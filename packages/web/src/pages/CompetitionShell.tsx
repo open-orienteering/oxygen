@@ -325,7 +325,7 @@ function KioskLauncher({ nameId }: { nameId: string }) {
 
   const handleLaunch = useCallback(() => {
     const url = `/${nameId}/kiosk`;
-    window.open(url, "oos-kiosk", "popup");
+    window.open(url, "oxygen-kiosk", "popup");
   }, [nameId]);
 
   return (
@@ -354,7 +354,7 @@ function KioskLauncher({ nameId }: { nameId: string }) {
 function StartScreenLauncher({ nameId, onLaunch }: { nameId: string; onLaunch?: () => void }) {
   const handleLaunch = useCallback(() => {
     const url = `/${nameId}/start-screen`;
-    window.open(url, "oos-start-screen", "popup");
+    window.open(url, "oxygen-start-screen", "popup");
     onLaunch?.();
   }, [nameId, onLaunch]);
 

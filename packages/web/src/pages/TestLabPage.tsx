@@ -59,6 +59,18 @@ export function TestLabPage() {
     },
   });
 
+  const registerFictionalRunners = trpc.testLab.registerFictionalRunners.useMutation({
+    onSuccess: (data) => {
+      setLastResult((prev) => ({
+        ...prev,
+        runners: `Registered ${data.created} fictional runners from ${data.clubsCreated} clubs (GDPR-safe)`,
+      }));
+      utils.testLab.status.invalidate();
+      utils.runner.list.invalidate();
+      utils.competition.dashboard.invalidate();
+    },
+  });
+
   const startSimulation = trpc.testLab.startSimulation.useMutation({
     onSuccess: (data) => {
       setLastResult((prev) => ({
@@ -117,6 +129,7 @@ export function TestLabPage() {
     generateClasses.isPending ||
     generateCourses.isPending ||
     registerRunners.isPending ||
+    registerFictionalRunners.isPending ||
     startSimulation.isPending;
 
   return (
@@ -142,7 +155,7 @@ export function TestLabPage() {
       <StageCard
         number={1}
         title="Generate Classes"
-        description="Create a standard Swedish long-distance class setup (Skogsluffarna LD style)."
+        description="Create a standard Swedish long-distance class setup (38 classes)."
         ready={true}
         done={hasClasses}
         result={lastResult.classes}
@@ -217,40 +230,50 @@ export function TestLabPage() {
       <StageCard
         number={3}
         title="Register Runners"
-        description="Pick runners from the Eventor runner database and distribute them across classes."
+        description="Distribute runners across classes using real or fictional data."
         ready={hasClasses && hasCourses}
         done={hasRunners}
         result={lastResult.runners}
-        error={registerRunners.error?.message}
+        error={registerRunners.error?.message || registerFictionalRunners.error?.message}
         details={<>
-          <p>Queries <strong>oos_runner_db</strong> (synced from Eventor) for runners with valid birth year and SI card, then:</p>
-          <ul className="list-disc ml-4 mt-1 space-y-0.5">
-            <li>Matches runners to classes by <strong>age</strong> (from BirthYear vs competition year) and <strong>gender</strong></li>
-            <li>Distributes the total count with realistic weights: H/D 21 get the most (~10-15% each), veteran decreasing with age, youth smaller counts, open classes a few</li>
-            <li>Creates corresponding <strong>oClub</strong> entries for each runner&apos;s club</li>
-            <li>Only uses runners with a valid SI card number (CardNo &gt; 0) to ensure unique readout data</li>
-          </ul>
+          <p className="font-medium">From Eventor DB:</p>
+          <p>Queries <strong>oxygen_runner_db</strong> (synced from Eventor) for runners with valid birth year and SI card. Requires a synced runner database.</p>
+          <p className="font-medium mt-2">Fictional (GDPR-safe):</p>
+          <p>Generates fictional runners with random Swedish names and randomized SI card types (SI5, SI8, SI9, SI10, SIAC). No external database required &mdash; fully self-contained.</p>
+          <p className="mt-2">Both modes distribute runners with realistic weights: H/D 21 get the most (~10-15% each), veteran decreasing with age, youth smaller counts, open classes a few.</p>
         </>}
       >
-        <div className="flex items-center gap-3">
-          <label className="text-sm text-slate-600">Total runners:</label>
-          <input
-            type="number"
-            min={10}
-            max={5000}
-            value={runnerCount}
-            onChange={(e) => setRunnerCount(Math.max(10, Math.min(5000, parseInt(e.target.value) || 200)))}
-            className="w-24 px-3 py-2 border border-slate-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-amber-500"
-            data-testid="runner-count-input"
-          />
-          <button
-            onClick={() => registerRunners.mutate({ count: runnerCount })}
-            disabled={anyLoading || !hasClasses || !hasCourses}
-            className="px-4 py-2 bg-amber-600 text-white text-sm font-medium rounded-lg hover:bg-amber-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors cursor-pointer"
-            data-testid="register-runners"
-          >
-            {registerRunners.isPending ? "Registering..." : "Register Runners"}
-          </button>
+        <div className="flex flex-col gap-3">
+          <div className="flex items-center gap-3">
+            <label className="text-sm text-slate-600">Total runners:</label>
+            <input
+              type="number"
+              min={10}
+              max={5000}
+              value={runnerCount}
+              onChange={(e) => setRunnerCount(Math.max(10, Math.min(5000, parseInt(e.target.value) || 200)))}
+              className="w-24 px-3 py-2 border border-slate-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-amber-500"
+              data-testid="runner-count-input"
+            />
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => registerFictionalRunners.mutate({ count: runnerCount })}
+              disabled={anyLoading || !hasClasses || !hasCourses}
+              className="px-4 py-2 bg-amber-600 text-white text-sm font-medium rounded-lg hover:bg-amber-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors cursor-pointer"
+              data-testid="register-fictional-runners"
+            >
+              {registerFictionalRunners.isPending ? "Generating..." : "Fictional (GDPR-safe)"}
+            </button>
+            <button
+              onClick={() => registerRunners.mutate({ count: runnerCount })}
+              disabled={anyLoading || !hasClasses || !hasCourses}
+              className="px-4 py-2 bg-slate-600 text-white text-sm font-medium rounded-lg hover:bg-slate-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors cursor-pointer"
+              data-testid="register-runners"
+            >
+              {registerRunners.isPending ? "Registering..." : "From Eventor DB"}
+            </button>
+          </div>
         </div>
       </StageCard>
 

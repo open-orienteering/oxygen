@@ -8,7 +8,7 @@
  * Key design decisions:
  * - Connection credentials fetched at runtime (not hardcoded)
  * - Competition created automatically on first enable
- * - tavid stored in oos_settings per competition
+ * - tavid stored in oxygen_settings per competition
  * - Radio controls identified by case-insensitive "radio" in name
  * - Times stored in centiseconds (MeOS uses 1/10s → divide by 10)
  */
@@ -101,8 +101,8 @@ export async function getLiveResultsPool(): Promise<mysql.Pool> {
 // ─── Competition management ───────────────────────────────────
 
 /**
- * Ensure a LiveResults competition exists for this OOS event.
- * Creates one if needed and stores the tavid in oos_settings.
+ * Ensure a LiveResults competition exists for this Oxygen event.
+ * Creates one if needed and stores the tavid in oxygen_settings.
  * Returns the tavid.
  */
 export async function ensureCompetition(nameId: string): Promise<number> {
@@ -110,10 +110,10 @@ export async function ensureCompetition(nameId: string): Promise<number> {
     const existing = await getSetting(settingKey);
     if (existing) return parseInt(existing, 10);
 
-    // Get event info from OOS
+    // Get event info from Oxygen
     const client = await getCompetitionClient();
     const event = await client.oEvent.findFirst({ where: { Removed: false } });
-    if (!event) throw new Error("No event found in OOS database");
+    if (!event) throw new Error("No event found in Oxygen database");
 
     const organizer = await client.oClub.findFirst({
         where: { Removed: false },
@@ -141,8 +141,8 @@ export async function ensureCompetition(nameId: string): Promise<number> {
                 event.Name.slice(0, 50),
                 compDate,
                 (organizer?.Name ?? "").slice(0, 50),
-                "oos",
-                `oos_${nameId}`,
+                "oxygen",
+                `oxygen_${nameId}`,
             ],
         );
 
@@ -180,7 +180,7 @@ export async function updateCompetitionMeta(
 // ─── Main sync ───────────────────────────────────────────────
 
 /**
- * Sync all data (splitcontrols, runners, results) from OOS to LiveResults.
+ * Sync all data (splitcontrols, runners, results) from Oxygen to LiveResults.
  * This is the core function called by the interval timer.
  */
 export async function syncAll(tavid: number): Promise<SyncStats> {
@@ -191,7 +191,7 @@ export async function syncAll(tavid: number): Promise<SyncStats> {
     const stats: SyncStats = { runners: 0, results: 0, splitcontrols: 0 };
 
     try {
-        // ── 1. Fetch OOS data ─────────────────────────────────────
+        // ── 1. Fetch Oxygen data ──────────────────────────────────
 
         const event = await client.oEvent.findFirst({ where: { Removed: false } });
         const zeroTime = event?.ZeroTime ?? 0;

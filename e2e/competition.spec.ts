@@ -4,7 +4,7 @@ test.describe("Competition Selection", () => {
   test("should display the competition selector page", async ({ page }) => {
     await page.goto("/");
 
-    await expect(page.getByText("Open Orienteering System")).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Oxygen" })).toBeVisible();
     await expect(
       page.getByText("Select a competition to manage"),
     ).toBeVisible();
@@ -122,7 +122,7 @@ test.describe("Competition Dashboard", () => {
       .getByRole("button", { name: "Back to competition list" })
       .click();
 
-    await expect(page.getByText("Open Orienteering System")).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Oxygen" })).toBeVisible();
     await expect(page.getByText("My example tävling")).toBeVisible();
   });
 });

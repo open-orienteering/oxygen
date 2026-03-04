@@ -149,7 +149,7 @@ function SyncBehaviorHelp() {
           </div>
 
           <p className="text-[10px] text-slate-400 border-t border-slate-100 pt-2">
-            Sync is one-way pull: OOS reads data from Eventor, never writes back automatically. Only Results and Start List can be pushed to Eventor via the buttons above. Fees, registrations, and class setup remain authoritative in Eventor. Sync is incremental — existing runners are updated in place. EntrySource is set to the Eventor event ID so the database is compatible with MeOS.
+            Sync is one-way pull: Oxygen reads data from Eventor, never writes back automatically. Only Results and Start List can be pushed to Eventor via the buttons above. Fees, registrations, and class setup remain authoritative in Eventor. Sync is incremental — existing runners are updated in place. EntrySource is set to the Eventor event ID so the database is compatible with MeOS.
           </p>
         </div>
       )}

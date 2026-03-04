@@ -16,6 +16,8 @@ A modern web application for managing orienteering competitions — from entry a
 - **Kiosk mode** — self-service registration and start/finish station interfaces
 - **MeOS-compatible** — reads and writes the same MySQL schema as MeOS; run both side by side
 
+See the [feature showcase](docs/features.md) for screenshots of every view.
+
 ## Architecture
 
 | Layer | Technologies |
@@ -34,6 +36,8 @@ oxygen/
   e2e/        # Playwright E2E tests
   docs/       # Guides and tutorials
 ```
+
+For a deeper dive into database design, deployment options, and subsystem details, see the [technical architecture](docs/architecture.md).
 
 ## Quick Start
 

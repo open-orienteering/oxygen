@@ -430,7 +430,7 @@ export const eventorRouter = router({
         ]);
         if (small) {
           await ensureLogoTable(client);
-          await client.oos_club_logo.upsert({
+          await client.oxygen_club_logo.upsert({
             where: { EventorId: input.organiserId },
             create: { EventorId: input.organiserId, SmallPng: small as any, ...(large ? { LargePng: large as any } : {}) },
             update: { SmallPng: small as any, ...(large ? { LargePng: large as any } : {}), UpdatedAt: new Date() },
@@ -986,7 +986,7 @@ export const eventorRouter = router({
 
     // Fetch logos for all clubs (in parallel batches to avoid overwhelming the server)
     await ensureLogoTable(client);
-    const existingLogos = await client.oos_club_logo.findMany({
+    const existingLogos = await client.oxygen_club_logo.findMany({
       select: { EventorId: true },
     });
     const existingLogoIds = new Set(existingLogos.map((l) => l.EventorId));
@@ -1010,7 +1010,7 @@ export const eventorRouter = router({
       );
       for (const r of results) {
         if (r.small) {
-          await client.oos_club_logo.upsert({
+          await client.oxygen_club_logo.upsert({
             where: { EventorId: r.orgId },
             create: {
               EventorId: r.orgId,
@@ -1352,7 +1352,7 @@ async function syncClubsFromEntries(
 
   // Fetch logos for new clubs in the background (non-blocking for overall sync)
   await ensureLogoTable(client);
-  const existingLogos = await client.oos_club_logo.findMany({
+  const existingLogos = await client.oxygen_club_logo.findMany({
     select: { EventorId: true },
   });
   const existingLogoIds = new Set(existingLogos.map((l) => l.EventorId));
@@ -1373,7 +1373,7 @@ async function syncClubsFromEntries(
       );
       for (const lr of logoResults) {
         if (lr.small) {
-          await client.oos_club_logo.upsert({
+          await client.oxygen_club_logo.upsert({
             where: { EventorId: lr.orgId },
             create: {
               EventorId: lr.orgId,

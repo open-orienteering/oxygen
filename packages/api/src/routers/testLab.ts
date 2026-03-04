@@ -10,8 +10,15 @@ import {
 import { RunnerStatus } from "@oxygen/shared";
 import type { PrismaClient } from "@prisma/client";
 import type mysql from "mysql2/promise";
+import {
+  MALE_FIRST_NAMES,
+  FEMALE_FIRST_NAMES,
+  LAST_NAMES,
+  CLUBS,
+  SI_CARD_RANGES,
+} from "./fictional-names.js";
 
-// ─── Class definitions (Skogsluffarna LD style) ─────────────
+// ─── Class definitions (standard Swedish long-distance) ─────
 
 interface ClassDef {
   name: string;
@@ -605,6 +612,168 @@ export const testLabRouter = router({
       } finally {
         await mainConn.end();
       }
+    }),
+
+  registerFictionalRunners: publicProcedure
+    .input(z.object({ count: z.number().int().min(1).max(5000) }))
+    .mutation(async ({ input }) => {
+      const client = await getCompetitionClient();
+
+      // Load classes
+      const classes = await client.oClass.findMany({ where: { Removed: false } });
+      if (classes.length === 0) {
+        throw new Error("No classes found. Generate classes first.");
+      }
+
+      // Get competition year from oEvent
+      const event = await client.oEvent.findFirst({ where: { Removed: false } });
+      const competitionYear = event?.Date
+        ? new Date(event.Date).getFullYear()
+        : new Date().getFullYear();
+
+      // Build class targets with the same weighting logic
+      const classTargets: { cls: typeof classes[number]; def: ClassDef | undefined; target: number }[] = [];
+      let totalWeight = 0;
+      for (const cls of classes) {
+        const def = CLASS_DEFS.find((d) => d.name === cls.Name);
+        const weight = def ? getClassWeight(def) : 1;
+        totalWeight += weight;
+        classTargets.push({ cls, def, target: weight });
+      }
+      for (const ct of classTargets) {
+        ct.target = Math.max(1, Math.round((ct.target / totalWeight) * input.count));
+      }
+
+      // Load existing card numbers to avoid duplicates
+      const existingRunners = await client.oRunner.findMany({
+        where: { Removed: false },
+        select: { CardNo: true },
+      });
+      const usedCards = new Set(existingRunners.map((r) => r.CardNo));
+
+      // Prepare SI card range picker (weighted)
+      const totalCardWeight = SI_CARD_RANGES.reduce((s, r) => s + r.weight, 0);
+
+      function pickCardNumber(): number {
+        let roll = Math.random() * totalCardWeight;
+        for (const range of SI_CARD_RANGES) {
+          roll -= range.weight;
+          if (roll <= 0) {
+            return range.min + Math.floor(Math.random() * (range.max - range.min + 1));
+          }
+        }
+        const last = SI_CARD_RANGES[SI_CARD_RANGES.length - 1];
+        return last.min + Math.floor(Math.random() * (last.max - last.min + 1));
+      }
+
+      function uniqueCardNumber(): number {
+        for (let attempt = 0; attempt < 100; attempt++) {
+          const card = pickCardNumber();
+          if (!usedCards.has(card)) {
+            usedCards.add(card);
+            return card;
+          }
+        }
+        // Fallback: sequential in SIAC range
+        let card = 9500000;
+        while (usedCards.has(card)) card++;
+        usedCards.add(card);
+        return card;
+      }
+
+      // Create clubs
+      const createdClubIds = new Set<number>();
+      const existingClubs = await client.oClub.findMany({
+        where: { Removed: false },
+        select: { Id: true },
+      });
+      for (const c of existingClubs) createdClubIds.add(c.Id);
+
+      let clubsCreated = 0;
+      for (const club of CLUBS) {
+        if (createdClubIds.has(club.id)) continue;
+        try {
+          await client.oClub.create({
+            data: { Id: club.id, Name: club.name, ShortName: club.shortName },
+          });
+          await incrementCounter("oClub", club.id);
+          clubsCreated++;
+        } catch {
+          try {
+            await client.oClub.update({
+              where: { Id: club.id },
+              data: { Removed: false, Name: club.name, ShortName: club.shortName },
+            });
+          } catch { /* ok */ }
+        }
+        createdClubIds.add(club.id);
+      }
+
+      // Generate runners
+      let totalCreated = 0;
+
+      for (const ct of classTargets) {
+        const { cls } = ct;
+        const sex = cls.Sex; // "M", "F", or ""
+        const lowAge = cls.LowAge;
+        const highAge = cls.HighAge;
+
+        const firstNames = sex === "F"
+          ? FEMALE_FIRST_NAMES
+          : sex === "M"
+            ? MALE_FIRST_NAMES
+            : [...MALE_FIRST_NAMES, ...FEMALE_FIRST_NAMES];
+
+        for (let i = 0; i < ct.target; i++) {
+          // Pick random name
+          const firstName = firstNames[Math.floor(Math.random() * firstNames.length)];
+          const lastName = LAST_NAMES[Math.floor(Math.random() * LAST_NAMES.length)];
+          const name = `${firstName} ${lastName}`;
+
+          // Pick random club
+          const club = CLUBS[Math.floor(Math.random() * CLUBS.length)];
+
+          // Compute birth year from class age constraints
+          let birthYear: number;
+          if (lowAge > 0 && highAge > 0) {
+            // Both bounds: random between them
+            const minBirthYear = competitionYear - highAge;
+            const maxBirthYear = competitionYear - lowAge;
+            birthYear = minBirthYear + Math.floor(Math.random() * (maxBirthYear - minBirthYear + 1));
+          } else if (highAge > 0) {
+            // Youth classes: age 0–highAge, spread across lower range
+            birthYear = competitionYear - highAge + Math.floor(Math.random() * 3);
+          } else if (lowAge > 0) {
+            // Veteran/senior: lowAge and up, spread within ~10 years
+            birthYear = competitionYear - lowAge - Math.floor(Math.random() * 10);
+          } else {
+            // Open: random age 10–70
+            birthYear = competitionYear - 10 - Math.floor(Math.random() * 60);
+          }
+
+          // Determine sex for open classes
+          const runnerSex = sex || (Math.random() < 0.5 ? "M" : "F");
+
+          const cardNo = uniqueCardNumber();
+
+          const r = await client.oRunner.create({
+            data: {
+              Name: name,
+              CardNo: cardNo,
+              Club: club.id,
+              Class: cls.Id,
+              BirthYear: birthYear,
+              Sex: runnerSex,
+              InputResult: "",
+              Annotation: "",
+            },
+          });
+          await incrementCounter("oRunner", r.Id);
+          totalCreated++;
+        }
+      }
+
+      return { created: totalCreated, clubsCreated };
     }),
 
   startSimulation: publicProcedure

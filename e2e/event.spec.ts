@@ -54,12 +54,6 @@ test.describe("Event Page", () => {
     await expect(page.getByText("Event settings (bib numbers")).toBeVisible();
   });
 
-  test("should display future integrations placeholder", async ({ page }) => {
-    await selectCompetition(page);
-    await clickTab(page, "Event");
-
-    await expect(page.getByText("More integrations coming soon")).toBeVisible({ timeout: 10000 });
-  });
 });
 
 test.describe("Event Page — Eventor-linked competition", () => {

@@ -305,7 +305,7 @@ export const competitionRouter = router({
 
       // Resolve organizer info for logo display.
       // Organizer field is stored as plain text "Name" (MeOS format).
-      // Legacy: may contain "Name\tEventorId" (old OOS format) or just a numeric ID.
+      // Legacy: may contain "Name\tEventorId" (old format) or just a numeric ID.
       let organizer: { name: string; eventorId: number } | undefined;
       if (event.Organizer) {
         const parts = event.Organizer.split("\t");
