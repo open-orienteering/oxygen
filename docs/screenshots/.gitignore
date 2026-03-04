@@ -1,2 +1,2 @@
 # Generated screenshots — regenerate with: pnpm docs:screenshots
-*.png
+# Tracked in git so docs render on GitHub.
