@@ -2,6 +2,7 @@ import { z } from "zod";
 import { router, publicProcedure } from "../trpc.js";
 import { getCompetitionClient } from "../db.js";
 import { RunnerStatus } from "@oxygen/shared";
+import { performReadout } from "./cardReadout.js";
 
 export const raceRouter = router({
   /**
@@ -182,6 +183,101 @@ export const raceRouter = router({
       iso: now.toISOString(),
     };
   }),
+
+  /**
+   * Get all data needed to print a finish receipt for a runner.
+   * Returns split times (from card readout), position in class, SIAC battery
+   * info, per-leg distances for pace, and top-5 class finishers.
+   */
+  finishReceipt: publicProcedure
+    .input(z.object({ runnerId: z.number().int() }))
+    .query(async ({ input }) => {
+      const client = await getCompetitionClient();
+      const result = await performReadout(client, input.runnerId);
+      if (!result) return null;
+
+      // ── Leg lengths for per-leg pace ─────────────────────────
+      let legLengths: number[] = [];
+      if (result.course) {
+        const course = await client.oCourse.findUnique({
+          where: { Id: result.course.id },
+          select: { Legs: true },
+        });
+        if (course?.Legs) {
+          legLengths = course.Legs
+            .split(";")
+            .filter(Boolean)
+            .map(Number)
+            .filter((n) => !isNaN(n));
+        }
+      }
+
+      // ── Position + top-5 class finishers ─────────────────────
+      let position: { rank: number; total: number } | null = null;
+      let classResults: Array<{ rank: number; name: string; clubName: string; runningTime: number }> = [];
+      const classId = result.runner.classId;
+      const thisTime = result.timing.runningTime;
+      if (classId && thisTime > 0) {
+        const classRunners = await client.oRunner.findMany({
+          where: { Class: classId, Removed: false, Status: RunnerStatus.OK },
+          select: { Name: true, Club: true, StartTime: true, FinishTime: true },
+        });
+        const withTimes = classRunners
+          .filter((r) => r.FinishTime > 0 && r.StartTime > 0)
+          .map((r) => ({ name: r.Name, clubId: r.Club, runningTime: r.FinishTime - r.StartTime }))
+          .sort((a, b) => a.runningTime - b.runningTime);
+
+        const rank = withTimes.filter((r) => r.runningTime < thisTime).length + 1;
+        position = { rank, total: withTimes.length };
+
+        // Fetch club names for top 5
+        const top5 = withTimes.slice(0, 5);
+        const clubIds = [...new Set(top5.map((r) => r.clubId).filter((id): id is number => id != null))];
+        const clubs = clubIds.length
+          ? await client.oClub.findMany({ where: { Id: { in: clubIds } }, select: { Id: true, Name: true } })
+          : [];
+        const clubMap = new Map(clubs.map((c) => [c.Id, c.Name]));
+        classResults = top5.map((r, i) => ({
+          rank: i + 1,
+          name: r.name,
+          clubName: clubMap.get(r.clubId ?? 0) ?? "",
+          runningTime: r.runningTime,
+        }));
+      }
+
+      // ── SIAC battery info ─────────────────────────────────────
+      let siac: { voltage: number | null; batteryDate: string | null; batteryOk: boolean } | null = null;
+      if (result.runner.cardNo > 0) {
+        try {
+          const rows = await client.$queryRawUnsafe<
+            Array<{ Voltage: number; Metadata: string | null }>
+          >(
+            `SELECT Voltage, Metadata FROM oxygen_card_readouts
+             WHERE CardNo = ? ORDER BY ReadAt DESC LIMIT 1`,
+            result.runner.cardNo,
+          );
+          if (rows.length > 0) {
+            const voltage = rows[0].Voltage > 0 ? rows[0].Voltage / 100 : null;
+            const meta = rows[0].Metadata ? (JSON.parse(rows[0].Metadata) as { batteryDate?: string }) : null;
+            siac = {
+              voltage,
+              batteryDate: meta?.batteryDate ?? null,
+              batteryOk: voltage != null && voltage >= 2.5,
+            };
+          }
+        } catch {
+          // oxygen_card_readouts table may not exist yet
+        }
+      }
+
+      return {
+        ...result,
+        controls: result.controls.map((c, i) => ({ ...c, legLength: legLengths[i] ?? 0 })),
+        position,
+        classResults,
+        siac,
+      };
+    }),
 
   /**
    * Get recent race activity (last N finish/start events).

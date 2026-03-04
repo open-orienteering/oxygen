@@ -13,6 +13,7 @@ import { RunnerManagement } from "./RunnerManagement";
 import { StartListPage } from "./StartListPage";
 import { ResultsPage } from "./ResultsPage";
 import { StartStation } from "./StartStation";
+import { FinishStation } from "./FinishStation";
 import { CardReadout } from "./CardReadout";
 import { ControlsPage } from "./ControlsPage";
 import { CoursesPage } from "./CoursesPage";
@@ -23,12 +24,13 @@ import { EventPage } from "./EventPage";
 import { TestLabPage } from "./TestLabPage";
 import { ClubLogo } from "../components/ClubLogo";
 import { useDeviceManager } from "../context/DeviceManager";
+import { usePrinter } from "../context/PrinterContext";
 import { CardNotification } from "../components/CardNotification";
 import { RecentCards } from "../components/RecentCards";
 import { DbLoadIndicator } from "../components/DbLoadIndicator";
 import { useExternalChanges } from "../hooks/useExternalChanges";
 
-type Tab = "dashboard" | "event" | "runners" | "startlist" | "results" | "classes" | "courses" | "controls" | "clubs" | "start-station" | "card-readout" | "cards" | "test-lab";
+type Tab = "dashboard" | "event" | "runners" | "startlist" | "results" | "classes" | "courses" | "controls" | "clubs" | "start-station" | "finish-station" | "card-readout" | "cards" | "test-lab";
 
 const tabs: { id: Tab; path: string; label: string; group?: string; countKey?: string; isOverflow?: boolean }[] = [
   { id: "dashboard", path: "", label: "Dashboard" },
@@ -43,6 +45,7 @@ const tabs: { id: Tab; path: string; label: string; group?: string; countKey?: s
   { id: "event", path: "event", label: "Event", isOverflow: true },
   { id: "clubs", path: "clubs", label: "Clubs", countKey: "clubs", isOverflow: true },
   { id: "start-station", path: "start-station", label: "Start Station", group: "race", isOverflow: true },
+  { id: "finish-station", path: "finish-station", label: "Finish Station", group: "race", isOverflow: true },
   { id: "card-readout", path: "card-readout", label: "Card Readout", group: "race", isOverflow: true },
   { id: "test-lab", path: "test-lab", label: "Test Lab", group: "dev", isOverflow: true },
 ];
@@ -171,6 +174,7 @@ export function CompetitionShell() {
             </div>
             <div className="flex items-center gap-2">
               <ReaderStatusIndicator />
+              <PrinterStatusIndicator />
               <KioskLauncher nameId={nameId ?? ""} />
               <StartScreenLauncher nameId={nameId ?? ""} />
               <DbLoadIndicator enabled={ready} />
@@ -284,6 +288,7 @@ export function CompetitionShell() {
           <Route path="clubs" element={<ClubsPage />} />
           <Route path="cards" element={<CardsPage />} />
           <Route path="start-station" element={<StartStation />} />
+          <Route path="finish-station" element={<FinishStation />} />
           <Route path="card-readout" element={<CardReadout />} />
           <Route path="test-lab" element={<TestLabPage />} />
           <Route path="*" element={<Navigate to="" replace />} />
@@ -370,6 +375,63 @@ function StartScreenLauncher({ nameId, onLaunch }: { nameId: string; onLaunch?: 
       </svg>
       Start
     </button>
+  );
+}
+
+// ─── Printer Status Indicator ───────────────────────────────
+
+function PrinterStatusIndicator() {
+  const { supported, connected, connect, disconnect } = usePrinter();
+  const [showMenu, setShowMenu] = useState(false);
+
+  if (!supported) return null;
+
+  if (!connected) {
+    return (
+      <button
+        onClick={() => connect().catch(() => {})}
+        className="inline-flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium text-slate-500 hover:text-slate-700 hover:bg-slate-100 rounded-full transition-colors cursor-pointer"
+        title="Connect receipt printer"
+      >
+        <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+          <path strokeLinecap="round" strokeLinejoin="round" d="M17 17h2a2 2 0 002-2v-4a2 2 0 00-2-2H5a2 2 0 00-2 2v4a2 2 0 002 2h2m2 4h6a2 2 0 002-2v-4a2 2 0 00-2-2H9a2 2 0 00-2 2v4a2 2 0 002 2zm8-12V5a2 2 0 00-2-2H9a2 2 0 00-2 2v4h10z" />
+        </svg>
+        Connect Printer
+      </button>
+    );
+  }
+
+  return (
+    <div className="relative">
+      <button
+        onClick={() => setShowMenu(!showMenu)}
+        className="inline-flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium text-emerald-700 bg-emerald-50 hover:bg-emerald-100 rounded-full transition-colors cursor-pointer"
+        title="Printer connected"
+      >
+        <span className="w-2 h-2 bg-emerald-500 rounded-full animate-pulse" />
+        Printer
+      </button>
+      {showMenu && (
+        <>
+          <div
+            className="fixed inset-0 z-20"
+            onClick={() => setShowMenu(false)}
+          />
+          <div className="absolute right-0 top-full mt-1 z-30 bg-white border border-slate-200 rounded-lg shadow-lg p-3 min-w-[180px]">
+            <div className="text-xs text-slate-500 mb-2">Receipt printer connected</div>
+            <button
+              onClick={() => {
+                disconnect();
+                setShowMenu(false);
+              }}
+              className="w-full text-left text-sm text-red-600 hover:bg-red-50 px-2 py-1.5 rounded transition-colors cursor-pointer"
+            >
+              Disconnect
+            </button>
+          </div>
+        </>
+      )}
+    </div>
   );
 }
 

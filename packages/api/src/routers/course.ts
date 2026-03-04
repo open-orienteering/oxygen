@@ -577,6 +577,15 @@ export const courseRouter = router({
           .join(";");
         const controlsStr = controlIds ? controlIds + ";" : "";
 
+        // Build leg lengths (metres) matching the Controls sequence, plus finish leg.
+        // Stored as semicolon-separated integers, e.g. "450;320;580;210;"
+        const legLengthArr = pc.controls
+          .filter((cc) => cc.type === "Control")
+          .map((cc) => Math.round(cc.legLength));
+        const finishCtrl = pc.controls.find((cc) => cc.type === "Finish");
+        if (finishCtrl) legLengthArr.push(Math.round(finishCtrl.legLength));
+        const legsStr = legLengthArr.length ? legLengthArr.join(";") + ";" : "";
+
         // Extract start name from the IOF course and convert to MeOS-style name.
         // MeOS uses "Start 1", "Start 2" etc. to link courses to their start station.
         const startControl = pc.controls.find((cc) => cc.type === "Start");
@@ -591,6 +600,7 @@ export const courseRouter = router({
             where: { Id: existing.Id },
             data: {
               Controls: controlsStr,
+              Legs: legsStr,
               Length: Math.round(pc.length),
               Climb: Math.round(pc.climb),
               FirstAsStart: 0,
@@ -605,6 +615,7 @@ export const courseRouter = router({
             data: {
               Name: pc.name,
               Controls: controlsStr,
+              Legs: legsStr,
               Length: Math.round(pc.length),
               Climb: Math.round(pc.climb),
               FirstAsStart: 0,
