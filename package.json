@@ -1,0 +1,29 @@
+{
+  "name": "oxygen",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Oxygen - Lightweight orienteering management",
+  "scripts": {
+    "dev": "pnpm --parallel --filter './packages/*' dev",
+    "build": "pnpm --filter './packages/*' build",
+    "lint": "pnpm --filter './packages/*' lint",
+    "test": "pnpm --filter './packages/*' test",
+    "test:coverage": "pnpm --filter './packages/*' test:coverage",
+    "test:integration": "pnpm --filter @oxygen/api test:integration",
+    "test:e2e": "playwright test",
+    "db:generate": "pnpm --filter @oxygen/api db:generate",
+    "db:push": "pnpm --filter @oxygen/api db:push"
+  },
+  "engines": {
+    "node": ">=20",
+    "pnpm": ">=10"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.58.2",
+    "mysql2": "^3.17.0",
+    "tsx": "^4.21.0"
+  },
+  "dependencies": {
+    "svg-control-descriptions": "^2.1.0"
+  }
+}

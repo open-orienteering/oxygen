@@ -1,0 +1,451 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "mysql"
+  url      = env("DATABASE_URL")
+}
+
+/// Competition event metadata
+model oEvent {
+  Id          Int       @id @default(autoincrement())
+  Name        String    @db.VarChar(128)
+  Annotation  String    @default("") @db.VarChar(128)
+  Date        String    @db.VarChar(32)
+  ZeroTime    Int       @default(0) @db.UnsignedInt
+  NameId      String    @default("") @db.VarChar(64)
+  BuildVersion Int      @default(0) @db.UnsignedInt
+
+  // Fee fields
+  CardFee     Int       @default(0)
+  EliteFee    Int       @default(0)
+  EntryFee    Int       @default(0)
+  YouthFee    Int       @default(0)
+  YouthAge    Int       @default(0) @db.UnsignedTinyInt
+  SeniorAge   Int       @default(0) @db.UnsignedTinyInt
+
+  // Organization fields
+  Account     String    @default("") @db.VarChar(61)
+  Organizer   String?   @db.MediumText
+  EMail       String?   @db.MediumText
+  Homepage    String?   @db.MediumText
+  Phone       String    @default("") @db.VarChar(65)
+
+  // Settings
+  UseEconomy  Int       @default(0) @db.UnsignedTinyInt
+  UseSpeaker  Int       @default(0) @db.UnsignedTinyInt
+  MaxTime     Int       @default(0)
+  NumStages   Int       @default(0) @db.TinyInt
+  LongTimes   Int       @default(0) @db.UnsignedTinyInt
+  SubSeconds  Int       @default(0) @db.UnsignedTinyInt
+
+  // Extra config stored as text
+  Lists       String?   @db.MediumText
+  Machine     String?   @db.MediumText
+  Features    String?   @db.MediumText
+  SPExtra     String?   @db.MediumText
+  IVExtra     String?   @db.MediumText
+  EntryExtra  String?   @db.MediumText
+
+  // Sync fields
+  Modified    DateTime  @default(now()) @updatedAt @db.Timestamp(0)
+  Counter     Int       @default(0) @db.UnsignedInt
+  Removed     Boolean   @default(false)
+
+  // Additional fields that exist in the schema
+  PaymentDue         Int    @default(0)
+  OrdinaryEntry      Int    @default(0)
+  SecondEntryDate    Int    @default(0)
+  LateEntryFactor    String @default("") @db.VarChar(13)
+  SecondEntryFactor  String @default("") @db.VarChar(13)
+  CareOf             String @default("") @db.VarChar(63)
+  Street             String @default("") @db.VarChar(65)
+  Address            String @default("") @db.VarChar(65)
+  SkipRunnerDb       Int    @default(0) @db.UnsignedTinyInt
+  ExtId              BigInt @default(0)
+  DiffTime           Int    @default(0)
+  PreEvent           String @default("") @db.VarChar(129)
+  PostEvent          String @default("") @db.VarChar(129)
+  ImportStamp        String @default("") @db.VarChar(29)
+  EventNumber        Int    @default(0) @db.TinyInt
+  CurrencyFactor     Int    @default(0) @db.SmallInt
+  CurrencySymbol     String @default("") @db.VarChar(11)
+  CurrencySeparator  String @default("") @db.VarChar(5)
+  CurrencyPreSymbol  Int    @default(0) @db.TinyInt
+  CurrencyCode       String @default("") @db.VarChar(11)
+  UTC                Int    @default(0) @db.TinyInt
+  Analysis           Int    @default(0) @db.TinyInt
+  BibGap             Int    @default(0) @db.UnsignedTinyInt
+  BibsPerClass       Int    @default(0) @db.UnsignedTinyInt
+  PayModes           String?  @db.MediumText
+  TransferFlags      Int    @default(0)
+  InvoiceDate        Int    @default(0)
+  StartGroups        String?  @db.MediumText
+  MergeTag           String @default("") @db.VarChar(25)
+  MergeInfo          String?  @db.MediumText
+  SplitPrint         String @default("") @db.VarChar(81)
+  NoVacantBib        Int    @default(0) @db.UnsignedTinyInt
+  RunnerIdTypes      String?  @db.MediumText
+  ExtraFields        String?  @db.MediumText
+  ControlMap         String?  @db.MediumText
+  OldCards           Int    @default(0) @db.UnsignedTinyInt
+
+  @@index([Counter])
+  @@index([Modified])
+}
+
+/// Runner / competitor
+model oRunner {
+  Id         Int       @id @default(autoincrement())
+  Name       String    @default("") @db.VarChar(64)
+  CardNo     Int       @default(0)
+  Club       Int       @default(0)
+  Class      Int       @default(0)
+  Course     Int       @default(0)
+  StartNo    Int       @default(0)
+  StartTime  Int       @default(0)
+  FinishTime Int       @default(0)
+  Status     Int       @default(0)
+  Card       Int       @default(0)
+  MultiR     String    @default("") @db.VarChar(200)
+
+  // Input (from previous stages)
+  InputTime   Int      @default(0)
+  InputStatus Int      @default(0)
+  InputPoints Int      @default(0)
+  InputPlace  Int      @default(0)
+
+  // Economy
+  Fee        Int       @default(0)
+  CardFee    Int       @default(0)
+  Paid       Int       @default(0)
+  PayMode    Int       @default(0) @db.UnsignedTinyInt
+  Taxable    Int       @default(0)
+
+  // Personal info
+  BirthYear  Int       @default(0)
+  Bib        String    @default("") @db.VarChar(17)
+  Rank       Int       @default(0)
+  Sex        String    @default("") @db.VarChar(3)
+  Nationality String   @default("") @db.VarChar(7)
+  Country    String    @default("") @db.VarChar(47)
+  Phone      String    @default("") @db.VarChar(41)
+
+  // Entry info
+  EntryDate  Int       @default(0)
+  EntryTime  Int       @default(0)
+  ExtId      BigInt    @default(0)
+  ExtId2     BigInt    @default(0)
+
+  // Misc
+  Priority     Int     @default(0) @db.UnsignedTinyInt
+  RaceId       Int     @default(0)
+  TimeAdjust   Int     @default(0)
+  PointAdjust  Int     @default(0)
+  TransferFlags Int    @default(0)
+  Shorten      Int     @default(0) @db.UnsignedTinyInt
+  EntrySource  Int     @default(0)
+  Heat         Int     @default(0) @db.UnsignedTinyInt
+  Reference    Int     @default(0)
+  NoRestart    Int     @default(0) @db.UnsignedTinyInt
+  InputResult  String?  @db.MediumText
+  StartGroup   Int     @default(0)
+  Family       Int     @default(0)
+  DataA        Int     @default(0)
+  DataB        Int     @default(0)
+  TextA        String  @default("") @db.VarChar(81)
+  Annotation   String?  @db.MediumText
+
+  // Sync fields
+  Modified   DateTime  @default(now()) @updatedAt @db.Timestamp(0)
+  Counter    Int       @default(0) @db.UnsignedInt
+  Removed    Boolean   @default(false)
+
+  @@index([Counter])
+  @@index([Modified])
+}
+
+/// Competition class / category
+model oClass {
+  Id          Int       @id @default(autoincrement())
+  Name        String    @default("") @db.VarChar(128)
+  Course      Int       @default(0)
+  MultiCourse String?   @db.MediumText
+  LegMethod   String    @default("") @db.VarChar(1024)
+  ExtId       BigInt    @default(0)
+  LongName    String    @default("") @db.VarChar(65)
+
+  // Age limits
+  LowAge      Int       @default(0) @db.UnsignedTinyInt
+  HighAge     Int       @default(0) @db.UnsignedTinyInt
+
+  // Settings
+  HasPool         Int   @default(0) @db.UnsignedTinyInt
+  AllowQuickEntry Int   @default(0) @db.UnsignedTinyInt
+  ClassType       String @default("") @db.VarChar(81)
+  Sex             String @default("") @db.VarChar(3)
+
+  // Start settings
+  StartName     String  @default("") @db.VarChar(33)
+  StartBlock    Int     @default(0) @db.UnsignedTinyInt
+  NoTiming      Int     @default(0) @db.UnsignedTinyInt
+  FreeStart     Int     @default(0) @db.UnsignedTinyInt
+  RequestStart  Int     @default(0) @db.UnsignedTinyInt
+  IgnoreStart   Int     @default(0) @db.UnsignedTinyInt
+  FirstStart    Int     @default(0)
+  StartInterval Int     @default(0)
+  Vacant        Int     @default(0) @db.UnsignedTinyInt
+  Reserved      Int     @default(0) @db.UnsignedSmallInt
+
+  // Fees
+  ClassFee              Int @default(0)
+  HighClassFee          Int @default(0)
+  SecondHighClassFee    Int @default(0)
+  ClassFeeRed           Int @default(0)
+  HighClassFeeRed       Int @default(0)
+  SecondHighClassFeeRed Int @default(0)
+
+  // Display
+  SortIndex   Int       @default(0)
+  MaxTime     Int       @default(0)
+  Status      String    @default("") @db.VarChar(5)
+  DirectResult Int      @default(0) @db.TinyInt
+  Bib         String    @default("") @db.VarChar(17)
+  BibMode     String    @default("") @db.VarChar(3)
+  Unordered   Int       @default(0) @db.UnsignedTinyInt
+  Heat        Int       @default(0) @db.UnsignedTinyInt
+  Locked      Int       @default(0) @db.UnsignedTinyInt
+  Qualification String?  @db.MediumText
+  NumberMaps  Int       @default(0) @db.SmallInt
+  Result      String    @default("") @db.VarChar(49)
+  TransferFlags Int     @default(0)
+  SplitPrint  String    @default("") @db.VarChar(81)
+  DataA       Int       @default(0)
+  DataB       Int       @default(0)
+  TextA       String    @default("") @db.VarChar(81)
+
+  // Sync fields
+  Modified    DateTime  @default(now()) @updatedAt @db.Timestamp(0)
+  Counter     Int       @default(0) @db.UnsignedInt
+  Removed     Boolean   @default(false)
+
+  @@index([Counter])
+  @@index([Modified])
+}
+
+/// Course definition
+model oCourse {
+  Id       Int       @id @default(autoincrement())
+  Name     String    @default("") @db.VarChar(64)
+  Controls String    @default("") @db.VarChar(512)
+  Length   Int       @default(0) @db.UnsignedInt
+  Legs     String    @default("") @db.VarChar(1024)
+  NumberMaps Int     @default(0) @db.SmallInt
+  StartName  String  @default("") @db.VarChar(33)
+  Climb    Int       @default(0) @db.SmallInt
+
+  // Rogaining
+  RPointLimit      Int @default(0)
+  RTimeLimit       Int @default(0)
+  RReduction       Int @default(0)
+  RReductionMethod Int @default(0) @db.UnsignedTinyInt
+
+  // Options
+  FirstAsStart  Int   @default(0) @db.UnsignedTinyInt
+  LastAsFinish  Int   @default(0) @db.UnsignedTinyInt
+  CControl      Int   @default(0) @db.UnsignedSmallInt
+  Shorten       Int   @default(0)
+
+  // Sync fields
+  Modified  DateTime  @default(now()) @updatedAt @db.Timestamp(0)
+  Counter   Int       @default(0) @db.UnsignedInt
+  Removed   Boolean   @default(false)
+
+  @@index([Counter])
+  @@index([Modified])
+}
+
+/// Control point
+model oControl {
+  Id         Int       @id @default(autoincrement())
+  Name       String    @default("") @db.VarChar(128)
+  Numbers    String    @default("") @db.VarChar(128)
+  Status     Int       @default(0) @db.UnsignedInt
+  TimeAdjust Int       @default(0)
+  MinTime    Int       @default(0)
+  xpos       Int       @default(0)
+  ypos       Int       @default(0)
+  latcrd     Int       @default(0)
+  longcrd    Int       @default(0)
+  Rogaining  Int       @default(0)
+  Radio      Int       @default(0) @db.UnsignedTinyInt
+  Unit       Int       @default(0) @db.UnsignedSmallInt
+
+  // Sync fields
+  Modified   DateTime  @default(now()) @updatedAt @db.Timestamp(0)
+  Counter    Int       @default(0) @db.UnsignedInt
+  Removed    Boolean   @default(false)
+
+  @@index([Counter])
+  @@index([Modified])
+}
+
+/// Club / organization
+model oClub {
+  Id          Int       @id @default(autoincrement())
+  Name        String    @default("") @db.VarChar(128)
+  District    Int       @default(0)
+  ShortName   String    @default("") @db.VarChar(17)
+  CareOf      String    @default("") @db.VarChar(63)
+  Street      String    @default("") @db.VarChar(83)
+  City        String    @default("") @db.VarChar(47)
+  State       String    @default("") @db.VarChar(47)
+  ZIP         String    @default("") @db.VarChar(23)
+  EMail       String    @default("") @db.VarChar(129)
+  Phone       String    @default("") @db.VarChar(65)
+  Nationality String    @default("") @db.VarChar(7)
+  Country     String    @default("") @db.VarChar(47)
+  Type        String    @default("") @db.VarChar(41)
+  ExtId       BigInt    @default(0)
+  Invoice     String    @default("") @db.VarChar(3)
+  InvoiceNo   Int       @default(0) @db.UnsignedSmallInt
+  StartGroup  Int       @default(0)
+
+  // Sync fields
+  Modified    DateTime  @default(now()) @updatedAt @db.Timestamp(0)
+  Counter     Int       @default(0) @db.UnsignedInt
+  Removed     Boolean   @default(false)
+
+  @@index([Counter])
+  @@index([Modified])
+}
+
+/// SI card with punch data
+model oCard {
+  Id       Int       @id @default(autoincrement())
+  CardNo   Int       @default(0)
+  ReadId   Int       @default(0) @db.UnsignedInt
+  Voltage  Int       @default(0) @db.UnsignedInt
+  BDate    Int       @default(0)
+  Punches  String    @default("") @db.VarChar(3040)
+
+  // Sync fields
+  Modified DateTime  @default(now()) @updatedAt @db.Timestamp(0)
+  Counter  Int       @default(0) @db.UnsignedInt
+  Removed  Boolean   @default(false)
+
+  @@index([Counter])
+  @@index([Modified])
+}
+
+/// Punch record (free punches)
+model oPunch {
+  Id     Int       @id @default(autoincrement())
+  CardNo Int       @default(0)
+  Time   Int       @default(0)
+  Type   Int       @default(0)
+  Unit   Int       @default(0)
+  Origin Int       @default(0)
+
+  // Sync fields
+  Modified DateTime  @default(now()) @updatedAt @db.Timestamp(0)
+  Counter  Int       @default(0) @db.UnsignedInt
+  Removed  Boolean   @default(false)
+
+  @@index([Counter])
+  @@index([Modified])
+}
+
+/// Team
+model oTeam {
+  Id         Int       @id @default(autoincrement())
+  Name       String    @default("") @db.VarChar(64)
+  Runners    String    @default("") @db.VarChar(256)
+  Club       Int       @default(0)
+  Class      Int       @default(0)
+  StartTime  Int       @default(0)
+  FinishTime Int       @default(0)
+  Status     Int       @default(0)
+  StartNo    Int       @default(0)
+
+  // Input
+  InputTime   Int      @default(0)
+  InputStatus Int      @default(0)
+  InputPoints Int      @default(0)
+  InputPlace  Int      @default(0)
+
+  // Economy
+  Fee        Int       @default(0)
+  Paid       Int       @default(0)
+  PayMode    Int       @default(0) @db.UnsignedTinyInt
+  Taxable    Int       @default(0)
+
+  // Entry
+  EntryDate  Int       @default(0)
+  EntryTime  Int       @default(0)
+  Nationality String   @default("") @db.VarChar(7)
+  Country    String    @default("") @db.VarChar(47)
+  Bib        String    @default("") @db.VarChar(17)
+  ExtId      BigInt    @default(0)
+  Priority   Int       @default(0) @db.UnsignedTinyInt
+  SortIndex  Int       @default(0) @db.SmallInt
+  TimeAdjust Int       @default(0)
+  PointAdjust Int      @default(0)
+  TransferFlags Int    @default(0)
+  EntrySource Int      @default(0)
+  Heat       Int       @default(0) @db.UnsignedTinyInt
+  NoRestart  Int       @default(0) @db.UnsignedTinyInt
+  InputResult String?   @db.MediumText
+  DataA      Int       @default(0)
+  DataB      Int       @default(0)
+  TextA      String    @default("") @db.VarChar(81)
+  Annotation String?   @db.MediumText
+
+  // Sync fields
+  Modified   DateTime  @default(now()) @updatedAt @db.Timestamp(0)
+  Counter    Int       @default(0) @db.UnsignedInt
+  Removed    Boolean   @default(false)
+
+  @@index([Counter])
+  @@index([Modified])
+}
+
+/// ID counter tracking
+model oCounter {
+  CounterId Int @id
+  oControl  Int @default(0) @db.UnsignedInt
+  oCourse   Int @default(0) @db.UnsignedInt
+  oClass    Int @default(0) @db.UnsignedInt
+  oCard     Int @default(0) @db.UnsignedInt
+  oClub     Int @default(0) @db.UnsignedInt
+  oPunch    Int @default(0) @db.UnsignedInt
+  oRunner   Int @default(0) @db.UnsignedInt
+  oTeam     Int @default(0) @db.UnsignedInt
+  oEvent    Int @default(0) @db.UnsignedInt
+
+  Modified  DateTime  @default(now()) @db.Timestamp(0)
+}
+
+/// Club logos fetched from Eventor (separate table to avoid breaking MeOS).
+/// Keyed by EventorId (the Eventor organisation ID, stored in oClub.ExtId).
+model oxygen_club_logo {
+  EventorId  Int    @id
+  SmallPng   Bytes  @db.MediumBlob
+  LargePng   Bytes? @db.MediumBlob
+  UpdatedAt  DateTime @default(now()) @db.Timestamp(0)
+}
+
+/// Client monitoring
+model oMonitor {
+  Id      Int       @id @default(autoincrement())
+  Client  String    @default("") @db.VarChar(64)
+  Count   Int       @default(0) @db.UnsignedInt
+
+  Modified DateTime  @default(now()) @updatedAt @db.Timestamp(0)
+  Counter  Int       @default(0) @db.UnsignedInt
+  Removed  Boolean   @default(false)
+
+  @@index([Counter])
+  @@index([Modified])
+}

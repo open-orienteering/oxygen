@@ -1,0 +1,86 @@
+Type 8: H:\Delade enheter\Skogsluffarna\Arrangemang\2025 Långdistans 4 okt\Banläggning\Utsnitt\A3 10000 Mörtsjön  - Luffarna.ocd[TAB]s1[TAB]r1[TAB]cUtsnitt\                                                                                                    
+Type 2: 1[TAB]H[TAB]C0[TAB]mT3[TAB]sSTA1[TAB]c70[TAB]c76[TAB]c129[TAB]c72[TAB]c88[TAB]c133[TAB]c111[TAB]c94[TAB]c103[TAB]c91[TAB]c56[TAB]c139[TAB]c87[TAB]c56[TAB]c81[TAB]c75[TAB]c200[TAB]c95[TAB]c113[TAB]c63[TAB]c32[TAB]c74[TAB]c114[TAB]c109[TAB]c100[TAB]fFIN1            
+Type 2: 2[TAB]H[TAB]C0[TAB]mT3[TAB]sSTA1[TAB]c92[TAB]c76[TAB]c52[TAB]c57[TAB]c127[TAB]c83[TAB]c91[TAB]c56[TAB]c81[TAB]c61[TAB]c112[TAB]c200[TAB]c113[TAB]c84[TAB]c82[TAB]c105[TAB]c135[TAB]c100[TAB]fFIN1           
+Type 2: 3[TAB]H[TAB]C0[TAB]mT3[TAB]sSTA1[TAB]c92[TAB]c42[TAB]c52[TAB]c127[TAB]c103[TAB]c83[TAB]c56[TAB]c81[TAB]c64[TAB]c112[TAB]c200[TAB]c95[TAB]c113[TAB]c102[TAB]c32[TAB]c74[TAB]c109[TAB]c100[TAB]fFIN1          
+Type 2: 4[TAB]H[TAB]C0[TAB]mT3[TAB]sSTA1[TAB]c70[TAB]c90[TAB]c129[TAB]c97[TAB]c77[TAB]c88[TAB]c65[TAB]c81[TAB]c112[TAB]c200[TAB]c95[TAB]c113[TAB]c63[TAB]c105[TAB]c114[TAB]c109[TAB]c100[TAB]fFIN1                              
+Type 2: 5[TAB]H[TAB]C0[TAB]mT3[TAB]sSTA1[TAB]c73[TAB]c80[TAB]c57[TAB]c103[TAB]c83[TAB]c56[TAB]c81[TAB]c75[TAB]c200[TAB]c96[TAB]c84[TAB]c63[TAB]c32[TAB]c85[TAB]c135[TAB]c100[TAB]fFIN1      
+Type 2: 6[TAB]H[TAB]C0[TAB]mT3[TAB]sSTA1[TAB]c71[TAB]c90[TAB]c42[TAB]c52[TAB]c67[TAB]c81[TAB]c61[TAB]c75[TAB]c200[TAB]c95[TAB]c96[TAB]c82[TAB]c85[TAB]c114[TAB]c109[TAB]c100[TAB]fFIN1      
+Type 2: 7[TAB]H[TAB]C0[TAB]mT3[TAB]sSTA1[TAB]c71[TAB]c88[TAB]c127[TAB]c103[TAB]c91[TAB]c56[TAB]c81[TAB]c64[TAB]c112[TAB]c200[TAB]c95[TAB]c113[TAB]c102[TAB]c32[TAB]c74[TAB]c109[TAB]c100[TAB]fFIN1                              
+Type 2: 8[TAB]H[TAB]C0[TAB]mT3[TAB]sSTA1[TAB]c73[TAB]c42[TAB]c80[TAB]c57[TAB]c127[TAB]c103[TAB]c83[TAB]c56[TAB]c81[TAB]c64[TAB]c112[TAB]c200[TAB]c84[TAB]c82[TAB]c85[TAB]c100[TAB]fFIN1     
+Type 2: 9[TAB]H[TAB]C0[TAB]mT3[TAB]sSTA1[TAB]c76[TAB]c129[TAB]c88[TAB]c139[TAB]c87[TAB]c56[TAB]c79[TAB]c47[TAB]c75[TAB]c200[TAB]c113[TAB]c84[TAB]c102[TAB]c85[TAB]c109[TAB]c100[TAB]fFIN1   
+Type 2: 10[TAB]H[TAB]C0[TAB]mT3[TAB]sSTA1[TAB]c73[TAB]c52[TAB]c139[TAB]c56[TAB]c81[TAB]c75[TAB]c200[TAB]c95[TAB]c96[TAB]c63[TAB]c32[TAB]c85[TAB]c109[TAB]c100[TAB]fFIN1             
+Type 2: 11[TAB]H[TAB]C0[TAB]mT3[TAB]sSTA1[TAB]c92[TAB]c90[TAB]c80[TAB]c97[TAB]c72[TAB]c88[TAB]c81[TAB]c112[TAB]c200[TAB]c113[TAB]c84[TAB]c82[TAB]c85[TAB]c114[TAB]c49[TAB]fFIN1         
+Type 2: 12[TAB]H[TAB]C0[TAB]mT3[TAB]sSTA1[TAB]c70[TAB]c73[TAB]c52[TAB]c67[TAB]c65[TAB]c81[TAB]c75[TAB]c200[TAB]c95[TAB]c113[TAB]c82[TAB]c105[TAB]c74[TAB]c109[TAB]c100[TAB]fFIN1        
+Type 2: 13[TAB]H[TAB]C0[TAB]mT3[TAB]sSTA1[TAB]c90[TAB]c129[TAB]c72[TAB]c67[TAB]c81[TAB]c64[TAB]c112[TAB]c200[TAB]c60[TAB]c82[TAB]c74[TAB]c109[TAB]c100[TAB]fFIN1                                                
+Type 2: 14[TAB]H[TAB]C0[TAB]mT3[TAB]sSTA1[TAB]c70[TAB]c42[TAB]c52[TAB]c88[TAB]c87[TAB]c91[TAB]c56[TAB]c135[TAB]c100[TAB]fFIN1   
+Type 2: 15[TAB]H[TAB]C0[TAB]mT3[TAB]sSTA1[TAB]c92[TAB]c90[TAB]c129[TAB]c77[TAB]c88[TAB]c65[TAB]c81[TAB]c75[TAB]c62[TAB]c82[TAB]c74[TAB]c107[TAB]c100[TAB]fFIN1  
+Type 2: 16[TAB]H[TAB]C0[TAB]mT3[TAB]sSTA1[TAB]c76[TAB]c129[TAB]c97[TAB]c52[TAB]c81[TAB]c61[TAB]c63[TAB]c105[TAB]c114[TAB]c109[TAB]c100[TAB]fFIN1        
+Type 2: 17[TAB]H[TAB]C0[TAB]mT3[TAB]sSTA1[TAB]c90[TAB]c80[TAB]c97[TAB]c72[TAB]c67[TAB]c65[TAB]c32[TAB]c105[TAB]c114[TAB]c49[TAB]fFIN1                                                               
+Type 2: 18[TAB]H[TAB]C0[TAB]mT3[TAB]sSTA1[TAB]c90[TAB]c80[TAB]c52[TAB]c67[TAB]c65[TAB]c79[TAB]c74[TAB]c114[TAB]c49[TAB]fFIN1    
+Type 2: 19[TAB]H[TAB]C0[TAB]mT3[TAB]sSTA1[TAB]c76[TAB]c90[TAB]c80[TAB]c72[TAB]c88[TAB]c65[TAB]c79[TAB]c135[TAB]c100[TAB]fFIN1   
+Type 2: 20[TAB]H[TAB]C0[TAB]mT3[TAB]sSTA1[TAB]c71[TAB]c90[TAB]c42[TAB]c52[TAB]c72[TAB]c97[TAB]c107[TAB]c49[TAB]fFIN1        
+Type 2: 21[TAB]H[TAB]C0[TAB]mT3[TAB]sSTA1[TAB]c90[TAB]c52[TAB]c94[TAB]c127[TAB]c139[TAB]c65[TAB]c81[TAB]c61[TAB]c63[TAB]c32[TAB]c74[TAB]c114[TAB]c109[TAB]c100[TAB]fFIN1            
+Type 2: 22[TAB]H[TAB]C0[TAB]mT3[TAB]sSTA1[TAB]c73[TAB]c80[TAB]c88[TAB]c94[TAB]c127[TAB]c139[TAB]c65[TAB]c47[TAB]c64[TAB]c82[TAB]c105[TAB]c109[TAB]c100[TAB]fFIN1                                                
+Type 2: 23[TAB]H[TAB]C0[TAB]mT3[TAB]sSTA1[TAB]c69[TAB]c42[TAB]c117[TAB]c31[TAB]c37[TAB]c33[TAB]c32[TAB]c72[TAB]c77[TAB]c39[TAB]c67[TAB]c53[TAB]c109[TAB]c100[TAB]fFIN1                                              
+Type 2: 24[TAB]H[TAB]C0[TAB]mT3[TAB]sSTA1[TAB]c71[TAB]c42[TAB]c117[TAB]c62[TAB]c37[TAB]c33[TAB]c32[TAB]c105[TAB]c80[TAB]c59[TAB]c109[TAB]c100[TAB]fFIN1     
+Type 2: 25[TAB]H[TAB]C0[TAB]mT3[TAB]sSTA1[TAB]c71[TAB]c115[TAB]c32[TAB]c72[TAB]c77[TAB]c67[TAB]c53[TAB]c49[TAB]fFIN1        
+Type 2: 26[TAB]H[TAB]C0[TAB]mT3[TAB]sSTA1[TAB]c69[TAB]c42[TAB]c31[TAB]c124[TAB]c46[TAB]c47[TAB]c79[TAB]c39[TAB]c59[TAB]c107[TAB]c38[TAB]c110[TAB]fFIN1      
+Type 2: 27[TAB]H[TAB]C0[TAB]mT3[TAB]sSTA1[TAB]c69[TAB]c50[TAB]c41[TAB]c121[TAB]c47[TAB]c79[TAB]c59[TAB]c36[TAB]c38[TAB]c110[TAB]fFIN1                                                               
+Type 2: 28[TAB]H[TAB]C0[TAB]mT3[TAB]sSTA1[TAB]c69[TAB]c50[TAB]c41[TAB]c79[TAB]c48[TAB]c107[TAB]c38[TAB]c110[TAB]fFIN1       
+Type 2: 29[TAB]H[TAB]C0[TAB]mT3[TAB]sSTA1[TAB]c43[TAB]c115[TAB]c50[TAB]c31[TAB]c124[TAB]c46[TAB]c47[TAB]c58[TAB]c48[TAB]c45[TAB]c38[TAB]c100[TAB]fFIN1      
+Type 2: 30[TAB]H[TAB]C0[TAB]mT3[TAB]sSTA1[TAB]c43[TAB]c123[TAB]c115[TAB]c121[TAB]c47[TAB]c58[TAB]c48[TAB]c45[TAB]c38[TAB]c49[TAB]fFIN1                                                              
+Type 2: 31[TAB]H[TAB]C0[TAB]mT3[TAB]sSTA1[TAB]c43[TAB]c123[TAB]c115[TAB]c44[TAB]c47[TAB]c58[TAB]c48[TAB]c45[TAB]c38[TAB]c100[TAB]fFIN1                                                              
+Type 2: 32[TAB]H[TAB]C0[TAB]mT3[TAB]sSTA1[TAB]c51[TAB]c40[TAB]c115[TAB]c34[TAB]c35[TAB]c44[TAB]c120[TAB]c45[TAB]c54[TAB]c100[TAB]fFIN1                                                              
+Type 2: 33[TAB]H[TAB]C0[TAB]mT3[TAB]sSTA1[TAB]c43[TAB]c106[TAB]c55[TAB]c34[TAB]c35[TAB]c44[TAB]c50[TAB]c54[TAB]c108[TAB]c100[TAB]fFIN1                                                              
+Type 3: H21[TAB]c1[TAB]r[TAB]f[TAB]t[TAB]d  
+Type 3: D21[TAB]c2[TAB]r[TAB]f[TAB]t[TAB]d  
+Type 3: H20[TAB]c3[TAB]r[TAB]f[TAB]t[TAB]d  
+Type 3: D20[TAB]c4[TAB]r[TAB]f[TAB]t[TAB]d  
+Type 3: H18[TAB]c5[TAB]r[TAB]f[TAB]t[TAB]d  
+Type 3: D18[TAB]c6[TAB]r[TAB]f[TAB]t[TAB]d  
+Type 3: H35[TAB]c7[TAB]r[TAB]f[TAB]t[TAB]d  
+Type 3: H40[TAB]c8[TAB]r[TAB]f[TAB]t[TAB]d  
+Type 3: H21 Kort[TAB]c8[TAB]r[TAB]f[TAB]t[TAB]d             
+Type 3: Svart 7 km[TAB]c9[TAB]r[TAB]f[TAB]t[TAB]d           
+Type 3: H45[TAB]c10[TAB]r[TAB]f[TAB]t[TAB]d                 
+Type 3: H50[TAB]c11[TAB]r[TAB]f[TAB]t[TAB]d                 
+Type 3: D35[TAB]c11[TAB]r[TAB]f[TAB]t[TAB]d                 
+Type 3: H55[TAB]c12[TAB]r[TAB]f[TAB]t[TAB]d                 
+Type 3: D40[TAB]c12[TAB]r[TAB]f[TAB]t[TAB]d                 
+Type 3: H60[TAB]c13[TAB]r[TAB]f[TAB]t[TAB]d                 
+Type 3: D45[TAB]c13[TAB]r[TAB]f[TAB]t[TAB]d                 
+Type 3: D21 kort[TAB]c13[TAB]r[TAB]f[TAB]t[TAB]d            
+Type 3: Svart 5 km[TAB]c14[TAB]r[TAB]f[TAB]t[TAB]d          
+Type 3: H65[TAB]c15[TAB]r[TAB]f[TAB]t[TAB]d                 
+Type 3: D50[TAB]c15[TAB]r[TAB]f[TAB]t[TAB]d                 
+Type 3: H70[TAB]c16[TAB]r[TAB]f[TAB]t[TAB]d                 
+Type 3: D55[TAB]c16[TAB]r[TAB]f[TAB]t[TAB]d                 
+Type 3: D60[TAB]c16[TAB]r[TAB]f[TAB]t[TAB]d                 
+Type 3: H75[TAB]c17[TAB]r[TAB]f[TAB]t[TAB]d                 
+Type 3: D65[TAB]c17[TAB]r[TAB]f[TAB]t[TAB]d                 
+Type 3: D70[TAB]c18[TAB]r[TAB]f[TAB]t[TAB]d                 
+Type 3: Blå 3 km[TAB]c18[TAB]r[TAB]f[TAB]t[TAB]d           
+Type 3: H80[TAB]c19[TAB]r[TAB]f[TAB]t[TAB]d                 
+Type 3: D75[TAB]c19[TAB]r[TAB]f[TAB]t[TAB]d                 
+Type 3: H85[TAB]c20[TAB]r[TAB]f[TAB]t[TAB]d                 
+Type 3: D80[TAB]c20[TAB]r[TAB]f[TAB]t[TAB]d                 
+Type 3: D85[TAB]c20[TAB]r[TAB]f[TAB]t[TAB]d                 
+Type 3: H16[TAB]c21[TAB]r[TAB]f[TAB]t[TAB]d                 
+Type 3: D16[TAB]c22[TAB]r[TAB]f[TAB]t[TAB]d                 
+Type 3: Orange 5 km[TAB]c23[TAB]r[TAB]f[TAB]t[TAB]d         
+Type 3: H14[TAB]c24[TAB]r[TAB]f[TAB]t[TAB]d                 
+Type 3: D14[TAB]c24[TAB]r[TAB]f[TAB]t[TAB]d                 
+Type 3: Orange 3 km[TAB]c25[TAB]r[TAB]f[TAB]t[TAB]d         
+Type 3: U4[TAB]c25[TAB]r[TAB]f[TAB]t[TAB]d  
+Type 3: Gul 5 km[TAB]c26[TAB]r[TAB]f[TAB]t[TAB]d            
+Type 3: H12[TAB]c27[TAB]r[TAB]f[TAB]t[TAB]d                 
+Type 3: D12[TAB]c27[TAB]r[TAB]f[TAB]t[TAB]d                 
+Type 3: U3[TAB]c28[TAB]r[TAB]f[TAB]t[TAB]d  
+Type 3: Gul 2,5 km[TAB]c28[TAB]r[TAB]f[TAB]t[TAB]d          
+Type 3: Vit 4 km[TAB]c29[TAB]r[TAB]f[TAB]t[TAB]d            
+Type 3: H10[TAB]c30[TAB]r[TAB]f[TAB]t[TAB]d                 
+Type 3: D10[TAB]c30[TAB]r[TAB]f[TAB]t[TAB]d                 
+Type 3: U2[TAB]c31[TAB]r[TAB]f[TAB]t[TAB]d  
+Type 3: Vit 2 km[TAB]c31[TAB]r[TAB]f[TAB]t[TAB]d            
+Type 3: U1[TAB]c32[TAB]r[TAB]f[TAB]t[TAB]d  
+Type 3: Inskolning[TAB]c33[TAB]r[TAB]f[TAB]t[TAB]d          

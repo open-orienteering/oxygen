@@ -1,0 +1,14 @@
+node_modules
+**/node_modules
+**/dist
+**/build
+.git
+.gitignore
+*.md
+.env
+packages/api/.env
+packages/e2e
+e2e
+playwright-report
+test-results
+.cursor

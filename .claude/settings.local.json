@@ -1,0 +1,15 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(wc -l /home/marcus/IdeaProjects/orientering/oos/e2e/*.spec.ts)",
+      "Bash(head -50 /home/marcus/IdeaProjects/orientering/oos/e2e/helpers/*.ts)",
+      "Bash(grep -r \"test\\\\|it\\\\|describe\" /home/marcus/IdeaProjects/orientering/oos/e2e/*.spec.ts)",
+      "Bash(grep -r \"vitest\\\\|@playwright/test\" /home/marcus/IdeaProjects/orientering/oos/packages/*/package.json)",
+      "Bash(grep -r \"describe\\\\|test\\(\" /home/marcus/IdeaProjects/orientering/oos/e2e/*.spec.ts)",
+      "Bash(sort -t: -k2 -rn)",
+      "Bash(ls -1 /home/marcus/IdeaProjects/orientering/oos/e2e/*.spec.ts)",
+      "Bash(grep -h \"from \"\"@playwright/test\"\"\\\\|from ''vitest''\" /home/marcus/IdeaProjects/orientering/oos/e2e/*.spec.ts /home/marcus/IdeaProjects/orientering/oos/packages/web/src/lib/__tests__/*.test.ts)",
+      "Bash(grep -rh \"test\\(\" /home/marcus/IdeaProjects/orientering/oos/e2e/*.spec.ts)"
+    ]
+  }
+}
