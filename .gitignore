@@ -32,3 +32,6 @@ test_log.txt
 
 # Local agent/Claude settings
 .agents/settings.local.json
+
+# direnv
+.envrc
