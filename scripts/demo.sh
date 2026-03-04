@@ -10,6 +10,8 @@ echo "Waiting for MySQL to be ready..."
 until docker compose exec mysql mysqladmin ping -h localhost --silent 2>/dev/null; do
   sleep 2
 done
+# Extra wait for init scripts to finish on first run
+sleep 3
 
 # ── 2. Create databases, user, and apply schema ──────────────────────────────
 echo "Initialising databases..."
@@ -20,13 +22,26 @@ docker compose exec mysql mysql -u root -e \
    GRANT ALL PRIVILEGES ON \`%\`.* TO 'meos'@'%';
    FLUSH PRIVILEGES;"
 
+echo "  Applying MeOSMain schema..."
 docker compose exec -T mysql mysql -u root MeOSMain \
   < packages/api/prisma/meos-schema.sql
 
 # ── 3. Load demo competition data ────────────────────────────────────────────
 echo "Loading demo data..."
-docker compose exec -T mysql mysql --max-allowed-packet=64M -u root itest \
-  < e2e/seed-test-competition.sql
+if ! docker compose exec -T mysql mysql -u root --net-buffer-length=16384 itest \
+  < e2e/seed-test-competition.sql 2>&1; then
+  echo "  Seed failed — MySQL may have run out of memory. Retrying..."
+  sleep 5
+  # Verify MySQL is still running
+  until docker compose exec mysql mysqladmin ping -h localhost --silent 2>/dev/null; do
+    echo "  Waiting for MySQL to recover..."
+    sleep 3
+  done
+  docker compose exec -T mysql mysql -u root --net-buffer-length=16384 itest \
+    < e2e/seed-test-competition.sql
+fi
+
+echo "  Registering competition..."
 docker compose exec mysql mysql -u root MeOSMain -e \
   "INSERT INTO oEvent (Id, Name, Date, NameId, Annotation, Removed) VALUES (1, 'itest', '2025-01-01', 'itest', '', 0)
    ON DUPLICATE KEY UPDATE Name=VALUES(Name);"
