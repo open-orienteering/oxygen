@@ -22,11 +22,16 @@ docker compose exec mysql mysql -u root -e \
 
 docker compose exec -T mysql mysql -u root itest \
   < packages/api/prisma/meos-schema.sql
+docker compose exec -T mysql mysql -u root MeOSMain \
+  < packages/api/prisma/meos-schema.sql
 
 # ── 3. Load demo competition data ────────────────────────────────────────────
 echo "Loading demo data..."
 docker compose exec -T mysql mysql -u root itest \
   < e2e/seed-test-competition.sql
+docker compose exec -T mysql mysql -u root MeOSMain -e \
+  "INSERT INTO oEvent (Id, Name, Date, NameId, Annotation, Removed) VALUES (1, 'itest', '2025-01-01', 'itest', '', 0)
+   ON DUPLICATE KEY UPDATE Name=VALUES(Name);"
 
 # ── 4. Start API and web ─────────────────────────────────────────────────────
 echo "Building and starting Oxygen (this takes a minute on first run)..."
