@@ -1,0 +1,784 @@
+import { Fragment, useMemo, useState } from "react";
+import { trpc } from "../lib/trpc";
+import { formatMeosTime } from "@oxygen/shared";
+import { StatusBadge } from "../components/StatusBadge";
+import { SortHeader } from "../components/SortHeader";
+import { ClubLogo } from "../components/ClubLogo";
+import { useSort } from "../hooks/useSort";
+import { useSearchParam, useNumericSearchParam } from "../hooks/useSearchParam";
+import { getCardType } from "../lib/si-protocol";
+
+// ─── Battery voltage thresholds (from sportident-python) ────
+const BATTERY_LOW = 2.5; // RED — replace battery!
+const BATTERY_WARN = 2.7; // YELLOW — getting low
+
+function batteryColor(volts: number): string {
+  if (volts < BATTERY_LOW) return "text-red-600 font-bold";
+  if (volts < BATTERY_WARN) return "text-amber-600 font-semibold";
+  return "text-emerald-600";
+}
+
+function batteryLabel(volts: number): string {
+  if (volts < BATTERY_LOW) return "LOW — replace!";
+  if (volts < BATTERY_WARN) return "Getting low";
+  return "OK";
+}
+
+function batteryBgColor(volts: number): string {
+  if (volts < BATTERY_LOW) return "bg-red-50";
+  if (volts < BATTERY_WARN) return "bg-amber-50";
+  return "bg-emerald-50";
+}
+
+// ─── Card Type Badge (no battery info here) ─────────────────
+
+const TYPE_COLORS: Record<string, string> = {
+  SI5: "bg-slate-100 text-slate-600",
+  SI6: "bg-slate-100 text-slate-600",
+  SI8: "bg-blue-100 text-blue-700",
+  SI9: "bg-blue-100 text-blue-700",
+  SI10: "bg-purple-100 text-purple-700",
+  SI11: "bg-purple-100 text-purple-700",
+  SIAC: "bg-emerald-100 text-emerald-700",
+  pCard: "bg-amber-100 text-amber-700",
+  tCard: "bg-amber-100 text-amber-700",
+};
+
+function CardTypeBadge({ type }: { type: string }) {
+  return (
+    <span
+      className={`px-1.5 py-0.5 rounded text-xs font-medium ${TYPE_COLORS[type] ?? "bg-slate-100 text-slate-600"
+        }`}
+    >
+      {type}
+    </span>
+  );
+}
+
+// ─── Battery Cell (for table column) ────────────────────────
+
+function BatteryCell({ voltage, cardType }: { voltage: number | null; cardType: string }) {
+  const isSIAC = cardType === "SIAC";
+  if (!isSIAC) return <span className="text-slate-200">—</span>;
+  if (voltage == null || voltage <= 0) {
+    return (
+      <span className="text-slate-300 text-xs italic" title="Re-read card to measure">
+        —
+      </span>
+    );
+  }
+
+  return (
+    <span
+      className={`font-mono text-xs ${batteryColor(voltage)}`}
+      title={`${voltage.toFixed(2)}V — ${batteryLabel(voltage)}`}
+    >
+      {voltage.toFixed(2)}V
+    </span>
+  );
+}
+
+// ─── Main Page ──────────────────────────────────────────────
+
+export function CardsPage() {
+  const [search, setSearch] = useSearchParam("search");
+  const [expandedCard, setExpandedCard] = useNumericSearchParam("card");
+
+  const cards = trpc.cardReadout.cardList.useQuery();
+
+  type Card = NonNullable<typeof cards.data>[number];
+
+  const comparators = useMemo(
+    () => ({
+      cardNo: (a: Card, b: Card) => a.cardNo - b.cardNo,
+      type: (a: Card, b: Card) => a.cardType.localeCompare(b.cardType),
+      battery: (a: Card, b: Card) =>
+        (a.batteryVoltage ?? -1) - (b.batteryVoltage ?? -1),
+      runner: (a: Card, b: Card) =>
+        (a.runner?.name ?? "").localeCompare(b.runner?.name ?? ""),
+      club: (a: Card, b: Card) =>
+        (a.runner?.clubName ?? "").localeCompare(b.runner?.clubName ?? ""),
+      class: (a: Card, b: Card) =>
+        (a.runner?.className ?? "").localeCompare(b.runner?.className ?? ""),
+      punches: (a: Card, b: Card) => a.punchCount - b.punchCount,
+      modified: (a: Card, b: Card) =>
+        (a.modified ?? "").localeCompare(b.modified ?? ""),
+    }),
+    [],
+  );
+  const { sorted, sort, toggle } = useSort(
+    cards.data ?? [],
+    { key: "cardNo", dir: "asc" },
+    comparators,
+  );
+
+  // Filter by search
+  const filtered = useMemo(() => {
+    if (!search) return sorted;
+    const term = search.toLowerCase();
+    return sorted.filter(
+      (c) =>
+        String(c.cardNo).includes(term) ||
+        (c.runner?.name ?? "").toLowerCase().includes(term) ||
+        (c.runner?.clubName ?? "").toLowerCase().includes(term) ||
+        c.cardType.toLowerCase().includes(term),
+    );
+  }, [sorted, search]);
+
+  const handleCardClick = (cardNo: number) => {
+    setExpandedCard(expandedCard === cardNo ? undefined : cardNo);
+  };
+
+  const colCount = 8;
+
+  return (
+    <>
+      {/* Header + Search */}
+      <div className="flex items-center justify-between mb-4 gap-4">
+        <div>
+          <h2 className="text-lg font-semibold text-slate-900">SI Cards</h2>
+          <p className="text-sm text-slate-500">
+            {cards.data?.length ?? 0} cards ·{" "}
+            {cards.data?.filter((c) => c.runner).length ?? 0} linked to runners
+          </p>
+        </div>
+        <div className="flex items-center gap-3">
+          <input
+            type="text"
+            placeholder="Search cards..."
+            value={search}
+            onChange={(e) => setSearch(e.target.value || "")}
+            className="px-3 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 w-64"
+          />
+        </div>
+      </div>
+
+      {/* Table */}
+      <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
+        <table className="w-full text-sm">
+          <thead>
+            <tr className="bg-slate-50 border-b border-slate-200">
+              <SortHeader label="Card No" active={sort.key === "cardNo"} direction={sort.dir} onClick={() => toggle("cardNo")} />
+              <SortHeader label="Type" active={sort.key === "type"} direction={sort.dir} onClick={() => toggle("type")} />
+              <SortHeader label="Battery" active={sort.key === "battery"} direction={sort.dir} onClick={() => toggle("battery")} />
+              <SortHeader label="Runner" active={sort.key === "runner"} direction={sort.dir} onClick={() => toggle("runner")} />
+              <SortHeader label="Club" active={sort.key === "club"} direction={sort.dir} onClick={() => toggle("club")} />
+              <SortHeader label="Class" active={sort.key === "class"} direction={sort.dir} onClick={() => toggle("class")} />
+              <SortHeader label="Punches" active={sort.key === "punches"} direction={sort.dir} onClick={() => toggle("punches")} />
+              <SortHeader label="Modified" active={sort.key === "modified"} direction={sort.dir} onClick={() => toggle("modified")} />
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-slate-100">
+            {cards.isLoading ? (
+              <tr>
+                <td colSpan={colCount} className="py-12 text-center text-slate-400">
+                  Loading...
+                </td>
+              </tr>
+            ) : filtered.length === 0 ? (
+              <tr>
+                <td colSpan={colCount} className="py-12 text-center text-slate-400">
+                  No cards found
+                </td>
+              </tr>
+            ) : (
+              filtered.map((card) => (
+                <Fragment key={card.cardNo}>
+                  <tr
+                    onClick={() => handleCardClick(card.cardNo)}
+                    className={`cursor-pointer hover:bg-slate-50 transition-colors ${expandedCard === card.cardNo ? "bg-blue-50" : ""
+                      }`}
+                  >
+                    <td className="px-4 py-3 font-mono font-medium text-slate-800">
+                      {card.cardNo}
+                    </td>
+                    <td className="px-4 py-3">
+                      <CardTypeBadge type={card.cardType || getCardType(card.cardNo)} />
+                    </td>
+                    <td className="px-4 py-3">
+                      <BatteryCell
+                        voltage={card.batteryVoltage}
+                        cardType={card.cardType || getCardType(card.cardNo)}
+                      />
+                    </td>
+                    <td className="px-4 py-3">
+                      {card.runner ? (
+                        <div className="flex items-center gap-2">
+                          <span className="text-slate-800">
+                            {card.runner.name}
+                          </span>
+                          {card.runner.status > 0 && (
+                            <StatusBadge status={card.runner.status as any} />
+                          )}
+                        </div>
+                      ) : (
+                        <span className="text-amber-600 text-xs font-medium">
+                          Unlinked
+                        </span>
+                      )}
+                    </td>
+                    <td className="px-4 py-3 text-slate-600">
+                      {card.runner?.clubName ? (
+                        <span className="inline-flex items-center gap-1.5">
+                          <ClubLogo clubId={card.runner.clubId} size="sm" />
+                          {card.runner.clubName}
+                        </span>
+                      ) : (
+                        "—"
+                      )}
+                    </td>
+                    <td className="px-4 py-3 text-slate-600">
+                      {card.runner?.className || "—"}
+                    </td>
+                    <td className="px-4 py-3 tabular-nums text-slate-600">
+                      {card.punchCount > 0 ? (
+                        <span className="font-medium">{card.punchCount}</span>
+                      ) : (
+                        <span className="text-slate-300">0</span>
+                      )}
+                    </td>
+                    <td className="px-4 py-3 text-xs text-slate-400">
+                      {card.modified
+                        ? new Date(card.modified).toLocaleString("sv-SE", {
+                          month: "short",
+                          day: "numeric",
+                          hour: "2-digit",
+                          minute: "2-digit",
+                        })
+                        : "—"}
+                    </td>
+                  </tr>
+                  {expandedCard === card.cardNo && (
+                    <tr key={`${card.cardNo}-detail`}>
+                      <td colSpan={colCount} className="p-0">
+                        <CardDetailPanel cardNo={card.cardNo} />
+                      </td>
+                    </tr>
+                  )}
+                </Fragment>
+              ))
+            )}
+          </tbody>
+        </table>
+      </div>
+    </>
+  );
+}
+
+// ─── Battery Detail Block (for detail panel) ────────────────
+
+interface BatteryDetailProps {
+  voltage: number; // raw ADC value from oCard
+  metadata?: {
+    batteryDate?: string;
+    productionDate?: string;
+    hardwareVersion?: string;
+    softwareVersion?: string;
+    clearCount?: number;
+  } | null;
+}
+
+function BatteryDetailBlock({ voltage, metadata }: BatteryDetailProps) {
+  // Convert oCard raw ADC voltage to volts
+  const volts = voltage > 0 && voltage < 255 ? 1.9 + voltage * 0.09 : 0;
+
+  return (
+    <div>
+      <h4 className="text-xs font-medium text-slate-500 uppercase tracking-wider mb-2">
+        Battery &amp; Card Info
+      </h4>
+      <dl className="space-y-1 text-sm">
+        {/* Voltage with status indicator */}
+        <div className="flex gap-2 items-center">
+          <dt className="text-slate-500 w-28">Voltage:</dt>
+          <dd>
+            {volts > 0 ? (
+              <span className="inline-flex items-center gap-2">
+                <span className={`font-mono font-medium ${batteryColor(volts)}`}>
+                  {volts.toFixed(2)}V
+                </span>
+                <span
+                  className={`text-xs px-1.5 py-0.5 rounded ${batteryBgColor(volts)} ${batteryColor(volts)}`}
+                >
+                  {batteryLabel(volts)}
+                </span>
+              </span>
+            ) : (
+              <span className="text-slate-400 text-xs italic">
+                Not measured — re-read card to measure
+              </span>
+            )}
+          </dd>
+        </div>
+
+        {/* Battery date */}
+        {metadata?.batteryDate && (
+          <div className="flex gap-2">
+            <dt className="text-slate-500 w-28">Battery date:</dt>
+            <dd className="font-mono text-slate-700">{metadata.batteryDate}</dd>
+          </div>
+        )}
+
+        {/* Production date */}
+        {metadata?.productionDate && (
+          <div className="flex gap-2">
+            <dt className="text-slate-500 w-28">Produced:</dt>
+            <dd className="font-mono text-slate-700">{metadata.productionDate}</dd>
+          </div>
+        )}
+
+        {/* Hardware version */}
+        {metadata?.hardwareVersion && (
+          <div className="flex gap-2">
+            <dt className="text-slate-500 w-28">HW version:</dt>
+            <dd className="font-mono text-slate-700">{metadata.hardwareVersion}</dd>
+          </div>
+        )}
+
+        {/* Software version */}
+        {metadata?.softwareVersion && (
+          <div className="flex gap-2">
+            <dt className="text-slate-500 w-28">SW version:</dt>
+            <dd className="font-mono text-slate-700">{metadata.softwareVersion}</dd>
+          </div>
+        )}
+
+        {/* Clear count */}
+        {metadata?.clearCount != null && (
+          <div className="flex gap-2">
+            <dt className="text-slate-500 w-28">Clear count:</dt>
+            <dd className="font-mono text-slate-700">{metadata.clearCount}</dd>
+          </div>
+        )}
+      </dl>
+    </div>
+  );
+}
+
+// ─── Card Detail Panel ──────────────────────────────────────
+
+function CardDetailPanel({ cardNo }: { cardNo: number }) {
+  const detail = trpc.cardReadout.cardDetail.useQuery({ cardNo });
+  const history = trpc.cardReadout.readoutHistory.useQuery({ cardNo });
+
+  if (detail.isLoading) {
+    return (
+      <div className="p-6 text-center text-slate-400">Loading details...</div>
+    );
+  }
+  if (detail.isError) {
+    return (
+      <div className="p-6 text-center text-red-500">
+        Error loading card: {detail.error?.message ?? "Unknown error"}
+      </div>
+    );
+  }
+  if (!detail.data) {
+    return (
+      <div className="p-6 text-center text-slate-400">Card not found in database</div>
+    );
+  }
+
+  const d = detail.data;
+  const cardType = d.cardType || (d.cardNo > 0 ? getCardType(d.cardNo) : "Unknown");
+  const isSIAC = cardType === "SIAC";
+
+  return (
+    <div className="bg-slate-50/50 border-t border-slate-200 p-5 space-y-5">
+      {/* Card Info + Runner */}
+      <div className="grid grid-cols-2 gap-6">
+        <div>
+          <h4 className="text-xs font-medium text-slate-500 uppercase tracking-wider mb-2">
+            Card Information
+          </h4>
+          <dl className="space-y-1 text-sm">
+            <div className="flex gap-2">
+              <dt className="text-slate-500 w-20">Number:</dt>
+              <dd className="font-mono font-medium">{d.cardNo}</dd>
+            </div>
+            <div className="flex gap-2">
+              <dt className="text-slate-500 w-20">Type:</dt>
+              <dd><CardTypeBadge type={String(cardType)} /></dd>
+            </div>
+            {(d.ownerData as any) && (
+              <>
+                {((d.ownerData as any).firstName || (d.ownerData as any).lastName) && (
+                  <div className="flex gap-2">
+                    <dt className="text-slate-500 w-20">Owner:</dt>
+                    <dd>
+                      {[(d.ownerData as any).firstName, (d.ownerData as any).lastName]
+                        .filter(Boolean)
+                        .join(" ")}
+                    </dd>
+                  </div>
+                )}
+                {(d.ownerData as any).club && (
+                  <div className="flex gap-2">
+                    <dt className="text-slate-500 w-20">Club:</dt>
+                    <dd>{(d.ownerData as any).club}</dd>
+                  </div>
+                )}
+                {(d.ownerData as any).country && (
+                  <div className="flex gap-2">
+                    <dt className="text-slate-500 w-20">Country:</dt>
+                    <dd>{(d.ownerData as any).country}</dd>
+                  </div>
+                )}
+              </>
+            )}
+          </dl>
+        </div>
+        <div>
+          <h4 className="text-xs font-medium text-slate-500 uppercase tracking-wider mb-2">
+            Linked Runner
+          </h4>
+          {d.runner ? (
+            <dl className="space-y-1 text-sm">
+              <div className="flex gap-2">
+                <dt className="text-slate-500 w-20">Name:</dt>
+                <dd className="font-medium">{d.runner.name}</dd>
+              </div>
+              <div className="flex gap-2">
+                <dt className="text-slate-500 w-20">Club:</dt>
+                <dd>
+                  {d.runner.clubName ? (
+                    <span className="inline-flex items-center gap-1.5">
+                      <ClubLogo clubId={d.runner.clubId} size="sm" />
+                      {d.runner.clubName}
+                    </span>
+                  ) : (
+                    "—"
+                  )}
+                </dd>
+              </div>
+              <div className="flex gap-2">
+                <dt className="text-slate-500 w-20">Class:</dt>
+                <dd>{d.runner.className || "—"}</dd>
+              </div>
+              <div className="flex gap-2">
+                <dt className="text-slate-500 w-20">Status:</dt>
+                <dd>
+                  <StatusBadge status={d.runner.status as any} />
+                </dd>
+              </div>
+            </dl>
+          ) : (
+            <p className="text-sm text-amber-600">
+              Not linked to any runner in this competition
+            </p>
+          )}
+        </div>
+      </div>
+
+      {/* Battery & Card Info (SIAC only) */}
+      {isSIAC && (
+        <BatteryDetailBlock voltage={d.voltage} metadata={d.metadata as any} />
+      )}
+
+      {/* Current Readout */}
+      <div>
+        <h4 className="text-xs font-medium text-slate-500 uppercase tracking-wider mb-2">
+          Current Readout ({d.punches.length} punches)
+        </h4>
+        <div className="bg-white rounded-lg border border-slate-200 overflow-hidden">
+          {d.punches.length === 0 && !d.startTime && !d.finishTime ? (
+            <div className="p-4 text-sm text-slate-400 text-center">
+              No readout data
+            </div>
+          ) : (
+            <table className="w-full text-xs">
+              <thead>
+                <tr className="bg-slate-50 border-b border-slate-100">
+                  <th className="px-3 py-1.5 text-left font-medium text-slate-500">
+                    #
+                  </th>
+                  <th className="px-3 py-1.5 text-left font-medium text-slate-500">
+                    Control
+                  </th>
+                  <th className="px-3 py-1.5 text-left font-medium text-slate-500">
+                    Time
+                  </th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-50">
+                {d.checkTime != null && d.checkTime > 0 && (
+                  <tr className="text-slate-400">
+                    <td className="px-3 py-1" />
+                    <td className="px-3 py-1 italic">Check</td>
+                    <td className="px-3 py-1 font-mono">
+                      {formatMeosTime(d.checkTime)}
+                    </td>
+                  </tr>
+                )}
+                {d.startTime != null && d.startTime > 0 && (
+                  <tr className="text-emerald-600">
+                    <td className="px-3 py-1" />
+                    <td className="px-3 py-1 font-medium">Start</td>
+                    <td className="px-3 py-1 font-mono">
+                      {formatMeosTime(d.startTime)}
+                    </td>
+                  </tr>
+                )}
+                {d.punches.map((p, i) => (
+                  <tr key={i}>
+                    <td className="px-3 py-1 text-slate-400">{i + 1}</td>
+                    <td className="px-3 py-1 font-mono font-medium">
+                      {p.controlCode}
+                    </td>
+                    <td className="px-3 py-1 font-mono">
+                      {formatMeosTime(p.time)}
+                    </td>
+                  </tr>
+                ))}
+                {d.finishTime != null && d.finishTime > 0 && (
+                  <tr className="text-blue-600 font-medium">
+                    <td className="px-3 py-1" />
+                    <td className="px-3 py-1">Finish</td>
+                    <td className="px-3 py-1 font-mono">
+                      {formatMeosTime(d.finishTime)}
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          )}
+        </div>
+      </div>
+
+      {/* Readout History */}
+      {history.data && history.data.length > 0 && (
+        <ReadoutHistorySection history={history.data as any} />
+      )}
+    </div>
+  );
+}
+
+// ─── Parse MeOS punch string ────────────────────────────────
+
+interface ParsedPunchEntry {
+  type: number;
+  time: number; // deciseconds
+}
+
+function parseMeosPunches(punchString: string): ParsedPunchEntry[] {
+  if (!punchString) return [];
+  const punches: ParsedPunchEntry[] = [];
+  for (const part of punchString.split(";").filter(Boolean)) {
+    const dashIdx = part.indexOf("-");
+    if (dashIdx === -1) continue;
+    const type = parseInt(part.substring(0, dashIdx), 10);
+    let timeStr = part.substring(dashIdx + 1);
+    const atIdx = timeStr.indexOf("@");
+    if (atIdx !== -1) timeStr = timeStr.substring(0, atIdx);
+    const hashIdx = timeStr.indexOf("#");
+    if (hashIdx !== -1) timeStr = timeStr.substring(0, hashIdx);
+    const dotIdx = timeStr.indexOf(".");
+    let time: number;
+    if (dotIdx !== -1) {
+      time =
+        parseInt(timeStr.substring(0, dotIdx), 10) * 10 +
+        (parseInt(timeStr.substring(dotIdx + 1), 10) || 0);
+    } else {
+      time = parseInt(timeStr, 10) * 10;
+    }
+    if (!isNaN(type) && !isNaN(time)) punches.push({ type, time });
+  }
+  return punches;
+}
+
+// ─── Readout History Section ────────────────────────────────
+
+type HistoryEntry = {
+  id: number;
+  cardNo: number;
+  cardType: string;
+  punches: string;
+  voltage: number; // hundredths of volts
+  ownerData: { firstName?: string; lastName?: string; club?: string } | null;
+  metadata: {
+    batteryDate?: string;
+    productionDate?: string;
+    hardwareVersion?: string;
+    softwareVersion?: string;
+    clearCount?: number;
+  } | null;
+  readAt: string;
+};
+
+function HistoryBatteryIndicator({ voltage }: { voltage: number }) {
+  // voltage is in hundredths of volts (e.g. 298 = 2.98V)
+  const volts = voltage > 0 ? voltage / 100 : 0;
+  if (volts <= 0) return null;
+
+  return (
+    <span
+      className={`text-[10px] font-mono ${batteryColor(volts)}`}
+      title={`Battery: ${volts.toFixed(2)}V — ${batteryLabel(volts)}`}
+    >
+      {volts.toFixed(2)}V
+    </span>
+  );
+}
+
+function ReadoutHistorySection({ history }: { history: HistoryEntry[] }) {
+  const [expandedId, setExpandedId] = useState<number | null>(null);
+
+  return (
+    <div>
+      <h4 className="text-xs font-medium text-slate-500 uppercase tracking-wider mb-2">
+        Readout History ({history.length})
+      </h4>
+      <div className="space-y-2">
+        {history.map((h) => {
+          const allPunches = parseMeosPunches(h.punches);
+          const isExpanded = expandedId === h.id;
+          const checkPunch = allPunches.find((p) => p.type === 3);
+          const startPunch = allPunches.find((p) => p.type === 1);
+          const finishPunch = allPunches.find((p) => p.type === 2);
+          const controlPunches = allPunches.filter(
+            (p) => p.type !== 1 && p.type !== 2 && p.type !== 3,
+          );
+
+          return (
+            <div key={h.id} className="bg-white rounded-lg border border-slate-200 overflow-hidden">
+              {/* Summary row — clickable */}
+              <button
+                onClick={() => setExpandedId(isExpanded ? null : h.id)}
+                className="w-full px-4 py-2 flex items-center justify-between text-sm hover:bg-slate-50 transition-colors"
+              >
+                <div className="flex items-center gap-3">
+                  <svg
+                    className={`w-3.5 h-3.5 text-slate-400 transition-transform ${isExpanded ? "rotate-90" : ""
+                      }`}
+                    fill="none"
+                    viewBox="0 0 24 24"
+                    stroke="currentColor"
+                    strokeWidth={2}
+                  >
+                    <path
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      d="M9 5l7 7-7 7"
+                    />
+                  </svg>
+                  <span className="text-xs text-slate-400 tabular-nums">
+                    {new Date(h.readAt).toLocaleString("sv-SE", {
+                      year: "numeric",
+                      month: "2-digit",
+                      day: "2-digit",
+                      hour: "2-digit",
+                      minute: "2-digit",
+                      second: "2-digit",
+                    })}
+                  </span>
+                  {h.cardType && (
+                    <CardTypeBadge type={h.cardType} />
+                  )}
+                  <span className="text-slate-600">
+                    {controlPunches.length} punches
+                  </span>
+                  {h.voltage > 0 && (
+                    <HistoryBatteryIndicator voltage={h.voltage} />
+                  )}
+                  {h.ownerData &&
+                    (h.ownerData.firstName || h.ownerData.lastName) && (
+                      <span className="text-slate-400 text-xs">
+                        Owner:{" "}
+                        {[h.ownerData.firstName, h.ownerData.lastName]
+                          .filter(Boolean)
+                          .join(" ")}
+                      </span>
+                    )}
+                </div>
+              </button>
+
+              {/* Expanded punch detail */}
+              {isExpanded && (
+                <div className="border-t border-slate-100 p-3">
+                  {allPunches.length === 0 ? (
+                    <p className="text-xs text-slate-400 text-center py-2">
+                      No punch data
+                    </p>
+                  ) : (
+                    <table className="w-full text-xs">
+                      <thead>
+                        <tr className="text-slate-400">
+                          <th className="px-2 py-1 text-left w-10">#</th>
+                          <th className="px-2 py-1 text-left">Control</th>
+                          <th className="px-2 py-1 text-left">Time</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-50">
+                        {checkPunch && (
+                          <tr className="text-slate-400">
+                            <td className="px-2 py-1" />
+                            <td className="px-2 py-1 italic">Check</td>
+                            <td className="px-2 py-1 font-mono">
+                              {formatMeosTime(checkPunch.time)}
+                            </td>
+                          </tr>
+                        )}
+                        {startPunch && (
+                          <tr className="text-emerald-600">
+                            <td className="px-2 py-1" />
+                            <td className="px-2 py-1 font-medium">Start</td>
+                            <td className="px-2 py-1 font-mono">
+                              {formatMeosTime(startPunch.time)}
+                            </td>
+                          </tr>
+                        )}
+                        {controlPunches.map((p, i) => (
+                          <tr key={i}>
+                            <td className="px-2 py-1 text-slate-400">
+                              {i + 1}
+                            </td>
+                            <td className="px-2 py-1 font-mono font-medium">
+                              {p.type}
+                            </td>
+                            <td className="px-2 py-1 font-mono">
+                              {formatMeosTime(p.time)}
+                            </td>
+                          </tr>
+                        ))}
+                        {finishPunch && (
+                          <tr className="text-blue-600 font-medium">
+                            <td className="px-2 py-1" />
+                            <td className="px-2 py-1">Finish</td>
+                            <td className="px-2 py-1 font-mono">
+                              {formatMeosTime(finishPunch.time)}
+                            </td>
+                          </tr>
+                        )}
+                      </tbody>
+                    </table>
+                  )}
+
+                  {/* Metadata for this readout */}
+                  {h.metadata && (
+                    <div className="mt-2 pt-2 border-t border-slate-100 flex flex-wrap gap-x-4 gap-y-1 text-[10px] text-slate-400">
+                      {h.metadata.batteryDate && (
+                        <span>Battery date: {h.metadata.batteryDate}</span>
+                      )}
+                      {h.metadata.productionDate && (
+                        <span>Produced: {h.metadata.productionDate}</span>
+                      )}
+                      {h.metadata.hardwareVersion && (
+                        <span>HW: {h.metadata.hardwareVersion}</span>
+                      )}
+                      {h.metadata.softwareVersion && (
+                        <span>SW: {h.metadata.softwareVersion}</span>
+                      )}
+                      {h.metadata.clearCount != null && (
+                        <span>Clears: {h.metadata.clearCount}</span>
+                      )}
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}

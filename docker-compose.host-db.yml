@@ -1,0 +1,41 @@
+# Use this when MySQL is already running on the host machine.
+#
+# Both containers use host networking so the API can reach MySQL on 127.0.0.1.
+# The web frontend will be available on port 8080, the API on port 3001.
+# The dev server uses port 3002 (API) and 5173 (Vite) to avoid collisions.
+#
+# Usage:
+#   docker compose -f docker-compose.host-db.yml up --build
+#
+# Optionally override the DB URLs:
+#   DATABASE_URL="mysql://meos@127.0.0.1:3306/itest" \
+#   MEOS_MAIN_DB_URL="mysql://meos@127.0.0.1:3306/MeOSMain" \
+#   docker compose -f docker-compose.host-db.yml up --build
+
+services:
+  api:
+    build:
+      context: .
+      target: api
+      network: host
+    container_name: oxygen-api
+    restart: unless-stopped
+    network_mode: host
+    environment:
+      DATABASE_URL: "${DATABASE_URL:-mysql://meos@127.0.0.1:3306/itest}"
+      MEOS_MAIN_DB_URL: "${MEOS_MAIN_DB_URL:-mysql://meos@127.0.0.1:3306/MeOSMain}"
+      PORT: "3001"
+      HOST: "0.0.0.0"
+
+  web:
+    build:
+      context: .
+      target: web
+      network: host
+    container_name: oxygen-web
+    restart: unless-stopped
+    network_mode: host
+    depends_on:
+      - api
+    volumes:
+      - ./docker/nginx.host-db.conf:/etc/nginx/conf.d/default.conf:ro

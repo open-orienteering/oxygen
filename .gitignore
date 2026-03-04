@@ -1,0 +1,34 @@
+node_modules/
+dist/
+.env
+.env.local
+*.log
+.DS_Store
+.vite/
+*.tsbuildinfo
+
+# Prisma
+packages/api/prisma/generated/
+
+# Playwright
+test-results/
+playwright-report/
+blob-report/
+
+# Coverage reports
+coverage/
+lcov-report/
+*.info
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Log files
+api_log.txt
+test_log.txt
+
+# Local agent/Claude settings
+.agents/settings.local.json

@@ -1,0 +1,272 @@
+Type 12: [TAB]x128.510000[TAB]y79.848789[TAB]z3.514258               
+Type 10: Purple[TAB]n5[TAB]v1[TAB]c35.0[TAB]m85.0[TAB]y0.0[TAB]k0.0[TAB]f1500.0[TAB]a45.0                
+Type 9: Violett för banlayout[TAB]n54[TAB]c30[TAB]m95[TAB]y0[TAB]k0[TAB]o0[TAB]t100[TAB]bNormal[TAB]p100[TAB]sPurple[TAB]p100      
+Type 9: Black for control description[TAB]n56[TAB]k100[TAB]sPurple[TAB]p100[TAB]m0                          
+Type 9: Vit för banlayout[TAB]n55[TAB]c0[TAB]m0[TAB]y0[TAB]k0[TAB]o0[TAB]t100[TAB]bNormal[TAB]sPurple[TAB]p0   
+Type 9: Alla färgseparationer[TAB]n1[TAB]k100[TAB]c100[TAB]m100[TAB]y100[TAB]sPurple[TAB]p100[TAB]o0[TAB]t100[TAB]bNormal      
+Type 9: Övre Violett för banpåtryck[TAB]n50[TAB]c35[TAB]m85[TAB]y0[TAB]k0[TAB]o1[TAB]t100[TAB]bDarken[TAB]sPurple[TAB]p100   
+Type 9: Vit för järnväg[TAB]n9[TAB]k0[TAB]bNormal[TAB]y0[TAB]o0[TAB]c0[TAB]m0[TAB]t100[TAB]sPurple[TAB]p0    
+Type 9: Svart[TAB]n2[TAB]c0[TAB]m0[TAB]y0[TAB]k100[TAB]o1[TAB]bNormal[TAB]t100          
+Type 9: Blå  för punktsymboler[TAB]n4[TAB]k0[TAB]y0[TAB]m0[TAB]c100[TAB]bNormal[TAB]o0[TAB]t100       
+Type 9: Brun för punktsymboler[TAB]n5[TAB]c25[TAB]m75[TAB]y100[TAB]k0[TAB]o0[TAB]bNormal[TAB]t100      
+Type 9: Grön  för punktsymboler[TAB]n6[TAB]y100[TAB]c80[TAB]m0[TAB]k0[TAB]o0[TAB]bNormal[TAB]t100     
+Type 9: White - Prominent bush or small tree[TAB]n57[TAB]k0[TAB]bNormal[TAB]y0[TAB]o0[TAB]c0[TAB]m0[TAB]t100[TAB]sPurple[TAB]p0                 
+Type 9: Blå  för linjesymboler[TAB]n14[TAB]k0[TAB]y0[TAB]m0[TAB]c100[TAB]bNormal[TAB]o0[TAB]t100      
+Type 9: Mörkgrön[TAB]n13[TAB]y80[TAB]c100[TAB]m0[TAB]k30[TAB]o0[TAB]bNormal[TAB]t100  
+Type 9: Brun för linjesymboler[TAB]n15[TAB]c25[TAB]m75[TAB]y100[TAB]k0[TAB]o0[TAB]bNormal[TAB]t100     
+Type 9: Undre Violett för banpåtryck[TAB]n52[TAB]c20[TAB]m95[TAB]y0[TAB]k0[TAB]o1[TAB]t100[TAB]bDarken[TAB]sPurple[TAB]p100   
+Type 9: Vit för banpåtryck[TAB]n51[TAB]c0[TAB]m0[TAB]y0[TAB]k0[TAB]o0[TAB]t100[TAB]bNormal[TAB]sPurple[TAB]p0                 
+Type 9: Svart för vägar (mittlinje)[TAB]n7[TAB]c0[TAB]m0[TAB]y0[TAB]k100[TAB]o1[TAB]bNormal[TAB]t100  
+Type 9: Brun 50% för vägfyllning[TAB]n8[TAB]c10[TAB]m35[TAB]y50[TAB]k0[TAB]o0[TAB]bNormal[TAB]t100    
+Type 9: Svart för  vägar (sidlinje)[TAB]n10[TAB]k100[TAB]y0[TAB]bNormal[TAB]o1[TAB]c0[TAB]m0[TAB]t100                 
+Type 9: Svart 50%[TAB]n11[TAB]k50[TAB]m0[TAB]bNormal[TAB]y0[TAB]o0[TAB]c0[TAB]t100      
+Type 9: Svart 20%[TAB]n12[TAB]k20[TAB]y0[TAB]bNormal[TAB]o0[TAB]c0[TAB]m0[TAB]t100      
+Type 9: Blå för ytsymboler[TAB]n16[TAB]k0[TAB]y0[TAB]m0[TAB]c100[TAB]bNormal[TAB]o0[TAB]t100          
+Type 9: Blå 70%[TAB]n17[TAB]k0[TAB]y0[TAB]m0[TAB]c70[TAB]bNormal[TAB]o0[TAB]t100       
+Type 9: Blå 50%[TAB]n18[TAB]k0[TAB]y0[TAB]m0[TAB]c50[TAB]bNormal[TAB]o0[TAB]t100       
+Type 9: Vit över brun, grön och gul[TAB]n23[TAB]k0[TAB]bNormal[TAB]y0[TAB]o0[TAB]c0[TAB]m0[TAB]t100   
+Type 9: Brun 50% för belagd yta[TAB]n19[TAB]c10[TAB]m35[TAB]y50[TAB]k0[TAB]o0[TAB]bNormal[TAB]t100     
+Type 9: Gul för rågång/drivningsväg[TAB]n20[TAB]m27[TAB]y79[TAB]c0[TAB]k0[TAB]bNormal[TAB]o0[TAB]t100               
+Type 9: Grön 60% för rågång/drivningsväg[TAB]n21[TAB]y60[TAB]c48[TAB]m0[TAB]k0[TAB]o0[TAB]bNormal[TAB]t100         
+Type 9: Grön 30% för rågång/drivningsväg[TAB]n22[TAB]c24[TAB]y30[TAB]k0[TAB]bNormal[TAB]m0[TAB]o0[TAB]t100         
+Type 9: Gul + Grön 50%[TAB]n24[TAB]c38[TAB]m27[TAB]y100[TAB]k0[TAB]o0[TAB]t100[TAB]bNormal             
+Type 9: Grön för ytsymboler[TAB]n26[TAB]y100[TAB]c80[TAB]m0[TAB]k0[TAB]o0[TAB]bNormal[TAB]t100        
+Type 9: Grön 60%[TAB]n27[TAB]y60[TAB]c48[TAB]o0[TAB]k0[TAB]m0[TAB]bNormal[TAB]t100     
+Type 9: Grön 30%[TAB]n28[TAB]c24[TAB]y30[TAB]k0[TAB]bNormal[TAB]m0[TAB]o0[TAB]t100     
+Type 9: Grön för undervegetation (över gul)[TAB]n29[TAB]y100[TAB]c80[TAB]m0[TAB]k0[TAB]o0[TAB]bNormal[TAB]t100       
+Type 9: Svart 35%[TAB]n30[TAB]y0[TAB]k35[TAB]m0[TAB]c0[TAB]bNormal[TAB]o0[TAB]t100      
+Type 9: Vit över gul[TAB]n31[TAB]k0[TAB]bNormal[TAB]y0[TAB]o0[TAB]c0[TAB]m0[TAB]t100   
+Type 9: Svart för odlad mark och sandområde[TAB]n35[TAB]c0[TAB]m0[TAB]y0[TAB]k100[TAB]o1[TAB]bNormal[TAB]t100         
+Type 9: Gul[TAB]n32[TAB]m27[TAB]y79[TAB]c0[TAB]k0[TAB]bNormal[TAB]o0[TAB]t100           
+Type 9: Gul 75%[TAB]n33[TAB]m20[TAB]y59[TAB]c0[TAB]k0[TAB]bNormal[TAB]o0[TAB]t100       
+Type 9: Gul 50%[TAB]n34[TAB]m14[TAB]y40[TAB]k0[TAB]bNormal[TAB]o0[TAB]c0[TAB]t100       
+Type 15: All symbols[TAB]g-1[TAB]e1[TAB]f1[TAB]l1[TAB]i0     
+Type 1039: [TAB]m15000.000000[TAB]g50.0000[TAB]r1[TAB]x671000[TAB]y6566000[TAB]a3.90000000[TAB]d250.00[TAB]b0.00[TAB]c0.00[TAB]e3006[TAB]i13002                                        
+Type 1024: [TAB]t0[TAB]v284[TAB]R1[TAB]s0[TAB]g-1[TAB]zVERT[TAB]h94                                    
+Type 1031: [TAB]t0[TAB]c0[TAB]h1[TAB]i30[TAB]n1.00[TAB]p0[TAB]l0.00[TAB]s4.00[TAB]b1[TAB]B0[TAB]d0[TAB]r1[TAB]w0[TAB]g1[TAB]a0[TAB]f0[TAB]u0[TAB]o0                                                                
+Type 8: H:\Delade enheter\Skogsluffarna\Arrangemang\2025 Långdistans 4 okt\Banläggning\Utsnitt\A3 10000 Mörtsjön  - Luffarna.ocd[TAB]s1[TAB]r1[TAB]cUtsnitt\                                                                                                    
+Type 12: [TAB]x128.510000[TAB]y74.385313[TAB]z3.514258               
+Type 2: 1[TAB]H[TAB]C0[TAB]mT3[TAB]sSTA1[TAB]c70[TAB]c76[TAB]c129[TAB]c72[TAB]c88[TAB]c133[TAB]c111[TAB]c94[TAB]c103[TAB]c91[TAB]c56[TAB]c139[TAB]c87[TAB]c56[TAB]c81[TAB]c75[TAB]c200[TAB]c95[TAB]c113[TAB]c63[TAB]c32[TAB]c74[TAB]c114[TAB]c109[TAB]c100[TAB]fFIN1            
+Type 2: 2[TAB]H[TAB]C0[TAB]mT3[TAB]sSTA1[TAB]c92[TAB]c76[TAB]c52[TAB]c57[TAB]c127[TAB]c83[TAB]c91[TAB]c56[TAB]c81[TAB]c61[TAB]c112[TAB]c200[TAB]c113[TAB]c84[TAB]c82[TAB]c105[TAB]c135[TAB]c100[TAB]fFIN1           
+Type 2: 3[TAB]H[TAB]C0[TAB]mT3[TAB]sSTA1[TAB]c92[TAB]c42[TAB]c52[TAB]c127[TAB]c103[TAB]c83[TAB]c56[TAB]c81[TAB]c64[TAB]c112[TAB]c200[TAB]c95[TAB]c113[TAB]c102[TAB]c32[TAB]c74[TAB]c109[TAB]c100[TAB]fFIN1          
+Type 2: 4[TAB]H[TAB]C0[TAB]mT3[TAB]sSTA1[TAB]c70[TAB]c90[TAB]c129[TAB]c97[TAB]c77[TAB]c88[TAB]c65[TAB]c81[TAB]c112[TAB]c200[TAB]c95[TAB]c113[TAB]c63[TAB]c105[TAB]c114[TAB]c109[TAB]c100[TAB]fFIN1                              
+Type 2: 5[TAB]H[TAB]C0[TAB]mT3[TAB]sSTA1[TAB]c73[TAB]c80[TAB]c57[TAB]c103[TAB]c83[TAB]c56[TAB]c81[TAB]c75[TAB]c200[TAB]c96[TAB]c84[TAB]c63[TAB]c32[TAB]c85[TAB]c135[TAB]c100[TAB]fFIN1      
+Type 2: 6[TAB]H[TAB]C0[TAB]mT3[TAB]sSTA1[TAB]c71[TAB]c90[TAB]c42[TAB]c52[TAB]c67[TAB]c81[TAB]c61[TAB]c75[TAB]c200[TAB]c95[TAB]c96[TAB]c82[TAB]c85[TAB]c114[TAB]c109[TAB]c100[TAB]fFIN1      
+Type 2: 7[TAB]H[TAB]C0[TAB]mT3[TAB]sSTA1[TAB]c71[TAB]c88[TAB]c127[TAB]c103[TAB]c91[TAB]c56[TAB]c81[TAB]c64[TAB]c112[TAB]c200[TAB]c95[TAB]c113[TAB]c102[TAB]c32[TAB]c74[TAB]c109[TAB]c100[TAB]fFIN1                              
+Type 2: 8[TAB]H[TAB]C0[TAB]mT3[TAB]sSTA1[TAB]c73[TAB]c42[TAB]c80[TAB]c57[TAB]c127[TAB]c103[TAB]c83[TAB]c56[TAB]c81[TAB]c64[TAB]c112[TAB]c200[TAB]c84[TAB]c82[TAB]c85[TAB]c100[TAB]fFIN1     
+Type 2: 9[TAB]H[TAB]C0[TAB]mT3[TAB]sSTA1[TAB]c76[TAB]c129[TAB]c88[TAB]c139[TAB]c87[TAB]c56[TAB]c79[TAB]c47[TAB]c75[TAB]c200[TAB]c113[TAB]c84[TAB]c102[TAB]c85[TAB]c109[TAB]c100[TAB]fFIN1   
+Type 2: 10[TAB]H[TAB]C0[TAB]mT3[TAB]sSTA1[TAB]c73[TAB]c52[TAB]c139[TAB]c56[TAB]c81[TAB]c75[TAB]c200[TAB]c95[TAB]c96[TAB]c63[TAB]c32[TAB]c85[TAB]c109[TAB]c100[TAB]fFIN1             
+Type 2: 11[TAB]H[TAB]C0[TAB]mT3[TAB]sSTA1[TAB]c92[TAB]c90[TAB]c80[TAB]c97[TAB]c72[TAB]c88[TAB]c81[TAB]c112[TAB]c200[TAB]c113[TAB]c84[TAB]c82[TAB]c85[TAB]c114[TAB]c49[TAB]fFIN1         
+Type 2: 12[TAB]H[TAB]C0[TAB]mT3[TAB]sSTA1[TAB]c70[TAB]c73[TAB]c52[TAB]c67[TAB]c65[TAB]c81[TAB]c75[TAB]c200[TAB]c95[TAB]c113[TAB]c82[TAB]c105[TAB]c74[TAB]c109[TAB]c100[TAB]fFIN1        
+Type 2: 13[TAB]H[TAB]C0[TAB]mT3[TAB]sSTA1[TAB]c90[TAB]c129[TAB]c72[TAB]c67[TAB]c81[TAB]c64[TAB]c112[TAB]c200[TAB]c60[TAB]c82[TAB]c74[TAB]c109[TAB]c100[TAB]fFIN1                                                
+Type 2: 14[TAB]H[TAB]C0[TAB]mT3[TAB]sSTA1[TAB]c70[TAB]c42[TAB]c52[TAB]c88[TAB]c87[TAB]c91[TAB]c56[TAB]c135[TAB]c100[TAB]fFIN1   
+Type 2: 15[TAB]H[TAB]C0[TAB]mT3[TAB]sSTA1[TAB]c92[TAB]c90[TAB]c129[TAB]c77[TAB]c88[TAB]c65[TAB]c81[TAB]c75[TAB]c62[TAB]c82[TAB]c74[TAB]c107[TAB]c100[TAB]fFIN1  
+Type 2: 16[TAB]H[TAB]C0[TAB]mT3[TAB]sSTA1[TAB]c76[TAB]c129[TAB]c97[TAB]c52[TAB]c81[TAB]c61[TAB]c63[TAB]c105[TAB]c114[TAB]c109[TAB]c100[TAB]fFIN1        
+Type 2: 17[TAB]H[TAB]C0[TAB]mT3[TAB]sSTA1[TAB]c90[TAB]c80[TAB]c97[TAB]c72[TAB]c67[TAB]c65[TAB]c32[TAB]c105[TAB]c114[TAB]c49[TAB]fFIN1                                                               
+Type 2: 18[TAB]H[TAB]C0[TAB]mT3[TAB]sSTA1[TAB]c90[TAB]c80[TAB]c52[TAB]c67[TAB]c65[TAB]c79[TAB]c74[TAB]c114[TAB]c49[TAB]fFIN1    
+Type 2: 19[TAB]H[TAB]C0[TAB]mT3[TAB]sSTA1[TAB]c76[TAB]c90[TAB]c80[TAB]c72[TAB]c88[TAB]c65[TAB]c79[TAB]c135[TAB]c100[TAB]fFIN1   
+Type 2: 20[TAB]H[TAB]C0[TAB]mT3[TAB]sSTA1[TAB]c71[TAB]c90[TAB]c42[TAB]c52[TAB]c72[TAB]c97[TAB]c107[TAB]c49[TAB]fFIN1        
+Type 2: 21[TAB]H[TAB]C0[TAB]mT3[TAB]sSTA1[TAB]c90[TAB]c52[TAB]c94[TAB]c127[TAB]c139[TAB]c65[TAB]c81[TAB]c61[TAB]c63[TAB]c32[TAB]c74[TAB]c114[TAB]c109[TAB]c100[TAB]fFIN1            
+Type 2: 22[TAB]H[TAB]C0[TAB]mT3[TAB]sSTA1[TAB]c73[TAB]c80[TAB]c88[TAB]c94[TAB]c127[TAB]c139[TAB]c65[TAB]c47[TAB]c64[TAB]c82[TAB]c105[TAB]c109[TAB]c100[TAB]fFIN1                                                
+Type 2: 23[TAB]H[TAB]C0[TAB]mT3[TAB]sSTA1[TAB]c69[TAB]c42[TAB]c117[TAB]c31[TAB]c37[TAB]c33[TAB]c32[TAB]c72[TAB]c77[TAB]c39[TAB]c67[TAB]c53[TAB]c109[TAB]c100[TAB]fFIN1                                              
+Type 2: 24[TAB]H[TAB]C0[TAB]mT3[TAB]sSTA1[TAB]c71[TAB]c42[TAB]c117[TAB]c62[TAB]c37[TAB]c33[TAB]c32[TAB]c105[TAB]c80[TAB]c59[TAB]c109[TAB]c100[TAB]fFIN1     
+Type 2: 25[TAB]H[TAB]C0[TAB]mT3[TAB]sSTA1[TAB]c71[TAB]c115[TAB]c32[TAB]c72[TAB]c77[TAB]c67[TAB]c53[TAB]c49[TAB]fFIN1        
+Type 2: 26[TAB]H[TAB]C0[TAB]mT3[TAB]sSTA1[TAB]c69[TAB]c42[TAB]c31[TAB]c124[TAB]c46[TAB]c47[TAB]c79[TAB]c39[TAB]c59[TAB]c107[TAB]c38[TAB]c110[TAB]fFIN1      
+Type 2: 27[TAB]H[TAB]C0[TAB]mT3[TAB]sSTA1[TAB]c69[TAB]c50[TAB]c41[TAB]c121[TAB]c47[TAB]c79[TAB]c59[TAB]c36[TAB]c38[TAB]c110[TAB]fFIN1                                                               
+Type 2: 28[TAB]H[TAB]C0[TAB]mT3[TAB]sSTA1[TAB]c69[TAB]c50[TAB]c41[TAB]c79[TAB]c48[TAB]c107[TAB]c38[TAB]c110[TAB]fFIN1       
+Type 2: 29[TAB]H[TAB]C0[TAB]mT3[TAB]sSTA1[TAB]c43[TAB]c115[TAB]c50[TAB]c31[TAB]c124[TAB]c46[TAB]c47[TAB]c58[TAB]c48[TAB]c45[TAB]c38[TAB]c100[TAB]fFIN1      
+Type 2: 30[TAB]H[TAB]C0[TAB]mT3[TAB]sSTA1[TAB]c43[TAB]c123[TAB]c115[TAB]c121[TAB]c47[TAB]c58[TAB]c48[TAB]c45[TAB]c38[TAB]c49[TAB]fFIN1                                                              
+Type 2: 31[TAB]H[TAB]C0[TAB]mT3[TAB]sSTA1[TAB]c43[TAB]c123[TAB]c115[TAB]c44[TAB]c47[TAB]c58[TAB]c48[TAB]c45[TAB]c38[TAB]c100[TAB]fFIN1                                                              
+Type 2: 32[TAB]H[TAB]C0[TAB]mT3[TAB]sSTA1[TAB]c51[TAB]c40[TAB]c115[TAB]c34[TAB]c35[TAB]c44[TAB]c120[TAB]c45[TAB]c54[TAB]c100[TAB]fFIN1                                                              
+Type 2: 33[TAB]H[TAB]C0[TAB]mT3[TAB]sSTA1[TAB]c43[TAB]c106[TAB]c55[TAB]c34[TAB]c35[TAB]c44[TAB]c50[TAB]c54[TAB]c108[TAB]c100[TAB]fFIN1                                                              
+Type 3: H21[TAB]c1[TAB]r[TAB]f[TAB]t[TAB]d  
+Type 3: D21[TAB]c2[TAB]r[TAB]f[TAB]t[TAB]d  
+Type 3: H20[TAB]c3[TAB]r[TAB]f[TAB]t[TAB]d  
+Type 3: D20[TAB]c4[TAB]r[TAB]f[TAB]t[TAB]d  
+Type 3: H18[TAB]c5[TAB]r[TAB]f[TAB]t[TAB]d  
+Type 3: D18[TAB]c6[TAB]r[TAB]f[TAB]t[TAB]d  
+Type 3: H35[TAB]c7[TAB]r[TAB]f[TAB]t[TAB]d  
+Type 3: H40[TAB]c8[TAB]r[TAB]f[TAB]t[TAB]d  
+Type 3: H21 Kort[TAB]c8[TAB]r[TAB]f[TAB]t[TAB]d             
+Type 3: Svart 7 km[TAB]c9[TAB]r[TAB]f[TAB]t[TAB]d           
+Type 3: H45[TAB]c10[TAB]r[TAB]f[TAB]t[TAB]d                 
+Type 3: H50[TAB]c11[TAB]r[TAB]f[TAB]t[TAB]d                 
+Type 3: D35[TAB]c11[TAB]r[TAB]f[TAB]t[TAB]d                 
+Type 3: H55[TAB]c12[TAB]r[TAB]f[TAB]t[TAB]d                 
+Type 3: D40[TAB]c12[TAB]r[TAB]f[TAB]t[TAB]d                 
+Type 3: H60[TAB]c13[TAB]r[TAB]f[TAB]t[TAB]d                 
+Type 3: D45[TAB]c13[TAB]r[TAB]f[TAB]t[TAB]d                 
+Type 3: D21 kort[TAB]c13[TAB]r[TAB]f[TAB]t[TAB]d            
+Type 3: Svart 5 km[TAB]c14[TAB]r[TAB]f[TAB]t[TAB]d          
+Type 3: H65[TAB]c15[TAB]r[TAB]f[TAB]t[TAB]d                 
+Type 3: D50[TAB]c15[TAB]r[TAB]f[TAB]t[TAB]d                 
+Type 3: H70[TAB]c16[TAB]r[TAB]f[TAB]t[TAB]d                 
+Type 3: D55[TAB]c16[TAB]r[TAB]f[TAB]t[TAB]d                 
+Type 3: D60[TAB]c16[TAB]r[TAB]f[TAB]t[TAB]d                 
+Type 3: H75[TAB]c17[TAB]r[TAB]f[TAB]t[TAB]d                 
+Type 3: D65[TAB]c17[TAB]r[TAB]f[TAB]t[TAB]d                 
+Type 3: D70[TAB]c18[TAB]r[TAB]f[TAB]t[TAB]d                 
+Type 3: Blå 3 km[TAB]c18[TAB]r[TAB]f[TAB]t[TAB]d           
+Type 3: H80[TAB]c19[TAB]r[TAB]f[TAB]t[TAB]d                 
+Type 3: D75[TAB]c19[TAB]r[TAB]f[TAB]t[TAB]d                 
+Type 3: H85[TAB]c20[TAB]r[TAB]f[TAB]t[TAB]d                 
+Type 3: D80[TAB]c20[TAB]r[TAB]f[TAB]t[TAB]d                 
+Type 3: D85[TAB]c20[TAB]r[TAB]f[TAB]t[TAB]d                 
+Type 3: H16[TAB]c21[TAB]r[TAB]f[TAB]t[TAB]d                 
+Type 3: D16[TAB]c22[TAB]r[TAB]f[TAB]t[TAB]d                 
+Type 3: Orange 5 km[TAB]c23[TAB]r[TAB]f[TAB]t[TAB]d         
+Type 3: H14[TAB]c24[TAB]r[TAB]f[TAB]t[TAB]d                 
+Type 3: D14[TAB]c24[TAB]r[TAB]f[TAB]t[TAB]d                 
+Type 3: Orange 3 km[TAB]c25[TAB]r[TAB]f[TAB]t[TAB]d         
+Type 3: U4[TAB]c25[TAB]r[TAB]f[TAB]t[TAB]d  
+Type 3: Gul 5 km[TAB]c26[TAB]r[TAB]f[TAB]t[TAB]d            
+Type 3: H12[TAB]c27[TAB]r[TAB]f[TAB]t[TAB]d                 
+Type 3: D12[TAB]c27[TAB]r[TAB]f[TAB]t[TAB]d                 
+Type 3: U3[TAB]c28[TAB]r[TAB]f[TAB]t[TAB]d  
+Type 3: Gul 2,5 km[TAB]c28[TAB]r[TAB]f[TAB]t[TAB]d          
+Type 3: Vit 4 km[TAB]c29[TAB]r[TAB]f[TAB]t[TAB]d            
+Type 3: H10[TAB]c30[TAB]r[TAB]f[TAB]t[TAB]d                 
+Type 3: D10[TAB]c30[TAB]r[TAB]f[TAB]t[TAB]d                 
+Type 3: U2[TAB]c31[TAB]r[TAB]f[TAB]t[TAB]d  
+Type 3: Vit 2 km[TAB]c31[TAB]r[TAB]f[TAB]t[TAB]d            
+Type 3: U1[TAB]c32[TAB]r[TAB]f[TAB]t[TAB]d  
+Type 3: Inskolning[TAB]c33[TAB]r[TAB]f[TAB]t[TAB]d          
+Type 12: [TAB]x128.510000[TAB]y74.093945[TAB]z3.514258               
+Type 12: [TAB]x95.583438[TAB]y95.219258[TAB]z3.514258                
+Type 12: [TAB]x95.583438[TAB]y105.854805[TAB]z3.514258               
+Type 12: [TAB]x95.583438[TAB]y106.000508[TAB]z3.514258               
+Type 1030: [TAB]x130.860000[TAB]y124.160000[TAB]z0.960221[TAB]v0[TAB]m100[TAB]t100[TAB]b50[TAB]c50[TAB]h0[TAB]k0[TAB]p0[TAB]d0[TAB]i0[TAB]l0       
+Type 12: [TAB]x95.583438[TAB]y111.755352[TAB]z3.514258               
+Type 12: [TAB]x95.583438[TAB]y112.920898[TAB]z3.514258               
+Type 12: [TAB]x95.583438[TAB]y113.430820[TAB]z3.514258               
+Type 12: [TAB]x95.583438[TAB]y124.430586[TAB]z3.514258               
+Type 12: [TAB]x95.583438[TAB]y127.198750[TAB]z3.514258               
+Type 12: [TAB]x95.583438[TAB]y133.172148[TAB]z3.514258               
+Type 12: [TAB]x95.583438[TAB]y137.251523[TAB]z3.514258               
+Type 12: [TAB]x95.583438[TAB]y137.761445[TAB]z3.514258               
+Type 12: [TAB]x95.583438[TAB]y142.205039[TAB]z3.514258               
+Type 12: [TAB]x95.583438[TAB]y142.496406[TAB]z3.514258               
+Type 12: [TAB]x95.583438[TAB]y142.642109[TAB]z3.514258               
+Type 12: [TAB]x95.583438[TAB]y141.913633[TAB]z3.514258                                                                                               
+Type 12: [TAB]x95.583438[TAB]y140.893789[TAB]z3.514258               
+Type 12: [TAB]x95.583438[TAB]y140.602422[TAB]z3.514258               
+Type 12: [TAB]x95.583438[TAB]y139.873945[TAB]z3.514258               
+Type 12: [TAB]x95.583438[TAB]y138.198477[TAB]z3.514258               
+Type 12: [TAB]x95.583438[TAB]y127.053008[TAB]z3.514258               
+Type 12: [TAB]x95.583438[TAB]y123.046484[TAB]z3.514258               
+Type 12: [TAB]x95.583438[TAB]y115.761875[TAB]z3.514258               
+Type 12: [TAB]x90.960000[TAB]y108.800000[TAB]z30.831488              
+Type 12: [TAB]x90.960000[TAB]y109.555586[TAB]z30.831488              
+Type 12: [TAB]x90.960000[TAB]y109.705039[TAB]z30.831488              
+Type 12: [TAB]x90.960000[TAB]y109.920938[TAB]z30.831488              
+Type 12: [TAB]x90.960000[TAB]y110.228164[TAB]z30.831488              
+Type 12: [TAB]x130.860000[TAB]y131.370000[TAB]z1.038503              
+Type 12: [TAB]x130.860000[TAB]y124.160000[TAB]z0.960221              
+Type -24: C:\Users\Fredrik\Downloads\Banor 4 oktober ALLA KLASSER.Courses.xml                                                                                             
+Type -24: C:\Users\Fredrik\AppData\Roaming\OCAD\OCAD 2018\Tmp\_LiveloxUpload0000\courses.xml                                                                                                                                                              
+Type 1090: [TAB]i26a668be658048e9a97ee13c8155137b[TAB]l1[TAB]mA3 10000 Mörtsjön  - Luffarna[TAB]r286[TAB]s15000[TAB]uhttps://www.livelox.com/Events/Show/170101[TAB]eSkogsluffarna, långdistans                                                                                     
+Type -24: C:\Users\Fredrik\Downloads\banor 2\Banor 4 oktober ALLA KLASSER.H21.pdf                                                                                                                                                                         
+Type -24: C:\Users\Fredrik\Downloads\banor 2\Banor 4 oktober ALLA KLASSER.D21.pdf                                                                         
+Type 1026: [TAB]a10000.00[TAB]L-8.340000[TAB]B31.020000[TAB]R271.660000[TAB]T229.020000        
+Type 1035: PDF[TAB]a1[TAB]b1[TAB]l1[TAB]c0[TAB]o0[TAB]p1[TAB]r300[TAB]t0[TAB]i1.27000000000000000[TAB]g0[TAB]w0[TAB]q95[TAB]z1                 
+Type 1041: Purple;         
+Type -24: H:\Delade enheter\Skogsluffarna\Arrangemang\2025 Långdistans 4 okt\Banläggning\PDF-utskrifter\A4 10 000\Banor 4 oktober ALLA KLASSER.D18.pdf  
+Type -24: H:\Delade enheter\Skogsluffarna\Arrangemang\2025 Långdistans 4 okt\Banläggning\PDF-utskrifter\A4 10 000\Banor 4 oktober ALLA KLASSER.D21 kort.pdf             
+Type 1027: [TAB]s6.00                                                                                                                                          
+Type 0: C:\Users\Fredrik\Downloads\banor 2\Banor 4 oktober ALLA KLASSER.H20.pdf                                                                         
+Type 24: C:\Users\Fredrik\Downloads\banor 2\Banor 4 oktober ALLA KLASSER.D20.pdf                                                                         
+Type 24: C:\Users\Fredrik\Downloads\banor 2\Banor 4 oktober ALLA KLASSER.H18.pdf                                                                         
+Type 24: C:\Users\Fredrik\Downloads\banor 2\Banor 4 oktober ALLA KLASSER.D18.pdf                                                                         
+Type 24: C:\Users\Fredrik\Downloads\banor 2\Banor 4 oktober ALLA KLASSER.H35.pdf                                                                         
+Type 24: C:\Users\Fredrik\Downloads\banor 2\Banor 4 oktober ALLA KLASSER.H40.pdf                                                                         
+Type 24: C:\Users\Fredrik\Downloads\banor 2\Banor 4 oktober ALLA KLASSER.H21 Kort.pdf                                                                    
+Type 24: C:\Users\Fredrik\Downloads\banor 2\Banor 4 oktober ALLA KLASSER.Svart 7 km.pdf                                                                  
+Type 24: C:\Users\Fredrik\Downloads\banor 2\Banor 4 oktober ALLA KLASSER.H45.pdf                                                                         
+Type 24: C:\Users\Fredrik\Downloads\banor 2\Banor 4 oktober ALLA KLASSER.H50.pdf                                                                         
+Type -24: H:\Delade enheter\Skogsluffarna\Arrangemang\2025 Långdistans 4 okt\Banläggning\PDF-utskrifter\A3 10 000\Banor 4 oktober ALLA KLASSER.H40.pdf  
+Type -24: H:\Delade enheter\Skogsluffarna\Arrangemang\2025 Långdistans 4 okt\Banläggning\PDF-utskrifter\A3 10 000\Banor 4 oktober ALLA KLASSER.H21 Kort.pdf             
+Type -24: H:\Delade enheter\Skogsluffarna\Arrangemang\2025 Långdistans 4 okt\Banläggning\PDF-utskrifter\A3 10 000\Banor 4 oktober ALLA KLASSER.Svart 7 km.pdf           
+Type 24: C:\Users\Fredrik\Downloads\banor 2\Banor 4 oktober ALLA KLASSER.D35.pdf                                                                         
+Type 24: C:\Users\Fredrik\Downloads\banor 2\Banor 4 oktober ALLA KLASSER.H55.pdf                                                                         
+Type 24: C:\Users\Fredrik\Downloads\banor 2\Banor 4 oktober ALLA KLASSER.D40.pdf                                                                                         
+Type -24: H:\Delade enheter\Skogsluffarna\Arrangemang\2025 Långdistans 4 okt\Banläggning\PDF-utskrifter\A3 7 500\Banor 4 oktober ALLA KLASSER.H45.pdf   
+Type -24: H:\Delade enheter\Skogsluffarna\Arrangemang\2025 Långdistans 4 okt\Banläggning\PDF-utskrifter\A3 7 500\Banor 4 oktober ALLA KLASSER.Svart 5 km.pdf            
+Type -24: H:\Delade enheter\Skogsluffarna\Arrangemang\2025 Långdistans 4 okt\Banläggning\PDF-utskrifter\A4 7500\Banor 4 oktober ALLA KLASSER.H50.pdf    
+Type -24: H:\Delade enheter\Skogsluffarna\Arrangemang\2025 Långdistans 4 okt\Banläggning\PDF-utskrifter\A4 7500\Banor 4 oktober ALLA KLASSER.D35.pdf    
+Type -24: H:\Delade enheter\Skogsluffarna\Arrangemang\2025 Långdistans 4 okt\Banläggning\PDF-utskrifter\A4 7500\Banor 4 oktober ALLA KLASSER.H55.pdf    
+Type -24: H:\Delade enheter\Skogsluffarna\Arrangemang\2025 Långdistans 4 okt\Banläggning\PDF-utskrifter\A4 7500\Banor 4 oktober ALLA KLASSER.D40.pdf    
+Type -24: H:\Delade enheter\Skogsluffarna\Arrangemang\2025 Långdistans 4 okt\Banläggning\PDF-utskrifter\A4 7500\Banor 4 oktober ALLA KLASSER.H60.pdf    
+Type -24: H:\Delade enheter\Skogsluffarna\Arrangemang\2025 Långdistans 4 okt\Banläggning\PDF-utskrifter\A4 7500\Banor 4 oktober ALLA KLASSER.D45.pdf    
+Type -24: H:\Delade enheter\Skogsluffarna\Arrangemang\2025 Långdistans 4 okt\Banläggning\PDF-utskrifter\A4 7500\Banor 4 oktober ALLA KLASSER.H65.pdf    
+Type -24: H:\Delade enheter\Skogsluffarna\Arrangemang\2025 Långdistans 4 okt\Banläggning\PDF-utskrifter\A4 7500\Banor 4 oktober ALLA KLASSER.D50.pdf    
+Type -24: H:\Delade enheter\Skogsluffarna\Arrangemang\2025 Långdistans 4 okt\Banläggning\PDF-utskrifter\A4 7500\Banor 4 oktober ALLA KLASSER.H70.pdf    
+Type -24: H:\Delade enheter\Skogsluffarna\Arrangemang\2025 Långdistans 4 okt\Banläggning\PDF-utskrifter\A4 7500\Banor 4 oktober ALLA KLASSER.D55.pdf    
+Type -24: H:\Delade enheter\Skogsluffarna\Arrangemang\2025 Långdistans 4 okt\Banläggning\PDF-utskrifter\A4 7500\Banor 4 oktober ALLA KLASSER.D60.pdf    
+Type -24: H:\Delade enheter\Skogsluffarna\Arrangemang\2025 Långdistans 4 okt\Banläggning\PDF-utskrifter\A4 7500\Banor 4 oktober ALLA KLASSER.H75.pdf    
+Type -24: H:\Delade enheter\Skogsluffarna\Arrangemang\2025 Långdistans 4 okt\Banläggning\PDF-utskrifter\A4 7500\Banor 4 oktober ALLA KLASSER.D65.pdf    
+Type -24: H:\Delade enheter\Skogsluffarna\Arrangemang\2025 Långdistans 4 okt\Banläggning\PDF-utskrifter\A4 7500\Banor 4 oktober ALLA KLASSER.D70.pdf    
+Type -24: H:\Delade enheter\Skogsluffarna\Arrangemang\2025 Långdistans 4 okt\Banläggning\PDF-utskrifter\A4 7500\Banor 4 oktober ALLA KLASSER.Blå 3 km.pdf              
+Type -24: H:\Delade enheter\Skogsluffarna\Arrangemang\2025 Långdistans 4 okt\Banläggning\PDF-utskrifter\A4 7500\Banor 4 oktober ALLA KLASSER.H80.pdf    
+Type -24: H:\Delade enheter\Skogsluffarna\Arrangemang\2025 Långdistans 4 okt\Banläggning\PDF-utskrifter\A4 7500\Banor 4 oktober ALLA KLASSER.D75.pdf    
+Type -24: H:\Delade enheter\Skogsluffarna\Arrangemang\2025 Långdistans 4 okt\Banläggning\PDF-utskrifter\A4 7500\Banor 4 oktober ALLA KLASSER.H85.pdf    
+Type -24: H:\Delade enheter\Skogsluffarna\Arrangemang\2025 Långdistans 4 okt\Banläggning\PDF-utskrifter\A4 7500\Banor 4 oktober ALLA KLASSER.D80.pdf    
+Type -24: H:\Delade enheter\Skogsluffarna\Arrangemang\2025 Långdistans 4 okt\Banläggning\PDF-utskrifter\A4 7500\Banor 4 oktober ALLA KLASSER.D85.pdf    
+Type -24: H:\Delade enheter\Skogsluffarna\Arrangemang\2025 Långdistans 4 okt\Banläggning\PDF-utskrifter\A4 7500\Banor 4 oktober ALLA KLASSER.H16.pdf    
+Type -24: H:\Delade enheter\Skogsluffarna\Arrangemang\2025 Långdistans 4 okt\Banläggning\PDF-utskrifter\A4 7500\Banor 4 oktober ALLA KLASSER.D16.pdf    
+Type -24: H:\Delade enheter\Skogsluffarna\Arrangemang\2025 Långdistans 4 okt\Banläggning\PDF-utskrifter\A4 7500\Banor 4 oktober ALLA KLASSER.Orange 5 km.pdf            
+Type -24: H:\Delade enheter\Skogsluffarna\Arrangemang\2025 Långdistans 4 okt\Banläggning\PDF-utskrifter\A4 7500\Banor 4 oktober ALLA KLASSER.H14.pdf    
+Type -24: H:\Delade enheter\Skogsluffarna\Arrangemang\2025 Långdistans 4 okt\Banläggning\PDF-utskrifter\A4 7500\Banor 4 oktober ALLA KLASSER.D14.pdf    
+Type -24: H:\Delade enheter\Skogsluffarna\Arrangemang\2025 Långdistans 4 okt\Banläggning\PDF-utskrifter\A4 7500\Banor 4 oktober ALLA KLASSER.Orange 3 km.pdf            
+Type -24: H:\Delade enheter\Skogsluffarna\Arrangemang\2025 Långdistans 4 okt\Banläggning\PDF-utskrifter\A4 7500\Banor 4 oktober ALLA KLASSER.U4.pdf     
+Type -24: H:\Delade enheter\Skogsluffarna\Arrangemang\2025 Långdistans 4 okt\Banläggning\PDF-utskrifter\A4 7500\Banor 4 oktober ALLA KLASSER.Gul 5 km.pdf               
+Type -24: H:\Delade enheter\Skogsluffarna\Arrangemang\2025 Långdistans 4 okt\Banläggning\PDF-utskrifter\A4 7500\Banor 4 oktober ALLA KLASSER.H12.pdf    
+Type -24: H:\Delade enheter\Skogsluffarna\Arrangemang\2025 Långdistans 4 okt\Banläggning\PDF-utskrifter\A4 7500\Banor 4 oktober ALLA KLASSER.D12.pdf    
+Type -24: H:\Delade enheter\Skogsluffarna\Arrangemang\2025 Långdistans 4 okt\Banläggning\PDF-utskrifter\A4 7500\Banor 4 oktober ALLA KLASSER.U3.pdf     
+Type -24: H:\Delade enheter\Skogsluffarna\Arrangemang\2025 Långdistans 4 okt\Banläggning\PDF-utskrifter\A4 7500\Banor 4 oktober ALLA KLASSER.Gul 2,5 km.pdf             
+Type -24: H:\Delade enheter\Skogsluffarna\Arrangemang\2025 Långdistans 4 okt\Banläggning\PDF-utskrifter\A4 7500\Banor 4 oktober ALLA KLASSER.Vit 4 km.pdf               
+Type -24: H:\Delade enheter\Skogsluffarna\Arrangemang\2025 Långdistans 4 okt\Banläggning\PDF-utskrifter\A4 7500\Banor 4 oktober ALLA KLASSER.H10.pdf    
+Type -24: H:\Delade enheter\Skogsluffarna\Arrangemang\2025 Långdistans 4 okt\Banläggning\PDF-utskrifter\A4 7500\Banor 4 oktober ALLA KLASSER.D10.pdf    
+Type -24: H:\Delade enheter\Skogsluffarna\Arrangemang\2025 Långdistans 4 okt\Banläggning\PDF-utskrifter\A4 7500\Banor 4 oktober ALLA KLASSER.U2.pdf     
+Type -24: H:\Delade enheter\Skogsluffarna\Arrangemang\2025 Långdistans 4 okt\Banläggning\PDF-utskrifter\A4 7500\Banor 4 oktober ALLA KLASSER.Vit 2 km.pdf               
+Type -24: H:\Delade enheter\Skogsluffarna\Arrangemang\2025 Långdistans 4 okt\Banläggning\PDF-utskrifter\A4 7500\Banor 4 oktober ALLA KLASSER.U1.pdf     
+Type -24: H:\Delade enheter\Skogsluffarna\Arrangemang\2025 Långdistans 4 okt\Banläggning\PDF-utskrifter\A4 7500\Banor 4 oktober ALLA KLASSER.Inskolning.pdf             
+Type 24: C:\Users\Fredrik\Downloads\banor 2\Banor 4 oktober ALLA KLASSER.H60.pdf                                                                                                                                                                         
+Type -24: H:\Delade enheter\Skogsluffarna\Arrangemang\2025 Långdistans 4 okt\Banläggning\PDF-utskrifter\A4L 10 000\Banor 4 oktober ALLA KLASSER.H16.pdf                 
+Type -24: H:\Delade enheter\Skogsluffarna\Arrangemang\2025 Långdistans 4 okt\Banläggning\PDF-utskrifter\A4L 10 000\Banor 4 oktober ALLA KLASSER.D16.pdf                 
+Type 24: C:\Users\Fredrik\Downloads\banor 2\Banor 4 oktober ALLA KLASSER.D45.pdf         
+Type 24: C:\Users\Fredrik\Downloads\banor 2\Banor 4 oktober ALLA KLASSER.D21 kort.pdf    
+Type 24: C:\Users\Fredrik\Downloads\banor 2\Banor 4 oktober ALLA KLASSER.Svart 5 km.pdf  
+Type 24: C:\Users\Fredrik\Downloads\banor 2\Banor 4 oktober ALLA KLASSER.H65.pdf         
+Type 24: C:\Users\Fredrik\Downloads\banor 2\Banor 4 oktober ALLA KLASSER.D50.pdf         
+Type 24: C:\Users\Fredrik\Downloads\banor 2\Banor 4 oktober ALLA KLASSER.H70.pdf         
+Type 24: C:\Users\Fredrik\Downloads\banor 2\Banor 4 oktober ALLA KLASSER.D55.pdf         
+Type 24: C:\Users\Fredrik\Downloads\banor 2\Banor 4 oktober ALLA KLASSER.D60.pdf         
+Type 24: C:\Users\Fredrik\Downloads\banor 2\Banor 4 oktober ALLA KLASSER.H75.pdf         
+Type 24: C:\Users\Fredrik\Downloads\banor 2\Banor 4 oktober ALLA KLASSER.D65.pdf         
+Type 24: C:\Users\Fredrik\Downloads\banor 2\Banor 4 oktober ALLA KLASSER.D70.pdf         
+Type 24: C:\Users\Fredrik\Downloads\banor 2\Banor 4 oktober ALLA KLASSER.Blå 3 km.pdf   
+Type 24: C:\Users\Fredrik\Downloads\banor 2\Banor 4 oktober ALLA KLASSER.H80.pdf         
+Type 24: C:\Users\Fredrik\Downloads\banor 2\Banor 4 oktober ALLA KLASSER.D75.pdf         
+Type 24: C:\Users\Fredrik\Downloads\banor 2\Banor 4 oktober ALLA KLASSER.H85.pdf         
+Type 24: C:\Users\Fredrik\Downloads\banor 2\Banor 4 oktober ALLA KLASSER.D80.pdf         
+Type 24: C:\Users\Fredrik\Downloads\banor 2\Banor 4 oktober ALLA KLASSER.D85.pdf         
+Type 24: C:\Users\Fredrik\Downloads\banor 2\Banor 4 oktober ALLA KLASSER.H16.pdf         
+Type 24: C:\Users\Fredrik\Downloads\banor 2\Banor 4 oktober ALLA KLASSER.D16.pdf         
+Type 24: C:\Users\Fredrik\Downloads\banor 2\Banor 4 oktober ALLA KLASSER.Orange 5 km.pdf                 
+Type 24: C:\Users\Fredrik\Downloads\banor 2\Banor 4 oktober ALLA KLASSER.H14.pdf         
+Type 24: C:\Users\Fredrik\Downloads\banor 2\Banor 4 oktober ALLA KLASSER.D14.pdf         
+Type 24: C:\Users\Fredrik\Downloads\banor 2\Banor 4 oktober ALLA KLASSER.Orange 3 km.pdf                 
+Type 24: C:\Users\Fredrik\Downloads\banor 2\Banor 4 oktober ALLA KLASSER.U4.pdf          
+Type 24: C:\Users\Fredrik\Downloads\banor 2\Banor 4 oktober ALLA KLASSER.Gul 5 km.pdf    
+Type 24: C:\Users\Fredrik\Downloads\banor 2\Banor 4 oktober ALLA KLASSER.H12.pdf         
+Type 24: C:\Users\Fredrik\Downloads\banor 2\Banor 4 oktober ALLA KLASSER.D12.pdf         
+Type 24: C:\Users\Fredrik\Downloads\banor 2\Banor 4 oktober ALLA KLASSER.U3.pdf          
+Type 24: C:\Users\Fredrik\Downloads\banor 2\Banor 4 oktober ALLA KLASSER.Gul 2,5 km.pdf  
+Type 24: C:\Users\Fredrik\Downloads\banor 2\Banor 4 oktober ALLA KLASSER.Vit 4 km.pdf    
+Type 24: C:\Users\Fredrik\Downloads\banor 2\Banor 4 oktober ALLA KLASSER.H10.pdf         
+Type 24: C:\Users\Fredrik\Downloads\banor 2\Banor 4 oktober ALLA KLASSER.D10.pdf         
+Type 24: C:\Users\Fredrik\Downloads\banor 2\Banor 4 oktober ALLA KLASSER.U2.pdf          
+Type 24: C:\Users\Fredrik\Downloads\banor 2\Banor 4 oktober ALLA KLASSER.Vit 2 km.pdf    
+Type 24: C:\Users\Fredrik\Downloads\banor 2\Banor 4 oktober ALLA KLASSER.U1.pdf          
+Type 24: C:\Users\Fredrik\Downloads\banor 2\Banor 4 oktober ALLA KLASSER.Inskolning.pdf  
+Type 24: C:\Users\Fredrik\AppData\Roaming\OCAD\OCAD 2018\Tmp\_LiveloxUpload0000\courses.xml              

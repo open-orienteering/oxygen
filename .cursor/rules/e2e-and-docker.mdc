@@ -1,0 +1,50 @@
+---
+description: E2E test, Docker build, and MeOS compatibility requirements for all code changes
+alwaysApply: true
+---
+
+# MeOS Database Compatibility
+
+OOS must maintain **full bidirectional compatibility** with MeOS. A database created by OOS must be openable by MeOS, and vice versa.
+
+## Key Rules
+
+- **Schema**: The Prisma schema (`packages/api/prisma/schema.prisma`) must match MeOS column types, nullability, and defaults. All `MEDIUMTEXT` columns must be `NOT NULL` with `@default("")`. All `Modified` columns must be `DateTime @default(now()) @updatedAt`.
+- **Control IDs**: Start controls use IDs `211100 + N`, finish controls use `311100 + N`. Names: "Start N" / "Mål N". Regular controls: `Name = ""`, `Numbers = code`.
+- **Coordinates**: `xpos`/`ypos` store values × 10 (1 decimal place). `latcrd`/`longcrd` store values × 1e6 (6 decimal places).
+- **Counter**: Increment the `Counter` column and update `oCounter` on record create/update (use `incrementCounter()` from `db.ts`).
+- **BirthYear**: MeOS may store `YYYYMMDD` (> 9999) or `YYYY`. When reading, normalize with `normalizeBirthYear()`.
+- **Organizer**: Store as plain text name (not `"name\tclubId"`).
+- **ZeroTime**: Default to `324000` (09:00:00 in deciseconds) on competition creation.
+- **Features**: Default to `"SL+BB+CL+CC+RF+NW+TA+RD"` on competition creation.
+- **Tables**: Competition databases must include `dbRunner`, `dbClub`, and `oImage` tables (created during init).
+- **OOS-only tables**: Must use the `oos_` prefix to avoid collisions with MeOS tables.
+- **When in doubt**: Reference MeOS source code at `/home/marcus/IdeaProjects/meos/code/` (especially `MeosSQL.cpp`, `oEvent.cpp`, `oDataContainer.cpp`).
+
+# E2E Tests & Docker Build
+
+## E2E Tests Are Mandatory
+
+Every code change that affects the UI, API routes, or data flow **must** include corresponding E2E test updates:
+
+- **New features**: Add E2E tests covering the happy path and key edge cases
+- **UI changes**: Update any tests that reference moved/renamed/removed elements (selectors, text, navigation)
+- **API changes**: Update tests that exercise affected endpoints
+- **Bug fixes**: Add a regression test if one doesn't already exist
+
+Test files live in `e2e/`. Shared helpers are in `e2e/helpers/`. Use existing helpers (`selectCompetition`, `tabButton`) rather than copy-pasting.
+
+## Docker Rebuild
+
+After all tests pass, **always rebuild the Docker stack** so the production image stays in sync:
+
+```bash
+docker compose -f docker-compose.host-db.yml up --build -d
+```
+
+## Test Hygiene
+
+- Tests must be self-contained: create any data they need, clean up after themselves
+- Never hard-code counts that could drift — use flexible assertions where possible
+- Use `data-testid` attributes for stable selectors over text matching
+- If a test creates a competition database, prefix the NameId with `E2E_` so global setup cleans it up
