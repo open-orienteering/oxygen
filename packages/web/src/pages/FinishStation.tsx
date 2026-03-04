@@ -1,7 +1,14 @@
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef, useEffect, useCallback } from "react";
 import { trpc } from "../lib/trpc";
-import { formatMeosTime, formatRunningTime, runnerStatusLabel, type RunnerStatusValue } from "@oxygen/shared";
+import {
+  formatMeosTime,
+  formatRunningTime,
+  runnerStatusLabel,
+  type RunnerStatusValue,
+} from "@oxygen/shared";
 import { StatusBadge } from "../components/StatusBadge";
+import { usePrinter } from "../context/PrinterContext";
+import type { FinishReceiptData } from "../lib/receipt-printer/index.js";
 
 export function FinishStation() {
   const [cardInput, setCardInput] = useState("");
@@ -13,6 +20,7 @@ export function FinishStation() {
   } | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const utils = trpc.useUtils();
+  const printer = usePrinter();
 
   const serverTime = trpc.race.serverTime.useQuery(undefined, {
     refetchInterval: 10000,
@@ -21,6 +29,52 @@ export function FinishStation() {
   const lookup = trpc.race.lookupByCard.useQuery(
     { cardNo: parseInt(cardInput, 10) },
     { enabled: cardInput.length >= 3 && !isNaN(parseInt(cardInput, 10)) },
+  );
+
+  // Get competition name for the receipt header (cached from CompetitionShell)
+  const dashboard = trpc.competition.dashboard.useQuery(undefined, {
+    staleTime: 60_000,
+  });
+
+  const buildReceiptData = useCallback(
+    async (runnerId: number): Promise<FinishReceiptData | null> => {
+      const result = await utils.race.finishReceipt.fetch({ runnerId });
+      if (!result) return null;
+      const competitionInfo = dashboard.data?.competition;
+      return {
+        competitionName: competitionInfo?.name ?? "",
+        competitionDate: competitionInfo?.date ?? undefined,
+        runner: {
+          name: result.runner.name,
+          clubName: result.runner.clubName,
+          className: result.runner.className,
+          startNo: result.runner.startNo,
+          cardNo: result.runner.cardNo,
+        },
+        timing: {
+          startTime: result.timing.startTime,
+          finishTime: result.timing.finishTime,
+          runningTime: result.timing.runningTime,
+          status: result.timing.status,
+        },
+        splits: result.controls.map((c) => ({
+          controlIndex: c.controlIndex,
+          controlCode: c.controlCode,
+          splitTime: c.splitTime,
+          cumTime: c.cumTime,
+          status: c.status,
+          punchTime: c.punchTime,
+          legLength: c.legLength,
+        })),
+        course: result.course
+          ? { name: result.course.name, length: result.course.length }
+          : null,
+        position: result.position,
+        siac: result.siac,
+        classResults: result.classResults,
+      };
+    },
+    [utils, dashboard.data],
   );
 
   const recordFinish = trpc.race.recordFinish.useMutation({
@@ -37,6 +91,13 @@ export function FinishStation() {
       utils.race.lookupByCard.invalidate();
       utils.runner.list.invalidate();
       utils.lists.resultList.invalidate();
+
+      // Print if printer is connected
+      if (printer.connected) {
+        buildReceiptData(data.id)
+          .then((receiptData) => receiptData && printer.print(receiptData))
+          .catch(() => {}); // non-fatal
+      }
     },
     onError: (err) => {
       setLastAction({
@@ -69,6 +130,16 @@ export function FinishStation() {
       handleRecordFinish();
     }
   };
+
+  const handleReprint = useCallback(
+    (runnerId: number) => {
+      if (!printer.connected || printer.printing) return;
+      buildReceiptData(runnerId)
+        .then((data) => data && printer.print(data))
+        .catch(() => {});
+    },
+    [printer, buildReceiptData],
+  );
 
   const currentTimeDeci = serverTime.data?.deciseconds ?? 0;
 
@@ -191,6 +262,28 @@ export function FinishStation() {
                   </span>
                 )}
                 <StatusBadge status={r.status as RunnerStatusValue} />
+                {printer.connected && (
+                  <button
+                    onClick={() => handleReprint(r.id)}
+                    disabled={printer.printing}
+                    title="Reprint receipt"
+                    className="p-1.5 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded transition-colors cursor-pointer disabled:opacity-40"
+                  >
+                    <svg
+                      className="w-4 h-4"
+                      fill="none"
+                      viewBox="0 0 24 24"
+                      stroke="currentColor"
+                      strokeWidth={2}
+                    >
+                      <path
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        d="M17 17h2a2 2 0 002-2v-4a2 2 0 00-2-2H5a2 2 0 00-2 2v4a2 2 0 002 2h2m2 4h6a2 2 0 002-2v-4a2 2 0 00-2-2H9a2 2 0 00-2 2v4a2 2 0 002 2zm8-12V5a2 2 0 00-2-2H9a2 2 0 00-2 2v4h10z"
+                      />
+                    </svg>
+                  </button>
+                )}
               </div>
             </div>
           ))}

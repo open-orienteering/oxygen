@@ -18,7 +18,7 @@ services:
       context: .
       target: api
       network: host
-    container_name: oxygen-api
+
     restart: unless-stopped
     network_mode: host
     environment:
@@ -32,7 +32,7 @@ services:
       context: .
       target: web
       network: host
-    container_name: oxygen-web
+
     restart: unless-stopped
     network_mode: host
     depends_on:

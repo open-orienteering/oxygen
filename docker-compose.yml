@@ -1,7 +1,6 @@
 services:
   mysql:
     image: mysql:8.0
-    container_name: oxygen-mysql
     restart: unless-stopped
     environment:
       MYSQL_ALLOW_EMPTY_PASSWORD: "yes"
@@ -32,7 +31,6 @@ services:
       context: .
       target: api
       network: host
-    container_name: oxygen-api
     restart: unless-stopped
     depends_on:
       mysql:
@@ -50,7 +48,6 @@ services:
       context: .
       target: web
       network: host
-    container_name: oxygen-web
     restart: unless-stopped
     depends_on:
       - api

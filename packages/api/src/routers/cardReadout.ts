@@ -146,8 +146,9 @@ function matchPunchesToCourse(
 
 /**
  * Core readout logic - shared between readout-by-card and readout-by-runner endpoints.
+ * Exported so race.ts can reuse it for the finish receipt endpoint.
  */
-async function performReadout(client: PrismaClient, runnerId: number) {
+export async function performReadout(client: PrismaClient, runnerId: number) {
   const runner = await client.oRunner.findFirst({
     where: { Id: runnerId, Removed: false },
   });

@@ -5,12 +5,14 @@ import { KioskPage } from "./pages/KioskPage";
 import { StartScreenPage } from "./pages/StartScreenPage";
 import { useVersionCheck } from "./hooks/useVersionCheck";
 import { DeviceManagerProvider } from "./context/DeviceManager";
+import { PrinterProvider } from "./context/PrinterContext";
 
 export default function App() {
   const { updateAvailable, reload } = useVersionCheck();
 
   return (
     <DeviceManagerProvider>
+    <PrinterProvider>
       {updateAvailable && (
         <div className="fixed top-0 left-0 right-0 z-[9999] bg-blue-600 text-white text-center py-1.5 px-4 text-sm shadow-lg flex items-center justify-center gap-3">
           <span>A new version is available.</span>
@@ -31,6 +33,7 @@ export default function App() {
         {/* Catch-all redirect to home */}
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
+    </PrinterProvider>
     </DeviceManagerProvider>
   );
 }
