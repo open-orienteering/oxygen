@@ -32,6 +32,8 @@ export interface ControlOverlay {
   punchCount?: number;
   /** Completion percentage 0–1 (undefined = no data / not enabled) */
   completionPct?: number;
+  /** Punch status for mispunch visualization */
+  punchStatus?: "ok" | "missing" | "extra";
 }
 
 /** A manual or automatic slit in a control circle. */
@@ -697,7 +699,10 @@ export function MapViewer({
     // ─── Render control symbols ──────────────────────────
     const controlElements = ctrlPts.map((ctrl) => {
       const isHighlighted = ctrl.highlight || ctrl.id === highlightControlId;
-      const color = isHighlighted ? "#ef4444" : "#c026d3";
+      const color =
+        ctrl.punchStatus === "missing" ? "#ef4444" :
+        ctrl.punchStatus === "extra"   ? "#f97316" :
+        isHighlighted ? "#ef4444" : "#c026d3";
 
       if (ctrl.type === "Start") {
         const s = radius * 1.1;
@@ -831,12 +836,20 @@ export function MapViewer({
         }
       }
 
+      const xOff = radius * 0.6;
       return (
         <g key={ctrl.id} className="cursor-pointer" onClick={() => onControlClick?.(ctrl.id)}>
           {/* Base circle: dimmed if completion is active and not complete */}
           <g opacity={hasCompletion && !isComplete ? 0.35 : 1}>
             {drawBrokenCircle(ctrl.cx, ctrl.cy, radius, ctrl.cuts, isComplete ? "#059669" : color, strokeW)}
           </g>
+          {/* X overlay for missing controls */}
+          {ctrl.punchStatus === "missing" && (
+            <>
+              <line x1={ctrl.cx - xOff} y1={ctrl.cy - xOff} x2={ctrl.cx + xOff} y2={ctrl.cy + xOff} stroke="#ef4444" strokeWidth={strokeW} strokeLinecap="round" />
+              <line x1={ctrl.cx + xOff} y1={ctrl.cy - xOff} x2={ctrl.cx - xOff} y2={ctrl.cy + xOff} stroke="#ef4444" strokeWidth={strokeW} strokeLinecap="round" />
+            </>
+          )}
           {/* Completion progress arc */}
           {progressArc}
           {label && (
