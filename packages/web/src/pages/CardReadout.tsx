@@ -7,6 +7,7 @@ import {
   type RunnerStatusValue,
 } from "@oxygen/shared";
 import { PunchTable, type PunchTableData } from "../components/PunchTable";
+import { MapPanel } from "../components/MapPanel";
 import { useSearchParam } from "../hooks/useSearchParam";
 import { useDeviceManager } from "../context/DeviceManager";
 
@@ -196,6 +197,50 @@ function ReadoutView({ data }: { data: any }) {
 
       {/* Punch table (read-only) */}
       <PunchTable data={toPunchTableData(data)} />
+
+      {/* Mispunch map — shown when there are missing or extra controls */}
+      {data.course && (data.missingControls.length > 0 || data.extraPunches.length > 0) && (
+        <MispunchMap
+          courseName={data.course.name}
+          controls={data.controls}
+          extraPunches={data.extraPunches}
+        />
+      )}
+    </div>
+  );
+}
+
+function MispunchMap({ courseName, controls, extraPunches }: {
+  courseName: string;
+  controls: { controlCode: number; status: "ok" | "missing" | "extra" }[];
+  extraPunches: { controlCode: number }[];
+}) {
+  const punchStatusByCode: Record<string, "ok" | "missing" | "extra"> = {};
+  for (const c of controls) punchStatusByCode[String(c.controlCode)] = c.status;
+  for (const ep of extraPunches) punchStatusByCode[String(ep.controlCode)] = "extra";
+
+  return (
+    <div>
+      <div className="flex items-center justify-between mb-2">
+        <span className="text-sm font-medium text-slate-600">Course Map</span>
+        <span className="flex items-center gap-3 text-xs text-slate-500">
+          <span className="flex items-center gap-1">
+            <span className="inline-block w-3 h-3 rounded-full border-2 border-red-500" />
+            Missing
+          </span>
+          <span className="flex items-center gap-1">
+            <span className="inline-block w-3 h-3 rounded-full border-2 border-orange-500" />
+            Extra punch
+          </span>
+        </span>
+      </div>
+      <MapPanel
+        highlightCourseName={courseName}
+        filterMode="course"
+        height="350px"
+        fitToControls
+        punchStatusByCode={punchStatusByCode}
+      />
     </div>
   );
 }

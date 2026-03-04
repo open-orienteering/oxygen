@@ -8,6 +8,7 @@ import {
   type RunnerStatusValue,
 } from "@oxygen/shared";
 import { PunchTable, type PunchTableData } from "./PunchTable";
+import { MapPanel } from "./MapPanel";
 import { ClubLogo } from "./ClubLogo";
 import { SearchableSelect } from "./SearchableSelect";
 import { formatEntryDate } from "../lib/format";
@@ -93,6 +94,16 @@ export function RunnerInlineDetail({ runnerId, colSpan }: Props) {
   const r = runner.data;
   const runningTime =
     r.finishTime > 0 && r.startTime > 0 ? r.finishTime - r.startTime : 0;
+
+  const mispunchMapInfo = (() => {
+    const d = readout.data;
+    if (!d?.course) return null;
+    if (d.missingControls.length === 0 && d.extraPunches.length === 0) return null;
+    const punchStatusByCode: Record<string, "ok" | "missing" | "extra"> = {};
+    for (const c of d.controls) punchStatusByCode[String(c.controlCode)] = c.status as "ok" | "missing" | "extra";
+    for (const ep of d.extraPunches) punchStatusByCode[String(ep.controlCode)] = "extra";
+    return { courseName: d.course.name, punchStatusByCode };
+  })();
 
   return (
     <tr>
@@ -243,6 +254,32 @@ export function RunnerInlineDetail({ runnerId, colSpan }: Props) {
                   );
                 }}
               />
+
+              {/* Mispunch map — shown when there are missing or extra controls */}
+              {mispunchMapInfo && (
+                <div className="mt-4 pt-4 border-t border-blue-100">
+                  <div className="flex items-center justify-between mb-2">
+                    <span className="text-sm font-medium text-slate-600">Course Map</span>
+                    <span className="flex items-center gap-3 text-xs text-slate-500">
+                      <span className="flex items-center gap-1">
+                        <span className="inline-block w-3 h-3 rounded-full border-2 border-red-500" />
+                        Missing
+                      </span>
+                      <span className="flex items-center gap-1">
+                        <span className="inline-block w-3 h-3 rounded-full border-2 border-orange-500" />
+                        Extra punch
+                      </span>
+                    </span>
+                  </div>
+                  <MapPanel
+                    highlightCourseName={mispunchMapInfo.courseName}
+                    filterMode="course"
+                    height="300px"
+                    fitToControls
+                    punchStatusByCode={mispunchMapInfo.punchStatusByCode}
+                  />
+                </div>
+              )}
             </div>
           )}
         </div>

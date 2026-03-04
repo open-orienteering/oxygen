@@ -92,6 +92,8 @@ interface Props {
   completionCourseId?: number;
   /** Render a toolbar above the map (for class selectors, toggles, etc.) */
   toolbar?: React.ReactNode;
+  /** Per-control punch status for mispunch visualization (keyed by control code string e.g. "67") */
+  punchStatusByCode?: Record<string, "ok" | "missing" | "extra">;
 }
 
 export function MapPanel({
@@ -107,6 +109,7 @@ export function MapPanel({
   onCompletionToggle,
   completionCourseId,
   toolbar,
+  punchStatusByCode,
 }: Props) {
   const { nameId } = useParams<{ nameId: string }>();
   const competitionId = nameId ?? "__none__";
@@ -289,6 +292,8 @@ export function MapPanel({
       if (showOnlyRelevant) {
         if (filterMode === "course" && courseControlIds.size > 0) {
           visible = courseControlIds.has(id) || c.status === 4 || c.status === 5;
+          // Extra punch controls are not in the course but should still be visible
+          if (!visible && punchStatusByCode?.[c.code] === "extra") visible = true;
         } else if (filterMode === "single-control" && highlightControlId) {
           visible = c.id === highlightControlId;
         }
@@ -312,9 +317,10 @@ export function MapPanel({
         highlight: isHighlighted,
         visible,
         completionPct,
+        punchStatus: punchStatusByCode?.[c.code],
       };
     });
-  }, [controlCoords.data, highlightControlId, filterMode, showOnlyRelevant, courseControlIds, showCompletion, completionStatus.data]);
+  }, [controlCoords.data, highlightControlId, filterMode, showOnlyRelevant, courseControlIds, showCompletion, completionStatus.data, punchStatusByCode]);
 
   // Build course overlays — augment with start/finish connections
   const courseOverlays: CourseOverlay[] = useMemo(() => {
