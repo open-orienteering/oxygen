@@ -1,6 +1,6 @@
-# Antigravity Critical Instructions - OOS Project
+# Antigravity Critical Instructions - Oxygen Project
 
-Always follow these rules when making changes to the OOS codebase.
+Always follow these rules when making changes to the Oxygen codebase.
 
 ## 1. Zero-Warning Build
 After any non-trivial change, run a full project build to ensure no TypeScript errors or warnings were introduced.

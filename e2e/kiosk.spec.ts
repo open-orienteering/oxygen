@@ -38,7 +38,7 @@ async function goToKiosk(page: Page) {
 async function sendKioskMessage(page: Page, nameId: string, message: Record<string, unknown>) {
   await page.evaluate(
     ({ nameId, message }) => {
-      const ch = new BroadcastChannel(`oos-kiosk-${nameId}`);
+      const ch = new BroadcastChannel(`oxygen-kiosk-${nameId}`);
       ch.postMessage(message);
       ch.close();
     },
@@ -343,7 +343,7 @@ test.describe("Kiosk Mode", () => {
     const confirmPromise = page.evaluate(
       (nameId) =>
         new Promise<boolean>((resolve) => {
-          const ch = new BroadcastChannel(`oos-kiosk-${nameId}`);
+          const ch = new BroadcastChannel(`oxygen-kiosk-${nameId}`);
           const timer = setTimeout(() => { ch.close(); resolve(false); }, 5000);
           ch.onmessage = (e) => {
             if (e.data.type === "registration-confirm" && e.data.confirmed) {
@@ -482,7 +482,7 @@ test.describe("Kiosk Mode", () => {
     const pongPromise = page.evaluate(
       (nameId) =>
         new Promise<boolean>((resolve) => {
-          const ch = new BroadcastChannel(`oos-kiosk-${nameId}`);
+          const ch = new BroadcastChannel(`oxygen-kiosk-${nameId}`);
           const timer = setTimeout(() => { ch.close(); resolve(false); }, 3000);
           ch.onmessage = (e) => {
             if (e.data.type === "kiosk-ping" && e.data.from === "kiosk") {

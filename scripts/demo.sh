@@ -11,18 +11,21 @@ until docker compose exec mysql mysqladmin ping -h localhost --silent 2>/dev/nul
   sleep 2
 done
 
-# ── 2. Create databases and apply schema ─────────────────────────────────────
+# ── 2. Create databases, user, and apply schema ──────────────────────────────
 echo "Initialising databases..."
-docker compose exec mysql mysql -u meos -e \
+docker compose exec mysql mysql -u root -e \
   "CREATE DATABASE IF NOT EXISTS itest CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
-   CREATE DATABASE IF NOT EXISTS MeOSMain CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;"
+   CREATE DATABASE IF NOT EXISTS MeOSMain CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+   CREATE USER IF NOT EXISTS 'meos'@'%' IDENTIFIED BY '';
+   GRANT ALL PRIVILEGES ON \`%\`.* TO 'meos'@'%';
+   FLUSH PRIVILEGES;"
 
-docker compose exec -T mysql mysql -u meos itest \
+docker compose exec -T mysql mysql -u root itest \
   < packages/api/prisma/meos-schema.sql
 
 # ── 3. Load demo competition data ────────────────────────────────────────────
 echo "Loading demo data..."
-docker compose exec -T mysql mysql -u meos itest \
+docker compose exec -T mysql mysql -u root itest \
   < e2e/seed-test-competition.sql
 
 # ── 4. Start API and web ─────────────────────────────────────────────────────

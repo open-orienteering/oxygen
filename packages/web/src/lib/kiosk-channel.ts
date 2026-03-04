@@ -1,7 +1,7 @@
 /**
  * Typed BroadcastChannel wrapper for admin ↔ kiosk communication.
  *
- * Channel name: `oos-kiosk-{competitionNameId}`
+ * Channel name: `oxygen-kiosk-{competitionNameId}`
  *
  * Used in two scenarios:
  * - Paired mode: Admin owns SI reader, forwards card events to kiosk
@@ -102,7 +102,7 @@ export class KioskChannel {
   private listeners = new Set<(msg: KioskMessage) => void>();
 
   constructor(competitionNameId: string) {
-    this.channel = new BroadcastChannel(`oos-kiosk-${competitionNameId}`);
+    this.channel = new BroadcastChannel(`oxygen-kiosk-${competitionNameId}`);
     this.channel.onmessage = (event: MessageEvent) => {
       const msg = event.data as KioskMessage;
       if (msg && typeof msg.type === "string") {

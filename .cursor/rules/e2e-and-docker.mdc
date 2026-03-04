@@ -5,7 +5,7 @@ alwaysApply: true
 
 # MeOS Database Compatibility
 
-OOS must maintain **full bidirectional compatibility** with MeOS. A database created by OOS must be openable by MeOS, and vice versa.
+Oxygen must maintain **full bidirectional compatibility** with MeOS. A database created by Oxygen must be openable by MeOS, and vice versa.
 
 ## Key Rules
 
@@ -19,7 +19,7 @@ OOS must maintain **full bidirectional compatibility** with MeOS. A database cre
 - **Features**: Default to `"SL+BB+CL+CC+RF+NW+TA+RD"` on competition creation.
 - **Tables**: Competition databases must include `dbRunner`, `dbClub`, and `oImage` tables (created during init).
 - **OOS-only tables**: Must use the `oos_` prefix to avoid collisions with MeOS tables.
-- **When in doubt**: Reference MeOS source code at `/home/marcus/IdeaProjects/meos/code/` (especially `MeosSQL.cpp`, `oEvent.cpp`, `oDataContainer.cpp`).
+- **When in doubt**: Reference MeOS source code, available from [melin.nu/meos](http://www.melin.nu/meos) (especially `MeosSQL.cpp`, `oEvent.cpp`, `oDataContainer.cpp`).
 
 # E2E Tests & Docker Build
 

@@ -47,14 +47,14 @@ const DEFAULT_SETTINGS: KioskSettings = {
 
 function loadSettings(nameId: string): KioskSettings {
   try {
-    const raw = localStorage.getItem(`oos-kiosk-settings-${nameId}`);
+    const raw = localStorage.getItem(`oxygen-kiosk-settings-${nameId}`);
     if (raw) return { ...DEFAULT_SETTINGS, ...JSON.parse(raw) };
   } catch { /* ignore */ }
   return DEFAULT_SETTINGS;
 }
 
 function saveSettings(nameId: string, settings: KioskSettings): void {
-  localStorage.setItem(`oos-kiosk-settings-${nameId}`, JSON.stringify(settings));
+  localStorage.setItem(`oxygen-kiosk-settings-${nameId}`, JSON.stringify(settings));
 }
 
 // ─── Main Kiosk Page ────────────────────────────────────────

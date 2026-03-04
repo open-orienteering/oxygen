@@ -1047,7 +1047,7 @@ export async function uploadResults(
       "@_iofVersion": "3.0",
       "@_status": "Snapshot",
       "@_createTime": new Date().toISOString(),
-      "@_creator": "OOS",
+      "@_creator": "Oxygen",
       Event: {
         Id: eventExtId,
         Name: eventName,
@@ -1162,7 +1162,7 @@ export async function uploadStartList(
       "@_xmlns:xsi": "http://www.w3.org/2001/XMLSchema-instance",
       "@_iofVersion": "3.0",
       "@_createTime": new Date().toISOString(),
-      "@_creator": "OOS",
+      "@_creator": "Oxygen",
       Event: {
         Id: eventExtId,
         Name: eventName,

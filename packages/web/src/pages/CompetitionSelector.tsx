@@ -29,10 +29,10 @@ export function CompetitionSelector() {
         {/* Logo / Header */}
         <div className="text-center mb-8">
           <div className="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-blue-600 text-white text-2xl font-bold mb-4 shadow-lg">
-            OOS
+            O2
           </div>
           <h1 className="text-3xl font-bold text-slate-900">
-            Open Orienteering System
+            Oxygen
           </h1>
           <p className="text-slate-500 mt-2">Select a competition to manage</p>
         </div>
@@ -52,7 +52,7 @@ export function CompetitionSelector() {
                 Connection Error
               </div>
               <p className="text-slate-500 text-sm mb-4">
-                Could not connect to the OOS API server.
+                Could not connect to the Oxygen API server.
                 <br />
                 Make sure it is running on port 3001.
               </p>
@@ -263,7 +263,7 @@ export function CompetitionSelector() {
 
         {/* Footer */}
         <div className="text-center mt-6 text-sm text-slate-400 space-y-1">
-          <div>OOS v0.1.0 &middot; Connected to MeOS MySQL</div>
+          <div>Oxygen v0.1.0 &middot; Connected to MeOS MySQL</div>
           <PurgeButton onPurged={() => competitions.refetch()} />
         </div>
       </div>
