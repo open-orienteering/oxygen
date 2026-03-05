@@ -195,10 +195,7 @@ function ReadoutView({ data }: { data: any }) {
         </div>
       )}
 
-      {/* Punch table (read-only) */}
-      <PunchTable data={toPunchTableData(data)} />
-
-      {/* Mispunch map — shown when there are missing or extra controls */}
+      {/* Mispunch map — immediately after status, before the split table */}
       {data.course && (data.missingControls.length > 0 || data.extraPunches.length > 0) && (
         <MispunchMap
           courseName={data.course.name}
@@ -206,6 +203,9 @@ function ReadoutView({ data }: { data: any }) {
           extraPunches={data.extraPunches}
         />
       )}
+
+      {/* Punch table (read-only) */}
+      <PunchTable data={toPunchTableData(data)} />
     </div>
   );
 }
@@ -219,27 +219,47 @@ function MispunchMap({ courseName, controls, extraPunches }: {
   for (const c of controls) punchStatusByCode[String(c.controlCode)] = c.status;
   for (const ep of extraPunches) punchStatusByCode[String(ep.controlCode)] = "extra";
 
+  // Zoom to bounding box of mispunched + extra controls
+  const focusControlCodes = [
+    ...controls.filter((c) => c.status === "missing").map((c) => String(c.controlCode)),
+    ...extraPunches.map((ep) => String(ep.controlCode)),
+  ];
+
   return (
     <div>
       <div className="flex items-center justify-between mb-2">
         <span className="text-sm font-medium text-slate-600">Course Map</span>
         <span className="flex items-center gap-3 text-xs text-slate-500">
           <span className="flex items-center gap-1">
-            <span className="inline-block w-3 h-3 rounded-full border-2 border-red-500" />
+            {/* Missing: circle with X */}
+            <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+              <circle cx="7" cy="7" r="5.5" stroke="#ef4444" strokeWidth="1.5" />
+              <line x1="4" y1="4" x2="10" y2="10" stroke="#ef4444" strokeWidth="1.5" strokeLinecap="round" />
+              <line x1="10" y1="4" x2="4" y2="10" stroke="#ef4444" strokeWidth="1.5" strokeLinecap="round" />
+            </svg>
             Missing
           </span>
           <span className="flex items-center gap-1">
-            <span className="inline-block w-3 h-3 rounded-full border-2 border-orange-500" />
+            <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+              <circle cx="7" cy="7" r="5.5" stroke="#f97316" strokeWidth="1.5" />
+            </svg>
             Extra punch
+          </span>
+          <span className="flex items-center gap-1">
+            <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+              <circle cx="7" cy="7" r="5.5" stroke="#059669" strokeWidth="1.5" />
+            </svg>
+            Correct
           </span>
         </span>
       </div>
       <MapPanel
         highlightCourseName={courseName}
         filterMode="course"
-        height="350px"
+        height="450px"
         fitToControls
         punchStatusByCode={punchStatusByCode}
+        focusControlCodes={focusControlCodes}
       />
     </div>
   );

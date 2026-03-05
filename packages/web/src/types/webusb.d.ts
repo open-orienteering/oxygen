@@ -71,8 +71,15 @@ interface USBDevice {
   ): Promise<USBOutTransferResult>;
 }
 
+interface USBConnectionEvent extends Event {
+  readonly device: USBDevice;
+}
+
 interface USB extends EventTarget {
   requestDevice(options: USBDeviceRequestOptions): Promise<USBDevice>;
+  getDevices(): Promise<USBDevice[]>;
+  addEventListener(type: "connect" | "disconnect", listener: (event: USBConnectionEvent) => void): void;
+  removeEventListener(type: "connect" | "disconnect", listener: (event: USBConnectionEvent) => void): void;
 }
 
 interface Navigator {

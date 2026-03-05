@@ -10,6 +10,7 @@
 import {
   createContext,
   useContext,
+  useEffect,
   useRef,
   useState,
   useCallback,
@@ -47,22 +48,33 @@ const PrinterContext = createContext<PrinterContextValue | null>(null);
 
 export function PrinterProvider({ children }: { children: ReactNode }) {
   const supported = isWebUsbSupported();
-  const driverRef = useRef<WebUsbPrinterDriver | null>(null);
+  // Create driver once so the USB disconnect listener survives connect/disconnect cycles.
+  const driverRef = useRef(new WebUsbPrinterDriver());
 
   const [connected, setConnected] = useState(false);
   const [printing, setPrinting] = useState(false);
   const [lastError, setLastError] = useState<string | null>(null);
 
+  // Wire events and attempt auto-reconnect to a previously paired printer.
+  useEffect(() => {
+    const driver = driverRef.current;
+    const onConnected = () => setConnected(true);
+    const onDisconnected = () => setConnected(false);
+    driver.addEventListener("printer:connected", onConnected);
+    driver.addEventListener("printer:disconnected", onDisconnected);
+    if (supported) {
+      driver.tryAutoConnect().catch(() => {});
+    }
+    return () => {
+      driver.removeEventListener("printer:connected", onConnected);
+      driver.removeEventListener("printer:disconnected", onDisconnected);
+    };
+  }, [supported]);
+
   const connect = useCallback(async () => {
     setLastError(null);
-    const driver = new WebUsbPrinterDriver();
-
-    driver.addEventListener("printer:connected", () => setConnected(true));
-    driver.addEventListener("printer:disconnected", () => setConnected(false));
-
     try {
-      await driver.connect();
-      driverRef.current = driver;
+      await driverRef.current.connect();
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       setLastError(msg);
@@ -71,14 +83,12 @@ export function PrinterProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const disconnect = useCallback(() => {
-    driverRef.current?.disconnect();
-    driverRef.current = null;
-    setConnected(false);
+    driverRef.current.disconnect();
   }, []);
 
   const print = useCallback(async (data: FinishReceiptData) => {
     const driver = driverRef.current;
-    if (!driver?.connected) throw new Error("Printer not connected");
+    if (!driver.connected) throw new Error("Printer not connected");
     setLastError(null);
     setPrinting(true);
     try {

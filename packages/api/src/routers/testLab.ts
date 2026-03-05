@@ -489,7 +489,7 @@ export const testLabRouter = router({
           ct.target = Math.max(1, Math.round((ct.target / totalWeight) * input.count));
         }
 
-        // Load runners from oos_runner_db (must have valid birth year and SI card)
+        // Load runners from oxygen_runner_db (must have valid birth year and SI card)
         const [dbRunnerRows] = await mainConn.execute<mysql.RowDataPacket[]>(
           "SELECT ExtId, Name, CardNo, ClubId, BirthYear, Sex FROM oxygen_runner_db WHERE BirthYear > 0 AND CardNo > 0",
         );

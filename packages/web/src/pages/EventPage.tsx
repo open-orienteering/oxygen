@@ -740,7 +740,6 @@ function ClubSyncPanel({ env }: { env?: string }) {
         <div className="mt-3 p-3 bg-white rounded-lg border border-emerald-100 text-xs text-slate-600">
           <span className="font-medium text-green-700">Sync complete:</span>{" "}
           {syncMutation.data.added} added, {syncMutation.data.updated} updated
-          {syncMutation.data.logosAdded > 0 && <>, {syncMutation.data.logosAdded} logos</>}
           {" "}({syncMutation.data.total} total)
         </div>
       )}

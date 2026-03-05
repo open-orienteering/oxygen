@@ -105,7 +105,7 @@ describe("buildFinishReceipt", () => {
     const bytes = buildFinishReceipt(SAMPLE);
     const text = Buffer.from(bytes).toString("latin1");
     expect(text).toContain("Nr.");
-    expect(text).toContain("t/km");
+    expect(text).toContain("Pace");
   });
 
   it("omits splits section when no splits", () => {
@@ -125,7 +125,7 @@ describe("buildFinishReceipt", () => {
     };
     const bytes = buildFinishReceipt(data);
     const text = Buffer.from(bytes).toString("latin1");
-    expect(text).toContain("SAKNAS");
+    expect(text).toContain("MISSING");
   });
 
   it("handles missing position gracefully", () => {
@@ -133,7 +133,7 @@ describe("buildFinishReceipt", () => {
     expect(() => buildFinishReceipt(data)).not.toThrow();
     const bytes = buildFinishReceipt(data);
     const text = Buffer.from(bytes).toString("latin1");
-    expect(text).not.toContain("Placering");
+    expect(text).not.toContain("Position");
   });
 
   it("includes clock time column when punchTime is provided", () => {
@@ -164,13 +164,13 @@ describe("buildFinishReceipt", () => {
     const bytes = buildFinishReceipt(data);
     const text = Buffer.from(bytes).toString("latin1");
     expect(text).not.toContain("SIAC");
-    expect(text).not.toContain("Batteri");
+    expect(text).not.toContain("Battery");
   });
 
   it("includes class results when provided", () => {
     const bytes = buildFinishReceipt(SAMPLE);
     const text = Buffer.from(bytes).toString("latin1");
-    expect(text).toContain("Placering");
+    expect(text).toContain("Position");
     expect(text).toContain("Kevin");
   });
 
@@ -184,8 +184,8 @@ describe("buildFinishReceipt", () => {
   it("includes attribution footer", () => {
     const bytes = buildFinishReceipt(SAMPLE);
     const text = Buffer.from(bytes).toString("latin1");
-    expect(text).toContain("Results by: Oxygen");
-    expect(text).toContain("Open Orienteering");
+    expect(text).toContain("Lightweight orienteering management");
+    expect(text).toContain("open-orienteering.org");
   });
 
   it("replaces non-Latin-1 characters with '?'", () => {
@@ -197,5 +197,29 @@ describe("buildFinishReceipt", () => {
     const arr = [...bytes];
     // Chinese chars (> 0xFF) should become 0x3F ('?')
     expect(arr.includes(0x3f)).toBe(true);
+  });
+
+  it("includes raster image command when logoRaster is provided", () => {
+    const data: FinishReceiptData = {
+      ...SAMPLE,
+      logoRaster: { widthBytes: 1, heightDots: 1, data: new Uint8Array([0x80]) },
+    };
+    const arr = [...buildFinishReceipt(data)];
+    // GS v 0 preamble: 0x1D 0x76 0x30 0x00
+    expect(arr.some((b, i) => b === 0x1D && arr[i + 1] === 0x76 && arr[i + 2] === 0x30)).toBe(true);
+  });
+
+  it("includes QR code command when qrUrl is provided", () => {
+    const data: FinishReceiptData = { ...SAMPLE, qrUrl: "https://example.com" };
+    const arr = [...buildFinishReceipt(data)];
+    // GS ( k preamble: 0x1D 0x28 0x6B
+    expect(arr.some((b, i) => b === 0x1D && arr[i + 1] === 0x28 && arr[i + 2] === 0x6B)).toBe(true);
+  });
+
+  it("omits QR command when qrUrl is null", () => {
+    const data: FinishReceiptData = { ...SAMPLE, qrUrl: null };
+    const arr = [...buildFinishReceipt(data)];
+    // GS ( k should not appear
+    expect(arr.some((b, i) => b === 0x1D && arr[i + 1] === 0x28 && arr[i + 2] === 0x6B)).toBe(false);
   });
 });

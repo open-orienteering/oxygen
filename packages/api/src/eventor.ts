@@ -386,6 +386,29 @@ export async function fetchEvents(
 }
 
 /**
+ * Fetch the organiser name and ID for a single event.
+ * Lightweight — only parses the Organiser element from the event XML.
+ */
+export async function fetchEventOrganiser(
+  apiKey: string,
+  eventId: number,
+  env: EventorEnvironment = "prod",
+): Promise<{ name: string; id: number } | null> {
+  try {
+    const xml = await eventorFetch(`event/${eventId}`, apiKey, env);
+    const parsed = parser.parse(xml);
+    const ev = parsed.Event ?? parsed;
+    const organiser = ev.Organiser ?? ev.Organisation ?? {};
+    const id = safeInt(organiser.OrganisationId ?? organiser["@_id"] ?? 0);
+    const name = safeStr(organiser.Name ?? "");
+    if (!name && !id) return null;
+    return { name, id };
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Fetch classes for a given event.
  *
  * Uses the Eventor native endpoint for class IDs and metadata, then enriches
@@ -988,22 +1011,32 @@ export async function fetchCachedCompetitors(
 // ─── Club Logos ──────────────────────────────────────────────
 
 /**
- * Fetch a club logo as a PNG buffer.
- * Type: "SmallIcon" or "LargeIcon"
+ * Fetch a club logo as a PNG buffer via the authenticated Eventor API.
+ * Always fetches from prod-Eventor since test-Eventor shares the same org IDs
+ * and prod is the authoritative source for logos.
  */
 export async function fetchClubLogo(
   organisationId: number,
+  apiKey: string,
   type: "SmallIcon" | "LargeIcon" = "SmallIcon",
-  env: EventorEnvironment = "prod",
 ): Promise<Uint8Array | null> {
-  // Use public blob URL for logos — these don't require an API key
-  const baseUrl = EVENTOR_URLS[env].replace("/api/", "/");
-  const url = `${baseUrl}Organisation/Logo/${organisationId}?type=${type}`;
+  const url = new URL("organisation/logo", EVENTOR_URLS["prod"]);
+  url.searchParams.set("organisationId", String(organisationId));
+  url.searchParams.set("type", type);
 
   try {
-    const res = await fetch(url);
-    if (!res.ok) return null;
-    return new Uint8Array(await res.arrayBuffer());
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 8000);
+    try {
+      const res = await fetch(url.toString(), {
+        headers: { ApiKey: apiKey },
+        signal: controller.signal,
+      });
+      if (!res.ok) return null;
+      return new Uint8Array(await res.arrayBuffer());
+    } finally {
+      clearTimeout(timer);
+    }
   } catch {
     return null;
   }

@@ -21,6 +21,7 @@ import {
   fetchClubs,
   fetchResults,
   fetchClubLogo,
+  fetchEventOrganiser,
   fetchCompetitors,
   fetchCachedCompetitors,
   uploadResults,
@@ -93,7 +94,7 @@ const clubMemberCache = new Map<
 export const eventorRouter = router({
   /**
    * Validate an Eventor API key and store it for subsequent requests.
-   * Persists to MeOSMain.oos_settings so it survives server restarts.
+   * Persists to MeOSMain.oxygen_settings so it survives server restarts.
    */
   validateKey: publicProcedure
     .input(
@@ -425,8 +426,8 @@ export const eventorRouter = router({
       // 7b. Fetch organiser logo if available
       if (input.organiserId && input.organiserId > 0) {
         const [small, large] = await Promise.all([
-          fetchClubLogo(input.organiserId, "SmallIcon", input.env),
-          fetchClubLogo(input.organiserId, "LargeIcon", input.env),
+          fetchClubLogo(input.organiserId, apiKey, "SmallIcon"),
+          fetchClubLogo(input.organiserId, apiKey, "LargeIcon"),
         ]);
         if (small) {
           await ensureLogoTable(client);
@@ -595,7 +596,7 @@ export const eventorRouter = router({
         }
       }
     }
-    const clubResult = await syncClubsFromEntries(client, allEntryLikeData, env);
+    const clubResult = await syncClubsFromEntries(client, allEntryLikeData, apiKey);
     stats.clubsAdded = clubResult.added;
     stats.clubsUpdated = clubResult.updated;
     const eventorToLocalClub = clubResult.mapping;
@@ -768,10 +769,15 @@ export const eventorRouter = router({
       }
     }
 
-    // 5. Update sync timestamp
+    // 5. Update sync timestamp (and organizer if missing)
+    const syncUpdateData: Record<string, unknown> = { ImportStamp: new Date().toISOString() };
+    if (!event.Organizer) {
+      const organiser = await fetchEventOrganiser(apiKey, eventorEventId, env);
+      if (organiser?.name) syncUpdateData.Organizer = organiser.name;
+    }
     await client.oEvent.update({
       where: { Id: event.Id },
-      data: { ImportStamp: new Date().toISOString() },
+      data: syncUpdateData,
     });
 
     return { ...stats, cancelledCount };
@@ -984,51 +990,81 @@ export const eventorRouter = router({
       }
     }
 
-    // Fetch logos for all clubs (in parallel batches to avoid overwhelming the server)
-    await ensureLogoTable(client);
-    const existingLogos = await client.oxygen_club_logo.findMany({
-      select: { EventorId: true },
-    });
-    const existingLogoIds = new Set(existingLogos.map((l) => l.EventorId));
+    // Fetch logos in the background — fire-and-forget so the mutation returns immediately.
+    // Always fetches from prod-Eventor (test-Eventor doesn't host logos; org IDs are shared).
+    void (async () => {
+      try {
+        await ensureLogoTable(client);
+        const existingLogos = await client.oxygen_club_logo.findMany({
+          select: { EventorId: true },
+        });
+        const existingLogoIds = new Set(existingLogos.map((l) => l.EventorId));
 
-    const clubIdsNeedingLogos = allClubs
-      .filter((c) => c.id > 0 && !existingLogoIds.has(c.id))
-      .map((c) => c.id);
-
-    let logosAdded = 0;
-    const BATCH = 20;
-    for (let i = 0; i < clubIdsNeedingLogos.length; i += BATCH) {
-      const batch = clubIdsNeedingLogos.slice(i, i + BATCH);
-      const results = await Promise.all(
-        batch.map(async (orgId) => {
-          const [small, large] = await Promise.all([
-            fetchClubLogo(orgId, "SmallIcon", env),
-            fetchClubLogo(orgId, "LargeIcon", env),
-          ]);
-          return { orgId, small, large };
-        }),
-      );
-      for (const r of results) {
-        if (r.small) {
-          await client.oxygen_club_logo.upsert({
-            where: { EventorId: r.orgId },
-            create: {
-              EventorId: r.orgId,
-              SmallPng: r.small as any,
-              ...(r.large ? { LargePng: r.large as any } : {}),
-            },
-            update: {
-              SmallPng: r.small as any,
-              ...(r.large ? { LargePng: r.large as any } : {}),
-              UpdatedAt: new Date(),
-            },
-          });
-          logosAdded++;
+        // Also check global table to avoid re-fetching already known logos
+        const mainConn = await getMainDbConnection();
+        let globalLogoIds: Set<number>;
+        try {
+          await ensureClubDbTable(mainConn);
+          const [rows] = await mainConn.execute(
+            "SELECT EventorId FROM oxygen_club_db WHERE SmallLogoPng IS NOT NULL",
+          );
+          globalLogoIds = new Set((rows as { EventorId: number }[]).map((r) => r.EventorId));
+        } finally {
+          await mainConn.end();
         }
-      }
-    }
 
-    return { added, updated, total: allClubs.length, logosAdded };
+        const clubIdsNeedingLogos = allClubs
+          .filter((c) => c.id > 0 && !existingLogoIds.has(c.id) && !globalLogoIds.has(c.id))
+          .map((c) => c.id);
+
+        const BATCH = 20;
+        for (let i = 0; i < clubIdsNeedingLogos.length; i += BATCH) {
+          const batch = clubIdsNeedingLogos.slice(i, i + BATCH);
+          const results = await Promise.all(
+            batch.map(async (orgId) => {
+              const [small, large] = await Promise.all([
+                fetchClubLogo(orgId, apiKey, "SmallIcon"),
+                fetchClubLogo(orgId, apiKey, "LargeIcon"),
+              ]);
+              return { orgId, small, large };
+            }),
+          );
+          for (const r of results) {
+            if (r.small) {
+              await client.oxygen_club_logo.upsert({
+                where: { EventorId: r.orgId },
+                create: {
+                  EventorId: r.orgId,
+                  SmallPng: r.small as any,
+                  ...(r.large ? { LargePng: r.large as any } : {}),
+                },
+                update: {
+                  SmallPng: r.small as any,
+                  ...(r.large ? { LargePng: r.large as any } : {}),
+                  UpdatedAt: new Date(),
+                },
+              });
+              // Also write to global table for reuse across competitions
+              const globalConn = await getMainDbConnection();
+              try {
+                await globalConn.execute(
+                  `INSERT INTO oxygen_club_db (EventorId, Name, ShortName, CountryCode, SmallLogoPng, LargeLogoPng)
+                   VALUES (?, '', '', '', ?, ?)
+                   ON DUPLICATE KEY UPDATE SmallLogoPng = VALUES(SmallLogoPng), LargeLogoPng = VALUES(LargeLogoPng)`,
+                  [r.orgId, r.small, r.large ?? null],
+                );
+              } finally {
+                await globalConn.end();
+              }
+            }
+          }
+        }
+      } catch {
+        // Non-critical — logos can be fetched on next sync
+      }
+    })();
+
+    return { added, updated, total: allClubs.length };
   }),
 
   /**
@@ -1067,7 +1103,7 @@ export const eventorRouter = router({
 
   /**
    * Download the full Eventor cached competitor database and store in MeOSMain.
-   * Also collects all clubs from the data and stores them in oos_club_db.
+   * Also collects all clubs from the data and stores them in oxygen_club_db.
    */
   syncRunnerDb: publicProcedure
     .input(z.object({ env: z.enum(["prod", "test"]).default("prod") }))
@@ -1090,7 +1126,7 @@ export const eventorRouter = router({
           }
         }
 
-        // 3. Bulk-upsert clubs into oos_club_db
+        // 3. Bulk-upsert clubs into oxygen_club_db
         const clubEntries = [...clubMap.entries()];
         const CLUB_CHUNK = 500;
         for (let i = 0; i < clubEntries.length; i += CLUB_CHUNK) {
@@ -1098,7 +1134,7 @@ export const eventorRouter = router({
           const placeholders = chunk.map(() => "(?, ?)").join(", ");
           const values = chunk.flatMap(([id, name]) => [id, name]);
           await conn.execute(
-            `INSERT INTO oos_club_db (EventorId, Name) VALUES ${placeholders}
+            `INSERT INTO oxygen_club_db (EventorId, Name) VALUES ${placeholders}
            ON DUPLICATE KEY UPDATE Name = VALUES(Name)`,
             values,
           );
@@ -1118,7 +1154,7 @@ export const eventorRouter = router({
               c.countryCode || "",
             ]);
             await conn.execute(
-              `INSERT INTO oos_club_db (EventorId, Name, ShortName, CountryCode) VALUES ${placeholders}
+              `INSERT INTO oxygen_club_db (EventorId, Name, ShortName, CountryCode) VALUES ${placeholders}
              ON DUPLICATE KEY UPDATE Name = VALUES(Name), ShortName = VALUES(ShortName), CountryCode = VALUES(CountryCode)`,
               values,
             );
@@ -1130,7 +1166,7 @@ export const eventorRouter = router({
 
         // 5. Download logos for clubs that don't have them yet
         const [existingLogos] = await conn.execute<import("mysql2/promise").RowDataPacket[]>(
-          "SELECT EventorId FROM oos_club_db WHERE SmallLogoPng IS NOT NULL",
+          "SELECT EventorId FROM oxygen_club_db WHERE SmallLogoPng IS NOT NULL",
         );
         const hasLogo = new Set(
           (existingLogos as { EventorId: number }[]).map((r) => r.EventorId),
@@ -1144,11 +1180,11 @@ export const eventorRouter = router({
         // Download logos in batches (don't overwhelm the server)
         for (const clubId of clubIdsNeedingLogos.slice(0, 200)) {
           try {
-            const small = await fetchClubLogo(clubId, "SmallIcon", input.env);
+            const small = await fetchClubLogo(clubId, apiKey, "SmallIcon");
             if (small) {
-              const large = await fetchClubLogo(clubId, "LargeIcon", input.env);
+              const large = await fetchClubLogo(clubId, apiKey, "LargeIcon");
               await conn.execute(
-                `UPDATE oos_club_db SET SmallLogoPng = ?, LargeLogoPng = ? WHERE EventorId = ?`,
+                `UPDATE oxygen_club_db SET SmallLogoPng = ?, LargeLogoPng = ? WHERE EventorId = ?`,
                 [small, large, clubId],
               );
               logosAdded++;
@@ -1160,7 +1196,7 @@ export const eventorRouter = router({
 
         // 6. Truncate and bulk-insert runners (skip entries without a valid ExtId)
         const validRunners = competitors.filter((c) => c.extId > 0);
-        await conn.execute("TRUNCATE TABLE oos_runner_db");
+        await conn.execute("TRUNCATE TABLE oxygen_runner_db");
 
         const CHUNK = 1000;
         for (let i = 0; i < validRunners.length; i += CHUNK) {
@@ -1178,7 +1214,7 @@ export const eventorRouter = router({
             c.nationality,
           ]);
           await conn.execute(
-            `INSERT INTO oos_runner_db (ExtId, Name, CardNo, ClubId, BirthYear, Sex, Nationality) VALUES ${placeholders}`,
+            `INSERT INTO oxygen_runner_db (ExtId, Name, CardNo, ClubId, BirthYear, Sex, Nationality) VALUES ${placeholders}`,
             values,
           );
         }
@@ -1218,8 +1254,8 @@ export const eventorRouter = router({
           [rows] = await conn.execute<import("mysql2/promise").RowDataPacket[]>(
             `SELECT r.ExtId, r.Name, r.CardNo, r.ClubId, r.BirthYear, r.Sex, r.Nationality,
                     COALESCE(c.Name, '') as ClubName
-             FROM oos_runner_db r
-             LEFT JOIN oos_club_db c ON r.ClubId = c.EventorId
+             FROM oxygen_runner_db r
+             LEFT JOIN oxygen_club_db c ON r.ClubId = c.EventorId
              WHERE CAST(r.CardNo AS CHAR) LIKE ?
              ORDER BY r.CardNo = ? DESC, r.Name
              LIMIT 15`,
@@ -1236,8 +1272,8 @@ export const eventorRouter = router({
             [rows] = await conn.execute<import("mysql2/promise").RowDataPacket[]>(
               `SELECT r.ExtId, r.Name, r.CardNo, r.ClubId, r.BirthYear, r.Sex, r.Nationality,
                       COALESCE(c.Name, '') as ClubName
-               FROM oos_runner_db r
-               LEFT JOIN oos_club_db c ON r.ClubId = c.EventorId
+               FROM oxygen_runner_db r
+               LEFT JOIN oxygen_club_db c ON r.ClubId = c.EventorId
                WHERE ${whereClauses.join(" AND ")}
                ORDER BY r.Name
                LIMIT 15`,
@@ -1287,7 +1323,7 @@ function formatDate(d: Date): string {
 async function syncClubsFromEntries(
   client: Awaited<ReturnType<typeof getCompetitionClient>>,
   entries: EventorEntry[],
-  env: EventorEnvironment = "prod",
+  apiKey: string,
 ): Promise<{ mapping: Map<number, number>; added: number; updated: number }> {
   const existingClubs = await client.oClub.findMany({ where: { Removed: false } });
   const clubExtIdMap = new Map(
@@ -1350,46 +1386,120 @@ async function syncClubsFromEntries(
     }
   }
 
-  // Fetch logos for new clubs in the background (non-blocking for overall sync)
-  await ensureLogoTable(client);
-  const existingLogos = await client.oxygen_club_logo.findMany({
-    select: { EventorId: true },
-  });
-  const existingLogoIds = new Set(existingLogos.map((l) => l.EventorId));
-  const needLogos = [...orgs.keys()].filter((id) => !existingLogoIds.has(id));
+  // Fetch logos for new clubs truly in the background — fire-and-forget so sync
+  // returns immediately regardless of how long logo fetching takes.
+  // Always fetches from prod-Eventor: test-Eventor doesn't host logos but shares
+  // the same organisation IDs as prod, so prod logos apply to both.
+  void (async () => {
+    try {
+      await ensureLogoTable(client);
+      const existingLogos = await client.oxygen_club_logo.findMany({
+        select: { EventorId: true },
+      });
+      const existingLogoIds = new Set(existingLogos.map((l) => l.EventorId));
 
-  if (needLogos.length > 0) {
-    const BATCH = 10;
-    for (let i = 0; i < needLogos.length; i += BATCH) {
-      const batch = needLogos.slice(i, i + BATCH);
-      const logoResults = await Promise.all(
-        batch.map(async (orgId) => {
-          const [small, large] = await Promise.all([
-            fetchClubLogo(orgId, "SmallIcon"),
-            fetchClubLogo(orgId, "LargeIcon"),
-          ]);
-          return { orgId, small, large };
-        }),
+      // Also check the global club DB — logos stored there don't need re-fetching
+      const mainConn = await getMainDbConnection();
+      let globalLogoIds: Set<number>;
+      try {
+        await ensureClubDbTable(mainConn);
+        const [rows] = await mainConn.execute(
+          "SELECT EventorId FROM oxygen_club_db WHERE SmallLogoPng IS NOT NULL",
+        );
+        globalLogoIds = new Set((rows as { EventorId: number }[]).map((r) => r.EventorId));
+      } finally {
+        await mainConn.end();
+      }
+
+      const needLogos = [...orgs.keys()].filter(
+        (id) => !existingLogoIds.has(id) && !globalLogoIds.has(id),
       );
-      for (const lr of logoResults) {
-        if (lr.small) {
-          await client.oxygen_club_logo.upsert({
-            where: { EventorId: lr.orgId },
-            create: {
-              EventorId: lr.orgId,
-              SmallPng: lr.small as any,
-              ...(lr.large ? { LargePng: lr.large as any } : {}),
-            },
-            update: {
-              SmallPng: lr.small as any,
-              ...(lr.large ? { LargePng: lr.large as any } : {}),
-              UpdatedAt: new Date(),
-            },
-          });
+
+      if (needLogos.length === 0) {
+        // Copy any global logos into the local per-competition table so logoMap works
+        const toImport = [...orgs.keys()].filter(
+          (id) => !existingLogoIds.has(id) && globalLogoIds.has(id),
+        );
+        for (const orgId of toImport) {
+          const globalConn = await getMainDbConnection();
+          try {
+            const [rows] = await globalConn.execute(
+              "SELECT SmallLogoPng, LargeLogoPng FROM oxygen_club_db WHERE EventorId = ?",
+              [orgId],
+            );
+            const row = (rows as Record<string, Buffer | null>[])[0];
+            if (row?.SmallLogoPng) {
+              await client.oxygen_club_logo.upsert({
+                where: { EventorId: orgId },
+                create: {
+                  EventorId: orgId,
+                  SmallPng: row.SmallLogoPng as any,
+                  ...(row.LargeLogoPng ? { LargePng: row.LargeLogoPng as any } : {}),
+                },
+                update: {
+                  SmallPng: row.SmallLogoPng as any,
+                  ...(row.LargeLogoPng ? { LargePng: row.LargeLogoPng as any } : {}),
+                  UpdatedAt: new Date(),
+                },
+              });
+            }
+          } finally {
+            await globalConn.end();
+          }
+        }
+        return;
+      }
+
+      // Logos not found anywhere — fetch from prod-Eventor (works for both prod and test
+      // competitions because org IDs are identical across environments).
+      const BATCH = 10;
+      for (let i = 0; i < needLogos.length; i += BATCH) {
+        const batch = needLogos.slice(i, i + BATCH);
+        const logoResults = await Promise.all(
+          batch.map(async (orgId) => {
+            const [small, large] = await Promise.all([
+              fetchClubLogo(orgId, apiKey, "SmallIcon"),
+              fetchClubLogo(orgId, apiKey, "LargeIcon"),
+            ]);
+            return { orgId, small, large };
+          }),
+        );
+        for (const lr of logoResults) {
+          if (lr.small) {
+            // Store in per-competition table
+            await client.oxygen_club_logo.upsert({
+              where: { EventorId: lr.orgId },
+              create: {
+                EventorId: lr.orgId,
+                SmallPng: lr.small as any,
+                ...(lr.large ? { LargePng: lr.large as any } : {}),
+              },
+              update: {
+                SmallPng: lr.small as any,
+                ...(lr.large ? { LargePng: lr.large as any } : {}),
+                UpdatedAt: new Date(),
+              },
+            });
+            // Also store in global table so future competitions (including test-Eventor)
+            // can reuse without re-fetching.
+            const globalConn = await getMainDbConnection();
+            try {
+              await globalConn.execute(
+                `INSERT INTO oxygen_club_db (EventorId, Name, ShortName, CountryCode, SmallLogoPng, LargeLogoPng)
+                 VALUES (?, '', '', '', ?, ?)
+                 ON DUPLICATE KEY UPDATE SmallLogoPng = VALUES(SmallLogoPng), LargeLogoPng = VALUES(LargeLogoPng)`,
+                [lr.orgId, lr.small, lr.large ?? null],
+              );
+            } finally {
+              await globalConn.end();
+            }
+          }
         }
       }
+    } catch {
+      // Non-critical — logos can be fetched on next sync
     }
-  }
+  })();
 
   return { mapping, added, updated };
 }

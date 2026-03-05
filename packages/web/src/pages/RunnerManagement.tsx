@@ -1,10 +1,11 @@
-import { useState, useMemo, useEffect, Fragment } from "react";
+import { useState, useMemo, useEffect, Fragment, useCallback } from "react";
 import { useSearchParams } from "react-router-dom";
 import { trpc } from "../lib/trpc";
 import {
   formatMeosTime,
   formatRunningTime,
   STATUS_FILTER_OPTIONS,
+  RunnerStatus,
   type RunnerStatusValue,
 } from "@oxygen/shared";
 import { StatusBadge } from "../components/StatusBadge";
@@ -17,6 +18,8 @@ import { useSort } from "../hooks/useSort";
 import { useSearchParam, useNumericSearchParam } from "../hooks/useSearchParam";
 import { useTableSelection } from "../hooks/useTableSelection";
 import { BulkActionBar } from "../components/BulkActionBar";
+import { usePrinter } from "../context/PrinterContext";
+import { fetchLogoRaster } from "../lib/receipt-printer/index.js";
 
 export function RunnerManagement() {
   const [search, setSearch] = useSearchParam("search");
@@ -72,6 +75,50 @@ export function RunnerManagement() {
   });
   const classes = trpc.competition.dashboard.useQuery();
   const clubs = trpc.competition.clubs.useQuery();
+  const printer = usePrinter();
+
+  const handlePrint = useCallback(async (runnerId: number) => {
+    const result = await utils.race.finishReceipt.fetch({ runnerId });
+    if (!result) return;
+    const competitionInfo = classes.data?.competition;
+    const eventorId = classes.data?.organizer?.eventorId;
+    await printer.print({
+      competitionName: competitionInfo?.name ?? "",
+      competitionDate: competitionInfo?.date ?? undefined,
+      runner: {
+        name: result.runner.name,
+        clubName: result.runner.clubName,
+        className: result.runner.className,
+        startNo: result.runner.startNo,
+        cardNo: result.runner.cardNo,
+      },
+      timing: {
+        startTime: result.timing.startTime,
+        finishTime: result.timing.finishTime,
+        runningTime: result.timing.runningTime,
+        status: result.timing.status,
+      },
+      splits: result.controls.map((c) => ({
+        controlIndex: c.controlIndex,
+        controlCode: c.controlCode,
+        splitTime: c.splitTime,
+        cumTime: c.cumTime,
+        status: c.status,
+        punchTime: c.punchTime,
+        legLength: c.legLength,
+      })),
+      course: result.course ? { name: result.course.name, length: result.course.length } : null,
+      position: result.position,
+      siac: result.siac,
+      classResults: result.classResults,
+      logoRaster: eventorId
+        ? await fetchLogoRaster(`/api/club-logo/${eventorId}?variant=large`, 250)
+        : null,
+      qrUrl: competitionInfo?.eventorEventId
+        ? `https://eventor.orientering.se/Events/Show/${competitionInfo.eventorEventId}`
+        : "https://open-orienteering.org",
+    });
+  }, [utils, classes.data, printer]);
 
   const deleteMutation = trpc.runner.delete.useMutation({
     onSuccess: () => {
@@ -307,6 +354,18 @@ export function RunnerManagement() {
                       </td>
                       <td className="px-4 py-2.5 text-right" onClick={(e) => e.stopPropagation()}>
                         <div className="flex items-center justify-end gap-1">
+                          {printer.connected && runner.status !== RunnerStatus.Unknown && (
+                            <button
+                              onClick={() => handlePrint(runner.id)}
+                              disabled={printer.printing}
+                              className="p-1.5 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded transition-colors cursor-pointer disabled:opacity-40"
+                              title="Print receipt"
+                            >
+                              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 17h2a2 2 0 002-2v-4a2 2 0 00-2-2H5a2 2 0 00-2 2v4a2 2 0 002 2h2m2 4h6a2 2 0 002-2v-4a2 2 0 00-2-2H9a2 2 0 00-2 2v4a2 2 0 002 2zm8-12V5a2 2 0 00-2-2H9a2 2 0 00-2 2v4h10z" />
+                              </svg>
+                            </button>
+                          )}
                           <button
                             onClick={() => handleDelete(runner.id, runner.name)}
                             className="p-1.5 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded transition-colors cursor-pointer"

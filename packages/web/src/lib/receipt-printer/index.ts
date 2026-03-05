@@ -1,3 +1,4 @@
-export type { PrinterDriver, FinishReceiptData, FinishReceiptSplit } from "./types.js";
+export type { PrinterDriver, FinishReceiptData, FinishReceiptSplit, LogoRaster } from "./types.js";
 export { buildFinishReceipt } from "./escpos.js";
 export { WebUsbPrinterDriver, isWebUsbSupported } from "./drivers/webusb.js";
+export { fetchLogoRaster } from "./raster.js";

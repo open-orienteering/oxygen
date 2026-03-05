@@ -61,35 +61,52 @@ No extra setup required. WebUSB works out of the box on macOS and Windows.
 ## Using the Finish Station Printer
 
 1. Open **More → Finish Station** in the competition view.
-2. Click **Connect Printer** — Chrome will show a device picker.
+2. Click **Connect Printer** in the header — Chrome will show a device picker.
 3. Select your printer and click **Connect**.
-4. Enable **Auto-print** to automatically print a ticket for each recorded finish.
+4. A receipt is automatically printed for each recorded finish.
 5. Use the printer icon on any row in the Recent Finishers list to reprint.
+6. After a page reload, the printer reconnects automatically if it was previously paired.
 
-## Receipt Layout
+## Receipt Layout (42-char, ESC/POS)
 
 ```
 ==========================================
-          OXYGEN RESULTS
-      Competition Name
-      2026-03-04  10:42
+        Test Cup 2026             ← bold, printer-centered
+          2026-03-04
 ==========================================
-  Klass: H21
-  Anna Svensson                      #42
+  Anna Svensson  H21              ← bold
   IFK Göteborg OK
 ==========================================
-  Start:   10:00:00
-  Mål:     10:42:35
-  Tid:        42:35
-  Plac: 3/12             Status: OK
+  Start: 10:00:00   Finish: 10:42:35
+  OK  Time: 42:35  (5:01 min/km)  ← bold
 ==========================================
-  MELLANTIDER
-   1.  101     5:12     5:12
-   2.  102     6:22    11:34
-   3.  103     8:45    20:19
-  Mål          42:35
+Nr.  Cod  Split      Time  Total  Pace
+ 1.   101   5:12  10:05:12   5:12  6:07
+ 2.   102   6:22  10:11:34  11:34 12:07
+ 3.   103   8:45  10:20:19  20:19  6:34
+Fin        8:45  10:42:35  42:35     - ← bold
 ==========================================
+  SIAC 8007045
+  Battery: 2.98V   2024-02-12   OK
+==========================================
+  Position: 3/12                ← bold
+  1  Kevin Hedström (Skogsl.)  24:00
+  2  Anna Ek (IFK Göteborg OK) 42:00
+  3  Anna Svensson (IFK Göteb.) 42:35
+==========================================
+   Oxygen - Lightweight orienteering
+           open-orienteering.org
               10:42:36
-==========================================
 [cut]
 ```
+
+**Column positions (splits table):**
+
+| Column | Width | Content |
+|--------|-------|---------|
+| Nr.    | 3     | Right-aligned control index + "." |
+| Cod    | 4+1sp | Right-aligned control code |
+| Split  | 6+1sp | Right-aligned split time (m:ss) |
+| Time   | 8+2sp | Clock time HH:MM:SS (2-space margin) |
+| Total  | 6+1sp | Right-aligned cumulative time |
+| Pace   | 5+1sp | Right-aligned min/km pace |
