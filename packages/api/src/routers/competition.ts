@@ -356,6 +356,7 @@ export const competitionRouter = router({
           annotation: event.Annotation,
           date: event.Date,
           nameId: event.NameId,
+          eventorEventId: Number(event.ExtId) || undefined,
         },
         classes: classInfos,
         courses: courseInfos,

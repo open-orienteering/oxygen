@@ -55,6 +55,20 @@ export class WebUsbPrinterDriver extends EventTarget implements PrinterDriver {
     return this._status;
   }
 
+  // ── USB disconnect watcher ────────────────────────────────
+  //
+  // Registered on navigator.usb after a successful connection so that
+  // powering off or unplugging the printer immediately reflects in the UI.
+  private onUsbDisconnect = (event: USBConnectionEvent) => {
+    if (event.device === this.device) {
+      this.device = null;
+      this._status = "idle";
+      this.dispatchEvent(new Event("printer:disconnected"));
+    }
+  };
+
+  // ── Open the browser device picker and connect ────────────
+
   async connect(): Promise<void> {
     if (!navigator.usb) {
       throw new Error("WebUSB is not supported in this browser (requires Chrome or Edge)");
@@ -71,6 +85,35 @@ export class WebUsbPrinterDriver extends EventTarget implements PrinterDriver {
       ],
     });
 
+    await this.connectToDevice(device);
+  }
+
+  /**
+   * Try to reconnect to a previously authorized printer without showing the
+   * device picker. Returns true if a device was found and connected.
+   * Mirrors SIReaderConnection.tryAutoReconnect().
+   */
+  async tryAutoConnect(): Promise<boolean> {
+    if (!navigator.usb) return false;
+    try {
+      const devices = await navigator.usb.getDevices();
+      const device =
+        devices.find(
+          (d) =>
+            d.vendorId === CITIZEN_CT_S310II_VID &&
+            d.productId === CITIZEN_CT_S310II_PID,
+        ) ?? devices[0];
+      if (!device) return false;
+      await this.connectToDevice(device);
+      return true;
+    } catch {
+      this._status = "idle";
+      return false;
+    }
+  }
+
+  /** Shared device setup used by both connect() and tryAutoConnect(). */
+  private async connectToDevice(device: USBDevice): Promise<void> {
     await device.open();
 
     if (device.configuration === null) {
@@ -105,11 +148,14 @@ export class WebUsbPrinterDriver extends EventTarget implements PrinterDriver {
 
     this.device = device;
     this._status = "connected";
+    // Listen for physical disconnect (unplug / power-off)
+    navigator.usb.addEventListener("disconnect", this.onUsbDisconnect);
     this.dispatchEvent(new Event("printer:connected"));
   }
 
   async disconnect(): Promise<void> {
     if (this.device) {
+      navigator.usb.removeEventListener("disconnect", this.onUsbDisconnect);
       try {
         await this.device.close();
       } catch {

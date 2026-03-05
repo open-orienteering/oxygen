@@ -28,6 +28,13 @@ export interface FinishReceiptSplit {
   legLength?: number; // metres for this leg (for pace calculation)
 }
 
+/** Pre-rasterized 1-bit logo image for printing via ESC/POS GS v 0. */
+export interface LogoRaster {
+  widthBytes: number;    // ceil(widthDots / 8)
+  heightDots: number;
+  data: Uint8Array;      // widthBytes × heightDots bytes, MSB-first, 1=black
+}
+
 /** All data needed to format and print a finish receipt. */
 export interface FinishReceiptData {
   competitionName: string;
@@ -61,4 +68,8 @@ export interface FinishReceiptData {
     clubName: string;
     runningTime: number;
   }>;
+  /** Pre-rasterized organizing club logo. Null = no logo printed. */
+  logoRaster?: LogoRaster | null;
+  /** URL to encode as a QR code at the bottom. Null = no QR printed. */
+  qrUrl?: string | null;
 }

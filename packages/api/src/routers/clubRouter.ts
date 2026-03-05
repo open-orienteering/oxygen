@@ -190,7 +190,7 @@ export const clubRouter = router({
       // Table might not exist
     }
 
-    // Also check global oos_club_db in MeOSMain
+    // Also check global oxygen_club_db in MeOSMain
     // Build a name→eventorId map so we can resolve clubs with ExtId=0 (non-Eventor competitions)
     const globalNameToEventorId = new Map<string, number>();
     try {

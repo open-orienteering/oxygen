@@ -147,10 +147,10 @@ describe("parseMeosTime", () => {
 describe("runnerStatusLabel", () => {
   it("returns correct label for each known status", () => {
     expect(runnerStatusLabel(RunnerStatus.OK)).toBe("OK");
-    expect(runnerStatusLabel(RunnerStatus.DNS)).toBe("DNS");
-    expect(runnerStatusLabel(RunnerStatus.DNF)).toBe("DNF");
-    expect(runnerStatusLabel(RunnerStatus.MissingPunch)).toBe("MP");
-    expect(runnerStatusLabel(RunnerStatus.DQ)).toBe("DQ");
+    expect(runnerStatusLabel(RunnerStatus.DNS)).toBe("Did Not Start");
+    expect(runnerStatusLabel(RunnerStatus.DNF)).toBe("Did Not Finish");
+    expect(runnerStatusLabel(RunnerStatus.MissingPunch)).toBe("Missing Punch");
+    expect(runnerStatusLabel(RunnerStatus.DQ)).toBe("Disqualified");
     expect(runnerStatusLabel(RunnerStatus.OverMaxTime)).toBe("Over max time");
     expect(runnerStatusLabel(RunnerStatus.Cancel)).toBe("Cancelled");
     expect(runnerStatusLabel(RunnerStatus.NoTiming)).toBe("No timing");

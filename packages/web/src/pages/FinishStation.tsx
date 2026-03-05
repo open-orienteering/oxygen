@@ -9,6 +9,7 @@ import {
 import { StatusBadge } from "../components/StatusBadge";
 import { usePrinter } from "../context/PrinterContext";
 import type { FinishReceiptData } from "../lib/receipt-printer/index.js";
+import { fetchLogoRaster } from "../lib/receipt-printer/index.js";
 
 export function FinishStation() {
   const [cardInput, setCardInput] = useState("");
@@ -72,6 +73,14 @@ export function FinishStation() {
         position: result.position,
         siac: result.siac,
         classResults: result.classResults,
+        logoRaster: await (async () => {
+          const eventorId = dashboard.data?.organizer?.eventorId;
+          if (!eventorId) return null;
+          return fetchLogoRaster(`/api/club-logo/${eventorId}?variant=large`, 250);
+        })(),
+        qrUrl: competitionInfo?.eventorEventId
+          ? `https://eventor.orientering.se/Events/Show/${competitionInfo.eventorEventId}`
+          : "https://open-orienteering.org",
       };
     },
     [utils, dashboard.data],

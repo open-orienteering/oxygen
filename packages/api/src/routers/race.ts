@@ -217,7 +217,7 @@ export const raceRouter = router({
       let classResults: Array<{ rank: number; name: string; clubName: string; runningTime: number }> = [];
       const classId = result.runner.classId;
       const thisTime = result.timing.runningTime;
-      if (classId && thisTime > 0) {
+      if (classId && thisTime > 0 && result.timing.status === RunnerStatus.OK) {
         const classRunners = await client.oRunner.findMany({
           where: { Class: classId, Removed: false, Status: RunnerStatus.OK },
           select: { Name: true, Club: true, StartTime: true, FinishTime: true },

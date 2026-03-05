@@ -94,6 +94,8 @@ interface Props {
   toolbar?: React.ReactNode;
   /** Per-control punch status for mispunch visualization (keyed by control code string e.g. "67") */
   punchStatusByCode?: Record<string, "ok" | "missing" | "extra">;
+  /** Focus/zoom to controls with these codes (e.g. mispunched controls) */
+  focusControlCodes?: string[];
 }
 
 export function MapPanel({
@@ -110,6 +112,7 @@ export function MapPanel({
   completionCourseId,
   toolbar,
   punchStatusByCode,
+  focusControlCodes,
 }: Props) {
   const { nameId } = useParams<{ nameId: string }>();
   const competitionId = nameId ?? "__none__";
@@ -383,6 +386,13 @@ export function MapPanel({
 
   // Compute the set of control IDs to focus on when selection changes
   const focusControlIds = useMemo(() => {
+    // Mispunch focus: zoom to specific control codes
+    if (focusControlCodes && focusControlCodes.length > 0 && controlCoords.data) {
+      const ids = controlCoords.data
+        .filter((c) => focusControlCodes.includes(c.code))
+        .map((c) => String(c.id));
+      if (ids.length > 0) return ids;
+    }
     if (effectiveCourseNames.size > 0 && courseControlIds.size > 0) {
       return Array.from(courseControlIds);
     }
@@ -390,7 +400,7 @@ export function MapPanel({
       return [String(highlightControlId)];
     }
     return null;
-  }, [effectiveCourseNames, courseControlIds, highlightControlId]);
+  }, [focusControlCodes, controlCoords.data, effectiveCourseNames, courseControlIds, highlightControlId]);
 
   const handleControlClick = useCallback((controlId: string) => {
     const numId = parseInt(controlId, 10);
@@ -544,6 +554,8 @@ export function MapPanel({
         initialFitControls={fitToControls}
         focusControlIds={focusControlIds}
         showDescriptions={showDescriptions}
+        onToggleFullscreen={toggleFullscreen}
+        isFullscreen={isFullscreen}
       />
 
       {/* Map info — below the map */}
@@ -571,15 +583,6 @@ export function MapPanel({
           >
             Replace map
           </button>
-          {!toolbar && !isFullscreen && (
-            <button
-              onClick={toggleFullscreen}
-              className="text-xs text-slate-500 hover:text-slate-700 cursor-pointer"
-              title="Fullscreen"
-            >
-              <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3.75 3.75v4.5m0-4.5h4.5m-4.5 0L9 9M3.75 20.25v-4.5m0 4.5h4.5m-4.5 0L9 15M20.25 3.75h-4.5m4.5 0v4.5m0-4.5L15 9m5.25 11.25h-4.5m4.5 0v-4.5m0 4.5L15 15" /></svg>
-            </button>
-          )}
         </div>
       </div>
 

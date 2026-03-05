@@ -61,6 +61,8 @@ interface Props {
   focusControlIds?: string[] | null;
   courseGeometry?: any; // the GeoJSON from the API
   showDescriptions?: boolean;
+  onToggleFullscreen?: () => void;
+  isFullscreen?: boolean;
 }
 
 // ─── Helpers ────────────────────────────────────────────────
@@ -191,6 +193,8 @@ export function MapViewer({
   focusControlIds = null,
   courseGeometry,
   showDescriptions = false,
+  onToggleFullscreen,
+  isFullscreen = false,
 }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const svgContainerRef = useRef<HTMLDivElement>(null);
@@ -702,6 +706,7 @@ export function MapViewer({
       const color =
         ctrl.punchStatus === "missing" ? "#ef4444" :
         ctrl.punchStatus === "extra"   ? "#f97316" :
+        ctrl.punchStatus === "ok"      ? "#059669" :
         isHighlighted ? "#ef4444" : "#c026d3";
 
       if (ctrl.type === "Start") {
@@ -1097,11 +1102,25 @@ export function MapViewer({
         </button>
         <button
           onClick={() => setTransform({ x: 0, y: 0, scale: 1 })}
-          className="w-8 h-8 bg-white border border-slate-200 rounded-lg flex items-center justify-center text-slate-600 hover:bg-slate-50 shadow-sm cursor-pointer text-xs font-bold"
+          className="w-8 h-8 bg-white border border-slate-200 rounded-lg flex items-center justify-center text-slate-600 hover:bg-slate-50 shadow-sm cursor-pointer"
           title="Reset view"
         >
-          <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 8V4m0 0h4M4 4l5 5m11-1V4m0 0h-4m4 0l-5 5M4 16v4m0 0h4m-4 0l5-5m11 5l-5-5m5 5v-4m0 4h-4" /></svg>
+          {/* Circular arrow — clearly distinct from the fullscreen icon */}
+          <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0l3.181 3.183a8.25 8.25 0 0013.803-3.7M4.031 9.865a8.25 8.25 0 0113.803-3.7l3.181 3.182m0-4.991v4.99" /></svg>
         </button>
+        {onToggleFullscreen && (
+          <button
+            onClick={onToggleFullscreen}
+            className="w-8 h-8 bg-white border border-slate-200 rounded-lg flex items-center justify-center text-slate-600 hover:bg-slate-50 shadow-sm cursor-pointer"
+            title={isFullscreen ? "Exit fullscreen" : "Fullscreen"}
+          >
+            {isFullscreen ? (
+              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 9V4.5M9 9H4.5M9 9L3.75 3.75M9 15v4.5M9 15H4.5M9 15l-5.25 5.25M15 9h4.5M15 9V4.5M15 9l5.25-5.25M15 15h4.5M15 15v4.5m0-4.5l5.25 5.25" /></svg>
+            ) : (
+              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3.75 3.75v4.5m0-4.5h4.5m-4.5 0L9 9M3.75 20.25v-4.5m0 4.5h4.5m-4.5 0L9 15M20.25 3.75h-4.5m4.5 0v4.5m0-4.5L15 9m5.25 11.25h-4.5m4.5 0v-4.5m0 4.5L15 15" /></svg>
+            )}
+          </button>
+        )}
       </div>
     </div>
   );

@@ -21,13 +21,13 @@ export function runnerStatusLabel(status: RunnerStatusValue): string {
     case RunnerStatus.OK:
       return "OK";
     case RunnerStatus.DNS:
-      return "DNS";
+      return "Did Not Start";
     case RunnerStatus.DNF:
-      return "DNF";
+      return "Did Not Finish";
     case RunnerStatus.MissingPunch:
-      return "MP";
+      return "Missing Punch";
     case RunnerStatus.DQ:
-      return "DQ";
+      return "Disqualified";
     case RunnerStatus.OverMaxTime:
       return "Over max time";
     case RunnerStatus.Cancel:
@@ -178,6 +178,8 @@ export interface CompetitionInfo {
   remoteHost?: string;
   /** The Eventor environment this competition is linked to, if any */
   eventorEnv?: EventorEnvironment;
+  /** Eventor event ID (oEvent.ExtId). Used to build QR links on receipts. */
+  eventorEventId?: number;
 }
 
 /** Class summary */

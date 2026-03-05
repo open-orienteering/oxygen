@@ -27,7 +27,7 @@ export interface TestDbContext {
  */
 export async function createTestDb(label = "test"): Promise<TestDbContext> {
   const suffix = randomBytes(4).toString("hex");
-  const dbName = `oos_test_${label}_${suffix}`;
+  const dbName = `oxygen_test_${label}_${suffix}`;
 
   await createCompetitionDatabase(
     `Test Competition ${suffix}`,

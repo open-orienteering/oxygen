@@ -85,6 +85,12 @@ class EscPosBuilder {
   alignCenter(): this { return this.raw(0x1b, 0x61, 0x01); }
   boldOn(): this { return this.raw(0x1b, 0x45, 0x01); }
   boldOff(): this { return this.raw(0x1b, 0x45, 0x00); }
+  /** Double-width + double-height text (GS ! 0x11). Resets with sizeNormal(). */
+  sizeDouble(): this { return this.raw(0x1d, 0x21, 0x11); }
+  /** Reset to normal text size (GS ! 0x00). */
+  sizeNormal(): this { return this.raw(0x1d, 0x21, 0x00); }
+  /** Feed paper by exactly n dots (ESC J n, ~n/180 inch). For small gaps between elements. */
+  feedDots(n: number): this { return this.raw(0x1b, 0x4a, n & 0xff); }
   lf(): this { return this.raw(0x0a); }
 
   /** Partial cut with 10-dot paper feed. */
@@ -126,10 +132,59 @@ class EscPosBuilder {
     return this.line(left + " ".repeat(gap) + right);
   }
 
+  /**
+   * Print a 1-bit raster image using GS v 0 (normal density, 203 dpi).
+   * Use alignCenter() before this call to center the image on the paper.
+   */
+  rasterImage(widthBytes: number, heightDots: number, data: Uint8Array): this {
+    const xL = widthBytes & 0xFF, xH = (widthBytes >> 8) & 0xFF;
+    const yL = heightDots & 0xFF, yH = (heightDots >> 8) & 0xFF;
+    this.raw(0x1D, 0x76, 0x30, 0x00, xL, xH, yL, yH);
+    for (const byte of data) this.buf.push(byte);
+    return this;
+  }
+
+  /**
+   * Print a QR code using the ESC/POS GS ( k command sequence.
+   * @param text  The string to encode (URL, plain text, etc.)
+   * @param size  Module size 1–8 (default 5 ≈ 18 mm at 203 dpi)
+   */
+  qrCode(text: string, size = 5): this {
+    const data = Array.from(new TextEncoder().encode(text));
+    const storeLen = data.length + 3; // +3 for cn(1) + fn(1) + m(1)
+    const pL = storeLen & 0xFF, pH = (storeLen >> 8) & 0xFF;
+    this.raw(0x1D, 0x28, 0x6B, 0x04, 0x00, 0x31, 0x41, 0x32, 0x00); // model 2
+    this.raw(0x1D, 0x28, 0x6B, 0x03, 0x00, 0x31, 0x43, size);         // module size
+    this.raw(0x1D, 0x28, 0x6B, 0x03, 0x00, 0x31, 0x45, 0x31);         // error correction M
+    this.raw(0x1D, 0x28, 0x6B, pL, pH, 0x31, 0x50, 0x30, ...data);    // store data
+    this.raw(0x1D, 0x28, 0x6B, 0x03, 0x00, 0x31, 0x51, 0x30);         // print
+    return this;
+  }
+
   build(): Uint8Array { return new Uint8Array(this.buf); }
 }
 
 // ─── Formatting helpers ───────────────────────────────────────
+
+/** Split a string into lines of at most maxLen chars, breaking at whitespace. */
+function wordWrap(s: string, maxLen: number): string[] {
+  if (s.length <= maxLen) return [s];
+  const lines: string[] = [];
+  let remaining = s;
+  while (remaining.length > maxLen) {
+    const slice = remaining.slice(0, maxLen);
+    const lastSpace = slice.lastIndexOf(" ");
+    if (lastSpace > 0) {
+      lines.push(remaining.slice(0, lastSpace));
+      remaining = remaining.slice(lastSpace + 1);
+    } else {
+      lines.push(slice);
+      remaining = remaining.slice(maxLen);
+    }
+  }
+  if (remaining) lines.push(remaining);
+  return lines;
+}
 
 /** deciseconds since midnight → "HH:MM:SS" */
 function formatClock(ds: number): string {
@@ -167,11 +222,23 @@ export function buildFinishReceipt(data: FinishReceiptData): Uint8Array {
   b.init();
   b.lf();
 
+  // ── Logo ──────────────────────────────────────────────────────
+  if (data.logoRaster) {
+    b.alignCenter();
+    b.rasterImage(data.logoRaster.widthBytes, data.logoRaster.heightDots, data.logoRaster.data);
+    b.lf();
+    b.alignLeft();
+  }
+
   // ── Header ──────────────────────────────────────────────────
+  // Use printer's built-in alignment (alignCenter) without manual padding.
   b.alignCenter();
-  b.boldOn().centered(data.competitionName).boldOff();
+  for (const nameLine of wordWrap(data.competitionName, Math.floor(LINE_WIDTH / 2))) {
+    b.sizeDouble().boldOn().line(nameLine).boldOff().sizeNormal();
+  }
   if (data.competitionDate) {
-    b.centered(data.competitionDate);
+    b.feedDots(8);
+    b.line(data.competitionDate);
   }
   b.alignLeft();
   b.separator();
@@ -183,29 +250,42 @@ export function buildFinishReceipt(data: FinishReceiptData): Uint8Array {
 
   // ── Status line ─────────────────────────────────────────────
   const { startTime, finishTime, runningTime, status } = data.timing;
-  b.line(`  Start: ${formatMeosTime(startTime)}   Mal: ${formatMeosTime(finishTime)}`);
+  b.line(`  Start: ${formatMeosTime(startTime)}   Finish: ${formatMeosTime(finishTime)}`);
 
   const statusLabel = runnerStatusLabel(status as RunnerStatusValue);
   const tidStr = formatRunningTime(runningTime);
-  let statusLine = `  ${statusLabel}  Tid: ${tidStr}`;
+  let statusLine = `  ${statusLabel}  Time: ${tidStr}`;
   if (data.course && data.course.length > 0) {
     const overallPace = formatPace(data.course.length, runningTime);
-    if (overallPace) statusLine += `  (${overallPace} t/km)`;
+    if (overallPace) statusLine += `  (${overallPace} min/km)`;
   }
   b.boldOn().line(statusLine).boldOff();
   b.separator();
 
   // ── Splits ──────────────────────────────────────────────────
+  //
+  // Column layout (38 chars total):
+  //   pos  0- 2  Nr   (3) — right-aligned control number + "."
+  //   pos  3     _    (1) — space
+  //   pos  4- 7  Cod  (4) — right-aligned control code
+  //   pos  8     _    (1) — space
+  //   pos  9-14  Spl  (6) — right-aligned split time (m:ss)
+  //   pos 15-16  __   (2) — two spaces (extra margin before clock)
+  //   pos 17-24  Time (8) — clock time HH:MM:SS
+  //   pos 25     _    (1) — space
+  //   pos 26-31  Tot  (6) — right-aligned cumulative time
+  //   pos 32     _    (1) — space
+  //   pos 33-37  Pace (5) — right-aligned min/km pace
   if (data.splits.length > 0) {
-    // Column header — 3+5+7+10+7+6 = 38 chars
-    b.line("Nr.  Kod   Splitt      Kl.   Tot  t/km");
+    // Each header label right-aligned to its column's right edge
+    b.line("Nr.  Cod  Split      Time  Total  Pace");
 
     for (const split of data.splits) {
       const idx = String(split.controlIndex + 1).padStart(2) + ".";
       const code = String(split.controlCode).padStart(4);
 
       if (split.status === "missing") {
-        b.line(`${idx} ${code}  --- SAKNAS ---`);
+        b.line(`${idx} ${code}  --- MISSING ---`);
       } else {
         const splitFmt = formatRunningTime(split.splitTime).padStart(6);
         const clockFmt = (split.punchTime && split.punchTime > 0)
@@ -215,20 +295,20 @@ export function buildFinishReceipt(data: FinishReceiptData): Uint8Array {
         const pace = (split.legLength && split.legLength > 0 && split.splitTime > 0)
           ? formatPace(split.legLength, split.splitTime).padStart(5)
           : "    -";
-        b.line(`${idx} ${code} ${splitFmt} ${clockFmt} ${cumFmt} ${pace}`);
+        b.line(`${idx} ${code} ${splitFmt}  ${clockFmt} ${cumFmt} ${pace}`);
       }
     }
 
-    // Mal row — last leg split + finish clock + total time + pace
+    // Fin row — "Fin" (3) + 6 spaces aligns to split column at pos 9
     const lastSplit = data.splits[data.splits.length - 1];
-    const malSplitDs = (lastSplit && lastSplit.status !== "missing") ? lastSplit.splitTime : 0;
-    const malSplitFmt = malSplitDs > 0 ? formatRunningTime(malSplitDs).padStart(6) : "      ";
-    const malClock = finishTime > 0 ? formatClock(finishTime) : "        ";
-    const malCum = formatRunningTime(runningTime).padStart(6);
-    const malPace = (lastSplit && lastSplit.legLength && lastSplit.legLength > 0 && malSplitDs > 0)
-      ? formatPace(lastSplit.legLength, malSplitDs).padStart(5)
+    const finSplitDs = (lastSplit && lastSplit.status !== "missing") ? lastSplit.splitTime : 0;
+    const finSplitFmt = finSplitDs > 0 ? formatRunningTime(finSplitDs).padStart(6) : "      ";
+    const finClock = finishTime > 0 ? formatClock(finishTime) : "        ";
+    const finCum = formatRunningTime(runningTime).padStart(6);
+    const finPace = (lastSplit && lastSplit.legLength && lastSplit.legLength > 0 && finSplitDs > 0)
+      ? formatPace(lastSplit.legLength, finSplitDs).padStart(5)
       : "    -";
-    b.boldOn().line(`Mal  ${malSplitFmt} ${malClock} ${malCum} ${malPace}`).boldOff();
+    b.boldOn().line(`Fin      ${finSplitFmt}  ${finClock} ${finCum} ${finPace}`).boldOff();
     b.separator();
   }
 
@@ -241,31 +321,53 @@ export function buildFinishReceipt(data: FinishReceiptData): Uint8Array {
       : "-.--V";
     const dateStr = data.siac.batteryDate ?? "";
     const okStr = data.siac.batteryOk ? "OK" : "LOW";
-    b.line(`  Batteri: ${voltStr}   ${dateStr}   ${okStr}`);
+    b.line(`  Battery: ${voltStr}   ${dateStr}   ${okStr}`);
     b.separator();
   }
 
   // ── Position + class results ─────────────────────────────────
   if (data.position) {
     const posLabel = `${data.position.rank}/${data.position.total}`;
-    b.boldOn().line(`  Placering: ${posLabel}`).boldOff();
+    b.boldOn().line(`  Position: ${posLabel}`).boldOff();
   }
   if (data.classResults && data.classResults.length > 0) {
     for (const r of data.classResults) {
       const timeFmt = formatRunningTime(r.runningTime);
+      const right = `${timeFmt}  `;
+      const maxLeft = LINE_WIDTH - right.length - 1; // at least 1 gap space
+      const prefix = `  ${r.rank}  `;
       const clubShort = r.clubName.length > 10 ? r.clubName.slice(0, 9) + "." : r.clubName;
-      const nameClub = `  ${r.rank}  ${r.name} (${clubShort})`;
-      b.leftRight(nameClub, `${timeFmt}  `);
+      const withClub = `${prefix}${r.name} (${clubShort})`;
+      const withoutClub = `${prefix}${r.name}`;
+      let left: string;
+      if (withClub.length <= maxLeft) {
+        left = withClub;
+      } else if (withoutClub.length <= maxLeft) {
+        left = withoutClub;
+      } else {
+        left = withoutClub.slice(0, maxLeft);
+      }
+      b.leftRight(left, right);
     }
     b.separator();
   }
 
+  // ── QR code ───────────────────────────────────────────────────
+  if (data.qrUrl) {
+    b.alignCenter();
+    b.line("Competition information:");
+    b.qrCode(data.qrUrl, 5);
+    b.lf();
+  }
+
   // ── Footer ───────────────────────────────────────────────────
   b.alignCenter();
-  b.centered("Results by: Oxygen - Open Orienteering");
+  b.boldOn().line("Oxygen").boldOff();
+  b.line("Lightweight orienteering management");
+  b.line("open-orienteering.org");
   const now = new Date();
   const timestamp = `${String(now.getHours()).padStart(2, "0")}:${String(now.getMinutes()).padStart(2, "0")}:${String(now.getSeconds()).padStart(2, "0")}`;
-  b.centered(timestamp);
+  b.line(timestamp);
   b.lf();
 
   // ── Cut ──────────────────────────────────────────────────────
