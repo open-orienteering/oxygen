@@ -22,6 +22,8 @@ import { ClubsPage } from "./ClubsPage";
 import { CardsPage } from "./CardsPage";
 import { EventPage } from "./EventPage";
 import { TestLabPage } from "./TestLabPage";
+import { BackupPunchesPage } from "./BackupPunchesPage";
+import { RegistrationPage } from "./RegistrationPage";
 import { ClubLogo } from "../components/ClubLogo";
 import { useDeviceManager } from "../context/DeviceManager";
 import { usePrinter } from "../context/PrinterContext";
@@ -30,7 +32,7 @@ import { RecentCards } from "../components/RecentCards";
 import { DbLoadIndicator } from "../components/DbLoadIndicator";
 import { useExternalChanges } from "../hooks/useExternalChanges";
 
-type Tab = "dashboard" | "event" | "runners" | "startlist" | "results" | "classes" | "courses" | "controls" | "clubs" | "start-station" | "finish-station" | "card-readout" | "cards" | "test-lab";
+type Tab = "dashboard" | "event" | "runners" | "startlist" | "results" | "classes" | "courses" | "controls" | "clubs" | "start-station" | "finish-station" | "card-readout" | "cards" | "backup-punches" | "registration" | "test-lab";
 
 const tabs: { id: Tab; path: string; label: string; group?: string; countKey?: string; isOverflow?: boolean }[] = [
   { id: "dashboard", path: "", label: "Dashboard" },
@@ -47,6 +49,8 @@ const tabs: { id: Tab; path: string; label: string; group?: string; countKey?: s
   { id: "start-station", path: "start-station", label: "Start Station", group: "race", isOverflow: true },
   { id: "finish-station", path: "finish-station", label: "Finish Station", group: "race", isOverflow: true },
   { id: "card-readout", path: "card-readout", label: "Card Readout", group: "race", isOverflow: true },
+  { id: "registration", path: "registration", label: "Registration", group: "race", isOverflow: true },
+  { id: "backup-punches", path: "backup-punches", label: "Backup Punches", group: "race", isOverflow: true },
   { id: "test-lab", path: "test-lab", label: "Test Lab", group: "dev", isOverflow: true },
 ];
 
@@ -290,6 +294,8 @@ export function CompetitionShell() {
           <Route path="start-station" element={<StartStation />} />
           <Route path="finish-station" element={<FinishStation />} />
           <Route path="card-readout" element={<CardReadout />} />
+          <Route path="registration" element={<RegistrationPage />} />
+          <Route path="backup-punches" element={<BackupPunchesPage />} />
           <Route path="test-lab" element={<TestLabPage />} />
           <Route path="*" element={<Navigate to="" replace />} />
         </Routes>

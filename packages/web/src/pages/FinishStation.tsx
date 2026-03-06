@@ -36,6 +36,9 @@ export function FinishStation() {
   const dashboard = trpc.competition.dashboard.useQuery(undefined, {
     staleTime: 60_000,
   });
+  const regConfig = trpc.competition.getRegistrationConfig.useQuery(undefined, {
+    staleTime: 60_000,
+  });
 
   const buildReceiptData = useCallback(
     async (runnerId: number): Promise<FinishReceiptData | null> => {
@@ -81,9 +84,10 @@ export function FinishStation() {
         qrUrl: competitionInfo?.eventorEventId
           ? `https://eventor.orientering.se/Events/Show/${competitionInfo.eventorEventId}`
           : "https://open-orienteering.org",
+        customMessage: regConfig.data?.finishReceiptMessage || undefined,
       };
     },
-    [utils, dashboard.data],
+    [utils, dashboard.data, regConfig.data],
   );
 
   const recordFinish = trpc.race.recordFinish.useMutation({

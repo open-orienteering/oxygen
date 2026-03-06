@@ -9,6 +9,7 @@
 
 import { useEffect, useState, useRef, useCallback } from "react";
 import { useParams } from "react-router-dom";
+import { QRCodeSVG } from "qrcode.react";
 import { trpc } from "../lib/trpc";
 import { formatMeosTime, formatRunningTime, RunnerStatus } from "@oxygen/shared";
 import {
@@ -17,6 +18,8 @@ import {
   type KioskCardReadoutMessage,
   type RegistrationFormState,
 } from "../lib/kiosk-channel";
+import swishIcon from "../assets/swish-icon.svg";
+import { ClubLogo } from "../components/ClubLogo";
 import { useDeviceManager } from "../context/DeviceManager";
 import { recentCardToKioskMessage } from "../lib/kiosk-channel";
 
@@ -25,11 +28,11 @@ import { recentCardToKioskMessage } from "../lib/kiosk-channel";
 type KioskScreen =
   | { mode: "idle" }
   | { mode: "reading"; cardNumber: number }
+  | { mode: "card-done"; cardNumber: number; next: KioskScreen }
   | { mode: "readout"; card: KioskCardReadoutMessage["card"] }
   | { mode: "pre-start"; card: KioskCardReadoutMessage["card"] }
-  | { mode: "registration-waiting"; card: KioskCardReadoutMessage["card"] }
-  | { mode: "registration-confirm"; card: KioskCardReadoutMessage["card"]; form: RegistrationFormState }
-  | { mode: "registration-complete"; runner: { name: string; className: string; clubName: string; startTime: string; cardNo: number } };
+  | { mode: "registration-waiting"; card: KioskCardReadoutMessage["card"]; form?: RegistrationFormState }
+  | { mode: "registration-complete"; runner: { name: string; className: string; clubName: string; startTime: string; cardNo: number; clubEventorId?: number } };
 
 interface KioskSettings {
   standalone: boolean;
@@ -121,6 +124,22 @@ export function KioskPage() {
     return () => clearTimeout(resetTimerRef.current);
   }, []);
 
+  // ── Card-done → next screen transition ─────────────────────
+  const cardDoneTimerRef = useRef<any>(undefined);
+
+  useEffect(() => {
+    if (screen.mode !== "card-done") return;
+    const nextScreen = screen.next;
+    cardDoneTimerRef.current = setTimeout(() => {
+      setScreen(nextScreen);
+      // Schedule auto-reset for result screens
+      if (nextScreen.mode === "readout" || nextScreen.mode === "pre-start") {
+        scheduleReset();
+      }
+    }, 2000);
+    return () => clearTimeout(cardDoneTimerRef.current);
+  }, [screen, scheduleReset]);
+
   // ── Handle incoming kiosk messages (paired mode) ──────────
 
   useEffect(() => {
@@ -137,43 +156,42 @@ export function KioskPage() {
           break;
 
         case "card-reading":
-          // Ignore card-reading during registration flow (it's the confirmation re-insert)
           setScreen((prev) => {
-            if (prev.mode === "registration-waiting" || prev.mode === "registration-confirm") {
-              return prev;
-            }
+            if (prev.mode === "registration-waiting") return prev;
             clearTimeout(resetTimerRef.current);
             return { mode: "reading", cardNumber: msg.cardNumber };
           });
           break;
 
         case "card-readout":
-          // Ignore card-readout during registration flow (it's the confirmation re-insert)
           setScreen((prev) => {
-            if (prev.mode === "registration-waiting" || prev.mode === "registration-confirm") {
-              return prev;
-            }
+            if (prev.mode === "registration-waiting") return prev;
             clearTimeout(resetTimerRef.current);
-            if (msg.card.action === "readout") {
-              scheduleReset();
-              return { mode: "readout", card: msg.card };
-            } else if (msg.card.action === "pre-start") {
-              scheduleReset();
-              return { mode: "pre-start", card: msg.card };
-            } else if (msg.card.action === "register") {
+
+            if (msg.card.action === "register") {
+              // Skip card-done transition for registration — go directly to waiting
               return { mode: "registration-waiting", card: msg.card };
             }
-            return prev;
+
+            let nextScreen: KioskScreen;
+            if (msg.card.action === "readout") {
+              nextScreen = { mode: "readout", card: msg.card };
+            } else if (msg.card.action === "pre-start") {
+              nextScreen = { mode: "pre-start", card: msg.card };
+            } else {
+              return prev;
+            }
+
+            // Show "card done — remove card" briefly before the actual screen
+            return { mode: "card-done", cardNumber: msg.card.cardNumber, next: nextScreen };
           });
           break;
 
         case "registration-state":
           setScreen((prev) => {
-            if (prev.mode !== "registration-waiting" && prev.mode !== "registration-confirm") return prev;
-            if (msg.ready) {
-              return { mode: "registration-confirm", card: prev.card, form: msg.form };
+            if (prev.mode === "registration-waiting") {
+              return { ...prev, form: msg.form };
             }
-            // Still entering — stay in waiting but keep the card
             return prev;
           });
           break;
@@ -207,15 +225,9 @@ export function KioskPage() {
     if (lastDetectedCardNo == null || lastDetectedCardNo === lastDetectedRef.current) return;
     lastDetectedRef.current = lastDetectedCardNo;
 
-    // If awaiting confirmation and same card is re-inserted, auto-confirm
-    if (screen.mode === "registration-confirm" && screen.card.cardNumber === lastDetectedCardNo) {
-      handleConfirmRegistration();
-      return;
-    }
-
     clearTimeout(resetTimerRef.current);
     setScreen({ mode: "reading", cardNumber: lastDetectedCardNo });
-  }, [lastDetectedCardNo, settings.standalone, screen]);
+  }, [lastDetectedCardNo, settings.standalone]);
 
   // ── Standalone mode: react to DeviceManager card events ───
 
@@ -229,23 +241,18 @@ export function KioskPage() {
     clearTimeout(resetTimerRef.current);
     const msg = recentCardToKioskMessage(currentCard);
 
+    let nextScreen: KioskScreen;
     if (msg.card.action === "readout") {
-      setScreen({ mode: "readout", card: msg.card });
-      scheduleReset();
+      nextScreen = { mode: "readout", card: msg.card };
     } else if (msg.card.action === "pre-start") {
-      setScreen({ mode: "pre-start", card: msg.card });
-      scheduleReset();
+      nextScreen = { mode: "pre-start", card: msg.card };
     } else if (msg.card.action === "register") {
-      setScreen({ mode: "registration-waiting", card: msg.card });
+      nextScreen = { mode: "registration-waiting", card: msg.card };
+    } else {
+      return;
     }
+    setScreen({ mode: "card-done", cardNumber: msg.card.cardNumber, next: nextScreen });
   }, [currentCard, settings.standalone, scheduleReset]);
-
-  // ── Handle confirmation from kiosk user ───────────────────
-
-  const handleConfirmRegistration = () => {
-    channelRef.current?.send({ type: "registration-confirm", confirmed: true });
-    // The admin will then send registration-complete
-  };
 
   // ── Fullscreen toggle ─────────────────────────────────────
 
@@ -322,20 +329,15 @@ export function KioskPage() {
         {screen.mode === "reading" && (
           <ReadingScreen cardNumber={screen.cardNumber} />
         )}
+        {screen.mode === "card-done" && (
+          <CardDoneScreen cardNumber={screen.cardNumber} />
+        )}
         {screen.mode === "readout" && <ReadoutScreen card={screen.card} />}
         {screen.mode === "pre-start" && (
           <PreStartScreen card={screen.card} requireClearCheck={settings.requireClearCheck} />
         )}
         {screen.mode === "registration-waiting" && (
-          <RegistrationWaitingScreen card={screen.card} />
-        )}
-        {screen.mode === "registration-confirm" && (
-          <RegistrationConfirmScreen
-            card={screen.card}
-            form={screen.form}
-            onConfirm={handleConfirmRegistration}
-            writeToCard={settings.writeToCard}
-          />
+          <RegistrationWaitingScreen card={screen.card} form={screen.form} />
         )}
         {screen.mode === "registration-complete" && (
           <RegistrationCompleteScreen runner={screen.runner} />
@@ -560,6 +562,31 @@ function ReadingScreen({ cardNumber }: { cardNumber: number }) {
       </h1>
       <p className="text-2xl text-white mb-6">
         Do not remove SI card until the beep
+      </p>
+      <div className="text-xl text-slate-400 font-mono">
+        Card {cardNumber}
+      </div>
+    </div>
+  );
+}
+
+// ─── Card Done Screen (remove card prompt) ──────────────────
+
+function CardDoneScreen({ cardNumber }: { cardNumber: number }) {
+  return (
+    <div className="text-center">
+      <div className="mb-8">
+        <div className="inline-flex items-center justify-center w-20 h-20 rounded-full bg-emerald-500/20 border-4 border-emerald-400">
+          <svg className="w-12 h-12 text-emerald-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}>
+            <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
+          </svg>
+        </div>
+      </div>
+      <h1 className="text-5xl font-black text-emerald-400 mb-4">
+        Card read
+      </h1>
+      <p className="text-2xl text-white mb-6">
+        You may remove your SI card
       </p>
       <div className="text-xl text-slate-400 font-mono">
         Card {cardNumber}
@@ -832,8 +859,10 @@ function PreStartScreen({
 
 function RegistrationWaitingScreen({
   card,
+  form,
 }: {
   card: KioskCardReadoutMessage["card"];
+  form?: RegistrationFormState;
 }) {
   return (
     <div className="text-center max-w-lg mx-auto">
@@ -846,70 +875,55 @@ function RegistrationWaitingScreen({
       <p className="text-xl text-slate-400 mb-6">
         Please wait while your details are being entered
       </p>
-      <div className="bg-slate-800 rounded-xl p-4 inline-block">
-        <div className="text-sm text-slate-400">Card Number</div>
-        <div className="text-2xl font-mono font-bold text-white">
-          {card.cardNumber}
-        </div>
-        {card.ownerData?.firstName && (
-          <div className="text-sm text-slate-400 mt-1">
-            {[card.ownerData.firstName, card.ownerData.lastName].filter(Boolean).join(" ")}
+
+      <div className="bg-slate-800 rounded-2xl p-6 text-left space-y-3">
+        <InfoRow label="Card" value={String(form?.cardNo || card.cardNumber)} />
+        {(form?.name || card.ownerData?.firstName) && (
+          <InfoRow label="Name" value={form?.name || [card.ownerData?.firstName, card.ownerData?.lastName].filter(Boolean).join(" ")} />
+        )}
+        {form?.clubName && (
+          <div className="flex justify-between items-center py-1 border-b border-slate-700/50">
+            <span className="text-slate-400 text-sm">Club</span>
+            <span className="text-white font-medium text-lg flex items-center gap-2">
+              {form.clubEventorId && (
+                <span className="inline-flex bg-white rounded p-0.5">
+                  <ClubLogo eventorId={form.clubEventorId} size="md" />
+                </span>
+              )}
+              {form.clubName}
+            </span>
           </div>
         )}
-      </div>
-    </div>
-  );
-}
-
-// ─── Registration: Confirm Screen ───────────────────────────
-
-function RegistrationConfirmScreen({
-  card,
-  form,
-  onConfirm,
-  writeToCard,
-}: {
-  card: KioskCardReadoutMessage["card"];
-  form: RegistrationFormState;
-  onConfirm: () => void;
-  writeToCard?: boolean;
-}) {
-  return (
-    <div className="w-full max-w-lg mx-auto text-center">
-      <h1 className="text-3xl font-bold text-white mb-6">
-        Please confirm your registration
-      </h1>
-
-      <div className="bg-slate-800 rounded-2xl p-6 text-left space-y-3 mb-8">
-        <InfoRow label="Name" value={form.name} />
-        <InfoRow label="Club" value={form.clubName} />
-        <InfoRow label="Class" value={form.className} />
-        {form.courseName && <InfoRow label="Course" value={form.courseName} />}
-        <InfoRow label="Card" value={String(form.cardNo || card.cardNumber)} />
-        {form.startTime && <InfoRow label="Start Time" value={form.startTime} />}
-        {form.paymentMode && (
+        {form?.className && <InfoRow label="Class" value={form.className} />}
+        {form?.paymentMode && (
           <InfoRow
             label="Payment"
-            value={form.paymentMode === "billed" ? "Invoice" : "Pay on site"}
+            value={form.paymentMode === "billed" ? "Invoice" : form.paymentMode === "swish" ? "Swish" : form.paymentMode === "card" ? "Card" : "Pay on site"}
           />
+        )}
+        {form?.fee != null && form.fee > 0 && form.paymentMode && form.paymentMode !== "billed" && (
+          <InfoRow label="Amount" value={`${form.fee} kr`} />
         )}
       </div>
 
-      {/* Card re-insert prompt instead of a button */}
-      <div className="mb-6">
-        <CardInsertAnimation size={100} />
-      </div>
-      <p className="text-2xl text-emerald-400 font-semibold mb-2" data-testid="kiosk-reinsert-prompt">
-        Insert your SI card again to confirm
-      </p>
-      <p className="text-slate-400 text-sm mb-4">
-        If any details are incorrect, please inform the organizer
-      </p>
-
-      {writeToCard && (
-        <p className="text-sm text-blue-400 mt-2">
-          Your details will also be saved to your SI card
-        </p>
+      {/* Swish QR code — only show once amount is known */}
+      {form?.paymentMode === "swish" && form.swishNumber && form.fee != null && form.fee > 0 && (
+        <div className="mt-6">
+          <div className="bg-white inline-block p-4 rounded-2xl">
+            <div className="relative inline-block">
+              <QRCodeSVG
+                value={`https://app.swish.nu/1/p/sw/?sw=${form.swishNumber}&amt=${form.fee}&msg=${encodeURIComponent([form.competitionName, form.className].filter(Boolean).join(" - ") || "Registration")}`}
+                size={200}
+                level="H"
+              />
+              {/* White circle mask + Swish icon overlay (per Swish design spec) */}
+              <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-14 h-14 rounded-full bg-white flex items-center justify-center">
+                <img src={swishIcon} alt="Swish" className="w-10 h-10" />
+              </div>
+            </div>
+          </div>
+          <p className="text-slate-400 text-sm mt-3">Scan with Swish to pay {form.fee} kr</p>
+        </div>
       )}
     </div>
   );
@@ -930,7 +944,7 @@ function InfoRow({ label, value }: { label: string; value: string }) {
 function RegistrationCompleteScreen({
   runner,
 }: {
-  runner: { name: string; className: string; clubName: string; startTime: string; cardNo: number };
+  runner: { name: string; className: string; clubName: string; startTime: string; cardNo: number; clubEventorId?: number };
 }) {
   return (
     <div className="text-center max-w-lg mx-auto">
@@ -947,20 +961,29 @@ function RegistrationCompleteScreen({
         Registration Complete!
       </h1>
       <p className="text-2xl text-white font-semibold mb-1">{runner.name}</p>
-      <p className="text-xl text-slate-400 mb-6">
+      <p className="text-xl text-slate-400 mb-6 flex items-center justify-center gap-2">
+        {runner.clubEventorId && (
+          <span className="inline-flex bg-white rounded p-0.5">
+            <ClubLogo eventorId={runner.clubEventorId} size="lg" />
+          </span>
+        )}
         {runner.clubName} &middot; {runner.className}
       </p>
 
-      {runner.startTime && (
-        <div className="bg-slate-800 rounded-2xl p-6 max-w-sm mx-auto">
-          <div className="text-sm text-slate-400 uppercase tracking-wider mb-1">
-            Your Start Time
-          </div>
+      <div className="bg-slate-800 rounded-2xl p-6 max-w-sm mx-auto">
+        <div className="text-sm text-slate-400 uppercase tracking-wider mb-1">
+          Start
+        </div>
+        {runner.startTime ? (
           <div className="text-5xl font-black tabular-nums text-emerald-400">
             {runner.startTime}
           </div>
-        </div>
-      )}
+        ) : (
+          <div className="text-3xl font-bold text-emerald-400">
+            Free start
+          </div>
+        )}
+      </div>
 
       <p className="text-slate-500 mt-6 text-sm">
         Please proceed to the start area. Good luck!

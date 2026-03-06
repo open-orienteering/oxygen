@@ -204,10 +204,18 @@ export function MapViewer({
   const [viewBox, setViewBox] = useState<{ x: number; y: number; w: number; h: number } | null>(null);
 
   const [transform, setTransform] = useState({ x: 0, y: 0, scale: 1 });
+  const [mapScale, setMapScale] = useState<number | null>(null);
   const isPanningRef = useRef(false);
   const lastPosRef = useRef({ x: 0, y: 0 });
   const hasInitialFitRef = useRef(false);
   const lastFocusKeyRef = useRef<string>("");
+
+  // ─── Measure tool state ──────────────────────────────────
+  const [measuring, setMeasuring] = useState(false);
+  const [measurePoints, setMeasurePoints] = useState<Pt[]>([]);
+  const [measureCursor, setMeasureCursor] = useState<Pt | null>(null);
+  const mouseDownPosRef = useRef<Pt | null>(null);
+  const lastClickTimeRef = useRef(0);
 
   // Track container size for correct overlay calculations after resize / fullscreen
   const [containerSize, setContainerSize] = useState({ w: 0, h: 0 });
@@ -270,6 +278,11 @@ export function MapViewer({
         const buffer = Buffer.from(ocdData!);
         const ocadFile = await readOcadFn(buffer, { quietWarnings: true });
         if (cancelled) return;
+        // Extract map scale from OCD CRS (e.g. 10000 for 1:10000)
+        try {
+          const crsScale = ocadFile?.getCrs?.()?.scale;
+          if (crsScale && typeof crsScale === "number" && crsScale > 0) setMapScale(crsScale);
+        } catch { /* ignore */ }
         const svg = ocadToSvgFn(ocadFile, {
           document: window.document,
           generateSymbolElements: true,
@@ -375,6 +388,14 @@ export function MapViewer({
       minX -= bw * 0.2; maxX += bw * 0.2;
       minY -= bh * 0.2; maxY += bh * 0.2;
     }
+
+    // Enforce minimum visible area (50mm × 50mm in OCAD units = 5000 × 5000)
+    const MIN_BOX = 5000;
+    const boxW = maxX - minX;
+    const boxH = maxY - minY;
+    if (boxW < MIN_BOX) { const extra = (MIN_BOX - boxW) / 2; minX -= extra; maxX += extra; }
+    if (boxH < MIN_BOX) { const extra = (MIN_BOX - boxH) / 2; minY -= extra; maxY += extra; }
+
     setTransform(computeFitTransform(viewBox, cw, ch, minX, minY, maxX, maxY));
   }, [viewBox, focusControlIds, controls]);
 
@@ -384,6 +405,35 @@ export function MapViewer({
     for (const c of controls) map.set(c.id, c);
     return map;
   }, [controls]);
+
+  // ─── Measure helpers ────────────────────────────────────
+
+  const screenToOcad = useCallback((clientX: number, clientY: number): Pt | null => {
+    if (!viewBox || !containerRef.current) return null;
+    const rect = containerRef.current.getBoundingClientRect();
+    const sx = clientX - rect.left;
+    const sy = clientY - rect.top;
+    const cw = containerSize.w || containerRef.current.clientWidth || 1;
+    const ch = containerSize.h || containerRef.current.clientHeight || 1;
+    const base = Math.min(cw / viewBox.w, ch / viewBox.h);
+    const padX = (cw - viewBox.w * base) / 2;
+    const padY = (ch - viewBox.h * base) / 2;
+    return {
+      x: viewBox.x + ((sx - transform.x) / transform.scale - padX) / base,
+      y: viewBox.y + ((sy - transform.y) / transform.scale - padY) / base,
+    };
+  }, [viewBox, transform, containerSize]);
+
+  function ocadDistPx(a: Pt, b: Pt) {
+    const dx = b.x - a.x, dy = b.y - a.y;
+    return Math.sqrt(dx * dx + dy * dy);
+  }
+  function ocadToMeters(d: number) {
+    return mapScale ? d * mapScale / 100000 : 0;
+  }
+  function formatDist(m: number) {
+    return m >= 1000 ? `${(m / 1000).toFixed(2)} km` : `${Math.round(m)} m`;
+  }
 
   // ─── Event Handlers ─────────────────────────────────────
 
@@ -411,23 +461,52 @@ export function MapViewer({
     if (e.button !== 0) return;
     isPanningRef.current = true;
     lastPosRef.current = { x: e.clientX, y: e.clientY };
+    mouseDownPosRef.current = { x: e.clientX, y: e.clientY };
   }, []);
   const handleMouseMove = useCallback((e: React.MouseEvent) => {
-    if (!isPanningRef.current) return;
-    const dx = e.clientX - lastPosRef.current.x;
-    const dy = e.clientY - lastPosRef.current.y;
-    lastPosRef.current = { x: e.clientX, y: e.clientY };
-    setTransform((prev) => ({ ...prev, x: prev.x + dx, y: prev.y + dy }));
-  }, []);
-  const handleMouseUp = useCallback(() => { isPanningRef.current = false; }, []);
+    if (isPanningRef.current) {
+      const dx = e.clientX - lastPosRef.current.x;
+      const dy = e.clientY - lastPosRef.current.y;
+      lastPosRef.current = { x: e.clientX, y: e.clientY };
+      setTransform((prev) => ({ ...prev, x: prev.x + dx, y: prev.y + dy }));
+    }
+    if (measuring) {
+      const pt = screenToOcad(e.clientX, e.clientY);
+      if (pt) setMeasureCursor(pt);
+    }
+  }, [measuring, screenToOcad]);
+  const handleMouseUp = useCallback((e: React.MouseEvent) => {
+    isPanningRef.current = false;
+    if (measuring && mouseDownPosRef.current) {
+      const dx = Math.abs(e.clientX - mouseDownPosRef.current.x);
+      const dy = Math.abs(e.clientY - mouseDownPosRef.current.y);
+      if (dx + dy < 5) {
+        const now = Date.now();
+        if (now - lastClickTimeRef.current < 300) {
+          // Double-click: finish measurement
+          lastClickTimeRef.current = 0;
+          setMeasureCursor(null);
+        } else {
+          lastClickTimeRef.current = now;
+          const pt = screenToOcad(e.clientX, e.clientY);
+          if (pt) setMeasurePoints((prev) => [...prev, pt]);
+        }
+      }
+    }
+    mouseDownPosRef.current = null;
+  }, [measuring, screenToOcad]);
 
   const lastTouchRef = useRef<{ x: number; y: number; dist?: number } | null>(null);
+  const touchStartPosRef = useRef<Pt | null>(null);
   const handleTouchStart = useCallback((e: React.TouchEvent) => {
-    if (e.touches.length === 1) lastTouchRef.current = { x: e.touches[0].clientX, y: e.touches[0].clientY };
-    else if (e.touches.length === 2) {
+    if (e.touches.length === 1) {
+      lastTouchRef.current = { x: e.touches[0].clientX, y: e.touches[0].clientY };
+      touchStartPosRef.current = { x: e.touches[0].clientX, y: e.touches[0].clientY };
+    } else if (e.touches.length === 2) {
       const dx = e.touches[0].clientX - e.touches[1].clientX;
       const dy = e.touches[0].clientY - e.touches[1].clientY;
       lastTouchRef.current = { x: (e.touches[0].clientX + e.touches[1].clientX) / 2, y: (e.touches[0].clientY + e.touches[1].clientY) / 2, dist: Math.sqrt(dx * dx + dy * dy) };
+      touchStartPosRef.current = null;
     }
   }, []);
   const handleTouchMove = useCallback((e: React.TouchEvent) => {
@@ -452,6 +531,34 @@ export function MapViewer({
       lastTouchRef.current = { x: cx, y: cy, dist };
     }
   }, []);
+  const handleTouchEnd = useCallback((e: React.TouchEvent) => {
+    if (measuring && touchStartPosRef.current && e.changedTouches.length === 1) {
+      const t = e.changedTouches[0];
+      const dx = Math.abs(t.clientX - touchStartPosRef.current.x);
+      const dy = Math.abs(t.clientY - touchStartPosRef.current.y);
+      if (dx + dy < 10) {
+        const pt = screenToOcad(t.clientX, t.clientY);
+        if (pt) setMeasurePoints((prev) => [...prev, pt]);
+      }
+    }
+    touchStartPosRef.current = null;
+    lastTouchRef.current = null;
+  }, [measuring, screenToOcad]);
+
+  // ─── Measure keyboard shortcuts ──────────────────────────
+  useEffect(() => {
+    if (!measuring) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        if (measurePoints.length > 0) { setMeasurePoints([]); setMeasureCursor(null); }
+        else setMeasuring(false);
+      } else if (e.key === "Backspace") {
+        setMeasurePoints((prev) => prev.slice(0, -1));
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [measuring, measurePoints.length]);
 
   // ─── Dynamic overlay viewBox (tracks pan/zoom for crisp vector rendering) ──
 
@@ -1020,6 +1127,68 @@ export function MapViewer({
     );
   }, [viewBox, overlayViewBox, controls, courses, highlightControlId, highlightCourseName, controlMap, onControlClick, courseGeometry, showDescriptions]);
 
+  // ─── Measure overlay SVG ────────────────────────────────
+
+  const measureOverlay = useMemo(() => {
+    if (!overlayViewBox || !viewBox) return null;
+    const pts = measurePoints;
+    const cursor = measureCursor;
+    const allPts = cursor && pts.length > 0 ? [...pts, cursor] : pts;
+    if (allPts.length === 0) return null;
+
+    // Compute a stroke width that stays constant on screen (~2px)
+    const vbParts = overlayViewBox.split(" ").map(Number);
+    const vbW = vbParts[2];
+    const cw = containerSize.w || 1;
+    const unit = vbW / cw; // OCAD units per screen pixel
+    const sw = unit * 2;
+    const dotR = unit * 4;
+    const fontSize = unit * 12;
+
+    const lineD = allPts.map((p, i) => `${i === 0 ? "M" : "L"} ${p.x},${p.y}`).join(" ");
+    const rubberD = cursor && pts.length > 0
+      ? `M ${pts[pts.length - 1].x},${pts[pts.length - 1].y} L ${cursor.x},${cursor.y}`
+      : null;
+
+    // Segment labels
+    const labels: React.ReactNode[] = [];
+    for (let i = 1; i < allPts.length; i++) {
+      const a = allPts[i - 1], b = allPts[i];
+      const mx = (a.x + b.x) / 2, my = (a.y + b.y) / 2;
+      const d = ocadToMeters(ocadDistPx(a, b));
+      const isRubber = cursor && i === allPts.length - 1;
+      labels.push(
+        <text key={i} x={mx} y={my - unit * 5} textAnchor="middle" fontSize={fontSize}
+          fill={isRubber ? "#6366f1" : "#1d4ed8"} fontWeight="bold" fontFamily="sans-serif"
+          stroke="white" strokeWidth={unit * 3} paintOrder="stroke"
+        >{formatDist(d)}</text>
+      );
+    }
+
+    return (
+      <svg
+        style={{ position: "absolute", top: 0, left: 0, width: "100%", height: "100%", pointerEvents: "none" }}
+        viewBox={overlayViewBox} preserveAspectRatio="none"
+      >
+        {/* Placed segments */}
+        {pts.length > 1 && (
+          <path d={pts.map((p, i) => `${i === 0 ? "M" : "L"} ${p.x},${p.y}`).join(" ")}
+            fill="none" stroke="#1d4ed8" strokeWidth={sw} strokeDasharray={`${unit * 6},${unit * 3}`} />
+        )}
+        {/* Rubber-band line */}
+        {rubberD && (
+          <path d={rubberD} fill="none" stroke="#6366f1" strokeWidth={sw * 0.7}
+            strokeDasharray={`${unit * 4},${unit * 3}`} opacity={0.7} />
+        )}
+        {/* Dots at waypoints */}
+        {pts.map((p, i) => (
+          <circle key={i} cx={p.x} cy={p.y} r={dotR} fill="#1d4ed8" stroke="white" strokeWidth={sw} />
+        ))}
+        {labels}
+      </svg>
+    );
+  }, [overlayViewBox, viewBox, measurePoints, measureCursor, containerSize, mapScale]); // eslint-disable-line react-hooks/exhaustive-deps
+
   // ─── Render ─────────────────────────────────────────────
 
   if (!ocdData) {
@@ -1062,14 +1231,14 @@ export function MapViewer({
     <div
       ref={containerRef}
       className={`relative overflow-hidden bg-white rounded-lg border border-slate-200 select-none ${className}`}
-      style={{ cursor: isPanningRef.current ? "grabbing" : "grab", ...style }}
+      style={{ cursor: measuring ? "crosshair" : isPanningRef.current ? "grabbing" : "grab", ...style }}
       onMouseDown={handleMouseDown}
       onMouseMove={handleMouseMove}
       onMouseUp={handleMouseUp}
       onMouseLeave={handleMouseUp}
       onTouchStart={handleTouchStart}
       onTouchMove={handleTouchMove}
-      onTouchEnd={() => { lastTouchRef.current = null; }}
+      onTouchEnd={handleTouchEnd}
     >
       {/* Base map — inside CSS transform container */}
       <div
@@ -1085,9 +1254,72 @@ export function MapViewer({
       {/* Overlay — OUTSIDE transform container, using dynamic viewBox for
           crisp vector rendering at any zoom level while scaling with map */}
       {overlayContent}
+      {measureOverlay}
 
-      {/* Zoom controls */}
+      {/* Measure total distance HUD */}
+      {measuring && measurePoints.length >= 2 && (
+        <div className="absolute top-3 left-1/2 -translate-x-1/2 z-10 bg-white/90 rounded-lg px-3 py-1.5 border border-slate-200 shadow-sm pointer-events-none">
+          <span className="text-sm font-semibold text-blue-700">
+            {formatDist(measurePoints.reduce((sum, p, i) => i === 0 ? 0 : sum + ocadToMeters(ocadDistPx(measurePoints[i - 1], p)), 0))}
+          </span>
+          <span className="text-xs text-slate-400 ml-2">{measurePoints.length - 1} segment{measurePoints.length > 2 ? "s" : ""}</span>
+        </div>
+      )}
+
+      {/* Scale bar */}
+      {(() => {
+        if (!mapScale || !viewBox || containerSize.w === 0) return null;
+        const basePixPerOcad = Math.min(containerSize.w / viewBox.w, containerSize.h / viewBox.h);
+        const pixPerOcad = transform.scale * basePixPerOcad;
+        // 1 OCAD unit = 0.01 mm paper; pixPerMeter = pixPerOcad * 100 * 1000 / mapScale
+        const pixPerMeter = pixPerOcad * 100 * 1000 / mapScale;
+        if (pixPerMeter <= 0) return null;
+        const niceSteps = [1, 2, 5, 10, 20, 25, 50, 100, 200, 250, 500, 1000, 2000, 5000];
+        const targetPx = 90;
+        const metersForTarget = targetPx / pixPerMeter;
+        const niceM = niceSteps.reduce((best, v) =>
+          Math.abs(v - metersForTarget) < Math.abs(best - metersForTarget) ? v : best
+        );
+        const barPx = Math.round(niceM * pixPerMeter);
+        const label = niceM >= 1000 ? `${niceM / 1000} km` : `${niceM} m`;
+        const svgW = barPx + 4;
+        return (
+          <div className="absolute bottom-3 left-3 z-10 bg-white/90 rounded px-2 py-1.5 border border-slate-200 shadow-sm pointer-events-none">
+            <svg width={svgW} height={22} style={{ display: "block" }}>
+              {/* Left tick pointing up */}
+              <line x1={2} y1={0} x2={2} y2={8} stroke="#475569" strokeWidth={1.5} />
+              {/* Right tick pointing up */}
+              <line x1={svgW - 2} y1={0} x2={svgW - 2} y2={8} stroke="#475569" strokeWidth={1.5} />
+              {/* Horizontal bar */}
+              <line x1={2} y1={8} x2={svgW - 2} y2={8} stroke="#475569" strokeWidth={1.5} />
+              {/* Label */}
+              <text x={svgW / 2} y={20} textAnchor="middle" fontSize={10} fill="#64748b" fontFamily="sans-serif">{label}</text>
+            </svg>
+          </div>
+        );
+      })()}
+
+      {/* Zoom & measure controls */}
       <div className="absolute bottom-3 right-3 flex flex-col gap-1 z-10">
+        {mapScale && (
+          <button
+            onClick={() => {
+              setMeasuring((m) => {
+                if (m) { setMeasurePoints([]); setMeasureCursor(null); }
+                return !m;
+              });
+            }}
+            className={`w-8 h-8 border rounded-lg flex items-center justify-center shadow-sm cursor-pointer mb-1 ${
+              measuring ? "bg-blue-600 border-blue-600 text-white" : "bg-white border-slate-200 text-slate-600 hover:bg-slate-50"
+            }`}
+            title={measuring ? "Stop measuring (Esc)" : "Measure distance"}
+          >
+            {/* Ruler icon */}
+            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M3 6h18v12H3zM7 12v-3M11 12v-3M15 12v-3M19 12v-3" />
+            </svg>
+          </button>
+        )}
         <button
           onClick={() => { const el = containerRef.current; if (!el) return; const cx = el.clientWidth / 2, cy = el.clientHeight / 2; setTransform(p => { const ns = Math.min(50, p.scale * 1.3); const ratio = ns / p.scale; return { scale: ns, x: cx - (cx - p.x) * ratio, y: cy - (cy - p.y) * ratio }; }); }}
           className="w-8 h-8 bg-white border border-slate-200 rounded-lg flex items-center justify-center text-slate-600 hover:bg-slate-50 shadow-sm cursor-pointer"

@@ -7,6 +7,7 @@ import {
   createCompetitionDatabase,
   getRemoteConnection,
   getSetting,
+  ensureCompetitionConfigTable,
 } from "../db.js";
 import type {
   CompetitionInfo,
@@ -290,6 +291,7 @@ export const competitionRouter = router({
         courseId: c.Course,
         sortIndex: c.SortIndex,
         runnerCount: runnerCountByClass.get(c.Id) ?? 0,
+        classFee: c.ClassFee || undefined,
       }));
 
       const courseInfos: CourseInfo[] = courses.map((c) => {
@@ -300,6 +302,7 @@ export const competitionRouter = router({
           length: c.Length,
           controls: c.Controls,
           controlCount: controlList.length,
+          numberOfMaps: c.NumberMaps > 0 ? c.NumberMaps : undefined,
         };
       });
 
@@ -307,6 +310,13 @@ export const competitionRouter = router({
       // Organizer field is stored as plain text "Name" (MeOS format).
       // Legacy: may contain "Name\tEventorId" (old format) or just a numeric ID.
       let organizer: { name: string; eventorId: number } | undefined;
+
+      // All clubs needed for name/ID resolution
+      const allClubs = await client.oClub.findMany({
+        where: { Removed: false },
+        select: { Name: true, ExtId: true },
+      });
+
       if (event.Organizer) {
         const parts = event.Organizer.split("\t");
         let orgName = parts[0].trim();
@@ -317,12 +327,6 @@ export const competitionRouter = router({
           eventorId = eventorId || parseInt(orgName, 10);
           orgName = ""; // Will be resolved from club data below
         }
-
-        // Resolve name and ID from clubs
-        const allClubs = await client.oClub.findMany({
-          where: { Removed: false },
-          select: { Name: true, ExtId: true },
-        });
 
         // If we have an eventorId but no name, look up the club by ExtId
         if (!orgName && eventorId) {
@@ -345,6 +349,22 @@ export const competitionRouter = router({
           organizer = {
             name: orgName,
             eventorId: eventorId && !isNaN(eventorId) ? eventorId : 0,
+          };
+        }
+      }
+
+      // Fallback: use organizer_eventor_id from competition config
+      if (!organizer?.eventorId) {
+        await ensureCompetitionConfigTable(client);
+        const configRows = (await client.$queryRawUnsafe(
+          "SELECT organizer_eventor_id FROM oxygen_competition_config WHERE id = 1",
+        )) as Array<{ organizer_eventor_id: number }>;
+        const configEventorId = configRows[0]?.organizer_eventor_id ?? 0;
+        if (configEventorId > 0) {
+          const orgClub = allClubs.find((c) => Number(c.ExtId) === configEventorId);
+          organizer = {
+            name: organizer?.name || orgClub?.Name || "",
+            eventorId: configEventorId,
           };
         }
       }
@@ -528,4 +548,83 @@ export const competitionRouter = router({
       return null;
     }
   }),
+
+  /**
+   * Get registration settings (payment methods, Swish config, receipt printing).
+   */
+  getRegistrationConfig: publicProcedure.query(async () => {
+    const client = await getCompetitionClient();
+    await ensureCompetitionConfigTable(client);
+
+    const rows = (await client.$queryRawUnsafe(
+      "SELECT payment_methods, swish_number, swish_payee_name, print_registration_receipt, registration_receipt_message, finish_receipt_message, organizer_eventor_id FROM oxygen_competition_config WHERE id = 1",
+    )) as Array<{
+      payment_methods: string;
+      swish_number: string;
+      swish_payee_name: string;
+      print_registration_receipt: number;
+      registration_receipt_message: string;
+      finish_receipt_message: string;
+      organizer_eventor_id: number;
+    }>;
+
+    const row = rows[0];
+    return {
+      paymentMethods: row?.payment_methods?.split(",").filter(Boolean) ?? ["billed"],
+      swishNumber: row?.swish_number ?? "",
+      swishPayeeName: row?.swish_payee_name ?? "",
+      printRegistrationReceipt: (row?.print_registration_receipt ?? 0) === 1,
+      registrationReceiptMessage: row?.registration_receipt_message ?? "",
+      finishReceiptMessage: row?.finish_receipt_message ?? "",
+      organizerEventorId: row?.organizer_eventor_id ?? 0,
+    };
+  }),
+
+  /**
+   * Update registration settings.
+   */
+  setRegistrationConfig: publicProcedure
+    .input(z.object({
+      paymentMethods: z.array(z.string()).optional(),
+      swishNumber: z.string().optional(),
+      swishPayeeName: z.string().optional(),
+      printRegistrationReceipt: z.boolean().optional(),
+      registrationReceiptMessage: z.string().optional(),
+      finishReceiptMessage: z.string().optional(),
+      organizerEventorId: z.number().optional(),
+    }))
+    .mutation(async ({ input }) => {
+      const client = await getCompetitionClient();
+      await ensureCompetitionConfigTable(client);
+
+      const setClauses: string[] = [];
+      if (input.paymentMethods !== undefined) {
+        const val = input.paymentMethods.join(",");
+        setClauses.push(`payment_methods = '${val.replace(/'/g, "''")}'`);
+      }
+      if (input.swishNumber !== undefined) {
+        setClauses.push(`swish_number = '${input.swishNumber.replace(/'/g, "''")}'`);
+      }
+      if (input.swishPayeeName !== undefined) {
+        setClauses.push(`swish_payee_name = '${input.swishPayeeName.replace(/'/g, "''")}'`);
+      }
+      if (input.printRegistrationReceipt !== undefined) {
+        setClauses.push(`print_registration_receipt = ${input.printRegistrationReceipt ? 1 : 0}`);
+      }
+      if (input.registrationReceiptMessage !== undefined) {
+        setClauses.push(`registration_receipt_message = '${input.registrationReceiptMessage.replace(/'/g, "''")}'`);
+      }
+      if (input.finishReceiptMessage !== undefined) {
+        setClauses.push(`finish_receipt_message = '${input.finishReceiptMessage.replace(/'/g, "''")}'`);
+      }
+      if (input.organizerEventorId !== undefined) {
+        setClauses.push(`organizer_eventor_id = ${Number(input.organizerEventorId) || 0}`);
+      }
+      if (setClauses.length > 0) {
+        await client.$executeRawUnsafe(
+          `UPDATE oxygen_competition_config SET ${setClauses.join(", ")} WHERE id = 1`,
+        );
+      }
+      return { ok: true };
+    }),
 });

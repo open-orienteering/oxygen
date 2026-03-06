@@ -18,8 +18,16 @@ export const WAKEUP = 0xff;
 /** SI command bytes */
 export const CMD = {
   GET_SYSTEM_VALUE: 0x83,
+  SET_SYSTEM_VALUE: 0x82,
   GET_BACKUP: 0x81,
   SET_MS_MODE: 0x70,
+  SET_MS: 0xf0,
+  GET_MS: 0xf1,
+  SET_TIME: 0xf6,
+  GET_TIME: 0xf7,
+  ERASE_BACKUP: 0xf5,
+  OFF: 0xf8,
+  BEEP: 0xf9,
 
   // Card detection (station → host)
   SI5_DETECTED: 0xe5,
@@ -145,22 +153,27 @@ export function calculateCRC(data: Uint8Array): number {
 /**
  * Build a command frame to send to the SI station.
  * Format: WAKEUP + STX + CMD + LEN + PARAMS + CRC(2) + ETX
+ *
+ * @param skipWakeup — omit the 0xFF wakeup prefix. Required when the BSM8
+ *   is in remote mode — the wakeup byte gets misinterpreted and causes NAK.
  */
-export function buildCommand(cmd: number, params: number[] = []): Uint8Array {
+export function buildCommand(cmd: number, params: number[] = [], skipWakeup = false): Uint8Array {
   const len = params.length;
-  const frame = new Uint8Array(7 + len);
-  frame[0] = WAKEUP;
-  frame[1] = STX;
-  frame[2] = cmd;
-  frame[3] = len;
-  for (let i = 0; i < len; i++) frame[4 + i] = params[i];
+  const prefixLen = skipWakeup ? 0 : 1;
+  const frame = new Uint8Array(6 + prefixLen + len);
+  let idx = 0;
+  if (!skipWakeup) frame[idx++] = WAKEUP;
+  frame[idx++] = STX;
+  frame[idx] = cmd;
+  frame[idx + 1] = len;
+  for (let i = 0; i < len; i++) frame[idx + 2 + i] = params[i];
 
   // CRC over CMD + LEN + PARAMS
-  const crcData = frame.slice(2, 4 + len);
+  const crcData = frame.slice(idx, idx + 2 + len);
   const crc = calculateCRC(crcData);
-  frame[4 + len] = (crc >> 8) & 0xff;
-  frame[5 + len] = crc & 0xff;
-  frame[6 + len] = ETX;
+  frame[idx + 2 + len] = (crc >> 8) & 0xff;
+  frame[idx + 3 + len] = crc & 0xff;
+  frame[idx + 4 + len] = ETX;
   return frame;
 }
 
@@ -805,6 +818,444 @@ export const VALID_COMMANDS = new Set([
   CMD.SI8_DETECTED,
   CMD.TRANSMIT_RECORD,
   CMD.SRR_PUNCH,
-  0xf0, // SET_MS response
-  0xf7, // GET_TIME response
+  CMD.SET_MS,
+  CMD.GET_TIME,
+  CMD.GET_SYSTEM_VALUE,
+  CMD.SET_SYSTEM_VALUE,
+  CMD.SET_TIME,
+  CMD.ERASE_BACKUP,
+  CMD.GET_BACKUP,
+  CMD.OFF,
+  CMD.BEEP,
 ]);
+
+// ─── Station Configuration ────────────────────────────────
+
+/** SYS_VAL memory offsets for station configuration */
+export const SYSVAL = {
+  SERIAL_NO: 0x00, // 4 bytes — station serial number
+  SRR_CFG: 0x04, // 1 byte — bit0: SRR enabled
+  FIRMWARE: 0x05, // 3 bytes — ASCII firmware version
+  BUILD_DATE: 0x08, // 3 bytes — YYMMDD
+  MODEL_ID: 0x0b, // 2 bytes — hardware model
+  MEM_SIZE: 0x0d, // 1 byte — backup memory size in KB
+  BAT_DATE: 0x15, // 3 bytes — battery installation date YYMMDD
+  BAT_CAP: 0x19, // 2 bytes — initial battery capacity in mAh
+  BACKUP_PTR_HI: 0x1c, // 2 bytes — backup pointer high
+  BACKUP_PTR_LO: 0x21, // 2 bytes — backup pointer low
+  BAT_VOLT: 0x50, // 2 bytes — V = raw * 5 / 65536
+  PROGRAM: 0x70, // 1 byte — competition(0) or training(1)
+  MODE: 0x71, // 1 byte — operating mode
+  STATION_CODE: 0x72, // 1 byte — station code lower 8 bits
+  FEEDBACK: 0x73, // 1 byte — bits 6-7: station code high, bit0: optical, bit1: acoustic, bit2: flash
+  PROTO: 0x74, // 1 byte — bit0: extended, bit1: autosend, bit2: handshake, bit3: legacy, bit4: sprint4ms, bit5: card6_192
+  AUTO_OFF: 0x7e, // 2 bytes (big-endian) — auto power-off time in minutes
+} as const;
+
+/** Station operating modes */
+export const STATION_MODE = {
+  SIAC_SPECIAL: 0x01,
+  CONTROL: 0x02,
+  START: 0x03,
+  FINISH: 0x04,
+  READOUT: 0x05,
+  CLEAR_OLD: 0x06,
+  CLEAR: 0x07,
+  CHECK: 0x0a,
+  PRINTOUT: 0x0b,
+  START_TRIG: 0x0c,
+  FINISH_TRIG: 0x0d,
+  BC_CONTROL: 0x12,
+  BC_START: 0x13,
+  BC_FINISH: 0x14,
+  BC_READOUT: 0x15,
+} as const;
+
+/** Direct/Remote (master/slave) mode constants */
+export const MS_MODE = {
+  DIRECT: 0x4d, // 'M' — master/direct
+  REMOTE: 0x53, // 'S' — slave/remote
+} as const;
+
+/** Parsed station configuration from GET_SYSTEM_VALUE response */
+export interface StationInfo {
+  serialNo: number;
+  stationCode: number; // 1–1023
+  mode: number;
+  srrEnabled: boolean;
+  batteryVoltage: number; // volts
+  batteryCapMah: number; // initial battery capacity in mAh
+  firmwareVersion: string;
+  memSizeKB: number;
+  backupPointer: number; // raw backup memory write pointer (address)
+  backupCount: number; // approximate number of backup records
+}
+
+/** A punch record from station backup memory (extended protocol BUX format) */
+export interface BackupRecord {
+  cardNo: number;
+  /** Full punch datetime as ISO string (from backup record's date + time fields) */
+  punchDatetime: string;
+  /** Seconds since midnight (for MeOS oPunch compatibility, deciseconds = this * 10) */
+  punchTimeSecs: number;
+  /** Sub-second fraction (0-255, divide by 256 for seconds) */
+  subSecond: number;
+}
+
+// ─── Station command builders ─────────────────────────────
+
+/** Build SET_SYSTEM_VALUE command: write bytes starting at offset */
+export function buildSetSysVal(
+  offset: number,
+  ...values: number[]
+): Uint8Array {
+  return buildCommand(CMD.SET_SYSTEM_VALUE, [offset, ...values]);
+}
+
+/** Build command to set station to direct (master) mode */
+export function buildSetDirectMode(): Uint8Array {
+  return buildCommand(CMD.SET_MS, [MS_MODE.DIRECT]);
+}
+
+/** Build command to set station to remote (slave/indirect) mode —
+ *  commands are forwarded to the coupled field control via the coupling stick */
+export function buildSetRemoteMode(): Uint8Array {
+  return buildCommand(CMD.SET_MS, [MS_MODE.REMOTE]);
+}
+
+/**
+ * Build command to read full SYS_VAL (128 bytes from offset 0).
+ * @param remote — skip wakeup byte (required when BSM8 is in remote mode)
+ */
+export function buildGetSysVal(remote = false): Uint8Array {
+  return buildCommand(CMD.GET_SYSTEM_VALUE, [0x00, 0x80], remote);
+}
+
+/**
+ * Build SET_SYSTEM_VALUE command for remote mode (no wakeup byte).
+ */
+export function buildSetSysValRemote(
+  offset: number,
+  ...values: number[]
+): Uint8Array {
+  return buildCommand(CMD.SET_SYSTEM_VALUE, [offset, ...values], true);
+}
+
+/**
+ * Build SET_TIME command from a Date.
+ * @param remote — skip wakeup byte for remote mode
+ */
+export function buildSetTime(date: Date, remote = false): Uint8Array {
+  const yy = date.getFullYear() % 100;
+  const mm = date.getMonth() + 1;
+  const dd = date.getDate();
+  const hours = date.getHours();
+  const mins = date.getMinutes();
+  const secs = date.getSeconds();
+
+  // dayAMPM: bits 3-1 = ISO weekday (Mon=1..Sun=7), bit 0 = PM flag
+  const isoWeekday = date.getDay() === 0 ? 7 : date.getDay(); // JS: 0=Sun→7
+  const pm = hours >= 12 ? 1 : 0;
+  const dayAMPM = (isoWeekday << 1) | pm;
+
+  // Seconds in 12h window
+  const totalSeconds = (hours % 12) * 3600 + mins * 60 + secs;
+  const secHi = (totalSeconds >> 8) & 0xff;
+  const secLo = totalSeconds & 0xff;
+
+  // Sub-second fraction: 1/256s units
+  const frac = Math.round((date.getMilliseconds() / 1000) * 256) & 0xff;
+
+  return buildCommand(CMD.SET_TIME, [yy, mm, dd, dayAMPM, secHi, secLo, frac], remote);
+}
+
+/**
+ * Build ERASE_BACKUP command.
+ * @param remote — skip wakeup byte for remote mode
+ */
+export function buildEraseBackup(remote = false): Uint8Array {
+  return buildCommand(CMD.ERASE_BACKUP, [], remote);
+}
+
+/**
+ * Build GET_BACKUP command for a specific page.
+ * @param remote — skip wakeup byte for remote mode
+ */
+/**
+ * Build GET_BACKUP command to read station backup memory.
+ * Parameters: 3-byte address (ADR2, ADR1, ADR0) + 1-byte count (max 0x80).
+ * Backup data starts at address 0x000100. End address comes from SYS_VAL
+ * backup pointer fields (O_BACKUP_PTR_HI at 0x1C + O_BACKUP_PTR_LO at 0x21).
+ */
+export function buildGetBackup(
+  adr2: number, adr1: number, adr0: number, count = 0x80, remote = false,
+): Uint8Array {
+  return buildCommand(CMD.GET_BACKUP, [adr2, adr1, adr0, count], remote);
+}
+
+/**
+ * Build OFF command — power off station.
+ * @param remote — skip wakeup byte for remote mode
+ */
+export function buildOff(remote = false): Uint8Array {
+  return buildCommand(CMD.OFF, [], remote);
+}
+
+/**
+ * Build BEEP command.
+ * @param remote — skip wakeup byte for remote mode
+ */
+export function buildBeep(count: number = 1, remote = false): Uint8Array {
+  return buildCommand(CMD.BEEP, [count], remote);
+}
+
+/** Encode a station code (1–1023) into STATION_CODE + FEEDBACK bytes */
+export function encodeStationCode(
+  code: number,
+  currentFeedback: number = 0x37,
+): { codeByte: number; feedbackByte: number } {
+  const codeByte = code & 0xff;
+  const codeHigh = (code >> 2) & 0xc0; // bits 8-9 of code → bits 6-7 of feedback
+  const feedbackByte = (currentFeedback & 0x3f) | codeHigh;
+  return { codeByte, feedbackByte };
+}
+
+/** Decode station code from STATION_CODE + FEEDBACK bytes */
+export function decodeStationCode(
+  codeByte: number,
+  feedbackByte: number,
+): number {
+  return codeByte | ((feedbackByte & 0xc0) << 2);
+}
+
+// ─── Station response parsers ─────────────────────────────
+
+/**
+ * Parse a GET_SYSTEM_VALUE response into station configuration.
+ *
+ * Response format (verified via dump-sysval.py against Config+):
+ *   [0x00] [station_id] [echoed_offset] [SYS_VAL data...]
+ * 3-byte header + 128 bytes SYS_VAL = 131 bytes total for a full read.
+ *
+ * Confirmed field mappings (BSF8-SRR, firmware 657):
+ *   0x00-0x03: Serial number (big-endian uint32)
+ *   0x04:      SRR config (bit 0 = SRR enabled; other bits are factory config, don't overwrite)
+ *   0x05-0x07: Firmware version as 3 ASCII chars (e.g. "657")
+ *   0x08-0x0a: Production date YY MM DD
+ *   0x50-0x51: Battery voltage — V = raw * 5 / 65536 (verified: 0xAFC0 → 3.43V ≈ Config+ 3.42V)
+ *   0x70:      PROGRAM config bank — ASCII '0' (competition) or '1' (training)
+ *   0x71:      Operating mode (see STATION_MODE)
+ *   0x72:      Station code lower 8 bits
+ *   0x73:      Feedback — bit0: optical, bit1: acoustic, bit2: flash, bits 6-7: code high
+ *   0x74:      Protocol — bit0: extended, bit1: autosend, bit2: handshake, bit3: legacy, bit4: sprint4ms
+ *   0x7e-0x7f: Auto power-off in minutes (big-endian uint16)
+ */
+export function parseStationInfo(data: Uint8Array): StationInfo | null {
+  // 3-byte header: [0x00, station_id, echoed_offset]
+  const P = 3;
+  if (data.length < P + 0x75) return null;
+
+  const serialNo =
+    (data[P + SYSVAL.SERIAL_NO] << 24) |
+    (data[P + SYSVAL.SERIAL_NO + 1] << 16) |
+    (data[P + SYSVAL.SERIAL_NO + 2] << 8) |
+    data[P + SYSVAL.SERIAL_NO + 3];
+
+  const srrEnabled = (data[P + SYSVAL.SRR_CFG] & 0x01) !== 0;
+
+  const fw0 = data[P + SYSVAL.FIRMWARE];
+  const fw1 = data[P + SYSVAL.FIRMWARE + 1];
+  const fw2 = data[P + SYSVAL.FIRMWARE + 2];
+  const firmwareVersion = String.fromCharCode(fw0, fw1, fw2);
+
+  const memSizeKB = data[P + SYSVAL.MEM_SIZE];
+
+  // Battery voltage: 2 bytes at offset 0x50, V = raw * 5 / 65536
+  const batRaw = (data[P + SYSVAL.BAT_VOLT] << 8) | data[P + SYSVAL.BAT_VOLT + 1];
+  const batteryVoltage = (batRaw * 5) / 65536;
+
+  // Battery capacity: 2 bytes at offset 0x19, initial capacity in mAh
+  const batteryCapMah = (data[P + SYSVAL.BAT_CAP] << 8) | data[P + SYSVAL.BAT_CAP + 1];
+
+  // Backup pointer (approximate record count)
+  const bpHi =
+    (data[P + SYSVAL.BACKUP_PTR_HI] << 8) | data[P + SYSVAL.BACKUP_PTR_HI + 1];
+  const bpLo =
+    (data[P + SYSVAL.BACKUP_PTR_LO] << 8) | data[P + SYSVAL.BACKUP_PTR_LO + 1];
+  const backupPointer = (bpHi << 16) | bpLo;
+  // Data starts at 0x100, each record is 8 bytes
+  const backupCount = backupPointer > 0x100 ? Math.floor((backupPointer - 0x100) / 8) : 0;
+
+  const mode = data[P + SYSVAL.MODE];
+  const stationCode = decodeStationCode(
+    data[P + SYSVAL.STATION_CODE],
+    data[P + SYSVAL.FEEDBACK],
+  );
+
+  return {
+    serialNo,
+    stationCode,
+    mode,
+    srrEnabled,
+    batteryVoltage,
+    batteryCapMah,
+    firmwareVersion,
+    memSizeKB,
+    backupPointer,
+    backupCount,
+  };
+}
+
+/**
+ * Parse a GET_TIME response and compute drift from the computer clock.
+ * Response format: StationNumber(2) + YY + MM + DD + dayAMPM + secHi + secLo + fraction(1/256s)
+ * Returns drift in milliseconds (positive = station ahead, negative = station behind).
+ */
+export function parseTimeDrift(
+  data: Uint8Array,
+  sendTimeMs: number,
+  recvTimeMs: number,
+): number | null {
+  // 2-byte station prefix + 7 bytes of time data
+  if (data.length < 9) return null;
+
+  const yy = data[2];
+  const mm = data[3];
+  const dd = data[4];
+  const dayAMPM = data[5];
+  const secHi = data[6];
+  const secLo = data[7];
+  const frac = data[8]; // 1/256 second
+
+  const pm = dayAMPM & 0x01;
+  const totalSeconds = (secHi << 8) | secLo;
+  const hours = Math.floor(totalSeconds / 3600) + (pm ? 12 : 0);
+  const mins = Math.floor((totalSeconds % 3600) / 60);
+  const secs = totalSeconds % 60;
+  const ms = Math.round((frac / 256) * 1000);
+
+  const stationDate = new Date(2000 + yy, mm - 1, dd, hours, mins, secs, ms);
+  // Best estimate of "when the station sampled the time" is midpoint of send/recv
+  const computerTimeMs = (sendTimeMs + recvTimeMs) / 2;
+
+  return stationDate.getTime() - computerTimeMs;
+}
+
+/**
+ * Parse a GET_BACKUP response into punch records.
+ *
+ * Response format (verified via dump-sysval.py):
+ *   4-byte header: [0x00, station_code, addr_hi, addr_lo]
+ *   followed by 8-byte records until empty (all 0x00 or 0xFF).
+ *
+ * Record format (8 bytes per punch):
+ *   SN3(1) SN2(1) SN1(1) SN0(1) TD(1) TH(1) TL(1) TMS(1)
+ *   - SN3 high nibble may contain control number extension
+ *   - TD bit 0 = PM flag (add 12h if set), bits 1-3 = day of week
+ *   - TH:TL = seconds since midnight (or since noon if PM)
+ *   - TMS = sub-second (1/256 sec, currently ignored)
+ */
+/**
+ * Parse a GET_BACKUP response page into punch records.
+ *
+ * Response format: [cmd_echo, station_id, addr2, addr1, addr0, ...data]
+ * The first byte after framing is the echoed address prefix (5 bytes total header).
+ * After the header, records are 8 bytes each (extended protocol BUX format):
+ *
+ *   Byte 0-2: Card number (3 bytes, MSB first) — decode with SI card numbering
+ *   Byte 3:   Year/Month high (bits 7..2 = year since 2000, bits 1..0 = month high)
+ *   Byte 4:   Month low/Day/AM-PM (bits 7..6 = month low, bits 5..1 = day, bit 0 = AM/PM)
+ *   Byte 5-6: Seconds since midnight (AM) or midday (PM), 2 bytes big-endian
+ *   Byte 7:   Sub-second fraction (÷256 for seconds)
+ */
+export function parseBackupPage(data: Uint8Array): BackupRecord[] {
+  const records: BackupRecord[] = [];
+  const RECORD_SIZE = 8;
+
+  // Response header: the frame parser gives us the payload after cmd+len.
+  // For GET_BACKUP that's: [0x00, station_id, adr2, adr1, adr0, ...records]
+  // But sireader2.py uses BUX_FIRST=2 (skip 2 bytes) + 1 = offset 3 into payload.
+  // Our frame parser strips cmd byte, so data starts at param data.
+  // Header is 5 bytes: [0x00, station_code, adr2, adr1, adr0]
+  const HEADER = 5;
+  const start = data.length > HEADER ? HEADER : 0;
+
+  for (let offset = start; offset + RECORD_SIZE <= data.length; offset += RECORD_SIZE) {
+    const rec = data.slice(offset, offset + RECORD_SIZE);
+
+    // Skip empty/erased records
+    const ffCount = rec.filter((b) => b === 0xff).length;
+    if (ffCount >= 6) break;
+    if (rec.every((b) => b === 0x00)) break;
+
+    const recHex = Array.from(rec).map((b) => b.toString(16).padStart(2, "0")).join(" ");
+
+    // Card number: 3 bytes MSB first (same encoding as SI card data)
+    const cardNo = (rec[0] << 16) | (rec[1] << 8) | rec[2];
+    if (cardNo === 0 || cardNo === 0xffffff) break;
+
+    // Byte 3: year/month high — bits 7..2 = year since 2000, bits 1..0 = month upper
+    const ym = rec[3];
+    const year = 2000 + (ym >> 2);
+    const monthHi = ym & 0x03;
+
+    // Byte 4: month low/day/AM-PM — bits 7..6 = month lower, bits 5..1 = day, bit 0 = AM/PM
+    const mdap = rec[4];
+    const month = (monthHi << 2) | (mdap >> 6);
+    const day = (mdap >> 1) & 0x1f;
+    const pm = mdap & 0x01;
+
+    // Bytes 5-6: seconds since midnight (AM=0) or midday (PM=1)
+    const secsRaw = (rec[5] << 8) | rec[6];
+    const punchTimeSecs = secsRaw + (pm ? 43200 : 0);
+    const subSecond = rec[7];
+
+    // Build full datetime
+    const hours = Math.floor(punchTimeSecs / 3600);
+    const mins = Math.floor((punchTimeSecs % 3600) / 60);
+    const secs = punchTimeSecs % 60;
+    const ms = Math.round((subSecond / 256) * 1000);
+    const dt = new Date(year, month - 1, day, hours, mins, secs, ms);
+    const punchDatetime = dt.toISOString();
+
+    console.log(
+      `[SI] Backup record @${offset}: ${recHex} → card=${cardNo} ` +
+      `${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")} ` +
+      `${String(hours).padStart(2, "0")}:${String(mins).padStart(2, "0")}:${String(secs).padStart(2, "0")}.${subSecond}`,
+    );
+
+    records.push({ cardNo, punchDatetime, punchTimeSecs, subSecond });
+  }
+
+  return records;
+}
+
+/** Check if a mode byte represents a control mode */
+export function isControlMode(mode: number): boolean {
+  return (
+    mode === STATION_MODE.CONTROL ||
+    mode === STATION_MODE.BC_CONTROL
+  );
+}
+
+/** Get a human-readable label for a station mode */
+export function stationModeLabel(mode: number): string {
+  switch (mode) {
+    case STATION_MODE.SIAC_SPECIAL: return "SIAC Special";
+    case STATION_MODE.CONTROL: return "Control";
+    case STATION_MODE.START: return "Start";
+    case STATION_MODE.FINISH: return "Finish";
+    case STATION_MODE.READOUT: return "Readout";
+    case STATION_MODE.CLEAR_OLD: return "Clear (old)";
+    case STATION_MODE.CLEAR: return "Clear";
+    case STATION_MODE.CHECK: return "Check";
+    case STATION_MODE.PRINTOUT: return "Printout";
+    case STATION_MODE.START_TRIG: return "Start (trigger)";
+    case STATION_MODE.FINISH_TRIG: return "Finish (trigger)";
+    case STATION_MODE.BC_CONTROL: return "Beacon Control";
+    case STATION_MODE.BC_START: return "Beacon Start";
+    case STATION_MODE.BC_FINISH: return "Beacon Finish";
+    case STATION_MODE.BC_READOUT: return "Beacon Readout";
+    default: return `Unknown (0x${mode.toString(16)})`;
+  }
+}

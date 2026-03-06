@@ -242,7 +242,7 @@ test.describe("Kiosk Mode", () => {
     await expect(page.getByText("999999")).toBeVisible();
   });
 
-  test("should show registration confirmation when admin sends ready form state", async ({
+  test("should show live form fields during registration", async ({
     page,
   }) => {
     await goToKiosk(page);
@@ -264,7 +264,7 @@ test.describe("Kiosk Mode", () => {
       timeout: 5000,
     });
 
-    // Admin sends form state with ready=true
+    // Admin sends form state — fields should appear live on waiting screen
     await sendKioskMessage(page, nameId, {
       type: "registration-state",
       form: {
@@ -282,19 +282,14 @@ test.describe("Kiosk Mode", () => {
       ready: true,
     });
 
-    // Should show confirmation screen with re-insert prompt instead of button
-    await expect(page.getByText("Please confirm your registration")).toBeVisible({
-      timeout: 5000,
-    });
-    await expect(page.getByText("New Runner")).toBeVisible();
+    // Fields should appear on the waiting screen
+    await expect(page.getByText("New Runner")).toBeVisible({ timeout: 5000 });
     await expect(page.getByText("Sprint Club")).toBeVisible();
     await expect(page.getByText("D21")).toBeVisible();
     await expect(page.getByText("Pay on site")).toBeVisible();
-    await expect(page.getByTestId("kiosk-reinsert-prompt")).toBeVisible();
-    await expect(page.getByText("Insert your SI card again to confirm")).toBeVisible();
   });
 
-  test("should handle registration confirmation via card re-insert message", async ({
+  test("should go directly from registration to complete (no re-insert)", async ({
     page,
   }) => {
     await goToKiosk(page);
@@ -316,7 +311,7 @@ test.describe("Kiosk Mode", () => {
       timeout: 5000,
     });
 
-    // Admin sends ready form
+    // Admin sends form state
     await sendKioskMessage(page, nameId, {
       type: "registration-state",
       form: {
@@ -334,36 +329,7 @@ test.describe("Kiosk Mode", () => {
       ready: true,
     });
 
-    // Should show the re-insert prompt
-    await expect(page.getByText("Insert your SI card again to confirm")).toBeVisible({
-      timeout: 5000,
-    });
-
-    // Set up listener for confirmation message from kiosk
-    const confirmPromise = page.evaluate(
-      (nameId) =>
-        new Promise<boolean>((resolve) => {
-          const ch = new BroadcastChannel(`oxygen-kiosk-${nameId}`);
-          const timer = setTimeout(() => { ch.close(); resolve(false); }, 5000);
-          ch.onmessage = (e) => {
-            if (e.data.type === "registration-confirm" && e.data.confirmed) {
-              clearTimeout(timer);
-              ch.close();
-              resolve(true);
-            }
-          };
-        }),
-      nameId,
-    );
-
-    // Simulate admin's DeviceManager detecting same card re-insert and sending confirmation
-    await sendKioskMessage(page, nameId, {
-      type: "registration-confirm",
-      confirmed: true,
-    });
-
-    // The kiosk should forward the confirmation (it also receives and may re-emit)
-    // But the key assertion: the admin sent the confirm, now send registration-complete
+    // Admin completes registration directly (no re-insert step)
     await sendKioskMessage(page, nameId, {
       type: "registration-complete",
       runner: {
@@ -501,64 +467,19 @@ test.describe("Kiosk Mode", () => {
     expect(gotPong).toBe(true);
   });
 
-  test("should show write-to-card consent text when setting is enabled", async ({
+  test("should show write-to-card setting in settings panel", async ({
     page,
   }) => {
     await goToKiosk(page);
-    const nameId = getNameId(page);
 
-    // Enable writeToCard in settings
+    // Open settings
     await page.locator('button[title="Settings"]').click();
-    await page.getByText("Write details to empty cards").click();
-    await page.locator('button[title="Settings"]').click(); // close settings
 
-    // Trigger registration and show confirm screen
-    await sendKioskMessage(page, nameId, {
-      type: "card-readout",
-      card: {
-        id: "test-write-1",
-        cardNumber: 888888,
-        cardType: "SI8",
-        action: "register",
-        hasRaceData: false,
-      },
-    });
-
-    await expect(page.getByText("Registration in progress")).toBeVisible({
-      timeout: 5000,
-    });
-
-    await sendKioskMessage(page, nameId, {
-      type: "registration-state",
-      form: {
-        name: "Card Writer",
-        clubName: "Write Club",
-        className: "H21",
-        courseName: "",
-        cardNo: 888888,
-        startTime: "",
-        sex: "M",
-        birthYear: "2000",
-        phone: "",
-        paymentMode: "",
-      },
-      ready: true,
-    });
-
-    await expect(page.getByText("Please confirm your registration")).toBeVisible({
-      timeout: 5000,
-    });
-    await expect(
-      page.getByText("Your details will also be saved to your SI card"),
-    ).toBeVisible();
-  });
-
-  test("should show writeToCard setting in settings panel", async ({ page }) => {
-    await goToKiosk(page);
-
-    await page.locator('button[title="Settings"]').click();
+    // The writeToCard toggle should be present
     await expect(page.getByText("Write details to empty cards")).toBeVisible();
+    await expect(page.getByText("Save runner details to SI card")).toBeVisible();
   });
+
 });
 
 test.describe("Kiosk Launch from Admin", () => {

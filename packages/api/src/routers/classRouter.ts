@@ -69,6 +69,7 @@ export const classRouter = router({
           freeStart: c.FreeStart === 1,
           noTiming: c.NoTiming === 1,
           classType: c.ClassType,
+          classFee: c.ClassFee,
         };
       });
 
@@ -142,6 +143,7 @@ export const classRouter = router({
         freeStart: cls.FreeStart === 1,
         noTiming: cls.NoTiming === 1,
         classType: cls.ClassType,
+        classFee: cls.ClassFee,
         longName: cls.LongName,
         firstStart: cls.FirstStart,
         startInterval: cls.StartInterval,
@@ -215,6 +217,7 @@ export const classRouter = router({
         noTiming: z.boolean().optional(),
         firstStart: z.number().int().optional(),
         startInterval: z.number().int().optional(),
+        classFee: z.number().int().optional(),
       }),
     )
     .mutation(async ({ input }) => {
@@ -233,6 +236,7 @@ export const classRouter = router({
       if (input.firstStart !== undefined) data.FirstStart = input.firstStart;
       if (input.startInterval !== undefined)
         data.StartInterval = input.startInterval;
+      if (input.classFee !== undefined) data.ClassFee = input.classFee;
 
       // Handle course assignment
       if (input.courseIds !== undefined) {

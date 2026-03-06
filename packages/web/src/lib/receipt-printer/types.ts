@@ -72,4 +72,26 @@ export interface FinishReceiptData {
   logoRaster?: LogoRaster | null;
   /** URL to encode as a QR code at the bottom. Null = no QR printed. */
   qrUrl?: string | null;
+  /** Optional custom message to print on the receipt. */
+  customMessage?: string;
+}
+
+/** All data needed to format and print a registration receipt. */
+export interface RegistrationReceiptData {
+  competitionName: string;
+  competitionDate?: string;
+  runner: {
+    name: string;
+    clubName: string;
+    className: string;
+    cardNo: number;
+  };
+  startTime?: string; // formatted HH:MM:SS or undefined for free start
+  payment?: {
+    method: string; // "Invoice", "Card", "Swish", "Pay on site"
+    amount: number; // whole currency units (e.g., 50 = 50 SEK)
+  };
+  logoRaster?: LogoRaster | null;
+  /** Optional custom message to print on the receipt. */
+  customMessage?: string;
 }

@@ -1,11 +1,76 @@
 import { z } from "zod";
 import { router, publicProcedure } from "../trpc.js";
-import { getCompetitionClient } from "../db.js";
-import type { ControlInfo, ControlDetail } from "@oxygen/shared";
+import {
+  getCompetitionClient,
+  incrementCounter,
+  ensureControlConfigTable,
+  ensureControlPunchesTable,
+  ensureCompetitionConfigTable,
+} from "../db.js";
+import type {
+  ControlInfo,
+  ControlDetail,
+  ControlConfig,
+  RadioType,
+  AirPlusOverride,
+} from "@oxygen/shared";
+
+// ─── Helpers ──────────────────────────────────────────────
+
+/** Format a Date from MySQL DATETIME as an ISO-like local-time string.
+ *  Prisma treats DATETIME as UTC, but MySQL NOW() returns server-local time.
+ *  Using getUTC* avoids the double timezone shift. */
+function fmtDatetimeLocal(d: Date): string {
+  const Y = d.getUTCFullYear();
+  const M = String(d.getUTCMonth() + 1).padStart(2, "0");
+  const D = String(d.getUTCDate()).padStart(2, "0");
+  const h = String(d.getUTCHours()).padStart(2, "0");
+  const m = String(d.getUTCMinutes()).padStart(2, "0");
+  const s = String(d.getUTCSeconds()).padStart(2, "0");
+  return `${Y}-${M}-${D} ${h}:${m}:${s}`;
+}
+
+interface ControlConfigRow {
+  control_id: number;
+  radio_type: string;
+  air_plus: string;
+  battery_voltage: number | null;
+  battery_low: number | null;
+  checked_at: Date | null;
+  memory_cleared_at: Date | null;
+  station_serial: number | null;
+}
+
+function rowToConfig(row: ControlConfigRow): ControlConfig {
+  return {
+    radioType: row.radio_type as RadioType,
+    airPlus: row.air_plus as AirPlusOverride,
+    batteryVoltage: row.battery_voltage,
+    batteryLow: row.battery_low !== null ? row.battery_low !== 0 : null,
+    checkedAt: row.checked_at?.toISOString() ?? null,
+    memoryClearedAt: row.memory_cleared_at?.toISOString() ?? null,
+  };
+}
+
+async function getConfigMap(
+  client: Awaited<ReturnType<typeof getCompetitionClient>>,
+): Promise<Map<number, ControlConfig>> {
+  await ensureControlConfigTable(client);
+  const rows = (await client.$queryRawUnsafe(
+    "SELECT * FROM oxygen_control_config",
+  )) as ControlConfigRow[];
+  const map = new Map<number, ControlConfig>();
+  for (const row of rows) {
+    map.set(row.control_id, rowToConfig(row));
+  }
+  return map;
+}
+
+// ─── Router ───────────────────────────────────────────────
 
 export const controlRouter = router({
   /**
-   * List all controls.
+   * List all controls with config data.
    */
   list: publicProcedure
     .input(
@@ -81,26 +146,18 @@ export const controlRouter = router({
       }
 
       // Handle Start (Status 4) and Finish (Status 5) controls.
-      // In MeOS, start/finish aren't stored in oCourse.Controls — they're separate.
-      // - If FirstAsStart=1, the first control in Controls IS the start (already counted above).
-      // - If FirstAsStart=0, a physical start station (STA1/STA2) is used.
-      // - Same logic for LastAsFinish and finish stations.
-      // We match start controls to courses via the StartName field.
-      // For finish, all courses share the finish unless there are multiple finishes.
       const startControls = filtered.filter((c) => c.Status === 4);
       const finishControls = filtered.filter((c) => c.Status === 5);
 
       if (startControls.length > 0) {
-        // Build a map: startName → controlId (matching control Name to course StartName)
         const startNameToCtrl = new Map<string, number>();
         for (const sc of startControls) {
           startNameToCtrl.set(sc.Name.toUpperCase(), sc.Id);
         }
-        // Default start (empty StartName) → first start control
         const defaultStartId = startControls[0].Id;
 
         for (const course of courses) {
-          if (course.FirstAsStart) continue; // first control already counted
+          if (course.FirstAsStart) continue;
           const courseRunners = runnersPerCourse.get(course.Id) ?? 0;
           if (courseRunners === 0) continue;
           const startKey = course.StartName.trim().toUpperCase();
@@ -110,17 +167,18 @@ export const controlRouter = router({
       }
 
       if (finishControls.length > 0) {
-        // MeOS has no FinishName on courses. If there's one finish, all non-LastAsFinish
-        // courses use it. If multiple, we assign to the first one.
         const defaultFinishId = finishControls[0].Id;
 
         for (const course of courses) {
-          if (course.LastAsFinish) continue; // last control already counted
+          if (course.LastAsFinish) continue;
           const courseRunners = runnersPerCourse.get(course.Id) ?? 0;
           if (courseRunners === 0) continue;
           controlRunnerCount.set(defaultFinishId, (controlRunnerCount.get(defaultFinishId) ?? 0) + courseRunners);
         }
       }
+
+      // Load config data
+      const configMap = await getConfigMap(client);
 
       return filtered.map(
         (c): ControlInfo => ({
@@ -131,6 +189,7 @@ export const controlRouter = router({
           timeAdjust: c.TimeAdjust,
           minTime: c.MinTime,
           runnerCount: controlRunnerCount.get(c.Id) ?? 0,
+          config: configMap.get(c.Id) ?? null,
         }),
       );
     }),
@@ -203,6 +262,9 @@ export const controlRouter = router({
         }
       }
 
+      // Load config
+      const configMap = await getConfigMap(client);
+
       return {
         id: control.Id,
         name: control.Name,
@@ -212,6 +274,7 @@ export const controlRouter = router({
         minTime: control.MinTime,
         runnerCount: courseUsage.reduce((sum, c) => sum + c.runnerCount, 0),
         courses: courseUsage,
+        config: configMap.get(control.Id) ?? null,
       };
     }),
 
@@ -327,4 +390,368 @@ export const controlRouter = router({
 
       return { success: true };
     }),
+
+  // ─── Control config (radio type, AIR+) ────────────────
+
+  /**
+   * Upsert config for one or more controls (bulk).
+   * Also syncs oControl.Radio for liveresults compatibility.
+   */
+  upsertConfig: publicProcedure
+    .input(
+      z.object({
+        controlIds: z.array(z.number().int()).min(1),
+        radioType: z.enum(["normal", "internal_radio", "public_radio"]).optional(),
+        airPlus: z.enum(["default", "on", "off"]).optional(),
+      }),
+    )
+    .mutation(async ({ input }) => {
+      const client = await getCompetitionClient();
+      await ensureControlConfigTable(client);
+
+      for (const controlId of input.controlIds) {
+        // Upsert config row
+        const setClauses: string[] = [];
+        if (input.radioType !== undefined) {
+          setClauses.push(`radio_type = '${input.radioType}'`);
+        }
+        if (input.airPlus !== undefined) {
+          setClauses.push(`air_plus = '${input.airPlus}'`);
+        }
+
+        if (setClauses.length > 0) {
+          await client.$executeRawUnsafe(
+            `INSERT INTO oxygen_control_config (control_id, ${input.radioType !== undefined ? "radio_type," : ""} ${input.airPlus !== undefined ? "air_plus," : ""} battery_voltage)
+             VALUES (${controlId}, ${input.radioType !== undefined ? `'${input.radioType}',` : ""} ${input.airPlus !== undefined ? `'${input.airPlus}',` : ""} NULL)
+             ON DUPLICATE KEY UPDATE ${setClauses.join(", ")}`,
+          );
+        }
+
+        // Sync oControl.Radio flag for liveresults
+        if (input.radioType !== undefined) {
+          const radioFlag = input.radioType === "public_radio" ? 1 : 0;
+          await client.oControl.update({
+            where: { Id: controlId },
+            data: { Radio: radioFlag },
+          });
+          await incrementCounter("oControl", controlId);
+        }
+      }
+
+      return { success: true, count: input.controlIds.length };
+    }),
+
+  /**
+   * Record the result of programming a physical control.
+   */
+  recordProgramming: publicProcedure
+    .input(
+      z.object({
+        controlId: z.number().int(),
+        batteryVoltage: z.number(),
+        stationSerial: z.number().int().optional(),
+        memoryClearedAt: z.boolean().optional(),
+      }),
+    )
+    .mutation(async ({ input }) => {
+      const client = await getCompetitionClient();
+      await ensureControlConfigTable(client);
+
+      const batteryLow = input.batteryVoltage < 2.5 ? 1 : 0;
+      const memClause = input.memoryClearedAt
+        ? ", memory_cleared_at = NOW()"
+        : "";
+      const serialClause = input.stationSerial !== undefined
+        ? `, station_serial = ${input.stationSerial}`
+        : "";
+
+      await client.$executeRawUnsafe(
+        `INSERT INTO oxygen_control_config (control_id, battery_voltage, battery_low, checked_at ${input.stationSerial !== undefined ? ", station_serial" : ""})
+         VALUES (${input.controlId}, ${input.batteryVoltage}, ${batteryLow}, NOW() ${input.stationSerial !== undefined ? `, ${input.stationSerial}` : ""})
+         ON DUPLICATE KEY UPDATE
+           battery_voltage = ${input.batteryVoltage},
+           battery_low = ${batteryLow},
+           checked_at = NOW()
+           ${serialClause}
+           ${memClause}`,
+      );
+
+      return { success: true, batteryLow: batteryLow !== 0 };
+    }),
+
+  // ─── Backup punch management ──────────────────────────
+
+  /**
+   * Import backup punches from a control's memory readout.
+   */
+  importBackupPunches: publicProcedure
+    .input(
+      z.object({
+        controlId: z.number().int(),
+        punches: z.array(
+          z.object({
+            cardNo: z.number().int(),
+            punchTime: z.number().int(), // deciseconds since midnight (for MeOS)
+            punchDatetime: z.string().optional(), // full ISO datetime
+            subSecond: z.number().int().min(0).max(255).optional(),
+          }),
+        ),
+      }),
+    )
+    .mutation(async ({ input }) => {
+      const client = await getCompetitionClient();
+      await ensureControlPunchesTable(client);
+
+      if (input.punches.length === 0) return { count: 0 };
+
+      // Deduplicate: skip punches already imported for this control
+      const existing = (await client.$queryRawUnsafe(
+        `SELECT card_no, punch_time FROM oxygen_control_punches WHERE control_id = ?`,
+        input.controlId,
+      )) as Array<{ card_no: number; punch_time: number }>;
+
+      const existingSet = new Set(
+        existing.map((e) => `${e.card_no}:${e.punch_time}`),
+      );
+      const newPunches = input.punches.filter(
+        (p) => !existingSet.has(`${p.cardNo}:${p.punchTime}`),
+      );
+
+      if (newPunches.length === 0) return { count: 0 };
+
+      // Bulk insert new punches with full datetime
+      const values = newPunches
+        .map((p) => {
+          const dt = p.punchDatetime
+            ? `'${new Date(p.punchDatetime).toISOString().slice(0, 23).replace("T", " ")}'`
+            : "NULL";
+          const ss = p.subSecond !== undefined ? String(p.subSecond) : "NULL";
+          return `(${input.controlId}, ${p.cardNo}, ${p.punchTime}, ${dt}, ${ss})`;
+        })
+        .join(", ");
+      await client.$executeRawUnsafe(
+        `INSERT INTO oxygen_control_punches (control_id, card_no, punch_time, punch_datetime, sub_second) VALUES ${values}`,
+      );
+
+      return { count: newPunches.length };
+    }),
+
+  /**
+   * List backup punches for a control, with matched runner names.
+   */
+  listBackupPunches: publicProcedure
+    .input(z.object({ controlId: z.number().int() }))
+    .query(async ({ input }) => {
+      const client = await getCompetitionClient();
+      await ensureControlPunchesTable(client);
+
+      const punches = (await client.$queryRawUnsafe(
+        `SELECT p.id, p.card_no, p.punch_time, p.punch_datetime, p.sub_second,
+                p.imported_at, p.pushed_to_punch,
+                r.Name as runner_name, r.Id as runner_id
+         FROM oxygen_control_punches p
+         LEFT JOIN oRunner r ON r.CardNo = p.card_no AND r.Removed = 0
+         WHERE p.control_id = ?
+         ORDER BY p.punch_datetime, p.punch_time`,
+        input.controlId,
+      )) as Array<{
+        id: number;
+        card_no: number;
+        punch_time: number;
+        punch_datetime: Date | null;
+        sub_second: number | null;
+        imported_at: Date;
+        pushed_to_punch: number;
+        runner_name: string | null;
+        runner_id: number | null;
+      }>;
+
+      return punches.map((p) => ({
+        id: p.id,
+        cardNo: p.card_no,
+        punchTime: p.punch_time,
+        punchDatetime: p.punch_datetime?.toISOString() ?? null,
+        subSecond: p.sub_second,
+        importedAt: fmtDatetimeLocal(p.imported_at),
+        pushedToPunch: p.pushed_to_punch !== 0,
+        runnerName: p.runner_name,
+        runnerId: p.runner_id,
+      }));
+    }),
+
+  /**
+   * Push a single backup punch into the oPunch table (manual import).
+   */
+  pushBackupPunch: publicProcedure
+    .input(z.object({ punchId: z.number().int() }))
+    .mutation(async ({ input }) => {
+      const client = await getCompetitionClient();
+      await ensureControlPunchesTable(client);
+
+      // Fetch the backup punch
+      const rows = (await client.$queryRawUnsafe(
+        "SELECT id, control_id, card_no, punch_time FROM oxygen_control_punches WHERE id = ?",
+        input.punchId,
+      )) as Array<{
+        id: number;
+        control_id: number;
+        card_no: number;
+        punch_time: number;
+      }>;
+      if (rows.length === 0) throw new Error("Punch not found");
+      const bp = rows[0];
+
+      // Get control code from oControl.Numbers (first code)
+      const control = await client.oControl.findFirst({
+        where: { Id: bp.control_id, Removed: false },
+        select: { Numbers: true },
+      });
+      if (!control) throw new Error("Control not found");
+      const controlCode = parseInt(control.Numbers.split(";")[0]?.trim() ?? "0", 10);
+      if (isNaN(controlCode) || controlCode <= 0) throw new Error("Invalid control code");
+
+      // Create oPunch record
+      await client.oPunch.create({
+        data: {
+          CardNo: bp.card_no,
+          Time: bp.punch_time,
+          Type: controlCode,
+          Origin: 5, // origin=5 for "imported from backup"
+        },
+      });
+
+      // Mark as pushed
+      await client.$executeRawUnsafe(
+        "UPDATE oxygen_control_punches SET pushed_to_punch = 1 WHERE id = ?",
+        input.punchId,
+      );
+
+      return { success: true };
+    }),
+
+  /**
+   * List all backup punches across all controls, grouped by control.
+   */
+  listAllBackupPunches: publicProcedure.query(async () => {
+    const client = await getCompetitionClient();
+    await ensureControlPunchesTable(client);
+
+    const punches = (await client.$queryRawUnsafe(
+      `SELECT p.id, p.control_id, p.card_no, p.punch_time, p.punch_datetime, p.sub_second,
+              p.imported_at, p.pushed_to_punch,
+              r.Name as runner_name, r.Id as runner_id,
+              c.Numbers as control_codes, c.Name as control_name
+       FROM oxygen_control_punches p
+       LEFT JOIN oRunner r ON r.CardNo = p.card_no AND r.Removed = 0
+       LEFT JOIN oControl c ON c.Id = p.control_id AND c.Removed = 0
+       ORDER BY p.control_id, p.punch_datetime, p.punch_time`,
+    )) as Array<{
+      id: number;
+      control_id: number;
+      card_no: number;
+      punch_time: number;
+      punch_datetime: Date | null;
+      sub_second: number | null;
+      imported_at: Date;
+      pushed_to_punch: number;
+      runner_name: string | null;
+      runner_id: number | null;
+      control_codes: string | null;
+      control_name: string | null;
+    }>;
+
+    return punches.map((p) => ({
+      id: p.id,
+      controlId: p.control_id,
+      controlCodes: p.control_codes ?? "",
+      controlName: p.control_name ?? "",
+      cardNo: p.card_no,
+      punchTime: p.punch_time,
+      punchDatetime: p.punch_datetime instanceof Date ? p.punch_datetime.toISOString() : (p.punch_datetime as string | null),
+      subSecond: p.sub_second,
+      // MySQL NOW() returns server-local time but Prisma treats DATETIME as UTC.
+      // Format manually to avoid double timezone shift.
+      importedAt: fmtDatetimeLocal(p.imported_at),
+      pushedToPunch: !!p.pushed_to_punch,
+      runnerName: p.runner_name,
+      runnerId: p.runner_id,
+    }));
+  }),
+
+  // ─── Competition-wide AIR+ config ─────────────────────
+
+  /**
+   * Get competition-wide AIR+ setting.
+   */
+  getAirPlusConfig: publicProcedure.query(async () => {
+    const client = await getCompetitionClient();
+    await ensureCompetitionConfigTable(client);
+
+    const rows = (await client.$queryRawUnsafe(
+      "SELECT air_plus, awake_hours FROM oxygen_competition_config WHERE id = 1",
+    )) as Array<{ air_plus: number; awake_hours: number }>;
+
+    return {
+      airPlusEnabled: rows.length > 0 && rows[0].air_plus !== 0,
+      awakeHours: rows.length > 0 ? rows[0].awake_hours : 6,
+    };
+  }),
+
+  /**
+   * Set competition-wide AIR+ and awake hours settings.
+   */
+  setAirPlusConfig: publicProcedure
+    .input(z.object({
+      enabled: z.boolean().optional(),
+      awakeHours: z.number().int().min(1).max(12).optional(),
+    }))
+    .mutation(async ({ input }) => {
+      const client = await getCompetitionClient();
+      await ensureCompetitionConfigTable(client);
+
+      const setClauses: string[] = [];
+      if (input.enabled !== undefined) {
+        setClauses.push(`air_plus = ${input.enabled ? 1 : 0}`);
+      }
+      if (input.awakeHours !== undefined) {
+        setClauses.push(`awake_hours = ${input.awakeHours}`);
+      }
+      if (setClauses.length > 0) {
+        await client.$executeRawUnsafe(
+          `UPDATE oxygen_competition_config SET ${setClauses.join(", ")} WHERE id = 1`,
+        );
+      }
+
+      return { success: true };
+    }),
+
+  /**
+   * Return server time + NTP verification.
+   * Checks the server clock against Cloudflare's trace endpoint.
+   */
+  serverTime: publicProcedure.query(async () => {
+    const serverMs = Date.now();
+    let ntpDriftMs: number | null = null;
+    let ntpSource: string | null = null;
+
+    try {
+      const t1 = Date.now();
+      const resp = await fetch("https://1.1.1.1/cdn-cgi/trace", {
+        signal: AbortSignal.timeout(3000),
+      });
+      const t2 = Date.now();
+      const text = await resp.text();
+      const tsMatch = text.match(/ts=(\d+\.?\d*)/);
+      if (tsMatch) {
+        const cfUnixSec = parseFloat(tsMatch[1]);
+        const localSec = (t1 + t2) / 2 / 1000;
+        ntpDriftMs = Math.round((localSec - cfUnixSec) * 1000);
+        ntpSource = "Cloudflare";
+      }
+    } catch {
+      // NTP check failed — still return server time
+    }
+
+    return { unixMs: serverMs, ntpDriftMs, ntpSource };
+  }),
 });

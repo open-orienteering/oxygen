@@ -66,6 +66,7 @@ export function ClassesPage() {
     name: (a: Cls, b: Cls) => a.name.localeCompare(b.name),
     course: (a: Cls, b: Cls) => (a.courseNames[0] ?? "").localeCompare(b.courseNames[0] ?? ""),
     runners: (a: Cls, b: Cls) => a.runnerCount - b.runnerCount,
+    fee: (a: Cls, b: Cls) => a.classFee - b.classFee,
     sex: (a: Cls, b: Cls) => a.sex.localeCompare(b.sex),
     type: (a: Cls, b: Cls) => (a.classType ?? "").localeCompare(b.classType ?? ""),
   }), []);
@@ -183,6 +184,7 @@ export function ClassesPage() {
                       <SortHeader label="Name" active={isFiltered ? sort.key === "name" : undefined} direction={sort.dir} onClick={() => toggle("name")} />
                       <SortHeader label="Course" active={isFiltered ? sort.key === "course" : undefined} direction={sort.dir} onClick={() => toggle("course")} />
                       <SortHeader label="Runners" active={isFiltered ? sort.key === "runners" : undefined} direction={sort.dir} onClick={() => toggle("runners")} className="w-24" />
+                      <SortHeader label="Fee" active={isFiltered ? sort.key === "fee" : undefined} direction={sort.dir} onClick={() => toggle("fee")} className="hidden sm:table-cell w-20" />
                       <SortHeader label="Sex" active={isFiltered ? sort.key === "sex" : undefined} direction={sort.dir} onClick={() => toggle("sex")} className="hidden md:table-cell w-24" />
                       <SortHeader label="Type" active={isFiltered ? sort.key === "type" : undefined} direction={sort.dir} onClick={() => toggle("type")} className="hidden lg:table-cell" />
                       <th className="px-4 py-2.5 text-left font-medium text-slate-500 hidden xl:table-cell w-32">Options</th>
@@ -309,6 +311,13 @@ function SortableClassRow({
         </td>
         <td className="px-4 py-2.5 tabular-nums text-slate-600">
           {cls.runnerCount}
+        </td>
+        <td className="px-4 py-2.5 tabular-nums text-right hidden sm:table-cell">
+          {cls.classFee > 0 ? (
+            <span className="text-slate-600">{cls.classFee} kr</span>
+          ) : (
+            <span className="text-slate-300">—</span>
+          )}
         </td>
         <td className="px-4 py-2.5 text-slate-500 hidden md:table-cell">
           {formatSex(cls.sex)}
@@ -441,6 +450,7 @@ function ClassInlineDetail({ classId }: { classId: number }) {
   const [editSex, setEditSex] = useState<string | null>(null);
   const [editLowAge, setEditLowAge] = useState<string | null>(null);
   const [editHighAge, setEditHighAge] = useState<string | null>(null);
+  const [editFee, setEditFee] = useState<string | null>(null);
   const [editCourseIds, setEditCourseIds] = useState<number[] | null>(null);
 
   if (detail.isLoading) {
@@ -597,6 +607,28 @@ function ClassInlineDetail({ classId }: { classId: number }) {
                 <span className="text-sm text-slate-600">No timing</span>
               </label>
             </div>
+          </div>
+
+          {/* Entry fee */}
+          <div>
+            <label className="block text-xs font-medium text-slate-500 mb-1">Entry fee (kr)</label>
+            <input
+              type="number"
+              value={editFee ?? String(d.classFee)}
+              onChange={(e) => setEditFee(e.target.value)}
+              onBlur={() => {
+                if (editFee !== null) {
+                  const val = parseInt(editFee, 10);
+                  if (!isNaN(val) && val !== d.classFee) {
+                    handleSave("classFee", val);
+                  }
+                }
+                setEditFee(null);
+              }}
+              className="w-32 px-3 py-1.5 border border-slate-200 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 tabular-nums"
+              min={0}
+              placeholder="0"
+            />
           </div>
 
           {/* Course assignment */}

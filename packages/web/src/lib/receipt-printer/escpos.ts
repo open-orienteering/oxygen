@@ -15,7 +15,7 @@
 
 import { formatMeosTime, formatRunningTime, runnerStatusLabel } from "@oxygen/shared";
 import type { RunnerStatusValue } from "@oxygen/shared";
-import type { FinishReceiptData } from "./types.js";
+import type { FinishReceiptData, RegistrationReceiptData } from "./types.js";
 
 // Standard line width for 80mm paper at default font size
 const LINE_WIDTH = 42;
@@ -352,6 +352,16 @@ export function buildFinishReceipt(data: FinishReceiptData): Uint8Array {
     b.separator();
   }
 
+  // ── Custom message ───────────────────────────────────────────
+  if (data.customMessage) {
+    b.alignCenter();
+    for (const line of wordWrap(data.customMessage, LINE_WIDTH)) {
+      b.line(line);
+    }
+    b.alignLeft();
+    b.separator();
+  }
+
   // ── QR code ───────────────────────────────────────────────────
   if (data.qrUrl) {
     b.alignCenter();
@@ -373,5 +383,70 @@ export function buildFinishReceipt(data: FinishReceiptData): Uint8Array {
   // ── Cut ──────────────────────────────────────────────────────
   b.cut();
 
+  return b.build();
+}
+
+// ─── Registration Receipt ─────────────────────────────────────
+
+export function buildRegistrationReceipt(data: RegistrationReceiptData): Uint8Array {
+  const b = new EscPosBuilder();
+  b.init();
+
+  // ── Logo ──────────────────────────────────────────────────────
+  if (data.logoRaster) {
+    b.alignCenter();
+    b.rasterImage(data.logoRaster.widthBytes, data.logoRaster.heightDots, data.logoRaster.data);
+    b.feedDots(10);
+    b.alignLeft();
+  }
+
+  // ── Header ────────────────────────────────────────────────────
+  b.alignCenter();
+  b.sizeDouble();
+  b.line(data.competitionName);
+  b.sizeNormal();
+  if (data.competitionDate) b.line(data.competitionDate);
+  b.lf();
+  b.boldOn();
+  b.line("REGISTRATION");
+  b.boldOff();
+  b.alignLeft();
+  b.separator();
+
+  // ── Runner info ───────────────────────────────────────────────
+  b.leftRight("Name:", data.runner.name);
+  if (data.runner.clubName) b.leftRight("Club:", data.runner.clubName);
+  b.leftRight("Class:", data.runner.className);
+  b.leftRight("SI Card:", String(data.runner.cardNo));
+  b.leftRight("Start:", data.startTime || "Free start");
+  b.separator();
+
+  // ── Payment ───────────────────────────────────────────────────
+  if (data.payment) {
+    b.leftRight("Payment:", data.payment.method);
+    b.leftRight("Amount:", `${data.payment.amount} kr`);
+    b.separator();
+  }
+
+  // ── Custom message ───────────────────────────────────────────
+  if (data.customMessage) {
+    b.lf();
+    b.alignCenter();
+    for (const line of wordWrap(data.customMessage, LINE_WIDTH)) {
+      b.line(line);
+    }
+    b.alignLeft();
+    b.separator();
+  }
+
+  // ── Footer ────────────────────────────────────────────────────
+  b.lf();
+  b.alignCenter();
+  const timestamp = new Date().toLocaleString("sv-SE", { hour: "2-digit", minute: "2-digit" });
+  b.line(`Printed ${timestamp}`);
+  b.lf();
+  b.alignLeft();
+
+  b.cut();
   return b.build();
 }

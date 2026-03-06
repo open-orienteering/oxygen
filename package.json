@@ -25,6 +25,7 @@
     "tsx": "^4.21.0"
   },
   "dependencies": {
+    "qrcode.react": "^4.2.0",
     "svg-control-descriptions": "^2.1.0"
   }
 }

@@ -26,9 +26,10 @@ export function CardNotification() {
   const timerRef = useRef<any>(undefined);
 
   const onCardPage = location.pathname.includes("/card-readout");
+  const onRegistrationPage = location.pathname.includes("/registration");
 
   useEffect(() => {
-    if (!currentCard || onCardPage || isOnCardReadoutPage) return;
+    if (!currentCard || onCardPage || onRegistrationPage || isOnCardReadoutPage) return;
 
     setCard(currentCard);
     setVisible(true);
