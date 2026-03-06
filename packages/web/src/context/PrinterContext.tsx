@@ -20,7 +20,9 @@ import {
   WebUsbPrinterDriver,
   isWebUsbSupported,
   buildFinishReceipt,
+  buildRegistrationReceipt,
   type FinishReceiptData,
+  type RegistrationReceiptData,
 } from "../lib/receipt-printer/index.js";
 
 // ─── Types ───────────────────────────────────────────────────
@@ -40,6 +42,8 @@ interface PrinterContextValue {
   disconnect(): void;
   /** Print a finish receipt. Throws if not connected or print fails. */
   print(data: FinishReceiptData): Promise<void>;
+  /** Print a registration receipt. Throws if not connected or print fails. */
+  printRegistration(data: RegistrationReceiptData): Promise<void>;
 }
 
 // ─── Context ─────────────────────────────────────────────────
@@ -103,9 +107,26 @@ export function PrinterProvider({ children }: { children: ReactNode }) {
     }
   }, []);
 
+  const printRegistration = useCallback(async (data: RegistrationReceiptData) => {
+    const driver = driverRef.current;
+    if (!driver.connected) throw new Error("Printer not connected");
+    setLastError(null);
+    setPrinting(true);
+    try {
+      const bytes = buildRegistrationReceipt(data);
+      await driver.sendBytes(bytes);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      setLastError(msg);
+      throw err;
+    } finally {
+      setPrinting(false);
+    }
+  }, []);
+
   return (
     <PrinterContext.Provider
-      value={{ supported, connected, printing, lastError, connect, disconnect, print }}
+      value={{ supported, connected, printing, lastError, connect, disconnect, print, printRegistration }}
     >
       {children}
     </PrinterContext.Provider>

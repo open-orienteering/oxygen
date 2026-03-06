@@ -45,8 +45,11 @@ export interface RegistrationFormState {
   sex: string;
   birthYear: string;
   phone: string;
-  paymentMode: "billed" | "on-site" | "";
-  writeToCard?: boolean;
+  paymentMode: "billed" | "on-site" | "card" | "swish" | "";
+  fee?: number;
+  swishNumber?: string;
+  clubEventorId?: number;
+  competitionName?: string;
 }
 
 export interface KioskRegistrationStateMessage {
@@ -64,12 +67,8 @@ export interface KioskRegistrationCompleteMessage {
     clubName: string;
     startTime: string;
     cardNo: number;
+    clubEventorId?: number;
   };
-}
-
-export interface KioskRegistrationConfirmMessage {
-  type: "registration-confirm";
-  confirmed: boolean;
 }
 
 export interface KioskCardReadingMessage {
@@ -91,7 +90,6 @@ export type KioskMessage =
   | KioskCardReadingMessage
   | KioskRegistrationStateMessage
   | KioskRegistrationCompleteMessage
-  | KioskRegistrationConfirmMessage
   | KioskResetMessage
   | KioskPingMessage;
 

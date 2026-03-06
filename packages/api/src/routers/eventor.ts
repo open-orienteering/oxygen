@@ -35,6 +35,7 @@ import {
 } from "../eventor.js";
 import { type EventorEnvironment } from "@oxygen/shared";
 import { computeClassPlacements } from "../results.js";
+import { parsePunches, parseCourseControls, matchPunchesToCourse, type ParsedPunch } from "./cardReadout.js";
 
 // In-memory store for the validated API key and organisation, keyed by environment.
 const storedKeys = new Map<
@@ -393,7 +394,10 @@ export const eventorRouter = router({
         }
       }
 
-      // 7. Store Eventor event ID, organiser, and sync timestamp in oEvent
+      // 7. Derive class fees from runner entry fees
+      await deriveClassFees(client);
+
+      // 8. Store Eventor event ID, organiser, and sync timestamp in oEvent
       const event = await client.oEvent.findFirst({ where: { Removed: false } });
       if (event) {
         // Resolve organiser name: use provided name, or look up club by ExtId
@@ -769,11 +773,33 @@ export const eventorRouter = router({
       }
     }
 
-    // 5. Update sync timestamp (and organizer if missing)
+    // 5. Derive class fees from runner entry fees
+    await deriveClassFees(client);
+
+    // 6. Update sync timestamp (and organizer if missing)
     const syncUpdateData: Record<string, unknown> = { ImportStamp: new Date().toISOString() };
     if (!event.Organizer) {
       const organiser = await fetchEventOrganiser(apiKey, eventorEventId, env);
       if (organiser?.name) syncUpdateData.Organizer = organiser.name;
+      // Fetch and store organiser logo if available
+      if (organiser?.id && organiser.id > 0) {
+        try {
+          const [small, large] = await Promise.all([
+            fetchClubLogo(organiser.id, apiKey, "SmallIcon"),
+            fetchClubLogo(organiser.id, apiKey, "LargeIcon"),
+          ]);
+          if (small) {
+            await ensureLogoTable(client);
+            await client.oxygen_club_logo.upsert({
+              where: { EventorId: organiser.id },
+              create: { EventorId: organiser.id, SmallPng: small as any, ...(large ? { LargePng: large as any } : {}) },
+              update: { SmallPng: small as any, ...(large ? { LargePng: large as any } : {}), UpdatedAt: new Date() },
+            });
+          }
+        } catch {
+          // Logo fetch failure is not critical
+        }
+      }
     }
     await client.oEvent.update({
       where: { Id: event.Id },
@@ -799,11 +825,14 @@ export const eventorRouter = router({
 
     const { apiKey } = await requireApiKey(env);
 
-    const [event, classes, runners, clubs] = await Promise.all([
+    const [event, classes, runners, clubs, courses, allPunches, allCards] = await Promise.all([
       client.oEvent.findFirst({ where: { Removed: false } }),
       client.oClass.findMany({ where: { Removed: false } }),
       client.oRunner.findMany({ where: { Removed: false } }),
       client.oClub.findMany({ where: { Removed: false } }),
+      client.oCourse.findMany({ where: { Removed: false } }),
+      client.oPunch.findMany({ where: { Removed: false }, orderBy: { Time: "asc" } }),
+      client.oCard.findMany({ where: { Removed: false } }),
     ]);
 
     if (!event || !event.ExtId) {
@@ -812,6 +841,16 @@ export const eventorRouter = router({
 
     const classMap = new Map(classes.map((c) => [c.Id, c]));
     const clubMap = new Map(clubs.map((c) => [c.Id, c]));
+    const courseMap = new Map(courses.map((c) => [c.Id, c]));
+    const cardById = new Map(allCards.map((c) => [c.Id, c]));
+
+    // Group free punches by CardNo for efficient lookup
+    const punchesByCardNo = new Map<number, typeof allPunches>();
+    for (const p of allPunches) {
+      const list = punchesByCardNo.get(p.CardNo) ?? [];
+      list.push(p);
+      punchesByCardNo.set(p.CardNo, list);
+    }
 
     // Group runners by class and compute placements once
     const byClass = new Map<number, typeof runners>();
@@ -843,6 +882,60 @@ export const eventorRouter = router({
       const cls = classMap.get(r.Class);
       const club = clubMap.get(r.Club);
       const p = placementByRunner.get(r.Id);
+
+      // Late fee detection (matching MeOS hasLateEntryFee, oRunner.cpp:7240)
+      let isLateFee = false;
+      if (cls && r.Fee > 0) {
+        const normalFee = cls.ClassFee;
+        const highFee = cls.HighClassFee;
+        const highFee2 = cls.SecondHighClassFee;
+        if (r.Fee !== normalFee && normalFee > 0) {
+          if ((r.Fee === highFee && highFee > normalFee) ||
+              (r.Fee === highFee2 && highFee2 > normalFee)) {
+            isLateFee = true;
+          }
+        }
+      }
+
+      // Normalize BirthYear (MeOS stores YYYY or YYYYMMDD)
+      const birthYear = r.BirthYear > 9999
+        ? Math.floor(r.BirthYear / 10000)
+        : r.BirthYear;
+
+      // Compute split times from punches + course
+      let splitTimes: ResultForUpload["splitTimes"];
+      const courseId = r.Course || cls?.Course || 0;
+      const course = courseId ? courseMap.get(courseId) : undefined;
+      // Only compute splits for runners with a result (status > 0, not DNS/Cancel)
+      if (course && r.Status > 0 && r.Status !== 20 && r.Status !== 99) {
+        const courseControls = parseCourseControls(course.Controls);
+        if (courseControls.length > 0) {
+          // Merge card punches + free punches
+          const card = r.Card ? cardById.get(r.Card) : undefined;
+          const cardPunches = parsePunches(card?.Punches ?? "");
+          const freePunches: ParsedPunch[] = (punchesByCardNo.get(r.CardNo) ?? []).map((p) => ({
+            type: p.Type,
+            time: p.Time,
+            source: "free" as const,
+          }));
+          const merged = [...cardPunches, ...freePunches].sort((a, b) => a.time - b.time);
+          const { matches, extraPunches, startTime } = matchPunchesToCourse(merged, courseControls, r.StartTime);
+
+          splitTimes = matches.map((m) => ({
+            controlCode: m.controlCode,
+            time: m.status === "ok" && m.cumTime > 0 ? Math.round(m.cumTime / 10) : undefined,
+            status: m.status === "ok" ? "ok" as const : "missing" as const,
+          }));
+          // Add extra punches as "additional" (control codes >= 30, matching MeOS filter)
+          for (const ep of extraPunches) {
+            if (ep.type >= 30) {
+              const time = ep.time > startTime ? Math.round((ep.time - startTime) / 10) : undefined;
+              splitTimes.push({ controlCode: ep.type, time, status: "additional" });
+            }
+          }
+        }
+      }
+
       return {
         personExtId: r.ExtId ? r.ExtId.toString() : undefined,
         name: r.Name,
@@ -856,6 +949,15 @@ export const eventorRouter = router({
         status: r.Status,
         place: p?.place ?? 0,
         noTiming: cls?.NoTiming === 1,
+        fee: r.Fee || undefined,
+        cardFee: r.CardFee || undefined,
+        paid: r.Paid || undefined,
+        taxable: r.Taxable || undefined,
+        isLateFee,
+        birthYear: birthYear || undefined,
+        nationality: r.Nationality || undefined,
+        bib: r.Bib || undefined,
+        splitTimes,
       };
     });
 
@@ -866,6 +968,8 @@ export const eventorRouter = router({
       event.Date,
       uploadData,
       env,
+      event.CurrencyCode || "",
+      event.CurrencyFactor || 100,
     );
 
     return { success: true, runnerCount: uploadData.length };
@@ -1298,6 +1402,40 @@ export const eventorRouter = router({
     }),
 
   /**
+   * Look up a runner by exact SI card number in the global runner database.
+   * Used to pre-fill registration form when an unknown card is detected.
+   */
+  lookupByCardNo: publicProcedure
+    .input(z.object({ cardNo: z.number().int().positive() }))
+    .query(async ({ input }) => {
+      const conn = await getMainDbConnection();
+      try {
+        await ensureRunnerDbTable(conn);
+        const [rows] = await conn.execute<import("mysql2/promise").RowDataPacket[]>(
+          `SELECT r.ExtId, r.Name, r.CardNo, r.ClubId, r.BirthYear, r.Sex, r.Nationality,
+                  COALESCE(c.Name, '') as ClubName, COALESCE(c.EventorId, 0) as ClubEventorId
+           FROM oxygen_runner_db r
+           LEFT JOIN oxygen_club_db c ON r.ClubId = c.EventorId
+           WHERE r.CardNo = ?
+           LIMIT 1`,
+          [input.cardNo],
+        );
+        if (!rows.length) return null;
+        const r = rows[0] as Record<string, unknown>;
+        return {
+          name: r.Name as string,
+          cardNo: Number(r.CardNo),
+          clubEventorId: Number(r.ClubEventorId || r.ClubId),
+          clubName: r.ClubName as string,
+          birthYear: Number(r.BirthYear),
+          sex: r.Sex as string,
+        };
+      } finally {
+        await conn.end();
+      }
+    }),
+
+  /**
    * Get the status of the global runner database.
    */
   runnerDbStatus: publicProcedure.query(async () => {
@@ -1317,6 +1455,46 @@ export const eventorRouter = router({
 
 function formatDate(d: Date): string {
   return d.toISOString().split("T")[0];
+}
+
+/**
+ * Derive ClassFee from the most common runner Fee in each class.
+ * Runner Fee is centesimal (11000 = 110 SEK), ClassFee is whole units (110 = 110 SEK).
+ */
+async function deriveClassFees(
+  client: Awaited<ReturnType<typeof getCompetitionClient>>,
+): Promise<void> {
+  const runners = await client.oRunner.findMany({
+    where: { Removed: false, Fee: { gt: 0 } },
+    select: { Class: true, Fee: true },
+  });
+  if (runners.length === 0) return;
+
+  // Group fees by class
+  const feesByClass = new Map<number, number[]>();
+  for (const r of runners) {
+    if (r.Class <= 0) continue;
+    let arr = feesByClass.get(r.Class);
+    if (!arr) { arr = []; feesByClass.set(r.Class, arr); }
+    arr.push(r.Fee);
+  }
+
+  // For each class, find the mode (most common fee) and update ClassFee
+  for (const [classId, fees] of feesByClass) {
+    const counts = new Map<number, number>();
+    for (const f of fees) counts.set(f, (counts.get(f) ?? 0) + 1);
+    let modeFee = 0, maxCount = 0;
+    for (const [fee, count] of counts) {
+      if (count > maxCount) { modeFee = fee; maxCount = count; }
+    }
+    if (modeFee > 0) {
+      const classFee = Math.round(modeFee / 100); // centesimal → whole units
+      await client.oClass.update({
+        where: { Id: classId },
+        data: { ClassFee: classFee },
+      });
+    }
+  }
 }
 
 /** Sync clubs referenced in entries into the database. Returns mapping from Eventor org ID to local club ID. */

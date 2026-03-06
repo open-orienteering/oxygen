@@ -189,6 +189,8 @@ export interface ClassInfo {
   courseId: number;
   sortIndex: number;
   runnerCount?: number;
+  /** Normal entry fee in whole currency units (e.g. 110 = 110 SEK) */
+  classFee?: number;
 }
 
 /** Club summary */
@@ -232,6 +234,7 @@ export interface CourseInfo {
   length: number;
   controls: string;
   controlCount: number;
+  numberOfMaps?: number;
 }
 
 /** Runner summary (list view) */
@@ -432,6 +435,22 @@ export const CONTROL_STATUS_OPTIONS: {
     { value: ControlStatus.Check, label: "Check", description: "Check control (pre-start)" },
   ];
 
+/** Radio type for control configuration */
+export type RadioType = "normal" | "internal_radio" | "public_radio";
+
+/** AIR+ override for a control */
+export type AirPlusOverride = "default" | "on" | "off";
+
+/** Control configuration from oxygen_control_config */
+export interface ControlConfig {
+  radioType: RadioType;
+  airPlus: AirPlusOverride;
+  batteryVoltage: number | null;
+  batteryLow: boolean | null;
+  checkedAt: string | null; // ISO timestamp
+  memoryClearedAt: string | null; // ISO timestamp
+}
+
 /** Control summary (list view) */
 export interface ControlInfo {
   id: number;
@@ -441,6 +460,7 @@ export interface ControlInfo {
   timeAdjust: number;
   minTime: number;
   runnerCount: number; // total runners on courses that include this control
+  config: ControlConfig | null; // null if no oxygen_control_config row
 }
 
 /** Control detail with course usage */
@@ -510,6 +530,8 @@ export interface ClassSummary {
   freeStart: boolean;
   noTiming: boolean;
   classType: string;
+  /** Entry fee in whole currency units (e.g. 110 = 110 SEK) */
+  classFee: number;
 }
 
 /** Full class detail for editing */

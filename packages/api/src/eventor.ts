@@ -130,6 +130,22 @@ export interface ResultForUpload {
   status: number; // MeOS status
   place?: number; // 1-based, 0 or undefined = no placement
   noTiming?: boolean; // class has no timing/ranking
+  // Fee data (integer currency units, e.g. 15000 = 150.00 SEK when factor=100)
+  fee?: number;
+  cardFee?: number;
+  paid?: number;
+  taxable?: number;
+  isLateFee?: boolean; // derived from class fee comparison
+  // Person/result fields
+  birthYear?: number;
+  nationality?: string;
+  bib?: string;
+  // Split times per control
+  splitTimes?: {
+    controlCode: number;
+    time?: number; // seconds from start (undefined = no time available)
+    status: "ok" | "missing" | "additional";
+  }[];
 }
 
 /**
@@ -398,9 +414,11 @@ export async function fetchEventOrganiser(
     const xml = await eventorFetch(`event/${eventId}`, apiKey, env);
     const parsed = parser.parse(xml);
     const ev = parsed.Event ?? parsed;
-    const organiser = ev.Organiser ?? ev.Organisation ?? {};
-    const id = safeInt(organiser.OrganisationId ?? organiser["@_id"] ?? 0);
-    const name = safeStr(organiser.Name ?? "");
+    const rawOrganiser = ev.Organiser ?? ev.Organisation ?? {};
+    // Eventor XML nests as <Organiser><Organisation>...</Organisation></Organiser>
+    const org = rawOrganiser.Organisation ?? rawOrganiser;
+    const id = safeInt(org.OrganisationId ?? org["@_id"] ?? 0);
+    const name = safeStr(org.Name ?? "");
     if (!name && !id) return null;
     return { name, id };
   } catch {
@@ -1043,6 +1061,89 @@ export async function fetchClubLogo(
 }
 
 /**
+ * Format a currency amount for IOF XML output.
+ * MeOS stores amounts as integers (e.g. 15000 = 150.00 SEK when factor=100).
+ */
+function formatCurrencyAmount(amount: number, factor: number): string {
+  if (factor <= 1) return String(amount);
+  const whole = Math.floor(amount / factor);
+  const frac = amount % factor;
+  return `${whole}.${String(frac).padStart(2, "0")}`;
+}
+
+/**
+ * Build an IOF Amount element with optional currency attribute.
+ */
+function iofAmount(tag: string, amount: number, factor: number, currencyCode: string): Record<string, unknown> | null {
+  if (amount <= 0) return null;
+  const value = formatCurrencyAmount(amount, factor);
+  if (currencyCode) {
+    return { [tag]: { "@_currency": currencyCode, "#text": value } };
+  }
+  return { [tag]: value };
+}
+
+/**
+ * Build AssignedFee element(s) for a runner, matching MeOS writeAssignedFee.
+ */
+function buildAssignedFee(
+  r: ResultForUpload,
+  factor: number,
+  currencyCode: string,
+): Record<string, unknown>[] {
+  const fee = r.fee ?? 0;
+  const taxable = r.taxable ?? 0;
+  const cardFee = r.cardFee ?? 0;
+  let paid = r.paid ?? 0;
+
+  if (fee === 0 && taxable === 0 && paid === 0) return [];
+
+  // Deduct card rental from paid (card rental has its own ServiceRequest)
+  if (paid >= cardFee && cardFee > 0) {
+    paid -= cardFee;
+  }
+
+  const feeType = r.isLateFee ? "Late" : "Normal";
+  const assignedFee: Record<string, unknown> = {
+    Fee: {
+      "@_type": feeType,
+      Name: "Entry fee",
+      ...iofAmount("Amount", fee, factor, currencyCode),
+      ...iofAmount("TaxableAmount", taxable, factor, currencyCode),
+    },
+    ...iofAmount("PaidAmount", paid, factor, currencyCode),
+  };
+
+  return [{ AssignedFee: assignedFee }];
+}
+
+/**
+ * Build ServiceRequest for card rental, matching MeOS writeRentalCardService.
+ */
+function buildCardRentalService(
+  cardFee: number,
+  paid: number,
+  factor: number,
+  currencyCode: string,
+): Record<string, unknown> | null {
+  if (cardFee <= 0) return null;
+  const paidCard = paid >= cardFee;
+  return {
+    ServiceRequest: {
+      Service: { "@_type": "RentalCard", Name: "Card Rental" },
+      RequestedQuantity: 1,
+      AssignedFee: {
+        Fee: {
+          Name: "Card Rental Fee",
+          ...iofAmount("Amount", cardFee, factor, currencyCode),
+        },
+        ...(paidCard ? iofAmount("PaidAmount", cardFee, factor, currencyCode) : {}),
+      },
+    },
+  };
+}
+
+/**
  * Upload results to Eventor.
  * Only enabled for Test-Eventor for safety.
  */
@@ -1053,10 +1154,14 @@ export async function uploadResults(
   eventDate: string,
   results: ResultForUpload[],
   env: EventorEnvironment = "prod",
+  currencyCode = "",
+  currencyFactor = 100,
 ): Promise<void> {
   if (env !== "test") {
     throw new Error("Results upload is only supported for Test-Eventor.");
   }
+
+  const factor = currencyFactor > 0 ? currencyFactor : 100;
 
   // Group by class
   const classMap = new Map<string, ResultForUpload[]>();
@@ -1105,6 +1210,22 @@ export async function uploadResults(
             ? Math.round((r.finishTime - r.startTime) / 10)
             : undefined;
 
+          // Fee elements (matching MeOS writeAssignedFee + writeRentalCardService)
+          const assignedFees = buildAssignedFee(r, factor, currencyCode);
+          const cardRental = buildCardRentalService(r.cardFee ?? 0, r.paid ?? 0, factor, currencyCode);
+
+          // Split times (matching MeOS iof30interface.cpp:3646-3706)
+          const splitTimeElements = (r.splitTimes ?? []).map((s) => {
+            if (s.status === "missing") {
+              return { "@_status": "Missing", ControlCode: s.controlCode };
+            }
+            const el: Record<string, unknown> = {};
+            if (s.status === "additional") el["@_status"] = "Additional";
+            el.ControlCode = s.controlCode;
+            if (s.time != null && s.time > 0 && hasTiming) el.Time = s.time;
+            return el;
+          });
+
           return {
             Person: {
               ...(r.personExtId ? { Id: r.personExtId } : {}),
@@ -1112,6 +1233,8 @@ export async function uploadResults(
                 Family: family,
                 Given: given,
               },
+              ...(r.birthYear && r.birthYear > 1900 ? { BirthDate: `${r.birthYear}-01-01` } : {}),
+              ...(r.nationality ? { Nationality: { "@_code": r.nationality } } : {}),
             },
             ...(r.clubName
               ? {
@@ -1122,15 +1245,19 @@ export async function uploadResults(
                 }
               : {}),
             Result: {
+              ...(r.bib ? { BibNumber: r.bib } : {}),
               ...(r.startTime && r.startTime > 0 ? { StartTime: formatIofTime(eventDate, r.startTime) } : {}),
               ...(hasTiming && r.finishTime && r.finishTime > 0 ? { FinishTime: formatIofTime(eventDate, r.finishTime) } : {}),
               ...(runningTime !== undefined ? { Time: runningTime } : {}),
               ...(r.place && r.place > 0 ? { Position: r.place } : {}),
               Status: statusStr,
+              ...(splitTimeElements.length > 0 ? { SplitTime: splitTimeElements } : {}),
               ...(r.cardNo && r.cardNo > 0
                 ? { ControlCard: r.cardNo }
                 : {}),
             },
+            ...Object.assign({}, ...assignedFees),
+            ...(cardRental ?? {}),
           };
         }),
       })),

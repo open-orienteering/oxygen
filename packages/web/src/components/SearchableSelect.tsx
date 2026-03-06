@@ -7,6 +7,8 @@ export interface SelectOption {
   icon?: ReactNode;
   /** Optional secondary text shown after the label */
   suffix?: string;
+  /** Disable this option (shown but not selectable) */
+  disabled?: boolean;
 }
 
 /**
@@ -27,6 +29,7 @@ export function SearchableSelect({
   searchPlaceholder = "Search...",
   className = "",
   testId,
+  alwaysShowSearch = false,
 }: {
   value: number | string;
   onChange: (value: number | string) => void;
@@ -36,6 +39,8 @@ export function SearchableSelect({
   className?: string;
   /** data-testid for E2E tests */
   testId?: string;
+  /** Always show the search input, even with few options */
+  alwaysShowSearch?: boolean;
 }) {
   const [open, setOpen] = useState(false);
   const [search, setSearch] = useState("");
@@ -107,7 +112,7 @@ export function SearchableSelect({
 
       {open && (
         <div className="absolute z-50 mt-1 w-full min-w-[200px] bg-white border border-slate-200 rounded-lg shadow-lg max-h-60 overflow-hidden flex flex-col">
-          {options.length > 6 && (
+          {(alwaysShowSearch || options.length > 6) && (
             <div className="p-1.5 border-b border-slate-100">
               <input
                 ref={inputRef}
@@ -124,15 +129,18 @@ export function SearchableSelect({
               <button
                 key={o.value}
                 type="button"
-                onClick={() => { onChange(o.value); setOpen(false); setSearch(""); }}
-                className={`w-full px-2.5 py-1.5 text-sm text-left hover:bg-blue-50 cursor-pointer flex items-center gap-1.5 ${
-                  o.value === value ? "bg-blue-50 font-medium" : ""
+                disabled={o.disabled}
+                onClick={() => { if (!o.disabled) { onChange(o.value); setOpen(false); setSearch(""); } }}
+                className={`w-full px-2.5 py-1.5 text-sm text-left flex items-center gap-1.5 ${
+                  o.disabled
+                    ? "opacity-50 cursor-not-allowed"
+                    : `hover:bg-blue-50 cursor-pointer ${o.value === value ? "bg-blue-50 font-medium" : ""}`
                 }`}
               >
                 {o.icon}
                 <span className="truncate">{o.label}</span>
                 {o.suffix && (
-                  <span className="text-slate-400 text-xs ml-auto flex-shrink-0">{o.suffix}</span>
+                  <span className={`text-xs ml-auto flex-shrink-0 ${o.disabled ? "text-red-400" : "text-slate-400"}`}>{o.suffix}</span>
                 )}
               </button>
             ))}

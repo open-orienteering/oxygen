@@ -702,6 +702,123 @@ export async function ensureMapFilesTable(
   mapFilesTableReady.add(db);
 }
 
+// ─── Control config table ──────────────────────────────────
+
+const controlConfigTableReady = new Set<string>();
+
+export async function ensureControlConfigTable(
+  client: PrismaClient,
+): Promise<void> {
+  const db = currentDbName ?? "";
+  if (controlConfigTableReady.has(db)) return;
+
+  await client.$executeRawUnsafe(`
+    CREATE TABLE IF NOT EXISTS oxygen_control_config (
+      control_id        INT NOT NULL PRIMARY KEY,
+      radio_type        VARCHAR(20) NOT NULL DEFAULT 'normal',
+      air_plus          VARCHAR(10) NOT NULL DEFAULT 'default',
+      battery_voltage   FLOAT NULL,
+      battery_low       TINYINT(1) NULL,
+      checked_at        TIMESTAMP(0) NULL,
+      memory_cleared_at TIMESTAMP(0) NULL,
+      station_serial    INT NULL
+    )
+  `);
+  controlConfigTableReady.add(db);
+}
+
+// ─── Control backup punches table ──────────────────────────
+
+const controlPunchesTableReady = new Set<string>();
+
+export async function ensureControlPunchesTable(
+  client: PrismaClient,
+): Promise<void> {
+  const db = currentDbName ?? "";
+  if (controlPunchesTableReady.has(db)) return;
+
+  await client.$executeRawUnsafe(`
+    CREATE TABLE IF NOT EXISTS oxygen_control_punches (
+      id              INT NOT NULL AUTO_INCREMENT PRIMARY KEY,
+      control_id      INT NOT NULL,
+      card_no         INT NOT NULL,
+      punch_time      INT NOT NULL COMMENT 'deciseconds since midnight (MeOS format)',
+      punch_datetime  DATETIME(3) NULL COMMENT 'full punch datetime from backup record',
+      sub_second      TINYINT UNSIGNED NULL COMMENT 'raw sub-second fraction 0-255',
+      imported_at     TIMESTAMP(0) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      pushed_to_punch TINYINT(1) NOT NULL DEFAULT 0,
+      INDEX idx_control (control_id)
+    )
+  `);
+  // Add columns if table already exists from previous version
+  try {
+    await client.$executeRawUnsafe(
+      `ALTER TABLE oxygen_control_punches ADD COLUMN punch_datetime DATETIME(3) NULL AFTER punch_time`,
+    );
+  } catch { /* column already exists */ }
+  try {
+    await client.$executeRawUnsafe(
+      `ALTER TABLE oxygen_control_punches ADD COLUMN sub_second TINYINT UNSIGNED NULL AFTER punch_datetime`,
+    );
+  } catch { /* column already exists */ }
+  controlPunchesTableReady.add(db);
+}
+
+// ─── Competition config table ──────────────────────────────
+
+const competitionConfigTableReady = new Set<string>();
+
+export async function ensureCompetitionConfigTable(
+  client: PrismaClient,
+): Promise<void> {
+  const db = currentDbName ?? "";
+  if (competitionConfigTableReady.has(db)) return;
+
+  await client.$executeRawUnsafe(`
+    CREATE TABLE IF NOT EXISTS oxygen_competition_config (
+      id          INT NOT NULL PRIMARY KEY DEFAULT 1,
+      air_plus    TINYINT(1) NOT NULL DEFAULT 0,
+      awake_hours INT NOT NULL DEFAULT 6
+    )
+  `);
+
+  // Ensure default row exists
+  await client.$executeRawUnsafe(`
+    INSERT IGNORE INTO oxygen_competition_config (id, air_plus, awake_hours) VALUES (1, 0, 6)
+  `);
+
+  // Migration: add awake_hours column if table existed before this column was added
+  try {
+    await client.$executeRawUnsafe(
+      `ALTER TABLE oxygen_competition_config ADD COLUMN awake_hours INT NOT NULL DEFAULT 6`,
+    );
+  } catch {
+    // Column already exists — ignore
+  }
+
+  // Migration: add registration/payment columns
+  const regColumns = [
+    `payment_methods VARCHAR(255) NOT NULL DEFAULT 'billed'`,
+    `swish_number VARCHAR(20) NOT NULL DEFAULT ''`,
+    `swish_payee_name VARCHAR(100) NOT NULL DEFAULT ''`,
+    `print_registration_receipt TINYINT(1) NOT NULL DEFAULT 0`,
+    `registration_receipt_message VARCHAR(500) NOT NULL DEFAULT ''`,
+    `finish_receipt_message VARCHAR(500) NOT NULL DEFAULT ''`,
+    `organizer_eventor_id INT NOT NULL DEFAULT 0`,
+  ];
+  for (const col of regColumns) {
+    try {
+      await client.$executeRawUnsafe(
+        `ALTER TABLE oxygen_competition_config ADD COLUMN ${col}`,
+      );
+    } catch {
+      // Column already exists — ignore
+    }
+  }
+
+  competitionConfigTableReady.add(db);
+}
+
 // ─── Raw competition DB connection ─────────────────────────
 
 /**

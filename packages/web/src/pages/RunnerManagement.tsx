@@ -76,6 +76,9 @@ export function RunnerManagement() {
   const classes = trpc.competition.dashboard.useQuery();
   const clubs = trpc.competition.clubs.useQuery();
   const printer = usePrinter();
+  const regConfig = trpc.competition.getRegistrationConfig.useQuery(undefined, {
+    staleTime: 60_000,
+  });
 
   const handlePrint = useCallback(async (runnerId: number) => {
     const result = await utils.race.finishReceipt.fetch({ runnerId });
@@ -117,8 +120,9 @@ export function RunnerManagement() {
       qrUrl: competitionInfo?.eventorEventId
         ? `https://eventor.orientering.se/Events/Show/${competitionInfo.eventorEventId}`
         : "https://open-orienteering.org",
+      customMessage: regConfig.data?.finishReceiptMessage || undefined,
     });
-  }, [utils, classes.data, printer]);
+  }, [utils, classes.data, printer, regConfig.data]);
 
   const deleteMutation = trpc.runner.delete.useMutation({
     onSuccess: () => {

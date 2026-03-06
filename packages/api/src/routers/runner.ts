@@ -27,6 +27,8 @@ const runnerCreateSchema = z.object({
   phone: z.string().optional().default(""),
   status: z.number().int().optional(),
   finishTime: z.number().int().optional(),
+  fee: z.number().int().optional().default(0),
+  paid: z.number().int().optional().default(0),
 });
 
 /** Schema for updating a runner — no defaults, so omitted fields stay untouched. */
@@ -43,6 +45,8 @@ const runnerUpdateSchema = z.object({
   phone: z.string().optional(),
   status: z.number().int().optional(),
   finishTime: z.number().int().optional(),
+  fee: z.number().int().optional(),
+  paid: z.number().int().optional(),
 });
 
 export const runnerRouter = router({
@@ -235,6 +239,8 @@ export const runnerRouter = router({
           Sex: input.sex,
           Nationality: input.nationality,
           Phone: input.phone,
+          Fee: input.fee,
+          Paid: input.paid,
           // MeOS requires these MediumText fields to be non-null
           InputResult: "",
           Annotation: "",
@@ -278,6 +284,8 @@ export const runnerRouter = router({
       if (input.data.status !== undefined) updateData.Status = input.data.status;
       if (input.data.finishTime !== undefined)
         updateData.FinishTime = input.data.finishTime;
+      if (input.data.fee !== undefined) updateData.Fee = input.data.fee;
+      if (input.data.paid !== undefined) updateData.Paid = input.data.paid;
 
       const runner = await client.oRunner.update({
         where: { Id: input.id },
@@ -321,6 +329,8 @@ export const runnerRouter = router({
       if (input.data.status !== undefined) updateData.Status = input.data.status;
       if (input.data.finishTime !== undefined)
         updateData.FinishTime = input.data.finishTime;
+      if (input.data.fee !== undefined) updateData.Fee = input.data.fee;
+      if (input.data.paid !== undefined) updateData.Paid = input.data.paid;
 
       let updatedCount = 0;
       for (const id of input.ids) {

@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { trpc } from "../lib/trpc";
 import { formatDateTime, timeAgo } from "../lib/format";
 import { ClubLogo } from "../components/ClubLogo";
@@ -91,17 +91,8 @@ export function EventPage() {
       </div>
 
 
-      {/* Event Settings (future) */}
-      <div>
-        <h2 className="text-sm font-semibold text-slate-500 uppercase tracking-wider mb-3">
-          Settings
-        </h2>
-        <div className="bg-white rounded-xl border border-slate-200 p-5">
-          <div className="text-sm text-slate-400">
-            Event settings (bib numbers, timing mode, etc.) will be available here.
-          </div>
-        </div>
-      </div>
+      {/* Registration Settings */}
+      <RegistrationSettings />
     </div>
   );
 }
@@ -143,13 +134,20 @@ function SyncBehaviorHelp() {
           </div>
 
           <div className="border-t border-slate-100 pt-2 space-y-2">
+            <p className="text-[11px] text-slate-500 uppercase tracking-wide font-medium">What gets pushed to Eventor</p>
+            <SyncRow icon="⏱️" label="Results" detail="Start time, finish time, running time, status, and placement per runner" />
+            <SyncRow icon="🔀" label="Split times" detail="Per-control split times matched from SI card + radio punches, including missing and additional punches" />
+            <SyncRow icon="💳" label="Fees" detail="Entry fee (Normal/Late type), taxable amount, paid amount, and card rental as ServiceRequest — matching MeOS format" />
+            <SyncRow icon="👤" label="Person details" detail="Birth date, nationality, and bib number per runner" />
+          </div>
+
+          <div className="border-t border-slate-100 pt-2 space-y-2">
             <p className="text-[11px] text-slate-500 uppercase tracking-wide font-medium">What is NOT synced</p>
             <SyncRow icon="🌊" label="Start groups / waves" detail="StartTimeAllocationRequest (heat/wave assignments) is not yet imported — deferred for future implementation" />
-            <SyncRow icon="🏃" label="Split times" detail="Intermediate punch splits from Eventor results are not imported — splits are read live from SI cards instead" />
           </div>
 
           <p className="text-[10px] text-slate-400 border-t border-slate-100 pt-2">
-            Sync is one-way pull: Oxygen reads data from Eventor, never writes back automatically. Only Results and Start List can be pushed to Eventor via the buttons above. Fees, registrations, and class setup remain authoritative in Eventor. Sync is incremental — existing runners are updated in place. EntrySource is set to the Eventor event ID so the database is compatible with MeOS.
+            Sync is incremental pull: Oxygen reads data from Eventor, never writes back automatically. Results and Start List can be pushed to Eventor via the buttons above. Fees, registrations, and class setup remain authoritative in Eventor. Existing runners are updated in place. EntrySource is set to the Eventor event ID so the database is compatible with MeOS.
           </p>
         </div>
       )}
@@ -689,6 +687,144 @@ function LiveResultsPanel() {
   );
 }
 // ─── Club Sync Panel ────────────────────────────────────────
+
+// ─── Registration Settings ──────────────────────────────────
+
+const ALL_PAYMENT_METHODS = [
+  { key: "billed", label: "Invoice" },
+  { key: "on-site", label: "Pay on site" },
+  { key: "card", label: "Card" },
+  { key: "swish", label: "Swish" },
+] as const;
+
+function RegistrationSettings() {
+  const config = trpc.competition.getRegistrationConfig.useQuery();
+  const updateConfig = trpc.competition.setRegistrationConfig.useMutation({
+    onSuccess: () => config.refetch(),
+  });
+
+  const [methods, setMethods] = useState<string[]>([]);
+  const [swishNumber, setSwishNumber] = useState("");
+  const [printReceipt, setPrintReceipt] = useState(false);
+  const [regReceiptMsg, setRegReceiptMsg] = useState("");
+  const [finishReceiptMsg, setFinishReceiptMsg] = useState("");
+  const initialized = useRef(false);
+
+  useEffect(() => {
+    if (!config.data || initialized.current) return;
+    initialized.current = true;
+    setMethods(config.data.paymentMethods);
+    setSwishNumber(config.data.swishNumber);
+    setPrintReceipt(config.data.printRegistrationReceipt);
+    setRegReceiptMsg(config.data.registrationReceiptMessage);
+    setFinishReceiptMsg(config.data.finishReceiptMessage);
+  }, [config.data]);
+
+  const save = (patch: Parameters<typeof updateConfig.mutate>[0]) => {
+    updateConfig.mutate(patch);
+  };
+
+  const toggleMethod = (key: string) => {
+    const next = methods.includes(key)
+      ? methods.filter((m) => m !== key)
+      : [...methods, key];
+    setMethods(next);
+    save({ paymentMethods: next });
+  };
+
+  return (
+    <div>
+      <h2 className="text-sm font-semibold text-slate-500 uppercase tracking-wider mb-3">
+        Registration Settings
+      </h2>
+      <div className="bg-white rounded-xl border border-slate-200 p-5 space-y-4">
+        <div>
+          <label className="block text-sm font-medium text-slate-700 mb-2">
+            Payment methods
+          </label>
+          <div className="flex flex-wrap gap-2">
+            {ALL_PAYMENT_METHODS.map(({ key, label }) => (
+              <button
+                key={key}
+                type="button"
+                onClick={() => toggleMethod(key)}
+                className={`px-3 py-1.5 text-sm rounded-lg border transition-colors cursor-pointer ${
+                  methods.includes(key)
+                    ? "bg-blue-50 border-blue-300 text-blue-700 font-medium"
+                    : "border-slate-200 text-slate-500 hover:bg-slate-50"
+                }`}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {methods.includes("swish") && (
+          <div>
+            <label className="block text-xs font-medium text-slate-600 mb-1">
+              Swish number
+            </label>
+            <input
+              type="text"
+              value={swishNumber}
+              onChange={(e) => setSwishNumber(e.target.value)}
+              onBlur={() => save({ swishNumber })}
+              placeholder="073XXXXXXX"
+              className="w-full max-w-xs px-3 py-1.5 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+            />
+            <p className="text-xs text-slate-400 mt-1">
+              Payment message is auto-generated as "Competition name - Class name"
+            </p>
+          </div>
+        )}
+
+        <label className="flex items-center gap-2 cursor-pointer">
+          <input
+            type="checkbox"
+            checked={printReceipt}
+            onChange={(e) => {
+              setPrintReceipt(e.target.checked);
+              save({ printRegistrationReceipt: e.target.checked });
+            }}
+            className="w-4 h-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
+          />
+          <span className="text-sm text-slate-700">Print registration receipt (when printer connected)</span>
+        </label>
+
+        <div>
+          <label className="block text-xs font-medium text-slate-600 mb-1">
+            Registration receipt message <span className="text-slate-400 font-normal">(optional)</span>
+          </label>
+          <textarea
+            value={regReceiptMsg}
+            onChange={(e) => setRegReceiptMsg(e.target.value)}
+            onBlur={() => save({ registrationReceiptMessage: regReceiptMsg })}
+            placeholder="Extra message printed on registration receipts"
+            rows={2}
+            className="w-full px-3 py-1.5 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none"
+          />
+        </div>
+
+        <div>
+          <label className="block text-xs font-medium text-slate-600 mb-1">
+            Finish receipt message <span className="text-slate-400 font-normal">(optional)</span>
+          </label>
+          <textarea
+            value={finishReceiptMsg}
+            onChange={(e) => setFinishReceiptMsg(e.target.value)}
+            onBlur={() => save({ finishReceiptMessage: finishReceiptMsg })}
+            placeholder="Extra message printed on finish receipts"
+            rows={2}
+            className="w-full px-3 py-1.5 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none"
+          />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── Club Sync ──────────────────────────────────────────────
 
 function ClubSyncPanel({ env }: { env?: string }) {
   const syncStatus = trpc.eventor.syncStatus.useQuery();

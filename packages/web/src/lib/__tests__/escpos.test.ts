@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
-import { buildFinishReceipt } from "../receipt-printer/escpos.js";
-import type { FinishReceiptData } from "../receipt-printer/types.js";
+import { buildFinishReceipt, buildRegistrationReceipt } from "../receipt-printer/escpos.js";
+import type { FinishReceiptData, RegistrationReceiptData } from "../receipt-printer/types.js";
 
 const SAMPLE: FinishReceiptData = {
   competitionName: "Test Cup 2026",
@@ -221,5 +221,92 @@ describe("buildFinishReceipt", () => {
     const arr = [...buildFinishReceipt(data)];
     // GS ( k should not appear
     expect(arr.some((b, i) => b === 0x1D && arr[i + 1] === 0x28 && arr[i + 2] === 0x6B)).toBe(false);
+  });
+});
+
+// ─── Registration Receipt ───────────────────────────────────
+
+const REG_SAMPLE: RegistrationReceiptData = {
+  competitionName: "Spring Cup 2026",
+  runner: {
+    name: "Erik Johansson",
+    clubName: "OK Ravinen",
+    className: "H35",
+    cardNo: 501438,
+  },
+  startTime: "11:30:00",
+  payment: { method: "Swish", amount: 15000 },
+};
+
+describe("buildRegistrationReceipt", () => {
+  it("returns a Uint8Array", () => {
+    const bytes = buildRegistrationReceipt(REG_SAMPLE);
+    expect(bytes).toBeInstanceOf(Uint8Array);
+    expect(bytes.length).toBeGreaterThan(50);
+  });
+
+  it("starts with ESC @ (printer init)", () => {
+    const bytes = buildRegistrationReceipt(REG_SAMPLE);
+    expect(bytes[0]).toBe(0x1b);
+    expect(bytes[1]).toBe(0x40);
+  });
+
+  it("ends with GS V partial cut command", () => {
+    const bytes = buildRegistrationReceipt(REG_SAMPLE);
+    const tail = bytes.slice(-4);
+    expect([...tail]).toEqual([0x1d, 0x56, 0x42, 0x0a]);
+  });
+
+  it("includes competition name", () => {
+    const bytes = buildRegistrationReceipt(REG_SAMPLE);
+    const text = Buffer.from(bytes).toString("latin1");
+    expect(text).toContain("Spring Cup 2026");
+  });
+
+  it("includes runner name and club", () => {
+    const bytes = buildRegistrationReceipt(REG_SAMPLE);
+    const text = Buffer.from(bytes).toString("latin1");
+    expect(text).toContain("Erik Johansson");
+    expect(text).toContain("OK Ravinen");
+  });
+
+  it("includes class and card number", () => {
+    const bytes = buildRegistrationReceipt(REG_SAMPLE);
+    const text = Buffer.from(bytes).toString("latin1");
+    expect(text).toContain("H35");
+    expect(text).toContain("501438");
+  });
+
+  it("includes start time", () => {
+    const bytes = buildRegistrationReceipt(REG_SAMPLE);
+    const text = Buffer.from(bytes).toString("latin1");
+    expect(text).toContain("11:30:00");
+  });
+
+  it("shows Free start when no start time", () => {
+    const data: RegistrationReceiptData = { ...REG_SAMPLE, startTime: undefined };
+    const bytes = buildRegistrationReceipt(data);
+    const text = Buffer.from(bytes).toString("latin1");
+    expect(text).toContain("Free start");
+  });
+
+  it("includes payment info when provided", () => {
+    const bytes = buildRegistrationReceipt(REG_SAMPLE);
+    const text = Buffer.from(bytes).toString("latin1");
+    expect(text).toContain("Swish");
+    expect(text).toContain("150"); // 15000 öre = 150 kr
+  });
+
+  it("omits payment section when no payment", () => {
+    const data: RegistrationReceiptData = { ...REG_SAMPLE, payment: undefined };
+    const bytes = buildRegistrationReceipt(data);
+    const text = Buffer.from(bytes).toString("latin1");
+    expect(text).not.toContain("Swish");
+  });
+
+  it("includes REGISTRATION header", () => {
+    const bytes = buildRegistrationReceipt(REG_SAMPLE);
+    const text = Buffer.from(bytes).toString("latin1");
+    expect(text).toContain("REGISTRATION");
   });
 });

@@ -4,7 +4,10 @@ import { parseMeosTime, formatMeosTime } from "@oxygen/shared";
 import { SearchableSelect } from "./SearchableSelect";
 import { ClubLogo } from "./ClubLogo";
 import { useDeviceManager } from "../context/DeviceManager";
+import { usePrinter } from "../context/PrinterContext";
+import { fetchLogoRaster } from "../lib/receipt-printer/index.js";
 import type { KioskChannel, RegistrationFormState } from "../lib/kiosk-channel";
+import { fuzzyMatchClub } from "../lib/fuzzy-club-match";
 
 interface Props {
   mode: "create" | "edit";
@@ -60,18 +63,21 @@ export function RunnerDialog({ mode, runnerId, initialCardNo, initialOwnerData, 
   const [birthYear, setBirthYear] = useState(ownerBirthYear);
   const [sex, setSex] = useState(normalizedSex);
   const [phone, setPhone] = useState(initialOwnerData?.phone ?? "");
-  const [paymentMode, setPaymentMode] = useState<"billed" | "on-site" | "">("");
+  const [paymentMode, setPaymentMode] = useState<"billed" | "on-site" | "card" | "swish" | "">("");
   const [error, setError] = useState("");
   const [showSuggestions, setShowSuggestions] = useState(false);
   const [selectedSuggestionIdx, setSelectedSuggestionIdx] = useState(-1);
-  const [kioskConfirmed, setKioskConfirmed] = useState(false);
   const [debouncedNameQuery, setDebouncedNameQuery] = useState("");
   const nameInputRef = useRef<HTMLInputElement>(null);
   const suggestionsRef = useRef<HTMLDivElement>(null);
   const debounceRef = useRef<any>(undefined);
-  const { getKioskChannel, setPendingConfirmCardNo } = useDeviceManager();
+  const { getKioskChannel } = useDeviceManager();
+  const printer = usePrinter();
 
   const classes = trpc.competition.dashboard.useQuery();
+  const regConfig = trpc.competition.getRegistrationConfig.useQuery(undefined, {
+    staleTime: 5 * 60_000,
+  });
   // Use showAll to include clubs without runners (important for new runner registration)
   const clubs = trpc.club.list.useQuery({ showAll: true });
   const syncStatus = trpc.eventor.syncStatus.useQuery();
@@ -100,6 +106,55 @@ export function RunnerDialog({ mode, runnerId, initialCardNo, initialOwnerData, 
       retry: false,
     },
   );
+
+  // Card number lookup in global runner DB (auto-fill on mount)
+  const cardLookup = trpc.eventor.lookupByCardNo.useQuery(
+    { cardNo: initialCardNo! },
+    {
+      enabled: mode === "create" && !!initialCardNo && initialCardNo > 0,
+      staleTime: 60_000,
+      retry: false,
+    },
+  );
+
+  // Auto-fill from runner DB lookup (runs once when data arrives)
+  const cardLookupAppliedRef = useRef(false);
+  useEffect(() => {
+    if (cardLookupAppliedRef.current || !cardLookup.data) return;
+    cardLookupAppliedRef.current = true;
+    const r = cardLookup.data;
+    // Only fill fields that are still empty (don't overwrite SI card owner data)
+    if (!name && r.name) {
+      const parts = r.name.split(", ");
+      const displayName = parts.length === 2 ? `${parts[1]} ${parts[0]}` : r.name;
+      setName(displayName);
+      triggerNameSearch(displayName);
+    }
+    if (!birthYear && r.birthYear > 0) setBirthYear(String(r.birthYear));
+    if (!sex && r.sex) setSex(r.sex);
+    if (!clubId && r.clubEventorId && clubs.data) {
+      const match = clubs.data.find((c) => c.extId === r.clubEventorId);
+      if (match) setClubId(match.id);
+    }
+  }, [cardLookup.data, clubs.data]);
+
+  // Trigger runner DB search when name is pre-filled from SI card owner data
+  const ownerNameSearched = useRef(false);
+  useEffect(() => {
+    if (ownerNameSearched.current || !ownerName) return;
+    ownerNameSearched.current = true;
+    triggerNameSearch(ownerName);
+  }, [ownerName]);
+
+  // Default payment mode to "billed" when config loaded
+  const paymentDefaultApplied = useRef(false);
+  useEffect(() => {
+    if (paymentDefaultApplied.current || !regConfig.data || mode !== "create") return;
+    paymentDefaultApplied.current = true;
+    const methods = regConfig.data.paymentMethods;
+    if (methods.includes("billed")) setPaymentMode("billed");
+    else if (methods.length > 0) setPaymentMode(methods[0] as typeof paymentMode);
+  }, [regConfig.data, mode]);
 
   // Global runner DB search (debounced)
   const globalSearch = trpc.eventor.searchRunnerDb.useQuery(
@@ -177,9 +232,46 @@ export function RunnerDialog({ mode, runnerId, initialCardNo, initialOwnerData, 
             clubName: selectedClubName,
             startTime,
             cardNo: cardNo ? parseInt(cardNo, 10) : initialCardNo,
+            clubEventorId: selectedClub?.extId || undefined,
           },
         });
       }
+
+      // Print registration receipt if printer connected and config enabled
+      if (printer.connected && regConfig.data?.printRegistrationReceipt) {
+        const classFee = classes.data?.classes.find((c) => c.id === classId)?.classFee ?? 0;
+        const paymentLabels: Record<string, string> = {
+          billed: "Invoice",
+          "on-site": "Pay on site",
+          card: "Card",
+          swish: "Swish",
+        };
+        const competitionInfo = classes.data?.competition;
+        const eventorId = classes.data?.organizer?.eventorId;
+        (async () => {
+          const logoRaster = eventorId
+            ? await fetchLogoRaster(`/api/club-logo/${eventorId}?variant=large`, 250).catch(() => null)
+            : null;
+          await printer.printRegistration({
+            competitionName: competitionInfo?.name ?? "",
+            competitionDate: competitionInfo?.date ?? undefined,
+            logoRaster,
+            runner: {
+              name: name.trim(),
+              clubName: selectedClubName,
+              className: selectedClassName,
+              cardNo: cardNo ? parseInt(cardNo, 10) : initialCardNo ?? 0,
+            },
+            startTime: startTime || undefined,
+            payment: classFee > 0 && paymentMode ? {
+              method: paymentLabels[paymentMode] ?? paymentMode,
+              amount: classFee,
+            } : undefined,
+            customMessage: regConfig.data?.registrationReceiptMessage || undefined,
+          });
+        })().catch(() => {}); // Don't block on print failure
+      }
+
       onSuccess();
     },
     onError: (err) => setError(err.message),
@@ -207,12 +299,7 @@ export function RunnerDialog({ mode, runnerId, initialCardNo, initialOwnerData, 
   // Auto-match club from SI card owner data
   useEffect(() => {
     if (initialOwnerData?.club && clubs.data && clubId === 0) {
-      const ownerClub = initialOwnerData.club.toLowerCase();
-      const match = clubs.data.find(
-        (c) => c.name.toLowerCase() === ownerClub ||
-          c.name.toLowerCase().includes(ownerClub) ||
-          ownerClub.includes(c.name.toLowerCase()),
-      );
+      const match = fuzzyMatchClub(initialOwnerData.club, clubs.data);
       if (match) {
         setClubId(match.id);
       }
@@ -252,27 +339,18 @@ export function RunnerDialog({ mode, runnerId, initialCardNo, initialOwnerData, 
     setSelectedSuggestionIdx(-1);
   }, [clubs.data]);
 
-  // ── Kiosk integration: broadcast form state + listen for confirm ──
+  // ── Kiosk integration: broadcast form state ──
   const kioskChannelRef = useRef<KioskChannel | null>(null);
 
   useEffect(() => {
     if (mode !== "create" || !initialCardNo) return;
     const ch = getKioskChannel();
     kioskChannelRef.current = ch;
-    if (!ch) return;
-
-    const unsub = ch.subscribe((msg) => {
-      if (msg.type === "registration-confirm" && msg.confirmed) {
-        setKioskConfirmed(true);
-      }
-    });
 
     return () => {
-      unsub();
       kioskChannelRef.current = null;
-      setPendingConfirmCardNo(null);
     };
-  }, [mode, initialCardNo, getKioskChannel, setPendingConfirmCardNo]);
+  }, [mode, initialCardNo, getKioskChannel]);
 
   // Broadcast form state to kiosk whenever fields change
   const selectedClubName = selectedClub?.name ?? "";
@@ -283,46 +361,44 @@ export function RunnerDialog({ mode, runnerId, initialCardNo, initialOwnerData, 
     const ch = kioskChannelRef.current;
     if (!ch) return;
 
+    const classFeeForBroadcast = classes.data?.classes.find((c) => c.id === classId)?.classFee ?? 0;
     const form: RegistrationFormState = {
       name,
       clubName: selectedClubName,
       className: selectedClassName,
-      courseName: "", // not directly available but not critical
+      courseName: "",
       cardNo: cardNo ? parseInt(cardNo, 10) : initialCardNo ?? 0,
       startTime,
       sex,
       birthYear,
       phone,
       paymentMode,
+      fee: classFeeForBroadcast > 0 ? classFeeForBroadcast : undefined,
+      swishNumber: regConfig.data?.swishNumber || undefined,
+      clubEventorId: selectedClub?.extId || undefined,
+      competitionName: classes.data?.competition?.name || undefined,
     };
 
     // Only send ready=true when we have at least name + class
     const ready = !!name.trim() && classId > 0;
     ch.send({ type: "registration-state", form, ready });
+  }, [mode, initialCardNo, name, selectedClubName, selectedClassName, cardNo, startTime, sex, birthYear, phone, paymentMode, classId, classes.data, regConfig.data]);
 
-    // Set pending confirmation card so DeviceManager can detect re-insert.
-    // Pass a direct callback so we get notified in the same page (BroadcastChannel
-    // only delivers to other browsing contexts).
-    if (ready && initialCardNo) {
-      setPendingConfirmCardNo(initialCardNo, () => setKioskConfirmed(true));
-    }
-  }, [mode, initialCardNo, name, selectedClubName, selectedClassName, cardNo, startTime, sex, birthYear, phone, paymentMode, classId, setPendingConfirmCardNo]);
-
-  const handleNameChange = (value: string) => {
-    setName(value);
+  const triggerNameSearch = (value: string) => {
     setShowSuggestions(value.trim().length >= 2);
     setSelectedSuggestionIdx(-1);
-
-    // Debounce the global runner DB search (300ms)
     if (debounceRef.current) clearTimeout(debounceRef.current);
     const trimmed = value.trim();
     if (trimmed.length >= 2) {
-      debounceRef.current = setTimeout(() => {
-        setDebouncedNameQuery(trimmed);
-      }, 300);
+      debounceRef.current = setTimeout(() => setDebouncedNameQuery(trimmed), 300);
     } else {
       setDebouncedNameQuery("");
     }
+  };
+
+  const handleNameChange = (value: string) => {
+    setName(value);
+    triggerNameSearch(value);
   };
 
   const handleNameKeyDown = (e: React.KeyboardEvent) => {
@@ -359,6 +435,20 @@ export function RunnerDialog({ mode, runnerId, initialCardNo, initialOwnerData, 
       return;
     }
 
+    // Compute fee from class fee schedule when payment mode is set
+    const classFee = classes.data?.classes.find((c) => c.id === classId)?.classFee ?? 0;
+    let fee = 0;
+    let paid = 0;
+    if (classFee > 0 && paymentMode) {
+      fee = classFee;
+      if (paymentMode === "billed") {
+        paid = 0; // Paid=0 implies invoice (MeOS convention)
+      } else {
+        // on-site, card, swish — all count as paid immediately
+        paid = classFee;
+      }
+    }
+
     const data = {
       name: name.trim(),
       classId,
@@ -368,6 +458,8 @@ export function RunnerDialog({ mode, runnerId, initialCardNo, initialOwnerData, 
       birthYear: birthYear ? parseInt(birthYear, 10) : 0,
       sex,
       phone,
+      fee,
+      paid,
     };
 
     if (mode === "create") {
@@ -500,12 +592,19 @@ export function RunnerDialog({ mode, runnerId, initialCardNo, initialOwnerData, 
               onChange={(v) => setClassId(Number(v))}
               placeholder="Select class..."
               searchPlaceholder="Search classes..."
+              alwaysShowSearch
               options={[
-                { value: 0, label: "Select class..." },
-                ...(classes.data?.classes.map((c) => ({
-                  value: c.id,
-                  label: c.name,
-                })) ?? []),
+                ...(classes.data?.classes.map((c) => {
+                  const course = classes.data?.courses.find((co) => co.id === c.courseId);
+                  const maps = course?.numberOfMaps;
+                  const remaining = maps != null ? maps - (c.runnerCount ?? 0) : null;
+                  return {
+                    value: c.id,
+                    label: c.name,
+                    suffix: remaining != null ? (remaining <= 0 ? "No maps" : `${remaining} maps`) : undefined,
+                    disabled: remaining != null && remaining <= 0,
+                  };
+                }) ?? []),
               ]}
             />
           </div>
@@ -588,45 +687,32 @@ export function RunnerDialog({ mode, runnerId, initialCardNo, initialOwnerData, 
               <label className="block text-sm font-medium text-slate-700 mb-1">
                 Payment
               </label>
-              <div className="flex gap-2">
-                {(["", "billed", "on-site"] as const).map((pm) => (
-                  <button
-                    key={pm || "none"}
-                    type="button"
-                    onClick={() => setPaymentMode(pm)}
-                    className={`flex-1 px-3 py-2 text-sm rounded-lg border transition-colors cursor-pointer ${paymentMode === pm
-                      ? "bg-blue-50 border-blue-300 text-blue-700 font-medium"
-                      : "border-slate-200 text-slate-600 hover:bg-slate-50"
-                      }`}
-                  >
-                    {pm === "" ? "Not set" : pm === "billed" ? "Invoice" : "Pay on site"}
-                  </button>
-                ))}
+              <div className="flex gap-2 flex-wrap">
+                {(regConfig.data?.paymentMethods ?? ["billed", "on-site"]).map((pm) => {
+                  const labels: Record<string, string> = {
+                    billed: "Invoice",
+                    "on-site": "Pay on site",
+                    card: "Card",
+                    swish: "Swish",
+                  };
+                  return (
+                    <button
+                      key={pm}
+                      type="button"
+                      onClick={() => setPaymentMode(paymentMode === pm ? "" : pm as typeof paymentMode)}
+                      className={`flex-1 min-w-[80px] px-3 py-2 text-sm rounded-lg border transition-colors cursor-pointer ${paymentMode === pm
+                        ? "bg-blue-50 border-blue-300 text-blue-700 font-medium"
+                        : "border-slate-200 text-slate-600 hover:bg-slate-50"
+                        }`}
+                    >
+                      {labels[pm] ?? pm}
+                    </button>
+                  );
+                })}
               </div>
             </div>
           )}
 
-          {/* Kiosk confirmation indicator */}
-          {mode === "create" && initialCardNo && kioskChannelRef.current && (
-            <div className={`p-3 rounded-lg text-sm flex items-center gap-2 ${kioskConfirmed
-              ? "bg-emerald-50 border border-emerald-200 text-emerald-700"
-              : "bg-blue-50 border border-blue-200 text-blue-700"
-              }`}>
-              {kioskConfirmed ? (
-                <>
-                  <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                    <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
-                  </svg>
-                  User confirmed on kiosk
-                </>
-              ) : (
-                <>
-                  <div className="w-3 h-3 border-2 border-blue-400 border-t-transparent rounded-full animate-spin" />
-                  Waiting for user confirmation on kiosk...
-                </>
-              )}
-            </div>
-          )}
 
           {/* Error */}
           {error && (

@@ -68,11 +68,12 @@ interface DeviceManagerState {
   setCompetitionNameId: (nameId: string | null) => void;
   /** Get the kiosk BroadcastChannel (if active) for sending messages */
   getKioskChannel: () => KioskChannel | null;
-  /** Set a card number to watch for re-insert (registration confirmation).
-   *  The optional callback fires directly in the same page when the card is detected. */
+  /** @deprecated No longer used — confirmation is now via operator click */
   setPendingConfirmCardNo: (cardNo: number | null, onConfirm?: () => void) => void;
   /** Last card number detected (fires before full readout completes) */
   lastDetectedCardNo: number | null;
+  /** Get the raw SIReaderConnection for station programming operations */
+  getReaderConnection: () => SIReaderConnection;
 }
 
 const MAX_RECENT = 20;
@@ -115,9 +116,9 @@ export function DeviceManagerProvider({ children }: { children: ReactNode }) {
 
   const [competitionNameId, setCompetitionNameIdState] = useState<string | null>(null);
   const kioskChannelRef = useRef<KioskChannel | null>(null);
+  // Legacy refs kept as no-ops for interface compat
   const pendingConfirmCardNoRef = useRef<number | null>(null);
   const pendingConfirmCallbackRef = useRef<(() => void) | null>(null);
-  const skipNextKioskBroadcastRef = useRef(false);
 
   const storeReadout = trpc.cardReadout.storeReadout.useMutation();
   const utils = trpc.useUtils();
@@ -168,6 +169,12 @@ export function DeviceManagerProvider({ children }: { children: ReactNode }) {
 
       setCurrentCard(entry);
       setRecentCards((prev) => [entry, ...prev].slice(0, MAX_RECENT));
+
+      // Send to kiosk immediately so it enters the correct mode
+      // before RegistrationPage broadcasts form state
+      if (kioskChannelRef.current) {
+        kioskChannelRef.current.send(recentCardToKioskMessage(entry));
+      }
 
       // Store card data on the server (non-blocking)
       try {
@@ -262,19 +269,16 @@ export function DeviceManagerProvider({ children }: { children: ReactNode }) {
           prev.map((c) => (c.id === id ? updated : c)),
         );
 
-        // Broadcast to kiosk window (paired mode) — unless this readout was
-        // from a confirmation re-insert (handled by onCardDetected already)
-        if (kioskChannelRef.current && !skipNextKioskBroadcastRef.current) {
+        // Broadcast to kiosk window (paired mode)
+        if (kioskChannelRef.current) {
           kioskChannelRef.current.send(recentCardToKioskMessage(updated));
         }
-        skipNextKioskBroadcastRef.current = false;
       } catch {
         // If the fetch fails, keep the initial entry
         // Still broadcast the initial entry to kiosk
-        if (kioskChannelRef.current && !skipNextKioskBroadcastRef.current) {
+        if (kioskChannelRef.current) {
           kioskChannelRef.current.send(recentCardToKioskMessage(entry));
         }
-        skipNextKioskBroadcastRef.current = false;
       }
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -317,23 +321,6 @@ export function DeviceManagerProvider({ children }: { children: ReactNode }) {
           type: "card-reading",
           cardNumber: detection.cardNumber,
         });
-      }
-      // Check if this card is a pending registration confirmation
-      if (
-        pendingConfirmCardNoRef.current != null &&
-        pendingConfirmCardNoRef.current === detection.cardNumber
-      ) {
-        // Send confirmation to kiosk window
-        kioskChannelRef.current?.send({
-          type: "registration-confirm",
-          confirmed: true,
-        });
-        // Notify RunnerDialog in the same page via direct callback
-        pendingConfirmCallbackRef.current?.();
-        pendingConfirmCardNoRef.current = null;
-        pendingConfirmCallbackRef.current = null;
-        // Skip the next kiosk broadcast (the readout from this re-insert)
-        skipNextKioskBroadcastRef.current = true;
       }
     };
 
@@ -378,6 +365,7 @@ export function DeviceManagerProvider({ children }: { children: ReactNode }) {
     getKioskChannel,
     setPendingConfirmCardNo,
     lastDetectedCardNo,
+    getReaderConnection: getConnection,
   };
 
   return (

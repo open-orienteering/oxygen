@@ -5,11 +5,11 @@ import { RunnerStatus } from "@oxygen/shared";
 import type { PrismaClient } from "@prisma/client";
 
 /** Special punch type codes in MeOS */
-const PUNCH_START = 1;
-const PUNCH_FINISH = 2;
-const PUNCH_CHECK = 3;
+export const PUNCH_START = 1;
+export const PUNCH_FINISH = 2;
+export const PUNCH_CHECK = 3;
 
-interface ParsedPunch {
+export interface ParsedPunch {
   type: number;
   time: number; // deciseconds since midnight
   source: "card" | "free";
@@ -30,7 +30,7 @@ export interface ControlMatch {
 /**
  * Parse MeOS card punch string: "{type}-{seconds}.{tenths}[@unit][#origin];"
  */
-function parsePunches(punchString: string): ParsedPunch[] {
+export function parsePunches(punchString: string): ParsedPunch[] {
   if (!punchString) return [];
   const punches: ParsedPunch[] = [];
   const parts = punchString.split(";").filter(Boolean);
@@ -65,7 +65,7 @@ function parsePunches(punchString: string): ParsedPunch[] {
   return punches;
 }
 
-function parseCourseControls(controls: string): number[] {
+export function parseCourseControls(controls: string): number[] {
   return controls
     .split(";")
     .filter(Boolean)
@@ -73,7 +73,7 @@ function parseCourseControls(controls: string): number[] {
     .filter((n) => !isNaN(n));
 }
 
-function matchPunchesToCourse(
+export function matchPunchesToCourse(
   punches: ParsedPunch[],
   courseControls: number[],
   fallbackStartTime = 0,
