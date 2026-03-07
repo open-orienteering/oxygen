@@ -1,4 +1,5 @@
 import type { ReactNode } from 'react';
+import { useTranslation } from "react-i18next";
 
 interface BulkActionBarProps {
     count: number;
@@ -11,6 +12,8 @@ interface BulkActionBarProps {
  * It provides a slot for actions to be performed on the selection.
  */
 export function BulkActionBar({ count, onDeselectAll, children }: BulkActionBarProps) {
+    const { t } = useTranslation("common");
+
     if (count === 0) return null;
 
     return (
@@ -21,12 +24,12 @@ export function BulkActionBar({ count, onDeselectAll, children }: BulkActionBarP
                         {count}
                     </div>
                     <div className="flex flex-col">
-                        <span className="text-sm font-semibold text-slate-900">selected</span>
+                        <span className="text-sm font-semibold text-slate-900">{t("selected")}</span>
                         <button
                             onClick={onDeselectAll}
                             className="text-[11px] text-slate-500 hover:text-blue-600 underline text-left transition-colors cursor-pointer"
                         >
-                            Deselect all
+                            {t("deselectAll")}
                         </button>
                     </div>
                 </div>

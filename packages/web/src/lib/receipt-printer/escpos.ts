@@ -15,7 +15,33 @@
 
 import { formatMeosTime, formatRunningTime, runnerStatusLabel } from "@oxygen/shared";
 import type { RunnerStatusValue } from "@oxygen/shared";
-import type { FinishReceiptData, RegistrationReceiptData } from "./types.js";
+import type { FinishReceiptData, RegistrationReceiptData, FinishReceiptLabels, RegistrationReceiptLabels } from "./types.js";
+
+const DEFAULT_FINISH_LABELS: Required<FinishReceiptLabels> = {
+  start: "Start",
+  finish: "Finish",
+  splitHeader: "Nr.  Cod  Split      Time  Total  Pace",
+  fin: "Fin",
+  battery: "Battery",
+  position: "Position",
+  competitionInfo: "Competition information:",
+  tagline: "Lightweight orienteering management",
+  missing: "--- MISSING ---",
+};
+
+const DEFAULT_REG_LABELS: Required<RegistrationReceiptLabels> = {
+  registration: "REGISTRATION",
+  name: "Name:",
+  club: "Club:",
+  class: "Class:",
+  siCard: "SI Card:",
+  start: "Start:",
+  freeStart: "Free start",
+  payment: "Payment:",
+  amount: "Amount:",
+  printed: "Printed",
+  tagline: "Lightweight orienteering management",
+};
 
 // Standard line width for 80mm paper at default font size
 const LINE_WIDTH = 42;
@@ -217,6 +243,7 @@ function formatPace(legLength: number, splitDs: number): string {
 
 /** Build a finish receipt as ESC/POS bytes ready to send to a printer. */
 export function buildFinishReceipt(data: FinishReceiptData): Uint8Array {
+  const L = { ...DEFAULT_FINISH_LABELS, ...data.labels };
   const b = new EscPosBuilder();
 
   b.init();
@@ -250,7 +277,7 @@ export function buildFinishReceipt(data: FinishReceiptData): Uint8Array {
 
   // ── Status line ─────────────────────────────────────────────
   const { startTime, finishTime, runningTime, status } = data.timing;
-  b.line(`  Start: ${formatMeosTime(startTime)}   Finish: ${formatMeosTime(finishTime)}`);
+  b.line(`  ${L.start}: ${formatMeosTime(startTime)}   ${L.finish}: ${formatMeosTime(finishTime)}`);
 
   const statusLabel = runnerStatusLabel(status as RunnerStatusValue);
   const tidStr = formatRunningTime(runningTime);
@@ -278,14 +305,14 @@ export function buildFinishReceipt(data: FinishReceiptData): Uint8Array {
   //   pos 33-37  Pace (5) — right-aligned min/km pace
   if (data.splits.length > 0) {
     // Each header label right-aligned to its column's right edge
-    b.line("Nr.  Cod  Split      Time  Total  Pace");
+    b.line(L.splitHeader);
 
     for (const split of data.splits) {
       const idx = String(split.controlIndex + 1).padStart(2) + ".";
       const code = String(split.controlCode).padStart(4);
 
       if (split.status === "missing") {
-        b.line(`${idx} ${code}  --- MISSING ---`);
+        b.line(`${idx} ${code}  ${L.missing}`);
       } else {
         const splitFmt = formatRunningTime(split.splitTime).padStart(6);
         const clockFmt = (split.punchTime && split.punchTime > 0)
@@ -308,7 +335,7 @@ export function buildFinishReceipt(data: FinishReceiptData): Uint8Array {
     const finPace = (lastSplit && lastSplit.legLength && lastSplit.legLength > 0 && finSplitDs > 0)
       ? formatPace(lastSplit.legLength, finSplitDs).padStart(5)
       : "    -";
-    b.boldOn().line(`Fin      ${finSplitFmt}  ${finClock} ${finCum} ${finPace}`).boldOff();
+    b.boldOn().line(`${L.fin.padEnd(3)}      ${finSplitFmt}  ${finClock} ${finCum} ${finPace}`).boldOff();
     b.separator();
   }
 
@@ -321,14 +348,14 @@ export function buildFinishReceipt(data: FinishReceiptData): Uint8Array {
       : "-.--V";
     const dateStr = data.siac.batteryDate ?? "";
     const okStr = data.siac.batteryOk ? "OK" : "LOW";
-    b.line(`  Battery: ${voltStr}   ${dateStr}   ${okStr}`);
+    b.line(`  ${L.battery}: ${voltStr}   ${dateStr}   ${okStr}`);
     b.separator();
   }
 
   // ── Position + class results ─────────────────────────────────
   if (data.position) {
     const posLabel = `${data.position.rank}/${data.position.total}`;
-    b.boldOn().line(`  Position: ${posLabel}`).boldOff();
+    b.boldOn().line(`  ${L.position}: ${posLabel}`).boldOff();
   }
   if (data.classResults && data.classResults.length > 0) {
     for (const r of data.classResults) {
@@ -365,7 +392,7 @@ export function buildFinishReceipt(data: FinishReceiptData): Uint8Array {
   // ── QR code ───────────────────────────────────────────────────
   if (data.qrUrl) {
     b.alignCenter();
-    b.line("Competition information:");
+    b.line(L.competitionInfo);
     b.qrCode(data.qrUrl, 5);
     b.lf();
   }
@@ -373,7 +400,7 @@ export function buildFinishReceipt(data: FinishReceiptData): Uint8Array {
   // ── Footer ───────────────────────────────────────────────────
   b.alignCenter();
   b.boldOn().line("Oxygen").boldOff();
-  b.line("Lightweight orienteering management");
+  b.line(L.tagline);
   b.line("open-orienteering.org");
   const now = new Date();
   const timestamp = `${String(now.getHours()).padStart(2, "0")}:${String(now.getMinutes()).padStart(2, "0")}:${String(now.getSeconds()).padStart(2, "0")}`;
@@ -389,6 +416,7 @@ export function buildFinishReceipt(data: FinishReceiptData): Uint8Array {
 // ─── Registration Receipt ─────────────────────────────────────
 
 export function buildRegistrationReceipt(data: RegistrationReceiptData): Uint8Array {
+  const L = { ...DEFAULT_REG_LABELS, ...data.labels };
   const b = new EscPosBuilder();
   b.init();
 
@@ -408,23 +436,23 @@ export function buildRegistrationReceipt(data: RegistrationReceiptData): Uint8Ar
   if (data.competitionDate) b.line(data.competitionDate);
   b.lf();
   b.boldOn();
-  b.line("REGISTRATION");
+  b.line(L.registration);
   b.boldOff();
   b.alignLeft();
   b.separator();
 
   // ── Runner info ───────────────────────────────────────────────
-  b.leftRight("Name:", data.runner.name);
-  if (data.runner.clubName) b.leftRight("Club:", data.runner.clubName);
-  b.leftRight("Class:", data.runner.className);
-  b.leftRight("SI Card:", String(data.runner.cardNo));
-  b.leftRight("Start:", data.startTime || "Free start");
+  b.leftRight(L.name, data.runner.name);
+  if (data.runner.clubName) b.leftRight(L.club, data.runner.clubName);
+  b.leftRight(L.class, data.runner.className);
+  b.leftRight(L.siCard, String(data.runner.cardNo));
+  b.leftRight(L.start, data.startTime || L.freeStart);
   b.separator();
 
   // ── Payment ───────────────────────────────────────────────────
   if (data.payment) {
-    b.leftRight("Payment:", data.payment.method);
-    b.leftRight("Amount:", `${data.payment.amount} kr`);
+    b.leftRight(L.payment, data.payment.method);
+    b.leftRight(L.amount, `${data.payment.amount} kr`);
     b.separator();
   }
 
@@ -443,7 +471,7 @@ export function buildRegistrationReceipt(data: RegistrationReceiptData): Uint8Ar
   b.lf();
   b.alignCenter();
   const timestamp = new Date().toLocaleString("sv-SE", { hour: "2-digit", minute: "2-digit" });
-  b.line(`Printed ${timestamp}`);
+  b.line(`${L.printed} ${timestamp}`);
   b.lf();
   b.alignLeft();
 

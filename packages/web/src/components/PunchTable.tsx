@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { useTranslation } from "react-i18next";
 import { formatMeosTime, formatRunningTime, parseMeosTime } from "@oxygen/shared";
 
 interface ControlMatch {
@@ -56,6 +57,7 @@ export function PunchTable({
   onUpdateStartTime,
   onUpdateFinishTime,
 }: PunchTableProps) {
+  const { t: tr } = useTranslation("race");
   const t = data.timing;
   const [showAddForm, setShowAddForm] = useState(false);
 
@@ -66,11 +68,11 @@ export function PunchTable({
         <div className={`bg-white ${compact ? "rounded-lg border border-slate-200" : "rounded-xl border border-slate-200"} overflow-hidden`}>
           <div className="px-4 py-3 border-b border-slate-200 flex items-center justify-between">
             <h3 className={`font-semibold text-slate-500 uppercase tracking-wider ${compact ? "text-xs" : "text-sm"}`}>
-              Punches &mdash; {data.course.name}
+              {tr("punches")} &mdash; {data.course.name}
             </h3>
             <span className="text-xs text-slate-400">
               {data.controls.filter((c) => c.status === "ok").length}/
-              {data.controls.length} controls OK
+              {data.controls.length} {tr("controlsOk")}
             </span>
           </div>
 
@@ -81,19 +83,19 @@ export function PunchTable({
                   #
                 </th>
                 <th className="px-4 py-2 text-left font-medium text-slate-500">
-                  Control
+                  {tr("control")}
                 </th>
                 <th className="px-4 py-2 text-right font-medium text-slate-500">
-                  Time
+                  {tr("time")}
                 </th>
                 <th className="px-4 py-2 text-right font-medium text-slate-500">
-                  Split
+                  {tr("split")}
                 </th>
                 <th className="px-4 py-2 text-right font-medium text-slate-500">
-                  Cumulative
+                  {tr("cumulative")}
                 </th>
                 <th className="px-4 py-2 text-center font-medium text-slate-500 w-16">
-                  Status
+                  {tr("statusHeader")}
                 </th>
                 {editable && (
                   <th className="px-4 py-2 text-center font-medium text-slate-500 w-20">
@@ -106,7 +108,7 @@ export function PunchTable({
               {/* Start row */}
               <TimingRow
                 label="S"
-                name="Start"
+                name={tr("punchStart")}
                 time={t.startTime}
                 editable={editable}
                 canEdit={!!onUpdateStartTime}
@@ -128,7 +130,7 @@ export function PunchTable({
               {/* Finish row */}
               <TimingRow
                 label="F"
-                name="Finish"
+                name={tr("punchFinish")}
                 time={t.finishTime}
                 editable={editable}
                 canEdit={!!onUpdateFinishTime}
@@ -153,7 +155,7 @@ export function PunchTable({
       {data.extraPunches.length > 0 && (
         <div className={`bg-amber-50 ${compact ? "rounded-lg" : "rounded-xl"} border border-amber-200 p-4`}>
           <h3 className="text-sm font-semibold text-amber-800 mb-2">
-            Extra Punches (not matched to course)
+            {tr("extraPunches")}
           </h3>
           <div className="flex flex-wrap gap-2">
             {data.extraPunches.map((p, i) => (
@@ -172,7 +174,7 @@ export function PunchTable({
       {data.missingControls.length > 0 && (
         <div className={`bg-red-50 ${compact ? "rounded-lg" : "rounded-xl"} border border-red-200 p-4`}>
           <h3 className="text-sm font-semibold text-red-800 mb-2">
-            Missing Controls
+            {tr("missingControlsTitle")}
           </h3>
           <div className="flex flex-wrap gap-2">
             {data.missingControls.map((code, i) => (
@@ -202,7 +204,7 @@ export function PunchTable({
             onClick={() => setShowAddForm(true)}
             className="w-full py-2 text-sm font-medium text-blue-600 hover:text-blue-800 hover:bg-blue-50 border border-dashed border-blue-300 rounded-lg transition-colors cursor-pointer"
           >
-            + Add Punch Correction
+            + {tr("addPunchCorrection")}
           </button>
         )
       )}
@@ -225,6 +227,7 @@ function ControlRow({
   onRemovePunch?: (punchId: number) => void;
   onUpdatePunchTime?: (punchId: number, newTime: number) => void;
 }) {
+  const { t: tr } = useTranslation("race");
   const isMissing = ctrl.status === "missing";
   const isFree = ctrl.source === "free";
   const [editingTime, setEditingTime] = useState(false);
@@ -261,7 +264,7 @@ function ControlRow({
         </span>
         {isFree && (
           <span className="ml-1.5 px-1.5 py-0.5 text-[10px] font-semibold bg-indigo-100 text-indigo-700 rounded">
-            manual
+            {tr("manual")}
           </span>
         )}
       </td>
@@ -483,6 +486,7 @@ function AddPunchForm({
   onAdd: (controlCode: number, time: number) => void;
   onCancel: () => void;
 }) {
+  const { t: tr } = useTranslation("race");
   const [controlCode, setControlCode] = useState("");
   const [timeStr, setTimeStr] = useState("");
   const [adding, setAdding] = useState(false);
@@ -506,19 +510,19 @@ function AddPunchForm({
     >
       <div className="flex items-center justify-between mb-3">
         <h3 className="text-sm font-semibold text-slate-500 uppercase tracking-wider">
-          Add Punch Correction
+          {tr("addPunchCorrection")}
         </h3>
         <button
           type="button"
           onClick={onCancel}
           className="text-xs text-slate-400 hover:text-slate-600 cursor-pointer"
         >
-          Cancel
+          {tr("cancelLabel")}
         </button>
       </div>
       <div className="flex items-end gap-3">
         <div className="flex-1">
-          <label className="block text-xs text-slate-500 mb-1">Control Code</label>
+          <label className="block text-xs text-slate-500 mb-1">{tr("controlCode")}</label>
           <input
             type="number"
             value={controlCode}
@@ -529,7 +533,7 @@ function AddPunchForm({
           />
         </div>
         <div className="flex-1">
-          <label className="block text-xs text-slate-500 mb-1">Time (HH:MM:SS)</label>
+          <label className="block text-xs text-slate-500 mb-1">{tr("timeHHMMSS")}</label>
           <input
             type="text"
             value={timeStr}
@@ -543,7 +547,7 @@ function AddPunchForm({
           disabled={adding}
           className="px-4 py-2 text-sm font-medium bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors cursor-pointer disabled:opacity-50"
         >
-          {adding ? "Adding..." : "Add Punch"}
+          {adding ? tr("adding") : tr("addPunch")}
         </button>
       </div>
     </form>

@@ -30,36 +30,59 @@ export function formatDate(input: Date | string | number): string {
 }
 
 /**
- * Human-friendly relative time: "just now", "3 min ago", "2 hours ago", "5 days ago", etc.
+ * Compute the numeric diff bucket for a date, returning the key + count.
+ * Used by timeAgo (English fallback) and useTimeAgo (i18n-aware).
  */
-export function timeAgo(input: Date | string | number): string {
+export function timeAgoParts(input: Date | string | number): { key: string; count: number } {
   const d = input instanceof Date ? input : new Date(input);
-  if (isNaN(d.getTime())) return "";
+  if (isNaN(d.getTime())) return { key: "", count: 0 };
   const diffMs = Date.now() - d.getTime();
-  if (diffMs < 0) return "just now"; // future date → treat as "just now"
+  if (diffMs < 0) return { key: "justNow", count: 0 };
 
   const seconds = Math.floor(diffMs / 1000);
-  if (seconds < 60) return "just now";
+  if (seconds < 60) return { key: "justNow", count: 0 };
 
   const minutes = Math.floor(seconds / 60);
-  if (minutes === 1) return "1 min ago";
-  if (minutes < 60) return `${minutes} min ago`;
+  if (minutes === 1) return { key: "minuteAgo", count: 1 };
+  if (minutes < 60) return { key: "minutesAgo", count: minutes };
 
   const hours = Math.floor(minutes / 60);
-  if (hours === 1) return "1 hour ago";
-  if (hours < 24) return `${hours} hours ago`;
+  if (hours === 1) return { key: "hourAgo", count: 1 };
+  if (hours < 24) return { key: "hoursAgo", count: hours };
 
   const days = Math.floor(hours / 24);
-  if (days === 1) return "1 day ago";
-  if (days < 30) return `${days} days ago`;
+  if (days === 1) return { key: "dayAgo", count: 1 };
+  if (days < 30) return { key: "daysAgo", count: days };
 
   const months = Math.floor(days / 30);
-  if (months === 1) return "1 month ago";
-  if (months < 12) return `${months} months ago`;
+  if (months === 1) return { key: "monthAgo", count: 1 };
+  if (months < 12) return { key: "monthsAgo", count: months };
 
   const years = Math.floor(days / 365);
-  if (years === 1) return "1 year ago";
-  return `${years} years ago`;
+  if (years === 1) return { key: "yearAgo", count: 1 };
+  return { key: "yearsAgo", count: years };
+}
+
+/**
+ * Human-friendly relative time: "just now", "3 min ago", "2 hours ago", "5 days ago", etc.
+ * English-only fallback — prefer useTimeAgo() hook for i18n-aware formatting.
+ */
+export function timeAgo(input: Date | string | number): string {
+  const { key, count } = timeAgoParts(input);
+  const map: Record<string, string> = {
+    justNow: "just now",
+    minuteAgo: "1 min ago",
+    minutesAgo: `${count} min ago`,
+    hourAgo: "1 hour ago",
+    hoursAgo: `${count} hours ago`,
+    dayAgo: "1 day ago",
+    daysAgo: `${count} days ago`,
+    monthAgo: "1 month ago",
+    monthsAgo: `${count} months ago`,
+    yearAgo: "1 year ago",
+    yearsAgo: `${count} years ago`,
+  };
+  return map[key] ?? "";
 }
 
 /**

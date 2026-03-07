@@ -1,4 +1,5 @@
 import { useState, useMemo, useCallback, useEffect, useRef } from "react";
+import { useTranslation } from "react-i18next";
 import { trpc } from "../lib/trpc";
 import {
   controlStatusLabel,
@@ -35,6 +36,7 @@ interface ProgramResult {
 // ─── Main component ──────────────────────────────────────
 
 export function ControlsPage() {
+  const { t } = useTranslation("controls");
   const [search, setSearch] = useSearchParam("search");
   const [statusFilter, setStatusFilter] = useSearchParam("status");
   const [expandedId, setExpandedId] = useNumericSearchParam("control");
@@ -76,7 +78,7 @@ export function ControlsPage() {
   });
 
   const handleDelete = (id: number) => {
-    if (window.confirm(`Remove control ${id}?`)) {
+    if (window.confirm(t("removeConfirm", { id }))) {
       deleteMutation.mutate({ id });
     }
   };
@@ -151,7 +153,7 @@ export function ControlsPage() {
           </svg>
           <input
             type="text"
-            placeholder="Search code, name..."
+            placeholder={t("searchPlaceholder")}
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             className="w-full pl-10 pr-4 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent bg-white"
@@ -162,7 +164,7 @@ export function ControlsPage() {
           onChange={(e) => setStatusFilter(e.target.value)}
           className="px-3 py-2 border border-slate-200 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 cursor-pointer"
         >
-          <option value="">All statuses</option>
+          <option value="">{t("allStatuses")}</option>
           {CONTROL_STATUS_OPTIONS.map((opt) => (
             <option key={opt.value} value={opt.value}>
               {opt.label} -- {opt.description}
@@ -176,7 +178,7 @@ export function ControlsPage() {
           <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
           </svg>
-          New Control
+          {t("newControl")}
         </button>
       </div>
 
@@ -184,10 +186,10 @@ export function ControlsPage() {
       <div className="flex items-center justify-between mb-4">
         <div className="flex items-center gap-4">
           <span className="text-sm text-slate-500">
-            {items.length} controls
+            {t("controlsCount", { count: items.length })}
           </span>
           <label className="flex items-center gap-2 text-sm">
-            <span className="text-slate-600 font-medium">AIR+</span>
+            <span className="text-slate-600 font-medium">{t("airPlus")}</span>
             <button
               onClick={() => setAirPlusMutation.mutate({ enabled: !airPlusConfig.data?.airPlusEnabled })}
               className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors cursor-pointer ${
@@ -202,7 +204,7 @@ export function ControlsPage() {
             </button>
           </label>
           <label className="flex items-center gap-2 text-sm">
-            <span className="text-slate-600 font-medium">Awake</span>
+            <span className="text-slate-600 font-medium">{t("awake")}</span>
             <select
               value={airPlusConfig.data?.awakeHours ?? 6}
               onChange={(e) => setAirPlusMutation.mutate({ awakeHours: parseInt(e.target.value, 10) })}
@@ -227,7 +229,7 @@ export function ControlsPage() {
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.066 2.573c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.573 1.066c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.066-2.573c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
             </svg>
-            Program Controls
+            {t("programControls")}
           </button>
           <button
             onClick={() => setStationMode(stationMode === "readout" ? null : "readout")}
@@ -240,7 +242,7 @@ export function ControlsPage() {
             <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
             </svg>
-            Read Controls
+            {t("readControls")}
           </button>
         </div>
       </div>
@@ -266,7 +268,7 @@ export function ControlsPage() {
       {selectedIds.size > 0 && (
         <div className="bg-blue-50 border border-blue-200 rounded-xl p-3 mb-4 flex items-center gap-3 flex-wrap">
           <span className="text-sm font-medium text-blue-800">
-            {selectedIds.size} selected
+            {t("selectedCount", { count: selectedIds.size })}
           </span>
           <div className="flex items-center gap-2">
             <select
@@ -277,10 +279,10 @@ export function ControlsPage() {
               }}
               className="px-2 py-1 text-sm border border-blue-200 rounded-lg bg-white cursor-pointer"
             >
-              <option value="" disabled>Set Radio Type...</option>
-              <option value="normal">Normal</option>
-              <option value="internal_radio">Internal Radio</option>
-              <option value="public_radio">Public Radio</option>
+              <option value="" disabled>{t("setRadioType")}</option>
+              <option value="normal">{t("normal")}</option>
+              <option value="internal_radio">{t("internalRadio")}</option>
+              <option value="public_radio">{t("publicRadio")}</option>
             </select>
             <select
               defaultValue=""
@@ -290,17 +292,17 @@ export function ControlsPage() {
               }}
               className="px-2 py-1 text-sm border border-blue-200 rounded-lg bg-white cursor-pointer"
             >
-              <option value="" disabled>Set AIR+...</option>
-              <option value="default">Default</option>
-              <option value="on">On</option>
-              <option value="off">Off</option>
+              <option value="" disabled>{t("setAirPlus")}</option>
+              <option value="default">{t("airPlusDefault")}</option>
+              <option value="on">{t("airPlusOn")}</option>
+              <option value="off">{t("airPlusOff")}</option>
             </select>
           </div>
           <button
             onClick={() => setSelectedIds(new Set())}
             className="text-sm text-blue-600 hover:text-blue-800 cursor-pointer ml-auto"
           >
-            Clear selection
+            {t("clearSelection")}
           </button>
         </div>
       )}
@@ -325,7 +327,7 @@ export function ControlsPage() {
         )}
         {items.length === 0 && !controls.isLoading && (
           <div className="p-8 text-center text-slate-400 text-sm">
-            No controls found
+            {t("noControls")}
           </div>
         )}
         {items.length > 0 && (
@@ -344,14 +346,14 @@ export function ControlsPage() {
                       className="rounded border-slate-300 cursor-pointer"
                     />
                   </th>
-                  <SortHeader label="Code" active={sort.key === "code"} direction={sort.dir} onClick={() => toggle("code")} className="w-20" />
-                  <SortHeader label="Name" active={sort.key === "name"} direction={sort.dir} onClick={() => toggle("name")} />
-                  <SortHeader label="Status" active={sort.key === "status"} direction={sort.dir} onClick={() => toggle("status")} className="w-28" />
-                  <SortHeader label="Radio" active={sort.key === "radio"} direction={sort.dir} onClick={() => toggle("radio")} className="w-28" />
-                  <SortHeader label="Runners" active={sort.key === "runners"} direction={sort.dir} onClick={() => toggle("runners")} className="w-24" />
-                  <SortHeader label="Checked" active={sort.key === "checked"} direction={sort.dir} onClick={() => toggle("checked")} className="hidden lg:table-cell w-32" />
-                  <th className="px-4 py-2.5 text-left font-medium text-slate-500 hidden lg:table-cell w-24">Battery</th>
-                  <th className="px-4 py-2.5 text-right font-medium text-slate-500 w-20">Actions</th>
+                  <SortHeader label={t("code")} active={sort.key === "code"} direction={sort.dir} onClick={() => toggle("code")} className="w-20" />
+                  <SortHeader label={t("name")} active={sort.key === "name"} direction={sort.dir} onClick={() => toggle("name")} />
+                  <SortHeader label={t("status")} active={sort.key === "status"} direction={sort.dir} onClick={() => toggle("status")} className="w-28" />
+                  <SortHeader label={t("radio")} active={sort.key === "radio"} direction={sort.dir} onClick={() => toggle("radio")} className="w-28" />
+                  <SortHeader label={t("runners")} active={sort.key === "runners"} direction={sort.dir} onClick={() => toggle("runners")} className="w-24" />
+                  <SortHeader label={t("checked")} active={sort.key === "checked"} direction={sort.dir} onClick={() => toggle("checked")} className="hidden lg:table-cell w-32" />
+                  <th className="px-4 py-2.5 text-left font-medium text-slate-500 hidden lg:table-cell w-24">{t("battery")}</th>
+                  <th className="px-4 py-2.5 text-right font-medium text-slate-500 w-20">{t("actions")}</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
@@ -398,6 +400,7 @@ function ControlRow({
   onToggleSelect: (e: React.MouseEvent) => void;
   onDelete: () => void;
 }) {
+  const { t } = useTranslation("controls");
   const isStartFinish = ctrl.status === 4 || ctrl.status === 5;
   const config = ctrl.config;
 
@@ -445,7 +448,7 @@ function ControlRow({
           <button
             onClick={onDelete}
             className="p-1.5 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded transition-colors cursor-pointer"
-            title="Remove control"
+            title={t("removeControl")}
           >
             <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
@@ -478,11 +481,12 @@ function ControlStatusBadge({ status }: { status: ControlStatusValue }) {
 }
 
 function RadioTypeBadge({ type }: { type: RadioType }) {
+  const { t } = useTranslation("controls");
   if (type === "normal") return <span className="text-slate-300">—</span>;
   if (type === "internal_radio") {
-    return <span className="px-2 py-0.5 rounded-full text-xs font-medium bg-amber-100 text-amber-800">Internal</span>;
+    return <span className="px-2 py-0.5 rounded-full text-xs font-medium bg-amber-100 text-amber-800">{t("internalRadio")}</span>;
   }
-  return <span className="px-2 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-800">Public</span>;
+  return <span className="px-2 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-800">{t("publicRadio")}</span>;
 }
 
 function CheckedIndicator({ checkedAt }: { checkedAt: string | null }) {
@@ -518,6 +522,7 @@ function relativeTime(date: Date): string {
 // ─── Inline detail (expanded view) ──────────────────────
 
 function ControlInlineDetail({ controlId }: { controlId: number }) {
+  const { t } = useTranslation("controls");
   const utils = trpc.useUtils();
   const detail = trpc.control.detail.useQuery({ id: controlId });
   const updateMutation = trpc.control.update.useMutation({
@@ -548,7 +553,7 @@ function ControlInlineDetail({ controlId }: { controlId: number }) {
   if (!detail.data) {
     return (
       <div className="bg-blue-50/60 p-6 text-center text-slate-400 text-sm">
-        Control not found
+        {t("controlNotFound")}
       </div>
     );
   }
@@ -567,11 +572,11 @@ function ControlInlineDetail({ controlId }: { controlId: number }) {
         {/* Editable fields */}
         <div className="space-y-4">
           <h4 className="text-xs font-semibold text-slate-500 uppercase tracking-wider">
-            Control Settings
+            {t("controlSettings")}
           </h4>
 
           <div>
-            <label className="block text-xs font-medium text-slate-500 mb-1">Name</label>
+            <label className="block text-xs font-medium text-slate-500 mb-1">{t("name")}</label>
             <input
               type="text"
               value={editName ?? d.name}
@@ -583,12 +588,12 @@ function ControlInlineDetail({ controlId }: { controlId: number }) {
                 setEditName(null);
               }}
               className="w-full px-3 py-1.5 border border-slate-200 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-500"
-              placeholder="e.g. Radio 1, Förvarning..."
+              placeholder={t("namePlaceholder")}
             />
           </div>
 
           <div>
-            <label className="block text-xs font-medium text-slate-500 mb-1">Punch Code(s)</label>
+            <label className="block text-xs font-medium text-slate-500 mb-1">{t("punchCodes")}</label>
             <input
               type="text"
               value={editCodes ?? d.codes}
@@ -600,15 +605,15 @@ function ControlInlineDetail({ controlId }: { controlId: number }) {
                 setEditCodes(null);
               }}
               className="w-full px-3 py-1.5 border border-slate-200 rounded-lg text-sm font-mono bg-white focus:outline-none focus:ring-2 focus:ring-blue-500"
-              placeholder="e.g. 31 or 31;250"
+              placeholder={t("punchCodesPlaceholder")}
             />
             <p className="text-xs text-slate-400 mt-1">
-              Separate multiple codes with semicolons for replacements or forks
+              {t("punchCodesHelp")}
             </p>
           </div>
 
           <div>
-            <label className="block text-xs font-medium text-slate-500 mb-1">Status</label>
+            <label className="block text-xs font-medium text-slate-500 mb-1">{t("status")}</label>
             <select
               value={editStatus ?? d.status}
               onChange={(e) => {
@@ -631,11 +636,11 @@ function ControlInlineDetail({ controlId }: { controlId: number }) {
         {!isStartFinish && (
           <div className="space-y-4">
             <h4 className="text-xs font-semibold text-slate-500 uppercase tracking-wider">
-              Radio &amp; AIR+ Config
+              {t("radioAirPlusConfig")}
             </h4>
 
             <div>
-              <label className="block text-xs font-medium text-slate-500 mb-1">Radio Type</label>
+              <label className="block text-xs font-medium text-slate-500 mb-1">{t("radioType")}</label>
               <select
                 value={config?.radioType ?? "normal"}
                 onChange={(e) => {
@@ -646,14 +651,14 @@ function ControlInlineDetail({ controlId }: { controlId: number }) {
                 }}
                 className="w-full px-3 py-1.5 border border-slate-200 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 cursor-pointer"
               >
-                <option value="normal">Normal</option>
-                <option value="internal_radio">Internal Radio (SRR+)</option>
-                <option value="public_radio">Public Radio (SRR+ + Liveresults)</option>
+                <option value="normal">{t("normal")}</option>
+                <option value="internal_radio">{t("internalRadioSRR")}</option>
+                <option value="public_radio">{t("publicRadioSRR")}</option>
               </select>
             </div>
 
             <div>
-              <label className="block text-xs font-medium text-slate-500 mb-1">AIR+ Override</label>
+              <label className="block text-xs font-medium text-slate-500 mb-1">{t("airPlusOverride")}</label>
               <select
                 value={config?.airPlus ?? "default"}
                 onChange={(e) => {
@@ -664,17 +669,17 @@ function ControlInlineDetail({ controlId }: { controlId: number }) {
                 }}
                 className="w-full px-3 py-1.5 border border-slate-200 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 cursor-pointer"
               >
-                <option value="default">Default (competition setting)</option>
-                <option value="on">On</option>
-                <option value="off">Off</option>
+                <option value="default">{t("airPlusDefaultDesc")}</option>
+                <option value="on">{t("airPlusOn")}</option>
+                <option value="off">{t("airPlusOff")}</option>
               </select>
             </div>
 
             {config?.checkedAt && (
               <div className="text-xs text-slate-500 space-y-1">
-                <div>Checked: {relativeTime(new Date(config.checkedAt))}</div>
+                <div>{t("checkedLabel", { time: relativeTime(new Date(config.checkedAt)) })}</div>
                 {config.batteryVoltage !== null && (
-                  <div>Battery: {config.batteryVoltage.toFixed(2)}V {config.batteryLow ? "(LOW)" : ""}</div>
+                  <div>{t("batteryLabel", { voltage: config.batteryVoltage.toFixed(2) })} {config.batteryLow ? t("batteryLow") : ""}</div>
                 )}
               </div>
             )}
@@ -684,10 +689,10 @@ function ControlInlineDetail({ controlId }: { controlId: number }) {
         {/* Course usage */}
         <div>
           <h4 className="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-3">
-            Used in Courses
+            {t("usedInCourses")}
           </h4>
           {d.courses.length === 0 ? (
-            <p className="text-sm text-slate-400">Not used in any course</p>
+            <p className="text-sm text-slate-400">{t("notUsedInAnyCourse")}</p>
           ) : (
             <div className="bg-white rounded-lg border border-slate-200 divide-y divide-slate-100">
               {d.courses.map((cu) => (
@@ -703,12 +708,12 @@ function ControlInlineDetail({ controlId }: { controlId: number }) {
                     )}
                   </div>
                   <span className="text-xs text-slate-500">
-                    {cu.runnerCount} runner{cu.runnerCount !== 1 ? "s" : ""}
+                    {t("runnerCount", { count: cu.runnerCount })}
                   </span>
                 </div>
               ))}
               <div className="px-4 py-2 bg-slate-50 text-xs text-slate-500">
-                Total: {d.courses.reduce((sum, c) => sum + c.runnerCount, 0)} runners across {d.courses.length} course{d.courses.length !== 1 ? "s" : ""}
+                {t("totalRunnersAcrossCourses", { runners: d.courses.reduce((sum, c) => sum + c.runnerCount, 0), courses: d.courses.length })}
               </div>
             </div>
           )}
@@ -727,6 +732,7 @@ function CreateControlForm({
   onClose: () => void;
   onCreated: () => void;
 }) {
+  const { t } = useTranslation("controls");
   const [codes, setCodes] = useState("");
   const [name, setName] = useState("");
   const [status, setStatus] = useState(0);
@@ -744,7 +750,7 @@ function CreateControlForm({
   return (
     <div className="bg-white rounded-xl border border-blue-200 shadow-sm p-5 mb-6">
       <div className="flex items-center justify-between mb-4">
-        <h3 className="text-sm font-semibold text-slate-900">New Control</h3>
+        <h3 className="text-sm font-semibold text-slate-900">{t("newControl")}</h3>
         <button
           onClick={onClose}
           className="p-1 text-slate-400 hover:text-slate-600 rounded cursor-pointer"
@@ -757,30 +763,30 @@ function CreateControlForm({
       <form onSubmit={handleSubmit} className="flex flex-col sm:flex-row gap-3">
         <div className="flex-1">
           <label className="block text-xs font-medium text-slate-500 mb-1">
-            Punch Code(s)
+            {t("punchCodes")}
           </label>
           <input
             type="text"
             value={codes}
             onChange={(e) => setCodes(e.target.value)}
-            placeholder="e.g. 50 or 50;250"
+            placeholder={t("codesPlaceholder")}
             className="w-full px-3 py-1.5 border border-slate-200 rounded-lg text-sm font-mono focus:outline-none focus:ring-2 focus:ring-blue-500"
             autoFocus
             required
           />
         </div>
         <div className="flex-1">
-          <label className="block text-xs font-medium text-slate-500 mb-1">Name</label>
+          <label className="block text-xs font-medium text-slate-500 mb-1">{t("name")}</label>
           <input
             type="text"
             value={name}
             onChange={(e) => setName(e.target.value)}
-            placeholder="e.g. Radio 1 (optional)"
+            placeholder={t("nameCreatePlaceholder")}
             className="w-full px-3 py-1.5 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
           />
         </div>
         <div className="sm:w-40">
-          <label className="block text-xs font-medium text-slate-500 mb-1">Status</label>
+          <label className="block text-xs font-medium text-slate-500 mb-1">{t("status")}</label>
           <select
             value={status}
             onChange={(e) => setStatus(parseInt(e.target.value, 10))}
@@ -799,14 +805,14 @@ function CreateControlForm({
             disabled={createMutation.isPending || !codes.trim()}
             className="px-4 py-1.5 bg-blue-600 text-white text-sm font-medium rounded-lg hover:bg-blue-700 disabled:opacity-50 transition-colors cursor-pointer"
           >
-            {createMutation.isPending ? "Creating..." : "Create"}
+            {createMutation.isPending ? t("creating") : t("create")}
           </button>
           <button
             type="button"
             onClick={onClose}
             className="px-4 py-1.5 text-slate-500 text-sm hover:text-slate-700 hover:bg-slate-100 rounded-lg transition-colors cursor-pointer"
           >
-            Cancel
+            {t("cancel")}
           </button>
         </div>
       </form>
@@ -834,6 +840,7 @@ function ProgrammingPanel({
   onProgrammed: () => void;
   onClose: () => void;
 }) {
+  const { t } = useTranslation("controls");
   const { readerStatus, getReaderConnection, connectReader } = useDeviceManager();
   const [busy, setBusy] = useState(false);
   const [results, setResults] = useState<ProgramResult[]>([]);
@@ -910,7 +917,7 @@ function ProgrammingPanel({
         batteryVoltage: stationInfo.batteryVoltage,
         batteryLow: false,
         success: false,
-        error: `Control #${code} not in this competition`,
+        error: t("controlNotInCompetition", { code }),
         timestamp: new Date(),
       };
       setResults((prev) => [result, ...prev].slice(0, 20));
@@ -1032,7 +1039,7 @@ function ProgrammingPanel({
       <div className="flex items-center justify-between mb-3">
         <div className="flex items-center gap-2">
           <span className={`w-2.5 h-2.5 rounded-full ${connected ? "bg-green-500 animate-pulse" : "bg-slate-300"}`} />
-          <h3 className="text-sm font-semibold text-slate-800">Pre-Competition Programming</h3>
+          <h3 className="text-sm font-semibold text-slate-800">{t("preCompProgramming")}</h3>
         </div>
         <div className="flex items-center gap-2">
           {!connected ? (
@@ -1040,7 +1047,7 @@ function ProgrammingPanel({
               onClick={() => connectReader()}
               className="px-3 py-1.5 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700 cursor-pointer"
             >
-              Connect SI Station
+              {t("connectStation")}
             </button>
           ) : (
             <button
@@ -1048,7 +1055,7 @@ function ProgrammingPanel({
               disabled={busy || autoMode}
               className="px-3 py-1.5 text-sm bg-green-600 text-white rounded-lg hover:bg-green-700 disabled:opacity-50 cursor-pointer"
             >
-              {busy ? "Programming..." : "Read & Program"}
+              {busy ? t("programmingStation") : t("readAndProgram")}
             </button>
           )}
           <label className="flex items-center gap-1.5 text-xs text-slate-600 cursor-pointer">
@@ -1062,7 +1069,7 @@ function ProgrammingPanel({
               disabled={!connected}
               className="rounded"
             />
-            Auto
+            {t("auto")}
           </label>
           <label className="flex items-center gap-1.5 text-xs text-slate-600 cursor-pointer">
             <input
@@ -1071,24 +1078,24 @@ function ProgrammingPanel({
               onChange={(e) => setBeep(e.target.checked)}
               className="rounded"
             />
-            Beep
+            {t("beep")}
           </label>
           <button
             onClick={handleClose}
             className="px-3 py-1.5 text-sm bg-slate-200 text-slate-700 rounded-lg hover:bg-slate-300 cursor-pointer"
           >
-            Close
+            {t("close")}
           </button>
         </div>
       </div>
 
       {/* Clock verification */}
       {ntpStatus === "checking" && (
-        <div className="text-xs text-slate-500 px-3 py-1.5 mb-2">Verifying clocks...</div>
+        <div className="text-xs text-slate-500 px-3 py-1.5 mb-2">{t("verifyingClocks")}</div>
       )}
       {ntpStatus === "failed" && (
         <div className="text-xs text-amber-700 bg-amber-50 px-3 py-1.5 rounded-lg mb-2">
-          Could not verify clocks — make sure your computer time is correct.
+          {t("clockVerifyFailed")}
         </div>
       )}
       {typeof ntpStatus === "object" && ntpStatus !== null && (() => {
@@ -1102,17 +1109,14 @@ function ProgrammingPanel({
         if (!isOk) {
           return (
             <div className="text-sm text-red-700 bg-red-50 px-3 py-2 rounded-lg mb-2 font-medium">
-              Local computer clock is off by {Math.abs(totalDriftMs) >= 1000
-                ? `${(totalDriftMs / 1000).toFixed(1)}s`
-                : `${Math.abs(totalDriftMs)}ms`
-              }{hasNtp ? ` (vs ${ntpSource})` : " (vs API server)"} — fix your computer time before programming controls!
+              {t("clockOffBy", { drift: Math.abs(totalDriftMs) >= 1000 ? `${(totalDriftMs / 1000).toFixed(1)}s` : `${Math.abs(totalDriftMs)}ms` })}
             </div>
           );
         }
 
         return (
           <div className="text-xs text-green-700 px-3 py-1 mb-2">
-            Local computer clock OK
+            {t("clockOk")}
             {hasNtp
               ? ` (${serverNtpOk ? "verified" : "unverified server"} via ${ntpSource}, drift: ${totalDriftMs >= 0 ? "+" : ""}${totalDriftMs}ms)`
               : ` (vs API server, drift: ${browserToServerMs >= 0 ? "+" : ""}${browserToServerMs}ms — NTP unavailable)`
@@ -1138,7 +1142,7 @@ function ProgrammingPanel({
                 <span className={`w-2 h-2 rounded-full ${r.success ? "bg-green-500" : "bg-red-500"}`} />
                 <span className="font-mono font-bold">{r.code}</span>
                 {r.success ? (
-                  <span className="text-green-700">Programmed</span>
+                  <span className="text-green-700">{t("programmed")}</span>
                 ) : (
                   <span className="text-red-600">{r.error}</span>
                 )}
@@ -1146,13 +1150,13 @@ function ProgrammingPanel({
               <div className="flex items-center gap-3 text-xs text-slate-500">
                 {r.timeDriftMs != null && (
                   <span className={`font-mono ${Math.abs(r.timeDriftMs) > 2000 ? "text-amber-600 font-bold" : ""}`}>
-                    Drift: {r.timeDriftMs >= 0 ? "+" : ""}{Math.abs(r.timeDriftMs) < 1000
+                    {t("drift")}: {r.timeDriftMs >= 0 ? "+" : ""}{Math.abs(r.timeDriftMs) < 1000
                       ? `${Math.round(r.timeDriftMs)}ms`
                       : `${(r.timeDriftMs / 1000).toFixed(1)}s`}
                   </span>
                 )}
                 <span className={`font-mono ${r.batteryLow ? "text-red-600 font-bold" : ""}`}>
-                  Bat: {r.batteryVoltage.toFixed(2)}V
+                  {t("bat")}: {r.batteryVoltage.toFixed(2)}V
                 </span>
                 <span>{r.timestamp.toLocaleTimeString(undefined, { hour12: false })}</span>
               </div>
@@ -1164,8 +1168,8 @@ function ProgrammingPanel({
       {connected && results.length === 0 && (
         <p className="text-sm text-slate-500">
           {autoMode
-            ? "Auto mode active — insert controls into the coupling stick to program them automatically."
-            : 'Insert a control into the coupling stick and press "Read & Program".'}
+            ? t("autoModeActiveProgramming")
+            : t("manualModeProgramming")}
         </p>
       )}
     </div>
@@ -1193,6 +1197,7 @@ function ReadoutPanel({
   controls: ControlInfo[];
   onClose: () => void;
 }) {
+  const { t } = useTranslation("controls");
   const { readerStatus, getReaderConnection, connectReader } = useDeviceManager();
   const [busy, setBusy] = useState(false);
   const [results, setResults] = useState<ReadoutResult[]>([]);
@@ -1239,7 +1244,7 @@ function ReadoutPanel({
       setResults((prev) => [{
         code, punchCount: 0, newPunches: 0,
         batteryVoltage: stationData.batteryVoltage,
-        success: false, error: `Control #${code} not in this competition`,
+        success: false, error: t("controlNotInCompetition", { code }),
         timestamp: new Date(),
       }, ...prev].slice(0, 20));
       return;
@@ -1411,7 +1416,7 @@ function ReadoutPanel({
       <div className="flex items-center justify-between mb-3">
         <div className="flex items-center gap-2">
           <span className={`w-2.5 h-2.5 rounded-full ${connected ? "bg-green-500 animate-pulse" : "bg-slate-300"}`} />
-          <h3 className="text-sm font-semibold text-slate-800">Post-Competition Readout</h3>
+          <h3 className="text-sm font-semibold text-slate-800">{t("postCompReadout")}</h3>
         </div>
         <div className="flex items-center gap-2">
           {!connected ? (
@@ -1419,7 +1424,7 @@ function ReadoutPanel({
               onClick={() => connectReader()}
               className="px-3 py-1.5 text-sm bg-amber-600 text-white rounded-lg hover:bg-amber-700 cursor-pointer"
             >
-              Connect SI Station
+              {t("connectStation")}
             </button>
           ) : (
             <>
@@ -1428,21 +1433,21 @@ function ReadoutPanel({
                 disabled={busy || autoMode}
                 className="px-3 py-1.5 text-sm bg-amber-600 text-white rounded-lg hover:bg-amber-700 disabled:opacity-50 cursor-pointer"
               >
-                {busy ? "Reading..." : "Read Memory"}
+                {busy ? t("reading") : t("readMemory")}
               </button>
               <button
                 onClick={handleClearMemory}
                 disabled={busy || autoMode}
                 className="px-3 py-1.5 text-sm bg-orange-600 text-white rounded-lg hover:bg-orange-700 disabled:opacity-50 cursor-pointer"
               >
-                Clear Memory
+                {t("clearMemory")}
               </button>
               <button
                 onClick={handlePowerOff}
                 disabled={busy}
                 className="px-3 py-1.5 text-sm bg-red-600 text-white rounded-lg hover:bg-red-700 disabled:opacity-50 cursor-pointer"
               >
-                Power Off
+                {t("powerOff")}
               </button>
             </>
           )}
@@ -1457,7 +1462,7 @@ function ReadoutPanel({
               disabled={!connected}
               className="rounded"
             />
-            Auto
+            {t("auto")}
           </label>
           <label className="flex items-center gap-1.5 text-xs text-slate-600 cursor-pointer">
             <input
@@ -1466,7 +1471,7 @@ function ReadoutPanel({
               onChange={(e) => setAutoClear(e.target.checked)}
               className="rounded"
             />
-            Clear
+            {t("clear")}
           </label>
           <label className="flex items-center gap-1.5 text-xs text-slate-600 cursor-pointer">
             <input
@@ -1475,7 +1480,7 @@ function ReadoutPanel({
               onChange={(e) => setAutoPowerOff(e.target.checked)}
               className="rounded"
             />
-            Power off
+            {t("powerOff")}
           </label>
           <label className="flex items-center gap-1.5 text-xs text-slate-600 cursor-pointer">
             <input
@@ -1484,13 +1489,13 @@ function ReadoutPanel({
               onChange={(e) => setBeep(e.target.checked)}
               className="rounded"
             />
-            Beep
+            {t("beep")}
           </label>
           <button
             onClick={handleClose}
             className="px-3 py-1.5 text-sm bg-slate-200 text-slate-700 rounded-lg hover:bg-slate-300 cursor-pointer"
           >
-            Close
+            {t("close")}
           </button>
         </div>
       </div>
@@ -1513,11 +1518,11 @@ function ReadoutPanel({
                 {r.code > 0 && <span className="font-mono font-bold">{r.code}</span>}
                 {r.success ? (
                   r.code === 0 && r.cleared ? (
-                    <span className="text-orange-600">Memory cleared</span>
+                    <span className="text-orange-600">{t("memoryClearedResult")}</span>
                   ) : (
                     <span className="text-green-700">
-                      {r.punchCount} punches{r.newPunches > 0 ? ` (${r.newPunches} new)` : " (all known)"}
-                      {r.punchCount === 0 && " (empty)"}
+                      {t("punchesResult", { total: r.punchCount })}{r.newPunches > 0 ? ` ${t("punchesNew", { new: r.newPunches })}` : ` ${t("punchesAllKnown")}`}
+                      {r.punchCount === 0 && ` ${t("punchesEmpty")}`}
                     </span>
                   )
                 ) : (
@@ -1526,10 +1531,10 @@ function ReadoutPanel({
               </div>
               <div className="flex items-center gap-3 text-xs text-slate-500">
                 <span className={`font-mono ${r.batteryVoltage < 2.5 ? "text-red-600 font-bold" : ""}`}>
-                  Bat: {r.batteryVoltage.toFixed(2)}V
+                  {t("bat")}: {r.batteryVoltage.toFixed(2)}V
                 </span>
-                {r.cleared && <span className="text-orange-500">Cleared</span>}
-                {r.poweredOff && <span className="text-slate-400">Off</span>}
+                {r.cleared && <span className="text-orange-500">{t("cleared")}</span>}
+                {r.poweredOff && <span className="text-slate-400">{t("off")}</span>}
                 <span>{r.timestamp.toLocaleTimeString(undefined, { hour12: false })}</span>
               </div>
             </div>
@@ -1540,8 +1545,8 @@ function ReadoutPanel({
       {connected && results.length === 0 && (
         <p className="text-sm text-slate-500">
           {autoMode
-            ? "Auto mode active — insert controls into the coupling stick to read them automatically."
-            : 'Insert a control into the coupling stick and press "Read Memory".'}
+            ? t("autoModeActiveReadout")
+            : t("manualModeReadout")}
         </p>
       )}
     </div>

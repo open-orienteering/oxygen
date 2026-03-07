@@ -1,4 +1,5 @@
 import { useState, useRef, useEffect, useCallback } from "react";
+import { useTranslation } from "react-i18next";
 import { trpc } from "../lib/trpc";
 import {
   formatMeosTime,
@@ -12,6 +13,7 @@ import type { FinishReceiptData } from "../lib/receipt-printer/index.js";
 import { fetchLogoRaster } from "../lib/receipt-printer/index.js";
 
 export function FinishStation() {
+  const { t } = useTranslation("race");
   const [cardInput, setCardInput] = useState("");
   const [lastAction, setLastAction] = useState<{
     type: "success" | "error";
@@ -94,7 +96,7 @@ export function FinishStation() {
     onSuccess: (data) => {
       setLastAction({
         type: "success",
-        message: `${data.name} finished`,
+        message: t("finished", { name: data.name }),
         runningTime: data.runningTime,
         time: Date.now(),
       });
@@ -162,7 +164,7 @@ export function FinishStation() {
       <div className="text-center mb-8">
         <div className="inline-flex items-center gap-2 px-4 py-2 bg-blue-100 text-blue-800 rounded-full text-sm font-medium mb-4">
           <div className="w-2 h-2 bg-blue-500 rounded-full animate-pulse" />
-          Finish Station
+          {t("finishStation")}
         </div>
         <div className="text-3xl font-bold text-slate-900 tabular-nums">
           {formatMeosTime(currentTimeDeci)}
@@ -172,7 +174,7 @@ export function FinishStation() {
       {/* Card input */}
       <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-6 mb-6">
         <label className="block text-sm font-medium text-slate-500 mb-2">
-          Scan or enter SI card number
+          {t("scanOrEnterCard")}
         </label>
         <input
           ref={inputRef}
@@ -181,7 +183,7 @@ export function FinishStation() {
           value={cardInput}
           onChange={(e) => setCardInput(e.target.value)}
           onKeyDown={handleKeyDown}
-          placeholder="Card number..."
+          placeholder={t("cardNumberPlaceholder")}
           className="w-full text-3xl font-bold text-center py-4 px-6 border-2 border-slate-200 rounded-xl focus:outline-none focus:border-blue-500 focus:ring-4 focus:ring-blue-100 tabular-nums"
           autoComplete="off"
         />
@@ -200,11 +202,10 @@ export function FinishStation() {
                       {lookup.data.runner.className}
                     </div>
                     <div className="text-xs text-slate-500 mt-1">
-                      Start: {formatMeosTime(lookup.data.runner.startTime)}
+                      {t("startPrefix")} {formatMeosTime(lookup.data.runner.startTime)}
                       {lookup.data.runner.finishTime > 0 && (
                         <span className="text-amber-600 font-medium ml-2">
-                          Already finished at{" "}
-                          {formatMeosTime(lookup.data.runner.finishTime)}
+                          {t("alreadyFinished", { time: formatMeosTime(lookup.data.runner.finishTime) })}
                         </span>
                       )}
                     </div>
@@ -216,14 +217,14 @@ export function FinishStation() {
                   disabled={recordFinish.isPending}
                   className="w-full mt-4 py-4 bg-blue-600 text-white text-lg font-bold rounded-xl hover:bg-blue-700 active:bg-blue-800 transition-colors cursor-pointer disabled:opacity-50"
                 >
-                  {recordFinish.isPending ? "Recording..." : "Record Finish"}
+                  {recordFinish.isPending ? t("recording") : t("recordFinish")}
                 </button>
               </div>
             ) : (
               <div className="bg-amber-50 rounded-xl p-4 text-amber-800">
-                <div className="font-medium">Card not found</div>
+                <div className="font-medium">{t("cardNotFound")}</div>
                 <div className="text-sm mt-1">
-                  No runner with card {cardInput} in this competition
+                  {t("noRunnerWithCard", { card: cardInput })}
                 </div>
               </div>
             )}
@@ -252,12 +253,12 @@ export function FinishStation() {
       {/* Recent finishers */}
       <div>
         <h3 className="text-sm font-semibold text-slate-500 uppercase tracking-wider mb-3">
-          Recent Finishers
+          {t("recentFinishers")}
         </h3>
         <div className="bg-white rounded-xl border border-slate-200 divide-y divide-slate-100">
           {recentActivity.data?.length === 0 && (
             <div className="px-4 py-6 text-center text-slate-400 text-sm">
-              No finishers yet
+              {t("noFinishersYet")}
             </div>
           )}
           {recentActivity.data?.map((r) => (
@@ -279,7 +280,7 @@ export function FinishStation() {
                   <button
                     onClick={() => handleReprint(r.id)}
                     disabled={printer.printing}
-                    title="Reprint receipt"
+                    title={t("reprintReceipt")}
                     className="p-1.5 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded transition-colors cursor-pointer disabled:opacity-40"
                   >
                     <svg

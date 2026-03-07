@@ -9,6 +9,7 @@
 
 import { useEffect, useState, useRef, useCallback } from "react";
 import { useParams } from "react-router-dom";
+import { useTranslation } from "react-i18next";
 import { QRCodeSVG } from "qrcode.react";
 import { trpc } from "../lib/trpc";
 import { formatMeosTime, formatRunningTime, RunnerStatus } from "@oxygen/shared";
@@ -63,6 +64,7 @@ function saveSettings(nameId: string, settings: KioskSettings): void {
 // ─── Main Kiosk Page ────────────────────────────────────────
 
 export function KioskPage() {
+  const { t } = useTranslation("kiosk");
   const { nameId } = useParams<{ nameId: string }>();
   const [screen, setScreen] = useState<KioskScreen>({ mode: "idle" });
   const [settings, setSettingsState] = useState<KioskSettings>(() =>
@@ -283,14 +285,14 @@ export function KioskPage() {
                 }`}
             >
               {readerStatus === "connected" || readerStatus === "reading"
-                ? "Reader active"
-                : "Connect Reader"}
+                ? t("readerActive")
+                : t("connectReader")}
             </button>
           )}
           <button
             onClick={() => setShowSettings(!showSettings)}
             className="text-slate-400 hover:text-white p-1.5 rounded hover:bg-slate-700 transition-colors"
-            title="Settings"
+            title={t("settings")}
           >
             <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
               <path strokeLinecap="round" strokeLinejoin="round" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.066 2.573c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.573 1.066c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.066-2.573c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
@@ -300,7 +302,7 @@ export function KioskPage() {
           <button
             onClick={toggleFullscreen}
             className="text-slate-400 hover:text-white p-1.5 rounded hover:bg-slate-700 transition-colors"
-            title="Toggle fullscreen"
+            title={t("toggleFullscreen")}
           >
             <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
               <path strokeLinecap="round" strokeLinejoin="round" d="M4 8V4m0 0h4M4 4l5 5m11-1V4m0 0h-4m4 0l-5 5M4 16v4m0 0h4m-4 0l5-5m11 5l-5-5m5 5v-4m0 4h-4" />
@@ -358,15 +360,16 @@ function KioskSettingsPanel({
   onChange: (partial: Partial<KioskSettings>) => void;
   onClose: () => void;
 }) {
+  const { t } = useTranslation("kiosk");
   return (
     <div className="bg-slate-800 border-b border-slate-700 px-6 py-4">
       <div className="max-w-lg mx-auto space-y-4">
         <div className="flex items-center justify-between">
           <h3 className="text-sm font-semibold text-slate-200 uppercase tracking-wider">
-            Kiosk Settings
+            {t("settings")}
           </h3>
           <button onClick={onClose} className="text-slate-400 hover:text-white text-sm">
-            Close
+            {t("close")}
           </button>
         </div>
 
@@ -378,9 +381,9 @@ function KioskSettingsPanel({
             className="w-4 h-4 rounded border-slate-600 bg-slate-700 text-emerald-500 focus:ring-emerald-500"
           />
           <div>
-            <div className="text-sm text-slate-200">Standalone mode</div>
+            <div className="text-sm text-slate-200">{t("standaloneMode")}</div>
             <div className="text-xs text-slate-400">
-              Use own SI reader instead of receiving from admin window
+              {t("standaloneModeDesc")}
             </div>
           </div>
         </label>
@@ -393,9 +396,9 @@ function KioskSettingsPanel({
             className="w-4 h-4 rounded border-slate-600 bg-slate-700 text-emerald-500 focus:ring-emerald-500"
           />
           <div>
-            <div className="text-sm text-slate-200">Require clear/check</div>
+            <div className="text-sm text-slate-200">{t("requireClearCheck")}</div>
             <div className="text-xs text-slate-400">
-              Verify card is cleared and checked before start (for start area kiosk)
+              {t("requireClearCheckDesc")}
             </div>
           </div>
         </label>
@@ -408,16 +411,16 @@ function KioskSettingsPanel({
             className="w-4 h-4 rounded border-slate-600 bg-slate-700 text-emerald-500 focus:ring-emerald-500"
           />
           <div>
-            <div className="text-sm text-slate-200">Write details to empty cards</div>
+            <div className="text-sm text-slate-200">{t("writeToCard")}</div>
             <div className="text-xs text-slate-400">
-              Save runner details to SI card during registration (with user consent)
+              {t("writeToCardDesc")}
             </div>
           </div>
         </label>
 
         <div>
           <label className="text-sm text-slate-200 block mb-1">
-            Auto-reset after (seconds)
+            {t("autoResetLabel")}
           </label>
           <input
             type="number"
@@ -502,6 +505,7 @@ function IdleScreen({
   competitionName: string;
   organizerEventorId?: number;
 }) {
+  const { t } = useTranslation("kiosk");
   const serverTime = trpc.race.serverTime.useQuery(undefined, {
     refetchInterval: 1000,
   });
@@ -533,10 +537,10 @@ function IdleScreen({
       </div>
 
       <h1 className="text-7xl font-black text-white mb-4">
-        Insert your SI card
+        {t("insertCard")}
       </h1>
       <p className="text-2xl text-slate-400 mb-8">
-        Place your card in the reader and wait for the beep
+        {t("insertCardHint")}
       </p>
 
       {/* Clock */}
@@ -552,19 +556,20 @@ function IdleScreen({
 // ─── Reading Screen (card inserted, readout in progress) ────
 
 function ReadingScreen({ cardNumber }: { cardNumber: number }) {
+  const { t } = useTranslation("kiosk");
   return (
     <div className="text-center">
       <div className="mb-8">
         <div className="inline-block w-20 h-20 border-4 border-amber-400 border-t-transparent rounded-full animate-spin" />
       </div>
       <h1 className="text-5xl font-black text-amber-400 mb-4">
-        Reading card...
+        {t("readingCard")}
       </h1>
       <p className="text-2xl text-white mb-6">
-        Do not remove SI card until the beep
+        {t("doNotRemove")}
       </p>
       <div className="text-xl text-slate-400 font-mono">
-        Card {cardNumber}
+        {t("cardNumber", { number: cardNumber })}
       </div>
     </div>
   );
@@ -573,6 +578,7 @@ function ReadingScreen({ cardNumber }: { cardNumber: number }) {
 // ─── Card Done Screen (remove card prompt) ──────────────────
 
 function CardDoneScreen({ cardNumber }: { cardNumber: number }) {
+  const { t } = useTranslation("kiosk");
   return (
     <div className="text-center">
       <div className="mb-8">
@@ -583,13 +589,13 @@ function CardDoneScreen({ cardNumber }: { cardNumber: number }) {
         </div>
       </div>
       <h1 className="text-5xl font-black text-emerald-400 mb-4">
-        Card read
+        {t("cardRead")}
       </h1>
       <p className="text-2xl text-white mb-6">
-        You may remove your SI card
+        {t("removeCard")}
       </p>
       <div className="text-xl text-slate-400 font-mono">
-        Card {cardNumber}
+        {t("cardNumber", { number: cardNumber })}
       </div>
     </div>
   );
@@ -598,6 +604,7 @@ function CardDoneScreen({ cardNumber }: { cardNumber: number }) {
 // ─── Readout Screen ─────────────────────────────────────────
 
 function ReadoutScreen({ card }: { card: KioskCardReadoutMessage["card"] }) {
+  const { t } = useTranslation("kiosk");
   // Fetch full readout from server for detailed punch data
   const readout = trpc.cardReadout.readout.useQuery(
     { cardNo: card.cardNumber },
@@ -645,7 +652,7 @@ function ReadoutScreen({ card }: { card: KioskCardReadoutMessage["card"] }) {
 
       {/* Runner info */}
       <h1 className="text-5xl font-black mb-2">
-        {card.runnerName || `Card ${card.cardNumber}`}
+        {card.runnerName || t("cardNumber", { number: card.cardNumber })}
       </h1>
       {card.clubName && (
         <p className="text-2xl text-slate-400 mb-1">{card.clubName}</p>
@@ -657,10 +664,10 @@ function ReadoutScreen({ card }: { card: KioskCardReadoutMessage["card"] }) {
       {/* Status + time */}
       <div className={`text-4xl font-bold mb-4 ${isOK ? "text-emerald-400" : isMP ? "text-red-400" : isDNF ? "text-amber-400" : "text-blue-400"
         }`}>
-        {isOK && "Completed"}
-        {isMP && "Missing Punch"}
-        {isDNF && "Did Not Finish"}
-        {!isOK && !isMP && !isDNF && (status || "Result")}
+        {isOK && t("completed")}
+        {isMP && t("missingPunch")}
+        {isDNF && t("didNotFinish")}
+        {!isOK && !isMP && !isDNF && (status || t("result"))}
       </div>
 
       {card.runningTime != null && card.runningTime > 0 && (
@@ -674,7 +681,7 @@ function ReadoutScreen({ card }: { card: KioskCardReadoutMessage["card"] }) {
         <div className="bg-slate-800 rounded-2xl p-6 text-left">
           <div className="grid grid-cols-3 gap-4 text-center mb-4">
             <div>
-              <div className="text-sm text-slate-400">Controls</div>
+              <div className="text-sm text-slate-400">{t("controls")}</div>
               <div className="text-2xl font-bold">
                 {readout.data.controls.filter((c) => c.status === "ok").length}/{readout.data.controls.length}
               </div>
@@ -682,11 +689,11 @@ function ReadoutScreen({ card }: { card: KioskCardReadoutMessage["card"] }) {
             {readout.data.course && (
               <>
                 <div>
-                  <div className="text-sm text-slate-400">Course</div>
+                  <div className="text-sm text-slate-400">{t("course")}</div>
                   <div className="text-2xl font-bold">{readout.data.course.name}</div>
                 </div>
                 <div>
-                  <div className="text-sm text-slate-400">Length</div>
+                  <div className="text-sm text-slate-400">{t("length")}</div>
                   <div className="text-2xl font-bold">
                     {(readout.data.course.length / 1000).toFixed(1)} km
                   </div>
@@ -699,7 +706,7 @@ function ReadoutScreen({ card }: { card: KioskCardReadoutMessage["card"] }) {
           {readout.data.missingControls.length > 0 && (
             <div className="mt-4 p-4 bg-red-900/30 border border-red-700/50 rounded-xl">
               <div className="text-red-400 font-semibold mb-2">
-                Missing controls ({readout.data.missingControls.length})
+                {t("missingControls", { count: readout.data.missingControls.length })}
               </div>
               <div className="flex flex-wrap gap-2">
                 {readout.data.missingControls.map((code, i) => (
@@ -728,6 +735,7 @@ function PreStartScreen({
   card: KioskCardReadoutMessage["card"];
   requireClearCheck: boolean;
 }) {
+  const { t } = useTranslation("kiosk");
   // Fetch runner details for start time and course
   const lookup = trpc.race.lookupByCard.useQuery(
     { cardNo: card.cardNumber },
@@ -765,13 +773,13 @@ function PreStartScreen({
             : "bg-red-500/20 text-red-400 border-2 border-red-500/50"
           }`}>
           <div className={`w-3 h-3 rounded-full ${clearCheckOk ? "bg-emerald-400 animate-pulse" : "bg-red-400"}`} />
-          {clearCheckOk ? "Ready to Start" : "Card Not Ready"}
+          {clearCheckOk ? t("readyToStart") : t("cardNotReady")}
         </div>
       </div>
 
       {/* Runner info */}
       <h1 className="text-5xl font-black mb-2">
-        {runner?.name || card.runnerName || `Card ${card.cardNumber}`}
+        {runner?.name || card.runnerName || t("cardNumber", { number: card.cardNumber })}
       </h1>
       {(runner?.clubName || card.clubName) && (
         <p className="text-2xl text-slate-400 mb-1">
@@ -788,14 +796,14 @@ function PreStartScreen({
       {requireClearCheck && !clearCheckOk && (
         <div className="mb-6 p-4 bg-red-900/30 border border-red-700/50 rounded-xl max-w-md mx-auto">
           <div className="text-red-400 font-semibold text-lg mb-2">
-            Card needs preparation
+            {t("cardNeedsPrep")}
           </div>
           <div className="space-y-1 text-red-300">
-            {!hasClear && <p>Card has not been cleared</p>}
-            {!hasCheck && <p>Card has not been checked</p>}
+            {!hasClear && <p>{t("cardNotCleared")}</p>}
+            {!hasCheck && <p>{t("cardNotChecked")}</p>}
           </div>
           <p className="text-red-400/70 mt-2 text-sm">
-            Please clear and check at the check station before starting
+            {t("clearCheckHint")}
           </p>
         </div>
       )}
@@ -805,17 +813,17 @@ function PreStartScreen({
         <div className="bg-slate-800 rounded-2xl p-6 mb-6 max-w-md mx-auto">
           <div className="grid grid-cols-3 gap-4 text-center">
             <div>
-              <div className="text-sm text-slate-400">Course</div>
+              <div className="text-sm text-slate-400">{t("course")}</div>
               <div className="text-xl font-bold">{course.name}</div>
             </div>
             <div>
-              <div className="text-sm text-slate-400">Length</div>
+              <div className="text-sm text-slate-400">{t("length")}</div>
               <div className="text-xl font-bold">
                 {(course.length / 1000).toFixed(1)} km
               </div>
             </div>
             <div>
-              <div className="text-sm text-slate-400">Controls</div>
+              <div className="text-sm text-slate-400">{t("controls")}</div>
               <div className="text-xl font-bold">{course.controlCount}</div>
             </div>
           </div>
@@ -826,7 +834,7 @@ function PreStartScreen({
       {runner?.startTime != null && runner.startTime > 0 ? (
         <div className="mt-6">
           <div className="text-sm font-medium text-slate-400 uppercase tracking-wider mb-2">
-            Start Time
+            {t("startTime")}
           </div>
           <div className="text-7xl font-black tabular-nums text-emerald-400">
             {formatMeosTime(runner.startTime)}
@@ -834,20 +842,20 @@ function PreStartScreen({
           {timeToStart !== 0 && (
             <div className={`mt-3 text-2xl font-semibold tabular-nums ${isPast ? "text-amber-400" : "text-emerald-300"
               }`}>
-              {isPast ? "Started " : ""}
+              {isPast ? `${t("started")} ` : ""}
               {countdownMinutes > 0 && `${countdownMinutes}m `}
               {countdownSeconds}s
-              {isPast ? " ago" : " to start"}
+              {isPast ? ` ${t("ago")}` : ` ${t("toStart")}`}
             </div>
           )}
         </div>
       ) : (
         <div className="mt-6">
           <div className="text-sm font-medium text-slate-400 uppercase tracking-wider mb-2">
-            Start Time
+            {t("startTime")}
           </div>
           <div className="text-3xl font-bold text-slate-500">
-            Not assigned
+            {t("notAssigned")}
           </div>
         </div>
       )}
@@ -864,26 +872,27 @@ function RegistrationWaitingScreen({
   card: KioskCardReadoutMessage["card"];
   form?: RegistrationFormState;
 }) {
+  const { t } = useTranslation("kiosk");
   return (
     <div className="text-center max-w-lg mx-auto">
       <div className="mb-8">
         <div className="inline-block w-16 h-16 border-4 border-emerald-300 border-t-transparent rounded-full animate-spin" />
       </div>
       <h1 className="text-4xl font-bold text-white mb-4">
-        Registration in progress
+        {t("registrationInProgress")}
       </h1>
       <p className="text-xl text-slate-400 mb-6">
-        Please wait while your details are being entered
+        {t("pleaseWait")}
       </p>
 
       <div className="bg-slate-800 rounded-2xl p-6 text-left space-y-3">
-        <InfoRow label="Card" value={String(form?.cardNo || card.cardNumber)} />
+        <InfoRow label={t("cardLabel")} value={String(form?.cardNo || card.cardNumber)} />
         {(form?.name || card.ownerData?.firstName) && (
-          <InfoRow label="Name" value={form?.name || [card.ownerData?.firstName, card.ownerData?.lastName].filter(Boolean).join(" ")} />
+          <InfoRow label={t("nameLabel")} value={form?.name || [card.ownerData?.firstName, card.ownerData?.lastName].filter(Boolean).join(" ")} />
         )}
         {form?.clubName && (
           <div className="flex justify-between items-center py-1 border-b border-slate-700/50">
-            <span className="text-slate-400 text-sm">Club</span>
+            <span className="text-slate-400 text-sm">{t("clubLabel")}</span>
             <span className="text-white font-medium text-lg flex items-center gap-2">
               {form.clubEventorId && (
                 <span className="inline-flex bg-white rounded p-0.5">
@@ -894,15 +903,15 @@ function RegistrationWaitingScreen({
             </span>
           </div>
         )}
-        {form?.className && <InfoRow label="Class" value={form.className} />}
+        {form?.className && <InfoRow label={t("classLabel")} value={form.className} />}
         {form?.paymentMode && (
           <InfoRow
-            label="Payment"
-            value={form.paymentMode === "billed" ? "Invoice" : form.paymentMode === "swish" ? "Swish" : form.paymentMode === "card" ? "Card" : "Pay on site"}
+            label={t("paymentLabel")}
+            value={form.paymentMode === "billed" ? t("invoice") : form.paymentMode === "swish" ? t("swish") : form.paymentMode === "card" ? t("cardPayment") : t("payOnSite")}
           />
         )}
         {form?.fee != null && form.fee > 0 && form.paymentMode && form.paymentMode !== "billed" && (
-          <InfoRow label="Amount" value={`${form.fee} kr`} />
+          <InfoRow label={t("amountLabel")} value={`${form.fee} kr`} />
         )}
       </div>
 
@@ -922,7 +931,7 @@ function RegistrationWaitingScreen({
               </div>
             </div>
           </div>
-          <p className="text-slate-400 text-sm mt-3">Scan with Swish to pay {form.fee} kr</p>
+          <p className="text-slate-400 text-sm mt-3">{t("scanSwish", { amount: form.fee })}</p>
         </div>
       )}
     </div>
@@ -946,6 +955,7 @@ function RegistrationCompleteScreen({
 }: {
   runner: { name: string; className: string; clubName: string; startTime: string; cardNo: number; clubEventorId?: number };
 }) {
+  const { t } = useTranslation("kiosk");
   return (
     <div className="text-center max-w-lg mx-auto">
       {/* Success icon */}
@@ -958,7 +968,7 @@ function RegistrationCompleteScreen({
       </div>
 
       <h1 className="text-4xl font-bold text-emerald-400 mb-2">
-        Registration Complete!
+        {t("registrationComplete")}
       </h1>
       <p className="text-2xl text-white font-semibold mb-1">{runner.name}</p>
       <p className="text-xl text-slate-400 mb-6 flex items-center justify-center gap-2">
@@ -972,7 +982,7 @@ function RegistrationCompleteScreen({
 
       <div className="bg-slate-800 rounded-2xl p-6 max-w-sm mx-auto">
         <div className="text-sm text-slate-400 uppercase tracking-wider mb-1">
-          Start
+          {t("start")}
         </div>
         {runner.startTime ? (
           <div className="text-5xl font-black tabular-nums text-emerald-400">
@@ -980,13 +990,13 @@ function RegistrationCompleteScreen({
           </div>
         ) : (
           <div className="text-3xl font-bold text-emerald-400">
-            Free start
+            {t("freeStart")}
           </div>
         )}
       </div>
 
       <p className="text-slate-500 mt-6 text-sm">
-        Please proceed to the start area. Good luck!
+        {t("proceedToStart")}
       </p>
     </div>
   );

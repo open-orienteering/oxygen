@@ -16,6 +16,24 @@ export const RunnerStatus = {
 export type RunnerStatusValue =
   (typeof RunnerStatus)[keyof typeof RunnerStatus];
 
+/** Map a runner status to its i18n translation key (for use with status namespace) */
+export function runnerStatusKey(status: RunnerStatusValue): string {
+  switch (status) {
+    case RunnerStatus.OK: return "ok";
+    case RunnerStatus.DNS: return "dns";
+    case RunnerStatus.DNF: return "dnf";
+    case RunnerStatus.MissingPunch: return "missingPunch";
+    case RunnerStatus.DQ: return "dq";
+    case RunnerStatus.OverMaxTime: return "overMaxTime";
+    case RunnerStatus.Cancel: return "cancelled";
+    case RunnerStatus.NoTiming: return "noTiming";
+    case RunnerStatus.OutOfCompetition: return "outOfCompetition";
+    case RunnerStatus.NotCompeting: return "notCompeting";
+    case RunnerStatus.Unknown:
+    default: return "unknown";
+  }
+}
+
 export function runnerStatusLabel(status: RunnerStatusValue): string {
   switch (status) {
     case RunnerStatus.OK:
@@ -360,6 +378,24 @@ export const ControlStatus = {
 
 export type ControlStatusValue =
   (typeof ControlStatus)[keyof typeof ControlStatus];
+
+/** Map a control status to its i18n translation key (for use with status namespace) */
+export function controlStatusKey(status: ControlStatusValue): string {
+  switch (status) {
+    case ControlStatus.OK: return "ok";
+    case ControlStatus.Bad: return "bad";
+    case ControlStatus.Multiple: return "multiple";
+    case ControlStatus.Start: return "start";
+    case ControlStatus.Finish: return "finish";
+    case ControlStatus.Rogaining: return "rogaining";
+    case ControlStatus.NoTiming: return "noTiming";
+    case ControlStatus.Optional: return "optional";
+    case ControlStatus.BadNoTiming: return "badNoTiming";
+    case ControlStatus.RogainingRequired: return "rogainingRequired";
+    case ControlStatus.Check: return "check";
+    default: return "unknown";
+  }
+}
 
 export function controlStatusLabel(status: ControlStatusValue): string {
   switch (status) {

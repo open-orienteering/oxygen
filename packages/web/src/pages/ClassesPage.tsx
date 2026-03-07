@@ -1,4 +1,5 @@
 import { useState, useMemo } from "react";
+import { useTranslation } from "react-i18next";
 import { useNavigate } from "react-router-dom";
 import { trpc } from "../lib/trpc";
 import { formatMeosTime, type ClassSummary } from "@oxygen/shared";
@@ -25,6 +26,7 @@ import { restrictToVerticalAxis } from "@dnd-kit/modifiers";
 import { MapPanel } from "../components/MapPanel";
 
 export function ClassesPage() {
+  const { t } = useTranslation("classes");
   const [search, setSearch] = useSearchParam("search");
   const [expandedId, setExpandedId] = useNumericSearchParam("classId");
   const [showCreateForm, setShowCreateForm] = useState(false);
@@ -49,7 +51,7 @@ export function ClassesPage() {
   });
 
   const handleDelete = (id: number, name: string) => {
-    if (window.confirm(`Remove class "${name}"?`)) {
+    if (window.confirm(t("removeConfirm", { name }))) {
       deleteMutation.mutate({ id });
     }
   };
@@ -113,7 +115,7 @@ export function ClassesPage() {
           </svg>
           <input
             type="text"
-            placeholder="Search class or course name..."
+            placeholder={t("searchPlaceholder")}
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             className="w-full pl-10 pr-4 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent bg-white"
@@ -126,15 +128,15 @@ export function ClassesPage() {
           <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
           </svg>
-          New Class
+          {t("newClass")}
         </button>
       </div>
 
       <div className="flex items-center justify-between mb-3">
         <span className="text-sm text-slate-500">
-          {items.length} class{items.length !== 1 ? "es" : ""}
+          {t("classCount", { count: items.length })}
           {!isFiltered && items.length > 1 && (
-            <span className="text-slate-400 ml-2">· drag to reorder</span>
+            <span className="text-slate-400 ml-2">· {t("dragToReorder")}</span>
           )}
         </span>
       </div>
@@ -159,7 +161,7 @@ export function ClassesPage() {
         )}
         {items.length === 0 && !classes.isLoading && (
           <div className="p-8 text-center text-slate-400 text-sm">
-            No classes found
+            {t("noClasses")}
           </div>
         )}
         {items.length > 0 && (
@@ -181,14 +183,14 @@ export function ClassesPage() {
                       {!isFiltered && (
                         <th className="w-10 px-1 py-2.5" />
                       )}
-                      <SortHeader label="Name" active={isFiltered ? sort.key === "name" : undefined} direction={sort.dir} onClick={() => toggle("name")} />
-                      <SortHeader label="Course" active={isFiltered ? sort.key === "course" : undefined} direction={sort.dir} onClick={() => toggle("course")} />
-                      <SortHeader label="Runners" active={isFiltered ? sort.key === "runners" : undefined} direction={sort.dir} onClick={() => toggle("runners")} className="w-24" />
-                      <SortHeader label="Fee" active={isFiltered ? sort.key === "fee" : undefined} direction={sort.dir} onClick={() => toggle("fee")} className="hidden sm:table-cell w-20" />
-                      <SortHeader label="Sex" active={isFiltered ? sort.key === "sex" : undefined} direction={sort.dir} onClick={() => toggle("sex")} className="hidden md:table-cell w-24" />
-                      <SortHeader label="Type" active={isFiltered ? sort.key === "type" : undefined} direction={sort.dir} onClick={() => toggle("type")} className="hidden lg:table-cell" />
-                      <th className="px-4 py-2.5 text-left font-medium text-slate-500 hidden xl:table-cell w-32">Options</th>
-                      <th className="px-4 py-2.5 text-right font-medium text-slate-500 w-20">Actions</th>
+                      <SortHeader label={t("name")} active={isFiltered ? sort.key === "name" : undefined} direction={sort.dir} onClick={() => toggle("name")} />
+                      <SortHeader label={t("course")} active={isFiltered ? sort.key === "course" : undefined} direction={sort.dir} onClick={() => toggle("course")} />
+                      <SortHeader label={t("runners")} active={isFiltered ? sort.key === "runners" : undefined} direction={sort.dir} onClick={() => toggle("runners")} className="w-24" />
+                      <SortHeader label={t("fee")} active={isFiltered ? sort.key === "fee" : undefined} direction={sort.dir} onClick={() => toggle("fee")} className="hidden sm:table-cell w-20" />
+                      <SortHeader label={t("sex")} active={isFiltered ? sort.key === "sex" : undefined} direction={sort.dir} onClick={() => toggle("sex")} className="hidden md:table-cell w-24" />
+                      <SortHeader label={t("classType")} active={isFiltered ? sort.key === "type" : undefined} direction={sort.dir} onClick={() => toggle("type")} className="hidden lg:table-cell" />
+                      <th className="px-4 py-2.5 text-left font-medium text-slate-500 hidden xl:table-cell w-32">{t("options")}</th>
+                      <th className="px-4 py-2.5 text-right font-medium text-slate-500 w-20">{t("actions")}</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100">
@@ -241,6 +243,7 @@ function SortableClassRow({
   onDelete: () => void;
   colSpan: number;
 }) {
+  const { t } = useTranslation("classes");
   const {
     attributes,
     listeners,
@@ -275,7 +278,7 @@ function SortableClassRow({
           >
             <button
               className="p-1 text-slate-300 hover:text-slate-500 cursor-grab active:cursor-grabbing touch-none"
-              aria-label="Drag to reorder"
+              aria-label={t("dragLabel")}
               {...attributes}
               {...listeners}
             >
@@ -297,7 +300,7 @@ function SortableClassRow({
           {cls.courseIds.length > 1 ? (
             <span className="flex items-center gap-1.5">
               <span className="px-1.5 py-0.5 rounded text-xs font-medium bg-purple-100 text-purple-700">
-                Forked
+                {t("courseForked")}
               </span>
               <span className="text-xs text-slate-400">
                 {cls.courseNames.join(", ")}
@@ -320,7 +323,7 @@ function SortableClassRow({
           )}
         </td>
         <td className="px-4 py-2.5 text-slate-500 hidden md:table-cell">
-          {formatSex(cls.sex)}
+          {cls.sex === "M" ? t("sexMen") : cls.sex === "F" || cls.sex === "W" ? t("sexWomen") : t("open")}
         </td>
         <td className="px-4 py-2.5 text-slate-500 hidden lg:table-cell text-xs">
           {cls.classType || "—"}
@@ -329,12 +332,12 @@ function SortableClassRow({
           <div className="flex gap-1.5">
             {cls.freeStart && (
               <span className="px-1.5 py-0.5 rounded text-xs font-medium bg-amber-100 text-amber-700">
-                Free start
+                {t("freeStart")}
               </span>
             )}
             {cls.noTiming && (
               <span className="px-1.5 py-0.5 rounded text-xs font-medium bg-slate-100 text-slate-600">
-                No timing
+                {t("noTiming")}
               </span>
             )}
             {!cls.freeStart && !cls.noTiming && (
@@ -346,7 +349,7 @@ function SortableClassRow({
           <button
             onClick={onDelete}
             className="p-1.5 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded transition-colors cursor-pointer"
-            title="Remove class"
+            title={t("removeClass")}
           >
             <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
@@ -367,11 +370,7 @@ function SortableClassRow({
 
 // ─── Helpers ─────────────────────────────────────────────────
 
-function formatSex(sex: string): string {
-  if (sex === "M") return "Men";
-  if (sex === "F" || sex === "W") return "Women";
-  return "Open";
-}
+// formatSex is no longer used directly -- replaced by t() calls in components
 
 function formatAge(low: number, high: number): string {
   if (low > 0 && high > 0) return `${low}–${high}`;
@@ -389,6 +388,7 @@ function CourseMultiSelect({
   selectedIds: number[];
   onChange: (ids: number[]) => void;
 }) {
+  const { t } = useTranslation("classes");
   const courses = trpc.course.list.useQuery();
   const available = courses.data ?? [];
 
@@ -415,17 +415,17 @@ function CourseMultiSelect({
           />
           <span className="text-sm text-slate-700">{c.name}</span>
           <span className="text-xs text-slate-400 ml-auto">
-            {c.controlCount} controls
+            {t("controlsCount", { count: c.controlCount })}
             {c.length > 0 && ` · ${(c.length / 1000).toFixed(1)} km`}
           </span>
         </label>
       ))}
       {available.length === 0 && (
-        <p className="text-xs text-slate-400">No courses available</p>
+        <p className="text-xs text-slate-400">{t("noCoursesAvailable")}</p>
       )}
       {selectedIds.length > 1 && (
         <p className="text-xs text-purple-600 font-medium mt-1">
-          Forked — runners will be assigned different courses
+          {t("forkedDescription")}
         </p>
       )}
     </div>
@@ -435,6 +435,7 @@ function CourseMultiSelect({
 // ─── Inline detail (expanded view) ──────────────────────────
 
 function ClassInlineDetail({ classId }: { classId: number }) {
+  const { t } = useTranslation("classes");
   const navigate = useNavigate();
   const utils = trpc.useUtils();
   const detail = trpc.class.detail.useQuery({ id: classId });
@@ -464,7 +465,7 @@ function ClassInlineDetail({ classId }: { classId: number }) {
   if (!detail.data) {
     return (
       <div className="bg-blue-50/60 p-6 text-center text-slate-400 text-sm">
-        Class not found
+        {t("classNotFound")}
       </div>
     );
   }
@@ -486,12 +487,12 @@ function ClassInlineDetail({ classId }: { classId: number }) {
         {/* Left: settings */}
         <div className="lg:col-span-2 space-y-4">
           <h4 className="text-xs font-semibold text-slate-500 uppercase tracking-wider">
-            Class Settings
+            {t("classSettings")}
           </h4>
 
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
             <div>
-              <label className="block text-xs font-medium text-slate-500 mb-1">Name</label>
+              <label className="block text-xs font-medium text-slate-500 mb-1">{t("name")}</label>
               <input
                 type="text"
                 value={editName ?? d.name}
@@ -506,7 +507,7 @@ function ClassInlineDetail({ classId }: { classId: number }) {
               />
             </div>
             <div>
-              <label className="block text-xs font-medium text-slate-500 mb-1">Sex</label>
+              <label className="block text-xs font-medium text-slate-500 mb-1">{t("sex")}</label>
               <select
                 value={editSex ?? d.sex}
                 onChange={(e) => {
@@ -515,13 +516,13 @@ function ClassInlineDetail({ classId }: { classId: number }) {
                 }}
                 className="w-full px-3 py-1.5 border border-slate-200 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 cursor-pointer"
               >
-                <option value="">Open (any)</option>
-                <option value="M">Men</option>
-                <option value="F">Women</option>
+                <option value="">{t("sexOpen")}</option>
+                <option value="M">{t("sexMen")}</option>
+                <option value="F">{t("sexWomen")}</option>
               </select>
             </div>
             <div>
-              <label className="block text-xs font-medium text-slate-500 mb-1">Sort Index</label>
+              <label className="block text-xs font-medium text-slate-500 mb-1">{t("sortIndex")}</label>
               <input
                 type="number"
                 value={editSort ?? String(d.sortIndex)}
@@ -543,12 +544,12 @@ function ClassInlineDetail({ classId }: { classId: number }) {
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
             {d.classType && (
               <div className="col-span-2 sm:col-span-4">
-                <label className="block text-xs font-medium text-slate-500 mb-1">Class Type</label>
+                <label className="block text-xs font-medium text-slate-500 mb-1">{t("classType")}</label>
                 <div className="text-sm text-slate-700 py-1.5">{d.classType}</div>
               </div>
             )}
             <div>
-              <label className="block text-xs font-medium text-slate-500 mb-1">Min Age</label>
+              <label className="block text-xs font-medium text-slate-500 mb-1">{t("minAge")}</label>
               <input
                 type="number"
                 value={editLowAge ?? String(d.lowAge)}
@@ -567,7 +568,7 @@ function ClassInlineDetail({ classId }: { classId: number }) {
               />
             </div>
             <div>
-              <label className="block text-xs font-medium text-slate-500 mb-1">Max Age</label>
+              <label className="block text-xs font-medium text-slate-500 mb-1">{t("maxAge")}</label>
               <input
                 type="number"
                 value={editHighAge ?? String(d.highAge)}
@@ -593,7 +594,7 @@ function ClassInlineDetail({ classId }: { classId: number }) {
                   onChange={(e) => handleSave("freeStart", e.target.checked)}
                   className="rounded border-slate-300 text-blue-600 focus:ring-blue-500 cursor-pointer"
                 />
-                <span className="text-sm text-slate-600">Free start</span>
+                <span className="text-sm text-slate-600">{t("freeStart")}</span>
               </label>
             </div>
             <div className="flex items-end">
@@ -604,14 +605,14 @@ function ClassInlineDetail({ classId }: { classId: number }) {
                   onChange={(e) => handleSave("noTiming", e.target.checked)}
                   className="rounded border-slate-300 text-blue-600 focus:ring-blue-500 cursor-pointer"
                 />
-                <span className="text-sm text-slate-600">No timing</span>
+                <span className="text-sm text-slate-600">{t("noTiming")}</span>
               </label>
             </div>
           </div>
 
           {/* Entry fee */}
           <div>
-            <label className="block text-xs font-medium text-slate-500 mb-1">Entry fee (kr)</label>
+            <label className="block text-xs font-medium text-slate-500 mb-1">{t("entryFee")}</label>
             <input
               type="number"
               value={editFee ?? String(d.classFee)}
@@ -634,7 +635,7 @@ function ClassInlineDetail({ classId }: { classId: number }) {
           {/* Course assignment */}
           <div>
             <label className="block text-xs font-medium text-slate-500 mb-2">
-              Course{(editCourseIds ?? d.courseIds).length > 1 ? "s (forked)" : ""}
+              {(editCourseIds ?? d.courseIds).length > 1 ? t("coursesForked") : t("course")}
             </label>
             <CourseMultiSelect
               selectedIds={editCourseIds ?? d.courseIds}
@@ -646,12 +647,12 @@ function ClassInlineDetail({ classId }: { classId: number }) {
           {d.courseLength > 0 && (
             <div className="flex gap-4 text-xs text-slate-500">
               <span>{(d.courseLength / 1000).toFixed(1)} km</span>
-              <span>{d.controlCount} controls</span>
+              <span>{t("controlsCount", { count: d.controlCount })}</span>
               {d.firstStart > 0 && (
-                <span>First start: {formatMeosTime(d.firstStart)}</span>
+                <span>{t("firstStartTime", { time: formatMeosTime(d.firstStart) })}</span>
               )}
               {d.startInterval > 0 && (
-                <span>Interval: {Math.floor(d.startInterval / 10)}s</span>
+                <span>{t("startIntervalSeconds", { seconds: Math.floor(d.startInterval / 10) })}</span>
               )}
             </div>
           )}
@@ -661,17 +662,17 @@ function ClassInlineDetail({ classId }: { classId: number }) {
         <div>
           <div className="flex items-center justify-between mb-3">
             <h4 className="text-xs font-semibold text-slate-500 uppercase tracking-wider">
-              Runners ({d.runnerCount})
+              {t("runnersCount", { count: d.runnerCount })}
             </h4>
             <button
               onClick={() => navigate(`../runners?class=${classId}`)}
               className="text-xs text-blue-600 hover:text-blue-800 font-medium cursor-pointer"
             >
-              View all
+              {t("viewAll")}
             </button>
           </div>
           {d.runners.length === 0 ? (
-            <p className="text-sm text-slate-400">No runners in this class</p>
+            <p className="text-sm text-slate-400">{t("noRunners")}</p>
           ) : (
             <div className="bg-white rounded-lg border border-slate-200 divide-y divide-slate-100 max-h-64 overflow-y-auto">
               {d.runners.slice(0, 30).map((r) => (
@@ -684,7 +685,7 @@ function ClassInlineDetail({ classId }: { classId: number }) {
               ))}
               {d.runners.length > 30 && (
                 <div className="px-4 py-2 text-xs text-slate-400 text-center">
-                  +{d.runners.length - 30} more
+                  {t("moreRunners", { count: d.runners.length - 30 })}
                 </div>
               )}
             </div>
@@ -713,6 +714,7 @@ function CreateClassForm({
   onClose: () => void;
   onCreated: () => void;
 }) {
+  const { t } = useTranslation("classes");
   const [name, setName] = useState("");
   const [courseIds, setCourseIds] = useState<number[]>([]);
   const [sex, setSex] = useState("");
@@ -736,7 +738,7 @@ function CreateClassForm({
   return (
     <div className="bg-white rounded-xl border border-blue-200 shadow-sm p-5 mb-6">
       <div className="flex items-center justify-between mb-4">
-        <h3 className="text-sm font-semibold text-slate-900">New Class</h3>
+        <h3 className="text-sm font-semibold text-slate-900">{t("newClass")}</h3>
         <button
           onClick={onClose}
           className="p-1 text-slate-400 hover:text-slate-600 rounded cursor-pointer"
@@ -749,31 +751,31 @@ function CreateClassForm({
       <form onSubmit={handleSubmit} className="space-y-3">
         <div className="flex flex-col sm:flex-row gap-3">
           <div className="flex-1">
-            <label className="block text-xs font-medium text-slate-500 mb-1">Name</label>
+            <label className="block text-xs font-medium text-slate-500 mb-1">{t("name")}</label>
             <input
               type="text"
               value={name}
               onChange={(e) => setName(e.target.value)}
-              placeholder="e.g. H21"
+              placeholder={t("namePlaceholder")}
               className="w-full px-3 py-1.5 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
               autoFocus
               required
             />
           </div>
           <div className="sm:w-28">
-            <label className="block text-xs font-medium text-slate-500 mb-1">Sex</label>
+            <label className="block text-xs font-medium text-slate-500 mb-1">{t("sex")}</label>
             <select
               value={sex}
               onChange={(e) => setSex(e.target.value)}
               className="w-full px-3 py-1.5 border border-slate-200 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 cursor-pointer"
             >
-              <option value="">Open</option>
-              <option value="M">Men</option>
-              <option value="F">Women</option>
+              <option value="">{t("open")}</option>
+              <option value="M">{t("sexMen")}</option>
+              <option value="F">{t("sexWomen")}</option>
             </select>
           </div>
           <div className="sm:w-24">
-            <label className="block text-xs font-medium text-slate-500 mb-1">Sort Index</label>
+            <label className="block text-xs font-medium text-slate-500 mb-1">{t("sortIndex")}</label>
             <input
               type="number"
               value={sortIndex}
@@ -785,7 +787,7 @@ function CreateClassForm({
         </div>
         <div>
           <label className="block text-xs font-medium text-slate-500 mb-2">
-            Course{courseIds.length > 1 ? "s (forked)" : ""}
+            {courseIds.length > 1 ? t("coursesForked") : t("course")}
           </label>
           <CourseMultiSelect selectedIds={courseIds} onChange={setCourseIds} />
         </div>
@@ -795,14 +797,14 @@ function CreateClassForm({
             disabled={createMutation.isPending || !name.trim()}
             className="px-4 py-1.5 bg-blue-600 text-white text-sm font-medium rounded-lg hover:bg-blue-700 disabled:opacity-50 transition-colors cursor-pointer"
           >
-            {createMutation.isPending ? "Creating..." : "Create"}
+            {createMutation.isPending ? t("creating") : t("create")}
           </button>
           <button
             type="button"
             onClick={onClose}
             className="px-4 py-1.5 text-slate-500 text-sm hover:text-slate-700 hover:bg-slate-100 rounded-lg transition-colors cursor-pointer"
           >
-            Cancel
+            {t("cancel")}
           </button>
         </div>
       </form>

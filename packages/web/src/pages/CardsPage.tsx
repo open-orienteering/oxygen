@@ -1,4 +1,5 @@
 import { Fragment, useMemo, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { trpc } from "../lib/trpc";
 import { formatMeosTime } from "@oxygen/shared";
 import { StatusBadge } from "../components/StatusBadge";
@@ -18,10 +19,10 @@ function batteryColor(volts: number): string {
   return "text-emerald-600";
 }
 
-function batteryLabel(volts: number): string {
-  if (volts < BATTERY_LOW) return "LOW — replace!";
-  if (volts < BATTERY_WARN) return "Getting low";
-  return "OK";
+function batteryLabelKey(volts: number): "batteryLowReplace" | "batteryGettingLow" | "batteryOk" {
+  if (volts < BATTERY_LOW) return "batteryLowReplace";
+  if (volts < BATTERY_WARN) return "batteryGettingLow";
+  return "batteryOk";
 }
 
 function batteryBgColor(volts: number): string {
@@ -58,11 +59,12 @@ function CardTypeBadge({ type }: { type: string }) {
 // ─── Battery Cell (for table column) ────────────────────────
 
 function BatteryCell({ voltage, cardType }: { voltage: number | null; cardType: string }) {
+  const { t } = useTranslation("devices");
   const isSIAC = cardType === "SIAC";
   if (!isSIAC) return <span className="text-slate-200">—</span>;
   if (voltage == null || voltage <= 0) {
     return (
-      <span className="text-slate-300 text-xs italic" title="Re-read card to measure">
+      <span className="text-slate-300 text-xs italic" title={t("notMeasured")}>
         —
       </span>
     );
@@ -71,7 +73,7 @@ function BatteryCell({ voltage, cardType }: { voltage: number | null; cardType: 
   return (
     <span
       className={`font-mono text-xs ${batteryColor(voltage)}`}
-      title={`${voltage.toFixed(2)}V — ${batteryLabel(voltage)}`}
+      title={`${voltage.toFixed(2)}V — ${t(batteryLabelKey(voltage))}`}
     >
       {voltage.toFixed(2)}V
     </span>
@@ -81,6 +83,7 @@ function BatteryCell({ voltage, cardType }: { voltage: number | null; cardType: 
 // ─── Main Page ──────────────────────────────────────────────
 
 export function CardsPage() {
+  const { t } = useTranslation("devices");
   const [search, setSearch] = useSearchParam("search");
   const [expandedCard, setExpandedCard] = useNumericSearchParam("card");
 
@@ -136,16 +139,16 @@ export function CardsPage() {
       {/* Header + Search */}
       <div className="flex items-center justify-between mb-4 gap-4">
         <div>
-          <h2 className="text-lg font-semibold text-slate-900">SI Cards</h2>
+          <h2 className="text-lg font-semibold text-slate-900">{t("siCards")}</h2>
           <p className="text-sm text-slate-500">
-            {cards.data?.length ?? 0} cards ·{" "}
-            {cards.data?.filter((c) => c.runner).length ?? 0} linked to runners
+            {t("cardsCount", { count: cards.data?.length ?? 0 })} ·{" "}
+            {t("linkedToRunners", { count: cards.data?.filter((c) => c.runner).length ?? 0 })}
           </p>
         </div>
         <div className="flex items-center gap-3">
           <input
             type="text"
-            placeholder="Search cards..."
+            placeholder={t("searchCards")}
             value={search}
             onChange={(e) => setSearch(e.target.value || "")}
             className="px-3 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 w-64"
@@ -158,27 +161,27 @@ export function CardsPage() {
         <table className="w-full text-sm">
           <thead>
             <tr className="bg-slate-50 border-b border-slate-200">
-              <SortHeader label="Card No" active={sort.key === "cardNo"} direction={sort.dir} onClick={() => toggle("cardNo")} />
-              <SortHeader label="Type" active={sort.key === "type"} direction={sort.dir} onClick={() => toggle("type")} />
-              <SortHeader label="Battery" active={sort.key === "battery"} direction={sort.dir} onClick={() => toggle("battery")} />
-              <SortHeader label="Runner" active={sort.key === "runner"} direction={sort.dir} onClick={() => toggle("runner")} />
-              <SortHeader label="Club" active={sort.key === "club"} direction={sort.dir} onClick={() => toggle("club")} />
-              <SortHeader label="Class" active={sort.key === "class"} direction={sort.dir} onClick={() => toggle("class")} />
-              <SortHeader label="Punches" active={sort.key === "punches"} direction={sort.dir} onClick={() => toggle("punches")} />
-              <SortHeader label="Modified" active={sort.key === "modified"} direction={sort.dir} onClick={() => toggle("modified")} />
+              <SortHeader label={t("cardNo")} active={sort.key === "cardNo"} direction={sort.dir} onClick={() => toggle("cardNo")} />
+              <SortHeader label={t("type")} active={sort.key === "type"} direction={sort.dir} onClick={() => toggle("type")} />
+              <SortHeader label={t("battery")} active={sort.key === "battery"} direction={sort.dir} onClick={() => toggle("battery")} />
+              <SortHeader label={t("runner")} active={sort.key === "runner"} direction={sort.dir} onClick={() => toggle("runner")} />
+              <SortHeader label={t("club")} active={sort.key === "club"} direction={sort.dir} onClick={() => toggle("club")} />
+              <SortHeader label={t("class")} active={sort.key === "class"} direction={sort.dir} onClick={() => toggle("class")} />
+              <SortHeader label={t("punches")} active={sort.key === "punches"} direction={sort.dir} onClick={() => toggle("punches")} />
+              <SortHeader label={t("modified")} active={sort.key === "modified"} direction={sort.dir} onClick={() => toggle("modified")} />
             </tr>
           </thead>
           <tbody className="divide-y divide-slate-100">
             {cards.isLoading ? (
               <tr>
                 <td colSpan={colCount} className="py-12 text-center text-slate-400">
-                  Loading...
+                  {t("loading")}
                 </td>
               </tr>
             ) : filtered.length === 0 ? (
               <tr>
                 <td colSpan={colCount} className="py-12 text-center text-slate-400">
-                  No cards found
+                  {t("noCardsFound")}
                 </td>
               </tr>
             ) : (
@@ -213,7 +216,7 @@ export function CardsPage() {
                         </div>
                       ) : (
                         <span className="text-amber-600 text-xs font-medium">
-                          Unlinked
+                          {t("unlinked")}
                         </span>
                       )}
                     </td>
@@ -279,18 +282,19 @@ interface BatteryDetailProps {
 }
 
 function BatteryDetailBlock({ voltage, metadata }: BatteryDetailProps) {
+  const { t } = useTranslation("devices");
   // Convert oCard raw ADC voltage to volts
   const volts = voltage > 0 && voltage < 255 ? 1.9 + voltage * 0.09 : 0;
 
   return (
     <div>
       <h4 className="text-xs font-medium text-slate-500 uppercase tracking-wider mb-2">
-        Battery &amp; Card Info
+        {t("batteryAndCardInfo")}
       </h4>
       <dl className="space-y-1 text-sm">
         {/* Voltage with status indicator */}
         <div className="flex gap-2 items-center">
-          <dt className="text-slate-500 w-28">Voltage:</dt>
+          <dt className="text-slate-500 w-28">{t("voltage")}:</dt>
           <dd>
             {volts > 0 ? (
               <span className="inline-flex items-center gap-2">
@@ -300,12 +304,12 @@ function BatteryDetailBlock({ voltage, metadata }: BatteryDetailProps) {
                 <span
                   className={`text-xs px-1.5 py-0.5 rounded ${batteryBgColor(volts)} ${batteryColor(volts)}`}
                 >
-                  {batteryLabel(volts)}
+                  {t(batteryLabelKey(volts))}
                 </span>
               </span>
             ) : (
               <span className="text-slate-400 text-xs italic">
-                Not measured — re-read card to measure
+                {t("notMeasured")}
               </span>
             )}
           </dd>
@@ -314,7 +318,7 @@ function BatteryDetailBlock({ voltage, metadata }: BatteryDetailProps) {
         {/* Battery date */}
         {metadata?.batteryDate && (
           <div className="flex gap-2">
-            <dt className="text-slate-500 w-28">Battery date:</dt>
+            <dt className="text-slate-500 w-28">{t("batteryDate")}:</dt>
             <dd className="font-mono text-slate-700">{metadata.batteryDate}</dd>
           </div>
         )}
@@ -322,7 +326,7 @@ function BatteryDetailBlock({ voltage, metadata }: BatteryDetailProps) {
         {/* Production date */}
         {metadata?.productionDate && (
           <div className="flex gap-2">
-            <dt className="text-slate-500 w-28">Produced:</dt>
+            <dt className="text-slate-500 w-28">{t("produced")}:</dt>
             <dd className="font-mono text-slate-700">{metadata.productionDate}</dd>
           </div>
         )}
@@ -330,7 +334,7 @@ function BatteryDetailBlock({ voltage, metadata }: BatteryDetailProps) {
         {/* Hardware version */}
         {metadata?.hardwareVersion && (
           <div className="flex gap-2">
-            <dt className="text-slate-500 w-28">HW version:</dt>
+            <dt className="text-slate-500 w-28">{t("hwVersion")}:</dt>
             <dd className="font-mono text-slate-700">{metadata.hardwareVersion}</dd>
           </div>
         )}
@@ -338,7 +342,7 @@ function BatteryDetailBlock({ voltage, metadata }: BatteryDetailProps) {
         {/* Software version */}
         {metadata?.softwareVersion && (
           <div className="flex gap-2">
-            <dt className="text-slate-500 w-28">SW version:</dt>
+            <dt className="text-slate-500 w-28">{t("swVersion")}:</dt>
             <dd className="font-mono text-slate-700">{metadata.softwareVersion}</dd>
           </div>
         )}
@@ -346,7 +350,7 @@ function BatteryDetailBlock({ voltage, metadata }: BatteryDetailProps) {
         {/* Clear count */}
         {metadata?.clearCount != null && (
           <div className="flex gap-2">
-            <dt className="text-slate-500 w-28">Clear count:</dt>
+            <dt className="text-slate-500 w-28">{t("clearCount")}:</dt>
             <dd className="font-mono text-slate-700">{metadata.clearCount}</dd>
           </div>
         )}
@@ -358,24 +362,25 @@ function BatteryDetailBlock({ voltage, metadata }: BatteryDetailProps) {
 // ─── Card Detail Panel ──────────────────────────────────────
 
 function CardDetailPanel({ cardNo }: { cardNo: number }) {
+  const { t } = useTranslation("devices");
   const detail = trpc.cardReadout.cardDetail.useQuery({ cardNo });
   const history = trpc.cardReadout.readoutHistory.useQuery({ cardNo });
 
   if (detail.isLoading) {
     return (
-      <div className="p-6 text-center text-slate-400">Loading details...</div>
+      <div className="p-6 text-center text-slate-400">{t("loadingDetails")}</div>
     );
   }
   if (detail.isError) {
     return (
       <div className="p-6 text-center text-red-500">
-        Error loading card: {detail.error?.message ?? "Unknown error"}
+        {t("errorLoadingCard", { message: detail.error?.message ?? t("unknownError") })}
       </div>
     );
   }
   if (!detail.data) {
     return (
-      <div className="p-6 text-center text-slate-400">Card not found in database</div>
+      <div className="p-6 text-center text-slate-400">{t("cardNotFoundInDb")}</div>
     );
   }
 
@@ -389,22 +394,22 @@ function CardDetailPanel({ cardNo }: { cardNo: number }) {
       <div className="grid grid-cols-2 gap-6">
         <div>
           <h4 className="text-xs font-medium text-slate-500 uppercase tracking-wider mb-2">
-            Card Information
+            {t("cardInformation")}
           </h4>
           <dl className="space-y-1 text-sm">
             <div className="flex gap-2">
-              <dt className="text-slate-500 w-20">Number:</dt>
+              <dt className="text-slate-500 w-20">{t("number")}:</dt>
               <dd className="font-mono font-medium">{d.cardNo}</dd>
             </div>
             <div className="flex gap-2">
-              <dt className="text-slate-500 w-20">Type:</dt>
+              <dt className="text-slate-500 w-20">{t("type")}:</dt>
               <dd><CardTypeBadge type={String(cardType)} /></dd>
             </div>
             {(d.ownerData as any) && (
               <>
                 {((d.ownerData as any).firstName || (d.ownerData as any).lastName) && (
                   <div className="flex gap-2">
-                    <dt className="text-slate-500 w-20">Owner:</dt>
+                    <dt className="text-slate-500 w-20">{t("owner")}:</dt>
                     <dd>
                       {[(d.ownerData as any).firstName, (d.ownerData as any).lastName]
                         .filter(Boolean)
@@ -414,13 +419,13 @@ function CardDetailPanel({ cardNo }: { cardNo: number }) {
                 )}
                 {(d.ownerData as any).club && (
                   <div className="flex gap-2">
-                    <dt className="text-slate-500 w-20">Club:</dt>
+                    <dt className="text-slate-500 w-20">{t("club")}:</dt>
                     <dd>{(d.ownerData as any).club}</dd>
                   </div>
                 )}
                 {(d.ownerData as any).country && (
                   <div className="flex gap-2">
-                    <dt className="text-slate-500 w-20">Country:</dt>
+                    <dt className="text-slate-500 w-20">{t("countryLabel")}:</dt>
                     <dd>{(d.ownerData as any).country}</dd>
                   </div>
                 )}
@@ -430,16 +435,16 @@ function CardDetailPanel({ cardNo }: { cardNo: number }) {
         </div>
         <div>
           <h4 className="text-xs font-medium text-slate-500 uppercase tracking-wider mb-2">
-            Linked Runner
+            {t("linkedRunner")}
           </h4>
           {d.runner ? (
             <dl className="space-y-1 text-sm">
               <div className="flex gap-2">
-                <dt className="text-slate-500 w-20">Name:</dt>
+                <dt className="text-slate-500 w-20">{t("name")}:</dt>
                 <dd className="font-medium">{d.runner.name}</dd>
               </div>
               <div className="flex gap-2">
-                <dt className="text-slate-500 w-20">Club:</dt>
+                <dt className="text-slate-500 w-20">{t("club")}:</dt>
                 <dd>
                   {d.runner.clubName ? (
                     <span className="inline-flex items-center gap-1.5">
@@ -452,11 +457,11 @@ function CardDetailPanel({ cardNo }: { cardNo: number }) {
                 </dd>
               </div>
               <div className="flex gap-2">
-                <dt className="text-slate-500 w-20">Class:</dt>
+                <dt className="text-slate-500 w-20">{t("class")}:</dt>
                 <dd>{d.runner.className || "—"}</dd>
               </div>
               <div className="flex gap-2">
-                <dt className="text-slate-500 w-20">Status:</dt>
+                <dt className="text-slate-500 w-20">{t("status")}:</dt>
                 <dd>
                   <StatusBadge status={d.runner.status as any} />
                 </dd>
@@ -464,7 +469,7 @@ function CardDetailPanel({ cardNo }: { cardNo: number }) {
             </dl>
           ) : (
             <p className="text-sm text-amber-600">
-              Not linked to any runner in this competition
+              {t("notLinkedToRunner")}
             </p>
           )}
         </div>
@@ -478,12 +483,12 @@ function CardDetailPanel({ cardNo }: { cardNo: number }) {
       {/* Current Readout */}
       <div>
         <h4 className="text-xs font-medium text-slate-500 uppercase tracking-wider mb-2">
-          Current Readout ({d.punches.length} punches)
+          {t("currentReadout", { count: d.punches.length })}
         </h4>
         <div className="bg-white rounded-lg border border-slate-200 overflow-hidden">
           {d.punches.length === 0 && !d.startTime && !d.finishTime ? (
             <div className="p-4 text-sm text-slate-400 text-center">
-              No readout data
+              {t("noReadoutData")}
             </div>
           ) : (
             <table className="w-full text-xs">
@@ -493,10 +498,10 @@ function CardDetailPanel({ cardNo }: { cardNo: number }) {
                     #
                   </th>
                   <th className="px-3 py-1.5 text-left font-medium text-slate-500">
-                    Control
+                    {t("controlHeader")}
                   </th>
                   <th className="px-3 py-1.5 text-left font-medium text-slate-500">
-                    Time
+                    {t("timeHeader")}
                   </th>
                 </tr>
               </thead>
@@ -504,7 +509,7 @@ function CardDetailPanel({ cardNo }: { cardNo: number }) {
                 {d.checkTime != null && d.checkTime > 0 && (
                   <tr className="text-slate-400">
                     <td className="px-3 py-1" />
-                    <td className="px-3 py-1 italic">Check</td>
+                    <td className="px-3 py-1 italic">{t("check")}</td>
                     <td className="px-3 py-1 font-mono">
                       {formatMeosTime(d.checkTime)}
                     </td>
@@ -513,7 +518,7 @@ function CardDetailPanel({ cardNo }: { cardNo: number }) {
                 {d.startTime != null && d.startTime > 0 && (
                   <tr className="text-emerald-600">
                     <td className="px-3 py-1" />
-                    <td className="px-3 py-1 font-medium">Start</td>
+                    <td className="px-3 py-1 font-medium">{t("start")}</td>
                     <td className="px-3 py-1 font-mono">
                       {formatMeosTime(d.startTime)}
                     </td>
@@ -533,7 +538,7 @@ function CardDetailPanel({ cardNo }: { cardNo: number }) {
                 {d.finishTime != null && d.finishTime > 0 && (
                   <tr className="text-blue-600 font-medium">
                     <td className="px-3 py-1" />
-                    <td className="px-3 py-1">Finish</td>
+                    <td className="px-3 py-1">{t("finish")}</td>
                     <td className="px-3 py-1 font-mono">
                       {formatMeosTime(d.finishTime)}
                     </td>
@@ -606,6 +611,7 @@ type HistoryEntry = {
 };
 
 function HistoryBatteryIndicator({ voltage }: { voltage: number }) {
+  const { t } = useTranslation("devices");
   // voltage is in hundredths of volts (e.g. 298 = 2.98V)
   const volts = voltage > 0 ? voltage / 100 : 0;
   if (volts <= 0) return null;
@@ -613,7 +619,7 @@ function HistoryBatteryIndicator({ voltage }: { voltage: number }) {
   return (
     <span
       className={`text-[10px] font-mono ${batteryColor(volts)}`}
-      title={`Battery: ${volts.toFixed(2)}V — ${batteryLabel(volts)}`}
+      title={`${t("battery")}: ${volts.toFixed(2)}V — ${t(batteryLabelKey(volts))}`}
     >
       {volts.toFixed(2)}V
     </span>
@@ -621,12 +627,13 @@ function HistoryBatteryIndicator({ voltage }: { voltage: number }) {
 }
 
 function ReadoutHistorySection({ history }: { history: HistoryEntry[] }) {
+  const { t } = useTranslation("devices");
   const [expandedId, setExpandedId] = useState<number | null>(null);
 
   return (
     <div>
       <h4 className="text-xs font-medium text-slate-500 uppercase tracking-wider mb-2">
-        Readout History ({history.length})
+        {t("readoutHistory", { count: history.length })}
       </h4>
       <div className="space-y-2">
         {history.map((h) => {
@@ -675,7 +682,7 @@ function ReadoutHistorySection({ history }: { history: HistoryEntry[] }) {
                     <CardTypeBadge type={h.cardType} />
                   )}
                   <span className="text-slate-600">
-                    {controlPunches.length} punches
+                    {t("punchesLabel", { count: controlPunches.length })}
                   </span>
                   {h.voltage > 0 && (
                     <HistoryBatteryIndicator voltage={h.voltage} />
@@ -683,10 +690,7 @@ function ReadoutHistorySection({ history }: { history: HistoryEntry[] }) {
                   {h.ownerData &&
                     (h.ownerData.firstName || h.ownerData.lastName) && (
                       <span className="text-slate-400 text-xs">
-                        Owner:{" "}
-                        {[h.ownerData.firstName, h.ownerData.lastName]
-                          .filter(Boolean)
-                          .join(" ")}
+                        {t("ownerLabel", { name: [h.ownerData.firstName, h.ownerData.lastName].filter(Boolean).join(" ") })}
                       </span>
                     )}
                 </div>
@@ -697,22 +701,22 @@ function ReadoutHistorySection({ history }: { history: HistoryEntry[] }) {
                 <div className="border-t border-slate-100 p-3">
                   {allPunches.length === 0 ? (
                     <p className="text-xs text-slate-400 text-center py-2">
-                      No punch data
+                      {t("noPunchData")}
                     </p>
                   ) : (
                     <table className="w-full text-xs">
                       <thead>
                         <tr className="text-slate-400">
                           <th className="px-2 py-1 text-left w-10">#</th>
-                          <th className="px-2 py-1 text-left">Control</th>
-                          <th className="px-2 py-1 text-left">Time</th>
+                          <th className="px-2 py-1 text-left">{t("controlHeader")}</th>
+                          <th className="px-2 py-1 text-left">{t("timeHeader")}</th>
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-slate-50">
                         {checkPunch && (
                           <tr className="text-slate-400">
                             <td className="px-2 py-1" />
-                            <td className="px-2 py-1 italic">Check</td>
+                            <td className="px-2 py-1 italic">{t("check")}</td>
                             <td className="px-2 py-1 font-mono">
                               {formatMeosTime(checkPunch.time)}
                             </td>
@@ -721,7 +725,7 @@ function ReadoutHistorySection({ history }: { history: HistoryEntry[] }) {
                         {startPunch && (
                           <tr className="text-emerald-600">
                             <td className="px-2 py-1" />
-                            <td className="px-2 py-1 font-medium">Start</td>
+                            <td className="px-2 py-1 font-medium">{t("start")}</td>
                             <td className="px-2 py-1 font-mono">
                               {formatMeosTime(startPunch.time)}
                             </td>
@@ -743,7 +747,7 @@ function ReadoutHistorySection({ history }: { history: HistoryEntry[] }) {
                         {finishPunch && (
                           <tr className="text-blue-600 font-medium">
                             <td className="px-2 py-1" />
-                            <td className="px-2 py-1">Finish</td>
+                            <td className="px-2 py-1">{t("finish")}</td>
                             <td className="px-2 py-1 font-mono">
                               {formatMeosTime(finishPunch.time)}
                             </td>
@@ -757,19 +761,19 @@ function ReadoutHistorySection({ history }: { history: HistoryEntry[] }) {
                   {h.metadata && (
                     <div className="mt-2 pt-2 border-t border-slate-100 flex flex-wrap gap-x-4 gap-y-1 text-[10px] text-slate-400">
                       {h.metadata.batteryDate && (
-                        <span>Battery date: {h.metadata.batteryDate}</span>
+                        <span>{t("batteryDateLabel", { date: h.metadata.batteryDate })}</span>
                       )}
                       {h.metadata.productionDate && (
-                        <span>Produced: {h.metadata.productionDate}</span>
+                        <span>{t("producedLabel", { date: h.metadata.productionDate })}</span>
                       )}
                       {h.metadata.hardwareVersion && (
-                        <span>HW: {h.metadata.hardwareVersion}</span>
+                        <span>{t("hwLabel", { version: h.metadata.hardwareVersion })}</span>
                       )}
                       {h.metadata.softwareVersion && (
-                        <span>SW: {h.metadata.softwareVersion}</span>
+                        <span>{t("swLabel", { version: h.metadata.softwareVersion })}</span>
                       )}
                       {h.metadata.clearCount != null && (
-                        <span>Clears: {h.metadata.clearCount}</span>
+                        <span>{t("clearsLabel", { count: h.metadata.clearCount })}</span>
                       )}
                     </div>
                   )}

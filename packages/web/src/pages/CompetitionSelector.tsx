@@ -1,10 +1,13 @@
 import { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
+import { useTranslation } from "react-i18next";
 import { trpc } from "../lib/trpc";
 import { formatDate } from "../lib/format";
+import { LanguageSelector } from "../components/LanguageSelector";
 
 export function CompetitionSelector() {
   const navigate = useNavigate();
+  const { t } = useTranslation("event");
   const competitions = trpc.competition.list.useQuery();
   const selectMutation = trpc.competition.select.useMutation({
     onSuccess: (data) => {
@@ -26,15 +29,20 @@ export function CompetitionSelector() {
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-50 to-blue-50 flex items-center justify-center p-4">
       <div className="w-full max-w-lg">
+        {/* Language Selector — top right */}
+        <div className="flex justify-end mb-2">
+          <LanguageSelector />
+        </div>
+
         {/* Logo / Header */}
         <div className="text-center mb-8">
           <div className="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-blue-600 text-white text-2xl font-bold mb-4 shadow-lg">
             O2
           </div>
           <h1 className="text-3xl font-bold text-slate-900">
-            Oxygen
+            {t("title")}
           </h1>
-          <p className="text-slate-500 mt-2">Select a competition to manage</p>
+          <p className="text-slate-500 mt-2">{t("selectCompetition")}</p>
         </div>
 
         {/* Competition List */}
@@ -42,32 +50,32 @@ export function CompetitionSelector() {
           {competitions.isLoading && (
             <div className="p-12 text-center">
               <div className="inline-block w-8 h-8 border-4 border-blue-200 border-t-blue-600 rounded-full animate-spin" />
-              <p className="text-slate-500 mt-4">Loading competitions...</p>
+              <p className="text-slate-500 mt-4">{t("loadingCompetitions")}</p>
             </div>
           )}
 
           {competitions.isError && (
             <div className="p-8 text-center">
               <div className="text-red-500 text-lg font-medium mb-2">
-                Connection Error
+                {t("connectionError")}
               </div>
               <p className="text-slate-500 text-sm mb-4">
-                Could not connect to the Oxygen API server.
+                {t("couldNotConnect")}
                 <br />
-                Make sure it is running on port 3001.
+                {t("ensureRunning")}
               </p>
               <button
                 onClick={() => competitions.refetch()}
                 className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors cursor-pointer"
               >
-                Retry
+                {t("retry", { ns: "common" })}
               </button>
             </div>
           )}
 
           {competitions.data && competitions.data.length === 0 && (
             <div className="p-8 text-center text-slate-500">
-              No competitions found. Create one below.
+              {t("noCompetitions")}
             </div>
           )}
 
@@ -108,7 +116,7 @@ export function CompetitionSelector() {
                             {comp.nameId}
                           </span>
                           {comp.remoteHost && (
-                            <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-purple-100 text-purple-700 text-[10px] font-medium" title={`Remote database: ${comp.remoteHost}`}>
+                            <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-purple-100 text-purple-700 text-[10px] font-medium" title={t("remoteDatabase", { host: comp.remoteHost })}>
                               <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 12h14M5 12a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v4a2 2 0 01-2 2M5 12a2 2 0 00-2 2v4a2 2 0 002 2h14a2 2 0 002-2v-4a2 2 0 00-2-2" />
                               </svg>
@@ -122,7 +130,7 @@ export function CompetitionSelector() {
                           )}
                           {comp.eventorEnv === "test" && (
                             <span className="inline-flex items-center px-1.5 py-0.5 rounded bg-amber-100 text-amber-700 text-[10px] font-bold uppercase tracking-wider">
-                              Test-Eventor
+                              {t("testEventor")}
                             </span>
                           )}
                         </div>
@@ -147,7 +155,7 @@ export function CompetitionSelector() {
                         setDeleteConfirm({ nameId: comp.nameId, name: comp.name });
                       }}
                       className="px-3 py-4 text-slate-300 hover:text-red-500 transition-colors cursor-pointer opacity-0 group-hover:opacity-100"
-                      title="Delete competition"
+                      title={t("deleteCompetitionTitle")}
                     >
                       <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
@@ -162,7 +170,7 @@ export function CompetitionSelector() {
 
         {selectMutation.isError && (
           <div className="mt-4 p-4 bg-red-50 border border-red-200 rounded-xl text-red-700 text-sm">
-            Failed to connect to competition: {selectMutation.error.message}
+            {t("failedToConnect", { message: selectMutation.error.message })}
           </div>
         )}
 
@@ -175,7 +183,7 @@ export function CompetitionSelector() {
             <svg className="w-5 h-5 text-slate-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
             </svg>
-            New Competition
+            {t("newCompetition")}
           </button>
           <button
             onClick={() => { setShowEventor(true); setShowCreate(false); }}
@@ -184,7 +192,7 @@ export function CompetitionSelector() {
             <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
             </svg>
-            Import from Eventor
+            {t("importFromEventor")}
           </button>
         </div>
 
@@ -223,18 +231,18 @@ export function CompetitionSelector() {
                   </svg>
                 </div>
                 <div>
-                  <h3 className="text-lg font-semibold text-slate-900">Delete Competition</h3>
-                  <p className="text-sm text-slate-500">This cannot be undone.</p>
+                  <h3 className="text-lg font-semibold text-slate-900">{t("deleteCompetition")}</h3>
+                  <p className="text-sm text-slate-500">{t("deleteCannotUndo")}</p>
                 </div>
               </div>
               <p className="text-sm text-slate-600 mb-1">
-                Are you sure you want to permanently delete:
+                {t("deleteConfirm")}
               </p>
               <p className="text-sm font-semibold text-slate-900 mb-1">
                 {deleteConfirm.name}
               </p>
               <p className="text-xs text-slate-400 font-mono mb-5">
-                Database: {deleteConfirm.nameId}
+                {t("database", { ns: "common" })}: {deleteConfirm.nameId}
               </p>
               <div className="flex gap-3 justify-end">
                 <button
@@ -242,14 +250,14 @@ export function CompetitionSelector() {
                   disabled={deleteMutation.isPending}
                   className="px-4 py-2 text-sm text-slate-600 hover:text-slate-800 cursor-pointer"
                 >
-                  Cancel
+                  {t("cancel", { ns: "common" })}
                 </button>
                 <button
                   onClick={() => deleteMutation.mutate({ nameId: deleteConfirm.nameId })}
                   disabled={deleteMutation.isPending}
                   className="px-4 py-2 bg-red-600 text-white text-sm font-medium rounded-lg hover:bg-red-700 disabled:opacity-50 transition-colors cursor-pointer"
                 >
-                  {deleteMutation.isPending ? "Deleting..." : "Delete Permanently"}
+                  {deleteMutation.isPending ? t("deleting") : t("deletePermanently")}
                 </button>
               </div>
               {deleteMutation.isError && (
@@ -263,7 +271,7 @@ export function CompetitionSelector() {
 
         {/* Footer */}
         <div className="text-center mt-6 text-sm text-slate-400 space-y-1">
-          <div>Oxygen v0.1.0 &middot; Connected to MeOS MySQL</div>
+          <div>{t("footer")}</div>
           <PurgeButton onPurged={() => competitions.refetch()} />
         </div>
       </div>
@@ -280,6 +288,7 @@ function CreateCompetitionForm({
   onClose: () => void;
   onCreated: (nameId: string) => void;
 }) {
+  const { t } = useTranslation("event");
   const [name, setName] = useState("");
   const [date, setDate] = useState(formatDate(new Date()));
   const [dbName, setDbName] = useState("");
@@ -320,7 +329,7 @@ function CreateCompetitionForm({
     <div className="mt-4 bg-white rounded-2xl shadow-lg border border-slate-200 p-6">
       <div className="flex items-center justify-between mb-4">
         <h2 className="text-lg font-semibold text-slate-900">
-          New Competition
+          {t("newCompetition")}
         </h2>
         <button
           onClick={onClose}
@@ -334,13 +343,13 @@ function CreateCompetitionForm({
       <form onSubmit={handleSubmit} className="space-y-4">
         <div>
           <label className="block text-sm font-medium text-slate-600 mb-1">
-            Competition Name
+            {t("competitionName")}
           </label>
           <input
             type="text"
             value={name}
             onChange={(e) => setName(e.target.value)}
-            placeholder="e.g. Klubbmästerskap 2026"
+            placeholder={t("competitionNamePlaceholder")}
             className="w-full px-4 py-2.5 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
             autoFocus
             required
@@ -348,7 +357,7 @@ function CreateCompetitionForm({
         </div>
         <div>
           <label className="block text-sm font-medium text-slate-600 mb-1">
-            Date
+            {t("date", { ns: "common" })}
           </label>
           <input
             type="date"
@@ -372,19 +381,19 @@ function CreateCompetitionForm({
             >
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
             </svg>
-            {showAdvanced ? "Hide" : "Show"} advanced options
+            {showAdvanced ? t("hideAdvanced") : t("showAdvanced")}
           </button>
           {showAdvanced && (
             <div className="mt-3 space-y-3 p-3 bg-slate-50 rounded-lg border border-slate-200">
               <div>
                 <label className="block text-sm font-medium text-slate-600 mb-1">
-                  Database Name <span className="text-slate-400 font-normal">(optional)</span>
+                  {t("databaseName")} <span className="text-slate-400 font-normal">({t("optional", { ns: "common" })})</span>
                 </label>
                 <input
                   type="text"
                   value={dbName}
                   onChange={(e) => setDbName(e.target.value)}
-                  placeholder="Auto-generated from name if empty"
+                  placeholder={t("databaseNamePlaceholder")}
                   className="w-full px-4 py-2.5 border border-slate-200 rounded-lg text-sm font-mono focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent bg-white"
                 />
               </div>
@@ -398,10 +407,10 @@ function CreateCompetitionForm({
                     onChange={(e) => setUseRemoteDb(e.target.checked)}
                     className="rounded border-slate-300 text-blue-600 focus:ring-blue-500 cursor-pointer"
                   />
-                  <span className="text-sm text-slate-600">Use separate database server</span>
+                  <span className="text-sm text-slate-600">{t("useSeparateDb")}</span>
                 </label>
                 <p className="text-xs text-slate-400 mt-1 ml-6">
-                  Connect to a different MySQL host instead of the default server
+                  {t("useSeparateDbDesc")}
                 </p>
               </div>
 
@@ -409,7 +418,7 @@ function CreateCompetitionForm({
                 <div className="space-y-3 pl-6">
                   <div className="grid grid-cols-3 gap-3">
                     <div className="col-span-2">
-                      <label className="block text-xs font-medium text-slate-500 mb-1">Host</label>
+                      <label className="block text-xs font-medium text-slate-500 mb-1">{t("host", { ns: "common" })}</label>
                       <input
                         type="text"
                         value={dbHost}
@@ -419,7 +428,7 @@ function CreateCompetitionForm({
                       />
                     </div>
                     <div>
-                      <label className="block text-xs font-medium text-slate-500 mb-1">Port</label>
+                      <label className="block text-xs font-medium text-slate-500 mb-1">{t("port", { ns: "common" })}</label>
                       <input
                         type="number"
                         value={dbPort}
@@ -432,7 +441,7 @@ function CreateCompetitionForm({
                   <div className="grid grid-cols-2 gap-3">
                     <div>
                       <label className="block text-xs font-medium text-slate-500 mb-1">
-                        Username <span className="text-slate-400 font-normal">(optional)</span>
+                        {t("username", { ns: "common" })} <span className="text-slate-400 font-normal">({t("optional", { ns: "common" })})</span>
                       </label>
                       <input
                         type="text"
@@ -444,7 +453,7 @@ function CreateCompetitionForm({
                     </div>
                     <div>
                       <label className="block text-xs font-medium text-slate-500 mb-1">
-                        Password <span className="text-slate-400 font-normal">(optional)</span>
+                        {t("password", { ns: "common" })} <span className="text-slate-400 font-normal">({t("optional", { ns: "common" })})</span>
                       </label>
                       <input
                         type="password"
@@ -459,7 +468,7 @@ function CreateCompetitionForm({
                     <svg className="w-3.5 h-3.5 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4c-.77-.833-1.964-.833-2.732 0L4.082 16.5c-.77.833.192 2.5 1.732 2.5z" />
                     </svg>
-                    The remote server must have a MeOSMain database accessible at this connection
+                    {t("remoteMeosWarning")}
                   </p>
                 </div>
               )}
@@ -472,14 +481,14 @@ function CreateCompetitionForm({
             disabled={createMutation.isPending || !name.trim()}
             className="px-6 py-2.5 bg-blue-600 text-white text-sm font-medium rounded-lg hover:bg-blue-700 disabled:opacity-50 transition-colors cursor-pointer"
           >
-            {createMutation.isPending ? "Creating..." : "Create"}
+            {createMutation.isPending ? t("creating", { ns: "common" }) : t("create", { ns: "common" })}
           </button>
           <button
             type="button"
             onClick={onClose}
             className="px-6 py-2.5 text-slate-500 text-sm hover:text-slate-700 cursor-pointer"
           >
-            Cancel
+            {t("cancel", { ns: "common" })}
           </button>
         </div>
         {createMutation.isError && (
@@ -501,6 +510,7 @@ function EventorImportPanel({
   onClose: () => void;
   onImported: (nameId: string) => void;
 }) {
+  const { t } = useTranslation("event");
   const [stepOverride, setStepOverride] = useState<"key" | "events" | null>(null);
   const [apiKey, setApiKey] = useState("");
   const [env, setEnv] = useState<"prod" | "test">("prod");
@@ -536,7 +546,7 @@ function EventorImportPanel({
             </svg>
           </div>
           <h2 className="text-lg font-semibold text-slate-900">
-            Import from Eventor
+            {t("importFromEventor")}
           </h2>
         </div>
         <button
@@ -558,7 +568,7 @@ function EventorImportPanel({
             : "text-slate-500 hover:text-slate-700"
             }`}
         >
-          Production
+          {t("production")}
         </button>
         <button
           onClick={() => setEnv("test")}
@@ -567,7 +577,7 @@ function EventorImportPanel({
             : "text-slate-500 hover:text-slate-700"
             }`}
         >
-          Test-Eventor
+          {t("testEventor")}
         </button>
       </div>
 
@@ -578,11 +588,11 @@ function EventorImportPanel({
             step === "key" ? "text-blue-600 font-medium" : "text-green-600"
           }
         >
-          1. API Key
+          {t("apiKeyStep")}
         </span>
         <span>&rarr;</span>
         <span className={step === "events" ? "text-blue-600 font-medium" : ""}>
-          2. Select &amp; Import
+          {t("selectImportStep")}
         </span>
       </div>
 
@@ -591,14 +601,14 @@ function EventorImportPanel({
       {step === "key" && (
         <form onSubmit={handleValidateKey} className="space-y-3">
           <p className="text-sm text-slate-500">
-            Enter your club's Eventor API key to browse and import events.
+            {t("apiKeyPrompt")}
           </p>
           <div>
             <input
               type="text"
               value={apiKey}
               onChange={(e) => setApiKey(e.target.value)}
-              placeholder="API key (e.g. df34af90...)"
+              placeholder={t("apiKeyPlaceholder")}
               className="w-full px-4 py-2.5 border border-slate-200 rounded-lg text-sm font-mono focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
               autoFocus
             />
@@ -608,7 +618,7 @@ function EventorImportPanel({
             disabled={validateMutation.isPending || !apiKey.trim()}
             className="px-6 py-2.5 bg-blue-600 text-white text-sm font-medium rounded-lg hover:bg-blue-700 disabled:opacity-50 transition-colors cursor-pointer"
           >
-            {validateMutation.isPending ? "Validating..." : "Connect"}
+            {validateMutation.isPending ? t("validating") : t("connect")}
           </button>
           {validateMutation.isError && (
             <div className="text-sm text-red-600">
@@ -649,6 +659,7 @@ function EventorEventList({
   onImported: (nameId: string) => void;
   onChangeKey: () => void;
 }) {
+  const { t } = useTranslation("event");
   const [search, setSearch] = useState("");
   const [importingEventId, setImportingEventId] = useState<number | null>(null);
   const events = trpc.eventor.events.useQuery({ env });
@@ -698,18 +709,20 @@ function EventorEventList({
           </svg>
         </div>
         <h3 className="text-lg font-semibold text-slate-900 mb-1">
-          Import Complete
+          {t("importComplete")}
         </h3>
         <p className="text-sm text-slate-500 mb-4">
-          {importMutation.data.runnerCount} runners,{" "}
-          {importMutation.data.classCount} classes,{" "}
-          {importMutation.data.clubCount} clubs imported
+          {t("importSummary", {
+            runners: importMutation.data.runnerCount,
+            classes: importMutation.data.classCount,
+            clubs: importMutation.data.clubCount,
+          })}
         </p>
         <button
           onClick={() => onImported(importMutation.data!.nameId)}
           className="px-6 py-2.5 bg-blue-600 text-white text-sm font-medium rounded-lg hover:bg-blue-700 transition-colors cursor-pointer"
         >
-          Open Competition
+          {t("openCompetition")}
         </button>
       </div>
     );
@@ -721,13 +734,13 @@ function EventorEventList({
       <div className="flex items-center justify-between text-xs">
         <span className="text-green-600 font-medium flex items-center gap-1">
           <span className="w-2 h-2 rounded-full bg-green-500 inline-block" />
-          Connected: {orgName}
+          {t("connectedTo", { name: orgName })}
         </span>
         <button
           onClick={onChangeKey}
           className="text-slate-400 hover:text-slate-600 cursor-pointer"
         >
-          Change key
+          {t("changeKey")}
         </button>
       </div>
 
@@ -740,7 +753,7 @@ function EventorEventList({
           type="text"
           value={search}
           onChange={(e) => setSearch(e.target.value)}
-          placeholder="Search events..."
+          placeholder={t("searchEvents")}
           className="w-full pl-10 pr-4 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
         />
       </div>
@@ -750,7 +763,7 @@ function EventorEventList({
         {events.isLoading && (
           <div className="p-6 text-center">
             <div className="inline-block w-6 h-6 border-3 border-blue-200 border-t-blue-600 rounded-full animate-spin" />
-            <p className="text-xs text-slate-400 mt-2">Loading events from Eventor...</p>
+            <p className="text-xs text-slate-400 mt-2">{t("loadingEvents")}</p>
           </div>
         )}
 
@@ -762,7 +775,7 @@ function EventorEventList({
 
         {filteredEvents.length === 0 && !events.isLoading && !events.isError && (
           <div className="p-6 text-center text-slate-400 text-sm">
-            No events found
+            {t("noEventsFound")}
           </div>
         )}
 
@@ -789,8 +802,8 @@ function EventorEventList({
                 className="px-3 py-1.5 bg-blue-600 text-white text-xs font-medium rounded-lg hover:bg-blue-700 disabled:opacity-50 transition-colors cursor-pointer whitespace-nowrap flex-shrink-0"
               >
                 {importMutation.isPending && importingEventId === ev.eventId
-                  ? "Importing..."
-                  : "Import"}
+                  ? t("importing", { ns: "common" })
+                  : t("import", { ns: "common" })}
               </button>
             </div>
           </div>
@@ -799,7 +812,7 @@ function EventorEventList({
 
       {importMutation.isError && (
         <div className="text-sm text-red-600 mt-2">
-          Import failed: {importMutation.error.message}
+          {t("importFailed", { message: importMutation.error.message })}
         </div>
       )}
     </div>
@@ -809,6 +822,7 @@ function EventorEventList({
 // ─── Purge Deleted Records Button ────────────────────────────
 
 function PurgeButton({ onPurged }: { onPurged: () => void }) {
+  const { t } = useTranslation("event");
   const [confirming, setConfirming] = useState(false);
   const purgeMutation = trpc.competition.purgeDeleted.useMutation({
     onSuccess: (data) => {
@@ -825,14 +839,14 @@ function PurgeButton({ onPurged }: { onPurged: () => void }) {
     if (purged === 0) {
       return (
         <span className="text-xs text-slate-400">
-          No deleted records to clean up
+          {t("noDeletedRecords")}
         </span>
       );
     }
     return (
       <span className="text-xs text-emerald-600">
-        Purged {purged} deleted record{purged !== 1 ? "s" : ""}
-        {droppedDatabases > 0 && `, dropped ${droppedDatabases} orphaned database${droppedDatabases !== 1 ? "s" : ""}`}
+        {t("purgedRecords", { count: purged })}
+        {droppedDatabases > 0 && t("droppedDatabases", { count: droppedDatabases })}
       </span>
     );
   }
@@ -840,20 +854,20 @@ function PurgeButton({ onPurged }: { onPurged: () => void }) {
   if (confirming) {
     return (
       <span className="inline-flex items-center gap-2 text-xs">
-        <span className="text-slate-500">Remove deleted competition records from MySQL?</span>
+        <span className="text-slate-500">{t("purgeConfirm")}</span>
         <button
           onClick={() => purgeMutation.mutate()}
           disabled={purgeMutation.isPending}
           className="text-red-500 hover:text-red-700 font-medium cursor-pointer"
         >
-          {purgeMutation.isPending ? "Purging..." : "Yes, purge"}
+          {purgeMutation.isPending ? t("purging") : t("yesPurge")}
         </button>
         <button
           onClick={() => setConfirming(false)}
           disabled={purgeMutation.isPending}
           className="text-slate-400 hover:text-slate-600 cursor-pointer"
         >
-          Cancel
+          {t("cancel", { ns: "common" })}
         </button>
       </span>
     );
@@ -863,9 +877,9 @@ function PurgeButton({ onPurged }: { onPurged: () => void }) {
     <button
       onClick={() => setConfirming(true)}
       className="text-xs text-slate-400 hover:text-slate-600 cursor-pointer"
-      title="Remove soft-deleted competition records and orphaned databases from MySQL"
+      title={t("cleanUpTitle")}
     >
-      Clean up deleted records
+      {t("cleanUpDeleted")}
     </button>
   );
 }

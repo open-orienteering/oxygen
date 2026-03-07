@@ -16,6 +16,7 @@ import {
   useCallback,
   type ReactNode,
 } from "react";
+import { useTranslation } from "react-i18next";
 import {
   WebUsbPrinterDriver,
   isWebUsbSupported,
@@ -23,6 +24,8 @@ import {
   buildRegistrationReceipt,
   type FinishReceiptData,
   type RegistrationReceiptData,
+  type FinishReceiptLabels,
+  type RegistrationReceiptLabels,
 } from "../lib/receipt-printer/index.js";
 
 // ─── Types ───────────────────────────────────────────────────
@@ -50,10 +53,41 @@ interface PrinterContextValue {
 
 const PrinterContext = createContext<PrinterContextValue | null>(null);
 
+function useReceiptLabels() {
+  const { t } = useTranslation("receipt");
+  return {
+    finish: (): FinishReceiptLabels => ({
+      start: t("start"),
+      finish: t("finish"),
+      splitHeader: t("splitHeader"),
+      fin: t("fin"),
+      battery: t("battery"),
+      position: t("position"),
+      competitionInfo: t("competitionInfo"),
+      tagline: t("tagline"),
+      missing: "--- " + t("missing", { defaultValue: "MISSING" }) + " ---",
+    }),
+    registration: (): RegistrationReceiptLabels => ({
+      registration: t("registration"),
+      name: t("name") + ":",
+      club: t("club") + ":",
+      class: t("class") + ":",
+      siCard: t("siCard") + ":",
+      start: t("start") + ":",
+      freeStart: t("freeStart"),
+      payment: t("payment") + ":",
+      amount: t("amount") + ":",
+      printed: t("printed"),
+      tagline: t("tagline"),
+    }),
+  };
+}
+
 export function PrinterProvider({ children }: { children: ReactNode }) {
   const supported = isWebUsbSupported();
   // Create driver once so the USB disconnect listener survives connect/disconnect cycles.
   const driverRef = useRef(new WebUsbPrinterDriver());
+  const receiptLabels = useReceiptLabels();
 
   const [connected, setConnected] = useState(false);
   const [printing, setPrinting] = useState(false);
@@ -96,7 +130,7 @@ export function PrinterProvider({ children }: { children: ReactNode }) {
     setLastError(null);
     setPrinting(true);
     try {
-      const bytes = buildFinishReceipt(data);
+      const bytes = buildFinishReceipt({ ...data, labels: { ...receiptLabels.finish(), ...data.labels } });
       await driver.sendBytes(bytes);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -105,7 +139,7 @@ export function PrinterProvider({ children }: { children: ReactNode }) {
     } finally {
       setPrinting(false);
     }
-  }, []);
+  }, [receiptLabels]);
 
   const printRegistration = useCallback(async (data: RegistrationReceiptData) => {
     const driver = driverRef.current;
@@ -113,7 +147,7 @@ export function PrinterProvider({ children }: { children: ReactNode }) {
     setLastError(null);
     setPrinting(true);
     try {
-      const bytes = buildRegistrationReceipt(data);
+      const bytes = buildRegistrationReceipt({ ...data, labels: { ...receiptLabels.registration(), ...data.labels } });
       await driver.sendBytes(bytes);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -122,7 +156,7 @@ export function PrinterProvider({ children }: { children: ReactNode }) {
     } finally {
       setPrinting(false);
     }
-  }, []);
+  }, [receiptLabels]);
 
   return (
     <PrinterContext.Provider

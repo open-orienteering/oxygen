@@ -1,9 +1,12 @@
 import { useState, useEffect, useRef } from "react";
+import { useTranslation } from "react-i18next";
 import { trpc } from "../lib/trpc";
-import { formatDateTime, timeAgo } from "../lib/format";
+import { formatDateTime } from "../lib/format";
+import { useTimeAgo } from "../hooks/useTimeAgo";
 import { ClubLogo } from "../components/ClubLogo";
 
 export function EventPage() {
+  const { t } = useTranslation("event");
   const dashboard = trpc.competition.dashboard.useQuery();
   const syncStatus = trpc.eventor.syncStatus.useQuery();
 
@@ -24,7 +27,7 @@ export function EventPage() {
       {/* Competition Info */}
       <div>
         <h2 className="text-sm font-semibold text-slate-500 uppercase tracking-wider mb-3">
-          Competition Info
+          {t("competitionInfo")}
         </h2>
         <div className="bg-white rounded-xl border border-slate-200 p-5">
           <div className="flex items-start gap-5">
@@ -46,7 +49,7 @@ export function EventPage() {
                 )}
               </div>
               <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-slate-400">
-                <span>Database: <span className="font-mono">{d.competition.nameId}</span></span>
+                <span>{t("database")}: <span className="font-mono">{d.competition.nameId}</span></span>
                 {d.competition.annotation && (
                   <span>{d.competition.annotation}</span>
                 )}
@@ -59,7 +62,7 @@ export function EventPage() {
       {/* Sync Section */}
       <div>
         <h2 className="text-sm font-semibold text-slate-500 uppercase tracking-wider mb-3">
-          Data Sync
+          {t("dataSync")}
         </h2>
         <div className="space-y-4">
           {/* Eventor Sync */}
@@ -100,6 +103,7 @@ export function EventPage() {
 // ─── Sync Behavior Help ─────────────────────────────────────
 
 function SyncBehaviorHelp() {
+  const { t } = useTranslation("event");
   const [open, setOpen] = useState(false);
 
   return (
@@ -111,43 +115,43 @@ function SyncBehaviorHelp() {
         <svg width={13} height={13} viewBox="0 0 20 20" fill="currentColor" className="shrink-0">
           <path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a.75.75 0 000 1.5h.253a.25.25 0 01.244.304l-.459 2.066A1.75 1.75 0 0010.747 15H11a.75.75 0 000-1.5h-.253a.25.25 0 01-.244-.304l.459-2.066A1.75 1.75 0 009.253 9H9z" clipRule="evenodd" />
         </svg>
-        {open ? "Hide sync details" : "How does sync work?"}
+        {open ? t("hideSyncDetails") : t("howDoesSyncWork")}
       </button>
 
       {open && (
         <div className="mt-2 p-3 bg-white border border-blue-100 rounded-lg space-y-3 text-xs text-slate-700">
-          <p className="text-[11px] text-slate-500 uppercase tracking-wide font-medium">What gets synced from Eventor</p>
+          <p className="text-[11px] text-slate-500 uppercase tracking-wide font-medium">{t("whatGetsSyncedFromEventor")}</p>
 
           <div className="space-y-2">
-            <SyncRow icon="👤" label="Runners" detail="Names, club, class, birth year, sex, nationality, SI card" />
-            <SyncRow icon="💳" label="Fees" detail="Entry fee, paid amount, and taxable portion from AssignedFee — not overwritten if manually edited" />
-            <SyncRow icon="🏷️" label="Bib" detail="Bib number string (e.g. H4 or 123) from results — stored separately from the integer start number" />
-            <SyncRow icon="🏅" label="Ranking score" detail="Pre-race ranking score from Eventor entry — stored as initial Rank value" />
-            <SyncRow icon="⏱️" label="Results" detail="Start time, finish time, and status (OK / DNS / DNF / DSQ etc.) when results are published" />
-            <SyncRow icon="🔵" label="Classes & clubs" detail="Names, age limits, sort order, club contact info" />
+            <SyncRow icon="👤" label={t("syncRunners")} detail={t("syncRunnersDetail")} />
+            <SyncRow icon="💳" label={t("syncFees")} detail={t("syncFeesDetail")} />
+            <SyncRow icon="🏷️" label={t("syncBib")} detail={t("syncBibDetail")} />
+            <SyncRow icon="🏅" label={t("syncRanking")} detail={t("syncRankingDetail")} />
+            <SyncRow icon="⏱️" label={t("results")} detail={t("syncResultsDetail")} />
+            <SyncRow icon="🔵" label={t("syncClassesClubs")} detail={t("syncClassesClubsDetail")} />
           </div>
 
           <div className="border-t border-slate-100 pt-2 space-y-2">
-            <p className="text-[11px] text-slate-500 uppercase tracking-wide font-medium">Special status handling</p>
-            <SyncRow icon="🚫" label="Withdrawn (Återbud)" detail="Runners who disappear from Eventor and have no race result are automatically marked as Cancelled (status 21), matching MeOS's StatusCANCEL" />
-            <SyncRow icon="🔇" label="NoTiming" detail="Classes with TimePresentation=false in Eventor are imported with StatusNoTiming — they appear in start lists but results are not timed" />
+            <p className="text-[11px] text-slate-500 uppercase tracking-wide font-medium">{t("specialStatusHandling")}</p>
+            <SyncRow icon="🚫" label={t("syncWithdrawn")} detail={t("syncWithdrawnDetail")} />
+            <SyncRow icon="🔇" label={t("syncNoTiming")} detail={t("syncNoTimingDetail")} />
           </div>
 
           <div className="border-t border-slate-100 pt-2 space-y-2">
-            <p className="text-[11px] text-slate-500 uppercase tracking-wide font-medium">What gets pushed to Eventor</p>
-            <SyncRow icon="⏱️" label="Results" detail="Start time, finish time, running time, status, and placement per runner" />
-            <SyncRow icon="🔀" label="Split times" detail="Per-control split times matched from SI card + radio punches, including missing and additional punches" />
-            <SyncRow icon="💳" label="Fees" detail="Entry fee (Normal/Late type), taxable amount, paid amount, and card rental as ServiceRequest — matching MeOS format" />
-            <SyncRow icon="👤" label="Person details" detail="Birth date, nationality, and bib number per runner" />
+            <p className="text-[11px] text-slate-500 uppercase tracking-wide font-medium">{t("whatGetsPushedToEventor")}</p>
+            <SyncRow icon="⏱️" label={t("results")} detail={t("pushResultsDetail")} />
+            <SyncRow icon="🔀" label={t("pushSplitTimes")} detail={t("pushSplitTimesDetail")} />
+            <SyncRow icon="💳" label={t("syncFees")} detail={t("pushFeesDetail")} />
+            <SyncRow icon="👤" label={t("pushPersonDetails")} detail={t("pushPersonDetailsDetail")} />
           </div>
 
           <div className="border-t border-slate-100 pt-2 space-y-2">
-            <p className="text-[11px] text-slate-500 uppercase tracking-wide font-medium">What is NOT synced</p>
-            <SyncRow icon="🌊" label="Start groups / waves" detail="StartTimeAllocationRequest (heat/wave assignments) is not yet imported — deferred for future implementation" />
+            <p className="text-[11px] text-slate-500 uppercase tracking-wide font-medium">{t("whatIsNotSynced")}</p>
+            <SyncRow icon="🌊" label={t("syncStartGroups")} detail={t("syncStartGroupsDetail")} />
           </div>
 
           <p className="text-[10px] text-slate-400 border-t border-slate-100 pt-2">
-            Sync is incremental pull: Oxygen reads data from Eventor, never writes back automatically. Results and Start List can be pushed to Eventor via the buttons above. Fees, registrations, and class setup remain authoritative in Eventor. Existing runners are updated in place. EntrySource is set to the Eventor event ID so the database is compatible with MeOS.
+            {t("syncExplanation")}
           </p>
         </div>
       )}
@@ -182,6 +186,8 @@ function EventorSyncPanel({
   env: string;
   onSynced: () => void;
 }) {
+  const { t } = useTranslation("event");
+  const timeAgo = useTimeAgo();
   const syncMutation = trpc.eventor.sync.useMutation({
     onSuccess: () => onSynced(),
   });
@@ -206,21 +212,21 @@ function EventorSyncPanel({
           </div>
           <div>
             <div className="text-sm font-semibold text-slate-900">
-              Eventor Linked
+              {t("eventorLinked")}
               <span className="ml-2 text-xs font-normal text-slate-500">
-                Event #{eventorEventId}
+                {t("eventNumber", { id: eventorEventId })}
               </span>
               {env === "test" && (
                 <span className="ml-2 px-1 rounded bg-amber-100 text-amber-700 text-[10px] font-bold uppercase">
-                  Test-Eventor
+                  {t("testEventor")}
                 </span>
               )}
             </div>
             <div className="text-xs text-slate-500">
-              Last sync:{" "}
+              {t("lastSync")}:{" "}
               {lastSync
                 ? <>{formatDateTime(lastSync)} <span className="text-slate-400">({timeAgo(lastSync)})</span></>
-                : "Never"}
+                : t("lastSyncNever")}
             </div>
           </div>
 
@@ -236,14 +242,14 @@ function EventorSyncPanel({
             {syncMutation.isPending ? (
               <>
                 <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-                Syncing...
+                {t("syncing")}
               </>
             ) : (
               <>
                 <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
                 </svg>
-                Sync from Eventor
+                {t("syncFromEventor")}
               </>
             )}
           </button>
@@ -258,14 +264,14 @@ function EventorSyncPanel({
                 {pushStartListMutation.isPending ? (
                   <>
                     <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-                    Pushing...
+                    {t("pushing")}
                   </>
                 ) : (
                   <>
                     <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
                     </svg>
-                    Push Start List
+                    {t("pushStartList")}
                   </>
                 )}
               </button>
@@ -278,14 +284,14 @@ function EventorSyncPanel({
                 {pushResultsMutation.isPending ? (
                   <>
                     <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-                    Pushing...
+                    {t("pushing")}
                   </>
                 ) : (
                   <>
                     <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" />
                     </svg>
-                    Push Results
+                    {t("pushResults")}
                   </>
                 )}
               </button>
@@ -296,55 +302,55 @@ function EventorSyncPanel({
 
       {syncMutation.isSuccess && syncMutation.data && (
         <div className="mt-3 p-3 bg-white rounded-lg border border-blue-100 text-xs text-slate-600">
-          <span className="font-medium text-green-700">Sync complete:</span>{" "}
-          {syncMutation.data.runnersAdded > 0 && <span>{syncMutation.data.runnersAdded} runners added, </span>}
-          {syncMutation.data.runnersUpdated > 0 && <span>{syncMutation.data.runnersUpdated} runners updated, </span>}
-          {syncMutation.data.cancelledCount > 0 && <span className="text-amber-700">{syncMutation.data.cancelledCount} marked as withdrawn, </span>}
-          {syncMutation.data.classesAdded > 0 && <span>{syncMutation.data.classesAdded} classes added, </span>}
-          {syncMutation.data.classesUpdated > 0 && <span>{syncMutation.data.classesUpdated} classes updated, </span>}
-          {syncMutation.data.clubsAdded > 0 && <span>{syncMutation.data.clubsAdded} clubs added, </span>}
-          {syncMutation.data.clubsUpdated > 0 && <span>{syncMutation.data.clubsUpdated} clubs updated, </span>}
+          <span className="font-medium text-green-700">{t("syncComplete")}</span>{" "}
+          {syncMutation.data.runnersAdded > 0 && <span>{t("runnersAdded", { count: syncMutation.data.runnersAdded })}, </span>}
+          {syncMutation.data.runnersUpdated > 0 && <span>{t("runnersUpdated", { count: syncMutation.data.runnersUpdated })}, </span>}
+          {syncMutation.data.cancelledCount > 0 && <span className="text-amber-700">{t("cancelledCount", { count: syncMutation.data.cancelledCount })}, </span>}
+          {syncMutation.data.classesAdded > 0 && <span>{t("classesAdded", { count: syncMutation.data.classesAdded })}, </span>}
+          {syncMutation.data.classesUpdated > 0 && <span>{t("classesUpdated", { count: syncMutation.data.classesUpdated })}, </span>}
+          {syncMutation.data.clubsAdded > 0 && <span>{t("clubsAdded", { count: syncMutation.data.clubsAdded })}, </span>}
+          {syncMutation.data.clubsUpdated > 0 && <span>{t("clubsUpdated", { count: syncMutation.data.clubsUpdated })}, </span>}
           {syncMutation.data.runnersAdded === 0 &&
             syncMutation.data.runnersUpdated === 0 &&
             syncMutation.data.cancelledCount === 0 &&
             syncMutation.data.classesAdded === 0 &&
-            syncMutation.data.clubsAdded === 0 && <span>Everything up to date</span>}
+            syncMutation.data.clubsAdded === 0 && <span>{t("everythingUpToDate")}</span>}
         </div>
       )}
 
       {syncMutation.isError && (
         <div className="mt-3 p-3 bg-red-50 rounded-lg border border-red-100 text-xs text-red-600">
-          Sync failed: {syncMutation.error.message}
+          {t("syncFailed", { message: syncMutation.error.message })}
         </div>
       )}
 
       {pushStartListMutation.isSuccess && pushStartListMutation.data && (
         <div className="mt-3 p-3 bg-slate-50 rounded-lg border border-slate-200 text-xs text-slate-700">
-          <span className="font-medium">Push complete:</span> Uploaded start list for {pushStartListMutation.data.runnerCount} runners to Test-Eventor.
+          <span className="font-medium">{t("pushComplete")}</span> {t("pushStartListComplete", { count: pushStartListMutation.data.runnerCount })}
         </div>
       )}
 
       {pushStartListMutation.isError && (
         <div className="mt-3 p-3 bg-red-50 rounded-lg border border-red-100 text-xs text-red-600">
-          Push start list failed: {pushStartListMutation.error.message}
+          {t("pushStartListFailed", { message: pushStartListMutation.error.message })}
         </div>
       )}
 
       {pushResultsMutation.isSuccess && pushResultsMutation.data && (
         <div className="mt-3 p-3 bg-amber-50 rounded-lg border border-amber-200 text-xs text-amber-800">
-          <span className="font-medium">Push complete:</span> Uploaded results for {pushResultsMutation.data.runnerCount} runners to Test-Eventor.
+          <span className="font-medium">{t("pushComplete")}</span> {t("pushResultsComplete", { count: pushResultsMutation.data.runnerCount })}
         </div>
       )}
 
       {pushResultsMutation.isError && (
         <div className="mt-3 p-3 bg-red-50 rounded-lg border border-red-100 text-xs text-red-600">
-          Push results failed: {pushResultsMutation.error.message}
+          {t("pushResultsFailed", { message: pushResultsMutation.error.message })}
         </div>
       )}
 
       {!apiKeyConfigured && (
         <div className="mt-3 text-xs text-amber-700 bg-amber-50 p-2 rounded-lg">
-          Eventor API key not configured. Go to the competition selector and connect your key to enable sync.
+          {t("eventorApiKeyNotConfigured")}
         </div>
       )}
     </div>
@@ -354,6 +360,8 @@ function EventorSyncPanel({
 // ─── Runner Database Panel ──────────────────────────────────
 
 function RunnerDbPanel({ env }: { env?: string }) {
+  const { t } = useTranslation("event");
+  const timeAgo = useTimeAgo();
   const dbStatus = trpc.eventor.runnerDbStatus.useQuery(undefined, {
     staleTime: 60_000,
   });
@@ -383,25 +391,24 @@ function RunnerDbPanel({ env }: { env?: string }) {
           </div>
           <div>
             <div className="text-sm font-semibold text-slate-900">
-              Runner Database
+              {t("runnerDatabase")}
               <span className="ml-2 text-xs font-normal text-slate-500">
-                Global
+                {t("runnerDatabaseGlobal")}
               </span>
             </div>
             <div className="text-xs text-slate-500">
               {dbStatus.data?.runnerCount
                 ? (
                   <>
-                    {dbStatus.data.runnerCount.toLocaleString()} runners,{" "}
-                    {dbStatus.data.clubCount.toLocaleString()} clubs
+                    {t("runnerDbStats", { runners: dbStatus.data.runnerCount.toLocaleString(), clubs: dbStatus.data.clubCount.toLocaleString() })}
                     {dbStatus.data.lastSync && (
                       <span className="text-slate-400">
-                        {" "}— synced {timeAgo(dbStatus.data.lastSync)}
+                        {" "}— {t("runnerDbSynced", { ago: timeAgo(dbStatus.data.lastSync) })}
                       </span>
                     )}
                   </>
                 )
-                : "Not synced yet"}
+                : t("runnerDbNotSynced")}
             </div>
           </div>
         </div>
@@ -414,14 +421,14 @@ function RunnerDbPanel({ env }: { env?: string }) {
           {syncMutation.isPending ? (
             <>
               <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-              Syncing...
+              {t("syncing")}
             </>
           ) : (
             <>
               <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
               </svg>
-              {dbStatus.data?.runnerCount ? "Re-sync" : "Download"}
+              {dbStatus.data?.runnerCount ? t("reSync") : t("download")}
             </>
           )}
         </button>
@@ -430,24 +437,23 @@ function RunnerDbPanel({ env }: { env?: string }) {
       {syncMutation.isPending && (
         <div className="mt-3 p-3 bg-white rounded-lg border border-purple-100 text-xs text-slate-600 flex items-center gap-2">
           <div className="w-3 h-3 border-2 border-purple-400 border-t-transparent rounded-full animate-spin" />
-          Downloading runner database from Eventor — this may take 30-60 seconds for ~200k runners...
+          {t("downloadingRunnerDb")}
         </div>
       )}
 
       {syncMutation.isSuccess && syncMutation.data && (
         <div className="mt-3 p-3 bg-white rounded-lg border border-purple-100 text-xs text-slate-600">
-          <span className="font-medium text-green-700">Sync complete:</span>{" "}
-          {syncMutation.data.runners.toLocaleString()} runners,{" "}
-          {syncMutation.data.clubs.toLocaleString()} clubs imported
+          <span className="font-medium text-green-700">{t("syncComplete")}</span>{" "}
+          {t("runnerDbSyncComplete", { runners: syncMutation.data.runners.toLocaleString(), clubs: syncMutation.data.clubs.toLocaleString() })}
           {syncMutation.data.logosAdded > 0 && (
-            <>, {syncMutation.data.logosAdded} logos downloaded</>
+            <>, {t("logosDownloaded", { count: syncMutation.data.logosAdded })}</>
           )}
         </div>
       )}
 
       {syncMutation.isError && (
         <div className="mt-3 p-3 bg-red-50 rounded-lg border border-red-100 text-xs text-red-600">
-          Sync failed: {syncMutation.error.message}
+          {t("syncFailed", { message: syncMutation.error.message })}
         </div>
       )}
     </div>
@@ -457,6 +463,8 @@ function RunnerDbPanel({ env }: { env?: string }) {
 // ─── LiveResults Panel ────────────────────────────────────────
 
 function LiveResultsPanel() {
+  const { t } = useTranslation("event");
+  const timeAgo = useTimeAgo();
   const config = trpc.liveresults.getConfig.useQuery(undefined, {
     refetchInterval: 5000,
   });
@@ -522,7 +530,7 @@ function LiveResultsPanel() {
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
               d="M8.111 16.404a5.5 5.5 0 017.778 0M12 20h.01m-7.08-7.071c3.904-3.905 10.236-3.905 14.14 0M1.394 9.393c5.857-5.857 15.355-5.857 21.213 0" />
           </svg>
-          <span className="text-sm font-semibold text-slate-800">LiveResults</span>
+          <span className="text-sm font-semibold text-slate-800">{t("liveResults")}</span>
           {tavid && <span className="text-xs text-slate-400 font-mono">#{tavid}</span>}
         </div>
         <button
@@ -542,10 +550,10 @@ function LiveResultsPanel() {
       {running && (
         <div className="mb-3 flex items-center gap-2 text-xs text-slate-500">
           <span className="inline-block w-2 h-2 rounded-full bg-green-400 animate-pulse" />
-          <span>Live</span>
+          <span>{t("live")}</span>
           {status.data?.lastPush && (
             <span className="text-slate-400">
-              · Last push {timeAgo(status.data.lastPush)} · {status.data.pushCount} total
+              · {t("lastPush", { ago: timeAgo(status.data.lastPush) })} · {t("totalPushes", { count: status.data.pushCount })}
             </span>
           )}
           {publicUrl && (
@@ -555,7 +563,7 @@ function LiveResultsPanel() {
               rel="noopener noreferrer"
               className="ml-auto text-blue-600 hover:underline flex items-center gap-1"
             >
-              View live
+              {t("viewLive")}
               <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
                   d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
@@ -575,39 +583,39 @@ function LiveResultsPanel() {
       {/* Form */}
       <div className="grid grid-cols-2 gap-3 text-sm">
         <div>
-          <label className="block text-xs text-slate-500 mb-1">Push interval</label>
+          <label className="block text-xs text-slate-500 mb-1">{t("pushInterval")}</label>
           <select
             value={intervalSeconds ?? 30}
             onChange={(e) => setIntervalSeconds(parseInt(e.target.value, 10))}
             disabled={running || isBusy}
             className="w-full border border-slate-200 rounded px-2 py-1 text-xs text-slate-700 disabled:bg-slate-50 disabled:text-slate-400"
           >
-            <option value={10}>10 seconds</option>
-            <option value={15}>15 seconds</option>
-            <option value={30}>30 seconds</option>
-            <option value={60}>60 seconds</option>
+            <option value={10}>{t("seconds", { count: 10 })}</option>
+            <option value={15}>{t("seconds", { count: 15 })}</option>
+            <option value={30}>{t("seconds", { count: 30 })}</option>
+            <option value={60}>{t("seconds", { count: 60 })}</option>
           </select>
         </div>
         <div>
-          <label className="block text-xs text-slate-500 mb-1">Country</label>
+          <label className="block text-xs text-slate-500 mb-1">{t("country")}</label>
           <select
             value={country ?? "SE"}
             onChange={(e) => setCountry(e.target.value)}
             disabled={isBusy}
             className="w-full border border-slate-200 rounded px-2 py-1 text-xs text-slate-700 disabled:bg-slate-50"
           >
-            <option value="SE">Sweden</option>
-            <option value="NO">Norway</option>
-            <option value="FI">Finland</option>
-            <option value="DK">Denmark</option>
-            <option value="CH">Switzerland</option>
-            <option value="AT">Austria</option>
-            <option value="DE">Germany</option>
-            <option value="GB">United Kingdom</option>
-            <option value="CZ">Czech Republic</option>
-            <option value="FR">France</option>
-            <option value="IT">Italy</option>
-            <option value="SK">Slovakia</option>
+            <option value="SE">{t("sweden")}</option>
+            <option value="NO">{t("norway")}</option>
+            <option value="FI">{t("finland")}</option>
+            <option value="DK">{t("denmark")}</option>
+            <option value="CH">{t("switzerland")}</option>
+            <option value="AT">{t("austria")}</option>
+            <option value="DE">{t("germany")}</option>
+            <option value="GB">{t("unitedKingdom")}</option>
+            <option value="CZ">{t("czechRepublic")}</option>
+            <option value="FR">{t("france")}</option>
+            <option value="IT">{t("italy")}</option>
+            <option value="SK">{t("slovakia")}</option>
           </select>
         </div>
       </div>
@@ -622,7 +630,7 @@ function LiveResultsPanel() {
             disabled={isBusy}
             className="rounded border-slate-300 text-blue-600 focus:ring-blue-500"
           />
-          Public competition
+          {t("publicCompetition")}
         </label>
 
         <div className="ml-auto flex items-center gap-2">
@@ -638,7 +646,7 @@ function LiveResultsPanel() {
               disabled={isBusy}
               className="text-xs text-slate-500 hover:text-slate-700 disabled:opacity-50"
             >
-              Save
+              {t("save")}
             </button>
           )}
           {tavid && (
@@ -655,7 +663,7 @@ function LiveResultsPanel() {
                     d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
                 </svg>
               )}
-              Push now
+              {t("pushNow")}
             </button>
           )}
         </div>
@@ -664,8 +672,7 @@ function LiveResultsPanel() {
       {/* Push result */}
       {pushNowMut.isSuccess && pushNowMut.data && (
         <div className="mt-2 text-xs text-emerald-600">
-          Pushed: {pushNowMut.data.stats.runners} runners, {pushNowMut.data.stats.results} results,{" "}
-          {pushNowMut.data.stats.splitcontrols} split controls
+          {t("pushedStats", { runners: pushNowMut.data.stats.runners, results: pushNowMut.data.stats.results, splitcontrols: pushNowMut.data.stats.splitcontrols })}
         </div>
       )}
 
@@ -679,8 +686,7 @@ function LiveResultsPanel() {
       {/* First-time help */}
       {!tavid && !running && (
         <p className="mt-2 text-xs text-slate-400">
-          Toggle on to automatically create a competition on liveresultat.orientering.se and start pushing results.
-          Controls with "radio" in their name will appear as split times.
+          {t("liveresultsHelp")}
         </p>
       )}
     </div>
@@ -691,13 +697,14 @@ function LiveResultsPanel() {
 // ─── Registration Settings ──────────────────────────────────
 
 const ALL_PAYMENT_METHODS = [
-  { key: "billed", label: "Invoice" },
-  { key: "on-site", label: "Pay on site" },
-  { key: "card", label: "Card" },
-  { key: "swish", label: "Swish" },
+  { key: "billed", labelKey: "paymentInvoice" },
+  { key: "on-site", labelKey: "paymentOnSite" },
+  { key: "card", labelKey: "paymentCard" },
+  { key: "swish", labelKey: "paymentSwish" },
 ] as const;
 
 function RegistrationSettings() {
+  const { t } = useTranslation("event");
   const config = trpc.competition.getRegistrationConfig.useQuery();
   const updateConfig = trpc.competition.setRegistrationConfig.useMutation({
     onSuccess: () => config.refetch(),
@@ -735,15 +742,15 @@ function RegistrationSettings() {
   return (
     <div>
       <h2 className="text-sm font-semibold text-slate-500 uppercase tracking-wider mb-3">
-        Registration Settings
+        {t("registrationSettings")}
       </h2>
       <div className="bg-white rounded-xl border border-slate-200 p-5 space-y-4">
         <div>
           <label className="block text-sm font-medium text-slate-700 mb-2">
-            Payment methods
+            {t("paymentMethods")}
           </label>
           <div className="flex flex-wrap gap-2">
-            {ALL_PAYMENT_METHODS.map(({ key, label }) => (
+            {ALL_PAYMENT_METHODS.map(({ key, labelKey }) => (
               <button
                 key={key}
                 type="button"
@@ -754,7 +761,7 @@ function RegistrationSettings() {
                     : "border-slate-200 text-slate-500 hover:bg-slate-50"
                 }`}
               >
-                {label}
+                {t(labelKey)}
               </button>
             ))}
           </div>
@@ -763,18 +770,18 @@ function RegistrationSettings() {
         {methods.includes("swish") && (
           <div>
             <label className="block text-xs font-medium text-slate-600 mb-1">
-              Swish number
+              {t("swishNumber")}
             </label>
             <input
               type="text"
               value={swishNumber}
               onChange={(e) => setSwishNumber(e.target.value)}
               onBlur={() => save({ swishNumber })}
-              placeholder="073XXXXXXX"
+              placeholder={t("swishNumberPlaceholder")}
               className="w-full max-w-xs px-3 py-1.5 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
             />
             <p className="text-xs text-slate-400 mt-1">
-              Payment message is auto-generated as "Competition name - Class name"
+              {t("swishPaymentMessage")}
             </p>
           </div>
         )}
@@ -789,18 +796,18 @@ function RegistrationSettings() {
             }}
             className="w-4 h-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
           />
-          <span className="text-sm text-slate-700">Print registration receipt (when printer connected)</span>
+          <span className="text-sm text-slate-700">{t("printRegistrationReceipt")}</span>
         </label>
 
         <div>
           <label className="block text-xs font-medium text-slate-600 mb-1">
-            Registration receipt message <span className="text-slate-400 font-normal">(optional)</span>
+            {t("registrationReceiptMessage")} <span className="text-slate-400 font-normal">({t("registrationReceiptMessageOptional")})</span>
           </label>
           <textarea
             value={regReceiptMsg}
             onChange={(e) => setRegReceiptMsg(e.target.value)}
             onBlur={() => save({ registrationReceiptMessage: regReceiptMsg })}
-            placeholder="Extra message printed on registration receipts"
+            placeholder={t("registrationReceiptPlaceholder")}
             rows={2}
             className="w-full px-3 py-1.5 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none"
           />
@@ -808,13 +815,13 @@ function RegistrationSettings() {
 
         <div>
           <label className="block text-xs font-medium text-slate-600 mb-1">
-            Finish receipt message <span className="text-slate-400 font-normal">(optional)</span>
+            {t("finishReceiptMessage")} <span className="text-slate-400 font-normal">({t("finishReceiptMessageOptional")})</span>
           </label>
           <textarea
             value={finishReceiptMsg}
             onChange={(e) => setFinishReceiptMsg(e.target.value)}
             onBlur={() => save({ finishReceiptMessage: finishReceiptMsg })}
-            placeholder="Extra message printed on finish receipts"
+            placeholder={t("finishReceiptPlaceholder")}
             rows={2}
             className="w-full px-3 py-1.5 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none"
           />
@@ -827,6 +834,7 @@ function RegistrationSettings() {
 // ─── Club Sync ──────────────────────────────────────────────
 
 function ClubSyncPanel({ env }: { env?: string }) {
+  const { t } = useTranslation("event");
   const syncStatus = trpc.eventor.syncStatus.useQuery();
   const syncMutation = trpc.eventor.syncClubs.useMutation();
 
@@ -843,10 +851,10 @@ function ClubSyncPanel({ env }: { env?: string }) {
           </div>
           <div>
             <div className="text-sm font-semibold text-slate-900">
-              Club Sync
+              {t("clubSync")}
             </div>
             <div className="text-xs text-slate-500">
-              Sync club data and logos from Eventor
+              {t("clubSyncDescription")}
             </div>
           </div>
         </div>
@@ -859,14 +867,14 @@ function ClubSyncPanel({ env }: { env?: string }) {
           {syncMutation.isPending ? (
             <>
               <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-              Syncing...
+              {t("syncing")}
             </>
           ) : (
             <>
               <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
               </svg>
-              Sync Clubs
+              {t("syncClubs")}
             </>
           )}
         </button>
@@ -874,15 +882,14 @@ function ClubSyncPanel({ env }: { env?: string }) {
 
       {syncMutation.isSuccess && syncMutation.data && (
         <div className="mt-3 p-3 bg-white rounded-lg border border-emerald-100 text-xs text-slate-600">
-          <span className="font-medium text-green-700">Sync complete:</span>{" "}
-          {syncMutation.data.added} added, {syncMutation.data.updated} updated
-          {" "}({syncMutation.data.total} total)
+          <span className="font-medium text-green-700">{t("syncComplete")}</span>{" "}
+          {t("clubSyncComplete", { added: syncMutation.data.added, updated: syncMutation.data.updated, total: syncMutation.data.total })}
         </div>
       )}
 
       {syncMutation.isError && (
         <div className="mt-3 p-3 bg-red-50 rounded-lg border border-red-100 text-xs text-red-600">
-          Sync failed: {syncMutation.error.message}
+          {t("syncFailed", { message: syncMutation.error.message })}
         </div>
       )}
     </div>

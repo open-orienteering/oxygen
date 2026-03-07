@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useMemo, useCallback } from "react";
+import { useTranslation } from "react-i18next";
 import { trpc } from "../lib/trpc";
 import { parseMeosTime, formatMeosTime } from "@oxygen/shared";
 import { SearchableSelect } from "../components/SearchableSelect";
@@ -19,6 +20,7 @@ interface RecentRegistration {
 }
 
 export function RegistrationPage() {
+  const { t } = useTranslation("registration");
   const { recentCards, getKioskChannel } = useDeviceManager();
   const printer = usePrinter();
   const utils = trpc.useUtils();
@@ -286,8 +288,8 @@ export function RegistrationPage() {
     e.preventDefault();
     setError("");
 
-    if (!name.trim()) { setError("Name is required"); return; }
-    if (!classId) { setError("Class is required"); return; }
+    if (!name.trim()) { setError(t("nameRequired")); return; }
+    if (!classId) { setError(t("classRequired")); return; }
 
     const classFee = classes.data?.classes.find((c) => c.id === classId)?.classFee ?? 0;
     let fee = 0;
@@ -333,7 +335,7 @@ export function RegistrationPage() {
 
       // Print receipt if configured
       if (printer.connected && regConfig.data?.printRegistrationReceipt) {
-        const paymentLabels: Record<string, string> = { billed: "Invoice", "on-site": "Pay on site", card: "Card", swish: "Swish" };
+        const paymentLabels: Record<string, string> = { billed: t("invoice"), "on-site": t("payOnSite"), card: t("card"), swish: t("swish") };
         const logoRaster = eventorId
           ? await fetchLogoRaster(`/api/club-logo/${eventorId}?variant=large`, 250).catch(() => null)
           : null;
@@ -355,7 +357,7 @@ export function RegistrationPage() {
       ]);
 
       // Show success
-      setSuccessMsg(`${trimmedName} registered in ${clsName}`);
+      setSuccessMsg(t("registeredInClass", { name: trimmedName, className: clsName }));
       if (successTimerRef.current) clearTimeout(successTimerRef.current);
       successTimerRef.current = setTimeout(() => setSuccessMsg(""), 4000);
 
@@ -367,7 +369,7 @@ export function RegistrationPage() {
       clearForm();
       nameInputRef.current?.focus();
     } catch (err: any) {
-      setError(err.message ?? "Registration failed");
+      setError(err.message ?? t("registrationFailed"));
     }
   };
 
@@ -441,13 +443,13 @@ export function RegistrationPage() {
         {!cardNo && !name && (
           <div className="mb-6 p-6 bg-slate-50 border border-slate-200 rounded-xl text-center">
             <div className="inline-block w-8 h-8 border-4 border-blue-200 border-t-blue-600 rounded-full animate-spin mb-3" />
-            <p className="text-slate-600 font-medium">Waiting for SI card...</p>
-            <p className="text-slate-400 text-sm mt-1">Insert a card into the reader, or enter a card number manually</p>
+            <p className="text-slate-600 font-medium">{t("waitingForCard")}</p>
+            <p className="text-slate-400 text-sm mt-1">{t("insertCardOrEnterManually")}</p>
             <div className="mt-3 flex items-center justify-center gap-2">
               <input
                 ref={manualCardInputRef}
                 type="number"
-                placeholder="Card number"
+                placeholder={t("cardNumber")}
                 className="w-40 px-3 py-1.5 border border-slate-300 rounded-lg text-sm text-center focus:outline-none focus:ring-2 focus:ring-blue-500"
                 onKeyDown={(e) => {
                   if (e.key === "Enter") {
@@ -465,7 +467,7 @@ export function RegistrationPage() {
                   if (val) startManualCard(val);
                 }}
               >
-                Start
+                {t("startButton")}
               </button>
             </div>
           </div>
@@ -474,15 +476,15 @@ export function RegistrationPage() {
         <form onSubmit={handleSubmit} className="space-y-4">
           {/* Club */}
           <div>
-            <label className="block text-sm font-medium text-slate-700 mb-1">Club</label>
+            <label className="block text-sm font-medium text-slate-700 mb-1">{t("club")}</label>
             <SearchableSelect
               testId="reg-club"
               value={clubId}
               onChange={(v) => setClubId(Number(v))}
-              placeholder="No club"
-              searchPlaceholder="Search clubs..."
+              placeholder={t("noClub")}
+              searchPlaceholder={t("searchClubs")}
               options={[
-                { value: 0, label: "No club" },
+                { value: 0, label: t("noClub") },
                 ...(clubs.data?.map((c) => ({
                   value: c.id,
                   label: c.name,
@@ -494,7 +496,7 @@ export function RegistrationPage() {
 
           {/* Name with autocomplete */}
           <div className="relative">
-            <label className="block text-sm font-medium text-slate-700 mb-1">Name *</label>
+            <label className="block text-sm font-medium text-slate-700 mb-1">{t("name")} *</label>
             <input
               ref={nameInputRef}
               type="text"
@@ -503,7 +505,7 @@ export function RegistrationPage() {
               onKeyDown={handleNameKeyDown}
               onFocus={() => name.trim().length >= 2 && setShowSuggestions(true)}
               className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-              placeholder="First Last"
+              placeholder={t("firstLast")}
               autoComplete="off"
               autoFocus
             />
@@ -524,12 +526,12 @@ export function RegistrationPage() {
                         <div className="text-xs text-slate-400 flex gap-2">
                           {s.clubName && <span>{s.clubName}</span>}
                           {s.birthYear > 0 && <span>{s.birthYear}</span>}
-                          {s.sex && <span>{s.sex === "M" ? "Male" : "Female"}</span>}
+                          {s.sex && <span>{s.sex === "M" ? t("male") : t("female")}</span>}
                           {s.cardNo > 0 && <span>SI: {s.cardNo}</span>}
                         </div>
                       </div>
                       <span className={`text-[10px] px-1.5 py-0.5 rounded flex-shrink-0 ${s.source === "eventor" ? "bg-blue-100 text-blue-700" : "bg-purple-100 text-purple-700"}`}>
-                        {s.source === "eventor" ? "Club" : "Runner DB"}
+                        {s.source === "eventor" ? t("clubSource") : t("runnerDbSource")}
                       </span>
                     </button>
                   );
@@ -540,13 +542,13 @@ export function RegistrationPage() {
 
           {/* Class */}
           <div>
-            <label className="block text-sm font-medium text-slate-700 mb-1">Class *</label>
+            <label className="block text-sm font-medium text-slate-700 mb-1">{t("class")} *</label>
             <SearchableSelect
               testId="reg-class"
               value={classId}
               onChange={(v) => setClassId(Number(v))}
-              placeholder="Select class..."
-              searchPlaceholder="Search classes..."
+              placeholder={t("selectClassPlaceholder")}
+              searchPlaceholder={t("searchClasses")}
               alwaysShowSearch
               options={[
                 ...(classes.data?.classes.map((c) => {
@@ -556,7 +558,7 @@ export function RegistrationPage() {
                   return {
                     value: c.id,
                     label: c.name,
-                    suffix: remaining != null ? (remaining <= 0 ? "No maps" : `${remaining} maps`) : undefined,
+                    suffix: remaining != null ? (remaining <= 0 ? t("noMaps") : t("mapsRemaining", { count: remaining })) : undefined,
                     disabled: remaining != null && remaining <= 0,
                   };
                 }) ?? []),
@@ -567,23 +569,23 @@ export function RegistrationPage() {
           {/* Card / Start time row */}
           <div className="grid grid-cols-2 gap-3">
             <div>
-              <label className="block text-sm font-medium text-slate-700 mb-1">SI Card</label>
+              <label className="block text-sm font-medium text-slate-700 mb-1">{t("siCard")}</label>
               <input
                 type="number"
                 value={cardNo}
                 onChange={(e) => setCardNo(e.target.value)}
                 className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-                placeholder="e.g. 500123"
+                placeholder={t("siCardPlaceholder")}
               />
             </div>
             <div>
-              <label className="block text-sm font-medium text-slate-700 mb-1">Start Time</label>
+              <label className="block text-sm font-medium text-slate-700 mb-1">{t("startTime")}</label>
               <input
                 type="text"
                 value={startTime}
                 onChange={(e) => setStartTime(e.target.value)}
                 className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-                placeholder="HH:MM:SS"
+                placeholder={t("startTimePlaceholder")}
               />
             </div>
           </div>
@@ -591,47 +593,47 @@ export function RegistrationPage() {
           {/* Birth year / Sex row */}
           <div className="grid grid-cols-2 gap-3">
             <div>
-              <label className="block text-sm font-medium text-slate-700 mb-1">Birth Year</label>
+              <label className="block text-sm font-medium text-slate-700 mb-1">{t("birthYear")}</label>
               <input
                 type="number"
                 value={birthYear}
                 onChange={(e) => setBirthYear(e.target.value)}
                 className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-                placeholder="e.g. 1990"
+                placeholder={t("birthYearPlaceholder")}
               />
             </div>
             <div>
-              <label className="block text-sm font-medium text-slate-700 mb-1">Sex</label>
+              <label className="block text-sm font-medium text-slate-700 mb-1">{t("sex")}</label>
               <select
                 value={sex}
                 onChange={(e) => setSex(e.target.value)}
                 className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 cursor-pointer"
               >
-                <option value="">Not specified</option>
-                <option value="M">Male</option>
-                <option value="F">Female</option>
+                <option value="">{t("notSpecified")}</option>
+                <option value="M">{t("male")}</option>
+                <option value="F">{t("female")}</option>
               </select>
             </div>
           </div>
 
           {/* Phone */}
           <div>
-            <label className="block text-sm font-medium text-slate-700 mb-1">Phone</label>
+            <label className="block text-sm font-medium text-slate-700 mb-1">{t("phone")}</label>
             <input
               type="tel"
               value={phone}
               onChange={(e) => setPhone(e.target.value)}
               className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-              placeholder="+46..."
+              placeholder={t("phonePlaceholder")}
             />
           </div>
 
           {/* Payment */}
           <div>
-            <label className="block text-sm font-medium text-slate-700 mb-1">Payment</label>
+            <label className="block text-sm font-medium text-slate-700 mb-1">{t("payment")}</label>
             <div className="flex gap-2 flex-wrap">
               {(regConfig.data?.paymentMethods ?? ["billed", "on-site"]).map((pm) => {
-                const labels: Record<string, string> = { billed: "Invoice", "on-site": "Pay on site", card: "Card", swish: "Swish" };
+                const labels: Record<string, string> = { billed: t("invoice"), "on-site": t("payOnSite"), card: t("card"), swish: t("swish") };
                 return (
                   <button
                     key={pm}
@@ -663,14 +665,14 @@ export function RegistrationPage() {
               onClick={() => { clearForm(); nameInputRef.current?.focus(); }}
               className="px-4 py-2.5 border border-slate-200 text-slate-700 text-sm font-medium rounded-lg hover:bg-slate-50 transition-colors cursor-pointer"
             >
-              Clear (Esc)
+              {t("clearEsc")}
             </button>
             <button
               type="submit"
               disabled={createMutation.isPending}
               className="flex-1 px-4 py-2.5 bg-blue-600 text-white text-sm font-medium rounded-lg hover:bg-blue-700 transition-colors cursor-pointer disabled:opacity-50"
             >
-              {createMutation.isPending ? "Saving..." : "Register Runner"}
+              {createMutation.isPending ? t("saving") : t("registerRunner")}
             </button>
           </div>
         </form>
@@ -678,9 +680,9 @@ export function RegistrationPage() {
 
       {/* Recent registrations sidebar */}
       <div className="w-72 flex-shrink-0">
-        <h3 className="text-sm font-semibold text-slate-700 mb-3">Recent Registrations</h3>
+        <h3 className="text-sm font-semibold text-slate-700 mb-3">{t("recentRegistrations")}</h3>
         {recentRegistrations.length === 0 ? (
-          <p className="text-sm text-slate-400">No registrations yet</p>
+          <p className="text-sm text-slate-400">{t("noRegistrationsYet")}</p>
         ) : (
           <div className="space-y-2">
             {recentRegistrations.map((r, i) => (
@@ -692,7 +694,7 @@ export function RegistrationPage() {
                 </div>
                 <div className="text-xs text-slate-400 mt-0.5 flex justify-between">
                   <span>SI: {r.cardNo}</span>
-                  <span>{r.startTime || "Free start"}</span>
+                  <span>{r.startTime || t("freeStart")}</span>
                 </div>
               </div>
             ))}

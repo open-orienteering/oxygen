@@ -1,12 +1,14 @@
 import { useState, useCallback, useRef, useMemo } from "react";
+import { useTranslation } from "react-i18next";
 import { trpc } from "../lib/trpc";
 import { useSearchParam, useNumericSearchParam } from "../hooks/useSearchParam";
-import { formatDateTime, timeAgo } from "../lib/format";
+import { formatDateTime } from "../lib/format";
 import { ClubLogo } from "../components/ClubLogo";
 import { SortHeader } from "../components/SortHeader";
 import { useSort } from "../hooks/useSort";
 
 export function ClubsPage() {
+  const { t } = useTranslation("clubs");
   const [search, setSearch] = useSearchParam("search");
   const [showAllParam, setShowAllParam] = useSearchParam("all");
   const [expandedId, setExpandedId] = useNumericSearchParam("club");
@@ -37,7 +39,7 @@ export function ClubsPage() {
   });
 
   const handleDelete = (id: number, name: string) => {
-    if (window.confirm(`Remove club "${name}"?`)) {
+    if (window.confirm(t("removeConfirm", { name }))) {
       deleteMutation.mutate({ id });
     }
   };
@@ -66,7 +68,7 @@ export function ClubsPage() {
           </svg>
           <input
             type="text"
-            placeholder="Search club name..."
+            placeholder={t("searchPlaceholder")}
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             className="w-full pl-10 pr-4 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent bg-white"
@@ -79,19 +81,19 @@ export function ClubsPage() {
             : "bg-white border-slate-200 text-slate-600 hover:bg-slate-50"
             }`}
         >
-          {showAll ? "Showing all clubs" : "Show all clubs"}
+          {showAll ? t("showingAll") : t("showAll")}
         </button>
         {syncStatus.data?.apiKeyConfigured && (
           <button
             onClick={() => clubSyncMutation.mutate()}
             disabled={clubSyncMutation.isPending}
             className="px-4 py-2 text-sm font-medium rounded-lg border border-slate-200 text-slate-600 bg-white hover:bg-slate-50 disabled:opacity-50 transition-colors cursor-pointer flex items-center gap-1.5"
-            title="Sync full club directory from Eventor"
+            title={t("syncFromEventor")}
           >
             <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
             </svg>
-            {clubSyncMutation.isPending ? "Syncing..." : "Sync from Eventor"}
+            {clubSyncMutation.isPending ? t("syncing") : t("syncFromEventor")}
           </button>
         )}
         <button
@@ -101,7 +103,7 @@ export function ClubsPage() {
           <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
           </svg>
-          New Club
+          {t("newClub")}
         </button>
       </div>
 
@@ -109,21 +111,20 @@ export function ClubsPage() {
       {clubSyncMutation.isSuccess && clubSyncMutation.data && (
         <div className="mb-4 p-3 bg-green-50 rounded-lg border border-green-200 text-sm text-green-800 flex items-center justify-between">
           <span>
-            <span className="font-medium">Club sync complete:</span>{" "}
-            {clubSyncMutation.data.added} added, {clubSyncMutation.data.updated} updated
-            {" "}({clubSyncMutation.data.total} total in Eventor)
+            <span className="font-medium">{t("syncComplete")}</span>{" "}
+            {t("syncAddedUpdated", { added: clubSyncMutation.data.added, updated: clubSyncMutation.data.updated, total: clubSyncMutation.data.total })}
           </span>
           <button
             onClick={() => clubSyncMutation.reset()}
             className="text-green-600 hover:text-green-800 cursor-pointer text-xs"
           >
-            Dismiss
+            {t("dismiss")}
           </button>
         </div>
       )}
       {clubSyncMutation.isError && (
         <div className="mb-4 p-3 bg-red-50 rounded-lg border border-red-200 text-sm text-red-700">
-          Club sync failed: {clubSyncMutation.error.message}
+          {t("syncFailed", { message: clubSyncMutation.error.message })}
         </div>
       )}
 
@@ -140,7 +141,7 @@ export function ClubsPage() {
 
       {/* Club count */}
       <div className="text-sm text-slate-500 mb-3">
-        {items.length} clubs{!showAll && " with runners"}
+        {!showAll ? t("clubsWithRunners", { count: items.length }) : t("clubsAll", { count: items.length })}
       </div>
 
       {/* Table */}
@@ -149,10 +150,10 @@ export function ClubsPage() {
           <thead>
             <tr className="border-b border-slate-100 text-left text-xs uppercase tracking-wider">
               <SortHeader label="#" active={sort.key === "id"} direction={sort.dir} onClick={() => toggle("id")} />
-              <SortHeader label="Name" active={sort.key === "name"} direction={sort.dir} onClick={() => toggle("name")} />
-              <SortHeader label="Short Name" active={sort.key === "shortName"} direction={sort.dir} onClick={() => toggle("shortName")} />
-              <SortHeader label="Runners" active={sort.key === "runners"} direction={sort.dir} onClick={() => toggle("runners")} align="right" />
-              <th className="px-4 py-3 w-10 font-medium text-slate-500">Actions</th>
+              <SortHeader label={t("name")} active={sort.key === "name"} direction={sort.dir} onClick={() => toggle("name")} />
+              <SortHeader label={t("shortName")} active={sort.key === "shortName"} direction={sort.dir} onClick={() => toggle("shortName")} />
+              <SortHeader label={t("runners")} active={sort.key === "runners"} direction={sort.dir} onClick={() => toggle("runners")} align="right" />
+              <th className="px-4 py-3 w-10 font-medium text-slate-500">{t("actions")}</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-slate-100">
@@ -168,7 +169,7 @@ export function ClubsPage() {
             {items.length === 0 && (
               <tr>
                 <td colSpan={5} className="px-4 py-8 text-center text-slate-400">
-                  {clubs.isLoading ? "Loading..." : "No clubs found"}
+                  {clubs.isLoading ? t("loading") : t("noClubs")}
                 </td>
               </tr>
             )}
@@ -192,6 +193,8 @@ function ClubRow({
   onToggle: () => void;
   onDelete: () => void;
 }) {
+  const { t } = useTranslation("clubs");
+
   return (
     <>
       <tr
@@ -218,7 +221,7 @@ function ClubRow({
           <button
             onClick={(e) => { e.stopPropagation(); onDelete(); }}
             className="p-1 text-slate-300 hover:text-red-500 transition-colors cursor-pointer"
-            title="Remove club"
+            title={t("removeClub")}
           >
             <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
@@ -240,6 +243,7 @@ function ClubRow({
 // ─── Club Detail Panel ──────────────────────────────────────
 
 function ClubDetailPanel({ clubId }: { clubId: number }) {
+  const { t } = useTranslation("clubs");
   const detail = trpc.club.detail.useQuery({ id: clubId });
   const utils = trpc.useUtils();
 
@@ -260,10 +264,10 @@ function ClubDetailPanel({ clubId }: { clubId: number }) {
   );
 
   if (detail.isLoading) {
-    return <div className="text-sm text-slate-400">Loading...</div>;
+    return <div className="text-sm text-slate-400">{t("loading")}</div>;
   }
   if (!detail.data) {
-    return <div className="text-sm text-red-500">Club not found</div>;
+    return <div className="text-sm text-red-500">{t("clubNotFound")}</div>;
   }
 
   const d = detail.data;
@@ -273,7 +277,7 @@ function ClubDetailPanel({ clubId }: { clubId: number }) {
       {/* Editable fields */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
         <div>
-          <label className="block text-xs font-medium text-slate-500 mb-1">Name</label>
+          <label className="block text-xs font-medium text-slate-500 mb-1">{t("name")}</label>
           <input
             type="text"
             defaultValue={d.name}
@@ -282,7 +286,7 @@ function ClubDetailPanel({ clubId }: { clubId: number }) {
           />
         </div>
         <div>
-          <label className="block text-xs font-medium text-slate-500 mb-1">Short Name</label>
+          <label className="block text-xs font-medium text-slate-500 mb-1">{t("shortName")}</label>
           <input
             type="text"
             defaultValue={d.shortName}
@@ -292,18 +296,18 @@ function ClubDetailPanel({ clubId }: { clubId: number }) {
           />
         </div>
         <div>
-          <label className="block text-xs font-medium text-slate-500 mb-1">Country</label>
+          <label className="block text-xs font-medium text-slate-500 mb-1">{t("country")}</label>
           <div className="text-sm text-slate-700 py-1.5">{d.country || d.nationality || "—"}</div>
         </div>
         <div>
-          <label className="block text-xs font-medium text-slate-500 mb-1">Logo</label>
+          <label className="block text-xs font-medium text-slate-500 mb-1">{t("logo")}</label>
           <div className="flex items-center gap-2 py-1.5">
             <ClubLogo clubId={d.id} size="lg" />
           </div>
         </div>
         {d.extId > 0 && (
           <div>
-            <label className="block text-xs font-medium text-slate-500 mb-1">Eventor ID</label>
+            <label className="block text-xs font-medium text-slate-500 mb-1">{t("eventorId")}</label>
             <div className="flex items-center gap-2 py-1.5">
               <span className="text-sm text-slate-700 font-mono">{d.extId}</span>
             </div>
@@ -315,36 +319,36 @@ function ClubDetailPanel({ clubId }: { clubId: number }) {
       {(d.street || d.city || d.zip || d.careOf || d.email || d.phone) && (
         <div>
           <h4 className="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-2">
-            Contact &amp; Address
+            {t("contactAddress")}
           </h4>
           <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
             {d.careOf && (
               <div>
-                <label className="block text-xs font-medium text-slate-500 mb-1">c/o</label>
+                <label className="block text-xs font-medium text-slate-500 mb-1">{t("careOf")}</label>
                 <div className="text-sm text-slate-700">{d.careOf}</div>
               </div>
             )}
             {d.street && (
               <div>
-                <label className="block text-xs font-medium text-slate-500 mb-1">Street</label>
+                <label className="block text-xs font-medium text-slate-500 mb-1">{t("street")}</label>
                 <div className="text-sm text-slate-700">{d.street}</div>
               </div>
             )}
             {(d.zip || d.city) && (
               <div>
-                <label className="block text-xs font-medium text-slate-500 mb-1">City</label>
+                <label className="block text-xs font-medium text-slate-500 mb-1">{t("city")}</label>
                 <div className="text-sm text-slate-700">{[d.zip, d.city].filter(Boolean).join(" ")}</div>
               </div>
             )}
             {d.email && (
               <div>
-                <label className="block text-xs font-medium text-slate-500 mb-1">Email</label>
+                <label className="block text-xs font-medium text-slate-500 mb-1">{t("email")}</label>
                 <div className="text-sm text-slate-700 truncate">{d.email}</div>
               </div>
             )}
             {d.phone && (
               <div>
-                <label className="block text-xs font-medium text-slate-500 mb-1">Phone</label>
+                <label className="block text-xs font-medium text-slate-500 mb-1">{t("phone")}</label>
                 <div className="text-sm text-slate-700">{d.phone}</div>
               </div>
             )}
@@ -356,7 +360,7 @@ function ClubDetailPanel({ clubId }: { clubId: number }) {
       {d.runners.length > 0 && (
         <div>
           <h4 className="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-2">
-            Runners ({d.runners.length})
+            {t("runnersCount", { count: d.runners.length })}
           </h4>
           <div className="bg-white rounded-lg border border-slate-200 divide-y divide-slate-100 max-h-48 overflow-y-auto">
             {d.runners.map((r) => (
@@ -373,7 +377,7 @@ function ClubDetailPanel({ clubId }: { clubId: number }) {
       )}
 
       {d.runners.length === 0 && (
-        <div className="text-xs text-slate-400">No runners in this club</div>
+        <div className="text-xs text-slate-400">{t("noRunners")}</div>
       )}
     </div>
   );
@@ -388,6 +392,7 @@ function CreateClubForm({
   onCreated: () => void;
   onCancel: () => void;
 }) {
+  const { t } = useTranslation("clubs");
   const [name, setName] = useState("");
   const [shortName, setShortName] = useState("");
 
@@ -406,10 +411,10 @@ function CreateClubForm({
 
   return (
     <div className="mb-4 bg-blue-50 rounded-xl border border-blue-200 p-4">
-      <h3 className="text-sm font-semibold text-slate-900 mb-3">New Club</h3>
+      <h3 className="text-sm font-semibold text-slate-900 mb-3">{t("newClub")}</h3>
       <form onSubmit={handleSubmit} className="flex gap-3 items-end">
         <div className="flex-1">
-          <label className="block text-xs font-medium text-slate-500 mb-1">Club Name</label>
+          <label className="block text-xs font-medium text-slate-500 mb-1">{t("clubName")}</label>
           <input
             type="text"
             value={name}
@@ -421,12 +426,12 @@ function CreateClubForm({
           />
         </div>
         <div className="w-40">
-          <label className="block text-xs font-medium text-slate-500 mb-1">Short Name</label>
+          <label className="block text-xs font-medium text-slate-500 mb-1">{t("shortName")}</label>
           <input
             type="text"
             value={shortName}
             onChange={(e) => setShortName(e.target.value)}
-            placeholder="Auto"
+            placeholder={t("shortNamePlaceholder")}
             maxLength={17}
             className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 focus:border-transparent"
           />
@@ -436,14 +441,14 @@ function CreateClubForm({
           disabled={createMutation.isPending || !name.trim()}
           className="px-4 py-2 bg-blue-600 text-white text-sm font-medium rounded-lg hover:bg-blue-700 disabled:opacity-50 cursor-pointer"
         >
-          {createMutation.isPending ? "Adding..." : "Add"}
+          {createMutation.isPending ? t("adding") : t("add")}
         </button>
         <button
           type="button"
           onClick={onCancel}
           className="px-4 py-2 text-slate-500 text-sm hover:text-slate-700 cursor-pointer"
         >
-          Cancel
+          {t("cancel")}
         </button>
       </form>
       {createMutation.isError && (

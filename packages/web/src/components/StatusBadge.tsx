@@ -1,11 +1,12 @@
 import {
-  runnerStatusLabel,
   RunnerStatus,
   type RunnerStatusValue,
 } from "@oxygen/shared";
+import { useRunnerStatusLabel } from "../hooks/useStatusLabels";
 
 export function StatusBadge({ status }: { status: RunnerStatusValue }) {
-  const label = runnerStatusLabel(status);
+  const statusLabel = useRunnerStatusLabel();
+  const label = statusLabel(status);
   let classes = "px-2 py-0.5 rounded-full text-xs font-medium ";
   switch (status) {
     case RunnerStatus.OK:

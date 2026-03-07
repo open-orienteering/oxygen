@@ -1,4 +1,5 @@
 import { useRef, useState, useCallback, useMemo } from "react";
+import { useTranslation } from "react-i18next";
 import { formatMeosTime, type DrawPreviewResult } from "@oxygen/shared";
 
 const CORRIDOR_COLORS = [
@@ -37,6 +38,7 @@ interface BarInfo {
 }
 
 export function DrawTimeline({ preview, totalCorridors, onReorder }: Props) {
+  const { t } = useTranslation("draw");
   const containerRef = useRef<HTMLDivElement>(null);
   const [dragState, setDragState] = useState<{
     classId: number;
@@ -242,7 +244,7 @@ export function DrawTimeline({ preview, totalCorridors, onReorder }: Props) {
               {/* Empty corridor hint */}
               {isEmpty && isDropTarget && (
                 <div className="absolute inset-0 flex items-center justify-center text-[10px] text-blue-400 pointer-events-none">
-                  Drop here
+                  {t("dropHere")}
                 </div>
               )}
               {/* Class bars */}
@@ -264,7 +266,7 @@ export function DrawTimeline({ preview, totalCorridors, onReorder }: Props) {
                       width: `${widthPercent(bar.startTime, bar.endTime)}%`,
                       minWidth: 24,
                     }}
-                    title={`${bar.className} (${bar.courseName}): ${formatMeosTime(bar.startTime)} – ${formatMeosTime(bar.endTime)} (${bar.runnerCount} runners)`}
+                    title={`${bar.className} (${bar.courseName}): ${formatMeosTime(bar.startTime)} – ${formatMeosTime(bar.endTime)} (${t("runnersTotal", { count: bar.runnerCount })})`}
                     data-testid={`timeline-bar-${bar.classId}`}
                   >
                     {label}

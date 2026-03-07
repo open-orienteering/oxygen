@@ -1,4 +1,5 @@
 import { useState, useRef, useMemo, useEffect, useCallback } from "react";
+import { useTranslation } from "react-i18next";
 import { useParams } from "react-router-dom";
 import { trpc } from "../lib/trpc";
 import { MapViewer, type ControlOverlay, type CourseOverlay } from "./MapViewer";
@@ -114,6 +115,7 @@ export function MapPanel({
   punchStatusByCode,
   focusControlCodes,
 }: Props) {
+  const { t } = useTranslation("dashboard");
   const { nameId } = useParams<{ nameId: string }>();
   const competitionId = nameId ?? "__none__";
 
@@ -443,12 +445,12 @@ export function MapPanel({
           <svg className="mx-auto w-10 h-10 text-slate-300 mb-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 20l-5.447-2.724A1 1 0 013 16.382V5.618a1 1 0 011.447-.894L9 7m0 13l6-3m-6 3V7m6 10l4.553 2.276A1 1 0 0021 18.382V7.618a1 1 0 00-.553-.894L15 4m0 13V4m0 0L9 7" />
           </svg>
-          <p className="text-sm text-slate-500 mb-2">Drop an OCAD map file (.ocd) here</p>
+          <p className="text-sm text-slate-500 mb-2">{t("dropMapHere")}</p>
           <button
             onClick={() => fileInputRef.current?.click()}
             className="px-3 py-1.5 text-xs bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors cursor-pointer"
           >
-            Upload map
+            {t("uploadMap")}
           </button>
           <input
             ref={fileInputRef}
@@ -461,7 +463,7 @@ export function MapPanel({
             }}
           />
           {uploadMutation.isPending && (
-            <div className="mt-2 text-xs text-blue-600">Uploading...</div>
+            <div className="mt-2 text-xs text-blue-600">{t("uploading")}</div>
           )}
           {uploadError && (
             <div className="mt-2 text-xs text-red-600">{uploadError}</div>
@@ -478,7 +480,7 @@ export function MapPanel({
         <div className="flex items-center justify-center bg-slate-50 rounded-lg border border-slate-200" style={{ height }}>
           <div className="text-center">
             <div className="w-6 h-6 border-2 border-blue-300 border-t-blue-600 rounded-full animate-spin mx-auto mb-2" />
-            <p className="text-xs text-slate-400">Loading map...</p>
+            <p className="text-xs text-slate-400">{t("loadingMap")}</p>
           </div>
         </div>
       </div>
@@ -500,7 +502,7 @@ export function MapPanel({
                     : "text-slate-500 hover:text-slate-700 hover:bg-slate-100"
                   }`}
               >
-                {showOnlyRelevant ? "Show all controls" : "Hide other controls"}
+                {showOnlyRelevant ? t("showAllControls") : t("hideOtherControls")}
               </button>
             )}
             {bestGeometryCourse && (
@@ -511,7 +513,7 @@ export function MapPanel({
                     : "text-slate-500 hover:text-slate-700 hover:bg-slate-100"
                   }`}
               >
-                {showDescriptions ? "Hide descriptions" : "Descriptions"}
+                {showDescriptions ? t("hideDescriptions") : t("descriptions")}
               </button>
             )}
             {onCompletionToggle && (
@@ -522,7 +524,7 @@ export function MapPanel({
                     : "text-slate-500 hover:text-slate-700 hover:bg-slate-100"
                   }`}
               >
-                {showCompletion ? "Hide progress" : "Show progress"}
+                {showCompletion ? t("hideProgress") : t("showProgress")}
               </button>
             )}
             <button
@@ -574,14 +576,14 @@ export function MapPanel({
                   : "text-slate-500 hover:text-slate-700 hover:bg-slate-100"
                 }`}
             >
-              {showOnlyRelevant ? "Show all controls" : "Hide other controls"}
+              {showOnlyRelevant ? t("showAllControls") : t("hideOtherControls")}
             </button>
           )}
           <button
             onClick={() => fileInputRef.current?.click()}
             className="text-xs text-blue-600 hover:text-blue-800 cursor-pointer"
           >
-            Replace map
+            {t("replaceMap")}
           </button>
         </div>
       </div>
@@ -597,7 +599,7 @@ export function MapPanel({
         }}
       />
       {uploadMutation.isPending && (
-        <div className="mt-1 text-xs text-blue-600">Uploading new map...</div>
+        <div className="mt-1 text-xs text-blue-600">{t("uploadingNewMap")}</div>
       )}
       {uploadError && (
         <div className="mt-1 text-xs text-red-600">{uploadError}</div>

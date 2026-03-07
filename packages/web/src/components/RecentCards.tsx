@@ -7,11 +7,13 @@
  */
 
 import { useState, useEffect, useRef } from "react";
+import { useTranslation } from "react-i18next";
 import { useNavigate, useLocation } from "react-router-dom";
 import { useDeviceManager, type RecentCard, type CardAction } from "../context/DeviceManager";
 import { formatRunningTime } from "@oxygen/shared";
 
 export function RecentCards() {
+  const { t } = useTranslation("race");
   const { recentCards, clearRecentCards, readerStatus, currentCard } =
     useDeviceManager();
   const navigate = useNavigate();
@@ -83,14 +85,14 @@ export function RecentCards() {
         >
           <div className="flex items-center justify-between px-4 py-3 border-b border-slate-100 bg-slate-50">
             <span className="text-sm font-semibold text-slate-700">
-              Recent Cards ({recentCards.length})
+              {t("recentCards", { count: recentCards.length })}
             </span>
             {recentCards.length > 0 && (
               <button
                 onClick={clearRecentCards}
                 className="text-xs text-slate-400 hover:text-red-500 transition-colors cursor-pointer"
               >
-                Clear all
+                {t("clearAll")}
               </button>
             )}
           </div>
@@ -98,7 +100,7 @@ export function RecentCards() {
           <div className="overflow-y-auto flex-1">
             {recentCards.length === 0 ? (
               <div className="p-6 text-center text-sm text-slate-400">
-                No cards read yet
+                {t("noCardsReadYet")}
               </div>
             ) : (
               recentCards.map((card) => (
@@ -136,11 +138,11 @@ export function RecentCards() {
                       ) : card.action === "register" ? (
                         <div className="text-xs text-amber-600 truncate">
                           {card.ownerData?.firstName || card.ownerData?.lastName
-                            ? `${[card.ownerData.firstName, card.ownerData.lastName].filter(Boolean).join(" ")}${card.ownerData.club ? ` · ${card.ownerData.club}` : ""} — click to register`
-                            : "Not registered — click to add"}
+                            ? `${[card.ownerData.firstName, card.ownerData.lastName].filter(Boolean).join(" ")}${card.ownerData.club ? ` · ${card.ownerData.club}` : ""} — ${t("clickToRegister")}`
+                            : t("notRegisteredClickToAdd")}
                         </div>
                       ) : (
-                        <div className="text-xs text-slate-400">Unknown runner</div>
+                        <div className="text-xs text-slate-400">{t("unknownRunner")}</div>
                       )}
                     </div>
                     <div className="text-right shrink-0 ml-2">
@@ -170,7 +172,7 @@ export function RecentCards() {
             : "bg-slate-600 hover:bg-slate-700 text-white"
         } ${pulse ? "scale-110" : "scale-100"}`}
         data-testid="recent-cards-button"
-        title={`Recent cards (${recentCards.length})`}
+        title={t("recentCards", { count: recentCards.length })}
       >
         <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 9h3.75M15 12h3.75M15 15h3.75M4.5 19.5h15a2.25 2.25 0 002.25-2.25V6.75A2.25 2.25 0 0019.5 4.5h-15A2.25 2.25 0 002.25 6.75v10.5A2.25 2.25 0 004.5 19.5zm6-10.125a1.875 1.875 0 11-3.75 0 1.875 1.875 0 013.75 0zm1.294 6.336a6.721 6.721 0 01-3.17.789 6.721 6.721 0 01-3.168-.789 3.376 3.376 0 016.338 0z" />
@@ -193,10 +195,11 @@ export function RecentCards() {
 // ─── Action Badge ───────────────────────────────────────────
 
 function ActionBadge({ action }: { action: CardAction }) {
+  const { t } = useTranslation("race");
   switch (action) {
     case "register":
       return (
-        <span className="w-5 h-5 rounded bg-amber-100 text-amber-600 flex items-center justify-center shrink-0" title="New runner">
+        <span className="w-5 h-5 rounded bg-amber-100 text-amber-600 flex items-center justify-center shrink-0" title={t("badgeNewRunner")}>
           <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
             <path strokeLinecap="round" strokeLinejoin="round" d="M12 4v16m8-8H4" />
           </svg>
@@ -204,7 +207,7 @@ function ActionBadge({ action }: { action: CardAction }) {
       );
     case "pre-start":
       return (
-        <span className="w-5 h-5 rounded bg-emerald-100 text-emerald-600 flex items-center justify-center shrink-0" title="Pre-start">
+        <span className="w-5 h-5 rounded bg-emerald-100 text-emerald-600 flex items-center justify-center shrink-0" title={t("preStart")}>
           <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
             <path strokeLinecap="round" strokeLinejoin="round" d="M12 8v4l3 3" />
           </svg>
@@ -213,7 +216,7 @@ function ActionBadge({ action }: { action: CardAction }) {
     case "readout":
     default:
       return (
-        <span className="w-5 h-5 rounded bg-blue-100 text-blue-600 flex items-center justify-center shrink-0" title="Readout">
+        <span className="w-5 h-5 rounded bg-blue-100 text-blue-600 flex items-center justify-center shrink-0" title={t("cardReadout")}>
           <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
             <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
           </svg>

@@ -1,4 +1,5 @@
 import { useState, useMemo, useCallback } from "react";
+import { useTranslation } from "react-i18next";
 import { trpc } from "../lib/trpc";
 import {
   formatMeosTime,
@@ -26,12 +27,15 @@ interface ClassConfig {
   interval: string; // MM:SS format for editing
 }
 
-const DRAW_METHODS: { value: DrawMethod; label: string }[] = [
-  { value: "random", label: "Random" },
-  { value: "clubSeparation", label: "Club separation" },
-  { value: "seeded", label: "Seeded" },
-  { value: "simultaneous", label: "Simultaneous" },
-];
+function useDrawMethods(): { value: DrawMethod; label: string }[] {
+  const { t } = useTranslation("draw");
+  return [
+    { value: "random", label: t("random") },
+    { value: "clubSeparation", label: t("clubSeparation") },
+    { value: "seeded", label: t("seeded") },
+    { value: "simultaneous", label: t("simultaneous") },
+  ];
+}
 
 function intervalToDeciseconds(mmss: string): number {
   return parseMeosTime(mmss);
@@ -46,6 +50,8 @@ function decisToInterval(ds: number): string {
 }
 
 export function DrawPanel({ onClose, onDrawComplete }: Props) {
+  const { t } = useTranslation("draw");
+  const DRAW_METHODS = useDrawMethods();
   const defaults = trpc.draw.defaults.useQuery();
   const previewMutation = trpc.draw.preview.useMutation();
   const executeMutation = trpc.draw.execute.useMutation();
@@ -264,13 +270,13 @@ export function DrawPanel({ onClose, onDrawComplete }: Props) {
     return (
       <div className="fixed inset-y-0 right-0 w-full max-w-6xl bg-white shadow-2xl border-l border-slate-200 z-50 flex flex-col items-center justify-center gap-4 p-8">
         <p className="text-red-600 text-sm" data-testid="draw-error">
-          Failed to load draw settings: {defaults.error?.message}
+          {t("failedToLoad", { message: defaults.error?.message })}
         </p>
         <button
           onClick={onClose}
           className="px-4 py-2 text-sm text-slate-600 hover:bg-slate-100 rounded-lg cursor-pointer"
         >
-          Close
+          {t("close")}
         </button>
       </div>
     );
@@ -281,11 +287,11 @@ export function DrawPanel({ onClose, onDrawComplete }: Props) {
       {/* Header */}
       <div className="flex items-center justify-between px-6 py-4 border-b border-slate-200 bg-slate-50">
         <div>
-          <h2 className="text-lg font-semibold text-slate-900">Draw Start Times</h2>
+          <h2 className="text-lg font-semibold text-slate-900">{t("drawStartTimes")}</h2>
           <p className="text-sm text-slate-500 mt-0.5">
-            {selectedCount} class{selectedCount !== 1 ? "es" : ""} selected
+            {t("classesSelected", { count: selectedCount })}
             {" \u00b7 "}
-            {totalRunners} runner{totalRunners !== 1 ? "s" : ""}
+            {t("runnersTotal", { count: totalRunners })}
           </p>
         </div>
         <button
@@ -304,12 +310,12 @@ export function DrawPanel({ onClose, onDrawComplete }: Props) {
         {/* Global Settings */}
         <div className="px-6 py-4 border-b border-slate-100">
           <h3 className="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-3">
-            Global Settings
+            {t("globalSettings")}
           </h3>
           <div className="grid grid-cols-3 gap-4">
             <div>
               <label className="block text-xs font-medium text-slate-500 mb-1">
-                First start
+                {t("firstStart")}
               </label>
               <input
                 type="text"
@@ -326,7 +332,7 @@ export function DrawPanel({ onClose, onDrawComplete }: Props) {
             </div>
             <div>
               <label className="flex items-center gap-1 text-xs font-medium text-slate-500 mb-1">
-                Max corridors
+                {t("maxCorridors")}
                 <CorridorTooltip />
               </label>
               <input
@@ -353,7 +359,7 @@ export function DrawPanel({ onClose, onDrawComplete }: Props) {
                   className="rounded border-slate-300 text-blue-600 focus:ring-blue-500 cursor-pointer"
                 />
                 <span className="text-sm text-slate-600 inline-flex items-center gap-1">
-                  Course overlap
+                  {t("courseOverlap")}
                   <OverlapTooltip />
                 </span>
               </label>
@@ -365,7 +371,7 @@ export function DrawPanel({ onClose, onDrawComplete }: Props) {
         <div className="px-6 py-4 border-b border-slate-100">
           <div className="flex items-center justify-between mb-3">
             <h3 className="text-xs font-semibold text-slate-500 uppercase tracking-wider">
-              Classes
+              {t("classesHeader")}
             </h3>
             <div className="flex items-center gap-2">
               <select
@@ -382,7 +388,7 @@ export function DrawPanel({ onClose, onDrawComplete }: Props) {
                 onClick={applyBulkMethod}
                 className="px-2 py-1 text-xs text-blue-600 hover:text-blue-800 hover:bg-blue-50 rounded transition-colors cursor-pointer font-medium"
               >
-                Apply
+                {t("applyBulk")}
               </button>
               <span className="text-slate-300 mx-1">|</span>
               <input
@@ -399,20 +405,20 @@ export function DrawPanel({ onClose, onDrawComplete }: Props) {
                 className="px-2 py-1 text-xs text-blue-600 hover:text-blue-800 hover:bg-blue-50 rounded transition-colors cursor-pointer font-medium"
                 data-testid="draw-bulk-interval-apply"
               >
-                Apply
+                {t("applyBulk")}
               </button>
               <span className="text-slate-300 mx-1">|</span>
               <button
                 onClick={() => toggleAll(true)}
                 className="text-xs text-blue-600 hover:text-blue-800 cursor-pointer"
               >
-                All
+                {t("all")}
               </button>
               <button
                 onClick={() => toggleAll(false)}
                 className="text-xs text-blue-600 hover:text-blue-800 cursor-pointer"
               >
-                None
+                {t("none")}
               </button>
             </div>
           </div>
@@ -424,11 +430,11 @@ export function DrawPanel({ onClose, onDrawComplete }: Props) {
               <thead>
                 <tr className="bg-slate-50 border-b border-slate-200">
                   <th className="w-8 px-2 py-2"></th>
-                  <th className="px-3 py-2 text-left font-medium text-slate-500 text-xs">Class</th>
-                  <th className="px-3 py-2 text-left font-medium text-slate-500 text-xs hidden sm:table-cell">Course</th>
-                  <th className="px-3 py-2 text-right font-medium text-slate-500 text-xs w-16">Runners</th>
-                  <th className="px-3 py-2 text-left font-medium text-slate-500 text-xs">Method</th>
-                  <th className="px-3 py-2 text-left font-medium text-slate-500 text-xs w-24">Interval</th>
+                  <th className="px-3 py-2 text-left font-medium text-slate-500 text-xs">{t("classHeader")}</th>
+                  <th className="px-3 py-2 text-left font-medium text-slate-500 text-xs hidden sm:table-cell">{t("courseHeader")}</th>
+                  <th className="px-3 py-2 text-right font-medium text-slate-500 text-xs w-16">{t("runnersHeader")}</th>
+                  <th className="px-3 py-2 text-left font-medium text-slate-500 text-xs">{t("method")}</th>
+                  <th className="px-3 py-2 text-left font-medium text-slate-500 text-xs w-24">{t("interval")}</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
@@ -508,7 +514,7 @@ export function DrawPanel({ onClose, onDrawComplete }: Props) {
         {preview && (
           <div className="px-6 py-4">
             <h3 className="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-3">
-              Preview
+              {t("preview")}
             </h3>
             <div className="mb-4 border border-slate-200 rounded-lg p-3 bg-slate-50/50">
               <DrawTimeline
@@ -517,7 +523,7 @@ export function DrawPanel({ onClose, onDrawComplete }: Props) {
                 onReorder={handleTimelineReorder}
               />
               <p className="text-[10px] text-slate-400 mt-1.5 text-center">
-                Drag class bars to reorder within or across corridors
+                {t("dragToReorder")}
               </p>
             </div>
             <div className="space-y-2">
@@ -532,11 +538,11 @@ export function DrawPanel({ onClose, onDrawComplete }: Props) {
                         {cls.className}
                       </span>
                       <span className="text-xs text-slate-400">
-                        {cls.entries.length} runners
+                        {t("runnersTotal", { count: cls.entries.length })}
                       </span>
                       {cls.corridor >= 0 && (
                         <span className="px-1.5 py-0.5 rounded text-xs font-medium bg-blue-100 text-blue-700">
-                          Corridor {cls.corridor + 1}
+                          {t("corridor")} {cls.corridor + 1}
                         </span>
                       )}
                     </div>
@@ -596,11 +602,10 @@ export function DrawPanel({ onClose, onDrawComplete }: Props) {
               </svg>
               <div>
                 <p className="text-sm font-medium text-green-800">
-                  Draw complete
+                  {t("drawComplete")}
                 </p>
                 <p className="text-xs text-green-600 mt-0.5">
-                  {executeMutation.data?.totalDrawn} runner{(executeMutation.data?.totalDrawn ?? 0) !== 1 ? "s" : ""} assigned start times.
-                  The start list has been updated.
+                  {t("drawCompleteDetail", { count: executeMutation.data?.totalDrawn ?? 0 })}
                 </p>
               </div>
             </div>
@@ -614,7 +619,7 @@ export function DrawPanel({ onClose, onDrawComplete }: Props) {
           onClick={onClose}
           className="px-4 py-2 text-sm text-slate-600 hover:text-slate-800 hover:bg-slate-100 rounded-lg transition-colors cursor-pointer"
         >
-          {drawComplete ? "Close" : "Cancel"}
+          {drawComplete ? t("close") : t("cancelDraw")}
         </button>
         <div className="flex items-center gap-2">
           {!drawComplete && (
@@ -625,7 +630,7 @@ export function DrawPanel({ onClose, onDrawComplete }: Props) {
                 className="px-4 py-2 text-sm font-medium text-blue-600 border border-blue-200 rounded-lg hover:bg-blue-50 transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
                 data-testid="draw-preview-btn"
               >
-                {previewMutation.isPending ? "Generating..." : "Preview"}
+                {previewMutation.isPending ? t("generating") : t("preview")}
               </button>
               <button
                 onClick={handleExecute}
@@ -633,7 +638,7 @@ export function DrawPanel({ onClose, onDrawComplete }: Props) {
                 className="px-4 py-2 text-sm font-medium text-white bg-blue-600 rounded-lg hover:bg-blue-700 transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
                 data-testid="draw-execute-btn"
               >
-                {executeMutation.isPending ? "Applying..." : "Apply Draw"}
+                {executeMutation.isPending ? t("applying") : t("apply")}
               </button>
             </>
           )}

@@ -10,6 +10,7 @@
  */
 
 import { useEffect, useRef, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { useNavigate, useLocation } from "react-router-dom";
 import { useDeviceManager, type RecentCard } from "../context/DeviceManager";
 import { formatRunningTime } from "@oxygen/shared";
@@ -17,6 +18,7 @@ import { formatRunningTime } from "@oxygen/shared";
 const AUTO_DISMISS_MS = 10000;
 
 export function CardNotification() {
+  const { t } = useTranslation("race");
   const { currentCard, isOnCardReadoutPage } = useDeviceManager();
   const navigate = useNavigate();
   const location = useLocation();
@@ -92,7 +94,7 @@ export function CardNotification() {
     case "register": {
       bgColor = "bg-amber-600";
       iconPath = "M18 9v3m0 0v3m0-3h3m-3 0h-3m-2-5a4 4 0 11-8 0 4 4 0 018 0zM3 20a6 6 0 0112 0v1H3v-1z";
-      actionLabel = "Register";
+      actionLabel = t("notifRegister");
       const ownerName = card.ownerData
         ? [card.ownerData.firstName, card.ownerData.lastName]
           .filter(Boolean)
@@ -100,17 +102,17 @@ export function CardNotification() {
         : "";
       content = (
         <>
-          <span className="font-semibold">New card {card.cardNumber}</span>
+          <span className="font-semibold">{t("notifNewCard", { card: card.cardNumber })}</span>
           {ownerName ? (
             <span className="ml-2">
               {ownerName}
               {card.ownerData?.club && (
                 <span className="opacity-75">, {card.ownerData.club}</span>
               )}
-              <span className="ml-1 opacity-80">— Not registered</span>
+              <span className="ml-1 opacity-80">— {t("notifNotRegistered")}</span>
             </span>
           ) : (
-            <span className="ml-2 opacity-80">— Not registered in this competition</span>
+            <span className="ml-2 opacity-80">— {t("notifNotRegisteredInComp")}</span>
           )}
         </>
       );
@@ -120,10 +122,10 @@ export function CardNotification() {
     case "pre-start":
       bgColor = "bg-emerald-600";
       iconPath = "M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z";
-      actionLabel = "View Start";
+      actionLabel = t("notifViewStart");
       content = (
         <>
-          <span className="font-semibold">Card {card.cardNumber}</span>
+          <span className="font-semibold">{t("notifCard", { card: card.cardNumber })}</span>
           {card.runnerName && (
             <span className="ml-2">
               {card.runnerName}
@@ -132,7 +134,7 @@ export function CardNotification() {
               )}
             </span>
           )}
-          <span className="ml-2 opacity-80">— Ready to start</span>
+          <span className="ml-2 opacity-80">— {t("notifReadyToStart")}</span>
         </>
       );
       break;
@@ -141,10 +143,10 @@ export function CardNotification() {
     default:
       bgColor = "bg-blue-600";
       iconPath = "M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z";
-      actionLabel = "View Readout";
+      actionLabel = t("notifViewReadout");
       content = (
         <>
-          <span className="font-semibold">Card {card.cardNumber}</span>
+          <span className="font-semibold">{t("notifCard", { card: card.cardNumber })}</span>
           {card.runnerName ? (
             <span className="ml-2">
               {card.runnerName}
@@ -170,7 +172,7 @@ export function CardNotification() {
               )}
             </span>
           ) : (
-            <span className="ml-2 opacity-75">Reading...</span>
+            <span className="ml-2 opacity-75">{t("notifReading")}</span>
           )}
         </>
       );
