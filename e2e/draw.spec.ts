@@ -21,25 +21,24 @@ async function reseedItestDb() {
   const conn = await mysql.createConnection({
     host: "localhost",
     user: "meos",
+    database: "itest",
     multipleStatements: true,
   });
   try {
-    await conn.execute("DROP DATABASE IF EXISTS `itest`");
-    await conn.execute(
-      "CREATE DATABASE `itest` CHARACTER SET utf8mb3 COLLATE utf8mb3_general_ci",
+    // Drop only MeOS tables (o*) without dropping the database or oxygen_* tables.
+    // This keeps Prisma connections alive and preserves oxygen_* schema.
+    await conn.query("SET FOREIGN_KEY_CHECKS = 0");
+    const [rows] = await conn.query(
+      "SELECT TABLE_NAME FROM information_schema.TABLES WHERE TABLE_SCHEMA = 'itest' AND TABLE_NAME NOT LIKE 'oxygen\\_%'",
     );
-    const seedConn = await mysql.createConnection({
-      host: "localhost",
-      user: "meos",
-      database: "itest",
-      multipleStatements: true,
-    });
-    try {
-      const seedSql = readFileSync(resolve(__dirname, "seed.sql"), "utf-8");
-      await seedConn.query(seedSql);
-    } finally {
-      await seedConn.end();
+    for (const row of rows as Array<{ TABLE_NAME: string }>) {
+      await conn.query(`DROP TABLE IF EXISTS \`${row.TABLE_NAME}\``);
     }
+    await conn.query("SET FOREIGN_KEY_CHECKS = 1");
+
+    // Re-import seed data (recreates MeOS tables)
+    const seedSql = readFileSync(resolve(__dirname, "seed.sql"), "utf-8");
+    await conn.query(seedSql);
   } finally {
     await conn.end();
   }
@@ -58,6 +57,10 @@ async function openDrawPanel(page: import("@playwright/test").Page) {
 }
 
 test.describe("Start Draw", () => {
+  test.afterAll(async () => {
+    await reseedItestDb();
+  });
+
   test("should open draw panel and generate a preview", async ({ page }) => {
     const panel = await openDrawPanel(page);
 
@@ -89,7 +92,6 @@ test.describe("Start Draw", () => {
       page.locator("td").filter({ hasText: /^\d{2}:\d{2}:\d{2}$/ }).first(),
     ).toBeVisible({ timeout: 5000 });
 
-    await reseedItestDb();
   });
 
   test("should show timeline visualization after preview", async ({ page }) => {

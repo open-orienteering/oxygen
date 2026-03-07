@@ -104,10 +104,9 @@ test.describe("Event Page — Eventor-linked competition", () => {
     });
 
     await page.goto("/");
-    await expect(
-      page.getByRole("button", { name: /Vinterserien/ }),
-    ).toBeVisible({ timeout: 10000 });
-    await page.getByRole("button", { name: /Vinterserien/ }).click();
+    const vinterBtn = page.getByRole("button", { name: /itest_vinterserien/ });
+    await expect(vinterBtn).toBeVisible({ timeout: 10000 });
+    await vinterBtn.click();
 
     // Navigate to Event page
     await expect(page.getByRole("button", { name: "Dashboard" })).toBeVisible({
