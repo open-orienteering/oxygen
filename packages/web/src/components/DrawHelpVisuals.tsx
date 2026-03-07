@@ -1,4 +1,5 @@
 import { useState, useRef, useEffect, type ReactNode } from "react";
+import { useTranslation } from "react-i18next";
 
 const CLUB_COLORS = [
   { bg: "bg-blue-500", label: "Club A" },
@@ -53,6 +54,7 @@ function MethodBlock({ title, description, children }: { title: string; descript
 }
 
 export function DrawMethodHelp() {
+  const { t } = useTranslation("draw");
   const [open, setOpen] = useState(false);
 
   return (
@@ -63,33 +65,33 @@ export function DrawMethodHelp() {
         data-testid="draw-method-help-toggle"
       >
         <InfoIcon size={13} />
-        {open ? "Hide" : "How do these methods work?"}
+        {open ? t("hideHelp") : t("howDoMethodsWork")}
       </button>
 
       {open && (
         <div className="mt-2 p-3 bg-slate-50 border border-slate-200 rounded-lg space-y-3 text-xs">
           <div className="flex items-center gap-1 mb-1">
             <span className="text-[10px] text-slate-400 uppercase tracking-wide font-medium">
-              Each color = one club
+              {t("eachColorOneClub")}
             </span>
             <Legend />
           </div>
 
-          <MethodBlock title="Random" description="Completely random start order">
+          <MethodBlock title={t("random")} description={t("helpRandomDesc")}>
             <div className="flex items-center gap-1.5">
               <BoxRow clubs={[0, 0, 1, 2, 1, 0, 2, 2, 1]} />
-              <span className="text-[10px] text-slate-400 ml-1">Same club may end up adjacent</span>
+              <span className="text-[10px] text-slate-400 ml-1">{t("helpRandomHint")}</span>
             </div>
           </MethodBlock>
 
-          <MethodBlock title="Club separation" description="Runners from the same club are spread apart">
+          <MethodBlock title={t("clubSeparation")} description={t("helpClubSepDesc")}>
             <div className="flex items-center gap-1.5">
               <BoxRow clubs={[0, 1, 2, 0, 2, 1, 0, 1, 2]} />
-              <span className="text-[10px] text-slate-400 ml-1">Same club never adjacent</span>
+              <span className="text-[10px] text-slate-400 ml-1">{t("helpClubSepHint")}</span>
             </div>
           </MethodBlock>
 
-          <MethodBlock title="Seeded" description="Top-ranked runners get later (better) start times">
+          <MethodBlock title={t("seeded")} description={t("helpSeededDesc")}>
             <div className="flex items-center gap-1.5">
               <BoxRow
                 clubs={[1, 2, 0, 2, 1, 0, 1, 2]}
@@ -97,17 +99,17 @@ export function DrawMethodHelp() {
               />
               <span className="text-[10px] text-slate-400 ml-1">
                 <span className="inline-block w-2.5 h-2.5 rounded-sm bg-slate-300 ring-1 ring-offset-0 ring-yellow-400 align-middle mr-0.5" />
-                = seeded (start later)
+                {t("helpSeededHint")}
               </span>
             </div>
           </MethodBlock>
 
-          <MethodBlock title="Simultaneous" description="All runners start at the same time (mass start)">
+          <MethodBlock title={t("simultaneous")} description={t("helpSimultaneousDesc")}>
             <div className="flex items-center gap-1.5">
               <span className="inline-flex flex-col items-center border-l-2 border-slate-400 pl-1.5">
                 <BoxRow clubs={[0, 1, 2, 3, 0, 1]} />
               </span>
-              <span className="text-[10px] text-slate-400 ml-1">Everyone at the same time</span>
+              <span className="text-[10px] text-slate-400 ml-1">{t("helpSimultaneousHint")}</span>
             </div>
           </MethodBlock>
         </div>
@@ -198,13 +200,13 @@ function Popover({ trigger, children }: { trigger: ReactNode; children: ReactNod
 }
 
 export function CorridorTooltip() {
+  const { t } = useTranslation("draw");
   return (
     <Popover trigger={<InfoIcon />}>
       <div data-testid="corridor-tooltip">
-        <p className="font-semibold text-slate-800 mb-1.5">Start corridors</p>
+        <p className="font-semibold text-slate-800 mb-1.5">{t("corridorTooltipTitle")}</p>
         <p className="text-slate-600 mb-2">
-          Classes are assigned to parallel start corridors. Within a corridor,
-          classes start one after another. More corridors = shorter total start window.
+          {t("corridorTooltipDesc")}
         </p>
         <div className="space-y-1.5 font-mono text-[10px]">
           <div className="flex items-center gap-1">
@@ -240,15 +242,13 @@ export function CorridorTooltip() {
 }
 
 export function OverlapTooltip() {
+  const { t } = useTranslation("draw");
   return (
     <Popover trigger={<InfoIcon />}>
       <div data-testid="overlap-tooltip">
-        <p className="font-semibold text-slate-800 mb-1.5">Course overlap detection</p>
+        <p className="font-semibold text-slate-800 mb-1.5">{t("overlapTooltipTitle")}</p>
         <p className="text-slate-600 mb-2">
-          When enabled, classes whose courses share the same opening controls are
-          placed in the same corridor so their runners start sequentially, never at
-          the same time. This prevents runners from following each other through
-          shared controls.
+          {t("overlapTooltipDesc")}
         </p>
         <div className="space-y-1 font-mono text-[10px]">
           <div className="flex items-center gap-1">
@@ -274,7 +274,7 @@ export function OverlapTooltip() {
           <div className="flex items-center gap-1 pt-1 text-slate-500">
             <span className="w-14 shrink-0" />
             <span className="inline-block w-2.5 h-2.5 rounded-sm bg-amber-400" />
-            <span>= shared opening → same corridor (sequential)</span>
+            <span>{t("overlapTooltipShared")}</span>
           </div>
         </div>
       </div>

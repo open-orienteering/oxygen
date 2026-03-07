@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from "react";
+import { useTranslation } from "react-i18next";
 import { trpc } from "../lib/trpc";
 
 type SimSpeed = 0 | 1 | 10 | 50;
@@ -11,6 +12,7 @@ const SPEED_OPTIONS: { value: SimSpeed; label: string }[] = [
 ];
 
 export function TestLabPage() {
+  const { t } = useTranslation("common");
   const utils = trpc.useUtils();
   const status = trpc.testLab.status.useQuery(undefined, { refetchInterval: 5000 });
   const simStatus = trpc.testLab.simulationStatus.useQuery(undefined, {
@@ -135,26 +137,25 @@ export function TestLabPage() {
   return (
     <div className="space-y-6">
       <div>
-        <h2 className="text-xl font-semibold text-slate-900">Test Lab</h2>
+        <h2 className="text-xl font-semibold text-slate-900">{t("testLab")}</h2>
         <p className="text-sm text-slate-500 mt-1">
-          Generate test data and simulate races for stress testing. Work through the four stages
-          in order &mdash; each stage depends on the previous one.
+          {t("testLabDescription")}
         </p>
       </div>
 
       {/* Status overview */}
       <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
-        <StatusBadge label="Classes" count={s?.classes ?? 0} />
-        <StatusBadge label="Courses" count={s?.courses ?? 0} />
-        <StatusBadge label="Controls" count={s?.controls ?? 0} />
-        <StatusBadge label="Runners" count={s?.runners ?? 0} />
-        <StatusBadge label="With start" count={s?.runnersWithStart ?? 0} />
+        <StatusBadge label={t("classes")} count={s?.classes ?? 0} />
+        <StatusBadge label={t("courses")} count={s?.courses ?? 0} />
+        <StatusBadge label={t("controls")} count={s?.controls ?? 0} />
+        <StatusBadge label={t("runners")} count={s?.runners ?? 0} />
+        <StatusBadge label={t("withStart")} count={s?.runnersWithStart ?? 0} />
       </div>
 
       {/* Stage 1: Classes */}
       <StageCard
         number={1}
-        title="Generate Classes"
+        title={t("generateClasses")}
         description="Create a standard Swedish long-distance class setup (38 classes)."
         ready={true}
         done={hasClasses}
@@ -177,14 +178,14 @@ export function TestLabPage() {
           className="px-4 py-2 bg-amber-600 text-white text-sm font-medium rounded-lg hover:bg-amber-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors cursor-pointer"
           data-testid="generate-classes"
         >
-          {generateClasses.isPending ? "Generating..." : "Generate Classes"}
+          {generateClasses.isPending ? t("generating") : t("generateClasses")}
         </button>
       </StageCard>
 
       {/* Stage 2: Courses & Controls */}
       <StageCard
         number={2}
-        title="Generate Courses & Controls"
+        title={t("generateCoursesAndControls")}
         description="Create 8 courses with ~50 controls, 4 different first controls, and realistic control sharing."
         ready={hasClasses}
         done={hasCourses}
@@ -222,14 +223,14 @@ export function TestLabPage() {
           className="px-4 py-2 bg-amber-600 text-white text-sm font-medium rounded-lg hover:bg-amber-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors cursor-pointer"
           data-testid="generate-courses"
         >
-          {generateCourses.isPending ? "Generating..." : "Generate Courses & Controls"}
+          {generateCourses.isPending ? t("generating") : t("generateCoursesAndControls")}
         </button>
       </StageCard>
 
       {/* Stage 3: Register Runners */}
       <StageCard
         number={3}
-        title="Register Runners"
+        title={t("registerRunners")}
         description="Distribute runners across classes using real or fictional data."
         ready={hasClasses && hasCourses}
         done={hasRunners}
@@ -245,7 +246,7 @@ export function TestLabPage() {
       >
         <div className="flex flex-col gap-3">
           <div className="flex items-center gap-3">
-            <label className="text-sm text-slate-600">Total runners:</label>
+            <label className="text-sm text-slate-600">{t("totalRunners")}</label>
             <input
               type="number"
               min={10}
@@ -263,7 +264,7 @@ export function TestLabPage() {
               className="px-4 py-2 bg-amber-600 text-white text-sm font-medium rounded-lg hover:bg-amber-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors cursor-pointer"
               data-testid="register-fictional-runners"
             >
-              {registerFictionalRunners.isPending ? "Generating..." : "Fictional (GDPR-safe)"}
+              {registerFictionalRunners.isPending ? t("generating") : t("fictionalGdprSafe")}
             </button>
             <button
               onClick={() => registerRunners.mutate({ count: runnerCount })}
@@ -271,7 +272,7 @@ export function TestLabPage() {
               className="px-4 py-2 bg-slate-600 text-white text-sm font-medium rounded-lg hover:bg-slate-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors cursor-pointer"
               data-testid="register-runners"
             >
-              {registerRunners.isPending ? "Registering..." : "From Eventor DB"}
+              {registerRunners.isPending ? t("registering") : t("fromEventorDb")}
             </button>
           </div>
         </div>
@@ -280,7 +281,7 @@ export function TestLabPage() {
       {/* Stage 4: Simulation */}
       <StageCard
         number={4}
-        title="Race Simulation"
+        title={t("raceSimulation")}
         description="Simulate a race by generating realistic punch data for all runners with start times."
         ready={hasStartTimes}
         done={false}
@@ -307,7 +308,7 @@ export function TestLabPage() {
         <div className="space-y-4">
           {/* Speed selector */}
           <div className="flex items-center gap-3">
-            <label className="text-sm text-slate-600">Speed:</label>
+            <label className="text-sm text-slate-600">{t("speed")}:</label>
             <div className="flex gap-1">
               {SPEED_OPTIONS.map((opt) => {
                 const isDisabledDuringRun = isSimRunning && opt.value === 0;
@@ -345,7 +346,7 @@ export function TestLabPage() {
                 className="px-4 py-2 bg-red-600 text-white text-sm font-medium rounded-lg hover:bg-red-700 disabled:opacity-50 transition-colors cursor-pointer"
                 data-testid="stop-simulation"
               >
-                {stopSimulation.isPending ? "Stopping..." : "Stop Simulation"}
+                {stopSimulation.isPending ? t("stopping") : t("stopSimulation")}
               </button>
             ) : (
               <button
@@ -354,7 +355,7 @@ export function TestLabPage() {
                 className="px-4 py-2 bg-amber-600 text-white text-sm font-medium rounded-lg hover:bg-amber-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors cursor-pointer"
                 data-testid="start-simulation"
               >
-                {startSimulation.isPending ? "Starting..." : "Start Simulation"}
+                {startSimulation.isPending ? t("starting") : t("startSimulation")}
               </button>
             )}
           </div>
@@ -406,6 +407,7 @@ function StageCard({
   details?: React.ReactNode;
   children: React.ReactNode;
 }) {
+  const { t } = useTranslation("common");
   const [expanded, setExpanded] = useState(false);
 
   return (
@@ -435,7 +437,7 @@ function StageCard({
                 onClick={() => setExpanded(!expanded)}
                 className="ml-1.5 text-amber-600 hover:text-amber-800 font-medium cursor-pointer"
               >
-                {expanded ? "Less" : "More..."}
+                {expanded ? t("less") : t("more")}
               </button>
             )}
           </p>
@@ -476,6 +478,7 @@ function SimulationProgress({
   total: number;
   elapsedMs: number;
 }) {
+  const { t } = useTranslation("common");
   const pct = total > 0 ? Math.round((processed / total) * 100) : 0;
   const elapsedSec = Math.round(elapsedMs / 1000);
 
@@ -483,10 +486,10 @@ function SimulationProgress({
     <div className="space-y-2">
       <div className="flex items-center justify-between text-xs text-slate-500">
         <span>
-          {processed} / {total} readouts ({pct}%)
+          {processed} / {total} {t("readouts")} ({pct}%)
         </span>
         <span>
-          {running ? "Running" : "Finished"} &mdash; {elapsedSec}s elapsed
+          {running ? t("running") : t("finished")} &mdash; {elapsedSec}s {t("elapsed")}
         </span>
       </div>
       <div className="w-full bg-slate-200 rounded-full h-2">

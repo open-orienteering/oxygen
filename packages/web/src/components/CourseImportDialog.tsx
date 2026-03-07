@@ -1,4 +1,5 @@
 import { useState, useCallback, useRef } from "react";
+import { useTranslation } from "react-i18next";
 import { trpc } from "../lib/trpc";
 import { SearchableSelect } from "./SearchableSelect";
 
@@ -12,6 +13,7 @@ type PreviewData = NonNullable<
 >;
 
 export function CourseImportDialog({ onClose, onSuccess }: Props) {
+  const { t } = useTranslation("courses");
   const [step, setStep] = useState<"upload" | "preview" | "result">("upload");
   const [fileType, setFileType] = useState<"xml" | "ocd">("xml");
   const [fileData, setFileData] = useState("");
@@ -108,7 +110,7 @@ export function CourseImportDialog({ onClose, onSuccess }: Props) {
       <div className="relative bg-white rounded-2xl shadow-xl w-full max-w-3xl max-h-[90vh] overflow-y-auto">
         <div className="px-6 py-4 border-b border-slate-200 flex items-center justify-between">
           <h2 className="text-lg font-semibold text-slate-900">
-            Import Courses (IOF XML or OCAD OCD)
+            {t("importTitle")}
           </h2>
           <button
             onClick={onClose}
@@ -134,13 +136,13 @@ export function CourseImportDialog({ onClose, onSuccess }: Props) {
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
               </svg>
               <p className="text-sm text-slate-600 mb-2">
-                Drop an IOF 3.0 CourseData XML or OCAD 12 OCD file here, or
+                {t("dropFileHint")}
               </p>
               <button
                 onClick={() => fileInputRef.current?.click()}
                 className="px-4 py-2 bg-blue-600 text-white text-sm font-medium rounded-lg hover:bg-blue-700 transition-colors cursor-pointer"
               >
-                Browse files
+                {t("browseFiles")}
               </button>
               <input
                 ref={fileInputRef}
@@ -153,13 +155,13 @@ export function CourseImportDialog({ onClose, onSuccess }: Props) {
                 }}
               />
               <p className="text-xs text-slate-400 mt-3">
-                Exported from OCAD, Purple Pen, Condes, or similar
+                {t("exportedFrom")}
               </p>
 
               {previewMutation.isPending && (
                 <div className="mt-6 flex items-center justify-center gap-2 text-sm text-blue-600">
                   <div className="w-4 h-4 border-2 border-blue-300 border-t-blue-600 rounded-full animate-spin" />
-                  Parsing {fileName}...
+                  {t("parsing", { fileName })}
                 </div>
               )}
 
@@ -176,26 +178,26 @@ export function CourseImportDialog({ onClose, onSuccess }: Props) {
             <div className="space-y-6">
               {/* Summary */}
               <div className="grid grid-cols-4 gap-3">
-                <SummaryBox label="Courses" value={preview.courses.length} />
-                <SummaryBox label="Controls" value={preview.totalControls} />
-                <SummaryBox label="New controls" value={preview.newControls} color="emerald" />
-                <SummaryBox label="Existing" value={preview.existingControls} color="blue" />
+                <SummaryBox label={t("summaryBoxCourses")} value={preview.courses.length} />
+                <SummaryBox label={t("controls")} value={preview.totalControls} />
+                <SummaryBox label={t("newControls")} value={preview.newControls} color="emerald" />
+                <SummaryBox label={t("existing")} value={preview.existingControls} color="blue" />
               </div>
 
               {/* Course table with class mapping */}
               <div>
                 <h3 className="text-sm font-semibold text-slate-700 mb-2">
-                  Courses and Class Assignments
+                  {t("coursesAndClassAssignments")}
                 </h3>
                 <div className="border border-slate-200 rounded-lg overflow-hidden">
                   <table className="w-full text-sm">
                     <thead>
                       <tr className="bg-slate-50 border-b border-slate-200">
-                        <th className="px-3 py-2 text-left text-xs font-medium text-slate-500 uppercase">Course</th>
-                        <th className="px-3 py-2 text-left text-xs font-medium text-slate-500 uppercase">Length</th>
-                        <th className="px-3 py-2 text-left text-xs font-medium text-slate-500 uppercase">Controls</th>
-                        <th className="px-3 py-2 text-left text-xs font-medium text-slate-500 uppercase">XML Class</th>
-                        <th className="px-3 py-2 text-left text-xs font-medium text-slate-500 uppercase">DB Class</th>
+                        <th className="px-3 py-2 text-left text-xs font-medium text-slate-500 uppercase">{t("name")}</th>
+                        <th className="px-3 py-2 text-left text-xs font-medium text-slate-500 uppercase">{t("length")}</th>
+                        <th className="px-3 py-2 text-left text-xs font-medium text-slate-500 uppercase">{t("controls")}</th>
+                        <th className="px-3 py-2 text-left text-xs font-medium text-slate-500 uppercase">{t("xmlClass")}</th>
+                        <th className="px-3 py-2 text-left text-xs font-medium text-slate-500 uppercase">{t("dbClass")}</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-slate-100">
@@ -208,7 +210,7 @@ export function CourseImportDialog({ onClose, onSuccess }: Props) {
                             <td className="px-3 py-2 font-medium text-slate-900">{course.name}</td>
                             <td className="px-3 py-2 text-slate-600">{(course.length / 1000).toFixed(1)} km</td>
                             <td className="px-3 py-2 text-slate-600">{course.controlCount}</td>
-                            <td className="px-3 py-2 text-slate-400 italic">None</td>
+                            <td className="px-3 py-2 text-slate-400 italic">{t("noneLabel")}</td>
                             <td className="px-3 py-2 text-slate-400">—</td>
                           </tr>
                         ) : (
@@ -239,10 +241,10 @@ export function CourseImportDialog({ onClose, onSuccess }: Props) {
                                       newMapping[i] = Number(v);
                                       updateClassMapping(course.name, newMapping);
                                     }}
-                                    placeholder="Select class..."
-                                    searchPlaceholder="Search..."
+                                    placeholder={t("selectClassPlaceholder")}
+                                    searchPlaceholder={t("searchPlaceholder")}
                                     options={[
-                                      { value: 0, label: "— Skip —" },
+                                      { value: 0, label: t("skip") },
                                       ...preview.dbClasses.map((c) => ({
                                         value: c.id,
                                         label: c.name,
@@ -266,7 +268,7 @@ export function CourseImportDialog({ onClose, onSuccess }: Props) {
                   onClick={() => { setStep("upload"); setPreview(null); }}
                   className="flex-1 px-4 py-2.5 border border-slate-200 text-slate-700 text-sm font-medium rounded-lg hover:bg-slate-50 transition-colors cursor-pointer"
                 >
-                  Back
+                  {t("back")}
                 </button>
                 <button
                   onClick={handleImport}
@@ -276,11 +278,11 @@ export function CourseImportDialog({ onClose, onSuccess }: Props) {
                   {importMutation.isPending ? (
                     <>
                       <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-                      Importing...
+                      {t("importing")}
                     </>
                   ) : (
                     <>
-                      Import {preview.courses.length} courses
+                      {t("importCount", { count: preview.courses.length })}
                     </>
                   )}
                 </button>
@@ -301,12 +303,12 @@ export function CourseImportDialog({ onClose, onSuccess }: Props) {
                 <svg className="mx-auto w-12 h-12 text-emerald-600 mb-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
                 </svg>
-                <h3 className="text-lg font-semibold text-emerald-900 mb-2">Import Complete</h3>
+                <h3 className="text-lg font-semibold text-emerald-900 mb-2">{t("importComplete")}</h3>
                 <div className="text-sm text-emerald-700 space-y-1">
-                  <p>{importMutation.data.coursesCreated} courses created, {importMutation.data.coursesUpdated} updated</p>
-                  <p>{importMutation.data.controlsCreated} controls created, {importMutation.data.controlsUpdated} updated</p>
+                  <p>{t("coursesCreatedUpdated", { created: importMutation.data.coursesCreated, updated: importMutation.data.coursesUpdated })}</p>
+                  <p>{t("controlsCreatedUpdated", { created: importMutation.data.controlsCreated, updated: importMutation.data.controlsUpdated })}</p>
                   {importMutation.data.classesAssigned > 0 && (
-                    <p>{importMutation.data.classesAssigned} class assignments made</p>
+                    <p>{t("classAssignmentsMade", { count: importMutation.data.classesAssigned })}</p>
                   )}
                 </div>
               </div>
@@ -314,7 +316,7 @@ export function CourseImportDialog({ onClose, onSuccess }: Props) {
                 onClick={() => { onSuccess(); onClose(); }}
                 className="w-full px-4 py-2.5 bg-blue-600 text-white text-sm font-medium rounded-lg hover:bg-blue-700 transition-colors cursor-pointer"
               >
-                Done
+                {t("done")}
               </button>
             </div>
           )}

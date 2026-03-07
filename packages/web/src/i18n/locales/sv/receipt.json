@@ -1,0 +1,21 @@
+{
+  "start": "Start",
+  "finish": "Mål",
+  "runningTime": "Löptid",
+  "position": "Placering",
+  "splitHeader": "Nr.  Kod  Sträck     Tid   Total  Tempo",
+  "fin": "Mål",
+  "battery": "Batteri",
+  "competitionInfo": "Tävlingsinformation",
+  "registration": "ANMÄLAN",
+  "name": "Namn",
+  "club": "Klubb",
+  "class": "Klass",
+  "siCard": "SI-bricka",
+  "payment": "Betalning",
+  "amount": "Belopp",
+  "freeStart": "Fri starttid",
+  "printed": "Utskriven",
+  "tagline": "Lättviktig orienteringshantering",
+  "missing": "SAKNAS"
+}

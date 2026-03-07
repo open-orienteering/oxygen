@@ -16,6 +16,7 @@
  */
 
 import { useState, useEffect, useMemo, useRef, useCallback } from "react";
+import { useTranslation } from "react-i18next";
 import { useParams } from "react-router-dom";
 import { trpc } from "../lib/trpc";
 import { ClubLogo } from "../components/ClubLogo";
@@ -86,6 +87,7 @@ function getClassColor(classId: number) {
 // ─── Main Component ─────────────────────────────────────────
 
 export function StartScreenPage() {
+    const { t } = useTranslation("race");
     const { nameId } = useParams<{ nameId: string }>();
     const [offsetMinutes, setOffsetMinutes] = useState(3);
     const [showSettings, setShowSettings] = useState(false);
@@ -252,7 +254,7 @@ export function StartScreenPage() {
                     fontSize: labelFontSize, color: "rgba(255,255,255,0.35)",
                     textTransform: "uppercase", letterSpacing: 5, fontWeight: 700,
                 }}>
-                    Call-up
+                    {t("callUp")}
                 </div>
 
                 <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
@@ -277,7 +279,7 @@ export function StartScreenPage() {
                     padding: 20, minWidth: 220, boxShadow: "0 20px 40px rgba(0,0,0,0.5)",
                 }}>
                     <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 12, color: "rgba(255,255,255,0.8)" }}>
-                        Call-up offset
+                        {t("callUpOffset")}
                     </div>
                     <div style={{ display: "flex", gap: 6 }}>
                         {[1, 2, 3, 4, 5].map((m) => (
@@ -292,7 +294,7 @@ export function StartScreenPage() {
                         ))}
                     </div>
                     <div style={{ marginTop: 10, fontSize: 11, color: "rgba(255,255,255,0.3)" }}>
-                        Start time = call-up + {offsetMinutes} min
+                        {t("startTimeEquation", { minutes: offsetMinutes })}
                     </div>
                 </div>
             )}
@@ -347,10 +349,10 @@ export function StartScreenPage() {
                             <div style={{ display: "flex", alignItems: "center", gap: 16, marginBottom: tileGap }}>
                                 <div style={{ flex: 1, height: 1, background: "linear-gradient(90deg, transparent, rgba(255,255,255,0.18), transparent)" }} />
                                 <div style={{ fontSize: subHeadingFontSize, fontWeight: 700, color: "rgba(255,255,255,0.6)", letterSpacing: 1.5 }}>
-                                    Start {formatMinute(startMinuteShown)}
+                                    {t("startAtTime", { time: formatMinute(startMinuteShown) })}
                                 </div>
                                 <div style={{ background: "rgba(99,102,241,0.22)", borderRadius: 20, padding: `${tileGap * 0.25}px ${tileGap * 0.8}px`, fontSize: subHeadingFontSize * 0.85, color: "#a5b4fc", fontWeight: 700 }}>
-                                    {currentGroup.runners.length} {currentGroup.runners.length === 1 ? "runner" : "runners"}
+                                    {currentGroup.runners.length} {t("runner", { count: currentGroup.runners.length })}
                                 </div>
                                 <div style={{ flex: 1, height: 1, background: "linear-gradient(90deg, transparent, rgba(255,255,255,0.18), transparent)" }} />
                             </div>
@@ -417,11 +419,11 @@ export function StartScreenPage() {
                         <div style={{ textAlign: "center", padding: "32px 0" }}>
                             <div style={{ fontSize: 40, marginBottom: 12, opacity: 0.25 }}>⏳</div>
                             <div style={{ fontSize: 18, color: "rgba(255,255,255,0.35)", fontWeight: 500 }}>
-                                No runners starting at {formatMinute(startMinuteShown)}
+                                {t("noRunnersStartingAt", { time: formatMinute(startMinuteShown) })}
                             </div>
                             {nextGroup && (
                                 <div style={{ fontSize: 14, color: "rgba(255,255,255,0.2)", marginTop: 8 }}>
-                                    Next: {formatMinute(nextStartMinute)} ({nextGroup.runners.length} runners)
+                                    {t("nextStartAt", { time: formatMinute(nextStartMinute), count: nextGroup.runners.length })}
                                 </div>
                             )}
                         </div>
@@ -441,7 +443,7 @@ export function StartScreenPage() {
                 {nextGroup && nextGroup.runners.length > 0 ? (
                     <>
                         <div style={{ fontSize: labelFontSize, color: "rgba(255,255,255,0.45)", textTransform: "uppercase", letterSpacing: 3, marginBottom: labelFontSize * 0.8, fontWeight: 600 }}>
-                            Coming up · Start {formatMinute(nextStartMinute)} · {nextGroup.runners.length} runners
+                            {t("comingUpDetail", { time: formatMinute(nextStartMinute), count: nextGroup.runners.length })}
                         </div>
                         <div style={{ display: "flex", flexWrap: "wrap", gap: 10 }}>
                             {nextGroup.runners.map((r) => (
@@ -463,7 +465,7 @@ export function StartScreenPage() {
                     </>
                 ) : (
                     <div style={{ fontSize: 13, color: "rgba(255,255,255,0.2)", textAlign: "center", padding: "4px 0" }}>
-                        No more upcoming starts
+                        {t("noMoreUpcomingStarts")}
                     </div>
                 )}
             </div>

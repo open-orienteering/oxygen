@@ -1,9 +1,11 @@
 import { useRef, useEffect } from "react";
+import { useTranslation } from "react-i18next";
 import { trpc } from "../lib/trpc";
 import { formatMeosTime } from "@oxygen/shared";
 import { useSearchParam } from "../hooks/useSearchParam";
 
 export function StartStation() {
+  const { t } = useTranslation("race");
   const [cardInput, setCardInput] = useSearchParam("card");
   const inputRef = useRef<HTMLInputElement>(null);
 
@@ -39,7 +41,7 @@ export function StartStation() {
       <div className="text-center mb-8">
         <div className="inline-flex items-center gap-2 px-5 py-2.5 bg-emerald-100 text-emerald-800 rounded-full text-base font-semibold mb-4">
           <div className="w-2.5 h-2.5 bg-emerald-500 rounded-full animate-pulse" />
-          Pre-Start
+          {t("preStart")}
         </div>
         <div className="text-4xl font-bold text-slate-900 tabular-nums">
           {formatMeosTime(currentTimeDeci)}
@@ -49,7 +51,7 @@ export function StartStation() {
       {/* Card input -- large kiosk-friendly */}
       <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-8 mb-8">
         <label className="block text-sm font-medium text-slate-500 mb-3 text-center">
-          Scan or enter SI card number
+          {t("scanOrEnterCard")}
         </label>
         <div className="flex gap-3">
           <div className="flex-1">
@@ -59,7 +61,7 @@ export function StartStation() {
               inputMode="numeric"
               value={cardInput}
               onChange={(e) => setCardInput(e.target.value)}
-              placeholder="Card number..."
+              placeholder={t("cardNumberPlaceholder")}
               className="w-full text-4xl font-bold text-center py-5 px-6 border-2 border-slate-200 rounded-xl focus:outline-none focus:border-emerald-500 focus:ring-4 focus:ring-emerald-100 tabular-nums"
               autoComplete="off"
             />
@@ -69,7 +71,7 @@ export function StartStation() {
               onClick={handleClear}
               className="px-5 py-2 text-sm text-slate-500 hover:text-slate-700 hover:bg-slate-100 rounded-xl transition-colors cursor-pointer self-center"
             >
-              Clear
+              {t("clear", { ns: "common" })}
             </button>
           )}
         </div>
@@ -86,13 +88,13 @@ export function StartStation() {
       {unknownCard && (
         <div className="rounded-2xl border-2 border-red-300 bg-red-50 p-10 text-center">
           <div className="text-5xl font-black text-red-600 mb-4">
-            Unknown Card
+            {t("unknownCard")}
           </div>
           <div className="text-xl text-red-700">
-            Card <span className="font-bold tabular-nums">{cardInput}</span> is not registered in this competition
+            {t("cardNotRegistered", { card: cardInput })}
           </div>
           <div className="mt-6 text-lg text-red-600 font-medium">
-            Please visit the secretariat
+            {t("pleaseVisitSecretariat")}
           </div>
         </div>
       )}
@@ -127,6 +129,7 @@ function RunnerKiosk({
   course: { name: string; length: number; controlCount: number } | null;
   currentTime: number;
 }) {
+  const { t } = useTranslation("race");
   // Countdown to start time
   const timeToStart = runner.startTime > 0 ? runner.startTime - currentTime : 0;
   const countdownMinutes = Math.floor(Math.abs(timeToStart) / 600);
@@ -157,9 +160,9 @@ function RunnerKiosk({
           <div className="flex items-center justify-center gap-6 text-lg">
             <span className="font-semibold text-slate-700">{course.name}</span>
             <span className="text-slate-400">&middot;</span>
-            <span className="text-slate-600">{(course.length / 1000).toFixed(1)} km</span>
+            <span className="text-slate-600">{(course.length / 1000).toFixed(1)} {t("km", { ns: "common" })}</span>
             <span className="text-slate-400">&middot;</span>
-            <span className="text-slate-600">{course.controlCount} controls</span>
+            <span className="text-slate-600">{t("nControls", { count: course.controlCount })}</span>
           </div>
         </div>
       )}
@@ -169,7 +172,7 @@ function RunnerKiosk({
         {runner.startTime > 0 ? (
           <>
             <div className="text-sm font-medium text-slate-500 uppercase tracking-wider mb-2">
-              Start Time
+              {t("startTime")}
             </div>
             <div className="text-6xl font-black tabular-nums text-emerald-700">
               {formatMeosTime(runner.startTime)}
@@ -178,20 +181,20 @@ function RunnerKiosk({
               <div className={`mt-3 text-xl font-semibold tabular-nums ${
                 isPast ? "text-amber-600" : "text-emerald-600"
               }`}>
-                {isPast ? "Started " : ""}
+                {isPast ? `${t("started")} ` : ""}
                 {countdownMinutes > 0 && `${countdownMinutes}m `}
                 {countdownSeconds}s
-                {isPast ? " ago" : " to start"}
+                {isPast ? ` ${t("ago")}` : ` ${t("toStart")}`}
               </div>
             )}
           </>
         ) : (
           <>
             <div className="text-sm font-medium text-slate-500 uppercase tracking-wider mb-2">
-              Start Time
+              {t("startTime")}
             </div>
             <div className="text-3xl font-bold text-slate-400">
-              Not assigned
+              {t("notAssigned")}
             </div>
           </>
         )}

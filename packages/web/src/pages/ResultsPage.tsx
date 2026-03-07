@@ -1,4 +1,5 @@
 import { useMemo } from "react";
+import { useTranslation } from "react-i18next";
 import { trpc } from "../lib/trpc";
 import {
   formatRunningTime,
@@ -51,6 +52,7 @@ function matchesStatusFilter(
 }
 
 export function ResultsPage() {
+  const { t } = useTranslation("results");
   const [search, setSearch] = useSearchParam("search");
   const [classFilter, setClassFilter] = useNumericSearchParam("class");
   const [clubFilter, setClubFilter] = useNumericSearchParam("club");
@@ -108,7 +110,7 @@ export function ResultsPage() {
   return (
     <>
       <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 mb-6">
-        <h2 className="text-lg font-semibold text-slate-900">Results</h2>
+        <h2 className="text-lg font-semibold text-slate-900">{t("title")}</h2>
         <div className="flex flex-col sm:flex-row gap-3 w-full sm:w-auto">
           <div className="relative flex-1 sm:flex-initial">
             <svg className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -116,7 +118,7 @@ export function ResultsPage() {
             </svg>
             <input
               type="text"
-              placeholder="Search name or club..."
+              placeholder={t("searchNameOrClub")}
               value={search}
               onChange={(e) => setSearch(e.target.value)}
               className="w-full sm:w-64 pl-10 pr-4 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent bg-white"
@@ -126,10 +128,10 @@ export function ResultsPage() {
             testId="class-filter"
             value={classFilter ?? ""}
             onChange={(v) => setClassFilter(v ? Number(v) : undefined)}
-            placeholder="All classes"
-            searchPlaceholder="Search classes..."
+            placeholder={t("allClasses")}
+            searchPlaceholder={t("searchClasses")}
             options={[
-              { value: "", label: "All classes" },
+              { value: "", label: t("allClasses") },
               ...(dashboard.data?.classes.map((c) => ({
                 value: c.id,
                 label: c.name,
@@ -141,10 +143,10 @@ export function ResultsPage() {
             testId="club-filter"
             value={clubFilter ?? ""}
             onChange={(v) => setClubFilter(v ? Number(v) : undefined)}
-            placeholder="All clubs"
-            searchPlaceholder="Search clubs..."
+            placeholder={t("allClubs")}
+            searchPlaceholder={t("searchClubs")}
             options={[
-              { value: "", label: "All clubs" },
+              { value: "", label: t("allClubs") },
               ...(clubs.data?.map((c) => ({
                 value: c.id,
                 label: c.name,
@@ -156,7 +158,7 @@ export function ResultsPage() {
             testId="status-filter"
             value={statusFilter}
             onChange={(v) => setStatusFilter(String(v))}
-            placeholder="All statuses"
+            placeholder={t("allStatuses")}
             options={STATUS_FILTER_OPTIONS.map((opt) => ({
               value: opt.value,
               label: opt.label,
@@ -173,9 +175,9 @@ export function ResultsPage() {
 
       {(search.trim() || statusFilter) && (
         <div className="text-sm text-slate-500 mb-4">
-          {filtered.length} {filtered.length === 1 ? "result" : "results"}
-          {search.trim() ? <> for &ldquo;{search}&rdquo;</> : ""}
-          {statusFilter ? ` (filtered by status)` : ""}
+          {t("resultCount", { count: filtered.length })}
+          {search.trim() ? <> {t("forQuery", { query: search })}</> : ""}
+          {statusFilter ? ` ${t("filteredByStatus")}` : ""}
         </div>
       )}
 
@@ -191,23 +193,23 @@ export function ResultsPage() {
               </h3>
               {isNoTiming && (
                 <span className="text-xs font-medium text-orange-600 bg-orange-50 border border-orange-200 rounded-full px-2 py-0.5">
-                  Unofficial
+                  {t("unofficial")}
                 </span>
               )}
               <span className="text-xs text-slate-400">
-                {okCount} classified / {classEntries.length} total
+                {t("classifiedTotal", { classified: okCount, total: classEntries.length })}
               </span>
             </div>
             <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
               <table className="w-full text-sm">
                 <thead>
                   <tr className="bg-slate-50 border-b border-slate-200">
-                    <SortHeader label="Place" active={sort.key === "place"} direction={sort.dir} onClick={() => toggle("place")} className="w-14" />
-                    <SortHeader label="Name" active={sort.key === "name"} direction={sort.dir} onClick={() => toggle("name")} />
-                    <SortHeader label="Club" active={sort.key === "club"} direction={sort.dir} onClick={() => toggle("club")} className="hidden sm:table-cell" />
-                    <SortHeader label="Time" active={sort.key === "time"} direction={sort.dir} onClick={() => toggle("time")} align="right" />
-                    <SortHeader label="Behind" active={sort.key === "behind"} direction={sort.dir} onClick={() => toggle("behind")} align="right" className="hidden sm:table-cell" />
-                    <SortHeader label="Status" active={sort.key === "status"} direction={sort.dir} onClick={() => toggle("status")} className="w-16" />
+                    <SortHeader label={t("place")} active={sort.key === "place"} direction={sort.dir} onClick={() => toggle("place")} className="w-14" />
+                    <SortHeader label={t("name")} active={sort.key === "name"} direction={sort.dir} onClick={() => toggle("name")} />
+                    <SortHeader label={t("club")} active={sort.key === "club"} direction={sort.dir} onClick={() => toggle("club")} className="hidden sm:table-cell" />
+                    <SortHeader label={t("time")} active={sort.key === "time"} direction={sort.dir} onClick={() => toggle("time")} align="right" />
+                    <SortHeader label={t("behind")} active={sort.key === "behind"} direction={sort.dir} onClick={() => toggle("behind")} align="right" className="hidden sm:table-cell" />
+                    <SortHeader label={t("status")} active={sort.key === "status"} direction={sort.dir} onClick={() => toggle("status")} className="w-16" />
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
@@ -278,7 +280,7 @@ export function ResultsPage() {
 
       {filtered.length === 0 && !results.isLoading && (
         <div className="text-center py-20 text-slate-400">
-          {search.trim() ? "No matching results found" : "No results found"}
+          {search.trim() ? t("noMatchingResults") : t("noResultsFound")}
         </div>
       )}
     </>

@@ -1,5 +1,6 @@
 import { useState, useMemo, useEffect, Fragment, useCallback } from "react";
 import { useSearchParams } from "react-router-dom";
+import { useTranslation } from "react-i18next";
 import { trpc } from "../lib/trpc";
 import {
   formatMeosTime,
@@ -22,6 +23,7 @@ import { usePrinter } from "../context/PrinterContext";
 import { fetchLogoRaster } from "../lib/receipt-printer/index.js";
 
 export function RunnerManagement() {
+  const { t } = useTranslation("runners");
   const [search, setSearch] = useSearchParam("search");
   const [classFilter, setClassFilter] = useNumericSearchParam("class");
   const [clubFilter, setClubFilter] = useNumericSearchParam("club");
@@ -132,7 +134,7 @@ export function RunnerManagement() {
   });
 
   const handleDelete = (runnerId: number, name: string) => {
-    if (window.confirm(`Remove "${name}" from the competition?`)) {
+    if (window.confirm(t("removeConfirm", { name }))) {
       deleteMutation.mutate({ id: runnerId });
     }
   };
@@ -177,7 +179,7 @@ export function RunnerManagement() {
   const handleApplyBulk = () => {
     if (bulkValue === "") return;
     const count = selection.count;
-    const fieldLabel = bulkField === "status" ? "status" : bulkField === "class" ? "class" : "club";
+    const fieldLabel = bulkField === "status" ? t("status").toLowerCase() : bulkField === "class" ? t("class").toLowerCase() : t("club").toLowerCase();
 
     let valueLabel = "";
     if (bulkField === "status") {
@@ -188,7 +190,7 @@ export function RunnerManagement() {
       valueLabel = clubs.data?.find(c => c.id == bulkValue)?.name ?? String(bulkValue);
     }
 
-    if (window.confirm(`Set ${fieldLabel} to "${valueLabel}" for ${count} runners?`)) {
+    if (window.confirm(t("bulkConfirm", { field: fieldLabel, value: valueLabel, count }))) {
       bulkUpdateMutation.mutate({
         ids: Array.from(selection.selected),
         data: {
@@ -212,7 +214,7 @@ export function RunnerManagement() {
           </svg>
           <input
             type="text"
-            placeholder="Search name, club, or card..."
+            placeholder={t("searchNameClubCard")}
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             className="w-full pl-10 pr-4 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent bg-white"
@@ -222,10 +224,10 @@ export function RunnerManagement() {
           testId="class-filter"
           value={classFilter ?? ""}
           onChange={(v) => setClassFilter(v ? Number(v) : undefined)}
-          placeholder="All classes"
-          searchPlaceholder="Search classes..."
+          placeholder={t("allClasses")}
+          searchPlaceholder={t("searchClasses")}
           options={[
-            { value: "", label: "All classes" },
+            { value: "", label: t("allClasses") },
             ...(classes.data?.classes.map((c) => ({
               value: c.id,
               label: c.name,
@@ -237,10 +239,10 @@ export function RunnerManagement() {
           testId="club-filter"
           value={clubFilter ?? ""}
           onChange={(v) => setClubFilter(v ? Number(v) : undefined)}
-          placeholder="All clubs"
-          searchPlaceholder="Search clubs..."
+          placeholder={t("allClubs")}
+          searchPlaceholder={t("searchClubs")}
           options={[
-            { value: "", label: "All clubs" },
+            { value: "", label: t("allClubs") },
             ...(clubs.data?.map((c) => ({
               value: c.id,
               label: c.name,
@@ -252,7 +254,7 @@ export function RunnerManagement() {
           testId="status-filter"
           value={statusFilter}
           onChange={(v) => setStatusFilter(String(v))}
-          placeholder="All statuses"
+          placeholder={t("allStatuses")}
           options={STATUS_FILTER_OPTIONS.map((opt) => ({
             value: opt.value,
             label: opt.label,
@@ -265,13 +267,13 @@ export function RunnerManagement() {
           <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
           </svg>
-          Add Runner
+          {t("addRunner")}
         </button>
       </div>
 
       <div className="flex items-center justify-between mb-3">
         <span className="text-sm text-slate-500">
-          {filteredRunners.length} runners
+          {t("runnersCount", { count: filteredRunners.length })}
         </span>
       </div>
 
@@ -283,7 +285,7 @@ export function RunnerManagement() {
         )}
         {filteredRunners.length === 0 && !runners.isLoading && (
           <div className="p-8 text-center text-slate-400 text-sm">
-            No runners found
+            {t("noRunners")}
           </div>
         )}
         {filteredRunners.length > 0 && (
@@ -302,15 +304,15 @@ export function RunnerManagement() {
                       onChange={selection.toggleAll}
                     />
                   </th>
-                  <SortHeader label="#" active={sort.key === "startNo"} direction={sort.dir} onClick={() => toggle("startNo")} className="w-12" />
-                  <SortHeader label="Name" active={sort.key === "name"} direction={sort.dir} onClick={() => toggle("name")} />
-                  <SortHeader label="Club" active={sort.key === "club"} direction={sort.dir} onClick={() => toggle("club")} className="hidden sm:table-cell" />
-                  <SortHeader label="Class" active={sort.key === "class"} direction={sort.dir} onClick={() => toggle("class")} className="hidden md:table-cell" />
-                  <SortHeader label="Card" active={sort.key === "card"} direction={sort.dir} onClick={() => toggle("card")} className="hidden lg:table-cell" />
-                  <SortHeader label="Start" active={sort.key === "start"} direction={sort.dir} onClick={() => toggle("start")} />
-                  <SortHeader label="Time" active={sort.key === "time"} direction={sort.dir} onClick={() => toggle("time")} />
-                  <SortHeader label="Status" active={sort.key === "status"} direction={sort.dir} onClick={() => toggle("status")} />
-                  <th className="px-4 py-2.5 text-right font-medium text-slate-500 w-24">Actions</th>
+                  <SortHeader label={t("startNoHash")} active={sort.key === "startNo"} direction={sort.dir} onClick={() => toggle("startNo")} className="w-12" />
+                  <SortHeader label={t("name")} active={sort.key === "name"} direction={sort.dir} onClick={() => toggle("name")} />
+                  <SortHeader label={t("club")} active={sort.key === "club"} direction={sort.dir} onClick={() => toggle("club")} className="hidden sm:table-cell" />
+                  <SortHeader label={t("class")} active={sort.key === "class"} direction={sort.dir} onClick={() => toggle("class")} className="hidden md:table-cell" />
+                  <SortHeader label={t("card")} active={sort.key === "card"} direction={sort.dir} onClick={() => toggle("card")} className="hidden lg:table-cell" />
+                  <SortHeader label={t("start")} active={sort.key === "start"} direction={sort.dir} onClick={() => toggle("start")} />
+                  <SortHeader label={t("time")} active={sort.key === "time"} direction={sort.dir} onClick={() => toggle("time")} />
+                  <SortHeader label={t("status")} active={sort.key === "status"} direction={sort.dir} onClick={() => toggle("status")} />
+                  <th className="px-4 py-2.5 text-right font-medium text-slate-500 w-24">{t("actions")}</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
@@ -363,7 +365,7 @@ export function RunnerManagement() {
                               onClick={() => handlePrint(runner.id)}
                               disabled={printer.printing}
                               className="p-1.5 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded transition-colors cursor-pointer disabled:opacity-40"
-                              title="Print receipt"
+                              title={t("printReceipt")}
                             >
                               <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 17h2a2 2 0 002-2v-4a2 2 0 00-2-2H5a2 2 0 00-2 2v4a2 2 0 002 2h2m2 4h6a2 2 0 002-2v-4a2 2 0 00-2-2H9a2 2 0 00-2 2v4a2 2 0 002 2zm8-12V5a2 2 0 00-2-2H9a2 2 0 00-2 2v4h10z" />
@@ -373,7 +375,7 @@ export function RunnerManagement() {
                           <button
                             onClick={() => handleDelete(runner.id, runner.name)}
                             className="p-1.5 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded transition-colors cursor-pointer"
-                            title="Remove runner"
+                            title={t("removeRunner")}
                           >
                             <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
@@ -428,9 +430,9 @@ export function RunnerManagement() {
             }}
             className="text-sm border border-slate-200 rounded px-2.5 py-1.5 focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white cursor-pointer"
           >
-            <option value="status">Set Status</option>
-            <option value="class">Set Class</option>
-            <option value="club">Set Club</option>
+            <option value="status">{t("bulkSetStatus")}</option>
+            <option value="class">{t("bulkSetClass")}</option>
+            <option value="club">{t("bulkSetClub")}</option>
           </select>
 
           {bulkField === "status" && (
@@ -439,7 +441,7 @@ export function RunnerManagement() {
               onChange={(e) => setBulkValue(e.target.value)}
               className="text-sm border border-slate-200 rounded px-2.5 py-1.5 focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white cursor-pointer min-w-[140px]"
             >
-              <option value="">Select status...</option>
+              <option value="">{t("selectStatus")}</option>
               {STATUS_FILTER_OPTIONS.filter(o => o.value !== "").map(opt => (
                 <option key={opt.value} value={opt.value}>{opt.label}</option>
               ))}
@@ -452,7 +454,7 @@ export function RunnerManagement() {
               onChange={(e) => setBulkValue(e.target.value)}
               className="text-sm border border-slate-200 rounded px-2.5 py-1.5 focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white cursor-pointer min-w-[140px]"
             >
-              <option value="">Select class...</option>
+              <option value="">{t("selectClass")}</option>
               {classes.data?.classes.map(cls => (
                 <option key={cls.id} value={cls.id}>{cls.name}</option>
               ))}
@@ -465,7 +467,7 @@ export function RunnerManagement() {
               onChange={(e) => setBulkValue(e.target.value)}
               className="text-sm border border-slate-200 rounded px-2.5 py-1.5 focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white cursor-pointer min-w-[140px]"
             >
-              <option value="">Select club...</option>
+              <option value="">{t("selectClub")}</option>
               {clubs.data?.map(club => (
                 <option key={club.id} value={club.id}>{club.name}</option>
               ))}
@@ -480,7 +482,7 @@ export function RunnerManagement() {
             {bulkUpdateMutation.isPending && (
               <div className="w-3 h-3 border-2 border-white/30 border-t-white rounded-full animate-spin" />
             )}
-            Apply to {selection.count}
+            {t("applyToCount", { count: selection.count })}
           </button>
         </div>
       </BulkActionBar>

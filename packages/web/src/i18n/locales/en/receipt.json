@@ -1,0 +1,21 @@
+{
+  "start": "Start",
+  "finish": "Finish",
+  "runningTime": "Running time",
+  "position": "Position",
+  "splitHeader": "Nr.  Cod  Split      Time  Total  Pace",
+  "fin": "Fin",
+  "battery": "Battery",
+  "competitionInfo": "Competition information",
+  "registration": "REGISTRATION",
+  "name": "Name",
+  "club": "Club",
+  "class": "Class",
+  "siCard": "SI Card",
+  "payment": "Payment",
+  "amount": "Amount",
+  "freeStart": "Free start",
+  "printed": "Printed",
+  "tagline": "Lightweight orienteering management",
+  "missing": "MISSING"
+}

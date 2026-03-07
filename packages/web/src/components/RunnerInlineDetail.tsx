@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from "react";
+import { useTranslation } from "react-i18next";
 import { trpc } from "../lib/trpc";
 import {
   formatMeosTime,
@@ -19,6 +20,7 @@ interface Props {
 }
 
 export function RunnerInlineDetail({ runnerId, colSpan }: Props) {
+  const { t } = useTranslation("runners");
   const runner = trpc.runner.getById.useQuery({ id: runnerId });
   const readout = trpc.cardReadout.readoutByRunner.useQuery(
     { runnerId },
@@ -82,7 +84,7 @@ export function RunnerInlineDetail({ runnerId, colSpan }: Props) {
         <td colSpan={colSpan} className="px-4 py-4 bg-blue-50/50">
           <div className="flex items-center gap-2 text-sm text-slate-500">
             <div className="w-4 h-4 border-2 border-blue-300 border-t-blue-600 rounded-full animate-spin" />
-            Loading...
+            {t("loading")}
           </div>
         </td>
       </tr>
@@ -118,72 +120,72 @@ export function RunnerInlineDetail({ runnerId, colSpan }: Props) {
             {saving && (
               <span className="text-xs text-blue-500 flex items-center gap-1">
                 <div className="w-3 h-3 border-2 border-blue-300 border-t-blue-600 rounded-full animate-spin" />
-                Saving...
+                {t("saving")}
               </span>
             )}
             {!saving && lastSaved > 0 && Date.now() - lastSaved < 3000 && (
-              <span className="text-xs text-emerald-600">Saved</span>
+              <span className="text-xs text-emerald-600">{t("saved")}</span>
             )}
           </div>
 
           <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-x-6 gap-y-3">
             {/* Editable fields */}
             <EditField
-              label="Name"
+              label={t("name")}
               value={r.name}
               onChange={(v) => debouncedSave("name", v)}
             />
             <SelectField
-              label="Class"
+              label={t("class")}
               runnerId={runnerId}
               field="classId"
               currentValue={r.classId}
               debouncedSave={debouncedSave}
             />
             <SelectClubField
-              label="Club"
+              label={t("club")}
               runnerId={runnerId}
               currentValue={r.clubId}
               debouncedSave={debouncedSave}
             />
             <EditField
-              label="SI Card"
+              label={t("siCard")}
               value={r.cardNo > 0 ? String(r.cardNo) : ""}
               type="number"
               onChange={(v) => debouncedSave("cardNo", parseInt(v, 10) || 0)}
             />
             <EditField
-              label="Start Time"
+              label={t("startTime")}
               value={r.startTime > 0 ? formatMeosTime(r.startTime) : ""}
               placeholder="HH:MM:SS"
               onChange={(v) => debouncedSave("startTime", parseMeosTime(v))}
             />
             <EditField
-              label="Finish Time"
+              label={t("finishTime")}
               value={r.finishTime > 0 ? formatMeosTime(r.finishTime) : ""}
               placeholder="HH:MM:SS"
               onChange={(v) => debouncedSave("finishTime", parseMeosTime(v))}
             />
             <ReadonlyField
-              label="Running Time"
+              label={t("runningTime")}
               value={runningTime > 0 ? formatRunningTime(runningTime) : "-"}
               bold
             />
             <div>
-              <label className="block text-xs text-slate-500 mb-1">Status</label>
+              <label className="block text-xs text-slate-500 mb-1">{t("status")}</label>
               <StatusSelect
                 value={r.status}
                 onChange={(v) => debouncedSave("status", v)}
               />
             </div>
             <EditField
-              label="Bib"
+              label={t("bib")}
               value={r.bib}
               onChange={(v) => debouncedSave("bib", v)}
               className="hidden sm:block"
             />
             <EditField
-              label="Birth Year"
+              label={t("birthYear")}
               value={r.birthYear > 0 ? String(r.birthYear) : ""}
               type="number"
               onChange={(v) =>
@@ -192,28 +194,28 @@ export function RunnerInlineDetail({ runnerId, colSpan }: Props) {
               className="hidden sm:block"
             />
             <div className="hidden sm:block">
-              <label className="block text-xs text-slate-500 mb-1">Sex</label>
+              <label className="block text-xs text-slate-500 mb-1">{t("sex")}</label>
               <SexSelect
                 value={r.sex}
                 onChange={(v) => debouncedSave("sex", v)}
               />
             </div>
             <EditField
-              label="Nationality"
+              label={t("nationality")}
               value={r.nationality}
               onChange={(v) => debouncedSave("nationality", v)}
               placeholder="e.g. SWE"
               className="hidden sm:block"
             />
             <EditField
-              label="Phone"
+              label={t("phone")}
               value={r.phone}
               onChange={(v) => debouncedSave("phone", v)}
               className="hidden sm:block"
             />
             {r.entryDate > 0 && (
               <ReadonlyField
-                label="Entry Date"
+                label={t("entryDate")}
                 value={formatEntryDate(r.entryDate)}
               />
             )}
@@ -263,7 +265,7 @@ export function RunnerInlineDetail({ runnerId, colSpan }: Props) {
               {mispunchMapInfo && (
                 <div className="mt-4 pt-4 border-t border-blue-100">
                   <div className="flex items-center justify-between mb-2">
-                    <span className="text-sm font-medium text-slate-600">Course Map</span>
+                    <span className="text-sm font-medium text-slate-600">{t("courseMap")}</span>
                     <span className="flex items-center gap-3 text-xs text-slate-500">
                       <span className="flex items-center gap-1">
                         <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
@@ -271,19 +273,19 @@ export function RunnerInlineDetail({ runnerId, colSpan }: Props) {
                           <line x1="4" y1="4" x2="10" y2="10" stroke="#ef4444" strokeWidth="1.5" strokeLinecap="round" />
                           <line x1="10" y1="4" x2="4" y2="10" stroke="#ef4444" strokeWidth="1.5" strokeLinecap="round" />
                         </svg>
-                        Missing
+                        {t("missing")}
                       </span>
                       <span className="flex items-center gap-1">
                         <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
                           <circle cx="7" cy="7" r="5.5" stroke="#f97316" strokeWidth="1.5" />
                         </svg>
-                        Extra punch
+                        {t("extraPunch")}
                       </span>
                       <span className="flex items-center gap-1">
                         <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
                           <circle cx="7" cy="7" r="5.5" stroke="#059669" strokeWidth="1.5" />
                         </svg>
-                        Correct
+                        {t("correct")}
                       </span>
                     </span>
                   </div>
@@ -380,6 +382,7 @@ function SexSelect({
   value: string;
   onChange: (v: string) => void;
 }) {
+  const { t } = useTranslation("runners");
   return (
     <select
       value={value}
@@ -387,8 +390,8 @@ function SexSelect({
       className="w-full px-2 py-1.5 text-sm border border-slate-200 rounded-md bg-white focus:outline-none focus:ring-2 focus:ring-blue-400 cursor-pointer"
     >
       <option value="">-</option>
-      <option value="M">Male</option>
-      <option value="F">Female</option>
+      <option value="M">{t("male")}</option>
+      <option value="F">{t("female")}</option>
     </select>
   );
 }
@@ -406,6 +409,7 @@ function SelectField({
   currentValue: number;
   debouncedSave: (field: string, value: number) => void;
 }) {
+  const { t } = useTranslation("runners");
   const dashboard = trpc.competition.dashboard.useQuery();
   return (
     <div>
@@ -414,7 +418,7 @@ function SelectField({
         value={currentValue}
         onChange={(v) => debouncedSave(field, Number(v))}
         placeholder="-"
-        searchPlaceholder="Search classes..."
+        searchPlaceholder={t("searchClasses")}
         options={[
           { value: 0, label: "-" },
           ...(dashboard.data?.classes.map((c) => ({
@@ -428,19 +432,21 @@ function SelectField({
 }
 
 /** Status options for the dropdown, ordered by typical usage */
-const STATUS_OPTIONS: { value: RunnerStatusValue; label: string; badgeClass: string }[] = [
-  { value: RunnerStatus.Unknown, label: "Unknown (no result)", badgeClass: "bg-slate-100 text-slate-500" },
-  { value: RunnerStatus.OK, label: "OK", badgeClass: "bg-green-100 text-green-800" },
-  { value: RunnerStatus.MissingPunch, label: "MP — Missing Punch", badgeClass: "bg-red-100 text-red-800" },
-  { value: RunnerStatus.DNF, label: "DNF — Did Not Finish", badgeClass: "bg-orange-100 text-orange-800" },
-  { value: RunnerStatus.DNS, label: "DNS — Did Not Start", badgeClass: "bg-slate-100 text-slate-600" },
-  { value: RunnerStatus.DQ, label: "DQ — Disqualified", badgeClass: "bg-red-100 text-red-800" },
-  { value: RunnerStatus.OverMaxTime, label: "Over Max Time", badgeClass: "bg-orange-100 text-orange-800" },
-  { value: RunnerStatus.NoTiming, label: "No Timing", badgeClass: "bg-slate-100 text-slate-500" },
-  { value: RunnerStatus.OutOfCompetition, label: "Out of Competition", badgeClass: "bg-slate-100 text-slate-500" },
-  { value: RunnerStatus.Cancel, label: "Cancelled", badgeClass: "bg-slate-100 text-slate-500" },
-  { value: RunnerStatus.NotCompeting, label: "Not Competing", badgeClass: "bg-slate-100 text-slate-500" },
-];
+function getStatusOptions(t: (key: string) => string): { value: RunnerStatusValue; label: string; badgeClass: string }[] {
+  return [
+    { value: RunnerStatus.Unknown, label: t("statusUnknown"), badgeClass: "bg-slate-100 text-slate-500" },
+    { value: RunnerStatus.OK, label: "OK", badgeClass: "bg-green-100 text-green-800" },
+    { value: RunnerStatus.MissingPunch, label: t("statusMP"), badgeClass: "bg-red-100 text-red-800" },
+    { value: RunnerStatus.DNF, label: t("statusDNF"), badgeClass: "bg-orange-100 text-orange-800" },
+    { value: RunnerStatus.DNS, label: t("statusDNS"), badgeClass: "bg-slate-100 text-slate-600" },
+    { value: RunnerStatus.DQ, label: t("statusDQ"), badgeClass: "bg-red-100 text-red-800" },
+    { value: RunnerStatus.OverMaxTime, label: t("statusOverMaxTime"), badgeClass: "bg-orange-100 text-orange-800" },
+    { value: RunnerStatus.NoTiming, label: t("statusNoTiming"), badgeClass: "bg-slate-100 text-slate-500" },
+    { value: RunnerStatus.OutOfCompetition, label: t("statusOutOfCompetition"), badgeClass: "bg-slate-100 text-slate-500" },
+    { value: RunnerStatus.Cancel, label: t("statusCancelled"), badgeClass: "bg-slate-100 text-slate-500" },
+    { value: RunnerStatus.NotCompeting, label: t("statusNotCompeting"), badgeClass: "bg-slate-100 text-slate-500" },
+  ];
+}
 
 function StatusBadgeInline({ badgeClass, label }: { badgeClass: string; label: string }) {
   // Extract the short code (e.g. "OK", "MP", "DNF") from the label
@@ -459,13 +465,15 @@ function StatusSelect({
   value: number;
   onChange: (v: number) => void;
 }) {
+  const { t } = useTranslation("runners");
+  const statusOptions = getStatusOptions(t as (key: string) => string);
   return (
     <SearchableSelect
       value={value}
       onChange={(v) => onChange(Number(v))}
-      placeholder="Select status..."
-      searchPlaceholder="Search statuses..."
-      options={STATUS_OPTIONS.map((opt) => ({
+      placeholder={t("selectStatus")}
+      searchPlaceholder={t("searchStatuses")}
+      options={statusOptions.map((opt) => ({
         value: opt.value,
         label: opt.label,
         icon: <StatusBadgeInline badgeClass={opt.badgeClass} label={opt.label} />,
@@ -485,6 +493,7 @@ function SelectClubField({
   currentValue: number;
   debouncedSave: (field: string, value: number) => void;
 }) {
+  const { t } = useTranslation("runners");
   const clubs = trpc.competition.clubs.useQuery();
   return (
     <div>
@@ -492,10 +501,10 @@ function SelectClubField({
       <SearchableSelect
         value={currentValue}
         onChange={(v) => debouncedSave("clubId", Number(v))}
-        placeholder="- None -"
-        searchPlaceholder="Search clubs..."
+        placeholder={t("noClub")}
+        searchPlaceholder={t("searchClubs")}
         options={[
-          { value: 0, label: "- None -" },
+          { value: 0, label: t("noClub") },
           ...(clubs.data?.map((c) => ({
             value: c.id,
             label: c.name,

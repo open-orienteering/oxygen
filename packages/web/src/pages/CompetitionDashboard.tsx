@@ -1,10 +1,12 @@
 import { useState, useMemo } from "react";
 import { useNavigate } from "react-router-dom";
+import { useTranslation } from "react-i18next";
 import { trpc } from "../lib/trpc";
 import { MapPanel } from "../components/MapPanel";
 import { SearchableSelect, type SelectOption } from "../components/SearchableSelect";
 
 function CompetitionProgressBar({ courseId }: { courseId?: number }) {
+  const { t } = useTranslation("dashboard");
   const completion = trpc.course.controlCompletionStatus.useQuery(
     courseId ? { courseId } : undefined,
     {
@@ -27,11 +29,11 @@ function CompetitionProgressBar({ courseId }: { courseId?: number }) {
       <div className="flex items-center justify-between mb-2">
         <div className="flex items-center gap-2">
           <span className="text-xs font-semibold text-slate-500 uppercase tracking-wider">
-            Competition Progress
+            {t("competitionProgress")}
           </span>
           {isComplete && (
             <span className="text-xs font-semibold text-emerald-600 bg-emerald-50 px-2 py-0.5 rounded-full">
-              Complete
+              {t("complete")}
             </span>
           )}
         </div>
@@ -39,7 +41,7 @@ function CompetitionProgressBar({ courseId }: { courseId?: number }) {
           <span className="font-bold text-slate-900">{totalPassed.toLocaleString()}</span>
           <span className="text-slate-400"> / </span>
           <span>{totalExpected.toLocaleString()}</span>
-          <span className="text-slate-400 ml-1">control punches</span>
+          <span className="text-slate-400 ml-1">{t("controlPunches")}</span>
         </div>
       </div>
       <div className="relative w-full h-3 bg-slate-100 rounded-full overflow-hidden">
@@ -60,7 +62,7 @@ function CompetitionProgressBar({ courseId }: { courseId?: number }) {
           {pctDisplay}%
         </span>
         <span className="text-xs text-slate-400">
-          {completion.data.length} controls
+          {t("controlsCount", { count: completion.data.length })}
         </span>
       </div>
     </div>
@@ -68,6 +70,7 @@ function CompetitionProgressBar({ courseId }: { courseId?: number }) {
 }
 
 export function CompetitionDashboard() {
+  const { t } = useTranslation("dashboard");
   const navigate = useNavigate();
   const dashboard = trpc.competition.dashboard.useQuery();
   const [selectedClassId, setSelectedClassId] = useState<number | null>(null);
@@ -79,7 +82,7 @@ export function CompetitionDashboard() {
     return dashboard.data.classes.map((cls) => ({
       value: cls.id,
       label: cls.name,
-      suffix: `${cls.runnerCount} runners`,
+      suffix: t("runnersCount", { count: cls.runnerCount }),
     }));
   }, [dashboard.data]);
 
@@ -115,32 +118,32 @@ export function CompetitionDashboard() {
     <>
       {/* Stats Cards */}
       <div className="grid grid-cols-2 sm:grid-cols-5 gap-4 mb-4">
-        <StatCard label="Runners" value={d.totalRunners} onClick={() => navigate("runners")} />
-        <StatCard label="Clubs" value={d.totalClubs} onClick={() => navigate("clubs")} />
-        <StatCard label="Classes" value={d.classes.length} onClick={() => navigate("classes")} />
-        <StatCard label="Courses" value={d.totalCourses} onClick={() => navigate("courses")} />
-        <StatCard label="Controls" value={d.totalControls} onClick={() => navigate("controls")} />
+        <StatCard label={t("runners")} value={d.totalRunners} onClick={() => navigate("runners")} />
+        <StatCard label={t("clubs")} value={d.totalClubs} onClick={() => navigate("clubs")} />
+        <StatCard label={t("classes")} value={d.classes.length} onClick={() => navigate("classes")} />
+        <StatCard label={t("courses")} value={d.totalCourses} onClick={() => navigate("courses")} />
+        <StatCard label={t("controls")} value={d.totalControls} onClick={() => navigate("controls")} />
       </div>
 
       {/* Race Status Cards */}
       <div className="grid grid-cols-3 gap-4 mb-6">
         <StatusCard
-          label="Not Yet Started"
-          description="Still waiting to start"
+          label={t("notYetStarted")}
+          description={t("stillWaiting")}
           value={sc.notStarted}
           color="slate"
           onClick={() => navigate("runners?status=not-started")}
         />
         <StatusCard
-          label="In the Forest"
-          description="Started, awaiting finish"
+          label={t("inTheForest")}
+          description={t("awaitingFinish")}
           value={sc.inForest}
           color="amber"
           onClick={() => navigate("runners?status=in-forest")}
         />
         <StatusCard
-          label="Finished"
-          description="Result booked (including DNS)"
+          label={t("finished")}
+          description={t("resultBooked")}
           value={sc.finished}
           color="emerald"
           onClick={() => navigate("results?status=finished")}
@@ -163,15 +166,15 @@ export function CompetitionDashboard() {
         toolbar={
           <>
             <h2 className="text-sm font-semibold text-slate-500 uppercase tracking-wider">
-              Map
+              {t("map")}
             </h2>
             <div className="w-64">
               <SearchableSelect
                 value={selectedClassId ?? ""}
                 onChange={(v) => setSelectedClassId(v ? Number(v) : null)}
-                options={[{ value: "", label: "All classes" }, ...classOptions]}
-                placeholder="Filter by class..."
-                searchPlaceholder="Search class..."
+                options={[{ value: "", label: t("allClasses") }, ...classOptions]}
+                placeholder={t("filterByClass")}
+                searchPlaceholder={t("searchClass")}
                 className="text-sm"
               />
             </div>

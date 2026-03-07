@@ -35,6 +35,34 @@ export interface LogoRaster {
   data: Uint8Array;      // widthBytes × heightDots bytes, MSB-first, 1=black
 }
 
+/** Translatable label strings for the finish receipt. All have English defaults in escpos.ts. */
+export interface FinishReceiptLabels {
+  start?: string;
+  finish?: string;
+  splitHeader?: string;
+  fin?: string;
+  battery?: string;
+  position?: string;
+  competitionInfo?: string;
+  tagline?: string;
+  missing?: string;
+}
+
+/** Translatable label strings for the registration receipt. All have English defaults in escpos.ts. */
+export interface RegistrationReceiptLabels {
+  registration?: string;
+  name?: string;
+  club?: string;
+  class?: string;
+  siCard?: string;
+  start?: string;
+  freeStart?: string;
+  payment?: string;
+  amount?: string;
+  printed?: string;
+  tagline?: string;
+}
+
 /** All data needed to format and print a finish receipt. */
 export interface FinishReceiptData {
   competitionName: string;
@@ -74,6 +102,8 @@ export interface FinishReceiptData {
   qrUrl?: string | null;
   /** Optional custom message to print on the receipt. */
   customMessage?: string;
+  /** Translated labels for receipt strings. English defaults used when omitted. */
+  labels?: FinishReceiptLabels;
 }
 
 /** All data needed to format and print a registration receipt. */
@@ -94,4 +124,6 @@ export interface RegistrationReceiptData {
   logoRaster?: LogoRaster | null;
   /** Optional custom message to print on the receipt. */
   customMessage?: string;
+  /** Translated labels for receipt strings. English defaults used when omitted. */
+  labels?: RegistrationReceiptLabels;
 }

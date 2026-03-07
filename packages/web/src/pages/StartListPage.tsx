@@ -1,4 +1,5 @@
 import { useMemo, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { trpc } from "../lib/trpc";
 import { formatMeosTime } from "@oxygen/shared";
 import { RunnerInlineDetail } from "../components/RunnerInlineDetail";
@@ -21,6 +22,7 @@ function matchesSearch(
 }
 
 export function StartListPage() {
+  const { t } = useTranslation("results");
   const [search, setSearch] = useSearchParam("search");
   const [classFilter, setClassFilter] = useNumericSearchParam("class");
   const [clubFilter, setClubFilter] = useNumericSearchParam("club");
@@ -86,14 +88,14 @@ export function StartListPage() {
     <>
       <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 mb-6">
         <div className="flex items-center gap-3">
-          <h2 className="text-lg font-semibold text-slate-900">Start List</h2>
+          <h2 className="text-lg font-semibold text-slate-900">{t("startList")}</h2>
           <div className="flex items-center rounded-lg border border-slate-200 overflow-hidden">
             <button
               onClick={() => setFlatView(false)}
               className={`px-2.5 py-1.5 text-sm font-medium transition-colors cursor-pointer ${
                 !flatView ? "bg-blue-50 text-blue-700" : "text-slate-500 hover:bg-slate-50"
               }`}
-              title="Group by class"
+              title={t("groupByClass")}
             >
               <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                 <path strokeLinecap="round" strokeLinejoin="round" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10" />
@@ -104,7 +106,7 @@ export function StartListPage() {
               className={`px-2.5 py-1.5 text-sm font-medium transition-colors cursor-pointer ${
                 flatView ? "bg-blue-50 text-blue-700" : "text-slate-500 hover:bg-slate-50"
               }`}
-              title="Flat list (all runners)"
+              title={t("flatList")}
             >
               <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                 <path strokeLinecap="round" strokeLinejoin="round" d="M4 6h16M4 10h16M4 14h16M4 18h16" />
@@ -119,7 +121,7 @@ export function StartListPage() {
             <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
             </svg>
-            Draw Start Times
+            {t("drawStartTimes")}
           </button>
         </div>
         <div className="flex flex-col sm:flex-row gap-3 w-full sm:w-auto">
@@ -129,7 +131,7 @@ export function StartListPage() {
             </svg>
             <input
               type="text"
-              placeholder="Search name, club, or card..."
+              placeholder={t("searchNameClubCard")}
               value={search}
               onChange={(e) => setSearch(e.target.value)}
               className="w-full sm:w-64 pl-10 pr-4 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent bg-white"
@@ -139,10 +141,10 @@ export function StartListPage() {
             testId="class-filter"
             value={classFilter ?? ""}
             onChange={(v) => setClassFilter(v ? Number(v) : undefined)}
-            placeholder="All classes"
-            searchPlaceholder="Search classes..."
+            placeholder={t("allClasses")}
+            searchPlaceholder={t("searchClasses")}
             options={[
-              { value: "", label: "All classes" },
+              { value: "", label: t("allClasses") },
               ...(dashboard.data?.classes.map((c) => ({
                 value: c.id,
                 label: c.name,
@@ -154,10 +156,10 @@ export function StartListPage() {
             testId="club-filter"
             value={clubFilter ?? ""}
             onChange={(v) => setClubFilter(v ? Number(v) : undefined)}
-            placeholder="All clubs"
-            searchPlaceholder="Search clubs..."
+            placeholder={t("allClubs")}
+            searchPlaceholder={t("searchClubs")}
             options={[
-              { value: "", label: "All clubs" },
+              { value: "", label: t("allClubs") },
               ...(clubs.data?.map((c) => ({
                 value: c.id,
                 label: c.name,
@@ -176,7 +178,7 @@ export function StartListPage() {
 
       {search.trim() && (
         <div className="text-sm text-slate-500 mb-4">
-          {filtered.length} {filtered.length === 1 ? "result" : "results"} for &ldquo;{search}&rdquo;
+          {t("resultCount", { count: filtered.length })} {t("forQuery", { query: search })}
         </div>
       )}
 
@@ -185,12 +187,12 @@ export function StartListPage() {
           <table className="w-full text-sm">
             <thead>
               <tr className="bg-slate-50 border-b border-slate-200">
-                <SortHeader label="Start #" active={sort.key === "startNo"} direction={sort.dir} onClick={() => toggle("startNo")} className="w-16" />
-                <SortHeader label="Start Time" active={sort.key === "startTime"} direction={sort.dir} onClick={() => toggle("startTime")} />
-                <SortHeader label="Name" active={sort.key === "name"} direction={sort.dir} onClick={() => toggle("name")} />
-                <SortHeader label="Class" active={sort.key === "class"} direction={sort.dir} onClick={() => toggle("class")} />
-                <SortHeader label="Club" active={sort.key === "club"} direction={sort.dir} onClick={() => toggle("club")} className="hidden sm:table-cell" />
-                <SortHeader label="Card" active={sort.key === "card"} direction={sort.dir} onClick={() => toggle("card")} className="hidden md:table-cell" />
+                <SortHeader label={t("startNoHash")} active={sort.key === "startNo"} direction={sort.dir} onClick={() => toggle("startNo")} className="w-16" />
+                <SortHeader label={t("startTime")} active={sort.key === "startTime"} direction={sort.dir} onClick={() => toggle("startTime")} />
+                <SortHeader label={t("name")} active={sort.key === "name"} direction={sort.dir} onClick={() => toggle("name")} />
+                <SortHeader label={t("class")} active={sort.key === "class"} direction={sort.dir} onClick={() => toggle("class")} />
+                <SortHeader label={t("club")} active={sort.key === "club"} direction={sort.dir} onClick={() => toggle("club")} className="hidden sm:table-cell" />
+                <SortHeader label={t("card")} active={sort.key === "card"} direction={sort.dir} onClick={() => toggle("card")} className="hidden md:table-cell" />
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
@@ -243,18 +245,18 @@ export function StartListPage() {
                 {className}
               </h3>
               <span className="text-xs text-slate-400">
-                {classEntries.length} runners
+                {t("runnersCount", { count: classEntries.length })}
               </span>
             </div>
             <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
               <table className="w-full text-sm">
                 <thead>
                   <tr className="bg-slate-50 border-b border-slate-200">
-                    <SortHeader label="Start #" active={sort.key === "startNo"} direction={sort.dir} onClick={() => toggle("startNo")} className="w-16" />
-                    <SortHeader label="Start Time" active={sort.key === "startTime"} direction={sort.dir} onClick={() => toggle("startTime")} />
-                    <SortHeader label="Name" active={sort.key === "name"} direction={sort.dir} onClick={() => toggle("name")} />
-                    <SortHeader label="Club" active={sort.key === "club"} direction={sort.dir} onClick={() => toggle("club")} className="hidden sm:table-cell" />
-                    <SortHeader label="Card" active={sort.key === "card"} direction={sort.dir} onClick={() => toggle("card")} className="hidden md:table-cell" />
+                    <SortHeader label={t("startNoHash")} active={sort.key === "startNo"} direction={sort.dir} onClick={() => toggle("startNo")} className="w-16" />
+                    <SortHeader label={t("startTime")} active={sort.key === "startTime"} direction={sort.dir} onClick={() => toggle("startTime")} />
+                    <SortHeader label={t("name")} active={sort.key === "name"} direction={sort.dir} onClick={() => toggle("name")} />
+                    <SortHeader label={t("club")} active={sort.key === "club"} direction={sort.dir} onClick={() => toggle("club")} className="hidden sm:table-cell" />
+                    <SortHeader label={t("card")} active={sort.key === "card"} direction={sort.dir} onClick={() => toggle("card")} className="hidden md:table-cell" />
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
@@ -302,7 +304,7 @@ export function StartListPage() {
 
       {filtered.length === 0 && !startList.isLoading && (
         <div className="text-center py-20 text-slate-400">
-          {search.trim() ? "No matching entries found" : "No start list entries found"}
+          {search.trim() ? t("noMatchingEntries") : t("noStartListEntries")}
         </div>
       )}
 

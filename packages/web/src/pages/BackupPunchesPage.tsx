@@ -1,4 +1,5 @@
 import { useMemo, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { trpc } from "../lib/trpc";
 import { useSort } from "../hooks/useSort";
 import { SortHeader } from "../components/SortHeader";
@@ -52,6 +53,7 @@ const comparators: Record<string, (a: BackupPunch, b: BackupPunch) => number> = 
 };
 
 export function BackupPunchesPage() {
+  const { t } = useTranslation("controls");
   const [filter, setFilter] = useState<"all" | "new" | "pushed">("all");
 
   const allPunches = trpc.control.listAllBackupPunches.useQuery();
@@ -83,11 +85,11 @@ export function BackupPunchesPage() {
       <div className="flex items-center justify-between mb-4">
         <div className="flex items-center gap-4">
           <h2 className="text-sm font-medium text-slate-500">
-            {totalPunches} backup punches from {controlCount} controls
+            {t("backupPunchesTitle", { count: totalPunches, controls: controlCount })}
           </h2>
           {newCount > 0 && (
             <span className="text-xs font-medium text-amber-700 bg-amber-100 px-2 py-0.5 rounded-full">
-              {newCount} not pushed
+              {t("notPushedCount", { count: newCount })}
             </span>
           )}
         </div>
@@ -102,7 +104,7 @@ export function BackupPunchesPage() {
                   : "bg-white border border-slate-200 text-slate-600 hover:bg-slate-50"
               }`}
             >
-              {f === "all" ? "All" : f === "new" ? "Not pushed" : "Pushed"}
+              {f === "all" ? t("filterAll") : f === "new" ? t("filterNotPushed") : t("filterPushed")}
             </button>
           ))}
         </div>
@@ -116,7 +118,7 @@ export function BackupPunchesPage() {
 
       {!allPunches.isLoading && totalPunches === 0 && (
         <div className="bg-white rounded-xl border border-slate-200 p-8 text-center text-slate-400 text-sm">
-          No backup punches imported yet. Use the "Read Controls" panel on the Controls page to read backup memory from field controls.
+          {t("noBackupPunchesImported")}
         </div>
       )}
 
@@ -126,12 +128,12 @@ export function BackupPunchesPage() {
             <table className="w-full text-sm">
               <thead>
                 <tr className="text-xs border-b border-slate-100">
-                  <SortHeader label="Control" active={sort.key === "control"} direction={sort.dir} onClick={() => toggle("control")} />
-                  <SortHeader label="Card" active={sort.key === "card"} direction={sort.dir} onClick={() => toggle("card")} />
-                  <SortHeader label="Time" active={sort.key === "time"} direction={sort.dir} onClick={() => toggle("time")} />
-                  <SortHeader label="Runner" active={sort.key === "runner"} direction={sort.dir} onClick={() => toggle("runner")} />
-                  <SortHeader label="Imported" active={sort.key === "imported"} direction={sort.dir} onClick={() => toggle("imported")} />
-                  <SortHeader label="Status" active={sort.key === "status"} direction={sort.dir} onClick={() => toggle("status")} align="right" />
+                  <SortHeader label={t("control")} active={sort.key === "control"} direction={sort.dir} onClick={() => toggle("control")} />
+                  <SortHeader label={t("card")} active={sort.key === "card"} direction={sort.dir} onClick={() => toggle("card")} />
+                  <SortHeader label={t("time")} active={sort.key === "time"} direction={sort.dir} onClick={() => toggle("time")} />
+                  <SortHeader label={t("runner")} active={sort.key === "runner"} direction={sort.dir} onClick={() => toggle("runner")} />
+                  <SortHeader label={t("imported")} active={sort.key === "imported"} direction={sort.dir} onClick={() => toggle("imported")} />
+                  <SortHeader label={t("status")} active={sort.key === "status"} direction={sort.dir} onClick={() => toggle("status")} align="right" />
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-50">
@@ -155,14 +157,14 @@ export function BackupPunchesPage() {
                     </td>
                     <td className="px-4 py-2 text-right">
                       {p.pushedToPunch ? (
-                        <span className="text-xs text-green-600 font-medium">Pushed</span>
+                        <span className="text-xs text-green-600 font-medium">{t("pushed")}</span>
                       ) : (
                         <button
                           onClick={() => pushMutation.mutate({ punchId: p.id })}
                           disabled={pushMutation.isPending}
                           className="text-xs text-blue-600 hover:text-blue-800 font-medium cursor-pointer"
                         >
-                          Push to oPunch
+                          {t("pushToOPunch")}
                         </button>
                       )}
                     </td>

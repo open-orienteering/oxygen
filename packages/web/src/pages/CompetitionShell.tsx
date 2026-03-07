@@ -7,6 +7,7 @@ import {
   Route,
   Navigate,
 } from "react-router-dom";
+import { useTranslation } from "react-i18next";
 import { trpc } from "../lib/trpc";
 import { CompetitionDashboard } from "./CompetitionDashboard";
 import { RunnerManagement } from "./RunnerManagement";
@@ -25,6 +26,7 @@ import { TestLabPage } from "./TestLabPage";
 import { BackupPunchesPage } from "./BackupPunchesPage";
 import { RegistrationPage } from "./RegistrationPage";
 import { ClubLogo } from "../components/ClubLogo";
+import { LanguageSelector } from "../components/LanguageSelector";
 import { useDeviceManager } from "../context/DeviceManager";
 import { usePrinter } from "../context/PrinterContext";
 import { CardNotification } from "../components/CardNotification";
@@ -34,30 +36,50 @@ import { useExternalChanges } from "../hooks/useExternalChanges";
 
 type Tab = "dashboard" | "event" | "runners" | "startlist" | "results" | "classes" | "courses" | "controls" | "clubs" | "start-station" | "finish-station" | "card-readout" | "cards" | "backup-punches" | "registration" | "test-lab";
 
-const tabs: { id: Tab; path: string; label: string; group?: string; countKey?: string; isOverflow?: boolean }[] = [
-  { id: "dashboard", path: "", label: "Dashboard" },
-  { id: "runners", path: "runners", label: "Runners", countKey: "runners" },
-  { id: "startlist", path: "startlist", label: "Start List", countKey: "startlist" },
-  { id: "results", path: "results", label: "Results", countKey: "results" },
-  { id: "classes", path: "classes", label: "Classes", countKey: "classes" },
-  { id: "courses", path: "courses", label: "Courses", countKey: "courses" },
-  { id: "controls", path: "controls", label: "Controls", countKey: "controls" },
-  { id: "cards", path: "cards", label: "Cards", countKey: "cards" }, // Primary now
+const tabLabelKeys = {
+  "dashboard": "dashboard",
+  "runners": "runners",
+  "startlist": "startList",
+  "results": "results",
+  "classes": "classes",
+  "courses": "courses",
+  "controls": "controls",
+  "cards": "cards",
+  "event": "event",
+  "clubs": "clubs",
+  "start-station": "startStation",
+  "finish-station": "finishStation",
+  "card-readout": "cardReadout",
+  "registration": "registration",
+  "backup-punches": "backupPunches",
+  "test-lab": "testLab",
+} as const satisfies Record<Tab, string>;
+
+const tabs: { id: Tab; path: string; group?: string; countKey?: string; isOverflow?: boolean }[] = [
+  { id: "dashboard", path: "" },
+  { id: "runners", path: "runners", countKey: "runners" },
+  { id: "startlist", path: "startlist", countKey: "startlist" },
+  { id: "results", path: "results", countKey: "results" },
+  { id: "classes", path: "classes", countKey: "classes" },
+  { id: "courses", path: "courses", countKey: "courses" },
+  { id: "controls", path: "controls", countKey: "controls" },
+  { id: "cards", path: "cards", countKey: "cards" },
   // Overflow items
-  { id: "event", path: "event", label: "Event", isOverflow: true },
-  { id: "clubs", path: "clubs", label: "Clubs", countKey: "clubs", isOverflow: true },
-  { id: "start-station", path: "start-station", label: "Start Station", group: "race", isOverflow: true },
-  { id: "finish-station", path: "finish-station", label: "Finish Station", group: "race", isOverflow: true },
-  { id: "card-readout", path: "card-readout", label: "Card Readout", group: "race", isOverflow: true },
-  { id: "registration", path: "registration", label: "Registration", group: "race", isOverflow: true },
-  { id: "backup-punches", path: "backup-punches", label: "Backup Punches", group: "race", isOverflow: true },
-  { id: "test-lab", path: "test-lab", label: "Test Lab", group: "dev", isOverflow: true },
+  { id: "event", path: "event", isOverflow: true },
+  { id: "clubs", path: "clubs", countKey: "clubs", isOverflow: true },
+  { id: "start-station", path: "start-station", group: "race", isOverflow: true },
+  { id: "finish-station", path: "finish-station", group: "race", isOverflow: true },
+  { id: "card-readout", path: "card-readout", group: "race", isOverflow: true },
+  { id: "registration", path: "registration", group: "race", isOverflow: true },
+  { id: "backup-punches", path: "backup-punches", group: "race", isOverflow: true },
+  { id: "test-lab", path: "test-lab", group: "dev", isOverflow: true },
 ];
 
 export function CompetitionShell() {
   const { nameId } = useParams<{ nameId: string }>();
   const navigate = useNavigate();
   const location = useLocation();
+  const { t } = useTranslation("nav");
 
   // Determine active tab from current URL path
   const pathAfterNameId = location.pathname.split(`/${nameId}/`)[1] ?? "";
@@ -122,16 +144,16 @@ export function CompetitionShell() {
       <div className="min-h-screen bg-slate-50 flex items-center justify-center p-4">
         <div className="text-center">
           <div className="text-red-500 text-lg font-medium mb-2">
-            Competition not found
+            {t("competitionNotFound")}
           </div>
           <p className="text-slate-500 text-sm mb-4">
-            Could not connect to competition &ldquo;{nameId}&rdquo;.
+            {t("couldNotConnect", { nameId })}
           </p>
           <button
             onClick={() => navigate("/")}
             className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors cursor-pointer"
           >
-            Back to competitions
+            {t("backToCompetitionList")}
           </button>
         </div>
       </div>
@@ -143,7 +165,7 @@ export function CompetitionShell() {
       <div className="min-h-screen bg-slate-50 flex items-center justify-center">
         <div className="text-center">
           <div className="inline-block w-8 h-8 border-4 border-blue-200 border-t-blue-600 rounded-full animate-spin" />
-          <p className="text-slate-500 mt-4">Loading competition...</p>
+          <p className="text-slate-500 mt-4">{t("loadingCompetition")}</p>
         </div>
       </div>
     );
@@ -159,7 +181,7 @@ export function CompetitionShell() {
               <button
                 onClick={() => navigate("/")}
                 className="p-2 -ml-2 text-slate-500 hover:text-slate-700 hover:bg-slate-100 rounded-lg transition-colors cursor-pointer"
-                title="Back to competition list"
+                title={t("backToCompetitions")}
               >
                 <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
@@ -183,7 +205,7 @@ export function CompetitionShell() {
               <StartScreenLauncher nameId={nameId ?? ""} />
               <DbLoadIndicator enabled={ready} />
               <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-800">
-                Connected
+                {t("connected", { ns: "common" })}
               </span>
             </div>
           </div>
@@ -200,7 +222,7 @@ export function CompetitionShell() {
                     : "border-transparent text-slate-500 hover:text-slate-700 hover:border-slate-300"
                     }`}
                 >
-                  {tab.label}
+                  {t(tabLabelKeys[tab.id])}
                   {tab.countKey && counts[tab.countKey] > 0 && (
                     <span aria-hidden="true" className={`ml-1 text-xs ${activeTab === tab.id ? "text-blue-400" : "text-slate-400"
                       }`}>
@@ -222,7 +244,7 @@ export function CompetitionShell() {
                     : "border-transparent text-slate-500 hover:text-slate-700 hover:border-slate-300"
                     }`}
                 >
-                  More
+                  {t("more")}
                   <svg className={`w-4 h-4 transition-transform ${showMoreMenu ? 'rotate-180' : ''}`} fill="none" viewBox="0 0 24 24" stroke="currentColor">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
                   </svg>
@@ -253,7 +275,7 @@ export function CompetitionShell() {
                           <span className="flex items-center gap-2">
                             {tab.group === "race" && <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />}
                             {tab.group === "dev" && <span className="w-1.5 h-1.5 rounded-full bg-amber-500" />}
-                            {tab.label}
+                            {t(tabLabelKeys[tab.id])}
                           </span>
                           {tab.countKey && counts[tab.countKey] > 0 && (
                             <span className="text-xs text-slate-400">
@@ -265,6 +287,10 @@ export function CompetitionShell() {
                       <div className="my-1 border-t border-slate-100" />
                       <div className="px-2 py-1">
                         <StartScreenLauncher nameId={nameId ?? ""} onLaunch={() => setShowMoreMenu(false)} />
+                      </div>
+                      <div className="my-1 border-t border-slate-100" />
+                      <div className="px-4 py-1.5">
+                        <LanguageSelector />
                       </div>
                     </div>
                   </>
@@ -310,6 +336,7 @@ export function CompetitionShell() {
 // ─── Kiosk Launcher ─────────────────────────────────────────
 
 function KioskLauncher({ nameId }: { nameId: string }) {
+  const { t } = useTranslation("nav");
   const { getKioskChannel } = useDeviceManager();
   const [connected, setConnected] = useState(false);
 
@@ -346,7 +373,7 @@ function KioskLauncher({ nameId }: { nameId: string }) {
         ? "text-emerald-700 bg-emerald-50 hover:bg-emerald-100"
         : "text-slate-500 hover:text-slate-700 hover:bg-slate-100"
         }`}
-      title={connected ? "Kiosk connected — click to open another window" : "Open kiosk display in a new window"}
+      title={connected ? t("kioskConnectedTitle") : t("openKioskTitle")}
       data-testid="kiosk-launcher"
     >
       {connected && (
@@ -355,7 +382,7 @@ function KioskLauncher({ nameId }: { nameId: string }) {
       <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
         <path strokeLinecap="round" strokeLinejoin="round" d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
       </svg>
-      Kiosk
+      {t("kiosk")}
     </button>
   );
 }
@@ -363,6 +390,7 @@ function KioskLauncher({ nameId }: { nameId: string }) {
 // ─── Start Screen Launcher ──────────────────────────────────
 
 function StartScreenLauncher({ nameId, onLaunch }: { nameId: string; onLaunch?: () => void }) {
+  const { t } = useTranslation("nav");
   const handleLaunch = useCallback(() => {
     const url = `/${nameId}/start-screen`;
     window.open(url, "oxygen-start-screen", "popup");
@@ -373,13 +401,13 @@ function StartScreenLauncher({ nameId, onLaunch }: { nameId: string; onLaunch?: 
     <button
       onClick={handleLaunch}
       className="inline-flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium text-slate-500 hover:text-slate-700 hover:bg-slate-100 rounded-full transition-colors cursor-pointer"
-      title="Open start screen display in a new window"
+      title={t("openStartScreenTitle")}
       data-testid="start-screen-launcher"
     >
       <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
         <path strokeLinecap="round" strokeLinejoin="round" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
       </svg>
-      Start
+      {t("startScreen")}
     </button>
   );
 }
@@ -387,6 +415,7 @@ function StartScreenLauncher({ nameId, onLaunch }: { nameId: string; onLaunch?: 
 // ─── Printer Status Indicator ───────────────────────────────
 
 function PrinterStatusIndicator() {
+  const { t } = useTranslation("nav");
   const { supported, connected, connect, disconnect } = usePrinter();
   const [showMenu, setShowMenu] = useState(false);
 
@@ -397,12 +426,12 @@ function PrinterStatusIndicator() {
       <button
         onClick={() => connect().catch(() => {})}
         className="inline-flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium text-slate-500 hover:text-slate-700 hover:bg-slate-100 rounded-full transition-colors cursor-pointer"
-        title="Connect receipt printer"
+        title={t("connectPrinterTitle")}
       >
         <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
           <path strokeLinecap="round" strokeLinejoin="round" d="M17 17h2a2 2 0 002-2v-4a2 2 0 00-2-2H5a2 2 0 00-2 2v4a2 2 0 002 2h2m2 4h6a2 2 0 002-2v-4a2 2 0 00-2-2H9a2 2 0 00-2 2v4a2 2 0 002 2zm8-12V5a2 2 0 00-2-2H9a2 2 0 00-2 2v4h10z" />
         </svg>
-        Connect Printer
+        {t("connectPrinter")}
       </button>
     );
   }
@@ -412,10 +441,10 @@ function PrinterStatusIndicator() {
       <button
         onClick={() => setShowMenu(!showMenu)}
         className="inline-flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium text-emerald-700 bg-emerald-50 hover:bg-emerald-100 rounded-full transition-colors cursor-pointer"
-        title="Printer connected"
+        title={t("printerConnectedTitle")}
       >
         <span className="w-2 h-2 bg-emerald-500 rounded-full animate-pulse" />
-        Printer
+        {t("printer")}
       </button>
       {showMenu && (
         <>
@@ -424,7 +453,7 @@ function PrinterStatusIndicator() {
             onClick={() => setShowMenu(false)}
           />
           <div className="absolute right-0 top-full mt-1 z-30 bg-white border border-slate-200 rounded-lg shadow-lg p-3 min-w-[180px]">
-            <div className="text-xs text-slate-500 mb-2">Receipt printer connected</div>
+            <div className="text-xs text-slate-500 mb-2">{t("receiptPrinterConnected")}</div>
             <button
               onClick={() => {
                 disconnect();
@@ -432,7 +461,7 @@ function PrinterStatusIndicator() {
               }}
               className="w-full text-left text-sm text-red-600 hover:bg-red-50 px-2 py-1.5 rounded transition-colors cursor-pointer"
             >
-              Disconnect
+              {t("disconnect", { ns: "common" })}
             </button>
           </div>
         </>
@@ -444,6 +473,7 @@ function PrinterStatusIndicator() {
 // ─── Reader Status Indicator ────────────────────────────────
 
 function ReaderStatusIndicator() {
+  const { t } = useTranslation("nav");
   const { supported, readerStatus, connectReader, disconnectReader } =
     useDeviceManager();
   const [showMenu, setShowMenu] = useState(false);
@@ -458,12 +488,12 @@ function ReaderStatusIndicator() {
         onClick={() => connectReader().catch(() => { })}
         className="inline-flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium text-slate-500 hover:text-slate-700 hover:bg-slate-100 rounded-full transition-colors cursor-pointer"
         data-testid="connect-reader"
-        title="Connect SI Reader"
+        title={t("connectReaderTitle")}
       >
         <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
         </svg>
-        Connect Reader
+        {t("connectReader")}
       </button>
     );
   }
@@ -476,7 +506,7 @@ function ReaderStatusIndicator() {
         data-testid="reader-status"
       >
         <span className="w-2 h-2 bg-emerald-500 rounded-full animate-pulse" />
-        SI Reader
+        {t("siReader")}
       </button>
       {showMenu && (
         <>
@@ -486,7 +516,7 @@ function ReaderStatusIndicator() {
           />
           <div className="absolute right-0 top-full mt-1 z-30 bg-white border border-slate-200 rounded-lg shadow-lg p-3 min-w-[180px]">
             <div className="text-xs text-slate-500 mb-2">
-              Status: {readerStatus === "reading" ? "Active" : "Connected"}
+              {t("status", { ns: "common" })}: {readerStatus === "reading" ? t("readerStatusActive") : t("readerStatusConnected")}
             </div>
             <button
               onClick={() => {
@@ -496,7 +526,7 @@ function ReaderStatusIndicator() {
               className="w-full text-left text-sm text-red-600 hover:bg-red-50 px-2 py-1.5 rounded transition-colors cursor-pointer"
               data-testid="disconnect-reader"
             >
-              Disconnect
+              {t("disconnect", { ns: "common" })}
             </button>
           </div>
         </>

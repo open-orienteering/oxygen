@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useMemo, useCallback } from "react";
+import { useTranslation } from "react-i18next";
 import { trpc } from "../lib/trpc";
 import { parseMeosTime, formatMeosTime } from "@oxygen/shared";
 import { SearchableSelect } from "./SearchableSelect";
@@ -39,6 +40,7 @@ interface Suggestion {
 }
 
 export function RunnerDialog({ mode, runnerId, initialCardNo, initialOwnerData, onClose, onSuccess }: Props) {
+  const { t } = useTranslation("runners");
   // Pre-fill from SI card owner data when available
   const ownerName = initialOwnerData
     ? [initialOwnerData.firstName, initialOwnerData.lastName].filter(Boolean).join(" ")
@@ -427,11 +429,11 @@ export function RunnerDialog({ mode, runnerId, initialCardNo, initialOwnerData, 
     setError("");
 
     if (!name.trim()) {
-      setError("Name is required");
+      setError(t("nameRequired"));
       return;
     }
     if (!classId) {
-      setError("Class is required");
+      setError(t("classRequired"));
       return;
     }
 
@@ -483,7 +485,7 @@ export function RunnerDialog({ mode, runnerId, initialCardNo, initialOwnerData, 
       <div className="relative bg-white rounded-2xl shadow-xl w-full max-w-md max-h-[90vh] overflow-y-auto">
         <div className="px-6 py-4 border-b border-slate-200">
           <h2 className="text-lg font-semibold text-slate-900">
-            {mode === "create" ? "Add Runner" : "Edit Runner"}
+            {mode === "create" ? t("addRunner") : t("editRunner")}
           </h2>
         </div>
 
@@ -491,16 +493,16 @@ export function RunnerDialog({ mode, runnerId, initialCardNo, initialOwnerData, 
           {/* Club — placed first so Eventor members are fetched before name entry */}
           <div>
             <label className="block text-sm font-medium text-slate-700 mb-1">
-              Club
+              {t("club")}
             </label>
             <SearchableSelect
               testId="dialog-club"
               value={clubId}
               onChange={(v) => setClubId(Number(v))}
-              placeholder="No club"
-              searchPlaceholder="Search clubs..."
+              placeholder={t("noClub")}
+              searchPlaceholder={t("searchClubs")}
               options={[
-                { value: 0, label: "No club" },
+                { value: 0, label: t("noClub") },
                 ...(clubs.data?.map((c) => ({
                   value: c.id,
                   label: c.name,
@@ -509,11 +511,11 @@ export function RunnerDialog({ mode, runnerId, initialCardNo, initialOwnerData, 
               ]}
             />
             {canFetchMembers && clubMembers.isLoading && (
-              <div className="text-xs text-slate-400 mt-1">Loading club members...</div>
+              <div className="text-xs text-slate-400 mt-1">{t("loadingClubMembers")}</div>
             )}
             {canFetchMembers && clubMembers.data && (
               <div className="text-xs text-slate-400 mt-1">
-                {clubMembers.data.length} members loaded — type name for suggestions
+                {t("membersLoaded", { count: clubMembers.data.length })}
               </div>
             )}
           </div>
@@ -521,7 +523,7 @@ export function RunnerDialog({ mode, runnerId, initialCardNo, initialOwnerData, 
           {/* Name with autocomplete */}
           <div className="relative">
             <label className="block text-sm font-medium text-slate-700 mb-1">
-              Name *
+              {t("name")} *
             </label>
             <input
               ref={nameInputRef}
@@ -531,7 +533,7 @@ export function RunnerDialog({ mode, runnerId, initialCardNo, initialOwnerData, 
               onKeyDown={handleNameKeyDown}
               onFocus={() => name.trim().length >= 2 && setShowSuggestions(true)}
               className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-              placeholder="First Last"
+              placeholder={t("namePlaceholder")}
               autoComplete="off"
               autoFocus
             />
@@ -558,7 +560,7 @@ export function RunnerDialog({ mode, runnerId, initialCardNo, initialOwnerData, 
                         <div className="text-xs text-slate-400 flex gap-2">
                           {s.clubName && <span>{s.clubName}</span>}
                           {s.birthYear > 0 && <span>{s.birthYear}</span>}
-                          {s.sex && <span>{s.sex === "M" ? "Male" : "Female"}</span>}
+                          {s.sex && <span>{s.sex === "M" ? t("male") : t("female")}</span>}
                           {s.cardNo > 0 && <span>SI: {s.cardNo}</span>}
                         </div>
                       </div>
@@ -566,7 +568,7 @@ export function RunnerDialog({ mode, runnerId, initialCardNo, initialOwnerData, 
                         ? "bg-blue-100 text-blue-700"
                         : "bg-purple-100 text-purple-700"
                         }`}>
-                        {s.source === "eventor" ? "Club" : "Runner DB"}
+                        {s.source === "eventor" ? t("suggestionClub") : t("suggestionRunnerDb")}
                       </span>
                     </button>
                   );
@@ -574,7 +576,7 @@ export function RunnerDialog({ mode, runnerId, initialCardNo, initialOwnerData, 
                 {globalSearch.isFetching && (
                   <div className="px-3 py-2 text-xs text-slate-400 flex items-center gap-2">
                     <div className="w-3 h-3 border-2 border-slate-300 border-t-transparent rounded-full animate-spin" />
-                    Searching runner database...
+                    {t("searchingRunnerDb")}
                   </div>
                 )}
               </div>
@@ -584,14 +586,14 @@ export function RunnerDialog({ mode, runnerId, initialCardNo, initialOwnerData, 
           {/* Class */}
           <div>
             <label className="block text-sm font-medium text-slate-700 mb-1">
-              Class *
+              {t("class")} *
             </label>
             <SearchableSelect
               testId="dialog-class"
               value={classId}
               onChange={(v) => setClassId(Number(v))}
-              placeholder="Select class..."
-              searchPlaceholder="Search classes..."
+              placeholder={t("selectClass")}
+              searchPlaceholder={t("searchClasses")}
               alwaysShowSearch
               options={[
                 ...(classes.data?.classes.map((c) => {
@@ -601,7 +603,7 @@ export function RunnerDialog({ mode, runnerId, initialCardNo, initialOwnerData, 
                   return {
                     value: c.id,
                     label: c.name,
-                    suffix: remaining != null ? (remaining <= 0 ? "No maps" : `${remaining} maps`) : undefined,
+                    suffix: remaining != null ? (remaining <= 0 ? t("noMaps") : t("mapsRemaining", { count: remaining })) : undefined,
                     disabled: remaining != null && remaining <= 0,
                   };
                 }) ?? []),
@@ -613,7 +615,7 @@ export function RunnerDialog({ mode, runnerId, initialCardNo, initialOwnerData, 
           <div className="grid grid-cols-2 gap-3">
             <div>
               <label className="block text-sm font-medium text-slate-700 mb-1">
-                SI Card
+                {t("siCard")}
               </label>
               <input
                 type="number"
@@ -625,7 +627,7 @@ export function RunnerDialog({ mode, runnerId, initialCardNo, initialOwnerData, 
             </div>
             <div>
               <label className="block text-sm font-medium text-slate-700 mb-1">
-                Start Time
+                {t("startTime")}
               </label>
               <input
                 type="text"
@@ -641,7 +643,7 @@ export function RunnerDialog({ mode, runnerId, initialCardNo, initialOwnerData, 
           <div className="grid grid-cols-2 gap-3">
             <div>
               <label className="block text-sm font-medium text-slate-700 mb-1">
-                Birth Year
+                {t("birthYear")}
               </label>
               <input
                 type="number"
@@ -653,16 +655,16 @@ export function RunnerDialog({ mode, runnerId, initialCardNo, initialOwnerData, 
             </div>
             <div>
               <label className="block text-sm font-medium text-slate-700 mb-1">
-                Sex
+                {t("sex")}
               </label>
               <select
                 value={sex}
                 onChange={(e) => setSex(e.target.value)}
                 className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 cursor-pointer"
               >
-                <option value="">Not specified</option>
-                <option value="M">Male</option>
-                <option value="F">Female</option>
+                <option value="">{t("notSpecified")}</option>
+                <option value="M">{t("male")}</option>
+                <option value="F">{t("female")}</option>
               </select>
             </div>
           </div>
@@ -670,7 +672,7 @@ export function RunnerDialog({ mode, runnerId, initialCardNo, initialOwnerData, 
           {/* Phone */}
           <div>
             <label className="block text-sm font-medium text-slate-700 mb-1">
-              Phone
+              {t("phone")}
             </label>
             <input
               type="tel"
@@ -685,14 +687,14 @@ export function RunnerDialog({ mode, runnerId, initialCardNo, initialOwnerData, 
           {mode === "create" && (
             <div>
               <label className="block text-sm font-medium text-slate-700 mb-1">
-                Payment
+                {t("payment")}
               </label>
               <div className="flex gap-2 flex-wrap">
                 {(regConfig.data?.paymentMethods ?? ["billed", "on-site"]).map((pm) => {
                   const labels: Record<string, string> = {
-                    billed: "Invoice",
-                    "on-site": "Pay on site",
-                    card: "Card",
+                    billed: t("payInvoice"),
+                    "on-site": t("payOnSite"),
+                    card: t("payCard"),
                     swish: "Swish",
                   };
                   return (
@@ -728,7 +730,7 @@ export function RunnerDialog({ mode, runnerId, initialCardNo, initialOwnerData, 
               onClick={onClose}
               className="flex-1 px-4 py-2.5 border border-slate-200 text-slate-700 text-sm font-medium rounded-lg hover:bg-slate-50 transition-colors cursor-pointer"
             >
-              Cancel
+              {t("cancel")}
             </button>
             <button
               type="submit"
@@ -736,10 +738,10 @@ export function RunnerDialog({ mode, runnerId, initialCardNo, initialOwnerData, 
               className="flex-1 px-4 py-2.5 bg-blue-600 text-white text-sm font-medium rounded-lg hover:bg-blue-700 transition-colors cursor-pointer disabled:opacity-50"
             >
               {isPending
-                ? "Saving..."
+                ? t("saving")
                 : mode === "create"
-                  ? "Add Runner"
-                  : "Save Changes"}
+                  ? t("addRunner")
+                  : t("saveChanges")}
             </button>
           </div>
         </form>
