@@ -3,10 +3,10 @@ import { useTranslation } from "react-i18next";
 import { trpc } from "../lib/trpc";
 import {
   formatRunningTime,
-  runnerStatusLabel,
   RunnerStatus,
   type RunnerStatusValue,
 } from "@oxygen/shared";
+import { useRunnerStatusLabel } from "../hooks/useStatusLabels";
 import { PunchTable, type PunchTableData } from "../components/PunchTable";
 import { MapPanel } from "../components/MapPanel";
 import { useSearchParam } from "../hooks/useSearchParam";
@@ -142,6 +142,7 @@ function toPunchTableData(data: any): PunchTableData {
 
 function ReadoutView({ data }: { data: any }) {
   const { t: tr } = useTranslation("race");
+  const statusLabel = useRunnerStatusLabel();
   const t = data.timing;
   const isOK = t.status === RunnerStatus.OK;
   const isMP = t.status === RunnerStatus.MissingPunch;
@@ -172,7 +173,7 @@ function ReadoutView({ data }: { data: any }) {
             isOK ? "text-emerald-600" : isMP ? "text-red-600" : "text-amber-600"
           }`}
         >
-          {runnerStatusLabel(t.status as RunnerStatusValue)}
+          {statusLabel(t.status as RunnerStatusValue)}
         </div>
 
         {/* Running time */}

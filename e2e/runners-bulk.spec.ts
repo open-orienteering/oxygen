@@ -45,6 +45,6 @@ test.describe("Runners Bulk Editing", () => {
     await actionBar.getByRole("button", { name: "Apply to 2" }).click();
 
     await expect(actionBar).not.toBeVisible();
-    await expect(page.locator("span", { hasText: "DNS" }).first()).toBeVisible();
+    await expect(page.locator("span", { hasText: "Did Not Start" }).first()).toBeVisible();
   });
 });
