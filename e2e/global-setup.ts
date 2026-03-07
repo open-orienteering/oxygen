@@ -20,7 +20,7 @@ const SEEDS: Array<{
     eventDate: "2026-04-15",
   },
   {
-    dbName: "Vinterserien",
+    dbName: "itest_vinterserien",
     seedFile: "seed-vinterserien.sql",
     eventName: "Vinterserien",
     eventDate: "2026-03-15",
