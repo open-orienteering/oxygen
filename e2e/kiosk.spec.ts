@@ -64,7 +64,7 @@ test.describe("Kiosk Mode", () => {
     await goToKiosk(page);
 
     // Click the settings gear
-    await page.locator('button[title="Settings"]').click();
+    await page.locator('button[title="Kiosk Settings"]').click();
 
     // Settings panel should appear
     await expect(page.getByText("Kiosk Settings")).toBeVisible();
@@ -376,10 +376,10 @@ test.describe("Kiosk Mode", () => {
     const nameId = getNameId(page);
 
     // Set a short auto-reset time via settings
-    await page.locator('button[title="Settings"]').click();
+    await page.locator('button[title="Kiosk Settings"]').click();
     const autoResetInput = page.locator('input[type="number"][min="5"]');
     await autoResetInput.fill("5");
-    await page.locator('button[title="Settings"]').click(); // close settings
+    await page.locator('button[title="Kiosk Settings"]').click(); // close settings
 
     // Send a readout card event
     await sendKioskMessage(page, nameId, {
@@ -473,7 +473,7 @@ test.describe("Kiosk Mode", () => {
     await goToKiosk(page);
 
     // Open settings
-    await page.locator('button[title="Settings"]').click();
+    await page.locator('button[title="Kiosk Settings"]').click();
 
     // The writeToCard toggle should be present
     await expect(page.getByText("Write details to empty cards")).toBeVisible();

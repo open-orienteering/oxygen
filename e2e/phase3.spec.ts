@@ -98,7 +98,7 @@ test.describe("Card Readout", () => {
     await page.getByPlaceholder("Enter SI card number...").fill("500803");
 
     await expect(page.getByText("Monica Henriksson")).toBeVisible({ timeout: 5000 });
-    await expect(page.locator("div.text-4xl", { hasText: "MP" })).toBeVisible();
+    await expect(page.locator("div.text-4xl", { hasText: "Missing Punch" })).toBeVisible();
     await expect(page.getByText("Missing controls: 50")).toBeVisible();
     await expect(page.locator("h3", { hasText: "Missing Controls" })).toBeVisible();
     await expect(page.locator(".bg-red-100", { hasText: "50" })).toBeVisible();

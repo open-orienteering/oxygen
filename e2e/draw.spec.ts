@@ -82,7 +82,7 @@ test.describe("Start Draw", () => {
     await expect(panel.getByText("Draw complete")).toBeVisible({
       timeout: 15000,
     });
-    await expect(panel.getByText(/runner[s]? assigned start times/)).toBeVisible();
+    await expect(panel.getByText(/runner.*assigned start times/)).toBeVisible();
 
     await panel.getByRole("button", { name: "Close", exact: true }).click();
     await expect(
