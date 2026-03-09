@@ -11,6 +11,7 @@ import { StatusBadge } from "../components/StatusBadge";
 import { usePrinter } from "../context/PrinterContext";
 import type { FinishReceiptData } from "../lib/receipt-printer/index.js";
 import { fetchLogoRaster } from "../lib/receipt-printer/index.js";
+import { getClubLogoUrl } from "../lib/club-logo";
 
 export function FinishStation() {
   const { t } = useTranslation("race");
@@ -81,7 +82,7 @@ export function FinishStation() {
         logoRaster: await (async () => {
           const eventorId = dashboard.data?.organizer?.eventorId;
           if (!eventorId) return null;
-          return fetchLogoRaster(`/api/club-logo/${eventorId}?variant=large`, 250);
+          return fetchLogoRaster(getClubLogoUrl(eventorId), 250);
         })(),
         qrUrl: competitionInfo?.eventorEventId
           ? `https://eventor.orientering.se/Events/Show/${competitionInfo.eventorEventId}`

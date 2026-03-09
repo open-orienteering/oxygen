@@ -304,9 +304,196 @@ describe("buildRegistrationReceipt", () => {
     expect(text).not.toContain("Swish");
   });
 
-  it("includes REGISTRATION header", () => {
+  it("includes REGISTRATION header when no orgNumber", () => {
     const bytes = buildRegistrationReceipt(REG_SAMPLE);
     const text = Buffer.from(bytes).toString("latin1");
     expect(text).toContain("REGISTRATION");
+    expect(text).not.toContain("RECEIPT");
+  });
+});
+
+// ─── Kvitto Mode (friskvardsbidrag) ────────────────────────
+
+const KVITTO_SAMPLE: RegistrationReceiptData = {
+  ...REG_SAMPLE,
+  organizerName: "Skogsluffarnas OK",
+  orgNumber: "802407-2996",
+  vatInfo: { exempt: true },
+  friskvardNote: true,
+};
+
+describe("buildRegistrationReceipt (kvitto mode)", () => {
+  it("uses Receipt title (mixed case) when orgNumber is set", () => {
+    const bytes = buildRegistrationReceipt(KVITTO_SAMPLE);
+    const text = Buffer.from(bytes).toString("latin1");
+    expect(text).toContain("Receipt");
+    expect(text).not.toContain("REGISTRATION");
+  });
+
+  it("includes organizer name and org number", () => {
+    const bytes = buildRegistrationReceipt(KVITTO_SAMPLE);
+    const text = Buffer.from(bytes).toString("latin1");
+    expect(text).toContain("Skogsluffarnas OK");
+    expect(text).toContain("802407-2996");
+  });
+
+  it("includes box-drawing characters (PC437 encoded)", () => {
+    const bytes = buildRegistrationReceipt(KVITTO_SAMPLE);
+    const arr = [...bytes];
+    // PC437 box chars: ┌=0xDA, ┐=0xBF, └=0xC0, ┘=0xD9, │=0xB3, ─=0xC4
+    expect(arr.includes(0xDA)).toBe(true); // ┌
+    expect(arr.includes(0xBF)).toBe(true); // ┐
+    expect(arr.includes(0xC0)).toBe(true); // └
+    expect(arr.includes(0xD9)).toBe(true); // ┘
+    expect(arr.includes(0xB3)).toBe(true); // │
+  });
+
+  it("includes VAT exempt line with Swedish amount format", () => {
+    const bytes = buildRegistrationReceipt(KVITTO_SAMPLE);
+    const text = Buffer.from(bytes).toString("latin1");
+    expect(text).toContain("VAT");
+    expect(text).toContain("0,00 kr");
+    expect(text).toContain("VAT exempt");
+  });
+
+  it("includes friskvardsbidrag note when enabled", () => {
+    const bytes = buildRegistrationReceipt(KVITTO_SAMPLE);
+    const text = Buffer.from(bytes).toString("latin1");
+    expect(text).toContain("friskvardsbidrag");
+  });
+
+  it("omits friskvardsbidrag note when disabled", () => {
+    const data: RegistrationReceiptData = { ...KVITTO_SAMPLE, friskvardNote: false };
+    const bytes = buildRegistrationReceipt(data);
+    const text = Buffer.from(bytes).toString("latin1");
+    expect(text).not.toContain("friskvardsbidrag");
+  });
+
+  it("includes entry fee and amount in Swedish format", () => {
+    const bytes = buildRegistrationReceipt(KVITTO_SAMPLE);
+    const text = Buffer.from(bytes).toString("latin1");
+    expect(text).toContain("Entry fee");
+    expect(text).toContain("15000,00 kr");
+  });
+
+  it("includes payment method in box", () => {
+    const bytes = buildRegistrationReceipt(KVITTO_SAMPLE);
+    const text = Buffer.from(bytes).toString("latin1");
+    expect(text).toContain("Swish");
+  });
+
+  it("falls back to simple layout without orgNumber", () => {
+    const data: RegistrationReceiptData = { ...KVITTO_SAMPLE, orgNumber: undefined };
+    const bytes = buildRegistrationReceipt(data);
+    const arr = [...bytes];
+    // No box-drawing top-left corner
+    expect(arr.includes(0xDA)).toBe(false);
+  });
+
+  it("includes ENTRY FEE subtitle in kvitto mode", () => {
+    const bytes = buildRegistrationReceipt(KVITTO_SAMPLE);
+    const text = Buffer.from(bytes).toString("latin1");
+    expect(text).toContain("ENTRY FEE");
+  });
+
+  it("includes Oxygen footer in kvitto mode", () => {
+    const bytes = buildRegistrationReceipt(KVITTO_SAMPLE);
+    const text = Buffer.from(bytes).toString("latin1");
+    expect(text).toContain("Oxygen");
+    expect(text).toContain("open-orienteering.org");
+  });
+
+  it("includes line spacing commands around payment box", () => {
+    const bytes = buildRegistrationReceipt(KVITTO_SAMPLE);
+    const arr = [...bytes];
+    // ESC 3 24 (set line spacing) and ESC 2 (reset) should be present
+    const setLineSpacingIdx = arr.findIndex((b, i) => b === 0x1B && arr[i + 1] === 0x33 && arr[i + 2] === 24);
+    const resetLineSpacingIdx = arr.findIndex((b, i) => b === 0x1B && arr[i + 1] === 0x32);
+    expect(setLineSpacingIdx).toBeGreaterThan(-1);
+    expect(resetLineSpacingIdx).toBeGreaterThan(setLineSpacingIdx);
+  });
+
+  it("includes organizer details when provided", () => {
+    const data: RegistrationReceiptData = {
+      ...KVITTO_SAMPLE,
+      organizerDetails: {
+        name: "Skogsluffarnas OK",
+        street: "Storgatan 12",
+        zip: "123 45",
+        city: "Staden",
+        phone: "08-123 45 67",
+        email: "kansli@skogsluffarna.se",
+        webUrl: "www.skogsluffarna.se",
+      },
+    };
+    const bytes = buildRegistrationReceipt(data);
+    const text = Buffer.from(bytes).toString("latin1");
+    expect(text).toContain("Storgatan 12");
+    expect(text).toContain("123 45 Staden");
+    expect(text).toContain("Org.nr: 802407-2996");
+    expect(text).toContain("kansli@skogsluffarna.se");
+    // Phone and webUrl are no longer printed
+    expect(text).not.toContain("08-123 45 67");
+    expect(text).not.toContain("www.skogsluffarna.se");
+  });
+
+  it("includes bold double-size payment amount inside box", () => {
+    const bytes = buildRegistrationReceipt(KVITTO_SAMPLE);
+    const arr = [...bytes];
+    // GS ! 0x11 (double-size) should appear between box top (┌=0xDA) and box bottom (└=0xC0)
+    const boxTopIdx = arr.lastIndexOf(0xDA); // ┌
+    const boxBottomIdx = arr.lastIndexOf(0xC0); // └
+    const doubleSizeIdx = arr.findIndex((b, i) => i > boxTopIdx && i < boxBottomIdx && b === 0x1D && arr[i + 1] === 0x21 && arr[i + 2] === 0x11);
+    expect(doubleSizeIdx).toBeGreaterThan(boxTopIdx);
+    expect(doubleSizeIdx).toBeLessThan(boxBottomIdx);
+  });
+
+  it("includes payment method label inside box", () => {
+    const bytes = buildRegistrationReceipt(KVITTO_SAMPLE);
+    const text = Buffer.from(bytes).toString("latin1");
+    expect(text).toContain("Payment method:");
+    expect(text).toContain("Swish");
+  });
+
+  it("includes feedDots gap between receipt title and subtitle", () => {
+    const bytes = buildRegistrationReceipt(KVITTO_SAMPLE);
+    const arr = [...bytes];
+    // ESC J 12 (feedDots(12)) should appear
+    const feedDotsIdx = arr.findIndex((b, i) => b === 0x1B && arr[i + 1] === 0x4A && arr[i + 2] === 12);
+    expect(feedDotsIdx).toBeGreaterThan(-1);
+  });
+});
+
+// ─── Finish receipt separator style ─────────────────────────
+
+describe("buildFinishReceipt separator style", () => {
+  it("uses box-drawing horizontal line instead of equals signs", () => {
+    const bytes = buildFinishReceipt(SAMPLE);
+    const arr = [...bytes];
+    // Should use ─ (PC437: 0xC4) for separators, not = (0x3D)
+    expect(arr.includes(0xC4)).toBe(true);
+    // Count consecutive = signs (42 in a row = old separator)
+    let maxConsecutiveEquals = 0;
+    let current = 0;
+    for (const b of arr) {
+      if (b === 0x3D) { current++; maxConsecutiveEquals = Math.max(maxConsecutiveEquals, current); }
+      else current = 0;
+    }
+    expect(maxConsecutiveEquals).toBeLessThan(42);
+  });
+
+  it("uses center alignment for separator lines", () => {
+    const bytes = buildFinishReceipt(SAMPLE);
+    const arr = [...bytes];
+    // Separator: ESC a 1 (center) immediately before a ─ (0xC4) run, then ESC a 0 (left) after
+    // Find a center command that is directly followed by 0xC4 within 3 bytes
+    let found = false;
+    for (let i = 0; i < arr.length - 5; i++) {
+      if (arr[i] === 0x1B && arr[i + 1] === 0x61 && arr[i + 2] === 0x01 && arr[i + 3] === 0xC4) {
+        found = true;
+        break;
+      }
+    }
+    expect(found).toBe(true);
   });
 });

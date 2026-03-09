@@ -45,7 +45,7 @@ export interface RegistrationFormState {
   sex: string;
   birthYear: string;
   phone: string;
-  paymentMode: "billed" | "on-site" | "card" | "swish" | "";
+  paymentMode: "billed" | "on-site" | "card" | "swish" | "cash" | "";
   fee?: number;
   swishNumber?: string;
   clubEventorId?: number;
@@ -80,6 +80,10 @@ export interface KioskResetMessage {
   type: "kiosk-reset";
 }
 
+export interface KioskCardRemovedMessage {
+  type: "card-removed";
+}
+
 export interface KioskPingMessage {
   type: "kiosk-ping";
   from: "admin" | "kiosk";
@@ -91,6 +95,7 @@ export type KioskMessage =
   | KioskRegistrationStateMessage
   | KioskRegistrationCompleteMessage
   | KioskResetMessage
+  | KioskCardRemovedMessage
   | KioskPingMessage;
 
 // ─── Channel wrapper ────────────────────────────────────────

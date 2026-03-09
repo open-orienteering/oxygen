@@ -7,7 +7,7 @@
  * In standalone mode, uses its own DeviceManager + SI reader.
  */
 
-import { useEffect, useState, useRef, useCallback } from "react";
+import { useEffect, useState, useRef, useCallback, useMemo } from "react";
 import { useParams } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { QRCodeSVG } from "qrcode.react";
@@ -21,8 +21,12 @@ import {
 } from "../lib/kiosk-channel";
 import swishIcon from "../assets/swish-icon.svg";
 import { ClubLogo } from "../components/ClubLogo";
+import { PunchTable, type PunchTableData } from "../components/PunchTable";
+import { MapPanel } from "../components/MapPanel";
 import { useDeviceManager } from "../context/DeviceManager";
+import { usePrinter } from "../context/PrinterContext";
 import { recentCardToKioskMessage } from "../lib/kiosk-channel";
+import { getClubLogoUrl } from "../lib/club-logo";
 
 // ─── Types ──────────────────────────────────────────────────
 
@@ -74,6 +78,8 @@ export function KioskPage() {
   const [competitionName, setCompetitionName] = useState("");
   const channelRef = useRef<KioskChannel | null>(null);
   const resetTimerRef = useRef<any>(undefined);
+  const screenRef = useRef<KioskScreen>(screen);
+  useEffect(() => { screenRef.current = screen; }, [screen]);
 
   // Select the competition (same as CompetitionShell)
   const selectMutation = trpc.competition.select.useMutation({
@@ -126,6 +132,23 @@ export function KioskPage() {
     return () => clearTimeout(resetTimerRef.current);
   }, []);
 
+  // ── Registration-waiting watchdog ─────────────────────────
+  // If no admin messages arrive for 15s while in registration-waiting, reset to idle.
+  // Admin sends registration-state heartbeat every 2s AND kiosk-ping every 5s,
+  // so 15s = 3 missed pings — resilient while still recovering from a dead admin.
+  const WATCHDOG_MS = 15_000;
+  const registrationWatchdogRef = useRef<any>(undefined);
+
+  useEffect(() => {
+    clearTimeout(registrationWatchdogRef.current);
+    if (screen.mode === "registration-waiting") {
+      registrationWatchdogRef.current = setTimeout(() => {
+        setScreen({ mode: "idle" });
+      }, WATCHDOG_MS);
+    }
+    return () => clearTimeout(registrationWatchdogRef.current);
+  }, [screen]);
+
   // ── Card-done → next screen transition ─────────────────────
   const cardDoneTimerRef = useRef<any>(undefined);
 
@@ -154,6 +177,13 @@ export function KioskPage() {
         case "kiosk-ping":
           if (msg.from === "admin") {
             channel.send({ type: "kiosk-ping", from: "kiosk" });
+            // Admin is still alive — keep registration-waiting alive
+            if (screenRef.current.mode === "registration-waiting") {
+              clearTimeout(registrationWatchdogRef.current);
+              registrationWatchdogRef.current = setTimeout(() => {
+                setScreen({ mode: "idle" });
+              }, WATCHDOG_MS);
+            }
           }
           break;
 
@@ -167,14 +197,17 @@ export function KioskPage() {
 
         case "card-readout":
           setScreen((prev) => {
-            if (prev.mode === "registration-waiting") return prev;
             clearTimeout(resetTimerRef.current);
 
             if (msg.card.action === "register") {
+              // Don't re-enter registration if already in registration-waiting
+              if (prev.mode === "registration-waiting") return prev;
               // Skip card-done transition for registration — go directly to waiting
               return { mode: "registration-waiting", card: msg.card };
             }
 
+            // Non-register actions (pre-start, readout) always take priority —
+            // they override registration-waiting if the DB lookup corrected the action
             let nextScreen: KioskScreen;
             if (msg.card.action === "readout") {
               nextScreen = { mode: "readout", card: msg.card };
@@ -184,12 +217,18 @@ export function KioskPage() {
               return prev;
             }
 
-            // Show "card done — remove card" briefly before the actual screen
-            return { mode: "card-done", cardNumber: msg.card.cardNumber, next: nextScreen };
+            // Skip card-done transition — go directly to result screen
+            scheduleReset();
+            return nextScreen;
           });
           break;
 
         case "registration-state":
+          // Reset watchdog — admin is still alive
+          clearTimeout(registrationWatchdogRef.current);
+          registrationWatchdogRef.current = setTimeout(() => {
+            setScreen({ mode: "idle" });
+          }, WATCHDOG_MS);
           setScreen((prev) => {
             if (prev.mode === "registration-waiting") {
               return { ...prev, form: msg.form };
@@ -207,6 +246,16 @@ export function KioskPage() {
         case "kiosk-reset":
           clearTimeout(resetTimerRef.current);
           setScreen({ mode: "idle" });
+          break;
+
+        case "card-removed":
+          setScreen((prev) => {
+            // Only reset if in "reading" state — don't disrupt readout/registration
+            if (prev.mode === "reading") {
+              return { mode: "idle" };
+            }
+            return prev;
+          });
           break;
       }
     });
@@ -253,7 +302,10 @@ export function KioskPage() {
     } else {
       return;
     }
-    setScreen({ mode: "card-done", cardNumber: msg.card.cardNumber, next: nextScreen });
+    if (nextScreen.mode === "readout" || nextScreen.mode === "pre-start") {
+      scheduleReset();
+    }
+    setScreen(nextScreen);
   }, [currentCard, settings.standalone, scheduleReset]);
 
   // ── Fullscreen toggle ─────────────────────────────────────
@@ -516,7 +568,7 @@ function IdleScreen({
       <div className="mb-10">
         {organizerEventorId && (
           <img
-            src={`${API_BASE}/api/club-logo/${organizerEventorId}?variant=large`}
+            src={getClubLogoUrl(organizerEventorId)}
             alt=""
             className="inline-block w-28 h-28 object-contain rounded-lg mb-4"
             onError={(e) => {
@@ -605,123 +657,337 @@ function CardDoneScreen({ cardNumber }: { cardNumber: number }) {
 
 function ReadoutScreen({ card }: { card: KioskCardReadoutMessage["card"] }) {
   const { t } = useTranslation("kiosk");
-  // Fetch full readout from server for detailed punch data
+  const printer = usePrinter();
+  const utils = trpc.useUtils();
+  const finishRecordedRef = useRef(false);
+  const printedRef = useRef(false);
+
+  // 1. Check DB state for this runner
+  const dbRunner = trpc.runner.findByCard.useQuery(
+    { cardNo: card.cardNumber },
+    { enabled: card.cardNumber > 0 },
+  );
+
+  // 2. Record finish if needed (card has finish punch but DB has no finish time)
+  const recordFinish = trpc.race.recordFinish.useMutation();
+
+  useEffect(() => {
+    if (finishRecordedRef.current) return;
+    if (!dbRunner.data) return;
+    if (dbRunner.data.finishTime > 0) return; // already finished
+
+    // Card's finish time is in seconds since midnight — convert to deciseconds
+    const cardFinishDeci = card.finishTime ? card.finishTime * 10 : 0;
+    if (cardFinishDeci <= 0) return; // no finish punch on card
+
+    finishRecordedRef.current = true;
+    recordFinish.mutate(
+      { runnerId: dbRunner.data.id, finishTime: cardFinishDeci },
+      {
+        onSuccess: () => {
+          // Invalidate so readout picks up the new finish time
+          utils.cardReadout.readout.invalidate({ cardNo: card.cardNumber });
+          utils.runner.findByCard.invalidate({ cardNo: card.cardNumber });
+        },
+      },
+    );
+  }, [dbRunner.data, card.finishTime]);
+
+  // 3. Fetch full readout + receipt data
   const readout = trpc.cardReadout.readout.useQuery(
     { cardNo: card.cardNumber },
     { enabled: card.cardNumber > 0 },
   );
 
-  const status = card.status;
-  const isOK = status === "OK";
-  const isMP = status === "MP";
-  const isDNF = status === "DNF";
+  const receipt = trpc.race.finishReceipt.useQuery(
+    { runnerId: dbRunner.data?.id ?? 0 },
+    { enabled: !!dbRunner.data?.id },
+  );
+
+  // Derive status from readout (more accurate than card.status since it evaluates punches)
+  const readoutStatus = readout.data?.found ? readout.data.timing.status : null;
+  const readoutRunningTime = readout.data?.found ? readout.data.timing.runningTime : 0;
+
+  // Fallback to card-level status before readout loads
+  const displayStatus = readoutStatus != null ? readoutStatus : (
+    card.status === "OK" ? RunnerStatus.OK :
+    card.status === "MP" ? RunnerStatus.MissingPunch :
+    card.status === "DNF" ? RunnerStatus.DNF : 0
+  );
+  const displayRunningTime = readoutRunningTime > 0 ? readoutRunningTime : (card.runningTime ?? 0);
+  const isOK = displayStatus === RunnerStatus.OK;
+  const isMP = displayStatus === RunnerStatus.MissingPunch;
+  const isDNF = displayStatus === RunnerStatus.DNF;
+
+  // 4. Auto-print receipt
+  const dashboard = trpc.competition.dashboard.useQuery(undefined, { staleTime: 5 * 60_000 });
+
+  useEffect(() => {
+    if (printedRef.current) return;
+    if (!printer.connected || !receipt.data || !dbRunner.data) return;
+    // Only auto-print for runners with a finish time
+    const hasFinish = (dbRunner.data.finishTime > 0) || finishRecordedRef.current;
+    if (!hasFinish) return;
+
+    const r = receipt.data;
+    printedRef.current = true;
+    printer.print({
+      competitionName: dashboard.data?.competition?.name ?? "",
+      competitionDate: dashboard.data?.competition?.date ?? undefined,
+      runner: {
+        name: r.runner.name,
+        clubName: r.runner.clubName,
+        className: r.runner.className,
+        startNo: r.runner.startNo,
+        cardNo: r.runner.cardNo,
+      },
+      timing: r.timing,
+      splits: r.controls.map((c) => ({
+        controlIndex: c.controlIndex,
+        controlCode: c.controlCode,
+        splitTime: c.splitTime,
+        cumTime: c.cumTime,
+        status: c.status,
+        punchTime: c.punchTime,
+        legLength: c.legLength,
+      })),
+      course: r.course,
+      position: r.position,
+      siac: r.siac,
+      classResults: r.classResults,
+    }).catch(() => {});
+  }, [receipt.data, dbRunner.data, printer.connected, dashboard.data]);
+
+  // 5. Build PunchTable data
+  const punchTableData: PunchTableData | null = useMemo(() => {
+    if (!readout.data?.found) return null;
+    const d = readout.data;
+    return {
+      controls: d.controls,
+      timing: d.timing,
+      course: d.course,
+      extraPunches: d.extraPunches,
+      missingControls: d.missingControls,
+    };
+  }, [readout.data]);
+
+  // 6. MapPanel info for MP runners
+  const mispunchMapInfo = useMemo(() => {
+    if (!readout.data?.found || !readout.data.course) return null;
+    const d = readout.data;
+    if (d.missingControls.length === 0 && d.extraPunches.length === 0) return null;
+    const punchStatusByCode: Record<string, "ok" | "missing" | "extra"> = {};
+    for (const c of d.controls) punchStatusByCode[String(c.controlCode)] = c.status as "ok" | "missing" | "extra";
+    for (const ep of d.extraPunches) punchStatusByCode[String(ep.controlCode)] = "extra";
+    const focusControlCodes = [
+      ...d.controls.filter((c) => c.status === "missing").map((c) => String(c.controlCode)),
+      ...d.extraPunches.map((ep) => String(ep.controlCode)),
+    ];
+    return { courseName: d.course!.name, punchStatusByCode, focusControlCodes };
+  }, [readout.data]);
+
+  // Auto-scale to fit viewport (works in both landscape and portrait)
+  const contentRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const content = contentRef.current;
+    if (!content) return;
+
+    const updateScale = () => {
+      // Reset scale to measure natural height
+      content.style.transform = "none";
+      const naturalHeight = content.scrollHeight;
+      // Available height = viewport minus kiosk top bar (~40px) and content padding (2×32px)
+      const availableHeight = window.innerHeight - 104;
+      if (naturalHeight > availableHeight && naturalHeight > 0) {
+        const newScale = Math.max(0.45, availableHeight / naturalHeight);
+        content.style.transform = `scale(${newScale})`;
+      } else {
+        content.style.transform = "none";
+      }
+    };
+
+    // Observe content size changes (e.g. when readout data loads)
+    const observer = new ResizeObserver(updateScale);
+    observer.observe(content);
+    window.addEventListener("resize", updateScale);
+    updateScale();
+
+    return () => {
+      observer.disconnect();
+      window.removeEventListener("resize", updateScale);
+    };
+  }, [readout.data, receipt.data]);
 
   return (
-    <div className="w-full max-w-2xl mx-auto text-center">
+    <div
+      ref={contentRef}
+      className="w-full max-w-4xl mx-auto text-center"
+      style={{ transformOrigin: "top center" }}
+    >
       {/* Status icon */}
-      <div className="mb-6">
-        {isOK && (
-          <div className="inline-flex items-center justify-center w-28 h-28 rounded-full bg-emerald-500/20 border-4 border-emerald-400">
-            <svg className="w-16 h-16 text-emerald-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}>
-              <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
-            </svg>
-          </div>
-        )}
-        {isMP && (
-          <div className="inline-flex items-center justify-center w-28 h-28 rounded-full bg-red-500/20 border-4 border-red-400">
-            <svg className="w-16 h-16 text-red-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}>
-              <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
-            </svg>
-          </div>
-        )}
-        {isDNF && (
-          <div className="inline-flex items-center justify-center w-28 h-28 rounded-full bg-amber-500/20 border-4 border-amber-400">
-            <svg className="w-16 h-16 text-amber-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}>
-              <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v3.75m9-.75a9 9 0 11-18 0 9 9 0 0118 0zm-9 3.75h.008v.008H12v-.008z" />
-            </svg>
-          </div>
-        )}
-        {!isOK && !isMP && !isDNF && (
-          <div className="inline-flex items-center justify-center w-28 h-28 rounded-full bg-blue-500/20 border-4 border-blue-400">
-            <svg className="w-16 h-16 text-blue-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-              <path strokeLinecap="round" strokeLinejoin="round" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
-            </svg>
-          </div>
-        )}
+      <div className="mb-2">
+        <StatusIcon status={displayStatus} />
       </div>
 
       {/* Runner info */}
-      <h1 className="text-5xl font-black mb-2">
+      <h1 className="text-4xl font-black mb-1">
         {card.runnerName || t("cardNumber", { number: card.cardNumber })}
       </h1>
       {card.clubName && (
-        <p className="text-2xl text-slate-400 mb-1">{card.clubName}</p>
+        <p className="text-xl text-slate-400">{card.clubName}</p>
       )}
       {card.className && (
-        <p className="text-xl text-slate-500 mb-6">{card.className}</p>
+        <p className="text-lg text-slate-500 mb-2">{card.className}</p>
       )}
 
       {/* Status + time */}
-      <div className={`text-4xl font-bold mb-4 ${isOK ? "text-emerald-400" : isMP ? "text-red-400" : isDNF ? "text-amber-400" : "text-blue-400"
-        }`}>
+      <div className={`text-3xl font-bold mb-1 ${isOK ? "text-emerald-400" : isMP ? "text-red-400" : isDNF ? "text-amber-400" : "text-blue-400"}`}>
         {isOK && t("completed")}
         {isMP && t("missingPunch")}
         {isDNF && t("didNotFinish")}
-        {!isOK && !isMP && !isDNF && (status || t("result"))}
+        {!isOK && !isMP && !isDNF && (card.status || t("result"))}
       </div>
 
-      {card.runningTime != null && card.runningTime > 0 && (
-        <div className="text-6xl font-black tabular-nums text-white mb-8">
-          {formatRunningTime(card.runningTime)}
+      {displayRunningTime > 0 && (
+        <div className="text-5xl font-black tabular-nums text-white mb-1">
+          {formatRunningTime(displayRunningTime)}
         </div>
       )}
 
-      {/* Detailed punch info from server */}
-      {readout.data?.found && (
-        <div className="bg-slate-800 rounded-2xl p-6 text-left">
-          <div className="grid grid-cols-3 gap-4 text-center mb-4">
-            <div>
-              <div className="text-sm text-slate-400">{t("controls")}</div>
-              <div className="text-2xl font-bold">
-                {readout.data.controls.filter((c) => c.status === "ok").length}/{readout.data.controls.length}
-              </div>
-            </div>
-            {readout.data.course && (
-              <>
+      {/* Position in class */}
+      {receipt.data?.position && (
+        <div className="text-lg text-slate-300 mb-2">
+          {t("positionInClass", {
+            rank: receipt.data.position.rank,
+            total: receipt.data.position.total,
+          })}
+        </div>
+      )}
+
+      {/* Two-column layout: splits + map */}
+      <div className={`flex gap-6 ${mispunchMapInfo ? "items-start" : ""}`}>
+        {/* Left: punch info */}
+        <div className="flex-1 min-w-0">
+          {readout.data?.found && (
+            <div className="bg-slate-800 rounded-2xl p-3 text-left">
+              <div className="grid grid-cols-3 gap-3 text-center mb-3">
                 <div>
-                  <div className="text-sm text-slate-400">{t("course")}</div>
-                  <div className="text-2xl font-bold">{readout.data.course.name}</div>
-                </div>
-                <div>
-                  <div className="text-sm text-slate-400">{t("length")}</div>
+                  <div className="text-sm text-slate-400">{t("controls")}</div>
                   <div className="text-2xl font-bold">
-                    {(readout.data.course.length / 1000).toFixed(1)} km
+                    {readout.data.controls.filter((c) => c.status === "ok").length}/{readout.data.controls.length}
                   </div>
                 </div>
-              </>
-            )}
-          </div>
+                {readout.data.course && (
+                  <>
+                    <div>
+                      <div className="text-sm text-slate-400">{t("course")}</div>
+                      <div className="text-2xl font-bold">{readout.data.course.name}</div>
+                    </div>
+                    <div>
+                      <div className="text-sm text-slate-400">{t("length")}</div>
+                      <div className="text-2xl font-bold">
+                        {(readout.data.course.length / 1000).toFixed(1)} km
+                      </div>
+                    </div>
+                  </>
+                )}
+              </div>
 
-          {/* Missing controls */}
-          {readout.data.missingControls.length > 0 && (
-            <div className="mt-4 p-4 bg-red-900/30 border border-red-700/50 rounded-xl">
-              <div className="text-red-400 font-semibold mb-2">
-                {t("missingControls", { count: readout.data.missingControls.length })}
-              </div>
-              <div className="flex flex-wrap gap-2">
-                {readout.data.missingControls.map((code, i) => (
-                  <span
-                    key={i}
-                    className="px-3 py-1 bg-red-800/50 text-red-300 rounded-lg font-mono text-lg"
-                  >
-                    {code}
-                  </span>
-                ))}
-              </div>
+              {/* Missing controls */}
+              {readout.data.missingControls.length > 0 && (
+                <div className="mb-4 p-3 bg-red-900/30 border border-red-700/50 rounded-xl">
+                  <div className="text-red-400 font-semibold mb-2">
+                    {t("missingControls", { count: readout.data.missingControls.length })}
+                  </div>
+                  <div className="flex flex-wrap gap-2">
+                    {readout.data.missingControls.map((code, i) => (
+                      <span key={i} className="px-3 py-1 bg-red-800/50 text-red-300 rounded-lg font-mono text-lg">
+                        {code}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Split times table */}
+              {punchTableData && (
+                <PunchTable data={punchTableData} compact dark />
+              )}
             </div>
           )}
         </div>
+
+        {/* Right: MapPanel for MP runners */}
+        {mispunchMapInfo && (
+          <div className="w-80 flex-shrink-0">
+            <div className="bg-slate-800 rounded-2xl p-4">
+              <div className="text-sm text-slate-400 mb-2 font-semibold">{t("courseMap")}</div>
+              <MapPanel
+                highlightCourseName={mispunchMapInfo.courseName}
+                filterMode="course"
+                height="300px"
+                fitToControls
+                punchStatusByCode={mispunchMapInfo.punchStatusByCode}
+                focusControlCodes={mispunchMapInfo.focusControlCodes}
+              />
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* Top-5 class results */}
+      {receipt.data?.classResults && receipt.data.classResults.length > 0 && (
+        <div className="mt-4 bg-slate-800 rounded-2xl p-4 text-left">
+          <div className="text-sm text-slate-400 mb-2 font-semibold">{t("classResults")}</div>
+          <div className="space-y-1">
+            {receipt.data.classResults.map((r) => (
+              <div key={r.rank} className={`flex items-center gap-3 text-sm py-1 ${r.rank === receipt.data!.position?.rank ? "text-emerald-400 font-bold" : "text-slate-300"}`}>
+                <span className="w-6 text-right font-mono">{r.rank}.</span>
+                <span className="flex-1 truncate">{r.name}</span>
+                {r.clubName && <span className="text-slate-500 truncate max-w-[120px]">{r.clubName}</span>}
+                <span className="font-mono tabular-nums">{formatRunningTime(r.runningTime)}</span>
+              </div>
+            ))}
+          </div>
+        </div>
       )}
+    </div>
+  );
+}
+
+/** Shared status icon for readout screen */
+function StatusIcon({ status }: { status: number }) {
+  const isOK = status === RunnerStatus.OK;
+  const isMP = status === RunnerStatus.MissingPunch;
+  const isDNF = status === RunnerStatus.DNF;
+
+  if (isOK) return (
+    <div className="inline-flex items-center justify-center w-24 h-24 rounded-full bg-emerald-500/20 border-4 border-emerald-400">
+      <svg className="w-14 h-14 text-emerald-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}>
+        <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
+      </svg>
+    </div>
+  );
+  if (isMP) return (
+    <div className="inline-flex items-center justify-center w-24 h-24 rounded-full bg-red-500/20 border-4 border-red-400">
+      <svg className="w-14 h-14 text-red-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}>
+        <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+      </svg>
+    </div>
+  );
+  if (isDNF) return (
+    <div className="inline-flex items-center justify-center w-24 h-24 rounded-full bg-amber-500/20 border-4 border-amber-400">
+      <svg className="w-14 h-14 text-amber-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}>
+        <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v3.75m9-.75a9 9 0 11-18 0 9 9 0 0118 0zm-9 3.75h.008v.008H12v-.008z" />
+      </svg>
+    </div>
+  );
+  return (
+    <div className="inline-flex items-center justify-center w-24 h-24 rounded-full bg-blue-500/20 border-4 border-blue-400">
+      <svg className="w-14 h-14 text-blue-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+        <path strokeLinecap="round" strokeLinejoin="round" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+      </svg>
     </div>
   );
 }
@@ -782,7 +1048,8 @@ function PreStartScreen({
         {runner?.name || card.runnerName || t("cardNumber", { number: card.cardNumber })}
       </h1>
       {(runner?.clubName || card.clubName) && (
-        <p className="text-2xl text-slate-400 mb-1">
+        <p className="text-2xl text-slate-400 mb-1 flex items-center justify-center gap-2">
+          {runner?.clubId && <ClubLogo clubId={runner.clubId} size="md" />}
           {runner?.clubName || card.clubName}
         </p>
       )}
@@ -811,7 +1078,7 @@ function PreStartScreen({
       {/* Course info */}
       {course && (
         <div className="bg-slate-800 rounded-2xl p-6 mb-6 max-w-md mx-auto">
-          <div className="grid grid-cols-3 gap-4 text-center">
+          <div className="grid grid-cols-2 gap-4 text-center">
             <div>
               <div className="text-sm text-slate-400">{t("course")}</div>
               <div className="text-xl font-bold">{course.name}</div>
@@ -821,10 +1088,6 @@ function PreStartScreen({
               <div className="text-xl font-bold">
                 {(course.length / 1000).toFixed(1)} km
               </div>
-            </div>
-            <div>
-              <div className="text-sm text-slate-400">{t("controls")}</div>
-              <div className="text-xl font-bold">{course.controlCount}</div>
             </div>
           </div>
         </div>
@@ -848,6 +1111,15 @@ function PreStartScreen({
               {isPast ? ` ${t("ago")}` : ` ${t("toStart")}`}
             </div>
           )}
+        </div>
+      ) : runner?.classFreeStart ? (
+        <div className="mt-6">
+          <div className="text-sm font-medium text-slate-400 uppercase tracking-wider mb-2">
+            {t("startTime")}
+          </div>
+          <div className="text-3xl font-bold text-emerald-400">
+            {t("freeStart")}
+          </div>
         </div>
       ) : (
         <div className="mt-6">
@@ -907,7 +1179,7 @@ function RegistrationWaitingScreen({
         {form?.paymentMode && (
           <InfoRow
             label={t("paymentLabel")}
-            value={form.paymentMode === "billed" ? t("invoice") : form.paymentMode === "swish" ? t("swish") : form.paymentMode === "card" ? t("cardPayment") : t("payOnSite")}
+            value={form.paymentMode === "billed" ? t("invoice") : form.paymentMode === "swish" ? t("swish") : form.paymentMode === "card" ? t("cardPayment") : form.paymentMode === "cash" ? t("cash") : t("payOnSite")}
           />
         )}
         {form?.fee != null && form.fee > 0 && form.paymentMode && form.paymentMode !== "billed" && (

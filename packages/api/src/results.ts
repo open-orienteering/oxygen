@@ -1,5 +1,60 @@
 import { RunnerStatus } from "@oxygen/shared";
 
+// ─── Position calculation for receipts ────────────────────────
+
+export interface ClassRunnerForPosition {
+  name: string;
+  clubId: number | null;
+  startTime: number;
+  finishTime: number;
+}
+
+export interface PositionResult {
+  rank: number;
+  total: number;
+  rankedRunners: Array<{ name: string; clubId: number | null; runningTime: number }>;
+}
+
+/**
+ * Compute the position of a runner within their class, including self-injection
+ * when the runner may not yet be persisted to the DB.
+ *
+ * Returns null if selfRunningTime <= 0 (no valid time).
+ */
+export function computePosition(
+  runners: ClassRunnerForPosition[],
+  selfName: string,
+  selfRunningTime: number,
+  selfClubId: number | null,
+): PositionResult | null {
+  if (selfRunningTime <= 0) return null;
+
+  const withTimes = runners
+    .filter((r) => r.finishTime > 0 && r.startTime > 0)
+    .map((r) => ({ name: r.name, clubId: r.clubId, runningTime: r.finishTime - r.startTime }))
+    .sort((a, b) => a.runningTime - b.runningTime);
+
+  // If the current runner isn't in the DB results yet (applyResult may not
+  // have persisted their status), include them so total count is correct.
+  const selfIncluded = withTimes.some(
+    (r) => r.name === selfName && r.runningTime === selfRunningTime,
+  );
+  if (!selfIncluded) {
+    withTimes.push({ name: selfName, clubId: selfClubId, runningTime: selfRunningTime });
+    withTimes.sort((a, b) => a.runningTime - b.runningTime);
+  }
+
+  const rank = withTimes.filter((r) => r.runningTime < selfRunningTime).length + 1;
+
+  return {
+    rank,
+    total: withTimes.length,
+    rankedRunners: withTimes,
+  };
+}
+
+// ─── Class placements for result lists ────────────────────────
+
 export interface RunnerForPlacement {
   id: number;
   status: number;

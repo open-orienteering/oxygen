@@ -42,6 +42,8 @@ export interface RecentCard {
   timestamp: Date;
   /** Determined action based on DB + card data */
   action: CardAction;
+  /** Whether the action has been resolved from the DB (false = still pending lookup) */
+  actionResolved: boolean;
   runnerName?: string;
   className?: string;
   clubName?: string;
@@ -91,15 +93,50 @@ export function useDeviceManager(): DeviceManagerState {
 // ─── Helpers ───────────────────────────────────────────────
 
 /**
- * Does this readout contain actual race data?
+ * Check if the SI card's punch data is likely from today's competition.
  *
- * Only check for control punches — start/finish times are unreliable after
- * card clearing because SI cards retain old times from previous races.
- * The MeOS backend has the authoritative finish/start data from the
- * timing stations.
+ * Uses the day-of-week encoded in the SI card's PTD bytes for finish/check
+ * times. If the finish (or check) was on a different day-of-week than today,
+ * the punches are stale data from a previous race.
+ *
+ * Returns false if card has no punches or if DOW indicates a different day.
+ * Returns true if DOW matches today or if no DOW info is available (conservative).
  */
-function hasRaceData(readout: SICardReadout): boolean {
-  return readout.punches.length > 0;
+export function isPunchDataFresh(readout: SICardReadout): boolean {
+  if (readout.punches.length === 0) return false;
+
+  // Convert JS day (0=Sun..6=Sat) to SI day (1=Mon..7=Sun)
+  const jsDay = new Date().getDay();
+  const todaySIDow = jsDay === 0 ? 7 : jsDay;
+
+  // Primary: check finish day-of-week
+  if (readout.finishDayOfWeek != null && readout.finishDayOfWeek !== todaySIDow) {
+    return false;
+  }
+
+  // Fallback: check the check-time day-of-week (if no finish DOW available)
+  if (readout.finishDayOfWeek == null && readout.checkDayOfWeek != null && readout.checkDayOfWeek !== todaySIDow) {
+    return false;
+  }
+
+  return true; // DOW matches or unavailable → assume fresh (server validates further)
+}
+
+/**
+ * Check if two card readouts have identical punch data.
+ * If all punches, start/finish/check times match exactly, the card hasn't changed.
+ */
+function readoutsMatch(a: SICardReadout, b: SICardReadout): boolean {
+  if (a.cardNumber !== b.cardNumber) return false;
+  if (a.startTime !== b.startTime) return false;
+  if (a.finishTime !== b.finishTime) return false;
+  if (a.checkTime !== b.checkTime) return false;
+  if (a.punches.length !== b.punches.length) return false;
+  for (let i = 0; i < a.punches.length; i++) {
+    if (a.punches[i].controlCode !== b.punches[i].controlCode) return false;
+    if (a.punches[i].time !== b.punches[i].time) return false;
+  }
+  return true;
 }
 
 // ─── Provider ──────────────────────────────────────────────
@@ -121,7 +158,11 @@ export function DeviceManagerProvider({ children }: { children: ReactNode }) {
   const pendingConfirmCallbackRef = useRef<(() => void) | null>(null);
 
   const storeReadout = trpc.cardReadout.storeReadout.useMutation();
+  const applyResult = trpc.cardReadout.applyResult.useMutation();
   const utils = trpc.useUtils();
+
+  // TestLab injection BroadcastChannel
+  const testLabChannelRef = useRef<BroadcastChannel | null>(null);
 
   // Manage kiosk BroadcastChannel lifecycle
   const setCompetitionNameId = useCallback((nameId: string | null) => {
@@ -130,15 +171,22 @@ export function DeviceManagerProvider({ children }: { children: ReactNode }) {
       kioskChannelRef.current.close();
       kioskChannelRef.current = null;
     }
+    // Clean up old testlab channel
+    if (testLabChannelRef.current) {
+      testLabChannelRef.current.close();
+      testLabChannelRef.current = null;
+    }
     if (nameId) {
       kioskChannelRef.current = new KioskChannel(nameId);
-      // Auto-respond to pings from kiosk
-      kioskChannelRef.current.subscribe((msg) => {
-        if (msg.type === "kiosk-ping" && msg.from === "kiosk") {
-          kioskChannelRef.current?.send({ type: "kiosk-ping", from: "admin" });
+      // Listen for TestLab fake readout injections
+      testLabChannelRef.current = new BroadcastChannel(`oxygen-testlab-${nameId}`);
+      testLabChannelRef.current.onmessage = (event) => {
+        if (event.data?.type === "inject-readout" && event.data.readout) {
+          addRecentCard(event.data.readout);
         }
-      });
+      };
     }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const getConnection = useCallback((): SIReaderConnection => {
@@ -150,72 +198,100 @@ export function DeviceManagerProvider({ children }: { children: ReactNode }) {
 
   // ── Process a card read ─────────────────────────────────
 
+  // Track recent readouts for deduplication (ref to avoid stale closure issues)
+  const recentCardsRef = useRef<RecentCard[]>([]);
+
   const addRecentCard = useCallback(
     async (readout: SICardReadout) => {
-      const id = `${readout.cardNumber}-${Date.now()}`;
-      const raceData = hasRaceData(readout);
+      // Deduplicate: if same card with identical punch data already exists,
+      // reuse the entry (update timestamp) but still re-resolve action from DB
+      // (runner may have been registered since last read).
+      const existing = recentCardsRef.current.find(
+        (c) => c.readout && readoutsMatch(c.readout, readout),
+      );
+      const isDuplicate = !!existing;
+
+      const id = isDuplicate ? existing.id : `${readout.cardNumber}-${Date.now()}`;
+      const raceData = isPunchDataFresh(readout);
 
       // Initial entry — before we know if runner is in DB
-      const entry: RecentCard = {
-        id,
-        cardNumber: readout.cardNumber,
-        cardType: readout.cardType,
-        timestamp: new Date(),
-        action: "register", // default until we check DB
-        hasRaceData: raceData,
-        ownerData: readout.ownerData ?? null,
-        readout,
-      };
+      const entry: RecentCard = isDuplicate
+        ? { ...existing, timestamp: new Date(), ownerData: readout.ownerData ?? existing.ownerData, actionResolved: false }
+        : {
+            id,
+            cardNumber: readout.cardNumber,
+            cardType: readout.cardType,
+            timestamp: new Date(),
+            action: "register", // default until we check DB
+            actionResolved: false,
+            hasRaceData: raceData,
+            ownerData: readout.ownerData ?? null,
+            readout,
+          };
 
       setCurrentCard(entry);
-      setRecentCards((prev) => [entry, ...prev].slice(0, MAX_RECENT));
-
-      // Send to kiosk immediately so it enters the correct mode
-      // before RegistrationPage broadcasts form state
-      if (kioskChannelRef.current) {
-        kioskChannelRef.current.send(recentCardToKioskMessage(entry));
-      }
-
-      // Store card data on the server (non-blocking)
-      try {
-        await storeReadout.mutateAsync({
-          cardNo: readout.cardNumber,
-          punches: readout.punches.map((p) => ({
-            controlCode: p.controlCode,
-            time: p.time,
-          })),
-          checkTime: readout.checkTime ?? undefined,
-          startTime: readout.startTime ?? undefined,
-          finishTime: readout.finishTime ?? undefined,
-          cardType: readout.cardType,
-          batteryVoltage: readout.batteryVoltage ?? undefined,
-          ownerData: readout.ownerData
-            ? {
-                firstName: readout.ownerData.firstName,
-                lastName: readout.ownerData.lastName,
-                sex: readout.ownerData.sex,
-                dateOfBirth: readout.ownerData.dateOfBirth,
-                club: readout.ownerData.club,
-                phone: readout.ownerData.phone,
-                email: readout.ownerData.email,
-                country: readout.ownerData.country,
-              }
-            : undefined,
-          metadata: readout.metadata
-            ? {
-                batteryDate: readout.metadata.batteryDate,
-                productionDate: readout.metadata.productionDate,
-                hardwareVersion: readout.metadata.hardwareVersion,
-                softwareVersion: readout.metadata.softwareVersion,
-                clearCount: readout.metadata.clearCount,
-              }
-            : undefined,
+      if (isDuplicate) {
+        setRecentCards((prev) => {
+          const next = [entry, ...prev.filter((c) => c.id !== id)].slice(0, MAX_RECENT);
+          recentCardsRef.current = next;
+          return next;
         });
-      } catch {
-        console.warn("[DeviceManager] Failed to store readout on server");
+      } else {
+        setRecentCards((prev) => {
+          const next = [entry, ...prev].slice(0, MAX_RECENT);
+          recentCardsRef.current = next;
+          return next;
+        });
       }
 
-      // Resolve runner info and determine action
+      // Store card data on the server (skip if duplicate — already stored)
+      let serverPunchesRelevant = true;
+      if (!isDuplicate) {
+        try {
+          const storeResult = await storeReadout.mutateAsync({
+            cardNo: readout.cardNumber,
+            punches: readout.punches.map((p) => ({
+              controlCode: p.controlCode,
+              time: p.time,
+            })),
+            checkTime: readout.checkTime ?? undefined,
+            startTime: readout.startTime ?? undefined,
+            finishTime: readout.finishTime ?? undefined,
+            cardType: readout.cardType,
+            batteryVoltage: readout.batteryVoltage ?? undefined,
+            ownerData: readout.ownerData
+              ? {
+                  firstName: readout.ownerData.firstName,
+                  lastName: readout.ownerData.lastName,
+                  sex: readout.ownerData.sex,
+                  dateOfBirth: readout.ownerData.dateOfBirth,
+                  club: readout.ownerData.club,
+                  phone: readout.ownerData.phone,
+                  email: readout.ownerData.email,
+                  country: readout.ownerData.country,
+                }
+              : undefined,
+            metadata: readout.metadata
+              ? {
+                  batteryDate: readout.metadata.batteryDate,
+                  productionDate: readout.metadata.productionDate,
+                  hardwareVersion: readout.metadata.hardwareVersion,
+                  softwareVersion: readout.metadata.softwareVersion,
+                  clearCount: readout.metadata.clearCount,
+                }
+              : undefined,
+          });
+          serverPunchesRelevant = storeResult.punchesRelevant ?? true;
+        } catch {
+          console.warn("[DeviceManager] Failed to store readout on server");
+        }
+      }
+
+      // Invalidate cache to ensure fresh DB data (runner may have been registered
+      // since the last read of this card)
+      await utils.cardReadout.readout.invalidate({ cardNo: readout.cardNumber });
+
+      // Resolve runner info and determine action (always — even for duplicates)
       try {
         const result = await utils.cardReadout.readout.fetch({
           cardNo: readout.cardNumber,
@@ -235,8 +311,17 @@ export function DeviceManagerProvider({ children }: { children: ReactNode }) {
           const hasDbResult =
             dbStatus > 0 && dbStatus !== 20 && dbStatus !== 21;
 
-          if (raceData || hasDbResult) {
-            // Runner found AND (card has race data OR already has result in DB) → readout
+          // Punches are relevant only if BOTH:
+          // - Client-side DOW check passed (raceData = isPunchDataFresh)
+          // - Server-side foreign control check passed (serverPunchesRelevant)
+          // - Server-side course matching found hits (punchesMatchCourse)
+          const punchesRelevant =
+            raceData &&
+            serverPunchesRelevant &&
+            (result.punchesMatchCourse ?? false);
+
+          if (punchesRelevant || hasDbResult) {
+            // Runner found AND (punches match this competition OR already has result in DB) → readout
             action = "readout";
             status =
               result.timing.status === 1
@@ -249,7 +334,7 @@ export function DeviceManagerProvider({ children }: { children: ReactNode }) {
                       ? "DNS"
                       : undefined;
           } else {
-            // Runner found but card is clean and no result → pre-start
+            // Runner found but punches are stale/absent and no result → pre-start
             action = "pre-start";
           }
         }
@@ -257,6 +342,10 @@ export function DeviceManagerProvider({ children }: { children: ReactNode }) {
         const updated: RecentCard = {
           ...entry,
           action,
+          actionResolved: true,
+          hasRaceData: result.found
+            ? ((result.punchesMatchCourse ?? false) && serverPunchesRelevant)
+            : entry.hasRaceData,
           runnerName: result.found ? result.runner.name : undefined,
           className: result.found ? result.runner.className : undefined,
           clubName: result.found ? result.runner.clubName : undefined,
@@ -265,19 +354,45 @@ export function DeviceManagerProvider({ children }: { children: ReactNode }) {
         };
 
         setCurrentCard(updated);
-        setRecentCards((prev) =>
-          prev.map((c) => (c.id === id ? updated : c)),
-        );
+        setRecentCards((prev) => {
+          const next = prev.map((c) => (c.id === id ? updated : c));
+          recentCardsRef.current = next;
+          return next;
+        });
 
         // Broadcast to kiosk window (paired mode)
         if (kioskChannelRef.current) {
           kioskChannelRef.current.send(recentCardToKioskMessage(updated));
         }
+
+        // Apply computed result to oRunner (readout station step)
+        if (action === "readout" && result.found) {
+          try {
+            await applyResult.mutateAsync({
+              runnerId: result.runner.id,
+              status: result.timing.status,
+              finishTime: result.timing.finishTime,
+              startTime: result.timing.startTime,
+            });
+            // Invalidate caches so results/runner lists recalculate placements
+            // for ALL runners in the class, not just the one just read out
+            utils.runner.list.invalidate();
+            utils.lists.resultList.invalidate();
+          } catch {
+            console.warn("[DeviceManager] Failed to apply readout result");
+          }
+        }
       } catch {
-        // If the fetch fails, keep the initial entry
-        // Still broadcast the initial entry to kiosk
+        // If the fetch fails, mark as resolved with default action and broadcast
+        const fallback: RecentCard = { ...entry, actionResolved: true };
+        setCurrentCard(fallback);
+        setRecentCards((prev) => {
+          const next = prev.map((c) => (c.id === id ? fallback : c));
+          recentCardsRef.current = next;
+          return next;
+        });
         if (kioskChannelRef.current) {
-          kioskChannelRef.current.send(recentCardToKioskMessage(entry));
+          kioskChannelRef.current.send(recentCardToKioskMessage(fallback));
         }
       }
     },
@@ -299,6 +414,7 @@ export function DeviceManagerProvider({ children }: { children: ReactNode }) {
 
   const clearRecentCards = useCallback(() => {
     setRecentCards([]);
+    recentCardsRef.current = [];
     setCurrentCard(null);
   }, []);
 
@@ -329,9 +445,17 @@ export function DeviceManagerProvider({ children }: { children: ReactNode }) {
       addRecentCard(readout);
     };
 
+    const onCardRemoved = () => {
+      setLastDetectedCardNo(null);
+      if (kioskChannelRef.current) {
+        kioskChannelRef.current.send({ type: "card-removed" });
+      }
+    };
+
     conn.addEventListener("si:status", onStatus);
     conn.addEventListener("si:card-detected", onCardDetected);
     conn.addEventListener("si:card-readout", onCardReadout);
+    conn.addEventListener("si:card-removed", onCardRemoved);
 
     if (supported) {
       conn.tryAutoReconnect().catch(() => {});
@@ -341,6 +465,7 @@ export function DeviceManagerProvider({ children }: { children: ReactNode }) {
       conn.removeEventListener("si:status", onStatus);
       conn.removeEventListener("si:card-detected", onCardDetected);
       conn.removeEventListener("si:card-readout", onCardReadout);
+      conn.removeEventListener("si:card-removed", onCardRemoved);
     };
   }, [getConnection, addRecentCard, supported]);
 

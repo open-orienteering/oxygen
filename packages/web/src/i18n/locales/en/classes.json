@@ -51,5 +51,11 @@
   "cancel": "Cancel",
   "namePlaceholder": "e.g. H21",
   "noCoursesAvailable": "No courses available",
-  "dragLabel": "Drag to reorder"
+  "dragLabel": "Drag to reorder",
+  "yes": "Yes",
+  "no": "No",
+  "apply": "Apply",
+  "applying": "Applying...",
+  "bulkConfirm": "Set {{field}} to \"{{value}}\" for {{count}} classes?",
+  "bulkUpdated": "Updated {{count}} classes"
 }

@@ -6,6 +6,8 @@ import { formatMeosTime, type ClassSummary } from "@oxygen/shared";
 import { useSearchParam, useNumericSearchParam } from "../hooks/useSearchParam";
 import { SortHeader } from "../components/SortHeader";
 import { useSort } from "../hooks/useSort";
+import { useTableSelection } from "../hooks/useTableSelection";
+import { BulkActionBar } from "../components/BulkActionBar";
 import {
   DndContext,
   closestCenter,
@@ -36,6 +38,36 @@ export function ClassesPage() {
   const classes = trpc.class.list.useQuery({
     search: search || undefined,
   });
+
+  const selection = useTableSelection(classes.data ?? []);
+
+  const [bulkField, setBulkField] = useState<"fee" | "freeStart" | "noTiming">("fee");
+  const [bulkValue, setBulkValue] = useState<string>("");
+
+  const bulkUpdateMutation = trpc.class.bulkUpdate.useMutation({
+    onSuccess: () => {
+      utils.class.list.invalidate();
+      utils.class.detail.invalidate();
+      selection.clearSelection();
+    },
+  });
+
+  const handleApplyBulk = () => {
+    if (bulkValue === "") return;
+    const fieldLabel = bulkField === "fee" ? t("fee").toLowerCase() : bulkField === "freeStart" ? t("freeStart").toLowerCase() : t("noTiming").toLowerCase();
+    const valueLabel = bulkField === "fee" ? `${bulkValue} kr` : bulkValue === "1" ? t("yes") : t("no");
+    if (!window.confirm(t("bulkConfirm", { field: fieldLabel, value: valueLabel, count: selection.count }))) return;
+
+    const data: { classFee?: number; freeStart?: boolean; noTiming?: boolean } = {};
+    if (bulkField === "fee") data.classFee = parseInt(bulkValue, 10) || 0;
+    else if (bulkField === "freeStart") data.freeStart = bulkValue === "1";
+    else if (bulkField === "noTiming") data.noTiming = bulkValue === "1";
+
+    bulkUpdateMutation.mutate({
+      ids: Array.from(selection.selected),
+      data,
+    });
+  };
 
   const deleteMutation = trpc.class.delete.useMutation({
     onSuccess: () => {
@@ -174,13 +206,22 @@ export function ClassesPage() {
             <SortableContext
               items={sortableIds}
               strategy={verticalListSortingStrategy}
-              disabled={isFiltered}
+              disabled={isFiltered || selection.someSelected}
             >
               <div className="overflow-x-auto">
                 <table className="w-full text-sm">
                   <thead>
                     <tr className="bg-slate-50 border-b border-slate-200">
-                      {!isFiltered && (
+                      <th className="w-10 px-1 py-2.5">
+                        <input
+                          type="checkbox"
+                          checked={selection.allSelected}
+                          ref={(el) => { if (el) el.indeterminate = selection.someSelected && !selection.allSelected; }}
+                          onChange={selection.toggleAll}
+                          className="rounded border-slate-300 text-blue-600 focus:ring-blue-500 cursor-pointer"
+                        />
+                      </th>
+                      {!isFiltered && !selection.someSelected && (
                         <th className="w-10 px-1 py-2.5" />
                       )}
                       <SortHeader label={t("name")} active={isFiltered ? sort.key === "name" : undefined} direction={sort.dir} onClick={() => toggle("name")} />
@@ -200,9 +241,12 @@ export function ClassesPage() {
                         cls={cls}
                         isExpanded={expandedId === cls.id}
                         isFiltered={isFiltered}
+                        isDndDisabled={isFiltered || selection.someSelected}
+                        isSelected={selection.isSelected(cls.id)}
+                        onToggleSelect={() => selection.toggle(cls.id)}
                         onToggleExpand={() => handleToggleExpand(cls.id)}
                         onDelete={() => handleDelete(cls.id, cls.name)}
-                        colSpan={isFiltered ? 6 : 7}
+                        colSpan={(!isFiltered && !selection.someSelected) ? 9 : 8}
                       />
                     ))}
                   </tbody>
@@ -212,6 +256,46 @@ export function ClassesPage() {
           </DndContext>
         )}
       </div>
+
+      {/* Bulk action bar */}
+      <BulkActionBar count={selection.count} onDeselectAll={selection.clearSelection}>
+        <select
+          value={bulkField}
+          onChange={(e) => { setBulkField(e.target.value as typeof bulkField); setBulkValue(""); }}
+          className="px-3 py-1.5 border border-slate-200 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 cursor-pointer"
+        >
+          <option value="fee">{t("fee")}</option>
+          <option value="freeStart">{t("freeStart")}</option>
+          <option value="noTiming">{t("noTiming")}</option>
+        </select>
+        {bulkField === "fee" ? (
+          <input
+            type="number"
+            min={0}
+            value={bulkValue}
+            onChange={(e) => setBulkValue(e.target.value)}
+            placeholder="0"
+            className="w-24 px-3 py-1.5 border border-slate-200 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 tabular-nums"
+          />
+        ) : (
+          <select
+            value={bulkValue}
+            onChange={(e) => setBulkValue(e.target.value)}
+            className="px-3 py-1.5 border border-slate-200 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 cursor-pointer"
+          >
+            <option value="">—</option>
+            <option value="1">{t("yes")}</option>
+            <option value="0">{t("no")}</option>
+          </select>
+        )}
+        <button
+          onClick={handleApplyBulk}
+          disabled={bulkValue === "" || bulkUpdateMutation.isPending}
+          className="px-4 py-1.5 bg-blue-600 text-white text-sm font-medium rounded-lg hover:bg-blue-700 disabled:opacity-50 transition-colors cursor-pointer"
+        >
+          {bulkUpdateMutation.isPending ? t("applying") : t("apply")}
+        </button>
+      </BulkActionBar>
 
       {/* Map */}
       <MapPanel
@@ -232,6 +316,9 @@ function SortableClassRow({
   cls,
   isExpanded,
   isFiltered,
+  isDndDisabled,
+  isSelected,
+  onToggleSelect,
   onToggleExpand,
   onDelete,
   colSpan,
@@ -239,6 +326,9 @@ function SortableClassRow({
   cls: ClassSummary;
   isExpanded: boolean;
   isFiltered: boolean;
+  isDndDisabled: boolean;
+  isSelected: boolean;
+  onToggleSelect: () => void;
   onToggleExpand: () => void;
   onDelete: () => void;
   colSpan: number;
@@ -251,7 +341,7 @@ function SortableClassRow({
     transform,
     transition,
     isDragging,
-  } = useSortable({ id: cls.id, disabled: isFiltered });
+  } = useSortable({ id: cls.id, disabled: isDndDisabled });
 
   const style = {
     transform: CSS.Transform.toString(transform),
@@ -267,11 +357,19 @@ function SortableClassRow({
         ref={setNodeRef}
         style={style}
         className={`transition-colors cursor-pointer ${
-          isExpanded ? "bg-blue-50" : "hover:bg-slate-50"
+          isSelected ? "bg-blue-50/80" : isExpanded ? "bg-blue-50" : "hover:bg-slate-50"
         } ${isDragging ? "shadow-lg bg-white" : ""}`}
         onClick={onToggleExpand}
       >
-        {!isFiltered && (
+        <td className="w-10 px-1 py-2.5 text-center" onClick={(e) => e.stopPropagation()}>
+          <input
+            type="checkbox"
+            checked={isSelected}
+            onChange={onToggleSelect}
+            className="rounded border-slate-300 text-blue-600 focus:ring-blue-500 cursor-pointer"
+          />
+        </td>
+        {!isFiltered && !isDndDisabled && (
           <td
             className="w-10 px-1 py-2.5 text-center"
             onClick={(e) => e.stopPropagation()}

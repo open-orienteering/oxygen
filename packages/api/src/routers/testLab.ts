@@ -8,6 +8,7 @@ import {
   ensureClubDbTable,
 } from "../db.js";
 import { RunnerStatus } from "@oxygen/shared";
+import { generateDrawPreview } from "../draw/index.js";
 import type { PrismaClient } from "@prisma/client";
 import type mysql from "mysql2/promise";
 import {
@@ -1053,4 +1054,203 @@ export const testLabRouter = router({
     simulations.delete(simKey);
     return result;
   }),
+
+  // ─── Quick Draw ──────────────────────────────────────────
+
+  quickDraw: publicProcedure.mutation(async () => {
+    const client = await getCompetitionClient();
+
+    const event = await client.oEvent.findFirst({ where: { Removed: false } });
+    const zeroTime = event?.ZeroTime ?? 324000; // default 09:00
+
+    // Load all non-free-start classes that have runners
+    const classes = await client.oClass.findMany({
+      where: { Removed: false },
+      orderBy: { SortIndex: "asc" },
+    });
+
+    const runners = await client.oRunner.findMany({
+      where: { Removed: false },
+      select: { Class: true },
+    });
+    const countByClass = new Map<number, number>();
+    for (const r of runners) {
+      countByClass.set(r.Class, (countByClass.get(r.Class) ?? 0) + 1);
+    }
+
+    // Filter: skip free-start classes and classes with no runners
+    const drawClasses = classes
+      .filter((c) => c.FreeStart !== 1 && (countByClass.get(c.Id) ?? 0) > 0)
+      .map((c) => ({
+        classId: c.Id,
+        method: "random" as const,
+        interval: 1200, // 120 seconds in deciseconds
+      }));
+
+    if (drawClasses.length === 0) {
+      return { totalDrawn: 0, classesDrawn: 0 };
+    }
+
+    const settings = {
+      firstStart: zeroTime,
+      baseInterval: 1200,
+      maxParallelStarts: 1,
+      detectCourseOverlap: false,
+    };
+
+    const result = await generateDrawPreview(client, drawClasses, settings);
+
+    let totalDrawn = 0;
+    const configMap = new Map(drawClasses.map((c) => [c.classId, c]));
+
+    for (const cls of result.classes) {
+      const config = configMap.get(cls.classId);
+
+      for (const entry of cls.entries) {
+        await client.oRunner.update({
+          where: { Id: entry.runnerId },
+          data: {
+            StartTime: entry.startTime,
+            StartNo: entry.startNo,
+          },
+        });
+        await incrementCounter("oRunner", entry.runnerId);
+        totalDrawn++;
+      }
+
+      if (config) {
+        await client.oClass.update({
+          where: { Id: cls.classId },
+          data: {
+            FirstStart: cls.computedFirstStart,
+            StartInterval: config.interval,
+          },
+        });
+        await incrementCounter("oClass", cls.classId);
+      }
+    }
+
+    return { totalDrawn, classesDrawn: result.classes.length };
+  }),
+
+  // ─── Generate Readout (preview for editing) ──────────────
+
+  generateReadout: publicProcedure
+    .input(z.object({
+      runnerId: z.number().int(),
+      mode: z.enum(["ok", "mp", "dnf", "dns"]),
+    }))
+    .mutation(async ({ input }) => {
+      const client = await getCompetitionClient();
+
+      // Load runner
+      const runner = await client.oRunner.findFirst({
+        where: { Id: input.runnerId, Removed: false },
+      });
+      if (!runner) throw new Error("Runner not found");
+
+      // Load class
+      const cls = await client.oClass.findFirst({
+        where: { Id: runner.Class, Removed: false },
+      });
+      if (!cls) throw new Error("Class not found");
+
+      // Load course
+      const courseId = runner.Course || cls.Course || 0;
+      const course = courseId ? await client.oCourse.findFirst({
+        where: { Id: courseId, Removed: false },
+      }) : null;
+
+      const courseControls = course
+        ? course.Controls.split(";").filter(Boolean).map(Number).filter((n) => !isNaN(n))
+        : [];
+
+      // Determine pace from class tier
+      const classDef = CLASS_DEFS.find((d) => d.name === cls.Name);
+      const tier = classDef?.courseTier ?? 4;
+      const paceInfo = TIER_PACE[tier] ?? TIER_PACE[4];
+
+      // Runner's start time (deciseconds) → convert to seconds
+      const startTimeDs = runner.StartTime > 0 ? runner.StartTime : 324000; // default 09:00
+      const startTimeSec = Math.floor(startTimeDs / 10);
+      const checkTimeSec = startTimeSec - 60; // 1 min before start
+      const clearTimeSec = checkTimeSec - 30; // 30s before check
+
+      // Generate punches based on mode
+      const courseLengthKm = (course?.Length || 5000) / 1000;
+      const paceVariation = 1 + gaussianRandom() * paceInfo.spread;
+      const totalTimeSec = Math.max(
+        courseLengthKm * paceInfo.base * 0.5,
+        courseLengthKm * paceInfo.base * paceVariation,
+      );
+
+      // Determine which controls to include
+      let controlsToVisit: number[];
+      if (input.mode === "dns") {
+        controlsToVisit = [];
+      } else if (input.mode === "dnf") {
+        // Visit 30-80% of controls then stop
+        const fraction = 0.3 + Math.random() * 0.5;
+        controlsToVisit = courseControls.slice(0, Math.floor(courseControls.length * fraction));
+      } else if (input.mode === "mp") {
+        // Skip one random control
+        const skipIdx = Math.floor(Math.random() * courseControls.length);
+        controlsToVisit = courseControls.filter((_, i) => i !== skipIdx);
+      } else {
+        controlsToVisit = [...courseControls];
+      }
+
+      // Distribute time across legs
+      const numLegs = controlsToVisit.length + (input.mode === "dnf" || input.mode === "dns" ? 0 : 1);
+      const legTimes: number[] = [];
+      let legTimeSum = 0;
+      for (let i = 0; i < Math.max(1, numLegs); i++) {
+        const raw = 1 + gaussianRandom() * 0.3;
+        const t = Math.max(0.3, raw);
+        legTimes.push(t);
+        legTimeSum += t;
+      }
+      const scaleFactor = totalTimeSec / Math.max(1, legTimeSum);
+      for (let i = 0; i < legTimes.length; i++) {
+        legTimes[i] *= scaleFactor;
+      }
+
+      // Build punch array (times in seconds since midnight)
+      const punches: { controlCode: number; time: number }[] = [];
+      let cumulativeSec = startTimeSec;
+      for (let i = 0; i < controlsToVisit.length; i++) {
+        cumulativeSec += Math.round(legTimes[i] ?? legTimes[legTimes.length - 1] ?? 60);
+        punches.push({ controlCode: controlsToVisit[i], time: cumulativeSec });
+      }
+
+      // Finish time
+      let finishTimeSec: number | null = null;
+      if (input.mode !== "dnf" && input.mode !== "dns" && numLegs > 0) {
+        cumulativeSec += Math.round(legTimes[legTimes.length - 1] ?? 60);
+        finishTimeSec = cumulativeSec;
+      }
+
+      // Status
+      let status: number;
+      if (input.mode === "ok") status = RunnerStatus.OK;
+      else if (input.mode === "mp") status = RunnerStatus.MissingPunch;
+      else if (input.mode === "dnf") status = RunnerStatus.DNF;
+      else status = RunnerStatus.DNS;
+
+      return {
+        runnerId: input.runnerId,
+        cardNo: runner.CardNo,
+        runnerName: runner.Name,
+        className: cls.Name,
+        courseName: course?.Name ?? "Unknown",
+        courseLength: course?.Length ?? 0,
+        controlCount: courseControls.length,
+        startTime: startTimeSec,
+        checkTime: checkTimeSec,
+        clearTime: clearTimeSec,
+        finishTime: finishTimeSec,
+        status,
+        punches,
+      };
+    }),
 });

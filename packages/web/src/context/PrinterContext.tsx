@@ -69,6 +69,7 @@ function useReceiptLabels() {
     }),
     registration: (): RegistrationReceiptLabels => ({
       registration: t("registration"),
+      receipt: t("receipt"),
       name: t("name") + ":",
       club: t("club") + ":",
       class: t("class") + ":",
@@ -79,6 +80,15 @@ function useReceiptLabels() {
       amount: t("amount") + ":",
       printed: t("printed"),
       tagline: t("tagline"),
+      entryFee: t("entryFee"),
+      vatExempt: t("vatExempt"),
+      vat: t("vat"),
+      total: t("total"),
+      friskvardNote: t("friskvardNote"),
+      date: t("date") + ":",
+      participant: t("participant") + ":",
+      entryFeeSubtitle: t("entryFeeSubtitle"),
+      paymentMethod: t("paymentMethod"),
     }),
   };
 }

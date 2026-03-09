@@ -89,7 +89,7 @@ export default async function globalSetup() {
     // ── 2. Clean up leftover E2E test databases ───────────────
 
     const [rows] = await conn.execute(
-      "SELECT Id, NameId FROM oEvent WHERE (NameId LIKE 'E2E\\_%' OR NameId LIKE 'Delete\\_%') AND Removed = 0",
+      "SELECT Id, NameId FROM oEvent WHERE (NameId LIKE 'E2E\\_%' OR NameId LIKE 'Delete\\_%' OR NameId LIKE 'oxygen\\_test\\_%') AND Removed = 0",
     );
 
     if (Array.isArray(rows)) {

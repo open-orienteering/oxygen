@@ -7,6 +7,7 @@ import {
   parseCardDetection,
   parsePunchRecord,
   parsePunchTime,
+  parseDayOfWeek,
   parseSI8CardData,
   parseSI10CardData,
   parseSI10PersonalData,
@@ -893,5 +894,100 @@ describe("parseSI10CardData", () => {
     });
     const result = parseSI10CardData(blocks)!;
     expect(result.ownerData).toBeNull();
+  });
+});
+
+// ─── parseDayOfWeek ─────────────────────────────────────────
+
+describe("parseDayOfWeek", () => {
+  it("extracts day-of-week from PTD byte bits 1-3", () => {
+    // DOW 1 (Mon) = 0b0000_0010 (bit 1 set)
+    expect(parseDayOfWeek(0x02)).toBe(1);
+    // DOW 5 (Fri) = 0b0000_1010
+    expect(parseDayOfWeek(0x0a)).toBe(5);
+    // DOW 7 (Sun) = 0b0000_1110
+    expect(parseDayOfWeek(0x0e)).toBe(7);
+  });
+
+  it("handles PM flag (bit 0) without affecting DOW", () => {
+    // DOW 3 (Wed) + PM = 0b0000_0111
+    expect(parseDayOfWeek(0x07)).toBe(3);
+    // DOW 6 (Sat) + PM = 0b0000_1101
+    expect(parseDayOfWeek(0x0d)).toBe(6);
+  });
+
+  it("ignores high bits (used for station code in punch records)", () => {
+    // DOW 2 (Tue) = 0b0000_0100, with high bits set: 0b1100_0100
+    expect(parseDayOfWeek(0xc4)).toBe(2);
+  });
+
+  it("returns null for zero DOW", () => {
+    expect(parseDayOfWeek(0x00)).toBeNull();
+    expect(parseDayOfWeek(0x01)).toBeNull(); // only PM set, DOW=0
+  });
+});
+
+// ─── SI8 Day-of-Week extraction ─────────────────────────────
+
+describe("parseSI8CardData DOW extraction", () => {
+  // Reuse makeBlock0 from the parseSI8CardData describe block above
+  function makeDowBlock(options: {
+    finishDow?: number; // 1-7
+    finishPm?: boolean;
+    checkDow?: number;
+    checkPm?: boolean;
+  }): Uint8Array {
+    const block = new Uint8Array(128);
+    // Card number 2220164 (SI8)
+    block[24] = 0x02;
+    block[25] = (2220164 >> 16) & 0xff;
+    block[26] = (2220164 >> 8) & 0xff;
+    block[27] = 2220164 & 0xff;
+    block[22] = 0; // no punches
+
+    if (options.checkDow != null) {
+      // Check PTD at offset 8: DOW in bits 1-3, PM in bit 0
+      block[8] = ((options.checkDow & 0x07) << 1) | (options.checkPm ? 1 : 0);
+      // Check time at offset 10-11: 10:00:00 = 36000s = 0x8CA0
+      block[10] = 0x8c;
+      block[11] = 0xa0;
+    }
+
+    if (options.finishDow != null) {
+      // Finish PTD at offset 16: DOW in bits 1-3, PM in bit 0
+      block[16] = ((options.finishDow & 0x07) << 1) | (options.finishPm ? 1 : 0);
+      // Finish time at offset 18-19: 10:30:00 = 37800s = 0x93A8
+      block[18] = 0x93;
+      block[19] = 0xa8;
+    }
+
+    return block;
+  }
+
+  it("extracts finishDayOfWeek from PTD byte", () => {
+    const block = makeDowBlock({ finishDow: 5 }); // Friday
+    const result = parseSI8CardData([block])!;
+    expect(result.finishDayOfWeek).toBe(5);
+  });
+
+  it("extracts checkDayOfWeek from PTD byte", () => {
+    const block = makeDowBlock({ checkDow: 3 }); // Wednesday
+    const result = parseSI8CardData([block])!;
+    expect(result.checkDayOfWeek).toBe(3);
+  });
+
+  it("returns null DOW when no finish time", () => {
+    const block = makeDowBlock({}); // no finish, no check
+    const result = parseSI8CardData([block])!;
+    expect(result.finishDayOfWeek).toBeNull();
+    expect(result.checkDayOfWeek).toBeNull();
+  });
+
+  it("handles PM flag alongside DOW", () => {
+    const block = makeDowBlock({ finishDow: 6, finishPm: true }); // Saturday PM
+    const result = parseSI8CardData([block])!;
+    expect(result.finishDayOfWeek).toBe(6);
+    // Finish time should be PM-adjusted (37800 + 43200 = 81000)
+    expect(result.finishTime).toBe(81000);
   });
 });

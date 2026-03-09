@@ -13,6 +13,10 @@ export const RunnerStatus = {
   NotCompeting: 99,
 } as const;
 
+/** Payment mode values matching MeOS oRunner.PayMode */
+export const PAY_MODE = { none: 0, billed: 1, onSite: 2, card: 3, swish: 4, cash: 5 } as const;
+export type PayMode = (typeof PAY_MODE)[keyof typeof PAY_MODE];
+
 export type RunnerStatusValue =
   (typeof RunnerStatus)[keyof typeof RunnerStatus];
 
@@ -268,6 +272,9 @@ export interface RunnerInfo {
   startTime: number;
   finishTime: number;
   status: RunnerStatusValue;
+  fee?: number;
+  paid?: number;
+  payMode?: number;
 }
 
 /** Runner detail (for editing) */
@@ -289,6 +296,7 @@ export interface RunnerDetail {
   phone: string;
   fee: number;
   paid: number;
+  payMode: number;
   bib: string;
   entryDate: number; // YYYYMMDD as int
 }

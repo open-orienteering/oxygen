@@ -1,10 +1,12 @@
 import { trpc } from "../lib/trpc";
-
-const API_BASE = import.meta.env.VITE_API_URL ?? "";
+import { getClubLogoUrl } from "../lib/club-logo";
 
 /**
  * Displays a club's logo (if one exists) by looking up the local club ID
  * in the cached logoMap and rendering an <img> from the logo endpoint.
+ *
+ * If a high-quality SVG override exists in public/clubs/, it is used instead
+ * of the Eventor-imported PNG.
  *
  * Props:
  *   clubId     — local club ID (from oClub.Id)
@@ -35,10 +37,11 @@ export function ClubLogo({
 
   const variant = size === "lg" ? "large" : "small";
   const px = size === "sm" ? 16 : size === "md" ? 24 : 48;
+  const src = getClubLogoUrl(resolvedEventorId, variant);
 
   return (
     <img
-      src={`${API_BASE}/api/club-logo/${resolvedEventorId}?variant=${variant}`}
+      src={src}
       alt=""
       width={px}
       height={px}

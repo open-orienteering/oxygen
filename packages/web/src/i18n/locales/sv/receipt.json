@@ -17,5 +17,15 @@
   "freeStart": "Fri starttid",
   "printed": "Utskriven",
   "tagline": "Lightweight orienteering management",
-  "missing": "SAKNAS"
+  "missing": "SAKNAS",
+  "receipt": "Kvitto",
+  "entryFee": "Anmälningsavgift",
+  "vatExempt": "Momsbefriad",
+  "vat": "Moms",
+  "total": "TOTALT",
+  "friskvardNote": "Giltigt som friskvårdsbidrag",
+  "date": "Datum",
+  "participant": "Deltagare",
+  "entryFeeSubtitle": "ANMÄLNINGSAVGIFT",
+  "paymentMethod": "Betalsätt:"
 }

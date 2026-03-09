@@ -1,6 +1,9 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { useTranslation } from "react-i18next";
+import { useParams } from "react-router-dom";
 import { trpc } from "../lib/trpc";
+import { getCardType } from "../lib/si-protocol";
+import type { SICardReadout } from "../lib/si-protocol";
 
 type SimSpeed = 0 | 1 | 10 | 50;
 
@@ -11,8 +14,53 @@ const SPEED_OPTIONS: { value: SimSpeed; label: string }[] = [
   { value: 50, label: "50x" },
 ];
 
+// ─── Helpers ──────────────────────────────────────────────
+
+/** Format seconds since midnight as HH:MM:SS */
+function fmtSec(seconds: number | null | undefined): string {
+  if (seconds == null || seconds <= 0) return "-";
+  const h = Math.floor(seconds / 3600);
+  const m = Math.floor((seconds % 3600) / 60);
+  const s = seconds % 60;
+  return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
+}
+
+/** Parse HH:MM:SS string to seconds since midnight */
+function parseSec(str: string): number | null {
+  const parts = str.split(":");
+  if (parts.length !== 3) return null;
+  const [h, m, s] = parts.map(Number);
+  if (isNaN(h) || isNaN(m) || isNaN(s)) return null;
+  return h * 3600 + m * 60 + s;
+}
+
+// ─── Types ────────────────────────────────────────────────
+
+interface EditablePunch {
+  controlCode: number;
+  time: number; // seconds since midnight
+}
+
+interface ReadoutPreview {
+  runnerId: number;
+  cardNo: number;
+  runnerName: string;
+  className: string;
+  courseName: string;
+  courseLength: number;
+  controlCount: number;
+  startTime: number;
+  checkTime: number;
+  clearTime: number;
+  finishTime: number | null;
+  status: number;
+  punches: EditablePunch[];
+  dayOfWeek: number; // 1-7 (Mon-Sun)
+}
+
 export function TestLabPage() {
   const { t } = useTranslation("common");
+  const { nameId } = useParams<{ nameId: string }>();
   const utils = trpc.useUtils();
   const status = trpc.testLab.status.useQuery(undefined, { refetchInterval: 5000 });
   const simStatus = trpc.testLab.simulationStatus.useQuery(undefined, {
@@ -69,6 +117,19 @@ export function TestLabPage() {
       }));
       utils.testLab.status.invalidate();
       utils.runner.list.invalidate();
+      utils.competition.dashboard.invalidate();
+    },
+  });
+
+  const quickDraw = trpc.testLab.quickDraw.useMutation({
+    onSuccess: (data) => {
+      setLastResult((prev) => ({
+        ...prev,
+        draw: `Drew ${data.totalDrawn} runners across ${data.classesDrawn} classes`,
+      }));
+      utils.testLab.status.invalidate();
+      utils.runner.list.invalidate();
+      utils.draw.defaults.invalidate();
       utils.competition.dashboard.invalidate();
     },
   });
@@ -132,6 +193,7 @@ export function TestLabPage() {
     generateCourses.isPending ||
     registerRunners.isPending ||
     registerFictionalRunners.isPending ||
+    quickDraw.isPending ||
     startSimulation.isPending;
 
   return (
@@ -278,9 +340,39 @@ export function TestLabPage() {
         </div>
       </StageCard>
 
-      {/* Stage 4: Simulation */}
+      {/* Stage 4: Quick Draw */}
       <StageCard
         number={4}
+        title="Quick Draw"
+        description="Auto-draw all non-free-start classes with random start order and 2-minute intervals."
+        ready={hasRunners}
+        done={hasStartTimes}
+        result={lastResult.draw}
+        error={quickDraw.error?.message}
+        details={<>
+          <p>Draws all classes with sensible defaults:</p>
+          <ul className="list-disc ml-4 mt-1 space-y-0.5">
+            <li><strong>Method:</strong> Random</li>
+            <li><strong>Interval:</strong> 2 minutes between starts</li>
+            <li><strong>First start:</strong> Competition zero time (typically 09:00)</li>
+            <li><strong>Max parallel starts:</strong> 1</li>
+          </ul>
+          <p className="mt-1.5">Skips free-start classes. Uses the same draw engine as the Start List page.</p>
+        </>}
+      >
+        <button
+          onClick={() => quickDraw.mutate()}
+          disabled={anyLoading || !hasRunners}
+          className="px-4 py-2 bg-amber-600 text-white text-sm font-medium rounded-lg hover:bg-amber-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors cursor-pointer"
+          data-testid="quick-draw"
+        >
+          {quickDraw.isPending ? "Drawing..." : "Quick Draw"}
+        </button>
+      </StageCard>
+
+      {/* Stage 5: Simulation */}
+      <StageCard
+        number={5}
         title={t("raceSimulation")}
         description="Simulate a race by generating realistic punch data for all runners with start times."
         ready={hasStartTimes}
@@ -288,8 +380,6 @@ export function TestLabPage() {
         result={lastResult.simulation}
         error={startSimulation.error?.message || stopSimulation.error?.message}
         details={<>
-          <p className="font-medium">Prerequisites:</p>
-          <p className="mb-2">Draw start times first using the <strong>Start List</strong> page. Only runners with a start time and valid SI card are included.</p>
           <p className="font-medium">How it works:</p>
           <ul className="list-disc ml-4 mt-1 space-y-0.5">
             <li>Generates realistic running times based on course length and tier difficulty (elite ~5:30 min/km, youth ~10 min/km)</li>
@@ -371,6 +461,362 @@ export function TestLabPage() {
           )}
         </div>
       </StageCard>
+
+      {/* Stage 6: Readout Generator */}
+      <StageCard
+        number={6}
+        title="Readout Generator"
+        description="Generate and inject fake SI card readouts via BroadcastChannel to DeviceManager."
+        ready={hasRunners}
+        done={false}
+        result={lastResult.readout}
+        error={undefined}
+        details={<>
+          <p>Pick a runner, choose a status, then edit the generated punch data before injecting.</p>
+          <p className="mt-1">The injected readout flows through the <strong>full DeviceManager pipeline</strong> (store, action resolution, kiosk broadcast) &mdash; identical to a real SI card read.</p>
+          <p className="mt-1 text-slate-400">Requires the admin tab to be open with the same competition selected.</p>
+        </>}
+      >
+        <ReadoutGenerator nameId={nameId} onResult={(msg) => setLastResult((prev) => ({ ...prev, readout: msg }))} />
+      </StageCard>
+    </div>
+  );
+}
+
+// ─── Readout Generator ──────────────────────────────────────
+
+function ReadoutGenerator({ nameId, onResult }: { nameId?: string; onResult: (msg: string) => void }) {
+  const [search, setSearch] = useState("");
+  const [selectedRunnerId, setSelectedRunnerId] = useState<number | null>(null);
+  const [preview, setPreview] = useState<ReadoutPreview | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const channelRef = useRef<BroadcastChannel | null>(null);
+
+  // Runner search
+  const runnerList = trpc.runner.list.useQuery(
+    { search: search.length >= 2 ? search : undefined },
+    { enabled: search.length >= 2 },
+  );
+
+  const generateReadout = trpc.testLab.generateReadout.useMutation({
+    onSuccess: (data) => {
+      // Convert JS day (0=Sun..6=Sat) to SI day (1=Mon..7=Sun)
+      const jsDay = new Date().getDay();
+      const todaySIDow = jsDay === 0 ? 7 : jsDay;
+      setPreview({
+        ...data,
+        dayOfWeek: todaySIDow,
+      });
+      setError(null);
+    },
+    onError: (err) => setError(err.message),
+  });
+
+  // Clean up BroadcastChannel
+  useEffect(() => {
+    return () => channelRef.current?.close();
+  }, []);
+
+  const handleGenerate = (mode: "ok" | "mp" | "dnf" | "dns") => {
+    if (!selectedRunnerId) return;
+    generateReadout.mutate({ runnerId: selectedRunnerId, mode });
+  };
+
+  const handleInject = () => {
+    if (!preview || !nameId) return;
+
+    const readout: SICardReadout = {
+      cardNumber: preview.cardNo,
+      cardType: getCardType(preview.cardNo),
+      checkTime: preview.checkTime > 0 ? preview.checkTime : null,
+      startTime: preview.startTime > 0 ? preview.startTime : null,
+      finishTime: preview.finishTime,
+      clearTime: preview.clearTime > 0 ? preview.clearTime : null,
+      finishDayOfWeek: preview.finishTime ? preview.dayOfWeek : null,
+      checkDayOfWeek: preview.checkTime > 0 ? preview.dayOfWeek : null,
+      punches: preview.punches.map((p) => ({
+        controlCode: p.controlCode,
+        time: p.time,
+      })),
+      punchCount: preview.punches.length,
+      ownerData: null,
+      batteryVoltage: null,
+      metadata: null,
+    };
+
+    // Send via BroadcastChannel to admin tab's DeviceManager
+    if (!channelRef.current) {
+      channelRef.current = new BroadcastChannel(`oxygen-testlab-${nameId}`);
+    }
+    channelRef.current.postMessage({ type: "inject-readout", readout });
+
+    onResult(`Injected readout for ${preview.runnerName} (card ${preview.cardNo}) — ${preview.punches.length} punches`);
+  };
+
+  // Punch editing helpers
+  const updatePunch = (idx: number, field: keyof EditablePunch, value: number) => {
+    if (!preview) return;
+    setPreview({
+      ...preview,
+      punches: preview.punches.map((p, i) =>
+        i === idx ? { ...p, [field]: value } : p,
+      ),
+    });
+  };
+
+  const deletePunch = (idx: number) => {
+    if (!preview) return;
+    setPreview({
+      ...preview,
+      punches: preview.punches.filter((_, i) => i !== idx),
+    });
+  };
+
+  const addPunch = () => {
+    if (!preview) return;
+    const lastTime = preview.punches.length > 0
+      ? preview.punches[preview.punches.length - 1].time + 60
+      : (preview.startTime || 32400) + 120;
+    setPreview({
+      ...preview,
+      punches: [...preview.punches, { controlCode: 31, time: lastTime }],
+    });
+  };
+
+  return (
+    <div className="space-y-4">
+      {/* Runner search */}
+      <div className="flex items-center gap-3">
+        <input
+          type="text"
+          placeholder="Search runner (name, card, bib)..."
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          className="flex-1 px-3 py-2 border border-slate-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-amber-500"
+        />
+      </div>
+
+      {/* Runner dropdown */}
+      {runnerList.data && runnerList.data.length > 0 && !selectedRunnerId && (
+        <div className="border border-slate-200 rounded-lg max-h-48 overflow-y-auto">
+          {runnerList.data.slice(0, 20).map((r) => (
+            <button
+              key={r.id}
+              onClick={() => {
+                setSelectedRunnerId(r.id);
+                setSearch(`${r.name} (${r.cardNo})`);
+                setPreview(null);
+              }}
+              className="w-full text-left px-3 py-2 text-sm hover:bg-amber-50 border-b border-slate-100 last:border-0 cursor-pointer"
+            >
+              <span className="font-medium">{r.name}</span>
+              <span className="text-slate-400 ml-2">{r.className}</span>
+              <span className="text-slate-400 ml-2">SI {r.cardNo}</span>
+            </button>
+          ))}
+        </div>
+      )}
+
+      {/* Selected runner + action buttons */}
+      {selectedRunnerId && (
+        <div className="space-y-3">
+          <div className="flex items-center gap-2">
+            <button onClick={() => { setSelectedRunnerId(null); setSearch(""); setPreview(null); }}
+              className="text-xs text-slate-400 hover:text-slate-600 cursor-pointer">Clear</button>
+          </div>
+
+          <div className="flex items-center gap-2">
+            {(["ok", "mp", "dnf", "dns"] as const).map((mode) => (
+              <button
+                key={mode}
+                onClick={() => handleGenerate(mode)}
+                disabled={generateReadout.isPending}
+                className={`px-4 py-2 text-sm font-medium rounded-lg transition-colors cursor-pointer disabled:opacity-50 ${
+                  mode === "ok" ? "bg-green-600 text-white hover:bg-green-700"
+                    : mode === "mp" ? "bg-orange-600 text-white hover:bg-orange-700"
+                    : mode === "dnf" ? "bg-red-600 text-white hover:bg-red-700"
+                    : "bg-slate-600 text-white hover:bg-slate-700"
+                }`}
+              >
+                {generateReadout.isPending ? "..." : mode.toUpperCase()}
+              </button>
+            ))}
+          </div>
+
+          {error && (
+            <div className="text-sm text-red-700 bg-red-50 border border-red-200 rounded-lg px-3 py-2">{error}</div>
+          )}
+        </div>
+      )}
+
+      {/* Preview + editable punch table */}
+      {preview && (
+        <div className="space-y-4">
+          {/* Runner info header */}
+          <div className="bg-slate-50 rounded-lg p-3 text-sm">
+            <div className="flex flex-wrap gap-x-6 gap-y-1">
+              <span><strong>{preview.runnerName}</strong></span>
+              <span className="text-slate-500">{preview.className}</span>
+              <span className="text-slate-500">{preview.courseName} ({(preview.courseLength / 1000).toFixed(1)} km, {preview.controlCount} controls)</span>
+              <span className="text-slate-500">Card: {preview.cardNo}</span>
+            </div>
+          </div>
+
+          {/* Special times */}
+          <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
+            <TimeInput label="Check" value={preview.checkTime} onChange={(v) => setPreview({ ...preview, checkTime: v })} />
+            <TimeInput label="Clear" value={preview.clearTime} onChange={(v) => setPreview({ ...preview, clearTime: v })} />
+            <TimeInput label="Start" value={preview.startTime} onChange={(v) => setPreview({ ...preview, startTime: v })} />
+            <TimeInput label="Finish" value={preview.finishTime ?? 0} onChange={(v) => setPreview({ ...preview, finishTime: v > 0 ? v : null })} />
+            <div>
+              <label className="text-xs text-slate-500 block mb-1">DOW (1-7)</label>
+              <input
+                type="number"
+                min={1}
+                max={7}
+                value={preview.dayOfWeek}
+                onChange={(e) => setPreview({ ...preview, dayOfWeek: Math.max(1, Math.min(7, parseInt(e.target.value) || 1)) })}
+                className="w-full px-2 py-1.5 border border-slate-300 rounded text-sm font-mono focus:outline-none focus:ring-1 focus:ring-amber-500"
+              />
+            </div>
+          </div>
+
+          {/* Punch table */}
+          <div className="border border-slate-200 rounded-lg overflow-hidden">
+            <table className="w-full text-sm">
+              <thead className="bg-slate-50">
+                <tr>
+                  <th className="text-left px-3 py-2 text-xs text-slate-500 font-medium w-10">#</th>
+                  <th className="text-left px-3 py-2 text-xs text-slate-500 font-medium">Control</th>
+                  <th className="text-left px-3 py-2 text-xs text-slate-500 font-medium">Time</th>
+                  <th className="px-3 py-2 w-10"></th>
+                </tr>
+              </thead>
+              <tbody>
+                {preview.punches.map((punch, idx) => (
+                  <tr key={idx} className="border-t border-slate-100">
+                    <td className="px-3 py-1.5 text-slate-400">{idx + 1}</td>
+                    <td className="px-3 py-1.5">
+                      <input
+                        type="number"
+                        value={punch.controlCode}
+                        onChange={(e) => updatePunch(idx, "controlCode", parseInt(e.target.value) || 0)}
+                        className="w-20 px-2 py-1 border border-slate-200 rounded text-sm font-mono focus:outline-none focus:ring-1 focus:ring-amber-500"
+                      />
+                    </td>
+                    <td className="px-3 py-1.5">
+                      <TimeInput
+                        value={punch.time}
+                        onChange={(v) => updatePunch(idx, "time", v)}
+                        compact
+                      />
+                    </td>
+                    <td className="px-3 py-1.5 text-center">
+                      <button
+                        onClick={() => deletePunch(idx)}
+                        className="text-red-400 hover:text-red-600 text-xs cursor-pointer"
+                        title="Delete punch"
+                      >
+                        &#x2715;
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            <div className="px-3 py-2 bg-slate-50 border-t border-slate-200">
+              <button
+                onClick={addPunch}
+                className="text-xs text-amber-600 hover:text-amber-800 font-medium cursor-pointer"
+              >
+                + Add punch
+              </button>
+            </div>
+          </div>
+
+          {/* Inject button */}
+          <button
+            onClick={handleInject}
+            disabled={!nameId}
+            className="px-6 py-2.5 bg-amber-600 text-white text-sm font-semibold rounded-lg hover:bg-amber-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors cursor-pointer"
+          >
+            Inject Readout
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── Time Input ───────────────────────────────────────────────
+
+function TimeInput({
+  label,
+  value,
+  onChange,
+  compact,
+}: {
+  label?: string;
+  value: number;
+  onChange: (v: number) => void;
+  compact?: boolean;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [text, setText] = useState("");
+
+  const handleStart = () => {
+    setText(fmtSec(value));
+    setEditing(true);
+  };
+
+  const handleCommit = () => {
+    const parsed = parseSec(text);
+    if (parsed !== null) onChange(parsed);
+    setEditing(false);
+  };
+
+  if (compact) {
+    return editing ? (
+      <input
+        type="text"
+        value={text}
+        onChange={(e) => setText(e.target.value)}
+        onBlur={handleCommit}
+        onKeyDown={(e) => e.key === "Enter" && handleCommit()}
+        className="w-24 px-2 py-1 border border-amber-300 rounded text-sm font-mono focus:outline-none focus:ring-1 focus:ring-amber-500"
+        autoFocus
+      />
+    ) : (
+      <button
+        onClick={handleStart}
+        className="w-24 px-2 py-1 text-sm font-mono text-left hover:bg-amber-50 rounded cursor-pointer"
+      >
+        {fmtSec(value)}
+      </button>
+    );
+  }
+
+  return (
+    <div>
+      {label && <label className="text-xs text-slate-500 block mb-1">{label}</label>}
+      {editing ? (
+        <input
+          type="text"
+          value={text}
+          onChange={(e) => setText(e.target.value)}
+          onBlur={handleCommit}
+          onKeyDown={(e) => e.key === "Enter" && handleCommit()}
+          className="w-full px-2 py-1.5 border border-amber-300 rounded text-sm font-mono focus:outline-none focus:ring-1 focus:ring-amber-500"
+          autoFocus
+        />
+      ) : (
+        <button
+          onClick={handleStart}
+          className="w-full px-2 py-1.5 border border-slate-300 rounded text-sm font-mono text-left hover:bg-amber-50 cursor-pointer"
+        >
+          {fmtSec(value)}
+        </button>
+      )}
     </div>
   );
 }

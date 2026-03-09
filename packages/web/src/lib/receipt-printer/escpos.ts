@@ -31,6 +31,7 @@ const DEFAULT_FINISH_LABELS: Required<FinishReceiptLabels> = {
 
 const DEFAULT_REG_LABELS: Required<RegistrationReceiptLabels> = {
   registration: "REGISTRATION",
+  receipt: "Receipt",
   name: "Name:",
   club: "Club:",
   class: "Class:",
@@ -41,6 +42,15 @@ const DEFAULT_REG_LABELS: Required<RegistrationReceiptLabels> = {
   amount: "Amount:",
   printed: "Printed",
   tagline: "Lightweight orienteering management",
+  entryFee: "Entry fee",
+  vatExempt: "VAT exempt",
+  vat: "VAT",
+  total: "TOTAL",
+  friskvardNote: "Valid for friskvardsbidrag",
+  date: "Date:",
+  participant: "Participant:",
+  entryFeeSubtitle: "ENTRY FEE",
+  paymentMethod: "Payment method:",
 };
 
 // Standard line width for 80mm paper at default font size
@@ -92,6 +102,15 @@ const UNICODE_TO_ESCPOS: Record<number, number> = {
   0x00FA: 0xA3, // ú
   0x00FB: 0x96, // û
   0x00FC: 0x81, // ü
+  // Box-drawing characters (PC437)
+  0x2500: 0xC4, // ─ horizontal
+  0x2502: 0xB3, // │ vertical
+  0x250C: 0xDA, // ┌ top-left
+  0x2510: 0xBF, // ┐ top-right
+  0x2514: 0xC0, // └ bottom-left
+  0x2518: 0xD9, // ┘ bottom-right
+  0x251C: 0xC3, // ├ left-tee
+  0x2524: 0xB4, // ┤ right-tee
 };
 
 // ─── ESC/POS Builder ─────────────────────────────────────────
@@ -117,6 +136,10 @@ class EscPosBuilder {
   sizeNormal(): this { return this.raw(0x1d, 0x21, 0x00); }
   /** Feed paper by exactly n dots (ESC J n, ~n/180 inch). For small gaps between elements. */
   feedDots(n: number): this { return this.raw(0x1b, 0x4a, n & 0xff); }
+  /** Set line spacing to n dots (ESC 3 n). 24 = character cell height (eliminates gaps in box-drawing). */
+  setLineSpacing(n: number): this { return this.raw(0x1b, 0x33, n & 0xff); }
+  /** Reset line spacing to printer default (ESC 2). */
+  resetLineSpacing(): this { return this.raw(0x1b, 0x32); }
   lf(): this { return this.raw(0x0a); }
 
   /** Partial cut with 10-dot paper feed. */
@@ -142,8 +165,44 @@ class EscPosBuilder {
   /** Text + line feed. */
   line(s: string): this { return this.text(s).lf(); }
 
-  /** Full-width separator line. */
-  separator(): this { return this.line("=".repeat(LINE_WIDTH)); }
+  /** Full-width separator line using box-drawing horizontal (centered). */
+  separator(): this { return this.alignCenter().line("─".repeat(LINE_WIDTH)).alignLeft(); }
+
+  /** Box top border: ┌──...──┐ */
+  boxTop(): this { return this.line("┌" + "─".repeat(LINE_WIDTH - 2) + "┐"); }
+  /** Box bottom border: └──...──┘ */
+  boxBottom(): this { return this.line("└" + "─".repeat(LINE_WIDTH - 2) + "┘"); }
+  /** Box divider: ├──...──┤ */
+  boxDivider(): this { return this.line("├" + "─".repeat(LINE_WIDTH - 2) + "┤"); }
+  /** Line inside box with borders: │ text              │ */
+  boxLine(s: string): this {
+    const inner = LINE_WIDTH - 4;
+    const padded = s.length > inner ? s.slice(0, inner) : s + " ".repeat(inner - s.length);
+    return this.line("│ " + padded + " │");
+  }
+  /** Double-height only (no double-width). For tall borders that match double-size content. */
+  sizeDoubleHeight(): this { return this.raw(0x1d, 0x21, 0x01); }
+
+  /** Line inside box with double-size bold text. Borders use double-height to match. */
+  boxLineDouble(s: string): this {
+    const inner = LINE_WIDTH - 4; // 38 usable single-width columns
+    const doubleWidth = s.length * 2;
+    const pad = Math.max(0, inner - doubleWidth);
+    // Use double-height borders so │ covers the full 48-dot row
+    this.sizeDoubleHeight().text("│").sizeNormal().text(" ");
+    this.boldOn().sizeDouble().text(s).sizeNormal().boldOff();
+    if (pad > 0) this.text(" ".repeat(pad));
+    this.text(" ").sizeDoubleHeight().text("│").sizeNormal();
+    return this.lf();
+  }
+
+  /** Two-column line inside box: │ left        right │ */
+  boxLeftRight(left: string, right: string): this {
+    const inner = LINE_WIDTH - 4;
+    const gap = inner - left.length - right.length;
+    const content = gap > 0 ? left + " ".repeat(gap) + right : (left + " " + right).slice(0, inner);
+    return this.line("│ " + content + " │");
+  }
 
   /** Center-align a string within LINE_WIDTH (no printer alignment command). */
   centered(s: string): this {
@@ -237,6 +296,11 @@ function formatPace(legLength: number, splitDs: number): string {
   let adjustedMins = mins;
   if (secs >= 60) { secs -= 60; adjustedMins += 1; }
   return `${adjustedMins}:${String(secs).padStart(2, "0")}`;
+}
+
+/** Format a whole-number amount as Swedish receipt format: "120,00 kr". */
+function formatAmountSEK(amount: number): string {
+  return `${amount},00 kr`;
 }
 
 // ─── Receipt builder ─────────────────────────────────────────
@@ -419,41 +483,116 @@ export function buildRegistrationReceipt(data: RegistrationReceiptData): Uint8Ar
   const L = { ...DEFAULT_REG_LABELS, ...data.labels };
   const b = new EscPosBuilder();
   b.init();
+  b.lf();
+
+  // Use the enhanced kvitto layout when org number is configured
+  const kvittoMode = !!data.orgNumber;
 
   // ── Logo ──────────────────────────────────────────────────────
   if (data.logoRaster) {
     b.alignCenter();
     b.rasterImage(data.logoRaster.widthBytes, data.logoRaster.heightDots, data.logoRaster.data);
-    b.feedDots(10);
+    b.lf();
     b.alignLeft();
   }
 
-  // ── Header ────────────────────────────────────────────────────
+  // ── Header (same style as finish receipt) ─────────────────────
   b.alignCenter();
-  b.sizeDouble();
-  b.line(data.competitionName);
-  b.sizeNormal();
-  if (data.competitionDate) b.line(data.competitionDate);
-  b.lf();
-  b.boldOn();
-  b.line(L.registration);
-  b.boldOff();
+  for (const nameLine of wordWrap(data.competitionName, Math.floor(LINE_WIDTH / 2))) {
+    b.sizeDouble().boldOn().line(nameLine).boldOff().sizeNormal();
+  }
+  if (data.competitionDate) {
+    b.feedDots(8);
+    b.line(data.competitionDate);
+  }
   b.alignLeft();
+
+  // ── Organizer details (kvitto mode) ───────────────────────────
+  if (kvittoMode) {
+    b.lf();
+    b.alignCenter();
+    const org = data.organizerDetails;
+    const orgName = org?.name || data.organizerName;
+    if (orgName) b.line(orgName);
+    if (org?.street) b.line(org.street);
+    const zipCity = [org?.zip, org?.city].filter(Boolean).join(" ");
+    if (zipCity) b.line(zipCity);
+    b.line(`Org.nr: ${data.orgNumber}`);
+    if (org?.email) b.line(org.email);
+    b.alignLeft();
+  }
+
+  b.separator();
+
+  // ── Title ─────────────────────────────────────────────────────
+  b.lf();
+  b.alignCenter();
+  b.boldOn();
+  b.sizeDouble();
+  b.line(kvittoMode ? L.receipt : L.registration);
+  b.sizeNormal();
+  b.boldOff();
+  if (kvittoMode) {
+    b.feedDots(12);
+    b.line(L.entryFeeSubtitle);
+  }
+  // Full datetime
+  const now = new Date();
+  const dateTimeStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")} ${String(now.getHours()).padStart(2, "0")}:${String(now.getMinutes()).padStart(2, "0")}`;
+  b.line(dateTimeStr);
+  b.alignLeft();
+  b.lf();
   b.separator();
 
   // ── Runner info ───────────────────────────────────────────────
-  b.leftRight(L.name, data.runner.name);
+  b.lf();
+  b.leftRight(L.participant, data.runner.name);
   if (data.runner.clubName) b.leftRight(L.club, data.runner.clubName);
   b.leftRight(L.class, data.runner.className);
   b.leftRight(L.siCard, String(data.runner.cardNo));
   b.leftRight(L.start, data.startTime || L.freeStart);
-  b.separator();
+  b.lf();
 
-  // ── Payment ───────────────────────────────────────────────────
-  if (data.payment) {
-    b.leftRight(L.payment, data.payment.method);
-    b.leftRight(L.amount, `${data.payment.amount} kr`);
+  // ── Financial section (kvitto mode) ────────────────────────────
+  if (kvittoMode && data.payment) {
     b.separator();
+    b.lf();
+    b.leftRight(L.entryFee, formatAmountSEK(data.payment.amount));
+    const vatExempt = data.vatInfo?.exempt ?? true;
+    if (vatExempt) {
+      b.line(`${L.vat}: 0,00 kr (${L.vatExempt})`);
+    }
+    b.lf();
+    b.separator();
+
+    // ── Payment box with amount + method ─────────────────────────
+    b.alignCenter();
+    b.setLineSpacing(24);
+    b.boxTop();
+    b.boxLine("");
+    // Double-size line needs 48-dot advance to match its height
+    b.setLineSpacing(48);
+    b.boxLineDouble(`${L.amount.replace(/:$/, "")}  ${formatAmountSEK(data.payment.amount)}`);
+    b.setLineSpacing(24);
+    b.boxLine("");
+    b.boxLine(`${L.paymentMethod} ${data.payment.method}`);
+    b.boxBottom();
+    b.resetLineSpacing();
+    b.alignLeft();
+  } else if (!kvittoMode && data.payment) {
+    b.separator();
+    b.leftRight(L.payment, data.payment.method);
+    b.leftRight(L.amount, formatAmountSEK(data.payment.amount));
+  }
+
+  if (!kvittoMode) b.separator();
+
+  // ── Friskvardsbidrag note ─────────────────────────────────────
+  if (kvittoMode && data.friskvardNote) {
+    b.lf();
+    b.alignCenter();
+    b.line(L.friskvardNote);
+    b.alignLeft();
   }
 
   // ── Custom message ───────────────────────────────────────────
@@ -464,14 +603,17 @@ export function buildRegistrationReceipt(data: RegistrationReceiptData): Uint8Ar
       b.line(line);
     }
     b.alignLeft();
-    b.separator();
   }
 
-  // ── Footer ────────────────────────────────────────────────────
+  // ── Footer (same as finish receipt) ────────────────────────────
   b.lf();
   b.alignCenter();
-  const timestamp = new Date().toLocaleString("sv-SE", { hour: "2-digit", minute: "2-digit" });
+  const timestamp = `${String(now.getHours()).padStart(2, "0")}:${String(now.getMinutes()).padStart(2, "0")}:${String(now.getSeconds()).padStart(2, "0")}`;
   b.line(`${L.printed} ${timestamp}`);
+  b.lf();
+  b.boldOn().line("Oxygen").boldOff();
+  b.line(L.tagline);
+  b.line("open-orienteering.org");
   b.lf();
   b.alignLeft();
 

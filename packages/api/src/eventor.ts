@@ -96,6 +96,7 @@ export interface EventorClub {
   zip: string;
   email: string;
   phone: string;
+  webUrl: string;
 }
 
 export interface EventorResult {
@@ -687,7 +688,8 @@ export async function fetchClubs(
         city: safeStr(address["@_city"] ?? ""),
         zip: safeStr(address["@_zipCode"] ?? ""),
         email: safeStr(tele["@_mailAddress"] ?? ""),
-        phone: safeStr(tele["@_phoneNumber"] ?? ""),
+        phone: safeStr(tele["@_phoneNumber"] || tele["@_mobilePhoneNumber"] || ""),
+        webUrl: safeStr(tele["@_webURL"] ?? ""),
       };
     },
   );
@@ -719,6 +721,7 @@ export async function fetchReferencedClubs(
         zip: "",
         email: "",
         phone: "",
+        webUrl: "",
       });
     }
   }

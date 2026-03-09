@@ -8,12 +8,13 @@ pnpm test
 ```
 All 208 tests across `shared`, `api`, and `web` must pass.
 
-## When the User Intends to Test the App
+## After Completing a Feature or Fix
 
 Always rebuild the Docker stack so the running instance reflects the latest code:
 ```bash
 docker compose -f docker-compose.host-db.yml up --build -d
 ```
+Do this automatically after tests and build pass — don't wait for the user to ask.
 
 ## Before Pushing Code / After Significant Changes
 

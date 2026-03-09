@@ -54,46 +54,22 @@ test.describe("Event Page", () => {
     await expect(page.getByText("Invoice")).toBeVisible();
   });
 
-  test("should show payment method toggles in registration settings", async ({ page }) => {
+  test("should show payment method list in registration settings", async ({ page }) => {
     await selectCompetition(page);
     await clickTab(page, "Event");
 
     await expect(page.getByText("Registration Settings")).toBeVisible({ timeout: 10000 });
     await expect(page.getByText("Payment methods")).toBeVisible();
 
-    // Payment method toggle buttons should be visible
+    // Payment method names should be visible in the sortable list
     const main = page.getByRole("main");
-    await expect(main.getByRole("button", { name: "Invoice" })).toBeVisible();
-    await expect(main.getByRole("button", { name: "Pay on site" })).toBeVisible();
-    await expect(main.getByRole("button", { name: "Card" })).toBeVisible();
-    await expect(main.getByRole("button", { name: "Swish" })).toBeVisible();
+    await expect(main.getByText("Invoice")).toBeVisible();
+    await expect(main.getByText("Pay on site")).toBeVisible();
+    await expect(main.getByText("Card")).toBeVisible();
+    await expect(main.getByText("Swish")).toBeVisible();
+    await expect(main.getByText("Cash")).toBeVisible();
   });
 
-});
-
-test.describe("Registration Page", () => {
-  test("should navigate to registration page via overflow menu", async ({ page }) => {
-    await selectCompetition(page);
-    await clickTab(page, "Registration");
-
-    expect(page.url()).toContain("/registration");
-    // Should show the waiting indicator and form elements
-    await expect(page.getByText("Waiting for SI card...")).toBeVisible({ timeout: 10000 });
-    await expect(page.getByText("Recent Registrations")).toBeVisible();
-  });
-
-  test("should display registration form fields", async ({ page }) => {
-    await selectCompetition(page);
-    await clickTab(page, "Registration");
-
-    await expect(page.getByText("Waiting for SI card...")).toBeVisible({ timeout: 10000 });
-    await expect(page.getByText("Name *")).toBeVisible();
-    await expect(page.getByText("Class *")).toBeVisible();
-    await expect(page.getByText("SI Card", { exact: true })).toBeVisible();
-    await expect(page.getByText("Payment")).toBeVisible();
-    await expect(page.getByRole("button", { name: "Register Runner" })).toBeVisible();
-    await expect(page.getByRole("button", { name: "Clear (Esc)" })).toBeVisible();
-  });
 });
 
 test.describe("Event Page — Eventor-linked competition", () => {

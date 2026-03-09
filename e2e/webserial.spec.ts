@@ -305,20 +305,19 @@ test.describe("WebSerial SI Reader", () => {
     await expect(notif).toContainText("Marcus Andersson", { timeout: 5000 });
     await expect(notif).toContainText("Skogslansen");
 
-    // Click Register — Add Runner dialog should have data pre-filled
+    // Click Register — RegistrationDialog should open with data pre-filled
     await page.getByTestId("card-notification-view").click();
-    await expect(page).toHaveURL(/runners/);
-    await expect(
-      page.getByRole("heading", { name: "Add Runner" }),
-    ).toBeVisible({ timeout: 5000 });
+    await expect(page.getByTestId("registration-dialog")).toBeVisible({ timeout: 5000 });
+
+    const dialog = page.getByTestId("registration-dialog");
 
     // Card number should be pre-filled
-    await expect(page.locator("input[placeholder='e.g. 500123']")).toHaveValue(
+    await expect(dialog.locator("input[placeholder='e.g. 500123']")).toHaveValue(
       "8007045",
     );
     // Name should be pre-filled
     await expect(
-      page.locator("input[placeholder='First Last']"),
+      dialog.locator("input[placeholder='First Last']"),
     ).toHaveValue("Marcus Andersson");
   });
 
@@ -359,14 +358,13 @@ test.describe("WebSerial SI Reader", () => {
       "Register",
     );
 
-    // Click "Register" — should navigate to runners page with addCard param
+    // Click "Register" — RegistrationDialog should open (no navigation)
     await page.getByTestId("card-notification-view").click();
-    await expect(page).toHaveURL(/runners/);
-    // The Add Runner dialog should be open with card number pre-filled
-    await expect(
-      page.getByRole("heading", { name: "Add Runner" }),
-    ).toBeVisible({ timeout: 5000 });
-    await expect(page.locator("input[placeholder='e.g. 500123']")).toHaveValue(
+    await expect(page.getByTestId("registration-dialog")).toBeVisible({ timeout: 5000 });
+
+    const dialog = page.getByTestId("registration-dialog");
+    // Card number should be pre-filled
+    await expect(dialog.locator("input[placeholder='e.g. 500123']")).toHaveValue(
       "2999999",
     );
   });

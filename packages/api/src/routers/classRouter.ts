@@ -285,6 +285,40 @@ export const classRouter = router({
     }),
 
   /**
+   * Bulk-update multiple classes at once.
+   */
+  bulkUpdate: publicProcedure
+    .input(
+      z.object({
+        ids: z.array(z.number().int()).min(1).max(500),
+        data: z.object({
+          classFee: z.number().int().optional(),
+          freeStart: z.boolean().optional(),
+          noTiming: z.boolean().optional(),
+        }),
+      }),
+    )
+    .mutation(async ({ input }) => {
+      const client = await getCompetitionClient();
+
+      let updated = 0;
+      const data: Record<string, unknown> = {};
+      if (input.data.classFee !== undefined) data.ClassFee = input.data.classFee;
+      if (input.data.freeStart !== undefined) data.FreeStart = input.data.freeStart ? 1 : 0;
+      if (input.data.noTiming !== undefined) data.NoTiming = input.data.noTiming ? 1 : 0;
+
+      for (const id of input.ids) {
+        await client.oClass.update({
+          where: { Id: id },
+          data,
+        });
+        updated++;
+      }
+
+      return { updated };
+    }),
+
+  /**
    * Soft-delete a class.
    */
   delete: publicProcedure

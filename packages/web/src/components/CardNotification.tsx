@@ -13,6 +13,7 @@ import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useNavigate, useLocation } from "react-router-dom";
 import { useDeviceManager, type RecentCard } from "../context/DeviceManager";
+import { useRegistrationDialog } from "../context/RegistrationDialogContext";
 import { formatRunningTime } from "@oxygen/shared";
 
 const AUTO_DISMISS_MS = 10000;
@@ -22,16 +23,16 @@ export function CardNotification() {
   const { currentCard, isOnCardReadoutPage } = useDeviceManager();
   const navigate = useNavigate();
   const location = useLocation();
+  const { openRegistration } = useRegistrationDialog();
 
   const [visible, setVisible] = useState(false);
   const [card, setCard] = useState<RecentCard | null>(null);
   const timerRef = useRef<any>(undefined);
 
   const onCardPage = location.pathname.includes("/card-readout");
-  const onRegistrationPage = location.pathname.includes("/registration");
 
   useEffect(() => {
-    if (!currentCard || onCardPage || onRegistrationPage || isOnCardReadoutPage) return;
+    if (!currentCard || onCardPage || isOnCardReadoutPage) return;
 
     setCard(currentCard);
     setVisible(true);
@@ -61,15 +62,14 @@ export function CardNotification() {
         navigate(`${base}/card-readout?card=${card.cardNumber}`);
         break;
       case "register": {
-        const params = new URLSearchParams({ addCard: String(card.cardNumber) });
-        // Pass owner data from SI card as URL params for pre-filling
-        if (card.ownerData?.firstName) params.set("firstName", card.ownerData.firstName);
-        if (card.ownerData?.lastName) params.set("lastName", card.ownerData.lastName);
-        if (card.ownerData?.club) params.set("club", card.ownerData.club);
-        if (card.ownerData?.sex) params.set("sex", card.ownerData.sex);
-        if (card.ownerData?.dateOfBirth) params.set("dob", card.ownerData.dateOfBirth);
-        if (card.ownerData?.phone) params.set("phone", card.ownerData.phone);
-        navigate(`${base}/runners?${params.toString()}`);
+        const ownerData: Record<string, string> = {};
+        if (card.ownerData?.firstName) ownerData.firstName = card.ownerData.firstName;
+        if (card.ownerData?.lastName) ownerData.lastName = card.ownerData.lastName;
+        if (card.ownerData?.club) ownerData.club = card.ownerData.club;
+        if (card.ownerData?.sex) ownerData.sex = card.ownerData.sex;
+        if (card.ownerData?.dateOfBirth) ownerData.dateOfBirth = card.ownerData.dateOfBirth;
+        if (card.ownerData?.phone) ownerData.phone = card.ownerData.phone;
+        openRegistration(card.cardNumber, Object.keys(ownerData).length > 0 ? ownerData : null);
         break;
       }
       case "pre-start":

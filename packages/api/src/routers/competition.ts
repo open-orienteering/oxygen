@@ -213,6 +213,7 @@ export const competitionRouter = router({
   dashboard: publicProcedure.query(
     async (): Promise<CompetitionDashboard> => {
       const client = await getCompetitionClient();
+      await ensureCompetitionConfigTable(client);
 
       const event = await client.oEvent.findFirst({
         where: { Removed: false },
@@ -557,7 +558,7 @@ export const competitionRouter = router({
     await ensureCompetitionConfigTable(client);
 
     const rows = (await client.$queryRawUnsafe(
-      "SELECT payment_methods, swish_number, swish_payee_name, print_registration_receipt, registration_receipt_message, finish_receipt_message, organizer_eventor_id FROM oxygen_competition_config WHERE id = 1",
+      "SELECT payment_methods, swish_number, swish_payee_name, print_registration_receipt, registration_receipt_message, finish_receipt_message, organizer_eventor_id, org_number, vat_exempt, receipt_friskvard_note, web_url FROM oxygen_competition_config WHERE id = 1",
     )) as Array<{
       payment_methods: string;
       swish_number: string;
@@ -566,9 +567,60 @@ export const competitionRouter = router({
       registration_receipt_message: string;
       finish_receipt_message: string;
       organizer_eventor_id: number;
+      org_number: string;
+      vat_exempt: number;
+      receipt_friskvard_note: number;
+      web_url: string;
     }>;
 
     const row = rows[0];
+
+    // Fetch organizer club details for receipt header
+    let organizerDetails: { name: string; street?: string; city?: string; zip?: string; phone?: string; email?: string; webUrl?: string } | undefined;
+    let organizerEventorId = row?.organizer_eventor_id ?? 0;
+    const webUrl = row?.web_url ?? "";
+
+    // Fallback: resolve organizer from oEvent.Organizer (same logic as dashboard)
+    if (organizerEventorId === 0) {
+      const events = (await client.$queryRawUnsafe(
+        "SELECT Organizer FROM oEvent LIMIT 1",
+      )) as Array<{ Organizer: string }>;
+      const orgField = events[0]?.Organizer ?? "";
+      if (orgField) {
+        const parts = orgField.split("\t");
+        let orgName = parts[0].trim();
+        let evId = parts[1] ? parseInt(parts[1], 10) : 0;
+        if (/^\d+$/.test(orgName)) { evId = evId || parseInt(orgName, 10); orgName = ""; }
+        if (!evId || isNaN(evId)) {
+          const clubs = (await client.$queryRawUnsafe(
+            "SELECT ExtId FROM oClub WHERE LOWER(TRIM(Name)) = LOWER(?) AND Removed = 0 LIMIT 1",
+            orgName,
+          )) as Array<{ ExtId: number }>;
+          evId = clubs[0] ? Number(clubs[0].ExtId) : 0;
+        }
+        if (evId > 0) organizerEventorId = evId;
+      }
+    }
+
+    if (organizerEventorId > 0) {
+      const clubs = (await client.$queryRawUnsafe(
+        "SELECT Name, Street, City, ZIP, Phone, EMail FROM oClub WHERE ExtId = ? AND Removed = 0 LIMIT 1",
+        organizerEventorId,
+      )) as Array<{ Name: string; Street: string; City: string; ZIP: string; Phone: string; EMail: string }>;
+      const club = clubs[0];
+      if (club) {
+        organizerDetails = {
+          name: club.Name,
+          ...(club.Street ? { street: club.Street } : {}),
+          ...(club.City ? { city: club.City } : {}),
+          ...(club.ZIP ? { zip: club.ZIP } : {}),
+          ...(club.Phone ? { phone: club.Phone } : {}),
+          ...(club.EMail ? { email: club.EMail } : {}),
+          ...(webUrl ? { webUrl } : {}),
+        };
+      }
+    }
+
     return {
       paymentMethods: row?.payment_methods?.split(",").filter(Boolean) ?? ["billed"],
       swishNumber: row?.swish_number ?? "",
@@ -576,7 +628,11 @@ export const competitionRouter = router({
       printRegistrationReceipt: (row?.print_registration_receipt ?? 0) === 1,
       registrationReceiptMessage: row?.registration_receipt_message ?? "",
       finishReceiptMessage: row?.finish_receipt_message ?? "",
-      organizerEventorId: row?.organizer_eventor_id ?? 0,
+      organizerEventorId,
+      orgNumber: row?.org_number ?? "",
+      vatExempt: (row?.vat_exempt ?? 1) === 1,
+      receiptFriskvardNote: (row?.receipt_friskvard_note ?? 0) === 1,
+      organizerDetails,
     };
   }),
 
@@ -592,6 +648,9 @@ export const competitionRouter = router({
       registrationReceiptMessage: z.string().optional(),
       finishReceiptMessage: z.string().optional(),
       organizerEventorId: z.number().optional(),
+      orgNumber: z.string().optional(),
+      vatExempt: z.boolean().optional(),
+      receiptFriskvardNote: z.boolean().optional(),
     }))
     .mutation(async ({ input }) => {
       const client = await getCompetitionClient();
@@ -619,6 +678,15 @@ export const competitionRouter = router({
       }
       if (input.organizerEventorId !== undefined) {
         setClauses.push(`organizer_eventor_id = ${Number(input.organizerEventorId) || 0}`);
+      }
+      if (input.orgNumber !== undefined) {
+        setClauses.push(`org_number = '${input.orgNumber.replace(/'/g, "''")}'`);
+      }
+      if (input.vatExempt !== undefined) {
+        setClauses.push(`vat_exempt = ${input.vatExempt ? 1 : 0}`);
+      }
+      if (input.receiptFriskvardNote !== undefined) {
+        setClauses.push(`receipt_friskvard_note = ${input.receiptFriskvardNote ? 1 : 0}`);
       }
       if (setClauses.length > 0) {
         await client.$executeRawUnsafe(
