@@ -167,6 +167,8 @@
   "paymentOnSite": "Betala på plats",
   "paymentCard": "Kort",
   "paymentSwish": "Swish",
+  "paymentCash": "Kontant",
+  "defaultMethod": "standard",
   "swishNumber": "Swishnummer",
   "swishNumberPlaceholder": "073XXXXXXX",
   "swishPaymentMessage": "Betalningsmeddelande genereras automatiskt som \"Tävlingsnamn - Klassnamn\"",
@@ -177,5 +179,11 @@
   "finishReceiptMessage": "Meddelande på målkvitto",
   "finishReceiptMessageOptional": "valfritt",
   "finishReceiptPlaceholder": "Extra meddelande som skrivs ut på målkvitton",
+  "receiptSettings": "Kvitton & utskrift",
+  "orgNumber": "Organisationsnummer",
+  "orgNumberPlaceholder": "t.ex. 802407-2996",
+  "orgNumberHelp": "Visas på kvitton. Krävs för friskvårdsbidrag.",
+  "vatExempt": "Momsbefriad",
+  "friskvardNote": "Skriv ut friskvårdsbidragstext på kvitton",
   "results": "Resultat"
 }

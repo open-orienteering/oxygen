@@ -94,8 +94,11 @@ export function EventPage() {
       </div>
 
 
-      {/* Registration Settings */}
-      <RegistrationSettings />
+      {/* Registration & Payment */}
+      <RegistrationPaymentSettings />
+
+      {/* Receipts & Printing */}
+      <ReceiptSettings />
     </div>
   );
 }
@@ -701,43 +704,61 @@ const ALL_PAYMENT_METHODS = [
   { key: "on-site", labelKey: "paymentOnSite" },
   { key: "card", labelKey: "paymentCard" },
   { key: "swish", labelKey: "paymentSwish" },
+  { key: "cash", labelKey: "paymentCash" },
 ] as const;
 
-function RegistrationSettings() {
+type MethodItem = { key: string; enabled: boolean };
+
+function buildOrderedList(enabledKeys: string[]): MethodItem[] {
+  const items: MethodItem[] = enabledKeys.map((key) => ({ key, enabled: true }));
+  for (const { key } of ALL_PAYMENT_METHODS) {
+    if (!enabledKeys.includes(key)) items.push({ key, enabled: false });
+  }
+  return items;
+}
+
+function RegistrationPaymentSettings() {
   const { t } = useTranslation("event");
   const config = trpc.competition.getRegistrationConfig.useQuery();
   const updateConfig = trpc.competition.setRegistrationConfig.useMutation({
     onSuccess: () => config.refetch(),
   });
 
-  const [methods, setMethods] = useState<string[]>([]);
+  const [items, setItems] = useState<MethodItem[]>([]);
   const [swishNumber, setSwishNumber] = useState("");
-  const [printReceipt, setPrintReceipt] = useState(false);
-  const [regReceiptMsg, setRegReceiptMsg] = useState("");
-  const [finishReceiptMsg, setFinishReceiptMsg] = useState("");
   const initialized = useRef(false);
 
   useEffect(() => {
     if (!config.data || initialized.current) return;
     initialized.current = true;
-    setMethods(config.data.paymentMethods);
+    setItems(buildOrderedList(config.data.paymentMethods));
     setSwishNumber(config.data.swishNumber);
-    setPrintReceipt(config.data.printRegistrationReceipt);
-    setRegReceiptMsg(config.data.registrationReceiptMessage);
-    setFinishReceiptMsg(config.data.finishReceiptMessage);
   }, [config.data]);
 
   const save = (patch: Parameters<typeof updateConfig.mutate>[0]) => {
     updateConfig.mutate(patch);
   };
 
-  const toggleMethod = (key: string) => {
-    const next = methods.includes(key)
-      ? methods.filter((m) => m !== key)
-      : [...methods, key];
-    setMethods(next);
-    save({ paymentMethods: next });
+  const saveItems = (next: MethodItem[]) => {
+    setItems(next);
+    save({ paymentMethods: next.filter((m) => m.enabled).map((m) => m.key) });
   };
+
+  const toggleMethod = (key: string) => {
+    const next = items.map((m) => m.key === key ? { ...m, enabled: !m.enabled } : m);
+    saveItems(next);
+  };
+
+  const moveItem = (idx: number, dir: -1 | 1) => {
+    const target = idx + dir;
+    if (target < 0 || target >= items.length) return;
+    const next = [...items];
+    [next[idx], next[target]] = [next[target], next[idx]];
+    saveItems(next);
+  };
+
+  const labelMap = Object.fromEntries(ALL_PAYMENT_METHODS.map(({ key, labelKey }) => [key, labelKey]));
+  const firstEnabled = items.find((m) => m.enabled)?.key;
 
   return (
     <div>
@@ -749,25 +770,50 @@ function RegistrationSettings() {
           <label className="block text-sm font-medium text-slate-700 mb-2">
             {t("paymentMethods")}
           </label>
-          <div className="flex flex-wrap gap-2">
-            {ALL_PAYMENT_METHODS.map(({ key, labelKey }) => (
-              <button
-                key={key}
-                type="button"
-                onClick={() => toggleMethod(key)}
-                className={`px-3 py-1.5 text-sm rounded-lg border transition-colors cursor-pointer ${
-                  methods.includes(key)
-                    ? "bg-blue-50 border-blue-300 text-blue-700 font-medium"
-                    : "border-slate-200 text-slate-500 hover:bg-slate-50"
+          <div className="space-y-1">
+            {items.map((item, idx) => (
+              <div
+                key={item.key}
+                className={`flex items-center gap-2 px-3 py-1.5 rounded-lg border transition-colors ${
+                  item.enabled
+                    ? "bg-blue-50/50 border-blue-200"
+                    : "border-slate-100 bg-slate-50/50"
                 }`}
               >
-                {t(labelKey)}
-              </button>
+                <button
+                  type="button"
+                  onClick={() => moveItem(idx, -1)}
+                  disabled={idx === 0}
+                  className="text-slate-400 hover:text-slate-600 disabled:opacity-20 cursor-pointer disabled:cursor-default text-xs leading-none"
+                  aria-label="Move up"
+                >▲</button>
+                <button
+                  type="button"
+                  onClick={() => moveItem(idx, 1)}
+                  disabled={idx === items.length - 1}
+                  className="text-slate-400 hover:text-slate-600 disabled:opacity-20 cursor-pointer disabled:cursor-default text-xs leading-none"
+                  aria-label="Move down"
+                >▼</button>
+                <label className="flex items-center gap-2 flex-1 cursor-pointer select-none">
+                  <input
+                    type="checkbox"
+                    checked={item.enabled}
+                    onChange={() => toggleMethod(item.key)}
+                    className="rounded border-slate-300 text-blue-600 focus:ring-blue-500 cursor-pointer"
+                  />
+                  <span className={`text-sm ${item.enabled ? "text-slate-700 font-medium" : "text-slate-400"}`}>
+                    {t(labelMap[item.key] ?? item.key)}
+                  </span>
+                </label>
+                {item.key === firstEnabled && (
+                  <span className="text-xs text-blue-500 font-medium">{t("defaultMethod")}</span>
+                )}
+              </div>
             ))}
           </div>
         </div>
 
-        {methods.includes("swish") && (
+        {items.some((m) => m.key === "swish" && m.enabled) && (
           <div>
             <label className="block text-xs font-medium text-slate-600 mb-1">
               {t("swishNumber")}
@@ -784,6 +830,91 @@ function RegistrationSettings() {
               {t("swishPaymentMessage")}
             </p>
           </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function ReceiptSettings() {
+  const { t } = useTranslation("event");
+  const config = trpc.competition.getRegistrationConfig.useQuery();
+  const updateConfig = trpc.competition.setRegistrationConfig.useMutation({
+    onSuccess: () => config.refetch(),
+  });
+
+  const [orgNumber, setOrgNumber] = useState("");
+  const [vatExempt, setVatExempt] = useState(true);
+  const [friskvardNote, setFriskvardNote] = useState(false);
+  const [printReceipt, setPrintReceipt] = useState(false);
+  const [regReceiptMsg, setRegReceiptMsg] = useState("");
+  const [finishReceiptMsg, setFinishReceiptMsg] = useState("");
+  const initialized = useRef(false);
+
+  useEffect(() => {
+    if (!config.data || initialized.current) return;
+    initialized.current = true;
+    setOrgNumber(config.data.orgNumber);
+    setVatExempt(config.data.vatExempt);
+    setFriskvardNote(config.data.receiptFriskvardNote);
+    setPrintReceipt(config.data.printRegistrationReceipt);
+    setRegReceiptMsg(config.data.registrationReceiptMessage);
+    setFinishReceiptMsg(config.data.finishReceiptMessage);
+  }, [config.data]);
+
+  const save = (patch: Parameters<typeof updateConfig.mutate>[0]) => {
+    updateConfig.mutate(patch);
+  };
+
+  return (
+    <div>
+      <h2 className="text-sm font-semibold text-slate-500 uppercase tracking-wider mb-3">
+        {t("receiptSettings")}
+      </h2>
+      <div className="bg-white rounded-xl border border-slate-200 p-5 space-y-4">
+        <div>
+          <label className="block text-xs font-medium text-slate-600 mb-1">
+            {t("orgNumber")}
+          </label>
+          <input
+            type="text"
+            value={orgNumber}
+            onChange={(e) => setOrgNumber(e.target.value)}
+            onBlur={() => save({ orgNumber })}
+            placeholder={t("orgNumberPlaceholder")}
+            className="w-full max-w-xs px-3 py-1.5 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+          />
+          <p className="text-xs text-slate-400 mt-1">
+            {t("orgNumberHelp")}
+          </p>
+        </div>
+
+        <label className="flex items-center gap-2 cursor-pointer">
+          <input
+            type="checkbox"
+            checked={vatExempt}
+            onChange={(e) => {
+              setVatExempt(e.target.checked);
+              save({ vatExempt: e.target.checked });
+            }}
+            className="w-4 h-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
+          />
+          <span className="text-sm text-slate-700">{t("vatExempt")}</span>
+        </label>
+
+        {orgNumber && (
+          <label className="flex items-center gap-2 cursor-pointer">
+            <input
+              type="checkbox"
+              checked={friskvardNote}
+              onChange={(e) => {
+                setFriskvardNote(e.target.checked);
+                save({ receiptFriskvardNote: e.target.checked });
+              }}
+              className="w-4 h-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
+            />
+            <span className="text-sm text-slate-700">{t("friskvardNote")}</span>
+          </label>
         )}
 
         <label className="flex items-center gap-2 cursor-pointer">

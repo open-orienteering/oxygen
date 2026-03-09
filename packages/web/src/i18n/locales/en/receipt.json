@@ -17,5 +17,15 @@
   "freeStart": "Free start",
   "printed": "Printed",
   "tagline": "Lightweight orienteering management",
-  "missing": "MISSING"
+  "missing": "MISSING",
+  "receipt": "Receipt",
+  "entryFee": "Entry fee",
+  "vatExempt": "VAT exempt",
+  "vat": "VAT",
+  "total": "TOTAL",
+  "friskvardNote": "Valid for friskvardsbidrag",
+  "date": "Date",
+  "participant": "Participant",
+  "entryFeeSubtitle": "ENTRY FEE",
+  "paymentMethod": "Payment method:"
 }

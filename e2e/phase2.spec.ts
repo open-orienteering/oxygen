@@ -19,17 +19,6 @@ async function goToTab(page: import("@playwright/test").Page, name: string) {
   }
 }
 
-async function pickSelectNth(
-  container: import("@playwright/test").Locator | import("@playwright/test").Page,
-  testId: string,
-  nth: number,
-) {
-  const select = container.locator(`[data-testid="${testId}"]`);
-  await select.locator("button").first().click();
-  const options = select.locator("[class*='overflow-y-auto'] button");
-  await options.nth(nth + 1).click();
-}
-
 test.describe("Tab Navigation", () => {
   test("should display all navigation tabs", async ({ page }) => {
     await selectCompetition(page);
@@ -79,18 +68,20 @@ test.describe("Runner Management", () => {
     await goToTab(page, "Runners");
     await expect(page.getByText("54 runners")).toBeVisible({ timeout: 10000 });
 
-    // CREATE
+    // CREATE (via RegistrationDialog)
     await page.getByRole("button", { name: "Add Runner" }).click();
+    await expect(page.getByTestId("registration-dialog")).toBeVisible({ timeout: 3000 });
     await expect(
-      page.getByRole("heading", { name: "Add Runner" }),
+      page.getByRole("heading", { name: "Register Runner" }),
     ).toBeVisible({ timeout: 3000 });
 
-    await page.getByPlaceholder("First Last").fill("Test Runner E2E");
-    const dialog = page.locator(".fixed");
-    await pickSelectNth(dialog, "dialog-class", 0);
-    await pickSelectNth(dialog, "dialog-club", 0);
-    await page.getByPlaceholder("e.g. 500123").fill("999999");
-    await page.locator(".fixed").getByRole("button", { name: "Add Runner" }).click();
+    const dialog = page.getByTestId("registration-dialog");
+    await dialog.locator("input[placeholder='First Last']").fill("Test Runner E2E");
+    await dialog.getByTestId("reg-class").click();
+    await page.waitForTimeout(300);
+    await dialog.getByText("Öppen 1", { exact: true }).click();
+    await dialog.locator("input[placeholder='e.g. 500123']").fill("999999");
+    await dialog.getByTestId("reg-submit").click();
 
     await expect(page.getByText("Test Runner E2E")).toBeVisible({ timeout: 5000 });
     await expect(page.getByText("55 runners")).toBeVisible();

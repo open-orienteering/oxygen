@@ -108,20 +108,20 @@ test.describe("Kiosk Mode", () => {
     // First show reading screen
     await sendKioskMessage(page, nameId, {
       type: "card-reading",
-      cardNumber: 501438,
+      cardNumber: 777001,
     });
     await expect(page.getByText("Reading card...")).toBeVisible({ timeout: 5000 });
 
-    // Then send the full readout
+    // Then send the full readout (use unknown card so fallback status applies)
     await sendKioskMessage(page, nameId, {
       type: "card-readout",
       card: {
         id: "test-transition-1",
-        cardNumber: 501438,
+        cardNumber: 777001,
         cardType: "SI8",
         action: "readout",
         hasRaceData: true,
-        runnerName: "Malin Johannesson",
+        runnerName: "Fake Runner",
         className: "H21",
         clubName: "Test Club",
         status: "OK",
@@ -130,7 +130,7 @@ test.describe("Kiosk Mode", () => {
     });
 
     // Should now show readout, not reading
-    await expect(page.getByText("Malin Johannesson")).toBeVisible({ timeout: 5000 });
+    await expect(page.getByText("Fake Runner")).toBeVisible({ timeout: 5000 });
     await expect(page.getByText("Completed")).toBeVisible();
   });
 
@@ -140,16 +140,16 @@ test.describe("Kiosk Mode", () => {
     await goToKiosk(page);
     const nameId = getNameId(page);
 
-    // Simulate admin sending a readout card event
+    // Simulate admin sending a readout card event (use unknown card so fallback status applies)
     await sendKioskMessage(page, nameId, {
       type: "card-readout",
       card: {
         id: "test-1",
-        cardNumber: 501438,
+        cardNumber: 777002,
         cardType: "SI8",
         action: "readout",
         hasRaceData: true,
-        runnerName: "Malin Johannesson",
+        runnerName: "Fake Runner OK",
         className: "H21",
         clubName: "Test Club",
         status: "OK",
@@ -158,7 +158,7 @@ test.describe("Kiosk Mode", () => {
     });
 
     // Should show the readout screen
-    await expect(page.getByText("Malin Johannesson")).toBeVisible({
+    await expect(page.getByText("Fake Runner OK")).toBeVisible({
       timeout: 5000,
     });
     await expect(page.getByText("Completed")).toBeVisible();
@@ -172,11 +172,12 @@ test.describe("Kiosk Mode", () => {
     await goToKiosk(page);
     const nameId = getNameId(page);
 
+    // Use unknown card number so server readout returns not-found, and card-level status applies
     await sendKioskMessage(page, nameId, {
       type: "card-readout",
       card: {
         id: "test-mp-1",
-        cardNumber: 501438,
+        cardNumber: 777003,
         cardType: "SI8",
         action: "readout",
         hasRaceData: true,

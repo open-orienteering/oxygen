@@ -14,6 +14,14 @@ import { ClubLogo } from "./ClubLogo";
 import { SearchableSelect } from "./SearchableSelect";
 import { formatEntryDate } from "../lib/format";
 
+function payModeLabel(payMode: number, t: (key: string) => string): string {
+  const labels: Record<number, string> = {
+    1: t("payModeInvoice"), 2: t("payModeOnSite"),
+    3: t("payModeCard"), 4: t("payModeSwish"), 5: t("payModeCash"),
+  };
+  return labels[payMode] ?? "-";
+}
+
 interface Props {
   runnerId: number;
   colSpan: number;
@@ -218,6 +226,15 @@ export function RunnerInlineDetail({ runnerId, colSpan }: Props) {
                 label={t("entryDate")}
                 value={formatEntryDate(r.entryDate)}
               />
+            )}
+            {(r.fee > 0 || r.paid > 0) && (
+              <>
+                <ReadonlyField label={t("fee")} value={`${r.fee} kr`} />
+                <ReadonlyField label={t("paid")} value={`${r.paid} kr`} />
+                {r.payMode > 0 && (
+                  <ReadonlyField label={t("paymentMethod")} value={payModeLabel(r.payMode, t as (key: string) => string)} />
+                )}
+              </>
             )}
           </div>
 

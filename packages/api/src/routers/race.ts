@@ -3,6 +3,7 @@ import { router, publicProcedure } from "../trpc.js";
 import { getCompetitionClient } from "../db.js";
 import { RunnerStatus } from "@oxygen/shared";
 import { performReadout } from "./cardReadout.js";
+import { computePosition } from "../results.js";
 
 export const raceRouter = router({
   /**
@@ -31,7 +32,7 @@ export const raceRouter = router({
       const cls = runner.Class
         ? await client.oClass.findUnique({
             where: { Id: runner.Class },
-            select: { Name: true, Course: true },
+            select: { Name: true, Course: true, FreeStart: true },
           })
         : null;
 
@@ -53,8 +54,10 @@ export const raceRouter = router({
           name: runner.Name,
           cardNo: runner.CardNo,
           clubName: club?.Name ?? "",
+          clubId: runner.Club,
           className: cls?.Name ?? "",
           classId: runner.Class,
+          classFreeStart: cls?.FreeStart === 1,
           startNo: runner.StartNo,
           startTime: runner.StartTime,
           finishTime: runner.FinishTime,
@@ -222,27 +225,31 @@ export const raceRouter = router({
           where: { Class: classId, Removed: false, Status: RunnerStatus.OK },
           select: { Name: true, Club: true, StartTime: true, FinishTime: true },
         });
-        const withTimes = classRunners
-          .filter((r) => r.FinishTime > 0 && r.StartTime > 0)
-          .map((r) => ({ name: r.Name, clubId: r.Club, runningTime: r.FinishTime - r.StartTime }))
-          .sort((a, b) => a.runningTime - b.runningTime);
 
-        const rank = withTimes.filter((r) => r.runningTime < thisTime).length + 1;
-        position = { rank, total: withTimes.length };
+        const posResult = computePosition(
+          classRunners.map((r) => ({ name: r.Name, clubId: r.Club, startTime: r.StartTime, finishTime: r.FinishTime })),
+          result.runner.name,
+          thisTime,
+          result.runner.clubId,
+        );
 
-        // Fetch club names for top 5
-        const top5 = withTimes.slice(0, 5);
-        const clubIds = [...new Set(top5.map((r) => r.clubId).filter((id): id is number => id != null))];
-        const clubs = clubIds.length
-          ? await client.oClub.findMany({ where: { Id: { in: clubIds } }, select: { Id: true, Name: true } })
-          : [];
-        const clubMap = new Map(clubs.map((c) => [c.Id, c.Name]));
-        classResults = top5.map((r, i) => ({
-          rank: i + 1,
-          name: r.name,
-          clubName: clubMap.get(r.clubId ?? 0) ?? "",
-          runningTime: r.runningTime,
-        }));
+        if (posResult) {
+          position = { rank: posResult.rank, total: posResult.total };
+
+          // Fetch club names for top 5
+          const top5 = posResult.rankedRunners.slice(0, 5);
+          const clubIds = [...new Set(top5.map((r) => r.clubId).filter((id): id is number => id != null))];
+          const clubs = clubIds.length
+            ? await client.oClub.findMany({ where: { Id: { in: clubIds } }, select: { Id: true, Name: true } })
+            : [];
+          const clubMap = new Map(clubs.map((c) => [c.Id, c.Name]));
+          classResults = top5.map((r, i) => ({
+            rank: i + 1,
+            name: r.name,
+            clubName: clubMap.get(r.clubId ?? 0) ?? "",
+            runningTime: r.runningTime,
+          }));
+        }
       }
 
       // ── SIAC battery info ─────────────────────────────────────

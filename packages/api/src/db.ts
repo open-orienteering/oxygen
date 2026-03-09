@@ -273,6 +273,14 @@ export async function getCompetitionClient(
     await competitionClient.$disconnect();
   }
 
+  // Clear per-database "table ready" caches so ensure* functions re-check
+  logoTableReady.clear();
+  readoutTableReady.clear();
+  mapFilesTableReady.clear();
+  controlConfigTableReady.clear();
+  controlPunchesTableReady.clear();
+  competitionConfigTableReady.clear();
+
   // Check if this competition has a remote connection
   const remote = await getRemoteConnection(targetDb);
   const url = buildDbUrl(targetDb, remote);
@@ -814,6 +822,32 @@ export async function ensureCompetitionConfigTable(
     } catch {
       // Column already exists — ignore
     }
+  }
+
+  // Migration: add receipt/kvitto columns for friskvardsbidrag
+  const receiptColumns = [
+    `org_number VARCHAR(20) NOT NULL DEFAULT ''`,
+    `vat_exempt TINYINT(1) NOT NULL DEFAULT 1`,
+    `receipt_friskvard_note TINYINT(1) NOT NULL DEFAULT 0`,
+    `web_url VARCHAR(255) NOT NULL DEFAULT ''`,
+  ];
+  for (const col of receiptColumns) {
+    try {
+      await client.$executeRawUnsafe(
+        `ALTER TABLE oxygen_competition_config ADD COLUMN ${col}`,
+      );
+    } catch {
+      // Column already exists — ignore
+    }
+  }
+
+  // Ensure oRunner has a CardNo index for fast lookups and duplicate checks
+  try {
+    await client.$executeRawUnsafe(
+      `CREATE INDEX idx_runner_cardno ON oRunner (CardNo)`,
+    );
+  } catch {
+    // Index already exists — ignore
   }
 
   competitionConfigTableReady.add(db);

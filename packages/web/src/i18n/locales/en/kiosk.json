@@ -49,9 +49,13 @@
   "swish": "Swish",
   "cardPayment": "Card",
   "payOnSite": "Pay on site",
+  "cash": "Cash",
   "scanSwish": "Scan with Swish to pay {{amount}} kr",
   "registrationComplete": "Registration Complete!",
   "start": "Start",
   "freeStart": "Free start",
-  "proceedToStart": "Please proceed to the start area. Good luck!"
+  "proceedToStart": "Please proceed to the start area. Good luck!",
+  "positionInClass": "{{rank}} of {{total}} in class",
+  "courseMap": "Course Map",
+  "classResults": "Class Results"
 }

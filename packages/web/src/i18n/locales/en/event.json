@@ -167,6 +167,8 @@
   "paymentOnSite": "Pay on site",
   "paymentCard": "Card",
   "paymentSwish": "Swish",
+  "paymentCash": "Cash",
+  "defaultMethod": "default",
   "swishNumber": "Swish number",
   "swishNumberPlaceholder": "073XXXXXXX",
   "swishPaymentMessage": "Payment message is auto-generated as \"Competition name - Class name\"",
@@ -177,5 +179,11 @@
   "finishReceiptMessage": "Finish receipt message",
   "finishReceiptMessageOptional": "optional",
   "finishReceiptPlaceholder": "Extra message printed on finish receipts",
+  "receiptSettings": "Receipts & Printing",
+  "orgNumber": "Organization number",
+  "orgNumberPlaceholder": "e.g. 802407-2996",
+  "orgNumberHelp": "Displayed on receipts. Required for friskvardsbidrag.",
+  "vatExempt": "VAT exempt (Momsbefriad)",
+  "friskvardNote": "Print friskvardsbidrag note on receipts",
   "results": "Results"
 }

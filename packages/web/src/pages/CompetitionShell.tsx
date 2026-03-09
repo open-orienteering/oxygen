@@ -24,17 +24,18 @@ import { CardsPage } from "./CardsPage";
 import { EventPage } from "./EventPage";
 import { TestLabPage } from "./TestLabPage";
 import { BackupPunchesPage } from "./BackupPunchesPage";
-import { RegistrationPage } from "./RegistrationPage";
 import { ClubLogo } from "../components/ClubLogo";
 import { LanguageSelector } from "../components/LanguageSelector";
 import { useDeviceManager } from "../context/DeviceManager";
 import { usePrinter } from "../context/PrinterContext";
 import { CardNotification } from "../components/CardNotification";
 import { RecentCards } from "../components/RecentCards";
+import { RegistrationDialogProvider } from "../context/RegistrationDialogContext";
+import { RegistrationDialog } from "../components/RegistrationDialog";
 import { DbLoadIndicator } from "../components/DbLoadIndicator";
 import { useExternalChanges } from "../hooks/useExternalChanges";
 
-type Tab = "dashboard" | "event" | "runners" | "startlist" | "results" | "classes" | "courses" | "controls" | "clubs" | "start-station" | "finish-station" | "card-readout" | "cards" | "backup-punches" | "registration" | "test-lab";
+type Tab = "dashboard" | "event" | "runners" | "startlist" | "results" | "classes" | "courses" | "controls" | "clubs" | "start-station" | "finish-station" | "card-readout" | "cards" | "backup-punches" | "test-lab";
 
 const tabLabelKeys = {
   "dashboard": "dashboard",
@@ -50,7 +51,6 @@ const tabLabelKeys = {
   "start-station": "startStation",
   "finish-station": "finishStation",
   "card-readout": "cardReadout",
-  "registration": "registration",
   "backup-punches": "backupPunches",
   "test-lab": "testLab",
 } as const satisfies Record<Tab, string>;
@@ -70,7 +70,6 @@ const tabs: { id: Tab; path: string; group?: string; countKey?: string; isOverfl
   { id: "start-station", path: "start-station", group: "race", isOverflow: true },
   { id: "finish-station", path: "finish-station", group: "race", isOverflow: true },
   { id: "card-readout", path: "card-readout", group: "race", isOverflow: true },
-  { id: "registration", path: "registration", group: "race", isOverflow: true },
   { id: "backup-punches", path: "backup-punches", group: "race", isOverflow: true },
   { id: "test-lab", path: "test-lab", group: "dev", isOverflow: true },
 ];
@@ -302,33 +301,38 @@ export function CompetitionShell() {
       </header>
 
       {/* Global card notification banner */}
-      <CardNotification />
+      <RegistrationDialogProvider>
+        <CardNotification />
 
-      {/* Tab Content via nested routes */}
-      <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
-        <Routes>
-          <Route index element={<CompetitionDashboard />} />
-          <Route path="event" element={<EventPage />} />
-          <Route path="runners" element={<RunnerManagement />} />
-          <Route path="startlist" element={<StartListPage />} />
-          <Route path="results" element={<ResultsPage />} />
-          <Route path="classes" element={<ClassesPage />} />
-          <Route path="courses" element={<CoursesPage />} />
-          <Route path="controls" element={<ControlsPage />} />
-          <Route path="clubs" element={<ClubsPage />} />
-          <Route path="cards" element={<CardsPage />} />
-          <Route path="start-station" element={<StartStation />} />
-          <Route path="finish-station" element={<FinishStation />} />
-          <Route path="card-readout" element={<CardReadout />} />
-          <Route path="registration" element={<RegistrationPage />} />
-          <Route path="backup-punches" element={<BackupPunchesPage />} />
-          <Route path="test-lab" element={<TestLabPage />} />
-          <Route path="*" element={<Navigate to="" replace />} />
-        </Routes>
-      </main>
+        {/* Tab Content via nested routes */}
+        <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
+          <Routes>
+            <Route index element={<CompetitionDashboard />} />
+            <Route path="event" element={<EventPage />} />
+            <Route path="runners" element={<RunnerManagement />} />
+            <Route path="startlist" element={<StartListPage />} />
+            <Route path="results" element={<ResultsPage />} />
+            <Route path="classes" element={<ClassesPage />} />
+            <Route path="courses" element={<CoursesPage />} />
+            <Route path="controls" element={<ControlsPage />} />
+            <Route path="clubs" element={<ClubsPage />} />
+            <Route path="cards" element={<CardsPage />} />
+            <Route path="start-station" element={<StartStation />} />
+            <Route path="finish-station" element={<FinishStation />} />
+            <Route path="card-readout" element={<CardReadout />} />
+            <Route path="registration" element={<Navigate to="" replace />} />
+            <Route path="backup-punches" element={<BackupPunchesPage />} />
+            <Route path="test-lab" element={<TestLabPage />} />
+            <Route path="*" element={<Navigate to="" replace />} />
+          </Routes>
+        </main>
 
-      {/* Floating recent cards panel */}
-      <RecentCards />
+        {/* Floating recent cards panel */}
+        <RecentCards />
+
+        {/* Global registration dialog */}
+        <RegistrationDialog />
+      </RegistrationDialogProvider>
     </div>
   );
 }

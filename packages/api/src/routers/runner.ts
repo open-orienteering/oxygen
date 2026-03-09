@@ -1,7 +1,27 @@
 import { z } from "zod";
+import { TRPCError } from "@trpc/server";
 import { router, publicProcedure } from "../trpc.js";
 import { getCompetitionClient, incrementCounter } from "../db.js";
 import type { RunnerDetail, RunnerInfo } from "@oxygen/shared";
+
+/** Check that cardNo is not already assigned to another (non-removed) runner. */
+async function assertCardNotTaken(
+  client: Awaited<ReturnType<typeof getCompetitionClient>>,
+  cardNo: number,
+  excludeRunnerId?: number,
+): Promise<void> {
+  if (cardNo <= 0) return; // 0 = unassigned, allow duplicates
+  const existing = await client.oRunner.findFirst({
+    where: { CardNo: cardNo, Removed: false, ...(excludeRunnerId ? { Id: { not: excludeRunnerId } } : {}) },
+    select: { Id: true, Name: true },
+  });
+  if (existing) {
+    throw new TRPCError({
+      code: "CONFLICT",
+      message: `Card ${cardNo} is already assigned to ${existing.Name} (runner #${existing.Id})`,
+    });
+  }
+}
 
 /**
  * Normalize BirthYear from MeOS format.
@@ -29,6 +49,7 @@ const runnerCreateSchema = z.object({
   finishTime: z.number().int().optional(),
   fee: z.number().int().optional().default(0),
   paid: z.number().int().optional().default(0),
+  payMode: z.number().int().optional().default(0),
 });
 
 /** Schema for updating a runner — no defaults, so omitted fields stay untouched. */
@@ -47,6 +68,7 @@ const runnerUpdateSchema = z.object({
   finishTime: z.number().int().optional(),
   fee: z.number().int().optional(),
   paid: z.number().int().optional(),
+  payMode: z.number().int().optional(),
 });
 
 export const runnerRouter = router({
@@ -90,8 +112,39 @@ export const runnerRouter = router({
         phone: r.Phone,
         fee: r.Fee,
         paid: r.Paid,
+        payMode: r.PayMode,
         bib: r.Bib,
         entryDate: r.EntryDate,
+      };
+    }),
+
+  /**
+   * Find a runner by SI card number. Returns null if not found.
+   */
+  findByCard: publicProcedure
+    .input(z.object({ cardNo: z.number().int() }))
+    .query(async ({ input }) => {
+      if (input.cardNo <= 0) return null;
+      const client = await getCompetitionClient();
+      const r = await client.oRunner.findFirst({
+        where: { CardNo: input.cardNo, Removed: false },
+      });
+      if (!r) return null;
+
+      const club = r.Club ? await client.oClub.findUnique({ where: { Id: r.Club } }) : null;
+      const cls = r.Class ? await client.oClass.findUnique({ where: { Id: r.Class } }) : null;
+
+      return {
+        id: r.Id,
+        name: r.Name,
+        cardNo: r.CardNo,
+        clubId: r.Club,
+        clubName: club?.Name ?? "",
+        classId: r.Class,
+        className: cls?.Name ?? "",
+        startTime: r.StartTime,
+        finishTime: r.FinishTime,
+        status: r.Status,
       };
     }),
 
@@ -215,6 +268,9 @@ export const runnerRouter = router({
           startTime: r.StartTime,
           finishTime: r.FinishTime,
           status: r.Status as RunnerInfo["status"],
+          fee: r.Fee || undefined,
+          paid: r.Paid || undefined,
+          payMode: r.PayMode || undefined,
         }),
       );
     }),
@@ -226,6 +282,8 @@ export const runnerRouter = router({
     .input(runnerCreateSchema)
     .mutation(async ({ input }) => {
       const client = await getCompetitionClient();
+
+      await assertCardNotTaken(client, input.cardNo);
 
       const runner = await client.oRunner.create({
         data: {
@@ -241,6 +299,7 @@ export const runnerRouter = router({
           Phone: input.phone,
           Fee: input.fee,
           Paid: input.paid,
+          PayMode: input.payMode,
           // MeOS requires these MediumText fields to be non-null
           InputResult: "",
           Annotation: "",
@@ -264,6 +323,10 @@ export const runnerRouter = router({
     .mutation(async ({ input }) => {
       const client = await getCompetitionClient();
 
+      if (input.data.cardNo !== undefined) {
+        await assertCardNotTaken(client, input.data.cardNo, input.id);
+      }
+
       const updateData: Record<string, unknown> = {};
       if (input.data.name !== undefined) updateData.Name = input.data.name;
       if (input.data.cardNo !== undefined)
@@ -286,6 +349,7 @@ export const runnerRouter = router({
         updateData.FinishTime = input.data.finishTime;
       if (input.data.fee !== undefined) updateData.Fee = input.data.fee;
       if (input.data.paid !== undefined) updateData.Paid = input.data.paid;
+      if (input.data.payMode !== undefined) updateData.PayMode = input.data.payMode;
 
       const runner = await client.oRunner.update({
         where: { Id: input.id },
@@ -331,6 +395,7 @@ export const runnerRouter = router({
         updateData.FinishTime = input.data.finishTime;
       if (input.data.fee !== undefined) updateData.Fee = input.data.fee;
       if (input.data.paid !== undefined) updateData.Paid = input.data.paid;
+      if (input.data.payMode !== undefined) updateData.PayMode = input.data.payMode;
 
       let updatedCount = 0;
       for (const id of input.ids) {

@@ -17,7 +17,7 @@ test.describe("Competition Selection", () => {
       timeout: 10000,
     });
     await expect(page.getByText("2026-04-15")).toBeVisible();
-    await expect(page.getByText("Test competition")).toBeVisible();
+    await expect(page.getByText("Test competition", { exact: true })).toBeVisible();
   });
 
   test("should select a competition and show dashboard", async ({ page }) => {

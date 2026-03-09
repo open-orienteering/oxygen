@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { computeClassPlacements, type RunnerForPlacement } from "../results.js";
+import { computeClassPlacements, computePosition, type RunnerForPlacement, type ClassRunnerForPosition } from "../results.js";
 import { RunnerStatus } from "@oxygen/shared";
 
 // ─── Fixtures ─────────────────────────────────────────────────
@@ -168,5 +168,81 @@ describe("computeClassPlacements", () => {
   it("runningTime is 0 for DNS runner with no times", () => {
     const result = computeClassPlacements([dnsRunner(1)], false);
     expect(result.get(1)!.runningTime).toBe(0);
+  });
+});
+
+// ─── computePosition ────────────────────────────────────────
+
+describe("computePosition", () => {
+  const START = 32400 * 10; // 09:00:00 in deciseconds
+
+  function classRunner(name: string, runningTimeDs: number, clubId: number | null = 1): ClassRunnerForPosition {
+    return { name, clubId, startTime: START, finishTime: START + runningTimeDs };
+  }
+
+  it("single runner gets rank 1 of 1", () => {
+    const result = computePosition([classRunner("Alice", 600)], "Alice", 600, 1);
+    expect(result).toMatchObject({ rank: 1, total: 1 });
+  });
+
+  it("two runners: faster is rank 1, slower is rank 2", () => {
+    const runners = [classRunner("Alice", 600), classRunner("Bob", 700)];
+    const result = computePosition(runners, "Bob", 700, 1);
+    expect(result).toMatchObject({ rank: 2, total: 2 });
+  });
+
+  it("tied runners share rank 1", () => {
+    const runners = [classRunner("Alice", 600), classRunner("Bob", 600)];
+    const result = computePosition(runners, "Bob", 600, 1);
+    expect(result).toMatchObject({ rank: 1, total: 2 });
+  });
+
+  it("injects self when not yet in DB results", () => {
+    // Only Alice in DB, but Bob (self) is not yet persisted
+    const runners = [classRunner("Alice", 600)];
+    const result = computePosition(runners, "Bob", 700, 1);
+    expect(result).toMatchObject({ rank: 2, total: 2 });
+  });
+
+  it("does not duplicate self when already in DB results", () => {
+    const runners = [classRunner("Alice", 600), classRunner("Bob", 700)];
+    const result = computePosition(runners, "Bob", 700, 1);
+    expect(result).toMatchObject({ rank: 2, total: 2 });
+  });
+
+  it("excludes runners with startTime=0", () => {
+    const runners = [
+      classRunner("Alice", 600),
+      { name: "NoStart", clubId: 1, startTime: 0, finishTime: START + 500 }, // no start
+    ];
+    const result = computePosition(runners, "Alice", 600, 1);
+    // NoStart is excluded, only Alice counts
+    expect(result).toMatchObject({ rank: 1, total: 1 });
+  });
+
+  it("excludes runners with finishTime=0", () => {
+    const runners = [
+      classRunner("Alice", 600),
+      { name: "NoFinish", clubId: 1, startTime: START, finishTime: 0 }, // no finish
+    ];
+    const result = computePosition(runners, "Alice", 600, 1);
+    expect(result).toMatchObject({ rank: 1, total: 1 });
+  });
+
+  it("returns null when selfRunningTime <= 0", () => {
+    const result = computePosition([classRunner("Alice", 600)], "Alice", 0, 1);
+    expect(result).toBeNull();
+  });
+
+  it("rankedRunners is sorted by running time", () => {
+    const runners = [classRunner("Alice", 700), classRunner("Bob", 600), classRunner("Carol", 800)];
+    const result = computePosition(runners, "Alice", 700, 1);
+    expect(result!.rankedRunners.map((r) => r.name)).toEqual(["Bob", "Alice", "Carol"]);
+  });
+
+  it("returns all ranked runners (not limited to 5)", () => {
+    const runners = Array.from({ length: 8 }, (_, i) => classRunner(`Runner${i}`, 600 + i * 100));
+    const result = computePosition(runners, "Runner0", 600, 1);
+    expect(result!.rankedRunners).toHaveLength(8);
   });
 });

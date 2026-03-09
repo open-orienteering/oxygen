@@ -10,6 +10,7 @@ import { useState, useEffect, useRef } from "react";
 import { useTranslation } from "react-i18next";
 import { useNavigate, useLocation } from "react-router-dom";
 import { useDeviceManager, type RecentCard, type CardAction } from "../context/DeviceManager";
+import { useRegistrationDialog } from "../context/RegistrationDialogContext";
 import { formatRunningTime } from "@oxygen/shared";
 
 export function RecentCards() {
@@ -18,6 +19,7 @@ export function RecentCards() {
     useDeviceManager();
   const navigate = useNavigate();
   const location = useLocation();
+  const { openRegistration } = useRegistrationDialog();
   const [open, setOpen] = useState(false);
   const [pulse, setPulse] = useState(false);
   const panelRef = useRef<HTMLDivElement>(null);
@@ -55,14 +57,14 @@ export function RecentCards() {
         navigate(`${base}/card-readout?card=${card.cardNumber}`);
         break;
       case "register": {
-        const params = new URLSearchParams({ addCard: String(card.cardNumber) });
-        if (card.ownerData?.firstName) params.set("firstName", card.ownerData.firstName);
-        if (card.ownerData?.lastName) params.set("lastName", card.ownerData.lastName);
-        if (card.ownerData?.club) params.set("club", card.ownerData.club);
-        if (card.ownerData?.sex) params.set("sex", card.ownerData.sex);
-        if (card.ownerData?.dateOfBirth) params.set("dob", card.ownerData.dateOfBirth);
-        if (card.ownerData?.phone) params.set("phone", card.ownerData.phone);
-        navigate(`${base}/runners?${params.toString()}`);
+        const ownerData: Record<string, string> = {};
+        if (card.ownerData?.firstName) ownerData.firstName = card.ownerData.firstName;
+        if (card.ownerData?.lastName) ownerData.lastName = card.ownerData.lastName;
+        if (card.ownerData?.club) ownerData.club = card.ownerData.club;
+        if (card.ownerData?.sex) ownerData.sex = card.ownerData.sex;
+        if (card.ownerData?.dateOfBirth) ownerData.dateOfBirth = card.ownerData.dateOfBirth;
+        if (card.ownerData?.phone) ownerData.phone = card.ownerData.phone;
+        openRegistration(card.cardNumber, Object.keys(ownerData).length > 0 ? ownerData : null);
         break;
       }
       case "pre-start":

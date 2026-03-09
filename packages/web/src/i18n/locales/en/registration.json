@@ -25,6 +25,7 @@
   "swish": "Swish",
   "card": "Card",
   "payOnSite": "Pay on site",
+  "cash": "Cash",
   "fee": "Fee",
   "feeAmount": "{{amount}} kr",
   "noFee": "No fee",
@@ -70,9 +71,12 @@
   "clearEsc": "Clear (Esc)",
   "saving": "Saving...",
   "registerRunner": "Register Runner",
+  "confirmPaymentRegister": "Confirm Payment & Register",
   "recentRegistrations": "Recent Registrations",
   "noRegistrationsYet": "No registrations yet",
   "registeredInClass": "{{name}} registered in {{className}}",
   "clubSource": "Club",
-  "runnerDbSource": "Runner DB"
+  "runnerDbSource": "Runner DB",
+  "duplicateCardWarning": "Card {{cardNo}} is already assigned to {{name}} ({{className}})",
+  "stickyMode": "Sticky mode"
 }

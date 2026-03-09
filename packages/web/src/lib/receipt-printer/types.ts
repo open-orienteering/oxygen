@@ -51,6 +51,7 @@ export interface FinishReceiptLabels {
 /** Translatable label strings for the registration receipt. All have English defaults in escpos.ts. */
 export interface RegistrationReceiptLabels {
   registration?: string;
+  receipt?: string;
   name?: string;
   club?: string;
   class?: string;
@@ -61,6 +62,15 @@ export interface RegistrationReceiptLabels {
   amount?: string;
   printed?: string;
   tagline?: string;
+  entryFee?: string;
+  vatExempt?: string;
+  vat?: string;
+  total?: string;
+  friskvardNote?: string;
+  date?: string;
+  participant?: string;
+  entryFeeSubtitle?: string;
+  paymentMethod?: string;
 }
 
 /** All data needed to format and print a finish receipt. */
@@ -124,6 +134,24 @@ export interface RegistrationReceiptData {
   logoRaster?: LogoRaster | null;
   /** Optional custom message to print on the receipt. */
   customMessage?: string;
+  /** Organizer/club name to display on kvitto header. */
+  organizerName?: string;
+  /** Full organizer details from Eventor (address, phone, email). */
+  organizerDetails?: {
+    name: string;
+    street?: string;
+    city?: string;
+    zip?: string;
+    phone?: string;
+    email?: string;
+    webUrl?: string;
+  };
+  /** Organization number for friskvardsbidrag (e.g., "802407-2996"). */
+  orgNumber?: string;
+  /** VAT information. */
+  vatInfo?: { exempt: boolean };
+  /** Whether to print the friskvardsbidrag eligibility note. */
+  friskvardNote?: boolean;
   /** Translated labels for receipt strings. English defaults used when omitted. */
   labels?: RegistrationReceiptLabels;
 }

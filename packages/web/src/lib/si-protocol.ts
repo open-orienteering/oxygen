@@ -340,6 +340,15 @@ export interface SIPunch {
 }
 
 /**
+ * Extract day-of-week from a PTD byte (bits 1-3).
+ * Returns 1=Mon..7=Sun, or null if invalid/zero.
+ */
+export function parseDayOfWeek(ptdByte: number): number | null {
+  const dow = (ptdByte >> 1) & 0x07;
+  return dow >= 1 && dow <= 7 ? dow : null;
+}
+
+/**
  * Parse a 2-byte time from SI card memory.
  *
  * The raw 16-bit value (PTH << 8 | PTL) represents seconds since midnight/noon
@@ -591,6 +600,10 @@ export interface SICardReadout {
   startTime: number | null;
   finishTime: number | null;
   clearTime: number | null;
+  /** Day-of-week of finish punch (1=Mon..7=Sun), null if no finish */
+  finishDayOfWeek?: number | null;
+  /** Day-of-week of check punch (1=Mon..7=Sun), null if no check */
+  checkDayOfWeek?: number | null;
   punches: SIPunch[];
   punchCount: number;
   /** Owner data from the card (SI10/SIAC/SI11 only) */
@@ -645,6 +658,11 @@ export function parseSI8CardData(blocks: Uint8Array[]): SICardReadout | null {
   const startTime = parsePunchTime(b0, 14);
   const finishTime = parsePunchTime(b0, 18);
 
+  // Extract day-of-week from PTD bytes (byte before station byte, 2 before time)
+  // Check PTD at offset 8, Finish PTD at offset 16
+  const checkDayOfWeek = checkTime != null ? parseDayOfWeek(b0[8]) : null;
+  const finishDayOfWeek = finishTime != null ? parseDayOfWeek(b0[16]) : null;
+
   // Parse punches — SI8: block 0 offset 32, then block 1+ offset 0
   const punches: SIPunch[] = [];
   for (let bi = 0; bi < blocks.length && punches.length < punchCount; bi++) {
@@ -672,6 +690,8 @@ export function parseSI8CardData(blocks: Uint8Array[]): SICardReadout | null {
     startTime,
     finishTime,
     clearTime,
+    finishDayOfWeek,
+    checkDayOfWeek,
     punches,
     punchCount,
   };
@@ -708,6 +728,10 @@ export function parseSI10CardData(
   const checkTime = parsePunchTime(b0, 10);
   const startTime = parsePunchTime(b0, 14);
   const finishTime = parsePunchTime(b0, 18);
+
+  // Extract day-of-week from PTD bytes (same layout as SI8)
+  const checkDayOfWeek = checkTime != null ? parseDayOfWeek(b0[8]) : null;
+  const finishDayOfWeek = finishTime != null ? parseDayOfWeek(b0[16]) : null;
 
   // Parse personal data from blocks 0-3
   const personalBlocks = allBlocks.slice(0, Math.min(allBlocks.length, 4));
@@ -758,6 +782,8 @@ export function parseSI10CardData(
     startTime,
     finishTime,
     clearTime,
+    finishDayOfWeek,
+    checkDayOfWeek,
     punches,
     punchCount,
     ownerData,

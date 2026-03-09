@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { router, publicProcedure } from "../trpc.js";
-import { getCompetitionClient, ensureReadoutTable } from "../db.js";
+import { getCompetitionClient, ensureReadoutTable, incrementCounter } from "../db.js";
 import { RunnerStatus } from "@oxygen/shared";
 import type { PrismaClient } from "@prisma/client";
 
@@ -85,7 +85,7 @@ export function matchPunchesToCourse(
   );
 
   const cardStartTime = startPunch?.time ?? 0;
-  const startTime = cardStartTime > 0 ? cardStartTime : fallbackStartTime;
+  const startTime = fallbackStartTime > 0 ? fallbackStartTime : cardStartTime;
   const finishTime = finishPunch?.time ?? 0;
 
   const matches: ControlMatch[] = [];
@@ -170,9 +170,13 @@ export async function performReadout(client: PrismaClient, runnerId: number) {
     : null;
 
   // Get card data (original SI card readout)
+  // Prefer linked card (runner.Card FK), fall back to CardNo lookup
+  // (card may exist from a prior read before the runner was registered)
   const card = runner.Card
     ? await client.oCard.findUnique({ where: { Id: runner.Card } })
-    : null;
+    : await client.oCard.findFirst({
+        where: { CardNo: runner.CardNo, Removed: false },
+      });
 
   // Get free punches (radio punches + manual corrections)
   const freePunches = await client.oPunch.findMany({
@@ -280,7 +284,18 @@ export const cardReadoutRouter = router({
       if (!result) {
         return { found: false as const, cardNo: input.cardNo };
       }
-      return { found: true as const, cardNo: input.cardNo, ...result };
+      // Check if any card punches actually match course controls
+      const matchedCount = result.controls.filter(
+        (c) => c.status === "ok",
+      ).length;
+      const punchesMatchCourse =
+        matchedCount > 0 && result.rawPunchCount > 0;
+      return {
+        found: true as const,
+        cardNo: input.cardNo,
+        punchesMatchCourse,
+        ...result,
+      };
     }),
 
   /** Card readout by runner ID (for inline detail) */
@@ -423,27 +438,87 @@ export const cardReadoutRouter = router({
 
       const punchString = parts.length > 0 ? parts.join(";") + ";" : "";
 
-      // ── Save readout history ────────────────────────────
+      // ── Check for foreign controls (stale punch detection) ──
+      let punchesRelevant = true;
+      if (input.punches.length > 0) {
+        const controls = await client.oControl.findMany({
+          where: { Removed: false },
+          select: { Numbers: true },
+        });
+        const competitionCodes = new Set<number>();
+        for (const c of controls) {
+          // oControl.Numbers is semicolon-separated; first value is the code
+          const code = parseInt(c.Numbers.split(";")[0], 10);
+          if (!isNaN(code) && code > 0) competitionCodes.add(code);
+        }
+
+        if (competitionCodes.size > 0) {
+          const hasForeignControl = input.punches.some(
+            (p) => !competitionCodes.has(p.controlCode),
+          );
+          if (hasForeignControl) punchesRelevant = false;
+        }
+      }
+
+      // ── Save readout history (deduplicate by punch content) ─────────
+      // Only INSERT if punches differ from the most recent readout for this card.
+      // If punches are identical, UPDATE metadata (battery, owner data, timestamp).
+      const voltageStored = input.batteryVoltage
+        ? Math.round(input.batteryVoltage * 100)
+        : 0;
+      const ownerDataJson = input.ownerData ? JSON.stringify(input.ownerData) : null;
+      const metadataJson = input.metadata ? JSON.stringify(input.metadata) : null;
+
       try {
         await ensureReadoutTable(client);
-        await client.$executeRawUnsafe(
-          `INSERT INTO oxygen_card_readouts (CardNo, CardType, Punches, Voltage, OwnerData, Metadata)
-           VALUES (?, ?, ?, ?, ?, ?)`,
+        const latest = await client.$queryRawUnsafe<Array<{ Id: bigint; Punches: string }>>(
+          `SELECT Id, Punches FROM oxygen_card_readouts
+           WHERE CardNo = ? ORDER BY ReadAt DESC LIMIT 1`,
           input.cardNo,
-          input.cardType ?? "",
-          punchString,
-          input.batteryVoltage
-            ? Math.round(input.batteryVoltage * 100)
-            : 0,
-          input.ownerData ? JSON.stringify(input.ownerData) : null,
-          input.metadata ? JSON.stringify(input.metadata) : null,
         );
+        if (latest.length > 0 && latest[0].Punches === punchString) {
+          // Same punches — update metadata and timestamp on existing row
+          await client.$executeRawUnsafe(
+            `UPDATE oxygen_card_readouts
+             SET ReadAt = NOW(), CardType = ?, Voltage = ?, OwnerData = ?, Metadata = ?
+             WHERE Id = ?`,
+            input.cardType ?? "",
+            voltageStored,
+            ownerDataJson,
+            metadataJson,
+            latest[0].Id,
+          );
+        } else {
+          // New or different punches — insert new history row
+          await client.$executeRawUnsafe(
+            `INSERT INTO oxygen_card_readouts (CardNo, CardType, Punches, Voltage, OwnerData, Metadata)
+             VALUES (?, ?, ?, ?, ?, ?)`,
+            input.cardNo,
+            input.cardType ?? "",
+            punchString,
+            voltageStored,
+            ownerDataJson,
+            metadataJson,
+          );
+        }
       } catch {
         // Non-critical — readout history is supplementary
         console.warn("[cardReadout] Failed to save readout history");
       }
 
-      // ── Upsert into oCard ──────────────────────────────
+      // ── Upsert into oCard (skip if punches are stale) ────
+      if (!punchesRelevant) {
+        // Stale punches — don't pollute oCard, but still return card info
+        const existing = await client.oCard.findFirst({
+          where: { CardNo: input.cardNo, Removed: false },
+        });
+        return {
+          cardId: existing?.Id ?? 0,
+          created: false,
+          punchesRelevant,
+        };
+      }
+
       // Prefer non-removed cards; fall back to any card with same number
       const existing =
         (await client.oCard.findFirst({
@@ -469,7 +544,7 @@ export const cardReadoutRouter = router({
               : {}),
           },
         });
-        return { cardId: existing.Id, created: false };
+        return { cardId: existing.Id, created: false, punchesRelevant };
       }
 
       const card = await client.oCard.create({
@@ -494,7 +569,7 @@ export const cardReadoutRouter = router({
         });
       }
 
-      return { cardId: card.Id, created: true };
+      return { cardId: card.Id, created: true, punchesRelevant };
     }),
 
   /** List readout history for a card number */
@@ -781,5 +856,33 @@ export const cardReadoutRouter = router({
         rawPunchString: card.Punches,
         modified: card.Modified?.toISOString() ?? null,
       };
+    }),
+
+  /**
+   * Apply the computed result from a card readout to the runner record.
+   * This is the "readout station" step: after punches are evaluated,
+   * persist the status (OK/MP/DNF) and finish time back to oRunner.
+   */
+  applyResult: publicProcedure
+    .input(
+      z.object({
+        runnerId: z.number().int(),
+        status: z.number().int(),
+        finishTime: z.number().int(),
+        startTime: z.number().int(),
+      }),
+    )
+    .mutation(async ({ input }) => {
+      const client = await getCompetitionClient();
+      await client.oRunner.update({
+        where: { Id: input.runnerId },
+        data: {
+          Status: input.status,
+          FinishTime: input.finishTime,
+          StartTime: input.startTime,
+        },
+      });
+      await incrementCounter("oRunner", input.runnerId);
+      return { applied: true, runnerId: input.runnerId, status: input.status, finishTime: input.finishTime, startTime: input.startTime };
     }),
 });

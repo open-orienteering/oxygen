@@ -25,6 +25,7 @@
   "swish": "Swish",
   "card": "Kort",
   "payOnSite": "Betala på plats",
+  "cash": "Kontant",
   "fee": "Avgift",
   "feeAmount": "{{amount}} kr",
   "noFee": "Ingen avgift",
@@ -70,9 +71,12 @@
   "clearEsc": "Rensa (Esc)",
   "saving": "Sparar...",
   "registerRunner": "Registrera löpare",
+  "confirmPaymentRegister": "Bekräfta betalning & registrera",
   "recentRegistrations": "Senaste registreringar",
   "noRegistrationsYet": "Inga registreringar ännu",
   "registeredInClass": "{{name}} registrerad i {{className}}",
   "clubSource": "Klubb",
-  "runnerDbSource": "Löpar-DB"
+  "runnerDbSource": "Löpar-DB",
+  "duplicateCardWarning": "Bricka {{cardNo}} är redan tilldelad {{name}} ({{className}})",
+  "stickyMode": "Hållbart läge"
 }

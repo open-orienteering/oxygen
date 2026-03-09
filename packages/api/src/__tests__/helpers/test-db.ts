@@ -44,7 +44,9 @@ export async function createTestDb(label = "test"): Promise<TestDbContext> {
     // Drop the test database
     const baseUrl = process.env.DATABASE_URL ?? "";
     if (!baseUrl) return;
-    const conn = await mysql.createConnection(baseUrl);
+    // Strip the database name — we just need a server connection to DROP DATABASE
+    const serverUrl = baseUrl.replace(/\/[^/?]+(\?|$)/, "/$1");
+    const conn = await mysql.createConnection(serverUrl);
     try {
       await conn.execute(`DROP DATABASE IF EXISTS \`${dbName}\``);
     } finally {

@@ -40,6 +40,7 @@ interface PunchTableProps {
   data: PunchTableData;
   editable?: boolean;
   compact?: boolean;
+  dark?: boolean;
   onAddPunch?: (controlCode: number, time: number) => void;
   onRemovePunch?: (punchId: number) => void;
   onUpdatePunchTime?: (punchId: number, newTime: number) => void;
@@ -51,6 +52,7 @@ export function PunchTable({
   data,
   editable = false,
   compact = false,
+  dark = false,
   onAddPunch,
   onRemovePunch,
   onUpdatePunchTime,
@@ -65,46 +67,46 @@ export function PunchTable({
     <div className={compact ? "space-y-2" : "space-y-4"}>
       {/* Course & Punches table */}
       {data.course && (
-        <div className={`bg-white ${compact ? "rounded-lg border border-slate-200" : "rounded-xl border border-slate-200"} overflow-hidden`}>
-          <div className="px-4 py-3 border-b border-slate-200 flex items-center justify-between">
-            <h3 className={`font-semibold text-slate-500 uppercase tracking-wider ${compact ? "text-xs" : "text-sm"}`}>
+        <div className={`${dark ? "bg-slate-800/50 border-slate-700" : "bg-white border-slate-200"} ${compact ? "rounded-lg" : "rounded-xl"} border overflow-hidden`}>
+          <div className={`px-4 py-3 border-b ${dark ? "border-slate-700" : "border-slate-200"} flex items-center justify-between`}>
+            <h3 className={`font-semibold ${dark ? "text-slate-400" : "text-slate-500"} uppercase tracking-wider ${compact ? "text-xs" : "text-sm"}`}>
               {tr("punches")} &mdash; {data.course.name}
             </h3>
-            <span className="text-xs text-slate-400">
+            <span className={`text-xs ${dark ? "text-slate-500" : "text-slate-400"}`}>
               {data.controls.filter((c) => c.status === "ok").length}/
               {data.controls.length} {tr("controlsOk")}
             </span>
           </div>
 
-          <table className="w-full text-sm">
+          <table className={`w-full text-sm ${dark ? "text-slate-200" : ""}`}>
             <thead>
-              <tr className="bg-slate-50 border-b border-slate-200">
-                <th className="px-4 py-2 text-left font-medium text-slate-500 w-12">
+              <tr className={`${dark ? "bg-slate-700/50 border-b border-slate-700" : "bg-slate-50 border-b border-slate-200"}`}>
+                <th className={`px-4 py-2 text-left font-medium ${dark ? "text-slate-400" : "text-slate-500"} w-12`}>
                   #
                 </th>
-                <th className="px-4 py-2 text-left font-medium text-slate-500">
+                <th className={`px-4 py-2 text-left font-medium ${dark ? "text-slate-400" : "text-slate-500"}`}>
                   {tr("control")}
                 </th>
-                <th className="px-4 py-2 text-right font-medium text-slate-500">
+                <th className={`px-4 py-2 text-right font-medium ${dark ? "text-slate-400" : "text-slate-500"}`}>
                   {tr("time")}
                 </th>
-                <th className="px-4 py-2 text-right font-medium text-slate-500">
+                <th className={`px-4 py-2 text-right font-medium ${dark ? "text-slate-400" : "text-slate-500"}`}>
                   {tr("split")}
                 </th>
-                <th className="px-4 py-2 text-right font-medium text-slate-500">
+                <th className={`px-4 py-2 text-right font-medium ${dark ? "text-slate-400" : "text-slate-500"}`}>
                   {tr("cumulative")}
                 </th>
-                <th className="px-4 py-2 text-center font-medium text-slate-500 w-16">
+                <th className={`px-4 py-2 text-center font-medium ${dark ? "text-slate-400" : "text-slate-500"} w-16`}>
                   {tr("statusHeader")}
                 </th>
                 {editable && (
-                  <th className="px-4 py-2 text-center font-medium text-slate-500 w-20">
+                  <th className={`px-4 py-2 text-center font-medium ${dark ? "text-slate-400" : "text-slate-500"} w-20`}>
                     &nbsp;
                   </th>
                 )}
               </tr>
             </thead>
-            <tbody className="divide-y divide-slate-100">
+            <tbody className={`divide-y ${dark ? "divide-slate-700" : "divide-slate-100"}`}>
               {/* Start row */}
               <TimingRow
                 label="S"
@@ -113,6 +115,7 @@ export function PunchTable({
                 editable={editable}
                 canEdit={!!onUpdateStartTime}
                 onUpdateTime={onUpdateStartTime}
+                dark={dark}
               />
 
               {/* Control rows */}
@@ -122,6 +125,7 @@ export function PunchTable({
                   ctrl={ctrl}
                   idx={idx}
                   editable={editable}
+                  dark={dark}
                   onRemovePunch={onRemovePunch}
                   onUpdatePunchTime={onUpdatePunchTime}
                 />
@@ -136,6 +140,7 @@ export function PunchTable({
                 canEdit={!!onUpdateFinishTime}
                 onUpdateTime={onUpdateFinishTime}
                 bold
+                dark={dark}
                 splitTime={(() => {
                   const lastOk = [...data.controls]
                     .reverse()
@@ -153,15 +158,15 @@ export function PunchTable({
 
       {/* Extra punches */}
       {data.extraPunches.length > 0 && (
-        <div className={`bg-amber-50 ${compact ? "rounded-lg" : "rounded-xl"} border border-amber-200 p-4`}>
-          <h3 className="text-sm font-semibold text-amber-800 mb-2">
+        <div className={`${dark ? "bg-amber-900/30 border-amber-700/50" : "bg-amber-50 border-amber-200"} ${compact ? "rounded-lg" : "rounded-xl"} border p-4`}>
+          <h3 className={`text-sm font-semibold ${dark ? "text-amber-400" : "text-amber-800"} mb-2`}>
             {tr("extraPunches")}
           </h3>
           <div className="flex flex-wrap gap-2">
             {data.extraPunches.map((p, i) => (
               <span
                 key={i}
-                className="px-2 py-1 bg-amber-100 rounded text-xs font-medium text-amber-800 tabular-nums"
+                className={`px-2 py-1 rounded text-xs font-medium tabular-nums ${dark ? "bg-amber-800/50 text-amber-300" : "bg-amber-100 text-amber-800"}`}
               >
                 {p.controlCode} @ {formatMeosTime(p.time)}
               </span>
@@ -172,15 +177,15 @@ export function PunchTable({
 
       {/* Missing controls summary */}
       {data.missingControls.length > 0 && (
-        <div className={`bg-red-50 ${compact ? "rounded-lg" : "rounded-xl"} border border-red-200 p-4`}>
-          <h3 className="text-sm font-semibold text-red-800 mb-2">
+        <div className={`${dark ? "bg-red-900/30 border-red-700/50" : "bg-red-50 border-red-200"} ${compact ? "rounded-lg" : "rounded-xl"} border p-4`}>
+          <h3 className={`text-sm font-semibold ${dark ? "text-red-400" : "text-red-800"} mb-2`}>
             {tr("missingControlsTitle")}
           </h3>
           <div className="flex flex-wrap gap-2">
             {data.missingControls.map((code, i) => (
               <span
                 key={i}
-                className="px-3 py-1 bg-red-100 rounded-full text-sm font-bold text-red-800"
+                className={`px-3 py-1 rounded-full text-sm font-bold ${dark ? "bg-red-800/50 text-red-300" : "bg-red-100 text-red-800"}`}
               >
                 {code}
               </span>
@@ -218,12 +223,14 @@ function ControlRow({
   ctrl,
   idx,
   editable,
+  dark = false,
   onRemovePunch,
   onUpdatePunchTime,
 }: {
   ctrl: ControlMatch;
   idx: number;
   editable: boolean;
+  dark?: boolean;
   onRemovePunch?: (punchId: number) => void;
   onUpdatePunchTime?: (punchId: number, newTime: number) => void;
 }) {
@@ -254,12 +261,12 @@ function ControlRow({
   };
 
   return (
-    <tr className={isMissing ? "bg-red-50" : "hover:bg-slate-50"}>
-      <td className="px-4 py-2 text-slate-400 tabular-nums">
+    <tr className={isMissing ? (dark ? "bg-red-900/30" : "bg-red-50") : (dark ? "hover:bg-slate-700/50" : "hover:bg-slate-50")}>
+      <td className={`px-4 py-2 tabular-nums ${dark ? "text-slate-500" : "text-slate-400"}`}>
         {idx + 1}
       </td>
       <td className="px-4 py-2 font-medium">
-        <span className={isMissing ? "text-red-700" : "text-slate-900"}>
+        <span className={isMissing ? (dark ? "text-red-400" : "text-red-700") : (dark ? "text-slate-100" : "text-slate-900")}>
           {ctrl.controlCode}
         </span>
         {isFree && (
@@ -324,9 +331,9 @@ function ControlRow({
       </td>
       <td className="px-4 py-2 text-center">
         {isMissing ? (
-          <span className="text-red-600 font-bold">&#10007;</span>
+          <span className={`${dark ? "text-red-400" : "text-red-600"} font-bold`}>&#10007;</span>
         ) : (
-          <span className="text-emerald-600">&#10003;</span>
+          <span className={dark ? "text-emerald-400" : "text-emerald-600"}>&#10003;</span>
         )}
       </td>
       {editable && (
@@ -356,6 +363,7 @@ function TimingRow({
   canEdit,
   onUpdateTime,
   bold,
+  dark = false,
   splitTime,
   cumTime,
 }: {
@@ -366,6 +374,7 @@ function TimingRow({
   canEdit: boolean;
   onUpdateTime?: (time: number) => void;
   bold?: boolean;
+  dark?: boolean;
   splitTime?: number;
   cumTime?: number;
 }) {
@@ -394,8 +403,8 @@ function TimingRow({
 
   const isFinish = label === "F";
   const rowClass = bold
-    ? "font-medium border-t-2 border-slate-200"
-    : "text-slate-500";
+    ? `font-medium border-t-2 ${dark ? "border-slate-600" : "border-slate-200"}`
+    : (dark ? "text-slate-400" : "text-slate-500");
 
   return (
     <tr className={rowClass}>
@@ -467,9 +476,9 @@ function TimingRow({
       </td>
       <td className="px-4 py-2 text-center">
         {time > 0 ? (
-          <span className="text-emerald-600">&#10003;</span>
+          <span className={dark ? "text-emerald-400" : "text-emerald-600"}>&#10003;</span>
         ) : (
-          <span className="text-red-600 font-bold">&#10007;</span>
+          <span className={`${dark ? "text-red-400" : "text-red-600"} font-bold`}>&#10007;</span>
         )}
       </td>
       {editable && <td />}

@@ -49,9 +49,13 @@
   "swish": "Swish",
   "cardPayment": "Kort",
   "payOnSite": "Betala på plats",
+  "cash": "Kontant",
   "scanSwish": "Scanna med Swish för att betala {{amount}} kr",
   "registrationComplete": "Registrering klar!",
   "start": "Start",
   "freeStart": "Fri starttid",
-  "proceedToStart": "Gå till startområdet. Lycka till!"
+  "proceedToStart": "Gå till startområdet. Lycka till!",
+  "positionInClass": "{{rank}} av {{total}} i klassen",
+  "courseMap": "Banöversikt",
+  "classResults": "Klassresultat"
 }

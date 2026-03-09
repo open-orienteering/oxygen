@@ -51,5 +51,11 @@
   "cancel": "Avbryt",
   "namePlaceholder": "t.ex. H21",
   "noCoursesAvailable": "Inga banor tillgängliga",
-  "dragLabel": "Dra för att ordna om"
+  "dragLabel": "Dra för att ordna om",
+  "yes": "Ja",
+  "no": "Nej",
+  "apply": "Tillämpa",
+  "applying": "Tillämpar...",
+  "bulkConfirm": "Sätt {{field}} till \"{{value}}\" för {{count}} klasser?",
+  "bulkUpdated": "Uppdaterade {{count}} klasser"
 }

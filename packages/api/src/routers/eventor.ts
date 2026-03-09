@@ -11,6 +11,7 @@ import {
   ensureRunnerDbTable,
   ensureClubDbTable,
   getCurrentDbName,
+  ensureCompetitionConfigTable,
 } from "../db.js";
 import {
   validateApiKey,
@@ -265,7 +266,7 @@ export const eventorRouter = router({
             name: r.organisationName,
             shortName: r.organisationShortName,
             countryCode: r.organisationCountry || "",
-            careOf: "", street: "", city: "", zip: "", email: "", phone: "",
+            careOf: "", street: "", city: "", zip: "", email: "", phone: "", webUrl: "",
           });
         }
       }
@@ -441,6 +442,40 @@ export const eventorRouter = router({
             update: { SmallPng: small as any, ...(large ? { LargePng: large as any } : {}), UpdatedAt: new Date() },
           });
         }
+      }
+
+      // 9. Enrich clubs with full details from Eventor (address, phone, email)
+      try {
+        const fullClubs = await fetchClubs(apiKey, input.env);
+        for (const club of fullClubs) {
+          const localId = eventorToLocalClub.get(club.id);
+          if (localId && (club.street || club.email || club.phone)) {
+            await client.oClub.update({
+              where: { Id: localId },
+              data: {
+                ...(club.careOf ? { CareOf: club.careOf.substring(0, 63) } : {}),
+                ...(club.street ? { Street: club.street.substring(0, 83) } : {}),
+                ...(club.city ? { City: club.city.substring(0, 47) } : {}),
+                ...(club.zip ? { ZIP: club.zip.substring(0, 23) } : {}),
+                ...(club.email ? { EMail: club.email.substring(0, 129) } : {}),
+                ...(club.phone ? { Phone: club.phone.substring(0, 65) } : {}),
+              },
+            });
+          }
+        }
+        // Store organizer webUrl if available
+        if (input.organiserId) {
+          const orgClub = fullClubs.find(c => c.id === input.organiserId);
+          if (orgClub?.webUrl) {
+            await ensureCompetitionConfigTable(client);
+            await client.$executeRawUnsafe(
+              "UPDATE oxygen_competition_config SET web_url = ? WHERE id = 1",
+              orgClub.webUrl,
+            );
+          }
+        }
+      } catch {
+        // Non-critical — club details will be available after manual club sync
       }
 
       return {
@@ -1093,6 +1128,24 @@ export const eventorRouter = router({
         added++;
       }
     }
+
+    // Store organizer webUrl if available
+    try {
+      await ensureCompetitionConfigTable(client);
+      const configRows = (await client.$queryRawUnsafe(
+        "SELECT organizer_eventor_id FROM oxygen_competition_config WHERE id = 1",
+      )) as Array<{ organizer_eventor_id: number }>;
+      const orgId = configRows[0]?.organizer_eventor_id ?? 0;
+      if (orgId > 0) {
+        const orgClub = allClubs.find(c => c.id === orgId);
+        if (orgClub?.webUrl) {
+          await client.$executeRawUnsafe(
+            "UPDATE oxygen_competition_config SET web_url = ? WHERE id = 1",
+            orgClub.webUrl,
+          );
+        }
+      }
+    } catch { /* non-critical */ }
 
     // Fetch logos in the background — fire-and-forget so the mutation returns immediately.
     // Always fetches from prod-Eventor (test-Eventor doesn't host logos; org IDs are shared).

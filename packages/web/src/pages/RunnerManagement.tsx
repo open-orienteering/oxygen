@@ -1,5 +1,4 @@
-import { useState, useMemo, useEffect, Fragment, useCallback } from "react";
-import { useSearchParams } from "react-router-dom";
+import { useState, useMemo, Fragment, useCallback } from "react";
 import { useTranslation } from "react-i18next";
 import { trpc } from "../lib/trpc";
 import {
@@ -11,7 +10,6 @@ import {
 } from "@oxygen/shared";
 import { StatusBadge } from "../components/StatusBadge";
 import { RunnerInlineDetail } from "../components/RunnerInlineDetail";
-import { RunnerDialog } from "../components/RunnerDialog";
 import { ClubLogo } from "../components/ClubLogo";
 import { SearchableSelect } from "../components/SearchableSelect";
 import { SortHeader } from "../components/SortHeader";
@@ -20,7 +18,9 @@ import { useSearchParam, useNumericSearchParam } from "../hooks/useSearchParam";
 import { useTableSelection } from "../hooks/useTableSelection";
 import { BulkActionBar } from "../components/BulkActionBar";
 import { usePrinter } from "../context/PrinterContext";
+import { useRegistrationDialog } from "../context/RegistrationDialogContext";
 import { fetchLogoRaster } from "../lib/receipt-printer/index.js";
+import { getClubLogoUrl } from "../lib/club-logo";
 
 export function RunnerManagement() {
   const { t } = useTranslation("runners");
@@ -29,43 +29,7 @@ export function RunnerManagement() {
   const [clubFilter, setClubFilter] = useNumericSearchParam("club");
   const [statusFilter, setStatusFilter] = useSearchParam("status");
   const [expandedRunner, setExpandedRunner] = useNumericSearchParam("runner");
-  const [showCreateDialog, setShowCreateDialog] = useState(false);
-  const [createCardNo, setCreateCardNo] = useState<number | undefined>();
-  const [createOwnerData, setCreateOwnerData] = useState<{
-    firstName?: string;
-    lastName?: string;
-    club?: string;
-    sex?: string;
-    dateOfBirth?: string;
-    phone?: string;
-  } | undefined>();
-
-  // Auto-open Add Runner dialog when navigated here with ?addCard=12345
-  const [searchParams, setSearchParams] = useSearchParams();
-  useEffect(() => {
-    const addCard = searchParams.get("addCard");
-    if (addCard) {
-      const num = parseInt(addCard, 10);
-      if (!isNaN(num) && num > 0) {
-        setCreateCardNo(num);
-        // Extract optional SI card owner data from URL params
-        const owner: typeof createOwnerData = {};
-        if (searchParams.get("firstName")) owner.firstName = searchParams.get("firstName")!;
-        if (searchParams.get("lastName")) owner.lastName = searchParams.get("lastName")!;
-        if (searchParams.get("club")) owner.club = searchParams.get("club")!;
-        if (searchParams.get("sex")) owner.sex = searchParams.get("sex")!;
-        if (searchParams.get("dob")) owner.dateOfBirth = searchParams.get("dob")!;
-        if (searchParams.get("phone")) owner.phone = searchParams.get("phone")!;
-        if (Object.keys(owner).length > 0) setCreateOwnerData(owner);
-        setShowCreateDialog(true);
-      }
-      // Remove all addCard-related params so refreshing doesn't re-open
-      for (const key of ["addCard", "firstName", "lastName", "club", "sex", "dob", "phone"]) {
-        searchParams.delete(key);
-      }
-      setSearchParams(searchParams, { replace: true });
-    }
-  }, [searchParams, setSearchParams]);
+  const { openRegistration } = useRegistrationDialog();
 
   const utils = trpc.useUtils();
 
@@ -117,7 +81,7 @@ export function RunnerManagement() {
       siac: result.siac,
       classResults: result.classResults,
       logoRaster: eventorId
-        ? await fetchLogoRaster(`/api/club-logo/${eventorId}?variant=large`, 250)
+        ? await fetchLogoRaster(getClubLogoUrl(eventorId), 250)
         : null,
       qrUrl: competitionInfo?.eventorEventId
         ? `https://eventor.orientering.se/Events/Show/${competitionInfo.eventorEventId}`
@@ -125,6 +89,36 @@ export function RunnerManagement() {
       customMessage: regConfig.data?.finishReceiptMessage || undefined,
     });
   }, [utils, classes.data, printer, regConfig.data]);
+
+  const handlePrintRegistration = useCallback(async (runner: { name: string; clubName?: string; className?: string; cardNo: number; startTime: number; paid?: number; fee?: number; payMode?: number }) => {
+    const competitionInfo = classes.data?.competition;
+    const eventorId = classes.data?.organizer?.eventorId;
+    const logoRaster = eventorId
+      ? await fetchLogoRaster(getClubLogoUrl(eventorId), 250).catch(() => null)
+      : null;
+    const amount = runner.paid ?? runner.fee ?? 0;
+    const payModeLabels: Record<number, string> = { 1: t("payModeInvoice"), 2: t("payModeOnSite"), 3: t("payModeCard"), 4: t("payModeSwish"), 5: t("payModeCash") };
+    const methodLabel = payModeLabels[runner.payMode ?? 0] ?? "";
+    await printer.printRegistration({
+      competitionName: competitionInfo?.name ?? "",
+      competitionDate: competitionInfo?.date ?? undefined,
+      logoRaster,
+      runner: {
+        name: runner.name,
+        clubName: runner.clubName ?? "",
+        className: runner.className ?? "",
+        cardNo: runner.cardNo,
+      },
+      startTime: runner.startTime > 0 ? formatMeosTime(runner.startTime) : undefined,
+      payment: amount > 0 ? { method: methodLabel || t("paid"), amount } : undefined,
+      organizerName: classes.data?.organizer?.name,
+      organizerDetails: regConfig.data?.organizerDetails || undefined,
+      orgNumber: regConfig.data?.orgNumber || undefined,
+      vatInfo: { exempt: regConfig.data?.vatExempt ?? true },
+      friskvardNote: regConfig.data?.receiptFriskvardNote ?? false,
+      customMessage: regConfig.data?.registrationReceiptMessage || undefined,
+    });
+  }, [classes.data, printer, regConfig.data, t]);
 
   const deleteMutation = trpc.runner.delete.useMutation({
     onSuccess: () => {
@@ -261,7 +255,7 @@ export function RunnerManagement() {
           }))}
         />
         <button
-          onClick={() => setShowCreateDialog(true)}
+          onClick={() => openRegistration()}
           className="px-4 py-2 bg-blue-600 text-white text-sm font-medium rounded-lg hover:bg-blue-700 transition-colors cursor-pointer flex items-center gap-1.5 whitespace-nowrap"
         >
           <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -372,6 +366,18 @@ export function RunnerManagement() {
                               </svg>
                             </button>
                           )}
+                          {printer.connected && (runner.paid ?? 0) > 0 && (
+                            <button
+                              onClick={() => handlePrintRegistration(runner)}
+                              disabled={printer.printing}
+                              className="p-1.5 text-slate-400 hover:text-green-600 hover:bg-green-50 rounded transition-colors cursor-pointer disabled:opacity-40"
+                              title={t("reprintRegistration")}
+                            >
+                              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                              </svg>
+                            </button>
+                          )}
                           <button
                             onClick={() => handleDelete(runner.id, runner.name)}
                             className="p-1.5 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded transition-colors cursor-pointer"
@@ -398,26 +404,6 @@ export function RunnerManagement() {
           </div>
         )}
       </div>
-
-      {showCreateDialog && (
-        <RunnerDialog
-          mode="create"
-          initialCardNo={createCardNo}
-          initialOwnerData={createOwnerData}
-          onClose={() => {
-            setShowCreateDialog(false);
-            setCreateCardNo(undefined);
-            setCreateOwnerData(undefined);
-          }}
-          onSuccess={() => {
-            setShowCreateDialog(false);
-            setCreateCardNo(undefined);
-            setCreateOwnerData(undefined);
-            utils.runner.list.invalidate();
-            utils.competition.dashboard.invalidate();
-          }}
-        />
-      )}
 
       {/* Bulk actions */}
       <BulkActionBar count={selection.count} onDeselectAll={handleDeselectAll}>
