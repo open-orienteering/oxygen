@@ -21,7 +21,6 @@ import {
 } from "../lib/kiosk-channel";
 import swishIcon from "../assets/swish-icon.svg";
 import { ClubLogo } from "../components/ClubLogo";
-import { PunchTable, type PunchTableData } from "../components/PunchTable";
 import { MapPanel } from "../components/MapPanel";
 import { useDeviceManager } from "../context/DeviceManager";
 import { usePrinter } from "../context/PrinterContext";
@@ -373,7 +372,7 @@ export function KioskPage() {
       )}
 
       {/* Main content area */}
-      <div className="flex-1 flex items-center justify-center p-8">
+      <div className="flex-1 flex items-center justify-center px-4 py-4">
         {screen.mode === "idle" && (
           <IdleScreen
             competitionName={competitionName}
@@ -758,24 +757,10 @@ function ReadoutScreen({ card }: { card: KioskCardReadoutMessage["card"] }) {
     }).catch(() => {});
   }, [receipt.data, dbRunner.data, printer.connected, dashboard.data]);
 
-  // 5. Build PunchTable data
-  const punchTableData: PunchTableData | null = useMemo(() => {
-    if (!readout.data?.found) return null;
-    const d = readout.data;
-    return {
-      controls: d.controls,
-      timing: d.timing,
-      course: d.course,
-      extraPunches: d.extraPunches,
-      missingControls: d.missingControls,
-    };
-  }, [readout.data]);
-
-  // 6. MapPanel info for MP runners
-  const mispunchMapInfo = useMemo(() => {
+  // 5. MapPanel info — always show when course data exists
+  const courseMapInfo = useMemo(() => {
     if (!readout.data?.found || !readout.data.course) return null;
     const d = readout.data;
-    if (d.missingControls.length === 0 && d.extraPunches.length === 0) return null;
     const punchStatusByCode: Record<string, "ok" | "missing" | "extra"> = {};
     for (const c of d.controls) punchStatusByCode[String(c.controlCode)] = c.status as "ok" | "missing" | "extra";
     for (const ep of d.extraPunches) punchStatusByCode[String(ep.controlCode)] = "extra";
@@ -797,8 +782,8 @@ function ReadoutScreen({ card }: { card: KioskCardReadoutMessage["card"] }) {
       // Reset scale to measure natural height
       content.style.transform = "none";
       const naturalHeight = content.scrollHeight;
-      // Available height = viewport minus kiosk top bar (~40px) and content padding (2×32px)
-      const availableHeight = window.innerHeight - 104;
+      // Available height = viewport minus kiosk top bar (~40px) and content padding (2×16px)
+      const availableHeight = window.innerHeight - 72;
       if (naturalHeight > availableHeight && naturalHeight > 0) {
         const newScale = Math.max(0.45, availableHeight / naturalHeight);
         content.style.transform = `scale(${newScale})`;
@@ -819,59 +804,93 @@ function ReadoutScreen({ card }: { card: KioskCardReadoutMessage["card"] }) {
     };
   }, [readout.data, receipt.data]);
 
+  const hasMap = !!courseMapInfo;
+
   return (
     <div
       ref={contentRef}
-      className="w-full max-w-4xl mx-auto text-center"
+      className={`w-full mx-auto ${hasMap ? "" : "max-w-4xl"}`}
       style={{ transformOrigin: "top center" }}
     >
-      {/* Status icon */}
-      <div className="mb-2">
-        <StatusIcon status={displayStatus} />
-      </div>
+      {/* Two-column layout on wide screens when map is available */}
+      <div className={hasMap ? "flex gap-6 items-stretch" : ""}>
+        {/* Left column: course map — stretches to match right column height */}
+        {courseMapInfo && (
+          <div className="flex-1 min-w-0 rounded-2xl overflow-hidden">
+            <MapPanel
+              highlightCourseName={courseMapInfo.courseName}
+              filterMode="course"
+              height="calc(100vh - 110px)"
+              fitToControls
+              hideToolbar
+              punchStatusByCode={courseMapInfo.punchStatusByCode}
+              focusControlCodes={courseMapInfo.focusControlCodes}
+            />
+          </div>
+        )}
 
-      {/* Runner info */}
-      <h1 className="text-4xl font-black mb-1">
-        {card.runnerName || t("cardNumber", { number: card.cardNumber })}
-      </h1>
-      {card.clubName && (
-        <p className="text-xl text-slate-400">{card.clubName}</p>
-      )}
-      {card.className && (
-        <p className="text-lg text-slate-500 mb-2">{card.className}</p>
-      )}
+        {/* Right column (or single column when no map): runner info */}
+        <div className={`text-center ${hasMap ? "w-[28rem] flex-shrink-0" : ""}`}>
+          {/* Status icon */}
+          <div className="mb-2">
+            <StatusIcon status={displayStatus} />
+          </div>
 
-      {/* Status + time */}
-      <div className={`text-3xl font-bold mb-1 ${isOK ? "text-emerald-400" : isMP ? "text-red-400" : isDNF ? "text-amber-400" : "text-blue-400"}`}>
-        {isOK && t("completed")}
-        {isMP && t("missingPunch")}
-        {isDNF && t("didNotFinish")}
-        {!isOK && !isMP && !isDNF && (card.status || t("result"))}
-      </div>
+          {/* Runner info */}
+          <h1 className="text-4xl font-black mb-1">
+            {card.runnerName || t("cardNumber", { number: card.cardNumber })}
+          </h1>
+          {card.clubName && (
+            <p className="text-xl text-slate-400">{card.clubName}</p>
+          )}
+          {card.className && (
+            <p className="text-lg text-slate-500 mb-2">{card.className}</p>
+          )}
 
-      {displayRunningTime > 0 && (
-        <div className="text-5xl font-black tabular-nums text-white mb-1">
-          {formatRunningTime(displayRunningTime)}
-        </div>
-      )}
+          {/* Status + time */}
+          <div className={`text-3xl font-bold mb-1 ${isOK ? "text-emerald-400" : isMP ? "text-red-400" : isDNF ? "text-amber-400" : "text-blue-400"}`}>
+            {isOK && t("completed")}
+            {isMP && t("missingPunch")}
+            {isDNF && t("didNotFinish")}
+            {!isOK && !isMP && !isDNF && (card.status || t("result"))}
+          </div>
 
-      {/* Position in class */}
-      {receipt.data?.position && (
-        <div className="text-lg text-slate-300 mb-2">
-          {t("positionInClass", {
-            rank: receipt.data.position.rank,
-            total: receipt.data.position.total,
-          })}
-        </div>
-      )}
+          {displayRunningTime > 0 && (
+            <div className="text-5xl font-black tabular-nums text-white mb-1">
+              {formatRunningTime(displayRunningTime)}
+            </div>
+          )}
 
-      {/* Two-column layout: splits + map */}
-      <div className={`flex gap-6 ${mispunchMapInfo ? "items-start" : ""}`}>
-        {/* Left: punch info */}
-        <div className="flex-1 min-w-0">
+          {/* Position in class */}
+          {receipt.data?.position && (
+            <div className="text-lg text-slate-300 mb-2">
+              {t("positionInClass", {
+                rank: receipt.data.position.rank,
+                total: receipt.data.position.total,
+              })}
+            </div>
+          )}
+
+          {/* Missing controls banner */}
+          {readout.data?.found && readout.data.missingControls.length > 0 && (
+            <div className="mb-3 p-3 bg-red-900/30 border border-red-700/50 rounded-xl text-left">
+              <div className="text-red-400 font-semibold mb-2">
+                {t("missingControls", { count: readout.data.missingControls.length })}
+              </div>
+              <div className="flex flex-wrap gap-2">
+                {readout.data.missingControls.map((code, i) => (
+                  <span key={i} className="px-3 py-1 bg-red-800/50 text-red-300 rounded-lg font-mono text-lg">
+                    {code}
+                  </span>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Summary stats */}
           {readout.data?.found && (
-            <div className="bg-slate-800 rounded-2xl p-3 text-left">
-              <div className="grid grid-cols-3 gap-3 text-center mb-3">
+            <div className="bg-slate-800 rounded-2xl p-3 mb-3">
+              <div className={`grid gap-3 text-center ${readout.data.course ? "grid-cols-3" : ""}`}>
                 <div>
                   <div className="text-sm text-slate-400">{t("controls")}</div>
                   <div className="text-2xl font-bold">
@@ -893,65 +912,27 @@ function ReadoutScreen({ card }: { card: KioskCardReadoutMessage["card"] }) {
                   </>
                 )}
               </div>
+            </div>
+          )}
 
-              {/* Missing controls */}
-              {readout.data.missingControls.length > 0 && (
-                <div className="mb-4 p-3 bg-red-900/30 border border-red-700/50 rounded-xl">
-                  <div className="text-red-400 font-semibold mb-2">
-                    {t("missingControls", { count: readout.data.missingControls.length })}
+          {/* Class results */}
+          {receipt.data?.classResults && receipt.data.classResults.length > 0 && (
+            <div className="bg-slate-800 rounded-2xl p-4 text-left">
+              <div className="text-sm text-slate-400 mb-2 font-semibold">{t("classResults")}</div>
+              <div className="space-y-1">
+                {receipt.data.classResults.map((r) => (
+                  <div key={r.rank} className={`flex items-center gap-3 text-sm py-1 ${r.rank === receipt.data!.position?.rank ? "text-emerald-400 font-bold" : "text-slate-300"}`}>
+                    <span className="w-6 text-right font-mono">{r.rank}.</span>
+                    <span className="flex-1 truncate">{r.name}</span>
+                    {r.clubName && <span className="text-slate-500 truncate max-w-[120px]">{r.clubName}</span>}
+                    <span className="font-mono tabular-nums">{formatRunningTime(r.runningTime)}</span>
                   </div>
-                  <div className="flex flex-wrap gap-2">
-                    {readout.data.missingControls.map((code, i) => (
-                      <span key={i} className="px-3 py-1 bg-red-800/50 text-red-300 rounded-lg font-mono text-lg">
-                        {code}
-                      </span>
-                    ))}
-                  </div>
-                </div>
-              )}
-
-              {/* Split times table */}
-              {punchTableData && (
-                <PunchTable data={punchTableData} compact dark />
-              )}
+                ))}
+              </div>
             </div>
           )}
         </div>
-
-        {/* Right: MapPanel for MP runners */}
-        {mispunchMapInfo && (
-          <div className="w-80 flex-shrink-0">
-            <div className="bg-slate-800 rounded-2xl p-4">
-              <div className="text-sm text-slate-400 mb-2 font-semibold">{t("courseMap")}</div>
-              <MapPanel
-                highlightCourseName={mispunchMapInfo.courseName}
-                filterMode="course"
-                height="300px"
-                fitToControls
-                punchStatusByCode={mispunchMapInfo.punchStatusByCode}
-                focusControlCodes={mispunchMapInfo.focusControlCodes}
-              />
-            </div>
-          </div>
-        )}
       </div>
-
-      {/* Top-5 class results */}
-      {receipt.data?.classResults && receipt.data.classResults.length > 0 && (
-        <div className="mt-4 bg-slate-800 rounded-2xl p-4 text-left">
-          <div className="text-sm text-slate-400 mb-2 font-semibold">{t("classResults")}</div>
-          <div className="space-y-1">
-            {receipt.data.classResults.map((r) => (
-              <div key={r.rank} className={`flex items-center gap-3 text-sm py-1 ${r.rank === receipt.data!.position?.rank ? "text-emerald-400 font-bold" : "text-slate-300"}`}>
-                <span className="w-6 text-right font-mono">{r.rank}.</span>
-                <span className="flex-1 truncate">{r.name}</span>
-                {r.clubName && <span className="text-slate-500 truncate max-w-[120px]">{r.clubName}</span>}
-                <span className="font-mono tabular-nums">{formatRunningTime(r.runningTime)}</span>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
     </div>
   );
 }

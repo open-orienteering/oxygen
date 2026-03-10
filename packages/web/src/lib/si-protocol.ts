@@ -75,6 +75,7 @@ export type SICardType =
 
 /** Number of 128-byte blocks to read per card type */
 export const BLOCKS_TO_READ: Record<string, number> = {
+  SI5: 1,
   SI8: 2,
   SI9: 2,
   pCard: 2,
@@ -298,10 +299,25 @@ export function parseCardDetection(
 
 function parseSI5Detection(data: Uint8Array): SICardDetection | null {
   if (data.length < 2) return null;
-  let cardNumber = (data[0] << 8) | data[1];
-  if (data.length >= 3) {
-    const series = data[2];
-    if (series >= 1 && series <= 4) cardNumber = series * 100000 + cardNumber;
+  let cardNumber: number;
+  let series: number;
+  if (data.length >= 6) {
+    // Extended protocol: stationCode(2) + CN2(1) + series(1) + CN1(1) + CN0(1)
+    series = data[3];
+    cardNumber = (data[4] << 8) | data[5];
+  } else if (data.length >= 3) {
+    // Legacy with series: CN1(1) + CN0(1) + series(1)
+    cardNumber = (data[0] << 8) | data[1];
+    series = data[2];
+  } else {
+    // Legacy minimal: CN1(1) + CN0(1)
+    cardNumber = (data[0] << 8) | data[1];
+    series = 0;
+  }
+  // Series 2-4 encode high card numbers (200000+)
+  // Series 0 or 1 means use the raw 16-bit number
+  if (series >= 2 && series <= 4) {
+    cardNumber = series * 100000 + cardNumber;
   }
   return { cardNumber, cardType: getCardType(cardNumber) };
 }
@@ -620,6 +636,164 @@ export interface SICardReadout {
  */
 export function isLargeCardType(cardType: SICardType): boolean {
   return cardType === "SI10" || cardType === "SI11" || cardType === "SIAC";
+}
+
+/**
+ * Parse a 2-byte SI5 time (seconds since midnight/noon, 12-hour range).
+ * Returns seconds since midnight, or null if the field is empty (0xEEEE).
+ * SI5 has no AM/PM flag — 12-hour ambiguity must be resolved by the caller.
+ */
+function parseSI5Time(data: Uint8Array, offset: number): number | null {
+  if (offset + 2 > data.length) return null;
+  const raw = (data[offset] << 8) | data[offset + 1];
+  if (raw === NO_TIME) return null;
+  return raw;
+}
+
+/**
+ * Parse SI5 card data from a single 128-byte readout block.
+ *
+ * SI5 memory layout (128 bytes):
+ *   [4-5]   Card number (CN1 high, CN0 low)
+ *   [6]     Card series (CN2): if 1 → use raw number, else cardNo = CN2*100000 + raw
+ *   [19-20] Start time (2 bytes, 12h seconds)
+ *   [21-22] Finish time (2 bytes, 12h seconds)
+ *   [23]    Punch counter (actual count = value - 1)
+ *   [25-26] Check time (2 bytes, 12h seconds)
+ *   [32+]   Punch area: 6 blocks × 16 bytes
+ *           Each block: byte 0 = overflow code (punches 30-35),
+ *           bytes 1-15 = 5 punches × 3 bytes (code + time)
+ *
+ * Max 30 punches with time, 6 more with code only.
+ * No clear time. No day-of-week. 12-hour time ambiguity.
+ */
+export function parseSI5CardData(
+  blocks: Uint8Array[],
+  now?: Date,
+): SICardReadout | null {
+  if (blocks.length === 0 || blocks[0].length < 128) return null;
+
+  const d = blocks[0];
+
+  // Card number
+  const rawCn = (d[4] << 8) | d[5];
+  const series = d[6];
+  let cardNumber: number;
+  if (series === 1 || series === 0) {
+    cardNumber = rawCn;
+  } else {
+    cardNumber = series * 100000 + rawCn;
+  }
+  if (cardNumber === 0) return null;
+
+  const cardType = getCardType(cardNumber);
+
+  // Timing
+  const startTime = parseSI5Time(d, 19);
+  const finishTime = parseSI5Time(d, 21);
+  const checkTime = parseSI5Time(d, 25);
+
+  // Punch count: stored as next-index, so actual = value - 1
+  const rc = d[23];
+  const punchCount = rc > 0 ? rc - 1 : 0;
+
+  // Parse punches (max 30 with time)
+  const punches: SIPunch[] = [];
+  const maxTimed = Math.min(punchCount, 30);
+
+  for (let k = 0; k < maxTimed; k++) {
+    const block = Math.floor(k / 5);
+    const slot = k % 5;
+    // Each 16-byte punch block starts at offset 32 + block*16
+    // Byte 0 is overflow code; punches at bytes 1, 4, 7, 10, 13
+    const base = 32 + block * 16 + 1 + slot * 3;
+    const controlCode = d[base];
+    if (controlCode === 0) continue;
+    const time = parseSI5Time(d, base + 1);
+    if (time === null) continue;
+    punches.push({ controlCode, time });
+  }
+
+  // Overflow punches 30-35: code only (byte 0 of each block), no time
+  if (punchCount > 30) {
+    const overflowCount = Math.min(punchCount - 30, 6);
+    for (let k = 0; k < overflowCount; k++) {
+      const controlCode = d[32 + k * 16];
+      if (controlCode === 0) continue;
+      punches.push({ controlCode, time: 0 });
+    }
+  }
+
+  const readout: SICardReadout = {
+    cardNumber,
+    cardType,
+    checkTime,
+    startTime,
+    finishTime,
+    clearTime: null,
+    punches,
+    punchCount,
+  };
+
+  resolveSI5Times(readout, now);
+  return readout;
+}
+
+const TWELVE_HOURS = 43200;
+
+/**
+ * Resolve 12-hour SI5 times to 24-hour times.
+ *
+ * SI5 cards store times as seconds since midnight/noon (0–43199) with no AM/PM flag.
+ * Strategy: resolve the first available time (check → start → first punch) against
+ * the current wall clock, then cascade the remaining times monotonically — each
+ * subsequent time must be ≥ the previous one.
+ *
+ * Exported for testing; called automatically by parseSI5CardData.
+ */
+export function resolveSI5Times(
+  readout: SICardReadout,
+  now?: Date,
+): void {
+  const clock = now ?? new Date();
+  const nowSec =
+    clock.getHours() * 3600 + clock.getMinutes() * 60 + clock.getSeconds();
+
+  // Resolve first time against wall clock: pick interpretation closest to now
+  function resolveFirst(t: number): number {
+    const pm = t + TWELVE_HOURS;
+    return Math.abs(nowSec - pm) < Math.abs(nowSec - t) ? pm : t;
+  }
+
+  // Resolve subsequent times monotonically: pick smallest interpretation >= floor
+  function resolveAfter(t: number, floor: number): number {
+    if (t >= floor) return t;
+    return t + TWELVE_HOURS;
+  }
+
+  let floor = -1;
+
+  if (readout.checkTime !== null) {
+    readout.checkTime =
+      floor < 0 ? resolveFirst(readout.checkTime) : resolveAfter(readout.checkTime, floor);
+    floor = readout.checkTime;
+  }
+
+  if (readout.startTime !== null) {
+    readout.startTime =
+      floor < 0 ? resolveFirst(readout.startTime) : resolveAfter(readout.startTime, floor);
+    floor = readout.startTime;
+  }
+
+  for (const p of readout.punches) {
+    p.time = floor < 0 ? resolveFirst(p.time) : resolveAfter(p.time, floor);
+    floor = p.time;
+  }
+
+  if (readout.finishTime !== null) {
+    readout.finishTime =
+      floor < 0 ? resolveFirst(readout.finishTime) : resolveAfter(readout.finishTime, floor);
+  }
 }
 
 /**

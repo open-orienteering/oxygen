@@ -490,6 +490,7 @@ function ReadoutGenerator({ nameId, onResult }: { nameId?: string; onResult: (ms
   const [selectedRunnerId, setSelectedRunnerId] = useState<number | null>(null);
   const [preview, setPreview] = useState<ReadoutPreview | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [customCardNo, setCustomCardNo] = useState("");
   const channelRef = useRef<BroadcastChannel | null>(null);
 
   // Runner search
@@ -553,6 +554,38 @@ function ReadoutGenerator({ nameId, onResult }: { nameId?: string; onResult: (ms
     onResult(`Injected readout for ${preview.runnerName} (card ${preview.cardNo}) — ${preview.punches.length} punches`);
   };
 
+  const handleInjectUnknown = () => {
+    const cardNo = parseInt(customCardNo, 10);
+    if (!cardNo || cardNo <= 0 || !nameId) return;
+
+    const jsDay = new Date().getDay();
+    const todaySIDow = jsDay === 0 ? 7 : jsDay;
+
+    const readout: SICardReadout = {
+      cardNumber: cardNo,
+      cardType: getCardType(cardNo),
+      checkTime: null,
+      startTime: null,
+      finishTime: null,
+      clearTime: null,
+      finishDayOfWeek: null,
+      checkDayOfWeek: todaySIDow,
+      punches: [],
+      punchCount: 0,
+      ownerData: null,
+      batteryVoltage: null,
+      metadata: null,
+    };
+
+    if (!channelRef.current) {
+      channelRef.current = new BroadcastChannel(`oxygen-testlab-${nameId}`);
+    }
+    channelRef.current.postMessage({ type: "inject-readout", readout });
+
+    onResult(`Injected unknown card ${cardNo} — should trigger registration`);
+    setCustomCardNo("");
+  };
+
   // Punch editing helpers
   const updatePunch = (idx: number, field: keyof EditablePunch, value: number) => {
     if (!preview) return;
@@ -584,36 +617,66 @@ function ReadoutGenerator({ nameId, onResult }: { nameId?: string; onResult: (ms
   };
 
   return (
-    <div className="space-y-4">
+    <div className="space-y-4 pb-52">
       {/* Runner search */}
-      <div className="flex items-center gap-3">
-        <input
-          type="text"
-          placeholder="Search runner (name, card, bib)..."
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
-          className="flex-1 px-3 py-2 border border-slate-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-amber-500"
-        />
+      <div className="relative">
+        <div className="flex items-center gap-3">
+          <input
+            type="text"
+            placeholder="Search runner (name, card, bib)..."
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            className="flex-1 px-3 py-2 border border-slate-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-amber-500"
+          />
+        </div>
+
+        {/* Runner dropdown */}
+        {runnerList.data && runnerList.data.length > 0 && !selectedRunnerId && (
+          <div className="absolute z-10 w-full mt-1 bg-white border border-slate-200 rounded-lg max-h-48 overflow-y-auto shadow-lg">
+            {runnerList.data.slice(0, 20).map((r) => (
+              <button
+                key={r.id}
+                onClick={() => {
+                  setSelectedRunnerId(r.id);
+                  setSearch(`${r.name} (${r.cardNo})`);
+                  setPreview(null);
+                }}
+                className="w-full text-left px-3 py-2 text-sm hover:bg-amber-50 border-b border-slate-100 last:border-0 cursor-pointer"
+              >
+                <span className="font-medium">{r.name}</span>
+                <span className="text-slate-400 ml-2">{r.className}</span>
+                <span className="text-slate-400 ml-2">SI {r.cardNo}</span>
+              </button>
+            ))}
+          </div>
+        )}
       </div>
 
-      {/* Runner dropdown */}
-      {runnerList.data && runnerList.data.length > 0 && !selectedRunnerId && (
-        <div className="border border-slate-200 rounded-lg max-h-48 overflow-y-auto">
-          {runnerList.data.slice(0, 20).map((r) => (
-            <button
-              key={r.id}
-              onClick={() => {
-                setSelectedRunnerId(r.id);
-                setSearch(`${r.name} (${r.cardNo})`);
-                setPreview(null);
-              }}
-              className="w-full text-left px-3 py-2 text-sm hover:bg-amber-50 border-b border-slate-100 last:border-0 cursor-pointer"
-            >
-              <span className="font-medium">{r.name}</span>
-              <span className="text-slate-400 ml-2">{r.className}</span>
-              <span className="text-slate-400 ml-2">SI {r.cardNo}</span>
-            </button>
-          ))}
+      {/* Custom card injection for unregistered cards */}
+      {!selectedRunnerId && !preview && (
+        <div className="flex items-center gap-3">
+          <div className="flex-1 h-px bg-slate-200" />
+          <span className="text-xs text-slate-400">or</span>
+          <div className="flex-1 h-px bg-slate-200" />
+        </div>
+      )}
+      {!selectedRunnerId && !preview && (
+        <div className="flex items-center gap-2">
+          <input
+            type="number"
+            placeholder="Card number (not in competition)"
+            value={customCardNo}
+            onChange={(e) => setCustomCardNo(e.target.value)}
+            onKeyDown={(e) => e.key === "Enter" && handleInjectUnknown()}
+            className="flex-1 px-3 py-2 border border-slate-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-amber-500"
+          />
+          <button
+            onClick={handleInjectUnknown}
+            disabled={!customCardNo || parseInt(customCardNo, 10) <= 0 || !nameId}
+            className="px-4 py-2 text-sm font-medium rounded-lg bg-blue-600 text-white hover:bg-blue-700 transition-colors cursor-pointer disabled:opacity-50"
+          >
+            Inject Unknown Card
+          </button>
         </div>
       )}
 

@@ -11,6 +11,7 @@
 import {
   extractFrame,
   parseCardDetection,
+  parseSI5CardData,
   parseSI8CardData,
   parseSI10CardData,
   parseTransmitRecord,
@@ -285,8 +286,14 @@ export class SIReaderConnection extends EventTarget {
 
     // Card detection
     if (isDetectionCommand(frame.cmd)) {
+      console.log(
+        `[SI] Detection cmd=0x${frame.cmd.toString(16)} len=${frame.data.length} data=[${Array.from(frame.data).map((b) => "0x" + b.toString(16).padStart(2, "0")).join(", ")}]`,
+      );
       const detection = parseCardDetection(frame.cmd, frame.data);
       if (detection) {
+        console.log(
+          `[SI] Detected card #${detection.cardNumber} type=${detection.cardType}`,
+        );
         this.dispatchEvent(
           new CustomEvent("si:card-detected", { detail: detection }),
         );
@@ -385,6 +392,10 @@ export class SIReaderConnection extends EventTarget {
   private async handleReadoutBlock(frame: SIParsedFrame): Promise<void> {
     if (!this.pendingCardType) return;
 
+    console.log(
+      `[SI] Readout block cmd=0x${frame.cmd.toString(16)} type=${this.pendingCardType} len=${frame.data.length} first32=[${Array.from(frame.data.slice(0, 32)).map((b) => "0x" + b.toString(16).padStart(2, "0")).join(", ")}]`,
+    );
+
     // The readout response data format (BSF8 mode):
     //   StationCode(2) + BlockNumber(1) + BlockData(128) = 131 bytes
     // For shorter responses, extract the last 128 bytes.
@@ -455,9 +466,14 @@ export class SIReaderConnection extends EventTarget {
 
     // Use the correct parser based on card type
     const cardType = this.pendingCardType!;
-    const readout = isLargeCardType(cardType)
-      ? parseSI10CardData(this.pendingBlocks)
-      : parseSI8CardData(this.pendingBlocks);
+    let readout;
+    if (cardType === "SI5") {
+      readout = parseSI5CardData(this.pendingBlocks);
+    } else if (isLargeCardType(cardType)) {
+      readout = parseSI10CardData(this.pendingBlocks);
+    } else {
+      readout = parseSI8CardData(this.pendingBlocks);
+    }
 
     const cardNumber = this.pendingCardNumber;
     this.pendingCardType = null;
