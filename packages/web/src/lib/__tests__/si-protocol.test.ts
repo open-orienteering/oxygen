@@ -8,6 +8,8 @@ import {
   parsePunchRecord,
   parsePunchTime,
   parseDayOfWeek,
+  parseSI5CardData,
+  resolveSI5Times,
   parseSI8CardData,
   parseSI10CardData,
   parseSI10PersonalData,
@@ -87,7 +89,8 @@ describe("getCardType", () => {
 });
 
 describe("supportsFullReadout", () => {
-  it("returns true for SI8+", () => {
+  it("returns true for SI5 and SI8+", () => {
+    expect(supportsFullReadout("SI5")).toBe(true);
     expect(supportsFullReadout("SI8")).toBe(true);
     expect(supportsFullReadout("SI9")).toBe(true);
     expect(supportsFullReadout("SI10")).toBe(true);
@@ -95,8 +98,7 @@ describe("supportsFullReadout", () => {
     expect(supportsFullReadout("pCard")).toBe(true);
   });
 
-  it("returns false for SI5/SI6/Unknown", () => {
-    expect(supportsFullReadout("SI5")).toBe(false);
+  it("returns false for SI6/Unknown", () => {
     expect(supportsFullReadout("SI6")).toBe(false);
     expect(supportsFullReadout("Unknown")).toBe(false);
   });
@@ -299,12 +301,39 @@ describe("parseCardDetection", () => {
     expect(result!.cardType).toBe("SIAC");
   });
 
-  it("parses SI5 detection with series byte", () => {
+  it("parses SI5 detection with series byte (legacy)", () => {
     // Card number 12345 with series 2 → 212345
     const data = new Uint8Array([0x30, 0x39, 0x02]); // 12345 = 0x3039
     const result = parseCardDetection(CMD.SI5_DETECTED, data);
     expect(result).not.toBeNull();
     expect(result!.cardNumber).toBe(212345);
+    expect(result!.cardType).toBe("SI5");
+  });
+
+  it("parses SI5 detection in extended protocol (real card 209604)", () => {
+    // Real data: station 125, card 209604 = series(2) * 100000 + 9604(0x2584)
+    const data = new Uint8Array([0x00, 0x7d, 0x00, 0x02, 0x25, 0x84]);
+    const result = parseCardDetection(CMD.SI5_DETECTED, data);
+    expect(result).not.toBeNull();
+    expect(result!.cardNumber).toBe(209604);
+    expect(result!.cardType).toBe("SI5");
+  });
+
+  it("parses SI5 detection in extended protocol (real card 452242)", () => {
+    // Real data: station 125, card 452242 = series(4) * 100000 + 52242(0xCC12)
+    const data = new Uint8Array([0x00, 0x7d, 0x00, 0x04, 0xcc, 0x12]);
+    const result = parseCardDetection(CMD.SI5_DETECTED, data);
+    expect(result).not.toBeNull();
+    expect(result!.cardNumber).toBe(452242);
+    expect(result!.cardType).toBe("SI5");
+  });
+
+  it("parses SI5 detection in extended protocol with series 1 (low card)", () => {
+    // Station 125, series=1, card 50000 (0xC350) → just 50000 (no multiply)
+    const data = new Uint8Array([0x00, 0x7d, 0x00, 0x01, 0xc3, 0x50]);
+    const result = parseCardDetection(CMD.SI5_DETECTED, data);
+    expect(result).not.toBeNull();
+    expect(result!.cardNumber).toBe(50000);
     expect(result!.cardType).toBe("SI5");
   });
 
@@ -383,6 +412,282 @@ describe("parsePunchRecord", () => {
 });
 
 // ─── SI8 Card Data Parsing ─────────────────────────────────
+
+// ─── SI5 Card Readout Parsing ──────────────────────────────
+
+describe("parseSI5CardData", () => {
+  function makeSI5Block(options: {
+    cardNumber?: number;
+    series?: number;
+    punchCount?: number;
+    startTime?: [number, number];
+    finishTime?: [number, number];
+    checkTime?: [number, number];
+    punches?: Array<{ code: number; timeH: number; timeL: number }>;
+  }): Uint8Array {
+    const d = new Uint8Array(128);
+    d.fill(0xee); // Fill with 0xEE (empty marker)
+
+    // Card number at bytes 4-5 (big-endian)
+    const cn = options.cardNumber ?? 12345;
+    d[4] = (cn >> 8) & 0xff;
+    d[5] = cn & 0xff;
+    // Series at byte 6
+    d[6] = options.series ?? 0;
+
+    // Start time at 19-20
+    if (options.startTime) {
+      d[19] = options.startTime[0];
+      d[20] = options.startTime[1];
+    }
+    // Finish time at 21-22
+    if (options.finishTime) {
+      d[21] = options.finishTime[0];
+      d[22] = options.finishTime[1];
+    }
+    // Punch counter at 23 (actual count + 1)
+    const pc = options.punchCount ?? options.punches?.length ?? 0;
+    d[23] = pc > 0 ? pc + 1 : 0;
+
+    // Check time at 25-26
+    if (options.checkTime) {
+      d[25] = options.checkTime[0];
+      d[26] = options.checkTime[1];
+    }
+
+    // Punch records: 6 blocks of 16 bytes starting at offset 32
+    // Each block: byte 0 = overflow code, then 5 × 3-byte punches
+    if (options.punches) {
+      for (let k = 0; k < Math.min(options.punches.length, 30); k++) {
+        const p = options.punches[k];
+        const block = Math.floor(k / 5);
+        const slot = k % 5;
+        const base = 32 + block * 16 + 1 + slot * 3;
+        d[base] = p.code;
+        d[base + 1] = p.timeH;
+        d[base + 2] = p.timeL;
+      }
+    }
+
+    return d;
+  }
+
+  it("returns null for empty blocks", () => {
+    expect(parseSI5CardData([])).toBeNull();
+  });
+
+  it("returns null for too-short data", () => {
+    expect(parseSI5CardData([new Uint8Array(64)])).toBeNull();
+  });
+
+  it("parses card number (low range, no series)", () => {
+    const block = makeSI5Block({ cardNumber: 31337, series: 0 });
+    const result = parseSI5CardData([block]);
+    expect(result).not.toBeNull();
+    expect(result!.cardNumber).toBe(31337);
+    expect(result!.cardType).toBe("SI5");
+  });
+
+  it("parses card number with series byte", () => {
+    // Card 212345: series=2, raw=12345
+    const block = makeSI5Block({ cardNumber: 12345, series: 2 });
+    const result = parseSI5CardData([block]);
+    expect(result).not.toBeNull();
+    expect(result!.cardNumber).toBe(212345);
+  });
+
+  it("parses card number with series=1 as raw number", () => {
+    const block = makeSI5Block({ cardNumber: 50000, series: 1 });
+    const result = parseSI5CardData([block]);
+    expect(result).not.toBeNull();
+    expect(result!.cardNumber).toBe(50000);
+  });
+
+  // Use a morning clock for raw-value tests so 12h resolution doesn't shift them
+  const morning = new Date(2026, 2, 10, 2, 0, 0);
+
+  it("parses check, start, and finish times", () => {
+    // Check: 3600s = 0x0E10, Start: 3660s = 0x0E4C, Finish: 5400s = 0x1518
+    const block = makeSI5Block({
+      checkTime: [0x0e, 0x10],
+      startTime: [0x0e, 0x4c],
+      finishTime: [0x15, 0x18],
+    });
+    const result = parseSI5CardData([block], morning);
+    expect(result).not.toBeNull();
+    expect(result!.checkTime).toBe(3600);
+    expect(result!.startTime).toBe(3660);
+    expect(result!.finishTime).toBe(5400);
+    expect(result!.clearTime).toBeNull();
+  });
+
+  it("returns null times for 0xEEEE", () => {
+    const block = makeSI5Block({});
+    // Default fill is 0xEE, so all times should be null
+    const result = parseSI5CardData([block], morning);
+    expect(result).not.toBeNull();
+    expect(result!.checkTime).toBeNull();
+    expect(result!.startTime).toBeNull();
+    expect(result!.finishTime).toBeNull();
+  });
+
+  it("parses punch records", () => {
+    const punches = [
+      { code: 31, timeH: 0x0e, timeL: 0x60 }, // control 31, 3680s
+      { code: 32, timeH: 0x0f, timeL: 0x00 }, // control 32, 3840s
+      { code: 33, timeH: 0x0f, timeL: 0xa0 }, // control 33, 4000s
+    ];
+    const block = makeSI5Block({ punches });
+    const result = parseSI5CardData([block], morning);
+    expect(result).not.toBeNull();
+    expect(result!.punchCount).toBe(3);
+    expect(result!.punches).toHaveLength(3);
+    expect(result!.punches[0]).toEqual({ controlCode: 31, time: 3680 });
+    expect(result!.punches[1]).toEqual({ controlCode: 32, time: 3840 });
+    expect(result!.punches[2]).toEqual({ controlCode: 33, time: 4000 });
+  });
+
+  it("parses punches across multiple SI5 blocks", () => {
+    // 7 punches should span 2 internal blocks (5 in first, 2 in second)
+    const punches = [];
+    for (let i = 0; i < 7; i++) {
+      punches.push({ code: 31 + i, timeH: 0x0e, timeL: 0x10 + i });
+    }
+    const block = makeSI5Block({ punches });
+    const result = parseSI5CardData([block], morning);
+    expect(result).not.toBeNull();
+    expect(result!.punchCount).toBe(7);
+    expect(result!.punches).toHaveLength(7);
+    expect(result!.punches[5].controlCode).toBe(36);
+    expect(result!.punches[6].controlCode).toBe(37);
+  });
+
+  it("handles maximum 30 timed punches", () => {
+    const punches = [];
+    for (let i = 0; i < 30; i++) {
+      punches.push({ code: 31 + (i % 200), timeH: 0x0e, timeL: i });
+    }
+    const block = makeSI5Block({ punches });
+    const result = parseSI5CardData([block], morning);
+    expect(result).not.toBeNull();
+    expect(result!.punchCount).toBe(30);
+    expect(result!.punches).toHaveLength(30);
+  });
+
+  it("handles zero punches", () => {
+    const block = makeSI5Block({ punchCount: 0 });
+    // punchCount 0 → rc = 0
+    block[23] = 0;
+    const result = parseSI5CardData([block]);
+    expect(result).not.toBeNull();
+    expect(result!.punchCount).toBe(0);
+    expect(result!.punches).toHaveLength(0);
+  });
+});
+
+// ─── SI5 12-hour Time Resolution ───────────────────────────
+
+describe("resolveSI5Times", () => {
+  function makeReadout(opts: {
+    checkTime?: number | null;
+    startTime?: number | null;
+    finishTime?: number | null;
+    punches?: Array<{ controlCode: number; time: number }>;
+  }) {
+    return {
+      cardNumber: 12345,
+      cardType: "SI5" as const,
+      checkTime: opts.checkTime ?? null,
+      startTime: opts.startTime ?? null,
+      finishTime: opts.finishTime ?? null,
+      clearTime: null,
+      punches: opts.punches ?? [],
+      punchCount: opts.punches?.length ?? 0,
+    };
+  }
+
+  // Helper: create a Date at a specific hour:minute
+  function clockAt(hour: number, minute = 0): Date {
+    const d = new Date(2026, 2, 10, hour, minute, 0);
+    return d;
+  }
+
+  it("keeps AM times when current time is AM", () => {
+    // It's 10:30, check at 09:00 (32400s), start at 09:15 (33300s)
+    const r = makeReadout({ checkTime: 32400, startTime: 33300 });
+    resolveSI5Times(r, clockAt(10, 30));
+    expect(r.checkTime).toBe(32400);  // 09:00
+    expect(r.startTime).toBe(33300);  // 09:15
+  });
+
+  it("shifts to PM when current time is PM", () => {
+    // It's 14:30 (52200s). Card has check=32400 (09:00 or 21:00), start=33300 (09:15 or 21:15)
+    // 09:00 is closer to 14:30 than 21:00 → stays AM? No:
+    // |52200-32400|=19800 vs |52200-75600|=23400 → AM wins for check
+    // But for a real PM event: check at 12:05 = 43500 → stored as 43500-43200 = 300
+    // |52200-300|=51900 vs |52200-43500|=8700 → PM wins ✓
+    const r = makeReadout({ checkTime: 300, startTime: 900 });
+    resolveSI5Times(r, clockAt(14, 30));
+    expect(r.checkTime).toBe(43500);   // 12:05
+    expect(r.startTime).toBe(44100);   // 12:15
+  });
+
+  it("cascades across noon boundary", () => {
+    // Event starts at 11:00 AM, runner punches through noon
+    // It's 13:00. Check at 10:50 (39000), start at 11:00 (39600)
+    // Punch at 11:30 (41400), punch at 12:15 (stored as 900, i.e. 12:15-12:00=900)
+    // Finish at 12:45 (stored as 2700)
+    const r = makeReadout({
+      checkTime: 39000,
+      startTime: 39600,
+      finishTime: 2700,
+      punches: [
+        { controlCode: 31, time: 41400 },
+        { controlCode: 32, time: 900 },
+      ],
+    });
+    resolveSI5Times(r, clockAt(13, 0));
+    expect(r.checkTime).toBe(39000);   // 10:50 AM
+    expect(r.startTime).toBe(39600);   // 11:00 AM
+    expect(r.punches[0].time).toBe(41400);  // 11:30 AM
+    expect(r.punches[1].time).toBe(44100);  // 12:15 PM (900 + 43200)
+    expect(r.finishTime).toBe(45900);       // 12:45 PM (2700 + 43200)
+  });
+
+  it("handles all-PM times", () => {
+    // It's 15:00. Check at 12:30 (stored 1800), start at 12:45 (stored 2700)
+    // Finish at 14:30 (stored 4800+43200=... no, stored as 14:30-12:00=9000... wait)
+    // 14:30 = 52200s since midnight. 52200 % 43200 = 9000.
+    // So card stores 9000 for 14:30.
+    const r = makeReadout({
+      checkTime: 1800,   // 12:30 stored as 1800
+      startTime: 2700,   // 12:45
+      finishTime: 9000,  // 14:30
+      punches: [
+        { controlCode: 31, time: 5400 },  // 13:30
+        { controlCode: 32, time: 7200 },  // 14:00
+      ],
+    });
+    resolveSI5Times(r, clockAt(15, 0));
+    expect(r.checkTime).toBe(45000);   // 12:30 PM
+    expect(r.startTime).toBe(45900);   // 12:45 PM
+    expect(r.punches[0].time).toBe(48600);  // 13:30
+    expect(r.punches[1].time).toBe(50400);  // 14:00
+    expect(r.finishTime).toBe(52200);       // 14:30
+  });
+
+  it("handles null times gracefully", () => {
+    const r = makeReadout({
+      checkTime: null,
+      startTime: 39600,  // 11:00
+      finishTime: 41400, // 11:30
+    });
+    resolveSI5Times(r, clockAt(11, 45));
+    expect(r.checkTime).toBeNull();
+    expect(r.startTime).toBe(39600);
+    expect(r.finishTime).toBe(41400);
+  });
+});
 
 describe("parseSI8CardData", () => {
   function makeBlock0(options: {

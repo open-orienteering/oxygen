@@ -97,6 +97,8 @@ interface Props {
   punchStatusByCode?: Record<string, "ok" | "missing" | "extra">;
   /** Focus/zoom to controls with these codes (e.g. mispunched controls) */
   focusControlCodes?: string[];
+  /** Hide the toolbar (filter/description/fullscreen buttons) entirely */
+  hideToolbar?: boolean;
 }
 
 export function MapPanel({
@@ -114,6 +116,7 @@ export function MapPanel({
   toolbar,
   punchStatusByCode,
   focusControlCodes,
+  hideToolbar = false,
 }: Props) {
   const { t } = useTranslation("dashboard");
   const { nameId } = useParams<{ nameId: string }>();
@@ -490,7 +493,7 @@ export function MapPanel({
   return (
     <div ref={fullscreenRef} className={`${className} ${isFullscreen ? "bg-white flex flex-col" : ""}`}>
       {/* Toolbar (class selector, toggles, etc.) — always visible, even fullscreen */}
-      {(toolbar || isFullscreen) && (
+      {!hideToolbar && (toolbar || isFullscreen) && (
         <div className="flex items-center gap-3 px-1 py-2 flex-shrink-0">
           {toolbar}
           <div className="ml-auto flex items-center gap-2">
@@ -558,10 +561,11 @@ export function MapPanel({
         showDescriptions={showDescriptions}
         onToggleFullscreen={toggleFullscreen}
         isFullscreen={isFullscreen}
+        hideControls={hideToolbar}
       />
 
       {/* Map info — below the map */}
-      <div className="flex items-center justify-between mt-1.5 px-0.5">
+      {!hideToolbar && <div className="flex items-center justify-between mt-1.5 px-0.5">
         <div className="flex items-center gap-2">
           {mapInfo.data && (
             <span className="text-xs text-slate-400">{mapInfo.data.fileName}</span>
@@ -586,7 +590,7 @@ export function MapPanel({
             {t("replaceMap")}
           </button>
         </div>
-      </div>
+      </div>}
 
       <input
         ref={fileInputRef}

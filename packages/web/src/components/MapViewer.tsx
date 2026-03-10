@@ -63,6 +63,8 @@ interface Props {
   showDescriptions?: boolean;
   onToggleFullscreen?: () => void;
   isFullscreen?: boolean;
+  /** Hide all interactive controls (zoom, measure, reset, fullscreen) */
+  hideControls?: boolean;
 }
 
 // ─── Helpers ────────────────────────────────────────────────
@@ -195,6 +197,7 @@ export function MapViewer({
   showDescriptions = false,
   onToggleFullscreen,
   isFullscreen = false,
+  hideControls = false,
 }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const svgContainerRef = useRef<HTMLDivElement>(null);
@@ -255,7 +258,7 @@ export function MapViewer({
       minX = Math.min(minX, ox); maxX = Math.max(maxX, ox);
       minY = Math.min(minY, oy); maxY = Math.max(maxY, oy);
     }
-    const m = 0.15;
+    const m = hideControls ? 0.02 : 0.15;
     const bw = (maxX - minX) || viewBox.w * 0.1;
     const bh = (maxY - minY) || viewBox.h * 0.1;
     setTransform(computeFitTransform(viewBox, cw, ch,
@@ -324,7 +327,7 @@ export function MapViewer({
     if (!viewBox || !containerRef.current || hasInitialFitRef.current) return;
     if (!initialFitControls) { hasInitialFitRef.current = true; return; }
     const visibleControls = controls.filter((c) => c.visible !== false && c.type === "Control");
-    if (visibleControls.length < 2) { hasInitialFitRef.current = true; return; }
+    if (visibleControls.length < 2) return; // Don't mark as done — controls may still be loading
     const cw = containerRef.current.clientWidth;
     const ch = containerRef.current.clientHeight;
     if (cw === 0 || ch === 0) return;
@@ -335,13 +338,13 @@ export function MapViewer({
       minX = Math.min(minX, ox); maxX = Math.max(maxX, ox);
       minY = Math.min(minY, oy); maxY = Math.max(maxY, oy);
     }
-    const m = 0.15;
+    const m = hideControls ? 0.02 : 0.15;
     const bw = (maxX - minX) || viewBox.w * 0.1;
     const bh = (maxY - minY) || viewBox.h * 0.1;
     setTransform(computeFitTransform(viewBox, cw, ch,
       minX - bw * m, minY - bh * m, maxX + bw * m, maxY + bh * m));
     hasInitialFitRef.current = true;
-  }, [viewBox, controls, initialFitControls]);
+  }, [viewBox, controls, initialFitControls, hideControls]);
 
   // ─── Focus on selection change ────────────────────────────
 
@@ -383,10 +386,11 @@ export function MapViewer({
         minX -= ext; maxX += ext; minY -= ext; maxY += ext;
       }
     } else {
+      const fm = hideControls ? 0.02 : 0.2;
       const bw = (maxX - minX) || viewBox.w * 0.1;
       const bh = (maxY - minY) || viewBox.h * 0.1;
-      minX -= bw * 0.2; maxX += bw * 0.2;
-      minY -= bh * 0.2; maxY += bh * 0.2;
+      minX -= bw * fm; maxX += bw * fm;
+      minY -= bh * fm; maxY += bh * fm;
     }
 
     // Enforce minimum visible area (50mm × 50mm in OCAD units = 5000 × 5000)
@@ -1230,8 +1234,8 @@ export function MapViewer({
   return (
     <div
       ref={containerRef}
-      className={`relative overflow-hidden bg-white rounded-lg border border-slate-200 select-none ${className}`}
-      style={{ cursor: measuring ? "crosshair" : isPanningRef.current ? "grabbing" : "grab", ...style }}
+      className={`relative overflow-hidden select-none bg-white ${hideControls ? "" : "rounded-lg border border-slate-200"} ${className}`}
+      style={{ cursor: hideControls ? "default" : measuring ? "crosshair" : isPanningRef.current ? "grabbing" : "grab", ...style }}
       onMouseDown={handleMouseDown}
       onMouseMove={handleMouseMove}
       onMouseUp={handleMouseUp}
@@ -1268,7 +1272,7 @@ export function MapViewer({
 
       {/* Scale bar */}
       {(() => {
-        if (!mapScale || !viewBox || containerSize.w === 0) return null;
+        if (hideControls || !mapScale || !viewBox || containerSize.w === 0) return null;
         const basePixPerOcad = Math.min(containerSize.w / viewBox.w, containerSize.h / viewBox.h);
         const pixPerOcad = transform.scale * basePixPerOcad;
         // 1 OCAD unit = 0.01 mm paper; pixPerMeter = pixPerOcad * 100 * 1000 / mapScale
@@ -1300,7 +1304,7 @@ export function MapViewer({
       })()}
 
       {/* Zoom & measure controls */}
-      <div className="absolute bottom-3 right-3 flex flex-col gap-1 z-10">
+      {!hideControls && <div className="absolute bottom-3 right-3 flex flex-col gap-1 z-10">
         {mapScale && (
           <button
             onClick={() => {
@@ -1353,7 +1357,7 @@ export function MapViewer({
             )}
           </button>
         )}
-      </div>
+      </div>}
     </div>
   );
 }
