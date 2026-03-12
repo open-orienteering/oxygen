@@ -3,6 +3,8 @@ import { TRPCError } from "@trpc/server";
 import { router, publicProcedure } from "../trpc.js";
 import { getCompetitionClient, incrementCounter } from "../db.js";
 import type { RunnerDetail, RunnerInfo } from "@oxygen/shared";
+import { parsePunches, parseCourseControls } from "./cardReadout.js";
+import { computeClassPlacements } from "../results.js";
 
 /** Check that cardNo is not already assigned to another (non-removed) runner. */
 async function assertCardNotTaken(
@@ -255,23 +257,97 @@ export const runnerRouter = router({
         })
         : runners;
 
-      return filtered.map(
-        (r): RunnerInfo => ({
+      // ── Punch control codes (from oCard) ──
+      const cards = await client.oCard.findMany({
+        where: { Removed: false },
+        select: { CardNo: true, Punches: true },
+      });
+      const punchCodesMap = new Map<number, number[]>();
+      const cardStartTimeMap = new Map<number, number>();
+      for (const card of cards) {
+        const parsed = parsePunches(card.Punches);
+        const codes: number[] = [];
+        for (const p of parsed) {
+          if (p.type >= 100) codes.push(p.type);
+          if (p.type === 1 && !cardStartTimeMap.has(card.CardNo)) {
+            cardStartTimeMap.set(card.CardNo, p.time);
+          }
+        }
+        // Keep latest card data per CardNo (last wins)
+        if (codes.length > 0) punchCodesMap.set(card.CardNo, codes);
+      }
+
+      // ── Course control codes ──
+      const courseIds = new Set<number>();
+      const classEntities = await client.oClass.findMany({
+        where: { Removed: false },
+        select: { Id: true, Course: true },
+      });
+      const classCourseMap = new Map(classEntities.map((c) => [c.Id, c.Course]));
+      for (const r of filtered) {
+        const cid = r.Course > 0 ? r.Course : (classCourseMap.get(r.Class) ?? 0);
+        if (cid > 0) courseIds.add(cid);
+      }
+      const courses = courseIds.size > 0
+        ? await client.oCourse.findMany({
+            where: { Id: { in: [...courseIds] }, Removed: false },
+            select: { Id: true, Controls: true },
+          })
+        : [];
+      const courseControlsMap = new Map<number, number[]>();
+      for (const c of courses) {
+        courseControlsMap.set(c.Id, parseCourseControls(c.Controls));
+      }
+
+      // ── Class placements (rank) ──
+      const rankMap = new Map<number, number>();
+      const byClass = new Map<number, typeof filtered>();
+      for (const r of filtered) {
+        let arr = byClass.get(r.Class);
+        if (!arr) { arr = []; byClass.set(r.Class, arr); }
+        arr.push(r);
+      }
+      for (const [, classRunners] of byClass) {
+        const forPlacement = classRunners.map((r) => ({
           id: r.Id,
-          name: r.Name,
-          cardNo: r.CardNo,
-          clubId: r.Club,
-          clubName: clubMap.get(r.Club) ?? "",
-          classId: r.Class,
-          className: classMap.get(r.Class) ?? "",
-          startNo: r.StartNo,
+          status: r.Status,
           startTime: r.StartTime,
           finishTime: r.FinishTime,
-          status: r.Status as RunnerInfo["status"],
-          fee: r.Fee || undefined,
-          paid: r.Paid || undefined,
-          payMode: r.PayMode || undefined,
-        }),
+        }));
+        const placements = computeClassPlacements(forPlacement, false);
+        for (const [rId, result] of placements) {
+          if (result.place > 0) rankMap.set(rId, result.place);
+        }
+      }
+
+      return filtered.map(
+        (r): RunnerInfo => {
+          const courseId = r.Course > 0 ? r.Course : (classCourseMap.get(r.Class) ?? 0);
+          return {
+            id: r.Id,
+            name: r.Name,
+            cardNo: r.CardNo,
+            clubId: r.Club,
+            clubName: clubMap.get(r.Club) ?? "",
+            classId: r.Class,
+            className: classMap.get(r.Class) ?? "",
+            startNo: r.StartNo,
+            startTime: r.StartTime,
+            finishTime: r.FinishTime,
+            status: r.Status as RunnerInfo["status"],
+            fee: r.Fee || undefined,
+            paid: r.Paid || undefined,
+            payMode: r.PayMode || undefined,
+            birthYear: r.BirthYear || undefined,
+            sex: r.Sex || undefined,
+            bib: r.Bib || undefined,
+            nationality: r.Nationality || undefined,
+            punchControlCodes: punchCodesMap.get(r.CardNo),
+            courseControlCodes: courseId > 0 ? courseControlsMap.get(courseId) : undefined,
+            rank: rankMap.get(r.Id),
+            cardStartTime: cardStartTimeMap.get(r.CardNo),
+          };
+        },
       );
     }),
 

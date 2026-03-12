@@ -164,19 +164,24 @@ test.describe("URL Routing", () => {
     await clickTab(page, "Runners");
     await expect(page.getByText("54 runners")).toBeVisible({ timeout: 10000 });
 
-    await pickSelect(page, "status-filter", "In the forest");
+    // Type a status filter in the structured search bar
+    const searchInput = page.getByRole("combobox", { name: "Search filter input" });
+    await searchInput.fill("status:in-forest");
+    await searchInput.press("Enter");
     await expect(page.getByText("11 runners")).toBeVisible({ timeout: 5000 });
-    expect(page.url()).toContain("status=in-forest");
+    await expect(page).toHaveURL(/q=status%3Ain-forest/, { timeout: 3000 });
 
-    await page.getByPlaceholder("Search name, club, or card...").fill("Monica");
-    await expect(page).toHaveURL(/search=Monica/, { timeout: 3000 });
+    // Add a free-text search on top
+    await searchInput.fill("Monica");
+    await searchInput.press("Enter");
+    await expect(page).toHaveURL(/q=.*Monica/, { timeout: 3000 });
   });
 
   test("should support deep linking directly to a filtered view", async ({ page }) => {
-    await page.goto("/itest/runners?status=in-forest");
+    await page.goto("/itest/runners?q=status:in-forest");
     await expect(page.getByText("11 runners")).toBeVisible({ timeout: 15000 });
-    const statusSelect = page.locator("[data-testid='status-filter']");
-    await expect(statusSelect.locator("button").first()).toContainText("In the forest");
+    // Verify the status filter pill is shown
+    await expect(page.getByText("in-forest")).toBeVisible();
   });
 
   test("should support browser back navigation", async ({ page }) => {

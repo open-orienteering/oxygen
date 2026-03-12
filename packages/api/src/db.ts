@@ -22,6 +22,10 @@ let currentDbName: string | null = null;
 // In-memory cache of stored remote connections (NameId → connection info)
 let remoteConnectionCache: Map<string, DbConnectionInfo> | null = null;
 
+// Listeners called when the active competition database changes
+const competitionSwitchListeners: (() => void)[] = [];
+export function onCompetitionSwitch(cb: () => void) { competitionSwitchListeners.push(cb); }
+
 // oMonitor heartbeat state (registers Oxygen as a connected client in MeOS)
 let monitorId: number | null = null;
 let monitorInterval: ReturnType<typeof setInterval> | null = null;
@@ -271,6 +275,8 @@ export async function getCompetitionClient(
   await stopMonitorHeartbeat();
   if (competitionClient) {
     await competitionClient.$disconnect();
+    // Notify listeners (e.g. to clear cached map tiles)
+    for (const cb of competitionSwitchListeners) cb();
   }
 
   // Clear per-database "table ready" caches so ensure* functions re-check
@@ -280,6 +286,9 @@ export async function getCompetitionClient(
   controlConfigTableReady.clear();
   controlPunchesTableReady.clear();
   competitionConfigTableReady.clear();
+  renderedMapsTableReady.clear();
+  mapTilesTableReady.clear();
+  tracksTableReady.clear();
 
   // Check if this competition has a remote connection
   const remote = await getRemoteConnection(targetDb);
@@ -710,6 +719,54 @@ export async function ensureMapFilesTable(
   mapFilesTableReady.add(db);
 }
 
+// ─── Rendered maps cache table ──────────────────────────────
+
+const renderedMapsTableReady = new Set<string>();
+
+export async function ensureRenderedMapsTable(
+  client: PrismaClient,
+): Promise<void> {
+  const db = currentDbName ?? "";
+  if (renderedMapsTableReady.has(db)) return;
+
+  await client.$executeRawUnsafe(`
+    CREATE TABLE IF NOT EXISTS oxygen_rendered_maps (
+      Id         INT NOT NULL AUTO_INCREMENT PRIMARY KEY,
+      MaxWidth   INT NOT NULL,
+      ImageData  LONGBLOB NOT NULL,
+      Bounds     TEXT NOT NULL,
+      MapScale   INT NOT NULL DEFAULT 0,
+      Width      INT NOT NULL DEFAULT 0,
+      Height     INT NOT NULL DEFAULT 0,
+      RenderedAt TIMESTAMP(0) NOT NULL DEFAULT CURRENT_TIMESTAMP
+    )
+  `);
+  renderedMapsTableReady.add(db);
+}
+
+// ─── Map tiles cache table ─────────────────────────────────
+
+const mapTilesTableReady = new Set<string>();
+
+export async function ensureMapTilesTable(
+  client: PrismaClient,
+): Promise<void> {
+  const db = currentDbName ?? "";
+  if (mapTilesTableReady.has(db)) return;
+
+  await client.$executeRawUnsafe(`
+    CREATE TABLE IF NOT EXISTS oxygen_map_tiles (
+      Id       INT NOT NULL AUTO_INCREMENT PRIMARY KEY,
+      Z        INT NOT NULL,
+      X        INT NOT NULL,
+      Y        INT NOT NULL,
+      TileData MEDIUMBLOB NOT NULL,
+      UNIQUE KEY tile_zxy (Z, X, Y)
+    )
+  `);
+  mapTilesTableReady.add(db);
+}
+
 // ─── Control config table ──────────────────────────────────
 
 const controlConfigTableReady = new Set<string>();
@@ -851,6 +908,34 @@ export async function ensureCompetitionConfigTable(
   }
 
   competitionConfigTableReady.add(db);
+}
+
+// ─── GPS tracks table ─────────────────────────────────────
+
+const tracksTableReady = new Set<string>();
+
+export async function ensureTracksTable(
+  client: PrismaClient,
+): Promise<void> {
+  const db = currentDbName ?? "";
+  if (tracksTableReady.has(db)) return;
+
+  await client.$executeRawUnsafe(`
+    CREATE TABLE IF NOT EXISTS oxygen_tracks (
+      Id          INT NOT NULL AUTO_INCREMENT PRIMARY KEY,
+      DeviceId    VARCHAR(255) NOT NULL,
+      TrackName   VARCHAR(255) NOT NULL DEFAULT '',
+      StartTime   BIGINT NOT NULL,
+      EndTime     BIGINT NULL,
+      Distance    DOUBLE NOT NULL DEFAULT 0,
+      PointCount  INT NOT NULL DEFAULT 0,
+      Geometry    LONGTEXT NOT NULL,
+      UploadedAt  TIMESTAMP(0) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      UpdatedAt   TIMESTAMP(0) NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+      UNIQUE KEY uq_device_track (DeviceId, StartTime)
+    )
+  `);
+  tracksTableReady.add(db);
 }
 
 // ─── Raw competition DB connection ─────────────────────────

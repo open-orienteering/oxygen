@@ -132,14 +132,14 @@ export function CompetitionDashboard() {
           description={t("stillWaiting")}
           value={sc.notStarted}
           color="slate"
-          onClick={() => navigate("runners?status=not-started")}
+          onClick={() => navigate("runners?q=status:not-started")}
         />
         <StatusCard
           label={t("inTheForest")}
           description={t("awaitingFinish")}
           value={sc.inForest}
           color="amber"
-          onClick={() => navigate("runners?status=in-forest")}
+          onClick={() => navigate("runners?q=status:in-forest")}
         />
         <StatusCard
           label={t("finished")}

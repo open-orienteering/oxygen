@@ -7,38 +7,37 @@ import {
   STATUS_FILTER_OPTIONS,
   RunnerStatus,
   type RunnerStatusValue,
+  type RunnerInfo,
 } from "@oxygen/shared";
 import { StatusBadge } from "../components/StatusBadge";
 import { RunnerInlineDetail } from "../components/RunnerInlineDetail";
 import { ClubLogo } from "../components/ClubLogo";
-import { SearchableSelect } from "../components/SearchableSelect";
 import { SortHeader } from "../components/SortHeader";
 import { useSort } from "../hooks/useSort";
-import { useSearchParam, useNumericSearchParam } from "../hooks/useSearchParam";
+import { useNumericSearchParam } from "../hooks/useSearchParam";
 import { useTableSelection } from "../hooks/useTableSelection";
 import { BulkActionBar } from "../components/BulkActionBar";
 import { usePrinter } from "../context/PrinterContext";
 import { useRegistrationDialog } from "../context/RegistrationDialogContext";
 import { fetchLogoRaster } from "../lib/receipt-printer/index.js";
 import { getClubLogoUrl } from "../lib/club-logo";
+import { StructuredSearchBar } from "../components/structured-search/StructuredSearchBar";
+import { useStructuredSearch } from "../hooks/useStructuredSearch";
+import { createRunnerAnchors } from "../lib/structured-search/anchors/runner-anchors";
+
+const RUNNER_FREE_TEXT_FIELDS: (keyof RunnerInfo)[] = ["name", "clubName", "className", "cardNo"];
 
 export function RunnerManagement() {
   const { t } = useTranslation("runners");
-  const [search, setSearch] = useSearchParam("search");
-  const [classFilter, setClassFilter] = useNumericSearchParam("class");
-  const [clubFilter, setClubFilter] = useNumericSearchParam("club");
-  const [statusFilter, setStatusFilter] = useSearchParam("status");
+  const runnerAnchors = useMemo(() => createRunnerAnchors((key) => t(key as never)), [t]);
+  const { tokens, setTokens, filterItems } =
+    useStructuredSearch<RunnerInfo>(runnerAnchors, RUNNER_FREE_TEXT_FIELDS);
   const [expandedRunner, setExpandedRunner] = useNumericSearchParam("runner");
   const { openRegistration } = useRegistrationDialog();
 
   const utils = trpc.useUtils();
 
-  const runners = trpc.runner.list.useQuery({
-    classId: classFilter,
-    clubId: clubFilter,
-    search: search || undefined,
-    statusFilter: statusFilter || undefined,
-  });
+  const runners = trpc.runner.list.useQuery({});
   const classes = trpc.competition.dashboard.useQuery();
   const clubs = trpc.competition.clubs.useQuery();
   const printer = usePrinter();
@@ -137,7 +136,15 @@ export function RunnerManagement() {
     setExpandedRunner(expandedRunner === id ? undefined : id);
   };
 
-  const rawRunners = runners.data ?? [];
+  const allRunners = runners.data ?? [];
+  const rawRunners = useMemo(() => filterItems(allRunners), [allRunners, filterItems]);
+
+  // Suggestion data for autocomplete
+  const suggestionData = useMemo(() => ({
+    classes: classes.data?.classes.map((c) => ({ id: c.id, name: c.name })) ?? [],
+    clubs: clubs.data?.map((c) => ({ id: c.id, name: c.name })) ?? [],
+    runners: allRunners.map((r) => ({ name: r.name })),
+  }), [classes.data, clubs.data, allRunners]);
 
   type Runner = (typeof rawRunners)[number];
   const comparators = useMemo(() => ({
@@ -201,68 +208,26 @@ export function RunnerManagement() {
   return (
     <>
       {/* Toolbar */}
-      <div className="flex flex-col sm:flex-row gap-3 mb-6">
-        <div className="relative flex-1">
-          <svg className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
-          </svg>
-          <input
-            type="text"
+      <div className="flex flex-col gap-3 mb-6">
+        {/* Structured search bar + Add Runner */}
+        <div className="flex flex-col sm:flex-row gap-3">
+          <StructuredSearchBar
+            tokens={tokens}
+            onTokensChange={setTokens}
+            anchors={runnerAnchors}
             placeholder={t("searchNameClubCard")}
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            className="w-full pl-10 pr-4 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent bg-white"
+            suggestionData={suggestionData}
           />
+          <button
+            onClick={() => openRegistration()}
+            className="px-4 py-2 bg-blue-600 text-white text-sm font-medium rounded-lg hover:bg-blue-700 transition-colors cursor-pointer flex items-center gap-1.5 whitespace-nowrap"
+          >
+            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
+            </svg>
+            {t("addRunner")}
+          </button>
         </div>
-        <SearchableSelect
-          testId="class-filter"
-          value={classFilter ?? ""}
-          onChange={(v) => setClassFilter(v ? Number(v) : undefined)}
-          placeholder={t("allClasses")}
-          searchPlaceholder={t("searchClasses")}
-          options={[
-            { value: "", label: t("allClasses") },
-            ...(classes.data?.classes.map((c) => ({
-              value: c.id,
-              label: c.name,
-              suffix: `(${c.runnerCount})`,
-            })) ?? []),
-          ]}
-        />
-        <SearchableSelect
-          testId="club-filter"
-          value={clubFilter ?? ""}
-          onChange={(v) => setClubFilter(v ? Number(v) : undefined)}
-          placeholder={t("allClubs")}
-          searchPlaceholder={t("searchClubs")}
-          options={[
-            { value: "", label: t("allClubs") },
-            ...(clubs.data?.map((c) => ({
-              value: c.id,
-              label: c.name,
-              icon: <ClubLogo clubId={c.id} size="sm" />,
-            })) ?? []),
-          ]}
-        />
-        <SearchableSelect
-          testId="status-filter"
-          value={statusFilter}
-          onChange={(v) => setStatusFilter(String(v))}
-          placeholder={t("allStatuses")}
-          options={STATUS_FILTER_OPTIONS.map((opt) => ({
-            value: opt.value,
-            label: opt.label,
-          }))}
-        />
-        <button
-          onClick={() => openRegistration()}
-          className="px-4 py-2 bg-blue-600 text-white text-sm font-medium rounded-lg hover:bg-blue-700 transition-colors cursor-pointer flex items-center gap-1.5 whitespace-nowrap"
-        >
-          <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
-          </svg>
-          {t("addRunner")}
-        </button>
       </div>
 
       <div className="flex items-center justify-between mb-3">
@@ -329,7 +294,7 @@ export function RunnerManagement() {
                           onChange={() => selection.toggle(runner.id)}
                         />
                       </td>
-                      <td className="px-4 py-2.5 text-slate-400 tabular-nums">{runner.startNo}</td>
+                      <td className="px-4 py-2.5 text-slate-400 tabular-nums">{runner.startNo > 0 ? runner.startNo : "-"}</td>
                       <td className="px-4 py-2.5 font-medium text-blue-700 hover:text-blue-900">
                         {runner.name}
                       </td>
