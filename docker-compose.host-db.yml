@@ -26,6 +26,7 @@ services:
       MEOS_MAIN_DB_URL: "${MEOS_MAIN_DB_URL:-mysql://meos@127.0.0.1:3306/MeOSMain}"
       PORT: "3001"
       HOST: "0.0.0.0"
+      NODE_OPTIONS: "--max-old-space-size=4096"
 
   web:
     build:

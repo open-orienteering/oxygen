@@ -23,6 +23,7 @@
   "time": "Time",
   "status": "Status",
   "actions": "Actions",
+  "age": "Age",
   "birthYear": "Birth Year",
   "sex": "Sex",
   "nationality": "Nationality",
@@ -109,5 +110,12 @@
   "statusNoTiming": "No Timing",
   "statusOutOfCompetition": "Out of Competition",
   "statusCancelled": "Cancelled",
-  "statusNotCompeting": "Not Competing"
+  "statusNotCompeting": "Not Competing",
+  "punched": "Punched",
+  "visited": "Visited",
+  "control": "Course control",
+  "rank": "Rank",
+  "scheduled": "Scheduled start",
+  "started": "Actual start",
+  "forest": "Time in forest"
 }

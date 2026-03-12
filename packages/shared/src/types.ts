@@ -275,6 +275,14 @@ export interface RunnerInfo {
   fee?: number;
   paid?: number;
   payMode?: number;
+  birthYear?: number;
+  sex?: string;
+  bib?: string;
+  nationality?: string;
+  punchControlCodes?: number[];
+  courseControlCodes?: number[];
+  rank?: number;
+  cardStartTime?: number;
 }
 
 /** Runner detail (for editing) */

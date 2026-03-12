@@ -1,7 +1,14 @@
 packages:
-  - "packages/*"
+  - packages/*
+
+ignoredBuiltDependencies:
+  - sharp
+
 onlyBuiltDependencies:
-  - "@prisma/engines"
-  - "@prisma/client"
-  - "prisma"
-  - "esbuild"
+  - '@prisma/engines'
+  - '@prisma/client'
+  - prisma
+  - esbuild
+
+patchedDependencies:
+  ocad2geojson@2.1.20: patches/ocad2geojson@2.1.20.patch

@@ -23,6 +23,7 @@
   "time": "Tid",
   "status": "Status",
   "actions": "Åtgärder",
+  "age": "Ålder",
   "birthYear": "Födelseår",
   "sex": "Kön",
   "nationality": "Nationalitet",
@@ -109,5 +110,12 @@
   "statusNoTiming": "Ingen tidtagning",
   "statusOutOfCompetition": "Utom tävlan",
   "statusCancelled": "Avbruten",
-  "statusNotCompeting": "Deltar ej"
+  "statusNotCompeting": "Deltar ej",
+  "punched": "Stämplat",
+  "visited": "Besökt",
+  "control": "Bankontroll",
+  "rank": "Placering",
+  "scheduled": "Planerad start",
+  "started": "Faktisk start",
+  "forest": "Tid i skogen"
 }

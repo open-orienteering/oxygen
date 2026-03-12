@@ -13,6 +13,8 @@ import { MapPanel } from "./MapPanel";
 import { ClubLogo } from "./ClubLogo";
 import { SearchableSelect } from "./SearchableSelect";
 import { formatEntryDate } from "../lib/format";
+import { CardTypeBadge } from "./CardTypeBadge";
+import { getCardType } from "../lib/si-protocol";
 
 function payModeLabel(payMode: number, t: (key: string) => string): string {
   const labels: Record<number, string> = {
@@ -156,12 +158,18 @@ export function RunnerInlineDetail({ runnerId, colSpan }: Props) {
               currentValue={r.clubId}
               debouncedSave={debouncedSave}
             />
-            <EditField
-              label={t("siCard")}
-              value={r.cardNo > 0 ? String(r.cardNo) : ""}
-              type="number"
-              onChange={(v) => debouncedSave("cardNo", parseInt(v, 10) || 0)}
-            />
+            <div>
+              <label className="flex items-center gap-1.5 text-xs text-slate-500 mb-1">
+                {t("siCard")}
+                {r.cardNo > 0 && <CardTypeBadge type={getCardType(r.cardNo)} />}
+              </label>
+              <EditField
+                label=""
+                value={r.cardNo > 0 ? String(r.cardNo) : ""}
+                type="number"
+                onChange={(v) => debouncedSave("cardNo", parseInt(v, 10) || 0)}
+              />
+            </div>
             <EditField
               label={t("startTime")}
               value={r.startTime > 0 ? formatMeosTime(r.startTime) : ""}
@@ -353,7 +361,7 @@ function EditField({
 
   return (
     <div className={className}>
-      <label className="block text-xs text-slate-500 mb-1">{label}</label>
+      {label && <label className="block text-xs text-slate-500 mb-1">{label}</label>}
       <input
         type={type}
         value={localValue}
