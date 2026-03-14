@@ -99,6 +99,7 @@ test.describe("Competition Dashboard", () => {
     }
 
     // Select a class in the map panel's filter dropdown
+    await expect(page.getByText("All classes")).toBeVisible({ timeout: 15000 });
     await page.getByText("All classes").click();
     await page.getByText("Öppen 1", { exact: true }).click();
 

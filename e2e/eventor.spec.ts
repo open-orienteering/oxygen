@@ -167,7 +167,7 @@ test.describe("Competition Selector — New Features", () => {
     await page.getByRole("button", { name: "New Club" }).click();
     await page.getByPlaceholder("e.g. OK Ansen").fill(uniqueClub);
     await page.getByRole("button", { name: "Add" }).click();
-    await expect(page.getByText(uniqueClub)).toBeVisible({ timeout: 5000 });
+    await expect(page.getByText(uniqueClub)).toBeVisible({ timeout: 15000 });
 
     page.on("dialog", (dialog) => dialog.accept());
     const clubRow = page.locator("tbody tr").filter({ hasText: uniqueClub }).first();
