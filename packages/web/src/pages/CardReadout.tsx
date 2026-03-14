@@ -1,4 +1,4 @@
-import { useRef, useEffect, useState } from "react";
+import { useRef, useEffect, useState, useCallback } from "react";
 import { useTranslation } from "react-i18next";
 import { trpc } from "../lib/trpc";
 import {
@@ -121,7 +121,7 @@ export function CardReadout() {
       )}
 
       {/* Readout result */}
-      {readout.data?.found && <ReadoutView data={readout.data} />}
+      {readout.data?.found && <ReadoutView data={readout.data} onCardReturnedChange={() => readout.refetch()} />}
     </div>
   );
 }
@@ -140,15 +140,52 @@ function toPunchTableData(data: any): PunchTableData {
 
 // ─── READOUT VIEW ────────────────────────────────────────────
 
-function ReadoutView({ data }: { data: any }) {
+function ReadoutView({ data, onCardReturnedChange }: { data: any; onCardReturnedChange?: () => void }) {
   const { t: tr } = useTranslation("race");
   const statusLabel = useRunnerStatusLabel();
   const t = data.timing;
   const isOK = t.status === RunnerStatus.OK;
   const isMP = t.status === RunnerStatus.MissingPunch;
 
+  const setCardReturned = trpc.runner.setCardReturned.useMutation({
+    onSuccess: () => onCardReturnedChange?.(),
+  });
+
+  const handleToggleReturned = useCallback(() => {
+    setCardReturned.mutate({ runnerId: data.runner.id, returned: !data.cardReturned });
+  }, [data.runner.id, data.cardReturned, setCardReturned]);
+
   return (
     <div className="space-y-4">
+      {/* Rental card return banner */}
+      {data.isRentalCard && (
+        <div className={`rounded-xl px-5 py-4 flex items-center justify-between gap-4 border-2 ${
+          data.cardReturned
+            ? "bg-emerald-50 border-emerald-200"
+            : "bg-amber-50 border-amber-300"
+        }`}>
+          <div className="flex items-center gap-3 min-w-0">
+            <svg className={`w-5 h-5 shrink-0 ${data.cardReturned ? "text-emerald-600" : "text-amber-600"}`} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M7 7h.01M7 3h5c.512 0 1.024.195 1.414.586l7 7a2 2 0 010 2.828l-7 7a2 2 0 01-2.828 0l-7-7A1.994 1.994 0 013 12V7a4 4 0 014-4z" />
+            </svg>
+            <span className={`text-sm font-semibold ${data.cardReturned ? "text-emerald-700" : "text-amber-800"}`}>
+              {data.cardReturned ? tr("rentalCardReturned") : tr("returnRentalCard")}
+            </span>
+          </div>
+          <button
+            onClick={handleToggleReturned}
+            disabled={setCardReturned.isPending}
+            className={`shrink-0 px-4 py-1.5 rounded-lg text-sm font-medium transition-colors cursor-pointer disabled:opacity-50 ${
+              data.cardReturned
+                ? "bg-slate-100 text-slate-700 hover:bg-slate-200"
+                : "bg-amber-600 text-white hover:bg-amber-700"
+            }`}
+          >
+            {data.cardReturned ? tr("markNotReturned") : tr("markReturned")}
+          </button>
+        </div>
+      )}
+
       {/* Big status banner */}
       <div
         className={`rounded-2xl p-8 text-center ${

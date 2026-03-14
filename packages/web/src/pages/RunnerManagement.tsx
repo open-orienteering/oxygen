@@ -89,7 +89,7 @@ export function RunnerManagement() {
     });
   }, [utils, classes.data, printer, regConfig.data]);
 
-  const handlePrintRegistration = useCallback(async (runner: { name: string; clubName?: string; className?: string; cardNo: number; startTime: number; paid?: number; fee?: number; payMode?: number }) => {
+  const handlePrintRegistration = useCallback(async (runner: { name: string; clubName?: string; className?: string; cardNo: number; startTime: number; paid?: number; fee?: number; payMode?: number; cardFee?: number }) => {
     const competitionInfo = classes.data?.competition;
     const eventorId = classes.data?.organizer?.eventorId;
     const logoRaster = eventorId
@@ -109,7 +109,7 @@ export function RunnerManagement() {
         cardNo: runner.cardNo,
       },
       startTime: runner.startTime > 0 ? formatMeosTime(runner.startTime) : undefined,
-      payment: amount > 0 ? { method: methodLabel || t("paid"), amount } : undefined,
+      payment: amount > 0 ? { method: methodLabel || t("paid"), amount, cardFee: (runner.cardFee ?? 0) > 0 ? runner.cardFee : undefined } : undefined,
       organizerName: classes.data?.organizer?.name,
       organizerDetails: regConfig.data?.organizerDetails || undefined,
       orgNumber: regConfig.data?.orgNumber || undefined,
@@ -306,7 +306,22 @@ export function RunnerManagement() {
                       </td>
                       <td className="px-4 py-2.5 text-slate-600 hidden md:table-cell">{runner.className}</td>
                       <td className="px-4 py-2.5 text-slate-500 tabular-nums hidden lg:table-cell">
-                        {runner.cardNo > 0 ? runner.cardNo : "-"}
+                        <span className="inline-flex items-center gap-1.5">
+                          {runner.cardNo > 0 ? runner.cardNo : "-"}
+                          {(runner.cardFee ?? 0) > 0 && (
+                            <span
+                              title={t("rentalCard")}
+                              className={`inline-flex items-center text-xs font-semibold px-1.5 py-0.5 rounded ${
+                                runner.cardReturned
+                                  ? "bg-emerald-50 text-emerald-600 border border-emerald-200"
+                                  : "bg-orange-50 text-orange-600 border border-orange-200"
+                              }`}
+                              data-testid="rental-card-badge"
+                            >
+                              🏷️
+                            </span>
+                          )}
+                        </span>
                       </td>
                       <td className="px-4 py-2.5 text-slate-500 tabular-nums">{formatMeosTime(runner.startTime)}</td>
                       <td className="px-4 py-2.5 tabular-nums font-medium text-slate-900">

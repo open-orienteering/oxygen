@@ -2,6 +2,7 @@ import { useState, useMemo, useCallback, useEffect, useRef } from "react";
 import { useTranslation } from "react-i18next";
 import { trpc } from "../lib/trpc";
 import {
+  ControlStatus,
   controlStatusLabel,
   CONTROL_STATUS_OPTIONS,
   type ControlStatusValue,
@@ -14,7 +15,7 @@ import { SortHeader } from "../components/SortHeader";
 import { useSort } from "../hooks/useSort";
 import { MapPanel } from "../components/MapPanel";
 import { useDeviceManager } from "../context/DeviceManager";
-import type { StationInfo } from "../lib/si-protocol";
+import { STATION_MODE, type StationInfo } from "../lib/si-protocol";
 
 // ─── Types ────────────────────────────────────────────────
 
@@ -30,6 +31,7 @@ interface ProgramResult {
   error?: string;
   timeDriftMs?: number | null;
   backupCleared?: number;
+  poweredOff?: boolean;
   timestamp: Date;
 }
 
@@ -845,8 +847,9 @@ function ProgrammingPanel({
   const [busy, setBusy] = useState(false);
   const [results, setResults] = useState<ProgramResult[]>([]);
   const [error, setError] = useState<string | null>(null);
-  const [beep, setBeep] = useState(true);
+  const [autoPowerOff, setAutoPowerOff] = useState(false);
   const [autoMode, setAutoMode] = useState(false);
+  const [targetControlId, setTargetControlId] = useState<number | "auto">("auto");
   const [ntpStatus, setNtpStatus] = useState<{
     browserToServerMs: number;
     serverNtpMs: number | null;
@@ -887,8 +890,11 @@ function ProgrammingPanel({
   // Track last programmed serial to avoid re-programming the same control
   const lastProgrammedSerial = useRef<number | null>(null);
   const pollingRef = useRef(false);
+  const pollCooldownRef = useRef(0);
   const autoModeRef = useRef(false);
   autoModeRef.current = autoMode;
+  const autoPowerOffRef = useRef(false);
+  autoPowerOffRef.current = autoPowerOff;
 
   const connected = readerStatus === "connected" || readerStatus === "reading";
 
@@ -901,45 +907,89 @@ function ProgrammingPanel({
     rawData: Uint8Array,
     stationInfo: { stationCode: number; batteryVoltage: number; serialNo: number; backupCount: number },
   ) => {
-    const code = stationInfo.stationCode;
+    const readCode = stationInfo.stationCode;
 
-    // Find matching control in list
-    const matchedControl = controls.find((c) => {
-      if (c.status === 4 || c.status === 5) return false;
-      const codes = c.codes.split(";").map((s) => parseInt(s.trim(), 10));
-      return codes.includes(code);
-    });
+    // Resolve target control: explicit selection or auto-match by station code
+    let matchedControl: ControlInfo | undefined;
+    if (targetControlId !== "auto") {
+      matchedControl = controls.find((c) => c.id === targetControlId);
+    } else {
+      matchedControl = controls.find((c) => {
+        const codes = c.codes.split(";").map((s) => parseInt(s.trim(), 10));
+        return codes.includes(readCode);
+      });
+    }
 
     if (!matchedControl) {
       const result: ProgramResult = {
         controlId: 0,
-        code,
+        code: readCode,
         batteryVoltage: stationInfo.batteryVoltage,
         batteryLow: false,
         success: false,
-        error: t("controlNotInCompetition", { code }),
+        error: t("controlNotInCompetition", { code: readCode }),
         timestamp: new Date(),
       };
       setResults((prev) => [result, ...prev].slice(0, 20));
       return;
     }
 
+    // Use the target control's first code (for reprogramming scenarios)
+    const targetCode = parseInt(matchedControl.codes.split(";")[0].trim(), 10);
+
     // Determine settings
     const config = matchedControl.config;
     const enableSRR = config?.radioType === "internal_radio" || config?.radioType === "public_radio";
     const airPlusOverride = config?.airPlus ?? "default";
-    const enableAirPlus = airPlusOverride === "on" || (airPlusOverride === "default" && airPlusEnabled);
+    const isNonAirPlusType =
+      matchedControl.status === ControlStatus.Check ||
+      matchedControl.status === ControlStatus.Clear;
+    const enableAirPlus = isNonAirPlusType
+      ? false
+      : airPlusOverride === "on" || (airPlusOverride === "default" && airPlusEnabled);
+
+    // Compute SI station mode from control status
+    let stationMode: number | undefined;
+    switch (matchedControl.status) {
+      case ControlStatus.Start:
+        stationMode = enableAirPlus ? STATION_MODE.BC_START : STATION_MODE.START;
+        break;
+      case ControlStatus.Finish:
+        stationMode = enableAirPlus ? STATION_MODE.BC_FINISH : STATION_MODE.FINISH;
+        break;
+      case ControlStatus.Check:
+        stationMode = STATION_MODE.CHECK;
+        break;
+      case ControlStatus.Clear:
+        stationMode = STATION_MODE.CLEAR;
+        break;
+    }
 
     // Program the field control (pass rawData to skip redundant read)
     const { batteryVoltage, stationInfo: progInfo, timeDriftMs } = await reader.programControl({
-      code,
+      code: targetCode,
       enableSRR,
       enableAirPlus,
       awakeHours: awakeHours ?? 6,
-      beep,
+      beep: false,
+      stationMode,
     }, rawData);
 
     const batteryLow = batteryVoltage < 2.5;
+
+    // Power off if enabled (read from ref for guaranteed freshness in auto-poll)
+    let poweredOff = false;
+    if (autoPowerOffRef.current) {
+      try {
+        await reader.powerOffStation();
+        poweredOff = true;
+        // Suppress polling for 2s so the coupling coil doesn't wake
+        // the field control before it finishes powering down
+        pollCooldownRef.current = Date.now() + 2000;
+      } catch {
+        // Ignore power-off failure
+      }
+    }
 
     // Record in DB
     recordMutation.mutate({
@@ -952,16 +1002,17 @@ function ProgrammingPanel({
 
     const result: ProgramResult = {
       controlId: matchedControl.id,
-      code,
+      code: targetCode,
       batteryVoltage,
       batteryCapMah: progInfo.batteryCapMah,
       batteryLow,
       success: true,
       timeDriftMs,
+      poweredOff,
       timestamp: new Date(),
     };
     setResults((prev) => [result, ...prev].slice(0, 20));
-  }, [controls, airPlusEnabled, awakeHours, beep, recordMutation]);
+  }, [controls, airPlusEnabled, awakeHours, targetControlId, recordMutation, t]);
 
   const handleProgram = async () => {
     const reader = getReaderConnection();
@@ -986,6 +1037,9 @@ function ProgrammingPanel({
 
     const poll = async () => {
       if (pollingRef.current || cancelled) return;
+      // After power-off, pause polling so the coupling coil doesn't
+      // wake the field control before it finishes powering down
+      if (Date.now() < pollCooldownRef.current) return;
       pollingRef.current = true;
 
       try {
@@ -1013,9 +1067,8 @@ function ProgrammingPanel({
       }
     };
 
-    // Poll immediately, then on interval
     poll();
-    const interval = setInterval(poll, 1500);
+    const interval = setInterval(poll, 500);
 
     return () => {
       cancelled = true;
@@ -1074,11 +1127,11 @@ function ProgrammingPanel({
           <label className="flex items-center gap-1.5 text-xs text-slate-600 cursor-pointer">
             <input
               type="checkbox"
-              checked={beep}
-              onChange={(e) => setBeep(e.target.checked)}
+              checked={autoPowerOff}
+              onChange={(e) => setAutoPowerOff(e.target.checked)}
               className="rounded"
             />
-            {t("beep")}
+            {t("powerOff")}
           </label>
           <button
             onClick={handleClose}
@@ -1087,6 +1140,23 @@ function ProgrammingPanel({
             {t("close")}
           </button>
         </div>
+      </div>
+
+      {/* Target control selector */}
+      <div className="flex items-center gap-2 mb-2">
+        <label className="text-xs text-slate-600">{t("targetControl")}:</label>
+        <select
+          value={targetControlId}
+          onChange={(e) => setTargetControlId(e.target.value === "auto" ? "auto" : Number(e.target.value))}
+          className="text-xs border border-slate-300 rounded-lg px-2 py-1 bg-white"
+        >
+          <option value="auto">{t("targetAuto")}</option>
+          {controls.map((c) => (
+            <option key={c.id} value={c.id}>
+              {c.codes}{c.name ? ` — ${c.name}` : ""} ({controlStatusLabel(c.status)})
+            </option>
+          ))}
+        </select>
       </div>
 
       {/* Clock verification */}
@@ -1158,6 +1228,7 @@ function ProgrammingPanel({
                 <span className={`font-mono ${r.batteryLow ? "text-red-600 font-bold" : ""}`}>
                   {t("bat")}: {r.batteryVoltage.toFixed(2)}V
                 </span>
+                {r.poweredOff && <span className="text-slate-400">{t("off")}</span>}
                 <span>{r.timestamp.toLocaleTimeString(undefined, { hour12: false })}</span>
               </div>
             </div>
@@ -1235,7 +1306,6 @@ function ReadoutPanel({
     const code = stationData.stationCode;
 
     const matchedControl = controls.find((c) => {
-      if (c.status === 4 || c.status === 5) return false;
       const codes = c.codes.split(";").map((s) => parseInt(s.trim(), 10));
       return codes.includes(code);
     });

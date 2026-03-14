@@ -52,6 +52,8 @@
   "punchStart": "Start",
   "punchFinish": "Finish",
   "extraPunches": "Extra Punches (not matched to course)",
+  "showInline": "Show inline",
+  "hideInline": "Show separate",
   "missingControlsTitle": "Missing Controls",
   "addPunchCorrection": "Add Punch Correction",
   "manual": "manual",
@@ -75,5 +77,10 @@
   "clickToRegister": "click to register",
   "notRegisteredClickToAdd": "Not registered — click to add",
   "unknownRunner": "Unknown runner",
-  "badgeNewRunner": "New runner"
+  "badgeNewRunner": "New runner",
+  "notifReturnCard": "Return SI card",
+  "returnRentalCard": "Return your SI card",
+  "rentalCardReturned": "SI card returned",
+  "markReturned": "Mark returned",
+  "markNotReturned": "Undo return"
 }

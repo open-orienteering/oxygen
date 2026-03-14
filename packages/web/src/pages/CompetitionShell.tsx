@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useRef, useState, useCallback } from "react";
 import {
   useParams,
   useNavigate,
@@ -28,6 +28,8 @@ import { ClubLogo } from "../components/ClubLogo";
 import { LanguageSelector } from "../components/LanguageSelector";
 import { useDeviceManager } from "../context/DeviceManager";
 import { usePrinter } from "../context/PrinterContext";
+import { fetchLogoRaster } from "../lib/receipt-printer/index.js";
+import { getClubLogoUrl } from "../lib/club-logo";
 import { CardNotification } from "../components/CardNotification";
 import { RecentCards } from "../components/RecentCards";
 import { RegistrationDialogProvider } from "../context/RegistrationDialogContext";
@@ -94,7 +96,8 @@ export function CompetitionShell() {
   // Poll oCounter for external changes (e.g. from MeOS) and auto-invalidate caches
   useExternalChanges(ready);
   const utils = trpc.useUtils();
-  const { setCompetitionNameId } = useDeviceManager();
+  const { setCompetitionNameId, getKioskChannel } = useDeviceManager();
+  const { print: printerPrint } = usePrinter();
   const selectMutation = trpc.competition.select.useMutation({
     onSuccess: (data) => {
       setCompetitionName(data.name);
@@ -106,6 +109,10 @@ export function CompetitionShell() {
   const dashboard = trpc.competition.dashboard.useQuery(undefined, {
     enabled: ready,
     staleTime: 30_000,
+  });
+  const regConfig = trpc.competition.getRegistrationConfig.useQuery(undefined, {
+    enabled: ready,
+    staleTime: 60_000,
   });
 
   const counts: Record<string, number> = {
@@ -131,6 +138,62 @@ export function CompetitionShell() {
     return () => setCompetitionNameId(null);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [nameId]);
+
+  // Forward kiosk print requests to the local printer.
+  // The kiosk only sends a runnerId; the admin shell fetches the full receipt
+  // data itself (logo, QR, custom message) so the receipt is always complete.
+  const dashboardRef = useRef(dashboard.data);
+  const regConfigRef = useRef(regConfig.data);
+  useEffect(() => { dashboardRef.current = dashboard.data; }, [dashboard.data]);
+  useEffect(() => { regConfigRef.current = regConfig.data; }, [regConfig.data]);
+
+  useEffect(() => {
+    const channel = getKioskChannel();
+    if (!channel) return;
+    return channel.subscribe((msg) => {
+      if (msg.type !== "kiosk-print-receipt") return;
+      const { runnerId } = msg;
+      const competitionInfo = dashboardRef.current?.competition;
+      const eventorId = dashboardRef.current?.organizer?.eventorId;
+      const finishMsg = regConfigRef.current?.finishReceiptMessage;
+      utils.race.finishReceipt.fetch({ runnerId }).then(async (result) => {
+        if (!result) return;
+        const logoRaster = eventorId
+          ? await fetchLogoRaster(getClubLogoUrl(eventorId), 250).catch(() => null)
+          : null;
+        return printerPrint({
+          competitionName: competitionInfo?.name ?? "",
+          competitionDate: competitionInfo?.date ?? undefined,
+          runner: {
+            name: result.runner.name,
+            clubName: result.runner.clubName,
+            className: result.runner.className,
+            startNo: result.runner.startNo,
+            cardNo: result.runner.cardNo,
+          },
+          timing: result.timing,
+          splits: result.controls.map((c) => ({
+            controlIndex: c.controlIndex,
+            controlCode: c.controlCode,
+            splitTime: c.splitTime,
+            cumTime: c.cumTime,
+            status: c.status,
+            punchTime: c.punchTime,
+            legLength: c.legLength,
+          })),
+          course: result.course ? { name: result.course.name, length: result.course.length } : null,
+          position: result.position,
+          siac: result.siac,
+          classResults: result.classResults,
+          logoRaster,
+          qrUrl: competitionInfo?.eventorEventId
+            ? `https://eventor.orientering.se/Events/Show/${competitionInfo.eventorEventId}`
+            : "https://open-orienteering.org",
+          customMessage: finishMsg || undefined,
+        });
+      }).catch(() => {});
+    });
+  }, [getKioskChannel, printerPrint, utils]);
 
   const handleTabChange = (tab: Tab) => {
     const tabDef = tabs.find((t) => t.id === tab);

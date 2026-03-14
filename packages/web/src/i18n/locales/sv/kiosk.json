@@ -57,5 +57,8 @@
   "proceedToStart": "Gå till startområdet. Lycka till!",
   "positionInClass": "{{rank}} av {{total}} i klassen",
   "courseMap": "Banöversikt",
-  "classResults": "Klassresultat"
+  "classResults": "Klassresultat",
+  "returnRentalCard": "Lämna tillbaka din SI-bricka",
+  "returnRentalCardHint": "Det här är en hyrbricka — lämna tillbaka den till arrangören",
+  "rentalCardFee": "Hyrbricka: {{fee}} kr"
 }

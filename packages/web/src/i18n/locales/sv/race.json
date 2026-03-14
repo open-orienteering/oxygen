@@ -52,6 +52,8 @@
   "punchStart": "Start",
   "punchFinish": "Mål",
   "extraPunches": "Extra stämplingar (ej matchade mot bana)",
+  "showInline": "Visa i ordning",
+  "hideInline": "Visa separat",
   "missingControlsTitle": "Saknade kontroller",
   "addPunchCorrection": "Lägg till stämplingskorrigering",
   "manual": "manuell",
@@ -75,5 +77,10 @@
   "clickToRegister": "klicka för att registrera",
   "notRegisteredClickToAdd": "Ej registrerad — klicka för att lägga till",
   "unknownRunner": "Okänd deltagare",
-  "badgeNewRunner": "Ny deltagare"
+  "badgeNewRunner": "Ny deltagare",
+  "notifReturnCard": "Lämna tillbaka brickan",
+  "returnRentalCard": "Lämna tillbaka brickan",
+  "rentalCardReturned": "Bricka inlämnad",
+  "markReturned": "Markera inlämnad",
+  "markNotReturned": "Ångra inlämning"
 }

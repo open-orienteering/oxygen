@@ -3,6 +3,7 @@ import { router, publicProcedure } from "../trpc.js";
 import { getCompetitionClient, ensureReadoutTable, incrementCounter } from "../db.js";
 import { RunnerStatus } from "@oxygen/shared";
 import type { PrismaClient } from "@prisma/client";
+import { pushToGoogleSheet } from "../sheetsBackup.js";
 
 /** Special punch type codes in MeOS */
 export const PUNCH_START = 1;
@@ -238,6 +239,8 @@ export async function performReadout(client: PrismaClient, runnerId: number) {
       classId: runner.Class,
       dbStatus: runner.Status,
     },
+    isRentalCard: runner.CardFee > 0,
+    cardReturned: runner.oos_card_returned === 1,
     course: course
       ? {
         id: course.Id,
@@ -506,6 +509,44 @@ export const cardReadoutRouter = router({
         console.warn("[cardReadout] Failed to save readout history");
       }
 
+      // ── Fire-and-forget Google Sheets backup ────────────────
+      {
+        const runner = await client.oRunner.findFirst({
+          where: { CardNo: input.cardNo, Removed: false },
+          select: { Name: true, Class: true, Club: true, StartNo: true },
+        });
+        const cls = runner?.Class
+          ? await client.oClass.findUnique({ where: { Id: runner.Class }, select: { Name: true } })
+          : null;
+        const club = runner?.Club
+          ? await client.oClub.findUnique({ where: { Id: runner.Club }, select: { Name: true } })
+          : null;
+
+        const fmtTime = (secs: number) => {
+          const h = Math.floor(secs / 3600);
+          const m = Math.floor((secs % 3600) / 60);
+          const s = secs % 60;
+          return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
+        };
+
+        pushToGoogleSheet(client, {
+          timestamp: new Date().toISOString(),
+          cardNo: input.cardNo,
+          cardType: input.cardType ?? "",
+          runnerName: runner?.Name ?? "",
+          className: cls?.Name ?? "",
+          clubName: club?.Name ?? "",
+          startNo: runner?.StartNo ?? 0,
+          checkTime: input.checkTime ?? null,
+          startTime: input.startTime ?? null,
+          finishTime: input.finishTime ?? null,
+          punchCount: input.punches.length,
+          punches: input.punches.map((p) => `${p.controlCode}:${fmtTime(p.time)}`).join(","),
+          punchesRelevant,
+          batteryVoltage: input.batteryVoltage ?? null,
+        });
+      }
+
       // ── Upsert into oCard (skip if punches are stale) ────
       if (!punchesRelevant) {
         // Stale punches — don't pollute oCard, but still return card info
@@ -642,6 +683,8 @@ export const cardReadoutRouter = router({
         Club: true,
         Class: true,
         Status: true,
+        CardFee: true,
+        oos_card_returned: true,
       },
     });
 
@@ -736,6 +779,8 @@ export const cardReadoutRouter = router({
             clubId: runner.Club,
             className: classMap.get(runner.Class) ?? "",
             status: runner.Status,
+            isRentalCard: runner.CardFee > 0,
+            cardReturned: runner.oos_card_returned === 1,
           }
           : null,
       };
@@ -780,6 +825,8 @@ export const cardReadoutRouter = router({
           Club: true,
           Class: true,
           Status: true,
+          CardFee: true,
+          oos_card_returned: true,
         },
       });
 
@@ -804,6 +851,8 @@ export const cardReadoutRouter = router({
           clubId: runner.Club,
           className: cls?.Name ?? "",
           status: runner.Status,
+          isRentalCard: runner.CardFee > 0,
+          cardReturned: runner.oos_card_returned === 1,
         };
       }
 

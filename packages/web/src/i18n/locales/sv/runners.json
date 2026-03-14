@@ -117,5 +117,9 @@
   "rank": "Placering",
   "scheduled": "Planerad start",
   "started": "Faktisk start",
-  "forest": "Tid i skogen"
+  "forest": "Tid i skogen",
+  "rentalCard": "Hyrbricka",
+  "markReturned": "Markera inlämnad",
+  "markNotReturned": "Ångra inlämning",
+  "cardReturned": "Bricka inlämnad"
 }

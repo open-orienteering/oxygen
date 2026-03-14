@@ -469,7 +469,7 @@ CREATE TABLE `oos_map_files` (
 
 LOCK TABLES `oEvent` WRITE;
 /*!40000 ALTER TABLE `oEvent` DISABLE KEYS */;
-INSERT INTO `oEvent` VALUES (1,'Vinterserien','','2026-03-15',0,'itest_vinterserien',0,0,0,0,0,0,0,'','','','','',0,0,0,0,0,0,'','','','','','','2026-02-14 10:27:10',0,0,0,0,0,'','','','','',0,57513,0,'','','2026-02-14T11:27:09.781Z',0,0,'','',0,'',0,0,0,0,'',0,0,'','','','',0,'','','',0);
+INSERT INTO `oEvent` VALUES (1,'Multi-Race Series','','2026-03-15',0,'itest_multirace',0,0,0,0,0,0,0,'','','','','',0,0,0,0,0,0,'','','','','','','2026-02-14 10:27:10',0,0,0,0,0,'','','','','',0,57513,0,'','','2026-02-14T11:27:09.781Z',0,0,'','',0,'',0,0,0,0,'',0,0,'','','','',0,'','','',0);
 /*!40000 ALTER TABLE `oEvent` ENABLE KEYS */;
 UNLOCK TABLES;
 /*!40103 SET TIME_ZONE=@OLD_TIME_ZONE */;

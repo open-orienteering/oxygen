@@ -58,10 +58,13 @@ function BatteryCell({ voltage, cardType }: { voltage: number | null; cardType: 
 
 // ─── Main Page ──────────────────────────────────────────────
 
+type RentalFilter = "all" | "unreturned" | "rental-all";
+
 export function CardsPage() {
   const { t } = useTranslation("devices");
   const [search, setSearch] = useSearchParam("search");
   const [expandedCard, setExpandedCard] = useNumericSearchParam("card");
+  const [rentalFilter, setRentalFilter] = useState<RentalFilter>("all");
 
   const cards = trpc.cardReadout.cardList.useQuery();
 
@@ -91,22 +94,39 @@ export function CardsPage() {
     comparators,
   );
 
-  // Filter by search
+  const unreturnedCount = useMemo(
+    () => (cards.data ?? []).filter((c) => c.runner?.isRentalCard && !c.runner?.cardReturned).length,
+    [cards.data],
+  );
+
+  // Filter by search + rental filter
   const filtered = useMemo(() => {
-    if (!search) return sorted;
+    let base = sorted;
+    if (rentalFilter === "unreturned") {
+      base = base.filter((c) => c.runner?.isRentalCard && !c.runner?.cardReturned);
+    } else if (rentalFilter === "rental-all") {
+      base = base.filter((c) => c.runner?.isRentalCard);
+    }
+    if (!search) return base;
     const term = search.toLowerCase();
-    return sorted.filter(
+    return base.filter(
       (c) =>
         String(c.cardNo).includes(term) ||
         (c.runner?.name ?? "").toLowerCase().includes(term) ||
         (c.runner?.clubName ?? "").toLowerCase().includes(term) ||
         c.cardType.toLowerCase().includes(term),
     );
-  }, [sorted, search]);
+  }, [sorted, search, rentalFilter]);
 
   const handleCardClick = (cardNo: number) => {
     setExpandedCard(expandedCard === cardNo ? undefined : cardNo);
   };
+
+  const rentalFilterOptions: { key: RentalFilter; label: string }[] = [
+    { key: "all", label: t("filterAll") },
+    { key: "unreturned", label: t("filterUnreturned") },
+    { key: "rental-all", label: t("filterRentalAll") },
+  ];
 
   const colCount = 8;
 
@@ -119,9 +139,37 @@ export function CardsPage() {
           <p className="text-sm text-slate-500">
             {t("cardsCount", { count: cards.data?.length ?? 0 })} ·{" "}
             {t("linkedToRunners", { count: cards.data?.filter((c) => c.runner).length ?? 0 })}
+            {unreturnedCount > 0 && (
+              <span className="ml-2 inline-flex items-center px-1.5 py-0.5 rounded-full text-xs font-semibold bg-amber-100 text-amber-700">
+                {t("unreturnedCount", { count: unreturnedCount })}
+              </span>
+            )}
           </p>
         </div>
         <div className="flex items-center gap-3">
+          {/* Rental filter pills */}
+          <div className="flex items-center rounded-lg border border-slate-200 bg-white overflow-hidden text-xs font-medium">
+            {rentalFilterOptions.map((opt) => (
+              <button
+                key={opt.key}
+                onClick={() => setRentalFilter(opt.key)}
+                className={`px-3 py-1.5 transition-colors cursor-pointer ${
+                  rentalFilter === opt.key
+                    ? "bg-amber-600 text-white"
+                    : "text-slate-600 hover:bg-slate-50"
+                }`}
+              >
+                {opt.label}
+                {opt.key === "unreturned" && unreturnedCount > 0 && (
+                  <span className={`ml-1.5 px-1 py-0.5 rounded-full text-[10px] font-bold ${
+                    rentalFilter === "unreturned" ? "bg-white/30 text-white" : "bg-amber-100 text-amber-700"
+                  }`}>
+                    {unreturnedCount}
+                  </span>
+                )}
+              </button>
+            ))}
+          </div>
           <input
             type="text"
             placeholder={t("searchCards")}
@@ -189,6 +237,18 @@ export function CardsPage() {
                           {card.runner.status > 0 && (
                             <StatusBadge status={card.runner.status as any} />
                           )}
+                          {card.runner.isRentalCard && (
+                            <span
+                              title={card.runner.cardReturned ? t("returned") : t("notReturned")}
+                              className={`inline-flex items-center text-xs font-semibold px-1.5 py-0.5 rounded ${
+                                card.runner.cardReturned
+                                  ? "bg-emerald-50 text-emerald-600 border border-emerald-200"
+                                  : "bg-amber-50 text-amber-600 border border-amber-200"
+                              }`}
+                            >
+                              {card.runner.cardReturned ? "✓" : "!"}
+                            </span>
+                          )}
                         </div>
                       ) : (
                         <span className="text-amber-600 text-xs font-medium">
@@ -230,7 +290,7 @@ export function CardsPage() {
                   {expandedCard === card.cardNo && (
                     <tr key={`${card.cardNo}-detail`}>
                       <td colSpan={colCount} className="p-0">
-                        <CardDetailPanel cardNo={card.cardNo} />
+                        <CardDetailPanel cardNo={card.cardNo} onReturnToggled={() => cards.refetch()} />
                       </td>
                     </tr>
                   )}
@@ -337,10 +397,17 @@ function BatteryDetailBlock({ voltage, metadata }: BatteryDetailProps) {
 
 // ─── Card Detail Panel ──────────────────────────────────────
 
-function CardDetailPanel({ cardNo }: { cardNo: number }) {
+function CardDetailPanel({ cardNo, onReturnToggled }: { cardNo: number; onReturnToggled?: () => void }) {
   const { t } = useTranslation("devices");
   const detail = trpc.cardReadout.cardDetail.useQuery({ cardNo });
   const history = trpc.cardReadout.readoutHistory.useQuery({ cardNo });
+
+  const setCardReturned = trpc.runner.setCardReturned.useMutation({
+    onSuccess: () => {
+      detail.refetch();
+      onReturnToggled?.();
+    },
+  });
 
   if (detail.isLoading) {
     return (
@@ -450,6 +517,44 @@ function CardDetailPanel({ cardNo }: { cardNo: number }) {
           )}
         </div>
       </div>
+
+      {/* Rental card section */}
+      {d.runner?.isRentalCard && (
+        <div className={`rounded-xl px-5 py-4 flex items-center justify-between gap-4 border-2 ${
+          d.runner.cardReturned
+            ? "bg-emerald-50 border-emerald-200"
+            : "bg-amber-50 border-amber-300"
+        }`}>
+          <div className="flex items-center gap-3">
+            <svg className={`w-5 h-5 shrink-0 ${d.runner.cardReturned ? "text-emerald-600" : "text-amber-600"}`} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M7 7h.01M7 3h5c.512 0 1.024.195 1.414.586l7 7a2 2 0 010 2.828l-7 7a2 2 0 01-2.828 0l-7-7A1.994 1.994 0 013 12V7a4 4 0 014-4z" />
+            </svg>
+            <div>
+              <span className={`text-sm font-semibold ${d.runner.cardReturned ? "text-emerald-700" : "text-amber-800"}`}>
+                {t("rentalCard")}
+              </span>
+              <span className={`ml-2 text-xs px-2 py-0.5 rounded-full font-medium ${
+                d.runner.cardReturned
+                  ? "bg-emerald-100 text-emerald-700"
+                  : "bg-amber-100 text-amber-700"
+              }`}>
+                {d.runner.cardReturned ? t("returned") : t("notReturned")}
+              </span>
+            </div>
+          </div>
+          <button
+            onClick={() => setCardReturned.mutate({ runnerId: d.runner!.id, returned: !d.runner!.cardReturned })}
+            disabled={setCardReturned.isPending}
+            className={`shrink-0 px-4 py-1.5 rounded-lg text-sm font-medium transition-colors cursor-pointer disabled:opacity-50 ${
+              d.runner.cardReturned
+                ? "bg-slate-100 text-slate-700 hover:bg-slate-200"
+                : "bg-amber-600 text-white hover:bg-amber-700"
+            }`}
+          >
+            {d.runner.cardReturned ? t("markNotReturned") : t("markReturned")}
+          </button>
+        </div>
+      )}
 
       {/* Battery & Card Info (SIAC only) */}
       {isSIAC && (

@@ -51,6 +51,10 @@ export function RunnerInlineDetail({ runnerId, colSpan }: Props) {
     onSuccess: invalidateAll,
   });
 
+  const setCardReturnedMutation = trpc.runner.setCardReturned.useMutation({
+    onSuccess: invalidateAll,
+  });
+
   const addPunchMutation = trpc.cardReadout.addPunch.useMutation({
     onSuccess: invalidateAll,
   });
@@ -243,6 +247,38 @@ export function RunnerInlineDetail({ runnerId, colSpan }: Props) {
                   <ReadonlyField label={t("paymentMethod")} value={payModeLabel(r.payMode, t as (key: string) => string)} />
                 )}
               </>
+            )}
+            {r.cardFee > 0 && (
+              <div className="flex items-center justify-between py-1.5 border-b border-blue-100">
+                <span className="text-xs text-slate-500 font-medium">{t("rentalCard")}</span>
+                <div className="flex items-center gap-2">
+                  <span className="text-xs font-semibold text-orange-600 bg-orange-50 border border-orange-200 rounded px-2 py-0.5">
+                    {r.cardFee} kr
+                  </span>
+                  {r.cardReturned ? (
+                    <span className="inline-flex items-center gap-1 text-xs text-emerald-700 bg-emerald-50 border border-emerald-200 rounded px-2 py-0.5 font-medium">
+                      ✓ {t("cardReturned")}
+                    </span>
+                  ) : (
+                    <span className="inline-flex items-center gap-1 text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded px-2 py-0.5 font-medium">
+                      ⚠ {t("rentalCard")}
+                    </span>
+                  )}
+                  <button
+                    type="button"
+                    onClick={() => setCardReturnedMutation.mutate({ runnerId, returned: !r.cardReturned })}
+                    disabled={setCardReturnedMutation.isPending}
+                    data-testid={r.cardReturned ? "undo-card-returned" : "mark-card-returned"}
+                    className={`text-xs px-2 py-0.5 rounded border cursor-pointer transition-colors ${
+                      r.cardReturned
+                        ? "border-slate-300 text-slate-500 hover:bg-slate-50"
+                        : "border-emerald-400 text-emerald-700 bg-emerald-50 hover:bg-emerald-100"
+                    }`}
+                  >
+                    {r.cardReturned ? t("markNotReturned") : t("markReturned")}
+                  </button>
+                </div>
+              </div>
             )}
           </div>
 

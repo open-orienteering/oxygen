@@ -27,5 +27,6 @@
   "date": "Datum",
   "participant": "Deltagare",
   "entryFeeSubtitle": "ANMÄLNINGSAVGIFT",
-  "paymentMethod": "Betalsätt:"
+  "paymentMethod": "Betalsätt:",
+  "rentalCardFee": "Hyrbricka"
 }

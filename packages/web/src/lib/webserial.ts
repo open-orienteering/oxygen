@@ -20,6 +20,7 @@ import {
   isReadoutResponse,
   isLargeCardType,
   CMD,
+  ACK,
   SYSVAL,
   STATION_MODE,
   supportsFullReadout,
@@ -179,6 +180,55 @@ export class SIReaderConnection extends EventTarget {
       this._inRemoteMode = false;
     } catch {
       // Non-fatal — station may not be ready yet
+    }
+
+    // Validate and fix station protocol + feedback settings.
+    // Required: extended protocol ON, handshake ON (for ACK-triggered beep),
+    // optical + acoustic feedback ON.
+    try {
+      await this.ensureStationConfig();
+    } catch {
+      // Non-fatal — station may not support SYS_VAL reads (old firmware)
+    }
+  }
+
+  /**
+   * Read station PROTO and FEEDBACK config; fix bits if needed.
+   * - PROTO (0x74): bit0=extended, bit1=autosend, bit2=handshake
+   *   We need: extended=1, handshake=1, autosend=0
+   * - FEEDBACK (0x73): bit0=optical, bit1=acoustic, bits6-7=station code high
+   *   We need: optical=1, acoustic=1 (preserve bits 2-7)
+   */
+  private async ensureStationConfig(): Promise<void> {
+    const resp = await this.sendAndWait(
+      buildGetSysVal(),
+      CMD.GET_SYSTEM_VALUE,
+      3000,
+    );
+    // Response: [0x00, station_id, echoed_offset, ...128 bytes SYS_VAL]
+    const P = 3; // data payload offset
+
+    const proto = resp.data[P + SYSVAL.PROTO];
+    const feedback = resp.data[P + SYSVAL.FEEDBACK];
+
+    // PROTO: ensure extended(bit0)=1, handshake(bit2)=1
+    const wantProto = (proto | 0x05) & ~0x02; // set ext+handshake, clear autosend
+    if (wantProto !== proto) {
+      console.log(`[SI] Fixing PROTO: 0x${proto.toString(16)} → 0x${wantProto.toString(16)}`);
+      await this.sendAndWait(
+        buildSetSysVal(SYSVAL.PROTO, wantProto),
+        CMD.SET_SYSTEM_VALUE,
+      );
+    }
+
+    // FEEDBACK: ensure optical(bit0)=1, acoustic(bit1)=1, preserve upper bits
+    const wantFeedback = feedback | 0x03;
+    if (wantFeedback !== feedback) {
+      console.log(`[SI] Fixing FEEDBACK: 0x${feedback.toString(16)} → 0x${wantFeedback.toString(16)}`);
+      await this.sendAndWait(
+        buildSetSysVal(SYSVAL.FEEDBACK, wantFeedback),
+        CMD.SET_SYSTEM_VALUE,
+      );
     }
   }
 
@@ -494,6 +544,9 @@ export class SIReaderConnection extends EventTarget {
         );
       }
 
+      // Send ACK to station — triggers built-in feedback (beep + LED blink)
+      this.write(new Uint8Array([ACK])).catch(() => {});
+
       this.dispatchEvent(
         new CustomEvent("si:card-readout", { detail: readout }),
       );
@@ -583,21 +636,31 @@ export class SIReaderConnection extends EventTarget {
 
   /**
    * Wake a sleeping field control by sending probe commands through the
-   * coupling coil. Each attempt activates the coil which gradually wakes
-   * the control. Returns the SYS_VAL response once the control responds.
+   * coupling coil. Re-sends SET_MS + GET_SYS_VAL on each attempt so the
+   * BSM8 re-enters remote mode after timeouts. The control typically
+   * responds after 3-6 attempts.
    */
   private async wakeAndReadSysVal(): Promise<SIParsedFrame> {
-    await this.sendAndWait(buildSetRemoteMode(), CMD.SET_MS);
-    this._inRemoteMode = true;
-    // Use short timeouts with many retries to mimic the polling pattern
-    // that successfully wakes sleeping controls. Each attempt activates the
-    // coupling coil; the control typically responds after 3-6 attempts.
-    return this.sendAndWaitRetry(
-      buildGetSysVal(),
-      CMD.GET_SYSTEM_VALUE,
-      2000,
-      8,
-    );
+    const maxAttempts = 10;
+    for (let attempt = 0; attempt < maxAttempts; attempt++) {
+      try {
+        if (attempt > 0) {
+          const delayMs = Math.min(attempt * 400, 1500);
+          console.log(`[SI] Wake attempt ${attempt + 1}/${maxAttempts}`);
+          await new Promise((r) => setTimeout(r, delayMs));
+        }
+        await this.sendAndWait(buildSetRemoteMode(), CMD.SET_MS, 1500);
+        this._inRemoteMode = true;
+        return await this.sendAndWait(
+          buildGetSysVal(),
+          CMD.GET_SYSTEM_VALUE,
+          2000,
+        );
+      } catch (err) {
+        if (attempt === maxAttempts - 1) throw err;
+      }
+    }
+    throw new Error("Unreachable");
   }
 
   /**
@@ -626,14 +689,14 @@ export class SIReaderConnection extends EventTarget {
    */
   async probeConnectedStation(): Promise<(StationInfo & { rawData: Uint8Array }) | null> {
     try {
-      // Switch to remote mode
-      await this.sendAndWait(buildSetRemoteMode(), CMD.SET_MS, 1500);
+      // Re-enter remote mode each time (BSM8 may drop out after timeouts)
+      await this.sendAndWait(buildSetRemoteMode(), CMD.SET_MS, 1000);
       this._inRemoteMode = true;
-      // Single attempt with short timeout — no retries
+      // Each attempt activates the coupling coil, which helps wake sleeping controls
       const response = await this.sendAndWait(
         buildGetSysVal(),
         CMD.GET_SYSTEM_VALUE,
-        1500,
+        800,
       );
       const info = parseStationInfo(response.data);
       if (!info) return null;
@@ -656,6 +719,7 @@ export class SIReaderConnection extends EventTarget {
     enableAirPlus: boolean;
     awakeHours?: number;
     beep?: boolean;
+    stationMode?: number;
   }, preReadData?: Uint8Array): Promise<{ batteryVoltage: number; stationInfo: StationInfo; timeDriftMs: number | null }> {
     let currentFeedback: number;
     let stationInfo: StationInfo;
@@ -690,8 +754,8 @@ export class SIReaderConnection extends EventTarget {
     );
     lap("SET_SYS_VAL(PROGRAM=competition)");
 
-    // 1. Set operating mode (CONTROL or BC_CONTROL for AIR+)
-    const mode = config.enableAirPlus ? STATION_MODE.BC_CONTROL : STATION_MODE.CONTROL;
+    // 1. Set operating mode — use explicit stationMode if provided, otherwise default to CONTROL/BC_CONTROL
+    const mode = config.stationMode ?? (config.enableAirPlus ? STATION_MODE.BC_CONTROL : STATION_MODE.CONTROL);
     await this.sendAndWait(
       buildSetSysVal(SYSVAL.MODE, mode),
       CMD.SET_SYSTEM_VALUE,
@@ -747,7 +811,7 @@ export class SIReaderConnection extends EventTarget {
 
     // 7. Beep to confirm (fire-and-forget)
     if (config.beep !== false) {
-      await this.write(buildBeep(2));
+      await this.write(buildBeep(1));
     }
     lap("done");
 

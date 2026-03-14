@@ -98,6 +98,8 @@
   "drift": "Drift",
   "bat": "Bat",
   "controlNotInCompetition": "Control #{{code}} not in this competition",
+  "targetControl": "Target",
+  "targetAuto": "Auto (keep current)",
   "autoModeActiveProgramming": "Auto mode active — insert controls into the coupling stick to program them automatically.",
   "manualModeProgramming": "Insert a control into the coupling stick and press \"Read & Program\".",
   "postCompReadout": "Post-Competition Readout",

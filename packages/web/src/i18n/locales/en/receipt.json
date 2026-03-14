@@ -27,5 +27,6 @@
   "date": "Date",
   "participant": "Participant",
   "entryFeeSubtitle": "ENTRY FEE",
-  "paymentMethod": "Payment method:"
+  "paymentMethod": "Payment method:",
+  "rentalCardFee": "Rental card"
 }

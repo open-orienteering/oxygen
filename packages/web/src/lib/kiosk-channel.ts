@@ -32,6 +32,8 @@ export interface KioskCardReadoutMessage {
     startTime?: number | null;
     finishTime?: number | null;
     clearTime?: number | null;
+    /** True if the runner is using a rental card (CardFee > 0) */
+    isRentalCard?: boolean;
   };
 }
 
@@ -50,6 +52,8 @@ export interface RegistrationFormState {
   swishNumber?: string;
   clubEventorId?: number;
   competitionName?: string;
+  isRentalCard?: boolean;
+  cardFee?: number;
 }
 
 export interface KioskRegistrationStateMessage {
@@ -89,6 +93,12 @@ export interface KioskPingMessage {
   from: "admin" | "kiosk";
 }
 
+/** Sent by the kiosk tab to request the admin tab print a finish receipt. */
+export interface KioskPrintReceiptMessage {
+  type: "kiosk-print-receipt";
+  runnerId: number;
+}
+
 export type KioskMessage =
   | KioskCardReadoutMessage
   | KioskCardReadingMessage
@@ -96,7 +106,8 @@ export type KioskMessage =
   | KioskRegistrationCompleteMessage
   | KioskResetMessage
   | KioskCardRemovedMessage
-  | KioskPingMessage;
+  | KioskPingMessage
+  | KioskPrintReceiptMessage;
 
 // ─── Channel wrapper ────────────────────────────────────────
 
@@ -171,6 +182,7 @@ export function recentCardToKioskMessage(
       clubName: card.clubName,
       status: card.status,
       runningTime: card.runningTime,
+      isRentalCard: card.isRentalCard,
       ownerData: card.ownerData,
       checkTime: card.readout?.checkTime,
       startTime: card.readout?.startTime,

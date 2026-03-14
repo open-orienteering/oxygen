@@ -8,7 +8,9 @@ import {
   getRemoteConnection,
   getSetting,
   ensureCompetitionConfigTable,
+  incrementCounter,
 } from "../db.js";
+import { clearSheetsCache, testGoogleSheetPush } from "../sheetsBackup.js";
 import type {
   CompetitionInfo,
   CompetitionDashboard,
@@ -64,6 +66,9 @@ export const competitionRouter = router({
     .input(z.object({ nameId: z.string().min(1) }))
     .mutation(async ({ input }) => {
       const client = await getCompetitionClient(input.nameId);
+      // Run all Oxygen-specific migrations eagerly so every route can rely on
+      // these columns being present without needing to call ensureCompetitionConfigTable.
+      await ensureCompetitionConfigTable(client);
       // Verify the database is accessible by reading the event
       const event = await client.oEvent.findFirst({
         where: { Removed: false },
@@ -693,6 +698,60 @@ export const competitionRouter = router({
           `UPDATE oxygen_competition_config SET ${setClauses.join(", ")} WHERE id = 1`,
         );
       }
+      return { ok: true };
+    }),
+
+  // ── Google Sheets backup config ──────────────────────────
+
+  getGoogleSheetsConfig: publicProcedure.query(async () => {
+    const client = await getCompetitionClient();
+    await ensureCompetitionConfigTable(client);
+    const rows = await client.$queryRawUnsafe<
+      Array<{ google_sheets_webhook_url: string }>
+    >(
+      "SELECT google_sheets_webhook_url FROM oxygen_competition_config WHERE id = 1",
+    );
+    return { webhookUrl: rows[0]?.google_sheets_webhook_url ?? "" };
+  }),
+
+  setGoogleSheetsConfig: publicProcedure
+    .input(z.object({ webhookUrl: z.string() }))
+    .mutation(async ({ input }) => {
+      const client = await getCompetitionClient();
+      await ensureCompetitionConfigTable(client);
+      await client.$executeRawUnsafe(
+        `UPDATE oxygen_competition_config SET google_sheets_webhook_url = ? WHERE id = 1`,
+        input.webhookUrl,
+      );
+      clearSheetsCache();
+      return { ok: true };
+    }),
+
+  testGoogleSheetsWebhook: publicProcedure
+    .input(z.object({ webhookUrl: z.string().url() }))
+    .mutation(async ({ input }) => {
+      return testGoogleSheetPush(input.webhookUrl);
+    }),
+
+  // ── Rental card fee (stored in oEvent.CardFee — MeOS compatible) ──
+
+  getCardFee: publicProcedure.query(async () => {
+    const client = await getCompetitionClient();
+    const event = await client.oEvent.findFirst({ where: { Removed: false } });
+    return { cardFee: event?.CardFee ?? 0 };
+  }),
+
+  setCardFee: publicProcedure
+    .input(z.object({ cardFee: z.number().int().min(0) }))
+    .mutation(async ({ input }) => {
+      const client = await getCompetitionClient();
+      const event = await client.oEvent.findFirst({ where: { Removed: false } });
+      if (!event) throw new Error("No active competition");
+      await client.oEvent.update({
+        where: { Id: event.Id },
+        data: { CardFee: input.cardFee },
+      });
+      await incrementCounter("oEvent", event.Id);
       return { ok: true };
     }),
 });

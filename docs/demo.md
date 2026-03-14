@@ -35,7 +35,7 @@ You'll see a sample competition ready to explore. Try:
 **To load a different seed dataset:**
 
 ```bash
-docker compose exec -T mysql mysql -u meos itest < e2e/seed-vinterserien.sql
+docker compose exec -T mysql mysql -u meos itest < e2e/seed-multirace.sql
 ```
 
 ---

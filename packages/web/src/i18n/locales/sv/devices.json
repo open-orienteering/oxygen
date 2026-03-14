@@ -69,5 +69,16 @@
   "producedLabel": "Tillverkad: {{date}}",
   "hwLabel": "HW: {{version}}",
   "swLabel": "SW: {{version}}",
-  "clearsLabel": "Rensningar: {{count}}"
+  "clearsLabel": "Rensningar: {{count}}",
+  "rentalCard": "Hyrbricka",
+  "rentalCards": "Hyrbrickor",
+  "notReturned": "Ej inlämnad",
+  "returned": "Inlämnad",
+  "filterAll": "Alla",
+  "filterUnreturned": "Ej inlämnade",
+  "filterRentalAll": "Alla hyrbrickor",
+  "markReturned": "Markera inlämnad",
+  "markNotReturned": "Ångra inlämning",
+  "rentalStatus": "Hyrstatus",
+  "unreturnedCount": "{{count}} ej inlämnade"
 }

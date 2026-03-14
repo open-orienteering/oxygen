@@ -57,5 +57,8 @@
   "proceedToStart": "Please proceed to the start area. Good luck!",
   "positionInClass": "{{rank}} of {{total}} in class",
   "courseMap": "Course Map",
-  "classResults": "Class Results"
+  "classResults": "Class Results",
+  "returnRentalCard": "Return your SI card",
+  "returnRentalCardHint": "This is a rental card — please hand it back to the organizer",
+  "rentalCardFee": "Rental card: {{fee}} kr"
 }

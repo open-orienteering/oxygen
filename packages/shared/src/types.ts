@@ -275,6 +275,8 @@ export interface RunnerInfo {
   fee?: number;
   paid?: number;
   payMode?: number;
+  cardFee?: number;
+  cardReturned?: boolean;
   birthYear?: number;
   sex?: string;
   bib?: string;
@@ -305,6 +307,8 @@ export interface RunnerDetail {
   fee: number;
   paid: number;
   payMode: number;
+  cardFee: number;
+  cardReturned: boolean;
   bib: string;
   entryDate: number; // YYYYMMDD as int
 }
@@ -390,6 +394,7 @@ export const ControlStatus = {
   BadNoTiming: 9,
   RogainingRequired: 10,
   Check: 11,
+  Clear: 12,
 } as const;
 
 export type ControlStatusValue =
@@ -409,6 +414,7 @@ export function controlStatusKey(status: ControlStatusValue): string {
     case ControlStatus.BadNoTiming: return "badNoTiming";
     case ControlStatus.RogainingRequired: return "rogainingRequired";
     case ControlStatus.Check: return "check";
+    case ControlStatus.Clear: return "clear";
     default: return "unknown";
   }
 }
@@ -437,6 +443,8 @@ export function controlStatusLabel(status: ControlStatusValue): string {
       return "Rogaining Required";
     case ControlStatus.Check:
       return "Check";
+    case ControlStatus.Clear:
+      return "Clear";
     default:
       return "Unknown";
   }
@@ -466,6 +474,8 @@ export function controlStatusDescription(status: ControlStatusValue): string {
       return "Required rogaining control";
     case ControlStatus.Check:
       return "Check control (pre-start)";
+    case ControlStatus.Clear:
+      return "Clear station (erases SI cards)";
     default:
       return "";
   }
@@ -485,6 +495,7 @@ export const CONTROL_STATUS_OPTIONS: {
     { value: ControlStatus.Start, label: "Start", description: "Start control" },
     { value: ControlStatus.Finish, label: "Finish", description: "Finish control" },
     { value: ControlStatus.Check, label: "Check", description: "Check control (pre-start)" },
+    { value: ControlStatus.Clear, label: "Clear", description: "Clear station (erases SI cards)" },
   ];
 
 /** Radio type for control configuration */

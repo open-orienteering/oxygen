@@ -18,7 +18,7 @@ The builders replace that with readable TypeScript using the Prisma client.
 |---------|--------|-------------|
 | `build-itest.ts` | `e2e/seed.sql` | "My example tävling" (`itest`) — main test competition |
 
-> The `seed-vinterserien.sql` and `seed-test-competition.sql` files are still raw dumps. Add builders for them following the same pattern when they need updating.
+> The `seed-multirace.sql` and `seed-test-competition.sql` files are still raw dumps. Add builders for them following the same pattern when they need updating.
 
 ## Usage
 

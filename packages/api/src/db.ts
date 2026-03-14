@@ -26,6 +26,11 @@ let remoteConnectionCache: Map<string, DbConnectionInfo> | null = null;
 const competitionSwitchListeners: (() => void)[] = [];
 export function onCompetitionSwitch(cb: () => void) { competitionSwitchListeners.push(cb); }
 
+// Listeners called when a new map is uploaded (to invalidate caches)
+const mapUploadListeners: (() => void)[] = [];
+export function onMapUpload(cb: () => void) { mapUploadListeners.push(cb); }
+export function fireMapUpload() { for (const cb of mapUploadListeners) cb(); }
+
 // oMonitor heartbeat state (registers Oxygen as a connected client in MeOS)
 let monitorId: number | null = null;
 let monitorInterval: ReturnType<typeof setInterval> | null = null;
@@ -452,10 +457,12 @@ export async function createCompetitionDatabase(
     await storeRemoteConnection(dbName, remote);
   }
 
-  // 4. Also insert the oEvent record inside the competition database itself
+  // 4. Also insert the oEvent record inside the competition database itself.
+  //    The Id must match MeOSMain.oEvent.Id so MeOS can find it.
   const client = await getCompetitionClient(dbName);
   await client.oEvent.create({
     data: {
+      Id: eventId,
       Name: eventName,
       Date: eventDate,
       NameId: dbName,
@@ -465,7 +472,6 @@ export async function createCompetitionDatabase(
       Homepage: "",
       Lists: "",
       Machine: "",
-      // Default features for a typical individual competition (MeOS format)
       Features: "SL+BB+CL+CC+RF+NW+TA+RD",
       SPExtra: "",
       IVExtra: "",
@@ -493,21 +499,23 @@ export async function createCompetitionDatabase(
       Nation VARCHAR(3) NOT NULL DEFAULT '',
       Sex VARCHAR(1) NOT NULL DEFAULT '',
       BirthYear INT NOT NULL DEFAULT 0,
-      ExtId BIGINT NOT NULL DEFAULT 0
+      ExtId BIGINT NOT NULL DEFAULT 0,
+      Modified timestamp NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
     ) ENGINE=InnoDB CHARACTER SET utf8 COLLATE utf8_general_ci
   `);
   await client.$executeRawUnsafe(`
     CREATE TABLE IF NOT EXISTS dbClub (
       Id INT NOT NULL,
-      Name VARCHAR(64) NOT NULL DEFAULT ''
+      Name VARCHAR(64) NOT NULL DEFAULT '',
+      Modified timestamp NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
     ) ENGINE=InnoDB CHARACTER SET utf8 COLLATE utf8_general_ci
   `);
   await client.$executeRawUnsafe(`
     CREATE TABLE IF NOT EXISTS oImage (
-      Id BIGINT UNSIGNED,
+      Id BIGINT UNSIGNED DEFAULT NULL,
       Filename TEXT,
       Image LONGBLOB
-    ) ENGINE=InnoDB CHARACTER SET utf8 COLLATE utf8_general_ci
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb3
   `);
 
   return { dbName, eventId };
@@ -898,6 +906,24 @@ export async function ensureCompetitionConfigTable(
     }
   }
 
+  // Migration: add Google Sheets backup webhook URL
+  try {
+    await client.$executeRawUnsafe(
+      `ALTER TABLE oxygen_competition_config ADD COLUMN google_sheets_webhook_url VARCHAR(500) NOT NULL DEFAULT ''`,
+    );
+  } catch {
+    // Column already exists — ignore
+  }
+
+  // Migration: add Oxygen-only rental card return tracking column
+  try {
+    await client.$executeRawUnsafe(
+      `ALTER TABLE oRunner ADD COLUMN oos_card_returned TINYINT(1) NOT NULL DEFAULT 0`,
+    );
+  } catch {
+    // Column already exists — ignore
+  }
+
   // Ensure oRunner has a CardNo index for fast lookups and duplicate checks
   try {
     await client.$executeRawUnsafe(
@@ -905,6 +931,17 @@ export async function ensureCompetitionConfigTable(
     );
   } catch {
     // Index already exists — ignore
+  }
+
+  // Migration: add Modified column to dbRunner/dbClub for MeOS 4.x SYNCREAD compatibility
+  for (const table of [`dbRunner`, `dbClub`]) {
+    try {
+      await client.$executeRawUnsafe(
+        `ALTER TABLE \`${table}\` ADD COLUMN Modified timestamp NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP`,
+      );
+    } catch {
+      // Column already exists — ignore
+    }
   }
 
   competitionConfigTableReady.add(db);
