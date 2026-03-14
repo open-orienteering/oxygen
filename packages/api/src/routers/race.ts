@@ -253,15 +253,27 @@ export const raceRouter = router({
       }
 
       // ── SIAC battery info ─────────────────────────────────────
+      // Determine SIAC status from card number ranges (same logic as getCardType
+      // in si-protocol.ts). This is more reliable than the stored CardType string,
+      // which may be empty for cards read before CardType tracking was added.
+      const cardNo = result.runner.cardNo;
+      const isSIACCard =
+        (cardNo >= 8000001 && cardNo <= 8999999) ||
+        (cardNo >= 9000001 && cardNo <= 9999999) ||
+        (cardNo >= 14000001 && cardNo <= 16999999);
+
       let siac: { voltage: number | null; batteryDate: string | null; batteryOk: boolean } | null = null;
-      if (result.runner.cardNo > 0) {
+      if (isSIACCard) {
+        // Default to a SIAC entry with unknown battery (shows section on receipt).
+        // Enriched below from readout history or oCard fallback.
+        siac = { voltage: null, batteryDate: null, batteryOk: false };
         try {
           const rows = await client.$queryRawUnsafe<
             Array<{ Voltage: number; Metadata: string | null }>
           >(
             `SELECT Voltage, Metadata FROM oxygen_card_readouts
              WHERE CardNo = ? ORDER BY ReadAt DESC LIMIT 1`,
-            result.runner.cardNo,
+            cardNo,
           );
           if (rows.length > 0) {
             const voltage = rows[0].Voltage > 0 ? rows[0].Voltage / 100 : null;
@@ -271,9 +283,23 @@ export const raceRouter = router({
               batteryDate: meta?.batteryDate ?? null,
               batteryOk: voltage != null && voltage >= 2.5,
             };
+          } else {
+            // No readout history — fall back to oCard.Voltage (raw ADC byte stored by MeOS)
+            const oCard = await client.oCard.findFirst({
+              where: { CardNo: cardNo, Removed: false },
+              select: { Voltage: true },
+            });
+            if (oCard && oCard.Voltage > 0) {
+              const voltage = 1.9 + oCard.Voltage * 0.09;
+              siac = {
+                voltage: voltage <= 5.0 ? voltage : null,
+                batteryDate: null,
+                batteryOk: voltage >= 2.5 && voltage <= 5.0,
+              };
+            }
           }
         } catch {
-          // oxygen_card_readouts table may not exist yet
+          // oxygen_card_readouts table may not exist yet — siac remains non-null with nulls
         }
       }
 

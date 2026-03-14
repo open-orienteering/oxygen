@@ -51,6 +51,7 @@ const DEFAULT_REG_LABELS: Required<RegistrationReceiptLabels> = {
   participant: "Participant:",
   entryFeeSubtitle: "ENTRY FEE",
   paymentMethod: "Payment method:",
+  rentalCardFee: "Rental card",
 };
 
 // Standard line width for 80mm paper at default font size
@@ -557,7 +558,11 @@ export function buildRegistrationReceipt(data: RegistrationReceiptData): Uint8Ar
   if (kvittoMode && data.payment) {
     b.separator();
     b.lf();
-    b.leftRight(L.entryFee, formatAmountSEK(data.payment.amount));
+    const entryFeeAmount = data.payment.amount - (data.payment.cardFee ?? 0);
+    b.leftRight(L.entryFee, formatAmountSEK(entryFeeAmount));
+    if (data.payment.cardFee) {
+      b.leftRight(L.rentalCardFee, formatAmountSEK(data.payment.cardFee));
+    }
     const vatExempt = data.vatInfo?.exempt ?? true;
     if (vatExempt) {
       b.line(`${L.vat}: 0,00 kr (${L.vatExempt})`);
@@ -583,6 +588,9 @@ export function buildRegistrationReceipt(data: RegistrationReceiptData): Uint8Ar
     b.separator();
     b.leftRight(L.payment, data.payment.method);
     b.leftRight(L.amount, formatAmountSEK(data.payment.amount));
+    if (data.payment.cardFee) {
+      b.leftRight(L.rentalCardFee, formatAmountSEK(data.payment.cardFee));
+    }
   }
 
   if (!kvittoMode) b.separator();

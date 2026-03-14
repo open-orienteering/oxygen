@@ -99,6 +99,9 @@ export function EventPage() {
 
       {/* Receipts & Printing */}
       <ReceiptSettings />
+
+      {/* Google Sheets Backup */}
+      <GoogleSheetsBackup />
     </div>
   );
 }
@@ -697,7 +700,7 @@ function LiveResultsPanel() {
 }
 // ─── Club Sync Panel ────────────────────────────────────────
 
-// ─── Registration Settings ──────────────────────────────────
+// ─── Registration & Payment Settings ────────────────────────
 
 const ALL_PAYMENT_METHODS = [
   { key: "billed", labelKey: "paymentInvoice" },
@@ -723,10 +726,16 @@ function RegistrationPaymentSettings() {
   const updateConfig = trpc.competition.setRegistrationConfig.useMutation({
     onSuccess: () => config.refetch(),
   });
+  const cardFeeQuery = trpc.competition.getCardFee.useQuery();
+  const setCardFee = trpc.competition.setCardFee.useMutation({
+    onSuccess: () => cardFeeQuery.refetch(),
+  });
+  const [cardFeeInput, setCardFeeInput] = useState("");
 
   const [items, setItems] = useState<MethodItem[]>([]);
   const [swishNumber, setSwishNumber] = useState("");
   const initialized = useRef(false);
+  const cardFeeInitialized = useRef(false);
 
   useEffect(() => {
     if (!config.data || initialized.current) return;
@@ -734,6 +743,12 @@ function RegistrationPaymentSettings() {
     setItems(buildOrderedList(config.data.paymentMethods));
     setSwishNumber(config.data.swishNumber);
   }, [config.data]);
+
+  useEffect(() => {
+    if (cardFeeQuery.data === undefined || cardFeeInitialized.current) return;
+    cardFeeInitialized.current = true;
+    setCardFeeInput(String(cardFeeQuery.data.cardFee));
+  }, [cardFeeQuery.data]);
 
   const save = (patch: Parameters<typeof updateConfig.mutate>[0]) => {
     updateConfig.mutate(patch);
@@ -831,6 +846,27 @@ function RegistrationPaymentSettings() {
             </p>
           </div>
         )}
+
+        <div>
+          <label className="block text-xs font-medium text-slate-600 mb-1">
+            {t("rentalCardFee")}
+          </label>
+          <input
+            type="number"
+            min={0}
+            value={cardFeeInput}
+            onChange={(e) => setCardFeeInput(e.target.value)}
+            onBlur={() => {
+              const val = parseInt(cardFeeInput, 10);
+              if (!isNaN(val) && val >= 0) setCardFee.mutate({ cardFee: val });
+            }}
+            data-testid="rental-card-fee-input"
+            className="w-28 px-3 py-1.5 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+          />
+          <p className="text-xs text-slate-400 mt-1">
+            {t("rentalCardFeeHelp")}
+          </p>
+        </div>
       </div>
     </div>
   );
@@ -1023,6 +1059,194 @@ function ClubSyncPanel({ env }: { env?: string }) {
           {t("syncFailed", { message: syncMutation.error.message })}
         </div>
       )}
+    </div>
+  );
+}
+
+// ─── Google Sheets Backup ────────────────────────────────────
+
+const APPS_SCRIPT_TEMPLATE = `function doPost(e) {
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var data = JSON.parse(e.postData.contents);
+  var sheetName = data.sheet || "Readouts";
+  var sheet = ss.getSheetByName(sheetName);
+  if (!sheet) sheet = ss.insertSheet(sheetName);
+
+  if (sheetName === "Registrations") {
+    if (sheet.getLastRow() === 0) {
+      sheet.appendRow(["Timestamp","RunnerId","Name","Class","Club","CardNo",
+        "StartNo","BirthYear","Sex","Nationality","Phone","Fee","Paid","PayMode"]);
+    }
+    sheet.appendRow([data.timestamp, data.runnerId, data.name, data.className,
+      data.clubName, data.cardNo, data.startNo, data.birthYear, data.sex,
+      data.nationality, data.phone, data.fee, data.paid, data.payMode]);
+  } else {
+    if (sheet.getLastRow() === 0) {
+      sheet.appendRow(["Timestamp","CardNo","CardType","Runner","Class","Club",
+        "StartNo","CheckTime","StartTime","FinishTime","PunchCount","Punches",
+        "PunchesRelevant","BatteryVoltage"]);
+    }
+    sheet.appendRow([data.timestamp, data.cardNo, data.cardType, data.runnerName,
+      data.className, data.clubName, data.startNo, data.checkTime, data.startTime,
+      data.finishTime, data.punchCount, data.punches, data.punchesRelevant,
+      data.batteryVoltage]);
+  }
+
+  return ContentService.createTextOutput('{"status":"ok"}')
+    .setMimeType(ContentService.MimeType.JSON);
+}`;
+
+function GoogleSheetsBackup() {
+  const { t } = useTranslation("event");
+  const config = trpc.competition.getGoogleSheetsConfig.useQuery();
+  const setConfig = trpc.competition.setGoogleSheetsConfig.useMutation({
+    onSuccess: () => config.refetch(),
+  });
+  const testWebhook = trpc.competition.testGoogleSheetsWebhook.useMutation();
+
+  const [url, setUrl] = useState("");
+  const [showInstructions, setShowInstructions] = useState(false);
+  const [copyLabel, setCopyLabel] = useState<string | null>(null);
+  const [saveLabel, setSaveLabel] = useState<string | null>(null);
+  const initialized = useRef(false);
+
+  useEffect(() => {
+    if (!config.data || initialized.current) return;
+    initialized.current = true;
+    setUrl(config.data.webhookUrl);
+  }, [config.data]);
+
+  const handleSave = () => {
+    setConfig.mutate({ webhookUrl: url }, {
+      onSuccess: () => {
+        setSaveLabel(t("saved"));
+        setTimeout(() => setSaveLabel(null), 2000);
+      },
+    });
+  };
+
+  const handleTest = () => {
+    if (!url) return;
+    testWebhook.mutate({ webhookUrl: url });
+  };
+
+  const handleCopy = async () => {
+    await navigator.clipboard.writeText(APPS_SCRIPT_TEMPLATE);
+    setCopyLabel(t("copied"));
+    setTimeout(() => setCopyLabel(null), 2000);
+  };
+
+  const isConfigured = !!config.data?.webhookUrl;
+
+  return (
+    <div>
+      <h2 className="text-sm font-semibold text-slate-500 uppercase tracking-wider mb-3">
+        {t("googleSheetsBackup")}
+      </h2>
+      <div className="bg-white rounded-xl border border-slate-200 p-5 space-y-4">
+        <div className="flex items-start gap-3">
+          <div className="w-9 h-9 rounded-lg bg-green-50 flex items-center justify-center flex-shrink-0">
+            <svg className="w-5 h-5 text-green-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 15a4 4 0 004 4h9a5 5 0 10-.1-9.999 5.002 5.002 0 10-9.78 2.096A4.001 4.001 0 003 15z" />
+            </svg>
+          </div>
+          <div className="flex-1">
+            <div className="text-sm font-semibold text-slate-900">
+              {t("googleSheetsBackup")}
+            </div>
+            <div className="text-xs text-slate-500">
+              {t("googleSheetsDescription")}
+            </div>
+          </div>
+          {isConfigured && (
+            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-green-50 text-green-700">
+              <span className="w-1.5 h-1.5 rounded-full bg-green-500" />
+              Active
+            </span>
+          )}
+        </div>
+
+        {/* URL input + buttons */}
+        <div>
+          <label className="block text-xs font-medium text-slate-600 mb-1">
+            {t("webhookUrl")}
+          </label>
+          <div className="flex gap-2">
+            <input
+              type="url"
+              value={url}
+              onChange={(e) => setUrl(e.target.value)}
+              placeholder={t("webhookUrlPlaceholder")}
+              className="flex-1 px-3 py-1.5 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+            />
+            <button
+              onClick={handleSave}
+              disabled={setConfig.isPending}
+              className="px-3 py-1.5 bg-blue-600 text-white text-sm font-medium rounded-lg hover:bg-blue-700 disabled:opacity-50 transition-colors cursor-pointer"
+            >
+              {saveLabel ?? t("save")}
+            </button>
+            <button
+              onClick={handleTest}
+              disabled={!url || testWebhook.isPending}
+              className="px-3 py-1.5 bg-slate-100 text-slate-700 text-sm font-medium rounded-lg hover:bg-slate-200 disabled:opacity-50 transition-colors cursor-pointer"
+            >
+              {testWebhook.isPending ? t("testing") : t("testConnection")}
+            </button>
+          </div>
+        </div>
+
+        {/* Test result */}
+        {testWebhook.isSuccess && testWebhook.data.ok && (
+          <div className="p-3 bg-green-50 rounded-lg border border-green-100 text-xs text-green-700">
+            {t("testSuccess")}
+          </div>
+        )}
+        {testWebhook.isSuccess && !testWebhook.data.ok && (
+          <div className="p-3 bg-red-50 rounded-lg border border-red-100 text-xs text-red-600">
+            {t("testFailed", { message: testWebhook.data.error || `HTTP ${testWebhook.data.status}` })}
+          </div>
+        )}
+        {testWebhook.isError && (
+          <div className="p-3 bg-red-50 rounded-lg border border-red-100 text-xs text-red-600">
+            {t("testFailed", { message: testWebhook.error.message })}
+          </div>
+        )}
+
+        {/* Setup instructions */}
+        <button
+          onClick={() => setShowInstructions(!showInstructions)}
+          className="text-xs text-blue-600 hover:text-blue-700 font-medium cursor-pointer"
+        >
+          {showInstructions ? "▾" : "▸"} {t("setupInstructions")}
+        </button>
+
+        {showInstructions && (
+          <div className="p-4 bg-slate-50 rounded-lg border border-slate-200 space-y-2 text-xs text-slate-600">
+            <p>{t("setupStep1")}</p>
+            <p>{t("setupStep2")}</p>
+            <p>{t("setupStep3")}</p>
+            <p>{t("setupStep4")}</p>
+            <p>{t("setupStep5")}</p>
+            <p>{t("setupStep6")}</p>
+
+            <div className="mt-3">
+              <div className="flex items-center justify-between mb-1">
+                <span className="font-medium text-slate-700">Apps Script:</span>
+                <button
+                  onClick={handleCopy}
+                  className="text-xs text-blue-600 hover:text-blue-700 font-medium cursor-pointer"
+                >
+                  {copyLabel ?? t("copyScript")}
+                </button>
+              </div>
+              <pre className="p-3 bg-white rounded border border-slate-200 text-[11px] text-slate-700 overflow-x-auto whitespace-pre-wrap">
+                {APPS_SCRIPT_TEMPLATE}
+              </pre>
+            </div>
+          </div>
+        )}
+      </div>
     </div>
   );
 }

@@ -4,9 +4,9 @@
  * Tests the critical path: mock-webserial card read → DeviceManager pipeline →
  * runner status updated in DB → correct kiosk readout screen displayed.
  *
- * Uses two pages in the same browser context (BroadcastChannel IPC):
- * - Admin page: mock-webserial connected, processes card reads
- * - Kiosk page: receives readout messages, displays result screens
+ * Two test modes:
+ * - Paired mode: admin page has mock-webserial, kiosk page receives via BroadcastChannel
+ * - Standalone mode: kiosk page has mock-webserial directly (no admin page)
  *
  * IMPORTANT: Uses SI8 card numbers (2000000+) because SI5/SI6 cards only get
  * minimal readout (card number only) from the WebSerial parser — no punch data.
@@ -354,5 +354,210 @@ test.describe("Kiosk Readout Station Flow", () => {
     // applyResult should have been called
     const applyResponse = await applyPromise;
     expect(applyResponse.status()).toBe(200);
+  });
+});
+
+// ─── Standalone mode tests ─────────────────────────────────
+//
+// These tests connect mock-webserial directly to the kiosk page.
+// Standalone mode is injected via localStorage before page load,
+// with autoResetSeconds=5 to avoid waiting 15 s for the default timer.
+//
+// Card numbers 2800020+ are used to avoid collision with paired-mode tests.
+
+test.describe("Standalone mode: re-read after idle", () => {
+  const createdRunnerIds: number[] = [];
+
+  test.beforeAll(async ({ request }) => {
+    // When the API server is reused between test runs (reuseExistingServer: true),
+    // its in-memory `competitionConfigTableReady` set may be stale — it marks 'itest'
+    // as already migrated even after global-setup has DROP+RECREATEd the database.
+    // Switching to a different competition clears all table-ready caches via
+    // getCompetitionClient's cache-clearing logic, so that the subsequent
+    // competition.select("itest") call re-runs ensureCompetitionConfigTable and
+    // adds the oos_card_returned column to the fresh database.
+    await request.post(`${API_BASE}/trpc/competition.select`, { data: { nameId: "itest_multirace" } });
+  });
+
+  test.afterAll(async ({ request }) => {
+    for (const id of createdRunnerIds) {
+      try {
+        await request.post(`${API_BASE}/trpc/runner.delete`, { data: { id } });
+      } catch {
+        // Best-effort cleanup
+      }
+    }
+  });
+
+  /**
+   * Set up a standalone kiosk page:
+   * - mock-webserial injected so __siMock is available
+   * - localStorage settings injected so the kiosk starts in standalone mode
+   *   with a short autoResetSeconds so tests don't wait 15 s
+   */
+  async function setupStandaloneKiosk(
+    context: BrowserContext,
+    nameId: string,
+    autoResetSeconds = 5,
+  ): Promise<Page> {
+    const kioskPage = await context.newPage();
+
+    // Inject mock-webserial before any page scripts run
+    await kioskPage.addInitScript(getMockWebSerialScript());
+
+    // Inject kiosk settings so the page starts in standalone mode
+    await kioskPage.addInitScript(
+      ({ nameId, autoResetSeconds }) => {
+        localStorage.setItem(
+          `oxygen-kiosk-settings-${nameId}`,
+          JSON.stringify({ standalone: true, autoResetSeconds, requireClearCheck: false, writeToCard: false }),
+        );
+      },
+      { nameId, autoResetSeconds },
+    );
+
+    await kioskPage.goto(`/${nameId}/kiosk`);
+    await expect(kioskPage.getByText("Insert your SI card")).toBeVisible({ timeout: 10000 });
+
+    // Connect the mock SI reader on the kiosk page itself
+    await kioskPage.getByTestId("connect-reader").click();
+    await expect(kioskPage.getByTestId("reader-status")).toBeVisible({ timeout: 5000 });
+
+    return kioskPage;
+  }
+
+  /** Resolve the competition nameId by navigating to "/" and clicking the competition */
+  async function resolveNameId(context: BrowserContext): Promise<string> {
+    const helperPage = await context.newPage();
+    await helperPage.goto("/");
+    await helperPage.getByText(COMPETITION_NAME).click();
+    await expect(helperPage.getByRole("button", { name: "Dashboard" })).toBeVisible({ timeout: 10000 });
+    const nameId = getNameId(helperPage);
+    await helperPage.close();
+    return nameId;
+  }
+
+  test("first card read shows readout screen in standalone mode", async ({ context, request }) => {
+    const nameId = await resolveNameId(context);
+    const kioskPage = await setupStandaloneKiosk(context, nameId);
+
+    const classId = await getClassId(request, "Öppen 2");
+    const cardNo = 2800020;
+    const runner = await createRunner(request, "E2E StandaloneFirst", cardNo, classId, 363000);
+    createdRunnerIds.push(runner.id);
+
+    const readoutPromise = kioskPage.waitForResponse(
+      (resp) => resp.url().includes("/trpc/cardReadout.readout") && resp.status() === 200,
+    );
+
+    await kioskPage.evaluate(
+      ({ cardNo, controls }) => {
+        const punches = controls.map((code: number, i: number) => ({
+          controlCode: code,
+          time: 36600 + i * 120,
+        }));
+        window.__siMock.insertCard(cardNo, punches);
+      },
+      { cardNo, controls: COURSE_2_CONTROLS },
+    );
+
+    await readoutPromise;
+
+    await expect(kioskPage.getByRole("heading", { name: "E2E StandaloneFirst" })).toBeVisible({ timeout: 10000 });
+    await expect(kioskPage.getByText("Completed")).toBeVisible();
+  });
+
+  test("same card re-read after auto-reset shows readout again — regression test for lastProcessedRef bug", async ({
+    context,
+    request,
+  }) => {
+    // This test caught the bug where lastCardIdRef was never reset on idle,
+    // meaning re-reading the same card after the kiosk auto-reset would be silently
+    // ignored and the kiosk would stay stuck on the idle screen.
+    const nameId = await resolveNameId(context);
+    const kioskPage = await setupStandaloneKiosk(context, nameId, 5); // 5 s auto-reset
+
+    const classId = await getClassId(request, "Öppen 2");
+    const cardNo = 2800021;
+    const runner = await createRunner(request, "E2E StandaloneReread", cardNo, classId, 363000);
+    createdRunnerIds.push(runner.id);
+
+    const punches = COURSE_2_CONTROLS.map((code, i) => ({
+      controlCode: code,
+      time: 36600 + i * 120,
+    }));
+
+    // ── First read ─────────────────────────────────────────
+    const firstReadoutPromise = kioskPage.waitForResponse(
+      (resp) => resp.url().includes("/trpc/cardReadout.readout") && resp.status() === 200,
+    );
+    await kioskPage.evaluate(
+      ({ cardNo, punches }) => { window.__siMock.insertCard(cardNo, punches); },
+      { cardNo, punches },
+    );
+    await firstReadoutPromise;
+
+    await expect(kioskPage.getByRole("heading", { name: "E2E StandaloneReread" })).toBeVisible({ timeout: 10000 });
+    await expect(kioskPage.getByText("Completed")).toBeVisible();
+
+    // Remove card and wait for auto-reset (5 s + 1 s buffer)
+    await kioskPage.evaluate(() => { window.__siMock.removeCard(); });
+    await kioskPage.waitForTimeout(6000);
+    await expect(kioskPage.getByText("Insert your SI card")).toBeVisible({ timeout: 5000 });
+
+    // ── Second read of the SAME card ───────────────────────
+    const secondReadoutPromise = kioskPage.waitForResponse(
+      (resp) => resp.url().includes("/trpc/cardReadout.readout") && resp.status() === 200,
+    );
+    await kioskPage.evaluate(
+      ({ cardNo, punches }) => { window.__siMock.insertCard(cardNo, punches); },
+      { cardNo, punches },
+    );
+    await secondReadoutPromise;
+
+    // Without the fix, the kiosk would stay on "Insert your SI card".
+    await expect(kioskPage.getByRole("heading", { name: "E2E StandaloneReread" })).toBeVisible({ timeout: 10000 });
+    await expect(kioskPage.getByText("Completed")).toBeVisible();
+  });
+
+  test("unresolved card entry does not trigger screen transition — guards against premature deduplication", async ({
+    context,
+    request,
+  }) => {
+    // Verifies that the standalone effect skips entries with actionResolved:false.
+    // (DeviceManager emits these before its DB lookup completes.)
+    // The kiosk should stay on the idle screen until the resolved update arrives.
+    const nameId = await resolveNameId(context);
+    const kioskPage = await setupStandaloneKiosk(context, nameId);
+
+    const classId = await getClassId(request, "Öppen 2");
+    const cardNo = 2800022;
+    const runner = await createRunner(request, "E2E StandaloneUnresolved", cardNo, classId, 363000);
+    createdRunnerIds.push(runner.id);
+
+    // Insert the card — DeviceManager will emit an unresolved entry first and then
+    // a resolved update. We cannot observe the intermediate unresolved state directly,
+    // but we CAN verify the final screen is correct (readout, not idle or stuck).
+    // This test primarily guards against regressions where the unresolved entry
+    // permanently blocks the resolved update.
+    const readoutPromise = kioskPage.waitForResponse(
+      (resp) => resp.url().includes("/trpc/cardReadout.readout") && resp.status() === 200,
+    );
+    await kioskPage.evaluate(
+      ({ cardNo, controls }) => {
+        const punches = controls.map((code: number, i: number) => ({
+          controlCode: code,
+          time: 36600 + i * 120,
+        }));
+        window.__siMock.insertCard(cardNo, punches);
+      },
+      { cardNo, controls: COURSE_2_CONTROLS },
+    );
+
+    await readoutPromise;
+
+    // The resolved update must reach ReadoutScreen — not get blocked by the unresolved entry.
+    await expect(kioskPage.getByRole("heading", { name: "E2E StandaloneUnresolved" })).toBeVisible({ timeout: 10000 });
+    await expect(kioskPage.getByText("Completed")).toBeVisible();
   });
 });

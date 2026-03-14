@@ -69,5 +69,16 @@
   "producedLabel": "Produced: {{date}}",
   "hwLabel": "HW: {{version}}",
   "swLabel": "SW: {{version}}",
-  "clearsLabel": "Clears: {{count}}"
+  "clearsLabel": "Clears: {{count}}",
+  "rentalCard": "Rental card",
+  "rentalCards": "Rental cards",
+  "notReturned": "Not returned",
+  "returned": "Returned",
+  "filterAll": "All",
+  "filterUnreturned": "Unreturned",
+  "filterRentalAll": "All rentals",
+  "markReturned": "Mark returned",
+  "markNotReturned": "Undo return",
+  "rentalStatus": "Rental status",
+  "unreturnedCount": "{{count}} unreturned"
 }

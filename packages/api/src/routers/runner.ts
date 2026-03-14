@@ -5,6 +5,7 @@ import { getCompetitionClient, incrementCounter } from "../db.js";
 import type { RunnerDetail, RunnerInfo } from "@oxygen/shared";
 import { parsePunches, parseCourseControls } from "./cardReadout.js";
 import { computeClassPlacements } from "../results.js";
+import { pushRegistrationToSheet } from "../sheetsBackup.js";
 
 /** Check that cardNo is not already assigned to another (non-removed) runner. */
 async function assertCardNotTaken(
@@ -52,6 +53,7 @@ const runnerCreateSchema = z.object({
   fee: z.number().int().optional().default(0),
   paid: z.number().int().optional().default(0),
   payMode: z.number().int().optional().default(0),
+  cardFee: z.number().int().optional().default(0),
 });
 
 /** Schema for updating a runner — no defaults, so omitted fields stay untouched. */
@@ -71,6 +73,7 @@ const runnerUpdateSchema = z.object({
   fee: z.number().int().optional(),
   paid: z.number().int().optional(),
   payMode: z.number().int().optional(),
+  cardFee: z.number().int().optional(),
 });
 
 export const runnerRouter = router({
@@ -115,6 +118,8 @@ export const runnerRouter = router({
         fee: r.Fee,
         paid: r.Paid,
         payMode: r.PayMode,
+        cardFee: r.CardFee,
+        cardReturned: r.oos_card_returned === 1,
         bib: r.Bib,
         entryDate: r.EntryDate,
       };
@@ -338,6 +343,8 @@ export const runnerRouter = router({
             fee: r.Fee || undefined,
             paid: r.Paid || undefined,
             payMode: r.PayMode || undefined,
+            cardFee: r.CardFee || undefined,
+            cardReturned: r.oos_card_returned === 1 ? true : undefined,
             birthYear: r.BirthYear || undefined,
             sex: r.Sex || undefined,
             bib: r.Bib || undefined,
@@ -376,6 +383,7 @@ export const runnerRouter = router({
           Fee: input.fee,
           Paid: input.paid,
           PayMode: input.payMode,
+          CardFee: input.cardFee,
           // MeOS requires these MediumText fields to be non-null
           InputResult: "",
           Annotation: "",
@@ -383,6 +391,34 @@ export const runnerRouter = router({
       });
 
       await incrementCounter("oRunner", runner.Id);
+
+      // Fire-and-forget Google Sheets backup
+      {
+        const cls = input.classId
+          ? await client.oClass.findUnique({ where: { Id: input.classId }, select: { Name: true } })
+          : null;
+        const club = input.clubId
+          ? await client.oClub.findUnique({ where: { Id: input.clubId }, select: { Name: true } })
+          : null;
+        pushRegistrationToSheet(client, {
+          sheet: "Registrations",
+          timestamp: new Date().toISOString(),
+          runnerId: runner.Id,
+          name: input.name,
+          className: cls?.Name ?? "",
+          clubName: club?.Name ?? "",
+          cardNo: input.cardNo,
+          startNo: input.startNo,
+          birthYear: input.birthYear,
+          sex: input.sex,
+          nationality: input.nationality,
+          phone: input.phone,
+          fee: input.fee,
+          paid: input.paid,
+          payMode: input.payMode,
+        });
+      }
+
       return { id: runner.Id, name: runner.Name };
     }),
 
@@ -426,6 +462,7 @@ export const runnerRouter = router({
       if (input.data.fee !== undefined) updateData.Fee = input.data.fee;
       if (input.data.paid !== undefined) updateData.Paid = input.data.paid;
       if (input.data.payMode !== undefined) updateData.PayMode = input.data.payMode;
+      if (input.data.cardFee !== undefined) updateData.CardFee = input.data.cardFee;
 
       const runner = await client.oRunner.update({
         where: { Id: input.id },
@@ -472,6 +509,7 @@ export const runnerRouter = router({
       if (input.data.fee !== undefined) updateData.Fee = input.data.fee;
       if (input.data.paid !== undefined) updateData.Paid = input.data.paid;
       if (input.data.payMode !== undefined) updateData.PayMode = input.data.payMode;
+      if (input.data.cardFee !== undefined) updateData.CardFee = input.data.cardFee;
 
       let updatedCount = 0;
       for (const id of input.ids) {
@@ -499,6 +537,21 @@ export const runnerRouter = router({
       });
       await incrementCounter("oRunner", input.id);
       return { success: true };
+    }),
+
+  /**
+   * Mark a rental card as returned (or undo the return).
+   * Writes to oos_card_returned — an Oxygen-only column ignored by MeOS.
+   */
+  setCardReturned: publicProcedure
+    .input(z.object({ runnerId: z.number().int(), returned: z.boolean() }))
+    .mutation(async ({ input }) => {
+      const client = await getCompetitionClient();
+      await client.oRunner.update({
+        where: { Id: input.runnerId },
+        data: { oos_card_returned: input.returned ? 1 : 0 },
+      });
+      return { runnerId: input.runnerId, returned: input.returned };
     }),
 
   /**

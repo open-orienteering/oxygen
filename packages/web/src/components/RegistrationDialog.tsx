@@ -37,6 +37,7 @@ export function RegistrationDialog() {
   const [sex, setSex] = useState("");
   const [phone, setPhone] = useState("");
   const [paymentMode, setPaymentMode] = useState<"billed" | "on-site" | "card" | "swish" | "cash" | "">("");
+  const [isRentalCard, setIsRentalCard] = useState(false);
   const [error, setError] = useState("");
   const [successMsg, setSuccessMsg] = useState("");
 
@@ -59,6 +60,9 @@ export function RegistrationDialog() {
   // ── Queries ─────────────────────────────────────────────
   const classes = trpc.competition.dashboard.useQuery();
   const regConfig = trpc.competition.getRegistrationConfig.useQuery(undefined, {
+    staleTime: 5 * 60_000,
+  });
+  const cardFeeQuery = trpc.competition.getCardFee.useQuery(undefined, {
     staleTime: 5 * 60_000,
   });
   const clubs = trpc.club.list.useQuery({ showAll: true });
@@ -114,6 +118,7 @@ export function RegistrationDialog() {
     setPhone("");
     setError("");
     setSuccessMsg("");
+    setIsRentalCard(false);
     setPaymentMode(regConfig.data?.paymentMethods.includes("billed") ? "billed" : regConfig.data?.paymentMethods[0] as typeof paymentMode || "");
     setShowSuggestions(false);
     setDebouncedNameQuery("");
@@ -137,6 +142,8 @@ export function RegistrationDialog() {
   // Broadcast form state to kiosk
   const buildFormMessage = useCallback(() => {
     const classFee = classes.data?.classes.find((c) => c.id === classId)?.classFee ?? 0;
+    const rentalFee = isRentalCard ? (cardFeeQuery.data?.cardFee ?? 0) : 0;
+    const totalFee = classFee + rentalFee;
     const form: RegistrationFormState = {
       name,
       clubName: selectedClubName,
@@ -148,14 +155,16 @@ export function RegistrationDialog() {
       birthYear,
       phone,
       paymentMode,
-      fee: classFee > 0 ? classFee : undefined,
+      fee: totalFee > 0 ? totalFee : undefined,
       swishNumber: regConfig.data?.swishNumber || undefined,
       clubEventorId: selectedClub?.extId || undefined,
       competitionName: classes.data?.competition?.name || undefined,
+      isRentalCard: isRentalCard || undefined,
+      cardFee: rentalFee > 0 ? rentalFee : undefined,
     };
     const ready = !!name.trim() && classId > 0;
     return { form, ready };
-  }, [name, selectedClubName, selectedClassName, cardNo, startTime, sex, birthYear, phone, paymentMode, classId, classes.data, regConfig.data, selectedClub?.extId]);
+  }, [name, selectedClubName, selectedClassName, cardNo, startTime, sex, birthYear, phone, paymentMode, isRentalCard, classId, classes.data, regConfig.data, cardFeeQuery.data, selectedClub?.extId]);
 
   // Send on every form change
   useEffect(() => {
@@ -452,13 +461,15 @@ export function RegistrationDialog() {
     if (!classId) { setError(t("classRequired")); return; }
 
     const classFee = classes.data?.classes.find((c) => c.id === classId)?.classFee ?? 0;
-    let fee = 0;
-    let paid = 0;
+    const rentalFee = isRentalCard ? (cardFeeQuery.data?.cardFee ?? 0) : 0;
+    let fee = 0;   // oRunner.Fee = entry fee only (NOT including rental)
+    let paid = 0;  // oRunner.Paid = total collected (entry + rental)
     const payModeMap: Record<string, number> = { billed: 1, "on-site": 2, card: 3, swish: 4, cash: 5 };
     let payModeNum = 0;
-    if (classFee > 0 && paymentMode) {
-      fee = classFee;
-      if (paymentMode !== "billed") paid = classFee;
+    const totalFee = classFee + rentalFee;
+    if (totalFee > 0 && paymentMode) {
+      fee = classFee;  // Fee stores entry fee only; CardFee stores rental separately
+      if (paymentMode !== "billed") paid = totalFee;  // Paid = total collected (entry + rental)
       payModeNum = payModeMap[paymentMode] ?? 0;
     }
 
@@ -485,6 +496,7 @@ export function RegistrationDialog() {
         fee,
         paid,
         payMode: payModeNum,
+        cardFee: rentalFee > 0 ? rentalFee : 0,
       });
 
       // Notify kiosk
@@ -508,7 +520,7 @@ export function RegistrationDialog() {
           logoRaster,
           runner: { name: trimmedName, clubName: clbName, className: clsName, cardNo: cn },
           startTime: st || undefined,
-          payment: classFee > 0 && pm ? { method: paymentLabels[pm] ?? pm, amount: classFee } : undefined,
+          payment: totalFee > 0 && pm ? { method: paymentLabels[pm] ?? pm, amount: totalFee, cardFee: rentalFee > 0 ? rentalFee : undefined } : undefined,
           customMessage: customMsg,
           organizerName: classes.data?.organizer?.name,
           organizerDetails: regConfig.data?.organizerDetails || undefined,
@@ -824,6 +836,25 @@ export function RegistrationDialog() {
               </div>
             </div>
 
+            {/* Rental card toggle */}
+            <div className="flex items-center gap-3 px-3 py-2 rounded-lg border border-slate-200 bg-slate-50">
+              <label className="flex items-center gap-2 flex-1 cursor-pointer select-none">
+                <input
+                  type="checkbox"
+                  checked={isRentalCard}
+                  onChange={(e) => setIsRentalCard(e.target.checked)}
+                  data-testid="rental-card-checkbox"
+                  className="rounded border-slate-300 text-orange-500 focus:ring-orange-400 cursor-pointer"
+                />
+                <span className="text-sm font-medium text-slate-700">{t("rentalCard")}</span>
+              </label>
+              {isRentalCard && (cardFeeQuery.data?.cardFee ?? 0) > 0 && (
+                <span className="text-xs font-medium text-orange-600 bg-orange-50 border border-orange-200 rounded px-2 py-0.5">
+                  +{cardFeeQuery.data!.cardFee} kr
+                </span>
+              )}
+            </div>
+
             {/* Birth year / Sex row */}
             <div className="grid grid-cols-2 gap-3">
               <div>
@@ -920,7 +951,7 @@ export function RegistrationDialog() {
                 className="flex-1 px-4 py-2.5 bg-blue-600 text-white text-sm font-medium rounded-lg hover:bg-blue-700 transition-colors cursor-pointer disabled:opacity-50"
               >
                 {createMutation.isPending ? t("saving") : (
-                  paymentMode && paymentMode !== "billed" && (classes.data?.classes.find((c) => c.id === classId)?.classFee ?? 0) > 0
+                  paymentMode && paymentMode !== "billed" && ((classes.data?.classes.find((c) => c.id === classId)?.classFee ?? 0) + (isRentalCard ? (cardFeeQuery.data?.cardFee ?? 0) : 0)) > 0
                     ? t("confirmPaymentRegister")
                     : t("registerRunner")
                 )}

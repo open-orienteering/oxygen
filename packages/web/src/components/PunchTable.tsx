@@ -48,6 +48,36 @@ interface PunchTableProps {
   onUpdateFinishTime?: (time: number) => void;
 }
 
+// ─── Merged row type for inline extra-punch view ─────────────
+
+type MergedRow =
+  | { kind: "control"; ctrl: ControlMatch; idx: number }
+  | { kind: "extra"; punch: ExtraPunch; extraIdx: number };
+
+function buildInlineRows(controls: ControlMatch[], extraPunches: ExtraPunch[]): MergedRow[] {
+  const rows: MergedRow[] = [];
+
+  // Timed course-control rows
+  for (let i = 0; i < controls.length; i++) {
+    if (controls[i].punchTime > 0) rows.push({ kind: "control", ctrl: controls[i], idx: i });
+  }
+  // Extra punch rows
+  for (let i = 0; i < extraPunches.length; i++) {
+    rows.push({ kind: "extra", punch: extraPunches[i], extraIdx: i });
+  }
+  // Sort by punch time
+  rows.sort((a, b) => {
+    const ta = a.kind === "control" ? a.ctrl.punchTime : a.punch.time;
+    const tb = b.kind === "control" ? b.ctrl.punchTime : b.punch.time;
+    return ta - tb;
+  });
+  // Append missing controls (no time) in course order at the end
+  for (let i = 0; i < controls.length; i++) {
+    if (controls[i].punchTime === 0) rows.push({ kind: "control", ctrl: controls[i], idx: i });
+  }
+  return rows;
+}
+
 export function PunchTable({
   data,
   editable = false,
@@ -62,6 +92,11 @@ export function PunchTable({
   const { t: tr } = useTranslation("race");
   const t = data.timing;
   const [showAddForm, setShowAddForm] = useState(false);
+  const [inlineExtras, setInlineExtras] = useState(false);
+
+  const inlineRows = inlineExtras && data.extraPunches.length > 0
+    ? buildInlineRows(data.controls, data.extraPunches)
+    : null;
 
   return (
     <div className={compact ? "space-y-2" : "space-y-4"}>
@@ -118,18 +153,43 @@ export function PunchTable({
                 dark={dark}
               />
 
-              {/* Control rows */}
-              {data.controls.map((ctrl, idx) => (
-                <ControlRow
-                  key={idx}
-                  ctrl={ctrl}
-                  idx={idx}
-                  editable={editable}
-                  dark={dark}
-                  onRemovePunch={onRemovePunch}
-                  onUpdatePunchTime={onUpdatePunchTime}
-                />
-              ))}
+              {inlineRows ? (
+                /* Inline view: course controls + extras interleaved by punch time */
+                inlineRows.map((row, i) =>
+                  row.kind === "control" ? (
+                    <ControlRow
+                      key={`ctrl-${row.idx}`}
+                      ctrl={row.ctrl}
+                      idx={row.idx}
+                      editable={editable}
+                      dark={dark}
+                      onRemovePunch={onRemovePunch}
+                      onUpdatePunchTime={onUpdatePunchTime}
+                    />
+                  ) : (
+                    <ExtraRow
+                      key={`extra-${i}`}
+                      punch={row.punch}
+                      dark={dark}
+                      label={tr("extraPunch")}
+                      editable={editable}
+                    />
+                  )
+                )
+              ) : (
+                /* Normal view: course controls only */
+                data.controls.map((ctrl, idx) => (
+                  <ControlRow
+                    key={idx}
+                    ctrl={ctrl}
+                    idx={idx}
+                    editable={editable}
+                    dark={dark}
+                    onRemovePunch={onRemovePunch}
+                    onUpdatePunchTime={onUpdatePunchTime}
+                  />
+                ))
+              )}
 
               {/* Finish row */}
               <TimingRow
@@ -156,22 +216,41 @@ export function PunchTable({
         </div>
       )}
 
-      {/* Extra punches */}
+      {/* Extra punches — shown as separate section when not in inline mode */}
       {data.extraPunches.length > 0 && (
         <div className={`${dark ? "bg-amber-900/30 border-amber-700/50" : "bg-amber-50 border-amber-200"} ${compact ? "rounded-lg" : "rounded-xl"} border p-4`}>
-          <h3 className={`text-sm font-semibold ${dark ? "text-amber-400" : "text-amber-800"} mb-2`}>
-            {tr("extraPunches")}
-          </h3>
-          <div className="flex flex-wrap gap-2">
-            {data.extraPunches.map((p, i) => (
-              <span
-                key={i}
-                className={`px-2 py-1 rounded text-xs font-medium tabular-nums ${dark ? "bg-amber-800/50 text-amber-300" : "bg-amber-100 text-amber-800"}`}
+          <div className="flex items-center justify-between mb-2">
+            <h3 className={`text-sm font-semibold ${dark ? "text-amber-400" : "text-amber-800"}`}>
+              {tr("extraPunches")}
+            </h3>
+            {data.course && (
+              <button
+                onClick={() => setInlineExtras((v) => !v)}
+                className={`text-xs font-medium cursor-pointer ${dark ? "text-amber-300 hover:text-amber-100" : "text-amber-700 hover:text-amber-900"}`}
               >
-                {p.controlCode} @ {formatMeosTime(p.time)}
-              </span>
-            ))}
+                {inlineExtras ? tr("hideInline") : tr("showInline")}
+              </button>
+            )}
           </div>
+          {!inlineExtras && (
+            <div className="flex flex-wrap gap-2">
+              {data.extraPunches.map((p, i) => (
+                <span
+                  key={i}
+                  className={`px-2 py-1 rounded text-xs font-medium tabular-nums ${dark ? "bg-amber-800/50 text-amber-300" : "bg-amber-100 text-amber-800"}`}
+                >
+                  {p.controlCode} @ {formatMeosTime(p.time)}
+                </span>
+              ))}
+            </div>
+          )}
+          {inlineExtras && (
+            <p className={`text-xs ${dark ? "text-amber-400/70" : "text-amber-700/70"}`}>
+              {data.extraPunches.length === 1
+                ? "1 extra punch shown inline above"
+                : `${data.extraPunches.length} extra punches shown inline above`}
+            </p>
+          )}
         </div>
       )}
 
@@ -349,6 +428,48 @@ function ControlRow({
           )}
         </td>
       )}
+    </tr>
+  );
+}
+
+// ─── Extra punch row (shown when inline-extras toggle is on) ─
+
+function ExtraRow({
+  punch,
+  dark = false,
+  label,
+  editable,
+}: {
+  punch: ExtraPunch;
+  dark?: boolean;
+  label: string;
+  editable: boolean;
+}) {
+  return (
+    <tr className={dark ? "bg-amber-900/20" : "bg-amber-50"}>
+      <td className={`px-4 py-2 tabular-nums ${dark ? "text-slate-500" : "text-slate-400"}`}>
+        &mdash;
+      </td>
+      <td className="px-4 py-2 font-medium">
+        <span className={dark ? "text-amber-300" : "text-amber-700"}>
+          {punch.controlCode}
+        </span>
+      </td>
+      <td className={`px-4 py-2 text-right tabular-nums ${dark ? "text-amber-300" : "text-amber-700"}`}>
+        {punch.time > 0 ? formatMeosTime(punch.time) : <span className="text-slate-400">&mdash;</span>}
+      </td>
+      <td className="px-4 py-2 text-right tabular-nums">
+        <span className={dark ? "text-slate-500" : "text-slate-400"}>&mdash;</span>
+      </td>
+      <td className="px-4 py-2 text-right tabular-nums">
+        <span className={dark ? "text-slate-500" : "text-slate-400"}>&mdash;</span>
+      </td>
+      <td className="px-4 py-2 text-center">
+        <span className={`px-1.5 py-0.5 text-[10px] font-semibold rounded ${dark ? "bg-amber-800/60 text-amber-300" : "bg-amber-100 text-amber-700"}`}>
+          {label}
+        </span>
+      </td>
+      {editable && <td />}
     </tr>
   );
 }

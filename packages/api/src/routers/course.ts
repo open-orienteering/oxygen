@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { router, publicProcedure } from "../trpc.js";
-import { getCompetitionClient, ensureMapFilesTable, incrementCounter } from "../db.js";
+import { getCompetitionClient, ensureMapFilesTable, ensureMapTilesTable, incrementCounter, fireMapUpload } from "../db.js";
+import { ocadBoundsToWgs84, computeMapNorthOffset, mapMmToWgs84, type OcadCrs } from "../map-projection.js";
 import { CourseSummary, CourseDetail, RunnerStatus } from "@oxygen/shared";
 import { parseIOFCourseData, parseIOFCourseDataWithGeometry, type ParsedCourseData, type GeoJSONFeatureCollection, type ParsedCourse } from "../iof-course-parser.js";
 import { parseOCDCourseData } from "../ocd-course-parser.js";
@@ -688,6 +689,11 @@ export const courseRouter = router({
         buffer,
       );
 
+      // Invalidate tile cache so new map gets re-rendered
+      await ensureMapTilesTable(client);
+      await client.$executeRawUnsafe("DELETE FROM oxygen_map_tiles");
+      fireMapUpload();
+
       return { success: true, fileName: input.fileName, size: buffer.length };
     }),
 
@@ -753,19 +759,97 @@ export const courseRouter = router({
       },
     });
 
+    // Load OCAD CRS for converting map mm → WGS84 when GPS coords are missing
+    let crs: OcadCrs | null = null;
+    const needsConversion = controls.some(
+      (c) => (c.latcrd === 0 && c.longcrd === 0) && (c.xpos !== 0 || c.ypos !== 0),
+    );
+    if (needsConversion) {
+      try {
+        await ensureMapFilesTable(client);
+        const rows = await client.$queryRawUnsafe<{ FileData: Buffer }[]>(
+          "SELECT FileData FROM oxygen_map_files ORDER BY Id DESC LIMIT 1",
+        );
+        if (rows.length > 0) {
+          const buffer = Buffer.from(rows[0].FileData);
+          const ocadMod = await import("ocad2geojson");
+          const readOcad = (ocadMod as Record<string, unknown>).readOcad as (
+            buf: Buffer, opts?: Record<string, unknown>
+          ) => Promise<{ getCrs(): OcadCrs }>;
+          const ocadFile = await readOcad(buffer, { quietWarnings: true });
+          crs = ocadFile.getCrs();
+        }
+      } catch (e) {
+        console.warn("[controlCoordinates] Failed to load OCAD CRS for coordinate conversion:", e);
+      }
+    }
+
     return controls
       .filter((c) => c.latcrd !== 0 || c.longcrd !== 0 || c.xpos !== 0 || c.ypos !== 0)
-      .map((c) => ({
-        id: c.Id,
-        name: c.Name,
-        code: c.Numbers.split(";")[0] || c.Name,
-        status: c.Status,
-        lat: c.latcrd / 1e6,
-        lng: c.longcrd / 1e6,
-        // Map position in mm (MeOS stores as value * 10, 1 decimal place)
-        mapX: c.xpos / 10,
-        mapY: c.ypos / 10,
-      }));
+      .map((c) => {
+        const mapX = c.xpos / 10;
+        const mapY = c.ypos / 10;
+        let lat = c.latcrd / 1e6;
+        let lng = c.longcrd / 1e6;
+
+        // Convert map mm → WGS84 when GPS coordinates are missing
+        if (lat === 0 && lng === 0 && crs && (mapX !== 0 || mapY !== 0)) {
+          const wgs84 = mapMmToWgs84(mapX, mapY, crs);
+          if (wgs84) {
+            lat = wgs84.lat;
+            lng = wgs84.lng;
+          }
+        }
+
+        return {
+          id: c.Id,
+          name: c.Name,
+          code: c.Numbers.split(";")[0] || c.Name,
+          status: c.Status,
+          lat,
+          lng,
+          mapX,
+          mapY,
+        };
+      });
+  }),
+
+  /**
+   * Lightweight map metadata — bounds, scale, north offset.
+   * Used by the tile-based MapViewer to set up the viewport without
+   * downloading the full OCD file.
+   */
+  mapMetadata: publicProcedure.query(async () => {
+    const client = await getCompetitionClient();
+    await ensureMapFilesTable(client);
+
+    const rows = await client.$queryRawUnsafe<{ FileData: Buffer; UploadedAt: Date }[]>(
+      "SELECT FileData, UploadedAt FROM oxygen_map_files ORDER BY Id DESC LIMIT 1",
+    );
+    if (rows.length === 0) return null;
+
+    try {
+      const buffer = Buffer.from(rows[0].FileData);
+      const ocadMod = await import("ocad2geojson");
+      const readOcad = (ocadMod as Record<string, unknown>).readOcad as (
+        buf: Buffer, opts?: Record<string, unknown>
+      ) => Promise<{ getCrs(): OcadCrs; getBounds(): number[] }>;
+
+      const ocadFile = await readOcad(buffer, { quietWarnings: true });
+      const crs = ocadFile.getCrs();
+      const ocadBounds = ocadFile.getBounds();
+      const bounds = ocadBoundsToWgs84(ocadBounds, crs);
+      const northOffset = computeMapNorthOffset(ocadBounds, crs);
+
+      return {
+        scale: crs.scale,
+        bounds,
+        northOffset,
+        uploadedAt: rows[0].UploadedAt.getTime(),
+      };
+    } catch {
+      return null;
+    }
   }),
 
   /**

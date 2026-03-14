@@ -65,7 +65,7 @@ test.describe("Event Page", () => {
     const main = page.getByRole("main");
     await expect(main.getByText("Invoice")).toBeVisible();
     await expect(main.getByText("Pay on site")).toBeVisible();
-    await expect(main.getByText("Card")).toBeVisible();
+    await expect(main.getByText("Card", { exact: true })).toBeVisible();
     await expect(main.getByText("Swish")).toBeVisible();
     await expect(main.getByText("Cash")).toBeVisible();
   });
@@ -80,9 +80,9 @@ test.describe("Event Page — Eventor-linked competition", () => {
     });
 
     await page.goto("/");
-    const vinterBtn = page.getByRole("button", { name: /itest_vinterserien/ });
-    await expect(vinterBtn).toBeVisible({ timeout: 10000 });
-    await vinterBtn.click();
+    const multiraceBtn = page.getByRole("button", { name: /itest_multirace/ });
+    await expect(multiraceBtn).toBeVisible({ timeout: 10000 });
+    await multiraceBtn.click();
 
     // Navigate to Event page
     await expect(page.getByRole("button", { name: "Dashboard" })).toBeVisible({

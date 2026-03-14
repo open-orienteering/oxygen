@@ -98,6 +98,8 @@
   "drift": "Drift",
   "bat": "Bat",
   "controlNotInCompetition": "Kontroll #{{code}} finns inte i denna tävling",
+  "targetControl": "Mål",
+  "targetAuto": "Auto (behåll nuvarande)",
   "autoModeActiveProgramming": "Autoläge aktivt — sätt in kontroller i kopplingspinnen för att programmera dem automatiskt.",
   "manualModeProgramming": "Sätt in en kontroll i kopplingspinnen och tryck \"Läs & programmera\".",
   "postCompReadout": "Avläsning efter tävling",

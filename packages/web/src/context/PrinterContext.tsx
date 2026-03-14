@@ -89,6 +89,7 @@ function useReceiptLabels() {
       participant: t("participant") + ":",
       entryFeeSubtitle: t("entryFeeSubtitle"),
       paymentMethod: t("paymentMethod"),
+      rentalCardFee: t("rentalCardFee"),
     }),
   };
 }

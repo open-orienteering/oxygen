@@ -7,7 +7,7 @@ import {
 import { appRouter, type AppRouter } from "./routers/index.js";
 export type { AppRouter };
 import { createContext } from "./trpc.js";
-import { disconnectAll, getCompetitionClient, ensureLogoTable, getMainDbConnection, ensureClubDbTable, ensureMapFilesTable, ensureMapTilesTable, onCompetitionSwitch } from "./db.js";
+import { disconnectAll, getCompetitionClient, ensureLogoTable, getMainDbConnection, ensureClubDbTable, ensureMapFilesTable, ensureMapTilesTable, onCompetitionSwitch, onMapUpload } from "./db.js";
 import { tileBoundsWgs84, wgs84ToOcad, ocadBoundsToWgs84, type OcadCrs } from "./map-projection.js";
 import "dotenv/config";
 
@@ -123,22 +123,43 @@ async function main() {
   // GET /api/map-tile/:z/:x/:y
 
   // Module-level cache for the pre-rendered map bitmap + CRS
-  let cachedBitmap: { data: Buffer; width: number; height: number; scale: number } | null = null;
+  type BitmapInfo = { data: Buffer; width: number; height: number; scale: number };
+  type PreRenderedMap = { bitmap: BitmapInfo; crs: OcadCrs; ocadBounds: number[] };
+
+  let cachedBitmap: BitmapInfo | null = null;
   let cachedOcadBounds: number[] | null = null;
   let cachedCrs: OcadCrs | null = null;
+  let renderInFlight: Promise<PreRenderedMap> | null = null;
 
-  // Invalidate cached bitmap when switching competitions
-  onCompetitionSwitch(() => {
+  // Tile pre-cache progress tracking
+  let tileCacheProgress = { total: 0, done: 0, rendering: false };
+
+  // Invalidate cached bitmap when switching competitions or re-uploading a map
+  const invalidateMapCache = () => {
     cachedBitmap = null;
     cachedOcadBounds = null;
     cachedCrs = null;
-  });
+    renderInFlight = null;
+  };
+  onCompetitionSwitch(invalidateMapCache);
+  onMapUpload(invalidateMapCache);
 
-  async function getPreRenderedMap() {
+  async function getPreRenderedMap(): Promise<PreRenderedMap> {
     if (cachedBitmap && cachedCrs && cachedOcadBounds) {
       return { bitmap: cachedBitmap, crs: cachedCrs, ocadBounds: cachedOcadBounds };
     }
 
+    // Mutex: if a render is already in flight, wait for it instead of starting another
+    if (renderInFlight) return renderInFlight;
+    renderInFlight = doPreRenderMap();
+    try {
+      return await renderInFlight;
+    } finally {
+      renderInFlight = null;
+    }
+  }
+
+  async function doPreRenderMap() {
     const client = await getCompetitionClient();
     await ensureMapFilesTable(client);
 
@@ -175,8 +196,8 @@ async function main() {
     const ocadH = bMaxY - bMinY;
 
     // Pre-render the full SVG to a bitmap.
-    // Cap total pixels to ~500M (2GB RGBA buffer) to avoid ERR_BUFFER_TOO_LARGE.
-    const maxPixels = 500_000_000;
+    // Cap total pixels to ~800M (3.2GB RGBA buffer). Node max-old-space-size is 4GB.
+    const maxPixels = 800_000_000;
     const idealPxPerUnit = 1.0;
     const idealPixels = ocadW * idealPxPerUnit * ocadH * idealPxPerUnit;
     const pxPerUnit = idealPixels > maxPixels
@@ -190,7 +211,7 @@ async function main() {
     const resvgMod = await import("@resvg/resvg-js");
     const resvg = new resvgMod.Resvg(svgElement.outerHTML, {
       fitTo: { mode: "width" as const, value: bitmapW },
-      background: "rgba(0,0,0,0)",
+      background: "white",
     });
     const rendered = resvg.render();
 
@@ -203,8 +224,174 @@ async function main() {
 
     server.log.info(`Pre-rendered: ${cachedBitmap.width}x${cachedBitmap.height}, scale=${cachedBitmap.scale.toFixed(4)} px/unit`);
 
+    // Pre-cache tiles in background (don't block the first request)
+    preCacheTiles(cachedBitmap, cachedCrs!, cachedOcadBounds!).catch((err) => {
+      server.log.error({ err }, "Failed to pre-cache tiles");
+    });
+
     return { bitmap: cachedBitmap, crs: cachedCrs, ocadBounds: cachedOcadBounds };
   }
+
+  /**
+   * Render a single tile from the pre-rendered bitmap.
+   * Returns the PNG buffer, or null if the tile has no content.
+   */
+  async function renderTile(
+    z: number, x: number, y: number,
+    bitmap: BitmapInfo,
+    crs: OcadCrs,
+    ocadBounds: number[],
+  ): Promise<Buffer | null> {
+    const tileBds = tileBoundsWgs84(z, x, y);
+    const mapWgs84 = ocadBoundsToWgs84(ocadBounds, crs);
+    if (!mapWgs84) return null;
+
+    if (
+      tileBds.west > mapWgs84.east || tileBds.east < mapWgs84.west ||
+      tileBds.south > mapWgs84.north || tileBds.north < mapWgs84.south
+    ) return null;
+
+    const nw = wgs84ToOcad(tileBds.north, tileBds.west, crs);
+    const ne = wgs84ToOcad(tileBds.north, tileBds.east, crs);
+    const sw = wgs84ToOcad(tileBds.south, tileBds.west, crs);
+    const se = wgs84ToOcad(tileBds.south, tileBds.east, crs);
+    if (!nw || !ne || !sw || !se) return null;
+
+    const tileSize = 256;
+    const { data: bitmapData, width: bmpW, height: bmpH, scale: pxPerUnit } = bitmap;
+    const [bMinX, , , bMaxY] = ocadBounds;
+
+    function ocadToBitmapPx(ocadX: number, ocadY: number) {
+      return { bx: (ocadX - bMinX) * pxPerUnit, by: (bMaxY - ocadY) * pxPerUnit };
+    }
+
+    const nwPx = ocadToBitmapPx(nw.x, nw.y);
+    const nePx = ocadToBitmapPx(ne.x, ne.y);
+    const swPx = ocadToBitmapPx(sw.x, sw.y);
+    const sePx = ocadToBitmapPx(se.x, se.y);
+
+    const tilePixels = Buffer.alloc(tileSize * tileSize * 4);
+    let hasContent = false;
+
+    for (let ty = 0; ty < tileSize; ty++) {
+      const v = ty / tileSize;
+      const leftBx  = nwPx.bx + (swPx.bx - nwPx.bx) * v;
+      const leftBy  = nwPx.by + (swPx.by - nwPx.by) * v;
+      const rightBx = nePx.bx + (sePx.bx - nePx.bx) * v;
+      const rightBy = nePx.by + (sePx.by - nePx.by) * v;
+
+      for (let tx = 0; tx < tileSize; tx++) {
+        const u = tx / tileSize;
+        const srcX = leftBx + (rightBx - leftBx) * u;
+        const srcY = leftBy + (rightBy - leftBy) * u;
+
+        const x0 = Math.floor(srcX);
+        const y0 = Math.floor(srcY);
+        if (x0 < 0 || y0 < 0 || x0 + 1 >= bmpW || y0 + 1 >= bmpH) continue;
+
+        const fx = srcX - x0;
+        const fy = srcY - y0;
+        const w00 = (1 - fx) * (1 - fy);
+        const w10 = fx * (1 - fy);
+        const w01 = (1 - fx) * fy;
+        const w11 = fx * fy;
+
+        const i00 = (y0 * bmpW + x0) * 4;
+        const i10 = (y0 * bmpW + (x0 + 1)) * 4;
+        const i01 = ((y0 + 1) * bmpW + x0) * 4;
+        const i11 = ((y0 + 1) * bmpW + (x0 + 1)) * 4;
+
+        const dstOff = (ty * tileSize + tx) * 4;
+        for (let ch = 0; ch < 4; ch++) {
+          tilePixels[dstOff + ch] = Math.round(
+            bitmapData[i00 + ch] * w00 + bitmapData[i10 + ch] * w10 +
+            bitmapData[i01 + ch] * w01 + bitmapData[i11 + ch] * w11,
+          );
+        }
+        if (tilePixels[dstOff + 3] > 0) hasContent = true;
+      }
+    }
+
+    if (!hasContent) return null;
+
+    const sharpMod = await import("sharp");
+    return sharpMod.default(tilePixels, {
+      raw: { width: tileSize, height: tileSize, channels: 4 },
+    }).png().toBuffer();
+  }
+
+  /**
+   * Pre-cache all tiles for zoom levels 10–16 that overlap the map bounds.
+   * Runs in the background after the bitmap is first rendered.
+   */
+  async function preCacheTiles(
+    bitmap: BitmapInfo,
+    crs: OcadCrs,
+    ocadBounds: number[],
+  ) {
+    const mapWgs84 = ocadBoundsToWgs84(ocadBounds, crs);
+    if (!mapWgs84) return;
+
+    const client = await getCompetitionClient();
+    await ensureMapTilesTable(client);
+
+    // Check how many tiles are already cached
+    const countResult = await client.$queryRawUnsafe<{ cnt: bigint }[]>(
+      "SELECT COUNT(*) as cnt FROM oxygen_map_tiles",
+    );
+    const existingCount = Number(countResult[0]?.cnt ?? 0);
+    if (existingCount > 10) {
+      server.log.info(`Tile cache already has ${existingCount} tiles, skipping pre-cache`);
+      return;
+    }
+
+    // Count total tiles to generate for progress tracking
+    let totalTiles = 0;
+    for (let z = 10; z <= 17; z++) {
+      const n = Math.pow(2, z);
+      const minTileX = Math.floor(((mapWgs84.west + 180) / 360) * n);
+      const maxTileX = Math.floor(((mapWgs84.east + 180) / 360) * n);
+      const minTileY = Math.floor((1 - Math.log(Math.tan(mapWgs84.north * Math.PI / 180) + 1 / Math.cos(mapWgs84.north * Math.PI / 180)) / Math.PI) / 2 * n);
+      const maxTileY = Math.floor((1 - Math.log(Math.tan(mapWgs84.south * Math.PI / 180) + 1 / Math.cos(mapWgs84.south * Math.PI / 180)) / Math.PI) / 2 * n);
+      totalTiles += (maxTileX - minTileX + 1) * (maxTileY - minTileY + 1);
+    }
+
+    tileCacheProgress = { total: totalTiles, done: 0, rendering: true };
+
+    let totalCached = 0;
+    for (let z = 10; z <= 17; z++) {
+      const n = Math.pow(2, z);
+      const minTileX = Math.floor(((mapWgs84.west + 180) / 360) * n);
+      const maxTileX = Math.floor(((mapWgs84.east + 180) / 360) * n);
+      const minTileY = Math.floor((1 - Math.log(Math.tan(mapWgs84.north * Math.PI / 180) + 1 / Math.cos(mapWgs84.north * Math.PI / 180)) / Math.PI) / 2 * n);
+      const maxTileY = Math.floor((1 - Math.log(Math.tan(mapWgs84.south * Math.PI / 180) + 1 / Math.cos(mapWgs84.south * Math.PI / 180)) / Math.PI) / 2 * n);
+
+      for (let tx = minTileX; tx <= maxTileX; tx++) {
+        for (let ty = minTileY; ty <= maxTileY; ty++) {
+          try {
+            const png = await renderTile(z, tx, ty, bitmap, crs, ocadBounds);
+            if (png) {
+              await client.$executeRawUnsafe(
+                "INSERT IGNORE INTO oxygen_map_tiles (Z, X, Y, TileData) VALUES (?, ?, ?, ?)",
+                z, tx, ty, png,
+              );
+              totalCached++;
+            }
+          } catch {
+            // Skip failed tiles
+          }
+          tileCacheProgress.done++;
+        }
+      }
+    }
+    tileCacheProgress.rendering = false;
+    server.log.info(`Pre-cached ${totalCached} tiles (zoom 10–17)`);
+  }
+
+  // Tile pre-cache progress endpoint (polled by frontend during map load)
+  server.get("/api/map-tile-progress", async (_req, reply) => {
+    return reply.send(tileCacheProgress);
+  });
 
   server.get<{
     Params: { z: string; x: string; y: string };
@@ -237,115 +424,10 @@ async function main() {
     try {
       const { bitmap, crs, ocadBounds } = await getPreRenderedMap();
 
-      // Check if tile overlaps the map bounds (in WGS84)
-      const tileBounds = tileBoundsWgs84(z, x, y);
-      const mapWgs84 = ocadBoundsToWgs84(ocadBounds, crs);
-      if (!mapWgs84) {
-        return reply.code(204).send();
+      const pngBuffer = await renderTile(z, x, y, bitmap, crs, ocadBounds);
+      if (!pngBuffer) {
+        return reply.header("Cache-Control", "public, max-age=604800").code(204).send();
       }
-
-      // Quick overlap check
-      if (
-        tileBounds.west > mapWgs84.east ||
-        tileBounds.east < mapWgs84.west ||
-        tileBounds.south > mapWgs84.north ||
-        tileBounds.north < mapWgs84.south
-      ) {
-        return reply.code(204).send();
-      }
-
-      // Convert all 4 tile corners to OCAD coordinates
-      const nw = wgs84ToOcad(tileBounds.north, tileBounds.west, crs);
-      const ne = wgs84ToOcad(tileBounds.north, tileBounds.east, crs);
-      const sw = wgs84ToOcad(tileBounds.south, tileBounds.west, crs);
-      const se = wgs84ToOcad(tileBounds.south, tileBounds.east, crs);
-      if (!nw || !ne || !sw || !se) {
-        return reply.code(204).send();
-      }
-
-      const tileSize = 256;
-      const { data: bitmapData, width: bmpW, height: bmpH, scale: pxPerUnit } = bitmap;
-      const [bMinX, bMinY, bMaxX, bMaxY] = ocadBounds;
-
-      // Convert OCAD coordinates to bitmap pixel coordinates
-      // Bitmap X: (ocadX - bMinX) * pxPerUnit
-      // Bitmap Y: (bMaxY - ocadY) * pxPerUnit  (Y inverted: top of bitmap = max OCAD Y)
-      function ocadToBitmapPx(ocadX: number, ocadY: number) {
-        return {
-          bx: (ocadX - bMinX) * pxPerUnit,
-          by: (bMaxY - ocadY) * pxPerUnit,
-        };
-      }
-
-      const nwPx = ocadToBitmapPx(nw.x, nw.y);
-      const nePx = ocadToBitmapPx(ne.x, ne.y);
-      const swPx = ocadToBitmapPx(sw.x, sw.y);
-      const sePx = ocadToBitmapPx(se.x, se.y);
-
-      // Bilinear mapping: tile pixel (tx, ty) → bitmap pixel (bx, by)
-      // Uses all 4 corners so adjacent tiles agree exactly at shared edges.
-      // (0,0)→nwPx, (T,0)→nePx, (0,T)→swPx, (T,T)→sePx
-      const tilePixels = Buffer.alloc(tileSize * tileSize * 4);
-      let hasContent = false;
-
-      for (let ty = 0; ty < tileSize; ty++) {
-        const v = ty / tileSize;
-        // Precompute the left and right edge bitmap positions for this row
-        const leftBx  = nwPx.bx + (swPx.bx - nwPx.bx) * v;
-        const leftBy  = nwPx.by + (swPx.by - nwPx.by) * v;
-        const rightBx = nePx.bx + (sePx.bx - nePx.bx) * v;
-        const rightBy = nePx.by + (sePx.by - nePx.by) * v;
-
-        for (let tx = 0; tx < tileSize; tx++) {
-          const u = tx / tileSize;
-          const srcX = leftBx + (rightBx - leftBx) * u;
-          const srcY = leftBy + (rightBy - leftBy) * u;
-
-          // Bilinear interpolation
-          const x0 = Math.floor(srcX);
-          const y0 = Math.floor(srcY);
-          const x1 = x0 + 1;
-          const y1 = y0 + 1;
-
-          if (x0 < 0 || y0 < 0 || x1 >= bmpW || y1 >= bmpH) {
-            // Out of bounds — transparent
-            continue;
-          }
-
-          const fx = srcX - x0;
-          const fy = srcY - y0;
-          const w00 = (1 - fx) * (1 - fy);
-          const w10 = fx * (1 - fy);
-          const w01 = (1 - fx) * fy;
-          const w11 = fx * fy;
-
-          const i00 = (y0 * bmpW + x0) * 4;
-          const i10 = (y0 * bmpW + x1) * 4;
-          const i01 = (y1 * bmpW + x0) * 4;
-          const i11 = (y1 * bmpW + x1) * 4;
-
-          const dstOff = (ty * tileSize + tx) * 4;
-          for (let ch = 0; ch < 4; ch++) {
-            tilePixels[dstOff + ch] = Math.round(
-              bitmapData[i00 + ch] * w00 +
-              bitmapData[i10 + ch] * w10 +
-              bitmapData[i01 + ch] * w01 +
-              bitmapData[i11 + ch] * w11,
-            );
-          }
-          if (tilePixels[dstOff + 3] > 0) hasContent = true;
-        }
-      }
-
-      if (!hasContent) {
-        return reply.code(204).send();
-      }
-
-      // Encode tile as PNG using sharp
-      const sharpMod = await import("sharp");
-      const pngBuffer = await sharpMod.default(tilePixels, {
-        raw: { width: tileSize, height: tileSize, channels: 4 },
-      }).png().toBuffer();
 
       // Cache in DB
       try {

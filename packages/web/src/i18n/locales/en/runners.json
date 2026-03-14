@@ -117,5 +117,9 @@
   "rank": "Rank",
   "scheduled": "Scheduled start",
   "started": "Actual start",
-  "forest": "Time in forest"
+  "forest": "Time in forest",
+  "rentalCard": "Rental card",
+  "markReturned": "Mark returned",
+  "markNotReturned": "Undo return",
+  "cardReturned": "Card returned"
 }

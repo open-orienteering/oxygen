@@ -71,6 +71,7 @@ export interface RegistrationReceiptLabels {
   participant?: string;
   entryFeeSubtitle?: string;
   paymentMethod?: string;
+  rentalCardFee?: string;
 }
 
 /** All data needed to format and print a finish receipt. */
@@ -129,7 +130,8 @@ export interface RegistrationReceiptData {
   startTime?: string; // formatted HH:MM:SS or undefined for free start
   payment?: {
     method: string; // "Invoice", "Card", "Swish", "Pay on site"
-    amount: number; // whole currency units (e.g., 50 = 50 SEK)
+    amount: number; // total amount (entry fee + card fee)
+    cardFee?: number; // rental card portion, printed as a separate line if > 0
   };
   logoRaster?: LogoRaster | null;
   /** Optional custom message to print on the receipt. */

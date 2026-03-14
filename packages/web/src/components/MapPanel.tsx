@@ -1,72 +1,7 @@
 import { useState, useRef, useMemo, useEffect, useCallback } from "react";
 import { useTranslation } from "react-i18next";
-import { useParams } from "react-router-dom";
 import { trpc } from "../lib/trpc";
 import { MapViewer, type ControlOverlay, type CourseOverlay } from "./MapViewer";
-
-// ─── Global OCD buffer cache (per competition) ──────────────
-// Persists across component mounts/unmounts (page navigation)
-let cachedCompetitionId: string | null = null;
-let cachedOcdBuffer: ArrayBuffer | null = null;
-let cachedOcdBase64Hash: string | null = null;
-
-function clearGlobalCache() {
-  cachedCompetitionId = null;
-  cachedOcdBuffer = null;
-  cachedOcdBase64Hash = null;
-}
-
-// ─── IndexedDB persistence for page reloads ─────────────────
-const IDB_NAME = "oos_map_cache";
-const IDB_STORE = "maps";
-
-function idbKey(competitionId: string) {
-  return `map_${competitionId}`;
-}
-
-function openMapDB(): Promise<IDBDatabase> {
-  return new Promise((resolve, reject) => {
-    const req = indexedDB.open(IDB_NAME, 2);
-    req.onupgradeneeded = () => {
-      const db = req.result;
-      if (!db.objectStoreNames.contains(IDB_STORE)) {
-        db.createObjectStore(IDB_STORE);
-      }
-    };
-    req.onsuccess = () => resolve(req.result);
-    req.onerror = () => reject(req.error);
-  });
-}
-
-async function saveOcdToIDB(competitionId: string, buf: ArrayBuffer, hash: string): Promise<void> {
-  try {
-    const db = await openMapDB();
-    const tx = db.transaction(IDB_STORE, "readwrite");
-    tx.objectStore(IDB_STORE).put({ buffer: buf, hash }, idbKey(competitionId));
-    db.close();
-  } catch { /* non-critical */ }
-}
-
-async function loadOcdFromIDB(competitionId: string): Promise<{ buffer: ArrayBuffer; hash: string } | null> {
-  try {
-    const db = await openMapDB();
-    return new Promise((resolve) => {
-      const tx = db.transaction(IDB_STORE, "readonly");
-      const req = tx.objectStore(IDB_STORE).get(idbKey(competitionId));
-      req.onsuccess = () => { db.close(); resolve(req.result ?? null); };
-      req.onerror = () => { db.close(); resolve(null); };
-    });
-  } catch { return null; }
-}
-
-async function removeOcdFromIDB(competitionId: string): Promise<void> {
-  try {
-    const db = await openMapDB();
-    const tx = db.transaction(IDB_STORE, "readwrite");
-    tx.objectStore(IDB_STORE).delete(idbKey(competitionId));
-    db.close();
-  } catch { /* non-critical */ }
-}
 
 interface Props {
   /** Highlight a specific control by DB ID */
@@ -119,9 +54,6 @@ export function MapPanel({
   hideToolbar = false,
 }: Props) {
   const { t } = useTranslation("dashboard");
-  const { nameId } = useParams<{ nameId: string }>();
-  const competitionId = nameId ?? "__none__";
-
   // Merge single + multi course names into a set for unified handling
   const effectiveCourseNames = useMemo(() => {
     const names = new Set<string>();
@@ -132,9 +64,9 @@ export function MapPanel({
   const mapInfo = trpc.course.mapFileInfo.useQuery(undefined, {
     staleTime: 60_000,
   });
-  const mapDownload = trpc.course.downloadMap.useQuery(undefined, {
-    enabled: !!mapInfo.data,
+  const mapMetadata = trpc.course.mapMetadata.useQuery(undefined, {
     staleTime: 60_000,
+    enabled: !!mapInfo.data,
   });
   const controlCoords = trpc.course.controlCoordinates.useQuery(undefined, {
     staleTime: 60_000,
@@ -162,7 +94,7 @@ export function MapPanel({
     onSuccess: () => {
       setUploadError(null);
       mapInfo.refetch();
-      mapDownload.refetch();
+      mapMetadata.refetch();
     },
     onError: (err) => {
       setUploadError(`Map upload failed: ${err.message}`);
@@ -175,75 +107,6 @@ export function MapPanel({
   const [showOnlyRelevant, setShowOnlyRelevant] = useState(true);
   const [showDescriptions, setShowDescriptions] = useState(false);
 
-  // Local state that mirrors the global cache
-  const [ocdBuffer, setOcdBuffer] = useState<ArrayBuffer | null>(
-    cachedCompetitionId === competitionId ? cachedOcdBuffer : null,
-  );
-  const [idbLoaded, setIdbLoaded] = useState(
-    cachedCompetitionId === competitionId && !!cachedOcdBuffer,
-  );
-
-  // When competition changes, reset buffer state
-  useEffect(() => {
-    if (cachedCompetitionId !== competitionId) {
-      clearGlobalCache();
-      setOcdBuffer(null);
-      setIdbLoaded(false);
-    }
-  }, [competitionId]);
-
-  // On mount / competition change: try to load from IndexedDB
-  useEffect(() => {
-    if (cachedCompetitionId === competitionId && cachedOcdBuffer) {
-      setOcdBuffer(cachedOcdBuffer);
-      setIdbLoaded(true);
-      return;
-    }
-    setIdbLoaded(false);
-    loadOcdFromIDB(competitionId).then((data) => {
-      if (data) {
-        cachedCompetitionId = competitionId;
-        cachedOcdBuffer = data.buffer;
-        cachedOcdBase64Hash = data.hash;
-        setOcdBuffer(data.buffer);
-      }
-      setIdbLoaded(true);
-    });
-  }, [competitionId]);
-
-  // When mapInfo resolves with no map, clear any stale cached buffer
-  useEffect(() => {
-    if (mapInfo.isFetched && !mapInfo.data) {
-      if (ocdBuffer) {
-        clearGlobalCache();
-        setOcdBuffer(null);
-        removeOcdFromIDB(competitionId);
-      }
-    }
-  }, [mapInfo.isFetched, mapInfo.data, competitionId, ocdBuffer]);
-
-  // When download data arrives, decode and cache globally + IDB
-  useEffect(() => {
-    if (mapDownload.data?.fileDataBase64) {
-      const hash = String(mapDownload.data.fileDataBase64.length);
-      if (cachedCompetitionId === competitionId && cachedOcdBase64Hash === hash && cachedOcdBuffer) {
-        if (!ocdBuffer) setOcdBuffer(cachedOcdBuffer);
-        return;
-      }
-      const binary = atob(mapDownload.data.fileDataBase64);
-      const bytes = new Uint8Array(binary.length);
-      for (let i = 0; i < binary.length; i++) {
-        bytes[i] = binary.charCodeAt(i);
-      }
-      const buf = bytes.buffer;
-      cachedCompetitionId = competitionId;
-      cachedOcdBuffer = buf;
-      cachedOcdBase64Hash = hash;
-      setOcdBuffer(buf);
-      saveOcdToIDB(competitionId, buf, hash);
-    }
-  }, [mapDownload.data, competitionId]);
-
   const handleFile = useCallback((file: File) => {
     if (!file.name.toLowerCase().endsWith(".ocd")) return;
     const reader = new FileReader();
@@ -253,14 +116,9 @@ export function MapPanel({
         new Uint8Array(buf).reduce((data, byte) => data + String.fromCharCode(byte), ""),
       );
       uploadMutation.mutate({ fileName: file.name, fileDataBase64: base64 });
-      cachedCompetitionId = competitionId;
-      cachedOcdBuffer = buf;
-      cachedOcdBase64Hash = String(base64.length);
-      setOcdBuffer(buf);
-      saveOcdToIDB(competitionId, buf, String(base64.length));
     };
     reader.readAsArrayBuffer(file);
-  }, [uploadMutation, competitionId]);
+  }, [uploadMutation]);
 
   const handleDrop = useCallback((e: React.DragEvent) => {
     e.preventDefault();
@@ -321,6 +179,8 @@ export function MapPanel({
         code: c.code,
         x: c.mapX,
         y: c.mapY,
+        lat: c.lat,
+        lng: c.lng,
         type: c.status === 4 ? "Start" as const : c.status === 5 ? "Finish" as const : "Control" as const,
         highlight: isHighlighted,
         visible,
@@ -398,8 +258,13 @@ export function MapPanel({
         .map((c) => String(c.id));
       if (ids.length > 0) return ids;
     }
-    if (effectiveCourseNames.size > 0 && courseControlIds.size > 0) {
-      return Array.from(courseControlIds);
+    if (effectiveCourseNames.size > 0 && courseControlIds.size > 0 && controlCoords.data) {
+      const ids = Array.from(courseControlIds);
+      // Also include start/finish controls (status 4/5) so the bounding box fits the full course
+      for (const c of controlCoords.data) {
+        if (c.status === 4 || c.status === 5) ids.push(String(c.id));
+      }
+      return ids;
     }
     if (highlightControlId) {
       return [String(highlightControlId)];
@@ -412,8 +277,8 @@ export function MapPanel({
     if (!isNaN(numId)) onControlClick?.(numId);
   }, [onControlClick]);
 
-  const hasMap = ocdBuffer || mapInfo.data;
-  const isLoadingMap = !idbLoaded || mapInfo.isLoading || (mapInfo.data && mapDownload.isLoading);
+  const hasMap = !!mapInfo.data;
+  const isLoadingMap = mapInfo.isLoading || (mapInfo.data && mapMetadata.isLoading);
   const canFilter = filterMode === "course" || filterMode === "single-control";
 
   // Fullscreen hooks — MUST be before any early returns to respect hook ordering rules
@@ -477,7 +342,7 @@ export function MapPanel({
   }
 
   // Loading state
-  if (isLoadingMap && !ocdBuffer) {
+  if (isLoadingMap) {
     return (
       <div className={`${className}`}>
         <div className="flex items-center justify-center bg-slate-50 rounded-lg border border-slate-200" style={{ height }}>
@@ -547,7 +412,10 @@ export function MapPanel({
 
       {/* Map viewer */}
       <MapViewer
-        ocdData={ocdBuffer}
+        mapBounds={mapMetadata.data?.bounds}
+        mapScale={mapMetadata.data?.scale}
+        northOffset={mapMetadata.data?.northOffset}
+        mapVersion={mapMetadata.data?.uploadedAt}
         controls={controlOverlays}
         courses={courseOverlays}
         courseGeometry={courseGeometry.data}

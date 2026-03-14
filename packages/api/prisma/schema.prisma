@@ -162,6 +162,9 @@ model oRunner {
   Counter    Int       @default(0) @db.UnsignedInt
   Removed    Boolean   @default(false)
 
+  // Oxygen-only fields (ignored by MeOS)
+  oos_card_returned Int @default(0) @db.TinyInt
+
   @@index([Counter])
   @@index([Modified])
 }

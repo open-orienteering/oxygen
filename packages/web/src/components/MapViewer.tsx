@@ -1,23 +1,16 @@
 import { useState, useRef, useEffect, useCallback, useMemo } from "react";
-import { Buffer } from "buffer";
 import { getDescriptionSymbols } from "../iof-symbols";
-
-// Make Buffer available globally for ocad2geojson (it uses Buffer.isBuffer)
-if (typeof globalThis.Buffer === "undefined") {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  (globalThis as any).Buffer = Buffer;
-}
-
-// ocad2geojson is a CommonJS module
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-let readOcadFn: (buf: Buffer, opts?: any) => Promise<any>;
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-let ocadToSvgFn: (ocadFile: any, opts?: any) => any;
-
-const ocadReady = import("ocad2geojson").then((mod) => {
-  readOcadFn = mod.readOcad;
-  ocadToSvgFn = mod.ocadToSvg;
-});
+import { TileLayer } from "./TileLayer";
+import {
+  type TileViewport,
+  type WGS84Bounds,
+  type AffineTransform,
+  latlngToPixel,
+  pixelToLatlng,
+  fitBounds,
+  metersPerPixel,
+  buildAffineTransform,
+} from "../lib/geo-utils";
 
 // ─── Types ──────────────────────────────────────────────────
 
@@ -26,6 +19,8 @@ export interface ControlOverlay {
   code: string;
   x: number; // map position x (mm on map)
   y: number; // map position y (mm on map)
+  lat: number;
+  lng: number;
   type: "Start" | "Control" | "Finish";
   highlight?: boolean;
   visible?: boolean;
@@ -49,7 +44,12 @@ export interface CourseOverlay {
 }
 
 interface Props {
-  ocdData?: ArrayBuffer | null;
+  mapBounds?: WGS84Bounds | null;
+  mapScale?: number | null;
+  /** Map north offset in degrees (bearing from true north to map north). Applied as CSS rotation. */
+  northOffset?: number | null;
+  /** Map upload timestamp for cache busting tile URLs */
+  mapVersion?: number;
   controls?: ControlOverlay[];
   courses?: CourseOverlay[];
   highlightControlId?: string;
@@ -69,10 +69,6 @@ interface Props {
 
 // ─── Helpers ────────────────────────────────────────────────
 
-function mmToOcad(mm: number): number {
-  return mm * 100;
-}
-
 interface Pt { x: number; y: number }
 
 /**
@@ -89,11 +85,10 @@ function clipLine(
   if (len < 1) return [];
   const ux = dx / len, uy = dy / len;
 
-  // Collect blocked intervals along the line (parametric t ∈ [0, len])
   const blocks: [number, number][] = [];
   for (const obs of obstacles) {
     const vx = obs.x - a.x, vy = obs.y - a.y;
-    const t = vx * ux + vy * uy; // projection along line
+    const t = vx * ux + vy * uy;
     const px = a.x + t * ux - obs.x;
     const py = a.y + t * uy - obs.y;
     const perpDist = Math.sqrt(px * px + py * py);
@@ -103,7 +98,6 @@ function clipLine(
     }
   }
 
-  // Merge overlapping blocks
   blocks.sort((ba, bb) => ba[0] - bb[0]);
   const merged: [number, number][] = [];
   for (const bl of blocks) {
@@ -114,7 +108,6 @@ function clipLine(
     }
   }
 
-  // Build sub-segments between blocked intervals, clamped to [0, len]
   const segs: { x1: number; y1: number; x2: number; y2: number }[] = [];
   let cursor = 0;
   for (const [bs, be] of merged) {
@@ -143,47 +136,13 @@ function ptSegDist(px: number, py: number, ax: number, ay: number, bx: number, b
   return { dist: Math.sqrt(ddx * ddx + ddy * ddy), cx, cy };
 }
 
-function computeFitTransform(
-  viewBox: { x: number; y: number; w: number; h: number },
-  cw: number,
-  ch: number,
-  minX: number,
-  minY: number,
-  maxX: number,
-  maxY: number,
-) {
-  const mapScaleX = cw / viewBox.w;
-  const mapScaleY = ch / viewBox.h;
-  const mapScale = Math.min(mapScaleX, mapScaleY);
-  const renderedW = viewBox.w * mapScale;
-  const renderedH = viewBox.h * mapScale;
-  const offsetX = (cw - renderedW) / 2;
-  const offsetY = (ch - renderedH) / 2;
-
-  // Guard against zero or near-zero extent (single point)
-  const fitW = Math.max(maxX - minX, viewBox.w * 0.001);
-  const fitH = Math.max(maxY - minY, viewBox.h * 0.001);
-
-  const fitScaleX = cw / (fitW * mapScale);
-  const fitScaleY = ch / (fitH * mapScale);
-  const fitScale = Math.max(0.1, Math.min(50, Math.min(fitScaleX, fitScaleY)));
-
-  const centerVbX = (minX + maxX) / 2;
-  const centerVbY = (minY + maxY) / 2;
-  const ctrlScreenX = offsetX + ((centerVbX - viewBox.x) / viewBox.w) * renderedW;
-  const ctrlScreenY = offsetY + ((centerVbY - viewBox.y) / viewBox.h) * renderedH;
-
-  return {
-    x: cw / 2 - ctrlScreenX * fitScale,
-    y: ch / 2 - ctrlScreenY * fitScale,
-    scale: fitScale,
-  };
-}
-
 // ─── Component ──────────────────────────────────────────────
 
 export function MapViewer({
-  ocdData,
+  mapBounds,
+  mapScale,
+  northOffset,
+  mapVersion,
   controls = [],
   courses = [],
   highlightControlId,
@@ -200,18 +159,26 @@ export function MapViewer({
   hideControls = false,
 }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
-  const svgContainerRef = useRef<HTMLDivElement>(null);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [svgElement, setSvgElement] = useState<SVGElement | null>(null);
-  const [viewBox, setViewBox] = useState<{ x: number; y: number; w: number; h: number } | null>(null);
+  const [viewport, setViewport] = useState<TileViewport | null>(null);
 
-  const [transform, setTransform] = useState({ x: 0, y: 0, scale: 1 });
-  const [mapScale, setMapScale] = useState<number | null>(null);
   const isPanningRef = useRef(false);
   const lastPosRef = useRef({ x: 0, y: 0 });
   const hasInitialFitRef = useRef(false);
   const lastFocusKeyRef = useRef<string>("");
+
+  // ─── Tile progress polling (while loading) ────────────────
+  const [tileProgress, setTileProgress] = useState<{ total: number; done: number; rendering: boolean } | null>(null);
+  useEffect(() => {
+    if (viewport) return; // already loaded, stop polling
+    if (!mapBounds) return; // no map
+    const interval = setInterval(async () => {
+      try {
+        const res = await fetch("/api/map-tile-progress");
+        if (res.ok) setTileProgress(await res.json());
+      } catch { /* ignore */ }
+    }, 2000);
+    return () => clearInterval(interval);
+  }, [viewport, mapBounds]);
 
   // ─── Measure tool state ──────────────────────────────────
   const [measuring, setMeasuring] = useState(false);
@@ -220,7 +187,7 @@ export function MapViewer({
   const mouseDownPosRef = useRef<Pt | null>(null);
   const lastClickTimeRef = useRef(0);
 
-  // Track container size for correct overlay calculations after resize / fullscreen
+  // Track container size
   const [containerSize, setContainerSize] = useState({ w: 0, h: 0 });
   const prevSizeRef = useRef({ w: 0, h: 0 });
   useEffect(() => {
@@ -239,169 +206,123 @@ export function MapViewer({
     return () => ro.disconnect();
   }, []);
 
+  // Map rotation: negate northOffset so map north points up on screen
+  const rotDeg = northOffset ? -northOffset : 0;
+  const rotRad = (rotDeg * Math.PI) / 180;
+  // Overscan factor: scale the inner rotated container so corners don't clip
+  const overscan = rotDeg !== 0
+    ? Math.abs(Math.cos(rotRad)) + Math.abs(Math.sin(rotRad)) // ≈ 1.12 for 7°
+    : 1;
+
+  // Effective render dimensions (larger when rotated to cover corners)
+  const renderW = rotDeg !== 0 ? Math.round(containerSize.w * overscan) : containerSize.w;
+  const renderH = rotDeg !== 0 ? Math.round(containerSize.h * overscan) : containerSize.h;
+
+  // Build affine transform from control points (mm ↔ lat/lng)
+  const affine: AffineTransform | null = useMemo(() => {
+    const pts = controls
+      .filter((c) => c.lat !== 0 && c.lng !== 0 && c.x !== 0 && c.y !== 0)
+      .map((c) => ({ mapX: c.x, mapY: c.y, lat: c.lat, lng: c.lng }));
+    return buildAffineTransform(pts);
+  }, [controls]);
+
+  // ─── Viewport initialization from map bounds ────────────
+
+  useEffect(() => {
+    if (viewport) return; // already initialized
+    if (!mapBounds || containerSize.w === 0 || containerSize.h === 0) return;
+    setViewport(fitBounds(mapBounds, containerSize.w, containerSize.h, 0.05));
+    hasInitialFitRef.current = false;
+    lastFocusKeyRef.current = "";
+  }, [mapBounds, containerSize, viewport]);
+
+  // ─── Helper: compute bounds from controls in lat/lng ─────
+
+  const fitToControlBounds = useCallback(
+    (ctrls: ControlOverlay[], padding: number) => {
+      if (ctrls.length === 0 || containerSize.w === 0 || containerSize.h === 0) return;
+      let minLat = Infinity, maxLat = -Infinity, minLng = Infinity, maxLng = -Infinity;
+      for (const c of ctrls) {
+        if (c.lat === 0 && c.lng === 0) continue;
+        minLat = Math.min(minLat, c.lat); maxLat = Math.max(maxLat, c.lat);
+        minLng = Math.min(minLng, c.lng); maxLng = Math.max(maxLng, c.lng);
+      }
+      if (minLat === Infinity) return;
+      // Expand bounds by ring radius so control rings aren't clipped at the edge.
+      // Ring radius = 2.5 mm on map × mapScale/1000 metres/mm.
+      if (mapScale) {
+        const ringM = 2.5 * mapScale / 1000;
+        const midLat = (minLat + maxLat) / 2;
+        const latMargin = ringM / 111320;
+        const lngMargin = ringM / (111320 * Math.cos(midLat * Math.PI / 180));
+        minLat -= latMargin; maxLat += latMargin;
+        minLng -= lngMargin; maxLng += lngMargin;
+      }
+      const bounds: WGS84Bounds = { north: maxLat, south: minLat, east: maxLng, west: minLng };
+      setViewport(fitBounds(bounds, containerSize.w, containerSize.h, padding));
+    },
+    [containerSize, mapScale],
+  );
+
   // Re-fit when container size changes (e.g. fullscreen toggle)
   useEffect(() => {
-    if (!viewBox || containerSize.w === 0 || containerSize.h === 0) return;
-    // Skip the very first size report — that's handled by the initial fit
+    if (!viewport || containerSize.w === 0 || containerSize.h === 0) return;
     if (!hasInitialFitRef.current) return;
-    const cw = containerSize.w;
-    const ch = containerSize.h;
-    const visibleControls = controls.filter((c) => c.visible !== false && c.type === "Control");
+    const visibleControls = controls.filter((c) => c.visible !== false);
     if (visibleControls.length < 2) {
-      setTransform({ x: 0, y: 0, scale: 1 });
+      if (mapBounds) setViewport(fitBounds(mapBounds, containerSize.w, containerSize.h, 0.05));
       return;
     }
-    let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
-    for (const c of visibleControls) {
-      const ox = mmToOcad(c.x);
-      const oy = 2 * viewBox.y + viewBox.h - mmToOcad(c.y);
-      minX = Math.min(minX, ox); maxX = Math.max(maxX, ox);
-      minY = Math.min(minY, oy); maxY = Math.max(maxY, oy);
-    }
-    const m = hideControls ? 0.02 : 0.15;
-    const bw = (maxX - minX) || viewBox.w * 0.1;
-    const bh = (maxY - minY) || viewBox.h * 0.1;
-    setTransform(computeFitTransform(viewBox, cw, ch,
-      minX - bw * m, minY - bh * m, maxX + bw * m, maxY + bh * m));
+    fitToControlBounds(visibleControls, hideControls ? 0.02 : 0.15);
   }, [containerSize]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  // Parse OCD file
-  useEffect(() => {
-    if (!ocdData || ocdData.byteLength === 0) {
-      setSvgElement(null);
-      setViewBox(null);
-      return;
-    }
-    let cancelled = false;
-    async function parse() {
-      setLoading(true);
-      setError(null);
-      try {
-        await ocadReady;
-        const buffer = Buffer.from(ocdData!);
-        const ocadFile = await readOcadFn(buffer, { quietWarnings: true });
-        if (cancelled) return;
-        // Extract map scale from OCD CRS (e.g. 10000 for 1:10000)
-        try {
-          const crsScale = ocadFile?.getCrs?.()?.scale;
-          if (crsScale && typeof crsScale === "number" && crsScale > 0) setMapScale(crsScale);
-        } catch { /* ignore */ }
-        const svg = ocadToSvgFn(ocadFile, {
-          document: window.document,
-          generateSymbolElements: true,
-          exportHidden: false,
-        });
-        if (cancelled) return;
-        const vb = svg.getAttribute("viewBox");
-        if (vb) {
-          const parts = vb.split(/[\s,]+/).map(Number);
-          setViewBox({ x: parts[0], y: parts[1], w: parts[2], h: parts[3] });
-        }
-        setSvgElement(svg);
-        hasInitialFitRef.current = false;
-        lastFocusKeyRef.current = "";
-      } catch (e) {
-        if (!cancelled) setError(e instanceof Error ? e.message : "Failed to parse OCD file");
-      } finally {
-        if (!cancelled) setLoading(false);
-      }
-    }
-    parse();
-    return () => { cancelled = true; };
-  }, [ocdData]);
-
-  // Mount SVG into DOM
-  useEffect(() => {
-    const container = svgContainerRef.current;
-    if (!container || !svgElement) return;
-    container.innerHTML = "";
-    svgElement.style.width = "100%";
-    svgElement.style.height = "100%";
-    container.appendChild(svgElement);
-    return () => { container.innerHTML = ""; };
-  }, [svgElement]);
 
   // ─── Initial fit ──────────────────────────────────────────
 
   useEffect(() => {
-    if (!viewBox || !containerRef.current || hasInitialFitRef.current) return;
+    if (!viewport || !containerRef.current || hasInitialFitRef.current) return;
     if (!initialFitControls) { hasInitialFitRef.current = true; return; }
-    const visibleControls = controls.filter((c) => c.visible !== false && c.type === "Control");
-    if (visibleControls.length < 2) return; // Don't mark as done — controls may still be loading
-    const cw = containerRef.current.clientWidth;
-    const ch = containerRef.current.clientHeight;
-    if (cw === 0 || ch === 0) return;
-    let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
-    for (const c of visibleControls) {
-      const ox = mmToOcad(c.x);
-      const oy = 2 * viewBox.y + viewBox.h - mmToOcad(c.y);
-      minX = Math.min(minX, ox); maxX = Math.max(maxX, ox);
-      minY = Math.min(minY, oy); maxY = Math.max(maxY, oy);
-    }
-    const m = hideControls ? 0.02 : 0.15;
-    const bw = (maxX - minX) || viewBox.w * 0.1;
-    const bh = (maxY - minY) || viewBox.h * 0.1;
-    setTransform(computeFitTransform(viewBox, cw, ch,
-      minX - bw * m, minY - bh * m, maxX + bw * m, maxY + bh * m));
+    const visibleControls = controls.filter((c) => c.visible !== false);
+    if (visibleControls.length < 2) return;
+    fitToControlBounds(visibleControls, hideControls ? 0.02 : 0.15);
     hasInitialFitRef.current = true;
-  }, [viewBox, controls, initialFitControls, hideControls]);
+  }, [viewport, controls, initialFitControls, hideControls, fitToControlBounds]);
 
   // ─── Focus on selection change ────────────────────────────
 
   useEffect(() => {
-    if (!viewBox || !containerRef.current || !focusControlIds || focusControlIds.length === 0) return;
+    if (!viewport || !containerRef.current || !focusControlIds || focusControlIds.length === 0) return;
     const key = [...focusControlIds].sort().join(",");
     if (key === lastFocusKeyRef.current) return;
     lastFocusKeyRef.current = key;
     const focusSet = new Set(focusControlIds);
     const focusControls = controls.filter((c) => focusSet.has(c.id));
     if (focusControls.length === 0) return;
-    const cw = containerRef.current.clientWidth;
-    const ch = containerRef.current.clientHeight;
+    const cw = containerSize.w || containerRef.current.clientWidth;
+    const ch = containerSize.h || containerRef.current.clientHeight;
     if (cw === 0 || ch === 0) return;
-    let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
-    for (const c of focusControls) {
-      const ox = mmToOcad(c.x);
-      const oy = 2 * viewBox.y + viewBox.h - mmToOcad(c.y);
-      minX = Math.min(minX, ox); maxX = Math.max(maxX, ox);
-      minY = Math.min(minY, oy); maxY = Math.max(maxY, oy);
-    }
+
     if (focusControls.length === 1) {
-      // Use ALL controls (including hidden ones) for extent reference
-      const allControls = controls.filter((c) => c.type === "Control");
-      if (allControls.length >= 2) {
-        let aX0 = Infinity, aX1 = -Infinity, aY0 = Infinity, aY1 = -Infinity;
-        for (const c of allControls) {
-          const ox = mmToOcad(c.x);
-          const oy = 2 * viewBox.y + viewBox.h - mmToOcad(c.y);
-          aX0 = Math.min(aX0, ox); aX1 = Math.max(aX1, ox);
-          aY0 = Math.min(aY0, oy); aY1 = Math.max(aY1, oy);
+      const fc = focusControls[0];
+      const allCtrls = controls.filter((c) => c.type === "Control" && c.lat !== 0);
+      if (allCtrls.length >= 2) {
+        let minLat = Infinity, maxLat = -Infinity, minLng = Infinity, maxLng = -Infinity;
+        for (const c of allCtrls) {
+          minLat = Math.min(minLat, c.lat); maxLat = Math.max(maxLat, c.lat);
+          minLng = Math.min(minLng, c.lng); maxLng = Math.max(maxLng, c.lng);
         }
-        const ext = Math.max(aX1 - aX0, aY1 - aY0) || viewBox.w * 0.1;
-        const h = ext * 0.167;
-        minX -= h; maxX += h; minY -= h; maxY += h;
+        const ext = Math.max(maxLat - minLat, maxLng - minLng) * 0.167;
+        const bounds: WGS84Bounds = {
+          north: fc.lat + ext, south: fc.lat - ext,
+          east: fc.lng + ext, west: fc.lng - ext,
+        };
+        setViewport(fitBounds(bounds, cw, ch, 0.05));
       } else {
-        // Fallback: use a fraction of the map extent
-        const ext = Math.max(viewBox.w, viewBox.h) * 0.1;
-        minX -= ext; maxX += ext; minY -= ext; maxY += ext;
+        setViewport((prev) => prev ? { ...prev, centerLat: fc.lat, centerLng: fc.lng } : prev);
       }
     } else {
-      const fm = hideControls ? 0.02 : 0.2;
-      const bw = (maxX - minX) || viewBox.w * 0.1;
-      const bh = (maxY - minY) || viewBox.h * 0.1;
-      minX -= bw * fm; maxX += bw * fm;
-      minY -= bh * fm; maxY += bh * fm;
+      fitToControlBounds(focusControls, hideControls ? 0.02 : 0.2);
     }
-
-    // Enforce minimum visible area (50mm × 50mm in OCAD units = 5000 × 5000)
-    const MIN_BOX = 5000;
-    const boxW = maxX - minX;
-    const boxH = maxY - minY;
-    if (boxW < MIN_BOX) { const extra = (MIN_BOX - boxW) / 2; minX -= extra; maxX += extra; }
-    if (boxH < MIN_BOX) { const extra = (MIN_BOX - boxH) / 2; minY -= extra; maxY += extra; }
-
-    setTransform(computeFitTransform(viewBox, cw, ch, minX, minY, maxX, maxY));
-  }, [viewBox, focusControlIds, controls]);
+  }, [viewport, focusControlIds, controls, containerSize, hideControls, fitToControlBounds]);
 
   // Build control lookup by ID
   const controlMap = useMemo(() => {
@@ -410,30 +331,67 @@ export function MapViewer({
     return map;
   }, [controls]);
 
+  // ─── Coordinate helpers ───────────────────────────────────
+
+  /** Rotate a screen-relative point to the rotated inner coordinate system. */
+  const screenToInner = useCallback(
+    (sx: number, sy: number): { ix: number; iy: number } => {
+      if (rotRad === 0) return { ix: sx, iy: sy };
+      // Rotate around container center by -rotDeg to undo visual rotation
+      const cx = containerSize.w / 2;
+      const cy = containerSize.h / 2;
+      const dx = sx - cx;
+      const dy = sy - cy;
+      const cos = Math.cos(-rotRad);
+      const sin = Math.sin(-rotRad);
+      return {
+        ix: dx * cos - dy * sin + renderW / 2,
+        iy: dx * sin + dy * cos + renderH / 2,
+      };
+    },
+    [rotRad, containerSize, renderW, renderH],
+  );
+
+  /** Convert screen pixel to map mm via affine. */
+  const screenToMapMm = useCallback(
+    (clientX: number, clientY: number): Pt | null => {
+      if (!viewport || !affine || !containerRef.current) return null;
+      const rect = containerRef.current.getBoundingClientRect();
+      const { ix, iy } = screenToInner(clientX - rect.left, clientY - rect.top);
+      const { lat, lng } = pixelToLatlng(ix, iy, viewport, renderW, renderH);
+      const mm = affine.toMapMm(lat, lng);
+      return { x: mm.mapX, y: mm.mapY };
+    },
+    [viewport, affine, renderW, renderH, screenToInner],
+  );
+
+  /** Convert map mm coords to screen pixel (in the rotated inner space). */
+  const mapMmToScreen = useCallback(
+    (mapX: number, mapY: number): Pt | null => {
+      if (!viewport || !affine || containerSize.w === 0) return null;
+      const { lat, lng } = affine.toLatLng(mapX, mapY);
+      const { px, py } = latlngToPixel(lat, lng, viewport, renderW, renderH);
+      return { x: px, y: py };
+    },
+    [viewport, affine, renderW, renderH, containerSize],
+  );
+
+  // Symbol size in pixels based on zoom and map scale
+  const symbolScale = useMemo(() => {
+    if (!viewport || !mapScale) return 1;
+    const mpp = metersPerPixel(viewport.centerLat, viewport.zoom);
+    // 1mm on map = mapScale/1000 meters on ground
+    return (mapScale / 1000) / mpp;
+  }, [viewport, mapScale]);
+
   // ─── Measure helpers ────────────────────────────────────
 
-  const screenToOcad = useCallback((clientX: number, clientY: number): Pt | null => {
-    if (!viewBox || !containerRef.current) return null;
-    const rect = containerRef.current.getBoundingClientRect();
-    const sx = clientX - rect.left;
-    const sy = clientY - rect.top;
-    const cw = containerSize.w || containerRef.current.clientWidth || 1;
-    const ch = containerSize.h || containerRef.current.clientHeight || 1;
-    const base = Math.min(cw / viewBox.w, ch / viewBox.h);
-    const padX = (cw - viewBox.w * base) / 2;
-    const padY = (ch - viewBox.h * base) / 2;
-    return {
-      x: viewBox.x + ((sx - transform.x) / transform.scale - padX) / base,
-      y: viewBox.y + ((sy - transform.y) / transform.scale - padY) / base,
-    };
-  }, [viewBox, transform, containerSize]);
-
-  function ocadDistPx(a: Pt, b: Pt) {
+  function mapMmDist(a: Pt, b: Pt) {
     const dx = b.x - a.x, dy = b.y - a.y;
     return Math.sqrt(dx * dx + dy * dy);
   }
-  function ocadToMeters(d: number) {
-    return mapScale ? d * mapScale / 100000 : 0;
+  function mmToMeters(d: number) {
+    return mapScale ? d * mapScale / 1000 : 0;
   }
   function formatDist(m: number) {
     return m >= 1000 ? `${(m / 1000).toFixed(2)} km` : `${Math.round(m)} m`;
@@ -443,42 +401,75 @@ export function MapViewer({
 
   useEffect(() => {
     const el = containerRef.current;
-    if (!el) return;
+    if (!el || !viewport) return;
     const onWheel = (e: WheelEvent) => {
       e.preventDefault();
       e.stopPropagation();
       const rect = el.getBoundingClientRect();
-      const mouseX = e.clientX - rect.left;
-      const mouseY = e.clientY - rect.top;
-      setTransform((prev) => {
-        const zoomFactor = e.deltaY > 0 ? 0.9 : 1.1;
-        const newScale = Math.max(0.1, Math.min(50, prev.scale * zoomFactor));
-        const r = newScale / prev.scale;
-        return { scale: newScale, x: mouseX - (mouseX - prev.x) * r, y: mouseY - (mouseY - prev.y) * r };
+      const sx = e.clientX - rect.left;
+      const sy = e.clientY - rect.top;
+      // Transform screen cursor to inner (rotated) coords
+      let ix = sx, iy = sy;
+      if (rotRad !== 0) {
+        const cx = containerSize.w / 2, cy = containerSize.h / 2;
+        const dx = sx - cx, dy = sy - cy;
+        const cos = Math.cos(-rotRad), sin = Math.sin(-rotRad);
+        ix = dx * cos - dy * sin + renderW / 2;
+        iy = dx * sin + dy * cos + renderH / 2;
+      }
+      const rw = renderW || el.clientWidth;
+      const rh = renderH || el.clientHeight;
+
+      const cursorGeo = pixelToLatlng(ix, iy, viewport, rw, rh);
+      const zoomDelta = e.deltaY > 0 ? -0.15 : 0.15;
+      const newZoom = Math.max(1, Math.min(22, viewport.zoom + zoomDelta));
+
+      setViewport((prev) => {
+        if (!prev) return prev;
+        const newVp = { ...prev, zoom: newZoom };
+        const afterCursor = latlngToPixel(cursorGeo.lat, cursorGeo.lng, newVp, rw, rh);
+        const dxPx = ix - afterCursor.px;
+        const dyPx = iy - afterCursor.py;
+        const newCenter = pixelToLatlng(rw / 2 - dxPx, rh / 2 - dyPx, newVp, rw, rh);
+        return { centerLat: newCenter.lat, centerLng: newCenter.lng, zoom: newZoom };
       });
     };
     el.addEventListener("wheel", onWheel, { passive: false });
     return () => el.removeEventListener("wheel", onWheel);
-  }, [svgElement]);
+  }, [viewport, containerSize, rotRad, renderW, renderH]);
 
   const handleMouseDown = useCallback((e: React.MouseEvent) => {
     if (e.button !== 0) return;
-    isPanningRef.current = true;
+    if (!measuring) isPanningRef.current = true;
     lastPosRef.current = { x: e.clientX, y: e.clientY };
     mouseDownPosRef.current = { x: e.clientX, y: e.clientY };
-  }, []);
+  }, [measuring]);
+
   const handleMouseMove = useCallback((e: React.MouseEvent) => {
-    if (isPanningRef.current) {
-      const dx = e.clientX - lastPosRef.current.x;
-      const dy = e.clientY - lastPosRef.current.y;
+    if (isPanningRef.current && viewport) {
+      let dx = e.clientX - lastPosRef.current.x;
+      let dy = e.clientY - lastPosRef.current.y;
       lastPosRef.current = { x: e.clientX, y: e.clientY };
-      setTransform((prev) => ({ ...prev, x: prev.x + dx, y: prev.y + dy }));
+      // Rotate pixel delta to account for map rotation
+      if (rotRad !== 0) {
+        const cos = Math.cos(-rotRad);
+        const sin = Math.sin(-rotRad);
+        const rdx = dx * cos - dy * sin;
+        const rdy = dx * sin + dy * cos;
+        dx = rdx; dy = rdy;
+      }
+      const rw = renderW || 1;
+      const rh = renderH || 1;
+      const center = latlngToPixel(viewport.centerLat, viewport.centerLng, viewport, rw, rh);
+      const newCenter = pixelToLatlng(center.px - dx, center.py - dy, viewport, rw, rh);
+      setViewport((prev) => prev ? { ...prev, centerLat: newCenter.lat, centerLng: newCenter.lng } : prev);
     }
     if (measuring) {
-      const pt = screenToOcad(e.clientX, e.clientY);
+      const pt = screenToMapMm(e.clientX, e.clientY);
       if (pt) setMeasureCursor(pt);
     }
-  }, [measuring, screenToOcad]);
+  }, [measuring, viewport, renderW, renderH, rotRad, screenToMapMm]);
+
   const handleMouseUp = useCallback((e: React.MouseEvent) => {
     isPanningRef.current = false;
     if (measuring && mouseDownPosRef.current) {
@@ -487,18 +478,17 @@ export function MapViewer({
       if (dx + dy < 5) {
         const now = Date.now();
         if (now - lastClickTimeRef.current < 300) {
-          // Double-click: finish measurement
           lastClickTimeRef.current = 0;
           setMeasureCursor(null);
         } else {
           lastClickTimeRef.current = now;
-          const pt = screenToOcad(e.clientX, e.clientY);
+          const pt = screenToMapMm(e.clientX, e.clientY);
           if (pt) setMeasurePoints((prev) => [...prev, pt]);
         }
       }
     }
     mouseDownPosRef.current = null;
-  }, [measuring, screenToOcad]);
+  }, [measuring, screenToMapMm]);
 
   const lastTouchRef = useRef<{ x: number; y: number; dist?: number } | null>(null);
   const touchStartPosRef = useRef<Pt | null>(null);
@@ -509,723 +499,591 @@ export function MapViewer({
     } else if (e.touches.length === 2) {
       const dx = e.touches[0].clientX - e.touches[1].clientX;
       const dy = e.touches[0].clientY - e.touches[1].clientY;
-      lastTouchRef.current = { x: (e.touches[0].clientX + e.touches[1].clientX) / 2, y: (e.touches[0].clientY + e.touches[1].clientY) / 2, dist: Math.sqrt(dx * dx + dy * dy) };
+      lastTouchRef.current = {
+        x: (e.touches[0].clientX + e.touches[1].clientX) / 2,
+        y: (e.touches[0].clientY + e.touches[1].clientY) / 2,
+        dist: Math.sqrt(dx * dx + dy * dy),
+      };
       touchStartPosRef.current = null;
     }
   }, []);
+
   const handleTouchMove = useCallback((e: React.TouchEvent) => {
     e.preventDefault();
+    if (!viewport) return;
+    const rw = renderW || 1;
+    const rh = renderH || 1;
+
     if (e.touches.length === 1 && lastTouchRef.current) {
-      const dx = e.touches[0].clientX - lastTouchRef.current.x;
-      const dy = e.touches[0].clientY - lastTouchRef.current.y;
+      let dx = e.touches[0].clientX - lastTouchRef.current.x;
+      let dy = e.touches[0].clientY - lastTouchRef.current.y;
       lastTouchRef.current = { x: e.touches[0].clientX, y: e.touches[0].clientY };
-      setTransform((prev) => ({ ...prev, x: prev.x + dx, y: prev.y + dy }));
+      // Rotate pixel delta to account for map rotation
+      if (rotRad !== 0) {
+        const cos = Math.cos(-rotRad);
+        const sin = Math.sin(-rotRad);
+        const rdx = dx * cos - dy * sin;
+        const rdy = dx * sin + dy * cos;
+        dx = rdx; dy = rdy;
+      }
+      const center = latlngToPixel(viewport.centerLat, viewport.centerLng, viewport, rw, rh);
+      const newCenter = pixelToLatlng(center.px - dx, center.py - dy, viewport, rw, rh);
+      setViewport((prev) => prev ? { ...prev, centerLat: newCenter.lat, centerLng: newCenter.lng } : prev);
     } else if (e.touches.length === 2 && lastTouchRef.current?.dist) {
       const dx = e.touches[0].clientX - e.touches[1].clientX;
       const dy = e.touches[0].clientY - e.touches[1].clientY;
       const dist = Math.sqrt(dx * dx + dy * dy);
-      const cx = (e.touches[0].clientX + e.touches[1].clientX) / 2;
-      const cy = (e.touches[0].clientY + e.touches[1].clientY) / 2;
+      const midX = (e.touches[0].clientX + e.touches[1].clientX) / 2;
+      const midY = (e.touches[0].clientY + e.touches[1].clientY) / 2;
+      const prevDist = lastTouchRef.current.dist;
+
       const rect = containerRef.current?.getBoundingClientRect();
-      if (rect) {
-        const mx = cx - rect.left, my = cy - rect.top;
-        const z = dist / lastTouchRef.current.dist;
-        setTransform((prev) => { const ns = Math.max(0.1, Math.min(50, prev.scale * z)); const r = ns / prev.scale; return { scale: ns, x: mx - (mx - prev.x) * r, y: my - (my - prev.y) * r }; });
+      const sx = rect ? midX - rect.left : containerSize.w / 2;
+      const sy = rect ? midY - rect.top : containerSize.h / 2;
+      // Transform screen pinch point to inner (rotated) coords
+      let ix = sx, iy = sy;
+      if (rotRad !== 0) {
+        const cx = containerSize.w / 2, cy = containerSize.h / 2;
+        const ddx = sx - cx, ddy = sy - cy;
+        const cos = Math.cos(-rotRad), sin = Math.sin(-rotRad);
+        ix = ddx * cos - ddy * sin + rw / 2;
+        iy = ddx * sin + ddy * cos + rh / 2;
       }
-      lastTouchRef.current = { x: cx, y: cy, dist };
+
+      const pinchGeo = pixelToLatlng(ix, iy, viewport, rw, rh);
+      const zoomDelta = Math.log2(dist / prevDist);
+      const newZoom = Math.max(1, Math.min(22, viewport.zoom + zoomDelta));
+
+      const newVp: TileViewport = { ...viewport, zoom: newZoom };
+      const afterPinch = latlngToPixel(pinchGeo.lat, pinchGeo.lng, newVp, rw, rh);
+      const dxPx = ix - afterPinch.px;
+      const dyPx = iy - afterPinch.py;
+      const newCenter = pixelToLatlng(rw / 2 - dxPx, rh / 2 - dyPx, newVp, rw, rh);
+
+      lastTouchRef.current = { x: midX, y: midY, dist };
+      setViewport({ centerLat: newCenter.lat, centerLng: newCenter.lng, zoom: newZoom });
     }
-  }, []);
+  }, [viewport, containerSize, renderW, renderH, rotRad]);
+
   const handleTouchEnd = useCallback((e: React.TouchEvent) => {
-    if (measuring && touchStartPosRef.current && e.changedTouches.length === 1) {
-      const t = e.changedTouches[0];
-      const dx = Math.abs(t.clientX - touchStartPosRef.current.x);
-      const dy = Math.abs(t.clientY - touchStartPosRef.current.y);
-      if (dx + dy < 10) {
-        const pt = screenToOcad(t.clientX, t.clientY);
+    if (e.touches.length === 0) {
+      if (measuring && touchStartPosRef.current) {
+        const pt = screenToMapMm(touchStartPosRef.current.x, touchStartPosRef.current.y);
         if (pt) setMeasurePoints((prev) => [...prev, pt]);
       }
+      lastTouchRef.current = null;
+      touchStartPosRef.current = null;
+    } else if (e.touches.length === 1) {
+      lastTouchRef.current = { x: e.touches[0].clientX, y: e.touches[0].clientY };
     }
-    touchStartPosRef.current = null;
-    lastTouchRef.current = null;
-  }, [measuring, screenToOcad]);
+  }, [measuring, screenToMapMm]);
 
-  // ─── Measure keyboard shortcuts ──────────────────────────
+  // Escape / Backspace to cancel / undo measure
   useEffect(() => {
     if (!measuring) return;
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
-        if (measurePoints.length > 0) { setMeasurePoints([]); setMeasureCursor(null); }
-        else setMeasuring(false);
+        setMeasuring(false);
+        setMeasurePoints([]);
+        setMeasureCursor(null);
       } else if (e.key === "Backspace") {
         setMeasurePoints((prev) => prev.slice(0, -1));
       }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [measuring, measurePoints.length]);
+  }, [measuring]);
 
-  // ─── Dynamic overlay viewBox (tracks pan/zoom for crisp vector rendering) ──
+  // Helper: get slit cuts from course geometry for a given control code
+  function getCourseGeomCuts(code: string): SlitGap[] | null {
+    if (!courseGeometry) return null;
+    const features = courseGeometry.features || [];
+    for (const f of features) {
+      if (f.properties?.symbolType === "control" && f.properties?.code === code && f.properties?.cuts) {
+        return f.properties.cuts;
+      }
+    }
+    return null;
+  }
 
-  const overlayViewBox = useMemo(() => {
-    if (!viewBox || !containerRef.current) return null;
-    // Use tracked containerSize for correct dimensions after resize/fullscreen
-    const cw = (containerSize.w > 0 ? containerSize.w : containerRef.current.clientWidth) || 1;
-    const ch = (containerSize.h > 0 ? containerSize.h : containerRef.current.clientHeight) || 1;
-
-    const mapScaleX = cw / viewBox.w;
-    const mapScaleY = ch / viewBox.h;
-    const mapScale = Math.min(mapScaleX, mapScaleY);
-    const renderedW = viewBox.w * mapScale;
-    const renderedH = viewBox.h * mapScale;
-    const padX = (cw - renderedW) / 2;
-    const padY = (ch - renderedH) / 2;
-
-    const s = transform.scale;
-    const tx = transform.x;
-    const ty = transform.y;
-
-    const ux0 = (0 - tx) / s;
-    const uy0 = (0 - ty) / s;
-    const ux1 = (cw - tx) / s;
-    const uy1 = (ch - ty) / s;
-
-    const vx0 = viewBox.x + viewBox.w * (ux0 - padX) / renderedW;
-    const vy0 = viewBox.y + viewBox.h * (uy0 - padY) / renderedH;
-    const vx1 = viewBox.x + viewBox.w * (ux1 - padX) / renderedW;
-    const vy1 = viewBox.y + viewBox.h * (uy1 - padY) / renderedH;
-
-    return `${vx0} ${vy0} ${vx1 - vx0} ${vy1 - vy0}`;
-  }, [viewBox, transform, containerSize]);
-
-  // ─── Control / Course overlay SVG ──────────────────────
+  // ─── Overlay rendering ─────────────────────────────────
 
   const overlayContent = useMemo(() => {
-    if (!viewBox || !overlayViewBox) return null;
-    const visibleControls = controls.filter((c) => c.visible !== false);
-    if (visibleControls.length === 0 && courses.length === 0) return null;
+    if (!viewport || containerSize.w === 0 || containerSize.h === 0) return null;
+    const cw = renderW;
+    const ch = renderH;
 
-    // ─── Sizes (typical IOF standard) ────────────
-    const radiusMm = 2.5;             // 5mm diameter circle
-    const radius = mmToOcad(radiusMm);
-    const strokeW = mmToOcad(0.35);   // IOF line width
-    const fontSize = radius * 1.1;
-    const clearance = radius * 1.35;  // line-to-center clearance (tight to circle)
+    const radius = 2.5 * symbolScale;
+    const stroke = Math.max(0.5, 0.35 * symbolScale);
+    const labelSize = 3.5 * symbolScale;
+    const startSize = 3.5 * symbolScale;
+    const finishInner = 2.0 * symbolScale;
+    const finishOuter = 3.0 * symbolScale;
+    const legStroke = Math.max(0.5, 0.35 * symbolScale);
 
-    // ─── Convert all controls to OCAD coords ─────────────
-    // OCAD Y goes up, SVG Y goes down.  ocad2geojson negates Y in path data,
-    // then applies translate(0, minY+maxY) on the root <g>.
-    // Overlay sits OUTSIDE that <g>, so we replicate the full transform:
-    //   rendered_y = (minY + maxY) - ocadY = (2·viewBox.y + viewBox.h) - mmToOcad(mm)
-    const toY = (my: number) => 2 * viewBox.y + viewBox.h - mmToOcad(my);
+    // Build pixel positions for all controls (fallback from lat/lng)
+    const ctrlPixels = new Map<string, Pt>();
+    for (const c of controls) {
+      if (c.lat === 0 && c.lng === 0) continue;
+      const { px, py } = latlngToPixel(c.lat, c.lng, viewport, cw, ch);
+      ctrlPixels.set(c.id, { x: px, y: py });
+    }
 
-    // ─── Extract Slits/Cuts from Course Geometry ─────────
-    const cutMap = new Map<string, SlitGap[]>();
-    // Handle both cases: courseGeometry as direct FeatureCollection or record
-    const geomCollection = (courseGeometry?.type === "FeatureCollection" || Array.isArray(courseGeometry?.features))
-      ? courseGeometry
-      : (highlightCourseName ? courseGeometry?.[highlightCourseName] : null);
+    // Override with precise OCAD positions from courseGeometry when available
+    if (courseGeometry && affine) {
+      for (const f of (courseGeometry.features || [])) {
+        const p = f.properties;
+        if (!p?.code || !f.geometry || f.geometry.type !== "Point") continue;
+        if (p.symbolType !== "control" && p.symbolType !== "start" && p.symbolType !== "finish") continue;
+        const [mx, my] = f.geometry.coordinates as [number, number];
+        const { lat, lng } = affine.toLatLng(mx, my);
+        const { px, py } = latlngToPixel(lat, lng, viewport, cw, ch);
+        const ctrl = controls.find(c => c.code === p.code);
+        if (ctrl) ctrlPixels.set(ctrl.id, { x: px, y: py });
+      }
+    }
 
-    if (geomCollection?.features) {
-      for (const f of geomCollection.features) {
-        if (f.geometry?.type === "Point") {
-          const cutId = f.properties?.code || f.properties?.id;
-          if (cutId && Array.isArray(f.properties.cuts)) {
-            cutMap.set(String(cutId), f.properties.cuts);
+    const elements: React.ReactNode[] = [];
+
+    // ─── Course geometry (GeoJSON) ───────────────────────
+
+    if (courseGeometry && affine) {
+      const features = courseGeometry.features || [];
+      for (let fi = 0; fi < features.length; fi++) {
+        const feature = features[fi];
+        const props = feature.properties || {};
+        const geom = feature.geometry;
+        if (!geom) continue;
+
+        if (props.symbolType === "leg" && geom.type === "LineString") {
+          const coords = geom.coordinates as [number, number][];
+          if (coords.length < 2) continue;
+
+          const screenPts: Pt[] = [];
+          for (const [mx, my] of coords) {
+            const { lat, lng } = affine.toLatLng(mx, my);
+            const { px, py } = latlngToPixel(lat, lng, viewport, cw, ch);
+            screenPts.push({ x: px, y: py });
+          }
+
+          if (props.preclipped) {
+            const d = screenPts.map((p, i) => `${i === 0 ? "M" : "L"}${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(" ");
+            elements.push(
+              <path key={`leg-${fi}`} d={d} stroke="#c026d3" strokeWidth={legStroke} fill="none" opacity={0.85} />
+            );
+          } else {
+            const obstacles: Pt[] = [];
+            for (const c of controls) {
+              const p = ctrlPixels.get(c.id);
+              if (p) obstacles.push(p);
+            }
+            for (let si = 0; si < screenPts.length - 1; si++) {
+              const segs = clipLine(screenPts[si], screenPts[si + 1], obstacles, radius * 1.2);
+              for (let segi = 0; segi < segs.length; segi++) {
+                const seg = segs[segi];
+                elements.push(
+                  <line key={`leg-${fi}-${si}-${segi}`}
+                    x1={seg.x1} y1={seg.y1} x2={seg.x2} y2={seg.y2}
+                    stroke="#c026d3" strokeWidth={legStroke} opacity={0.85} />
+                );
+              }
+            }
+          }
+        } else if (props.symbolType === "marked_route" && geom.type === "LineString") {
+          const coords = geom.coordinates as [number, number][];
+          const screenPts = coords.map(([mx, my]) => {
+            const { lat, lng } = affine.toLatLng(mx, my);
+            return latlngToPixel(lat, lng, viewport, cw, ch);
+          });
+          const d = screenPts.map((p, i) => `${i === 0 ? "M" : "L"}${p.px.toFixed(1)},${p.py.toFixed(1)}`).join(" ");
+          elements.push(
+            <path key={`route-${fi}`} d={d} stroke="#c026d3" strokeWidth={legStroke * 1.5}
+              fill="none" opacity={0.7} strokeDasharray={`${legStroke * 4} ${legStroke * 2}`} />
+          );
+        } else if ((props.symbolType === "forbidden_route" || props.symbolType === "restricted_line") && geom.type === "LineString") {
+          const coords = geom.coordinates as [number, number][];
+          const screenPts = coords.map(([mx, my]) => {
+            const { lat, lng } = affine.toLatLng(mx, my);
+            return latlngToPixel(lat, lng, viewport, cw, ch);
+          });
+          const d = screenPts.map((p, i) => `${i === 0 ? "M" : "L"}${p.px.toFixed(1)},${p.py.toFixed(1)}`).join(" ");
+          elements.push(
+            <path key={`restrict-${fi}`} d={d} stroke="#c026d3" strokeWidth={legStroke * 2}
+              fill="none" opacity={0.6}
+              strokeDasharray={props.symbolType === "forbidden_route" ? `${legStroke * 6} ${legStroke * 3}` : "none"} />
+          );
+        }
+        // Note: start/finish/control symbols are rendered by the "Control symbols"
+        // section below (with click handlers, badges, highlights, etc.).
+        // Rendering them here from courseGeometry would produce duplicate rings.
+      }
+    }
+
+    // ─── Fallback legs (if no course geometry) ───────────
+
+    if (!courseGeometry) {
+      const highlightedCourse = courses.find((c) => c.highlight || c.name === highlightCourseName);
+      const coursesToDraw = highlightedCourse ? [highlightedCourse] : [];
+
+      for (const course of coursesToDraw) {
+        const obstacles: Pt[] = [];
+        for (const cid of course.controls) {
+          const p = ctrlPixels.get(cid);
+          if (p) obstacles.push(p);
+        }
+
+        for (let i = 0; i < course.controls.length - 1; i++) {
+          const fromPt = ctrlPixels.get(course.controls[i]);
+          const toPt = ctrlPixels.get(course.controls[i + 1]);
+          if (!fromPt || !toPt) continue;
+          const segs = clipLine(fromPt, toPt, obstacles, radius * 1.2);
+          for (let segi = 0; segi < segs.length; segi++) {
+            const seg = segs[segi];
+            elements.push(
+              <line key={`fleg-${course.name}-${i}-${segi}`}
+                x1={seg.x1} y1={seg.y1} x2={seg.x2} y2={seg.y2}
+                stroke="#c026d3" strokeWidth={legStroke} opacity={0.85} />
+            );
           }
         }
       }
     }
 
-    // Build code -> sequential number map from the highlighted course.
-    // Use the courses prop's highlight flag (set by MapPanel from effectiveCourseNames)
-    // since highlightCourseName may be undefined when highlightCourseNames (plural) is used.
-    const codeToSeqNum = new Map<string, number>();
+    // ─── Control symbols ─────────────────────────────────
+
+    const labelPositions: { x: number; y: number; w: number; h: number }[] = [];
+    const allCirclePts: Pt[] = [];
+    const allLineSegs: { x1: number; y1: number; x2: number; y2: number }[] = [];
+
+    for (const course of courses) {
+      for (let i = 0; i < course.controls.length - 1; i++) {
+        const a = ctrlPixels.get(course.controls[i]);
+        const b = ctrlPixels.get(course.controls[i + 1]);
+        if (a && b) allLineSegs.push({ x1: a.x, y1: a.y, x2: b.x, y2: b.y });
+      }
+    }
+
+    // Sort controls deterministically so label placement is stable across renders
+    const sortedControls = [...controls].sort((a, b) => a.id.localeCompare(b.id, undefined, { numeric: true }));
+
+    // In description mode, map control IDs to sequence numbers (1, 2, 3, ...)
+    const sequenceMap = new Map<string, number>();
     if (showDescriptions) {
-      const highlightedCourse = courses.find(c => c.highlight)
-        || (highlightCourseName ? courses.find(c => c.name === highlightCourseName) : null);
-      if (highlightedCourse) {
+      const activeCourse = courses.find(c => c.highlight || c.name === highlightCourseName);
+      if (activeCourse) {
         let seq = 0;
-        for (const cid of highlightedCourse.controls) {
+        for (const cid of activeCourse.controls) {
           const ctrl = controls.find(c => c.id === cid);
           if (ctrl && ctrl.type === "Control") {
-            codeToSeqNum.set(cid, ++seq);
+            seq++;
+            sequenceMap.set(cid, seq);
           }
         }
       }
     }
 
-    // Extract description properties from geometry features
-    const descriptionMap = new Map<string, any>();
-    if (showDescriptions && geomCollection?.features) {
-      for (const f of geomCollection.features) {
-        if (f.geometry?.type === "Point" && f.properties?.description) {
-          const code = f.properties?.code || f.properties?.id;
-          if (code) descriptionMap.set(String(code), f.properties.description);
-        }
-      }
+    for (const c of sortedControls) {
+      if (c.visible === false) continue;
+      const pos = ctrlPixels.get(c.id);
+      if (!pos) continue;
+      allCirclePts.push(pos);
     }
 
-    // Visible controls with OCAD positions
-    const ctrlPts = visibleControls.map((c) => ({
-      ...c,
-      cx: mmToOcad(c.x),
-      cy: toY(c.y),
-      cuts: cutMap.get(c.code) || cutMap.get(c.id),
-    }));
+    for (const c of sortedControls) {
+      if (c.visible === false) continue;
+      const pos = ctrlPixels.get(c.id);
+      if (!pos) continue;
 
-    // ─── Course geometry (legs, restricted areas, etc.) ──────────────────
-    type Seg = { x1: number; y1: number; x2: number; y2: number };
-    const lineSegments: Seg[] = [];
-    const graphicalObjects: React.ReactNode[] = [];
-    const legLines: React.ReactNode[] = [];
-    const cutMasks: React.ReactNode[] = [];
+      const isHighlighted = c.highlight || c.id === highlightControlId;
+      const baseColor =
+        c.punchStatus === "missing" ? "#ef4444" :
+        c.punchStatus === "extra" ? "#f59e0b" :
+        c.punchStatus === "ok" ? "#059669" :
+        isHighlighted ? "#ef4444" :
+        "#c026d3";
 
-    // Track unique IDs for masks per course to avoid collisions (slugify for safe IDs)
-    const maskId = `leg-mask-${(highlightCourseName || "all").replace(/[^a-zA-Z0-9\-]/g, "_")}`;
-
-    const activeCourseGeom = geomCollection;
-
-    if (activeCourseGeom) {
-      activeCourseGeom.features.forEach((f: any, i: number) => {
-        if (f.geometry?.type === "LineString") {
-          const coords = f.geometry.coordinates;
-          const d = coords.map((c: number[], j: number) => `${j === 0 ? "M" : "L"} ${mmToOcad(c[0])},${toY(c[1])}`).join(" ");
-
-          if (f.properties?.symbolType === "leg") {
-            legLines.push(
-              <path key={`leg-${i}`} d={d} fill="none" stroke="#c026d3" strokeWidth={strokeW} opacity={0.8}
-                // Pre-clipped legs from OCAD already have correct gaps; no mask needed
-                mask={f.properties?.preclipped ? undefined : `url(#${maskId})`}
-              />
-            );
-            for (let j = 0; j < coords.length - 1; j++) {
-              lineSegments.push({
-                x1: mmToOcad(coords[j][0]), y1: toY(coords[j][1]),
-                x2: mmToOcad(coords[j + 1][0]), y2: toY(coords[j + 1][1])
-              });
-            }
-          } else if (f.properties?.symbolType === "marked_route") {
-            graphicalObjects.push(
-              <path key={`go-${i}`} d={d} fill="none" stroke="#c026d3" strokeWidth={strokeW} opacity={0.8} />
-            );
-          } else if (f.properties?.symbolType === "forbidden_route" || f.properties?.symbolType === "restricted_line") {
-            const isForbidden = f.properties.symbolType === "forbidden_route";
-            graphicalObjects.push(
-              <path key={`go-${i}`} d={d} fill="none"
-                stroke="#c026d3"
-                strokeWidth={isForbidden ? strokeW * 1.5 : strokeW}
-                strokeDasharray={isForbidden ? `${strokeW * 4},${strokeW * 2}` : undefined}
-                opacity={0.8}
-              />
-            );
-          }
-        } else if (f.geometry?.type === "Polygon") {
-          if (f.properties?.symbolType === "description_box") return;
-          const coords = f.geometry.coordinates[0];
-          const pts = coords.map((c: number[]) => `${mmToOcad(c[0])},${toY(c[1])}`).join(" ");
-
-          if (f.properties?.symbolType === "leg_cut") {
-            cutMasks.push(<polygon key={`mask-poly-${i}`} points={pts} fill="black" />);
-          } else {
-            graphicalObjects.push(
-              <polygon key={`go-${i}`} points={pts} fill="url(#restricted-crosshatch)" stroke="#c026d3" strokeWidth={strokeW} opacity={0.65} />
-            );
-          }
-        }
-      });
-    }
-
-    // Add black circles to mask out leg lines inside the symbols
-    ctrlPts.forEach((ctrl) => {
-      // Use slightly smaller radius for mask to ensure it doesn't leave stray line fragments
-      // and feels tighter.
-      const maskR = radius * 0.98;
-      cutMasks.push(
-        <circle
-          key={`mask-sym-${ctrl.id}`}
-          cx={ctrl.cx}
-          cy={ctrl.cy}
-          r={maskR}
-          fill="black"
-        />
-      );
-    });
-
-    // ─── Smart label placement ───────────────────────────
-    // Try 12 candidate positions around each control and pick the one
-    // with the least overlap with other circles, course lines, and
-    // already-placed labels (greedy: first-placed labels have priority).
-    interface LabelInfo { x: number; y: number; anchor: string }
-    const labelMap = new Map<string, LabelInfo>();
-    const placedLabelCenters: Pt[] = []; // centers of already-placed labels
-    const labelDist = radius * 2.0;
-    const CANDIDATES = 12;
-
-    for (const ctrl of ctrlPts) {
-      if (ctrl.type === "Start" || ctrl.type === "Finish") continue;
-
-      let bestScore = -Infinity;
-      let bestLx = ctrl.cx + labelDist;
-      let bestLy = ctrl.cy - labelDist * 0.3;
-      let bestAnchor = "start";
-
-      for (let ci = 0; ci < CANDIDATES; ci++) {
-        const angle = (ci / CANDIDATES) * 2 * Math.PI - Math.PI / 6; // start upper-right
-        const dirX = Math.cos(angle);
-        const dirY = Math.sin(angle);
-        const lx = ctrl.cx + dirX * labelDist;
-        const ly = ctrl.cy + dirY * labelDist;
-
-        // Score = minimum distance to any obstacle (higher is better)
-        let minDist = Infinity;
-
-        // Distance from other control circles
-        for (const other of ctrlPts) {
-          if (other.id === ctrl.id) continue;
-          const dx = lx - other.cx, dy = ly - other.cy;
-          minDist = Math.min(minDist, Math.sqrt(dx * dx + dy * dy));
-        }
-
-        // Distance from course line segments
-        for (const seg of lineSegments) {
-          const { dist } = ptSegDist(lx, ly, seg.x1, seg.y1, seg.x2, seg.y2);
-          minDist = Math.min(minDist, dist);
-        }
-
-        // Distance from already-placed label centers
-        for (const pl of placedLabelCenters) {
-          const dx = lx - pl.x, dy = ly - pl.y;
-          minDist = Math.min(minDist, Math.sqrt(dx * dx + dy * dy));
-        }
-
-        if (minDist > bestScore) {
-          bestScore = minDist;
-          bestLx = lx;
-          bestLy = ly;
-          const absDirX = Math.abs(dirX);
-          bestAnchor = absDirX < 0.35 ? "middle" : dirX >= 0 ? "start" : "end";
-        }
-      }
-
-      placedLabelCenters.push({ x: bestLx, y: bestLy });
-      labelMap.set(ctrl.id, { x: bestLx, y: bestLy, anchor: bestAnchor });
-    }
-
-    // ─── Render control symbols ──────────────────────────
-    const controlElements = ctrlPts.map((ctrl) => {
-      const isHighlighted = ctrl.highlight || ctrl.id === highlightControlId;
-      const color =
-        ctrl.punchStatus === "missing" ? "#ef4444" :
-        ctrl.punchStatus === "extra"   ? "#f97316" :
-        ctrl.punchStatus === "ok"      ? "#059669" :
-        isHighlighted ? "#ef4444" : "#c026d3";
-
-      if (ctrl.type === "Start") {
-        const s = radius * 1.1;
-        return (
-          <g key={ctrl.id} className="cursor-pointer" onClick={() => onControlClick?.(ctrl.id)}>
-            <polygon
-              points={`${ctrl.cx},${ctrl.cy - s} ${ctrl.cx - s * 0.87},${ctrl.cy + s * 0.5} ${ctrl.cx + s * 0.87},${ctrl.cy + s * 0.5}`}
-              fill="none" stroke={color} strokeWidth={strokeW}
-            />
+      if (c.type === "Start") {
+        const s = startSize;
+        const triPath = `M${pos.x},${pos.y - s} L${pos.x - s * 0.866},${pos.y + s * 0.5} L${pos.x + s * 0.866},${pos.y + s * 0.5} Z`;
+        elements.push(
+          <path key={`start-${c.id}`} d={triPath} stroke={baseColor} strokeWidth={stroke} fill="none"
+            style={{ cursor: onControlClick ? "pointer" : undefined }}
+            onClick={onControlClick ? () => onControlClick(c.id) : undefined} />
+        );
+      } else if (c.type === "Finish") {
+        elements.push(
+          <g key={`finish-${c.id}`} style={{ cursor: onControlClick ? "pointer" : undefined }}
+            onClick={onControlClick ? () => onControlClick(c.id) : undefined}>
+            <circle cx={pos.x} cy={pos.y} r={finishOuter} stroke={baseColor} strokeWidth={stroke} fill="none" />
+            <circle cx={pos.x} cy={pos.y} r={finishInner} stroke={baseColor} strokeWidth={stroke} fill="none" />
           </g>
         );
-      }
+      } else {
+        const cuts = getCourseGeomCuts(c.code);
 
-      // Helper to generate a broken circle path for cut gaps
-      const drawBrokenCircle = (cx: number, cy: number, r: number, cuts: SlitGap[] | undefined, strokeClr: string, sw: number) => {
-        if (!cuts || cuts.length === 0) {
-          return <circle cx={cx} cy={cy} r={r} fill="none" stroke={strokeClr} strokeWidth={sw} />;
-        }
-
-        // 1. Normalize and merge overlapping gaps
-        const ranges = cuts.map(c => {
-          let s = (c.start + 720) % 360;
-          let e = (c.end + 720) % 360;
-          if (e < s) e += 360;
-          return { s, e };
-        }).sort((a, b) => a.s - b.s);
-
-        const merged: { s: number, e: number }[] = [];
-        if (ranges.length > 0) {
-          let curr = ranges[0];
-          for (let i = 1; i < ranges.length; i++) {
-            if (ranges[i].s <= curr.e) curr.e = Math.max(curr.e, ranges[i].e);
-            else { merged.push(curr); curr = ranges[i]; }
-          }
-          merged.push(curr);
-        }
-
-        // 2. Handle wrap-around merge and split back to [0, 360]
-        const finalGaps: { s: number, e: number }[] = [];
-        merged.forEach(m => {
-          if (m.e > 360) {
-            finalGaps.push({ s: m.s, e: 360 });
-            finalGaps.push({ s: 0, e: m.e - 360 });
-          } else finalGaps.push(m);
-        });
-        finalGaps.sort((a, b) => a.s - b.s);
-
-        const results: { s: number, e: number }[] = [];
-        if (finalGaps.length > 0) {
-          let curr = finalGaps[0];
-          for (let i = 1; i < finalGaps.length; i++) {
-            if (finalGaps[i].s <= curr.e) curr.e = Math.max(curr.e, finalGaps[i].e);
-            else { results.push(curr); curr = finalGaps[i]; }
-          }
-          results.push(curr);
-        }
-
-        // Merge end-to-start wrap
-        if (results.length > 1 && results[results.length - 1].e === 360 && results[0].s === 0) {
-          const last = results.pop()!;
-          results[0].s = last.s - 360;
-        }
-
-        // 3. Generate arcs for the DRAWN segments (between gaps)
-        const getPt = (deg: number) => {
-          const rad = (deg * Math.PI) / 180;
-          return { x: cx + r * Math.sin(rad), y: cy - r * Math.cos(rad) };
-        };
-
-        const arcs: string[] = [];
-        for (let i = 0; i < results.length; i++) {
-          const curr = results[i];
-          const next = results[(i + 1) % results.length];
-          const s = curr.e;
-          let e = next.s;
-          if (e <= s) e += 360;
-          if (e - s < 0.5) continue;
-          const p1 = getPt(s), p2 = getPt(e);
-          const largeArc = (e - s > 180) ? 1 : 0;
-          arcs.push(`M ${p1.x},${p1.y} A ${r},${r} 0 ${largeArc},1 ${p2.x},${p2.y}`);
-        }
-
-        if (arcs.length === 0 && results.length > 0) return null;
-
-        return <path d={arcs.join(" ")} fill="none" stroke={strokeClr} strokeWidth={sw} />;
-      };
-
-      if (ctrl.type === "Finish") {
-        const outerR = radius;
-        const innerR = radius * 0.75;
-        return (
-          <g key={ctrl.id} className="cursor-pointer" onClick={() => onControlClick?.(ctrl.id)}>
-            {drawBrokenCircle(ctrl.cx, ctrl.cy, outerR, ctrl.cuts, color, strokeW)}
-            {drawBrokenCircle(ctrl.cx, ctrl.cy, innerR, ctrl.cuts, color, strokeW)}
-          </g>
-        );
-      }
-
-      // Regular control with smart label and optional completion ring
-      const label = labelMap.get(ctrl.id);
-      const pct = ctrl.completionPct;
-      const hasCompletion = pct !== undefined;
-      const isComplete = pct !== undefined && pct >= 1;
-
-      // Progress arc: sweeps clockwise from 12 o'clock
-      let progressArc: React.ReactNode = null;
-      if (hasCompletion && pct > 0) {
-        const r = radius;
-        if (isComplete) {
-          // 100%: filled green ring (semi-transparent fill so map is visible)
-          progressArc = (
-            <circle cx={ctrl.cx} cy={ctrl.cy} r={r}
-              fill="rgba(16, 185, 129, 0.15)" stroke="#059669" strokeWidth={strokeW * 1.5}
-            />
+        if (cuts && cuts.length > 0) {
+          const adj = cuts.map(g => ({ start: g.start + (northOffset || 0), end: g.end + (northOffset || 0) }));
+          const arcs = drawBrokenCircle(pos.x, pos.y, radius, adj);
+          elements.push(
+            <path key={`ctrl-${c.id}`} d={arcs} stroke={baseColor} strokeWidth={stroke} fill="none"
+              style={{ cursor: onControlClick ? "pointer" : undefined }}
+              onClick={onControlClick ? () => onControlClick(c.id) : undefined} />
           );
         } else {
-          // Partial: green arc from 12 o'clock
-          const angle = pct * 2 * Math.PI;
-          const startX = ctrl.cx;
-          const startY = ctrl.cy - r;
-          const endX = ctrl.cx + r * Math.sin(angle);
-          const endY = ctrl.cy - r * Math.cos(angle);
-          const largeArc = angle > Math.PI ? 1 : 0;
-          progressArc = (
-            <path
-              d={`M ${startX} ${startY} A ${r} ${r} 0 ${largeArc} 1 ${endX} ${endY}`}
-              fill="none" stroke="#10b981" strokeWidth={strokeW * 1.5}
-              strokeLinecap="round"
-            />
+          elements.push(
+            <circle key={`ctrl-${c.id}`} cx={pos.x} cy={pos.y} r={radius} stroke={baseColor} strokeWidth={stroke} fill="none"
+              style={{ cursor: onControlClick ? "pointer" : undefined }}
+              onClick={onControlClick ? () => onControlClick(c.id) : undefined} />
           );
         }
-      }
 
-      const xOff = radius * 0.6;
-      return (
-        <g key={ctrl.id} className="cursor-pointer" onClick={() => onControlClick?.(ctrl.id)}>
-          {/* Base circle: dimmed if completion is active and not complete */}
-          <g opacity={hasCompletion && !isComplete ? 0.35 : 1}>
-            {drawBrokenCircle(ctrl.cx, ctrl.cy, radius, ctrl.cuts, isComplete ? "#059669" : color, strokeW)}
-          </g>
-          {/* X overlay for missing controls */}
-          {ctrl.punchStatus === "missing" && (
-            <>
-              <line x1={ctrl.cx - xOff} y1={ctrl.cy - xOff} x2={ctrl.cx + xOff} y2={ctrl.cy + xOff} stroke="#ef4444" strokeWidth={strokeW} strokeLinecap="round" />
-              <line x1={ctrl.cx + xOff} y1={ctrl.cy - xOff} x2={ctrl.cx - xOff} y2={ctrl.cy + xOff} stroke="#ef4444" strokeWidth={strokeW} strokeLinecap="round" />
-            </>
-          )}
-          {/* Completion progress arc */}
-          {progressArc}
-          {label && (
-            <text
-              x={label.x} y={label.y}
-              fontSize={fontSize} fill={isComplete ? "#059669" : color} fontWeight="bold"
-              textAnchor={label.anchor as any} dominantBaseline="central"
-            >{showDescriptions && codeToSeqNum.has(ctrl.id) ? codeToSeqNum.get(ctrl.id) : ctrl.code}</text>
-          )}
-          {!hasCompletion && ctrl.punchCount !== undefined && (
-            <text
-              x={ctrl.cx} y={ctrl.cy}
-              fontSize={fontSize * 0.7} fill="#1d4ed8"
-              textAnchor="middle" dominantBaseline="central" fontWeight="bold"
-            >{ctrl.punchCount}</text>
-          )}
-        </g>
-      );
-    });
-
-    // ─── Description sheet rendering (8-column IOF grid with pictographic symbols) ─
-    let descriptionSheet: React.ReactNode = null;
-    if (showDescriptions && geomCollection?.features) {
-      const boxFeature = geomCollection.features.find(
-        (f: any) => f.properties?.symbolType === "description_box" && f.geometry?.type === "Polygon"
-      );
-      if (boxFeature && codeToSeqNum.size > 0) {
-        const coords: number[][] = boxFeature.geometry.coordinates[0];
-        const xs = coords.map(c => mmToOcad(c[0]));
-        const ys = coords.map(c => toY(c[1]));
-        const boxX = Math.min(...xs);
-        const boxY = Math.min(...ys);
-        const boxW = Math.max(...xs) - boxX;
-        const boxH = Math.max(...ys) - boxY;
-
-        const hlCourse = courses.find(c => c.highlight)
-          || (highlightCourseName ? courses.find(c => c.name === highlightCourseName) : null);
-        const orderedCodes: string[] = [];
-        if (hlCourse) {
-          for (const cid of hlCourse.controls) {
-            const ctrl = controls.find(c => c.id === cid);
-            if (ctrl && ctrl.type === "Control") orderedCodes.push(cid);
+        // Completion ring (overlaps control circle at same radius)
+        if (c.completionPct !== undefined && c.completionPct > 0) {
+          const ringR = radius;
+          const pct = Math.min(c.completionPct, 1);
+          if (pct >= 1) {
+            elements.push(
+              <circle key={`comp-${c.id}`} cx={pos.x} cy={pos.y} r={ringR}
+                stroke="#059669" strokeWidth={stroke * 2.5} fill="none" opacity={0.8} />
+            );
+          } else {
+            const angle = pct * 2 * Math.PI;
+            const startAngle = -Math.PI / 2;
+            const endAngle = startAngle + angle;
+            const x1 = pos.x + ringR * Math.cos(startAngle);
+            const y1 = pos.y + ringR * Math.sin(startAngle);
+            const x2 = pos.x + ringR * Math.cos(endAngle);
+            const y2 = pos.y + ringR * Math.sin(endAngle);
+            const largeArc = angle > Math.PI ? 1 : 0;
+            elements.push(
+              <path key={`comp-${c.id}`}
+                d={`M${x1},${y1} A${ringR},${ringR} 0 ${largeArc} 1 ${x2},${y2}`}
+                stroke="#059669" strokeWidth={stroke * 2.5} fill="none" opacity={0.8} />
+            );
           }
         }
 
-        const numRows = orderedCodes.length + 1;
-        const rowH = boxH / numRows;
-        // 8 IOF columns: A(seq#), B(code), C(which), D(feature), E(appearance), F(combo), G(position), H(other)
-        const numCols = 8;
-        const colW = boxW / numCols;
-        const descStrokeW = strokeW * 0.6;
-        const txtFontSize = rowH * 0.50;
-        const headerFontSize = rowH * 0.45;
-        const symPad = rowH * 0.08;
-
-        const renderSymbolCell = (svgContent: string | null, cellX: number, cellY: number) => {
-          if (!svgContent) return null;
-          return (
-            <svg
-              x={cellX + symPad} y={cellY + symPad}
-              width={colW - 2 * symPad} height={rowH - 2 * symPad}
-              viewBox="-100 -100 200 200"
-              dangerouslySetInnerHTML={{ __html: svgContent }}
-            />
-          );
-        };
-
-        const gridLines: React.ReactNode[] = [];
-        // Horizontal row dividers
-        for (let r = 0; r <= numRows; r++) {
-          const y = boxY + r * rowH;
-          gridLines.push(
-            <line key={`hr-${r}`} x1={boxX} y1={y} x2={boxX + boxW} y2={y}
-              stroke="#c026d3" strokeWidth={r <= 1 ? descStrokeW : descStrokeW * 0.4} />
-          );
-        }
-        // Vertical column dividers (start below the header row)
-        const gridTop = boxY + rowH;
-        for (let c = 0; c <= numCols; c++) {
-          const x = boxX + c * colW;
-          gridLines.push(
-            <line key={`vc-${c}`} x1={x} y1={c === 0 || c === numCols ? boxY : gridTop} x2={x} y2={boxY + boxH}
-              stroke="#c026d3" strokeWidth={c === 0 || c === numCols ? descStrokeW : descStrokeW * 0.4} />
+        // Punch count badge
+        if (c.punchCount !== undefined && c.punchCount > 0) {
+          const badgeR = Math.max(6, labelSize * 0.5);
+          elements.push(
+            <g key={`badge-${c.id}`}
+              transform={rotDeg !== 0 ? `rotate(${-rotDeg}, ${pos.x}, ${pos.y})` : undefined}>
+              <circle cx={pos.x} cy={pos.y} r={badgeR} fill="#2563eb" opacity={0.85} />
+              <text x={pos.x} y={pos.y} textAnchor="middle" dominantBaseline="central"
+                fontSize={badgeR * 1.2} fill="white" fontWeight="bold">
+                {c.punchCount}
+              </text>
+            </g>
           );
         }
 
-        descriptionSheet = (
-          <g key="desc-sheet">
-            <rect x={boxX} y={boxY} width={boxW} height={boxH}
-              fill="white" stroke="#c026d3" strokeWidth={descStrokeW} />
-            {gridLines}
-            {/* Header row spanning all columns */}
-            <text x={boxX + boxW * 0.5} y={boxY + rowH * 0.55}
-              fontSize={headerFontSize} fill="#c026d3" fontWeight="bold"
+        // Control code label (or sequence number in description mode)
+        if (!hideControls) {
+          const label = showDescriptions && sequenceMap.has(c.id)
+            ? String(sequenceMap.get(c.id))
+            : c.code;
+          const estW = label.length * labelSize * 0.65;
+          const estH = labelSize * 1.2;
+
+          const offsets = [
+            { dx: 1, dy: -1 }, { dx: 1, dy: 0 }, { dx: 1, dy: 1 },
+            { dx: 0, dy: -1 }, { dx: -1, dy: -1 }, { dx: -1, dy: 0 },
+            { dx: -1, dy: 1 }, { dx: 0, dy: 1 },
+            { dx: 1.3, dy: -0.7 }, { dx: -1.3, dy: -0.7 },
+            { dx: 1.3, dy: 0.7 }, { dx: -1.3, dy: 0.7 },
+          ];
+
+          let bestPos = { x: pos.x + radius * 1.3, y: pos.y - radius * 0.5 };
+          let bestCost = Infinity;
+
+          for (const off of offsets) {
+            const candX = pos.x + off.dx * (radius + estW * 0.55);
+            const candY = pos.y + off.dy * (radius + estH * 0.55);
+            const candRect = { x: candX - estW / 2, y: candY - estH / 2, w: estW, h: estH };
+
+            let cost = 0;
+            for (const cp of allCirclePts) {
+              if (cp === pos) continue;
+              const dx = candX - cp.x, dy = candY - cp.y;
+              const d = Math.sqrt(dx * dx + dy * dy);
+              if (d < radius * 2) cost += 100;
+              else if (d < radius * 3) cost += 20;
+            }
+            for (const lp of labelPositions) {
+              if (candRect.x < lp.x + lp.w && candRect.x + candRect.w > lp.x &&
+                  candRect.y < lp.y + lp.h && candRect.y + candRect.h > lp.y) {
+                cost += 50;
+              }
+            }
+            for (const seg of allLineSegs) {
+              const { dist } = ptSegDist(candX, candY, seg.x1, seg.y1, seg.x2, seg.y2);
+              if (dist < estH) cost += 30;
+            }
+            if (off.dx < 0) cost += 2;
+            if (off.dy > 0) cost += 1;
+
+            if (cost < bestCost) { bestCost = cost; bestPos = { x: candX, y: candY }; }
+          }
+
+          labelPositions.push({ x: bestPos.x - estW / 2, y: bestPos.y - estH / 2, w: estW, h: estH });
+
+          const labelColor = (c.completionPct !== undefined && c.completionPct >= 1) ? "#059669" : baseColor;
+          elements.push(
+            <text key={`label-${c.id}`} x={bestPos.x} y={bestPos.y}
               textAnchor="middle" dominantBaseline="central"
-            >{hlCourse?.name || highlightCourseName || ""}</text>
-            {/* Control rows with IOF symbols */}
-            {orderedCodes.map((code, idx) => {
-              const rowY = boxY + rowH * (idx + 1);
-              const seqNum = codeToSeqNum.get(code) ?? idx + 1;
-              const desc = descriptionMap.get(code);
-              const syms = desc ? getDescriptionSymbols(desc) : null;
+              fontSize={labelSize} fill={labelColor} fontWeight="bold"
+              transform={rotDeg !== 0 ? `rotate(${-rotDeg}, ${bestPos.x}, ${bestPos.y})` : undefined}
+              style={{ cursor: onControlClick ? "pointer" : undefined }}
+              onClick={onControlClick ? () => onControlClick(c.id) : undefined}>
+              {label}
+            </text>
+          );
+        }
+      }
+    }
 
-              return (
-                <g key={`row-${code}`}>
-                  {/* Col A: sequential number */}
-                  <text x={boxX + colW * 0.5} y={rowY + rowH * 0.55}
-                    fontSize={txtFontSize} fill="#c026d3" fontWeight="bold"
-                    textAnchor="middle" dominantBaseline="central"
-                  >{seqNum}</text>
-                  {/* Col B: control code */}
-                  <text x={boxX + colW * 1.5} y={rowY + rowH * 0.55}
-                    fontSize={txtFontSize} fill="#c026d3"
-                    textAnchor="middle" dominantBaseline="central"
-                  >{code}</text>
-                  {/* Col C: which of similar features */}
-                  {renderSymbolCell(syms?.colC ?? null, boxX + colW * 2, rowY)}
-                  {/* Col D: control feature */}
-                  {renderSymbolCell(syms?.colD ?? null, boxX + colW * 3, rowY)}
-                  {/* Col E: appearance/dimensions */}
-                  {syms?.colE ? (
-                    <text x={boxX + colW * 4.5} y={rowY + rowH * 0.55}
-                      fontSize={txtFontSize * 0.85} fill="#c026d3"
-                      textAnchor="middle" dominantBaseline="central"
-                    >{syms.colE}</text>
-                  ) : null}
-                  {/* Col F: combinations */}
-                  {renderSymbolCell(syms?.colF ?? null, boxX + colW * 5, rowY)}
-                  {/* Col G: location of flag */}
-                  {renderSymbolCell(syms?.colG ?? null, boxX + colW * 6, rowY)}
-                  {/* Col H: other (reserved for future use) */}
-                </g>
-              );
-            })}
-          </g>
+    // Description sheet rendered separately (outside rotated div)
+
+    // ─── Measure overlay ────────────────────────────────
+
+    if (measuring && measurePoints.length > 0) {
+      const screenMeasurePts = measurePoints.map((p) => mapMmToScreen(p.x, p.y)).filter(Boolean) as Pt[];
+      let cursorScreen: Pt | null = null;
+      if (measureCursor) cursorScreen = mapMmToScreen(measureCursor.x, measureCursor.y);
+
+      const allPts = cursorScreen ? [...screenMeasurePts, cursorScreen] : screenMeasurePts;
+
+      if (allPts.length >= 2) {
+        const d = allPts.map((p, i) => `${i === 0 ? "M" : "L"}${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(" ");
+        elements.push(
+          <path key="measure-line" d={d} stroke="#2563eb" strokeWidth={3} fill="none" strokeDasharray="10 5" />
+        );
+
+        // Per-leg distance labels
+        let cumDist = 0;
+        for (let i = 1; i < allPts.length; i++) {
+          const p1 = allPts[i - 1], p2 = allPts[i];
+          const midX = (p1.x + p2.x) / 2;
+          const midY = (p1.y + p2.y) / 2;
+          const srcPt1 = measurePoints[i - 1];
+          const srcPt2 = i < measurePoints.length ? measurePoints[i] : measureCursor;
+          if (srcPt1 && srcPt2) {
+            const legM = mmToMeters(mapMmDist(srcPt1, srcPt2));
+            cumDist += legM;
+            const label = formatDist(legM);
+            const halfW = label.length * 3.5 + 6;
+            elements.push(
+              <g key={`mleg-${i}`}>
+                <rect x={midX - halfW} y={midY - 9} width={halfW * 2} height={16} rx={3}
+                  fill="rgba(255,255,255,0.85)" stroke="#93c5fd" strokeWidth={0.5} />
+                <text x={midX} y={midY} textAnchor="middle" dominantBaseline="central"
+                  fontSize={11} fill="#1e3a8a" fontWeight="600">{label}</text>
+              </g>
+            );
+          }
+        }
+      }
+
+      for (let i = 0; i < screenMeasurePts.length; i++) {
+        elements.push(
+          <circle key={`mpt-${i}`} cx={screenMeasurePts[i].x} cy={screenMeasurePts[i].y}
+            r={5} fill="#2563eb" stroke="white" strokeWidth={2} />
         );
       }
     }
 
-    return (
-      <svg
-        style={{ position: "absolute", top: 0, left: 0, width: "100%", height: "100%", pointerEvents: "none" }}
-        viewBox={overlayViewBox}
-        preserveAspectRatio="none"
-      >
-        <defs>
-          <pattern id="restricted-crosshatch" width={strokeW * 3} height={strokeW * 3} patternUnits="userSpaceOnUse" patternTransform="rotate(45)">
-            <line stroke="#c026d3" strokeWidth={strokeW * 0.4} y2={strokeW * 3} />
-            <line stroke="#c026d3" strokeWidth={strokeW * 0.4} x2={strokeW * 3} />
-          </pattern>
-          <mask id={maskId} maskUnits="userSpaceOnUse" x={-1e6} y={-1e6} width={2e6} height={2e6}>
-            <rect x={-1e6} y={-1e6} width={2e6} height={2e6} fill="white" />
-            {cutMasks}
-          </mask>
-        </defs>
-        <g style={{ pointerEvents: "auto" }}>
-          {graphicalObjects}
-          {legLines}
-          {controlElements}
-          {descriptionSheet}
-        </g>
-      </svg>
-    );
-  }, [viewBox, overlayViewBox, controls, courses, highlightControlId, highlightCourseName, controlMap, onControlClick, courseGeometry, showDescriptions]);
+    return elements;
 
-  // ─── Measure overlay SVG ────────────────────────────────
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [viewport, containerSize, renderW, renderH, controls, courses, courseGeometry, highlightControlId, highlightCourseName,
+      symbolScale, affine, measuring, measurePoints, measureCursor, showDescriptions, hideControls, onControlClick,
+      mapMmToScreen, rotDeg]);
 
-  const measureOverlay = useMemo(() => {
-    if (!overlayViewBox || !viewBox) return null;
-    const pts = measurePoints;
-    const cursor = measureCursor;
-    const allPts = cursor && pts.length > 0 ? [...pts, cursor] : pts;
-    if (allPts.length === 0) return null;
+  // ─── Description sheet (outside rotation) ──────────────
 
-    // Compute a stroke width that stays constant on screen (~2px)
-    const vbParts = overlayViewBox.split(" ").map(Number);
-    const vbW = vbParts[2];
-    const cw = containerSize.w || 1;
-    const unit = vbW / cw; // OCAD units per screen pixel
-    const sw = unit * 2;
-    const dotR = unit * 4;
-    const fontSize = unit * 12;
+  const descriptionSheet = useMemo(() => {
+    if (!showDescriptions || !courseGeometry || containerSize.w === 0 || containerSize.h === 0) return null;
+    const activeCourse = courses.find(c => c.highlight || c.name === highlightCourseName);
+    return renderDescriptionSheet(courseGeometry, symbolScale, containerSize.w, containerSize.h, activeCourse?.name);
+  }, [showDescriptions, courseGeometry, symbolScale, containerSize, courses, highlightCourseName]);
 
-    const lineD = allPts.map((p, i) => `${i === 0 ? "M" : "L"} ${p.x},${p.y}`).join(" ");
-    const rubberD = cursor && pts.length > 0
-      ? `M ${pts[pts.length - 1].x},${pts[pts.length - 1].y} L ${cursor.x},${cursor.y}`
-      : null;
+  // ─── Scale bar ─────────────────────────────────────────
 
-    // Segment labels
-    const labels: React.ReactNode[] = [];
-    for (let i = 1; i < allPts.length; i++) {
-      const a = allPts[i - 1], b = allPts[i];
-      const mx = (a.x + b.x) / 2, my = (a.y + b.y) / 2;
-      const d = ocadToMeters(ocadDistPx(a, b));
-      const isRubber = cursor && i === allPts.length - 1;
-      labels.push(
-        <text key={i} x={mx} y={my - unit * 5} textAnchor="middle" fontSize={fontSize}
-          fill={isRubber ? "#6366f1" : "#1d4ed8"} fontWeight="bold" fontFamily="sans-serif"
-          stroke="white" strokeWidth={unit * 3} paintOrder="stroke"
-        >{formatDist(d)}</text>
-      );
+  const scaleBar = useMemo(() => {
+    if (!viewport || !mapScale || containerSize.w === 0) return null;
+    const mpp = metersPerPixel(viewport.centerLat, viewport.zoom);
+    const targetPx = 120;
+    const targetM = targetPx * mpp;
+
+    const niceSteps = [1, 2, 5, 10, 20, 50, 100, 200, 500, 1000, 2000, 5000, 10000];
+    let barM = niceSteps[0];
+    for (const s of niceSteps) {
+      if (s <= targetM * 2) barM = s;
     }
+    const barPx = barM / mpp;
+    const label = barM >= 1000 ? `${barM / 1000} km` : `${barM} m`;
 
     return (
-      <svg
-        style={{ position: "absolute", top: 0, left: 0, width: "100%", height: "100%", pointerEvents: "none" }}
-        viewBox={overlayViewBox} preserveAspectRatio="none"
-      >
-        {/* Placed segments */}
-        {pts.length > 1 && (
-          <path d={pts.map((p, i) => `${i === 0 ? "M" : "L"} ${p.x},${p.y}`).join(" ")}
-            fill="none" stroke="#1d4ed8" strokeWidth={sw} strokeDasharray={`${unit * 6},${unit * 3}`} />
-        )}
-        {/* Rubber-band line */}
-        {rubberD && (
-          <path d={rubberD} fill="none" stroke="#6366f1" strokeWidth={sw * 0.7}
-            strokeDasharray={`${unit * 4},${unit * 3}`} opacity={0.7} />
-        )}
-        {/* Dots at waypoints */}
-        {pts.map((p, i) => (
-          <circle key={i} cx={p.x} cy={p.y} r={dotR} fill="#1d4ed8" stroke="white" strokeWidth={sw} />
-        ))}
-        {labels}
-      </svg>
-    );
-  }, [overlayViewBox, viewBox, measurePoints, measureCursor, containerSize, mapScale]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  // ─── Render ─────────────────────────────────────────────
-
-  if (!ocdData) {
-    return (
-      <div className={`flex items-center justify-center bg-slate-100 rounded-lg border border-slate-200 ${className}`} style={style}>
-        <div className="text-center p-8">
-          <svg className="mx-auto w-12 h-12 text-slate-300 mb-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 20l-5.447-2.724A1 1 0 013 16.382V5.618a1 1 0 011.447-.894L9 7m0 13l6-3m-6 3V7m6 10l4.553 2.276A1 1 0 0021 18.382V7.618a1 1 0 00-.553-.894L15 4m0 13V4m0 0L9 7" />
-          </svg>
-          <p className="text-sm text-slate-400">No map loaded</p>
-          <p className="text-xs text-slate-400 mt-1">Upload an OCAD (.ocd) file</p>
-        </div>
+      <div style={{ position: "absolute", bottom: 12, left: 12, pointerEvents: "none", zIndex: 10 }}>
+        <div style={{ fontSize: 11, color: "#334155", fontWeight: 600, marginBottom: 2 }}>{label}</div>
+        <div style={{ width: barPx, height: 4, background: "#334155", borderRadius: 1, opacity: 0.8 }} />
       </div>
     );
-  }
+  }, [viewport, mapScale, containerSize]);
 
-  if (loading) {
+  // ─── Measure HUD ──────────────────────────────────────
+
+  const measureHud = useMemo(() => {
+    if (!measuring || measurePoints.length === 0) return null;
+    let total = 0;
+    for (let i = 1; i < measurePoints.length; i++) {
+      total += mmToMeters(mapMmDist(measurePoints[i - 1], measurePoints[i]));
+    }
+    if (measureCursor && measurePoints.length > 0) {
+      total += mmToMeters(mapMmDist(measurePoints[measurePoints.length - 1], measureCursor));
+    }
+    return (
+      <div style={{
+        position: "absolute", top: 8, left: "50%", transform: "translateX(-50%)",
+        background: "rgba(255,255,255,0.9)", borderRadius: 6, padding: "4px 12px",
+        fontSize: 13, fontWeight: 600, color: "#1e3a8a", boxShadow: "0 1px 4px rgba(0,0,0,0.15)", zIndex: 10,
+      }}>
+        {formatDist(total)} · {measurePoints.length} pt{measurePoints.length > 1 ? "s" : ""}
+      </div>
+    );
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [measuring, measurePoints, measureCursor, mapScale]);
+
+  // ─── Render ───────────────────────────────────────────
+
+  if (!mapBounds) {
     return (
       <div className={`flex items-center justify-center bg-slate-50 rounded-lg border border-slate-200 ${className}`} style={style}>
-        <div className="text-center">
-          <div className="w-8 h-8 border-3 border-blue-200 border-t-blue-600 rounded-full animate-spin mx-auto mb-3" />
-          <p className="text-sm text-slate-500">Rendering map...</p>
+        <div className="text-center p-4">
+          <p className="text-sm text-slate-500">No map uploaded</p>
         </div>
       </div>
     );
   }
 
-  if (error) {
+  if (!viewport) {
     return (
-      <div className={`flex items-center justify-center bg-red-50 rounded-lg border border-red-200 ${className}`} style={style}>
-        <div className="text-center p-4">
-          <p className="text-sm text-red-600 font-medium">Failed to render map</p>
-          <p className="text-xs text-red-500 mt-1">{error}</p>
+      <div ref={containerRef} className={`flex items-center justify-center bg-slate-50 rounded-lg border border-slate-200 ${className}`} style={style}>
+        <div className="text-center">
+          <div className="w-8 h-8 border-3 border-blue-200 border-t-blue-600 rounded-full animate-spin mx-auto mb-3" />
+          <p className="text-sm text-slate-500">Loading map...</p>
+          {tileProgress && tileProgress.rendering && tileProgress.total > 0 && (
+            <>
+              <div className="w-32 h-1.5 bg-slate-200 rounded-full mt-2 mx-auto">
+                <div className="h-full bg-blue-500 rounded-full transition-all"
+                  style={{ width: `${Math.round((tileProgress.done / tileProgress.total) * 100)}%` }} />
+              </div>
+              <p className="text-xs text-slate-400 mt-1">
+                Generating tiles... {tileProgress.done}/{tileProgress.total}
+              </p>
+            </>
+          )}
         </div>
       </div>
     );
@@ -1244,120 +1102,299 @@ export function MapViewer({
       onTouchMove={handleTouchMove}
       onTouchEnd={handleTouchEnd}
     >
-      {/* Base map — inside CSS transform container */}
-      <div
-        style={{
-          transform: `translate(${transform.x}px, ${transform.y}px) scale(${transform.scale})`,
-          transformOrigin: "0 0",
-          position: "absolute", top: 0, left: 0, width: "100%", height: "100%",
-        }}
-      >
-        <div ref={svgContainerRef} style={{ width: "100%", height: "100%" }} />
+      {/* Rotated map layer (tiles + overlay) — corrects map north offset */}
+      <div style={{
+        position: "absolute",
+        inset: 0,
+        transform: rotDeg !== 0 ? `rotate(${rotDeg}deg)` : undefined,
+        transformOrigin: "center center",
+        ...(rotDeg !== 0 ? { width: renderW, height: renderH, left: (containerSize.w - renderW) / 2, top: (containerSize.h - renderH) / 2 } : {}),
+      }}>
+        {/* Base map tiles */}
+        <TileLayer
+          viewport={viewport}
+          containerWidth={renderW}
+          containerHeight={renderH}
+          tileVersion={mapVersion}
+        />
+
+        {/* Overlay SVG */}
+        <svg
+          style={{ position: "absolute", inset: 0, width: "100%", height: "100%", pointerEvents: "none", zIndex: 2 }}
+          viewBox={`0 0 ${renderW} ${renderH}`}
+        >
+          <g style={{ pointerEvents: "auto" }}>
+            {overlayContent}
+          </g>
+        </svg>
       </div>
 
-      {/* Overlay — OUTSIDE transform container, using dynamic viewBox for
-          crisp vector rendering at any zoom level while scaling with map */}
-      {overlayContent}
-      {measureOverlay}
-
-      {/* Measure total distance HUD */}
-      {measuring && measurePoints.length >= 2 && (
-        <div className="absolute top-3 left-1/2 -translate-x-1/2 z-10 bg-white/90 rounded-lg px-3 py-1.5 border border-slate-200 shadow-sm pointer-events-none">
-          <span className="text-sm font-semibold text-blue-700">
-            {formatDist(measurePoints.reduce((sum, p, i) => i === 0 ? 0 : sum + ocadToMeters(ocadDistPx(measurePoints[i - 1], p)), 0))}
-          </span>
-          <span className="text-xs text-slate-400 ml-2">{measurePoints.length - 1} segment{measurePoints.length > 2 ? "s" : ""}</span>
-        </div>
+      {/* Description sheet (not rotated) */}
+      {descriptionSheet && (
+        <svg style={{ position: "absolute", inset: 0, width: "100%", height: "100%", pointerEvents: "none", zIndex: 3 }}
+          viewBox={`0 0 ${containerSize.w} ${containerSize.h}`}>
+          {descriptionSheet}
+        </svg>
       )}
 
       {/* Scale bar */}
-      {(() => {
-        if (hideControls || !mapScale || !viewBox || containerSize.w === 0) return null;
-        const basePixPerOcad = Math.min(containerSize.w / viewBox.w, containerSize.h / viewBox.h);
-        const pixPerOcad = transform.scale * basePixPerOcad;
-        // 1 OCAD unit = 0.01 mm paper; pixPerMeter = pixPerOcad * 100 * 1000 / mapScale
-        const pixPerMeter = pixPerOcad * 100 * 1000 / mapScale;
-        if (pixPerMeter <= 0) return null;
-        const niceSteps = [1, 2, 5, 10, 20, 25, 50, 100, 200, 250, 500, 1000, 2000, 5000];
-        const targetPx = 90;
-        const metersForTarget = targetPx / pixPerMeter;
-        const niceM = niceSteps.reduce((best, v) =>
-          Math.abs(v - metersForTarget) < Math.abs(best - metersForTarget) ? v : best
-        );
-        const barPx = Math.round(niceM * pixPerMeter);
-        const label = niceM >= 1000 ? `${niceM / 1000} km` : `${niceM} m`;
-        const svgW = barPx + 4;
-        return (
-          <div className="absolute bottom-3 left-3 z-10 bg-white/90 rounded px-2 py-1.5 border border-slate-200 shadow-sm pointer-events-none">
-            <svg width={svgW} height={22} style={{ display: "block" }}>
-              {/* Left tick pointing up */}
-              <line x1={2} y1={0} x2={2} y2={8} stroke="#475569" strokeWidth={1.5} />
-              {/* Right tick pointing up */}
-              <line x1={svgW - 2} y1={0} x2={svgW - 2} y2={8} stroke="#475569" strokeWidth={1.5} />
-              {/* Horizontal bar */}
-              <line x1={2} y1={8} x2={svgW - 2} y2={8} stroke="#475569" strokeWidth={1.5} />
-              {/* Label */}
-              <text x={svgW / 2} y={20} textAnchor="middle" fontSize={10} fill="#64748b" fontFamily="sans-serif">{label}</text>
-            </svg>
-          </div>
-        );
-      })()}
+      {scaleBar}
 
-      {/* Zoom & measure controls */}
-      {!hideControls && <div className="absolute bottom-3 right-3 flex flex-col gap-1 z-10">
-        {mapScale && (
+      {/* Measure HUD */}
+      {measureHud}
+
+      {/* Control buttons */}
+      {!hideControls && (
+        <div style={{
+          position: "absolute", bottom: 12, right: 12, display: "flex", flexDirection: "column", gap: 4, zIndex: 10,
+        }}>
+          <button
+            onClick={() => setViewport((prev) => prev ? { ...prev, zoom: Math.min(22, prev.zoom + 0.5) } : prev)}
+            className="w-8 h-8 bg-white rounded shadow hover:bg-slate-50 flex items-center justify-center text-slate-600 font-bold text-lg"
+            title="Zoom in"
+          >+</button>
+          <button
+            onClick={() => setViewport((prev) => prev ? { ...prev, zoom: Math.max(1, prev.zoom - 0.5) } : prev)}
+            className="w-8 h-8 bg-white rounded shadow hover:bg-slate-50 flex items-center justify-center text-slate-600 font-bold text-lg"
+            title="Zoom out"
+          >−</button>
           <button
             onClick={() => {
-              setMeasuring((m) => {
-                if (m) { setMeasurePoints([]); setMeasureCursor(null); }
-                return !m;
-              });
+              if (mapBounds) setViewport(fitBounds(mapBounds, containerSize.w, containerSize.h, 0.05));
             }}
-            className={`w-8 h-8 border rounded-lg flex items-center justify-center shadow-sm cursor-pointer mb-1 ${
-              measuring ? "bg-blue-600 border-blue-600 text-white" : "bg-white border-slate-200 text-slate-600 hover:bg-slate-50"
-            }`}
-            title={measuring ? "Stop measuring (Esc)" : "Measure distance"}
+            className="w-8 h-8 bg-white rounded shadow hover:bg-slate-50 flex items-center justify-center"
+            title="Reset view"
           >
-            {/* Ruler icon */}
-            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-              <path strokeLinecap="round" strokeLinejoin="round" d="M3 6h18v12H3zM7 12v-3M11 12v-3M15 12v-3M19 12v-3" />
+            <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth={1.8} className="w-4 h-4 text-slate-600">
+              <path d="M3 7V3h4M13 3h4v4M17 13v4h-4M7 17H3v-4" strokeLinecap="round" strokeLinejoin="round" />
+              <rect x="7" y="7" width="6" height="6" rx="0.5" fill="currentColor" opacity="0.3" />
             </svg>
           </button>
-        )}
-        <button
-          onClick={() => { const el = containerRef.current; if (!el) return; const cx = el.clientWidth / 2, cy = el.clientHeight / 2; setTransform(p => { const ns = Math.min(50, p.scale * 1.3); const ratio = ns / p.scale; return { scale: ns, x: cx - (cx - p.x) * ratio, y: cy - (cy - p.y) * ratio }; }); }}
-          className="w-8 h-8 bg-white border border-slate-200 rounded-lg flex items-center justify-center text-slate-600 hover:bg-slate-50 shadow-sm cursor-pointer"
-        >
-          <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" /></svg>
-        </button>
-        <button
-          onClick={() => { const el = containerRef.current; if (!el) return; const cx = el.clientWidth / 2, cy = el.clientHeight / 2; setTransform(p => { const ns = Math.max(0.1, p.scale / 1.3); const ratio = ns / p.scale; return { scale: ns, x: cx - (cx - p.x) * ratio, y: cy - (cy - p.y) * ratio }; }); }}
-          className="w-8 h-8 bg-white border border-slate-200 rounded-lg flex items-center justify-center text-slate-600 hover:bg-slate-50 shadow-sm cursor-pointer"
-        >
-          <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M20 12H4" /></svg>
-        </button>
-        <button
-          onClick={() => setTransform({ x: 0, y: 0, scale: 1 })}
-          className="w-8 h-8 bg-white border border-slate-200 rounded-lg flex items-center justify-center text-slate-600 hover:bg-slate-50 shadow-sm cursor-pointer"
-          title="Reset view"
-        >
-          {/* Circular arrow — clearly distinct from the fullscreen icon */}
-          <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0l3.181 3.183a8.25 8.25 0 0013.803-3.7M4.031 9.865a8.25 8.25 0 0113.803-3.7l3.181 3.182m0-4.991v4.99" /></svg>
-        </button>
-        {onToggleFullscreen && (
           <button
-            onClick={onToggleFullscreen}
-            className="w-8 h-8 bg-white border border-slate-200 rounded-lg flex items-center justify-center text-slate-600 hover:bg-slate-50 shadow-sm cursor-pointer"
-            title={isFullscreen ? "Exit fullscreen" : "Fullscreen"}
+            onClick={() => {
+              setMeasuring((prev) => {
+                if (prev) { setMeasurePoints([]); setMeasureCursor(null); }
+                return !prev;
+              });
+            }}
+            className={`w-8 h-8 rounded shadow flex items-center justify-center ${measuring ? "bg-blue-500 text-white" : "bg-white hover:bg-slate-50 text-slate-600"}`}
+            title="Measure distance"
           >
-            {isFullscreen ? (
-              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 9V4.5M9 9H4.5M9 9L3.75 3.75M9 15v4.5M9 15H4.5M9 15l-5.25 5.25M15 9h4.5M15 9V4.5M15 9l5.25-5.25M15 15h4.5M15 15v4.5m0-4.5l5.25 5.25" /></svg>
-            ) : (
-              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3.75 3.75v4.5m0-4.5h4.5m-4.5 0L9 9M3.75 20.25v-4.5m0 4.5h4.5m-4.5 0L9 15M20.25 3.75h-4.5m4.5 0v4.5m0-4.5L15 9m5.25 11.25h-4.5m4.5 0v-4.5m0 4.5L15 15" /></svg>
-            )}
+            <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth={1.5} className="w-4 h-4">
+              <path d="M3 17L17 3" strokeLinecap="round" />
+              <path d="M6 14l1.5-1.5M9 11l1.5-1.5M12 8l1.5-1.5" strokeLinecap="round" />
+            </svg>
           </button>
-        )}
-      </div>}
+          {onToggleFullscreen && (
+            <button
+              onClick={onToggleFullscreen}
+              className="w-8 h-8 bg-white rounded shadow hover:bg-slate-50 flex items-center justify-center text-slate-600"
+              title={isFullscreen ? "Exit fullscreen" : "Fullscreen"}
+            >
+              <svg viewBox="0 0 20 20" fill="currentColor" className="w-4 h-4">
+                {isFullscreen ? (
+                  <path fillRule="evenodd" d="M3.28 2.22a.75.75 0 00-1.06 1.06L5.44 6.5H2.75a.75.75 0 000 1.5h4.5a.75.75 0 00.75-.75v-4.5a.75.75 0 00-1.5 0v2.69L3.28 2.22zm13.44 0a.75.75 0 10-1.06 1.06L18.88 6.5h-2.69a.75.75 0 000 1.5h4.5a.75.75 0 00.75-.75v-4.5a.75.75 0 00-1.5 0v2.69L16.72 2.22zM3.28 17.78a.75.75 0 001.06 1.06L7.56 15.5h-2.69a.75.75 0 010-1.5h4.5a.75.75 0 01.75.75v4.5a.75.75 0 01-1.5 0v-2.69L3.28 17.78zm13.44 0a.75.75 0 11-1.06 1.06L12.44 15.5h2.69a.75.75 0 010-1.5h-4.5a.75.75 0 01-.75.75v4.5a.75.75 0 011.5 0v-2.69l3.22 3.22z" clipRule="evenodd" />
+                ) : (
+                  <path fillRule="evenodd" d="M4.25 2A2.25 2.25 0 002 4.25v2a.75.75 0 001.5 0v-2a.75.75 0 01.75-.75h2a.75.75 0 000-1.5h-2zm9.5 0a.75.75 0 000 1.5h2a.75.75 0 01.75.75v2a.75.75 0 001.5 0v-2A2.25 2.25 0 0015.75 2h-2zM3.5 13.75a.75.75 0 00-1.5 0v2A2.25 2.25 0 004.25 18h2a.75.75 0 000-1.5h-2a.75.75 0 01-.75-.75v-2zm15 0a.75.75 0 00-1.5 0v2a.75.75 0 01-.75.75h-2a.75.75 0 000 1.5h2A2.25 2.25 0 0018.5 15.75v-2z" clipRule="evenodd" />
+                )}
+              </svg>
+            </button>
+          )}
+        </div>
+      )}
     </div>
   );
+}
+
+// ─── Draw broken circle with slit gaps ─────────────────────
+
+function drawBrokenCircle(cx: number, cy: number, r: number, gaps: SlitGap[]): string {
+  const normalized: { start: number; end: number }[] = [];
+  for (const g of gaps) {
+    const s = ((g.start % 360) + 360) % 360;
+    const e = ((g.end % 360) + 360) % 360;
+    if (Math.abs(s - e) < 0.5) continue;
+    normalized.push({ start: s, end: e });
+  }
+
+  if (normalized.length === 0) {
+    return `M${cx + r},${cy} A${r},${r} 0 1 1 ${cx - r},${cy} A${r},${r} 0 1 1 ${cx + r},${cy}`;
+  }
+
+  const gapAngles: [number, number][] = [];
+  for (const g of normalized) {
+    if (g.start < g.end) {
+      gapAngles.push([g.start, g.end]);
+    } else {
+      gapAngles.push([g.start, 360]);
+      gapAngles.push([0, g.end]);
+    }
+  }
+  gapAngles.sort((a, b) => a[0] - b[0]);
+
+  const merged: [number, number][] = [];
+  for (const g of gapAngles) {
+    if (merged.length > 0 && g[0] <= merged[merged.length - 1][1]) {
+      merged[merged.length - 1][1] = Math.max(merged[merged.length - 1][1], g[1]);
+    } else {
+      merged.push([g[0], g[1]]);
+    }
+  }
+
+  const arcs: { start: number; end: number }[] = [];
+  let cursor = 0;
+  for (const [gs, ge] of merged) {
+    if (gs > cursor) arcs.push({ start: cursor, end: gs });
+    cursor = ge;
+  }
+  if (cursor < 360) arcs.push({ start: cursor, end: 360 });
+
+  let d = "";
+  for (const arc of arcs) {
+    const sweep = arc.end - arc.start;
+    if (sweep < 0.5) continue;
+    const startRad = ((90 - arc.start) * Math.PI) / 180;
+    const endRad = ((90 - arc.end) * Math.PI) / 180;
+    const x1 = cx + r * Math.cos(startRad);
+    const y1 = cy - r * Math.sin(startRad);
+    const x2 = cx + r * Math.cos(endRad);
+    const y2 = cy - r * Math.sin(endRad);
+    const largeArc = sweep > 180 ? 1 : 0;
+    d += `M${x1.toFixed(1)},${y1.toFixed(1)} A${r},${r} 0 ${largeArc} 1 ${x2.toFixed(1)},${y2.toFixed(1)} `;
+  }
+
+  return d;
+}
+
+// ─── Description sheet renderer ────────────────────────────
+
+function renderDescriptionSheet(
+  courseGeometry: any,
+  symbolScale: number,
+  cw: number,
+  ch: number,
+  courseName?: string,
+): React.ReactNode | null {
+  if (!courseGeometry?.features) return null;
+
+  const features = courseGeometry.features || [];
+  const controlFeatures = features.filter(
+    (f: any) => f.properties?.symbolType === "control" && f.properties?.code && f.properties?.description,
+  );
+
+  if (controlFeatures.length === 0) return null;
+
+  // IOF standard: 8 columns (A=seq, B=code, C-G=description symbols, H=dimensions)
+  const cellSize = Math.max(20, Math.min(36, 7 * symbolScale));
+  const cols = 8;
+  const headerRows = 1; // course name header
+  const totalRows = headerRows + controlFeatures.length;
+  const sheetW = cols * cellSize;
+  const sheetH = totalRows * cellSize;
+
+  // Position: top-right corner, clear of controls
+  const sheetX = cw - sheetW - 12;
+  const sheetY = 12;
+
+  const elements: React.ReactNode[] = [];
+
+  // Background with shadow effect
+  elements.push(
+    <rect key="desc-shadow" x={sheetX + 2} y={sheetY + 2} width={sheetW} height={sheetH}
+      fill="rgba(0,0,0,0.1)" rx={2} />
+  );
+  elements.push(
+    <rect key="desc-bg" x={sheetX} y={sheetY} width={sheetW} height={sheetH}
+      fill="white" stroke="#94a3b8" strokeWidth={1} rx={2} />
+  );
+
+  // Header row: course name
+  elements.push(
+    <rect key="desc-header" x={sheetX} y={sheetY} width={sheetW} height={cellSize}
+      fill="#e2e8f0" stroke="#94a3b8" strokeWidth={0.5} rx={2} />
+  );
+  if (courseName) {
+    elements.push(
+      <text key="desc-title" x={sheetX + sheetW / 2} y={sheetY + cellSize * 0.5}
+        textAnchor="middle" dominantBaseline="central"
+        fontSize={cellSize * 0.5} fill="#1e293b" fontWeight="bold">
+        {courseName}
+      </text>
+    );
+  }
+
+  // Grid lines
+  for (let r = 0; r <= totalRows; r++) {
+    elements.push(
+      <line key={`desc-hr-${r}`} x1={sheetX} y1={sheetY + r * cellSize}
+        x2={sheetX + sheetW} y2={sheetY + r * cellSize} stroke="#cbd5e1" strokeWidth={0.5} />
+    );
+  }
+  for (let c = 0; c <= cols; c++) {
+    elements.push(
+      <line key={`desc-vr-${c}`} x1={sheetX + c * cellSize} y1={sheetY + cellSize}
+        x2={sheetX + c * cellSize} y2={sheetY + sheetH} stroke="#cbd5e1" strokeWidth={0.5} />
+    );
+  }
+
+  // Control rows
+  for (let i = 0; i < controlFeatures.length; i++) {
+    const f = controlFeatures[i];
+    const code = f.properties.code;
+    const desc = f.properties.description;
+    const ry = sheetY + (i + headerRows) * cellSize;
+    const fs = cellSize * 0.45;
+
+    // Column A: sequence number
+    elements.push(
+      <text key={`desc-seq-${i}`} x={sheetX + cellSize * 0.5} y={ry + cellSize * 0.5}
+        textAnchor="middle" dominantBaseline="central" fontSize={fs} fill="#475569">
+        {i + 1}
+      </text>
+    );
+    // Column B: control code
+    elements.push(
+      <text key={`desc-code-${i}`} x={sheetX + cellSize * 1.5} y={ry + cellSize * 0.5}
+        textAnchor="middle" dominantBaseline="central" fontSize={fs} fill="#1e293b" fontWeight="bold">
+        {code}
+      </text>
+    );
+
+    // Columns C-G: IOF description symbols
+    const symbols = getDescriptionSymbols(desc, "#c026d3");
+    const colKeys = ["colC", "colD", "colE", "colF", "colG"] as const;
+    for (let ci = 0; ci < colKeys.length; ci++) {
+      const content = symbols[colKeys[ci]];
+      if (content) {
+        const sx = sheetX + (ci + 2) * cellSize;
+        if (colKeys[ci] === "colE") {
+          // colE is dimensions text (e.g. "3m"), render as SVG text
+          elements.push(
+            <text key={`desc-sym-${i}-${ci}`} x={sx + cellSize * 0.5} y={ry + cellSize * 0.5}
+              textAnchor="middle" dominantBaseline="central" fontSize={fs * 0.85} fill="#475569">
+              {content}
+            </text>
+          );
+        } else {
+          // IOF symbol SVG — render as nested <svg> (foreignObject + HTML can't render raw SVG paths)
+          elements.push(
+            <svg key={`desc-sym-${i}-${ci}`} x={sx + 1} y={ry + 1}
+              width={cellSize - 2} height={cellSize - 2}
+              viewBox="-100 -100 200 200"
+              dangerouslySetInnerHTML={{ __html: content }} />
+          );
+        }
+      }
+    }
+
+    // Alternate row shading for readability
+    if (i % 2 === 1) {
+      elements.splice(elements.length - colKeys.length - 2, 0,
+        <rect key={`desc-row-bg-${i}`} x={sheetX + 0.5} y={ry + 0.5}
+          width={sheetW - 1} height={cellSize - 1} fill="#f8fafc" />
+      );
+    }
+  }
+
+  return <g key="desc-sheet">{elements}</g>;
 }

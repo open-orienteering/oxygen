@@ -23,9 +23,10 @@ import swishIcon from "../assets/swish-icon.svg";
 import { ClubLogo } from "../components/ClubLogo";
 import { MapPanel } from "../components/MapPanel";
 import { useDeviceManager } from "../context/DeviceManager";
-import { usePrinter } from "../context/PrinterContext";
 import { recentCardToKioskMessage } from "../lib/kiosk-channel";
+import { shouldProcessStandaloneCard } from "../lib/kiosk-standalone-routing";
 import { getClubLogoUrl } from "../lib/club-logo";
+import { SiCardAnimation } from "../components/SiCardAnimation";
 
 // ─── Types ──────────────────────────────────────────────────
 
@@ -78,6 +79,9 @@ export function KioskPage() {
   const channelRef = useRef<KioskChannel | null>(null);
   const resetTimerRef = useRef<any>(undefined);
   const screenRef = useRef<KioskScreen>(screen);
+  // Tracks the last standalone card that was fully processed {id, action}.
+  // Cleared on every idle transition so the same card can re-trigger after reset.
+  const lastProcessedRef = useRef<{ id: string; action: string } | null>(null);
   useEffect(() => { screenRef.current = screen; }, [screen]);
 
   // Select the competition (same as CompetitionShell)
@@ -122,6 +126,7 @@ export function KioskPage() {
       const delay = (seconds ?? settings.autoResetSeconds) * 1000;
       resetTimerRef.current = setTimeout(() => {
         setScreen({ mode: "idle" });
+        lastProcessedRef.current = null;
       }, delay);
     },
     [settings.autoResetSeconds],
@@ -143,10 +148,21 @@ export function KioskPage() {
     if (screen.mode === "registration-waiting") {
       registrationWatchdogRef.current = setTimeout(() => {
         setScreen({ mode: "idle" });
+        lastProcessedRef.current = null;
       }, WATCHDOG_MS);
     }
     return () => clearTimeout(registrationWatchdogRef.current);
   }, [screen]);
+
+  // ── Play beep when card readout completes ───────────────────
+  const prevScreenModeRef = useRef(screen.mode);
+  useEffect(() => {
+    const prev = prevScreenModeRef.current;
+    prevScreenModeRef.current = screen.mode;
+    if (prev === "reading" && screen.mode !== "reading" && screen.mode !== "idle") {
+      playReadoutBeep();
+    }
+  }, [screen.mode]);
 
   // ── Card-done → next screen transition ─────────────────────
   const cardDoneTimerRef = useRef<any>(undefined);
@@ -181,6 +197,7 @@ export function KioskPage() {
               clearTimeout(registrationWatchdogRef.current);
               registrationWatchdogRef.current = setTimeout(() => {
                 setScreen({ mode: "idle" });
+                lastProcessedRef.current = null;
               }, WATCHDOG_MS);
             }
           }
@@ -227,6 +244,7 @@ export function KioskPage() {
           clearTimeout(registrationWatchdogRef.current);
           registrationWatchdogRef.current = setTimeout(() => {
             setScreen({ mode: "idle" });
+            lastProcessedRef.current = null;
           }, WATCHDOG_MS);
           setScreen((prev) => {
             if (prev.mode === "registration-waiting") {
@@ -245,6 +263,7 @@ export function KioskPage() {
         case "kiosk-reset":
           clearTimeout(resetTimerRef.current);
           setScreen({ mode: "idle" });
+          lastProcessedRef.current = null;
           break;
 
         case "card-removed":
@@ -281,15 +300,13 @@ export function KioskPage() {
 
   // ── Standalone mode: react to DeviceManager card events ───
 
-  const lastCardIdRef = useRef<string | null>(null);
-
   useEffect(() => {
     if (!settings.standalone) return;
-    if (!currentCard || currentCard.id === lastCardIdRef.current) return;
-    lastCardIdRef.current = currentCard.id;
+    if (!shouldProcessStandaloneCard(currentCard, lastProcessedRef.current)) return;
+    lastProcessedRef.current = { id: currentCard!.id, action: currentCard!.action };
 
     clearTimeout(resetTimerRef.current);
-    const msg = recentCardToKioskMessage(currentCard);
+    const msg = recentCardToKioskMessage(currentCard!);
 
     let nextScreen: KioskScreen;
     if (msg.card.action === "readout") {
@@ -306,6 +323,17 @@ export function KioskPage() {
     }
     setScreen(nextScreen);
   }, [currentCard, settings.standalone, scheduleReset]);
+
+  // ── Print delegation ─────────────────────────────────────
+  // Delegate printing to the admin tab via BroadcastChannel — it holds the
+  // printer connection. The admin shell fetches all receipt data (logo, QR,
+  // custom message) itself, so the kiosk only needs to pass the runner ID.
+  const handlePrint = useCallback(
+    (runnerId: number) => {
+      channelRef.current?.send({ type: "kiosk-print-receipt", runnerId });
+    },
+    [],
+  );
 
   // ── Fullscreen toggle ─────────────────────────────────────
 
@@ -329,6 +357,7 @@ export function KioskPage() {
         <div className="flex items-center gap-2">
           {settings.standalone && supported && (
             <button
+              data-testid="connect-reader"
               onClick={() => connectReader().catch(() => { })}
               className={`text-xs px-2 py-1 rounded ${readerStatus === "connected" || readerStatus === "reading"
                   ? "bg-emerald-600/30 text-emerald-300"
@@ -336,7 +365,7 @@ export function KioskPage() {
                 }`}
             >
               {readerStatus === "connected" || readerStatus === "reading"
-                ? t("readerActive")
+                ? <span data-testid="reader-status">{t("readerActive")}</span>
                 : t("connectReader")}
             </button>
           )}
@@ -373,27 +402,57 @@ export function KioskPage() {
 
       {/* Main content area */}
       <div className="flex-1 flex items-center justify-center px-4 py-4">
-        {screen.mode === "idle" && (
-          <IdleScreen
-            competitionName={competitionName}
-            organizerEventorId={organizerEventorId}
-          />
-        )}
-        {screen.mode === "reading" && (
-          <ReadingScreen cardNumber={screen.cardNumber} />
-        )}
-        {screen.mode === "card-done" && (
-          <CardDoneScreen cardNumber={screen.cardNumber} />
-        )}
-        {screen.mode === "readout" && <ReadoutScreen card={screen.card} />}
-        {screen.mode === "pre-start" && (
-          <PreStartScreen card={screen.card} requireClearCheck={settings.requireClearCheck} />
-        )}
-        {screen.mode === "registration-waiting" && (
-          <RegistrationWaitingScreen card={screen.card} form={screen.form} />
-        )}
-        {screen.mode === "registration-complete" && (
-          <RegistrationCompleteScreen runner={screen.runner} />
+        {(screen.mode === "idle" || screen.mode === "reading" || screen.mode === "card-done") ? (
+          <div className="text-center">
+            {/* Competition branding — always visible to keep layout stable */}
+            <div className="mb-4">
+              {organizerEventorId && (
+                <img
+                  src={getClubLogoUrl(organizerEventorId)}
+                  alt=""
+                  className="inline-block w-28 h-28 object-contain rounded-lg mb-4"
+                  onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }}
+                />
+              )}
+              {competitionName && (
+                <h2 className="text-4xl font-bold text-slate-200 tracking-tight">
+                  {competitionName}
+                </h2>
+              )}
+            </div>
+
+            {/* Reader animation — fixed position, overflow clipped */}
+            <div className="mb-6 overflow-hidden mx-auto" style={{ paddingTop: 100 }}>
+              <SiCardAnimation
+                cardNumber={
+                  screen.mode === "idle"
+                    ? (lastDetectedCardNo ?? undefined)
+                    : screen.cardNumber
+                }
+                inserted={screen.mode !== "idle"}
+              />
+            </div>
+
+            {/* Screen-specific content below the reader — fixed height to prevent reader shift */}
+            <div className="min-h-[220px]">
+              {screen.mode === "idle" && <IdleContent />}
+              {screen.mode === "reading" && <ReadingContent cardNumber={screen.cardNumber} />}
+              {screen.mode === "card-done" && <CardDoneContent cardNumber={screen.cardNumber} />}
+            </div>
+          </div>
+        ) : (
+          <>
+            {screen.mode === "readout" && <ReadoutScreen card={screen.card} onPrint={handlePrint} />}
+            {screen.mode === "pre-start" && (
+              <PreStartScreen card={screen.card} requireClearCheck={settings.requireClearCheck} />
+            )}
+            {screen.mode === "registration-waiting" && (
+              <RegistrationWaitingScreen card={screen.card} form={screen.form} />
+            )}
+            {screen.mode === "registration-complete" && (
+              <RegistrationCompleteScreen runner={screen.runner} />
+            )}
+          </>
         )}
       </div>
     </div>
@@ -489,174 +548,143 @@ function KioskSettingsPanel({
   );
 }
 
-// ─── Idle Screen ────────────────────────────────────────────
-
-// ─── Animated Card Insert Icon ──────────────────────────────
-
-/**
- * SVG animation of an SI card sliding down into a reader bucket.
- * Uses CSS keyframes for the card movement.
- */
-function CardInsertAnimation({ size = 160 }: { size?: number }) {
-  return (
-    <div className="inline-block" style={{ width: size, height: size }}>
-      <style>{`
-        @keyframes slideCard {
-          0%, 100% { transform: translateY(-18px); }
-          40%, 60% { transform: translateY(8px); }
-        }
-      `}</style>
-      <svg
-        viewBox="0 0 100 100"
-        fill="none"
-        xmlns="http://www.w3.org/2000/svg"
-        className="w-full h-full"
-      >
-        {/* Reader bucket / station body */}
-        <rect
-          x="25" y="50" width="50" height="40" rx="6"
-          fill="#334155" stroke="#475569" strokeWidth="2"
-        />
-        {/* Slot opening */}
-        <rect x="35" y="48" width="30" height="6" rx="2" fill="#1e293b" />
-        {/* SI card — animated */}
-        <g style={{ animation: "slideCard 2.5s ease-in-out infinite" }}>
-          {/* Card body */}
-          <rect
-            x="34" y="12" width="32" height="42" rx="4"
-            fill="#10b981" stroke="#34d399" strokeWidth="1.5"
-          />
-          {/* Card chip */}
-          <rect x="42" y="20" width="16" height="12" rx="2" fill="#065f46" />
-          {/* Chip contacts */}
-          <line x1="45" y1="23" x2="45" y2="29" stroke="#34d399" strokeWidth="0.8" />
-          <line x1="48" y1="23" x2="48" y2="29" stroke="#34d399" strokeWidth="0.8" />
-          <line x1="51" y1="23" x2="51" y2="29" stroke="#34d399" strokeWidth="0.8" />
-          <line x1="54" y1="23" x2="54" y2="29" stroke="#34d399" strokeWidth="0.8" />
-          {/* Card number text area */}
-          <rect x="38" y="38" width="24" height="3" rx="1" fill="#065f46" opacity="0.5" />
-          <rect x="40" y="44" width="20" height="2" rx="1" fill="#065f46" opacity="0.3" />
-        </g>
-        {/* Down arrow hint */}
-        <path
-          d="M50 94 L45 88 L55 88 Z"
-          fill="#475569" opacity="0.5"
-        />
-      </svg>
-    </div>
-  );
-}
+// ─── Idle Content (text + clock below the shared reader) ────
 
 const API_BASE = import.meta.env.VITE_API_URL ?? "";
 
-function IdleScreen({
-  competitionName,
-  organizerEventorId,
-}: {
-  competitionName: string;
-  organizerEventorId?: number;
-}) {
+function IdleContent() {
   const { t } = useTranslation("kiosk");
-  const serverTime = trpc.race.serverTime.useQuery(undefined, {
-    refetchInterval: 1000,
-  });
+  const fmt = useCallback((d: Date) =>
+    d.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false }), []);
+  const [clock, setClock] = useState(() => fmt(new Date()));
+
+  useEffect(() => {
+    const id = setInterval(() => setClock(fmt(new Date())), 1000);
+    return () => clearInterval(id);
+  }, [fmt]);
 
   return (
-    <div className="text-center">
-      {/* Competition branding */}
-      <div className="mb-10">
-        {organizerEventorId && (
-          <img
-            src={getClubLogoUrl(organizerEventorId)}
-            alt=""
-            className="inline-block w-28 h-28 object-contain rounded-lg mb-4"
-            onError={(e) => {
-              (e.target as HTMLImageElement).style.display = "none";
-            }}
-          />
-        )}
-        {competitionName && (
-          <h2 className="text-4xl font-bold text-slate-200 tracking-tight">
-            {competitionName}
-          </h2>
-        )}
-      </div>
-
-      {/* Animated card insertion icon */}
-      <div className="mb-10">
-        <CardInsertAnimation />
-      </div>
-
+    <>
       <h1 className="text-7xl font-black text-white mb-4">
         {t("insertCard")}
       </h1>
       <p className="text-2xl text-slate-400 mb-8">
         {t("insertCardHint")}
       </p>
-
-      {/* Clock */}
-      {serverTime.data && (
-        <div className="text-3xl font-mono text-slate-500 tabular-nums">
-          {formatMeosTime(serverTime.data.deciseconds)}
-        </div>
-      )}
-    </div>
+      <div className="text-3xl font-mono text-slate-500 tabular-nums">
+        {clock}
+      </div>
+    </>
   );
 }
 
-// ─── Reading Screen (card inserted, readout in progress) ────
+// ─── Reading Content (status text below the shared reader) ──
 
-function ReadingScreen({ cardNumber }: { cardNumber: number }) {
+function ReadingContent({ cardNumber }: { cardNumber: number }) {
   const { t } = useTranslation("kiosk");
   return (
-    <div className="text-center">
-      <div className="mb-8">
-        <div className="inline-block w-20 h-20 border-4 border-amber-400 border-t-transparent rounded-full animate-spin" />
+    <>
+      <div className="mb-4 flex items-center justify-center gap-3">
+        <div className="inline-block w-8 h-8 border-4 border-amber-400 border-t-transparent rounded-full animate-spin" />
+        <h1 className="text-4xl font-black text-amber-400">
+          {t("readingCard")}
+        </h1>
       </div>
-      <h1 className="text-5xl font-black text-amber-400 mb-4">
-        {t("readingCard")}
-      </h1>
-      <p className="text-2xl text-white mb-6">
+      <p className="text-2xl text-white mb-4">
         {t("doNotRemove")}
       </p>
       <div className="text-xl text-slate-400 font-mono">
         {t("cardNumber", { number: cardNumber })}
       </div>
-    </div>
+    </>
   );
 }
 
-// ─── Card Done Screen (remove card prompt) ──────────────────
+// ─── Card Done Content (status text below the shared reader) ─
 
-function CardDoneScreen({ cardNumber }: { cardNumber: number }) {
+function CardDoneContent({ cardNumber }: { cardNumber: number }) {
   const { t } = useTranslation("kiosk");
   return (
-    <div className="text-center">
-      <div className="mb-8">
-        <div className="inline-flex items-center justify-center w-20 h-20 rounded-full bg-emerald-500/20 border-4 border-emerald-400">
-          <svg className="w-12 h-12 text-emerald-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}>
+    <>
+      <div className="mb-4 flex items-center justify-center gap-3">
+        <div className="inline-flex items-center justify-center w-10 h-10 rounded-full bg-emerald-500/20 border-4 border-emerald-400">
+          <svg className="w-6 h-6 text-emerald-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}>
             <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
           </svg>
         </div>
+        <h1 className="text-4xl font-black text-emerald-400">
+          {t("cardRead")}
+        </h1>
       </div>
-      <h1 className="text-5xl font-black text-emerald-400 mb-4">
-        {t("cardRead")}
-      </h1>
-      <p className="text-2xl text-white mb-6">
+      <p className="text-2xl text-white mb-4">
         {t("removeCard")}
       </p>
       <div className="text-xl text-slate-400 font-mono">
         {t("cardNumber", { number: cardNumber })}
       </div>
-    </div>
+    </>
   );
+}
+
+// ─── Card readout beep (Web Audio API) ──────────────────────
+
+function playReadoutBeep() {
+  try {
+    const ctx = new AudioContext();
+    const gain = ctx.createGain();
+    gain.connect(ctx.destination);
+    gain.gain.setValueAtTime(0.4, ctx.currentTime);
+
+    const osc = ctx.createOscillator();
+    osc.type = "sine";
+    osc.frequency.setValueAtTime(1000, ctx.currentTime);
+    osc.connect(gain);
+    osc.start(ctx.currentTime);
+    osc.stop(ctx.currentTime + 0.15);
+
+    setTimeout(() => ctx.close(), 500);
+  } catch {
+    // AudioContext not available — ignore
+  }
+}
+
+// ─── Rental card sound (Web Audio API) ──────────────────────
+
+function playRentalCardSound() {
+  try {
+    const ctx = new AudioContext();
+    const gain = ctx.createGain();
+    gain.connect(ctx.destination);
+    gain.gain.setValueAtTime(0.35, ctx.currentTime);
+
+    // Three short ascending beeps — distinct from any "success" sound
+    const freqs = [660, 880, 1100];
+    freqs.forEach((freq, i) => {
+      const osc = ctx.createOscillator();
+      osc.type = "sine";
+      osc.frequency.setValueAtTime(freq, ctx.currentTime);
+      osc.connect(gain);
+      const start = ctx.currentTime + i * 0.22;
+      osc.start(start);
+      osc.stop(start + 0.18);
+    });
+
+    setTimeout(() => ctx.close(), 1500);
+  } catch {
+    // AudioContext not available — ignore
+  }
 }
 
 // ─── Readout Screen ─────────────────────────────────────────
 
-function ReadoutScreen({ card }: { card: KioskCardReadoutMessage["card"] }) {
+function ReadoutScreen({
+  card,
+  onPrint,
+}: {
+  card: KioskCardReadoutMessage["card"];
+  onPrint: (runnerId: number) => void;
+}) {
   const { t } = useTranslation("kiosk");
-  const printer = usePrinter();
   const utils = trpc.useUtils();
   const finishRecordedRef = useRef(false);
   const printedRef = useRef(false);
@@ -680,13 +708,15 @@ function ReadoutScreen({ card }: { card: KioskCardReadoutMessage["card"] }) {
     if (cardFinishDeci <= 0) return; // no finish punch on card
 
     finishRecordedRef.current = true;
+    const runnerIdForReceipt = dbRunner.data.id;
     recordFinish.mutate(
       { runnerId: dbRunner.data.id, finishTime: cardFinishDeci },
       {
         onSuccess: () => {
-          // Invalidate so readout picks up the new finish time
+          // Invalidate so readout and receipt pick up the new finish time
           utils.cardReadout.readout.invalidate({ cardNo: card.cardNumber });
           utils.runner.findByCard.invalidate({ cardNo: card.cardNumber });
+          utils.race.finishReceipt.invalidate({ runnerId: runnerIdForReceipt });
         },
       },
     );
@@ -719,43 +749,33 @@ function ReadoutScreen({ card }: { card: KioskCardReadoutMessage["card"] }) {
   const isDNF = displayStatus === RunnerStatus.DNF;
 
   // 4. Auto-print receipt
-  const dashboard = trpc.competition.dashboard.useQuery(undefined, { staleTime: 5 * 60_000 });
-
   useEffect(() => {
     if (printedRef.current) return;
-    if (!printer.connected || !receipt.data || !dbRunner.data) return;
-    // Only auto-print for runners with a finish time
-    const hasFinish = (dbRunner.data.finishTime > 0) || finishRecordedRef.current;
+    if (!receipt.data || !dbRunner.data) return;
+    // Only auto-print for runners with a finish time.
+    // Check both the DB-stored finish time AND the receipt's card-computed finish
+    // time — the latter is derived from oCard and is available as soon as
+    // storeReadout runs, before applyResult has written to oRunner.FinishTime.
+    const hasFinish =
+      (dbRunner.data.finishTime > 0) ||
+      (receipt.data.timing.finishTime > 0) ||
+      finishRecordedRef.current;
     if (!hasFinish) return;
 
-    const r = receipt.data;
     printedRef.current = true;
-    printer.print({
-      competitionName: dashboard.data?.competition?.name ?? "",
-      competitionDate: dashboard.data?.competition?.date ?? undefined,
-      runner: {
-        name: r.runner.name,
-        clubName: r.runner.clubName,
-        className: r.runner.className,
-        startNo: r.runner.startNo,
-        cardNo: r.runner.cardNo,
-      },
-      timing: r.timing,
-      splits: r.controls.map((c) => ({
-        controlIndex: c.controlIndex,
-        controlCode: c.controlCode,
-        splitTime: c.splitTime,
-        cumTime: c.cumTime,
-        status: c.status,
-        punchTime: c.punchTime,
-        legLength: c.legLength,
-      })),
-      course: r.course,
-      position: r.position,
-      siac: r.siac,
-      classResults: r.classResults,
-    }).catch(() => {});
-  }, [receipt.data, dbRunner.data, printer.connected, dashboard.data]);
+    onPrint(dbRunner.data.id);
+  }, [receipt.data, dbRunner.data, onPrint]);
+
+  // Derive rental card status: from readout data (authoritative) or card message (fast path)
+  const isRentalCard = readout.data?.found ? readout.data.isRentalCard : card.isRentalCard;
+
+  // Play a distinct sound when a rental card is detected
+  const rentalSoundPlayedRef = useRef(false);
+  useEffect(() => {
+    if (!isRentalCard || rentalSoundPlayedRef.current) return;
+    rentalSoundPlayedRef.current = true;
+    playRentalCardSound();
+  }, [isRentalCard]);
 
   // 5. MapPanel info — always show when course data exists
   const courseMapInfo = useMemo(() => {
@@ -763,7 +783,13 @@ function ReadoutScreen({ card }: { card: KioskCardReadoutMessage["card"] }) {
     const d = readout.data;
     const punchStatusByCode: Record<string, "ok" | "missing" | "extra"> = {};
     for (const c of d.controls) punchStatusByCode[String(c.controlCode)] = c.status as "ok" | "missing" | "extra";
-    for (const ep of d.extraPunches) punchStatusByCode[String(ep.controlCode)] = "extra";
+    // Don't overwrite an "ok" slot with "extra" — happens when the runner punched a control
+    // out of order (e.g. 1,2,3,5,4,5,6): the early punch for code 5 lands in extraPunches
+    // but the correctly-matched slot is already "ok" and should stay green.
+    for (const ep of d.extraPunches) {
+      if (punchStatusByCode[String(ep.controlCode)] !== "ok")
+        punchStatusByCode[String(ep.controlCode)] = "extra";
+    }
     const focusControlCodes = [
       ...d.controls.filter((c) => c.status === "missing").map((c) => String(c.controlCode)),
       ...d.extraPunches.map((ep) => String(ep.controlCode)),
@@ -868,6 +894,15 @@ function ReadoutScreen({ card }: { card: KioskCardReadoutMessage["card"] }) {
                 rank: receipt.data.position.rank,
                 total: receipt.data.position.total,
               })}
+            </div>
+          )}
+
+          {/* Rental card banner */}
+          {isRentalCard && (
+            <div className="mb-3 p-4 bg-amber-900/40 border-2 border-amber-500/70 rounded-xl text-center" data-testid="rental-card-banner">
+              <div className="text-3xl mb-1">🏷️</div>
+              <div className="text-amber-300 font-bold text-xl">{t("returnRentalCard")}</div>
+              <div className="text-amber-400/80 text-sm mt-1">{t("returnRentalCardHint")}</div>
             </div>
           )}
 
@@ -1165,6 +1200,9 @@ function RegistrationWaitingScreen({
         )}
         {form?.fee != null && form.fee > 0 && form.paymentMode && form.paymentMode !== "billed" && (
           <InfoRow label={t("amountLabel")} value={`${form.fee} kr`} />
+        )}
+        {form?.isRentalCard && form.cardFee != null && form.cardFee > 0 && (
+          <InfoRow label="🏷️" value={t("rentalCardFee", { fee: form.cardFee })} />
         )}
       </div>
 

@@ -51,6 +51,8 @@ export interface RecentCard {
   runningTime?: number;
   /** Whether the card has punch/finish data (runner actually ran) */
   hasRaceData: boolean;
+  /** Whether this runner was registered with a rental card */
+  isRentalCard?: boolean;
   /** Owner data read from the SI card (SI10/SIAC only) */
   ownerData?: SICardOwnerData | null;
   readout?: SICardReadout;
@@ -351,6 +353,7 @@ export function DeviceManagerProvider({ children }: { children: ReactNode }) {
           clubName: result.found ? result.runner.clubName : undefined,
           status,
           runningTime: result.found ? result.timing.runningTime : undefined,
+          isRentalCard: result.found ? result.isRentalCard : undefined,
         };
 
         setCurrentCard(updated);
@@ -375,9 +378,12 @@ export function DeviceManagerProvider({ children }: { children: ReactNode }) {
               startTime: result.timing.startTime,
             });
             // Invalidate caches so results/runner lists recalculate placements
-            // for ALL runners in the class, not just the one just read out
+            // for ALL runners in the class, not just the one just read out.
+            // Also invalidate findByCard so ReadoutScreen sees the updated
+            // FinishTime without waiting for an unrelated refetch trigger.
             utils.runner.list.invalidate();
             utils.lists.resultList.invalidate();
+            utils.runner.findByCard.invalidate({ cardNo: readout.cardNumber });
           } catch {
             console.warn("[DeviceManager] Failed to apply readout result");
           }
