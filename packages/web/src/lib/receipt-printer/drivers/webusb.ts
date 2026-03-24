@@ -9,20 +9,10 @@
  *  - Chrome or Edge (WebUSB support)
  *  - Secure context (https:// or http://localhost)
  *
- * Linux note:
- *  The kernel loads the `usblp` driver automatically for USB printers, which
- *  prevents WebUSB from claiming the interface.
- *  See docs/receipt-printer-setup.md for the full setup instructions.
- *
- *  Short version — create /etc/udev/rules.d/50-citizen-thermal.rules:
- *
- *    SUBSYSTEM=="usb", ATTRS{idVendor}=="1d90", ATTRS{idProduct}=="2060", MODE="0666", TAG+="uaccess"
- *    ACTION=="bind", SUBSYSTEM=="usb", DRIVER=="usblp", \
- *      ATTRS{idVendor}=="1d90", ATTRS{idProduct}=="2060", \
- *      RUN+="/bin/sh -c 'echo -n %k > /sys/bus/usb/drivers/usblp/unbind'"
- *
- *  Then: sudo udevadm control --reload-rules && sudo udevadm trigger
- *  Replug the printer. This only affects this specific printer model.
+ * Platform notes:
+ *  Both Linux and Windows load OS-level printer drivers (usblp / usbprint.sys)
+ *  that block WebUSB from claiming the interface.
+ *  See docs/receipt-printer-setup.md for per-platform setup instructions.
  */
 
 import type { PrinterDriver } from "../types.js";
@@ -132,8 +122,20 @@ export class WebUsbPrinterDriver extends EventTarget implements PrinterDriver {
       throw new Error("No printer interface found on USB device");
     }
 
-    // claimInterface detaches the kernel usblp driver on Linux automatically
-    await device.claimInterface(iface.interfaceNumber);
+    try {
+      await device.claimInterface(iface.interfaceNumber);
+    } catch (err) {
+      await device.close();
+      this._status = "error";
+      const isWindows = navigator.userAgent.includes("Windows");
+      const hint = isWindows
+        ? "On Windows, use Zadig (zadig.akeo.ie) to replace the printer driver with WinUSB. See docs/receipt-printer-setup.md."
+        : "On Linux, a udev rule is needed to release the usblp driver. See docs/receipt-printer-setup.md.";
+      throw new Error(
+        `Could not claim the printer USB interface — the OS printer driver is blocking access. ${hint}`,
+        { cause: err },
+      );
+    }
 
     // Find the bulk OUT endpoint (direction: "out")
     const outEndpoint = iface.alternates[0]?.endpoints.find(

@@ -179,8 +179,8 @@ async function seedCourses(prisma: PrismaClient) {
 async function seedClasses(prisma: PrismaClient) {
   const classes = [
     { Id: 1, Name: "Öppen 1", Course: 1, SortIndex: 10, ClassType: "Open", StartBlock: 1, AllowQuickEntry: 1 },
-    { Id: 2, Name: "Öppen 2", Course: 2, SortIndex: 20, ClassType: "Open", StartBlock: 0, AllowQuickEntry: 0 },
-    { Id: 3, Name: "Öppen 3", Course: 3, SortIndex: 30, ClassType: "Open", StartBlock: 0, AllowQuickEntry: 0 },
+    { Id: 2, Name: "Öppen 2", Course: 2, SortIndex: 20, ClassType: "Open", StartBlock: 0, AllowQuickEntry: 1 },
+    { Id: 3, Name: "Öppen 3", Course: 3, SortIndex: 30, ClassType: "Open", StartBlock: 0, AllowQuickEntry: 1 },
   ];
   for (const c of classes) {
     await prisma.oClass.create({

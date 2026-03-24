@@ -260,49 +260,45 @@ function EventorSyncPanel({
             )}
           </button>
 
-          {env === "test" && (
-            <>
-              <button
-                onClick={() => pushStartListMutation.mutate()}
-                disabled={pushStartListMutation.isPending || !apiKeyConfigured}
-                className="px-4 py-2 bg-slate-600 text-white text-sm font-medium rounded-lg hover:bg-slate-700 disabled:opacity-50 transition-colors cursor-pointer flex items-center gap-2 whitespace-nowrap"
-              >
-                {pushStartListMutation.isPending ? (
-                  <>
-                    <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-                    {t("pushing")}
-                  </>
-                ) : (
-                  <>
-                    <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
-                    </svg>
-                    {t("pushStartList")}
-                  </>
-                )}
-              </button>
+          <button
+            onClick={() => pushStartListMutation.mutate()}
+            disabled={pushStartListMutation.isPending || !apiKeyConfigured}
+            className="px-4 py-2 bg-slate-600 text-white text-sm font-medium rounded-lg hover:bg-slate-700 disabled:opacity-50 transition-colors cursor-pointer flex items-center gap-2 whitespace-nowrap"
+          >
+            {pushStartListMutation.isPending ? (
+              <>
+                <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                {t("pushing")}
+              </>
+            ) : (
+              <>
+                <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
+                </svg>
+                {t("pushStartList")}
+              </>
+            )}
+          </button>
 
-              <button
-                onClick={() => pushResultsMutation.mutate()}
-                disabled={pushResultsMutation.isPending || !apiKeyConfigured}
-                className="px-4 py-2 bg-amber-600 text-white text-sm font-medium rounded-lg hover:bg-amber-700 disabled:opacity-50 transition-colors cursor-pointer flex items-center gap-2 whitespace-nowrap"
-              >
-                {pushResultsMutation.isPending ? (
-                  <>
-                    <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-                    {t("pushing")}
-                  </>
-                ) : (
-                  <>
-                    <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" />
-                    </svg>
-                    {t("pushResults")}
-                  </>
-                )}
-              </button>
-            </>
-          )}
+          <button
+            onClick={() => pushResultsMutation.mutate()}
+            disabled={pushResultsMutation.isPending || !apiKeyConfigured}
+            className="px-4 py-2 bg-amber-600 text-white text-sm font-medium rounded-lg hover:bg-amber-700 disabled:opacity-50 transition-colors cursor-pointer flex items-center gap-2 whitespace-nowrap"
+          >
+            {pushResultsMutation.isPending ? (
+              <>
+                <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                {t("pushing")}
+              </>
+            ) : (
+              <>
+                <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" />
+                </svg>
+                {t("pushResults")}
+              </>
+            )}
+          </button>
         </div>
       </div>
 

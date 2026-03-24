@@ -298,6 +298,7 @@ export const competitionRouter = router({
         sortIndex: c.SortIndex,
         runnerCount: runnerCountByClass.get(c.Id) ?? 0,
         classFee: c.ClassFee || undefined,
+        allowQuickEntry: c.AllowQuickEntry === 1 || undefined,
       }));
 
       const courseInfos: CourseInfo[] = courses.map((c) => {

@@ -41,7 +41,7 @@ export function ClassesPage() {
 
   const selection = useTableSelection(classes.data ?? []);
 
-  const [bulkField, setBulkField] = useState<"fee" | "freeStart" | "noTiming">("fee");
+  const [bulkField, setBulkField] = useState<"fee" | "freeStart" | "noTiming" | "allowQuickEntry">("fee");
   const [bulkValue, setBulkValue] = useState<string>("");
 
   const bulkUpdateMutation = trpc.class.bulkUpdate.useMutation({
@@ -54,14 +54,15 @@ export function ClassesPage() {
 
   const handleApplyBulk = () => {
     if (bulkValue === "") return;
-    const fieldLabel = bulkField === "fee" ? t("fee").toLowerCase() : bulkField === "freeStart" ? t("freeStart").toLowerCase() : t("noTiming").toLowerCase();
+    const fieldLabel = bulkField === "fee" ? t("fee").toLowerCase() : bulkField === "freeStart" ? t("freeStart").toLowerCase() : bulkField === "noTiming" ? t("noTiming").toLowerCase() : t("allowQuickEntry").toLowerCase();
     const valueLabel = bulkField === "fee" ? `${bulkValue} kr` : bulkValue === "1" ? t("yes") : t("no");
     if (!window.confirm(t("bulkConfirm", { field: fieldLabel, value: valueLabel, count: selection.count }))) return;
 
-    const data: { classFee?: number; freeStart?: boolean; noTiming?: boolean } = {};
+    const data: { classFee?: number; freeStart?: boolean; noTiming?: boolean; allowQuickEntry?: boolean } = {};
     if (bulkField === "fee") data.classFee = parseInt(bulkValue, 10) || 0;
     else if (bulkField === "freeStart") data.freeStart = bulkValue === "1";
     else if (bulkField === "noTiming") data.noTiming = bulkValue === "1";
+    else if (bulkField === "allowQuickEntry") data.allowQuickEntry = bulkValue === "1";
 
     bulkUpdateMutation.mutate({
       ids: Array.from(selection.selected),
@@ -267,6 +268,7 @@ export function ClassesPage() {
           <option value="fee">{t("fee")}</option>
           <option value="freeStart">{t("freeStart")}</option>
           <option value="noTiming">{t("noTiming")}</option>
+          <option value="allowQuickEntry">{t("allowQuickEntry")}</option>
         </select>
         {bulkField === "fee" ? (
           <input
@@ -438,7 +440,12 @@ function SortableClassRow({
                 {t("noTiming")}
               </span>
             )}
-            {!cls.freeStart && !cls.noTiming && (
+            {cls.allowQuickEntry && (
+              <span className="px-1.5 py-0.5 rounded text-xs font-medium bg-green-100 text-green-700">
+                {t("allowQuickEntry")}
+              </span>
+            )}
+            {!cls.freeStart && !cls.noTiming && !cls.allowQuickEntry && (
               <span className="text-slate-300">—</span>
             )}
           </div>
@@ -704,6 +711,17 @@ function ClassInlineDetail({ classId }: { classId: number }) {
                   className="rounded border-slate-300 text-blue-600 focus:ring-blue-500 cursor-pointer"
                 />
                 <span className="text-sm text-slate-600">{t("noTiming")}</span>
+              </label>
+            </div>
+            <div className="flex items-end">
+              <label className="flex items-center gap-2 cursor-pointer pb-1.5">
+                <input
+                  type="checkbox"
+                  checked={d.allowQuickEntry}
+                  onChange={(e) => handleSave("allowQuickEntry", e.target.checked)}
+                  className="rounded border-slate-300 text-green-600 focus:ring-green-500 cursor-pointer"
+                />
+                <span className="text-sm text-slate-600">{t("allowQuickEntry")}</span>
               </label>
             </div>
           </div>

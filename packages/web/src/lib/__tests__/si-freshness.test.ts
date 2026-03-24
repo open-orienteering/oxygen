@@ -81,13 +81,24 @@ describe("isPunchDataFresh", () => {
     expect(isPunchDataFresh(readout)).toBe(true);
   });
 
-  it("detects stale Sunday data on a Monday", () => {
+  it("accepts Sunday finish data on Monday (yesterday = night-O window)", () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-03-16T10:00:00")); // Monday (DOW=1)
     const readout = makeReadout({
       punches: [{ controlCode: 31, time: 36000 }],
       finishTime: 37800,
-      finishDayOfWeek: 7, // Sunday — stale
+      finishDayOfWeek: 7, // Sunday — yesterday, accepted for night-O
+    });
+    expect(isPunchDataFresh(readout)).toBe(true);
+  });
+
+  it("rejects finish data from 2 days ago", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-03-16T10:00:00")); // Monday (DOW=1)
+    const readout = makeReadout({
+      punches: [{ controlCode: 31, time: 36000 }],
+      finishTime: 37800,
+      finishDayOfWeek: 6, // Saturday — 2 days ago
     });
     expect(isPunchDataFresh(readout)).toBe(false);
   });
@@ -100,6 +111,42 @@ describe("isPunchDataFresh", () => {
       finishTime: 37800,
       finishDayOfWeek: 3, // today
       checkDayOfWeek: 5, // old check from Friday — should be ignored
+    });
+    expect(isPunchDataFresh(readout)).toBe(true);
+  });
+
+  // ── Night-O tests ────────────────────────────────────────────
+
+  it("accepts yesterday finish for night-O (Saturday finish → Sunday check)", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-03-15T08:00:00")); // Sunday (DOW=7)
+    const readout = makeReadout({
+      punches: [{ controlCode: 31, time: 36000 }],
+      finishTime: 3600, // 01:00 Sunday morning
+      finishDayOfWeek: 6, // Saturday — but yesterday is OK
+    });
+    expect(isPunchDataFresh(readout)).toBe(true);
+  });
+
+  it("accepts yesterday check DOW for night-O DNF (no finish punch)", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-03-15T08:00:00")); // Sunday (DOW=7)
+    const readout = makeReadout({
+      punches: [{ controlCode: 31, time: 36000 }],
+      checkTime: 80000, // Saturday 22:13
+      checkDayOfWeek: 6, // Saturday
+      finishDayOfWeek: null, // DNF — no finish
+    });
+    expect(isPunchDataFresh(readout)).toBe(true);
+  });
+
+  it("wraps Monday yesterday to Sunday (DOW 1 → 7)", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-03-16T08:00:00")); // Monday (DOW=1)
+    const readout = makeReadout({
+      punches: [{ controlCode: 31, time: 36000 }],
+      finishTime: 3600,
+      finishDayOfWeek: 7, // Sunday — yesterday for Monday
     });
     expect(isPunchDataFresh(readout)).toBe(true);
   });

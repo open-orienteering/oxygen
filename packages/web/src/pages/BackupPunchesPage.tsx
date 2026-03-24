@@ -4,6 +4,8 @@ import { trpc } from "../lib/trpc";
 import { useSort } from "../hooks/useSort";
 import { SortHeader } from "../components/SortHeader";
 
+type MatchStatus = "matched" | "no_runner" | "no_result" | "time_mismatch" | "unknown";
+
 type BackupPunch = {
   id: number;
   controlId: number;
@@ -13,10 +15,14 @@ type BackupPunch = {
   punchTime: number;
   punchDatetime: string | null;
   subSecond: number | null;
+  stationSerial: number | null;
   importedAt: string;
   pushedToPunch: boolean;
   runnerName: string | null;
   runnerId: number | null;
+  runnerStatus: number | null;
+  registeredTime: number | null;
+  matchStatus: MatchStatus;
 };
 
 function fmtIso(d: Date): string {
@@ -35,7 +41,6 @@ function formatPunchDatetime(p: BackupPunch): string {
     const ms = p.subSecond != null ? `.${Math.round((p.subSecond / 256) * 10)}` : "";
     return `${fmtIso(d)}${ms}`;
   }
-  // Fallback: deciseconds since midnight
   const totalSecs = Math.floor(p.punchTime / 10);
   const h = Math.floor(totalSecs / 3600);
   const m = Math.floor((totalSecs % 3600) / 60);
@@ -43,18 +48,37 @@ function formatPunchDatetime(p: BackupPunch): string {
   return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
 }
 
+function formatDs(ds: number): string {
+  const totalSecs = Math.floor(ds / 10);
+  const h = Math.floor(totalSecs / 3600);
+  const m = Math.floor((totalSecs % 3600) / 60);
+  const s = totalSecs % 60;
+  return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
+}
+
+const matchStatusOrder: Record<MatchStatus, number> = {
+  no_runner: 0,
+  time_mismatch: 1,
+  no_result: 2,
+  unknown: 3,
+  matched: 4,
+};
+
 const comparators: Record<string, (a: BackupPunch, b: BackupPunch) => number> = {
   control: (a, b) => a.controlCodes.localeCompare(b.controlCodes, undefined, { numeric: true }),
   card: (a, b) => a.cardNo - b.cardNo,
   time: (a, b) => (a.punchDatetime ?? "").localeCompare(b.punchDatetime ?? "") || a.punchTime - b.punchTime,
   runner: (a, b) => (a.runnerName ?? "").localeCompare(b.runnerName ?? ""),
-  imported: (a, b) => a.importedAt.localeCompare(b.importedAt),
-  status: (a, b) => Number(a.pushedToPunch) - Number(b.pushedToPunch),
+  match: (a, b) => matchStatusOrder[a.matchStatus] - matchStatusOrder[b.matchStatus],
 };
+
+type Filter = "all" | "anomalies" | "matched";
 
 export function BackupPunchesPage() {
   const { t } = useTranslation("controls");
-  const [filter, setFilter] = useState<"all" | "new" | "pushed">("all");
+  const [filter, setFilter] = useState<Filter>("all");
+  const [cardSearch, setCardSearch] = useState("");
+  const [controlFilter, setControlFilter] = useState<number | "all">("all");
 
   const allPunches = trpc.control.listAllBackupPunches.useQuery();
   const pushMutation = trpc.control.pushBackupPunch.useMutation({
@@ -62,39 +86,49 @@ export function BackupPunchesPage() {
   });
 
   const punches = (allPunches.data ?? []) as BackupPunch[];
-  const filtered = useMemo(() =>
-    filter === "all"
-      ? punches
-      : filter === "pushed"
-        ? punches.filter((p) => p.pushedToPunch)
-        : punches.filter((p) => !p.pushedToPunch),
-    [punches, filter],
-  );
+
+  const controls = useMemo(() => {
+    const map = new Map<number, string>();
+    for (const p of punches) {
+      if (!map.has(p.controlId)) {
+        map.set(p.controlId, p.controlCodes || String(p.controlId));
+      }
+    }
+    return Array.from(map.entries()).sort((a, b) => a[0] - b[0]);
+  }, [punches]);
+
+  const filtered = useMemo(() => {
+    let result = punches;
+
+    if (controlFilter !== "all") {
+      result = result.filter((p) => p.controlId === controlFilter);
+    }
+
+    if (cardSearch.trim()) {
+      const q = cardSearch.trim();
+      result = result.filter((p) => String(p.cardNo).includes(q));
+    }
+
+    if (filter === "anomalies") {
+      result = result.filter((p) => p.matchStatus !== "matched");
+    } else if (filter === "matched") {
+      result = result.filter((p) => p.matchStatus === "matched");
+    }
+
+    return result;
+  }, [punches, filter, cardSearch, controlFilter]);
 
   const { sorted, sort, toggle } = useSort(filtered, { key: "time", dir: "asc" }, comparators);
 
-  const totalPunches = punches.length;
-  const pushedCount = punches.filter((p) => p.pushedToPunch).length;
-  const newCount = totalPunches - pushedCount;
-
-  const controlCount = useMemo(() => new Set(filtered.map((p) => p.controlId)).size, [filtered]);
+  const matchedCount = punches.filter((p) => p.matchStatus === "matched").length;
+  const anomalyCount = punches.length - matchedCount;
 
   return (
     <>
-      {/* Summary + filter */}
-      <div className="flex items-center justify-between mb-4">
-        <div className="flex items-center gap-4">
-          <h2 className="text-sm font-medium text-slate-500">
-            {t("backupPunchesTitle", { count: totalPunches, controls: controlCount })}
-          </h2>
-          {newCount > 0 && (
-            <span className="text-xs font-medium text-amber-700 bg-amber-100 px-2 py-0.5 rounded-full">
-              {t("notPushedCount", { count: newCount })}
-            </span>
-          )}
-        </div>
+      {/* Filters row */}
+      <div className="flex flex-wrap items-center gap-3 mb-4">
         <div className="flex items-center gap-1">
-          {(["all", "new", "pushed"] as const).map((f) => (
+          {(["all", "anomalies", "matched"] as const).map((f) => (
             <button
               key={f}
               onClick={() => setFilter(f)}
@@ -104,10 +138,37 @@ export function BackupPunchesPage() {
                   : "bg-white border border-slate-200 text-slate-600 hover:bg-slate-50"
               }`}
             >
-              {f === "all" ? t("filterAll") : f === "new" ? t("filterNotPushed") : t("filterPushed")}
+              {f === "all"
+                ? `${t("filterAll")} (${punches.length})`
+                : f === "anomalies"
+                  ? `${t("filterAnomalies")} (${anomalyCount})`
+                  : `${t("filterMatched")} (${matchedCount})`}
             </button>
           ))}
         </div>
+
+        <select
+          value={controlFilter === "all" ? "all" : String(controlFilter)}
+          onChange={(e) => setControlFilter(e.target.value === "all" ? "all" : Number(e.target.value))}
+          className="px-2 py-1.5 text-xs border border-slate-200 rounded-lg bg-white text-slate-600"
+        >
+          <option value="all">{t("allControls")}</option>
+          {controls.map(([id, codes]) => (
+            <option key={id} value={id}>{codes}</option>
+          ))}
+        </select>
+
+        <input
+          type="text"
+          value={cardSearch}
+          onChange={(e) => setCardSearch(e.target.value)}
+          placeholder={t("searchCard")}
+          className="px-2 py-1.5 text-xs border border-slate-200 rounded-lg bg-white text-slate-600 w-32 placeholder:text-slate-400"
+        />
+
+        <span className="text-xs text-slate-400 ml-auto">
+          {t("showingCount", { shown: sorted.length, total: punches.length })}
+        </span>
       </div>
 
       {allPunches.isLoading && (
@@ -116,7 +177,7 @@ export function BackupPunchesPage() {
         </div>
       )}
 
-      {!allPunches.isLoading && totalPunches === 0 && (
+      {!allPunches.isLoading && punches.length === 0 && (
         <div className="bg-white rounded-xl border border-slate-200 p-8 text-center text-slate-400 text-sm">
           {t("noBackupPunchesImported")}
         </div>
@@ -130,15 +191,15 @@ export function BackupPunchesPage() {
                 <tr className="text-xs border-b border-slate-100">
                   <SortHeader label={t("control")} active={sort.key === "control"} direction={sort.dir} onClick={() => toggle("control")} />
                   <SortHeader label={t("card")} active={sort.key === "card"} direction={sort.dir} onClick={() => toggle("card")} />
-                  <SortHeader label={t("time")} active={sort.key === "time"} direction={sort.dir} onClick={() => toggle("time")} />
+                  <SortHeader label={t("backupTime")} active={sort.key === "time"} direction={sort.dir} onClick={() => toggle("time")} />
                   <SortHeader label={t("runner")} active={sort.key === "runner"} direction={sort.dir} onClick={() => toggle("runner")} />
-                  <SortHeader label={t("imported")} active={sort.key === "imported"} direction={sort.dir} onClick={() => toggle("imported")} />
-                  <SortHeader label={t("status")} active={sort.key === "status"} direction={sort.dir} onClick={() => toggle("status")} align="right" />
+                  <th className="px-4 py-2 text-left font-medium text-slate-500">{t("registeredTime")}</th>
+                  <SortHeader label={t("matchStatus")} active={sort.key === "match"} direction={sort.dir} onClick={() => toggle("match")} align="right" />
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-50">
                 {sorted.map((p) => (
-                  <tr key={p.id} className="hover:bg-slate-50">
+                  <tr key={p.id} className={`hover:bg-slate-50 ${p.matchStatus !== "matched" && p.matchStatus !== "unknown" ? "bg-amber-50/50" : ""}`}>
                     <td className="px-4 py-2">
                       <span className="font-mono font-bold text-amber-700">{p.controlCodes}</span>
                       {p.controlName && (
@@ -152,17 +213,18 @@ export function BackupPunchesPage() {
                     <td className="px-4 py-2 text-slate-600">
                       {p.runnerName ?? <span className="text-slate-300">—</span>}
                     </td>
-                    <td className="px-4 py-2 text-xs text-slate-400">
-                      {p.importedAt}
+                    <td className="px-4 py-2 font-mono tabular-nums text-slate-500">
+                      {p.registeredTime != null && p.registeredTime > 0
+                        ? formatDs(p.registeredTime)
+                        : <span className="text-slate-300">—</span>}
                     </td>
                     <td className="px-4 py-2 text-right">
-                      {p.pushedToPunch ? (
-                        <span className="text-xs text-green-600 font-medium">{t("pushed")}</span>
-                      ) : (
+                      <MatchBadge status={p.matchStatus} />
+                      {!p.pushedToPunch && p.matchStatus !== "matched" && (
                         <button
                           onClick={() => pushMutation.mutate({ punchId: p.id })}
                           disabled={pushMutation.isPending}
-                          className="text-xs text-blue-600 hover:text-blue-800 font-medium cursor-pointer"
+                          className="ml-2 text-xs text-blue-600 hover:text-blue-800 font-medium cursor-pointer"
                         >
                           {t("pushToOPunch")}
                         </button>
@@ -177,4 +239,20 @@ export function BackupPunchesPage() {
       )}
     </>
   );
+}
+
+function MatchBadge({ status }: { status: MatchStatus }) {
+  const { t } = useTranslation("controls");
+  switch (status) {
+    case "matched":
+      return <span className="text-xs font-medium text-green-700 bg-green-100 px-1.5 py-0.5 rounded">{t("statusMatched")}</span>;
+    case "no_runner":
+      return <span className="text-xs font-medium text-red-700 bg-red-100 px-1.5 py-0.5 rounded">{t("statusNoRunner")}</span>;
+    case "no_result":
+      return <span className="text-xs font-medium text-amber-700 bg-amber-100 px-1.5 py-0.5 rounded">{t("statusNoResult")}</span>;
+    case "time_mismatch":
+      return <span className="text-xs font-medium text-red-700 bg-red-100 px-1.5 py-0.5 rounded">{t("statusTimeMismatch")}</span>;
+    case "unknown":
+      return <span className="text-xs font-medium text-slate-500 bg-slate-100 px-1.5 py-0.5 rounded">—</span>;
+  }
 }

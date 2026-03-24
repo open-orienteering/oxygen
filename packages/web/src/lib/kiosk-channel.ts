@@ -32,7 +32,7 @@ export interface KioskCardReadoutMessage {
     startTime?: number | null;
     finishTime?: number | null;
     clearTime?: number | null;
-    /** True if the runner is using a rental card (CardFee > 0) */
+    /** True if the runner is using a rental card (CardFee != 0) */
     isRentalCard?: boolean;
   };
 }

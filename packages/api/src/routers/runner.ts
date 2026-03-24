@@ -3,9 +3,28 @@ import { TRPCError } from "@trpc/server";
 import { router, publicProcedure } from "../trpc.js";
 import { getCompetitionClient, incrementCounter } from "../db.js";
 import type { RunnerDetail, RunnerInfo } from "@oxygen/shared";
-import { parsePunches, parseCourseControls } from "./cardReadout.js";
+import { parsePunches, parseCourseControls, performReadout } from "./cardReadout.js";
 import { computeClassPlacements } from "../results.js";
 import { pushRegistrationToSheet } from "../sheetsBackup.js";
+
+/**
+ * MeOS stores CardFee = -1 to mean "rental card, use competition default".
+ * CardFee > 0 means an explicit fee. CardFee = 0 means not a rental card.
+ * This helper resolves -1 to the competition-level fee so the frontend
+ * receives the effective fee. Returns the resolved positive fee, or -1
+ * if the runner has a rental card but no competition-level fee is configured.
+ * Frontend should treat any non-zero value as "is rental card".
+ */
+async function resolveCardFee(
+  client: Awaited<ReturnType<typeof getCompetitionClient>>,
+  rawCardFee: number,
+): Promise<number> {
+  if (rawCardFee === 0) return 0;
+  if (rawCardFee > 0) return rawCardFee;
+  const event = await client.oEvent.findFirst({ where: { Removed: false }, select: { CardFee: true } });
+  const baseFee = event?.CardFee ?? 0;
+  return baseFee > 0 ? baseFee : rawCardFee;
+}
 
 /** Check that cardNo is not already assigned to another (non-removed) runner. */
 async function assertCardNotTaken(
@@ -118,7 +137,7 @@ export const runnerRouter = router({
         fee: r.Fee,
         paid: r.Paid,
         payMode: r.PayMode,
-        cardFee: r.CardFee,
+        cardFee: await resolveCardFee(client, r.CardFee),
         cardReturned: r.oos_card_returned === 1,
         bib: r.Bib,
         entryDate: r.EntryDate,
@@ -304,6 +323,11 @@ export const runnerRouter = router({
         courseControlsMap.set(c.Id, parseCourseControls(c.Controls));
       }
 
+      // Fetch competition-level card fee once for resolving CardFee = -1
+      const eventRow = await client.oEvent.findFirst({ where: { Removed: false }, select: { CardFee: true } });
+      const baseCardFee = eventRow?.CardFee ?? 0;
+      const resolveRawCardFee = (raw: number) => raw === 0 ? 0 : raw > 0 ? raw : (baseCardFee > 0 ? baseCardFee : raw);
+
       // ── Class placements (rank) ──
       const rankMap = new Map<number, number>();
       const byClass = new Map<number, typeof filtered>();
@@ -343,8 +367,8 @@ export const runnerRouter = router({
             fee: r.Fee || undefined,
             paid: r.Paid || undefined,
             payMode: r.PayMode || undefined,
-            cardFee: r.CardFee || undefined,
-            cardReturned: r.oos_card_returned === 1 ? true : undefined,
+            cardFee: resolveRawCardFee(r.CardFee) || undefined,
+            cardReturned: r.CardFee !== 0 && r.oos_card_returned === 1 ? true : undefined,
             birthYear: r.BirthYear || undefined,
             sex: r.Sex || undefined,
             bib: r.Bib || undefined,
@@ -389,6 +413,19 @@ export const runnerRouter = router({
           Annotation: "",
         },
       });
+
+      // Link existing oCard if one exists for this card number
+      if (input.cardNo > 0) {
+        const existingCard = await client.oCard.findFirst({
+          where: { CardNo: input.cardNo, Removed: false },
+        });
+        if (existingCard) {
+          await client.oRunner.update({
+            where: { Id: runner.Id },
+            data: { Card: existingCard.Id },
+          });
+        }
+      }
 
       await incrementCounter("oRunner", runner.Id);
 
@@ -468,6 +505,24 @@ export const runnerRouter = router({
         where: { Id: input.id },
         data: updateData,
       });
+
+      // When status is changed to OK and times are missing, derive from oCard
+      if (input.data.status === 1 /* RunnerStatus.OK */) {
+        if (runner.StartTime === 0 || runner.FinishTime === 0) {
+          const result = await performReadout(client, input.id);
+          if (result && result.timing.finishTime !== 0) {
+            const timeUpdate: Record<string, number> = {};
+            if (runner.StartTime === 0) timeUpdate.StartTime = result.timing.startTime;
+            if (runner.FinishTime === 0) timeUpdate.FinishTime = result.timing.finishTime;
+            if (Object.keys(timeUpdate).length > 0) {
+              await client.oRunner.update({
+                where: { Id: input.id },
+                data: timeUpdate,
+              });
+            }
+          }
+        }
+      }
 
       await incrementCounter("oRunner", runner.Id);
       return { id: runner.Id, name: runner.Name };

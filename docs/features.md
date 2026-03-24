@@ -66,7 +66,7 @@ After applying the draw, the start list shows all runners with their allocated s
 
 Oxygen reads SportIdent cards directly in the browser using the Web Serial API. Supported card types: SI5, SI6, SI8, SI9, SI10, SI11, SIAC, pCard, and tCard.
 
-When a card is read, punches are validated against the course definition and a result is computed instantly — OK, missing punch, or DNF. Results update in real-time as cards are processed.
+When a card is read, punches are validated against the course definition and a result is computed instantly — OK, missing punch, or DNF. Results update in real-time as cards are processed. Three-layer stale punch detection prevents data from previous races from polluting results. See [registration-and-readout.md](registration-and-readout.md) for the full technical flow.
 
 ![Results](screenshots/results.png)
 
@@ -78,7 +78,7 @@ The cards page shows all readout data, including detailed punch information.
 
 A self-service interface for race day operations, designed for a dedicated screen:
 
-- **Registration** — runners insert their SI card, the organizer enters their details, and the runner confirms by re-inserting the card
+- **Registration** — runners insert their SI card, the organizer enters their details, and the runner confirms by re-inserting the card. Smart pre-fill from DB, Eventor, and card owner data (with factory default filtering).
 - **Pre-start** — shows course information, clear/check verification, and a countdown to start time
 - **Readout** — displays the result (OK, missing punch, DNF) with running time
 

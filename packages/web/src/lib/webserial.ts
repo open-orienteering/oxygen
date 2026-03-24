@@ -872,25 +872,44 @@ export class SIReaderConnection extends EventTarget {
       const adr1 = (readAddr >> 8) & 0xff;
       const adr0 = readAddr & 0xff;
 
-      try {
-        const resp = await this.sendAndWait(
-          buildGetBackup(adr2, adr1, adr0, count, true),
-          CMD.GET_BACKUP,
-          5000,
-        );
+      console.log(`[SI] Backup page: readAddr=0x${readAddr.toString(16)} endAddr=0x${endAddr.toString(16)} count=${count}`);
 
-        const records = parseBackupPage(resp.data);
-        if (records.length > 0) {
-          console.log(`[SI] Backup @0x${readAddr.toString(16)}: ${records.length} records`);
-          allRecords.push(...records);
-        } else {
-          // Empty page — no more data
-          console.log(`[SI] Empty page at 0x${readAddr.toString(16)}, stopping`);
+      let resp: SIParsedFrame | null = null;
+      for (let attempt = 0; attempt < 4; attempt++) {
+        try {
+          if (attempt > 0) {
+            console.log(`[SI] Backup page retry ${attempt}/3 — re-waking station`);
+            await new Promise((r) => setTimeout(r, attempt * 500));
+            await this.sendAndWait(buildSetRemoteMode(), CMD.SET_MS, 2000);
+          }
+          resp = await this.sendAndWait(
+            buildGetBackup(adr2, adr1, adr0, count, false),
+            CMD.GET_BACKUP,
+            5000,
+          );
           break;
+        } catch (err) {
+          console.warn(`[SI] Backup read attempt ${attempt + 1} at 0x${readAddr.toString(16)}:`, err);
         }
-      } catch (err) {
-        console.warn(`[SI] Backup read error at 0x${readAddr.toString(16)}:`, err);
-        break;
+      }
+
+      if (!resp) {
+        console.warn(`[SI] Backup page at 0x${readAddr.toString(16)} failed after all retries, skipping`);
+        readAddr += count;
+        continue;
+      }
+
+      console.log(
+        `[SI] Backup raw @0x${readAddr.toString(16)} (${resp.data.length} bytes): ` +
+        Array.from(resp.data).map(b => b.toString(16).padStart(2, "0")).join(" "),
+      );
+
+      const records = parseBackupPage(resp.data);
+      if (records.length > 0) {
+        console.log(`[SI] Backup @0x${readAddr.toString(16)}: ${records.length} records`);
+        allRecords.push(...records);
+      } else {
+        console.log(`[SI] Empty page at 0x${readAddr.toString(16)}, continuing to endAddr`);
       }
 
       readAddr += count;
