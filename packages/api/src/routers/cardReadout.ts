@@ -66,6 +66,43 @@ export function parsePunches(punchString: string): ParsedPunch[] {
   return punches;
 }
 
+/**
+ * Compute a ReadId hash from punch data, matching MeOS's SICard::calculateHash()
+ * (SportIdent.cpp:2530-2538). Used for deduplication — identical card reads
+ * produce the same hash so we can skip redundant oCard writes.
+ */
+export function computeReadId(
+  punches: { controlCode: number; time: number }[],
+  finishTime?: number | null,
+  startTime?: number | null,
+): number {
+  let h = (punches.length * 100000 + (finishTime ?? 0)) >>> 0;
+  for (const p of punches) {
+    h = (((h * 31 + p.controlCode) >>> 0) * 31 + p.time) >>> 0;
+  }
+  h = (h + (startTime ?? 0)) >>> 0;
+  return h;
+}
+
+/**
+ * Compute a 0.0–1.0 score for how well the card punches match a course.
+ *
+ * Base: proportion of course controls matched (0.0–1.0).
+ * Penalty: each punch for a control NOT in the competition subtracts 0.10.
+ * Controls in the competition but not in this course are "extra" (no penalty).
+ */
+export function computeMatchScore(
+  courseControlCount: number,
+  matchedCount: number,
+  totalCardPunches: number,
+  foreignPunchCount: number,
+): number {
+  if (courseControlCount === 0 || totalCardPunches === 0) return 0;
+  const courseRate = matchedCount / courseControlCount;
+  const penalty = foreignPunchCount * 0.10;
+  return Math.max(0, Math.min(1, courseRate - penalty));
+}
+
 export function parseCourseControls(controls: string): number[] {
   return controls
     .split(";")
@@ -188,6 +225,22 @@ export async function performReadout(client: PrismaClient, runnerId: number) {
   // Parse card punches
   const cardPunches = parsePunches(card?.Punches ?? "");
 
+  // Normalize MeOS-relative times: MeOS stores punch times as (rawSITime - ZeroTime),
+  // which can be negative or much smaller than absolute time-of-day values.
+  // Oxygen expects absolute deciseconds since midnight. Detect and fix.
+  const hasMeosRelativeTimes = cardPunches.some((p) => p.time < 0);
+  let meosZeroTime = 0;
+  if (hasMeosRelativeTimes) {
+    const event = await client.oEvent.findFirst({ select: { ZeroTime: true } });
+    meosZeroTime = event?.ZeroTime ?? 324000; // default 09:00
+    const DAY = 864000; // 24 hours in deciseconds
+    for (const p of cardPunches) {
+      if (p.time !== 0) {
+        p.time = ((p.time + meosZeroTime) % DAY + DAY) % DAY;
+      }
+    }
+  }
+
   // Convert free punches to our format (free punch times are stored in deciseconds)
   const freeParsed: ParsedPunch[] = freePunches.map((p) => ({
     type: p.Type,
@@ -202,22 +255,28 @@ export async function performReadout(client: PrismaClient, runnerId: number) {
   // Parse course controls
   const courseControls = course ? parseCourseControls(course.Controls) : [];
 
+  // If card has MeOS-relative times and runner.StartTime is also negative, normalize it
+  const runnerStartTime = hasMeosRelativeTimes && runner.StartTime < 0
+    ? ((runner.StartTime + meosZeroTime) % 864000 + 864000) % 864000
+    : runner.StartTime;
+
   // Match punches to course (pass runner's assigned start time as fallback)
   const { matches, extraPunches, startTime, cardStartTime, finishTime, missingCount } =
-    matchPunchesToCourse(allPunches, courseControls, runner.StartTime);
+    matchPunchesToCourse(allPunches, courseControls, runnerStartTime);
 
   const effectiveStartTime = startTime;
+  // MeOS may store times with a negative base offset; the difference is still valid
   const runningTime =
-    finishTime > 0 && effectiveStartTime > 0
+    finishTime !== 0 && effectiveStartTime !== 0
       ? finishTime - effectiveStartTime
       : 0;
 
   let status: number;
-  if (finishTime <= 0) {
+  if (finishTime === 0) {
     status = RunnerStatus.DNF;
   } else if (missingCount > 0) {
     status = RunnerStatus.MissingPunch;
-  } else if (effectiveStartTime > 0 && finishTime > 0) {
+  } else if (runningTime > 0) {
     status = RunnerStatus.OK;
   } else {
     status = runner.Status;
@@ -239,7 +298,7 @@ export async function performReadout(client: PrismaClient, runnerId: number) {
       classId: runner.Class,
       dbStatus: runner.Status,
     },
-    isRentalCard: runner.CardFee > 0,
+    isRentalCard: runner.CardFee !== 0,
     cardReturned: runner.oos_card_returned === 1,
     course: course
       ? {
@@ -287,16 +346,39 @@ export const cardReadoutRouter = router({
       if (!result) {
         return { found: false as const, cardNo: input.cardNo };
       }
-      // Check if any card punches actually match course controls
+      // Compute match score: how well do the card's punches match the course?
       const matchedCount = result.controls.filter(
         (c) => c.status === "ok",
       ).length;
-      const punchesMatchCourse =
-        matchedCount > 0 && result.rawPunchCount > 0;
+
+      // Load competition controls to identify foreign punches
+      const allControls = await client.oControl.findMany({
+        where: { Removed: false },
+        select: { Numbers: true },
+      });
+      const competitionCodes = new Set<number>();
+      for (const c of allControls) {
+        const code = parseInt(c.Numbers.split(";")[0], 10);
+        if (!isNaN(code) && code > 0) competitionCodes.add(code);
+      }
+      const foreignPunchCount = competitionCodes.size > 0
+        ? result.extraPunches.filter(
+            (p) => !competitionCodes.has(p.controlCode),
+          ).length
+        : 0;
+
+      const matchScore = computeMatchScore(
+        result.controls.length,
+        matchedCount,
+        result.rawPunchCount,
+        foreignPunchCount,
+      );
+
       return {
         found: true as const,
         cardNo: input.cardNo,
-        punchesMatchCourse,
+        matchScore,
+        punchesMatchCourse: matchScore >= 0.2,
         ...result,
       };
     }),
@@ -386,6 +468,7 @@ export const cardReadoutRouter = router({
         finishTime: z.number().int().optional(),
         cardType: z.string().optional(),
         batteryVoltage: z.number().optional(),
+        punchesFresh: z.boolean().optional(), // client-side DOW freshness check result
         ownerData: z
           .object({
             firstName: z.string().optional(),
@@ -456,10 +539,13 @@ export const cardReadoutRouter = router({
         }
 
         if (competitionCodes.size > 0) {
-          const hasForeignControl = input.punches.some(
+          const foreignCount = input.punches.filter(
             (p) => !competitionCodes.has(p.controlCode),
-          );
-          if (hasForeignControl) punchesRelevant = false;
+          ).length;
+          // Majority of punches must be for this competition's controls
+          if (foreignCount > input.punches.length * 0.5) {
+            punchesRelevant = false;
+          }
         }
       }
 
@@ -547,21 +633,33 @@ export const cardReadoutRouter = router({
         });
       }
 
-      // ── Upsert into oCard (skip if punches are stale) ────
-      if (!punchesRelevant) {
-        // Stale punches — don't pollute oCard, but still return card info
-        const existing = await client.oCard.findFirst({
-          where: { CardNo: input.cardNo, Removed: false },
-        });
-        return {
-          cardId: existing?.Id ?? 0,
-          created: false,
-          punchesRelevant,
-        };
+      // ── Upsert into oCard (only for real readouts, not registration scans) ──
+      // oCard should only contain real race data (matches MeOS behavior).
+      // Three conditions must ALL be true:
+      //   1. punchesRelevant — no foreign controls detected
+      //   2. hasControlPunches — not just check/start/finish
+      //   3. punchesFresh !== false — client DOW check didn't flag as stale
+      const hasControlPunches = input.punches.length > 0;
+      const shouldWriteOCard =
+        punchesRelevant && hasControlPunches && input.punchesFresh !== false;
+
+      if (!shouldWriteOCard) {
+        return { cardId: null as number | null, created: false, punchesRelevant };
       }
 
-      // Prefer non-removed cards; fall back to any card with same number
+      // Find the runner to prefer their linked oCard
+      const runner = await client.oRunner.findFirst({
+        where: { CardNo: input.cardNo, Removed: false },
+        select: { Id: true, Card: true },
+      });
+
+      // Prefer runner-linked card, then non-removed by CardNo, then any by CardNo
+      const linkedCard =
+        runner?.Card
+          ? await client.oCard.findUnique({ where: { Id: runner.Card } })
+          : null;
       const existing =
+        linkedCard ??
         (await client.oCard.findFirst({
           where: { CardNo: input.cardNo, Removed: false },
         })) ??
@@ -574,25 +672,50 @@ export const cardReadoutRouter = router({
         ? Math.round((input.batteryVoltage - 1.9) / 0.09)
         : undefined;
 
+      // Compute ReadId hash for deduplication (matches MeOS's calculateHash)
+      const readId = computeReadId(input.punches, input.finishTime, input.startTime);
+
       if (existing) {
+        // Skip update if identical data (ReadId deduplication)
+        if (existing.ReadId === readId) {
+          // Still link runner if not yet linked
+          if (runner && !runner.Card) {
+            await client.oRunner.update({
+              where: { Id: runner.Id },
+              data: { Card: existing.Id },
+            });
+          }
+          return { cardId: existing.Id as number | null, created: false, punchesRelevant };
+        }
+
         await client.oCard.update({
           where: { Id: existing.Id },
           data: {
             Punches: punchString,
+            ReadId: readId,
             Removed: false, // ensure card is visible after re-read
             ...(voltageRaw != null && voltageRaw > 0
               ? { Voltage: voltageRaw }
               : {}),
           },
         });
-        return { cardId: existing.Id, created: false, punchesRelevant };
+
+        // Link runner on update path too (not just create)
+        if (runner && !runner.Card) {
+          await client.oRunner.update({
+            where: { Id: runner.Id },
+            data: { Card: existing.Id },
+          });
+        }
+
+        return { cardId: existing.Id as number | null, created: false, punchesRelevant };
       }
 
       const card = await client.oCard.create({
         data: {
           CardNo: input.cardNo,
           Punches: punchString,
-          ReadId: 0,
+          ReadId: readId,
           ...(voltageRaw != null && voltageRaw > 0
             ? { Voltage: voltageRaw }
             : {}),
@@ -600,9 +723,6 @@ export const cardReadoutRouter = router({
       });
 
       // Link the card to the runner if one exists with this card number
-      const runner = await client.oRunner.findFirst({
-        where: { CardNo: input.cardNo, Removed: false },
-      });
       if (runner && !runner.Card) {
         await client.oRunner.update({
           where: { Id: runner.Id },
@@ -610,7 +730,7 @@ export const cardReadoutRouter = router({
         });
       }
 
-      return { cardId: card.Id, created: true, punchesRelevant };
+      return { cardId: card.Id as number | null, created: true, punchesRelevant };
     }),
 
   /** List readout history for a card number */
@@ -779,7 +899,7 @@ export const cardReadoutRouter = router({
             clubId: runner.Club,
             className: classMap.get(runner.Class) ?? "",
             status: runner.Status,
-            isRentalCard: runner.CardFee > 0,
+            isRentalCard: runner.CardFee !== 0,
             cardReturned: runner.oos_card_returned === 1,
           }
           : null,
@@ -851,7 +971,7 @@ export const cardReadoutRouter = router({
           clubId: runner.Club,
           className: cls?.Name ?? "",
           status: runner.Status,
-          isRentalCard: runner.CardFee > 0,
+          isRentalCard: runner.CardFee !== 0,
           cardReturned: runner.oos_card_returned === 1,
         };
       }

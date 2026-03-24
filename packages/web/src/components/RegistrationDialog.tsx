@@ -13,6 +13,17 @@ import type { KioskChannel, RegistrationFormState } from "../lib/kiosk-channel";
 import { fuzzyMatchClub } from "../lib/fuzzy-club-match";
 import swishIcon from "../assets/swish-icon.svg";
 
+/**
+ * Check if card owner data contains a real name (not SPORTident factory defaults).
+ * Factory defaults: firstName = card number (purely numeric), lastName = "SPORTident Sweden" etc.
+ */
+function isRealOwnerName(firstName?: string, lastName?: string): boolean {
+  if (!firstName && !lastName) return false;
+  if (firstName && /^\d+$/.test(firstName.trim())) return false;
+  if (lastName && /sportident/i.test(lastName)) return false;
+  return true;
+}
+
 export function RegistrationDialog() {
   const { t } = useTranslation("registration");
   const {
@@ -52,6 +63,7 @@ export function RegistrationDialog() {
 
   const lastConsumedCardRef = useRef<string | null>(null);
   const lastPendingCardRef = useRef<number | null>(null);
+  const pendingOwnerDataRef = useRef<Record<string, string> | null>(null);
   const successTimerRef = useRef<ReturnType<typeof setTimeout>>(undefined);
   const kioskChannelRef = useRef<KioskChannel | null>(null);
   const paymentDefaultApplied = useRef(false);
@@ -212,11 +224,11 @@ export function RegistrationDialog() {
 
     setCardNo(String(pendingCard.cardNo));
 
-    // Pre-fill from owner data
+    // Store owner data for deferred name fill (DB data takes priority — see below)
+    pendingOwnerDataRef.current = pendingCard.ownerData ?? null;
     if (pendingCard.ownerData) {
       const od = pendingCard.ownerData;
-      const n = [od.firstName, od.lastName].filter(Boolean).join(" ");
-      if (n) setName(n);
+      // Fill non-name fields immediately (these don't conflict with DB runner data)
       if (od.dateOfBirth) setBirthYear(od.dateOfBirth.substring(0, 4));
       const rawSex = od.sex?.trim().toUpperCase() ?? "";
       if (rawSex.startsWith("M")) setSex("M");
@@ -225,13 +237,6 @@ export function RegistrationDialog() {
       if (od.club && clubs.data) {
         const match = fuzzyMatchClub(od.club, clubs.data);
         if (match) setClubId(match.id);
-      }
-      // Focus class selector if name is known
-      if (n) {
-        setTimeout(() => {
-          const classBtn = document.querySelector<HTMLElement>('[data-testid="reg-class"] button');
-          classBtn?.focus();
-        }, 150);
       }
     }
 
@@ -286,6 +291,25 @@ export function RegistrationDialog() {
     setShowSuggestions(false);
   }, [duplicateCheck.data]);
 
+  // ── Deferred owner data name fill (only if no DB runner match) ──
+  useEffect(() => {
+    if (!isOpen) return;
+    if (duplicateCheck.isLoading || !duplicateCheck.isFetched) return;
+    if (duplicateCheck.data) return; // Runner found in DB — DB data wins
+    if (name) return; // Name already set (e.g., from Eventor lookup)
+    const od = pendingOwnerDataRef.current;
+    if (!od) return;
+    const n = [od.firstName, od.lastName].filter(Boolean).join(" ");
+    if (n && isRealOwnerName(od.firstName, od.lastName)) {
+      setName(n);
+      // Focus class selector since name is now filled
+      setTimeout(() => {
+        const classBtn = document.querySelector<HTMLElement>('[data-testid="reg-class"] button');
+        classBtn?.focus();
+      }, 150);
+    }
+  }, [isOpen, duplicateCheck.isFetched, duplicateCheck.isLoading, duplicateCheck.data, name]);
+
   // ── Auto-populate from DeviceManager card reads (sticky mode) ──
   useEffect(() => {
     if (!isOpen) return;
@@ -303,8 +327,9 @@ export function RegistrationDialog() {
     setCardNo(String(latest.cardNumber));
     if (latest.ownerData) {
       const od = latest.ownerData;
-      const n = [od.firstName, od.lastName].filter(Boolean).join(" ");
-      if (n) setName(n);
+      // Store for deferred name fill (DB data takes priority)
+      pendingOwnerDataRef.current = od as Record<string, string>;
+      // Fill non-name fields immediately
       if (od.dateOfBirth) setBirthYear((od.dateOfBirth as string).substring(0, 4));
       const rawSex = (od.sex as string)?.trim().toUpperCase() ?? "";
       if (rawSex.startsWith("M")) setSex("M");
@@ -797,17 +822,22 @@ export function RegistrationDialog() {
                 searchPlaceholder={t("searchClasses")}
                 alwaysShowSearch
                 options={[
-                  ...(classes.data?.classes.map((c) => {
-                    const course = classes.data?.courses.find((co) => co.id === c.courseId);
-                    const maps = course?.numberOfMaps;
-                    const remaining = maps != null ? maps - (c.runnerCount ?? 0) : null;
-                    return {
-                      value: c.id,
-                      label: c.name,
-                      suffix: remaining != null ? (remaining <= 0 ? t("noMaps") : t("mapsRemaining", { count: remaining })) : undefined,
-                      disabled: remaining != null && remaining <= 0,
-                    };
-                  }) ?? []),
+                  ...(() => {
+                    const all = classes.data?.classes ?? [];
+                    const hasAnyQuickEntry = all.some((c) => c.allowQuickEntry);
+                    const eligible = hasAnyQuickEntry ? all.filter((c) => c.allowQuickEntry) : all;
+                    return eligible.map((c) => {
+                      const course = classes.data?.courses.find((co) => co.id === c.courseId);
+                      const maps = course?.numberOfMaps;
+                      const remaining = maps != null ? maps - (c.runnerCount ?? 0) : null;
+                      return {
+                        value: c.id,
+                        label: c.name,
+                        suffix: remaining != null ? (remaining <= 0 ? t("noMaps") : t("mapsRemaining", { count: remaining })) : undefined,
+                        disabled: remaining != null && remaining <= 0,
+                      };
+                    });
+                  })(),
                 ]}
               />
             </div>

@@ -15,6 +15,13 @@ export async function createContext(
 const t = initTRPC.context<Context>().create();
 
 export const router = t.router;
-export const publicProcedure = t.procedure;
 export const middleware = t.middleware;
 export const createCallerFactory = t.createCallerFactory;
+
+export const publicProcedure = t.procedure.use(async ({ path, next }) => {
+  const result = await next();
+  if (!result.ok) {
+    console.error(`[tRPC ERROR] ${path}:`, result.error);
+  }
+  return result;
+});

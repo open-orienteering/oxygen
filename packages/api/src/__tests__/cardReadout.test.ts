@@ -3,6 +3,8 @@ import {
   parsePunches,
   parseCourseControls,
   matchPunchesToCourse,
+  computeReadId,
+  computeMatchScore,
   PUNCH_START,
   PUNCH_FINISH,
   PUNCH_CHECK,
@@ -222,5 +224,124 @@ describe("matchPunchesToCourse", () => {
     expect(result.matches[1]).toMatchObject({ controlCode: 32, punchTime: START + 1200 });
     expect(result.extraPunches).toHaveLength(1);
     expect(result.extraPunches[0]).toMatchObject({ type: 32, time: START + 300 });
+  });
+});
+
+// ─── computeReadId ────────────────────────────────────────────
+
+describe("computeReadId", () => {
+  it("produces the same hash for identical inputs", () => {
+    const punches = [
+      { controlCode: 31, time: 3600 },
+      { controlCode: 32, time: 3660 },
+    ];
+    const a = computeReadId(punches, 3700, 3550);
+    const b = computeReadId(punches, 3700, 3550);
+    expect(a).toBe(b);
+  });
+
+  it("produces different hashes for different punches", () => {
+    const a = computeReadId(
+      [{ controlCode: 31, time: 3600 }],
+      3700,
+      3550,
+    );
+    const b = computeReadId(
+      [{ controlCode: 32, time: 3600 }],
+      3700,
+      3550,
+    );
+    expect(a).not.toBe(b);
+  });
+
+  it("produces different hashes for different finish times", () => {
+    const punches = [{ controlCode: 31, time: 3600 }];
+    const a = computeReadId(punches, 3700, 3550);
+    const b = computeReadId(punches, 3800, 3550);
+    expect(a).not.toBe(b);
+  });
+
+  it("produces different hashes for different start times", () => {
+    const punches = [{ controlCode: 31, time: 3600 }];
+    const a = computeReadId(punches, 3700, 3550);
+    const b = computeReadId(punches, 3700, 3560);
+    expect(a).not.toBe(b);
+  });
+
+  it("handles empty punches", () => {
+    const h = computeReadId([], 0, 0);
+    expect(typeof h).toBe("number");
+    expect(h).toBeGreaterThanOrEqual(0);
+  });
+
+  it("handles null/undefined finish and start times", () => {
+    const punches = [{ controlCode: 31, time: 3600 }];
+    const a = computeReadId(punches, null, null);
+    const b = computeReadId(punches, undefined, undefined);
+    expect(a).toBe(b);
+  });
+
+  it("always returns a non-negative integer (unsigned 32-bit)", () => {
+    // Use values that could cause overflow
+    const punches = Array.from({ length: 50 }, (_, i) => ({
+      controlCode: 100 + i,
+      time: 40000 + i * 100,
+    }));
+    const h = computeReadId(punches, 99999, 10000);
+    expect(h).toBeGreaterThanOrEqual(0);
+    expect(h).toBeLessThanOrEqual(0xFFFFFFFF);
+    expect(Number.isInteger(h)).toBe(true);
+  });
+});
+
+// ─── computeMatchScore ───────────────────────────────────────
+
+describe("computeMatchScore", () => {
+  it("returns 1.0 for perfect readout (all controls matched, no foreign)", () => {
+    expect(computeMatchScore(15, 15, 15, 0)).toBe(1.0);
+  });
+
+  it("returns proportional score for missing punches (MP)", () => {
+    // 12/15 matched = 0.8
+    expect(computeMatchScore(15, 12, 12, 0)).toBeCloseTo(0.8);
+  });
+
+  it("penalizes 0.10 per foreign punch", () => {
+    // 15/15 matched = 1.0, minus 1 foreign * 0.10 = 0.9
+    expect(computeMatchScore(15, 15, 16, 1)).toBeCloseTo(0.9);
+  });
+
+  it("penalizes multiple foreign punches", () => {
+    // 15/15 matched = 1.0, minus 3 foreign * 0.10 = 0.7
+    expect(computeMatchScore(15, 15, 18, 3)).toBeCloseTo(0.7);
+  });
+
+  it("returns low score for coincidental 1-control overlap", () => {
+    // 1/15 = 0.067
+    const score = computeMatchScore(15, 1, 10, 0);
+    expect(score).toBeCloseTo(1 / 15);
+    expect(score).toBeLessThan(0.1);
+  });
+
+  it("returns 0 when foreign penalty exceeds course rate", () => {
+    // 1/15 = 0.067, minus 3 * 0.10 = -0.233 → clamped to 0
+    expect(computeMatchScore(15, 1, 4, 3)).toBe(0);
+  });
+
+  it("returns 0 for empty course", () => {
+    expect(computeMatchScore(0, 0, 5, 0)).toBe(0);
+  });
+
+  it("returns 0 for empty card (no punches)", () => {
+    expect(computeMatchScore(15, 0, 0, 0)).toBe(0);
+  });
+
+  it("never exceeds 1.0", () => {
+    // Even if somehow matchedCount > courseControlCount
+    expect(computeMatchScore(5, 10, 10, 0)).toBeLessThanOrEqual(1.0);
+  });
+
+  it("never goes below 0.0", () => {
+    expect(computeMatchScore(5, 0, 20, 20)).toBe(0);
   });
 });

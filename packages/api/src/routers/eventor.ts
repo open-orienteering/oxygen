@@ -846,17 +846,12 @@ export const eventorRouter = router({
 
   /**
    * Push current results to Eventor.
-   * Only enabled for Test-Eventor for safety.
    */
   pushResults: publicProcedure.mutation(async () => {
     const client = await getCompetitionClient();
     const dbName = getCurrentDbName();
     const env = ((await getSetting(`eventor_env_${dbName}`)) ??
       "prod") as EventorEnvironment;
-
-    if (env !== "test") {
-      throw new Error("Pushing results is only supported for Test-Eventor.");
-    }
 
     const { apiKey } = await requireApiKey(env);
 
@@ -985,7 +980,7 @@ export const eventorRouter = router({
         place: p?.place ?? 0,
         noTiming: cls?.NoTiming === 1,
         fee: r.Fee || undefined,
-        cardFee: r.CardFee || undefined,
+        cardFee: (r.CardFee !== 0 ? (r.CardFee > 0 ? r.CardFee : (event!.CardFee > 0 ? event!.CardFee : undefined)) : undefined),
         paid: r.Paid || undefined,
         taxable: r.Taxable || undefined,
         isLateFee,
@@ -1012,17 +1007,12 @@ export const eventorRouter = router({
 
   /**
    * Push current start list to Eventor.
-   * Only enabled for Test-Eventor for safety.
    */
   pushStartList: publicProcedure.mutation(async () => {
     const client = await getCompetitionClient();
     const dbName = getCurrentDbName();
     const env = ((await getSetting(`eventor_env_${dbName}`)) ??
       "prod") as EventorEnvironment;
-
-    if (env !== "test") {
-      throw new Error("Pushing start list is only supported for Test-Eventor.");
-    }
 
     const { apiKey } = await requireApiKey(env);
 

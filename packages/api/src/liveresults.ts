@@ -296,7 +296,24 @@ export async function syncAll(tavid: number): Promise<SyncStats> {
         });
         const clubNameById = new Map(clubs.map((c) => [c.Id, c.Name]));
 
+        // Remove previously-synced runners that no longer have a result
+        const noResultIds = runners.filter((r) => r.Status === 0).map((r) => r.Id);
+        if (noResultIds.length > 0) {
+            const placeholders = noResultIds.map(() => "?").join(",");
+            await conn.execute(
+                `DELETE FROM results WHERE tavid = ? AND dbid IN (${placeholders})`,
+                [tavid, ...noResultIds],
+            );
+            await conn.execute(
+                `DELETE FROM runners WHERE tavid = ? AND dbid IN (${placeholders})`,
+                [tavid, ...noResultIds],
+            );
+        }
+
         for (const r of runners) {
+            // Skip runners with unknown status (not started / no result)
+            if (r.Status === 0) continue;
+
             const className = classById.get(r.Class)?.Name ?? "";
             const clubName = clubNameById.get(r.Club) ?? "";
             const bib = r.Bib ?? r.StartNo.toString();

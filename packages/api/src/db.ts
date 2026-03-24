@@ -518,6 +518,10 @@ export async function createCompetitionDatabase(
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb3
   `);
 
+  // 7. Set up Oxygen-specific config table + columns on the fresh database
+  //    so that the first dashboard/getRegistrationConfig request doesn't race.
+  await ensureCompetitionConfigTable(client);
+
   return { dbName, eventId };
 }
 
@@ -818,6 +822,7 @@ export async function ensureControlPunchesTable(
       punch_time      INT NOT NULL COMMENT 'deciseconds since midnight (MeOS format)',
       punch_datetime  DATETIME(3) NULL COMMENT 'full punch datetime from backup record',
       sub_second      TINYINT UNSIGNED NULL COMMENT 'raw sub-second fraction 0-255',
+      station_serial  INT UNSIGNED NULL COMMENT 'SI station hardware serial number',
       imported_at     TIMESTAMP(0) NOT NULL DEFAULT CURRENT_TIMESTAMP,
       pushed_to_punch TINYINT(1) NOT NULL DEFAULT 0,
       INDEX idx_control (control_id)
@@ -834,12 +839,18 @@ export async function ensureControlPunchesTable(
       `ALTER TABLE oxygen_control_punches ADD COLUMN sub_second TINYINT UNSIGNED NULL AFTER punch_datetime`,
     );
   } catch { /* column already exists */ }
+  try {
+    await client.$executeRawUnsafe(
+      `ALTER TABLE oxygen_control_punches ADD COLUMN station_serial INT UNSIGNED NULL AFTER sub_second`,
+    );
+  } catch { /* column already exists */ }
   controlPunchesTableReady.add(db);
 }
 
 // ─── Competition config table ──────────────────────────────
 
 const competitionConfigTableReady = new Set<string>();
+const competitionConfigTablePending = new Map<string, Promise<void>>();
 
 export async function ensureCompetitionConfigTable(
   client: PrismaClient,
@@ -847,6 +858,23 @@ export async function ensureCompetitionConfigTable(
   const db = currentDbName ?? "";
   if (competitionConfigTableReady.has(db)) return;
 
+  // Prevent concurrent callers from running DDL in parallel (race on fresh DBs)
+  const pending = competitionConfigTablePending.get(db);
+  if (pending) return pending;
+
+  const promise = _doEnsureCompetitionConfigTable(client, db);
+  competitionConfigTablePending.set(db, promise);
+  try {
+    await promise;
+  } finally {
+    competitionConfigTablePending.delete(db);
+  }
+}
+
+async function _doEnsureCompetitionConfigTable(
+  client: PrismaClient,
+  db: string,
+): Promise<void> {
   await client.$executeRawUnsafe(`
     CREATE TABLE IF NOT EXISTS oxygen_competition_config (
       id          INT NOT NULL PRIMARY KEY DEFAULT 1,

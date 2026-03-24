@@ -445,18 +445,36 @@ describe("storeReadout: stale punch detection", () => {
     }
   });
 
-  it("rejects punches when mix of valid and foreign controls", async () => {
+  it("rejects punches when majority are foreign controls", async () => {
     const caller = makeCaller();
-    // Card has control 31 (valid) + 91 (foreign) → foreign = stale
+    // Card has 1 valid + 2 foreign → 67% foreign > 50% threshold
     const result = await caller.cardReadout.storeReadout({
       cardNo: runnerDns.cardNo,
       punches: [
         { controlCode: 31, time: 36000 },
         { controlCode: 91, time: 36120 },
+        { controlCode: 92, time: 36240 },
       ],
     });
 
     expect(result.punchesRelevant).toBe(false);
+  });
+
+  it("accepts punches when minority are foreign (misconfigured control)", async () => {
+    const caller = makeCaller();
+    // Card has 3 valid + 1 foreign → 25% foreign < 50% threshold
+    const result = await caller.cardReadout.storeReadout({
+      cardNo: 600099,
+      punches: [
+        { controlCode: 31, time: 36000 },
+        { controlCode: 32, time: 36120 },
+        { controlCode: 33, time: 36240 },
+        { controlCode: 91, time: 36360 }, // 1 foreign
+      ],
+      punchesFresh: true,
+    });
+
+    expect(result.punchesRelevant).toBe(true);
   });
 
   it("stores to history even when punches are stale", async () => {

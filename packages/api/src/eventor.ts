@@ -1160,11 +1160,7 @@ export async function uploadResults(
   currencyCode = "",
   currencyFactor = 100,
 ): Promise<void> {
-  if (env !== "test") {
-    throw new Error("Results upload is only supported for Test-Eventor.");
-  }
-
-  const factor = currencyFactor > 0 ? currencyFactor : 100;
+  const factor = currencyFactor > 0 ? currencyFactor : 1;
 
   // Group by class
   const classMap = new Map<string, ResultForUpload[]>();
@@ -1203,9 +1199,22 @@ export async function uploadResults(
           Name: runners[0].className,
         },
         PersonResult: runners.map((r) => {
-          const parts = r.name.split(",");
-          const family = parts[0]?.trim() || "";
-          const given = parts[1]?.trim() || r.name;
+          let family: string, given: string;
+          if (r.name.includes(",")) {
+            const parts = r.name.split(",");
+            family = parts[0]?.trim() || "";
+            given = parts[1]?.trim() || "";
+          } else {
+            const name = r.name.trim();
+            const lastSpace = name.lastIndexOf(" ");
+            if (lastSpace > 0) {
+              given = name.substring(0, lastSpace);
+              family = name.substring(lastSpace + 1);
+            } else {
+              family = name;
+              given = name;
+            }
+          }
 
           const hasTiming = !r.noTiming;
           const statusStr = meosStatusToIof(r.status, (r.finishTime ?? 0) > 0);
@@ -1258,9 +1267,9 @@ export async function uploadResults(
               ...(r.cardNo && r.cardNo > 0
                 ? { ControlCard: r.cardNo }
                 : {}),
+              ...Object.assign({}, ...assignedFees),
+              ...(cardRental ?? {}),
             },
-            ...Object.assign({}, ...assignedFees),
-            ...(cardRental ?? {}),
           };
         }),
       })),
@@ -1269,11 +1278,17 @@ export async function uploadResults(
 
   const xml = `<?xml version="1.0" encoding="UTF-8"?>\n${builder.build(obj)}`;
 
+  // Debug: write XML to /tmp for inspection
+  const fs = await import("fs/promises");
+  await fs.writeFile("/tmp/eventor-resultlist.xml", xml, "utf-8");
+  console.log(`[Eventor] Result XML written to /tmp/eventor-resultlist.xml (${xml.length} bytes, ${results.length} runners)`);
+
   const zip = new AdmZip();
   zip.addFile("resultlist.xml", Buffer.from(xml, "utf-8"));
   const zipBuffer = new Uint8Array(zip.toBuffer());
 
   const url = new URL("import/resultlist", EVENTOR_URLS[env]);
+  console.log(`[Eventor] Uploading to ${url.toString()} (env=${env})`);
   const resp = await fetch(url.toString(), {
     method: "POST",
     headers: {
@@ -1300,10 +1315,6 @@ export async function uploadStartList(
   runners: ResultForUpload[],
   env: EventorEnvironment = "prod",
 ): Promise<void> {
-  if (env !== "test") {
-    throw new Error("Start list upload is only supported for Test-Eventor.");
-  }
-
   // Group by class
   const classMap = new Map<string, ResultForUpload[]>();
   for (const r of runners) {
@@ -1340,9 +1351,22 @@ export async function uploadStartList(
           Name: runners[0].className,
         },
         PersonStart: runners.map((r) => {
-          const parts = r.name.split(",");
-          const family = parts[0]?.trim() || "";
-          const given = parts[1]?.trim() || r.name;
+          let family: string, given: string;
+          if (r.name.includes(",")) {
+            const parts = r.name.split(",");
+            family = parts[0]?.trim() || "";
+            given = parts[1]?.trim() || "";
+          } else {
+            const name = r.name.trim();
+            const lastSpace = name.lastIndexOf(" ");
+            if (lastSpace > 0) {
+              given = name.substring(0, lastSpace);
+              family = name.substring(lastSpace + 1);
+            } else {
+              family = name;
+              given = name;
+            }
+          }
 
           return {
             Person: {

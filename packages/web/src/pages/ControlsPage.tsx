@@ -1334,21 +1334,21 @@ function ReadoutPanel({
 
       const result = await new Promise<{ count: number }>((resolve, reject) => {
         importMutation.mutate(
-          { controlId: matchedControl.id, punches },
+          { controlId: matchedControl.id, stationSerial: stationData.serialNo, punches },
           { onSuccess: resolve, onError: reject },
         );
       });
       newPunches = result.count;
     }
 
-    // Clear backup memory if enabled
+    // Clear backup memory after read (if auto-clear is enabled)
     let cleared = false;
     if (autoClear) {
       try {
         await reader.clearBackupMemory();
         cleared = true;
       } catch {
-        // Ignore clear failure
+        console.warn("Failed to clear backup memory after read");
       }
     }
 
@@ -1441,20 +1441,11 @@ function ReadoutPanel({
   }, [autoMode, connected, getReaderConnection, readStation]);
 
   const handleClearMemory = async () => {
-    setBusy(true);
-    setError(null);
     try {
       const reader = getReaderConnection();
+      setBusy(true);
+      setError(null);
       await reader.clearBackupMemory();
-      setResults((prev) => [{
-        code: 0,
-        punchCount: 0,
-        newPunches: 0,
-        batteryVoltage: 0,
-        success: true,
-        cleared: true,
-        timestamp: new Date(),
-      }, ...prev].slice(0, 20));
     } catch (err) {
       setError(err instanceof Error ? err.message : "Clear failed");
     } finally {
@@ -1539,6 +1530,7 @@ function ReadoutPanel({
               type="checkbox"
               checked={autoClear}
               onChange={(e) => setAutoClear(e.target.checked)}
+              disabled={!connected}
               className="rounded"
             />
             {t("clear")}

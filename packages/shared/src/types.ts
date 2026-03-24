@@ -213,6 +213,8 @@ export interface ClassInfo {
   runnerCount?: number;
   /** Normal entry fee in whole currency units (e.g. 110 = 110 SEK) */
   classFee?: number;
+  /** Whether on-site registration is allowed for this class (MeOS: AllowQuickEntry) */
+  allowQuickEntry?: boolean;
 }
 
 /** Club summary */
@@ -592,6 +594,7 @@ export interface ClassSummary {
   highAge: number;
   freeStart: boolean;
   noTiming: boolean;
+  allowQuickEntry: boolean;
   classType: string;
   /** Entry fee in whole currency units (e.g. 110 = 110 SEK) */
   classFee: number;

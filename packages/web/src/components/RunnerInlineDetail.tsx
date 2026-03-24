@@ -248,13 +248,15 @@ export function RunnerInlineDetail({ runnerId, colSpan }: Props) {
                 )}
               </>
             )}
-            {r.cardFee > 0 && (
+            {(r.cardFee ?? 0) !== 0 && (
               <div className="flex items-center justify-between py-1.5 border-b border-blue-100">
                 <span className="text-xs text-slate-500 font-medium">{t("rentalCard")}</span>
                 <div className="flex items-center gap-2">
-                  <span className="text-xs font-semibold text-orange-600 bg-orange-50 border border-orange-200 rounded px-2 py-0.5">
-                    {r.cardFee} kr
-                  </span>
+                  {r.cardFee > 0 && (
+                    <span className="text-xs font-semibold text-orange-600 bg-orange-50 border border-orange-200 rounded px-2 py-0.5">
+                      {r.cardFee} kr
+                    </span>
+                  )}
                   {r.cardReturned ? (
                     <span className="inline-flex items-center gap-1 text-xs text-emerald-700 bg-emerald-50 border border-emerald-200 rounded px-2 py-0.5 font-medium">
                       ✓ {t("cardReturned")}

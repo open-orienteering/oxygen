@@ -68,6 +68,7 @@ export const classRouter = router({
           highAge: c.HighAge,
           freeStart: c.FreeStart === 1,
           noTiming: c.NoTiming === 1,
+          allowQuickEntry: c.AllowQuickEntry === 1,
           classType: c.ClassType,
           classFee: c.ClassFee,
         };
@@ -142,6 +143,7 @@ export const classRouter = router({
         highAge: cls.HighAge,
         freeStart: cls.FreeStart === 1,
         noTiming: cls.NoTiming === 1,
+        allowQuickEntry: cls.AllowQuickEntry === 1,
         classType: cls.ClassType,
         classFee: cls.ClassFee,
         longName: cls.LongName,
@@ -171,6 +173,7 @@ export const classRouter = router({
         highAge: z.number().int().optional().default(0),
         freeStart: z.boolean().optional().default(false),
         noTiming: z.boolean().optional().default(false),
+        allowQuickEntry: z.boolean().optional().default(false),
       }),
     )
     .mutation(async ({ input }) => {
@@ -194,6 +197,7 @@ export const classRouter = router({
           HighAge: input.highAge,
           FreeStart: input.freeStart ? 1 : 0,
           NoTiming: input.noTiming ? 1 : 0,
+          AllowQuickEntry: input.allowQuickEntry ? 1 : 0,
         },
       });
 
@@ -215,6 +219,7 @@ export const classRouter = router({
         highAge: z.number().int().optional(),
         freeStart: z.boolean().optional(),
         noTiming: z.boolean().optional(),
+        allowQuickEntry: z.boolean().optional(),
         firstStart: z.number().int().optional(),
         startInterval: z.number().int().optional(),
         classFee: z.number().int().optional(),
@@ -233,6 +238,8 @@ export const classRouter = router({
         data.FreeStart = input.freeStart ? 1 : 0;
       if (input.noTiming !== undefined)
         data.NoTiming = input.noTiming ? 1 : 0;
+      if (input.allowQuickEntry !== undefined)
+        data.AllowQuickEntry = input.allowQuickEntry ? 1 : 0;
       if (input.firstStart !== undefined) data.FirstStart = input.firstStart;
       if (input.startInterval !== undefined)
         data.StartInterval = input.startInterval;
@@ -295,6 +302,7 @@ export const classRouter = router({
           classFee: z.number().int().optional(),
           freeStart: z.boolean().optional(),
           noTiming: z.boolean().optional(),
+          allowQuickEntry: z.boolean().optional(),
         }),
       }),
     )
@@ -306,6 +314,7 @@ export const classRouter = router({
       if (input.data.classFee !== undefined) data.ClassFee = input.data.classFee;
       if (input.data.freeStart !== undefined) data.FreeStart = input.data.freeStart ? 1 : 0;
       if (input.data.noTiming !== undefined) data.NoTiming = input.data.noTiming ? 1 : 0;
+      if (input.data.allowQuickEntry !== undefined) data.AllowQuickEntry = input.data.allowQuickEntry ? 1 : 0;
 
       for (const id of input.ids) {
         await client.oClass.update({

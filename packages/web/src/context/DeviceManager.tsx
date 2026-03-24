@@ -110,14 +110,25 @@ export function isPunchDataFresh(readout: SICardReadout): boolean {
   // Convert JS day (0=Sun..6=Sat) to SI day (1=Mon..7=Sun)
   const jsDay = new Date().getDay();
   const todaySIDow = jsDay === 0 ? 7 : jsDay;
+  // Accept yesterday too (night-O events span midnight: Saturday start → Sunday finish)
+  const yesterdaySIDow = todaySIDow === 1 ? 7 : todaySIDow - 1;
 
-  // Primary: check finish day-of-week
-  if (readout.finishDayOfWeek != null && readout.finishDayOfWeek !== todaySIDow) {
+  // Primary: check finish day-of-week (today or yesterday for night-O)
+  if (
+    readout.finishDayOfWeek != null &&
+    readout.finishDayOfWeek !== todaySIDow &&
+    readout.finishDayOfWeek !== yesterdaySIDow
+  ) {
     return false;
   }
 
-  // Fallback: check the check-time day-of-week (if no finish DOW available)
-  if (readout.finishDayOfWeek == null && readout.checkDayOfWeek != null && readout.checkDayOfWeek !== todaySIDow) {
+  // Fallback: check-time DOW (today or yesterday for night-O DNFs)
+  if (
+    readout.finishDayOfWeek == null &&
+    readout.checkDayOfWeek != null &&
+    readout.checkDayOfWeek !== todaySIDow &&
+    readout.checkDayOfWeek !== yesterdaySIDow
+  ) {
     return false;
   }
 
@@ -260,6 +271,7 @@ export function DeviceManagerProvider({ children }: { children: ReactNode }) {
             startTime: readout.startTime ?? undefined,
             finishTime: readout.finishTime ?? undefined,
             cardType: readout.cardType,
+            punchesFresh: raceData,
             batteryVoltage: readout.batteryVoltage ?? undefined,
             ownerData: readout.ownerData
               ? {
@@ -313,14 +325,11 @@ export function DeviceManagerProvider({ children }: { children: ReactNode }) {
           const hasDbResult =
             dbStatus > 0 && dbStatus !== 20 && dbStatus !== 21;
 
-          // Punches are relevant only if BOTH:
-          // - Client-side DOW check passed (raceData = isPunchDataFresh)
-          // - Server-side foreign control check passed (serverPunchesRelevant)
-          // - Server-side course matching found hits (punchesMatchCourse)
-          const punchesRelevant =
-            raceData &&
-            serverPunchesRelevant &&
-            (result.punchesMatchCourse ?? false);
+          // Server-side match score (0.0–1.0): how well do the card's
+          // punches match the runner's assigned course? Penalized by
+          // foreign punches (controls not in this competition).
+          const matchScore = result.matchScore ?? 0;
+          const punchesRelevant = matchScore >= 0.2;
 
           if (punchesRelevant || hasDbResult) {
             // Runner found AND (punches match this competition OR already has result in DB) → readout
@@ -346,7 +355,7 @@ export function DeviceManagerProvider({ children }: { children: ReactNode }) {
           action,
           actionResolved: true,
           hasRaceData: result.found
-            ? ((result.punchesMatchCourse ?? false) && serverPunchesRelevant)
+            ? ((result.matchScore ?? 0) >= 0.2 && serverPunchesRelevant)
             : entry.hasRaceData,
           runnerName: result.found ? result.runner.name : undefined,
           className: result.found ? result.runner.className : undefined,

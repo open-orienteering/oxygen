@@ -109,7 +109,7 @@ export function RunnerManagement() {
         cardNo: runner.cardNo,
       },
       startTime: runner.startTime > 0 ? formatMeosTime(runner.startTime) : undefined,
-      payment: amount > 0 ? { method: methodLabel || t("paid"), amount, cardFee: (runner.cardFee ?? 0) > 0 ? runner.cardFee : undefined } : undefined,
+      payment: amount > 0 ? { method: methodLabel || t("paid"), amount, cardFee: (runner.cardFee ?? 0) !== 0 ? runner.cardFee : undefined } : undefined,
       organizerName: classes.data?.organizer?.name,
       organizerDetails: regConfig.data?.organizerDetails || undefined,
       orgNumber: regConfig.data?.orgNumber || undefined,
@@ -308,7 +308,7 @@ export function RunnerManagement() {
                       <td className="px-4 py-2.5 text-slate-500 tabular-nums hidden lg:table-cell">
                         <span className="inline-flex items-center gap-1.5">
                           {runner.cardNo > 0 ? runner.cardNo : "-"}
-                          {(runner.cardFee ?? 0) > 0 && (
+                          {(runner.cardFee ?? 0) !== 0 && (
                             <span
                               title={t("rentalCard")}
                               className={`inline-flex items-center text-xs font-semibold px-1.5 py-0.5 rounded ${

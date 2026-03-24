@@ -54,9 +54,43 @@ Unplug and replug the USB cable. The printer should no longer appear as
 > **Note:** If you later need CUPS/system printing for this printer, remove
 > the rules file and reload udev. The two approaches are mutually exclusive.
 
-## macOS / Windows
+## Windows Setup (one-time)
 
-No extra setup required. WebUSB works out of the box on macOS and Windows.
+Windows loads its own USB printer driver (`usbprint.sys`) automatically when a
+thermal printer is plugged in. This prevents WebUSB from claiming the interface —
+the device picker will show the printer as "parkopplad" (paired) and connecting
+will fail. The fix is to replace the Windows driver with **WinUSB** using Zadig.
+
+### Step 1 — Download Zadig
+
+Download [Zadig](https://zadig.akeo.ie/) (free, no installation needed).
+
+### Step 2 — Replace the driver
+
+1. Plug in the thermal printer.
+2. Run Zadig.
+3. In the menu bar, check **Options → List All Devices**.
+4. Select the printer from the dropdown (e.g. "CT-S310II" or "USB Printing Support").
+5. In the **Driver** row you will see the current driver on the left (e.g.
+   `usbprint`) and the target driver on the right. Use the arrows to select
+   **WinUSB** as the target.
+6. Click **Replace Driver** and wait for it to finish.
+
+### Step 3 — Reconnect in Chrome
+
+Reload the Oxygen page and click **Connect Printer**. The printer should now
+appear without "parkopplad" and connect successfully.
+
+> **Note:** Replacing the driver means the printer will no longer be visible to
+> Windows' built-in printing system (e.g. Notepad, Word). To restore the
+> original driver, open **Device Manager**, find the printer under
+> "Universal Serial Bus devices", right-click → **Uninstall device** (tick
+> "Delete the driver software"), then replug the printer. Windows will
+> reinstall `usbprint.sys` automatically.
+
+## macOS
+
+No extra setup required. WebUSB works out of the box on macOS.
 
 ## Using the Finish Station Printer
 

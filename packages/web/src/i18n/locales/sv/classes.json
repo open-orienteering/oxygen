@@ -57,5 +57,6 @@
   "apply": "Tillämpa",
   "applying": "Tillämpar...",
   "bulkConfirm": "Sätt {{field}} till \"{{value}}\" för {{count}} klasser?",
-  "bulkUpdated": "Uppdaterade {{count}} klasser"
+  "bulkUpdated": "Uppdaterade {{count}} klasser",
+  "allowQuickEntry": "Direktanmälan"
 }

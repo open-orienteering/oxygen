@@ -488,6 +488,7 @@ export const controlRouter = router({
     .input(
       z.object({
         controlId: z.number().int(),
+        stationSerial: z.number().int().optional(),
         punches: z.array(
           z.object({
             cardNo: z.number().int(),
@@ -520,17 +521,18 @@ export const controlRouter = router({
       if (newPunches.length === 0) return { count: 0 };
 
       // Bulk insert new punches with full datetime
+      const serial = input.stationSerial ?? "NULL";
       const values = newPunches
         .map((p) => {
           const dt = p.punchDatetime
             ? `'${new Date(p.punchDatetime).toISOString().slice(0, 23).replace("T", " ")}'`
             : "NULL";
           const ss = p.subSecond !== undefined ? String(p.subSecond) : "NULL";
-          return `(${input.controlId}, ${p.cardNo}, ${p.punchTime}, ${dt}, ${ss})`;
+          return `(${input.controlId}, ${p.cardNo}, ${p.punchTime}, ${dt}, ${ss}, ${serial})`;
         })
         .join(", ");
       await client.$executeRawUnsafe(
-        `INSERT INTO oxygen_control_punches (control_id, card_no, punch_time, punch_datetime, sub_second) VALUES ${values}`,
+        `INSERT INTO oxygen_control_punches (control_id, card_no, punch_time, punch_datetime, sub_second, station_serial) VALUES ${values}`,
       );
 
       return { count: newPunches.length };
@@ -547,7 +549,7 @@ export const controlRouter = router({
 
       const punches = (await client.$queryRawUnsafe(
         `SELECT p.id, p.card_no, p.punch_time, p.punch_datetime, p.sub_second,
-                p.imported_at, p.pushed_to_punch,
+                p.station_serial, p.imported_at, p.pushed_to_punch,
                 r.Name as runner_name, r.Id as runner_id
          FROM oxygen_control_punches p
          LEFT JOIN oRunner r ON r.CardNo = p.card_no AND r.Removed = 0
@@ -560,6 +562,7 @@ export const controlRouter = router({
         punch_time: number;
         punch_datetime: Date | null;
         sub_second: number | null;
+        station_serial: number | null;
         imported_at: Date;
         pushed_to_punch: number;
         runner_name: string | null;
@@ -572,6 +575,7 @@ export const controlRouter = router({
         punchTime: p.punch_time,
         punchDatetime: p.punch_datetime?.toISOString() ?? null,
         subSecond: p.sub_second,
+        stationSerial: p.station_serial != null ? Number(p.station_serial) : null,
         importedAt: fmtDatetimeLocal(p.imported_at),
         pushedToPunch: p.pushed_to_punch !== 0,
         runnerName: p.runner_name,
@@ -638,8 +642,9 @@ export const controlRouter = router({
 
     const punches = (await client.$queryRawUnsafe(
       `SELECT p.id, p.control_id, p.card_no, p.punch_time, p.punch_datetime, p.sub_second,
-              p.imported_at, p.pushed_to_punch,
-              r.Name as runner_name, r.Id as runner_id,
+              p.station_serial, p.imported_at, p.pushed_to_punch,
+              r.Name as runner_name, r.Id as runner_id, r.Status as runner_status,
+              r.StartTime as runner_start, r.FinishTime as runner_finish,
               c.Numbers as control_codes, c.Name as control_name
        FROM oxygen_control_punches p
        LEFT JOIN oRunner r ON r.CardNo = p.card_no AND r.Removed = 0
@@ -652,30 +657,51 @@ export const controlRouter = router({
       punch_time: number;
       punch_datetime: Date | null;
       sub_second: number | null;
+      station_serial: number | null;
       imported_at: Date;
       pushed_to_punch: number;
       runner_name: string | null;
       runner_id: number | null;
+      runner_status: number | null;
+      runner_start: number | null;
+      runner_finish: number | null;
       control_codes: string | null;
       control_name: string | null;
     }>;
 
-    return punches.map((p) => ({
-      id: p.id,
-      controlId: p.control_id,
-      controlCodes: p.control_codes ?? "",
-      controlName: p.control_name ?? "",
-      cardNo: p.card_no,
-      punchTime: p.punch_time,
-      punchDatetime: p.punch_datetime instanceof Date ? p.punch_datetime.toISOString() : (p.punch_datetime as string | null),
-      subSecond: p.sub_second,
-      // MySQL NOW() returns server-local time but Prisma treats DATETIME as UTC.
-      // Format manually to avoid double timezone shift.
-      importedAt: fmtDatetimeLocal(p.imported_at),
-      pushedToPunch: !!p.pushed_to_punch,
-      runnerName: p.runner_name,
-      runnerId: p.runner_id,
-    }));
+    return punches.map((p) => {
+      const isFinish = p.control_id >= 311100 && p.control_id < 400000;
+      const isStart = p.control_id >= 211100 && p.control_id < 300000;
+      const registeredTime = isFinish ? p.runner_finish : isStart ? p.runner_start : null;
+      const timeMatch = registeredTime != null && registeredTime > 0
+        ? Math.abs(registeredTime - p.punch_time) <= 10
+        : false;
+
+      let matchStatus: "matched" | "no_runner" | "no_result" | "time_mismatch" | "unknown";
+      if (p.runner_id == null) matchStatus = "no_runner";
+      else if (p.runner_status == null || p.runner_status === 0) matchStatus = "no_result";
+      else if (isFinish || isStart) matchStatus = timeMatch ? "matched" : "time_mismatch";
+      else matchStatus = "unknown";
+
+      return {
+        id: p.id,
+        controlId: p.control_id,
+        controlCodes: p.control_codes ?? "",
+        controlName: p.control_name ?? "",
+        cardNo: p.card_no,
+        punchTime: p.punch_time,
+        punchDatetime: p.punch_datetime instanceof Date ? p.punch_datetime.toISOString() : (p.punch_datetime as string | null),
+        subSecond: p.sub_second,
+        stationSerial: p.station_serial != null ? Number(p.station_serial) : null,
+        importedAt: fmtDatetimeLocal(p.imported_at),
+        pushedToPunch: !!p.pushed_to_punch,
+        runnerName: p.runner_name,
+        runnerId: p.runner_id,
+        runnerStatus: p.runner_status,
+        registeredTime,
+        matchStatus,
+      };
+    });
   }),
 
   // ─── Competition-wide AIR+ config ─────────────────────

@@ -1201,7 +1201,7 @@ function RegistrationWaitingScreen({
         {form?.fee != null && form.fee > 0 && form.paymentMode && form.paymentMode !== "billed" && (
           <InfoRow label={t("amountLabel")} value={`${form.fee} kr`} />
         )}
-        {form?.isRentalCard && form.cardFee != null && form.cardFee > 0 && (
+        {form?.isRentalCard && form.cardFee != null && form.cardFee !== 0 && (
           <InfoRow label="🏷️" value={t("rentalCardFee", { fee: form.cardFee })} />
         )}
       </div>

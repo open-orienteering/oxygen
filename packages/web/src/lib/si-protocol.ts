@@ -1382,17 +1382,30 @@ export function parseBackupPage(data: Uint8Array): BackupRecord[] {
 
   for (let offset = start; offset + RECORD_SIZE <= data.length; offset += RECORD_SIZE) {
     const rec = data.slice(offset, offset + RECORD_SIZE);
-
-    // Skip empty/erased records
-    const ffCount = rec.filter((b) => b === 0xff).length;
-    if (ffCount >= 6) break;
-    if (rec.every((b) => b === 0x00)) break;
-
     const recHex = Array.from(rec).map((b) => b.toString(16).padStart(2, "0")).join(" ");
 
-    // Card number: 3 bytes MSB first (same encoding as SI card data)
-    const cardNo = (rec[0] << 16) | (rec[1] << 8) | rec[2];
-    if (cardNo === 0 || cardNo === 0xffffff) break;
+    // Skip empty/erased records (but keep reading — don't break)
+    const ffCount = rec.filter((b) => b === 0xff).length;
+    if (ffCount >= 6) {
+      console.log(`[SI] Backup skip @${offset}: ${recHex} reason=ff (${ffCount}/8 are 0xff)`);
+      continue;
+    }
+    if (rec.every((b) => b === 0x00)) {
+      console.log(`[SI] Backup skip @${offset}: ${recHex} reason=all-zeros`);
+      continue;
+    }
+
+    // Card number: 3 bytes. For SI-5 (series 1-4) byte 0 is the series code
+    // and the actual card number is series * 100000 + (byte1 << 8 | byte2).
+    // For SI-6/8/9/10/11/SIAC byte 0 is just the high byte of a 24-bit number.
+    const cn2 = rec[0], cn1 = rec[1], cn0 = rec[2];
+    const cardNo = (cn2 >= 1 && cn2 <= 4)
+      ? cn2 * 100000 + ((cn1 << 8) | cn0)
+      : (cn2 << 16) | (cn1 << 8) | cn0;
+    if (cardNo === 0 || cardNo === 0xffffff) {
+      console.log(`[SI] Backup skip @${offset}: ${recHex} reason=cardNo-invalid (${cardNo})`);
+      continue;
+    }
 
     // Byte 3: year/month high — bits 7..2 = year since 2000, bits 1..0 = month upper
     const ym = rec[3];
@@ -1408,6 +1421,24 @@ export function parseBackupPage(data: Uint8Array): BackupRecord[] {
     // Bytes 5-6: seconds since midnight (AM=0) or midday (PM=1)
     const secsRaw = (rec[5] << 8) | rec[6];
     const punchTimeSecs = secsRaw + (pm ? 43200 : 0);
+
+    if (secsRaw >= 43200) {
+      console.log(`[SI] Backup skip @${offset}: ${recHex} reason=secsRaw-overflow (${secsRaw} >= 43200) card=${cardNo}`);
+      continue;
+    }
+    if (month < 1 || month > 12) {
+      console.log(`[SI] Backup skip @${offset}: ${recHex} reason=month-invalid (${month}) card=${cardNo}`);
+      continue;
+    }
+    if (day < 1 || day > 31) {
+      console.log(`[SI] Backup skip @${offset}: ${recHex} reason=day-invalid (${day}) card=${cardNo}`);
+      continue;
+    }
+    if (year < 2020 || year > 2030) {
+      console.log(`[SI] Backup skip @${offset}: ${recHex} reason=year-invalid (${year}) card=${cardNo}`);
+      continue;
+    }
+
     const subSecond = rec[7];
 
     // Build full datetime

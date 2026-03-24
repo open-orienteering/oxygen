@@ -5,6 +5,7 @@ import {
     ensureCompetition,
     updateCompetitionMeta,
     liveResultsPusher,
+    getLiveResultsPool,
     syncAll,
 } from "../liveresults.js";
 
@@ -151,6 +152,33 @@ export const liveresultsRouter = router({
         const tavid = parseInt(tavidStr, 10);
         const stats = await syncAll(tavid);
         return { success: true, stats };
+    }),
+
+    /**
+     * Clear all remote LiveResults data (results, runners, splitcontrols)
+     * for this competition. Useful when a tavid was reused and has stale data.
+     * Optionally re-syncs fresh data immediately after clearing.
+     */
+    clearRemoteData: publicProcedure.mutation(async () => {
+        const nameId = getCurrentDbName();
+        if (!nameId) throw new Error("No competition selected");
+
+        const tavidStr = await getSetting(`liveresults_tavid_${nameId}`);
+        if (!tavidStr) throw new Error("LiveResults not enabled for this competition");
+
+        const tavid = parseInt(tavidStr, 10);
+        const pool = await getLiveResultsPool();
+        const conn = await pool.getConnection();
+        try {
+            await conn.execute("DELETE FROM results WHERE tavid = ?", [tavid]);
+            await conn.execute("DELETE FROM runners WHERE tavid = ?", [tavid]);
+            await conn.execute("DELETE FROM splitcontrols WHERE tavid = ?", [tavid]);
+        } finally {
+            conn.release();
+        }
+
+        const stats = await syncAll(tavid);
+        return { success: true, cleared: true, resyncStats: stats };
     }),
 
     /**
