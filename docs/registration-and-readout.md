@@ -167,16 +167,19 @@ This is the core mutation that processes incoming card data on the server.
 
 ### 3a. Build MeOS Punch String
 
-Punches are converted from the input format to MeOS's string encoding:
+Input times (seconds since midnight from SI reader) are converted to ZeroTime-relative deciseconds before encoding in MeOS's string format:
 
 ```
-Format: "{type}-{seconds}.{tenths};"
+Format: "{type}-{relativeSeconds}.{tenths};"
 
-Examples:
-  3-35940.0;    → check punch at 09:59:00
-  1-36000.0;    → start punch at 10:00:00
-  41-36120.0;   → control 41 at 10:02:00
-  2-36720.0;    → finish punch at 10:12:00
+Input: SI card time 36120s (10:02:00), ZeroTime 32400s (09:00:00)
+Relative: 36120 - 32400 = 3720s → "41-3720.0;"
+
+Examples (with ZeroTime = 09:00:00):
+  3-3540.0;     → check punch at 09:59:00
+  1-3600.0;     → start punch at 10:00:00
+  41-3720.0;    → control 41 at 10:02:00
+  2-4320.0;     → finish punch at 10:12:00
 ```
 
 Special punch types: `1` = start, `2` = finish, `3` = check. All other numbers are control codes.
@@ -694,17 +697,29 @@ The `oCard` table is shared between Oxygen and MeOS. Both systems can read and w
 - **ReadId**: Both compute the same hash for deduplication. Oxygen's `computeReadId()` matches MeOS's `SICard::calculateHash`.
 - **Multiple oCard rows**: When both systems create oCards for the same CardNo, Oxygen prefers the runner-linked one. The runner FK (`oRunner.Card`) is the authoritative link.
 
-### Time Format
+### Time Format: ZeroTime-Relative Storage
 
-All times in the database are **deciseconds since midnight** (seconds × 10):
+All times in the database are stored as **ZeroTime-relative deciseconds**. ZeroTime is the competition's reference point (default: 324000 = 09:00:00), stored in `oEvent.ZeroTime`. This matches MeOS behavior exactly.
 
 ```
-10:00:00 → 360000 ds
-10:02:00 → 361200 ds
-10:12:00 → 367200 ds
+Absolute time → Stored (relative to ZeroTime 09:00:00)
+10:00:00       → 36000 ds   (360000 - 324000)
+10:02:00       → 37200 ds   (361200 - 324000)
+08:50:00       → -6000 ds   (318000 - 324000)
 ```
 
-MeOS may encode times with a DOW component, producing values that look negative or very large. Oxygen's `matchPunchesToCourse()` computes `runningTime = finishTime - startTime`, which gives the correct duration regardless of the absolute time encoding.
+**Conversion at the API boundary:**
+
+- **DB writes**: `toRelative(absoluteDs, zeroTime) = absoluteDs - zeroTime`
+- **DB reads**: `toAbsolute(relativeDs, zeroTime) = (relativeDs + zeroTime) % 864000`
+- **API always speaks absolute times** — the web UI never sees relative values
+- **Running time = finishTime - startTime** is the same in both frames (no conversion needed)
+
+Sentinel value: `StartTime = 1` means "drawn with no specific time" (MeOS convention for interval=0 draws). It is preserved through the conversion layer and treated as "started" in dashboard/status logic.
+
+**Files:**
+- `packages/api/src/timeConvert.ts` — `toRelative()` and `toAbsolute()` helpers
+- `packages/api/src/db.ts` — `getZeroTime(client)` — cached ZeroTime lookup (defaults to 324000)
 
 ### Counter Increments
 

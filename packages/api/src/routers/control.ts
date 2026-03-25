@@ -6,7 +6,9 @@ import {
   ensureControlConfigTable,
   ensureControlPunchesTable,
   ensureCompetitionConfigTable,
+  getZeroTime,
 } from "../db.js";
+import { toRelative, toAbsolute } from "../timeConvert.js";
 import type {
   ControlInfo,
   ControlDetail,
@@ -505,6 +507,13 @@ export const controlRouter = router({
 
       if (input.punches.length === 0) return { count: 0 };
 
+      // Convert absolute punch times to ZeroTime-relative for DB storage
+      const zeroTime = await getZeroTime(client);
+      const punchesRelative = input.punches.map((p) => ({
+        ...p,
+        punchTime: toRelative(p.punchTime, zeroTime),
+      }));
+
       // Deduplicate: skip punches already imported for this control
       const existing = (await client.$queryRawUnsafe(
         `SELECT card_no, punch_time FROM oxygen_control_punches WHERE control_id = ?`,
@@ -514,7 +523,7 @@ export const controlRouter = router({
       const existingSet = new Set(
         existing.map((e) => `${e.card_no}:${e.punch_time}`),
       );
-      const newPunches = input.punches.filter(
+      const newPunches = punchesRelative.filter(
         (p) => !existingSet.has(`${p.cardNo}:${p.punchTime}`),
       );
 
@@ -547,6 +556,8 @@ export const controlRouter = router({
       const client = await getCompetitionClient();
       await ensureControlPunchesTable(client);
 
+      const zeroTime = await getZeroTime(client);
+
       const punches = (await client.$queryRawUnsafe(
         `SELECT p.id, p.card_no, p.punch_time, p.punch_datetime, p.sub_second,
                 p.station_serial, p.imported_at, p.pushed_to_punch,
@@ -572,7 +583,7 @@ export const controlRouter = router({
       return punches.map((p) => ({
         id: p.id,
         cardNo: p.card_no,
-        punchTime: p.punch_time,
+        punchTime: toAbsolute(p.punch_time, zeroTime),
         punchDatetime: p.punch_datetime?.toISOString() ?? null,
         subSecond: p.sub_second,
         stationSerial: p.station_serial != null ? Number(p.station_serial) : null,
@@ -640,6 +651,8 @@ export const controlRouter = router({
     const client = await getCompetitionClient();
     await ensureControlPunchesTable(client);
 
+    const zeroTime = await getZeroTime(client);
+
     const punches = (await client.$queryRawUnsafe(
       `SELECT p.id, p.control_id, p.card_no, p.punch_time, p.punch_datetime, p.sub_second,
               p.station_serial, p.imported_at, p.pushed_to_punch,
@@ -689,7 +702,7 @@ export const controlRouter = router({
         controlCodes: p.control_codes ?? "",
         controlName: p.control_name ?? "",
         cardNo: p.card_no,
-        punchTime: p.punch_time,
+        punchTime: toAbsolute(p.punch_time, zeroTime),
         punchDatetime: p.punch_datetime instanceof Date ? p.punch_datetime.toISOString() : (p.punch_datetime as string | null),
         subSecond: p.sub_second,
         stationSerial: p.station_serial != null ? Number(p.station_serial) : null,

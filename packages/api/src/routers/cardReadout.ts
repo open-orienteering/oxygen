@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { router, publicProcedure } from "../trpc.js";
-import { getCompetitionClient, ensureReadoutTable, incrementCounter } from "../db.js";
+import { getCompetitionClient, ensureReadoutTable, incrementCounter, getZeroTime } from "../db.js";
+import { toRelative, toAbsolute } from "../timeConvert.js";
 import { RunnerStatus } from "@oxygen/shared";
 import type { PrismaClient } from "@prisma/client";
 import { pushToGoogleSheet } from "../sheetsBackup.js";
@@ -225,26 +226,16 @@ export async function performReadout(client: PrismaClient, runnerId: number) {
   // Parse card punches
   const cardPunches = parsePunches(card?.Punches ?? "");
 
-  // Normalize MeOS-relative times: MeOS stores punch times as (rawSITime - ZeroTime),
-  // which can be negative or much smaller than absolute time-of-day values.
-  // Oxygen expects absolute deciseconds since midnight. Detect and fix.
-  const hasMeosRelativeTimes = cardPunches.some((p) => p.time < 0);
-  let meosZeroTime = 0;
-  if (hasMeosRelativeTimes) {
-    const event = await client.oEvent.findFirst({ select: { ZeroTime: true } });
-    meosZeroTime = event?.ZeroTime ?? 324000; // default 09:00
-    const DAY = 864000; // 24 hours in deciseconds
-    for (const p of cardPunches) {
-      if (p.time !== 0) {
-        p.time = ((p.time + meosZeroTime) % DAY + DAY) % DAY;
-      }
-    }
+  // Convert ZeroTime-relative DB times to absolute (MeOS stores all times relative to ZeroTime)
+  const zeroTime = await getZeroTime(client);
+  for (const p of cardPunches) {
+    if (p.time !== 0) p.time = toAbsolute(p.time, zeroTime);
   }
 
-  // Convert free punches to our format (free punch times are stored in deciseconds)
+  // Convert free punches to our format (oPunch.Time is also ZeroTime-relative)
   const freeParsed: ParsedPunch[] = freePunches.map((p) => ({
     type: p.Type,
-    time: p.Time,
+    time: p.Time !== 0 ? toAbsolute(p.Time, zeroTime) : 0,
     source: "free" as const,
     freePunchId: p.Id,
   }));
@@ -255,10 +246,8 @@ export async function performReadout(client: PrismaClient, runnerId: number) {
   // Parse course controls
   const courseControls = course ? parseCourseControls(course.Controls) : [];
 
-  // If card has MeOS-relative times and runner.StartTime is also negative, normalize it
-  const runnerStartTime = hasMeosRelativeTimes && runner.StartTime < 0
-    ? ((runner.StartTime + meosZeroTime) % 864000 + 864000) % 864000
-    : runner.StartTime;
+  // Convert runner's assigned start time from ZeroTime-relative to absolute
+  const runnerStartTime = toAbsolute(runner.StartTime, zeroTime);
 
   // Match punches to course (pass runner's assigned start time as fallback)
   const { matches, extraPunches, startTime, cardStartTime, finishTime, missingCount } =
@@ -494,32 +483,35 @@ export const cardReadoutRouter = router({
     )
     .mutation(async ({ input }) => {
       const client = await getCompetitionClient();
+      const zeroTime = await getZeroTime(client);
 
-      // Build the MeOS punch string
+      // Helper: convert absolute seconds → ZeroTime-relative deciseconds punch token
+      const fmtPunch = (type: number, absSecs: number) => {
+        const relDs = toRelative(absSecs * 10, zeroTime);
+        return `${type}-${Math.floor(relDs / 10)}.${relDs % 10}`;
+      };
+
+      // Build the MeOS punch string (ZeroTime-relative, matching MeOS convention)
       const parts: string[] = [];
 
       // Check time → special type 3 (PUNCH_CHECK)
       if (input.checkTime != null && input.checkTime > 0) {
-        const ds = input.checkTime * 10;
-        parts.push(`${PUNCH_CHECK}-${Math.floor(ds / 10)}.${ds % 10}`);
+        parts.push(fmtPunch(PUNCH_CHECK, input.checkTime));
       }
 
       // Start time → special type 1 (PUNCH_START)
       if (input.startTime != null && input.startTime > 0) {
-        const ds = input.startTime * 10;
-        parts.push(`${PUNCH_START}-${Math.floor(ds / 10)}.${ds % 10}`);
+        parts.push(fmtPunch(PUNCH_START, input.startTime));
       }
 
       // Control punches
       for (const p of input.punches) {
-        const ds = p.time * 10;
-        parts.push(`${p.controlCode}-${Math.floor(ds / 10)}.${ds % 10}`);
+        parts.push(fmtPunch(p.controlCode, p.time));
       }
 
       // Finish time → special type 2 (PUNCH_FINISH)
       if (input.finishTime != null && input.finishTime > 0) {
-        const ds = input.finishTime * 10;
-        parts.push(`${PUNCH_FINISH}-${Math.floor(ds / 10)}.${ds % 10}`);
+        parts.push(fmtPunch(PUNCH_FINISH, input.finishTime));
       }
 
       const punchString = parts.length > 0 ? parts.join(";") + ";" : "";
@@ -1043,12 +1035,13 @@ export const cardReadoutRouter = router({
     )
     .mutation(async ({ input }) => {
       const client = await getCompetitionClient();
+      const zeroTime = await getZeroTime(client);
       await client.oRunner.update({
         where: { Id: input.runnerId },
         data: {
           Status: input.status,
-          FinishTime: input.finishTime,
-          StartTime: input.startTime,
+          FinishTime: toRelative(input.finishTime, zeroTime),
+          StartTime: toRelative(input.startTime, zeroTime),
         },
       });
       await incrementCounter("oRunner", input.runnerId);

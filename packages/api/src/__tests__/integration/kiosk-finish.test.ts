@@ -22,7 +22,9 @@ let runnerDns: { id: number; cardNo: number };
 
 // Course: 5 controls (31, 32, 33, 34, 35) + start + finish
 const CONTROLS = [31, 32, 33, 34, 35];
-const START_TIME = 360000; // 10:00:00 in deciseconds
+const START_TIME = 360000; // 10:00:00 in deciseconds (absolute)
+const ZERO_TIME = 324000; // 09:00:00 in deciseconds (from createCompetitionDatabase)
+const REL_START = START_TIME - ZERO_TIME; // ZeroTime-relative start for direct DB writes
 
 beforeAll(async () => {
   ctx = await createTestDb("kiosk");
@@ -64,18 +66,18 @@ beforeAll(async () => {
   const rA = await caller.runner.create({ name: "Anna OK", classId, cardNo: 500001 });
   await ctx.client.oRunner.update({
     where: { Id: rA.id },
-    data: { StartTime: START_TIME },
+    data: { StartTime: REL_START }, // DB stores ZeroTime-relative
   });
-  // Build MeOS punch string: start, 5 controls, finish
+  // Build MeOS punch string (ZeroTime-relative): start, 5 controls, finish
   // Times: start 10:00:00, controls at +2min intervals, finish at +12min
   const okPunches = [
-    `1-${START_TIME / 10}.0`,          // start (type 1)
-    `31-${(START_TIME + 1200) / 10}.0`, // control 31 at +2:00
-    `32-${(START_TIME + 2400) / 10}.0`, // control 32 at +4:00
-    `33-${(START_TIME + 3600) / 10}.0`, // control 33 at +6:00
-    `34-${(START_TIME + 4800) / 10}.0`, // control 34 at +8:00
-    `35-${(START_TIME + 6000) / 10}.0`, // control 35 at +10:00
-    `2-${(START_TIME + 7200) / 10}.0`,  // finish (type 2) at +12:00
+    `1-${REL_START / 10}.0`,          // start (type 1)
+    `31-${(REL_START + 1200) / 10}.0`, // control 31 at +2:00
+    `32-${(REL_START + 2400) / 10}.0`, // control 32 at +4:00
+    `33-${(REL_START + 3600) / 10}.0`, // control 33 at +6:00
+    `34-${(REL_START + 4800) / 10}.0`, // control 34 at +8:00
+    `35-${(REL_START + 6000) / 10}.0`, // control 35 at +10:00
+    `2-${(REL_START + 7200) / 10}.0`,  // finish (type 2) at +12:00
   ].join(";") + ";";
   const cardA = await ctx.client.oCard.create({
     data: { CardNo: 500001, Punches: okPunches, ReadId: 0 },
@@ -90,16 +92,16 @@ beforeAll(async () => {
   const rB = await caller.runner.create({ name: "Björn MP", classId, cardNo: 500002 });
   await ctx.client.oRunner.update({
     where: { Id: rB.id },
-    data: { StartTime: START_TIME },
+    data: { StartTime: REL_START },
   });
   const mpPunches = [
-    `1-${START_TIME / 10}.0`,
-    `31-${(START_TIME + 1200) / 10}.0`,
-    `32-${(START_TIME + 2400) / 10}.0`,
+    `1-${REL_START / 10}.0`,
+    `31-${(REL_START + 1200) / 10}.0`,
+    `32-${(REL_START + 2400) / 10}.0`,
     // control 33 is MISSING
-    `34-${(START_TIME + 4800) / 10}.0`,
-    `35-${(START_TIME + 6000) / 10}.0`,
-    `2-${(START_TIME + 7200) / 10}.0`,
+    `34-${(REL_START + 4800) / 10}.0`,
+    `35-${(REL_START + 6000) / 10}.0`,
+    `2-${(REL_START + 7200) / 10}.0`,
   ].join(";") + ";";
   const cardB = await ctx.client.oCard.create({
     data: { CardNo: 500002, Punches: mpPunches, ReadId: 0 },
@@ -114,13 +116,13 @@ beforeAll(async () => {
   const rC = await caller.runner.create({ name: "Clara DNF", classId, cardNo: 500003 });
   await ctx.client.oRunner.update({
     where: { Id: rC.id },
-    data: { StartTime: START_TIME },
+    data: { StartTime: REL_START },
   });
   const dnfPunches = [
-    `1-${START_TIME / 10}.0`,
-    `31-${(START_TIME + 1200) / 10}.0`,
-    `32-${(START_TIME + 2400) / 10}.0`,
-    `33-${(START_TIME + 3600) / 10}.0`,
+    `1-${REL_START / 10}.0`,
+    `31-${(REL_START + 1200) / 10}.0`,
+    `32-${(REL_START + 2400) / 10}.0`,
+    `33-${(REL_START + 3600) / 10}.0`,
     // stopped after control 33, no finish
   ].join(";") + ";";
   const cardC = await ctx.client.oCard.create({
@@ -136,7 +138,7 @@ beforeAll(async () => {
   const rD = await caller.runner.create({ name: "David DNS", classId, cardNo: 500004 });
   await ctx.client.oRunner.update({
     where: { Id: rD.id },
-    data: { StartTime: START_TIME },
+    data: { StartTime: REL_START },
   });
   runnerDns = { id: rD.id, cardNo: 500004 };
 
@@ -360,14 +362,14 @@ describe("kiosk card store + evaluate flow", () => {
     });
     await ctx.client.oRunner.update({
       where: { Id: runner.id },
-      data: { StartTime: START_TIME },
+      data: { StartTime: REL_START }, // DB stores ZeroTime-relative
     });
 
     // Simulate kiosk: SI card is read, storeReadout is called
-    // (storeReadout takes seconds, not deciseconds)
+    // (storeReadout takes absolute seconds, API converts to relative for DB)
     await caller.cardReadout.storeReadout({
       cardNo: 500010,
-      startTime: START_TIME / 10, // convert deci→sec
+      startTime: START_TIME / 10, // convert deci→sec (absolute)
       finishTime: (START_TIME + 5400) / 10, // +9:00
       punches: CONTROLS.map((code, i) => ({
         controlCode: code,
@@ -375,7 +377,7 @@ describe("kiosk card store + evaluate flow", () => {
       })),
     });
 
-    // Now readout should work
+    // Now readout should work (API returns absolute times)
     const readout = await caller.cardReadout.readoutByRunner({ runnerId: runner.id });
     expect(readout).not.toBeNull();
     expect(readout!.hasCard).toBe(true);
@@ -554,17 +556,17 @@ describe("cardReadout.applyResult", () => {
   beforeAll(async () => {
     const caller = makeCaller();
 
-    // Create fresh runners for applyResult tests
+    // Create fresh runners for applyResult tests (DB stores ZeroTime-relative)
     const rOk = await caller.runner.create({ name: "ApplyOk Runner", classId, cardNo: 600001 });
-    await ctx.client.oRunner.update({ where: { Id: rOk.id }, data: { StartTime: START_TIME } });
+    await ctx.client.oRunner.update({ where: { Id: rOk.id }, data: { StartTime: REL_START } });
     freshOk = { id: rOk.id, cardNo: 600001 };
 
     const rMp = await caller.runner.create({ name: "ApplyMp Runner", classId, cardNo: 600002 });
-    await ctx.client.oRunner.update({ where: { Id: rMp.id }, data: { StartTime: START_TIME } });
+    await ctx.client.oRunner.update({ where: { Id: rMp.id }, data: { StartTime: REL_START } });
     freshMp = { id: rMp.id, cardNo: 600002 };
 
     const rDnf = await caller.runner.create({ name: "ApplyDnf Runner", classId, cardNo: 600003 });
-    await ctx.client.oRunner.update({ where: { Id: rDnf.id }, data: { StartTime: START_TIME } });
+    await ctx.client.oRunner.update({ where: { Id: rDnf.id }, data: { StartTime: REL_START } });
     freshDnf = { id: rDnf.id, cardNo: 600003 };
   });
 
@@ -662,7 +664,7 @@ describe("full readout station flow", () => {
     });
     await ctx.client.oRunner.update({
       where: { Id: runner.id },
-      data: { StartTime: START_TIME },
+      data: { StartTime: REL_START }, // DB stores ZeroTime-relative
     });
 
     // Step 1: Store card readout (simulates DeviceManager storeReadout call)
@@ -692,7 +694,7 @@ describe("full readout station flow", () => {
       startTime: readout.timing.startTime,
     });
 
-    // Verify runner status persisted
+    // Verify runner status persisted (API returns absolute times)
     const after = await caller.runner.getById({ id: runner.id });
     expect(after.status).toBe(RunnerStatus.OK);
     expect(after.finishTime).toBe(START_TIME + 6000);

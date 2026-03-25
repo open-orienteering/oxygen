@@ -26,6 +26,25 @@ const DB_NAME = "itest";
 const DB_URL = process.env.DATABASE_URL ?? `mysql://meos@localhost:3306/${DB_NAME}`;
 const MAIN_DB_URL = process.env.MEOS_MAIN_DB_URL ?? "mysql://meos@localhost:3306/MeOSMain";
 
+// ZeroTime-relative conversion: MeOS stores all times relative to ZeroTime.
+// createCompetitionDatabase sets ZeroTime=324000 (09:00:00).
+const ZERO_TIME_DS = 324000;
+const ZERO_TIME_SECS = 32400;
+function toRel(absoluteDs: number): number {
+  return absoluteDs > 1 ? absoluteDs - ZERO_TIME_DS : absoluteDs; // preserve sentinels 0 and 1
+}
+function toRelSec(absoluteSec: number): number {
+  return absoluteSec > 0 ? absoluteSec - ZERO_TIME_SECS : absoluteSec;
+}
+/** Convert a MeOS punch string from absolute seconds to ZeroTime-relative seconds */
+function toRelPunches(punchStr: string): string {
+  if (!punchStr) return punchStr;
+  return punchStr.replace(/(\d+)-(\d+)\.(\d)/g, (_match, type, secs, tenths) => {
+    const relSecs = parseInt(secs, 10) - ZERO_TIME_SECS;
+    return `${type}-${relSecs}.${tenths}`;
+  });
+}
+
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
 function parseUrl(url: string) {
@@ -270,8 +289,8 @@ async function seedRunners(prisma: PrismaClient) {
     await prisma.oRunner.create({
       data: {
         Id: r.Id, Name: r.Name, CardNo: r.CardNo, Club: r.Club,
-        Class: r.Class, StartNo: r.StartNo, StartTime: r.StartTime,
-        FinishTime: r.FinishTime, Status: r.Status, Card: r.Card,
+        Class: r.Class, StartNo: r.StartNo, StartTime: toRel(r.StartTime),
+        FinishTime: toRel(r.FinishTime), Status: r.Status, Card: r.Card,
         EntryDate: 20150415,
         Fee: r.CardNo === 0 ? 0 : 110,
       },
@@ -333,16 +352,16 @@ async function seedCards(prisma: PrismaClient) {
 
   for (const c of cards) {
     await prisma.oCard.create({
-      data: { Id: c.Id, CardNo: c.CardNo, Punches: c.Punches },
+      data: { Id: c.Id, CardNo: c.CardNo, Punches: toRelPunches(c.Punches) },
     });
   }
 
-  // Free punches (Albin Bergman's card pre-checks)
+  // Free punches (Albin Bergman's card pre-checks) — times are ZeroTime-relative
   await prisma.oPunch.createMany({
     data: [
-      { Id: 1, CardNo: 2220164, Time: 598400, Type: 200, Unit: 200, Origin: 1225432524 },
-      { Id: 2, CardNo: 2220164, Time: 617970, Type: 200, Unit: 200, Origin: 299824060  },
-      { Id: 3, CardNo: 2220164, Time: 618700, Type: 200, Unit: 200, Origin: 418152654  },
+      { Id: 1, CardNo: 2220164, Time: toRel(598400), Type: 200, Unit: 200, Origin: 1225432524 },
+      { Id: 2, CardNo: 2220164, Time: toRel(617970), Type: 200, Unit: 200, Origin: 299824060  },
+      { Id: 3, CardNo: 2220164, Time: toRel(618700), Type: 200, Unit: 200, Origin: 418152654  },
     ],
   });
 }
@@ -355,6 +374,7 @@ async function seedEvent(prisma: PrismaClient) {
       Name: "My example tävling",
       Date: "2026-04-15",
       NameId: "itest",
+      ZeroTime: ZERO_TIME_DS, // 09:00:00 — must match the toRel/toRelSec constants
     },
   });
 }

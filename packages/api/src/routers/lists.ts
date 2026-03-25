@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { router, publicProcedure } from "../trpc.js";
-import { getCompetitionClient } from "../db.js";
+import { getCompetitionClient, getZeroTime } from "../db.js";
+import { toAbsolute } from "../timeConvert.js";
 import {
   RunnerStatus,
   type StartListEntry,
@@ -39,9 +40,7 @@ export const listsRouter = router({
       });
       const classMap = new Map(classes.map((c) => [c.Id, c]));
 
-      // Get event for ZeroTime
-      const event = await client.oEvent.findFirst({ where: { Removed: false } });
-      const zeroTime = event?.ZeroTime ?? 0;
+      const zeroTime = await getZeroTime(client);
       const now = new Date();
       const meosNow = (now.getHours() * 3600 + now.getMinutes() * 60 + now.getSeconds()) * 10;
 
@@ -63,11 +62,11 @@ export const listsRouter = router({
         clubName: clubMap.get(r.Club) ?? "",
         className: classMap.get(r.Class)?.Name ?? "",
         classId: r.Class,
-        startTime: r.StartTime,
+        startTime: toAbsolute(r.StartTime, zeroTime),
         cardNo: r.CardNo,
         bib: r.Bib,
         hasPunches: (punchMap.get(r.CardNo) ?? 0) > 0,
-        hasStarted: r.StartTime > 0 && meosNow >= r.StartTime,
+        hasStarted: r.StartTime > 0 && (r.StartTime <= 1 || meosNow >= toAbsolute(r.StartTime, zeroTime)),
       }));
 
       // Sort by class sort index, then start time
@@ -109,6 +108,7 @@ export const listsRouter = router({
       });
       const classMap = new Map(classes.map((c) => [c.Id, c]));
 
+      const zeroTime = await getZeroTime(client);
       const now = new Date();
       const meosNow = (now.getHours() * 3600 + now.getMinutes() * 60 + now.getSeconds()) * 10;
 
@@ -183,14 +183,14 @@ export const listsRouter = router({
             clubName: clubMap.get(r.Club) ?? "",
             className: cls?.Name ?? "",
             classId: r.Class,
-            startTime: r.StartTime,
-            finishTime: r.FinishTime,
+            startTime: toAbsolute(r.StartTime, zeroTime),
+            finishTime: toAbsolute(r.FinishTime, zeroTime),
             runningTime: p.runningTime,
             timeBehind: p.timeBehind,
             status: r.Status as ResultEntry["status"],
             startNo: r.StartNo,
             hasPunches: hasResult || (punchMap.get(r.CardNo) ?? 0) > 0,
-            hasStarted: r.StartTime > 0 && meosNow >= r.StartTime,
+            hasStarted: r.StartTime > 0 && (r.StartTime <= 1 || meosNow >= toAbsolute(r.StartTime, zeroTime)),
             ...(noTiming ? { noTiming: true } : {}),
           });
         }
@@ -204,6 +204,7 @@ export const listsRouter = router({
    */
   classes: publicProcedure.query(async (): Promise<ClassDetail[]> => {
     const client = await getCompetitionClient();
+    const zeroTime = await getZeroTime(client);
 
     const classes = await client.oClass.findMany({
       where: { Removed: false },
@@ -241,7 +242,7 @@ export const listsRouter = router({
         courseLength: course?.Length ?? 0,
         controlCount,
         runnerCount: runnerCountByClass.get(c.Id) ?? 0,
-        firstStart: c.FirstStart,
+        firstStart: toAbsolute(c.FirstStart, zeroTime),
         startInterval: c.StartInterval,
         sortIndex: c.SortIndex,
       };

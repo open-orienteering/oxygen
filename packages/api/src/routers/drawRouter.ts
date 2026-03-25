@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { router, publicProcedure } from "../trpc.js";
-import { getCompetitionClient, incrementCounter } from "../db.js";
+import { getCompetitionClient, incrementCounter, getZeroTime } from "../db.js";
+import { toRelative, toAbsolute } from "../timeConvert.js";
 import { generateDrawPreview } from "../draw/index.js";
 import type { DrawPreviewResult } from "@oxygen/shared";
 
@@ -31,9 +32,7 @@ export const drawRouter = router({
    */
   defaults: publicProcedure.query(async () => {
     const client = await getCompetitionClient();
-
-    const event = await client.oEvent.findFirst({ where: { Removed: false } });
-    const zeroTime = event?.ZeroTime ?? 324000;
+    const zeroTime = await getZeroTime(client);
 
     const classes = await client.oClass.findMany({
       where: { Removed: false },
@@ -63,7 +62,7 @@ export const drawRouter = router({
         courseId: c.Course,
         courseName: courseMap.get(c.Course) ?? "",
         runnerCount: countByClass.get(c.Id) ?? 0,
-        firstStart: c.FirstStart,
+        firstStart: toAbsolute(c.FirstStart, zeroTime),
         startInterval: c.StartInterval,
         freeStart: c.FreeStart === 1,
       })),
@@ -90,6 +89,7 @@ export const drawRouter = router({
     .input(drawInputSchema)
     .mutation(async ({ input }): Promise<{ success: boolean; totalDrawn: number; warnings: string[] }> => {
       const client = await getCompetitionClient();
+      const zeroTime = await getZeroTime(client);
       const result = await generateDrawPreview(client, input.classes, input.settings);
 
       let totalDrawn = 0;
@@ -103,7 +103,7 @@ export const drawRouter = router({
           await client.oRunner.update({
             where: { Id: entry.runnerId },
             data: {
-              StartTime: entry.startTime,
+              StartTime: toRelative(entry.startTime, zeroTime),
               StartNo: entry.startNo,
             },
           });
@@ -116,7 +116,7 @@ export const drawRouter = router({
           await client.oClass.update({
             where: { Id: cls.classId },
             data: {
-              FirstStart: cls.computedFirstStart,
+              FirstStart: toRelative(cls.computedFirstStart, zeroTime),
               StartInterval: config.interval,
             },
           });

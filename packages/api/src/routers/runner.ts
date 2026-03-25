@@ -1,7 +1,8 @@
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import { router, publicProcedure } from "../trpc.js";
-import { getCompetitionClient, incrementCounter } from "../db.js";
+import { getCompetitionClient, incrementCounter, getZeroTime } from "../db.js";
+import { toRelative, toAbsolute } from "../timeConvert.js";
 import type { RunnerDetail, RunnerInfo } from "@oxygen/shared";
 import { parsePunches, parseCourseControls, performReadout } from "./cardReadout.js";
 import { computeClassPlacements } from "../results.js";
@@ -110,6 +111,8 @@ export const runnerRouter = router({
         throw new Error(`Runner with ID ${input.id} not found`);
       }
 
+      const zeroTime = await getZeroTime(client);
+
       // Lookup names
       const club = r.Club
         ? await client.oClub.findUnique({ where: { Id: r.Club } })
@@ -127,8 +130,8 @@ export const runnerRouter = router({
         classId: r.Class,
         className: cls?.Name ?? "",
         startNo: r.StartNo,
-        startTime: r.StartTime,
-        finishTime: r.FinishTime,
+        startTime: toAbsolute(r.StartTime, zeroTime),
+        finishTime: toAbsolute(r.FinishTime, zeroTime),
         status: r.Status as RunnerDetail["status"],
         birthYear: normalizeBirthYear(r.BirthYear),
         sex: r.Sex,
@@ -157,6 +160,7 @@ export const runnerRouter = router({
       });
       if (!r) return null;
 
+      const zeroTime = await getZeroTime(client);
       const club = r.Club ? await client.oClub.findUnique({ where: { Id: r.Club } }) : null;
       const cls = r.Class ? await client.oClass.findUnique({ where: { Id: r.Class } }) : null;
 
@@ -168,8 +172,8 @@ export const runnerRouter = router({
         clubName: club?.Name ?? "",
         classId: r.Class,
         className: cls?.Name ?? "",
-        startTime: r.StartTime,
-        finishTime: r.FinishTime,
+        startTime: toAbsolute(r.StartTime, zeroTime),
+        finishTime: toAbsolute(r.FinishTime, zeroTime),
         status: r.Status,
       };
     }),
@@ -241,9 +245,7 @@ export const runnerRouter = router({
         orderBy: [{ Class: "asc" }, { StartNo: "asc" }],
       });
 
-      // Fetch event for ZeroTime calculation
-      const event = await client.oEvent.findFirst({ where: { Removed: false } });
-      const zeroTime = event?.ZeroTime ?? 0;
+      const zeroTime = await getZeroTime(client);
       const now = new Date();
       const meosNow = (now.getHours() * 3600 + now.getMinutes() * 60 + now.getSeconds()) * 10;
 
@@ -259,7 +261,8 @@ export const runnerRouter = router({
       const filtered = statusFilter
         ? runners.filter((r) => {
           const hasPunches = punchCardNos.has(r.CardNo);
-          const hasStartedByTime = r.StartTime > 0 && meosNow >= (zeroTime + r.StartTime);
+          // StartTime=1 is a MeOS sentinel for "drawn but no specific time" (interval=0)
+          const hasStartedByTime = r.StartTime > 0 && (r.StartTime <= 1 || meosNow >= toAbsolute(r.StartTime, zeroTime));
           const hasFinishTime = r.FinishTime > 0;
           const hasResult = r.Status > 0;
 
@@ -294,7 +297,7 @@ export const runnerRouter = router({
         for (const p of parsed) {
           if (p.type >= 100) codes.push(p.type);
           if (p.type === 1 && !cardStartTimeMap.has(card.CardNo)) {
-            cardStartTimeMap.set(card.CardNo, p.time);
+            cardStartTimeMap.set(card.CardNo, toAbsolute(p.time, zeroTime));
           }
         }
         // Keep latest card data per CardNo (last wins)
@@ -361,8 +364,8 @@ export const runnerRouter = router({
             classId: r.Class,
             className: classMap.get(r.Class) ?? "",
             startNo: r.StartNo,
-            startTime: r.StartTime,
-            finishTime: r.FinishTime,
+            startTime: toAbsolute(r.StartTime, zeroTime),
+            finishTime: toAbsolute(r.FinishTime, zeroTime),
             status: r.Status as RunnerInfo["status"],
             fee: r.Fee || undefined,
             paid: r.Paid || undefined,
@@ -392,6 +395,8 @@ export const runnerRouter = router({
 
       await assertCardNotTaken(client, input.cardNo);
 
+      const zeroTime = (input.startTime || input.finishTime) ? await getZeroTime(client) : 0;
+
       const runner = await client.oRunner.create({
         data: {
           Name: input.name,
@@ -399,7 +404,7 @@ export const runnerRouter = router({
           Club: input.clubId,
           Class: input.classId,
           StartNo: input.startNo,
-          StartTime: input.startTime,
+          StartTime: input.startTime ? toRelative(input.startTime, zeroTime) : 0,
           BirthYear: input.birthYear,
           Sex: input.sex,
           Nationality: input.nationality,
@@ -407,6 +412,7 @@ export const runnerRouter = router({
           Fee: input.fee,
           Paid: input.paid,
           PayMode: input.payMode,
+          FinishTime: input.finishTime ? toRelative(input.finishTime, zeroTime) : 0,
           CardFee: input.cardFee,
           // MeOS requires these MediumText fields to be non-null
           InputResult: "",
@@ -476,6 +482,9 @@ export const runnerRouter = router({
         await assertCardNotTaken(client, input.data.cardNo, input.id);
       }
 
+      const needsZT = input.data.startTime !== undefined || input.data.finishTime !== undefined || input.data.status === 1;
+      const zeroTime = needsZT ? await getZeroTime(client) : 0;
+
       const updateData: Record<string, unknown> = {};
       if (input.data.name !== undefined) updateData.Name = input.data.name;
       if (input.data.cardNo !== undefined)
@@ -486,7 +495,7 @@ export const runnerRouter = router({
       if (input.data.startNo !== undefined)
         updateData.StartNo = input.data.startNo;
       if (input.data.startTime !== undefined)
-        updateData.StartTime = input.data.startTime;
+        updateData.StartTime = toRelative(input.data.startTime, zeroTime);
       if (input.data.birthYear !== undefined)
         updateData.BirthYear = input.data.birthYear;
       if (input.data.sex !== undefined) updateData.Sex = input.data.sex;
@@ -495,7 +504,7 @@ export const runnerRouter = router({
       if (input.data.phone !== undefined) updateData.Phone = input.data.phone;
       if (input.data.status !== undefined) updateData.Status = input.data.status;
       if (input.data.finishTime !== undefined)
-        updateData.FinishTime = input.data.finishTime;
+        updateData.FinishTime = toRelative(input.data.finishTime, zeroTime);
       if (input.data.fee !== undefined) updateData.Fee = input.data.fee;
       if (input.data.paid !== undefined) updateData.Paid = input.data.paid;
       if (input.data.payMode !== undefined) updateData.PayMode = input.data.payMode;
@@ -512,8 +521,8 @@ export const runnerRouter = router({
           const result = await performReadout(client, input.id);
           if (result && result.timing.finishTime !== 0) {
             const timeUpdate: Record<string, number> = {};
-            if (runner.StartTime === 0) timeUpdate.StartTime = result.timing.startTime;
-            if (runner.FinishTime === 0) timeUpdate.FinishTime = result.timing.finishTime;
+            if (runner.StartTime === 0) timeUpdate.StartTime = toRelative(result.timing.startTime, zeroTime);
+            if (runner.FinishTime === 0) timeUpdate.FinishTime = toRelative(result.timing.finishTime, zeroTime);
             if (Object.keys(timeUpdate).length > 0) {
               await client.oRunner.update({
                 where: { Id: input.id },
@@ -541,6 +550,9 @@ export const runnerRouter = router({
     .mutation(async ({ input }) => {
       const client = await getCompetitionClient();
 
+      const needsZT = input.data.startTime !== undefined || input.data.finishTime !== undefined;
+      const zeroTime = needsZT ? await getZeroTime(client) : 0;
+
       const updateData: Record<string, unknown> = {};
       if (input.data.name !== undefined) updateData.Name = input.data.name;
       if (input.data.cardNo !== undefined)
@@ -551,7 +563,7 @@ export const runnerRouter = router({
       if (input.data.startNo !== undefined)
         updateData.StartNo = input.data.startNo;
       if (input.data.startTime !== undefined)
-        updateData.StartTime = input.data.startTime;
+        updateData.StartTime = toRelative(input.data.startTime, zeroTime);
       if (input.data.birthYear !== undefined)
         updateData.BirthYear = input.data.birthYear;
       if (input.data.sex !== undefined) updateData.Sex = input.data.sex;
@@ -560,7 +572,7 @@ export const runnerRouter = router({
       if (input.data.phone !== undefined) updateData.Phone = input.data.phone;
       if (input.data.status !== undefined) updateData.Status = input.data.status;
       if (input.data.finishTime !== undefined)
-        updateData.FinishTime = input.data.finishTime;
+        updateData.FinishTime = toRelative(input.data.finishTime, zeroTime);
       if (input.data.fee !== undefined) updateData.Fee = input.data.fee;
       if (input.data.paid !== undefined) updateData.Paid = input.data.paid;
       if (input.data.payMode !== undefined) updateData.PayMode = input.data.payMode;
@@ -616,12 +628,13 @@ export const runnerRouter = router({
   startScreen: publicProcedure.query(async () => {
     const client = await getCompetitionClient();
 
-    // Get ZeroTime from the event
+    const zeroTime = await getZeroTime(client);
+
+    // Get event name
     const event = await client.oEvent.findFirst({
       where: { Removed: false },
-      select: { ZeroTime: true, Name: true },
+      select: { Name: true },
     });
-    const zeroTime = event?.ZeroTime ?? 324000; // default 09:00:00
 
     // Get clubs and classes for name lookups
     const clubs = await client.oClub.findMany({
@@ -664,7 +677,7 @@ export const runnerRouter = router({
           clubExtId: club?.extId ?? 0,
           classId: r.Class,
           className: classMap.get(r.Class) ?? "",
-          startTime: r.StartTime,
+          startTime: toAbsolute(r.StartTime, zeroTime),
           startNo: r.StartNo,
           status: r.Status,
         };

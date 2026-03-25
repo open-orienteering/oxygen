@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { router, publicProcedure } from "../trpc.js";
-import { getCompetitionClient } from "../db.js";
+import { getCompetitionClient, getZeroTime } from "../db.js";
+import { toRelative, toAbsolute } from "../timeConvert.js";
 import { RunnerStatus } from "@oxygen/shared";
 import { performReadout } from "./cardReadout.js";
 import { computePosition } from "../results.js";
@@ -14,6 +15,7 @@ export const raceRouter = router({
     .input(z.object({ cardNo: z.number().int().positive() }))
     .query(async ({ input }) => {
       const client = await getCompetitionClient();
+      const zeroTime = await getZeroTime(client);
 
       const runner = await client.oRunner.findFirst({
         where: { CardNo: input.cardNo, Removed: false },
@@ -59,8 +61,8 @@ export const raceRouter = router({
           classId: runner.Class,
           classFreeStart: cls?.FreeStart === 1,
           startNo: runner.StartNo,
-          startTime: runner.StartTime,
-          finishTime: runner.FinishTime,
+          startTime: toAbsolute(runner.StartTime, zeroTime),
+          finishTime: toAbsolute(runner.FinishTime, zeroTime),
           status: runner.Status,
         },
         course: course
@@ -86,16 +88,17 @@ export const raceRouter = router({
     )
     .mutation(async ({ input }) => {
       const client = await getCompetitionClient();
+      const zeroTime = await getZeroTime(client);
 
       const runner = await client.oRunner.update({
         where: { Id: input.runnerId },
-        data: { StartTime: input.startTime },
+        data: { StartTime: toRelative(input.startTime, zeroTime) },
       });
 
       return {
         id: runner.Id,
         name: runner.Name,
-        startTime: runner.StartTime,
+        startTime: toAbsolute(runner.StartTime, zeroTime),
       };
     }),
 
@@ -114,6 +117,7 @@ export const raceRouter = router({
     )
     .mutation(async ({ input }) => {
       const client = await getCompetitionClient();
+      const zeroTime = await getZeroTime(client);
 
       const runner = await client.oRunner.findUnique({
         where: { Id: input.runnerId },
@@ -130,7 +134,7 @@ export const raceRouter = router({
       const updated = await client.oRunner.update({
         where: { Id: input.runnerId },
         data: {
-          FinishTime: input.finishTime,
+          FinishTime: toRelative(input.finishTime, zeroTime),
           Status: newStatus,
         },
       });
@@ -138,7 +142,7 @@ export const raceRouter = router({
       return {
         id: updated.Id,
         name: updated.Name,
-        finishTime: updated.FinishTime,
+        finishTime: toAbsolute(updated.FinishTime, zeroTime),
         status: updated.Status,
         runningTime:
           updated.FinishTime > 0 && updated.StartTime > 0
@@ -161,11 +165,12 @@ export const raceRouter = router({
     )
     .mutation(async ({ input }) => {
       const client = await getCompetitionClient();
+      const zeroTime = await getZeroTime(client);
 
       const punch = await client.oPunch.create({
         data: {
           CardNo: input.cardNo,
-          Time: input.time,
+          Time: toRelative(input.time, zeroTime),
           Type: input.controlType,
         },
       });
@@ -320,6 +325,7 @@ export const raceRouter = router({
     .input(z.object({ limit: z.number().int().min(1).max(50).default(20) }).optional())
     .query(async ({ input }) => {
       const client = await getCompetitionClient();
+      const zeroTime = await getZeroTime(client);
       const limit = input?.limit ?? 20;
 
       // Get runners ordered by most recently modified
@@ -349,8 +355,8 @@ export const raceRouter = router({
         name: r.Name,
         clubName: clubMap.get(r.Club) ?? "",
         className: classMap.get(r.Class) ?? "",
-        startTime: r.StartTime,
-        finishTime: r.FinishTime,
+        startTime: toAbsolute(r.StartTime, zeroTime),
+        finishTime: toAbsolute(r.FinishTime, zeroTime),
         status: r.Status,
         runningTime:
           r.FinishTime > 0 && r.StartTime > 0

@@ -21,8 +21,10 @@ let courseId: number;
 
 const CONTROLS = [41, 42, 43, 44, 45];
 const FOREIGN_CONTROLS = [91, 92, 93]; // not in this competition
-const START_TIME_SECS = 36000; // 10:00:00 in seconds
-const START_TIME_DS = 360000; // 10:00:00 in deciseconds
+const START_TIME_SECS = 36000; // 10:00:00 in seconds (absolute)
+const START_TIME_DS = 360000; // 10:00:00 in deciseconds (absolute)
+const ZERO_TIME = 324000; // 09:00:00 in deciseconds (from createCompetitionDatabase)
+const ZERO_TIME_SECS = 32400; // 09:00:00 in seconds
 
 beforeAll(async () => {
   ctx = await createTestDb("cardlink");
@@ -197,7 +199,7 @@ describe("registration→readout flow", () => {
     const { id: runnerId } = await caller.runner.create({ name: "Test Runner", classId, cardNo });
     await ctx.client.oRunner.update({
       where: { Id: runnerId },
-      data: { StartTime: START_TIME_DS },
+      data: { StartTime: START_TIME_DS - ZERO_TIME }, // DB stores ZeroTime-relative
     });
 
     // Step 1: Registration scan with stale same-course punches (punchesFresh=false)
@@ -237,8 +239,8 @@ describe("registration→readout flow", () => {
       where: { CardNo: cardNo, Removed: false },
     });
     expect(card).not.toBeNull();
-    // Real finish time is 36720s → deciseconds 367200 → "2-36720.0"
-    expect(card!.Punches).toContain("2-36720.0");
+    // Real finish time 36720s absolute → relative = 36720 - 32400 = 4320s → "2-4320.0"
+    expect(card!.Punches).toContain("2-4320.0");
 
     // Verify performReadout returns correct times and matchScore
     const readout = await caller.cardReadout.readout({ cardNo });
@@ -260,8 +262,9 @@ describe("runner.create links oCard", () => {
     const cardNo = 600020;
 
     // First create an oCard (from a previous readout or MeOS)
+    // DB stores ZeroTime-relative seconds: 36120 - 32400 = 3720, 36720 - 32400 = 4320
     const card = await ctx.client.oCard.create({
-      data: { CardNo: cardNo, Punches: "41-36120.0;2-36720.0;", ReadId: 0 },
+      data: { CardNo: cardNo, Punches: "41-3720.0;2-4320.0;", ReadId: 0 },
     });
 
     // Now create the runner with the same cardNo
@@ -380,16 +383,17 @@ describe("status→OK auto-populates times", () => {
       classId,
       cardNo,
     });
+    const REL_START = START_TIME_DS - ZERO_TIME; // DB stores ZeroTime-relative
     await ctx.client.oRunner.update({
       where: { Id: runnerId },
-      data: { StartTime: START_TIME_DS },
+      data: { StartTime: REL_START },
     });
 
-    // Create oCard with punch data
+    // Create oCard with punch data (ZeroTime-relative seconds in punch string)
     const punchStr = [
-      `1-${START_TIME_DS / 10}.0`,             // start
-      ...CONTROLS.map((c, i) => `${c}-${(START_TIME_DS + (i + 1) * 1200) / 10}.0`),
-      `2-${(START_TIME_DS + 7200) / 10}.0`,     // finish
+      `1-${REL_START / 10}.0`,             // start
+      ...CONTROLS.map((c, i) => `${c}-${(REL_START + (i + 1) * 1200) / 10}.0`),
+      `2-${(REL_START + 7200) / 10}.0`,     // finish
     ].join(";") + ";";
 
     const card = await ctx.client.oCard.create({
@@ -407,18 +411,18 @@ describe("status→OK auto-populates times", () => {
     // Change status to OK
     await caller.runner.update({ id: runnerId, data: { status: 1 } });
 
-    // Verify FinishTime was auto-populated
+    // Verify FinishTime was auto-populated (DB stores ZeroTime-relative)
     const after = await ctx.client.oRunner.findUnique({ where: { Id: runnerId } });
     expect(after!.Status).toBe(1);
     expect(after!.FinishTime).toBeGreaterThan(0);
-    expect(after!.FinishTime).toBe(START_TIME_DS + 7200); // 10:12:00 in ds
+    expect(after!.FinishTime).toBe(REL_START + 7200); // relative: 36000 + 7200 = 43200
   });
 });
 
 // ── Test 7: MeOS negative time normalization ──
 
 describe("MeOS negative time normalization", () => {
-  it("normalizes negative MeOS punch times to absolute times via ZeroTime", async () => {
+  it("converts ZeroTime-relative punch times (including negatives) to absolute", async () => {
     const cardNo = 600060;
 
     const { id: runnerId } = await caller.runner.create({
@@ -427,14 +431,13 @@ describe("MeOS negative time normalization", () => {
       cardNo,
     });
 
-    // MeOS stores punch times as (rawSITime - ZeroTime). Edge cases in MeOS's
-    // 12h→24h conversion can produce negative values. ZeroTime is 324000 (09:00).
-    // Write an oCard with MeOS-style negative times (double-minus encoding):
-    //   -6000 ds → absolute 324000 + (-6000) = 318000 (08:50:00)
-    //   -4800 ds → absolute 319200 (08:52:00)
-    //   etc.
-    // Positive MeOS-relative times are also present (0 and 1200 ds).
-    // When ANY time is negative, ALL card punches should be normalized.
+    // All oCard.Punches times are ZeroTime-relative (MeOS convention).
+    // Negative relative values occur for events starting before ZeroTime (09:00).
+    // performReadout adds ZeroTime to convert all times to absolute.
+    //   -6000 ds relative → 324000 + (-6000) = 318000 absolute (08:50:00)
+    //   -4800 ds → 319200 (08:52:00)
+    //   0 ds → 324000 (09:00:00)
+    //   1200 ds → 325200 (09:02:00)
     const punchStr = [
       "1--600.0",     // start: -6000 ds → 318000 (08:50:00)
       "41--480.0",    // ctrl 41: -4800 ds → 319200 (08:52:00)
@@ -456,12 +459,12 @@ describe("MeOS negative time normalization", () => {
     const readout = await caller.cardReadout.readout({ cardNo });
     expect(readout.found).toBe(true);
     if (readout.found) {
-      // All times should be positive after normalization
+      // All times should be positive after conversion to absolute
       expect(readout.timing.startTime).toBeGreaterThan(0);
       expect(readout.timing.finishTime).toBeGreaterThan(0);
       expect(readout.timing.runningTime).toBeGreaterThan(0);
 
-      // Verify exact normalized values (ZeroTime 324000 added to all)
+      // Verify exact absolute values (ZeroTime 324000 added to all relative values)
       expect(readout.timing.cardStartTime).toBe(318000); // -6000 + 324000
       expect(readout.timing.finishTime).toBe(325200);     // 1200 + 324000
       expect(readout.timing.runningTime).toBe(7200);       // 325200 - 318000 = 12 minutes
