@@ -14,7 +14,8 @@
  */
 
 import mysql from "mysql2/promise";
-import { getSetting, setSetting, getCompetitionClient } from "./db.js";
+import { getSetting, setSetting, getCompetitionClient, getZeroTime } from "./db.js";
+import { toAbsolute } from "./timeConvert.js";
 
 // ─── Constants ────────────────────────────────────────────────
 
@@ -194,7 +195,7 @@ export async function syncAll(tavid: number): Promise<SyncStats> {
         // ── 1. Fetch Oxygen data ──────────────────────────────────
 
         const event = await client.oEvent.findFirst({ where: { Removed: false } });
-        const zeroTime = event?.ZeroTime ?? 0;
+        const zeroTime = event?.ZeroTime ?? 324000;
 
         const classes = await client.oClass.findMany({
             where: { Removed: false },
@@ -333,9 +334,10 @@ export async function syncAll(tavid: number): Promise<SyncStats> {
             const lrStatus = mapStatus(meosStatus, r.FinishTime);
 
             // Start time as time-of-day in centiseconds (control 100)
-            // MeOS stores times in deciseconds (1/10s), LiveResults uses centiseconds (1/100s)
+            // DB stores times as ZeroTime-relative deciseconds; LiveResults needs absolute centiseconds
             if (r.StartTime > 0) {
-                const startCentiseconds = r.StartTime * 10;
+                const startAbsolute = toAbsolute(r.StartTime, zeroTime);
+                const startCentiseconds = startAbsolute * 10;
                 await conn.execute(
                     `INSERT INTO results (tavid, dbid, control, time, status, changed)
            VALUES (?, ?, 100, ?, 0, Now())

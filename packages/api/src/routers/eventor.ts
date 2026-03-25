@@ -12,6 +12,7 @@ import {
   ensureClubDbTable,
   getCurrentDbName,
   ensureCompetitionConfigTable,
+  getZeroTime,
 } from "../db.js";
 import {
   validateApiKey,
@@ -37,6 +38,7 @@ import {
 import { type EventorEnvironment } from "@oxygen/shared";
 import { computeClassPlacements } from "../results.js";
 import { parsePunches, parseCourseControls, matchPunchesToCourse, type ParsedPunch } from "./cardReadout.js";
+import { toAbsolute } from "../timeConvert.js";
 
 // In-memory store for the validated API key and organisation, keyed by environment.
 const storedKeys = new Map<
@@ -869,6 +871,7 @@ export const eventorRouter = router({
       throw new Error("Competition not linked to Eventor.");
     }
 
+    const zeroTime = await getZeroTime(client);
     const classMap = new Map(classes.map((c) => [c.Id, c]));
     const clubMap = new Map(clubs.map((c) => [c.Id, c]));
     const courseMap = new Map(courses.map((c) => [c.Id, c]));
@@ -974,8 +977,8 @@ export const eventorRouter = router({
         clubExtId: club?.ExtId ? club.ExtId.toString() : undefined,
         clubName: club?.Name || undefined,
         cardNo: r.CardNo || undefined,
-        startTime: r.StartTime || undefined,
-        finishTime: r.FinishTime || undefined,
+        startTime: toAbsolute(r.StartTime, zeroTime) || undefined,
+        finishTime: toAbsolute(r.FinishTime, zeroTime) || undefined,
         status: r.Status,
         place: p?.place ?? 0,
         noTiming: cls?.NoTiming === 1,
@@ -1027,6 +1030,7 @@ export const eventorRouter = router({
       throw new Error("Competition not linked to Eventor.");
     }
 
+    const zeroTime = await getZeroTime(client);
     const classMap = new Map(classes.map((c) => [c.Id, c]));
     const clubMap = new Map(clubs.map((c) => [c.Id, c]));
 
@@ -1041,7 +1045,7 @@ export const eventorRouter = router({
         clubExtId: club?.ExtId ? club.ExtId.toString() : undefined,
         clubName: club?.Name || undefined,
         cardNo: r.CardNo || undefined,
-        startTime: r.StartTime || undefined,
+        startTime: toAbsolute(r.StartTime, zeroTime) || undefined,
         status: r.Status,
       };
     });

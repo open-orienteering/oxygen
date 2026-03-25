@@ -6,7 +6,9 @@ import {
   incrementCounter,
   ensureRunnerDbTable,
   ensureClubDbTable,
+  getZeroTime,
 } from "../db.js";
+import { toAbsolute } from "../timeConvert.js";
 import { RunnerStatus } from "@oxygen/shared";
 import { generateDrawPreview } from "../draw/index.js";
 import type { PrismaClient } from "@prisma/client";
@@ -1100,6 +1102,7 @@ export const testLabRouter = router({
 
     const result = await generateDrawPreview(client, drawClasses, settings);
 
+    // Draw engine produces absolute times; convert to ZeroTime-relative for DB storage
     let totalDrawn = 0;
     const configMap = new Map(drawClasses.map((c) => [c.classId, c]));
 
@@ -1110,7 +1113,7 @@ export const testLabRouter = router({
         await client.oRunner.update({
           where: { Id: entry.runnerId },
           data: {
-            StartTime: entry.startTime,
+            StartTime: entry.startTime - zeroTime,
             StartNo: entry.startNo,
           },
         });
@@ -1122,7 +1125,7 @@ export const testLabRouter = router({
         await client.oClass.update({
           where: { Id: cls.classId },
           data: {
-            FirstStart: cls.computedFirstStart,
+            FirstStart: cls.computedFirstStart - zeroTime,
             StartInterval: config.interval,
           },
         });
@@ -1170,8 +1173,9 @@ export const testLabRouter = router({
       const tier = classDef?.courseTier ?? 4;
       const paceInfo = TIER_PACE[tier] ?? TIER_PACE[4];
 
-      // Runner's start time (deciseconds) → convert to seconds
-      const startTimeDs = runner.StartTime > 0 ? runner.StartTime : 324000; // default 09:00
+      // Runner's start time is ZeroTime-relative in DB → convert to absolute deciseconds
+      const zeroTime = await getZeroTime(client);
+      const startTimeDs = runner.StartTime > 0 ? toAbsolute(runner.StartTime, zeroTime) : 324000; // default 09:00
       const startTimeSec = Math.floor(startTimeDs / 10);
       const checkTimeSec = startTimeSec - 60; // 1 min before start
       const clearTimeSec = checkTimeSec - 30; // 30s before check

@@ -9,7 +9,9 @@ import {
   getSetting,
   ensureCompetitionConfigTable,
   incrementCounter,
+  getZeroTime,
 } from "../db.js";
+import { toAbsolute } from "../timeConvert.js";
 import { clearSheetsCache, testGoogleSheetPush } from "../sheetsBackup.js";
 import type {
   CompetitionInfo,
@@ -256,7 +258,7 @@ export const competitionRouter = router({
 
       const now = new Date();
       const meosNow = (now.getHours() * 3600 + now.getMinutes() * 60 + now.getSeconds()) * 10;
-      const zeroTime = event.ZeroTime;
+      const zeroTime = await getZeroTime(client);
 
       // Grouped punch counts by CardNo (to detect 'In Forest' runners with punches)
       const punchCounts = await client.oPunch.groupBy({
@@ -276,7 +278,8 @@ export const competitionRouter = router({
         );
 
         const hasPunches = (punchMap.get(r.CardNo) ?? 0) > 0;
-        const hasStartedByTime = r.StartTime > 0 && meosNow >= r.StartTime;
+        // StartTime=1 is a MeOS sentinel for "drawn but no specific time" (interval=0)
+        const hasStartedByTime = r.StartTime > 0 && (r.StartTime <= 1 || meosNow >= toAbsolute(r.StartTime, zeroTime));
         const hasFinishTime = r.FinishTime > 0;
         const hasResult = r.Status > 0;
 
@@ -411,6 +414,7 @@ export const competitionRouter = router({
     )
     .query(async ({ input }): Promise<RunnerInfo[]> => {
       const client = await getCompetitionClient();
+      const zeroTime = await getZeroTime(client);
 
       // Build where clause
       const where: Record<string, unknown> = { Removed: false };
@@ -450,8 +454,8 @@ export const competitionRouter = router({
           classId: r.Class,
           className: classMap.get(r.Class) ?? "",
           startNo: r.StartNo,
-          startTime: r.StartTime,
-          finishTime: r.FinishTime,
+          startTime: toAbsolute(r.StartTime, zeroTime),
+          finishTime: toAbsolute(r.FinishTime, zeroTime),
           status: r.Status as RunnerInfo["status"],
         }),
       );

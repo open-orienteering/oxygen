@@ -237,13 +237,17 @@ describe("draw.execute", () => {
     });
 
     // All runners should now have a non-zero StartTime and StartNo
+    // DB stores ZeroTime-relative: firstStart 324000 - ZeroTime 324000 = 0 for first runner
+    // Subsequent runners have interval offsets > 0
     const updatedRunners = await ctx.client.oRunner.findMany({
       where: { Id: { in: runnersA.map((r) => r.id) } },
     });
     for (const r of updatedRunners) {
-      expect(r.StartTime).toBeGreaterThan(0);
+      expect(r.StartTime).toBeGreaterThanOrEqual(0);
       expect(r.StartNo).toBeGreaterThan(0);
     }
+    // At least one runner should have a non-zero relative start (interval offset)
+    expect(updatedRunners.some((r) => r.StartTime > 0)).toBe(true);
   });
 
   it("persists FirstStart and StartInterval to oClass", async () => {
@@ -265,7 +269,8 @@ describe("draw.execute", () => {
     const updatedClass = await ctx.client.oClass.findUnique({
       where: { Id: classA.Id },
     });
-    expect(updatedClass?.FirstStart).toBe(FIRST_START);
+    // DB stores ZeroTime-relative: 324000 - 324000 = 0
+    expect(updatedClass?.FirstStart).toBe(0);
     expect(updatedClass?.StartInterval).toBe(INTERVAL);
   });
 

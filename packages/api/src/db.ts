@@ -1034,6 +1034,19 @@ type CounterTable = "oControl" | "oCourse" | "oClass" | "oCard" | "oClub" | "oPu
  * comparing Counter values in the oCounter table.
  *
  * Uses LOCK TABLES ... WRITE around the SELECT MAX + UPDATE to match
+/**
+ * Get the competition's ZeroTime (reference point for all MeOS time values).
+ * MeOS stores all times relative to ZeroTime. Default is 324000 (09:00:00).
+ */
+export async function getZeroTime(client: PrismaClient): Promise<number> {
+  const event = await client.oEvent.findFirst({
+    where: { Removed: false },
+    select: { ZeroTime: true },
+  });
+  return event?.ZeroTime ?? 324000;
+}
+
+/**
  * MeOS's atomic counter increment pattern (see MeosSQL.cpp:updateCounter).
  * A raw mysql2 connection is used instead of Prisma to guarantee that
  * LOCK/UNLOCK/queries all execute on the same connection.
