@@ -167,6 +167,9 @@ model oRunner {
 
   @@index([Counter])
   @@index([Modified])
+  @@index([CardNo])
+  @@index([Club])
+  @@index([Class])
 }
 
 /// Competition class / category
@@ -340,6 +343,7 @@ model oCard {
 
   @@index([Counter])
   @@index([Modified])
+  @@index([CardNo])
 }
 
 /// Punch record (free punches)

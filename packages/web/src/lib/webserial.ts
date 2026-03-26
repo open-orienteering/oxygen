@@ -47,6 +47,12 @@ import {
   type BackupRecord,
 } from "./si-protocol";
 
+// ─── Debug logging ─────────────────────────────────────────
+// Enable with: localStorage.setItem("oxygen-si-debug", "1")
+const SI_DEBUG = (() => { try { return localStorage.getItem("oxygen-si-debug") === "1"; } catch { return false; } })();
+function siLog(...args: unknown[]) { if (SI_DEBUG) console.log("[SI]", ...args); }
+function siWarn(...args: unknown[]) { console.warn("[SI]", ...args); }
+
 // ─── Events emitted by SIReaderConnection ──────────────────
 
 export interface SICardDetectedEvent extends CustomEvent {
@@ -214,7 +220,7 @@ export class SIReaderConnection extends EventTarget {
     // PROTO: ensure extended(bit0)=1, handshake(bit2)=1
     const wantProto = (proto | 0x05) & ~0x02; // set ext+handshake, clear autosend
     if (wantProto !== proto) {
-      console.log(`[SI] Fixing PROTO: 0x${proto.toString(16)} → 0x${wantProto.toString(16)}`);
+      siLog(`Fixing PROTO: 0x${proto.toString(16)} → 0x${wantProto.toString(16)}`);
       await this.sendAndWait(
         buildSetSysVal(SYSVAL.PROTO, wantProto),
         CMD.SET_SYSTEM_VALUE,
@@ -224,7 +230,7 @@ export class SIReaderConnection extends EventTarget {
     // FEEDBACK: ensure optical(bit0)=1, acoustic(bit1)=1, preserve upper bits
     const wantFeedback = feedback | 0x03;
     if (wantFeedback !== feedback) {
-      console.log(`[SI] Fixing FEEDBACK: 0x${feedback.toString(16)} → 0x${wantFeedback.toString(16)}`);
+      siLog(`Fixing FEEDBACK: 0x${feedback.toString(16)} → 0x${wantFeedback.toString(16)}`);
       await this.sendAndWait(
         buildSetSysVal(SYSVAL.FEEDBACK, wantFeedback),
         CMD.SET_SYSTEM_VALUE,
@@ -336,13 +342,13 @@ export class SIReaderConnection extends EventTarget {
 
     // Card detection
     if (isDetectionCommand(frame.cmd)) {
-      console.log(
-        `[SI] Detection cmd=0x${frame.cmd.toString(16)} len=${frame.data.length} data=[${Array.from(frame.data).map((b) => "0x" + b.toString(16).padStart(2, "0")).join(", ")}]`,
+      siLog(
+        `Detection cmd=0x${frame.cmd.toString(16)} len=${frame.data.length} data=[${Array.from(frame.data).map((b) => "0x" + b.toString(16).padStart(2, "0")).join(", ")}]`,
       );
       const detection = parseCardDetection(frame.cmd, frame.data);
       if (detection) {
-        console.log(
-          `[SI] Detected card #${detection.cardNumber} type=${detection.cardType}`,
+        siLog(
+          `Detected card #${detection.cardNumber} type=${detection.cardType}`,
         );
         this.dispatchEvent(
           new CustomEvent("si:card-detected", { detail: detection }),
@@ -442,8 +448,8 @@ export class SIReaderConnection extends EventTarget {
   private async handleReadoutBlock(frame: SIParsedFrame): Promise<void> {
     if (!this.pendingCardType) return;
 
-    console.log(
-      `[SI] Readout block cmd=0x${frame.cmd.toString(16)} type=${this.pendingCardType} len=${frame.data.length} first32=[${Array.from(frame.data.slice(0, 32)).map((b) => "0x" + b.toString(16).padStart(2, "0")).join(", ")}]`,
+    siLog(
+      `Readout block cmd=0x${frame.cmd.toString(16)} type=${this.pendingCardType} len=${frame.data.length} first32=[${Array.from(frame.data.slice(0, 32)).map((b) => "0x" + b.toString(16).padStart(2, "0")).join(", ")}]`,
     );
 
     // The readout response data format (BSF8 mode):
@@ -539,9 +545,7 @@ export class SIReaderConnection extends EventTarget {
       }
 
       if (readout.batteryVoltage) {
-        console.log(
-          `[SI] Battery voltage: ${readout.batteryVoltage.toFixed(2)}V`,
-        );
+        siLog(`Battery voltage: ${readout.batteryVoltage.toFixed(2)}V`);
       }
 
       // Send ACK to station — triggers built-in feedback (beep + LED blink)
@@ -611,7 +615,7 @@ export class SIReaderConnection extends EventTarget {
           // Brief pause between retries — each attempt activates the coupling
           // coil which helps wake sleeping field controls.
           const delayMs = Math.min(attempt * 500, 2000);
-          console.log(`[SI] Retry ${attempt}/${retries}`);
+          siLog(`Retry ${attempt}/${retries}`);
           await new Promise((r) => setTimeout(r, delayMs));
         }
         return await this.sendAndWait(data, expectedCmd, timeoutMs);
@@ -646,7 +650,7 @@ export class SIReaderConnection extends EventTarget {
       try {
         if (attempt > 0) {
           const delayMs = Math.min(attempt * 400, 1500);
-          console.log(`[SI] Wake attempt ${attempt + 1}/${maxAttempts}`);
+          siLog(`Wake attempt ${attempt + 1}/${maxAttempts}`);
           await new Promise((r) => setTimeout(r, delayMs));
         }
         await this.sendAndWait(buildSetRemoteMode(), CMD.SET_MS, 1500);
@@ -671,8 +675,7 @@ export class SIReaderConnection extends EventTarget {
   async readConnectedStation(): Promise<StationInfo & { rawData: Uint8Array }> {
     const t0 = performance.now();
     const response = await this.wakeAndReadSysVal();
-    console.log(`[SI] ${(performance.now() - t0).toFixed(0)}ms GET_SYS_VAL(read)`);
-    console.log(`[SI] ${(performance.now() - t0).toFixed(0)}ms GET_SYS_VAL(read)`);
+    siLog(`${(performance.now() - t0).toFixed(0)}ms GET_SYS_VAL(read)`);
     const info = parseStationInfo(response.data);
     if (!info) throw new Error("Failed to parse station info");
 
@@ -744,7 +747,7 @@ export class SIReaderConnection extends EventTarget {
     const t0 = performance.now();
     const lap = (label: string) => {
       const ms = (performance.now() - t0).toFixed(0);
-      console.log(`[SI] ${ms}ms ${label}`);
+      siLog(`${ms}ms ${label}`);
     };
 
     // 0. Ensure competition config bank (PC0) — must be first so subsequent writes target it
@@ -843,18 +846,18 @@ export class SIReaderConnection extends EventTarget {
     const sysResp = await this.wakeAndReadSysVal();
     const info = parseStationInfo(sysResp.data);
     if (!info) throw new Error("Failed to read station info");
-    console.log(`[SI] Backup read: station code=${info.stationCode}, serial=${info.serialNo}`);
+    siLog(`Backup read: station code=${info.stationCode}, serial=${info.serialNo}`);
 
     // Backup pointer from SYS_VAL is the write position (next free address).
     // After ERASE_BACKUP it resets to 0x100 (data start). Data lives at 0x100..pointer.
     const endAddr = info.backupPointer;
-    console.log(
-      `[SI] Backup pointer: 0x${endAddr.toString(16)} (~${info.backupCount} records), ` +
+    siLog(
+      `Backup pointer: 0x${endAddr.toString(16)} (~${info.backupCount} records), ` +
       `mem=${info.memSizeKB}KB`,
     );
 
     if (endAddr <= 0x100) {
-      console.log("[SI] Backup pointer at start — no data");
+      siLog("Backup pointer at start — no data");
       this.dispatchEvent(
         new CustomEvent("si:backup-read", { detail: { records: [] } }),
       );
@@ -872,13 +875,13 @@ export class SIReaderConnection extends EventTarget {
       const adr1 = (readAddr >> 8) & 0xff;
       const adr0 = readAddr & 0xff;
 
-      console.log(`[SI] Backup page: readAddr=0x${readAddr.toString(16)} endAddr=0x${endAddr.toString(16)} count=${count}`);
+      siLog(`Backup page: readAddr=0x${readAddr.toString(16)} endAddr=0x${endAddr.toString(16)} count=${count}`);
 
       let resp: SIParsedFrame | null = null;
       for (let attempt = 0; attempt < 4; attempt++) {
         try {
           if (attempt > 0) {
-            console.log(`[SI] Backup page retry ${attempt}/3 — re-waking station`);
+            siLog(`Backup page retry ${attempt}/3 — re-waking station`);
             await new Promise((r) => setTimeout(r, attempt * 500));
             await this.sendAndWait(buildSetRemoteMode(), CMD.SET_MS, 2000);
           }
@@ -889,33 +892,33 @@ export class SIReaderConnection extends EventTarget {
           );
           break;
         } catch (err) {
-          console.warn(`[SI] Backup read attempt ${attempt + 1} at 0x${readAddr.toString(16)}:`, err);
+          siWarn(`Backup read attempt ${attempt + 1} at 0x${readAddr.toString(16)}:`, err);
         }
       }
 
       if (!resp) {
-        console.warn(`[SI] Backup page at 0x${readAddr.toString(16)} failed after all retries, skipping`);
+        siWarn(`Backup page at 0x${readAddr.toString(16)} failed after all retries, skipping`);
         readAddr += count;
         continue;
       }
 
-      console.log(
-        `[SI] Backup raw @0x${readAddr.toString(16)} (${resp.data.length} bytes): ` +
+      siLog(
+        `Backup raw @0x${readAddr.toString(16)} (${resp.data.length} bytes): ` +
         Array.from(resp.data).map(b => b.toString(16).padStart(2, "0")).join(" "),
       );
 
       const records = parseBackupPage(resp.data);
       if (records.length > 0) {
-        console.log(`[SI] Backup @0x${readAddr.toString(16)}: ${records.length} records`);
+        siLog(`Backup @0x${readAddr.toString(16)}: ${records.length} records`);
         allRecords.push(...records);
       } else {
-        console.log(`[SI] Empty page at 0x${readAddr.toString(16)}, continuing to endAddr`);
+        siLog(`Empty page at 0x${readAddr.toString(16)}, continuing to endAddr`);
       }
 
       readAddr += count;
     }
 
-    console.log(`[SI] Backup read complete: ${allRecords.length} records`);
+    siLog(`Backup read complete: ${allRecords.length} records`);
 
     this.dispatchEvent(
       new CustomEvent("si:backup-read", { detail: { records: allRecords } }),
@@ -937,7 +940,7 @@ export class SIReaderConnection extends EventTarget {
       CMD.ERASE_BACKUP,
       10000, // longer timeout — flash erase can take several seconds
     );
-    console.log("[SI] Erase response:", Array.from(resp.data).map((b) => b.toString(16).padStart(2, "0")).join(" "));
+    siLog("Erase response:", Array.from(resp.data).map((b) => b.toString(16).padStart(2, "0")).join(" "));
     // Wait for erase to complete
     await new Promise((r) => setTimeout(r, 1000));
 
@@ -952,15 +955,15 @@ export class SIReaderConnection extends EventTarget {
       );
       const info = parseStationInfo(sysResp.data);
       if (info) {
-        console.log(`[SI] Post-erase backup pointer: 0x${info.backupPointer.toString(16)} (~${info.backupCount} records)`);
+        siLog(`Post-erase backup pointer: 0x${info.backupPointer.toString(16)} (~${info.backupCount} records)`);
         if (info.backupPointer <= 0x100) {
-          console.log("[SI] Erase verified: pointer reset to start");
+          siLog("Erase verified: pointer reset to start");
         } else {
-          console.warn(`[SI] Erase may have failed: pointer still at 0x${info.backupPointer.toString(16)}`);
+          siWarn(`Erase may have failed: pointer still at 0x${info.backupPointer.toString(16)}`);
         }
       }
     } catch (err) {
-      console.warn("[SI] Could not verify erase:", err);
+      siWarn("Could not verify erase:", err);
     }
   }
 

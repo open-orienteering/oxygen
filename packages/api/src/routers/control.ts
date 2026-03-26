@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { TRPCError } from "@trpc/server";
 import { router, publicProcedure } from "../trpc.js";
 import {
   getCompetitionClient,
@@ -300,7 +301,7 @@ export const controlRouter = router({
         10,
       );
       if (isNaN(firstCode) || firstCode <= 0) {
-        throw new Error("Invalid control code — must be a positive number");
+        throw new TRPCError({ code: "BAD_REQUEST", message: "Invalid control code — must be a positive number" });
       }
 
       // Check if control with that ID already exists (active)
@@ -310,7 +311,7 @@ export const controlRouter = router({
 
       let control;
       if (existing && !existing.Removed) {
-        throw new Error(`Control ${firstCode} already exists`);
+        throw new TRPCError({ code: "CONFLICT", message: `Control ${firstCode} already exists` });
       } else if (existing && existing.Removed) {
         // Re-activate a previously deleted control
         control = await client.oControl.update({
@@ -412,21 +413,22 @@ export const controlRouter = router({
       await ensureControlConfigTable(client);
 
       for (const controlId of input.controlIds) {
-        // Upsert config row
-        const setClauses: string[] = [];
-        if (input.radioType !== undefined) {
-          setClauses.push(`radio_type = '${input.radioType}'`);
-        }
-        if (input.airPlus !== undefined) {
-          setClauses.push(`air_plus = '${input.airPlus}'`);
-        }
-
-        if (setClauses.length > 0) {
-          await client.$executeRawUnsafe(
-            `INSERT INTO oxygen_control_config (control_id, ${input.radioType !== undefined ? "radio_type," : ""} ${input.airPlus !== undefined ? "air_plus," : ""} battery_voltage)
-             VALUES (${controlId}, ${input.radioType !== undefined ? `'${input.radioType}',` : ""} ${input.airPlus !== undefined ? `'${input.airPlus}',` : ""} NULL)
-             ON DUPLICATE KEY UPDATE ${setClauses.join(", ")}`,
-          );
+        // Upsert config row — use parameterized queries for safety
+        if (input.radioType !== undefined && input.airPlus !== undefined) {
+          await client.$executeRaw`
+            INSERT INTO oxygen_control_config (control_id, radio_type, air_plus, battery_voltage)
+            VALUES (${controlId}, ${input.radioType}, ${input.airPlus}, NULL)
+            ON DUPLICATE KEY UPDATE radio_type = ${input.radioType}, air_plus = ${input.airPlus}`;
+        } else if (input.radioType !== undefined) {
+          await client.$executeRaw`
+            INSERT INTO oxygen_control_config (control_id, radio_type, battery_voltage)
+            VALUES (${controlId}, ${input.radioType}, NULL)
+            ON DUPLICATE KEY UPDATE radio_type = ${input.radioType}`;
+        } else if (input.airPlus !== undefined) {
+          await client.$executeRaw`
+            INSERT INTO oxygen_control_config (control_id, air_plus, battery_voltage)
+            VALUES (${controlId}, ${input.airPlus}, NULL)
+            ON DUPLICATE KEY UPDATE air_plus = ${input.airPlus}`;
         }
 
         // Sync oControl.Radio flag for liveresults
@@ -460,23 +462,36 @@ export const controlRouter = router({
       await ensureControlConfigTable(client);
 
       const batteryLow = input.batteryVoltage < 2.5 ? 1 : 0;
-      const memClause = input.memoryClearedAt
-        ? ", memory_cleared_at = NOW()"
-        : "";
-      const serialClause = input.stationSerial !== undefined
-        ? `, station_serial = ${input.stationSerial}`
-        : "";
 
-      await client.$executeRawUnsafe(
-        `INSERT INTO oxygen_control_config (control_id, battery_voltage, battery_low, checked_at ${input.stationSerial !== undefined ? ", station_serial" : ""})
-         VALUES (${input.controlId}, ${input.batteryVoltage}, ${batteryLow}, NOW() ${input.stationSerial !== undefined ? `, ${input.stationSerial}` : ""})
-         ON DUPLICATE KEY UPDATE
-           battery_voltage = ${input.batteryVoltage},
-           battery_low = ${batteryLow},
-           checked_at = NOW()
-           ${serialClause}
-           ${memClause}`,
-      );
+      if (input.stationSerial !== undefined && input.memoryClearedAt) {
+        await client.$executeRaw`
+          INSERT INTO oxygen_control_config (control_id, battery_voltage, battery_low, checked_at, station_serial)
+          VALUES (${input.controlId}, ${input.batteryVoltage}, ${batteryLow}, NOW(), ${input.stationSerial})
+          ON DUPLICATE KEY UPDATE
+            battery_voltage = ${input.batteryVoltage}, battery_low = ${batteryLow},
+            checked_at = NOW(), station_serial = ${input.stationSerial}, memory_cleared_at = NOW()`;
+      } else if (input.stationSerial !== undefined) {
+        await client.$executeRaw`
+          INSERT INTO oxygen_control_config (control_id, battery_voltage, battery_low, checked_at, station_serial)
+          VALUES (${input.controlId}, ${input.batteryVoltage}, ${batteryLow}, NOW(), ${input.stationSerial})
+          ON DUPLICATE KEY UPDATE
+            battery_voltage = ${input.batteryVoltage}, battery_low = ${batteryLow},
+            checked_at = NOW(), station_serial = ${input.stationSerial}`;
+      } else if (input.memoryClearedAt) {
+        await client.$executeRaw`
+          INSERT INTO oxygen_control_config (control_id, battery_voltage, battery_low, checked_at)
+          VALUES (${input.controlId}, ${input.batteryVoltage}, ${batteryLow}, NOW())
+          ON DUPLICATE KEY UPDATE
+            battery_voltage = ${input.batteryVoltage}, battery_low = ${batteryLow},
+            checked_at = NOW(), memory_cleared_at = NOW()`;
+      } else {
+        await client.$executeRaw`
+          INSERT INTO oxygen_control_config (control_id, battery_voltage, battery_low, checked_at)
+          VALUES (${input.controlId}, ${input.batteryVoltage}, ${batteryLow}, NOW())
+          ON DUPLICATE KEY UPDATE
+            battery_voltage = ${input.batteryVoltage}, battery_low = ${batteryLow},
+            checked_at = NOW()`;
+      }
 
       return { success: true, batteryLow: batteryLow !== 0 };
     }),
@@ -529,20 +544,17 @@ export const controlRouter = router({
 
       if (newPunches.length === 0) return { count: 0 };
 
-      // Bulk insert new punches with full datetime
-      const serial = input.stationSerial ?? "NULL";
-      const values = newPunches
-        .map((p) => {
-          const dt = p.punchDatetime
-            ? `'${new Date(p.punchDatetime).toISOString().slice(0, 23).replace("T", " ")}'`
-            : "NULL";
-          const ss = p.subSecond !== undefined ? String(p.subSecond) : "NULL";
-          return `(${input.controlId}, ${p.cardNo}, ${p.punchTime}, ${dt}, ${ss}, ${serial})`;
-        })
-        .join(", ");
-      await client.$executeRawUnsafe(
-        `INSERT INTO oxygen_control_punches (control_id, card_no, punch_time, punch_datetime, sub_second, station_serial) VALUES ${values}`,
-      );
+      // Bulk insert new punches with parameterized queries
+      const serial = input.stationSerial ?? null;
+      for (const p of newPunches) {
+        const dt = p.punchDatetime
+          ? new Date(p.punchDatetime).toISOString().slice(0, 23).replace("T", " ")
+          : null;
+        const ss = p.subSecond ?? null;
+        await client.$executeRaw`
+          INSERT INTO oxygen_control_punches (control_id, card_no, punch_time, punch_datetime, sub_second, station_serial)
+          VALUES (${input.controlId}, ${p.cardNo}, ${p.punchTime}, ${dt}, ${ss}, ${serial})`;
+      }
 
       return { count: newPunches.length };
     }),
@@ -613,7 +625,7 @@ export const controlRouter = router({
         card_no: number;
         punch_time: number;
       }>;
-      if (rows.length === 0) throw new Error("Punch not found");
+      if (rows.length === 0) throw new TRPCError({ code: "NOT_FOUND", message: `Punch ${input.punchId} not found` });
       const bp = rows[0];
 
       // Get control code from oControl.Numbers (first code)
@@ -621,9 +633,9 @@ export const controlRouter = router({
         where: { Id: bp.control_id, Removed: false },
         select: { Numbers: true },
       });
-      if (!control) throw new Error("Control not found");
+      if (!control) throw new TRPCError({ code: "NOT_FOUND", message: `Control ${bp.control_id} not found` });
       const controlCode = parseInt(control.Numbers.split(";")[0]?.trim() ?? "0", 10);
-      if (isNaN(controlCode) || controlCode <= 0) throw new Error("Invalid control code");
+      if (isNaN(controlCode) || controlCode <= 0) throw new TRPCError({ code: "BAD_REQUEST", message: "Invalid control code" });
 
       // Create oPunch record
       await client.oPunch.create({

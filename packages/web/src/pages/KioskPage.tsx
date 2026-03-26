@@ -77,7 +77,7 @@ export function KioskPage() {
   const [showSettings, setShowSettings] = useState(false);
   const [competitionName, setCompetitionName] = useState("");
   const channelRef = useRef<KioskChannel | null>(null);
-  const resetTimerRef = useRef<any>(undefined);
+  const resetTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const screenRef = useRef<KioskScreen>(screen);
   // Tracks the last standalone card that was fully processed {id, action}.
   // Cleared on every idle transition so the same card can re-trigger after reset.
@@ -141,7 +141,7 @@ export function KioskPage() {
   // Admin sends registration-state heartbeat every 2s AND kiosk-ping every 5s,
   // so 15s = 3 missed pings — resilient while still recovering from a dead admin.
   const WATCHDOG_MS = 15_000;
-  const registrationWatchdogRef = useRef<any>(undefined);
+  const registrationWatchdogRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
 
   useEffect(() => {
     clearTimeout(registrationWatchdogRef.current);
@@ -165,7 +165,7 @@ export function KioskPage() {
   }, [screen.mode]);
 
   // ── Card-done → next screen transition ─────────────────────
-  const cardDoneTimerRef = useRef<any>(undefined);
+  const cardDoneTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
 
   useEffect(() => {
     if (screen.mode !== "card-done") return;

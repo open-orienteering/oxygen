@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { router, publicProcedure } from "../trpc.js";
-import { getCompetitionClient, incrementCounter, getZeroTime } from "../db.js";
+import { getCompetitionClient, incrementCounter, incrementCounterBatch, getZeroTime } from "../db.js";
 import { toRelative, toAbsolute } from "../timeConvert.js";
 import { generateDrawPreview } from "../draw/index.js";
 import type { DrawPreviewResult } from "@oxygen/shared";
@@ -95,10 +95,14 @@ export const drawRouter = router({
       let totalDrawn = 0;
       const configMap = new Map(input.classes.map((c) => [c.classId, c]));
 
+      const allRunnerIds: number[] = [];
+      const classIds: number[] = [];
+
       for (const cls of result.classes) {
         const config = configMap.get(cls.classId);
 
         // Update each runner's start time and start number
+        // (each runner gets a unique StartTime/StartNo so individual updates needed)
         for (const entry of cls.entries) {
           await client.oRunner.update({
             where: { Id: entry.runnerId },
@@ -107,7 +111,7 @@ export const drawRouter = router({
               StartNo: entry.startNo,
             },
           });
-          await incrementCounter("oRunner", entry.runnerId);
+          allRunnerIds.push(entry.runnerId);
           totalDrawn++;
         }
 
@@ -120,9 +124,13 @@ export const drawRouter = router({
               StartInterval: config.interval,
             },
           });
-          await incrementCounter("oClass", cls.classId);
+          classIds.push(cls.classId);
         }
       }
+
+      // Batch counter increments (single lock/unlock per table instead of per-record)
+      await incrementCounterBatch("oRunner", allRunnerIds);
+      await incrementCounterBatch("oClass", classIds);
 
       return {
         success: true,

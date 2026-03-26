@@ -1076,9 +1076,10 @@ export async function incrementCounter(
     const nextCounter =
       (Number((rows as mysql.RowDataPacket[])[0]?.maxCounter) || 0) + 1;
 
-    // 3. Update the record's Counter
+    // 3. Update the record's Counter (parameterized for safety)
     await conn.query(
-      `UPDATE \`${table}\` SET Counter = ${Number(nextCounter)} WHERE Id = ${Number(recordId)}`,
+      `UPDATE \`${table}\` SET Counter = ? WHERE Id = ?`,
+      [Number(nextCounter), Number(recordId)],
     );
 
     // 4. Unlock the table
@@ -1086,7 +1087,50 @@ export async function incrementCounter(
 
     // 5. Update oCounter tracking table (outside lock, matching MeOS)
     await conn.query(
-      `UPDATE oCounter SET \`${table}\` = GREATEST(${Number(nextCounter)}, COALESCE(\`${table}\`, 0))`,
+      `UPDATE oCounter SET \`${table}\` = GREATEST(?, COALESCE(\`${table}\`, 0))`,
+      [Number(nextCounter)],
+    );
+  } finally {
+    await conn.end();
+  }
+}
+
+/**
+ * Batch version of incrementCounter — assigns sequential Counter values to
+ * multiple records in a single LOCK/UNLOCK cycle instead of one per record.
+ */
+export async function incrementCounterBatch(
+  table: CounterTable,
+  recordIds: number[],
+): Promise<void> {
+  if (recordIds.length === 0) return;
+  if (recordIds.length === 1) return incrementCounter(table, recordIds[0]);
+
+  const conn = await getCompetitionDbConnection();
+  try {
+    await conn.query(`LOCK TABLES \`${table}\` WRITE`);
+
+    const [rows] = await conn.query(
+      `SELECT COALESCE(MAX(Counter), 0) as maxCounter FROM \`${table}\``,
+    );
+    const baseCounter =
+      (Number((rows as mysql.RowDataPacket[])[0]?.maxCounter) || 0) + 1;
+
+    // Build CASE expression to assign sequential counters
+    const cases = recordIds
+      .map((id, i) => `WHEN Id = ${Number(id)} THEN ${baseCounter + i}`)
+      .join(" ");
+    const idList = recordIds.map((id) => Number(id)).join(",");
+    await conn.query(
+      `UPDATE \`${table}\` SET Counter = CASE ${cases} END WHERE Id IN (${idList})`,
+    );
+
+    await conn.query(`UNLOCK TABLES`);
+
+    const finalCounter = baseCounter + recordIds.length - 1;
+    await conn.query(
+      `UPDATE oCounter SET \`${table}\` = GREATEST(?, COALESCE(\`${table}\`, 0))`,
+      [finalCounter],
     );
   } finally {
     await conn.end();

@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { TRPCError } from "@trpc/server";
 import { router, publicProcedure } from "../trpc.js";
 import { getCompetitionClient, getZeroTime } from "../db.js";
 import { toRelative, toAbsolute } from "../timeConvert.js";
@@ -122,7 +123,7 @@ export const raceRouter = router({
       const runner = await client.oRunner.findUnique({
         where: { Id: input.runnerId },
       });
-      if (!runner) throw new Error("Runner not found");
+      if (!runner) throw new TRPCError({ code: "NOT_FOUND", message: `Runner ${input.runnerId} not found` });
 
       // Basic status: if they have a start time and now a finish time, mark OK
       // Full card evaluation (punch matching) comes in Phase 4
@@ -282,7 +283,12 @@ export const raceRouter = router({
           );
           if (rows.length > 0) {
             const voltage = rows[0].Voltage > 0 ? rows[0].Voltage / 100 : null;
-            const meta = rows[0].Metadata ? (JSON.parse(rows[0].Metadata) as { batteryDate?: string }) : null;
+            let meta: { batteryDate?: string } | null = null;
+            try {
+              meta = rows[0].Metadata ? JSON.parse(rows[0].Metadata) : null;
+            } catch {
+              // malformed JSON in Metadata — ignore
+            }
             siac = {
               voltage,
               batteryDate: meta?.batteryDate ?? null,
@@ -303,8 +309,12 @@ export const raceRouter = router({
               };
             }
           }
-        } catch {
+        } catch (err: unknown) {
           // oxygen_card_readouts table may not exist yet — siac remains non-null with nulls
+          const msg = err instanceof Error ? err.message : String(err);
+          if (!msg.includes("doesn't exist") && !msg.includes("does not exist")) {
+            console.warn("[finishReceipt] SIAC lookup failed:", msg);
+          }
         }
       }
 

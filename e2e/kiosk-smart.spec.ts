@@ -93,8 +93,7 @@ test.describe("Registration: Auto-fill from Runner DB", () => {
     await expect(nameInput).toHaveValue("Erik Testsson", { timeout: 5000 });
 
     // Suggestions dropdown should NOT be visible after auto-fill
-    await page.waitForTimeout(500); // Allow debounced search to fire if it would
-    await expect(dialog.getByTestId("name-suggestions")).not.toBeVisible();
+    await expect(dialog.getByTestId("name-suggestions")).not.toBeVisible({ timeout: 2000 });
 
     // Name input should NOT have focus — class selector should be next
     await expect(nameInput).not.toBeFocused();
@@ -132,9 +131,8 @@ test.describe("Registration: Duplicate Card Prevention", () => {
     await cardInput.fill("999888");
     await cardInput.press("Tab"); // Trigger lookup
 
-    // No warning should appear
-    await page.waitForTimeout(1000);
-    await expect(dialog.getByText(/already assigned/)).not.toBeVisible();
+    // No warning should appear (wait long enough for async fetch to complete)
+    await expect(dialog.getByText(/already assigned/)).not.toBeVisible({ timeout: 3000 });
   });
 
   test("should register a runner with a unique card via API", async ({
@@ -155,7 +153,7 @@ test.describe("Registration: Duplicate Card Prevention", () => {
     await nameInput.fill("Test Unique");
     // Select a class using the SearchableSelect
     await dialog.getByTestId("reg-class").click();
-    await page.waitForTimeout(300);
+    await expect(dialog.getByText("Öppen 1", { exact: true })).toBeVisible({ timeout: 3000 });
     await dialog.getByText("Öppen 1", { exact: true }).click();
 
     // Submit
@@ -414,8 +412,8 @@ test.describe("Kiosk: Re-scan Known Card", () => {
       },
     });
 
-    // Give kiosk a moment to process the first message
-    await page.waitForTimeout(200);
+    // Wait for kiosk to process the first message (registration screen appears)
+    await expect(page.getByText("Registration in progress")).toBeVisible({ timeout: 3000 });
 
     // Now send the corrected message (simulating DeviceManager after DB lookup)
     await sendKioskMessage(page, nameId, {

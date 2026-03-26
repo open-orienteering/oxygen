@@ -82,7 +82,7 @@ export const resources = {
 
 i18n.use(initReactI18next).init({
   resources,
-  lng: localStorage.getItem("oxygen-lang") || "en",
+  lng: (() => { try { return localStorage.getItem("oxygen-lang"); } catch { return null; } })() || "en",
   fallbackLng: "en",
   defaultNS,
   interpolation: { escapeValue: false },

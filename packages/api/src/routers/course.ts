@@ -9,8 +9,9 @@ import { parseOCDCourseData } from "../ocd-course-parser.js";
 /**
  * Extract a numeric suffix from a control ID string (e.g. "STA1" → 1, "FIN2" → 2).
  * Returns 1 as default if no numeric suffix is found.
+ * @internal Exported for unit testing.
  */
-function getControlSuffix(id: string): number {
+export function getControlSuffix(id: string): number {
   const match = id.match(/(\d+)\s*$/);
   return match ? parseInt(match[1], 10) || 1 : 1;
 }
@@ -18,22 +19,24 @@ function getControlSuffix(id: string): number {
 /**
  * MeOS-style IDs for start/finish controls.
  * Start N → 211100 + N, Finish N → 311100 + N
+ * @internal Exported for unit testing.
  */
-function meosStartId(n: number): number {
+export function meosStartId(n: number): number {
   return 211100 + n;
 }
-function meosFinishId(n: number): number {
+export function meosFinishId(n: number): number {
   return 311100 + n;
 }
 
 /**
  * MeOS-style names for start/finish controls.
  * Start N → "Start N", Finish N → "Mål N"
+ * @internal Exported for unit testing.
  */
-function meosStartName(n: number): string {
+export function meosStartName(n: number): string {
   return n > 1 ? `Start ${n}` : "Start 1";
 }
-function meosFinishName(n: number): string {
+export function meosFinishName(n: number): string {
   return n > 1 ? `Mål ${n}` : "Mål 1";
 }
 

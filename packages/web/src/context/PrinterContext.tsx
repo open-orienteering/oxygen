@@ -14,6 +14,7 @@ import {
   useRef,
   useState,
   useCallback,
+  useMemo,
   type ReactNode,
 } from "react";
 import { useTranslation } from "react-i18next";
@@ -55,7 +56,9 @@ const PrinterContext = createContext<PrinterContextValue | null>(null);
 
 function useReceiptLabels() {
   const { t } = useTranslation("receipt");
-  return {
+  // Memoize so print/printRegistration callbacks don't re-create every render.
+  // `t` is stable from react-i18next (only changes on language switch).
+  return useMemo(() => ({
     finish: (): FinishReceiptLabels => ({
       start: t("start"),
       finish: t("finish"),
@@ -91,7 +94,7 @@ function useReceiptLabels() {
       paymentMethod: t("paymentMethod"),
       rentalCardFee: t("rentalCardFee"),
     }),
-  };
+  }), [t]);
 }
 
 export function PrinterProvider({ children }: { children: ReactNode }) {

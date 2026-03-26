@@ -274,9 +274,9 @@ test.describe("Kiosk Readout Station Flow", () => {
     // Kiosk should show registration-waiting (card not registered)
     await expect(kioskPage.getByText("Registration in progress")).toBeVisible({ timeout: 10000 });
 
-    // Remove card
+    // Remove card and wait for reader to return to idle
     await adminPage.evaluate(() => { window.__siMock.removeCard(); });
-    await adminPage.waitForTimeout(500);
+    await expect(adminPage.getByTestId("reader-status")).toBeVisible();
 
     // Register the runner via API
     const classId = await getClassId(request, "Öppen 2");
@@ -319,9 +319,9 @@ test.describe("Kiosk Readout Station Flow", () => {
     );
     await firstReadoutPromise;
 
-    // Remove card
+    // Remove card and wait for reader to return to idle
     await adminPage.evaluate(() => { window.__siMock.removeCard(); });
-    await adminPage.waitForTimeout(500);
+    await expect(adminPage.getByTestId("reader-status")).toBeVisible();
 
     // Register runner and assign start time
     const classId = await getClassId(request, "Öppen 2");
@@ -500,10 +500,9 @@ test.describe("Standalone mode: re-read after idle", () => {
     await expect(kioskPage.getByRole("heading", { name: "E2E StandaloneReread" })).toBeVisible({ timeout: 10000 });
     await expect(kioskPage.getByText("Completed")).toBeVisible();
 
-    // Remove card and wait for auto-reset (5 s + 1 s buffer)
+    // Remove card and wait for auto-reset (5s timer) — assert directly with sufficient timeout
     await kioskPage.evaluate(() => { window.__siMock.removeCard(); });
-    await kioskPage.waitForTimeout(6000);
-    await expect(kioskPage.getByText("Insert your SI card")).toBeVisible({ timeout: 5000 });
+    await expect(kioskPage.getByText("Insert your SI card")).toBeVisible({ timeout: 10000 });
 
     // ── Second read of the SAME card ───────────────────────
     const secondReadoutPromise = kioskPage.waitForResponse(

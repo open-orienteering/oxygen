@@ -7,6 +7,10 @@
  * Supports: SI5/SI6 detection, SI8/SI9/SI10/SI11/SIAC/pCard/tCard full readout.
  */
 
+// ─── Debug logging ─────────────────────────────────────────
+const SI_DEBUG = (() => { try { return localStorage.getItem("oxygen-si-debug") === "1"; } catch { return false; } })();
+function siLog(...args: unknown[]) { if (SI_DEBUG) console.log("[SI]", ...args); }
+
 // ─── Constants ─────────────────────────────────────────────
 
 export const STX = 0x02;
@@ -1387,11 +1391,11 @@ export function parseBackupPage(data: Uint8Array): BackupRecord[] {
     // Skip empty/erased records (but keep reading — don't break)
     const ffCount = rec.filter((b) => b === 0xff).length;
     if (ffCount >= 6) {
-      console.log(`[SI] Backup skip @${offset}: ${recHex} reason=ff (${ffCount}/8 are 0xff)`);
+      siLog(`Backup skip @${offset}: ${recHex} reason=ff (${ffCount}/8 are 0xff)`);
       continue;
     }
     if (rec.every((b) => b === 0x00)) {
-      console.log(`[SI] Backup skip @${offset}: ${recHex} reason=all-zeros`);
+      siLog(`Backup skip @${offset}: ${recHex} reason=all-zeros`);
       continue;
     }
 
@@ -1403,7 +1407,7 @@ export function parseBackupPage(data: Uint8Array): BackupRecord[] {
       ? cn2 * 100000 + ((cn1 << 8) | cn0)
       : (cn2 << 16) | (cn1 << 8) | cn0;
     if (cardNo === 0 || cardNo === 0xffffff) {
-      console.log(`[SI] Backup skip @${offset}: ${recHex} reason=cardNo-invalid (${cardNo})`);
+      siLog(`Backup skip @${offset}: ${recHex} reason=cardNo-invalid (${cardNo})`);
       continue;
     }
 
@@ -1423,19 +1427,19 @@ export function parseBackupPage(data: Uint8Array): BackupRecord[] {
     const punchTimeSecs = secsRaw + (pm ? 43200 : 0);
 
     if (secsRaw >= 43200) {
-      console.log(`[SI] Backup skip @${offset}: ${recHex} reason=secsRaw-overflow (${secsRaw} >= 43200) card=${cardNo}`);
+      siLog(`Backup skip @${offset}: ${recHex} reason=secsRaw-overflow (${secsRaw} >= 43200) card=${cardNo}`);
       continue;
     }
     if (month < 1 || month > 12) {
-      console.log(`[SI] Backup skip @${offset}: ${recHex} reason=month-invalid (${month}) card=${cardNo}`);
+      siLog(`Backup skip @${offset}: ${recHex} reason=month-invalid (${month}) card=${cardNo}`);
       continue;
     }
     if (day < 1 || day > 31) {
-      console.log(`[SI] Backup skip @${offset}: ${recHex} reason=day-invalid (${day}) card=${cardNo}`);
+      siLog(`Backup skip @${offset}: ${recHex} reason=day-invalid (${day}) card=${cardNo}`);
       continue;
     }
     if (year < 2020 || year > 2030) {
-      console.log(`[SI] Backup skip @${offset}: ${recHex} reason=year-invalid (${year}) card=${cardNo}`);
+      siLog(`Backup skip @${offset}: ${recHex} reason=year-invalid (${year}) card=${cardNo}`);
       continue;
     }
 
@@ -1449,8 +1453,8 @@ export function parseBackupPage(data: Uint8Array): BackupRecord[] {
     const dt = new Date(year, month - 1, day, hours, mins, secs, ms);
     const punchDatetime = dt.toISOString();
 
-    console.log(
-      `[SI] Backup record @${offset}: ${recHex} → card=${cardNo} ` +
+    siLog(
+      `Backup record @${offset}: ${recHex} → card=${cardNo} ` +
       `${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")} ` +
       `${String(hours).padStart(2, "0")}:${String(mins).padStart(2, "0")}:${String(secs).padStart(2, "0")}.${subSecond}`,
     );

@@ -400,12 +400,9 @@ test.describe("Kiosk Mode", () => {
     // Should be on readout screen
     await expect(page.getByText("Test Runner")).toBeVisible({ timeout: 5000 });
 
-    // Wait for auto-reset (5s + buffer)
-    await page.waitForTimeout(7000);
-
-    // Should be back to idle
+    // Wait for auto-reset (5s timer) — assert directly with sufficient timeout
     await expect(page.getByText("Insert your SI card")).toBeVisible({
-      timeout: 5000,
+      timeout: 10000,
     });
   });
 
