@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import { router, publicProcedure } from "../trpc.js";
-import { getCompetitionClient, incrementCounter, getZeroTime } from "../db.js";
+import { getCompetitionClient, incrementCounter, incrementCounterBatch, getZeroTime } from "../db.js";
 import { toRelative, toAbsolute } from "../timeConvert.js";
 import type { RunnerDetail, RunnerInfo } from "@oxygen/shared";
 import { parsePunches, parseCourseControls, performReadout } from "./cardReadout.js";
@@ -51,7 +51,8 @@ async function assertCardNotTaken(
  * MeOS stores BirthYear as either YYYY (1900-9999) or YYYYMMDD (>9999).
  * Oxygen always returns YYYY.
  */
-function normalizeBirthYear(val: number): number {
+/** @internal Exported for unit testing. */
+export function normalizeBirthYear(val: number): number {
   if (val > 9999) return Math.floor(val / 10000);
   return val;
 }
@@ -108,7 +109,7 @@ export const runnerRouter = router({
         where: { Id: input.id, Removed: false },
       });
       if (!r) {
-        throw new Error(`Runner with ID ${input.id} not found`);
+        throw new TRPCError({ code: "NOT_FOUND", message: `Runner ${input.id} not found` });
       }
 
       const zeroTime = await getZeroTime(client);
@@ -482,7 +483,7 @@ export const runnerRouter = router({
         await assertCardNotTaken(client, input.data.cardNo, input.id);
       }
 
-      const needsZT = input.data.startTime !== undefined || input.data.finishTime !== undefined || input.data.status === 1;
+      const needsZT = input.data.startTime !== undefined || input.data.finishTime !== undefined;
       const zeroTime = needsZT ? await getZeroTime(client) : 0;
 
       const updateData: Record<string, unknown> = {};
@@ -578,17 +579,13 @@ export const runnerRouter = router({
       if (input.data.payMode !== undefined) updateData.PayMode = input.data.payMode;
       if (input.data.cardFee !== undefined) updateData.CardFee = input.data.cardFee;
 
-      let updatedCount = 0;
-      for (const id of input.ids) {
-        await client.oRunner.update({
-          where: { Id: id },
-          data: updateData,
-        });
-        await incrementCounter("oRunner", id);
-        updatedCount++;
-      }
+      await client.oRunner.updateMany({
+        where: { Id: { in: input.ids } },
+        data: updateData,
+      });
+      await incrementCounterBatch("oRunner", input.ids);
 
-      return { updated: updatedCount };
+      return { updated: input.ids.length };
     }),
 
   /**

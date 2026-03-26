@@ -384,10 +384,9 @@ test.describe("WebSerial SI Reader", () => {
         { controlCode: 31, time: 36360 },
       ]),
     );
-    // Small delay between card reads
-    await page.waitForTimeout(500);
+    // Wait for first card to be processed
+    await expect(page.getByTestId("card-notification")).toBeVisible({ timeout: 5000 });
     await page.evaluate(() => window.__siMock.removeCard());
-    await page.waitForTimeout(200);
     await page.evaluate(() =>
       window.__siMock.insertCard(2501002, [
         { controlCode: 32, time: 36420 },

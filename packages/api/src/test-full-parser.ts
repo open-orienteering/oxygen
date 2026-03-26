@@ -1,5 +1,5 @@
 import * as fs from 'fs';
-import { parseOCDCourseData } from './ocd-course-parser';
+import { parseOCDCourseData } from './ocd-course-parser.js';
 
 const fileData = fs.readFileSync('e2e/test.ocd');
 const parsed = parseOCDCourseData(fileData);

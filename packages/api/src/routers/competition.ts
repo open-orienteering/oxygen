@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { TRPCError } from "@trpc/server";
 import { router, publicProcedure } from "../trpc.js";
 import {
   getMainDbConnection,
@@ -131,7 +132,7 @@ export const competitionRouter = router({
           [input.nameId],
         );
         if (!Array.isArray(rows) || rows.length === 0) {
-          throw new Error(`Competition "${input.nameId}" not found`);
+          throw new TRPCError({ code: "NOT_FOUND", message: `Competition "${input.nameId}" not found` });
         }
 
         // Mark as removed in MeOSMain
@@ -226,7 +227,7 @@ export const competitionRouter = router({
         where: { Removed: false },
       });
       if (!event) {
-        throw new Error("No competition selected or event not found");
+        throw new TRPCError({ code: "NOT_FOUND", message: "No competition selected or event not found" });
       }
 
       // Fetch classes with runner counts
@@ -751,7 +752,7 @@ export const competitionRouter = router({
     .mutation(async ({ input }) => {
       const client = await getCompetitionClient();
       const event = await client.oEvent.findFirst({ where: { Removed: false } });
-      if (!event) throw new Error("No active competition");
+      if (!event) throw new TRPCError({ code: "NOT_FOUND", message: "No active competition" });
       await client.oEvent.update({
         where: { Id: event.Id },
         data: { CardFee: input.cardFee },

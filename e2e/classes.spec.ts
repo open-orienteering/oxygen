@@ -147,12 +147,11 @@ test.describe("Classes Page", () => {
       targetBox.y + targetBox.height / 2 - 5,
       { steps: 20 },
     );
-    await page.waitForTimeout(100);
     await page.mouse.up();
-    await page.waitForTimeout(1500);
 
+    // Wait for the reorder to complete and the UI to update
     const rowsAfter = page.locator("tbody tr").filter({ hasNotText: "Class Settings" });
-    await expect(rowsAfter.nth(0)).toContainText("Öppen 3");
+    await expect(rowsAfter.nth(0)).toContainText("Öppen 3", { timeout: 5000 });
 
     // Restore original order
     await page.request.post("/trpc/class.reorder", {
@@ -188,6 +187,7 @@ test.describe("Classes Page", () => {
       .locator("label", { hasText: "Bana 1" })
       .locator("input[type='checkbox']")
       .uncheck();
-    await page.waitForTimeout(1000);
+    // Wait for the forked badge to disappear after unchecking
+    await expect(expandedPanel.getByText(/Forked/)).not.toBeVisible({ timeout: 5000 });
   });
 });

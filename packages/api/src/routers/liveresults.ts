@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { TRPCError } from "@trpc/server";
 import { router, publicProcedure } from "../trpc.js";
 import { getSetting, setSetting, getCurrentDbName } from "../db.js";
 import {
@@ -45,7 +46,7 @@ export const liveresultsRouter = router({
      */
     getConfig: publicProcedure.query(async () => {
         const nameId = getCurrentDbName();
-        if (!nameId) throw new Error("No competition selected");
+        if (!nameId) throw new TRPCError({ code: "PRECONDITION_FAILED", message: "No competition selected" });
         const config = await getConfig(nameId);
         const tavid = await getSetting(`liveresults_tavid_${nameId}`);
         return {
@@ -71,7 +72,7 @@ export const liveresultsRouter = router({
         )
         .mutation(async ({ input }) => {
             const nameId = getCurrentDbName();
-            if (!nameId) throw new Error("No competition selected");
+            if (!nameId) throw new TRPCError({ code: "PRECONDITION_FAILED", message: "No competition selected" });
             const config = await getConfig(nameId);
 
             if (input.intervalSeconds !== undefined) config.intervalSeconds = input.intervalSeconds;
@@ -99,7 +100,7 @@ export const liveresultsRouter = router({
      */
     enable: publicProcedure.mutation(async () => {
         const nameId = getCurrentDbName();
-        if (!nameId) throw new Error("No competition selected");
+        if (!nameId) throw new TRPCError({ code: "PRECONDITION_FAILED", message: "No competition selected" });
 
         const config = await getConfig(nameId);
         const tavid = await ensureCompetition(nameId);
@@ -128,7 +129,7 @@ export const liveresultsRouter = router({
      */
     disable: publicProcedure.mutation(async () => {
         const nameId = getCurrentDbName();
-        if (!nameId) throw new Error("No competition selected");
+        if (!nameId) throw new TRPCError({ code: "PRECONDITION_FAILED", message: "No competition selected" });
 
         liveResultsPusher.stop();
 
@@ -144,10 +145,10 @@ export const liveresultsRouter = router({
      */
     pushNow: publicProcedure.mutation(async () => {
         const nameId = getCurrentDbName();
-        if (!nameId) throw new Error("No competition selected");
+        if (!nameId) throw new TRPCError({ code: "PRECONDITION_FAILED", message: "No competition selected" });
 
         const tavidStr = await getSetting(`liveresults_tavid_${nameId}`);
-        if (!tavidStr) throw new Error("LiveResults not enabled for this competition");
+        if (!tavidStr) throw new TRPCError({ code: "PRECONDITION_FAILED", message: "LiveResults not enabled for this competition" });
 
         const tavid = parseInt(tavidStr, 10);
         const stats = await syncAll(tavid);
@@ -161,10 +162,10 @@ export const liveresultsRouter = router({
      */
     clearRemoteData: publicProcedure.mutation(async () => {
         const nameId = getCurrentDbName();
-        if (!nameId) throw new Error("No competition selected");
+        if (!nameId) throw new TRPCError({ code: "PRECONDITION_FAILED", message: "No competition selected" });
 
         const tavidStr = await getSetting(`liveresults_tavid_${nameId}`);
-        if (!tavidStr) throw new Error("LiveResults not enabled for this competition");
+        if (!tavidStr) throw new TRPCError({ code: "PRECONDITION_FAILED", message: "LiveResults not enabled for this competition" });
 
         const tavid = parseInt(tavidStr, 10);
         const pool = await getLiveResultsPool();

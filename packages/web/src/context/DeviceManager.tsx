@@ -24,6 +24,7 @@ import {
 import type { SICardReadout, SICardOwnerData } from "../lib/si-protocol";
 import { trpc } from "../lib/trpc";
 import { KioskChannel, recentCardToKioskMessage } from "../lib/kiosk-channel";
+import { RunnerStatus, runnerStatusLabel, type RunnerStatusValue } from "@oxygen/shared";
 
 // ─── Types ─────────────────────────────────────────────────
 
@@ -323,7 +324,7 @@ export function DeviceManagerProvider({ children }: { children: ReactNode }) {
           // DNS (20) and Cancel (21) are NOT result statuses.
           const dbStatus = result.runner.dbStatus;
           const hasDbResult =
-            dbStatus > 0 && dbStatus !== 20 && dbStatus !== 21;
+            dbStatus > 0 && dbStatus !== RunnerStatus.DNS && dbStatus !== RunnerStatus.Cancel;
 
           // Server-side match score (0.0–1.0): how well do the card's
           // punches match the runner's assigned course? Penalized by
@@ -334,16 +335,9 @@ export function DeviceManagerProvider({ children }: { children: ReactNode }) {
           if (punchesRelevant || hasDbResult) {
             // Runner found AND (punches match this competition OR already has result in DB) → readout
             action = "readout";
-            status =
-              result.timing.status === 1
-                ? "OK"
-                : result.timing.status === 3
-                  ? "MP"
-                  : result.timing.status === 4
-                    ? "DNF"
-                    : result.timing.status === 20
-                      ? "DNS"
-                      : undefined;
+            status = result.timing.status > 0
+              ? runnerStatusLabel(result.timing.status as RunnerStatusValue)
+              : undefined;
           } else {
             // Runner found but punches are stale/absent and no result → pre-start
             action = "pre-start";

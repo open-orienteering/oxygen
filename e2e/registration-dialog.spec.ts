@@ -170,8 +170,8 @@ test.describe("Registration Dialog", () => {
       await setupAdmin(page);
       await insertUnregisteredCard(page, 2900002);
 
-      // Dismiss the notification first
-      await page.waitForTimeout(500);
+      // Wait for notification to appear, then open the floating RecentCards panel
+      await expect(page.getByTestId("card-notification")).toBeVisible({ timeout: 5000 });
 
       // Open the floating RecentCards panel
       await page.getByTestId("recent-cards-button").click();
@@ -293,8 +293,7 @@ test.describe("Registration Dialog", () => {
       );
 
       // Suggestions dropdown should NOT be visible
-      await page.waitForTimeout(500);
-      await expect(dialog.getByTestId("name-suggestions")).not.toBeVisible();
+      await expect(dialog.getByTestId("name-suggestions")).not.toBeVisible({ timeout: 2000 });
     });
 
     test("duplicate card shows warning", async ({ page }) => {
@@ -342,7 +341,7 @@ test.describe("Registration Dialog", () => {
       // Fill form
       await dialog.locator("input[placeholder='First Last']").fill("Test KioskReg");
       await dialog.getByTestId("reg-class").click();
-      await adminPage.waitForTimeout(300);
+      await expect(adminPage.getByText("Öppen 1", { exact: true })).toBeVisible({ timeout: 3000 });
       await adminPage.getByText("Öppen 1", { exact: true }).click();
 
       // Submit
@@ -383,7 +382,7 @@ test.describe("Registration Dialog", () => {
 
       // Fill class → kiosk should update
       await dialog.getByTestId("reg-class").click();
-      await adminPage.waitForTimeout(300);
+      await expect(adminPage.getByText("Öppen 2", { exact: true })).toBeVisible({ timeout: 3000 });
       await adminPage.getByText("Öppen 2", { exact: true }).click();
 
       await expect(kioskPage.getByText("Öppen 2")).toBeVisible({ timeout: 5000 });
@@ -410,7 +409,7 @@ test.describe("Registration Dialog", () => {
       const dialog = page.getByTestId("registration-dialog");
       await dialog.locator("input[placeholder='First Last']").fill("Test PersistDB");
       await dialog.getByTestId("reg-class").click();
-      await page.waitForTimeout(300);
+      await expect(page.getByRole("button", { name: "Öppen 1" }).first()).toBeVisible({ timeout: 3000 });
       await page.getByRole("button", { name: "Öppen 1" }).first().click();
       await dialog.getByTestId("reg-submit").click();
 
@@ -447,7 +446,6 @@ test.describe("Registration Dialog", () => {
 
       // Re-insert card and reopen dialog
       await page.evaluate(() => window.__siMock.removeCard());
-      await page.waitForTimeout(300);
       await insertUnregisteredCard(page, 2900031);
       await page.getByTestId("card-notification-view").click();
       await expect(page.getByTestId("registration-dialog")).toBeVisible({ timeout: 5000 });
@@ -468,7 +466,7 @@ test.describe("Registration Dialog", () => {
       const dialog = page.getByTestId("registration-dialog");
       await dialog.locator("input[placeholder='First Last']").fill("Test Sticky1");
       await dialog.getByTestId("reg-class").click();
-      await page.waitForTimeout(300);
+      await expect(page.getByRole("button", { name: "Öppen 1" }).first()).toBeVisible({ timeout: 3000 });
       await page.getByRole("button", { name: "Öppen 1" }).first().click();
       await dialog.getByTestId("reg-submit").click();
 
@@ -541,7 +539,7 @@ test.describe("Registration Dialog", () => {
       const dialog = page.getByTestId("registration-dialog");
       await dialog.locator("input[placeholder='First Last']").fill("Test Sticky2");
       await dialog.getByTestId("reg-class").click();
-      await page.waitForTimeout(300);
+      await expect(page.getByRole("button", { name: "Öppen 1" }).first()).toBeVisible({ timeout: 3000 });
       await page.getByRole("button", { name: "Öppen 1" }).first().click();
       await dialog.getByTestId("reg-submit").click();
 
@@ -550,7 +548,6 @@ test.describe("Registration Dialog", () => {
 
       // Remove old card and insert new one
       await page.evaluate(() => window.__siMock.removeCard());
-      await page.waitForTimeout(300);
 
       // Insert new unregistered SIAC card with owner data (must be 7000001-9999999 for ownerData)
       const resolutionPromise = page.waitForResponse(
@@ -592,7 +589,7 @@ test.describe("Registration Dialog", () => {
       const dialog = adminPage.getByTestId("registration-dialog");
       await dialog.locator("input[placeholder='First Last']").fill("Test StickyKiosk1");
       await dialog.getByTestId("reg-class").click();
-      await adminPage.waitForTimeout(300);
+      await expect(adminPage.getByText("Öppen 1", { exact: true })).toBeVisible({ timeout: 3000 });
       await adminPage.getByText("Öppen 1", { exact: true }).click();
       await dialog.getByTestId("reg-submit").click();
 
@@ -601,7 +598,6 @@ test.describe("Registration Dialog", () => {
 
       // Insert new card → kiosk should show registration-waiting again
       await adminPage.evaluate(() => window.__siMock.removeCard());
-      await adminPage.waitForTimeout(300);
       await insertUnregisteredCard(adminPage, 2900038);
 
       await expect(kioskPage.getByText("Registration in progress")).toBeVisible({ timeout: 10000 });
@@ -713,8 +709,9 @@ test.describe("Registration Dialog", () => {
       // Kiosk should be in registration-waiting
       await expect(kioskPage.getByText("Registration in progress")).toBeVisible({ timeout: 10000 });
 
-      // Wait 20 seconds (watchdog is 15s, heartbeat is 2s)
-      await adminPage.waitForTimeout(20000);
+      // Wait beyond the 15s watchdog timeout (heartbeat at 2s intervals keeps it alive).
+      // This is an intentional fixed wait to verify the watchdog does NOT fire.
+      await adminPage.waitForTimeout(18000);
 
       // Kiosk should STILL show registration-waiting (heartbeat kept it alive)
       await expect(kioskPage.getByText("Registration in progress")).toBeVisible();
@@ -738,8 +735,8 @@ test.describe("Registration Dialog", () => {
       const dialog = page.getByTestId("registration-dialog");
       await dialog.locator("input[placeholder='First Last']").fill("Test FromDashboard");
       await dialog.getByTestId("reg-class").click();
-      await page.waitForTimeout(300);
       // Use Öppen 3 which always has maps remaining
+      await expect(dialog.locator("button").filter({ hasText: "Öppen 3" })).toBeVisible({ timeout: 3000 });
       await dialog.locator("button").filter({ hasText: "Öppen 3" }).click();
       await dialog.getByTestId("reg-submit").click();
 
@@ -774,10 +771,9 @@ test.describe("Registration Dialog", () => {
       const dialog = page.getByTestId("registration-dialog");
       await dialog.locator("input[placeholder='First Last']").fill("Test FromResults");
       await dialog.getByTestId("reg-class").click();
-      await page.waitForTimeout(300);
       // Use Öppen 3 which always has maps remaining
+      await expect(dialog.locator("button").filter({ hasText: "Öppen 3" })).toBeVisible({ timeout: 3000 });
       await dialog.locator("button").filter({ hasText: "Öppen 3" }).click();
-      await page.waitForTimeout(200);
       await dialog.getByTestId("reg-submit").click();
 
       // Dialog closes, still on results page

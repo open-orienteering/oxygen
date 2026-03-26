@@ -112,7 +112,7 @@ export function FinishStation() {
       if (printer.connected) {
         buildReceiptData(data.id)
           .then((receiptData) => receiptData && printer.print(receiptData))
-          .catch(() => {}); // non-fatal
+          .catch((err) => console.warn("[FinishStation] Receipt print failed:", err));
       }
     },
     onError: (err) => {

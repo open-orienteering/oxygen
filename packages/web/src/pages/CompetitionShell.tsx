@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, useCallback } from "react";
+import { useEffect, useRef, useState, useCallback, lazy, Suspense } from "react";
 import {
   useParams,
   useNavigate,
@@ -9,21 +9,6 @@ import {
 } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { trpc } from "../lib/trpc";
-import { CompetitionDashboard } from "./CompetitionDashboard";
-import { RunnerManagement } from "./RunnerManagement";
-import { StartListPage } from "./StartListPage";
-import { ResultsPage } from "./ResultsPage";
-import { StartStation } from "./StartStation";
-import { FinishStation } from "./FinishStation";
-import { CardReadout } from "./CardReadout";
-import { ControlsPage } from "./ControlsPage";
-import { CoursesPage } from "./CoursesPage";
-import { ClassesPage } from "./ClassesPage";
-import { ClubsPage } from "./ClubsPage";
-import { CardsPage } from "./CardsPage";
-import { EventPage } from "./EventPage";
-import { TestLabPage } from "./TestLabPage";
-import { BackupPunchesPage } from "./BackupPunchesPage";
 import { ClubLogo } from "../components/ClubLogo";
 import { LanguageSelector } from "../components/LanguageSelector";
 import { useDeviceManager } from "../context/DeviceManager";
@@ -36,6 +21,23 @@ import { RegistrationDialogProvider } from "../context/RegistrationDialogContext
 import { RegistrationDialog } from "../components/RegistrationDialog";
 import { DbLoadIndicator } from "../components/DbLoadIndicator";
 import { useExternalChanges } from "../hooks/useExternalChanges";
+
+// Lazy-loaded page components — each becomes a separate chunk
+const CompetitionDashboard = lazy(() => import("./CompetitionDashboard").then(m => ({ default: m.CompetitionDashboard })));
+const RunnerManagement = lazy(() => import("./RunnerManagement").then(m => ({ default: m.RunnerManagement })));
+const StartListPage = lazy(() => import("./StartListPage").then(m => ({ default: m.StartListPage })));
+const ResultsPage = lazy(() => import("./ResultsPage").then(m => ({ default: m.ResultsPage })));
+const StartStation = lazy(() => import("./StartStation").then(m => ({ default: m.StartStation })));
+const FinishStation = lazy(() => import("./FinishStation").then(m => ({ default: m.FinishStation })));
+const CardReadout = lazy(() => import("./CardReadout").then(m => ({ default: m.CardReadout })));
+const ControlsPage = lazy(() => import("./ControlsPage").then(m => ({ default: m.ControlsPage })));
+const CoursesPage = lazy(() => import("./CoursesPage").then(m => ({ default: m.CoursesPage })));
+const ClassesPage = lazy(() => import("./ClassesPage").then(m => ({ default: m.ClassesPage })));
+const ClubsPage = lazy(() => import("./ClubsPage").then(m => ({ default: m.ClubsPage })));
+const CardsPage = lazy(() => import("./CardsPage").then(m => ({ default: m.CardsPage })));
+const EventPage = lazy(() => import("./EventPage").then(m => ({ default: m.EventPage })));
+const TestLabPage = lazy(() => import("./TestLabPage").then(m => ({ default: m.TestLabPage })));
+const BackupPunchesPage = lazy(() => import("./BackupPunchesPage").then(m => ({ default: m.BackupPunchesPage })));
 
 type Tab = "dashboard" | "event" | "runners" | "startlist" | "results" | "classes" | "courses" | "controls" | "clubs" | "start-station" | "finish-station" | "card-readout" | "cards" | "backup-punches" | "test-lab";
 
@@ -369,6 +371,7 @@ export function CompetitionShell() {
 
         {/* Tab Content via nested routes */}
         <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
+          <Suspense fallback={<div className="flex justify-center py-12"><div className="w-8 h-8 border-4 border-blue-200 border-t-blue-600 rounded-full animate-spin" /></div>}>
           <Routes>
             <Route index element={<CompetitionDashboard />} />
             <Route path="event" element={<EventPage />} />
@@ -388,6 +391,7 @@ export function CompetitionShell() {
             <Route path="test-lab" element={<TestLabPage />} />
             <Route path="*" element={<Navigate to="" replace />} />
           </Routes>
+          </Suspense>
         </main>
 
         {/* Floating recent cards panel */}

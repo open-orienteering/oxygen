@@ -57,6 +57,12 @@ export default defineConfig({
         entryFileNames: "assets/[name]-[hash].js",
         chunkFileNames: "assets/[name]-[hash].js",
         assetFileNames: "assets/[name]-[hash].[ext]",
+        manualChunks: {
+          // Split heavy vendor deps into cacheable chunks
+          "vendor-react": ["react", "react-dom", "react-router-dom"],
+          "vendor-i18n": ["i18next", "react-i18next"],
+          "vendor-trpc": ["@trpc/client", "@trpc/react-query", "@tanstack/react-query"],
+        },
       },
     },
   },

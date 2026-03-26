@@ -78,7 +78,7 @@ test.describe("Runner Management", () => {
     const dialog = page.getByTestId("registration-dialog");
     await dialog.locator("input[placeholder='First Last']").fill("Test Runner E2E");
     await dialog.getByTestId("reg-class").click();
-    await page.waitForTimeout(300);
+    await expect(dialog.getByText("Öppen 1", { exact: true })).toBeVisible({ timeout: 3000 });
     await dialog.getByText("Öppen 1", { exact: true }).click();
     await dialog.locator("input[placeholder='e.g. 500123']").fill("999999");
     await dialog.getByTestId("reg-submit").click();

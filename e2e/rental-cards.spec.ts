@@ -121,7 +121,10 @@ test.describe("Rental Cards — Competition Settings", () => {
     await page.getByTestId("rental-card-fee-input").fill("50");
     await page.getByTestId("rental-card-fee-input").blur();
 
-    await page.waitForTimeout(500);
+    // Wait for the save API call to complete after blur
+    await page.waitForResponse(
+      (resp) => resp.url().includes("/trpc/competition.setCardFee") && resp.status() === 200,
+    );
     const resp = await request.get(`${API_BASE}/trpc/competition.getCardFee`);
     const body = await resp.json();
     const fee = body?.result?.data?.cardFee ?? body?.result?.data?.json?.cardFee;
@@ -168,7 +171,7 @@ test.describe("Rental Cards — Registration Dialog", () => {
 
     // Select class
     await dialog.getByTestId("reg-class").click();
-    await page.waitForTimeout(300);
+    await expect(dialog.getByText("Öppen 2", { exact: true })).toBeVisible({ timeout: 3000 });
     await dialog.getByText("Öppen 2", { exact: true }).click();
 
     // Fill card number
