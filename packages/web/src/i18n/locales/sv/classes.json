@@ -58,5 +58,7 @@
   "applying": "Tillämpar...",
   "bulkConfirm": "Sätt {{field}} till \"{{value}}\" för {{count}} klasser?",
   "bulkUpdated": "Uppdaterade {{count}} klasser",
-  "allowQuickEntry": "Direktanmälan"
+  "allowQuickEntry": "Direktanmälan",
+  "maxTime": "Maxtid",
+  "noLimit": "Ingen gräns"
 }

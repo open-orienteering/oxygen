@@ -145,6 +145,7 @@ export const runnerRouter = router({
         cardReturned: r.oos_card_returned === 1,
         bib: r.Bib,
         entryDate: r.EntryDate,
+        transferFlags: r.TransferFlags,
       };
     }),
 
@@ -381,6 +382,7 @@ export const runnerRouter = router({
             courseControlCodes: courseId > 0 ? courseControlsMap.get(courseId) : undefined,
             rank: rankMap.get(r.Id),
             cardStartTime: cardStartTimeMap.get(r.CardNo),
+            transferFlags: r.TransferFlags || undefined,
           };
         },
       );

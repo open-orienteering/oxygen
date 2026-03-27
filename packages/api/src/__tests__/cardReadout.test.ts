@@ -31,9 +31,9 @@ describe("parsePunches", () => {
     expect(result[3].type).toBe(PUNCH_FINISH);
   });
 
-  it("strips @unit suffix", () => {
+  it("extracts @unit suffix", () => {
     const result = parsePunches("31-3600.0@42;");
-    expect(result).toEqual([{ type: 31, time: 36000, source: "card" }]);
+    expect(result).toEqual([{ type: 31, time: 36000, source: "card", unit: 42 }]);
   });
 
   it("strips #origin suffix", () => {
@@ -41,9 +41,9 @@ describe("parsePunches", () => {
     expect(result).toEqual([{ type: 31, time: 36000, source: "card" }]);
   });
 
-  it("strips both @unit and #origin", () => {
+  it("extracts @unit and strips #origin", () => {
     const result = parsePunches("31-3600.0@42#1;");
-    expect(result).toEqual([{ type: 31, time: 36000, source: "card" }]);
+    expect(result).toEqual([{ type: 31, time: 36000, source: "card", unit: 42 }]);
   });
 
   it("returns empty array for empty string", () => {

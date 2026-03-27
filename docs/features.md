@@ -37,7 +37,7 @@ Select multiple runners using checkboxes to access bulk operations. The floating
 
 ## Course, Class & Control Setup
 
-Courses can be imported from OCAD files or IOF XML, or created manually. Each course defines a control sequence with distance and climb data. Classes are assigned to courses, and the system validates that all referenced controls exist.
+Courses can be imported from OCAD files or IOF XML, or created manually. Each course defines a control sequence with distance and climb data. Classes are assigned to courses, and the system validates that all referenced controls exist. Each class supports configurable options including free start, no timing (for children's/open classes), direct registration, and a maximum allowed running time.
 
 ![Course management](screenshots/courses.png)
 
@@ -110,3 +110,5 @@ The simulation runs server-side so it doesn't depend on keeping the browser tab 
 ## MeOS Compatibility
 
 Oxygen reads and writes the same MySQL schema as [MeOS](http://www.melin.nu/meos), the established Windows-based orienteering software. Both tools can operate on the same database simultaneously — changes made in MeOS are immediately reflected in Oxygen and vice versa. This allows a gradual migration path where organizers can use Oxygen for web-based features while keeping MeOS for legacy workflows.
+
+Status calculation is fully MeOS-compatible — Oxygen computes all result statuses that MeOS does: OK, DNF, Missing Punch, Over Max Time, No Timing, and Out of Competition. MeOS per-runner flags (TransferFlags) such as OutOfCompetition and NoTiming are respected by the result engine and displayed as badges in the runner detail view. Punch data round-trips correctly including MeOS-specific `@unit` metadata for multi-unit timing setups.

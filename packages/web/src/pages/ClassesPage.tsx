@@ -2,7 +2,7 @@ import { useState, useMemo } from "react";
 import { useTranslation } from "react-i18next";
 import { useNavigate } from "react-router-dom";
 import { trpc } from "../lib/trpc";
-import { formatMeosTime, type ClassSummary } from "@oxygen/shared";
+import { formatMeosTime, parseMeosTime, type ClassSummary } from "@oxygen/shared";
 import { useSearchParam, useNumericSearchParam } from "../hooks/useSearchParam";
 import { SortHeader } from "../components/SortHeader";
 import { useSort } from "../hooks/useSort";
@@ -41,7 +41,7 @@ export function ClassesPage() {
 
   const selection = useTableSelection(classes.data ?? []);
 
-  const [bulkField, setBulkField] = useState<"fee" | "freeStart" | "noTiming" | "allowQuickEntry">("fee");
+  const [bulkField, setBulkField] = useState<"fee" | "freeStart" | "noTiming" | "allowQuickEntry" | "maxTime">("fee");
   const [bulkValue, setBulkValue] = useState<string>("");
 
   const bulkUpdateMutation = trpc.class.bulkUpdate.useMutation({
@@ -54,12 +54,13 @@ export function ClassesPage() {
 
   const handleApplyBulk = () => {
     if (bulkValue === "") return;
-    const fieldLabel = bulkField === "fee" ? t("fee").toLowerCase() : bulkField === "freeStart" ? t("freeStart").toLowerCase() : bulkField === "noTiming" ? t("noTiming").toLowerCase() : t("allowQuickEntry").toLowerCase();
-    const valueLabel = bulkField === "fee" ? `${bulkValue} kr` : bulkValue === "1" ? t("yes") : t("no");
+    const fieldLabel = bulkField === "fee" ? t("fee").toLowerCase() : bulkField === "maxTime" ? t("maxTime").toLowerCase() : bulkField === "freeStart" ? t("freeStart").toLowerCase() : bulkField === "noTiming" ? t("noTiming").toLowerCase() : t("allowQuickEntry").toLowerCase();
+    const valueLabel = bulkField === "fee" ? `${bulkValue} kr` : bulkField === "maxTime" ? bulkValue : bulkValue === "1" ? t("yes") : t("no");
     if (!window.confirm(t("bulkConfirm", { field: fieldLabel, value: valueLabel, count: selection.count }))) return;
 
-    const data: { classFee?: number; freeStart?: boolean; noTiming?: boolean; allowQuickEntry?: boolean } = {};
+    const data: { classFee?: number; freeStart?: boolean; noTiming?: boolean; allowQuickEntry?: boolean; maxTime?: number } = {};
     if (bulkField === "fee") data.classFee = parseInt(bulkValue, 10) || 0;
+    else if (bulkField === "maxTime") data.maxTime = bulkValue.trim() ? parseMeosTime(bulkValue) : 0;
     else if (bulkField === "freeStart") data.freeStart = bulkValue === "1";
     else if (bulkField === "noTiming") data.noTiming = bulkValue === "1";
     else if (bulkField === "allowQuickEntry") data.allowQuickEntry = bulkValue === "1";
@@ -266,6 +267,7 @@ export function ClassesPage() {
           className="px-3 py-1.5 border border-slate-200 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 cursor-pointer"
         >
           <option value="fee">{t("fee")}</option>
+          <option value="maxTime">{t("maxTime")}</option>
           <option value="freeStart">{t("freeStart")}</option>
           <option value="noTiming">{t("noTiming")}</option>
           <option value="allowQuickEntry">{t("allowQuickEntry")}</option>
@@ -278,6 +280,14 @@ export function ClassesPage() {
             onChange={(e) => setBulkValue(e.target.value)}
             placeholder="0"
             className="w-24 px-3 py-1.5 border border-slate-200 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 tabular-nums"
+          />
+        ) : bulkField === "maxTime" ? (
+          <input
+            type="text"
+            value={bulkValue}
+            onChange={(e) => setBulkValue(e.target.value)}
+            placeholder="H:MM:SS"
+            className="w-28 px-3 py-1.5 border border-slate-200 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 tabular-nums"
           />
         ) : (
           <select
@@ -445,7 +455,12 @@ function SortableClassRow({
                 {t("allowQuickEntry")}
               </span>
             )}
-            {!cls.freeStart && !cls.noTiming && !cls.allowQuickEntry && (
+            {cls.maxTime > 0 && (
+              <span className="px-1.5 py-0.5 rounded text-xs font-medium bg-blue-100 text-blue-700 tabular-nums">
+                {t("maxTime")} {formatMeosTime(cls.maxTime)}
+              </span>
+            )}
+            {!cls.freeStart && !cls.noTiming && !cls.allowQuickEntry && !cls.maxTime && (
               <span className="text-slate-300">—</span>
             )}
           </div>
@@ -557,6 +572,7 @@ function ClassInlineDetail({ classId }: { classId: number }) {
   const [editLowAge, setEditLowAge] = useState<string | null>(null);
   const [editHighAge, setEditHighAge] = useState<string | null>(null);
   const [editFee, setEditFee] = useState<string | null>(null);
+  const [editMaxTime, setEditMaxTime] = useState<string | null>(null);
   const [editCourseIds, setEditCourseIds] = useState<number[] | null>(null);
 
   if (detail.isLoading) {
@@ -745,6 +761,27 @@ function ClassInlineDetail({ classId }: { classId: number }) {
               className="w-32 px-3 py-1.5 border border-slate-200 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 tabular-nums"
               min={0}
               placeholder="0"
+            />
+          </div>
+
+          {/* Max time */}
+          <div>
+            <label className="block text-xs font-medium text-slate-500 mb-1">{t("maxTime")}</label>
+            <input
+              type="text"
+              value={editMaxTime ?? (d.maxTime > 0 ? formatMeosTime(d.maxTime) : "")}
+              onChange={(e) => setEditMaxTime(e.target.value)}
+              onBlur={() => {
+                if (editMaxTime !== null) {
+                  const ds = editMaxTime.trim() ? parseMeosTime(editMaxTime) : 0;
+                  if (ds !== d.maxTime) {
+                    handleSave("maxTime", ds);
+                  }
+                }
+                setEditMaxTime(null);
+              }}
+              className="w-32 px-3 py-1.5 border border-slate-200 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 tabular-nums"
+              placeholder="H:MM:SS"
             />
           </div>
 

@@ -6,6 +6,8 @@ import {
   formatRunningTime,
   parseMeosTime,
   RunnerStatus,
+  TransferFlags,
+  hasTransferFlag,
   type RunnerStatusValue,
 } from "@oxygen/shared";
 import { PunchTable, type PunchTableData } from "./PunchTable";
@@ -197,6 +199,19 @@ export function RunnerInlineDetail({ runnerId, colSpan }: Props) {
                 value={r.status}
                 onChange={(v) => debouncedSave("status", v)}
               />
+              {r.transferFlags > 0 && (
+                <div className="flex gap-1 mt-1">
+                  {hasTransferFlag(r.transferFlags, TransferFlags.FlagOutsideCompetition) && (
+                    <span className="px-1.5 py-0.5 rounded text-xs font-medium bg-purple-100 text-purple-700">{t("flagOC")}</span>
+                  )}
+                  {hasTransferFlag(r.transferFlags, TransferFlags.FlagNoTiming) && (
+                    <span className="px-1.5 py-0.5 rounded text-xs font-medium bg-blue-100 text-blue-700">{t("flagNT")}</span>
+                  )}
+                  {hasTransferFlag(r.transferFlags, TransferFlags.FlagPayBeforeResult) && (
+                    <span className="px-1.5 py-0.5 rounded text-xs font-medium bg-amber-100 text-amber-700">{t("flagPayBefore")}</span>
+                  )}
+                </div>
+              )}
             </div>
             <EditField
               label={t("bib")}

@@ -428,12 +428,17 @@ export async function createCompetitionDatabase(
   }
 
   // 3. Register in the target MeOSMain.oEvent
+  // Version must be >= 89 to prevent MeOS from running upgradeTimeFormat()
+  // which multiplies all time columns by 10 (seconds→deciseconds migration).
+  // Oxygen already stores deciseconds, so the upgrade would corrupt all times.
+  // MeOS current dbVersion is 96.
+  const MEOS_DB_VERSION = 96;
   const mainConn = await getTargetMainConn();
   let eventId: number;
   try {
     const [result] = await mainConn.execute(
-      "INSERT INTO oEvent (Name, Date, NameId) VALUES (?, ?, ?)",
-      [eventName, eventDate, dbName],
+      "INSERT INTO oEvent (Name, Date, NameId, Version) VALUES (?, ?, ?, ?)",
+      [eventName, eventDate, dbName, MEOS_DB_VERSION],
     );
     eventId = (result as { insertId: number }).insertId;
   } finally {
@@ -448,8 +453,8 @@ export async function createCompetitionDatabase(
     try {
       // Insert into local MeOSMain (ignore if somehow already exists)
       await localConn.execute(
-        "INSERT IGNORE INTO oEvent (Name, Date, NameId) VALUES (?, ?, ?)",
-        [eventName, eventDate, dbName],
+        "INSERT IGNORE INTO oEvent (Name, Date, NameId, Version) VALUES (?, ?, ?, ?)",
+        [eventName, eventDate, dbName, MEOS_DB_VERSION],
       );
     } finally {
       await localConn.end();

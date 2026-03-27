@@ -329,12 +329,28 @@ Split times are computed relative to the previous matched control (or start for 
 
 ### 4d. Result Status Determination
 
+Base status (computed from punch data):
+
 ```
 finishTime === 0        → DNF (Did Not Finish)
 missingCount > 0        → MP  (Missing Punch)
 runningTime > 0         → OK
 else                    → keep existing DB status
 ```
+
+MeOS-compatible status overrides (applied only when base status is OK):
+
+```
+class.MaxTime > 0 AND runningTime > MaxTime  → OverMaxTime (6)
+runner.TransferFlags & 256 (OutOfCompetition) → OutOfCompetition (15)
+class.NoTiming OR runner.TransferFlags & 512  → NoTiming (2)
+```
+
+Priority: MaxTime > OutOfCompetition > NoTiming. If MaxTime is exceeded, the runner gets OverMaxTime regardless of flags. OutOfCompetition takes priority over NoTiming.
+
+- **OverMaxTime**: Class-level setting (`oClass.MaxTime`, deciseconds). Runner's time is shown but they rank last.
+- **NoTiming**: For children's/open classes. Set at class level (`oClass.NoTiming`) or per-runner (`TransferFlags` bit 512). Time is not displayed in results, runner is not placed.
+- **OutOfCompetition**: Per-runner flag (`TransferFlags` bit 256). For course setters, unofficial runs. Time IS shown but runner is not placed.
 
 ### 4e. Return Object
 
@@ -348,7 +364,7 @@ else                    → keep existing DB status
     startTime,              // effective (assigned > card > 0)
     finishTime,             // deciseconds
     runningTime,            // finish - start (deciseconds)
-    status,                 // 1=OK, 2=DNF, 3=MP
+    status,                 // 1=OK, 2=NoTiming, 3=MP, 4=DNF, 6=OverMaxTime, 15=OutOfCompetition
   },
   controls: [{              // one per expected control
     controlCode, status,    // "ok" | "missing"
@@ -693,7 +709,7 @@ DeviceManager.addRecentCard()
 
 The `oCard` table is shared between Oxygen and MeOS. Both systems can read and write to it. Key compatibility points:
 
-- **Punch string format**: Both use `"{type}-{seconds}.{tenths};"` but MeOS may add `@unit` suffixes (e.g., `41-36120.0@42;`). Oxygen's `parsePunches()` strips these.
+- **Punch string format**: Both use `"{type}-{seconds}.{tenths};"`. MeOS may add `@unit` and `#origin` suffixes (e.g., `41-36120.0@42#1;`). Oxygen's `parsePunches()` extracts and preserves `@unit` (timing station identifier for multi-unit time adjustment) and strips `#origin` (tamper-detection checksum, not needed for results). When encoding, `fmtPunch()` includes `@unit` when present.
 - **ReadId**: Both compute the same hash for deduplication. Oxygen's `computeReadId()` matches MeOS's `SICard::calculateHash`.
 - **Multiple oCard rows**: When both systems create oCards for the same CardNo, Oxygen prefers the runner-linked one. The runner FK (`oRunner.Card`) is the authoritative link.
 

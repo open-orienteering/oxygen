@@ -13,6 +13,20 @@ export const RunnerStatus = {
   NotCompeting: 99,
 } as const;
 
+/** TransferFlags bitfield values matching MeOS oRunner.TransferFlags */
+export const TransferFlags = {
+  FlagAutoDNS: 64,
+  FlagAddedViaAPI: 128,
+  FlagOutsideCompetition: 256,
+  FlagNoTiming: 512,
+  FlagPayBeforeResult: 2048,
+} as const;
+
+/** Check if a specific TransferFlags bit is set */
+export function hasTransferFlag(flags: number, flag: number): boolean {
+  return (flags & flag) !== 0;
+}
+
 /** Payment mode values matching MeOS oRunner.PayMode */
 export const PAY_MODE = { none: 0, billed: 1, onSite: 2, card: 3, swish: 4, cash: 5 } as const;
 export type PayMode = (typeof PAY_MODE)[keyof typeof PAY_MODE];
@@ -287,6 +301,7 @@ export interface RunnerInfo {
   courseControlCodes?: number[];
   rank?: number;
   cardStartTime?: number;
+  transferFlags?: number;
 }
 
 /** Runner detail (for editing) */
@@ -313,6 +328,7 @@ export interface RunnerDetail {
   cardReturned: boolean;
   bib: string;
   entryDate: number; // YYYYMMDD as int
+  transferFlags: number;
 }
 
 /** Input for creating/updating a runner */
@@ -598,6 +614,8 @@ export interface ClassSummary {
   classType: string;
   /** Entry fee in whole currency units (e.g. 110 = 110 SEK) */
   classFee: number;
+  /** Maximum allowed running time in deciseconds (0 = no limit) */
+  maxTime: number;
 }
 
 /** Full class detail for editing */

@@ -121,5 +121,8 @@
   "rentalCard": "Hyrbricka",
   "markReturned": "Markera inlämnad",
   "markNotReturned": "Ångra inlämning",
-  "cardReturned": "Bricka inlämnad"
+  "cardReturned": "Bricka inlämnad",
+  "flagOC": "Utom tävlan",
+  "flagNT": "Utan tidtagning",
+  "flagPayBefore": "Betala före resultat"
 }
