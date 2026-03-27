@@ -58,5 +58,7 @@
   "applying": "Applying...",
   "bulkConfirm": "Set {{field}} to \"{{value}}\" for {{count}} classes?",
   "bulkUpdated": "Updated {{count}} classes",
-  "allowQuickEntry": "Direct registration"
+  "allowQuickEntry": "Direct registration",
+  "maxTime": "Max time",
+  "noLimit": "No limit"
 }

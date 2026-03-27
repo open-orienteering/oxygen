@@ -121,5 +121,8 @@
   "rentalCard": "Rental card",
   "markReturned": "Mark returned",
   "markNotReturned": "Undo return",
-  "cardReturned": "Card returned"
+  "cardReturned": "Card returned",
+  "flagOC": "Out of competition",
+  "flagNT": "No timing",
+  "flagPayBefore": "Pay before result"
 }
