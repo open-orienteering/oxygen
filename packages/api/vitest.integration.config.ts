@@ -5,6 +5,7 @@ export default defineConfig({
     environment: "node",
     include: ["src/__tests__/integration/**/*.test.ts"],
     setupFiles: ["src/__tests__/helpers/load-env.ts"],
+    globalSetup: ["src/__tests__/helpers/global-setup.ts"],
     testTimeout: 30000,
     hookTimeout: 30000,
     // Integration tests share module state (DB singleton) — run sequentially
