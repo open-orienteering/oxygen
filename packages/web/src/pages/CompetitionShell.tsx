@@ -38,8 +38,10 @@ const CardsPage = lazy(() => import("./CardsPage").then(m => ({ default: m.Cards
 const EventPage = lazy(() => import("./EventPage").then(m => ({ default: m.EventPage })));
 const TestLabPage = lazy(() => import("./TestLabPage").then(m => ({ default: m.TestLabPage })));
 const BackupPunchesPage = lazy(() => import("./BackupPunchesPage").then(m => ({ default: m.BackupPunchesPage })));
+const TracksPage = lazy(() => import("./TracksPage").then(m => ({ default: m.TracksPage })));
+const TracksReplayPage = lazy(() => import("./TracksReplayPage").then(m => ({ default: m.TracksReplayPage })));
 
-type Tab = "dashboard" | "event" | "runners" | "startlist" | "results" | "classes" | "courses" | "controls" | "clubs" | "start-station" | "finish-station" | "card-readout" | "cards" | "backup-punches" | "test-lab";
+type Tab = "dashboard" | "event" | "runners" | "startlist" | "results" | "classes" | "courses" | "controls" | "clubs" | "start-station" | "finish-station" | "card-readout" | "cards" | "backup-punches" | "test-lab" | "tracks";
 
 const tabLabelKeys = {
   "dashboard": "dashboard",
@@ -57,6 +59,7 @@ const tabLabelKeys = {
   "card-readout": "cardReadout",
   "backup-punches": "backupPunches",
   "test-lab": "testLab",
+  "tracks": "tracks",
 } as const satisfies Record<Tab, string>;
 
 const tabs: { id: Tab; path: string; group?: string; countKey?: string; isOverflow?: boolean }[] = [
@@ -68,6 +71,7 @@ const tabs: { id: Tab; path: string; group?: string; countKey?: string; isOverfl
   { id: "courses", path: "courses", countKey: "courses" },
   { id: "controls", path: "controls", countKey: "controls" },
   { id: "cards", path: "cards", countKey: "cards" },
+  { id: "tracks", path: "tracks" },
   // Overflow items
   { id: "event", path: "event", isOverflow: true },
   { id: "clubs", path: "clubs", countKey: "clubs", isOverflow: true },
@@ -389,6 +393,8 @@ export function CompetitionShell() {
             <Route path="registration" element={<Navigate to="" replace />} />
             <Route path="backup-punches" element={<BackupPunchesPage />} />
             <Route path="test-lab" element={<TestLabPage />} />
+            <Route path="tracks" element={<TracksPage />} />
+            <Route path="tracks/replay" element={<TracksReplayPage />} />
             <Route path="*" element={<Navigate to="" replace />} />
           </Routes>
           </Suspense>

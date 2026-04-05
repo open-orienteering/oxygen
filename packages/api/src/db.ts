@@ -294,6 +294,7 @@ export async function getCompetitionClient(
   renderedMapsTableReady.clear();
   mapTilesTableReady.clear();
   tracksTableReady.clear();
+  routesTableReady.clear();
 
   // Check if this competition has a remote connection
   const remote = await getRemoteConnection(targetDb);
@@ -948,6 +949,15 @@ async function _doEnsureCompetitionConfigTable(
     // Column already exists — ignore
   }
 
+  // Migration: add Livelox event ID for GPS route sync
+  try {
+    await client.$executeRawUnsafe(
+      `ALTER TABLE oxygen_competition_config ADD COLUMN livelox_event_id INT NULL`,
+    );
+  } catch {
+    // Column already exists — ignore
+  }
+
   // Migration: add Oxygen-only rental card return tracking column
   try {
     await client.$executeRawUnsafe(
@@ -1006,6 +1016,37 @@ export async function ensureTracksTable(
     )
   `);
   tracksTableReady.add(db);
+}
+
+// ─── GPS routes table (Livelox / GPX / device) ─────────────
+
+const routesTableReady = new Set<string>();
+
+export async function ensureRoutesTable(
+  client: PrismaClient,
+): Promise<void> {
+  const db = currentDbName ?? "";
+  if (routesTableReady.has(db)) return;
+
+  await client.$executeRawUnsafe(`
+    CREATE TABLE IF NOT EXISTS oxygen_routes (
+      Id                INT NOT NULL AUTO_INCREMENT PRIMARY KEY,
+      RunnerId          INT NULL     COMMENT 'FK → oRunner.Id; NULL if no name match found',
+      ClassId           INT NULL     COMMENT 'FK → oClass.Id; NULL if no match found',
+      LiveloxClassId    INT NULL     COMMENT 'Livelox class ID, for re-sync',
+      SourceType        VARCHAR(20)  NOT NULL DEFAULT 'livelox' COMMENT 'livelox | gps | gpx',
+      Color             VARCHAR(20)  NOT NULL DEFAULT '',
+      RaceStartMs       BIGINT NULL  COMMENT 'Race start epoch ms',
+      WaypointsJson     LONGTEXT     NOT NULL COMMENT 'JSON [{timeMs,lat,lng}]',
+      InterruptionsJson TEXT         NULL COMMENT 'JSON array of waypoint indices',
+      ResultJson        TEXT         NULL COMMENT 'JSON of {status,timeMs,rank,splitTimes}',
+      SyncedAt          TIMESTAMP(0) NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+      INDEX idx_runner  (RunnerId),
+      INDEX idx_class   (ClassId),
+      INDEX idx_livelox (LiveloxClassId)
+    )
+  `);
+  routesTableReady.add(db);
 }
 
 // ─── Raw competition DB connection ─────────────────────────

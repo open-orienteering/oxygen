@@ -80,5 +80,16 @@
   "markReturned": "Markera inlämnad",
   "markNotReturned": "Ångra inlämning",
   "rentalStatus": "Hyrstatus",
-  "unreturnedCount": "{{count}} ej inlämnade"
+  "unreturnedCount": "{{count}} ej inlämnade",
+  "filterUnlinked": "Okopplade",
+  "unlinkedCount": "{{count}} okopplade",
+  "linkRunner": "Koppla",
+  "changeRunner": "Ändra",
+  "unlinkRunner": "Koppla bort",
+  "searchRunnerPlaceholder": "Sök löpare på namn eller bricka...",
+  "confirmLink": "Koppla {{runner}} till bricka {{cardNo}}?",
+  "confirmUnlink": "Koppla bort {{runner}} från bricka {{cardNo}}?",
+  "linking": "Kopplar...",
+  "noRunnersFound": "Inga löpare hittades",
+  "typeToSearch": "Skriv för att söka..."
 }

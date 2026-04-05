@@ -107,6 +107,17 @@ The simulation runs server-side so it doesn't depend on keeping the browser tab 
 
 ![Test Lab](screenshots/test-lab.png)
 
+## GPS Tracks & Replay
+
+The Tracks page displays GPS route data synced from Livelox, with support for viewing, filtering, and animated replay.
+
+- **Livelox integration** — Event Settings includes a Livelox section where the organizer can enter or auto-detect the Livelox event ID (via Eventor link), then sync all GPS routes into the competition database
+- **Runner matching** — Livelox participants are matched to registered runners using a 3-tier strategy: Eventor person ID (ExtId), club-scoped name match with middle-name stripping, and cross-club name fallback
+- **Route storage** — GPS waypoints stored in `oxygen_routes` table with nullable FK to `oRunner`/`oClass`, enabling unmatched routes to still appear
+- **Tracks page** — Sortable table of all synced routes with class/name filters. Expandable rows show a map preview (O2 map or Livelox map fallback) with the track overlaid, filtered to only show the runner's course controls
+- **Replay viewer** — Full animated GPS playback with mass start / real time / legs modes, variable speed (1x–64x), follow mode, and per-runner visibility toggles. Light theme matching Oxygen's UI. Punch pulse animations at control points. Class selector in the header for quick switching
+- **Late GPS lock correction** — Runners whose GPS locked after their race start are detected and corrected using `lastWaypoint - result.time` derivation, preventing visual offset in mass-start replays
+
 ## MeOS Compatibility
 
 Oxygen reads and writes the same MySQL schema as [MeOS](http://www.melin.nu/meos), the established Windows-based orienteering software. Both tools can operate on the same database simultaneously — changes made in MeOS are immediately reflected in Oxygen and vice versa. This allows a gradual migration path where organizers can use Oxygen for web-based features while keeping MeOS for legacy workflows.

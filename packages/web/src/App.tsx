@@ -11,6 +11,7 @@ const CompetitionSelector = lazy(() => import("./pages/CompetitionSelector").the
 const CompetitionShell = lazy(() => import("./pages/CompetitionShell").then(m => ({ default: m.CompetitionShell })));
 const KioskPage = lazy(() => import("./pages/KioskPage").then(m => ({ default: m.KioskPage })));
 const StartScreenPage = lazy(() => import("./pages/StartScreenPage").then(m => ({ default: m.StartScreenPage })));
+const ReplayPage = lazy(() => import("./pages/ReplayPage").then(m => ({ default: m.ReplayPage })));
 
 function PageSpinner() {
   return (
@@ -45,6 +46,8 @@ export default function App() {
             {/* Kiosk route — outside CompetitionShell (fullscreen, no admin UI) */}
             <Route path="/:nameId/kiosk" element={<KioskPage />} />
             <Route path="/:nameId/start-screen" element={<StartScreenPage />} />
+            <Route path="/replay" element={<ReplayPage />} />
+            <Route path="/:nameId/replay" element={<ReplayPage />} />
             <Route path="/:nameId/*" element={<CompetitionShell />} />
             {/* Catch-all redirect to home */}
             <Route path="*" element={<Navigate to="/" replace />} />

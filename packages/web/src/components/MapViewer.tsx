@@ -65,6 +65,8 @@ interface Props {
   isFullscreen?: boolean;
   /** Hide all interactive controls (zoom, measure, reset, fullscreen) */
   hideControls?: boolean;
+  /** GPS route traces to overlay on the map (lat/lng points, already in WGS84). */
+  gpsRoutes?: Array<{ color: string; points: Array<{ lat: number; lng: number }> }>;
 }
 
 // ─── Helpers ────────────────────────────────────────────────
@@ -157,6 +159,7 @@ export function MapViewer({
   onToggleFullscreen,
   isFullscreen = false,
   hideControls = false,
+  gpsRoutes,
 }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [viewport, setViewport] = useState<TileViewport | null>(null);
@@ -719,6 +722,33 @@ export function MapViewer({
       }
     }
 
+    // ─── GPS route traces ─────────────────────────────────
+
+    if (gpsRoutes && gpsRoutes.length > 0 && viewport) {
+      for (let ri = 0; ri < gpsRoutes.length; ri++) {
+        const route = gpsRoutes[ri];
+        if (route.points.length < 2) continue;
+        const screenPts = route.points.map(({ lat, lng }) =>
+          latlngToPixel(lat, lng, viewport, cw, ch),
+        );
+        const d = screenPts
+          .map((p, i) => `${i === 0 ? "M" : "L"}${p.px.toFixed(1)},${p.py.toFixed(1)}`)
+          .join(" ");
+        elements.push(
+          <path
+            key={`gps-${ri}`}
+            d={d}
+            stroke={route.color}
+            strokeWidth={4.5}
+            fill="none"
+            strokeLinejoin="round"
+            strokeLinecap="round"
+            opacity={0.8}
+          />,
+        );
+      }
+    }
+
     // ─── Fallback legs (if no course geometry) ───────────
 
     if (!courseGeometry) {
@@ -998,7 +1028,7 @@ export function MapViewer({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [viewport, containerSize, renderW, renderH, controls, courses, courseGeometry, highlightControlId, highlightCourseName,
       symbolScale, affine, measuring, measurePoints, measureCursor, showDescriptions, hideControls, onControlClick,
-      mapMmToScreen, rotDeg]);
+      mapMmToScreen, rotDeg, gpsRoutes]);
 
   // ─── Description sheet (outside rotation) ──────────────
 

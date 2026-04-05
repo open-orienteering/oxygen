@@ -34,6 +34,8 @@ interface Props {
   focusControlCodes?: string[];
   /** Hide the toolbar (filter/description/fullscreen buttons) entirely */
   hideToolbar?: boolean;
+  /** GPS route traces to overlay on the map. */
+  gpsRoutes?: Array<{ color: string; points: Array<{ lat: number; lng: number }> }>;
 }
 
 export function MapPanel({
@@ -52,6 +54,7 @@ export function MapPanel({
   punchStatusByCode,
   focusControlCodes,
   hideToolbar = false,
+  gpsRoutes,
 }: Props) {
   const { t } = useTranslation("dashboard");
   // Merge single + multi course names into a set for unified handling
@@ -430,6 +433,7 @@ export function MapPanel({
         onToggleFullscreen={toggleFullscreen}
         isFullscreen={isFullscreen}
         hideControls={hideToolbar}
+        gpsRoutes={gpsRoutes}
       />
 
       {/* Map info — below the map */}

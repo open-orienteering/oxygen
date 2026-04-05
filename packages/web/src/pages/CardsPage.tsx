@@ -58,13 +58,15 @@ function BatteryCell({ voltage, cardType }: { voltage: number | null; cardType: 
 
 // ─── Main Page ──────────────────────────────────────────────
 
-type RentalFilter = "all" | "unreturned" | "rental-all";
+type CardFilter = "all" | "unreturned" | "rental-all" | "unlinked";
+const VALID_FILTERS: CardFilter[] = ["all", "unreturned", "rental-all", "unlinked"];
 
 export function CardsPage() {
   const { t } = useTranslation("devices");
   const [search, setSearch] = useSearchParam("search");
   const [expandedCard, setExpandedCard] = useNumericSearchParam("card");
-  const [rentalFilter, setRentalFilter] = useState<RentalFilter>("all");
+  const [filterParam, setFilterParam] = useSearchParam("filter");
+  const cardFilter: CardFilter = VALID_FILTERS.includes(filterParam as CardFilter) ? (filterParam as CardFilter) : "all";
 
   const cards = trpc.cardReadout.cardList.useQuery();
 
@@ -98,14 +100,20 @@ export function CardsPage() {
     () => (cards.data ?? []).filter((c) => c.runner?.isRentalCard && !c.runner?.cardReturned).length,
     [cards.data],
   );
+  const unlinkedCount = useMemo(
+    () => (cards.data ?? []).filter((c) => !c.runner).length,
+    [cards.data],
+  );
 
-  // Filter by search + rental filter
+  // Filter by search + card filter
   const filtered = useMemo(() => {
     let base = sorted;
-    if (rentalFilter === "unreturned") {
+    if (cardFilter === "unreturned") {
       base = base.filter((c) => c.runner?.isRentalCard && !c.runner?.cardReturned);
-    } else if (rentalFilter === "rental-all") {
+    } else if (cardFilter === "rental-all") {
       base = base.filter((c) => c.runner?.isRentalCard);
+    } else if (cardFilter === "unlinked") {
+      base = base.filter((c) => !c.runner);
     }
     if (!search) return base;
     const term = search.toLowerCase();
@@ -116,16 +124,17 @@ export function CardsPage() {
         (c.runner?.clubName ?? "").toLowerCase().includes(term) ||
         c.cardType.toLowerCase().includes(term),
     );
-  }, [sorted, search, rentalFilter]);
+  }, [sorted, search, cardFilter]);
 
   const handleCardClick = (cardNo: number) => {
     setExpandedCard(expandedCard === cardNo ? undefined : cardNo);
   };
 
-  const rentalFilterOptions: { key: RentalFilter; label: string }[] = [
+  const filterOptions: { key: CardFilter; label: string }[] = [
     { key: "all", label: t("filterAll") },
     { key: "unreturned", label: t("filterUnreturned") },
     { key: "rental-all", label: t("filterRentalAll") },
+    { key: "unlinked", label: t("filterUnlinked") },
   ];
 
   const colCount = 8;
@@ -137,7 +146,10 @@ export function CardsPage() {
         <div>
           <h2 className="text-lg font-semibold text-slate-900">{t("siCards")}</h2>
           <p className="text-sm text-slate-500">
-            {t("cardsCount", { count: cards.data?.length ?? 0 })} ·{" "}
+            {cardFilter !== "all"
+              ? `${filtered.length} / ${cards.data?.length ?? 0}`
+              : t("cardsCount", { count: cards.data?.length ?? 0 })
+            } ·{" "}
             {t("linkedToRunners", { count: cards.data?.filter((c) => c.runner).length ?? 0 })}
             {unreturnedCount > 0 && (
               <span className="ml-2 inline-flex items-center px-1.5 py-0.5 rounded-full text-xs font-semibold bg-amber-100 text-amber-700">
@@ -149,12 +161,12 @@ export function CardsPage() {
         <div className="flex items-center gap-3">
           {/* Rental filter pills */}
           <div className="flex items-center rounded-lg border border-slate-200 bg-white overflow-hidden text-xs font-medium">
-            {rentalFilterOptions.map((opt) => (
+            {filterOptions.map((opt) => (
               <button
                 key={opt.key}
-                onClick={() => setRentalFilter(opt.key)}
+                onClick={() => setFilterParam(opt.key === "all" ? "" : opt.key)}
                 className={`px-3 py-1.5 transition-colors cursor-pointer ${
-                  rentalFilter === opt.key
+                  cardFilter === opt.key
                     ? "bg-amber-600 text-white"
                     : "text-slate-600 hover:bg-slate-50"
                 }`}
@@ -162,9 +174,16 @@ export function CardsPage() {
                 {opt.label}
                 {opt.key === "unreturned" && unreturnedCount > 0 && (
                   <span className={`ml-1.5 px-1 py-0.5 rounded-full text-[10px] font-bold ${
-                    rentalFilter === "unreturned" ? "bg-white/30 text-white" : "bg-amber-100 text-amber-700"
+                    cardFilter === "unreturned" ? "bg-white/30 text-white" : "bg-amber-100 text-amber-700"
                   }`}>
                     {unreturnedCount}
+                  </span>
+                )}
+                {opt.key === "unlinked" && unlinkedCount > 0 && (
+                  <span className={`ml-1.5 px-1 py-0.5 rounded-full text-[10px] font-bold ${
+                    cardFilter === "unlinked" ? "bg-white/30 text-white" : "bg-slate-200 text-slate-600"
+                  }`}>
+                    {unlinkedCount}
                   </span>
                 )}
               </button>
@@ -210,7 +229,7 @@ export function CardsPage() {
               </tr>
             ) : (
               filtered.map((card) => (
-                <Fragment key={card.cardNo}>
+                <Fragment key={card.id}>
                   <tr
                     onClick={() => handleCardClick(card.cardNo)}
                     className={`cursor-pointer hover:bg-slate-50 transition-colors ${expandedCard === card.cardNo ? "bg-blue-50" : ""
@@ -402,12 +421,29 @@ function CardDetailPanel({ cardNo, onReturnToggled }: { cardNo: number; onReturn
   const detail = trpc.cardReadout.cardDetail.useQuery({ cardNo });
   const history = trpc.cardReadout.readoutHistory.useQuery({ cardNo });
 
+  const [isLinking, setIsLinking] = useState(false);
+  const [runnerSearch, setRunnerSearch] = useState("");
+
   const setCardReturned = trpc.runner.setCardReturned.useMutation({
     onSuccess: () => {
       detail.refetch();
       onReturnToggled?.();
     },
   });
+
+  const linkMutation = trpc.cardReadout.linkCardToRunner.useMutation({
+    onSuccess: () => {
+      detail.refetch();
+      onReturnToggled?.();
+      setIsLinking(false);
+      setRunnerSearch("");
+    },
+  });
+
+  const runnerResults = trpc.runner.list.useQuery(
+    { search: runnerSearch },
+    { enabled: isLinking && runnerSearch.length >= 2 },
+  );
 
   if (detail.isLoading) {
     return (
@@ -477,10 +513,52 @@ function CardDetailPanel({ cardNo, onReturnToggled }: { cardNo: number; onReturn
           </dl>
         </div>
         <div>
-          <h4 className="text-xs font-medium text-slate-500 uppercase tracking-wider mb-2">
-            {t("linkedRunner")}
-          </h4>
-          {d.runner ? (
+          <div className="flex items-center justify-between mb-2">
+            <h4 className="text-xs font-medium text-slate-500 uppercase tracking-wider">
+              {t("linkedRunner")}
+            </h4>
+            <div className="flex gap-1.5">
+              {d.runner && !isLinking && (
+                <>
+                  <button
+                    onClick={() => setIsLinking(true)}
+                    className="text-xs text-blue-600 hover:text-blue-800 font-medium cursor-pointer"
+                  >
+                    {t("changeRunner")}
+                  </button>
+                  <span className="text-slate-300">·</span>
+                  <button
+                    onClick={() => {
+                      if (window.confirm(t("confirmUnlink", { runner: d.runner!.name, cardNo: d.cardNo }))) {
+                        linkMutation.mutate({ cardId: d.id, runnerId: null });
+                      }
+                    }}
+                    disabled={linkMutation.isPending}
+                    className="text-xs text-red-500 hover:text-red-700 font-medium cursor-pointer disabled:opacity-50"
+                  >
+                    {t("unlinkRunner")}
+                  </button>
+                </>
+              )}
+              {!d.runner && !isLinking && (
+                <button
+                  onClick={() => setIsLinking(true)}
+                  className="text-xs text-blue-600 hover:text-blue-800 font-medium cursor-pointer"
+                >
+                  {t("linkRunner")}
+                </button>
+              )}
+              {isLinking && (
+                <button
+                  onClick={() => { setIsLinking(false); setRunnerSearch(""); }}
+                  className="text-xs text-slate-500 hover:text-slate-700 font-medium cursor-pointer"
+                >
+                  ✕
+                </button>
+              )}
+            </div>
+          </div>
+          {d.runner && !isLinking ? (
             <dl className="space-y-1 text-sm">
               <div className="flex gap-2">
                 <dt className="text-slate-500 w-20">{t("name")}:</dt>
@@ -510,6 +588,48 @@ function CardDetailPanel({ cardNo, onReturnToggled }: { cardNo: number; onReturn
                 </dd>
               </div>
             </dl>
+          ) : isLinking ? (
+            <div className="space-y-2">
+              <input
+                type="text"
+                value={runnerSearch}
+                onChange={(e) => setRunnerSearch(e.target.value)}
+                placeholder={t("searchRunnerPlaceholder")}
+                className="w-full px-3 py-1.5 border border-slate-200 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+                autoFocus
+              />
+              {runnerSearch.length < 2 ? (
+                <p className="text-xs text-slate-400 px-1">{t("typeToSearch")}</p>
+              ) : runnerResults.isLoading ? (
+                <p className="text-xs text-slate-400 px-1">{t("loading")}</p>
+              ) : (runnerResults.data ?? []).length === 0 ? (
+                <p className="text-xs text-slate-400 px-1">{t("noRunnersFound")}</p>
+              ) : (
+                <div className="border border-slate-200 rounded-lg bg-white max-h-48 overflow-y-auto divide-y divide-slate-50">
+                  {(runnerResults.data ?? []).slice(0, 20).map((r) => (
+                    <button
+                      key={r.id}
+                      onClick={() => {
+                        if (window.confirm(t("confirmLink", { runner: r.name, cardNo: d.cardNo }))) {
+                          linkMutation.mutate({ cardId: d.id, runnerId: r.id });
+                        }
+                      }}
+                      disabled={linkMutation.isPending}
+                      className="w-full text-left px-3 py-1.5 text-sm hover:bg-blue-50 transition-colors cursor-pointer disabled:opacity-50 flex items-center justify-between"
+                    >
+                      <span className="font-medium text-slate-800">{r.name}</span>
+                      <span className="text-xs text-slate-400">
+                        {r.className}{r.clubName ? ` · ${r.clubName}` : ""}
+                        {r.cardNo > 0 ? ` · #${r.cardNo}` : ""}
+                      </span>
+                    </button>
+                  ))}
+                </div>
+              )}
+              {linkMutation.isPending && (
+                <p className="text-xs text-blue-600 px-1">{t("linking")}</p>
+              )}
+            </div>
           ) : (
             <p className="text-sm text-amber-600">
               {t("notLinkedToRunner")}
