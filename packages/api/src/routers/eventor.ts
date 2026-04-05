@@ -24,6 +24,7 @@ import {
   fetchResults,
   fetchClubLogo,
   fetchEventOrganiser,
+  fetchEventWebUrl,
   fetchCompetitors,
   fetchCachedCompetitors,
   uploadResults,
@@ -39,6 +40,7 @@ import { type EventorEnvironment } from "@oxygen/shared";
 import { computeClassPlacements } from "../results.js";
 import { parsePunches, parseCourseControls, matchPunchesToCourse, type ParsedPunch } from "./cardReadout.js";
 import { toAbsolute } from "../timeConvert.js";
+import { fetchLiveloxEventClasses } from "../livelox/fetcher.js";
 
 // In-memory store for the validated API key and organisation, keyed by environment.
 const storedKeys = new Map<
@@ -1496,6 +1498,46 @@ export const eventorRouter = router({
       clubCount: clubCount ? parseInt(clubCount, 10) : 0,
     };
   }),
+
+  /**
+   * Given an Eventor event ID, resolve the linked Livelox event and return
+   * its class list (with Livelox class IDs) for the replay class picker.
+   *
+   * Flow: Eventor event XML → WebURL → Livelox event ID → SearchEvents → classes
+   */
+  getLiveloxClasses: publicProcedure
+    .input(
+      z.object({
+        eventorEventId: z.number().int().positive(),
+        env: z.enum(["prod", "test"]).default("prod"),
+      }),
+    )
+    .query(async ({ input }) => {
+      const { apiKey } = await requireApiKey(input.env);
+
+      const info = await fetchEventWebUrl(apiKey, input.eventorEventId, input.env);
+      if (!info?.webUrl) {
+        throw new Error(
+          "This Eventor event has no external URL. Make sure the event links to Livelox.",
+        );
+      }
+
+      // Extract Livelox event ID from URL like /Events/Show/182866/
+      const match = info.webUrl.match(/\/Events\/Show\/(\d+)/i);
+      if (!match) {
+        throw new Error(
+          `The event URL does not appear to be a Livelox link: ${info.webUrl}`,
+        );
+      }
+      const liveloxEventId = parseInt(match[1], 10);
+
+      const event = await fetchLiveloxEventClasses(liveloxEventId, info.date);
+      return {
+        liveloxEventId,
+        eventName: event.name || info.name,
+        classes: event.classes,
+      };
+    }),
 });
 
 // ─── Helpers ────────────────────────────────────────────────

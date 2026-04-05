@@ -80,5 +80,16 @@
   "markReturned": "Mark returned",
   "markNotReturned": "Undo return",
   "rentalStatus": "Rental status",
-  "unreturnedCount": "{{count}} unreturned"
+  "unreturnedCount": "{{count}} unreturned",
+  "filterUnlinked": "Unlinked",
+  "unlinkedCount": "{{count}} unlinked",
+  "linkRunner": "Link",
+  "changeRunner": "Change",
+  "unlinkRunner": "Unlink",
+  "searchRunnerPlaceholder": "Search runner by name or card...",
+  "confirmLink": "Link {{runner}} to card {{cardNo}}?",
+  "confirmUnlink": "Unlink {{runner}} from card {{cardNo}}?",
+  "linking": "Linking...",
+  "noRunnersFound": "No runners found",
+  "typeToSearch": "Type to search..."
 }

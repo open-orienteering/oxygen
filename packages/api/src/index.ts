@@ -449,6 +449,33 @@ async function main() {
     }
   });
 
+  // ─── Livelox tile proxy ───────────────────────────────────
+  // Proxies map tile images from Livelox Azure blob storage to avoid CORS issues.
+  // Only allows URLs from the expected Azure blob domain.
+  server.get<{
+    Querystring: { url: string };
+  }>("/api/livelox-tile", async (req, reply) => {
+    const { url } = req.query;
+    if (!url || !url.startsWith("https://livelox.blob.core.windows.net/")) {
+      return reply.code(400).send({ error: "Invalid or disallowed URL" });
+    }
+    try {
+      const resp = await fetch(url);
+      if (!resp.ok) {
+        return reply.code(resp.status).send({ error: "Upstream fetch failed" });
+      }
+      const buffer = Buffer.from(await resp.arrayBuffer());
+      const contentType = resp.headers.get("content-type") ?? "image/png";
+      return reply
+        .header("Content-Type", contentType)
+        .header("Cache-Control", "public, max-age=604800")
+        .send(buffer);
+    } catch (err) {
+      server.log.error(err, "Livelox tile proxy error");
+      return reply.code(502).send({ error: "Proxy fetch failed" });
+    }
+  });
+
   // Graceful shutdown
   const shutdown = async () => {
     server.log.info("Shutting down...");

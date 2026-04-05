@@ -18,6 +18,7 @@ import enDraw from "./locales/en/draw.json";
 import enEvent from "./locales/en/event.json";
 import enDevices from "./locales/en/devices.json";
 import enStatus from "./locales/en/status.json";
+import enTracks from "./locales/en/tracks.json";
 
 import svCommon from "./locales/sv/common.json";
 import svNav from "./locales/sv/nav.json";
@@ -36,6 +37,7 @@ import svDraw from "./locales/sv/draw.json";
 import svEvent from "./locales/sv/event.json";
 import svDevices from "./locales/sv/devices.json";
 import svStatus from "./locales/sv/status.json";
+import svTracks from "./locales/sv/tracks.json";
 
 export const defaultNS = "common" as const;
 
@@ -58,6 +60,7 @@ export const resources = {
     event: enEvent,
     devices: enDevices,
     status: enStatus,
+    tracks: enTracks,
   },
   sv: {
     common: svCommon,
@@ -77,6 +80,7 @@ export const resources = {
     event: svEvent,
     devices: svDevices,
     status: svStatus,
+    tracks: svTracks,
   },
 } as const;
 

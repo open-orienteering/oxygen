@@ -232,7 +232,7 @@ export function ClassesPage() {
                       <SortHeader label={t("fee")} active={isFiltered ? sort.key === "fee" : undefined} direction={sort.dir} onClick={() => toggle("fee")} className="hidden sm:table-cell w-20" />
                       <SortHeader label={t("sex")} active={isFiltered ? sort.key === "sex" : undefined} direction={sort.dir} onClick={() => toggle("sex")} className="hidden md:table-cell w-24" />
                       <SortHeader label={t("classType")} active={isFiltered ? sort.key === "type" : undefined} direction={sort.dir} onClick={() => toggle("type")} className="hidden lg:table-cell" />
-                      <th className="px-4 py-2.5 text-left font-medium text-slate-500 hidden xl:table-cell w-32">{t("options")}</th>
+                      <th className="px-4 py-2.5 text-left font-medium text-slate-500 hidden xl:table-cell w-52">{t("options")}</th>
                       <th className="px-4 py-2.5 text-right font-medium text-slate-500 w-20">{t("actions")}</th>
                     </tr>
                   </thead>
@@ -248,7 +248,7 @@ export function ClassesPage() {
                         onToggleSelect={() => selection.toggle(cls.id)}
                         onToggleExpand={() => handleToggleExpand(cls.id)}
                         onDelete={() => handleDelete(cls.id, cls.name)}
-                        colSpan={(!isFiltered && !selection.someSelected) ? 9 : 8}
+                        colSpan={99}
                       />
                     ))}
                   </tbody>
@@ -611,6 +611,7 @@ function ClassInlineDetail({ classId }: { classId: number }) {
             {t("classSettings")}
           </h4>
 
+          {/* Row 1: Name / Sex / Sort index */}
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
             <div>
               <label className="block text-xs font-medium text-slate-500 mb-1">{t("name")}</label>
@@ -662,13 +663,8 @@ function ClassInlineDetail({ classId }: { classId: number }) {
             </div>
           </div>
 
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
-            {d.classType && (
-              <div className="col-span-2 sm:col-span-4">
-                <label className="block text-xs font-medium text-slate-500 mb-1">{t("classType")}</label>
-                <div className="text-sm text-slate-700 py-1.5">{d.classType}</div>
-              </div>
-            )}
+          {/* Row 2: Min age / Max age / Entry fee */}
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
             <div>
               <label className="block text-xs font-medium text-slate-500 mb-1">{t("minAge")}</label>
               <input
@@ -707,64 +703,69 @@ function ClassInlineDetail({ classId }: { classId: number }) {
                 min={0}
               />
             </div>
-            <div className="flex items-end">
-              <label className="flex items-center gap-2 cursor-pointer pb-1.5">
+            <div>
+              <label className="block text-xs font-medium text-slate-500 mb-1">{t("entryFee")}</label>
+              <input
+                type="number"
+                value={editFee ?? String(d.classFee)}
+                onChange={(e) => setEditFee(e.target.value)}
+                onBlur={() => {
+                  if (editFee !== null) {
+                    const val = parseInt(editFee, 10);
+                    if (!isNaN(val) && val !== d.classFee) {
+                      handleSave("classFee", val);
+                    }
+                  }
+                  setEditFee(null);
+                }}
+                className="w-full px-3 py-1.5 border border-slate-200 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 tabular-nums"
+                min={0}
+                placeholder="0"
+              />
+            </div>
+          </div>
+
+          {/* Row 3: Flags (Free start / No timing / Allow quick entry) */}
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+            <div>
+              <label className="block text-xs font-medium text-slate-500 mb-1">{t("freeStart")}</label>
+              <label className="flex items-center gap-2 cursor-pointer h-[34px]">
                 <input
                   type="checkbox"
                   checked={d.freeStart}
                   onChange={(e) => handleSave("freeStart", e.target.checked)}
                   className="rounded border-slate-300 text-blue-600 focus:ring-blue-500 cursor-pointer"
                 />
-                <span className="text-sm text-slate-600">{t("freeStart")}</span>
+                <span className="text-sm text-slate-600">{d.freeStart ? t("yes") : t("no")}</span>
               </label>
             </div>
-            <div className="flex items-end">
-              <label className="flex items-center gap-2 cursor-pointer pb-1.5">
+            <div>
+              <label className="block text-xs font-medium text-slate-500 mb-1">{t("noTiming")}</label>
+              <label className="flex items-center gap-2 cursor-pointer h-[34px]">
                 <input
                   type="checkbox"
                   checked={d.noTiming}
                   onChange={(e) => handleSave("noTiming", e.target.checked)}
                   className="rounded border-slate-300 text-blue-600 focus:ring-blue-500 cursor-pointer"
                 />
-                <span className="text-sm text-slate-600">{t("noTiming")}</span>
+                <span className="text-sm text-slate-600">{d.noTiming ? t("yes") : t("no")}</span>
               </label>
             </div>
-            <div className="flex items-end">
-              <label className="flex items-center gap-2 cursor-pointer pb-1.5">
+            <div>
+              <label className="block text-xs font-medium text-slate-500 mb-1">{t("allowQuickEntry")}</label>
+              <label className="flex items-center gap-2 cursor-pointer h-[34px]">
                 <input
                   type="checkbox"
                   checked={d.allowQuickEntry}
                   onChange={(e) => handleSave("allowQuickEntry", e.target.checked)}
                   className="rounded border-slate-300 text-green-600 focus:ring-green-500 cursor-pointer"
                 />
-                <span className="text-sm text-slate-600">{t("allowQuickEntry")}</span>
+                <span className="text-sm text-slate-600">{d.allowQuickEntry ? t("yes") : t("no")}</span>
               </label>
             </div>
           </div>
 
-          {/* Entry fee */}
-          <div>
-            <label className="block text-xs font-medium text-slate-500 mb-1">{t("entryFee")}</label>
-            <input
-              type="number"
-              value={editFee ?? String(d.classFee)}
-              onChange={(e) => setEditFee(e.target.value)}
-              onBlur={() => {
-                if (editFee !== null) {
-                  const val = parseInt(editFee, 10);
-                  if (!isNaN(val) && val !== d.classFee) {
-                    handleSave("classFee", val);
-                  }
-                }
-                setEditFee(null);
-              }}
-              className="w-32 px-3 py-1.5 border border-slate-200 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 tabular-nums"
-              min={0}
-              placeholder="0"
-            />
-          </div>
-
-          {/* Max time */}
+          {/* Max time (standalone — less common) */}
           <div>
             <label className="block text-xs font-medium text-slate-500 mb-1">{t("maxTime")}</label>
             <input
@@ -780,10 +781,18 @@ function ClassInlineDetail({ classId }: { classId: number }) {
                 }
                 setEditMaxTime(null);
               }}
-              className="w-32 px-3 py-1.5 border border-slate-200 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 tabular-nums"
+              className="w-36 px-3 py-1.5 border border-slate-200 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 tabular-nums"
               placeholder="H:MM:SS"
             />
           </div>
+
+          {/* Class type (read-only, shown only if set) */}
+          {d.classType && (
+            <div>
+              <label className="block text-xs font-medium text-slate-500 mb-1">{t("classType")}</label>
+              <div className="text-sm text-slate-700 py-1.5">{d.classType}</div>
+            </div>
+          )}
 
           {/* Course assignment */}
           <div>

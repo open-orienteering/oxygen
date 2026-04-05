@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { TRPCError } from "@trpc/server";
 import { router, publicProcedure } from "../trpc.js";
 import { getCompetitionClient, ensureReadoutTable, incrementCounter, getZeroTime } from "../db.js";
 import { toRelative, toAbsolute } from "../timeConvert.js";
@@ -802,17 +803,20 @@ export const cardReadoutRouter = router({
   cardList: publicProcedure.query(async () => {
     const client = await getCompetitionClient();
 
-    const cards = await client.oCard.findMany({
+    const allCards = await client.oCard.findMany({
       where: { Removed: false },
       orderBy: { CardNo: "asc" },
     });
 
-    // Batch-load runner info for linked cards
-    const runnerIds = new Set(
-      cards.map((c) => c.ReadId).filter((id) => id > 0),
-    );
-    // Also match by Card FK on oRunner
-    const cardIds = new Set(cards.map((c) => c.Id));
+    // Deduplicate by CardNo — keep the record with the highest Id (newest)
+    const dedupMap = new Map<number, (typeof allCards)[number]>();
+    for (const card of allCards) {
+      const existing = dedupMap.get(card.CardNo);
+      if (!existing || card.Id > existing.Id) {
+        dedupMap.set(card.CardNo, card);
+      }
+    }
+    const cards = [...dedupMap.values()];
 
     const runners = await client.oRunner.findMany({
       where: { Removed: false },
@@ -1075,5 +1079,54 @@ export const cardReadoutRouter = router({
       });
       await incrementCounter("oRunner", input.runnerId);
       return { applied: true, runnerId: input.runnerId, status: input.status, finishTime: input.finishTime, startTime: input.startTime };
+    }),
+
+  /** Manually link or unlink a card to/from a runner */
+  linkCardToRunner: publicProcedure
+    .input(
+      z.object({
+        cardId: z.number().int().positive(),
+        runnerId: z.number().int().nullable(),
+      }),
+    )
+    .mutation(async ({ input }) => {
+      const client = await getCompetitionClient();
+
+      const card = await client.oCard.findUnique({ where: { Id: input.cardId } });
+      if (!card) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "Card not found" });
+      }
+
+      // Clear any runner currently linked to this card (by Card FK or CardNo)
+      const oldRunners = await client.oRunner.findMany({
+        where: {
+          OR: [{ Card: card.Id }, { CardNo: card.CardNo }],
+          Removed: false,
+        },
+        select: { Id: true },
+      });
+      for (const r of oldRunners) {
+        await client.oRunner.update({
+          where: { Id: r.Id },
+          data: { Card: 0, CardNo: 0 },
+        });
+      }
+
+      // Link new runner if provided
+      if (input.runnerId) {
+        const runner = await client.oRunner.findUnique({
+          where: { Id: input.runnerId },
+          select: { Id: true, Removed: true },
+        });
+        if (!runner || runner.Removed) {
+          throw new TRPCError({ code: "NOT_FOUND", message: "Runner not found" });
+        }
+        await client.oRunner.update({
+          where: { Id: input.runnerId },
+          data: { CardNo: card.CardNo, Card: card.Id },
+        });
+      }
+
+      return { success: true };
     }),
 });

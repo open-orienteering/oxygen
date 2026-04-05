@@ -760,4 +760,29 @@ export const competitionRouter = router({
       await incrementCounter("oEvent", event.Id);
       return { ok: true };
     }),
+
+  // ── Livelox integration config ───────────────────────────
+
+  getLiveloxEventId: publicProcedure.query(async () => {
+    const client = await getCompetitionClient();
+    await ensureCompetitionConfigTable(client);
+    const rows = await client.$queryRawUnsafe<
+      Array<{ livelox_event_id: number | null }>
+    >(
+      "SELECT livelox_event_id FROM oxygen_competition_config WHERE id = 1",
+    );
+    return { liveloxEventId: rows[0]?.livelox_event_id ?? null };
+  }),
+
+  setLiveloxEventId: publicProcedure
+    .input(z.object({ liveloxEventId: z.number().int().positive().nullable() }))
+    .mutation(async ({ input }) => {
+      const client = await getCompetitionClient();
+      await ensureCompetitionConfigTable(client);
+      await client.$executeRawUnsafe(
+        `UPDATE oxygen_competition_config SET livelox_event_id = ? WHERE id = 1`,
+        input.liveloxEventId,
+      );
+      return { ok: true };
+    }),
 });
