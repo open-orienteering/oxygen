@@ -1,6 +1,6 @@
 import { z } from "zod";
-import { router, publicProcedure } from "../trpc.js";
-import { getCompetitionClient, getZeroTime } from "../db.js";
+import { router, competitionProcedure } from "../trpc.js";
+import {getZeroTime} from "../db.js";
 import { toAbsolute } from "../timeConvert.js";
 import {
   RunnerStatus,
@@ -15,10 +15,10 @@ export const listsRouter = router({
    * Get start list, optionally filtered by class.
    * Sorted by class sort index, then start time.
    */
-  startList: publicProcedure
+  startList: competitionProcedure
     .input(z.object({ classId: z.number().optional() }).optional())
-    .query(async ({ input }): Promise<StartListEntry[]> => {
-      const client = await getCompetitionClient();
+    .query(async ({ ctx, input }): Promise<StartListEntry[]> => {
+      const client = ctx.db;
 
       const where: Record<string, unknown> = { Removed: false };
       if (input?.classId) where.Class = input.classId;
@@ -86,10 +86,10 @@ export const listsRouter = router({
    * Get result list with place calculation, optionally filtered by class.
    * Results are computed per class: OK runners sorted by time, then non-OK runners.
    */
-  resultList: publicProcedure
+  resultList: competitionProcedure
     .input(z.object({ classId: z.number().optional() }).optional())
-    .query(async ({ input }): Promise<ResultEntry[]> => {
-      const client = await getCompetitionClient();
+    .query(async ({ ctx, input }): Promise<ResultEntry[]> => {
+      const client = ctx.db;
 
       const where: Record<string, unknown> = { Removed: false };
       if (input?.classId) where.Class = input.classId;
@@ -202,8 +202,8 @@ export const listsRouter = router({
   /**
    * Get all classes with course details and runner counts.
    */
-  classes: publicProcedure.query(async (): Promise<ClassDetail[]> => {
-    const client = await getCompetitionClient();
+  classes: competitionProcedure.query(async ({ ctx }): Promise<ClassDetail[]> => {
+    const client = ctx.db;
     const zeroTime = await getZeroTime(client);
 
     const classes = await client.oClass.findMany({

@@ -1,4 +1,5 @@
 import { useState, useRef, useEffect, useCallback, useMemo } from "react";
+import { useParams } from "react-router-dom";
 import { getDescriptionSymbols } from "../iof-symbols";
 import { TileLayer } from "./TileLayer";
 import {
@@ -161,6 +162,9 @@ export function MapViewer({
   hideControls = false,
   gpsRoutes,
 }: Props) {
+  const { nameId } = useParams<{ nameId: string }>();
+  const tileUrlBase = nameId ? `/api/map-tile/${nameId}` : "/api/map-tile";
+
   const containerRef = useRef<HTMLDivElement>(null);
   const [viewport, setViewport] = useState<TileViewport | null>(null);
 
@@ -176,7 +180,7 @@ export function MapViewer({
     if (!mapBounds) return; // no map
     const interval = setInterval(async () => {
       try {
-        const res = await fetch("/api/map-tile-progress");
+        const res = await fetch("/api/map-tile-progress", nameId ? { headers: { "x-competition-id": nameId } } : {});
         if (res.ok) setTileProgress(await res.json());
       } catch { /* ignore */ }
     }, 2000);
@@ -1145,6 +1149,7 @@ export function MapViewer({
           viewport={viewport}
           containerWidth={renderW}
           containerHeight={renderH}
+          tileUrlBase={tileUrlBase}
           tileVersion={mapVersion}
         />
 

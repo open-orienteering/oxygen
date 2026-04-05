@@ -60,7 +60,7 @@ afterAll(async () => {
 
 describe("re-scan after registration", () => {
   it("runner.findByCard returns runner after creation", async () => {
-    const caller = makeCaller();
+    const caller = makeCaller({ dbName: ctx.dbName });
     await caller.runner.create({ name: "Alice Rescan", classId, cardNo: 500001 });
 
     const found = await caller.runner.findByCard({ cardNo: 500001 });
@@ -71,7 +71,7 @@ describe("re-scan after registration", () => {
   });
 
   it("cardReadout.readout returns found: true after creation", async () => {
-    const caller = makeCaller();
+    const caller = makeCaller({ dbName: ctx.dbName });
     await caller.runner.create({ name: "Bob Rescan", classId, cardNo: 500002 });
 
     const result = await caller.cardReadout.readout({ cardNo: 500002 });
@@ -82,7 +82,7 @@ describe("re-scan after registration", () => {
   });
 
   it("cardReadout.readout returns found: false for unknown card", async () => {
-    const caller = makeCaller();
+    const caller = makeCaller({ dbName: ctx.dbName });
     const result = await caller.cardReadout.readout({ cardNo: 999888 });
     expect(result.found).toBe(false);
   });
@@ -92,7 +92,7 @@ describe("re-scan after registration", () => {
 
 describe("race.lookupByCard with freeStart", () => {
   it("returns classFreeStart: false for normal class", async () => {
-    const caller = makeCaller();
+    const caller = makeCaller({ dbName: ctx.dbName });
     await caller.runner.create({ name: "Carol Normal", classId, cardNo: 500003 });
 
     const result = await caller.race.lookupByCard({ cardNo: 500003 });
@@ -104,7 +104,7 @@ describe("race.lookupByCard with freeStart", () => {
   });
 
   it("returns classFreeStart: true for free start class", async () => {
-    const caller = makeCaller();
+    const caller = makeCaller({ dbName: ctx.dbName });
     await caller.runner.create({ name: "Dave FreeStart", classId: freeStartClassId, cardNo: 500004 });
 
     const result = await caller.race.lookupByCard({ cardNo: 500004 });
@@ -116,7 +116,7 @@ describe("race.lookupByCard with freeStart", () => {
   });
 
   it("returns found: false for unknown card", async () => {
-    const result = await makeCaller().race.lookupByCard({ cardNo: 999777 });
+    const result = await makeCaller({ dbName: ctx.dbName }).race.lookupByCard({ cardNo: 999777 });
     expect(result.found).toBe(false);
   });
 });

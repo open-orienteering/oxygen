@@ -1,10 +1,9 @@
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
-import { router, publicProcedure } from "../trpc.js";
+import { router, publicProcedure, competitionProcedure } from "../trpc.js";
 import {
   getMainDbConnection,
   getCompetitionClient,
-  getCurrentDbName,
   createCompetitionDatabase,
   getRemoteConnection,
   getSetting,
@@ -65,13 +64,13 @@ export const competitionRouter = router({
    * Select a competition by its database name (NameId).
    * This switches the Prisma client to the correct database.
    */
-  select: publicProcedure
+  select: competitionProcedure
     .input(z.object({ nameId: z.string().min(1) }))
     .mutation(async ({ input }) => {
       const client = await getCompetitionClient(input.nameId);
       // Run all Oxygen-specific migrations eagerly so every route can rely on
       // these columns being present without needing to call ensureCompetitionConfigTable.
-      await ensureCompetitionConfigTable(client);
+      await ensureCompetitionConfigTable(client, input.nameId);
       // Verify the database is accessible by reading the event
       const event = await client.oEvent.findFirst({
         where: { Removed: false },
@@ -211,17 +210,17 @@ export const competitionRouter = router({
   /**
    * Get the currently selected competition database name.
    */
-  current: publicProcedure.query((): { nameId: string | null } => {
-    return { nameId: getCurrentDbName() };
+  current: competitionProcedure.query(({ ctx }): { nameId: string } => {
+    return { nameId: ctx.dbName };
   }),
 
   /**
    * Get the full dashboard overview for the currently selected competition.
    */
-  dashboard: publicProcedure.query(
-    async (): Promise<CompetitionDashboard> => {
-      const client = await getCompetitionClient();
-      await ensureCompetitionConfigTable(client);
+  dashboard: competitionProcedure.query(
+    async ({ ctx }): Promise<CompetitionDashboard> => {
+      const client = ctx.db;
+      await ensureCompetitionConfigTable(client, ctx.dbName);
 
       const event = await client.oEvent.findFirst({
         where: { Removed: false },
@@ -366,7 +365,7 @@ export const competitionRouter = router({
 
       // Fallback: use organizer_eventor_id from competition config
       if (!organizer?.eventorId) {
-        await ensureCompetitionConfigTable(client);
+        await ensureCompetitionConfigTable(client, ctx.dbName);
         const configRows = (await client.$queryRawUnsafe(
           "SELECT organizer_eventor_id FROM oxygen_competition_config WHERE id = 1",
         )) as Array<{ organizer_eventor_id: number }>;
@@ -404,7 +403,7 @@ export const competitionRouter = router({
   /**
    * Get runners, optionally filtered by class.
    */
-  runners: publicProcedure
+  runners: competitionProcedure
     .input(
       z
         .object({
@@ -413,8 +412,8 @@ export const competitionRouter = router({
         })
         .optional(),
     )
-    .query(async ({ input }): Promise<RunnerInfo[]> => {
-      const client = await getCompetitionClient();
+    .query(async ({ ctx, input }): Promise<RunnerInfo[]> => {
+      const client = ctx.db;
       const zeroTime = await getZeroTime(client);
 
       // Build where clause
@@ -465,8 +464,8 @@ export const competitionRouter = router({
   /**
    * Get clubs for the current competition (only those with at least one runner).
    */
-  clubs: publicProcedure.query(async (): Promise<ClubInfo[]> => {
-    const client = await getCompetitionClient();
+  clubs: competitionProcedure.query(async ({ ctx }): Promise<ClubInfo[]> => {
+    const client = ctx.db;
 
     // Find distinct club IDs that have runners
     const runners = await client.oRunner.findMany({
@@ -497,17 +496,14 @@ export const competitionRouter = router({
    * Modified column, which Prisma's typed client rejects.
    * Returns zeros if no competition is selected (e.g. after API restart).
    */
-  counterState: publicProcedure.query(async () => {
+  counterState: competitionProcedure.query(async ({ ctx }) => {
     const zeros = {
       oControl: 0, oCourse: 0, oClass: 0, oCard: 0, oClub: 0,
       oPunch: 0, oRunner: 0, oTeam: 0, oEvent: 0,
     };
 
-    const dbName = getCurrentDbName();
-    if (!dbName) return zeros;
-
     try {
-      const client = await getCompetitionClient();
+      const client = ctx.db;
       const rows = await client.$queryRawUnsafe<Record<string, number | null>[]>(
         "SELECT oControl, oCourse, oClass, oCard, oClub, oPunch, oRunner, oTeam, oEvent FROM oCounter LIMIT 1",
       );
@@ -564,9 +560,9 @@ export const competitionRouter = router({
   /**
    * Get registration settings (payment methods, Swish config, receipt printing).
    */
-  getRegistrationConfig: publicProcedure.query(async () => {
-    const client = await getCompetitionClient();
-    await ensureCompetitionConfigTable(client);
+  getRegistrationConfig: competitionProcedure.query(async ({ ctx }) => {
+    const client = ctx.db;
+    await ensureCompetitionConfigTable(client, ctx.dbName);
 
     const rows = (await client.$queryRawUnsafe(
       "SELECT payment_methods, swish_number, swish_payee_name, print_registration_receipt, registration_receipt_message, finish_receipt_message, organizer_eventor_id, org_number, vat_exempt, receipt_friskvard_note, web_url FROM oxygen_competition_config WHERE id = 1",
@@ -650,7 +646,7 @@ export const competitionRouter = router({
   /**
    * Update registration settings.
    */
-  setRegistrationConfig: publicProcedure
+  setRegistrationConfig: competitionProcedure
     .input(z.object({
       paymentMethods: z.array(z.string()).optional(),
       swishNumber: z.string().optional(),
@@ -663,9 +659,9 @@ export const competitionRouter = router({
       vatExempt: z.boolean().optional(),
       receiptFriskvardNote: z.boolean().optional(),
     }))
-    .mutation(async ({ input }) => {
-      const client = await getCompetitionClient();
-      await ensureCompetitionConfigTable(client);
+    .mutation(async ({ ctx, input }) => {
+      const client = ctx.db;
+      await ensureCompetitionConfigTable(client, ctx.dbName);
 
       const setClauses: string[] = [];
       if (input.paymentMethods !== undefined) {
@@ -709,9 +705,9 @@ export const competitionRouter = router({
 
   // ── Google Sheets backup config ──────────────────────────
 
-  getGoogleSheetsConfig: publicProcedure.query(async () => {
-    const client = await getCompetitionClient();
-    await ensureCompetitionConfigTable(client);
+  getGoogleSheetsConfig: competitionProcedure.query(async ({ ctx }) => {
+    const client = ctx.db;
+    await ensureCompetitionConfigTable(client, ctx.dbName);
     const rows = await client.$queryRawUnsafe<
       Array<{ google_sheets_webhook_url: string }>
     >(
@@ -720,11 +716,11 @@ export const competitionRouter = router({
     return { webhookUrl: rows[0]?.google_sheets_webhook_url ?? "" };
   }),
 
-  setGoogleSheetsConfig: publicProcedure
+  setGoogleSheetsConfig: competitionProcedure
     .input(z.object({ webhookUrl: z.string() }))
-    .mutation(async ({ input }) => {
-      const client = await getCompetitionClient();
-      await ensureCompetitionConfigTable(client);
+    .mutation(async ({ ctx, input }) => {
+      const client = ctx.db;
+      await ensureCompetitionConfigTable(client, ctx.dbName);
       await client.$executeRawUnsafe(
         `UPDATE oxygen_competition_config SET google_sheets_webhook_url = ? WHERE id = 1`,
         input.webhookUrl,
@@ -741,31 +737,31 @@ export const competitionRouter = router({
 
   // ── Rental card fee (stored in oEvent.CardFee — MeOS compatible) ──
 
-  getCardFee: publicProcedure.query(async () => {
-    const client = await getCompetitionClient();
+  getCardFee: competitionProcedure.query(async ({ ctx }) => {
+    const client = ctx.db;
     const event = await client.oEvent.findFirst({ where: { Removed: false } });
     return { cardFee: event?.CardFee ?? 0 };
   }),
 
-  setCardFee: publicProcedure
+  setCardFee: competitionProcedure
     .input(z.object({ cardFee: z.number().int().min(0) }))
-    .mutation(async ({ input }) => {
-      const client = await getCompetitionClient();
+    .mutation(async ({ ctx, input }) => {
+      const client = ctx.db;
       const event = await client.oEvent.findFirst({ where: { Removed: false } });
       if (!event) throw new TRPCError({ code: "NOT_FOUND", message: "No active competition" });
       await client.oEvent.update({
         where: { Id: event.Id },
         data: { CardFee: input.cardFee },
       });
-      await incrementCounter("oEvent", event.Id);
+      await incrementCounter("oEvent", event.Id, ctx.dbName);
       return { ok: true };
     }),
 
   // ── Livelox integration config ───────────────────────────
 
-  getLiveloxEventId: publicProcedure.query(async () => {
-    const client = await getCompetitionClient();
-    await ensureCompetitionConfigTable(client);
+  getLiveloxEventId: competitionProcedure.query(async ({ ctx }) => {
+    const client = ctx.db;
+    await ensureCompetitionConfigTable(client, ctx.dbName);
     const rows = await client.$queryRawUnsafe<
       Array<{ livelox_event_id: number | null }>
     >(
@@ -774,11 +770,11 @@ export const competitionRouter = router({
     return { liveloxEventId: rows[0]?.livelox_event_id ?? null };
   }),
 
-  setLiveloxEventId: publicProcedure
+  setLiveloxEventId: competitionProcedure
     .input(z.object({ liveloxEventId: z.number().int().positive().nullable() }))
-    .mutation(async ({ input }) => {
-      const client = await getCompetitionClient();
-      await ensureCompetitionConfigTable(client);
+    .mutation(async ({ ctx, input }) => {
+      const client = ctx.db;
+      await ensureCompetitionConfigTable(client, ctx.dbName);
       await client.$executeRawUnsafe(
         `UPDATE oxygen_competition_config SET livelox_event_id = ? WHERE id = 1`,
         input.liveloxEventId,

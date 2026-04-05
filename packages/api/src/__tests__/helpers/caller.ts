@@ -12,6 +12,6 @@ import type { Context } from "../../trpc.js";
 
 const createCaller = createCallerFactory(appRouter);
 
-export function makeCaller(ctx: Context = {}) {
+export function makeCaller(ctx: Context = { dbName: null }) {
   return createCaller(ctx);
 }

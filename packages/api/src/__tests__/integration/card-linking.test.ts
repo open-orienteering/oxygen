@@ -28,7 +28,7 @@ const ZERO_TIME_SECS = 32400; // 09:00:00 in seconds
 
 beforeAll(async () => {
   ctx = await createTestDb("cardlink");
-  caller = makeCaller();
+  caller = makeCaller({ dbName: ctx.dbName });
 
   // Create class
   const cls = await ctx.client.oClass.create({

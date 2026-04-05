@@ -6,13 +6,9 @@
  */
 
 import { z } from "zod";
-import { router, publicProcedure } from "../trpc.js";
-import {
-  getCompetitionClient,
-  ensureMapFilesTable,
-  ensureRenderedMapsTable,
-  ensureTracksTable,
-} from "../db.js";
+import { router, competitionProcedure } from "../trpc.js";
+import type { PrismaClient } from "@prisma/client";
+import {ensureMapFilesTable, ensureRenderedMapsTable, ensureTracksTable} from "../db.js";
 import { ocadBoundsToWgs84, computeMapNorthOffset, mapMmToWgs84, type OcadCrs } from "../map-projection.js";
 import type { GeoJSONFeatureCollection } from "../iof-course-parser.js";
 
@@ -60,9 +56,8 @@ async function loadJsdom() {
 
 // ─── Helpers ─────────────────────────────────────────────────
 
-async function getOcdFileBuffer(): Promise<Buffer | null> {
-  const client = await getCompetitionClient();
-  await ensureMapFilesTable(client);
+async function getOcdFileBuffer(client: PrismaClient, dbName: string): Promise<Buffer | null> {
+  await ensureMapFilesTable(client, dbName);
 
   const rows = await client.$queryRawUnsafe<{ FileData: Buffer }[]>(
     "SELECT FileData FROM oxygen_map_files ORDER BY Id DESC LIMIT 1",
@@ -71,8 +66,8 @@ async function getOcdFileBuffer(): Promise<Buffer | null> {
   return Buffer.from(rows[0].FileData);
 }
 
-async function parseOcdFile() {
-  const buffer = await getOcdFileBuffer();
+async function parseOcdFile(client: PrismaClient, dbName: string) {
+  const buffer = await getOcdFileBuffer(client, dbName);
   if (!buffer) throw new Error("No map file uploaded");
 
   const { readOcad, ocadToSvg } = await loadOcadLib();
@@ -82,7 +77,7 @@ async function parseOcdFile() {
   return { ocadFile, crs, ocadToSvg };
 }
 
-async function ensureCourseGeometryTable(client: Awaited<ReturnType<typeof getCompetitionClient>>) {
+async function ensureCourseGeometryTable(client: PrismaClient) {
   await client.$executeRawUnsafe(`
     CREATE TABLE IF NOT EXISTS oxygen_course_geometry (
       Id INT AUTO_INCREMENT PRIMARY KEY,
@@ -99,9 +94,9 @@ export const externalRouter = router({
   /**
    * Lightweight endpoint to check what maps and courses are available.
    */
-  mapInfo: publicProcedure.query(async () => {
-    const client = await getCompetitionClient();
-    await ensureMapFilesTable(client);
+  mapInfo: competitionProcedure.query(async ({ ctx }) => {
+    const client = ctx.db;
+    await ensureMapFilesTable(client, ctx.dbName);
 
     // Check if a map file exists
     const mapRows = await client.$queryRawUnsafe<
@@ -117,7 +112,7 @@ export const externalRouter = router({
 
     if (hasMap) {
       try {
-        const { ocadFile, crs } = await parseOcdFile();
+        const { ocadFile, crs } = await parseOcdFile(client, ctx.dbName);
         mapScale = crs.scale;
         const ocadBounds = ocadFile.getBounds();
         bounds = ocadBoundsToWgs84(ocadBounds, crs);
@@ -168,11 +163,11 @@ export const externalRouter = router({
    * Render the OCAD map to a georeferenced PNG image.
    * Cached in the database to avoid re-rendering on each request.
    */
-  renderMapImage: publicProcedure
+  renderMapImage: competitionProcedure
     .input(z.object({ maxWidth: z.number().default(4096) }).optional().default({ maxWidth: 4096 }))
-    .query(async ({ input }) => {
-      const client = await getCompetitionClient();
-      await ensureRenderedMapsTable(client);
+    .query(async ({ ctx, input }) => {
+      const client = ctx.db;
+      await ensureRenderedMapsTable(client, ctx.dbName);
 
       // Check cache
       const cached = await client.$queryRawUnsafe<
@@ -193,7 +188,7 @@ export const externalRouter = router({
       }
 
       // Render from scratch
-      const { ocadFile, crs, ocadToSvg } = await parseOcdFile();
+      const { ocadFile, crs, ocadToSvg } = await parseOcdFile(client, ctx.dbName);
       const JSDOM = await loadJsdom();
       const Resvg = await loadResvg();
 
@@ -256,10 +251,10 @@ export const externalRouter = router({
   /**
    * Get course geometry (controls, legs, etc.) with WGS84 coordinates.
    */
-  courseGeometry: publicProcedure
+  courseGeometry: competitionProcedure
     .input(z.object({ courseName: z.string() }))
-    .query(async ({ input }) => {
-      const client = await getCompetitionClient();
+    .query(async ({ ctx, input }) => {
+      const client = ctx.db;
       await ensureCourseGeometryTable(client);
 
       const row = await client.$queryRawUnsafe<{ Geometry: string }[]>(
@@ -278,7 +273,7 @@ export const externalRouter = router({
       // Get the CRS from the OCD file to convert coordinates
       let crs: OcadCrs;
       try {
-        const parsed = await parseOcdFile();
+        const parsed = await parseOcdFile(client, ctx.dbName);
         crs = parsed.crs;
       } catch {
         // No OCD file — can't convert. Return original geometry.
@@ -292,8 +287,8 @@ export const externalRouter = router({
   /**
    * Get all controls with WGS84 positions (for "All controls" view).
    */
-  controlCoordinates: publicProcedure.query(async () => {
-    const client = await getCompetitionClient();
+  controlCoordinates: competitionProcedure.query(async ({ ctx }) => {
+    const client = ctx.db;
 
     const controls = await client.oControl.findMany({
       where: { Removed: false },
@@ -318,7 +313,7 @@ export const externalRouter = router({
 
     if (needsConversion) {
       try {
-        const parsed = await parseOcdFile();
+        const parsed = await parseOcdFile(client, ctx.dbName);
         crs = parsed.crs;
       } catch {
         // No OCD file — can't convert
@@ -358,7 +353,7 @@ export const externalRouter = router({
    * Upload a GPS track as a GeoJSON Feature (LineString).
    * Upserts on (DeviceId, StartTime) so re-uploading is safe.
    */
-  uploadTrack: publicProcedure
+  uploadTrack: competitionProcedure
     .input(
       z.object({
         deviceId: z.string().min(1).max(255),
@@ -381,9 +376,9 @@ export const externalRouter = router({
         }),
       }),
     )
-    .mutation(async ({ input }) => {
-      const client = await getCompetitionClient();
-      await ensureTracksTable(client);
+    .mutation(async ({ ctx, input }) => {
+      const client = ctx.db;
+      await ensureTracksTable(client, ctx.dbName);
 
       const geometryJson = JSON.stringify(input.geometry);
       const pointCount = input.geometry.geometry.coordinates.length;
@@ -412,7 +407,7 @@ export const externalRouter = router({
   /**
    * Append points to an existing track (for future live push).
    */
-  appendTrackPoints: publicProcedure
+  appendTrackPoints: competitionProcedure
     .input(
       z.object({
         deviceId: z.string().min(1).max(255),
@@ -424,9 +419,9 @@ export const externalRouter = router({
         distance: z.number().optional(),
       }),
     )
-    .mutation(async ({ input }) => {
-      const client = await getCompetitionClient();
-      await ensureTracksTable(client);
+    .mutation(async ({ ctx, input }) => {
+      const client = ctx.db;
+      await ensureTracksTable(client, ctx.dbName);
 
       const rows = await client.$queryRawUnsafe<
         { Id: number; Geometry: string }[]
@@ -467,7 +462,7 @@ export const externalRouter = router({
   /**
    * List uploaded tracks (metadata only, no geometry blob).
    */
-  listTracks: publicProcedure
+  listTracks: competitionProcedure
     .input(
       z
         .object({
@@ -477,9 +472,9 @@ export const externalRouter = router({
         .optional()
         .default({ limit: 50 }),
     )
-    .query(async ({ input }) => {
-      const client = await getCompetitionClient();
-      await ensureTracksTable(client);
+    .query(async ({ ctx, input }) => {
+      const client = ctx.db;
+      await ensureTracksTable(client, ctx.dbName);
 
       type RawTrack = {
         Id: number;

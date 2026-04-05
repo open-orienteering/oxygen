@@ -1,14 +1,14 @@
 import { z } from "zod";
-import { router, publicProcedure } from "../trpc.js";
+import { router, publicProcedure, competitionProcedure } from "../trpc.js";
 import {
   fetchClassInfo,
   fetchClassBlob,
   fetchLiveloxEventClasses,
 } from "../livelox/fetcher.js";
 import { transformToReplayData } from "../livelox/transform.js";
-import { getCompetitionClient } from "../db.js";
 import { ensureRoutesTable } from "../db.js";
 import type { ReplayResult, ReplayWaypoint } from "@oxygen/shared";
+import type { PrismaClient } from "@prisma/client";
 
 // ─── Helpers ────────────────────────────────────────────────
 
@@ -32,7 +32,7 @@ export interface RunnerLookups {
 
 /** Build all lookup structures needed for 3-priority runner matching. */
 async function buildRunnerLookups(
-  client: Awaited<ReturnType<typeof getCompetitionClient>>,
+  client: PrismaClient,
 ): Promise<RunnerLookups> {
   const [runners, clubs] = await Promise.all([
     client.oRunner.findMany({
@@ -135,7 +135,7 @@ export function matchRunner(
 
 /** Build a class-name-to-oClass-Id map (case-insensitive). */
 async function buildClassNameMap(
-  client: Awaited<ReturnType<typeof getCompetitionClient>>,
+  client: PrismaClient,
 ): Promise<Map<string, number>> {
   const classes = await client.oClass.findMany({
     where: { Removed: false },
@@ -172,11 +172,11 @@ export const liveloxRouter = router({
    * Matches participants to oRunner by name and classes to oClass by name.
    * Re-syncing a class replaces its existing routes.
    */
-  sync: publicProcedure
+  sync: competitionProcedure
     .input(z.object({ liveloxEventId: z.number().int().positive() }))
-    .mutation(async ({ input }) => {
-      const client = await getCompetitionClient();
-      await ensureRoutesTable(client);
+    .mutation(async ({ ctx, input }) => {
+      const client = ctx.db;
+      await ensureRoutesTable(client, ctx.dbName);
 
       // Fetch Livelox class list and all runner lookup structures in parallel
       const [liveloxClasses, runnerLookups, classMap] = await Promise.all([
@@ -297,16 +297,16 @@ export const liveloxRouter = router({
    * List synced routes with runner/class info joined from oRunner/oClass.
    * Unmatched routes (NULL RunnerId/ClassId) are included with empty name/class.
    */
-  listRoutes: publicProcedure
+  listRoutes: competitionProcedure
     .input(
       z.object({
         classId: z.number().int().positive().optional(),
         liveloxClassId: z.number().int().positive().optional(),
       }).optional(),
     )
-    .query(async ({ input }) => {
-      const client = await getCompetitionClient();
-      await ensureRoutesTable(client);
+    .query(async ({ ctx, input }) => {
+      const client = ctx.db;
+      await ensureRoutesTable(client, ctx.dbName);
 
       let where = "";
       const params: unknown[] = [];
@@ -368,9 +368,9 @@ export const liveloxRouter = router({
    * Return distinct synced class list with route counts.
    * Used for filter dropdowns and EventPage statistics.
    */
-  listSyncedClasses: publicProcedure.query(async () => {
-    const client = await getCompetitionClient();
-    await ensureRoutesTable(client);
+  listSyncedClasses: competitionProcedure.query(async ({ ctx }) => {
+    const client = ctx.db;
+    await ensureRoutesTable(client, ctx.dbName);
 
     const rows = await client.$queryRawUnsafe<
       Array<{
@@ -402,11 +402,11 @@ export const liveloxRouter = router({
   /**
    * Delete a single route from oxygen_routes.
    */
-  deleteRoute: publicProcedure
+  deleteRoute: competitionProcedure
     .input(z.object({ routeId: z.number().int().positive() }))
-    .mutation(async ({ input }) => {
-      const client = await getCompetitionClient();
-      await ensureRoutesTable(client);
+    .mutation(async ({ ctx, input }) => {
+      const client = ctx.db;
+      await ensureRoutesTable(client, ctx.dbName);
       await client.$executeRawUnsafe(
         `DELETE FROM oxygen_routes WHERE Id = ?`,
         input.routeId,
@@ -418,11 +418,11 @@ export const liveloxRouter = router({
    * Get waypoints + metadata for a single route — used by TrackMapPanel preview.
    * Does NOT re-fetch from Livelox; all data comes from the local DB.
    */
-  getRoutePreview: publicProcedure
+  getRoutePreview: competitionProcedure
     .input(z.object({ routeId: z.number().int().positive() }))
-    .query(async ({ input }) => {
-      const client = await getCompetitionClient();
-      await ensureRoutesTable(client);
+    .query(async ({ ctx, input }) => {
+      const client = ctx.db;
+      await ensureRoutesTable(client, ctx.dbName);
 
       const rows = await client.$queryRawUnsafe<
         Array<{

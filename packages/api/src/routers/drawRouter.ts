@@ -1,6 +1,6 @@
 import { z } from "zod";
-import { router, publicProcedure } from "../trpc.js";
-import { getCompetitionClient, incrementCounter, incrementCounterBatch, getZeroTime } from "../db.js";
+import { router, competitionProcedure } from "../trpc.js";
+import {incrementCounter, incrementCounterBatch, getZeroTime} from "../db.js";
 import { toRelative, toAbsolute } from "../timeConvert.js";
 import { generateDrawPreview } from "../draw/index.js";
 import type { DrawPreviewResult } from "@oxygen/shared";
@@ -30,8 +30,8 @@ export const drawRouter = router({
   /**
    * Get default settings and class info for the draw panel.
    */
-  defaults: publicProcedure.query(async () => {
-    const client = await getCompetitionClient();
+  defaults: competitionProcedure.query(async ({ ctx }) => {
+    const client = ctx.db;
     const zeroTime = await getZeroTime(client);
 
     const classes = await client.oClass.findMany({
@@ -73,10 +73,10 @@ export const drawRouter = router({
    * Generate a draw preview without saving.
    * Returns proposed start times and start numbers for review.
    */
-  preview: publicProcedure
+  preview: competitionProcedure
     .input(drawInputSchema)
-    .mutation(async ({ input }): Promise<DrawPreviewResult> => {
-      const client = await getCompetitionClient();
+    .mutation(async ({ ctx, input }): Promise<DrawPreviewResult> => {
+      const client = ctx.db;
       return generateDrawPreview(client, input.classes, input.settings);
     }),
 
@@ -85,10 +85,10 @@ export const drawRouter = router({
    * Updates oRunner.StartTime, oRunner.StartNo, oClass.FirstStart,
    * and oClass.StartInterval for each drawn class.
    */
-  execute: publicProcedure
+  execute: competitionProcedure
     .input(drawInputSchema)
-    .mutation(async ({ input }): Promise<{ success: boolean; totalDrawn: number; warnings: string[] }> => {
-      const client = await getCompetitionClient();
+    .mutation(async ({ ctx, input }): Promise<{ success: boolean; totalDrawn: number; warnings: string[] }> => {
+      const client = ctx.db;
       const zeroTime = await getZeroTime(client);
       const result = await generateDrawPreview(client, input.classes, input.settings);
 
@@ -129,8 +129,8 @@ export const drawRouter = router({
       }
 
       // Batch counter increments (single lock/unlock per table instead of per-record)
-      await incrementCounterBatch("oRunner", allRunnerIds);
-      await incrementCounterBatch("oClass", classIds);
+      await incrementCounterBatch("oRunner", allRunnerIds, ctx.dbName);
+      await incrementCounterBatch("oClass", classIds, ctx.dbName);
 
       return {
         success: true,

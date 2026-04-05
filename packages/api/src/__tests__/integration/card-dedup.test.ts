@@ -20,7 +20,7 @@ const CONTROLS = [31, 32, 33];
 
 beforeAll(async () => {
   ctx = await createTestDb("carddedup");
-  caller = makeCaller();
+  caller = makeCaller({ dbName: ctx.dbName });
 
   // Create class + course
   const cls = await ctx.client.oClass.create({

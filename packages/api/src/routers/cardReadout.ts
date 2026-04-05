@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
-import { router, publicProcedure } from "../trpc.js";
-import { getCompetitionClient, ensureReadoutTable, incrementCounter, getZeroTime } from "../db.js";
+import { router, competitionProcedure } from "../trpc.js";
+import { ensureReadoutTable, incrementCounter, getZeroTime } from "../db.js";
 import { toRelative, toAbsolute } from "../timeConvert.js";
 import { RunnerStatus, TransferFlags, hasTransferFlag } from "@oxygen/shared";
 import type { PrismaClient } from "@prisma/client";
@@ -348,10 +348,10 @@ export async function performReadout(client: PrismaClient, runnerId: number) {
 
 export const cardReadoutRouter = router({
   /** Full card readout by SI card number */
-  readout: publicProcedure
+  readout: competitionProcedure
     .input(z.object({ cardNo: z.number().int().positive() }))
-    .query(async ({ input }) => {
-      const client = await getCompetitionClient();
+    .query(async ({ ctx, input }) => {
+      const client = ctx.db;
       const runner = await client.oRunner.findFirst({
         where: { CardNo: input.cardNo, Removed: false },
       });
@@ -400,16 +400,16 @@ export const cardReadoutRouter = router({
     }),
 
   /** Card readout by runner ID (for inline detail) */
-  readoutByRunner: publicProcedure
+  readoutByRunner: competitionProcedure
     .input(z.object({ runnerId: z.number().int() }))
-    .query(async ({ input }) => {
-      const client = await getCompetitionClient();
+    .query(async ({ ctx, input }) => {
+      const client = ctx.db;
       const result = await performReadout(client, input.runnerId);
       return result;
     }),
 
   /** Add a manual punch correction (stored in oPunch table) */
-  addPunch: publicProcedure
+  addPunch: competitionProcedure
     .input(
       z.object({
         cardNo: z.number().int(),
@@ -417,8 +417,8 @@ export const cardReadoutRouter = router({
         time: z.number().int(), // deciseconds
       }),
     )
-    .mutation(async ({ input }) => {
-      const client = await getCompetitionClient();
+    .mutation(async ({ ctx, input }) => {
+      const client = ctx.db;
       const zeroTime = await getZeroTime(client);
       const punch = await client.oPunch.create({
         data: {
@@ -432,10 +432,10 @@ export const cardReadoutRouter = router({
     }),
 
   /** Remove a manual punch correction (soft delete in oPunch table) */
-  removePunch: publicProcedure
+  removePunch: competitionProcedure
     .input(z.object({ punchId: z.number().int() }))
-    .mutation(async ({ input }) => {
-      const client = await getCompetitionClient();
+    .mutation(async ({ ctx, input }) => {
+      const client = ctx.db;
       await client.oPunch.update({
         where: { Id: input.punchId },
         data: { Removed: true },
@@ -444,15 +444,15 @@ export const cardReadoutRouter = router({
     }),
 
   /** Update the time of a free punch */
-  updatePunchTime: publicProcedure
+  updatePunchTime: competitionProcedure
     .input(
       z.object({
         punchId: z.number().int(),
         time: z.number().int(), // deciseconds
       }),
     )
-    .mutation(async ({ input }) => {
-      const client = await getCompetitionClient();
+    .mutation(async ({ ctx, input }) => {
+      const client = ctx.db;
       const zeroTime = await getZeroTime(client);
       await client.oPunch.update({
         where: { Id: input.punchId },
@@ -471,7 +471,7 @@ export const cardReadoutRouter = router({
    *
    * SI times are in seconds since midnight, MeOS times are in deciseconds.
    */
-  storeReadout: publicProcedure
+  storeReadout: competitionProcedure
     .input(
       z.object({
         cardNo: z.number().int().positive(),
@@ -510,8 +510,8 @@ export const cardReadoutRouter = router({
           .optional(),
       }),
     )
-    .mutation(async ({ input }) => {
-      const client = await getCompetitionClient();
+    .mutation(async ({ ctx, input }) => {
+      const client = ctx.db;
       const zeroTime = await getZeroTime(client);
 
       // Helper: convert absolute seconds → ZeroTime-relative deciseconds punch token
@@ -581,7 +581,7 @@ export const cardReadoutRouter = router({
       const metadataJson = input.metadata ? JSON.stringify(input.metadata) : null;
 
       try {
-        await ensureReadoutTable(client);
+        await ensureReadoutTable(client, ctx.dbName);
         const latest = await client.$queryRawUnsafe<Array<{ Id: bigint; Punches: string }>>(
           `SELECT Id, Punches FROM oxygen_card_readouts
            WHERE CardNo = ? ORDER BY ReadAt DESC LIMIT 1`,
@@ -637,7 +637,7 @@ export const cardReadoutRouter = router({
           return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
         };
 
-        pushToGoogleSheet(client, {
+        pushToGoogleSheet(client, ctx.dbName, {
           timestamp: new Date().toISOString(),
           cardNo: input.cardNo,
           cardType: input.cardType ?? "",
@@ -756,12 +756,12 @@ export const cardReadoutRouter = router({
     }),
 
   /** List readout history for a card number */
-  readoutHistory: publicProcedure
+  readoutHistory: competitionProcedure
     .input(z.object({ cardNo: z.number().int().positive() }))
-    .query(async ({ input }) => {
-      const client = await getCompetitionClient();
+    .query(async ({ ctx, input }) => {
+      const client = ctx.db;
       try {
-        await ensureReadoutTable(client);
+        await ensureReadoutTable(client, ctx.dbName);
         const rows = await client.$queryRawUnsafe<
           Array<{
             Id: bigint | number;
@@ -800,8 +800,8 @@ export const cardReadoutRouter = router({
   // ─── Card list / detail endpoints ───────────────────────
 
   /** List all cards with linked runner info */
-  cardList: publicProcedure.query(async () => {
-    const client = await getCompetitionClient();
+  cardList: competitionProcedure.query(async ({ ctx }) => {
+    const client = ctx.db;
 
     const allCards = await client.oCard.findMany({
       where: { Removed: false },
@@ -860,7 +860,7 @@ export const cardReadoutRouter = router({
       { cardType: string; voltage: number; metadata: unknown }
     >();
     try {
-      await ensureReadoutTable(client);
+      await ensureReadoutTable(client, ctx.dbName);
       const infoRows = await client.$queryRawUnsafe<
         Array<{
           CardNo: bigint | number;
@@ -933,10 +933,10 @@ export const cardReadoutRouter = router({
   }),
 
   /** Get detail for a single card (parsed punches + owner data from latest readout) */
-  cardDetail: publicProcedure
+  cardDetail: competitionProcedure
     .input(z.object({ cardNo: z.number().int().positive() }))
-    .query(async ({ input }) => {
-      const client = await getCompetitionClient();
+    .query(async ({ ctx, input }) => {
+      const client = ctx.db;
 
       const card = await client.oCard.findFirst({
         where: { CardNo: input.cardNo, Removed: false },
@@ -1006,7 +1006,7 @@ export const cardReadoutRouter = router({
       let ownerData: unknown = null;
       let metadata: unknown = null;
       try {
-        await ensureReadoutTable(client);
+        await ensureReadoutTable(client, ctx.dbName);
         const latest = await client.$queryRawUnsafe<
           Array<{
             CardType: string;
@@ -1057,7 +1057,7 @@ export const cardReadoutRouter = router({
    * This is the "readout station" step: after punches are evaluated,
    * persist the status (OK/MP/DNF) and finish time back to oRunner.
    */
-  applyResult: publicProcedure
+  applyResult: competitionProcedure
     .input(
       z.object({
         runnerId: z.number().int(),
@@ -1066,8 +1066,8 @@ export const cardReadoutRouter = router({
         startTime: z.number().int(),
       }),
     )
-    .mutation(async ({ input }) => {
-      const client = await getCompetitionClient();
+    .mutation(async ({ ctx, input }) => {
+      const client = ctx.db;
       const zeroTime = await getZeroTime(client);
       await client.oRunner.update({
         where: { Id: input.runnerId },
@@ -1077,20 +1077,20 @@ export const cardReadoutRouter = router({
           StartTime: toRelative(input.startTime, zeroTime),
         },
       });
-      await incrementCounter("oRunner", input.runnerId);
+      await incrementCounter("oRunner", input.runnerId, ctx.dbName);
       return { applied: true, runnerId: input.runnerId, status: input.status, finishTime: input.finishTime, startTime: input.startTime };
     }),
 
   /** Manually link or unlink a card to/from a runner */
-  linkCardToRunner: publicProcedure
+  linkCardToRunner: competitionProcedure
     .input(
       z.object({
         cardId: z.number().int().positive(),
         runnerId: z.number().int().nullable(),
       }),
     )
-    .mutation(async ({ input }) => {
-      const client = await getCompetitionClient();
+    .mutation(async ({ ctx, input }) => {
+      const client = ctx.db;
 
       const card = await client.oCard.findUnique({ where: { Id: input.cardId } });
       if (!card) {
