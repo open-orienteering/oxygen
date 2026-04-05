@@ -47,7 +47,7 @@ async function seedClub(client: TestDbContext["client"]) {
 describe("runner.create", () => {
   it("creates a runner and it appears in the list", async () => {
     const cls = await seedClass(ctx.client);
-    const caller = makeCaller();
+    const caller = makeCaller({ dbName: ctx.dbName });
 
     await caller.runner.create({ name: "Alice Smith", classId: cls.Id });
 
@@ -58,7 +58,7 @@ describe("runner.create", () => {
 
   it("assigns the given classId", async () => {
     const cls = await seedClass(ctx.client);
-    const caller = makeCaller();
+    const caller = makeCaller({ dbName: ctx.dbName });
 
     await caller.runner.create({ name: "Bob Jones", classId: cls.Id });
 
@@ -69,7 +69,7 @@ describe("runner.create", () => {
 
   it("assigns an optional cardNo", async () => {
     const cls = await seedClass(ctx.client);
-    const caller = makeCaller();
+    const caller = makeCaller({ dbName: ctx.dbName });
 
     await caller.runner.create({ name: "Carol", classId: cls.Id, cardNo: 9999 });
 
@@ -81,7 +81,7 @@ describe("runner.create", () => {
   it("assigns an optional clubId", async () => {
     const cls = await seedClass(ctx.client);
     const club = await seedClub(ctx.client);
-    const caller = makeCaller();
+    const caller = makeCaller({ dbName: ctx.dbName });
 
     await caller.runner.create({
       name: "Dave",
@@ -100,7 +100,7 @@ describe("runner.create", () => {
 describe("runner.update", () => {
   it("updates the runner name", async () => {
     const cls = await seedClass(ctx.client);
-    const caller = makeCaller();
+    const caller = makeCaller({ dbName: ctx.dbName });
 
     const created = await caller.runner.create({
       name: "Original Name",
@@ -115,7 +115,7 @@ describe("runner.update", () => {
 
   it("updates cardNo without touching other fields", async () => {
     const cls = await seedClass(ctx.client);
-    const caller = makeCaller();
+    const caller = makeCaller({ dbName: ctx.dbName });
 
     const created = await caller.runner.create({
       name: "Stable Name",
@@ -136,7 +136,7 @@ describe("runner.update", () => {
 describe("runner.delete", () => {
   it("removes the runner from the list", async () => {
     const cls = await seedClass(ctx.client);
-    const caller = makeCaller();
+    const caller = makeCaller({ dbName: ctx.dbName });
 
     const created = await caller.runner.create({
       name: "To Be Deleted",
@@ -157,7 +157,7 @@ describe("runner.list", () => {
   it("filters by classId", async () => {
     const cls1 = await seedClass(ctx.client);
     const cls2 = await seedClass(ctx.client);
-    const caller = makeCaller();
+    const caller = makeCaller({ dbName: ctx.dbName });
 
     await caller.runner.create({ name: "In Class 1", classId: cls1.Id });
     await caller.runner.create({ name: "In Class 2", classId: cls2.Id });

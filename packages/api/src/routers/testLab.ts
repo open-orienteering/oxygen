@@ -1,7 +1,6 @@
 import { z } from "zod";
-import { router, publicProcedure } from "../trpc.js";
+import { router, competitionProcedure } from "../trpc.js";
 import {
-  getCompetitionClient,
   getMainDbConnection,
   incrementCounter,
   ensureRunnerDbTable,
@@ -236,6 +235,7 @@ function buildControls(): { controlsByTier: Map<number, number[]>; allControlCod
 
 async function upsertControl(
   client: PrismaClient,
+  dbName: string,
   id: number,
   numbers: string,
   name: string,
@@ -254,7 +254,7 @@ async function upsertControl(
   await client.oControl.create({
     data: { Id: id, Numbers: numbers, Name: name, Status: status },
   });
-  await incrementCounter("oControl", id);
+  await incrementCounter("oControl", id, dbName);
 }
 
 const PUNCH_START = 1;
@@ -293,6 +293,7 @@ function buildMeosPunchString(opts: {
 
 async function processSimulatedReadout(
   client: PrismaClient,
+  dbName: string,
   readout: SimulatedReadout,
 ) {
   // Upsert oCard
@@ -314,7 +315,7 @@ async function processSimulatedReadout(
       data: { CardNo: readout.cardNo, Punches: readout.punchString, ReadId: 0 },
     });
     cardId = card.Id;
-    await incrementCounter("oCard", cardId);
+    await incrementCounter("oCard", cardId, dbName);
   }
 
   // Link card to runner and update status/finish
@@ -326,14 +327,14 @@ async function processSimulatedReadout(
       Status: readout.status,
     },
   });
-  await incrementCounter("oRunner", readout.runnerId);
+  await incrementCounter("oRunner", readout.runnerId, dbName);
 }
 
 // ─── Router ─────────────────────────────────────────────────
 
 export const testLabRouter = router({
-  status: publicProcedure.query(async () => {
-    const client = await getCompetitionClient();
+  status: competitionProcedure.query(async ({ ctx }) => {
+    const client = ctx.db;
     const [classes, courses, controls, runners] = await Promise.all([
       client.oClass.count({ where: { Removed: false } }),
       client.oCourse.count({ where: { Removed: false } }),
@@ -346,8 +347,8 @@ export const testLabRouter = router({
     return { classes, courses, controls, runners, runnersWithStart };
   }),
 
-  generateClasses: publicProcedure.mutation(async () => {
-    const client = await getCompetitionClient();
+  generateClasses: competitionProcedure.mutation(async ({ ctx }) => {
+    const client = ctx.db;
 
     const existing = await client.oClass.findMany({
       where: { Removed: false },
@@ -375,25 +376,25 @@ export const testLabRouter = router({
           HighAge: def.highAge,
         },
       });
-      await incrementCounter("oClass", cls.Id);
+      await incrementCounter("oClass", cls.Id, ctx.dbName);
       created++;
     }
 
     return { created, skipped, total: CLASS_DEFS.length };
   }),
 
-  generateCourses: publicProcedure.mutation(async () => {
-    const client = await getCompetitionClient();
+  generateCourses: competitionProcedure.mutation(async ({ ctx }) => {
+    const client = ctx.db;
 
     const { controlsByTier, allControlCodes } = buildControls();
 
     // Create start and finish controls
-    await upsertControl(client, 211101, "", "Start 1", 4);
-    await upsertControl(client, 311101, "", "Mål 1", 5);
+    await upsertControl(client, ctx.dbName, 211101, "", "Start 1", 4);
+    await upsertControl(client, ctx.dbName, 311101, "", "Mål 1", 5);
 
     // Create regular controls
     for (const code of allControlCodes) {
-      await upsertControl(client, code, String(code), "", 0);
+      await upsertControl(client, ctx.dbName, code, String(code), "", 0);
     }
 
     // Create courses — each course's control sequence already starts
@@ -424,7 +425,7 @@ export const testLabRouter = router({
           },
         });
         courseId = course.Id;
-        await incrementCounter("oCourse", courseId);
+        await incrementCounter("oCourse", courseId, ctx.dbName);
       }
       courseIdByTier.set(def.tier, courseId);
     }
@@ -442,7 +443,7 @@ export const testLabRouter = router({
         where: { Id: cls.Id },
         data: { Course: courseId },
       });
-      await incrementCounter("oClass", cls.Id);
+      await incrementCounter("oClass", cls.Id, ctx.dbName);
       assigned++;
     }
 
@@ -454,10 +455,10 @@ export const testLabRouter = router({
     };
   }),
 
-  registerRunners: publicProcedure
+  registerRunners: competitionProcedure
     .input(z.object({ count: z.number().int().min(1).max(5000) }))
-    .mutation(async ({ input }) => {
-      const client = await getCompetitionClient();
+    .mutation(async ({ ctx, input }) => {
+      const client = ctx.db;
       const mainConn = await getMainDbConnection();
 
       try {
@@ -576,7 +577,7 @@ export const testLabRouter = router({
                     ShortName: shortName,
                   },
                 });
-                await incrementCounter("oClub", runner.clubId);
+                await incrementCounter("oClub", runner.clubId, ctx.dbName);
                 clubsCreated++;
               } catch {
                 // ID conflict — already exists, just un-remove
@@ -603,7 +604,7 @@ export const testLabRouter = router({
                 Annotation: "",
               },
             });
-            await incrementCounter("oRunner", r.Id);
+            await incrementCounter("oRunner", r.Id, ctx.dbName);
 
             if (runner.cardNo > 0) usedCards.add(runner.cardNo);
             classCount++;
@@ -617,10 +618,10 @@ export const testLabRouter = router({
       }
     }),
 
-  registerFictionalRunners: publicProcedure
+  registerFictionalRunners: competitionProcedure
     .input(z.object({ count: z.number().int().min(1).max(5000) }))
-    .mutation(async ({ input }) => {
-      const client = await getCompetitionClient();
+    .mutation(async ({ ctx, input }) => {
+      const client = ctx.db;
 
       // Load classes
       const classes = await client.oClass.findMany({ where: { Removed: false } });
@@ -699,7 +700,7 @@ export const testLabRouter = router({
           await client.oClub.create({
             data: { Id: club.id, Name: club.name, ShortName: club.shortName },
           });
-          await incrementCounter("oClub", club.id);
+          await incrementCounter("oClub", club.id, ctx.dbName);
           clubsCreated++;
         } catch {
           try {
@@ -771,7 +772,7 @@ export const testLabRouter = router({
               Annotation: "",
             },
           });
-          await incrementCounter("oRunner", r.Id);
+          await incrementCounter("oRunner", r.Id, ctx.dbName);
           totalCreated++;
         }
       }
@@ -779,18 +780,18 @@ export const testLabRouter = router({
       return { created: totalCreated, clubsCreated };
     }),
 
-  startSimulation: publicProcedure
+  startSimulation: competitionProcedure
     .input(
       z.object({
         speed: z.number().min(0).default(10),
       }),
     )
-    .mutation(async ({ input }) => {
-      const client = await getCompetitionClient();
+    .mutation(async ({ ctx, input }) => {
+      const client = ctx.db;
 
       // Check for existing simulation
       const event = await client.oEvent.findFirst({ where: { Removed: false } });
-      const simKey = event?.NameId ?? "default";
+      const simKey = event?.NameId ?? ctx.dbName;
 
       const existingSim = simulations.get(simKey);
       if (existingSim?.running) {
@@ -926,7 +927,7 @@ export const testLabRouter = router({
       if (input.speed === 0) {
         // Instant mode — process all readouts immediately
         for (const readout of schedule) {
-          await processSimulatedReadout(client, readout);
+          await processSimulatedReadout(client, ctx.dbName, readout);
         }
 
         return {
@@ -970,7 +971,7 @@ export const testLabRouter = router({
           state.schedule[state.processed].finishTimeDs <= currentSimTimeDs
         ) {
           try {
-            await processSimulatedReadout(client, state.schedule[state.processed]);
+            await processSimulatedReadout(client, ctx.dbName, state.schedule[state.processed]);
           } catch (err) {
             console.warn("[testLab] Failed to process readout:", err);
           }
@@ -994,10 +995,10 @@ export const testLabRouter = router({
       };
     }),
 
-  simulationStatus: publicProcedure.query(async () => {
-    const client = await getCompetitionClient();
+  simulationStatus: competitionProcedure.query(async ({ ctx }) => {
+    const client = ctx.db;
     const event = await client.oEvent.findFirst({ where: { Removed: false } });
-    const simKey = event?.NameId ?? "default";
+    const simKey = event?.NameId ?? ctx.dbName;
     const state = simulations.get(simKey);
 
     if (!state) {
@@ -1013,12 +1014,12 @@ export const testLabRouter = router({
     };
   }),
 
-  updateSpeed: publicProcedure
+  updateSpeed: competitionProcedure
     .input(z.object({ speed: z.number().min(1).max(100) }))
-    .mutation(async ({ input }) => {
-      const client = await getCompetitionClient();
+    .mutation(async ({ ctx, input }) => {
+      const client = ctx.db;
       const event = await client.oEvent.findFirst({ where: { Removed: false } });
-      const simKey = event?.NameId ?? "default";
+      const simKey = event?.NameId ?? ctx.dbName;
       const state = simulations.get(simKey);
 
       if (!state?.running) {
@@ -1036,10 +1037,10 @@ export const testLabRouter = router({
       return { speed: input.speed };
     }),
 
-  stopSimulation: publicProcedure.mutation(async () => {
-    const client = await getCompetitionClient();
+  stopSimulation: competitionProcedure.mutation(async ({ ctx }) => {
+    const client = ctx.db;
     const event = await client.oEvent.findFirst({ where: { Removed: false } });
-    const simKey = event?.NameId ?? "default";
+    const simKey = event?.NameId ?? ctx.dbName;
     const state = simulations.get(simKey);
 
     if (!state) {
@@ -1059,8 +1060,8 @@ export const testLabRouter = router({
 
   // ─── Quick Draw ──────────────────────────────────────────
 
-  quickDraw: publicProcedure.mutation(async () => {
-    const client = await getCompetitionClient();
+  quickDraw: competitionProcedure.mutation(async ({ ctx }) => {
+    const client = ctx.db;
 
     const event = await client.oEvent.findFirst({ where: { Removed: false } });
     const zeroTime = event?.ZeroTime ?? 324000; // default 09:00
@@ -1117,7 +1118,7 @@ export const testLabRouter = router({
             StartNo: entry.startNo,
           },
         });
-        await incrementCounter("oRunner", entry.runnerId);
+        await incrementCounter("oRunner", entry.runnerId, ctx.dbName);
         totalDrawn++;
       }
 
@@ -1129,7 +1130,7 @@ export const testLabRouter = router({
             StartInterval: config.interval,
           },
         });
-        await incrementCounter("oClass", cls.classId);
+        await incrementCounter("oClass", cls.classId, ctx.dbName);
       }
     }
 
@@ -1138,13 +1139,13 @@ export const testLabRouter = router({
 
   // ─── Generate Readout (preview for editing) ──────────────
 
-  generateReadout: publicProcedure
+  generateReadout: competitionProcedure
     .input(z.object({
       runnerId: z.number().int(),
       mode: z.enum(["ok", "mp", "dnf", "dns"]),
     }))
-    .mutation(async ({ input }) => {
-      const client = await getCompetitionClient();
+    .mutation(async ({ ctx, input }) => {
+      const client = ctx.db;
 
       // Load runner
       const runner = await client.oRunner.findFirst({

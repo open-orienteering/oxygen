@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
-import { router, publicProcedure } from "../trpc.js";
-import { getSetting, setSetting, getCurrentDbName } from "../db.js";
+import { router, competitionProcedure } from "../trpc.js";
+import { getSetting, setSetting } from "../db.js";
 import {
     ensureCompetition,
     updateCompetitionMeta,
@@ -44,9 +44,8 @@ export const liveresultsRouter = router({
     /**
      * Get current LiveResults config for the active competition.
      */
-    getConfig: publicProcedure.query(async () => {
-        const nameId = getCurrentDbName();
-        if (!nameId) throw new TRPCError({ code: "PRECONDITION_FAILED", message: "No competition selected" });
+    getConfig: competitionProcedure.query(async ({ ctx }) => {
+        const nameId = ctx.dbName;
         const config = await getConfig(nameId);
         const tavid = await getSetting(`liveresults_tavid_${nameId}`);
         return {
@@ -62,7 +61,7 @@ export const liveresultsRouter = router({
      * Save LiveResults configuration. Also updates the LiveResults competition
      * metadata if a competition has already been created (tavid exists).
      */
-    saveConfig: publicProcedure
+    saveConfig: competitionProcedure
         .input(
             z.object({
                 intervalSeconds: z.number().int().min(5).max(300).optional(),
@@ -70,9 +69,8 @@ export const liveresultsRouter = router({
                 country: z.string().length(2).optional(),
             }),
         )
-        .mutation(async ({ input }) => {
-            const nameId = getCurrentDbName();
-            if (!nameId) throw new TRPCError({ code: "PRECONDITION_FAILED", message: "No competition selected" });
+        .mutation(async ({ ctx, input }) => {
+            const nameId = ctx.dbName;
             const config = await getConfig(nameId);
 
             if (input.intervalSeconds !== undefined) config.intervalSeconds = input.intervalSeconds;
@@ -98,9 +96,8 @@ export const liveresultsRouter = router({
      * Creates the competition in LiveResults if it doesn't exist yet,
      * then starts the interval pusher.
      */
-    enable: publicProcedure.mutation(async () => {
-        const nameId = getCurrentDbName();
-        if (!nameId) throw new TRPCError({ code: "PRECONDITION_FAILED", message: "No competition selected" });
+    enable: competitionProcedure.mutation(async ({ ctx }) => {
+        const nameId = ctx.dbName;
 
         const config = await getConfig(nameId);
         const tavid = await ensureCompetition(nameId);
@@ -115,7 +112,7 @@ export const liveresultsRouter = router({
         config.tavid = tavid;
         await saveConfig(nameId, config);
 
-        liveResultsPusher.start(tavid, config.intervalSeconds);
+        liveResultsPusher.start(tavid, config.intervalSeconds, nameId);
 
         return {
             success: true,
@@ -127,9 +124,8 @@ export const liveresultsRouter = router({
     /**
      * Disable LiveResults sync (stops the interval timer).
      */
-    disable: publicProcedure.mutation(async () => {
-        const nameId = getCurrentDbName();
-        if (!nameId) throw new TRPCError({ code: "PRECONDITION_FAILED", message: "No competition selected" });
+    disable: competitionProcedure.mutation(async ({ ctx }) => {
+        const nameId = ctx.dbName;
 
         liveResultsPusher.stop();
 
@@ -143,15 +139,14 @@ export const liveresultsRouter = router({
     /**
      * Trigger an immediate sync (useful for testing).
      */
-    pushNow: publicProcedure.mutation(async () => {
-        const nameId = getCurrentDbName();
-        if (!nameId) throw new TRPCError({ code: "PRECONDITION_FAILED", message: "No competition selected" });
+    pushNow: competitionProcedure.mutation(async ({ ctx }) => {
+        const nameId = ctx.dbName;
 
         const tavidStr = await getSetting(`liveresults_tavid_${nameId}`);
         if (!tavidStr) throw new TRPCError({ code: "PRECONDITION_FAILED", message: "LiveResults not enabled for this competition" });
 
         const tavid = parseInt(tavidStr, 10);
-        const stats = await syncAll(tavid);
+        const stats = await syncAll(tavid, nameId);
         return { success: true, stats };
     }),
 
@@ -160,9 +155,8 @@ export const liveresultsRouter = router({
      * for this competition. Useful when a tavid was reused and has stale data.
      * Optionally re-syncs fresh data immediately after clearing.
      */
-    clearRemoteData: publicProcedure.mutation(async () => {
-        const nameId = getCurrentDbName();
-        if (!nameId) throw new TRPCError({ code: "PRECONDITION_FAILED", message: "No competition selected" });
+    clearRemoteData: competitionProcedure.mutation(async ({ ctx }) => {
+        const nameId = ctx.dbName;
 
         const tavidStr = await getSetting(`liveresults_tavid_${nameId}`);
         if (!tavidStr) throw new TRPCError({ code: "PRECONDITION_FAILED", message: "LiveResults not enabled for this competition" });
@@ -178,16 +172,15 @@ export const liveresultsRouter = router({
             conn.release();
         }
 
-        const stats = await syncAll(tavid);
+        const stats = await syncAll(tavid, nameId);
         return { success: true, cleared: true, resyncStats: stats };
     }),
 
     /**
      * Get current pusher status (running, last push time, errors, etc.).
      */
-    getStatus: publicProcedure.query(async () => {
-        const nameId = getCurrentDbName();
-        if (!nameId) return null;
+    getStatus: competitionProcedure.query(async ({ ctx }) => {
+        const nameId = ctx.dbName;
 
         const status = liveResultsPusher.status;
         const tavidStr = await getSetting(`liveresults_tavid_${nameId}`);

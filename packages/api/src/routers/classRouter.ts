@@ -1,6 +1,5 @@
 import { z } from "zod";
-import { router, publicProcedure } from "../trpc.js";
-import { getCompetitionClient } from "../db.js";
+import { router, competitionProcedure } from "../trpc.js";
 import {
   parseMultiCourse,
   encodeMultiCourse,
@@ -12,12 +11,12 @@ export const classRouter = router({
   /**
    * List all classes.
    */
-  list: publicProcedure
+  list: competitionProcedure
     .input(
       z.object({ search: z.string().optional() }).optional(),
     )
-    .query(async ({ input }): Promise<ClassSummary[]> => {
-      const client = await getCompetitionClient();
+    .query(async ({ ctx, input }): Promise<ClassSummary[]> => {
+      const client = ctx.db;
 
       const classes = await client.oClass.findMany({
         where: { Removed: false },
@@ -91,10 +90,10 @@ export const classRouter = router({
   /**
    * Get a single class with full details.
    */
-  detail: publicProcedure
+  detail: competitionProcedure
     .input(z.object({ id: z.number().int() }))
-    .query(async ({ input }): Promise<ClassManageDetail | null> => {
-      const client = await getCompetitionClient();
+    .query(async ({ ctx, input }): Promise<ClassManageDetail | null> => {
+      const client = ctx.db;
 
       const cls = await client.oClass.findFirst({
         where: { Id: input.id, Removed: false },
@@ -164,7 +163,7 @@ export const classRouter = router({
   /**
    * Create a new class.
    */
-  create: publicProcedure
+  create: competitionProcedure
     .input(
       z.object({
         name: z.string().min(1),
@@ -178,8 +177,8 @@ export const classRouter = router({
         allowQuickEntry: z.boolean().optional().default(false),
       }),
     )
-    .mutation(async ({ input }) => {
-      const client = await getCompetitionClient();
+    .mutation(async ({ ctx, input }) => {
+      const client = ctx.db;
 
       const courseId = input.courseIds.length > 0 ? input.courseIds[0] : 0;
       const multiCourse =
@@ -209,7 +208,7 @@ export const classRouter = router({
   /**
    * Update an existing class.
    */
-  update: publicProcedure
+  update: competitionProcedure
     .input(
       z.object({
         id: z.number().int(),
@@ -228,8 +227,8 @@ export const classRouter = router({
         maxTime: z.number().int().min(0).optional(),
       }),
     )
-    .mutation(async ({ input }) => {
-      const client = await getCompetitionClient();
+    .mutation(async ({ ctx, input }) => {
+      const client = ctx.db;
 
       const data: Record<string, unknown> = {};
       if (input.name !== undefined) data.Name = input.name;
@@ -269,7 +268,7 @@ export const classRouter = router({
   /**
    * Batch-reorder classes by updating SortIndex.
    */
-  reorder: publicProcedure
+  reorder: competitionProcedure
     .input(
       z.object({
         items: z.array(
@@ -280,8 +279,8 @@ export const classRouter = router({
         ),
       }),
     )
-    .mutation(async ({ input }) => {
-      const client = await getCompetitionClient();
+    .mutation(async ({ ctx, input }) => {
+      const client = ctx.db;
 
       await Promise.all(
         input.items.map((item) =>
@@ -298,7 +297,7 @@ export const classRouter = router({
   /**
    * Bulk-update multiple classes at once.
    */
-  bulkUpdate: publicProcedure
+  bulkUpdate: competitionProcedure
     .input(
       z.object({
         ids: z.array(z.number().int()).min(1).max(500),
@@ -311,8 +310,8 @@ export const classRouter = router({
         }),
       }),
     )
-    .mutation(async ({ input }) => {
-      const client = await getCompetitionClient();
+    .mutation(async ({ ctx, input }) => {
+      const client = ctx.db;
 
       let updated = 0;
       const data: Record<string, unknown> = {};
@@ -336,10 +335,10 @@ export const classRouter = router({
   /**
    * Soft-delete a class.
    */
-  delete: publicProcedure
+  delete: competitionProcedure
     .input(z.object({ id: z.number().int() }))
-    .mutation(async ({ input }) => {
-      const client = await getCompetitionClient();
+    .mutation(async ({ ctx, input }) => {
+      const client = ctx.db;
 
       await client.oClass.update({
         where: { Id: input.id },

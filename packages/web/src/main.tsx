@@ -27,6 +27,14 @@ const trpcClient = trpc.createClient({
   links: [
     httpBatchLink({
       url: API_URL,
+      headers() {
+        // Extract the first path segment as the competition nameId.
+        // e.g. /my_competition/dashboard → "my_competition"
+        // Pages outside a competition (e.g. the selector) won't have a nameId.
+        const match = window.location.pathname.match(/^\/([^/]+)/);
+        const nameId = match?.[1];
+        return nameId ? { "x-competition-id": nameId } : {};
+      },
     }),
   ],
 });

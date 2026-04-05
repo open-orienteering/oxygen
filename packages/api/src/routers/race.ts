@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
-import { router, publicProcedure } from "../trpc.js";
-import { getCompetitionClient, getZeroTime } from "../db.js";
+import { router, publicProcedure, competitionProcedure } from "../trpc.js";
+import { getZeroTime } from "../db.js";
 import { toRelative, toAbsolute } from "../timeConvert.js";
 import { RunnerStatus } from "@oxygen/shared";
 import { performReadout } from "./cardReadout.js";
@@ -12,10 +12,10 @@ export const raceRouter = router({
    * Look up a runner by SI card number. Used at start/finish stations.
    * Returns the runner and their class info if found.
    */
-  lookupByCard: publicProcedure
+  lookupByCard: competitionProcedure
     .input(z.object({ cardNo: z.number().int().positive() }))
-    .query(async ({ input }) => {
-      const client = await getCompetitionClient();
+    .query(async ({ ctx, input }) => {
+      const client = ctx.db;
       const zeroTime = await getZeroTime(client);
 
       const runner = await client.oRunner.findFirst({
@@ -80,15 +80,15 @@ export const raceRouter = router({
    * Register a start for a runner.
    * Sets the start time (in MeOS deciseconds).
    */
-  registerStart: publicProcedure
+  registerStart: competitionProcedure
     .input(
       z.object({
         runnerId: z.number().int(),
         startTime: z.number().int(), // deciseconds since midnight
       }),
     )
-    .mutation(async ({ input }) => {
-      const client = await getCompetitionClient();
+    .mutation(async ({ ctx, input }) => {
+      const client = ctx.db;
       const zeroTime = await getZeroTime(client);
 
       const runner = await client.oRunner.update({
@@ -109,15 +109,15 @@ export const raceRouter = router({
    * A simple status assignment: if finishTime > 0 and startTime > 0, status = OK.
    * (Full punch validation with course matching is Phase 4.)
    */
-  recordFinish: publicProcedure
+  recordFinish: competitionProcedure
     .input(
       z.object({
         runnerId: z.number().int(),
         finishTime: z.number().int(), // deciseconds since midnight
       }),
     )
-    .mutation(async ({ input }) => {
-      const client = await getCompetitionClient();
+    .mutation(async ({ ctx, input }) => {
+      const client = ctx.db;
       const zeroTime = await getZeroTime(client);
 
       const runner = await client.oRunner.findUnique({
@@ -156,7 +156,7 @@ export const raceRouter = router({
    * Record a manual punch (free punch).
    * Used for radio controls or manual punch entry at a station.
    */
-  recordPunch: publicProcedure
+  recordPunch: competitionProcedure
     .input(
       z.object({
         cardNo: z.number().int(),
@@ -164,8 +164,8 @@ export const raceRouter = router({
         controlType: z.number().int(), // control code
       }),
     )
-    .mutation(async ({ input }) => {
-      const client = await getCompetitionClient();
+    .mutation(async ({ ctx, input }) => {
+      const client = ctx.db;
       const zeroTime = await getZeroTime(client);
 
       const punch = await client.oPunch.create({
@@ -198,10 +198,10 @@ export const raceRouter = router({
    * Returns split times (from card readout), position in class, SIAC battery
    * info, per-leg distances for pace, and top-5 class finishers.
    */
-  finishReceipt: publicProcedure
+  finishReceipt: competitionProcedure
     .input(z.object({ runnerId: z.number().int() }))
-    .query(async ({ input }) => {
-      const client = await getCompetitionClient();
+    .query(async ({ ctx, input }) => {
+      const client = ctx.db;
       const result = await performReadout(client, input.runnerId);
       if (!result) return null;
 
@@ -331,10 +331,10 @@ export const raceRouter = router({
    * Get recent race activity (last N finish/start events).
    * Used for the activity feed on station screens.
    */
-  recentActivity: publicProcedure
+  recentActivity: competitionProcedure
     .input(z.object({ limit: z.number().int().min(1).max(50).default(20) }).optional())
-    .query(async ({ input }) => {
-      const client = await getCompetitionClient();
+    .query(async ({ ctx, input }) => {
+      const client = ctx.db;
       const zeroTime = await getZeroTime(client);
       const limit = input?.limit ?? 20;
 

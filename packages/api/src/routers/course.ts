@@ -1,6 +1,7 @@
 import { z } from "zod";
-import { router, publicProcedure } from "../trpc.js";
-import { getCompetitionClient, ensureMapFilesTable, ensureMapTilesTable, incrementCounter, fireMapUpload } from "../db.js";
+import { router, competitionProcedure } from "../trpc.js";
+import type { PrismaClient } from "@prisma/client";
+import {ensureMapFilesTable, ensureMapTilesTable, incrementCounter, fireMapUpload} from "../db.js";
 import { ocadBoundsToWgs84, computeMapNorthOffset, mapMmToWgs84, type OcadCrs } from "../map-projection.js";
 import { CourseSummary, CourseDetail, RunnerStatus } from "@oxygen/shared";
 import { parseIOFCourseData, parseIOFCourseDataWithGeometry, type ParsedCourseData, type GeoJSONFeatureCollection, type ParsedCourse } from "../iof-course-parser.js";
@@ -42,7 +43,7 @@ export function meosFinishName(n: number): string {
 
 // ─── Course geometry table ───────────────────────────────────────────────────
 
-async function ensureCourseGeometryTable(client: Awaited<ReturnType<typeof getCompetitionClient>>) {
+async function ensureCourseGeometryTable(client: PrismaClient) {
   await client.$executeRawUnsafe(`
     CREATE TABLE IF NOT EXISTS oxygen_course_geometry (
       Id INT AUTO_INCREMENT PRIMARY KEY,
@@ -58,7 +59,7 @@ async function ensureCourseGeometryTable(client: Awaited<ReturnType<typeof getCo
  * Source priority: 'ocd' > 'xml' — an OCD geometry is never overwritten by XML.
  */
 async function saveCourseGeometry(
-  client: Awaited<ReturnType<typeof getCompetitionClient>>,
+  client: PrismaClient,
   courseGeometry: Record<string, GeoJSONFeatureCollection>,
   source: "xml" | "ocd",
 ) {
@@ -118,7 +119,7 @@ export const courseRouter = router({
   /**
    * List all courses.
    */
-  list: publicProcedure
+  list: competitionProcedure
     .input(
       z
         .object({
@@ -126,8 +127,8 @@ export const courseRouter = router({
         })
         .optional(),
     )
-    .query(async ({ input }): Promise<CourseSummary[]> => {
-      const client = await getCompetitionClient();
+    .query(async ({ ctx, input }): Promise<CourseSummary[]> => {
+      const client = ctx.db;
 
       const courses = await client.oCourse.findMany({
         where: { Removed: false },
@@ -163,10 +164,10 @@ export const courseRouter = router({
   /**
    * Get a single course with detailed class usage info.
    */
-  detail: publicProcedure
+  detail: competitionProcedure
     .input(z.object({ id: z.number().int() }))
-    .query(async ({ input }): Promise<CourseDetail | null> => {
-      const client = await getCompetitionClient();
+    .query(async ({ ctx, input }): Promise<CourseDetail | null> => {
+      const client = ctx.db;
 
       const course = await client.oCourse.findFirst({
         where: { Id: input.id, Removed: false },
@@ -215,7 +216,7 @@ export const courseRouter = router({
   /**
    * Create a new course.
    */
-  create: publicProcedure
+  create: competitionProcedure
     .input(
       z.object({
         name: z.string().min(1),
@@ -226,8 +227,8 @@ export const courseRouter = router({
         lastAsFinish: z.boolean().optional().default(false),
       }),
     )
-    .mutation(async ({ input }) => {
-      const client = await getCompetitionClient();
+    .mutation(async ({ ctx, input }) => {
+      const client = ctx.db;
 
       const course = await client.oCourse.create({
         data: {
@@ -240,7 +241,7 @@ export const courseRouter = router({
         },
       });
 
-      await incrementCounter("oCourse", course.Id);
+      await incrementCounter("oCourse", course.Id, ctx.dbName);
       return {
         id: course.Id,
         name: course.Name,
@@ -250,7 +251,7 @@ export const courseRouter = router({
   /**
    * Update an existing course.
    */
-  update: publicProcedure
+  update: competitionProcedure
     .input(
       z.object({
         id: z.number().int(),
@@ -262,8 +263,8 @@ export const courseRouter = router({
         lastAsFinish: z.boolean().optional(),
       }),
     )
-    .mutation(async ({ input }) => {
-      const client = await getCompetitionClient();
+    .mutation(async ({ ctx, input }) => {
+      const client = ctx.db;
 
       const data: Record<string, unknown> = {};
       if (input.name !== undefined) data.Name = input.name;
@@ -280,7 +281,7 @@ export const courseRouter = router({
         data,
       });
 
-      await incrementCounter("oCourse", course.Id);
+      await incrementCounter("oCourse", course.Id, ctx.dbName);
       return {
         id: course.Id,
         name: course.Name,
@@ -290,10 +291,10 @@ export const courseRouter = router({
   /**
    * Soft-delete a course.
    */
-  delete: publicProcedure
+  delete: competitionProcedure
     .input(z.object({ id: z.number().int() }))
-    .mutation(async ({ input }) => {
-      const client = await getCompetitionClient();
+    .mutation(async ({ ctx, input }) => {
+      const client = ctx.db;
 
       await client.oCourse.update({
         where: { Id: input.id },
@@ -307,11 +308,11 @@ export const courseRouter = router({
    * Preview an IOF 3.0 CourseData XML import.
    * Parses the XML, auto-matches class names, and returns what would be imported.
    */
-  previewImport: publicProcedure
+  previewImport: competitionProcedure
     .input(courseFileInput)
-    .mutation(async ({ input }) => {
+    .mutation(async ({ ctx, input }) => {
       const parsed = parseCourseFileInput(input);
-      const client = await getCompetitionClient();
+      const client = ctx.db;
 
       // Fetch existing classes for auto-matching
       const dbClasses = await client.oClass.findMany({
@@ -412,12 +413,12 @@ export const courseRouter = router({
    * Import IOF 3.0 CourseData XML into the competition database.
    * Creates/updates controls, courses, and optionally assigns courses to classes.
    */
-  importCourses: publicProcedure
+  importCourses: competitionProcedure
     .input(courseFileInput)
-    .mutation(async ({ input }) => {
+    .mutation(async ({ ctx, input }) => {
       const parsed = parseCourseFileInput(input);
       const { courseGeometry: geometry, geometrySource: source } = parsed;
-      const client = await getCompetitionClient();
+      const client = ctx.db;
 
       let controlsCreated = 0;
       let controlsUpdated = 0;
@@ -670,16 +671,16 @@ export const courseRouter = router({
    * Upload an OCD (OCAD) map file for this competition.
    * Accepts base64-encoded file data.
    */
-  uploadMap: publicProcedure
+  uploadMap: competitionProcedure
     .input(
       z.object({
         fileName: z.string(),
         fileDataBase64: z.string(),
       }),
     )
-    .mutation(async ({ input }) => {
-      const client = await getCompetitionClient();
-      await ensureMapFilesTable(client);
+    .mutation(async ({ ctx, input }) => {
+      const client = ctx.db;
+      await ensureMapFilesTable(client, ctx.dbName);
 
       const buffer = Buffer.from(input.fileDataBase64, "base64");
 
@@ -693,9 +694,9 @@ export const courseRouter = router({
       );
 
       // Invalidate tile cache so new map gets re-rendered
-      await ensureMapTilesTable(client);
+      await ensureMapTilesTable(client, ctx.dbName);
       await client.$executeRawUnsafe("DELETE FROM oxygen_map_tiles");
-      fireMapUpload();
+      fireMapUpload(ctx.dbName);
 
       return { success: true, fileName: input.fileName, size: buffer.length };
     }),
@@ -703,9 +704,9 @@ export const courseRouter = router({
   /**
    * Check if a map file exists for this competition.
    */
-  mapFileInfo: publicProcedure.query(async () => {
-    const client = await getCompetitionClient();
-    await ensureMapFilesTable(client);
+  mapFileInfo: competitionProcedure.query(async ({ ctx }) => {
+    const client = ctx.db;
+    await ensureMapFilesTable(client, ctx.dbName);
 
     const rows = await client.$queryRawUnsafe<
       { Id: number; FileName: string; UploadedAt: Date; Size: number }[]
@@ -725,9 +726,9 @@ export const courseRouter = router({
   /**
    * Download the OCD map file (base64-encoded).
    */
-  downloadMap: publicProcedure.query(async () => {
-    const client = await getCompetitionClient();
-    await ensureMapFilesTable(client);
+  downloadMap: competitionProcedure.query(async ({ ctx }) => {
+    const client = ctx.db;
+    await ensureMapFilesTable(client, ctx.dbName);
 
     const rows = await client.$queryRawUnsafe<
       { FileData: Buffer; FileName: string }[]
@@ -745,8 +746,8 @@ export const courseRouter = router({
   /**
    * Get all controls with their coordinates (for map overlay).
    */
-  controlCoordinates: publicProcedure.query(async () => {
-    const client = await getCompetitionClient();
+  controlCoordinates: competitionProcedure.query(async ({ ctx }) => {
+    const client = ctx.db;
 
     const controls = await client.oControl.findMany({
       where: { Removed: false },
@@ -769,7 +770,7 @@ export const courseRouter = router({
     );
     if (needsConversion) {
       try {
-        await ensureMapFilesTable(client);
+        await ensureMapFilesTable(client, ctx.dbName);
         const rows = await client.$queryRawUnsafe<{ FileData: Buffer }[]>(
           "SELECT FileData FROM oxygen_map_files ORDER BY Id DESC LIMIT 1",
         );
@@ -822,9 +823,9 @@ export const courseRouter = router({
    * Used by the tile-based MapViewer to set up the viewport without
    * downloading the full OCD file.
    */
-  mapMetadata: publicProcedure.query(async () => {
-    const client = await getCompetitionClient();
-    await ensureMapFilesTable(client);
+  mapMetadata: competitionProcedure.query(async ({ ctx }) => {
+    const client = ctx.db;
+    await ensureMapFilesTable(client, ctx.dbName);
 
     const rows = await client.$queryRawUnsafe<{ FileData: Buffer; UploadedAt: Date }[]>(
       "SELECT FileData, UploadedAt FROM oxygen_map_files ORDER BY Id DESC LIMIT 1",
@@ -859,7 +860,7 @@ export const courseRouter = router({
    * Get completion status for each control — how many runners have passed it.
    * Optionally filter by a specific course.
    */
-  controlCompletionStatus: publicProcedure
+  controlCompletionStatus: competitionProcedure
     .input(
       z
         .object({
@@ -867,8 +868,8 @@ export const courseRouter = router({
         })
         .optional(),
     )
-    .query(async ({ input }) => {
-      const client = await getCompetitionClient();
+    .query(async ({ ctx, input }) => {
+      const client = ctx.db;
 
       // 1. Get all controls (for code → id mapping)
       const controls = await client.oControl.findMany({
@@ -1064,10 +1065,10 @@ export const courseRouter = router({
   /**
    * Get the GeoJSON routing geometry for a specific course.
    */
-  courseGeometry: publicProcedure
+  courseGeometry: competitionProcedure
     .input(z.object({ courseName: z.string() }))
-    .query(async ({ input }) => {
-      const client = await getCompetitionClient();
+    .query(async ({ ctx, input }) => {
+      const client = ctx.db;
       await ensureCourseGeometryTable(client);
       const row = await client.$queryRawUnsafe<{ Geometry: string }[]>(
         "SELECT Geometry FROM oxygen_course_geometry WHERE CourseName=?",

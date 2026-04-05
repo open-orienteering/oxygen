@@ -1,14 +1,8 @@
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
-import { router, publicProcedure } from "../trpc.js";
-import {
-  getCompetitionClient,
-  incrementCounter,
-  ensureControlConfigTable,
-  ensureControlPunchesTable,
-  ensureCompetitionConfigTable,
-  getZeroTime,
-} from "../db.js";
+import { router, competitionProcedure } from "../trpc.js";
+import type { PrismaClient } from "@prisma/client";
+import {incrementCounter, ensureControlConfigTable, ensureControlPunchesTable, ensureCompetitionConfigTable, getZeroTime} from "../db.js";
 import { toRelative, toAbsolute } from "../timeConvert.js";
 import type {
   ControlInfo,
@@ -56,9 +50,10 @@ function rowToConfig(row: ControlConfigRow): ControlConfig {
 }
 
 async function getConfigMap(
-  client: Awaited<ReturnType<typeof getCompetitionClient>>,
+  client: PrismaClient,
+  dbName: string,
 ): Promise<Map<number, ControlConfig>> {
-  await ensureControlConfigTable(client);
+  await ensureControlConfigTable(client, dbName);
   const rows = (await client.$queryRawUnsafe(
     "SELECT * FROM oxygen_control_config",
   )) as ControlConfigRow[];
@@ -75,7 +70,7 @@ export const controlRouter = router({
   /**
    * List all controls with config data.
    */
-  list: publicProcedure
+  list: competitionProcedure
     .input(
       z
         .object({
@@ -84,8 +79,8 @@ export const controlRouter = router({
         })
         .optional(),
     )
-    .query(async ({ input }): Promise<ControlInfo[]> => {
-      const client = await getCompetitionClient();
+    .query(async ({ ctx, input }): Promise<ControlInfo[]> => {
+      const client = ctx.db;
 
       const controls = await client.oControl.findMany({
         where: { Removed: false },
@@ -181,7 +176,7 @@ export const controlRouter = router({
       }
 
       // Load config data
-      const configMap = await getConfigMap(client);
+      const configMap = await getConfigMap(client, ctx.dbName);
 
       return filtered.map(
         (c): ControlInfo => ({
@@ -200,10 +195,10 @@ export const controlRouter = router({
   /**
    * Get a single control with detailed course usage info.
    */
-  detail: publicProcedure
+  detail: competitionProcedure
     .input(z.object({ id: z.number().int() }))
-    .query(async ({ input }): Promise<ControlDetail | null> => {
-      const client = await getCompetitionClient();
+    .query(async ({ ctx, input }): Promise<ControlDetail | null> => {
+      const client = ctx.db;
 
       const control = await client.oControl.findFirst({
         where: { Id: input.id, Removed: false },
@@ -266,7 +261,7 @@ export const controlRouter = router({
       }
 
       // Load config
-      const configMap = await getConfigMap(client);
+      const configMap = await getConfigMap(client, ctx.dbName);
 
       return {
         id: control.Id,
@@ -284,7 +279,7 @@ export const controlRouter = router({
   /**
    * Create a new control.
    */
-  create: publicProcedure
+  create: competitionProcedure
     .input(
       z.object({
         codes: z.string().min(1),
@@ -292,8 +287,8 @@ export const controlRouter = router({
         status: z.number().int().optional().default(0),
       }),
     )
-    .mutation(async ({ input }) => {
-      const client = await getCompetitionClient();
+    .mutation(async ({ ctx, input }) => {
+      const client = ctx.db;
 
       // Use the first numeric code as the ID
       const firstCode = parseInt(
@@ -344,7 +339,7 @@ export const controlRouter = router({
   /**
    * Update an existing control.
    */
-  update: publicProcedure
+  update: competitionProcedure
     .input(
       z.object({
         id: z.number().int(),
@@ -355,8 +350,8 @@ export const controlRouter = router({
         minTime: z.number().int().optional(),
       }),
     )
-    .mutation(async ({ input }) => {
-      const client = await getCompetitionClient();
+    .mutation(async ({ ctx, input }) => {
+      const client = ctx.db;
 
       const data: Record<string, unknown> = {};
       if (input.name !== undefined) data.Name = input.name;
@@ -381,10 +376,10 @@ export const controlRouter = router({
   /**
    * Soft-delete a control.
    */
-  delete: publicProcedure
+  delete: competitionProcedure
     .input(z.object({ id: z.number().int() }))
-    .mutation(async ({ input }) => {
-      const client = await getCompetitionClient();
+    .mutation(async ({ ctx, input }) => {
+      const client = ctx.db;
 
       await client.oControl.update({
         where: { Id: input.id },
@@ -400,7 +395,7 @@ export const controlRouter = router({
    * Upsert config for one or more controls (bulk).
    * Also syncs oControl.Radio for liveresults compatibility.
    */
-  upsertConfig: publicProcedure
+  upsertConfig: competitionProcedure
     .input(
       z.object({
         controlIds: z.array(z.number().int()).min(1),
@@ -408,9 +403,9 @@ export const controlRouter = router({
         airPlus: z.enum(["default", "on", "off"]).optional(),
       }),
     )
-    .mutation(async ({ input }) => {
-      const client = await getCompetitionClient();
-      await ensureControlConfigTable(client);
+    .mutation(async ({ ctx, input }) => {
+      const client = ctx.db;
+      await ensureControlConfigTable(client, ctx.dbName);
 
       for (const controlId of input.controlIds) {
         // Upsert config row — use parameterized queries for safety
@@ -438,7 +433,7 @@ export const controlRouter = router({
             where: { Id: controlId },
             data: { Radio: radioFlag },
           });
-          await incrementCounter("oControl", controlId);
+          await incrementCounter("oControl", controlId, ctx.dbName);
         }
       }
 
@@ -448,7 +443,7 @@ export const controlRouter = router({
   /**
    * Record the result of programming a physical control.
    */
-  recordProgramming: publicProcedure
+  recordProgramming: competitionProcedure
     .input(
       z.object({
         controlId: z.number().int(),
@@ -457,9 +452,9 @@ export const controlRouter = router({
         memoryClearedAt: z.boolean().optional(),
       }),
     )
-    .mutation(async ({ input }) => {
-      const client = await getCompetitionClient();
-      await ensureControlConfigTable(client);
+    .mutation(async ({ ctx, input }) => {
+      const client = ctx.db;
+      await ensureControlConfigTable(client, ctx.dbName);
 
       const batteryLow = input.batteryVoltage < 2.5 ? 1 : 0;
 
@@ -501,7 +496,7 @@ export const controlRouter = router({
   /**
    * Import backup punches from a control's memory readout.
    */
-  importBackupPunches: publicProcedure
+  importBackupPunches: competitionProcedure
     .input(
       z.object({
         controlId: z.number().int(),
@@ -516,9 +511,9 @@ export const controlRouter = router({
         ),
       }),
     )
-    .mutation(async ({ input }) => {
-      const client = await getCompetitionClient();
-      await ensureControlPunchesTable(client);
+    .mutation(async ({ ctx, input }) => {
+      const client = ctx.db;
+      await ensureControlPunchesTable(client, ctx.dbName);
 
       if (input.punches.length === 0) return { count: 0 };
 
@@ -562,11 +557,11 @@ export const controlRouter = router({
   /**
    * List backup punches for a control, with matched runner names.
    */
-  listBackupPunches: publicProcedure
+  listBackupPunches: competitionProcedure
     .input(z.object({ controlId: z.number().int() }))
-    .query(async ({ input }) => {
-      const client = await getCompetitionClient();
-      await ensureControlPunchesTable(client);
+    .query(async ({ ctx, input }) => {
+      const client = ctx.db;
+      await ensureControlPunchesTable(client, ctx.dbName);
 
       const zeroTime = await getZeroTime(client);
 
@@ -609,11 +604,11 @@ export const controlRouter = router({
   /**
    * Push a single backup punch into the oPunch table (manual import).
    */
-  pushBackupPunch: publicProcedure
+  pushBackupPunch: competitionProcedure
     .input(z.object({ punchId: z.number().int() }))
-    .mutation(async ({ input }) => {
-      const client = await getCompetitionClient();
-      await ensureControlPunchesTable(client);
+    .mutation(async ({ ctx, input }) => {
+      const client = ctx.db;
+      await ensureControlPunchesTable(client, ctx.dbName);
 
       // Fetch the backup punch
       const rows = (await client.$queryRawUnsafe(
@@ -659,9 +654,9 @@ export const controlRouter = router({
   /**
    * List all backup punches across all controls, grouped by control.
    */
-  listAllBackupPunches: publicProcedure.query(async () => {
-    const client = await getCompetitionClient();
-    await ensureControlPunchesTable(client);
+  listAllBackupPunches: competitionProcedure.query(async ({ ctx }) => {
+    const client = ctx.db;
+    await ensureControlPunchesTable(client, ctx.dbName);
 
     const zeroTime = await getZeroTime(client);
 
@@ -734,9 +729,9 @@ export const controlRouter = router({
   /**
    * Get competition-wide AIR+ setting.
    */
-  getAirPlusConfig: publicProcedure.query(async () => {
-    const client = await getCompetitionClient();
-    await ensureCompetitionConfigTable(client);
+  getAirPlusConfig: competitionProcedure.query(async ({ ctx }) => {
+    const client = ctx.db;
+    await ensureCompetitionConfigTable(client, ctx.dbName);
 
     const rows = (await client.$queryRawUnsafe(
       "SELECT air_plus, awake_hours FROM oxygen_competition_config WHERE id = 1",
@@ -751,14 +746,14 @@ export const controlRouter = router({
   /**
    * Set competition-wide AIR+ and awake hours settings.
    */
-  setAirPlusConfig: publicProcedure
+  setAirPlusConfig: competitionProcedure
     .input(z.object({
       enabled: z.boolean().optional(),
       awakeHours: z.number().int().min(1).max(12).optional(),
     }))
-    .mutation(async ({ input }) => {
-      const client = await getCompetitionClient();
-      await ensureCompetitionConfigTable(client);
+    .mutation(async ({ ctx, input }) => {
+      const client = ctx.db;
+      await ensureCompetitionConfigTable(client, ctx.dbName);
 
       const setClauses: string[] = [];
       if (input.enabled !== undefined) {
@@ -780,7 +775,7 @@ export const controlRouter = router({
    * Return server time + NTP verification.
    * Checks the server clock against Cloudflare's trace endpoint.
    */
-  serverTime: publicProcedure.query(async () => {
+  serverTime: competitionProcedure.query(async ({ ctx }) => {
     const serverMs = Date.now();
     let ntpDriftMs: number | null = null;
     let ntpSource: string | null = null;

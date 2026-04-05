@@ -28,7 +28,7 @@ const REL_START = START_TIME - ZERO_TIME; // ZeroTime-relative start for direct 
 
 beforeAll(async () => {
   ctx = await createTestDb("kiosk");
-  const caller = makeCaller();
+  const caller = makeCaller({ dbName: ctx.dbName });
 
   // Create class
   const cls = await ctx.client.oClass.create({
@@ -158,7 +158,7 @@ afterAll(async () => {
 
 describe("cardReadout.readoutByRunner", () => {
   it("evaluates OK status for runner with all punches + finish", async () => {
-    const caller = makeCaller();
+    const caller = makeCaller({ dbName: ctx.dbName });
     const result = await caller.cardReadout.readoutByRunner({ runnerId: runnerOk.id });
 
     expect(result).not.toBeNull();
@@ -172,7 +172,7 @@ describe("cardReadout.readoutByRunner", () => {
   });
 
   it("evaluates MP status for runner missing control 33", async () => {
-    const caller = makeCaller();
+    const caller = makeCaller({ dbName: ctx.dbName });
     const result = await caller.cardReadout.readoutByRunner({ runnerId: runnerMp.id });
 
     expect(result).not.toBeNull();
@@ -187,7 +187,7 @@ describe("cardReadout.readoutByRunner", () => {
   });
 
   it("evaluates DNF status for runner with no finish punch", async () => {
-    const caller = makeCaller();
+    const caller = makeCaller({ dbName: ctx.dbName });
     const result = await caller.cardReadout.readoutByRunner({ runnerId: runnerDnf.id });
 
     expect(result).not.toBeNull();
@@ -201,7 +201,7 @@ describe("cardReadout.readoutByRunner", () => {
   });
 
   it("returns no card data for DNS runner", async () => {
-    const caller = makeCaller();
+    const caller = makeCaller({ dbName: ctx.dbName });
     const result = await caller.cardReadout.readoutByRunner({ runnerId: runnerDns.id });
 
     expect(result).not.toBeNull();
@@ -216,7 +216,7 @@ describe("cardReadout.readoutByRunner", () => {
 
 describe("race.recordFinish", () => {
   it("records finish time and sets status OK", async () => {
-    const caller = makeCaller();
+    const caller = makeCaller({ dbName: ctx.dbName });
 
     // Runner A has all punches but FinishTime is 0 in oRunner (not yet recorded)
     const before = await caller.runner.getById({ id: runnerOk.id });
@@ -240,7 +240,7 @@ describe("race.recordFinish", () => {
   });
 
   it("is idempotent — re-recording same finish does not error", async () => {
-    const caller = makeCaller();
+    const caller = makeCaller({ dbName: ctx.dbName });
     const finishTime = START_TIME + 7200;
 
     // Call again for the same runner
@@ -254,7 +254,7 @@ describe("race.recordFinish", () => {
   });
 
   it("records finish for MP runner (status stays OK until readout evaluates)", async () => {
-    const caller = makeCaller();
+    const caller = makeCaller({ dbName: ctx.dbName });
     const finishTime = START_TIME + 7200;
 
     const result = await caller.race.recordFinish({
@@ -274,7 +274,7 @@ describe("race.recordFinish", () => {
 
 describe("race.finishReceipt", () => {
   it("returns full receipt data with splits for OK runner", async () => {
-    const caller = makeCaller();
+    const caller = makeCaller({ dbName: ctx.dbName });
     const receipt = await caller.race.finishReceipt({ runnerId: runnerOk.id });
 
     expect(receipt).not.toBeNull();
@@ -304,7 +304,7 @@ describe("race.finishReceipt", () => {
   });
 
   it("returns position in class", async () => {
-    const caller = makeCaller();
+    const caller = makeCaller({ dbName: ctx.dbName });
     const receipt = await caller.race.finishReceipt({ runnerId: runnerOk.id });
 
     expect(receipt).not.toBeNull();
@@ -316,7 +316,7 @@ describe("race.finishReceipt", () => {
   });
 
   it("returns receipt for MP runner with missing controls flagged", async () => {
-    const caller = makeCaller();
+    const caller = makeCaller({ dbName: ctx.dbName });
     const receipt = await caller.race.finishReceipt({ runnerId: runnerMp.id });
 
     expect(receipt).not.toBeNull();
@@ -329,7 +329,7 @@ describe("race.finishReceipt", () => {
   });
 
   it("returns receipt for DNF runner", async () => {
-    const caller = makeCaller();
+    const caller = makeCaller({ dbName: ctx.dbName });
     const receipt = await caller.race.finishReceipt({ runnerId: runnerDnf.id });
 
     expect(receipt).not.toBeNull();
@@ -339,7 +339,7 @@ describe("race.finishReceipt", () => {
   });
 
   it("returns receipt for DNS runner (no card data)", async () => {
-    const caller = makeCaller();
+    const caller = makeCaller({ dbName: ctx.dbName });
     const receipt = await caller.race.finishReceipt({ runnerId: runnerDns.id });
 
     expect(receipt).not.toBeNull();
@@ -352,7 +352,7 @@ describe("race.finishReceipt", () => {
 
 describe("kiosk card store + evaluate flow", () => {
   it("storeReadout then readoutByRunner gives correct result", async () => {
-    const caller = makeCaller();
+    const caller = makeCaller({ dbName: ctx.dbName });
 
     // Create a new runner with no card data
     const runner = await caller.runner.create({
@@ -400,7 +400,7 @@ describe("kiosk card store + evaluate flow", () => {
 
 describe("storeReadout: stale punch detection", () => {
   it("stores punches when all controls match competition", async () => {
-    const caller = makeCaller();
+    const caller = makeCaller({ dbName: ctx.dbName });
     const result = await caller.cardReadout.storeReadout({
       cardNo: runnerOk.cardNo,
       punches: CONTROLS.map((code, i) => ({
@@ -422,7 +422,7 @@ describe("storeReadout: stale punch detection", () => {
   });
 
   it("rejects punches when card has foreign controls (stale data)", async () => {
-    const caller = makeCaller();
+    const caller = makeCaller({ dbName: ctx.dbName });
     // Use controls 91, 92, 93 which are NOT in our competition
     const result = await caller.cardReadout.storeReadout({
       cardNo: runnerDns.cardNo,
@@ -448,7 +448,7 @@ describe("storeReadout: stale punch detection", () => {
   });
 
   it("rejects punches when majority are foreign controls", async () => {
-    const caller = makeCaller();
+    const caller = makeCaller({ dbName: ctx.dbName });
     // Card has 1 valid + 2 foreign → 67% foreign > 50% threshold
     const result = await caller.cardReadout.storeReadout({
       cardNo: runnerDns.cardNo,
@@ -463,7 +463,7 @@ describe("storeReadout: stale punch detection", () => {
   });
 
   it("accepts punches when minority are foreign (misconfigured control)", async () => {
-    const caller = makeCaller();
+    const caller = makeCaller({ dbName: ctx.dbName });
     // Card has 3 valid + 1 foreign → 25% foreign < 50% threshold
     const result = await caller.cardReadout.storeReadout({
       cardNo: 600099,
@@ -480,7 +480,7 @@ describe("storeReadout: stale punch detection", () => {
   });
 
   it("stores to history even when punches are stale", async () => {
-    const caller = makeCaller();
+    const caller = makeCaller({ dbName: ctx.dbName });
 
     // Store stale punches
     await caller.cardReadout.storeReadout({
@@ -496,7 +496,7 @@ describe("storeReadout: stale punch detection", () => {
   });
 
   it("deduplicates identical readouts within 1 minute", async () => {
-    const caller = makeCaller();
+    const caller = makeCaller({ dbName: ctx.dbName });
     const uniqueCard = 599998;
 
     // Store same readout twice quickly
@@ -525,7 +525,7 @@ describe("storeReadout: stale punch detection", () => {
 
 describe("cardReadout.readout: punchesMatchCourse", () => {
   it("returns punchesMatchCourse=true when card punches match course", async () => {
-    const caller = makeCaller();
+    const caller = makeCaller({ dbName: ctx.dbName });
     const result = await caller.cardReadout.readout({ cardNo: runnerOk.cardNo });
 
     expect(result.found).toBe(true);
@@ -535,7 +535,7 @@ describe("cardReadout.readout: punchesMatchCourse", () => {
   });
 
   it("returns punchesMatchCourse=false when no card data", async () => {
-    const caller = makeCaller();
+    const caller = makeCaller({ dbName: ctx.dbName });
     const result = await caller.cardReadout.readout({ cardNo: runnerDns.cardNo });
 
     expect(result.found).toBe(true);
@@ -554,7 +554,7 @@ describe("cardReadout.applyResult", () => {
   let freshDnf: { id: number; cardNo: number };
 
   beforeAll(async () => {
-    const caller = makeCaller();
+    const caller = makeCaller({ dbName: ctx.dbName });
 
     // Create fresh runners for applyResult tests (DB stores ZeroTime-relative)
     const rOk = await caller.runner.create({ name: "ApplyOk Runner", classId, cardNo: 600001 });
@@ -571,7 +571,7 @@ describe("cardReadout.applyResult", () => {
   });
 
   it("applies OK status and finishTime to runner", async () => {
-    const caller = makeCaller();
+    const caller = makeCaller({ dbName: ctx.dbName });
     const finishTime = START_TIME + 7200;
 
     const result = await caller.cardReadout.applyResult({
@@ -594,7 +594,7 @@ describe("cardReadout.applyResult", () => {
   });
 
   it("applies MP status to runner", async () => {
-    const caller = makeCaller();
+    const caller = makeCaller({ dbName: ctx.dbName });
     const finishTime = START_TIME + 7200;
 
     await caller.cardReadout.applyResult({
@@ -610,7 +610,7 @@ describe("cardReadout.applyResult", () => {
   });
 
   it("applies DNF status with finishTime=0", async () => {
-    const caller = makeCaller();
+    const caller = makeCaller({ dbName: ctx.dbName });
 
     await caller.cardReadout.applyResult({
       runnerId: freshDnf.id,
@@ -625,7 +625,7 @@ describe("cardReadout.applyResult", () => {
   });
 
   it("is idempotent — calling twice with same values does not error", async () => {
-    const caller = makeCaller();
+    const caller = makeCaller({ dbName: ctx.dbName });
     const finishTime = START_TIME + 7200;
 
     await caller.cardReadout.applyResult({
@@ -654,7 +654,7 @@ describe("cardReadout.applyResult", () => {
 
 describe("full readout station flow", () => {
   it("storeReadout → readout → applyResult persists correct status", async () => {
-    const caller = makeCaller();
+    const caller = makeCaller({ dbName: ctx.dbName });
 
     // Create a fresh runner with no card data
     const runner = await caller.runner.create({
@@ -706,7 +706,7 @@ describe("full readout station flow", () => {
 
 describe("punch-start readout → placement flow", () => {
   it("punch-start runner gets correct placement after applyResult", async () => {
-    const caller = makeCaller();
+    const caller = makeCaller({ dbName: ctx.dbName });
 
     // Create runner with NO pre-assigned start time (punch-start)
     const runner = await caller.runner.create({
@@ -758,7 +758,7 @@ describe("punch-start readout → placement flow", () => {
   });
 
   it("two punch-start runners are ranked correctly", async () => {
-    const caller = makeCaller();
+    const caller = makeCaller({ dbName: ctx.dbName });
 
     // Create a separate class for this test to avoid interference
     const cls2 = await ctx.client.oClass.create({
@@ -834,7 +834,7 @@ describe("punch-start readout → placement flow", () => {
   });
 
   it("placements recalculate for all class runners after each apply", async () => {
-    const caller = makeCaller();
+    const caller = makeCaller({ dbName: ctx.dbName });
 
     // Create isolated class
     const cls = await ctx.client.oClass.create({
@@ -898,7 +898,7 @@ describe("punch-start readout → placement flow", () => {
   });
 
   it("tied runners get same place after incremental apply", async () => {
-    const caller = makeCaller();
+    const caller = makeCaller({ dbName: ctx.dbName });
 
     const cls = await ctx.client.oClass.create({
       data: {

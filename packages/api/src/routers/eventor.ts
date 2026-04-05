@@ -1,19 +1,7 @@
 import { z } from "zod";
-import { router, publicProcedure } from "../trpc.js";
-import {
-  createCompetitionDatabase,
-  sanitizeDbName,
-  getCompetitionClient,
-  ensureLogoTable,
-  getSetting,
-  setSetting,
-  getMainDbConnection,
-  ensureRunnerDbTable,
-  ensureClubDbTable,
-  getCurrentDbName,
-  ensureCompetitionConfigTable,
-  getZeroTime,
-} from "../db.js";
+import { router, competitionProcedure } from "../trpc.js";
+import {createCompetitionDatabase, sanitizeDbName, ensureLogoTable, getSetting, setSetting, getMainDbConnection, ensureRunnerDbTable, ensureClubDbTable, ensureCompetitionConfigTable, getZeroTime, getCompetitionClient} from "../db.js";
+import type { PrismaClient } from "@prisma/client";
 import {
   validateApiKey,
   fetchEvents,
@@ -102,14 +90,14 @@ export const eventorRouter = router({
    * Validate an Eventor API key and store it for subsequent requests.
    * Persists to MeOSMain.oxygen_settings so it survives server restarts.
    */
-  validateKey: publicProcedure
+  validateKey: competitionProcedure
     .input(
       z.object({
         apiKey: z.string().min(1),
         env: z.enum(["prod", "test"]).default("prod"),
       }),
     )
-    .mutation(async ({ input }) => {
+    .mutation(async ({ ctx, input }) => {
       const org = await validateApiKey(input.apiKey, input.env);
       storedKeys.set(input.env, { apiKey: input.apiKey, org });
       keyLoadedFromDb.set(input.env, true);
@@ -128,9 +116,9 @@ export const eventorRouter = router({
   /**
    * Clear the stored Eventor API key (for testing or switching).
    */
-  clearKey: publicProcedure
+  clearKey: competitionProcedure
     .input(z.object({ env: z.enum(["prod", "test"]).default("prod") }))
-    .mutation(async ({ input }) => {
+    .mutation(async ({ ctx, input }) => {
       storedKeys.set(input.env, null);
       const settingKey =
         input.env === "test" ? "eventor_api_key_test" : "eventor_api_key";
@@ -142,9 +130,9 @@ export const eventorRouter = router({
    * Get the currently stored key status (without exposing the key).
    * Restores from persistent storage on first call after server start.
    */
-  keyStatus: publicProcedure
+  keyStatus: competitionProcedure
     .input(z.object({ env: z.enum(["prod", "test"]).default("prod") }))
-    .query(async ({ input }) => {
+    .query(async ({ ctx, input }) => {
       await ensureKeyLoaded(input.env);
       const stored = storedKeys.get(input.env);
       if (!stored) {
@@ -160,7 +148,7 @@ export const eventorRouter = router({
   /**
    * Fetch events from Eventor for the configured organisation.
    */
-  events: publicProcedure
+  events: competitionProcedure
     .input(
       z.object({
         fromDate: z.string().optional(),
@@ -168,7 +156,7 @@ export const eventorRouter = router({
         env: z.enum(["prod", "test"]).default("prod"),
       }).optional(),
     )
-    .query(async ({ input }) => {
+    .query(async ({ ctx, input }) => {
       const { apiKey, org } = await requireApiKey(input?.env);
 
       // Default: from 6 months ago to 6 months ahead
@@ -195,12 +183,12 @@ export const eventorRouter = router({
   /**
    * Get detail for a specific event: classes and entry count.
    */
-  eventDetail: publicProcedure
+  eventDetail: competitionProcedure
     .input(z.object({
       eventId: z.number().int().positive(),
       env: z.enum(["prod", "test"]).default("prod"),
     }))
-    .query(async ({ input }) => {
+    .query(async ({ ctx, input }) => {
       const { apiKey } = await requireApiKey(input.env);
 
       const [classes, entries] = await Promise.all([
@@ -227,7 +215,7 @@ export const eventorRouter = router({
    * Import an event from Eventor into a new local database.
    * Creates the DB, imports classes, clubs, and entries.
    */
-  importEvent: publicProcedure
+  importEvent: competitionProcedure
     .input(
       z.object({
         eventId: z.number().int().positive(),
@@ -238,7 +226,7 @@ export const eventorRouter = router({
         env: z.enum(["prod", "test"]).default("prod"),
       }),
     )
-    .mutation(async ({ input }) => {
+    .mutation(async ({ ctx, input }) => {
       const { apiKey } = await requireApiKey(input.env);
 
       // 1. Create the database
@@ -439,7 +427,7 @@ export const eventorRouter = router({
           fetchClubLogo(input.organiserId, apiKey, "LargeIcon"),
         ]);
         if (small) {
-          await ensureLogoTable(client);
+          await ensureLogoTable(client, ctx.dbName);
           await client.oxygen_club_logo.upsert({
             where: { EventorId: input.organiserId },
             create: { EventorId: input.organiserId, SmallPng: small as any, ...(large ? { LargePng: large as any } : {}) },
@@ -471,7 +459,7 @@ export const eventorRouter = router({
         if (input.organiserId) {
           const orgClub = fullClubs.find(c => c.id === input.organiserId);
           if (orgClub?.webUrl) {
-            await ensureCompetitionConfigTable(client);
+            await ensureCompetitionConfigTable(client, ctx.dbName);
             await client.$executeRawUnsafe(
               "UPDATE oxygen_competition_config SET web_url = ? WHERE id = 1",
               orgClub.webUrl,
@@ -495,11 +483,11 @@ export const eventorRouter = router({
    * Get Eventor sync status for the current competition.
    * Returns the linked Eventor event ID and last sync time.
    */
-  syncStatus: publicProcedure.query(async () => {
-    const client = await getCompetitionClient();
+  syncStatus: competitionProcedure.query(async ({ ctx }) => {
+    const client = ctx.db;
     const event = await client.oEvent.findFirst({ where: { Removed: false } });
 
-    const dbName = getCurrentDbName();
+    const dbName = ctx.dbName;
     const envSuffix = (await getSetting(`eventor_env_${dbName}`)) as
       | EventorEnvironment
       | null;
@@ -534,9 +522,9 @@ export const eventorRouter = router({
    * Incremental sync: update classes, clubs, and entries from Eventor.
    * Matches by ExtId (Eventor IDs) and adds/updates as needed.
    */
-  sync: publicProcedure.mutation(async () => {
-    const client = await getCompetitionClient();
-    const dbName = getCurrentDbName();
+  sync: competitionProcedure.mutation(async ({ ctx }) => {
+    const client = ctx.db;
+    const dbName = ctx.dbName;
     const env = ((await getSetting(`eventor_env_${dbName}`)) ??
       "prod") as EventorEnvironment;
     const { apiKey } = await requireApiKey(env);
@@ -639,7 +627,7 @@ export const eventorRouter = router({
         }
       }
     }
-    const clubResult = await syncClubsFromEntries(client, allEntryLikeData, apiKey);
+    const clubResult = await syncClubsFromEntries(client, ctx.dbName, allEntryLikeData, apiKey);
     stats.clubsAdded = clubResult.added;
     stats.clubsUpdated = clubResult.updated;
     const eventorToLocalClub = clubResult.mapping;
@@ -828,7 +816,7 @@ export const eventorRouter = router({
             fetchClubLogo(organiser.id, apiKey, "LargeIcon"),
           ]);
           if (small) {
-            await ensureLogoTable(client);
+            await ensureLogoTable(client, ctx.dbName);
             await client.oxygen_club_logo.upsert({
               where: { EventorId: organiser.id },
               create: { EventorId: organiser.id, SmallPng: small as any, ...(large ? { LargePng: large as any } : {}) },
@@ -851,9 +839,9 @@ export const eventorRouter = router({
   /**
    * Push current results to Eventor.
    */
-  pushResults: publicProcedure.mutation(async () => {
-    const client = await getCompetitionClient();
-    const dbName = getCurrentDbName();
+  pushResults: competitionProcedure.mutation(async ({ ctx }) => {
+    const client = ctx.db;
+    const dbName = ctx.dbName;
     const env = ((await getSetting(`eventor_env_${dbName}`)) ??
       "prod") as EventorEnvironment;
 
@@ -1013,9 +1001,9 @@ export const eventorRouter = router({
   /**
    * Push current start list to Eventor.
    */
-  pushStartList: publicProcedure.mutation(async () => {
-    const client = await getCompetitionClient();
-    const dbName = getCurrentDbName();
+  pushStartList: competitionProcedure.mutation(async ({ ctx }) => {
+    const client = ctx.db;
+    const dbName = ctx.dbName;
     const env = ((await getSetting(`eventor_env_${dbName}`)) ??
       "prod") as EventorEnvironment;
 
@@ -1067,9 +1055,9 @@ export const eventorRouter = router({
   /**
    * Sync club list from Eventor into the current competition.
    */
-  syncClubs: publicProcedure.mutation(async () => {
-    const client = await getCompetitionClient();
-    const dbName = getCurrentDbName();
+  syncClubs: competitionProcedure.mutation(async ({ ctx }) => {
+    const client = ctx.db;
+    const dbName = ctx.dbName;
     const env = ((await getSetting(`eventor_env_${dbName}`)) ??
       "prod") as EventorEnvironment;
     const { apiKey } = await requireApiKey(env);
@@ -1127,7 +1115,7 @@ export const eventorRouter = router({
 
     // Store organizer webUrl if available
     try {
-      await ensureCompetitionConfigTable(client);
+      await ensureCompetitionConfigTable(client, ctx.dbName);
       const configRows = (await client.$queryRawUnsafe(
         "SELECT organizer_eventor_id FROM oxygen_competition_config WHERE id = 1",
       )) as Array<{ organizer_eventor_id: number }>;
@@ -1147,7 +1135,7 @@ export const eventorRouter = router({
     // Always fetches from prod-Eventor (test-Eventor doesn't host logos; org IDs are shared).
     void (async () => {
       try {
-        await ensureLogoTable(client);
+        await ensureLogoTable(client, ctx.dbName);
         const existingLogos = await client.oxygen_club_logo.findMany({
           select: { EventorId: true },
         });
@@ -1224,12 +1212,12 @@ export const eventorRouter = router({
    * Fetch members of a club from Eventor for autocomplete.
    * Cached in-memory per organisationId to avoid repeated API calls.
    */
-  clubMembers: publicProcedure
+  clubMembers: competitionProcedure
     .input(z.object({
       organisationId: z.number().int().positive(),
       env: z.enum(["prod", "test"]).default("prod"),
     }))
-    .query(async ({ input }) => {
+    .query(async ({ ctx, input }) => {
       const { apiKey } = await requireApiKey(input.env);
 
       // Check in-memory cache
@@ -1258,9 +1246,9 @@ export const eventorRouter = router({
    * Download the full Eventor cached competitor database and store in MeOSMain.
    * Also collects all clubs from the data and stores them in oxygen_club_db.
    */
-  syncRunnerDb: publicProcedure
+  syncRunnerDb: competitionProcedure
     .input(z.object({ env: z.enum(["prod", "test"]).default("prod") }))
-    .mutation(async ({ input }) => {
+    .mutation(async ({ ctx, input }) => {
       const { apiKey } = await requireApiKey(input.env);
 
       // 1. Download and parse the full competitor list
@@ -1390,9 +1378,9 @@ export const eventorRouter = router({
   /**
    * Search the global runner database by name or card number.
    */
-  searchRunnerDb: publicProcedure
+  searchRunnerDb: competitionProcedure
     .input(z.object({ query: z.string().min(2) }))
-    .query(async ({ input }) => {
+    .query(async ({ ctx, input }) => {
       const conn = await getMainDbConnection();
       try {
         await ensureRunnerDbTable(conn);
@@ -1454,9 +1442,9 @@ export const eventorRouter = router({
    * Look up a runner by exact SI card number in the global runner database.
    * Used to pre-fill registration form when an unknown card is detected.
    */
-  lookupByCardNo: publicProcedure
+  lookupByCardNo: competitionProcedure
     .input(z.object({ cardNo: z.number().int().positive() }))
-    .query(async ({ input }) => {
+    .query(async ({ ctx, input }) => {
       const conn = await getMainDbConnection();
       try {
         await ensureRunnerDbTable(conn);
@@ -1487,7 +1475,7 @@ export const eventorRouter = router({
   /**
    * Get the status of the global runner database.
    */
-  runnerDbStatus: publicProcedure.query(async () => {
+  runnerDbStatus: competitionProcedure.query(async ({ ctx }) => {
     const lastSync = await getSetting("runnerdb_last_sync");
     const runnerCount = await getSetting("runnerdb_runner_count");
     const clubCount = await getSetting("runnerdb_club_count");
@@ -1505,14 +1493,14 @@ export const eventorRouter = router({
    *
    * Flow: Eventor event XML → WebURL → Livelox event ID → SearchEvents → classes
    */
-  getLiveloxClasses: publicProcedure
+  getLiveloxClasses: competitionProcedure
     .input(
       z.object({
         eventorEventId: z.number().int().positive(),
         env: z.enum(["prod", "test"]).default("prod"),
       }),
     )
-    .query(async ({ input }) => {
+    .query(async ({ ctx, input }) => {
       const { apiKey } = await requireApiKey(input.env);
 
       const info = await fetchEventWebUrl(apiKey, input.eventorEventId, input.env);
@@ -1551,7 +1539,7 @@ function formatDate(d: Date): string {
  * Runner Fee is centesimal (11000 = 110 SEK), ClassFee is whole units (110 = 110 SEK).
  */
 async function deriveClassFees(
-  client: Awaited<ReturnType<typeof getCompetitionClient>>,
+  client: PrismaClient,
 ): Promise<void> {
   const runners = await client.oRunner.findMany({
     where: { Removed: false, Fee: { gt: 0 } },
@@ -1588,7 +1576,8 @@ async function deriveClassFees(
 
 /** Sync clubs referenced in entries into the database. Returns mapping from Eventor org ID to local club ID. */
 async function syncClubsFromEntries(
-  client: Awaited<ReturnType<typeof getCompetitionClient>>,
+  client: PrismaClient,
+  dbName: string,
   entries: EventorEntry[],
   apiKey: string,
 ): Promise<{ mapping: Map<number, number>; added: number; updated: number }> {
@@ -1659,7 +1648,7 @@ async function syncClubsFromEntries(
   // the same organisation IDs as prod, so prod logos apply to both.
   void (async () => {
     try {
-      await ensureLogoTable(client);
+      await ensureLogoTable(client, dbName);
       const existingLogos = await client.oxygen_club_logo.findMany({
         select: { EventorId: true },
       });

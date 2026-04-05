@@ -1,9 +1,10 @@
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
-import { router, publicProcedure } from "../trpc.js";
-import { getCompetitionClient, incrementCounter, incrementCounterBatch, getZeroTime } from "../db.js";
+import { router, competitionProcedure } from "../trpc.js";
+import { incrementCounter, incrementCounterBatch, getZeroTime } from "../db.js";
 import { toRelative, toAbsolute } from "../timeConvert.js";
 import type { RunnerDetail, RunnerInfo } from "@oxygen/shared";
+import type { PrismaClient } from "@prisma/client";
 import { parsePunches, parseCourseControls, performReadout } from "./cardReadout.js";
 import { computeClassPlacements } from "../results.js";
 import { pushRegistrationToSheet } from "../sheetsBackup.js";
@@ -17,7 +18,7 @@ import { pushRegistrationToSheet } from "../sheetsBackup.js";
  * Frontend should treat any non-zero value as "is rental card".
  */
 async function resolveCardFee(
-  client: Awaited<ReturnType<typeof getCompetitionClient>>,
+  client: PrismaClient,
   rawCardFee: number,
 ): Promise<number> {
   if (rawCardFee === 0) return 0;
@@ -29,7 +30,7 @@ async function resolveCardFee(
 
 /** Check that cardNo is not already assigned to another (non-removed) runner. */
 async function assertCardNotTaken(
-  client: Awaited<ReturnType<typeof getCompetitionClient>>,
+  client: PrismaClient,
   cardNo: number,
   excludeRunnerId?: number,
 ): Promise<void> {
@@ -101,10 +102,10 @@ export const runnerRouter = router({
   /**
    * Get a single runner by ID with full detail.
    */
-  getById: publicProcedure
+  getById: competitionProcedure
     .input(z.object({ id: z.number().int() }))
-    .query(async ({ input }): Promise<RunnerDetail> => {
-      const client = await getCompetitionClient();
+    .query(async ({ ctx, input }): Promise<RunnerDetail> => {
+      const client = ctx.db;
       const r = await client.oRunner.findFirst({
         where: { Id: input.id, Removed: false },
       });
@@ -152,11 +153,11 @@ export const runnerRouter = router({
   /**
    * Find a runner by SI card number. Returns null if not found.
    */
-  findByCard: publicProcedure
+  findByCard: competitionProcedure
     .input(z.object({ cardNo: z.number().int() }))
-    .query(async ({ input }) => {
+    .query(async ({ ctx, input }) => {
       if (input.cardNo <= 0) return null;
-      const client = await getCompetitionClient();
+      const client = ctx.db;
       const r = await client.oRunner.findFirst({
         where: { CardNo: input.cardNo, Removed: false },
       });
@@ -183,7 +184,7 @@ export const runnerRouter = router({
   /**
    * List runners with filtering and search.
    */
-  list: publicProcedure
+  list: competitionProcedure
     .input(
       z
         .object({
@@ -194,8 +195,8 @@ export const runnerRouter = router({
         })
         .optional(),
     )
-    .query(async ({ input }): Promise<RunnerInfo[]> => {
-      const client = await getCompetitionClient();
+    .query(async ({ ctx, input }): Promise<RunnerInfo[]> => {
+      const client = ctx.db;
 
       const clubs = await client.oClub.findMany({
         where: { Removed: false },
@@ -391,10 +392,10 @@ export const runnerRouter = router({
   /**
    * Create a new runner.
    */
-  create: publicProcedure
+  create: competitionProcedure
     .input(runnerCreateSchema)
-    .mutation(async ({ input }) => {
-      const client = await getCompetitionClient();
+    .mutation(async ({ ctx, input }) => {
+      const client = ctx.db;
 
       await assertCardNotTaken(client, input.cardNo);
 
@@ -436,7 +437,7 @@ export const runnerRouter = router({
         }
       }
 
-      await incrementCounter("oRunner", runner.Id);
+      await incrementCounter("oRunner", runner.Id, ctx.dbName);
 
       // Fire-and-forget Google Sheets backup
       {
@@ -446,7 +447,7 @@ export const runnerRouter = router({
         const club = input.clubId
           ? await client.oClub.findUnique({ where: { Id: input.clubId }, select: { Name: true } })
           : null;
-        pushRegistrationToSheet(client, {
+        pushRegistrationToSheet(client, ctx.dbName, {
           sheet: "Registrations",
           timestamp: new Date().toISOString(),
           runnerId: runner.Id,
@@ -471,15 +472,15 @@ export const runnerRouter = router({
   /**
    * Update an existing runner.
    */
-  update: publicProcedure
+  update: competitionProcedure
     .input(
       z.object({
         id: z.number().int(),
         data: runnerUpdateSchema,
       }),
     )
-    .mutation(async ({ input }) => {
-      const client = await getCompetitionClient();
+    .mutation(async ({ ctx, input }) => {
+      const client = ctx.db;
 
       if (input.data.cardNo !== undefined) {
         await assertCardNotTaken(client, input.data.cardNo, input.id);
@@ -536,22 +537,22 @@ export const runnerRouter = router({
         }
       }
 
-      await incrementCounter("oRunner", runner.Id);
+      await incrementCounter("oRunner", runner.Id, ctx.dbName);
       return { id: runner.Id, name: runner.Name };
     }),
 
   /**
    * Bulk update multiple runners.
    */
-  bulkUpdate: publicProcedure
+  bulkUpdate: competitionProcedure
     .input(
       z.object({
         ids: z.array(z.number().int()).min(1).max(1000),
         data: runnerUpdateSchema,
       }),
     )
-    .mutation(async ({ input }) => {
-      const client = await getCompetitionClient();
+    .mutation(async ({ ctx, input }) => {
+      const client = ctx.db;
 
       const needsZT = input.data.startTime !== undefined || input.data.finishTime !== undefined;
       const zeroTime = needsZT ? await getZeroTime(client) : 0;
@@ -585,7 +586,7 @@ export const runnerRouter = router({
         where: { Id: { in: input.ids } },
         data: updateData,
       });
-      await incrementCounterBatch("oRunner", input.ids);
+      await incrementCounterBatch("oRunner", input.ids, ctx.dbName);
 
       return { updated: input.ids.length };
     }),
@@ -593,15 +594,15 @@ export const runnerRouter = router({
   /**
    * Delete a runner (soft delete - sets Removed=true, matching MeOS convention).
    */
-  delete: publicProcedure
+  delete: competitionProcedure
     .input(z.object({ id: z.number().int() }))
-    .mutation(async ({ input }) => {
-      const client = await getCompetitionClient();
+    .mutation(async ({ ctx, input }) => {
+      const client = ctx.db;
       await client.oRunner.update({
         where: { Id: input.id },
         data: { Removed: true },
       });
-      await incrementCounter("oRunner", input.id);
+      await incrementCounter("oRunner", input.id, ctx.dbName);
       return { success: true };
     }),
 
@@ -609,10 +610,10 @@ export const runnerRouter = router({
    * Mark a rental card as returned (or undo the return).
    * Writes to oos_card_returned — an Oxygen-only column ignored by MeOS.
    */
-  setCardReturned: publicProcedure
+  setCardReturned: competitionProcedure
     .input(z.object({ runnerId: z.number().int(), returned: z.boolean() }))
-    .mutation(async ({ input }) => {
-      const client = await getCompetitionClient();
+    .mutation(async ({ ctx, input }) => {
+      const client = ctx.db;
       await client.oRunner.update({
         where: { Id: input.runnerId },
         data: { oos_card_returned: input.returned ? 1 : 0 },
@@ -624,8 +625,8 @@ export const runnerRouter = router({
    * Start screen data: returns ZeroTime + all runners with start times
    * for the advance-time display at the start area.
    */
-  startScreen: publicProcedure.query(async () => {
-    const client = await getCompetitionClient();
+  startScreen: competitionProcedure.query(async ({ ctx }) => {
+    const client = ctx.db;
 
     const zeroTime = await getZeroTime(client);
 

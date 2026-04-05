@@ -16,7 +16,7 @@ let ctx: TestDbContext;
 
 async function seedFixture(ctx: TestDbContext) {
   const { client } = ctx;
-  const caller = makeCaller();
+  const caller = makeCaller({ dbName: ctx.dbName });
 
   // Create two clubs
   const clubA = await client.oClub.create({
@@ -106,7 +106,7 @@ afterAll(async () => {
 describe("draw.defaults", () => {
   it("returns the classes with correct runner counts", async () => {
     const { classA, classB } = await seedFixture(ctx);
-    const caller = makeCaller();
+    const caller = makeCaller({ dbName: ctx.dbName });
 
     const result = await caller.draw.defaults();
 
@@ -118,7 +118,7 @@ describe("draw.defaults", () => {
   });
 
   it("includes the event ZeroTime", async () => {
-    const caller = makeCaller();
+    const caller = makeCaller({ dbName: ctx.dbName });
     const result = await caller.draw.defaults();
     // createCompetitionDatabase sets ZeroTime to 324000 (09:00:00)
     expect(result.zeroTime).toBe(324000);
@@ -128,7 +128,7 @@ describe("draw.defaults", () => {
 describe("draw.preview", () => {
   it("returns all runner IDs in the preview", async () => {
     const { classA, runnersA } = await seedFixture(ctx);
-    const caller = makeCaller();
+    const caller = makeCaller({ dbName: ctx.dbName });
 
     const preview = await caller.draw.preview({
       classes: [
@@ -156,7 +156,7 @@ describe("draw.preview", () => {
 
   it("assigns sequential start times with the given interval", async () => {
     const { classA } = await seedFixture(ctx);
-    const caller = makeCaller();
+    const caller = makeCaller({ dbName: ctx.dbName });
     const FIRST_START = 324000;
     const INTERVAL = 20;
 
@@ -183,7 +183,7 @@ describe("draw.preview", () => {
 
   it("does not modify the database (preview only)", async () => {
     const { classA, runnersA } = await seedFixture(ctx);
-    const caller = makeCaller();
+    const caller = makeCaller({ dbName: ctx.dbName });
 
     await caller.draw.preview({
       classes: [{ classId: classA.Id, method: "random", interval: 20 }],
@@ -206,7 +206,7 @@ describe("draw.preview", () => {
     // Integration smoke-test: the clubSeparation method is accepted and returns data.
     // Statistical quality is tested by unit tests in algorithms.test.ts.
     const { classA, runnersA } = await seedFixture(ctx);
-    const caller = makeCaller();
+    const caller = makeCaller({ dbName: ctx.dbName });
 
     const preview = await caller.draw.preview({
       classes: [{ classId: classA.Id, method: "clubSeparation", interval: 20 }],
@@ -224,7 +224,7 @@ describe("draw.preview", () => {
 describe("draw.execute", () => {
   it("persists start times and start numbers to oRunner", async () => {
     const { classA, runnersA } = await seedFixture(ctx);
-    const caller = makeCaller();
+    const caller = makeCaller({ dbName: ctx.dbName });
 
     await caller.draw.execute({
       classes: [{ classId: classA.Id, method: "random", interval: 20 }],
@@ -252,7 +252,7 @@ describe("draw.execute", () => {
 
   it("persists FirstStart and StartInterval to oClass", async () => {
     const { classA } = await seedFixture(ctx);
-    const caller = makeCaller();
+    const caller = makeCaller({ dbName: ctx.dbName });
     const FIRST_START = 324000;
     const INTERVAL = 30;
 
@@ -276,7 +276,7 @@ describe("draw.execute", () => {
 
   it("returns correct totalDrawn count", async () => {
     const { classA, runnersA } = await seedFixture(ctx);
-    const caller = makeCaller();
+    const caller = makeCaller({ dbName: ctx.dbName });
 
     const result = await caller.draw.execute({
       classes: [{ classId: classA.Id, method: "random", interval: 20 }],
@@ -294,7 +294,7 @@ describe("draw.execute", () => {
 
   it("start numbers are unique within the drawn class", async () => {
     const { classA } = await seedFixture(ctx);
-    const caller = makeCaller();
+    const caller = makeCaller({ dbName: ctx.dbName });
 
     await caller.draw.execute({
       classes: [{ classId: classA.Id, method: "random", interval: 20 }],

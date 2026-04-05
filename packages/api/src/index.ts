@@ -7,7 +7,7 @@ import {
 import { appRouter, type AppRouter } from "./routers/index.js";
 export type { AppRouter };
 import { createContext } from "./trpc.js";
-import { disconnectAll, getCompetitionClient, ensureLogoTable, getMainDbConnection, ensureClubDbTable, ensureMapFilesTable, ensureMapTilesTable, onCompetitionSwitch, onMapUpload } from "./db.js";
+import { disconnectAll, getCompetitionClient, ensureLogoTable, getMainDbConnection, ensureClubDbTable, ensureMapFilesTable, ensureMapTilesTable, onMapUpload } from "./db.js";
 import { tileBoundsWgs84, wgs84ToOcad, ocadBoundsToWgs84, type OcadCrs } from "./map-projection.js";
 import "dotenv/config";
 
@@ -31,6 +31,7 @@ async function main() {
   await server.register(cors, {
     origin: ["http://localhost:5173", "http://localhost:4173", "http://localhost:8080"],
     credentials: true,
+    allowedHeaders: ["content-type", "x-competition-id"],
   });
 
   // tRPC handler
@@ -95,8 +96,11 @@ async function main() {
 
     // 2. Fall back to per-competition oxygen_club_logo
     try {
-      const client = await getCompetitionClient();
-      await ensureLogoTable(client);
+      const rawDbName = req.headers["x-competition-id"];
+      const dbName = (Array.isArray(rawDbName) ? rawDbName[0] : rawDbName) ?? "";
+      if (!dbName) return reply.code(404).send({ error: "No competition selected" });
+      const client = await getCompetitionClient(dbName);
+      await ensureLogoTable(client, dbName);
       const logo = await client.oxygen_club_logo.findUnique({
         where: { EventorId: eventorId },
       });
@@ -122,46 +126,46 @@ async function main() {
   // Serves 256x256 PNG tiles of the OCAD map at slippy-map coordinates.
   // GET /api/map-tile/:z/:x/:y
 
-  // Module-level cache for the pre-rendered map bitmap + CRS
+  // Per-competition cache for the pre-rendered map bitmap + CRS
   type BitmapInfo = { data: Buffer; width: number; height: number; scale: number };
   type PreRenderedMap = { bitmap: BitmapInfo; crs: OcadCrs; ocadBounds: number[] };
+  type MapCacheEntry = PreRenderedMap;
 
-  let cachedBitmap: BitmapInfo | null = null;
-  let cachedOcadBounds: number[] | null = null;
-  let cachedCrs: OcadCrs | null = null;
-  let renderInFlight: Promise<PreRenderedMap> | null = null;
+  const mapCache = new Map<string, MapCacheEntry>();
+  const mapRenderInFlight = new Map<string, Promise<PreRenderedMap>>();
 
-  // Tile pre-cache progress tracking
-  let tileCacheProgress = { total: 0, done: 0, rendering: false };
+  // Tile pre-cache progress tracking — one entry per competition
+  const tileCacheProgress = new Map<string, { total: number; done: number; rendering: boolean }>();
 
-  // Invalidate cached bitmap when switching competitions or re-uploading a map
-  const invalidateMapCache = () => {
-    cachedBitmap = null;
-    cachedOcadBounds = null;
-    cachedCrs = null;
-    renderInFlight = null;
-  };
-  onCompetitionSwitch(invalidateMapCache);
-  onMapUpload(invalidateMapCache);
+  // Invalidate cached bitmap for a specific competition when its map is re-uploaded
+  onMapUpload((nameId: string) => {
+    mapCache.delete(nameId);
+    mapRenderInFlight.delete(nameId);
+    tileCacheProgress.delete(nameId);
+  });
 
-  async function getPreRenderedMap(): Promise<PreRenderedMap> {
-    if (cachedBitmap && cachedCrs && cachedOcadBounds) {
-      return { bitmap: cachedBitmap, crs: cachedCrs, ocadBounds: cachedOcadBounds };
-    }
+  async function getPreRenderedMap(dbName: string): Promise<PreRenderedMap> {
+    const cached = mapCache.get(dbName);
+    if (cached) return cached;
 
-    // Mutex: if a render is already in flight, wait for it instead of starting another
-    if (renderInFlight) return renderInFlight;
-    renderInFlight = doPreRenderMap();
+    // Mutex: if a render is already in flight for this competition, wait for it
+    const inFlight = mapRenderInFlight.get(dbName);
+    if (inFlight) return inFlight;
+
+    const promise = doPreRenderMap(dbName);
+    mapRenderInFlight.set(dbName, promise);
     try {
-      return await renderInFlight;
+      const result = await promise;
+      mapCache.set(dbName, result);
+      return result;
     } finally {
-      renderInFlight = null;
+      mapRenderInFlight.delete(dbName);
     }
   }
 
-  async function doPreRenderMap() {
-    const client = await getCompetitionClient();
-    await ensureMapFilesTable(client);
+  async function doPreRenderMap(dbName: string) {
+    const client = await getCompetitionClient(dbName);
+    await ensureMapFilesTable(client, dbName);
 
     const rows = await client.$queryRawUnsafe<{ FileData: Buffer }[]>(
       "SELECT FileData FROM oxygen_map_files ORDER BY Id DESC LIMIT 1",
@@ -186,12 +190,12 @@ async function main() {
       exportHidden: false,
     });
 
-    cachedCrs = ocadFile.getCrs();
-    server.log.info(`OCAD CRS: code=${cachedCrs.code}, catalog=${cachedCrs.catalog}, easting=${cachedCrs.easting}, northing=${cachedCrs.northing}, scale=${cachedCrs.scale}`);
-    cachedOcadBounds = ocadFile.getBounds();
-    server.log.info(`OCAD bounds: ${JSON.stringify(cachedOcadBounds)}`);
+    const crs = ocadFile.getCrs();
+    server.log.info(`OCAD CRS: code=${crs.code}, catalog=${crs.catalog}, easting=${crs.easting}, northing=${crs.northing}, scale=${crs.scale}`);
+    const ocadBounds = ocadFile.getBounds();
+    server.log.info(`OCAD bounds: ${JSON.stringify(ocadBounds)}`);
 
-    const [bMinX, bMinY, bMaxX, bMaxY] = cachedOcadBounds;
+    const [bMinX, bMinY, bMaxX, bMaxY] = ocadBounds;
     const ocadW = bMaxX - bMinX;
     const ocadH = bMaxY - bMinY;
 
@@ -215,21 +219,21 @@ async function main() {
     });
     const rendered = resvg.render();
 
-    cachedBitmap = {
+    const bitmap: BitmapInfo = {
       data: Buffer.from(rendered.pixels),
       width: rendered.width,
       height: rendered.height,
       scale: rendered.width / ocadW,
     };
 
-    server.log.info(`Pre-rendered: ${cachedBitmap.width}x${cachedBitmap.height}, scale=${cachedBitmap.scale.toFixed(4)} px/unit`);
+    server.log.info(`Pre-rendered: ${bitmap.width}x${bitmap.height}, scale=${bitmap.scale.toFixed(4)} px/unit`);
 
     // Pre-cache tiles in background (don't block the first request)
-    preCacheTiles(cachedBitmap, cachedCrs!, cachedOcadBounds!).catch((err) => {
+    preCacheTiles(bitmap, crs, ocadBounds, dbName).catch((err) => {
       server.log.error({ err }, "Failed to pre-cache tiles");
     });
 
-    return { bitmap: cachedBitmap, crs: cachedCrs, ocadBounds: cachedOcadBounds };
+    return { bitmap, crs, ocadBounds };
   }
 
   /**
@@ -328,12 +332,13 @@ async function main() {
     bitmap: BitmapInfo,
     crs: OcadCrs,
     ocadBounds: number[],
+    dbName: string,
   ) {
     const mapWgs84 = ocadBoundsToWgs84(ocadBounds, crs);
     if (!mapWgs84) return;
 
-    const client = await getCompetitionClient();
-    await ensureMapTilesTable(client);
+    const client = await getCompetitionClient(dbName);
+    await ensureMapTilesTable(client, dbName);
 
     // Check how many tiles are already cached
     const countResult = await client.$queryRawUnsafe<{ cnt: bigint }[]>(
@@ -356,7 +361,7 @@ async function main() {
       totalTiles += (maxTileX - minTileX + 1) * (maxTileY - minTileY + 1);
     }
 
-    tileCacheProgress = { total: totalTiles, done: 0, rendering: true };
+    tileCacheProgress.set(dbName, { total: totalTiles, done: 0, rendering: true });
 
     let totalCached = 0;
     for (let z = 10; z <= 17; z++) {
@@ -380,69 +385,89 @@ async function main() {
           } catch {
             // Skip failed tiles
           }
-          tileCacheProgress.done++;
+          const prog = tileCacheProgress.get(dbName);
+          if (prog) prog.done++;
         }
       }
     }
-    tileCacheProgress.rendering = false;
+    const prog = tileCacheProgress.get(dbName);
+    if (prog) prog.rendering = false;
     server.log.info(`Pre-cached ${totalCached} tiles (zoom 10–17)`);
   }
 
   // Tile pre-cache progress endpoint (polled by frontend during map load)
-  server.get("/api/map-tile-progress", async (_req, reply) => {
-    return reply.send(tileCacheProgress);
+  server.get("/api/map-tile-progress", async (req, reply) => {
+    const rawDbName = req.headers["x-competition-id"];
+    const dbName = (Array.isArray(rawDbName) ? rawDbName[0] : rawDbName) ?? "";
+    return reply.send(tileCacheProgress.get(dbName) ?? { total: 0, done: 0, rendering: false });
   });
 
+  // Path-based route — used by <img> tags (browsers can't add custom headers to img src)
+  server.get<{
+    Params: { nameId: string; z: string; x: string; y: string };
+  }>("/api/map-tile/:nameId/:z/:x/:y", async (req, reply) => {
+    const z = parseInt(req.params.z, 10);
+    const x = parseInt(req.params.x, 10);
+    const y = parseInt(req.params.y, 10);
+    const dbName = req.params.nameId;
+
+    if (isNaN(z) || isNaN(x) || isNaN(y) || !dbName) {
+      return reply.code(400).send({ error: "Invalid tile request" });
+    }
+
+    const client = await getCompetitionClient(dbName);
+    await ensureMapTilesTable(client, dbName);
+
+    const cached = await client.$queryRawUnsafe<{ TileData: Buffer }[]>(
+      "SELECT TileData FROM oxygen_map_tiles WHERE Z=? AND X=? AND Y=?", z, x, y,
+    );
+    if (cached.length > 0) {
+      return reply.header("Content-Type", "image/png").header("Cache-Control", "public, max-age=604800").send(Buffer.from(cached[0].TileData));
+    }
+
+    try {
+      const { bitmap, crs, ocadBounds } = await getPreRenderedMap(dbName);
+      const pngBuffer = await renderTile(z, x, y, bitmap, crs, ocadBounds);
+      if (!pngBuffer) return reply.header("Cache-Control", "public, max-age=604800").code(204).send();
+
+      try { await client.$executeRawUnsafe("INSERT IGNORE INTO oxygen_map_tiles (Z, X, Y, TileData) VALUES (?, ?, ?, ?)", z, x, y, pngBuffer); } catch { /* race */ }
+      return reply.header("Content-Type", "image/png").header("Cache-Control", "public, max-age=604800").send(pngBuffer);
+    } catch (err) {
+      server.log.error({ err }, "Failed to render map tile");
+      return reply.code(500).send({ error: "Failed to render tile" });
+    }
+  });
+
+  // Header-based route — backward compatibility for fetch()-based callers
   server.get<{
     Params: { z: string; x: string; y: string };
   }>("/api/map-tile/:z/:x/:y", async (req, reply) => {
     const z = parseInt(req.params.z, 10);
     const x = parseInt(req.params.x, 10);
     const y = parseInt(req.params.y, 10);
+    const rawDbName = req.headers["x-competition-id"];
+    const dbName = (Array.isArray(rawDbName) ? rawDbName[0] : rawDbName) ?? "";
 
-    if (isNaN(z) || isNaN(x) || isNaN(y)) {
-      return reply.code(400).send({ error: "Invalid tile coordinates" });
-    }
+    if (isNaN(z) || isNaN(x) || isNaN(y)) return reply.code(400).send({ error: "Invalid tile coordinates" });
+    if (!dbName) return reply.code(400).send({ error: "No competition selected" });
 
-    // Check DB cache
-    const client = await getCompetitionClient();
-    await ensureMapTilesTable(client);
+    const client = await getCompetitionClient(dbName);
+    await ensureMapTilesTable(client, dbName);
 
     const cached = await client.$queryRawUnsafe<{ TileData: Buffer }[]>(
-      "SELECT TileData FROM oxygen_map_tiles WHERE Z=? AND X=? AND Y=?",
-      z, x, y,
+      "SELECT TileData FROM oxygen_map_tiles WHERE Z=? AND X=? AND Y=?", z, x, y,
     );
-
     if (cached.length > 0) {
-      return reply
-        .header("Content-Type", "image/png")
-        .header("Cache-Control", "public, max-age=604800")
-        .send(Buffer.from(cached[0].TileData));
+      return reply.header("Content-Type", "image/png").header("Cache-Control", "public, max-age=604800").send(Buffer.from(cached[0].TileData));
     }
 
-    // Render tile
     try {
-      const { bitmap, crs, ocadBounds } = await getPreRenderedMap();
-
+      const { bitmap, crs, ocadBounds } = await getPreRenderedMap(dbName);
       const pngBuffer = await renderTile(z, x, y, bitmap, crs, ocadBounds);
-      if (!pngBuffer) {
-        return reply.header("Cache-Control", "public, max-age=604800").code(204).send();
-      }
+      if (!pngBuffer) return reply.header("Cache-Control", "public, max-age=604800").code(204).send();
 
-      // Cache in DB
-      try {
-        await client.$executeRawUnsafe(
-          "INSERT IGNORE INTO oxygen_map_tiles (Z, X, Y, TileData) VALUES (?, ?, ?, ?)",
-          z, x, y, pngBuffer,
-        );
-      } catch {
-        // Ignore duplicate key errors from race conditions
-      }
-
-      return reply
-        .header("Content-Type", "image/png")
-        .header("Cache-Control", "public, max-age=604800")
-        .send(pngBuffer);
+      try { await client.$executeRawUnsafe("INSERT IGNORE INTO oxygen_map_tiles (Z, X, Y, TileData) VALUES (?, ?, ?, ?)", z, x, y, pngBuffer); } catch { /* race */ }
+      return reply.header("Content-Type", "image/png").header("Cache-Control", "public, max-age=604800").send(pngBuffer);
     } catch (err) {
       server.log.error({ err }, "Failed to render map tile");
       return reply.code(500).send({ error: "Failed to render tile" });

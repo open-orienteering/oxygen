@@ -41,12 +41,12 @@ let cachedWebhookUrl: string | null = null;
 let cacheTime = 0;
 const CACHE_TTL_MS = 60_000;
 
-async function getWebhookUrl(client: PrismaClient): Promise<string> {
+async function getWebhookUrl(client: PrismaClient, dbName: string): Promise<string> {
   if (cachedWebhookUrl !== null && Date.now() - cacheTime < CACHE_TTL_MS) {
     return cachedWebhookUrl;
   }
   try {
-    await ensureCompetitionConfigTable(client);
+    await ensureCompetitionConfigTable(client, dbName);
     const rows = await client.$queryRawUnsafe<
       Array<{ google_sheets_webhook_url: string }>
     >(
@@ -66,9 +66,9 @@ export function clearSheetsCache(): void {
 }
 
 /** Fire-and-forget POST to the configured webhook. */
-function fireAndForget(client: PrismaClient, payload: Record<string, unknown>): void {
+function fireAndForget(client: PrismaClient, dbName: string, payload: Record<string, unknown>): void {
   void (async () => {
-    const url = await getWebhookUrl(client);
+    const url = await getWebhookUrl(client, dbName);
     if (!url) return;
 
     try {
@@ -89,9 +89,10 @@ function fireAndForget(client: PrismaClient, payload: Record<string, unknown>): 
  */
 export function pushToGoogleSheet(
   client: PrismaClient,
+  dbName: string,
   row: SheetRow,
 ): void {
-  fireAndForget(client, { ...row, sheet: "Readouts" });
+  fireAndForget(client, dbName, { ...row, sheet: "Readouts" });
 }
 
 /**
@@ -99,9 +100,10 @@ export function pushToGoogleSheet(
  */
 export function pushRegistrationToSheet(
   client: PrismaClient,
+  dbName: string,
   row: RegistrationRow,
 ): void {
-  fireAndForget(client, { ...row, sheet: "Registrations" });
+  fireAndForget(client, dbName, { ...row, sheet: "Registrations" });
 }
 
 /**

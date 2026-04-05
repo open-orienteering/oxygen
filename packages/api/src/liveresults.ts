@@ -15,6 +15,7 @@
 
 import mysql from "mysql2/promise";
 import { getSetting, setSetting, getCompetitionClient, getZeroTime } from "./db.js";
+// Note: liveresults.ts calls getCompetitionClient(nameId) directly
 import { toAbsolute } from "./timeConvert.js";
 
 // ─── Constants ────────────────────────────────────────────────
@@ -112,7 +113,7 @@ export async function ensureCompetition(nameId: string): Promise<number> {
     if (existing) return parseInt(existing, 10);
 
     // Get event info from Oxygen
-    const client = await getCompetitionClient();
+    const client = await getCompetitionClient(nameId);
     const event = await client.oEvent.findFirst({ where: { Removed: false } });
     if (!event) throw new Error("No event found in Oxygen database");
 
@@ -184,8 +185,8 @@ export async function updateCompetitionMeta(
  * Sync all data (splitcontrols, runners, results) from Oxygen to LiveResults.
  * This is the core function called by the interval timer.
  */
-export async function syncAll(tavid: number): Promise<SyncStats> {
-    const client = await getCompetitionClient();
+export async function syncAll(tavid: number, nameId: string): Promise<SyncStats> {
+    const client = await getCompetitionClient(nameId);
     const pool = await getLiveResultsPool();
     const conn = await pool.getConnection();
 
@@ -419,6 +420,7 @@ export interface PusherStatus {
 class LiveResultsPusherManager {
     private timer: ReturnType<typeof setInterval> | null = null;
     private _tavid: number | null = null;
+    private _nameId: string | null = null;
     private _lastPush: string | null = null;
     private _lastError: string | null = null;
     private _pushCount = 0;
@@ -433,14 +435,15 @@ class LiveResultsPusherManager {
         };
     }
 
-    start(tavid: number, intervalSeconds: number): void {
+    start(tavid: number, intervalSeconds: number, nameId: string): void {
         this.stop();
         this._tavid = tavid;
+        this._nameId = nameId;
         this._lastError = null;
 
         const run = async () => {
             try {
-                await syncAll(tavid);
+                await syncAll(tavid, nameId);
                 this._lastPush = new Date().toISOString();
                 this._pushCount++;
                 this._lastError = null;
@@ -462,8 +465,8 @@ class LiveResultsPusherManager {
         }
     }
 
-    async pushNow(tavid: number): Promise<SyncStats> {
-        return syncAll(tavid);
+    async pushNow(tavid: number, nameId: string): Promise<SyncStats> {
+        return syncAll(tavid, nameId);
     }
 }
 

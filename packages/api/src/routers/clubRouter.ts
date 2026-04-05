@@ -1,13 +1,13 @@
 import { z } from "zod";
-import { router, publicProcedure } from "../trpc.js";
-import { getCompetitionClient, ensureLogoTable, getMainDbConnection, ensureClubDbTable } from "../db.js";
+import { router, competitionProcedure } from "../trpc.js";
+import {ensureLogoTable, getMainDbConnection, ensureClubDbTable} from "../db.js";
 import type { ClubSummary, ClubDetail } from "@oxygen/shared";
 
 export const clubRouter = router({
   /**
    * List all clubs with runner counts.
    */
-  list: publicProcedure
+  list: competitionProcedure
     .input(
       z
         .object({
@@ -16,8 +16,8 @@ export const clubRouter = router({
         })
         .optional(),
     )
-    .query(async ({ input }): Promise<ClubSummary[]> => {
-      const client = await getCompetitionClient();
+    .query(async ({ ctx, input }): Promise<ClubSummary[]> => {
+      const client = ctx.db;
 
       const clubs = await client.oClub.findMany({
         where: { Removed: false },
@@ -66,10 +66,10 @@ export const clubRouter = router({
   /**
    * Get a single club with details and runner list.
    */
-  detail: publicProcedure
+  detail: competitionProcedure
     .input(z.object({ id: z.number().int() }))
-    .query(async ({ input }): Promise<ClubDetail | null> => {
-      const client = await getCompetitionClient();
+    .query(async ({ ctx, input }): Promise<ClubDetail | null> => {
+      const client = ctx.db;
 
       const club = await client.oClub.findFirst({
         where: { Id: input.id, Removed: false },
@@ -114,15 +114,15 @@ export const clubRouter = router({
   /**
    * Create a new club.
    */
-  create: publicProcedure
+  create: competitionProcedure
     .input(
       z.object({
         name: z.string().min(1),
         shortName: z.string().optional(),
       }),
     )
-    .mutation(async ({ input }) => {
-      const client = await getCompetitionClient();
+    .mutation(async ({ ctx, input }) => {
+      const client = ctx.db;
       const created = await client.oClub.create({
         data: {
           Name: input.name,
@@ -135,7 +135,7 @@ export const clubRouter = router({
   /**
    * Update a club.
    */
-  update: publicProcedure
+  update: competitionProcedure
     .input(
       z.object({
         id: z.number().int(),
@@ -143,8 +143,8 @@ export const clubRouter = router({
         shortName: z.string().optional(),
       }),
     )
-    .mutation(async ({ input }) => {
-      const client = await getCompetitionClient();
+    .mutation(async ({ ctx, input }) => {
+      const client = ctx.db;
       const data: Record<string, unknown> = {};
       if (input.name !== undefined) data.Name = input.name;
       if (input.shortName !== undefined)
@@ -160,10 +160,10 @@ export const clubRouter = router({
   /**
    * Delete a club (soft delete).
    */
-  delete: publicProcedure
+  delete: competitionProcedure
     .input(z.object({ id: z.number().int() }))
-    .mutation(async ({ input }) => {
-      const client = await getCompetitionClient();
+    .mutation(async ({ ctx, input }) => {
+      const client = ctx.db;
       await client.oClub.update({
         where: { Id: input.id },
         data: { Removed: true },
@@ -175,13 +175,13 @@ export const clubRouter = router({
    * Return a mapping of local club ID → Eventor org ID for all clubs that have logos stored.
    * The frontend uses this to construct /api/club-logo/:eventorId URLs.
    */
-  logoMap: publicProcedure.query(async () => {
-    const client = await getCompetitionClient();
+  logoMap: competitionProcedure.query(async ({ ctx }) => {
+    const client = ctx.db;
 
     // Collect Eventor IDs with logos from per-competition table
     const logoEventorIds = new Set<number>();
     try {
-      await ensureLogoTable(client);
+      await ensureLogoTable(client, ctx.dbName);
       const logos = await client.oxygen_club_logo.findMany({
         select: { EventorId: true },
       });

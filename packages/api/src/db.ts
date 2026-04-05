@@ -15,26 +15,24 @@ export interface DbConnectionInfo {
 
 // ─── State ─────────────────────────────────────────────────
 
-// The main Prisma client for the currently selected competition database
-let competitionClient: PrismaClient | null = null;
-let currentDbName: string | null = null;
+// Prisma clients cached by competition database name (one per competition)
+const competitionClients = new Map<string, PrismaClient>();
 
 // In-memory cache of stored remote connections (NameId → connection info)
 let remoteConnectionCache: Map<string, DbConnectionInfo> | null = null;
 
-// Listeners called when the active competition database changes
-const competitionSwitchListeners: (() => void)[] = [];
-export function onCompetitionSwitch(cb: () => void) { competitionSwitchListeners.push(cb); }
-
 // Listeners called when a new map is uploaded (to invalidate caches)
-const mapUploadListeners: (() => void)[] = [];
-export function onMapUpload(cb: () => void) { mapUploadListeners.push(cb); }
-export function fireMapUpload() { for (const cb of mapUploadListeners) cb(); }
+const mapUploadListeners: ((nameId: string) => void)[] = [];
+export function onMapUpload(cb: (nameId: string) => void) { mapUploadListeners.push(cb); }
+export function fireMapUpload(nameId: string) { for (const cb of mapUploadListeners) cb(nameId); }
 
-// oMonitor heartbeat state (registers Oxygen as a connected client in MeOS)
-let monitorId: number | null = null;
-let monitorInterval: ReturnType<typeof setInterval> | null = null;
-let monitorConn: mysql.Connection | null = null;
+// oMonitor heartbeat state — one handle per competition database
+interface MonitorHandle {
+  id: number;
+  interval: ReturnType<typeof setInterval>;
+  conn: mysql.Connection;
+}
+const monitorHandles = new Map<string, MonitorHandle>();
 
 // ─── Main DB (MeOSMain) connection ─────────────────────────
 
@@ -190,144 +188,119 @@ const MONITOR_INTERVAL_MS = 15_000;
  * every 15 seconds to keep the entry's Modified timestamp fresh.
  *
  * See MeosSQL.cpp:monitorShow() for MeOS's side of this protocol.
+ * No-ops if a heartbeat for this dbName is already running.
  */
 async function startMonitorHeartbeat(dbName: string): Promise<void> {
-  await stopMonitorHeartbeat();
+  if (monitorHandles.has(dbName)) return; // already running for this DB
 
+  let conn: mysql.Connection | null = null;
   try {
-    monitorConn = await getCompetitionDbConnection(dbName);
+    conn = await getCompetitionDbConnection(dbName);
 
-    const [result] = await monitorConn.execute<mysql.ResultSetHeader>(
+    const [result] = await conn.execute<mysql.ResultSetHeader>(
       "INSERT INTO oMonitor (Count, Client, Modified) VALUES (1, 'Oxygen', NOW())",
     );
-    monitorId = result.insertId;
-    console.log(`  [monitor] Registered as client #${monitorId} in ${dbName}`);
+    const id = result.insertId;
+    console.log(`  [monitor] Registered as client #${id} in ${dbName}`);
 
-    monitorInterval = setInterval(async () => {
-      if (!monitorConn || !monitorId) return;
+    const interval = setInterval(async () => {
+      const handle = monitorHandles.get(dbName);
+      if (!handle) return;
       try {
-        await monitorConn.execute(
+        await handle.conn.execute(
           "UPDATE oMonitor SET Count = Count + 1, Client = 'Oxygen', Modified = NOW() WHERE Id = ?",
-          [monitorId],
+          [handle.id],
         );
       } catch {
         // Connection may have been lost; stop heartbeat silently
-        await stopMonitorHeartbeat();
+        await stopMonitorHeartbeat(dbName);
       }
     }, MONITOR_INTERVAL_MS);
+
+    monitorHandles.set(dbName, { id, interval, conn });
   } catch (err) {
     // oMonitor table may not exist (e.g. test databases).
     // This is non-critical — just skip registration.
     console.warn(`  [monitor] Failed to register in ${dbName}:`, err);
-    if (monitorConn) {
-      try { await monitorConn.end(); } catch { /* ignore */ }
-    }
-    monitorConn = null;
-    monitorId = null;
+    if (conn) { try { await conn.end(); } catch { /* ignore */ } }
   }
 }
 
 /**
- * Stop the oMonitor heartbeat and mark the Oxygen client as removed.
+ * Stop the oMonitor heartbeat for a specific competition (or all if no dbName given).
  */
-async function stopMonitorHeartbeat(): Promise<void> {
-  if (monitorInterval) {
-    clearInterval(monitorInterval);
-    monitorInterval = null;
-  }
-
-  if (monitorConn && monitorId) {
+async function stopMonitorHeartbeat(dbName?: string): Promise<void> {
+  const toStop = dbName ? [dbName] : [...monitorHandles.keys()];
+  for (const name of toStop) {
+    const handle = monitorHandles.get(name);
+    if (!handle) continue;
+    clearInterval(handle.interval);
     try {
-      await monitorConn.execute(
+      await handle.conn.execute(
         "UPDATE oMonitor SET Removed = 1, Modified = NOW() WHERE Id = ?",
-        [monitorId],
+        [handle.id],
       );
-      console.log(`  [monitor] Unregistered client #${monitorId}`);
-    } catch {
-      // Ignore errors during cleanup
-    }
+      console.log(`  [monitor] Unregistered client #${handle.id}`);
+    } catch { /* ignore */ }
+    try { await handle.conn.end(); } catch { /* ignore */ }
+    monitorHandles.delete(name);
   }
-
-  if (monitorConn) {
-    try {
-      await monitorConn.end();
-    } catch {
-      // Ignore
-    }
-    monitorConn = null;
-  }
-  monitorId = null;
 }
 
 // ─── Competition Prisma client ─────────────────────────────
 
 /**
  * Get or create the Prisma client for a specific competition database.
- * If the database name changes, the old client is disconnected and a new one is created.
+ * Multiple clients are cached simultaneously (one per competition).
  * Automatically checks for stored remote connections.
  * Also starts the oMonitor heartbeat to register Oxygen as a connected client.
  */
 export async function getCompetitionClient(
-  dbName?: string,
+  dbName: string,
 ): Promise<PrismaClient> {
-  const targetDb = dbName ?? currentDbName ?? getDbNameFromUrl();
-
-  if (competitionClient && currentDbName === targetDb) {
-    return competitionClient;
-  }
-
-  // Stop old heartbeat + disconnect old client if switching databases
-  await stopMonitorHeartbeat();
-  if (competitionClient) {
-    await competitionClient.$disconnect();
-    // Notify listeners (e.g. to clear cached map tiles)
-    for (const cb of competitionSwitchListeners) cb();
-  }
-
-  // Clear per-database "table ready" caches so ensure* functions re-check
-  logoTableReady.clear();
-  readoutTableReady.clear();
-  mapFilesTableReady.clear();
-  controlConfigTableReady.clear();
-  controlPunchesTableReady.clear();
-  competitionConfigTableReady.clear();
-  renderedMapsTableReady.clear();
-  mapTilesTableReady.clear();
-  tracksTableReady.clear();
-  routesTableReady.clear();
+  const existing = competitionClients.get(dbName);
+  if (existing) return existing;
 
   // Check if this competition has a remote connection
-  const remote = await getRemoteConnection(targetDb);
-  const url = buildDbUrl(targetDb, remote);
+  const remote = await getRemoteConnection(dbName);
+  const url = buildDbUrl(dbName, remote);
 
-  competitionClient = new PrismaClient({
+  const client = new PrismaClient({
     datasources: {
       db: { url },
     },
   });
 
-  await competitionClient.$connect();
-  currentDbName = targetDb;
+  await client.$connect();
+  competitionClients.set(dbName, client);
 
-  // Start oMonitor heartbeat for the new database (fire-and-forget)
-  startMonitorHeartbeat(targetDb).catch(() => {});
+  // Start oMonitor heartbeat for this database (fire-and-forget)
+  startMonitorHeartbeat(dbName).catch(() => {});
 
-  return competitionClient;
+  return client;
 }
 
-/** Get the default Prisma client (using DATABASE_URL as-is) */
-export async function getDefaultClient(): Promise<PrismaClient> {
-  if (!competitionClient) {
-    competitionClient = new PrismaClient();
-    await competitionClient.$connect();
-    currentDbName = getDbNameFromUrl();
+/**
+ * Remove a cached competition client and clear its ensure-caches.
+ * Use this in tests to allow a fresh setup of the same database.
+ */
+export async function clearCachedClient(dbName: string): Promise<void> {
+  await stopMonitorHeartbeat(dbName);
+  const client = competitionClients.get(dbName);
+  if (client) {
+    try { await client.$disconnect(); } catch { /* ignore */ }
+    competitionClients.delete(dbName);
   }
-  return competitionClient;
-}
-
-/** Get the current competition database name */
-export function getCurrentDbName(): string | null {
-  return currentDbName;
+  logoTableReady.delete(dbName);
+  readoutTableReady.delete(dbName);
+  mapFilesTableReady.delete(dbName);
+  controlConfigTableReady.delete(dbName);
+  controlPunchesTableReady.delete(dbName);
+  competitionConfigTableReady.delete(dbName);
+  renderedMapsTableReady.delete(dbName);
+  mapTilesTableReady.delete(dbName);
+  tracksTableReady.delete(dbName);
+  routesTableReady.delete(dbName);
 }
 
 /** Extract the database name from DATABASE_URL */
@@ -526,7 +499,7 @@ export async function createCompetitionDatabase(
 
   // 7. Set up Oxygen-specific config table + columns on the fresh database
   //    so that the first dashboard/getRegistrationConfig request doesn't race.
-  await ensureCompetitionConfigTable(client);
+  await ensureCompetitionConfigTable(client, dbName);
 
   return { dbName, eventId };
 }
@@ -663,9 +636,9 @@ const logoTableReady = new Set<string>();
 
 export async function ensureLogoTable(
   client: PrismaClient,
+  dbName: string,
 ): Promise<void> {
-  const db = currentDbName ?? "";
-  if (logoTableReady.has(db)) return;
+  if (logoTableReady.has(dbName)) return;
 
   await client.$executeRawUnsafe(`
     CREATE TABLE IF NOT EXISTS oxygen_club_logo (
@@ -675,7 +648,7 @@ export async function ensureLogoTable(
       UpdatedAt  TIMESTAMP(0) NOT NULL DEFAULT CURRENT_TIMESTAMP
     )
   `);
-  logoTableReady.add(db);
+  logoTableReady.add(dbName);
 }
 
 // ─── Card readout history table ────────────────────────────
@@ -684,9 +657,9 @@ const readoutTableReady = new Set<string>();
 
 export async function ensureReadoutTable(
   client: PrismaClient,
+  dbName: string,
 ): Promise<void> {
-  const db = currentDbName ?? "";
-  if (readoutTableReady.has(db)) return;
+  if (readoutTableReady.has(dbName)) return;
 
   await client.$executeRawUnsafe(`
     CREATE TABLE IF NOT EXISTS oxygen_card_readouts (
@@ -712,7 +685,7 @@ export async function ensureReadoutTable(
     // Column already exists — safe to ignore
   }
 
-  readoutTableReady.add(db);
+  readoutTableReady.add(dbName);
 }
 
 // ─── Map files table ────────────────────────────────────────
@@ -721,9 +694,9 @@ const mapFilesTableReady = new Set<string>();
 
 export async function ensureMapFilesTable(
   client: PrismaClient,
+  dbName: string,
 ): Promise<void> {
-  const db = currentDbName ?? "";
-  if (mapFilesTableReady.has(db)) return;
+  if (mapFilesTableReady.has(dbName)) return;
 
   await client.$executeRawUnsafe(`
     CREATE TABLE IF NOT EXISTS oxygen_map_files (
@@ -734,7 +707,7 @@ export async function ensureMapFilesTable(
     )
   `);
 
-  mapFilesTableReady.add(db);
+  mapFilesTableReady.add(dbName);
 }
 
 // ─── Rendered maps cache table ──────────────────────────────
@@ -743,9 +716,9 @@ const renderedMapsTableReady = new Set<string>();
 
 export async function ensureRenderedMapsTable(
   client: PrismaClient,
+  dbName: string,
 ): Promise<void> {
-  const db = currentDbName ?? "";
-  if (renderedMapsTableReady.has(db)) return;
+  if (renderedMapsTableReady.has(dbName)) return;
 
   await client.$executeRawUnsafe(`
     CREATE TABLE IF NOT EXISTS oxygen_rendered_maps (
@@ -759,7 +732,7 @@ export async function ensureRenderedMapsTable(
       RenderedAt TIMESTAMP(0) NOT NULL DEFAULT CURRENT_TIMESTAMP
     )
   `);
-  renderedMapsTableReady.add(db);
+  renderedMapsTableReady.add(dbName);
 }
 
 // ─── Map tiles cache table ─────────────────────────────────
@@ -768,9 +741,9 @@ const mapTilesTableReady = new Set<string>();
 
 export async function ensureMapTilesTable(
   client: PrismaClient,
+  dbName: string,
 ): Promise<void> {
-  const db = currentDbName ?? "";
-  if (mapTilesTableReady.has(db)) return;
+  if (mapTilesTableReady.has(dbName)) return;
 
   await client.$executeRawUnsafe(`
     CREATE TABLE IF NOT EXISTS oxygen_map_tiles (
@@ -782,7 +755,7 @@ export async function ensureMapTilesTable(
       UNIQUE KEY tile_zxy (Z, X, Y)
     )
   `);
-  mapTilesTableReady.add(db);
+  mapTilesTableReady.add(dbName);
 }
 
 // ─── Control config table ──────────────────────────────────
@@ -791,9 +764,9 @@ const controlConfigTableReady = new Set<string>();
 
 export async function ensureControlConfigTable(
   client: PrismaClient,
+  dbName: string,
 ): Promise<void> {
-  const db = currentDbName ?? "";
-  if (controlConfigTableReady.has(db)) return;
+  if (controlConfigTableReady.has(dbName)) return;
 
   await client.$executeRawUnsafe(`
     CREATE TABLE IF NOT EXISTS oxygen_control_config (
@@ -807,7 +780,7 @@ export async function ensureControlConfigTable(
       station_serial    INT NULL
     )
   `);
-  controlConfigTableReady.add(db);
+  controlConfigTableReady.add(dbName);
 }
 
 // ─── Control backup punches table ──────────────────────────
@@ -816,9 +789,9 @@ const controlPunchesTableReady = new Set<string>();
 
 export async function ensureControlPunchesTable(
   client: PrismaClient,
+  dbName: string,
 ): Promise<void> {
-  const db = currentDbName ?? "";
-  if (controlPunchesTableReady.has(db)) return;
+  if (controlPunchesTableReady.has(dbName)) return;
 
   await client.$executeRawUnsafe(`
     CREATE TABLE IF NOT EXISTS oxygen_control_punches (
@@ -850,7 +823,7 @@ export async function ensureControlPunchesTable(
       `ALTER TABLE oxygen_control_punches ADD COLUMN station_serial INT UNSIGNED NULL AFTER sub_second`,
     );
   } catch { /* column already exists */ }
-  controlPunchesTableReady.add(db);
+  controlPunchesTableReady.add(dbName);
 }
 
 // ─── Competition config table ──────────────────────────────
@@ -860,26 +833,26 @@ const competitionConfigTablePending = new Map<string, Promise<void>>();
 
 export async function ensureCompetitionConfigTable(
   client: PrismaClient,
+  dbName: string,
 ): Promise<void> {
-  const db = currentDbName ?? "";
-  if (competitionConfigTableReady.has(db)) return;
+  if (competitionConfigTableReady.has(dbName)) return;
 
   // Prevent concurrent callers from running DDL in parallel (race on fresh DBs)
-  const pending = competitionConfigTablePending.get(db);
+  const pending = competitionConfigTablePending.get(dbName);
   if (pending) return pending;
 
-  const promise = _doEnsureCompetitionConfigTable(client, db);
-  competitionConfigTablePending.set(db, promise);
+  const promise = _doEnsureCompetitionConfigTable(client, dbName);
+  competitionConfigTablePending.set(dbName, promise);
   try {
     await promise;
   } finally {
-    competitionConfigTablePending.delete(db);
+    competitionConfigTablePending.delete(dbName);
   }
 }
 
 async function _doEnsureCompetitionConfigTable(
   client: PrismaClient,
-  db: string,
+  dbName: string,
 ): Promise<void> {
   await client.$executeRawUnsafe(`
     CREATE TABLE IF NOT EXISTS oxygen_competition_config (
@@ -987,7 +960,7 @@ async function _doEnsureCompetitionConfigTable(
     }
   }
 
-  competitionConfigTableReady.add(db);
+  competitionConfigTableReady.add(dbName);
 }
 
 // ─── GPS tracks table ─────────────────────────────────────
@@ -996,9 +969,9 @@ const tracksTableReady = new Set<string>();
 
 export async function ensureTracksTable(
   client: PrismaClient,
+  dbName: string,
 ): Promise<void> {
-  const db = currentDbName ?? "";
-  if (tracksTableReady.has(db)) return;
+  if (tracksTableReady.has(dbName)) return;
 
   await client.$executeRawUnsafe(`
     CREATE TABLE IF NOT EXISTS oxygen_tracks (
@@ -1015,7 +988,7 @@ export async function ensureTracksTable(
       UNIQUE KEY uq_device_track (DeviceId, StartTime)
     )
   `);
-  tracksTableReady.add(db);
+  tracksTableReady.add(dbName);
 }
 
 // ─── GPS routes table (Livelox / GPX / device) ─────────────
@@ -1024,9 +997,9 @@ const routesTableReady = new Set<string>();
 
 export async function ensureRoutesTable(
   client: PrismaClient,
+  dbName: string,
 ): Promise<void> {
-  const db = currentDbName ?? "";
-  if (routesTableReady.has(db)) return;
+  if (routesTableReady.has(dbName)) return;
 
   await client.$executeRawUnsafe(`
     CREATE TABLE IF NOT EXISTS oxygen_routes (
@@ -1046,24 +1019,20 @@ export async function ensureRoutesTable(
       INDEX idx_livelox (LiveloxClassId)
     )
   `);
-  routesTableReady.add(db);
+  routesTableReady.add(dbName);
 }
 
 // ─── Raw competition DB connection ─────────────────────────
 
 /**
- * Get a raw mysql2 connection to the current competition database.
+ * Get a raw mysql2 connection to a specific competition database.
  * Used for operations that need explicit table locking (e.g., counter increment).
  */
 async function getCompetitionDbConnection(
-  dbName?: string,
+  dbName: string,
 ): Promise<mysql.Connection> {
-  const targetDb = dbName ?? currentDbName ?? getDbNameFromUrl();
-  if (!targetDb) {
-    throw new Error("No competition database selected");
-  }
-  const remote = await getRemoteConnection(targetDb);
-  const url = buildDbUrl(targetDb, remote);
+  const remote = await getRemoteConnection(dbName);
+  const url = buildDbUrl(dbName, remote);
   return mysql.createConnection(url);
 }
 
@@ -1105,8 +1074,9 @@ export async function getZeroTime(client: PrismaClient): Promise<number> {
 export async function incrementCounter(
   table: CounterTable,
   recordId: number,
+  dbName: string,
 ): Promise<void> {
-  const conn = await getCompetitionDbConnection();
+  const conn = await getCompetitionDbConnection(dbName);
   try {
     // Note: LOCK/UNLOCK TABLES are not supported in the prepared statement
     // protocol, so we use conn.query() (text protocol) for all statements
@@ -1148,11 +1118,12 @@ export async function incrementCounter(
 export async function incrementCounterBatch(
   table: CounterTable,
   recordIds: number[],
+  dbName: string,
 ): Promise<void> {
   if (recordIds.length === 0) return;
-  if (recordIds.length === 1) return incrementCounter(table, recordIds[0]);
+  if (recordIds.length === 1) return incrementCounter(table, recordIds[0], dbName);
 
-  const conn = await getCompetitionDbConnection();
+  const conn = await getCompetitionDbConnection(dbName);
   try {
     await conn.query(`LOCK TABLES \`${table}\` WRITE`);
 
@@ -1185,14 +1156,22 @@ export async function incrementCounterBatch(
 
 // ─── Shutdown ──────────────────────────────────────────────
 
-/** Graceful shutdown */
+/** Graceful shutdown — disconnects all cached competition clients */
 export async function disconnectAll(): Promise<void> {
-  await stopMonitorHeartbeat();
-  if (competitionClient) {
-    await competitionClient.$disconnect();
-    competitionClient = null;
-    currentDbName = null;
-    logoTableReady.clear();
-    remoteConnectionCache = null;
+  await stopMonitorHeartbeat(); // stops all heartbeats
+  for (const [, client] of competitionClients) {
+    try { await client.$disconnect(); } catch { /* ignore */ }
   }
+  competitionClients.clear();
+  logoTableReady.clear();
+  readoutTableReady.clear();
+  mapFilesTableReady.clear();
+  controlConfigTableReady.clear();
+  controlPunchesTableReady.clear();
+  competitionConfigTableReady.clear();
+  renderedMapsTableReady.clear();
+  mapTilesTableReady.clear();
+  tracksTableReady.clear();
+  routesTableReady.clear();
+  remoteConnectionCache = null;
 }
