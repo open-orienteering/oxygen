@@ -379,6 +379,7 @@ export function ControlsPage() {
       {/* Map */}
       <MapPanel
         className="mt-6"
+        fitToControls
         highlightControlId={expandedId ?? undefined}
       />
     </>

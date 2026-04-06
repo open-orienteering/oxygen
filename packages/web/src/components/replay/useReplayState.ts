@@ -93,6 +93,21 @@ export function useReplayState(data: ReplayData | undefined, config?: ReplayConf
 
   const { raceStarts, globalStart, globalEnd, maxIndividualDuration } = routeInfo;
 
+  // ── Bounds restricted to visible participants (used in real-time mode) ──
+  const visibleBounds = useMemo(() => {
+    let start = Infinity, end = -Infinity;
+    for (const route of data?.routes ?? []) {
+      if (!visibleParticipants.has(route.participantId)) continue;
+      if (route.waypoints.length === 0) continue;
+      const s = route.raceStartMs ?? route.waypoints[0].timeMs;
+      const e = route.waypoints[route.waypoints.length - 1].timeMs;
+      if (s < start) start = s;
+      if (e > end) end = e;
+    }
+    if (!isFinite(start)) return { start: globalStart, end: globalEnd };
+    return { start, end };
+  }, [data?.routes, visibleParticipants, globalStart, globalEnd]);
+
   // ── Per-participant split times at each control (for control restart + legs) ──
   const controlSplits = useMemo(() => {
     if (!data || data.courses.length === 0) return [];
@@ -117,7 +132,7 @@ export function useReplayState(data: ReplayData | undefined, config?: ReplayConf
 
   // ── Duration depends on mode ──
   const totalDurationMs = useMemo(() => {
-    if (startMode === "real") return globalEnd - globalStart;
+    if (startMode === "real") return visibleBounds.end - visibleBounds.start;
     if (startMode === "legs" && controlSplits.length > 1) {
       // Duration of the current leg: slowest of the VISIBLE runners, plus 2s buffer
       const fromSplits = controlSplits[currentLeg];
@@ -153,7 +168,7 @@ export function useReplayState(data: ReplayData | undefined, config?: ReplayConf
       return maxDur || maxIndividualDuration;
     }
     return maxIndividualDuration;
-  }, [startMode, globalEnd, globalStart, maxIndividualDuration, controlSplits, currentLeg, restartControlIdx, data, visibleParticipants, raceStarts]);
+  }, [startMode, visibleBounds, maxIndividualDuration, controlSplits, currentLeg, restartControlIdx, data, visibleParticipants, raceStarts]);
 
   // ── Init when data changes ──
   useEffect(() => {
@@ -318,12 +333,12 @@ export function useReplayState(data: ReplayData | undefined, config?: ReplayConf
         return raceStart - 1;
       }
 
-      if (startMode === "real") return globalStart + elapsedMs;
+      if (startMode === "real") return visibleBounds.start + elapsedMs;
 
       // Mass start: offset from each runner's race start
       return raceStart + elapsedMs;
     },
-    [startMode, elapsedMs, raceStarts, globalStart, controlSplits, currentLeg, restartControlIdx],
+    [startMode, elapsedMs, raceStarts, globalStart, visibleBounds, controlSplits, currentLeg, restartControlIdx],
   );
 
   return {

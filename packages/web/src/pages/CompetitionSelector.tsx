@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, Link } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { trpc } from "../lib/trpc";
 import { formatDate } from "../lib/format";
@@ -84,12 +84,9 @@ export function CompetitionSelector() {
               {competitions.data.map((comp) => (
                 <li key={comp.id}>
                   <div className="flex items-center hover:bg-blue-50 transition-colors group">
-                    <button
-                      onClick={() =>
-                        selectMutation.mutate({ nameId: comp.nameId })
-                      }
-                      disabled={selectMutation.isPending}
-                      className="flex-1 px-6 py-4 text-left flex items-center justify-between cursor-pointer disabled:opacity-50"
+                    <Link
+                      to={`/${comp.nameId}`}
+                      className="flex-1 px-6 py-4 text-left flex items-center justify-between cursor-pointer"
                     >
                       <div>
                         <div className="font-semibold text-slate-900 group-hover:text-blue-700 transition-colors">
@@ -148,7 +145,7 @@ export function CompetitionSelector() {
                           d="M9 5l7 7-7 7"
                         />
                       </svg>
-                    </button>
+                    </Link>
                     <button
                       onClick={(e) => {
                         e.stopPropagation();

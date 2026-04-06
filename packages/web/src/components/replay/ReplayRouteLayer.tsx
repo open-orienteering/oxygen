@@ -5,10 +5,15 @@
  * current playback time. The trail has a configurable tail length (default 60s).
  */
 
-import { useRef, useEffect, useCallback } from "react";
+import { useRef, useEffect, useCallback, useMemo } from "react";
 import type { ReplayData, ReplayRoute, ReplayWaypoint } from "@oxygen/shared";
 import type { ViewportState } from "./ReplayMapLayer";
 import { latLngToMapPx } from "./projection-utils";
+
+interface NearbyFilter {
+  targetId: string;
+  radiusM: number;
+}
 
 interface Props {
   data: ReplayData;
@@ -20,6 +25,17 @@ interface Props {
   tailLengthMs?: number;
   /** Current playback speed multiplier (used to keep pulse animation duration constant in real time). */
   playbackSpeed?: number;
+  /** Routes from other classes, shown in nearby mode. */
+  extraRoutes?: ReplayRoute[];
+  /** When set, only routes within radiusM of the target are drawn; extraRoutes included. */
+  nearbyFilter?: NearbyFilter;
+}
+
+/** Approximate distance in metres between two lat/lng points. */
+function distanceM(lat1: number, lng1: number, lat2: number, lng2: number): number {
+  const dLat = (lat2 - lat1) * 111320;
+  const dLng = (lng2 - lng1) * 111320 * Math.cos((lat1 + lat2) * Math.PI / 360);
+  return Math.sqrt(dLat * dLat + dLng * dLng);
 }
 
 const DEFAULT_TAIL_MS = 60_000;
@@ -66,9 +82,17 @@ export function ReplayRouteLayer({
   visibleParticipants,
   tailLengthMs = DEFAULT_TAIL_MS,
   playbackSpeed = 1,
+  extraRoutes,
+  nearbyFilter,
 }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const rafRef = useRef<number>(0);
+
+  // Stable set of extra-route participantIds for O(1) lookup
+  const extraIds = useMemo(
+    () => new Set((extraRoutes ?? []).map((r) => r.participantId)),
+    [extraRoutes],
+  );
 
   const draw = useCallback(() => {
     const canvas = canvasRef.current;
@@ -108,11 +132,54 @@ export function ReplayRouteLayer({
       };
     };
 
-    for (const route of data.routes) {
-      if (!visibleParticipants.has(route.participantId)) continue;
+    // In nearby mode: combine primary routes + extra routes; find target position
+    const allRoutes: ReplayRoute[] = nearbyFilter
+      ? [...data.routes, ...(extraRoutes ?? [])]
+      : data.routes;
+
+    let nearbyTargetLat: number | null = null;
+    let nearbyTargetLng: number | null = null;
+    if (nearbyFilter) {
+      const tr = data.routes.find((r) => r.participantId === nearbyFilter.targetId);
+      if (tr) {
+        const t = getRouteTime(nearbyFilter.targetId);
+        const idx = findWaypointIndex(tr.waypoints, t);
+        if (idx >= 0) {
+          const wp = tr.waypoints[idx];
+          if (idx < tr.waypoints.length - 1 && t > wp.timeMs) {
+            const pos = interpolatePosition(wp, tr.waypoints[idx + 1], t);
+            nearbyTargetLat = pos.lat; nearbyTargetLng = pos.lng;
+          } else {
+            nearbyTargetLat = wp.lat; nearbyTargetLng = wp.lng;
+          }
+        }
+      }
+    }
+
+    for (const route of allRoutes) {
+      // Visibility: in nearby mode show all routes within radius; otherwise respect selection
+      if (nearbyFilter) {
+        if (route.participantId !== nearbyFilter.targetId) {
+          // Skip if target position not yet known
+          if (nearbyTargetLat === null) continue;
+          // Get this route's position at the same wall time as the target
+          const t = extraIds.has(route.participantId)
+            ? getRouteTime(nearbyFilter.targetId) // extra routes use target's wall time
+            : getRouteTime(route.participantId);
+          const idx = findWaypointIndex(route.waypoints, t);
+          if (idx < 0) continue;
+          const wp = route.waypoints[idx];
+          if (distanceM(nearbyTargetLat!, nearbyTargetLng!, wp.lat, wp.lng) > nearbyFilter.radiusM) continue;
+        }
+      } else {
+        if (!visibleParticipants.has(route.participantId)) continue;
+      }
       if (route.waypoints.length < 2) continue;
 
-      const routeTime = getRouteTime(route.participantId);
+      // Extra-class routes use the target's current wall time for playback position
+      const routeTime = extraIds.has(route.participantId) && nearbyFilter
+        ? getRouteTime(nearbyFilter.targetId)
+        : getRouteTime(route.participantId);
       const currentIdx = findWaypointIndex(route.waypoints, routeTime);
       if (currentIdx < 0) continue; // Route hasn't started yet
 
@@ -169,10 +236,12 @@ export function ReplayRouteLayer({
         tailPoints.push({ sx, sy, timeMs: routeTime, interrupt: false });
       }
 
+      const isExtra = extraIds.has(route.participantId);
+
       // Draw tail as a single path with uniform opacity
       ctx.beginPath();
       ctx.strokeStyle = color;
-      ctx.globalAlpha = 0.8;
+      ctx.globalAlpha = isExtra ? 0.5 : 0.8;
       for (let i = 1; i < tailPoints.length; i++) {
         const pt = tailPoints[i];
         if (pt.interrupt) continue;
@@ -256,7 +325,7 @@ export function ReplayRouteLayer({
         }
       }
     }
-  }, [data, viewport, containerSize, getRouteTime, visibleParticipants, tailLengthMs, playbackSpeed]);
+  }, [data, viewport, containerSize, getRouteTime, visibleParticipants, tailLengthMs, playbackSpeed, extraRoutes, extraIds, nearbyFilter]);
 
   // Redraw on every animation frame when playing
   useEffect(() => {

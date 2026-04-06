@@ -6,7 +6,7 @@
  */
 
 import { useRef, useState, useCallback, useEffect, useMemo } from "react";
-import type { ReplayData } from "@oxygen/shared";
+import type { ReplayData, ReplayRoute } from "@oxygen/shared";
 import {
   ReplayMapLayer,
   type ReplayMapLayerHandle,
@@ -14,10 +14,13 @@ import {
 } from "./ReplayMapLayer";
 import { ReplayRouteLayer } from "./ReplayRouteLayer";
 import { ReplayCourseLayer, hitTestControl } from "./ReplayCourseLayer";
+import { ReplayHeatmapLayer } from "./ReplayHeatmapLayer";
 import { ReplayControls } from "./ReplayControls";
 import { ParticipantList } from "./ParticipantList";
 import { useReplayState, type ReplayConfig } from "./useReplayState";
 import { latLngToMapPx } from "./projection-utils";
+
+const NEARBY_RADIUS_M = 500;
 
 interface Props {
   data: ReplayData;
@@ -26,6 +29,14 @@ interface Props {
   style?: React.CSSProperties;
   /** Initial replay configuration (speed, follow, autoPlay, visible runners). */
   replayConfig?: ReplayConfig;
+  /** If set, use native OCAD tiles instead of the Livelox map. E.g. "/api/map-tile/my_competition" */
+  nativeTileBase?: string;
+  /** Routes from other classes, loaded on demand for nearby mode. */
+  extraRoutes?: ReplayRoute[];
+  /** True while other-class route data is still loading. */
+  extraRoutesLoading?: boolean;
+  /** Called when the user toggles nearby mode on/off. */
+  onNearbyModeChange?: (active: boolean) => void;
 }
 
 /** Binary search for waypoint index at or before timeMs. */
@@ -37,12 +48,37 @@ function findWpIdx(wps: { timeMs: number }[], t: number): number {
   return lo;
 }
 
-export function ReplayViewer({ data, compact, className, style, replayConfig }: Props) {
+export function ReplayViewer({ data, compact, className, style, replayConfig, nativeTileBase, extraRoutes, extraRoutesLoading, onNearbyModeChange }: Props) {
   const state = useReplayState(data, replayConfig);
+  const allParticipants = useMemo(
+    () => new Set(data.routes.map((r) => r.participantId)),
+    [data.routes],
+  );
   const mapRef = useRef<ReplayMapLayerHandle>(null);
   const [viewport, setViewport] = useState<ViewportState | null>(null);
   const [containerSize, setContainerSize] = useState({ w: 0, h: 0 });
   const [sidebarOpen, setSidebarOpen] = useState(!compact);
+  const [showHeatmap, setShowHeatmap] = useState(false);
+  const [nearbyMode, setNearbyMode] = useState(false);
+
+  // The single target runner when nearby mode is active
+  const nearbyTargetId = nearbyMode && state.visibleParticipants.size === 1
+    ? [...state.visibleParticipants][0]
+    : null;
+
+  const handleNearbyToggle = useCallback(() => {
+    const next = !nearbyMode;
+    setNearbyMode(next);
+    onNearbyModeChange?.(next);
+  }, [nearbyMode, onNearbyModeChange]);
+
+  // Auto-disable nearby mode if selection changes away from exactly 1 runner
+  useEffect(() => {
+    if (nearbyMode && state.visibleParticipants.size !== 1) {
+      setNearbyMode(false);
+      onNearbyModeChange?.(false);
+    }
+  }, [nearbyMode, state.visibleParticipants.size, onNearbyModeChange]);
   const containerRef = useRef<HTMLDivElement>(null);
 
   // Track the map container size
@@ -66,7 +102,7 @@ export function ReplayViewer({ data, compact, className, style, replayConfig }: 
   const followLastFrameRef = useRef<number>(0);
 
   useEffect(() => {
-    if (state.followMode !== "all") {
+    if (state.followMode !== "all" || nearbyTargetId) {
       cancelAnimationFrame(followRafRef.current);
       return;
     }
@@ -121,7 +157,61 @@ export function ReplayViewer({ data, compact, className, style, replayConfig }: 
     followLastFrameRef.current = performance.now();
     followRafRef.current = requestAnimationFrame(tick);
     return () => cancelAnimationFrame(followRafRef.current);
-  }, [state.followMode, state.visibleParticipants, state.getRouteTime, data, containerSize]);
+  }, [state.followMode, nearbyTargetId, state.visibleParticipants, state.getRouteTime, data, containerSize]);
+
+  // ─── Nearby follow loop ──────────────────────────────────────
+  const nearbyRafRef = useRef<number>(0);
+  const nearbyLastFrameRef = useRef<number>(0);
+
+  useEffect(() => {
+    if (!nearbyTargetId) {
+      cancelAnimationFrame(nearbyRafRef.current);
+      return;
+    }
+
+    const targetRoute = data.routes.find((r) => r.participantId === nearbyTargetId);
+    if (!targetRoute) return;
+
+    const LERP_SPEED = 2.0;
+
+    const tick = (now: number) => {
+      const dt = Math.min((now - nearbyLastFrameRef.current) / 1000, 0.1);
+      nearbyLastFrameRef.current = now;
+
+      const vp = mapRef.current?.getViewport();
+      if (!vp) { nearbyRafRef.current = requestAnimationFrame(tick); return; }
+
+      const t = state.getRouteTime(nearbyTargetId);
+      const idx = findWpIdx(targetRoute.waypoints, t);
+      if (idx < 0) { nearbyRafRef.current = requestAnimationFrame(tick); return; }
+
+      let lat: number, lng: number;
+      const wp = targetRoute.waypoints[idx];
+      if (idx < targetRoute.waypoints.length - 1 && t > wp.timeMs) {
+        const next = targetRoute.waypoints[idx + 1];
+        const frac = (t - wp.timeMs) / (next.timeMs - wp.timeMs);
+        lat = wp.lat + (next.lat - wp.lat) * frac;
+        lng = wp.lng + (next.lng - wp.lng) * frac;
+      } else {
+        lat = wp.lat;
+        lng = wp.lng;
+      }
+
+      const { px, py } = latLngToMapPx(lat, lng, data.map.projection);
+      const alpha = 1 - Math.exp(-LERP_SPEED * dt);
+      mapRef.current?.setViewport?.({
+        ...vp,
+        cx: vp.cx + (px - vp.cx) * alpha,
+        cy: vp.cy + (py - vp.cy) * alpha,
+      });
+
+      nearbyRafRef.current = requestAnimationFrame(tick);
+    };
+
+    nearbyLastFrameRef.current = performance.now();
+    nearbyRafRef.current = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(nearbyRafRef.current);
+  }, [nearbyTargetId, data, state.getRouteTime]);
 
   // Click on map area — check if a control was hit (only for true clicks, not drags)
   const pointerDownPos = useRef<{ x: number; y: number } | null>(null);
@@ -168,6 +258,33 @@ export function ReplayViewer({ data, compact, className, style, replayConfig }: 
             {data.routes.length} routes
           </span>
           <button
+            onClick={() => setShowHeatmap((h) => !h)}
+            title="Toggle heatmap overlay"
+            className={`text-xs px-2 py-0.5 rounded border transition-colors cursor-pointer ${
+              showHeatmap
+                ? "bg-orange-500 border-orange-500 text-white"
+                : "text-slate-500 hover:text-slate-900 border-slate-300"
+            }`}
+          >
+            Heatmap
+          </button>
+          <button
+            onClick={handleNearbyToggle}
+            disabled={!nearbyMode && state.visibleParticipants.size !== 1}
+            title={
+              state.visibleParticipants.size !== 1 && !nearbyMode
+                ? "Select exactly one runner to enable nearby mode"
+                : "Show all runners within 500 m of the selected runner"
+            }
+            className={`text-xs px-2 py-0.5 rounded border transition-colors cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed ${
+              nearbyMode
+                ? "bg-blue-600 border-blue-600 text-white"
+                : "text-slate-500 hover:text-slate-900 border-slate-300"
+            }`}
+          >
+            {nearbyMode && extraRoutesLoading ? "Nearby…" : "Nearby"}
+          </button>
+          <button
             onClick={() => setSidebarOpen((o) => !o)}
             className="text-slate-500 hover:text-slate-900 transition-colors text-xs px-2 py-0.5 rounded border border-slate-300 cursor-pointer"
           >
@@ -190,7 +307,16 @@ export function ReplayViewer({ data, compact, className, style, replayConfig }: 
             map={data.map}
             onViewportChange={onViewportChange}
             style={{ position: "absolute", inset: 0 }}
+            nativeTileBase={nativeTileBase}
           />
+          {viewport && containerSize.w > 0 && showHeatmap && (
+            <ReplayHeatmapLayer
+              data={data}
+              viewport={viewport}
+              containerSize={containerSize}
+              visibleParticipants={allParticipants}
+            />
+          )}
           {viewport && containerSize.w > 0 && (
             <>
               <ReplayCourseLayer
@@ -206,6 +332,8 @@ export function ReplayViewer({ data, compact, className, style, replayConfig }: 
                 getRouteTime={state.getRouteTime}
                 visibleParticipants={state.visibleParticipants}
                 playbackSpeed={state.speed}
+                extraRoutes={nearbyTargetId ? extraRoutes : undefined}
+                nearbyFilter={nearbyTargetId ? { targetId: nearbyTargetId, radiusM: NEARBY_RADIUS_M } : undefined}
               />
             </>
           )}

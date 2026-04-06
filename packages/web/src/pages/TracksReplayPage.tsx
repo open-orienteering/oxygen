@@ -102,9 +102,9 @@ export function TracksReplayPage() {
 
       <div className="flex-1 min-h-0">
         {routeId != null ? (
-          <SingleRouteReplay routeId={routeId} classId={classId} />
+          <SingleRouteReplay routeId={routeId} classId={classId} nameId={nameId} />
         ) : classId != null ? (
-          <ClassReplay classId={classId} />
+          <ClassReplay classId={classId} nameId={nameId} />
         ) : (
           <div className="flex items-center justify-center h-full text-slate-400 text-sm">
             {hasContent ? null : t("selectClass")}
@@ -117,7 +117,7 @@ export function TracksReplayPage() {
 
 // ─── Single-route replay ──────────────────────────────────────
 
-function SingleRouteReplay({ routeId, classId }: { routeId: number; classId: number | null }) {
+function SingleRouteReplay({ routeId, classId, nameId }: { routeId: number; classId: number | null; nameId: string }) {
   const { t } = useTranslation("tracks");
   const preview = trpc.livelox.getRoutePreview.useQuery({ routeId });
   const syncedClasses = trpc.livelox.listSyncedClasses.useQuery();
@@ -137,13 +137,14 @@ function SingleRouteReplay({ routeId, classId }: { routeId: number; classId: num
     <LiveloxClassReplay
       liveloxClassId={liveloxClassId}
       filterRunnerName={preview.data.runnerName}
+      nameId={nameId}
     />
   );
 }
 
 // ─── Class replay ─────────────────────────────────────────────
 
-function ClassReplay({ classId }: { classId: number }) {
+function ClassReplay({ classId, nameId }: { classId: number; nameId: string }) {
   const { t } = useTranslation("tracks");
   const syncedClasses = trpc.livelox.listSyncedClasses.useQuery(undefined, {
     retry: 3,
@@ -160,6 +161,7 @@ function ClassReplay({ classId }: { classId: number }) {
     <LiveloxClassReplay
       liveloxClassId={cls.liveloxClassId}
       filterRunnerName={null}
+      nameId={nameId}
     />
   );
 }
@@ -169,15 +171,48 @@ function ClassReplay({ classId }: { classId: number }) {
 function LiveloxClassReplay({
   liveloxClassId,
   filterRunnerName,
+  nameId,
 }: {
   liveloxClassId: number;
   filterRunnerName: string | null;
+  nameId: string;
 }) {
   const { t } = useTranslation("tracks");
   const { data, isLoading, error } = trpc.livelox.importClass.useQuery(
     { classId: liveloxClassId },
     { staleTime: 10 * 60_000, retry: 1 },
   );
+
+  // ─── Nearby mode: load all other classes ─────────────────
+  const [nearbyActive, setNearbyActive] = useState(false);
+
+  // Fetch list of all synced classes (cached — already loaded by parent)
+  const syncedClasses = trpc.livelox.listSyncedClasses.useQuery(undefined, {
+    staleTime: 10 * 60_000,
+  });
+
+  // IDs of other classes to load (empty unless nearby is active)
+  const otherClassIds = useMemo(() => {
+    if (!nearbyActive || !syncedClasses.data) return [] as number[];
+    return syncedClasses.data
+      .map((c) => c.liveloxClassId)
+      .filter((id): id is number => id != null && id !== liveloxClassId);
+  }, [nearbyActive, syncedClasses.data, liveloxClassId]);
+
+  // Load all other class route data in parallel (react-query caches each result)
+  const otherClassResults = trpc.useQueries((t) =>
+    otherClassIds.map((id) =>
+      t.livelox.importClass({ classId: id }, { staleTime: 10 * 60_000, retry: 1 }),
+    ),
+  );
+
+  const extraRoutes = useMemo(
+    () => otherClassResults.flatMap((r) => r.data?.routes ?? []),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [otherClassResults],
+  );
+
+  const extraRoutesLoading = nearbyActive && otherClassResults.some((r) => r.isLoading);
 
   // All hooks MUST be called before any early return (React rules of hooks).
   const replayConfig = useMemo(() => {
@@ -205,7 +240,16 @@ function LiveloxClassReplay({
   if (error || !data)
     return <ErrorMessage message={error?.message ?? t("failedToLoadLivelox")} />;
 
-  return <ReplayViewer data={data} replayConfig={replayConfig} />;
+  return (
+    <ReplayViewer
+      data={data}
+      replayConfig={replayConfig}
+      nativeTileBase={nameId ? `/api/map-tile/${nameId}` : undefined}
+      extraRoutes={extraRoutes}
+      extraRoutesLoading={extraRoutesLoading}
+      onNearbyModeChange={setNearbyActive}
+    />
+  );
 }
 
 // ─── Shared UI ───────────────────────────────────────────────
