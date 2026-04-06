@@ -11,8 +11,11 @@ import { PunchTable, type PunchTableData } from "../components/PunchTable";
 import { MapPanel } from "../components/MapPanel";
 import { useSearchParam } from "../hooks/useSearchParam";
 import { useDeviceManager } from "../context/DeviceManager";
+import { useStationSync } from "../hooks/useStationSync";
 
 export function CardReadout() {
+  // Pre-fetch and persist all competition data for offline use
+  useStationSync(true);
   const { t } = useTranslation("race");
   const [cardInput, setCardInput] = useSearchParam("card");
   const inputRef = useRef<HTMLInputElement>(null);

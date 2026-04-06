@@ -27,6 +27,7 @@ import { recentCardToKioskMessage } from "../lib/kiosk-channel";
 import { shouldProcessStandaloneCard } from "../lib/kiosk-standalone-routing";
 import { getClubLogoUrl } from "../lib/club-logo";
 import { SiCardAnimation } from "../components/SiCardAnimation";
+import { useStationSync } from "../hooks/useStationSync";
 
 // ─── Types ──────────────────────────────────────────────────
 
@@ -88,6 +89,9 @@ export function KioskPage() {
   const selectMutation = trpc.competition.select.useMutation({
     onSuccess: (data) => setCompetitionName(data.name),
   });
+
+  // Pre-fetch and persist all competition data for offline use
+  useStationSync(selectMutation.isSuccess);
 
   // Fetch dashboard data for organizer logo
   const dashboard = trpc.competition.dashboard.useQuery(undefined, {

@@ -3,193 +3,24 @@ import { TRPCError } from "@trpc/server";
 import { router, competitionProcedure } from "../trpc.js";
 import { ensureReadoutTable, incrementCounter, getZeroTime } from "../db.js";
 import { toRelative, toAbsolute } from "../timeConvert.js";
-import { RunnerStatus, TransferFlags, hasTransferFlag } from "@oxygen/shared";
+import {
+  RunnerStatus, TransferFlags, hasTransferFlag,
+  // Re-exported from @oxygen/shared — shared between server and client
+  parsePunches, computeReadId, computeMatchScore, parseCourseControls,
+  matchPunchesToCourse, computeStatus,
+  PUNCH_START, PUNCH_FINISH, PUNCH_CHECK,
+  type ParsedPunch, type ControlMatch,
+} from "@oxygen/shared";
 import type { PrismaClient } from "@prisma/client";
 import { pushToGoogleSheet } from "../sheetsBackup.js";
 
-/** Special punch type codes in MeOS */
-export const PUNCH_START = 1;
-export const PUNCH_FINISH = 2;
-export const PUNCH_CHECK = 3;
-
-export interface ParsedPunch {
-  type: number;
-  time: number; // deciseconds since midnight
-  source: "card" | "free";
-  freePunchId?: number; // oPunch.Id for free punches (enables removal)
-  unit?: number; // MeOS punch unit (timing station identifier for time adjustment)
-}
-
-export interface ControlMatch {
-  controlIndex: number;
-  controlCode: number;
-  punchTime: number;
-  splitTime: number;
-  cumTime: number;
-  status: "ok" | "missing" | "extra";
-  source: "card" | "free" | "";
-  freePunchId?: number;
-}
-
-/**
- * Parse MeOS card punch string: "{type}-{seconds}.{tenths}[@unit][#origin];"
- */
-export function parsePunches(punchString: string): ParsedPunch[] {
-  if (!punchString) return [];
-  const punches: ParsedPunch[] = [];
-  const parts = punchString.split(";").filter(Boolean);
-
-  for (const part of parts) {
-    const dashIdx = part.indexOf("-");
-    if (dashIdx === -1) continue;
-
-    const type = parseInt(part.substring(0, dashIdx), 10);
-    let timeStr = part.substring(dashIdx + 1);
-
-    // Extract optional @unit suffix (MeOS timing station identifier)
-    let unit: number | undefined;
-    const atIdx = timeStr.indexOf("@");
-    if (atIdx !== -1) {
-      const unitStr = timeStr.substring(atIdx + 1).split("#")[0];
-      unit = parseInt(unitStr, 10) || undefined;
-      timeStr = timeStr.substring(0, atIdx);
-    }
-    const hashIdx = timeStr.indexOf("#");
-    if (hashIdx !== -1) timeStr = timeStr.substring(0, hashIdx);
-
-    const dotIdx = timeStr.indexOf(".");
-    let time: number;
-    if (dotIdx !== -1) {
-      const seconds = parseInt(timeStr.substring(0, dotIdx), 10);
-      const tenths = parseInt(timeStr.substring(dotIdx + 1), 10) || 0;
-      time = seconds * 10 + tenths;
-    } else {
-      time = parseInt(timeStr, 10) * 10;
-    }
-
-    if (!isNaN(type) && !isNaN(time)) {
-      punches.push({ type, time, source: "card", ...(unit ? { unit } : {}) });
-    }
-  }
-
-  return punches;
-}
-
-/**
- * Compute a ReadId hash from punch data, matching MeOS's SICard::calculateHash()
- * (SportIdent.cpp:2530-2538). Used for deduplication — identical card reads
- * produce the same hash so we can skip redundant oCard writes.
- */
-export function computeReadId(
-  punches: { controlCode: number; time: number }[],
-  finishTime?: number | null,
-  startTime?: number | null,
-): number {
-  let h = (punches.length * 100000 + (finishTime ?? 0)) >>> 0;
-  for (const p of punches) {
-    h = (((h * 31 + p.controlCode) >>> 0) * 31 + p.time) >>> 0;
-  }
-  h = (h + (startTime ?? 0)) >>> 0;
-  return h;
-}
-
-/**
- * Compute a 0.0–1.0 score for how well the card punches match a course.
- *
- * Base: proportion of course controls matched (0.0–1.0).
- * Penalty: each punch for a control NOT in the competition subtracts 0.10.
- * Controls in the competition but not in this course are "extra" (no penalty).
- */
-export function computeMatchScore(
-  courseControlCount: number,
-  matchedCount: number,
-  totalCardPunches: number,
-  foreignPunchCount: number,
-): number {
-  if (courseControlCount === 0 || totalCardPunches === 0) return 0;
-  const courseRate = matchedCount / courseControlCount;
-  const penalty = foreignPunchCount * 0.10;
-  return Math.max(0, Math.min(1, courseRate - penalty));
-}
-
-export function parseCourseControls(controls: string): number[] {
-  return controls
-    .split(";")
-    .filter(Boolean)
-    .map((s) => parseInt(s, 10))
-    .filter((n) => !isNaN(n));
-}
-
-export function matchPunchesToCourse(
-  punches: ParsedPunch[],
-  courseControls: number[],
-  fallbackStartTime = 0,
-) {
-  const startPunch = punches.find((p) => p.type === PUNCH_START);
-  const finishPunch = punches.find((p) => p.type === PUNCH_FINISH);
-  const controlPunches = punches.filter(
-    (p) => p.type !== PUNCH_START && p.type !== PUNCH_FINISH && p.type !== PUNCH_CHECK,
-  );
-
-  const cardStartTime = startPunch?.time ?? 0;
-  const startTime = fallbackStartTime > 0 ? fallbackStartTime : cardStartTime;
-  const finishTime = finishPunch?.time ?? 0;
-
-  const matches: ControlMatch[] = [];
-  const usedPunchIndices = new Set<number>();
-  let punchSearchStart = 0;
-  let prevTime = startTime;
-  let missingCount = 0;
-
-  for (let ci = 0; ci < courseControls.length; ci++) {
-    const expectedCode = courseControls[ci];
-    let found = false;
-
-    for (let pi = punchSearchStart; pi < controlPunches.length; pi++) {
-      if (controlPunches[pi].type === expectedCode && !usedPunchIndices.has(pi)) {
-        const p = controlPunches[pi];
-        const splitTime = p.time - prevTime;
-        const cumTime = p.time - startTime;
-
-        matches.push({
-          controlIndex: ci,
-          controlCode: expectedCode,
-          punchTime: p.time,
-          splitTime,
-          cumTime,
-          status: "ok",
-          source: p.source,
-          freePunchId: p.freePunchId,
-        });
-
-        usedPunchIndices.add(pi);
-        punchSearchStart = pi + 1;
-        prevTime = p.time;
-        found = true;
-        break;
-      }
-    }
-
-    if (!found) {
-      matches.push({
-        controlIndex: ci,
-        controlCode: expectedCode,
-        punchTime: 0,
-        splitTime: 0,
-        cumTime: 0,
-        status: "missing",
-        source: "",
-      });
-      missingCount++;
-    }
-  }
-
-  const extraPunches = controlPunches.filter(
-    (_, idx) => !usedPunchIndices.has(idx),
-  );
-
-  return { matches, extraPunches, startTime, cardStartTime, finishTime, missingCount };
-}
+// Re-export shared functions so existing imports from this file continue to work
+export {
+  parsePunches, computeReadId, computeMatchScore, parseCourseControls,
+  matchPunchesToCourse, computeStatus,
+  PUNCH_START, PUNCH_FINISH, PUNCH_CHECK,
+  type ParsedPunch, type ControlMatch,
+} from "@oxygen/shared";
 
 /**
  * Core readout logic - shared between readout-by-card and readout-by-runner endpoints.
@@ -268,35 +99,16 @@ export async function performReadout(client: PrismaClient, runnerId: number) {
       ? finishTime - effectiveStartTime
       : 0;
 
-  let status: number;
-  if (finishTime === 0) {
-    status = RunnerStatus.DNF;
-  } else if (missingCount > 0) {
-    status = RunnerStatus.MissingPunch;
-  } else if (runningTime > 0) {
-    status = RunnerStatus.OK;
-  } else {
-    status = runner.Status;
-  }
-
-  // MeOS-compatible status overrides (only when base status is OK)
-  if (status === RunnerStatus.OK) {
-    // MaxTime check (class-level, deciseconds, 0 = no limit)
-    const classMaxTime = cls?.MaxTime ?? 0;
-    if (classMaxTime > 0 && runningTime > classMaxTime) {
-      status = RunnerStatus.OverMaxTime;
-    }
-    // OutOfCompetition flag (runner TransferFlags bit 256)
-    if (status === RunnerStatus.OK && hasTransferFlag(runner.TransferFlags, TransferFlags.FlagOutsideCompetition)) {
-      status = RunnerStatus.OutOfCompetition;
-    }
-    // NoTiming: class flag OR runner TransferFlags bit 512
-    if (status === RunnerStatus.OK) {
-      if (cls?.NoTiming === 1 || hasTransferFlag(runner.TransferFlags, TransferFlags.FlagNoTiming)) {
-        status = RunnerStatus.NoTiming;
-      }
-    }
-  }
+  const status = computeStatus({
+    finishTime,
+    startTime: effectiveStartTime,
+    missingCount,
+    runningTime,
+    classMaxTime: cls?.MaxTime ?? 0,
+    classNoTiming: cls?.NoTiming === 1,
+    transferFlags: runner.TransferFlags,
+    currentStatus: runner.Status,
+  });
 
   const missingControls = matches
     .filter((m) => m.status === "missing")

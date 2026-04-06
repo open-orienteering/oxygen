@@ -370,8 +370,13 @@ function RunnerDbPanel({ env }: { env?: string }) {
   const dbStatus = trpc.eventor.runnerDbStatus.useQuery(undefined, {
     staleTime: 60_000,
   });
+  const utils = trpc.useUtils();
   const syncMutation = trpc.eventor.syncRunnerDb.useMutation({
-    onSuccess: () => dbStatus.refetch(),
+    onSuccess: () => {
+      dbStatus.refetch();
+      // Invalidate cached runner DB dump so offline caches pick up the new data
+      utils.eventor.runnerDbDump.invalidate();
+    },
   });
 
   const handleSync = () => {

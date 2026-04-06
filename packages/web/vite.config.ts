@@ -1,6 +1,7 @@
 import { defineConfig } from "vitest/config";
 import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
+import { VitePWA } from "vite-plugin-pwa";
 import path from "path";
 
 // Build version: timestamp at build time, used for cache busting
@@ -25,7 +26,52 @@ export default defineConfig({
       },
     },
   },
-  plugins: [react(), tailwindcss()],
+  plugins: [
+    react(),
+    tailwindcss(),
+    VitePWA({
+      registerType: "autoUpdate",
+      manifest: false, // We provide our own manifest.webmanifest
+      workbox: {
+        // Precache all built assets (JS, CSS, HTML)
+        globPatterns: ["**/*.{js,css,html,svg,woff,woff2}"],
+        // Runtime caching for tRPC API calls
+        runtimeCaching: [
+          {
+            // tRPC batch requests — serve from cache when offline, refresh in background when online
+            urlPattern: /\/trpc\/.*/,
+            handler: "NetworkFirst",
+            options: {
+              cacheName: "trpc-api",
+              networkTimeoutSeconds: 3,
+              expiration: {
+                maxEntries: 500,
+                maxAgeSeconds: 24 * 60 * 60, // 24 hours
+              },
+              cacheableResponse: {
+                statuses: [0, 200],
+              },
+            },
+          },
+          {
+            // API version endpoint
+            urlPattern: /\/api\/version/,
+            handler: "NetworkFirst",
+            options: {
+              cacheName: "api-misc",
+              networkTimeoutSeconds: 2,
+              expiration: {
+                maxEntries: 10,
+                maxAgeSeconds: 60 * 60,
+              },
+            },
+          },
+        ],
+        // Don't precache source maps
+        globIgnores: ["**/*.map"],
+      },
+    }),
+  ],
   define: {
     __BUILD_VERSION__: JSON.stringify(BUILD_VERSION),
     // Buffer polyfill for ocad2geojson (uses Node-style Buffer.isBuffer)

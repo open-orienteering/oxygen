@@ -12,8 +12,15 @@ import { usePrinter } from "../context/PrinterContext";
 import type { FinishReceiptData } from "../lib/receipt-printer/index.js";
 import { fetchLogoRaster } from "../lib/receipt-printer/index.js";
 import { getClubLogoUrl } from "../lib/club-logo";
+import { useStationSync } from "../hooks/useStationSync";
+import { useOnlineStatus } from "../hooks/useOnlineStatus";
+import { useQueryClient } from "@tanstack/react-query";
+import { emitEvent } from "../lib/offline/events";
+import { computeLocalReadout } from "../lib/offline/local-readout";
 
 export function FinishStation() {
+  // Pre-fetch and persist all competition data for offline use
+  useStationSync(true);
   const { t } = useTranslation("race");
   const [cardInput, setCardInput] = useState("");
   const [lastAction, setLastAction] = useState<{
@@ -93,6 +100,9 @@ export function FinishStation() {
     [utils, dashboard.data, regConfig.data],
   );
 
+  const isOnline = useOnlineStatus();
+  const queryClient = useQueryClient();
+
   const recordFinish = trpc.race.recordFinish.useMutation({
     onSuccess: (data) => {
       setLastAction({
@@ -116,11 +126,16 @@ export function FinishStation() {
       }
     },
     onError: (err) => {
-      setLastAction({
-        type: "error",
-        message: err.message,
-        time: Date.now(),
-      });
+      // If offline, handle locally
+      if (!navigator.onLine) {
+        handleOfflineFinish();
+      } else {
+        setLastAction({
+          type: "error",
+          message: err.message,
+          time: Date.now(),
+        });
+      }
     },
   });
 
@@ -130,8 +145,77 @@ export function FinishStation() {
     inputRef.current?.focus();
   }, []);
 
+  // Extract competition nameId for event emission
+  const nameId = window.location.pathname.match(/^\/([^/]+)/)?.[1] ?? "";
+
+  const handleOfflineFinish = useCallback(() => {
+    if (!lookup.data?.found) return;
+    const runner = lookup.data.runner;
+    const now = new Date();
+    const finishTime =
+      (now.getHours() * 3600 + now.getMinutes() * 60 + now.getSeconds()) * 10;
+
+    // Emit event to local queue
+    emitEvent("finish.recorded", nameId, {
+      runnerId: runner.id,
+      finishTime,
+      cardNo: runner.cardNo,
+    });
+
+    // Compute result locally for receipt
+    const localResult = computeLocalReadout(runner.id, finishTime, queryClient);
+    const runningTime = localResult?.timing.runningTime ?? 0;
+
+    setLastAction({
+      type: "success",
+      message: t("finished", { name: runner.name }),
+      runningTime,
+      time: Date.now(),
+    });
+    setCardInput("");
+    inputRef.current?.focus();
+
+    // Print receipt from local data if printer connected
+    if (printer.connected && localResult) {
+      const competitionInfo = dashboard.data?.competition;
+      const receiptData: FinishReceiptData = {
+        competitionName: competitionInfo?.name ?? "",
+        competitionDate: competitionInfo?.date ?? undefined,
+        runner: localResult.runner,
+        timing: localResult.timing,
+        splits: localResult.controls.map((c) => ({
+          controlIndex: c.controlIndex,
+          controlCode: c.controlCode,
+          splitTime: c.splitTime,
+          cumTime: c.cumTime,
+          status: c.status,
+          punchTime: c.punchTime,
+        })),
+        course: localResult.course,
+        position: localResult.position,
+        classResults: localResult.classResults.map((r, i) => ({
+          rank: i + 1,
+          name: r.name,
+          clubName: "",
+          runningTime: r.runningTime,
+        })),
+        logoRaster: null,
+        qrUrl: "https://open-orienteering.org",
+        customMessage: regConfig.data?.finishReceiptMessage || undefined,
+      };
+      printer.print(receiptData).catch(() => {});
+    }
+  }, [lookup.data, nameId, queryClient, t, printer, dashboard.data, regConfig.data]);
+
   const handleRecordFinish = () => {
     if (!lookup.data?.found) return;
+
+    // When offline, skip the server call entirely
+    if (!isOnline) {
+      handleOfflineFinish();
+      return;
+    }
+
     const now = new Date();
     const deciseconds =
       (now.getHours() * 3600 + now.getMinutes() * 60 + now.getSeconds()) * 10;

@@ -3,8 +3,11 @@ import { useTranslation } from "react-i18next";
 import { trpc } from "../lib/trpc";
 import { formatMeosTime } from "@oxygen/shared";
 import { useSearchParam } from "../hooks/useSearchParam";
+import { useStationSync } from "../hooks/useStationSync";
 
 export function StartStation() {
+  // Pre-fetch and persist all competition data for offline use
+  useStationSync(true);
   const { t } = useTranslation("race");
   const [cardInput, setCardInput] = useSearchParam("card");
   const inputRef = useRef<HTMLInputElement>(null);
