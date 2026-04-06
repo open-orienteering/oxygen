@@ -118,6 +118,16 @@ The Tracks page displays GPS route data synced from Livelox, with support for vi
 - **Replay viewer** — Full animated GPS playback with mass start / real time / legs modes, variable speed (1x–64x), follow mode, and per-runner visibility toggles. Light theme matching Oxygen's UI. Punch pulse animations at control points. Class selector in the header for quick switching
 - **Late GPS lock correction** — Runners whose GPS locked after their race start are detected and corrected using `lastWaypoint - result.time` derivation, preventing visual offset in mass-start replays
 
+## Offline Support & PWA
+
+Oxygen works during internet outages — from brief drops to full-day operation at forest venues with no connectivity.
+
+The app is a **Progressive Web App (PWA)** that can be installed on any device. A service worker precaches all static assets and caches API responses, so the app loads instantly even without internet. Competition data (runners, classes, courses, controls, clubs) is pre-fetched and persisted to IndexedDB on station pages, surviving browser restarts and overnight power-off.
+
+When offline, an **event-based mutation queue** stores all actions locally (finish recording, registration, etc.) and drains them to the server when connectivity returns. The finish station can compute results locally using shared readout logic, including course matching, status computation, and position ranking — printing receipts from cached data.
+
+See [offline-architecture.md](offline-architecture.md) for technical details and [future-architecture.md](future-architecture.md) for the post-MeOS vision with event sourcing.
+
 ## MeOS Compatibility
 
 Oxygen reads and writes the same MySQL schema as [MeOS](http://www.melin.nu/meos), the established Windows-based orienteering software. Both tools can operate on the same database simultaneously — changes made in MeOS are immediately reflected in Oxygen and vice versa. This allows a gradual migration path where organizers can use Oxygen for web-based features while keeping MeOS for legacy workflows.

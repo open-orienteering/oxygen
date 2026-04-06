@@ -1488,6 +1488,50 @@ export const eventorRouter = router({
   }),
 
   /**
+   * Compact dump of the entire runner DB for offline caching.
+   *
+   * Returns an array-of-tuples format for minimal transfer size:
+   * [[name, cardNo, clubId, birthYear, sex], ...]
+   *
+   * Club names are returned separately as a map: { clubId: clubName, ... }
+   *
+   * ~249K runners → ~9 MB JSON, ~2-3 MB gzipped.
+   */
+  runnerDbDump: competitionProcedure.query(async () => {
+    const conn = await getMainDbConnection();
+    try {
+      await ensureRunnerDbTable(conn);
+      await ensureClubDbTable(conn);
+
+      const [runnerRows] = await conn.execute<import("mysql2/promise").RowDataPacket[]>(
+        "SELECT Name, CardNo, ClubId, BirthYear, Sex FROM oxygen_runner_db",
+      );
+
+      const [clubRows] = await conn.execute<import("mysql2/promise").RowDataPacket[]>(
+        "SELECT EventorId, Name FROM oxygen_club_db",
+      );
+
+      const clubs: Record<number, string> = {};
+      for (const c of clubRows) {
+        clubs[Number(c.EventorId)] = c.Name as string;
+      }
+
+      // Compact tuple format: [name, cardNo, clubId, birthYear, sex]
+      const runners = (runnerRows as Record<string, unknown>[]).map((r) => [
+        r.Name as string,
+        Number(r.CardNo),
+        Number(r.ClubId),
+        Number(r.BirthYear),
+        r.Sex as string,
+      ]);
+
+      return { runners, clubs };
+    } finally {
+      await conn.end();
+    }
+  }),
+
+  /**
    * Given an Eventor event ID, resolve the linked Livelox event and return
    * its class list (with Livelox class IDs) for the replay class picker.
    *

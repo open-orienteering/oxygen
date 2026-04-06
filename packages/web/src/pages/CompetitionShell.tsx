@@ -22,6 +22,7 @@ import { RegistrationDialogProvider } from "../context/RegistrationDialogContext
 import { RegistrationDialog } from "../components/RegistrationDialog";
 import { DbLoadIndicator } from "../components/DbLoadIndicator";
 import { useExternalChanges } from "../hooks/useExternalChanges";
+import { SyncStatusIndicator } from "../components/SyncStatusIndicator";
 
 // Lazy-loaded page components — each becomes a separate chunk
 const CompetitionDashboard = lazy(() => import("./CompetitionDashboard").then(m => ({ default: m.CompetitionDashboard })));
@@ -273,9 +274,7 @@ export function CompetitionShell() {
               <KioskLauncher nameId={nameId ?? ""} />
               <StartScreenLauncher nameId={nameId ?? ""} />
               <DbLoadIndicator enabled={ready} />
-              <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-800">
-                {t("connected", { ns: "common" })}
-              </span>
+              <SyncStatusIndicator competitionId={nameId} />
             </div>
           </div>
 

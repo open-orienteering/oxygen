@@ -25,6 +25,9 @@ import type { SICardReadout, SICardOwnerData } from "../lib/si-protocol";
 import { trpc } from "../lib/trpc";
 import { KioskChannel, recentCardToKioskMessage } from "../lib/kiosk-channel";
 import { RunnerStatus, runnerStatusLabel, type RunnerStatusValue } from "@oxygen/shared";
+import { emitEvent } from "../lib/offline/events";
+import { computeCardReadout, lookupRunnerByCard } from "../lib/offline/local-readout";
+import { useQueryClient } from "@tanstack/react-query";
 
 // ─── Types ─────────────────────────────────────────────────
 
@@ -166,6 +169,7 @@ export function DeviceManagerProvider({ children }: { children: ReactNode }) {
   const [lastDetectedCardNo, setLastDetectedCardNo] = useState<number | null>(null);
 
   const [competitionNameId, setCompetitionNameIdState] = useState<string | null>(null);
+  const competitionNameIdRef = useRef<string | null>(null);
   const kioskChannelRef = useRef<KioskChannel | null>(null);
   // Legacy refs kept as no-ops for interface compat
   const pendingConfirmCardNoRef = useRef<number | null>(null);
@@ -174,6 +178,7 @@ export function DeviceManagerProvider({ children }: { children: ReactNode }) {
   const storeReadout = trpc.cardReadout.storeReadout.useMutation();
   const applyResult = trpc.cardReadout.applyResult.useMutation();
   const utils = trpc.useUtils();
+  const queryClient = useQueryClient();
 
   // TestLab injection BroadcastChannel
   const testLabChannelRef = useRef<BroadcastChannel | null>(null);
@@ -181,6 +186,7 @@ export function DeviceManagerProvider({ children }: { children: ReactNode }) {
   // Manage kiosk BroadcastChannel lifecycle
   const setCompetitionNameId = useCallback((nameId: string | null) => {
     setCompetitionNameIdState(nameId);
+    competitionNameIdRef.current = nameId;
     if (kioskChannelRef.current) {
       kioskChannelRef.current.close();
       kioskChannelRef.current = null;
@@ -298,7 +304,18 @@ export function DeviceManagerProvider({ children }: { children: ReactNode }) {
           });
           serverPunchesRelevant = storeResult.punchesRelevant ?? true;
         } catch {
-          console.warn("[DeviceManager] Failed to store readout on server");
+          console.warn("[DeviceManager] Failed to store readout on server — queuing offline event");
+          if (competitionNameIdRef.current) {
+            emitEvent("card.read", competitionNameIdRef.current, {
+              cardNo: readout.cardNumber,
+              punches: readout.punches.map((p) => ({ controlCode: p.controlCode, time: p.time })),
+              checkTime: readout.checkTime ?? undefined,
+              startTime: readout.startTime ?? undefined,
+              finishTime: readout.finishTime ?? undefined,
+              cardType: readout.cardType,
+              batteryVoltage: readout.batteryVoltage ?? undefined,
+            });
+          }
         }
       }
 
@@ -388,20 +405,86 @@ export function DeviceManagerProvider({ children }: { children: ReactNode }) {
             utils.lists.resultList.invalidate();
             utils.runner.findByCard.invalidate({ cardNo: readout.cardNumber });
           } catch {
-            console.warn("[DeviceManager] Failed to apply readout result");
+            console.warn("[DeviceManager] Failed to apply readout result — queuing offline event");
+            if (competitionNameIdRef.current) {
+              emitEvent("result.applied", competitionNameIdRef.current, {
+                runnerId: result.runner.id,
+                status: result.timing.status,
+                finishTime: result.timing.finishTime,
+                startTime: result.timing.startTime,
+              });
+            }
           }
         }
       } catch {
-        // If the fetch fails, mark as resolved with default action and broadcast
-        const fallback: RecentCard = { ...entry, actionResolved: true };
-        setCurrentCard(fallback);
-        setRecentCards((prev) => {
-          const next = prev.map((c) => (c.id === id ? fallback : c));
-          recentCardsRef.current = next;
-          return next;
-        });
-        if (kioskChannelRef.current) {
-          kioskChannelRef.current.send(recentCardToKioskMessage(fallback));
+        // Server unreachable — try local readout from cached data
+        const localResult = computeCardReadout(
+          {
+            cardNo: readout.cardNumber,
+            punches: readout.punches.map((p) => ({ controlCode: p.controlCode, time: p.time })),
+            startTime: readout.startTime ?? undefined,
+            finishTime: readout.finishTime ?? undefined,
+          },
+          queryClient,
+        );
+
+        if (localResult && localResult.punchesRelevant) {
+          // We have cached data — resolve locally
+          const status = localResult.timing.status > 0
+            ? runnerStatusLabel(localResult.timing.status as RunnerStatusValue)
+            : undefined;
+
+          const offlineResolved: RecentCard = {
+            ...entry,
+            action: "readout",
+            actionResolved: true,
+            hasRaceData: true,
+            runnerName: localResult.runner.name,
+            className: localResult.runner.className,
+            clubName: localResult.runner.clubName,
+            status,
+            runningTime: localResult.timing.runningTime,
+          };
+
+          setCurrentCard(offlineResolved);
+          setRecentCards((prev) => {
+            const next = prev.map((c) => (c.id === id ? offlineResolved : c));
+            recentCardsRef.current = next;
+            return next;
+          });
+          if (kioskChannelRef.current) {
+            kioskChannelRef.current.send(recentCardToKioskMessage(offlineResolved));
+          }
+
+          // Emit result.applied event for later sync
+          if (competitionNameId) {
+            emitEvent("result.applied", competitionNameId, {
+              runnerId: localResult.runner.id,
+              status: localResult.timing.status,
+              finishTime: localResult.timing.finishTime,
+              startTime: localResult.timing.startTime,
+            });
+          }
+        } else {
+          // No cached data or runner not found — check if runner exists in cache at all
+          const cachedRunner = lookupRunnerByCard(readout.cardNumber, queryClient);
+          const fallback: RecentCard = {
+            ...entry,
+            actionResolved: true,
+            action: cachedRunner ? "pre-start" : "register",
+            runnerName: cachedRunner?.name,
+            className: cachedRunner?.className,
+            clubName: cachedRunner?.clubName,
+          };
+          setCurrentCard(fallback);
+          setRecentCards((prev) => {
+            const next = prev.map((c) => (c.id === id ? fallback : c));
+            recentCardsRef.current = next;
+            return next;
+          });
+          if (kioskChannelRef.current) {
+            kioskChannelRef.current.send(recentCardToKioskMessage(fallback));
+          }
         }
       }
     },

@@ -11,6 +11,7 @@ import { fetchLogoRaster } from "../lib/receipt-printer/index.js";
 import { getClubLogoUrl } from "../lib/club-logo";
 import type { KioskChannel, RegistrationFormState } from "../lib/kiosk-channel";
 import { fuzzyMatchClub } from "../lib/fuzzy-club-match";
+import { emitRunnerRegistered } from "../lib/offline/events";
 import swishIcon from "../assets/swish-icon.svg";
 
 /**
@@ -95,6 +96,13 @@ export function RegistrationDialog() {
     { enabled: canFetchMembers, staleTime: 10 * 60_000, retry: false },
   );
 
+  // Cached runner DB dump for offline autocomplete + card lookup
+  const runnerDbDump = trpc.eventor.runnerDbDump.useQuery(undefined, {
+    staleTime: 10 * 60_000,
+    gcTime: Infinity,
+    enabled: false, // Populated by useStationSync; don't re-fetch here
+  });
+
   // Duplicate card check
   const cardNoNum = cardNo ? parseInt(cardNo, 10) : 0;
   const duplicateCheck = trpc.runner.findByCard.useQuery(
@@ -102,16 +110,29 @@ export function RegistrationDialog() {
     { enabled: cardNoNum > 0, staleTime: 5_000 },
   );
 
-  // Card number lookup for auto-fill
-  const cardLookup = trpc.eventor.lookupByCardNo.useQuery(
+  // Card number lookup for auto-fill — use local cache if available, else server
+  const cardLookupServer = trpc.eventor.lookupByCardNo.useQuery(
     { cardNo: cardNoNum },
-    { enabled: cardNoNum > 0 && !name && duplicateCheck.isFetched && duplicateCheck.data === null, staleTime: 60_000, retry: false },
+    { enabled: cardNoNum > 0 && !name && !runnerDbDump.data && duplicateCheck.isFetched && duplicateCheck.data === null, staleTime: 60_000, retry: false },
   );
+  const cardLookupLocal = useMemo(() => {
+    if (!runnerDbDump.data || cardNoNum <= 0) return null;
+    const { runners, clubs: clubMap } = runnerDbDump.data;
+    const match = (runners as [string, number, number, number, string][]).find((r) => r[1] === cardNoNum);
+    if (!match) return null;
+    return { name: match[0], cardNo: match[1], clubEventorId: match[2], birthYear: match[3], sex: match[4], clubName: clubMap[match[2]] ?? "" };
+  }, [runnerDbDump.data, cardNoNum]);
+  const cardLookup = { data: cardLookupLocal ?? cardLookupServer.data ?? null };
 
-  // Global runner DB search
+  // Global runner DB search — fall back to server when local cache empty
   const globalSearch = trpc.eventor.searchRunnerDb.useQuery(
     { query: debouncedNameQuery },
-    { enabled: debouncedNameQuery.length >= 2, staleTime: 30_000, retry: false },
+    {
+      // Only use server search if local cache is empty
+      enabled: debouncedNameQuery.length >= 2 && !runnerDbDump.data,
+      staleTime: 30_000,
+      retry: false,
+    },
   );
 
   // ── Derived ─────────────────────────────────────────────
@@ -441,7 +462,43 @@ export function RegistrationDialog() {
         }
       }
     }
-    if (globalSearch.data) {
+    // Search cached runner DB dump (local, instant) or fall back to server results
+    if (runnerDbDump.data) {
+      const queryWords = query.split(/\s+/).filter((w) => w.length > 0);
+      const isNumeric = /^\d+$/.test(query);
+      const { runners, clubs } = runnerDbDump.data;
+      let matchCount = 0;
+      for (const r of runners) {
+        if (matchCount >= 15) break;
+        const [rName, rCardNo, rClubId, rBirthYear, rSex] = r as [string, number, number, number, string];
+        const key = `${rName}|${rCardNo}`;
+        if (seen.has(key)) continue;
+
+        let matches = false;
+        if (isNumeric) {
+          matches = String(rCardNo).startsWith(query);
+        } else {
+          const nameLower = rName.toLowerCase();
+          const nameParts = nameLower.split(/[, ]+/);
+          matches = nameLower.includes(query)
+            || nameParts.some((p) => p.startsWith(query))
+            || queryWords.every((q) => nameParts.some((p) => p.startsWith(q)));
+        }
+        if (matches) {
+          seen.add(key);
+          results.push({
+            name: rName,
+            cardNo: rCardNo,
+            birthYear: rBirthYear,
+            sex: rSex,
+            clubName: clubs[rClubId] ?? "",
+            clubEventorId: rClubId || undefined,
+            source: "runnerdb",
+          });
+          matchCount++;
+        }
+      }
+    } else if (globalSearch.data) {
       for (const r of globalSearch.data) {
         const key = `${r.name}|${r.cardNo}`;
         if (seen.has(key)) continue;
@@ -450,7 +507,7 @@ export function RegistrationDialog() {
       }
     }
     return results.slice(0, 12);
-  }, [name, clubMembers.data, globalSearch.data]);
+  }, [name, clubMembers.data, runnerDbDump.data, globalSearch.data]);
 
   const applySuggestion = useCallback((s: typeof suggestions[0]) => {
     const parts = s.name.split(", ");
@@ -509,20 +566,39 @@ export function RegistrationDialog() {
     const customMsg = regConfig.data?.registrationReceiptMessage || undefined;
 
     try {
-      await createMutation.mutateAsync({
-        name: trimmedName,
-        classId,
-        clubId: clubId || 0,
-        cardNo: cn,
-        startTime: st ? parseMeosTime(st) : 0,
-        birthYear: birthYear ? parseInt(birthYear, 10) : 0,
-        sex,
-        phone,
-        fee,
-        paid,
-        payMode: payModeNum,
-        cardFee: rentalFee > 0 ? rentalFee : 0,
-      });
+      let registeredOnline = false;
+      try {
+        await createMutation.mutateAsync({
+          name: trimmedName,
+          classId,
+          clubId: clubId || 0,
+          cardNo: cn,
+          startTime: st ? parseMeosTime(st) : 0,
+          birthYear: birthYear ? parseInt(birthYear, 10) : 0,
+          sex,
+          phone,
+          fee,
+          paid,
+          payMode: payModeNum,
+          cardFee: rentalFee > 0 ? rentalFee : 0,
+        });
+        registeredOnline = true;
+      } catch {
+        if (!navigator.onLine) {
+          // Offline — queue the registration event
+          const nameId = window.location.pathname.match(/^\/([^/]+)/)?.[1] ?? "";
+          await emitRunnerRegistered(nameId, {
+            tempId: crypto.randomUUID(),
+            name: trimmedName,
+            classId,
+            clubId: clubId || 0,
+            cardNo: cn,
+            startTime: st ? parseMeosTime(st) : 0,
+          });
+        } else {
+          throw new Error(t("registrationFailed"));
+        }
+      }
 
       // Notify kiosk
       const ch = kioskChannelRef.current;
@@ -565,11 +641,13 @@ export function RegistrationDialog() {
         timestamp: new Date(),
       });
 
-      // Invalidate queries
-      utils.runner.list.invalidate();
-      utils.runner.findByCard.invalidate({ cardNo: cn });
-      utils.cardReadout.readout.invalidate({ cardNo: cn });
-      utils.competition.dashboard.invalidate();
+      // Invalidate queries (only when online — offline would clear cached data we need)
+      if (registeredOnline) {
+        utils.runner.list.invalidate();
+        utils.runner.findByCard.invalidate({ cardNo: cn });
+        utils.cardReadout.readout.invalidate({ cardNo: cn });
+        utils.competition.dashboard.invalidate();
+      }
 
       if (stickyMode) {
         // Show success briefly, then clear form
