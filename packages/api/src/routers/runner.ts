@@ -486,7 +486,8 @@ export const runnerRouter = router({
         await assertCardNotTaken(client, input.data.cardNo, input.id);
       }
 
-      const needsZT = input.data.startTime !== undefined || input.data.finishTime !== undefined;
+      const needsZT = input.data.startTime !== undefined || input.data.finishTime !== undefined
+        || input.data.status === 1 /* may need to derive times from oCard */;
       const zeroTime = needsZT ? await getZeroTime(client) : 0;
 
       const updateData: Record<string, unknown> = {};
