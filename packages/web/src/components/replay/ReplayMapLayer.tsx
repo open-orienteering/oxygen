@@ -14,7 +14,8 @@ import {
   forwardRef,
   useImperativeHandle,
 } from "react";
-import type { ReplayMap } from "@oxygen/shared";
+import type { ReplayMap, ReplayProjection } from "@oxygen/shared";
+import { latLngToMapPx, mapPxToLatLng } from "./projection-utils";
 
 export interface ViewportState {
   /** Centre of the viewport in map-pixel coordinates. */
@@ -43,10 +44,132 @@ interface Props {
   /** Called after every viewport change. */
   onViewportChange?: (vp: ViewportState) => void;
   children?: React.ReactNode;
+  /**
+   * If provided, use native OCAD tiles from this base URL instead of the
+   * Livelox map image. Example: "/api/map-tile/my_competition"
+   */
+  nativeTileBase?: string;
+}
+
+// ─── Native tile helpers (module-level, no React deps) ────────
+
+/** Convert Web Mercator tile-y index to latitude. */
+function tileYToLat(y: number, n: number): number {
+  const t = Math.PI - (2 * Math.PI * y) / n;
+  return (180 / Math.PI) * Math.atan((Math.exp(t) - Math.exp(-t)) / 2);
+}
+
+/**
+ * Choose a slippy-map zoom level so that one tile ≈ 256 screen pixels.
+ * `scale` is "screen pixels per Livelox map pixel".
+ */
+function pickNativeZoom(scale: number, proj: ReplayProjection): number {
+  const [a] = proj.matrix;
+  const cosLat = Math.cos((proj.originLat * Math.PI) / 180);
+  // Livelox px per degree lng = |a| * DEG_TO_M_LNG
+  // A tile at zoom z spans 360/2^z degrees → tile_livelox_px = |a| * 111320 * cosLat * 360 / 2^z
+  // Want tile_livelox_px * scale ≈ 256
+  const ideal = Math.log2((Math.abs(a) * 111320 * cosLat * 360 * scale) / 256);
+  return Math.max(10, Math.min(17, Math.round(ideal)));
+}
+
+/**
+ * Draw native slippy-map tiles on the canvas.
+ * Must be called with the DPR-scaled context active (but outside any
+ * viewport save/restore block).  Tiles are projected from lat/lng → Livelox
+ * map pixels → CSS screen pixels using the existing affine projection.
+ */
+function drawNativeTilesOnCanvas(
+  ctx: CanvasRenderingContext2D,
+  vp: ViewportState,
+  cw: number,
+  ch: number,
+  proj: ReplayProjection,
+  tileBase: string,
+  tileImages: Map<string, HTMLImageElement>,
+  requestLoad: (url: string) => void,
+) {
+  const z = pickNativeZoom(vp.scale, proj);
+  const n = Math.pow(2, z);
+
+  // Project screen corners → map pixels → lat/lng to find the visible bbox
+  const cos_r = Math.cos(-vp.rotation);
+  const sin_r = Math.sin(-vp.rotation);
+  const latLngs = (
+    [{ sx: 0, sy: 0 }, { sx: cw, sy: 0 }, { sx: 0, sy: ch }, { sx: cw, sy: ch }] as const
+  ).map(({ sx, sy }) => {
+    const dx = sx - cw / 2, dy = sy - ch / 2;
+    const mx = (cos_r * dx - sin_r * dy) / vp.scale + vp.cx;
+    const my = (sin_r * dx + cos_r * dy) / vp.scale + vp.cy;
+    return mapPxToLatLng(mx, my, proj);
+  });
+
+  const minLat = Math.min(...latLngs.map((c) => c.lat));
+  const maxLat = Math.max(...latLngs.map((c) => c.lat));
+  const minLng = Math.min(...latLngs.map((c) => c.lng));
+  const maxLng = Math.max(...latLngs.map((c) => c.lng));
+
+  // Tile index range (with 1-tile border for smooth panning)
+  const x0 = Math.max(0, Math.floor(((minLng + 180) / 360) * n) - 1);
+  const x1 = Math.min(n - 1, Math.floor(((maxLng + 180) / 360) * n) + 1);
+  const toTileY = (lat: number) => {
+    const r = (lat * Math.PI) / 180;
+    return Math.floor(((1 - Math.log(Math.tan(r) + 1 / Math.cos(r)) / Math.PI) / 2) * n);
+  };
+  const y0 = Math.max(0, toTileY(maxLat) - 1);
+  const y1 = Math.min(n - 1, toTileY(minLat) + 1);
+
+  if (x1 - x0 > 30 || y1 - y0 > 30) return; // sanity guard
+
+  // Helper: Livelox map pixel → CSS screen pixel
+  const cos_v = Math.cos(vp.rotation);
+  const sin_v = Math.sin(vp.rotation);
+  const mts = (mx: number, my: number) => {
+    const dx = (mx - vp.cx) * vp.scale;
+    const dy = (my - vp.cy) * vp.scale;
+    return { sx: cos_v * dx - sin_v * dy + cw / 2, sy: sin_v * dx + cos_v * dy + ch / 2 };
+  };
+
+  for (let tx = x0; tx <= x1; tx++) {
+    for (let ty = y0; ty <= y1; ty++) {
+      const lng0 = (tx / n) * 360 - 180;
+      const lng1 = ((tx + 1) / n) * 360 - 180;
+      const lat0 = tileYToLat(ty, n);
+      const lat1 = tileYToLat(ty + 1, n);
+
+      // 3 tile corners: lat/lng → Livelox px → CSS screen px
+      const tl_mp = latLngToMapPx(lat0, lng0, proj);
+      const tr_mp = latLngToMapPx(lat0, lng1, proj);
+      const bl_mp = latLngToMapPx(lat1, lng0, proj);
+      const tl = mts(tl_mp.px, tl_mp.py);
+      const tr = mts(tr_mp.px, tr_mp.py);
+      const bl = mts(bl_mp.px, bl_mp.py);
+
+      // Affine from tile pixel (0..256) to CSS screen pixel
+      // (ctx already has DPR scale, so ctx.transform composes correctly)
+      const a = (tr.sx - tl.sx) / 256;
+      const b = (tr.sy - tl.sy) / 256;
+      const c = (bl.sx - tl.sx) / 256;
+      const d = (bl.sy - tl.sy) / 256;
+
+      const url = `${tileBase}/${z}/${tx}/${ty}`;
+      const img = tileImages.get(url);
+      if (!img) {
+        requestLoad(url);
+        continue;
+      }
+      if (!img.complete || img.naturalWidth === 0) continue;
+
+      ctx.save();
+      ctx.transform(a, b, c, d, tl.sx, tl.sy);
+      ctx.drawImage(img, 0, 0, 256, 256);
+      ctx.restore();
+    }
+  }
 }
 
 export const ReplayMapLayer = forwardRef<ReplayMapLayerHandle, Props>(
-  function ReplayMapLayer({ map, className, style, onViewportChange, children }, ref) {
+  function ReplayMapLayer({ map, className, style, onViewportChange, children, nativeTileBase }, ref) {
     const containerRef = useRef<HTMLDivElement>(null);
     const canvasRef = useRef<HTMLCanvasElement>(null);
     const [containerSize, setContainerSize] = useState({ w: 0, h: 0 });
@@ -61,9 +184,13 @@ export const ReplayMapLayer = forwardRef<ReplayMapLayerHandle, Props>(
       rotation: 0,
     });
 
-    // Tile images cache
+    // Livelox tile images cache
     const tileImagesRef = useRef<Map<string, HTMLImageElement>>(new Map());
     const [tilesLoaded, setTilesLoaded] = useState(0);
+
+    // Native (OCAD) tile images cache + load counter for redraw triggering
+    const nativeTileImagesRef = useRef<Map<string, HTMLImageElement>>(new Map());
+    const [nativeTilesVersion, setNativeTilesVersion] = useState(0);
 
     // ─── Resize observer ──────────────────────────────────────
     useEffect(() => {
@@ -93,8 +220,10 @@ export const ReplayMapLayer = forwardRef<ReplayMapLayerHandle, Props>(
       onViewportChange?.(vpRef.current);
     }, [containerSize.w, containerSize.h, map.widthPx, map.heightPx]);
 
-    // ─── Load tiles ───────────────────────────────────────────
+    // ─── Load Livelox tiles (skipped when using native tiles) ─
     useEffect(() => {
+      if (nativeTileBase) return; // native tiles loaded on demand in drawMap
+
       const tiles = map.tiles ?? [];
       if (tiles.length === 0 && map.imageUrl) {
         // Single image fallback
@@ -108,7 +237,6 @@ export const ReplayMapLayer = forwardRef<ReplayMapLayerHandle, Props>(
         return;
       }
 
-      let loaded = 0;
       for (const tile of tiles) {
         const key = `${tile.x}-${tile.y}`;
         if (tileImagesRef.current.has(key)) continue;
@@ -116,21 +244,18 @@ export const ReplayMapLayer = forwardRef<ReplayMapLayerHandle, Props>(
         img.crossOrigin = "anonymous";
         img.onload = () => {
           tileImagesRef.current.set(key, img);
-          loaded++;
           setTilesLoaded((n) => n + 1);
         };
         img.onerror = () => {
-          loaded++;
           setTilesLoaded((n) => n + 1);
         };
         img.src = tile.url;
       }
-    }, [map.tiles, map.imageUrl]);
+    }, [map.tiles, map.imageUrl, nativeTileBase]);
 
-    // Redraw when tiles load
-    useEffect(() => {
-      drawMap();
-    }, [tilesLoaded]);
+    // Redraw when Livelox tiles or native tiles load
+    useEffect(() => { drawMap(); }, [tilesLoaded]);
+    useEffect(() => { drawMap(); }, [nativeTilesVersion]);
 
     // ─── Transform helpers ────────────────────────────────────
     const mapToScreen = useCallback(
@@ -183,6 +308,16 @@ export const ReplayMapLayer = forwardRef<ReplayMapLayerHandle, Props>(
       [mapToScreen, screenToMap, onViewportChange],
     );
 
+    // ─── Request a native tile load (called from drawMap) ─────
+    const requestNativeTileLoad = useCallback((url: string) => {
+      if (nativeTileImagesRef.current.has(url)) return;
+      const img = new Image();
+      img.crossOrigin = "anonymous";
+      nativeTileImagesRef.current.set(url, img); // prevent duplicate loads
+      img.onload = () => setNativeTilesVersion((v) => v + 1);
+      img.src = url;
+    }, []);
+
     // ─── Canvas draw ──────────────────────────────────────────
     const drawMap = useCallback(() => {
       const canvas = canvasRef.current;
@@ -199,32 +334,36 @@ export const ReplayMapLayer = forwardRef<ReplayMapLayerHandle, Props>(
 
       const vp = vpRef.current;
 
-      ctx.save();
-      ctx.translate(containerSize.w / 2, containerSize.h / 2);
-      ctx.rotate(vp.rotation);
-      ctx.scale(vp.scale, vp.scale);
-      ctx.translate(-vp.cx, -vp.cy);
-
-      // Draw tiles
-      const tiles = map.tiles ?? [];
-      if (tiles.length > 0) {
-        for (const tile of tiles) {
-          const key = `${tile.x}-${tile.y}`;
-          const img = tileImagesRef.current.get(key);
-          if (img) {
-            ctx.drawImage(img, tile.x, tile.y, tile.width, tile.height);
-          }
-        }
+      if (nativeTileBase) {
+        // Draw native OCAD tiles using the Livelox affine projection
+        drawNativeTilesOnCanvas(
+          ctx, vp, containerSize.w, containerSize.h,
+          map.projection, nativeTileBase,
+          nativeTileImagesRef.current, requestNativeTileLoad,
+        );
       } else {
-        // Single image fallback
-        const img = tileImagesRef.current.get("full");
-        if (img) {
-          ctx.drawImage(img, 0, 0, map.widthPx, map.heightPx);
-        }
-      }
+        // Draw Livelox map tiles / image
+        ctx.save();
+        ctx.translate(containerSize.w / 2, containerSize.h / 2);
+        ctx.rotate(vp.rotation);
+        ctx.scale(vp.scale, vp.scale);
+        ctx.translate(-vp.cx, -vp.cy);
 
-      ctx.restore();
-    }, [containerSize, map]);
+        const tiles = map.tiles ?? [];
+        if (tiles.length > 0) {
+          for (const tile of tiles) {
+            const key = `${tile.x}-${tile.y}`;
+            const img = tileImagesRef.current.get(key);
+            if (img) ctx.drawImage(img, tile.x, tile.y, tile.width, tile.height);
+          }
+        } else {
+          const img = tileImagesRef.current.get("full");
+          if (img) ctx.drawImage(img, 0, 0, map.widthPx, map.heightPx);
+        }
+
+        ctx.restore();
+      }
+    }, [containerSize, map, nativeTileBase, requestNativeTileLoad]);
 
     // Keep ref in sync so imperative setViewport can call drawMap
     drawMapRef.current = drawMap;

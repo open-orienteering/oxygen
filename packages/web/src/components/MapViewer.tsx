@@ -280,7 +280,7 @@ export function MapViewer({
       if (mapBounds) setViewport(fitBounds(mapBounds, containerSize.w, containerSize.h, 0.05));
       return;
     }
-    fitToControlBounds(visibleControls, hideControls ? 0.02 : 0.15);
+    fitToControlBounds(visibleControls, hideControls ? 0.02 : 0.05);
   }, [containerSize]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ─── Initial fit ──────────────────────────────────────────
@@ -290,7 +290,7 @@ export function MapViewer({
     if (!initialFitControls) { hasInitialFitRef.current = true; return; }
     const visibleControls = controls.filter((c) => c.visible !== false);
     if (visibleControls.length < 2) return;
-    fitToControlBounds(visibleControls, hideControls ? 0.02 : 0.15);
+    fitToControlBounds(visibleControls, hideControls ? 0.02 : 0.05);
     hasInitialFitRef.current = true;
   }, [viewport, controls, initialFitControls, hideControls, fitToControlBounds]);
 
@@ -327,7 +327,7 @@ export function MapViewer({
         setViewport((prev) => prev ? { ...prev, centerLat: fc.lat, centerLng: fc.lng } : prev);
       }
     } else {
-      fitToControlBounds(focusControls, hideControls ? 0.02 : 0.2);
+      fitToControlBounds(focusControls, hideControls ? 0.02 : 0.05);
     }
   }, [viewport, focusControlIds, controls, containerSize, hideControls, fitToControlBounds]);
 

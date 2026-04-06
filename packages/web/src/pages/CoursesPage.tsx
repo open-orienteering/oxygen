@@ -206,6 +206,7 @@ export function CoursesPage() {
       {/* Map */}
       <MapPanel
         className="mt-6"
+        fitToControls
         highlightCourseName={expandedId ? items.find((c) => c.id === expandedId)?.name : undefined}
       />
     </>

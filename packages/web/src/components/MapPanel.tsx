@@ -432,7 +432,7 @@ export function MapPanel({
         showDescriptions={showDescriptions}
         onToggleFullscreen={toggleFullscreen}
         isFullscreen={isFullscreen}
-        hideControls={hideToolbar}
+        hideControls={false}
         gpsRoutes={gpsRoutes}
       />
 

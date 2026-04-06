@@ -6,6 +6,7 @@ import {
   Routes,
   Route,
   Navigate,
+  Link,
 } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { trpc } from "../lib/trpc";
@@ -281,24 +282,27 @@ export function CompetitionShell() {
           {/* Tabs */}
           <div className="flex items-center justify-between border-b border-slate-200">
             <nav className="-mb-px flex flex-1 gap-1 overflow-x-auto min-w-0" aria-label="Tabs" style={{ scrollbarWidth: 'none', msOverflowStyle: 'none' }}>
-              {tabs.filter((t) => !t.isOverflow).map((tab) => (
-                <button
-                  key={tab.id}
-                  onClick={() => handleTabChange(tab.id)}
-                  className={`px-3 py-2.5 text-sm font-medium border-b-2 transition-colors cursor-pointer whitespace-nowrap ${activeTab === tab.id
-                    ? "border-blue-600 text-blue-600"
-                    : "border-transparent text-slate-500 hover:text-slate-700 hover:border-slate-300"
-                    }`}
-                >
-                  {t(tabLabelKeys[tab.id])}
-                  {tab.countKey && counts[tab.countKey] > 0 && (
-                    <span aria-hidden="true" className={`ml-1 text-xs ${activeTab === tab.id ? "text-blue-400" : "text-slate-400"
-                      }`}>
-                      {counts[tab.countKey]}
-                    </span>
-                  )}
-                </button>
-              ))}
+              {tabs.filter((t) => !t.isOverflow).map((tab) => {
+                const path = tab.path ? `/${nameId}/${tab.path}` : `/${nameId}`;
+                return (
+                  <Link
+                    key={tab.id}
+                    to={path}
+                    className={`px-3 py-2.5 text-sm font-medium border-b-2 transition-colors cursor-pointer whitespace-nowrap ${activeTab === tab.id
+                      ? "border-blue-600 text-blue-600"
+                      : "border-transparent text-slate-500 hover:text-slate-700 hover:border-slate-300"
+                      }`}
+                  >
+                    {t(tabLabelKeys[tab.id])}
+                    {tab.countKey && counts[tab.countKey] > 0 && (
+                      <span aria-hidden="true" className={`ml-1 text-xs ${activeTab === tab.id ? "text-blue-400" : "text-slate-400"
+                        }`}>
+                        {counts[tab.countKey]}
+                      </span>
+                    )}
+                  </Link>
+                );
+              })}
             </nav>
 
             {/* More Menu Dropdown - Outside scrollable area to prevent clipping */}
@@ -328,30 +332,31 @@ export function CompetitionShell() {
                       data-testid="more-menu-content"
                       className="absolute right-0 top-full mt-1 z-30 bg-white border border-slate-200 rounded-lg shadow-lg py-1 min-w-[200px]"
                     >
-                      {tabs.filter((t) => t.isOverflow).map((tab) => (
-                        <button
-                          key={tab.id}
-                          onClick={() => {
-                            handleTabChange(tab.id);
-                            setShowMoreMenu(false);
-                          }}
-                          className={`w-full text-left px-4 py-2 text-sm transition-colors cursor-pointer flex items-center justify-between ${activeTab === tab.id
-                            ? "bg-blue-50 text-blue-700 font-semibold"
-                            : "text-slate-700 hover:bg-slate-50"
-                            }`}
-                        >
-                          <span className="flex items-center gap-2">
-                            {tab.group === "race" && <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />}
-                            {tab.group === "dev" && <span className="w-1.5 h-1.5 rounded-full bg-amber-500" />}
-                            {t(tabLabelKeys[tab.id])}
-                          </span>
-                          {tab.countKey && counts[tab.countKey] > 0 && (
-                            <span className="text-xs text-slate-400">
-                              {counts[tab.countKey]}
+                      {tabs.filter((t) => t.isOverflow).map((tab) => {
+                        const path = tab.path ? `/${nameId}/${tab.path}` : `/${nameId}`;
+                        return (
+                          <Link
+                            key={tab.id}
+                            to={path}
+                            onClick={() => setShowMoreMenu(false)}
+                            className={`w-full text-left px-4 py-2 text-sm transition-colors cursor-pointer flex items-center justify-between ${activeTab === tab.id
+                              ? "bg-blue-50 text-blue-700 font-semibold"
+                              : "text-slate-700 hover:bg-slate-50"
+                              }`}
+                          >
+                            <span className="flex items-center gap-2">
+                              {tab.group === "race" && <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />}
+                              {tab.group === "dev" && <span className="w-1.5 h-1.5 rounded-full bg-amber-500" />}
+                              {t(tabLabelKeys[tab.id])}
                             </span>
-                          )}
-                        </button>
-                      ))}
+                            {tab.countKey && counts[tab.countKey] > 0 && (
+                              <span className="text-xs text-slate-400">
+                                {counts[tab.countKey]}
+                              </span>
+                            )}
+                          </Link>
+                        );
+                      })}
                       <div className="my-1 border-t border-slate-100" />
                       <div className="px-2 py-1">
                         <StartScreenLauncher nameId={nameId ?? ""} onLaunch={() => setShowMoreMenu(false)} />
