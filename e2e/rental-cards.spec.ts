@@ -34,18 +34,18 @@ const API_BASE = "http://localhost:3002";
 async function selectCompetition(page: Page) {
   await page.goto("/");
   await page.getByText(COMPETITION_NAME).click();
-  await expect(page.getByRole("button", { name: "Dashboard" })).toBeVisible({
+  await expect(page.getByRole("link", { name: "Dashboard" })).toBeVisible({
     timeout: 10000,
   });
 }
 
 async function clickTab(page: Page, name: string) {
-  const mainTab = page.locator("nav[aria-label='Tabs']").getByRole("button", { name, exact: true });
+  const mainTab = page.locator("nav[aria-label='Tabs']").getByRole("link", { name, exact: true });
   if (await mainTab.isVisible()) {
     await mainTab.click();
   } else {
     await page.getByTestId("more-menu-button").click();
-    await page.getByTestId("more-menu-content").getByRole("button", { name, exact: true }).click();
+    await page.getByTestId("more-menu-content").getByRole("link", { name, exact: true }).click();
   }
 }
 

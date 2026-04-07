@@ -33,14 +33,14 @@ declare global {
 async function selectCompetition(page: import("@playwright/test").Page) {
   await page.goto("/");
   await page.getByText("My example tävling").click();
-  await expect(page.getByRole("button", { name: "Dashboard" })).toBeVisible({
+  await expect(page.getByRole("link", { name: "Dashboard" })).toBeVisible({
     timeout: 10000,
   });
 }
 
 async function goToTab(page: import("@playwright/test").Page, tab: string) {
   await selectCompetition(page);
-  await page.getByRole("button", { name: tab, exact: true }).click();
+  await page.getByRole("link", { name: tab, exact: true }).click();
 }
 
 // Inject mock WebSerial before each test
@@ -186,7 +186,7 @@ test.describe("WebSerial SI Reader", () => {
     // Go directly to card-readout page
     await selectCompetition(page);
     await page.getByTestId("more-menu-button").click();
-    await page.getByTestId("more-menu-content").getByRole("button", { name: "Card Readout", exact: true }).click();
+    await page.getByTestId("more-menu-content").getByRole("link", { name: "Card Readout", exact: true }).click();
 
     await expect(
       page.getByPlaceholder("Enter SI card number..."),

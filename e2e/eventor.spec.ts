@@ -38,7 +38,7 @@ test.describe("Competition Selector — New Features", () => {
     await page.getByPlaceholder(/Klubbmästerskap/).fill(uniqueName);
 
     await page.getByRole("button", { name: "Create" }).click();
-    await expect(page.getByRole("button", { name: "Dashboard" })).toBeVisible({
+    await expect(page.getByRole("link", { name: "Dashboard" })).toBeVisible({
       timeout: 15000,
     });
     await expect(page.getByText(uniqueName)).toBeVisible();
@@ -156,7 +156,7 @@ test.describe("Competition Selector — New Features", () => {
     await expect(page.getByText("Dashboard")).toBeVisible({ timeout: 5000 });
 
     await page.getByTestId("more-menu-button").click();
-    await page.getByTestId("more-menu-content").getByRole("button", { name: "Clubs" }).click();
+    await page.getByTestId("more-menu-content").getByRole("link", { name: "Clubs" }).click();
     await expect(page.getByText(/\d+ clubs/)).toBeVisible();
 
     // Show all clubs so we can see newly created empty ones

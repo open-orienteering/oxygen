@@ -3,15 +3,15 @@ import { test, expect } from "@playwright/test";
 async function goToRunners(page: import("@playwright/test").Page) {
   await page.goto("/");
   await page.getByText("My example tävling").click();
-  await expect(page.getByRole("button", { name: "Dashboard" })).toBeVisible({
+  await expect(page.getByRole("link", { name: "Dashboard" })).toBeVisible({
     timeout: 15000,
   });
-  const mainTab = page.locator("nav[aria-label='Tabs']").getByRole("button", { name: "Runners", exact: true });
+  const mainTab = page.locator("nav[aria-label='Tabs']").getByRole("link", { name: "Runners", exact: true });
   if (await mainTab.isVisible()) {
     await mainTab.click();
   } else {
     await page.getByTestId("more-menu-button").click();
-    await page.getByTestId("more-menu-content").getByRole("button", { name: "Runners", exact: true }).click();
+    await page.getByTestId("more-menu-content").getByRole("link", { name: "Runners", exact: true }).click();
   }
   await expect(page.locator("span", { hasText: "runners" })).toContainText("54", {
     timeout: 15000,

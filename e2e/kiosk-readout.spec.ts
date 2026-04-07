@@ -40,7 +40,7 @@ const COURSE_2_CONTROLS = [81, 50, 40, 150, 100];
 async function selectCompetition(page: Page) {
   await page.goto("/");
   await page.getByText(COMPETITION_NAME).click();
-  await expect(page.getByRole("button", { name: "Dashboard" })).toBeVisible({
+  await expect(page.getByRole("link", { name: "Dashboard" })).toBeVisible({
     timeout: 10000,
   });
 }
@@ -431,7 +431,7 @@ test.describe("Standalone mode: re-read after idle", () => {
     const helperPage = await context.newPage();
     await helperPage.goto("/");
     await helperPage.getByText(COMPETITION_NAME).click();
-    await expect(helperPage.getByRole("button", { name: "Dashboard" })).toBeVisible({ timeout: 10000 });
+    await expect(helperPage.getByRole("link", { name: "Dashboard" })).toBeVisible({ timeout: 10000 });
     const nameId = getNameId(helperPage);
     await helperPage.close();
     return nameId;

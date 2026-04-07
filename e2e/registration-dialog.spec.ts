@@ -44,7 +44,7 @@ const COURSE_2_CONTROLS = [81, 50, 40, 150, 100];
 async function selectCompetition(page: Page) {
   await page.goto("/");
   await page.getByText(COMPETITION_NAME).click();
-  await expect(page.getByRole("button", { name: "Dashboard" })).toBeVisible({
+  await expect(page.getByRole("link", { name: "Dashboard" })).toBeVisible({
     timeout: 10000,
   });
 }
@@ -742,7 +742,7 @@ test.describe("Registration Dialog", () => {
 
       // Dialog closes, still on dashboard
       await expect(page.getByTestId("registration-dialog")).not.toBeVisible({ timeout: 5000 });
-      await expect(page.getByRole("button", { name: "Dashboard" })).toBeVisible();
+      await expect(page.getByRole("link", { name: "Dashboard" })).toBeVisible();
 
       // Clean up
       const runnerId = await page.evaluate(async () => {
@@ -758,7 +758,7 @@ test.describe("Registration Dialog", () => {
       await selectCompetition(page);
       const nameId = getNameId(page);
       // Navigate via tab click to stay in SPA (no page reload)
-      await page.getByRole("button", { name: "Results" }).click();
+      await page.getByRole("link", { name: "Results" }).click();
       await expect(page.url()).toContain("/results");
       // Connect reader
       await page.getByTestId("connect-reader").click();
