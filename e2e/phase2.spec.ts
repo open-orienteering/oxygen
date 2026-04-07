@@ -3,19 +3,19 @@ import { test, expect } from "@playwright/test";
 async function selectCompetition(page: import("@playwright/test").Page) {
   await page.goto("/");
   await page.getByText("My example tävling").click();
-  await expect(page.getByRole("button", { name: "Dashboard" })).toBeVisible({
+  await expect(page.getByRole("link", { name: "Dashboard" })).toBeVisible({
     timeout: 10000,
   });
 }
 
 async function goToTab(page: import("@playwright/test").Page, name: string) {
   await selectCompetition(page);
-  const mainTab = page.locator("nav[aria-label='Tabs']").getByRole("button", { name, exact: true });
+  const mainTab = page.locator("nav[aria-label='Tabs']").getByRole("link", { name, exact: true });
   if (await mainTab.isVisible()) {
     await mainTab.click();
   } else {
     await page.getByTestId("more-menu-button").click();
-    await page.getByTestId("more-menu-content").getByRole("button", { name, exact: true }).click();
+    await page.getByTestId("more-menu-content").getByRole("link", { name, exact: true }).click();
   }
 }
 
@@ -23,16 +23,16 @@ test.describe("Tab Navigation", () => {
   test("should display all navigation tabs", async ({ page }) => {
     await selectCompetition(page);
 
-    await expect(page.getByRole("button", { name: "Dashboard" })).toBeVisible();
-    await expect(page.getByRole("button", { name: "Runners", exact: true })).toBeVisible();
-    await expect(page.getByRole("button", { name: "Start List" })).toBeVisible();
-    await expect(page.getByRole("button", { name: "Results" })).toBeVisible();
+    await expect(page.getByRole("link", { name: "Dashboard" })).toBeVisible();
+    await expect(page.getByRole("link", { name: "Runners", exact: true })).toBeVisible();
+    await expect(page.getByRole("link", { name: "Start List" })).toBeVisible();
+    await expect(page.getByRole("link", { name: "Results" })).toBeVisible();
 
     // Event is in More menu
-    await expect(page.getByRole("button", { name: "Event", exact: true })).not.toBeVisible();
+    await expect(page.getByRole("link", { name: "Event", exact: true })).not.toBeVisible();
     await page.getByTestId("more-menu-button").click();
     await expect(
-      page.getByTestId("more-menu-content").getByRole("button", { name: "Event", exact: true }),
+      page.getByTestId("more-menu-content").getByRole("link", { name: "Event", exact: true }),
     ).toBeVisible();
   });
 

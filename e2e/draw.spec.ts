@@ -6,7 +6,7 @@ import { resolve } from "path";
 async function selectCompetition(page: import("@playwright/test").Page) {
   await page.goto("/");
   await page.getByText("My example tävling").click();
-  await expect(page.getByRole("button", { name: "Dashboard" })).toBeVisible({
+  await expect(page.getByRole("link", { name: "Dashboard" })).toBeVisible({
     timeout: 10000,
   });
 }
@@ -14,7 +14,7 @@ async function selectCompetition(page: import("@playwright/test").Page) {
 function tabButton(page: import("@playwright/test").Page, name: string) {
   return page
     .locator("nav[aria-label='Tabs']")
-    .getByRole("button", { name, exact: true });
+    .getByRole("link", { name, exact: true });
 }
 
 async function reseedItestDb() {

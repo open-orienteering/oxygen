@@ -13,7 +13,7 @@ const COMPETITION_NAME = "My example tävling";
 async function selectCompetition(page: Page) {
   await page.goto("/");
   await page.getByText(COMPETITION_NAME).click();
-  await expect(page.getByRole("button", { name: "Dashboard" })).toBeVisible({
+  await expect(page.getByRole("link", { name: "Dashboard" })).toBeVisible({
     timeout: 10000,
   });
 }

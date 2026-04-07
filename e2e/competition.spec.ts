@@ -31,12 +31,12 @@ test.describe("Competition Selection", () => {
     ).toBeVisible({ timeout: 10000 });
 
     // Should show tab navigation
-    await expect(page.getByRole("button", { name: "Dashboard" })).toBeVisible();
-    await expect(page.getByRole("button", { name: "Runners", exact: true })).toBeVisible();
+    await expect(page.getByRole("link", { name: "Dashboard" })).toBeVisible();
+    await expect(page.getByRole("link", { name: "Runners", exact: true })).toBeVisible();
 
     // Event is now in the More menu
     await page.getByTestId("more-menu-button").click();
-    await expect(page.getByTestId("more-menu-content").getByRole("button", { name: "Event", exact: true })).toBeVisible();
+    await expect(page.getByTestId("more-menu-content").getByRole("link", { name: "Event", exact: true })).toBeVisible();
   });
 
 });

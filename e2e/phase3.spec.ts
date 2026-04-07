@@ -3,18 +3,18 @@ import { test, expect } from "@playwright/test";
 async function selectCompetition(page: import("@playwright/test").Page) {
   await page.goto("/");
   await page.getByText("My example tävling").click();
-  await expect(page.getByRole("button", { name: "Dashboard" })).toBeVisible({
+  await expect(page.getByRole("link", { name: "Dashboard" })).toBeVisible({
     timeout: 10000,
   });
 }
 
 async function clickTab(page: import("@playwright/test").Page, name: string) {
-  const mainTab = page.locator("nav[aria-label='Tabs']").getByRole("button", { name, exact: true });
+  const mainTab = page.locator("nav[aria-label='Tabs']").getByRole("link", { name, exact: true });
   if (await mainTab.isVisible()) {
     await mainTab.click();
   } else {
     await page.getByTestId("more-menu-button").click();
-    await page.getByTestId("more-menu-content").getByRole("button", { name, exact: true }).click();
+    await page.getByTestId("more-menu-content").getByRole("link", { name, exact: true }).click();
   }
 }
 
