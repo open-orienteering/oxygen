@@ -111,6 +111,16 @@ export function CompetitionShell() {
       setCompetitionName(data.name);
       setReady(true);
     },
+    onError: () => {
+      // Offline fallback: use cached dashboard data to get competition name
+      if (!navigator.onLine) {
+        const cachedDashboard = utils.competition.dashboard.getData();
+        if (cachedDashboard?.competition?.name) {
+          setCompetitionName(cachedDashboard.competition.name);
+          setReady(true);
+        }
+      }
+    },
   });
 
   // Fetch dashboard data for counts and organizer logo
@@ -139,9 +149,15 @@ export function CompetitionShell() {
     if (nameId) {
       setReady(false);
       setCompetitionNameId(nameId);
-      utils.invalidate().then(() => {
+      if (navigator.onLine) {
+        utils.invalidate().then(() => {
+          selectMutation.mutate({ nameId });
+        });
+      } else {
+        // Offline: skip cache invalidation (we need that data!) and try select
+        // (will fail and trigger onError fallback to cached data)
         selectMutation.mutate({ nameId });
-      });
+      }
     }
     return () => setCompetitionNameId(null);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -209,7 +225,7 @@ export function CompetitionShell() {
     navigate(path);
   };
 
-  if (selectMutation.isError) {
+  if (selectMutation.isError && !ready) {
     return (
       <div className="min-h-screen bg-slate-50 flex items-center justify-center p-4">
         <div className="text-center">

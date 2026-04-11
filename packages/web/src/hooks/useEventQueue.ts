@@ -20,7 +20,14 @@ export function useEventQueue(competitionId?: string) {
 
   // Poll pending count
   useEffect(() => {
-    const refresh = () => getPendingCount(competitionId).then(setPendingCount);
+    const refresh = async () => {
+      const filtered = await getPendingCount(competitionId);
+      const total = await getPendingCount();
+      if (total > 0) {
+        console.log(`[event-queue] pending: ${filtered} (filtered by "${competitionId}"), ${total} (total)`);
+      }
+      setPendingCount(filtered);
+    };
     refresh();
     const interval = setInterval(refresh, 2000);
     return () => clearInterval(interval);

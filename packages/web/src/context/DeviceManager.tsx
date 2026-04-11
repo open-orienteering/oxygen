@@ -266,7 +266,7 @@ export function DeviceManagerProvider({ children }: { children: ReactNode }) {
 
       // Store card data on the server (skip if duplicate — already stored)
       let serverPunchesRelevant = true;
-      if (!isDuplicate) {
+      if (!isDuplicate && navigator.onLine) {
         try {
           const storeResult = await storeReadout.mutateAsync({
             cardNo: readout.cardNumber,
@@ -317,17 +317,34 @@ export function DeviceManagerProvider({ children }: { children: ReactNode }) {
             });
           }
         }
+      } else if (!isDuplicate && !navigator.onLine) {
+        // Offline — queue the card read event immediately
+        if (competitionNameIdRef.current) {
+          emitEvent("card.read", competitionNameIdRef.current, {
+            cardNo: readout.cardNumber,
+            punches: readout.punches.map((p) => ({ controlCode: p.controlCode, time: p.time })),
+            checkTime: readout.checkTime ?? undefined,
+            startTime: readout.startTime ?? undefined,
+            finishTime: readout.finishTime ?? undefined,
+            cardType: readout.cardType,
+            batteryVoltage: readout.batteryVoltage ?? undefined,
+          });
+        }
       }
 
-      // Invalidate cache to ensure fresh DB data (runner may have been registered
-      // since the last read of this card)
-      await utils.cardReadout.readout.invalidate({ cardNo: readout.cardNumber });
+      // Invalidate cache and resolve from server (only when online)
+      if (navigator.onLine) {
+        await utils.cardReadout.readout.invalidate({ cardNo: readout.cardNumber });
+      }
 
       // Resolve runner info and determine action (always — even for duplicates)
       try {
-        const result = await utils.cardReadout.readout.fetch({
-          cardNo: readout.cardNumber,
-        });
+        const result = navigator.onLine
+          ? await utils.cardReadout.readout.fetch({ cardNo: readout.cardNumber })
+          : null;
+
+        // Offline — skip to catch block for local resolution
+        if (!result) throw new Error("offline");
 
         let action: CardAction;
         let status: string | undefined;
@@ -389,7 +406,7 @@ export function DeviceManagerProvider({ children }: { children: ReactNode }) {
         }
 
         // Apply computed result to oRunner (readout station step)
-        if (action === "readout" && result.found) {
+        if (action === "readout" && result.found && navigator.onLine) {
           try {
             await applyResult.mutateAsync({
               runnerId: result.runner.id,
