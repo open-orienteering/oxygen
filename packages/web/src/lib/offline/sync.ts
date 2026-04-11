@@ -30,9 +30,11 @@ export async function drainEventQueue(competitionId?: string): Promise<number> {
 
       // Try to sync the batch
       try {
+        console.log(`[offline-sync] Pushing ${events.length} events...`, events.map(e => e.type));
         const result = await trpcVanillaClient.events.push.mutate({
           events: events.map(serializeEvent),
         });
+        console.log(`[offline-sync] Push result: ${result.synced.length} synced, ${result.failed.length} failed`);
 
         // Mark synced events
         for (const id of result.synced) {
@@ -42,6 +44,7 @@ export async function drainEventQueue(competitionId?: string): Promise<number> {
 
         // Mark failed events
         for (const failure of result.failed) {
+          console.warn(`[offline-sync] Event ${failure.id} failed:`, failure.error);
           const event = await offlineDb.events.get(failure.id);
           if (event) {
             await offlineDb.events.update(failure.id, {

@@ -153,11 +153,13 @@ async function applyEvent(
         tempId: string; name: string; classId: number; clubId: number;
         cardNo: number; startTime?: number;
       };
-      // Check card not already taken
-      const existing = await client.oRunner.findFirst({
-        where: { CardNo: cardNo, Removed: false },
-        select: { Id: true },
-      });
+      // Check card not already taken (skip check if no card assigned)
+      const existing = cardNo > 0
+        ? await client.oRunner.findFirst({
+            where: { CardNo: cardNo, Removed: false },
+            select: { Id: true },
+          })
+        : null;
       if (!existing) {
         await client.oRunner.create({
           data: {

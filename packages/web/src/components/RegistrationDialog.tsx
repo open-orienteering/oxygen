@@ -567,37 +567,38 @@ export function RegistrationDialog() {
 
     try {
       let registeredOnline = false;
-      try {
-        await createMutation.mutateAsync({
-          name: trimmedName,
-          classId,
-          clubId: clubId || 0,
-          cardNo: cn,
-          startTime: st ? parseMeosTime(st) : 0,
-          birthYear: birthYear ? parseInt(birthYear, 10) : 0,
-          sex,
-          phone,
-          fee,
-          paid,
-          payMode: payModeNum,
-          cardFee: rentalFee > 0 ? rentalFee : 0,
-        });
-        registeredOnline = true;
-      } catch {
-        if (!navigator.onLine) {
-          // Offline — queue the registration event
-          const nameId = window.location.pathname.match(/^\/([^/]+)/)?.[1] ?? "";
-          await emitRunnerRegistered(nameId, {
-            tempId: crypto.randomUUID(),
+      if (navigator.onLine) {
+        try {
+          await createMutation.mutateAsync({
             name: trimmedName,
             classId,
             clubId: clubId || 0,
             cardNo: cn,
             startTime: st ? parseMeosTime(st) : 0,
+            birthYear: birthYear ? parseInt(birthYear, 10) : 0,
+            sex,
+            phone,
+            fee,
+            paid,
+            payMode: payModeNum,
+            cardFee: rentalFee > 0 ? rentalFee : 0,
           });
-        } else {
+          registeredOnline = true;
+        } catch {
+          // Server error while online — don't silently queue, show the error
           throw new Error(t("registrationFailed"));
         }
+      } else {
+        // Offline — queue the registration event
+        const nameId = window.location.pathname.match(/^\/([^/]+)/)?.[1] ?? "";
+        await emitRunnerRegistered(nameId, {
+          tempId: crypto.randomUUID(),
+          name: trimmedName,
+          classId,
+          clubId: clubId || 0,
+          cardNo: cn,
+          startTime: st ? parseMeosTime(st) : 0,
+        });
       }
 
       // Notify kiosk
