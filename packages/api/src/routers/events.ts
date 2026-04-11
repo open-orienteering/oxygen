@@ -168,6 +168,9 @@ async function applyEvent(
             Club: clubId,
             CardNo: cardNo,
             StartTime: startTime ? toRelative(startTime, zeroTime) : 0,
+            // MeOS requires these MediumText fields to be non-null
+            InputResult: "",
+            Annotation: "",
           },
         });
       }
