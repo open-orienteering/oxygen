@@ -432,7 +432,7 @@ function ControlRow({
           ) : (
             <span className="inline-flex items-center gap-1.5">
               {ctrl.id}
-              {ctrl.units.length > 1 && (
+              {(ctrl.units ?? []).length > 1 && (
                 <span
                   className="px-1.5 py-0.5 rounded-full text-[10px] font-medium bg-indigo-100 text-indigo-700"
                   title={t("unitsCountTooltip", { count: ctrl.units.length })}
@@ -692,7 +692,7 @@ function ControlInlineDetail({ controlId }: { controlId: number }) {
               </select>
             </div>
 
-            {d.units.length === 0 && config?.checkedAt && (
+            {(d.units ?? []).length === 0 && config?.checkedAt && (
               <div className="text-xs text-slate-500 space-y-1">
                 <div>{t("checkedLabel", { time: relativeTime(new Date(config.checkedAt)) })}</div>
                 {config.batteryVoltage !== null && (
@@ -743,7 +743,7 @@ function ControlInlineDetail({ controlId }: { controlId: number }) {
           <h4 className="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-3">
             {t("physicalUnits")}
           </h4>
-          {d.units.length === 0 ? (
+          {(d.units ?? []).length === 0 ? (
             <p className="text-sm text-slate-400">{t("noUnitsRecorded")}</p>
           ) : (
             <div className="bg-white rounded-lg border border-slate-200 overflow-hidden">
@@ -759,7 +759,7 @@ function ControlInlineDetail({ controlId }: { controlId: number }) {
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
-                  {d.units.map((u) => (
+                  {(d.units ?? []).map((u) => (
                     <tr key={u.stationSerial}>
                       <td className="px-3 py-1.5 font-mono text-slate-700 tabular-nums">{u.stationSerial}</td>
                       <td className="px-3 py-1.5 font-mono text-slate-700 tabular-nums">
