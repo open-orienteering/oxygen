@@ -522,7 +522,10 @@ export type RadioType = "normal" | "internal_radio" | "public_radio";
 /** AIR+ override for a control */
 export type AirPlusOverride = "default" | "on" | "off";
 
-/** Control configuration from oxygen_control_config */
+/** Control configuration from oxygen_control_config.
+ *  Battery / checked / memory-cleared fields are aggregates across all
+ *  physical units fulfilling this logical control — see `units` below for
+ *  per-unit detail. */
 export interface ControlConfig {
   radioType: RadioType;
   airPlus: AirPlusOverride;
@@ -530,6 +533,18 @@ export interface ControlConfig {
   batteryLow: boolean | null;
   checkedAt: string | null; // ISO timestamp
   memoryClearedAt: string | null; // ISO timestamp
+}
+
+/** A physical SI station unit fulfilling a logical control. */
+export interface ControlUnit {
+  stationSerial: number;
+  lastProgrammedCode: number | null;
+  batteryVoltage: number | null;
+  batteryLow: boolean;
+  checkedAt: string | null; // ISO timestamp
+  memoryClearedAt: string | null; // ISO timestamp
+  firmwareVersion: string | null;
+  lastSeenAt: string | null; // ISO timestamp
 }
 
 /** Control summary (list view) */
@@ -542,6 +557,7 @@ export interface ControlInfo {
   minTime: number;
   runnerCount: number; // total runners on courses that include this control
   config: ControlConfig | null; // null if no oxygen_control_config row
+  units: ControlUnit[]; // physical units currently mapped to this control
 }
 
 /** Control detail with course usage */

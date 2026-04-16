@@ -2,12 +2,13 @@ import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import { router, competitionProcedure } from "../trpc.js";
 import type { PrismaClient } from "@prisma/client";
-import {incrementCounter, ensureControlConfigTable, ensureControlPunchesTable, ensureCompetitionConfigTable, getZeroTime} from "../db.js";
+import {incrementCounter, ensureControlConfigTable, ensureControlPunchesTable, ensureControlUnitsTable, ensureCompetitionConfigTable, getZeroTime} from "../db.js";
 import { toRelative, toAbsolute } from "../timeConvert.js";
 import type {
   ControlInfo,
   ControlDetail,
   ControlConfig,
+  ControlUnit,
   RadioType,
   AirPlusOverride,
 } from "@oxygen/shared";
@@ -31,37 +32,115 @@ interface ControlConfigRow {
   control_id: number;
   radio_type: string;
   air_plus: string;
-  battery_voltage: number | null;
-  battery_low: number | null;
-  checked_at: Date | null;
-  memory_cleared_at: Date | null;
-  station_serial: number | null;
 }
 
-function rowToConfig(row: ControlConfigRow): ControlConfig {
+interface ControlUnitRow {
+  station_serial: number;
+  control_id: number | null;
+  last_programmed_code: number | null;
+  battery_voltage: number | null;
+  battery_low: number;
+  checked_at: Date | null;
+  memory_cleared_at: Date | null;
+  firmware_version: string | null;
+  last_seen_at: Date | null;
+}
+
+function rowToUnit(row: ControlUnitRow): ControlUnit {
   return {
-    radioType: row.radio_type as RadioType,
-    airPlus: row.air_plus as AirPlusOverride,
+    stationSerial: Number(row.station_serial),
+    lastProgrammedCode: row.last_programmed_code,
     batteryVoltage: row.battery_voltage,
-    batteryLow: row.battery_low !== null ? row.battery_low !== 0 : null,
+    batteryLow: row.battery_low !== 0,
     checkedAt: row.checked_at?.toISOString() ?? null,
     memoryClearedAt: row.memory_cleared_at?.toISOString() ?? null,
+    firmwareVersion: row.firmware_version,
+    lastSeenAt: row.last_seen_at?.toISOString() ?? null,
+  };
+}
+
+/** Aggregate the unit-level fields into the legacy flat ControlConfig shape.
+ *  Picks the lowest battery voltage (worst case) and the earliest checked_at
+ *  (stalest check) so the top-level row still surfaces concerning values. */
+function aggregateUnits(units: ControlUnit[]): Pick<ControlConfig,
+  "batteryVoltage" | "batteryLow" | "checkedAt" | "memoryClearedAt"
+> {
+  if (units.length === 0) {
+    return { batteryVoltage: null, batteryLow: null, checkedAt: null, memoryClearedAt: null };
+  }
+  let minVoltage: number | null = null;
+  let anyLow = false;
+  let earliestChecked: string | null = null;
+  let earliestCleared: string | null = null;
+  for (const u of units) {
+    if (u.batteryVoltage !== null && (minVoltage === null || u.batteryVoltage < minVoltage)) {
+      minVoltage = u.batteryVoltage;
+    }
+    if (u.batteryLow) anyLow = true;
+    if (u.checkedAt && (earliestChecked === null || u.checkedAt < earliestChecked)) {
+      earliestChecked = u.checkedAt;
+    }
+    if (u.memoryClearedAt && (earliestCleared === null || u.memoryClearedAt < earliestCleared)) {
+      earliestCleared = u.memoryClearedAt;
+    }
+  }
+  return {
+    batteryVoltage: minVoltage,
+    batteryLow: minVoltage !== null ? anyLow : null,
+    checkedAt: earliestChecked,
+    memoryClearedAt: earliestCleared,
   };
 }
 
 async function getConfigMap(
   client: PrismaClient,
   dbName: string,
-): Promise<Map<number, ControlConfig>> {
+): Promise<Map<number, Pick<ControlConfig, "radioType" | "airPlus">>> {
   await ensureControlConfigTable(client, dbName);
   const rows = (await client.$queryRawUnsafe(
-    "SELECT * FROM oxygen_control_config",
+    "SELECT control_id, radio_type, air_plus FROM oxygen_control_config",
   )) as ControlConfigRow[];
-  const map = new Map<number, ControlConfig>();
+  const map = new Map<number, Pick<ControlConfig, "radioType" | "airPlus">>();
   for (const row of rows) {
-    map.set(row.control_id, rowToConfig(row));
+    map.set(row.control_id, {
+      radioType: row.radio_type as RadioType,
+      airPlus: row.air_plus as AirPlusOverride,
+    });
   }
   return map;
+}
+
+async function getUnitsByControl(
+  client: PrismaClient,
+  dbName: string,
+): Promise<Map<number, ControlUnit[]>> {
+  await ensureControlUnitsTable(client, dbName);
+  const rows = (await client.$queryRawUnsafe(
+    "SELECT * FROM oxygen_control_units WHERE control_id IS NOT NULL",
+  )) as ControlUnitRow[];
+  const map = new Map<number, ControlUnit[]>();
+  for (const row of rows) {
+    if (row.control_id === null) continue;
+    const list = map.get(row.control_id) ?? [];
+    list.push(rowToUnit(row));
+    map.set(row.control_id, list);
+  }
+  return map;
+}
+
+/** Build a ControlConfig that merges per-control settings with per-unit
+ *  aggregates. Returns null if neither settings nor units exist. */
+function buildControlConfig(
+  settings: Pick<ControlConfig, "radioType" | "airPlus"> | undefined,
+  units: ControlUnit[],
+): ControlConfig | null {
+  if (!settings && units.length === 0) return null;
+  const agg = aggregateUnits(units);
+  return {
+    radioType: settings?.radioType ?? "normal",
+    airPlus: settings?.airPlus ?? "default",
+    ...agg,
+  };
 }
 
 // ─── Router ───────────────────────────────────────────────
@@ -175,11 +254,13 @@ export const controlRouter = router({
         }
       }
 
-      // Load config data
+      // Load config + units data
       const configMap = await getConfigMap(client, ctx.dbName);
+      const unitsMap = await getUnitsByControl(client, ctx.dbName);
 
-      return filtered.map(
-        (c): ControlInfo => ({
+      return filtered.map((c): ControlInfo => {
+        const units = unitsMap.get(c.Id) ?? [];
+        return {
           id: c.Id,
           name: c.Name,
           codes: c.Numbers,
@@ -187,9 +268,10 @@ export const controlRouter = router({
           timeAdjust: c.TimeAdjust,
           minTime: c.MinTime,
           runnerCount: controlRunnerCount.get(c.Id) ?? 0,
-          config: configMap.get(c.Id) ?? null,
-        }),
-      );
+          config: buildControlConfig(configMap.get(c.Id), units),
+          units,
+        };
+      });
     }),
 
   /**
@@ -260,8 +342,10 @@ export const controlRouter = router({
         }
       }
 
-      // Load config
+      // Load config + units
       const configMap = await getConfigMap(client, ctx.dbName);
+      const unitsMap = await getUnitsByControl(client, ctx.dbName);
+      const units = unitsMap.get(control.Id) ?? [];
 
       return {
         id: control.Id,
@@ -272,7 +356,8 @@ export const controlRouter = router({
         minTime: control.MinTime,
         runnerCount: courseUsage.reduce((sum, c) => sum + c.runnerCount, 0),
         courses: courseUsage,
-        config: configMap.get(control.Id) ?? null,
+        config: buildControlConfig(configMap.get(control.Id), units),
+        units,
       };
     }),
 
@@ -441,51 +526,61 @@ export const controlRouter = router({
     }),
 
   /**
-   * Record the result of programming a physical control.
+   * Record the result of programming a physical control. Keyed by station
+   * serial — if two physical units fulfill the same logical control, each
+   * keeps its own battery / checked / memory_cleared state.
    */
   recordProgramming: competitionProcedure
     .input(
       z.object({
         controlId: z.number().int(),
+        stationSerial: z.number().int(),
+        programmedCode: z.number().int(),
         batteryVoltage: z.number(),
-        stationSerial: z.number().int().optional(),
-        memoryClearedAt: z.boolean().optional(),
+        firmwareVersion: z.string().optional(),
+        memoryCleared: z.boolean().optional(),
       }),
     )
     .mutation(async ({ ctx, input }) => {
       const client = ctx.db;
-      await ensureControlConfigTable(client, ctx.dbName);
+      await ensureControlUnitsTable(client, ctx.dbName);
 
       const batteryLow = input.batteryVoltage < 2.5 ? 1 : 0;
+      const firmware = input.firmwareVersion ?? null;
 
-      if (input.stationSerial !== undefined && input.memoryClearedAt) {
+      if (input.memoryCleared) {
         await client.$executeRaw`
-          INSERT INTO oxygen_control_config (control_id, battery_voltage, battery_low, checked_at, station_serial)
-          VALUES (${input.controlId}, ${input.batteryVoltage}, ${batteryLow}, NOW(), ${input.stationSerial})
+          INSERT INTO oxygen_control_units
+            (station_serial, control_id, last_programmed_code,
+             battery_voltage, battery_low, checked_at, memory_cleared_at,
+             firmware_version, last_seen_at)
+          VALUES (${input.stationSerial}, ${input.controlId}, ${input.programmedCode},
+                  ${input.batteryVoltage}, ${batteryLow}, NOW(), NOW(),
+                  ${firmware}, NOW())
           ON DUPLICATE KEY UPDATE
-            battery_voltage = ${input.batteryVoltage}, battery_low = ${batteryLow},
-            checked_at = NOW(), station_serial = ${input.stationSerial}, memory_cleared_at = NOW()`;
-      } else if (input.stationSerial !== undefined) {
-        await client.$executeRaw`
-          INSERT INTO oxygen_control_config (control_id, battery_voltage, battery_low, checked_at, station_serial)
-          VALUES (${input.controlId}, ${input.batteryVoltage}, ${batteryLow}, NOW(), ${input.stationSerial})
-          ON DUPLICATE KEY UPDATE
-            battery_voltage = ${input.batteryVoltage}, battery_low = ${batteryLow},
-            checked_at = NOW(), station_serial = ${input.stationSerial}`;
-      } else if (input.memoryClearedAt) {
-        await client.$executeRaw`
-          INSERT INTO oxygen_control_config (control_id, battery_voltage, battery_low, checked_at)
-          VALUES (${input.controlId}, ${input.batteryVoltage}, ${batteryLow}, NOW())
-          ON DUPLICATE KEY UPDATE
-            battery_voltage = ${input.batteryVoltage}, battery_low = ${batteryLow},
-            checked_at = NOW(), memory_cleared_at = NOW()`;
+            control_id = ${input.controlId},
+            last_programmed_code = ${input.programmedCode},
+            battery_voltage = ${input.batteryVoltage},
+            battery_low = ${batteryLow},
+            checked_at = NOW(),
+            memory_cleared_at = NOW(),
+            firmware_version = COALESCE(${firmware}, firmware_version),
+            last_seen_at = NOW()`;
       } else {
         await client.$executeRaw`
-          INSERT INTO oxygen_control_config (control_id, battery_voltage, battery_low, checked_at)
-          VALUES (${input.controlId}, ${input.batteryVoltage}, ${batteryLow}, NOW())
+          INSERT INTO oxygen_control_units
+            (station_serial, control_id, last_programmed_code,
+             battery_voltage, battery_low, checked_at, firmware_version, last_seen_at)
+          VALUES (${input.stationSerial}, ${input.controlId}, ${input.programmedCode},
+                  ${input.batteryVoltage}, ${batteryLow}, NOW(), ${firmware}, NOW())
           ON DUPLICATE KEY UPDATE
-            battery_voltage = ${input.batteryVoltage}, battery_low = ${batteryLow},
-            checked_at = NOW()`;
+            control_id = ${input.controlId},
+            last_programmed_code = ${input.programmedCode},
+            battery_voltage = ${input.batteryVoltage},
+            battery_low = ${batteryLow},
+            checked_at = NOW(),
+            firmware_version = COALESCE(${firmware}, firmware_version),
+            last_seen_at = NOW()`;
       }
 
       return { success: true, batteryLow: batteryLow !== 0 };
@@ -549,6 +644,15 @@ export const controlRouter = router({
         await client.$executeRaw`
           INSERT INTO oxygen_control_punches (control_id, card_no, punch_time, punch_datetime, sub_second, station_serial)
           VALUES (${input.controlId}, ${p.cardNo}, ${p.punchTime}, ${dt}, ${ss}, ${serial})`;
+      }
+
+      // Track the physical unit the backup was read from
+      if (serial !== null) {
+        await ensureControlUnitsTable(client, ctx.dbName);
+        await client.$executeRaw`
+          INSERT INTO oxygen_control_units (station_serial, control_id, last_seen_at)
+          VALUES (${serial}, ${input.controlId}, NOW())
+          ON DUPLICATE KEY UPDATE control_id = ${input.controlId}, last_seen_at = NOW()`;
       }
 
       return { count: newPunches.length };

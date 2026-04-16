@@ -296,6 +296,7 @@ export async function clearCachedClient(dbName: string): Promise<void> {
   mapFilesTableReady.delete(dbName);
   controlConfigTableReady.delete(dbName);
   controlPunchesTableReady.delete(dbName);
+  controlUnitsTableReady.delete(dbName);
   competitionConfigTableReady.delete(dbName);
   renderedMapsTableReady.delete(dbName);
   mapTilesTableReady.delete(dbName);
@@ -783,6 +784,78 @@ export async function ensureControlConfigTable(
   controlConfigTableReady.add(dbName);
 }
 
+// ─── Control physical units table ──────────────────────────
+
+const controlUnitsTableReady = new Set<string>();
+
+/**
+ * Ensure the oxygen_control_units table exists. Each row represents a physical
+ * SI station (identified by hardware serial) and optionally maps to a logical
+ * oControl. Battery, checked_at, last programmed code etc. are tracked per
+ * unit, so two physical units fulfilling the same logical control don't
+ * overwrite each other's state. On first run, back-fills from the legacy
+ * oxygen_control_config and oxygen_control_punches tables.
+ */
+export async function ensureControlUnitsTable(
+  client: PrismaClient,
+  dbName: string,
+): Promise<void> {
+  if (controlUnitsTableReady.has(dbName)) return;
+
+  await client.$executeRawUnsafe(`
+    CREATE TABLE IF NOT EXISTS oxygen_control_units (
+      station_serial       INT UNSIGNED NOT NULL PRIMARY KEY,
+      control_id           INT NULL,
+      last_programmed_code INT NULL,
+      battery_voltage      FLOAT NULL,
+      battery_low          TINYINT(1) NOT NULL DEFAULT 0,
+      checked_at           DATETIME NULL,
+      memory_cleared_at    DATETIME NULL,
+      firmware_version     VARCHAR(16) NULL,
+      last_seen_at         DATETIME NULL,
+      created_at           DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at           DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+      KEY idx_control_id (control_id)
+    )
+  `);
+
+  // Backfill from oxygen_control_config (one unit per config row that has a
+  // serial). Only inserts if the row doesn't exist yet — safe to run repeatedly.
+  try {
+    await client.$executeRawUnsafe(`
+      INSERT IGNORE INTO oxygen_control_units
+        (station_serial, control_id, last_programmed_code,
+         battery_voltage, battery_low, checked_at, memory_cleared_at)
+      SELECT cc.station_serial, cc.control_id,
+             CAST(SUBSTRING_INDEX(c.Numbers, ';', 1) AS UNSIGNED),
+             cc.battery_voltage, COALESCE(cc.battery_low, 0),
+             cc.checked_at, cc.memory_cleared_at
+      FROM oxygen_control_config cc
+      LEFT JOIN oControl c ON c.Id = cc.control_id
+      WHERE cc.station_serial IS NOT NULL
+    `);
+  } catch {
+    // oxygen_control_config may not exist yet on a brand-new database — ignore.
+  }
+
+  // Backfill from oxygen_control_punches: for each distinct (control_id,
+  // station_serial) pair, create a unit row with last_seen_at = MAX(imported_at).
+  try {
+    await client.$executeRawUnsafe(`
+      INSERT IGNORE INTO oxygen_control_units
+        (station_serial, control_id, last_seen_at)
+      SELECT station_serial, control_id, MAX(imported_at)
+      FROM oxygen_control_punches
+      WHERE station_serial IS NOT NULL
+      GROUP BY station_serial, control_id
+    `);
+  } catch {
+    // oxygen_control_punches may not exist yet — ignore.
+  }
+
+  controlUnitsTableReady.add(dbName);
+}
+
 // ─── Control backup punches table ──────────────────────────
 
 const controlPunchesTableReady = new Set<string>();
@@ -1168,6 +1241,7 @@ export async function disconnectAll(): Promise<void> {
   mapFilesTableReady.clear();
   controlConfigTableReady.clear();
   controlPunchesTableReady.clear();
+  controlUnitsTableReady.clear();
   competitionConfigTableReady.clear();
   renderedMapsTableReady.clear();
   mapTilesTableReady.clear();
