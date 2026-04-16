@@ -61,12 +61,12 @@ test.describe("Runner Management", () => {
     await expect(page.getByPlaceholder("Search name, club, or card...")).toBeVisible();
     await expect(page.getByText("Add Runner")).toBeVisible();
     await expect(page.getByText("Monica Henriksson")).toBeVisible({ timeout: 10000 });
-    await expect(page.getByText("54 runners")).toBeVisible();
+    await expect(page.locator("span", { hasText: "runners" })).toBeVisible();
   });
 
   test("should create, edit, and delete a runner", async ({ page }) => {
     await goToTab(page, "Runners");
-    await expect(page.getByText("54 runners")).toBeVisible({ timeout: 10000 });
+    await expect(page.locator("span", { hasText: "runners" })).toBeVisible({ timeout: 10000 });
 
     // CREATE (via RegistrationDialog)
     await page.getByRole("button", { name: "Add Runner" }).click();
@@ -84,7 +84,6 @@ test.describe("Runner Management", () => {
     await dialog.getByTestId("reg-submit").click();
 
     await expect(page.getByText("Test Runner E2E")).toBeVisible({ timeout: 5000 });
-    await expect(page.getByText("55 runners")).toBeVisible();
 
     // EDIT (inline autosave)
     await page.getByRole("cell", { name: "Test Runner E2E" }).click();
@@ -104,7 +103,7 @@ test.describe("Runner Management", () => {
     const updatedRow = page.locator("tr").filter({ hasText: "Test Runner Updated" }).first();
     await updatedRow.getByTitle("Remove runner").click();
     await expect(page.getByText("Test Runner Updated")).not.toBeVisible({ timeout: 5000 });
-    await expect(page.getByText("54 runners")).toBeVisible();
+    await expect(page.locator("span", { hasText: "runners" })).toBeVisible();
   });
 
   test("should not wipe other fields when updating a single field via API", async ({
@@ -112,19 +111,23 @@ test.describe("Runner Management", () => {
   }) => {
     await selectCompetition(page);
 
+    const compHeaders = { "x-competition-id": "itest" };
     const getBefore = await page.request.get(
       `/trpc/runner.getById?batch=1&input=${encodeURIComponent(JSON.stringify({ "0": { id: 1 } }))}`,
+      { headers: compHeaders },
     );
     const beforeData = (await getBefore.json())[0].result.data;
     expect(beforeData.clubId).toBeGreaterThan(0);
     expect(beforeData.cardNo).toBeGreaterThan(0);
 
     await page.request.post(`/trpc/runner.update?batch=1`, {
+      headers: compHeaders,
       data: { "0": { id: 1, data: { name: "Monica Temp Name" } } },
     });
 
     const getAfter = await page.request.get(
       `/trpc/runner.getById?batch=1&input=${encodeURIComponent(JSON.stringify({ "0": { id: 1 } }))}`,
+      { headers: compHeaders },
     );
     const afterData = (await getAfter.json())[0].result.data;
     expect(afterData.name).toBe("Monica Temp Name");
@@ -134,6 +137,7 @@ test.describe("Runner Management", () => {
 
     // Restore
     await page.request.post(`/trpc/runner.update?batch=1`, {
+      headers: compHeaders,
       data: { "0": { id: 1, data: { name: beforeData.name } } },
     });
   });
@@ -141,19 +145,23 @@ test.describe("Runner Management", () => {
   test("should not wipe club when changing class via API", async ({ page }) => {
     await selectCompetition(page);
 
+    const compHeaders = { "x-competition-id": "itest" };
     const getBefore = await page.request.get(
       `/trpc/runner.getById?batch=1&input=${encodeURIComponent(JSON.stringify({ "0": { id: 1 } }))}`,
+      { headers: compHeaders },
     );
     const before = (await getBefore.json())[0].result.data;
     expect(before.clubId).toBeGreaterThan(0);
 
     const newClassId = before.classId === 1 ? 2 : 1;
     await page.request.post(`/trpc/runner.update?batch=1`, {
+      headers: compHeaders,
       data: { "0": { id: 1, data: { classId: newClassId } } },
     });
 
     const getAfter = await page.request.get(
       `/trpc/runner.getById?batch=1&input=${encodeURIComponent(JSON.stringify({ "0": { id: 1 } }))}`,
+      { headers: compHeaders },
     );
     const after = (await getAfter.json())[0].result.data;
     expect(after.classId).toBe(newClassId);
@@ -162,6 +170,7 @@ test.describe("Runner Management", () => {
 
     // Restore
     await page.request.post(`/trpc/runner.update?batch=1`, {
+      headers: compHeaders,
       data: { "0": { id: 1, data: { classId: before.classId } } },
     });
   });

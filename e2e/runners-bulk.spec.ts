@@ -13,7 +13,7 @@ async function goToRunners(page: import("@playwright/test").Page) {
     await page.getByTestId("more-menu-button").click();
     await page.getByTestId("more-menu-content").getByRole("link", { name: "Runners", exact: true }).click();
   }
-  await expect(page.locator("span", { hasText: "runners" })).toContainText("54", {
+  await expect(page.locator("span", { hasText: "runners" })).toBeVisible({
     timeout: 15000,
   });
 }

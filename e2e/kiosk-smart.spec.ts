@@ -167,14 +167,14 @@ test.describe("Registration: Duplicate Card Prevention", () => {
 
     // Clean up: soft-delete the registered runner so it doesn't affect other test counts
     const deleted = await page.evaluate(async () => {
-      const findResp = await fetch(`/trpc/runner.findByCard?input=${encodeURIComponent(JSON.stringify({ cardNo: 999666 }))}`);
+      const compHeader = { "x-competition-id": "itest" };
+      const findResp = await fetch(`/trpc/runner.findByCard?input=${encodeURIComponent(JSON.stringify({ cardNo: 999666 }))}`, { headers: compHeader });
       const findData = await findResp.json();
       const id = findData?.result?.data?.id;
       if (!id) return "not-found";
-      // tRPC v10 single mutation: POST with Content-Type application/json
       const delResp = await fetch("/trpc/runner.delete", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", ...compHeader },
         body: JSON.stringify({ id }),
       });
       return delResp.ok ? "deleted" : `error-${delResp.status}`;
@@ -446,7 +446,7 @@ test.describe("Stale Punch Detection", () => {
     const result = await page.evaluate(async () => {
       const resp = await fetch("/trpc/cardReadout.storeReadout", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", "x-competition-id": "itest" },
         body: JSON.stringify({
           cardNo: 999777,
           punches: [
@@ -473,7 +473,7 @@ test.describe("Stale Punch Detection", () => {
     const result = await page.evaluate(async () => {
       const resp = await fetch("/trpc/cardReadout.storeReadout", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", "x-competition-id": "itest" },
         body: JSON.stringify({
           cardNo: 999778,
           punches: [
