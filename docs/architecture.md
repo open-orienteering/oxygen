@@ -129,6 +129,15 @@ SportIdent card reading uses the Web Serial API for direct hardware communicatio
 - Punch validation against course definition with automatic result computation
 - Card write capability for owner data
 
+### Control Management — Logical vs Physical Units
+
+Oxygen distinguishes **logical controls** (the `oControl` MeOS table — what courses reference) from **physical units** (SI stations, identified by hardware serial). A logical control can own multiple physical units:
+
+- **Redundancy** — two units at the same location punching the same code (radio + backup, or crowd management at spectator controls)
+- **Replacement** — a broken unit swapped mid-race with a spare programmed to a different code; both codes live in `oControl.Numbers` (semicolon-separated), and the read path accepts either
+
+Per-unit state (battery voltage, `checked_at`, last-programmed code, firmware) lives in `oxygen_control_units`, keyed by `station_serial`. The logical-control config (`radio_type`, `air_plus` override) stays in `oxygen_control_config`. Programming and backup-memory reads both upsert the corresponding unit row — so two units fulfilling the same logical control never overwrite each other's state. Forks, despite sometimes being described this way, are *not* modelled via multi-code in `Numbers`; they are separate logical controls with distinct codes and distinct courses.
+
 ### Eventor Integration
 Direct integration with the Swedish Orienteering Federation's Eventor API:
 - Import events, entries, classes, and clubs

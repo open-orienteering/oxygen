@@ -45,6 +45,8 @@ Courses can be imported from OCAD files or IOF XML, or created manually. Each co
 
 ![Control management](screenshots/controls.png)
 
+The Controls page tracks both logical controls (used in course definitions) and the physical SI station units that fulfill them. Each physical unit is identified by its SI hardware serial — a single logical control can own multiple units (for redundancy at the same location, or after a mid-race unit replacement with a different code). Battery voltage, last-checked time, programmed code and firmware are tracked per unit, so two stations never overwrite each other's state. When a control is programmed from the UI, the unit row is upserted automatically; backup-memory reads are attributed to the reading unit too.
+
 ## Start Draw
 
 The draw engine allocates start times with configurable methods:

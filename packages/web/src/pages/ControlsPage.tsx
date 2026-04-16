@@ -427,7 +427,21 @@ function ControlRow({
           )}
         </td>
         <td className="px-4 py-2.5 font-mono font-bold text-blue-700 tabular-nums">
-          {isStartFinish ? <span className="text-slate-300">—</span> : ctrl.id}
+          {isStartFinish ? (
+            <span className="text-slate-300">—</span>
+          ) : (
+            <span className="inline-flex items-center gap-1.5">
+              {ctrl.id}
+              {ctrl.units.length > 1 && (
+                <span
+                  className="px-1.5 py-0.5 rounded-full text-[10px] font-medium bg-indigo-100 text-indigo-700"
+                  title={t("unitsCountTooltip", { count: ctrl.units.length })}
+                >
+                  {t("unitsCount", { count: ctrl.units.length })}
+                </span>
+              )}
+            </span>
+          )}
         </td>
         <td className="px-4 py-2.5 text-slate-700">
           {ctrl.name || <span className="text-slate-300">—</span>}
@@ -678,7 +692,7 @@ function ControlInlineDetail({ controlId }: { controlId: number }) {
               </select>
             </div>
 
-            {config?.checkedAt && (
+            {d.units.length === 0 && config?.checkedAt && (
               <div className="text-xs text-slate-500 space-y-1">
                 <div>{t("checkedLabel", { time: relativeTime(new Date(config.checkedAt)) })}</div>
                 {config.batteryVoltage !== null && (
@@ -722,6 +736,57 @@ function ControlInlineDetail({ controlId }: { controlId: number }) {
           )}
         </div>
       </div>
+
+      {/* Physical units — spans full width below the 3-col grid */}
+      {!isStartFinish && (
+        <div className="mt-6">
+          <h4 className="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-3">
+            {t("physicalUnits")}
+          </h4>
+          {d.units.length === 0 ? (
+            <p className="text-sm text-slate-400">{t("noUnitsRecorded")}</p>
+          ) : (
+            <div className="bg-white rounded-lg border border-slate-200 overflow-hidden">
+              <table className="w-full text-xs">
+                <thead className="bg-slate-50 text-slate-500">
+                  <tr>
+                    <th className="px-3 py-1.5 text-left font-medium">{t("serial")}</th>
+                    <th className="px-3 py-1.5 text-left font-medium">{t("code")}</th>
+                    <th className="px-3 py-1.5 text-left font-medium">{t("battery")}</th>
+                    <th className="px-3 py-1.5 text-left font-medium">{t("checked")}</th>
+                    <th className="px-3 py-1.5 text-left font-medium">{t("firmware")}</th>
+                    <th className="px-3 py-1.5 text-left font-medium">{t("lastSeen")}</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {d.units.map((u) => (
+                    <tr key={u.stationSerial}>
+                      <td className="px-3 py-1.5 font-mono text-slate-700 tabular-nums">{u.stationSerial}</td>
+                      <td className="px-3 py-1.5 font-mono text-slate-700 tabular-nums">
+                        {u.lastProgrammedCode ?? <span className="text-slate-300">—</span>}
+                      </td>
+                      <td className="px-3 py-1.5">
+                        <BatteryIndicator voltage={u.batteryVoltage} low={u.batteryLow} />
+                      </td>
+                      <td className="px-3 py-1.5">
+                        <CheckedIndicator checkedAt={u.checkedAt} />
+                      </td>
+                      <td className="px-3 py-1.5 text-slate-500 font-mono">
+                        {u.firmwareVersion ?? <span className="text-slate-300">—</span>}
+                      </td>
+                      <td className="px-3 py-1.5 text-slate-500">
+                        {u.lastSeenAt
+                          ? relativeTime(new Date(u.lastSeenAt))
+                          : <span className="text-slate-300">—</span>}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }
@@ -906,7 +971,7 @@ function ProgrammingPanel({
   const programStation = useCallback(async (
     reader: ReturnType<typeof getReaderConnection>,
     rawData: Uint8Array,
-    stationInfo: { stationCode: number; batteryVoltage: number; serialNo: number; backupCount: number },
+    stationInfo: { stationCode: number; batteryVoltage: number; serialNo: number; backupCount: number; firmwareVersion: string },
   ) => {
     const readCode = stationInfo.stationCode;
 
@@ -992,11 +1057,15 @@ function ProgrammingPanel({
       }
     }
 
-    // Record in DB
+    // Record in DB — keyed by station serial so two physical units fulfilling
+    // the same logical control keep independent battery / checked state.
     recordMutation.mutate({
       controlId: matchedControl.id,
+      stationSerial: stationInfo.serialNo,
+      programmedCode: targetCode,
       batteryVoltage,
-      memoryClearedAt: true,
+      firmwareVersion: stationInfo.firmwareVersion,
+      memoryCleared: true,
     });
 
     lastProgrammedSerial.current = stationInfo.serialNo;
