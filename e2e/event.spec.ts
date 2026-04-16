@@ -74,15 +74,16 @@ test.describe("Event Page", () => {
 
 test.describe("Event Page — Eventor-linked competition", () => {
   test("should show Eventor sync panel for linked competition", async ({ page }) => {
-    // Ensure API key is set
+    // Ensure API key is set for itest_multirace competition
     await page.request.post("/trpc/eventor.validateKey", {
+      headers: { "x-competition-id": "itest_multirace" },
       data: { apiKey: "df34af90a0c64ca4abfe9492be057e9c" },
     });
 
     await page.goto("/");
-    const multiraceBtn = page.getByRole("button", { name: /itest_multirace/ });
-    await expect(multiraceBtn).toBeVisible({ timeout: 10000 });
-    await multiraceBtn.click();
+    const multiraceEntry = page.getByText("itest_multirace").first();
+    await expect(multiraceEntry).toBeVisible({ timeout: 10000 });
+    await multiraceEntry.click();
 
     // Navigate to Event page
     await expect(page.getByRole("link", { name: "Dashboard" })).toBeVisible({
@@ -101,6 +102,7 @@ test.describe("Event Page — Eventor-linked competition", () => {
   test("should show runner database panel when API key is configured", async ({ page }) => {
     // Ensure API key is set
     await page.request.post("/trpc/eventor.validateKey", {
+      headers: { "x-competition-id": "itest" },
       data: { apiKey: "df34af90a0c64ca4abfe9492be057e9c" },
     });
 
@@ -118,6 +120,7 @@ test.describe("Event Page — Eventor-linked competition", () => {
   test("should show club sync panel when API key is configured", async ({ page }) => {
     // Ensure API key is set
     await page.request.post("/trpc/eventor.validateKey", {
+      headers: { "x-competition-id": "itest" },
       data: { apiKey: "df34af90a0c64ca4abfe9492be057e9c" },
     });
 

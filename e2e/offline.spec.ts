@@ -33,8 +33,8 @@ async function warmStationCache(page: Page) {
     (resp) => resp.url().includes("/trpc/runner.list") && resp.status() === 200,
     { timeout: 15000 },
   );
-  // Wait for React Query to persist to IndexedDB
-  await page.waitForTimeout(2000);
+  // Give React Query time to persist to IndexedDB (~100-300ms in practice)
+  await page.waitForTimeout(500);
 }
 
 /** Get pending event count from IndexedDB */
@@ -168,7 +168,7 @@ test.describe("Offline Support", () => {
 
     // Go to dashboard
     await page.getByRole("link", { name: "Dashboard" }).click();
-    await page.waitForTimeout(500);
+    await expect(page.getByRole("link", { name: "Dashboard" })).toBeVisible();
 
     // Go offline
     await context.setOffline(true);

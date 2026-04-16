@@ -28,6 +28,7 @@ declare global {
 
 const COMPETITION_NAME = "My example tävling";
 const API_BASE = "http://localhost:3002";
+const COMP_HEADERS = { "x-competition-id": "itest" };
 
 // ─── Helpers ───────────────────────────────────────────────
 
@@ -58,7 +59,7 @@ async function getClassId(
   request: import("@playwright/test").APIRequestContext,
   className: string,
 ): Promise<number> {
-  const resp = await request.get(`${API_BASE}/trpc/class.list`);
+  const resp = await request.get(`${API_BASE}/trpc/class.list`, { headers: COMP_HEADERS });
   const body = await resp.json();
   const classes = (body?.result?.data ?? []) as Array<{ id: number; name: string }>;
   const cls = classes.find((c) => c.name === className);
@@ -74,6 +75,7 @@ async function createRunner(
   cardFee = 0,
 ): Promise<{ id: number }> {
   const resp = await request.post(`${API_BASE}/trpc/runner.create`, {
+    headers: COMP_HEADERS,
     data: { name, cardNo, classId, startTime: 0, cardFee },
   });
   const body = await resp.json();
@@ -84,7 +86,7 @@ async function createRunner(
 
 async function deleteRunner(request: import("@playwright/test").APIRequestContext, id: number) {
   try {
-    await request.post(`${API_BASE}/trpc/runner.delete`, { data: { id } });
+    await request.post(`${API_BASE}/trpc/runner.delete`, { headers: COMP_HEADERS, data: { id } });
   } catch { /* best effort */ }
 }
 
@@ -93,6 +95,7 @@ async function setCardFee(
   cardFee: number,
 ) {
   await request.post(`${API_BASE}/trpc/competition.setCardFee`, {
+    headers: COMP_HEADERS,
     data: { cardFee },
   });
 }
@@ -125,7 +128,7 @@ test.describe("Rental Cards — Competition Settings", () => {
     await page.waitForResponse(
       (resp) => resp.url().includes("/trpc/competition.setCardFee") && resp.status() === 200,
     );
-    const resp = await request.get(`${API_BASE}/trpc/competition.getCardFee`);
+    const resp = await request.get(`${API_BASE}/trpc/competition.getCardFee`, { headers: COMP_HEADERS });
     const body = await resp.json();
     const fee = body?.result?.data?.cardFee ?? body?.result?.data?.json?.cardFee;
     expect(fee).toBe(50);
@@ -186,7 +189,7 @@ test.describe("Rental Cards — Registration Dialog", () => {
     await expect(dialog).not.toBeVisible({ timeout: 5000 });
 
     // Verify CardFee stored
-    const listResp = await request.get(`${API_BASE}/trpc/runner.list`);
+    const listResp = await request.get(`${API_BASE}/trpc/runner.list`, { headers: COMP_HEADERS });
     const listBody = await listResp.json();
     const runners = (listBody?.result?.data ?? []) as Array<{ id: number; name: string; cardFee?: number }>;
     const created = runners.find((r) => r.name === "E2E_Rental Register Test");
@@ -252,6 +255,7 @@ test.describe("Rental Cards — Admin Runner List", () => {
 
   test("should undo card returned", async ({ page, request }) => {
     await request.post(`${API_BASE}/trpc/runner.setCardReturned`, {
+      headers: COMP_HEADERS,
       data: { runnerId, returned: true },
     });
 

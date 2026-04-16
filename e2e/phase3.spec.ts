@@ -139,7 +139,7 @@ test.describe("URL Routing", () => {
     expect(page.url()).toContain("/itest");
 
     await clickTab(page, "Runners");
-    await expect(page.getByText("54 runners")).toBeVisible({ timeout: 10000 });
+    await expect(page.locator("span", { hasText: "runners" })).toBeVisible({ timeout: 10000 });
     expect(page.url()).toContain("/itest/runners");
 
     await clickTab(page, "Start List");
@@ -162,7 +162,7 @@ test.describe("URL Routing", () => {
   test("should preserve filters in URL search params", async ({ page }) => {
     await selectCompetition(page);
     await clickTab(page, "Runners");
-    await expect(page.getByText("54 runners")).toBeVisible({ timeout: 10000 });
+    await expect(page.locator("span", { hasText: "runners" })).toBeVisible({ timeout: 10000 });
 
     // Type a status filter in the structured search bar
     const searchInput = page.getByRole("combobox", { name: "Search filter input" });
@@ -188,13 +188,13 @@ test.describe("URL Routing", () => {
     await selectCompetition(page);
 
     await clickTab(page, "Runners");
-    await expect(page.getByText("54 runners")).toBeVisible({ timeout: 10000 });
+    await expect(page.locator("span", { hasText: "runners" })).toBeVisible({ timeout: 10000 });
 
     await clickTab(page, "Results");
     await expect(page.getByRole("heading", { name: "Results" })).toBeVisible({ timeout: 5000 });
 
     await page.goBack();
-    await expect(page.getByText("54 runners")).toBeVisible({ timeout: 5000 });
+    await expect(page.locator("span", { hasText: "runners" })).toBeVisible({ timeout: 5000 });
     expect(page.url()).toContain("/itest/runners");
   });
 

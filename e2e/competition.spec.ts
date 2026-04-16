@@ -87,9 +87,12 @@ test.describe("Competition Dashboard", () => {
   test("should show descriptions toggle when a class is selected on map", async ({ page }) => {
     await goToDashboard(page);
 
-    // Upload a map file so the map panel renders the toolbar
+    // Wait for map panel to become interactive (upload button or loaded map)
     const uploadBtn = page.getByRole("button", { name: "Upload map" });
-    if (await uploadBtn.isVisible({ timeout: 3000 }).catch(() => false)) {
+    const allClassesText = page.getByText("All classes");
+    await expect(uploadBtn.or(allClassesText)).toBeVisible({ timeout: 10000 });
+
+    if (await uploadBtn.isVisible()) {
       const fileChooserPromise = page.waitForEvent("filechooser");
       await uploadBtn.click();
       const fileChooser = await fileChooserPromise;

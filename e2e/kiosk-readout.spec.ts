@@ -31,6 +31,8 @@ declare global {
 
 const COMPETITION_NAME = "My example tävling";
 const API_BASE = "http://localhost:3002";
+const COMPETITION_ID = "itest";
+const COMP_HEADERS = { "x-competition-id": COMPETITION_ID };
 
 // Course 2 "Bana 2" controls (Öppen 2 class) — only 5 controls, manageable
 const COURSE_2_CONTROLS = [81, 50, 40, 150, 100];
@@ -59,6 +61,7 @@ async function createRunner(
   startTime: number,
 ): Promise<{ id: number }> {
   const resp = await request.post(`${API_BASE}/trpc/runner.create`, {
+    headers: COMP_HEADERS,
     data: { name, cardNo, classId, startTime },
   });
   const body = await resp.json();
@@ -72,7 +75,7 @@ async function getClassId(
   request: import("@playwright/test").APIRequestContext,
   className: string,
 ): Promise<number> {
-  const resp = await request.get(`${API_BASE}/trpc/class.list`);
+  const resp = await request.get(`${API_BASE}/trpc/class.list`, { headers: COMP_HEADERS });
   const body = await resp.json();
   const classes = (body?.result?.data ?? []) as Array<{ id: number; name: string }>;
   const cls = classes.find((c) => c.name === className);
@@ -116,6 +119,7 @@ test.describe("Kiosk Readout Station Flow", () => {
     for (const id of createdRunnerIds) {
       try {
         await request.post(`${API_BASE}/trpc/runner.delete`, {
+          headers: COMP_HEADERS,
           data: { id },
         });
       } catch {
@@ -217,7 +221,7 @@ test.describe("Kiosk Readout Station Flow", () => {
     createdRunnerIds.push(runner.id);
 
     // Verify runner starts with Status=0 (unknown)
-    const beforeResp = await request.get(`${API_BASE}/trpc/runner.getById?input=${encodeURIComponent(JSON.stringify({ id: runner.id }))}`);
+    const beforeResp = await request.get(`${API_BASE}/trpc/runner.getById?input=${encodeURIComponent(JSON.stringify({ id: runner.id }))}`, { headers: COMP_HEADERS });
     const beforeBody = await beforeResp.json();
     const beforeStatus = beforeBody?.result?.data?.status ?? beforeBody?.result?.data?.json?.status;
     expect(beforeStatus).toBe(0);
@@ -250,7 +254,7 @@ test.describe("Kiosk Readout Station Flow", () => {
 
     // Verify runner status was persisted to DB (Status=1 = OK)
     // This ensures subsequent scans will have hasDbResult=true → action="readout" (not "pre-start")
-    const afterResp = await request.get(`${API_BASE}/trpc/runner.getById?input=${encodeURIComponent(JSON.stringify({ id: runner.id }))}`);
+    const afterResp = await request.get(`${API_BASE}/trpc/runner.getById?input=${encodeURIComponent(JSON.stringify({ id: runner.id }))}`, { headers: COMP_HEADERS });
     const afterBody = await afterResp.json();
     const afterStatus = afterBody?.result?.data?.status ?? afterBody?.result?.data?.json?.status;
     expect(afterStatus).toBe(1); // RunnerStatus.OK = 1
@@ -376,13 +380,13 @@ test.describe("Standalone mode: re-read after idle", () => {
     // getCompetitionClient's cache-clearing logic, so that the subsequent
     // competition.select("itest") call re-runs ensureCompetitionConfigTable and
     // adds the oos_card_returned column to the fresh database.
-    await request.post(`${API_BASE}/trpc/competition.select`, { data: { nameId: "itest_multirace" } });
+    await request.post(`${API_BASE}/trpc/competition.select`, { headers: COMP_HEADERS, data: { nameId: "itest_multirace" } });
   });
 
   test.afterAll(async ({ request }) => {
     for (const id of createdRunnerIds) {
       try {
-        await request.post(`${API_BASE}/trpc/runner.delete`, { data: { id } });
+        await request.post(`${API_BASE}/trpc/runner.delete`, { headers: COMP_HEADERS, data: { id } });
       } catch {
         // Best-effort cleanup
       }

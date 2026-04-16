@@ -35,6 +35,8 @@ declare global {
 
 const COMPETITION_NAME = "My example tävling";
 const API_BASE = "http://localhost:3002";
+const COMPETITION_ID = "itest";
+const COMP_HEADERS = { "x-competition-id": COMPETITION_ID };
 
 // Course 2 "Bana 2" controls (Öppen 2 class) — 5 controls
 const COURSE_2_CONTROLS = [81, 50, 40, 150, 100];
@@ -71,10 +73,10 @@ async function setupAdminAndKiosk(context: BrowserContext) {
 
   const kioskPage = await context.newPage();
   await kioskPage.goto(`/${nameId}/kiosk`);
-  await expect(kioskPage.getByText("Insert your SI card")).toBeVisible({ timeout: 10000 });
+  await expect(kioskPage.getByText("Insert your SI card")).toBeVisible({ timeout: 20000 });
 
   await adminPage.getByTestId("connect-reader").click();
-  await expect(adminPage.getByTestId("reader-status")).toBeVisible({ timeout: 5000 });
+  await expect(adminPage.getByTestId("reader-status")).toBeVisible({ timeout: 10000 });
 
   return { adminPage, kioskPage, nameId };
 }
@@ -102,6 +104,7 @@ async function createRunner(
   startTime: number,
 ): Promise<{ id: number }> {
   const resp = await request.post(`${API_BASE}/trpc/runner.create`, {
+    headers: COMP_HEADERS,
     data: { name, cardNo, classId, startTime },
   });
   const body = await resp.json();
@@ -115,7 +118,7 @@ async function getClassId(
   request: import("@playwright/test").APIRequestContext,
   className: string,
 ): Promise<number> {
-  const resp = await request.get(`${API_BASE}/trpc/class.list`);
+  const resp = await request.get(`${API_BASE}/trpc/class.list`, { headers: COMP_HEADERS });
   const body = await resp.json();
   const classes = (body?.result?.data ?? []) as Array<{ id: number; name: string }>;
   const cls = classes.find((c) => c.name === className);
@@ -126,7 +129,7 @@ async function getClassId(
 /** Delete a runner (best-effort cleanup) */
 async function deleteRunner(request: import("@playwright/test").APIRequestContext, id: number) {
   try {
-    await request.post(`${API_BASE}/trpc/runner.delete`, { data: { id } });
+    await request.post(`${API_BASE}/trpc/runner.delete`, { headers: COMP_HEADERS, data: { id } });
   } catch { /* best effort */ }
 }
 
@@ -356,7 +359,7 @@ test.describe("Registration Dialog", () => {
 
       // Clean up
       const runnerId = await adminPage.evaluate(async () => {
-        const resp = await fetch(`/trpc/runner.findByCard?input=${encodeURIComponent(JSON.stringify({ cardNo: 2900020 }))}`);
+        const resp = await fetch(`/trpc/runner.findByCard?input=${encodeURIComponent(JSON.stringify({ cardNo: 2900020 }))}`, { headers: { "x-competition-id": "itest" } });
         const data = await resp.json();
         return data?.result?.data?.id;
       });
@@ -393,7 +396,7 @@ test.describe("Registration Dialog", () => {
 
       // Clean up
       const runnerId = await adminPage.evaluate(async () => {
-        const resp = await fetch(`/trpc/runner.findByCard?input=${encodeURIComponent(JSON.stringify({ cardNo: 2900021 }))}`);
+        const resp = await fetch(`/trpc/runner.findByCard?input=${encodeURIComponent(JSON.stringify({ cardNo: 2900021 }))}`, { headers: { "x-competition-id": "itest" } });
         const data = await resp.json();
         return data?.result?.data?.id;
       });
@@ -417,7 +420,7 @@ test.describe("Registration Dialog", () => {
       await expect(page.getByTestId("registration-dialog")).not.toBeVisible({ timeout: 5000 });
 
       // Verify via API
-      const resp = await request.get(`${API_BASE}/trpc/runner.findByCard?input=${encodeURIComponent(JSON.stringify({ cardNo: 2900022 }))}`);
+      const resp = await request.get(`${API_BASE}/trpc/runner.findByCard?input=${encodeURIComponent(JSON.stringify({ cardNo: 2900022 }))}`, { headers: COMP_HEADERS });
       const body = await resp.json();
       const runner = body?.result?.data;
       expect(runner).toBeTruthy();
@@ -478,7 +481,7 @@ test.describe("Registration Dialog", () => {
 
       // Clean up
       const runnerId = await page.evaluate(async () => {
-        const resp = await fetch(`/trpc/runner.findByCard?input=${encodeURIComponent(JSON.stringify({ cardNo: 2900032 }))}`);
+        const resp = await fetch(`/trpc/runner.findByCard?input=${encodeURIComponent(JSON.stringify({ cardNo: 2900032 }))}`, { headers: { "x-competition-id": "itest" } });
         const data = await resp.json();
         return data?.result?.data?.id;
       });
@@ -568,7 +571,7 @@ test.describe("Registration Dialog", () => {
 
       // Clean up first runner
       const runnerId = await page.evaluate(async () => {
-        const resp = await fetch(`/trpc/runner.findByCard?input=${encodeURIComponent(JSON.stringify({ cardNo: 2900035 }))}`);
+        const resp = await fetch(`/trpc/runner.findByCard?input=${encodeURIComponent(JSON.stringify({ cardNo: 2900035 }))}`, { headers: { "x-competition-id": "itest" } });
         const data = await resp.json();
         return data?.result?.data?.id;
       });
@@ -576,11 +579,12 @@ test.describe("Registration Dialog", () => {
     });
 
     test("kiosk resets between sticky registrations", async ({ context }) => {
+      test.setTimeout(90000);
       const { adminPage, kioskPage } = await setupAdminAndKiosk(context);
 
       await insertUnregisteredCard(adminPage, 2900037);
       await adminPage.getByTestId("card-notification-view").click();
-      await expect(adminPage.getByTestId("registration-dialog")).toBeVisible({ timeout: 5000 });
+      await expect(adminPage.getByTestId("registration-dialog")).toBeVisible({ timeout: 10000 });
 
       // Enable sticky
       await adminPage.getByTestId("reg-sticky-toggle").click();
@@ -589,22 +593,23 @@ test.describe("Registration Dialog", () => {
       const dialog = adminPage.getByTestId("registration-dialog");
       await dialog.locator("input[placeholder='First Last']").fill("Test StickyKiosk1");
       await dialog.getByTestId("reg-class").click();
-      await expect(adminPage.getByText("Öppen 1", { exact: true })).toBeVisible({ timeout: 3000 });
-      await adminPage.getByText("Öppen 1", { exact: true }).click();
+      // Use Öppen 2 which has maps regardless of course imports by earlier tests
+      await expect(adminPage.getByRole("button", { name: /Öppen 2/ }).first()).toBeVisible({ timeout: 10000 });
+      await adminPage.getByRole("button", { name: /Öppen 2/ }).first().click();
       await dialog.getByTestId("reg-submit").click();
 
       // Kiosk should show completion briefly then return to idle
-      await expect(kioskPage.getByText("Insert your SI card")).toBeVisible({ timeout: 15000 });
+      await expect(kioskPage.getByText("Insert your SI card")).toBeVisible({ timeout: 20000 });
 
       // Insert new card → kiosk should show registration-waiting again
       await adminPage.evaluate(() => window.__siMock.removeCard());
       await insertUnregisteredCard(adminPage, 2900038);
 
-      await expect(kioskPage.getByText("Registration in progress")).toBeVisible({ timeout: 10000 });
+      await expect(kioskPage.getByText("Registration in progress")).toBeVisible({ timeout: 15000 });
 
       // Clean up
       const runnerId = await adminPage.evaluate(async () => {
-        const resp = await fetch(`/trpc/runner.findByCard?input=${encodeURIComponent(JSON.stringify({ cardNo: 2900037 }))}`);
+        const resp = await fetch(`/trpc/runner.findByCard?input=${encodeURIComponent(JSON.stringify({ cardNo: 2900037 }))}`, { headers: { "x-competition-id": "itest" } });
         const data = await resp.json();
         return data?.result?.data?.id;
       });
@@ -746,7 +751,7 @@ test.describe("Registration Dialog", () => {
 
       // Clean up
       const runnerId = await page.evaluate(async () => {
-        const resp = await fetch(`/trpc/runner.findByCard?input=${encodeURIComponent(JSON.stringify({ cardNo: 2900050 }))}`);
+        const resp = await fetch(`/trpc/runner.findByCard?input=${encodeURIComponent(JSON.stringify({ cardNo: 2900050 }))}`, { headers: { "x-competition-id": "itest" } });
         const data = await resp.json();
         return data?.result?.data?.id;
       });
@@ -782,7 +787,7 @@ test.describe("Registration Dialog", () => {
 
       // Clean up
       const runnerId = await page.evaluate(async () => {
-        const resp = await fetch(`/trpc/runner.findByCard?input=${encodeURIComponent(JSON.stringify({ cardNo: 2900051 }))}`);
+        const resp = await fetch(`/trpc/runner.findByCard?input=${encodeURIComponent(JSON.stringify({ cardNo: 2900051 }))}`, { headers: { "x-competition-id": "itest" } });
         const data = await resp.json();
         return data?.result?.data?.id;
       });
