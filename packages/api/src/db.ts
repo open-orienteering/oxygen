@@ -1109,6 +1109,24 @@ async function getCompetitionDbConnection(
   return mysql.createConnection(url);
 }
 
+/**
+ * Get a raw mysql2 connection to a specific competition database with
+ * `multipleStatements: true` enabled. Used for bulk DDL/DML dumps
+ * (e.g. seeding the showcase fixture for docs screenshots).
+ *
+ * Callers must end the returned connection.
+ */
+export async function getCompetitionMultiStatementConnection(
+  dbName: string,
+): Promise<mysql.Connection> {
+  const remote = await getRemoteConnection(dbName);
+  const url = buildDbUrl(dbName, remote);
+  return mysql.createConnection({
+    ...parseMysqlUrl(url),
+    multipleStatements: true,
+  });
+}
+
 // ─── MeOS Counter increment ────────────────────────────────
 
 /**

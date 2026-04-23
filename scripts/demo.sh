@@ -12,30 +12,23 @@ until docker compose exec mysql mysql -u root -e "SELECT 1" >/dev/null 2>&1; do
 done
 echo "  MySQL is ready."
 
-# ── 2. Create databases, user, and apply schema ──────────────────────────────
-echo "Initialising databases..."
+# ── 2. Create MeOSMain + MySQL user ──────────────────────────────────────────
+# The Demo Competition database itself is created by the loader in step 3.
+echo "Initialising MeOSMain and user..."
 docker compose exec mysql mysql -u root -e \
-  "CREATE DATABASE IF NOT EXISTS itest CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
-   CREATE DATABASE IF NOT EXISTS MeOSMain CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+  "CREATE DATABASE IF NOT EXISTS MeOSMain CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
    CREATE USER IF NOT EXISTS 'meos'@'%' IDENTIFIED BY '';
    GRANT ALL PRIVILEGES ON \`%\`.* TO 'meos'@'%';
    FLUSH PRIVILEGES;"
-echo "  Databases and user created."
+echo "  MeOSMain and user created."
 
 echo "  Applying MeOSMain schema..."
 docker compose exec -T mysql mysql -u root MeOSMain \
   < packages/api/prisma/meos-schema.sql
 
-# ── 3. Load demo competition data ────────────────────────────────────────────
-echo "Loading demo data..."
-docker compose exec -T mysql mysql -u root itest \
-  < e2e/seed-test-competition.sql
-echo "  Seed loaded."
-
-echo "  Registering competition..."
-docker compose exec mysql mysql -u root MeOSMain -e \
-  "INSERT INTO oEvent (Id, Name, Date, NameId, Annotation, Removed) VALUES (1, 'itest', '2025-01-01', 'itest', '', 0)
-   ON DUPLICATE KEY UPDATE Name=VALUES(Name);"
+# ── 3. Load Demo Competition showcase ────────────────────────────────────────
+echo "Loading Demo Competition showcase..."
+USE_DOCKER=1 DB_NAME=demo_competition bash scripts/load-showcase.sh
 
 # ── 4. Start API and web ─────────────────────────────────────────────────────
 echo "Building and starting Oxygen (this takes a minute on first run)..."

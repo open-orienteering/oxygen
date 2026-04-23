@@ -13,7 +13,8 @@
     "test:e2e": "playwright test",
     "db:generate": "pnpm --filter @oxygen/api db:generate",
     "db:push": "pnpm --filter @oxygen/api db:push",
-    "docs:screenshots": "tsx docs/screenshots/capture.ts"
+    "docs:screenshots": "tsx docs/screenshots/capture.ts",
+    "showcase:load": "bash scripts/load-showcase.sh"
   },
   "engines": {
     "node": ">=20",
