@@ -1,4 +1,7 @@
 import { z } from "zod";
+import { readFileSync, existsSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import path from "node:path";
 import { router, competitionProcedure } from "../trpc.js";
 import {
   getMainDbConnection,
@@ -6,6 +9,8 @@ import {
   ensureRunnerDbTable,
   ensureClubDbTable,
   getZeroTime,
+  getCompetitionMultiStatementConnection,
+  clearCachedClient,
 } from "../db.js";
 import { toAbsolute } from "../timeConvert.js";
 import { RunnerStatus } from "@oxygen/shared";
@@ -1258,4 +1263,54 @@ export const testLabRouter = router({
         punches,
       };
     }),
+
+  // ─── Showcase seed (for docs screenshots) ─────────────────
+
+  /**
+   * Seed the competition DB from the committed showcase fixture
+   * (docs/screenshots/fixtures/showcase.sql).
+   *
+   * The fixture is an anonymized Vinterserien dump — real controls, courses,
+   * classes, clubs, GPS tracks and pre-rendered map tiles, with runner names
+   * and personal data replaced. Used by docs/screenshots/capture.ts to render
+   * the Features page.
+   *
+   * Guarded by NODE_ENV — rejects outside dev/test so it cannot run in prod.
+   */
+  seedShowcase: competitionProcedure.mutation(async ({ ctx }) => {
+    if (process.env.NODE_ENV === "production") {
+      throw new Error("seedShowcase is disabled in production");
+    }
+
+    const fixturePath = resolveFixturePath();
+    if (!existsSync(fixturePath)) {
+      throw new Error(
+        `Showcase fixture not found at ${fixturePath}. ` +
+          "Regenerate with `tsx scripts/anonymize-vinterserien.ts`.",
+      );
+    }
+
+    const sql = readFileSync(fixturePath, "utf-8");
+
+    const conn = await getCompetitionMultiStatementConnection(ctx.dbName);
+    try {
+      await conn.query(sql);
+    } finally {
+      await conn.end();
+    }
+
+    // The dump dropped + recreated tables; evict the cached Prisma client so
+    // subsequent queries reconnect and see the fresh schema/state.
+    await clearCachedClient(ctx.dbName);
+
+    return { ok: true, fixturePath, sizeBytes: sql.length };
+  }),
 });
+
+function resolveFixturePath(): string {
+  const __filename = fileURLToPath(import.meta.url);
+  const __dirname = path.dirname(__filename);
+  // From packages/api/src/routers → repo root is 4 levels up
+  const repoRoot = path.resolve(__dirname, "../../../..");
+  return path.join(repoRoot, "docs/screenshots/fixtures/showcase.sql");
+}
