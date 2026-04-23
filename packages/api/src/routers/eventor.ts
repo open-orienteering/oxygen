@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { router, competitionProcedure } from "../trpc.js";
+import { router, competitionProcedure, publicProcedure } from "../trpc.js";
 import {createCompetitionDatabase, sanitizeDbName, ensureLogoTable, getSetting, setSetting, getMainDbConnection, ensureRunnerDbTable, ensureClubDbTable, ensureCompetitionConfigTable, getZeroTime, getCompetitionClient} from "../db.js";
 import type { PrismaClient } from "@prisma/client";
 import {
@@ -89,15 +89,19 @@ export const eventorRouter = router({
   /**
    * Validate an Eventor API key and store it for subsequent requests.
    * Persists to MeOSMain.oxygen_settings so it survives server restarts.
+   *
+   * Public: the Eventor key lives in the global MeOSMain DB and must be
+   * configurable from the competition selector (main page) before any
+   * competition is opened.
    */
-  validateKey: competitionProcedure
+  validateKey: publicProcedure
     .input(
       z.object({
         apiKey: z.string().min(1),
         env: z.enum(["prod", "test"]).default("prod"),
       }),
     )
-    .mutation(async ({ ctx, input }) => {
+    .mutation(async ({ input }) => {
       const org = await validateApiKey(input.apiKey, input.env);
       storedKeys.set(input.env, { apiKey: input.apiKey, org });
       keyLoadedFromDb.set(input.env, true);
@@ -115,10 +119,11 @@ export const eventorRouter = router({
 
   /**
    * Clear the stored Eventor API key (for testing or switching).
+   * Public: globally-scoped like validateKey.
    */
-  clearKey: competitionProcedure
+  clearKey: publicProcedure
     .input(z.object({ env: z.enum(["prod", "test"]).default("prod") }))
-    .mutation(async ({ ctx, input }) => {
+    .mutation(async ({ input }) => {
       storedKeys.set(input.env, null);
       const settingKey =
         input.env === "test" ? "eventor_api_key_test" : "eventor_api_key";
@@ -129,10 +134,11 @@ export const eventorRouter = router({
   /**
    * Get the currently stored key status (without exposing the key).
    * Restores from persistent storage on first call after server start.
+   * Public: globally-scoped like validateKey.
    */
-  keyStatus: competitionProcedure
+  keyStatus: publicProcedure
     .input(z.object({ env: z.enum(["prod", "test"]).default("prod") }))
-    .query(async ({ ctx, input }) => {
+    .query(async ({ input }) => {
       await ensureKeyLoaded(input.env);
       const stored = storedKeys.get(input.env);
       if (!stored) {
@@ -147,8 +153,9 @@ export const eventorRouter = router({
 
   /**
    * Fetch events from Eventor for the configured organisation.
+   * Public: used from the competition selector before any competition exists.
    */
-  events: competitionProcedure
+  events: publicProcedure
     .input(
       z.object({
         fromDate: z.string().optional(),
@@ -156,7 +163,7 @@ export const eventorRouter = router({
         env: z.enum(["prod", "test"]).default("prod"),
       }).optional(),
     )
-    .query(async ({ ctx, input }) => {
+    .query(async ({ input }) => {
       const { apiKey, org } = await requireApiKey(input?.env);
 
       // Default: from 6 months ago to 6 months ahead
@@ -182,13 +189,14 @@ export const eventorRouter = router({
 
   /**
    * Get detail for a specific event: classes and entry count.
+   * Public: used from the competition selector before any competition exists.
    */
-  eventDetail: competitionProcedure
+  eventDetail: publicProcedure
     .input(z.object({
       eventId: z.number().int().positive(),
       env: z.enum(["prod", "test"]).default("prod"),
     }))
-    .query(async ({ ctx, input }) => {
+    .query(async ({ input }) => {
       const { apiKey } = await requireApiKey(input.env);
 
       const [classes, entries] = await Promise.all([
@@ -214,8 +222,11 @@ export const eventorRouter = router({
   /**
    * Import an event from Eventor into a new local database.
    * Creates the DB, imports classes, clubs, and entries.
+   *
+   * Public: invoked from the competition selector (main page) before any
+   * competition has been opened, so it must not require x-competition-id.
    */
-  importEvent: competitionProcedure
+  importEvent: publicProcedure
     .input(
       z.object({
         eventId: z.number().int().positive(),
@@ -226,7 +237,7 @@ export const eventorRouter = router({
         env: z.enum(["prod", "test"]).default("prod"),
       }),
     )
-    .mutation(async ({ ctx, input }) => {
+    .mutation(async ({ input }) => {
       const { apiKey } = await requireApiKey(input.env);
 
       // 1. Create the database
@@ -427,7 +438,7 @@ export const eventorRouter = router({
           fetchClubLogo(input.organiserId, apiKey, "LargeIcon"),
         ]);
         if (small) {
-          await ensureLogoTable(client, ctx.dbName);
+          await ensureLogoTable(client, dbName);
           await client.oxygen_club_logo.upsert({
             where: { EventorId: input.organiserId },
             create: { EventorId: input.organiserId, SmallPng: small as any, ...(large ? { LargePng: large as any } : {}) },
@@ -459,7 +470,7 @@ export const eventorRouter = router({
         if (input.organiserId) {
           const orgClub = fullClubs.find(c => c.id === input.organiserId);
           if (orgClub?.webUrl) {
-            await ensureCompetitionConfigTable(client, ctx.dbName);
+            await ensureCompetitionConfigTable(client, dbName);
             await client.$executeRawUnsafe(
               "UPDATE oxygen_competition_config SET web_url = ? WHERE id = 1",
               orgClub.webUrl,
