@@ -376,11 +376,13 @@ export function ControlsPage() {
         )}
       </div>
 
-      {/* Map */}
+      {/* Map — selection drives the filter when non-empty, otherwise the
+          expanded row is highlighted as before. */}
       <MapPanel
         className="mt-6"
         fitToControls
-        highlightControlId={expandedId ?? undefined}
+        highlightControlId={selectedIds.size === 0 ? (expandedId ?? undefined) : undefined}
+        highlightControlIds={selectedIds.size > 0 ? Array.from(selectedIds) : undefined}
       />
     </>
   );

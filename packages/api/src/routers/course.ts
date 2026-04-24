@@ -289,6 +289,56 @@ export const courseRouter = router({
     }),
 
   /**
+   * Update the same subset of fields on many courses at once.
+   *
+   * Used by the bulk-edit bar on the Courses page — e.g. setting
+   * `numberOfMaps` for many courses in a single click. Only the fields
+   * actually present on the input are touched; everything else is left
+   * alone. Each changed course gets its MeOS counter bumped so MeOS
+   * picks up the update on its next sync.
+   */
+  bulkUpdate: competitionProcedure
+    .input(
+      z.object({
+        ids: z.array(z.number().int()).min(1),
+        numberOfMaps: z.number().int().min(0).optional(),
+        firstAsStart: z.boolean().optional(),
+        lastAsFinish: z.boolean().optional(),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      const client = ctx.db;
+
+      const data: Record<string, unknown> = {};
+      if (input.numberOfMaps !== undefined) data.NumberMaps = input.numberOfMaps;
+      if (input.firstAsStart !== undefined)
+        data.FirstAsStart = input.firstAsStart ? 1 : 0;
+      if (input.lastAsFinish !== undefined)
+        data.LastAsFinish = input.lastAsFinish ? 1 : 0;
+
+      if (Object.keys(data).length === 0) {
+        return { updated: 0 };
+      }
+
+      // Only update courses that actually exist and aren't already soft-deleted
+      const existing = await client.oCourse.findMany({
+        where: { Id: { in: input.ids }, Removed: false },
+        select: { Id: true },
+      });
+
+      await client.oCourse.updateMany({
+        where: { Id: { in: existing.map((c) => c.Id) } },
+        data,
+      });
+
+      for (const c of existing) {
+        await incrementCounter("oCourse", c.Id, ctx.dbName);
+      }
+
+      return { updated: existing.length };
+    }),
+
+  /**
    * Soft-delete a course.
    */
   delete: competitionProcedure

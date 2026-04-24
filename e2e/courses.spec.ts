@@ -81,6 +81,49 @@ test.describe("Courses Page", () => {
     await expect(page.getByText("3 courses")).toBeVisible({ timeout: 5000 });
   });
 
+  test("should bulk-update maps across many selected courses", async ({ page }) => {
+    await selectCompetition(page);
+    await clickTab(page, "Courses");
+    await expect(page.getByText("3 courses")).toBeVisible({ timeout: 10000 });
+
+    // Select two rows by their row checkboxes. The checkboxes themselves are
+    // unlabeled (by design — see controls.spec.ts for the same pattern), so
+    // we find them via the row they live in.
+    const bana1Row = page.getByRole("row").filter({ hasText: "Bana 1" });
+    const bana2Row = page.getByRole("row").filter({ hasText: "Bana 2" });
+    const bana3Row = page.getByRole("row").filter({ hasText: "Bana 3" });
+    await bana1Row.getByRole("checkbox").check();
+    await bana2Row.getByRole("checkbox").check();
+
+    // Bulk bar appears with the right count
+    const bar = page.getByTestId("bulk-action-bar");
+    await expect(bar).toBeVisible();
+    await expect(bar).toContainText("2 selected");
+
+    // Type a new map count and commit with Enter
+    const mapsInput = page.getByTestId("bulk-set-maps-input");
+    await mapsInput.fill("7");
+    await mapsInput.press("Enter");
+
+    // The two edited rows reflect the new value; the untouched row does not
+    await expect(bana1Row.getByRole("cell", { name: "7", exact: true })).toBeVisible({ timeout: 5000 });
+    await expect(bana2Row.getByRole("cell", { name: "7", exact: true })).toBeVisible({ timeout: 5000 });
+    await expect(bana3Row.getByRole("cell", { name: "7", exact: true })).not.toBeVisible();
+
+    // Clear selection dismisses the bulk bar
+    await page.getByRole("button", { name: "Clear selection" }).click();
+    await expect(bar).not.toBeVisible();
+
+    // Revert to 1 map so later tests / screenshots aren't polluted by this run
+    await bana1Row.getByRole("checkbox").check();
+    await bana2Row.getByRole("checkbox").check();
+    const resetInput = page.getByTestId("bulk-set-maps-input");
+    await resetInput.fill("1");
+    await resetInput.press("Enter");
+    await expect(bana1Row.getByRole("cell", { name: "1", exact: true })).toBeVisible({ timeout: 5000 });
+    await page.getByRole("button", { name: "Clear selection" }).click();
+  });
+
   test("should import courses from OCAD OCD file", async ({ page }) => {
     await selectCompetition(page);
     await clickTab(page, "Courses");
