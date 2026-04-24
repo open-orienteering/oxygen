@@ -66,15 +66,15 @@ test.describe("Controls Page", () => {
     await radio1Row.getByRole("checkbox").check();
     await radio2Row.getByRole("checkbox").check();
 
-    // Bulk bar appears with the right count + the existing radio/AIR+ dropdowns
-    await expect(page.getByText("2 selected")).toBeVisible();
-    await expect(page.getByRole("combobox", { name: /Set Radio Type/i }).or(
-      page.locator("select").filter({ hasText: "Set Radio Type" }),
-    )).toBeVisible();
+    // Floating bulk bar appears with the right count + the existing
+    // radio/AIR+ dropdowns
+    await expect(page.getByText("selected").first()).toBeVisible();
+    await expect(page.getByText("2", { exact: true }).first()).toBeVisible();
+    await expect(page.locator("option", { hasText: "Set Radio Type..." })).toBeAttached();
 
-    // Clear selection dismisses the bar
-    await page.getByRole("button", { name: "Clear selection" }).click();
-    await expect(page.getByText("2 selected")).not.toBeVisible();
+    // "Deselect all" button in the floating bar dismisses it
+    await page.getByRole("button", { name: "Deselect all" }).click();
+    await expect(page.getByRole("button", { name: "Deselect all" })).not.toBeVisible();
   });
 
   test("should create and then delete a control", async ({ page }) => {

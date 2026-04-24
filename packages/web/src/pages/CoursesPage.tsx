@@ -1,9 +1,11 @@
-import { useState, useMemo, useCallback } from "react";
+import { useState, useMemo } from "react";
 import { useTranslation } from "react-i18next";
 import { trpc } from "../lib/trpc";
 import { useSearchParam, useNumericSearchParam } from "../hooks/useSearchParam";
 import { SortHeader } from "../components/SortHeader";
 import { useSort } from "../hooks/useSort";
+import { useTableSelection } from "../hooks/useTableSelection";
+import { BulkActionBar } from "../components/BulkActionBar";
 import { CourseImportDialog } from "../components/CourseImportDialog";
 import { MapPanel } from "../components/MapPanel";
 
@@ -13,7 +15,6 @@ export function CoursesPage() {
   const [expandedId, setExpandedId] = useNumericSearchParam("course");
   const [showCreateForm, setShowCreateForm] = useState(false);
   const [showImportDialog, setShowImportDialog] = useState(false);
-  const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
 
   const utils = trpc.useUtils();
 
@@ -28,12 +29,8 @@ export function CoursesPage() {
     },
   });
 
-  const bulkUpdateMutation = trpc.course.bulkUpdate.useMutation({
-    onSuccess: () => {
-      utils.course.list.invalidate();
-      utils.course.detail.invalidate();
-    },
-  });
+  const [bulkField, setBulkField] = useState<"numberOfMaps" | "firstAsStart" | "lastAsFinish">("numberOfMaps");
+  const [bulkValue, setBulkValue] = useState<string>("");
 
   const handleDelete = (id: number, name: string) => {
     if (window.confirm(t("removeConfirm", { name }))) {
@@ -45,16 +42,6 @@ export function CoursesPage() {
     setExpandedId(expandedId === id ? undefined : id);
   };
 
-  const toggleSelect = useCallback((id: number, e: React.MouseEvent) => {
-    e.stopPropagation();
-    setSelectedIds((prev) => {
-      const next = new Set(prev);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
-      return next;
-    });
-  }, []);
-
   type Course = NonNullable<typeof courses.data>[number];
   const comparators = useMemo(() => ({
     name: (a: Course, b: Course) => a.name.localeCompare(b.name),
@@ -65,23 +52,48 @@ export function CoursesPage() {
 
   const { sorted: items, sort, toggle } = useSort(courses.data ?? [], { key: "name", dir: "asc" }, comparators);
 
-  const toggleSelectAll = useCallback(() => {
-    const allIds = items.map((c) => c.id);
-    setSelectedIds((prev) => (prev.size === allIds.length ? new Set() : new Set(allIds)));
-  }, [items]);
+  const selection = useTableSelection(items);
+
+  const bulkUpdateMutation = trpc.course.bulkUpdate.useMutation({
+    onSuccess: () => {
+      utils.course.list.invalidate();
+      utils.course.detail.invalidate();
+      selection.clearSelection();
+      setBulkValue("");
+    },
+  });
 
   // Names of selected courses — drive the map filter when selection is non-empty
   const selectedCourseNames = useMemo(
-    () => items.filter((c) => selectedIds.has(c.id)).map((c) => c.name),
-    [items, selectedIds],
+    () => items.filter((c) => selection.isSelected(c.id)).map((c) => c.name),
+    [items, selection],
   );
 
-  const handleBulkSetMaps = (value: number) => {
-    if (selectedIds.size === 0 || Number.isNaN(value) || value < 0) return;
-    bulkUpdateMutation.mutate({
-      ids: Array.from(selectedIds),
-      numberOfMaps: value,
-    });
+  const handleApplyBulk = () => {
+    if (bulkValue === "" || selection.count === 0) return;
+    const fieldLabel =
+      bulkField === "numberOfMaps" ? t("maps").toLowerCase() :
+      bulkField === "firstAsStart" ? t("firstAsStartShort").toLowerCase() :
+      t("lastAsFinishShort").toLowerCase();
+    const valueLabel = bulkField === "numberOfMaps"
+      ? bulkValue
+      : bulkValue === "1" ? t("yes") : t("no");
+
+    if (!window.confirm(t("bulkConfirm", { field: fieldLabel, value: valueLabel, count: selection.count }))) return;
+
+    const payload: { ids: number[]; numberOfMaps?: number; firstAsStart?: boolean; lastAsFinish?: boolean } = {
+      ids: Array.from(selection.selected),
+    };
+    if (bulkField === "numberOfMaps") {
+      const v = parseInt(bulkValue, 10);
+      if (Number.isNaN(v) || v < 0) return;
+      payload.numberOfMaps = v;
+    } else if (bulkField === "firstAsStart") {
+      payload.firstAsStart = bulkValue === "1";
+    } else {
+      payload.lastAsFinish = bulkValue === "1";
+    }
+    bulkUpdateMutation.mutate(payload);
   };
 
   return (
@@ -147,52 +159,6 @@ export function CoursesPage() {
         />
       )}
 
-      {/* Bulk action bar */}
-      {selectedIds.size > 0 && (
-        <div className="bg-blue-50 border border-blue-200 rounded-xl p-3 mb-4 flex items-center gap-3 flex-wrap" data-testid="bulk-action-bar">
-          <span className="text-sm font-medium text-blue-800">
-            {t("selectedCount", { count: selectedIds.size })}
-          </span>
-          <div className="flex items-center gap-2">
-            <label className="text-sm text-slate-600" htmlFor="bulk-set-maps-input">
-              {t("setMaps")}
-            </label>
-            <input
-              id="bulk-set-maps-input"
-              type="number"
-              min={0}
-              defaultValue=""
-              disabled={bulkUpdateMutation.isPending}
-              onKeyDown={(e) => {
-                if (e.key === "Enter") {
-                  const v = parseInt((e.target as HTMLInputElement).value, 10);
-                  if (!isNaN(v)) {
-                    handleBulkSetMaps(v);
-                    (e.target as HTMLInputElement).value = "";
-                  }
-                }
-              }}
-              onBlur={(e) => {
-                const v = parseInt(e.target.value, 10);
-                if (!isNaN(v)) {
-                  handleBulkSetMaps(v);
-                  e.target.value = "";
-                }
-              }}
-              placeholder={t("mapsPerRunner")}
-              className="w-24 px-2 py-1 text-sm border border-blue-200 rounded-lg bg-white tabular-nums focus:outline-none focus:ring-2 focus:ring-blue-500"
-              data-testid="bulk-set-maps-input"
-            />
-          </div>
-          <button
-            onClick={() => setSelectedIds(new Set())}
-            className="text-sm text-blue-600 hover:text-blue-800 cursor-pointer ml-auto"
-          >
-            {t("clearSelection")}
-          </button>
-        </div>
-      )}
-
       {/* Courses table */}
       <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
         {courses.isLoading && (
@@ -213,12 +179,12 @@ export function CoursesPage() {
                   <th className="px-3 py-2.5 w-10">
                     <input
                       type="checkbox"
-                      checked={items.length > 0 && selectedIds.size === items.length}
+                      checked={selection.allSelected}
                       ref={(el) => {
-                        if (el) el.indeterminate = selectedIds.size > 0 && selectedIds.size < items.length;
+                        if (el) el.indeterminate = selection.someSelected && !selection.allSelected;
                       }}
-                      onChange={toggleSelectAll}
-                      className="rounded border-slate-300 cursor-pointer"
+                      onChange={selection.toggleAll}
+                      className="rounded border-slate-300 text-blue-600 focus:ring-blue-500 cursor-pointer"
                     />
                   </th>
                   <SortHeader label={t("name")} active={sort.key === "name"} direction={sort.dir} onClick={() => toggle("name")} />
@@ -241,10 +207,9 @@ export function CoursesPage() {
                       <td className="px-3 py-2.5" onClick={(e) => e.stopPropagation()}>
                         <input
                           type="checkbox"
-                          checked={selectedIds.has(c.id)}
-                          onClick={(e) => toggleSelect(c.id, e)}
-                          onChange={() => {}}
-                          className="rounded border-slate-300 cursor-pointer"
+                          checked={selection.isSelected(c.id)}
+                          onChange={() => selection.toggle(c.id)}
+                          className="rounded border-slate-300 text-blue-600 focus:ring-blue-500 cursor-pointer"
                         />
                       </td>
                       <td className="px-4 py-2.5 font-medium text-slate-700">
@@ -318,6 +283,49 @@ export function CoursesPage() {
         }
         highlightCourseNames={selectedCourseNames.length > 0 ? selectedCourseNames : undefined}
       />
+
+      {/* Bulk action bar — floating at bottom, same as Classes/Runners */}
+      <BulkActionBar count={selection.count} onDeselectAll={selection.clearSelection}>
+        <select
+          value={bulkField}
+          onChange={(e) => { setBulkField(e.target.value as typeof bulkField); setBulkValue(""); }}
+          className="px-3 py-1.5 border border-slate-200 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 cursor-pointer"
+          data-testid="bulk-field-select"
+        >
+          <option value="numberOfMaps">{t("maps")}</option>
+          <option value="firstAsStart">{t("firstAsStartShort")}</option>
+          <option value="lastAsFinish">{t("lastAsFinishShort")}</option>
+        </select>
+        {bulkField === "numberOfMaps" ? (
+          <input
+            type="number"
+            min={0}
+            value={bulkValue}
+            onChange={(e) => setBulkValue(e.target.value)}
+            placeholder="0"
+            className="w-24 px-3 py-1.5 border border-slate-200 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 tabular-nums"
+            data-testid="bulk-value-input"
+          />
+        ) : (
+          <select
+            value={bulkValue}
+            onChange={(e) => setBulkValue(e.target.value)}
+            className="px-3 py-1.5 border border-slate-200 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 cursor-pointer"
+            data-testid="bulk-value-input"
+          >
+            <option value="">—</option>
+            <option value="1">{t("yes")}</option>
+            <option value="0">{t("no")}</option>
+          </select>
+        )}
+        <button
+          onClick={handleApplyBulk}
+          disabled={bulkValue === "" || bulkUpdateMutation.isPending}
+          className="px-4 py-1.5 bg-blue-600 text-white text-sm font-medium rounded-lg hover:bg-blue-700 disabled:opacity-50 transition-colors cursor-pointer"
+        >
+          {bulkUpdateMutation.isPending ? t("applying") : t("apply")}
+        </button>
+      </BulkActionBar>
     </>
   );
 }

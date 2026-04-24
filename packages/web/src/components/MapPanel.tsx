@@ -103,11 +103,45 @@ export function MapPanel({
     { staleTime: 10_000, refetchInterval: showCompletion ? 15_000 : false, enabled: showCompletion },
   );
 
-  const bestGeometryCourse = effectiveCourseNames.values().next().value;
-  const courseGeometry = trpc.course.courseGeometry.useQuery(
-    { courseName: bestGeometryCourse || "" },
-    { staleTime: 60_000, enabled: !!bestGeometryCourse }
+  // Fetch geometry for every highlighted course so the map can draw all of
+  // their routes at once (user-selecting three courses → three overlays,
+  // not just the first). Returns a map keyed by course name.
+  const highlightedCourseNamesList = useMemo(
+    () => Array.from(effectiveCourseNames),
+    [effectiveCourseNames],
   );
+  const courseGeometriesQuery = trpc.course.courseGeometries.useQuery(
+    { courseNames: highlightedCourseNamesList },
+    { staleTime: 60_000, enabled: highlightedCourseNamesList.length > 0 },
+  );
+  // Merge per-course FeatureCollections into a single FeatureCollection so
+  // the downstream MapViewer can keep its existing single-input contract.
+  // Geometry features duplicated across courses (e.g. shared legs) are
+  // fine — they just draw over each other at identical coordinates.
+  const courseGeometry = useMemo(() => {
+    const byName = courseGeometriesQuery.data;
+    if (!byName) return undefined;
+    const names = Object.keys(byName);
+    if (names.length === 0) return null;
+    const combinedFeatures: unknown[] = [];
+    for (const name of names) {
+      const fc = byName[name];
+      if (fc?.features) combinedFeatures.push(...fc.features);
+    }
+    return { type: "FeatureCollection", features: combinedFeatures };
+  }, [courseGeometriesQuery.data]);
+  // Track which course names we actually have geometry for, so the
+  // fallback leg renderer below knows which courses still need lines
+  // drawn from raw control coordinates.
+  const coursesWithGeometry = useMemo(() => {
+    const set = new Set<string>();
+    const byName = courseGeometriesQuery.data;
+    if (!byName) return set;
+    for (const [name, fc] of Object.entries(byName)) {
+      if (fc?.features && fc.features.length > 0) set.add(name);
+    }
+    return set;
+  }, [courseGeometriesQuery.data]);
 
   const [isFullscreen, setIsFullscreen] = useState(false);
   const fullscreenRef = useRef<HTMLDivElement>(null);
@@ -398,7 +432,7 @@ export function MapPanel({
                 {showOnlyRelevant ? t("showAllControls") : t("hideOtherControls")}
               </button>
             )}
-            {bestGeometryCourse && (
+            {highlightedCourseNamesList.length > 0 && (
               <button
                 onClick={() => setShowDescriptions((v) => !v)}
                 className={`text-xs px-2 py-1 rounded-md transition-colors cursor-pointer ${showDescriptions
@@ -443,7 +477,8 @@ export function MapPanel({
         mapVersion={mapMetadata.data?.uploadedAt}
         controls={controlOverlays}
         courses={courseOverlays}
-        courseGeometry={courseGeometry.data}
+        courseGeometry={courseGeometry}
+        coursesWithGeometry={coursesWithGeometry}
         highlightControlId={highlightControlId ? String(highlightControlId) : undefined}
         highlightCourseName={highlightCourseName}
         onControlClick={handleControlClick}

@@ -73,8 +73,9 @@
   "controlsCreatedUpdated": "{{created}} controls created, {{updated}} updated",
   "classAssignmentsMade": "{{count}} class assignments made",
   "done": "Done",
-  "selectedCount": "{{count}} selected",
-  "clearSelection": "Clear selection",
-  "setMaps": "Set maps to",
-  "mapsPerRunner": "e.g. 1"
+  "apply": "Apply",
+  "applying": "Applying...",
+  "yes": "Yes",
+  "no": "No",
+  "bulkConfirm": "Set {{field}} to \"{{value}}\" for {{count}} courses?"
 }

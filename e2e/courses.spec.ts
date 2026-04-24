@@ -95,33 +95,29 @@ test.describe("Courses Page", () => {
     await bana1Row.getByRole("checkbox").check();
     await bana2Row.getByRole("checkbox").check();
 
-    // Bulk bar appears with the right count
-    const bar = page.getByTestId("bulk-action-bar");
-    await expect(bar).toBeVisible();
-    await expect(bar).toContainText("2 selected");
+    // Floating bulk bar appears with the right count ("2 selected")
+    await expect(page.getByText("selected").first()).toBeVisible();
+    await expect(page.getByText("2", { exact: true })).toBeVisible();
 
-    // Type a new map count and commit with Enter
-    const mapsInput = page.getByTestId("bulk-set-maps-input");
-    await mapsInput.fill("7");
-    await mapsInput.press("Enter");
+    // Field is already "Maps" by default — type a new value and apply
+    page.on("dialog", (d) => d.accept()); // confirm() popup
+    await page.getByTestId("bulk-value-input").fill("7");
+    await page.getByRole("button", { name: "Apply" }).click();
 
     // The two edited rows reflect the new value; the untouched row does not
     await expect(bana1Row.getByRole("cell", { name: "7", exact: true })).toBeVisible({ timeout: 5000 });
     await expect(bana2Row.getByRole("cell", { name: "7", exact: true })).toBeVisible({ timeout: 5000 });
     await expect(bana3Row.getByRole("cell", { name: "7", exact: true })).not.toBeVisible();
 
-    // Clear selection dismisses the bulk bar
-    await page.getByRole("button", { name: "Clear selection" }).click();
-    await expect(bar).not.toBeVisible();
+    // Applying clears the selection, which hides the bar again
+    await expect(page.getByRole("button", { name: "Apply" })).not.toBeVisible();
 
     // Revert to 1 map so later tests / screenshots aren't polluted by this run
     await bana1Row.getByRole("checkbox").check();
     await bana2Row.getByRole("checkbox").check();
-    const resetInput = page.getByTestId("bulk-set-maps-input");
-    await resetInput.fill("1");
-    await resetInput.press("Enter");
+    await page.getByTestId("bulk-value-input").fill("1");
+    await page.getByRole("button", { name: "Apply" }).click();
     await expect(bana1Row.getByRole("cell", { name: "1", exact: true })).toBeVisible({ timeout: 5000 });
-    await page.getByRole("button", { name: "Clear selection" }).click();
   });
 
   test("should import courses from OCAD OCD file", async ({ page }) => {
