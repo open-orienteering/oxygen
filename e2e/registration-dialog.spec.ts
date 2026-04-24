@@ -759,15 +759,16 @@ test.describe("Registration Dialog", () => {
     });
 
     test("works from Results page", async ({ page }) => {
-      await page.addInitScript(getMockWebSerialScript());
-      await selectCompetition(page);
-      const nameId = getNameId(page);
-      // Navigate via tab click to stay in SPA (no page reload)
+      // Connect the reader on the lightweight Dashboard page first —
+      // the Results page is heavy (hundreds of runner rows accumulated
+      // across preceding tests in this spec) and running connect-reader
+      // there races with its data fetches, causing the subsequent card
+      // read to time out. Once the reader is established, SPA-navigate
+      // to Results and insert the card.
+      await setupAdmin(page);
+
       await page.getByRole("link", { name: "Results" }).click();
-      await expect(page.url()).toContain("/results");
-      // Connect reader
-      await page.getByTestId("connect-reader").click();
-      await expect(page.getByTestId("reader-status")).toBeVisible({ timeout: 5000 });
+      await expect(page).toHaveURL(/\/results/);
 
       await insertUnregisteredCard(page, 2900051);
       await page.getByTestId("card-notification-view").click();
