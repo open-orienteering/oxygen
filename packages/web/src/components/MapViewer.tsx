@@ -61,6 +61,14 @@ interface Props {
   initialFitControls?: boolean;
   focusControlIds?: string[] | null;
   courseGeometry?: any; // the GeoJSON from the API
+  /**
+   * Names of highlighted courses for which high-fidelity geometry is already
+   * included in `courseGeometry` (i.e. imported as OCD/XML). Any highlighted
+   * course NOT in this set gets fallback straight-line legs between its
+   * controls so the user still sees a route for it. When omitted, falls back
+   * to the legacy "draw legs only when no geometry at all" behaviour.
+   */
+  coursesWithGeometry?: Set<string>;
   showDescriptions?: boolean;
   onToggleFullscreen?: () => void;
   isFullscreen?: boolean;
@@ -156,6 +164,7 @@ export function MapViewer({
   initialFitControls = false,
   focusControlIds = null,
   courseGeometry,
+  coursesWithGeometry,
   showDescriptions = false,
   onToggleFullscreen,
   isFullscreen = false,
@@ -753,32 +762,50 @@ export function MapViewer({
       }
     }
 
-    // ─── Fallback legs (if no course geometry) ───────────
+    // ─── Fallback legs for every highlighted course ───────
+    //
+    // Draw straight-line legs (clipped around control circles) for every
+    // highlighted course that isn't already covered by `courseGeometry`.
+    // When `coursesWithGeometry` is provided, it lists the courses whose
+    // routes are already drawn from precise OCD/XML geometry — those we
+    // skip. Anything else highlighted (selection without imported routes,
+    // or selection alongside geometry-only courses) gets legs here so
+    // the user always sees *every* selected course connected.
+    //
+    // Back-compat: when neither `coursesWithGeometry` nor `courseGeometry`
+    // is provided, fall back to the legacy behaviour of drawing just one
+    // highlighted course.
+    const highlightedCourses = courses.filter(
+      (c) => c.highlight || c.name === highlightCourseName,
+    );
+    let coursesToDraw: typeof courses;
+    if (coursesWithGeometry) {
+      coursesToDraw = highlightedCourses.filter((c) => !coursesWithGeometry.has(c.name));
+    } else if (!courseGeometry) {
+      coursesToDraw = highlightedCourses.slice(0, 1);
+    } else {
+      coursesToDraw = [];
+    }
 
-    if (!courseGeometry) {
-      const highlightedCourse = courses.find((c) => c.highlight || c.name === highlightCourseName);
-      const coursesToDraw = highlightedCourse ? [highlightedCourse] : [];
+    for (const course of coursesToDraw) {
+      const obstacles: Pt[] = [];
+      for (const cid of course.controls) {
+        const p = ctrlPixels.get(cid);
+        if (p) obstacles.push(p);
+      }
 
-      for (const course of coursesToDraw) {
-        const obstacles: Pt[] = [];
-        for (const cid of course.controls) {
-          const p = ctrlPixels.get(cid);
-          if (p) obstacles.push(p);
-        }
-
-        for (let i = 0; i < course.controls.length - 1; i++) {
-          const fromPt = ctrlPixels.get(course.controls[i]);
-          const toPt = ctrlPixels.get(course.controls[i + 1]);
-          if (!fromPt || !toPt) continue;
-          const segs = clipLine(fromPt, toPt, obstacles, radius * 1.2);
-          for (let segi = 0; segi < segs.length; segi++) {
-            const seg = segs[segi];
-            elements.push(
-              <line key={`fleg-${course.name}-${i}-${segi}`}
-                x1={seg.x1} y1={seg.y1} x2={seg.x2} y2={seg.y2}
-                stroke="#c026d3" strokeWidth={legStroke} opacity={0.85} />
-            );
-          }
+      for (let i = 0; i < course.controls.length - 1; i++) {
+        const fromPt = ctrlPixels.get(course.controls[i]);
+        const toPt = ctrlPixels.get(course.controls[i + 1]);
+        if (!fromPt || !toPt) continue;
+        const segs = clipLine(fromPt, toPt, obstacles, radius * 1.2);
+        for (let segi = 0; segi < segs.length; segi++) {
+          const seg = segs[segi];
+          elements.push(
+            <line key={`fleg-${course.name}-${i}-${segi}`}
+              x1={seg.x1} y1={seg.y1} x2={seg.x2} y2={seg.y2}
+              stroke="#c026d3" strokeWidth={legStroke} opacity={0.85} />
+          );
         }
       }
     }
@@ -1030,7 +1057,7 @@ export function MapViewer({
     return elements;
 
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [viewport, containerSize, renderW, renderH, controls, courses, courseGeometry, highlightControlId, highlightCourseName,
+  }, [viewport, containerSize, renderW, renderH, controls, courses, courseGeometry, coursesWithGeometry, highlightControlId, highlightCourseName,
       symbolScale, affine, measuring, measurePoints, measureCursor, showDescriptions, hideControls, onControlClick,
       mapMmToScreen, rotDeg, gpsRoutes]);
 

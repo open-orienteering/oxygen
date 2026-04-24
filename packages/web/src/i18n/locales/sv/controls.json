@@ -59,8 +59,6 @@
   "awake": "Vaken",
   "programControls": "Programmera kontroller",
   "readControls": "Läs kontroller",
-  "selectedCount": "{{count}} valda",
-  "clearSelection": "Rensa urval",
   "allStatuses": "Alla statusar",
   "removeConfirm": "Ta bort kontroll {{id}}?",
   "removeControl": "Ta bort kontroll",

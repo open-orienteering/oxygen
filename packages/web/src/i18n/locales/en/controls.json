@@ -59,8 +59,6 @@
   "awake": "Awake",
   "programControls": "Program Controls",
   "readControls": "Read Controls",
-  "selectedCount": "{{count}} selected",
-  "clearSelection": "Clear selection",
   "allStatuses": "All statuses",
   "removeConfirm": "Remove control {{id}}?",
   "removeControl": "Remove control",

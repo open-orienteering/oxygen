@@ -14,6 +14,7 @@ import { useSearchParam, useNumericSearchParam } from "../hooks/useSearchParam";
 import { SortHeader } from "../components/SortHeader";
 import { useSort } from "../hooks/useSort";
 import { MapPanel } from "../components/MapPanel";
+import { BulkActionBar } from "../components/BulkActionBar";
 import { useDeviceManager } from "../context/DeviceManager";
 import { STATION_MODE, type StationInfo } from "../lib/si-protocol";
 
@@ -266,49 +267,6 @@ export function ControlsPage() {
         />
       )}
 
-      {/* Bulk action bar */}
-      {selectedIds.size > 0 && (
-        <div className="bg-blue-50 border border-blue-200 rounded-xl p-3 mb-4 flex items-center gap-3 flex-wrap">
-          <span className="text-sm font-medium text-blue-800">
-            {t("selectedCount", { count: selectedIds.size })}
-          </span>
-          <div className="flex items-center gap-2">
-            <select
-              defaultValue=""
-              onChange={(e) => {
-                if (e.target.value) handleBulkRadioType(e.target.value as RadioType);
-                e.target.value = "";
-              }}
-              className="px-2 py-1 text-sm border border-blue-200 rounded-lg bg-white cursor-pointer"
-            >
-              <option value="" disabled>{t("setRadioType")}</option>
-              <option value="normal">{t("normal")}</option>
-              <option value="internal_radio">{t("internalRadio")}</option>
-              <option value="public_radio">{t("publicRadio")}</option>
-            </select>
-            <select
-              defaultValue=""
-              onChange={(e) => {
-                if (e.target.value) handleBulkAirPlus(e.target.value as AirPlusOverride);
-                e.target.value = "";
-              }}
-              className="px-2 py-1 text-sm border border-blue-200 rounded-lg bg-white cursor-pointer"
-            >
-              <option value="" disabled>{t("setAirPlus")}</option>
-              <option value="default">{t("airPlusDefault")}</option>
-              <option value="on">{t("airPlusOn")}</option>
-              <option value="off">{t("airPlusOff")}</option>
-            </select>
-          </div>
-          <button
-            onClick={() => setSelectedIds(new Set())}
-            className="text-sm text-blue-600 hover:text-blue-800 cursor-pointer ml-auto"
-          >
-            {t("clearSelection")}
-          </button>
-        </div>
-      )}
-
       {/* Create form */}
       {showCreateForm && (
         <CreateControlForm
@@ -384,6 +342,36 @@ export function ControlsPage() {
         highlightControlId={selectedIds.size === 0 ? (expandedId ?? undefined) : undefined}
         highlightControlIds={selectedIds.size > 0 ? Array.from(selectedIds) : undefined}
       />
+
+      {/* Bulk action bar — floating at bottom, same as Classes/Runners */}
+      <BulkActionBar count={selectedIds.size} onDeselectAll={() => setSelectedIds(new Set())}>
+        <select
+          defaultValue=""
+          onChange={(e) => {
+            if (e.target.value) handleBulkRadioType(e.target.value as RadioType);
+            e.target.value = "";
+          }}
+          className="px-3 py-1.5 border border-slate-200 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 cursor-pointer"
+        >
+          <option value="" disabled>{t("setRadioType")}</option>
+          <option value="normal">{t("normal")}</option>
+          <option value="internal_radio">{t("internalRadio")}</option>
+          <option value="public_radio">{t("publicRadio")}</option>
+        </select>
+        <select
+          defaultValue=""
+          onChange={(e) => {
+            if (e.target.value) handleBulkAirPlus(e.target.value as AirPlusOverride);
+            e.target.value = "";
+          }}
+          className="px-3 py-1.5 border border-slate-200 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 cursor-pointer"
+        >
+          <option value="" disabled>{t("setAirPlus")}</option>
+          <option value="default">{t("airPlusDefault")}</option>
+          <option value="on">{t("airPlusOn")}</option>
+          <option value="off">{t("airPlusOff")}</option>
+        </select>
+      </BulkActionBar>
     </>
   );
 }

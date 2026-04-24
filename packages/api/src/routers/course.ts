@@ -1131,4 +1131,39 @@ export const courseRouter = router({
         return null;
       }
     }),
+
+  /**
+   * Get GeoJSON routing geometry for many courses at once.
+   *
+   * Returns a map keyed by course name so the caller can render them
+   * together. Courses without geometry are simply omitted from the map.
+   * Used by the map panel when several courses are selected and we want
+   * to overlay every selected course's route at once.
+   */
+  courseGeometries: competitionProcedure
+    .input(z.object({ courseNames: z.array(z.string()).min(1) }))
+    .query(async ({ ctx, input }) => {
+      const client = ctx.db;
+      await ensureCourseGeometryTable(client);
+
+      // Deduplicate and bail on empty so we never emit `IN ()`
+      const unique = [...new Set(input.courseNames)];
+      if (unique.length === 0) return {} as Record<string, GeoJSONFeatureCollection>;
+
+      const placeholders = unique.map(() => "?").join(",");
+      const rows = await client.$queryRawUnsafe<{ CourseName: string; Geometry: string }[]>(
+        `SELECT CourseName, Geometry FROM oxygen_course_geometry WHERE CourseName IN (${placeholders})`,
+        ...unique,
+      );
+
+      const out: Record<string, GeoJSONFeatureCollection> = {};
+      for (const r of rows) {
+        try {
+          out[r.CourseName] = JSON.parse(r.Geometry) as GeoJSONFeatureCollection;
+        } catch {
+          // Skip malformed rows rather than failing the whole request
+        }
+      }
+      return out;
+    }),
 });

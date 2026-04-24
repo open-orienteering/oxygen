@@ -73,8 +73,9 @@
   "controlsCreatedUpdated": "{{created}} kontroller skapade, {{updated}} uppdaterade",
   "classAssignmentsMade": "{{count}} klasstilldelningar gjorda",
   "done": "Klar",
-  "selectedCount": "{{count}} valda",
-  "clearSelection": "Avmarkera",
-  "setMaps": "Sätt kartor till",
-  "mapsPerRunner": "t.ex. 1"
+  "apply": "Tillämpa",
+  "applying": "Tillämpar...",
+  "yes": "Ja",
+  "no": "Nej",
+  "bulkConfirm": "Sätt {{field}} till \"{{value}}\" för {{count}} banor?"
 }
