@@ -93,15 +93,17 @@ This is a TDD-first project. All new features and bug fixes must be developed te
 
 ## 6. Verification Checklist
 
-Run this sequence before declaring any task complete:
+Run this sequence before declaring any task complete. Every step is
+mandatory — there is no "optional" step. If you skip one, say so explicitly
+in your final message and explain why.
 
 1. **`pnpm build`** — Zero TypeScript errors across all three packages.
 2. **`pnpm test`** — All unit tests pass. Always required.
 3. **Integration tests** — Run for any DB-related changes. Always required for features: `pnpm --filter api exec vitest run --config vitest.integration.config.ts`
 4. **`pnpm test:e2e`** — Full suite for features and significant changes. For minor, isolated fixes, selective tests covering the affected area are acceptable: `pnpm test:e2e -- e2e/specific-file.spec.ts`
-5. **`docker compose -f docker-compose.host-db.yml up --build -d`** — Rebuild Docker stack so the running instance reflects the latest code.
+5. **Rebuild Docker** — Run `docker compose -f docker-compose.host-db.yml up --build -d` so the running stack reflects the latest code. **Required for every change that touches `packages/api/`, `packages/web/`, `packages/shared/`, `docker/`, any `Dockerfile`, `docker-compose*.yml`, or `pnpm-lock.yaml`.** You may skip it only for changes confined to `docs/`, `AGENTS.md`, `.claude/`, or test fixtures that don't ship in either image — and when you skip it, state so in your final message. Verify the output ends with both `Image oxygen-api Built` / `Image oxygen-web Built` and both containers `Started`; treat anything else as a failure.
 
-Never push code that fails any of steps 1–4. Step 5 must succeed but is a deployment step, not a commit gate.
+Never push code that fails any of steps 1–5. "It built fine locally" is not a substitute for step 5 — the Docker images use a different build path (multi-stage, production `NODE_ENV`, no dev dependencies) and routinely catch things `pnpm build` misses.
 
 ## 7. MeOS Database Compatibility
 
