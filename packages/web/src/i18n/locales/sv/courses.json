@@ -72,5 +72,9 @@
   "coursesCreatedUpdated": "{{created}} banor skapade, {{updated}} uppdaterade",
   "controlsCreatedUpdated": "{{created}} kontroller skapade, {{updated}} uppdaterade",
   "classAssignmentsMade": "{{count}} klasstilldelningar gjorda",
-  "done": "Klar"
+  "done": "Klar",
+  "selectedCount": "{{count}} valda",
+  "clearSelection": "Avmarkera",
+  "setMaps": "Sätt kartor till",
+  "mapsPerRunner": "t.ex. 1"
 }

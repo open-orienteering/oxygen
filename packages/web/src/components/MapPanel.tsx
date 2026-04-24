@@ -6,6 +6,12 @@ import { MapViewer, type ControlOverlay, type CourseOverlay } from "./MapViewer"
 interface Props {
   /** Highlight a specific control by DB ID */
   highlightControlId?: number;
+  /**
+   * Highlight multiple controls by DB ID. When non-empty, overrides
+   * `highlightControlId` and filters the map to these controls (plus
+   * start/finish). Used by the Controls page multi-select.
+   */
+  highlightControlIds?: number[];
   /** Highlight a specific course by name */
   highlightCourseName?: string;
   /** Highlight multiple courses by name (for forked classes) */
@@ -40,6 +46,7 @@ interface Props {
 
 export function MapPanel({
   highlightControlId,
+  highlightControlIds,
   highlightCourseName,
   highlightCourseNames,
   onControlClick,
@@ -64,6 +71,19 @@ export function MapPanel({
     if (highlightCourseNames) highlightCourseNames.forEach((n) => names.add(n));
     return names;
   }, [highlightCourseName, highlightCourseNames]);
+  // Merge single + multi control IDs into a set for unified handling.
+  // When the multi array is populated, it drives the filter (a user selecting
+  // rows on the Controls page); otherwise we fall back to the single id which
+  // represents the currently expanded row.
+  const effectiveControlIds = useMemo(() => {
+    const ids = new Set<number>();
+    if (highlightControlIds && highlightControlIds.length > 0) {
+      highlightControlIds.forEach((id) => ids.add(id));
+    } else if (highlightControlId !== undefined) {
+      ids.add(highlightControlId);
+    }
+    return ids;
+  }, [highlightControlId, highlightControlIds]);
   const mapInfo = trpc.course.mapFileInfo.useQuery(undefined, {
     staleTime: 60_000,
   });
@@ -145,7 +165,7 @@ export function MapPanel({
   // Effective filter mode
   const filterMode = externalFilterMode ?? (
     effectiveCourseNames.size > 0 ? "course" :
-      highlightControlId ? "single-control" :
+      effectiveControlIds.size > 0 ? "single-control" :
         "all"
   );
 
@@ -154,7 +174,7 @@ export function MapPanel({
     if (!controlCoords.data) return [];
     return controlCoords.data.map((c) => {
       const id = String(c.id);
-      const isHighlighted = highlightControlId ? c.id === highlightControlId : false;
+      const isHighlighted = effectiveControlIds.has(c.id);
 
       // Determine visibility based on filter mode and toggle
       let visible = true;
@@ -163,8 +183,10 @@ export function MapPanel({
           visible = courseControlIds.has(id) || c.status === 4 || c.status === 5;
           // Extra punch controls are not in the course but should still be visible
           if (!visible && punchStatusByCode?.[c.code] === "extra") visible = true;
-        } else if (filterMode === "single-control" && highlightControlId) {
-          visible = c.id === highlightControlId;
+        } else if (filterMode === "single-control" && effectiveControlIds.size > 0) {
+          // Keep start/finish visible so the map still has useful anchor points
+          // when the user is just inspecting a handful of regular controls.
+          visible = effectiveControlIds.has(c.id) || c.status === 4 || c.status === 5;
         }
       }
 
@@ -191,7 +213,7 @@ export function MapPanel({
         punchStatus: punchStatusByCode?.[c.code],
       };
     });
-  }, [controlCoords.data, highlightControlId, filterMode, showOnlyRelevant, courseControlIds, showCompletion, completionStatus.data, punchStatusByCode]);
+  }, [controlCoords.data, effectiveControlIds, filterMode, showOnlyRelevant, courseControlIds, showCompletion, completionStatus.data, punchStatusByCode]);
 
   // Build course overlays — augment with start/finish connections
   const courseOverlays: CourseOverlay[] = useMemo(() => {
@@ -269,11 +291,11 @@ export function MapPanel({
       }
       return ids;
     }
-    if (highlightControlId) {
-      return [String(highlightControlId)];
+    if (effectiveControlIds.size > 0) {
+      return Array.from(effectiveControlIds, (id) => String(id));
     }
     return null;
-  }, [focusControlCodes, controlCoords.data, effectiveCourseNames, courseControlIds, highlightControlId]);
+  }, [focusControlCodes, controlCoords.data, effectiveCourseNames, courseControlIds, effectiveControlIds]);
 
   const handleControlClick = useCallback((controlId: string) => {
     const numId = parseInt(controlId, 10);

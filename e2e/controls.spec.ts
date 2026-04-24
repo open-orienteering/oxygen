@@ -54,6 +54,29 @@ test.describe("Controls Page", () => {
     await expect(page.getByText("Bana 1")).toBeVisible();
   });
 
+  test("should show bulk action bar when selecting controls", async ({ page }) => {
+    await selectCompetition(page);
+    await clickTab(page, "Controls");
+    await expect(page.getByText("23 controls")).toBeVisible({ timeout: 10000 });
+
+    // Select two controls via their row checkboxes. The Controls table's
+    // checkboxes are unlabeled, so grab them by position inside the row.
+    const radio1Row = page.getByRole("row").filter({ hasText: "Radio 1" });
+    const radio2Row = page.getByRole("row").filter({ hasText: "Radio 2" });
+    await radio1Row.getByRole("checkbox").check();
+    await radio2Row.getByRole("checkbox").check();
+
+    // Bulk bar appears with the right count + the existing radio/AIR+ dropdowns
+    await expect(page.getByText("2 selected")).toBeVisible();
+    await expect(page.getByRole("combobox", { name: /Set Radio Type/i }).or(
+      page.locator("select").filter({ hasText: "Set Radio Type" }),
+    )).toBeVisible();
+
+    // Clear selection dismisses the bar
+    await page.getByRole("button", { name: "Clear selection" }).click();
+    await expect(page.getByText("2 selected")).not.toBeVisible();
+  });
+
   test("should create and then delete a control", async ({ page }) => {
     await selectCompetition(page);
     await clickTab(page, "Controls");

@@ -72,5 +72,9 @@
   "coursesCreatedUpdated": "{{created}} courses created, {{updated}} updated",
   "controlsCreatedUpdated": "{{created}} controls created, {{updated}} updated",
   "classAssignmentsMade": "{{count}} class assignments made",
-  "done": "Done"
+  "done": "Done",
+  "selectedCount": "{{count}} selected",
+  "clearSelection": "Clear selection",
+  "setMaps": "Set maps to",
+  "mapsPerRunner": "e.g. 1"
 }

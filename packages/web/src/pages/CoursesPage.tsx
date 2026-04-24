@@ -1,4 +1,4 @@
-import { useState, useMemo } from "react";
+import { useState, useMemo, useCallback } from "react";
 import { useTranslation } from "react-i18next";
 import { trpc } from "../lib/trpc";
 import { useSearchParam, useNumericSearchParam } from "../hooks/useSearchParam";
@@ -13,6 +13,7 @@ export function CoursesPage() {
   const [expandedId, setExpandedId] = useNumericSearchParam("course");
   const [showCreateForm, setShowCreateForm] = useState(false);
   const [showImportDialog, setShowImportDialog] = useState(false);
+  const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
 
   const utils = trpc.useUtils();
 
@@ -21,6 +22,13 @@ export function CoursesPage() {
   });
 
   const deleteMutation = trpc.course.delete.useMutation({
+    onSuccess: () => {
+      utils.course.list.invalidate();
+      utils.course.detail.invalidate();
+    },
+  });
+
+  const bulkUpdateMutation = trpc.course.bulkUpdate.useMutation({
     onSuccess: () => {
       utils.course.list.invalidate();
       utils.course.detail.invalidate();
@@ -37,6 +45,16 @@ export function CoursesPage() {
     setExpandedId(expandedId === id ? undefined : id);
   };
 
+  const toggleSelect = useCallback((id: number, e: React.MouseEvent) => {
+    e.stopPropagation();
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }, []);
+
   type Course = NonNullable<typeof courses.data>[number];
   const comparators = useMemo(() => ({
     name: (a: Course, b: Course) => a.name.localeCompare(b.name),
@@ -46,6 +64,25 @@ export function CoursesPage() {
   }), []);
 
   const { sorted: items, sort, toggle } = useSort(courses.data ?? [], { key: "name", dir: "asc" }, comparators);
+
+  const toggleSelectAll = useCallback(() => {
+    const allIds = items.map((c) => c.id);
+    setSelectedIds((prev) => (prev.size === allIds.length ? new Set() : new Set(allIds)));
+  }, [items]);
+
+  // Names of selected courses — drive the map filter when selection is non-empty
+  const selectedCourseNames = useMemo(
+    () => items.filter((c) => selectedIds.has(c.id)).map((c) => c.name),
+    [items, selectedIds],
+  );
+
+  const handleBulkSetMaps = (value: number) => {
+    if (selectedIds.size === 0 || Number.isNaN(value) || value < 0) return;
+    bulkUpdateMutation.mutate({
+      ids: Array.from(selectedIds),
+      numberOfMaps: value,
+    });
+  };
 
   return (
     <>
@@ -110,6 +147,52 @@ export function CoursesPage() {
         />
       )}
 
+      {/* Bulk action bar */}
+      {selectedIds.size > 0 && (
+        <div className="bg-blue-50 border border-blue-200 rounded-xl p-3 mb-4 flex items-center gap-3 flex-wrap" data-testid="bulk-action-bar">
+          <span className="text-sm font-medium text-blue-800">
+            {t("selectedCount", { count: selectedIds.size })}
+          </span>
+          <div className="flex items-center gap-2">
+            <label className="text-sm text-slate-600" htmlFor="bulk-set-maps-input">
+              {t("setMaps")}
+            </label>
+            <input
+              id="bulk-set-maps-input"
+              type="number"
+              min={0}
+              defaultValue=""
+              disabled={bulkUpdateMutation.isPending}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") {
+                  const v = parseInt((e.target as HTMLInputElement).value, 10);
+                  if (!isNaN(v)) {
+                    handleBulkSetMaps(v);
+                    (e.target as HTMLInputElement).value = "";
+                  }
+                }
+              }}
+              onBlur={(e) => {
+                const v = parseInt(e.target.value, 10);
+                if (!isNaN(v)) {
+                  handleBulkSetMaps(v);
+                  e.target.value = "";
+                }
+              }}
+              placeholder={t("mapsPerRunner")}
+              className="w-24 px-2 py-1 text-sm border border-blue-200 rounded-lg bg-white tabular-nums focus:outline-none focus:ring-2 focus:ring-blue-500"
+              data-testid="bulk-set-maps-input"
+            />
+          </div>
+          <button
+            onClick={() => setSelectedIds(new Set())}
+            className="text-sm text-blue-600 hover:text-blue-800 cursor-pointer ml-auto"
+          >
+            {t("clearSelection")}
+          </button>
+        </div>
+      )}
+
       {/* Courses table */}
       <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
         {courses.isLoading && (
@@ -127,6 +210,17 @@ export function CoursesPage() {
             <table className="w-full text-sm">
               <thead>
                 <tr className="bg-slate-50 border-b border-slate-200">
+                  <th className="px-3 py-2.5 w-10">
+                    <input
+                      type="checkbox"
+                      checked={items.length > 0 && selectedIds.size === items.length}
+                      ref={(el) => {
+                        if (el) el.indeterminate = selectedIds.size > 0 && selectedIds.size < items.length;
+                      }}
+                      onChange={toggleSelectAll}
+                      className="rounded border-slate-300 cursor-pointer"
+                    />
+                  </th>
                   <SortHeader label={t("name")} active={sort.key === "name"} direction={sort.dir} onClick={() => toggle("name")} />
                   <SortHeader label={t("controls")} active={sort.key === "controls"} direction={sort.dir} onClick={() => toggle("controls")} className="w-24" />
                   <SortHeader label={t("length")} active={sort.key === "length"} direction={sort.dir} onClick={() => toggle("length")} className="w-24" />
@@ -144,6 +238,15 @@ export function CoursesPage() {
                         }`}
                       onClick={() => handleToggleExpand(c.id)}
                     >
+                      <td className="px-3 py-2.5" onClick={(e) => e.stopPropagation()}>
+                        <input
+                          type="checkbox"
+                          checked={selectedIds.has(c.id)}
+                          onClick={(e) => toggleSelect(c.id, e)}
+                          onChange={() => {}}
+                          className="rounded border-slate-300 cursor-pointer"
+                        />
+                      </td>
                       <td className="px-4 py-2.5 font-medium text-slate-700">
                         {c.name}
                       </td>
@@ -190,7 +293,7 @@ export function CoursesPage() {
                     </tr>
                     {expandedId === c.id && (
                       <tr key={`detail-${c.id}`}>
-                        <td colSpan={6} className="p-0">
+                        <td colSpan={7} className="p-0">
                           <CourseInlineDetail courseId={c.id} />
                         </td>
                       </tr>
@@ -203,11 +306,17 @@ export function CoursesPage() {
         )}
       </div>
 
-      {/* Map */}
+      {/* Map — selection drives the filter when non-empty, otherwise the
+          expanded row is highlighted as before. */}
       <MapPanel
         className="mt-6"
         fitToControls
-        highlightCourseName={expandedId ? items.find((c) => c.id === expandedId)?.name : undefined}
+        highlightCourseName={
+          selectedCourseNames.length === 0 && expandedId
+            ? items.find((c) => c.id === expandedId)?.name
+            : undefined
+        }
+        highlightCourseNames={selectedCourseNames.length > 0 ? selectedCourseNames : undefined}
       />
     </>
   );
