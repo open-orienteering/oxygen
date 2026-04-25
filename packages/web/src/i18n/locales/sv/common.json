@@ -84,6 +84,10 @@
   "more": "Mer...",
   "less": "Mindre",
 
+  "structuredSearchHintTypeToSearch": "Skriv för att söka...",
+  "structuredSearchHintNumber": "Ange ett nummer — t.ex. >25 eller <60:00",
+  "searchOrFilter": "Sök eller filtrera...",
+
   "timeAgo_justNow": "just nu",
   "timeAgo_minuteAgo": "1 min sedan",
   "timeAgo_minutesAgo": "{{count}} min sedan",

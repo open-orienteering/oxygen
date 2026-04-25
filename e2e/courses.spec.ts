@@ -71,13 +71,15 @@ test.describe("Courses Page", () => {
     await expect(page.getByRole("cell", { name: "Test Bana" })).toBeVisible({ timeout: 5000 });
     await expect(page.getByText("4 courses")).toBeVisible({ timeout: 5000 });
 
-    await page.getByPlaceholder("Search name, control code...").fill("Test Bana");
+    const search = page.getByPlaceholder("Search name, control code...");
+    await search.fill("Test Bana");
+    await search.press("Enter");
     await expect(page.getByText("1 course")).toBeVisible({ timeout: 5000 });
     page.on("dialog", (dialog) => dialog.accept());
     await page.getByTitle("Remove course").click();
 
     await expect(page.getByText("No courses found")).toBeVisible({ timeout: 5000 });
-    await page.getByPlaceholder("Search name, control code...").clear();
+    await page.getByLabel("Clear all filters").click();
     await expect(page.getByText("3 courses")).toBeVisible({ timeout: 5000 });
   });
 

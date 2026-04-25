@@ -91,5 +91,7 @@
   "confirmUnlink": "Unlink {{runner}} from card {{cardNo}}?",
   "linking": "Linking...",
   "noRunnersFound": "No runners found",
-  "typeToSearch": "Type to search..."
+  "typeToSearch": "Type to search...",
+  "rental": "Rental",
+  "linked": "Linked"
 }

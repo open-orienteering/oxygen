@@ -1,38 +1,47 @@
-import { useState, useMemo } from "react";
+import { useState, useMemo, Fragment } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { trpc } from "../lib/trpc";
 import { TrackMapPanel } from "../components/TrackMapPanel";
 import { SortHeader } from "../components/SortHeader";
 import { useSort } from "../hooks/useSort";
+import { StructuredSearchBar } from "../components/structured-search/StructuredSearchBar";
+import { useStructuredSearch } from "../hooks/useStructuredSearch";
+import { createTrackAnchors, type TrackRow } from "../lib/structured-search/anchors/track-anchors";
 
 export function TracksPage() {
   const { nameId = "" } = useParams<{ nameId: string }>();
   const navigate = useNavigate();
   const { t } = useTranslation("tracks");
 
-  const [classFilter, setClassFilter] = useState<number | null>(null);
-  const [clubSearch, setClubSearch] = useState("");
   const [expandedId, setExpandedId] = useState<number | null>(null);
 
-  const syncedClasses = trpc.livelox.listSyncedClasses.useQuery();
-  const routes = trpc.livelox.listRoutes.useQuery(
-    classFilter != null ? { classId: classFilter } : undefined,
+  const anchors = useMemo(() => createTrackAnchors((key) => t(key as never)), [t]);
+  const { tokens, setTokens, filterItems } = useStructuredSearch<TrackRow>(
+    anchors,
+    ["runnerName", "organisation", "className"],
   );
+
+  const syncedClasses = trpc.livelox.listSyncedClasses.useQuery();
+  const routes = trpc.livelox.listRoutes.useQuery();
   const deleteRoute = trpc.livelox.deleteRoute.useMutation({
     onSuccess: () => routes.refetch(),
   });
 
+  const suggestionData = useMemo(
+    () => ({
+      classes: syncedClasses.data?.map((c) => ({ id: c.classId, name: c.className })) ?? [],
+      clubs: routes.data
+        ? Array.from(new Set(routes.data.map((r) => r.organisation))).map((name) => ({ name }))
+        : [],
+    }),
+    [syncedClasses.data, routes.data],
+  );
+
   const filtered = useMemo(() => {
     if (!routes.data) return [];
-    const q = clubSearch.toLowerCase().trim();
-    if (!q) return routes.data;
-    return routes.data.filter(
-      (r) =>
-        r.organisation.toLowerCase().includes(q) ||
-        r.runnerName.toLowerCase().includes(q),
-    );
-  }, [routes.data, clubSearch]);
+    return filterItems(routes.data as TrackRow[]);
+  }, [routes.data, filterItems]);
 
   const comparators = useMemo(
     () => ({
@@ -78,44 +87,26 @@ export function TracksPage() {
   return (
     <div className="space-y-4">
       {/* Header */}
-      <div className="flex items-center justify-between mb-4 gap-4">
-        <div>
+      <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3 mb-4">
+        <div className="shrink-0">
           <h2 className="text-lg font-semibold text-slate-900">{t("title")}</h2>
           <p className="text-sm text-slate-500">
             {t("routeCount", { count: filtered.length })}
           </p>
         </div>
-        <div className="flex items-center gap-3 flex-wrap">
-          <select
-            value={classFilter ?? ""}
-            onChange={(e) =>
-              setClassFilter(e.target.value ? Number(e.target.value) : null)
-            }
-            className="px-3 py-1.5 border border-slate-200 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-500"
-          >
-            <option value="">{t("allClasses")}</option>
-            {syncedClasses.data?.map((c) => (
-              <option key={c.liveloxClassId ?? c.classId} value={c.classId ?? ""}>
-                {c.className} ({c.routeCount})
-              </option>
-            ))}
-          </select>
-
-          <input
-            type="search"
-            value={clubSearch}
-            onChange={(e) => setClubSearch(e.target.value)}
-            placeholder={t("searchPlaceholder")}
-            className="flex-1 min-w-[160px] px-3 py-1.5 border border-slate-200 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-500"
-          />
-
-          <button
-            onClick={() => navigate(`/${nameId}/tracks/replay`)}
-            className="px-3 py-1.5 bg-blue-600 text-white text-sm font-medium rounded-lg hover:bg-blue-700 transition-colors cursor-pointer whitespace-nowrap"
-          >
-            {t("openClassReplay")}
-          </button>
-        </div>
+        <StructuredSearchBar
+          tokens={tokens}
+          onTokensChange={setTokens}
+          anchors={anchors}
+          placeholder={t("searchPlaceholder")}
+          suggestionData={suggestionData}
+        />
+        <button
+          onClick={() => navigate(`/${nameId}/tracks/replay`)}
+          className="px-3 py-2 bg-blue-600 text-white text-sm font-medium rounded-lg hover:bg-blue-700 transition-colors cursor-pointer whitespace-nowrap"
+        >
+          {t("openClassReplay")}
+        </button>
       </div>
 
       {/* No data states */}
@@ -174,9 +165,8 @@ export function TracksPage() {
               {sorted.map((route) => {
                 const isExpanded = expandedId === route.id;
                 return (
-                  <>
+                  <Fragment key={route.id}>
                     <tr
-                      key={route.id}
                       className={`hover:bg-slate-50 cursor-pointer transition-colors ${isExpanded ? "bg-slate-50" : ""}`}
                       onClick={() =>
                         setExpandedId(isExpanded ? null : route.id)
@@ -225,7 +215,7 @@ export function TracksPage() {
                     </tr>
 
                     {isExpanded && (
-                      <tr key={`${route.id}-detail`}>
+                      <tr>
                         <td colSpan={6} className="px-4 pb-4 pt-2 bg-slate-50">
                           <ExpandedDetail
                             route={route}
@@ -235,7 +225,7 @@ export function TracksPage() {
                         </td>
                       </tr>
                     )}
-                  </>
+                  </Fragment>
                 );
               })}
             </tbody>

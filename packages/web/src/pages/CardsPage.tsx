@@ -6,9 +6,12 @@ import { StatusBadge } from "../components/StatusBadge";
 import { SortHeader } from "../components/SortHeader";
 import { ClubLogo } from "../components/ClubLogo";
 import { useSort } from "../hooks/useSort";
-import { useSearchParam, useNumericSearchParam } from "../hooks/useSearchParam";
+import { useNumericSearchParam } from "../hooks/useSearchParam";
 import { getCardType } from "../lib/si-protocol";
 import { CardTypeBadge } from "../components/CardTypeBadge";
+import { StructuredSearchBar } from "../components/structured-search/StructuredSearchBar";
+import { useStructuredSearch } from "../hooks/useStructuredSearch";
+import { createCardAnchors, type CardListItem } from "../lib/structured-search/anchors/card-anchors";
 
 // ─── Battery voltage thresholds (from sportident-python) ────
 const BATTERY_LOW = 2.5; // RED — replace battery!
@@ -58,17 +61,27 @@ function BatteryCell({ voltage, cardType }: { voltage: number | null; cardType: 
 
 // ─── Main Page ──────────────────────────────────────────────
 
-type CardFilter = "all" | "unreturned" | "rental-all" | "unlinked";
-const VALID_FILTERS: CardFilter[] = ["all", "unreturned", "rental-all", "unlinked"];
-
 export function CardsPage() {
   const { t } = useTranslation("devices");
-  const [search, setSearch] = useSearchParam("search");
   const [expandedCard, setExpandedCard] = useNumericSearchParam("card");
-  const [filterParam, setFilterParam] = useSearchParam("filter");
-  const cardFilter: CardFilter = VALID_FILTERS.includes(filterParam as CardFilter) ? (filterParam as CardFilter) : "all";
 
   const cards = trpc.cardReadout.cardList.useQuery();
+  const dashboard = trpc.competition.dashboard.useQuery();
+  const clubs = trpc.competition.clubs.useQuery();
+
+  const anchors = useMemo(() => createCardAnchors((key) => t(key as never)), [t]);
+  const { tokens, setTokens, filterItems } = useStructuredSearch<CardListItem>(
+    anchors,
+    [],
+  );
+
+  const suggestionData = useMemo(
+    () => ({
+      classes: dashboard.data?.classes.map((c) => ({ id: c.id, name: c.name })) ?? [],
+      clubs: clubs.data?.map((c) => ({ id: c.id, name: c.name })) ?? [],
+    }),
+    [dashboard.data, clubs.data],
+  );
 
   type Card = NonNullable<typeof cards.data>[number];
 
@@ -90,113 +103,42 @@ export function CardsPage() {
     }),
     [],
   );
+
+  const filtered = useMemo(
+    () => filterItems((cards.data ?? []) as CardListItem[]),
+    [cards.data, filterItems],
+  );
+
   const { sorted, sort, toggle } = useSort(
-    cards.data ?? [],
+    filtered,
     { key: "cardNo", dir: "asc" },
     comparators,
   );
-
-  const unreturnedCount = useMemo(
-    () => (cards.data ?? []).filter((c) => c.runner?.isRentalCard && !c.runner?.cardReturned).length,
-    [cards.data],
-  );
-  const unlinkedCount = useMemo(
-    () => (cards.data ?? []).filter((c) => !c.runner).length,
-    [cards.data],
-  );
-
-  // Filter by search + card filter
-  const filtered = useMemo(() => {
-    let base = sorted;
-    if (cardFilter === "unreturned") {
-      base = base.filter((c) => c.runner?.isRentalCard && !c.runner?.cardReturned);
-    } else if (cardFilter === "rental-all") {
-      base = base.filter((c) => c.runner?.isRentalCard);
-    } else if (cardFilter === "unlinked") {
-      base = base.filter((c) => !c.runner);
-    }
-    if (!search) return base;
-    const term = search.toLowerCase();
-    return base.filter(
-      (c) =>
-        String(c.cardNo).includes(term) ||
-        (c.runner?.name ?? "").toLowerCase().includes(term) ||
-        (c.runner?.clubName ?? "").toLowerCase().includes(term) ||
-        c.cardType.toLowerCase().includes(term),
-    );
-  }, [sorted, search, cardFilter]);
 
   const handleCardClick = (cardNo: number) => {
     setExpandedCard(expandedCard === cardNo ? undefined : cardNo);
   };
 
-  const filterOptions: { key: CardFilter; label: string }[] = [
-    { key: "all", label: t("filterAll") },
-    { key: "unreturned", label: t("filterUnreturned") },
-    { key: "rental-all", label: t("filterRentalAll") },
-    { key: "unlinked", label: t("filterUnlinked") },
-  ];
-
   const colCount = 8;
 
   return (
     <>
-      {/* Header + Search */}
-      <div className="flex items-center justify-between mb-4 gap-4">
-        <div>
-          <h2 className="text-lg font-semibold text-slate-900">{t("siCards")}</h2>
-          <p className="text-sm text-slate-500">
-            {cardFilter !== "all"
-              ? `${filtered.length} / ${cards.data?.length ?? 0}`
-              : t("cardsCount", { count: cards.data?.length ?? 0 })
-            } ·{" "}
-            {t("linkedToRunners", { count: cards.data?.filter((c) => c.runner).length ?? 0 })}
-            {unreturnedCount > 0 && (
-              <span className="ml-2 inline-flex items-center px-1.5 py-0.5 rounded-full text-xs font-semibold bg-amber-100 text-amber-700">
-                {t("unreturnedCount", { count: unreturnedCount })}
-              </span>
-            )}
-          </p>
-        </div>
-        <div className="flex items-center gap-3">
-          {/* Rental filter pills */}
-          <div className="flex items-center rounded-lg border border-slate-200 bg-white overflow-hidden text-xs font-medium">
-            {filterOptions.map((opt) => (
-              <button
-                key={opt.key}
-                onClick={() => setFilterParam(opt.key === "all" ? "" : opt.key)}
-                className={`px-3 py-1.5 transition-colors cursor-pointer ${
-                  cardFilter === opt.key
-                    ? "bg-amber-600 text-white"
-                    : "text-slate-600 hover:bg-slate-50"
-                }`}
-              >
-                {opt.label}
-                {opt.key === "unreturned" && unreturnedCount > 0 && (
-                  <span className={`ml-1.5 px-1 py-0.5 rounded-full text-[10px] font-bold ${
-                    cardFilter === "unreturned" ? "bg-white/30 text-white" : "bg-amber-100 text-amber-700"
-                  }`}>
-                    {unreturnedCount}
-                  </span>
-                )}
-                {opt.key === "unlinked" && unlinkedCount > 0 && (
-                  <span className={`ml-1.5 px-1 py-0.5 rounded-full text-[10px] font-bold ${
-                    cardFilter === "unlinked" ? "bg-white/30 text-white" : "bg-slate-200 text-slate-600"
-                  }`}>
-                    {unlinkedCount}
-                  </span>
-                )}
-              </button>
-            ))}
-          </div>
-          <input
-            type="text"
-            placeholder={t("searchCards")}
-            value={search}
-            onChange={(e) => setSearch(e.target.value || "")}
-            className="px-3 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 w-64"
-          />
-        </div>
+      {/* Search */}
+      <div className="mb-4">
+        <StructuredSearchBar
+          tokens={tokens}
+          onTokensChange={setTokens}
+          anchors={anchors}
+          placeholder={t("searchCards")}
+          suggestionData={suggestionData}
+        />
+      </div>
+      <div className="flex items-center justify-between mb-3">
+        <span className="text-sm text-slate-500">
+          {tokens.length > 0
+            ? `${filtered.length} / ${cards.data?.length ?? 0}`
+            : t("cardsCount", { count: cards.data?.length ?? 0 })}
+        </span>
       </div>
 
       {/* Table */}
@@ -221,14 +163,14 @@ export function CardsPage() {
                   {t("loading")}
                 </td>
               </tr>
-            ) : filtered.length === 0 ? (
+            ) : sorted.length === 0 ? (
               <tr>
                 <td colSpan={colCount} className="py-12 text-center text-slate-400">
                   {t("noCardsFound")}
                 </td>
               </tr>
             ) : (
-              filtered.map((card) => (
+              sorted.map((card) => (
                 <Fragment key={card.id}>
                   <tr
                     onClick={() => handleCardClick(card.cardNo)}

@@ -143,5 +143,6 @@
   "statusNoRunner": "No runner",
   "statusNoResult": "No result",
   "statusTimeMismatch": "Time mismatch",
-  "pushToOPunch": "Push to oPunch"
+  "pushToOPunch": "Push to oPunch",
+  "pushed": "Pushed"
 }

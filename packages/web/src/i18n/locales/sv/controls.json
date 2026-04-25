@@ -143,5 +143,6 @@
   "statusNoRunner": "Ingen löpare",
   "statusNoResult": "Inget resultat",
   "statusTimeMismatch": "Tidsskillnad",
-  "pushToOPunch": "Skicka till oPunch"
+  "pushToOPunch": "Skicka till oPunch",
+  "pushed": "Skickad"
 }

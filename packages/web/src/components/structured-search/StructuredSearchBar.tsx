@@ -1,4 +1,5 @@
 import { useState, useRef, useCallback, useMemo, useEffect } from "react";
+import { useTranslation } from "react-i18next";
 import type { FilterToken, AnchorDef } from "../../lib/structured-search/types";
 import { FilterPill } from "./FilterPill";
 import {
@@ -86,6 +87,7 @@ export function StructuredSearchBar({
   placeholder = "Search or filter...",
   suggestionData,
 }: StructuredSearchBarProps) {
+  const { t } = useTranslation("common");
   const [inputValue, setInputValue] = useState("");
   const [showSuggestions, setShowSuggestions] = useState(false);
   const [highlightIndex, setHighlightIndex] = useState(-1);
@@ -160,6 +162,28 @@ export function StructuredSearchBar({
   useEffect(() => {
     setHighlightIndex(-1);
   }, [suggestions.length]);
+
+  // True whenever the user has an active anchor in value-entry mode
+  // (input ends with e.g. `club:`). We use this to keep the suggestion
+  // dropdown open regardless of the showSuggestions flag — mouse-driven
+  // anchor selection can otherwise race with surrounding click/blur events
+  // and end up with the dropdown collapsed even though the input now reads
+  // `club:`. Escape and click-outside clear the input entirely (below) so
+  // this stays a real "user is editing this anchor" signal.
+  const isAnchorValueMode = suggestionContext.mode === "value" && suggestionContext.anchor != null;
+
+  // Hint shown in the dropdown when an anchor is active but no value suggestions exist yet.
+  // Mirrors the behavior of typing `anchor:` from the keyboard so click and keyboard feel identical.
+  const dropdownHint = useMemo(() => {
+    if (suggestionContext.mode !== "value") return undefined;
+    if (suggestions.length > 0) return undefined;
+    const anchor = suggestionContext.anchor;
+    if (!anchor) return undefined;
+    if (anchor.type === "number") {
+      return t("structuredSearchHintNumber");
+    }
+    return t("structuredSearchHintTypeToSearch");
+  }, [suggestionContext, suggestions.length, t]);
 
   const commitToken = useCallback(
     (raw: string) => {
@@ -289,6 +313,12 @@ export function StructuredSearchBar({
         if (pendingValues.size > 0) {
           commitPendingValues();
         } else {
+          // In value mode (input is `club:` etc.) clear the input so the
+          // dropdown actually closes — visibility is now driven by
+          // isAnchorValueMode, not just showSuggestions.
+          if (suggestionContext.mode === "value") {
+            setInputValue("");
+          }
           setShowSuggestions(false);
           setHighlightIndex(-1);
         }
@@ -354,13 +384,11 @@ export function StructuredSearchBar({
     [],
   );
 
-  // Close suggestions when clicking outside (commit pending multi-select values)
+  // Close suggestions when clicking outside the entire search bar.
   useEffect(() => {
     function handleClickOutside(e: MouseEvent) {
-      if (
-        containerRef.current &&
-        !containerRef.current.contains(e.target as Node)
-      ) {
+      const target = e.target as Node;
+      if (containerRef.current && !containerRef.current.contains(target)) {
         if (pendingValues.size > 0 && suggestionContext.anchor) {
           const value = [...pendingValues].join(",");
           const raw = `${suggestionContext.anchor.key}:${value}`;
@@ -370,13 +398,17 @@ export function StructuredSearchBar({
           }
           setPendingValues(new Set());
           setInputValue("");
+        } else if (suggestionContext.mode === "value") {
+          // Cancel an in-progress anchor entry on click outside (the dropdown
+          // is otherwise pinned open by isAnchorValueMode).
+          setInputValue("");
         }
         setShowSuggestions(false);
       }
     }
     document.addEventListener("mousedown", handleClickOutside);
     return () => document.removeEventListener("mousedown", handleClickOutside);
-  }, [pendingValues, suggestionContext.anchor, anchorMap, tokens, onTokensChange]);
+  }, [pendingValues, suggestionContext.mode, suggestionContext.anchor, anchorMap, tokens, onTokensChange]);
 
   // Global "/" keyboard shortcut to focus search
   useEffect(() => {
@@ -406,7 +438,10 @@ export function StructuredSearchBar({
         className={`flex flex-wrap items-center gap-1.5 w-full pl-9 pr-8 py-1.5 min-h-[38px] border rounded-lg text-sm bg-white transition-colors
           ${showSuggestions ? "border-blue-400 ring-2 ring-blue-100" : "border-slate-200"}
           focus-within:border-blue-400 focus-within:ring-2 focus-within:ring-blue-100`}
-        onClick={() => inputRef.current?.focus()}
+        onClick={() => {
+          inputRef.current?.focus();
+          setShowSuggestions(true);
+        }}
       >
         {/* Search icon */}
         <svg
@@ -445,7 +480,7 @@ export function StructuredSearchBar({
           placeholder={tokens.length === 0 ? placeholder : ""}
           className="flex-1 min-w-[120px] outline-none bg-transparent text-sm text-slate-900 placeholder:text-slate-400"
           aria-label="Search filter input"
-          aria-expanded={showSuggestions && suggestions.length > 0}
+          aria-expanded={(showSuggestions || isAnchorValueMode) && (suggestions.length > 0 || !!dropdownHint)}
           role="combobox"
           aria-autocomplete="list"
         />
@@ -475,13 +510,14 @@ export function StructuredSearchBar({
         suggestions={suggestions}
         highlightIndex={highlightIndex}
         onSelect={handleSuggestionSelect}
-        visible={showSuggestions && suggestions.length > 0}
+        visible={(showSuggestions || isAnchorValueMode) && (suggestions.length > 0 || !!dropdownHint)}
         multiSelect={isMultiSelect}
         selectedKeys={pendingValues}
         onToggle={isMultiSelect ? (s) => {
           if (s.type === "value") togglePendingValue(s.item.key);
         } : undefined}
         onCommitMulti={isMultiSelect ? commitPendingValues : undefined}
+        hint={dropdownHint}
       />
     </div>
   );

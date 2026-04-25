@@ -1,15 +1,18 @@
 import { useState, useCallback, useRef, useMemo } from "react";
 import { useTranslation } from "react-i18next";
 import { trpc } from "../lib/trpc";
+import { type ClubSummary } from "@oxygen/shared";
 import { useSearchParam, useNumericSearchParam } from "../hooks/useSearchParam";
 import { formatDateTime } from "../lib/format";
 import { ClubLogo } from "../components/ClubLogo";
 import { SortHeader } from "../components/SortHeader";
 import { useSort } from "../hooks/useSort";
+import { StructuredSearchBar } from "../components/structured-search/StructuredSearchBar";
+import { useStructuredSearch } from "../hooks/useStructuredSearch";
+import { createClubAnchors } from "../lib/structured-search/anchors/club-anchors";
 
 export function ClubsPage() {
   const { t } = useTranslation("clubs");
-  const [search, setSearch] = useSearchParam("search");
   const [showAllParam, setShowAllParam] = useSearchParam("all");
   const [expandedId, setExpandedId] = useNumericSearchParam("club");
   const [showCreateForm, setShowCreateForm] = useState(false);
@@ -17,21 +20,16 @@ export function ClubsPage() {
   const showAll = showAllParam === "1";
 
   const utils = trpc.useUtils();
-  const syncStatus = trpc.eventor.syncStatus.useQuery();
 
-  const clubs = trpc.club.list.useQuery({
-    search: search || undefined,
-    showAll,
-  });
+  const anchors = useMemo(() => createClubAnchors((key) => t(key as never)), [t]);
+  const { tokens, setTokens, filterItems } = useStructuredSearch<ClubSummary>(
+    anchors,
+    ["name", "shortName"],
+  );
+
+  const clubs = trpc.club.list.useQuery({ showAll });
 
   const deleteMutation = trpc.club.delete.useMutation({
-    onSuccess: () => {
-      utils.club.list.invalidate();
-      utils.club.detail.invalidate();
-    },
-  });
-
-  const clubSyncMutation = trpc.eventor.syncClubs.useMutation({
     onSuccess: () => {
       utils.club.list.invalidate();
       utils.club.detail.invalidate();
@@ -56,49 +54,31 @@ export function ClubsPage() {
     runners: (a: Club, b: Club) => a.runnerCount - b.runnerCount,
   }), []);
 
-  const { sorted: items, sort, toggle } = useSort(clubs.data ?? [], { key: "name", dir: "asc" }, comparators);
+  const filtered = useMemo(() => filterItems(clubs.data ?? []), [clubs.data, filterItems]);
+  const { sorted: items, sort, toggle } = useSort(filtered, { key: "name", dir: "asc" }, comparators);
 
   return (
     <>
       {/* Toolbar */}
       <div className="flex flex-col sm:flex-row gap-3 mb-6">
-        <div className="relative flex-1">
-          <svg className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
-          </svg>
-          <input
-            type="text"
-            placeholder={t("searchPlaceholder")}
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            className="w-full pl-10 pr-4 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent bg-white"
-          />
-        </div>
+        <StructuredSearchBar
+          tokens={tokens}
+          onTokensChange={setTokens}
+          anchors={anchors}
+          placeholder={t("searchPlaceholder")}
+        />
         <button
           onClick={() => setShowAllParam(showAll ? "" : "1")}
-          className={`px-4 py-2 text-sm font-medium rounded-lg border transition-colors cursor-pointer ${showAll
+          className={`px-4 py-2 text-sm font-medium rounded-lg border transition-colors cursor-pointer whitespace-nowrap ${showAll
             ? "bg-blue-50 border-blue-300 text-blue-700"
             : "bg-white border-slate-200 text-slate-600 hover:bg-slate-50"
             }`}
         >
           {showAll ? t("showingAll") : t("showAll")}
         </button>
-        {syncStatus.data?.apiKeyConfigured && (
-          <button
-            onClick={() => clubSyncMutation.mutate()}
-            disabled={clubSyncMutation.isPending}
-            className="px-4 py-2 text-sm font-medium rounded-lg border border-slate-200 text-slate-600 bg-white hover:bg-slate-50 disabled:opacity-50 transition-colors cursor-pointer flex items-center gap-1.5"
-            title={t("syncFromEventor")}
-          >
-            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
-            </svg>
-            {clubSyncMutation.isPending ? t("syncing") : t("syncFromEventor")}
-          </button>
-        )}
         <button
           onClick={() => setShowCreateForm(!showCreateForm)}
-          className="px-4 py-2 bg-blue-600 text-white text-sm font-medium rounded-lg hover:bg-blue-700 transition-colors cursor-pointer flex items-center gap-1"
+          className="px-4 py-2 bg-blue-600 text-white text-sm font-medium rounded-lg hover:bg-blue-700 transition-colors cursor-pointer flex items-center gap-1 whitespace-nowrap"
         >
           <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
@@ -106,27 +86,6 @@ export function ClubsPage() {
           {t("newClub")}
         </button>
       </div>
-
-      {/* Club sync results */}
-      {clubSyncMutation.isSuccess && clubSyncMutation.data && (
-        <div className="mb-4 p-3 bg-green-50 rounded-lg border border-green-200 text-sm text-green-800 flex items-center justify-between">
-          <span>
-            <span className="font-medium">{t("syncComplete")}</span>{" "}
-            {t("syncAddedUpdated", { added: clubSyncMutation.data.added, updated: clubSyncMutation.data.updated, total: clubSyncMutation.data.total })}
-          </span>
-          <button
-            onClick={() => clubSyncMutation.reset()}
-            className="text-green-600 hover:text-green-800 cursor-pointer text-xs"
-          >
-            {t("dismiss")}
-          </button>
-        </div>
-      )}
-      {clubSyncMutation.isError && (
-        <div className="mb-4 p-3 bg-red-50 rounded-lg border border-red-200 text-sm text-red-700">
-          {t("syncFailed", { message: clubSyncMutation.error.message })}
-        </div>
-      )}
 
       {/* Create form */}
       {showCreateForm && (
