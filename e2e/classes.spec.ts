@@ -85,13 +85,15 @@ test.describe("Classes Page", () => {
     await expect(page.getByRole("cell", { name: "Test Klass" })).toBeVisible({ timeout: 5000 });
     await expect(page.getByText("4 classes")).toBeVisible({ timeout: 5000 });
 
-    await page.getByPlaceholder("Search class or course name...").fill("Test Klass");
+    const search = page.getByPlaceholder("Search class or course name...");
+    await search.fill("Test Klass");
+    await search.press("Enter");
     await expect(page.getByText("1 class")).toBeVisible({ timeout: 5000 });
     page.on("dialog", (dialog) => dialog.accept());
     await page.getByTitle("Remove class").click();
 
     await expect(page.getByText("No classes found")).toBeVisible({ timeout: 5000 });
-    await page.getByPlaceholder("Search class or course name...").clear();
+    await page.getByLabel("Clear all filters").click();
     await expect(page.getByText("3 classes")).toBeVisible({ timeout: 5000 });
   });
 
@@ -104,11 +106,13 @@ test.describe("Classes Page", () => {
     await expect(handles).toHaveCount(3);
     await expect(page.getByText("drag to reorder")).toBeVisible();
 
-    await page.getByPlaceholder("Search class or course name...").fill("Öppen 1");
+    const search = page.getByPlaceholder("Search class or course name...");
+    await search.fill("Öppen 1");
+    await search.press("Enter");
     await expect(page.getByText("1 class")).toBeVisible({ timeout: 5000 });
     await expect(page.getByLabel("Drag to reorder")).toHaveCount(0);
 
-    await page.getByPlaceholder("Search class or course name...").clear();
+    await page.getByLabel("Clear all filters").click();
     await expect(page.getByText("3 classes")).toBeVisible({ timeout: 5000 });
     await expect(handles).toHaveCount(3);
   });

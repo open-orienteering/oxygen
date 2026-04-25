@@ -320,6 +320,32 @@ export function CompetitionShell() {
               })}
             </nav>
 
+            {/* Active overflow tab — promoted into the top bar so the user can see
+                what page they're on. Disappears as soon as activeTab is no longer overflow. */}
+            {(() => {
+              const activeOverflow = tabs.find((tt) => tt.id === activeTab && tt.isOverflow);
+              if (!activeOverflow) return null;
+              const path = activeOverflow.path
+                ? `/${nameId}/${activeOverflow.path}`
+                : `/${nameId}`;
+              return (
+                <div className="flex-shrink-0 -mb-px">
+                  <Link
+                    to={path}
+                    data-testid={`active-overflow-tab-${activeOverflow.id}`}
+                    className="px-3 py-2.5 text-sm font-medium border-b-2 border-blue-600 text-blue-600 whitespace-nowrap inline-flex items-center"
+                  >
+                    {t(tabLabelKeys[activeOverflow.id])}
+                    {activeOverflow.countKey && counts[activeOverflow.countKey] > 0 && (
+                      <span aria-hidden="true" className="ml-1 text-xs text-blue-400">
+                        {counts[activeOverflow.countKey]}
+                      </span>
+                    )}
+                  </Link>
+                </div>
+              );
+            })()}
+
             {/* More Menu Dropdown - Outside scrollable area to prevent clipping */}
             <div className="flex-shrink-0 border-l border-slate-200 ml-2">
               <div className="relative -mb-px">

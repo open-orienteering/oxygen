@@ -91,5 +91,7 @@
   "confirmUnlink": "Koppla bort {{runner}} från bricka {{cardNo}}?",
   "linking": "Kopplar...",
   "noRunnersFound": "Inga löpare hittades",
-  "typeToSearch": "Skriv för att söka..."
+  "typeToSearch": "Skriv för att söka...",
+  "rental": "Hyra",
+  "linked": "Kopplad"
 }

@@ -84,6 +84,10 @@
   "more": "More...",
   "less": "Less",
 
+  "structuredSearchHintTypeToSearch": "Type to search...",
+  "structuredSearchHintNumber": "Enter a number — e.g. >25 or <60:00",
+  "searchOrFilter": "Search or filter...",
+
   "timeAgo_justNow": "just now",
   "timeAgo_minuteAgo": "1 min ago",
   "timeAgo_minutesAgo": "{{count}} min ago",

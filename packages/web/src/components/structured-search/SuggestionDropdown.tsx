@@ -22,6 +22,8 @@ interface SuggestionDropdownProps {
   selectedKeys?: Set<string>;
   onToggle?: (suggestion: Suggestion) => void;
   onCommitMulti?: () => void;
+  /** When set, an anchor is active but no value suggestions exist; render a non-selectable hint. */
+  hint?: string;
 }
 
 /** Tailwind color classes for anchor key badges */
@@ -69,6 +71,7 @@ export function SuggestionDropdown({
   selectedKeys,
   onToggle,
   onCommitMulti,
+  hint,
 }: SuggestionDropdownProps) {
   const listRef = useRef<HTMLUListElement>(null);
 
@@ -82,7 +85,9 @@ export function SuggestionDropdown({
     }
   }, [highlightIndex, multiSelect]);
 
-  if (!visible || suggestions.length === 0) return null;
+  if (!visible) return null;
+  // Render a hint-only dropdown when no suggestions are available but an anchor is active
+  if (suggestions.length === 0 && !hint) return null;
 
   const selectedCount = selectedKeys?.size ?? 0;
 
@@ -96,6 +101,13 @@ export function SuggestionDropdown({
       {multiSelect && (
         <li className="px-3 py-1 text-[11px] text-slate-400 border-b border-slate-100 select-none">
           Space to toggle · Enter to apply
+        </li>
+      )}
+
+      {/* Anchor-active hint (e.g. "Type to search...") when no suggestions yet */}
+      {hint && suggestions.length === 0 && (
+        <li className="px-3 py-2 text-xs text-slate-400 italic select-none">
+          {hint}
         </li>
       )}
 
@@ -115,6 +127,10 @@ export function SuggestionDropdown({
               }`}
               onMouseDown={(e) => {
                 e.preventDefault();
+                // Stop the native event from reaching the document-level
+                // click-outside listener (React synthetic stopPropagation
+                // alone does not stop native bubbling to document).
+                e.nativeEvent.stopImmediatePropagation();
                 onSelect(suggestion);
               }}
             >
@@ -144,6 +160,7 @@ export function SuggestionDropdown({
             }`}
             onMouseDown={(e) => {
               e.preventDefault();
+              e.nativeEvent.stopImmediatePropagation();
               if (multiSelect && onToggle) {
                 onToggle(suggestion);
               } else {
@@ -169,6 +186,7 @@ export function SuggestionDropdown({
             className="text-xs font-medium text-blue-600 hover:text-blue-800 cursor-pointer"
             onMouseDown={(e) => {
               e.preventDefault();
+              e.nativeEvent.stopImmediatePropagation();
               onCommitMulti?.();
             }}
           >

@@ -94,13 +94,15 @@ test.describe("Controls Page", () => {
     await expect(page.getByRole("cell", { name: "Test Control" })).toBeVisible({ timeout: 5000 });
     await expect(page.getByText("24 controls")).toBeVisible({ timeout: 5000 });
 
-    await page.getByPlaceholder("Search code, name...").fill("999");
+    const search = page.getByPlaceholder("Search code, name...");
+    await search.fill("999");
+    await search.press("Enter");
     await expect(page.getByText("1 controls")).toBeVisible({ timeout: 5000 });
     page.on("dialog", (dialog) => dialog.accept());
     await page.getByTitle("Remove control").click();
 
     await expect(page.getByText("No controls found")).toBeVisible({ timeout: 5000 });
-    await page.getByPlaceholder("Search code, name...").clear();
+    await page.getByLabel("Clear all filters").click();
     await expect(page.getByText("23 controls")).toBeVisible({ timeout: 5000 });
   });
 });

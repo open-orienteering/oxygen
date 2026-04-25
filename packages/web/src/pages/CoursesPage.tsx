@@ -1,26 +1,33 @@
 import { useState, useMemo } from "react";
 import { useTranslation } from "react-i18next";
 import { trpc } from "../lib/trpc";
-import { useSearchParam, useNumericSearchParam } from "../hooks/useSearchParam";
+import { type CourseSummary } from "@oxygen/shared";
+import { useNumericSearchParam } from "../hooks/useSearchParam";
 import { SortHeader } from "../components/SortHeader";
 import { useSort } from "../hooks/useSort";
 import { useTableSelection } from "../hooks/useTableSelection";
 import { BulkActionBar } from "../components/BulkActionBar";
 import { CourseImportDialog } from "../components/CourseImportDialog";
 import { MapPanel } from "../components/MapPanel";
+import { StructuredSearchBar } from "../components/structured-search/StructuredSearchBar";
+import { useStructuredSearch } from "../hooks/useStructuredSearch";
+import { createCourseAnchors } from "../lib/structured-search/anchors/course-anchors";
 
 export function CoursesPage() {
   const { t } = useTranslation("courses");
-  const [search, setSearch] = useSearchParam("search");
   const [expandedId, setExpandedId] = useNumericSearchParam("course");
   const [showCreateForm, setShowCreateForm] = useState(false);
   const [showImportDialog, setShowImportDialog] = useState(false);
 
   const utils = trpc.useUtils();
 
-  const courses = trpc.course.list.useQuery({
-    search: search || undefined,
-  });
+  const anchors = useMemo(() => createCourseAnchors((key) => t(key as never)), [t]);
+  const { tokens, setTokens, filterItems } = useStructuredSearch<CourseSummary>(
+    anchors,
+    ["name"],
+  );
+
+  const courses = trpc.course.list.useQuery();
 
   const deleteMutation = trpc.course.delete.useMutation({
     onSuccess: () => {
@@ -50,7 +57,8 @@ export function CoursesPage() {
     maps: (a: Course, b: Course) => a.numberOfMaps - b.numberOfMaps,
   }), []);
 
-  const { sorted: items, sort, toggle } = useSort(courses.data ?? [], { key: "name", dir: "asc" }, comparators);
+  const filtered = useMemo(() => filterItems(courses.data ?? []), [courses.data, filterItems]);
+  const { sorted: items, sort, toggle } = useSort(filtered, { key: "name", dir: "asc" }, comparators);
 
   const selection = useTableSelection(items);
 
@@ -100,18 +108,12 @@ export function CoursesPage() {
     <>
       {/* Toolbar */}
       <div className="flex flex-col sm:flex-row gap-3 mb-6">
-        <div className="relative flex-1">
-          <svg className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
-          </svg>
-          <input
-            type="text"
-            placeholder={t("searchPlaceholder")}
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            className="w-full pl-10 pr-4 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent bg-white"
-          />
-        </div>
+        <StructuredSearchBar
+          tokens={tokens}
+          onTokensChange={setTokens}
+          anchors={anchors}
+          placeholder={t("searchPlaceholder")}
+        />
         <button
           onClick={() => setShowImportDialog(true)}
           className="px-4 py-2 border border-blue-200 text-blue-700 text-sm font-medium rounded-lg hover:bg-blue-50 transition-colors cursor-pointer flex items-center gap-1.5 whitespace-nowrap"

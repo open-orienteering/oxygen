@@ -1,87 +1,51 @@
-import { useMemo } from "react";
+import { useMemo, Fragment } from "react";
 import { useTranslation } from "react-i18next";
 import { trpc } from "../lib/trpc";
 import {
   formatRunningTime,
   RunnerStatus,
-  STATUS_FILTER_OPTIONS,
+  type ResultEntry,
   type RunnerStatusValue,
 } from "@oxygen/shared";
 import { StatusBadge } from "../components/StatusBadge";
 import { RunnerInlineDetail } from "../components/RunnerInlineDetail";
 import { ClubLogo } from "../components/ClubLogo";
-import { SearchableSelect } from "../components/SearchableSelect";
 import { SortHeader } from "../components/SortHeader";
 import { useSort } from "../hooks/useSort";
-import { useSearchParam, useNumericSearchParam } from "../hooks/useSearchParam";
+import { useNumericSearchParam } from "../hooks/useSearchParam";
+import { StructuredSearchBar } from "../components/structured-search/StructuredSearchBar";
+import { useStructuredSearch } from "../hooks/useStructuredSearch";
+import { createResultAnchors } from "../lib/structured-search/anchors/result-anchors";
 
-function matchesSearch(
-  entry: { name: string; clubName: string; startNo: number },
-  term: string,
-): boolean {
-  const lower = term.toLowerCase();
-  if (entry.name.toLowerCase().includes(lower)) return true;
-  if (entry.clubName.toLowerCase().includes(lower)) return true;
-  if (/^\d+$/.test(term) && entry.startNo > 0 && String(entry.startNo).startsWith(term)) return true;
-  return false;
-}
-
-function matchesStatusFilter(
-  entry: { status: RunnerStatusValue; startTime: number; finishTime: number; hasPunches?: boolean; hasStarted?: boolean },
-  filter: string,
-): boolean {
-  const hasResult = entry.status > 0;
-  const hasFinishTime = entry.finishTime > 0;
-  const hasPunches = !!entry.hasPunches;
-  const hasStarted = !!entry.hasStarted;
-
-  if (filter === "not-started") {
-    return !hasResult && !hasFinishTime && !hasPunches && !hasStarted;
-  }
-  if (filter === "in-forest") {
-    return !hasResult && !hasFinishTime && (hasPunches || hasStarted);
-  }
-  if (filter === "finished") {
-    return hasResult || hasFinishTime;
-  }
-  const statusNum = parseInt(filter, 10);
-  if (!isNaN(statusNum)) {
-    return entry.status === statusNum;
-  }
-  return true;
-}
+const FREE_TEXT_FIELDS: (keyof ResultEntry)[] = ["name", "clubName", "className", "startNo"];
 
 export function ResultsPage() {
   const { t } = useTranslation("results");
-  const [search, setSearch] = useSearchParam("search");
-  const [classFilter, setClassFilter] = useNumericSearchParam("class");
-  const [clubFilter, setClubFilter] = useNumericSearchParam("club");
-  const [statusFilter, setStatusFilter] = useSearchParam("status");
   const [expandedRunner, setExpandedRunner] = useNumericSearchParam("runner");
 
-  const results = trpc.lists.resultList.useQuery(
-    classFilter ? { classId: classFilter } : undefined,
+  const anchors = useMemo(() => createResultAnchors((key) => t(key as never)), [t]);
+  const { tokens, setTokens, filterItems } = useStructuredSearch<ResultEntry>(
+    anchors,
+    FREE_TEXT_FIELDS,
   );
+
+  const results = trpc.lists.resultList.useQuery();
   const dashboard = trpc.competition.dashboard.useQuery();
   const clubs = trpc.competition.clubs.useQuery();
 
   const entries = results.data ?? [];
   const COL_COUNT = 6;
 
-  // Apply client-side search + club + status filter
-  const filtered = useMemo(() => {
-    let list = entries;
-    if (clubFilter) {
-      list = list.filter((e) => e.clubId === clubFilter);
-    }
-    if (search.trim()) {
-      list = list.filter((e) => matchesSearch(e, search.trim()));
-    }
-    if (statusFilter) {
-      list = list.filter((e) => matchesStatusFilter(e, statusFilter));
-    }
-    return list;
-  }, [entries, search, clubFilter, statusFilter]);
+  const filtered = useMemo(() => filterItems(entries), [entries, filterItems]);
+
+  const suggestionData = useMemo(
+    () => ({
+      classes: dashboard.data?.classes.map((c) => ({ id: c.id, name: c.name })) ?? [],
+      clubs: clubs.data?.map((c) => ({ id: c.id, name: c.name })) ?? [],
+      runners: entries.map((e) => ({ name: e.name })),
+    }),
+    [dashboard.data, clubs.data, entries],
+  );
 
   type Entry = (typeof filtered)[number];
   const comparators = useMemo(() => ({
@@ -109,62 +73,14 @@ export function ResultsPage() {
 
   return (
     <>
-      <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 mb-6">
-        <h2 className="text-lg font-semibold text-slate-900">{t("title")}</h2>
-        <div className="flex flex-col sm:flex-row gap-3 w-full sm:w-auto">
-          <div className="relative flex-1 sm:flex-initial">
-            <svg className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
-            </svg>
-            <input
-              type="text"
-              placeholder={t("searchNameOrClub")}
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              className="w-full sm:w-64 pl-10 pr-4 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent bg-white"
-            />
-          </div>
-          <SearchableSelect
-            testId="class-filter"
-            value={classFilter ?? ""}
-            onChange={(v) => setClassFilter(v ? Number(v) : undefined)}
-            placeholder={t("allClasses")}
-            searchPlaceholder={t("searchClasses")}
-            options={[
-              { value: "", label: t("allClasses") },
-              ...(dashboard.data?.classes.map((c) => ({
-                value: c.id,
-                label: c.name,
-                suffix: c.runnerCount ? `(${c.runnerCount})` : undefined,
-              })) ?? []),
-            ]}
-          />
-          <SearchableSelect
-            testId="club-filter"
-            value={clubFilter ?? ""}
-            onChange={(v) => setClubFilter(v ? Number(v) : undefined)}
-            placeholder={t("allClubs")}
-            searchPlaceholder={t("searchClubs")}
-            options={[
-              { value: "", label: t("allClubs") },
-              ...(clubs.data?.map((c) => ({
-                value: c.id,
-                label: c.name,
-                icon: <ClubLogo clubId={c.id} size="sm" />,
-              })) ?? []),
-            ]}
-          />
-          <SearchableSelect
-            testId="status-filter"
-            value={statusFilter}
-            onChange={(v) => setStatusFilter(String(v))}
-            placeholder={t("allStatuses")}
-            options={STATUS_FILTER_OPTIONS.map((opt) => ({
-              value: opt.value,
-              label: opt.label,
-            }))}
-          />
-        </div>
+      <div className="mb-6">
+        <StructuredSearchBar
+          tokens={tokens}
+          onTokensChange={setTokens}
+          anchors={anchors}
+          placeholder={t("searchNameOrClub")}
+          suggestionData={suggestionData}
+        />
       </div>
 
       {results.isLoading && (
@@ -173,11 +89,9 @@ export function ResultsPage() {
         </div>
       )}
 
-      {(search.trim() || statusFilter) && (
+      {tokens.length > 0 && (
         <div className="text-sm text-slate-500 mb-4">
           {t("resultCount", { count: filtered.length })}
-          {search.trim() ? <> {t("forQuery", { query: search })}</> : ""}
-          {statusFilter ? ` ${t("filteredByStatus")}` : ""}
         </div>
       )}
 
@@ -214,9 +128,8 @@ export function ResultsPage() {
                 </thead>
                 <tbody className="divide-y divide-slate-100">
                   {classEntries.map((entry) => (
-                    <>
+                    <Fragment key={entry.id}>
                       <tr
-                        key={entry.id}
                         className={`transition-colors cursor-pointer ${expandedRunner === entry.id
                             ? "bg-blue-50"
                             : entry.place === 1
@@ -269,7 +182,7 @@ export function ResultsPage() {
                           colSpan={COL_COUNT}
                         />
                       )}
-                    </>
+                    </Fragment>
                   ))}
                 </tbody>
               </table>
@@ -280,7 +193,7 @@ export function ResultsPage() {
 
       {filtered.length === 0 && !results.isLoading && (
         <div className="text-center py-20 text-slate-400">
-          {search.trim() ? t("noMatchingResults") : t("noResultsFound")}
+          {tokens.length > 0 ? t("noMatchingResults") : t("noResultsFound")}
         </div>
       )}
     </>

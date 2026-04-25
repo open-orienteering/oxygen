@@ -44,13 +44,15 @@ test.describe("Tab Navigation", () => {
 
     await goToTab(page, "Start List");
     await expect(
-      page.getByRole("heading", { name: "Start List" }),
+      page.getByTestId("draw-start-times-btn"),
     ).toBeVisible({ timeout: 5000 });
+    expect(page.url()).toContain("/itest/startlist");
 
     await goToTab(page, "Results");
     await expect(
-      page.getByRole("heading", { name: "Results" }),
+      page.getByPlaceholder("Search name or club..."),
     ).toBeVisible({ timeout: 5000 });
+    expect(page.url()).toContain("/itest/results");
   });
 });
 

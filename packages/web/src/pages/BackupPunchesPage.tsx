@@ -1,29 +1,17 @@
-import { useMemo, useState } from "react";
+import { useMemo } from "react";
 import { useTranslation } from "react-i18next";
 import { trpc } from "../lib/trpc";
 import { useSort } from "../hooks/useSort";
 import { SortHeader } from "../components/SortHeader";
+import { StructuredSearchBar } from "../components/structured-search/StructuredSearchBar";
+import { useStructuredSearch } from "../hooks/useStructuredSearch";
+import {
+  createBackupPunchAnchors,
+  type BackupPunchRow,
+  type MatchStatus,
+} from "../lib/structured-search/anchors/backup-punch-anchors";
 
-type MatchStatus = "matched" | "no_runner" | "no_result" | "time_mismatch" | "unknown";
-
-type BackupPunch = {
-  id: number;
-  controlId: number;
-  controlCodes: string;
-  controlName: string;
-  cardNo: number;
-  punchTime: number;
-  punchDatetime: string | null;
-  subSecond: number | null;
-  stationSerial: number | null;
-  importedAt: string;
-  pushedToPunch: boolean;
-  runnerName: string | null;
-  runnerId: number | null;
-  runnerStatus: number | null;
-  registeredTime: number | null;
-  matchStatus: MatchStatus;
-};
+type BackupPunch = BackupPunchRow;
 
 function fmtIso(d: Date): string {
   const Y = d.getFullYear();
@@ -72,13 +60,8 @@ const comparators: Record<string, (a: BackupPunch, b: BackupPunch) => number> = 
   match: (a, b) => matchStatusOrder[a.matchStatus] - matchStatusOrder[b.matchStatus],
 };
 
-type Filter = "all" | "anomalies" | "matched";
-
 export function BackupPunchesPage() {
   const { t } = useTranslation("controls");
-  const [filter, setFilter] = useState<Filter>("all");
-  const [cardSearch, setCardSearch] = useState("");
-  const [controlFilter, setControlFilter] = useState<number | "all">("all");
 
   const allPunches = trpc.control.listAllBackupPunches.useQuery();
   const pushMutation = trpc.control.pushBackupPunch.useMutation({
@@ -87,86 +70,44 @@ export function BackupPunchesPage() {
 
   const punches = (allPunches.data ?? []) as BackupPunch[];
 
-  const controls = useMemo(() => {
+  const anchors = useMemo(
+    () => createBackupPunchAnchors((key) => t(key as never)),
+    [t],
+  );
+  const { tokens, setTokens, filterItems } = useStructuredSearch<BackupPunchRow>(
+    anchors,
+    ["runnerName", "controlCodes", "controlName"],
+  );
+
+  const suggestionData = useMemo(() => {
     const map = new Map<number, string>();
     for (const p of punches) {
       if (!map.has(p.controlId)) {
         map.set(p.controlId, p.controlCodes || String(p.controlId));
       }
     }
-    return Array.from(map.entries()).sort((a, b) => a[0] - b[0]);
+    return {
+      controls: Array.from(map.entries())
+        .sort((a, b) => a[0] - b[0])
+        .map(([id, code]) => ({ id, code })),
+    };
   }, [punches]);
 
-  const filtered = useMemo(() => {
-    let result = punches;
-
-    if (controlFilter !== "all") {
-      result = result.filter((p) => p.controlId === controlFilter);
-    }
-
-    if (cardSearch.trim()) {
-      const q = cardSearch.trim();
-      result = result.filter((p) => String(p.cardNo).includes(q));
-    }
-
-    if (filter === "anomalies") {
-      result = result.filter((p) => p.matchStatus !== "matched");
-    } else if (filter === "matched") {
-      result = result.filter((p) => p.matchStatus === "matched");
-    }
-
-    return result;
-  }, [punches, filter, cardSearch, controlFilter]);
-
+  const filtered = useMemo(() => filterItems(punches), [punches, filterItems]);
   const { sorted, sort, toggle } = useSort(filtered, { key: "time", dir: "asc" }, comparators);
-
-  const matchedCount = punches.filter((p) => p.matchStatus === "matched").length;
-  const anomalyCount = punches.length - matchedCount;
 
   return (
     <>
-      {/* Filters row */}
-      <div className="flex flex-wrap items-center gap-3 mb-4">
-        <div className="flex items-center gap-1">
-          {(["all", "anomalies", "matched"] as const).map((f) => (
-            <button
-              key={f}
-              onClick={() => setFilter(f)}
-              className={`px-3 py-1.5 text-xs font-medium rounded-lg cursor-pointer ${
-                filter === f
-                  ? "bg-amber-600 text-white"
-                  : "bg-white border border-slate-200 text-slate-600 hover:bg-slate-50"
-              }`}
-            >
-              {f === "all"
-                ? `${t("filterAll")} (${punches.length})`
-                : f === "anomalies"
-                  ? `${t("filterAnomalies")} (${anomalyCount})`
-                  : `${t("filterMatched")} (${matchedCount})`}
-            </button>
-          ))}
-        </div>
-
-        <select
-          value={controlFilter === "all" ? "all" : String(controlFilter)}
-          onChange={(e) => setControlFilter(e.target.value === "all" ? "all" : Number(e.target.value))}
-          className="px-2 py-1.5 text-xs border border-slate-200 rounded-lg bg-white text-slate-600"
-        >
-          <option value="all">{t("allControls")}</option>
-          {controls.map(([id, codes]) => (
-            <option key={id} value={id}>{codes}</option>
-          ))}
-        </select>
-
-        <input
-          type="text"
-          value={cardSearch}
-          onChange={(e) => setCardSearch(e.target.value)}
+      {/* Search row */}
+      <div className="flex flex-col sm:flex-row sm:items-center gap-3 mb-4">
+        <StructuredSearchBar
+          tokens={tokens}
+          onTokensChange={setTokens}
+          anchors={anchors}
           placeholder={t("searchCard")}
-          className="px-2 py-1.5 text-xs border border-slate-200 rounded-lg bg-white text-slate-600 w-32 placeholder:text-slate-400"
+          suggestionData={suggestionData}
         />
-
-        <span className="text-xs text-slate-400 ml-auto">
+        <span className="text-xs text-slate-400 whitespace-nowrap">
           {t("showingCount", { shown: sorted.length, total: punches.length })}
         </span>
       </div>

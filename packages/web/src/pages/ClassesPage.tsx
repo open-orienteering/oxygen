@@ -3,11 +3,14 @@ import { useTranslation } from "react-i18next";
 import { useNavigate } from "react-router-dom";
 import { trpc } from "../lib/trpc";
 import { formatMeosTime, parseMeosTime, type ClassSummary } from "@oxygen/shared";
-import { useSearchParam, useNumericSearchParam } from "../hooks/useSearchParam";
+import { useNumericSearchParam } from "../hooks/useSearchParam";
 import { SortHeader } from "../components/SortHeader";
 import { useSort } from "../hooks/useSort";
 import { useTableSelection } from "../hooks/useTableSelection";
 import { BulkActionBar } from "../components/BulkActionBar";
+import { StructuredSearchBar } from "../components/structured-search/StructuredSearchBar";
+import { useStructuredSearch } from "../hooks/useStructuredSearch";
+import { createClassAnchors } from "../lib/structured-search/anchors/class-anchors";
 import {
   DndContext,
   closestCenter,
@@ -29,15 +32,26 @@ import { MapPanel } from "../components/MapPanel";
 
 export function ClassesPage() {
   const { t } = useTranslation("classes");
-  const [search, setSearch] = useSearchParam("search");
   const [expandedId, setExpandedId] = useNumericSearchParam("classId");
   const [showCreateForm, setShowCreateForm] = useState(false);
 
   const utils = trpc.useUtils();
 
-  const classes = trpc.class.list.useQuery({
-    search: search || undefined,
-  });
+  const anchors = useMemo(() => createClassAnchors((key) => t(key as never)), [t]);
+  const { tokens, setTokens, filterItems } = useStructuredSearch<ClassSummary>(
+    anchors,
+    ["name", "classType"],
+  );
+
+  const classes = trpc.class.list.useQuery();
+  const courses = trpc.course.list.useQuery();
+
+  const suggestionData = useMemo(
+    () => ({
+      courses: courses.data?.map((c) => ({ id: c.id, name: c.name })) ?? [],
+    }),
+    [courses.data],
+  );
 
   const selection = useTableSelection(classes.data ?? []);
 
@@ -94,8 +108,9 @@ export function ClassesPage() {
     setExpandedId(expandedId === id ? undefined : id);
   };
 
-  const rawItems = classes.data ?? [];
-  const isFiltered = !!search;
+  const allItems = classes.data ?? [];
+  const rawItems = useMemo(() => filterItems(allItems), [allItems, filterItems]);
+  const isFiltered = tokens.length > 0;
 
   type Cls = (typeof rawItems)[number];
   const comparators = useMemo(() => ({
@@ -143,18 +158,13 @@ export function ClassesPage() {
     <>
       {/* Toolbar */}
       <div className="flex flex-col sm:flex-row gap-3 mb-6">
-        <div className="relative flex-1">
-          <svg className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
-          </svg>
-          <input
-            type="text"
-            placeholder={t("searchPlaceholder")}
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            className="w-full pl-10 pr-4 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent bg-white"
-          />
-        </div>
+        <StructuredSearchBar
+          tokens={tokens}
+          onTokensChange={setTokens}
+          anchors={anchors}
+          placeholder={t("searchPlaceholder")}
+          suggestionData={suggestionData}
+        />
         <button
           onClick={() => setShowCreateForm(true)}
           className="px-4 py-2 bg-blue-600 text-white text-sm font-medium rounded-lg hover:bg-blue-700 transition-colors cursor-pointer flex items-center gap-1.5 whitespace-nowrap"

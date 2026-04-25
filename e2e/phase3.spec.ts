@@ -143,11 +143,11 @@ test.describe("URL Routing", () => {
     expect(page.url()).toContain("/itest/runners");
 
     await clickTab(page, "Start List");
-    await expect(page.getByRole("heading", { name: "Start List" })).toBeVisible({ timeout: 5000 });
+    await expect(page.getByTestId("draw-start-times-btn")).toBeVisible({ timeout: 5000 });
     expect(page.url()).toContain("/itest/startlist");
 
     await clickTab(page, "Results");
-    await expect(page.getByRole("heading", { name: "Results" })).toBeVisible({ timeout: 5000 });
+    await expect(page.getByPlaceholder("Search name or club...")).toBeVisible({ timeout: 5000 });
     expect(page.url()).toContain("/itest/results");
 
     await clickTab(page, "Card Readout");
@@ -191,7 +191,7 @@ test.describe("URL Routing", () => {
     await expect(page.locator("span", { hasText: "runners" })).toBeVisible({ timeout: 10000 });
 
     await clickTab(page, "Results");
-    await expect(page.getByRole("heading", { name: "Results" })).toBeVisible({ timeout: 5000 });
+    await expect(page.getByPlaceholder("Search name or club...")).toBeVisible({ timeout: 5000 });
 
     await page.goBack();
     await expect(page.locator("span", { hasText: "runners" })).toBeVisible({ timeout: 5000 });
