@@ -167,6 +167,18 @@ const EVENTOR_STATUS_MAP: Record<string, number> = {
 
 // ─── Helpers ────────────────────────────────────────────────
 
+/**
+ * Thrown when Eventor explicitly rejects the API key (HTTP 403).
+ * This is distinct from transient failures (network errors, 5xx, etc.) so
+ * callers can decide whether to discard the key or keep it for a retry.
+ */
+export class EventorAuthError extends Error {
+  constructor(message = "Invalid API key or insufficient permissions") {
+    super(message);
+    this.name = "EventorAuthError";
+  }
+}
+
 async function eventorFetch(
   endpoint: string,
   apiKey: string,
@@ -185,7 +197,7 @@ async function eventorFetch(
   });
 
   if (resp.status === 403) {
-    throw new Error("Invalid API key or insufficient permissions");
+    throw new EventorAuthError();
   }
   if (!resp.ok) {
     throw new Error(`Eventor API error: ${resp.status} ${resp.statusText}`);
