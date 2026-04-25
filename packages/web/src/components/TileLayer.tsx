@@ -65,16 +65,27 @@ function computeTiles(
       const key = `${z}/${wrappedX}/${ty}`;
       if (failedTiles.has(key)) continue;
 
-      const px = (tx - centerTileX) * tileDisplaySize + containerWidth / 2;
-      const py = (ty - centerTileY) * tileDisplaySize + containerHeight / 2;
+      // Snap tile placement to integer pixel boundaries so adjacent tiles
+      // share an exact pixel column/row. At fractional zoom levels both the
+      // position and tileDisplaySize are non-integer, which causes the browser
+      // to anti-alias each tile edge against the container background and
+      // produces visible white hairlines between neighbouring tiles.
+      // floor(left) + ceil(right) - floor(left) guarantees coverage with no
+      // gaps and at most one pixel of overlap between neighbours.
+      const x0 = (tx - centerTileX) * tileDisplaySize + containerWidth / 2;
+      const y0 = (ty - centerTileY) * tileDisplaySize + containerHeight / 2;
+      const left = Math.floor(x0);
+      const top = Math.floor(y0);
+      const width = Math.ceil(x0 + tileDisplaySize) - left;
+      const height = Math.ceil(y0 + tileDisplaySize) - top;
 
       result.push({
         key,
         src: `${tileUrlBase}/${z}/${wrappedX}/${ty}${tileVersion ? `?v=${tileVersion}` : ""}`,
-        x: px,
-        y: py,
-        width: tileDisplaySize,
-        height: tileDisplaySize,
+        x: left,
+        y: top,
+        width,
+        height,
       });
     }
   }

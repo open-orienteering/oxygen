@@ -12,6 +12,7 @@ import {
   metersPerPixel,
   buildAffineTransform,
 } from "../lib/geo-utils";
+import { rotatedBoundingBox } from "../lib/map-rotation";
 
 // ─── Types ──────────────────────────────────────────────────
 
@@ -225,14 +226,13 @@ export function MapViewer({
   // Map rotation: negate northOffset so map north points up on screen
   const rotDeg = northOffset ? -northOffset : 0;
   const rotRad = (rotDeg * Math.PI) / 180;
-  // Overscan factor: scale the inner rotated container so corners don't clip
-  const overscan = rotDeg !== 0
-    ? Math.abs(Math.cos(rotRad)) + Math.abs(Math.sin(rotRad)) // ≈ 1.12 for 7°
-    : 1;
-
-  // Effective render dimensions (larger when rotated to cover corners)
-  const renderW = rotDeg !== 0 ? Math.round(containerSize.w * overscan) : containerSize.w;
-  const renderH = rotDeg !== 0 ? Math.round(containerSize.h * overscan) : containerSize.h;
+  // Effective render dimensions: minimum bounding box of a rectangle that
+  // fully covers the outer container after rotation. See rotatedBoundingBox
+  // for the math — the previous single-factor formula was only correct for
+  // square containers and produced visible wedges at corners otherwise.
+  const { width: renderW, height: renderH } = rotatedBoundingBox(
+    containerSize.w, containerSize.h, rotDeg,
+  );
 
   // Build affine transform from control points (mm ↔ lat/lng)
   const affine: AffineTransform | null = useMemo(() => {
