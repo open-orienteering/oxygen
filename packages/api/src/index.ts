@@ -277,15 +277,21 @@ async function main() {
     const tilePixels = Buffer.alloc(tileSize * tileSize * 4);
     let hasContent = false;
 
+    // Sample at pixel centres (u, v ∈ [0.5/N, (N-0.5)/N]) rather than at
+    // pixel corners (u, v ∈ [0, (N-1)/N]). With the previous mapping the
+    // rightmost column of tile A sampled at u=255/256 of A's geographic
+    // span while tile B's leftmost column sampled at u=0 of B's span, which
+    // share a geographic edge — producing a 1-sample discontinuity that
+    // renders as a hairline seam between adjacent tiles.
     for (let ty = 0; ty < tileSize; ty++) {
-      const v = ty / tileSize;
+      const v = (ty + 0.5) / tileSize;
       const leftBx  = nwPx.bx + (swPx.bx - nwPx.bx) * v;
       const leftBy  = nwPx.by + (swPx.by - nwPx.by) * v;
       const rightBx = nePx.bx + (sePx.bx - nePx.bx) * v;
       const rightBy = nePx.by + (sePx.by - nePx.by) * v;
 
       for (let tx = 0; tx < tileSize; tx++) {
-        const u = tx / tileSize;
+        const u = (tx + 0.5) / tileSize;
         const srcX = leftBx + (rightBx - leftBx) * u;
         const srcY = leftBy + (rightBy - leftBy) * u;
 
