@@ -3,7 +3,6 @@ import { router, competitionProcedure, publicProcedure } from "../trpc.js";
 import {createCompetitionDatabase, sanitizeDbName, ensureLogoTable, getSetting, setSetting, getMainDbConnection, ensureRunnerDbTable, ensureClubDbTable, ensureCompetitionConfigTable, getZeroTime, getCompetitionClient} from "../db.js";
 import type { PrismaClient } from "@prisma/client";
 import {
-  validateApiKey,
   fetchEvents,
   fetchEventClasses,
   fetchEntries,
@@ -24,58 +23,44 @@ import {
   type EventorResult,
   type EventorCompetitor,
 } from "../eventor.js";
+import { eventorKeyStore } from "../eventorKeyStore.js";
 import { type EventorEnvironment } from "@oxygen/shared";
 import { computeClassPlacements } from "../results.js";
 import { parsePunches, parseCourseControls, matchPunchesToCourse, type ParsedPunch } from "./cardReadout.js";
 import { toAbsolute } from "../timeConvert.js";
 import { fetchLiveloxEventClasses } from "../livelox/fetcher.js";
 
-// In-memory store for the validated API key and organisation, keyed by environment.
-const storedKeys = new Map<
-  EventorEnvironment,
-  { apiKey: string; org: EventorOrganisation } | null
->();
-const keyLoadedFromDb = new Map<EventorEnvironment, boolean>([
-  ["prod", false],
-  ["test", false],
-]);
-
 /**
- * Ensure the API key for a specific environment is loaded from the database into memory.
- */
-async function ensureKeyLoaded(env: EventorEnvironment): Promise<void> {
-  if (keyLoadedFromDb.get(env)) return;
-  keyLoadedFromDb.set(env, true);
-
-  try {
-    const settingKey =
-      env === "test" ? "eventor_api_key_test" : "eventor_api_key";
-    const saved = await getSetting(settingKey);
-    if (saved) {
-      // Validate it's still good and populate storedOrg
-      const org = await validateApiKey(saved, env);
-      storedKeys.set(env, { apiKey: saved, org });
-    }
-  } catch {
-    // Key is invalid or Eventor unreachable — clear it
-    storedKeys.set(env, null);
-  }
-}
-
-/**
- * Get the stored API key for an environment, loading from DB if needed.
+ * Get the stored API key (without org info) for endpoints that just need to
+ * authenticate against Eventor. Throws if no key is configured.
  */
 async function requireApiKey(
   env: EventorEnvironment = "prod",
-): Promise<{ apiKey: string; org: EventorOrganisation }> {
-  await ensureKeyLoaded(env);
-  const stored = storedKeys.get(env);
-  if (!stored) {
+): Promise<{ apiKey: string }> {
+  const apiKey = await eventorKeyStore.getKey(env);
+  if (!apiKey) {
     throw new Error(
       `Eventor API key for ${env} not configured. Please validate your key first.`,
     );
   }
-  return stored;
+  return { apiKey };
+}
+
+/**
+ * Get the stored API key plus organisation info. Used by endpoints that need
+ * the organisation id (e.g. the events listing). May make a single Eventor
+ * round-trip the first time after process start to resolve the org.
+ */
+async function requireApiKeyWithOrg(
+  env: EventorEnvironment = "prod",
+): Promise<{ apiKey: string; org: EventorOrganisation }> {
+  const result = await eventorKeyStore.getKeyWithOrg(env);
+  if (!result) {
+    throw new Error(
+      `Eventor API key for ${env} not configured. Please validate your key first.`,
+    );
+  }
+  return result;
 }
 
 // Cache club member lists to avoid repeated Eventor API calls
@@ -102,15 +87,7 @@ export const eventorRouter = router({
       }),
     )
     .mutation(async ({ input }) => {
-      const org = await validateApiKey(input.apiKey, input.env);
-      storedKeys.set(input.env, { apiKey: input.apiKey, org });
-      keyLoadedFromDb.set(input.env, true);
-
-      // Persist to database
-      const settingKey =
-        input.env === "test" ? "eventor_api_key_test" : "eventor_api_key";
-      await setSetting(settingKey, input.apiKey);
-
+      const org = await eventorKeyStore.setKey(input.apiKey, input.env);
       return {
         organisationId: org.id,
         organisationName: org.name,
@@ -124,10 +101,7 @@ export const eventorRouter = router({
   clearKey: publicProcedure
     .input(z.object({ env: z.enum(["prod", "test"]).default("prod") }))
     .mutation(async ({ input }) => {
-      storedKeys.set(input.env, null);
-      const settingKey =
-        input.env === "test" ? "eventor_api_key_test" : "eventor_api_key";
-      await setSetting(settingKey, null);
+      await eventorKeyStore.clearKey(input.env);
       return { success: true };
     }),
 
@@ -135,19 +109,25 @@ export const eventorRouter = router({
    * Get the currently stored key status (without exposing the key).
    * Restores from persistent storage on first call after server start.
    * Public: globally-scoped like validateKey.
+   *
+   * Importantly, this does NOT call out to Eventor on cold start — a flaky
+   * Eventor must never make the user's saved key appear "forgotten". If we
+   * already have org info cached, we surface it; otherwise we report
+   * `connected: true` with no org details until the next call that actually
+   * needs them.
    */
   keyStatus: publicProcedure
     .input(z.object({ env: z.enum(["prod", "test"]).default("prod") }))
     .query(async ({ input }) => {
-      await ensureKeyLoaded(input.env);
-      const stored = storedKeys.get(input.env);
-      if (!stored) {
+      const apiKey = await eventorKeyStore.getKey(input.env);
+      if (!apiKey) {
         return { connected: false as const };
       }
+      const cached = eventorKeyStore.peek(input.env);
       return {
         connected: true as const,
-        organisationId: stored.org.id,
-        organisationName: stored.org.name,
+        organisationId: cached?.org?.id,
+        organisationName: cached?.org?.name,
       };
     }),
 
@@ -164,7 +144,7 @@ export const eventorRouter = router({
       }).optional(),
     )
     .query(async ({ input }) => {
-      const { apiKey, org } = await requireApiKey(input?.env);
+      const { apiKey, org } = await requireApiKeyWithOrg(input?.env);
 
       // Default: from 6 months ago to 6 months ahead
       const now = new Date();
@@ -504,18 +484,17 @@ export const eventorRouter = router({
       | null;
     const env = envSuffix ?? "prod";
 
-    await ensureKeyLoaded(env);
-    const stored = storedKeys.get(env);
+    const apiKeyConfigured = (await eventorKeyStore.getKey(env)) !== null;
 
     if (!event) {
-      return { linked: false as const, apiKeyConfigured: !!stored, env };
+      return { linked: false as const, apiKeyConfigured, env };
     }
 
     const eventorEventId = Number(event.ExtId);
     if (!eventorEventId) {
       return {
         linked: false as const,
-        apiKeyConfigured: !!stored,
+        apiKeyConfigured,
         env,
       };
     }
@@ -524,7 +503,7 @@ export const eventorRouter = router({
       linked: true as const,
       eventorEventId,
       lastSync: event.ImportStamp || null,
-      apiKeyConfigured: !!stored,
+      apiKeyConfigured,
       env,
     };
   }),

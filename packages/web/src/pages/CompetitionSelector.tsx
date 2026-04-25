@@ -631,7 +631,7 @@ function EventorImportPanel({
           env={env}
           orgName={
             keyStatus.data?.connected
-              ? keyStatus.data.organisationName
+              ? keyStatus.data.organisationName ?? ""
               : ""
           }
           onImported={onImported}
