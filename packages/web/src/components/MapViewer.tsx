@@ -1066,8 +1066,16 @@ export function MapViewer({
   const descriptionSheet = useMemo(() => {
     if (!showDescriptions || !courseGeometry || containerSize.w === 0 || containerSize.h === 0) return null;
     const activeCourse = courses.find(c => c.highlight || c.name === highlightCourseName);
-    return renderDescriptionSheet(courseGeometry, symbolScale, containerSize.w, containerSize.h, activeCourse?.name);
-  }, [showDescriptions, courseGeometry, symbolScale, containerSize, courses, highlightCourseName]);
+    return renderDescriptionSheet(
+      courseGeometry,
+      symbolScale,
+      containerSize.w,
+      containerSize.h,
+      activeCourse?.name,
+      activeCourse?.controls,
+      controls,
+    );
+  }, [showDescriptions, courseGeometry, symbolScale, containerSize, courses, highlightCourseName, controls]);
 
   // ─── Scale bar ─────────────────────────────────────────
 
@@ -1336,21 +1344,64 @@ function renderDescriptionSheet(
   cw: number,
   ch: number,
   courseName?: string,
+  /** Ordered list of control IDs for the active course (start/finish included). */
+  activeCourseControls?: string[],
+  /** All control overlays — used to resolve id → code/type when geometry is sparse. */
+  controlOverlays?: ControlOverlay[],
 ): React.ReactNode | null {
   if (!courseGeometry?.features) return null;
 
   const features = courseGeometry.features || [];
-  const controlFeatures = features.filter(
-    (f: any) => f.properties?.symbolType === "control" && f.properties?.code && f.properties?.description,
-  );
 
-  if (controlFeatures.length === 0) return null;
+  // Build a code-keyed map from the geometry. Start/finish features have
+  // their own symbolType so they can't accidentally appear here, and we
+  // de-dup by code (the same control may show up in multiple courses).
+  const featureByCode = new Map<string, { code: string; description?: unknown }>();
+  for (const f of features) {
+    if (f?.properties?.symbolType === "control" && f.properties?.code) {
+      const code = String(f.properties.code);
+      if (!featureByCode.has(code)) {
+        featureByCode.set(code, {
+          code,
+          description: f.properties.description,
+        });
+      }
+    }
+  }
+
+  // Build the ordered list of rows. Prefer the active course's control
+  // list (proper sequence + skips controls not in the course). Fall back
+  // to whatever's in the geometry if no course is highlighted.
+  type Row = { code: string; description?: unknown };
+  const rows: Row[] = [];
+  if (activeCourseControls && activeCourseControls.length > 0) {
+    for (const cid of activeCourseControls) {
+      // Look up overlay first: it tells us the type so we can skip start/finish.
+      const overlay = controlOverlays?.find((o) => o.id === cid);
+      if (overlay && overlay.type !== "Control") continue;
+      // The id used by the course is normally the punch code (OCD parser
+      // sets `id: code`). For IOF-parsed courses the id may differ, so
+      // also fall back to the overlay's code.
+      const lookupKey = overlay?.code ?? cid;
+      const f = featureByCode.get(String(lookupKey));
+      rows.push({
+        code: String(overlay?.code ?? lookupKey),
+        description: f?.description,
+      });
+    }
+  } else {
+    for (const f of featureByCode.values()) {
+      rows.push(f);
+    }
+  }
+
+  if (rows.length === 0) return null;
 
   // IOF standard: 8 columns (A=seq, B=code, C-G=description symbols, H=dimensions)
   const cellSize = Math.max(20, Math.min(36, 7 * symbolScale));
   const cols = 8;
   const headerRows = 1; // course name header
-  const totalRows = headerRows + controlFeatures.length;
+  const totalRows = headerRows + rows.length;
   const sheetW = cols * cellSize;
   const sheetH = totalRows * cellSize;
 
@@ -1400,10 +1451,10 @@ function renderDescriptionSheet(
   }
 
   // Control rows
-  for (let i = 0; i < controlFeatures.length; i++) {
-    const f = controlFeatures[i];
-    const code = f.properties.code;
-    const desc = f.properties.description;
+  for (let i = 0; i < rows.length; i++) {
+    const row = rows[i];
+    const code = row.code;
+    const desc = row.description;
     const ry = sheetY + (i + headerRows) * cellSize;
     const fs = cellSize * 0.45;
 
@@ -1422,8 +1473,8 @@ function renderDescriptionSheet(
       </text>
     );
 
-    // Columns C-G: IOF description symbols
-    const symbols = getDescriptionSymbols(desc, "#c026d3");
+    // Columns C-G: IOF description symbols (empty if no description)
+    const symbols = desc ? getDescriptionSymbols(desc, "#c026d3") : ({} as ReturnType<typeof getDescriptionSymbols>);
     const colKeys = ["colC", "colD", "colE", "colF", "colG"] as const;
     for (let ci = 0; ci < colKeys.length; ci++) {
       const content = symbols[colKeys[ci]];
