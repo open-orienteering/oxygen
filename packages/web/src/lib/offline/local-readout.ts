@@ -10,7 +10,6 @@
 import type { QueryClient } from "@tanstack/react-query";
 import {
   parsePunches,
-  parseCourseControls,
   matchPunchesToCourse,
   computeStatus,
   computePosition,
@@ -74,8 +73,9 @@ export function computeLocalReadout(
     ? dashboard.courses?.find((c: CourseItem) => c.id === cls.courseId)
     : null;
 
-  // Parse course controls
-  const courseControls = course?.controls ? parseCourseControls(course.controls) : [];
+  // No-op for the manual-finish path (no card data → no matching). Kept
+  // here only so future telemetry can report course length etc.
+  void course;
 
   // We may not have the card punch data cached locally.
   // For a manual finish (FinishStation), we don't have SI card punches —
@@ -174,7 +174,10 @@ export function computeCardReadout(
   const course = cls?.courseId
     ? dashboard.courses?.find((c: CourseItem) => c.id === cls.courseId)
     : null;
-  const courseControls = course?.controls ? parseCourseControls(course.controls) : [];
+  // Use the server-resolved per-position descriptors. Status-aware:
+  // multi-code controls, Bad/Optional/BadNoTiming skipping, NoTiming /
+  // BadNoTiming leg deductions are all baked into this shape.
+  const expectedPositions = course?.expectedPositions ?? [];
 
   // Convert SI card data to ParsedPunch format (seconds → deciseconds)
   const allPunches: ParsedPunch[] = [];
@@ -192,10 +195,13 @@ export function computeCardReadout(
   // Use runner's assigned start time as fallback (already in deciseconds from server cache)
   const fallbackStartTime = runner.startTime || 0;
 
-  const { matches, extraPunches, startTime, finishTime, missingCount } =
-    matchPunchesToCourse(allPunches, courseControls, fallbackStartTime);
+  const { matches, extraPunches, startTime, finishTime, missingCount, runningTimeAdjustment } =
+    matchPunchesToCourse(allPunches, expectedPositions, fallbackStartTime);
 
-  const runningTime = finishTime > 0 && startTime > 0 ? finishTime - startTime : 0;
+  const rawRunningTime = finishTime > 0 && startTime > 0 ? finishTime - startTime : 0;
+  // Subtract NoTiming/BadNoTiming leg deductions so the offline result
+  // matches the canonical (kiosk + admin + results-page) running time.
+  const runningTime = Math.max(0, rawRunningTime - runningTimeAdjustment);
 
   const status = computeStatus({
     finishTime,
@@ -210,7 +216,7 @@ export function computeCardReadout(
 
   // Compute match score
   const matchedCount = matches.filter((m) => m.status === "ok").length;
-  const matchScore = computeMatchScore(courseControls.length, matchedCount, input.punches.length, 0);
+  const matchScore = computeMatchScore(expectedPositions.length, matchedCount, input.punches.length, 0);
   const punchesRelevant = matchScore >= 0.2;
 
   // Compute position from cached runners
@@ -307,7 +313,15 @@ interface CourseItem {
   id: number;
   name: string;
   length: number;
+  /** Raw oCourse.Controls Id list (kept for diagnostics). */
   controls: string;
+  /**
+   * Status-aware per-position descriptors resolved server-side. Used
+   * for offline punch matching so the client applies the same MeOS
+   * evaluation rules (skipped positions, NoTiming / BadNoTiming leg
+   * deductions, Multiple expansion).
+   */
+  expectedPositions: import("@oxygen/shared").ExpectedPosition[];
 }
 
 interface RunnerItem {

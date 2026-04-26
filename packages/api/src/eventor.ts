@@ -130,6 +130,13 @@ export interface ResultForUpload {
   cardNo?: number;
   startTime?: number; // ds from midnight
   finishTime?: number; // ds from midnight
+  /**
+   * Deciseconds to subtract from `finishTime - startTime` to get the
+   * canonical running time. Set when the runner traversed NoTiming or
+   * BadNoTiming positions. Mirrors MeOS oImportExport.cpp:2325 which
+   * exports getRunningTime(true) — the adjusted time.
+   */
+  runningTimeAdjustment?: number;
   status: number; // MeOS status
   place?: number; // 1-based, 0 or undefined = no placement
   noTiming?: boolean; // class has no timing/ranking
@@ -1257,9 +1264,14 @@ export async function uploadResults(
 
           const hasTiming = !r.noTiming;
           const statusStr = meosStatusToIof(r.status, (r.finishTime ?? 0) > 0);
-          const runningTime = hasTiming && r.status === 1 && r.finishTime && r.startTime && r.finishTime > r.startTime
-            ? Math.round((r.finishTime - r.startTime) / 10)
-            : undefined;
+          // Adjusted running time — mirrors MeOS getRunningTime(true) which
+          // returns tComputedTime including NoTiming/BadNoTiming deductions
+          // (oImportExport.cpp:2325 calls the adjusted accessor).
+          const adjustedRaw =
+            hasTiming && r.status === 1 && r.finishTime && r.startTime && r.finishTime > r.startTime
+              ? Math.max(0, r.finishTime - r.startTime - (r.runningTimeAdjustment ?? 0))
+              : 0;
+          const runningTime = adjustedRaw > 0 ? Math.round(adjustedRaw / 10) : undefined;
 
           // Fee elements (matching MeOS writeAssignedFee + writeRentalCardService)
           const assignedFees = buildAssignedFee(r, factor, currencyCode);

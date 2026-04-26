@@ -266,13 +266,28 @@ export interface ClubDetail {
 }
 
 /** Course summary */
+// Re-export the matcher's per-position descriptor so callers can
+// import it from "@oxygen/shared" alongside CourseInfo without
+// reaching into the readout submodule directly.
+import type { ExpectedPosition } from "./readout.js";
+export type { ExpectedPosition } from "./readout.js";
+
 export interface CourseInfo {
   id: number;
   name: string;
   length: number;
+  /** Raw oCourse.Controls column: semicolon-separated oControl.Id list. */
   controls: string;
   controlCount: number;
   numberOfMaps?: number;
+  /**
+   * Status-aware per-position descriptors for the course, resolved from
+   * each referenced oControl's Numbers + Status. Used for offline punch
+   * matching so the client gets identical evaluation to the server
+   * (skipped positions, NoTiming/BadNoTiming leg deductions, multi-code
+   * and Multiple-expanded positions all baked in by the server).
+   */
+  expectedPositions: ExpectedPosition[];
 }
 
 /** Runner summary (list view) */
@@ -302,6 +317,12 @@ export interface RunnerInfo {
   rank?: number;
   cardStartTime?: number;
   transferFlags?: number;
+  /**
+   * Deciseconds to subtract from `finishTime - startTime` to get the
+   * canonical running time. Non-zero only when the runner's course
+   * contains NoTiming or BadNoTiming positions.
+   */
+  runningTimeAdjustment?: number;
 }
 
 /** Runner detail (for editing) */
@@ -592,7 +613,14 @@ export interface CourseDetail extends CourseSummary {
     className: string;
     runnerCount: number;
   }[];
-  controlCodes: number[]; // parsed control list
+  /**
+   * Display-friendly control sequence: each entry pairs the stable
+   * oControl.Id (used internally and stored in oCourse.Controls) with the
+   * live punch code from oControl.Numbers (the first code, for multi-code
+   * controls). Use `id` when sending updates back to the server, `code`
+   * for any user-facing rendering.
+   */
+  controlCodes: { id: number; code: string }[];
 }
 
 /** Class with its course details (used in lists endpoint) */

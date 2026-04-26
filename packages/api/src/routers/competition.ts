@@ -22,6 +22,7 @@ import type {
   ClubInfo,
   StatusCounts,
 } from "@oxygen/shared";
+import { resolveCourseExpectedPositions } from "./course.js";
 import { type RowDataPacket } from "mysql2/promise";
 
 export const competitionRouter = router({
@@ -304,17 +305,24 @@ export const competitionRouter = router({
         allowQuickEntry: c.AllowQuickEntry === 1 || undefined,
       }));
 
-      const courseInfos: CourseInfo[] = courses.map((c) => {
-        const controlList = c.Controls.split(";").filter(Boolean);
-        return {
-          id: c.Id,
-          name: c.Name,
-          length: c.Length,
-          controls: c.Controls,
-          controlCount: controlList.length,
-          numberOfMaps: c.NumberMaps > 0 ? c.NumberMaps : undefined,
-        };
-      });
+      // Pre-resolve full status-aware ExpectedPosition[] per course up front
+      // so the offline cache carries everything the matcher needs to apply
+      // MeOS evaluation rules on the client (skipped positions, NoTiming /
+      // BadNoTiming leg deductions, Multiple expansion, multi-code aware).
+      const courseInfos: CourseInfo[] = await Promise.all(
+        courses.map(async (c): Promise<CourseInfo> => {
+          const expectedPositions = await resolveCourseExpectedPositions(client, c.Controls);
+          return {
+            id: c.Id,
+            name: c.Name,
+            length: c.Length,
+            controls: c.Controls,
+            controlCount: expectedPositions.length,
+            numberOfMaps: c.NumberMaps > 0 ? c.NumberMaps : undefined,
+            expectedPositions,
+          };
+        }),
+      );
 
       // Resolve organizer info for logo display.
       // Organizer field is stored as plain text "Name" (MeOS format).

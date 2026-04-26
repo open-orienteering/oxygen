@@ -7,8 +7,12 @@ import {
   type StartListEntry,
   type ResultEntry,
   type ClassDetail,
+  matchPunchesToCourse,
+  parsePunches,
+  type ExpectedPosition,
 } from "@oxygen/shared";
 import { computeClassPlacements } from "../results.js";
+import { resolveCourseExpectedPositions } from "./course.js";
 
 export const listsRouter = router({
   /**
@@ -121,6 +125,58 @@ export const listsRouter = router({
         punchCounts.map((p) => [p.CardNo, p._count.Id]),
       );
 
+      // ── Running-time adjustment (NoTiming / BadNoTiming legs) ──
+      // Resolve each course's status-aware ExpectedPosition[] once and
+      // reuse the matcher per runner so adjusted running time is the
+      // canonical value used for placements + results display.
+      const courseIdsForAdjust = new Set<number>();
+      const classCourseMap = new Map<number, number>();
+      for (const cls of await client.oClass.findMany({
+        where: { Removed: false },
+        select: { Id: true, Course: true },
+      })) {
+        classCourseMap.set(cls.Id, cls.Course);
+      }
+      for (const r of runners) {
+        const cid = r.Course > 0 ? r.Course : (classCourseMap.get(r.Class) ?? 0);
+        if (cid > 0) courseIdsForAdjust.add(cid);
+      }
+      const expectedPositionsByCourse = new Map<number, ExpectedPosition[]>();
+      if (courseIdsForAdjust.size > 0) {
+        const courseRows = await client.oCourse.findMany({
+          where: { Id: { in: [...courseIdsForAdjust] }, Removed: false },
+          select: { Id: true, Controls: true },
+        });
+        for (const c of courseRows) {
+          expectedPositionsByCourse.set(
+            c.Id,
+            await resolveCourseExpectedPositions(client, c.Controls),
+          );
+        }
+      }
+      const cardRows = await client.oCard.findMany({
+        where: { Removed: false, CardNo: { in: runners.map((r) => r.CardNo).filter((n) => n > 0) } },
+        select: { CardNo: true, Punches: true },
+      });
+      const cardPunchesByCardNo = new Map<number, ReturnType<typeof parsePunches>>();
+      for (const c of cardRows) {
+        cardPunchesByCardNo.set(c.CardNo, parsePunches(c.Punches));
+      }
+      const adjustmentByRunner = new Map<number, number>();
+      for (const r of runners) {
+        const cid = r.Course > 0 ? r.Course : (classCourseMap.get(r.Class) ?? 0);
+        const positions = expectedPositionsByCourse.get(cid);
+        const punches = cardPunchesByCardNo.get(r.CardNo);
+        if (!positions || positions.length === 0 || !punches) continue;
+        const absPunches = punches.map((p) => ({
+          ...p,
+          time: p.time !== 0 ? toAbsolute(p.time, zeroTime) : 0,
+        }));
+        const fallbackStart = toAbsolute(r.StartTime, zeroTime);
+        const { runningTimeAdjustment } = matchPunchesToCourse(absPunches, positions, fallbackStart);
+        if (runningTimeAdjustment > 0) adjustmentByRunner.set(r.Id, runningTimeAdjustment);
+      }
+
       // Group runners by class
       const byClass = new Map<number, typeof runners>();
       for (const r of runners) {
@@ -146,6 +202,7 @@ export const listsRouter = router({
             status: r.Status,
             startTime: r.StartTime,
             finishTime: r.FinishTime,
+            runningTimeAdjustment: adjustmentByRunner.get(r.Id) ?? 0,
           })),
           noTiming,
         );

@@ -12,6 +12,12 @@ export interface ClassRunnerForPosition {
   clubId: number | null;
   startTime: number;
   finishTime: number;
+  /**
+   * Optional deciseconds to deduct from `finishTime - startTime` to
+   * obtain the canonical running time. Set when the runner's course
+   * contains NoTiming or BadNoTiming positions; otherwise omit (default 0).
+   */
+  runningTimeAdjustment?: number;
 }
 
 export interface PositionResult {
@@ -36,7 +42,14 @@ export function computePosition(
 
   const withTimes = runners
     .filter((r) => r.finishTime > 0 && r.startTime > 0)
-    .map((r) => ({ name: r.name, clubId: r.clubId, runningTime: r.finishTime - r.startTime }))
+    .map((r) => ({
+      name: r.name,
+      clubId: r.clubId,
+      runningTime: Math.max(
+        0,
+        r.finishTime - r.startTime - (r.runningTimeAdjustment ?? 0),
+      ),
+    }))
     .sort((a, b) => a.runningTime - b.runningTime);
 
   // If the current runner isn't in the DB results yet (applyResult may not
@@ -65,6 +78,8 @@ export interface RunnerForPlacement {
   status: number;
   startTime: number;
   finishTime: number;
+  /** See {@link ClassRunnerForPosition.runningTimeAdjustment}. */
+  runningTimeAdjustment?: number;
 }
 
 export interface PlacementResult {
@@ -88,6 +103,14 @@ export function computeClassPlacements(
 ): Map<number, PlacementResult> {
   const results = new Map<number, PlacementResult>();
 
+  const adjustedRunningTime = (r: RunnerForPlacement): number => {
+    if (r.finishTime <= 0 || r.startTime <= 0) return 0;
+    return Math.max(
+      0,
+      r.finishTime - r.startTime - (r.runningTimeAdjustment ?? 0),
+    );
+  };
+
   const okRunners = runners
     .filter(
       (r) =>
@@ -95,7 +118,7 @@ export function computeClassPlacements(
         r.finishTime > 0 &&
         r.startTime > 0,
     )
-    .map((r) => ({ ...r, runningTime: r.finishTime - r.startTime }))
+    .map((r) => ({ ...r, runningTime: adjustedRunningTime(r) }))
     .sort((a, b) => a.runningTime - b.runningTime);
 
   const winnerTime = okRunners.length > 0 ? okRunners[0].runningTime : 0;
@@ -114,11 +137,11 @@ export function computeClassPlacements(
 
   for (const r of runners) {
     if (!results.has(r.id)) {
-      const runningTime =
-        r.finishTime > 0 && r.startTime > 0
-          ? r.finishTime - r.startTime
-          : 0;
-      results.set(r.id, { place: 0, runningTime, timeBehind: 0 });
+      results.set(r.id, {
+        place: 0,
+        runningTime: adjustedRunningTime(r),
+        timeBehind: 0,
+      });
     }
   }
 

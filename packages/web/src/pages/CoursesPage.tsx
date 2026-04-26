@@ -354,6 +354,7 @@ function CourseInlineDetail({ courseId }: { courseId: number }) {
 
   const [editName, setEditName] = useState<string | null>(null);
   const [editControls, setEditControls] = useState<string | null>(null);
+  const [controlsError, setControlsError] = useState<string | null>(null);
   const [editLength, setEditLength] = useState<string | null>(null);
   const [editMaps, setEditMaps] = useState<string | null>(null);
 
@@ -377,6 +378,28 @@ function CourseInlineDetail({ courseId }: { courseId: number }) {
 
   const handleSave = (field: string, value: string | number | boolean) => {
     updateMutation.mutate({ id: courseId, [field]: value });
+  };
+
+  /**
+   * Live-codes view of the control sequence: what the user sees and edits.
+   * `oCourse.Controls` itself stores oControl.Id values (MeOS-compatible);
+   * the server resolves Ids to live codes for display and translates the
+   * user's edits back to Ids on save.
+   */
+  const controlsCodeString = d.controlCodes.map((c) => c.code).join(";");
+
+  const handleSaveControlCodes = (value: string) => {
+    setControlsError(null);
+    const codes = value
+      .split(/[;,\s]+/)
+      .map((s) => s.trim())
+      .filter(Boolean);
+    updateMutation.mutate(
+      { id: courseId, controlCodes: codes },
+      {
+        onError: (err) => setControlsError(err.message),
+      },
+    );
   };
 
   return (
@@ -456,26 +479,37 @@ function CourseInlineDetail({ courseId }: { courseId: number }) {
             </label>
             <input
               type="text"
-              value={editControls ?? d.controls}
-              onChange={(e) => setEditControls(e.target.value)}
+              value={editControls ?? controlsCodeString}
+              onChange={(e) => {
+                setEditControls(e.target.value);
+                if (controlsError) setControlsError(null);
+              }}
               onBlur={() => {
-                if (editControls !== null && editControls !== d.controls) {
-                  handleSave("controls", editControls);
+                if (editControls !== null && editControls !== controlsCodeString) {
+                  handleSaveControlCodes(editControls);
                 }
                 setEditControls(null);
               }}
-              className="w-full px-3 py-1.5 border border-slate-200 rounded-lg text-sm font-mono bg-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+              className={`w-full px-3 py-1.5 border rounded-lg text-sm font-mono bg-white focus:outline-none focus:ring-2 ${
+                controlsError
+                  ? "border-rose-300 focus:ring-rose-500"
+                  : "border-slate-200 focus:ring-blue-500"
+              }`}
               placeholder={t("controlsPlaceholder")}
             />
-            <p className="text-xs text-slate-400 mt-1">
-              {t("controlsHelp")}
-              {d.controlCount > 0 && (
-                <span className="ml-1 font-medium text-slate-500">
-                  {t("controlCount", { count: d.controlCount })}
-                  {d.length > 0 && ` — ${formatLength(d.length)}`}
-                </span>
-              )}
-            </p>
+            {controlsError ? (
+              <p className="text-xs text-rose-600 mt-1">{controlsError}</p>
+            ) : (
+              <p className="text-xs text-slate-400 mt-1">
+                {t("controlsHelp")}
+                {d.controlCount > 0 && (
+                  <span className="ml-1 font-medium text-slate-500">
+                    {t("controlCount", { count: d.controlCount })}
+                    {d.length > 0 && ` — ${formatLength(d.length)}`}
+                  </span>
+                )}
+              </p>
+            )}
           </div>
 
           {/* Visual control sequence */}
@@ -485,15 +519,15 @@ function CourseInlineDetail({ courseId }: { courseId: number }) {
                 {t("controlSequence")}
               </label>
               <div className="flex flex-wrap gap-1.5">
-                {d.controlCodes.map((code, i) => (
-                  <div key={i} className="flex items-center gap-1">
+                {d.controlCodes.map((c, i) => (
+                  <div key={`${c.id}-${i}`} className="flex items-center gap-1">
                     {i > 0 && (
                       <svg className="w-3 h-3 text-slate-300 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
                       </svg>
                     )}
                     <span className="inline-flex items-center justify-center min-w-[2rem] h-7 px-2 rounded-md bg-white border border-slate-200 text-xs font-mono font-medium text-slate-700 tabular-nums">
-                      {code}
+                      {c.code}
                     </span>
                   </div>
                 ))}
@@ -571,16 +605,24 @@ function CreateCourseForm({
   const [firstAsStart, setFirstAsStart] = useState(false);
   const [lastAsFinish, setLastAsFinish] = useState(false);
 
+  const [createError, setCreateError] = useState<string | null>(null);
+
   const createMutation = trpc.course.create.useMutation({
     onSuccess: () => onCreated(),
+    onError: (err) => setCreateError(err.message),
   });
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!name.trim()) return;
+    setCreateError(null);
+    const codes = controls
+      .split(/[;,\s]+/)
+      .map((s) => s.trim())
+      .filter(Boolean);
     createMutation.mutate({
       name: name.trim(),
-      controls: controls.trim(),
+      controlCodes: codes,
       length: parseInt(length, 10) || 0,
       numberOfMaps: parseInt(numberOfMaps, 10) || 1,
       firstAsStart,
@@ -642,10 +684,20 @@ function CreateCourseForm({
           <input
             type="text"
             value={controls}
-            onChange={(e) => setControls(e.target.value)}
+            onChange={(e) => {
+              setControls(e.target.value);
+              if (createError) setCreateError(null);
+            }}
             placeholder={t("controlsCreatePlaceholder")}
-            className="w-full px-3 py-1.5 border border-slate-200 rounded-lg text-sm font-mono focus:outline-none focus:ring-2 focus:ring-blue-500"
+            className={`w-full px-3 py-1.5 border rounded-lg text-sm font-mono focus:outline-none focus:ring-2 ${
+              createError
+                ? "border-rose-300 focus:ring-rose-500"
+                : "border-slate-200 focus:ring-blue-500"
+            }`}
           />
+          {createError && (
+            <p className="text-xs text-rose-600 mt-1">{createError}</p>
+          )}
         </div>
         <div className="flex gap-5">
           <label className="flex items-center gap-2 cursor-pointer">

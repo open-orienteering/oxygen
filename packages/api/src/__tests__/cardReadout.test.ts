@@ -225,6 +225,261 @@ describe("matchPunchesToCourse", () => {
     expect(result.extraPunches).toHaveLength(1);
     expect(result.extraPunches[0]).toMatchObject({ type: 32, time: START + 300 });
   });
+
+  // ─── number[][] (per-position) matcher behaviour ───────────────────────────
+
+  it("accepts the new per-position number[][] shape (single-code positions)", () => {
+    // Same scenario as the first test, but expressed with the new shape.
+    const punches = [
+      punch(PUNCH_START, START),
+      punch(31, START + 600),
+      punch(32, START + 1200),
+      punch(PUNCH_FINISH, START + 1800),
+    ];
+    const result = matchPunchesToCourse(punches, [[31], [32]]);
+
+    expect(result.missingCount).toBe(0);
+    expect(result.matches[0]).toMatchObject({ controlCode: 31, status: "ok" });
+    expect(result.matches[1]).toMatchObject({ controlCode: 32, status: "ok" });
+    expect(result.matches[0].expectedCodes).toEqual([31]);
+  });
+
+  it("accepts any code from a multi-code position (oControl.Numbers='131;231')", () => {
+    // Course position 0 has two acceptable codes; the runner happens to
+    // hit the second one. MeOS-equivalent oCourse.cpp:472,483.
+    const punches = [
+      punch(PUNCH_START, START),
+      punch(231, START + 600),
+      punch(PUNCH_FINISH, START + 1800),
+    ];
+    const result = matchPunchesToCourse(punches, [[131, 231]]);
+
+    expect(result.missingCount).toBe(0);
+    expect(result.matches[0]).toMatchObject({
+      controlCode: 231,
+      status: "ok",
+      expectedCodes: [131, 231],
+    });
+    expect(result.extraPunches).toHaveLength(0);
+  });
+
+  it("matches a renumbered control (Id 31 lives on but punch code is now 131)", () => {
+    // The course's stored Id is still 31, but the live oControl.Numbers
+    // is "131" — so the matcher receives [[131]] from the resolver. A
+    // card carrying punch type 131 must match; a card stuck on the old
+    // code 31 must not.
+    const ok = matchPunchesToCourse(
+      [
+        punch(PUNCH_START, START),
+        punch(131, START + 600),
+        punch(PUNCH_FINISH, START + 1800),
+      ],
+      [[131]],
+    );
+    expect(ok.missingCount).toBe(0);
+    expect(ok.matches[0]).toMatchObject({ controlCode: 131, status: "ok" });
+
+    const stale = matchPunchesToCourse(
+      [
+        punch(PUNCH_START, START),
+        punch(31, START + 600),
+        punch(PUNCH_FINISH, START + 1800),
+      ],
+      [[131]],
+    );
+    expect(stale.missingCount).toBe(1);
+    expect(stale.matches[0]).toMatchObject({ controlCode: 131, status: "missing" });
+    // The 31 punch is foreign — surfaces as an extra.
+    expect(stale.extraPunches.map((p) => p.type)).toEqual([31]);
+  });
+
+  it("mixes single-code and multi-code positions on the same course", () => {
+    const punches = [
+      punch(PUNCH_START, START),
+      punch(31, START + 600),
+      punch(231, START + 1200),
+      punch(33, START + 1800),
+      punch(PUNCH_FINISH, START + 2400),
+    ];
+    const result = matchPunchesToCourse(punches, [[31], [131, 231], [33]]);
+
+    expect(result.missingCount).toBe(0);
+    expect(result.matches.map((m) => m.controlCode)).toEqual([31, 231, 33]);
+  });
+
+  it("populates expectedCodes on missing positions for diagnostics", () => {
+    const result = matchPunchesToCourse([], [[131, 231], [33]]);
+    expect(result.matches[0].expectedCodes).toEqual([131, 231]);
+    expect(result.matches[0].controlCode).toBe(131);
+    expect(result.matches[1].expectedCodes).toEqual([33]);
+  });
+
+  // ─── ExpectedPosition shape (status-aware matcher behaviour) ───────────────
+
+  it("OK position is required (missing → MP, time counts) — sanity check via ExpectedPosition shape", () => {
+    const punches = [
+      punch(PUNCH_START, START),
+      punch(31, START + 600),
+      punch(PUNCH_FINISH, START + 1200),
+    ];
+    const result = matchPunchesToCourse(
+      punches,
+      [{ codes: [31], skipMatching: false, noTimingLeg: false }],
+    );
+    expect(result.missingCount).toBe(0);
+    expect(result.matches[0].positionMode).toBe("required");
+    expect(result.runningTimeAdjustment).toBe(0);
+  });
+
+  it("Bad position with no punch: status=missing, mode=skipped, missingCount stays 0", () => {
+    const punches = [
+      punch(PUNCH_START, START),
+      // no punch for the bad position
+      punch(33, START + 1200),
+      punch(PUNCH_FINISH, START + 1800),
+    ];
+    const result = matchPunchesToCourse(punches, [
+      { codes: [32], skipMatching: true, noTimingLeg: false },
+      { codes: [33], skipMatching: false, noTimingLeg: false },
+    ]);
+    expect(result.missingCount).toBe(0);
+    expect(result.matches[0].status).toBe("missing");
+    expect(result.matches[0].positionMode).toBe("skipped");
+    expect(result.matches[1].status).toBe("ok");
+  });
+
+  it("Bad position with a punch: status=ok, mode=skipped, punch consumed (not in extras)", () => {
+    const punches = [
+      punch(PUNCH_START, START),
+      punch(32, START + 600), // hit the bad control anyway
+      punch(33, START + 1200),
+      punch(PUNCH_FINISH, START + 1800),
+    ];
+    const result = matchPunchesToCourse(punches, [
+      { codes: [32], skipMatching: true, noTimingLeg: false },
+      { codes: [33], skipMatching: false, noTimingLeg: false },
+    ]);
+    expect(result.missingCount).toBe(0);
+    expect(result.matches[0]).toMatchObject({
+      status: "ok",
+      positionMode: "skipped",
+      controlCode: 32,
+    });
+    // Punch was consumed by the skipped position — not surfaced as extra.
+    expect(result.extraPunches).toHaveLength(0);
+  });
+
+  it("Optional behaves identically to Bad", () => {
+    // Same scenario as the previous two but with skipMatching=true
+    // representing Optional rather than Bad. Our matcher doesn't
+    // distinguish — both share the skipMatching code path.
+    const punches = [
+      punch(PUNCH_START, START),
+      punch(33, START + 1200),
+      punch(PUNCH_FINISH, START + 1800),
+    ];
+    const result = matchPunchesToCourse(punches, [
+      { codes: [32], skipMatching: true, noTimingLeg: false },
+      { codes: [33], skipMatching: false, noTimingLeg: false },
+    ]);
+    expect(result.missingCount).toBe(0);
+    expect(result.matches[0].positionMode).toBe("skipped");
+  });
+
+  it("NoTiming position deducts the leg into it from runningTimeAdjustment", () => {
+    // Course: 31 → 32(NoTiming) → 33. The 32 leg duration must be
+    // accumulated into runningTimeAdjustment. Previous reference is the
+    // ok punch at 31 (or startTime if 31 hadn't punched).
+    const punches = [
+      punch(PUNCH_START, START),
+      punch(31, START + 600),
+      punch(32, START + 1200), // leg of 600 — should be deducted
+      punch(33, START + 1800),
+      punch(PUNCH_FINISH, START + 2400),
+    ];
+    const result = matchPunchesToCourse(punches, [
+      { codes: [31], skipMatching: false, noTimingLeg: false },
+      { codes: [32], skipMatching: false, noTimingLeg: true },
+      { codes: [33], skipMatching: false, noTimingLeg: false },
+    ]);
+    expect(result.missingCount).toBe(0);
+    expect(result.runningTimeAdjustment).toBe(600);
+    expect(result.matches[1].positionMode).toBe("noTiming");
+  });
+
+  it("BadNoTiming → propagated to next required position's leg deduction", () => {
+    // Course (resolver-emitted): 31 → 32(BadNoTiming, skip) → 33(noTimingLeg=true).
+    // The runner skipped 32 entirely. Time from 31 to 33 (1200 deciseconds)
+    // should be deducted. Resolver propagation happens upstream — here we
+    // just verify the matcher honours the noTimingLeg flag on 33.
+    const punches = [
+      punch(PUNCH_START, START),
+      punch(31, START + 600),
+      // no punch at 32 (was destroyed mid-race)
+      punch(33, START + 1800), // 1200 deciseconds after 31
+      punch(PUNCH_FINISH, START + 2400),
+    ];
+    const result = matchPunchesToCourse(punches, [
+      { codes: [31], skipMatching: false, noTimingLeg: false },
+      { codes: [32], skipMatching: true, noTimingLeg: false },
+      { codes: [33], skipMatching: false, noTimingLeg: true },
+    ]);
+    expect(result.missingCount).toBe(0);
+    expect(result.runningTimeAdjustment).toBe(1200);
+    expect(result.matches[1].positionMode).toBe("skipped");
+    expect(result.matches[2].positionMode).toBe("noTiming");
+  });
+
+  it("Multiple-expansion: 3 any-order positions sharing the same code pool", () => {
+    // Resolver-emitted: a single MeOS Multiple control with Numbers
+    // = "31;32;33" expands to three positions, each accepting any of
+    // the three codes. The runner punches them out of "natural" order
+    // 33 / 31 / 32; all count.
+    const punches = [
+      punch(PUNCH_START, START),
+      punch(33, START + 600),
+      punch(31, START + 900),
+      punch(32, START + 1200),
+      punch(PUNCH_FINISH, START + 1800),
+    ];
+    const result = matchPunchesToCourse(punches, [
+      { codes: [31, 32, 33], skipMatching: false, noTimingLeg: false },
+      { codes: [31, 32, 33], skipMatching: false, noTimingLeg: false },
+      { codes: [31, 32, 33], skipMatching: false, noTimingLeg: false },
+    ]);
+    expect(result.missingCount).toBe(0);
+    expect(result.matches.map((m) => m.controlCode)).toEqual([33, 31, 32]);
+    expect(result.runningTimeAdjustment).toBe(0);
+  });
+
+  it("Mixed course: OK → Bad → NoTiming → Multiple → OK", () => {
+    // Combines every status to verify the matcher doesn't accidentally
+    // entangle adjustments / missing counts across modes.
+    const punches = [
+      punch(PUNCH_START, START),
+      punch(31, START + 600),
+      // 32 (Bad) skipped
+      punch(33, START + 1200), // NoTiming → 600 leg deducted (from 31)
+      punch(34, START + 1800),
+      punch(35, START + 2100), // multi pool
+      punch(36, START + 2400), // multi pool
+      punch(37, START + 3000), // final OK
+      punch(PUNCH_FINISH, START + 3600),
+    ];
+    const result = matchPunchesToCourse(punches, [
+      { codes: [31], skipMatching: false, noTimingLeg: false },
+      { codes: [32], skipMatching: true, noTimingLeg: false },
+      { codes: [33], skipMatching: false, noTimingLeg: true },
+      { codes: [34, 35, 36], skipMatching: false, noTimingLeg: false },
+      { codes: [34, 35, 36], skipMatching: false, noTimingLeg: false },
+      { codes: [34, 35, 36], skipMatching: false, noTimingLeg: false },
+      { codes: [37], skipMatching: false, noTimingLeg: false },
+    ]);
+    expect(result.missingCount).toBe(0);
+    expect(result.runningTimeAdjustment).toBe(600);
+    // No leftover punches surface as extras.
+    expect(result.extraPunches).toHaveLength(0);
+  });
 });
 
 // ─── computeReadId ────────────────────────────────────────────

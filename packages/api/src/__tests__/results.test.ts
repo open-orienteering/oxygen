@@ -169,6 +169,52 @@ describe("computeClassPlacements", () => {
     const result = computeClassPlacements([dnsRunner(1)], false);
     expect(result.get(1)!.runningTime).toBe(0);
   });
+
+  // ─── runningTimeAdjustment (NoTiming / BadNoTiming) ──────────────────────
+
+  it("subtracts runningTimeAdjustment from the OK runner's running time", () => {
+    // Raw card time 700 ds, adjustment 100 ds → canonical running time 600.
+    const runner: RunnerForPlacement = {
+      ...okRunner(1, 700),
+      runningTimeAdjustment: 100,
+    };
+    const result = computeClassPlacements([runner], false);
+    expect(result.get(1)!.runningTime).toBe(600);
+  });
+
+  it("ranks runners on adjusted running time, not raw", () => {
+    // Raw: A=700, B=650 → B should win.
+    // Adjusted: A=550 (deduct 150), B=650 → A should win.
+    const a: RunnerForPlacement = { ...okRunner(1, 700), runningTimeAdjustment: 150 };
+    const b: RunnerForPlacement = { ...okRunner(2, 650) };
+    const result = computeClassPlacements([a, b], false);
+    expect(result.get(1)!.place).toBe(1);
+    expect(result.get(1)!.runningTime).toBe(550);
+    expect(result.get(2)!.place).toBe(2);
+    expect(result.get(2)!.runningTime).toBe(650);
+  });
+
+  it("clamps runningTime to 0 when the adjustment exceeds raw time", () => {
+    // Pathological: adjustment is bigger than the raw card duration.
+    // Should never happen in practice, but the helper must not return
+    // a negative value to downstream UI.
+    const runner: RunnerForPlacement = {
+      ...okRunner(1, 500),
+      runningTimeAdjustment: 800,
+    };
+    const result = computeClassPlacements([runner], false);
+    expect(result.get(1)!.runningTime).toBe(0);
+  });
+
+  it("non-OK runner with adjustment still has its (adjusted) runningTime exposed", () => {
+    const runner: RunnerForPlacement = {
+      ...mpRunner(1, 700),
+      runningTimeAdjustment: 200,
+    };
+    const result = computeClassPlacements([runner], false);
+    expect(result.get(1)!.place).toBe(0);
+    expect(result.get(1)!.runningTime).toBe(500);
+  });
 });
 
 // ─── computePosition ────────────────────────────────────────
@@ -244,5 +290,18 @@ describe("computePosition", () => {
     const runners = Array.from({ length: 8 }, (_, i) => classRunner(`Runner${i}`, 600 + i * 100));
     const result = computePosition(runners, "Runner0", 600, 1);
     expect(result!.rankedRunners).toHaveLength(8);
+  });
+
+  it("uses runningTimeAdjustment when ranking other runners in the class", () => {
+    // Bob raw 700 with 200 ds NoTiming adjustment → adjusted 500.
+    // Alice raw 600 with no adjustment → 600.
+    // Bob should rank ahead of Alice on adjusted time.
+    const runners: ClassRunnerForPosition[] = [
+      classRunner("Alice", 600),
+      { name: "Bob", clubId: 2, startTime: START, finishTime: START + 700, runningTimeAdjustment: 200 },
+    ];
+    const result = computePosition(runners, "Alice", 600, 1);
+    expect(result!.rankedRunners.map((r) => r.name)).toEqual(["Bob", "Alice"]);
+    expect(result!.rank).toBe(2);
   });
 });

@@ -20,6 +20,7 @@ import { STATION_MODE, type StationInfo } from "../lib/si-protocol";
 import { StructuredSearchBar } from "../components/structured-search/StructuredSearchBar";
 import { useStructuredSearch } from "../hooks/useStructuredSearch";
 import { createControlAnchors } from "../lib/structured-search/anchors/control-anchors";
+import { ControlStatusHelp } from "../components/ControlStatusHelp";
 
 // ─── Types ────────────────────────────────────────────────
 
@@ -616,6 +617,9 @@ function ControlInlineDetail({ controlId }: { controlId: number }) {
                 </option>
               ))}
             </select>
+            {/* Inline help: explains how each status affects the matcher /
+                time accounting. Mirrors DrawMethodHelp on the Draw screen. */}
+            <ControlStatusHelp />
           </div>
         </div>
 
@@ -832,6 +836,7 @@ function CreateControlForm({
               </option>
             ))}
           </select>
+          <ControlStatusHelp />
         </div>
         <div className="flex items-end gap-2">
           <button

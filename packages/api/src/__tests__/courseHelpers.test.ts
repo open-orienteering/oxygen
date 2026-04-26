@@ -5,7 +5,9 @@ import {
   meosFinishId,
   meosStartName,
   meosFinishName,
+  parseCourseControlIds,
 } from "../routers/course.js";
+import { normalizeExpectedCodes } from "@oxygen/shared";
 
 describe("getControlSuffix", () => {
   it("extracts numeric suffix from STA1", () => {
@@ -70,5 +72,62 @@ describe("meosStartName / meosFinishName", () => {
 
   it("finish 2 → 'Mål 2'", () => {
     expect(meosFinishName(2)).toBe("Mål 2");
+  });
+});
+
+describe("parseCourseControlIds", () => {
+  it("parses a typical MeOS-style trailing-semicolon list", () => {
+    expect(parseCourseControlIds("31;32;33;")).toEqual([31, 32, 33]);
+  });
+
+  it("handles missing trailing semicolon", () => {
+    expect(parseCourseControlIds("31;32;33")).toEqual([31, 32, 33]);
+  });
+
+  it("returns an empty list for an empty string", () => {
+    expect(parseCourseControlIds("")).toEqual([]);
+  });
+
+  it("trims whitespace around tokens", () => {
+    expect(parseCourseControlIds(" 31 ; 32 ; ")).toEqual([31, 32]);
+  });
+
+  it("drops non-numeric and non-positive tokens", () => {
+    expect(parseCourseControlIds("31;abc;0;-5;42;")).toEqual([31, 42]);
+  });
+
+  it("preserves duplicate Ids (a control may appear twice on a course)", () => {
+    expect(parseCourseControlIds("31;42;31;")).toEqual([31, 42, 31]);
+  });
+});
+
+describe("normalizeExpectedCodes", () => {
+  it("lifts a flat number[] into ExpectedPosition[] (one required code per position)", () => {
+    expect(normalizeExpectedCodes([31, 32, 33])).toEqual([
+      { codes: [31], skipMatching: false, noTimingLeg: false },
+      { codes: [32], skipMatching: false, noTimingLeg: false },
+      { codes: [33], skipMatching: false, noTimingLeg: false },
+    ]);
+  });
+
+  it("lifts a number[][] into ExpectedPosition[] preserving multi-code sets", () => {
+    expect(normalizeExpectedCodes([[31], [131, 231], [33]])).toEqual([
+      { codes: [31], skipMatching: false, noTimingLeg: false },
+      { codes: [131, 231], skipMatching: false, noTimingLeg: false },
+      { codes: [33], skipMatching: false, noTimingLeg: false },
+    ]);
+  });
+
+  it("passes ExpectedPosition[] through untouched", () => {
+    const input = [
+      { codes: [31], skipMatching: false, noTimingLeg: false },
+      { codes: [32], skipMatching: true, noTimingLeg: false },
+      { codes: [33], skipMatching: false, noTimingLeg: true },
+    ];
+    expect(normalizeExpectedCodes(input)).toEqual(input);
+  });
+
+  it("returns an empty array for an empty input", () => {
+    expect(normalizeExpectedCodes([])).toEqual([]);
   });
 });

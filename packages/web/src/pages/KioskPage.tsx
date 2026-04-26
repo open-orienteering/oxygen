@@ -740,6 +740,10 @@ function ReadoutScreen({
   // Derive status from readout (more accurate than card.status since it evaluates punches)
   const readoutStatus = readout.data?.found ? readout.data.timing.status : null;
   const readoutRunningTime = readout.data?.found ? readout.data.timing.runningTime : 0;
+  // Raw running time for the small "raw 35:42" subtitle when the
+  // canonical (adjusted) time deducted any NoTiming/BadNoTiming legs.
+  const readoutRawRunningTime = readout.data?.found ? readout.data.timing.rawRunningTime : 0;
+  const readoutAdjustment = readout.data?.found ? readout.data.timing.runningTimeAdjustment : 0;
 
   // Fallback to card-level status before readout loads
   const displayStatus = readoutStatus != null ? readoutStatus : (
@@ -786,7 +790,16 @@ function ReadoutScreen({
     if (!readout.data?.found || !readout.data.course) return null;
     const d = readout.data;
     const punchStatusByCode: Record<string, "ok" | "missing" | "extra"> = {};
-    for (const c of d.controls) punchStatusByCode[String(c.controlCode)] = c.status as "ok" | "missing" | "extra";
+    for (const c of d.controls) {
+      // A skipped position (Bad / Optional / BadNoTiming) that the runner
+      // did NOT punch must not surface as a missing red marker on the map
+      // — it was never required. Skipped + ok (punched anyway) renders
+      // the same green as a normal hit. NoTiming positions evaluate
+      // identically to required for map status purposes (the runner
+      // still has to punch them; the leg time is what's adjusted).
+      if (c.positionMode === "skipped" && c.status === "missing") continue;
+      punchStatusByCode[String(c.controlCode)] = c.status as "ok" | "missing" | "extra";
+    }
     // Don't overwrite an "ok" slot with "extra" — happens when the runner punched a control
     // out of order (e.g. 1,2,3,5,4,5,6): the early punch for code 5 lands in extraPunches
     // but the correctly-matched slot is already "ok" and should stay green.
@@ -794,8 +807,12 @@ function ReadoutScreen({
       if (punchStatusByCode[String(ep.controlCode)] !== "ok")
         punchStatusByCode[String(ep.controlCode)] = "extra";
     }
+    // Skipped controls that the runner missed are not focused either —
+    // they're not actionable feedback for the runner.
     const focusControlCodes = [
-      ...d.controls.filter((c) => c.status === "missing").map((c) => String(c.controlCode)),
+      ...d.controls
+        .filter((c) => c.status === "missing" && c.positionMode === "required")
+        .map((c) => String(c.controlCode)),
       ...d.extraPunches.map((ep) => String(ep.controlCode)),
     ];
     return { courseName: d.course!.name, punchStatusByCode, focusControlCodes };
@@ -886,9 +903,19 @@ function ReadoutScreen({
           </div>
 
           {displayRunningTime > 0 && (
-            <div className="text-5xl font-black tabular-nums text-white mb-1">
-              {formatRunningTime(displayRunningTime)}
-            </div>
+            <>
+              <div className="text-5xl font-black tabular-nums text-white mb-1">
+                {formatRunningTime(displayRunningTime)}
+              </div>
+              {/* When NoTiming / BadNoTiming legs were deducted, show the
+                  raw card duration as a small subtitle so the runner sees
+                  both numbers and understands why they differ. */}
+              {readoutAdjustment > 0 && readoutRawRunningTime > 0 && (
+                <div className="text-sm text-slate-400 mb-1" data-testid="kiosk-raw-running-time">
+                  {t("rawTime", { time: formatRunningTime(readoutRawRunningTime) })}
+                </div>
+              )}
+            </>
           )}
 
           {/* Position in class */}
@@ -926,6 +953,48 @@ function ReadoutScreen({
             </div>
           )}
 
+          {/* Non-OK position summary (Bad / Optional / NoTiming / BadNoTiming).
+              Compact pills so a runner who passed through a transit zone or
+              a broken control can see the kiosk acknowledged it. We don't
+              show plain "ok" required positions here — the X/Y stat already
+              covers those. */}
+          {readout.data?.found && (() => {
+            const specials = readout.data.controls.filter(
+              (c) => c.positionMode !== "required",
+            );
+            if (specials.length === 0) return null;
+            return (
+              <div className="mb-3 p-3 bg-slate-800/60 border border-slate-700/60 rounded-xl text-left">
+                <div className="text-slate-300 font-semibold mb-2">
+                  {t("specialControls")}
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  {specials.map((c, i) => {
+                    const labelKey = c.positionMode === "noTiming"
+                      ? "noTimingPill"
+                      : c.status === "ok"
+                      ? "skippedPunchedPill"
+                      : "skippedMissingPill";
+                    const palette =
+                      c.positionMode === "noTiming"
+                        ? "bg-blue-900/40 border-blue-700/50 text-blue-200"
+                        : c.status === "ok"
+                        ? "bg-amber-900/30 border-amber-700/40 text-amber-200"
+                        : "bg-slate-900/40 border-slate-700/50 text-slate-300";
+                    return (
+                      <span
+                        key={i}
+                        className={`px-3 py-1 border rounded-lg text-sm font-mono tabular-nums ${palette}`}
+                      >
+                        {t(labelKey, { code: c.controlCode })}
+                      </span>
+                    );
+                  })}
+                </div>
+              </div>
+            );
+          })()}
+
           {/* Summary stats */}
           {readout.data?.found && (
             <div className="bg-slate-800 rounded-2xl p-3 mb-3">
@@ -933,7 +1002,23 @@ function ReadoutScreen({
                 <div>
                   <div className="text-sm text-slate-400">{t("controls")}</div>
                   <div className="text-2xl font-bold">
-                    {readout.data.controls.filter((c) => c.status === "ok").length}/{readout.data.controls.length}
+                    {/* Numerator: punched required positions. Denominator:
+                        required positions only — skipped (Bad / Optional /
+                        BadNoTiming) controls were never expected to be
+                        punched, so counting them would understate the
+                        runner's score. NoTiming counts as required since
+                        the punch is still mandatory; only the leg time
+                        is excluded. */}
+                    {
+                      readout.data.controls.filter(
+                        (c) => c.status === "ok" && c.positionMode !== "skipped",
+                      ).length
+                    }
+                    /
+                    {
+                      readout.data.course?.requiredControlCount ??
+                      readout.data.controls.filter((c) => c.positionMode !== "skipped").length
+                    }
                   </div>
                 </div>
                 {readout.data.course && (

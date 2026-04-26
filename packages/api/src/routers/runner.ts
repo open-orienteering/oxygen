@@ -5,7 +5,9 @@ import { incrementCounter, incrementCounterBatch, getZeroTime } from "../db.js";
 import { toRelative, toAbsolute } from "../timeConvert.js";
 import type { RunnerDetail, RunnerInfo } from "@oxygen/shared";
 import type { PrismaClient } from "@prisma/client";
-import { parsePunches, parseCourseControls, performReadout } from "./cardReadout.js";
+import { parsePunches, performReadout } from "./cardReadout.js";
+import { resolveCourseExpectedPositions } from "./course.js";
+import { matchPunchesToCourse, type ExpectedPosition } from "@oxygen/shared";
 import { computeClassPlacements } from "../results.js";
 import { pushRegistrationToSheet } from "../sheetsBackup.js";
 
@@ -294,6 +296,9 @@ export const runnerRouter = router({
       });
       const punchCodesMap = new Map<number, number[]>();
       const cardStartTimeMap = new Map<number, number>();
+      // Keep the parsed punch list per CardNo so we can run the matcher
+      // once per runner without re-parsing the card string.
+      const cardPunchesMap = new Map<number, ReturnType<typeof parsePunches>>();
       for (const card of cards) {
         const parsed = parsePunches(card.Punches);
         const codes: number[] = [];
@@ -305,6 +310,7 @@ export const runnerRouter = router({
         }
         // Keep latest card data per CardNo (last wins)
         if (codes.length > 0) punchCodesMap.set(card.CardNo, codes);
+        cardPunchesMap.set(card.CardNo, parsed);
       }
 
       // ── Course control codes ──
@@ -324,9 +330,45 @@ export const runnerRouter = router({
             select: { Id: true, Controls: true },
           })
         : [];
+      // Resolve each course's status-aware ExpectedPosition[] once. We use
+      // the per-position descriptors for the per-runner match (running-time
+      // adjustment), and a flattened code list for the structured-search
+      // "control:<code>" filter (status-agnostic; users search by punch code).
+      const expectedPositionsByCourse = new Map<number, ExpectedPosition[]>();
       const courseControlsMap = new Map<number, number[]>();
       for (const c of courses) {
-        courseControlsMap.set(c.Id, parseCourseControls(c.Controls));
+        const positions = await resolveCourseExpectedPositions(client, c.Controls);
+        expectedPositionsByCourse.set(c.Id, positions);
+        courseControlsMap.set(c.Id, positions.flatMap((p) => p.codes));
+      }
+
+      // Per-runner running-time adjustment: run the matcher once over each
+      // runner's card punches against their course's expected positions.
+      // This is the bulk equivalent of performReadout's adjustment logic;
+      // results endpoints (list, leaderboards, Eventor) all consume it
+      // through computeClassPlacements so adjusted time is canonical.
+      const adjustmentByRunner = new Map<number, number>();
+      for (const r of filtered) {
+        const courseId = r.Course > 0 ? r.Course : (classCourseMap.get(r.Class) ?? 0);
+        const positions = expectedPositionsByCourse.get(courseId);
+        if (!positions || positions.length === 0) continue;
+        const punches = cardPunchesMap.get(r.CardNo);
+        if (!punches) continue;
+        // Convert ZeroTime-relative card times to absolute so leg-time
+        // arithmetic in the matcher is correct.
+        const absPunches = punches.map((p) => ({
+          ...p,
+          time: p.time !== 0 ? toAbsolute(p.time, zeroTime) : 0,
+        }));
+        const fallbackStart = toAbsolute(r.StartTime, zeroTime);
+        const { runningTimeAdjustment } = matchPunchesToCourse(
+          absPunches,
+          positions,
+          fallbackStart,
+        );
+        if (runningTimeAdjustment > 0) {
+          adjustmentByRunner.set(r.Id, runningTimeAdjustment);
+        }
       }
 
       // Fetch competition-level card fee once for resolving CardFee = -1
@@ -348,6 +390,7 @@ export const runnerRouter = router({
           status: r.Status,
           startTime: r.StartTime,
           finishTime: r.FinishTime,
+          runningTimeAdjustment: adjustmentByRunner.get(r.Id) ?? 0,
         }));
         const placements = computeClassPlacements(forPlacement, false);
         for (const [rId, result] of placements) {
@@ -384,6 +427,7 @@ export const runnerRouter = router({
             rank: rankMap.get(r.Id),
             cardStartTime: cardStartTimeMap.get(r.CardNo),
             transferFlags: r.TransferFlags || undefined,
+            runningTimeAdjustment: adjustmentByRunner.get(r.Id),
           };
         },
       );

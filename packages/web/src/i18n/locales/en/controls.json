@@ -144,5 +144,26 @@
   "statusNoResult": "No result",
   "statusTimeMismatch": "Time mismatch",
   "pushToOPunch": "Push to oPunch",
-  "pushed": "Pushed"
+  "pushed": "Pushed",
+  "statusHelp": {
+    "show": "How do statuses affect evaluation?",
+    "hide": "Hide help",
+    "okLabel": "OK",
+    "okDesc": "Required, time counts.",
+    "badLabel": "Bad",
+    "badDesc": "Reactive: control broke during the race.",
+    "badHint": "Skipped from match. Punch consumed if hit.",
+    "optionalLabel": "Optional",
+    "optionalDesc": "By design optional, e.g. relay bonus controls.",
+    "optionalHint": "Same evaluation as Bad — only the icon and intent differ.",
+    "noTimingLabel": "No Timing",
+    "noTimingDesc": "Required (missing = MP), but the leg into it does not count.",
+    "noTimingHint": "Used for transit zones and mandatory transitions.",
+    "badNoTimingLabel": "Bad (No Timing)",
+    "badNoTimingDesc": "Skipped from match AND the leg afterwards is excluded.",
+    "badNoTimingHint": "Use when a control vanished and runners wasted time hunting.",
+    "multipleLabel": "Multiple",
+    "multipleDesc": "All listed codes (butterfly cluster) must be punched in any order.",
+    "multipleHint": "Each code becomes a separate any-order position."
+  }
 }

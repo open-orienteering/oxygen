@@ -60,5 +60,10 @@
   "classResults": "Klassresultat",
   "returnRentalCard": "Lämna tillbaka din SI-bricka",
   "returnRentalCardHint": "Det här är en hyrbricka — lämna tillbaka den till arrangören",
-  "rentalCardFee": "Hyrbricka: {{fee}} kr"
+  "rentalCardFee": "Hyrbricka: {{fee}} kr",
+  "rawTime": "Bruttotid {{time}}",
+  "specialControls": "Specialkontroller",
+  "noTimingPill": "{{code}} · Utan tidtagning",
+  "skippedPunchedPill": "{{code}} · Valfri",
+  "skippedMissingPill": "{{code}} · Utelämnad"
 }

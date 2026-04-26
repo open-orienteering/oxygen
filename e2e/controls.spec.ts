@@ -120,6 +120,32 @@ test.describe("Controls Page", () => {
     await expect(page.getByText("23 controls")).toBeVisible({ timeout: 5000 });
   });
 
+  test("should expand status help panel from the controls table", async ({ page }) => {
+    // The expanded inline detail (per row) contains a status dropdown
+    // with a "How do statuses affect evaluation?" toggle directly under
+    // it. Toggling the button must reveal a help block listing every
+    // status with its label and description.
+    await selectCompetition(page);
+    await clickTab(page, "Controls");
+    await expect(page.getByText("23 controls")).toBeVisible({ timeout: 10000 });
+
+    await page.getByRole("cell", { name: "Radio 1" }).click();
+    await expect(page.getByText("Used in Courses")).toBeVisible({ timeout: 5000 });
+
+    const helpToggle = page.getByTestId("control-status-help-toggle").first();
+    await expect(helpToggle).toBeVisible();
+    // Closed initially.
+    await expect(page.getByText("Required, time counts.")).not.toBeVisible();
+    await helpToggle.click();
+    // Once opened, descriptions for OK / Bad / NoTiming are present.
+    await expect(page.getByText("Required, time counts.")).toBeVisible();
+    await expect(page.getByText(/Reactive: control broke/)).toBeVisible();
+    await expect(page.getByText(/leg into it does not count/)).toBeVisible();
+    // Toggle closes it again.
+    await helpToggle.click();
+    await expect(page.getByText("Required, time counts.")).not.toBeVisible();
+  });
+
   test("should create and then delete a control", async ({ page }) => {
     await selectCompetition(page);
     await clickTab(page, "Controls");
