@@ -21,20 +21,21 @@ export function CourseImportDialog({ onClose, onSuccess }: Props) {
   const [preview, setPreview] = useState<PreviewData | null>(null);
   const [classMapping, setClassMapping] = useState<Record<string, number[]>>({});
   const [dragOver, setDragOver] = useState(false);
+  const [hideFullyMatched, setHideFullyMatched] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const previewMutation = trpc.course.previewImport.useMutation({
     onSuccess: (data) => {
       setPreview(data);
-      // Build initial class mapping from auto-matches
+      // Build initial class mapping from auto-matches, position-aligned with
+      // course.classMatches so each row's SearchableSelect can read its own
+      // index. Unmatched rows start at 0 ("Skip"); the user can fill them in.
       const mapping: Record<string, number[]> = {};
       for (const course of data.courses) {
-        const matched = course.classMatches
-          .filter((m) => m.matched)
-          .map((m) => m.dbClassId);
-        if (matched.length > 0) {
-          mapping[course.name] = matched;
-        }
+        if (course.classMatches.length === 0) continue;
+        mapping[course.name] = course.classMatches.map((m) =>
+          m.matched ? m.dbClassId : 0,
+        );
       }
       setClassMapping(mapping);
       setStep("preview");
@@ -98,11 +99,45 @@ export function CourseImportDialog({ onClose, onSuccess }: Props) {
   };
 
   const updateClassMapping = (courseName: string, classIds: number[]) => {
+    // Keep the array position-aligned with course.classMatches; the server
+    // ignores 0 values, so we don't drop them here.
     setClassMapping((prev) => ({
       ...prev,
-      [courseName]: classIds.filter((id) => id > 0),
+      [courseName]: classIds,
     }));
   };
+
+  // When the "hide exact matches" toggle is on, hide individual exact-matched
+  // rows rather than whole courses. For each course we compute which row
+  // indices to render. Courses with no XML class assignments at all (the
+  // "None" placeholder row) are always shown — they're a third category the
+  // user wants to see ("don't match at all").
+  type CourseRow = PreviewData["courses"][number];
+  const visibleIndicesFor = (course: CourseRow): number[] => {
+    if (course.classMatches.length === 0) return [];
+    if (!hideFullyMatched) {
+      return course.xmlClassNames.map((_, i) => i);
+    }
+    return course.xmlClassNames
+      .map((_, i) => i)
+      .filter((i) => course.classMatches[i]?.matchType !== "exact");
+  };
+
+  const visibleCourses = preview
+    ? preview.courses.filter((c) => {
+        if (c.classMatches.length === 0) return true; // "None" course always shown
+        return visibleIndicesFor(c).length > 0;
+      })
+    : [];
+  // Count of class assignments the toggle is currently hiding (i.e. exact
+  // auto-matches the user no longer needs to look at).
+  const hiddenCount = preview && hideFullyMatched
+    ? preview.courses.reduce(
+        (sum, c) =>
+          sum + c.classMatches.filter((m) => m.matchType === "exact").length,
+        0,
+      )
+    : 0;
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
@@ -186,9 +221,24 @@ export function CourseImportDialog({ onClose, onSuccess }: Props) {
 
               {/* Course table with class mapping */}
               <div>
-                <h3 className="text-sm font-semibold text-slate-700 mb-2">
-                  {t("coursesAndClassAssignments")}
-                </h3>
+                <div className="flex items-center justify-between mb-2 gap-3 flex-wrap">
+                  <h3 className="text-sm font-semibold text-slate-700">
+                    {t("coursesAndClassAssignments")}
+                  </h3>
+                  <label className="flex items-center gap-2 text-xs text-slate-600 cursor-pointer select-none">
+                    <input
+                      type="checkbox"
+                      checked={hideFullyMatched}
+                      onChange={(e) => setHideFullyMatched(e.target.checked)}
+                      className="w-4 h-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500 cursor-pointer"
+                    />
+                    <span>
+                      {hiddenCount > 0
+                        ? t("hideExactMatchesWithCount", { count: hiddenCount })
+                        : t("hideExactMatches")}
+                    </span>
+                  </label>
+                </div>
                 <div className="border border-slate-200 rounded-lg overflow-hidden">
                   <table className="w-full text-sm">
                     <thead>
@@ -201,61 +251,99 @@ export function CourseImportDialog({ onClose, onSuccess }: Props) {
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-slate-100">
-                      {preview.courses.map((course) => {
-                        const assignments = course.xmlClassNames;
-                        const hasMultiple = assignments.length > 1;
+                      {visibleCourses.length === 0 && (
+                        <tr>
+                          <td colSpan={5} className="px-3 py-6 text-center text-sm text-slate-400 italic">
+                            {t("allCoursesFullyMatched")}
+                          </td>
+                        </tr>
+                      )}
+                      {visibleCourses.map((course) => {
+                        if (course.xmlClassNames.length === 0) {
+                          return (
+                            <tr key={course.name}>
+                              <td className="px-3 py-2 font-medium text-slate-900">{course.name}</td>
+                              <td className="px-3 py-2 text-slate-600">{(course.length / 1000).toFixed(1)} km</td>
+                              <td className="px-3 py-2 text-slate-600">{course.controlCount}</td>
+                              <td className="px-3 py-2 text-slate-400 italic">{t("noneLabel")}</td>
+                              <td className="px-3 py-2 text-slate-400">—</td>
+                            </tr>
+                          );
+                        }
 
-                        return assignments.length === 0 ? (
-                          <tr key={course.name}>
-                            <td className="px-3 py-2 font-medium text-slate-900">{course.name}</td>
-                            <td className="px-3 py-2 text-slate-600">{(course.length / 1000).toFixed(1)} km</td>
-                            <td className="px-3 py-2 text-slate-600">{course.controlCount}</td>
-                            <td className="px-3 py-2 text-slate-400 italic">{t("noneLabel")}</td>
-                            <td className="px-3 py-2 text-slate-400">—</td>
-                          </tr>
-                        ) : (
-                          assignments.map((xmlClass, i) => {
-                            const matchInfo = course.classMatches[i];
-                            const currentMapping = classMapping[course.name] ?? [];
-                            return (
-                              <tr key={`${course.name}-${xmlClass}`}>
-                                {i === 0 && (
-                                  <>
-                                    <td className="px-3 py-2 font-medium text-slate-900" rowSpan={hasMultiple ? assignments.length : undefined}>
-                                      {course.name}
-                                    </td>
-                                    <td className="px-3 py-2 text-slate-600" rowSpan={hasMultiple ? assignments.length : undefined}>
-                                      {(course.length / 1000).toFixed(1)} km
-                                    </td>
-                                    <td className="px-3 py-2 text-slate-600" rowSpan={hasMultiple ? assignments.length : undefined}>
-                                      {course.controlCount}
-                                    </td>
-                                  </>
-                                )}
-                                <td className="px-3 py-2 text-slate-700">{xmlClass}</td>
-                                <td className="px-3 py-2">
-                                  <SearchableSelect
-                                    value={matchInfo?.matched ? matchInfo.dbClassId : (currentMapping[i] ?? 0)}
-                                    onChange={(v) => {
-                                      const newMapping = [...currentMapping];
-                                      newMapping[i] = Number(v);
-                                      updateClassMapping(course.name, newMapping);
-                                    }}
-                                    placeholder={t("selectClassPlaceholder")}
-                                    searchPlaceholder={t("searchPlaceholder")}
-                                    options={[
-                                      { value: 0, label: t("skip") },
-                                      ...preview.dbClasses.map((c) => ({
-                                        value: c.id,
-                                        label: c.name,
-                                      })),
-                                    ]}
+                        const indices = visibleIndicesFor(course);
+                        const rowSpanCount = indices.length;
+                        const useRowSpan = rowSpanCount > 1;
+
+                        return indices.map((i, displayIdx) => {
+                          const xmlClass = course.xmlClassNames[i];
+                          const currentMapping = classMapping[course.name] ?? [];
+                          const matchInfo = course.classMatches[i];
+                          const isHeuristic =
+                            matchInfo?.matchType === "normalized" ||
+                            matchInfo?.matchType === "substring";
+                          const isUnmatched = matchInfo?.matchType === "none";
+                          const rowTint = isHeuristic
+                            ? "bg-amber-50/60"
+                            : isUnmatched
+                              ? "bg-rose-50/60"
+                              : "";
+                          const heuristicTitle =
+                            matchInfo?.matchType === "normalized"
+                              ? t("matchType.normalized")
+                              : matchInfo?.matchType === "substring"
+                                ? t("matchType.substring")
+                                : undefined;
+                          return (
+                            <tr
+                              key={`${course.name}-${xmlClass}`}
+                              className={rowTint}
+                            >
+                              {displayIdx === 0 && (
+                                <>
+                                  <td className="px-3 py-2 font-medium text-slate-900" rowSpan={useRowSpan ? rowSpanCount : undefined}>
+                                    {course.name}
+                                  </td>
+                                  <td className="px-3 py-2 text-slate-600" rowSpan={useRowSpan ? rowSpanCount : undefined}>
+                                    {(course.length / 1000).toFixed(1)} km
+                                  </td>
+                                  <td className="px-3 py-2 text-slate-600" rowSpan={useRowSpan ? rowSpanCount : undefined}>
+                                    {course.controlCount}
+                                  </td>
+                                </>
+                              )}
+                              <td className="px-3 py-2 text-slate-700">
+                                {isHeuristic && (
+                                  <span
+                                    title={heuristicTitle}
+                                    className="inline-block w-2 h-2 rounded-full bg-amber-400 mr-2 align-middle"
+                                    aria-label={heuristicTitle}
                                   />
-                                </td>
-                              </tr>
-                            );
-                          })
-                        );
+                                )}
+                                {xmlClass}
+                              </td>
+                              <td className="px-3 py-2">
+                                <SearchableSelect
+                                  value={currentMapping[i] ?? 0}
+                                  onChange={(v) => {
+                                    const newMapping = [...currentMapping];
+                                    newMapping[i] = Number(v);
+                                    updateClassMapping(course.name, newMapping);
+                                  }}
+                                  placeholder={t("selectClassPlaceholder")}
+                                  searchPlaceholder={t("searchPlaceholder")}
+                                  options={[
+                                    { value: 0, label: t("skip") },
+                                    ...preview.dbClasses.map((c) => ({
+                                      value: c.id,
+                                      label: c.name,
+                                    })),
+                                  ]}
+                                />
+                              </td>
+                            </tr>
+                          );
+                        });
                       })}
                     </tbody>
                   </table>

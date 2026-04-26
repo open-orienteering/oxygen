@@ -45,18 +45,32 @@ export function SearchableSelect({
   const [open, setOpen] = useState(false);
   const [search, setSearch] = useState("");
   const containerRef = useRef<HTMLDivElement>(null);
+  const buttonRef = useRef<HTMLButtonElement>(null);
+  const popupRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
+  // Popup position is computed from the trigger's bounding rect and applied
+  // via `position: fixed`, so it escapes any ancestor `overflow:auto` (e.g.
+  // the import dialog's scroll container) instead of being clipped.
+  const [popupStyle, setPopupStyle] = useState<React.CSSProperties | null>(null);
 
   const selected = options.find((o) => o.value === value);
 
-  // Close on outside click
+  // Close on outside click. The popup may live outside `containerRef` visually
+  // (via fixed positioning), but it's still a DOM child of `containerRef`, so
+  // the contains() check works regardless. We also accept clicks on `popupRef`
+  // explicitly as a defensive fallback.
   useEffect(() => {
     if (!open) return;
     const handler = (e: MouseEvent) => {
-      if (containerRef.current && !containerRef.current.contains(e.target as Node)) {
-        setOpen(false);
-        setSearch("");
+      const target = e.target as Node;
+      if (
+        (containerRef.current && containerRef.current.contains(target)) ||
+        (popupRef.current && popupRef.current.contains(target))
+      ) {
+        return;
       }
+      setOpen(false);
+      setSearch("");
     };
     document.addEventListener("mousedown", handler);
     return () => document.removeEventListener("mousedown", handler);
@@ -75,6 +89,45 @@ export function SearchableSelect({
     return () => document.removeEventListener("keydown", handler);
   }, [open]);
 
+  // Compute popup placement (above/below) based on viewport space, and keep
+  // it in sync while the page (or any ancestor scroll container) scrolls or
+  // the window resizes.
+  useEffect(() => {
+    if (!open) {
+      setPopupStyle(null);
+      return;
+    }
+    const update = () => {
+      const btn = buttonRef.current;
+      if (!btn) return;
+      const rect = btn.getBoundingClientRect();
+      const desired = 240; // matches Tailwind max-h-60
+      const margin = 4;
+      const spaceBelow = window.innerHeight - rect.bottom - margin;
+      const spaceAbove = rect.top - margin;
+      const openUp =
+        spaceBelow < Math.min(desired, 160) && spaceAbove > spaceBelow;
+      const maxHeight = Math.min(desired, openUp ? spaceAbove : spaceBelow);
+      setPopupStyle({
+        position: "fixed",
+        left: rect.left,
+        width: rect.width,
+        maxHeight: Math.max(maxHeight, 80),
+        ...(openUp
+          ? { bottom: window.innerHeight - rect.top + margin }
+          : { top: rect.bottom + margin }),
+      });
+    };
+    update();
+    // capture: true so we also catch scrolls inside ancestor scroll containers
+    window.addEventListener("scroll", update, true);
+    window.addEventListener("resize", update);
+    return () => {
+      window.removeEventListener("scroll", update, true);
+      window.removeEventListener("resize", update);
+    };
+  }, [open]);
+
   // Auto-focus search input when opened
   useEffect(() => {
     if (open) {
@@ -90,6 +143,7 @@ export function SearchableSelect({
   return (
     <div ref={containerRef} className={`relative ${className}`} data-testid={testId}>
       <button
+        ref={buttonRef}
         type="button"
         onClick={() => { setOpen(!open); setSearch(""); }}
         className="w-full px-2.5 py-1.5 text-sm border border-slate-200 rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-blue-400 cursor-pointer text-left flex items-center gap-1.5 hover:border-slate-300 transition-colors"
@@ -110,8 +164,12 @@ export function SearchableSelect({
         </svg>
       </button>
 
-      {open && (
-        <div className="absolute z-50 mt-1 w-full min-w-[200px] bg-white border border-slate-200 rounded-lg shadow-lg max-h-60 overflow-hidden flex flex-col">
+      {open && popupStyle && (
+        <div
+          ref={popupRef}
+          style={popupStyle}
+          className="z-50 min-w-[200px] bg-white border border-slate-200 rounded-lg shadow-lg overflow-hidden flex flex-col"
+        >
           {(alwaysShowSearch || options.length > 6) && (
             <div className="p-1.5 border-b border-slate-100">
               <input

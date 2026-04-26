@@ -6,6 +6,8 @@ import {
   meosStartName,
   meosFinishName,
   parseCourseControlIds,
+  normalizeClassName,
+  findBestClassMatch,
 } from "../routers/course.js";
 import { normalizeExpectedCodes } from "@oxygen/shared";
 
@@ -98,6 +100,136 @@ describe("parseCourseControlIds", () => {
 
   it("preserves duplicate Ids (a control may appear twice on a course)", () => {
     expect(parseCourseControlIds("31;42;31;")).toEqual([31, 42, 31]);
+  });
+});
+
+describe("normalizeClassName", () => {
+  it("lowercases", () => {
+    expect(normalizeClassName("H21")).toBe("h21");
+  });
+
+  it("strips whitespace", () => {
+    expect(normalizeClassName("H 21")).toBe("h21");
+    expect(normalizeClassName("  H\t21 ")).toBe("h21");
+  });
+
+  it("strips common punctuation (.,;:_-/\\)", () => {
+    expect(normalizeClassName("H.21")).toBe("h21");
+    expect(normalizeClassName("H,21")).toBe("h21");
+    expect(normalizeClassName("D-21")).toBe("d21");
+    expect(normalizeClassName("H_21")).toBe("h21");
+    expect(normalizeClassName("H/21")).toBe("h21");
+    expect(normalizeClassName("H21,Elit")).toBe("h21elit");
+  });
+
+  it("collapses consecutive separators", () => {
+    expect(normalizeClassName("H  - 21")).toBe("h21");
+  });
+
+  it("returns empty string when only separators", () => {
+    expect(normalizeClassName("  -.,  ")).toBe("");
+  });
+
+  it("preserves Swedish characters", () => {
+    expect(normalizeClassName("Öppen 5")).toBe("öppen5");
+  });
+});
+
+describe("findBestClassMatch", () => {
+  const dbClasses = [
+    { Id: 1, Name: "H21" },
+    { Id: 2, Name: "D21" },
+    { Id: 3, Name: "H21 Elit" },
+    { Id: 4, Name: "Öppen 5" },
+  ];
+
+  it("returns null when DB list is empty", () => {
+    expect(findBestClassMatch("H21", [])).toBeNull();
+  });
+
+  it("returns null when no match is possible", () => {
+    expect(findBestClassMatch("H35", dbClasses)).toBeNull();
+  });
+
+  it("matches identical names as an exact match", () => {
+    expect(findBestClassMatch("H21", dbClasses)).toEqual({
+      id: 1,
+      name: "H21",
+      matchType: "exact",
+    });
+  });
+
+  it("matches case-insensitively as exact", () => {
+    expect(findBestClassMatch("h21", dbClasses)).toEqual({
+      id: 1,
+      name: "H21",
+      matchType: "exact",
+    });
+    expect(findBestClassMatch("D21", dbClasses)).toEqual({
+      id: 2,
+      name: "D21",
+      matchType: "exact",
+    });
+  });
+
+  it("matches across whitespace differences as a normalized match", () => {
+    expect(findBestClassMatch("H 21", dbClasses)).toEqual({
+      id: 1,
+      name: "H21",
+      matchType: "normalized",
+    });
+  });
+
+  it("matches across punctuation differences as a normalized match", () => {
+    expect(findBestClassMatch("H.21", dbClasses)).toEqual({
+      id: 1,
+      name: "H21",
+      matchType: "normalized",
+    });
+    expect(findBestClassMatch("H,21", dbClasses)).toEqual({
+      id: 1,
+      name: "H21",
+      matchType: "normalized",
+    });
+    expect(findBestClassMatch("D-21", dbClasses)).toEqual({
+      id: 2,
+      name: "D21",
+      matchType: "normalized",
+    });
+  });
+
+  it("prefers a normalized exact match over a substring match", () => {
+    // "H21" must match "H21" (id=1), NOT the longer "H21 Elit" (id=3).
+    expect(findBestClassMatch("H 21", dbClasses)).toEqual({
+      id: 1,
+      name: "H21",
+      matchType: "normalized",
+    });
+  });
+
+  it("falls back to substring match when no exact / normalized match exists", () => {
+    // "H21 Elit Lång" is not equal to anything but contains "H21 Elit".
+    const result = findBestClassMatch("H21 Elit Lång", dbClasses);
+    expect(result).toEqual({ id: 3, name: "H21 Elit", matchType: "substring" });
+  });
+
+  it("substring fallback works in either direction", () => {
+    // XML "Elit" is substring of DB "H21 Elit" (after normalization).
+    const result = findBestClassMatch("Elit", dbClasses);
+    expect(result).toEqual({ id: 3, name: "H21 Elit", matchType: "substring" });
+  });
+
+  it("normalizes both sides during substring matching", () => {
+    // DB stores "Öppen 5" with whitespace; XML has "Öppen-5".
+    expect(findBestClassMatch("Öppen-5", dbClasses)).toEqual({
+      id: 4,
+      name: "Öppen 5",
+      matchType: "normalized",
+    });
+  });
+
+  it("returns null when XML name normalizes to empty", () => {
+    expect(findBestClassMatch("   ", dbClasses)).toBeNull();
   });
 });
 
