@@ -14,7 +14,7 @@
  */
 
 import mysql from "mysql2/promise";
-import { getSetting, setSetting, getCompetitionClient, getZeroTime } from "./db.js";
+import { getSetting, setSetting, getCompetitionClient, getMainDbConnection } from "./db.js";
 // Note: liveresults.ts calls getCompetitionClient(nameId) directly
 import { toAbsolute } from "./timeConvert.js";
 
@@ -403,7 +403,44 @@ export interface SyncStats {
     splitcontrols: number;
 }
 
-// ─── Pusher class (interval timer) ───────────────────────────
+// ─── Persistent config (oxygen_settings) ─────────────────────
+
+const CONFIG_SETTING_PREFIX = "liveresults_config_";
+
+export interface LiveResultsConfig {
+    enabled: boolean;
+    intervalSeconds: number;
+    isPublic: boolean;
+    country: string;
+    tavid?: number;
+}
+
+export function configKey(nameId: string): string {
+    return `${CONFIG_SETTING_PREFIX}${nameId}`;
+}
+
+const DEFAULT_CONFIG: LiveResultsConfig = {
+    enabled: false,
+    intervalSeconds: 30,
+    isPublic: false,
+    country: "SE",
+};
+
+export async function loadConfig(nameId: string): Promise<LiveResultsConfig> {
+    const raw = await getSetting(configKey(nameId));
+    if (!raw) return { ...DEFAULT_CONFIG };
+    try {
+        return { ...DEFAULT_CONFIG, ...(JSON.parse(raw) as Partial<LiveResultsConfig>) };
+    } catch {
+        return { ...DEFAULT_CONFIG };
+    }
+}
+
+export async function persistConfig(nameId: string, config: LiveResultsConfig): Promise<void> {
+    await setSetting(configKey(nameId), JSON.stringify(config));
+}
+
+// ─── Pusher class (interval timer, multi-tenant) ─────────────
 
 export interface PusherStatus {
     running: boolean;
@@ -413,55 +450,105 @@ export interface PusherStatus {
     pushCount: number;
 }
 
+export type SyncFn = (tavid: number, nameId: string) => Promise<SyncStats>;
+
+interface TenantState {
+    timer: ReturnType<typeof setInterval>;
+    tavid: number;
+    intervalSeconds: number;
+    lastPush: string | null;
+    lastError: string | null;
+    pushCount: number;
+}
+
 /**
- * Singleton pusher instance per process.
- * Manages the setInterval timer and tracks status.
+ * Process-wide pusher manager. Each competition (`nameId`) owns an
+ * independent `setInterval` timer plus its own status counters, so
+ * multiple competitions can sync to LiveResults concurrently.
  */
 class LiveResultsPusherManager {
-    private timer: ReturnType<typeof setInterval> | null = null;
-    private _tavid: number | null = null;
-    private _nameId: string | null = null;
-    private _lastPush: string | null = null;
-    private _lastError: string | null = null;
-    private _pushCount = 0;
+    private tenants = new Map<string, TenantState>();
 
-    get status(): PusherStatus {
+    /**
+     * Status for a specific competition. Returns a "not running" status
+     * when no timer is active for that nameId.
+     */
+    getStatus(nameId: string): PusherStatus {
+        const t = this.tenants.get(nameId);
+        if (!t) {
+            return { running: false, tavid: null, lastPush: null, lastError: null, pushCount: 0 };
+        }
         return {
-            running: this.timer !== null,
-            tavid: this._tavid,
-            lastPush: this._lastPush,
-            lastError: this._lastError,
-            pushCount: this._pushCount,
+            running: true,
+            tavid: t.tavid,
+            lastPush: t.lastPush,
+            lastError: t.lastError,
+            pushCount: t.pushCount,
         };
     }
 
-    start(tavid: number, intervalSeconds: number, nameId: string): void {
-        this.stop();
-        this._tavid = tavid;
-        this._nameId = nameId;
-        this._lastError = null;
+    /** True if a timer is currently active for the given nameId. */
+    isRunning(nameId: string): boolean {
+        return this.tenants.has(nameId);
+    }
+
+    /** List nameIds with active timers — useful for diagnostics and tests. */
+    activeNameIds(): string[] {
+        return [...this.tenants.keys()];
+    }
+
+    /**
+     * Start (or restart) the push timer for a single competition.
+     * Replaces any existing timer for the same nameId. The provided
+     * `syncFn` is overrideable for tests.
+     */
+    start(
+        nameId: string,
+        tavid: number,
+        intervalSeconds: number,
+        syncFn: SyncFn = syncAll,
+    ): void {
+        this.stop(nameId);
+
+        const state: TenantState = {
+            timer: undefined as unknown as ReturnType<typeof setInterval>,
+            tavid,
+            intervalSeconds,
+            lastPush: null,
+            lastError: null,
+            pushCount: 0,
+        };
 
         const run = async () => {
             try {
-                await syncAll(tavid, nameId);
-                this._lastPush = new Date().toISOString();
-                this._pushCount++;
-                this._lastError = null;
+                await syncFn(tavid, nameId);
+                state.lastPush = new Date().toISOString();
+                state.pushCount++;
+                state.lastError = null;
             } catch (err) {
-                this._lastError = err instanceof Error ? err.message : String(err);
-                console.error("[LiveResults] Sync error:", err);
+                state.lastError = err instanceof Error ? err.message : String(err);
+                console.error(`[LiveResults] Sync error for ${nameId}:`, err);
             }
         };
 
-        // Run immediately, then on interval
-        run();
-        this.timer = setInterval(run, intervalSeconds * 1000);
+        state.timer = setInterval(run, intervalSeconds * 1000);
+        this.tenants.set(nameId, state);
+        // Fire an immediate first sync; errors are captured into state.
+        void run();
     }
 
-    stop(): void {
-        if (this.timer) {
-            clearInterval(this.timer);
-            this.timer = null;
+    /** Stop the timer for one competition. No-op if not running. */
+    stop(nameId: string): void {
+        const t = this.tenants.get(nameId);
+        if (!t) return;
+        clearInterval(t.timer);
+        this.tenants.delete(nameId);
+    }
+
+    /** Stop every active timer. Called during graceful shutdown. */
+    stopAll(): void {
+        for (const nameId of [...this.tenants.keys()]) {
+            this.stop(nameId);
         }
     }
 
@@ -471,3 +558,107 @@ class LiveResultsPusherManager {
 }
 
 export const liveResultsPusher = new LiveResultsPusherManager();
+
+// ─── Boot reconciler ─────────────────────────────────────────
+
+export interface ReconcileResult {
+    started: string[];
+    skipped: string[];
+    failed: Array<{ nameId: string; error: string }>;
+}
+
+/**
+ * Re-arm push timers for every competition whose persisted config has
+ * `enabled: true` AND whose oEvent row is still present (Removed=0). The
+ * pusher state lives in process memory, so this must be called once after
+ * the API process starts to avoid silently losing LiveResults sync after
+ * a restart. Orphan settings rows for deleted competitions are skipped
+ * (and reported as failures with a clear reason) instead of starting a
+ * phantom pusher that would fail on every tick.
+ */
+export async function reconcileEnabledPushers(): Promise<ReconcileResult> {
+    const result: ReconcileResult = { started: [], skipped: [], failed: [] };
+
+    // Read all liveresults_config_* rows, all tavid rows, and the set of
+    // active competitions from MeOSMain in one go. If the settings table
+    // doesn't exist yet (fresh install), bail out cleanly.
+    const conn = await getMainDbConnection();
+    let rows: Array<{ SettingKey: string; SettingValue: string | null }>;
+    const tavidMap = new Map<string, number>();
+    const activeNameIds = new Set<string>();
+    try {
+        try {
+            const [r] = await conn.execute(
+                "SELECT SettingKey, SettingValue FROM oxygen_settings WHERE SettingKey LIKE ?",
+                [`${CONFIG_SETTING_PREFIX}%`],
+            );
+            rows = r as Array<{ SettingKey: string; SettingValue: string | null }>;
+        } catch {
+            // Settings table not yet provisioned — nothing to reconcile.
+            return result;
+        }
+
+        const [tavidRows] = await conn.execute(
+            "SELECT SettingKey, SettingValue FROM oxygen_settings WHERE SettingKey LIKE ?",
+            ["liveresults_tavid_%"],
+        );
+        for (const r of tavidRows as Array<{ SettingKey: string; SettingValue: string | null }>) {
+            const nameId = r.SettingKey.slice("liveresults_tavid_".length);
+            const tavid = parseInt(r.SettingValue ?? "", 10);
+            if (Number.isFinite(tavid)) tavidMap.set(nameId, tavid);
+        }
+
+        // Active competitions in MeOSMain. Used to skip orphan settings
+        // for deleted/purged competitions.
+        try {
+            const [activeRows] = await conn.execute(
+                "SELECT NameId FROM oEvent WHERE Removed = 0",
+            );
+            for (const r of activeRows as Array<{ NameId: string }>) {
+                if (r.NameId) activeNameIds.add(r.NameId);
+            }
+        } catch {
+            // oEvent missing is unrecoverable; treat every config as orphan
+            // so we don't start phantom pushers.
+        }
+    } finally {
+        await conn.end();
+    }
+
+    for (const row of rows) {
+        const nameId = row.SettingKey.slice(CONFIG_SETTING_PREFIX.length);
+        try {
+            if (!row.SettingValue) {
+                result.skipped.push(nameId);
+                continue;
+            }
+            const cfg = JSON.parse(row.SettingValue) as Partial<LiveResultsConfig>;
+            if (!cfg.enabled) {
+                result.skipped.push(nameId);
+                continue;
+            }
+            if (!activeNameIds.has(nameId)) {
+                result.failed.push({
+                    nameId,
+                    error: "competition not present in oEvent (orphan setting)",
+                });
+                continue;
+            }
+            const tavid = tavidMap.get(nameId);
+            if (tavid === undefined) {
+                result.failed.push({ nameId, error: "tavid not stored" });
+                continue;
+            }
+            const intervalSeconds = cfg.intervalSeconds ?? DEFAULT_CONFIG.intervalSeconds;
+            liveResultsPusher.start(nameId, tavid, intervalSeconds);
+            result.started.push(nameId);
+        } catch (err) {
+            result.failed.push({
+                nameId,
+                error: err instanceof Error ? err.message : String(err),
+            });
+        }
+    }
+
+    return result;
+}
