@@ -102,8 +102,9 @@ in your final message and explain why.
 3. **Integration tests** — Run for any DB-related changes. Always required for features: `pnpm --filter api exec vitest run --config vitest.integration.config.ts`
 4. **`pnpm test:e2e`** — Full suite for features and significant changes. For minor, isolated fixes, selective tests covering the affected area are acceptable: `pnpm test:e2e -- e2e/specific-file.spec.ts`
 5. **Rebuild Docker** — Run `docker compose -f docker-compose.host-db.yml up --build -d` so the running stack reflects the latest code. **Required for every change that touches `packages/api/`, `packages/web/`, `packages/shared/`, `docker/`, any `Dockerfile`, `docker-compose*.yml`, or `pnpm-lock.yaml`.** You may skip it only for changes confined to `docs/`, `AGENTS.md`, `.claude/`, or test fixtures that don't ship in either image — and when you skip it, state so in your final message. Verify the output ends with both `Image oxygen-api Built` / `Image oxygen-web Built` and both containers `Started`; treat anything else as a failure.
+6. **Major-version drift report** — After all other steps pass, run `pnpm outdated -r --long` and list any **direct** dependencies (production or dev) with a major-version update available. Format each as `package: current → latest — one-line note on what changes / "no notable changes documented"`. Informational only; do not bump majors as part of an unrelated PR. The user decides whether to act.
 
-Never push code that fails any of steps 1–5. "It built fine locally" is not a substitute for step 5 — the Docker images use a different build path (multi-stage, production `NODE_ENV`, no dev dependencies) and routinely catch things `pnpm build` misses.
+Never push code that fails any of steps 1–5. "It built fine locally" is not a substitute for step 5 — the Docker images use a different build path (multi-stage, production `NODE_ENV`, no dev dependencies) and routinely catch things `pnpm build` misses. Step 6 is informational and never gating.
 
 ## 7. MeOS Database Compatibility
 
@@ -229,7 +230,41 @@ After completing a feature, perform a self-review covering these areas:
 - Do not force-push to `main`.
 - Do not commit generated files (`dist/`, `node_modules/`, `prisma/generated/`), test artifacts, or `.env` files.
 
-## 14. Common Pitfalls
+## 14. Dependency Management
+
+Dependency hygiene is developer- and agent-driven, not Dependabot-driven. Dependabot in this repo is configured to surface alerts in the GitHub Security tab only; it does not open update or security PRs. The day-to-day loop runs through `pnpm audit`.
+
+### On every PR that touches deps
+
+- Run `pnpm audit --prod --audit-level=high` locally before pushing. PRs must not introduce new high or critical advisories in the production tree. The same check runs in `.github/workflows/audit-pr.yml` and will fail the PR.
+- If a transitive dep is vulnerable and upstream has no fix, pin via `pnpm.overrides` in the root `package.json`. The block currently covers `undici`, `minimatch`, `flatted`, `serialize-javascript`, `effect`, `postcss`, `rollup`, `picomatch`, `defu`, and `vite`; add new entries with a one-line comment explaining why.
+- Direct deps follow `^` ranges. Patch and minor bumps can land in any PR. Major bumps require a dedicated PR with the migration documented in `docs/`.
+
+### After every push
+
+The §6 verification checklist's step 6 (`pnpm outdated -r --long`) reports major-version drift. Do not act on it inside the same PR — surface it to the user so they can plan a dedicated bump.
+
+### Vulnerability backstop
+
+- Weekly: `.github/workflows/audit-weekly.yml` runs Mondays at 06:00 UTC. If any production high/critical advisory is unresolved, it opens (or comments on) a single open issue labelled `security-audit`. No issue → no notification.
+- Manual sweep: `pnpm audit --prod --audit-level=high` at any time tells you the current state in seconds.
+
+### Repository settings (one-time, manual)
+
+The following must be set by a repo admin in **Settings → Code security**, since the API endpoint requires admin scope:
+
+- Dependabot alerts: **ON** (so the Security tab and the weekly workflow have data to read).
+- Dependabot security updates: **OFF** (no auto-PRs).
+- Dependabot version updates: **OFF** (no `dependabot.yml` is committed; do not add one).
+- Grouped security updates: **OFF**.
+
+If those settings drift back on, you'll start getting Dependabot PRs; fix the settings, don't fight the bot.
+
+### ocad2geojson fork
+
+`ocad2geojson` upstream (`perliedman/ocad2geojson@2.1.20`) bundles a deprecated `xmldom@0.6.0` (one critical and several high CVEs) plus an old `uuid@3.4.0` and `protocol-buffers-schema` chain. Oxygen consumes a fork at [`marcus-kempe/ocad2geojson@v2.2.0-oxygen.0`](https://github.com/marcus-kempe/ocad2geojson/tree/v2.2.0-oxygen.0) that replaces `xmldom` with `@xmldom/xmldom`, bumps `uuid` and `vt-pbf`, and inlines the previously-patched color-fallback fix. Upstream PR: [perliedman/ocad2geojson#34](https://github.com/perliedman/ocad2geojson/pull/34). When the upstream merges, switch back to the npm release and drop the fork reference from `packages/api/package.json` and `packages/web/package.json`.
+
+## 15. Common Pitfalls
 
 1. **MySQL DATETIME timezone**: MySQL `DATETIME` has no timezone. Prisma treats it as UTC. If MySQL uses local time (e.g. CET), timestamps get double-shifted. Use `getUTC*()` methods for server-side formatting (see `fmtDatetimeLocal` in `control.ts`).
 

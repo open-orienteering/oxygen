@@ -28,7 +28,7 @@
     "dexie": "^4.4.2",
     "i18next": "^25.8.14",
     "idb-keyval": "^6.2.2",
-    "ocad2geojson": "^2.1.20",
+    "ocad2geojson": "github:marcus-kempe/ocad2geojson#v2.2.0-oxygen.0",
     "qrcode.react": "^4.2.0",
     "react": "^19.2.0",
     "react-dom": "^19.2.0",
@@ -52,7 +52,7 @@
     "tailwindcss": "^4",
     "typescript": "~5.9.3",
     "typescript-eslint": "^8.48.0",
-    "vite": "^7.3.1",
+    "vite": "^7.3.2",
     "vitest": "^4.0.18"
   }
 }

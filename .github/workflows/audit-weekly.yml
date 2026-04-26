@@ -1,0 +1,84 @@
+name: Weekly dependency audit
+on:
+  schedule:
+    - cron: "0 6 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 20
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+
+      - name: Count high/critical advisories in production tree
+        id: audit
+        run: |
+          set +e
+          report=$(pnpm audit --prod --audit-level=high --json 2>/dev/null)
+          set -e
+          highs=$(echo "$report" | jq '
+            ([.advisories[]?, (.vulnerabilities[]?.via[]? | select(type=="object"))]
+             | map(select(.severity=="high" or .severity=="critical"))
+             | length) // 0' 2>/dev/null || echo 0)
+          echo "highs=${highs:-0}" >> "$GITHUB_OUTPUT"
+
+      - name: Render human-readable report
+        if: steps.audit.outputs.highs != '0'
+        id: report
+        run: |
+          {
+            echo 'body<<__END__'
+            echo '`pnpm audit --prod --audit-level=high` reports unresolved high or critical advisories in the production dependency tree.'
+            echo ''
+            echo 'Run locally to inspect:'
+            echo ''
+            echo '```'
+            echo 'pnpm audit --prod --audit-level=high'
+            echo '```'
+            echo ''
+            echo "Last run: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            echo "Workflow: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+            echo '__END__'
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Open or update tracking issue
+        if: steps.audit.outputs.highs != '0'
+        uses: actions/github-script@v7
+        env:
+          ISSUE_BODY: ${{ steps.report.outputs.body }}
+        with:
+          script: |
+            const title = 'Weekly dependency audit: high/critical vulns in production tree';
+            const body = process.env.ISSUE_BODY;
+            const { data: existing } = await github.rest.issues.listForRepo({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              state: 'open',
+              labels: 'security-audit',
+            });
+            if (existing.length === 0) {
+              await github.rest.issues.create({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                title,
+                body,
+                labels: ['security-audit'],
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: existing[0].number,
+                body,
+              });
+            }
