@@ -6,6 +6,9 @@ export function useTimeAgo() {
   const { t } = useTranslation();
   return (input: Date | string | number): string => {
     const { key, count } = timeAgoParts(input);
-    return t(`timeAgo_${key}` as any, { count });
+    return (t as (k: string, opts: { count: number }) => string)(
+      `timeAgo_${key}`,
+      { count },
+    );
   };
 }
