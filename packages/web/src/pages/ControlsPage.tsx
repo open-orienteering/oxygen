@@ -107,10 +107,7 @@ export function ControlsPage() {
 
   const toggleSelectAll = useCallback(() => {
     if (!controls.data) return;
-    // Only select regular controls (not start/finish)
-    const selectableIds = controls.data
-      .filter((c) => c.status !== 4 && c.status !== 5)
-      .map((c) => c.id);
+    const selectableIds = controls.data.map((c) => c.id);
     setSelectedIds((prev) =>
       prev.size === selectableIds.length ? new Set() : new Set(selectableIds),
     );
@@ -152,7 +149,7 @@ export function ControlsPage() {
   );
   const { sorted: items, sort, toggle } = useSort(filteredControls, { key: "code", dir: "asc" }, comparators);
 
-  const selectableItems = items.filter((c) => c.status !== 4 && c.status !== 5);
+  const selectableItems = items;
 
   return (
     <>
@@ -384,8 +381,8 @@ function ControlRow({
   onDelete: () => void;
 }) {
   const { t } = useTranslation("controls");
-  const isStartFinish = ctrl.status === 4 || ctrl.status === 5;
   const config = ctrl.config;
+  const firstCode = ctrl.codes.split(";")[0]?.trim() ?? "";
 
   return (
     <>
@@ -396,32 +393,26 @@ function ControlRow({
         onClick={onToggleExpand}
       >
         <td className="px-3 py-2.5" onClick={(e) => e.stopPropagation()}>
-          {!isStartFinish && (
-            <input
-              type="checkbox"
-              checked={selected}
-              onClick={onToggleSelect}
-              onChange={() => {}}
-              className="rounded border-slate-300 cursor-pointer"
-            />
-          )}
+          <input
+            type="checkbox"
+            checked={selected}
+            onClick={onToggleSelect}
+            onChange={() => {}}
+            className="rounded border-slate-300 cursor-pointer"
+          />
         </td>
         <td className="px-4 py-2.5 font-mono font-bold text-blue-700 tabular-nums">
-          {isStartFinish ? (
-            <span className="text-slate-300">—</span>
-          ) : (
-            <span className="inline-flex items-center gap-1.5">
-              {ctrl.id}
-              {(ctrl.units ?? []).length > 1 && (
-                <span
-                  className="px-1.5 py-0.5 rounded-full text-[10px] font-medium bg-indigo-100 text-indigo-700"
-                  title={t("unitsCountTooltip", { count: ctrl.units.length })}
-                >
-                  {t("unitsCount", { count: ctrl.units.length })}
-                </span>
-              )}
-            </span>
-          )}
+          <span className="inline-flex items-center gap-1.5">
+            {firstCode ? firstCode : <span className="text-slate-300">—</span>}
+            {(ctrl.units ?? []).length > 1 && (
+              <span
+                className="px-1.5 py-0.5 rounded-full text-[10px] font-medium bg-indigo-100 text-indigo-700"
+                title={t("unitsCountTooltip", { count: ctrl.units.length })}
+              >
+                {t("unitsCount", { count: ctrl.units.length })}
+              </span>
+            )}
+          </span>
         </td>
         <td className="px-4 py-2.5 text-slate-700">
           {ctrl.name || <span className="text-slate-300">—</span>}
@@ -430,7 +421,7 @@ function ControlRow({
           <ControlStatusBadge status={ctrl.status as ControlStatusValue} />
         </td>
         <td className="px-4 py-2.5">
-          {!isStartFinish ? <RadioTypeBadge type={config?.radioType ?? "normal"} /> : <span className="text-slate-300">—</span>}
+          <RadioTypeBadge type={config?.radioType ?? "normal"} />
         </td>
         <td className="px-4 py-2.5 text-slate-600 tabular-nums">
           {ctrl.runnerCount > 0 ? ctrl.runnerCount : <span className="text-slate-300">—</span>}
@@ -557,7 +548,6 @@ function ControlInlineDetail({ controlId }: { controlId: number }) {
 
   const d = detail.data;
   const config = d.config;
-  const isStartFinish = d.status === 4 || d.status === 5;
 
   const handleSave = (field: string, value: string | number) => {
     updateMutation.mutate({ id: controlId, [field]: value });
@@ -630,58 +620,56 @@ function ControlInlineDetail({ controlId }: { controlId: number }) {
         </div>
 
         {/* Radio/AIR+ config */}
-        {!isStartFinish && (
-          <div className="space-y-4">
-            <h4 className="text-xs font-semibold text-slate-500 uppercase tracking-wider">
-              {t("radioAirPlusConfig")}
-            </h4>
+        <div className="space-y-4">
+          <h4 className="text-xs font-semibold text-slate-500 uppercase tracking-wider">
+            {t("radioAirPlusConfig")}
+          </h4>
 
-            <div>
-              <label className="block text-xs font-medium text-slate-500 mb-1">{t("radioType")}</label>
-              <select
-                value={config?.radioType ?? "normal"}
-                onChange={(e) => {
-                  upsertConfigMutation.mutate({
-                    controlIds: [controlId],
-                    radioType: e.target.value as RadioType,
-                  });
-                }}
-                className="w-full px-3 py-1.5 border border-slate-200 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 cursor-pointer"
-              >
-                <option value="normal">{t("normal")}</option>
-                <option value="internal_radio">{t("internalRadioSRR")}</option>
-                <option value="public_radio">{t("publicRadioSRR")}</option>
-              </select>
-            </div>
-
-            <div>
-              <label className="block text-xs font-medium text-slate-500 mb-1">{t("airPlusOverride")}</label>
-              <select
-                value={config?.airPlus ?? "default"}
-                onChange={(e) => {
-                  upsertConfigMutation.mutate({
-                    controlIds: [controlId],
-                    airPlus: e.target.value as AirPlusOverride,
-                  });
-                }}
-                className="w-full px-3 py-1.5 border border-slate-200 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 cursor-pointer"
-              >
-                <option value="default">{t("airPlusDefaultDesc")}</option>
-                <option value="on">{t("airPlusOn")}</option>
-                <option value="off">{t("airPlusOff")}</option>
-              </select>
-            </div>
-
-            {(d.units ?? []).length === 0 && config?.checkedAt && (
-              <div className="text-xs text-slate-500 space-y-1">
-                <div>{t("checkedLabel", { time: relativeTime(new Date(config.checkedAt)) })}</div>
-                {config.batteryVoltage !== null && (
-                  <div>{t("batteryLabel", { voltage: config.batteryVoltage.toFixed(2) })} {config.batteryLow ? t("batteryLow") : ""}</div>
-                )}
-              </div>
-            )}
+          <div>
+            <label className="block text-xs font-medium text-slate-500 mb-1">{t("radioType")}</label>
+            <select
+              value={config?.radioType ?? "normal"}
+              onChange={(e) => {
+                upsertConfigMutation.mutate({
+                  controlIds: [controlId],
+                  radioType: e.target.value as RadioType,
+                });
+              }}
+              className="w-full px-3 py-1.5 border border-slate-200 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 cursor-pointer"
+            >
+              <option value="normal">{t("normal")}</option>
+              <option value="internal_radio">{t("internalRadioSRR")}</option>
+              <option value="public_radio">{t("publicRadioSRR")}</option>
+            </select>
           </div>
-        )}
+
+          <div>
+            <label className="block text-xs font-medium text-slate-500 mb-1">{t("airPlusOverride")}</label>
+            <select
+              value={config?.airPlus ?? "default"}
+              onChange={(e) => {
+                upsertConfigMutation.mutate({
+                  controlIds: [controlId],
+                  airPlus: e.target.value as AirPlusOverride,
+                });
+              }}
+              className="w-full px-3 py-1.5 border border-slate-200 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 cursor-pointer"
+            >
+              <option value="default">{t("airPlusDefaultDesc")}</option>
+              <option value="on">{t("airPlusOn")}</option>
+              <option value="off">{t("airPlusOff")}</option>
+            </select>
+          </div>
+
+          {(d.units ?? []).length === 0 && config?.checkedAt && (
+            <div className="text-xs text-slate-500 space-y-1">
+              <div>{t("checkedLabel", { time: relativeTime(new Date(config.checkedAt)) })}</div>
+              {config.batteryVoltage !== null && (
+                <div>{t("batteryLabel", { voltage: config.batteryVoltage.toFixed(2) })} {config.batteryLow ? t("batteryLow") : ""}</div>
+              )}
+            </div>
+          )}
+        </div>
 
         {/* Course usage */}
         <div>
@@ -718,55 +706,53 @@ function ControlInlineDetail({ controlId }: { controlId: number }) {
       </div>
 
       {/* Physical units — spans full width below the 3-col grid */}
-      {!isStartFinish && (
-        <div className="mt-6">
-          <h4 className="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-3">
-            {t("physicalUnits")}
-          </h4>
-          {(d.units ?? []).length === 0 ? (
-            <p className="text-sm text-slate-400">{t("noUnitsRecorded")}</p>
-          ) : (
-            <div className="bg-white rounded-lg border border-slate-200 overflow-hidden">
-              <table className="w-full text-xs">
-                <thead className="bg-slate-50 text-slate-500">
-                  <tr>
-                    <th className="px-3 py-1.5 text-left font-medium">{t("serial")}</th>
-                    <th className="px-3 py-1.5 text-left font-medium">{t("code")}</th>
-                    <th className="px-3 py-1.5 text-left font-medium">{t("battery")}</th>
-                    <th className="px-3 py-1.5 text-left font-medium">{t("checked")}</th>
-                    <th className="px-3 py-1.5 text-left font-medium">{t("firmware")}</th>
-                    <th className="px-3 py-1.5 text-left font-medium">{t("lastSeen")}</th>
+      <div className="mt-6">
+        <h4 className="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-3">
+          {t("physicalUnits")}
+        </h4>
+        {(d.units ?? []).length === 0 ? (
+          <p className="text-sm text-slate-400">{t("noUnitsRecorded")}</p>
+        ) : (
+          <div className="bg-white rounded-lg border border-slate-200 overflow-hidden">
+            <table className="w-full text-xs">
+              <thead className="bg-slate-50 text-slate-500">
+                <tr>
+                  <th className="px-3 py-1.5 text-left font-medium">{t("serial")}</th>
+                  <th className="px-3 py-1.5 text-left font-medium">{t("code")}</th>
+                  <th className="px-3 py-1.5 text-left font-medium">{t("battery")}</th>
+                  <th className="px-3 py-1.5 text-left font-medium">{t("checked")}</th>
+                  <th className="px-3 py-1.5 text-left font-medium">{t("firmware")}</th>
+                  <th className="px-3 py-1.5 text-left font-medium">{t("lastSeen")}</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100">
+                {(d.units ?? []).map((u) => (
+                  <tr key={u.stationSerial}>
+                    <td className="px-3 py-1.5 font-mono text-slate-700 tabular-nums">{u.stationSerial}</td>
+                    <td className="px-3 py-1.5 font-mono text-slate-700 tabular-nums">
+                      {u.lastProgrammedCode ?? <span className="text-slate-300">—</span>}
+                    </td>
+                    <td className="px-3 py-1.5">
+                      <BatteryIndicator voltage={u.batteryVoltage} low={u.batteryLow} />
+                    </td>
+                    <td className="px-3 py-1.5">
+                      <CheckedIndicator checkedAt={u.checkedAt} />
+                    </td>
+                    <td className="px-3 py-1.5 text-slate-500 font-mono">
+                      {u.firmwareVersion ?? <span className="text-slate-300">—</span>}
+                    </td>
+                    <td className="px-3 py-1.5 text-slate-500">
+                      {u.lastSeenAt
+                        ? relativeTime(new Date(u.lastSeenAt))
+                        : <span className="text-slate-300">—</span>}
+                    </td>
                   </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-100">
-                  {(d.units ?? []).map((u) => (
-                    <tr key={u.stationSerial}>
-                      <td className="px-3 py-1.5 font-mono text-slate-700 tabular-nums">{u.stationSerial}</td>
-                      <td className="px-3 py-1.5 font-mono text-slate-700 tabular-nums">
-                        {u.lastProgrammedCode ?? <span className="text-slate-300">—</span>}
-                      </td>
-                      <td className="px-3 py-1.5">
-                        <BatteryIndicator voltage={u.batteryVoltage} low={u.batteryLow} />
-                      </td>
-                      <td className="px-3 py-1.5">
-                        <CheckedIndicator checkedAt={u.checkedAt} />
-                      </td>
-                      <td className="px-3 py-1.5 text-slate-500 font-mono">
-                        {u.firmwareVersion ?? <span className="text-slate-300">—</span>}
-                      </td>
-                      <td className="px-3 py-1.5 text-slate-500">
-                        {u.lastSeenAt
-                          ? relativeTime(new Date(u.lastSeenAt))
-                          : <span className="text-slate-300">—</span>}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
-        </div>
-      )}
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
     </div>
   );
 }

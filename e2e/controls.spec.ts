@@ -77,6 +77,49 @@ test.describe("Controls Page", () => {
     await expect(page.getByRole("button", { name: "Deselect all" })).not.toBeVisible();
   });
 
+  test("should show code and allow bulk-selecting start/finish controls", async ({ page }) => {
+    await selectCompetition(page);
+    await clickTab(page, "Controls");
+    await expect(page.getByText("23 controls")).toBeVisible({ timeout: 10000 });
+
+    // Create a Start control with code 998 — the seed has no start/finish
+    // controls, so we make one in the test and clean up at the end.
+    await page.getByRole("button", { name: "New Control" }).click();
+    await expect(
+      page.getByRole("heading", { name: "New Control" }),
+    ).toBeVisible({ timeout: 3000 });
+
+    await page.getByPlaceholder("e.g. 50 or 50;250").fill("998");
+    await page.getByPlaceholder("e.g. Radio 1 (optional)").fill("Start E2E");
+    // Status select inside the New Control form (value 4 == Start)
+    const form = page.locator("form").filter({ has: page.getByPlaceholder("e.g. 50 or 50;250") });
+    await form.locator("select").selectOption("4");
+    await page.getByRole("button", { name: "Create" }).click();
+
+    // Row appears with the configured code in the Code column (regression
+    // for the old behaviour that showed "—" for start/finish rows)
+    const startRow = page.getByRole("row").filter({ hasText: "Start E2E" });
+    await expect(startRow).toBeVisible({ timeout: 5000 });
+    await expect(startRow.getByText("998", { exact: true })).toBeVisible();
+
+    // The row checkbox is now enabled and triggers the bulk action bar
+    await startRow.getByRole("checkbox").check();
+    await expect(page.getByText("selected").first()).toBeVisible();
+    await expect(page.getByText("1", { exact: true }).first()).toBeVisible();
+    await page.getByRole("button", { name: "Deselect all" }).click();
+
+    // Cleanup — search by code and delete
+    const search = page.getByPlaceholder("Search code, name...");
+    await search.fill("998");
+    await search.press("Enter");
+    await expect(page.getByText("1 controls")).toBeVisible({ timeout: 5000 });
+    page.on("dialog", (dialog) => dialog.accept());
+    await page.getByTitle("Remove control").click();
+    await expect(page.getByText("No controls found")).toBeVisible({ timeout: 5000 });
+    await page.getByLabel("Clear all filters").click();
+    await expect(page.getByText("23 controls")).toBeVisible({ timeout: 5000 });
+  });
+
   test("should create and then delete a control", async ({ page }) => {
     await selectCompetition(page);
     await clickTab(page, "Controls");
