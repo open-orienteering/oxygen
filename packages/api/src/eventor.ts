@@ -25,7 +25,7 @@ const parser = new XMLParser({
       "CompetitorList.Competitor",
       "Competitor.ControlCard",
     ];
-    return arrayPaths.includes(jpath);
+    return arrayPaths.includes(String(jpath));
   },
 });
 

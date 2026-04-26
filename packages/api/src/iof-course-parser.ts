@@ -106,7 +106,7 @@ const parser = new XMLParser({
       "CourseData.RaceCourseData.Course.CourseControl",
       "CourseData.RaceCourseData.ClassCourseAssignment",
     ];
-    return arrayPaths.includes(jpath);
+    return arrayPaths.includes(String(jpath));
   },
 });
 

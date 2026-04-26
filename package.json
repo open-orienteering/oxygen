@@ -30,5 +30,19 @@
     "qrcode.react": "^4.2.0",
     "react-i18next": "^16.5.6",
     "svg-control-descriptions": "^2.1.0"
+  },
+  "pnpm": {
+    "overrides": {
+      "undici": "^7.24.0",
+      "minimatch@<9.0.7": "^9.0.7",
+      "flatted": "^3.4.2",
+      "serialize-javascript": "^7.0.5",
+      "effect": "^3.20.0",
+      "postcss": "^8.5.10",
+      "rollup@<4.59.0": "^4.59.0",
+      "picomatch@<4.0.4": "^4.0.4",
+      "defu": "^6.1.5",
+      "vite@<7.3.2": "^7.3.2"
+    }
   }
 }
