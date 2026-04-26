@@ -7,12 +7,13 @@
 
 import { useRef, useEffect, useCallback } from "react";
 import type { ReplayData, ReplayControl } from "@oxygen/shared";
-import type { ViewportState } from "./ReplayMapLayer";
+import type { ReplayMapLayerHandle, ViewportState } from "./ReplayMapLayer";
 import { latLngToMapPx } from "./projection-utils";
 
 interface Props {
   data: ReplayData;
-  viewport: ViewportState | null;
+  /** Imperative handle to the map layer, used to read the live viewport. */
+  mapRef: React.RefObject<ReplayMapLayerHandle | null>;
   containerSize: { w: number; h: number };
   activeControlIdx?: number | null;
 }
@@ -186,22 +187,30 @@ export function hitTestControl(
 
 export function ReplayCourseLayer({
   data,
-  viewport,
+  mapRef,
   containerSize,
   activeControlIdx,
 }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const lastCanvasDimsRef = useRef({ w: 0, h: 0 });
 
   const draw = useCallback(() => {
     const canvas = canvasRef.current;
-    if (!canvas || !viewport) return;
+    if (!canvas) return;
+    const viewport = mapRef.current?.getViewport();
+    if (!viewport) return;
 
     const dpr = window.devicePixelRatio || 1;
-    canvas.width = containerSize.w * dpr;
-    canvas.height = containerSize.h * dpr;
+    const wPx = containerSize.w * dpr;
+    const hPx = containerSize.h * dpr;
+    if (lastCanvasDimsRef.current.w !== wPx || lastCanvasDimsRef.current.h !== hPx) {
+      canvas.width = wPx;
+      canvas.height = hPx;
+      lastCanvasDimsRef.current = { w: wPx, h: hPx };
+    }
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
-    ctx.scale(dpr, dpr);
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.clearRect(0, 0, containerSize.w, containerSize.h);
 
     if (data.courses.length === 0) return;
@@ -316,10 +325,26 @@ export function ReplayCourseLayer({
         ctx.fillText(label, labelPos.x, labelPos.y);
       }
     }
-  }, [data, viewport, containerSize, activeControlIdx]);
+  }, [data, mapRef, containerSize, activeControlIdx]);
 
+  // Always read the latest draw fn from a ref so the viewport subscription
+  // doesn't have to re-attach on every prop change.
+  const drawRef = useRef(draw);
   useEffect(() => {
-    draw();
+    drawRef.current = draw;
+  }, [draw]);
+
+  // Subscribe to viewport changes (drag, zoom, follow updates).
+  useEffect(() => {
+    const handle = mapRef.current;
+    if (!handle) return;
+    drawRef.current();
+    return handle.subscribeViewport(() => drawRef.current());
+  }, [mapRef]);
+
+  // Redraw on structural changes (data, activeControlIdx, container size).
+  useEffect(() => {
+    drawRef.current();
   }, [draw]);
 
   return (
@@ -335,3 +360,4 @@ export function ReplayCourseLayer({
     />
   );
 }
+

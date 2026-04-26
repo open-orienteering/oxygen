@@ -1,8 +1,10 @@
 import { useEffect, useState, useCallback } from "react";
 import { useOnlineStatus } from "./useOnlineStatus";
+import { usePageVisible } from "./usePageVisible";
 import { getPendingCount } from "../lib/offline/events";
 import { drainEventQueue, cleanupSyncedEvents } from "../lib/offline/sync";
 import { trpc } from "../lib/trpc";
+import { usePerformanceSensitive } from "../lib/performance-mode";
 
 /**
  * Hook that manages the offline event queue:
@@ -14,11 +16,17 @@ import { trpc } from "../lib/trpc";
  */
 export function useEventQueue(competitionId?: string) {
   const isOnline = useOnlineStatus();
+  const visible = usePageVisible();
+  const performanceSensitive = usePerformanceSensitive();
+  const pollingActive = visible && !performanceSensitive;
   const [pendingCount, setPendingCount] = useState(0);
   const [syncing, setSyncing] = useState(false);
   const utils = trpc.useUtils();
 
-  // Poll pending count
+  // Poll pending count. The 2s cadence is only useful while the user can
+  // actually see the indicator change — when the tab is hidden, or a
+  // performance-sensitive page like the replay viewer is mounted, we
+  // refresh once and idle until polling resumes.
   useEffect(() => {
     const refresh = async () => {
       const filtered = await getPendingCount(competitionId);
@@ -29,9 +37,10 @@ export function useEventQueue(competitionId?: string) {
       setPendingCount(filtered);
     };
     refresh();
+    if (!pollingActive) return;
     const interval = setInterval(refresh, 2000);
     return () => clearInterval(interval);
-  }, [competitionId]);
+  }, [competitionId, pollingActive]);
 
   // Auto-drain when coming back online
   useEffect(() => {

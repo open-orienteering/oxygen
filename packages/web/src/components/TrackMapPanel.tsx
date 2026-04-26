@@ -10,7 +10,7 @@
 import { useMemo, useState, useRef, useCallback, useEffect } from "react";
 import { trpc } from "../lib/trpc";
 import { MapPanel } from "./MapPanel";
-import { ReplayMapLayer, type ReplayMapLayerHandle, type ViewportState } from "./replay/ReplayMapLayer";
+import { ReplayMapLayer, type ReplayMapLayerHandle } from "./replay/ReplayMapLayer";
 import { ReplayRouteLayer } from "./replay/ReplayRouteLayer";
 import { ReplayCourseLayer } from "./replay/ReplayCourseLayer";
 import type { ReplayWaypoint } from "@oxygen/shared";
@@ -108,13 +108,13 @@ function LiveloxMapPreview({ route, liveloxClassId, height }: LiveloxMapPreviewP
     { staleTime: 10 * 60_000, retry: 1 },
   );
 
-  const mapRef = useRef<ReplayMapLayerHandle>(null);
-  const [viewport, setViewport] = useState<ViewportState | null>(null);
+  const mapRef = useRef<ReplayMapLayerHandle | null>(null);
+  const [mapReady, setMapReady] = useState(false);
   const [containerSize, setContainerSize] = useState({ w: 0, h: 0 });
   const containerRef = useRef<HTMLDivElement>(null);
 
-  const onViewportChange = useCallback((vp: ViewportState) => {
-    setViewport({ ...vp });
+  const onViewportChange = useCallback(() => {
+    setMapReady(true);
   }, []);
 
   useEffect(() => {
@@ -186,17 +186,17 @@ function LiveloxMapPreview({ route, liveloxClassId, height }: LiveloxMapPreviewP
         onViewportChange={onViewportChange}
         style={{ position: "absolute", inset: 0 }}
       />
-      {viewport && containerSize.w > 0 && singleRouteData && (
+      {mapReady && containerSize.w > 0 && singleRouteData && (
         <>
           <ReplayCourseLayer
             data={data}
-            viewport={viewport}
+            mapRef={mapRef}
             containerSize={containerSize}
             activeControlIdx={null}
           />
           <ReplayRouteLayer
             data={singleRouteData}
-            viewport={viewport}
+            mapRef={mapRef}
             containerSize={containerSize}
             getRouteTime={getRouteTime}
             visibleParticipants={visibleParticipants}

@@ -23,6 +23,7 @@ import { RegistrationDialog } from "../components/RegistrationDialog";
 import { DbLoadIndicator } from "../components/DbLoadIndicator";
 import { useExternalChanges } from "../hooks/useExternalChanges";
 import { SyncStatusIndicator } from "../components/SyncStatusIndicator";
+import { usePerformanceSensitive } from "../lib/performance-mode";
 
 // Lazy-loaded page components — each becomes a separate chunk
 const CompetitionDashboard = lazy(() => import("./CompetitionDashboard").then(m => ({ default: m.CompetitionDashboard })));
@@ -101,8 +102,9 @@ export function CompetitionShell() {
   const [ready, setReady] = useState(false);
   const [showMoreMenu, setShowMoreMenu] = useState(false);
 
-  // Poll oCounter for external changes (e.g. from MeOS) and auto-invalidate caches
-  useExternalChanges(ready);
+  // Poll oCounter for external changes (e.g. from MeOS) and auto-invalidate
+  // caches. Hosted in a sibling component so the query subscription's
+  // re-renders never cascade into the routed page tree.
   const utils = trpc.useUtils();
   const { setCompetitionNameId, getKioskChannel } = useDeviceManager();
   const { print: printerPrint } = usePrinter();
@@ -259,6 +261,7 @@ export function CompetitionShell() {
 
   return (
     <div className="min-h-screen bg-slate-50">
+      <ExternalChangesProbe enabled={ready} />
       {/* Header */}
       <header className="bg-white border-b border-slate-200 sticky top-0 z-10">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
@@ -462,6 +465,7 @@ function KioskLauncher({ nameId }: { nameId: string }) {
   const { t } = useTranslation("nav");
   const { getKioskChannel } = useDeviceManager();
   const [connected, setConnected] = useState(false);
+  const performanceSensitive = usePerformanceSensitive();
 
   useEffect(() => {
     let cancelled = false;
@@ -477,12 +481,15 @@ function KioskLauncher({ nameId }: { nameId: string }) {
     };
 
     checkConnection();
+    if (performanceSensitive) {
+      return () => { cancelled = true; };
+    }
     const interval = setInterval(checkConnection, 5000);
     return () => {
       cancelled = true;
       clearInterval(interval);
     };
-  }, [getKioskChannel]);
+  }, [getKioskChannel, performanceSensitive]);
 
   const handleLaunch = useCallback(() => {
     const url = `/${nameId}/kiosk`;
@@ -656,4 +663,14 @@ function ReaderStatusIndicator() {
       )}
     </div>
   );
+}
+
+// ─── External changes probe ────────────────────────────────
+// Hosting `useExternalChanges` here (not directly in `CompetitionShell`)
+// keeps any re-renders triggered by the hook's underlying `useQuery`
+// subscription confined to this no-output component, instead of cascading
+// through the shell into the routed page tree.
+function ExternalChangesProbe({ enabled }: { enabled: boolean }) {
+  useExternalChanges(enabled);
+  return null;
 }

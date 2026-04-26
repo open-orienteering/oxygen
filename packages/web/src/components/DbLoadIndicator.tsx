@@ -1,5 +1,7 @@
 import { useState, useEffect, useRef } from "react";
 import { trpc } from "../lib/trpc";
+import { usePageVisible } from "../hooks/usePageVisible";
+import { usePerformanceSensitive } from "../lib/performance-mode";
 
 const POLL_MS = 3_000;
 const HISTORY_LEN = 20;
@@ -80,11 +82,27 @@ export function DbLoadIndicator({ enabled = true }: { enabled?: boolean }) {
   const prevRef = useRef<Record<string, number> | null>(null);
   const prevTimeRef = useRef<number>(0);
 
+  const visible = usePageVisible();
+  const performanceSensitive = usePerformanceSensitive();
+  const active = enabled && visible && !performanceSensitive;
+
   const { data } = trpc.competition.dbStatus.useQuery(undefined, {
     enabled,
-    refetchInterval: enabled ? POLL_MS : false,
+    refetchInterval: active ? POLL_MS : false,
+    refetchIntervalInBackground: false,
     staleTime: 0,
   });
+
+  // When polling pauses (hidden tab or performance-sensitive page mounted),
+  // the dt for the next sample after resume would span the whole pause and
+  // produce an averaged-down rate. Drop the baseline so the next poll
+  // establishes a fresh one.
+  useEffect(() => {
+    if (!active) {
+      prevRef.current = null;
+      prevTimeRef.current = 0;
+    }
+  }, [active]);
 
   useEffect(() => {
     if (!data) return;

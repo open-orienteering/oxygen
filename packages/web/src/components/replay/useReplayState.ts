@@ -4,8 +4,18 @@ import type { ReplayData } from "@oxygen/shared";
 export type StartMode = "real" | "mass" | "legs";
 export type FollowMode = "off" | "all";
 
+/** How often the React-bound `elapsedMs` (used by the timeline UI) is
+ *  refreshed during playback. The internal time ref advances every animation
+ *  frame; React state only needs to keep the slider/label readable. */
+const REACT_REFRESH_MS = 100;
+
 export interface ReplayState {
-  /** Elapsed time in ms from the logical start of the current segment. */
+  /**
+   * Elapsed time in ms from the logical start of the current segment.
+   * Updates at ~10 Hz during playback so the slider/label stay readable
+   * without re-rendering the entire viewer every frame. For the canvas
+   * drawing path, prefer `getElapsedMs()`.
+   */
   elapsedMs: number;
   isPlaying: boolean;
   speed: number;
@@ -38,7 +48,22 @@ export interface ReplayState {
   nextLeg: () => void;
   prevLeg: () => void;
 
+  /** Stable: returns the current waypoint time for a participant, reading
+   *  from the live time ref. Safe to call inside RAF loops. */
   getRouteTime: (participantId: string) => number;
+  /** Stable: returns the current `elapsedMs` from the live time ref. */
+  getElapsedMs: () => number;
+  /**
+   * Subscribe to time changes (fired every animation frame during playback,
+   * plus on every external seek). Returns an unsubscribe function.
+   */
+  subscribeElapsed: (cb: () => void) => () => void;
+  /**
+   * Advance the playback time by `dtRealMs` real-time milliseconds, scaled by
+   * the current speed. Handles end-of-segment / leg auto-advance. Should be
+   * called from the orchestrator RAF when `isPlaying` is true.
+   */
+  advanceTime: (dtRealMs: number) => void;
 }
 
 export interface ReplayConfig {
@@ -57,12 +82,21 @@ export function useReplayState(data: ReplayData | undefined, config?: ReplayConf
   const [speed, setSpeed] = useState(config?.defaultSpeed ?? 32);
   const [startMode, setStartMode] = useState<StartMode>("mass");
   const [followMode, setFollowMode] = useState<FollowMode>(config?.defaultFollowMode ?? "all");
-  const [elapsedMs, setElapsedMs] = useState(0);
+  const [elapsedMs, setElapsedMsState] = useState(0);
   const [visibleParticipants, setVisibleParticipants] = useState<Set<string>>(
     new Set(),
   );
   const [restartControlIdx, setRestartControlIdx] = useState<number | null>(null);
   const [currentLeg, setCurrentLeg] = useState(0);
+
+  // ── Live time ref + pub/sub ───────────────────────────────
+  // The canonical "what time is it right now" value lives in this ref so the
+  // animation loop can update it 60 times per second without triggering React
+  // re-renders. The React `elapsedMs` state above is a throttled mirror used
+  // only by UI consumers (slider, label).
+  const elapsedRef = useRef(0);
+  const subscribersRef = useRef<Set<() => void>>(new Set());
+  const lastReactRefreshRef = useRef(0);
 
   // ── Per-route timing info ──
   const routeInfo = useMemo(() => {
@@ -170,6 +204,53 @@ export function useReplayState(data: ReplayData | undefined, config?: ReplayConf
     return maxIndividualDuration;
   }, [startMode, visibleBounds, maxIndividualDuration, controlSplits, currentLeg, restartControlIdx, data, visibleParticipants, raceStarts]);
 
+  // ── Refs that the orchestrator/advanceTime need to read each frame ──
+  // Kept in sync via effects so the closure-free RAF can read the latest
+  // values without re-creating the function on every state change.
+  //
+  // `currentLegRef` and `restartControlIdxRef` additionally have to be
+  // updated *synchronously* alongside any elapsed reset (leg auto-advance,
+  // manual leg switch, restart-from-control) so the very next subscriber
+  // notification reads the new value. Otherwise the canvas draws one
+  // frame at "elapsed = 0" against the *previous* leg, snapping every
+  // runner backwards before React commits and corrects it next frame.
+  const speedRef = useRef(speed);
+  const startModeRef = useRef(startMode);
+  const currentLegRef = useRef(currentLeg);
+  const totalLegsRef = useRef(totalLegs);
+  const totalDurationMsRef = useRef(totalDurationMs);
+  const restartControlIdxRef = useRef(restartControlIdx);
+  useEffect(() => { speedRef.current = speed; }, [speed]);
+  useEffect(() => { startModeRef.current = startMode; }, [startMode]);
+  useEffect(() => { currentLegRef.current = currentLeg; }, [currentLeg]);
+  useEffect(() => { totalLegsRef.current = totalLegs; }, [totalLegs]);
+  useEffect(() => { totalDurationMsRef.current = totalDurationMs; }, [totalDurationMs]);
+  useEffect(() => { restartControlIdxRef.current = restartControlIdx; }, [restartControlIdx]);
+
+  // ── Time write helper ─────────────────────────────────────
+  const notify = useCallback(() => {
+    for (const cb of subscribersRef.current) {
+      cb();
+    }
+  }, []);
+
+  /**
+   * Write a new elapsed value to the time ref, notify subscribers, and
+   * (throttled) refresh the React state. Pass `flushReact: true` for
+   * user-driven seeks where we want the UI to track immediately.
+   */
+  const writeElapsed = useCallback((next: number, flushReact: boolean) => {
+    const clamped = Math.max(0, Math.min(totalDurationMsRef.current, next));
+    if (clamped === elapsedRef.current && !flushReact) return;
+    elapsedRef.current = clamped;
+    notify();
+    const now = performance.now();
+    if (flushReact || now - lastReactRefreshRef.current >= REACT_REFRESH_MS) {
+      lastReactRefreshRef.current = now;
+      setElapsedMsState(clamped);
+    }
+  }, [notify]);
+
   // ── Init when data changes ──
   useEffect(() => {
     if (!data) return;
@@ -178,7 +259,14 @@ export function useReplayState(data: ReplayData | undefined, config?: ReplayConf
     } else {
       setVisibleParticipants(new Set(data.routes.map((r) => r.participantId)));
     }
-    setElapsedMs(0);
+    elapsedRef.current = 0;
+    // Sync the leg/restart-control refs synchronously so the `notify()`
+    // call below redraws against the reset state, not the previous data's
+    // leg/restart selection.
+    currentLegRef.current = 0;
+    restartControlIdxRef.current = null;
+    setElapsedMsState(0);
+    notify();
     setRestartControlIdx(null);
     setCurrentLeg(0);
     if (config?.autoPlay) {
@@ -188,64 +276,48 @@ export function useReplayState(data: ReplayData | undefined, config?: ReplayConf
     }
   }, [data]); // eslint-disable-line react-hooks/exhaustive-deps -- config is stable
 
-  // ── Animation loop ──
-  const lastFrameRef = useRef<number>(0);
-  const rafRef = useRef<number>(0);
-
-  useEffect(() => {
-    if (!isPlaying) {
-      if (rafRef.current) cancelAnimationFrame(rafRef.current);
-      return;
+  // ── advanceTime: called by the orchestrator while playing ─
+  const advanceTime = useCallback((dtRealMs: number) => {
+    const next = elapsedRef.current + dtRealMs * speedRef.current;
+    if (next >= totalDurationMsRef.current) {
+      if (startModeRef.current === "legs" && currentLegRef.current < totalLegsRef.current - 1) {
+        // Auto-advance to next leg. Sync the ref BEFORE writeElapsed so
+        // the synchronous subscriber notification draws the new leg, not
+        // a one-frame snapshot of the old leg at elapsed=0.
+        const newLeg = currentLegRef.current + 1;
+        currentLegRef.current = newLeg;
+        setCurrentLeg(newLeg);
+        writeElapsed(0, true);
+      } else {
+        setIsPlaying(false);
+        writeElapsed(totalDurationMsRef.current, true);
+      }
+    } else {
+      writeElapsed(next, false);
     }
-
-    lastFrameRef.current = performance.now();
-
-    const tick = (now: number) => {
-      const dt = now - lastFrameRef.current;
-      lastFrameRef.current = now;
-
-      setElapsedMs((prev) => {
-        const next = prev + dt * speed;
-        if (next >= totalDurationMs) {
-          if (startMode === "legs" && currentLeg < totalLegs - 1) {
-            // Auto-advance to next leg
-            setCurrentLeg((l) => l + 1);
-            return 0;
-          }
-          setIsPlaying(false);
-          return totalDurationMs;
-        }
-        return next;
-      });
-
-      rafRef.current = requestAnimationFrame(tick);
-    };
-
-    rafRef.current = requestAnimationFrame(tick);
-    return () => {
-      if (rafRef.current) cancelAnimationFrame(rafRef.current);
-    };
-  }, [isPlaying, speed, totalDurationMs, startMode, currentLeg, totalLegs]);
+  }, [writeElapsed]);
 
   const play = useCallback(() => {
-    setElapsedMs((prev) => (prev >= totalDurationMs ? 0 : prev));
+    if (elapsedRef.current >= totalDurationMsRef.current) {
+      writeElapsed(0, true);
+    }
     setIsPlaying(true);
-  }, [totalDurationMs]);
+  }, [writeElapsed]);
 
   const pause = useCallback(() => setIsPlaying(false), []);
 
   const togglePlay = useCallback(() => {
     setIsPlaying((p) => {
-      if (!p) {
-        setElapsedMs((prev) => (prev >= totalDurationMs ? 0 : prev));
+      if (!p && elapsedRef.current >= totalDurationMsRef.current) {
+        writeElapsed(0, true);
       }
       return !p;
     });
-  }, [totalDurationMs]);
+  }, [writeElapsed]);
 
   const setElapsedWrapped = useCallback(
-    (ms: number) => setElapsedMs(Math.max(0, Math.min(totalDurationMs, ms))),
-    [totalDurationMs],
+    (ms: number) => writeElapsed(ms, true),
+    [writeElapsed],
   );
 
   const toggleParticipant = useCallback((id: string) => {
@@ -272,36 +344,51 @@ export function useReplayState(data: ReplayData | undefined, config?: ReplayConf
     if (startMode === "legs" && controlIdx !== null) {
       // In legs mode: jump to the leg that starts at the clicked control.
       // Control at index N is the start of leg N (goes to control N+1).
-      setCurrentLeg(Math.min(controlIdx, Math.max(0, totalLegs - 1)));
-      setElapsedMs(0);
+      const newLeg = Math.min(controlIdx, Math.max(0, totalLegs - 1));
+      currentLegRef.current = newLeg;
+      setCurrentLeg(newLeg);
+      writeElapsed(0, true);
       setIsPlaying(true);
       return;
     }
+    restartControlIdxRef.current = controlIdx;
     setRestartControlIdx(controlIdx);
-    setElapsedMs(0);
+    writeElapsed(0, true);
     if (controlIdx != null) {
       setIsPlaying(true);
     }
-  }, [startMode, totalLegs]);
+  }, [startMode, totalLegs, writeElapsed]);
 
   const nextLeg = useCallback(() => {
     if (currentLeg < totalLegs - 1) {
-      setCurrentLeg((l) => l + 1);
-      setElapsedMs(0);
+      const newLeg = currentLegRef.current + 1;
+      currentLegRef.current = newLeg;
+      setCurrentLeg(newLeg);
+      writeElapsed(0, true);
     }
-  }, [currentLeg, totalLegs]);
+  }, [currentLeg, totalLegs, writeElapsed]);
 
   const prevLeg = useCallback(() => {
     if (currentLeg > 0) {
-      setCurrentLeg((l) => l - 1);
-      setElapsedMs(0);
+      const newLeg = currentLegRef.current - 1;
+      currentLegRef.current = newLeg;
+      setCurrentLeg(newLeg);
+      writeElapsed(0, true);
     }
-  }, [currentLeg]);
+  }, [currentLeg, writeElapsed]);
 
   // ── Convert elapsed → waypoint time ──
+  // Stable: reads from `elapsedRef`, `currentLegRef`, and
+  // `restartControlIdxRef` so the function identity does NOT change every
+  // animation frame, AND so a synchronous leg/control switch (paired with
+  // an immediate elapsed reset) is reflected in the very next subscriber
+  // draw. Only the structural inputs (mode, splits, etc.) affect identity.
   const getRouteTime = useCallback(
     (participantId: string) => {
+      const elapsed = elapsedRef.current;
       const raceStart = raceStarts.get(participantId) ?? globalStart;
+      const liveCurrentLeg = currentLegRef.current;
+      const liveRestartControlIdx = restartControlIdxRef.current;
 
       // Legs mode: offset from split time at current leg's start control.
       // For leg 0, the start control is the start triangle which has no split
@@ -310,36 +397,45 @@ export function useReplayState(data: ReplayData | undefined, config?: ReplayConf
       // so they freeze and wait for the slowest runner before the next leg.
       if (startMode === "legs") {
         let legStartTime: number | undefined;
-        if (currentLeg === 0) {
+        if (liveCurrentLeg === 0) {
           legStartTime = raceStart;
         } else {
-          legStartTime = controlSplits[currentLeg]?.get(participantId);
+          legStartTime = controlSplits[liveCurrentLeg]?.get(participantId);
         }
         if (legStartTime !== undefined) {
           // Cap at the end control split time (runner stops there when done)
-          const legEndSplit = controlSplits[currentLeg + 1]?.get(participantId);
+          const legEndSplit = controlSplits[liveCurrentLeg + 1]?.get(participantId);
           const cappedElapsed = legEndSplit !== undefined
-            ? Math.min(elapsedMs, legEndSplit - legStartTime)
-            : elapsedMs;
+            ? Math.min(elapsed, legEndSplit - legStartTime)
+            : elapsed;
           return legStartTime + cappedElapsed;
         }
         return raceStart - 1; // no split data → hide
       }
 
       // Control restart: offset from split time at that control
-      if (restartControlIdx != null && controlSplits[restartControlIdx]) {
-        const splitTime = controlSplits[restartControlIdx].get(participantId);
-        if (splitTime !== undefined) return splitTime + elapsedMs;
+      if (liveRestartControlIdx != null && controlSplits[liveRestartControlIdx]) {
+        const splitTime = controlSplits[liveRestartControlIdx].get(participantId);
+        if (splitTime !== undefined) return splitTime + elapsed;
         return raceStart - 1;
       }
 
-      if (startMode === "real") return visibleBounds.start + elapsedMs;
+      if (startMode === "real") return visibleBounds.start + elapsed;
 
       // Mass start: offset from each runner's race start
-      return raceStart + elapsedMs;
+      return raceStart + elapsed;
     },
-    [startMode, elapsedMs, raceStarts, globalStart, visibleBounds, controlSplits, currentLeg, restartControlIdx],
+    [startMode, raceStarts, globalStart, visibleBounds, controlSplits],
   );
+
+  const getElapsedMs = useCallback(() => elapsedRef.current, []);
+
+  const subscribeElapsed = useCallback((cb: () => void) => {
+    subscribersRef.current.add(cb);
+    return () => {
+      subscribersRef.current.delete(cb);
+    };
+  }, []);
 
   return {
     elapsedMs,
@@ -367,5 +463,8 @@ export function useReplayState(data: ReplayData | undefined, config?: ReplayConf
     nextLeg,
     prevLeg,
     getRouteTime,
+    getElapsedMs,
+    subscribeElapsed,
+    advanceTime,
   };
 }
