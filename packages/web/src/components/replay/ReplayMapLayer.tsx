@@ -35,6 +35,15 @@ export interface ReplayMapLayerHandle {
   mapToScreen: (mx: number, my: number) => { sx: number; sy: number };
   /** Convert screen pixel → map pixel. */
   screenToMap: (sx: number, sy: number) => { mx: number; my: number };
+  /**
+   * Subscribe to viewport changes (drag, zoom, programmatic setViewport,
+   * initial fit). Overlays use this to redraw without forcing the parent
+   * tree through React state on every animation frame. Returns an
+   * unsubscribe function.
+   */
+  subscribeViewport: (cb: () => void) => () => void;
+  /** Trigger a redraw of the underlying map canvas (tiles / image). */
+  redraw: () => void;
 }
 
 interface Props {
@@ -184,13 +193,41 @@ export const ReplayMapLayer = forwardRef<ReplayMapLayerHandle, Props>(
       rotation: 0,
     });
 
+    // Viewport subscribers — overlays subscribe here to redraw on viewport
+    // changes without going through React state every animation frame.
+    const vpSubscribersRef = useRef<Set<() => void>>(new Set());
+    const notifyViewport = useCallback(() => {
+      for (const cb of vpSubscribersRef.current) cb();
+    }, []);
+
+    // Track last canvas dimensions so we can skip the (expensive) reset that
+    // happens whenever you assign canvas.width / canvas.height — a true
+    // no-op resize otherwise reallocates the GPU surface and clears state.
+    const lastCanvasDimsRef = useRef({ w: 0, h: 0, dpr: 0 });
+
     // Livelox tile images cache
     const tileImagesRef = useRef<Map<string, HTMLImageElement>>(new Map());
-    const [tilesLoaded, setTilesLoaded] = useState(0);
 
-    // Native (OCAD) tile images cache + load counter for redraw triggering
+    // Native (OCAD) tile images cache
     const nativeTileImagesRef = useRef<Map<string, HTMLImageElement>>(new Map());
-    const [nativeTilesVersion, setNativeTilesVersion] = useState(0);
+
+    // drawMap is defined later, but tile-load handlers below reference it
+    // through this ref. The ref body is replaced once drawMap exists.
+    const drawMapRef = useRef<() => void>(() => {});
+
+    // Coalesce tile-load redraws: drawing once when each response handler
+    // fires would force a full React commit and overlay redraw chain. Tiles
+    // arrive in bursts during pans, so we collapse them via RAF — the next
+    // frame the orchestrator runs will already include the new tiles.
+    const tileRedrawScheduledRef = useRef(false);
+    const scheduleMapRedraw = useCallback(() => {
+      if (tileRedrawScheduledRef.current) return;
+      tileRedrawScheduledRef.current = true;
+      requestAnimationFrame(() => {
+        tileRedrawScheduledRef.current = false;
+        drawMapRef.current();
+      });
+    }, []);
 
     // ─── Resize observer ──────────────────────────────────────
     useEffect(() => {
@@ -217,6 +254,7 @@ export const ReplayMapLayer = forwardRef<ReplayMapLayerHandle, Props>(
         rotation: 0,
       };
       drawMap();
+      notifyViewport();
       onViewportChange?.(vpRef.current);
     }, [containerSize.w, containerSize.h, map.widthPx, map.heightPx]);
 
@@ -231,7 +269,7 @@ export const ReplayMapLayer = forwardRef<ReplayMapLayerHandle, Props>(
         img.crossOrigin = "anonymous";
         img.onload = () => {
           tileImagesRef.current.set("full", img);
-          setTilesLoaded((n) => n + 1);
+          scheduleMapRedraw();
         };
         img.src = map.imageUrl;
         return;
@@ -244,18 +282,14 @@ export const ReplayMapLayer = forwardRef<ReplayMapLayerHandle, Props>(
         img.crossOrigin = "anonymous";
         img.onload = () => {
           tileImagesRef.current.set(key, img);
-          setTilesLoaded((n) => n + 1);
+          scheduleMapRedraw();
         };
         img.onerror = () => {
-          setTilesLoaded((n) => n + 1);
+          scheduleMapRedraw();
         };
         img.src = tile.url;
       }
-    }, [map.tiles, map.imageUrl, nativeTileBase]);
-
-    // Redraw when Livelox tiles or native tiles load
-    useEffect(() => { drawMap(); }, [tilesLoaded]);
-    useEffect(() => { drawMap(); }, [nativeTilesVersion]);
+    }, [map.tiles, map.imageUrl, nativeTileBase, scheduleMapRedraw]);
 
     // ─── Transform helpers ────────────────────────────────────
     const mapToScreen = useCallback(
@@ -290,9 +324,6 @@ export const ReplayMapLayer = forwardRef<ReplayMapLayerHandle, Props>(
       [containerSize],
     );
 
-    // drawMap is defined below — use a ref to avoid ordering issues
-    const drawMapRef = useRef<() => void>(() => {});
-
     useImperativeHandle(
       ref,
       () => ({
@@ -300,12 +331,20 @@ export const ReplayMapLayer = forwardRef<ReplayMapLayerHandle, Props>(
         setViewport: (vp: ViewportState) => {
           vpRef.current = vp;
           drawMapRef.current();
+          notifyViewport();
           onViewportChange?.(vp);
         },
         mapToScreen,
         screenToMap,
+        subscribeViewport: (cb: () => void) => {
+          vpSubscribersRef.current.add(cb);
+          return () => {
+            vpSubscribersRef.current.delete(cb);
+          };
+        },
+        redraw: () => drawMapRef.current(),
       }),
-      [mapToScreen, screenToMap, onViewportChange],
+      [mapToScreen, screenToMap, onViewportChange, notifyViewport],
     );
 
     // ─── Request a native tile load (called from drawMap) ─────
@@ -314,9 +353,9 @@ export const ReplayMapLayer = forwardRef<ReplayMapLayerHandle, Props>(
       const img = new Image();
       img.crossOrigin = "anonymous";
       nativeTileImagesRef.current.set(url, img); // prevent duplicate loads
-      img.onload = () => setNativeTilesVersion((v) => v + 1);
+      img.onload = () => scheduleMapRedraw();
       img.src = url;
-    }, []);
+    }, [scheduleMapRedraw]);
 
     // ─── Canvas draw ──────────────────────────────────────────
     const drawMap = useCallback(() => {
@@ -326,9 +365,19 @@ export const ReplayMapLayer = forwardRef<ReplayMapLayerHandle, Props>(
       if (!ctx) return;
 
       const dpr = window.devicePixelRatio || 1;
-      canvas.width = containerSize.w * dpr;
-      canvas.height = containerSize.h * dpr;
-      ctx.scale(dpr, dpr);
+      const wPx = containerSize.w * dpr;
+      const hPx = containerSize.h * dpr;
+      const last = lastCanvasDimsRef.current;
+      if (last.w !== wPx || last.h !== hPx) {
+        canvas.width = wPx;
+        canvas.height = hPx;
+        lastCanvasDimsRef.current = { w: wPx, h: hPx, dpr };
+      }
+      // setTransform is preferable to ctx.scale here: assigning width/height
+      // resets the context to identity, but on subsequent frames (no resize)
+      // the transform persists from the previous draw, so cumulative
+      // ctx.scale(dpr, dpr) calls would compound. setTransform is idempotent.
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
 
       ctx.clearRect(0, 0, containerSize.w, containerSize.h);
 
@@ -363,6 +412,9 @@ export const ReplayMapLayer = forwardRef<ReplayMapLayerHandle, Props>(
 
         ctx.restore();
       }
+      // Reset to identity DPR transform so the next call's clearRect at
+      // CSS-pixel coordinates is consistent.
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     }, [containerSize, map, nativeTileBase, requestNativeTileLoad]);
 
     // Keep ref in sync so imperative setViewport can call drawMap
@@ -409,15 +461,17 @@ export const ReplayMapLayer = forwardRef<ReplayMapLayerHandle, Props>(
         zoomAnchorRef.current = null;
         zoomVelRef.current = 0;
         drawMap();
+        notifyViewport();
         onViewportChange?.(vpRef.current);
         return;
       }
 
       applyScaleWithAnchor(vp.scale + zoomVelRef.current, anchor);
       drawMap();
+      notifyViewport();
       onViewportChange?.(vpRef.current);
       zoomRafRef.current = requestAnimationFrame(animateZoom);
-    }, [applyScaleWithAnchor, drawMap, onViewportChange]);
+    }, [applyScaleWithAnchor, drawMap, onViewportChange, notifyViewport]);
 
     // ─── Interaction: pan + zoom ──────────────────────────────
     const dragRef = useRef<{ sx: number; sy: number; cx: number; cy: number } | null>(null);
@@ -452,9 +506,10 @@ export const ReplayMapLayer = forwardRef<ReplayMapLayerHandle, Props>(
           cy: dragRef.current.cy - rdy / vp.scale,
         };
         drawMap();
+        notifyViewport();
         onViewportChange?.(vpRef.current);
       },
-      [drawMap, onViewportChange],
+      [drawMap, onViewportChange, notifyViewport],
     );
 
     const onPointerUp = useCallback(() => {
@@ -505,10 +560,11 @@ export const ReplayMapLayer = forwardRef<ReplayMapLayerHandle, Props>(
           const newScale = Math.max(0.05, Math.min(20, touchRef.current.scale * (d / touchRef.current.d)));
           vpRef.current = { ...vpRef.current, scale: newScale };
           drawMap();
+          notifyViewport();
           onViewportChange?.(vpRef.current);
         }
       },
-      [drawMap, onViewportChange],
+      [drawMap, onViewportChange, notifyViewport],
     );
 
     const onTouchEnd = useCallback(() => {

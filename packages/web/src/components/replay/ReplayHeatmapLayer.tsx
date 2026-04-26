@@ -11,12 +11,13 @@
 
 import { useRef, useEffect, useCallback, useMemo } from "react";
 import type { ReplayData } from "@oxygen/shared";
-import type { ViewportState } from "./ReplayMapLayer";
+import type { ReplayMapLayerHandle } from "./ReplayMapLayer";
 import { latLngToMapPx } from "./projection-utils";
 
 interface Props {
   data: ReplayData;
-  viewport: ViewportState | null;
+  /** Imperative handle to the map layer, used to read the live viewport. */
+  mapRef: React.RefObject<ReplayMapLayerHandle | null>;
   containerSize: { w: number; h: number };
   visibleParticipants: Set<string>;
 }
@@ -77,11 +78,12 @@ function buildOffscreen(
 
 export function ReplayHeatmapLayer({
   data,
-  viewport,
+  mapRef,
   containerSize,
   visibleParticipants,
 }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const lastCanvasDimsRef = useRef({ w: 0, h: 0 });
 
   // Rebuild offscreen only when the set of visible participants or data changes.
   // Sorted key ensures stable identity regardless of Set insertion order.
@@ -103,11 +105,18 @@ export function ReplayHeatmapLayer({
 
     const oc = offscreenRef.current;
     const canvas = canvasRef.current;
-    if (!oc || !canvas || !viewport || containerSize.w === 0) return;
+    if (!oc || !canvas || containerSize.w === 0) return;
+    const viewport = mapRef.current?.getViewport();
+    if (!viewport) return;
 
     const dpr = window.devicePixelRatio || 1;
-    canvas.width = containerSize.w * dpr;
-    canvas.height = containerSize.h * dpr;
+    const wPx = containerSize.w * dpr;
+    const hPx = containerSize.h * dpr;
+    if (lastCanvasDimsRef.current.w !== wPx || lastCanvasDimsRef.current.h !== hPx) {
+      canvas.width = wPx;
+      canvas.height = hPx;
+      lastCanvasDimsRef.current = { w: wPx, h: hPx };
+    }
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
 
@@ -129,10 +138,25 @@ export function ReplayHeatmapLayer({
     );
     ctx.drawImage(oc, 0, 0);
     ctx.setTransform(1, 0, 0, 1, 0, 0);
-  }, [data, visibleParticipants, participantKey, viewport, containerSize]);
+  }, [data, visibleParticipants, participantKey, mapRef, containerSize]);
 
+  const drawRef = useRef(draw);
   useEffect(() => {
-    draw();
+    drawRef.current = draw;
+  }, [draw]);
+
+  // Subscribe to viewport changes so the heatmap pans/zooms with the map
+  // without going through React state.
+  useEffect(() => {
+    const handle = mapRef.current;
+    if (!handle) return;
+    drawRef.current();
+    return handle.subscribeViewport(() => drawRef.current());
+  }, [mapRef]);
+
+  // Redraw on structural changes (data, participants, container size).
+  useEffect(() => {
+    drawRef.current();
   }, [draw]);
 
   return (

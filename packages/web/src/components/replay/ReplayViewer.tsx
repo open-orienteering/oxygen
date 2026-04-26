@@ -3,14 +3,27 @@
  *
  * Wires together map, routes, course, playback controls, and participant list
  * into a self-contained viewer that can be embedded in any page.
+ *
+ * Performance notes
+ * -----------------
+ * - The current playback time lives in a ref inside `useReplayState` and is
+ *   advanced once per frame by the orchestrating RAF below. React state for
+ *   `elapsedMs` is updated at ~10 Hz only, so the slider/label stay readable
+ *   without re-rendering this component every frame.
+ * - The map viewport also lives in a ref inside `ReplayMapLayer`. Overlays
+ *   subscribe to viewport changes via `subscribeViewport` and redraw without
+ *   forcing a React commit on every drag/zoom/follow tick.
+ * - A single orchestrating RAF in this component drives playback time and
+ *   the follow-camera lerp. Map/zoom interactions and overlay redraws are
+ *   self-coordinated through the subscription buses; this loop only runs
+ *   while playback or follow is active.
  */
 
 import { useRef, useState, useCallback, useEffect, useMemo } from "react";
-import type { ReplayData, ReplayRoute } from "@oxygen/shared";
+import type { ReplayData, ReplayRoute, ReplayWaypoint } from "@oxygen/shared";
 import {
   ReplayMapLayer,
   type ReplayMapLayerHandle,
-  type ViewportState,
 } from "./ReplayMapLayer";
 import { ReplayRouteLayer } from "./ReplayRouteLayer";
 import { ReplayCourseLayer, hitTestControl } from "./ReplayCourseLayer";
@@ -19,6 +32,7 @@ import { ReplayControls } from "./ReplayControls";
 import { ParticipantList } from "./ParticipantList";
 import { useReplayState, type ReplayConfig } from "./useReplayState";
 import { latLngToMapPx } from "./projection-utils";
+import { usePerformanceLock } from "../../lib/performance-mode";
 
 const NEARBY_RADIUS_M = 500;
 
@@ -48,14 +62,45 @@ function findWpIdx(wps: { timeMs: number }[], t: number): number {
   return lo;
 }
 
+/** Interpolate between two waypoints — same as the route layer's logic so
+ *  the follow-all camera tracks the actual rendered dot, not the last raw
+ *  GPS sample (which makes the camera judder between segments). */
+function interpolateWp(
+  wps: ReplayWaypoint[],
+  idx: number,
+  t: number,
+): { lat: number; lng: number } {
+  const a = wps[idx];
+  if (idx >= wps.length - 1) return { lat: a.lat, lng: a.lng };
+  const b = wps[idx + 1];
+  if (b.timeMs <= a.timeMs || t <= a.timeMs) return { lat: a.lat, lng: a.lng };
+  if (t >= b.timeMs) return { lat: b.lat, lng: b.lng };
+  const frac = (t - a.timeMs) / (b.timeMs - a.timeMs);
+  return {
+    lat: a.lat + (b.lat - a.lat) * frac,
+    lng: a.lng + (b.lng - a.lng) * frac,
+  };
+}
+
 export function ReplayViewer({ data, compact, className, style, replayConfig, nativeTileBase, extraRoutes, extraRoutesLoading, onNearbyModeChange }: Props) {
   const state = useReplayState(data, replayConfig);
+
+  // Pause shell-side background polls (counter probe, MySQL stats, queue
+  // refresh, version check, kiosk ping) only while playback is actually
+  // running — their periodic React commits compete with the orchestrator
+  // RAF and cause 1-2 frame stutters every few seconds. When the user
+  // pauses or playback ends, the lock is released and the header
+  // indicators in the surrounding shell pick up live updates again.
+  usePerformanceLock(state.isPlaying);
   const allParticipants = useMemo(
     () => new Set(data.routes.map((r) => r.participantId)),
     [data.routes],
   );
-  const mapRef = useRef<ReplayMapLayerHandle>(null);
-  const [viewport, setViewport] = useState<ViewportState | null>(null);
+  const mapRef = useRef<ReplayMapLayerHandle | null>(null);
+  // We don't store the viewport in React state — it lives in mapRef. We do
+  // need a "ready" flag so overlay components only mount once the map's
+  // imperative handle is populated and the initial fit-to-bounds has fired.
+  const [mapReady, setMapReady] = useState(false);
   const [containerSize, setContainerSize] = useState({ w: 0, h: 0 });
   const [sidebarOpen, setSidebarOpen] = useState(!compact);
   const [showHeatmap, setShowHeatmap] = useState(false);
@@ -93,125 +138,141 @@ export function ReplayViewer({ data, compact, className, style, replayConfig, na
     return () => ro.disconnect();
   }, []);
 
-  const onViewportChange = useCallback((vp: ViewportState) => {
-    setViewport({ ...vp });
+  // Fired by ReplayMapLayer on every viewport change (initial fit, drag,
+  // zoom, follow). We use it solely as a "map is ready" signal — the
+  // viewport itself is read via mapRef in overlays + orchestrator.
+  const onViewportChange = useCallback(() => {
+    setMapReady(true);
   }, []);
 
-  // Auto-pan: rAF-based loop with delta-time lerp for smooth following
-  const followRafRef = useRef<number>(0);
-  const followLastFrameRef = useRef<number>(0);
+  // ─── Orchestrating RAF ───────────────────────────────────────
+  // Drives:
+  //   1. playback time (advances elapsedRef inside useReplayState)
+  //   2. follow-all and nearby-follow camera lerps (mutate map viewport)
+  // Other concerns coordinate themselves:
+  //   - Map redraws happen inside ReplayMapLayer when viewport changes.
+  //   - Overlays subscribe to viewport + time pubs and redraw on demand.
+  //   - The wheel zoom spring keeps its own RAF inside ReplayMapLayer.
+  //
+  // The loop only runs when there's per-frame work to do (playing or
+  // following). When nothing is happening, the main thread sleeps.
+
+  // Refs for state values that need to be read each frame without
+  // re-creating the orchestrator on every change.
+  const isPlayingRef = useRef(state.isPlaying);
+  const followModeRef = useRef(state.followMode);
+  const nearbyTargetIdRef = useRef<string | null>(nearbyTargetId);
+  const visibleParticipantsRef = useRef(state.visibleParticipants);
+  const containerWRef = useRef(containerSize.w);
+  useEffect(() => { isPlayingRef.current = state.isPlaying; }, [state.isPlaying]);
+  useEffect(() => { followModeRef.current = state.followMode; }, [state.followMode]);
+  useEffect(() => { nearbyTargetIdRef.current = nearbyTargetId; }, [nearbyTargetId]);
+  useEffect(() => { visibleParticipantsRef.current = state.visibleParticipants; }, [state.visibleParticipants]);
+  useEffect(() => { containerWRef.current = containerSize.w; }, [containerSize.w]);
+
+  // Stable refs for state methods (these are stable across renders already
+  // but storing them in a ref keeps the orchestrator effect dep-free).
+  const advanceTimeRef = useRef(state.advanceTime);
+  const getRouteTimeRef = useRef(state.getRouteTime);
+  useEffect(() => { advanceTimeRef.current = state.advanceTime; }, [state.advanceTime]);
+  useEffect(() => { getRouteTimeRef.current = state.getRouteTime; }, [state.getRouteTime]);
 
   useEffect(() => {
-    if (state.followMode !== "all" || nearbyTargetId) {
-      cancelAnimationFrame(followRafRef.current);
-      return;
-    }
+    let raf = 0;
+    let lastNow = performance.now();
+    let stopped = false;
 
-    const LERP_SPEED = 1.5; // higher = faster convergence (units: 1/second)
-
-    const tick = (now: number) => {
-      const dt = Math.min((now - followLastFrameRef.current) / 1000, 0.1); // seconds, capped
-      followLastFrameRef.current = now;
-
-      const vp = mapRef.current?.getViewport();
-      if (!vp || containerSize.w === 0) {
-        followRafRef.current = requestAnimationFrame(tick);
-        return;
-      }
-
-      const proj = data.map.projection;
-      let minMx = Infinity, maxMx = -Infinity, minMy = Infinity, maxMy = -Infinity;
-      let count = 0;
-
-      for (const route of data.routes) {
-        if (!state.visibleParticipants.has(route.participantId)) continue;
-        if (route.waypoints.length === 0) continue;
-        const t = state.getRouteTime(route.participantId);
-        const idx = findWpIdx(route.waypoints, t);
-        if (idx < 0) continue;
-        const wp = route.waypoints[idx];
-        const { px, py } = latLngToMapPx(wp.lat, wp.lng, proj);
-        if (px < minMx) minMx = px;
-        if (px > maxMx) maxMx = px;
-        if (py < minMy) minMy = py;
-        if (py > maxMy) maxMy = py;
-        count++;
-      }
-
-      if (count > 0) {
-        const cx = (minMx + maxMx) / 2;
-        const cy = (minMy + maxMy) / 2;
-
-        // Exponential lerp: smooth regardless of framerate. Only lerp cx/cy,
-        // letting the user control scale freely with the scroll wheel.
-        const alpha = 1 - Math.exp(-LERP_SPEED * dt);
-        const newCx = vp.cx + (cx - vp.cx) * alpha;
-        const newCy = vp.cy + (cy - vp.cy) * alpha;
-
-        mapRef.current?.setViewport?.({ ...vp, cx: newCx, cy: newCy });
-      }
-
-      followRafRef.current = requestAnimationFrame(tick);
-    };
-
-    followLastFrameRef.current = performance.now();
-    followRafRef.current = requestAnimationFrame(tick);
-    return () => cancelAnimationFrame(followRafRef.current);
-  }, [state.followMode, nearbyTargetId, state.visibleParticipants, state.getRouteTime, data, containerSize]);
-
-  // ─── Nearby follow loop ──────────────────────────────────────
-  const nearbyRafRef = useRef<number>(0);
-  const nearbyLastFrameRef = useRef<number>(0);
-
-  useEffect(() => {
-    if (!nearbyTargetId) {
-      cancelAnimationFrame(nearbyRafRef.current);
-      return;
-    }
-
-    const targetRoute = data.routes.find((r) => r.participantId === nearbyTargetId);
-    if (!targetRoute) return;
-
-    const LERP_SPEED = 2.0;
+    // Hoisted out of the per-frame tick: looking up the target route via
+    // `data.routes.find(...)` is O(n) and the result is constant within
+    // this effect's lifetime.
+    const targetRoute = nearbyTargetId
+      ? data.routes.find((r) => r.participantId === nearbyTargetId) ?? null
+      : null;
+    const proj = data.map.projection;
 
     const tick = (now: number) => {
-      const dt = Math.min((now - nearbyLastFrameRef.current) / 1000, 0.1);
-      nearbyLastFrameRef.current = now;
+      if (stopped) return;
+      const dt = Math.min(now - lastNow, 100); // cap dt in case of tab-switch hiccup
+      lastNow = now;
 
-      const vp = mapRef.current?.getViewport();
-      if (!vp) { nearbyRafRef.current = requestAnimationFrame(tick); return; }
-
-      const t = state.getRouteTime(nearbyTargetId);
-      const idx = findWpIdx(targetRoute.waypoints, t);
-      if (idx < 0) { nearbyRafRef.current = requestAnimationFrame(tick); return; }
-
-      let lat: number, lng: number;
-      const wp = targetRoute.waypoints[idx];
-      if (idx < targetRoute.waypoints.length - 1 && t > wp.timeMs) {
-        const next = targetRoute.waypoints[idx + 1];
-        const frac = (t - wp.timeMs) / (next.timeMs - wp.timeMs);
-        lat = wp.lat + (next.lat - wp.lat) * frac;
-        lng = wp.lng + (next.lng - wp.lng) * frac;
-      } else {
-        lat = wp.lat;
-        lng = wp.lng;
+      // 1. Advance playback time.
+      if (isPlayingRef.current) {
+        advanceTimeRef.current(dt);
       }
 
-      const { px, py } = latLngToMapPx(lat, lng, data.map.projection);
-      const alpha = 1 - Math.exp(-LERP_SPEED * dt);
-      mapRef.current?.setViewport?.({
-        ...vp,
-        cx: vp.cx + (px - vp.cx) * alpha,
-        cy: vp.cy + (py - vp.cy) * alpha,
-      });
+      // 2. Step follow-all camera (interpolates between waypoints, not raw
+      //    waypoint vertices, so the camera tracks smoothly between samples).
+      const followMode = followModeRef.current;
+      const target = nearbyTargetIdRef.current;
+      if (followMode === "all" && !target && containerWRef.current > 0) {
+        const handle = mapRef.current;
+        const vp = handle?.getViewport();
+        if (handle && vp) {
+          const visible = visibleParticipantsRef.current;
+          let minMx = Infinity, maxMx = -Infinity, minMy = Infinity, maxMy = -Infinity;
+          let count = 0;
+          for (const route of data.routes) {
+            if (!visible.has(route.participantId)) continue;
+            if (route.waypoints.length === 0) continue;
+            const t = getRouteTimeRef.current(route.participantId);
+            const idx = findWpIdx(route.waypoints, t);
+            if (idx < 0) continue;
+            const pos = interpolateWp(route.waypoints, idx, t);
+            const { px, py } = latLngToMapPx(pos.lat, pos.lng, proj);
+            if (px < minMx) minMx = px;
+            if (px > maxMx) maxMx = px;
+            if (py < minMy) minMy = py;
+            if (py > maxMy) maxMy = py;
+            count++;
+          }
+          if (count > 0) {
+            const cx = (minMx + maxMx) / 2;
+            const cy = (minMy + maxMy) / 2;
+            const LERP_SPEED = 1.5; // 1/seconds — exponential lerp
+            const alpha = 1 - Math.exp(-LERP_SPEED * dt / 1000);
+            const newCx = vp.cx + (cx - vp.cx) * alpha;
+            const newCy = vp.cy + (cy - vp.cy) * alpha;
+            handle.setViewport({ ...vp, cx: newCx, cy: newCy });
+          }
+        }
+      }
 
-      nearbyRafRef.current = requestAnimationFrame(tick);
+      // 3. Step nearby-follow camera (track the single selected runner).
+      if (target && targetRoute && targetRoute.waypoints.length > 0) {
+        const handle = mapRef.current;
+        const vp = handle?.getViewport();
+        if (handle && vp) {
+          const t = getRouteTimeRef.current(target);
+          const idx = findWpIdx(targetRoute.waypoints, t);
+          if (idx >= 0) {
+            const pos = interpolateWp(targetRoute.waypoints, idx, t);
+            const { px, py } = latLngToMapPx(pos.lat, pos.lng, proj);
+            const LERP_SPEED = 2.0;
+            const alpha = 1 - Math.exp(-LERP_SPEED * dt / 1000);
+            handle.setViewport({
+              ...vp,
+              cx: vp.cx + (px - vp.cx) * alpha,
+              cy: vp.cy + (py - vp.cy) * alpha,
+            });
+          }
+        }
+      }
+
+      raf = requestAnimationFrame(tick);
     };
 
-    nearbyLastFrameRef.current = performance.now();
-    nearbyRafRef.current = requestAnimationFrame(tick);
-    return () => cancelAnimationFrame(nearbyRafRef.current);
-  }, [nearbyTargetId, data, state.getRouteTime]);
+    // Only start the loop when there's per-frame work. When everything
+    // settles (paused, no follow), the main thread can idle entirely.
+    if (state.isPlaying || (state.followMode === "all" && !nearbyTargetId) || nearbyTargetId) {
+      lastNow = performance.now();
+      raf = requestAnimationFrame(tick);
+    }
+
+    return () => {
+      stopped = true;
+      cancelAnimationFrame(raf);
+    };
+  }, [state.isPlaying, state.followMode, nearbyTargetId, data]);
 
   // Click on map area — check if a control was hit (only for true clicks, not drags)
   const pointerDownPos = useRef<{ x: number; y: number } | null>(null);
@@ -228,19 +289,20 @@ export function ReplayViewer({ data, compact, className, style, replayConfig, na
         const dy = e.clientY - pointerDownPos.current.y;
         if (dx * dx + dy * dy > 25) return; // was a drag
       }
-      if (!viewport) return;
+      const vp = mapRef.current?.getViewport();
+      if (!vp) return;
       const rect = containerRef.current?.getBoundingClientRect();
       if (!rect) return;
       const x = e.clientX - rect.left;
       const y = e.clientY - rect.top;
-      const idx = hitTestControl(x, y, data, viewport, containerSize);
+      const idx = hitTestControl(x, y, data, vp, containerSize);
       if (idx >= 0) {
         state.restartFromControl(state.restartControlIdx === idx ? null : idx);
       } else {
         state.togglePlay();
       }
     },
-    [viewport, containerSize, data, state.restartFromControl, state.restartControlIdx, state.togglePlay],
+    [containerSize, data, state.restartFromControl, state.restartControlIdx, state.togglePlay], // eslint-disable-line react-hooks/exhaustive-deps -- state methods are stable
   );
 
   return (
@@ -309,27 +371,28 @@ export function ReplayViewer({ data, compact, className, style, replayConfig, na
             style={{ position: "absolute", inset: 0 }}
             nativeTileBase={nativeTileBase}
           />
-          {viewport && containerSize.w > 0 && showHeatmap && (
+          {mapReady && containerSize.w > 0 && showHeatmap && (
             <ReplayHeatmapLayer
               data={data}
-              viewport={viewport}
+              mapRef={mapRef}
               containerSize={containerSize}
               visibleParticipants={allParticipants}
             />
           )}
-          {viewport && containerSize.w > 0 && (
+          {mapReady && containerSize.w > 0 && (
             <>
               <ReplayCourseLayer
                 data={data}
-                viewport={viewport}
+                mapRef={mapRef}
                 containerSize={containerSize}
                 activeControlIdx={state.restartControlIdx}
               />
               <ReplayRouteLayer
                 data={data}
-                viewport={viewport}
+                mapRef={mapRef}
                 containerSize={containerSize}
                 getRouteTime={state.getRouteTime}
+                subscribeElapsed={state.subscribeElapsed}
                 visibleParticipants={state.visibleParticipants}
                 playbackSpeed={state.speed}
                 extraRoutes={nearbyTargetId ? extraRoutes : undefined}

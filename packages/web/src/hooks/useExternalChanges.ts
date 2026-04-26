@@ -1,5 +1,7 @@
 import { useEffect, useRef } from "react";
 import { trpc } from "../lib/trpc";
+import { usePageVisible } from "./usePageVisible";
+import { usePerformanceSensitive } from "../lib/performance-mode";
 
 /**
  * Mapping from oCounter table columns to the tRPC router keys
@@ -31,13 +33,25 @@ const POLL_INTERVAL_MS = 5_000;
 export function useExternalChanges(enabled = true) {
   const utils = trpc.useUtils();
   const prevCounters = useRef<CounterState | null>(null);
+  const visible = usePageVisible();
+  const performanceSensitive = usePerformanceSensitive();
+  const active = enabled && visible && !performanceSensitive;
 
-  const { data } = trpc.competition.counterState.useQuery(undefined, {
+  const { data, refetch } = trpc.competition.counterState.useQuery(undefined, {
     enabled,
-    refetchInterval: enabled ? POLL_INTERVAL_MS : false,
-    refetchIntervalInBackground: true,
+    refetchInterval: active ? POLL_INTERVAL_MS : false,
+    refetchIntervalInBackground: false,
     staleTime: 0,
   });
+
+  // Catch up immediately whenever polling resumes (tab becomes visible
+  // again, performance-sensitive page unmounts, ...) so we don't wait up
+  // to POLL_INTERVAL_MS to detect anything that changed while paused.
+  useEffect(() => {
+    if (active) {
+      refetch();
+    }
+  }, [active, refetch]);
 
   useEffect(() => {
     if (!data) return;
