@@ -44,6 +44,12 @@ FROM node:20-slim AS api
 
 WORKDIR /app
 
+# mysqldump is required for the competition backup download endpoint
+# (GET /api/backup/competition). default-mysql-client provides it.
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends default-mysql-client \
+ && rm -rf /var/lib/apt/lists/*
+
 # Copy the monorepo structure with deps (includes generated Prisma client)
 COPY --from=deps /app/node_modules ./node_modules
 COPY --from=deps /app/package.json ./

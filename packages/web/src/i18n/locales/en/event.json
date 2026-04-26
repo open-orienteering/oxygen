@@ -189,6 +189,10 @@
   "friskvardNote": "Print friskvardsbidrag note on receipts",
   "results": "Results",
 
+  "databaseBackup": "Database Backup",
+  "databaseBackupDescription": "Download a complete .sql dump of this competition's database. Includes a commented INSERT statement so you can re-register the competition in MeOSMain after restoring.",
+  "downloadBackup": "Download backup",
+
   "googleSheetsBackup": "Google Sheets Backup",
   "googleSheetsDescription": "Automatically push each card readout to a Google Sheet as a cloud backup.",
   "webhookUrl": "Apps Script URL",
