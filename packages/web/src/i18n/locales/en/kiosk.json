@@ -60,5 +60,10 @@
   "classResults": "Class Results",
   "returnRentalCard": "Return your SI card",
   "returnRentalCardHint": "This is a rental card — please hand it back to the organizer",
-  "rentalCardFee": "Rental card: {{fee}} kr"
+  "rentalCardFee": "Rental card: {{fee}} kr",
+  "rawTime": "Raw {{time}}",
+  "specialControls": "Special controls",
+  "noTimingPill": "{{code}} · No timing",
+  "skippedPunchedPill": "{{code}} · Optional",
+  "skippedMissingPill": "{{code}} · Skipped"
 }

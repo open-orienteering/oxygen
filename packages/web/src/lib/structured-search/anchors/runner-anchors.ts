@@ -427,9 +427,15 @@ export function createRunnerAnchors(
         const effectiveStart = item.startTime;
         if (effectiveStart <= 0) return false;
 
+        // Subtract the NoTiming/BadNoTiming leg adjustment so the search
+        // matches the canonical (displayed) running time everywhere else
+        // in the app. In-forest runners haven't finished and don't have
+        // a meaningful adjustment yet — they fall through to raw time.
+        const adjustment = item.runningTimeAdjustment ?? 0;
+
         let runningTime: number;
         if (item.finishTime > 0) {
-          runningTime = item.finishTime - effectiveStart;
+          runningTime = Math.max(0, item.finishTime - effectiveStart - adjustment);
         } else {
           // In-forest: compute current running time
           const now = new Date();

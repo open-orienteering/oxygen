@@ -13,6 +13,7 @@ import {
 } from "@oxygen/shared";
 import type { PrismaClient } from "@prisma/client";
 import { pushToGoogleSheet } from "../sheetsBackup.js";
+import { resolveCourseExpectedPositions } from "./course.js";
 
 // Re-export shared functions so existing imports from this file continue to work
 export {
@@ -82,22 +83,40 @@ export async function performReadout(client: PrismaClient, runnerId: number) {
   // Merge card + free punches, sorted chronologically so sequential matching works
   const allPunches = [...cardPunches, ...freeParsed].sort((a, b) => a.time - b.time);
 
-  // Parse course controls
-  const courseControls = course ? parseCourseControls(course.Controls) : [];
+  // Resolve the course's stored Id list into status-aware per-position
+  // descriptors. The matcher then applies MeOS's full evaluation rules:
+  // - Multiple expansion (any-order code pool)
+  // - Bad / Optional / BadNoTiming positions skipped from missing-punch
+  //   accounting (but consumed if punched, mirroring oRunner.cpp:1424-1438)
+  // - NoTiming / propagated-from-BadNoTiming legs deducted from runningTime
+  //   (mirroring oRunner.cpp:1772-1786).
+  const expectedPositions = course
+    ? await resolveCourseExpectedPositions(client, course.Controls)
+    : [];
 
   // Convert runner's assigned start time from ZeroTime-relative to absolute
   const runnerStartTime = toAbsolute(runner.StartTime, zeroTime);
 
   // Match punches to course (pass runner's assigned start time as fallback)
-  const { matches, extraPunches, startTime, cardStartTime, finishTime, missingCount } =
-    matchPunchesToCourse(allPunches, courseControls, runnerStartTime);
+  const {
+    matches,
+    extraPunches,
+    startTime,
+    cardStartTime,
+    finishTime,
+    missingCount,
+    runningTimeAdjustment,
+  } = matchPunchesToCourse(allPunches, expectedPositions, runnerStartTime);
 
   const effectiveStartTime = startTime;
-  // MeOS may store times with a negative base offset; the difference is still valid
-  const runningTime =
+  // Raw time across the card (finish - start). The adjusted running time
+  // subtracts NoTiming / BadNoTiming legs so that downstream consumers
+  // (kiosk, results, leaderboards, Eventor) all see the canonical value.
+  const rawRunningTime =
     finishTime !== 0 && effectiveStartTime !== 0
       ? finishTime - effectiveStartTime
       : 0;
+  const runningTime = Math.max(0, rawRunningTime - runningTimeAdjustment);
 
   const status = computeStatus({
     finishTime,
@@ -110,9 +129,15 @@ export async function performReadout(client: PrismaClient, runnerId: number) {
     currentStatus: runner.Status,
   });
 
+  // Only required positions that the runner failed to punch count as
+  // "missing" for status banners — skipped positions never bubble up.
   const missingControls = matches
-    .filter((m) => m.status === "missing")
+    .filter((m) => m.status === "missing" && m.positionMode === "required")
     .map((m) => m.controlCode);
+
+  // Required positions only (skipped positions don't count toward the
+  // X/Y stat the kiosk shows; they were never expected to be punched).
+  const requiredCount = matches.filter((m) => m.positionMode !== "skipped").length;
 
   return {
     runner: {
@@ -133,7 +158,8 @@ export async function performReadout(client: PrismaClient, runnerId: number) {
         id: course.Id,
         name: course.Name,
         length: course.Length,
-        controlCount: courseControls.length,
+        controlCount: expectedPositions.length,
+        requiredControlCount: requiredCount,
       }
       : null,
     timing: {
@@ -142,6 +168,8 @@ export async function performReadout(client: PrismaClient, runnerId: number) {
       startTime: effectiveStartTime,
       finishTime,
       runningTime,
+      rawRunningTime,
+      runningTimeAdjustment,
       status,
     },
     controls: matches,

@@ -1,9 +1,16 @@
 import { z } from "zod";
+import { TRPCError } from "@trpc/server";
 import { router, competitionProcedure } from "../trpc.js";
 import type { PrismaClient } from "@prisma/client";
 import {ensureMapFilesTable, ensureMapTilesTable, incrementCounter, fireMapUpload} from "../db.js";
 import { ocadBoundsToWgs84, computeMapNorthOffset, mapMmToWgs84, type OcadCrs } from "../map-projection.js";
-import { CourseSummary, CourseDetail, RunnerStatus } from "@oxygen/shared";
+import {
+  CourseSummary,
+  CourseDetail,
+  RunnerStatus,
+  ControlStatus,
+  type ExpectedPosition,
+} from "@oxygen/shared";
 import { parseIOFCourseData, parseIOFCourseDataWithGeometry, type ParsedCourseData, type GeoJSONFeatureCollection, type ParsedCourse } from "../iof-course-parser.js";
 import { parseOCDCourseData } from "../ocd-course-parser.js";
 
@@ -41,6 +48,257 @@ export function meosFinishName(n: number): string {
   return n > 1 ? `Mål ${n}` : "Mål 1";
 }
 
+// ─── Course-controls ↔ punch-code resolvers ──────────────────────────────────
+//
+// MeOS stores `oCourse.Controls` as a semicolon-separated list of `oControl.Id`
+// values, never the punch codes themselves (verified against MeOS upstream
+// `oCourse.cpp:137` `getControls()` and `MeosSQL.cpp` column definition).
+// Live punch codes live on `oControl.Numbers` and may differ from `Id` once
+// anyone edits a control's punch code on the Controls page.
+//
+// These helpers translate between the two views so that both punch matching
+// and the Courses-page UI can speak punch codes while the database keeps the
+// stable Id-based references MeOS expects.
+
+/**
+ * Parse the raw `oCourse.Controls` string into a list of `oControl.Id`
+ * references, dropping non-numeric / non-positive tokens.
+ *
+ * @internal Exported for unit testing.
+ */
+export function parseCourseControlIds(controlsField: string): number[] {
+  return controlsField
+    .split(";")
+    .map((s) => s.trim())
+    .filter(Boolean)
+    .map((s) => parseInt(s, 10))
+    .filter((n) => Number.isFinite(n) && n > 0);
+}
+
+/**
+ * Display-friendly view of a course's control sequence: each entry pairs the
+ * stable `oControl.Id` with the live punch code from `oControl.Numbers`
+ * (the first code, for multi-code controls).
+ *
+ * Falls back to the Id (as a string) if the referenced control row is
+ * missing or has an empty Numbers field. This matches MeOS's "default to
+ * Id when Numbers is unset" behaviour (`oControl.cpp:263`).
+ */
+export async function resolveCourseControlsToCodes(
+  client: PrismaClient,
+  controlsField: string,
+): Promise<{ id: number; code: string }[]> {
+  const ids = parseCourseControlIds(controlsField);
+  if (ids.length === 0) return [];
+
+  const rows = await client.oControl.findMany({
+    where: { Id: { in: [...new Set(ids)] }, Removed: false },
+    select: { Id: true, Numbers: true },
+  });
+  const numbersById = new Map(rows.map((r) => [r.Id, r.Numbers]));
+
+  return ids.map((id) => {
+    const numbers = numbersById.get(id) ?? "";
+    const firstCode = numbers.split(";").map((s) => s.trim()).find(Boolean);
+    return { id, code: firstCode ?? String(id) };
+  });
+}
+
+/**
+ * Parse one `oControl.Numbers` string into a list of SI punch codes.
+ * Returns `[fallbackId]` when the field is empty or yields no numbers,
+ * matching MeOS's "default to Id when Numbers is unset" behaviour
+ * (`oControl.cpp:263`).
+ */
+function parseControlNumbers(numbers: string, fallbackId: number): number[] {
+  const codes = numbers
+    .split(";")
+    .map((s) => s.trim())
+    .filter(Boolean)
+    .map((s) => parseInt(s, 10))
+    .filter((n) => Number.isFinite(n) && n > 0);
+  return codes.length > 0 ? codes : [fallbackId];
+}
+
+/**
+ * Per-position list of acceptable SI punch codes for a course, dereferenced
+ * from each `oControl.Numbers`. Each inner array is non-empty.
+ *
+ * This is the matching-only view (no status semantics). For the full
+ * status-aware view used by the readout pipeline, use
+ * {@link resolveCourseExpectedPositions} instead.
+ */
+export async function resolveCourseExpectedCodes(
+  client: PrismaClient,
+  controlsField: string,
+): Promise<number[][]> {
+  const positions = await resolveCourseExpectedPositions(client, controlsField);
+  return positions.map((p) => p.codes);
+}
+
+/**
+ * Per-position descriptor list for a course, with full MeOS status
+ * semantics applied. Used by the punch matcher to evaluate each position
+ * with the right matching / time-accounting rules.
+ *
+ * Status handling (verified against MeOS upstream):
+ *   - OK:           one required position, time-counted.
+ *   - Multiple:     expand to N any-order positions sharing the full
+ *                   Numbers set (oCourse.cpp:467-477). Any one code at
+ *                   each position; runner must hit all to advance.
+ *   - Bad / Optional:        one skipped position
+ *                            (oCourse.cpp:462-465, oRunner.cpp:1424-1438).
+ *   - NoTiming:              one required position with `noTimingLeg=true`
+ *                            (oRunner.cpp:1777). Leg into it is deducted.
+ *   - BadNoTiming:           one skipped position; the next emitted
+ *                            non-skipped position carries `noTimingLeg=true`
+ *                            so its leg is deducted too (oRunner.cpp:1772-1786).
+ *   - Special (Start/Finish/Check/Clear): treated as OK at the position
+ *     level; these statuses normally only appear on dedicated
+ *     start/finish controls that aren't stored in `oCourse.Controls`.
+ */
+export async function resolveCourseExpectedPositions(
+  client: PrismaClient,
+  controlsField: string,
+): Promise<ExpectedPosition[]> {
+  const ids = parseCourseControlIds(controlsField);
+  if (ids.length === 0) return [];
+
+  const rows = await client.oControl.findMany({
+    where: { Id: { in: [...new Set(ids)] }, Removed: false },
+    select: { Id: true, Numbers: true, Status: true },
+  });
+  const byId = new Map(rows.map((r) => [r.Id, r]));
+
+  const positions: ExpectedPosition[] = [];
+  // BadNoTiming propagation: when we emit a skipped position for a
+  // BadNoTiming control, the *next* non-skipped position must carry
+  // `noTimingLeg=true` so its incoming leg gets credited back. We track
+  // this with a one-shot flag that's consumed by the next required /
+  // NoTiming emission.
+  let pendingNoTimingFromBadNoTiming = false;
+
+  for (const id of ids) {
+    const row = byId.get(id);
+    const codes = row ? parseControlNumbers(row.Numbers, id) : [id];
+    const status = row?.Status ?? ControlStatus.OK;
+
+    if (status === ControlStatus.Multiple) {
+      // Expand into N any-order positions, each accepting any code from
+      // the same pool. Any pending BadNoTiming propagation lands on the
+      // first emitted required position only.
+      for (let j = 0; j < codes.length; j++) {
+        positions.push({
+          codes: [...codes],
+          skipMatching: false,
+          noTimingLeg: pendingNoTimingFromBadNoTiming,
+        });
+        pendingNoTimingFromBadNoTiming = false;
+      }
+      continue;
+    }
+
+    if (status === ControlStatus.Bad || status === ControlStatus.Optional) {
+      positions.push({
+        codes,
+        skipMatching: true,
+        noTimingLeg: false,
+      });
+      continue;
+    }
+
+    if (status === ControlStatus.BadNoTiming) {
+      positions.push({
+        codes,
+        skipMatching: true,
+        noTimingLeg: false,
+      });
+      pendingNoTimingFromBadNoTiming = true;
+      continue;
+    }
+
+    if (status === ControlStatus.NoTiming) {
+      positions.push({
+        codes,
+        skipMatching: false,
+        noTimingLeg: true,
+      });
+      pendingNoTimingFromBadNoTiming = false;
+      continue;
+    }
+
+    // Default: OK and any unrecognised special status fall through.
+    positions.push({
+      codes,
+      skipMatching: false,
+      noTimingLeg: pendingNoTimingFromBadNoTiming,
+    });
+    pendingNoTimingFromBadNoTiming = false;
+  }
+
+  return positions;
+}
+
+/**
+ * Inverse of {@link resolveCourseControlsToCodes} — translate a list of
+ * user-typed punch codes back to `oControl.Id` references suitable for
+ * storage in `oCourse.Controls`.
+ *
+ * Resolution order per token:
+ *   1. Exact match against any `oControl.Numbers` entry (handles renumbered
+ *      controls and multi-code controls equally).
+ *   2. Exact match against `oControl.Id` (handles a user pasting an Id list,
+ *      or the MeOS convention `Id == Numbers[0]`).
+ *
+ * Throws `TRPCError(BAD_REQUEST)` listing every unresolved token so the UI
+ * can surface a single, complete error message.
+ */
+export async function resolveCodesToCourseControls(
+  client: PrismaClient,
+  codes: string[],
+): Promise<{ ids: number[]; rawString: string }> {
+  const trimmed = codes.map((c) => c.trim()).filter(Boolean);
+  if (trimmed.length === 0) return { ids: [], rawString: "" };
+
+  const allControls = await client.oControl.findMany({
+    where: { Removed: false },
+    select: { Id: true, Numbers: true },
+  });
+
+  const byCode = new Map<string, number>();
+  const byId = new Map<string, number>();
+  for (const c of allControls) {
+    byId.set(String(c.Id), c.Id);
+    for (const part of c.Numbers.split(";")) {
+      const code = part.trim();
+      if (code && !byCode.has(code)) byCode.set(code, c.Id);
+    }
+  }
+
+  const ids: number[] = [];
+  const unresolved: string[] = [];
+  for (const token of trimmed) {
+    const id = byCode.get(token) ?? byId.get(token);
+    if (id === undefined) {
+      unresolved.push(token);
+    } else {
+      ids.push(id);
+    }
+  }
+
+  if (unresolved.length > 0) {
+    throw new TRPCError({
+      code: "BAD_REQUEST",
+      message: `Unknown control code${unresolved.length === 1 ? "" : "s"}: ${unresolved.join(", ")}`,
+    });
+  }
+
+  return {
+    ids,
+    rawString: ids.length > 0 ? ids.join(";") + ";" : "",
+  };
+}
+
 // ─── Course geometry table ───────────────────────────────────────────────────
 
 async function ensureCourseGeometryTable(client: PrismaClient) {
@@ -55,8 +313,89 @@ async function ensureCourseGeometryTable(client: PrismaClient) {
 }
 
 /**
+ * Default tolerance (in map mm) below which an OCD-stored control position
+ * is considered unchanged compared to a freshly-imported XML position.
+ *
+ * IOF XML round-trips can introduce sub-mm floating-point noise, so we
+ * don't want to treat a 0.01 mm jitter as a real move. At a 1:4000 sprint
+ * scale, 0.5 mm is 2 m on the ground — well below "controls have shifted
+ * meaningfully" but well above floating-point round-trip drift.
+ */
+const OCD_STALENESS_TOLERANCE_MM = 0.5;
+
+/**
+ * Decide whether a previously stored OCD geometry for a course is stale
+ * relative to a freshly built XML straight-line geometry for the same
+ * course — meaning the course's controls have been moved or its sequence
+ * has changed since the OCD was imported, so the OCD's pre-routed lines
+ * no longer correspond to the live control positions on the map.
+ *
+ * Both inputs use the same coordinate space (map mm) and tag their Point
+ * features with `properties.code`, so we compare them feature-by-feature.
+ *
+ * Conservative rule: if the XML carries no usable Point positions, return
+ * false so we keep the higher-quality OCD routed geometry untouched.
+ *
+ * @internal Exported for unit testing.
+ */
+export function isOcdGeometryStaleVsXml(
+  ocd: GeoJSONFeatureCollection,
+  xml: GeoJSONFeatureCollection,
+  toleranceMm: number = OCD_STALENESS_TOLERANCE_MM,
+): boolean {
+  const ocdPoints = ocd.features.filter((f) => f.geometry.type === "Point");
+  const xmlPoints = xml.features.filter((f) => f.geometry.type === "Point");
+
+  // No XML positions to compare → keep OCD geometry as-is.
+  if (xmlPoints.length === 0) return false;
+
+  const codeOf = (f: { properties: Record<string, unknown> }): string =>
+    String(f.properties?.code ?? "");
+
+  // Sequence change (control added, removed, or reordered on the course)
+  // invalidates the OCD routed legs — they'd connect the wrong endpoints.
+  const ocdSeq = ocdPoints.map(codeOf);
+  const xmlSeq = xmlPoints.map(codeOf);
+  if (ocdSeq.length !== xmlSeq.length) return true;
+  for (let i = 0; i < ocdSeq.length; i++) {
+    if (ocdSeq[i] !== xmlSeq[i]) return true;
+  }
+
+  // Position drift on any control beyond tolerance.
+  const tolSq = toleranceMm * toleranceMm;
+  const ocdPos = new Map<string, [number, number]>();
+  for (const f of ocdPoints) {
+    const code = codeOf(f);
+    if (!code) continue;
+    const c = (f.geometry as { coordinates: [number, number] }).coordinates;
+    ocdPos.set(code, c);
+  }
+  for (const f of xmlPoints) {
+    const code = codeOf(f);
+    if (!code) continue;
+    const xmlCoord = (f.geometry as { coordinates: [number, number] }).coordinates;
+    const ocdCoord = ocdPos.get(code);
+    if (!ocdCoord) continue;
+    const dx = ocdCoord[0] - xmlCoord[0];
+    const dy = ocdCoord[1] - xmlCoord[1];
+    if (dx * dx + dy * dy > tolSq) return true;
+  }
+  return false;
+}
+
+/**
  * Upsert GeoJSON geometry for a set of courses.
- * Source priority: 'ocd' > 'xml' — an OCD geometry is never overwritten by XML.
+ *
+ * Source priority: 'ocd' > 'xml'. OCD provides nicely routed legs (around
+ * fences, through corridors, dogleg cuts), so a later XML re-import does
+ * not normally overwrite OCD geometry.
+ *
+ * Exception: when the XML import shows that controls on a course have been
+ * moved or its sequence has changed since the OCD was imported, the OCD's
+ * routed lines no longer match reality (they trace through old positions
+ * while the circles render at new ones). In that case we replace the OCD
+ * geometry with the XML straight-line geometry for that course so the
+ * displayed lines are at least correct, even if not optimally routed.
  */
 async function saveCourseGeometry(
   client: PrismaClient,
@@ -65,20 +404,28 @@ async function saveCourseGeometry(
 ) {
   await ensureCourseGeometryTable(client);
 
-  // Load existing geometries to check their source
-  const existing = await client.$queryRawUnsafe<{ CourseName: string; Source: string }[]>(
-    "SELECT CourseName, Source FROM oxygen_course_geometry",
-  );
-  const existingSource = new Map(existing.map(r => [r.CourseName, r.Source]));
+  const existing = await client.$queryRawUnsafe<
+    { CourseName: string; Source: string; Geometry: string }[]
+  >("SELECT CourseName, Source, Geometry FROM oxygen_course_geometry");
+  const existingByName = new Map(existing.map((r) => [r.CourseName, r]));
 
   for (const [courseName, geometry] of Object.entries(courseGeometry)) {
-    const currentSource = existingSource.get(courseName);
+    const current = existingByName.get(courseName);
 
-    // Skip write if existing geometry is OCD and new source is only XML
-    if (source === "xml" && currentSource === "ocd") continue;
+    if (source === "xml" && current?.Source === "ocd") {
+      let parsed: GeoJSONFeatureCollection | null = null;
+      try {
+        parsed = JSON.parse(current.Geometry) as GeoJSONFeatureCollection;
+      } catch {
+        parsed = null;
+      }
+      // Keep OCD only when it still matches the live control layout.
+      // Unreadable OCD JSON falls through to be overwritten.
+      if (parsed && !isOcdGeometryStaleVsXml(parsed, geometry)) continue;
+    }
 
     const geomJson = JSON.stringify(geometry);
-    if (currentSource !== undefined) {
+    if (current !== undefined) {
       await client.$executeRawUnsafe(
         "UPDATE oxygen_course_geometry SET Source=?, Geometry=? WHERE CourseName=?",
         source, geomJson, courseName,
@@ -190,9 +537,11 @@ export const courseRouter = router({
         runnersByClass.set(r.Class, (runnersByClass.get(r.Class) ?? 0) + 1);
       }
 
-      const controlCodes = course.Controls.split(";")
-        .filter(Boolean)
-        .map((s) => parseInt(s, 10));
+      // Dereference each oControl.Id stored in oCourse.Controls to its
+      // live oControl.Numbers (first code per multi-code control). The
+      // chip view and editable text input both consume `controlCodes`,
+      // so the page always shows live punch codes — not stale Ids.
+      const controlCodes = await resolveCourseControlsToCodes(client, course.Controls);
 
       return {
         id: course.Id,
@@ -215,12 +564,17 @@ export const courseRouter = router({
 
   /**
    * Create a new course.
+   *
+   * Like `update`, prefer `controlCodes` (live punch codes) for the
+   * control sequence. The legacy `controls` raw string stays available
+   * for callers that operate at the storage layer.
    */
   create: competitionProcedure
     .input(
       z.object({
         name: z.string().min(1),
         controls: z.string().optional().default(""),
+        controlCodes: z.array(z.string()).optional(),
         length: z.number().int().optional().default(0),
         numberOfMaps: z.number().int().optional().default(1),
         firstAsStart: z.boolean().optional().default(false),
@@ -230,10 +584,16 @@ export const courseRouter = router({
     .mutation(async ({ ctx, input }) => {
       const client = ctx.db;
 
+      let controlsField = input.controls;
+      if (input.controlCodes !== undefined) {
+        const { rawString } = await resolveCodesToCourseControls(client, input.controlCodes);
+        controlsField = rawString;
+      }
+
       const course = await client.oCourse.create({
         data: {
           Name: input.name,
-          Controls: input.controls,
+          Controls: controlsField,
           Length: input.length,
           NumberMaps: input.numberOfMaps,
           FirstAsStart: input.firstAsStart ? 1 : 0,
@@ -250,6 +610,17 @@ export const courseRouter = router({
 
   /**
    * Update an existing course.
+   *
+   * For the control sequence, prefer `controlCodes` (an array of live
+   * punch codes the user typed in the UI). The server resolves each code
+   * to its `oControl.Id` and stores the resulting Id list in
+   * `oCourse.Controls`, keeping MeOS-compatible storage even when codes
+   * have diverged from Ids. Unknown codes raise a `BAD_REQUEST` listing
+   * every unresolved token.
+   *
+   * The legacy `controls` string input is still accepted (treated as the
+   * raw Id list) for callers that operate at the storage layer; the UI
+   * does not use it.
    */
   update: competitionProcedure
     .input(
@@ -257,6 +628,7 @@ export const courseRouter = router({
         id: z.number().int(),
         name: z.string().optional(),
         controls: z.string().optional(),
+        controlCodes: z.array(z.string()).optional(),
         length: z.number().int().optional(),
         numberOfMaps: z.number().int().optional(),
         firstAsStart: z.boolean().optional(),
@@ -268,7 +640,13 @@ export const courseRouter = router({
 
       const data: Record<string, unknown> = {};
       if (input.name !== undefined) data.Name = input.name;
-      if (input.controls !== undefined) data.Controls = input.controls;
+      if (input.controls !== undefined && input.controlCodes === undefined) {
+        data.Controls = input.controls;
+      }
+      if (input.controlCodes !== undefined) {
+        const { rawString } = await resolveCodesToCourseControls(client, input.controlCodes);
+        data.Controls = rawString;
+      }
       if (input.length !== undefined) data.Length = input.length;
       if (input.numberOfMaps !== undefined) data.NumberMaps = input.numberOfMaps;
       if (input.firstAsStart !== undefined)

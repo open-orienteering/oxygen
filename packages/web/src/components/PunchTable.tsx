@@ -1,17 +1,17 @@
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
-import { formatMeosTime, formatRunningTime, parseMeosTime } from "@oxygen/shared";
+import { formatMeosTime, formatRunningTime, parseMeosTime, type ControlMatch as SharedControlMatch } from "@oxygen/shared";
 
-interface ControlMatch {
-  controlIndex: number;
-  controlCode: number;
-  punchTime: number;
-  splitTime: number;
-  cumTime: number;
-  status: "ok" | "missing" | "extra";
-  source: "card" | "free" | "";
-  freePunchId?: number;
-}
+// PunchTable consumes the canonical ControlMatch shape from @oxygen/shared,
+// which now carries `positionMode` (required / skipped / noTiming) and
+// `expectedCodes` for multi-code support. We allow `positionMode` to be
+// optional in the props to keep older callers (tests / fixtures that
+// haven't been updated) compiling without changes — they fall through to
+// "required" rendering, identical to the legacy three-status behaviour.
+type ControlMatch = Omit<SharedControlMatch, "positionMode" | "expectedCodes"> & {
+  positionMode?: SharedControlMatch["positionMode"];
+  expectedCodes?: SharedControlMatch["expectedCodes"];
+};
 
 interface ExtraPunch {
   controlCode: number;
@@ -26,11 +26,21 @@ export interface PunchTableData {
     startTime: number;
     finishTime: number;
     runningTime: number;
+    /**
+     * Raw `finishTime - startTime` before NoTiming/BadNoTiming legs are
+     * deducted. When this differs from `runningTime`, the table shows
+     * both numbers in the header so admins can see what was excluded.
+     */
+    rawRunningTime?: number;
+    /** Sum of deciseconds deducted from `rawRunningTime`. */
+    runningTimeAdjustment?: number;
   };
   course: {
     name: string;
     length: number;
     controlCount: number;
+    /** Required-position count for the X/Y "controlsOk" stat header. */
+    requiredControlCount?: number;
   } | null;
   extraPunches: ExtraPunch[];
   missingControls: number[];
@@ -103,14 +113,42 @@ export function PunchTable({
       {/* Course & Punches table */}
       {data.course && (
         <div className={`${dark ? "bg-slate-800/50 border-slate-700" : "bg-white border-slate-200"} ${compact ? "rounded-lg" : "rounded-xl"} border overflow-hidden`}>
-          <div className={`px-4 py-3 border-b ${dark ? "border-slate-700" : "border-slate-200"} flex items-center justify-between`}>
+          <div className={`px-4 py-3 border-b ${dark ? "border-slate-700" : "border-slate-200"} flex items-center justify-between gap-3 flex-wrap`}>
             <h3 className={`font-semibold ${dark ? "text-slate-400" : "text-slate-500"} uppercase tracking-wider ${compact ? "text-xs" : "text-sm"}`}>
               {tr("punches")} &mdash; {data.course.name}
             </h3>
-            <span className={`text-xs ${dark ? "text-slate-500" : "text-slate-400"}`}>
-              {data.controls.filter((c) => c.status === "ok").length}/
-              {data.controls.length} {tr("controlsOk")}
-            </span>
+            <div className="flex items-center gap-3 flex-wrap">
+              {/* Adjusted vs raw running time when NoTiming / BadNoTiming
+                  legs were deducted. Helps the admin see exactly how much
+                  was excluded and on which legs. */}
+              {(t.runningTimeAdjustment ?? 0) > 0 && (t.rawRunningTime ?? 0) > 0 && (
+                <span className={`text-xs tabular-nums ${dark ? "text-slate-400" : "text-slate-500"}`}>
+                  {tr("adjustedTime", { time: formatRunningTime(t.runningTime) })}
+                  <span className={dark ? "text-slate-500" : "text-slate-400"}>
+                    {" \u00b7 "}
+                    {tr("rawTime", { time: formatRunningTime(t.rawRunningTime!) })}
+                  </span>
+                </span>
+              )}
+              <span className={`text-xs ${dark ? "text-slate-500" : "text-slate-400"}`}>
+                {/* Numerator: punched required-and-counted positions.
+                    Denominator: required positions only (skipped controls
+                    were never expected to be punched, so counting them
+                    would understate the runner's score). */}
+                {
+                  data.controls.filter(
+                    (c) => c.status === "ok" && (c.positionMode ?? "required") !== "skipped",
+                  ).length
+                }
+                /
+                {
+                  data.course.requiredControlCount ??
+                  data.controls.filter((c) => (c.positionMode ?? "required") !== "skipped").length
+                }
+                {" "}
+                {tr("controlsOk")}
+              </span>
+            </div>
           </div>
 
           <table className={`w-full text-sm ${dark ? "text-slate-200" : ""}`}>
@@ -314,7 +352,10 @@ function ControlRow({
   onUpdatePunchTime?: (punchId: number, newTime: number) => void;
 }) {
   const { t: tr } = useTranslation("race");
+  const mode = ctrl.positionMode ?? "required";
   const isMissing = ctrl.status === "missing";
+  const isSkipped = mode === "skipped";
+  const isNoTiming = mode === "noTiming";
   const isFree = ctrl.source === "free";
   const [editingTime, setEditingTime] = useState(false);
   const [timeInput, setTimeInput] = useState("");
@@ -339,15 +380,70 @@ function ControlRow({
     setEditingTime(false);
   };
 
+  // Row colour: skipped + missing should look neutral (the runner wasn't
+  // required to punch). Skipped + ok is a passive hit (greyed but not
+  // failure-coloured). NoTiming uses a faint blue tint to flag "time is
+  // not counting here". Required + missing keeps the existing red.
+  const rowClass =
+    isSkipped
+      ? dark
+        ? "bg-slate-800/40 hover:bg-slate-700/50"
+        : "bg-slate-50 hover:bg-slate-100"
+      : isNoTiming
+        ? dark
+          ? "bg-blue-900/20 hover:bg-blue-900/30"
+          : "bg-blue-50 hover:bg-blue-100"
+        : isMissing
+          ? dark
+            ? "bg-red-900/30"
+            : "bg-red-50"
+          : dark
+            ? "hover:bg-slate-700/50"
+            : "hover:bg-slate-50";
+
   return (
-    <tr className={isMissing ? (dark ? "bg-red-900/30" : "bg-red-50") : (dark ? "hover:bg-slate-700/50" : "hover:bg-slate-50")}>
+    <tr className={rowClass}>
       <td className={`px-4 py-2 tabular-nums ${dark ? "text-slate-500" : "text-slate-400"}`}>
         {idx + 1}
       </td>
       <td className="px-4 py-2 font-medium">
-        <span className={isMissing ? (dark ? "text-red-400" : "text-red-700") : (dark ? "text-slate-100" : "text-slate-900")}>
+        <span
+          className={
+            isSkipped
+              ? (dark ? "text-slate-400" : "text-slate-500")
+              : isMissing
+                ? (dark ? "text-red-400" : "text-red-700")
+                : isNoTiming
+                  ? (dark ? "text-blue-200" : "text-blue-700")
+                  : (dark ? "text-slate-100" : "text-slate-900")
+          }
+        >
           {ctrl.controlCode}
         </span>
+        {/* Position-mode badge: tells the admin at a glance why a row
+            looks different. Skipped rows render as Bad/Optional in MeOS
+            and we treat them identically here; NoTiming gets its own
+            label. */}
+        {isSkipped && (
+          <span
+            className={`ml-1.5 px-1.5 py-0.5 text-[10px] font-semibold rounded ${
+              dark ? "bg-slate-700/70 text-slate-300" : "bg-slate-200 text-slate-700"
+            }`}
+            title={tr("statusSkippedHint")}
+          >
+            {tr("statusSkipped")}
+          </span>
+        )}
+        {isNoTiming && (
+          <span
+            className={`ml-1.5 px-1.5 py-0.5 text-[10px] font-semibold rounded ${
+              dark ? "bg-blue-900/60 text-blue-200" : "bg-blue-100 text-blue-800"
+            }`}
+            title={tr("statusNoTimingHint")}
+          >
+            {tr("statusNoTiming")}
+          </span>
+        )}
         {isFree && (
           <span className="ml-1.5 px-1.5 py-0.5 text-[10px] font-semibold bg-indigo-100 text-indigo-700 rounded">
             {tr("manual")}
@@ -401,7 +497,21 @@ function ControlRow({
         )}
       </td>
       <td className="px-4 py-2 text-right tabular-nums">
-        {ctrl.splitTime > 0 ? formatRunningTime(ctrl.splitTime) : (
+        {ctrl.splitTime > 0 ? (
+          // NoTiming legs: display the leg duration but with strikethrough
+          // and muted colour so the admin sees "this much time was excluded".
+          <span
+            className={
+              isNoTiming
+                ? `line-through ${dark ? "text-slate-500" : "text-slate-400"}`
+                : ""
+            }
+          >
+            {formatRunningTime(ctrl.splitTime)}
+          </span>
+        ) : isSkipped ? (
+          <span className={dark ? "text-slate-500" : "text-slate-400"}>&mdash;</span>
+        ) : (
           <span className="text-red-500">&mdash;</span>
         )}
       </td>
@@ -409,7 +519,16 @@ function ControlRow({
         {ctrl.cumTime > 0 ? formatRunningTime(ctrl.cumTime) : "-"}
       </td>
       <td className="px-4 py-2 text-center">
-        {isMissing ? (
+        {isSkipped ? (
+          // Bad / Optional / BadNoTiming: not a failure when missing; show
+          // a neutral marker. When the runner did punch the skipped
+          // control, show a muted check (counted for splits, not for MP).
+          ctrl.status === "ok" ? (
+            <span className={dark ? "text-slate-400" : "text-slate-500"}>&#10003;</span>
+          ) : (
+            <span className={dark ? "text-slate-500" : "text-slate-400"}>&#8226;</span>
+          )
+        ) : isMissing ? (
           <span className={`${dark ? "text-red-400" : "text-red-600"} font-bold`}>&#10007;</span>
         ) : (
           <span className={dark ? "text-emerald-400" : "text-emerald-600"}>&#10003;</span>

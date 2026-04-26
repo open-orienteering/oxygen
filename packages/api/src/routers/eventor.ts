@@ -26,7 +26,9 @@ import {
 import { eventorKeyStore } from "../eventorKeyStore.js";
 import { type EventorEnvironment } from "@oxygen/shared";
 import { computeClassPlacements } from "../results.js";
-import { parsePunches, parseCourseControls, matchPunchesToCourse, type ParsedPunch } from "./cardReadout.js";
+import { parsePunches, matchPunchesToCourse, type ParsedPunch } from "./cardReadout.js";
+import { resolveCourseExpectedPositions } from "./course.js";
+import type { ExpectedPosition } from "@oxygen/shared";
 import { toAbsolute } from "../timeConvert.js";
 import { fetchLiveloxEventClasses } from "../livelox/fetcher.js";
 
@@ -857,6 +859,14 @@ export const eventorRouter = router({
     const courseMap = new Map(courses.map((c) => [c.Id, c]));
     const cardById = new Map(allCards.map((c) => [c.Id, c]));
 
+    // Pre-resolve status-aware ExpectedPosition[] for every course up front
+    // so the synchronous per-runner mapping below can look them up in O(1).
+    // Done here (not per-runner) so we issue one bulk oControl query, not N.
+    const expectedPositionsByCourse = new Map<number, ExpectedPosition[]>();
+    for (const c of courses) {
+      expectedPositionsByCourse.set(c.Id, await resolveCourseExpectedPositions(client, c.Controls));
+    }
+
     // Group free punches by CardNo for efficient lookup
     const punchesByCardNo = new Map<number, typeof allPunches>();
     for (const p of allPunches) {
@@ -873,6 +883,33 @@ export const eventorRouter = router({
       byClass.set(r.Class, list);
     }
 
+    // Per-runner running-time adjustment so placements rank on the same
+    // canonical time the kiosk + admin readout show, and the same time
+    // we publish to Eventor below.
+    const adjustmentByRunner = new Map<number, number>();
+    for (const r of runners) {
+      const cls = classMap.get(r.Class);
+      const courseId = r.Course || cls?.Course || 0;
+      const positions = expectedPositionsByCourse.get(courseId);
+      if (!positions || positions.length === 0) continue;
+      const card = r.Card ? cardById.get(r.Card) : undefined;
+      const cardPunches = parsePunches(card?.Punches ?? "").map((p) => ({
+        ...p,
+        time: p.time !== 0 ? toAbsolute(p.time, zeroTime) : 0,
+      }));
+      const freePunches: ParsedPunch[] = (punchesByCardNo.get(r.CardNo) ?? []).map((p) => ({
+        type: p.Type,
+        time: p.Time !== 0 ? toAbsolute(p.Time, zeroTime) : 0,
+        source: "free" as const,
+      }));
+      const merged = [...cardPunches, ...freePunches].sort((a, b) => a.time - b.time);
+      const fallbackStart = toAbsolute(r.StartTime, zeroTime);
+      const { runningTimeAdjustment } = matchPunchesToCourse(merged, positions, fallbackStart);
+      if (runningTimeAdjustment > 0) {
+        adjustmentByRunner.set(r.Id, runningTimeAdjustment);
+      }
+    }
+
     const placementByRunner = new Map<number, { place: number }>();
     for (const [classId, classRunners] of byClass) {
       const cls = classMap.get(classId);
@@ -883,6 +920,7 @@ export const eventorRouter = router({
           status: r.Status,
           startTime: r.StartTime,
           finishTime: r.FinishTime,
+          runningTimeAdjustment: adjustmentByRunner.get(r.Id) ?? 0,
         })),
         noTiming,
       );
@@ -921,8 +959,8 @@ export const eventorRouter = router({
       const course = courseId ? courseMap.get(courseId) : undefined;
       // Only compute splits for runners with a result (status > 0, not DNS/Cancel)
       if (course && r.Status > 0 && r.Status !== 20 && r.Status !== 99) {
-        const courseControls = parseCourseControls(course.Controls);
-        if (courseControls.length > 0) {
+        const positions = expectedPositionsByCourse.get(course.Id) ?? [];
+        if (positions.length > 0) {
           // Merge card punches + free punches
           const card = r.Card ? cardById.get(r.Card) : undefined;
           const cardPunches = parsePunches(card?.Punches ?? "");
@@ -932,13 +970,36 @@ export const eventorRouter = router({
             source: "free" as const,
           }));
           const merged = [...cardPunches, ...freePunches].sort((a, b) => a.time - b.time);
-          const { matches, extraPunches, startTime } = matchPunchesToCourse(merged, courseControls, r.StartTime);
+          const { matches, extraPunches, startTime } = matchPunchesToCourse(merged, positions, r.StartTime);
 
-          splitTimes = matches.map((m) => ({
-            controlCode: m.controlCode,
-            time: m.status === "ok" && m.cumTime > 0 ? Math.round(m.cumTime / 10) : undefined,
-            status: m.status === "ok" ? "ok" as const : "missing" as const,
-          }));
+          splitTimes = matches.flatMap((m) => {
+            // Skipped (Bad / Optional / BadNoTiming): include with the
+            // punch time when present (matches MeOS split display); omit
+            // otherwise — Eventor doesn't need to know about positions
+            // the runner wasn't expected to punch.
+            if (m.positionMode === "skipped") {
+              if (m.status !== "ok") return [];
+              return [{
+                controlCode: m.controlCode,
+                time: m.cumTime > 0 ? Math.round(m.cumTime / 10) : undefined,
+                status: "ok" as const,
+              }];
+            }
+            // NoTiming: include without a time so Eventor renders it as
+            // "no timing" — the leg is excluded from the runner's total.
+            if (m.positionMode === "noTiming") {
+              return [{
+                controlCode: m.controlCode,
+                time: undefined,
+                status: m.status === "ok" ? ("ok" as const) : ("missing" as const),
+              }];
+            }
+            return [{
+              controlCode: m.controlCode,
+              time: m.status === "ok" && m.cumTime > 0 ? Math.round(m.cumTime / 10) : undefined,
+              status: m.status === "ok" ? ("ok" as const) : ("missing" as const),
+            }];
+          });
           // Add extra punches as "additional" (control codes >= 30, matching MeOS filter)
           for (const ep of extraPunches) {
             if (ep.type >= 30) {
@@ -959,6 +1020,7 @@ export const eventorRouter = router({
         cardNo: r.CardNo || undefined,
         startTime: toAbsolute(r.StartTime, zeroTime) || undefined,
         finishTime: toAbsolute(r.FinishTime, zeroTime) || undefined,
+        runningTimeAdjustment: adjustmentByRunner.get(r.Id),
         status: r.Status,
         place: p?.place ?? 0,
         noTiming: cls?.NoTiming === 1,

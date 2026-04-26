@@ -144,5 +144,26 @@
   "statusNoResult": "Inget resultat",
   "statusTimeMismatch": "Tidsskillnad",
   "pushToOPunch": "Skicka till oPunch",
-  "pushed": "Skickad"
+  "pushed": "Skickad",
+  "statusHelp": {
+    "show": "Hur påverkar statusarna evalueringen?",
+    "hide": "Dölj hjälp",
+    "okLabel": "OK",
+    "okDesc": "Obligatorisk, tiden räknas.",
+    "badLabel": "Trasig",
+    "badDesc": "Reaktivt: kontrollen gick sönder under tävlingen.",
+    "badHint": "Hoppas över i matchningen. Stämpling registreras om den finns.",
+    "optionalLabel": "Valfri",
+    "optionalDesc": "Planerat valfri, t.ex. bonuskontroll i stafett.",
+    "optionalHint": "Samma utvärdering som Trasig — bara ikon och avsikt skiljer.",
+    "noTimingLabel": "Utan tidtagning",
+    "noTimingDesc": "Obligatorisk (saknad = bom), men sträckan dit räknas inte.",
+    "noTimingHint": "Används för transportsträckor och obligatoriska passager.",
+    "badNoTimingLabel": "Försvunnen",
+    "badNoTimingDesc": "Hoppas över i matchningen OCH efterföljande sträcka räknas inte.",
+    "badNoTimingHint": "Använd när en kontroll försvunnit och löpare letat förgäves.",
+    "multipleLabel": "Multipel",
+    "multipleDesc": "Alla angivna koder (butterfly) måste stämplas i valfri ordning.",
+    "multipleHint": "Varje kod blir en separat position i godtycklig ordning."
+  }
 }
