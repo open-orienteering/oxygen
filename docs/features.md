@@ -216,6 +216,10 @@ Oxygen reads and writes the same MySQL schema as [MeOS](http://www.melin.nu/meos
 
 Status calculation is fully MeOS-compatible — Oxygen computes every result status MeOS does: OK, DNF, Missing Punch, Over Max Time, No Timing, and Out of Competition. Per-runner flags (`TransferFlags`) such as OutOfCompetition and NoTiming are respected by the result engine and surfaced as badges in the runner detail view. Punch data round-trips correctly, including MeOS's `@unit` metadata for multi-unit timing setups.
 
+### Database backup
+
+The Event page exposes a one-click **Download backup** button that streams a `mysqldump` of the current competition's database to your browser as a `.sql` file. The dump is prefixed with a header that includes a ready-to-run (commented) `INSERT INTO MeOSMain.oEvent` statement, so a restore can re-register the competition in MeOSMain without manual SQL. See [backup-restore.md](backup-restore.md) for the full restore workflow.
+
 ### Web Serial card reader
 
 Oxygen reads SportIdent cards directly in the browser using the Web Serial API. Supported card types: SI5, SI6, SI8, SI9, SI10, SI11, SIAC, pCard, tCard. No driver install, no desktop bridge — plug the reader into any Chromium-based browser and grant permission once per origin.

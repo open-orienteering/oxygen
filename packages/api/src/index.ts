@@ -9,6 +9,8 @@ export type { AppRouter };
 import { createContext } from "./trpc.js";
 import { disconnectAll, getCompetitionClient, ensureLogoTable, getMainDbConnection, ensureClubDbTable, ensureMapFilesTable, ensureMapTilesTable, onMapUpload } from "./db.js";
 import { tileBoundsWgs84, wgs84ToOcad, ocadBoundsToWgs84, type OcadCrs } from "./map-projection.js";
+import { liveResultsPusher, reconcileEnabledPushers } from "./liveresults.js";
+import { registerBackupRoute } from "./backup.js";
 import "dotenv/config";
 
 const PORT = parseInt(process.env.PORT ?? "3002", 10);
@@ -51,6 +53,13 @@ async function main() {
       .header("Cache-Control", "no-store")
       .send({ startedAt: SERVER_START });
   });
+
+  // ─── Competition database backup ──────────────────────────
+  // GET /api/backup/competition?name=<NameId>
+  // Streams a mysqldump of the competition database, prefixed with a
+  // header that includes a commented INSERT for re-registering the
+  // competition in MeOSMain after restore.
+  registerBackupRoute(server);
 
   // ─── Club Logo endpoint ────────────────────────────────────
   // Serves PNG images — checks global oxygen_club_db (MeOSMain) first,
@@ -510,6 +519,7 @@ async function main() {
   // Graceful shutdown
   const shutdown = async () => {
     server.log.info("Shutting down...");
+    liveResultsPusher.stopAll();
     await disconnectAll();
     await server.close();
     process.exit(0);
@@ -521,6 +531,25 @@ async function main() {
     await server.listen({ port: PORT, host: HOST });
     server.log.info(`Oxygen API server running at http://${HOST}:${PORT}`);
     server.log.info(`tRPC endpoint: http://${HOST}:${PORT}/trpc`);
+
+    // Re-arm LiveResults push timers for any competition that was enabled
+    // before the previous restart. Runs in the background so it doesn't
+    // delay readiness if the LiveResults database is slow to reach.
+    void reconcileEnabledPushers()
+      .then((res) => {
+        if (res.started.length > 0) {
+          server.log.info(
+            { started: res.started, skipped: res.skipped.length, failed: res.failed },
+            `Reconciled LiveResults pushers: started ${res.started.length}`,
+          );
+        }
+        for (const f of res.failed) {
+          server.log.warn({ nameId: f.nameId, error: f.error }, "LiveResults reconcile failed");
+        }
+      })
+      .catch((err) => {
+        server.log.error({ err }, "LiveResults reconcile threw");
+      });
   } catch (err) {
     server.log.error(err);
     process.exit(1);

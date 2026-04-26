@@ -189,6 +189,10 @@
   "friskvardNote": "Skriv ut friskvårdsbidragstext på kvitton",
   "results": "Resultat",
 
+  "databaseBackup": "Databasbackup",
+  "databaseBackupDescription": "Ladda ner en fullständig .sql-dump av tävlingens databas. Filen innehåller en utkommenterad INSERT så du kan återregistrera tävlingen i MeOSMain efter återställning.",
+  "downloadBackup": "Ladda ner backup",
+
   "googleSheetsBackup": "Google Sheets-backup",
   "googleSheetsDescription": "Skicka varje brickavläsning automatiskt till ett Google Sheet som molnbackup.",
   "webhookUrl": "Apps Script-URL",

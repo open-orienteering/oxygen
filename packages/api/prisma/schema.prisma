@@ -1,5 +1,11 @@
 generator client {
-  provider = "prisma-client-js"
+  provider      = "prisma-client-js"
+  // Ship engines for both the dev host ("native") and the Docker base image
+  // (node:20-slim is Debian 12 / OpenSSL 3.0). Without the explicit
+  // debian-openssl-3.0.x target the production container errors at runtime
+  // with: "Prisma Client could not locate the Query Engine for runtime
+  // 'debian-openssl-3.0.x'".
+  binaryTargets = ["native", "debian-openssl-3.0.x"]
 }
 
 datasource db {

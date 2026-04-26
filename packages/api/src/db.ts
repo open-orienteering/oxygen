@@ -146,6 +146,33 @@ function parseMysqlUrl(url: string): mysql.ConnectionOptions {
   };
 }
 
+/**
+ * Resolve the host/port/user/password/database for a competition database.
+ * Honours per-competition remote connections stored in MeOSMain, falling back
+ * to DATABASE_URL for local competitions. Used by backup/restore and other
+ * CLI-style operations that need raw connection parameters.
+ */
+export async function getCompetitionConnectionParams(
+  nameId: string,
+): Promise<{
+  host: string;
+  port: number;
+  user?: string;
+  password?: string;
+  database: string;
+}> {
+  const remote = await getRemoteConnection(nameId);
+  const url = buildDbUrl(nameId, remote);
+  const u = new URL(url);
+  return {
+    host: u.hostname,
+    port: u.port ? parseInt(u.port, 10) : 3306,
+    user: u.username ? decodeURIComponent(u.username) : undefined,
+    password: u.password ? decodeURIComponent(u.password) : undefined,
+    database: u.pathname.replace(/^\//, "") || nameId,
+  };
+}
+
 // ─── URL building ──────────────────────────────────────────
 
 /**
