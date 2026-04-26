@@ -6,9 +6,13 @@
  * 1. The DB row in `oxygen_settings` is the source of truth. The in-memory
  *    cache is a pure performance optimisation.
  *
- * 2. We never delete the persisted key on transient errors. The DB row is
- *    only cleared when Eventor itself rejects the key (HTTP 403, surfaced as
- *    {@link EventorAuthError}) or when the user explicitly clears it.
+ * 2. We never delete the persisted key automatically. Only the explicit
+ *    "Clear" action in the UI removes the row from the database. A 403 from
+ *    Eventor on lazy validation invalidates the in-memory org cache and
+ *    propagates the error to the caller, but the saved key stays put — a
+ *    transient 403 must not cost the user their saved credentials, and even
+ *    a definitive 403 is better surfaced as an error to the user than as a
+ *    silent deletion they can't undo.
  *
  * 3. The "loaded from DB" latch is only set after a successful read. If the
  *    DB read itself throws, we leave the latch unset so the next request
@@ -120,9 +124,14 @@ export function createEventorKeyStore(deps: KeyStoreDeps) {
 
   /**
    * Get the stored API key plus organisation info. If org info isn't cached,
-   * we make a single Eventor round-trip to populate it. A 403 from Eventor
-   * means the stored key is no longer valid — we clear it and rethrow.
-   * Other errors propagate without touching stored state.
+   * we make a single Eventor round-trip to populate it.
+   *
+   * Errors (including {@link EventorAuthError}) propagate to the caller. We
+   * never delete the persisted key here — Eventor 403s have empirically
+   * been seen as transient blips during long-running processes, and silently
+   * losing a working key is far worse than surfacing a transient error. The
+   * user can clear the key explicitly via the Clear button if they really
+   * want to discard it.
    */
   async function getKeyWithOrg(
     env: EventorEnvironment,
@@ -135,17 +144,9 @@ export function createEventorKeyStore(deps: KeyStoreDeps) {
       return { apiKey: entry.apiKey, org: entry.org };
     }
 
-    try {
-      const org = await deps.validateApiKey(entry.apiKey, env);
-      cache.set(env, { apiKey: entry.apiKey, org });
-      return { apiKey: entry.apiKey, org };
-    } catch (err) {
-      if (err instanceof EventorAuthError) {
-        // Eventor explicitly rejected the key — discard it.
-        await clearKey(env);
-      }
-      throw err;
-    }
+    const org = await deps.validateApiKey(entry.apiKey, env);
+    cache.set(env, { apiKey: entry.apiKey, org });
+    return { apiKey: entry.apiKey, org };
   }
 
   /**

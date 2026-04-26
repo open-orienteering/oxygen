@@ -166,9 +166,13 @@ describe("eventorKeyStore", () => {
       expect(validateApiKey).toHaveBeenCalledTimes(1);
     });
 
-    it("clears the persisted key when Eventor returns 403", async () => {
+    it("preserves the persisted key when Eventor returns 403", async () => {
+      // Regression: a single 403 from Eventor (which can be transient!) must
+      // never wipe the user's saved key. Manually re-entering the key after
+      // each flaky Eventor response is a much worse experience than a brief
+      // error message until Eventor recovers.
       const { deps, db, validateApiKey, setSetting } = makeDeps({
-        [PROD_KEY]: "stale",
+        [PROD_KEY]: "good-but-rejected",
       });
       validateApiKey.mockRejectedValueOnce(new EventorAuthError());
       const store = createEventorKeyStore(deps);
@@ -177,10 +181,17 @@ describe("eventorKeyStore", () => {
         EventorAuthError,
       );
 
-      // The DB row must be deleted, and a subsequent peek/get must show empty.
-      expect(setSetting).toHaveBeenCalledWith(PROD_KEY, null);
-      expect(db.has(PROD_KEY)).toBe(false);
-      expect(await store.getKey("prod")).toBeNull();
+      // The DB row must remain intact — only an explicit clearKey() should
+      // ever delete it.
+      expect(setSetting).not.toHaveBeenCalled();
+      expect(db.get(PROD_KEY)).toBe("good-but-rejected");
+      expect(await store.getKey("prod")).toBe("good-but-rejected");
+
+      // Subsequent calls retry validation against Eventor — if the 403 was
+      // transient, recovery is automatic.
+      validateApiKey.mockResolvedValueOnce(ORG);
+      const result = await store.getKeyWithOrg("prod");
+      expect(result).toEqual({ apiKey: "good-but-rejected", org: ORG });
     });
 
     it("preserves the persisted key on transient Eventor failures", async () => {
