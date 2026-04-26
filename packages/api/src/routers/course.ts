@@ -48,6 +48,69 @@ export function meosFinishName(n: number): string {
   return n > 1 ? `Mål ${n}` : "Mål 1";
 }
 
+/**
+ * Normalize a class name for fuzzy comparison: lowercase and strip whitespace
+ * and common punctuation (".,;:_-/\\"). This lets the importer match e.g.
+ * `"H 21"` against `"H21"`, `"D-21"` against `"D21"`, or `"H21,Elit"` against
+ * `"H21 Elit"` when the only difference is punctuation/spacing.
+ *
+ * @internal Exported for unit testing.
+ */
+export function normalizeClassName(name: string): string {
+  return name.toLowerCase().replace(/[\s.,;:_\-/\\]+/g, "");
+}
+
+/**
+ * How a class name was matched against the DB classes. Exposed in the import
+ * preview so the UI can distinguish exact matches (high confidence, can be
+ * hidden by default) from heuristic matches (worth a manual review).
+ */
+export type ClassMatchType = "exact" | "normalized" | "substring" | "none";
+
+/**
+ * Find the best DB class match for an XML class name, used by the course
+ * import preview. Tries, in order:
+ *   1. Exact match (case-insensitive) — `matchType: "exact"`.
+ *   2. Punctuation- and whitespace-insensitive exact match — `matchType: "normalized"`.
+ *   3. Punctuation- and whitespace-insensitive substring match — `matchType: "substring"`.
+ *
+ * @internal Exported for unit testing.
+ */
+export function findBestClassMatch<T extends { Id: number; Name: string }>(
+  xmlClassName: string,
+  dbClasses: T[],
+): { id: number; name: string; matchType: Exclude<ClassMatchType, "none"> } | null {
+  const xmlLower = xmlClassName.toLowerCase();
+  const exact = dbClasses.find((c) => c.Name.toLowerCase() === xmlLower);
+  if (exact) return { id: exact.Id, name: exact.Name, matchType: "exact" };
+
+  const xmlNorm = normalizeClassName(xmlClassName);
+  if (xmlNorm.length === 0) return null;
+
+  const normExact = dbClasses.find(
+    (c) => normalizeClassName(c.Name) === xmlNorm,
+  );
+  if (normExact)
+    return { id: normExact.Id, name: normExact.Name, matchType: "normalized" };
+
+  // Substring fallback: among candidates, prefer the longest DB normalized
+  // name (most specific class wins). E.g. for XML "H21 Elit Lång", both "H21"
+  // and "H21 Elit" are substrings; the latter is the better match.
+  let best: { class: T; normLen: number } | null = null;
+  for (const c of dbClasses) {
+    const dbNorm = normalizeClassName(c.Name);
+    if (dbNorm.length === 0) continue;
+    if (!dbNorm.includes(xmlNorm) && !xmlNorm.includes(dbNorm)) continue;
+    if (!best || dbNorm.length > best.normLen) {
+      best = { class: c, normLen: dbNorm.length };
+    }
+  }
+  if (best)
+    return { id: best.class.Id, name: best.class.Name, matchType: "substring" };
+
+  return null;
+}
+
 // ─── Course-controls ↔ punch-code resolvers ──────────────────────────────────
 //
 // MeOS stores `oCourse.Controls` as a semicolon-separated list of `oControl.Id`
@@ -758,38 +821,28 @@ export const courseRouter = router({
       );
 
       // Auto-match class names from XML to DB classes
-      const classMap: Record<string, { dbClassId: number; dbClassName: string; matched: boolean }[]> = {};
+      const classMap: Record<
+        string,
+        {
+          dbClassId: number;
+          dbClassName: string;
+          matched: boolean;
+          matchType: ClassMatchType;
+        }[]
+      > = {};
 
       for (const assignment of parsed.classAssignments) {
         const xmlClassName = assignment.className;
         const courseName = assignment.courseName;
 
-        // Find best matching DB class
-        let bestMatch: { id: number; name: string } | null = null;
-
-        // Exact match (case-insensitive)
-        const exact = dbClasses.find(
-          (c) => c.Name.toLowerCase() === xmlClassName.toLowerCase(),
-        );
-        if (exact) {
-          bestMatch = { id: exact!.Id, name: exact!.Name };
-        } else {
-          // Fuzzy: check if DB class name contains the XML name or vice versa
-          const fuzzy = dbClasses.find(
-            (c) =>
-              c.Name.toLowerCase().includes(xmlClassName.toLowerCase()) ||
-              xmlClassName.toLowerCase().includes(c.Name.toLowerCase()),
-          );
-          if (fuzzy) {
-            bestMatch = { id: fuzzy!.Id, name: fuzzy!.Name };
-          }
-        }
+        const bestMatch = findBestClassMatch(xmlClassName, dbClasses);
 
         if (!classMap[courseName]) classMap[courseName] = [];
         classMap[courseName].push({
           dbClassId: bestMatch?.id ?? 0,
           dbClassName: bestMatch?.name ?? "",
           matched: !!bestMatch,
+          matchType: bestMatch?.matchType ?? "none",
         });
       }
 

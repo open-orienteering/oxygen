@@ -60,6 +60,13 @@
   "newControls": "New controls",
   "existing": "Existing",
   "coursesAndClassAssignments": "Courses and Class Assignments",
+  "hideExactMatches": "Hide exact matches",
+  "hideExactMatchesWithCount": "Hide exact matches ({{count}})",
+  "allCoursesFullyMatched": "All assignments are exact matches.",
+  "matchType": {
+    "normalized": "Heuristic match — punctuation/whitespace ignored",
+    "substring": "Heuristic match — substring"
+  },
   "xmlClass": "XML Class",
   "dbClass": "DB Class",
   "noneLabel": "None",

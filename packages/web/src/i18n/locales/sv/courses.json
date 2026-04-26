@@ -60,6 +60,13 @@
   "newControls": "Nya kontroller",
   "existing": "Befintliga",
   "coursesAndClassAssignments": "Banor och klasstilldelningar",
+  "hideExactMatches": "Dölj exakta matchningar",
+  "hideExactMatchesWithCount": "Dölj exakta matchningar ({{count}})",
+  "allCoursesFullyMatched": "Alla tilldelningar är exakta matchningar.",
+  "matchType": {
+    "normalized": "Heuristisk matchning — skiljetecken/blanksteg ignorerade",
+    "substring": "Heuristisk matchning — delsträng"
+  },
   "xmlClass": "XML-klass",
   "dbClass": "DB-klass",
   "noneLabel": "Ingen",
