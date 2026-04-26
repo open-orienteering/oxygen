@@ -1,44 +1,16 @@
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import { router, competitionProcedure } from "../trpc.js";
-import { getSetting, setSetting } from "../db.js";
+import { getSetting } from "../db.js";
 import {
     ensureCompetition,
     updateCompetitionMeta,
     liveResultsPusher,
     getLiveResultsPool,
     syncAll,
+    loadConfig,
+    persistConfig,
 } from "../liveresults.js";
-
-const CONFIG_SETTING_PREFIX = "liveresults_config_";
-
-function configKey(nameId: string) {
-    return `${CONFIG_SETTING_PREFIX}${nameId}`;
-}
-
-interface LiveResultsConfig {
-    enabled: boolean;
-    intervalSeconds: number;
-    isPublic: boolean;
-    country: string;
-    tavid?: number;
-}
-
-async function getConfig(nameId: string): Promise<LiveResultsConfig> {
-    const raw = await getSetting(configKey(nameId));
-    if (!raw) {
-        return { enabled: false, intervalSeconds: 30, isPublic: false, country: "SE" };
-    }
-    try {
-        return JSON.parse(raw) as LiveResultsConfig;
-    } catch {
-        return { enabled: false, intervalSeconds: 30, isPublic: false, country: "SE" };
-    }
-}
-
-async function saveConfig(nameId: string, config: LiveResultsConfig): Promise<void> {
-    await setSetting(configKey(nameId), JSON.stringify(config));
-}
 
 export const liveresultsRouter = router({
     /**
@@ -46,7 +18,7 @@ export const liveresultsRouter = router({
      */
     getConfig: competitionProcedure.query(async ({ ctx }) => {
         const nameId = ctx.dbName;
-        const config = await getConfig(nameId);
+        const config = await loadConfig(nameId);
         const tavid = await getSetting(`liveresults_tavid_${nameId}`);
         return {
             ...config,
@@ -71,13 +43,13 @@ export const liveresultsRouter = router({
         )
         .mutation(async ({ ctx, input }) => {
             const nameId = ctx.dbName;
-            const config = await getConfig(nameId);
+            const config = await loadConfig(nameId);
 
             if (input.intervalSeconds !== undefined) config.intervalSeconds = input.intervalSeconds;
             if (input.isPublic !== undefined) config.isPublic = input.isPublic;
             if (input.country !== undefined) config.country = input.country;
 
-            await saveConfig(nameId, config);
+            await persistConfig(nameId, config);
 
             // Update LiveResults metadata if competition already exists
             const tavidStr = await getSetting(`liveresults_tavid_${nameId}`);
@@ -99,7 +71,7 @@ export const liveresultsRouter = router({
     enable: competitionProcedure.mutation(async ({ ctx }) => {
         const nameId = ctx.dbName;
 
-        const config = await getConfig(nameId);
+        const config = await loadConfig(nameId);
         const tavid = await ensureCompetition(nameId);
 
         // Update meta with current config
@@ -110,9 +82,9 @@ export const liveresultsRouter = router({
 
         config.enabled = true;
         config.tavid = tavid;
-        await saveConfig(nameId, config);
+        await persistConfig(nameId, config);
 
-        liveResultsPusher.start(tavid, config.intervalSeconds, nameId);
+        liveResultsPusher.start(nameId, tavid, config.intervalSeconds);
 
         return {
             success: true,
@@ -122,16 +94,16 @@ export const liveresultsRouter = router({
     }),
 
     /**
-     * Disable LiveResults sync (stops the interval timer).
+     * Disable LiveResults sync (stops the interval timer for this competition).
      */
     disable: competitionProcedure.mutation(async ({ ctx }) => {
         const nameId = ctx.dbName;
 
-        liveResultsPusher.stop();
+        liveResultsPusher.stop(nameId);
 
-        const config = await getConfig(nameId);
+        const config = await loadConfig(nameId);
         config.enabled = false;
-        await saveConfig(nameId, config);
+        await persistConfig(nameId, config);
 
         return { success: true };
     }),
@@ -182,9 +154,11 @@ export const liveresultsRouter = router({
     getStatus: competitionProcedure.query(async ({ ctx }) => {
         const nameId = ctx.dbName;
 
-        const status = liveResultsPusher.status;
+        const status = liveResultsPusher.getStatus(nameId);
+        // Persisted tavid is the source of truth for the public URL — the
+        // pusher's tavid is only set while the timer is actually running.
         const tavidStr = await getSetting(`liveresults_tavid_${nameId}`);
-        const tavid = tavidStr ? parseInt(tavidStr, 10) : null;
+        const tavid = tavidStr ? parseInt(tavidStr, 10) : status.tavid;
 
         return {
             ...status,
