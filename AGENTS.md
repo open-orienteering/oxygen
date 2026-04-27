@@ -222,6 +222,7 @@ After completing a feature, perform a self-review covering these areas:
 - WebSerial is mocked via `page.addInitScript()` with the mock from `e2e/helpers/mock-webserial.ts`.
 - Playwright runs sequentially: `fullyParallel: false`, `workers: 1`. Tests share a single Chromium instance.
 - Three seed databases (`itest`, `itest_multirace`, `meos_20251222_001121_2BC`) are recreated fresh by `e2e/global-setup.ts` before every run.
+- `MeOSMain.oxygen_settings` is shared with the developer's running stack. The Eventor API key rows (`eventor_api_key`, `eventor_api_key_test`) are snapshotted by `e2e/global-setup.ts` and restored by `e2e/global-teardown.ts` so tests can freely call `eventor.clearKey` / `eventor.validateKey` without wiping real credentials. If you add another mutation that writes a globally-scoped row in `oxygen_settings`, extend the snapshot list in the same place.
 
 ## 13. Git Conventions
 
