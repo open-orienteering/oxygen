@@ -164,11 +164,17 @@ export function ReplayViewer({ data, compact, className, style, replayConfig, na
   const nearbyTargetIdRef = useRef<string | null>(nearbyTargetId);
   const visibleParticipantsRef = useRef(state.visibleParticipants);
   const containerWRef = useRef(containerSize.w);
+  const containerHRef = useRef(containerSize.h);
+  const startModeRef = useRef(state.startMode);
+  const currentLegRef = useRef(state.currentLeg);
   useEffect(() => { isPlayingRef.current = state.isPlaying; }, [state.isPlaying]);
   useEffect(() => { followModeRef.current = state.followMode; }, [state.followMode]);
   useEffect(() => { nearbyTargetIdRef.current = nearbyTargetId; }, [nearbyTargetId]);
   useEffect(() => { visibleParticipantsRef.current = state.visibleParticipants; }, [state.visibleParticipants]);
   useEffect(() => { containerWRef.current = containerSize.w; }, [containerSize.w]);
+  useEffect(() => { containerHRef.current = containerSize.h; }, [containerSize.h]);
+  useEffect(() => { startModeRef.current = state.startMode; }, [state.startMode]);
+  useEffect(() => { currentLegRef.current = state.currentLeg; }, [state.currentLeg]);
 
   // Stable refs for state methods (these are stable across renders already
   // but storing them in a ref keeps the orchestrator effect dep-free).
@@ -190,6 +196,56 @@ export function ReplayViewer({ data, compact, className, style, replayConfig, na
       : null;
     const proj = data.map.projection;
 
+    // Pre-compute per-route, per-control absolute split times so smart
+    // follow can find each runner's next un-punched control without
+    // walking splitTimes every frame. Indexed [routeIdx][ctrlIdx]; null
+    // when no split exists for that control (e.g. start, missed punches).
+    const course = data.courses[0];
+    const courseControls = course?.controls ?? [];
+    const splitTimesByRoute: (number | null)[][] = data.routes.map((route) => {
+      const start = route.raceStartMs ?? route.waypoints[0]?.timeMs ?? 0;
+      return courseControls.map((ctrl) => {
+        const split = route.result?.splitTimes?.find(
+          (s) => s.controlCode === ctrl.code,
+        );
+        return split !== undefined ? start + split.timeMs : null;
+      });
+    });
+
+    // Control circle "extent" in map pixels — used to expand the bbox so
+    // the entire control symbol (not just its centre) is always inside
+    // the camera frame, with a one-diameter buffer for breathing room.
+    // Mirrors the radius the course layer actually draws:
+    //   controlRadius_screenPx = 2.5 * ss = 2.5 * (mapScale/1000) * resolution * vp.scale
+    // → controlRadius_mapPx    = 2.5 * (mapScale/1000) * resolution   (no vp.scale).
+    const projMatrix = data.map.projection.matrix;
+    const projResolution = Math.sqrt(
+      (projMatrix[0] * projMatrix[0] + projMatrix[3] * projMatrix[3] +
+        projMatrix[1] * projMatrix[1] + projMatrix[4] * projMatrix[4]) / 2,
+    );
+    const ctrlRadiusMapPx = 2.5 * ((data.map.mapScale ?? 15000) / 1000) * projResolution;
+    // Extent = radius + one full diameter as margin.
+    const ctrlExtentMapPx = ctrlRadiusMapPx + 2 * ctrlRadiusMapPx;
+
+    /**
+     * Returns the index of the next un-punched course control for a given
+     * route at runner-clock time `t`. The start (index 0) is treated as
+     * already passed once the runner has begun, so the very first call
+     * returns 1 (the first real control).
+     */
+    const nextControlIdx = (routeIdx: number, t: number): number => {
+      if (courseControls.length === 0) return -1;
+      let lastDone = 0;
+      const splits = splitTimesByRoute[routeIdx];
+      for (let i = 1; i < courseControls.length; i++) {
+        const splitT = splits[i];
+        if (splitT !== null && splitT <= t) {
+          lastDone = i;
+        }
+      }
+      return Math.min(lastDone + 1, courseControls.length - 1);
+    };
+
     const tick = (now: number) => {
       if (stopped) return;
       const dt = Math.min(now - lastNow, 100); // cap dt in case of tab-switch hiccup
@@ -200,18 +256,38 @@ export function ReplayViewer({ data, compact, className, style, replayConfig, na
         advanceTimeRef.current(dt);
       }
 
-      // 2. Step follow-all camera (interpolates between waypoints, not raw
-      //    waypoint vertices, so the camera tracks smoothly between samples).
+      // 2. Step follow camera. "all" pans the bbox of current runner
+      //    positions; "smart" additionally widens the bbox to include
+      //    each runner's next un-punched control AND lerps the zoom
+      //    level to fit, so the camera always frames the relevant
+      //    action without losing the destination.
       const followMode = followModeRef.current;
       const target = nearbyTargetIdRef.current;
-      if (followMode === "all" && !target && containerWRef.current > 0) {
+      const containerW = containerWRef.current;
+      const containerH = containerHRef.current;
+      if (
+        (followMode === "all" || followMode === "smart") &&
+        !target &&
+        containerW > 0 &&
+        containerH > 0
+      ) {
         const handle = mapRef.current;
         const vp = handle?.getViewport();
         if (handle && vp) {
           const visible = visibleParticipantsRef.current;
+          const isSmart = followMode === "smart";
+          // In legs mode, every runner shares the same destination
+          // (controls[currentLeg + 1]). Pre-compute it once so we don't
+          // repeat the per-runner next-control lookup pointlessly.
+          const isLegsMode = startModeRef.current === "legs";
+          const legsTargetIdx = isLegsMode && courseControls.length > 1
+            ? Math.min(currentLegRef.current + 1, courseControls.length - 1)
+            : -1;
+
           let minMx = Infinity, maxMx = -Infinity, minMy = Infinity, maxMy = -Infinity;
           let count = 0;
-          for (const route of data.routes) {
+          for (let r = 0; r < data.routes.length; r++) {
+            const route = data.routes[r];
             if (!visible.has(route.participantId)) continue;
             if (route.waypoints.length === 0) continue;
             const t = getRouteTimeRef.current(route.participantId);
@@ -224,15 +300,59 @@ export function ReplayViewer({ data, compact, className, style, replayConfig, na
             if (py < minMy) minMy = py;
             if (py > maxMy) maxMy = py;
             count++;
+
+            if (isSmart && courseControls.length > 0) {
+              const ctrlIdx = isLegsMode
+                ? legsTargetIdx
+                : nextControlIdx(r, t);
+              if (ctrlIdx >= 0) {
+                const ctrl = courseControls[ctrlIdx];
+                const { px: cPx, py: cPy } = latLngToMapPx(ctrl.lat, ctrl.lng, proj);
+                // Expand by the control symbol's radius + one diameter
+                // margin so the entire circle stays in frame, not just
+                // its centre point.
+                if (cPx - ctrlExtentMapPx < minMx) minMx = cPx - ctrlExtentMapPx;
+                if (cPx + ctrlExtentMapPx > maxMx) maxMx = cPx + ctrlExtentMapPx;
+                if (cPy - ctrlExtentMapPx < minMy) minMy = cPy - ctrlExtentMapPx;
+                if (cPy + ctrlExtentMapPx > maxMy) maxMy = cPy + ctrlExtentMapPx;
+              }
+            }
           }
+
           if (count > 0) {
             const cx = (minMx + maxMx) / 2;
             const cy = (minMy + maxMy) / 2;
-            const LERP_SPEED = 1.5; // 1/seconds — exponential lerp
-            const alpha = 1 - Math.exp(-LERP_SPEED * dt / 1000);
-            const newCx = vp.cx + (cx - vp.cx) * alpha;
-            const newCy = vp.cy + (cy - vp.cy) * alpha;
-            handle.setViewport({ ...vp, cx: newCx, cy: newCy });
+            const PAN_SPEED = 1.5; // 1/seconds — exponential lerp
+            const alphaPan = 1 - Math.exp(-PAN_SPEED * dt / 1000);
+            const newCx = vp.cx + (cx - vp.cx) * alphaPan;
+            const newCy = vp.cy + (cy - vp.cy) * alphaPan;
+
+            let newScale = vp.scale;
+            if (isSmart) {
+              // Compute the largest scale that fits the bbox + 25%
+              // padding inside the viewport. Floor the bbox dims so a
+              // single point doesn't blow scale up to infinity, and
+              // clamp scale to the same range the wheel-zoom uses.
+              const bboxW = Math.max(maxMx - minMx, 1);
+              const bboxH = Math.max(maxMy - minMy, 1);
+              const padding = 1.25;
+              const fitScaleX = containerW / (bboxW * padding);
+              const fitScaleY = containerH / (bboxH * padding);
+              const targetScale = Math.max(
+                0.05,
+                Math.min(8, Math.min(fitScaleX, fitScaleY)),
+              );
+              // Log-space lerp gives perceptually uniform zoom motion —
+              // a 2x→4x change feels the same speed as 1x→2x.
+              const ZOOM_SPEED = 1.2;
+              const alphaZoom = 1 - Math.exp(-ZOOM_SPEED * dt / 1000);
+              newScale = Math.exp(
+                Math.log(vp.scale) +
+                  (Math.log(targetScale) - Math.log(vp.scale)) * alphaZoom,
+              );
+            }
+
+            handle.setViewport({ ...vp, cx: newCx, cy: newCy, scale: newScale });
           }
         }
       }
@@ -263,7 +383,8 @@ export function ReplayViewer({ data, compact, className, style, replayConfig, na
 
     // Only start the loop when there's per-frame work. When everything
     // settles (paused, no follow), the main thread can idle entirely.
-    if (state.isPlaying || (state.followMode === "all" && !nearbyTargetId) || nearbyTargetId) {
+    const followActive = state.followMode === "all" || state.followMode === "smart";
+    if (state.isPlaying || (followActive && !nearbyTargetId) || nearbyTargetId) {
       lastNow = performance.now();
       raf = requestAnimationFrame(tick);
     }
