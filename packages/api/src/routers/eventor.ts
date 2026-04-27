@@ -638,6 +638,17 @@ export const eventorRouter = router({
 
       const existing = runnerExtIdMap.get(entry.personId);
       if (existing) {
+        // If the runner was previously stamped Cancel (21) by an earlier
+        // sync detecting them as withdrawn and they're now back in the
+        // entries snapshot — without a result yet — reset the status to
+        // the same default the create branch uses (`entry.noTiming ? 22 : 0`).
+        // Without this, a re-entered runner stays Cancelled forever even
+        // though seenPersonIds keeps them out of the withdrawn-detection
+        // loop further down.
+        const isReinstating =
+          existing.Status === 21 && !result;
+        const reinstatedStatus = entry.noTiming ? 22 : 0;
+
         const needsUpdate =
           existing.Name !== entry.personName ||
           existing.CardNo !== (result?.cardNo || entry.cardNo) ||
@@ -648,7 +659,8 @@ export const eventorRouter = router({
           (entry.nationality && existing.Nationality !== entry.nationality) ||
           (result && existing.StartTime !== result.startTime) ||
           (result && existing.FinishTime !== result.finishTime) ||
-          (result && existing.Status !== result.status);
+          (result && existing.Status !== result.status) ||
+          isReinstating;
 
         if (needsUpdate) {
           await client.oRunner.update({
@@ -676,6 +688,8 @@ export const eventorRouter = router({
                 Status: result.status,
                 ...(result.startNo > 0 ? { StartNo: result.startNo } : {}),
                 ...(result.bib ? { Bib: result.bib.substring(0, 17) } : {}),
+              } : isReinstating ? {
+                Status: reinstatedStatus,
               } : {}),
             },
           });

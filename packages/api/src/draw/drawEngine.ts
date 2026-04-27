@@ -11,6 +11,7 @@ import type {
   DrawPreviewClass,
   DrawPreviewEntry,
 } from "@oxygen/shared";
+import { WITHDRAWN_STATUSES } from "@oxygen/shared";
 import {
   randomDraw,
   clubSeparationDraw,
@@ -52,8 +53,14 @@ async function loadClassData(
   });
   const courseMap = new Map(dbCourses.map((c) => [c.Id, c]));
 
+  // Withdrawn entries (Cancel) are not part of the draw — they aren't
+  // running and shouldn't occupy a slot in the start grid.
   const dbRunners = await client.oRunner.findMany({
-    where: { Class: { in: classIds }, Removed: false },
+    where: {
+      Class: { in: classIds },
+      Removed: false,
+      Status: { notIn: [...WITHDRAWN_STATUSES] },
+    },
     orderBy: { StartNo: "asc" },
   });
 

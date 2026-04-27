@@ -4,6 +4,7 @@ import {getZeroTime} from "../db.js";
 import { toAbsolute } from "../timeConvert.js";
 import {
   RunnerStatus,
+  WITHDRAWN_STATUSES,
   type StartListEntry,
   type ResultEntry,
   type ClassDetail,
@@ -24,7 +25,12 @@ export const listsRouter = router({
     .query(async ({ ctx, input }): Promise<StartListEntry[]> => {
       const client = ctx.db;
 
-      const where: Record<string, unknown> = { Removed: false };
+      // Withdrawn entries (Cancel) never appear on the start list — they
+      // are not participating.
+      const where: Record<string, unknown> = {
+        Removed: false,
+        Status: { notIn: [...WITHDRAWN_STATUSES] },
+      };
       if (input?.classId) where.Class = input.classId;
 
       const runners = await client.oRunner.findMany({
@@ -95,7 +101,12 @@ export const listsRouter = router({
     .query(async ({ ctx, input }): Promise<ResultEntry[]> => {
       const client = ctx.db;
 
-      const where: Record<string, unknown> = { Removed: false };
+      // Withdrawn entries (Cancel) are excluded from the result list —
+      // a withdrawn runner has no race result. DNS stays in (paid no-show).
+      const where: Record<string, unknown> = {
+        Removed: false,
+        Status: { notIn: [...WITHDRAWN_STATUSES] },
+      };
       if (input?.classId) where.Class = input.classId;
 
       const runners = await client.oRunner.findMany({ where });
@@ -273,9 +284,9 @@ export const listsRouter = router({
     });
     const courseMap = new Map(courses.map((c) => [c.Id, c]));
 
-    // Count runners per class
+    // Count participating runners per class (Cancel excluded).
     const runners = await client.oRunner.findMany({
-      where: { Removed: false },
+      where: { Removed: false, Status: { notIn: [...WITHDRAWN_STATUSES] } },
       select: { Class: true },
     });
     const runnerCountByClass = new Map<number, number>();

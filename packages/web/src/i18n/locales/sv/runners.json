@@ -11,6 +11,7 @@
   "noRunners": "Inga deltagare hittades",
   "noRunnersMatch": "Inga deltagare matchar din sökning",
   "runnersCount": "{{count}} deltagare",
+  "activeAndWithdrawn": "{{active}} aktiva · {{withdrawn}} återbud",
   "name": "Namn",
   "club": "Klubb",
   "class": "Klass",

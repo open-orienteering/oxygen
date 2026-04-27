@@ -1,4 +1,4 @@
-import { RunnerStatus, type RunnerInfo } from "@oxygen/shared";
+import { RunnerStatus, isFinished, isWithdrawn, type RunnerInfo } from "@oxygen/shared";
 import { getCardType, type SICardType } from "../../si-protocol";
 import type { AnchorDef, FilterOperator, SuggestionItem } from "../types";
 
@@ -13,6 +13,7 @@ const STATUS_ALIASES: Record<string, number[]> = {
   dq: [RunnerStatus.DQ],
   overtime: [RunnerStatus.OverMaxTime],
   cancel: [RunnerStatus.Cancel],
+  oc: [RunnerStatus.OutOfCompetition],
   nc: [RunnerStatus.NotCompeting],
 };
 
@@ -69,16 +70,20 @@ function matchNumber(
 
 function matchStatus(runner: RunnerInfo, op: FilterOperator, value: string): boolean {
   const values = op === "in" ? value.split(",").map((v) => v.trim().toLowerCase()) : [value.toLowerCase()];
+  const finished = isFinished(runner.status, runner.finishTime);
 
   return values.some((v) => {
     if (v === "not-started") {
-      return runner.status === 0 && runner.finishTime === 0 && runner.startTime === 0;
+      return !finished && runner.startTime === 0;
     }
     if (v === "started" || v === "in-forest") {
-      return runner.status === 0 && runner.finishTime === 0 && runner.startTime > 0;
+      return !finished && runner.startTime > 0;
     }
     if (v === "finished") {
-      return runner.status > 0 || runner.finishTime > 0;
+      return finished;
+    }
+    if (v === "withdrawn" || v === "cancelled") {
+      return isWithdrawn(runner.status);
     }
 
     const alias = STATUS_ALIASES[v];
@@ -252,6 +257,10 @@ export function createRunnerAnchors(
         { key: "dnf", label: "DNF — Did Not Finish" },
         { key: "dns", label: "DNS — Did Not Start" },
         { key: "dq", label: "DQ — Disqualified" },
+        { key: "overtime", label: "OT — Over Max Time" },
+        { key: "cancel", label: "Cancelled (withdrawn)" },
+        { key: "oc", label: "OC — Out of Competition" },
+        { key: "nc", label: "NC — Not Competing" },
         { key: "not-started", label: "Not started" },
         { key: "in-forest", label: "In forest" },
         { key: "finished", label: "Finished" },
