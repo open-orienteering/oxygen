@@ -3,7 +3,7 @@ import { TRPCError } from "@trpc/server";
 import { router, publicProcedure, competitionProcedure } from "../trpc.js";
 import { getZeroTime } from "../db.js";
 import { toRelative, toAbsolute } from "../timeConvert.js";
-import { RunnerStatus } from "@oxygen/shared";
+import { RunnerStatus, voltsFromMeos } from "@oxygen/shared";
 import { performReadout } from "./cardReadout.js";
 import { computePosition } from "../results.js";
 
@@ -282,7 +282,7 @@ export const raceRouter = router({
             cardNo,
           );
           if (rows.length > 0) {
-            const voltage = rows[0].Voltage > 0 ? rows[0].Voltage / 100 : null;
+            const voltage = voltsFromMeos(rows[0].Voltage);
             let meta: { batteryDate?: string } | null = null;
             try {
               meta = rows[0].Metadata ? JSON.parse(rows[0].Metadata) : null;
@@ -295,13 +295,13 @@ export const raceRouter = router({
               batteryOk: voltage != null && voltage >= 2.5,
             };
           } else {
-            // No readout history — fall back to oCard.Voltage (raw ADC byte stored by MeOS)
+            // No readout history — fall back to oCard.Voltage (MeOS-compatible mV)
             const oCard = await client.oCard.findFirst({
               where: { CardNo: cardNo, Removed: false },
               select: { Voltage: true },
             });
-            if (oCard && oCard.Voltage > 0) {
-              const voltage = 1.9 + oCard.Voltage * 0.09;
+            const voltage = voltsFromMeos(oCard?.Voltage);
+            if (voltage != null) {
               siac = {
                 voltage: voltage <= 5.0 ? voltage : null,
                 batteryDate: null,

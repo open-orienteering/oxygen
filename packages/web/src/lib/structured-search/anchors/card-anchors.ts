@@ -9,7 +9,6 @@ export interface CardListItem {
   id: number;
   cardNo: number;
   cardType: string;
-  voltage: number;
   batteryVoltage: number | null;
   punchCount: number;
   hasPunches: boolean;
