@@ -442,9 +442,9 @@ test.describe("Registration Dialog", () => {
       // Enable sticky
       await page.getByTestId("reg-sticky-toggle").click();
 
-      // Close dialog — first ESC clears the dirty form (card is pre-filled), second ESC closes
-      await page.keyboard.press("Escape");
-      await page.keyboard.press("Escape");
+      // ESC must never close the dialog while sticky mode is on, so close
+      // explicitly via the close button.
+      await page.getByRole("button", { name: "Close" }).click();
       await expect(page.getByTestId("registration-dialog")).not.toBeVisible({ timeout: 3000 });
 
       // Re-insert card and reopen dialog
@@ -510,7 +510,7 @@ test.describe("Registration Dialog", () => {
       await expect(dialog.locator("input[placeholder='First Last']")).toHaveValue("");
     });
 
-    test("ESC closes dialog when form is clean in sticky mode", async ({ page }) => {
+    test("ESC never closes the dialog in sticky mode", async ({ page }) => {
       await setupAdmin(page);
       await insertUnregisteredCard(page, 2900034);
       await page.getByTestId("card-notification-view").click();
@@ -519,14 +519,15 @@ test.describe("Registration Dialog", () => {
       // Enable sticky
       await page.getByTestId("reg-sticky-toggle").click();
 
-      // First ESC clears the pre-filled card data
+      // First ESC clears the pre-filled card data; dialog must stay open
       await page.keyboard.press("Escape");
-      // Dialog should still be open (form was dirty from card pre-fill)
       await expect(page.getByTestId("registration-dialog")).toBeVisible();
 
-      // Now form is clean — second ESC closes dialog
+      // Form is now clean — a second ESC must still NOT close the dialog
+      // when sticky mode is on (the whole point of sticky mode is to keep
+      // the registration surface up between card reads).
       await page.keyboard.press("Escape");
-      await expect(page.getByTestId("registration-dialog")).not.toBeVisible({ timeout: 3000 });
+      await expect(page.getByTestId("registration-dialog")).toBeVisible();
     });
 
     test("next card auto-fills in sticky mode", async ({ page }) => {

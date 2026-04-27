@@ -34,6 +34,75 @@ export type PayMode = (typeof PAY_MODE)[keyof typeof PAY_MODE];
 export type RunnerStatusValue =
   (typeof RunnerStatus)[keyof typeof RunnerStatus];
 
+/**
+ * Statuses that represent a real race result, i.e. something we report
+ * onward (Eventor, LiveResults, result list). DNS and NotCompeting are
+ * included because the entry is real and the organizer may need to
+ * report it; only Cancel (withdrawn entry) is excluded.
+ */
+export const RACE_RESULT_STATUSES: readonly RunnerStatusValue[] = [
+  RunnerStatus.OK,
+  RunnerStatus.NoTiming,
+  RunnerStatus.MissingPunch,
+  RunnerStatus.DNF,
+  RunnerStatus.DQ,
+  RunnerStatus.OverMaxTime,
+  RunnerStatus.OutOfCompetition,
+  RunnerStatus.DNS,
+  RunnerStatus.NotCompeting,
+];
+
+/**
+ * Statuses that represent a withdrawn entry — the runner is not
+ * participating, didn't pay, and must not be counted toward
+ * totalRunners or any per-class / per-club / status bucket.
+ */
+export const WITHDRAWN_STATUSES: readonly RunnerStatusValue[] = [
+  RunnerStatus.Cancel,
+];
+
+/**
+ * Statuses that exclude a runner from "in the forest" / control
+ * completion calculations. These are runners who definitively did not
+ * pass through the controls — either by withdrawal, no-show, or by
+ * design (NoTiming class, NotCompeting exhibition, OutOfCompetition).
+ */
+export const IN_FOREST_EXCLUDED_STATUSES: readonly RunnerStatusValue[] = [
+  RunnerStatus.NoTiming,
+  RunnerStatus.DNS,
+  RunnerStatus.Cancel,
+  RunnerStatus.NotCompeting,
+  RunnerStatus.OutOfCompetition,
+];
+
+/** True for `Cancel` — a withdrawn entry (Återbud). */
+export function isWithdrawn(status: RunnerStatusValue): boolean {
+  return status === RunnerStatus.Cancel;
+}
+
+/**
+ * True for any non-withdrawn status. Use this when deciding whether a
+ * runner counts toward `totalRunners` / per-class / per-club totals.
+ */
+export function isParticipant(status: RunnerStatusValue): boolean {
+  return !isWithdrawn(status);
+}
+
+/**
+ * True if the runner has a final outcome — a non-zero race-result
+ * status (OK / MP / DNF / DQ / OverMaxTime / OutOfCompetition / DNS /
+ * NoTiming / NotCompeting), or `Unknown` with a finish time recorded.
+ *
+ * Cancel returns false: a withdrawn entry never gets a result.
+ */
+export function isFinished(
+  status: RunnerStatusValue,
+  finishTime: number,
+): boolean {
+  if (RACE_RESULT_STATUSES.includes(status)) return true;
+  return status === RunnerStatus.Unknown && finishTime > 0;
+}
+
 /** Map a runner status to its i18n translation key (for use with status namespace) */
 export function runnerStatusKey(status: RunnerStatusValue): string {
   switch (status) {
@@ -144,6 +213,8 @@ export interface StatusCounts {
   notStarted: number;
   inForest: number;
   finished: number;
+  /** Withdrawn entries (Status = Cancel). Not counted in totalRunners. */
+  cancelled: number;
   /** Runners waiting to start (Unknown status, no start time — excludes DNS/Cancel) */
   startListCount: number;
   /** Runners with a result booked (Status !== 0) */
@@ -229,6 +300,14 @@ export interface ClassInfo {
   classFee?: number;
   /** Whether on-site registration is allowed for this class (MeOS: AllowQuickEntry) */
   allowQuickEntry?: boolean;
+  /** "M" / "F" (or "W") restricts the class; empty string means open */
+  sex: string;
+  /** Minimum age (0 = no lower bound) */
+  lowAge: number;
+  /** Maximum age (0 = no upper bound) */
+  highAge: number;
+  /** Eventor / MeOS class type label (e.g. "Öppna klasser"). May be empty. */
+  classType?: string;
 }
 
 /** Club summary */

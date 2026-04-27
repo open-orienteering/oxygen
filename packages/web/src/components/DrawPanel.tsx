@@ -21,6 +21,7 @@ interface ClassConfig {
   classId: number;
   className: string;
   courseName: string;
+  classType: string;
   runnerCount: number;
   selected: boolean;
   method: DrawMethod;
@@ -80,6 +81,7 @@ export function DrawPanel({ onClose, onDrawComplete }: Props) {
           classId: c.id,
           className: c.name,
           courseName: c.courseName,
+          classType: c.classType ?? "",
           runnerCount: c.runnerCount,
           selected: !c.freeStart,
           method: "clubSeparation",
@@ -432,6 +434,7 @@ export function DrawPanel({ onClose, onDrawComplete }: Props) {
                   <th className="w-8 px-2 py-2"></th>
                   <th className="px-3 py-2 text-left font-medium text-slate-500 text-xs">{t("classHeader")}</th>
                   <th className="px-3 py-2 text-left font-medium text-slate-500 text-xs hidden sm:table-cell">{t("courseHeader")}</th>
+                  <th className="px-3 py-2 text-left font-medium text-slate-500 text-xs hidden md:table-cell">{t("classTypeHeader")}</th>
                   <th className="px-3 py-2 text-right font-medium text-slate-500 text-xs w-16">{t("runnersHeader")}</th>
                   <th className="px-3 py-2 text-left font-medium text-slate-500 text-xs">{t("method")}</th>
                   <th className="px-3 py-2 text-left font-medium text-slate-500 text-xs w-24">{t("interval")}</th>
@@ -457,6 +460,9 @@ export function DrawPanel({ onClose, onDrawComplete }: Props) {
                     </td>
                     <td className="px-3 py-1.5 text-slate-500 hidden sm:table-cell">
                       {c.courseName || "\u2014"}
+                    </td>
+                    <td className="px-3 py-1.5 text-slate-500 hidden md:table-cell text-xs">
+                      {c.classType || "\u2014"}
                     </td>
                     <td className="px-3 py-1.5 text-right tabular-nums text-slate-600">
                       {c.runnerCount}

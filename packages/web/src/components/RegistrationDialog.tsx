@@ -12,6 +12,10 @@ import { getClubLogoUrl } from "../lib/club-logo";
 import type { KioskChannel, RegistrationFormState } from "../lib/kiosk-channel";
 import { fuzzyMatchClub } from "../lib/fuzzy-club-match";
 import { emitRunnerRegistered } from "../lib/offline/events";
+import {
+  filterRegistrationClasses,
+  competitionYearFromDate,
+} from "../lib/registration-class-filter";
 import swishIcon from "../assets/swish-icon.svg";
 
 /**
@@ -137,7 +141,32 @@ export function RegistrationDialog() {
 
   // ── Derived ─────────────────────────────────────────────
   const selectedClubName = selectedClub?.name ?? "";
-  const selectedClassName = classes.data?.classes.find((c) => c.id === classId)?.name ?? "";
+
+  // Class list filtered by what the user has entered so far. Always restricted
+  // to allowQuickEntry classes (on-site registration), then narrowed further
+  // by sex / age when those fields are known.
+  const eligibleClasses = useMemo(() => {
+    const all = classes.data?.classes ?? [];
+    const competitionYear = competitionYearFromDate(classes.data?.competition?.date);
+    const birthYearNum = birthYear ? parseInt(birthYear, 10) : 0;
+    return filterRegistrationClasses(all, {
+      sex,
+      birthYear: birthYearNum > 0 ? birthYearNum : undefined,
+      competitionYear,
+    });
+  }, [classes.data, sex, birthYear]);
+
+  // If the picked class is no longer eligible (e.g. user just picked a sex
+  // that excludes it), treat the selection as cleared. Doing this in render
+  // — rather than via an effect that calls setClassId — keeps the picker,
+  // the displayed class name, and form submission consistent without
+  // triggering an extra render pass.
+  const effectiveClassId = useMemo(() => {
+    if (!classId) return 0;
+    return eligibleClasses.some((c) => c.id === classId) ? classId : 0;
+  }, [classId, eligibleClasses]);
+  const selectedClassName =
+    classes.data?.classes.find((c) => c.id === effectiveClassId)?.name ?? "";
 
   // ── Clear form ──────────────────────────────────────────
   const clearForm = useCallback(() => {
@@ -174,7 +203,7 @@ export function RegistrationDialog() {
 
   // Broadcast form state to kiosk
   const buildFormMessage = useCallback(() => {
-    const classFee = classes.data?.classes.find((c) => c.id === classId)?.classFee ?? 0;
+    const classFee = classes.data?.classes.find((c) => c.id === effectiveClassId)?.classFee ?? 0;
     const rentalFee = isRentalCard ? (cardFeeQuery.data?.cardFee ?? 0) : 0;
     const totalFee = classFee + rentalFee;
     const form: RegistrationFormState = {
@@ -195,9 +224,9 @@ export function RegistrationDialog() {
       isRentalCard: isRentalCard || undefined,
       cardFee: rentalFee > 0 ? rentalFee : undefined,
     };
-    const ready = !!name.trim() && classId > 0;
+    const ready = !!name.trim() && effectiveClassId > 0;
     return { form, ready };
-  }, [name, selectedClubName, selectedClassName, cardNo, startTime, sex, birthYear, phone, paymentMode, isRentalCard, classId, classes.data, regConfig.data, cardFeeQuery.data, selectedClub?.extId]);
+  }, [name, selectedClubName, selectedClassName, cardNo, startTime, sex, birthYear, phone, paymentMode, isRentalCard, effectiveClassId, classes.data, regConfig.data, cardFeeQuery.data, selectedClub?.extId]);
 
   // Send on every form change
   useEffect(() => {
@@ -540,9 +569,9 @@ export function RegistrationDialog() {
     setError("");
 
     if (!name.trim()) { setError(t("nameRequired")); return; }
-    if (!classId) { setError(t("classRequired")); return; }
+    if (!effectiveClassId) { setError(t("classRequired")); return; }
 
-    const classFee = classes.data?.classes.find((c) => c.id === classId)?.classFee ?? 0;
+    const classFee = classes.data?.classes.find((c) => c.id === effectiveClassId)?.classFee ?? 0;
     const rentalFee = isRentalCard ? (cardFeeQuery.data?.cardFee ?? 0) : 0;
     let fee = 0;   // oRunner.Fee = entry fee only (NOT including rental)
     let paid = 0;  // oRunner.Paid = total collected (entry + rental)
@@ -571,7 +600,7 @@ export function RegistrationDialog() {
         try {
           await createMutation.mutateAsync({
             name: trimmedName,
-            classId,
+            classId: effectiveClassId,
             clubId: clubId || 0,
             cardNo: cn,
             startTime: st ? parseMeosTime(st) : 0,
@@ -594,7 +623,7 @@ export function RegistrationDialog() {
         await emitRunnerRegistered(nameId, {
           tempId: crypto.randomUUID(),
           name: trimmedName,
-          classId,
+          classId: effectiveClassId,
           clubId: clubId || 0,
           cardNo: cn,
           startTime: st ? parseMeosTime(st) : 0,
@@ -681,17 +710,19 @@ export function RegistrationDialog() {
         setShowSuggestions(false);
         return;
       }
-      if (stickyMode && isFormDirty) {
-        // Clear form but keep dialog open
-        clearForm();
-        const ch = getKioskChannel();
-        if (ch) ch.send({ type: "kiosk-reset" });
-      } else {
-        // Close dialog
-        closeRegistration();
-        const ch = getKioskChannel();
-        if (ch) ch.send({ type: "kiosk-reset" });
+      if (stickyMode) {
+        // Sticky mode: ESC clears a dirty form but never closes the dialog.
+        if (isFormDirty) {
+          clearForm();
+          const ch = getKioskChannel();
+          if (ch) ch.send({ type: "kiosk-reset" });
+        }
+        return;
       }
+      // Non-sticky: ESC closes the dialog.
+      closeRegistration();
+      const ch = getKioskChannel();
+      if (ch) ch.send({ type: "kiosk-reset" });
     };
     document.addEventListener("keydown", handler);
     return () => document.removeEventListener("keydown", handler);
@@ -895,29 +926,22 @@ export function RegistrationDialog() {
               <label className="block text-sm font-medium text-slate-700 mb-1">{t("class")} *</label>
               <SearchableSelect
                 testId="reg-class"
-                value={classId}
+                value={effectiveClassId}
                 onChange={(v) => setClassId(Number(v))}
                 placeholder={t("selectClassPlaceholder")}
                 searchPlaceholder={t("searchClasses")}
                 alwaysShowSearch
-                options={[
-                  ...(() => {
-                    const all = classes.data?.classes ?? [];
-                    const hasAnyQuickEntry = all.some((c) => c.allowQuickEntry);
-                    const eligible = hasAnyQuickEntry ? all.filter((c) => c.allowQuickEntry) : all;
-                    return eligible.map((c) => {
-                      const course = classes.data?.courses.find((co) => co.id === c.courseId);
-                      const maps = course?.numberOfMaps;
-                      const remaining = maps != null ? maps - (c.runnerCount ?? 0) : null;
-                      return {
-                        value: c.id,
-                        label: c.name,
-                        suffix: remaining != null ? (remaining <= 0 ? t("noMaps") : t("mapsRemaining", { count: remaining })) : undefined,
-                        disabled: remaining != null && remaining <= 0,
-                      };
-                    });
-                  })(),
-                ]}
+                options={eligibleClasses.map((c) => {
+                  const course = classes.data?.courses.find((co) => co.id === c.courseId);
+                  const maps = course?.numberOfMaps;
+                  const remaining = maps != null ? maps - (c.runnerCount ?? 0) : null;
+                  return {
+                    value: c.id,
+                    label: c.name,
+                    suffix: remaining != null ? (remaining <= 0 ? t("noMaps") : t("mapsRemaining", { count: remaining })) : undefined,
+                    disabled: remaining != null && remaining <= 0,
+                  };
+                })}
               />
             </div>
 
@@ -1060,7 +1084,7 @@ export function RegistrationDialog() {
                 className="flex-1 px-4 py-2.5 bg-blue-600 text-white text-sm font-medium rounded-lg hover:bg-blue-700 transition-colors cursor-pointer disabled:opacity-50"
               >
                 {createMutation.isPending ? t("saving") : (
-                  paymentMode && paymentMode !== "billed" && ((classes.data?.classes.find((c) => c.id === classId)?.classFee ?? 0) + (isRentalCard ? (cardFeeQuery.data?.cardFee ?? 0) : 0)) > 0
+                  paymentMode && paymentMode !== "billed" && ((classes.data?.classes.find((c) => c.id === effectiveClassId)?.classFee ?? 0) + (isRentalCard ? (cardFeeQuery.data?.cardFee ?? 0) : 0)) > 0
                     ? t("confirmPaymentRegister")
                     : t("registerRunner")
                 )}

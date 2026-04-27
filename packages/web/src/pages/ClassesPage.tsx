@@ -53,7 +53,15 @@ export function ClassesPage() {
     [courses.data],
   );
 
-  const selection = useTableSelection(classes.data ?? []);
+  const rawItems = useMemo(
+    () => filterItems(classes.data ?? []),
+    [classes.data, filterItems],
+  );
+  const isFiltered = tokens.length > 0;
+
+  // Selection is scoped to the visible (filtered) list so "select all" only
+  // ever picks the rows the user is currently looking at.
+  const selection = useTableSelection(rawItems);
 
   const [bulkField, setBulkField] = useState<"fee" | "freeStart" | "noTiming" | "allowQuickEntry" | "maxTime">("fee");
   const [bulkValue, setBulkValue] = useState<string>("");
@@ -107,10 +115,6 @@ export function ClassesPage() {
   const handleToggleExpand = (id: number) => {
     setExpandedId(expandedId === id ? undefined : id);
   };
-
-  const allItems = classes.data ?? [];
-  const rawItems = useMemo(() => filterItems(allItems), [allItems, filterItems]);
-  const isFiltered = tokens.length > 0;
 
   type Cls = (typeof rawItems)[number];
   const comparators = useMemo(() => ({

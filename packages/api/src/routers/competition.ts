@@ -21,7 +21,9 @@ import type {
   RunnerInfo,
   ClubInfo,
   StatusCounts,
+  RunnerStatusValue,
 } from "@oxygen/shared";
+import { isWithdrawn, isFinished, WITHDRAWN_STATUSES } from "@oxygen/shared";
 import { resolveCourseExpectedPositions } from "./course.js";
 import { type RowDataPacket } from "mysql2/promise";
 
@@ -244,14 +246,19 @@ export const competitionRouter = router({
         where: { Removed: false },
       });
 
-      // Count runners per class
+      // Fetch all runner rows; counts below exclude withdrawn entries.
       const runners = await client.oRunner.findMany({
         where: { Removed: false },
         select: { Class: true, Club: true, Status: true, StartTime: true, FinishTime: true, CardNo: true },
       });
 
-      // Count distinct clubs that have at least one runner
-      const clubsWithRunners = new Set(runners.map((r) => r.Club).filter((c) => c > 0));
+      // Count distinct clubs that have at least one *participant* (Cancel excluded).
+      const clubsWithRunners = new Set(
+        runners
+          .filter((r) => !isWithdrawn(r.Status as RunnerStatusValue))
+          .map((r) => r.Club)
+          .filter((c) => c > 0),
+      );
       const clubCount = clubsWithRunners.size;
 
       // Build runner counts per class + status summary
@@ -271,8 +278,28 @@ export const competitionRouter = router({
         punchCounts.map((p) => [p.CardNo, p._count.Id]),
       );
 
-      const statusCounts: StatusCounts = { notStarted: 0, inForest: 0, finished: 0, startListCount: 0, resultCount: 0 };
+      const statusCounts: StatusCounts = {
+        notStarted: 0,
+        inForest: 0,
+        finished: 0,
+        cancelled: 0,
+        startListCount: 0,
+        resultCount: 0,
+      };
+      let participantCount = 0;
       for (const r of runners) {
+        const status = r.Status as RunnerStatusValue;
+
+        // Withdrawn entries are not participants — they don't contribute
+        // to totalRunners, per-class counts, or any of the three race
+        // buckets. We only track them in statusCounts.cancelled so the
+        // UI can surface them when needed.
+        if (isWithdrawn(status)) {
+          statusCounts.cancelled++;
+          continue;
+        }
+
+        participantCount++;
         runnerCountByClass.set(
           r.Class,
           (runnerCountByClass.get(r.Class) ?? 0) + 1,
@@ -281,10 +308,9 @@ export const competitionRouter = router({
         const hasPunches = (punchMap.get(r.CardNo) ?? 0) > 0;
         // StartTime=1 is a MeOS sentinel for "drawn but no specific time" (interval=0)
         const hasStartedByTime = r.StartTime > 0 && (r.StartTime <= 1 || meosNow >= toAbsolute(r.StartTime, zeroTime));
-        const hasFinishTime = r.FinishTime > 0;
-        const hasResult = r.Status > 0;
+        const finished = isFinished(status, r.FinishTime);
 
-        if (hasResult || hasFinishTime) {
+        if (finished) {
           statusCounts.finished++;
           statusCounts.resultCount++;
         } else if (hasPunches || hasStartedByTime) {
@@ -303,6 +329,10 @@ export const competitionRouter = router({
         runnerCount: runnerCountByClass.get(c.Id) ?? 0,
         classFee: c.ClassFee || undefined,
         allowQuickEntry: c.AllowQuickEntry === 1 || undefined,
+        sex: c.Sex,
+        lowAge: c.LowAge,
+        highAge: c.HighAge,
+        classType: c.ClassType || undefined,
       }));
 
       // Pre-resolve full status-aware ExpectedPosition[] per course up front
@@ -398,7 +428,7 @@ export const competitionRouter = router({
         },
         classes: classInfos,
         courses: courseInfos,
-        totalRunners: runners.length,
+        totalRunners: participantCount,
         totalClubs: clubCount,
         totalCourses: courseInfos.length,
         totalControls,
@@ -470,14 +500,15 @@ export const competitionRouter = router({
     }),
 
   /**
-   * Get clubs for the current competition (only those with at least one runner).
+   * Get clubs for the current competition (only those with at least one
+   * participating runner — withdrawn entries don't count).
    */
   clubs: competitionProcedure.query(async ({ ctx }): Promise<ClubInfo[]> => {
     const client = ctx.db;
 
-    // Find distinct club IDs that have runners
+    // Find distinct club IDs that have at least one non-withdrawn runner
     const runners = await client.oRunner.findMany({
-      where: { Removed: false },
+      where: { Removed: false, Status: { notIn: [...WITHDRAWN_STATUSES] } },
       select: { Club: true },
     });
     const clubIdsWithRunners = new Set(

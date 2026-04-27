@@ -40,6 +40,7 @@
   "none": "Inga",
   "classHeader": "Klass",
   "courseHeader": "Bana",
+  "classTypeHeader": "Klasstyp",
   "runnersHeader": "Löpare",
   "dragToReorder": "Dra klassfält för att ordna om inom eller mellan korridorer",
   "drawComplete": "Lottning klar",

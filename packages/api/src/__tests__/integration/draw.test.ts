@@ -123,6 +123,36 @@ describe("draw.defaults", () => {
     // createCompetitionDatabase sets ZeroTime to 324000 (09:00:00)
     expect(result.zeroTime).toBe(324000);
   });
+
+  it("surfaces freeStart and classType so the panel can deselect free-start classes and show the class type", async () => {
+    const { client } = ctx;
+    await seedFixture(ctx);
+    const caller = makeCaller({ dbName: ctx.dbName });
+
+    // Add a free-start, typed class with a runner so it appears in defaults
+    const courseC = await client.oCourse.create({
+      data: { Name: "Course C", Length: 1500, Climb: 0, Controls: "", Removed: false, Counter: 0 },
+    });
+    const freeClass = await client.oClass.create({
+      data: {
+        Name: "Open 1",
+        Course: courseC.Id,
+        FirstStart: 0,
+        StartInterval: 0,
+        SortIndex: 99,
+        Removed: false,
+        Counter: 0,
+        FreeStart: 1,
+        ClassType: "Öppna klasser",
+      },
+    });
+    await caller.runner.create({ name: "FreeRunner", classId: freeClass.Id, clubId: 0 });
+
+    const result = await caller.draw.defaults();
+    const free = result.classes.find((c) => c.id === freeClass.Id)!;
+    expect(free.freeStart).toBe(true);
+    expect(free.classType).toBe("Öppna klasser");
+  });
 });
 
 describe("draw.preview", () => {
