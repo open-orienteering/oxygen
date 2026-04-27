@@ -40,6 +40,7 @@
   "none": "None",
   "classHeader": "Class",
   "courseHeader": "Course",
+  "classTypeHeader": "Class type",
   "runnersHeader": "Runners",
   "dragToReorder": "Drag class bars to reorder within or across corridors",
   "drawComplete": "Draw complete",

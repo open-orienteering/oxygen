@@ -4,6 +4,7 @@ import {incrementCounter, incrementCounterBatch, getZeroTime} from "../db.js";
 import { toRelative, toAbsolute } from "../timeConvert.js";
 import { generateDrawPreview } from "../draw/index.js";
 import type { DrawPreviewResult } from "@oxygen/shared";
+import { WITHDRAWN_STATUSES } from "@oxygen/shared";
 
 const classDrawConfigSchema = z.object({
   classId: z.number().int(),
@@ -45,8 +46,9 @@ export const drawRouter = router({
     });
     const courseMap = new Map(courses.map((c) => [c.Id, c.Name]));
 
+    // Withdrawn entries are not drawn — exclude them from the per-class count.
     const runners = await client.oRunner.findMany({
-      where: { Removed: false },
+      where: { Removed: false, Status: { notIn: [...WITHDRAWN_STATUSES] } },
       select: { Class: true },
     });
     const countByClass = new Map<number, number>();
@@ -65,6 +67,7 @@ export const drawRouter = router({
         firstStart: toAbsolute(c.FirstStart, zeroTime),
         startInterval: c.StartInterval,
         freeStart: c.FreeStart === 1,
+        classType: c.ClassType,
       })),
     };
   }),
