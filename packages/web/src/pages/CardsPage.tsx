@@ -268,7 +268,8 @@ export function CardsPage() {
 // ─── Battery Detail Block (for detail panel) ────────────────
 
 interface BatteryDetailProps {
-  voltage: number; // raw ADC value from oCard
+  /** Battery voltage in volts, or null when not measured. */
+  batteryVoltage: number | null;
   metadata?: {
     batteryDate?: string;
     productionDate?: string;
@@ -278,10 +279,9 @@ interface BatteryDetailProps {
   } | null;
 }
 
-function BatteryDetailBlock({ voltage, metadata }: BatteryDetailProps) {
+function BatteryDetailBlock({ batteryVoltage, metadata }: BatteryDetailProps) {
   const { t } = useTranslation("devices");
-  // Convert oCard raw ADC voltage to volts
-  const volts = voltage > 0 && voltage < 255 ? 1.9 + voltage * 0.09 : 0;
+  const volts = batteryVoltage != null && batteryVoltage > 0 ? batteryVoltage : 0;
 
   return (
     <div>
@@ -620,7 +620,7 @@ function CardDetailPanel({ cardNo, onReturnToggled }: { cardNo: number; onReturn
 
       {/* Battery & Card Info (SIAC only) */}
       {isSIAC && (
-        <BatteryDetailBlock voltage={d.voltage} metadata={d.metadata as any} />
+        <BatteryDetailBlock batteryVoltage={d.batteryVoltage} metadata={d.metadata as any} />
       )}
 
       {/* Current Readout */}
@@ -741,7 +741,8 @@ type HistoryEntry = {
   cardNo: number;
   cardType: string;
   punches: string;
-  voltage: number; // hundredths of volts
+  /** Battery voltage in volts, or null when not measured. */
+  batteryVoltage: number | null;
   ownerData: { firstName?: string; lastName?: string; club?: string } | null;
   metadata: {
     batteryDate?: string;
@@ -753,11 +754,10 @@ type HistoryEntry = {
   readAt: string;
 };
 
-function HistoryBatteryIndicator({ voltage }: { voltage: number }) {
+function HistoryBatteryIndicator({ batteryVoltage }: { batteryVoltage: number | null }) {
   const { t } = useTranslation("devices");
-  // voltage is in hundredths of volts (e.g. 298 = 2.98V)
-  const volts = voltage > 0 ? voltage / 100 : 0;
-  if (volts <= 0) return null;
+  if (batteryVoltage == null || batteryVoltage <= 0) return null;
+  const volts = batteryVoltage;
 
   return (
     <span
@@ -827,8 +827,8 @@ function ReadoutHistorySection({ history }: { history: HistoryEntry[] }) {
                   <span className="text-slate-600">
                     {t("punchesLabel", { count: controlPunches.length })}
                   </span>
-                  {h.voltage > 0 && (
-                    <HistoryBatteryIndicator voltage={h.voltage} />
+                  {h.batteryVoltage != null && h.batteryVoltage > 0 && (
+                    <HistoryBatteryIndicator batteryVoltage={h.batteryVoltage} />
                   )}
                   {h.ownerData &&
                     (h.ownerData.firstName || h.ownerData.lastName) && (

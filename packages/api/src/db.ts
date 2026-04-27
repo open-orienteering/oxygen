@@ -713,7 +713,38 @@ export async function ensureReadoutTable(
     // Column already exists — safe to ignore
   }
 
+  // One-shot voltage encoding migration (idempotent).
+  await migrateVoltageToMillivolts(client);
+
   readoutTableReady.add(dbName);
+}
+
+/**
+ * Migrate any rows still using legacy voltage encodings to integer millivolts.
+ *
+ * - `oCard.Voltage`: older Oxygen versions wrote raw SIAC ADC bytes (1..255),
+ *   but MeOS expects millivolts. Convert via `mV = 1900 + raw × 90`.
+ * - `oxygen_card_readouts.Voltage`: older Oxygen versions wrote hundredths of
+ *   a volt (≤ ~330). Convert via `mV = raw × 10`.
+ *
+ * Real battery readings always exceed ~2 V, so the value-range checks below
+ * unambiguously identify legacy rows. The migration is safe to run repeatedly.
+ */
+async function migrateVoltageToMillivolts(client: PrismaClient): Promise<void> {
+  try {
+    await client.$executeRawUnsafe(
+      `UPDATE oCard SET Voltage = 1900 + Voltage * 90 WHERE Voltage > 0 AND Voltage < 256`,
+    );
+  } catch {
+    // Non-fatal — oCard always exists in MeOS-shaped DBs, but be defensive.
+  }
+  try {
+    await client.$executeRawUnsafe(
+      `UPDATE oxygen_card_readouts SET Voltage = Voltage * 10 WHERE Voltage > 0 AND Voltage < 1000`,
+    );
+  } catch {
+    // Non-fatal — table was just ensured above.
+  }
 }
 
 // ─── Map files table ────────────────────────────────────────

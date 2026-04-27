@@ -9,6 +9,7 @@ import {
   parsePunches, computeReadId, computeMatchScore, parseCourseControls,
   matchPunchesToCourse, computeStatus,
   PUNCH_START, PUNCH_FINISH, PUNCH_CHECK,
+  meosFromVolts, voltsFromMeos,
   type ParsedPunch, type ControlMatch,
 } from "@oxygen/shared";
 import type { PrismaClient } from "@prisma/client";
@@ -414,9 +415,8 @@ export const cardReadoutRouter = router({
       // ── Save readout history (deduplicate by punch content) ─────────
       // Only INSERT if punches differ from the most recent readout for this card.
       // If punches are identical, UPDATE metadata (battery, owner data, timestamp).
-      const voltageStored = input.batteryVoltage
-        ? Math.round(input.batteryVoltage * 100)
-        : 0;
+      // Voltage is stored as integer millivolts (matches MeOS oCard.Voltage).
+      const voltageStored = meosFromVolts(input.batteryVoltage) ?? 0;
       const ownerDataJson = input.ownerData ? JSON.stringify(input.ownerData) : null;
       const metadataJson = input.metadata ? JSON.stringify(input.metadata) : null;
 
@@ -529,10 +529,8 @@ export const cardReadoutRouter = router({
           where: { CardNo: input.cardNo },
         }));
 
-      // Store voltage as raw value (0-255 range matching MeOS format)
-      const voltageRaw = input.batteryVoltage
-        ? Math.round((input.batteryVoltage - 1.9) / 0.09)
-        : undefined;
+      // MeOS stores oCard.Voltage as integer millivolts (e.g. 2980 = 2.98 V).
+      const voltageMv = meosFromVolts(input.batteryVoltage) ?? undefined;
 
       // Compute ReadId hash for deduplication (matches MeOS's calculateHash)
       const readId = computeReadId(input.punches, input.finishTime, input.startTime);
@@ -556,8 +554,8 @@ export const cardReadoutRouter = router({
             Punches: punchString,
             ReadId: readId,
             Removed: false, // ensure card is visible after re-read
-            ...(voltageRaw != null && voltageRaw > 0
-              ? { Voltage: voltageRaw }
+            ...(voltageMv != null && voltageMv > 0
+              ? { Voltage: voltageMv }
               : {}),
           },
         });
@@ -578,8 +576,8 @@ export const cardReadoutRouter = router({
           CardNo: input.cardNo,
           Punches: punchString,
           ReadId: readId,
-          ...(voltageRaw != null && voltageRaw > 0
-            ? { Voltage: voltageRaw }
+          ...(voltageMv != null && voltageMv > 0
+            ? { Voltage: voltageMv }
             : {}),
         },
       });
@@ -627,7 +625,7 @@ export const cardReadoutRouter = router({
           cardNo: Number(r.CardNo),
           cardType: r.CardType,
           punches: r.Punches,
-          voltage: Number(r.Voltage),
+          batteryVoltage: voltsFromMeos(r.Voltage),
           ownerData: r.OwnerData ? (JSON.parse(r.OwnerData) as unknown) : null,
           metadata: r.Metadata ? (JSON.parse(r.Metadata) as unknown) : null,
           readAt: r.ReadAt.toISOString(),
@@ -642,6 +640,9 @@ export const cardReadoutRouter = router({
   /** List all cards with linked runner info */
   cardList: competitionProcedure.query(async ({ ctx }) => {
     const client = ctx.db;
+
+    // Ensure the voltage-encoding migration has run before we read oCard.Voltage.
+    await ensureReadoutTable(client, ctx.dbName);
 
     const allCards = await client.oCard.findMany({
       where: { Removed: false },
@@ -738,21 +739,17 @@ export const cardReadoutRouter = router({
         : 0;
       const historyInfo = cardInfoMap.get(card.CardNo);
 
-      // Battery voltage: prefer readout history (stored in hundredths of volts)
-      // over oCard.Voltage (raw ADC byte, formula: 1.9 + raw * 0.09)
-      let batteryVoltage: number | null = null;
-      if (historyInfo && historyInfo.voltage > 0) {
-        batteryVoltage = historyInfo.voltage / 100; // hundredths → volts
-      } else if (card.Voltage > 0) {
-        batteryVoltage = 1.9 + card.Voltage * 0.09;
-      }
+      // Battery voltage is stored as integer millivolts (MeOS-compatible).
+      // Prefer the readout-history reading if present (it's what we just
+      // observed at the readout station), otherwise fall back to oCard.Voltage.
+      const batteryVoltage =
+        voltsFromMeos(historyInfo?.voltage) ?? voltsFromMeos(card.Voltage);
 
       return {
         id: card.Id,
         cardNo: card.CardNo,
         cardType: historyInfo?.cardType || "",
-        voltage: card.Voltage,
-        batteryVoltage, // precise voltage in volts (or null)
+        batteryVoltage, // volts, or null when not measured
         punchCount,
         hasPunches: punchCount > 0,
         modified: card.Modified?.toISOString() ?? null,
@@ -777,6 +774,9 @@ export const cardReadoutRouter = router({
     .input(z.object({ cardNo: z.number().int().positive() }))
     .query(async ({ ctx, input }) => {
       const client = ctx.db;
+
+      // Ensure the voltage-encoding migration has run before we read oCard.Voltage.
+      await ensureReadoutTable(client, ctx.dbName);
 
       const card = await client.oCard.findFirst({
         where: { CardNo: input.cardNo, Removed: false },
@@ -876,7 +876,7 @@ export const cardReadoutRouter = router({
         id: Number(card.Id),
         cardNo: Number(card.CardNo),
         cardType,
-        voltage: Number(card.Voltage),
+        batteryVoltage: voltsFromMeos(card.Voltage),
         ownerData,
         metadata,
         runner: runnerInfo,

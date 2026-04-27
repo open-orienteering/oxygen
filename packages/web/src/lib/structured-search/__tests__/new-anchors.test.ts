@@ -166,17 +166,17 @@ describe("card anchors", () => {
   const anchors = createCardAnchors(lbl) as AnchorDef<CardListItem>[];
   const cards: CardListItem[] = [
     {
-      id: 1, cardNo: 8001234, cardType: "SIAC", voltage: 200, batteryVoltage: 2.45,
+      id: 1, cardNo: 8001234, cardType: "SIAC", batteryVoltage: 2.45,
       punchCount: 12, hasPunches: true, modified: "2026-04-25",
       runner: { id: 1, name: "A", clubName: "Skog", clubId: 1, className: "H21", status: 1, isRentalCard: true, cardReturned: false },
     },
     {
-      id: 2, cardNo: 500123, cardType: "SI6", voltage: 0, batteryVoltage: null,
+      id: 2, cardNo: 500123, cardType: "SI6", batteryVoltage: null,
       punchCount: 0, hasPunches: false, modified: "2026-04-25",
       runner: null,
     },
     {
-      id: 3, cardNo: 2345678, cardType: "SI8", voltage: 0, batteryVoltage: null,
+      id: 3, cardNo: 2345678, cardType: "SI8", batteryVoltage: null,
       punchCount: 5, hasPunches: true, modified: "2026-04-25",
       runner: { id: 3, name: "C", clubName: "OK", clubId: 2, className: "D21", status: 0, isRentalCard: true, cardReturned: true },
     },
