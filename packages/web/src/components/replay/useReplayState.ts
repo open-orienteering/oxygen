@@ -2,7 +2,18 @@ import { useState, useRef, useCallback, useEffect, useMemo } from "react";
 import type { ReplayData } from "@oxygen/shared";
 
 export type StartMode = "real" | "mass" | "legs";
-export type FollowMode = "off" | "all";
+/**
+ * Camera follow modes:
+ *  - "off"   — manual control; the user pans/zooms with mouse + wheel.
+ *  - "all"   — camera centre tracks the bounding box of visible runners;
+ *              user keeps zoom control.
+ *  - "smart" — camera centre AND zoom track a bounding box that includes
+ *              every visible runner PLUS their next un-punched control,
+ *              so you can always see where they are and where they are
+ *              heading. Especially useful for knockout-sprint replays
+ *              where the relevant action is one short leg at a time.
+ */
+export type FollowMode = "off" | "all" | "smart";
 
 /** How often the React-bound `elapsedMs` (used by the timeline UI) is
  *  refreshed during playback. The internal time ref advances every animation

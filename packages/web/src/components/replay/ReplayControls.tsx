@@ -2,7 +2,7 @@
  * Playback controls bar for the replay viewer.
  */
 
-import type { ReplayState } from "./useReplayState";
+import type { FollowMode, ReplayState } from "./useReplayState";
 
 interface Props {
   state: ReplayState;
@@ -117,17 +117,38 @@ export function ReplayControls({ state }: Props) {
         </div>
       )}
 
-      {/* Follow */}
+      {/* Follow — tri-state: off → all → smart → off
+          - "all" pans the camera to the runners' bbox (manual zoom).
+          - "smart" additionally widens the bbox to include each runner's
+            next un-punched control and lerps the zoom to fit, so the
+            camera always frames the action plus its destination. */}
       <div className="flex items-center border-l border-slate-300 pl-2 flex-shrink-0">
         <button
-          onClick={() => state.setFollowMode(state.followMode === "off" ? "all" : "off")}
-          className={`px-2 py-0.5 text-xs rounded transition-colors ${
-            state.followMode === "all"
-              ? "bg-green-600 text-white"
-              : "text-slate-400 hover:bg-slate-700"
+          onClick={() => {
+            const next: FollowMode =
+              state.followMode === "off"
+                ? "all"
+                : state.followMode === "all"
+                  ? "smart"
+                  : "off";
+            state.setFollowMode(next);
+          }}
+          title={
+            state.followMode === "smart"
+              ? "Smart follow: zoom to runners + next control. Click to disable."
+              : state.followMode === "all"
+                ? "Follow all runners (pan only). Click to enable smart follow."
+                : "Manual control. Click to follow runners."
+          }
+          className={`px-2 py-0.5 text-xs rounded transition-colors cursor-pointer ${
+            state.followMode === "smart"
+              ? "bg-blue-600 text-white"
+              : state.followMode === "all"
+                ? "bg-green-600 text-white"
+                : "text-slate-500 hover:bg-slate-200"
           }`}
         >
-          Follow
+          {state.followMode === "smart" ? "Smart" : "Follow"}
         </button>
       </div>
 

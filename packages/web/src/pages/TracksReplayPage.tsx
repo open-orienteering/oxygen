@@ -7,7 +7,7 @@
  *   /:nameId/tracks/replay               — class picker (no pre-selection)
  */
 
-import { useRef, useCallback, useState, useMemo } from "react";
+import { useRef, useCallback, useState, useMemo, useEffect } from "react";
 import { useSearchParams, useNavigate, useParams } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { trpc } from "../lib/trpc";
@@ -36,13 +36,19 @@ export function TracksReplayPage() {
   const handleToggleFullscreen = useCallback(() => {
     if (!containerRef.current) return;
     if (!document.fullscreenElement) {
-      containerRef.current
-        .requestFullscreen()
-        .then(() => setIsFullscreen(true))
-        .catch(() => undefined);
+      containerRef.current.requestFullscreen().catch(() => undefined);
     } else {
-      document.exitFullscreen().then(() => setIsFullscreen(false));
+      document.exitFullscreen().catch(() => undefined);
     }
+  }, []);
+
+  // Sync `isFullscreen` from the actual fullscreen state, so pressing Esc
+  // (which exits fullscreen at the browser level without going through
+  // our handler) restores the header bar and its fullscreen toggle.
+  useEffect(() => {
+    const onFsChange = () => setIsFullscreen(!!document.fullscreenElement);
+    document.addEventListener("fullscreenchange", onFsChange);
+    return () => document.removeEventListener("fullscreenchange", onFsChange);
   }, []);
 
   const handleClassChange = useCallback(
