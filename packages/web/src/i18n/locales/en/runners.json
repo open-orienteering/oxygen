@@ -11,6 +11,7 @@
   "noRunners": "No runners found",
   "noRunnersMatch": "No runners match your search",
   "runnersCount": "{{count}} runners",
+  "activeAndWithdrawn": "{{active}} active · {{withdrawn}} withdrawn",
   "name": "Name",
   "club": "Club",
   "class": "Class",

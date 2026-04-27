@@ -3,11 +3,19 @@ import { TRPCError } from "@trpc/server";
 import { router, competitionProcedure } from "../trpc.js";
 import { incrementCounter, incrementCounterBatch, getZeroTime } from "../db.js";
 import { toRelative, toAbsolute } from "../timeConvert.js";
-import type { RunnerDetail, RunnerInfo } from "@oxygen/shared";
+import type {
+  RunnerDetail,
+  RunnerInfo,
+  RunnerStatusValue,
+} from "@oxygen/shared";
 import type { PrismaClient } from "@prisma/client";
 import { parsePunches, performReadout } from "./cardReadout.js";
 import { resolveCourseExpectedPositions } from "./course.js";
-import { matchPunchesToCourse, type ExpectedPosition } from "@oxygen/shared";
+import {
+  matchPunchesToCourse,
+  type ExpectedPosition,
+  isFinished,
+} from "@oxygen/shared";
 import { computeClassPlacements } from "../results.js";
 import { pushRegistrationToSheet } from "../sheetsBackup.js";
 
@@ -265,20 +273,20 @@ export const runnerRouter = router({
       const statusFilter = input?.statusFilter;
       const filtered = statusFilter
         ? runners.filter((r) => {
+          const status = r.Status as RunnerStatusValue;
           const hasPunches = punchCardNos.has(r.CardNo);
           // StartTime=1 is a MeOS sentinel for "drawn but no specific time" (interval=0)
           const hasStartedByTime = r.StartTime > 0 && (r.StartTime <= 1 || meosNow >= toAbsolute(r.StartTime, zeroTime));
-          const hasFinishTime = r.FinishTime > 0;
-          const hasResult = r.Status > 0;
+          const finished = isFinished(status, r.FinishTime);
 
           if (statusFilter === "not-started") {
-            return !hasResult && !hasFinishTime && !hasPunches && !hasStartedByTime;
+            return !finished && !hasPunches && !hasStartedByTime;
           }
           if (statusFilter === "in-forest") {
-            return !hasResult && !hasFinishTime && (hasPunches || hasStartedByTime);
+            return !finished && (hasPunches || hasStartedByTime);
           }
           if (statusFilter === "finished") {
-            return hasResult || hasFinishTime;
+            return finished;
           }
           // Specific numeric status
           const statusNum = parseInt(statusFilter, 10);

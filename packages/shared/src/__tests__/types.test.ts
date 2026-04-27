@@ -1,6 +1,12 @@
 import { describe, it, expect } from "vitest";
 import {
   RunnerStatus,
+  RACE_RESULT_STATUSES,
+  WITHDRAWN_STATUSES,
+  IN_FOREST_EXCLUDED_STATUSES,
+  isWithdrawn,
+  isParticipant,
+  isFinished,
   meosToSeconds,
   secondsToMeos,
   formatMeosTime,
@@ -167,6 +173,79 @@ describe("runnerStatusLabel", () => {
       const label = runnerStatusLabel(v as Parameters<typeof runnerStatusLabel>[0]);
       expect(label.length).toBeGreaterThan(0);
     }
+  });
+});
+
+// ─── status helpers (cancellation handling) ──────────────────
+
+describe("isWithdrawn", () => {
+  it("is true only for Cancel", () => {
+    expect(isWithdrawn(RunnerStatus.Cancel)).toBe(true);
+  });
+
+  it("is false for every other status", () => {
+    const others = Object.values(RunnerStatus).filter(
+      (v) => v !== RunnerStatus.Cancel,
+    ) as number[];
+    for (const s of others) {
+      expect(isWithdrawn(s as Parameters<typeof isWithdrawn>[0])).toBe(false);
+    }
+  });
+});
+
+describe("isParticipant", () => {
+  it("is true for every status except Cancel", () => {
+    for (const v of Object.values(RunnerStatus) as number[]) {
+      const expected = v !== RunnerStatus.Cancel;
+      expect(isParticipant(v as Parameters<typeof isParticipant>[0])).toBe(
+        expected,
+      );
+    }
+  });
+});
+
+describe("isFinished", () => {
+  it("is true for every race-result status (incl. DNS, NotCompeting)", () => {
+    for (const s of RACE_RESULT_STATUSES) {
+      expect(isFinished(s, 0)).toBe(true);
+    }
+  });
+
+  it("is true for Unknown when finishTime > 0", () => {
+    expect(isFinished(RunnerStatus.Unknown, 1)).toBe(true);
+    expect(isFinished(RunnerStatus.Unknown, 36000)).toBe(true);
+  });
+
+  it("is false for Unknown without a finish time", () => {
+    expect(isFinished(RunnerStatus.Unknown, 0)).toBe(false);
+  });
+
+  it("is false for Cancel even with a finish time", () => {
+    expect(isFinished(RunnerStatus.Cancel, 0)).toBe(false);
+    expect(isFinished(RunnerStatus.Cancel, 36000)).toBe(false);
+  });
+});
+
+describe("status constants", () => {
+  it("RACE_RESULT_STATUSES does not include Cancel or Unknown", () => {
+    expect(RACE_RESULT_STATUSES).not.toContain(RunnerStatus.Cancel);
+    expect(RACE_RESULT_STATUSES).not.toContain(RunnerStatus.Unknown);
+  });
+
+  it("WITHDRAWN_STATUSES contains exactly Cancel", () => {
+    expect([...WITHDRAWN_STATUSES]).toEqual([RunnerStatus.Cancel]);
+  });
+
+  it("IN_FOREST_EXCLUDED_STATUSES covers DNS, Cancel, NoTiming, NotCompeting, OutOfCompetition", () => {
+    expect([...IN_FOREST_EXCLUDED_STATUSES].sort((a, b) => a - b)).toEqual(
+      [
+        RunnerStatus.NoTiming,
+        RunnerStatus.OutOfCompetition,
+        RunnerStatus.DNS,
+        RunnerStatus.Cancel,
+        RunnerStatus.NotCompeting,
+      ].sort((a, b) => a - b),
+    );
   });
 });
 

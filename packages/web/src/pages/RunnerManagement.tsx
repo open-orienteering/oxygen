@@ -6,6 +6,7 @@ import {
   formatRunningTime,
   STATUS_FILTER_OPTIONS,
   RunnerStatus,
+  isWithdrawn,
   type RunnerStatusValue,
   type RunnerInfo,
 } from "@oxygen/shared";
@@ -232,7 +233,16 @@ export function RunnerManagement() {
 
       <div className="flex items-center justify-between mb-3">
         <span className="text-sm text-slate-500">
-          {t("runnersCount", { count: filteredRunners.length })}
+          {(() => {
+            const withdrawn = filteredRunners.filter((r) =>
+              isWithdrawn(r.status),
+            ).length;
+            const active = filteredRunners.length - withdrawn;
+            if (withdrawn > 0) {
+              return t("activeAndWithdrawn", { active, withdrawn });
+            }
+            return t("runnersCount", { count: filteredRunners.length });
+          })()}
         </span>
       </div>
 

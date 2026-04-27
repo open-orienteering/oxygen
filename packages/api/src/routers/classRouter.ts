@@ -3,8 +3,11 @@ import { router, competitionProcedure } from "../trpc.js";
 import {
   parseMultiCourse,
   encodeMultiCourse,
+  WITHDRAWN_STATUSES,
+  isWithdrawn,
   type ClassSummary,
   type ClassManageDetail,
+  type RunnerStatusValue,
 } from "@oxygen/shared";
 
 export const classRouter = router({
@@ -28,8 +31,10 @@ export const classRouter = router({
       });
       const courseMap = new Map(courses.map((c) => [c.Id, c]));
 
+      // Only count participating runners — withdrawn entries (Cancel)
+      // are not part of the class size.
       const runners = await client.oRunner.findMany({
-        where: { Removed: false },
+        where: { Removed: false, Status: { notIn: [...WITHDRAWN_STATUSES] } },
         select: { Class: true },
       });
       const runnerCountByClass = new Map<number, number>();
@@ -122,12 +127,17 @@ export const classRouter = router({
         ? primaryCourse.Controls.split(";").filter(Boolean).length
         : 0;
 
-      // Get runners in this class (limited fields)
+      // Get runners in this class (limited fields). Withdrawn entries
+      // are returned so the management UI can still show them, but the
+      // headline runnerCount only reflects participants.
       const runners = await client.oRunner.findMany({
         where: { Removed: false, Class: cls.Id },
         select: { Id: true, Name: true, Status: true },
         orderBy: { StartNo: "asc" },
       });
+      const participantCount = runners.filter(
+        (r) => !isWithdrawn(r.Status as RunnerStatusValue),
+      ).length;
 
       return {
         id: cls.Id,
@@ -136,7 +146,7 @@ export const classRouter = router({
         courseName: primaryCourse?.Name ?? "",
         courseIds,
         courseNames,
-        runnerCount: runners.length,
+        runnerCount: participantCount,
         sortIndex: cls.SortIndex,
         sex: cls.Sex,
         lowAge: cls.LowAge,

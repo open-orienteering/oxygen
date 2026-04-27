@@ -2,6 +2,7 @@ import { z } from "zod";
 import { router, competitionProcedure } from "../trpc.js";
 import {ensureLogoTable, getMainDbConnection, ensureClubDbTable} from "../db.js";
 import type { ClubSummary, ClubDetail } from "@oxygen/shared";
+import { WITHDRAWN_STATUSES } from "@oxygen/shared";
 
 export const clubRouter = router({
   /**
@@ -24,9 +25,10 @@ export const clubRouter = router({
         orderBy: { Name: "asc" },
       });
 
-      // Count runners per club
+      // Count participating runners per club (Cancel excluded — a
+      // withdrawn entry doesn't keep the club on the list).
       const runners = await client.oRunner.findMany({
-        where: { Removed: false },
+        where: { Removed: false, Status: { notIn: [...WITHDRAWN_STATUSES] } },
         select: { Club: true },
       });
 

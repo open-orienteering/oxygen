@@ -7,9 +7,12 @@ import { ocadBoundsToWgs84, computeMapNorthOffset, mapMmToWgs84, type OcadCrs } 
 import {
   CourseSummary,
   CourseDetail,
-  RunnerStatus,
   ControlStatus,
+  WITHDRAWN_STATUSES,
+  IN_FOREST_EXCLUDED_STATUSES,
+  isFinished,
   type ExpectedPosition,
+  type RunnerStatusValue,
 } from "@oxygen/shared";
 import { parseIOFCourseData, parseIOFCourseDataWithGeometry, type ParsedCourseData, type GeoJSONFeatureCollection, type ParsedCourse } from "../iof-course-parser.js";
 import { parseOCDCourseData } from "../ocd-course-parser.js";
@@ -590,9 +593,9 @@ export const courseRouter = router({
         select: { Id: true, Name: true },
       });
 
-      // Count runners per class
+      // Count participating runners per class (Cancel excluded).
       const runners = await client.oRunner.findMany({
-        where: { Removed: false },
+        where: { Removed: false, Status: { notIn: [...WITHDRAWN_STATUSES] } },
         select: { Class: true },
       });
       const runnersByClass = new Map<number, number>();
@@ -1386,15 +1389,7 @@ export const courseRouter = router({
       const runners = await client.oRunner.findMany({
         where: {
           Removed: false,
-          Status: {
-            notIn: [
-              RunnerStatus.NoTiming,
-              RunnerStatus.DNS,
-              RunnerStatus.Cancel,
-              RunnerStatus.NotCompeting,
-              RunnerStatus.OutOfCompetition,
-            ],
-          },
+          Status: { notIn: [...IN_FOREST_EXCLUDED_STATUSES] },
         },
         select: {
           Id: true,
@@ -1470,8 +1465,8 @@ export const courseRouter = router({
         runnersPerCourse.set(courseId, (runnersPerCourse.get(courseId) ?? 0) + 1);
         relevantRunnerIds.add(r.Id);
 
-        const isFinished = r.Status > 0 || r.FinishTime > 0;
-        if (!isFinished) {
+        const finished = isFinished(r.Status as RunnerStatusValue, r.FinishTime);
+        if (!finished) {
           inForestRunnersPerCourse.set(courseId, (inForestRunnersPerCourse.get(courseId) ?? 0) + 1);
         }
 

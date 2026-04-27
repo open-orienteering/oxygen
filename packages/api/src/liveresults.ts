@@ -17,6 +17,7 @@ import mysql from "mysql2/promise";
 import { getSetting, setSetting, getCompetitionClient, getMainDbConnection } from "./db.js";
 // Note: liveresults.ts calls getCompetitionClient(nameId) directly
 import { toAbsolute } from "./timeConvert.js";
+import { isWithdrawn, type RunnerStatusValue } from "@oxygen/shared";
 
 // ─── Constants ────────────────────────────────────────────────
 
@@ -298,23 +299,30 @@ export async function syncAll(tavid: number, nameId: string): Promise<SyncStats>
         });
         const clubNameById = new Map(clubs.map((c) => [c.Id, c.Name]));
 
-        // Remove previously-synced runners that no longer have a result
-        const noResultIds = runners.filter((r) => r.Status === 0).map((r) => r.Id);
-        if (noResultIds.length > 0) {
-            const placeholders = noResultIds.map(() => "?").join(",");
+        // Remove previously-synced rows for runners who no longer belong on
+        // LiveResults: that's runners with no result yet (Status=0) AND
+        // withdrawn entries (Cancel) — withdrawn runners must be scrubbed
+        // entirely, not just collapsed to a DNS row. mapStatus still
+        // collapses any stragglers to DNS as a fallback.
+        const idsToScrub = runners
+            .filter((r) => r.Status === 0 || isWithdrawn(r.Status as RunnerStatusValue))
+            .map((r) => r.Id);
+        if (idsToScrub.length > 0) {
+            const placeholders = idsToScrub.map(() => "?").join(",");
             await conn.execute(
                 `DELETE FROM results WHERE tavid = ? AND dbid IN (${placeholders})`,
-                [tavid, ...noResultIds],
+                [tavid, ...idsToScrub],
             );
             await conn.execute(
                 `DELETE FROM runners WHERE tavid = ? AND dbid IN (${placeholders})`,
-                [tavid, ...noResultIds],
+                [tavid, ...idsToScrub],
             );
         }
 
         for (const r of runners) {
-            // Skip runners with unknown status (not started / no result)
-            if (r.Status === 0) continue;
+            // Skip runners with unknown status (not started / no result) and
+            // withdrawn entries (Cancel) — both were removed above.
+            if (r.Status === 0 || isWithdrawn(r.Status as RunnerStatusValue)) continue;
 
             const className = classById.get(r.Class)?.Name ?? "";
             const clubName = clubNameById.get(r.Club) ?? "";

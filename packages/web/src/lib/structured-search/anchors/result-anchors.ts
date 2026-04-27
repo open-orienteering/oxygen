@@ -1,4 +1,10 @@
-import { RunnerStatus, type ResultEntry, type RunnerStatusValue } from "@oxygen/shared";
+import {
+  RunnerStatus,
+  isFinished,
+  isWithdrawn,
+  type ResultEntry,
+  type RunnerStatusValue,
+} from "@oxygen/shared";
 import type { AnchorDef, FilterOperator } from "../types";
 
 const STATUS_ALIASES: Record<string, RunnerStatusValue[]> = {
@@ -9,6 +15,7 @@ const STATUS_ALIASES: Record<string, RunnerStatusValue[]> = {
   dq: [RunnerStatus.DQ],
   overtime: [RunnerStatus.OverMaxTime],
   cancel: [RunnerStatus.Cancel],
+  oc: [RunnerStatus.OutOfCompetition],
   nc: [RunnerStatus.NotCompeting],
 };
 
@@ -73,16 +80,20 @@ function matchTime(actual: number, op: FilterOperator, value: string): boolean {
 
 function matchStatus(entry: ResultEntry, op: FilterOperator, value: string): boolean {
   const values = op === "in" ? value.split(",").map((v) => v.trim().toLowerCase()) : [value.toLowerCase()];
+  const finished = isFinished(entry.status, entry.finishTime);
 
   return values.some((v) => {
     if (v === "not-started") {
-      return !(entry.status > 0 || entry.finishTime > 0 || entry.hasPunches || entry.hasStarted);
+      return !finished && !entry.hasPunches && !entry.hasStarted;
     }
     if (v === "in-forest" || v === "started") {
-      return !(entry.status > 0 || entry.finishTime > 0) && (!!entry.hasPunches || !!entry.hasStarted);
+      return !finished && (!!entry.hasPunches || !!entry.hasStarted);
     }
     if (v === "finished") {
-      return entry.status > 0 || entry.finishTime > 0;
+      return finished;
+    }
+    if (v === "withdrawn" || v === "cancelled") {
+      return isWithdrawn(entry.status);
     }
 
     const alias = STATUS_ALIASES[v];
@@ -179,6 +190,10 @@ export function createResultAnchors(
         { key: "dnf", label: "DNF — Did Not Finish" },
         { key: "dns", label: "DNS — Did Not Start" },
         { key: "dq", label: "DQ — Disqualified" },
+        { key: "overtime", label: "OT — Over Max Time" },
+        { key: "cancel", label: "Cancelled (withdrawn)" },
+        { key: "oc", label: "OC — Out of Competition" },
+        { key: "nc", label: "NC — Not Competing" },
         { key: "not-started", label: "Not started" },
         { key: "in-forest", label: "In forest" },
         { key: "finished", label: "Finished" },
