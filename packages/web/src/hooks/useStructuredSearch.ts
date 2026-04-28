@@ -1,12 +1,25 @@
 import { useCallback, useMemo, useRef } from "react";
 import { useSearchParams } from "react-router-dom";
-import type { AnchorDef, FilterToken } from "../lib/structured-search/types";
-import { parseQuery, serializeTokens } from "../lib/structured-search/parser";
+import type {
+  AnchorDef,
+  Atom,
+  FilterExpression,
+  FilterNode,
+} from "../lib/structured-search/types";
+import { isOrGroup } from "../lib/structured-search/types";
+import {
+  parseExpression,
+  serializeExpression,
+} from "../lib/structured-search/parser";
 import { applyFilters } from "../lib/structured-search/filter";
 
 /**
- * Hook that manages structured search state synced to URL ?q= param.
- * Returns tokens, setters, and a filterItems function.
+ * Hook that manages structured search state synced to the URL `?q=` param.
+ *
+ * Returns the parsed expression as a flat list of root nodes (`tokens`)
+ * along with helpers. OR groups appear as nodes alongside atoms — page
+ * code that only inspects atoms can use the type guards in
+ * `lib/structured-search/types`.
  */
 export function useStructuredSearch<T>(
   anchors: AnchorDef<T>[],
@@ -16,25 +29,26 @@ export function useStructuredSearch<T>(
   const anchorsRef = useRef(anchors);
   anchorsRef.current = anchors;
 
-  // Parse tokens from URL
-  const tokens = useMemo(() => {
+  const expression = useMemo<FilterExpression>(() => {
     const q = searchParams.get("q") ?? "";
-    return parseQuery(q, anchors as AnchorDef<never>[]);
+    return parseExpression(q, anchors as AnchorDef<never>[]);
   }, [searchParams.get("q"), anchors]);
 
-  // Update URL when tokens change
-  const setTokens = useCallback(
-    (newTokens: FilterToken[]) => {
+  // Flat list of root nodes — what the bar and pages render directly.
+  const tokens = expression.roots;
+
+  const setExpression = useCallback(
+    (next: FilterExpression) => {
       setSearchParams(
         (prev) => {
           const p = new URLSearchParams(prev);
-          const serialized = serializeTokens(newTokens);
+          const serialized = serializeExpression(next);
           if (serialized) {
             p.set("q", serialized);
           } else {
             p.delete("q");
           }
-          // Clean up old params if migrating
+          // Clean up legacy params, if any
           p.delete("search");
           p.delete("class");
           p.delete("club");
@@ -47,49 +61,73 @@ export function useStructuredSearch<T>(
     [setSearchParams],
   );
 
-  // Add or replace a token for a specific anchor
+  const setTokens = useCallback(
+    (newTokens: FilterNode[]) => {
+      setExpression({ roots: newTokens });
+    },
+    [setExpression],
+  );
+
+  /**
+   * Set a single root-level atom for a given anchor key. Replaces any
+   * existing root atom (or root OR group containing only that anchor)
+   * for the same key. Does not touch OR groups that mix multiple
+   * anchors — those keep their existing semantics.
+   */
   const setAnchorValue = useCallback(
     (anchorKey: string, value: string | undefined) => {
       const currentQ = searchParams.get("q") ?? "";
-      const currentTokens = parseQuery(currentQ, anchorsRef.current as AnchorDef<never>[]);
+      const currentExpr = parseExpression(
+        currentQ,
+        anchorsRef.current as AnchorDef<never>[],
+      );
 
-      // Remove existing tokens for this anchor
-      const filtered = currentTokens.filter((t) => t.anchor !== anchorKey);
+      const filtered: FilterNode[] = currentExpr.roots.filter((node) => {
+        if (isOrGroup(node)) return true;
+        return node.anchor !== anchorKey;
+      });
 
       if (value) {
         const anchor = anchorsRef.current.find((a) => a.key === anchorKey);
         if (anchor) {
-          filtered.push({
+          const atom: Atom = {
+            kind: "atom",
             id: `sa_${Date.now()}`,
             anchor: anchorKey,
             operator: anchor.defaultOperator,
             value,
-          });
+          };
+          filtered.push(atom);
         }
       }
 
-      setTokens(filtered);
+      setExpression({ roots: filtered });
     },
-    [searchParams, setTokens],
+    [searchParams, setExpression],
   );
 
-  // Get the current value for a specific anchor (first match)
+  /** Get the first root-level atom value for the given anchor key, if any. */
   const getAnchorValue = useCallback(
     (anchorKey: string): string | undefined => {
-      return tokens.find((t) => t.anchor === anchorKey)?.value;
+      for (const node of expression.roots) {
+        if (isOrGroup(node)) continue;
+        if (node.anchor === anchorKey) return node.value;
+      }
+      return undefined;
     },
-    [tokens],
+    [expression],
   );
 
-  // Filter items using current tokens
   const filterItems = useCallback(
     (items: T[]): T[] => {
-      return applyFilters(items, tokens, anchorsRef.current, freeTextFields);
+      return applyFilters(items, expression, anchorsRef.current, freeTextFields);
     },
-    [tokens, freeTextFields],
+    [expression, freeTextFields],
   );
 
   return {
+    expression,
+    setExpression,
     tokens,
     setTokens,
     setAnchorValue,

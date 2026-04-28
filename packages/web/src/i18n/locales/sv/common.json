@@ -86,6 +86,14 @@
 
   "structuredSearchHintTypeToSearch": "Skriv för att söka...",
   "structuredSearchHintNumber": "Ange ett nummer — t.ex. >25 eller <60:00",
+  "structuredSearchPlaceholder": "Sök eller filtrera — | för ELLER, ! för INTE",
+  "structuredSearchPillOr": "eller",
+  "structuredSearchPillNot": "inte",
+  "structuredSearchAddOrBranch": "Lägg till ett ELLER-alternativ",
+  "structuredSearchOrGroupTitle": "Något av dessa (ELLER)",
+  "structuredSearchOrGroupNegatedTitle": "Inget av dessa (INTE (ELLER))",
+  "structuredSearchPendingNot": "Nästa filter du lägger till blir negerat",
+  "structuredSearchOrInProgress": "Nästa filter du lägger till kombineras med ELLER",
   "searchOrFilter": "Sök eller filtrera...",
 
   "timeAgo_justNow": "just nu",

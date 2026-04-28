@@ -86,6 +86,14 @@
 
   "structuredSearchHintTypeToSearch": "Type to search...",
   "structuredSearchHintNumber": "Enter a number — e.g. >25 or <60:00",
+  "structuredSearchPlaceholder": "Search or filter — | for OR, ! for NOT",
+  "structuredSearchPillOr": "or",
+  "structuredSearchPillNot": "not",
+  "structuredSearchAddOrBranch": "Add another OR option",
+  "structuredSearchOrGroupTitle": "Any of these (OR)",
+  "structuredSearchOrGroupNegatedTitle": "None of these (NOT (OR))",
+  "structuredSearchPendingNot": "The next filter you add will be negated",
+  "structuredSearchOrInProgress": "The next filter you add will be combined with OR",
   "searchOrFilter": "Search or filter...",
 
   "timeAgo_justNow": "just now",
