@@ -339,6 +339,18 @@ export function KioskPage() {
     [],
   );
 
+  // Toggle the admin's "print registration receipt" flag from the kiosk so
+  // a runner can opt in (or back out) before submission.
+  const handleRequestRegistrationReceipt = useCallback(
+    (printReceipt: boolean) => {
+      channelRef.current?.send({
+        type: "kiosk-request-registration-receipt",
+        printReceipt,
+      });
+    },
+    [],
+  );
+
   // ── Fullscreen toggle ─────────────────────────────────────
 
   const toggleFullscreen = () => {
@@ -451,7 +463,11 @@ export function KioskPage() {
               <PreStartScreen card={screen.card} requireClearCheck={settings.requireClearCheck} />
             )}
             {screen.mode === "registration-waiting" && (
-              <RegistrationWaitingScreen card={screen.card} form={screen.form} />
+              <RegistrationWaitingScreen
+                card={screen.card}
+                form={screen.form}
+                onRequestReceipt={handleRequestRegistrationReceipt}
+              />
             )}
             {screen.mode === "registration-complete" && (
               <RegistrationCompleteScreen runner={screen.runner} />
@@ -1245,11 +1261,18 @@ function PreStartScreen({
 function RegistrationWaitingScreen({
   card,
   form,
+  onRequestReceipt,
 }: {
   card: KioskCardReadoutMessage["card"];
   form?: RegistrationFormState;
+  onRequestReceipt: (printReceipt: boolean) => void;
 }) {
   const { t } = useTranslation("kiosk");
+  // The admin tab only includes `printReceipt` in form-state when the
+  // organizer has enabled registration-receipt printing. Treat its presence
+  // as the signal that the receipt option is available to runners at all.
+  const receiptOptionAvailable = form?.printReceipt !== undefined;
+  const receiptRequested = form?.printReceipt === true;
   return (
     <div className="text-center max-w-lg mx-auto">
       <div className="mb-8">
@@ -1294,6 +1317,33 @@ function RegistrationWaitingScreen({
           <InfoRow label="🏷️" value={t("rentalCardFee", { fee: form.cardFee })} />
         )}
       </div>
+
+      {/* Receipt opt-in — only shown when the organizer has enabled
+          registration-receipt printing for this competition. */}
+      {receiptOptionAvailable && (
+        <div className="mt-4 flex items-center justify-between gap-3 bg-slate-800 rounded-2xl px-5 py-3">
+          <div className="text-left">
+            <div className="text-sm uppercase tracking-wider text-slate-400">
+              {t("receiptLabel")}
+            </div>
+            <div className="text-base font-medium text-white">
+              {receiptRequested ? t("receiptWillBePrinted") : t("receiptDeclined")}
+            </div>
+          </div>
+          <button
+            type="button"
+            data-testid="kiosk-receipt-request"
+            onClick={() => onRequestReceipt(!receiptRequested)}
+            className={`px-4 py-2 rounded-lg text-sm font-semibold transition-colors ${
+              receiptRequested
+                ? "bg-slate-700 hover:bg-slate-600 text-slate-200"
+                : "bg-emerald-500 hover:bg-emerald-400 text-slate-900"
+            }`}
+          >
+            {receiptRequested ? t("declineReceipt") : t("requestReceipt")}
+          </button>
+        </div>
+      )}
 
       {/* Swish QR code — only show once amount is known */}
       {form?.paymentMode === "swish" && form.swishNumber && form.fee != null && form.fee > 0 && (
