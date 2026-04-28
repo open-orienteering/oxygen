@@ -54,6 +54,7 @@ export function RegistrationDialog() {
   const [phone, setPhone] = useState("");
   const [paymentMode, setPaymentMode] = useState<"billed" | "on-site" | "card" | "swish" | "cash" | "">("");
   const [isRentalCard, setIsRentalCard] = useState(false);
+  const [printReceipt, setPrintReceipt] = useState(false);
   const [error, setError] = useState("");
   const [successMsg, setSuccessMsg] = useState("");
 
@@ -181,6 +182,7 @@ export function RegistrationDialog() {
     setError("");
     setSuccessMsg("");
     setIsRentalCard(false);
+    setPrintReceipt(false);
     setPaymentMode(regConfig.data?.paymentMethods.includes("billed") ? "billed" : regConfig.data?.paymentMethods[0] as typeof paymentMode || "");
     setShowSuggestions(false);
     setDebouncedNameQuery("");
@@ -198,7 +200,18 @@ export function RegistrationDialog() {
     }
     const ch = getKioskChannel();
     kioskChannelRef.current = ch;
-    return () => { kioskChannelRef.current = null; };
+    // The runner can tap a button on the kiosk to ask for a receipt. The
+    // admin form is the source of truth for the toggle, so we just mirror
+    // the requested value here.
+    const unsub = ch?.subscribe((msg) => {
+      if (msg.type === "kiosk-request-registration-receipt") {
+        setPrintReceipt(msg.printReceipt);
+      }
+    });
+    return () => {
+      unsub?.();
+      kioskChannelRef.current = null;
+    };
   }, [isOpen, getKioskChannel]);
 
   // Broadcast form state to kiosk
@@ -223,10 +236,14 @@ export function RegistrationDialog() {
       competitionName: classes.data?.competition?.name || undefined,
       isRentalCard: isRentalCard || undefined,
       cardFee: rentalFee > 0 ? rentalFee : undefined,
+      // Only surface the toggle to the kiosk when receipt printing is
+      // enabled at the event level; otherwise leave it `undefined` so the
+      // kiosk hides the receipt panel completely.
+      printReceipt: regConfig.data?.printRegistrationReceipt ? printReceipt : undefined,
     };
     const ready = !!name.trim() && effectiveClassId > 0;
     return { form, ready };
-  }, [name, selectedClubName, selectedClassName, cardNo, startTime, sex, birthYear, phone, paymentMode, isRentalCard, effectiveClassId, classes.data, regConfig.data, cardFeeQuery.data, selectedClub?.extId]);
+  }, [name, selectedClubName, selectedClassName, cardNo, startTime, sex, birthYear, phone, paymentMode, isRentalCard, printReceipt, effectiveClassId, classes.data, regConfig.data, cardFeeQuery.data, selectedClub?.extId]);
 
   // Send on every form change
   useEffect(() => {
@@ -639,8 +656,10 @@ export function RegistrationDialog() {
         });
       }
 
-      // Print receipt if configured
-      if (printer.connected && regConfig.data?.printRegistrationReceipt) {
+      // Print receipt only when the event has receipt printing enabled,
+      // the operator (or runner via the kiosk) opted in for this individual
+      // registration, and a printer is connected.
+      if (printer.connected && regConfig.data?.printRegistrationReceipt && printReceipt) {
         const paymentLabels: Record<string, string> = { billed: t("invoice"), "on-site": t("payOnSite"), card: t("card"), swish: t("swish"), cash: t("cash") };
         const logoRaster = eventorId
           ? await fetchLogoRaster(getClubLogoUrl(eventorId), 250).catch(() => null)
@@ -969,23 +988,76 @@ export function RegistrationDialog() {
               </div>
             </div>
 
-            {/* Rental card toggle */}
-            <div className="flex items-center gap-3 px-3 py-2 rounded-lg border border-slate-200 bg-slate-50">
-              <label className="flex items-center gap-2 flex-1 cursor-pointer select-none">
-                <input
-                  type="checkbox"
-                  checked={isRentalCard}
-                  onChange={(e) => setIsRentalCard(e.target.checked)}
-                  data-testid="rental-card-checkbox"
-                  className="rounded border-slate-300 text-orange-500 focus:ring-orange-400 cursor-pointer"
-                />
-                <span className="text-sm font-medium text-slate-700">{t("rentalCard")}</span>
-              </label>
-              {isRentalCard && (cardFeeQuery.data?.cardFee ?? 0) > 0 && (
-                <span className="text-xs font-medium text-orange-600 bg-orange-50 border border-orange-200 rounded px-2 py-0.5">
-                  +{cardFeeQuery.data!.cardFee} kr
-                </span>
-              )}
+            {/* Rental card + Print receipt toggles */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+              <div className="flex items-center gap-3 px-3 py-2 rounded-lg border border-slate-200 bg-slate-50">
+                <label className="flex items-center gap-2 flex-1 cursor-pointer select-none">
+                  <input
+                    type="checkbox"
+                    checked={isRentalCard}
+                    onChange={(e) => setIsRentalCard(e.target.checked)}
+                    data-testid="rental-card-checkbox"
+                    className="rounded border-slate-300 text-orange-500 focus:ring-orange-400 cursor-pointer"
+                  />
+                  <span className="text-sm font-medium text-slate-700">{t("rentalCard")}</span>
+                </label>
+                {isRentalCard && (cardFeeQuery.data?.cardFee ?? 0) > 0 && (
+                  <span className="text-xs font-medium text-orange-600 bg-orange-50 border border-orange-200 rounded px-2 py-0.5">
+                    +{cardFeeQuery.data!.cardFee} kr
+                  </span>
+                )}
+              </div>
+              {(() => {
+                const printingEnabled = !!regConfig.data?.printRegistrationReceipt;
+                const printerOffline = printingEnabled && !printer.connected;
+                return (
+                  <div
+                    className={`flex items-center gap-3 px-3 py-2 rounded-lg border border-slate-200 ${
+                      printingEnabled ? "bg-slate-50" : "bg-slate-100/60"
+                    }`}
+                  >
+                    <label
+                      className={`flex items-center gap-2 flex-1 select-none ${
+                        printingEnabled ? "cursor-pointer" : "cursor-not-allowed"
+                      }`}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={printingEnabled && printReceipt}
+                        disabled={!printingEnabled}
+                        onChange={(e) => setPrintReceipt(e.target.checked)}
+                        data-testid="print-receipt-checkbox"
+                        className={`rounded border-slate-300 text-blue-500 focus:ring-blue-400 ${
+                          printingEnabled ? "cursor-pointer" : "cursor-not-allowed opacity-50"
+                        }`}
+                      />
+                      <span
+                        className={`text-sm font-medium ${
+                          printingEnabled ? "text-slate-700" : "text-slate-400"
+                        }`}
+                      >
+                        {t("printReceipt")}
+                      </span>
+                    </label>
+                    {!printingEnabled && (
+                      <span
+                        className="text-[10px] font-medium text-slate-500 bg-slate-200/70 border border-slate-200 rounded px-2 py-0.5"
+                        title={t("printingDisabledHint")}
+                      >
+                        {t("printingDisabled")}
+                      </span>
+                    )}
+                    {printerOffline && (
+                      <span
+                        className="text-[10px] font-medium text-slate-500 bg-slate-100 border border-slate-200 rounded px-2 py-0.5"
+                        title={t("printerNotConnected")}
+                      >
+                        {t("printerOffline")}
+                      </span>
+                    )}
+                  </div>
+                );
+              })()}
             </div>
 
             {/* Birth year / Sex row */}

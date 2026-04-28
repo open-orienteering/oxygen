@@ -54,6 +54,8 @@ export interface RegistrationFormState {
   competitionName?: string;
   isRentalCard?: boolean;
   cardFee?: number;
+  /** Whether admin currently intends to print a registration receipt on submit. */
+  printReceipt?: boolean;
 }
 
 export interface KioskRegistrationStateMessage {
@@ -99,6 +101,16 @@ export interface KioskPrintReceiptMessage {
   runnerId: number;
 }
 
+/**
+ * Sent by the kiosk tab while a registration is in progress so the runner can
+ * request a printed receipt. The admin tab toggles its "print receipt" flag
+ * accordingly and includes it in the next form-state heartbeat.
+ */
+export interface KioskRequestRegistrationReceiptMessage {
+  type: "kiosk-request-registration-receipt";
+  printReceipt: boolean;
+}
+
 export type KioskMessage =
   | KioskCardReadoutMessage
   | KioskCardReadingMessage
@@ -107,7 +119,8 @@ export type KioskMessage =
   | KioskResetMessage
   | KioskCardRemovedMessage
   | KioskPingMessage
-  | KioskPrintReceiptMessage;
+  | KioskPrintReceiptMessage
+  | KioskRequestRegistrationReceiptMessage;
 
 // ─── Channel wrapper ────────────────────────────────────────
 
