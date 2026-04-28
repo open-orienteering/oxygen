@@ -1,4 +1,4 @@
-import type { FilterToken, AnchorDef } from "../../lib/structured-search/types";
+import type { Atom, AnchorDef } from "../../lib/structured-search/types";
 
 /** Tailwind color classes for each anchor color token */
 const COLOR_MAP: Record<string, { bg: string; text: string; border: string; close: string }> = {
@@ -34,23 +34,50 @@ function operatorSymbol(op: string): string {
 }
 
 interface FilterPillProps {
-  token: FilterToken;
+  token: Atom;
   anchor?: AnchorDef;
   onRemove: (id: string) => void;
   onClick?: (id: string) => void;
+  /** When provided, clicking the leading `!` chip toggles negation in-place. */
+  onToggleNegation?: (id: string) => void;
 }
 
-export function FilterPill({ token, anchor, onRemove, onClick }: FilterPillProps) {
+export function FilterPill({ token, anchor, onRemove, onClick, onToggleNegation }: FilterPillProps) {
   const colorKey = token.anchor ? (anchor?.color ?? "slate") : "slate";
   const colors = COLOR_MAP[colorKey] ?? DEFAULT_COLORS;
   const isFreeText = !token.anchor;
+  const negated = !!token.negated;
+
+  // Visual decoration for negated pills: a red ring + faded body text.
+  const wrapperExtra = negated
+    ? "ring-2 ring-rose-300/70 line-through decoration-rose-400/70 decoration-[1px]"
+    : "";
+
+  const titleSuffix = isFreeText
+    ? token.value
+    : `${token.anchor}${operatorSymbol(token.operator)}${token.value}`;
 
   return (
     <span
-      className={`inline-flex items-center gap-0.5 px-2 py-0.5 rounded-md text-xs font-medium border ${colors.bg} ${colors.text} ${colors.border} max-w-[200px] cursor-pointer`}
+      className={`inline-flex items-center gap-0.5 px-2 py-0.5 rounded-md text-xs font-medium border ${colors.bg} ${colors.text} ${colors.border} max-w-[200px] cursor-pointer ${wrapperExtra}`}
       onClick={() => onClick?.(token.id)}
-      title={isFreeText ? token.value : `${token.anchor}${operatorSymbol(token.operator)}${token.value}`}
+      title={negated ? `NOT ${titleSuffix}` : titleSuffix}
     >
+      {negated && (
+        <button
+          type="button"
+          className="shrink-0 px-1 -ml-1 mr-0.5 rounded text-rose-700 bg-rose-100/80 hover:bg-rose-200 font-bold no-underline"
+          style={{ textDecoration: "none" }}
+          onClick={(e) => {
+            e.stopPropagation();
+            onToggleNegation?.(token.id);
+          }}
+          aria-label="Toggle negation"
+          title="Click to remove NOT"
+        >
+          !
+        </button>
+      )}
       {isFreeText ? (
         <>
           <svg className="w-3 h-3 shrink-0 opacity-60" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -67,7 +94,8 @@ export function FilterPill({ token, anchor, onRemove, onClick }: FilterPillProps
       )}
       <button
         type="button"
-        className={`ml-0.5 shrink-0 rounded-full p-0.5 ${colors.close} transition-colors`}
+        className={`ml-0.5 shrink-0 rounded-full p-0.5 ${colors.close} transition-colors no-underline`}
+        style={{ textDecoration: "none" }}
         onClick={(e) => {
           e.stopPropagation();
           onRemove(token.id);

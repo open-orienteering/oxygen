@@ -1,15 +1,26 @@
 import { useState, useRef, useCallback, useMemo, useEffect } from "react";
 import { useTranslation } from "react-i18next";
-import type { FilterToken, AnchorDef } from "../../lib/structured-search/types";
+import type {
+  AnchorDef,
+  Atom,
+  FilterNode,
+} from "../../lib/structured-search/types";
+import { isOrGroup } from "../../lib/structured-search/types";
+import {
+  appendAtom,
+  popLastEntry,
+  removeChildFromGroup as removeChildFromGroupOp,
+} from "../../lib/structured-search/edit-ops";
 import { FilterPill } from "./FilterPill";
+import { OrGroupPill } from "./OrGroupPill";
 import {
   SuggestionDropdown,
   type Suggestion,
 } from "./SuggestionDropdown";
 
 interface StructuredSearchBarProps {
-  tokens: FilterToken[];
-  onTokensChange: (tokens: FilterToken[]) => void;
+  tokens: FilterNode[];
+  onTokensChange: (tokens: FilterNode[]) => void;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   anchors: AnchorDef<any>[];
   placeholder?: string;
@@ -17,18 +28,18 @@ interface StructuredSearchBarProps {
 }
 
 let nextTokenId = 0;
-function newTokenId(): string {
-  return `st_${++nextTokenId}`;
+function newTokenId(prefix = "st"): string {
+  return `${prefix}_${++nextTokenId}`;
 }
 
 /**
- * Parse a raw input segment into a FilterToken.
+ * Parse a raw input segment into an Atom.
  * Handles anchor:value, operator detection, etc.
  */
-function parseInputToToken(
+function parseInputToAtom(
   raw: string,
   anchorMap: Map<string, AnchorDef>,
-): FilterToken | null {
+): Atom | null {
   const trimmed = raw.trim();
   if (!trimmed) return null;
 
@@ -38,12 +49,10 @@ function parseInputToToken(
     const anchor = anchorMap.get(key);
     if (anchor) {
       let value = trimmed.slice(colonIdx + 1);
-      // Strip surrounding quotes
       if (value.startsWith('"') && value.endsWith('"'))
         value = value.slice(1, -1);
       if (!value) return null;
 
-      // Detect operator from value prefix
       let operator = anchor.defaultOperator;
       if (value.startsWith(">=")) {
         operator = "gte";
@@ -64,15 +73,21 @@ function parseInputToToken(
       }
 
       if (!value) return null;
-      return { id: newTokenId(), anchor: anchor.key, operator, value };
+      return {
+        kind: "atom",
+        id: newTokenId(),
+        anchor: anchor.key,
+        operator,
+        value,
+      };
     }
   }
 
-  // Free text
   let value = trimmed;
   if (value.startsWith('"') && value.endsWith('"'))
     value = value.slice(1, -1);
   return {
+    kind: "atom",
     id: newTokenId(),
     anchor: "",
     operator: "contains",
@@ -80,11 +95,25 @@ function parseInputToToken(
   };
 }
 
+/** Format an atom back into editable text (with operator/quote prefixes). */
+function atomToText(atom: Atom): string {
+  if (!atom.anchor) {
+    return atom.value.includes(" ") ? `"${atom.value}"` : atom.value;
+  }
+  let val = atom.value;
+  if (atom.operator === "gt") val = `>${val}`;
+  else if (atom.operator === "lt") val = `<${val}`;
+  else if (atom.operator === "gte") val = `>=${val}`;
+  else if (atom.operator === "lte") val = `<=${val}`;
+  if (val.includes(" ")) val = `"${val}"`;
+  return `${atom.anchor}:${val}`;
+}
+
 export function StructuredSearchBar({
   tokens,
   onTokensChange,
   anchors,
-  placeholder = "Search or filter...",
+  placeholder,
   suggestionData,
 }: StructuredSearchBarProps) {
   const { t } = useTranslation("common");
@@ -92,11 +121,23 @@ export function StructuredSearchBar({
   const [showSuggestions, setShowSuggestions] = useState(false);
   const [highlightIndex, setHighlightIndex] = useState(-1);
   const [pendingValues, setPendingValues] = useState<Set<string>>(new Set());
+  /** When true, next committed atom should be marked negated. */
+  const [pendingNot, setPendingNot] = useState(false);
+  /**
+   * When set, the next committed atom is appended to this OR group.
+   * "auto" → fold into / extend the immediately-previous root node.
+   * <id>  → extend an existing OR group with this id.
+   */
+  const [orMode, setOrMode] = useState<null | "auto" | string>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
 
   const anchorMap = useMemo(
     () => new Map(anchors.map((a) => [a.key.toLowerCase(), a])),
+    [anchors],
+  );
+  const anchorMapByKey = useMemo(
+    () => new Map(anchors.map((a) => [a.key, a])),
     [anchors],
   );
 
@@ -113,14 +154,12 @@ export function StructuredSearchBar({
     return { mode: "anchor" as const, anchor: null, query: inputValue };
   }, [inputValue, anchorMap]);
 
-  // Multi-select mode: active when anchor supports "in" operator and has suggestions
   const isMultiSelect =
     suggestionContext.mode === "value" &&
     suggestionContext.anchor != null &&
     suggestionContext.anchor.operators.includes("in") &&
     suggestionContext.anchor.suggest != null;
 
-  // Build suggestions list
   const suggestions = useMemo((): Suggestion[] => {
     if (!inputValue && !showSuggestions) return [];
 
@@ -133,7 +172,6 @@ export function StructuredSearchBar({
       return [];
     }
 
-    // Anchor mode: filter anchors by typed prefix
     const query = suggestionContext.query.toLowerCase();
     const matchingAnchors = anchors.filter(
       (a) =>
@@ -143,7 +181,6 @@ export function StructuredSearchBar({
 
     const anchorSuggestions: Suggestion[] = matchingAnchors.map((anchor) => ({ type: "anchor", anchor }));
 
-    // In free-text mode with 3+ chars, also show name suggestions from anchors with suggest fn
     if (query.length >= 3) {
       for (const anchor of anchors) {
         if (anchor.suggest && anchor.type === "string") {
@@ -158,22 +195,12 @@ export function StructuredSearchBar({
     return anchorSuggestions;
   }, [inputValue, showSuggestions, suggestionContext, anchors, suggestionData]);
 
-  // Reset highlight when suggestions change
   useEffect(() => {
     setHighlightIndex(-1);
   }, [suggestions.length]);
 
-  // True whenever the user has an active anchor in value-entry mode
-  // (input ends with e.g. `club:`). We use this to keep the suggestion
-  // dropdown open regardless of the showSuggestions flag — mouse-driven
-  // anchor selection can otherwise race with surrounding click/blur events
-  // and end up with the dropdown collapsed even though the input now reads
-  // `club:`. Escape and click-outside clear the input entirely (below) so
-  // this stays a real "user is editing this anchor" signal.
   const isAnchorValueMode = suggestionContext.mode === "value" && suggestionContext.anchor != null;
 
-  // Hint shown in the dropdown when an anchor is active but no value suggestions exist yet.
-  // Mirrors the behavior of typing `anchor:` from the keyboard so click and keyboard feel identical.
   const dropdownHint = useMemo(() => {
     if (suggestionContext.mode !== "value") return undefined;
     if (suggestions.length > 0) return undefined;
@@ -185,16 +212,27 @@ export function StructuredSearchBar({
     return t("structuredSearchHintTypeToSearch");
   }, [suggestionContext, suggestions.length, t]);
 
+  // ─── Tree edit helpers ────────────────────────────────────────────
+
+  const appendNode = useCallback(
+    (atom: Atom) => {
+      const finalAtom: Atom = pendingNot ? { ...atom, negated: true } : atom;
+      const next = appendAtom(tokens, finalAtom, orMode, newTokenId);
+      onTokensChange(next);
+      setPendingNot(false);
+      if (orMode) setOrMode(null);
+    },
+    [tokens, onTokensChange, pendingNot, orMode],
+  );
+
   const commitToken = useCallback(
     (raw: string) => {
-      const token = parseInputToToken(raw, anchorMap);
-      if (token) {
-        onTokensChange([...tokens, token]);
-      }
+      const atom = parseInputToAtom(raw, anchorMap);
+      if (atom) appendNode(atom);
       setInputValue("");
       setShowSuggestions(false);
     },
-    [tokens, onTokensChange, anchorMap],
+    [anchorMap, appendNode],
   );
 
   const togglePendingValue = useCallback(
@@ -203,7 +241,6 @@ export function StructuredSearchBar({
         const next = new Set(prev);
         if (next.has(key)) next.delete(key);
         else next.add(key);
-        // Update input to reflect selections
         if (suggestionContext.anchor) {
           setInputValue(`${suggestionContext.anchor.key}:`);
         }
@@ -220,56 +257,139 @@ export function StructuredSearchBar({
     setPendingValues(new Set());
   }, [pendingValues, suggestionContext.anchor, commitToken]);
 
-  const removeToken = useCallback(
+  const removeNode = useCallback(
     (id: string) => {
-      onTokensChange(tokens.filter((t) => t.id !== id));
+      onTokensChange(tokens.filter((n) => n.id !== id));
+    },
+    [tokens, onTokensChange],
+  );
+
+  const removeChildFromGroup = useCallback(
+    (groupId: string, childId: string) => {
+      onTokensChange(removeChildFromGroupOp(tokens, groupId, childId));
     },
     [tokens, onTokensChange],
   );
 
   const handlePillClick = useCallback(
     (id: string) => {
-      // Convert pill back to text for editing
-      const token = tokens.find((t) => t.id === id);
-      if (!token) return;
+      const node = tokens.find((n) => n.id === id);
+      if (!node || isOrGroup(node)) return;
+      const atom = node;
 
-      // Multi-select re-editing: open dropdown with values pre-checked
-      if (token.anchor) {
-        const anchor = anchorMap.get(token.anchor);
+      if (atom.anchor) {
+        const anchor = anchorMap.get(atom.anchor.toLowerCase());
         if (anchor?.operators.includes("in") && anchor.suggest) {
-          const values = token.value.split(",").filter(Boolean);
+          const values = atom.value.split(",").filter(Boolean);
           setPendingValues(new Set(values));
-          onTokensChange(tokens.filter((t) => t.id !== id));
-          setInputValue(`${token.anchor}:`);
+          onTokensChange(tokens.filter((n) => n.id !== id));
+          setInputValue(`${atom.anchor}:`);
+          setPendingNot(!!atom.negated);
           setShowSuggestions(true);
           setTimeout(() => inputRef.current?.focus(), 0);
           return;
         }
       }
 
-      let text: string;
-      if (!token.anchor) {
-        text = token.value.includes(" ") ? `"${token.value}"` : token.value;
-      } else {
-        let val = token.value;
-        if (token.operator === "gt") val = `>${val}`;
-        else if (token.operator === "lt") val = `<${val}`;
-        else if (token.operator === "gte") val = `>=${val}`;
-        else if (token.operator === "lte") val = `<=${val}`;
-        if (val.includes(" ")) val = `"${val}"`;
-        text = `${token.anchor}:${val}`;
-      }
-
-      onTokensChange(tokens.filter((t) => t.id !== id));
-      setInputValue(text);
+      onTokensChange(tokens.filter((n) => n.id !== id));
+      setInputValue(atomToText(atom));
+      setPendingNot(!!atom.negated);
       setShowSuggestions(true);
       setTimeout(() => inputRef.current?.focus(), 0);
     },
     [tokens, onTokensChange, anchorMap],
   );
 
+  const handleEditChild = useCallback(
+    (groupId: string, childId: string) => {
+      const group = tokens.find((n) => n.id === groupId);
+      if (!group || !isOrGroup(group)) return;
+      const child = group.children.find((c) => c.id === childId);
+      if (!child) return;
+
+      const next = removeChildFromGroupOp(tokens, groupId, childId);
+      onTokensChange(next);
+      setInputValue(atomToText(child));
+      setPendingNot(!!child.negated);
+      // If the group survived (still ≥2 children), re-typing appends to it.
+      const survived = next.find((n) => n.id === groupId && isOrGroup(n));
+      if (survived) setOrMode(groupId);
+      setShowSuggestions(true);
+      setTimeout(() => inputRef.current?.focus(), 0);
+    },
+    [tokens, onTokensChange],
+  );
+
+  const handleAddBranch = useCallback(
+    (groupId: string) => {
+      setOrMode(groupId);
+      setInputValue("");
+      setShowSuggestions(true);
+      setTimeout(() => inputRef.current?.focus(), 0);
+    },
+    [],
+  );
+
+  const toggleAtomNegation = useCallback(
+    (id: string) => {
+      onTokensChange(
+        tokens.map((n) => {
+          if (n.id !== id || isOrGroup(n)) return n;
+          return { ...n, negated: !n.negated };
+        }),
+      );
+    },
+    [tokens, onTokensChange],
+  );
+
+  const toggleGroupNegation = useCallback(
+    (id: string) => {
+      onTokensChange(
+        tokens.map((n) => {
+          if (n.id !== id || !isOrGroup(n)) return n;
+          return { ...n, negated: !n.negated };
+        }),
+      );
+    },
+    [tokens, onTokensChange],
+  );
+
+  // ─── Keyboard handling ─────────────────────────────────────────────
+
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
+      // `|` keystroke: commits the current text and arms OR-mode for the
+      // next atom. We suppress this only when the cursor is inside an
+      // unclosed quote — that's the one case where `|` is a literal value
+      // character (e.g. `name:"a|b"` while still typing the closing quote).
+      if (e.key === "|") {
+        const quoteCount = (inputValue.match(/"/g) ?? []).length;
+        const insideOpenQuote = quoteCount % 2 === 1;
+        if (!insideOpenQuote) {
+          e.preventDefault();
+          if (isMultiSelect && pendingValues.size > 0) {
+            commitPendingValues();
+          } else if (inputValue.trim()) {
+            commitToken(inputValue);
+          }
+          // Default to "auto" (extend the previous root) unless we're already
+          // appending to a specific group.
+          setOrMode((prev) => prev ?? "auto");
+          return;
+        }
+      }
+
+      // `!` at position 0 of empty input toggles the NOT-pending chip.
+      if (
+        e.key === "!" &&
+        !inputValue &&
+        !isMultiSelect
+      ) {
+        e.preventDefault();
+        setPendingNot((p) => !p);
+        return;
+      }
+
       if (e.key === "ArrowDown") {
         e.preventDefault();
         setHighlightIndex((prev) =>
@@ -281,18 +401,15 @@ export function StructuredSearchBar({
           prev > 0 ? prev - 1 : suggestions.length - 1,
         );
       } else if (e.key === " " && isMultiSelect && highlightIndex >= 0 && highlightIndex < suggestions.length) {
-        // Space toggles a value in multi-select mode
         e.preventDefault();
         const s = suggestions[highlightIndex];
         if (s.type === "value") togglePendingValue(s.item.key);
       } else if (e.key === "Enter") {
         e.preventDefault();
         if (isMultiSelect && pendingValues.size > 0) {
-          // If highlighting an item, toggle it first, then commit all
           if (highlightIndex >= 0 && highlightIndex < suggestions.length) {
             const s = suggestions[highlightIndex];
             if (s.type === "value") {
-              // Toggle and commit in one step
               const next = new Set(pendingValues);
               if (next.has(s.item.key)) next.delete(s.item.key);
               else next.add(s.item.key);
@@ -313,20 +430,31 @@ export function StructuredSearchBar({
         if (pendingValues.size > 0) {
           commitPendingValues();
         } else {
-          // In value mode (input is `club:` etc.) clear the input so the
-          // dropdown actually closes — visibility is now driven by
-          // isAnchorValueMode, not just showSuggestions.
           if (suggestionContext.mode === "value") {
             setInputValue("");
           }
           setShowSuggestions(false);
           setHighlightIndex(-1);
+          setOrMode(null);
+          setPendingNot(false);
         }
       } else if (e.key === "Backspace" && !inputValue) {
-        // Remove last token
+        // Clear NOT-pending first if present.
+        if (pendingNot) {
+          setPendingNot(false);
+          return;
+        }
+        if (orMode) {
+          setOrMode(null);
+          return;
+        }
         if (tokens.length > 0) {
           const last = tokens[tokens.length - 1];
-          handlePillClick(last.id);
+          if (isOrGroup(last)) {
+            onTokensChange(popLastEntry(tokens));
+          } else {
+            handlePillClick(last.id);
+          }
         }
       } else if (e.key === "Tab" && (inputValue.trim() || pendingValues.size > 0)) {
         e.preventDefault();
@@ -339,32 +467,44 @@ export function StructuredSearchBar({
         }
       }
     },
-    [inputValue, tokens, suggestions, highlightIndex, commitToken, handlePillClick, isMultiSelect, pendingValues, togglePendingValue, commitPendingValues, suggestionContext.anchor],
+    [
+      inputValue,
+      tokens,
+      suggestions,
+      highlightIndex,
+      commitToken,
+      handlePillClick,
+      isMultiSelect,
+      pendingValues,
+      togglePendingValue,
+      commitPendingValues,
+      suggestionContext.anchor,
+      suggestionContext.mode,
+      anchorMap,
+      pendingNot,
+      orMode,
+      onTokensChange,
+    ],
   );
 
   const handleSuggestionSelect = useCallback(
     (suggestion: Suggestion) => {
       if (suggestion.type === "anchor") {
-        // Insert anchor key with colon, ready for value typing
         setInputValue(`${suggestion.anchor.key}:`);
         setPendingValues(new Set());
         setShowSuggestions(true);
         setHighlightIndex(-1);
         inputRef.current?.focus();
       } else if (isMultiSelect) {
-        // Multi-select: toggle value instead of committing
         togglePendingValue(suggestion.item.key);
         inputRef.current?.focus();
       } else {
-        // Single-select: insert the value and commit
         const key = suggestion.item.key;
         const colonIdx = inputValue.indexOf(":");
         if (colonIdx > 0) {
-          // We're in value mode — prepend the anchor prefix
           const prefix = inputValue.slice(0, colonIdx + 1);
           commitToken(`${prefix}${key}`);
         } else if (key.includes(":")) {
-          // Free-text name suggestion like "name:Anna Svensson"
           const value = key.split(":").slice(1).join(":");
           commitToken(`${key.split(":")[0]}:${value.includes(" ") ? `"${value}"` : value}`);
         } else {
@@ -384,7 +524,6 @@ export function StructuredSearchBar({
     [],
   );
 
-  // Close suggestions when clicking outside the entire search bar.
   useEffect(() => {
     function handleClickOutside(e: MouseEvent) {
       const target = e.target as Node;
@@ -392,25 +531,26 @@ export function StructuredSearchBar({
         if (pendingValues.size > 0 && suggestionContext.anchor) {
           const value = [...pendingValues].join(",");
           const raw = `${suggestionContext.anchor.key}:${value}`;
-          const token = parseInputToToken(raw, anchorMap);
-          if (token) {
-            onTokensChange([...tokens, token]);
+          const atom = parseInputToAtom(raw, anchorMap);
+          if (atom) {
+            // appendNode would re-trigger via state; simulate inline.
+            const finalAtom: Atom = pendingNot ? { ...atom, negated: true } : atom;
+            onTokensChange([...tokens, finalAtom]);
           }
           setPendingValues(new Set());
           setInputValue("");
+          setPendingNot(false);
         } else if (suggestionContext.mode === "value") {
-          // Cancel an in-progress anchor entry on click outside (the dropdown
-          // is otherwise pinned open by isAnchorValueMode).
           setInputValue("");
         }
         setShowSuggestions(false);
+        setOrMode(null);
       }
     }
     document.addEventListener("mousedown", handleClickOutside);
     return () => document.removeEventListener("mousedown", handleClickOutside);
-  }, [pendingValues, suggestionContext.mode, suggestionContext.anchor, anchorMap, tokens, onTokensChange]);
+  }, [pendingValues, suggestionContext.mode, suggestionContext.anchor, anchorMap, tokens, onTokensChange, pendingNot]);
 
-  // Global "/" keyboard shortcut to focus search
   useEffect(() => {
     function handleGlobalKey(e: KeyboardEvent) {
       if (e.key !== "/") return;
@@ -427,10 +567,13 @@ export function StructuredSearchBar({
   const clearAll = useCallback(() => {
     onTokensChange([]);
     setInputValue("");
+    setPendingNot(false);
+    setOrMode(null);
     inputRef.current?.focus();
   }, [onTokensChange]);
 
-  const hasContent = tokens.length > 0 || inputValue.length > 0;
+  const hasContent = tokens.length > 0 || inputValue.length > 0 || pendingNot || orMode !== null;
+  const effectivePlaceholder = placeholder ?? t("structuredSearchPlaceholder");
 
   return (
     <div ref={containerRef} className="relative flex-1">
@@ -443,7 +586,6 @@ export function StructuredSearchBar({
           setShowSuggestions(true);
         }}
       >
-        {/* Search icon */}
         <svg
           className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400 pointer-events-none"
           fill="none"
@@ -458,18 +600,50 @@ export function StructuredSearchBar({
           />
         </svg>
 
-        {/* Rendered pills */}
-        {tokens.map((token) => (
-          <FilterPill
-            key={token.id}
-            token={token}
-            anchor={anchorMap.get(token.anchor) as AnchorDef | undefined}
-            onRemove={removeToken}
-            onClick={handlePillClick}
-          />
-        ))}
+        {tokens.map((node) =>
+          isOrGroup(node) ? (
+            <OrGroupPill
+              key={node.id}
+              group={node}
+              anchorMap={anchorMapByKey as Map<string, AnchorDef>}
+              onRemoveGroup={removeNode}
+              onRemoveChild={removeChildFromGroup}
+              onEditChild={handleEditChild}
+              onAddBranch={handleAddBranch}
+              onToggleNegation={toggleGroupNegation}
+            />
+          ) : (
+            <FilterPill
+              key={node.id}
+              token={node}
+              anchor={anchorMapByKey.get(node.anchor) as AnchorDef | undefined}
+              onRemove={removeNode}
+              onClick={handlePillClick}
+              onToggleNegation={toggleAtomNegation}
+            />
+          ),
+        )}
 
-        {/* Input field */}
+        {/* Indicators for in-progress modifiers */}
+        {pendingNot && (
+          <span
+            className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded text-xs font-bold text-rose-700 bg-rose-100 border border-rose-200 select-none"
+            title={t("structuredSearchPendingNot")}
+            data-testid="pending-not"
+          >
+            !
+          </span>
+        )}
+        {orMode && (
+          <span
+            className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-bold uppercase text-slate-600 bg-slate-100 border border-slate-200 select-none"
+            title={t("structuredSearchOrInProgress")}
+            data-testid="or-mode-indicator"
+          >
+            {t("structuredSearchPillOr")}
+          </span>
+        )}
+
         <input
           ref={inputRef}
           type="text"
@@ -477,7 +651,7 @@ export function StructuredSearchBar({
           onChange={handleInputChange}
           onKeyDown={handleKeyDown}
           onFocus={() => setShowSuggestions(true)}
-          placeholder={tokens.length === 0 ? placeholder : ""}
+          placeholder={tokens.length === 0 ? effectivePlaceholder : ""}
           className="flex-1 min-w-[120px] outline-none bg-transparent text-sm text-slate-900 placeholder:text-slate-400"
           aria-label="Search filter input"
           aria-expanded={(showSuggestions || isAnchorValueMode) && (suggestions.length > 0 || !!dropdownHint)}
@@ -485,12 +659,10 @@ export function StructuredSearchBar({
           aria-autocomplete="list"
         />
 
-        {/* "/" shortcut hint */}
         {!hasContent && (
           <kbd className="absolute right-2.5 top-1/2 -translate-y-1/2 px-1.5 py-0.5 text-xs text-slate-400 border border-slate-200 rounded font-mono pointer-events-none">/</kbd>
         )}
 
-        {/* Clear button */}
         {hasContent && (
           <button
             type="button"
@@ -505,7 +677,6 @@ export function StructuredSearchBar({
         )}
       </div>
 
-      {/* Suggestions dropdown */}
       <SuggestionDropdown
         suggestions={suggestions}
         highlightIndex={highlightIndex}

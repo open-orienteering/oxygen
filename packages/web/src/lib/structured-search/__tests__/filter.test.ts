@@ -275,6 +275,131 @@ describe("applyFilters", () => {
     // Lisa has startTime=0, excluded
     expect(result.map(r => r.id)).toEqual([1, 4]);
   });
+
+  // ── OR groups ──
+
+  it("OR-groups a single anchor across two values", () => {
+    const nodes = [
+      {
+        kind: "or" as const,
+        id: "g1",
+        children: [
+          { id: "a", anchor: "class", operator: "eq" as const, value: "H21" },
+          { id: "b", anchor: "class", operator: "eq" as const, value: "D21" },
+        ],
+      },
+    ];
+    const result = applyFilters(runners, nodes, anchors);
+    // H21: Anna(1), Lisa(3); D21: Erik(2)
+    expect(result.map((r) => r.id)).toEqual([1, 2, 3]);
+  });
+
+  it("ANDs an OR group with a sibling atom", () => {
+    const nodes = [
+      {
+        kind: "or" as const,
+        id: "g1",
+        children: [
+          { id: "a", anchor: "class", operator: "eq" as const, value: "H21" },
+          { id: "b", anchor: "class", operator: "eq" as const, value: "H35" },
+        ],
+      },
+      { id: "c", anchor: "status", operator: "eq" as const, value: "ok" },
+    ];
+    const result = applyFilters(runners, nodes, anchors);
+    expect(result.map((r) => r.id)).toEqual([1]); // Anna: H21 + ok
+  });
+
+  it("OR-groups across different anchors", () => {
+    const nodes = [
+      {
+        kind: "or" as const,
+        id: "g1",
+        children: [
+          { id: "a", anchor: "class", operator: "eq" as const, value: "H35" },
+          { id: "b", anchor: "club", operator: "eq" as const, value: "OK Linné" },
+        ],
+      },
+    ];
+    const result = applyFilters(runners, nodes, anchors);
+    // H35: Olof(4); OK Linné: Erik(2)
+    expect(result.map((r) => r.id)).toEqual([2, 4]);
+  });
+
+  it("evaluates a passed FilterExpression object", () => {
+    const expr = {
+      roots: [
+        { id: "a", anchor: "class", operator: "eq" as const, value: "H21" },
+      ],
+    };
+    const result = applyFilters(runners, expr, anchors);
+    expect(result.map((r) => r.id)).toEqual([1, 3]);
+  });
+
+  // ── NOT semantics ──
+
+  it("negates a single atom", () => {
+    const nodes = [
+      {
+        id: "1",
+        anchor: "status",
+        operator: "eq" as const,
+        value: "dns",
+        negated: true,
+      },
+    ];
+    const result = applyFilters(runners, nodes, anchors);
+    // Everyone except Lisa (DNS)
+    expect(result.map((r) => r.id)).toEqual([1, 2, 4]);
+  });
+
+  it("combines NOT with AND", () => {
+    const nodes = [
+      { id: "1", anchor: "class", operator: "eq" as const, value: "H21" },
+      {
+        id: "2",
+        anchor: "status",
+        operator: "eq" as const,
+        value: "dns",
+        negated: true,
+      },
+    ];
+    const result = applyFilters(runners, nodes, anchors);
+    // H21 = Anna, Lisa; not DNS → Anna only
+    expect(result.map((r) => r.id)).toEqual([1]);
+  });
+
+  it("negates an OR group as 'none of these'", () => {
+    const nodes = [
+      {
+        kind: "or" as const,
+        id: "g1",
+        negated: true,
+        children: [
+          { id: "a", anchor: "class", operator: "eq" as const, value: "H21" },
+          { id: "b", anchor: "class", operator: "eq" as const, value: "D21" },
+        ],
+      },
+    ];
+    const result = applyFilters(runners, nodes, anchors);
+    // Not (H21 OR D21) → only Olof (H35)
+    expect(result.map((r) => r.id)).toEqual([4]);
+  });
+
+  it("negates a free-text atom", () => {
+    const nodes = [
+      {
+        id: "1",
+        anchor: "",
+        operator: "contains" as const,
+        value: "anna",
+        negated: true,
+      },
+    ];
+    const result = applyFilters(runners, nodes, anchors, ["name", "clubName"]);
+    // Everyone except Anna (id 1)
+    expect(result.map((r) => r.id)).toEqual([2, 3, 4]);
+  });
 });
 
 describe("parseTimeValue", () => {
