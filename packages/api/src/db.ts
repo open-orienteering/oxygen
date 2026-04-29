@@ -870,12 +870,26 @@ export async function ensureControlUnitsTable(
       checked_at           DATETIME NULL,
       memory_cleared_at    DATETIME NULL,
       firmware_version     VARCHAR(16) NULL,
+      model_id             INT UNSIGNED NULL,
+      model_name           VARCHAR(32) NULL,
       last_seen_at         DATETIME NULL,
       created_at           DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
       updated_at           DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
       KEY idx_control_id (control_id)
     )
   `);
+
+  // Add hardware-model columns if the table pre-exists from an older version.
+  try {
+    await client.$executeRawUnsafe(
+      `ALTER TABLE oxygen_control_units ADD COLUMN model_id INT UNSIGNED NULL AFTER firmware_version`,
+    );
+  } catch { /* column already exists */ }
+  try {
+    await client.$executeRawUnsafe(
+      `ALTER TABLE oxygen_control_units ADD COLUMN model_name VARCHAR(32) NULL AFTER model_id`,
+    );
+  } catch { /* column already exists */ }
 
   // Backfill from oxygen_control_config (one unit per config row that has a
   // serial). Only inserts if the row doesn't exist yet — safe to run repeatedly.

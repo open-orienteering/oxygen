@@ -50,7 +50,11 @@ Every class gets its own row of options: free start, no timing (for open / HD10-
 
 The Controls page tracks two things side by side: the logical controls used in course definitions, and the physical SI station units that fulfill them. A single logical control can own multiple units — for redundancy at the same location, or after a mid-race unit swap with a different code.
 
-Battery voltage, last-checked time, programmed code, and firmware are tracked per unit, so two stations never overwrite each other's state. When a control is programmed from the UI, the unit row is upserted automatically; backup-memory reads are attributed to the reading unit too.
+Battery voltage, last-checked time, programmed code, firmware, and hardware type are tracked per unit, so two stations never overwrite each other's state. The list view also shows an aggregated **Type** column (`BSF8 / BSF9` when mixed units fulfill the same control), and unit rows expose capability badges such as **AIR+** where applicable.
+
+Programming now performs a post-write SYS_VAL refresh before persisting battery data, which removes the old "freshly woken control shows exactly 3.00 V" artifact. The power-off sequence also returns the BSM8 to direct mode after OFF so the next coupling-coil probe doesn't immediately re-wake a just-programmed sleeping unit.
+
+When a control is programmed from the UI, the unit row is upserted automatically; backup-memory reads are attributed to the reading unit too.
 
 ![Controls with unit status](screenshots/controls.png)
 

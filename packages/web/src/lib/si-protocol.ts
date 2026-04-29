@@ -1081,6 +1081,68 @@ export const MS_MODE = {
   REMOTE: 0x53, // 'S' — slave/remote
 } as const;
 
+/**
+ * SPORTident hardware MODEL_ID → product name lookup.
+ *
+ * Most entries are verbatim from per-magnusson sireader2.py `MODEL2NAME`:
+ *   https://github.com/per-magnusson/sportident-python/blob/master/sireader2.py
+ *
+ * Entries marked "(field-observed)" were added based on actual hardware
+ * readings during Oxygen testing — not present in upstream. When the
+ * upstream table grows, pull the latest entries here too.
+ *
+ * Read from SYS_VAL offset 0x0B (2 bytes, big-endian).
+ */
+export const MODEL_ID_NAMES: Record<number, string> = {
+  0x6f21: "SIMSRR1-AP", // ShortRangeRadio AccessPoint = SRR-dongle
+  0x8003: "BSF3", // serial numbers > 1.000
+  0x8004: "BSF4", // serial numbers > 10.000
+  0x8084: "BSM4-RS232",
+  0x8086: "BSM6-RS232/USB",
+  0x8115: "BSF5", // serial numbers > 50.000
+  0x8117: "BSF7", // serial no. 70.000…70.521, 72.002…72.009
+  0x8118: "BSF8", // serial no. 70.000…70.521, 72.002…72.009
+  0x8146: "BSF6", // serial numbers > 30.000
+  0x8187: "BS7-SI-Master",
+  0x8188: "BS8-SI-Master",
+  0x8197: "BSF7", // serial numbers > 71.000, apart from 72.002…72.009
+  0x8198: "BSF8", // serial numbers > 80.000 (includes BSF8-SRR variants)
+  0x819e: "BSF9", // (field-observed) — pattern suggests BSF9 follows BSF7/8
+  0x9197: "BSM7-RS232/USB",
+  0x9198: "BSM8-SRR",
+  0x9597: "BS7-S", // Sprinter
+  0x9d9a: "BS11-BL", // SIAC / Air+
+  0xb197: "BS7-P", // Printer
+  0xb198: "BS8-P", // Printer
+  0xb897: "BS7-GSM",
+  0xcd9b: "BS11-BS", // -red / -blue (SIAC / Air+)
+};
+
+/** Resolve a raw MODEL_ID (16-bit) to a product name, or "0xNNNN" fallback. */
+export function lookupModelName(modelId: number): string {
+  return MODEL_ID_NAMES[modelId] ?? `0x${modelId.toString(16).padStart(4, "0")}`;
+}
+
+/** Derived hardware capabilities, computed from `modelName`. */
+export interface StationCapabilities {
+  /** SIAC / AIR+ capable (BS11 family). */
+  airPlus: boolean;
+  /** Has SRR radio hardware (BSM8-USB/SRR, SIMSRR1-AP). For BSF8-SRR field
+   *  variants the MODEL_ID is identical to a non-SRR BSF8 — for them the
+   *  enabled bit (`srrEnabled`) is the more reliable signal. */
+  srrHardware: boolean;
+  /** Receipt printer station (BS7-P / BS8-P). */
+  printer: boolean;
+}
+
+export function deriveCapabilities(modelName: string): StationCapabilities {
+  return {
+    airPlus: modelName.startsWith("BS11"),
+    srrHardware: modelName.includes("SRR"),
+    printer: modelName.startsWith("BS7-P") || modelName.startsWith("BS8-P"),
+  };
+}
+
 /** Parsed station configuration from GET_SYSTEM_VALUE response */
 export interface StationInfo {
   serialNo: number;
@@ -1093,6 +1155,13 @@ export interface StationInfo {
   memSizeKB: number;
   backupPointer: number; // raw backup memory write pointer (address)
   backupCount: number; // approximate number of backup records
+  /** Raw 16-bit hardware model identifier from SYS_VAL offset 0x0B. */
+  modelId: number;
+  /** Product name (e.g. "BSF8", "BS11-BL") looked up from MODEL_ID_NAMES;
+   *  falls back to "0xNNNN" hex for unknown IDs. */
+  modelName: string;
+  /** Derived hardware capabilities from `modelName`. */
+  capabilities: StationCapabilities;
 }
 
 /** A punch record from station backup memory (extended protocol BUX format) */
@@ -1296,6 +1365,11 @@ export function parseStationInfo(data: Uint8Array): StationInfo | null {
     data[P + SYSVAL.FEEDBACK],
   );
 
+  const modelId =
+    (data[P + SYSVAL.MODEL_ID] << 8) | data[P + SYSVAL.MODEL_ID + 1];
+  const modelName = lookupModelName(modelId);
+  const capabilities = deriveCapabilities(modelName);
+
   return {
     serialNo,
     stationCode,
@@ -1307,6 +1381,9 @@ export function parseStationInfo(data: Uint8Array): StationInfo | null {
     memSizeKB,
     backupPointer,
     backupCount,
+    modelId,
+    modelName,
+    capabilities,
   };
 }
 

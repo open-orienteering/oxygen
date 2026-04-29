@@ -644,6 +644,10 @@ export interface ControlUnit {
   checkedAt: string | null; // ISO timestamp
   memoryClearedAt: string | null; // ISO timestamp
   firmwareVersion: string | null;
+  /** Raw 16-bit hardware MODEL_ID (e.g. 0x8198 for BSF8). */
+  modelId: number | null;
+  /** Product name (e.g. "BSF8", "BS11-BL"). Persisted at programming time. */
+  modelName: string | null;
   lastSeenAt: string | null; // ISO timestamp
 }
 
