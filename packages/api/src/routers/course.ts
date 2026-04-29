@@ -2,7 +2,7 @@ import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import { router, competitionProcedure } from "../trpc.js";
 import type { PrismaClient } from "@prisma/client";
-import {ensureMapFilesTable, ensureMapTilesTable, incrementCounter, fireMapUpload} from "../db.js";
+import {ensureMapFilesTable, ensureMapTilesTable, incrementCounter, incrementCounterBatch, fireMapUpload} from "../db.js";
 import { ocadBoundsToWgs84, computeMapNorthOffset, mapMmToWgs84, type OcadCrs } from "../map-projection.js";
 import {
   CourseSummary,
@@ -512,6 +512,16 @@ const courseFileInput = z.object({
   xmlContent: z.string().optional(),
   ocdBase64: z.string().optional(),
   classMapping: z.record(z.string(), z.array(z.number().int())).optional(),
+  /**
+   * When true, every existing course and control is soft-deleted (and any
+   * class→course assignment cleared) before the new file is imported.
+   * Existing rows whose names match the new file are reactivated in place,
+   * so we don't accumulate Removed: true rows when re-importing the same
+   * course set repeatedly. When false (legacy behaviour), the import
+   * merges into the current course set, only touching rows it sees in
+   * the file.
+   */
+  replaceAll: z.boolean().optional().default(false),
 });
 
 /** Parse the incoming file data (XML string or OCD base64) using the right parser. */
@@ -910,6 +920,60 @@ export const courseRouter = router({
       let coursesUpdated = 0;
       let classesAssigned = 0;
 
+      // ── 0. Optionally wipe the slate ────────────────────────
+      //
+      // "Replace all" semantics: soft-delete every existing course and
+      // control, drop class→course assignments, and clear the geometry
+      // cache. The upsert loops below still match by name and reactivate
+      // matching rows, so re-importing the same file repeatedly does
+      // not pile up Removed:true zombie rows. Items not present in the
+      // new file simply stay soft-deleted, which is what the user asked
+      // for. Counters are bumped so MeOS sees the deletions on its next
+      // sync.
+      if (input.replaceAll) {
+        const allCourses = await client.oCourse.findMany({
+          where: { Removed: false },
+          select: { Id: true },
+        });
+        if (allCourses.length > 0) {
+          const courseIds = allCourses.map((c) => c.Id);
+          await client.oCourse.updateMany({
+            where: { Id: { in: courseIds } },
+            data: { Removed: true },
+          });
+          await incrementCounterBatch("oCourse", courseIds, ctx.dbName);
+        }
+
+        const allControls = await client.oControl.findMany({
+          where: { Removed: false },
+          select: { Id: true },
+        });
+        if (allControls.length > 0) {
+          const controlIds = allControls.map((c) => c.Id);
+          await client.oControl.updateMany({
+            where: { Id: { in: controlIds } },
+            data: { Removed: true },
+          });
+          await incrementCounterBatch("oControl", controlIds, ctx.dbName);
+        }
+
+        const assignedClasses = await client.oClass.findMany({
+          where: { Removed: false, Course: { gt: 0 } },
+          select: { Id: true },
+        });
+        if (assignedClasses.length > 0) {
+          const classIds = assignedClasses.map((c) => c.Id);
+          await client.oClass.updateMany({
+            where: { Id: { in: classIds } },
+            data: { Course: 0 },
+          });
+          await incrementCounterBatch("oClass", classIds, ctx.dbName);
+        }
+
+        await ensureCourseGeometryTable(client);
+        await client.$executeRawUnsafe("DELETE FROM oxygen_course_geometry");
+      }
+
       // ── 1. Upsert controls ──────────────────────────────────
 
       // Build a map from control string ID → DB control ID
@@ -1047,14 +1111,25 @@ export const courseRouter = router({
 
       // ── 2. Create/update courses ────────────────────────────
 
-      // Load existing courses
+      // Load existing courses. When replaceAll is true we soft-deleted
+      // every course in step 0, so we explicitly include Removed rows
+      // here and reactivate the ones that match a name in the import.
+      // This keeps Course Ids stable across re-imports of the same set
+      // (so class→course assignments saved alongside don't get orphaned)
+      // and avoids accumulating Removed:true zombie rows.
       const existingCourses = await client.oCourse.findMany({
-        where: { Removed: false },
-        select: { Id: true, Name: true },
+        where: input.replaceAll ? {} : { Removed: false },
+        select: { Id: true, Name: true, Removed: true },
       });
-      const courseByName = new Map(
-        existingCourses.map((c) => [c.Name.toLowerCase(), c]),
-      );
+      const courseByName = new Map<string, typeof existingCourses[number]>();
+      for (const c of existingCourses) {
+        const key = c.Name.toLowerCase();
+        const prev = courseByName.get(key);
+        // Prefer an active row over a soft-deleted one if both exist
+        if (!prev || (prev.Removed && !c.Removed)) {
+          courseByName.set(key, c);
+        }
+      }
       const courseIdMap = new Map<string, number>();
 
       for (const pc of parsed.courses) {
@@ -1088,6 +1163,7 @@ export const courseRouter = router({
           await client.oCourse.update({
             where: { Id: existing.Id },
             data: {
+              Name: pc.name,
               Controls: controlsStr,
               Legs: legsStr,
               Length: Math.round(pc.length),
@@ -1095,10 +1171,12 @@ export const courseRouter = router({
               FirstAsStart: 0,
               LastAsFinish: 0,
               StartName: startName,
+              ...(existing.Removed ? { Removed: false } : {}),
             },
           });
           courseIdMap.set(pc.name, existing.Id);
-          coursesUpdated++;
+          if (existing.Removed) coursesCreated++;
+          else coursesUpdated++;
         } else {
           const created = await client.oCourse.create({
             data: {

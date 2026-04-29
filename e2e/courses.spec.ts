@@ -122,9 +122,10 @@ test.describe("Courses Page", () => {
     await expect(bana1Row.getByRole("cell", { name: "1", exact: true })).toBeVisible({ timeout: 5000 });
   });
 
-  test("should import courses from OCAD OCD file", async ({ page }) => {
+  test("should import courses from OCAD OCD file (Replace-all default; toggle off to append)", async ({ page }) => {
     await selectCompetition(page);
     await clickTab(page, "Courses");
+    await expect(page.getByText("3 courses")).toBeVisible({ timeout: 10000 });
 
     await page.getByRole("button", { name: "Import courses" }).click();
     await expect(page.getByText("Import Courses (IOF XML or OCAD OCD)")).toBeVisible();
@@ -144,6 +145,15 @@ test.describe("Courses Page", () => {
 
     await expect(page.getByRole("cell", { name: "A", exact: true })).toBeVisible();
     await expect(page.getByRole("cell", { name: "E", exact: true })).toBeVisible();
+
+    // The replace-all toggle defaults to ON; assert that, then turn it
+    // off so this test still appends to the seed data (3 + 5 = 8).
+    // Wiping the seed courses here would break later spec files that
+    // depend on Bana 2 — the destructive path is covered in the
+    // course-import integration test instead.
+    const replaceAll = page.getByTestId("course-import-replace-all");
+    await expect(replaceAll).toBeChecked();
+    await replaceAll.uncheck();
 
     await page.getByRole("button", { name: "Import 5 courses" }).click();
     await expect(page.getByText("Import Complete")).toBeVisible({ timeout: 15000 });

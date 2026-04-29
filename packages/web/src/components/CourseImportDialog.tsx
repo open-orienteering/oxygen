@@ -22,6 +22,12 @@ export function CourseImportDialog({ onClose, onSuccess }: Props) {
   const [classMapping, setClassMapping] = useState<Record<string, number[]>>({});
   const [dragOver, setDragOver] = useState(false);
   const [hideFullyMatched, setHideFullyMatched] = useState(false);
+  // "Replace all" is the default: most users import a complete course
+  // set and expect previous courses/controls to be wiped before the
+  // new file lands. Append/merge is the opt-in alternative, useful
+  // when adding a course set on top of an existing one (e.g. a relay
+  // added on top of an individual race).
+  const [replaceAll, setReplaceAll] = useState(true);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const previewMutation = trpc.course.previewImport.useMutation({
@@ -95,6 +101,7 @@ export function CourseImportDialog({ onClose, onSuccess }: Props) {
     importMutation.mutate({
       ...(fileType === "xml" ? { xmlContent: fileData } : { ocdBase64: fileData }),
       classMapping,
+      replaceAll,
     });
   };
 
@@ -218,6 +225,49 @@ export function CourseImportDialog({ onClose, onSuccess }: Props) {
                 <SummaryBox label={t("newControls")} value={preview.newControls} color="emerald" />
                 <SummaryBox label={t("existing")} value={preview.existingControls} color="blue" />
               </div>
+
+              {/* Replace vs append mode */}
+              <fieldset className="border border-slate-200 rounded-lg p-3">
+                <legend className="px-2 text-xs font-semibold text-slate-600 uppercase tracking-wider">
+                  {t("importMode")}
+                </legend>
+                <div className="space-y-2">
+                  <label className="flex items-start gap-2 cursor-pointer">
+                    <input
+                      type="radio"
+                      name="importMode"
+                      checked={replaceAll}
+                      onChange={() => setReplaceAll(true)}
+                      className="mt-0.5 w-4 h-4 text-blue-600 focus:ring-blue-500 cursor-pointer"
+                    />
+                    <span className="flex-1">
+                      <span className="block text-sm font-medium text-slate-900">
+                        {t("replaceAllLabel")}
+                      </span>
+                      <span className="block text-xs text-slate-500 mt-0.5">
+                        {t("replaceAllHint")}
+                      </span>
+                    </span>
+                  </label>
+                  <label className="flex items-start gap-2 cursor-pointer">
+                    <input
+                      type="radio"
+                      name="importMode"
+                      checked={!replaceAll}
+                      onChange={() => setReplaceAll(false)}
+                      className="mt-0.5 w-4 h-4 text-blue-600 focus:ring-blue-500 cursor-pointer"
+                    />
+                    <span className="flex-1">
+                      <span className="block text-sm font-medium text-slate-900">
+                        {t("appendLabel")}
+                      </span>
+                      <span className="block text-xs text-slate-500 mt-0.5">
+                        {t("appendHint")}
+                      </span>
+                    </span>
+                  </label>
+                </div>
+              </fieldset>
 
               {/* Course table with class mapping */}
               <div>
@@ -348,6 +398,29 @@ export function CourseImportDialog({ onClose, onSuccess }: Props) {
                     </tbody>
                   </table>
                 </div>
+              </div>
+
+              {/* Replace-all toggle */}
+              <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
+                <label className="flex items-start gap-3 cursor-pointer select-none">
+                  <input
+                    type="checkbox"
+                    data-testid="course-import-replace-all"
+                    checked={replaceAll}
+                    onChange={(e) => setReplaceAll(e.target.checked)}
+                    className="mt-0.5 w-4 h-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500 cursor-pointer"
+                  />
+                  <span className="text-sm text-slate-700">
+                    <span className="font-medium text-slate-900 block">
+                      {t("replaceAllCoursesAndControls")}
+                    </span>
+                    <span className="text-xs text-slate-500 block mt-0.5">
+                      {replaceAll
+                        ? t("replaceAllOnHint")
+                        : t("replaceAllOffHint")}
+                    </span>
+                  </span>
+                </label>
               </div>
 
               {/* Actions */}
