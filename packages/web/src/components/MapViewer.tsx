@@ -688,8 +688,17 @@ export function MapViewer({
               <path key={`leg-${fi}`} d={d} stroke="#c026d3" strokeWidth={legStroke} fill="none" opacity={0.85} />
             );
           } else {
+            // Only visible controls clip the leg. When the user has
+            // "show only relevant" on (the default for a single-course
+            // selection), unrelated controls have `visible: false` and
+            // therefore aren't drawn as circles — so they shouldn't
+            // chop a slit out of an unrelated course's leg either.
+            // When showAllControls is on, every control is visible
+            // again and the original "leg breaks around any circle on
+            // the map" behaviour is preserved.
             const obstacles: Pt[] = [];
             for (const c of controls) {
+              if (c.visible === false) continue;
               const p = ctrlPixels.get(c.id);
               if (p) obstacles.push(p);
             }
