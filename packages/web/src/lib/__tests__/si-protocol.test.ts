@@ -3,6 +3,10 @@ import {
   calculateCRC,
   buildCommand,
   buildReadCommand,
+  parseStationInfo,
+  lookupModelName,
+  deriveCapabilities,
+  SYSVAL,
   extractFrame,
   parseCardDetection,
   parsePunchRecord,
@@ -192,6 +196,136 @@ describe("buildReadCommand", () => {
   it("uses 0xEF for SIAC cards", () => {
     const frame = buildReadCommand("SIAC", 0);
     expect(frame[2]).toBe(CMD.SI8_READ);
+  });
+});
+
+// ─── Station SYS_VAL Parsing ───────────────────────────────
+
+describe("parseStationInfo", () => {
+  function makeSysValResponse(): Uint8Array {
+    const data = new Uint8Array(3 + 0x80);
+    // 3-byte prefix: [0x00, station_id, echoed_offset]
+    data[0] = 0x00;
+    data[1] = 0x7d;
+    data[2] = 0x00;
+    const P = 3;
+
+    // Serial: 123456 (0x0001E240)
+    data[P + SYSVAL.SERIAL_NO] = 0x00;
+    data[P + SYSVAL.SERIAL_NO + 1] = 0x01;
+    data[P + SYSVAL.SERIAL_NO + 2] = 0xe2;
+    data[P + SYSVAL.SERIAL_NO + 3] = 0x40;
+
+    // SRR bit enabled
+    data[P + SYSVAL.SRR_CFG] = 0x01;
+
+    // Firmware "657"
+    data[P + SYSVAL.FIRMWARE] = "6".charCodeAt(0);
+    data[P + SYSVAL.FIRMWARE + 1] = "5".charCodeAt(0);
+    data[P + SYSVAL.FIRMWARE + 2] = "7".charCodeAt(0);
+
+    // MODEL_ID: BSF8
+    data[P + SYSVAL.MODEL_ID] = 0x81;
+    data[P + SYSVAL.MODEL_ID + 1] = 0x98;
+
+    // Mem size
+    data[P + SYSVAL.MEM_SIZE] = 128;
+
+    // Battery voltage raw 0xAFC0 ≈ 3.43V
+    data[P + SYSVAL.BAT_VOLT] = 0xaf;
+    data[P + SYSVAL.BAT_VOLT + 1] = 0xc0;
+
+    // Battery cap 1600 mAh
+    data[P + SYSVAL.BAT_CAP] = 0x06;
+    data[P + SYSVAL.BAT_CAP + 1] = 0x40;
+
+    // Backup pointer = 0x000120 => 4 records
+    data[P + SYSVAL.BACKUP_PTR_HI] = 0x00;
+    data[P + SYSVAL.BACKUP_PTR_HI + 1] = 0x00;
+    data[P + SYSVAL.BACKUP_PTR_LO] = 0x01;
+    data[P + SYSVAL.BACKUP_PTR_LO + 1] = 0x20;
+
+    // Mode + code
+    data[P + SYSVAL.MODE] = 0x02;
+    data[P + SYSVAL.STATION_CODE] = 0x1f; // 31
+    data[P + SYSVAL.FEEDBACK] = 0x00;
+
+    return data;
+  }
+
+  it("parses known model id and derived capabilities", () => {
+    const data = makeSysValResponse();
+    const info = parseStationInfo(data);
+    expect(info).not.toBeNull();
+    expect(info!.serialNo).toBe(123456);
+    expect(info!.firmwareVersion).toBe("657");
+    expect(info!.modelId).toBe(0x8198);
+    expect(info!.modelName).toBe("BSF8");
+    expect(info!.capabilities).toEqual({
+      airPlus: false,
+      srrHardware: false,
+      printer: false,
+    });
+    expect(info!.batteryVoltage).toBeCloseTo(3.43, 2);
+    expect(info!.backupCount).toBe(4);
+  });
+
+  it("maps BSF9 model id 0x819E", () => {
+    const data = makeSysValResponse();
+    const P = 3;
+    data[P + SYSVAL.MODEL_ID] = 0x81;
+    data[P + SYSVAL.MODEL_ID + 1] = 0x9e;
+    const info = parseStationInfo(data);
+    expect(info).not.toBeNull();
+    expect(info!.modelId).toBe(0x819e);
+    expect(info!.modelName).toBe("BSF9");
+  });
+
+  it("keeps unknown model ids as hex strings", () => {
+    const data = makeSysValResponse();
+    const P = 3;
+    data[P + SYSVAL.MODEL_ID] = 0xab;
+    data[P + SYSVAL.MODEL_ID + 1] = 0xcd;
+    const info = parseStationInfo(data);
+    expect(info).not.toBeNull();
+    expect(info!.modelId).toBe(0xabcd);
+    expect(info!.modelName).toBe("0xabcd");
+  });
+
+  it("parses the observed stale voltage sentinel 0x9999 as ~3.00V", () => {
+    const data = makeSysValResponse();
+    const P = 3;
+    data[P + SYSVAL.BAT_VOLT] = 0x99;
+    data[P + SYSVAL.BAT_VOLT + 1] = 0x99;
+    const info = parseStationInfo(data);
+    expect(info).not.toBeNull();
+    expect(info!.batteryVoltage).toBeCloseTo(3.0, 2);
+  });
+});
+
+describe("lookupModelName / deriveCapabilities", () => {
+  it("returns lookup names and fallback hex", () => {
+    expect(lookupModelName(0x9d9a)).toBe("BS11-BL");
+    expect(lookupModelName(0x9198)).toBe("BSM8-SRR");
+    expect(lookupModelName(0x1234)).toBe("0x1234");
+  });
+
+  it("derives AIR+/SRR/printer capabilities from model names", () => {
+    expect(deriveCapabilities("BS11-BL")).toEqual({
+      airPlus: true,
+      srrHardware: false,
+      printer: false,
+    });
+    expect(deriveCapabilities("BSM8-SRR")).toEqual({
+      airPlus: false,
+      srrHardware: true,
+      printer: false,
+    });
+    expect(deriveCapabilities("BS8-P")).toEqual({
+      airPlus: false,
+      srrHardware: false,
+      printer: true,
+    });
   });
 });
 

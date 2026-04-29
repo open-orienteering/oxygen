@@ -724,12 +724,12 @@ export class SIReaderConnection extends EventTarget {
     beep?: boolean;
     stationMode?: number;
   }, preReadData?: Uint8Array): Promise<{ batteryVoltage: number; stationInfo: StationInfo; timeDriftMs: number | null }> {
-    let currentFeedback: number;
     let stationInfo: StationInfo;
+    let sysValData: Uint8Array;
 
     if (preReadData) {
       // Use pre-read data — skip redundant remote switch + GET_SYS_VAL
-      currentFeedback = preReadData[3 + SYSVAL.FEEDBACK];
+      sysValData = preReadData;
       stationInfo = parseStationInfo(preReadData)!;
     } else {
       // Fallback: switch to remote and read
@@ -739,10 +739,11 @@ export class SIReaderConnection extends EventTarget {
         buildGetSysVal(),
         CMD.GET_SYSTEM_VALUE,
       );
+      sysValData = readResp.data;
       stationInfo = parseStationInfo(readResp.data)!;
       if (!stationInfo) throw new Error("Failed to read station before programming");
-      currentFeedback = readResp.data[3 + SYSVAL.FEEDBACK];
     }
+    const currentFeedback = sysValData[3 + SYSVAL.FEEDBACK];
 
     const t0 = performance.now();
     const lap = (label: string) => {
@@ -776,8 +777,12 @@ export class SIReaderConnection extends EventTarget {
     );
     lap("SET_SYS_VAL(code+feedback)");
 
-    // 3. Set SRR config (bit 0 = SRR enabled)
-    const srrByte = config.enableSRR ? 0x01 : 0x00;
+    // 3. Set SRR config (bit 0 = SRR enabled). Read-modify-write so the
+    //    other bits (factory config, see SYSVAL comment) are preserved.
+    const currentSrrByte = sysValData[3 + SYSVAL.SRR_CFG];
+    const srrByte = config.enableSRR
+      ? (currentSrrByte | 0x01)
+      : (currentSrrByte & ~0x01);
     await this.sendAndWait(
       buildSetSysVal(SYSVAL.SRR_CFG, srrByte),
       CMD.SET_SYSTEM_VALUE,
@@ -818,21 +823,38 @@ export class SIReaderConnection extends EventTarget {
     }
     lap("done");
 
-    // Use battery voltage from initial read (doesn't change during programming)
+    // 8. Re-read SYS_VAL so battery voltage and other dynamic fields reflect
+    //    the now-fully-booted state. The post-boot ADC sample isn't latched
+    //    on the very first read after a coil-wake (per SI BS7/8/9 firmware
+    //    notes: "Battery voltage is measured after firmware boot"), which is
+    //    why freshly-woken units used to report exactly 3.00V (raw 0x9999).
+    let finalInfo = stationInfo;
+    try {
+      const finalResp = await this.sendAndWait(
+        buildGetSysVal(true),
+        CMD.GET_SYSTEM_VALUE,
+      );
+      const parsed = parseStationInfo(finalResp.data);
+      if (parsed) finalInfo = parsed;
+      lap("GET_SYS_VAL(post-program)");
+    } catch {
+      // Keep initial info if final read fails.
+    }
+
     this.dispatchEvent(
       new CustomEvent("si:control-programmed", {
         detail: {
           code: config.code,
-          batteryVoltage: stationInfo.batteryVoltage,
-          stationInfo,
+          batteryVoltage: finalInfo.batteryVoltage,
+          stationInfo: finalInfo,
           timeDriftMs,
         },
       }),
     );
 
     return {
-      batteryVoltage: stationInfo.batteryVoltage,
-      stationInfo,
+      batteryVoltage: finalInfo.batteryVoltage,
+      stationInfo: finalInfo,
       timeDriftMs,
     };
   }
@@ -968,13 +990,52 @@ export class SIReaderConnection extends EventTarget {
   }
 
   /**
-   * Power off the connected station/control.
+   * Power off the connected field control.
+   *
+   * Asymmetry observed on hardware: an already-awake control would power off
+   * after programming, but a freshly-coil-woken one would not. Three things
+   * in the previous fire-and-forget version are suspect, all of which hurt
+   * freshly-woken units more than already-awake ones:
+   *
+   *   1. buildOff() defaulted to remote=false → 0xFF wakeup byte included.
+   *      In remote mode the BSM8 misinterprets the wakeup byte and NAKs
+   *      (see comment on buildCommand). Frame forwarded via the coupling
+   *      coil was therefore mangled.
+   *   2. this.write() with no sendAndWait — we never observed the BSM8 ACK
+   *      and have no idea whether the OFF was forwarded.
+   *   3. BSM8 stayed in REMOTE mode after OFF, so the next probe poll's
+   *      coupling-coil pulse re-woke the unit we just told to sleep.
+   *
+   * Each step below addresses one of those.
    */
   async powerOffStation(): Promise<void> {
+    // 1. Make sure BSM8 is in remote mode so the coil forwards the OFF.
     await this.sendAndWait(buildSetRemoteMode(), CMD.SET_MS);
     this._inRemoteMode = true;
-    await new Promise((r) => setTimeout(r, 200));
-    await this.write(buildOff());
+
+    // 2. Give a freshly-booted field control time to finish post-boot init
+    //    before we ask it to power down.
+    await new Promise((r) => setTimeout(r, 500));
+
+    // 3. Send OFF without the 0xFF wakeup byte (remote=true) and via
+    //    sendAndWait so the BSM8 ACKs the forwarded frame. OFF may not
+    //    elicit a response from the field control itself once it's gone
+    //    to sleep; tolerate timeout.
+    try {
+      await this.sendAndWait(buildOff(true), CMD.OFF, 700);
+    } catch {
+      // Best-effort: unit may sleep before responding.
+    }
+
+    // 4. Return the BSM8 to direct mode so the coupling coil stops pulsing.
+    //    Otherwise the next coil pulse can re-wake the unit we just told
+    //    to sleep.
+    try {
+      await this.sendAndWait(buildSetDirectMode(), CMD.SET_MS, 1000);
+      this._inRemoteMode = false;
+    } catch {
+      // Best-effort cleanup.
+    }
   }
 
   /**

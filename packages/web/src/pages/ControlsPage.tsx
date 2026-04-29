@@ -7,6 +7,7 @@ import {
   CONTROL_STATUS_OPTIONS,
   type ControlStatusValue,
   type ControlInfo,
+  type ControlUnit,
   type RadioType,
   type AirPlusOverride,
 } from "@oxygen/shared";
@@ -301,6 +302,7 @@ export function ControlsPage() {
                   <SortHeader label={t("runners")} active={sort.key === "runners"} direction={sort.dir} onClick={() => toggle("runners")} className="w-24" />
                   <SortHeader label={t("checked")} active={sort.key === "checked"} direction={sort.dir} onClick={() => toggle("checked")} className="hidden lg:table-cell w-32" />
                   <th className="px-4 py-2.5 text-left font-medium text-slate-500 hidden lg:table-cell w-24">{t("battery")}</th>
+                  <th className="px-4 py-2.5 text-left font-medium text-slate-500 hidden xl:table-cell w-32">{t("type")}</th>
                   <th className="px-4 py-2.5 text-right font-medium text-slate-500 w-20">{t("actions")}</th>
                 </tr>
               </thead>
@@ -433,6 +435,9 @@ function ControlRow({
         <td className="px-4 py-2.5 hidden lg:table-cell">
           <BatteryIndicator voltage={config?.batteryVoltage ?? null} low={config?.batteryLow ?? null} />
         </td>
+        <td className="px-4 py-2.5 hidden xl:table-cell">
+          <UnitTypeSummary units={ctrl.units ?? []} />
+        </td>
         <td className="px-4 py-2.5 text-right" onClick={(e) => e.stopPropagation()}>
           <button
             onClick={onDelete}
@@ -447,7 +452,7 @@ function ControlRow({
       </tr>
       {expanded && (
         <tr key={`detail-${ctrl.id}`}>
-          <td colSpan={9} className="p-0">
+          <td colSpan={10} className="p-0">
             <ControlInlineDetail controlId={ctrl.id} />
           </td>
         </tr>
@@ -493,6 +498,61 @@ function BatteryIndicator({ voltage, low }: { voltage: number | null; low: boole
   if (voltage === null) return <span className="text-slate-300">—</span>;
   const color = low ? "text-red-600" : voltage < 3.0 ? "text-amber-600" : "text-green-600";
   return <span className={`text-xs font-mono tabular-nums ${color}`}>{voltage.toFixed(2)}V</span>;
+}
+
+/** Summarise a control's physical units' hardware models for the main table.
+ *  Distinct names joined by " / " (e.g. "BSF8 / BSF9") so that controls
+ *  fulfilled by mismatched hardware are visible at a glance. */
+function UnitTypeSummary({ units }: { units: ControlUnit[] }) {
+  const names = Array.from(
+    new Set(
+      units
+        .map((u) => u.modelName)
+        .filter((n): n is string => typeof n === "string" && n.length > 0),
+    ),
+  );
+  if (names.length === 0) return <span className="text-slate-300">—</span>;
+  return (
+    <span className="text-xs font-mono text-slate-700">
+      {names.join(" / ")}
+    </span>
+  );
+}
+
+/** Small AIR+ / SRR+ capability badge shown next to a unit's model name. */
+function CapabilityBadge({ kind }: { kind: "airPlus" | "srrPlus" }) {
+  const { t } = useTranslation("controls");
+  const label = kind === "airPlus" ? t("airPlusBadge") : t("srrPlusBadge");
+  const cls =
+    kind === "airPlus"
+      ? "bg-violet-100 text-violet-700"
+      : "bg-emerald-100 text-emerald-700";
+  return (
+    <span
+      className={`px-1.5 py-0.5 rounded-full text-[10px] font-medium ${cls}`}
+    >
+      {label}
+    </span>
+  );
+}
+
+/** Per-unit "Type" cell: model name + AIR+/SRR+ capability badges.
+ *
+ *  AIR+ badge: shown whenever the model is a BS11 family (these are the only
+ *  stations that handle SIAC/Air+ punching). For BSF8-SRR variants we have no
+ *  cleanly distinguishable MODEL_ID from a non-SRR BSF8, so we don't try to
+ *  guess hardware-SRR for field stations from the model alone — the SRR+
+ *  badge is currently a TODO that needs the SRR_CFG bit persisted per-unit. */
+function UnitTypeCell({ unit }: { unit: ControlUnit }) {
+  const name = unit.modelName ?? "";
+  if (!name) return <span className="text-slate-300">—</span>;
+  const isAirPlus = name.startsWith("BS11");
+  return (
+    <span className="inline-flex items-center gap-1">
+      <span className="font-mono text-slate-700">{name}</span>
+      {isAirPlus && <CapabilityBadge kind="airPlus" />}
+    </span>
+  );
 }
 
 // ─── Helpers ─────────────────────────────────────────────
@@ -723,6 +783,7 @@ function ControlInlineDetail({ controlId }: { controlId: number }) {
                 <tr>
                   <th className="px-3 py-1.5 text-left font-medium">{t("serial")}</th>
                   <th className="px-3 py-1.5 text-left font-medium">{t("code")}</th>
+                  <th className="px-3 py-1.5 text-left font-medium">{t("type")}</th>
                   <th className="px-3 py-1.5 text-left font-medium">{t("battery")}</th>
                   <th className="px-3 py-1.5 text-left font-medium">{t("checked")}</th>
                   <th className="px-3 py-1.5 text-left font-medium">{t("firmware")}</th>
@@ -735,6 +796,9 @@ function ControlInlineDetail({ controlId }: { controlId: number }) {
                     <td className="px-3 py-1.5 font-mono text-slate-700 tabular-nums">{u.stationSerial}</td>
                     <td className="px-3 py-1.5 font-mono text-slate-700 tabular-nums">
                       {u.lastProgrammedCode ?? <span className="text-slate-300">—</span>}
+                    </td>
+                    <td className="px-3 py-1.5">
+                      <UnitTypeCell unit={u} />
                     </td>
                     <td className="px-3 py-1.5">
                       <BatteryIndicator voltage={u.batteryVoltage} low={u.batteryLow} />
@@ -1035,7 +1099,9 @@ function ProgrammingPanel({
       stationSerial: stationInfo.serialNo,
       programmedCode: targetCode,
       batteryVoltage,
-      firmwareVersion: stationInfo.firmwareVersion,
+      firmwareVersion: progInfo.firmwareVersion,
+      modelId: progInfo.modelId,
+      modelName: progInfo.modelName,
       memoryCleared: true,
     });
 

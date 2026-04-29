@@ -43,6 +43,8 @@ interface ControlUnitRow {
   checked_at: Date | null;
   memory_cleared_at: Date | null;
   firmware_version: string | null;
+  model_id: number | null;
+  model_name: string | null;
   last_seen_at: Date | null;
 }
 
@@ -55,6 +57,8 @@ function rowToUnit(row: ControlUnitRow): ControlUnit {
     checkedAt: row.checked_at?.toISOString() ?? null,
     memoryClearedAt: row.memory_cleared_at?.toISOString() ?? null,
     firmwareVersion: row.firmware_version,
+    modelId: row.model_id !== null ? Number(row.model_id) : null,
+    modelName: row.model_name,
     lastSeenAt: row.last_seen_at?.toISOString() ?? null,
   };
 }
@@ -538,6 +542,8 @@ export const controlRouter = router({
         programmedCode: z.number().int(),
         batteryVoltage: z.number(),
         firmwareVersion: z.string().optional(),
+        modelId: z.number().int().optional(),
+        modelName: z.string().optional(),
         memoryCleared: z.boolean().optional(),
       }),
     )
@@ -547,16 +553,18 @@ export const controlRouter = router({
 
       const batteryLow = input.batteryVoltage < 2.5 ? 1 : 0;
       const firmware = input.firmwareVersion ?? null;
+      const modelId = input.modelId ?? null;
+      const modelName = input.modelName ?? null;
 
       if (input.memoryCleared) {
         await client.$executeRaw`
           INSERT INTO oxygen_control_units
             (station_serial, control_id, last_programmed_code,
              battery_voltage, battery_low, checked_at, memory_cleared_at,
-             firmware_version, last_seen_at)
+             firmware_version, model_id, model_name, last_seen_at)
           VALUES (${input.stationSerial}, ${input.controlId}, ${input.programmedCode},
                   ${input.batteryVoltage}, ${batteryLow}, NOW(), NOW(),
-                  ${firmware}, NOW())
+                  ${firmware}, ${modelId}, ${modelName}, NOW())
           ON DUPLICATE KEY UPDATE
             control_id = ${input.controlId},
             last_programmed_code = ${input.programmedCode},
@@ -565,14 +573,18 @@ export const controlRouter = router({
             checked_at = NOW(),
             memory_cleared_at = NOW(),
             firmware_version = COALESCE(${firmware}, firmware_version),
+            model_id = COALESCE(${modelId}, model_id),
+            model_name = COALESCE(${modelName}, model_name),
             last_seen_at = NOW()`;
       } else {
         await client.$executeRaw`
           INSERT INTO oxygen_control_units
             (station_serial, control_id, last_programmed_code,
-             battery_voltage, battery_low, checked_at, firmware_version, last_seen_at)
+             battery_voltage, battery_low, checked_at, firmware_version,
+             model_id, model_name, last_seen_at)
           VALUES (${input.stationSerial}, ${input.controlId}, ${input.programmedCode},
-                  ${input.batteryVoltage}, ${batteryLow}, NOW(), ${firmware}, NOW())
+                  ${input.batteryVoltage}, ${batteryLow}, NOW(), ${firmware},
+                  ${modelId}, ${modelName}, NOW())
           ON DUPLICATE KEY UPDATE
             control_id = ${input.controlId},
             last_programmed_code = ${input.programmedCode},
@@ -580,6 +592,8 @@ export const controlRouter = router({
             battery_low = ${batteryLow},
             checked_at = NOW(),
             firmware_version = COALESCE(${firmware}, firmware_version),
+            model_id = COALESCE(${modelId}, model_id),
+            model_name = COALESCE(${modelName}, model_name),
             last_seen_at = NOW()`;
       }
 
