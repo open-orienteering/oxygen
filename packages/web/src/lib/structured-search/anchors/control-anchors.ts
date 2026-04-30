@@ -177,6 +177,56 @@ export function createControlAnchors(
       },
     },
     {
+      key: "type",
+      label: getLabel("type"),
+      type: "string",
+      operators: ["eq", "contains", "wildcard", "in"],
+      defaultOperator: "contains",
+      color: "violet",
+      suggest: (query, data) => {
+        const items = Array.isArray(data) ? (data as ControlInfo[]) : [];
+        const uniqueNames = Array.from(
+          new Set(
+            items.flatMap((item) =>
+              (item.units ?? [])
+                .map((u) => u.modelName)
+                .filter((n): n is string => !!n && n.trim().length > 0),
+            ),
+          ),
+        )
+          .sort((a, b) => a.localeCompare(b))
+          .filter((name) => {
+            if (!query.trim()) return true;
+            return name.toLowerCase().includes(query.toLowerCase());
+          })
+          .slice(0, 25);
+
+        const suggestions = uniqueNames.map((name) => ({ key: name, label: name }));
+        // Keep "missing" discoverable for controls with no known unit type yet.
+        if ("missing".includes(query.toLowerCase()) || !query.trim()) {
+          suggestions.push({ key: "missing", label: "Missing type" });
+        }
+        return suggestions;
+      },
+      match: (item, op, value) => {
+        const names = Array.from(
+          new Set(
+            (item.units ?? [])
+              .map((u) => u.modelName)
+              .filter((n): n is string => !!n && n.trim().length > 0),
+          ),
+        );
+
+        // Useful special value: type:missing
+        if (value.trim().toLowerCase() === "missing") return names.length === 0;
+
+        // Match against each model name and also the joined summary string
+        // used by the table ("BSF8 / BSF9").
+        const summary = names.join(" / ");
+        return names.some((n) => matchString(n, op, value)) || matchString(summary, op, value);
+      },
+    },
+    {
       key: "runners",
       label: getLabel("runners"),
       type: "number",
