@@ -42,26 +42,62 @@ eventor_api_key       →  (missing)                          (deleted by clearK
 ## Fix
 
 Snapshot/restore the two Eventor key rows around the E2E run, in the
-existing Playwright globalSetup plus a new globalTeardown:
+existing Playwright globalSetup plus a new globalTeardown.
 
-- `e2e/global-setup.ts` writes the current values of `eventor_api_key`
-  and `eventor_api_key_test` into `e2e_backup_*` rows in the same table
-  before any test runs. If a backup row already exists from a
-  previously interrupted run, it is left intact — overwriting it would
-  cement the test-injected value as the "real" one on the next
-  teardown.
-- `e2e/global-teardown.ts` reads the backup rows and either restores
-  the original value or deletes the live row (using the `__E2E_NULL__`
-  sentinel for "the key was originally absent"), then removes the
-  backup.
+### Original DB-row snapshot (insufficient)
+
+The first iteration stored the snapshot back into `oxygen_settings`
+itself, as `e2e_backup_*` rows, with idempotency to "leave existing
+backups intact" across interrupted runs.
+
+That broke whenever a run was interrupted before teardown:
+
+1. Run A snapshots the real key into `e2e_backup_eventor_api_key`.
+2. Tests run, live key is wiped to placeholder/empty.
+3. Ctrl-C / crash before teardown. State: live polluted, backup = real.
+4. User notices, manually re-enters real key in the UI.
+5. Run B starts; setup sees backup exists → idempotent skip; backup
+   is *not* refreshed.
+6. Tests run, live wiped again.
+7. Teardown reads (now stale) backup → overwrites the user's freshly
+   re-entered key with the previous snapshot, or — worse — with whatever
+   placeholder value the snapshot was written with if the original
+   snapshot itself was taken during a polluted state.
+
+### Current file-based snapshot
+
+The snapshot now lives in a gitignored file at
+`e2e/.eventor-snapshot.json`. The setup/teardown logic is:
+
+- `e2e/global-setup.ts`:
+  - Reads the current live values of `eventor_api_key` and
+    `eventor_api_key_test`.
+  - For each, classifies the live value as "test pollution"
+    (null / empty / equal to the e2e placeholder string) or "real".
+  - If real and different from the snapshot file → updates the snapshot
+    (this is how a manually re-entered key after an interrupt is
+    picked up).
+  - If polluted → keeps the existing snapshot intact and never lets
+    test pollution become the new ground truth.
+- `e2e/global-teardown.ts`:
+  - Reads the snapshot file.
+  - For each captured key, restores the live row from the snapshot
+    (or deletes it when the snapshot recorded an originally absent
+    row, represented as `null` in JSON).
+  - The snapshot file itself stays on disk across runs — no
+    self-erasing on success — so the next interrupted run is still
+    recoverable.
+
+Legacy DB-row backup entries (`e2e_backup_*`) are deleted on every
+setup so they can't be silently consulted by anything anymore.
 
 Tests can keep doing what they need to (clearing the key to verify the
 "API key step" UI, validating fake keys to surface the sync panels) —
 the developer's real key just survives the round-trip.
 
-The fix is contained to `e2e/global-setup.ts`, the new
-`e2e/global-teardown.ts`, and a `globalTeardown` line in
-`playwright.config.ts`. No production code changes.
+The fix is contained to `e2e/global-setup.ts`, `e2e/global-teardown.ts`,
+the `globalTeardown` line in `playwright.config.ts`, and a `.gitignore`
+entry for the snapshot file. No production code changes.
 
 ## Recovery
 

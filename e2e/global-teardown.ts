@@ -1,21 +1,45 @@
 import mysql from "mysql2/promise";
+import { readFileSync, existsSync } from "fs";
+import { resolve } from "path";
 import { EVENTOR_KEYS_TO_PRESERVE } from "./global-setup";
 
-const E2E_BACKUP_PREFIX = "e2e_backup_";
-const E2E_BACKUP_NULL = "__E2E_NULL__";
+const SNAPSHOT_PATH = resolve(__dirname, ".eventor-snapshot.json");
+
+interface Snapshot {
+  [key: string]: string | null;
+}
+
+function readSnapshot(): Snapshot | null {
+  if (!existsSync(SNAPSHOT_PATH)) return null;
+  try {
+    const raw = readFileSync(SNAPSHOT_PATH, "utf-8");
+    const parsed = JSON.parse(raw);
+    if (parsed && typeof parsed === "object") return parsed as Snapshot;
+  } catch {
+    // ignore
+  }
+  return null;
+}
 
 /**
  * Playwright global teardown.
  *
- * Restores the Eventor API key settings snapshotted in global-setup so
- * that running the E2E suite does not silently delete or overwrite the
- * developer's real Eventor API key in MeOSMain.oxygen_settings.
+ * Restores the Eventor API key settings recorded in the file-based
+ * snapshot from global-setup so that running the E2E suite does not
+ * silently delete or overwrite the developer's real Eventor API key
+ * in MeOSMain.oxygen_settings.
  *
- * Robust to interrupted runs: if no backup row exists (because setup
- * never ran, or the backup was already restored), we do nothing rather
- * than guessing.
+ * Robust to interrupted runs: the snapshot is durable on disk, so even
+ * if a run is killed before teardown, the next clean teardown can still
+ * restore from the same file.
  */
 export default async function globalTeardown() {
+  const snapshot = readSnapshot();
+  if (!snapshot) {
+    console.log("  [teardown] No Eventor key snapshot file — nothing to restore.");
+    return;
+  }
+
   const conn = await mysql.createConnection({
     host: "localhost",
     user: "meos",
@@ -25,16 +49,13 @@ export default async function globalTeardown() {
 
   try {
     for (const key of EVENTOR_KEYS_TO_PRESERVE) {
-      const backupKey = `${E2E_BACKUP_PREFIX}${key}`;
-      const [rows] = await conn.execute(
-        "SELECT SettingValue FROM oxygen_settings WHERE SettingKey = ?",
-        [backupKey],
-      );
-      const arr = rows as Array<{ SettingValue: string | null }>;
-      if (arr.length === 0) continue;
+      // Missing snapshot entry → leave the live row alone. Defensive
+      // default: do nothing rather than guess.
+      if (!(key in snapshot)) continue;
 
-      const backupValue = arr[0].SettingValue;
-      if (backupValue === null || backupValue === E2E_BACKUP_NULL) {
+      const value = snapshot[key];
+      if (value === null || value === undefined || value === "") {
+        // Snapshot says "originally absent / empty": delete the row.
         await conn.execute(
           "DELETE FROM oxygen_settings WHERE SettingKey = ?",
           [key],
@@ -43,15 +64,11 @@ export default async function globalTeardown() {
         await conn.execute(
           `INSERT INTO oxygen_settings (SettingKey, SettingValue) VALUES (?, ?)
            ON DUPLICATE KEY UPDATE SettingValue = VALUES(SettingValue)`,
-          [key, backupValue],
+          [key, value],
         );
       }
-      await conn.execute(
-        "DELETE FROM oxygen_settings WHERE SettingKey = ?",
-        [backupKey],
-      );
     }
-    console.log("  [teardown] Eventor key settings restored");
+    console.log("  [teardown] Eventor key settings restored from snapshot");
   } finally {
     await conn.end();
   }
