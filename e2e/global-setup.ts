@@ -1,5 +1,5 @@
 import mysql from "mysql2/promise";
-import { readFileSync } from "fs";
+import { readFileSync, writeFileSync, existsSync } from "fs";
 import { resolve } from "path";
 
 /**
@@ -36,25 +36,78 @@ const SEEDS: Array<{
 /**
  * Eventor API key settings that the E2E suite mutates (clearKey,
  * validateKey). They live in the shared MeOSMain.oxygen_settings table
- * alongside the developer's real keys, so we snapshot them here and
- * restore them in global-teardown. See e2e/global-teardown.ts.
+ * alongside the developer's real keys, so we snapshot them to a local
+ * file (gitignored) and restore them in global-teardown.
+ *
+ * Earlier revisions stored the snapshot back into oxygen_settings as
+ * `e2e_backup_*` rows. That broke whenever a run was interrupted before
+ * teardown: the live key was lost and the backup row could end up
+ * containing test-pollution, which was then "restored" on the next run
+ * and silently overwrote the developer's freshly re-entered key.
+ *
+ * The file-based snapshot below survives interrupts and (importantly)
+ * is updated on every setup that observes a real value, so manually
+ * re-entering the key after an interrupted run is also picked up
+ * correctly on the next teardown.
  */
 export const EVENTOR_KEYS_TO_PRESERVE = [
   "eventor_api_key",
   "eventor_api_key_test",
 ] as const;
-const E2E_BACKUP_PREFIX = "e2e_backup_";
-/** Sentinel meaning "the original row did not exist; restore = delete". */
-const E2E_BACKUP_NULL = "__E2E_NULL__";
+
+const SNAPSHOT_PATH = resolve(__dirname, ".eventor-snapshot.json");
+
+/** Placeholder value the e2e suite writes via validateKey. */
+const TEST_PLACEHOLDER = "df34af90a0c64ca4abfe9492be057e9c";
+
+/**
+ * "Test pollution" = a value the e2e suite would have written:
+ *   - empty / null / undefined
+ *   - the literal placeholder string
+ * Anything else is treated as a real value worth preserving.
+ */
+function isTestPollution(value: string | null | undefined): boolean {
+  if (value == null) return true;
+  if (value.trim() === "") return true;
+  if (value === TEST_PLACEHOLDER) return true;
+  return false;
+}
+
+interface Snapshot {
+  /** Per-key real value (null = "the row was originally absent / empty"). */
+  [key: string]: string | null;
+}
+
+function readSnapshot(): Snapshot {
+  if (!existsSync(SNAPSHOT_PATH)) return {};
+  try {
+    const raw = readFileSync(SNAPSHOT_PATH, "utf-8");
+    const parsed = JSON.parse(raw);
+    if (parsed && typeof parsed === "object") return parsed as Snapshot;
+  } catch {
+    // Unreadable / corrupt — fall through to empty snapshot. Teardown
+    // logic treats "no snapshot entry" as "do nothing", which is the
+    // safe default.
+  }
+  return {};
+}
+
+function writeSnapshot(snapshot: Snapshot): void {
+  writeFileSync(SNAPSHOT_PATH, JSON.stringify(snapshot, null, 2) + "\n", "utf-8");
+}
 
 /**
  * Playwright global setup:
- *   1. Snapshot Eventor API key settings (so individual tests can
- *      legitimately clear/set them without trashing the developer's
- *      real keys).
- *   2. Drop and recreate all test databases from clean seeds
- *   3. Ensure MeOSMain has the required competition entries
- *   4. Clean up leftover E2E test databases from previous runs
+ *   0. Update file-based Eventor key snapshot from the live values, but
+ *      only when the live value isn't test-pollution. This way:
+ *        - First run after a fresh key entry → snapshot file is written.
+ *        - Run after an interrupted run (live still polluted) → existing
+ *          snapshot is kept untouched.
+ *        - Run after the user manually re-entered the key post-interrupt
+ *          → snapshot file is overwritten with the new real value.
+ *   1. Drop and recreate all test databases from clean seeds
+ *   2. Ensure MeOSMain has the required competition entries
+ *   3. Clean up leftover E2E test databases from previous runs
  *
  * This guarantees every test run starts from the exact same state
  * with zero dependency on pre-existing data.
@@ -68,47 +121,48 @@ export default async function globalSetup() {
   });
 
   try {
-    // ── 0. Snapshot Eventor key settings ──────────────────────
-    // The eventor.clearKey / eventor.validateKey mutations write to
-    // MeOSMain.oxygen_settings, which is shared with everything else
-    // running against this MySQL instance. Without a backup, every
-    // E2E run wipes the developer's real Eventor API key.
-    //
-    // Idempotency: if a backup row already exists from a previously
-    // interrupted run, leave it alone — overwriting it would lose
-    // the original value and cement the test-injected key as the
-    // "real" one on the next teardown.
+    // ── 0. Snapshot Eventor key settings to file ──────────────
     await conn.execute(`
       CREATE TABLE IF NOT EXISTS oxygen_settings (
         SettingKey   VARCHAR(128) NOT NULL PRIMARY KEY,
         SettingValue TEXT NULL
       )
     `);
+
+    const snapshot = readSnapshot();
+    let snapshotChanged = false;
     for (const key of EVENTOR_KEYS_TO_PRESERVE) {
-      const backupKey = `${E2E_BACKUP_PREFIX}${key}`;
-      const [backupRows] = await conn.execute(
-        "SELECT 1 FROM oxygen_settings WHERE SettingKey = ?",
-        [backupKey],
-      );
-      if (Array.isArray(backupRows) && backupRows.length > 0) {
-        console.log(
-          `  [setup] Eventor key backup for "${key}" already exists from a prior run — leaving it intact.`,
-        );
-        continue;
-      }
       const [rows] = await conn.execute(
         "SELECT SettingValue FROM oxygen_settings WHERE SettingKey = ?",
         [key],
       );
       const arr = rows as Array<{ SettingValue: string | null }>;
-      const original = arr.length > 0 ? arr[0].SettingValue : null;
-      await conn.execute(
-        `INSERT INTO oxygen_settings (SettingKey, SettingValue) VALUES (?, ?)
-         ON DUPLICATE KEY UPDATE SettingValue = VALUES(SettingValue)`,
-        [backupKey, original ?? E2E_BACKUP_NULL],
-      );
+      const live = arr.length > 0 ? arr[0].SettingValue : null;
+
+      if (isTestPollution(live)) {
+        // Don't overwrite a previously-captured real value with test
+        // pollution. If we have nothing yet, record null to mean "row
+        // was originally absent / empty".
+        if (!(key in snapshot)) {
+          snapshot[key] = null;
+          snapshotChanged = true;
+          console.log(`  [setup] No prior snapshot for "${key}"; recording empty baseline.`);
+        } else {
+          console.log(`  [setup] Keeping existing snapshot for "${key}" (live is test-pollution).`);
+        }
+      } else {
+        // Live value looks real. If it differs from the snapshot,
+        // refresh the snapshot — the user may have just re-entered a
+        // new key after an interrupted run.
+        if (snapshot[key] !== live) {
+          snapshot[key] = live;
+          snapshotChanged = true;
+          console.log(`  [setup] Updated snapshot for "${key}" from live value.`);
+        }
+      }
     }
-    console.log("  [setup] Eventor key settings snapshotted");
+    if (snapshotChanged) writeSnapshot(snapshot);
+    console.log(`  [setup] Eventor key snapshot at ${SNAPSHOT_PATH}`);
 
     // ── 1. Recreate test databases from seeds ─────────────────
 
@@ -161,6 +215,19 @@ export default async function globalSetup() {
           // Ignore errors for individual DBs
         }
       }
+    }
+
+    // ── 3. Clean up any legacy DB-resident backup rows ────────
+    // Earlier versions of this script stashed the snapshot in
+    // oxygen_settings as `e2e_backup_*` rows. Those are now stale and
+    // should never be used to "restore" anything — drop them so we
+    // don't accidentally read a value left over from a botched run.
+    try {
+      await conn.execute(
+        "DELETE FROM oxygen_settings WHERE SettingKey LIKE 'e2e_backup_%'",
+      );
+    } catch {
+      // ignore
     }
   } finally {
     await conn.end();
