@@ -107,14 +107,6 @@ export function ControlsPage() {
     });
   }, []);
 
-  const toggleSelectAll = useCallback(() => {
-    if (!controls.data) return;
-    const selectableIds = controls.data.map((c) => c.id);
-    setSelectedIds((prev) =>
-      prev.size === selectableIds.length ? new Set() : new Set(selectableIds),
-    );
-  }, [controls.data]);
-
   // Bulk actions
   const handleBulkRadioType = (type: RadioType) => {
     if (selectedIds.size === 0) return;
@@ -151,6 +143,15 @@ export function ControlsPage() {
   );
   const { sorted: items, sort, toggle } = useSort(filteredControls, { key: "code", dir: "asc" }, comparators);
 
+  // Select-all operates on the currently filtered/sorted view, not the full
+  // dataset — declared after `items` so the closure captures it without a TDZ.
+  const toggleSelectAll = useCallback(() => {
+    const selectableIds = items.map((c) => c.id);
+    setSelectedIds((prev) =>
+      prev.size === selectableIds.length ? new Set() : new Set(selectableIds),
+    );
+  }, [items]);
+
   const selectableItems = items;
 
   return (
@@ -161,6 +162,7 @@ export function ControlsPage() {
           tokens={tokens}
           onTokensChange={setTokens}
           anchors={anchors}
+          suggestionData={controls.data ?? []}
           placeholder={t("searchPlaceholder")}
         />
         <button
