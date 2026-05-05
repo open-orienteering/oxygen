@@ -15,6 +15,7 @@ import { liveresultsRouter } from "./liveresults.js";
 import { externalRouter } from "./external.js";
 import { liveloxRouter } from "./livelox.js";
 import { eventsRouter } from "./events.js";
+import { registrationTrendsRouter } from "./registrationTrends.js";
 
 export const appRouter = router({
   competition: competitionRouter,
@@ -33,6 +34,7 @@ export const appRouter = router({
   external: externalRouter,
   livelox: liveloxRouter,
   events: eventsRouter,
+  registrationTrends: registrationTrendsRouter,
 });
 
 

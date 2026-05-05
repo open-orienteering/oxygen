@@ -61,15 +61,41 @@ const SNAPSHOT_PATH = resolve(__dirname, ".eventor-snapshot.json");
 const TEST_PLACEHOLDER = "df34af90a0c64ca4abfe9492be057e9c";
 
 /**
- * "Test pollution" = a value the e2e suite would have written:
+ * Strings any test in this repo might leak into oxygen_settings as a
+ * "fake" key. Real Eventor API keys are 32 lowercase hex chars, so any
+ * recognisable English/dash word value is also a clear giveaway.
+ */
+const KNOWN_FAKE_KEY_TOKENS = [
+  TEST_PLACEHOLDER,
+  "fake",
+  "test",
+  "dummy",
+  "placeholder",
+];
+
+/**
+ * "Test pollution" = a value the e2e suite (or any other test in this
+ * repo) might have written:
  *   - empty / null / undefined
  *   - the literal placeholder string
+ *   - anything containing an obvious "fake/test/dummy" token
  * Anything else is treated as a real value worth preserving.
+ *
+ * Conservative on purpose: a few false negatives (real keys that happen
+ * to contain "test") would just refresh the snapshot from a value that
+ * already matches; a single false positive (treating a real key as
+ * pollution) would silently drop it. The token list is therefore kept
+ * to strings that no real Eventor key would ever contain.
  */
 function isTestPollution(value: string | null | undefined): boolean {
   if (value == null) return true;
-  if (value.trim() === "") return true;
-  if (value === TEST_PLACEHOLDER) return true;
+  const trimmed = value.trim();
+  if (trimmed === "") return true;
+  const lower = trimmed.toLowerCase();
+  for (const token of KNOWN_FAKE_KEY_TOKENS) {
+    if (lower === token.toLowerCase()) return true;
+    if (lower.includes(token)) return true;
+  }
   return false;
 }
 

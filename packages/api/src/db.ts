@@ -632,6 +632,43 @@ export async function ensureRunnerDbTable(
   runnerDbTableReady = true;
 }
 
+// ─── Eventor entry history cache (MeOSMain) ────────────────
+
+// Per-event-meta and per-entry caches shared across all competitions on
+// the same Oxygen instance. Used by the "Registration trends" page to draw
+// historical curves for comparable Eventor events without re-hitting the
+// Eventor API every time the page is opened.
+
+let eventorEntryHistoryTableReady = false;
+
+export async function ensureEventorEntryHistoryTable(
+  conn: mysql.Connection,
+): Promise<void> {
+  if (eventorEntryHistoryTableReady) return;
+  await conn.execute(`
+    CREATE TABLE IF NOT EXISTS oxygen_eventor_event_meta (
+      EventorEventId   INT NOT NULL PRIMARY KEY,
+      Name             VARCHAR(255) NOT NULL DEFAULT '',
+      StartDate        DATE NOT NULL,
+      ClassificationId INT NOT NULL DEFAULT 0,
+      Organiser        VARCHAR(255) NOT NULL DEFAULT '',
+      EntryCount       INT NOT NULL DEFAULT 0,
+      FetchedAt        DATETIME NOT NULL
+    )
+  `);
+  await conn.execute(`
+    CREATE TABLE IF NOT EXISTS oxygen_eventor_entry_history (
+      EventorEventId INT NOT NULL,
+      RowSeq         INT NOT NULL,
+      EntryClassId   INT NOT NULL DEFAULT 0,
+      EntryAt        DATETIME NOT NULL,
+      PRIMARY KEY (EventorEventId, RowSeq),
+      KEY idx_event (EventorEventId)
+    )
+  `);
+  eventorEntryHistoryTableReady = true;
+}
+
 // ─── Global Club DB table (MeOSMain) ───────────────────────
 
 let clubDbTableReady = false;

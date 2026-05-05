@@ -2,7 +2,7 @@ import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import { router, competitionProcedure } from "../trpc.js";
 import { incrementCounter, incrementCounterBatch, getZeroTime } from "../db.js";
-import { toRelative, toAbsolute } from "../timeConvert.js";
+import { toRelative, toAbsolute, nowMeosDate, nowMeosTime } from "../timeConvert.js";
 import type {
   RunnerDetail,
   RunnerInfo,
@@ -453,6 +453,12 @@ export const runnerRouter = router({
 
       const zeroTime = (input.startTime || input.finishTime) ? await getZeroTime(client) : 0;
 
+      // Stamp the registration moment so the row contributes to the
+      // "registrations over time" trend even though it didn't come via
+      // Eventor. EntrySource stays at 0 so we can still distinguish manual
+      // entries from synced ones downstream.
+      const registeredAt = new Date();
+
       const runner = await client.oRunner.create({
         data: {
           Name: input.name,
@@ -470,6 +476,8 @@ export const runnerRouter = router({
           PayMode: input.payMode,
           FinishTime: input.finishTime ? toRelative(input.finishTime, zeroTime) : 0,
           CardFee: input.cardFee,
+          EntryDate: nowMeosDate(registeredAt),
+          EntryTime: nowMeosTime(registeredAt),
           // MeOS requires these MediumText fields to be non-null
           InputResult: "",
           Annotation: "",

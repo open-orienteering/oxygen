@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { useTranslation } from "react-i18next";
+import { Link } from "react-router-dom";
 import { trpc } from "../lib/trpc";
 import { formatDateTime } from "../lib/format";
 import { useTimeAgo } from "../hooks/useTimeAgo";
@@ -53,6 +54,9 @@ export function EventPage() {
                 {d.competition.annotation && (
                   <span>{d.competition.annotation}</span>
                 )}
+              </div>
+              <div className="mt-3">
+                <RegistrationTrendsLink />
               </div>
             </div>
           </div>
@@ -109,6 +113,23 @@ export function EventPage() {
       {/* Livelox GPS Routes */}
       <LiveloxSection eventorEventId={syncStatus.data?.linked ? syncStatus.data.eventorEventId : null} />
     </div>
+  );
+}
+
+// ─── Registration Trends Link ───────────────────────────────
+
+function RegistrationTrendsLink() {
+  const { t } = useTranslation("trends");
+  return (
+    <Link
+      to="../registration-trends"
+      className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-blue-700 bg-blue-50 hover:bg-blue-100 rounded-lg transition-colors"
+    >
+      <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 3v18h18M7 17l4-4 4 4 6-6" />
+      </svg>
+      {t("viewTrends")}
+    </Link>
   );
 }
 
