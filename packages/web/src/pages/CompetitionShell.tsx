@@ -43,8 +43,9 @@ const TestLabPage = lazy(() => import("./TestLabPage").then(m => ({ default: m.T
 const BackupPunchesPage = lazy(() => import("./BackupPunchesPage").then(m => ({ default: m.BackupPunchesPage })));
 const TracksPage = lazy(() => import("./TracksPage").then(m => ({ default: m.TracksPage })));
 const TracksReplayPage = lazy(() => import("./TracksReplayPage").then(m => ({ default: m.TracksReplayPage })));
+const RegistrationTrendsPage = lazy(() => import("./RegistrationTrendsPage").then(m => ({ default: m.RegistrationTrendsPage })));
 
-type Tab = "dashboard" | "event" | "runners" | "startlist" | "results" | "classes" | "courses" | "controls" | "clubs" | "start-station" | "finish-station" | "card-readout" | "cards" | "backup-punches" | "test-lab" | "tracks";
+type Tab = "dashboard" | "event" | "runners" | "startlist" | "results" | "classes" | "courses" | "controls" | "clubs" | "start-station" | "finish-station" | "card-readout" | "cards" | "backup-punches" | "test-lab" | "tracks" | "registration-trends";
 
 const tabLabelKeys = {
   "dashboard": "dashboard",
@@ -63,6 +64,7 @@ const tabLabelKeys = {
   "backup-punches": "backupPunches",
   "test-lab": "testLab",
   "tracks": "tracks",
+  "registration-trends": "trends",
 } as const satisfies Record<Tab, string>;
 
 const tabs: { id: Tab; path: string; group?: string; countKey?: string; isOverflow?: boolean }[] = [
@@ -77,6 +79,7 @@ const tabs: { id: Tab; path: string; group?: string; countKey?: string; isOverfl
   { id: "tracks", path: "tracks" },
   // Overflow items
   { id: "event", path: "event", isOverflow: true },
+  { id: "registration-trends", path: "registration-trends", isOverflow: true },
   { id: "clubs", path: "clubs", countKey: "clubs", isOverflow: true },
   { id: "start-station", path: "start-station", group: "race", isOverflow: true },
   { id: "finish-station", path: "finish-station", group: "race", isOverflow: true },
@@ -444,6 +447,7 @@ export function CompetitionShell() {
             <Route path="test-lab" element={<TestLabPage />} />
             <Route path="tracks" element={<TracksPage />} />
             <Route path="tracks/replay" element={<TracksReplayPage />} />
+            <Route path="registration-trends" element={<RegistrationTrendsPage />} />
             <Route path="*" element={<Navigate to="" replace />} />
           </Routes>
           </Suspense>

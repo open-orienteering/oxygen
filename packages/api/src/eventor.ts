@@ -378,13 +378,41 @@ export async function fetchEvents(
   toDate: string,
   env: EventorEnvironment = "prod",
 ): Promise<EventorEvent[]> {
-  const xml = await eventorFetch("events", apiKey, env, {
-    fromDate,
-    toDate,
-    organisationIds: String(orgId),
+  return fetchEventsBroad(apiKey, { fromDate, toDate, organisationIds: [orgId] }, env);
+}
+
+/**
+ * Lower-level events search that allows broader filters than the
+ * single-org variant above. `organisationIds` may include district orgs
+ * (every event organised by clubs in that district will be returned),
+ * or be omitted entirely for "all events in the date range" — useful
+ * for the registration-trends comparison picker. `classificationIds`
+ * restricts to a single competition tier (1=mästerskap … 6=internationell).
+ */
+export async function fetchEventsBroad(
+  apiKey: string,
+  filters: {
+    fromDate: string;
+    toDate: string;
+    organisationIds?: number[];
+    classificationIds?: number[];
+  },
+  env: EventorEnvironment = "prod",
+): Promise<EventorEvent[]> {
+  const params: Record<string, string> = {
+    fromDate: filters.fromDate,
+    toDate: filters.toDate,
     includeEntryBreaks: "true",
     includeAttributes: "true",
-  });
+  };
+  if (filters.organisationIds && filters.organisationIds.length > 0) {
+    params.organisationIds = filters.organisationIds.join(",");
+  }
+  if (filters.classificationIds && filters.classificationIds.length > 0) {
+    params.classificationIds = filters.classificationIds.join(",");
+  }
+
+  const xml = await eventorFetch("events", apiKey, env, params);
 
   const parsed = parser.parse(xml);
   const eventList = parsed.EventList;
@@ -395,18 +423,14 @@ export async function fetchEvents(
     const startDate = ev.StartDate;
     const date = startDate?.Date ?? "";
 
-    // Classification can be nested or a simple id
     const classId = safeInt(
       ev.EventClassificationId ?? ev.EventClassification?.["@_id"],
     );
 
-    // Organiser info — Eventor XML may nest as <Organiser> or <Organisation>
-    // with child <OrganisationId> and <Name>, or as attributes.
     const organiser = ev.Organiser ?? ev.Organisation ?? {};
     const organiserId = safeInt(
       organiser.OrganisationId ?? organiser["@_id"] ?? 0,
     );
-    // Name is the human-readable org name — never fall back to the numeric ID
     const organiserName = safeStr(organiser.Name ?? "");
 
     const webUrl = safeStr(ev.WebURL ?? "");
@@ -446,6 +470,47 @@ export async function fetchEventWebUrl(
   } catch {
     return null;
   }
+}
+
+/**
+ * Fetch lightweight metadata (name + date + organiser) for a single event
+ * from Eventor by ID. Unlike {@link fetchEventWebUrl}, this does *not*
+ * require the event to have a `WebURL`, so it works for any event the API
+ * key can read.
+ *
+ * Auth errors are propagated as {@link EventorAuthError} so callers can
+ * surface a clear message to the user. Network/parse errors throw the
+ * raw error.
+ */
+export async function fetchEventMeta(
+  apiKey: string,
+  eventId: number,
+  env: EventorEnvironment = "prod",
+): Promise<{
+  name: string;
+  date: string;
+  classificationId: number;
+  organiserName: string;
+} | null> {
+  const xml = await eventorFetch(`event/${eventId}`, apiKey, env);
+  const parsed = parser.parse(xml);
+  const ev = parsed.Event ?? parsed;
+  if (!ev || typeof ev !== "object") return null;
+
+  const name = safeStr(ev.Name ?? "");
+  const date = safeStr(ev.StartDate?.Date ?? ev.StartDate ?? "");
+  const classificationId = safeInt(
+    ev.EventClassificationId ?? ev.EventClassification?.["@_id"] ?? 0,
+  );
+  const organiser = ev.Organiser ?? ev.Organisation ?? {};
+  const organiserName = safeStr(organiser.Name ?? "");
+
+  // Eventor returns an empty <Event /> wrapper when the ID is invalid.
+  // Treat "no name and no date" as "not found" rather than fabricating
+  // a row.
+  if (!name && !date) return null;
+
+  return { name, date, classificationId, organiserName };
 }
 
 /**

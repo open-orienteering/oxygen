@@ -4,6 +4,7 @@ import { useTranslation } from "react-i18next";
 import { trpc } from "../lib/trpc";
 import { MapPanel } from "../components/MapPanel";
 import { SearchableSelect, type SelectOption } from "../components/SearchableSelect";
+import { entriesToday, daysToGo, buildSeries } from "../lib/registration-trends";
 
 function CompetitionProgressBar({ courseId }: { courseId?: number }) {
   const { t } = useTranslation("dashboard");
@@ -126,7 +127,7 @@ export function CompetitionDashboard() {
       </div>
 
       {/* Race Status Cards */}
-      <div className="grid grid-cols-3 gap-4 mb-6">
+      <div className="grid grid-cols-3 gap-4 mb-4">
         <StatusCard
           label={t("notYetStarted")}
           description={t("stillWaiting")}
@@ -149,6 +150,9 @@ export function CompetitionDashboard() {
           onClick={() => navigate("results?status=finished")}
         />
       </div>
+
+      {/* Registration trends preview */}
+      <RegistrationTrendsCard onOpen={() => navigate("registration-trends")} />
 
       {/* Competition progress */}
       <CompetitionProgressBar courseId={selectedCourseId} />
@@ -235,6 +239,82 @@ const statusColorMap: Record<string, { bg: string; border: string; text: string;
     hoverBg: "hover:bg-emerald-100",
   },
 };
+
+function RegistrationTrendsCard({ onOpen }: { onOpen: () => void }) {
+  const { t } = useTranslation("trends");
+  const trends = trpc.registrationTrends.ownTimeline.useQuery(undefined, {
+    staleTime: 60_000,
+  });
+  if (trends.isLoading || !trends.data) return null;
+  const data = trends.data;
+  if (data.entries.length === 0) return null;
+
+  const todayCount = entriesToday(data.entries);
+  const dtg = daysToGo(data.event.date);
+  // Build a small per-day series for the sparkline
+  const points = buildSeries(data.entries, {
+    xAxis: "date",
+    yAxis: "perDay",
+    eventDate: data.event.date,
+  });
+  const values = points.map((p) => p.y);
+
+  return (
+    <button
+      onClick={onOpen}
+      className="w-full bg-white rounded-xl border border-slate-200 p-4 mb-6 text-left hover:bg-blue-50 hover:border-blue-200 transition-colors cursor-pointer"
+    >
+      <div className="flex items-center gap-4">
+        <div className="flex-1 min-w-0">
+          <div className="flex items-baseline gap-3">
+            <span className="text-xs font-semibold text-slate-500 uppercase tracking-wider">
+              {t("title")}
+            </span>
+            <span className="text-xs text-slate-400">
+              {dtg > 0
+                ? t("daysToGo") + ": " + dtg
+                : dtg === 0
+                  ? t("raceDay")
+                  : t("raceDayPast", { days: -dtg })}
+            </span>
+          </div>
+          <div className="mt-1 flex items-baseline gap-2">
+            <span className="text-2xl font-bold text-slate-900">
+              {data.datedCount}
+            </span>
+            <span className="text-xs text-slate-500">
+              · {t("todayCard")}: {todayCount > 0 ? todayCount : t("todayCardEmpty")}
+            </span>
+          </div>
+        </div>
+        <div className="text-blue-600">
+          <DashboardSparkline values={values} />
+        </div>
+      </div>
+    </button>
+  );
+}
+
+function DashboardSparkline({ values }: { values: number[] }) {
+  if (values.length < 2) return null;
+  const max = Math.max(...values, 1);
+  const w = 160;
+  const h = 36;
+  const step = w / (values.length - 1);
+  const points = values.map((v, i) => `${i * step},${h - (v / max) * h}`);
+  return (
+    <svg width={w} height={h} viewBox={`0 0 ${w} ${h}`}>
+      <polyline
+        points={points.join(" ")}
+        fill="none"
+        stroke="currentColor"
+        strokeWidth={1.75}
+        strokeLinejoin="round"
+        strokeLinecap="round"
+      />
+    </svg>
+  );
+}
 
 function StatusCard({
   label,

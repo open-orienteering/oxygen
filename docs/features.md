@@ -64,6 +64,10 @@ Clubs are pulled from Eventor (or entered manually) and rendered with their real
 
 ![Clubs list with logos](screenshots/clubs.png)
 
+### Registration trends
+
+The registration trend page (overflow nav → **Trends**) plots when runners signed up for the competition — useful both retroactively and during the countdown days when last-minute entries decide whether you need extra start corridors. The same chart can overlay comparable historical events from Eventor; the curves are aligned by *days before race* so different events with different start dates can be compared at a glance. See [registration-trends.md](registration-trends.md) for the data sources, cache strategy, and rate-limit handling.
+
 ### Runner list and bulk editing
 
 Every registered competitor is on one page, with class, club, SI card, and status visible at a glance. Click any row to expand an inline detail pane — name, class, club, times, punches, and status are all editable in place with auto-save.
