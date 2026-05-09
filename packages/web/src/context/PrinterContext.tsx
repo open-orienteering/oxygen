@@ -23,6 +23,9 @@ import {
   isWebUsbSupported,
   buildFinishReceipt,
   buildRegistrationReceipt,
+  buildFinishReceiptStarRaster,
+  buildRegistrationReceiptStarRaster,
+  buildStarRasterTestPattern,
   type FinishReceiptData,
   type RegistrationReceiptData,
   type FinishReceiptLabels,
@@ -178,7 +181,11 @@ export function PrinterProvider({ children }: { children: ReactNode }) {
     setLastError(null);
     setPrinting(true);
     try {
-      const bytes = buildFinishReceipt({ ...data, labels: { ...receiptLabels.finish(), ...data.labels } });
+      const merged = { ...data, labels: { ...receiptLabels.finish(), ...data.labels } };
+      const id = driver.getIdentity();
+      const bytes = id?.protocol === "star-raster"
+        ? buildFinishReceiptStarRaster(merged)
+        : buildFinishReceipt(merged);
       await driver.sendBytes(bytes);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -195,7 +202,11 @@ export function PrinterProvider({ children }: { children: ReactNode }) {
     setLastError(null);
     setPrinting(true);
     try {
-      const bytes = buildRegistrationReceipt({ ...data, labels: { ...receiptLabels.registration(), ...data.labels } });
+      const merged = { ...data, labels: { ...receiptLabels.registration(), ...data.labels } };
+      const id = driver.getIdentity();
+      const bytes = id?.protocol === "star-raster"
+        ? buildRegistrationReceiptStarRaster(merged)
+        : buildRegistrationReceipt(merged);
       await driver.sendBytes(bytes);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -264,7 +275,15 @@ export function PrinterProvider({ children }: { children: ReactNode }) {
     setLastError(null);
     setPrinting(true);
     try {
-      await driver.printSelfTest();
+      const id = driver.getIdentity();
+      if (id?.protocol === "star-raster") {
+        // Star raster doesn't have a built-in self-test command. Send a
+        // tiny known raster pattern (one black bar + cut) instead — proves
+        // the wire format works and the cut is configured correctly.
+        await driver.sendBytes(buildStarRasterTestPattern());
+      } else {
+        await driver.printSelfTest();
+      }
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       setLastError(msg);

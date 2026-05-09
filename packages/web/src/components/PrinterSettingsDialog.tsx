@@ -24,6 +24,8 @@ import { usePrinter } from "../context/PrinterContext.js";
 import {
   CITIZEN_USB_MODE_SWITCH,
   type CitizenUsbMode,
+  type PrinterFamily,
+  type PrinterProtocol,
 } from "../lib/receipt-printer/index.js";
 import {
   clearRecord,
@@ -156,8 +158,11 @@ export function PrinterSettingsDialog({ open, onClose }: Props): ReactNode {
             />
           )}
 
-          {connected && !isCtS310II && (
+          {connected && !isCtS310II && identity?.family === "unknown" && (
             <p className="text-sm text-slate-600">{t("printerNotSupported")}</p>
+          )}
+          {connected && identity?.family === "star-tsp100" && (
+            <p className="text-sm text-slate-600">{t("printerStarTsp100Note")}</p>
           )}
 
           {connected && isCtS310II && usbMode && (
@@ -187,7 +192,10 @@ export function PrinterSettingsDialog({ open, onClose }: Props): ReactNode {
           )}
 
           {connected && (
-            <SelfTestSection onPrint={handlePrintSelfTest} />
+            <SelfTestSection
+              onPrint={handlePrintSelfTest}
+              family={identity?.family ?? "unknown"}
+            />
           )}
         </div>
       </div>
@@ -202,13 +210,21 @@ function IdentitySection({
   borrowedRecord,
   onDismissBorrowed,
 }: {
-  identity: { vendorId: number; productId: number; productName: string | null; serialNumber: string | null } | null;
+  identity: {
+    vendorId: number;
+    productId: number;
+    productName: string | null;
+    serialNumber: string | null;
+    family?: PrinterFamily;
+    protocol?: PrinterProtocol;
+  } | null;
   borrowedRecord: PrinterFlashRecord | null;
   onDismissBorrowed: () => void;
 }) {
   const { t } = useTranslation("devices");
   if (!identity) return null;
   const fmtHex = (n: number) => `0x${n.toString(16).toUpperCase().padStart(4, "0")}`;
+  const transportKey = identity.protocol === "star-raster" ? "transportStarRaster" : "transportEscPos";
   return (
     <section>
       <h3 className="text-sm font-semibold text-slate-700 mb-2">{t("printerIdentity")}</h3>
@@ -225,6 +241,12 @@ function IdentitySection({
             ? identity.serialNumber
             : t("noSerial")}
         </dd>
+        {identity.protocol && (
+          <>
+            <dt className="text-slate-500">{t("transport")}</dt>
+            <dd className="text-slate-900" data-testid="printer-transport">{t(transportKey)}</dd>
+          </>
+        )}
       </dl>
       {borrowedRecord && borrowedRecord.currentMode !== borrowedRecord.originalMode && (
         <BorrowedWarning record={borrowedRecord} onDismiss={onDismissBorrowed} />
@@ -474,12 +496,21 @@ function FragmentRow({
   );
 }
 
-function SelfTestSection({ onPrint }: { onPrint: () => void | Promise<void> }) {
+function SelfTestSection({
+  onPrint,
+  family,
+}: {
+  onPrint: () => void | Promise<void>;
+  family: PrinterFamily;
+}) {
   const { t } = useTranslation("devices");
+  const isStar = family === "star-tsp100";
   return (
     <section>
       <h3 className="text-sm font-semibold text-slate-700 mb-2">{t("printSelfTest")}</h3>
-      <p className="text-xs text-slate-600 mb-2">{t("printSelfTestDescription")}</p>
+      <p className="text-xs text-slate-600 mb-2">
+        {isStar ? t("printSelfTestDescriptionStar") : t("printSelfTestDescription")}
+      </p>
       <button
         type="button"
         onClick={() => void onPrint()}
@@ -488,8 +519,15 @@ function SelfTestSection({ onPrint }: { onPrint: () => void | Promise<void> }) {
       >
         {t("printSelfTest")}
       </button>
-      <p className="mt-2 text-xs text-amber-700">{t("printSelfTestDisconnectNote")}</p>
-      <p className="mt-2 text-xs text-slate-500">{t("printChangeListNote")}</p>
+      {!isStar && (
+        <p className="mt-2 text-xs text-amber-700">{t("printSelfTestDisconnectNote")}</p>
+      )}
+      {!isStar && (
+        <p className="mt-2 text-xs text-slate-500">{t("printChangeListNote")}</p>
+      )}
+      {isStar && (
+        <p className="mt-2 text-xs text-slate-500">{t("printSelfTestNoteStar")}</p>
+      )}
     </section>
   );
 }

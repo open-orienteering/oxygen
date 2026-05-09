@@ -586,7 +586,7 @@ function StartScreenLauncher({ nameId, onLaunch }: { nameId: string; onLaunch?: 
 
 function PrinterStatusIndicator() {
   const { t } = useTranslation("nav");
-  const { supported, connected, connect, disconnect } = usePrinter();
+  const { supported, connected, connect, disconnect, lastError } = usePrinter();
   const [showMenu, setShowMenu] = useState(false);
 
   if (!supported) return null;
@@ -594,9 +594,18 @@ function PrinterStatusIndicator() {
   if (!connected) {
     return (
       <button
-        onClick={() => connect().catch(() => {})}
-        className="inline-flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium text-slate-500 hover:text-slate-700 hover:bg-slate-100 rounded-full transition-colors cursor-pointer"
-        title={t("connectPrinterTitle")}
+        onClick={() => connect().catch((err) => {
+          // Don't crash the UI, but surface enough that the operator can
+          // copy/paste an actionable message from DevTools.
+          // eslint-disable-next-line no-console
+          console.warn("[Printer] Connect failed:", err);
+        })}
+        className={`inline-flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium rounded-full transition-colors cursor-pointer ${
+          lastError
+            ? "text-red-600 hover:text-red-700 hover:bg-red-50"
+            : "text-slate-500 hover:text-slate-700 hover:bg-slate-100"
+        }`}
+        title={lastError ? `${t("connectPrinterTitle")} — last error: ${lastError}` : t("connectPrinterTitle")}
       >
         <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
           <path strokeLinecap="round" strokeLinejoin="round" d="M17 17h2a2 2 0 002-2v-4a2 2 0 00-2-2H5a2 2 0 00-2 2v4a2 2 0 002 2h2m2 4h6a2 2 0 002-2v-4a2 2 0 00-2-2H9a2 2 0 00-2 2v4a2 2 0 002 2zm8-12V5a2 2 0 00-2-2H9a2 2 0 00-2 2v4h10z" />

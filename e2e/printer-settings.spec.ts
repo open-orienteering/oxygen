@@ -4,8 +4,8 @@ import { getMockWebUsbScript } from "./helpers/mock-webusb";
 declare global {
   interface Window {
     __usbMock: {
-      setMode(m: "printer-class" | "virtual-com"): void;
-      getMode(): "printer-class" | "virtual-com";
+      setMode(m: "printer-class" | "virtual-com" | "star-tsp100"): void;
+      getMode(): "printer-class" | "virtual-com" | "star-tsp100";
       getWrittenBytes(): number[][];
       getMemorySwitch(n: number): string;
       setMemorySwitch(n: number, bits: string): void;
@@ -171,5 +171,59 @@ test.describe("Printer Settings dialog", () => {
         b[6] === 0x02,
     );
     expect(found).toBe(true);
+  });
+});
+
+test.describe("Printer Settings dialog — Star TSP100", () => {
+  test.beforeEach(async ({ page }) => {
+    await page.addInitScript(getMockWebUsbScript("star-tsp100"));
+    await page.addInitScript(() => {
+      try {
+        localStorage.removeItem("oxygen.printer-flash-history.v1");
+      } catch {
+        /* noop */
+      }
+    });
+  });
+
+  test("identifies the printer as Star with raster transport", async ({ page }) => {
+    await selectCompetition(page);
+    await openPrinterSettings(page);
+
+    await expect(page.getByText("0x0519")).toBeVisible();
+    await expect(page.getByText("0x0003")).toBeVisible();
+    await expect(page.getByText("Star TSP143")).toBeVisible();
+    await expect(page.getByTestId("printer-transport")).toContainText("Star raster");
+  });
+
+  test("hides Citizen-specific sections (Memory Switches, USB Mode flasher)", async ({ page }) => {
+    await selectCompetition(page);
+    await openPrinterSettings(page);
+
+    // None of the Citizen-only test IDs should be visible.
+    await expect(page.getByTestId("printer-flash-button")).not.toBeVisible();
+    await expect(page.getByTestId("printer-memory-switches")).not.toBeVisible();
+    await expect(page.getByTestId("printer-read-switches-button")).not.toBeVisible();
+  });
+
+  test("printing emits the Star raster prologue, end-page, and end-job bytes", async ({ page }) => {
+    await selectCompetition(page);
+    await openPrinterSettings(page);
+
+    // Trigger the self-test (small known raster pattern). Printing a real
+    // finish receipt would require driving the finish station flow; the
+    // self-test path exercises the same encoder + driver routing.
+    await page.getByTestId("printer-self-test-button").click();
+
+    const written = await page.evaluate(() => window.__usbMock.getWrittenBytes());
+    const flat = written.flat();
+    const dump = flat.map((x) => x.toString(16).padStart(2, "0")).join(" ");
+
+    // Prologue: ESC @ + ESC *rR ESC *rA + ESC *rE13 (partial cut config)
+    expect(dump.includes("1b 40 1b 2a 72 52 1b 2a 72 41 1b 2a 72 45 31 33 00")).toBe(true);
+    // One data line: 'b' 09 00 ff ff ff ff ff ff ff ff ff
+    expect(dump.includes("62 09 00 ff ff ff ff ff ff ff ff ff")).toBe(true);
+    // Epilogue: endPage form-feed (1b 2a 72 59 31 00 1b 0c) + endJob (04 1b 2a 72 42)
+    expect(dump.includes("1b 2a 72 59 31 00 1b 0c 04 1b 2a 72 42")).toBe(true);
   });
 });

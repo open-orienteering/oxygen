@@ -15,14 +15,18 @@
  * call so PrinterContext's tryAutoConnect() picks it up immediately.
  */
 
-export function getMockWebUsbScript(initialMode: "printer-class" | "virtual-com" = "printer-class"): string {
+export type MockPrinterKind = "printer-class" | "virtual-com" | "star-tsp100";
+
+export function getMockWebUsbScript(initial: MockPrinterKind = "printer-class"): string {
   return `
 (function() {
-  const PID_PRINTER = 0x2060;
-  const PID_VCOM    = 0x0fff;
-  const VID         = 0x1d90;
+  const PID_PRINTER  = 0x2060;
+  const PID_VCOM     = 0x0fff;
+  const VID          = 0x1d90;
+  const STAR_VID     = 0x0519;
+  const STAR_PID     = 0x0003;
 
-  let currentMode = ${JSON.stringify(initialMode)};
+  let currentMode = ${JSON.stringify(initial)};
   let writtenChunks = [];
   // Memory switches as MSB-first bit strings (bit 8 first). SW5 = "00000100"
   // matches our slip from exploration: MSW5-3 ON = Printer Class.
@@ -46,12 +50,61 @@ export function getMockWebUsbScript(initialMode: "printer-class" | "virtual-com"
 
   function syncSwitch5ToMode() {
     // MSW5-3 (bit 3) lives at MSB-first index 5.
+    if (currentMode !== "printer-class" && currentMode !== "virtual-com") return;
     const bits = memorySwitches[5].split("");
     bits[5] = currentMode === "virtual-com" ? "0" : "1";
     memorySwitches[5] = bits.join("");
   }
 
   function buildDevice() {
+    if (currentMode === "star-tsp100") {
+      // Star TSP100: USB Printer Class, single bulk OUT (the original
+      // TSP100 firmware doesn't service IN-endpoint GS commands).
+      const starAlt = {
+        alternateSetting: 0,
+        interfaceClass: 7,
+        interfaceSubclass: 1,
+        interfaceProtocol: 2,
+        interfaceName: null,
+        endpoints: [
+          { endpointNumber: 1, direction: "out", type: "bulk", packetSize: 64 },
+        ],
+      };
+      return {
+        vendorId: STAR_VID,
+        productId: STAR_PID,
+        deviceClass: 0,
+        deviceSubclass: 0,
+        deviceProtocol: 0,
+        productName: "Star TSP143",
+        serialNumber: "",
+        manufacturerName: "STAR",
+        configuration: {
+          configurationValue: 1,
+          configurationName: null,
+          interfaces: [{
+            interfaceNumber: 0,
+            claimed: false,
+            alternate: starAlt,
+            alternates: [starAlt],
+          }],
+        },
+        configurations: [],
+        async open() { /* no-op */ },
+        async close() { /* no-op */ },
+        async selectConfiguration() { /* no-op */ },
+        async claimInterface() { this.configuration.interfaces[0].claimed = true; },
+        async releaseInterface() { this.configuration.interfaces[0].claimed = false; },
+        async transferOut(_ep, data) {
+          const bytes = data instanceof Uint8Array ? data : new Uint8Array(data);
+          writtenChunks.push(new Uint8Array(bytes));
+          return { bytesWritten: bytes.length, status: "ok" };
+        },
+        // Star printer has no IN endpoint — transferIn shouldn't be called,
+        // but provide a stub that returns empty so a stray call doesn't hang.
+        async transferIn() { return { data: new DataView(new ArrayBuffer(0)), status: "ok" }; },
+      };
+    }
     return {
       vendorId: VID,
       productId: currentMode === "virtual-com" ? PID_VCOM : PID_PRINTER,

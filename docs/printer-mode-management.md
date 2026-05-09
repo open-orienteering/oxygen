@@ -237,6 +237,67 @@ the `RecentCards` panel close flow or a new banner in the
 `CompetitionShell` header that calls `pendingRestores()` from the flash
 history module.
 
+## Star TSP100 family
+
+The Star TSP100 / TSP100ECO / TSP100GT / TSP143 are the second printer
+family Oxygen supports. Unlike the Citizen, they are **raster-only on
+the original firmware**: they expect bitmap pixel data wrapped in
+Star's raster command set, not ESC/POS bytes. Newer TSP100II / TSP100III
+firmwares can be flipped to ESC/POS via Star's Configuration Utility,
+but the TSP100 v1.x firmware tested against during this work doesn't
+have that option. Oxygen therefore drives the TSP100 family with the
+raster encoder unconditionally — any device matching VID `0x0519` /
+PID `0x0003` is routed through `buildFinishReceiptStarRaster` etc.
+
+### Wire format (verified from Star's `rastertostar.c`)
+
+Receipts are sent as a single page wrapped in Star's documented init,
+raster mode entry, cut configuration, scan-line data, and end-of-page
+form-feed. **The cut command must be sent up front as a *configuration*
+("when end-of-page happens, do this kind of cut"), and the actual cut
+is triggered by the form-feed at endPage** — sending the cut after the
+data with no form-feed wastes ~10 cm of paper before cutting (verified
+empirically during exploration).
+
+```
+1B 40                          ESC @                init
+1B 2A 72 52 1B 2A 72 41        ESC *rR ESC *rA      enter raster mode
+1B 2A 72 45 31 33 00           ESC *rE13            docCutType partial (TSP143)
+[per scan line]
+  blank streak: 1B 2A 72 59 <ASCII count> 00        ESC *rY<n> (skip n rows)
+  data line:    62 <len_lo> <len_hi> <bytes>        'b' <len> <data>
+1B 2A 72 59 31 00 1B 0C        ESC *rY1 ESC FF      endPage (form-feed = cut trigger)
+04 1B 2A 72 42                 EOT ESC *rB          endJob
+```
+
+Each data byte = 8 horizontal dots, MSB first. TSP100 print width is
+**576 dots = 72 bytes per scan line** at 203 dpi (72 mm physical).
+
+The `ESC *rY` skip count is **ASCII**, not binary — `'5' '0' 0x00` for
+50 blank rows, not `0x32 0x00`. The `'b' <len>` length is **binary
+little-endian 16-bit**. Two different conventions in the same command
+set; both confirmed by reading `rastertostar.c`.
+
+### Practical limitation
+
+The Original TSP100 firmware (~2007–2010, v1.x) doesn't support
+ESC/POS. There's no documented way to update the firmware on the
+hardware itself — Citizen-style "flip a memory switch" flashing
+doesn't exist for this. Operators with newer TSP100II / TSP100III
+units can switch them to ESC/POS using Star's Configuration Utility on
+Windows, after which Oxygen would route them through the regular
+ESC/POS path; but for default-state TSP100s, raster is the only
+option. This is fine because raster works on every TSP100 generation,
+old or new, including the v1.3 unit verified against during this work.
+
+### File layout
+
+| File | Purpose |
+|---|---|
+| [star-raster.ts](../packages/web/src/lib/receipt-printer/star-raster.ts) | Star raster encoder: `encodeBitmapAsStarRaster` (pure), Canvas-based `buildFinishReceiptStarRaster` / `buildRegistrationReceiptStarRaster`, `buildStarRasterTestPattern`. Layout duplicated from escpos.ts (per scope decision — future refactor opportunity). |
+| [drivers/webusb.ts](../packages/web/src/lib/receipt-printer/drivers/webusb.ts) | Adds Star VID:PID `0x0519:0x0003` to the picker, sets `protocol: "star-raster"` and `family: "star-tsp100"` in the identity. |
+| [PrinterContext.tsx](../packages/web/src/context/PrinterContext.tsx) | Branches on `identity.protocol` to pick the right encoder. |
+
 ## Recovery procedures
 
 ### "I sent the wrong flash command and the printer is in a weird state"
