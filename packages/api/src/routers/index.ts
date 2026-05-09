@@ -12,6 +12,7 @@ import { eventorRouter } from "./eventor.js";
 import { drawRouter } from "./drawRouter.js";
 import { testLabRouter } from "./testLab.js";
 import { liveresultsRouter } from "./liveresults.js";
+import { onlineInputRouter } from "./onlineInput.js";
 import { externalRouter } from "./external.js";
 import { liveloxRouter } from "./livelox.js";
 import { eventsRouter } from "./events.js";
@@ -31,6 +32,7 @@ export const appRouter = router({
   draw: drawRouter,
   testLab: testLabRouter,
   liveresults: liveresultsRouter,
+  onlineInput: onlineInputRouter,
   external: externalRouter,
   livelox: liveloxRouter,
   events: eventsRouter,

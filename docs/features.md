@@ -30,6 +30,7 @@ The event page is mission control for external integrations. Everything the Swed
 - **Global Runner Database** — download the federation-wide runner directory for fast name/card lookup at registration.
 - **Club sync** — pull club metadata and logos.
 - **LiveResults** — push live splits to [liveresultat.se](https://liveresultat.se) on a configurable interval.
+- **Online Input (ROC)** — pull radio-control punches from [roc.olresultat.se](https://roc.olresultat.se) (or any ROC-protocol-compatible server) on a configurable interval. Punches land in `oPunch` with the MeOS-original `Origin` checksum so the same database round-trips cleanly between Oxygen and MeOS. See [docs/online-input-roc.md](online-input-roc.md).
 - **Livelox** — link the event so GPS tracks flow back in automatically after the race (see the GPS section below).
 
 ![Event page with sync integrations](screenshots/event.png)

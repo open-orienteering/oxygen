@@ -24,6 +24,7 @@ Oxygen is a modern web application for managing orienteering competitions. It co
 |  |  competition  runner  draw     testLab         |  |
 |  |  cardReadout  course  class    eventor         |  |
 |  |  liveresults  club    race     control         |  |
+|  |  onlineInput  livelox events                   |  |
 |  +------------------------+-----------------------+  |
 |                           | Prisma ORM               |
 +---------------------------+--------------------------+
@@ -104,7 +105,7 @@ Oxygen is designed for field conditions where internet connectivity is unreliabl
 - **Service Worker caching** — cache the full PWA shell and API responses so Oxygen loads and operates without internet
 - **Remote database, local resilience** — MySQL runs on a remote server; each Oxygen PWA client caches all data it needs to continue operating independently during an outage
 - **Local network fallback** — during internet loss, Oxygen stations on the same local network (e.g., registration and start) can propagate new registrations and card readouts directly between each other
-- **Background sync** — when connectivity is restored, queued changes sync back to the remote database, Eventor, and LiveResults
+- **Background sync** — when connectivity is restored, queued changes sync back to the remote database, Eventor, LiveResults, and online-input (ROC)
 - **SI card readout** — Web Serial API works entirely locally, no network needed
 
 This means the remote database is the source of truth, but each client can survive disconnection. The only challenge is propagating new registrations between stations during an outage, which is solvable via local network discovery when stations share a WiFi network.
@@ -145,6 +146,9 @@ Direct integration with the Swedish Orienteering Federation's Eventor API:
 - Upload results and start lists (Test-Eventor supported, production pending)
 
 ![Event page with sync controls](screenshots/event.png)
+
+### Online Input (ROC)
+Per-competition pull from a remote radio-control service. Currently supports the ROC protocol used by [roc.olresultat.se](https://roc.olresultat.se) (and OResults' compatible endpoint). One `setInterval` timer per competition lives in the API process, polling the configured endpoint with a `lastId` watermark and inserting new punches into `oPunch` with the MeOS-original `Origin` checksum so a database written by Oxygen and re-opened in MeOS shows the rows as `isOriginal()`. Architecture and the SICenter forward-compat path are documented in [online-input-roc.md](online-input-roc.md). Code lives in `packages/api/src/online-input/` with a small `Protocol` interface so a second protocol (SICenter) is later a single new file plus a UI dropdown entry.
 
 ### Kiosk Mode
 A self-service interface for race day:

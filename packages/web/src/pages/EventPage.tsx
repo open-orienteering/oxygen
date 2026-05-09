@@ -94,6 +94,9 @@ export function EventPage() {
           {/* LiveResults Sync */}
           <LiveResultsPanel />
 
+          {/* Online Input (ROC) */}
+          <OnlineInputPanel />
+
         </div>
       </div>
 
@@ -726,6 +729,339 @@ function LiveResultsPanel() {
     </div>
   );
 }
+
+// ─── Online Input (ROC) Panel ─────────────────────────────────
+
+const SPECIAL_PUNCH_OPTIONS = [
+  { value: 1, key: "specialStart" },
+  { value: 2, key: "specialFinish" },
+  { value: 3, key: "specialCheck" },
+] as const;
+
+function OnlineInputPanel() {
+  const { t } = useTranslation("event");
+  const timeAgo = useTimeAgo();
+
+  const config = trpc.onlineInput.getConfig.useQuery(undefined, { refetchInterval: 5000 });
+  const status = trpc.onlineInput.getStatus.useQuery(undefined, { refetchInterval: 5000 });
+
+  const refetchAll = () => {
+    config.refetch();
+    status.refetch();
+  };
+
+  const enableMut = trpc.onlineInput.enable.useMutation({ onSuccess: refetchAll });
+  const disableMut = trpc.onlineInput.disable.useMutation({ onSuccess: refetchAll });
+  const saveMut = trpc.onlineInput.saveConfig.useMutation({ onSuccess: () => config.refetch() });
+  const pollNowMut = trpc.onlineInput.pollNow.useMutation({ onSuccess: refetchAll });
+  const clearLastIdMut = trpc.onlineInput.clearLastId.useMutation({ onSuccess: () => config.refetch() });
+  const addMappingMut = trpc.onlineInput.addMapping.useMutation({ onSuccess: () => config.refetch() });
+  const removeMappingMut = trpc.onlineInput.removeMapping.useMutation({ onSuccess: () => config.refetch() });
+
+  const [unitId, setUnitId] = useState<string | null>(null);
+  const [endpointUrl, setEndpointUrl] = useState<string | null>(null);
+  const [intervalSeconds, setIntervalSeconds] = useState<number | null>(null);
+  const [newCode, setNewCode] = useState("");
+  const [newTarget, setNewTarget] = useState<1 | 2 | 3>(1);
+
+  useEffect(() => {
+    if (config.data && unitId === null) {
+      setUnitId(config.data.unitId);
+      setEndpointUrl(config.data.endpointUrl);
+      setIntervalSeconds(config.data.intervalSeconds);
+    }
+  }, [config.data, unitId]);
+
+  const running = status.data?.running ?? false;
+  const isBusy =
+    enableMut.isPending ||
+    disableMut.isPending ||
+    saveMut.isPending ||
+    pollNowMut.isPending ||
+    clearLastIdMut.isPending;
+
+  const dirty =
+    config.data !== undefined &&
+    (unitId !== config.data.unitId ||
+      endpointUrl !== config.data.endpointUrl ||
+      intervalSeconds !== config.data.intervalSeconds);
+
+  const saveCurrent = async () => {
+    await saveMut.mutateAsync({
+      unitId: unitId ?? "",
+      endpointUrl: endpointUrl ?? "",
+      intervalSeconds: intervalSeconds ?? 10,
+    });
+  };
+
+  const handleToggle = async () => {
+    if (running) {
+      disableMut.mutate();
+    } else {
+      if (dirty) {
+        await saveCurrent();
+      }
+      enableMut.mutate();
+    }
+  };
+
+  const handleAddMapping = () => {
+    const code = parseInt(newCode, 10);
+    if (!Number.isFinite(code) || code <= 0) return;
+    addMappingMut.mutate({ rawCode: code, target: newTarget });
+    setNewCode("");
+  };
+
+  const mapping = config.data?.mapping ?? {};
+  const mappingEntries = Object.entries(mapping)
+    .map(([k, v]) => [parseInt(k, 10), v as 1 | 2 | 3] as const)
+    .sort(([a], [b]) => a - b);
+
+  return (
+    <div className="bg-white rounded-xl border border-slate-200 p-4">
+      {/* Header */}
+      <div className="flex items-center justify-between mb-3">
+        <div className="flex items-center gap-2">
+          <svg className="w-4 h-4 text-purple-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+              d="M5.636 18.364a9 9 0 010-12.728m12.728 0a9 9 0 010 12.728m-9.9-2.829a5 5 0 010-7.07m7.072 0a5 5 0 010 7.07M13 12a1 1 0 11-2 0 1 1 0 012 0z" />
+          </svg>
+          <span className="text-sm font-semibold text-slate-800">{t("onlineInput.title")}</span>
+        </div>
+        <button
+          onClick={() => void handleToggle()}
+          disabled={isBusy || !unitId}
+          className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none ${running ? "bg-green-500" : "bg-slate-200"
+            } disabled:opacity-50`}
+        >
+          <span
+            className={`inline-block h-4 w-4 transform rounded-full bg-white shadow transition-transform ${running ? "translate-x-6" : "translate-x-1"
+              }`}
+          />
+        </button>
+      </div>
+
+      {/* Live status bar */}
+      {running && (
+        <div className="mb-3 flex items-center gap-2 text-xs text-slate-500">
+          <span className="inline-block w-2 h-2 rounded-full bg-green-400 animate-pulse" />
+          <span>{t("live")}</span>
+          {status.data?.lastPoll && (
+            <span className="text-slate-400">
+              · {t("onlineInput.lastPoll", { ago: timeAgo(status.data.lastPoll) })}
+              {" · "}
+              {t("onlineInput.totalPolls", { count: status.data.pollCount })}
+              {" · "}
+              {t("onlineInput.totalImported", { count: status.data.punchesImported })}
+            </span>
+          )}
+        </div>
+      )}
+
+      {/* Error */}
+      {status.data?.lastError && (
+        <div className="mb-3 p-2 bg-red-50 border border-red-100 rounded text-xs text-red-600">
+          {status.data.lastError}
+        </div>
+      )}
+
+      {/* Form */}
+      <div className="grid grid-cols-2 gap-3 text-sm">
+        <div>
+          <label className="block text-xs text-slate-500 mb-1">{t("onlineInput.protocol")}</label>
+          <select
+            value="roc"
+            disabled
+            className="w-full border border-slate-200 rounded px-2 py-1 text-xs text-slate-700 disabled:bg-slate-50"
+          >
+            <option value="roc">{t("onlineInput.protocolRoc")}</option>
+          </select>
+        </div>
+        <div>
+          <label className="block text-xs text-slate-500 mb-1">{t("onlineInput.unitId")}</label>
+          <input
+            type="text"
+            value={unitId ?? ""}
+            onChange={(e) => setUnitId(e.target.value)}
+            disabled={running || isBusy}
+            placeholder={t("onlineInput.unitIdPlaceholder")}
+            className="w-full border border-slate-200 rounded px-2 py-1 text-xs text-slate-700 disabled:bg-slate-50 disabled:text-slate-400"
+            data-testid="online-input-unit-id"
+          />
+        </div>
+        <div className="col-span-2">
+          <label className="block text-xs text-slate-500 mb-1">{t("onlineInput.endpointUrl")}</label>
+          <input
+            type="text"
+            value={endpointUrl ?? ""}
+            onChange={(e) => setEndpointUrl(e.target.value)}
+            disabled={running || isBusy}
+            className="w-full border border-slate-200 rounded px-2 py-1 text-xs font-mono text-slate-700 disabled:bg-slate-50 disabled:text-slate-400"
+          />
+        </div>
+        <div>
+          <label className="block text-xs text-slate-500 mb-1">{t("onlineInput.pollInterval")}</label>
+          <select
+            value={intervalSeconds ?? 10}
+            onChange={(e) => setIntervalSeconds(parseInt(e.target.value, 10))}
+            disabled={running || isBusy}
+            className="w-full border border-slate-200 rounded px-2 py-1 text-xs text-slate-700 disabled:bg-slate-50 disabled:text-slate-400"
+          >
+            <option value={5}>{t("seconds", { count: 5 })}</option>
+            <option value={10}>{t("seconds", { count: 10 })}</option>
+            <option value={15}>{t("seconds", { count: 15 })}</option>
+            <option value={30}>{t("seconds", { count: 30 })}</option>
+            <option value={60}>{t("seconds", { count: 60 })}</option>
+          </select>
+        </div>
+        <div>
+          <label className="block text-xs text-slate-500 mb-1">{t("onlineInput.lastId")}</label>
+          <div className="flex items-center gap-2">
+            <span className="font-mono text-xs text-slate-600">
+              {config.data?.lastId ?? 0}
+            </span>
+            <button
+              onClick={() => clearLastIdMut.mutate()}
+              disabled={isBusy || (config.data?.lastId ?? 0) === 0}
+              className="text-xs text-slate-500 hover:text-slate-700 disabled:opacity-50"
+              title={t("onlineInput.resetLastIdHelp")}
+              data-testid="online-input-reset-last-id"
+            >
+              {t("onlineInput.resetLastId")}
+            </button>
+          </div>
+        </div>
+      </div>
+
+      {/* Action buttons */}
+      <div className="mt-3 flex items-center gap-2">
+        <div className="ml-auto flex items-center gap-2">
+          {!running && dirty && (
+            <button
+              onClick={() => void saveCurrent()}
+              disabled={isBusy}
+              className="text-xs text-slate-500 hover:text-slate-700 disabled:opacity-50"
+              data-testid="online-input-save"
+            >
+              {t("save")}
+            </button>
+          )}
+          <button
+            onClick={() => pollNowMut.mutate()}
+            disabled={isBusy || !unitId}
+            className="flex items-center gap-1 px-3 py-1 text-xs font-medium text-white bg-purple-500 hover:bg-purple-600 rounded-md disabled:opacity-50 transition-colors"
+            data-testid="online-input-poll-now"
+          >
+            {pollNowMut.isPending ? (
+              <span className="inline-block w-3 h-3 border-2 border-white border-t-transparent rounded-full animate-spin" />
+            ) : (
+              <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+                  d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+              </svg>
+            )}
+            {t("onlineInput.pollNow")}
+          </button>
+        </div>
+      </div>
+
+      {/* Poll result */}
+      {pollNowMut.isSuccess && pollNowMut.data && (
+        <div className="mt-2 text-xs text-emerald-600">
+          {t("onlineInput.pollStats", {
+            fetched: pollNowMut.data.stats.fetched,
+            inserted: pollNowMut.data.stats.inserted,
+          })}
+        </div>
+      )}
+
+      {/* Mutation errors */}
+      {(enableMut.isError || disableMut.isError || saveMut.isError || pollNowMut.isError) && (
+        <div className="mt-2 text-xs text-red-600">
+          {enableMut.error?.message ??
+            disableMut.error?.message ??
+            saveMut.error?.message ??
+            pollNowMut.error?.message}
+        </div>
+      )}
+
+      {/* Control mapping */}
+      <div className="mt-4 pt-4 border-t border-slate-100">
+        <h4 className="text-xs font-semibold text-slate-700 mb-2">
+          {t("onlineInput.mappingTitle")}
+        </h4>
+        <p className="text-xs text-slate-500 mb-3">{t("onlineInput.mappingHelp")}</p>
+
+        {mappingEntries.length > 0 && (
+          <div className="mb-3 space-y-1">
+            {mappingEntries.map(([code, target]) => (
+              <div
+                key={code}
+                className="flex items-center gap-2 text-xs bg-slate-50 rounded px-2 py-1"
+                data-testid={`online-input-mapping-${code}`}
+              >
+                <span className="font-mono w-12 text-slate-700">{code}</span>
+                <span className="text-slate-400">→</span>
+                <span className="text-slate-700">
+                  {t(`onlineInput.${SPECIAL_PUNCH_OPTIONS.find((o) => o.value === target)?.key ?? "specialStart"}`)}
+                </span>
+                <button
+                  onClick={() => removeMappingMut.mutate({ rawCode: code })}
+                  disabled={isBusy}
+                  className="ml-auto text-slate-400 hover:text-red-600 disabled:opacity-50"
+                  aria-label={t("onlineInput.removeMapping")}
+                >
+                  <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                  </svg>
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+
+        <div className="flex items-center gap-2">
+          <input
+            type="number"
+            value={newCode}
+            onChange={(e) => setNewCode(e.target.value)}
+            placeholder={t("onlineInput.mappingCodePlaceholder")}
+            min={1}
+            max={1023}
+            className="w-24 border border-slate-200 rounded px-2 py-1 text-xs font-mono text-slate-700"
+            data-testid="online-input-new-code"
+          />
+          <select
+            value={newTarget}
+            onChange={(e) => setNewTarget(parseInt(e.target.value, 10) as 1 | 2 | 3)}
+            className="border border-slate-200 rounded px-2 py-1 text-xs text-slate-700"
+            data-testid="online-input-new-target"
+          >
+            {SPECIAL_PUNCH_OPTIONS.map((o) => (
+              <option key={o.value} value={o.value}>
+                {t(`onlineInput.${o.key}`)}
+              </option>
+            ))}
+          </select>
+          <button
+            onClick={handleAddMapping}
+            disabled={isBusy || !newCode}
+            className="text-xs px-2 py-1 bg-slate-100 hover:bg-slate-200 rounded disabled:opacity-50"
+            data-testid="online-input-add-mapping"
+          >
+            {t("onlineInput.addMapping")}
+          </button>
+        </div>
+      </div>
+
+      {/* First-time help */}
+      {!unitId && !running && (
+        <p className="mt-3 text-xs text-slate-400">{t("onlineInput.help")}</p>
+      )}
+    </div>
+  );
+}
+
 // ─── Club Sync Panel ────────────────────────────────────────
 
 // ─── Registration & Payment Settings ────────────────────────
