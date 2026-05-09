@@ -6,12 +6,16 @@ printing is handled entirely in the browser.
 
 ## Supported Printers
 
-Any ESC/POS-compatible USB thermal printer is supported. Tested with:
+Two protocol families are supported, with automatic detection based on the
+device's USB VID:PID:
 
-- **CITIZEN CT-S310II** (VID `0x1D90`) — 80 mm paper
+- **CITIZEN CT-S310II** (VID `0x1D90`) — 80 mm, ESC/POS. Recommended.
+- **Star TSP100 family** (VID `0x0519` / PID `0x0003` — TSP100 / TSP100ECO / TSP100GT / TSP143) — 72 mm, raster mode.
 
-Other ESC/POS printers (Epson TM series, Star TSP series, etc.) will appear in the
-device picker via the generic USB Printer class filter.
+Generic ESC/POS printers (Epson TM, Bixolon, etc.) appear in the device
+picker via the USB Printer Class filter and are treated as ESC/POS by
+default. They may work for the basic text + cut subset of the receipt
+layout but haven't been explicitly tested.
 
 ## Browser Requirements
 
@@ -19,6 +23,10 @@ device picker via the generic USB Printer class filter.
 - **Secure context** — the app must be served from `http://localhost` or `https://`
 
 ## Two operating modes (CT-S310II)
+
+This section is **specific to the Citizen CT-S310II**. The Star TSP100
+family is documented further down — its transport selection is automatic
+based on detected model.
 
 The CT-S310II can be configured to present itself on USB in either of two modes,
 selected by memory switch **MSW5-3**. The choice has large implications for how
@@ -183,6 +191,78 @@ WebUSB, replace the active driver with **WinUSB** using Zadig.
 ### macOS
 
 No extra setup required.
+
+## Star TSP100 family
+
+The Star TSP100 / TSP100ECO / TSP100GT / TSP143 are USB Printer Class
+devices that present as `0x0519:0x0003`. Their default firmware is
+**raster-only** — it does not accept ESC/POS commands. Oxygen detects
+these printers by VID:PID and automatically routes receipts through a
+Star raster encoder; the receipt layout matches the ESC/POS one as
+closely as a canvas-rendered monospace font can.
+
+Newer TSP100II / TSP100III firmwares can be switched to ESC/POS via
+Star's Configuration Utility (Windows-only). Once flipped, Oxygen would
+treat them as plain ESC/POS via the generic class-7 filter — but the
+original TSP100 (firmware revisions in the 1.x series) doesn't have
+that option, so we always drive these printers with raster.
+
+### Linux setup
+
+The TSP100 enumerates as USB Printer Class. On modern Ubuntu (24.04+)
+the kernel does **not** auto-bind `usblp` to it, so WebUSB can claim
+the interface directly with just a permissions rule. Older kernels
+(or ones with `usblp` enabled) need the same unbind dance as Citizen's
+Printer Class mode.
+
+Append this clause to `/etc/udev/rules.d/50-citizen-thermal.rules`
+(create it if missing — same file as for Citizen):
+
+```
+# Star TSP100 family — raster-mode printers (TSP100, TSP100ECO, TSP143, etc.)
+SUBSYSTEM=="usb", ATTRS{idVendor}=="0519", ATTRS{idProduct}=="0003", MODE="0666", TAG+="uaccess"
+
+# Auto-release usblp from the Star printer if your kernel binds it.
+# Harmless on systems where usblp doesn't load.
+ACTION=="bind", SUBSYSTEM=="usb", DRIVER=="usblp", \
+  ATTRS{idVendor}=="0519", ATTRS{idProduct}=="0003", \
+  RUN+="/bin/sh -c 'echo -n %k > /sys/bus/usb/drivers/usblp/unbind'"
+```
+
+Apply and replug:
+
+```bash
+sudo udevadm control --reload-rules && sudo udevadm trigger
+```
+
+### Windows setup
+
+Same as Citizen Printer Class mode — Star's `usbprint.sys` /
+futurePRNT driver claims the interface and blocks WebUSB. Use Zadig
+to replace it with WinUSB:
+
+1. Plug in the printer.
+2. Run [Zadig](https://zadig.akeo.ie/) → **Options → List All Devices**.
+3. Select the Star TSP143 entry.
+4. Pick **WinUSB** as the target driver and click **Replace Driver**.
+
+Note that this hides the printer from Windows' built-in printing
+(Notepad, Word, etc.). To restore: Device Manager → uninstall device
+(tick "Delete the driver software") → replug.
+
+### macOS setup
+
+Nothing required — Chrome's WebUSB can claim the device directly.
+
+### Self-test
+
+The printer's hardware self-test is reached the usual way: hold the
+**FEED** button while powering the printer on. This works on every
+TSP100 generation and is independent of any host setup.
+
+The Printer Settings dialog also has a "Print self-test page" button
+that sends a tiny known raster pattern (one black bar + cut), useful
+for verifying the WebUSB wire format end-to-end.
 
 ## Using the Finish Station Printer
 

@@ -41,6 +41,11 @@ const CITIZEN_CT_S310II_PID_PRINTER = 0x2060;
 // Virtual COM mode (MSW5-3 OFF). Vendor-specific class, no OS driver attaches.
 const CITIZEN_CT_S310II_PID_VCOM = 0x0fff;
 
+// Star Micronics TSP100 family USB identifiers (TSP100 / TSP100ECO /
+// TSP100GT / TSP143 — all share VID:PID 0x0519:0x0003 in raster mode).
+const STAR_TSP100_VID = 0x0519;
+const STAR_TSP100_PID = 0x0003;
+
 // USB Printer class code
 const USB_PRINTER_CLASS = 7;
 
@@ -53,6 +58,11 @@ function isCitizenCtS310II(device: USBDevice): boolean {
   );
 }
 
+/** True if a USB device is a Star Micronics TSP100-family printer. */
+function isStarTsp100(device: USBDevice): boolean {
+  return device.vendorId === STAR_TSP100_VID && device.productId === STAR_TSP100_PID;
+}
+
 export type WebUsbPrinterStatus =
   | "idle"
   | "connecting"
@@ -60,6 +70,20 @@ export type WebUsbPrinterStatus =
   | "error";
 
 export type CtS310IIUsbMode = CitizenUsbMode;
+
+/**
+ * Receipt-formatting protocol the connected printer expects.
+ * The PrinterContext uses this to pick which encoder to call.
+ */
+export type PrinterProtocol = "escpos" | "star-raster";
+
+/**
+ * Recognised printer family. Used by the Printer Settings dialog to label
+ * the device and to decide which model-specific UI sections to show.
+ * `unknown` is the catch-all for generic USB Printer Class devices we
+ * accept via the `classCode: 7` filter.
+ */
+export type PrinterFamily = "citizen-ct-s310ii" | "star-tsp100" | "unknown";
 
 export interface PrinterIdentity {
   /** USB Vendor ID. */
@@ -70,6 +94,14 @@ export interface PrinterIdentity {
   productName: string | null;
   /** USB descriptor serial string. */
   serialNumber: string | null;
+  /** Recognised printer family, or `"unknown"` for generic devices. */
+  family: PrinterFamily;
+  /**
+   * Receipt-formatting protocol expected by this printer. Default is
+   * `"escpos"` for Citizen and unknown class-7 devices; `"star-raster"`
+   * for the TSP100 family.
+   */
+  protocol: PrinterProtocol;
   /**
    * The CT-S310II USB mode currently in use, or null if the device isn't a
    * recognised CT-S310II (in which case the mode concept doesn't apply).
@@ -103,11 +135,26 @@ export class WebUsbPrinterDriver extends EventTarget implements PrinterDriver {
     if (!this.device) return null;
     const { vendorId, productId, productName, serialNumber } = this.device;
     let ctS310IIMode: CtS310IIUsbMode | null = null;
+    let family: PrinterFamily = "unknown";
+    let protocol: PrinterProtocol = "escpos";
     if (vendorId === CITIZEN_CT_S310II_VID) {
+      family = "citizen-ct-s310ii";
+      protocol = "escpos";
       if (productId === CITIZEN_CT_S310II_PID_VCOM) ctS310IIMode = "virtual-com";
       else if (productId === CITIZEN_CT_S310II_PID_PRINTER) ctS310IIMode = "printer-class";
+    } else if (vendorId === STAR_TSP100_VID && productId === STAR_TSP100_PID) {
+      family = "star-tsp100";
+      protocol = "star-raster";
     }
-    return { vendorId, productId, productName, serialNumber, ctS310IIMode };
+    return {
+      vendorId,
+      productId,
+      productName,
+      serialNumber,
+      family,
+      protocol,
+      ctS310IIMode,
+    };
   }
 
   // ── USB disconnect watcher ────────────────────────────────
@@ -137,6 +184,8 @@ export class WebUsbPrinterDriver extends EventTarget implements PrinterDriver {
         { vendorId: CITIZEN_CT_S310II_VID, productId: CITIZEN_CT_S310II_PID_VCOM },
         // CT-S310II in Printer Class mode
         { vendorId: CITIZEN_CT_S310II_VID, productId: CITIZEN_CT_S310II_PID_PRINTER },
+        // Star Micronics TSP100 family (raster-only)
+        { vendorId: STAR_TSP100_VID, productId: STAR_TSP100_PID },
         // Any USB Printer Class device (generic ESC/POS)
         { classCode: USB_PRINTER_CLASS },
       ],
@@ -154,8 +203,11 @@ export class WebUsbPrinterDriver extends EventTarget implements PrinterDriver {
     if (!navigator.usb) return false;
     try {
       const devices = await navigator.usb.getDevices();
-      // Prefer a CT-S310II (in either mode) over any other paired device.
-      const device = devices.find(isCitizenCtS310II) ?? devices[0];
+      // Prefer a recognised printer over any other paired device.
+      const device =
+        devices.find(isCitizenCtS310II) ??
+        devices.find(isStarTsp100) ??
+        devices[0];
       if (!device) return false;
       await this.connectToDevice(device);
       return true;
