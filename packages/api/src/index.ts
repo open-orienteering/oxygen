@@ -10,6 +10,7 @@ import { createContext } from "./trpc.js";
 import { disconnectAll, getCompetitionClient, ensureLogoTable, getMainDbConnection, ensureClubDbTable, ensureMapFilesTable, ensureMapTilesTable, onMapUpload } from "./db.js";
 import { tileBoundsWgs84, wgs84ToOcad, ocadBoundsToWgs84, type OcadCrs } from "./map-projection.js";
 import { liveResultsPusher, reconcileEnabledPushers } from "./liveresults.js";
+import { onlineInputPuller, reconcileEnabledPullers } from "./online-input/puller.js";
 import { registerBackupRoute } from "./backup.js";
 import "dotenv/config";
 
@@ -520,6 +521,7 @@ async function main() {
   const shutdown = async () => {
     server.log.info("Shutting down...");
     liveResultsPusher.stopAll();
+    onlineInputPuller.stopAll();
     await disconnectAll();
     await server.close();
     process.exit(0);
@@ -549,6 +551,25 @@ async function main() {
       })
       .catch((err) => {
         server.log.error({ err }, "LiveResults reconcile threw");
+      });
+
+    // Re-arm online-input (ROC) pullers. Same orphan-handling pattern as
+    // LiveResults — runs in the background so a slow remote endpoint
+    // doesn't delay startup.
+    void reconcileEnabledPullers()
+      .then((res) => {
+        if (res.started.length > 0) {
+          server.log.info(
+            { started: res.started, skipped: res.skipped.length, failed: res.failed },
+            `Reconciled online-input pullers: started ${res.started.length}`,
+          );
+        }
+        for (const f of res.failed) {
+          server.log.warn({ nameId: f.nameId, error: f.error }, "Online-input reconcile failed");
+        }
+      })
+      .catch((err) => {
+        server.log.error({ err }, "Online-input reconcile threw");
       });
   } catch (err) {
     server.log.error(err);
