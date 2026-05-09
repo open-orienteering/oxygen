@@ -8,7 +8,7 @@ printing is handled entirely in the browser.
 
 Any ESC/POS-compatible USB thermal printer is supported. Tested with:
 
-- **CITIZEN CT-S310II** (VID `0x1D90` / PID `0x2060`) — 80 mm paper
+- **CITIZEN CT-S310II** (VID `0x1D90`) — 80 mm paper
 
 Other ESC/POS printers (Epson TM series, Star TSP series, etc.) will appear in the
 device picker via the generic USB Printer class filter.
@@ -18,79 +18,171 @@ device picker via the generic USB Printer class filter.
 - **Chrome or Edge** (Firefox does not support WebUSB)
 - **Secure context** — the app must be served from `http://localhost` or `https://`
 
-## Linux Setup (one-time)
+## Two operating modes (CT-S310II)
 
-On Linux the kernel loads the `usblp` driver automatically when a USB printer is
-plugged in, which blocks WebUSB from claiming the interface. The fix is a udev rule
-that grants browser access and auto-releases the interface.
+The CT-S310II can be configured to present itself on USB in either of two modes,
+selected by memory switch **MSW5-3**. The choice has large implications for how
+much per-laptop setup is needed:
 
-### Step 1 — Create udev rules file
+| Mode | USB identity | OS driver behaviour | Per-laptop setup |
+|------|--------------|---------------------|------------------|
+| **Virtual COM** (recommended) | VID `0x1D90` / PID `0x0FFF`, vendor-specific class | No OS driver auto-binds | None |
+| Printer Class (default from factory) | VID `0x1D90` / PID `0x2060`, USB Printer class 7 | `usblp` (Linux) / `usbprint.sys` + vendor driver (Windows) auto-binds and blocks WebUSB | Required on Linux and Windows |
+
+In Virtual COM mode the printer enumerates as a different USB device entirely
+(different PID and a vendor-specific interface class), so neither the Linux
+`usblp` driver nor the Windows CITIZEN/`usbprint.sys` drivers recognise it —
+they don't bind, the interface stays free, and Chrome's WebUSB can claim it
+directly. This makes it the right choice for competitions where laptops are
+borrowed from other clubs and arrive with the standard CITIZEN driver
+pre-installed.
+
+The printer is shipped from the factory in Printer Class mode. Flipping a
+printer to Virtual COM is a one-time operation done via the printer's own
+FEED button menu — see below. The change is reversible by the same procedure,
+which matters for borrowed equipment that needs to be returned in its original
+state.
+
+## Virtual COM mode (recommended)
+
+### Step 1 — Flip the printer to Virtual COM mode (once per printer)
+
+Done from the printer's Individual Setting Mode using the FEED button. The
+procedure is taken from Citizen's CT-S310II User Manual, pages 41–43.
+
+1. Load paper. **Open the paper cover.**
+2. Hold the FEED button and turn the power on. Keep holding while it boots,
+   then release.
+3. **Press FEED exactly twice**, then **close the cover.** The printer prints
+   "Memory SW (1)" with its current settings — you are now in Individual
+   Setting Mode.
+   - 0 presses before closing → hex dump mode (wrong).
+   - 3 presses before closing → quick setting mode (wrong).
+4. **Short-press FEED** to advance the cursor: SW(1) → SW(2) → … → SW(10) →
+   "Save To Memory" → SW(1) → … Stop when **"Memory SW (5)"** is printed.
+5. **Long-press FEED for at least 2 seconds** to enter SW5. The first function
+   in SW5 (Buzzer) is printed.
+6. Short-press FEED to cycle through the SW5 functions (Buzzer → Line Pitch →
+   **USB Mode** → …). Stop when **"USB Mode"** is printed.
+7. Long-press FEED ≥2 s to enter the value editor. The current value is
+   printed; the ERROR LED lights to indicate edit mode.
+8. Short-press FEED to cycle through values: Printer Class → **Virtual COM** →
+   (back). Stop when "Virtual COM" is printed.
+9. Long-press FEED ≥2 s to commit. The next function in SW5 is printed.
+10. Open the cover, then close it. The changed setting is printed and you
+    return to the SW selection level.
+11. Short-press FEED until **"Save To Memory"** is printed.
+12. Long-press FEED ≥2 s to save. The printer prints a final summary and
+    exits setup mode.
+13. **Power-cycle the printer** so it re-enumerates with the new USB class.
+
+If anything goes wrong, the on-printer setup mode is OS-independent and can
+always be used to recover — re-enter Individual Setting Mode and either set
+USB Mode back to Printer Class, or use "Memory switch initialization" (open
+the cover at "Save To Memory" and long-press) to reset every switch to
+factory defaults.
+
+### Step 2 — Linux (one-time per laptop)
+
+Linux requires a one-line udev rule so that the logged-in user has raw USB
+access to the device. No driver-unbinding is needed — nothing has bound.
 
 Create `/etc/udev/rules.d/50-citizen-thermal.rules`:
 
 ```
-# Grant user/browser access to the CITIZEN CT-S310II
-SUBSYSTEM=="usb", ATTRS{idVendor}=="1d90", ATTRS{idProduct}=="2060", MODE="0666", TAG+="uaccess"
-
-# Immediately release the interface from the usblp kernel driver
-# when it binds, so WebUSB can claim it. This does NOT affect any
-# other USB printers on the system.
-ACTION=="bind", SUBSYSTEM=="usb", DRIVER=="usblp", \
-  ATTRS{idVendor}=="1d90", ATTRS{idProduct}=="2060", \
-  RUN+="/bin/sh -c 'echo -n %k > /sys/bus/usb/drivers/usblp/unbind'"
+# Grant the logged-in user access to the CITIZEN CT-S310II in Virtual COM mode.
+# No driver auto-binds to PID 0x0FFF (it's a vendor-specific class), so
+# WebUSB can claim it directly once the user has uaccess.
+SUBSYSTEM=="usb", ATTRS{idVendor}=="1d90", ATTRS{idProduct}=="0fff", MODE="0666", TAG+="uaccess"
 ```
 
-### Step 2 — Apply the rules
+Apply the rule and replug the printer:
 
 ```bash
 sudo udevadm control --reload-rules && sudo udevadm trigger
 ```
 
-### Step 3 — Replug the printer
+### Step 3 — Windows
 
-Unplug and replug the USB cable. The printer should no longer appear as
-`/dev/usblpN` and will instead be claimable by Chrome via WebUSB.
+Nothing to do. The CITIZEN printer driver is keyed to `1D90:2060` and will
+not bind to a Virtual COM device (`1D90:0FFF`); `usbprint.sys` only binds USB
+Printer class devices; `usbser.sys` only binds CDC devices. Citizen's
+Virtual COM is vendor-specific, so none of them match. Chrome's WebUSB
+claims the interface directly.
 
-> **Note:** If you later need CUPS/system printing for this printer, remove
-> the rules file and reload udev. The two approaches are mutually exclusive.
+### Step 4 — macOS
 
-## Windows Setup (one-time)
+Nothing to do. WebUSB works out of the box.
 
-Windows loads its own USB printer driver (`usbprint.sys`) automatically when a
-thermal printer is plugged in. This prevents WebUSB from claiming the interface —
-the device picker will show the printer as "parkopplad" (paired) and connecting
-will fail. The fix is to replace the Windows driver with **WinUSB** using Zadig.
+## Returning a borrowed printer
 
-### Step 1 — Download Zadig
+If you flipped a borrowed printer to Virtual COM during a competition, flip
+it back to Printer Class before returning it so the lender's setup
+(usually based on the CITIZEN driver) keeps working as before.
 
-Download [Zadig](https://zadig.akeo.ie/) (free, no installation needed).
+The procedure is identical to the Step 1 flip above, except that in step 8
+you select **Printer Class** instead of Virtual COM. Then power-cycle the
+printer.
 
-### Step 2 — Replace the driver
+## Printer Class mode (alternative / legacy)
 
-1. Plug in the thermal printer.
-2. Run Zadig.
-3. In the menu bar, check **Options → List All Devices**.
-4. Select the printer from the dropdown (e.g. "CT-S310II" or "USB Printing Support").
-5. In the **Driver** row you will see the current driver on the left (e.g.
-   `usbprint`) and the target driver on the right. Use the arrows to select
-   **WinUSB** as the target.
-6. Click **Replace Driver** and wait for it to finish.
+Use this mode for printers that for some reason cannot be flipped to Virtual
+COM (e.g. firmware too old, or different printer model). It requires
+per-laptop setup on both Linux and Windows because OS printer drivers
+auto-bind to USB Printer class devices and block WebUSB.
 
-### Step 3 — Reconnect in Chrome
+### Linux
 
-Reload the Oxygen page and click **Connect Printer**. The printer should now
-appear without "parkopplad" and connect successfully.
+Create `/etc/udev/rules.d/50-citizen-thermal.rules` with both the access rule
+and an unbind rule that releases the kernel `usblp` driver from the device:
 
-> **Note:** Replacing the driver means the printer will no longer be visible to
-> Windows' built-in printing system (e.g. Notepad, Word). To restore the
-> original driver, open **Device Manager**, find the printer under
-> "Universal Serial Bus devices", right-click → **Uninstall device** (tick
-> "Delete the driver software"), then replug the printer. Windows will
-> reinstall `usbprint.sys` automatically.
+```
+# Grant the logged-in user access to the CITIZEN CT-S310II in Printer Class mode.
+SUBSYSTEM=="usb", ATTRS{idVendor}=="1d90", ATTRS{idProduct}=="2060", MODE="0666", TAG+="uaccess"
 
-## macOS
+# Immediately release the interface from the usblp kernel driver when it
+# binds, so WebUSB can claim it. Targeted to this specific VID:PID — no
+# effect on any other USB printer on the system.
+ACTION=="bind", SUBSYSTEM=="usb", DRIVER=="usblp", \
+  ATTRS{idVendor}=="1d90", ATTRS{idProduct}=="2060", \
+  RUN+="/bin/sh -c 'echo -n %k > /sys/bus/usb/drivers/usblp/unbind'"
+```
 
-No extra setup required. WebUSB works out of the box on macOS.
+Apply and replug:
+
+```bash
+sudo udevadm control --reload-rules && sudo udevadm trigger
+```
+
+> If you later want CUPS/system printing for this printer, remove the file
+> and reload udev. The two approaches are mutually exclusive.
+
+### Windows
+
+Windows loads its own USB printer driver (`usbprint.sys`), and Citizen's
+optional driver also binds to this device. To free the interface for
+WebUSB, replace the active driver with **WinUSB** using Zadig.
+
+1. Download [Zadig](https://zadig.akeo.ie/) (free, no installation).
+2. Plug in the printer and run Zadig.
+3. Menu bar → **Options → List All Devices**.
+4. Select the printer (e.g. "CT-S310II" or "USB Printing Support").
+5. In the **Driver** row pick **WinUSB** as the target.
+6. Click **Replace Driver**.
+7. Reload Oxygen and click **Connect Printer**.
+
+> Replacing the driver hides the printer from Windows' built-in printing
+> system (Notepad, Word, etc.). To restore it: Device Manager → find the
+> printer under "Universal Serial Bus devices" → right-click → **Uninstall
+> device** (tick "Delete the driver software") → replug. Windows
+> reinstalls `usbprint.sys` automatically.
+>
+> If the printer can be flipped to Virtual COM, that route avoids needing
+> Zadig entirely.
+
+### macOS
+
+No extra setup required.
 
 ## Using the Finish Station Printer
 

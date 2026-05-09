@@ -27,7 +27,13 @@ import {
   type RegistrationReceiptData,
   type FinishReceiptLabels,
   type RegistrationReceiptLabels,
+  type PrinterIdentity,
+  type CitizenUsbMode,
 } from "../lib/receipt-printer/index.js";
+import {
+  recordFlash,
+  type PrinterFlashRecord,
+} from "../lib/printer-flash-history.js";
 
 // ─── Types ───────────────────────────────────────────────────
 
@@ -48,6 +54,24 @@ interface PrinterContextValue {
   print(data: FinishReceiptData): Promise<void>;
   /** Print a registration receipt. Throws if not connected or print fails. */
   printRegistration(data: RegistrationReceiptData): Promise<void>;
+  /**
+   * Identity of the currently connected printer, or null if disconnected.
+   * Updated reactively on connect/disconnect.
+   */
+  identity: PrinterIdentity | null;
+  /** True if the connected printer supports two-way commands (memory switch reads). */
+  supportsRead: boolean;
+  /** Read the printer's current USB mode (CT-S310II). */
+  readUsbMode(): Promise<CitizenUsbMode>;
+  /** Read all 10 memory switches (CT-S310II). Returns map keyed by switch number. */
+  readAllMemorySwitches(): Promise<Record<number, string>>;
+  /**
+   * Flip the printer's USB mode and persist a record in flash history.
+   * Caller is responsible for telling the operator to power-cycle.
+   */
+  flashUsbMode(targetMode: CitizenUsbMode, currentMode: CitizenUsbMode): Promise<PrinterFlashRecord | null>;
+  /** Trigger the printer's built-in self-test print. */
+  printSelfTest(): Promise<void>;
 }
 
 // ─── Context ─────────────────────────────────────────────────
@@ -106,12 +130,22 @@ export function PrinterProvider({ children }: { children: ReactNode }) {
   const [connected, setConnected] = useState(false);
   const [printing, setPrinting] = useState(false);
   const [lastError, setLastError] = useState<string | null>(null);
+  const [identity, setIdentity] = useState<PrinterIdentity | null>(null);
+  const [supportsRead, setSupportsRead] = useState(false);
 
   // Wire events and attempt auto-reconnect to a previously paired printer.
   useEffect(() => {
     const driver = driverRef.current;
-    const onConnected = () => setConnected(true);
-    const onDisconnected = () => setConnected(false);
+    const onConnected = () => {
+      setConnected(true);
+      setIdentity(driver.getIdentity());
+      setSupportsRead(driver.supportsRead);
+    };
+    const onDisconnected = () => {
+      setConnected(false);
+      setIdentity(null);
+      setSupportsRead(false);
+    };
     driver.addEventListener("printer:connected", onConnected);
     driver.addEventListener("printer:disconnected", onDisconnected);
     if (supported) {
@@ -172,9 +206,92 @@ export function PrinterProvider({ children }: { children: ReactNode }) {
     }
   }, [receiptLabels]);
 
+  const readUsbMode = useCallback(async () => {
+    const driver = driverRef.current;
+    if (!driver.connected) throw new Error("Printer not connected");
+    setLastError(null);
+    try {
+      return await driver.readUsbMode();
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      setLastError(msg);
+      throw err;
+    }
+  }, []);
+
+  const readAllMemorySwitches = useCallback(async () => {
+    const driver = driverRef.current;
+    if (!driver.connected) throw new Error("Printer not connected");
+    setLastError(null);
+    try {
+      return await driver.readAllMemorySwitches();
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      setLastError(msg);
+      throw err;
+    }
+  }, []);
+
+  const flashUsbMode = useCallback(
+    async (targetMode: CitizenUsbMode, currentMode: CitizenUsbMode) => {
+      const driver = driverRef.current;
+      if (!driver.connected) throw new Error("Printer not connected");
+      const id = driver.getIdentity();
+      if (!id) throw new Error("Printer identity unavailable");
+      setLastError(null);
+      try {
+        await driver.flashUsbMode(targetMode);
+        const record = recordFlash({
+          vendorId: id.vendorId,
+          serial: id.serialNumber,
+          productName: id.productName,
+          fromMode: currentMode,
+          toMode: targetMode,
+        });
+        return record;
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        setLastError(msg);
+        throw err;
+      }
+    },
+    [],
+  );
+
+  const printSelfTest = useCallback(async () => {
+    const driver = driverRef.current;
+    if (!driver.connected) throw new Error("Printer not connected");
+    setLastError(null);
+    setPrinting(true);
+    try {
+      await driver.printSelfTest();
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      setLastError(msg);
+      throw err;
+    } finally {
+      setPrinting(false);
+    }
+  }, []);
+
   return (
     <PrinterContext.Provider
-      value={{ supported, connected, printing, lastError, connect, disconnect, print, printRegistration }}
+      value={{
+        supported,
+        connected,
+        printing,
+        lastError,
+        connect,
+        disconnect,
+        print,
+        printRegistration,
+        identity,
+        supportsRead,
+        readUsbMode,
+        readAllMemorySwitches,
+        flashUsbMode,
+        printSelfTest,
+      }}
     >
       {children}
     </PrinterContext.Provider>
