@@ -36,6 +36,11 @@ interface USBOutTransferResult {
   readonly status: "ok" | "stall" | "babble";
 }
 
+interface USBInTransferResult {
+  readonly data: DataView;
+  readonly status: "ok" | "stall" | "babble";
+}
+
 interface USBDeviceFilter {
   vendorId?: number;
   productId?: number;
@@ -69,6 +74,10 @@ interface USBDevice {
     endpointNumber: number,
     data: ArrayBuffer | ArrayBufferView,
   ): Promise<USBOutTransferResult>;
+  transferIn(
+    endpointNumber: number,
+    length: number,
+  ): Promise<USBInTransferResult>;
 }
 
 interface USBConnectionEvent extends Event {

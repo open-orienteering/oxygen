@@ -15,6 +15,7 @@ import { LanguageSelector } from "../components/LanguageSelector";
 import { useDeviceManager } from "../context/DeviceManager";
 import { usePrinter } from "../context/PrinterContext";
 import { fetchLogoRaster } from "../lib/receipt-printer/index.js";
+import { PrinterSettingsDialog } from "../components/PrinterSettingsDialog";
 import { getClubLogoUrl } from "../lib/club-logo";
 import { CardNotification } from "../components/CardNotification";
 import { RecentCards } from "../components/RecentCards";
@@ -104,6 +105,7 @@ export function CompetitionShell() {
   const [competitionName, setCompetitionName] = useState<string>("");
   const [ready, setReady] = useState(false);
   const [showMoreMenu, setShowMoreMenu] = useState(false);
+  const [showPrinterSettings, setShowPrinterSettings] = useState(false);
 
   // Poll oCounter for external changes (e.g. from MeOS) and auto-invalidate
   // caches. Hosted in a sibling component so the query subscription's
@@ -408,6 +410,14 @@ export function CompetitionShell() {
                       <div className="px-2 py-1">
                         <StartScreenLauncher nameId={nameId ?? ""} onLaunch={() => setShowMoreMenu(false)} />
                       </div>
+                      <div className="px-2 py-1">
+                        <PrinterSettingsLauncher
+                          onLaunch={() => {
+                            setShowPrinterSettings(true);
+                            setShowMoreMenu(false);
+                          }}
+                        />
+                      </div>
                       <div className="my-1 border-t border-slate-100" />
                       <div className="px-4 py-1.5">
                         <LanguageSelector />
@@ -459,6 +469,12 @@ export function CompetitionShell() {
         {/* Global registration dialog */}
         <RegistrationDialog />
       </RegistrationDialogProvider>
+
+      {/* Printer settings dialog */}
+      <PrinterSettingsDialog
+        open={showPrinterSettings}
+        onClose={() => setShowPrinterSettings(false)}
+      />
     </div>
   );
 }
@@ -517,6 +533,26 @@ function KioskLauncher({ nameId }: { nameId: string }) {
         <path strokeLinecap="round" strokeLinejoin="round" d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
       </svg>
       {t("kiosk")}
+    </button>
+  );
+}
+
+// ─── Printer Settings Launcher ──────────────────────────────
+
+function PrinterSettingsLauncher({ onLaunch }: { onLaunch: () => void }) {
+  const { t } = useTranslation("devices");
+  return (
+    <button
+      onClick={onLaunch}
+      className="inline-flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium text-slate-500 hover:text-slate-700 hover:bg-slate-100 rounded-full transition-colors cursor-pointer"
+      title={t("printerSettingsLauncherTitle")}
+      data-testid="printer-settings-launcher"
+    >
+      <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+        <path strokeLinecap="round" strokeLinejoin="round" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
+        <path strokeLinecap="round" strokeLinejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+      </svg>
+      {t("printerSettingsLauncher")}
     </button>
   );
 }
