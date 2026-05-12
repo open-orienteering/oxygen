@@ -37,5 +37,11 @@
   "connectReaderTitle": "Anslut SI-läsare",
   "siReader": "SI-läsare",
   "readerStatusActive": "Aktiv",
-  "readerStatusConnected": "Ansluten"
+  "readerStatusConnected": "Ansluten",
+  "mapPaneLabel": "Karta",
+  "hideMapPane": "Dölj karta",
+  "hideMapPaneTitle": "Dölj kartpanelen",
+  "showMapPane": "Visa karta",
+  "showMapPaneTitle": "Visa kartpanelen",
+  "resizeMapPane": "Dra för att ändra storlek på kartpanelen"
 }

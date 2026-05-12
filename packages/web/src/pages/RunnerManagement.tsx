@@ -25,15 +25,19 @@ import { getClubLogoUrl } from "../lib/club-logo";
 import { StructuredSearchBar } from "../components/structured-search/StructuredSearchBar";
 import { useStructuredSearch } from "../hooks/useStructuredSearch";
 import { createRunnerAnchors } from "../lib/structured-search/anchors/runner-anchors";
+import { MapSlot } from "../components/MapSlot";
+import { RunnerMapPreview } from "../components/RunnerMapPreview";
+import { useDefaultMapCourseNames } from "../hooks/useDefaultMapCourseNames";
 
 const RUNNER_FREE_TEXT_FIELDS: (keyof RunnerInfo)[] = ["name", "clubName", "className", "cardNo"];
 
 export function RunnerManagement() {
   const { t } = useTranslation("runners");
   const runnerAnchors = useMemo(() => createRunnerAnchors((key) => t(key as never)), [t]);
-  const { tokens, setTokens, filterItems } =
+  const { tokens, setTokens, filterItems, getAnchorValue } =
     useStructuredSearch<RunnerInfo>(runnerAnchors, RUNNER_FREE_TEXT_FIELDS);
   const [expandedRunner, setExpandedRunner] = useNumericSearchParam("runner");
+  const defaultCourseNames = useDefaultMapCourseNames(getAnchorValue("class"));
   const { openRegistration } = useRegistrationDialog();
 
   const utils = trpc.useUtils();
@@ -394,6 +398,17 @@ export function RunnerManagement() {
           </div>
         )}
       </div>
+
+      {/* Map preview — shows the expanded runner's course / punch status /
+          GPS track, or the page's class-filter course when nothing is
+          expanded. Portals into the shell pane on wide viewports; renders
+          inline on narrow. */}
+      <MapSlot>
+        <RunnerMapPreview
+          runnerId={expandedRunner}
+          defaultCourseNames={defaultCourseNames}
+        />
+      </MapSlot>
 
       {/* Bulk actions */}
       <BulkActionBar count={selection.count} onDeselectAll={handleDeselectAll}>

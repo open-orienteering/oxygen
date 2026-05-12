@@ -11,6 +11,9 @@ import { useNumericSearchParam } from "../hooks/useSearchParam";
 import { StructuredSearchBar } from "../components/structured-search/StructuredSearchBar";
 import { useStructuredSearch } from "../hooks/useStructuredSearch";
 import { createStartListAnchors } from "../lib/structured-search/anchors/start-list-anchors";
+import { MapSlot } from "../components/MapSlot";
+import { RunnerMapPreview } from "../components/RunnerMapPreview";
+import { useDefaultMapCourseNames } from "../hooks/useDefaultMapCourseNames";
 
 const FREE_TEXT_FIELDS: (keyof StartListEntry)[] = ["name", "clubName", "className", "cardNo"];
 
@@ -21,10 +24,9 @@ export function StartListPage() {
   const [flatView, setFlatView] = useState(false);
 
   const anchors = useMemo(() => createStartListAnchors((key) => t(key as never)), [t]);
-  const { tokens, setTokens, filterItems } = useStructuredSearch<StartListEntry>(
-    anchors,
-    FREE_TEXT_FIELDS,
-  );
+  const { tokens, setTokens, filterItems, getAnchorValue } =
+    useStructuredSearch<StartListEntry>(anchors, FREE_TEXT_FIELDS);
+  const defaultCourseNames = useDefaultMapCourseNames(getAnchorValue("class"));
 
   const utils = trpc.useUtils();
   const startList = trpc.lists.startList.useQuery();
@@ -263,6 +265,16 @@ export function StartListPage() {
           {tokens.length > 0 ? t("noMatchingEntries") : t("noStartListEntries")}
         </div>
       )}
+
+      {/* Map preview — shows the expanded runner's assigned course or the
+          page's class-filter course when nothing is expanded. Portals into
+          the shell pane on wide viewports; renders inline on narrow. */}
+      <MapSlot>
+        <RunnerMapPreview
+          runnerId={expandedRunner}
+          defaultCourseNames={defaultCourseNames}
+        />
+      </MapSlot>
 
       {showDrawPanel && (
         <DrawPanel

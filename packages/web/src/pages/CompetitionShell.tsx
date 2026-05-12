@@ -25,6 +25,10 @@ import { DbLoadIndicator } from "../components/DbLoadIndicator";
 import { useExternalChanges } from "../hooks/useExternalChanges";
 import { SyncStatusIndicator } from "../components/SyncStatusIndicator";
 import { usePerformanceSensitive } from "../lib/performance-mode";
+import { MapSlotProvider } from "../components/MapSlot";
+import { useIsWideViewport } from "../components/map-pane-shared";
+import { MapPane } from "../components/MapPane";
+import { useLocalStorage } from "../hooks/useLocalStorage";
 
 // Lazy-loaded page components — each becomes a separate chunk
 const CompetitionDashboard = lazy(() => import("./CompetitionDashboard").then(m => ({ default: m.CompetitionDashboard })));
@@ -226,6 +230,58 @@ export function CompetitionShell() {
     });
   }, [getKioskChannel, printerPrint, utils]);
 
+  // ─── Two-pane (wide-screen) layout state ──────────────────
+  // All of these hooks must be declared before the early returns below to
+  // keep the hook count stable across renders.
+  const isWide = useIsWideViewport();
+  const [paneCollapsed, setPaneCollapsed] = useLocalStorage(
+    "oxygen.mapPane.collapsed",
+    false,
+  );
+  const [paneWidth, setPaneWidth] = useLocalStorage(
+    "oxygen.mapPane.width",
+    900,
+  );
+  const [paneTarget, setPaneTarget] = useState<HTMLElement | null>(null);
+  const [paneActive, setPaneActive] = useState(false);
+
+  // Visible width of the pane (clamped to a sane range against the
+  // current viewport). The CSS variable is mirrored from this on every
+  // render so external tweaks (e.g. resize handle's imperative DOM
+  // writes) eventually converge with React state. The upper clamp is
+  // viewport-relative so the user can grow the pane as much as their
+  // monitor allows while still leaving the content column readable;
+  // matches the bound in MapPane's drag handler.
+  const MIN_PANE_WIDTH = 600;
+  const MIN_CONTENT_WIDTH = 480;
+  const viewportWidth =
+    typeof window === "undefined" ? 1920 : window.innerWidth;
+  const paneUpperBound = Math.max(
+    MIN_PANE_WIDTH,
+    viewportWidth - MIN_CONTENT_WIDTH,
+  );
+  const clampedPaneWidth = Math.max(
+    MIN_PANE_WIDTH,
+    Math.min(paneUpperBound, paneWidth),
+  );
+  const wideContainer = isWide && !paneCollapsed;
+  const paneVisible = wideContainer && paneActive;
+
+  // The container element holds the `--map-pane-width` CSS variable that
+  // drives the grid column width. The resize handle writes to it
+  // imperatively during a drag (no React re-renders); commit-to-state
+  // happens only on pointer-up, at which point React's next render writes
+  // the new value back into the inline style.
+  const containerRef = useRef<HTMLDivElement>(null);
+  const setLivePaneWidth = useCallback((px: number) => {
+    if (containerRef.current) {
+      containerRef.current.style.setProperty(
+        "--map-pane-width",
+        `${px}px`,
+      );
+    }
+  }, []);
+
   const handleTabChange = (tab: Tab) => {
     const tabDef = tabs.find((t) => t.id === tab);
     const path = tabDef?.path ? `/${nameId}/${tabDef.path}` : `/${nameId}`;
@@ -264,12 +320,36 @@ export function CompetitionShell() {
     );
   }
 
+  // Container CSS: when the pane is visible we drop the max-w-7xl cap, lay
+  // out as a 2-column grid, and embed the persisted pane width directly in
+  // the inline style so the initial render already has the right column
+  // size. The drag handle mutates this via setProperty without re-rendering
+  // React; on commit, React's next render writes the new value back.
+  const containerClass = wideContainer
+    ? "px-4 sm:px-6 lg:px-8 py-6 w-full"
+    : "max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6";
+  const containerStyle: React.CSSProperties = {
+    ["--map-pane-width" as never]: `${clampedPaneWidth}px`,
+    ...(paneVisible
+      ? {
+          display: "grid",
+          gridTemplateColumns: "minmax(0,1fr) var(--map-pane-width, 900px)",
+          gap: "1.5rem",
+          alignItems: "start",
+        }
+      : {}),
+  };
+
+  const headerInnerClass = wideContainer
+    ? "px-4 sm:px-6 lg:px-8 w-full"
+    : "max-w-7xl mx-auto px-4 sm:px-6 lg:px-8";
+
   return (
     <div className="min-h-screen bg-slate-50">
       <ExternalChangesProbe enabled={ready} />
       {/* Header */}
       <header className="bg-white border-b border-slate-200 sticky top-0 z-10">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+        <div className={headerInnerClass}>
           <div className="flex items-center justify-between h-14">
             <div className="flex items-center gap-3">
               <button
@@ -293,6 +373,9 @@ export function CompetitionShell() {
               </h1>
             </div>
             <div className="flex items-center gap-2">
+              {isWide && paneCollapsed && paneActive && (
+                <ShowMapPaneButton onShow={() => setPaneCollapsed(false)} />
+              )}
               <ReaderStatusIndicator />
               <PrinterStatusIndicator />
               <KioskLauncher nameId={nameId ?? ""} />
@@ -436,32 +519,55 @@ export function CompetitionShell() {
         <CardNotification />
 
         {/* Tab Content via nested routes */}
-        <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
-          <Suspense fallback={<div className="flex justify-center py-12"><div className="w-8 h-8 border-4 border-blue-200 border-t-blue-600 rounded-full animate-spin" /></div>}>
-          <Routes>
-            <Route index element={<CompetitionDashboard />} />
-            <Route path="event" element={<EventPage />} />
-            <Route path="runners" element={<RunnerManagement />} />
-            <Route path="startlist" element={<StartListPage />} />
-            <Route path="results" element={<ResultsPage />} />
-            <Route path="classes" element={<ClassesPage />} />
-            <Route path="courses" element={<CoursesPage />} />
-            <Route path="controls" element={<ControlsPage />} />
-            <Route path="clubs" element={<ClubsPage />} />
-            <Route path="cards" element={<CardsPage />} />
-            <Route path="start-station" element={<StartStation />} />
-            <Route path="finish-station" element={<FinishStation />} />
-            <Route path="card-readout" element={<CardReadout />} />
-            <Route path="registration" element={<Navigate to="" replace />} />
-            <Route path="backup-punches" element={<BackupPunchesPage />} />
-            <Route path="test-lab" element={<TestLabPage />} />
-            <Route path="tracks" element={<TracksPage />} />
-            <Route path="tracks/replay" element={<TracksReplayPage />} />
-            <Route path="registration-trends" element={<RegistrationTrendsPage />} />
-            <Route path="*" element={<Navigate to="" replace />} />
-          </Routes>
-          </Suspense>
-        </main>
+        <MapSlotProvider
+          target={paneTarget}
+          onActiveChange={setPaneActive}
+          paneEnabled={!paneCollapsed}
+        >
+          <div
+            ref={containerRef}
+            className={containerClass}
+            style={containerStyle}
+            data-testid="shell-container"
+            data-pane-visible={paneVisible ? "true" : "false"}
+          >
+            <main className="min-w-0">
+              <Suspense fallback={<div className="flex justify-center py-12"><div className="w-8 h-8 border-4 border-blue-200 border-t-blue-600 rounded-full animate-spin" /></div>}>
+              <Routes>
+                <Route index element={<CompetitionDashboard />} />
+                <Route path="event" element={<EventPage />} />
+                <Route path="runners" element={<RunnerManagement />} />
+                <Route path="startlist" element={<StartListPage />} />
+                <Route path="results" element={<ResultsPage />} />
+                <Route path="classes" element={<ClassesPage />} />
+                <Route path="courses" element={<CoursesPage />} />
+                <Route path="controls" element={<ControlsPage />} />
+                <Route path="clubs" element={<ClubsPage />} />
+                <Route path="cards" element={<CardsPage />} />
+                <Route path="start-station" element={<StartStation />} />
+                <Route path="finish-station" element={<FinishStation />} />
+                <Route path="card-readout" element={<CardReadout />} />
+                <Route path="registration" element={<Navigate to="" replace />} />
+                <Route path="backup-punches" element={<BackupPunchesPage />} />
+                <Route path="test-lab" element={<TestLabPage />} />
+                <Route path="tracks" element={<TracksPage />} />
+                <Route path="tracks/replay" element={<TracksReplayPage />} />
+                <Route path="registration-trends" element={<RegistrationTrendsPage />} />
+                <Route path="*" element={<Navigate to="" replace />} />
+              </Routes>
+              </Suspense>
+            </main>
+            {wideContainer && (
+              <MapPane
+                setPortalTarget={setPaneTarget}
+                visible={paneVisible}
+                onCollapse={() => setPaneCollapsed(true)}
+                onLiveResize={setLivePaneWidth}
+                onWidthCommit={setPaneWidth}
+              />
+            )}
+          </div>
+        </MapSlotProvider>
 
         {/* Floating recent cards panel */}
         <RecentCards />
@@ -476,6 +582,35 @@ export function CompetitionShell() {
         onClose={() => setShowPrinterSettings(false)}
       />
     </div>
+  );
+}
+
+// ─── Show Map Pane Button ───────────────────────────────────
+
+function ShowMapPaneButton({ onShow }: { onShow: () => void }) {
+  const { t } = useTranslation("nav");
+  return (
+    <button
+      onClick={onShow}
+      data-testid="show-map-pane"
+      className="inline-flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium text-slate-500 hover:text-slate-700 hover:bg-slate-100 rounded-full transition-colors cursor-pointer"
+      title={t("showMapPaneTitle")}
+    >
+      <svg
+        className="w-4 h-4"
+        fill="none"
+        viewBox="0 0 24 24"
+        stroke="currentColor"
+        strokeWidth={2}
+      >
+        <path
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          d="M9 20l-5.447-2.724A1 1 0 013 16.382V5.618a1 1 0 011.447-.894L9 7m0 13l6-3m-6 3V7m6 10l4.553 2.276A1 1 0 0021 18.382V7.618a1 1 0 00-.553-.894L15 4m0 13V4m0 0L9 7"
+        />
+      </svg>
+      {t("showMapPane")}
+    </button>
   );
 }
 

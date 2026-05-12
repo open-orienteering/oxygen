@@ -10,6 +10,7 @@
 import { useMemo, useState, useRef, useCallback, useEffect } from "react";
 import { trpc } from "../lib/trpc";
 import { MapPanel } from "./MapPanel";
+import { useIsPortaled } from "./map-pane-shared";
 import { ReplayMapLayer, type ReplayMapLayerHandle } from "./replay/ReplayMapLayer";
 import { ReplayRouteLayer } from "./replay/ReplayRouteLayer";
 import { ReplayCourseLayer } from "./replay/ReplayCourseLayer";
@@ -30,17 +31,25 @@ interface Props {
   height?: string;
 }
 
-/** Convert stored waypoints to the gpsRoutes format expected by MapPanel/MapViewer. */
+/** Convert stored waypoints to the gpsRoutes format expected by MapPanel/MapViewer.
+ *  Always renders in red — single-track previews stay consistent across
+ *  pages regardless of the stored per-route colour. (Multi-runner replay
+ *  uses its own per-track colours via `ReplayRouteLayer`, not this path.) */
 function toGpsRoute(route: RoutePreview) {
   return [
     {
-      color: route.color || "#e6194b",
+      color: "#e6194b",
       points: route.waypoints.map((w) => ({ lat: w.lat, lng: w.lng })),
     },
   ];
 }
 
 export function TrackMapPanel({ route, height = "400px" }: Props) {
+  // When portaled into the side pane, ignore the caller-provided pixel
+  // height and fill the pane instead. MapPanel already does this on its
+  // own; the Livelox fallback below also reads `useIsPortaled()`.
+  const portaled = useIsPortaled();
+  const effectiveHeight = portaled ? "100%" : height;
   // Check whether an O2 map exists
   const mapMetadata = trpc.course.mapMetadata.useQuery(undefined, {
     staleTime: 5 * 60_000,
@@ -52,8 +61,8 @@ export function TrackMapPanel({ route, height = "400px" }: Props) {
   if (isLoadingMap) {
     return (
       <div
-        className="flex items-center justify-center bg-slate-50 rounded-lg border border-slate-200"
-        style={{ height }}
+        className={`flex items-center justify-center bg-slate-50 rounded-lg border border-slate-200 ${portaled ? "h-full" : ""}`}
+        style={portaled ? undefined : { height }}
       >
         <div className="w-5 h-5 border-2 border-slate-300 border-t-blue-500 rounded-full animate-spin" />
       </div>
@@ -64,7 +73,7 @@ export function TrackMapPanel({ route, height = "400px" }: Props) {
     // O2 map available — overlay the GPS track
     return (
       <MapPanel
-        height={height}
+        height={effectiveHeight}
         fitToControls={false}
         hideToolbar
         gpsRoutes={toGpsRoute(route)}
@@ -77,8 +86,8 @@ export function TrackMapPanel({ route, height = "400px" }: Props) {
   if (!route.liveloxClassId) {
     return (
       <div
-        className="flex items-center justify-center bg-slate-100 rounded-lg border border-slate-200 text-slate-400 text-sm"
-        style={{ height }}
+        className={`flex items-center justify-center bg-slate-100 rounded-lg border border-slate-200 text-slate-400 text-sm ${portaled ? "h-full" : ""}`}
+        style={portaled ? undefined : { height }}
       >
         No map available
       </div>
@@ -89,7 +98,7 @@ export function TrackMapPanel({ route, height = "400px" }: Props) {
     <LiveloxMapPreview
       route={route}
       liveloxClassId={route.liveloxClassId}
-      height={height}
+      height={effectiveHeight}
     />
   );
 }
@@ -128,17 +137,22 @@ function LiveloxMapPreview({ route, liveloxClassId, height }: LiveloxMapPreviewP
     return () => ro.disconnect();
   }, []);
 
-  // Build a single-route ReplayData-like structure for the route layer
+  // Build a single-route ReplayData-like structure for the route layer.
+  // The single visible track is force-coloured red to match the .ocd map
+  // preview path (consistent single-track styling across runners).
   const singleRouteData = useMemo(() => {
     if (!data) return null;
     return {
       ...data,
-      routes: data.routes.filter((r) => {
-        // Match by name (best effort)
-        const norm = (s: string) => s.toLowerCase().trim();
-        return norm(r.name).includes(norm(route.runnerName.split(" ")[0] ?? "")) ||
-               norm(route.runnerName).includes(norm(r.name.split(" ")[0] ?? ""));
-      }),
+      routes: data.routes
+        .filter((r) => {
+          const norm = (s: string) => s.toLowerCase().trim();
+          return (
+            norm(r.name).includes(norm(route.runnerName.split(" ")[0] ?? "")) ||
+            norm(route.runnerName).includes(norm(r.name.split(" ")[0] ?? ""))
+          );
+        })
+        .map((r) => ({ ...r, color: "#e6194b" })),
     };
   }, [data, route.runnerName]);
 

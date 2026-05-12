@@ -3,6 +3,7 @@ import { useNavigate } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { trpc } from "../lib/trpc";
 import { MapPanel } from "../components/MapPanel";
+import { MapSlot } from "../components/MapSlot";
 import { SearchableSelect, type SelectOption } from "../components/SearchableSelect";
 import { entriesToday, daysToGo, buildSeries } from "../lib/registration-trends";
 
@@ -158,33 +159,35 @@ export function CompetitionDashboard() {
       <CompetitionProgressBar courseId={selectedCourseId} />
 
       {/* Map with class filter */}
-      <MapPanel
-        className="w-full"
-        height="700px"
-        fitToControls
-        highlightCourseNames={selectedClassCourseNames.length > 0 ? selectedClassCourseNames : undefined}
-        onControlClick={(id) => navigate(`controls?control=${id}`)}
-        showCompletion={showCompletion}
-        onCompletionToggle={setShowCompletion}
-        completionCourseId={selectedCourseId}
-        toolbar={
-          <>
-            <h2 className="text-sm font-semibold text-slate-500 uppercase tracking-wider">
-              {t("map")}
-            </h2>
-            <div className="w-64">
-              <SearchableSelect
-                value={selectedClassId ?? ""}
-                onChange={(v) => setSelectedClassId(v ? Number(v) : null)}
-                options={[{ value: "", label: t("allClasses") }, ...classOptions]}
-                placeholder={t("filterByClass")}
-                searchPlaceholder={t("searchClass")}
-                className="text-sm"
-              />
-            </div>
-          </>
-        }
-      />
+      <MapSlot>
+        <MapPanel
+          className="w-full"
+          height="700px"
+          fitToControls
+          highlightCourseNames={selectedClassCourseNames.length > 0 ? selectedClassCourseNames : undefined}
+          onControlClick={(id) => navigate(`controls?control=${id}`)}
+          showCompletion={showCompletion}
+          onCompletionToggle={setShowCompletion}
+          completionCourseId={selectedCourseId}
+          toolbar={
+            <>
+              <h2 className="text-sm font-semibold text-slate-500 uppercase tracking-wider">
+                {t("map")}
+              </h2>
+              <div className="w-64">
+                <SearchableSelect
+                  value={selectedClassId ?? ""}
+                  onChange={(v) => setSelectedClassId(v ? Number(v) : null)}
+                  options={[{ value: "", label: t("allClasses") }, ...classOptions]}
+                  placeholder={t("filterByClass")}
+                  searchPlaceholder={t("searchClass")}
+                  className="text-sm"
+                />
+              </div>
+            </>
+          }
+        />
+      </MapSlot>
     </>
   );
 }

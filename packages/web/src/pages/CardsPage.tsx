@@ -12,6 +12,9 @@ import { CardTypeBadge } from "../components/CardTypeBadge";
 import { StructuredSearchBar } from "../components/structured-search/StructuredSearchBar";
 import { useStructuredSearch } from "../hooks/useStructuredSearch";
 import { createCardAnchors, type CardListItem } from "../lib/structured-search/anchors/card-anchors";
+import { MapSlot } from "../components/MapSlot";
+import { CardMapPreview } from "../components/CardMapPreview";
+import { useDefaultMapCourseNames } from "../hooks/useDefaultMapCourseNames";
 
 // ─── Battery voltage thresholds (from sportident-python) ────
 const BATTERY_LOW = 2.5; // RED — replace battery!
@@ -70,10 +73,9 @@ export function CardsPage() {
   const clubs = trpc.competition.clubs.useQuery();
 
   const anchors = useMemo(() => createCardAnchors((key) => t(key as never)), [t]);
-  const { tokens, setTokens, filterItems } = useStructuredSearch<CardListItem>(
-    anchors,
-    [],
-  );
+  const { tokens, setTokens, filterItems, getAnchorValue } =
+    useStructuredSearch<CardListItem>(anchors, []);
+  const defaultCourseNames = useDefaultMapCourseNames(getAnchorValue("class"));
 
   const suggestionData = useMemo(
     () => ({
@@ -261,6 +263,18 @@ export function CardsPage() {
           </tbody>
         </table>
       </div>
+
+      {/* Map preview — when a card row is expanded, the linked runner's
+          course / punch status / GPS track are shown. Falls back to the
+          page's class-filter course (or plain overview) otherwise.
+          Portals into the shell pane on wide viewports; renders inline
+          on narrow. */}
+      <MapSlot>
+        <CardMapPreview
+          cardNo={expandedCard}
+          defaultCourseNames={defaultCourseNames}
+        />
+      </MapSlot>
     </>
   );
 }

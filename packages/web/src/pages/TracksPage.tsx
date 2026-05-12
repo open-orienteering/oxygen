@@ -3,6 +3,7 @@ import { useNavigate, useParams } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { trpc } from "../lib/trpc";
 import { TrackMapPanel } from "../components/TrackMapPanel";
+import { MapSlot } from "../components/MapSlot";
 import { SortHeader } from "../components/SortHeader";
 import { useSort } from "../hooks/useSort";
 import { StructuredSearchBar } from "../components/structured-search/StructuredSearchBar";
@@ -283,13 +284,15 @@ function ExpandedDetail({
 
   return (
     <div className="space-y-3">
-      {previewRoute ? (
-        <TrackMapPanel route={previewRoute} height="640px" />
-      ) : (
-        <div className="h-[640px] flex items-center justify-center bg-slate-100 rounded-lg border border-slate-200">
-          <div className="w-5 h-5 border-2 border-slate-300 border-t-blue-500 rounded-full animate-spin" />
-        </div>
-      )}
+      <MapSlot>
+        {previewRoute ? (
+          <TrackMapPanel route={previewRoute} height="640px" />
+        ) : (
+          <div className="h-[640px] flex items-center justify-center bg-slate-100 rounded-lg border border-slate-200">
+            <div className="w-5 h-5 border-2 border-slate-300 border-t-blue-500 rounded-full animate-spin" />
+          </div>
+        )}
+      </MapSlot>
 
       <div className="flex gap-2">
         {route.liveloxClassId && (
