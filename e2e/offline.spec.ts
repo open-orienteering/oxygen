@@ -29,8 +29,16 @@ async function selectCompetition(page: Page) {
 /** Navigate to runners tab and wait for data to load — ensures useStationSync caches everything */
 async function warmStationCache(page: Page) {
   await page.getByRole("link", { name: "Runners", exact: true }).click();
+  // tRPC batches multiple procedures into one URL like
+  // `/trpc/class.list,runner.list,competition.dashboard?batch=1&...`, so
+  // we match `runner.list` as a substring anywhere in the URL rather than
+  // anchoring on `/trpc/runner.list` (which only catches it when batched
+  // first alphabetically).
   await page.waitForResponse(
-    (resp) => resp.url().includes("/trpc/runner.list") && resp.status() === 200,
+    (resp) =>
+      resp.url().includes("runner.list") &&
+      resp.url().includes("/trpc/") &&
+      resp.status() === 200,
     { timeout: 15000 },
   );
   // Give React Query time to persist to IndexedDB (~100-300ms in practice)

@@ -2,6 +2,7 @@ import { useState, useRef, useMemo, useEffect, useCallback } from "react";
 import { useTranslation } from "react-i18next";
 import { trpc } from "../lib/trpc";
 import { MapViewer, type ControlOverlay, type CourseOverlay } from "./MapViewer";
+import { useIsPortaled } from "./map-pane-shared";
 
 interface Props {
   /** Highlight a specific control by DB ID */
@@ -64,6 +65,14 @@ export function MapPanel({
   gpsRoutes,
 }: Props) {
   const { t } = useTranslation("dashboard");
+  const isPortaled = useIsPortaled();
+  // When rendered inside the persistent right pane, strip caller-provided
+  // layout margins (typically `mt-6`) and let the map fill the available
+  // height of the pane instead of using the fixed pixel `height` prop.
+  const effectiveClassName = isPortaled
+    ? className.replace(/\bmt-\S+/g, "").trim()
+    : className;
+  const effectiveHeight = isPortaled ? "100%" : height;
   // Merge single + multi course names into a set for unified handling
   const effectiveCourseNames = useMemo(() => {
     const names = new Set<string>();
@@ -356,11 +365,21 @@ export function MapPanel({
     return () => document.removeEventListener("fullscreenchange", onFsChange);
   }, []);
 
+  // Highlight attribute (intent, not render outcome) — also surfaced on
+  // the upload-prompt / loading-state paths so E2E tests can observe the
+  // requested highlight regardless of map upload state.
+  const dataHighlightCourse =
+    highlightedCourseNamesList.length > 0
+      ? highlightedCourseNamesList.join(",")
+      : "";
+
   // Show upload prompt only if we're done loading and there's no map
   if (!hasMap && !isLoadingMap) {
     return (
       <div
-        className={`${className}`}
+        data-testid="map-panel"
+        data-highlight-course={dataHighlightCourse}
+        className={`${effectiveClassName} ${isPortaled ? "h-full p-4 overflow-auto" : ""}`}
         onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
         onDragLeave={() => setDragOver(false)}
         onDrop={handleDrop}
@@ -403,8 +422,15 @@ export function MapPanel({
   // Loading state
   if (isLoadingMap) {
     return (
-      <div className={`${className}`}>
-        <div className="flex items-center justify-center bg-slate-50 rounded-lg border border-slate-200" style={{ height }}>
+      <div
+        data-testid="map-panel"
+        data-highlight-course={dataHighlightCourse}
+        className={`${effectiveClassName} ${isPortaled ? "h-full" : ""}`}
+      >
+        <div
+          className="flex items-center justify-center bg-slate-50 rounded-lg border border-slate-200"
+          style={{ height: effectiveHeight }}
+        >
           <div className="text-center">
             <div className="w-6 h-6 border-2 border-blue-300 border-t-blue-600 rounded-full animate-spin mx-auto mb-2" />
             <p className="text-xs text-slate-400">{t("loadingMap")}</p>
@@ -415,7 +441,14 @@ export function MapPanel({
   }
 
   return (
-    <div ref={fullscreenRef} className={`${className} ${isFullscreen ? "bg-white flex flex-col" : ""}`}>
+    <div
+      ref={fullscreenRef}
+      data-testid="map-panel"
+      data-highlight-course={dataHighlightCourse}
+      className={`${effectiveClassName} ${
+        isPortaled || isFullscreen ? "bg-white flex flex-col" : ""
+      } ${isPortaled ? "h-full" : ""}`}
+    >
       {/* Toolbar (class selector, toggles, etc.) — always visible, even fullscreen */}
       {!hideToolbar && (toolbar || isFullscreen) && (
         <div className="flex items-center gap-3 px-1 py-2 flex-shrink-0">
@@ -483,7 +516,10 @@ export function MapPanel({
         highlightCourseName={highlightCourseName}
         onControlClick={handleControlClick}
         className="w-full"
-        style={{ height: isFullscreen ? undefined : height, flex: isFullscreen ? "1 1 0" : undefined }}
+        style={{
+          height: isFullscreen || isPortaled ? undefined : height,
+          flex: isFullscreen || isPortaled ? "1 1 0" : undefined,
+        }}
         initialFitControls={fitToControls}
         focusControlIds={focusControlIds}
         showDescriptions={showDescriptions}

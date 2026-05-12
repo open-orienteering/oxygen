@@ -15,6 +15,7 @@ import { useNumericSearchParam } from "../hooks/useSearchParam";
 import { SortHeader } from "../components/SortHeader";
 import { useSort } from "../hooks/useSort";
 import { MapPanel } from "../components/MapPanel";
+import { MapSlot } from "../components/MapSlot";
 import { BulkActionBar } from "../components/BulkActionBar";
 import { useDeviceManager } from "../context/DeviceManager";
 import { STATION_MODE, type StationInfo } from "../lib/si-protocol";
@@ -328,12 +329,14 @@ export function ControlsPage() {
 
       {/* Map — selection drives the filter when non-empty, otherwise the
           expanded row is highlighted as before. */}
-      <MapPanel
-        className="mt-6"
-        fitToControls
-        highlightControlId={selectedIds.size === 0 ? (expandedId ?? undefined) : undefined}
-        highlightControlIds={selectedIds.size > 0 ? Array.from(selectedIds) : undefined}
-      />
+      <MapSlot>
+        <MapPanel
+          className="mt-6"
+          fitToControls
+          highlightControlId={selectedIds.size === 0 ? (expandedId ?? undefined) : undefined}
+          highlightControlIds={selectedIds.size > 0 ? Array.from(selectedIds) : undefined}
+        />
+      </MapSlot>
 
       {/* Bulk action bar — floating at bottom, same as Classes/Runners */}
       <BulkActionBar count={selectedIds.size} onDeselectAll={() => setSelectedIds(new Set())}>

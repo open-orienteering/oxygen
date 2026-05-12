@@ -11,7 +11,6 @@ import {
   type RunnerStatusValue,
 } from "@oxygen/shared";
 import { PunchTable, type PunchTableData } from "./PunchTable";
-import { MapPanel } from "./MapPanel";
 import { ClubLogo } from "./ClubLogo";
 import { SearchableSelect } from "./SearchableSelect";
 import { formatEntryDate } from "../lib/format";
@@ -112,20 +111,6 @@ export function RunnerInlineDetail({ runnerId, colSpan }: Props) {
   const r = runner.data;
   const runningTime =
     r.finishTime > 0 && r.startTime > 0 ? r.finishTime - r.startTime : 0;
-
-  const mispunchMapInfo = (() => {
-    const d = readout.data;
-    if (!d?.course) return null;
-    if (d.missingControls.length === 0 && d.extraPunches.length === 0) return null;
-    const punchStatusByCode: Record<string, "ok" | "missing" | "extra"> = {};
-    for (const c of d.controls) punchStatusByCode[String(c.controlCode)] = c.status as "ok" | "missing" | "extra";
-    for (const ep of d.extraPunches) punchStatusByCode[String(ep.controlCode)] = "extra";
-    const focusControlCodes = [
-      ...d.controls.filter((c) => c.status === "missing").map((c) => String(c.controlCode)),
-      ...d.extraPunches.map((ep) => String(ep.controlCode)),
-    ];
-    return { courseName: d.course.name, punchStatusByCode, focusControlCodes };
-  })();
 
   return (
     <tr>
@@ -339,44 +324,10 @@ export function RunnerInlineDetail({ runnerId, colSpan }: Props) {
                 }}
               />
 
-              {/* Mispunch map — shown when there are missing or extra controls */}
-              {mispunchMapInfo && (
-                <div className="mt-4 pt-4 border-t border-blue-100">
-                  <div className="flex items-center justify-between mb-2">
-                    <span className="text-sm font-medium text-slate-600">{t("courseMap")}</span>
-                    <span className="flex items-center gap-3 text-xs text-slate-500">
-                      <span className="flex items-center gap-1">
-                        <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
-                          <circle cx="7" cy="7" r="5.5" stroke="#ef4444" strokeWidth="1.5" />
-                          <line x1="4" y1="4" x2="10" y2="10" stroke="#ef4444" strokeWidth="1.5" strokeLinecap="round" />
-                          <line x1="10" y1="4" x2="4" y2="10" stroke="#ef4444" strokeWidth="1.5" strokeLinecap="round" />
-                        </svg>
-                        {t("missing")}
-                      </span>
-                      <span className="flex items-center gap-1">
-                        <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
-                          <circle cx="7" cy="7" r="5.5" stroke="#f97316" strokeWidth="1.5" />
-                        </svg>
-                        {t("extraPunch")}
-                      </span>
-                      <span className="flex items-center gap-1">
-                        <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
-                          <circle cx="7" cy="7" r="5.5" stroke="#059669" strokeWidth="1.5" />
-                        </svg>
-                        {t("correct")}
-                      </span>
-                    </span>
-                  </div>
-                  <MapPanel
-                    highlightCourseName={mispunchMapInfo.courseName}
-                    filterMode="course"
-                    height="300px"
-                    fitToControls
-                    punchStatusByCode={mispunchMapInfo.punchStatusByCode}
-                    focusControlCodes={mispunchMapInfo.focusControlCodes}
-                  />
-                </div>
-              )}
+              {/* The full per-runner map (course + punch status colours
+                  + GPS track) is rendered at the page level via
+                  `<MapSlot><RunnerMapPreview ... /></MapSlot>` and
+                  reflects the expanded runner automatically. */}
             </div>
           )}
         </div>

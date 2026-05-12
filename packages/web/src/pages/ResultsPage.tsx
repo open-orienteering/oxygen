@@ -16,6 +16,9 @@ import { useNumericSearchParam } from "../hooks/useSearchParam";
 import { StructuredSearchBar } from "../components/structured-search/StructuredSearchBar";
 import { useStructuredSearch } from "../hooks/useStructuredSearch";
 import { createResultAnchors } from "../lib/structured-search/anchors/result-anchors";
+import { MapSlot } from "../components/MapSlot";
+import { RunnerMapPreview } from "../components/RunnerMapPreview";
+import { useDefaultMapCourseNames } from "../hooks/useDefaultMapCourseNames";
 
 const FREE_TEXT_FIELDS: (keyof ResultEntry)[] = ["name", "clubName", "className", "startNo"];
 
@@ -24,10 +27,9 @@ export function ResultsPage() {
   const [expandedRunner, setExpandedRunner] = useNumericSearchParam("runner");
 
   const anchors = useMemo(() => createResultAnchors((key) => t(key as never)), [t]);
-  const { tokens, setTokens, filterItems } = useStructuredSearch<ResultEntry>(
-    anchors,
-    FREE_TEXT_FIELDS,
-  );
+  const { tokens, setTokens, filterItems, getAnchorValue } =
+    useStructuredSearch<ResultEntry>(anchors, FREE_TEXT_FIELDS);
+  const defaultCourseNames = useDefaultMapCourseNames(getAnchorValue("class"));
 
   const results = trpc.lists.resultList.useQuery();
   const dashboard = trpc.competition.dashboard.useQuery();
@@ -196,6 +198,17 @@ export function ResultsPage() {
           {tokens.length > 0 ? t("noMatchingResults") : t("noResultsFound")}
         </div>
       )}
+
+      {/* Map preview — shows the expanded runner's course + punch status
+          colours + GPS overlay, or the page's class-filter course when
+          nothing is expanded. Portals into the shell pane on wide
+          viewports; renders inline on narrow. */}
+      <MapSlot>
+        <RunnerMapPreview
+          runnerId={expandedRunner}
+          defaultCourseNames={defaultCourseNames}
+        />
+      </MapSlot>
     </>
   );
 }

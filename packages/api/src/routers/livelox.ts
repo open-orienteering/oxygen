@@ -470,4 +470,64 @@ export const liveloxRouter = router({
         courseName: row.CourseName ?? null,
       };
     }),
+
+  /**
+   * Get the synced route for a specific runner, if any.
+   * Returns null when the runner has no associated `oxygen_routes` row —
+   * callers (e.g. RunnerMapPreview) interpret null as "no GPS overlay
+   * available" and quietly skip the overlay.
+   */
+  routeByRunner: competitionProcedure
+    .input(z.object({ runnerId: z.number().int().positive() }))
+    .query(async ({ ctx, input }) => {
+      const client = ctx.db;
+      await ensureRoutesTable(client, ctx.dbName);
+
+      const rows = await client.$queryRawUnsafe<
+        Array<{
+          Id: number;
+          Color: string;
+          RaceStartMs: bigint | null;
+          WaypointsJson: string;
+          InterruptionsJson: string | null;
+          ResultJson: string | null;
+          LiveloxClassId: number | null;
+          ClassId: number | null;
+          RunnerName: string | null;
+          CourseName: string | null;
+        }>
+      >(
+        `SELECT r.Id, r.Color, r.RaceStartMs, r.WaypointsJson,
+                r.InterruptionsJson, r.ResultJson, r.LiveloxClassId, r.ClassId,
+                ru.Name AS RunnerName, co.Name AS CourseName
+         FROM oxygen_routes r
+         LEFT JOIN oRunner ru ON ru.Id = r.RunnerId
+         LEFT JOIN oClass cl ON cl.Id = r.ClassId
+         LEFT JOIN oCourse co ON co.Id = cl.Course
+         WHERE r.RunnerId = ?
+         ORDER BY r.SyncedAt DESC
+         LIMIT 1`,
+        input.runnerId,
+      );
+
+      const row = rows[0];
+      if (!row) return null;
+
+      return {
+        id: row.Id,
+        color: row.Color,
+        raceStartMs: row.RaceStartMs ? Number(row.RaceStartMs) : null,
+        waypoints: JSON.parse(row.WaypointsJson) as ReplayWaypoint[],
+        interruptions: row.InterruptionsJson
+          ? (JSON.parse(row.InterruptionsJson) as number[])
+          : [],
+        result: row.ResultJson
+          ? (JSON.parse(row.ResultJson) as ReplayResult)
+          : null,
+        liveloxClassId: row.LiveloxClassId,
+        classId: row.ClassId,
+        runnerName: row.RunnerName ?? "",
+        courseName: row.CourseName ?? null,
+      };
+    }),
 });

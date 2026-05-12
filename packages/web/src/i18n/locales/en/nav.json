@@ -37,5 +37,11 @@
   "connectReaderTitle": "Connect SI Reader",
   "siReader": "SI Reader",
   "readerStatusActive": "Active",
-  "readerStatusConnected": "Connected"
+  "readerStatusConnected": "Connected",
+  "mapPaneLabel": "Map",
+  "hideMapPane": "Hide map",
+  "hideMapPaneTitle": "Hide the map pane",
+  "showMapPane": "Show map",
+  "showMapPaneTitle": "Show the map pane",
+  "resizeMapPane": "Drag to resize the map pane"
 }
