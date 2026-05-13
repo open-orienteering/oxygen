@@ -1082,6 +1082,44 @@ export const MS_MODE = {
 } as const;
 
 /**
+ * Autosend variant for BC (radio) station modes, encoded in MODE byte
+ * (offset 0x71) bits 5-7. Bit 5 is always set when the station is in
+ * BC/radio mode; bits 6 and 7 select which records to autosend over
+ * the SRR radio. PROTO byte (offset 0x74) bit 1 must also be set for
+ * any non-OFF variant to actually transmit.
+ *
+ * Observed in Config+ 2.11.0 captures:
+ *   0x20 | BC_CONTROL(0x12) = 0x32  → BC, no autosend ("no radio")
+ *   0x60 | BC_CONTROL(0x12) = 0x72  → send last record (Config+ default)
+ *   0xA0 | BC_CONTROL(0x12) = 0xB2  → send all records
+ *   0xE0 | BC_FINISH(0x14) = 0xF4   → send unsent records
+ *
+ * Only meaningful for BC modes (BC_CONTROL, BC_START, BC_FINISH,
+ * BC_READOUT). Non-BC modes simply leave these bits as zero.
+ */
+export const AUTOSEND_MODE = {
+  /** BC mode but no autosend over radio ("no radio" in Config+). MODE bit 5. */
+  OFF: 0x20,
+  /** Default in Config+. MODE bits 5,6. */
+  SEND_LAST: 0x60,
+  /** MODE bits 5,7. */
+  SEND_ALL: 0xa0,
+  /** MODE bits 5,6,7. */
+  SEND_UNSENT: 0xe0,
+} as const;
+export type AutosendMode = (typeof AUTOSEND_MODE)[keyof typeof AUTOSEND_MODE];
+
+/** Combine a base STATION_MODE with autosend high bits. */
+export function combineModeByte(
+  baseMode: number,
+  autosend: number = 0,
+): number {
+  // Operating mode lives in the low 5 bits (0x1F mask). Autosend lives
+  // in bits 5-7 (0xE0 mask).
+  return (baseMode & 0x1f) | (autosend & 0xe0);
+}
+
+/**
  * SPORTident hardware MODEL_ID → product name lookup.
  *
  * Most entries are verbatim from per-magnusson sireader2.py `MODEL2NAME`:
@@ -1268,10 +1306,16 @@ export function buildGetBackup(
 
 /**
  * Build OFF command — power off station.
+ *
+ * Config+ on the wire: `FF 02 F8 01 00 90 09 03` (LEN=1, param=0x00,
+ * response in ~60 ms). The single parameter byte appears to be a reason
+ * code; Config+ always sends 0x00 and we follow suit.
+ *
+ * @param reason — reason byte (default 0x00, matching Config+)
  * @param remote — skip wakeup byte for remote mode
  */
-export function buildOff(remote = false): Uint8Array {
-  return buildCommand(CMD.OFF, [], remote);
+export function buildOff(reason: number = 0x00, remote = false): Uint8Array {
+  return buildCommand(CMD.OFF, [reason & 0xff], remote);
 }
 
 /**

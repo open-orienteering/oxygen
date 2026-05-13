@@ -10,6 +10,7 @@ import {
   type ControlUnit,
   type RadioType,
   type AirPlusOverride,
+  type AutosendMode,
 } from "@oxygen/shared";
 import { useNumericSearchParam } from "../hooks/useSearchParam";
 import { SortHeader } from "../components/SortHeader";
@@ -18,7 +19,7 @@ import { MapPanel } from "../components/MapPanel";
 import { MapSlot } from "../components/MapSlot";
 import { BulkActionBar } from "../components/BulkActionBar";
 import { useDeviceManager } from "../context/DeviceManager";
-import { STATION_MODE, type StationInfo } from "../lib/si-protocol";
+import { STATION_MODE, AUTOSEND_MODE, type StationInfo } from "../lib/si-protocol";
 import { StructuredSearchBar } from "../components/structured-search/StructuredSearchBar";
 import { useStructuredSearch } from "../hooks/useStructuredSearch";
 import { createControlAnchors } from "../lib/structured-search/anchors/control-anchors";
@@ -730,6 +731,35 @@ function ControlInlineDetail({ controlId }: { controlId: number }) {
             </select>
           </div>
 
+          {(() => {
+            const radioType = config?.radioType ?? "normal";
+            const autosendDisabled = radioType === "normal";
+            const autosendValue = config?.autosendMode ?? "last";
+            return (
+              <div>
+                <label className="block text-xs font-medium text-slate-500 mb-1">{t("autosendMode")}</label>
+                <select
+                  value={autosendValue}
+                  disabled={autosendDisabled}
+                  onChange={(e) => {
+                    upsertConfigMutation.mutate({
+                      controlIds: [controlId],
+                      autosendMode: e.target.value as AutosendMode,
+                    });
+                  }}
+                  className={`w-full px-3 py-1.5 border border-slate-200 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 ${
+                    autosendDisabled ? "opacity-50 cursor-not-allowed" : "cursor-pointer"
+                  }`}
+                  title={autosendDisabled ? t("autosendDisabledHint") : undefined}
+                >
+                  <option value="last">{t("autosendLast")}</option>
+                  <option value="unsent">{t("autosendUnsent")}</option>
+                  <option value="all">{t("autosendAll")}</option>
+                </select>
+              </div>
+            );
+          })()}
+
           {(d.units ?? []).length === 0 && config?.checkedAt && (
             <div className="text-xs text-slate-500 space-y-1">
               <div>{t("checkedLabel", { time: relativeTime(new Date(config.checkedAt)) })}</div>
@@ -1027,6 +1057,11 @@ function ProgrammingPanel({
     }
 
     if (!matchedControl) {
+      // Remember this serial so the auto-poll loop doesn't keep flagging
+      // the same offending control on every probe cycle (~600 ms apart).
+      // The error stays visible in the results list until the user lifts
+      // the control off the coupling stick and replaces a different one.
+      lastProgrammedSerial.current = stationInfo.serialNo;
       const result: ProgramResult = {
         controlId: 0,
         code: readCode,
@@ -1045,7 +1080,8 @@ function ProgrammingPanel({
 
     // Determine settings
     const config = matchedControl.config;
-    const enableSRR = config?.radioType === "internal_radio" || config?.radioType === "public_radio";
+    const radioType = config?.radioType ?? "normal";
+    const enableSRR = radioType === "internal_radio" || radioType === "public_radio";
     const airPlusOverride = config?.airPlus ?? "default";
     const isNonAirPlusType =
       matchedControl.status === ControlStatus.Check ||
@@ -1071,11 +1107,24 @@ function ProgrammingPanel({
         break;
     }
 
+    // Resolve autosend variant. Only meaningful when radio is enabled — for
+    // "normal" controls the stored value is ignored at the wire level since
+    // we use non-BC station modes there.
+    const autosendByCfg = config?.autosendMode ?? "last";
+    const autosendMode = !enableSRR
+      ? AUTOSEND_MODE.OFF
+      : autosendByCfg === "all"
+        ? AUTOSEND_MODE.SEND_ALL
+        : autosendByCfg === "unsent"
+          ? AUTOSEND_MODE.SEND_UNSENT
+          : AUTOSEND_MODE.SEND_LAST;
+
     // Program the field control (pass rawData to skip redundant read)
     const { batteryVoltage, stationInfo: progInfo, timeDriftMs } = await reader.programControl({
       code: targetCode,
       enableSRR,
       enableAirPlus,
+      autosendMode,
       awakeHours: awakeHours ?? 6,
       beep: false,
       stationMode,
@@ -1180,7 +1229,11 @@ function ProgrammingPanel({
     };
 
     poll();
-    const interval = setInterval(poll, 500);
+    // Tight poll cadence — matches Config+'s wake cadence. Each probe blocks
+    // up to ~550 ms on GET_SYS_VAL timeout (via probeConnectedStation), so
+    // a 50 ms tick just bridges the gap between consecutive probes; the
+    // pollingRef guard prevents overlapping invocations.
+    const interval = setInterval(poll, 50);
 
     return () => {
       cancelled = true;
@@ -1423,6 +1476,9 @@ function ReadoutPanel({
     });
 
     if (!matchedControl) {
+      // Mark this serial as "seen" so the auto-poll loop doesn't keep
+      // emitting the same error on every probe cycle.
+      lastReadSerial.current = stationData.serialNo;
       setResults((prev) => [{
         code, punchCount: 0, newPunches: 0,
         batteryVoltage: stationData.batteryVoltage,
@@ -1432,8 +1488,9 @@ function ReadoutPanel({
       return;
     }
 
-    // Read backup memory
-    const records = await reader.readBackupMemory();
+    // Read backup memory. Pass the SYS_VAL data already obtained during
+    // probe/manual-read so readBackupMemory doesn't re-read it.
+    const records = await reader.readBackupMemory(stationData.rawData);
 
     let newPunches = 0;
     if (records.length > 0) {
@@ -1544,7 +1601,11 @@ function ReadoutPanel({
     };
 
     poll();
-    const interval = setInterval(poll, 1500);
+    // Tight poll cadence — matches Config+'s wake cadence. Each probe blocks
+    // up to ~550 ms on GET_SYS_VAL timeout (via probeConnectedStation), so
+    // a 50 ms tick just bridges the gap between consecutive probes; the
+    // pollingRef guard prevents overlapping invocations.
+    const interval = setInterval(poll, 50);
 
     return () => {
       cancelled = true;

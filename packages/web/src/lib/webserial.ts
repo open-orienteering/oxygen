@@ -23,6 +23,8 @@ import {
   ACK,
   SYSVAL,
   STATION_MODE,
+  AUTOSEND_MODE,
+  combineModeByte,
   supportsFullReadout,
   buildCommand,
   buildSetSysVal,
@@ -38,6 +40,7 @@ import {
   parseStationInfo,
   parseTimeDrift,
   parseBackupPage,
+  type AutosendMode,
   type SICardDetection,
   type SICardReadout,
   type SITransmitPunch,
@@ -639,29 +642,33 @@ export class SIReaderConnection extends EventTarget {
   }
 
   /**
-   * Wake a sleeping field control by sending probe commands through the
-   * coupling coil. Re-sends SET_MS + GET_SYS_VAL on each attempt so the
-   * BSM8 re-enters remote mode after timeouts. The control typically
-   * responds after 3-6 attempts.
+   * Wake a sleeping field control by sending GET_SYS_VAL probes through
+   * the coupling coil. Each GET_SYS_VAL activates the coil; the control
+   * typically responds after 1-3 attempts.
+   *
+   * Matches Config+'s wake cadence: SET_MS REMOTE is sent only once (if
+   * not already in remote mode) and GET_SYS_VAL retries are back-to-back
+   * with a ~550 ms per-attempt timeout (Config+ retries at ~535 ms).
    */
   private async wakeAndReadSysVal(): Promise<SIParsedFrame> {
+    if (!this._inRemoteMode) {
+      await this.sendAndWait(buildSetRemoteMode(), CMD.SET_MS, 1500);
+      this._inRemoteMode = true;
+    }
+
     const maxAttempts = 10;
     for (let attempt = 0; attempt < maxAttempts; attempt++) {
       try {
-        if (attempt > 0) {
-          const delayMs = Math.min(attempt * 400, 1500);
-          siLog(`Wake attempt ${attempt + 1}/${maxAttempts}`);
-          await new Promise((r) => setTimeout(r, delayMs));
-        }
-        await this.sendAndWait(buildSetRemoteMode(), CMD.SET_MS, 1500);
-        this._inRemoteMode = true;
+        if (attempt > 0) siLog(`Wake attempt ${attempt + 1}/${maxAttempts}`);
         return await this.sendAndWait(
           buildGetSysVal(),
           CMD.GET_SYSTEM_VALUE,
-          2000,
+          550,
         );
       } catch (err) {
         if (attempt === maxAttempts - 1) throw err;
+        // No extra sleep — the 550 ms timeout above already paces retries
+        // to match Config+'s ~535 ms cadence.
       }
     }
     throw new Error("Unreachable");
@@ -688,18 +695,28 @@ export class SIReaderConnection extends EventTarget {
   /**
    * Quick probe for a coupled field control. Returns station info if one is
    * present on the coupling stick, or null if nothing responds (timeout).
-   * Uses a short timeout to keep polling responsive.
+   *
+   * Designed to match Config+'s wake cadence: SET_MS REMOTE is sent at most
+   * once per "polling session" (whenever the BSM8 is not already in remote
+   * mode), and every subsequent probe is a bare GET_SYS_VAL that activates
+   * the coupling coil. Timeout is tuned to ~535 ms which is what Config+
+   * uses between GET_SYS_VAL retries when waking a sleeping station.
    */
   async probeConnectedStation(): Promise<(StationInfo & { rawData: Uint8Array }) | null> {
     try {
-      // Re-enter remote mode each time (BSM8 may drop out after timeouts)
-      await this.sendAndWait(buildSetRemoteMode(), CMD.SET_MS, 1000);
-      this._inRemoteMode = true;
-      // Each attempt activates the coupling coil, which helps wake sleeping controls
+      // Only re-enter remote mode if we're not already there. Avoids the
+      // extra SET_MS roundtrip per probe — Config+ never re-sends SET_MS
+      // between GET_SYS_VAL retries.
+      if (!this._inRemoteMode) {
+        await this.sendAndWait(buildSetRemoteMode(), CMD.SET_MS, 1000);
+        this._inRemoteMode = true;
+      }
+      // Each attempt activates the coupling coil, which is what actually
+      // wakes a sleeping control.
       const response = await this.sendAndWait(
         buildGetSysVal(),
         CMD.GET_SYSTEM_VALUE,
-        800,
+        550,
       );
       const info = parseStationInfo(response.data);
       if (!info) return null;
@@ -710,16 +727,29 @@ export class SIReaderConnection extends EventTarget {
   }
 
   /**
-   * Program a field control: set mode, station code, SRR+, AIR+, sync time, erase backup.
-   * Assumes remote mode is already active and station has been read (call readConnectedStation first).
+   * Program a field control: set mode, station code, autosend, auto-off,
+   * sync time, erase backup.
    *
-   * @param preReadData — raw GET_SYS_VAL response from readConnectedStation, used to
-   *   preserve existing feedback bits. Pass this to avoid a redundant remote switch + read.
+   * Matches what Config+ 2.11.0 does on the wire: a single bulk
+   * SET_SYS_VAL covering offsets 0x10-0x7F (112 bytes), copying the
+   * current SYS_VAL bytes and mutating only the few fields we change.
+   * This replaces the old 5-write loop and matches Config+ atomicity.
+   *
+   * SRR_CFG (offset 0x04) is intentionally NOT written — Config+
+   * never touches it during programming, treating it as a one-time
+   * factory/admin setting. The `enableSRR` parameter is accepted for
+   * backwards compatibility but ignored.
+   *
+   * @param preReadData — raw GET_SYS_VAL response from readConnectedStation,
+   *   used to seed the bulk write buffer. Pass this to avoid a redundant
+   *   remote switch + read.
    */
   async programControl(config: {
     code: number;
-    enableSRR: boolean;
+    /** @deprecated Config+ never writes SRR_CFG during programming. */
+    enableSRR?: boolean;
     enableAirPlus: boolean;
+    autosendMode?: AutosendMode;
     awakeHours?: number;
     beep?: boolean;
     stationMode?: number;
@@ -743,7 +773,6 @@ export class SIReaderConnection extends EventTarget {
       stationInfo = parseStationInfo(readResp.data)!;
       if (!stationInfo) throw new Error("Failed to read station before programming");
     }
-    const currentFeedback = sysValData[3 + SYSVAL.FEEDBACK];
 
     const t0 = performance.now();
     const lap = (label: string) => {
@@ -751,59 +780,83 @@ export class SIReaderConnection extends EventTarget {
       siLog(`${ms}ms ${label}`);
     };
 
-    // 0. Ensure competition config bank (PC0) — must be first so subsequent writes target it
-    await this.sendAndWait(
-      buildSetSysVal(SYSVAL.PROGRAM, 0x30), // ASCII '0' = competition
-      CMD.SET_SYSTEM_VALUE,
-    );
-    lap("SET_SYS_VAL(PROGRAM=competition)");
+    // 1. Build the bulk SET_SYS_VAL payload. Copy the read-back bytes
+    //    for offsets 0x10-0x7F into a 112-byte buffer, then mutate only
+    //    the fields we want to change. SYS_VAL response has 3 header
+    //    bytes before the actual SYS_VAL data (P=3).
+    const P = 3;
+    if (sysValData.length < P + 0x80) {
+      throw new Error(
+        `SYS_VAL response too short: ${sysValData.length} bytes (need ${P + 0x80})`,
+      );
+    }
+    const buf = new Uint8Array(112);
+    for (let i = 0; i < 112; i++) buf[i] = sysValData[P + 0x10 + i];
 
-    // 1. Set operating mode — use explicit stationMode if provided, otherwise default to CONTROL/BC_CONTROL
-    const mode = config.stationMode ?? (config.enableAirPlus ? STATION_MODE.BC_CONTROL : STATION_MODE.CONTROL);
-    await this.sendAndWait(
-      buildSetSysVal(SYSVAL.MODE, mode),
-      CMD.SET_SYSTEM_VALUE,
-    );
-    lap("SET_SYS_VAL(mode)");
+    // Resolve operating mode — explicit stationMode wins, else default to
+    // BC_CONTROL when AIR+ is enabled, CONTROL otherwise.
+    const baseMode =
+      config.stationMode ??
+      (config.enableAirPlus ? STATION_MODE.BC_CONTROL : STATION_MODE.CONTROL);
+    const isBcMode =
+      baseMode === STATION_MODE.BC_CONTROL ||
+      baseMode === STATION_MODE.BC_START ||
+      baseMode === STATION_MODE.BC_FINISH ||
+      baseMode === STATION_MODE.BC_READOUT;
+    const autosend = isBcMode
+      ? (config.autosendMode ?? AUTOSEND_MODE.SEND_LAST)
+      : 0;
+    const modeByte = combineModeByte(baseMode, autosend);
 
-    // 2. Set station code + feedback in one write (consecutive bytes 0x72, 0x73)
+    // PROTO byte (offset 0x74): bit 1 (0x02) is the protocol-level
+    // autosend gate. MODE high bits do nothing without it. Read-modify-
+    // write so we don't disturb extended (bit 0), handshake (bit 2), etc.
+    const currentProto = sysValData[P + SYSVAL.PROTO];
+    const wantAutosend = isBcMode && autosend !== AUTOSEND_MODE.OFF;
+    const protoByte = wantAutosend
+      ? (currentProto | 0x02)
+      : (currentProto & ~0x02);
+
+    // Station code → CODE byte + high bits into FEEDBACK byte. Preserve
+    // existing feedback bits (optical/acoustic/flash and reserved).
     const { codeByte, feedbackByte } = encodeStationCode(
       config.code,
-      currentFeedback,
+      sysValData[P + SYSVAL.FEEDBACK],
     );
-    await this.sendAndWait(
-      buildSetSysVal(SYSVAL.STATION_CODE, codeByte, feedbackByte),
-      CMD.SET_SYSTEM_VALUE,
-    );
-    lap("SET_SYS_VAL(code+feedback)");
 
-    // 3. Set SRR config (bit 0 = SRR enabled). Read-modify-write so the
-    //    other bits (factory config, see SYSVAL comment) are preserved.
-    const currentSrrByte = sysValData[3 + SYSVAL.SRR_CFG];
-    const srrByte = config.enableSRR
-      ? (currentSrrByte | 0x01)
-      : (currentSrrByte & ~0x01);
-    await this.sendAndWait(
-      buildSetSysVal(SYSVAL.SRR_CFG, srrByte),
-      CMD.SET_SYSTEM_VALUE,
-    );
-    lap("SET_SYS_VAL(SRR)");
-
-    // 3b. Set auto power-off time (2 bytes big-endian, hours → minutes)
+    // Auto power-off (minutes, big-endian uint16). Default to whatever the
+    // station already has if not specified.
+    let autoOffHi = sysValData[P + SYSVAL.AUTO_OFF];
+    let autoOffLo = sysValData[P + SYSVAL.AUTO_OFF + 1];
     if (config.awakeHours !== undefined) {
       const autoOffMinutes = config.awakeHours * 60;
-      await this.sendAndWait(
-        buildSetSysVal(SYSVAL.AUTO_OFF, (autoOffMinutes >> 8) & 0xff, autoOffMinutes & 0xff),
-        CMD.SET_SYSTEM_VALUE,
-      );
-      lap(`SET_SYS_VAL(AUTO_OFF=${autoOffMinutes}min)`);
+      autoOffHi = (autoOffMinutes >> 8) & 0xff;
+      autoOffLo = autoOffMinutes & 0xff;
     }
 
-    // 4. Sync time
+    // Apply mutations at their respective offsets within the buffer.
+    buf[SYSVAL.PROGRAM - 0x10] = 0x30; // ASCII '0' = competition bank
+    buf[SYSVAL.MODE - 0x10] = modeByte;
+    buf[SYSVAL.STATION_CODE - 0x10] = codeByte;
+    buf[SYSVAL.FEEDBACK - 0x10] = feedbackByte;
+    buf[SYSVAL.PROTO - 0x10] = protoByte;
+    buf[SYSVAL.AUTO_OFF - 0x10] = autoOffHi;
+    buf[SYSVAL.AUTO_OFF - 0x10 + 1] = autoOffLo;
+
+    // 2. Single bulk SET_SYS_VAL covering 0x10-0x7F. Use sendAndWaitRetry
+    //    because Config+ retried this same payload after 745 ms when no
+    //    response came back the first time (capture 3 segment 2).
+    await this.sendAndWaitRetry(
+      buildCommand(CMD.SET_SYSTEM_VALUE, [0x10, ...buf]),
+      CMD.SET_SYSTEM_VALUE,
+    );
+    lap(`SET_SYS_VAL(bulk 0x10-0x7F, mode=0x${modeByte.toString(16)}, autosend=0x${autosend.toString(16)})`);
+
+    // 3. Sync time
     await this.sendAndWait(buildSetTime(new Date()), CMD.SET_TIME);
     lap("SET_TIME");
 
-    // 5. Read station time immediately to get accurate drift measurement
+    // 4. Read station time immediately to get accurate drift measurement
     const beforeTime = Date.now();
     const timeResp = await this.sendAndWait(
       buildCommand(CMD.GET_TIME),
@@ -813,26 +866,28 @@ export class SIReaderConnection extends EventTarget {
     const timeDriftMs = parseTimeDrift(timeResp.data, beforeTime, afterTime);
     lap(`GET_TIME (rtt=${afterTime - beforeTime}ms, drift=${timeDriftMs}ms)`);
 
-    // 6. Erase backup memory
-    await this.sendAndWait(buildEraseBackup(), CMD.ERASE_BACKUP);
+    // 5. Erase backup memory — Config+ sees response in ~65-145ms.
+    await this.sendAndWait(buildEraseBackup(), CMD.ERASE_BACKUP, 3000);
     lap("ERASE_BACKUP");
 
-    // 7. Beep to confirm (fire-and-forget)
+    // 6. Beep to confirm (fire-and-forget)
     if (config.beep !== false) {
       await this.write(buildBeep(1));
     }
     lap("done");
 
-    // 8. Re-read SYS_VAL so battery voltage and other dynamic fields reflect
-    //    the now-fully-booted state. The post-boot ADC sample isn't latched
-    //    on the very first read after a coil-wake (per SI BS7/8/9 firmware
-    //    notes: "Battery voltage is measured after firmware boot"), which is
-    //    why freshly-woken units used to report exactly 3.00V (raw 0x9999).
+    // 7. Re-read SYS_VAL so battery voltage and other dynamic fields
+    //    reflect the now-fully-booted state. The post-boot ADC sample
+    //    isn't latched on the very first read after a coil-wake (per SI
+    //    BS7/8/9 firmware notes: "Battery voltage is measured after
+    //    firmware boot"), which is why freshly-woken units used to report
+    //    exactly 3.00V (raw 0x9999).
     let finalInfo = stationInfo;
     try {
       const finalResp = await this.sendAndWait(
-        buildGetSysVal(true),
+        buildGetSysVal(),
         CMD.GET_SYSTEM_VALUE,
+        1500, // healthy unit responds in ~300ms; cap at 1.5s on failure
       );
       const parsed = parseStationInfo(finalResp.data);
       if (parsed) finalInfo = parsed;
@@ -862,11 +917,20 @@ export class SIReaderConnection extends EventTarget {
   /**
    * Read the backup memory from the connected station/control.
    * Returns all punch records stored in the backup.
+   *
+   * @param preReadData — raw GET_SYS_VAL response captured during a recent
+   *   probe. When provided, skips the redundant SYS_VAL read at the start.
    */
-  async readBackupMemory(): Promise<BackupRecord[]> {
-    // Wake + read SYS_VAL (handles sleeping controls via coupling coil)
-    const sysResp = await this.wakeAndReadSysVal();
-    const info = parseStationInfo(sysResp.data);
+  async readBackupMemory(preReadData?: Uint8Array): Promise<BackupRecord[]> {
+    let sysValData: Uint8Array;
+    if (preReadData) {
+      sysValData = preReadData;
+    } else {
+      // Wake + read SYS_VAL (handles sleeping controls via coupling coil)
+      const sysResp = await this.wakeAndReadSysVal();
+      sysValData = sysResp.data;
+    }
+    const info = parseStationInfo(sysValData);
     if (!info) throw new Error("Failed to read station info");
     siLog(`Backup read: station code=${info.stationCode}, serial=${info.serialNo}`);
 
@@ -903,14 +967,18 @@ export class SIReaderConnection extends EventTarget {
       for (let attempt = 0; attempt < 4; attempt++) {
         try {
           if (attempt > 0) {
-            siLog(`Backup page retry ${attempt}/3 — re-waking station`);
-            await new Promise((r) => setTimeout(r, attempt * 500));
-            await this.sendAndWait(buildSetRemoteMode(), CMD.SET_MS, 2000);
+            siLog(`Backup page retry ${attempt}/3`);
+            // Only refresh SET_MS if we actually dropped out of remote.
+            // Skip the long sleep — Config+ retries back-to-back.
+            if (!this._inRemoteMode) {
+              await this.sendAndWait(buildSetRemoteMode(), CMD.SET_MS, 1000);
+              this._inRemoteMode = true;
+            }
           }
           resp = await this.sendAndWait(
             buildGetBackup(adr2, adr1, adr0, count, false),
             CMD.GET_BACKUP,
-            5000,
+            1500,
           );
           break;
         } catch (err) {
@@ -951,85 +1019,59 @@ export class SIReaderConnection extends EventTarget {
 
   /**
    * Erase backup memory on the connected station/control.
-   * Assumes remote mode is already active (call after readBackupMemory).
+   *
+   * Matches Config+ (capture 2 segment 6): SET_MS REMOTE (only if not
+   * already), ERASE_BACKUP with a tight timeout (~65-145 ms observed), no
+   * extra sleep, no verification read. The station's response confirms the
+   * erase completed.
    */
   async clearBackupMemory(): Promise<void> {
-    // Ensure we're in remote mode
-    await this.sendAndWait(buildSetRemoteMode(), CMD.SET_MS);
-    this._inRemoteMode = true;
+    if (!this._inRemoteMode) {
+      await this.sendAndWait(buildSetRemoteMode(), CMD.SET_MS);
+      this._inRemoteMode = true;
+    }
     const resp = await this.sendAndWaitRetry(
-      buildEraseBackup(true),
+      buildEraseBackup(),
       CMD.ERASE_BACKUP,
-      10000, // longer timeout — flash erase can take several seconds
+      1500, // Config+ observes 65-145ms; 1.5s covers worst case
     );
     siLog("Erase response:", Array.from(resp.data).map((b) => b.toString(16).padStart(2, "0")).join(" "));
-    // Wait for erase to complete
-    await new Promise((r) => setTimeout(r, 1000));
-
-    // Verify erase by checking if backup pointer was reset.
-    // ERASE_BACKUP resets the write pointer to 0x100 (data start) but doesn't
-    // necessarily zero the flash — old bytes remain but the pointer says "no data".
-    try {
-      const sysResp = await this.sendAndWait(
-        buildGetSysVal(),
-        CMD.GET_SYSTEM_VALUE,
-        5000,
-      );
-      const info = parseStationInfo(sysResp.data);
-      if (info) {
-        siLog(`Post-erase backup pointer: 0x${info.backupPointer.toString(16)} (~${info.backupCount} records)`);
-        if (info.backupPointer <= 0x100) {
-          siLog("Erase verified: pointer reset to start");
-        } else {
-          siWarn(`Erase may have failed: pointer still at 0x${info.backupPointer.toString(16)}`);
-        }
-      }
-    } catch (err) {
-      siWarn("Could not verify erase:", err);
-    }
   }
 
   /**
    * Power off the connected field control.
    *
-   * Asymmetry observed on hardware: an already-awake control would power off
-   * after programming, but a freshly-coil-woken one would not. Three things
-   * in the previous fire-and-forget version are suspect, all of which hurt
-   * freshly-woken units more than already-awake ones:
+   * Matches what Config+ 2.11.0 does in capture 3 segment 4 (standalone
+   * switch-off):
    *
-   *   1. buildOff() defaulted to remote=false → 0xFF wakeup byte included.
-   *      In remote mode the BSM8 misinterprets the wakeup byte and NAKs
-   *      (see comment on buildCommand). Frame forwarded via the coupling
-   *      coil was therefore mangled.
-   *   2. this.write() with no sendAndWait — we never observed the BSM8 ACK
-   *      and have no idea whether the OFF was forwarded.
-   *   3. BSM8 stayed in REMOTE mode after OFF, so the next probe poll's
-   *      coupling-coil pulse re-woke the unit we just told to sleep.
+   *   1. SET_MS REMOTE (forwards via coupling coil).
+   *   2. OFF (LEN=1 param=0x00, with 0xFF wakeup byte). Config+ retried
+   *      this command four times at ~540 ms intervals before getting a
+   *      response from a sleepy station, so we use sendAndWaitRetry.
+   *   3. SET_MS DIRECT (stop coupling-coil pulses so the unit can
+   *      actually finish powering down).
    *
-   * Each step below addresses one of those.
+   * No pre-OFF settle delay — Config+ goes straight from the SET_MS
+   * response to OFF (~16 ms gap).
    */
   async powerOffStation(): Promise<void> {
-    // 1. Make sure BSM8 is in remote mode so the coil forwards the OFF.
     await this.sendAndWait(buildSetRemoteMode(), CMD.SET_MS);
     this._inRemoteMode = true;
 
-    // 2. Give a freshly-booted field control time to finish post-boot init
-    //    before we ask it to power down.
-    await new Promise((r) => setTimeout(r, 500));
-
-    // 3. Send OFF without the 0xFF wakeup byte (remote=true) and via
-    //    sendAndWait so the BSM8 ACKs the forwarded frame. OFF may not
-    //    elicit a response from the field control itself once it's gone
-    //    to sleep; tolerate timeout.
+    // OFF with up to 4 attempts at ~500 ms cadence — Config+ pattern for
+    // sleepy/transitioning stations. sendAndWaitRetry uses
+    // min(attempt * 500, 2000) ms between attempts; retries=3 gives 4 total.
     try {
-      await this.sendAndWait(buildOff(true), CMD.OFF, 700);
+      await this.sendAndWaitRetry(
+        buildOff(),
+        CMD.OFF,
+        1500,
+        3,
+      );
     } catch {
-      // Best-effort: unit may sleep before responding.
+      // Best-effort: unit may sleep before responding to the very last try.
     }
 
-    // 4. Return the BSM8 to direct mode so the coupling coil stops pulsing.
-    //    Otherwise the next coil pulse can re-wake the unit we just told
-    //    to sleep.
     try {
       await this.sendAndWait(buildSetDirectMode(), CMD.SET_MS, 1000);
       this._inRemoteMode = false;

@@ -622,6 +622,18 @@ export type RadioType = "normal" | "internal_radio" | "public_radio";
 /** AIR+ override for a control */
 export type AirPlusOverride = "default" | "on" | "off";
 
+/**
+ * Autosend variant for radio-enabled (BC) controls. Selects which records
+ * the station transmits over the SRR radio:
+ *  - "last":   only the most recent record (Config+ default, recommended)
+ *  - "unsent": all records the station hasn't yet confirmed transmission of
+ *  - "all":    every record on every event
+ *
+ * Only applied when `radioType !== "normal"`. For controls with no radio
+ * the stored value is ignored at programming time.
+ */
+export type AutosendMode = "last" | "unsent" | "all";
+
 /** Control configuration from oxygen_control_config.
  *  Battery / checked / memory-cleared fields are aggregates across all
  *  physical units fulfilling this logical control — see `units` below for
@@ -629,6 +641,7 @@ export type AirPlusOverride = "default" | "on" | "off";
 export interface ControlConfig {
   radioType: RadioType;
   airPlus: AirPlusOverride;
+  autosendMode: AutosendMode;
   batteryVoltage: number | null;
   batteryLow: boolean | null;
   checkedAt: string | null; // ISO timestamp

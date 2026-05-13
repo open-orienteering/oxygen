@@ -11,6 +11,7 @@ import type {
   ControlUnit,
   RadioType,
   AirPlusOverride,
+  AutosendMode,
 } from "@oxygen/shared";
 
 // ─── Helpers ──────────────────────────────────────────────
@@ -32,6 +33,7 @@ interface ControlConfigRow {
   control_id: number;
   radio_type: string;
   air_plus: string;
+  autosend_mode: string | null;
 }
 
 interface ControlUnitRow {
@@ -96,19 +98,29 @@ function aggregateUnits(units: ControlUnit[]): Pick<ControlConfig,
   };
 }
 
+type ControlConfigSettings = Pick<
+  ControlConfig,
+  "radioType" | "airPlus" | "autosendMode"
+>;
+
+function rowAutosendMode(value: string | null | undefined): AutosendMode {
+  return value === "unsent" || value === "all" ? value : "last";
+}
+
 async function getConfigMap(
   client: PrismaClient,
   dbName: string,
-): Promise<Map<number, Pick<ControlConfig, "radioType" | "airPlus">>> {
+): Promise<Map<number, ControlConfigSettings>> {
   await ensureControlConfigTable(client, dbName);
   const rows = (await client.$queryRawUnsafe(
-    "SELECT control_id, radio_type, air_plus FROM oxygen_control_config",
+    "SELECT control_id, radio_type, air_plus, autosend_mode FROM oxygen_control_config",
   )) as ControlConfigRow[];
-  const map = new Map<number, Pick<ControlConfig, "radioType" | "airPlus">>();
+  const map = new Map<number, ControlConfigSettings>();
   for (const row of rows) {
     map.set(row.control_id, {
       radioType: row.radio_type as RadioType,
       airPlus: row.air_plus as AirPlusOverride,
+      autosendMode: rowAutosendMode(row.autosend_mode),
     });
   }
   return map;
@@ -135,7 +147,7 @@ async function getUnitsByControl(
 /** Build a ControlConfig that merges per-control settings with per-unit
  *  aggregates. Returns null if neither settings nor units exist. */
 function buildControlConfig(
-  settings: Pick<ControlConfig, "radioType" | "airPlus"> | undefined,
+  settings: ControlConfigSettings | undefined,
   units: ControlUnit[],
 ): ControlConfig | null {
   if (!settings && units.length === 0) return null;
@@ -143,6 +155,7 @@ function buildControlConfig(
   return {
     radioType: settings?.radioType ?? "normal",
     airPlus: settings?.airPlus ?? "default",
+    autosendMode: settings?.autosendMode ?? "last",
     ...agg,
   };
 }
@@ -490,6 +503,7 @@ export const controlRouter = router({
         controlIds: z.array(z.number().int()).min(1),
         radioType: z.enum(["normal", "internal_radio", "public_radio"]).optional(),
         airPlus: z.enum(["default", "on", "off"]).optional(),
+        autosendMode: z.enum(["last", "unsent", "all"]).optional(),
       }),
     )
     .mutation(async ({ ctx, input }) => {
@@ -497,22 +511,22 @@ export const controlRouter = router({
       await ensureControlConfigTable(client, ctx.dbName);
 
       for (const controlId of input.controlIds) {
-        // Upsert config row — use parameterized queries for safety
-        if (input.radioType !== undefined && input.airPlus !== undefined) {
+        // Make sure a row exists for this control with defaults; subsequent
+        // per-field updates then overwrite only what the caller supplied.
+        await client.$executeRaw`
+          INSERT IGNORE INTO oxygen_control_config (control_id) VALUES (${controlId})`;
+
+        if (input.radioType !== undefined) {
           await client.$executeRaw`
-            INSERT INTO oxygen_control_config (control_id, radio_type, air_plus, battery_voltage)
-            VALUES (${controlId}, ${input.radioType}, ${input.airPlus}, NULL)
-            ON DUPLICATE KEY UPDATE radio_type = ${input.radioType}, air_plus = ${input.airPlus}`;
-        } else if (input.radioType !== undefined) {
+            UPDATE oxygen_control_config SET radio_type = ${input.radioType} WHERE control_id = ${controlId}`;
+        }
+        if (input.airPlus !== undefined) {
           await client.$executeRaw`
-            INSERT INTO oxygen_control_config (control_id, radio_type, battery_voltage)
-            VALUES (${controlId}, ${input.radioType}, NULL)
-            ON DUPLICATE KEY UPDATE radio_type = ${input.radioType}`;
-        } else if (input.airPlus !== undefined) {
+            UPDATE oxygen_control_config SET air_plus = ${input.airPlus} WHERE control_id = ${controlId}`;
+        }
+        if (input.autosendMode !== undefined) {
           await client.$executeRaw`
-            INSERT INTO oxygen_control_config (control_id, air_plus, battery_voltage)
-            VALUES (${controlId}, ${input.airPlus}, NULL)
-            ON DUPLICATE KEY UPDATE air_plus = ${input.airPlus}`;
+            UPDATE oxygen_control_config SET autosend_mode = ${input.autosendMode} WHERE control_id = ${controlId}`;
         }
 
         // Sync oControl.Radio flag for liveresults
