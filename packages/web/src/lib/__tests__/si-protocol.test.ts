@@ -3,9 +3,13 @@ import {
   calculateCRC,
   buildCommand,
   buildReadCommand,
+  buildOff,
   parseStationInfo,
   lookupModelName,
   deriveCapabilities,
+  combineModeByte,
+  AUTOSEND_MODE,
+  STATION_MODE,
   SYSVAL,
   extractFrame,
   parseCardDetection,
@@ -1428,5 +1432,94 @@ describe("parseSI8CardData DOW extraction", () => {
     expect(result.finishDayOfWeek).toBe(6);
     // Finish time should be PM-adjusted (37800 + 43200 = 81000)
     expect(result.finishTime).toBe(81000);
+  });
+});
+
+// ─── OFF command (Config+ 2.11.0 wire format) ──────────────
+
+describe("buildOff", () => {
+  it("emits FF 02 F8 01 00 <CRC> <CRC> 03 (LEN=1, param=0x00)", () => {
+    // Observed in Config+: FF 02 F8 01 00 90 09 03 (~60ms response)
+    const frame = buildOff();
+    expect(frame[0]).toBe(WAKEUP);
+    expect(frame[1]).toBe(STX);
+    expect(frame[2]).toBe(CMD.OFF);
+    expect(frame[3]).toBe(1); // LEN
+    expect(frame[4]).toBe(0x00); // reason byte
+    expect(frame[frame.length - 1]).toBe(ETX);
+    // 1 (wakeup) + 1 (STX) + 1 (CMD) + 1 (LEN) + 1 (param) + 2 (CRC) + 1 (ETX)
+    expect(frame.length).toBe(8);
+  });
+
+  it("matches the exact Config+ byte sequence", () => {
+    const frame = buildOff();
+    expect(Array.from(frame))
+      .toEqual([0xff, 0x02, 0xf8, 0x01, 0x00, 0x90, 0x09, 0x03]);
+  });
+
+  it("emits non-zero reason byte if specified", () => {
+    const frame = buildOff(0x42);
+    expect(frame[4]).toBe(0x42);
+  });
+
+  it("omits wakeup byte when remote=true", () => {
+    const frame = buildOff(0x00, true);
+    expect(frame[0]).toBe(STX);
+    expect(frame.length).toBe(7);
+  });
+});
+
+// ─── AUTOSEND_MODE encoding (Config+ MODE byte bits 5-7) ───
+
+describe("AUTOSEND_MODE constants", () => {
+  it("uses bit 5 for OFF (BC mode, no autosend)", () => {
+    expect(AUTOSEND_MODE.OFF).toBe(0x20);
+  });
+
+  it("uses bits 5,6 for SEND_LAST (Config+ default)", () => {
+    expect(AUTOSEND_MODE.SEND_LAST).toBe(0x60);
+  });
+
+  it("uses bits 5,7 for SEND_ALL", () => {
+    expect(AUTOSEND_MODE.SEND_ALL).toBe(0xa0);
+  });
+
+  it("uses bits 5,6,7 for SEND_UNSENT", () => {
+    expect(AUTOSEND_MODE.SEND_UNSENT).toBe(0xe0);
+  });
+});
+
+describe("combineModeByte", () => {
+  it("matches Config+ capture: BC_CONTROL + SEND_LAST = 0x72", () => {
+    expect(combineModeByte(STATION_MODE.BC_CONTROL, AUTOSEND_MODE.SEND_LAST))
+      .toBe(0x72);
+  });
+
+  it("matches Config+ capture: BC_FINISH + SEND_UNSENT = 0xF4", () => {
+    expect(combineModeByte(STATION_MODE.BC_FINISH, AUTOSEND_MODE.SEND_UNSENT))
+      .toBe(0xf4);
+  });
+
+  it("matches Config+ capture: BC_CONTROL + SEND_ALL = 0xB2", () => {
+    expect(combineModeByte(STATION_MODE.BC_CONTROL, AUTOSEND_MODE.SEND_ALL))
+      .toBe(0xb2);
+  });
+
+  it("matches Config+ capture: BC_CONTROL + OFF (no radio) = 0x32", () => {
+    expect(combineModeByte(STATION_MODE.BC_CONTROL, AUTOSEND_MODE.OFF))
+      .toBe(0x32);
+  });
+
+  it("falls back to plain operating mode when autosend is omitted", () => {
+    expect(combineModeByte(STATION_MODE.CONTROL)).toBe(STATION_MODE.CONTROL);
+    expect(combineModeByte(STATION_MODE.FINISH)).toBe(STATION_MODE.FINISH);
+  });
+
+  it("masks autosend to bits 5-7 so callers can't bleed into the operating mode", () => {
+    // Bit 4 (0x10) is part of the operating mode (BC_* family) and must not
+    // be touched by the autosend mask, while bits 0-4 of an autosend value
+    // are silently ignored.
+    expect(combineModeByte(STATION_MODE.BC_CONTROL, 0xff))
+      .toBe(STATION_MODE.BC_CONTROL | 0xe0);
   });
 });

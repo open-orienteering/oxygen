@@ -869,6 +869,7 @@ export async function ensureControlConfigTable(
       control_id        INT NOT NULL PRIMARY KEY,
       radio_type        VARCHAR(20) NOT NULL DEFAULT 'normal',
       air_plus          VARCHAR(10) NOT NULL DEFAULT 'default',
+      autosend_mode     VARCHAR(8) NOT NULL DEFAULT 'last',
       battery_voltage   FLOAT NULL,
       battery_low       TINYINT(1) NULL,
       checked_at        TIMESTAMP(0) NULL,
@@ -876,6 +877,15 @@ export async function ensureControlConfigTable(
       station_serial    INT NULL
     )
   `);
+
+  // Idempotent ALTER for the autosend_mode column on tables created by a
+  // previous version of this script.
+  try {
+    await client.$executeRawUnsafe(
+      `ALTER TABLE oxygen_control_config ADD COLUMN autosend_mode VARCHAR(8) NOT NULL DEFAULT 'last' AFTER air_plus`,
+    );
+  } catch { /* column already exists */ }
+
   controlConfigTableReady.add(dbName);
 }
 

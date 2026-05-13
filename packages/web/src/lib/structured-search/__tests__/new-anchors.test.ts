@@ -109,13 +109,13 @@ describe("control anchors", () => {
     {
       id: 31, name: "", codes: "31", status: ControlStatus.OK, timeAdjust: 0, minTime: 0,
       runnerCount: 12,
-      config: { radioType: "internal_radio", airPlus: "default", batteryVoltage: 2.6, batteryLow: false, checkedAt: "2026-04-01T10:00:00Z", memoryClearedAt: null },
+      config: { radioType: "internal_radio", airPlus: "default", autosendMode: "last", batteryVoltage: 2.6, batteryLow: false, checkedAt: "2026-04-01T10:00:00Z", memoryClearedAt: null },
       units: [],
     },
     {
       id: 42, name: "Radio 1", codes: "42", status: ControlStatus.OK, timeAdjust: 0, minTime: 0,
       runnerCount: 5,
-      config: { radioType: "public_radio", airPlus: "default", batteryVoltage: 2.4, batteryLow: true, checkedAt: null, memoryClearedAt: null },
+      config: { radioType: "public_radio", airPlus: "default", autosendMode: "last", batteryVoltage: 2.4, batteryLow: true, checkedAt: null, memoryClearedAt: null },
       units: [],
     },
     {
@@ -125,7 +125,7 @@ describe("control anchors", () => {
     {
       id: 60, name: "", codes: "60", status: ControlStatus.OK, timeAdjust: 0, minTime: 0,
       runnerCount: 8,
-      config: { radioType: "normal", airPlus: "default", batteryVoltage: 3.0, batteryLow: false, checkedAt: "2026-04-02T10:00:00Z", memoryClearedAt: null },
+      config: { radioType: "normal", airPlus: "default", autosendMode: "last", batteryVoltage: 3.0, batteryLow: false, checkedAt: "2026-04-02T10:00:00Z", memoryClearedAt: null },
       units: [],
     },
   ];
