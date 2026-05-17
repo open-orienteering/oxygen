@@ -34,7 +34,7 @@ import {
   fetchEntries,
   fetchResults,
 } from "../../eventor.js";
-import { setSetting } from "../../db.js";
+import { getSetting, setSetting } from "../../db.js";
 import { createTestDb, type TestDbContext } from "../helpers/test-db.js";
 import { makeCaller } from "../helpers/caller.js";
 import { eventorKeyStore } from "../../eventorKeyStore.js";
@@ -44,7 +44,16 @@ const EVENTOR_EVENT_ID = 99001;
 const EVENTOR_CLASS_ID = 12345;
 const EVENTOR_PERSON_ID = 67890;
 
+// Snapshot the developer's real prod Eventor key so we can restore it.
+// This file shares MeOSMain with the running dev stack, so writing a
+// fake key without restoring would silently wipe the developer's
+// credentials on every integration run. (Mirrors the pattern in
+// registration-trends.test.ts.)
+let savedEventorKey: string | null = null;
+
 beforeAll(async () => {
+  savedEventorKey = await getSetting("eventor_api_key");
+
   ctx = await createTestDb("eventor_reentry");
 
   // Stamp the test competition with an Eventor event ID so the sync
@@ -62,7 +71,11 @@ beforeAll(async () => {
 }, 60000);
 
 afterAll(async () => {
-  await setSetting("eventor_api_key", null);
+  // Restore the snapshotted Eventor API key. `setSetting(..., null)`
+  // deletes the row when the original was empty/absent. Reset the
+  // in-memory keystore so the restored value is read next time.
+  await setSetting("eventor_api_key", savedEventorKey);
+  eventorKeyStore._resetForTests();
   await ctx.cleanup();
 }, 30000);
 

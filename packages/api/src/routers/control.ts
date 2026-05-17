@@ -4,14 +4,16 @@ import { router, competitionProcedure } from "../trpc.js";
 import type { PrismaClient } from "@prisma/client";
 import {incrementCounter, ensureControlConfigTable, ensureControlPunchesTable, ensureControlUnitsTable, ensureCompetitionConfigTable, getZeroTime} from "../db.js";
 import { toRelative, toAbsolute } from "../timeConvert.js";
-import type {
-  ControlInfo,
-  ControlDetail,
-  ControlConfig,
-  ControlUnit,
-  RadioType,
-  AirPlusOverride,
-  AutosendMode,
+import {
+  isWithdrawn,
+  type ControlInfo,
+  type ControlDetail,
+  type ControlConfig,
+  type ControlUnit,
+  type RadioType,
+  type AirPlusOverride,
+  type AutosendMode,
+  type RunnerStatusValue,
 } from "@oxygen/shared";
 
 // ─── Helpers ──────────────────────────────────────────────
@@ -210,12 +212,16 @@ export const controlRouter = router({
         where: { Removed: false },
         select: { Id: true, Course: true },
       });
+      // Count only participants — withdrawn entries (Status=Cancel)
+      // must not inflate the per-control runner totals, mirroring the
+      // dashboard logic in routers/competition.ts.
       const runners = await client.oRunner.findMany({
         where: { Removed: false },
-        select: { Class: true },
+        select: { Class: true, Status: true },
       });
       const runnersByClass = new Map<number, number>();
       for (const r of runners) {
+        if (isWithdrawn(r.Status as RunnerStatusValue)) continue;
         runnersByClass.set(r.Class, (runnersByClass.get(r.Class) ?? 0) + 1);
       }
       const runnersPerCourse = new Map<number, number>();
@@ -313,13 +319,15 @@ export const controlRouter = router({
         select: { Id: true, Course: true },
       });
 
-      // Count runners per class
+      // Count runners per class — exclude withdrawn entries
+      // (Status=Cancel) so the detail panel matches the dashboard.
       const runners = await client.oRunner.findMany({
         where: { Removed: false },
-        select: { Class: true },
+        select: { Class: true, Status: true },
       });
       const runnersByClass = new Map<number, number>();
       for (const r of runners) {
+        if (isWithdrawn(r.Status as RunnerStatusValue)) continue;
         runnersByClass.set(r.Class, (runnersByClass.get(r.Class) ?? 0) + 1);
       }
 
