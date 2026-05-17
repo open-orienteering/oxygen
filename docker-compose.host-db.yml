@@ -1,15 +1,14 @@
-# Use this when MySQL is already running on the host machine.
+# Use this when PostgreSQL is already running on the host machine.
 #
-# Both containers use host networking so the API can reach MySQL on 127.0.0.1.
-# The web frontend will be available on port 8080, the API on port 3001.
+# Both containers use host networking so the API can reach PG on 127.0.0.1.
+# The web frontend is available on port 8080, the API on port 3001.
 # The dev server uses port 3002 (API) and 5173 (Vite) to avoid collisions.
 #
 # Usage:
 #   docker compose -f docker-compose.host-db.yml up --build
 #
-# Optionally override the DB URLs:
-#   DATABASE_URL="mysql://meos@127.0.0.1:3306/itest" \
-#   MEOS_MAIN_DB_URL="mysql://meos@127.0.0.1:3306/MeOSMain" \
+# Optionally override the DB URL:
+#   DATABASE_URL="postgresql://oxygen:oxygen@127.0.0.1:5432/oxygen?schema=oxygen" \
 #   docker compose -f docker-compose.host-db.yml up --build
 
 services:
@@ -22,8 +21,7 @@ services:
     restart: unless-stopped
     network_mode: host
     environment:
-      DATABASE_URL: "${DATABASE_URL:-mysql://meos@127.0.0.1:3306/itest}"
-      MEOS_MAIN_DB_URL: "${MEOS_MAIN_DB_URL:-mysql://meos@127.0.0.1:3306/MeOSMain}"
+      DATABASE_URL: "${DATABASE_URL:-postgresql://oxygen:oxygen@127.0.0.1:5432/oxygen?schema=oxygen}"
       PORT: "3001"
       HOST: "0.0.0.0"
       NODE_OPTIONS: "--max-old-space-size=4096"

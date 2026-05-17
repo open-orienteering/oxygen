@@ -1,464 +1,760 @@
+// Oxygen schema — single PostgreSQL database, all tables in the `oxygen` schema.
+//
+// Conventions documented in docs/schema.md:
+//   - Per-event entities use UUID v7 PK + a per-event integer `seq` (URL-stable).
+//     `seq` is filled by a BEFORE INSERT trigger (see migration SQL).
+//   - Append-only / immutable tables use UUID v7 only.
+//   - Pure server-side tables (maps, tracks, routes) use BIGSERIAL.
+//   - Global directories use their natural external IDs as PK.
+//   - Status columns use native PG ENUM types.
+//   - Wall-clock metadata: TIMESTAMPTZ. Race times: INTEGER deciseconds, ZeroTime-relative.
+//   - JSONB for structured blobs.
+
 generator client {
   provider      = "prisma-client-js"
-  // Ship engines for both the dev host ("native") and the Docker base image
-  // (node:20-slim is Debian 12 / OpenSSL 3.0). Without the explicit
-  // debian-openssl-3.0.x target the production container errors at runtime
-  // with: "Prisma Client could not locate the Query Engine for runtime
-  // 'debian-openssl-3.0.x'".
   binaryTargets = ["native", "debian-openssl-3.0.x"]
 }
 
 datasource db {
-  provider = "mysql"
+  provider = "postgresql"
   url      = env("DATABASE_URL")
+  schemas  = ["oxygen"]
 }
 
-/// Competition event metadata
-model oEvent {
-  Id          Int       @id @default(autoincrement())
-  Name        String    @db.VarChar(128)
-  Annotation  String    @default("") @db.VarChar(128)
-  Date        String    @db.VarChar(32)
-  ZeroTime    Int       @default(0) @db.UnsignedInt
-  NameId      String    @default("") @db.VarChar(64)
-  BuildVersion Int      @default(0) @db.UnsignedInt
+// ─── Enums ─────────────────────────────────────────────────
 
-  // Fee fields
-  CardFee     Int       @default(0)
-  EliteFee    Int       @default(0)
-  EntryFee    Int       @default(0)
-  YouthFee    Int       @default(0)
-  YouthAge    Int       @default(0) @db.UnsignedTinyInt
-  SeniorAge   Int       @default(0) @db.UnsignedTinyInt
+enum RunnerStatus {
+  unknown
+  ok
+  no_timing
+  missing_punch
+  dnf
+  dq
+  over_max_time
+  out_of_competition
+  dns
+  cancel
+  not_competing
 
-  // Organization fields
-  Account     String    @default("") @db.VarChar(61)
-  Organizer   String?   @db.MediumText
-  EMail       String?   @db.MediumText
-  Homepage    String?   @db.MediumText
-  Phone       String    @default("") @db.VarChar(65)
-
-  // Settings
-  UseEconomy  Int       @default(0) @db.UnsignedTinyInt
-  UseSpeaker  Int       @default(0) @db.UnsignedTinyInt
-  MaxTime     Int       @default(0)
-  NumStages   Int       @default(0) @db.TinyInt
-  LongTimes   Int       @default(0) @db.UnsignedTinyInt
-  SubSeconds  Int       @default(0) @db.UnsignedTinyInt
-
-  // Extra config stored as text
-  Lists       String?   @db.MediumText
-  Machine     String?   @db.MediumText
-  Features    String?   @db.MediumText
-  SPExtra     String?   @db.MediumText
-  IVExtra     String?   @db.MediumText
-  EntryExtra  String?   @db.MediumText
-
-  // Sync fields
-  Modified    DateTime  @default(now()) @updatedAt @db.Timestamp(0)
-  Counter     Int       @default(0) @db.UnsignedInt
-  Removed     Boolean   @default(false)
-
-  // Additional fields that exist in the schema
-  PaymentDue         Int    @default(0)
-  OrdinaryEntry      Int    @default(0)
-  SecondEntryDate    Int    @default(0)
-  LateEntryFactor    String @default("") @db.VarChar(13)
-  SecondEntryFactor  String @default("") @db.VarChar(13)
-  CareOf             String @default("") @db.VarChar(63)
-  Street             String @default("") @db.VarChar(65)
-  Address            String @default("") @db.VarChar(65)
-  SkipRunnerDb       Int    @default(0) @db.UnsignedTinyInt
-  ExtId              BigInt @default(0)
-  DiffTime           Int    @default(0)
-  PreEvent           String @default("") @db.VarChar(129)
-  PostEvent          String @default("") @db.VarChar(129)
-  ImportStamp        String @default("") @db.VarChar(29)
-  EventNumber        Int    @default(0) @db.TinyInt
-  CurrencyFactor     Int    @default(0) @db.SmallInt
-  CurrencySymbol     String @default("") @db.VarChar(11)
-  CurrencySeparator  String @default("") @db.VarChar(5)
-  CurrencyPreSymbol  Int    @default(0) @db.TinyInt
-  CurrencyCode       String @default("") @db.VarChar(11)
-  UTC                Int    @default(0) @db.TinyInt
-  Analysis           Int    @default(0) @db.TinyInt
-  BibGap             Int    @default(0) @db.UnsignedTinyInt
-  BibsPerClass       Int    @default(0) @db.UnsignedTinyInt
-  PayModes           String?  @db.MediumText
-  TransferFlags      Int    @default(0)
-  InvoiceDate        Int    @default(0)
-  StartGroups        String?  @db.MediumText
-  MergeTag           String @default("") @db.VarChar(25)
-  MergeInfo          String?  @db.MediumText
-  SplitPrint         String @default("") @db.VarChar(81)
-  NoVacantBib        Int    @default(0) @db.UnsignedTinyInt
-  RunnerIdTypes      String?  @db.MediumText
-  ExtraFields        String?  @db.MediumText
-  ControlMap         String?  @db.MediumText
-  OldCards           Int    @default(0) @db.UnsignedTinyInt
-
-  @@index([Counter])
-  @@index([Modified])
+  @@map("runner_status")
+  @@schema("oxygen")
 }
 
-/// Runner / competitor
-model oRunner {
-  Id         Int       @id @default(autoincrement())
-  Name       String    @default("") @db.VarChar(64)
-  CardNo     Int       @default(0)
-  Club       Int       @default(0)
-  Class      Int       @default(0)
-  Course     Int       @default(0)
-  StartNo    Int       @default(0)
-  StartTime  Int       @default(0)
-  FinishTime Int       @default(0)
-  Status     Int       @default(0)
-  Card       Int       @default(0)
-  MultiR     String    @default("") @db.VarChar(200)
+enum ControlStatus {
+  ok
+  bad
+  multiple
+  start
+  finish
+  no_timing
+  optional
+  bad_no_timing
+  check
+  clear
 
-  // Input (from previous stages)
-  InputTime   Int      @default(0)
-  InputStatus Int      @default(0)
-  InputPoints Int      @default(0)
-  InputPlace  Int      @default(0)
+  @@map("control_status")
+  @@schema("oxygen")
+}
 
-  // Economy
-  Fee        Int       @default(0)
-  CardFee    Int       @default(0)
-  Paid       Int       @default(0)
-  PayMode    Int       @default(0) @db.UnsignedTinyInt
-  Taxable    Int       @default(0)
+// ─── Registry & global tables ──────────────────────────────
 
-  // Personal info
-  BirthYear  Int       @default(0)
-  Bib        String    @default("") @db.VarChar(17)
-  Rank       Int       @default(0)
-  Sex        String    @default("") @db.VarChar(3)
-  Nationality String   @default("") @db.VarChar(7)
-  Country    String    @default("") @db.VarChar(47)
-  Phone      String    @default("") @db.VarChar(41)
+/// An orienteering event — competition, training session, club evening, etc.
+model Event {
+  id             BigInt   @id @default(autoincrement())
+  nameId         String   @unique @map("name_id")
+  name           String
+  /// Subtitle shown beneath the event name in UI.
+  annotation     String   @default("")
+  date           DateTime @db.Date
+  /// Deciseconds since midnight. Default 324000 = 09:00:00.
+  zeroTime       Int      @default(324000) @map("zero_time")
+  kind           String   @default("competition")
+  eventorEventId BigInt?  @map("eventor_event_id")
+  eventorEnv     String   @default("prod") @map("eventor_env")
 
-  // Entry info
-  EntryDate  Int       @default(0)
-  EntryTime  Int       @default(0)
-  ExtId      BigInt    @default(0)
-  ExtId2     BigInt    @default(0)
+  liveresultsTavid  Int?  @map("liveresults_tavid")
+  liveresultsConfig Json? @map("liveresults_config")
+
+  // Organizer
+  organizerName      String  @default("") @map("organizer_name")
+  organizerEventorId Int     @default(0) @map("organizer_eventor_id")
+  email              String  @default("")
+  homepage           String  @default("")
+  phone              String  @default("")
+  street             String  @default("")
+  city               String  @default("")
+  zip                String  @default("")
+  orgNumber          String  @default("") @map("org_number")
+  vatExempt          Boolean @default(true) @map("vat_exempt")
+
+  // Fees (cents)
+  cardFeeCents      Int    @default(0) @map("card_fee_cents")
+  entryFeeCents     Int    @default(0) @map("entry_fee_cents")
+  eliteFeeCents     Int    @default(0) @map("elite_fee_cents")
+  youthFeeCents     Int    @default(0) @map("youth_fee_cents")
+  youthAge          Int    @default(0) @map("youth_age") @db.SmallInt
+  seniorAge         Int    @default(0) @map("senior_age") @db.SmallInt
+  lateEntryFactor   String @default("") @map("late_entry_factor")
+  ordinaryEntryDate Int    @default(0) @map("ordinary_entry_date")
+  secondEntryDate   Int    @default(0) @map("second_entry_date")
+  paymentDue        Int    @default(0) @map("payment_due")
+
+  // Currency
+  currencySymbol    String  @default("kr") @map("currency_symbol")
+  currencySeparator String  @default(",") @map("currency_separator")
+  currencyCode      String  @default("SEK") @map("currency_code")
+  currencyPreSymbol Boolean @default(false) @map("currency_pre_symbol")
+  currencyFactor    Int     @default(1) @map("currency_factor") @db.SmallInt
+
+  // Was oxygen_competition_config
+  airPlus                    Boolean @default(false) @map("air_plus")
+  awakeHours                 Int     @default(6) @map("awake_hours")
+  paymentMethods             String  @default("billed") @map("payment_methods")
+  swishNumber                String  @default("") @map("swish_number")
+  swishPayeeName             String  @default("") @map("swish_payee_name")
+  printRegistrationReceipt   Boolean @default(false) @map("print_registration_receipt")
+  registrationReceiptMessage String  @default("") @map("registration_receipt_message")
+  finishReceiptMessage       String  @default("") @map("finish_receipt_message")
+  receiptFriskvardNote       Boolean @default(false) @map("receipt_friskvard_note")
+  webUrl                     String  @default("") @map("web_url")
+  googleSheetsWebhookUrl     String  @default("") @map("google_sheets_webhook_url")
+  liveloxEventId             Int?    @map("livelox_event_id")
 
   // Misc
-  Priority     Int     @default(0) @db.UnsignedTinyInt
-  RaceId       Int     @default(0)
-  TimeAdjust   Int     @default(0)
-  PointAdjust  Int     @default(0)
-  TransferFlags Int    @default(0)
-  Shorten      Int     @default(0) @db.UnsignedTinyInt
-  EntrySource  Int     @default(0)
-  Heat         Int     @default(0) @db.UnsignedTinyInt
-  Reference    Int     @default(0)
-  NoRestart    Int     @default(0) @db.UnsignedTinyInt
-  InputResult  String?  @db.MediumText
-  StartGroup   Int     @default(0)
-  Family       Int     @default(0)
-  DataA        Int     @default(0)
-  DataB        Int     @default(0)
-  TextA        String  @default("") @db.VarChar(81)
-  Annotation   String?  @db.MediumText
+  useEconomy   Boolean @default(false) @map("use_economy")
+  useSpeaker   Boolean @default(false) @map("use_speaker")
+  maxTime      Int     @default(0) @map("max_time")
+  numStages    Int     @default(1) @map("num_stages") @db.SmallInt
+  longTimes    Boolean @default(false) @map("long_times")
+  subSeconds   Boolean @default(false) @map("sub_seconds")
+  noVacantBib  Boolean @default(false) @map("no_vacant_bib")
+  bibGap       Int     @default(0) @map("bib_gap") @db.SmallInt
+  bibsPerClass Int     @default(0) @map("bibs_per_class") @db.SmallInt
 
-  // Sync fields
-  Modified   DateTime  @default(now()) @updatedAt @db.Timestamp(0)
-  Counter    Int       @default(0) @db.UnsignedInt
-  Removed    Boolean   @default(false)
+  payModes    Json?  @map("pay_modes")
+  startGroups Json?  @map("start_groups")
+  controlMap  Json?  @map("control_map")
+  lists       Json?
+  machine     Json?
+  spExtra     Json?  @map("sp_extra")
+  ivExtra     Json?  @map("iv_extra")
+  entryExtra  Json?  @map("entry_extra")
+  splitPrint  String @default("") @map("split_print")
 
-  // Oxygen-only fields (ignored by MeOS)
-  oos_card_returned Int @default(0) @db.TinyInt
+  removed   Boolean  @default(false)
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime @default(now()) @map("updated_at") @db.Timestamptz(6)
 
-  @@index([Counter])
-  @@index([Modified])
-  @@index([CardNo])
-  @@index([Club])
-  @@index([Class])
+  controls     Control[]
+  courses      Course[]
+  classes      Class[]
+  runners      Runner[]
+  teams        Team[]
+  cards        Card[]
+  cardReadouts CardReadout[]
+  punches      Punch[]
+  controlUnits ControlUnit[]
+  eventLog     EventLogEntry[]
+  mapFiles     MapFile[]
+  renderedMaps RenderedMap[]
+  mapTiles     MapTile[]
+  tracks       Track[]
+  routes       Route[]
+  eventSeqs    EventSeq[]
+
+  @@index([removed])
+  @@map("events")
+  @@schema("oxygen")
 }
 
-/// Competition class / category
-model oClass {
-  Id          Int       @id @default(autoincrement())
-  Name        String    @default("") @db.VarChar(128)
-  Course      Int       @default(0)
-  MultiCourse String?   @db.MediumText
-  LegMethod   String    @default("") @db.VarChar(1024)
-  ExtId       BigInt    @default(0)
-  LongName    String    @default("") @db.VarChar(65)
+/// Per-(event, table) integer sequence allocator.
+/// next_seq is the value that will be assigned to the NEXT row.
+model EventSeq {
+  eventId   BigInt @map("event_id")
+  tableName String @map("table_name")
+  nextSeq   Int    @default(1) @map("next_seq")
 
-  // Age limits
-  LowAge      Int       @default(0) @db.UnsignedTinyInt
-  HighAge     Int       @default(0) @db.UnsignedTinyInt
+  event Event @relation(fields: [eventId], references: [id], onDelete: Cascade)
 
-  // Settings
-  HasPool         Int   @default(0) @db.UnsignedTinyInt
-  AllowQuickEntry Int   @default(0) @db.UnsignedTinyInt
-  ClassType       String @default("") @db.VarChar(81)
-  Sex             String @default("") @db.VarChar(3)
-
-  // Start settings
-  StartName     String  @default("") @db.VarChar(33)
-  StartBlock    Int     @default(0) @db.UnsignedTinyInt
-  NoTiming      Int     @default(0) @db.UnsignedTinyInt
-  FreeStart     Int     @default(0) @db.UnsignedTinyInt
-  RequestStart  Int     @default(0) @db.UnsignedTinyInt
-  IgnoreStart   Int     @default(0) @db.UnsignedTinyInt
-  FirstStart    Int     @default(0)
-  StartInterval Int     @default(0)
-  Vacant        Int     @default(0) @db.UnsignedTinyInt
-  Reserved      Int     @default(0) @db.UnsignedSmallInt
-
-  // Fees
-  ClassFee              Int @default(0)
-  HighClassFee          Int @default(0)
-  SecondHighClassFee    Int @default(0)
-  ClassFeeRed           Int @default(0)
-  HighClassFeeRed       Int @default(0)
-  SecondHighClassFeeRed Int @default(0)
-
-  // Display
-  SortIndex   Int       @default(0)
-  MaxTime     Int       @default(0)
-  Status      String    @default("") @db.VarChar(5)
-  DirectResult Int      @default(0) @db.TinyInt
-  Bib         String    @default("") @db.VarChar(17)
-  BibMode     String    @default("") @db.VarChar(3)
-  Unordered   Int       @default(0) @db.UnsignedTinyInt
-  Heat        Int       @default(0) @db.UnsignedTinyInt
-  Locked      Int       @default(0) @db.UnsignedTinyInt
-  Qualification String?  @db.MediumText
-  NumberMaps  Int       @default(0) @db.SmallInt
-  Result      String    @default("") @db.VarChar(49)
-  TransferFlags Int     @default(0)
-  SplitPrint  String    @default("") @db.VarChar(81)
-  DataA       Int       @default(0)
-  DataB       Int       @default(0)
-  TextA       String    @default("") @db.VarChar(81)
-
-  // Sync fields
-  Modified    DateTime  @default(now()) @updatedAt @db.Timestamp(0)
-  Counter     Int       @default(0) @db.UnsignedInt
-  Removed     Boolean   @default(false)
-
-  @@index([Counter])
-  @@index([Modified])
+  @@id([eventId, tableName])
+  @@map("event_seqs")
+  @@schema("oxygen")
 }
 
-/// Course definition
-model oCourse {
-  Id       Int       @id @default(autoincrement())
-  Name     String    @default("") @db.VarChar(64)
-  Controls String    @default("") @db.VarChar(512)
-  Length   Int       @default(0) @db.UnsignedInt
-  Legs     String    @default("") @db.VarChar(1024)
-  NumberMaps Int     @default(0) @db.SmallInt
-  StartName  String  @default("") @db.VarChar(33)
-  Climb    Int       @default(0) @db.SmallInt
+/// Global key-value store. Only truly global state:
+/// eventor_api_key, eventor_api_key_test, runnerdb_last_sync,
+/// runnerdb_runner_count, runnerdb_club_count.
+model Setting {
+  key   String  @id
+  value String?
 
-  // Rogaining
-  RPointLimit      Int @default(0)
-  RTimeLimit       Int @default(0)
-  RReduction       Int @default(0)
-  RReductionMethod Int @default(0) @db.UnsignedTinyInt
-
-  // Options
-  FirstAsStart  Int   @default(0) @db.UnsignedTinyInt
-  LastAsFinish  Int   @default(0) @db.UnsignedTinyInt
-  CControl      Int   @default(0) @db.UnsignedSmallInt
-  Shorten       Int   @default(0)
-
-  // Sync fields
-  Modified  DateTime  @default(now()) @updatedAt @db.Timestamp(0)
-  Counter   Int       @default(0) @db.UnsignedInt
-  Removed   Boolean   @default(false)
-
-  @@index([Counter])
-  @@index([Modified])
+  @@map("settings")
+  @@schema("oxygen")
 }
 
-/// Control point
-model oControl {
-  Id         Int       @id @default(autoincrement())
-  Name       String    @default("") @db.VarChar(128)
-  Numbers    String    @default("") @db.VarChar(128)
-  Status     Int       @default(0) @db.UnsignedInt
-  TimeAdjust Int       @default(0)
-  MinTime    Int       @default(0)
-  xpos       Int       @default(0)
-  ypos       Int       @default(0)
-  latcrd     Int       @default(0)
-  longcrd    Int       @default(0)
-  Rogaining  Int       @default(0)
-  Radio      Int       @default(0) @db.UnsignedTinyInt
-  Unit       Int       @default(0) @db.UnsignedSmallInt
+/// Global runner directory synced from Eventor (was oxygen_runner_db).
+model RunnerDirectory {
+  eventorPersonId BigInt   @id @map("eventor_person_id")
+  name            String   @default("")
+  cardNo          Int      @default(0) @map("card_no")
+  eventorClubId   Int      @default(0) @map("eventor_club_id")
+  birthYear       Int      @default(0) @map("birth_year") @db.SmallInt
+  sex             String   @default("") @db.Char(1)
+  nationality     String   @default("")
+  updatedAt       DateTime @default(now()) @map("updated_at") @db.Timestamptz(6)
 
-  // Sync fields
-  Modified   DateTime  @default(now()) @updatedAt @db.Timestamp(0)
-  Counter    Int       @default(0) @db.UnsignedInt
-  Removed    Boolean   @default(false)
-
-  @@index([Counter])
-  @@index([Modified])
+  @@index([cardNo])
+  @@index([name])
+  @@index([eventorClubId])
+  @@map("runner_directory")
+  @@schema("oxygen")
 }
 
-/// Club / organization
-model oClub {
-  Id          Int       @id @default(autoincrement())
-  Name        String    @default("") @db.VarChar(128)
-  District    Int       @default(0)
-  ShortName   String    @default("") @db.VarChar(17)
-  CareOf      String    @default("") @db.VarChar(63)
-  Street      String    @default("") @db.VarChar(83)
-  City        String    @default("") @db.VarChar(47)
-  State       String    @default("") @db.VarChar(47)
-  ZIP         String    @default("") @db.VarChar(23)
-  EMail       String    @default("") @db.VarChar(129)
-  Phone       String    @default("") @db.VarChar(65)
-  Nationality String    @default("") @db.VarChar(7)
-  Country     String    @default("") @db.VarChar(47)
-  Type        String    @default("") @db.VarChar(41)
-  ExtId       BigInt    @default(0)
-  Invoice     String    @default("") @db.VarChar(3)
-  InvoiceNo   Int       @default(0) @db.UnsignedSmallInt
-  StartGroup  Int       @default(0)
+/// Global club directory synced from Eventor + logos.
+/// Replaces both oxygen_club_db (MeOSMain) and per-event oxygen_club_logo.
+model ClubDirectory {
+  eventorId    BigInt   @id @map("eventor_id")
+  name         String   @default("")
+  shortName    String   @default("") @map("short_name")
+  countryCode  String   @default("") @map("country_code") @db.Char(3)
+  smallLogoPng Bytes?   @map("small_logo_png")
+  largeLogoPng Bytes?   @map("large_logo_png")
+  updatedAt    DateTime @default(now()) @map("updated_at") @db.Timestamptz(6)
 
-  // Sync fields
-  Modified    DateTime  @default(now()) @updatedAt @db.Timestamp(0)
-  Counter     Int       @default(0) @db.UnsignedInt
-  Removed     Boolean   @default(false)
-
-  @@index([Counter])
-  @@index([Modified])
+  @@map("club_directory")
+  @@schema("oxygen")
 }
 
-/// SI card with punch data
-model oCard {
-  Id       Int       @id @default(autoincrement())
-  CardNo   Int       @default(0)
-  ReadId   Int       @default(0) @db.UnsignedInt
-  Voltage  Int       @default(0) @db.UnsignedInt
-  BDate    Int       @default(0)
-  Punches  String    @default("") @db.VarChar(3040)
+/// Eventor event metadata cache for Registration Trends page.
+model EventorEventMeta {
+  eventorEventId   Int      @id @map("eventor_event_id")
+  name             String   @default("")
+  startDate        DateTime @map("start_date") @db.Date
+  classificationId Int      @default(0) @map("classification_id")
+  organiser        String   @default("")
+  entryCount       Int      @default(0) @map("entry_count")
+  fetchedAt        DateTime @map("fetched_at") @db.Timestamptz(6)
 
-  // Sync fields
-  Modified DateTime  @default(now()) @updatedAt @db.Timestamp(0)
-  Counter  Int       @default(0) @db.UnsignedInt
-  Removed  Boolean   @default(false)
+  entryHistory EventorEntryHistory[]
 
-  @@index([Counter])
-  @@index([Modified])
-  @@index([CardNo])
+  @@map("eventor_event_meta")
+  @@schema("oxygen")
 }
 
-/// Punch record (free punches)
-model oPunch {
-  Id     Int       @id @default(autoincrement())
-  CardNo Int       @default(0)
-  Time   Int       @default(0)
-  Type   Int       @default(0)
-  Unit   Int       @default(0)
-  Origin Int       @default(0)
+model EventorEntryHistory {
+  eventorEventId Int      @map("eventor_event_id")
+  rowSeq         Int      @map("row_seq")
+  entryClassId   Int      @default(0) @map("entry_class_id")
+  entryAt        DateTime @map("entry_at") @db.Timestamptz(6)
 
-  // Sync fields
-  Modified DateTime  @default(now()) @updatedAt @db.Timestamp(0)
-  Counter  Int       @default(0) @db.UnsignedInt
-  Removed  Boolean   @default(false)
+  event EventorEventMeta @relation(fields: [eventorEventId], references: [eventorEventId], onDelete: Cascade)
 
-  @@index([Counter])
-  @@index([Modified])
+  @@id([eventorEventId, rowSeq])
+  @@map("eventor_entry_history")
+  @@schema("oxygen")
 }
 
-/// Team
-model oTeam {
-  Id         Int       @id @default(autoincrement())
-  Name       String    @default("") @db.VarChar(64)
-  Runners    String    @default("") @db.VarChar(256)
-  Club       Int       @default(0)
-  Class      Int       @default(0)
-  StartTime  Int       @default(0)
-  FinishTime Int       @default(0)
-  Status     Int       @default(0)
-  StartNo    Int       @default(0)
+// ─── Per-event entities ────────────────────────────────────
 
-  // Input
-  InputTime   Int      @default(0)
-  InputStatus Int      @default(0)
-  InputPoints Int      @default(0)
-  InputPlace  Int      @default(0)
+model Control {
+  id         String        @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  eventId    BigInt        @map("event_id")
+  seq        Int           @default(0)
+  name       String        @default("")
+  /// ';'-separated list of accepted punch codes (multi-code controls).
+  codes      String        @default("")
+  status     ControlStatus @default(ok)
+  timeAdjust Int           @default(0) @map("time_adjust")
+  minTime    Int           @default(0) @map("min_time")
+  /// OCD map X coordinate (real decimal value).
+  xpos       Float         @default(0) @db.DoublePrecision
+  ypos       Float         @default(0) @db.DoublePrecision
+  /// WGS84 latitude (real decimal value). NULL until coords are imported.
+  lat        Float?        @db.DoublePrecision
+  lng        Float?        @db.DoublePrecision
+  radioType  String        @default("normal") @map("radio_type")
+  airPlus    String        @default("default") @map("air_plus")
+  removed    Boolean       @default(false)
+  createdAt  DateTime      @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt  DateTime      @default(now()) @map("updated_at") @db.Timestamptz(6)
 
-  // Economy
-  Fee        Int       @default(0)
-  Paid       Int       @default(0)
-  PayMode    Int       @default(0) @db.UnsignedTinyInt
-  Taxable    Int       @default(0)
+  event           Event           @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  finishOfCourses Course[]        @relation("CourseFinishControl")
+  courseControls  CourseControl[]
+  punches         Punch[]
+  controlUnits    ControlUnit[]
 
-  // Entry
-  EntryDate  Int       @default(0)
-  EntryTime  Int       @default(0)
-  Nationality String   @default("") @db.VarChar(7)
-  Country    String    @default("") @db.VarChar(47)
-  Bib        String    @default("") @db.VarChar(17)
-  ExtId      BigInt    @default(0)
-  Priority   Int       @default(0) @db.UnsignedTinyInt
-  SortIndex  Int       @default(0) @db.SmallInt
-  TimeAdjust Int       @default(0)
-  PointAdjust Int      @default(0)
-  TransferFlags Int    @default(0)
-  EntrySource Int      @default(0)
-  Heat       Int       @default(0) @db.UnsignedTinyInt
-  NoRestart  Int       @default(0) @db.UnsignedTinyInt
-  InputResult String?   @db.MediumText
-  DataA      Int       @default(0)
-  DataB      Int       @default(0)
-  TextA      String    @default("") @db.VarChar(81)
-  Annotation String?   @db.MediumText
-
-  // Sync fields
-  Modified   DateTime  @default(now()) @updatedAt @db.Timestamp(0)
-  Counter    Int       @default(0) @db.UnsignedInt
-  Removed    Boolean   @default(false)
-
-  @@index([Counter])
-  @@index([Modified])
+  @@unique([eventId, seq])
+  @@index([eventId, removed])
+  @@map("controls")
+  @@schema("oxygen")
 }
 
-/// ID counter tracking
-model oCounter {
-  CounterId Int @id
-  oControl  Int @default(0) @db.UnsignedInt
-  oCourse   Int @default(0) @db.UnsignedInt
-  oClass    Int @default(0) @db.UnsignedInt
-  oCard     Int @default(0) @db.UnsignedInt
-  oClub     Int @default(0) @db.UnsignedInt
-  oPunch    Int @default(0) @db.UnsignedInt
-  oRunner   Int @default(0) @db.UnsignedInt
-  oTeam     Int @default(0) @db.UnsignedInt
-  oEvent    Int @default(0) @db.UnsignedInt
+model Course {
+  id              String   @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  eventId         BigInt   @map("event_id")
+  seq             Int      @default(0)
+  name            String   @default("")
+  lengthM         Int      @default(0) @map("length_m")
+  climbM          Int      @default(0) @map("climb_m")
+  numberOfMaps    Int      @default(0) @map("number_of_maps")
+  startName       String   @default("") @map("start_name")
+  legs            String   @default("")
+  firstAsStart    Boolean  @default(false) @map("first_as_start")
+  lastAsFinish    Boolean  @default(false) @map("last_as_finish")
+  finishControlId String?  @map("finish_control_id") @db.Uuid
+  shorten         Int      @default(0)
+  removed         Boolean  @default(false)
+  createdAt       DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt       DateTime @default(now()) @map("updated_at") @db.Timestamptz(6)
 
-  Modified  DateTime  @default(now()) @db.Timestamp(0)
+  event          Event             @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  finishControl  Control?          @relation("CourseFinishControl", fields: [finishControlId], references: [id], onDelete: SetNull)
+  courseControls CourseControl[]
+  classes        Class[]
+  runners        Runner[]
+  classPools     ClassCoursePool[]
+
+  @@unique([eventId, seq])
+  @@index([eventId, removed])
+  @@map("courses")
+  @@schema("oxygen")
 }
 
-/// Club logos fetched from Eventor (separate table to avoid breaking MeOS).
-/// Keyed by EventorId (the Eventor organisation ID, stored in oClub.ExtId).
-model oxygen_club_logo {
-  EventorId  Int    @id
-  SmallPng   Bytes  @db.MediumBlob
-  LargePng   Bytes? @db.MediumBlob
-  UpdatedAt  DateTime @default(now()) @db.Timestamp(0)
+/// Normalised replacement for oCourse.Controls "123;456;789".
+model CourseControl {
+  courseId  String @map("course_id") @db.Uuid
+  position  Int
+  controlId String @map("control_id") @db.Uuid
+
+  course  Course  @relation(fields: [courseId], references: [id], onDelete: Cascade)
+  control Control @relation(fields: [controlId], references: [id], onDelete: Restrict)
+
+  @@id([courseId, position])
+  @@index([controlId])
+  @@map("course_controls")
+  @@schema("oxygen")
 }
 
-/// Client monitoring
-model oMonitor {
-  Id      Int       @id @default(autoincrement())
-  Client  String    @default("") @db.VarChar(64)
-  Count   Int       @default(0) @db.UnsignedInt
+model Class {
+  id        String  @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  eventId   BigInt  @map("event_id")
+  seq       Int     @default(0)
+  name      String  @default("")
+  longName  String  @default("") @map("long_name")
+  courseId  String? @map("course_id") @db.Uuid
+  eventorId BigInt? @map("eventor_id")
 
-  Modified DateTime  @default(now()) @updatedAt @db.Timestamp(0)
-  Counter  Int       @default(0) @db.UnsignedInt
-  Removed  Boolean   @default(false)
+  lowAge    Int    @default(0) @map("low_age") @db.SmallInt
+  highAge   Int    @default(0) @map("high_age") @db.SmallInt
+  sex       String @default("")
+  classType String @default("") @map("class_type")
 
-  @@index([Counter])
-  @@index([Modified])
+  classFeeCents              Int @default(0) @map("class_fee_cents")
+  classFeeRedCents           Int @default(0) @map("class_fee_red_cents")
+  highClassFeeCents          Int @default(0) @map("high_class_fee_cents")
+  highClassFeeRedCents       Int @default(0) @map("high_class_fee_red_cents")
+  secondHighClassFeeCents    Int @default(0) @map("second_high_class_fee_cents")
+  secondHighClassFeeRedCents Int @default(0) @map("second_high_class_fee_red_cents")
+
+  allowQuickEntry Boolean @default(false) @map("allow_quick_entry")
+  vacantCount     Int     @default(0) @map("vacant_count")
+  reservedCount   Int     @default(0) @map("reserved_count")
+
+  startName     String  @default("") @map("start_name")
+  startBlock    Int     @default(0) @map("start_block")
+  noTiming      Boolean @default(false) @map("no_timing")
+  freeStart     Boolean @default(false) @map("free_start")
+  requestStart  Boolean @default(false) @map("request_start")
+  ignoreStart   Boolean @default(false) @map("ignore_start")
+  firstStart    Int     @default(0) @map("first_start")
+  startInterval Int     @default(0) @map("start_interval")
+
+  sortIndex     Int     @default(0) @map("sort_index")
+  maxTime       Int     @default(0) @map("max_time")
+  /// Free-form MeOS tournament-status code (typically empty; values like "Q","F1","F2" for qualifying schemes).
+  status        String  @default("")
+  directResult  Boolean @default(false) @map("direct_result")
+  bib           String  @default("")
+  bibMode       String  @default("") @map("bib_mode")
+  unordered     Boolean @default(false)
+  numberMaps    Int     @default(0) @map("number_maps")
+  result        String  @default("")
+  legMethod     String  @default("") @map("leg_method")
+  qualification Json?
+  transferFlags Int     @default(0) @map("transfer_flags")
+
+  removed   Boolean  @default(false)
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime @default(now()) @map("updated_at") @db.Timestamptz(6)
+
+  event       Event             @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  course      Course?           @relation(fields: [courseId], references: [id], onDelete: SetNull)
+  runners     Runner[]
+  teams       Team[]
+  routes      Route[]
+  coursePools ClassCoursePool[]
+
+  @@unique([eventId, seq])
+  @@index([eventId, removed])
+  @@index([courseId])
+  @@index([eventId, eventorId])
+  @@map("classes")
+  @@schema("oxygen")
+}
+
+/// Forking: a class may pull from a pool of courses per stage.
+model ClassCoursePool {
+  classId  String @map("class_id") @db.Uuid
+  stage    Int    @default(0) @db.SmallInt
+  courseId String @map("course_id") @db.Uuid
+
+  class  Class  @relation(fields: [classId], references: [id], onDelete: Cascade)
+  course Course @relation(fields: [courseId], references: [id], onDelete: Cascade)
+
+  @@id([classId, stage, courseId])
+  @@map("class_course_pools")
+  @@schema("oxygen")
+}
+
+model Runner {
+  id            String       @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  eventId       BigInt       @map("event_id")
+  seq           Int          @default(0)
+  classId       String?      @map("class_id") @db.Uuid
+  /// Free-text club name. Empty when clubless. Eventor clubs populate this AND eventorClubId.
+  clubName      String       @default("") @map("club_name")
+  /// Eventor club ID (references global club_directory).
+  eventorClubId BigInt?      @map("eventor_club_id")
+  courseId      String?      @map("course_id") @db.Uuid
+  cardId        String?      @map("card_id") @db.Uuid
+  name          String       @default("")
+  cardNo        Int          @default(0) @map("card_no")
+  startNo       Int          @default(0) @map("start_no")
+  /// Deciseconds, ZeroTime-relative.
+  startTime     Int          @default(0) @map("start_time")
+  finishTime    Int          @default(0) @map("finish_time")
+  status        RunnerStatus @default(unknown)
+
+  bib         String @default("")
+  birthYear   Int    @default(0) @map("birth_year") @db.SmallInt
+  sex         String @default("")
+  nationality String @default("")
+  country     String @default("")
+  phone       String @default("")
+
+  entryDate       Int     @default(0) @map("entry_date")
+  entryTime       Int     @default(0) @map("entry_time")
+  entrySource     Int     @default(0) @map("entry_source")
+  eventorPersonId BigInt? @map("eventor_person_id")
+  eventorEntryId  BigInt? @map("eventor_entry_id")
+
+  feeCents     Int     @default(0) @map("fee_cents")
+  cardFeeCents Int     @default(0) @map("card_fee_cents")
+  paidCents    Int     @default(0) @map("paid_cents")
+  payMode      Int     @default(0) @map("pay_mode") @db.SmallInt
+  taxableCents Int     @default(0) @map("taxable_cents")
+  cardReturned Boolean @default(false) @map("card_returned")
+
+  inputTime    Int          @default(0) @map("input_time")
+  inputStatus  RunnerStatus @default(unknown) @map("input_status")
+  inputPoints  Int          @default(0) @map("input_points")
+  inputPlace   Int          @default(0) @map("input_place")
+  inputResult  Json?        @map("input_result")
+  multiResults Json?        @map("multi_results")
+
+  rank          Int     @default(0)
+  priority      Int     @default(0) @db.SmallInt
+  timeAdjust    Int     @default(0) @map("time_adjust")
+  pointAdjust   Int     @default(0) @map("point_adjust")
+  transferFlags Int     @default(0) @map("transfer_flags")
+  shorten       Boolean @default(false)
+  startGroup    Int     @default(0) @map("start_group")
+  noRestart     Boolean @default(false) @map("no_restart")
+  heat          Int     @default(0) @db.SmallInt
+  reference     Int     @default(0)
+  family        Int     @default(0)
+  annotation    String  @default("")
+
+  removed   Boolean  @default(false)
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime @default(now()) @map("updated_at") @db.Timestamptz(6)
+
+  event  Event   @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  class  Class?  @relation(fields: [classId], references: [id], onDelete: SetNull)
+  course Course? @relation(fields: [courseId], references: [id], onDelete: SetNull)
+  card   Card?   @relation(fields: [cardId], references: [id], onDelete: SetNull)
+  routes Route[]
+
+  @@unique([eventId, seq])
+  @@index([eventId, classId, removed])
+  @@index([eventId, eventorClubId, removed])
+  @@index([eventId, cardNo])
+  @@index([eventId, status, removed])
+  @@index([eventId, startTime])
+  @@index([eventId, eventorPersonId])
+  @@map("runners")
+  @@schema("oxygen")
+}
+
+model Team {
+  id            String       @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  eventId       BigInt       @map("event_id")
+  seq           Int          @default(0)
+  classId       String?      @map("class_id") @db.Uuid
+  clubName      String       @default("") @map("club_name")
+  eventorClubId BigInt?      @map("eventor_club_id")
+  name          String       @default("")
+  startNo       Int          @default(0) @map("start_no")
+  startTime     Int          @default(0) @map("start_time")
+  finishTime    Int          @default(0) @map("finish_time")
+  status        RunnerStatus @default(unknown)
+  bib           String       @default("")
+  /// Ordered runner UUIDs.
+  members       String[]     @db.Uuid
+
+  inputTime   Int          @default(0) @map("input_time")
+  inputStatus RunnerStatus @default(unknown) @map("input_status")
+  inputPoints Int          @default(0) @map("input_points")
+  inputPlace  Int          @default(0) @map("input_place")
+  inputResult Json?        @map("input_result")
+
+  feeCents      Int     @default(0) @map("fee_cents")
+  paidCents     Int     @default(0) @map("paid_cents")
+  payMode       Int     @default(0) @map("pay_mode") @db.SmallInt
+  eventorId     BigInt? @map("eventor_id")
+  entrySource   Int     @default(0) @map("entry_source")
+  transferFlags Int     @default(0) @map("transfer_flags")
+  noRestart     Boolean @default(false) @map("no_restart")
+  annotation    String  @default("")
+
+  removed   Boolean  @default(false)
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime @default(now()) @map("updated_at") @db.Timestamptz(6)
+
+  event Event  @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  class Class? @relation(fields: [classId], references: [id], onDelete: SetNull)
+
+  @@unique([eventId, seq])
+  @@index([eventId, classId, removed])
+  @@map("teams")
+  @@schema("oxygen")
+}
+
+model Card {
+  id          String   @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  eventId     BigInt   @map("event_id")
+  seq         Int      @default(0)
+  cardNo      Int      @map("card_no")
+  readoutId   String?  @map("readout_id") @db.Uuid
+  readCount   Int      @default(0) @map("read_count")
+  voltageMv   Int      @default(0) @map("voltage_mv")
+  batteryDate Int      @default(0) @map("battery_date")
+  punchesRaw  String   @default("") @map("punches_raw")
+  removed     Boolean  @default(false)
+  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt   DateTime @default(now()) @map("updated_at") @db.Timestamptz(6)
+
+  event   Event        @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  readout CardReadout? @relation(fields: [readoutId], references: [id], onDelete: SetNull)
+  runners Runner[]
+
+  @@unique([eventId, seq])
+  @@index([eventId, cardNo])
+  @@map("cards")
+  @@schema("oxygen")
+}
+
+model ControlUnit {
+  id                 String    @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  eventId            BigInt    @map("event_id")
+  seq                Int       @default(0)
+  stationSerial      Int       @map("station_serial")
+  controlId          String?   @map("control_id") @db.Uuid
+  lastProgrammedCode Int?      @map("last_programmed_code")
+  batteryVoltageMv   Int?      @map("battery_voltage_mv")
+  batteryLow         Boolean   @default(false) @map("battery_low")
+  checkedAt          DateTime? @map("checked_at") @db.Timestamptz(6)
+  memoryClearedAt    DateTime? @map("memory_cleared_at") @db.Timestamptz(6)
+  firmwareVersion    String?   @map("firmware_version")
+  modelId            Int?      @map("model_id")
+  modelName          String?   @map("model_name")
+  lastSeenAt         DateTime? @map("last_seen_at") @db.Timestamptz(6)
+  createdAt          DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt          DateTime  @default(now()) @map("updated_at") @db.Timestamptz(6)
+
+  event   Event    @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  control Control? @relation(fields: [controlId], references: [id], onDelete: SetNull)
+  punches Punch[]
+
+  @@unique([eventId, seq])
+  @@unique([eventId, stationSerial])
+  @@index([controlId])
+  @@map("control_units")
+  @@schema("oxygen")
+}
+
+// ─── Append-only / immutable tables ────────────────────────
+
+/// Raw SI card read log (was oxygen_card_readouts). Client-mintable UUID.
+model CardReadout {
+  id         String   @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  eventId    BigInt   @map("event_id")
+  cardNo     Int      @map("card_no")
+  cardType   String   @default("") @map("card_type")
+  /// [{code,time,subSecond,unit}, ...]
+  punches    Json
+  voltageMv  Int      @default(0) @map("voltage_mv")
+  batteryLow Boolean? @map("battery_low")
+  ownerData  Json?    @map("owner_data")
+  metadata   Json?
+  stationId  String?  @map("station_id")
+  readAt     DateTime @default(now()) @map("read_at") @db.Timestamptz(6)
+
+  event Event  @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  cards Card[]
+
+  @@index([eventId, cardNo])
+  @@index([eventId, readAt(sort: Desc)])
+  @@map("card_readouts")
+  @@schema("oxygen")
+}
+
+/// Free / online-input / backup-unit punches (was oPunch + oxygen_control_punches).
+model Punch {
+  id          String    @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  eventId     BigInt    @map("event_id")
+  cardNo      Int       @map("card_no")
+  controlCode Int       @map("control_code")
+  controlId   String?   @map("control_id") @db.Uuid
+  unitId      String?   @map("unit_id") @db.Uuid
+  /// Deciseconds, ZeroTime-relative.
+  time        Int
+  punchedAt   DateTime? @map("punched_at") @db.Timestamptz(6)
+  subSecond   Int?      @map("sub_second") @db.SmallInt
+  /// 'card' | 'online_input' | 'backup_memory' | 'manual'
+  source      String    @default("card")
+  isOriginal  Boolean   @default(true) @map("is_original")
+  importedAt  DateTime  @default(now()) @map("imported_at") @db.Timestamptz(6)
+  removed     Boolean   @default(false)
+
+  event   Event        @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  control Control?     @relation(fields: [controlId], references: [id], onDelete: SetNull)
+  unit    ControlUnit? @relation(fields: [unitId], references: [id], onDelete: SetNull)
+
+  @@index([eventId, cardNo])
+  @@index([eventId, controlId])
+  @@index([eventId, importedAt(sort: Desc)])
+  @@map("punches")
+  @@schema("oxygen")
+}
+
+/// Offline operational event log (was oxygen_events).
+/// eventId references the orienteering event; the log entry has its own UUID id.
+model EventLogEntry {
+  id              String   @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  eventId         BigInt   @map("event_id")
+  type            String
+  stationId       String   @map("station_id")
+  clientTimestamp DateTime @map("client_timestamp") @db.Timestamptz(6)
+  payload         Json
+  appliedAt       DateTime @default(now()) @map("applied_at") @db.Timestamptz(6)
+
+  event Event @relation(fields: [eventId], references: [id], onDelete: Cascade)
+
+  @@index([eventId, clientTimestamp(sort: Desc)])
+  @@index([eventId, type])
+  @@map("event_log")
+  @@schema("oxygen")
+}
+
+// ─── Maps & GPS tracks ─────────────────────────────────────
+
+model MapFile {
+  id         BigInt   @id @default(autoincrement())
+  eventId    BigInt   @map("event_id")
+  fileName   String   @default("") @map("file_name")
+  fileData   Bytes    @map("file_data")
+  uploadedAt DateTime @default(now()) @map("uploaded_at") @db.Timestamptz(6)
+
+  event Event @relation(fields: [eventId], references: [id], onDelete: Cascade)
+
+  @@index([eventId])
+  @@map("map_files")
+  @@schema("oxygen")
+}
+
+model RenderedMap {
+  id         BigInt   @id @default(autoincrement())
+  eventId    BigInt   @map("event_id")
+  maxWidth   Int      @map("max_width")
+  imageData  Bytes    @map("image_data")
+  bounds     Json
+  mapScale   Int      @default(0) @map("map_scale")
+  width      Int      @default(0)
+  height     Int      @default(0)
+  renderedAt DateTime @default(now()) @map("rendered_at") @db.Timestamptz(6)
+
+  event Event @relation(fields: [eventId], references: [id], onDelete: Cascade)
+
+  @@index([eventId])
+  @@map("rendered_maps")
+  @@schema("oxygen")
+}
+
+model MapTile {
+  eventId  BigInt @map("event_id")
+  z        Int
+  x        Int
+  y        Int
+  tileData Bytes  @map("tile_data")
+
+  event Event @relation(fields: [eventId], references: [id], onDelete: Cascade)
+
+  @@id([eventId, z, x, y])
+  @@map("map_tiles")
+  @@schema("oxygen")
+}
+
+model Track {
+  id          BigInt   @id @default(autoincrement())
+  eventId     BigInt   @map("event_id")
+  deviceId    String   @map("device_id")
+  trackName   String   @default("") @map("track_name")
+  startTimeMs BigInt   @map("start_time_ms")
+  endTimeMs   BigInt?  @map("end_time_ms")
+  distanceM   Float    @default(0) @map("distance_m") @db.DoublePrecision
+  pointCount  Int      @default(0) @map("point_count")
+  geometry    Json
+  uploadedAt  DateTime @default(now()) @map("uploaded_at") @db.Timestamptz(6)
+  updatedAt   DateTime @default(now()) @map("updated_at") @db.Timestamptz(6)
+
+  event Event @relation(fields: [eventId], references: [id], onDelete: Cascade)
+
+  @@unique([eventId, deviceId, startTimeMs])
+  @@map("tracks")
+  @@schema("oxygen")
+}
+
+model Route {
+  id             BigInt   @id @default(autoincrement())
+  eventId        BigInt   @map("event_id")
+  runnerId       String?  @map("runner_id") @db.Uuid
+  classId        String?  @map("class_id") @db.Uuid
+  liveloxClassId Int?     @map("livelox_class_id")
+  sourceType     String   @default("livelox") @map("source_type")
+  color          String   @default("")
+  raceStartMs    BigInt?  @map("race_start_ms")
+  waypoints      Json
+  interruptions  Json?
+  result         Json?
+  syncedAt       DateTime @default(now()) @map("synced_at") @db.Timestamptz(6)
+
+  event  Event   @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  runner Runner? @relation(fields: [runnerId], references: [id], onDelete: SetNull)
+  class  Class?  @relation(fields: [classId], references: [id], onDelete: SetNull)
+
+  @@index([eventId, runnerId])
+  @@map("routes")
+  @@schema("oxygen")
 }
