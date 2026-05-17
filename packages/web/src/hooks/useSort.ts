@@ -55,6 +55,13 @@ export function useSort<T>(
   sorted: T[];
   sort: SortState<string>;
   toggle: (key: string) => void;
+  /**
+   * True when the user has explicitly chosen a sort via column header
+   * (the URL `?sort=` param is present and resolves to a valid key).
+   * Useful for callers that want to switch between server/DnD order and
+   * client column sort only after the user picks a column.
+   */
+  hasExplicitSort: boolean;
 } {
   const [searchParams, setSearchParams] = useSearchParams();
 
@@ -67,6 +74,13 @@ export function useSort<T>(
     () => parseSortParam(searchParams.get("sort"), initial, validKeys),
     [searchParams, initial, validKeys],
   );
+
+  const rawSortParam = searchParams.get("sort");
+  const hasExplicitSort = useMemo(() => {
+    if (!rawSortParam) return false;
+    const key = rawSortParam.startsWith("-") ? rawSortParam.slice(1) : rawSortParam;
+    return validKeys.has(key as string);
+  }, [rawSortParam, validKeys]);
 
   const toggle = useCallback(
     (key: string) => {
@@ -100,5 +114,5 @@ export function useSort<T>(
     return [...items].sort((a, b) => cmp(a, b) * dir);
   }, [items, sort, comparators]);
 
-  return { sorted, sort, toggle };
+  return { sorted, sort, toggle, hasExplicitSort };
 }

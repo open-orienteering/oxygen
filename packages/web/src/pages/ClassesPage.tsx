@@ -29,6 +29,7 @@ import {
 import { CSS } from "@dnd-kit/utilities";
 import { restrictToVerticalAxis } from "@dnd-kit/modifiers";
 import { MapSlot } from "../components/MapSlot";
+import { CourseMultiSelectDropdown } from "../components/CourseMultiSelectDropdown";
 
 export function ClassesPage() {
   const { t } = useTranslation("classes");
@@ -126,10 +127,17 @@ export function ClassesPage() {
     type: (a: Cls, b: Cls) => (a.classType ?? "").localeCompare(b.classType ?? ""),
   }), []);
 
-  const { sorted: sortedItems, sort, toggle } = useSort(rawItems, { key: "name", dir: "asc" }, comparators);
+  const { sorted: sortedItems, sort, toggle, hasExplicitSort } = useSort(
+    rawItems,
+    { key: "name", dir: "asc" },
+    comparators,
+  );
 
-  // Only use column sorting when DnD is disabled (i.e. when filtered)
-  const items = isFiltered ? sortedItems : rawItems;
+  // DnD reorder is the default order; switch to column sort whenever the
+  // user has explicitly picked a column, the search bar is filtering,
+  // or any rows are selected (bulk actions).
+  const isDndDisabled = hasExplicitSort || isFiltered || selection.someSelected;
+  const items = isDndDisabled ? sortedItems : rawItems;
 
   // DnD sensors — require 8px movement to start drag (prevents accidental drags)
   const sensors = useSensors(
@@ -138,6 +146,21 @@ export function ClassesPage() {
   );
 
   const sortableIds = useMemo(() => items.map((c) => c.id), [items]);
+
+  // Course names from selected classes drive the map highlight when any
+  // rows are selected (mirrors CoursesPage). Dedup across selected
+  // classes so a course that appears in multiple selected classes is
+  // highlighted once.
+  const selectedCourseNames = useMemo(() => {
+    const names = new Set<string>();
+    for (const cls of items) {
+      if (!selection.isSelected(cls.id)) continue;
+      for (const n of cls.courseNames) {
+        if (n) names.add(n);
+      }
+    }
+    return Array.from(names);
+  }, [items, selection]);
 
   const handleDragEnd = (event: DragEndEvent) => {
     const { active, over } = event;
@@ -183,7 +206,7 @@ export function ClassesPage() {
       <div className="flex items-center justify-between mb-3">
         <span className="text-sm text-slate-500">
           {t("classCount", { count: items.length })}
-          {!isFiltered && items.length > 1 && (
+          {!isDndDisabled && items.length > 1 && (
             <span className="text-slate-400 ml-2">· {t("dragToReorder")}</span>
           )}
         </span>
@@ -222,7 +245,7 @@ export function ClassesPage() {
             <SortableContext
               items={sortableIds}
               strategy={verticalListSortingStrategy}
-              disabled={isFiltered || selection.someSelected}
+              disabled={isDndDisabled}
             >
               <div className="overflow-x-auto">
                 <table className="w-full text-sm">
@@ -237,15 +260,15 @@ export function ClassesPage() {
                           className="rounded border-slate-300 text-blue-600 focus:ring-blue-500 cursor-pointer"
                         />
                       </th>
-                      {!isFiltered && !selection.someSelected && (
+                      {!isDndDisabled && (
                         <th className="w-10 px-1 py-2.5" />
                       )}
-                      <SortHeader label={t("name")} active={isFiltered ? sort.key === "name" : undefined} direction={sort.dir} onClick={() => toggle("name")} />
-                      <SortHeader label={t("course")} active={isFiltered ? sort.key === "course" : undefined} direction={sort.dir} onClick={() => toggle("course")} />
-                      <SortHeader label={t("runners")} active={isFiltered ? sort.key === "runners" : undefined} direction={sort.dir} onClick={() => toggle("runners")} className="w-24" />
-                      <SortHeader label={t("fee")} active={isFiltered ? sort.key === "fee" : undefined} direction={sort.dir} onClick={() => toggle("fee")} className="hidden sm:table-cell w-20" />
-                      <SortHeader label={t("sex")} active={isFiltered ? sort.key === "sex" : undefined} direction={sort.dir} onClick={() => toggle("sex")} className="hidden md:table-cell w-24" />
-                      <SortHeader label={t("classType")} active={isFiltered ? sort.key === "type" : undefined} direction={sort.dir} onClick={() => toggle("type")} className="hidden lg:table-cell" />
+                      <SortHeader label={t("name")} active={sort.key === "name"} direction={sort.dir} onClick={() => toggle("name")} />
+                      <SortHeader label={t("course")} active={sort.key === "course"} direction={sort.dir} onClick={() => toggle("course")} />
+                      <SortHeader label={t("runners")} active={sort.key === "runners"} direction={sort.dir} onClick={() => toggle("runners")} className="w-24" />
+                      <SortHeader label={t("fee")} active={sort.key === "fee"} direction={sort.dir} onClick={() => toggle("fee")} className="hidden sm:table-cell w-20" />
+                      <SortHeader label={t("sex")} active={sort.key === "sex"} direction={sort.dir} onClick={() => toggle("sex")} className="hidden md:table-cell w-24" />
+                      <SortHeader label={t("classType")} active={sort.key === "type"} direction={sort.dir} onClick={() => toggle("type")} className="hidden lg:table-cell" />
                       <th className="px-4 py-2.5 text-left font-medium text-slate-500 hidden xl:table-cell w-52">{t("options")}</th>
                       <th className="px-4 py-2.5 text-right font-medium text-slate-500 w-20">{t("actions")}</th>
                     </tr>
@@ -256,8 +279,7 @@ export function ClassesPage() {
                         key={cls.id}
                         cls={cls}
                         isExpanded={expandedId === cls.id}
-                        isFiltered={isFiltered}
-                        isDndDisabled={isFiltered || selection.someSelected}
+                        isDndDisabled={isDndDisabled}
                         isSelected={selection.isSelected(cls.id)}
                         onToggleSelect={() => selection.toggle(cls.id)}
                         onToggleExpand={() => handleToggleExpand(cls.id)}
@@ -323,14 +345,17 @@ export function ClassesPage() {
         </button>
       </BulkActionBar>
 
-      {/* Map */}
+      {/* Map — selection drives the filter when non-empty, otherwise the
+          expanded row is highlighted as before. */}
       <MapSlot
         className="mt-6"
         fitToControls
         highlightCourseNames={
-          expandedId
-            ? (items.find((c) => c.id === expandedId)?.courseNames ?? [])
-            : undefined
+          selectedCourseNames.length > 0
+            ? selectedCourseNames
+            : expandedId
+              ? (items.find((c) => c.id === expandedId)?.courseNames ?? [])
+              : undefined
         }
       />
     </>
@@ -342,7 +367,6 @@ export function ClassesPage() {
 function SortableClassRow({
   cls,
   isExpanded,
-  isFiltered,
   isDndDisabled,
   isSelected,
   onToggleSelect,
@@ -352,7 +376,6 @@ function SortableClassRow({
 }: {
   cls: ClassSummary;
   isExpanded: boolean;
-  isFiltered: boolean;
   isDndDisabled: boolean;
   isSelected: boolean;
   onToggleSelect: () => void;
@@ -396,7 +419,7 @@ function SortableClassRow({
             className="rounded border-slate-300 text-blue-600 focus:ring-blue-500 cursor-pointer"
           />
         </td>
-        {!isFiltered && !isDndDisabled && (
+        {!isDndDisabled && (
           <td
             className="w-10 px-1 py-2.5 text-center"
             onClick={(e) => e.stopPropagation()}
@@ -500,70 +523,6 @@ function SortableClassRow({
         </tr>
       )}
     </>
-  );
-}
-
-// ─── Helpers ─────────────────────────────────────────────────
-
-// formatSex is no longer used directly -- replaced by t() calls in components
-
-function formatAge(low: number, high: number): string {
-  if (low > 0 && high > 0) return `${low}–${high}`;
-  if (low > 0) return `${low}+`;
-  if (high > 0) return `≤${high}`;
-  return "—";
-}
-
-// ─── Multi-select course picker ─────────────────────────────
-
-function CourseMultiSelect({
-  selectedIds,
-  onChange,
-}: {
-  selectedIds: number[];
-  onChange: (ids: number[]) => void;
-}) {
-  const { t } = useTranslation("classes");
-  const courses = trpc.course.list.useQuery();
-  const available = courses.data ?? [];
-
-  const toggleCourse = (id: number) => {
-    if (selectedIds.includes(id)) {
-      onChange(selectedIds.filter((x) => x !== id));
-    } else {
-      onChange([...selectedIds, id]);
-    }
-  };
-
-  return (
-    <div className="space-y-1.5">
-      {available.map((c) => (
-        <label
-          key={c.id}
-          className="flex items-center gap-2 cursor-pointer hover:bg-slate-50 rounded px-2 py-1 -mx-2"
-        >
-          <input
-            type="checkbox"
-            checked={selectedIds.includes(c.id)}
-            onChange={() => toggleCourse(c.id)}
-            className="rounded border-slate-300 text-blue-600 focus:ring-blue-500 cursor-pointer"
-          />
-          <span className="text-sm text-slate-700">{c.name}</span>
-          <span className="text-xs text-slate-400 ml-auto">
-            {t("controlsCount", { count: c.controlCount })}
-            {c.length > 0 && ` · ${(c.length / 1000).toFixed(1)} km`}
-          </span>
-        </label>
-      ))}
-      {available.length === 0 && (
-        <p className="text-xs text-slate-400">{t("noCoursesAvailable")}</p>
-      )}
-      {selectedIds.length > 1 && (
-        <p className="text-xs text-purple-600 font-medium mt-1">
-          {t("forkedDescription")}
-        </p>
-      )}
-    </div>
   );
 }
 
@@ -814,7 +773,7 @@ function ClassInlineDetail({ classId }: { classId: number }) {
             <label className="block text-xs font-medium text-slate-500 mb-2">
               {(editCourseIds ?? d.courseIds).length > 1 ? t("coursesForked") : t("course")}
             </label>
-            <CourseMultiSelect
+            <CourseMultiSelectDropdown
               selectedIds={editCourseIds ?? d.courseIds}
               onChange={handleCourseChange}
             />
@@ -966,7 +925,7 @@ function CreateClassForm({
           <label className="block text-xs font-medium text-slate-500 mb-2">
             {courseIds.length > 1 ? t("coursesForked") : t("course")}
           </label>
-          <CourseMultiSelect selectedIds={courseIds} onChange={setCourseIds} />
+          <CourseMultiSelectDropdown selectedIds={courseIds} onChange={setCourseIds} />
         </div>
         <div className="flex items-center gap-2 pt-1">
           <button
