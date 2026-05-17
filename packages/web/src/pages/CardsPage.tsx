@@ -12,7 +12,6 @@ import { CardTypeBadge } from "../components/CardTypeBadge";
 import { StructuredSearchBar } from "../components/structured-search/StructuredSearchBar";
 import { useStructuredSearch } from "../hooks/useStructuredSearch";
 import { createCardAnchors, type CardListItem } from "../lib/structured-search/anchors/card-anchors";
-import { MapSlot } from "../components/MapSlot";
 import { CardMapPreview } from "../components/CardMapPreview";
 import { useDefaultMapCourseNames } from "../hooks/useDefaultMapCourseNames";
 
@@ -267,14 +266,11 @@ export function CardsPage() {
       {/* Map preview — when a card row is expanded, the linked runner's
           course / punch status / GPS track are shown. Falls back to the
           page's class-filter course (or plain overview) otherwise.
-          Portals into the shell pane on wide viewports; renders inline
-          on narrow. */}
-      <MapSlot>
-        <CardMapPreview
-          cardNo={expandedCard}
-          defaultCourseNames={defaultCourseNames}
-        />
-      </MapSlot>
+          `CardMapPreview` itself wraps the `<MapSlot>`. */}
+      <CardMapPreview
+        cardNo={expandedCard}
+        defaultCourseNames={defaultCourseNames}
+      />
     </>
   );
 }

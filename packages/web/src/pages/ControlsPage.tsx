@@ -15,7 +15,6 @@ import {
 import { useNumericSearchParam } from "../hooks/useSearchParam";
 import { SortHeader } from "../components/SortHeader";
 import { useSort } from "../hooks/useSort";
-import { MapPanel } from "../components/MapPanel";
 import { MapSlot } from "../components/MapSlot";
 import { BulkActionBar } from "../components/BulkActionBar";
 import { useDeviceManager } from "../context/DeviceManager";
@@ -137,6 +136,17 @@ export function ControlsPage() {
       (a.config?.radioType ?? "normal").localeCompare(b.config?.radioType ?? "normal"),
     checked: (a: Ctrl, b: Ctrl) =>
       (a.config?.checkedAt ?? "").localeCompare(b.config?.checkedAt ?? ""),
+    // Battery: missing voltage sorts last in ascending order (large
+    // sentinel) and first in descending — matches the table's "—" UX.
+    battery: (a: Ctrl, b: Ctrl) => {
+      const av = a.config?.batteryVoltage ?? Number.POSITIVE_INFINITY;
+      const bv = b.config?.batteryVoltage ?? Number.POSITIVE_INFINITY;
+      return av - bv;
+    },
+    // Type: distinct model names joined with " / " (same string the
+    // UnitTypeSummary cell renders), case-insensitive locale sort.
+    type: (a: Ctrl, b: Ctrl) =>
+      unitTypeSortKey(a.units ?? []).localeCompare(unitTypeSortKey(b.units ?? [])),
   }), []);
 
   const filteredControls = useMemo(
@@ -305,8 +315,8 @@ export function ControlsPage() {
                   <SortHeader label={t("radio")} active={sort.key === "radio"} direction={sort.dir} onClick={() => toggle("radio")} className="w-28" />
                   <SortHeader label={t("runners")} active={sort.key === "runners"} direction={sort.dir} onClick={() => toggle("runners")} className="w-24" />
                   <SortHeader label={t("checked")} active={sort.key === "checked"} direction={sort.dir} onClick={() => toggle("checked")} className="hidden lg:table-cell w-32" />
-                  <th className="px-4 py-2.5 text-left font-medium text-slate-500 hidden lg:table-cell w-24">{t("battery")}</th>
-                  <th className="px-4 py-2.5 text-left font-medium text-slate-500 hidden xl:table-cell w-32">{t("type")}</th>
+                  <SortHeader label={t("battery")} active={sort.key === "battery"} direction={sort.dir} onClick={() => toggle("battery")} className="hidden lg:table-cell w-24" />
+                  <SortHeader label={t("type")} active={sort.key === "type"} direction={sort.dir} onClick={() => toggle("type")} className="hidden xl:table-cell w-32" />
                   <th className="px-4 py-2.5 text-right font-medium text-slate-500 w-20">{t("actions")}</th>
                 </tr>
               </thead>
@@ -330,14 +340,12 @@ export function ControlsPage() {
 
       {/* Map — selection drives the filter when non-empty, otherwise the
           expanded row is highlighted as before. */}
-      <MapSlot>
-        <MapPanel
-          className="mt-6"
-          fitToControls
-          highlightControlId={selectedIds.size === 0 ? (expandedId ?? undefined) : undefined}
-          highlightControlIds={selectedIds.size > 0 ? Array.from(selectedIds) : undefined}
-        />
-      </MapSlot>
+      <MapSlot
+        className="mt-6"
+        fitToControls
+        highlightControlId={selectedIds.size === 0 ? (expandedId ?? undefined) : undefined}
+        highlightControlIds={selectedIds.size > 0 ? Array.from(selectedIds) : undefined}
+      />
 
       {/* Bulk action bar — floating at bottom, same as Classes/Runners */}
       <BulkActionBar count={selectedIds.size} onDeselectAll={() => setSelectedIds(new Set())}>
@@ -506,10 +514,12 @@ function BatteryIndicator({ voltage, low }: { voltage: number | null; low: boole
   return <span className={`text-xs font-mono tabular-nums ${color}`}>{voltage.toFixed(2)}V</span>;
 }
 
-/** Summarise a control's physical units' hardware models for the main table.
- *  Distinct names joined by " / " (e.g. "BSF8 / BSF9") so that controls
- *  fulfilled by mismatched hardware are visible at a glance. */
-function UnitTypeSummary({ units }: { units: ControlUnit[] }) {
+/** Distinct unit model names joined with " / ". Used both for the
+ *  UnitTypeSummary cell and as the sort key for the "Type" column so
+ *  that display order matches sort order. Empty/missing -> empty string
+ *  (sorts before any model name, matching the "—" placeholder shown
+ *  for those rows). */
+function unitTypeSortKey(units: ControlUnit[]): string {
   const names = Array.from(
     new Set(
       units
@@ -517,10 +527,18 @@ function UnitTypeSummary({ units }: { units: ControlUnit[] }) {
         .filter((n): n is string => typeof n === "string" && n.length > 0),
     ),
   );
-  if (names.length === 0) return <span className="text-slate-300">—</span>;
+  return names.join(" / ");
+}
+
+/** Summarise a control's physical units' hardware models for the main table.
+ *  Distinct names joined by " / " (e.g. "BSF8 / BSF9") so that controls
+ *  fulfilled by mismatched hardware are visible at a glance. */
+function UnitTypeSummary({ units }: { units: ControlUnit[] }) {
+  const key = unitTypeSortKey(units);
+  if (!key) return <span className="text-slate-300">—</span>;
   return (
     <span className="text-xs font-mono text-slate-700">
-      {names.join(" / ")}
+      {key}
     </span>
   );
 }

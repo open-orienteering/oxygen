@@ -1,10 +1,14 @@
-import { useState, useRef, useMemo, useEffect, useCallback } from "react";
+import { memo, useId, useState, useRef, useMemo, useEffect, useCallback } from "react";
 import { useTranslation } from "react-i18next";
 import { trpc } from "../lib/trpc";
 import { MapViewer, type ControlOverlay, type CourseOverlay } from "./MapViewer";
-import { useIsPortaled } from "./map-pane-shared";
 
-interface Props {
+/**
+ * Public prop surface for `<MapPanel>`. Exported so the shell-owned
+ * persistent panel and the props-pushing `<MapSlot>` share a single
+ * source of truth for the contract.
+ */
+export interface MapPanelPublicProps {
   /** Highlight a specific control by DB ID */
   highlightControlId?: number;
   /**
@@ -17,11 +21,11 @@ interface Props {
   highlightCourseName?: string;
   /** Highlight multiple courses by name (for forked classes) */
   highlightCourseNames?: string[];
-  /** Callback when a control is clicked */
+  /** Callback when a control is clicked. Stabilize via `useCallback` to keep `memo` effective. */
   onControlClick?: (controlId: number) => void;
   /** CSS class */
   className?: string;
-  /** Height for the map container */
+  /** Height for the map container (ignored when `fillContainer` is true). */
   height?: string;
   /** Auto-zoom to fit the controls area */
   fitToControls?: boolean;
@@ -29,11 +33,11 @@ interface Props {
   filterMode?: "all" | "course" | "single-control";
   /** Show completion status overlay on controls */
   showCompletion?: boolean;
-  /** Callback when completion toggle changes */
+  /** Callback when completion toggle changes. Stabilize via `useCallback`. */
   onCompletionToggle?: (enabled: boolean) => void;
   /** Course ID to filter completion data by */
   completionCourseId?: number;
-  /** Render a toolbar above the map (for class selectors, toggles, etc.) */
+  /** Render a toolbar above the map (for class selectors, toggles, etc.). Stabilize via `useMemo`. */
   toolbar?: React.ReactNode;
   /** Per-control punch status for mispunch visualization (keyed by control code string e.g. "67") */
   punchStatusByCode?: Record<string, "ok" | "missing" | "extra">;
@@ -43,9 +47,23 @@ interface Props {
   hideToolbar?: boolean;
   /** GPS route traces to overlay on the map. */
   gpsRoutes?: Array<{ color: string; points: Array<{ lat: number; lng: number }> }>;
+  /**
+   * Fill the available height of the parent container instead of using
+   * the fixed pixel `height` prop. Set by the shell-owned persistent
+   * panel; inline call sites leave this `false` so they keep their
+   * caller-defined height.
+   */
+  fillContainer?: boolean;
+  /**
+   * When set, render a small "collapse pane" button at the right edge
+   * of the toolbar (after the fullscreen toggle). Only the shell-owned
+   * persistent panel passes this — pages leave it `undefined`. Wired to
+   * `data-testid="map-pane-collapse"` for the existing E2E tests.
+   */
+  onPaneCollapse?: () => void;
 }
 
-export function MapPanel({
+function MapPanelImpl({
   highlightControlId,
   highlightControlIds,
   highlightCourseName,
@@ -63,16 +81,23 @@ export function MapPanel({
   focusControlCodes,
   hideToolbar = false,
   gpsRoutes,
-}: Props) {
+  fillContainer = false,
+  onPaneCollapse,
+}: MapPanelPublicProps) {
   const { t } = useTranslation("dashboard");
-  const isPortaled = useIsPortaled();
+  // Stable for the lifetime of this MapPanel instance. Exposed as
+  // `data-instance-id` on every render-path root so the E2E suite can
+  // assert the persistent shell-pane MapPanel doesn't remount across
+  // route changes — the value rotates when (and only when) the React
+  // fibre is torn down and a new one is mounted.
+  const instanceId = useId();
   // When rendered inside the persistent right pane, strip caller-provided
   // layout margins (typically `mt-6`) and let the map fill the available
   // height of the pane instead of using the fixed pixel `height` prop.
-  const effectiveClassName = isPortaled
+  const effectiveClassName = fillContainer
     ? className.replace(/\bmt-\S+/g, "").trim()
     : className;
-  const effectiveHeight = isPortaled ? "100%" : height;
+  const effectiveHeight = fillContainer ? "100%" : height;
   // Merge single + multi course names into a set for unified handling
   const effectiveCourseNames = useMemo(() => {
     const names = new Set<string>();
@@ -93,18 +118,24 @@ export function MapPanel({
     }
     return ids;
   }, [highlightControlId, highlightControlIds]);
+  // These four describe the competition's map + control layout and don't
+  // change during a session except via explicit user actions (uploading a
+  // new map, editing controls, adding courses) — and each of those paths
+  // already invalidates the relevant cache. `staleTime: Infinity` keeps
+  // the cache warm for the whole session so navigation between pages
+  // doesn't refetch.
   const mapInfo = trpc.course.mapFileInfo.useQuery(undefined, {
-    staleTime: 60_000,
+    staleTime: Number.POSITIVE_INFINITY,
   });
   const mapMetadata = trpc.course.mapMetadata.useQuery(undefined, {
-    staleTime: 60_000,
+    staleTime: Number.POSITIVE_INFINITY,
     enabled: !!mapInfo.data,
   });
   const controlCoords = trpc.course.controlCoordinates.useQuery(undefined, {
-    staleTime: 60_000,
+    staleTime: Number.POSITIVE_INFINITY,
   });
   const courses = trpc.course.list.useQuery(undefined, {
-    staleTime: 60_000,
+    staleTime: Number.POSITIVE_INFINITY,
   });
   // Completion status data
   const completionStatus = trpc.course.controlCompletionStatus.useQuery(
@@ -373,47 +404,136 @@ export function MapPanel({
       ? highlightedCourseNamesList.join(",")
       : "";
 
+  // Unified toolbar — renders on the happy path AND on the upload-prompt /
+  // loading paths whenever in pane mode, so the collapse pill is always
+  // accessible. Inline-mode call sites keep the legacy condition
+  // (render only when the page supplied a toolbar or we're fullscreen).
+  const renderToolbar = !hideToolbar && (fillContainer || toolbar || isFullscreen);
+  const paneToolbar = renderToolbar ? (
+    <div className="flex items-center gap-3 px-3 py-2 border-b border-slate-200 flex-shrink-0">
+      {fillContainer && !toolbar && (
+        <h2 className="text-sm font-semibold text-slate-500 uppercase tracking-wider">
+          {t("map")}
+        </h2>
+      )}
+      {toolbar}
+      <div className="ml-auto flex items-center gap-2">
+        {canFilter && (
+          <button
+            onClick={() => setShowOnlyRelevant((v) => !v)}
+            className={`text-xs px-2 py-1 rounded-md transition-colors cursor-pointer ${showOnlyRelevant
+                ? "bg-purple-100 text-purple-700 font-medium"
+                : "text-slate-500 hover:text-slate-700 hover:bg-slate-100"
+              }`}
+          >
+            {showOnlyRelevant ? t("showAllControls") : t("hideOtherControls")}
+          </button>
+        )}
+        {highlightedCourseNamesList.length > 0 && (
+          <button
+            onClick={() => setShowDescriptions((v) => !v)}
+            className={`text-xs px-2 py-1 rounded-md transition-colors cursor-pointer ${showDescriptions
+                ? "bg-purple-100 text-purple-700 font-medium"
+                : "text-slate-500 hover:text-slate-700 hover:bg-slate-100"
+              }`}
+          >
+            {showDescriptions ? t("hideDescriptions") : t("descriptions")}
+          </button>
+        )}
+        {onCompletionToggle && (
+          <button
+            onClick={() => onCompletionToggle(!showCompletion)}
+            className={`text-xs px-2 py-1 rounded-md transition-colors cursor-pointer ${showCompletion
+                ? "bg-emerald-100 text-emerald-700 font-medium"
+                : "text-slate-500 hover:text-slate-700 hover:bg-slate-100"
+              }`}
+          >
+            {showCompletion ? t("hideProgress") : t("showProgress")}
+          </button>
+        )}
+        <button
+          onClick={toggleFullscreen}
+          className="text-xs px-2 py-1 rounded-md text-slate-500 hover:text-slate-700 hover:bg-slate-100 cursor-pointer"
+          title={isFullscreen ? "Exit fullscreen" : "Fullscreen"}
+        >
+          {isFullscreen ? (
+            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 9V4.5M9 9H4.5M9 9L3.75 3.75M9 15v4.5M9 15H4.5M9 15l-5.25 5.25M15 9h4.5M15 9V4.5M15 9l5.25-5.25M15 15h4.5M15 15v4.5m0-4.5l5.25 5.25" /></svg>
+          ) : (
+            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3.75 3.75v4.5m0-4.5h4.5m-4.5 0L9 9M3.75 20.25v-4.5m0 4.5h4.5m-4.5 0L9 15M20.25 3.75h-4.5m4.5 0v4.5m0-4.5L15 9m5.25 11.25h-4.5m4.5 0v-4.5m0 4.5L15 15" /></svg>
+          )}
+        </button>
+        {onPaneCollapse && (
+          <button
+            onClick={onPaneCollapse}
+            data-testid="map-pane-collapse"
+            title={t("hideMapPaneTitle", { ns: "nav" })}
+            className="text-xs px-2 py-1 rounded-md text-slate-500 hover:text-slate-700 hover:bg-slate-100 cursor-pointer"
+          >
+            <span className="sr-only">{t("hideMapPane", { ns: "nav" })}</span>
+            <svg
+              className="w-4 h-4"
+              fill="none"
+              viewBox="0 0 24 24"
+              stroke="currentColor"
+              strokeWidth={2}
+            >
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                d="M13 5l7 7-7 7M5 5l7 7-7 7"
+              />
+            </svg>
+          </button>
+        )}
+      </div>
+    </div>
+  ) : null;
+
   // Show upload prompt only if we're done loading and there's no map
   if (!hasMap && !isLoadingMap) {
     return (
       <div
         data-testid="map-panel"
+        data-instance-id={instanceId}
         data-highlight-course={dataHighlightCourse}
-        className={`${effectiveClassName} ${isPortaled ? "h-full p-4 overflow-auto" : ""}`}
+        className={`${effectiveClassName} ${fillContainer ? "h-full flex flex-col" : ""}`}
         onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
         onDragLeave={() => setDragOver(false)}
         onDrop={handleDrop}
       >
-        <div
-          className={`border-2 border-dashed rounded-xl p-6 text-center transition-colors ${dragOver ? "border-blue-400 bg-blue-50" : "border-slate-200 bg-slate-50"
-            }`}
-        >
-          <svg className="mx-auto w-10 h-10 text-slate-300 mb-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 20l-5.447-2.724A1 1 0 013 16.382V5.618a1 1 0 011.447-.894L9 7m0 13l6-3m-6 3V7m6 10l4.553 2.276A1 1 0 0021 18.382V7.618a1 1 0 00-.553-.894L15 4m0 13V4m0 0L9 7" />
-          </svg>
-          <p className="text-sm text-slate-500 mb-2">{t("dropMapHere")}</p>
-          <button
-            onClick={() => fileInputRef.current?.click()}
-            className="px-3 py-1.5 text-xs bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors cursor-pointer"
+        {paneToolbar}
+        <div className={fillContainer ? "flex-1 p-4 overflow-auto" : ""}>
+          <div
+            className={`border-2 border-dashed rounded-xl p-6 text-center transition-colors ${dragOver ? "border-blue-400 bg-blue-50" : "border-slate-200 bg-slate-50"
+              }`}
           >
-            {t("uploadMap")}
-          </button>
-          <input
-            ref={fileInputRef}
-            type="file"
-            accept=".ocd"
-            className="hidden"
-            onChange={(e) => {
-              const file = e.target.files?.[0];
-              if (file) handleFile(file);
-            }}
-          />
-          {uploadMutation.isPending && (
-            <div className="mt-2 text-xs text-blue-600">{t("uploading")}</div>
-          )}
-          {uploadError && (
-            <div className="mt-2 text-xs text-red-600">{uploadError}</div>
-          )}
+            <svg className="mx-auto w-10 h-10 text-slate-300 mb-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 20l-5.447-2.724A1 1 0 013 16.382V5.618a1 1 0 011.447-.894L9 7m0 13l6-3m-6 3V7m6 10l4.553 2.276A1 1 0 0021 18.382V7.618a1 1 0 00-.553-.894L15 4m0 13V4m0 0L9 7" />
+            </svg>
+            <p className="text-sm text-slate-500 mb-2">{t("dropMapHere")}</p>
+            <button
+              onClick={() => fileInputRef.current?.click()}
+              className="px-3 py-1.5 text-xs bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors cursor-pointer"
+            >
+              {t("uploadMap")}
+            </button>
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept=".ocd"
+              className="hidden"
+              onChange={(e) => {
+                const file = e.target.files?.[0];
+                if (file) handleFile(file);
+              }}
+            />
+            {uploadMutation.isPending && (
+              <div className="mt-2 text-xs text-blue-600">{t("uploading")}</div>
+            )}
+            {uploadError && (
+              <div className="mt-2 text-xs text-red-600">{uploadError}</div>
+            )}
+          </div>
         </div>
       </div>
     );
@@ -424,12 +544,14 @@ export function MapPanel({
     return (
       <div
         data-testid="map-panel"
+        data-instance-id={instanceId}
         data-highlight-course={dataHighlightCourse}
-        className={`${effectiveClassName} ${isPortaled ? "h-full" : ""}`}
+        className={`${effectiveClassName} ${fillContainer ? "h-full flex flex-col" : ""}`}
       >
+        {paneToolbar}
         <div
-          className="flex items-center justify-center bg-slate-50 rounded-lg border border-slate-200"
-          style={{ height: effectiveHeight }}
+          className={`flex items-center justify-center bg-slate-50 rounded-lg border border-slate-200 ${fillContainer ? "flex-1" : ""}`}
+          style={fillContainer ? undefined : { height: effectiveHeight }}
         >
           <div className="text-center">
             <div className="w-6 h-6 border-2 border-blue-300 border-t-blue-600 rounded-full animate-spin mx-auto mb-2" />
@@ -444,63 +566,13 @@ export function MapPanel({
     <div
       ref={fullscreenRef}
       data-testid="map-panel"
+      data-instance-id={instanceId}
       data-highlight-course={dataHighlightCourse}
       className={`${effectiveClassName} ${
-        isPortaled || isFullscreen ? "bg-white flex flex-col" : ""
-      } ${isPortaled ? "h-full" : ""}`}
+        fillContainer || isFullscreen ? "bg-white flex flex-col" : ""
+      } ${fillContainer ? "h-full" : ""}`}
     >
-      {/* Toolbar (class selector, toggles, etc.) — always visible, even fullscreen */}
-      {!hideToolbar && (toolbar || isFullscreen) && (
-        <div className="flex items-center gap-3 px-1 py-2 flex-shrink-0">
-          {toolbar}
-          <div className="ml-auto flex items-center gap-2">
-            {canFilter && (
-              <button
-                onClick={() => setShowOnlyRelevant((v) => !v)}
-                className={`text-xs px-2 py-1 rounded-md transition-colors cursor-pointer ${showOnlyRelevant
-                    ? "bg-purple-100 text-purple-700 font-medium"
-                    : "text-slate-500 hover:text-slate-700 hover:bg-slate-100"
-                  }`}
-              >
-                {showOnlyRelevant ? t("showAllControls") : t("hideOtherControls")}
-              </button>
-            )}
-            {highlightedCourseNamesList.length > 0 && (
-              <button
-                onClick={() => setShowDescriptions((v) => !v)}
-                className={`text-xs px-2 py-1 rounded-md transition-colors cursor-pointer ${showDescriptions
-                    ? "bg-purple-100 text-purple-700 font-medium"
-                    : "text-slate-500 hover:text-slate-700 hover:bg-slate-100"
-                  }`}
-              >
-                {showDescriptions ? t("hideDescriptions") : t("descriptions")}
-              </button>
-            )}
-            {onCompletionToggle && (
-              <button
-                onClick={() => onCompletionToggle(!showCompletion)}
-                className={`text-xs px-2 py-1 rounded-md transition-colors cursor-pointer ${showCompletion
-                    ? "bg-emerald-100 text-emerald-700 font-medium"
-                    : "text-slate-500 hover:text-slate-700 hover:bg-slate-100"
-                  }`}
-              >
-                {showCompletion ? t("hideProgress") : t("showProgress")}
-              </button>
-            )}
-            <button
-              onClick={toggleFullscreen}
-              className="text-xs px-2 py-1 rounded-md text-slate-500 hover:text-slate-700 hover:bg-slate-100 cursor-pointer"
-              title={isFullscreen ? "Exit fullscreen" : "Fullscreen"}
-            >
-              {isFullscreen ? (
-                <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 9V4.5M9 9H4.5M9 9L3.75 3.75M9 15v4.5M9 15H4.5M9 15l-5.25 5.25M15 9h4.5M15 9V4.5M15 9l5.25-5.25M15 15h4.5M15 15v4.5m0-4.5l5.25 5.25" /></svg>
-              ) : (
-                <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3.75 3.75v4.5m0-4.5h4.5m-4.5 0L9 9M3.75 20.25v-4.5m0 4.5h4.5m-4.5 0L9 15M20.25 3.75h-4.5m4.5 0v4.5m0-4.5L15 9m5.25 11.25h-4.5m4.5 0v-4.5m0 4.5L15 15" /></svg>
-              )}
-            </button>
-          </div>
-        </div>
-      )}
+      {paneToolbar}
 
       {/* Map viewer */}
       <MapViewer
@@ -517,8 +589,8 @@ export function MapPanel({
         onControlClick={handleControlClick}
         className="w-full"
         style={{
-          height: isFullscreen || isPortaled ? undefined : height,
-          flex: isFullscreen || isPortaled ? "1 1 0" : undefined,
+          height: isFullscreen || fillContainer ? undefined : height,
+          flex: isFullscreen || fillContainer ? "1 1 0" : undefined,
         }}
         initialFitControls={fitToControls}
         focusControlIds={focusControlIds}
@@ -576,3 +648,13 @@ export function MapPanel({
     </div>
   );
 }
+
+/**
+ * Default-equality `memo`. The public prop surface is mostly primitives,
+ * plus a few arrays/records and React callbacks/nodes (`toolbar`,
+ * `onControlClick`, `onCompletionToggle`). Callers that pass those must
+ * stabilize them via `useCallback` / `useMemo`, or `memo` won't help —
+ * `CompetitionDashboard` is the only current caller in that boat, and is
+ * updated alongside this change.
+ */
+export const MapPanel = memo(MapPanelImpl);

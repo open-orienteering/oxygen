@@ -1,4 +1,3 @@
-import { createContext, useContext } from "react";
 import { useMediaQuery } from "../hooks/useMediaQuery";
 
 /**
@@ -32,21 +31,4 @@ export function getWideBreakpoint(): number {
 export function useIsWideViewport(): boolean {
   const breakpoint = getWideBreakpoint();
   return useMediaQuery(`(min-width: ${breakpoint}px)`);
-}
-
-/**
- * Internal context that flips to `true` only inside the React subtree of a
- * `<MapSlot>` that is currently portaling. Exported so `MapSlot` can set
- * its value; consumers should use `useIsPortaled()` instead of reading the
- * context directly.
- */
-export const PortaledContext = createContext(false);
-
-/**
- * Hook for child components (e.g. `MapPanel`) that need to know whether
- * they're currently rendered inside the portaled pane vs. inline. Returns
- * `false` outside any `<MapSlot>`.
- */
-export function useIsPortaled(): boolean {
-  return useContext(PortaledContext);
 }

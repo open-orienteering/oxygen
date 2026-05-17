@@ -2,8 +2,8 @@ import { useState, useMemo, Fragment } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { trpc } from "../lib/trpc";
-import { TrackMapPanel } from "../components/TrackMapPanel";
 import { MapSlot } from "../components/MapSlot";
+import { TrackMapPanel } from "../components/TrackMapPanel";
 import { SortHeader } from "../components/SortHeader";
 import { useSort } from "../hooks/useSort";
 import { StructuredSearchBar } from "../components/structured-search/StructuredSearchBar";
@@ -28,6 +28,44 @@ export function TracksPage() {
   const deleteRoute = trpc.livelox.deleteRoute.useMutation({
     onSuccess: () => routes.refetch(),
   });
+
+  // Persistent-pane wiring. Hoisted from `ExpandedDetail` so the
+  // page-level `<MapSlot>` below publishes something *for every*
+  // TracksPage render — not just when a row is expanded — which keeps
+  // the shell-owned MapPanel from unmounting whenever the user collapses
+  // the row or first lands on Tracks. `mapMetadata` is cached forever
+  // by MapPanel itself (`staleTime: Infinity`), so this query is free
+  // after first load; we use it here to know whether ExpandedDetail
+  // should render the Livelox fallback inline.
+  const mapMetadata = trpc.course.mapMetadata.useQuery(undefined, {
+    staleTime: Number.POSITIVE_INFINITY,
+  });
+  const hasOcdMap = mapMetadata.data != null;
+
+  const expandedPreview = trpc.livelox.getRoutePreview.useQuery(
+    { routeId: expandedId ?? 0 },
+    { enabled: !!expandedId, staleTime: 60_000 },
+  );
+
+  // Single-track GPS overlay for the persistent pane. Red is the
+  // app-wide single-track colour (matches RunnerMapPreview /
+  // CardMapPreview, and the multi-runner replay view uses its own
+  // per-runner colours via ReplayRouteLayer instead).
+  const gpsRoutes = useMemo(() => {
+    if (!expandedPreview.data) return undefined;
+    return [
+      {
+        color: "#e6194b",
+        points: expandedPreview.data.waypoints.map((w) => ({
+          lat: w.lat,
+          lng: w.lng,
+        })),
+      },
+    ];
+  }, [expandedPreview.data]);
+
+  const highlightCourseName =
+    expandedPreview.data?.courseName ?? undefined;
 
   const suggestionData = useMemo(
     () => ({
@@ -87,6 +125,18 @@ export function TracksPage() {
 
   return (
     <div className="space-y-4">
+      {/* Persistent map preview. Always pushed — even with no row
+          expanded — so the shell pane stays mounted while the user is
+          on Tracks (and across navigation in and out of Tracks). When a
+          row is expanded, `gpsRoutes` and `highlightCourseName` start
+          driving the overlay; otherwise the panel just shows the
+          competition map. */}
+      <MapSlot
+        fitToControls={false}
+        gpsRoutes={gpsRoutes}
+        highlightCourseName={highlightCourseName}
+      />
+
       {/* Header */}
       <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3 mb-4">
         <div className="shrink-0">
@@ -220,6 +270,9 @@ export function TracksPage() {
                         <td colSpan={6} className="px-4 pb-4 pt-2 bg-slate-50">
                           <ExpandedDetail
                             route={route}
+                            preview={expandedPreview.data ?? null}
+                            isPreviewLoading={expandedPreview.isLoading}
+                            hasOcdMap={hasOcdMap}
                             nameId={nameId}
                             onNavigate={navigate}
                           />
@@ -258,41 +311,65 @@ interface RouteRow {
   syncedAt: string | Date;
 }
 
+interface RoutePreviewData {
+  raceStartMs: number | null;
+  waypoints: { lat: number; lng: number; timeMs: number }[];
+  interruptions: number[];
+  liveloxClassId: number | null;
+  courseName: string | null;
+}
+
 function ExpandedDetail({
   route,
+  preview,
+  isPreviewLoading,
+  hasOcdMap,
   nameId,
   onNavigate,
 }: {
   route: RouteRow;
+  preview: RoutePreviewData | null;
+  isPreviewLoading: boolean;
+  hasOcdMap: boolean;
   nameId: string;
   onNavigate: ReturnType<typeof useNavigate>;
 }) {
   const { t } = useTranslation("tracks");
-  const preview = trpc.livelox.getRoutePreview.useQuery({ routeId: route.id });
 
-  const previewRoute = preview.data
-    ? {
-        color: "#e6194b",
-        raceStartMs: preview.data.raceStartMs,
-        waypoints: preview.data.waypoints,
-        interruptions: preview.data.interruptions,
-        liveloxClassId: preview.data.liveloxClassId,
-        runnerName: route.runnerName,
-        courseName: preview.data.courseName,
-      }
-    : null;
+  // When an .ocd map is uploaded the GPS overlay lives in the
+  // persistent shell pane (via the page-level `<MapSlot>`), so we
+  // intentionally don't render an inline map here in that case. The
+  // Livelox fallback below only kicks in when there's no .ocd, which
+  // is rare in practice.
+  const showInlineFallback = !hasOcdMap && !!preview;
+  const livePreview =
+    preview && showInlineFallback
+      ? {
+          color: "#e6194b",
+          raceStartMs: preview.raceStartMs,
+          waypoints: preview.waypoints,
+          interruptions: preview.interruptions,
+          liveloxClassId: preview.liveloxClassId,
+          runnerName: route.runnerName,
+          courseName: preview.courseName,
+        }
+      : null;
 
   return (
     <div className="space-y-3">
-      <MapSlot>
-        {previewRoute ? (
-          <TrackMapPanel route={previewRoute} height="640px" />
-        ) : (
-          <div className="h-[640px] flex items-center justify-center bg-slate-100 rounded-lg border border-slate-200">
-            <div className="w-5 h-5 border-2 border-slate-300 border-t-blue-500 rounded-full animate-spin" />
-          </div>
-        )}
-      </MapSlot>
+      {/* While the preview is still loading we briefly show a spinner
+          so the row doesn't visually collapse mid-fetch. */}
+      {isPreviewLoading && !preview && (
+        <div className="h-[80px] flex items-center justify-center bg-slate-100 rounded-lg border border-slate-200">
+          <div className="w-5 h-5 border-2 border-slate-300 border-t-blue-500 rounded-full animate-spin" />
+        </div>
+      )}
+
+      {/* Inline Livelox / no-map fallback. Only renders when there's
+          no .ocd map for the persistent pane to draw on. */}
+      {livePreview && (
+        <TrackMapPanel route={livePreview} height="640px" />
+      )}
 
       <div className="flex gap-2">
         {route.liveloxClassId && (

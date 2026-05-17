@@ -28,7 +28,6 @@ import {
 } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import { restrictToVerticalAxis } from "@dnd-kit/modifiers";
-import { MapPanel } from "../components/MapPanel";
 import { MapSlot } from "../components/MapSlot";
 
 export function ClassesPage() {
@@ -325,17 +324,15 @@ export function ClassesPage() {
       </BulkActionBar>
 
       {/* Map */}
-      <MapSlot>
-        <MapPanel
-          className="mt-6"
-          fitToControls
-          highlightCourseNames={
-            expandedId
-              ? (items.find((c) => c.id === expandedId)?.courseNames ?? [])
-              : undefined
-          }
-        />
-      </MapSlot>
+      <MapSlot
+        className="mt-6"
+        fitToControls
+        highlightCourseNames={
+          expandedId
+            ? (items.find((c) => c.id === expandedId)?.courseNames ?? [])
+            : undefined
+        }
+      />
     </>
   );
 }

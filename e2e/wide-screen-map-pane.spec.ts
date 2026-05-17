@@ -9,8 +9,8 @@ async function gotoControls(page: Page) {
 }
 
 // Wait for the map pane to appear in its visible state. The shell mounts
-// the pane lazily once the first <MapSlot> registers, so we explicitly
-// poll for the data-attribute rather than a fixed timeout.
+// the pane lazily once a page first publishes map state via `<MapSlot>`,
+// so we explicitly poll for the data-attribute rather than a fixed timeout.
 async function waitForPaneVisible(page: Page) {
   const pane = page.getByTestId("map-pane");
   await expect(pane).toBeVisible({ timeout: 5000 });
@@ -39,7 +39,7 @@ test.describe("Wide-screen map pane (>=2200px viewport)", () => {
     await resetPaneStorage(page);
   });
 
-  test("portals the Controls page map into the right pane on a wide viewport", async ({
+  test("renders the persistent MapPanel inside the right pane on a wide viewport", async ({
     page,
   }) => {
     await page.setViewportSize(WIDE);
@@ -47,12 +47,9 @@ test.describe("Wide-screen map pane (>=2200px viewport)", () => {
 
     await waitForPaneVisible(page);
 
-    // The map should be physically located inside the pane's portal target,
-    // not in the page's regular content flow.
-    const portaledMap = page.getByTestId("map-slot-portaled");
-    await expect(portaledMap).toHaveCount(1);
-    const paneTarget = page.getByTestId("map-pane-target");
-    await expect(paneTarget.getByTestId("map-slot-portaled")).toHaveCount(1);
+    // The single shell-owned MapPanel should live inside the pane.
+    const pane = page.getByTestId("map-pane");
+    await expect(pane.getByTestId("map-panel")).toHaveCount(1);
 
     // The shell container should be laid out as a 2-column grid.
     const shell = page.getByTestId("shell-container");
@@ -67,8 +64,10 @@ test.describe("Wide-screen map pane (>=2200px viewport)", () => {
 
     // The pane and its associated chrome should never appear.
     await expect(page.getByTestId("map-pane")).toHaveCount(0);
-    await expect(page.getByTestId("map-slot-portaled")).toHaveCount(0);
     await expect(page.getByTestId("show-map-pane")).toHaveCount(0);
+
+    // The inline MapPanel (MapSlot's narrow fallback) should still be on the page.
+    await expect(page.getByTestId("map-panel")).toHaveCount(1);
 
     // And the shell stays in single-column mode.
     const shell = page.getByTestId("shell-container");
@@ -166,19 +165,59 @@ test.describe("Wide-screen map pane (>=2200px viewport)", () => {
     expect(Math.round(persistedBox!.width)).toBe(afterWidth);
   });
 
-  test("pane stays visible across Runners \u2192 StartList \u2192 Results \u2192 Cards on wide viewport", async ({
+  test("pane stays visible across Runners \u2192 StartList \u2192 Results \u2192 Cards \u2192 Tracks on wide viewport", async ({
     page,
   }) => {
     await page.setViewportSize(WIDE);
 
-    // Each of the 4 non-overflow tabs newly mounts a page-level <MapSlot>
-    // so the pane shouldn't flip on/off during navigation. We visit each
-    // in turn and assert the pane stays data-visible=true the whole way.
-    for (const path of ["runners", "startlist", "results", "cards"]) {
+    // Each of these non-overflow tabs publishes map state on mount, so the
+    // pane shouldn't flip on/off during navigation. We visit each in turn
+    // and assert the pane stays data-visible=true the whole way. Tracks
+    // is included to lock down the page-level MapSlot push that survives
+    // regardless of row expansion (previously gated on an expanded row).
+    for (const path of ["runners", "startlist", "results", "cards", "tracks"]) {
       await page.goto(`/itest/${path}`);
       await waitForPaneVisible(page);
-      // Exactly one map should be portaled into the pane at any time.
-      await expect(page.getByTestId("map-slot-portaled")).toHaveCount(1);
+      const pane = page.getByTestId("map-pane");
+      // Exactly one MapPanel inside the pane at all times.
+      await expect(pane.getByTestId("map-panel")).toHaveCount(1);
+    }
+  });
+
+  test("persistent MapPanel keeps its instance across navigation", async ({
+    page,
+  }) => {
+    // The shell-owned MapPanel is mounted once for the wide-pane's
+    // lifetime. Switching routes only updates its props via the
+    // map-props-store; the React fibre — and therefore `useId()` —
+    // stays the same. If this assertion fails, MapPanel is remounting
+    // per navigation and the perf win of this refactor is gone.
+    //
+    // Tracks is included in the path because it's the page that
+    // historically only published map state from an expanded-row
+    // subcomponent — visiting it with no row expanded used to clear
+    // the store and unmount the persistent MapPanel.
+    await page.setViewportSize(WIDE);
+
+    async function paneInstanceId(): Promise<string | null> {
+      return page
+        .getByTestId("map-pane")
+        .getByTestId("map-panel")
+        .getAttribute("data-instance-id");
+    }
+
+    await page.goto("/itest/runners");
+    await waitForPaneVisible(page);
+    const initialId = await paneInstanceId();
+    expect(initialId).toBeTruthy();
+
+    for (const path of ["results", "tracks", "cards", "runners"]) {
+      await page.goto(`/itest/${path}`);
+      await waitForPaneVisible(page);
+      const id = await paneInstanceId();
+      expect(id, `MapPanel remounted when navigating to /${path}`).toBe(
+        initialId,
+      );
     }
   });
 
@@ -194,8 +233,7 @@ test.describe("Wide-screen map pane (>=2200px viewport)", () => {
     await page.goto(`/itest/results?q=${q}`);
     await waitForPaneVisible(page);
 
-    const portaledMap = page.getByTestId("map-slot-portaled");
-    const panel = portaledMap.getByTestId("map-panel");
+    const panel = page.getByTestId("map-pane").getByTestId("map-panel");
     // We don't pin the exact course name to the seed (it depends on the
     // class-to-course mapping); we just assert the attribute is non-empty,
     // i.e. the page is driving a highlight from the class filter.
@@ -215,8 +253,7 @@ test.describe("Wide-screen map pane (>=2200px viewport)", () => {
     await page.goto("/itest/results?runner=1");
     await waitForPaneVisible(page);
 
-    const portaledMap = page.getByTestId("map-slot-portaled");
-    const panel = portaledMap.getByTestId("map-panel");
+    const panel = page.getByTestId("map-pane").getByTestId("map-panel");
     // Runner 1's course is resolved server-side; we don't pin the name,
     // just assert the highlight ends up populated.
     await expect(panel).toHaveAttribute(
@@ -233,13 +270,17 @@ test.describe("Wide-screen map pane (>=2200px viewport)", () => {
     await gotoControls(page);
     await waitForPaneVisible(page);
 
-    // Shrink → pane chrome disappears, map remounts inline.
+    // Shrink → pane chrome disappears, MapSlot's inline fallback renders
+    // on the page instead.
     await page.setViewportSize(NARROW);
     await expect(page.getByTestId("map-pane")).toHaveCount(0);
-    await expect(page.getByTestId("map-slot-portaled")).toHaveCount(0);
+    await expect(page.getByTestId("map-panel")).toHaveCount(1);
 
-    // Grow back → pane reappears.
+    // Grow back → pane reappears with its own MapPanel.
     await page.setViewportSize(WIDE);
     await waitForPaneVisible(page);
+    await expect(
+      page.getByTestId("map-pane").getByTestId("map-panel"),
+    ).toHaveCount(1);
   });
 });

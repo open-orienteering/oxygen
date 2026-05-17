@@ -25,8 +25,9 @@ import { DbLoadIndicator } from "../components/DbLoadIndicator";
 import { useExternalChanges } from "../hooks/useExternalChanges";
 import { SyncStatusIndicator } from "../components/SyncStatusIndicator";
 import { usePerformanceSensitive } from "../lib/performance-mode";
-import { MapSlotProvider } from "../components/MapSlot";
 import { useIsWideViewport } from "../components/map-pane-shared";
+import { useMapPanelProps } from "../lib/map-props-store";
+import { MapPanel } from "../components/MapPanel";
 import { MapPane } from "../components/MapPane";
 import { useLocalStorage } from "../hooks/useLocalStorage";
 
@@ -242,8 +243,6 @@ export function CompetitionShell() {
     "oxygen.mapPane.width",
     900,
   );
-  const [paneTarget, setPaneTarget] = useState<HTMLElement | null>(null);
-  const [paneActive, setPaneActive] = useState(false);
 
   // Visible width of the pane (clamped to a sane range against the
   // current viewport). The CSS variable is mirrored from this on every
@@ -265,22 +264,6 @@ export function CompetitionShell() {
     Math.min(paneUpperBound, paneWidth),
   );
   const wideContainer = isWide && !paneCollapsed;
-  const paneVisible = wideContainer && paneActive;
-
-  // The container element holds the `--map-pane-width` CSS variable that
-  // drives the grid column width. The resize handle writes to it
-  // imperatively during a drag (no React re-renders); commit-to-state
-  // happens only on pointer-up, at which point React's next render writes
-  // the new value back into the inline style.
-  const containerRef = useRef<HTMLDivElement>(null);
-  const setLivePaneWidth = useCallback((px: number) => {
-    if (containerRef.current) {
-      containerRef.current.style.setProperty(
-        "--map-pane-width",
-        `${px}px`,
-      );
-    }
-  }, []);
 
   const handleTabChange = (tab: Tab) => {
     const tabDef = tabs.find((t) => t.id === tab);
@@ -320,26 +303,6 @@ export function CompetitionShell() {
     );
   }
 
-  // Container CSS: when the pane is visible we drop the max-w-7xl cap, lay
-  // out as a 2-column grid, and embed the persisted pane width directly in
-  // the inline style so the initial render already has the right column
-  // size. The drag handle mutates this via setProperty without re-rendering
-  // React; on commit, React's next render writes the new value back.
-  const containerClass = wideContainer
-    ? "px-4 sm:px-6 lg:px-8 py-6 w-full"
-    : "max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6";
-  const containerStyle: React.CSSProperties = {
-    ["--map-pane-width" as never]: `${clampedPaneWidth}px`,
-    ...(paneVisible
-      ? {
-          display: "grid",
-          gridTemplateColumns: "minmax(0,1fr) var(--map-pane-width, 900px)",
-          gap: "1.5rem",
-          alignItems: "start",
-        }
-      : {}),
-  };
-
   const headerInnerClass = wideContainer
     ? "px-4 sm:px-6 lg:px-8 w-full"
     : "max-w-7xl mx-auto px-4 sm:px-6 lg:px-8";
@@ -373,8 +336,10 @@ export function CompetitionShell() {
               </h1>
             </div>
             <div className="flex items-center gap-2">
-              {isWide && paneCollapsed && paneActive && (
-                <ShowMapPaneButton onShow={() => setPaneCollapsed(false)} />
+              {isWide && paneCollapsed && (
+                <ShellHeaderMapPaneButton
+                  onShow={() => setPaneCollapsed(false)}
+                />
               )}
               <ReaderStatusIndicator />
               <PrinterStatusIndicator />
@@ -518,56 +483,41 @@ export function CompetitionShell() {
       <RegistrationDialogProvider>
         <CardNotification />
 
-        {/* Tab Content via nested routes */}
-        <MapSlotProvider
-          target={paneTarget}
-          onActiveChange={setPaneActive}
-          paneEnabled={!paneCollapsed}
+        {/* Tab Content via nested routes. PaneContainer owns the wide-screen
+            grid layout AND the store subscription that drives pane visibility,
+            so a `setMapProps(...)` in any page only re-renders PaneContainer's
+            leaf subtree — not the whole route tree. */}
+        <PaneContainer
+          wideContainer={wideContainer}
+          clampedPaneWidth={clampedPaneWidth}
+          onCollapse={() => setPaneCollapsed(true)}
+          onWidthCommit={setPaneWidth}
         >
-          <div
-            ref={containerRef}
-            className={containerClass}
-            style={containerStyle}
-            data-testid="shell-container"
-            data-pane-visible={paneVisible ? "true" : "false"}
-          >
-            <main className="min-w-0">
-              <Suspense fallback={<div className="flex justify-center py-12"><div className="w-8 h-8 border-4 border-blue-200 border-t-blue-600 rounded-full animate-spin" /></div>}>
-              <Routes>
-                <Route index element={<CompetitionDashboard />} />
-                <Route path="event" element={<EventPage />} />
-                <Route path="runners" element={<RunnerManagement />} />
-                <Route path="startlist" element={<StartListPage />} />
-                <Route path="results" element={<ResultsPage />} />
-                <Route path="classes" element={<ClassesPage />} />
-                <Route path="courses" element={<CoursesPage />} />
-                <Route path="controls" element={<ControlsPage />} />
-                <Route path="clubs" element={<ClubsPage />} />
-                <Route path="cards" element={<CardsPage />} />
-                <Route path="start-station" element={<StartStation />} />
-                <Route path="finish-station" element={<FinishStation />} />
-                <Route path="card-readout" element={<CardReadout />} />
-                <Route path="registration" element={<Navigate to="" replace />} />
-                <Route path="backup-punches" element={<BackupPunchesPage />} />
-                <Route path="test-lab" element={<TestLabPage />} />
-                <Route path="tracks" element={<TracksPage />} />
-                <Route path="tracks/replay" element={<TracksReplayPage />} />
-                <Route path="registration-trends" element={<RegistrationTrendsPage />} />
-                <Route path="*" element={<Navigate to="" replace />} />
-              </Routes>
-              </Suspense>
-            </main>
-            {wideContainer && (
-              <MapPane
-                setPortalTarget={setPaneTarget}
-                visible={paneVisible}
-                onCollapse={() => setPaneCollapsed(true)}
-                onLiveResize={setLivePaneWidth}
-                onWidthCommit={setPaneWidth}
-              />
-            )}
-          </div>
-        </MapSlotProvider>
+          <Suspense fallback={<div className="flex justify-center py-12"><div className="w-8 h-8 border-4 border-blue-200 border-t-blue-600 rounded-full animate-spin" /></div>}>
+          <Routes>
+            <Route index element={<CompetitionDashboard />} />
+            <Route path="event" element={<EventPage />} />
+            <Route path="runners" element={<RunnerManagement />} />
+            <Route path="startlist" element={<StartListPage />} />
+            <Route path="results" element={<ResultsPage />} />
+            <Route path="classes" element={<ClassesPage />} />
+            <Route path="courses" element={<CoursesPage />} />
+            <Route path="controls" element={<ControlsPage />} />
+            <Route path="clubs" element={<ClubsPage />} />
+            <Route path="cards" element={<CardsPage />} />
+            <Route path="start-station" element={<StartStation />} />
+            <Route path="finish-station" element={<FinishStation />} />
+            <Route path="card-readout" element={<CardReadout />} />
+            <Route path="registration" element={<Navigate to="" replace />} />
+            <Route path="backup-punches" element={<BackupPunchesPage />} />
+            <Route path="test-lab" element={<TestLabPage />} />
+            <Route path="tracks" element={<TracksPage />} />
+            <Route path="tracks/replay" element={<TracksReplayPage />} />
+            <Route path="registration-trends" element={<RegistrationTrendsPage />} />
+            <Route path="*" element={<Navigate to="" replace />} />
+          </Routes>
+          </Suspense>
+        </PaneContainer>
 
         {/* Floating recent cards panel */}
         <RecentCards />
@@ -583,6 +533,108 @@ export function CompetitionShell() {
       />
     </div>
   );
+}
+
+// ─── PaneContainer ──────────────────────────────────────────
+//
+// Isolates the subscription to `map-props-store` from the shell. Without
+// this split, a `setMapProps(...)` from any page would force the shell
+// (and therefore `<Routes>` + every sibling) to re-render. PaneContainer
+// is the only thing that re-renders on store updates; the route subtree
+// it receives as `children` is referentially stable across those updates
+// (same JSX element from the shell's last render), so React skips the
+// reconciliation.
+
+interface PaneContainerProps {
+  wideContainer: boolean;
+  clampedPaneWidth: number;
+  onCollapse: () => void;
+  onWidthCommit: (px: number) => void;
+  children: React.ReactNode;
+}
+
+function PaneContainer({
+  wideContainer,
+  clampedPaneWidth,
+  onCollapse,
+  onWidthCommit,
+  children,
+}: PaneContainerProps) {
+  const mapProps = useMapPanelProps();
+  const paneVisible = wideContainer && mapProps != null;
+
+  // The ref + imperative setter mirror what was previously held by the
+  // shell: the resize handle writes `--map-pane-width` to this element
+  // during drag (no React re-renders), and on pointer-up the committed
+  // width gets reflected back into React state via `onWidthCommit`.
+  const containerRef = useRef<HTMLDivElement>(null);
+  const setLivePaneWidth = useCallback((px: number) => {
+    if (containerRef.current) {
+      containerRef.current.style.setProperty("--map-pane-width", `${px}px`);
+    }
+  }, []);
+
+  const containerClass = wideContainer
+    ? "px-4 sm:px-6 lg:px-8 py-6 w-full"
+    : "max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6";
+  const containerStyle: React.CSSProperties = {
+    ["--map-pane-width" as never]: `${clampedPaneWidth}px`,
+    ...(paneVisible
+      ? {
+          display: "grid",
+          gridTemplateColumns: "minmax(0,1fr) var(--map-pane-width, 900px)",
+          gap: "1.5rem",
+          alignItems: "start",
+        }
+      : {}),
+  };
+
+  return (
+    <div
+      ref={containerRef}
+      className={containerClass}
+      style={containerStyle}
+      data-testid="shell-container"
+      data-pane-visible={paneVisible ? "true" : "false"}
+    >
+      <main className="min-w-0">{children}</main>
+      {wideContainer && (
+        <MapPane
+          visible={paneVisible}
+          onLiveResize={setLivePaneWidth}
+          onWidthCommit={onWidthCommit}
+        >
+          {/* Persistent MapPanel — mounted once for the wide-screen pane's
+              lifetime, regardless of route changes. Pages drive it via
+              `useMapState(...)` through `<MapSlot>`. `fillContainer` makes
+              MapPanel fill the pane's flex height. The collapse button
+              is hosted inside MapPanel's own (now unified) toolbar via
+              `onPaneCollapse`, so MapPane itself has no chrome of its
+              own — one consistent header across pages. */}
+          {mapProps && (
+            <MapPanel
+              {...mapProps}
+              fillContainer
+              onPaneCollapse={onCollapse}
+            />
+          )}
+        </MapPane>
+      )}
+    </div>
+  );
+}
+
+// ─── Shell Header Map Pane Button ───────────────────────────
+//
+// Subscribes to the store to know whether *any* page is currently
+// driving the pane; if so AND the user has collapsed it, surface the
+// "show map" pill in the header. Lives in a leaf component so the
+// subscription doesn't re-render the rest of the header.
+
+function ShellHeaderMapPaneButton({ onShow }: { onShow: () => void }) {
+  const mapProps = useMapPanelProps();
+  if (mapProps == null) return null;
+  return <ShowMapPaneButton onShow={onShow} />;
 }
 
 // ─── Show Map Pane Button ───────────────────────────────────

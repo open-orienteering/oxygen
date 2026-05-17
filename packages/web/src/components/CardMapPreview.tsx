@@ -1,6 +1,6 @@
 import { useMemo } from "react";
 import { trpc } from "../lib/trpc";
-import { MapPanel } from "./MapPanel";
+import { MapSlot } from "./MapSlot";
 
 interface Props {
   /**
@@ -80,14 +80,19 @@ export function CardMapPreview({ cardNo, defaultCourseNames }: Props) {
     ];
   }, [route.data]);
 
-  const highlightCourseNames = readoutCourseName
-    ? [readoutCourseName]
-    : defaultCourseNames;
+  // Stable identity for the highlight array so React.memo on the shell-
+  // owned MapPanel can skip re-renders when the underlying values are
+  // unchanged.
+  const highlightCourseNames = useMemo(
+    () =>
+      readoutCourseName ? [readoutCourseName] : defaultCourseNames,
+    [readoutCourseName, defaultCourseNames],
+  );
 
   const hasCourse = !!highlightCourseNames?.length;
 
   return (
-    <MapPanel
+    <MapSlot
       fitToControls
       filterMode={hasCourse ? "course" : "all"}
       highlightCourseNames={highlightCourseNames}

@@ -8,7 +8,6 @@ import { useSort } from "../hooks/useSort";
 import { useTableSelection } from "../hooks/useTableSelection";
 import { BulkActionBar } from "../components/BulkActionBar";
 import { CourseImportDialog } from "../components/CourseImportDialog";
-import { MapPanel } from "../components/MapPanel";
 import { MapSlot } from "../components/MapSlot";
 import { StructuredSearchBar } from "../components/structured-search/StructuredSearchBar";
 import { useStructuredSearch } from "../hooks/useStructuredSearch";
@@ -276,18 +275,16 @@ export function CoursesPage() {
 
       {/* Map — selection drives the filter when non-empty, otherwise the
           expanded row is highlighted as before. */}
-      <MapSlot>
-        <MapPanel
-          className="mt-6"
-          fitToControls
-          highlightCourseName={
-            selectedCourseNames.length === 0 && expandedId
-              ? items.find((c) => c.id === expandedId)?.name
-              : undefined
-          }
-          highlightCourseNames={selectedCourseNames.length > 0 ? selectedCourseNames : undefined}
-        />
-      </MapSlot>
+      <MapSlot
+        className="mt-6"
+        fitToControls
+        highlightCourseName={
+          selectedCourseNames.length === 0 && expandedId
+            ? items.find((c) => c.id === expandedId)?.name
+            : undefined
+        }
+        highlightCourseNames={selectedCourseNames.length > 0 ? selectedCourseNames : undefined}
+      />
 
       {/* Bulk action bar — floating at bottom, same as Classes/Runners */}
       <BulkActionBar count={selection.count} onDeselectAll={selection.clearSelection}>
