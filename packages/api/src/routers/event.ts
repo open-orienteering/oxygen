@@ -218,10 +218,12 @@ export const eventRouter = router({
         }
       }
 
+      // Resolve course seq for each class' courseId UUID.
+      const courseSeqById = new Map(courses.map((c) => [c.id, c.seq]));
       const classInfos: ClassInfo[] = classes.map((c) => ({
-        id: c.id,
+        id: c.seq,
         name: c.name,
-        courseId: c.courseId ?? "",
+        courseId: c.courseId ? courseSeqById.get(c.courseId) ?? 0 : 0,
         sortIndex: c.sortIndex,
         runnerCount: runnerCountByClass.get(c.id) ?? 0,
         classFee: c.classFeeCents || undefined,
@@ -239,7 +241,7 @@ export const eventRouter = router({
             c.id,
           );
           return {
-            id: c.id,
+            id: c.seq,
             name: c.name,
             length: c.lengthM,
             controls: "", // deprecated raw string; clients use expectedPositions
@@ -294,19 +296,19 @@ export const eventRouter = router({
 
       const runners = await ctx.db.runner.findMany({
         where,
-        include: { class: { select: { name: true } } },
+        include: { class: { select: { name: true, seq: true } } },
         orderBy: [{ class: { sortIndex: "asc" } }, { startNo: "asc" }],
       });
 
       const zeroTime = ctx.event.zeroTime;
       return runners.map(
         (r): RunnerInfo => ({
-          id: r.id,
+          id: r.seq,
           name: r.name,
           cardNo: r.cardNo,
-          clubId: r.eventorClubId ? r.eventorClubId.toString() : "",
+          clubId: r.eventorClubId ? Number(r.eventorClubId) : 0,
           clubName: r.clubName,
-          classId: r.classId ?? "",
+          classId: r.class?.seq ?? 0,
           className: r.class?.name ?? "",
           startNo: r.startNo,
           startTime: toAbsolute(r.startTime, zeroTime),
@@ -336,7 +338,7 @@ export const eventRouter = router({
       if (r.eventorClubId) {
         if (!byEventor.has(r.eventorClubId)) {
           byEventor.set(r.eventorClubId, {
-            id: r.eventorClubId.toString(),
+            id: Number(r.eventorClubId),
             name: r.clubName,
             eventorId: Number(r.eventorClubId),
           });
@@ -344,7 +346,7 @@ export const eventRouter = router({
       } else if (r.clubName) {
         const k = r.clubName.toLowerCase();
         if (!byName.has(k)) {
-          byName.set(k, { id: r.clubName, name: r.clubName });
+          byName.set(k, { id: 0, name: r.clubName });
         }
       }
     }

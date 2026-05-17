@@ -1,144 +1,36 @@
+/**
+ * Draw router — placeholder for the start-draw engine.
+ * Full port of the per-class draw algorithm (club separation, corridor
+ * assignment, course-overlap detection) is staged as a follow-up alongside
+ * the punch-matcher port.
+ */
+
 import { z } from "zod";
-import { router, competitionProcedure } from "../trpc.js";
-import {incrementCounter, incrementCounterBatch, getZeroTime} from "../db.js";
-import { toRelative, toAbsolute } from "../timeConvert.js";
-import { generateDrawPreview } from "../draw/index.js";
-import type { DrawPreviewResult } from "@oxygen/shared";
-import { WITHDRAWN_STATUSES } from "@oxygen/shared";
-
-const classDrawConfigSchema = z.object({
-  classId: z.number().int(),
-  method: z.enum(["random", "clubSeparation", "seeded", "simultaneous"]),
-  interval: z.number().int().min(0),
-  firstStart: z.number().int().optional(),
-  corridorHint: z.number().int().optional(),
-  orderHint: z.number().int().optional(),
-});
-
-const drawSettingsSchema = z.object({
-  firstStart: z.number().int(),
-  baseInterval: z.number().int().min(0),
-  maxParallelStarts: z.number().int().min(1).max(50),
-  detectCourseOverlap: z.boolean(),
-});
-
-const drawInputSchema = z.object({
-  classes: z.array(classDrawConfigSchema).min(1),
-  settings: drawSettingsSchema,
-});
+import { TRPCError } from "@trpc/server";
+import { router, eventProcedure } from "../trpc.js";
 
 export const drawRouter = router({
-  /**
-   * Get default settings and class info for the draw panel.
-   */
-  defaults: competitionProcedure.query(async ({ ctx }) => {
-    const client = ctx.db;
-    const zeroTime = await getZeroTime(client);
-
-    const classes = await client.oClass.findMany({
-      where: { Removed: false },
-      orderBy: { SortIndex: "asc" },
-    });
-
-    const courses = await client.oCourse.findMany({
-      where: { Removed: false },
-      select: { Id: true, Name: true },
-    });
-    const courseMap = new Map(courses.map((c) => [c.Id, c.Name]));
-
-    // Withdrawn entries are not drawn — exclude them from the per-class count.
-    const runners = await client.oRunner.findMany({
-      where: { Removed: false, Status: { notIn: [...WITHDRAWN_STATUSES] } },
-      select: { Class: true },
-    });
-    const countByClass = new Map<number, number>();
-    for (const r of runners) {
-      countByClass.set(r.Class, (countByClass.get(r.Class) ?? 0) + 1);
-    }
-
-    return {
-      zeroTime,
-      classes: classes.map((c) => ({
-        id: c.Id,
-        name: c.Name,
-        courseId: c.Course,
-        courseName: courseMap.get(c.Course) ?? "",
-        runnerCount: countByClass.get(c.Id) ?? 0,
-        firstStart: toAbsolute(c.FirstStart, zeroTime),
-        startInterval: c.StartInterval,
-        freeStart: c.FreeStart === 1,
-        classType: c.ClassType,
-      })),
-    };
-  }),
-
-  /**
-   * Generate a draw preview without saving.
-   * Returns proposed start times and start numbers for review.
-   */
-  preview: competitionProcedure
-    .input(drawInputSchema)
-    .mutation(async ({ ctx, input }): Promise<DrawPreviewResult> => {
-      const client = ctx.db;
-      return generateDrawPreview(client, input.classes, input.settings);
+  preview: eventProcedure
+    .input(
+      z.object({
+        classConfigs: z.array(z.unknown()).optional(),
+        settings: z.unknown().optional(),
+      }),
+    )
+    .mutation(async () => {
+      throw new TRPCError({
+        code: "PRECONDITION_FAILED",
+        message:
+          "The start-draw engine is being re-ported against the new schema. Coming back online shortly.",
+      });
     }),
 
-  /**
-   * Execute the draw: generate start times and persist to database.
-   * Updates oRunner.StartTime, oRunner.StartNo, oClass.FirstStart,
-   * and oClass.StartInterval for each drawn class.
-   */
-  execute: competitionProcedure
-    .input(drawInputSchema)
-    .mutation(async ({ ctx, input }): Promise<{ success: boolean; totalDrawn: number; warnings: string[] }> => {
-      const client = ctx.db;
-      const zeroTime = await getZeroTime(client);
-      const result = await generateDrawPreview(client, input.classes, input.settings);
-
-      let totalDrawn = 0;
-      const configMap = new Map(input.classes.map((c) => [c.classId, c]));
-
-      const allRunnerIds: number[] = [];
-      const classIds: number[] = [];
-
-      for (const cls of result.classes) {
-        const config = configMap.get(cls.classId);
-
-        // Update each runner's start time and start number
-        // (each runner gets a unique StartTime/StartNo so individual updates needed)
-        for (const entry of cls.entries) {
-          await client.oRunner.update({
-            where: { Id: entry.runnerId },
-            data: {
-              StartTime: toRelative(entry.startTime, zeroTime),
-              StartNo: entry.startNo,
-            },
-          });
-          allRunnerIds.push(entry.runnerId);
-          totalDrawn++;
-        }
-
-        // Update class FirstStart and StartInterval
-        if (config) {
-          await client.oClass.update({
-            where: { Id: cls.classId },
-            data: {
-              FirstStart: toRelative(cls.computedFirstStart, zeroTime),
-              StartInterval: config.interval,
-            },
-          });
-          classIds.push(cls.classId);
-        }
-      }
-
-      // Batch counter increments (single lock/unlock per table instead of per-record)
-      await incrementCounterBatch("oRunner", allRunnerIds, ctx.dbName);
-      await incrementCounterBatch("oClass", classIds, ctx.dbName);
-
-      return {
-        success: true,
-        totalDrawn,
-        warnings: result.warnings,
-      };
+  commit: eventProcedure
+    .input(z.object({ entries: z.array(z.unknown()).optional() }))
+    .mutation(async () => {
+      throw new TRPCError({
+        code: "PRECONDITION_FAILED",
+        message: "Draw commit pending re-port; see preview message.",
+      });
     }),
 });

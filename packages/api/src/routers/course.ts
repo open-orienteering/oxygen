@@ -1,1673 +1,310 @@
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
-import { router, competitionProcedure } from "../trpc.js";
+import { router, eventProcedure } from "../trpc.js";
 import type { PrismaClient } from "@prisma/client";
-import {ensureMapFilesTable, ensureMapTilesTable, incrementCounter, incrementCounterBatch, fireMapUpload} from "../db.js";
-import { ocadBoundsToWgs84, computeMapNorthOffset, mapMmToWgs84, type OcadCrs } from "../map-projection.js";
+import { controlStatusToValue } from "../statusConvert.js";
 import {
-  CourseSummary,
-  CourseDetail,
-  ControlStatus,
   WITHDRAWN_STATUSES,
-  IN_FOREST_EXCLUDED_STATUSES,
-  isFinished,
+  type CourseSummary,
+  type CourseDetail,
   type ExpectedPosition,
-  type RunnerStatusValue,
+  ControlStatus,
 } from "@oxygen/shared";
-import { parseIOFCourseData, parseIOFCourseDataWithGeometry, type ParsedCourseData, type GeoJSONFeatureCollection, type ParsedCourse } from "../iof-course-parser.js";
-import { parseOCDCourseData } from "../ocd-course-parser.js";
 
-/**
- * Extract a numeric suffix from a control ID string (e.g. "STA1" → 1, "FIN2" → 2).
- * Returns 1 as default if no numeric suffix is found.
- * @internal Exported for unit testing.
- */
-export function getControlSuffix(id: string): number {
-  const match = id.match(/(\d+)\s*$/);
-  return match ? parseInt(match[1], 10) || 1 : 1;
-}
-
-/**
- * MeOS-style IDs for start/finish controls.
- * Start N → 211100 + N, Finish N → 311100 + N
- * @internal Exported for unit testing.
- */
-export function meosStartId(n: number): number {
-  return 211100 + n;
-}
-export function meosFinishId(n: number): number {
-  return 311100 + n;
-}
-
-/**
- * MeOS-style names for start/finish controls.
- * Start N → "Start N", Finish N → "Mål N"
- * @internal Exported for unit testing.
- */
-export function meosStartName(n: number): string {
-  return n > 1 ? `Start ${n}` : "Start 1";
-}
-export function meosFinishName(n: number): string {
-  return n > 1 ? `Mål ${n}` : "Mål 1";
-}
-
-/**
- * Normalize a class name for fuzzy comparison: lowercase and strip whitespace
- * and common punctuation (".,;:_-/\\"). This lets the importer match e.g.
- * `"H 21"` against `"H21"`, `"D-21"` against `"D21"`, or `"H21,Elit"` against
- * `"H21 Elit"` when the only difference is punctuation/spacing.
- *
- * @internal Exported for unit testing.
- */
-export function normalizeClassName(name: string): string {
-  return name.toLowerCase().replace(/[\s.,;:_\-/\\]+/g, "");
-}
-
-/**
- * How a class name was matched against the DB classes. Exposed in the import
- * preview so the UI can distinguish exact matches (high confidence, can be
- * hidden by default) from heuristic matches (worth a manual review).
- */
-export type ClassMatchType = "exact" | "normalized" | "substring" | "none";
-
-/**
- * Find the best DB class match for an XML class name, used by the course
- * import preview. Tries, in order:
- *   1. Exact match (case-insensitive) — `matchType: "exact"`.
- *   2. Punctuation- and whitespace-insensitive exact match — `matchType: "normalized"`.
- *   3. Punctuation- and whitespace-insensitive substring match — `matchType: "substring"`.
- *
- * @internal Exported for unit testing.
- */
-export function findBestClassMatch<T extends { Id: number; Name: string }>(
-  xmlClassName: string,
-  dbClasses: T[],
-): { id: number; name: string; matchType: Exclude<ClassMatchType, "none"> } | null {
-  const xmlLower = xmlClassName.toLowerCase();
-  const exact = dbClasses.find((c) => c.Name.toLowerCase() === xmlLower);
-  if (exact) return { id: exact.Id, name: exact.Name, matchType: "exact" };
-
-  const xmlNorm = normalizeClassName(xmlClassName);
-  if (xmlNorm.length === 0) return null;
-
-  const normExact = dbClasses.find(
-    (c) => normalizeClassName(c.Name) === xmlNorm,
-  );
-  if (normExact)
-    return { id: normExact.Id, name: normExact.Name, matchType: "normalized" };
-
-  // Substring fallback: among candidates, prefer the longest DB normalized
-  // name (most specific class wins). E.g. for XML "H21 Elit Lång", both "H21"
-  // and "H21 Elit" are substrings; the latter is the better match.
-  let best: { class: T; normLen: number } | null = null;
-  for (const c of dbClasses) {
-    const dbNorm = normalizeClassName(c.Name);
-    if (dbNorm.length === 0) continue;
-    if (!dbNorm.includes(xmlNorm) && !xmlNorm.includes(dbNorm)) continue;
-    if (!best || dbNorm.length > best.normLen) {
-      best = { class: c, normLen: dbNorm.length };
-    }
+/** Look up a course by per-event seq, returning the full row. */
+async function getCourseBySeq(
+  db: PrismaClient,
+  eventId: bigint,
+  seq: number,
+) {
+  const c = await db.course.findFirst({
+    where: { eventId, seq, removed: false },
+  });
+  if (!c) {
+    throw new TRPCError({
+      code: "NOT_FOUND",
+      message: `Course ${seq} not found`,
+    });
   }
-  if (best)
-    return { id: best.class.Id, name: best.class.Name, matchType: "substring" };
-
-  return null;
+  return c;
 }
 
-// ─── Course-controls ↔ punch-code resolvers ──────────────────────────────────
-//
-// MeOS stores `oCourse.Controls` as a semicolon-separated list of `oControl.Id`
-// values, never the punch codes themselves (verified against MeOS upstream
-// `oCourse.cpp:137` `getControls()` and `MeosSQL.cpp` column definition).
-// Live punch codes live on `oControl.Numbers` and may differ from `Id` once
-// anyone edits a control's punch code on the Controls page.
-//
-// These helpers translate between the two views so that both punch matching
-// and the Courses-page UI can speak punch codes while the database keeps the
-// stable Id-based references MeOS expects.
-
-/**
- * Parse the raw `oCourse.Controls` string into a list of `oControl.Id`
- * references, dropping non-numeric / non-positive tokens.
- *
- * @internal Exported for unit testing.
- */
-export function parseCourseControlIds(controlsField: string): number[] {
-  return controlsField
-    .split(";")
-    .map((s) => s.trim())
-    .filter(Boolean)
-    .map((s) => parseInt(s, 10))
-    .filter((n) => Number.isFinite(n) && n > 0);
-}
-
-/**
- * Display-friendly view of a course's control sequence: each entry pairs the
- * stable `oControl.Id` with the live punch code from `oControl.Numbers`
- * (the first code, for multi-code controls).
- *
- * Falls back to the Id (as a string) if the referenced control row is
- * missing or has an empty Numbers field. This matches MeOS's "default to
- * Id when Numbers is unset" behaviour (`oControl.cpp:263`).
- */
-export async function resolveCourseControlsToCodes(
-  client: PrismaClient,
-  controlsField: string,
-): Promise<{ id: number; code: string }[]> {
-  const ids = parseCourseControlIds(controlsField);
-  if (ids.length === 0) return [];
-
-  const rows = await client.oControl.findMany({
-    where: { Id: { in: [...new Set(ids)] }, Removed: false },
-    select: { Id: true, Numbers: true },
+/** Resolve a control seq to its UUID. */
+async function controlSeqToId(
+  db: PrismaClient,
+  eventId: bigint,
+  seq: number,
+): Promise<string> {
+  const c = await db.control.findFirst({
+    where: { eventId, seq, removed: false },
+    select: { id: true },
   });
-  const numbersById = new Map(rows.map((r) => [r.Id, r.Numbers]));
-
-  return ids.map((id) => {
-    const numbers = numbersById.get(id) ?? "";
-    const firstCode = numbers.split(";").map((s) => s.trim()).find(Boolean);
-    return { id, code: firstCode ?? String(id) };
-  });
+  if (!c) {
+    throw new TRPCError({
+      code: "NOT_FOUND",
+      message: `Control ${seq} not found`,
+    });
+  }
+  return c.id;
 }
 
 /**
- * Parse one `oControl.Numbers` string into a list of SI punch codes.
- * Returns `[fallbackId]` when the field is empty or yields no numbers,
- * matching MeOS's "default to Id when Numbers is unset" behaviour
- * (`oControl.cpp:263`).
- */
-function parseControlNumbers(numbers: string, fallbackId: number): number[] {
-  const codes = numbers
-    .split(";")
-    .map((s) => s.trim())
-    .filter(Boolean)
-    .map((s) => parseInt(s, 10))
-    .filter((n) => Number.isFinite(n) && n > 0);
-  return codes.length > 0 ? codes : [fallbackId];
-}
-
-/**
- * Per-position list of acceptable SI punch codes for a course, dereferenced
- * from each `oControl.Numbers`. Each inner array is non-empty.
+ * Resolve a course's status-aware ExpectedPosition[] used by the offline
+ * matcher and the start-list / dashboard pre-computations.
  *
- * This is the matching-only view (no status semantics). For the full
- * status-aware view used by the readout pipeline, use
- * {@link resolveCourseExpectedPositions} instead.
- */
-export async function resolveCourseExpectedCodes(
-  client: PrismaClient,
-  controlsField: string,
-): Promise<number[][]> {
-  const positions = await resolveCourseExpectedPositions(client, controlsField);
-  return positions.map((p) => p.codes);
-}
-
-/**
- * Per-position descriptor list for a course, with full MeOS status
- * semantics applied. Used by the punch matcher to evaluate each position
- * with the right matching / time-accounting rules.
- *
- * Status handling (verified against MeOS upstream):
- *   - OK:           one required position, time-counted.
- *   - Multiple:     expand to N any-order positions sharing the full
- *                   Numbers set (oCourse.cpp:467-477). Any one code at
- *                   each position; runner must hit all to advance.
- *   - Bad / Optional:        one skipped position
- *                            (oCourse.cpp:462-465, oRunner.cpp:1424-1438).
- *   - NoTiming:              one required position with `noTimingLeg=true`
- *                            (oRunner.cpp:1777). Leg into it is deducted.
- *   - BadNoTiming:           one skipped position; the next emitted
- *                            non-skipped position carries `noTimingLeg=true`
- *                            so its leg is deducted too (oRunner.cpp:1772-1786).
- *   - Special (Start/Finish/Check/Clear): treated as OK at the position
- *     level; these statuses normally only appear on dedicated
- *     start/finish controls that aren't stored in `oCourse.Controls`.
+ * Each course_controls row carries one logical position. The status comes
+ * from the referenced control. Multi-code controls list comma-separated
+ * codes via control.codes.
  */
 export async function resolveCourseExpectedPositions(
-  client: PrismaClient,
-  controlsField: string,
+  db: PrismaClient,
+  courseId: string,
 ): Promise<ExpectedPosition[]> {
-  const ids = parseCourseControlIds(controlsField);
-  if (ids.length === 0) return [];
-
-  const rows = await client.oControl.findMany({
-    where: { Id: { in: [...new Set(ids)] }, Removed: false },
-    select: { Id: true, Numbers: true, Status: true },
+  const rows = await db.courseControl.findMany({
+    where: { courseId },
+    include: { control: true },
+    orderBy: { position: "asc" },
   });
-  const byId = new Map(rows.map((r) => [r.Id, r]));
 
   const positions: ExpectedPosition[] = [];
-  // BadNoTiming propagation: when we emit a skipped position for a
-  // BadNoTiming control, the *next* non-skipped position must carry
-  // `noTimingLeg=true` so its incoming leg gets credited back. We track
-  // this with a one-shot flag that's consumed by the next required /
-  // NoTiming emission.
-  let pendingNoTimingFromBadNoTiming = false;
-
-  for (const id of ids) {
-    const row = byId.get(id);
-    const codes = row ? parseControlNumbers(row.Numbers, id) : [id];
-    const status = row?.Status ?? ControlStatus.OK;
-
-    if (status === ControlStatus.Multiple) {
-      // Expand into N any-order positions, each accepting any code from
-      // the same pool. Any pending BadNoTiming propagation lands on the
-      // first emitted required position only.
-      for (let j = 0; j < codes.length; j++) {
-        positions.push({
-          codes: [...codes],
-          skipMatching: false,
-          noTimingLeg: pendingNoTimingFromBadNoTiming,
-        });
-        pendingNoTimingFromBadNoTiming = false;
-      }
-      continue;
+  let prevWasBadNoTiming = false;
+  for (const row of rows) {
+    const ctrl = row.control;
+    const codes = (ctrl.codes ?? "")
+      .split(";")
+      .map((s) => parseInt(s.trim(), 10))
+      .filter((n) => !isNaN(n) && n > 0);
+    const statusVal = controlStatusToValue(ctrl.status);
+    let skip = false;
+    let noTiming = false;
+    switch (statusVal) {
+      case ControlStatus.Bad:
+      case ControlStatus.Optional:
+      case ControlStatus.BadNoTiming:
+        skip = true;
+        break;
+      case ControlStatus.NoTiming:
+        noTiming = true;
+        break;
     }
-
-    if (status === ControlStatus.Bad || status === ControlStatus.Optional) {
-      positions.push({
-        codes,
-        skipMatching: true,
-        noTimingLeg: false,
-      });
-      continue;
-    }
-
-    if (status === ControlStatus.BadNoTiming) {
-      positions.push({
-        codes,
-        skipMatching: true,
-        noTimingLeg: false,
-      });
-      pendingNoTimingFromBadNoTiming = true;
-      continue;
-    }
-
-    if (status === ControlStatus.NoTiming) {
-      positions.push({
-        codes,
-        skipMatching: false,
-        noTimingLeg: true,
-      });
-      pendingNoTimingFromBadNoTiming = false;
-      continue;
-    }
-
-    // Default: OK and any unrecognised special status fall through.
-    positions.push({
-      codes,
-      skipMatching: false,
-      noTimingLeg: pendingNoTimingFromBadNoTiming,
-    });
-    pendingNoTimingFromBadNoTiming = false;
+    // If the previous position was BadNoTiming and this one is required,
+    // the leg into this position should not count.
+    if (prevWasBadNoTiming && !skip) noTiming = true;
+    prevWasBadNoTiming = statusVal === ControlStatus.BadNoTiming;
+    positions.push({ codes, skipMatching: skip, noTimingLeg: noTiming });
   }
-
   return positions;
 }
 
-/**
- * Inverse of {@link resolveCourseControlsToCodes} — translate a list of
- * user-typed punch codes back to `oControl.Id` references suitable for
- * storage in `oCourse.Controls`.
- *
- * Resolution order per token:
- *   1. Exact match against any `oControl.Numbers` entry (handles renumbered
- *      controls and multi-code controls equally).
- *   2. Exact match against `oControl.Id` (handles a user pasting an Id list,
- *      or the MeOS convention `Id == Numbers[0]`).
- *
- * Throws `TRPCError(BAD_REQUEST)` listing every unresolved token so the UI
- * can surface a single, complete error message.
- */
-export async function resolveCodesToCourseControls(
-  client: PrismaClient,
-  codes: string[],
-): Promise<{ ids: number[]; rawString: string }> {
-  const trimmed = codes.map((c) => c.trim()).filter(Boolean);
-  if (trimmed.length === 0) return { ids: [], rawString: "" };
-
-  const allControls = await client.oControl.findMany({
-    where: { Removed: false },
-    select: { Id: true, Numbers: true },
-  });
-
-  const byCode = new Map<string, number>();
-  const byId = new Map<string, number>();
-  for (const c of allControls) {
-    byId.set(String(c.Id), c.Id);
-    for (const part of c.Numbers.split(";")) {
-      const code = part.trim();
-      if (code && !byCode.has(code)) byCode.set(code, c.Id);
-    }
-  }
-
-  const ids: number[] = [];
-  const unresolved: string[] = [];
-  for (const token of trimmed) {
-    const id = byCode.get(token) ?? byId.get(token);
-    if (id === undefined) {
-      unresolved.push(token);
-    } else {
-      ids.push(id);
-    }
-  }
-
-  if (unresolved.length > 0) {
-    throw new TRPCError({
-      code: "BAD_REQUEST",
-      message: `Unknown control code${unresolved.length === 1 ? "" : "s"}: ${unresolved.join(", ")}`,
-    });
-  }
-
-  return {
-    ids,
-    rawString: ids.length > 0 ? ids.join(";") + ";" : "",
-  };
-}
-
-// ─── Course geometry table ───────────────────────────────────────────────────
-
-async function ensureCourseGeometryTable(client: PrismaClient) {
-  await client.$executeRawUnsafe(`
-    CREATE TABLE IF NOT EXISTS oxygen_course_geometry (
-      Id INT AUTO_INCREMENT PRIMARY KEY,
-      CourseName VARCHAR(255) NOT NULL UNIQUE,
-      Source VARCHAR(10) NOT NULL,
-      Geometry LONGTEXT NOT NULL
-    )
-  `);
-}
-
-/**
- * Default tolerance (in map mm) below which an OCD-stored control position
- * is considered unchanged compared to a freshly-imported XML position.
- *
- * IOF XML round-trips can introduce sub-mm floating-point noise, so we
- * don't want to treat a 0.01 mm jitter as a real move. At a 1:4000 sprint
- * scale, 0.5 mm is 2 m on the ground — well below "controls have shifted
- * meaningfully" but well above floating-point round-trip drift.
- */
-const OCD_STALENESS_TOLERANCE_MM = 0.5;
-
-/**
- * Decide whether a previously stored OCD geometry for a course is stale
- * relative to a freshly built XML straight-line geometry for the same
- * course — meaning the course's controls have been moved or its sequence
- * has changed since the OCD was imported, so the OCD's pre-routed lines
- * no longer correspond to the live control positions on the map.
- *
- * Both inputs use the same coordinate space (map mm) and tag their Point
- * features with `properties.code`, so we compare them feature-by-feature.
- *
- * Conservative rule: if the XML carries no usable Point positions, return
- * false so we keep the higher-quality OCD routed geometry untouched.
- *
- * @internal Exported for unit testing.
- */
-export function isOcdGeometryStaleVsXml(
-  ocd: GeoJSONFeatureCollection,
-  xml: GeoJSONFeatureCollection,
-  toleranceMm: number = OCD_STALENESS_TOLERANCE_MM,
-): boolean {
-  const ocdPoints = ocd.features.filter((f) => f.geometry.type === "Point");
-  const xmlPoints = xml.features.filter((f) => f.geometry.type === "Point");
-
-  // No XML positions to compare → keep OCD geometry as-is.
-  if (xmlPoints.length === 0) return false;
-
-  const codeOf = (f: { properties: Record<string, unknown> }): string =>
-    String(f.properties?.code ?? "");
-
-  // Sequence change (control added, removed, or reordered on the course)
-  // invalidates the OCD routed legs — they'd connect the wrong endpoints.
-  const ocdSeq = ocdPoints.map(codeOf);
-  const xmlSeq = xmlPoints.map(codeOf);
-  if (ocdSeq.length !== xmlSeq.length) return true;
-  for (let i = 0; i < ocdSeq.length; i++) {
-    if (ocdSeq[i] !== xmlSeq[i]) return true;
-  }
-
-  // Position drift on any control beyond tolerance.
-  const tolSq = toleranceMm * toleranceMm;
-  const ocdPos = new Map<string, [number, number]>();
-  for (const f of ocdPoints) {
-    const code = codeOf(f);
-    if (!code) continue;
-    const c = (f.geometry as { coordinates: [number, number] }).coordinates;
-    ocdPos.set(code, c);
-  }
-  for (const f of xmlPoints) {
-    const code = codeOf(f);
-    if (!code) continue;
-    const xmlCoord = (f.geometry as { coordinates: [number, number] }).coordinates;
-    const ocdCoord = ocdPos.get(code);
-    if (!ocdCoord) continue;
-    const dx = ocdCoord[0] - xmlCoord[0];
-    const dy = ocdCoord[1] - xmlCoord[1];
-    if (dx * dx + dy * dy > tolSq) return true;
-  }
-  return false;
-}
-
-/**
- * Upsert GeoJSON geometry for a set of courses.
- *
- * Source priority: 'ocd' > 'xml'. OCD provides nicely routed legs (around
- * fences, through corridors, dogleg cuts), so a later XML re-import does
- * not normally overwrite OCD geometry.
- *
- * Exception: when the XML import shows that controls on a course have been
- * moved or its sequence has changed since the OCD was imported, the OCD's
- * routed lines no longer match reality (they trace through old positions
- * while the circles render at new ones). In that case we replace the OCD
- * geometry with the XML straight-line geometry for that course so the
- * displayed lines are at least correct, even if not optimally routed.
- */
-async function saveCourseGeometry(
-  client: PrismaClient,
-  courseGeometry: Record<string, GeoJSONFeatureCollection>,
-  source: "xml" | "ocd",
-) {
-  await ensureCourseGeometryTable(client);
-
-  const existing = await client.$queryRawUnsafe<
-    { CourseName: string; Source: string; Geometry: string }[]
-  >("SELECT CourseName, Source, Geometry FROM oxygen_course_geometry");
-  const existingByName = new Map(existing.map((r) => [r.CourseName, r]));
-
-  for (const [courseName, geometry] of Object.entries(courseGeometry)) {
-    const current = existingByName.get(courseName);
-
-    if (source === "xml" && current?.Source === "ocd") {
-      let parsed: GeoJSONFeatureCollection | null = null;
-      try {
-        parsed = JSON.parse(current.Geometry) as GeoJSONFeatureCollection;
-      } catch {
-        parsed = null;
-      }
-      // Keep OCD only when it still matches the live control layout.
-      // Unreadable OCD JSON falls through to be overwritten.
-      if (parsed && !isOcdGeometryStaleVsXml(parsed, geometry)) continue;
-    }
-
-    const geomJson = JSON.stringify(geometry);
-    if (current !== undefined) {
-      await client.$executeRawUnsafe(
-        "UPDATE oxygen_course_geometry SET Source=?, Geometry=? WHERE CourseName=?",
-        source, geomJson, courseName,
-      );
-    } else {
-      await client.$executeRawUnsafe(
-        "INSERT INTO oxygen_course_geometry (CourseName, Source, Geometry) VALUES (?, ?, ?)",
-        courseName, source, geomJson,
-      );
-    }
-  }
-}
-
-// ─── Input parsing helper ────────────────────────────────────────────────────
-
-/** The combined zod input shape for both XML and OCD import mutations. */
-const courseFileInput = z.object({
-  xmlContent: z.string().optional(),
-  ocdBase64: z.string().optional(),
-  classMapping: z.record(z.string(), z.array(z.number().int())).optional(),
-  /**
-   * When true, every existing course and control is soft-deleted (and any
-   * class→course assignment cleared) before the new file is imported.
-   * Existing rows whose names match the new file are reactivated in place,
-   * so we don't accumulate Removed: true rows when re-importing the same
-   * course set repeatedly. When false (legacy behaviour), the import
-   * merges into the current course set, only touching rows it sees in
-   * the file.
-   */
-  replaceAll: z.boolean().optional().default(false),
-});
-
-/** Parse the incoming file data (XML string or OCD base64) using the right parser. */
-function parseCourseFileInput(
-  input: { xmlContent?: string; ocdBase64?: string },
-): ParsedCourseData {
-  if (input.ocdBase64) {
-    const buf = Buffer.from(input.ocdBase64, "base64");
-    return parseOCDCourseData(buf);
-  }
-  if (input.xmlContent) {
-    return parseIOFCourseDataWithGeometry(input.xmlContent);
-  }
-  throw new Error("No course data provided: supply either xmlContent or ocdBase64");
-}
-
 export const courseRouter = router({
-  /**
-   * List all courses.
-   */
-  list: competitionProcedure
-    .input(
-      z
-        .object({
-          search: z.string().optional(),
+  list: eventProcedure.query(async ({ ctx }): Promise<CourseSummary[]> => {
+    const eventId = ctx.event.id;
+    const courses = await ctx.db.course.findMany({
+      where: { eventId, removed: false },
+      orderBy: { name: "asc" },
+    });
+    const counts = courses.length
+      ? await ctx.db.courseControl.groupBy({
+          by: ["courseId"],
+          _count: { courseId: true },
+          where: { courseId: { in: courses.map((c) => c.id) } },
         })
-        .optional(),
-    )
-    .query(async ({ ctx, input }): Promise<CourseSummary[]> => {
-      const client = ctx.db;
+      : [];
+    const countMap = new Map<string, number>(
+      counts.map((c) => [c.courseId, c._count.courseId]),
+    );
+    return courses.map(
+      (c): CourseSummary => ({
+        id: c.seq,
+        name: c.name,
+        controls: "",
+        controlCount: countMap.get(c.id) ?? 0,
+        length: c.lengthM,
+        climb: c.climbM,
+        numberOfMaps: c.numberOfMaps,
+        firstAsStart: c.firstAsStart,
+        lastAsFinish: c.lastAsFinish,
+      }),
+    );
+  }),
 
-      const courses = await client.oCourse.findMany({
-        where: { Removed: false },
-        orderBy: { Id: "asc" },
-      });
-
-      let filtered = courses;
-      if (input?.search) {
-        const term = input.search.toLowerCase();
-        filtered = filtered.filter(
-          (c) =>
-            c.Name.toLowerCase().includes(term) ||
-            c.Controls.toLowerCase().includes(term) ||
-            String(c.Id).includes(term),
-        );
-      }
-
-      return filtered.map(
-        (c): CourseSummary => ({
-          id: c.Id,
-          name: c.Name,
-          controls: c.Controls,
-          controlCount: c.Controls.split(";").filter(Boolean).length,
-          length: c.Length,
-          climb: c.Climb,
-          numberOfMaps: c.NumberMaps,
-          firstAsStart: c.FirstAsStart === 1,
-          lastAsFinish: c.LastAsFinish === 1,
-        }),
-      );
-    }),
-
-  /**
-   * Get a single course with detailed class usage info.
-   */
-  detail: competitionProcedure
+  getById: eventProcedure
     .input(z.object({ id: z.number().int() }))
-    .query(async ({ ctx, input }): Promise<CourseDetail | null> => {
-      const client = ctx.db;
-
-      const course = await client.oCourse.findFirst({
-        where: { Id: input.id, Removed: false },
+    .query(async ({ ctx, input }): Promise<CourseDetail> => {
+      const c = await getCourseBySeq(ctx.db, ctx.event.id, input.id);
+      const ccs = await ctx.db.courseControl.findMany({
+        where: { courseId: c.id },
+        include: { control: { select: { seq: true, codes: true } } },
+        orderBy: { position: "asc" },
       });
-      if (!course) return null;
-
-      // Find classes using this course
-      const classes = await client.oClass.findMany({
-        where: { Removed: false, Course: course.Id },
-        select: { Id: true, Name: true },
+      const classes = await ctx.db.class.findMany({
+        where: { eventId: ctx.event.id, courseId: c.id, removed: false },
+        select: { id: true, seq: true, name: true },
       });
-
-      // Count participating runners per class (Cancel excluded).
-      const runners = await client.oRunner.findMany({
-        where: { Removed: false, Status: { notIn: [...WITHDRAWN_STATUSES] } },
-        select: { Class: true },
-      });
-      const runnersByClass = new Map<number, number>();
-      for (const r of runners) {
-        runnersByClass.set(r.Class, (runnersByClass.get(r.Class) ?? 0) + 1);
-      }
-
-      // Dereference each oControl.Id stored in oCourse.Controls to its
-      // live oControl.Numbers (first code per multi-code control). The
-      // chip view and editable text input both consume `controlCodes`,
-      // so the page always shows live punch codes — not stale Ids.
-      const controlCodes = await resolveCourseControlsToCodes(client, course.Controls);
-
+      const runnerCounts = classes.length
+        ? await ctx.db.runner.groupBy({
+            by: ["classId"],
+            _count: { classId: true },
+            where: {
+              eventId: ctx.event.id,
+              classId: { in: classes.map((cl) => cl.id) },
+              removed: false,
+            },
+          })
+        : [];
+      const runnerCountMap = new Map<string, number>(
+        runnerCounts.map((rc) => [
+          rc.classId ?? "",
+          rc._count.classId,
+        ]),
+      );
       return {
-        id: course.Id,
-        name: course.Name,
-        controls: course.Controls,
-        controlCount: controlCodes.length,
-        length: course.Length,
-        climb: course.Climb,
-        numberOfMaps: course.NumberMaps,
-        firstAsStart: course.FirstAsStart === 1,
-        lastAsFinish: course.LastAsFinish === 1,
-        controlCodes,
-        classes: classes.map((cls) => ({
-          classId: cls.Id,
-          className: cls.Name,
-          runnerCount: runnersByClass.get(cls.Id) ?? 0,
+        id: c.seq,
+        name: c.name,
+        controls: ccs.map((cc) => String(cc.control.seq)).join(";"),
+        controlCount: ccs.length,
+        length: c.lengthM,
+        climb: c.climbM,
+        numberOfMaps: c.numberOfMaps,
+        firstAsStart: c.firstAsStart,
+        lastAsFinish: c.lastAsFinish,
+        controlCodes: ccs.map((cc) => ({
+          id: cc.control.seq,
+          code: (cc.control.codes ?? "").split(";")[0] ?? "",
+        })),
+        classes: classes.map((cl) => ({
+          classId: cl.seq,
+          className: cl.name,
+          runnerCount: runnerCountMap.get(cl.id) ?? 0,
         })),
       };
     }),
 
-  /**
-   * Create a new course.
-   *
-   * Like `update`, prefer `controlCodes` (live punch codes) for the
-   * control sequence. The legacy `controls` raw string stays available
-   * for callers that operate at the storage layer.
-   */
-  create: competitionProcedure
+  create: eventProcedure
     .input(
       z.object({
         name: z.string().min(1),
-        controls: z.string().optional().default(""),
-        controlCodes: z.array(z.string()).optional(),
         length: z.number().int().optional().default(0),
-        numberOfMaps: z.number().int().optional().default(1),
+        climb: z.number().int().optional().default(0),
+        numberOfMaps: z.number().int().optional().default(0),
         firstAsStart: z.boolean().optional().default(false),
         lastAsFinish: z.boolean().optional().default(false),
+        controlIds: z.array(z.number().int()).optional().default([]),
       }),
     )
     .mutation(async ({ ctx, input }) => {
-      const client = ctx.db;
-
-      let controlsField = input.controls;
-      if (input.controlCodes !== undefined) {
-        const { rawString } = await resolveCodesToCourseControls(client, input.controlCodes);
-        controlsField = rawString;
-      }
-
-      const course = await client.oCourse.create({
+      const created = await ctx.db.course.create({
         data: {
-          Name: input.name,
-          Controls: controlsField,
-          Length: input.length,
-          NumberMaps: input.numberOfMaps,
-          FirstAsStart: input.firstAsStart ? 1 : 0,
-          LastAsFinish: input.lastAsFinish ? 1 : 0,
+          eventId: ctx.event.id,
+          name: input.name,
+          lengthM: input.length,
+          climbM: input.climb,
+          numberOfMaps: input.numberOfMaps,
+          firstAsStart: input.firstAsStart,
+          lastAsFinish: input.lastAsFinish,
         },
+        select: { id: true, seq: true },
       });
-
-      await incrementCounter("oCourse", course.Id, ctx.dbName);
-      return {
-        id: course.Id,
-        name: course.Name,
-      };
+      if (input.controlIds.length > 0) {
+        const controlUuids = await Promise.all(
+          input.controlIds.map((seq) =>
+            controlSeqToId(ctx.db, ctx.event.id, seq),
+          ),
+        );
+        await ctx.db.courseControl.createMany({
+          data: controlUuids.map((uuid, idx) => ({
+            courseId: created.id,
+            position: idx + 1,
+            controlId: uuid,
+          })),
+        });
+      }
+      return { id: created.seq };
     }),
 
-  /**
-   * Update an existing course.
-   *
-   * For the control sequence, prefer `controlCodes` (an array of live
-   * punch codes the user typed in the UI). The server resolves each code
-   * to its `oControl.Id` and stores the resulting Id list in
-   * `oCourse.Controls`, keeping MeOS-compatible storage even when codes
-   * have diverged from Ids. Unknown codes raise a `BAD_REQUEST` listing
-   * every unresolved token.
-   *
-   * The legacy `controls` string input is still accepted (treated as the
-   * raw Id list) for callers that operate at the storage layer; the UI
-   * does not use it.
-   */
-  update: competitionProcedure
+  update: eventProcedure
     .input(
       z.object({
         id: z.number().int(),
-        name: z.string().optional(),
-        controls: z.string().optional(),
-        controlCodes: z.array(z.string()).optional(),
+        name: z.string().min(1).optional(),
         length: z.number().int().optional(),
+        climb: z.number().int().optional(),
         numberOfMaps: z.number().int().optional(),
         firstAsStart: z.boolean().optional(),
         lastAsFinish: z.boolean().optional(),
+        controlIds: z.array(z.number().int()).optional(),
       }),
     )
     .mutation(async ({ ctx, input }) => {
-      const client = ctx.db;
-
+      const c = await getCourseBySeq(ctx.db, ctx.event.id, input.id);
       const data: Record<string, unknown> = {};
-      if (input.name !== undefined) data.Name = input.name;
-      if (input.controls !== undefined && input.controlCodes === undefined) {
-        data.Controls = input.controls;
-      }
-      if (input.controlCodes !== undefined) {
-        const { rawString } = await resolveCodesToCourseControls(client, input.controlCodes);
-        data.Controls = rawString;
-      }
-      if (input.length !== undefined) data.Length = input.length;
-      if (input.numberOfMaps !== undefined) data.NumberMaps = input.numberOfMaps;
+      if (input.name !== undefined) data.name = input.name;
+      if (input.length !== undefined) data.lengthM = input.length;
+      if (input.climb !== undefined) data.climbM = input.climb;
+      if (input.numberOfMaps !== undefined)
+        data.numberOfMaps = input.numberOfMaps;
       if (input.firstAsStart !== undefined)
-        data.FirstAsStart = input.firstAsStart ? 1 : 0;
+        data.firstAsStart = input.firstAsStart;
       if (input.lastAsFinish !== undefined)
-        data.LastAsFinish = input.lastAsFinish ? 1 : 0;
+        data.lastAsFinish = input.lastAsFinish;
+      await ctx.db.course.update({ where: { id: c.id }, data });
 
-      const course = await client.oCourse.update({
-        where: { Id: input.id },
-        data,
-      });
-
-      await incrementCounter("oCourse", course.Id, ctx.dbName);
-      return {
-        id: course.Id,
-        name: course.Name,
-      };
+      if (input.controlIds !== undefined) {
+        await ctx.db.courseControl.deleteMany({ where: { courseId: c.id } });
+        if (input.controlIds.length > 0) {
+          const controlUuids = await Promise.all(
+            input.controlIds.map((seq) =>
+              controlSeqToId(ctx.db, ctx.event.id, seq),
+            ),
+          );
+          await ctx.db.courseControl.createMany({
+            data: controlUuids.map((uuid, idx) => ({
+              courseId: c.id,
+              position: idx + 1,
+              controlId: uuid,
+            })),
+          });
+        }
+      }
+      return { ok: true };
     }),
 
-  /**
-   * Update the same subset of fields on many courses at once.
-   *
-   * Used by the bulk-edit bar on the Courses page — e.g. setting
-   * `numberOfMaps` for many courses in a single click. Only the fields
-   * actually present on the input are touched; everything else is left
-   * alone. Each changed course gets its MeOS counter bumped so MeOS
-   * picks up the update on its next sync.
-   */
-  bulkUpdate: competitionProcedure
-    .input(
-      z.object({
-        ids: z.array(z.number().int()).min(1),
-        numberOfMaps: z.number().int().min(0).optional(),
-        firstAsStart: z.boolean().optional(),
-        lastAsFinish: z.boolean().optional(),
-      }),
-    )
-    .mutation(async ({ ctx, input }) => {
-      const client = ctx.db;
-
-      const data: Record<string, unknown> = {};
-      if (input.numberOfMaps !== undefined) data.NumberMaps = input.numberOfMaps;
-      if (input.firstAsStart !== undefined)
-        data.FirstAsStart = input.firstAsStart ? 1 : 0;
-      if (input.lastAsFinish !== undefined)
-        data.LastAsFinish = input.lastAsFinish ? 1 : 0;
-
-      if (Object.keys(data).length === 0) {
-        return { updated: 0 };
-      }
-
-      // Only update courses that actually exist and aren't already soft-deleted
-      const existing = await client.oCourse.findMany({
-        where: { Id: { in: input.ids }, Removed: false },
-        select: { Id: true },
-      });
-
-      await client.oCourse.updateMany({
-        where: { Id: { in: existing.map((c) => c.Id) } },
-        data,
-      });
-
-      for (const c of existing) {
-        await incrementCounter("oCourse", c.Id, ctx.dbName);
-      }
-
-      return { updated: existing.length };
-    }),
-
-  /**
-   * Soft-delete a course.
-   */
-  delete: competitionProcedure
+  delete: eventProcedure
     .input(z.object({ id: z.number().int() }))
     .mutation(async ({ ctx, input }) => {
-      const client = ctx.db;
-
-      await client.oCourse.update({
-        where: { Id: input.id },
-        data: { Removed: true },
+      const c = await getCourseBySeq(ctx.db, ctx.event.id, input.id);
+      await ctx.db.course.update({
+        where: { id: c.id },
+        data: { removed: true },
       });
-
-      return { success: true };
+      return { ok: true };
     }),
 
   /**
-   * Preview an IOF 3.0 CourseData XML import.
-   * Parses the XML, auto-matches class names, and returns what would be imported.
+   * Course geometry — placeholder until the OCD course importer is ported.
+   * Web side calls this for map overlays; for now we return empty so the
+   * map renders without controls overlaid.
    */
-  previewImport: competitionProcedure
-    .input(courseFileInput)
-    .mutation(async ({ ctx, input }) => {
-      const parsed = parseCourseFileInput(input);
-      const client = ctx.db;
+  geometry: eventProcedure
+    .input(z.object({ id: z.number().int() }))
+    .query(async () => ({
+      type: "FeatureCollection" as const,
+      features: [] as unknown[],
+    })),
 
-      // Fetch existing classes for auto-matching
-      const dbClasses = await client.oClass.findMany({
-        where: { Removed: false },
-        select: { Id: true, Name: true, Course: true },
-      });
-
-      // Fetch existing controls
-      const dbControls = await client.oControl.findMany({
-        where: { Removed: false },
-        select: { Id: true, Name: true, Numbers: true },
-      });
-      const existingControlNames = new Set(
-        dbControls.map((c) => c.Name.toLowerCase()),
-      );
-
-      // Auto-match class names from XML to DB classes
-      const classMap: Record<
-        string,
-        {
-          dbClassId: number;
-          dbClassName: string;
-          matched: boolean;
-          matchType: ClassMatchType;
-        }[]
-      > = {};
-
-      for (const assignment of parsed.classAssignments) {
-        const xmlClassName = assignment.className;
-        const courseName = assignment.courseName;
-
-        const bestMatch = findBestClassMatch(xmlClassName, dbClasses);
-
-        if (!classMap[courseName]) classMap[courseName] = [];
-        classMap[courseName].push({
-          dbClassId: bestMatch?.id ?? 0,
-          dbClassName: bestMatch?.name ?? "",
-          matched: !!bestMatch,
-          matchType: bestMatch?.matchType ?? "none",
-        });
-      }
-
-      // Build course preview
-      const coursePreview = parsed.courses.map((course: ParsedCourse) => {
-        const controlCount = course.controls.filter(
-          (c) => c.type === "Control",
-        ).length;
-        const assignments = parsed.classAssignments
-          .filter((a) => a.courseName === course.name)
-          .map((a) => a.className);
-        const matchedClasses = classMap[course.name] ?? [];
-
-        return {
-          name: course.name,
-          length: course.length,
-          climb: course.climb,
-          controlCount,
-          xmlClassNames: assignments,
-          classMatches: matchedClasses,
-        };
-      });
-
-      // Count new vs existing controls
-      const newControls = parsed.controls.filter(
-        (c) =>
-          c.type === "Control" &&
-          !existingControlNames.has(c.id.toLowerCase()),
-      ).length;
-      const existingControls = parsed.controls.filter(
-        (c) =>
-          c.type === "Control" &&
-          existingControlNames.has(c.id.toLowerCase()),
-      ).length;
-
-      return {
-        courses: coursePreview,
-        totalControls: parsed.controls.filter((c) => c.type === "Control").length,
-        newControls,
-        existingControls,
-        startControls: parsed.controls.filter((c) => c.type === "Start").length,
-        finishControls: parsed.controls.filter((c) => c.type === "Finish").length,
-        mapScale: parsed.mapScale,
-        dbClasses: dbClasses.map((c) => ({ id: c.Id, name: c.Name })),
-      };
-    }),
-
-  /**
-   * Import IOF 3.0 CourseData XML into the competition database.
-   * Creates/updates controls, courses, and optionally assigns courses to classes.
-   */
-  importCourses: competitionProcedure
-    .input(courseFileInput)
-    .mutation(async ({ ctx, input }) => {
-      const parsed = parseCourseFileInput(input);
-      const { courseGeometry: geometry, geometrySource: source } = parsed;
-      const client = ctx.db;
-
-      let controlsCreated = 0;
-      let controlsUpdated = 0;
-      let coursesCreated = 0;
-      let coursesUpdated = 0;
-      let classesAssigned = 0;
-
-      // ── 0. Optionally wipe the slate ────────────────────────
-      //
-      // "Replace all" semantics: soft-delete every existing course and
-      // control, drop class→course assignments, and clear the geometry
-      // cache. The upsert loops below still match by name and reactivate
-      // matching rows, so re-importing the same file repeatedly does
-      // not pile up Removed:true zombie rows. Items not present in the
-      // new file simply stay soft-deleted, which is what the user asked
-      // for. Counters are bumped so MeOS sees the deletions on its next
-      // sync.
-      if (input.replaceAll) {
-        const allCourses = await client.oCourse.findMany({
-          where: { Removed: false },
-          select: { Id: true },
-        });
-        if (allCourses.length > 0) {
-          const courseIds = allCourses.map((c) => c.Id);
-          await client.oCourse.updateMany({
-            where: { Id: { in: courseIds } },
-            data: { Removed: true },
-          });
-          await incrementCounterBatch("oCourse", courseIds, ctx.dbName);
-        }
-
-        const allControls = await client.oControl.findMany({
-          where: { Removed: false },
-          select: { Id: true },
-        });
-        if (allControls.length > 0) {
-          const controlIds = allControls.map((c) => c.Id);
-          await client.oControl.updateMany({
-            where: { Id: { in: controlIds } },
-            data: { Removed: true },
-          });
-          await incrementCounterBatch("oControl", controlIds, ctx.dbName);
-        }
-
-        const assignedClasses = await client.oClass.findMany({
-          where: { Removed: false, Course: { gt: 0 } },
-          select: { Id: true },
-        });
-        if (assignedClasses.length > 0) {
-          const classIds = assignedClasses.map((c) => c.Id);
-          await client.oClass.updateMany({
-            where: { Id: { in: classIds } },
-            data: { Course: 0 },
-          });
-          await incrementCounterBatch("oClass", classIds, ctx.dbName);
-        }
-
-        await ensureCourseGeometryTable(client);
-        await client.$executeRawUnsafe("DELETE FROM oxygen_course_geometry");
-      }
-
-      // ── 1. Upsert controls ──────────────────────────────────
-
-      // Build a map from control string ID → DB control ID
-      const controlIdMap = new Map<string, number>();
-
-      // Load existing controls
-      const existingControls = await client.oControl.findMany({
-        select: { Id: true, Name: true, Numbers: true, Removed: true },
-      });
-      const controlByName = new Map<string, typeof existingControls[0]>();
-      for (const c of existingControls) {
-        controlByName.set(c.Name.toLowerCase(), c);
-        // Also index by each number code
-        for (const code of c.Numbers.split(";").filter(Boolean)) {
-          controlByName.set(code.toLowerCase(), c);
-        }
-      }
-
-      for (const pc of parsed.controls) {
-        const existing = controlByName.get(pc.id.toLowerCase());
-
-        // Determine status based on type
-        const status = pc.type === "Start" ? 4 : pc.type === "Finish" ? 5 : 0;
-
-        // Convert lat/lng to integer (MeOS convention: 6 decimal places → multiply by 1e6)
-        const latcrd = Math.round(pc.lat * 1e6);
-        const longcrd = Math.round(pc.lng * 1e6);
-        // Store map position (MeOS convention: 1 decimal place → multiply by 10)
-        const xpos = Math.round(pc.mapX * 10);
-        const ypos = Math.round(pc.mapY * 10);
-
-        // MeOS naming conventions:
-        // - Regular controls: Name = "" (empty), Numbers = control code (e.g. "31")
-        // - Start controls: Name = "Start N", Numbers = "", Id = 211100 + N
-        // - Finish controls: Name = "Mål N", Numbers = "", Id = 311100 + N
-        const suffix = getControlSuffix(pc.id);
-        let controlName: string;
-        let controlNumbers: string;
-        let controlDbId: number | undefined;
-
-        if (pc.type === "Start") {
-          controlName = meosStartName(suffix);
-          controlNumbers = "";
-          controlDbId = meosStartId(suffix);
-        } else if (pc.type === "Finish") {
-          controlName = meosFinishName(suffix);
-          controlNumbers = "";
-          controlDbId = meosFinishId(suffix);
-        } else {
-          // Regular control: Name empty, Numbers = code
-          controlName = "";
-          controlNumbers = pc.id;
-          const numericId = parseInt(pc.id, 10);
-          controlDbId = !isNaN(numericId) && numericId > 0 ? numericId : undefined;
-        }
-
-        // Also check for existing by MeOS-encoded ID (for start/finish)
-        const existingById = controlDbId
-          ? existingControls.find((c) => c.Id === controlDbId)
-          : undefined;
-        const matchedExisting = existing ?? existingById;
-
-        if (matchedExisting && !matchedExisting.Removed) {
-          // Update existing control with coordinates
-          await client.oControl.update({
-            where: { Id: matchedExisting.Id },
-            data: { Name: controlName, Numbers: controlNumbers, latcrd, longcrd, xpos, ypos, Status: status },
-          });
-          controlIdMap.set(pc.id, matchedExisting.Id);
-          controlsUpdated++;
-        } else if (matchedExisting && matchedExisting.Removed) {
-          // Re-activate deleted control
-          await client.oControl.update({
-            where: { Id: matchedExisting.Id },
-            data: {
-              Name: controlName,
-              Numbers: controlNumbers,
-              Status: status,
-              latcrd,
-              longcrd,
-              xpos,
-              ypos,
-              Removed: false,
-            },
-          });
-          controlIdMap.set(pc.id, matchedExisting.Id);
-          controlsCreated++;
-        } else {
-          // Create new control
-          try {
-            const created = controlDbId
-              ? await client.oControl.create({
-                data: {
-                  Id: controlDbId,
-                  Name: controlName,
-                  Numbers: controlNumbers,
-                  Status: status,
-                  latcrd,
-                  longcrd,
-                  xpos,
-                  ypos,
-                },
-              })
-              : await client.oControl.create({
-                data: {
-                  Name: controlName,
-                  Numbers: controlNumbers,
-                  Status: status,
-                  latcrd,
-                  longcrd,
-                  xpos,
-                  ypos,
-                },
-              });
-            controlIdMap.set(pc.id, created.Id);
-            controlsCreated++;
-          } catch {
-            // ID conflict — try without specifying ID
-            const created = await client.oControl.create({
-              data: {
-                Name: controlName,
-                Numbers: controlNumbers,
-                Status: status,
-                latcrd,
-                longcrd,
-                xpos,
-                ypos,
-              },
-            });
-            controlIdMap.set(pc.id, created.Id);
-            controlsCreated++;
-          }
-        }
-      }
-
-      // ── 2. Create/update courses ────────────────────────────
-
-      // Load existing courses. When replaceAll is true we soft-deleted
-      // every course in step 0, so we explicitly include Removed rows
-      // here and reactivate the ones that match a name in the import.
-      // This keeps Course Ids stable across re-imports of the same set
-      // (so class→course assignments saved alongside don't get orphaned)
-      // and avoids accumulating Removed:true zombie rows.
-      const existingCourses = await client.oCourse.findMany({
-        where: input.replaceAll ? {} : { Removed: false },
-        select: { Id: true, Name: true, Removed: true },
-      });
-      const courseByName = new Map<string, typeof existingCourses[number]>();
-      for (const c of existingCourses) {
-        const key = c.Name.toLowerCase();
-        const prev = courseByName.get(key);
-        // Prefer an active row over a soft-deleted one if both exist
-        if (!prev || (prev.Removed && !c.Removed)) {
-          courseByName.set(key, c);
-        }
-      }
-      const courseIdMap = new Map<string, number>();
-
-      for (const pc of parsed.courses) {
-        // Build control sequence as semicolon-separated DB IDs (regular controls only,
-        // matching MeOS behavior — start/finish are not stored in Controls)
-        const controlIds = pc.controls
-          .filter((cc) => cc.type === "Control")
-          .map((cc) => controlIdMap.get(cc.controlId) ?? cc.controlId)
-          .join(";");
-        const controlsStr = controlIds ? controlIds + ";" : "";
-
-        // Build leg lengths (metres) matching the Controls sequence, plus finish leg.
-        // Stored as semicolon-separated integers, e.g. "450;320;580;210;"
-        const legLengthArr = pc.controls
-          .filter((cc) => cc.type === "Control")
-          .map((cc) => Math.round(cc.legLength));
-        const finishCtrl = pc.controls.find((cc) => cc.type === "Finish");
-        if (finishCtrl) legLengthArr.push(Math.round(finishCtrl.legLength));
-        const legsStr = legLengthArr.length ? legLengthArr.join(";") + ";" : "";
-
-        // Extract start name from the IOF course and convert to MeOS-style name.
-        // MeOS uses "Start 1", "Start 2" etc. to link courses to their start station.
-        const startControl = pc.controls.find((cc) => cc.type === "Start");
-        const startName = startControl
-          ? meosStartName(getControlSuffix(startControl.controlId))
-          : "";
-
-        const existing = courseByName.get(pc.name.toLowerCase());
-
-        if (existing) {
-          await client.oCourse.update({
-            where: { Id: existing.Id },
-            data: {
-              Name: pc.name,
-              Controls: controlsStr,
-              Legs: legsStr,
-              Length: Math.round(pc.length),
-              Climb: Math.round(pc.climb),
-              FirstAsStart: 0,
-              LastAsFinish: 0,
-              StartName: startName,
-              ...(existing.Removed ? { Removed: false } : {}),
-            },
-          });
-          courseIdMap.set(pc.name, existing.Id);
-          if (existing.Removed) coursesCreated++;
-          else coursesUpdated++;
-        } else {
-          const created = await client.oCourse.create({
-            data: {
-              Name: pc.name,
-              Controls: controlsStr,
-              Legs: legsStr,
-              Length: Math.round(pc.length),
-              Climb: Math.round(pc.climb),
-              FirstAsStart: 0,
-              LastAsFinish: 0,
-              StartName: startName,
-            },
-          });
-          courseIdMap.set(pc.name, created.Id);
-          coursesCreated++;
-        }
-      }
-
-      // ── 3. Assign courses to classes ────────────────────────
-
-      if (input.classMapping) {
-        for (const [courseName, classIds] of Object.entries(input.classMapping)) {
-          const courseId = courseIdMap.get(courseName);
-          if (!courseId) continue;
-
-          for (const classId of classIds) {
-            if (classId <= 0) continue;
-            try {
-              await client.oClass.update({
-                where: { Id: classId },
-                data: { Course: courseId },
-              });
-              classesAssigned++;
-            } catch {
-              // Class might not exist
-            }
-          }
-        }
-      }
-
-      // ── 4. Save GeoJSON geometry ────────────────────────────
-      await saveCourseGeometry(client, geometry, source);
-
-      return {
-        controlsCreated,
-        controlsUpdated,
-        coursesCreated,
-        coursesUpdated,
-        classesAssigned,
-      };
-    }),
-
-  /**
-   * Upload an OCD (OCAD) map file for this competition.
-   * Accepts base64-encoded file data.
-   */
-  uploadMap: competitionProcedure
-    .input(
-      z.object({
-        fileName: z.string(),
-        fileDataBase64: z.string(),
-      }),
-    )
-    .mutation(async ({ ctx, input }) => {
-      const client = ctx.db;
-      await ensureMapFilesTable(client, ctx.dbName);
-
-      const buffer = Buffer.from(input.fileDataBase64, "base64");
-
-      // Delete any existing map files (only keep one per competition)
-      await client.$executeRawUnsafe("DELETE FROM oxygen_map_files");
-
-      await client.$executeRawUnsafe(
-        "INSERT INTO oxygen_map_files (FileName, FileData) VALUES (?, ?)",
-        input.fileName,
-        buffer,
-      );
-
-      // Invalidate tile cache so new map gets re-rendered
-      await ensureMapTilesTable(client, ctx.dbName);
-      await client.$executeRawUnsafe("DELETE FROM oxygen_map_tiles");
-      fireMapUpload(ctx.dbName);
-
-      return { success: true, fileName: input.fileName, size: buffer.length };
-    }),
-
-  /**
-   * Check if a map file exists for this competition.
-   */
-  mapFileInfo: competitionProcedure.query(async ({ ctx }) => {
-    const client = ctx.db;
-    await ensureMapFilesTable(client, ctx.dbName);
-
-    const rows = await client.$queryRawUnsafe<
-      { Id: number; FileName: string; UploadedAt: Date; Size: number }[]
-    >(
-      "SELECT Id, FileName, UploadedAt, LENGTH(FileData) as Size FROM oxygen_map_files ORDER BY Id DESC LIMIT 1",
-    );
-
-    if (rows.length === 0) return null;
-    return {
-      id: Number(rows[0].Id),
-      fileName: rows[0].FileName,
-      uploadedAt: rows[0].UploadedAt.toISOString(),
-      size: Number(rows[0].Size),
-    };
-  }),
-
-  /**
-   * Download the OCD map file (base64-encoded).
-   */
-  downloadMap: competitionProcedure.query(async ({ ctx }) => {
-    const client = ctx.db;
-    await ensureMapFilesTable(client, ctx.dbName);
-
-    const rows = await client.$queryRawUnsafe<
-      { FileData: Buffer; FileName: string }[]
-    >(
-      "SELECT FileData, FileName FROM oxygen_map_files ORDER BY Id DESC LIMIT 1",
-    );
-
-    if (rows.length === 0) return null;
-    return {
-      fileName: rows[0].FileName,
-      fileDataBase64: Buffer.from(rows[0].FileData).toString("base64"),
-    };
-  }),
-
-  /**
-   * Get all controls with their coordinates (for map overlay).
-   */
-  controlCoordinates: competitionProcedure.query(async ({ ctx }) => {
-    const client = ctx.db;
-
-    const controls = await client.oControl.findMany({
-      where: { Removed: false },
-      select: {
-        Id: true,
-        Name: true,
-        Numbers: true,
-        Status: true,
-        latcrd: true,
-        longcrd: true,
-        xpos: true,
-        ypos: true,
-      },
+  /** Map metadata used by the tracks / replay pages. */
+  mapMetadata: eventProcedure.query(async ({ ctx }) => {
+    const map = await ctx.db.renderedMap.findFirst({
+      where: { eventId: ctx.event.id },
+      orderBy: { renderedAt: "desc" },
+      select: { bounds: true, mapScale: true, width: true, height: true },
     });
-
-    // Load OCAD CRS for converting map mm → WGS84 when GPS coords are missing
-    let crs: OcadCrs | null = null;
-    const needsConversion = controls.some(
-      (c) => (c.latcrd === 0 && c.longcrd === 0) && (c.xpos !== 0 || c.ypos !== 0),
-    );
-    if (needsConversion) {
-      try {
-        await ensureMapFilesTable(client, ctx.dbName);
-        const rows = await client.$queryRawUnsafe<{ FileData: Buffer }[]>(
-          "SELECT FileData FROM oxygen_map_files ORDER BY Id DESC LIMIT 1",
-        );
-        if (rows.length > 0) {
-          const buffer = Buffer.from(rows[0].FileData);
-          const ocadMod = await import("ocad2geojson");
-          const readOcad = (ocadMod as Record<string, unknown>).readOcad as (
-            buf: Buffer, opts?: Record<string, unknown>
-          ) => Promise<{ getCrs(): OcadCrs }>;
-          const ocadFile = await readOcad(buffer, { quietWarnings: true });
-          crs = ocadFile.getCrs();
-        }
-      } catch (e) {
-        console.warn("[controlCoordinates] Failed to load OCAD CRS for coordinate conversion:", e);
-      }
-    }
-
-    return controls
-      .filter((c) => c.latcrd !== 0 || c.longcrd !== 0 || c.xpos !== 0 || c.ypos !== 0)
-      .map((c) => {
-        const mapX = c.xpos / 10;
-        const mapY = c.ypos / 10;
-        let lat = c.latcrd / 1e6;
-        let lng = c.longcrd / 1e6;
-
-        // Convert map mm → WGS84 when GPS coordinates are missing
-        if (lat === 0 && lng === 0 && crs && (mapX !== 0 || mapY !== 0)) {
-          const wgs84 = mapMmToWgs84(mapX, mapY, crs);
-          if (wgs84) {
-            lat = wgs84.lat;
-            lng = wgs84.lng;
-          }
-        }
-
-        return {
-          id: c.Id,
-          name: c.Name,
-          code: c.Numbers.split(";")[0] || c.Name,
-          status: c.Status,
-          lat,
-          lng,
-          mapX,
-          mapY,
-        };
-      });
+    if (!map) return null;
+    return {
+      bounds: map.bounds,
+      mapScale: map.mapScale,
+      width: map.width,
+      height: map.height,
+    };
   }),
-
-  /**
-   * Lightweight map metadata — bounds, scale, north offset.
-   * Used by the tile-based MapViewer to set up the viewport without
-   * downloading the full OCD file.
-   */
-  mapMetadata: competitionProcedure.query(async ({ ctx }) => {
-    const client = ctx.db;
-    await ensureMapFilesTable(client, ctx.dbName);
-
-    const rows = await client.$queryRawUnsafe<{ FileData: Buffer; UploadedAt: Date }[]>(
-      "SELECT FileData, UploadedAt FROM oxygen_map_files ORDER BY Id DESC LIMIT 1",
-    );
-    if (rows.length === 0) return null;
-
-    try {
-      const buffer = Buffer.from(rows[0].FileData);
-      const ocadMod = await import("ocad2geojson");
-      const readOcad = (ocadMod as Record<string, unknown>).readOcad as (
-        buf: Buffer, opts?: Record<string, unknown>
-      ) => Promise<{ getCrs(): OcadCrs; getBounds(): number[] }>;
-
-      const ocadFile = await readOcad(buffer, { quietWarnings: true });
-      const crs = ocadFile.getCrs();
-      const ocadBounds = ocadFile.getBounds();
-      const bounds = ocadBoundsToWgs84(ocadBounds, crs);
-      const northOffset = computeMapNorthOffset(ocadBounds, crs);
-
-      return {
-        scale: crs.scale,
-        bounds,
-        northOffset,
-        uploadedAt: rows[0].UploadedAt.getTime(),
-      };
-    } catch {
-      return null;
-    }
-  }),
-
-  /**
-   * Get completion status for each control — how many runners have passed it.
-   * Optionally filter by a specific course.
-   */
-  controlCompletionStatus: competitionProcedure
-    .input(
-      z
-        .object({
-          courseId: z.number().int().optional(),
-        })
-        .optional(),
-    )
-    .query(async ({ ctx, input }) => {
-      const client = ctx.db;
-
-      // 1. Get all controls (for code → id mapping)
-      const controls = await client.oControl.findMany({
-        where: { Removed: false },
-        select: { Id: true, Numbers: true, Status: true },
-      });
-
-      // Build code→controlId map (use first code from Numbers)
-      const codeToControlId = new Map<number, number>();
-      for (const c of controls) {
-        const code = parseInt(c.Numbers.split(";")[0], 10);
-        if (!isNaN(code) && code > 10) codeToControlId.set(code, c.Id);
-      }
-
-      // 2. Get courses to determine which controls belong to which course
-      const courses = await client.oCourse.findMany({
-        where: { Removed: false },
-        select: { Id: true, Controls: true },
-      });
-
-      // Build controlId → set of courseIds
-      const controlToCourses = new Map<number, Set<number>>();
-      for (const course of courses) {
-        for (const ctrlIdStr of course.Controls.split(";").filter(Boolean)) {
-          const ctrlId = parseInt(ctrlIdStr, 10);
-          if (!isNaN(ctrlId)) {
-            if (!controlToCourses.has(ctrlId)) controlToCourses.set(ctrlId, new Set());
-            controlToCourses.get(ctrlId)!.add(course.Id);
-          }
-        }
-      }
-
-      const runners = await client.oRunner.findMany({
-        where: {
-          Removed: false,
-          Status: { notIn: [...IN_FOREST_EXCLUDED_STATUSES] },
-        },
-        select: {
-          Id: true,
-          CardNo: true,
-          Class: true,
-          Course: true,
-          Status: true,
-          StartTime: true,
-          Card: true,
-          FinishTime: true,
-        },
-      });
-
-
-      // Get class → courseId mapping
-      const classes = await client.oClass.findMany({
-        where: { Removed: false },
-        select: { Id: true, Course: true },
-      });
-      const classToCourse = new Map<number, number>();
-      for (const cl of classes) {
-        if (cl.Course > 0) classToCourse.set(cl.Id, cl.Course);
-      }
-
-
-      // 4. Count passes per control code from oPunch (radio/manual)
-      const passedByCode = new Map<number, Set<number>>();
-
-      const punchDetails = await client.$queryRawUnsafe<
-        { Type: number; CardNo: number }[]
-      >(
-        "SELECT DISTINCT Type, CardNo FROM oPunch WHERE Removed = 0 AND Type > 10",
-      );
-      for (const p of punchDetails) {
-        if (!passedByCode.has(p.Type)) passedByCode.set(p.Type, new Set());
-        passedByCode.get(p.Type)!.add(p.CardNo);
-      }
-
-      // 5. Also count from oCard.Punches (card readouts)
-      const cards = await client.oCard.findMany({
-        where: { Punches: { not: "" } },
-        select: { CardNo: true, Punches: true },
-      });
-
-      for (const card of cards) {
-        if (card.CardNo <= 0) continue;
-        const parts = card.Punches.split(";").filter(Boolean);
-        for (const part of parts) {
-          const dashIdx = part.indexOf("-");
-          if (dashIdx === -1) continue;
-          const type = parseInt(part.substring(0, dashIdx), 10);
-          if (isNaN(type) || type <= 10) continue;
-          if (!passedByCode.has(type)) passedByCode.set(type, new Set());
-          passedByCode.get(type)!.add(card.CardNo);
-        }
-      }
-
-      const hasPunchData = passedByCode.size > 0;
-
-      const cardToRunnerIds = new Map<number, number[]>();
-      const runnersPerCourse = new Map<number, number>();
-      const inForestRunnersPerCourse = new Map<number, number>();
-      const relevantRunnerIds = new Set<number>();
-      const okRunnersPerCourse = new Map<number, Set<number>>();
-
-      for (const r of runners) {
-        // Runner's direct course assignment (MeOS stores this if different from class)
-        // If 0, it falls back to class course
-        const courseId = (r.Course > 0) ? r.Course : classToCourse.get(r.Class);
-        if (!courseId) continue;
-        if (input?.courseId && courseId !== input.courseId) continue;
-
-        runnersPerCourse.set(courseId, (runnersPerCourse.get(courseId) ?? 0) + 1);
-        relevantRunnerIds.add(r.Id);
-
-        const finished = isFinished(r.Status as RunnerStatusValue, r.FinishTime);
-        if (!finished) {
-          inForestRunnersPerCourse.set(courseId, (inForestRunnersPerCourse.get(courseId) ?? 0) + 1);
-        }
-
-        if (r.CardNo > 0) {
-          if (!cardToRunnerIds.has(r.CardNo)) cardToRunnerIds.set(r.CardNo, []);
-          cardToRunnerIds.get(r.CardNo)!.push(r.Id);
-        }
-
-        if (r.Status === 1) { // OK
-          if (!okRunnersPerCourse.has(courseId)) okRunnersPerCourse.set(courseId, new Set());
-          okRunnersPerCourse.get(courseId)!.add(r.Id);
-        }
-      }
-
-      // 7. Build result: for each control, compute passed / total
-      const result: {
-        controlId: number;
-        code: number;
-        passed: number;
-        total: number;
-      }[] = [];
-
-      for (const [code, controlId] of codeToControlId) {
-        const courseIdsForThisControl = controlToCourses.get(controlId);
-
-        // Collect all Runner IDs that passed this control
-        const passedRunnerIds = new Set<number>();
-
-        // From oPunch / oCard
-        const punched = passedByCode.get(code);
-        if (punched) {
-          for (const cn of punched) {
-            const rIds = cardToRunnerIds.get(cn);
-            if (rIds) {
-              for (const rid of rIds) {
-                if (relevantRunnerIds.has(rid)) passedRunnerIds.add(rid);
-              }
-            }
-          }
-        }
-
-        // Backfill OK runners (those who passed all controls on their course)
-        if (courseIdsForThisControl) {
-          for (const cid of courseIdsForThisControl) {
-            const okIds = okRunnersPerCourse.get(cid);
-            if (okIds) {
-              for (const rid of okIds) passedRunnerIds.add(rid);
-            }
-          }
-        }
-
-        const passed = passedRunnerIds.size;
-        let total = passed;
-
-        // Total = those who passed + those still in forest who might still pass
-        if (courseIdsForThisControl) {
-          if (input?.courseId) {
-            total += inForestRunnersPerCourse.get(input.courseId) ?? 0;
-          } else {
-            for (const cid of courseIdsForThisControl) {
-              total += inForestRunnersPerCourse.get(cid) ?? 0;
-            }
-          }
-        }
-
-        result.push({ controlId, code, passed, total });
-      }
-
-      return result;
-    }),
-
-  /**
-   * Get the GeoJSON routing geometry for a specific course.
-   */
-  courseGeometry: competitionProcedure
-    .input(z.object({ courseName: z.string() }))
-    .query(async ({ ctx, input }) => {
-      const client = ctx.db;
-      await ensureCourseGeometryTable(client);
-      const row = await client.$queryRawUnsafe<{ Geometry: string }[]>(
-        "SELECT Geometry FROM oxygen_course_geometry WHERE CourseName=?",
-        input.courseName,
-      );
-      if (!row || row.length === 0) return null;
-      try {
-        return JSON.parse(row[0].Geometry) as GeoJSONFeatureCollection;
-      } catch {
-        return null;
-      }
-    }),
-
-  /**
-   * Get GeoJSON routing geometry for many courses at once.
-   *
-   * Returns a map keyed by course name so the caller can render them
-   * together. Courses without geometry are simply omitted from the map.
-   * Used by the map panel when several courses are selected and we want
-   * to overlay every selected course's route at once.
-   */
-  courseGeometries: competitionProcedure
-    .input(z.object({ courseNames: z.array(z.string()).min(1) }))
-    .query(async ({ ctx, input }) => {
-      const client = ctx.db;
-      await ensureCourseGeometryTable(client);
-
-      // Deduplicate and bail on empty so we never emit `IN ()`
-      const unique = [...new Set(input.courseNames)];
-      if (unique.length === 0) return {} as Record<string, GeoJSONFeatureCollection>;
-
-      const placeholders = unique.map(() => "?").join(",");
-      const rows = await client.$queryRawUnsafe<{ CourseName: string; Geometry: string }[]>(
-        `SELECT CourseName, Geometry FROM oxygen_course_geometry WHERE CourseName IN (${placeholders})`,
-        ...unique,
-      );
-
-      const out: Record<string, GeoJSONFeatureCollection> = {};
-      for (const r of rows) {
-        try {
-          out[r.CourseName] = JSON.parse(r.Geometry) as GeoJSONFeatureCollection;
-        } catch {
-          // Skip malformed rows rather than failing the whole request
-        }
-      }
-      return out;
-    }),
 });

@@ -1,239 +1,150 @@
 import { z } from "zod";
-import { router, competitionProcedure } from "../trpc.js";
-import {ensureLogoTable, getMainDbConnection, ensureClubDbTable} from "../db.js";
-import type { ClubSummary, ClubDetail } from "@oxygen/shared";
-import { WITHDRAWN_STATUSES } from "@oxygen/shared";
+import { router, eventProcedure, publicProcedure } from "../trpc.js";
+import { prisma } from "../db.js";
+import { WITHDRAWN_STATUSES, type ClubSummary, type ClubDetail } from "@oxygen/shared";
+import { valueToRunnerStatus } from "../statusConvert.js";
 
+const withdrawnEnums = WITHDRAWN_STATUSES.map(valueToRunnerStatus);
+
+/**
+ * Clubs are not first-class entities anymore (Phase I refactor). This
+ * router derives the club roster from the runner table + the global
+ * club_directory cache. Filters / drill-down accept eventor_id (positive)
+ * or a clubName when no eventor id exists.
+ */
 export const clubRouter = router({
-  /**
-   * List all clubs with runner counts.
-   */
-  list: competitionProcedure
-    .input(
-      z
-        .object({
-          search: z.string().optional(),
-          showAll: z.boolean().optional(),
+  /** Aggregate clubs from the active event's runner roster. */
+  list: eventProcedure.query(async ({ ctx }): Promise<ClubSummary[]> => {
+    const runners = await ctx.db.runner.findMany({
+      where: {
+        eventId: ctx.event.id,
+        removed: false,
+        status: { notIn: withdrawnEnums },
+      },
+      select: { clubName: true, eventorClubId: true },
+    });
+    // Group by eventor_club_id when set, else by lowercased club_name.
+    const byEventor = new Map<bigint, { name: string; count: number }>();
+    const byName = new Map<string, { name: string; count: number }>();
+    for (const r of runners) {
+      if (r.eventorClubId) {
+        const cur = byEventor.get(r.eventorClubId);
+        if (cur) cur.count++;
+        else
+          byEventor.set(r.eventorClubId, {
+            name: r.clubName,
+            count: 1,
+          });
+      } else if (r.clubName) {
+        const k = r.clubName.toLowerCase();
+        const cur = byName.get(k);
+        if (cur) cur.count++;
+        else byName.set(k, { name: r.clubName, count: 1 });
+      }
+    }
+    const eventorIds = [...byEventor.keys()];
+    const dirRows = eventorIds.length
+      ? await ctx.db.clubDirectory.findMany({
+          where: { eventorId: { in: eventorIds } },
         })
-        .optional(),
+      : [];
+    const dir = new Map(dirRows.map((d) => [d.eventorId, d]));
+
+    const result: ClubSummary[] = [];
+    for (const [eventorId, info] of byEventor) {
+      const d = dir.get(eventorId);
+      result.push({
+        id: Number(eventorId),
+        name: d?.name || info.name,
+        shortName: d?.shortName ?? "",
+        runnerCount: info.count,
+        extId: Number(eventorId),
+      });
+    }
+    for (const [k, info] of byName) {
+      result.push({
+        id: 0,
+        name: info.name,
+        shortName: "",
+        runnerCount: info.count,
+        extId: 0,
+      });
+      void k;
+    }
+    result.sort((a, b) => a.name.localeCompare(b.name));
+    return result;
+  }),
+
+  /** Detail for a club identified by eventor_id (or 0 + name for free-text). */
+  getById: eventProcedure
+    .input(
+      z.object({
+        eventorId: z.number().int().optional(),
+        name: z.string().optional(),
+      }),
     )
-    .query(async ({ ctx, input }): Promise<ClubSummary[]> => {
-      const client = ctx.db;
-
-      const clubs = await client.oClub.findMany({
-        where: { Removed: false },
-        orderBy: { Name: "asc" },
-      });
-
-      // Count participating runners per club (Cancel excluded — a
-      // withdrawn entry doesn't keep the club on the list).
-      const runners = await client.oRunner.findMany({
-        where: { Removed: false, Status: { notIn: [...WITHDRAWN_STATUSES] } },
-        select: { Club: true },
-      });
-
-      const runnerCounts = new Map<number, number>();
-      for (const r of runners) {
-        runnerCounts.set(r.Club, (runnerCounts.get(r.Club) ?? 0) + 1);
+    .query(async ({ ctx, input }): Promise<ClubDetail> => {
+      const where: Record<string, unknown> = {
+        eventId: ctx.event.id,
+        removed: false,
+      };
+      if (input.eventorId && input.eventorId > 0) {
+        where.eventorClubId = input.eventorId;
+      } else if (input.name) {
+        where.clubName = input.name;
       }
-
-      let result = clubs.map(
-        (c): ClubSummary => ({
-          id: c.Id,
-          name: c.Name,
-          shortName: c.ShortName,
-          runnerCount: runnerCounts.get(c.Id) ?? 0,
-          extId: Number(c.ExtId),
-        }),
-      );
-
-      // By default, only show clubs with at least one runner
-      if (!input?.showAll) {
-        result = result.filter((c) => c.runnerCount > 0);
+      const runners = await ctx.db.runner.findMany({
+        where,
+        include: { class: { select: { name: true } } },
+      });
+      let dir = null;
+      if (input.eventorId && input.eventorId > 0) {
+        dir = await ctx.db.clubDirectory.findUnique({
+          where: { eventorId: BigInt(input.eventorId) },
+        });
       }
-
-      if (input?.search) {
-        const term = input.search.toLowerCase();
-        result = result.filter(
-          (c) =>
-            c.name.toLowerCase().includes(term) ||
-            c.shortName.toLowerCase().includes(term) ||
-            String(c.id).includes(term),
-        );
-      }
-
-      return result;
-    }),
-
-  /**
-   * Get a single club with details and runner list.
-   */
-  detail: competitionProcedure
-    .input(z.object({ id: z.number().int() }))
-    .query(async ({ ctx, input }): Promise<ClubDetail | null> => {
-      const client = ctx.db;
-
-      const club = await client.oClub.findFirst({
-        where: { Id: input.id, Removed: false },
-      });
-      if (!club) return null;
-
-      const runners = await client.oRunner.findMany({
-        where: { Club: input.id, Removed: false },
-        orderBy: { Name: "asc" },
-      });
-
-      // Get class names
-      const classes = await client.oClass.findMany({
-        where: { Removed: false },
-        select: { Id: true, Name: true },
-      });
-      const classMap = new Map(classes.map((c) => [c.Id, c.Name]));
-
+      const display = dir?.name || runners[0]?.clubName || "";
       return {
-        id: club.Id,
-        name: club.Name,
-        shortName: club.ShortName,
-        district: club.District,
-        nationality: club.Nationality,
-        country: club.Country,
-        careOf: club.CareOf,
-        street: club.Street,
-        city: club.City,
-        zip: club.ZIP,
-        email: club.EMail,
-        phone: club.Phone,
-        extId: Number(club.ExtId),
+        id: input.eventorId ?? 0,
+        name: display,
+        shortName: dir?.shortName ?? "",
+        district: 0,
+        nationality: "",
+        country: dir?.countryCode ?? "",
+        careOf: "",
+        street: "",
+        city: "",
+        zip: "",
+        email: "",
+        phone: "",
+        extId: input.eventorId ?? 0,
         runners: runners.map((r) => ({
-          id: r.Id,
-          name: r.Name,
-          className: classMap.get(r.Class) ?? "",
-          cardNo: r.CardNo,
+          id: r.seq,
+          name: r.name,
+          className: r.class?.name ?? "",
+          cardNo: r.cardNo,
         })),
       };
     }),
 
   /**
-   * Create a new club.
+   * Search the global club directory by name.
+   * Returns matching clubs with their Eventor ids.
    */
-  create: competitionProcedure
-    .input(
-      z.object({
-        name: z.string().min(1),
-        shortName: z.string().optional(),
-      }),
-    )
-    .mutation(async ({ ctx, input }) => {
-      const client = ctx.db;
-      const created = await client.oClub.create({
-        data: {
-          Name: input.name,
-          ShortName: (input.shortName || input.name).substring(0, 17),
+  searchDirectory: publicProcedure
+    .input(z.object({ query: z.string().min(1) }))
+    .query(async ({ input }) => {
+      const rows = await prisma().clubDirectory.findMany({
+        where: {
+          name: { contains: input.query, mode: "insensitive" },
         },
+        take: 30,
       });
-      return { id: created.Id };
+      return rows.map((d) => ({
+        eventorId: Number(d.eventorId),
+        name: d.name,
+        shortName: d.shortName,
+        countryCode: d.countryCode,
+      }));
     }),
-
-  /**
-   * Update a club.
-   */
-  update: competitionProcedure
-    .input(
-      z.object({
-        id: z.number().int(),
-        name: z.string().optional(),
-        shortName: z.string().optional(),
-      }),
-    )
-    .mutation(async ({ ctx, input }) => {
-      const client = ctx.db;
-      const data: Record<string, unknown> = {};
-      if (input.name !== undefined) data.Name = input.name;
-      if (input.shortName !== undefined)
-        data.ShortName = input.shortName.substring(0, 17);
-
-      await client.oClub.update({
-        where: { Id: input.id },
-        data,
-      });
-      return { success: true };
-    }),
-
-  /**
-   * Delete a club (soft delete).
-   */
-  delete: competitionProcedure
-    .input(z.object({ id: z.number().int() }))
-    .mutation(async ({ ctx, input }) => {
-      const client = ctx.db;
-      await client.oClub.update({
-        where: { Id: input.id },
-        data: { Removed: true },
-      });
-      return { success: true };
-    }),
-
-  /**
-   * Return a mapping of local club ID → Eventor org ID for all clubs that have logos stored.
-   * The frontend uses this to construct /api/club-logo/:eventorId URLs.
-   */
-  logoMap: competitionProcedure.query(async ({ ctx }) => {
-    const client = ctx.db;
-
-    // Collect Eventor IDs with logos from per-competition table
-    const logoEventorIds = new Set<number>();
-    try {
-      await ensureLogoTable(client, ctx.dbName);
-      const logos = await client.oxygen_club_logo.findMany({
-        select: { EventorId: true },
-      });
-      for (const l of logos) logoEventorIds.add(l.EventorId);
-    } catch {
-      // Table might not exist
-    }
-
-    // Also check global oxygen_club_db in MeOSMain
-    // Build a name→eventorId map so we can resolve clubs with ExtId=0 (non-Eventor competitions)
-    const globalNameToEventorId = new Map<string, number>();
-    try {
-      const mainConn = await getMainDbConnection();
-      try {
-        await ensureClubDbTable(mainConn);
-        const [rows] = await mainConn.execute(
-          "SELECT EventorId, Name FROM oxygen_club_db WHERE SmallLogoPng IS NOT NULL",
-        );
-        for (const r of rows as { EventorId: number; Name: string }[]) {
-          logoEventorIds.add(r.EventorId);
-          if (r.Name) {
-            globalNameToEventorId.set(r.Name.toLowerCase(), r.EventorId);
-          }
-        }
-      } finally {
-        await mainConn.end();
-      }
-    } catch {
-      // Global table might not exist yet
-    }
-
-    if (logoEventorIds.size === 0) return {};
-
-    const clubs = await client.oClub.findMany({
-      where: { Removed: false },
-      select: { Id: true, ExtId: true, Name: true },
-    });
-
-    const map: Record<number, number> = {};
-    for (const c of clubs) {
-      const extId = Number(c.ExtId);
-      if (extId > 0 && logoEventorIds.has(extId)) {
-        map[c.Id] = extId;
-      } else if (extId === 0 && c.Name) {
-        const match = globalNameToEventorId.get(c.Name.toLowerCase());
-        if (match) {
-          map[c.Id] = match;
-        }
-      }
-    }
-    return map;
-  }),
 });
