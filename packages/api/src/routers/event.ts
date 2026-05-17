@@ -361,23 +361,31 @@ export const eventRouter = router({
    */
   changeWatermarks: eventProcedure.query(async ({ ctx }) => {
     const eventId = ctx.event.id;
-    const tables = [
+    // Append-only tables (card_readouts, punches, event_log) use their
+    // own timestamp columns; entity tables use updated_at.
+    const entityTables = [
       "runners",
       "classes",
       "courses",
       "controls",
       "cards",
-      "punches",
       "teams",
+      "control_units",
     ] as const;
     const result: Record<string, string> = {};
-    for (const t of tables) {
+    for (const t of entityTables) {
       const row = await ctx.db.$queryRawUnsafe<Array<{ max: Date | null }>>(
         `SELECT MAX(updated_at) AS max FROM oxygen.${t} WHERE event_id = $1`,
         eventId,
       );
       result[t] = row[0]?.max?.toISOString() ?? "";
     }
+    // Append-only tables — clients invalidate when their max id changes.
+    const punches = await ctx.db.$queryRawUnsafe<Array<{ max: Date | null }>>(
+      `SELECT MAX(imported_at) AS max FROM oxygen.punches WHERE event_id = $1`,
+      eventId,
+    );
+    result["punches"] = punches[0]?.max?.toISOString() ?? "";
     return result;
   }),
 
