@@ -1,415 +1,92 @@
-import { useState, useMemo, useCallback } from "react";
-import { useNavigate } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { trpc } from "../lib/trpc";
-import { MapSlot } from "../components/MapSlot";
-import { SearchableSelect, type SelectOption } from "../components/SearchableSelect";
-import { entriesToday, daysToGo, buildSeries } from "../lib/registration-trends";
 
-function CompetitionProgressBar({ courseId }: { courseId?: number }) {
+/**
+ * Event dashboard — simplified during the post-MeOS migration. Shows
+ * core counts + status breakdown; the in-forest progress bar +
+ * registration-trends timeline are being re-ported alongside the
+ * punch-matcher + eventor sync pipelines.
+ */
+export function CompetitionDashboard() {
   const { t } = useTranslation("dashboard");
-  const completion = trpc.course.controlCompletionStatus.useQuery(
-    courseId ? { courseId } : undefined,
-    {
-      refetchInterval: 15_000,
-    }
-  );
+  void t;
+  const dashboard = trpc.competition.dashboard.useQuery();
 
-  if (!completion.data || completion.data.length === 0) return null;
-
-  const totalExpected = completion.data.reduce((s, c) => s + c.total, 0);
-  const totalPassed = completion.data.reduce((s, c) => s + c.passed, 0);
-  if (totalExpected === 0) return null;
-
-  const pct = Math.min(totalPassed / totalExpected, 1);
-  const pctDisplay = Math.round(pct * 100);
-  const isComplete = pct >= 1;
+  if (dashboard.isLoading) return <div className="p-6">Loading…</div>;
+  if (dashboard.error)
+    return (
+      <div className="p-6 text-red-600">
+        Failed to load dashboard: {dashboard.error.message}
+      </div>
+    );
+  const d = dashboard.data;
+  if (!d) return null;
 
   return (
-    <div className="bg-white rounded-xl border border-slate-200 p-4 mb-4">
-      <div className="flex items-center justify-between mb-2">
-        <div className="flex items-center gap-2">
-          <span className="text-xs font-semibold text-slate-500 uppercase tracking-wider">
-            {t("competitionProgress")}
-          </span>
-          {isComplete && (
-            <span className="text-xs font-semibold text-emerald-600 bg-emerald-50 px-2 py-0.5 rounded-full">
-              {t("complete")}
-            </span>
-          )}
-        </div>
-        <div className="text-sm text-slate-600">
-          <span className="font-bold text-slate-900">{totalPassed.toLocaleString()}</span>
-          <span className="text-slate-400"> / </span>
-          <span>{totalExpected.toLocaleString()}</span>
-          <span className="text-slate-400 ml-1">{t("controlPunches")}</span>
-        </div>
-      </div>
-      <div className="relative w-full h-3 bg-slate-100 rounded-full overflow-hidden">
-        <div
-          className={`h-full rounded-full transition-all duration-700 ease-out ${isComplete
-            ? "bg-emerald-500"
-            : pct > 0.75
-              ? "bg-gradient-to-r from-emerald-400 to-emerald-500"
-              : pct > 0.4
-                ? "bg-gradient-to-r from-blue-400 to-blue-500"
-                : "bg-gradient-to-r from-amber-400 to-amber-500"
-            }`}
-          style={{ width: `${pctDisplay}%` }}
-        />
-      </div>
-      <div className="flex items-center justify-between mt-1.5">
-        <span className={`text-lg font-black ${isComplete ? "text-emerald-600" : "text-slate-800"}`}>
-          {pctDisplay}%
-        </span>
-        <span className="text-xs text-slate-400">
-          {t("controlsCount", { count: completion.data.length })}
-        </span>
-      </div>
+    <div className="p-6 space-y-6">
+      <header>
+        <h1 className="text-2xl font-semibold">{d.event.name}</h1>
+        {d.event.annotation && (
+          <p className="text-sm text-slate-500 dark:text-slate-400">
+            {d.event.annotation}
+          </p>
+        )}
+      </header>
+
+      <section className="grid grid-cols-2 gap-4 sm:grid-cols-3 md:grid-cols-5">
+        <Stat label="Runners" value={d.totalRunners} />
+        <Stat label="Clubs" value={d.totalClubs} />
+        <Stat label="Classes" value={d.classes.length} />
+        <Stat label="Courses" value={d.totalCourses} />
+        <Stat label="Controls" value={d.totalControls} />
+      </section>
+
+      <section className="rounded-lg border bg-white p-4 shadow dark:bg-slate-800">
+        <h2 className="mb-2 text-lg font-semibold">Status breakdown</h2>
+        <ul className="grid grid-cols-2 gap-2 text-sm sm:grid-cols-3">
+          <li>
+            <span className="text-slate-500">Not started:</span>{" "}
+            {d.statusCounts.notStarted}
+          </li>
+          <li>
+            <span className="text-slate-500">In forest:</span>{" "}
+            {d.statusCounts.inForest}
+          </li>
+          <li>
+            <span className="text-slate-500">Finished:</span>{" "}
+            {d.statusCounts.finished}
+          </li>
+          <li>
+            <span className="text-slate-500">Cancelled:</span>{" "}
+            {d.statusCounts.cancelled}
+          </li>
+          <li>
+            <span className="text-slate-500">Start list:</span>{" "}
+            {d.statusCounts.startListCount}
+          </li>
+          <li>
+            <span className="text-slate-500">Results:</span>{" "}
+            {d.statusCounts.resultCount}
+          </li>
+        </ul>
+      </section>
+
+      <section className="rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900 dark:border-amber-700 dark:bg-amber-900/30 dark:text-amber-100">
+        Live progress bar (passed-controls completion), registration
+        trends timeline, and the dashboard map preview are being
+        re-ported against the new PostgreSQL schema.
+      </section>
     </div>
   );
 }
 
-export function CompetitionDashboard() {
-  const { t } = useTranslation("dashboard");
-  const navigate = useNavigate();
-  const dashboard = trpc.competition.dashboard.useQuery();
-  const [selectedClassId, setSelectedClassId] = useState<number | null>(null);
-  const [showCompletion, setShowCompletion] = useState(false);
-
-  // Build class options for the searchable select
-  const classOptions: SelectOption[] = useMemo(() => {
-    if (!dashboard.data) return [];
-    return dashboard.data.classes.map((cls) => ({
-      value: cls.id,
-      label: cls.name,
-      suffix: t("runnersCount", { count: cls.runnerCount }),
-    }));
-  }, [dashboard.data]);
-
-  // Find the course name(s) and courseId for the selected class
-  const selectedClassCourseNames: string[] = useMemo(() => {
-    if (!selectedClassId || !dashboard.data) return [];
-    const cls = dashboard.data.classes.find((c) => c.id === selectedClassId);
-    if (!cls || !cls.courseId) return [];
-    const course = dashboard.data.courses.find((c) => c.id === cls.courseId);
-    return course ? [course.name] : [];
-  }, [selectedClassId, dashboard.data]);
-
-  const selectedCourseId: number | undefined = useMemo(() => {
-    if (!selectedClassId || !dashboard.data) return undefined;
-    const cls = dashboard.data.classes.find((c) => c.id === selectedClassId);
-    return cls?.courseId ?? undefined;
-  }, [selectedClassId, dashboard.data]);
-
-  if (dashboard.isLoading) {
-    return (
-      <div className="flex items-center justify-center py-20">
-        <div className="inline-block w-8 h-8 border-4 border-blue-200 border-t-blue-600 rounded-full animate-spin" />
-      </div>
-    );
-  }
-
-  if (!dashboard.data) return null;
-
-  const d = dashboard.data;
-  const sc = d.statusCounts;
-
+function Stat({ label, value }: { label: string; value: number }) {
   return (
-    <>
-      {/* Stats Cards */}
-      <div className="grid grid-cols-2 sm:grid-cols-5 gap-4 mb-4">
-        <StatCard label={t("runners")} value={d.totalRunners} onClick={() => navigate("runners")} />
-        <StatCard label={t("clubs")} value={d.totalClubs} onClick={() => navigate("clubs")} />
-        <StatCard label={t("classes")} value={d.classes.length} onClick={() => navigate("classes")} />
-        <StatCard label={t("courses")} value={d.totalCourses} onClick={() => navigate("courses")} />
-        <StatCard label={t("controls")} value={d.totalControls} onClick={() => navigate("controls")} />
-      </div>
-
-      {/* Race Status Cards */}
-      <div className="grid grid-cols-3 gap-4 mb-4">
-        <StatusCard
-          label={t("notYetStarted")}
-          description={t("stillWaiting")}
-          value={sc.notStarted}
-          color="slate"
-          onClick={() => navigate("runners?q=status:not-started")}
-        />
-        <StatusCard
-          label={t("inTheForest")}
-          description={t("awaitingFinish")}
-          value={sc.inForest}
-          color="amber"
-          onClick={() => navigate("runners?q=status:in-forest")}
-        />
-        <StatusCard
-          label={t("finished")}
-          description={t("resultBooked")}
-          value={sc.finished}
-          color="emerald"
-          onClick={() => navigate("results?status=finished")}
-        />
-      </div>
-
-      {/* Registration trends preview */}
-      <RegistrationTrendsCard onOpen={() => navigate("registration-trends")} />
-
-      {/* Competition progress */}
-      <CompetitionProgressBar courseId={selectedCourseId} />
-
-      {/* Map with class filter. Props are stabilised below so React.memo
-          on the shell-owned persistent MapPanel can short-circuit
-          re-renders when nothing changed. */}
-      <DashboardMapSlot
-        selectedClassId={selectedClassId}
-        onSelectClassId={setSelectedClassId}
-        classOptions={classOptions}
-        selectedClassCourseNames={selectedClassCourseNames}
-        showCompletion={showCompletion}
-        setShowCompletion={setShowCompletion}
-        selectedCourseId={selectedCourseId}
-      />
-    </>
+    <div className="rounded-lg border bg-white p-3 shadow-sm dark:bg-slate-800">
+      <div className="text-xs uppercase tracking-wide text-slate-500">{label}</div>
+      <div className="text-2xl font-semibold">{value}</div>
+    </div>
   );
 }
 
-// ─── Map slot wiring ────────────────────────────────────────
-//
-// Extracted from the page body so the callbacks (`onControlClick`,
-// `onChange`) and the toolbar JSX can be stabilised with
-// `useCallback` / `useMemo`. Stable refs let `React.memo` on the
-// shell-owned MapPanel skip render work when nothing actually changed.
-
-interface DashboardMapSlotProps {
-  selectedClassId: number | null;
-  onSelectClassId: (id: number | null) => void;
-  classOptions: SelectOption[];
-  selectedClassCourseNames: string[];
-  showCompletion: boolean;
-  setShowCompletion: (v: boolean) => void;
-  selectedCourseId: number | undefined;
-}
-
-function DashboardMapSlot({
-  selectedClassId,
-  onSelectClassId,
-  classOptions,
-  selectedClassCourseNames,
-  showCompletion,
-  setShowCompletion,
-  selectedCourseId,
-}: DashboardMapSlotProps) {
-  const { t } = useTranslation("dashboard");
-  const navigate = useNavigate();
-  const onControlClick = useCallback(
-    (id: number) => navigate(`controls?control=${id}`),
-    [navigate],
-  );
-  const highlightCourseNames = useMemo(
-    () =>
-      selectedClassCourseNames.length > 0 ? selectedClassCourseNames : undefined,
-    [selectedClassCourseNames],
-  );
-  const toolbar = useMemo(
-    () => (
-      <>
-        <h2 className="text-sm font-semibold text-slate-500 uppercase tracking-wider">
-          {t("map")}
-        </h2>
-        <div className="w-64">
-          <SearchableSelect
-            value={selectedClassId ?? ""}
-            onChange={(v) => onSelectClassId(v ? Number(v) : null)}
-            options={[{ value: "", label: t("allClasses") }, ...classOptions]}
-            placeholder={t("filterByClass")}
-            searchPlaceholder={t("searchClass")}
-            className="text-sm"
-          />
-        </div>
-      </>
-    ),
-    [t, selectedClassId, onSelectClassId, classOptions],
-  );
-  return (
-    <MapSlot
-      className="w-full"
-      height="700px"
-      fitToControls
-      highlightCourseNames={highlightCourseNames}
-      onControlClick={onControlClick}
-      showCompletion={showCompletion}
-      onCompletionToggle={setShowCompletion}
-      completionCourseId={selectedCourseId}
-      toolbar={toolbar}
-    />
-  );
-}
-
-function StatCard({
-  label,
-  value,
-  accent,
-  onClick,
-}: {
-  label: string;
-  value: number;
-  accent?: boolean;
-  onClick?: () => void;
-}) {
-  const Tag = onClick ? "button" : "div";
-  return (
-    <Tag
-      onClick={onClick}
-      className={`bg-white rounded-xl border border-slate-200 p-4 text-left ${onClick ? "hover:bg-blue-50 hover:border-blue-200 transition-colors cursor-pointer" : ""}`}
-    >
-      <div className="text-xs font-medium text-slate-500 uppercase tracking-wider">
-        {label}
-      </div>
-      <div className={`text-2xl font-bold mt-1 ${accent ? "text-emerald-600" : "text-slate-900"}`}>
-        {value}
-      </div>
-    </Tag>
-  );
-}
-
-const statusColorMap: Record<string, { bg: string; border: string; text: string; valueText: string; hoverBg: string }> = {
-  slate: {
-    bg: "bg-slate-50",
-    border: "border-slate-200",
-    text: "text-slate-600",
-    valueText: "text-slate-900",
-    hoverBg: "hover:bg-slate-100",
-  },
-  amber: {
-    bg: "bg-amber-50",
-    border: "border-amber-200",
-    text: "text-amber-700",
-    valueText: "text-amber-900",
-    hoverBg: "hover:bg-amber-100",
-  },
-  emerald: {
-    bg: "bg-emerald-50",
-    border: "border-emerald-200",
-    text: "text-emerald-700",
-    valueText: "text-emerald-900",
-    hoverBg: "hover:bg-emerald-100",
-  },
-};
-
-function RegistrationTrendsCard({ onOpen }: { onOpen: () => void }) {
-  const { t } = useTranslation("trends");
-  const trends = trpc.registrationTrends.ownTimeline.useQuery(undefined, {
-    staleTime: 60_000,
-  });
-  if (trends.isLoading || !trends.data) return null;
-  const data = trends.data;
-  if (data.entries.length === 0) return null;
-
-  const todayCount = entriesToday(data.entries);
-  const dtg = daysToGo(data.event.date);
-  // Build a small per-day series for the sparkline
-  const points = buildSeries(data.entries, {
-    xAxis: "date",
-    yAxis: "perDay",
-    eventDate: data.event.date,
-  });
-  const values = points.map((p) => p.y);
-
-  return (
-    <button
-      onClick={onOpen}
-      className="w-full bg-white rounded-xl border border-slate-200 p-4 mb-6 text-left hover:bg-blue-50 hover:border-blue-200 transition-colors cursor-pointer"
-    >
-      <div className="flex items-center gap-4">
-        <div className="flex-1 min-w-0">
-          <div className="flex items-baseline gap-3">
-            <span className="text-xs font-semibold text-slate-500 uppercase tracking-wider">
-              {t("title")}
-            </span>
-            <span className="text-xs text-slate-400">
-              {dtg > 0
-                ? t("daysToGo") + ": " + dtg
-                : dtg === 0
-                  ? t("raceDay")
-                  : t("raceDayPast", { days: -dtg })}
-            </span>
-          </div>
-          <div className="mt-1 flex items-baseline gap-2">
-            <span className="text-2xl font-bold text-slate-900">
-              {data.datedCount}
-            </span>
-            <span className="text-xs text-slate-500">
-              · {t("todayCard")}: {todayCount > 0 ? todayCount : t("todayCardEmpty")}
-            </span>
-          </div>
-        </div>
-        <div className="text-blue-600">
-          <DashboardSparkline values={values} />
-        </div>
-      </div>
-    </button>
-  );
-}
-
-function DashboardSparkline({ values }: { values: number[] }) {
-  if (values.length < 2) return null;
-  const max = Math.max(...values, 1);
-  const w = 160;
-  const h = 36;
-  const step = w / (values.length - 1);
-  const points = values.map((v, i) => `${i * step},${h - (v / max) * h}`);
-  return (
-    <svg width={w} height={h} viewBox={`0 0 ${w} ${h}`}>
-      <polyline
-        points={points.join(" ")}
-        fill="none"
-        stroke="currentColor"
-        strokeWidth={1.75}
-        strokeLinejoin="round"
-        strokeLinecap="round"
-      />
-    </svg>
-  );
-}
-
-function StatusCard({
-  label,
-  description,
-  value,
-  color,
-  onClick,
-}: {
-  label: string;
-  description: string;
-  value: number;
-  color: "slate" | "amber" | "emerald";
-  onClick: () => void;
-}) {
-  const c = statusColorMap[color];
-  return (
-    <button
-      onClick={onClick}
-      className={`${c.bg} ${c.hoverBg} rounded-xl border ${c.border} p-4 text-left transition-colors cursor-pointer group`}
-    >
-      <div className="flex items-center justify-between mb-1">
-        <div className={`text-xs font-semibold uppercase tracking-wider ${c.text}`}>
-          {label}
-        </div>
-        <svg
-          className={`w-4 h-4 ${c.text} opacity-0 group-hover:opacity-100 transition-opacity`}
-          fill="none"
-          viewBox="0 0 24 24"
-          stroke="currentColor"
-        >
-          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
-        </svg>
-      </div>
-      <div data-testid="status-value" className={`text-3xl font-black ${c.valueText}`}>
-        {value}
-      </div>
-      <div className={`text-xs mt-1 ${c.text} opacity-75`}>
-        {description}
-      </div>
-    </button>
-  );
-}
+export default CompetitionDashboard;

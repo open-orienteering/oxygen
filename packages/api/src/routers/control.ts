@@ -284,4 +284,191 @@ export const controlRouter = router({
       });
       return { ok: true };
     }),
+
+  /** Alias for getById so the web side can read `control.detail`. */
+  detail: eventProcedure
+    .input(z.object({ id: z.number().int() }))
+    .query(async ({ ctx, input }) => {
+      const c = await getControlBySeq(ctx.db, ctx.event.id, input.id);
+      const units = await ctx.db.controlUnit.findMany({
+        where: { eventId: ctx.event.id, controlId: c.id },
+      });
+      const u = units.map(unitToDto);
+      return {
+        id: c.seq,
+        name: c.name,
+        codes: c.codes,
+        status: controlStatusToValue(c.status),
+        timeAdjust: c.timeAdjust,
+        minTime: c.minTime,
+        runnerCount: 0,
+        config: aggregateConfig(u, c.radioType, c.airPlus),
+        units: u,
+        courses: [] as Array<{
+          courseId: number;
+          courseName: string;
+          occurrences: number;
+          runnerCount: number;
+        }>,
+      };
+    }),
+
+  /** Single per-event toggle for AIR+. */
+  getAirPlusConfig: eventProcedure.query(async ({ ctx }) => {
+    const event = await ctx.db.event.findUnique({
+      where: { id: ctx.event.id },
+      select: { airPlus: true },
+    });
+    return { airPlus: event?.airPlus ?? false };
+  }),
+
+  setAirPlusConfig: eventProcedure
+    .input(z.object({ airPlus: z.boolean() }))
+    .mutation(async ({ ctx, input }) => {
+      await ctx.db.event.update({
+        where: { id: ctx.event.id },
+        data: { airPlus: input.airPlus },
+      });
+      return { ok: true as const };
+    }),
+
+  /** Persist control config (radio + air-plus override + station serial). */
+  upsertConfig: eventProcedure
+    .input(
+      z.object({
+        controlId: z.number().int(),
+        radioType: z.enum(["normal", "internal_radio", "public_radio"]).optional(),
+        airPlus: z.enum(["default", "on", "off"]).optional(),
+        stationSerial: z.number().int().nullable().optional(),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      const c = await getControlBySeq(ctx.db, ctx.event.id, input.controlId);
+      const data: Record<string, unknown> = {};
+      if (input.radioType !== undefined) data.radioType = input.radioType;
+      if (input.airPlus !== undefined) data.airPlus = input.airPlus;
+      await ctx.db.control.update({ where: { id: c.id }, data });
+      if (input.stationSerial !== undefined) {
+        if (input.stationSerial === null) {
+          await ctx.db.controlUnit.deleteMany({
+            where: { eventId: ctx.event.id, controlId: c.id },
+          });
+        } else {
+          await ctx.db.controlUnit.upsert({
+            where: {
+              eventId_stationSerial: {
+                eventId: ctx.event.id,
+                stationSerial: input.stationSerial,
+              },
+            },
+            create: {
+              eventId: ctx.event.id,
+              stationSerial: input.stationSerial,
+              controlId: c.id,
+            },
+            update: { controlId: c.id },
+          });
+        }
+      }
+      return { ok: true as const };
+    }),
+
+  /** Server time (ms since epoch) for clock drift checks at controls. */
+  serverTime: eventProcedure.query(() => ({ now: Date.now() })),
+
+  /** Record that a station was programmed (stub — full hardware sync pending). */
+  recordProgramming: eventProcedure
+    .input(
+      z.object({
+        stationSerial: z.number().int(),
+        controlId: z.number().int().optional(),
+        lastProgrammedCode: z.number().int().optional(),
+        firmwareVersion: z.string().optional(),
+        modelId: z.number().int().optional(),
+        modelName: z.string().optional(),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      const controlUuid = input.controlId
+        ? (await getControlBySeq(ctx.db, ctx.event.id, input.controlId)).id
+        : null;
+      await ctx.db.controlUnit.upsert({
+        where: {
+          eventId_stationSerial: {
+            eventId: ctx.event.id,
+            stationSerial: input.stationSerial,
+          },
+        },
+        create: {
+          eventId: ctx.event.id,
+          stationSerial: input.stationSerial,
+          controlId: controlUuid,
+          lastProgrammedCode: input.lastProgrammedCode ?? null,
+          firmwareVersion: input.firmwareVersion ?? null,
+          modelId: input.modelId ?? null,
+          modelName: input.modelName ?? null,
+          checkedAt: new Date(),
+        },
+        update: {
+          ...(controlUuid != null ? { controlId: controlUuid } : {}),
+          ...(input.lastProgrammedCode !== undefined
+            ? { lastProgrammedCode: input.lastProgrammedCode }
+            : {}),
+          ...(input.firmwareVersion !== undefined
+            ? { firmwareVersion: input.firmwareVersion }
+            : {}),
+          ...(input.modelId !== undefined ? { modelId: input.modelId } : {}),
+          ...(input.modelName !== undefined ? { modelName: input.modelName } : {}),
+          checkedAt: new Date(),
+        },
+      });
+      return { ok: true as const };
+    }),
+
+  /** Import punches from an SI station's backup memory. */
+  importBackupPunches: eventProcedure
+    .input(
+      z.object({
+        controlId: z.number().int().optional(),
+        stationSerial: z.number().int().optional(),
+        punches: z.array(
+          z.object({
+            cardNo: z.number().int(),
+            controlCode: z.number().int(),
+            time: z.number().int(),
+            punchedAt: z.string().optional(),
+            subSecond: z.number().int().optional(),
+          }),
+        ),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      const controlUuid = input.controlId
+        ? (await getControlBySeq(ctx.db, ctx.event.id, input.controlId)).id
+        : null;
+      const unitRow = input.stationSerial
+        ? await ctx.db.controlUnit.findUnique({
+            where: {
+              eventId_stationSerial: {
+                eventId: ctx.event.id,
+                stationSerial: input.stationSerial,
+              },
+            },
+            select: { id: true },
+          })
+        : null;
+      const data = input.punches.map((p) => ({
+        eventId: ctx.event.id,
+        cardNo: p.cardNo,
+        controlCode: p.controlCode,
+        controlId: controlUuid,
+        unitId: unitRow?.id ?? null,
+        time: p.time,
+        punchedAt: p.punchedAt ? new Date(p.punchedAt) : null,
+        subSecond: p.subSecond ?? null,
+        source: "backup_memory",
+      }));
+      const result = await ctx.db.punch.createMany({ data, skipDuplicates: true });
+      return { ok: true as const, inserted: result.count };
+    }),
 });

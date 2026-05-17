@@ -111,7 +111,7 @@ export function StartScreenPage() {
     }, [nameId]);
 
     // Fetch runner data (poll every 5s)
-    const { data } = trpc.runner.startScreen.useQuery(undefined, {
+    const { data } = trpc.competition.startScreen.useQuery(undefined, {
         enabled: selectMutation.isSuccess,
         refetchInterval: 5000,
     });

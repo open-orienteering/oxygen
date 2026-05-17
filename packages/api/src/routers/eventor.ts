@@ -100,4 +100,122 @@ export const eventorRouter = router({
   pushResults: eventProcedure.mutation(async () => notReady("results push")),
 
   pushStartList: eventProcedure.mutation(async () => notReady("start-list push")),
+
+  // ─── Surface used by EventPage / RegistrationDialog ─────
+
+  /** Aggregated sync status for the active event. */
+  syncStatus: eventProcedure.query(async ({ ctx }) => {
+    const event = await ctx.db.event.findUnique({
+      where: { id: ctx.event.id },
+      select: { eventorEventId: true, eventorEnv: true },
+    });
+    return {
+      linked: !!event?.eventorEventId,
+      eventorEventId: event?.eventorEventId ? Number(event.eventorEventId) : 0,
+      env: event?.eventorEnv ?? "prod",
+      lastSync: null as string | null,
+      runnerCount: 0,
+      classCount: 0,
+    };
+  }),
+
+  /** Top-level sync trigger (placeholder). */
+  sync: eventProcedure.mutation(async () => notReady("event sync")),
+
+  /** Refresh club roster from Eventor (placeholder). */
+  syncClubs: eventProcedure.mutation(async () => notReady("club sync")),
+
+  /** Is the configured API key valid (cached check, no live call yet)? */
+  keyStatus: publicProcedure
+    .input(z.object({ env: z.enum(["prod", "test"]).default("prod") }))
+    .query(async ({ input }) => {
+      const key = input.env === "test" ? "eventor_api_key_test" : "eventor_api_key";
+      const value = await getSetting(key);
+      return {
+        hasKey: !!value,
+        env: input.env,
+        valid: !!value, // optimistic — actual validate call pending re-port
+      };
+    }),
+
+  /** Search the global runner directory by partial name / id. */
+  searchRunnerDb: publicProcedure
+    .input(z.object({ query: z.string().min(1) }))
+    .query(async ({ input, ctx }) => {
+      void ctx;
+      const { prisma } = await import("../db.js");
+      const rows = await prisma().runnerDirectory.findMany({
+        where: { name: { contains: input.query, mode: "insensitive" } },
+        take: 30,
+      });
+      return rows.map((r) => ({
+        eventorPersonId: Number(r.eventorPersonId),
+        name: r.name,
+        cardNo: r.cardNo,
+        eventorClubId: r.eventorClubId,
+        birthYear: r.birthYear,
+        sex: r.sex,
+      }));
+    }),
+
+  /** Look up a single runner in the global directory by SI card number. */
+  lookupByCardNo: publicProcedure
+    .input(z.object({ cardNo: z.number().int() }))
+    .query(async ({ input }) => {
+      const { prisma } = await import("../db.js");
+      const r = await prisma().runnerDirectory.findFirst({
+        where: { cardNo: input.cardNo },
+      });
+      if (!r) return null;
+      return {
+        eventorPersonId: Number(r.eventorPersonId),
+        name: r.name,
+        cardNo: r.cardNo,
+        eventorClubId: r.eventorClubId,
+        birthYear: r.birthYear,
+        sex: r.sex,
+      };
+    }),
+
+  /** All runner-directory rows for a given Eventor club. */
+  clubMembers: publicProcedure
+    .input(z.object({ eventorClubId: z.number().int() }))
+    .query(async ({ input }) => {
+      const { prisma } = await import("../db.js");
+      const rows = await prisma().runnerDirectory.findMany({
+        where: { eventorClubId: input.eventorClubId },
+        orderBy: { name: "asc" },
+      });
+      return rows.map((r) => ({
+        eventorPersonId: Number(r.eventorPersonId),
+        name: r.name,
+        cardNo: r.cardNo,
+        birthYear: r.birthYear,
+        sex: r.sex,
+      }));
+    }),
+
+  /** Dump the full directory (used by RegistrationDialog client-side search). */
+  runnerDbDump: publicProcedure.query(async () => {
+    const { prisma } = await import("../db.js");
+    const rows = await prisma().runnerDirectory.findMany({
+      orderBy: { name: "asc" },
+      take: 50_000,
+    });
+    return rows.map((r) => ({
+      eventorPersonId: Number(r.eventorPersonId),
+      name: r.name,
+      cardNo: r.cardNo,
+      eventorClubId: r.eventorClubId,
+      birthYear: r.birthYear,
+      sex: r.sex,
+    }));
+  }),
+
+  /** Eventor-side classes for the given event (placeholder). */
+  getLiveloxClasses: publicProcedure
+    .input(z.object({ eventorEventId: z.number().int() }))
+    .query(async () => {
+      return [] as Array<{ id: number; name: string }>;
+    }),
 });

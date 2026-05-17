@@ -196,11 +196,15 @@ export function RunnerManagement() {
     }
 
     if (window.confirm(t("bulkConfirm", { field: fieldLabel, value: valueLabel, count }))) {
+      const fieldKey =
+        bulkField === "club"
+          ? "eventorClubId"
+          : bulkField === "class"
+            ? "classId"
+            : "status";
       bulkUpdateMutation.mutate({
         ids: Array.from(selection.selected),
-        data: {
-          [bulkField === "club" ? "clubId" : bulkField === "class" ? "classId" : "status"]: Number(bulkValue)
-        }
+        [fieldKey]: Number(bulkValue),
       });
     }
   };

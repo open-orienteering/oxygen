@@ -13,8 +13,12 @@ const withdrawnEnums = WITHDRAWN_STATUSES.map(valueToRunnerStatus);
  * or a clubName when no eventor id exists.
  */
 export const clubRouter = router({
-  /** Aggregate clubs from the active event's runner roster. */
-  list: eventProcedure.query(async ({ ctx }): Promise<ClubSummary[]> => {
+  /** Aggregate clubs from the active event's runner roster.
+   *  `showAll` includes clubs without participating runners (currently
+   *  identical because clubs aren't first-class entities anymore). */
+  list: eventProcedure
+    .input(z.object({ showAll: z.boolean().optional() }).optional())
+    .query(async ({ ctx }): Promise<ClubSummary[]> => {
     const runners = await ctx.db.runner.findMany({
       where: {
         eventId: ctx.event.id,
@@ -147,4 +151,37 @@ export const clubRouter = router({
         countryCode: d.countryCode,
       }));
     }),
+
+  /**
+   * Map of club id (eventor_club_id) → Eventor organisation id. Since
+   * clubs are now keyed by their Eventor id, this is an identity map
+   * for every club that *has* a directory entry with a logo (so the
+   * caller knows which logos to load).
+   */
+  logoMap: eventProcedure.query(async ({ ctx }) => {
+    const runners = await ctx.db.runner.findMany({
+      where: { eventId: ctx.event.id, removed: false },
+      select: { eventorClubId: true },
+    });
+    const ids = [
+      ...new Set(
+        runners
+          .map((r) => r.eventorClubId)
+          .filter((id): id is bigint => id !== null),
+      ),
+    ];
+    const dirs = ids.length
+      ? await ctx.db.clubDirectory.findMany({
+          where: { eventorId: { in: ids } },
+          select: { eventorId: true, smallLogoPng: true },
+        })
+      : [];
+    const map: Record<string, number> = {};
+    for (const d of dirs) {
+      if (d.smallLogoPng && d.smallLogoPng.length > 0) {
+        map[d.eventorId.toString()] = Number(d.eventorId);
+      }
+    }
+    return map;
+  }),
 });

@@ -114,7 +114,12 @@ export function DbLoadIndicator({ enabled = true }: { enabled?: boolean }) {
     if (prev && prevTime > 0) {
       const dt = (now - prevTime) / 1000;
       if (dt > 0.5) {
-        const diff = (key: string) => Math.max(0, (data[key] ?? 0) - (prev[key] ?? 0)) / dt;
+        const diff = (key: string) =>
+          Math.max(
+            0,
+            ((data as Record<string, number>)[key] ?? 0) -
+              ((prev as Record<string, number>)[key] ?? 0),
+          ) / dt;
         const locksWaited = (data.Table_locks_waited ?? 0) - (prev.Table_locks_waited ?? 0);
         const locksImmediate = (data.Table_locks_immediate ?? 0) - (prev.Table_locks_immediate ?? 0);
         const totalLocks = locksWaited + locksImmediate;

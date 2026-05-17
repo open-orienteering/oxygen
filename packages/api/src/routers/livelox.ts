@@ -90,11 +90,46 @@ export const liveloxRouter = router({
     }),
 
   importClass: eventProcedure
-    .input(z.object({ liveloxClassId: z.number().int(), classId: z.number().int() }))
-    .mutation(async () => {
+    .input(z.object({ liveloxClassId: z.number().int(), classId: z.number().int().optional() }))
+    .query(async () => {
+      // The web page uses this with useQuery, so it returns a payload.
       throw new TRPCError({
         code: "PRECONDITION_FAILED",
         message: "Livelox class import pending re-port.",
       });
+    }),
+
+  /** Sync trigger (alias of syncRoutes). */
+  sync: eventProcedure.mutation(async () => {
+    throw new TRPCError({
+      code: "PRECONDITION_FAILED",
+      message: "Livelox sync pending re-port.",
+    });
+  }),
+
+  /** Route by runner seq. */
+  routeByRunner: eventProcedure
+    .input(z.object({ runnerId: z.number().int() }))
+    .query(async ({ ctx, input }) => {
+      const runner = await ctx.db.runner.findFirst({
+        where: { eventId: ctx.event.id, seq: input.runnerId, removed: false },
+        select: { id: true },
+      });
+      if (!runner) return null;
+      const route = await ctx.db.route.findFirst({
+        where: { eventId: ctx.event.id, runnerId: runner.id },
+        orderBy: { syncedAt: "desc" },
+      });
+      if (!route) return null;
+      return {
+        id: Number(route.id),
+        sourceType: route.sourceType,
+        color: route.color,
+        raceStartMs: route.raceStartMs != null ? Number(route.raceStartMs) : null,
+        waypoints: route.waypoints,
+        interruptions: route.interruptions,
+        result: route.result,
+        syncedAt: route.syncedAt.toISOString(),
+      };
     }),
 });
