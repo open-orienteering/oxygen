@@ -18,6 +18,8 @@ import { RunnerStatus } from "@oxygen/shared";
 
 let ctx: TestDbContext;
 let classId: number;
+let courseId: number;
+let controlId: number;
 let clubId: number;
 let cancelledClubId: number;
 
@@ -54,12 +56,30 @@ async function seedRunner(
 beforeAll(async () => {
   ctx = await createTestDb("cancellation");
 
+  // Set up a course with a single intermediate control so the
+  // control.list / control.detail runner counts can be exercised
+  // alongside the dashboard / list assertions below.
+  const ctrl = await ctx.client.oControl.create({
+    data: { Id: 50, Name: "", Numbers: "50", Status: 0 },
+  });
+  controlId = ctrl.Id;
+
+  const course = await ctx.client.oCourse.create({
+    data: {
+      Name: "Cancel Course",
+      Controls: `${controlId};`,
+      Length: 3000,
+      Legs: "600;600;",
+    },
+  });
+  courseId = course.Id;
+
   // Set up classes / clubs (one club exists only for cancelled runners,
   // to verify it's filtered out of competition.clubs).
   const cls = await ctx.client.oClass.create({
     data: {
       Name: "H21",
-      Course: 0,
+      Course: courseId,
       FirstStart: 0,
       StartInterval: 0,
       SortIndex: 1,
@@ -262,5 +282,26 @@ describe("runner.list with cancelled runners", () => {
     const caller = makeCaller({ dbName: ctx.dbName });
     const list = await caller.runner.list({ statusFilter: "finished" });
     expect(list.find((r) => r.status === RunnerStatus.DNS)).toBeDefined();
+  });
+});
+
+// ─── Control runner counts ───────────────────────────────────
+
+describe("control runner counts with cancelled runners", () => {
+  it("control.list excludes cancelled runners from runnerCount", async () => {
+    const caller = makeCaller({ dbName: ctx.dbName });
+    const controls = await caller.control.list();
+    const ctrl = controls.find((c) => c.id === controlId);
+    // 5 OK + 1 DNS + 1 unstarted = 7 participants. 2 cancelled excluded.
+    expect(ctrl?.runnerCount).toBe(7);
+  });
+
+  it("control.detail excludes cancelled runners from per-course runner count", async () => {
+    const caller = makeCaller({ dbName: ctx.dbName });
+    const detail = await caller.control.detail({ id: controlId });
+    expect(detail).not.toBeNull();
+    const usage = detail!.courses.find((c) => c.courseId === courseId);
+    expect(usage?.runnerCount).toBe(7);
+    expect(detail!.runnerCount).toBe(7);
   });
 });
