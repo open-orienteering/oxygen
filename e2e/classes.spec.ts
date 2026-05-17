@@ -30,7 +30,7 @@ test.describe("Classes Page", () => {
     await expect(page.getByRole("cell", { name: "Öppen 3" })).toBeVisible();
   });
 
-  test("should expand class to show details, course checkboxes, and runner list", async ({
+  test("should expand class to show details, course dropdown, and runner list", async ({
     page,
   }) => {
     await selectCompetition(page);
@@ -43,8 +43,13 @@ test.describe("Classes Page", () => {
     await expect(page.locator("label", { hasText: "Name" })).toBeVisible();
     await expect(page.locator("label", { hasText: "Sex" })).toBeVisible();
 
-    // Course checkboxes — Bana 2 checked, others not
+    // The course picker is a dropdown trigger — the assigned course
+    // name (Bana 2) shows as the trigger label. Open the dropdown to
+    // verify checkbox state for both courses.
     const expandedPanel = page.locator(".bg-blue-50\\/60");
+    const trigger = expandedPanel.getByRole("button", { name: "Bana 2" });
+    await expect(trigger).toBeVisible();
+    await trigger.click();
     const bana2Checkbox = expandedPanel
       .locator("label", { hasText: "Bana 2" })
       .locator("input[type='checkbox']");
@@ -76,10 +81,16 @@ test.describe("Classes Page", () => {
 
     await page.getByPlaceholder("e.g. H21").fill("Test Klass");
     const createForm = page.locator("form").first();
+    // Open the course dropdown (placeholder text when nothing selected),
+    // then tick Bana 1 inside the popover.
+    await createForm.getByRole("button", { name: "Select courses..." }).click();
     await createForm
       .locator("label", { hasText: "Bana 1" })
       .locator("input[type='checkbox']")
       .check();
+    // Close the dropdown so it doesn't intercept clicks on the
+    // Create button below it.
+    await page.keyboard.press("Escape");
     await page.getByRole("button", { name: "Create" }).click();
 
     await expect(page.getByRole("cell", { name: "Test Klass" })).toBeVisible({ timeout: 5000 });
@@ -178,6 +189,8 @@ test.describe("Classes Page", () => {
     await expect(page.getByText("Class Settings")).toBeVisible({ timeout: 5000 });
 
     const expandedPanel = page.locator(".bg-blue-50\\/60");
+    // Open the course dropdown (Öppen 3 has Bana 3 assigned).
+    await expandedPanel.getByRole("button", { name: "Bana 3" }).click();
     await expandedPanel
       .locator("label", { hasText: "Bana 1" })
       .locator("input[type='checkbox']")
@@ -186,7 +199,7 @@ test.describe("Classes Page", () => {
     await expect(expandedPanel.getByText(/Forked/)).toBeVisible({ timeout: 5000 });
     await expect(page.getByText("Forked").first()).toBeVisible();
 
-    // Clean up
+    // Clean up — uncheck inside the still-open dropdown
     await expandedPanel
       .locator("label", { hasText: "Bana 1" })
       .locator("input[type='checkbox']")
