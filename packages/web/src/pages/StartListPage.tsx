@@ -11,7 +11,6 @@ import { useNumericSearchParam } from "../hooks/useSearchParam";
 import { StructuredSearchBar } from "../components/structured-search/StructuredSearchBar";
 import { useStructuredSearch } from "../hooks/useStructuredSearch";
 import { createStartListAnchors } from "../lib/structured-search/anchors/start-list-anchors";
-import { MapSlot } from "../components/MapSlot";
 import { RunnerMapPreview } from "../components/RunnerMapPreview";
 import { useDefaultMapCourseNames } from "../hooks/useDefaultMapCourseNames";
 
@@ -267,14 +266,12 @@ export function StartListPage() {
       )}
 
       {/* Map preview — shows the expanded runner's assigned course or the
-          page's class-filter course when nothing is expanded. Portals into
-          the shell pane on wide viewports; renders inline on narrow. */}
-      <MapSlot>
-        <RunnerMapPreview
-          runnerId={expandedRunner}
-          defaultCourseNames={defaultCourseNames}
-        />
-      </MapSlot>
+          page's class-filter course when nothing is expanded.
+          `RunnerMapPreview` itself wraps the `<MapSlot>`. */}
+      <RunnerMapPreview
+        runnerId={expandedRunner}
+        defaultCourseNames={defaultCourseNames}
+      />
 
       {showDrawPanel && (
         <DrawPanel

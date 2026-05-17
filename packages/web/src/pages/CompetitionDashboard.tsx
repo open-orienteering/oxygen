@@ -1,8 +1,7 @@
-import { useState, useMemo } from "react";
+import { useState, useMemo, useCallback } from "react";
 import { useNavigate } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { trpc } from "../lib/trpc";
-import { MapPanel } from "../components/MapPanel";
 import { MapSlot } from "../components/MapSlot";
 import { SearchableSelect, type SelectOption } from "../components/SearchableSelect";
 import { entriesToday, daysToGo, buildSeries } from "../lib/registration-trends";
@@ -158,37 +157,91 @@ export function CompetitionDashboard() {
       {/* Competition progress */}
       <CompetitionProgressBar courseId={selectedCourseId} />
 
-      {/* Map with class filter */}
-      <MapSlot>
-        <MapPanel
-          className="w-full"
-          height="700px"
-          fitToControls
-          highlightCourseNames={selectedClassCourseNames.length > 0 ? selectedClassCourseNames : undefined}
-          onControlClick={(id) => navigate(`controls?control=${id}`)}
-          showCompletion={showCompletion}
-          onCompletionToggle={setShowCompletion}
-          completionCourseId={selectedCourseId}
-          toolbar={
-            <>
-              <h2 className="text-sm font-semibold text-slate-500 uppercase tracking-wider">
-                {t("map")}
-              </h2>
-              <div className="w-64">
-                <SearchableSelect
-                  value={selectedClassId ?? ""}
-                  onChange={(v) => setSelectedClassId(v ? Number(v) : null)}
-                  options={[{ value: "", label: t("allClasses") }, ...classOptions]}
-                  placeholder={t("filterByClass")}
-                  searchPlaceholder={t("searchClass")}
-                  className="text-sm"
-                />
-              </div>
-            </>
-          }
-        />
-      </MapSlot>
+      {/* Map with class filter. Props are stabilised below so React.memo
+          on the shell-owned persistent MapPanel can short-circuit
+          re-renders when nothing changed. */}
+      <DashboardMapSlot
+        selectedClassId={selectedClassId}
+        onSelectClassId={setSelectedClassId}
+        classOptions={classOptions}
+        selectedClassCourseNames={selectedClassCourseNames}
+        showCompletion={showCompletion}
+        setShowCompletion={setShowCompletion}
+        selectedCourseId={selectedCourseId}
+      />
     </>
+  );
+}
+
+// ─── Map slot wiring ────────────────────────────────────────
+//
+// Extracted from the page body so the callbacks (`onControlClick`,
+// `onChange`) and the toolbar JSX can be stabilised with
+// `useCallback` / `useMemo`. Stable refs let `React.memo` on the
+// shell-owned MapPanel skip render work when nothing actually changed.
+
+interface DashboardMapSlotProps {
+  selectedClassId: number | null;
+  onSelectClassId: (id: number | null) => void;
+  classOptions: SelectOption[];
+  selectedClassCourseNames: string[];
+  showCompletion: boolean;
+  setShowCompletion: (v: boolean) => void;
+  selectedCourseId: number | undefined;
+}
+
+function DashboardMapSlot({
+  selectedClassId,
+  onSelectClassId,
+  classOptions,
+  selectedClassCourseNames,
+  showCompletion,
+  setShowCompletion,
+  selectedCourseId,
+}: DashboardMapSlotProps) {
+  const { t } = useTranslation("dashboard");
+  const navigate = useNavigate();
+  const onControlClick = useCallback(
+    (id: number) => navigate(`controls?control=${id}`),
+    [navigate],
+  );
+  const highlightCourseNames = useMemo(
+    () =>
+      selectedClassCourseNames.length > 0 ? selectedClassCourseNames : undefined,
+    [selectedClassCourseNames],
+  );
+  const toolbar = useMemo(
+    () => (
+      <>
+        <h2 className="text-sm font-semibold text-slate-500 uppercase tracking-wider">
+          {t("map")}
+        </h2>
+        <div className="w-64">
+          <SearchableSelect
+            value={selectedClassId ?? ""}
+            onChange={(v) => onSelectClassId(v ? Number(v) : null)}
+            options={[{ value: "", label: t("allClasses") }, ...classOptions]}
+            placeholder={t("filterByClass")}
+            searchPlaceholder={t("searchClass")}
+            className="text-sm"
+          />
+        </div>
+      </>
+    ),
+    [t, selectedClassId, onSelectClassId, classOptions],
+  );
+  return (
+    <MapSlot
+      className="w-full"
+      height="700px"
+      fitToControls
+      highlightCourseNames={highlightCourseNames}
+      onControlClick={onControlClick}
+      showCompletion={showCompletion}
+      onCompletionToggle={setShowCompletion}
+      completionCourseId={selectedCourseId}
+      toolbar={toolbar}
+    />
   );
 }
 

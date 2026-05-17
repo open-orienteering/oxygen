@@ -1,13 +1,11 @@
-import { useCallback, useEffect, useRef } from "react";
+import { useCallback, useEffect, useRef, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 
 interface Props {
-  /** Forwarded ref callback so the parent can grab the portal target div. */
-  setPortalTarget: (el: HTMLDivElement | null) => void;
+  /** Hosted content (the shell-owned persistent `<MapPanel>`). */
+  children?: ReactNode;
   /** Set to false when no slot is currently active (pane visually hides). */
   visible: boolean;
-  /** Hide-pane callback wired to the collapse button. */
-  onCollapse: () => void;
   /** Lower bound for the pane width (px). */
   minWidth?: number;
   /**
@@ -32,24 +30,24 @@ interface Props {
 }
 
 /**
- * Right-side pane that holds a portal target for `<MapSlot>`-wrapped maps.
+ * Right-side pane that hosts the persistent `<MapPanel>`.
  *
  * The pane:
- * - Renders a small chrome row with a collapse button.
+ * - Has no chrome of its own — the collapse button and "MAP" label
+ *   live inside the hosted MapPanel's toolbar (one unified header
+ *   across all pages, instead of the previous two stacked headers).
  * - Exposes a 4px drag handle on its left edge that updates the
  *   `--map-pane-width` CSS variable on the shell container during drag
  *   (no React re-renders), then persists the final value via
  *   `onWidthCommit` on pointer-up.
- * - Is always rendered while wide+not-collapsed even when no slot is
- *   active, so the portal target ref stays stable. The `visible` prop
- *   controls CSS visibility only — keeping the DOM target alive lets
- *   `<MapSlot>` portal without remounting children when the count
- *   transitions 0 → 1.
+ * - Is always mounted while wide+not-collapsed; the `visible` prop just
+ *   toggles `display: none` so the underlying MapPanel React fibre
+ *   stays alive when no page is currently driving content (avoids
+ *   remounting the MapViewer on transient empty states).
  */
 export function MapPane({
-  setPortalTarget,
+  children,
   visible,
-  onCollapse,
   minWidth = 600,
   maxWidth = Number.POSITIVE_INFINITY,
   minContentWidth = 480,
@@ -134,39 +132,12 @@ export function MapPane({
         <div className="absolute inset-y-0 left-1/2 -translate-x-1/2 w-0.5 bg-transparent group-hover:bg-blue-400 transition-colors" />
       </div>
 
-      <div className="flex items-center justify-between px-3 py-2 border-b border-slate-200 bg-slate-50">
-        <span className="text-xs font-semibold text-slate-500 uppercase tracking-wider">
-          {t("mapPaneLabel")}
-        </span>
-        <button
-          type="button"
-          onClick={onCollapse}
-          title={t("hideMapPaneTitle")}
-          data-testid="map-pane-collapse"
-          className="p-1 text-slate-400 hover:text-slate-700 hover:bg-slate-100 rounded transition-colors cursor-pointer"
-        >
-          <span className="sr-only">{t("hideMapPane")}</span>
-          <svg
-            className="w-4 h-4"
-            fill="none"
-            viewBox="0 0 24 24"
-            stroke="currentColor"
-            strokeWidth={2}
-          >
-            <path
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              d="M13 5l7 7-7 7M5 5l7 7-7 7"
-            />
-          </svg>
-        </button>
-      </div>
-
       <div
-        ref={setPortalTarget}
-        data-testid="map-pane-target"
-        className="h-[calc(100%-2.5rem)] overflow-hidden"
-      />
+        data-testid="map-pane-content"
+        className="h-full overflow-hidden"
+      >
+        {children}
+      </div>
     </aside>
   );
 }

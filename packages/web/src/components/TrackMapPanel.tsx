@@ -1,16 +1,20 @@
 /**
- * Unified map panel for displaying a GPS route preview.
+ * Inline fallback map panel for the Tracks page.
  *
- * - If an O2 map is uploaded: renders the O2 map via MapPanel with the GPS
- *   track overlaid as a coloured polyline.
- * - If no O2 map: renders the Livelox map + route via the replay components,
- *   loading on-demand using the Livelox class ID.
+ * Used only when there is no .ocd map uploaded for the competition.
+ * The common case — .ocd uploaded — is handled by the page-level
+ * `<MapSlot>` in `TracksPage`, which drives the shell's persistent
+ * MapPanel and so doesn't remount on navigation.
+ *
+ * This component covers the two remaining cases (called when
+ * `hasOcdMap === false`):
+ * - The route has a `liveloxClassId` → render the Livelox replay
+ *   stack inline at the caller's height.
+ * - Otherwise → render a "no map available" placeholder.
  */
 
 import { useMemo, useState, useRef, useCallback, useEffect } from "react";
 import { trpc } from "../lib/trpc";
-import { MapPanel } from "./MapPanel";
-import { useIsPortaled } from "./map-pane-shared";
 import { ReplayMapLayer, type ReplayMapLayerHandle } from "./replay/ReplayMapLayer";
 import { ReplayRouteLayer } from "./replay/ReplayRouteLayer";
 import { ReplayCourseLayer } from "./replay/ReplayCourseLayer";
@@ -31,63 +35,12 @@ interface Props {
   height?: string;
 }
 
-/** Convert stored waypoints to the gpsRoutes format expected by MapPanel/MapViewer.
- *  Always renders in red — single-track previews stay consistent across
- *  pages regardless of the stored per-route colour. (Multi-runner replay
- *  uses its own per-track colours via `ReplayRouteLayer`, not this path.) */
-function toGpsRoute(route: RoutePreview) {
-  return [
-    {
-      color: "#e6194b",
-      points: route.waypoints.map((w) => ({ lat: w.lat, lng: w.lng })),
-    },
-  ];
-}
-
 export function TrackMapPanel({ route, height = "400px" }: Props) {
-  // When portaled into the side pane, ignore the caller-provided pixel
-  // height and fill the pane instead. MapPanel already does this on its
-  // own; the Livelox fallback below also reads `useIsPortaled()`.
-  const portaled = useIsPortaled();
-  const effectiveHeight = portaled ? "100%" : height;
-  // Check whether an O2 map exists
-  const mapMetadata = trpc.course.mapMetadata.useQuery(undefined, {
-    staleTime: 5 * 60_000,
-  });
-
-  const hasMap = mapMetadata.data != null;
-  const isLoadingMap = mapMetadata.isLoading;
-
-  if (isLoadingMap) {
-    return (
-      <div
-        className={`flex items-center justify-center bg-slate-50 rounded-lg border border-slate-200 ${portaled ? "h-full" : ""}`}
-        style={portaled ? undefined : { height }}
-      >
-        <div className="w-5 h-5 border-2 border-slate-300 border-t-blue-500 rounded-full animate-spin" />
-      </div>
-    );
-  }
-
-  if (hasMap) {
-    // O2 map available — overlay the GPS track
-    return (
-      <MapPanel
-        height={effectiveHeight}
-        fitToControls={false}
-        hideToolbar
-        gpsRoutes={toGpsRoute(route)}
-        highlightCourseName={route.courseName ?? undefined}
-      />
-    );
-  }
-
-  // No O2 map — use Livelox map if we have a class ID
   if (!route.liveloxClassId) {
     return (
       <div
-        className={`flex items-center justify-center bg-slate-100 rounded-lg border border-slate-200 text-slate-400 text-sm ${portaled ? "h-full" : ""}`}
-        style={portaled ? undefined : { height }}
+        className="flex items-center justify-center bg-slate-100 rounded-lg border border-slate-200 text-slate-400 text-sm"
+        style={{ height }}
       >
         No map available
       </div>
@@ -98,7 +51,7 @@ export function TrackMapPanel({ route, height = "400px" }: Props) {
     <LiveloxMapPreview
       route={route}
       liveloxClassId={route.liveloxClassId}
-      height={effectiveHeight}
+      height={height}
     />
   );
 }

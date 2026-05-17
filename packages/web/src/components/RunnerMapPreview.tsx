@@ -1,6 +1,6 @@
 import { useMemo } from "react";
 import { trpc } from "../lib/trpc";
-import { MapPanel } from "./MapPanel";
+import { MapSlot } from "./MapSlot";
 
 interface Props {
   /**
@@ -75,14 +75,19 @@ export function RunnerMapPreview({ runnerId, defaultCourseNames }: Props) {
   // Course precedence: readout course (specific runner) wins over the
   // page-level class filter. Both fall through to plain overview when
   // neither produces a course name.
-  const highlightCourseNames = readoutCourseName
-    ? [readoutCourseName]
-    : defaultCourseNames;
+  // Wrap in useMemo so the resulting array has a stable identity across
+  // renders that don't change the underlying course list, letting
+  // React.memo on the shell-owned MapPanel short-circuit re-renders.
+  const highlightCourseNames = useMemo(
+    () =>
+      readoutCourseName ? [readoutCourseName] : defaultCourseNames,
+    [readoutCourseName, defaultCourseNames],
+  );
 
   const hasCourse = !!highlightCourseNames?.length;
 
   return (
-    <MapPanel
+    <MapSlot
       fitToControls
       filterMode={hasCourse ? "course" : "all"}
       highlightCourseNames={highlightCourseNames}

@@ -25,7 +25,6 @@ import { getClubLogoUrl } from "../lib/club-logo";
 import { StructuredSearchBar } from "../components/structured-search/StructuredSearchBar";
 import { useStructuredSearch } from "../hooks/useStructuredSearch";
 import { createRunnerAnchors } from "../lib/structured-search/anchors/runner-anchors";
-import { MapSlot } from "../components/MapSlot";
 import { RunnerMapPreview } from "../components/RunnerMapPreview";
 import { useDefaultMapCourseNames } from "../hooks/useDefaultMapCourseNames";
 
@@ -401,14 +400,13 @@ export function RunnerManagement() {
 
       {/* Map preview — shows the expanded runner's course / punch status /
           GPS track, or the page's class-filter course when nothing is
-          expanded. Portals into the shell pane on wide viewports; renders
-          inline on narrow. */}
-      <MapSlot>
-        <RunnerMapPreview
-          runnerId={expandedRunner}
-          defaultCourseNames={defaultCourseNames}
-        />
-      </MapSlot>
+          expanded. `RunnerMapPreview` itself renders the `<MapSlot>` so
+          it publishes to the shell-owned pane on wide viewports and
+          renders inline on narrow. */}
+      <RunnerMapPreview
+        runnerId={expandedRunner}
+        defaultCourseNames={defaultCourseNames}
+      />
 
       {/* Bulk actions */}
       <BulkActionBar count={selection.count} onDeselectAll={handleDeselectAll}>

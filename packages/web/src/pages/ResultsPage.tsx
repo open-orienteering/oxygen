@@ -16,7 +16,6 @@ import { useNumericSearchParam } from "../hooks/useSearchParam";
 import { StructuredSearchBar } from "../components/structured-search/StructuredSearchBar";
 import { useStructuredSearch } from "../hooks/useStructuredSearch";
 import { createResultAnchors } from "../lib/structured-search/anchors/result-anchors";
-import { MapSlot } from "../components/MapSlot";
 import { RunnerMapPreview } from "../components/RunnerMapPreview";
 import { useDefaultMapCourseNames } from "../hooks/useDefaultMapCourseNames";
 
@@ -201,14 +200,12 @@ export function ResultsPage() {
 
       {/* Map preview — shows the expanded runner's course + punch status
           colours + GPS overlay, or the page's class-filter course when
-          nothing is expanded. Portals into the shell pane on wide
-          viewports; renders inline on narrow. */}
-      <MapSlot>
-        <RunnerMapPreview
-          runnerId={expandedRunner}
-          defaultCourseNames={defaultCourseNames}
-        />
-      </MapSlot>
+          nothing is expanded. `RunnerMapPreview` itself wraps the
+          `<MapSlot>`. */}
+      <RunnerMapPreview
+        runnerId={expandedRunner}
+        defaultCourseNames={defaultCourseNames}
+      />
     </>
   );
 }
