@@ -1,217 +1,189 @@
 /**
- * Competition database backup.
+ * Event database backup endpoint.
  *
- * Streams a `mysqldump` of a competition database to the caller, prefixed
- * with a header comment that records which `MeOSMain.oEvent` row this
- * backup was taken for. The header also includes a ready-to-run (commented)
- * INSERT statement so the user can re-register the competition in MeOSMain
- * after a restore — important because Oxygen drops the registry pointer on
- * delete/purge, so a raw `mysql < backup.sql` restore would otherwise leave
- * the database invisible to the UI.
- *
- * Output format:
- *
- *     -- Oxygen backup
- *     -- Created:    <ISO timestamp>
- *     -- Database:   <NameId>
- *     -- Name:       <Name>
- *     -- Date:       <Date>
- *     ...
- *     -- To restore:
- *     --   mysql -u <user> <NameId> < this-file.sql
- *     --   <run the INSERT below against MeOSMain to re-register>
- *     --
- *     -- INSERT INTO MeOSMain.oEvent (...) VALUES (...);
- *
- *     <mysqldump output>
- *
- * On a non-zero `mysqldump` exit code the stream is terminated with a
- * trailing `-- BACKUP FAILED: ...` line so a partial download can be
- * detected after the fact.
+ * Streams a `pg_dump` of the active event's rows (filtered by event_id)
+ * to the caller, prefixed with a header comment recording the event
+ * metadata. The header includes a ready-to-run (commented) INSERT to
+ * re-register the event after a restore.
  */
 
 import { spawn, type ChildProcessByStdio } from "node:child_process";
 import { PassThrough, Readable } from "node:stream";
 import type { FastifyInstance } from "fastify";
-import type { RowDataPacket } from "mysql2/promise";
-import {
-  getCompetitionConnectionParams,
-  getMainDbConnection,
-} from "./db.js";
+import { prisma } from "./db.js";
 
 // ─── Types ─────────────────────────────────────────────────
 
-export interface BackupRow {
-  Id: number;
-  Name: string;
-  NameId: string;
-  Date: string;
-  ZeroTime: number;
-  Annotation: string;
-  Version: number;
+export interface BackupEvent {
+  id: bigint;
+  nameId: string;
+  name: string;
+  date: Date;
+  zeroTime: number;
+  annotation: string;
 }
 
-export interface BackupConnectionParams {
-  host: string;
-  port: number;
-  user?: string;
-  password?: string;
-  database: string;
-}
+// ─── Lookup ────────────────────────────────────────────────
 
-export interface BackupTarget {
-  row: BackupRow;
-  params: BackupConnectionParams;
-}
-
-// ─── Metadata lookup ───────────────────────────────────────
-
-/**
- * Look up the live `MeOSMain.oEvent` row + connection parameters for a
- * given competition NameId. Returns null if the row does not exist or is
- * soft-deleted (Removed=1) — soft-deleted competitions are not safe to
- * back up because the underlying database may already have been dropped.
- */
 export async function getBackupTarget(
   nameId: string,
-): Promise<BackupTarget | null> {
-  if (!nameId || !/^[A-Za-z0-9_]+$/.test(nameId)) {
-    return null;
-  }
-  const conn = await getMainDbConnection();
-  let row: BackupRow | null = null;
-  try {
-    const [rows] = await conn.execute<RowDataPacket[]>(
-      `SELECT Id, Name, NameId, Date, ZeroTime, Annotation, Version
-         FROM oEvent
-        WHERE NameId = ? AND Removed = 0`,
-      [nameId],
-    );
-    if (Array.isArray(rows) && rows.length > 0) {
-      const r = rows[0];
-      row = {
-        Id: Number(r.Id),
-        Name: String(r.Name ?? ""),
-        NameId: String(r.NameId ?? ""),
-        Date: String(r.Date ?? ""),
-        ZeroTime: Number(r.ZeroTime ?? 0),
-        Annotation: String(r.Annotation ?? ""),
-        Version: Number(r.Version ?? 0),
-      };
-    }
-  } finally {
-    await conn.end();
-  }
-
-  if (!row) return null;
-
-  const params = await getCompetitionConnectionParams(nameId);
-  return { row, params };
+): Promise<BackupEvent | null> {
+  if (!nameId || !/^[A-Za-z0-9_-]+$/.test(nameId)) return null;
+  const row = await prisma().event.findUnique({ where: { nameId } });
+  if (!row || row.removed) return null;
+  return {
+    id: row.id,
+    nameId: row.nameId,
+    name: row.name,
+    date: row.date,
+    zeroTime: row.zeroTime,
+    annotation: row.annotation,
+  };
 }
 
-// ─── Filename + header ────────────────────────────────────
+// ─── Filename + header ─────────────────────────────────────
 
-/**
- * Build the suggested download filename: `<NameId>_backup_<YYYYMMDD_HHMMSS>.sql`.
- * Uses local time so the filename matches existing manual backups in the
- * `~/backup/mysql/` convention.
- */
 export function buildBackupFilename(nameId: string, when: Date = new Date()): string {
   const pad = (n: number) => String(n).padStart(2, "0");
   const ts =
     `${when.getFullYear()}${pad(when.getMonth() + 1)}${pad(when.getDate())}` +
     `_${pad(when.getHours())}${pad(when.getMinutes())}${pad(when.getSeconds())}`;
-  // Strip anything that's not safe in a filename — NameId is already
-  // sanitised at creation time but be defensive.
   const safe = nameId.replace(/[^A-Za-z0-9_-]/g, "_");
   return `${safe}_backup_${ts}.sql`;
 }
 
-/** Escape a string literal for inclusion in a SQL `'...'` value. */
 function sqlEscape(s: string): string {
-  return s.replace(/\\/g, "\\\\").replace(/'/g, "\\'");
+  return s.replace(/\\/g, "\\\\").replace(/'/g, "''");
 }
 
-/**
- * Build the SQL header (comment block + commented MeOSMain INSERT) that
- * precedes the mysqldump output.
- */
-export function buildBackupHeader(row: BackupRow, when: Date = new Date()): string {
-  const insert =
-    `INSERT INTO MeOSMain.oEvent (Name, Date, NameId, Annotation, ZeroTime, Version, Removed) VALUES (` +
-    `'${sqlEscape(row.Name)}', ` +
-    `'${sqlEscape(row.Date)}', ` +
-    `'${sqlEscape(row.NameId)}', ` +
-    `'${sqlEscape(row.Annotation)}', ` +
-    `${row.ZeroTime}, ` +
-    `${row.Version}, ` +
-    `0);`;
-
+export function buildBackupHeader(row: BackupEvent, when: Date = new Date()): string {
+  const dateStr = row.date.toISOString().slice(0, 10);
+  const reInsert =
+    `INSERT INTO oxygen.events (name_id, name, date, zero_time, annotation) VALUES (` +
+    `'${sqlEscape(row.nameId)}', ` +
+    `'${sqlEscape(row.name)}', ` +
+    `'${dateStr}', ` +
+    `${row.zeroTime}, ` +
+    `'${sqlEscape(row.annotation)}');`;
   return [
     `-- Oxygen backup`,
     `-- Created:    ${when.toISOString()}`,
-    `-- Database:   ${row.NameId}`,
-    `-- Name:       ${row.Name}`,
-    `-- Date:       ${row.Date}`,
-    `-- ZeroTime:   ${row.ZeroTime}`,
-    `-- Version:    ${row.Version}`,
-    `-- Annotation: ${row.Annotation}`,
+    `-- Event:      ${row.nameId}`,
+    `-- Name:       ${row.name}`,
+    `-- Date:       ${dateStr}`,
+    `-- ZeroTime:   ${row.zeroTime}`,
+    `-- Annotation: ${row.annotation}`,
     `--`,
+    `-- This is a per-event dump filtered to event_id = ${row.id}.`,
     `-- To restore:`,
-    `--   1. Recreate the database (drop first if it exists):`,
-    `--        mysql -e "CREATE DATABASE \\\`${row.NameId}\\\` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci"`,
-    `--   2. Load the dump:`,
-    `--        mysql ${row.NameId} < this-file.sql`,
-    `--   3. Re-register in MeOSMain by uncommenting and running the INSERT below:`,
+    `--   1. Apply the latest oxygen schema migration on a fresh database.`,
+    `--   2. Run the INSERT below to recreate the event row, capturing the`,
+    `--      new id (BIGSERIAL): the dump references the original id, which`,
+    `--      you'll need to rewrite via sed before loading the data.`,
     `--`,
-    `-- ${insert}`,
+    `-- ${reInsert}`,
     ``,
     ``,
   ].join("\n");
 }
 
-// ─── mysqldump child process ──────────────────────────────
+// ─── pg_dump child process ─────────────────────────────────
 
-export interface MysqldumpProcess {
+export interface PgDumpProcess {
   child: ChildProcessByStdio<null, Readable, Readable>;
   stdout: Readable;
   stderr: Readable;
-  /** Resolves with the exit code and captured stderr text after the child exits. */
   exited: Promise<{ code: number | null; stderr: string }>;
 }
 
-/**
- * Spawn `mysqldump` for the given connection params. The password (if any)
- * is passed via the `MYSQL_PWD` environment variable so it does not appear
- * on the command line / in process listings.
- */
-export function spawnMysqldump(params: BackupConnectionParams): MysqldumpProcess {
-  const args: string[] = [
-    "--no-tablespaces",
-    "--routines=0",
-    "--triggers=0",
-    "--default-character-set=utf8mb4",
-    `-h${params.host}`,
-    `-P${String(params.port)}`,
+interface PgConnectionParams {
+  host: string;
+  port: number;
+  user?: string;
+  password?: string;
+  database: string;
+  schema: string;
+}
+
+function parseDatabaseUrl(): PgConnectionParams {
+  const raw = process.env.DATABASE_URL ?? "";
+  const u = new URL(raw);
+  const schema = u.searchParams.get("schema") ?? "oxygen";
+  return {
+    host: u.hostname,
+    port: u.port ? parseInt(u.port, 10) : 5432,
+    user: u.username ? decodeURIComponent(u.username) : undefined,
+    password: u.password ? decodeURIComponent(u.password) : undefined,
+    database: u.pathname.replace(/^\//, ""),
+    schema,
+  };
+}
+
+export function spawnPgDump(eventId: bigint): PgDumpProcess {
+  const params = parseDatabaseUrl();
+  // The per-event filter is done via --table=oxygen.events plus dependent
+  // tables, then a post-process WHERE on each table. Simpler: emit each
+  // entity table filtered by event_id via psql COPY. pg_dump itself can't
+  // filter rows, so we wrap with psql.
+  //
+  // Tables that have an event_id column (single SELECT each).
+  const tables = [
+    "events",
+    "controls",
+    "courses",
+    "course_controls",
+    "classes",
+    "class_course_pools",
+    "runners",
+    "teams",
+    "cards",
+    "card_readouts",
+    "punches",
+    "control_units",
+    "event_log",
+    "map_files",
+    "rendered_maps",
+    "map_tiles",
+    "tracks",
+    "routes",
+    "event_seqs",
   ];
-  if (params.user) args.push(`-u${params.user}`);
-  args.push(params.database);
+
+  // Build a single psql script that COPYs each table filtered by event_id
+  // (or by foreign-key membership for tables without it).
+  const copyStatements = tables
+    .map((t) => {
+      if (t === "events") {
+        return `\\copy (SELECT * FROM oxygen.events WHERE id = ${eventId}) TO STDOUT WITH (FORMAT csv, HEADER true);`;
+      }
+      if (t === "event_seqs") {
+        return `\\copy (SELECT * FROM oxygen.event_seqs WHERE event_id = ${eventId}) TO STDOUT WITH (FORMAT csv, HEADER true);`;
+      }
+      if (t === "course_controls") {
+        return `\\copy (SELECT cc.* FROM oxygen.course_controls cc JOIN oxygen.courses c ON c.id = cc.course_id WHERE c.event_id = ${eventId}) TO STDOUT WITH (FORMAT csv, HEADER true);`;
+      }
+      if (t === "class_course_pools") {
+        return `\\copy (SELECT ccp.* FROM oxygen.class_course_pools ccp JOIN oxygen.classes cl ON cl.id = ccp.class_id WHERE cl.event_id = ${eventId}) TO STDOUT WITH (FORMAT csv, HEADER true);`;
+      }
+      return `\\copy (SELECT * FROM oxygen.${t} WHERE event_id = ${eventId}) TO STDOUT WITH (FORMAT csv, HEADER true);`;
+    })
+    .map((stmt, i) => `\\echo --- ${tables[i]} ---\n${stmt}`)
+    .join("\n");
+
+  const args: string[] = [`-h${params.host}`, `-p${String(params.port)}`];
+  if (params.user) args.push(`-U${params.user}`);
+  args.push(`-d${params.database}`);
+  args.push("-c", copyStatements);
 
   const env: NodeJS.ProcessEnv = { ...process.env };
-  if (params.password) env.MYSQL_PWD = params.password;
-  else delete env.MYSQL_PWD;
+  if (params.password) env.PGPASSWORD = params.password;
 
-  const child = spawn("mysqldump", args, {
-    env,
-    stdio: ["ignore", "pipe", "pipe"],
-  });
+  const child = spawn("psql", args, { env, stdio: ["ignore", "pipe", "pipe"] });
 
   let stderrText = "";
   child.stderr.on("data", (chunk) => {
     stderrText += String(chunk);
-    if (stderrText.length > 4096) {
-      stderrText = stderrText.slice(-4096);
-    }
+    if (stderrText.length > 4096) stderrText = stderrText.slice(-4096);
   });
 
   const exited = new Promise<{ code: number | null; stderr: string }>(
@@ -227,27 +199,21 @@ export function spawnMysqldump(params: BackupConnectionParams): MysqldumpProcess
   return { child, stdout: child.stdout, stderr: child.stderr, exited };
 }
 
-// ─── Stream composition ───────────────────────────────────
+// ─── Stream composition ────────────────────────────────────
 
-/**
- * Build a Readable stream that emits the header followed by the mysqldump
- * output for the given target. On dump failure, a trailing
- * `-- BACKUP FAILED: <stderr>` marker is appended before the stream ends.
- */
 export function createBackupStream(
-  target: BackupTarget,
+  target: BackupEvent,
   when: Date = new Date(),
 ): Readable {
   const out = new PassThrough();
-  out.write(buildBackupHeader(target.row, when));
+  out.write(buildBackupHeader(target, when));
 
-  const dump = spawnMysqldump(target.params);
+  const dump = spawnPgDump(target.id);
   dump.stdout.on("data", (chunk) => out.write(chunk));
   dump.stdout.on("error", (err) => {
     out.write(`\n-- BACKUP FAILED: ${String(err.message ?? err).slice(0, 500)}\n`);
     out.end();
   });
-
   void dump.exited.then(({ code, stderr }) => {
     if (code === 0) {
       out.end();
@@ -257,17 +223,36 @@ export function createBackupStream(
       out.end();
     }
   });
-
   return out;
 }
 
-// ─── Fastify route ────────────────────────────────────────
+// ─── Fastify route ─────────────────────────────────────────
 
-/**
- * Register `GET /api/backup/competition?name=<NameId>` on the given server.
- * Streams a `.sql` backup to the caller as a file download.
- */
 export function registerBackupRoute(server: FastifyInstance): void {
+  server.get<{ Querystring: { name?: string } }>(
+    "/api/backup/event",
+    async (req, reply) => {
+      const name = (req.query.name ?? "").trim();
+      if (!name) {
+        return reply.code(400).send({ error: "Missing 'name' query parameter" });
+      }
+      if (!/^[A-Za-z0-9_-]+$/.test(name)) {
+        return reply.code(400).send({ error: "Invalid event name" });
+      }
+      const target = await getBackupTarget(name);
+      if (!target) {
+        return reply.code(404).send({ error: `Event "${name}" not found` });
+      }
+      const filename = buildBackupFilename(name);
+      const stream = createBackupStream(target);
+      return reply
+        .header("Content-Type", "application/sql; charset=utf-8")
+        .header("Content-Disposition", `attachment; filename="${filename}"`)
+        .header("Cache-Control", "no-store")
+        .send(stream);
+    },
+  );
+  // Legacy alias kept for one transition release.
   server.get<{ Querystring: { name?: string } }>(
     "/api/backup/competition",
     async (req, reply) => {
@@ -275,20 +260,15 @@ export function registerBackupRoute(server: FastifyInstance): void {
       if (!name) {
         return reply.code(400).send({ error: "Missing 'name' query parameter" });
       }
-      if (!/^[A-Za-z0-9_]+$/.test(name)) {
-        return reply.code(400).send({ error: "Invalid competition name" });
+      if (!/^[A-Za-z0-9_-]+$/.test(name)) {
+        return reply.code(400).send({ error: "Invalid event name" });
       }
-
       const target = await getBackupTarget(name);
       if (!target) {
-        return reply
-          .code(404)
-          .send({ error: `Competition "${name}" not found` });
+        return reply.code(404).send({ error: `Event "${name}" not found` });
       }
-
       const filename = buildBackupFilename(name);
       const stream = createBackupStream(target);
-
       return reply
         .header("Content-Type", "application/sql; charset=utf-8")
         .header("Content-Disposition", `attachment; filename="${filename}"`)
