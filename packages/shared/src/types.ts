@@ -449,6 +449,8 @@ export interface RunnerInput {
 /** Dashboard overview for the active event. */
 export interface EventDashboard {
   event: EventInfo;
+  /** @deprecated alias for `event` kept for the transition window. */
+  competition?: EventInfo;
   classes: ClassInfo[];
   courses: CourseInfo[];
   totalRunners: number;

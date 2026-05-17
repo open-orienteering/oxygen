@@ -262,8 +262,10 @@ export const eventRouter = router({
         };
       }
 
+      const info = toEventInfo(event);
       return {
-        event: toEventInfo(event),
+        event: info,
+        competition: info, // legacy alias kept for one release
         classes: classInfos,
         courses: courseInfos,
         totalRunners: participantCount,
@@ -388,6 +390,105 @@ export const eventRouter = router({
     result["punches"] = punches[0]?.max?.toISOString() ?? "";
     return result;
   }),
+
+  /**
+   * Legacy alias used by the web `useExternalChanges` hook. Maps the new
+   * watermarks back onto the table keys the existing hook diffs against
+   * (oRunner, oClass, …) so we don't have to update the hook for the
+   * cutover release.
+   */
+  counterState: eventProcedure.query(async ({ ctx }) => {
+    const eventId = ctx.event.id;
+    const tables = [
+      { legacy: "oRunner", table: "runners" },
+      { legacy: "oClass", table: "classes" },
+      { legacy: "oCourse", table: "courses" },
+      { legacy: "oControl", table: "controls" },
+      { legacy: "oCard", table: "cards" },
+      { legacy: "oTeam", table: "teams" },
+    ] as const;
+    const out: Record<string, number> = {};
+    for (const { legacy, table } of tables) {
+      const row = await ctx.db.$queryRawUnsafe<Array<{ ms: number | null }>>(
+        `SELECT EXTRACT(EPOCH FROM MAX(updated_at)) * 1000 AS ms FROM oxygen.${table} WHERE event_id = $1`,
+        eventId,
+      );
+      out[legacy] = Math.floor(Number(row[0]?.ms) || 0);
+    }
+    const punches = await ctx.db.$queryRawUnsafe<Array<{ ms: number | null }>>(
+      `SELECT EXTRACT(EPOCH FROM MAX(imported_at)) * 1000 AS ms FROM oxygen.punches WHERE event_id = $1`,
+      eventId,
+    );
+    out.oPunch = Math.floor(Number(punches[0]?.ms) || 0);
+    const eventRow = await ctx.db.$queryRawUnsafe<Array<{ ms: number | null }>>(
+      `SELECT EXTRACT(EPOCH FROM MAX(updated_at)) * 1000 AS ms FROM oxygen.events WHERE id = $1`,
+      eventId,
+    );
+    out.oEvent = Math.floor(Number(eventRow[0]?.ms) || 0);
+    const club = await ctx.db.runner.aggregate({
+      _max: { updatedAt: true },
+      where: { eventId, removed: false },
+    });
+    out.oClub = club._max.updatedAt
+      ? Math.floor(club._max.updatedAt.getTime())
+      : 0;
+    return out;
+  }),
+
+  /**
+   * Start-screen summary — runners with their start times for the active
+   * event, plus event metadata. Used by the kiosk start-screen view.
+   */
+  startScreen: eventProcedure
+    .input(
+      z.object({
+        classId: z.number().int().optional(),
+        windowSeconds: z.number().int().optional().default(1800),
+      }).optional(),
+    )
+    .query(async ({ ctx, input }) => {
+      const event = await ctx.db.event.findUnique({
+        where: { id: ctx.event.id },
+        select: { name: true, zeroTime: true, date: true },
+      });
+      const where: Record<string, unknown> = {
+        eventId: ctx.event.id,
+        removed: false,
+        startTime: { gt: 0 },
+      };
+      if (input?.classId) {
+        const cls = await ctx.db.class.findFirst({
+          where: { eventId: ctx.event.id, seq: input.classId },
+          select: { id: true },
+        });
+        if (cls) where.classId = cls.id;
+      }
+      const runners = await ctx.db.runner.findMany({
+        where,
+        include: { class: { select: { name: true, seq: true } } },
+        orderBy: [{ startTime: "asc" }, { startNo: "asc" }],
+      });
+      const zeroTime = event?.zeroTime ?? 324000;
+      return {
+        competitionName: event?.name ?? "",
+        eventName: event?.name ?? "",
+        zeroTime,
+        date: event?.date.toISOString().slice(0, 10) ?? "",
+        runners: runners.map((r) => ({
+          id: r.seq,
+          name: r.name,
+          className: r.class?.name ?? "",
+          classId: r.class?.seq ?? 0,
+          clubName: r.clubName,
+          clubId: r.eventorClubId ? Number(r.eventorClubId) : 0,
+          clubExtId: r.eventorClubId ? Number(r.eventorClubId) : 0,
+          startNo: r.startNo,
+          startTime: toAbsolute(r.startTime, zeroTime),
+          status: 0,
+          bib: r.bib,
+        })),
+      };
+    }),
 
   /** DB status — surface basic stats for the load indicator. */
   dbStatus: publicProcedure.query(async () => {

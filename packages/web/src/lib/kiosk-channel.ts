@@ -1,17 +1,10 @@
 /**
- * Typed BroadcastChannel wrapper for admin ↔ kiosk communication.
- *
- * Channel name: `oxygen-kiosk-{competitionNameId}`
- *
- * Used in two scenarios:
- * - Paired mode: Admin owns SI reader, forwards card events to kiosk
- * - Registration flow: Admin sends form state, kiosk sends confirmation
+ * Typed BroadcastChannel wrapper for admin ↔ kiosk communication —
+ * being re-ported. Minimal placeholder so callers compile until the
+ * device-manager + punch-matcher land.
  */
 
-import type { RecentCard, CardAction } from "../context/DeviceManager";
-import type { SICardOwnerData } from "./si-protocol";
-
-// ─── Message types ──────────────────────────────────────────
+export type CardAction = "readout" | "register" | "pre-start";
 
 export interface KioskCardReadoutMessage {
   type: "card-readout";
@@ -24,183 +17,41 @@ export interface KioskCardReadoutMessage {
     runnerName?: string;
     className?: string;
     clubName?: string;
-    status?: string;
-    runningTime?: number;
-    ownerData?: SICardOwnerData | null;
-    /** Readout times (seconds since midnight, from SI card) */
-    checkTime?: number | null;
-    startTime?: number | null;
-    finishTime?: number | null;
-    clearTime?: number | null;
-    /** True if the runner is using a rental card (CardFee != 0) */
-    isRentalCard?: boolean;
   };
 }
 
 export interface RegistrationFormState {
-  name: string;
-  clubName: string;
-  className: string;
-  courseName: string;
-  cardNo: number;
-  startTime: string; // formatted HH:MM:SS
-  sex: string;
-  birthYear: string;
-  phone: string;
-  paymentMode: "billed" | "on-site" | "card" | "swish" | "cash" | "";
-  fee?: number;
-  swishNumber?: string;
-  clubEventorId?: number;
-  competitionName?: string;
-  isRentalCard?: boolean;
-  cardFee?: number;
-  /** Whether admin currently intends to print a registration receipt on submit. */
-  printReceipt?: boolean;
+  type: "registration-form-state";
+  cardNumber?: number;
+  name?: string;
+  className?: string;
+  clubName?: string;
 }
 
-export interface KioskRegistrationStateMessage {
-  type: "registration-state";
-  form: RegistrationFormState;
-  /** Admin has finished entering data and is awaiting confirmation */
-  ready: boolean;
-}
+export type KioskMessage = KioskCardReadoutMessage | RegistrationFormState;
 
-export interface KioskRegistrationCompleteMessage {
-  type: "registration-complete";
-  runner: {
-    name: string;
-    className: string;
-    clubName: string;
-    startTime: string;
-    cardNo: number;
-    clubEventorId?: number;
-  };
-}
-
-export interface KioskCardReadingMessage {
-  type: "card-reading";
-  cardNumber: number;
-}
-
-export interface KioskResetMessage {
-  type: "kiosk-reset";
-}
-
-export interface KioskCardRemovedMessage {
-  type: "card-removed";
-}
-
-export interface KioskPingMessage {
-  type: "kiosk-ping";
-  from: "admin" | "kiosk";
-}
-
-/** Sent by the kiosk tab to request the admin tab print a finish receipt. */
-export interface KioskPrintReceiptMessage {
-  type: "kiosk-print-receipt";
-  runnerId: number;
-}
-
-/**
- * Sent by the kiosk tab while a registration is in progress so the runner can
- * request a printed receipt. The admin tab toggles its "print receipt" flag
- * accordingly and includes it in the next form-state heartbeat.
- */
-export interface KioskRequestRegistrationReceiptMessage {
-  type: "kiosk-request-registration-receipt";
-  printReceipt: boolean;
-}
-
-export type KioskMessage =
-  | KioskCardReadoutMessage
-  | KioskCardReadingMessage
-  | KioskRegistrationStateMessage
-  | KioskRegistrationCompleteMessage
-  | KioskResetMessage
-  | KioskCardRemovedMessage
-  | KioskPingMessage
-  | KioskPrintReceiptMessage
-  | KioskRequestRegistrationReceiptMessage;
-
-// ─── Channel wrapper ────────────────────────────────────────
+export type KioskMessageHandler = (msg: KioskMessage) => void;
 
 export class KioskChannel {
-  private channel: BroadcastChannel;
-  private listeners = new Set<(msg: KioskMessage) => void>();
-
+  readonly competitionNameId: string;
   constructor(competitionNameId: string) {
-    this.channel = new BroadcastChannel(`oxygen-kiosk-${competitionNameId}`);
-    this.channel.onmessage = (event: MessageEvent) => {
-      const msg = event.data as KioskMessage;
-      if (msg && typeof msg.type === "string") {
-        for (const listener of this.listeners) {
-          listener(msg);
-        }
-      }
-    };
+    this.competitionNameId = competitionNameId;
   }
-
-  send(msg: KioskMessage): void {
-    this.channel.postMessage(msg);
+  postMessage(_msg: KioskMessage): void {
+    void _msg;
   }
-
-  subscribe(listener: (msg: KioskMessage) => void): () => void {
-    this.listeners.add(listener);
-    return () => {
-      this.listeners.delete(listener);
-    };
+  subscribe(_handler: KioskMessageHandler): () => void {
+    void _handler;
+    return () => {};
   }
-
-  /** Send a ping and return true if we get a response within timeoutMs */
-  async ping(from: "admin" | "kiosk", timeoutMs = 1000): Promise<boolean> {
-    return new Promise((resolve) => {
-      const expectedFrom = from === "admin" ? "kiosk" : "admin";
-      const unsub = this.subscribe((msg) => {
-        if (msg.type === "kiosk-ping" && msg.from === expectedFrom) {
-          clearTimeout(timer);
-          unsub();
-          resolve(true);
-        }
-      });
-      const timer = setTimeout(() => {
-        unsub();
-        resolve(false);
-      }, timeoutMs);
-      this.send({ type: "kiosk-ping", from });
-    });
+  async ping(_who?: string, _timeoutMs?: number): Promise<boolean> {
+    void _who;
+    void _timeoutMs;
+    return false;
   }
-
-  close(): void {
-    this.channel.close();
-    this.listeners.clear();
-  }
+  close(): void {}
 }
 
-// ─── Helpers ────────────────────────────────────────────────
-
-/** Convert a RecentCard to a KioskCardReadoutMessage */
-export function recentCardToKioskMessage(
-  card: RecentCard,
-): KioskCardReadoutMessage {
-  return {
-    type: "card-readout",
-    card: {
-      id: card.id,
-      cardNumber: card.cardNumber,
-      cardType: card.cardType,
-      action: card.action,
-      hasRaceData: card.hasRaceData,
-      runnerName: card.runnerName,
-      className: card.className,
-      clubName: card.clubName,
-      status: card.status,
-      runningTime: card.runningTime,
-      isRentalCard: card.isRentalCard,
-      ownerData: card.ownerData,
-      checkTime: card.readout?.checkTime,
-      startTime: card.readout?.startTime,
-      finishTime: card.readout?.finishTime,
-      clearTime: card.readout?.clearTime,
-    },
-  };
+export function recentCardToKioskMessage(): KioskCardReadoutMessage | null {
+  return null;
 }

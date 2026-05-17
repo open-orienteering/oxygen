@@ -4,14 +4,12 @@ import { router, eventProcedure } from "../trpc.js";
 import type { PrismaClient } from "@prisma/client";
 import { controlStatusToValue } from "../statusConvert.js";
 import {
-  WITHDRAWN_STATUSES,
   type CourseSummary,
   type CourseDetail,
   type ExpectedPosition,
   ControlStatus,
 } from "@oxygen/shared";
 
-/** Look up a course by per-event seq, returning the full row. */
 async function getCourseBySeq(
   db: PrismaClient,
   eventId: bigint,
@@ -29,7 +27,6 @@ async function getCourseBySeq(
   return c;
 }
 
-/** Resolve a control seq to its UUID. */
 async function controlSeqToId(
   db: PrismaClient,
   eventId: bigint,
@@ -50,11 +47,7 @@ async function controlSeqToId(
 
 /**
  * Resolve a course's status-aware ExpectedPosition[] used by the offline
- * matcher and the start-list / dashboard pre-computations.
- *
- * Each course_controls row carries one logical position. The status comes
- * from the referenced control. Multi-code controls list comma-separated
- * codes via control.codes.
+ * matcher and start-list / dashboard pre-computations.
  */
 export async function resolveCourseExpectedPositions(
   db: PrismaClient,
@@ -87,13 +80,62 @@ export async function resolveCourseExpectedPositions(
         noTiming = true;
         break;
     }
-    // If the previous position was BadNoTiming and this one is required,
-    // the leg into this position should not count.
     if (prevWasBadNoTiming && !skip) noTiming = true;
     prevWasBadNoTiming = statusVal === ControlStatus.BadNoTiming;
     positions.push({ codes, skipMatching: skip, noTimingLeg: noTiming });
   }
   return positions;
+}
+
+async function loadCourseDetail(
+  db: PrismaClient,
+  eventId: bigint,
+  seq: number,
+): Promise<CourseDetail> {
+  const c = await getCourseBySeq(db, eventId, seq);
+  const ccs = await db.courseControl.findMany({
+    where: { courseId: c.id },
+    include: { control: { select: { seq: true, codes: true } } },
+    orderBy: { position: "asc" },
+  });
+  const classes = await db.class.findMany({
+    where: { eventId, courseId: c.id, removed: false },
+    select: { id: true, seq: true, name: true },
+  });
+  const runnerCounts = classes.length
+    ? await db.runner.groupBy({
+        by: ["classId"],
+        _count: { classId: true },
+        where: {
+          eventId,
+          classId: { in: classes.map((cl) => cl.id) },
+          removed: false,
+        },
+      })
+    : [];
+  const runnerCountMap = new Map<string, number>(
+    runnerCounts.map((rc) => [rc.classId ?? "", rc._count.classId]),
+  );
+  return {
+    id: c.seq,
+    name: c.name,
+    controls: ccs.map((cc) => String(cc.control.seq)).join(";"),
+    controlCount: ccs.length,
+    length: c.lengthM,
+    climb: c.climbM,
+    numberOfMaps: c.numberOfMaps,
+    firstAsStart: c.firstAsStart,
+    lastAsFinish: c.lastAsFinish,
+    controlCodes: ccs.map((cc) => ({
+      id: cc.control.seq,
+      code: (cc.control.codes ?? "").split(";")[0] ?? "",
+    })),
+    classes: classes.map((cl) => ({
+      classId: cl.seq,
+      className: cl.name,
+      runnerCount: runnerCountMap.get(cl.id) ?? 0,
+    })),
+  };
 }
 
 export const courseRouter = router({
@@ -128,57 +170,17 @@ export const courseRouter = router({
     );
   }),
 
+  detail: eventProcedure
+    .input(z.object({ id: z.number().int() }))
+    .query(async ({ ctx, input }) =>
+      loadCourseDetail(ctx.db, ctx.event.id, input.id),
+    ),
+
   getById: eventProcedure
     .input(z.object({ id: z.number().int() }))
-    .query(async ({ ctx, input }): Promise<CourseDetail> => {
-      const c = await getCourseBySeq(ctx.db, ctx.event.id, input.id);
-      const ccs = await ctx.db.courseControl.findMany({
-        where: { courseId: c.id },
-        include: { control: { select: { seq: true, codes: true } } },
-        orderBy: { position: "asc" },
-      });
-      const classes = await ctx.db.class.findMany({
-        where: { eventId: ctx.event.id, courseId: c.id, removed: false },
-        select: { id: true, seq: true, name: true },
-      });
-      const runnerCounts = classes.length
-        ? await ctx.db.runner.groupBy({
-            by: ["classId"],
-            _count: { classId: true },
-            where: {
-              eventId: ctx.event.id,
-              classId: { in: classes.map((cl) => cl.id) },
-              removed: false,
-            },
-          })
-        : [];
-      const runnerCountMap = new Map<string, number>(
-        runnerCounts.map((rc) => [
-          rc.classId ?? "",
-          rc._count.classId,
-        ]),
-      );
-      return {
-        id: c.seq,
-        name: c.name,
-        controls: ccs.map((cc) => String(cc.control.seq)).join(";"),
-        controlCount: ccs.length,
-        length: c.lengthM,
-        climb: c.climbM,
-        numberOfMaps: c.numberOfMaps,
-        firstAsStart: c.firstAsStart,
-        lastAsFinish: c.lastAsFinish,
-        controlCodes: ccs.map((cc) => ({
-          id: cc.control.seq,
-          code: (cc.control.codes ?? "").split(";")[0] ?? "",
-        })),
-        classes: classes.map((cl) => ({
-          classId: cl.seq,
-          className: cl.name,
-          runnerCount: runnerCountMap.get(cl.id) ?? 0,
-        })),
-      };
-    }),
+    .query(async ({ ctx, input }) =>
+      loadCourseDetail(ctx.db, ctx.event.id, input.id),
+    ),
 
   create: eventProcedure
     .input(
@@ -269,6 +271,36 @@ export const courseRouter = router({
       return { ok: true };
     }),
 
+  bulkUpdate: eventProcedure
+    .input(
+      z.object({
+        ids: z.array(z.number().int()),
+        numberOfMaps: z.number().int().optional(),
+        climb: z.number().int().optional(),
+        firstAsStart: z.boolean().optional(),
+        lastAsFinish: z.boolean().optional(),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      const rows = await ctx.db.course.findMany({
+        where: { eventId: ctx.event.id, seq: { in: input.ids } },
+        select: { id: true },
+      });
+      const data: Record<string, unknown> = {};
+      if (input.numberOfMaps !== undefined)
+        data.numberOfMaps = input.numberOfMaps;
+      if (input.climb !== undefined) data.climbM = input.climb;
+      if (input.firstAsStart !== undefined)
+        data.firstAsStart = input.firstAsStart;
+      if (input.lastAsFinish !== undefined)
+        data.lastAsFinish = input.lastAsFinish;
+      await ctx.db.course.updateMany({
+        where: { id: { in: rows.map((r) => r.id) } },
+        data,
+      });
+      return { ok: true as const, count: rows.length };
+    }),
+
   delete: eventProcedure
     .input(z.object({ id: z.number().int() }))
     .mutation(async ({ ctx, input }) => {
@@ -282,8 +314,6 @@ export const courseRouter = router({
 
   /**
    * Course geometry — placeholder until the OCD course importer is ported.
-   * Web side calls this for map overlays; for now we return empty so the
-   * map renders without controls overlaid.
    */
   geometry: eventProcedure
     .input(z.object({ id: z.number().int() }))
@@ -291,6 +321,18 @@ export const courseRouter = router({
       type: "FeatureCollection" as const,
       features: [] as unknown[],
     })),
+
+  /** Geometry for many courses at once. */
+  courseGeometries: eventProcedure
+    .input(z.object({ ids: z.array(z.number().int()).optional() }).optional())
+    .query(async () => {
+      // Returns empty per-course geometry until the OCD parser is re-ported.
+      return [] as Array<{
+        courseId: number;
+        type: "FeatureCollection";
+        features: unknown[];
+      }>;
+    }),
 
   /** Map metadata used by the tracks / replay pages. */
   mapMetadata: eventProcedure.query(async ({ ctx }) => {
@@ -307,4 +349,80 @@ export const courseRouter = router({
       height: map.height,
     };
   }),
+
+  /** Info about the uploaded OCAD map file (if any). */
+  mapFileInfo: eventProcedure.query(async ({ ctx }) => {
+    const f = await ctx.db.mapFile.findFirst({
+      where: { eventId: ctx.event.id },
+      orderBy: { uploadedAt: "desc" },
+      select: { id: true, fileName: true, uploadedAt: true },
+    });
+    if (!f) return null;
+    return {
+      id: Number(f.id),
+      fileName: f.fileName,
+      uploadedAt: f.uploadedAt.toISOString(),
+    };
+  }),
+
+  /** Cached projected control coordinates from the OCD parser. */
+  controlCoordinates: eventProcedure.query(async ({ ctx }) => {
+    const controls = await ctx.db.control.findMany({
+      where: { eventId: ctx.event.id, removed: false },
+      select: { seq: true, codes: true, lat: true, lng: true, xpos: true, ypos: true },
+    });
+    return controls.map((c) => ({
+      controlId: c.seq,
+      code: parseInt((c.codes ?? "").split(";")[0] ?? "0", 10) || 0,
+      lat: c.lat,
+      lng: c.lng,
+      xpos: c.xpos,
+      ypos: c.ypos,
+    }));
+  }),
+
+  /**
+   * Completion status per control — placeholder until the punch matcher
+   * lands. Returns empty so the dashboard renders the "Pending" state.
+   */
+  controlCompletionStatus: eventProcedure
+    .input(z.object({ courseId: z.number().int().optional() }).optional())
+    .query(async () => {
+      return [] as Array<{
+        controlId: number;
+        code: number;
+        total: number;
+        passed: number;
+      }>;
+    }),
+
+  /** Upload an OCAD map file (stub — full parser pending). */
+  uploadMap: eventProcedure
+    .input(z.object({ fileName: z.string(), data: z.string() }))
+    .mutation(async () => {
+      throw new TRPCError({
+        code: "PRECONDITION_FAILED",
+        message: "OCAD map upload pending re-port.",
+      });
+    }),
+
+  /** Preview an IOF XML / OCD course bundle import (stub). */
+  previewImport: eventProcedure
+    .input(z.object({ data: z.string() }))
+    .mutation(async () => {
+      throw new TRPCError({
+        code: "PRECONDITION_FAILED",
+        message: "Course-bundle preview pending re-port.",
+      });
+    }),
+
+  /** Commit a previously-previewed import (stub). */
+  importCourses: eventProcedure
+    .input(z.object({ data: z.string() }))
+    .mutation(async () => {
+      throw new TRPCError({
+        code: "PRECONDITION_FAILED",
+        message: "Course import pending re-port.",
+      });
+    }),
 });

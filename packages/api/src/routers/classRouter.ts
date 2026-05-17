@@ -8,9 +8,6 @@ import {
 } from "@oxygen/shared";
 import { valueToRunnerStatus, runnerStatusToValue } from "../statusConvert.js";
 
-/**
- * Resolve a class by its per-event seq; returns the row including its UUID id.
- */
 async function getClassBySeq(
   db: import("@prisma/client").PrismaClient,
   eventId: bigint,
@@ -42,8 +39,58 @@ async function courseSeqToId(
 
 const withdrawnEnums = WITHDRAWN_STATUSES.map(valueToRunnerStatus);
 
+async function loadClassDetail(
+  db: import("@prisma/client").PrismaClient,
+  eventId: bigint,
+  seq: number,
+): Promise<ClassManageDetail> {
+  const c = await getClassBySeq(db, eventId, seq);
+  const course = c.courseId
+    ? await db.course.findUnique({
+        where: { id: c.courseId },
+        select: { name: true, seq: true, lengthM: true },
+      })
+    : null;
+  const courseControlCount = c.courseId
+    ? await db.courseControl.count({ where: { courseId: c.courseId } })
+    : 0;
+  const runners = await db.runner.findMany({
+    where: { eventId, classId: c.id, removed: false },
+    select: { id: true, seq: true, name: true, status: true },
+    orderBy: { startNo: "asc" },
+  });
+  return {
+    id: c.seq,
+    name: c.name,
+    longName: c.longName,
+    courseId: course?.seq ?? 0,
+    courseName: course?.name ?? "",
+    courseIds: course ? [course.seq] : [],
+    courseNames: course ? [course.name] : [],
+    courseLength: course?.lengthM ?? 0,
+    controlCount: courseControlCount,
+    runnerCount: runners.length,
+    sortIndex: c.sortIndex,
+    sex: c.sex,
+    lowAge: c.lowAge,
+    highAge: c.highAge,
+    freeStart: c.freeStart,
+    noTiming: c.noTiming,
+    allowQuickEntry: c.allowQuickEntry,
+    classType: c.classType,
+    classFee: c.classFeeCents,
+    maxTime: c.maxTime,
+    firstStart: c.firstStart,
+    startInterval: c.startInterval,
+    runners: runners.map((r) => ({
+      id: r.seq,
+      name: r.name,
+      status: runnerStatusToValue(r.status),
+    })),
+  };
+}
+
 export const classRouter = router({
-  /** List classes (summary). */
   list: eventProcedure
     .input(z.object({ search: z.string().optional() }).optional())
     .query(async ({ ctx, input }): Promise<ClassSummary[]> => {
@@ -54,7 +101,6 @@ export const classRouter = router({
         orderBy: { sortIndex: "asc" },
       });
 
-      // runner counts excluding withdrawn
       const runners = await ctx.db.runner.findMany({
         where: { eventId, removed: false, status: { notIn: withdrawnEnums } },
         select: { classId: true },
@@ -64,21 +110,9 @@ export const classRouter = router({
         if (r.classId) counts.set(r.classId, (counts.get(r.classId) ?? 0) + 1);
       }
 
-      // course control count
       const courseIds = classes
         .map((c) => c.courseId)
         .filter((id): id is string => !!id);
-      const controlCounts = courseIds.length
-        ? await ctx.db.courseControl.groupBy({
-            by: ["courseId"],
-            where: { courseId: { in: courseIds } },
-          })
-        : [];
-      const controlCountMap = new Map<string, number>();
-      for (const cc of courseIds) {
-        controlCountMap.set(cc, 0);
-      }
-      // group counts need _count
       const grouped = courseIds.length
         ? await ctx.db.courseControl.groupBy({
             by: ["courseId"],
@@ -86,10 +120,10 @@ export const classRouter = router({
             where: { courseId: { in: courseIds } },
           })
         : [];
-      for (const g of grouped) {
-        controlCountMap.set(g.courseId, g._count.courseId);
-      }
-      void controlCounts;
+      const controlCountMap = new Map<string, number>(
+        grouped.map((g) => [g.courseId, g._count.courseId]),
+      );
+      void controlCountMap;
 
       const result = classes.map((c): ClassSummary => {
         const courseSeq = c.course?.seq ?? 0;
@@ -122,55 +156,13 @@ export const classRouter = router({
       return result;
     }),
 
-  /** Full detail for one class. */
+  detail: eventProcedure
+    .input(z.object({ id: z.number().int() }))
+    .query(async ({ ctx, input }) => loadClassDetail(ctx.db, ctx.event.id, input.id)),
+
   getById: eventProcedure
     .input(z.object({ id: z.number().int() }))
-    .query(async ({ ctx, input }): Promise<ClassManageDetail> => {
-      const c = await getClassBySeq(ctx.db, ctx.event.id, input.id);
-      const course = c.courseId
-        ? await ctx.db.course.findUnique({
-            where: { id: c.courseId },
-            select: { name: true, seq: true, lengthM: true },
-          })
-        : null;
-      const courseControlCount = c.courseId
-        ? await ctx.db.courseControl.count({ where: { courseId: c.courseId } })
-        : 0;
-      const runners = await ctx.db.runner.findMany({
-        where: { eventId: ctx.event.id, classId: c.id, removed: false },
-        select: { id: true, seq: true, name: true, status: true },
-        orderBy: { startNo: "asc" },
-      });
-      return {
-        id: c.seq,
-        name: c.name,
-        longName: c.longName,
-        courseId: course?.seq ?? 0,
-        courseName: course?.name ?? "",
-        courseIds: course ? [course.seq] : [],
-        courseNames: course ? [course.name] : [],
-        courseLength: course?.lengthM ?? 0,
-        controlCount: courseControlCount,
-        runnerCount: runners.length,
-        sortIndex: c.sortIndex,
-        sex: c.sex,
-        lowAge: c.lowAge,
-        highAge: c.highAge,
-        freeStart: c.freeStart,
-        noTiming: c.noTiming,
-        allowQuickEntry: c.allowQuickEntry,
-        classType: c.classType,
-        classFee: c.classFeeCents,
-        maxTime: c.maxTime,
-        firstStart: c.firstStart,
-        startInterval: c.startInterval,
-        runners: runners.map((r) => ({
-          id: r.seq,
-          name: r.name,
-          status: runnerStatusToValue(r.status),
-        })),
-      };
-    }),
+    .query(async ({ ctx, input }) => loadClassDetail(ctx.db, ctx.event.id, input.id)),
 
   create: eventProcedure
     .input(
@@ -262,6 +254,46 @@ export const classRouter = router({
       return { ok: true };
     }),
 
+  bulkUpdate: eventProcedure
+    .input(
+      z.object({
+        ids: z.array(z.number().int()),
+        courseId: z.number().int().nullable().optional(),
+        sortIndex: z.number().int().optional(),
+        classFee: z.number().int().optional(),
+        firstStart: z.number().int().optional(),
+        startInterval: z.number().int().optional(),
+        maxTime: z.number().int().optional(),
+        allowQuickEntry: z.boolean().optional(),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      const rows = await ctx.db.class.findMany({
+        where: { eventId: ctx.event.id, seq: { in: input.ids } },
+        select: { id: true },
+      });
+      const data: Record<string, unknown> = {};
+      if (input.courseId !== undefined) {
+        data.courseId =
+          input.courseId === null
+            ? null
+            : await courseSeqToId(ctx.db, ctx.event.id, input.courseId);
+      }
+      if (input.sortIndex !== undefined) data.sortIndex = input.sortIndex;
+      if (input.classFee !== undefined) data.classFeeCents = input.classFee;
+      if (input.firstStart !== undefined) data.firstStart = input.firstStart;
+      if (input.startInterval !== undefined)
+        data.startInterval = input.startInterval;
+      if (input.maxTime !== undefined) data.maxTime = input.maxTime;
+      if (input.allowQuickEntry !== undefined)
+        data.allowQuickEntry = input.allowQuickEntry;
+      await ctx.db.class.updateMany({
+        where: { id: { in: rows.map((r) => r.id) } },
+        data,
+      });
+      return { ok: true as const, count: rows.length };
+    }),
+
   delete: eventProcedure
     .input(z.object({ id: z.number().int() }))
     .mutation(async ({ ctx, input }) => {
@@ -291,5 +323,3 @@ export const classRouter = router({
       return { ok: true };
     }),
 });
-
-export const classRouterAlias = classRouter;

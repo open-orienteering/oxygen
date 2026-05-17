@@ -395,7 +395,10 @@ function CourseInlineDetail({ courseId }: { courseId: number }) {
       .map((s) => s.trim())
       .filter(Boolean);
     updateMutation.mutate(
-      { id: courseId, controlCodes: codes },
+      {
+        id: courseId,
+        controlIds: codes.map((c) => parseInt(c, 10)).filter((n) => !isNaN(n)),
+      },
       {
         onError: (err) => setControlsError(err.message),
       },
@@ -622,7 +625,7 @@ function CreateCourseForm({
       .filter(Boolean);
     createMutation.mutate({
       name: name.trim(),
-      controlCodes: codes,
+      controlIds: codes.map((c) => parseInt(c, 10)).filter((n) => !isNaN(n)),
       length: parseInt(length, 10) || 0,
       numberOfMaps: parseInt(numberOfMaps, 10) || 1,
       firstAsStart,

@@ -415,4 +415,54 @@ export const runnerRouter = router({
       });
       return { ok: true, count: rows.length };
     }),
+
+  /** Apply the same change to many runners at once. */
+  bulkUpdate: eventProcedure
+    .input(
+      z.object({
+        ids: z.array(z.number().int()),
+        classId: z.number().int().optional(),
+        clubName: z.string().optional(),
+        eventorClubId: z.number().int().nullable().optional(),
+        status: z.number().int().optional(),
+        startTime: z.number().int().optional(),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      const rows = await ctx.db.runner.findMany({
+        where: {
+          eventId: ctx.event.id,
+          seq: { in: input.ids },
+          removed: false,
+        },
+        select: { id: true },
+      });
+      const data: Record<string, unknown> = {};
+      if (input.classId !== undefined) {
+        data.classId = await classSeqToId(ctx.db, ctx.event.id, input.classId);
+      }
+      if (input.clubName !== undefined) data.clubName = input.clubName;
+      if (input.eventorClubId !== undefined)
+        data.eventorClubId = input.eventorClubId;
+      if (input.status !== undefined)
+        data.status = valueToRunnerStatus(input.status);
+      if (input.startTime !== undefined) data.startTime = input.startTime;
+      await ctx.db.runner.updateMany({
+        where: { id: { in: rows.map((r) => r.id) } },
+        data,
+      });
+      return { ok: true as const, count: rows.length };
+    }),
+
+  /** Toggle the rental-card-returned flag. */
+  setCardReturned: eventProcedure
+    .input(z.object({ id: z.number().int(), returned: z.boolean() }))
+    .mutation(async ({ ctx, input }) => {
+      const r = await getRunnerBySeq(ctx.db, ctx.event.id, input.id);
+      await ctx.db.runner.update({
+        where: { id: r.id },
+        data: { cardReturned: input.returned },
+      });
+      return { ok: true as const };
+    }),
 });
