@@ -1,13 +1,18 @@
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import { router, eventProcedure } from "../trpc.js";
-import { toAbsolute } from "../timeConvert.js";
-import { runnerStatusToValue } from "../statusConvert.js";
+import { toAbsolute, toRelative } from "../timeConvert.js";
+import {
+  runnerStatusToValue,
+  valueToRunnerStatus,
+} from "../statusConvert.js";
+import { performReadout } from "./cardReadout.js";
+import type { ControlMatch } from "@oxygen/shared";
 
 /**
  * Race-time endpoints used by the start, finish, and kiosk pages.
- * Most heavy lifting (card-to-result matching, free punch insertion) is in
- * the cardReadout router; this one is a shallow lookup layer.
+ * The heavy matching work lives in cardReadout.performReadout — this
+ * router orchestrates lookups and writes.
  */
 export const raceRouter = router({
   /** Look up a runner by SI card number for start / finish stations. */
@@ -23,6 +28,7 @@ export const raceRouter = router({
               courseId: true,
               freeStart: true,
               noTiming: true,
+              seq: true,
             },
           },
         },
@@ -47,7 +53,7 @@ export const raceRouter = router({
           name: runner.name,
           clubId: runner.eventorClubId ? Number(runner.eventorClubId) : 0,
           clubName: runner.clubName,
-          classId: runner.classId,
+          classId: runner.class?.seq ?? 0,
           className: runner.class?.name ?? "",
           startNo: runner.startNo,
           startTime: toAbsolute(runner.startTime, zeroTime),
@@ -62,9 +68,13 @@ export const raceRouter = router({
       };
     }),
 
-  /** Most-recent finishers + readouts, for the activity feed. */
+  /** Most-recent finishers, for the activity feed. */
   recentActivity: eventProcedure
-    .input(z.object({ limit: z.number().int().min(1).max(50).default(10) }).optional())
+    .input(
+      z
+        .object({ limit: z.number().int().min(1).max(50).default(10) })
+        .optional(),
+    )
     .query(async ({ ctx, input }) => {
       const limit = input?.limit ?? 10;
       const finishers = await ctx.db.runner.findMany({
@@ -89,80 +99,143 @@ export const raceRouter = router({
       }));
     }),
 
-  /** Receipt payload for a finished runner — split times etc.
-   *  Stub returning header info; full split-time matcher is staged. */
+  /**
+   * Receipt payload for a finished runner. Runs the matcher to produce
+   * split times + position + status, then translates the result into
+   * the legacy nested shape expected by the receipt printer + the
+   * kiosk `kiosk-print-receipt` forwarder.
+   */
   finishReceipt: eventProcedure
     .input(z.object({ runnerId: z.number().int() }))
     .query(async ({ ctx, input }) => {
-      const r = await ctx.db.runner.findFirst({
+      const runner = await ctx.db.runner.findFirst({
         where: {
           eventId: ctx.event.id,
           seq: input.runnerId,
           removed: false,
         },
-        include: { class: { select: { name: true, courseId: true } } },
+        select: { id: true },
       });
-      if (!r) return null;
-      const zeroTime = ctx.event.zeroTime;
-      const startAbs = toAbsolute(r.startTime, zeroTime);
-      const finishAbs = toAbsolute(r.finishTime, zeroTime);
-      const runningTime =
-        startAbs > 0 && finishAbs > 0 ? Math.max(0, finishAbs - startAbs) : 0;
+      if (!runner) return null;
 
-      const courseId = r.courseId ?? r.class?.courseId ?? null;
-      const course = courseId
-        ? await ctx.db.course.findUnique({
-            where: { id: courseId },
-            select: { name: true, lengthM: true, seq: true },
-          })
-        : null;
-      const ccCount = courseId
-        ? await ctx.db.courseControl.count({ where: { courseId } })
-        : 0;
+      const r = await performReadout(
+        ctx.db,
+        ctx.event.id,
+        ctx.event.zeroTime,
+        runner.id,
+      );
+      if (!r) return null;
+
+      // Build split times. The matcher's `controls` array is already
+      // ordered by course position. We compute split + cum from the
+      // punch times; first split is from start.
+      let lastTime = r.timing.startTime;
+      let cum = 0;
+      const splits: Array<{
+        controlIndex: number;
+        controlCode: number;
+        splitTime: number;
+        cumTime: number;
+        status: "ok" | "missing" | "extra";
+        punchTime: number;
+        legLength: number;
+      }> = [];
+      r.controls.forEach((m: ControlMatch, idx) => {
+        if (m.positionMode === "skipped") return;
+        const status: "ok" | "missing" | "extra" = m.status;
+        const punchTime = m.punchTime;
+        const split = m.splitTime;
+        cum = m.cumTime;
+        splits.push({
+          controlIndex: idx,
+          controlCode: m.controlCode,
+          splitTime: split,
+          cumTime: cum,
+          status,
+          punchTime,
+          legLength: 0, // OCAD parser not ported yet — leg lengths follow
+        });
+        if (status === "ok" && punchTime > 0) lastTime = punchTime;
+      });
+
+      // Position within class — placeholder until a dedicated index lands.
+      let position: { rank: number; total: number } | null = null;
+      if (r.timing.status === 1 && r.timing.runningTime > 0) {
+        const peers = await ctx.db.runner.findMany({
+          where: {
+            eventId: ctx.event.id,
+            removed: false,
+            classId: { not: null },
+            finishTime: { gt: 0 },
+            startTime: { gt: 0 },
+          },
+          select: { id: true, classId: true, startTime: true, finishTime: true, status: true },
+        });
+        // Re-filter to the runner's class.
+        const runnerRow = await ctx.db.runner.findUnique({
+          where: { id: runner.id },
+          select: { classId: true },
+        });
+        const sameClass = peers.filter(
+          (p) => p.classId && runnerRow?.classId && p.classId === runnerRow.classId,
+        );
+        const okOnly = sameClass.filter((p) => runnerStatusToValue(p.status) === 1);
+        const runningTimes = okOnly.map((p) =>
+          Math.max(0, p.finishTime - p.startTime),
+        );
+        runningTimes.sort((a, b) => a - b);
+        const myRunningTime =
+          (r.timing.finishTime > 0 ? r.timing.finishTime : 0) -
+          (r.timing.startTime > 0 ? r.timing.startTime : 0);
+        const rank =
+          myRunningTime > 0
+            ? runningTimes.findIndex((t) => t >= myRunningTime) + 1
+            : 0;
+        position = rank > 0 ? { rank, total: okOnly.length } : null;
+      }
 
       return {
-        // Newer flat shape — preferred:
-        runnerId: r.seq,
-        name: r.name,
-        className: r.class?.name ?? "",
-        clubName: r.clubName,
-        startTime: startAbs,
-        finishTime: finishAbs,
-        runningTime,
-        status: runnerStatusToValue(r.status),
-        splits: [] as Array<{ code: number; time: number; cumulative: number }>,
-        // Legacy nested shape kept for the unchanged web receipt printer.
+        // Flat shape (handy for newer callers):
+        runnerId: r.runner.id,
+        name: r.runner.name,
+        className: r.runner.className,
+        clubName: r.runner.clubName,
+        startTime: r.timing.startTime,
+        finishTime: r.timing.finishTime,
+        runningTime: r.timing.runningTime,
+        status: r.timing.status,
+        splits: splits.map((s) => ({
+          code: s.controlCode,
+          time: s.punchTime,
+          cumulative: s.cumTime,
+        })),
+
+        // Legacy nested shape used by the receipt printer.
         runner: {
-          id: r.seq,
-          name: r.name,
-          className: r.class?.name ?? "",
-          clubName: r.clubName,
-          cardNo: r.cardNo,
-          startNo: r.startNo,
-          birthYear: r.birthYear,
+          id: r.runner.id,
+          name: r.runner.name,
+          className: r.runner.className,
+          clubName: r.runner.clubName,
+          cardNo: r.runner.cardNo,
+          startNo: r.runner.startNo,
+          birthYear: 0, // omitted in fast path
         },
         timing: {
-          startTime: startAbs,
-          finishTime: finishAbs,
-          runningTime,
-          status: runnerStatusToValue(r.status),
+          startTime: r.timing.startTime,
+          finishTime: r.timing.finishTime,
+          runningTime: r.timing.runningTime,
+          status: r.timing.status,
         },
-        controls: [] as Array<{
-          controlIndex: number;
-          controlCode: number;
-          splitTime: number;
-          cumTime: number;
-          status: "ok" | "missing" | "extra";
-          punchTime: number;
-          legLength: number;
-        }>,
-        course: {
-          id: course?.seq ?? 0,
-          name: course?.name ?? "",
-          length: course?.lengthM ?? 0,
-          controlCount: ccCount,
-        },
-        position: null as { rank: number; total: number } | null,
+        controls: splits,
+        course: r.course
+          ? {
+              id: r.course.id,
+              name: r.course.name,
+              length: r.course.length,
+              controlCount: r.course.controlCount,
+            }
+          : null,
+        position,
         siac: null as
           | { voltage: number | null; batteryDate: string | null; batteryOk: boolean }
           | null,
@@ -175,7 +248,11 @@ export const raceRouter = router({
       };
     }),
 
-  /** Manually set a runner's finish time (used by the finish station). */
+  /**
+   * Record a finish (manual entry from the finish station). If the
+   * runner has a card linked, the matcher runs to derive a proper
+   * status; otherwise we just stamp the finish time.
+   */
   recordFinish: eventProcedure
     .input(
       z.object({
@@ -187,30 +264,25 @@ export const raceRouter = router({
     .mutation(async ({ ctx, input }) => {
       const r = await ctx.db.runner.findFirst({
         where: { eventId: ctx.event.id, seq: input.id, removed: false },
-        select: { id: true, startTime: true },
+        select: { id: true, startTime: true, cardId: true, cardNo: true },
       });
       if (!r) {
         throw new TRPCError({ code: "NOT_FOUND", message: "Runner not found" });
       }
       const zeroTime = ctx.event.zeroTime;
       const finishRel =
-        input.finishTimeAbsolute > 0 ? input.finishTimeAbsolute - zeroTime : 0;
+        input.finishTimeAbsolute > 0
+          ? toRelative(input.finishTimeAbsolute, zeroTime)
+          : 0;
+      const computedStatus =
+        input.status != null
+          ? valueToRunnerStatus(input.status)
+          : undefined;
       await ctx.db.runner.update({
         where: { id: r.id },
         data: {
           finishTime: finishRel,
-          ...(input.status != null
-            ? {
-                status:
-                  input.status === 1
-                    ? "ok"
-                    : input.status === 3
-                      ? "missing_punch"
-                      : input.status === 4
-                        ? "dnf"
-                        : "unknown",
-              }
-            : {}),
+          ...(computedStatus ? { status: computedStatus } : {}),
         },
       });
       return { ok: true };

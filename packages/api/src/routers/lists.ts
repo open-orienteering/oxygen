@@ -2,7 +2,13 @@ import { z } from "zod";
 import { router, eventProcedure } from "../trpc.js";
 import { toAbsolute } from "../timeConvert.js";
 import { runnerStatusToValue } from "../statusConvert.js";
-import type { StartListEntry, ResultEntry } from "@oxygen/shared";
+import {
+  parsePunches,
+  matchPunchesToCourse,
+  type StartListEntry,
+  type ResultEntry,
+} from "@oxygen/shared";
+import { resolveCourseExpectedPositions } from "./course.js";
 
 /**
  * Start list + result list endpoints. Minimal port — sorts and presents
@@ -80,20 +86,80 @@ export const listsRouter = router({
       }
       const runners = await ctx.db.runner.findMany({
         where,
-        include: { class: { select: { name: true, seq: true } } },
+        include: {
+          class: { select: { name: true, seq: true, courseId: true } },
+        },
       });
       const zeroTime = ctx.event.zeroTime;
+
+      // Compute running-time adjustment per runner by running the
+      // matcher over each card's punches against the runner's course.
+      // This is the bulk equivalent of performReadout's adjustment step;
+      // cached per course so we don't re-resolve expectedPositions for
+      // every runner.
+      const cardNos = runners.map((r) => r.cardNo).filter((c) => c > 0);
+      const cards = cardNos.length
+        ? await ctx.db.card.findMany({
+            where: {
+              eventId: ctx.event.id,
+              cardNo: { in: cardNos },
+              removed: false,
+            },
+            select: { cardNo: true, punchesRaw: true },
+          })
+        : [];
+      const cardByNo = new Map<number, string>(
+        cards.map((c) => [c.cardNo, c.punchesRaw]),
+      );
+
+      const courseIds = new Set<string>();
+      for (const r of runners) {
+        const cid = r.courseId ?? r.class?.courseId ?? null;
+        if (cid) courseIds.add(cid);
+      }
+      const expectedByCourse = new Map<
+        string,
+        Awaited<ReturnType<typeof resolveCourseExpectedPositions>>
+      >();
+      for (const cid of courseIds) {
+        expectedByCourse.set(
+          cid,
+          await resolveCourseExpectedPositions(ctx.db, cid),
+        );
+      }
+
+      const adjustmentByRunner = new Map<string, number>();
+      for (const r of runners) {
+        const courseId = r.courseId ?? r.class?.courseId ?? null;
+        const expected = courseId ? expectedByCourse.get(courseId) : null;
+        if (!expected || expected.length === 0) continue;
+        const raw = cardByNo.get(r.cardNo);
+        if (!raw) continue;
+        const punches = parsePunches(raw);
+        for (const p of punches) {
+          if (p.time !== 0) p.time = toAbsolute(p.time, zeroTime);
+        }
+        const fallbackStart = toAbsolute(r.startTime, zeroTime);
+        const { runningTimeAdjustment } = matchPunchesToCourse(
+          punches,
+          expected,
+          fallbackStart,
+        );
+        if (runningTimeAdjustment > 0)
+          adjustmentByRunner.set(r.id, runningTimeAdjustment);
+      }
 
       const enriched = runners.map((r) => {
         const status = runnerStatusToValue(r.status);
         const startAbs = toAbsolute(r.startTime, zeroTime);
         const finishAbs = toAbsolute(r.finishTime, zeroTime);
-        const runningTime =
+        const raw =
           startAbs > 0 && finishAbs > 0 ? Math.max(0, finishAbs - startAbs) : 0;
-        return { r, status, startAbs, finishAbs, runningTime };
+        const adj = adjustmentByRunner.get(r.id) ?? 0;
+        const runningTime = Math.max(0, raw - adj);
+        return { r, status, startAbs, finishAbs, runningTime, adj };
       });
 
-      // Sort by class, then status (OK first, then others), then running time.
       enriched.sort((a, b) => {
         const aOk = a.status === 1 ? 0 : 1;
         const bOk = b.status === 1 ? 0 : 1;

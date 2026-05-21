@@ -21,7 +21,8 @@ export interface ParsedPunch {
   type: number;
   time: number; // deciseconds since midnight (absolute or ZeroTime-relative, depending on context)
   source: "card" | "free";
-  freePunchId?: number; // oPunch.Id for free punches (enables removal)
+  /** Opaque handle to the source row (e.g. punches.id, UUID string in PG or numeric in legacy MySQL). Enables the UI to delete/edit the punch. */
+  freePunchId?: string | number;
   unit?: number; // MeOS punch unit (timing station identifier)
 }
 
@@ -60,7 +61,7 @@ export interface ControlMatch {
   cumTime: number;
   status: "ok" | "missing" | "extra";
   source: "card" | "free" | "";
-  freePunchId?: number;
+  freePunchId?: string | number;
 }
 
 export interface MatchResult {
