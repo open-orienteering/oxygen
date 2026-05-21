@@ -22,7 +22,7 @@ See `docs/architecture.md` for the full system architecture.
 | Start dev servers | `pnpm dev` | API on :3002, Web on :5173 |
 | TypeScript build | `pnpm build` | All 3 packages must compile cleanly |
 | Unit tests | `pnpm test` | ~371 tests across shared, api, web |
-| Integration tests | `pnpm --filter api exec vitest run --config vitest.integration.config.ts` | 62 tests, requires live MySQL |
+| Integration tests | `pnpm --filter api exec vitest run --config vitest.integration.config.ts` | requires the test Postgres container (`docker compose -f docker-compose.test.yml up -d`) |
 | E2E tests | `pnpm test:e2e` | 139 tests, Playwright (Chromium, single worker) |
 | Test coverage | `pnpm test:coverage` | V8 coverage reports (HTML + LCOV) |
 | Lint | `pnpm lint` | ESLint |
@@ -81,7 +81,7 @@ This is a TDD-first project. All new features and bug fixes must be developed te
 ### Test Structure
 
 - **Unit tests**: `packages/*/src/__tests__/*.test.ts` — Vitest, jsdom (web) / node (api). Fast, deterministic, no database.
-- **Integration tests**: `packages/api/src/__tests__/integration/*.test.ts` — Vitest with live MySQL. Test tRPC routers with real data.
+- **Integration tests**: `packages/api/src/__tests__/integration/*.test.ts` — Vitest against the dedicated `postgres-oxygen-test` container on `:5433`. The harness (`helpers/load-env.ts`) refuses to run if `DATABASE_URL` resolves to port 5432 (dev DB) — set `INTEGRATION_DATABASE_URL` to override. Per-suite isolation comes from giving each suite its own `Event` row and relying on `ON DELETE CASCADE`.
 - **E2E tests**: `e2e/*.spec.ts` — Playwright, Chromium, single worker, sequential. Full user flows through the browser.
 
 ## 5. Flaky Test Policy
@@ -223,7 +223,7 @@ After completing a feature, perform a self-review covering these areas:
 - Playwright runs sequentially: `fullyParallel: false`, `workers: 1`. Tests share a single Chromium instance.
 - Three seed databases (`itest`, `itest_multirace`, `meos_20251222_001121_2BC`) are recreated fresh by `e2e/global-setup.ts` before every run.
 - `MeOSMain.oxygen_settings` is shared with the developer's running stack. The Eventor API key rows (`eventor_api_key`, `eventor_api_key_test`) are snapshotted to a gitignored file at `e2e/.eventor-snapshot.json` by `e2e/global-setup.ts` and restored by `e2e/global-teardown.ts` so tests can freely call `eventor.clearKey` / `eventor.validateKey` without wiping real credentials. The snapshot is durable across interrupted runs and is refreshed whenever a real (non-placeholder) value is observed at setup. If you add another mutation that writes a globally-scoped row in `oxygen_settings`, extend the snapshot list in the same place.
-- The Playwright snapshot covers **E2E only**. Integration tests under `packages/api/src/__tests__/integration/` hit the same shared `MeOSMain` via `getSetting` / `setSetting`. Any integration test that writes a globally-scoped `oxygen_settings` row (Eventor key, online-input config, etc.) must snapshot the live value with `getSetting` in `beforeAll` and restore it with `setSetting(..., savedValue)` in `afterAll` — and call `eventorKeyStore._resetForTests()` after the restore when the row is `eventor_api_key{,_test}`. See `registration-trends.test.ts` and `eventor-reentry.test.ts` for the canonical pattern.
+- The Playwright snapshot covers **E2E only**. Integration tests run against the isolated `oxygen_test` database on `:5433` (see Test Structure §4), so they never touch the developer's dev DB. The globally-scoped `oxygen.settings` rows inside *that* test DB are still shared between integration suites — snapshot/restore Eventor keys with `getSetting`/`setSetting` in `beforeAll`/`afterAll` (and `eventorKeyStore._resetForTests()` after restore) so suites stay independent.
 
 ## 13. Git Conventions
 
