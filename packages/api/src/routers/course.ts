@@ -382,18 +382,103 @@ export const courseRouter = router({
   }),
 
   /**
-   * Completion status per control — placeholder until the punch matcher
-   * lands. Returns empty so the dashboard renders the "Pending" state.
+   * Completion status per control across all runners on the given course
+   * (or all courses when none supplied). For each course control we
+   * report `total` (runners expected to pass) and `passed` (runners with
+   * at least one matching punch code on their card).
+   *
+   * Uses card.punches_raw as the source of punches; this is fast (one
+   * cache row per card) and matches what the matcher consumes.
    */
   controlCompletionStatus: eventProcedure
     .input(z.object({ courseId: z.number().int().optional() }).optional())
-    .query(async () => {
-      return [] as Array<{
+    .query(async ({ ctx, input }) => {
+      const eventId = ctx.event.id;
+      const courseFilter = input?.courseId
+        ? await ctx.db.course.findFirst({
+            where: { eventId, seq: input.courseId },
+            select: { id: true },
+          })
+        : null;
+      // Collect (course → control) bindings to consider.
+      const courseControls = await ctx.db.courseControl.findMany({
+        where: courseFilter ? { courseId: courseFilter.id } : undefined,
+        include: {
+          control: { select: { id: true, seq: true, codes: true } },
+          course: { select: { id: true } },
+        },
+      });
+      if (courseControls.length === 0) return [];
+
+      // Runners on classes whose course matches.
+      const classes = await ctx.db.class.findMany({
+        where: { eventId, removed: false, courseId: { not: null } },
+        select: { id: true, courseId: true },
+      });
+      const classCourse = new Map<string, string>();
+      for (const c of classes) if (c.courseId) classCourse.set(c.id, c.courseId);
+
+      const runners = await ctx.db.runner.findMany({
+        where: { eventId, removed: false, classId: { not: null } },
+        select: { id: true, cardNo: true, classId: true, courseId: true },
+      });
+      if (runners.length === 0) return [];
+
+      const cards = await ctx.db.card.findMany({
+        where: { eventId, removed: false },
+        select: { cardNo: true, punchesRaw: true },
+      });
+      const cardByNo = new Map<number, string>(
+        cards.map((c) => [c.cardNo, c.punchesRaw]),
+      );
+
+      // For each control on the course, count runners-on-that-course and
+      // how many of them have at least one matching punch code.
+      const out: Array<{
         controlId: number;
         code: number;
         total: number;
         passed: number;
-      }>;
+      }> = [];
+      const ccsByControl = new Map<string, typeof courseControls>();
+      for (const cc of courseControls) {
+        const list = ccsByControl.get(cc.control.id) ?? [];
+        list.push(cc);
+        ccsByControl.set(cc.control.id, list);
+      }
+
+      for (const [controlId, ccs] of ccsByControl) {
+        const courseIds = new Set(ccs.map((cc) => cc.course.id));
+        const expectedRunners = runners.filter((r) => {
+          const cid = r.courseId ?? classCourse.get(r.classId ?? "") ?? null;
+          return cid ? courseIds.has(cid) : false;
+        });
+        const codes = (ccs[0].control.codes ?? "")
+          .split(";")
+          .map((s) => parseInt(s.trim(), 10))
+          .filter((n) => !isNaN(n) && n > 0);
+        const codeSet = new Set(codes);
+        let passed = 0;
+        for (const r of expectedRunners) {
+          const raw = cardByNo.get(r.cardNo);
+          if (!raw) continue;
+          // Quick scan of the packed punch string for any matching code.
+          // Format is `code-time;code-time;...` so a simple regex
+          // catches it without parsing every punch into objects.
+          const hit = codes.some((c) =>
+            new RegExp(`(?:^|;)${c}-`).test(raw),
+          );
+          if (hit) passed++;
+          void codeSet;
+        }
+        out.push({
+          controlId: ccs[0].control.seq,
+          code: codes[0] ?? 0,
+          total: expectedRunners.length,
+          passed,
+        });
+      }
+      return out;
     }),
 
   /** Upload an OCAD map file (stub — full parser pending). */
