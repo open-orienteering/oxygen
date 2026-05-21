@@ -759,6 +759,12 @@ export const eventorRouter = router({
       clubsUpdated: 0,
       runnersAdded: 0,
       runnersUpdated: 0,
+      /**
+       * Runners that exist locally but Eventor no longer reports — we
+       * flip them to `cancel` so the start list reflects withdrawals
+       * without dropping the row (keeps audit history intact).
+       */
+      cancelledCount: 0,
     };
 
     // 1. Classes
@@ -997,7 +1003,7 @@ export const eventorRouter = router({
               status: valueToRunnerStatus(21 as RunnerStatusValue),
             },
           });
-          stats.runnersUpdated++;
+          stats.cancelledCount++;
         }
       }
     }
@@ -1343,25 +1349,37 @@ export const eventorRouter = router({
       // which the dedicated livelox router will own once it lands.
       return {
         liveloxEventId: parseInt(match[1], 10),
+        eventName: info.name ?? "",
         webUrl: info.webUrl,
-        classes: [] as Array<{ id: number; name: string }>,
+        classes: [] as Array<{
+          id: number;
+          name: string;
+          participantCount: number;
+        }>,
       };
     }),
 
   // ───────────── Push to Eventor (stubs — heavy pipelines) ─────────────
 
+  /**
+   * Push final results to Eventor. Returns `{ runnerCount }` so the UI
+   * can render "Pushed N runners". The XML-emitter pipeline itself is
+   * pending re-port, so for now we throw a typed error — the EventPage
+   * surface is wired through `pushResultsMutation.error.message`.
+   */
   pushResults: eventProcedure
     .input(z.object({ dryRun: z.boolean().optional() }).optional())
-    .mutation(async () => {
+    .mutation(async (): Promise<{ runnerCount: number }> => {
       throw new TRPCError({
         code: "PRECONDITION_FAILED",
         message: "Eventor results push is being re-ported against the new schema.",
       });
     }),
 
+  /** See `pushResults` for the staging story. */
   pushStartList: eventProcedure
     .input(z.object({ dryRun: z.boolean().optional() }).optional())
-    .mutation(async () => {
+    .mutation(async (): Promise<{ runnerCount: number }> => {
       throw new TRPCError({
         code: "PRECONDITION_FAILED",
         message:

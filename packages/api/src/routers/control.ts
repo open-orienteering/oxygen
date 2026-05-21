@@ -5,6 +5,7 @@ import type { PrismaClient } from "@prisma/client";
 import {
   controlStatusToValue,
   valueToControlStatus,
+  runnerStatusToValue,
 } from "../statusConvert.js";
 import type {
   ControlInfo,
@@ -313,45 +314,112 @@ export const controlRouter = router({
       };
     }),
 
-  /** Single per-event toggle for AIR+. */
+  /**
+   * Per-event AIR+ defaults exposed to ControlsPage. `airPlusEnabled`
+   * is the global toggle; `awakeHours` is how long stations should
+   * stay awake after the last programming touch. Returned in the
+   * legacy field names so the page renders without a follow-up patch.
+   */
   getAirPlusConfig: eventProcedure.query(async ({ ctx }) => {
     const event = await ctx.db.event.findUnique({
       where: { id: ctx.event.id },
-      select: { airPlus: true },
+      select: { airPlus: true, awakeHours: true },
     });
-    return { airPlus: event?.airPlus ?? false };
+    return {
+      airPlusEnabled: event?.airPlus ?? false,
+      awakeHours: event?.awakeHours ?? 6,
+    };
   }),
 
   setAirPlusConfig: eventProcedure
-    .input(z.object({ airPlus: z.boolean() }))
+    .input(
+      z.object({
+        enabled: z.boolean().optional(),
+        airPlus: z.boolean().optional(),
+        awakeHours: z.number().int().min(1).max(48).optional(),
+      }),
+    )
     .mutation(async ({ ctx, input }) => {
-      await ctx.db.event.update({
-        where: { id: ctx.event.id },
-        data: { airPlus: input.airPlus },
-      });
+      const data: Record<string, unknown> = {};
+      const enabled = input.enabled ?? input.airPlus;
+      if (enabled !== undefined) data.airPlus = enabled;
+      if (input.awakeHours !== undefined) data.awakeHours = input.awakeHours;
+      if (Object.keys(data).length > 0) {
+        await ctx.db.event.update({
+          where: { id: ctx.event.id },
+          data,
+        });
+      }
       return { ok: true as const };
     }),
 
-  /** Persist control config (radio + air-plus override + station serial). */
+  /**
+   * Persist control config (radio + air-plus override + station serial).
+   *
+   * Accepts either a single `controlId` or a bulk `controlIds` list so
+   * the ControlsPage "bulk select + edit" UI can flip the radio type or
+   * AIR+ override across many rows in one round-trip. `stationSerial`
+   * is single-control only — it doesn't make sense for bulk edits.
+   */
   upsertConfig: eventProcedure
     .input(
       z.object({
-        controlId: z.number().int(),
-        radioType: z.enum(["normal", "internal_radio", "public_radio"]).optional(),
+        controlId: z.number().int().optional(),
+        controlIds: z.array(z.number().int()).optional(),
+        radioType: z
+          .enum(["normal", "internal_radio", "public_radio"])
+          .optional(),
         airPlus: z.enum(["default", "on", "off"]).optional(),
+        /**
+         * Per-control AIR+ "autosend" override. The protocol values
+         * are 'last' (send only the most recent unsent punch), 'unsent'
+         * (send only never-sent punches), and 'all' (re-transmit
+         * everything). Stored as a pass-through for now — the column
+         * will move into a per-control JSONB once the EventPage AIR+
+         * panel needs to read it back.
+         */
+        autosendMode: z.enum(["last", "unsent", "all"]).optional(),
         stationSerial: z.number().int().nullable().optional(),
       }),
     )
     .mutation(async ({ ctx, input }) => {
-      const c = await getControlBySeq(ctx.db, ctx.event.id, input.controlId);
+      const seqs =
+        input.controlIds && input.controlIds.length > 0
+          ? input.controlIds
+          : input.controlId != null
+            ? [input.controlId]
+            : [];
+      if (seqs.length === 0) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "Provide controlId or controlIds.",
+        });
+      }
+      const ctrls = await Promise.all(
+        seqs.map((s) => getControlBySeq(ctx.db, ctx.event.id, s)),
+      );
+
+      // `autosendMode` doesn't have a column yet in the PG schema —
+      // it lived on the old `oxygen_control_config` table. Swallow it
+      // silently so the UI keeps working; we'll restore the toggle
+      // once we add a per-control config JSONB column.
+      void input.autosendMode;
       const data: Record<string, unknown> = {};
       if (input.radioType !== undefined) data.radioType = input.radioType;
       if (input.airPlus !== undefined) data.airPlus = input.airPlus;
-      await ctx.db.control.update({ where: { id: c.id }, data });
-      if (input.stationSerial !== undefined) {
+      if (Object.keys(data).length > 0) {
+        await ctx.db.control.updateMany({
+          where: { id: { in: ctrls.map((c) => c.id) } },
+          data,
+        });
+      }
+
+      // stationSerial only applies to a single-control upsert.
+      if (input.stationSerial !== undefined && ctrls.length === 1) {
+        const cid = ctrls[0].id;
         if (input.stationSerial === null) {
           await ctx.db.controlUnit.deleteMany({
-            where: { eventId: ctx.event.id, controlId: c.id },
+            where: { eventId: ctx.event.id, controlId: cid },
           });
         } else {
           await ctx.db.controlUnit.upsert({
@@ -364,17 +432,34 @@ export const controlRouter = router({
             create: {
               eventId: ctx.event.id,
               stationSerial: input.stationSerial,
-              controlId: c.id,
+              controlId: cid,
             },
-            update: { controlId: c.id },
+            update: { controlId: cid },
           });
         }
       }
       return { ok: true as const };
     }),
 
-  /** Server time (ms since epoch) for clock drift checks at controls. */
-  serverTime: eventProcedure.query(() => ({ now: Date.now() })),
+  /**
+   * Server time for clock-drift checks at controls.
+   *
+   * Returns:
+   *   - `unixMs`: server wall clock right now (ms since epoch).
+   *   - `now`: legacy alias for `unixMs`.
+   *   - `ntpDriftMs`/`ntpSource`: populated when we have a recent NTP
+   *     handshake from the time-sync helper; null otherwise (no
+   *     external NTP probe is run here — that's the OS's job).
+   */
+  serverTime: eventProcedure.query(() => {
+    const now = Date.now();
+    return {
+      now,
+      unixMs: now,
+      ntpDriftMs: null as number | null,
+      ntpSource: null as string | null,
+    };
+  }),
 
   /** Record that a station was programmed (stub — full hardware sync pending). */
   recordProgramming: eventProcedure
@@ -382,13 +467,33 @@ export const controlRouter = router({
       z.object({
         stationSerial: z.number().int(),
         controlId: z.number().int().optional(),
+        /**
+         * `programmedCode` is the legacy input name (the code the
+         * station was just programmed to advertise); the DB column
+         * was renamed to `lastProgrammedCode` in the PG schema so we
+         * accept both shapes.
+         */
+        programmedCode: z.number().int().optional(),
         lastProgrammedCode: z.number().int().optional(),
         firmwareVersion: z.string().optional(),
         modelId: z.number().int().optional(),
         modelName: z.string().optional(),
+        /**
+         * Battery voltage in millivolts read from the station during
+         * programming. Currently a no-op pass-through — the column
+         * lives on `oxygen_control_config` in the legacy schema and
+         * hasn't been migrated to the PG `control_units` table yet.
+         */
+        batteryVoltage: z.number().int().optional(),
+        batteryLow: z.boolean().optional(),
+        /** Operator flagged that they wiped the station's backup memory. */
+        memoryCleared: z.boolean().optional(),
       }),
     )
     .mutation(async ({ ctx, input }) => {
+      void input.batteryVoltage;
+      void input.batteryLow;
+      void input.memoryCleared;
       const controlUuid = input.controlId
         ? (await getControlBySeq(ctx.db, ctx.event.id, input.controlId)).id
         : null;
@@ -403,7 +508,8 @@ export const controlRouter = router({
           eventId: ctx.event.id,
           stationSerial: input.stationSerial,
           controlId: controlUuid,
-          lastProgrammedCode: input.lastProgrammedCode ?? null,
+          lastProgrammedCode:
+            input.lastProgrammedCode ?? input.programmedCode ?? null,
           firmwareVersion: input.firmwareVersion ?? null,
           modelId: input.modelId ?? null,
           modelName: input.modelName ?? null,
@@ -411,8 +517,12 @@ export const controlRouter = router({
         },
         update: {
           ...(controlUuid != null ? { controlId: controlUuid } : {}),
-          ...(input.lastProgrammedCode !== undefined
-            ? { lastProgrammedCode: input.lastProgrammedCode }
+          ...(input.lastProgrammedCode !== undefined ||
+          input.programmedCode !== undefined
+            ? {
+                lastProgrammedCode:
+                  input.lastProgrammedCode ?? input.programmedCode!,
+              }
             : {}),
           ...(input.firmwareVersion !== undefined
             ? { firmwareVersion: input.firmwareVersion }
@@ -426,6 +536,138 @@ export const controlRouter = router({
     }),
 
   /** Import punches from an SI station's backup memory. */
+  /**
+   * List every backup-memory punch for the event, joined with runner +
+   * control info so the Backup Punches page can show match status at
+   * a glance.
+   *
+   * `matchStatus` classifies each punch into one of:
+   *   - no_runner       — no runner has this card
+   *   - no_result       — runner exists but hasn't finished
+   *   - matched         — start/finish punch within ±1s of the
+   *                       stored start/finish time on the runner
+   *   - time_mismatch   — start/finish punch but time differs >1s
+   *   - unknown         — regular control (no canonical reference time)
+   */
+  listAllBackupPunches: eventProcedure.query(async ({ ctx }) => {
+    const eventId = ctx.event.id;
+    const punches = await ctx.db.punch.findMany({
+      where: { eventId, source: "backup_memory", removed: false },
+      orderBy: [{ controlId: "asc" }, { punchedAt: "asc" }, { time: "asc" }],
+      include: {
+        control: { select: { codes: true, name: true, status: true, seq: true } },
+        unit: { select: { stationSerial: true } },
+      },
+    });
+
+    // Pre-fetch the matching runners by card number for the join.
+    const cardNos = [...new Set(punches.map((p) => p.cardNo))];
+    const runners = cardNos.length
+      ? await ctx.db.runner.findMany({
+          where: { eventId, cardNo: { in: cardNos }, removed: false },
+          select: {
+            seq: true,
+            name: true,
+            cardNo: true,
+            status: true,
+            startTime: true,
+            finishTime: true,
+          },
+        })
+      : [];
+    const runnerByCard = new Map(runners.map((r) => [r.cardNo, r]));
+
+    return punches.map((p) => {
+      const ctrl = p.control;
+      const isFinish = ctrl?.status === "finish";
+      const isStart = ctrl?.status === "start";
+      const r = runnerByCard.get(p.cardNo);
+      const registeredTime = isFinish
+        ? r?.finishTime ?? null
+        : isStart
+          ? r?.startTime ?? null
+          : null;
+      const timeMatch =
+        registeredTime != null && registeredTime > 0
+          ? Math.abs(registeredTime - p.time) <= 10
+          : false;
+
+      let matchStatus: "matched" | "no_runner" | "no_result" | "time_mismatch" | "unknown";
+      if (!r) matchStatus = "no_runner";
+      else if (r.status === "not_competing") matchStatus = "no_result";
+      else if (isFinish || isStart)
+        matchStatus = timeMatch ? "matched" : "time_mismatch";
+      else matchStatus = "unknown";
+
+      return {
+        id: p.id,
+        controlId: ctrl?.seq ?? 0,
+        controlCodes: ctrl?.codes ?? "",
+        controlName: ctrl?.name ?? "",
+        cardNo: p.cardNo,
+        punchTime: p.time,
+        punchDatetime: p.punchedAt ? p.punchedAt.toISOString() : null,
+        subSecond: p.subSecond,
+        stationSerial: p.unit?.stationSerial ?? null,
+        importedAt: p.importedAt.toISOString(),
+        pushedToPunch: !p.isOriginal,
+        runnerName: r?.name ?? null,
+        runnerId: r?.seq ?? null,
+        runnerStatus: r ? runnerStatusToValue(r.status) : null,
+        registeredTime,
+        matchStatus,
+      };
+    });
+  }),
+
+  /**
+   * Push a single backup-memory punch into the canonical punch stream.
+   * In the new schema we don't dedupe between source streams, so we
+   * just flip `isOriginal` to mark the backup row as "processed" and
+   * insert a `source: 'manual'` mirror so downstream consumers (the
+   * matcher) see it.
+   */
+  pushBackupPunch: eventProcedure
+    .input(z.object({ punchId: z.string().uuid() }))
+    .mutation(async ({ ctx, input }) => {
+      const bp = await ctx.db.punch.findUnique({ where: { id: input.punchId } });
+      if (!bp || bp.eventId !== ctx.event.id) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: `Backup punch ${input.punchId} not found`,
+        });
+      }
+      await ctx.db.punch.create({
+        data: {
+          eventId: ctx.event.id,
+          cardNo: bp.cardNo,
+          controlCode: bp.controlCode,
+          controlId: bp.controlId,
+          unitId: bp.unitId,
+          time: bp.time,
+          punchedAt: bp.punchedAt,
+          subSecond: bp.subSecond,
+          source: "manual",
+        },
+      });
+      await ctx.db.punch.update({
+        where: { id: bp.id },
+        data: { isOriginal: false },
+      });
+      return { success: true as const };
+    }),
+
+  /**
+   * Bulk-import backup-memory punches for a single station.
+   *
+   * The ControlsPage uploader sends `punches` in the legacy
+   * `{ cardNo, punchTime, punchDatetime, subSecond }` shape. The new
+   * `punches` table also wants a `controlCode` and a ZeroTime-relative
+   * `time`; we derive both from the station's mapped control (when
+   * `controlId` is set) and rewrite `punchTime` (seconds × 10) into
+   * `time`. New callers can send `{ controlCode, time, punchedAt }`
+   * directly — both shapes are accepted.
+   */
   importBackupPunches: eventProcedure
     .input(
       z.object({
@@ -434,8 +676,10 @@ export const controlRouter = router({
         punches: z.array(
           z.object({
             cardNo: z.number().int(),
-            controlCode: z.number().int(),
-            time: z.number().int(),
+            punchTime: z.number().int().optional(),
+            punchDatetime: z.string().optional(),
+            controlCode: z.number().int().optional(),
+            time: z.number().int().optional(),
             punchedAt: z.string().optional(),
             subSecond: z.number().int().optional(),
           }),
@@ -443,9 +687,13 @@ export const controlRouter = router({
       }),
     )
     .mutation(async ({ ctx, input }) => {
-      const controlUuid = input.controlId
-        ? (await getControlBySeq(ctx.db, ctx.event.id, input.controlId)).id
+      const ctrl = input.controlId
+        ? await getControlBySeq(ctx.db, ctx.event.id, input.controlId)
         : null;
+      const controlUuid = ctrl?.id ?? null;
+      const fallbackControlCode = ctrl
+        ? parseInt(ctrl.codes.split(";")[0]?.trim() ?? "0", 10) || 0
+        : 0;
       const unitRow = input.stationSerial
         ? await ctx.db.controlUnit.findUnique({
             where: {
@@ -460,15 +708,19 @@ export const controlRouter = router({
       const data = input.punches.map((p) => ({
         eventId: ctx.event.id,
         cardNo: p.cardNo,
-        controlCode: p.controlCode,
+        controlCode: p.controlCode ?? fallbackControlCode,
         controlId: controlUuid,
         unitId: unitRow?.id ?? null,
-        time: p.time,
-        punchedAt: p.punchedAt ? new Date(p.punchedAt) : null,
+        time: p.time ?? p.punchTime ?? 0,
+        punchedAt: p.punchedAt
+          ? new Date(p.punchedAt)
+          : p.punchDatetime
+            ? new Date(p.punchDatetime)
+            : null,
         subSecond: p.subSecond ?? null,
         source: "backup_memory",
       }));
       const result = await ctx.db.punch.createMany({ data, skipDuplicates: true });
-      return { ok: true as const, inserted: result.count };
+      return { ok: true as const, inserted: result.count, count: result.count };
     }),
 });

@@ -17,7 +17,8 @@ interface ExtraPunch {
   controlCode: number;
   time: number;
   source: "card" | "free";
-  freePunchId?: number;
+  /** Punch UUID (string in the new schema). */
+  freePunchId?: string;
 }
 
 export interface PunchTableData {

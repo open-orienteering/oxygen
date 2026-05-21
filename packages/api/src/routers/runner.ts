@@ -350,36 +350,93 @@ export const runnerRouter = router({
       return { id: created.seq };
     }),
 
+  /**
+   * Update a runner.
+   *
+   * Accepts either a flat shape (`{ id, name?, cardNo?, ... }`) or the
+   * legacy `{ id, data: { ... } }` wrapper that RunnerInlineDetail
+   * still uses. Field semantics:
+   *   - `clubId` (legacy): eventor club id — resolved server-side to
+   *     `eventorClubId` + a `clubName` looked up from the directory.
+   *   - `clubName`: free-text club (sent when there's no Eventor link).
+   *   - `eventorClubId`: explicit Eventor club id (preferred new shape).
+   */
   update: eventProcedure
-    .input(z.object({ id: z.number().int() }).extend(runnerUpdateSchema.shape))
+    .input(
+      z.object({
+        id: z.number().int(),
+        ...runnerUpdateSchema.shape,
+        clubId: z.number().int().nullable().optional(),
+        data: runnerUpdateSchema
+          .extend({ clubId: z.number().int().nullable().optional() })
+          .partial()
+          .optional(),
+      }),
+    )
     .mutation(async ({ ctx, input }) => {
       const r = await getRunnerBySeq(ctx.db, ctx.event.id, input.id);
-      if (input.cardNo != null && input.cardNo !== r.cardNo) {
-        await assertCardNotTaken(ctx.db, ctx.event.id, input.cardNo, r.id);
+      // Merge legacy `data: { ... }` wrapper with the flat shape.
+      const fields = { ...input, ...(input.data ?? {}) } as Record<
+        string,
+        unknown
+      >;
+      const get = <T>(k: string): T | undefined =>
+        (fields[k] === undefined ? undefined : (fields[k] as T));
+
+      const cardNo = get<number>("cardNo");
+      if (cardNo != null && cardNo !== r.cardNo) {
+        await assertCardNotTaken(ctx.db, ctx.event.id, cardNo, r.id);
       }
+
       const data: Record<string, unknown> = {};
-      if (input.name !== undefined) data.name = input.name;
-      if (input.cardNo !== undefined) data.cardNo = input.cardNo;
-      if (input.clubName !== undefined) data.clubName = input.clubName;
-      if (input.eventorClubId !== undefined)
-        data.eventorClubId = input.eventorClubId;
-      if (input.classId !== undefined) {
-        data.classId = await classSeqToId(ctx.db, ctx.event.id, input.classId);
+      if (get<string>("name") !== undefined) data.name = get<string>("name");
+      if (cardNo !== undefined) data.cardNo = cardNo;
+      if (get<string>("clubName") !== undefined)
+        data.clubName = get<string>("clubName");
+      if (fields.eventorClubId !== undefined)
+        data.eventorClubId = fields.eventorClubId;
+      // Legacy clubId → eventorClubId + (best-effort) clubName.
+      if (fields.clubId !== undefined) {
+        const cid = fields.clubId as number | null;
+        if (cid && cid > 0) {
+          data.eventorClubId = BigInt(cid);
+          const dir = await ctx.db.clubDirectory.findUnique({
+            where: { eventorId: BigInt(cid) },
+            select: { name: true },
+          });
+          if (dir?.name) data.clubName = dir.name;
+        } else {
+          data.eventorClubId = null;
+          data.clubName = "";
+        }
       }
-      if (input.startNo !== undefined) data.startNo = input.startNo;
-      if (input.startTime !== undefined) data.startTime = input.startTime;
-      if (input.birthYear !== undefined) data.birthYear = input.birthYear;
-      if (input.sex !== undefined) data.sex = input.sex;
-      if (input.nationality !== undefined) data.nationality = input.nationality;
-      if (input.phone !== undefined) data.phone = input.phone;
-      if (input.status !== undefined)
-        data.status = valueToRunnerStatus(input.status);
-      if (input.finishTime !== undefined) data.finishTime = input.finishTime;
-      if (input.fee !== undefined) data.feeCents = input.fee;
-      if (input.paid !== undefined) data.paidCents = input.paid;
-      if (input.payMode !== undefined) data.payMode = input.payMode;
-      if (input.cardFee !== undefined) data.cardFeeCents = input.cardFee;
-      if (input.cardReturned !== undefined) data.cardReturned = input.cardReturned;
+      if (get<number>("classId") !== undefined) {
+        data.classId = await classSeqToId(
+          ctx.db,
+          ctx.event.id,
+          get<number>("classId")!,
+        );
+      }
+      if (get<number>("startNo") !== undefined) data.startNo = get<number>("startNo");
+      if (get<number>("startTime") !== undefined)
+        data.startTime = get<number>("startTime");
+      if (get<number>("birthYear") !== undefined)
+        data.birthYear = get<number>("birthYear");
+      if (get<string>("sex") !== undefined) data.sex = get<string>("sex");
+      if (get<string>("nationality") !== undefined)
+        data.nationality = get<string>("nationality");
+      if (get<string>("phone") !== undefined) data.phone = get<string>("phone");
+      if (get<number>("status") !== undefined)
+        data.status = valueToRunnerStatus(get<number>("status")!);
+      if (get<number>("finishTime") !== undefined)
+        data.finishTime = get<number>("finishTime");
+      if (get<number>("fee") !== undefined) data.feeCents = get<number>("fee");
+      if (get<number>("paid") !== undefined) data.paidCents = get<number>("paid");
+      if (get<number>("payMode") !== undefined) data.payMode = get<number>("payMode");
+      if (get<number>("cardFee") !== undefined)
+        data.cardFeeCents = get<number>("cardFee");
+      if (get<boolean>("cardReturned") !== undefined)
+        data.cardReturned = get<boolean>("cardReturned");
 
       await ctx.db.runner.update({ where: { id: r.id }, data });
       return { ok: true };

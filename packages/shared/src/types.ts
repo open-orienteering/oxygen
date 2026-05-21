@@ -449,8 +449,13 @@ export interface RunnerInput {
 /** Dashboard overview for the active event. */
 export interface EventDashboard {
   event: EventInfo;
-  /** @deprecated alias for `event` kept for the transition window. */
-  competition?: EventInfo;
+  /**
+   * @deprecated alias for `event` kept for the transition window —
+   * the API always populates it (with the same value as `event`), so
+   * existing UI code referencing `d.competition.*` keeps compiling
+   * without optional chaining noise.
+   */
+  competition: EventInfo;
   classes: ClassInfo[];
   courses: CourseInfo[];
   totalRunners: number;
