@@ -183,22 +183,53 @@ export function CompetitionShell() {
   useEffect(() => { dashboardRef.current = dashboard.data; }, [dashboard.data]);
   useEffect(() => { regConfigRef.current = regConfig.data; }, [regConfig.data]);
 
-  // Kiosk-print-receipt forwarding is being re-ported alongside the
-  // punch-matcher pipeline. The hook scaffolding is kept so the channel
-  // is still subscribed-and-cleaned-up, but the receipt build path is
-  // staged.
   useEffect(() => {
     const channel = getKioskChannel();
     if (!channel) return;
-    return channel.subscribe(() => {});
-  }, [getKioskChannel]);
-
-  // Silence unused-var warnings while the receipt build path is staged.
-  void dashboardRef;
-  void regConfigRef;
-  void printerPrint;
-  void fetchLogoRaster;
-  void getClubLogoUrl;
+    return channel.subscribe((msg) => {
+      if (msg.type !== "kiosk-print-receipt") return;
+      const { runnerId } = msg;
+      const competitionInfo = dashboardRef.current?.competition;
+      const eventorId = dashboardRef.current?.organizer?.eventorId;
+      const finishMsg = regConfigRef.current?.finishReceiptMessage;
+      utils.race.finishReceipt.fetch({ runnerId }).then(async (result) => {
+        if (!result) return;
+        const logoRaster = eventorId
+          ? await fetchLogoRaster(getClubLogoUrl(eventorId), 250).catch(() => null)
+          : null;
+        return printerPrint({
+          competitionName: competitionInfo?.name ?? "",
+          competitionDate: competitionInfo?.date ?? undefined,
+          runner: {
+            name: result.runner.name,
+            clubName: result.runner.clubName,
+            className: result.runner.className,
+            startNo: result.runner.startNo,
+            cardNo: result.runner.cardNo,
+          },
+          timing: result.timing,
+          splits: result.controls.map((c) => ({
+            controlIndex: c.controlIndex,
+            controlCode: c.controlCode,
+            splitTime: c.splitTime,
+            cumTime: c.cumTime,
+            status: c.status,
+            punchTime: c.punchTime,
+            legLength: c.legLength,
+          })),
+          course: result.course ? { name: result.course.name, length: result.course.length } : null,
+          position: result.position,
+          siac: result.siac,
+          classResults: result.classResults,
+          logoRaster,
+          qrUrl: competitionInfo?.eventorEventId
+            ? `https://eventor.orientering.se/Events/Show/${competitionInfo.eventorEventId}`
+            : "https://open-orienteering.org",
+          customMessage: finishMsg || undefined,
+        });
+      }).catch(() => {});
+    });
+  }, [getKioskChannel, printerPrint, utils]);
 
   // ─── Two-pane (wide-screen) layout state ──────────────────
   // All of these hooks must be declared before the early returns below to
@@ -491,7 +522,8 @@ export function CompetitionShell() {
         {/* Floating recent cards panel */}
         <RecentCards />
 
-        {/* The registration dialog is now rendered by the provider when open. */}
+        {/* Global registration dialog */}
+        <RegistrationDialog />
       </RegistrationDialogProvider>
 
       {/* Printer settings dialog */}
@@ -579,8 +611,13 @@ function PaneContainer({
               is hosted inside MapPanel's own (now unified) toolbar via
               `onPaneCollapse`, so MapPane itself has no chrome of its
               own — one consistent header across pages. */}
-          {mapProps && <MapPanel />}
-          {/* onCollapse + mapProps are passed once the full MapPanel re-port lands. */}
+          {mapProps && (
+            <MapPanel
+              {...mapProps}
+              fillContainer
+              onPaneCollapse={onCollapse}
+            />
+          )}
         </MapPane>
       )}
     </div>

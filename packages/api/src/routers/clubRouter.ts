@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { TRPCError } from "@trpc/server";
 import { router, eventProcedure, publicProcedure } from "../trpc.js";
 import { prisma } from "../db.js";
 import { WITHDRAWN_STATUSES, type ClubSummary, type ClubDetail } from "@oxygen/shared";
@@ -78,6 +79,89 @@ export const clubRouter = router({
     result.sort((a, b) => a.name.localeCompare(b.name));
     return result;
   }),
+
+  /**
+   * Legacy alias for `getById` — clubs are now keyed by Eventor id +
+   * name rather than a per-event integer. The ClubsPage still calls
+   * `detail({ id })` so we accept a numeric id and route it through.
+   */
+  detail: eventProcedure
+    .input(z.object({ id: z.number().int() }))
+    .query(async ({ ctx, input }): Promise<ClubDetail> => {
+      const where: Record<string, unknown> = {
+        eventId: ctx.event.id,
+        removed: false,
+      };
+      if (input.id > 0) where.eventorClubId = input.id;
+      const runners = await ctx.db.runner.findMany({
+        where,
+        include: { class: { select: { name: true } } },
+      });
+      let dir = null;
+      if (input.id > 0) {
+        dir = await ctx.db.clubDirectory.findUnique({
+          where: { eventorId: BigInt(input.id) },
+        });
+      }
+      const display = dir?.name || runners[0]?.clubName || "";
+      return {
+        id: input.id,
+        name: display,
+        shortName: dir?.shortName ?? "",
+        district: 0,
+        nationality: "",
+        country: dir?.countryCode ?? "",
+        careOf: "",
+        street: "",
+        city: "",
+        zip: "",
+        email: "",
+        phone: "",
+        extId: input.id,
+        runners: runners.map((r) => ({
+          id: r.seq,
+          name: r.name,
+          className: r.class?.name ?? "",
+          cardNo: r.cardNo,
+        })),
+      };
+    }),
+
+  /**
+   * Read-only stubs. Clubs are now a global, Eventor-synced entity
+   * (clubDirectory). Per-event create / edit / delete don't exist in
+   * the new model — the ClubsPage UI surfaces these as disabled
+   * operations and the API rejects them clearly.
+   */
+  create: eventProcedure
+    .input(z.unknown())
+    .mutation(async () => {
+      throw new TRPCError({
+        code: "PRECONDITION_FAILED",
+        message:
+          "Clubs are now global. Add via Eventor sync (eventor.syncClubs) instead.",
+      });
+    }),
+
+  update: eventProcedure
+    .input(z.unknown())
+    .mutation(async () => {
+      throw new TRPCError({
+        code: "PRECONDITION_FAILED",
+        message:
+          "Clubs are now global. Edit the club_directory row via Eventor sync.",
+      });
+    }),
+
+  delete: eventProcedure
+    .input(z.object({ id: z.number().int() }))
+    .mutation(async () => {
+      throw new TRPCError({
+        code: "PRECONDITION_FAILED",
+        message:
+          "Clubs are now global. Unassign runners from the club instead.",
+      });
+    }),
 
   /** Detail for a club identified by eventor_id (or 0 + name for free-text). */
   getById: eventProcedure

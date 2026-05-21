@@ -633,6 +633,15 @@ export const cardReadoutRouter = router({
     }),
 
   /** All known cards for the event (one row per card_no). */
+  /**
+   * One row per card, joined with the runner that currently owns it.
+   *
+   * The CardsPage filter UI consumes a rich shape — `cardType`,
+   * `batteryVoltage` (volts!), `punchCount`, `runner.{status,
+   * isRentalCard, cardReturned}` — so we synthesise that here from the
+   * latest readout + the runner row. Cards with no readout yet still
+   * appear with `cardType: ""` and `batteryVoltage: null`.
+   */
   cardList: eventProcedure.query(async ({ ctx }) => {
     const cards = await ctx.db.card.findMany({
       where: { eventId: ctx.event.id, removed: false },
@@ -652,27 +661,83 @@ export const cardReadoutRouter = router({
             name: true,
             clubName: true,
             eventorClubId: true,
+            status: true,
+            cardReturned: true,
+            cardFeeCents: true,
             class: { select: { name: true } },
           },
         })
       : [];
     const runnerByCard = new Map(runners.map((r) => [r.cardNo, r]));
+
+    // Latest readout per card (for cardType + battery voltage). We
+    // query in one go and reduce client-side to avoid an N+1.
+    const readouts = cardNos.length
+      ? await ctx.db.cardReadout.findMany({
+          where: { eventId: ctx.event.id, cardNo: { in: cardNos } },
+          orderBy: { readAt: "desc" },
+          select: {
+            cardNo: true,
+            cardType: true,
+            voltageMv: true,
+            readAt: true,
+            punches: true,
+          },
+        })
+      : [];
+    const latestByCard = new Map<number, (typeof readouts)[number]>();
+    for (const r of readouts) {
+      if (!latestByCard.has(r.cardNo)) latestByCard.set(r.cardNo, r);
+    }
+
     return cards.map((c) => {
       const r = runnerByCard.get(c.cardNo);
+      const latest = latestByCard.get(c.cardNo) ?? null;
+      const punches = latest?.punches as unknown[] | null | undefined;
+      const punchCount = Array.isArray(punches) ? punches.length : 0;
+      const voltageMv = latest?.voltageMv ?? c.voltageMv ?? 0;
+      const batteryVoltage = voltageMv > 0 ? voltageMv / 1000 : null;
       return {
         id: c.seq,
         cardNo: c.cardNo,
-        voltageMv: c.voltageMv,
+        cardType: latest?.cardType ?? "",
+        batteryVoltage,
+        voltageMv,
         readCount: c.readCount,
+        punchCount,
+        hasPunches: punchCount > 0,
+        modified: (latest?.readAt ?? c.updatedAt).toISOString(),
         runnerId: r?.seq ?? null,
         runnerName: r?.name ?? "",
         className: r?.class?.name ?? "",
         clubName: r?.clubName ?? "",
+        runner: r
+          ? {
+              id: r.seq,
+              name: r.name,
+              clubName: r.clubName,
+              clubId: r.eventorClubId ? Number(r.eventorClubId) : 0,
+              className: r.class?.name ?? "",
+              status: runnerStatusToValue(r.status),
+              // Rental cards are flagged with a non-zero cardFee
+              // (matches the legacy MeOS convention).
+              isRentalCard: r.cardFeeCents > 0,
+              cardReturned: r.cardReturned,
+            }
+          : null,
       };
     });
   }),
 
-  /** Full detail for a card. */
+  /**
+   * Full detail for a card — the structured shape the CardsPage drawer
+   * consumes. Surfaces the parsed punches, owner data + metadata from
+   * the latest readout, and the linked runner (with club + status +
+   * card-return flag).
+   *
+   * Returns `null` when neither the card nor a readout exists for the
+   * given `cardNo`, so the page can render "unknown card" gracefully.
+   */
   cardDetail: eventProcedure
     .input(z.object({ cardNo: z.number().int() }))
     .query(async ({ ctx, input }) => {
@@ -690,6 +755,9 @@ export const cardReadoutRouter = router({
           name: true,
           clubName: true,
           eventorClubId: true,
+          status: true,
+          cardFeeCents: true,
+          cardReturned: true,
           class: { select: { name: true } },
         },
       });
@@ -697,32 +765,60 @@ export const cardReadoutRouter = router({
         where: { eventId: ctx.event.id, cardNo: input.cardNo },
         orderBy: { readAt: "desc" },
       });
+
+      if (!card && !latestReadout) return null;
+
+      // Parsed punches from the latest readout. The readout `punches`
+      // column is JSONB matching the legacy
+      //   { type: number, time: number, ... } shape.
+      type Punch = { type: number; time: number };
+      const parsedPunches: Punch[] = Array.isArray(latestReadout?.punches)
+        ? (latestReadout!.punches as unknown as Punch[])
+        : [];
+      const PUNCH_START = 1;
+      const PUNCH_FINISH = 2;
+      const PUNCH_CHECK = 3;
+      const startPunch = parsedPunches.find((p) => p.type === PUNCH_START);
+      const finishPunch = parsedPunches.find((p) => p.type === PUNCH_FINISH);
+      const checkPunch = parsedPunches.find((p) => p.type === PUNCH_CHECK);
+      const controlPunches = parsedPunches.filter(
+        (p) =>
+          p.type !== PUNCH_START &&
+          p.type !== PUNCH_FINISH &&
+          p.type !== PUNCH_CHECK,
+      );
+
+      const voltageMv = latestReadout?.voltageMv ?? card?.voltageMv ?? 0;
+      const batteryVoltage = voltageMv > 0 ? voltageMv / 1000 : null;
+
       return {
         cardNo: input.cardNo,
-        card: card
-          ? {
-              id: card.seq,
-              voltageMv: card.voltageMv,
-              readCount: card.readCount,
-            }
-          : null,
+        id: card?.seq ?? 0,
+        cardType: latestReadout?.cardType ?? "",
+        batteryVoltage,
+        voltageMv,
+        ownerData: latestReadout?.ownerData ?? null,
+        metadata: latestReadout?.metadata ?? null,
         runner: runner
           ? {
               id: runner.seq,
               name: runner.name,
               className: runner.class?.name ?? "",
               clubName: runner.clubName,
+              clubId: runner.eventorClubId ? Number(runner.eventorClubId) : 0,
+              status: runnerStatusToValue(runner.status),
+              isRentalCard: runner.cardFeeCents > 0,
+              cardReturned: runner.cardReturned,
             }
           : null,
-        latestReadout: latestReadout
-          ? {
-              id: latestReadout.id,
-              cardType: latestReadout.cardType,
-              punches: latestReadout.punches,
-              voltageMv: latestReadout.voltageMv,
-              readAt: latestReadout.readAt.toISOString(),
-            }
-          : null,
+        checkTime: checkPunch?.time ?? null,
+        startTime: startPunch?.time ?? null,
+        finishTime: finishPunch?.time ?? null,
+        punches: controlPunches.map((p) => ({
+          controlCode: p.type,
+          time: p.time,
+        })),
+        modified: (latestReadout?.readAt ?? card?.updatedAt ?? new Date()).toISOString(),
       };
     }),
 
@@ -744,10 +840,51 @@ export const cardReadoutRouter = router({
       }));
     }),
 
-  /** Link a card to a runner manually. */
+  /**
+   * Link a card to a runner manually.
+   *
+   * Accepts either `{ cardNo }` (the new shape) or `{ cardId }` (the
+   * legacy seq-based shape — the CardsPage drawer still passes this).
+   * `runnerId` is the runner's seq, or `null` to unlink. The card row
+   * is created if it doesn't exist yet.
+   */
   linkCardToRunner: eventProcedure
-    .input(z.object({ cardNo: z.number().int(), runnerId: z.number().int() }))
+    .input(
+      z.object({
+        cardNo: z.number().int().optional(),
+        cardId: z.number().int().optional(),
+        runnerId: z.number().int().nullable(),
+      }),
+    )
     .mutation(async ({ ctx, input }) => {
+      let cardNo = input.cardNo;
+      if (!cardNo && input.cardId) {
+        const c = await ctx.db.card.findFirst({
+          where: { eventId: ctx.event.id, seq: input.cardId },
+          select: { cardNo: true },
+        });
+        if (!c) {
+          throw new TRPCError({
+            code: "NOT_FOUND",
+            message: `Card #${input.cardId} not found.`,
+          });
+        }
+        cardNo = c.cardNo;
+      }
+      if (!cardNo) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "Provide cardNo or cardId.",
+        });
+      }
+      if (input.runnerId === null) {
+        // Unlink: clear cardNo on any runner currently holding it.
+        await ctx.db.runner.updateMany({
+          where: { eventId: ctx.event.id, cardNo, removed: false },
+          data: { cardNo: 0 },
+        });
+        return { ok: true as const };
+      }
       const runner = await ctx.db.runner.findFirst({
         where: { eventId: ctx.event.id, seq: input.runnerId, removed: false },
         select: { id: true },
@@ -759,12 +896,12 @@ export const cardReadoutRouter = router({
         });
       }
       const card = await ctx.db.card.findFirst({
-        where: { eventId: ctx.event.id, cardNo: input.cardNo, removed: false },
+        where: { eventId: ctx.event.id, cardNo, removed: false },
         select: { id: true },
       });
       await ctx.db.runner.update({
         where: { id: runner.id },
-        data: { cardNo: input.cardNo, cardId: card?.id ?? null },
+        data: { cardNo, cardId: card?.id ?? null },
       });
       return { ok: true as const };
     }),
@@ -804,10 +941,10 @@ export const cardReadoutRouter = router({
 
   /** Remove a free punch by id (UUID). */
   removePunch: eventProcedure
-    .input(z.object({ id: z.string().uuid() }))
+    .input(z.object({ punchId: z.string().uuid() }))
     .mutation(async ({ ctx, input }) => {
       await ctx.db.punch.update({
-        where: { id: input.id },
+        where: { id: input.punchId },
         data: { removed: true },
       });
       return { ok: true as const };
@@ -815,11 +952,11 @@ export const cardReadoutRouter = router({
 
   /** Adjust the time on an existing free punch. */
   updatePunchTime: eventProcedure
-    .input(z.object({ id: z.string().uuid(), time: z.number().int() }))
+    .input(z.object({ punchId: z.string().uuid(), time: z.number().int() }))
     .mutation(async ({ ctx, input }) => {
       const zeroTime = ctx.event.zeroTime;
       await ctx.db.punch.update({
-        where: { id: input.id },
+        where: { id: input.punchId },
         data: {
           time: input.time > 0 ? toRelative(input.time, zeroTime) : 0,
           isOriginal: false,
