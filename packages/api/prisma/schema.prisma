@@ -304,6 +304,10 @@ model Course {
   lastAsFinish    Boolean  @default(false) @map("last_as_finish")
   finishControlId String?  @map("finish_control_id") @db.Uuid
   shorten         Int      @default(0)
+  /// GeoJSON FeatureCollection for control + leg overlay. Populated by the OCAD / IOF course importer.
+  geometry        Json?
+  /// Provenance for `geometry`: 'ocd' (full routed legs from OCAD) or 'xml' (straight-line fallback from IOF XML).
+  geometrySource  String   @default("") @map("geometry_source")
   removed         Boolean  @default(false)
   createdAt       DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt       DateTime @default(now()) @map("updated_at") @db.Timestamptz(6)

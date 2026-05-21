@@ -7,7 +7,8 @@
 
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
-import { router, eventProcedure } from "../trpc.js";
+import { router, eventProcedure, publicProcedure } from "../trpc.js";
+import type { ReplayData } from "@oxygen/shared";
 
 export const liveloxRouter = router({
   getConfig: eventProcedure.query(async ({ ctx }) => {
@@ -89,10 +90,15 @@ export const liveloxRouter = router({
       });
     }),
 
-  importClass: eventProcedure
-    .input(z.object({ liveloxClassId: z.number().int(), classId: z.number().int().optional() }))
-    .query(async () => {
-      // The web page uses this with useQuery, so it returns a payload.
+  /**
+   * Standalone Livelox class viewer entry. The web page expects a
+   * `ReplayData` payload; the full Livelox fetch+transform pipeline is
+   * staged, so for now we throw with a typed return so the page can
+   * render its "Failed to load map" graceful fallback.
+   */
+  importClass: publicProcedure
+    .input(z.object({ classId: z.number().int() }))
+    .query(async (): Promise<ReplayData> => {
       throw new TRPCError({
         code: "PRECONDITION_FAILED",
         message: "Livelox class import pending re-port.",
