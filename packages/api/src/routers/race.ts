@@ -51,6 +51,7 @@ export const raceRouter = router({
         runner: {
           id: runner.seq,
           name: runner.name,
+          cardNo: runner.cardNo,
           clubId: runner.eventorClubId ? Number(runner.eventorClubId) : 0,
           clubName: runner.clubName,
           classId: runner.class?.seq ?? 0,
@@ -63,10 +64,32 @@ export const raceRouter = router({
           courseName: course?.name ?? "",
           courseControlCount: ccCount,
           freeStart: runner.class?.freeStart ?? false,
+          classFreeStart: runner.class?.freeStart ?? false,
           noTiming: runner.class?.noTiming ?? false,
         },
+        course: course
+          ? {
+              id: course.seq,
+              name: course.name,
+              length: course.lengthM,
+              controlCount: ccCount,
+            }
+          : null,
       };
     }),
+
+  /**
+   * Server clock — returned both as ms-since-epoch (`now`) and as
+   * deciseconds-since-midnight (`deciseconds`, in the event's local
+   * timezone) for stations that want one or the other.
+   */
+  serverTime: eventProcedure.query(() => {
+    const d = new Date();
+    const deciseconds =
+      (d.getHours() * 3600 + d.getMinutes() * 60 + d.getSeconds()) * 10 +
+      Math.floor(d.getMilliseconds() / 100);
+    return { now: d.getTime(), deciseconds };
+  }),
 
   /** Most-recent finishers, for the activity feed. */
   recentActivity: eventProcedure
@@ -88,15 +111,26 @@ export const raceRouter = router({
         include: { class: { select: { name: true } } },
       });
       const zeroTime = ctx.event.zeroTime;
-      return finishers.map((r) => ({
-        runnerId: r.seq,
-        name: r.name,
-        className: r.class?.name ?? "",
-        clubName: r.clubName,
-        finishTime: toAbsolute(r.finishTime, zeroTime),
-        status: runnerStatusToValue(r.status),
-        updatedAt: r.updatedAt.toISOString(),
-      }));
+      return finishers.map((r) => {
+        const startAbs = toAbsolute(r.startTime, zeroTime);
+        const finishAbs = toAbsolute(r.finishTime, zeroTime);
+        const runningTime =
+          startAbs > 0 && finishAbs > 0
+            ? Math.max(0, finishAbs - startAbs)
+            : 0;
+        return {
+          id: r.seq,
+          runnerId: r.seq,
+          name: r.name,
+          className: r.class?.name ?? "",
+          clubName: r.clubName,
+          finishTime: finishAbs,
+          startTime: startAbs,
+          runningTime,
+          status: runnerStatusToValue(r.status),
+          updatedAt: r.updatedAt.toISOString(),
+        };
+      });
     }),
 
   /**
@@ -249,42 +283,68 @@ export const raceRouter = router({
     }),
 
   /**
-   * Record a finish (manual entry from the finish station). If the
-   * runner has a card linked, the matcher runs to derive a proper
-   * status; otherwise we just stamp the finish time.
+   * Record a finish (manual entry from the finish station). After
+   * writing the finish time, runs the matcher so the response carries
+   * the same shape the UI expects — name, class, club, computed
+   * running time, and status. Caller can pass either `id` or
+   * `runnerId` (legacy field name; kept for compatibility).
    */
   recordFinish: eventProcedure
     .input(
-      z.object({
-        id: z.number().int(),
-        finishTimeAbsolute: z.number().int(),
-        status: z.number().int().optional(),
-      }),
+      z
+        .object({
+          id: z.number().int().optional(),
+          runnerId: z.number().int().optional(),
+          finishTimeAbsolute: z.number().int().optional(),
+          finishTime: z.number().int().optional(),
+          status: z.number().int().optional(),
+        })
+        .refine((x) => (x.id ?? x.runnerId) != null, {
+          message: "id or runnerId required",
+        }),
     )
     .mutation(async ({ ctx, input }) => {
+      const seq = input.id ?? input.runnerId!;
+      const finishAbs = input.finishTimeAbsolute ?? input.finishTime ?? 0;
       const r = await ctx.db.runner.findFirst({
-        where: { eventId: ctx.event.id, seq: input.id, removed: false },
-        select: { id: true, startTime: true, cardId: true, cardNo: true },
+        where: { eventId: ctx.event.id, seq, removed: false },
+        select: { id: true },
       });
       if (!r) {
         throw new TRPCError({ code: "NOT_FOUND", message: "Runner not found" });
       }
       const zeroTime = ctx.event.zeroTime;
-      const finishRel =
-        input.finishTimeAbsolute > 0
-          ? toRelative(input.finishTimeAbsolute, zeroTime)
-          : 0;
-      const computedStatus =
-        input.status != null
-          ? valueToRunnerStatus(input.status)
-          : undefined;
-      await ctx.db.runner.update({
+      const finishRel = finishAbs > 0 ? toRelative(finishAbs, zeroTime) : 0;
+      const data: Record<string, unknown> = { finishTime: finishRel };
+      if (input.status != null) data.status = valueToRunnerStatus(input.status);
+      await ctx.db.runner.update({ where: { id: r.id }, data });
+
+      // Re-run the matcher so the caller gets the final result.
+      const result = await performReadout(
+        ctx.db,
+        ctx.event.id,
+        ctx.event.zeroTime,
+        r.id,
+      );
+      // Always return the rich shape; fall back to runner row values if
+      // performReadout failed (no card, no course).
+      const runner = await ctx.db.runner.findUnique({
         where: { id: r.id },
-        data: {
-          finishTime: finishRel,
-          ...(computedStatus ? { status: computedStatus } : {}),
-        },
+        include: { class: { select: { name: true } } },
       });
-      return { ok: true };
+      return {
+        ok: true as const,
+        id: result?.runner.id ?? runner?.seq ?? seq,
+        name: result?.runner.name ?? runner?.name ?? "",
+        className: result?.runner.className ?? runner?.class?.name ?? "",
+        clubName: result?.runner.clubName ?? runner?.clubName ?? "",
+        cardNo: result?.runner.cardNo ?? runner?.cardNo ?? 0,
+        startTime:
+          result?.timing.startTime ??
+          (runner ? toAbsolute(runner.startTime, zeroTime) : 0),
+        finishTime: result?.timing.finishTime ?? finishAbs,
+        runningTime: result?.timing.runningTime ?? 0,
+        status: result?.timing.status ?? input.status ?? 0,
+      };
     }),
 });
