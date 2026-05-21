@@ -69,8 +69,10 @@ model Event {
   /// Deciseconds since midnight. Default 324000 = 09:00:00.
   zeroTime       Int      @default(324000) @map("zero_time")
   kind           String   @default("competition")
-  eventorEventId BigInt?  @map("eventor_event_id")
-  eventorEnv     String   @default("prod") @map("eventor_env")
+  eventorEventId   BigInt?   @map("eventor_event_id")
+  eventorEnv       String    @default("prod") @map("eventor_env")
+  /// Timestamp of the last successful Eventor sync. NULL = never synced.
+  eventorLastSync  DateTime? @map("eventor_last_sync") @db.Timestamptz(6)
 
   liveresultsTavid  Int?  @map("liveresults_tavid")
   liveresultsConfig Json? @map("liveresults_config")
