@@ -101,12 +101,7 @@ export function RegistrationDialogProvider({ children }: { children: ReactNode }
   return (
     <ctx.Provider value={value}>
       {children}
-      {isOpen && (
-        <RegistrationDialog
-          onClose={closeRegistration}
-          initialCardNo={pendingCard?.cardNo}
-        />
-      )}
+      {isOpen && <RegistrationDialog />}
     </ctx.Provider>
   );
 }
