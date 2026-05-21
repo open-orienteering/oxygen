@@ -454,11 +454,22 @@ export const runnerRouter = router({
       return { ok: true as const, count: rows.length };
     }),
 
-  /** Toggle the rental-card-returned flag. */
+  /** Toggle the rental-card-returned flag. Accepts `id` or `runnerId`. */
   setCardReturned: eventProcedure
-    .input(z.object({ id: z.number().int(), returned: z.boolean() }))
+    .input(
+      z
+        .object({
+          id: z.number().int().optional(),
+          runnerId: z.number().int().optional(),
+          returned: z.boolean(),
+        })
+        .refine((x) => (x.id ?? x.runnerId) != null, {
+          message: "id or runnerId required",
+        }),
+    )
     .mutation(async ({ ctx, input }) => {
-      const r = await getRunnerBySeq(ctx.db, ctx.event.id, input.id);
+      const seq = input.id ?? input.runnerId!;
+      const r = await getRunnerBySeq(ctx.db, ctx.event.id, seq);
       await ctx.db.runner.update({
         where: { id: r.id },
         data: { cardReturned: input.returned },
