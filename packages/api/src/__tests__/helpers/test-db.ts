@@ -1,72 +1,81 @@
 /**
  * Test database helpers for API integration tests.
  *
- * Creates an isolated MySQL database per test suite using the same MeOS
- * schema as production, then drops it after the suite completes.
- * Fixtures are built programmatically via Prisma (no SQL seed files).
+ * The new Oxygen layout uses a single Postgres database with all tables
+ * under the `oxygen` schema; per-event entities are scoped by `event_id`.
+ * Test isolation is therefore achieved by giving each suite its own
+ * `Event` row inside the dedicated test container (port 5433) and
+ * cascading the cleanup via `ON DELETE CASCADE`.
+ *
+ * Anything globally-scoped (`settings`, `runner_directory`,
+ * `club_directory`, `eventor_event_meta`) is the caller's responsibility
+ * to clean up. Suites that touch those should snapshot/restore around
+ * their assertions.
  */
 
 import { randomBytes } from "crypto";
-import mysql from "mysql2/promise";
-import { PrismaClient } from "@prisma/client";
-import {
-  createCompetitionDatabase,
-  getCompetitionClient,
-  disconnectAll,
-} from "../../db.js";
+import { prisma, disconnectAll, type EventRef } from "../../db.js";
+import type { PrismaClient } from "@prisma/client";
 
-export interface TestDbContext {
-  dbName: string;
-  client: PrismaClient;
+export interface TestEventContext {
+  /** Resolved EventRef ready to pass to makeCaller. */
+  event: EventRef;
+  /** Shared Prisma singleton — use for fixture seeding. */
+  db: PrismaClient;
+  /** Internal numeric event id. */
+  eventId: bigint;
+  /** URL slug of the test event. */
+  nameId: string;
+  /** Drop the event row (cascades to all children) + close the client. */
   cleanup: () => Promise<void>;
 }
 
 /**
- * Create a fresh test competition database.
- * Call in beforeAll; call ctx.cleanup() in afterAll.
+ * Create a fresh test event inside the shared test DB.
+ * Call in `beforeAll`; call `ctx.cleanup()` in `afterAll`.
+ *
+ * @param label human-readable label for the suite — embedded in the
+ *   event's `nameId` so leftover rows after a crash are easy to spot.
  */
-export async function createTestDb(label = "test"): Promise<TestDbContext> {
+export async function createTestEvent(
+  label = "test",
+): Promise<TestEventContext> {
   const suffix = randomBytes(4).toString("hex");
-  const dbName = `oxygen_test_${label}_${suffix}`;
+  const nameId = `oxygen_test_${label}_${suffix}`;
+  const db = prisma();
 
-  await createCompetitionDatabase(
-    `Test Competition ${suffix}`,
-    "2026-01-01",
-    dbName,
-  );
+  const row = await db.event.create({
+    data: {
+      nameId,
+      name: `Test Event ${label} ${suffix}`,
+      date: new Date("2026-01-01T00:00:00Z"),
+      kind: "competition",
+    },
+    select: { id: true, nameId: true, zeroTime: true },
+  });
 
-  // Point the module-level singleton to this test DB
-  const client = await getCompetitionClient(dbName);
+  const event: EventRef = {
+    id: row.id,
+    nameId: row.nameId,
+    zeroTime: row.zeroTime,
+  };
 
   const cleanup = async () => {
-    await disconnectAll();
-
-    // Drop the test database
-    const baseUrl = process.env.DATABASE_URL ?? "";
-    if (!baseUrl) return;
-    // Strip the database name — we just need a server connection to DROP DATABASE
-    const serverUrl = baseUrl.replace(/\/[^/?]+(\?|$)/, "/$1");
-    const conn = await mysql.createConnection(serverUrl);
     try {
-      await conn.execute(`DROP DATABASE IF EXISTS \`${dbName}\``);
-    } finally {
-      await conn.end();
-    }
-
-    // Remove the competition registration from MeOSMain
-    const mainUrl = process.env.MEOS_MAIN_DB_URL ?? "";
-    if (mainUrl) {
-      const mainConn = await mysql.createConnection(mainUrl);
-      try {
-        await mainConn.execute(
-          "DELETE FROM oEvent WHERE NameId = ?",
-          [dbName],
-        );
-      } finally {
-        await mainConn.end();
-      }
+      await db.event.delete({ where: { id: row.id } });
+    } catch {
+      // Already gone — fine.
     }
   };
 
-  return { dbName, client, cleanup };
+  return { event, db, eventId: row.id, nameId: row.nameId, cleanup };
+}
+
+/**
+ * Suite-level disconnect. Call from a top-level `afterAll` when no
+ * further DB work will happen — releases the connection pool so Vitest
+ * can exit cleanly.
+ */
+export async function disconnect(): Promise<void> {
+  await disconnectAll();
 }
