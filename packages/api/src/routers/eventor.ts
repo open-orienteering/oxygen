@@ -30,14 +30,32 @@ import {
   fetchCompetitors,
   fetchCachedCompetitors,
   fetchEventWebUrl,
+  uploadResults,
+  uploadStartList,
   type EventorEntry,
   type EventorResult,
   type EventorClub,
   type EventorCompetitor,
+  type ResultForUpload,
 } from "../eventor.js";
 import { eventorKeyStore } from "../eventorKeyStore.js";
-import { valueToRunnerStatus } from "../statusConvert.js";
-import type { EventorEnvironment, RunnerStatusValue } from "@oxygen/shared";
+import {
+  runnerStatusToValue,
+  valueToRunnerStatus,
+} from "../statusConvert.js";
+import {
+  parsePunches,
+  matchPunchesToCourse,
+  computeClassPlacements,
+  type ParsedPunch,
+  RunnerStatus,
+} from "@oxygen/shared";
+import { toAbsolute } from "../timeConvert.js";
+import { resolveCourseExpectedPositions } from "./course.js";
+import type {
+  EventorEnvironment,
+  RunnerStatusValue,
+} from "@oxygen/shared";
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 
@@ -1359,32 +1377,359 @@ export const eventorRouter = router({
       };
     }),
 
-  // ───────────── Push to Eventor (stubs — heavy pipelines) ─────────────
+  // ───────────── Push to Eventor (IOF v3 XML POST) ─────────────
 
   /**
-   * Push final results to Eventor. Returns `{ runnerCount }` so the UI
-   * can render "Pushed N runners". The XML-emitter pipeline itself is
-   * pending re-port, so for now we throw a typed error — the EventPage
-   * surface is wired through `pushResultsMutation.error.message`.
+   * Push final results to Eventor.
+   *
+   * Pipeline:
+   *   1. Resolve the configured API key + env.
+   *   2. Load event + runners + classes + courses + course_controls +
+   *      cards + punches in parallel.
+   *   3. For each course, resolve its `ExpectedPosition[]` so the
+   *      offline matcher can derive split times + running-time
+   *      adjustments.
+   *   4. Compute per-class placements with adjustments folded in (so
+   *      Eventor receives the same canonical ranking the kiosk +
+   *      admin readout show).
+   *   5. Map the result rows into `ResultForUpload[]` and POST the
+   *      zipped IOF v3 ResultList XML.
+   *
+   * Returns `{ runnerCount }` for the UI status line.
    */
   pushResults: eventProcedure
     .input(z.object({ dryRun: z.boolean().optional() }).optional())
-    .mutation(async (): Promise<{ runnerCount: number }> => {
-      throw new TRPCError({
-        code: "PRECONDITION_FAILED",
-        message: "Eventor results push is being re-ported against the new schema.",
+    .mutation(async ({ ctx, input }): Promise<{ runnerCount: number }> => {
+      const event = await ctx.db.event.findUnique({
+        where: { id: ctx.event.id },
+        select: {
+          id: true,
+          name: true,
+          date: true,
+          zeroTime: true,
+          eventorEventId: true,
+          eventorEnv: true,
+          cardFeeCents: true,
+          currencyCode: true,
+          currencyFactor: true,
+        },
       });
+      if (!event?.eventorEventId) {
+        throw new TRPCError({
+          code: "PRECONDITION_FAILED",
+          message: "Event is not linked to Eventor.",
+        });
+      }
+      const env = (event.eventorEnv as EventorEnvironment) || "prod";
+      const { apiKey } = await requireApiKey(env);
+
+      const [classes, courses, runners, cards, allPunches] = await Promise.all(
+        [
+          ctx.db.class.findMany({
+            where: { eventId: ctx.event.id, removed: false },
+          }),
+          ctx.db.course.findMany({
+            where: { eventId: ctx.event.id, removed: false },
+          }),
+          ctx.db.runner.findMany({
+            where: { eventId: ctx.event.id, removed: false },
+          }),
+          ctx.db.card.findMany({
+            where: { eventId: ctx.event.id, removed: false },
+          }),
+          ctx.db.punch.findMany({
+            where: { eventId: ctx.event.id, removed: false },
+            orderBy: { time: "asc" },
+          }),
+        ],
+      );
+
+      const classById = new Map(classes.map((c) => [c.id, c]));
+      const courseById = new Map(courses.map((c) => [c.id, c]));
+      const cardById = new Map(cards.map((c) => [c.id, c]));
+
+      // Pre-compute ExpectedPositions per course so each runner mapping
+      // is O(1) — one SQL query per course up front, not per runner.
+      const positionsByCourse = new Map<
+        string,
+        Awaited<ReturnType<typeof resolveCourseExpectedPositions>>
+      >();
+      for (const c of courses) {
+        positionsByCourse.set(
+          c.id,
+          await resolveCourseExpectedPositions(ctx.db, c.id),
+        );
+      }
+
+      // Group free punches by cardNo for fast lookup during matching.
+      const freePunchesByCardNo = new Map<number, typeof allPunches>();
+      for (const p of allPunches) {
+        if (p.cardNo === 0) continue;
+        const list = freePunchesByCardNo.get(p.cardNo) ?? [];
+        list.push(p);
+        freePunchesByCardNo.set(p.cardNo, list);
+      }
+
+      // Compute running-time adjustments via the matcher.
+      const adjustmentByRunner = new Map<string, number>();
+      const matchByRunner = new Map<
+        string,
+        ReturnType<typeof matchPunchesToCourse>
+      >();
+      for (const r of runners) {
+        const cls = r.classId ? classById.get(r.classId) : null;
+        const courseId = r.courseId ?? cls?.courseId ?? null;
+        if (!courseId) continue;
+        const positions = positionsByCourse.get(courseId) ?? [];
+        if (positions.length === 0) continue;
+
+        const card = r.cardId ? cardById.get(r.cardId) : null;
+        const cardPunches = parsePunches(card?.punchesRaw ?? "").map((p) => ({
+          ...p,
+          time: p.time !== 0 ? toAbsolute(p.time, event.zeroTime) : 0,
+        }));
+        const freePunches: ParsedPunch[] = (
+          freePunchesByCardNo.get(r.cardNo) ?? []
+        ).map((p) => ({
+          type: p.controlCode,
+          time: p.time !== 0 ? toAbsolute(p.time, event.zeroTime) : 0,
+          source: "free" as const,
+        }));
+        const merged = [...cardPunches, ...freePunches].sort(
+          (a, b) => a.time - b.time,
+        );
+        const fallbackStart = toAbsolute(r.startTime, event.zeroTime);
+        const matched = matchPunchesToCourse(merged, positions, fallbackStart);
+        matchByRunner.set(r.id, matched);
+        if (matched.runningTimeAdjustment > 0) {
+          adjustmentByRunner.set(r.id, matched.runningTimeAdjustment);
+        }
+      }
+
+      // Placements per class — folds in adjustments so ranks line up.
+      const placementByRunner = new Map<string, { place: number }>();
+      const runnersByClass = new Map<string, typeof runners>();
+      for (const r of runners) {
+        if (!r.classId) continue;
+        const list = runnersByClass.get(r.classId) ?? [];
+        list.push(r);
+        runnersByClass.set(r.classId, list);
+      }
+      for (const [classId, classRunners] of runnersByClass) {
+        const cls = classById.get(classId);
+        const noTiming = cls?.noTiming === true;
+        // computeClassPlacements is shared with web/admin clients and
+        // still keys placements by a numeric id. Map our UUID rows
+        // through an index so we can translate the result back without
+        // changing the shared signature.
+        const uuidByIndex: string[] = [];
+        const placements = computeClassPlacements(
+          classRunners.map((r, idx) => {
+            uuidByIndex[idx] = r.id;
+            return {
+              id: idx,
+              status: runnerStatusToValue(r.status),
+              startTime: r.startTime,
+              finishTime: r.finishTime,
+              runningTimeAdjustment: adjustmentByRunner.get(r.id) ?? 0,
+            };
+          }),
+          noTiming,
+        );
+        for (const [idx, p] of placements) {
+          const uuid = uuidByIndex[idx];
+          if (uuid) placementByRunner.set(uuid, p);
+        }
+      }
+
+      // Build the ResultForUpload[] payload.
+      const uploadData: ResultForUpload[] = runners.map((r) => {
+        const cls = r.classId ? classById.get(r.classId) : null;
+        const courseId = r.courseId ?? cls?.courseId ?? null;
+        const course = courseId ? courseById.get(courseId) : null;
+        const oxygenStatus = runnerStatusToValue(r.status);
+        const placement = placementByRunner.get(r.id);
+        const matched = matchByRunner.get(r.id);
+
+        let splitTimes: ResultForUpload["splitTimes"];
+        if (
+          course &&
+          oxygenStatus !== RunnerStatus.Unknown &&
+          oxygenStatus !== RunnerStatus.DNS &&
+          oxygenStatus !== RunnerStatus.NotCompeting &&
+          matched
+        ) {
+          splitTimes = matched.matches.flatMap((m) => {
+            if (m.positionMode === "skipped") {
+              if (m.status !== "ok") return [];
+              return [
+                {
+                  controlCode: m.controlCode,
+                  time:
+                    m.cumTime > 0 ? Math.round(m.cumTime / 10) : undefined,
+                  status: "ok" as const,
+                },
+              ];
+            }
+            if (m.positionMode === "noTiming") {
+              return [
+                {
+                  controlCode: m.controlCode,
+                  time: undefined,
+                  status:
+                    m.status === "ok"
+                      ? ("ok" as const)
+                      : ("missing" as const),
+                },
+              ];
+            }
+            return [
+              {
+                controlCode: m.controlCode,
+                time:
+                  m.status === "ok" && m.cumTime > 0
+                    ? Math.round(m.cumTime / 10)
+                    : undefined,
+                status:
+                  m.status === "ok" ? ("ok" as const) : ("missing" as const),
+              },
+            ];
+          });
+          for (const ep of matched.extraPunches) {
+            if (ep.type >= 30) {
+              const time =
+                ep.time > matched.startTime
+                  ? Math.round((ep.time - matched.startTime) / 10)
+                  : undefined;
+              splitTimes.push({
+                controlCode: ep.type,
+                time,
+                status: "additional",
+              });
+            }
+          }
+        }
+
+        return {
+          personExtId: r.eventorPersonId
+            ? r.eventorPersonId.toString()
+            : undefined,
+          name: r.name,
+          classExtId: cls?.eventorId ? cls.eventorId.toString() : undefined,
+          className: cls?.name ?? "Unknown",
+          clubExtId: r.eventorClubId ? r.eventorClubId.toString() : undefined,
+          clubName: r.clubName || undefined,
+          cardNo: r.cardNo || undefined,
+          startTime: toAbsolute(r.startTime, event.zeroTime) || undefined,
+          finishTime: toAbsolute(r.finishTime, event.zeroTime) || undefined,
+          runningTimeAdjustment: adjustmentByRunner.get(r.id),
+          status: oxygenStatus,
+          place: placement?.place ?? 0,
+          noTiming: cls?.noTiming === true,
+          fee: r.feeCents || undefined,
+          cardFee:
+            r.cardFeeCents !== 0
+              ? r.cardFeeCents > 0
+                ? r.cardFeeCents
+                : event.cardFeeCents > 0
+                  ? event.cardFeeCents
+                  : undefined
+              : undefined,
+          paid: r.paidCents || undefined,
+          birthYear: r.birthYear || undefined,
+          nationality: r.nationality || undefined,
+          bib: r.bib || undefined,
+          splitTimes,
+        };
+      });
+
+      if (input?.dryRun) {
+        return { runnerCount: uploadData.length };
+      }
+
+      await uploadResults(
+        apiKey,
+        event.eventorEventId.toString(),
+        event.name,
+        event.date.toISOString().slice(0, 10),
+        uploadData,
+        env,
+        event.currencyCode || "",
+        event.currencyFactor || 100,
+      );
+
+      return { runnerCount: uploadData.length };
     }),
 
-  /** See `pushResults` for the staging story. */
+  /**
+   * Push current start list to Eventor. Lighter than pushResults — we
+   * only need name + class + start time + card + status, no matcher
+   * pass.
+   */
   pushStartList: eventProcedure
     .input(z.object({ dryRun: z.boolean().optional() }).optional())
-    .mutation(async (): Promise<{ runnerCount: number }> => {
-      throw new TRPCError({
-        code: "PRECONDITION_FAILED",
-        message:
-          "Eventor start-list push is being re-ported against the new schema.",
+    .mutation(async ({ ctx, input }): Promise<{ runnerCount: number }> => {
+      const event = await ctx.db.event.findUnique({
+        where: { id: ctx.event.id },
+        select: {
+          id: true,
+          name: true,
+          date: true,
+          zeroTime: true,
+          eventorEventId: true,
+          eventorEnv: true,
+        },
       });
+      if (!event?.eventorEventId) {
+        throw new TRPCError({
+          code: "PRECONDITION_FAILED",
+          message: "Event is not linked to Eventor.",
+        });
+      }
+      const env = (event.eventorEnv as EventorEnvironment) || "prod";
+      const { apiKey } = await requireApiKey(env);
+
+      const [classes, runners] = await Promise.all([
+        ctx.db.class.findMany({
+          where: { eventId: ctx.event.id, removed: false },
+        }),
+        ctx.db.runner.findMany({
+          where: { eventId: ctx.event.id, removed: false },
+        }),
+      ]);
+      const classById = new Map(classes.map((c) => [c.id, c]));
+
+      const uploadData: ResultForUpload[] = runners.map((r) => {
+        const cls = r.classId ? classById.get(r.classId) : null;
+        return {
+          personExtId: r.eventorPersonId
+            ? r.eventorPersonId.toString()
+            : undefined,
+          name: r.name,
+          classExtId: cls?.eventorId ? cls.eventorId.toString() : undefined,
+          className: cls?.name ?? "Unknown",
+          clubExtId: r.eventorClubId ? r.eventorClubId.toString() : undefined,
+          clubName: r.clubName || undefined,
+          cardNo: r.cardNo || undefined,
+          startTime: toAbsolute(r.startTime, event.zeroTime) || undefined,
+          status: runnerStatusToValue(r.status),
+        };
+      });
+
+      if (input?.dryRun) {
+        return { runnerCount: uploadData.length };
+      }
+
+      await uploadStartList(
+        apiKey,
+        event.eventorEventId.toString(),
+        event.name,
+        event.date.toISOString().slice(0, 10),
+        uploadData,
+        env,
+      );
+
+      return { runnerCount: uploadData.length };
     }),
 
   /**
