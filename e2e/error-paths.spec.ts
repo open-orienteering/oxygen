@@ -1,4 +1,7 @@
 import { test, expect } from "@playwright/test";
+import { reseed } from "./helpers/reseed";
+
+test.beforeAll(reseed);
 
 /**
  * E2E tests for error handling and edge cases.

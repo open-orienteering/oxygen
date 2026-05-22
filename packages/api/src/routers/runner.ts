@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import { router, eventProcedure } from "../trpc.js";
-import { toAbsolute, nowMeosDate, nowMeosTime } from "../timeConvert.js";
+import { toAbsolute, toRelative, nowMeosDate, nowMeosTime } from "../timeConvert.js";
 import type { RunnerDetail, RunnerInfo } from "@oxygen/shared";
 import {
   runnerStatusToValue,
@@ -329,7 +329,11 @@ export const runnerRouter = router({
           eventorClubId: input.eventorClubId ?? null,
           classId: classUuid,
           startNo: input.startNo,
-          startTime: input.startTime,
+          // Inputs are absolute deciseconds; storage is ZeroTime-relative.
+          startTime:
+            input.startTime > 0
+              ? toRelative(input.startTime, ctx.event.zeroTime)
+              : input.startTime,
           birthYear: input.birthYear,
           sex: input.sex,
           nationality: input.nationality,
@@ -337,7 +341,14 @@ export const runnerRouter = router({
           ...(input.status != null
             ? { status: valueToRunnerStatus(input.status) }
             : {}),
-          ...(input.finishTime != null ? { finishTime: input.finishTime } : {}),
+          ...(input.finishTime != null
+            ? {
+                finishTime:
+                  input.finishTime > 0
+                    ? toRelative(input.finishTime, ctx.event.zeroTime)
+                    : input.finishTime,
+              }
+            : {}),
           feeCents: input.fee,
           paidCents: input.paid,
           payMode: input.payMode,
@@ -418,8 +429,10 @@ export const runnerRouter = router({
         );
       }
       if (get<number>("startNo") !== undefined) data.startNo = get<number>("startNo");
-      if (get<number>("startTime") !== undefined)
-        data.startTime = get<number>("startTime");
+      if (get<number>("startTime") !== undefined) {
+        const st = get<number>("startTime")!;
+        data.startTime = st > 0 ? toRelative(st, ctx.event.zeroTime) : st;
+      }
       if (get<number>("birthYear") !== undefined)
         data.birthYear = get<number>("birthYear");
       if (get<string>("sex") !== undefined) data.sex = get<string>("sex");
@@ -428,8 +441,10 @@ export const runnerRouter = router({
       if (get<string>("phone") !== undefined) data.phone = get<string>("phone");
       if (get<number>("status") !== undefined)
         data.status = valueToRunnerStatus(get<number>("status")!);
-      if (get<number>("finishTime") !== undefined)
-        data.finishTime = get<number>("finishTime");
+      if (get<number>("finishTime") !== undefined) {
+        const ft = get<number>("finishTime")!;
+        data.finishTime = ft > 0 ? toRelative(ft, ctx.event.zeroTime) : ft;
+      }
       if (get<number>("fee") !== undefined) data.feeCents = get<number>("fee");
       if (get<number>("paid") !== undefined) data.paidCents = get<number>("paid");
       if (get<number>("payMode") !== undefined) data.payMode = get<number>("payMode");
@@ -503,7 +518,11 @@ export const runnerRouter = router({
         data.eventorClubId = input.eventorClubId;
       if (input.status !== undefined)
         data.status = valueToRunnerStatus(input.status);
-      if (input.startTime !== undefined) data.startTime = input.startTime;
+      if (input.startTime !== undefined)
+        data.startTime =
+          input.startTime > 0
+            ? toRelative(input.startTime, ctx.event.zeroTime)
+            : input.startTime;
       await ctx.db.runner.updateMany({
         where: { id: { in: rows.map((r) => r.id) } },
         data,

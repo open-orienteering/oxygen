@@ -14,22 +14,57 @@ import type {
   ControlUnit as ControlUnitDto,
 } from "@oxygen/shared";
 
-/** Resolve a control by its per-event seq. */
-async function getControlBySeq(
+/**
+ * Resolve a control by its user-facing numeric identifier.
+ *
+ * Controls are addressed by their punch code (e.g. 50, 100, 150) — the same
+ * value runners see on the map. The page exposes the code as `id` in URLs
+ * (`?control=50`) and table keys, so all mutation endpoints accept it too.
+ * Falls back to per-event seq for legacy / non-coded controls (start /
+ * finish punches stored without a numeric code).
+ */
+async function getControlByCode(
   db: PrismaClient,
   eventId: bigint,
-  seq: number,
+  code: number,
 ) {
+  const codeStr = String(code);
   const c = await db.control.findFirst({
-    where: { eventId, seq, removed: false },
+    where: {
+      eventId,
+      removed: false,
+      OR: [
+        { codes: codeStr },
+        { codes: { startsWith: `${codeStr};` } },
+        { codes: { contains: `;${codeStr};` } },
+        { codes: { endsWith: `;${codeStr}` } },
+      ],
+    },
   });
-  if (!c) {
+  if (c) return c;
+  // Fallback: treat the input as a seq for controls without a code.
+  const bySeq = await db.control.findFirst({
+    where: { eventId, seq: code, removed: false },
+  });
+  if (!bySeq) {
     throw new TRPCError({
       code: "NOT_FOUND",
-      message: `Control ${seq} not found`,
+      message: `Control ${code} not found`,
     });
   }
-  return c;
+  return bySeq;
+}
+
+/** Extract the first numeric code from a control's `codes` string. */
+function firstCode(codes: string): number {
+  const head = codes.split(";")[0]?.trim();
+  const n = parseInt(head ?? "", 10);
+  return Number.isNaN(n) ? 0 : n;
+}
+
+/** User-facing id for a control: first code, falling back to seq. */
+function publicControlId(c: { codes: string; seq: number }): number {
+  return firstCode(c.codes) || c.seq;
 }
 
 function unitToDto(u: {
@@ -149,7 +184,7 @@ export const controlRouter = router({
         }
       }
       return {
-        id: c.seq,
+        id: publicControlId(c),
         name: c.name,
         codes: c.codes,
         status: controlStatusToValue(c.status),
@@ -165,7 +200,7 @@ export const controlRouter = router({
   getById: eventProcedure
     .input(z.object({ id: z.number().int() }))
     .query(async ({ ctx, input }): Promise<ControlDetail> => {
-      const c = await getControlBySeq(ctx.db, ctx.event.id, input.id);
+      const c = await getControlByCode(ctx.db, ctx.event.id, input.id);
       const units = await ctx.db.controlUnit.findMany({
         where: { eventId: ctx.event.id, controlId: c.id },
       });
@@ -209,7 +244,7 @@ export const controlRouter = router({
         }),
       );
       return {
-        id: c.seq,
+        id: publicControlId(c),
         name: c.name,
         codes: c.codes,
         status: controlStatusToValue(c.status),
@@ -233,6 +268,47 @@ export const controlRouter = router({
       }),
     )
     .mutation(async ({ ctx, input }) => {
+      // Validate codes: each part must be a positive integer.
+      const parts = input.codes.split(";").map((p) => p.trim()).filter(Boolean);
+      if (parts.length === 0) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "Invalid control code: at least one code is required",
+        });
+      }
+      const parsed: number[] = [];
+      for (const p of parts) {
+        const n = parseInt(p, 10);
+        if (!Number.isFinite(n) || n <= 0 || String(n) !== p) {
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message: `Invalid control code: "${p}" is not a positive integer`,
+          });
+        }
+        parsed.push(n);
+      }
+      // Reject duplicates (codes already used by another control).
+      for (const n of parsed) {
+        const dup = await ctx.db.control.findFirst({
+          where: {
+            eventId: ctx.event.id,
+            removed: false,
+            OR: [
+              { codes: String(n) },
+              { codes: { startsWith: `${n};` } },
+              { codes: { contains: `;${n};` } },
+              { codes: { endsWith: `;${n}` } },
+            ],
+          },
+          select: { id: true },
+        });
+        if (dup) {
+          throw new TRPCError({
+            code: "CONFLICT",
+            message: `Control with code ${n} already exists`,
+          });
+        }
+      }
       const created = await ctx.db.control.create({
         data: {
           eventId: ctx.event.id,
@@ -242,9 +318,9 @@ export const controlRouter = router({
           timeAdjust: input.timeAdjust,
           minTime: input.minTime,
         },
-        select: { seq: true },
+        select: { seq: true, codes: true },
       });
-      return { id: created.seq };
+      return { id: publicControlId(created) };
     }),
 
   update: eventProcedure
@@ -261,7 +337,7 @@ export const controlRouter = router({
       }),
     )
     .mutation(async ({ ctx, input }) => {
-      const c = await getControlBySeq(ctx.db, ctx.event.id, input.id);
+      const c = await getControlByCode(ctx.db, ctx.event.id, input.id);
       const data: Record<string, unknown> = {};
       if (input.name !== undefined) data.name = input.name;
       if (input.codes !== undefined) data.codes = input.codes;
@@ -278,7 +354,7 @@ export const controlRouter = router({
   delete: eventProcedure
     .input(z.object({ id: z.number().int() }))
     .mutation(async ({ ctx, input }) => {
-      const c = await getControlBySeq(ctx.db, ctx.event.id, input.id);
+      const c = await getControlByCode(ctx.db, ctx.event.id, input.id);
       await ctx.db.control.update({
         where: { id: c.id },
         data: { removed: true },
@@ -290,27 +366,100 @@ export const controlRouter = router({
   detail: eventProcedure
     .input(z.object({ id: z.number().int() }))
     .query(async ({ ctx, input }) => {
-      const c = await getControlBySeq(ctx.db, ctx.event.id, input.id);
+      const c = await getControlByCode(ctx.db, ctx.event.id, input.id);
       const units = await ctx.db.controlUnit.findMany({
         where: { eventId: ctx.event.id, controlId: c.id },
       });
       const u = units.map(unitToDto);
+
+      // Compute course usage: which courses include this control, how
+      // many times each one references it, and how many runners are
+      // registered to those courses.
+      const courseRows = await ctx.db.courseControl.findMany({
+        where: { controlId: c.id, course: { eventId: ctx.event.id, removed: false } },
+        select: { courseId: true, course: { select: { seq: true, name: true } } },
+      });
+      const occByCourse = new Map<
+        string,
+        { seq: number; name: string; occurrences: number }
+      >();
+      for (const row of courseRows) {
+        const prev = occByCourse.get(row.courseId);
+        if (prev) {
+          prev.occurrences += 1;
+        } else {
+          occByCourse.set(row.courseId, {
+            seq: row.course.seq,
+            name: row.course.name,
+            occurrences: 1,
+          });
+        }
+      }
+      const courseIds = Array.from(occByCourse.keys());
+      const runnerCountsRaw =
+        courseIds.length > 0
+          ? await ctx.db.runner.groupBy({
+              by: ["courseId"],
+              where: {
+                eventId: ctx.event.id,
+                removed: false,
+                courseId: { in: courseIds },
+              },
+              _count: { _all: true },
+            })
+          : [];
+      const runnerCountByCourse = new Map<string, number>();
+      for (const r of runnerCountsRaw) {
+        if (r.courseId) runnerCountByCourse.set(r.courseId, r._count._all);
+      }
+      // Runners with no explicit courseId fall back to their class's course.
+      // Count those by joining classes → course.
+      const classRunnerCounts =
+        courseIds.length > 0
+          ? await ctx.db.class.findMany({
+              where: {
+                eventId: ctx.event.id,
+                courseId: { in: courseIds },
+              },
+              select: {
+                courseId: true,
+                _count: {
+                  select: {
+                    runners: {
+                      where: { removed: false, courseId: null },
+                    },
+                  },
+                },
+              },
+            })
+          : [];
+      for (const cr of classRunnerCounts) {
+        if (!cr.courseId) continue;
+        runnerCountByCourse.set(
+          cr.courseId,
+          (runnerCountByCourse.get(cr.courseId) ?? 0) + cr._count.runners,
+        );
+      }
+      const courses = Array.from(occByCourse.entries())
+        .map(([cid, meta]) => ({
+          courseId: meta.seq,
+          courseName: meta.name,
+          occurrences: meta.occurrences,
+          runnerCount: runnerCountByCourse.get(cid) ?? 0,
+        }))
+        .sort((a, b) => a.courseName.localeCompare(b.courseName));
+
       return {
-        id: c.seq,
+        id: publicControlId(c),
         name: c.name,
         codes: c.codes,
         status: controlStatusToValue(c.status),
         timeAdjust: c.timeAdjust,
         minTime: c.minTime,
-        runnerCount: 0,
+        runnerCount: courses.reduce((sum, x) => sum + x.runnerCount, 0),
         config: aggregateConfig(u, c.radioType, c.airPlus),
         units: u,
-        courses: [] as Array<{
-          courseId: number;
-          courseName: string;
-          occurrences: number;
-          runnerCount: number;
-        }>,
+        courses,
       };
     }),
 
@@ -396,7 +545,7 @@ export const controlRouter = router({
         });
       }
       const ctrls = await Promise.all(
-        seqs.map((s) => getControlBySeq(ctx.db, ctx.event.id, s)),
+        seqs.map((s) => getControlByCode(ctx.db, ctx.event.id, s)),
       );
 
       // `autosendMode` doesn't have a column yet in the PG schema —
@@ -495,7 +644,7 @@ export const controlRouter = router({
       void input.batteryLow;
       void input.memoryCleared;
       const controlUuid = input.controlId
-        ? (await getControlBySeq(ctx.db, ctx.event.id, input.controlId)).id
+        ? (await getControlByCode(ctx.db, ctx.event.id, input.controlId)).id
         : null;
       await ctx.db.controlUnit.upsert({
         where: {
@@ -688,7 +837,7 @@ export const controlRouter = router({
     )
     .mutation(async ({ ctx, input }) => {
       const ctrl = input.controlId
-        ? await getControlBySeq(ctx.db, ctx.event.id, input.controlId)
+        ? await getControlByCode(ctx.db, ctx.event.id, input.controlId)
         : null;
       const controlUuid = ctrl?.id ?? null;
       const fallbackControlCode = ctrl

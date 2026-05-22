@@ -90,7 +90,7 @@ export function buildBackupHeader(row: BackupEvent, when: Date = new Date()): st
 // ─── pg_dump child process ─────────────────────────────────
 
 export interface PgDumpProcess {
-  child: ChildProcessByStdio<null, Readable, Readable>;
+  child: ChildProcessByStdio<import("node:stream").Writable, Readable, Readable>;
   stdout: Readable;
   stderr: Readable;
   exited: Promise<{ code: number | null; stderr: string }>;
@@ -170,15 +170,29 @@ export function spawnPgDump(eventId: bigint): PgDumpProcess {
     .map((stmt, i) => `\\echo --- ${tables[i]} ---\n${stmt}`)
     .join("\n");
 
-  const args: string[] = [`-h${params.host}`, `-p${String(params.port)}`];
-  if (params.user) args.push(`-U${params.user}`);
-  args.push(`-d${params.database}`);
-  args.push("-c", copyStatements);
+  const args: string[] = [
+    "-h",
+    params.host,
+    "-p",
+    String(params.port),
+    "-d",
+    params.database,
+    // -q suppresses noisy headers; -X skips ~/.psqlrc; -A forces unaligned
+    // output (no padding); -t hides table headers from non-\copy queries;
+    // -P pager=off prevents paging.
+    "-q",
+    "-X",
+    "-f",
+    "-",
+  ];
+  if (params.user) args.unshift("-U", params.user);
 
   const env: NodeJS.ProcessEnv = { ...process.env };
   if (params.password) env.PGPASSWORD = params.password;
 
-  const child = spawn("psql", args, { env, stdio: ["ignore", "pipe", "pipe"] });
+  const child = spawn("psql", args, { env, stdio: ["pipe", "pipe", "pipe"] });
+  // Feed the script via stdin so all \copy / \echo lines execute.
+  child.stdin.end(copyStatements);
 
   let stderrText = "";
   child.stderr.on("data", (chunk) => {

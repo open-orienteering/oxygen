@@ -268,15 +268,26 @@ export function DeviceManagerProvider({ children }: { children: ReactNode }) {
       let serverPunchesRelevant = true;
       if (!isDuplicate && navigator.onLine) {
         try {
+          // SI readouts use seconds-since-midnight; the API contract is
+          // absolute deciseconds, so multiply by 10 on the way out.
           const storeResult = await storeReadout.mutateAsync({
             cardNo: readout.cardNumber,
             punches: readout.punches.map((p) => ({
               controlCode: p.controlCode,
-              time: p.time,
+              time: p.time * 10,
             })),
-            checkTime: readout.checkTime ?? undefined,
-            startTime: readout.startTime ?? undefined,
-            finishTime: readout.finishTime ?? undefined,
+            checkTime:
+              readout.checkTime !== null && readout.checkTime !== undefined
+                ? readout.checkTime * 10
+                : undefined,
+            startTime:
+              readout.startTime !== null && readout.startTime !== undefined
+                ? readout.startTime * 10
+                : undefined,
+            finishTime:
+              readout.finishTime !== null && readout.finishTime !== undefined
+                ? readout.finishTime * 10
+                : undefined,
             cardType: readout.cardType,
             punchesFresh: raceData,
             batteryVoltage: readout.batteryVoltage ?? undefined,
