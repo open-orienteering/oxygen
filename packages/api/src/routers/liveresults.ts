@@ -12,6 +12,12 @@
 
 import { z } from "zod";
 import { router, eventProcedure } from "../trpc.js";
+import {
+  ensureCompetition,
+  liveResultsPusherManager,
+  syncAll,
+  updateCompetitionMeta,
+} from "../liveresults.js";
 
 export interface LRConfig {
   enabled: boolean;
@@ -59,25 +65,28 @@ export const liveresultsRouter = router({
   }),
 
   /**
-   * Live snapshot for the status indicator.
-   *
-   * `running` mirrors `config.enabled` until the actual push worker
-   * lands — once it does, this turns into a real "did we push within
-   * the last N seconds" check.
+   * Live snapshot for the status indicator. `running` reflects whether
+   * the in-process push timer is currently armed for this event (not
+   * just whether `config.enabled` is true) — that distinction matters
+   * during boot-time reconciliation and after a failed `enable`.
    */
   getStatus: eventProcedure.query(async ({ ctx }) => {
     const event = await ctx.db.event.findUnique({
       where: { id: ctx.event.id },
       select: { liveresultsTavid: true, liveresultsConfig: true },
     });
-    const cfg = readConfig(event?.liveresultsConfig, event?.liveresultsTavid ?? null);
+    const cfg = readConfig(
+      event?.liveresultsConfig,
+      event?.liveresultsTavid ?? null,
+    );
+    const status = liveResultsPusherManager.getStatus(ctx.event.id);
     return {
-      running: cfg.enabled,
+      running: status.running,
       tavid: cfg.tavid,
       publicUrl: cfg.publicUrl,
-      lastPush: null as string | null,
-      pushCount: 0,
-      lastError: null as string | null,
+      lastPush: status.lastPush,
+      pushCount: status.pushCount,
+      lastError: status.lastError,
     };
   }),
 
@@ -121,18 +130,44 @@ export const liveresultsRouter = router({
   enable: eventProcedure.mutation(async ({ ctx }) => {
     const existing = await ctx.db.event.findUnique({
       where: { id: ctx.event.id },
-      select: { liveresultsTavid: true, liveresultsConfig: true },
+      select: {
+        liveresultsTavid: true,
+        liveresultsConfig: true,
+        name: true,
+        organizerName: true,
+      },
     });
     const cfg = readConfig(
       existing?.liveresultsConfig,
       existing?.liveresultsTavid ?? null,
     );
+
+    // Allocate a tavid lazily on first enable so the operator never
+    // has to know what it is. ensureCompetition is idempotent.
+    const tavid = await ensureCompetition(ctx.event.id);
+    cfg.tavid = tavid;
     cfg.enabled = true;
     await ctx.db.event.update({
       where: { id: ctx.event.id },
-      data: { liveresultsConfig: cfg as never },
+      data: { liveresultsConfig: cfg as never, liveresultsTavid: tavid },
     });
-    return { ok: true as const };
+
+    // Keep the remote `login` row in sync with the latest event name +
+    // organizer + public flag before the timer starts pushing
+    // splitcontrols/results into it.
+    try {
+      await updateCompetitionMeta(tavid, {
+        compName: existing?.name,
+        organizer: existing?.organizerName ?? "",
+        isPublic: cfg.isPublic,
+        country: cfg.country,
+      });
+    } catch (err) {
+      console.error("[LiveResults] updateCompetitionMeta failed:", err);
+    }
+
+    liveResultsPusherManager.start(ctx.event.id, tavid, cfg.intervalSeconds);
+    return { ok: true as const, tavid };
   }),
 
   disable: eventProcedure.mutation(async ({ ctx }) => {
@@ -149,19 +184,32 @@ export const liveresultsRouter = router({
       where: { id: ctx.event.id },
       data: { liveresultsConfig: cfg as never },
     });
+    liveResultsPusherManager.stop(ctx.event.id);
     return { ok: true as const };
   }),
 
   /**
-   * Manual one-shot push. Stubbed until the pump is re-ported, but we
-   * return a realistic `stats: { runners, results, splitcontrols }` so
-   * the EventPage status line renders the right shape.
+   * Manual one-shot push. Bypasses the interval timer entirely so the
+   * operator can verify connectivity / data shape on demand. Returns
+   * the same `{ runners, results, splitcontrols }` shape the timer
+   * exposes via status.
    */
-  pushNow: eventProcedure.mutation(async () => ({
-    ok: true as const,
-    message: "LiveResults push pipeline pending re-port.",
-    stats: { runners: 0, results: 0, splitcontrols: 0 },
-  })),
+  pushNow: eventProcedure.mutation(async ({ ctx }) => {
+    const event = await ctx.db.event.findUnique({
+      where: { id: ctx.event.id },
+      select: { liveresultsTavid: true },
+    });
+    let tavid = event?.liveresultsTavid ?? null;
+    if (!tavid) {
+      tavid = await ensureCompetition(ctx.event.id);
+    }
+    const stats = await syncAll(tavid, ctx.event.id);
+    return {
+      ok: true as const,
+      message: "LiveResults push complete.",
+      stats,
+    };
+  }),
 
   /**
    * Legacy alias kept for internal tooling that wants to write the raw

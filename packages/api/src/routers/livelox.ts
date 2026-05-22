@@ -9,6 +9,7 @@ import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import { router, eventProcedure, publicProcedure } from "../trpc.js";
 import type { ReplayData } from "@oxygen/shared";
+import { syncEvent } from "../livelox/sync.js";
 
 export const liveloxRouter = router({
   getConfig: eventProcedure.query(async ({ ctx }) => {
@@ -29,36 +30,53 @@ export const liveloxRouter = router({
       return { ok: true as const };
     }),
 
-  syncRoutes: eventProcedure.mutation(async () => {
-    throw new TRPCError({
-      code: "PRECONDITION_FAILED",
-      message:
-        "Livelox route sync is being re-ported against the new schema. Coming back online shortly.",
+  /**
+   * Legacy single-button sync — falls back to whatever liveloxEventId
+   * the event is configured with. Returns the same shape as `sync`.
+   */
+  syncRoutes: eventProcedure.mutation(async ({ ctx }) => {
+    const event = await ctx.db.event.findUnique({
+      where: { id: ctx.event.id },
+      select: { liveloxEventId: true },
     });
+    if (!event?.liveloxEventId) {
+      throw new TRPCError({
+        code: "PRECONDITION_FAILED",
+        message: "Configure a Livelox event id first.",
+      });
+    }
+    return syncEvent(ctx.db, ctx.event.id, event.liveloxEventId);
   }),
 
   /**
-   * Sync from a specific Livelox event id. The actual fetch+transform
-   * pipeline is staged behind a re-port; for now this is a typed stub
-   * so the EventPage Livelox panel can wire its sync button against
-   * the right shape (`{ classesAdded, classesUpdated, runnersMatched,
-   * runnersUnmatched }`). The handler still throws so the UI surfaces
-   * the staging message via `syncMutation.error`.
+   * Sync from an explicit Livelox event id. When omitted, falls back
+   * to the configured one. Returns `{ classesSynced, routesSynced,
+   * unmatched: { runners, classes } }` so the EventPage panel can
+   * surface matching diagnostics.
    */
   sync: eventProcedure
-    .input(z.object({ liveloxEventId: z.number().int().positive() }).optional())
-    .mutation(
-      async (): Promise<{
-        classesSynced: number;
-        routesSynced: number;
-        unmatched: { runners: string[]; classes: string[] };
-      }> => {
+    .input(
+      z
+        .object({ liveloxEventId: z.number().int().positive() })
+        .optional(),
+    )
+    .mutation(async ({ ctx, input }) => {
+      let liveloxEventId = input?.liveloxEventId ?? null;
+      if (!liveloxEventId) {
+        const event = await ctx.db.event.findUnique({
+          where: { id: ctx.event.id },
+          select: { liveloxEventId: true },
+        });
+        liveloxEventId = event?.liveloxEventId ?? null;
+      }
+      if (!liveloxEventId) {
         throw new TRPCError({
           code: "PRECONDITION_FAILED",
-          message: "Livelox sync pending re-port.",
+          message: "Configure a Livelox event id first.",
         });
-      },
-    ),
+      }
+      return syncEvent(ctx.db, ctx.event.id, liveloxEventId);
+    }),
 
   listRoutes: eventProcedure.query(async ({ ctx }) => {
     const routes = await ctx.db.route.findMany({
