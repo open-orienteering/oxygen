@@ -13,6 +13,11 @@
  */
 
 import "dotenv/config";
+// Mount the BigInt→JSON polyfill before any router code runs so
+// integration tests serialize tRPC responses the same way the live
+// server does. Without it, anything returning a Prisma row with a
+// BigInt PK 500s the moment a caller tries to JSON.stringify it.
+import "../../bigint-json.js";
 
 const TEST_DB_DEFAULT =
   "postgresql://oxygen:oxygen@localhost:5433/oxygen_test?schema=oxygen";

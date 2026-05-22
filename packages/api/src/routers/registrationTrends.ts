@@ -105,6 +105,8 @@ export const registrationTrendsRouter = router({
       event: {
         name: event?.name ?? "",
         date: event?.date.toISOString().slice(0, 10) ?? "",
+        // BigInt → number via the BigInt.prototype.toJSON polyfill
+        // installed in index.ts.
         eventorEventId: event?.eventorEventId ?? null,
       },
       classes: classes.map((c) => ({ id: c.seq, name: c.name })),

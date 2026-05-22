@@ -1,3 +1,7 @@
+// Mount the BigInt JSON polyfill before anything else loads — Prisma
+// models surface BigInt PKs throughout the response pipeline.
+import "./bigint-json.js";
+
 import Fastify from "fastify";
 import cors from "@fastify/cors";
 import {
