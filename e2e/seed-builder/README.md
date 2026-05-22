@@ -1,62 +1,59 @@
 # E2E Seed Builder
 
-TypeScript scripts that build the E2E test databases programmatically using Prisma, then export them as SQL dumps via `mysqldump`. The committed `e2e/seed*.sql` files are the _outputs_ of these scripts — they are loaded quickly at test run time, but the _source of truth_ is the builder code here.
+TypeScript scripts that build the E2E test events programmatically using
+Prisma against the dedicated `oxygen_e2e` Postgres database on
+`localhost:5433`. They are run automatically by `e2e/global-setup.ts`
+before each Playwright run, so the committed builders are the single
+source of truth for E2E fixtures.
 
 ## Why
 
-The raw mysqldump files (731–531 lines of MeOS binary SQL) are hard to maintain:
-
-- Schema changes require a manual re-dump
-- Adding or removing test fixtures means editing opaque INSERT statements
-- It's impossible to tell what data actually exists without running the database
-
-The builders replace that with readable TypeScript using the Prisma client.
+The previous MeOS-MySQL world required hand-edited mysqldump output as
+the source of truth — 731 lines of opaque INSERT statements per event,
+impossible to diff meaningfully when the schema changed. The new layout
+seeds via readable TypeScript with the same Prisma client the app uses,
+so schema drift surfaces as compile errors instead of "the dump no
+longer loads".
 
 ## Databases
 
-| Builder | Output | Competition |
-|---------|--------|-------------|
-| `build-itest.ts` | `e2e/seed.sql` | "My example tävling" (`itest`) — main test competition |
+| Builder | Event nameId | Notes |
+|---------|--------------|-------|
+| `build-itest.ts` | `itest` | "My example tävling" — main fixture: 3 classes, 3 courses, 23 controls, 54 runners, 44 card readouts. |
+| `build-multirace.ts` | `itest_multirace` | "Multi-Race Series" — empty event, used for empty-state tests. |
+| `build-test-competition.ts` | `meos_20251222_001121_2BC` | "Test competition" — empty event with non-default ZeroTime, used for error-path tests. |
 
-> The `seed-multirace.sql` and `seed-test-competition.sql` files are still raw dumps. Add builders for them following the same pattern when they need updating.
+All builders share `shared.ts` for MeOS-time helpers, status-enum
+conversion, and the `recreateEvent` primitive that wipes an event and
+re-creates it from scratch.
 
 ## Usage
 
-### Prerequisites
-
-- Local MySQL running at `localhost:3306`, user `meos` (no password, or set `MYSQL_PWD`)
-- The `MeOSMain` database exists with an `oEvent` table
-- `mysqldump` available in `$PATH`
-- Packages installed: `pnpm install` from the repo root
-
-### Regenerate `itest`
+### Automatic (typical)
 
 ```bash
-# From the repo root:
-cd packages/api
-
-DATABASE_URL="mysql://meos@localhost:3306/itest" \
-MEOS_MAIN_DB_URL="mysql://meos@localhost:3306/MeOSMain" \
-pnpm tsx ../../e2e/seed-builder/build-itest.ts
+pnpm test:e2e
 ```
 
-The script will:
-1. Drop and recreate the `itest` MySQL database
-2. Push the current Prisma schema (`prisma db push`)
-3. Insert all test data via Prisma client
-4. Run `mysqldump` and write the output to `e2e/seed.sql`
+`global-setup.ts` runs the builders in order against the dedicated
+`oxygen_e2e` database before any test starts. No manual step required.
 
-After running, commit the updated `e2e/seed.sql`.
+### Standalone (during development)
 
-### Modifying test data
+```bash
+DATABASE_URL="postgresql://oxygen:oxygen@localhost:5433/oxygen_e2e?schema=oxygen" \
+  pnpm exec tsx e2e/seed-builder/build-itest.ts
+```
 
-Edit the data arrays in `build-itest.ts` (clubs, controls, courses, classes, runners, cards), then re-run the builder. The SQL file will update automatically.
+You can run a single builder this way to iterate on its fixture without
+re-running the entire suite. The builder is idempotent (it deletes the
+event row first, which cascades to all child tables).
 
-### Adding a new builder
+### Adding a new fixture
 
-Follow the same structure as `build-itest.ts`:
-
-1. Call `recreateDb()` to drop/recreate the target database and register it in MeOSMain
-2. Call `pushSchema()` to apply the Prisma schema
-3. Insert data using the `PrismaClient`
-4. Call `dumpToSql()` to write the output SQL file
+1. Create `e2e/seed-builder/build-<name>.ts` mirroring the existing
+   builders. Use `recreateEvent` so the script is re-runnable.
+2. Add the new builder path to `runSeeds()` in
+   `e2e/global-setup.ts`.
+3. Add the new `nameId` to `SEED_NAME_IDS` in the same file so
+   stale-cleanup keeps working.

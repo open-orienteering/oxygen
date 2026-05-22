@@ -21,7 +21,7 @@ Oxygen is a modern web application for managing orienteering competitions. It co
 |  Fastify API                                         |
 |  +------------------------------------------------+  |
 |  | tRPC Router (type-safe, Zod-validated)         |  |
-|  |  competition  runner  draw     testLab         |  |
+|  |  event        runner  draw     testLab         |  |
 |  |  cardReadout  course  class    eventor         |  |
 |  |  liveresults  club    race     control         |  |
 |  |  onlineInput  livelox events                   |  |
@@ -30,16 +30,22 @@ Oxygen is a modern web application for managing orienteering competitions. It co
 +---------------------------+--------------------------+
                             |
 +---------------------------v--------------------------+
-|  MySQL 8                                             |
-|  +---------------------------+ +------------------+  |
-|  | MeOSMain                  | | <competition_db> |  |
-|  | - oEvent (registry)       | | - oRunner        |  |
-|  | - oxygen_runner_db        | | - oClass         |  |
-|  | - oxygen_club_db          | | - oCourse        |  |
-|  |                           | | - oControl       |  |
-|  |                           | | - oCard          |  |
-|  |                           | | - oPunch         |  |
-|  +---------------------------+ +------------------+  |
+|  PostgreSQL 18 — single database `oxygen`            |
+|                                                      |
+|  schema `oxygen`:                                    |
+|    events, controls, courses, course_controls,       |
+|    classes, class_course_pools, runners, teams,      |
+|    cards, card_readouts, punches, control_units,     |
+|    event_log, event_seqs, map_files, rendered_maps,  |
+|    map_tiles, tracks, routes                         |
+|                                                      |
+|  global directories (schema `oxygen`):               |
+|    runner_directory, club_directory,                 |
+|    eventor_event_meta, oxygen_settings               |
+|                                                      |
+|  PK strategy:                                        |
+|    UUIDv7 (client-mintable) + per-event `seq INT`    |
+|    (URL-stable, allocated by BEFORE INSERT trigger)  |
 +------------------------------------------------------+
 ```
 
@@ -53,47 +59,79 @@ Oxygen is a modern web application for managing orienteering competitions. It co
 | **Backend** | Fastify 5 + tRPC 11 | High-performance HTTP, type-safe RPC with zero code generation |
 | **Validation** | Zod 4 | Runtime schema validation shared between client and server |
 | **ORM** | Prisma 6 | Type-safe database access with migration support |
-| **Database** | MySQL 8 | MeOS-compatible schema — both tools can operate on the same database |
+| **Database** | PostgreSQL 18 | UUIDv7 PKs, JSONB columns, native ENUM types, row-level FKs |
 | **Testing** | Vitest (unit), Playwright (E2E) | Fast unit tests, reliable browser automation |
 | **Build** | Docker multi-stage | Reproducible builds, separate API and web containers |
 
 ## Database Architecture
 
-Oxygen uses MySQL with a two-tier database design:
+Oxygen runs on **a single PostgreSQL 18 database**. Every table lives in the
+`oxygen` schema; the Prisma datasource is pointed at
+`postgresql://…/oxygen?schema=oxygen`. The MeOS-compatible MySQL layout
+(multi-database, per-event `oRunner` / `oCard` / `oPunch` tables, `oCounter`
+change detection) was retired in the May 2026 refactor — see
+[`docs/migrations/2026-drop-meos.md`](migrations/2026-drop-meos.md) for the
+full migration story.
 
-**MeOSMain** — a shared registry database containing:
-- `oEvent` — competition registry (one row per competition, with `NameId` as the database name)
-- `oxygen_runner_db` — global runner database synced from Eventor
-- `oxygen_club_db` — global club/organization database with logos
+### Table groups
 
-**Per-competition databases** — each competition gets its own MySQL database with the MeOS schema:
-- `oRunner`, `oClass`, `oCourse`, `oControl`, `oCard`, `oPunch`, `oClub`, `oTeam`, `oEvent`
-- `oCounter` — change counter for detecting external modifications (MeOS compatibility)
-- `oMonitor` — heartbeat table for client presence detection
+- **Event-scoped entities** — `controls`, `courses`, `course_controls`,
+  `classes`, `class_course_pools`, `runners`, `teams`, `cards`,
+  `control_units`. Each row has `id UUID PRIMARY KEY DEFAULT uuidv7()` plus
+  a per-event `seq INT` (URL-stable, human-friendly). `seq` is allocated by
+  a `BEFORE INSERT` trigger drawing from a shared
+  `oxygen.event_seqs(event_id, table_name, next_seq)` table, so explicit
+  values can be passed through (the migration tool relies on this).
+- **Append-only / immutable** — `card_readouts`, `punches`, `event_log`.
+  UUID PK only, no `seq`.
+- **Pure server-side** — `map_files`, `rendered_maps`, `map_tiles`,
+  `tracks`, `routes`. `BIGSERIAL` PK.
+- **Global directories** — `runner_directory`, `club_directory`,
+  `eventor_event_meta`. Keyed by their natural external IDs from Eventor.
+- **Settings** — `oxygen_settings` (Eventor API keys, runner-db revision,
+  etc.); a flat key/value store shared by all events.
 
-This design means Oxygen and MeOS can operate on the same database simultaneously. The `oCounter` table is used for change detection, so edits made in MeOS are immediately reflected in Oxygen and vice versa.
+### ID strategy
 
-**Future direction:** Once Oxygen is mature enough to stand on its own without MeOS compatibility, the plan is to migrate from MySQL to PostgreSQL. This will unlock features like better JSON support, advanced indexing, and simpler hosting options while shedding the constraints of the legacy MeOS schema.
+Hybrid: `id UUID` (client-mintable, offline-safe, eventually-consistent
+sync-friendly) + per-event `seq INT` (used in URLs like
+`/Bagissprinten/runners?runner=196`). The API speaks `seq` on the wire for
+human-facing entities; internally everything joins on UUIDs.
+
+### Status semantics
+
+`runners.status` and `controls.status` use native PostgreSQL ENUM types
+(`runner_status`, `control_status`). The API converts to/from the legacy
+integer codes at the boundary via `statusConvert.ts` so existing clients
+keep working during the transition.
+
+### Time storage
+
+All times live in **ZeroTime-relative deciseconds** (the column type is
+`INT`, default `0`). The default `ZeroTime` is `324000` (09:00:00 in
+deciseconds since midnight). Every API surface accepts **absolute
+deciseconds** and converts at the boundary (`toAbsolute` / `toRelative` in
+`packages/api/src/timeConvert.ts`).
 
 ## Deployment Options
 
 ### Docker (full stack)
 ```bash
-docker compose up -d        # MySQL + API + Web
+docker compose up -d        # PostgreSQL + API + Web
 ```
-Starts MySQL 8, the API server, and an Nginx-served web frontend. Suitable for dedicated servers or cloud VMs.
+Starts PostgreSQL 18, the API server, and an Nginx-served web frontend. Suitable for dedicated servers or cloud VMs.
 
 ### Docker (host database)
 ```bash
 docker compose -f docker-compose.host-db.yml up --build -d
 ```
-Connects to an existing MySQL instance on the host. Useful when running alongside a local MeOS installation.
+Connects to an existing PostgreSQL 18 instance on the host (`localhost:5432`). Convenient when running alongside an integration test container or sharing a database across dev tools.
 
 ### Bare metal
 ```bash
 pnpm install && pnpm db:generate && pnpm dev
 ```
-Node.js 20+, pnpm 10+, and a MySQL 8 instance. The API proxies through Vite in development.
+Node.js 20+, pnpm 10+, and a PostgreSQL 18 instance. The API proxies through Vite in development.
 
 ### Cloud Shell demo
 One-click deployment via Google Cloud Shell — no local install needed. See [demo.md](demo.md).
@@ -103,9 +141,9 @@ One-click deployment via Google Cloud Shell — no local install needed. See [de
 Oxygen is designed for field conditions where internet connectivity is unreliable. The database is always hosted remotely (cloud VM or dedicated server), keeping the competition data safe and accessible from anywhere. The planned approach makes each client station resilient to connectivity loss:
 
 - **Service Worker caching** — cache the full PWA shell and API responses so Oxygen loads and operates without internet
-- **Remote database, local resilience** — MySQL runs on a remote server; each Oxygen PWA client caches all data it needs to continue operating independently during an outage
+- **Remote database, local resilience** — PostgreSQL runs on a remote server; each Oxygen PWA client caches all data it needs to continue operating independently during an outage
 - **Local network fallback** — during internet loss, Oxygen stations on the same local network (e.g., registration and start) can propagate new registrations and card readouts directly between each other
-- **Background sync** — when connectivity is restored, queued changes sync back to the remote database, Eventor, LiveResults, and online-input (ROC)
+- **Background sync** — when connectivity is restored, queued changes sync back to the remote database, Eventor, LiveResults, and online-input (ROC). UUIDv7 PKs let offline-minted rows merge without ID collisions when they reach the server.
 - **SI card readout** — Web Serial API works entirely locally, no network needed
 
 This means the remote database is the source of truth, but each client can survive disconnection. The only challenge is propagating new registrations between stations during an outage, which is solvable via local network discovery when stations share a WiFi network.
@@ -132,23 +170,23 @@ SportIdent card reading uses the Web Serial API for direct hardware communicatio
 
 ### Control Management — Logical vs Physical Units
 
-Oxygen distinguishes **logical controls** (the `oControl` MeOS table — what courses reference) from **physical units** (SI stations, identified by hardware serial). A logical control can own multiple physical units:
+Oxygen distinguishes **logical controls** (`controls` — what courses reference) from **physical units** (SI stations, identified by hardware serial). A logical control can own multiple physical units:
 
 - **Redundancy** — two units at the same location punching the same code (radio + backup, or crowd management at spectator controls)
-- **Replacement** — a broken unit swapped mid-race with a spare programmed to a different code; both codes live in `oControl.Numbers` (semicolon-separated), and the read path accepts either
+- **Replacement** — a broken unit swapped mid-race with a spare programmed to a different code; both codes live in `controls.codes` (semicolon-separated), and the read path accepts either
 
-Per-unit state (battery voltage, `checked_at`, last-programmed code, firmware) lives in `oxygen_control_units`, keyed by `station_serial`. The logical-control config (`radio_type`, `air_plus` override) stays in `oxygen_control_config`. Programming and backup-memory reads both upsert the corresponding unit row — so two units fulfilling the same logical control never overwrite each other's state. Forks, despite sometimes being described this way, are *not* modelled via multi-code in `Numbers`; they are separate logical controls with distinct codes and distinct courses.
+Per-unit state (battery voltage, `checked_at`, last-programmed code, firmware) lives in `control_units`, keyed by `station_serial`. The logical-control config (`radio_type`, `air_plus` override) stays on the `controls` row itself. Programming and backup-memory reads both upsert the corresponding unit row — so two units fulfilling the same logical control never overwrite each other's state. Forks, despite sometimes being described this way, are *not* modelled via multi-code in `codes`; they are separate logical controls with distinct codes and distinct courses.
 
 ### Eventor Integration
 Direct integration with the Swedish Orienteering Federation's Eventor API:
 - Import events, entries, classes, and clubs
 - Sync global runner database for name/card lookup
-- Upload results and start lists (Test-Eventor supported, production pending)
+- Upload results and start lists (Test-Eventor and production)
 
 ![Event page with sync controls](screenshots/event.png)
 
 ### Online Input (ROC)
-Per-competition pull from a remote radio-control service. Currently supports the ROC protocol used by [roc.olresultat.se](https://roc.olresultat.se) (and OResults' compatible endpoint). One `setInterval` timer per competition lives in the API process, polling the configured endpoint with a `lastId` watermark and inserting new punches into `oPunch` with the MeOS-original `Origin` checksum so a database written by Oxygen and re-opened in MeOS shows the rows as `isOriginal()`. Architecture and the SICenter forward-compat path are documented in [online-input-roc.md](online-input-roc.md). Code lives in `packages/api/src/online-input/` with a small `Protocol` interface so a second protocol (SICenter) is later a single new file plus a UI dropdown entry.
+Per-event pull from a remote radio-control service. Currently supports the ROC protocol used by [roc.olresultat.se](https://roc.olresultat.se) (and OResults' compatible endpoint). One `setInterval` timer per event lives in the API process, polling the configured endpoint with a `lastId` watermark and inserting new rows into `punches` (with `source = 'online_input'`). Architecture and the SICenter forward-compat path are documented in [online-input-roc.md](online-input-roc.md). Code lives in `packages/api/src/online-input/` with a small `Protocol` interface so a second protocol (SICenter) is later a single new file plus a UI dropdown entry.
 
 ### Kiosk Mode
 A self-service interface for race day:

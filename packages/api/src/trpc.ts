@@ -1,20 +1,28 @@
 import { initTRPC, TRPCError } from "@trpc/server";
 import type { CreateFastifyContextOptions } from "@trpc/server/adapters/fastify";
 import type { PrismaClient } from "@prisma/client";
-import { getCompetitionClient } from "./db.js";
+import { prisma, resolveEvent, type EventRef } from "./db.js";
 
-/** Context available to all tRPC procedures */
+/** Context available to all tRPC procedures. */
 export interface Context {
-  /** Competition database name, resolved from the x-competition-id request header */
-  dbName: string | null;
+  /** Resolved active event from the x-competition-id header, or null. */
+  event: EventRef | null;
 }
 
+/**
+ * Build the per-request context. The header is `x-competition-id` for
+ * backwards compatibility with the running web clients during the
+ * MeOS → Postgres cutover; the next major release renames it to
+ * `x-event-id`.
+ */
 export async function createContext(
   opts: CreateFastifyContextOptions,
 ): Promise<Context> {
-  const raw = opts.req.headers["x-competition-id"];
-  const dbName = (Array.isArray(raw) ? raw[0] : raw) ?? null;
-  return { dbName: dbName || null };
+  const raw =
+    opts.req.headers["x-event-id"] ?? opts.req.headers["x-competition-id"];
+  const nameId = (Array.isArray(raw) ? raw[0] : raw) ?? "";
+  const event = nameId ? await resolveEvent(nameId) : null;
+  return { event };
 }
 
 const t = initTRPC.context<Context>().create();
@@ -31,24 +39,28 @@ export const publicProcedure = t.procedure.use(async ({ path, next }) => {
   return result;
 });
 
-/** Context shape available inside competitionProcedure handlers */
-export interface CompetitionContext extends Context {
-  dbName: string; // guaranteed non-null
+/** Context shape inside an eventProcedure handler. */
+export interface EventContext extends Context {
+  event: EventRef;
   db: PrismaClient;
 }
 
 /**
- * Base procedure for all competition-scoped operations.
- * Resolves and injects ctx.db (the competition's PrismaClient) from ctx.dbName.
- * Throws BAD_REQUEST if no competition is identified in the request.
+ * Base procedure for all event-scoped operations.
+ * Resolves the active event from the request header; injects `ctx.event`
+ * (the resolved row) and `ctx.db` (the singleton Prisma client).
+ * Throws BAD_REQUEST if no event is identified, NOT_FOUND if the slug
+ * doesn't resolve.
  */
-export const competitionProcedure = publicProcedure.use(async ({ ctx, next }) => {
-  if (!ctx.dbName) {
+export const eventProcedure = publicProcedure.use(async ({ ctx, next }) => {
+  if (!ctx.event) {
     throw new TRPCError({
       code: "BAD_REQUEST",
-      message: "No competition selected (missing x-competition-id header)",
+      message:
+        "No event selected (missing or unresolved x-event-id / x-competition-id header)",
     });
   }
-  const db = await getCompetitionClient(ctx.dbName);
-  return next({ ctx: { ...ctx, dbName: ctx.dbName, db } as CompetitionContext });
+  return next({
+    ctx: { ...ctx, event: ctx.event, db: prisma() } as EventContext,
+  });
 });

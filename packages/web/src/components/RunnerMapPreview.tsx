@@ -57,20 +57,24 @@ export function RunnerMapPreview({ runnerId, defaultCourseNames }: Props) {
     return Object.keys(m).length ? m : undefined;
   }, [readout.data]);
 
+  // Pull out the waypoints early as `unknown` to dodge the deep
+  // JsonValue type explosion that comes from Prisma's JSONB column.
+  const routeWaypoints = route.data
+    ? ((route.data as { waypoints?: unknown }).waypoints as
+        | Array<{ lat: number; lng: number }>
+        | null
+        | undefined)
+    : null;
+
   const gpsRoutes = useMemo(() => {
-    if (!route.data) return undefined;
-    // Single-track previews always render in red regardless of the stored
-    // route colour — consistent across runners, and high-contrast against
-    // the map background. The per-track colour from `oxygen_routes` is
-    // still meaningful in the multi-runner replay view, which doesn't
-    // share this code path.
+    if (!routeWaypoints) return undefined;
     return [
       {
         color: "#e6194b",
-        points: route.data.waypoints.map((w) => ({ lat: w.lat, lng: w.lng })),
+        points: routeWaypoints.map((w) => ({ lat: w.lat, lng: w.lng })),
       },
     ];
-  }, [route.data]);
+  }, [routeWaypoints]);
 
   // Course precedence: readout course (specific runner) wins over the
   // page-level class filter. Both fall through to plain overview when

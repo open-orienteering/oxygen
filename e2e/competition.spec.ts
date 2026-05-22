@@ -90,7 +90,7 @@ test.describe("Competition Dashboard", () => {
     // Wait for map panel to become interactive (upload button or loaded map)
     const uploadBtn = page.getByRole("button", { name: "Upload map" });
     const allClassesText = page.getByText("All classes");
-    await expect(uploadBtn.or(allClassesText)).toBeVisible({ timeout: 10000 });
+    await expect(uploadBtn.or(allClassesText).first()).toBeVisible({ timeout: 10000 });
 
     if (await uploadBtn.isVisible()) {
       const fileChooserPromise = page.waitForEvent("filechooser");

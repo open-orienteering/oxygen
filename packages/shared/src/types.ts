@@ -274,20 +274,21 @@ export function parseMeosTime(time: string): number {
 
 export type EventorEnvironment = "prod" | "test";
 
-/** Competition summary as returned by the MeOSMain database */
-export interface CompetitionInfo {
+/** Event summary as returned by the registry. */
+export interface EventInfo {
   id: number;
   name: string;
   annotation: string;
   date: string;
   nameId: string;
-  /** If the competition uses a remote DB, the host:port string */
-  remoteHost?: string;
-  /** The Eventor environment this competition is linked to, if any */
+  /** The Eventor environment this event is linked to, if any */
   eventorEnv?: EventorEnvironment;
-  /** Eventor event ID (oEvent.ExtId). Used to build QR links on receipts. */
+  /** Eventor event ID. Used to build QR links on receipts. */
   eventorEventId?: number;
 }
+
+/** @deprecated alias for {@link EventInfo} kept during the post-MeOS rename window. */
+export type CompetitionInfo = EventInfo;
 
 /** Class summary */
 export interface ClassInfo {
@@ -445,9 +446,16 @@ export interface RunnerInput {
   phone?: string;
 }
 
-/** Competition dashboard overview */
-export interface CompetitionDashboard {
-  competition: CompetitionInfo;
+/** Dashboard overview for the active event. */
+export interface EventDashboard {
+  event: EventInfo;
+  /**
+   * @deprecated alias for `event` kept for the transition window —
+   * the API always populates it (with the same value as `event`), so
+   * existing UI code referencing `d.competition.*` keeps compiling
+   * without optional chaining noise.
+   */
+  competition: EventInfo;
   classes: ClassInfo[];
   courses: CourseInfo[];
   totalRunners: number;
@@ -457,9 +465,12 @@ export interface CompetitionDashboard {
   statusCounts: StatusCounts;
   organizer?: {
     name: string;
-    eventorId: number; // Eventor organisation ID (for logo)
+    eventorId: number;
   };
 }
+
+/** @deprecated alias for {@link EventDashboard}. */
+export type CompetitionDashboard = EventDashboard;
 
 /** Start list entry */
 export interface StartListEntry {
@@ -661,6 +672,10 @@ export interface ControlUnit {
   modelId: number | null;
   /** Product name (e.g. "BSF8", "BS11-BL"). Persisted at programming time. */
   modelName: string | null;
+  /** SRR_CFG bit observed at programming time. True = short-range
+   *  radio enabled on this unit (drives the "SRR+" badge on the
+   *  Controls page). */
+  srrCfg: boolean;
   lastSeenAt: string | null; // ISO timestamp
 }
 

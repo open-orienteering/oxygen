@@ -1,0 +1,28 @@
+# Postgres instance dedicated to tests. Runs on a non-default port so it can
+# coexist with a developer's working DB on :5432. The integration + E2E
+# suites use per-suite Postgres schemas inside this instance for isolation.
+#
+# Usage:
+#   docker compose -f docker-compose.test.yml up -d        # start
+#   docker compose -f docker-compose.test.yml down -v       # stop + wipe
+
+services:
+  postgres-oxygen-test:
+    image: postgres:18-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: oxygen
+      POSTGRES_PASSWORD: oxygen
+      POSTGRES_DB: oxygen_test
+    ports:
+      - "5433:5432"
+    volumes:
+      - postgres-oxygen-test-data:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U oxygen -d oxygen_test"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  postgres-oxygen-test-data:

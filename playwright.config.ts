@@ -30,10 +30,13 @@ export default defineConfig({
     {
       command: "pnpm exec tsx packages/api/src/index.ts",
       port: 3002,
-      reuseExistingServer: true,
+      reuseExistingServer: false,
       env: {
-        DATABASE_URL: "mysql://meos@localhost:3306/itest",
-        MEOS_MAIN_DB_URL: "mysql://meos@localhost:3306/MeOSMain",
+        // Dedicated E2E database in the test PG container (:5433). Kept
+        // separate from the integration test DB so the two suites can't
+        // clobber each other.
+        DATABASE_URL:
+          "postgresql://oxygen:oxygen@localhost:5433/oxygen_e2e?schema=oxygen",
         PORT: "3002",
       },
     },

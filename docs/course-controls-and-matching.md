@@ -4,9 +4,13 @@ This document describes how Oxygen represents the control sequence on a
 course, how it matches a runner's SI card punches against that sequence,
 and how the two layers stay consistent when the user renumbers a control.
 
-It is the authoritative reference for anyone touching `oCourse.Controls`,
-`oControl.Numbers`, `parseCourseControlIds`, `resolveCourseExpectedCodes`,
-or `matchPunchesToCourse`.
+> **MeOS naming preserved.** The code paths and column names below use
+> the MeOS-era spellings (`oCourse.Controls`, `oControl.Numbers`, etc.).
+> Post-migration the same data lives in PostgreSQL tables `courses`,
+> `controls`, `course_controls`, with snake_case columns — the logical
+> model is unchanged, only the storage layer moved. The MeOS column
+> citations in this doc are kept verbatim so the upstream MeOS source
+> references still resolve.
 
 ## TL;DR
 

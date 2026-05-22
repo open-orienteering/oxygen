@@ -75,7 +75,12 @@ export function CardMapPreview({ cardNo, defaultCourseNames }: Props) {
     return [
       {
         color: "#e6194b",
-        points: route.data.waypoints.map((w) => ({ lat: w.lat, lng: w.lng })),
+        points: (
+          ((route.data as { waypoints?: unknown } | null | undefined)?.waypoints as
+            | Array<{ lat: number; lng: number }>
+            | null
+            | undefined) ?? []
+        ).map((w) => ({ lat: w.lat, lng: w.lng })),
       },
     ];
   }, [route.data]);

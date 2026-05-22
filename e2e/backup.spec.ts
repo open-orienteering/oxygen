@@ -62,7 +62,7 @@ test.describe("Database Backup", () => {
 
     const head = readFileSync(path!, "utf-8").slice(0, 4096);
     expect(head).toContain("-- Oxygen backup");
-    expect(head).toContain("-- Database:   itest");
-    expect(head).toContain("-- INSERT INTO MeOSMain.oEvent (");
+    expect(head).toContain("-- Event:      itest");
+    expect(head).toContain("-- INSERT INTO oxygen.events (");
   });
 });

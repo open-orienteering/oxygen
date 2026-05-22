@@ -4,7 +4,8 @@ export type MatchStatus = "matched" | "no_runner" | "no_result" | "time_mismatch
 
 /** Backup punch row, matching `BackupPunch` in BackupPunchesPage. */
 export interface BackupPunchRow {
-  id: number;
+  /** Punch UUID (string in the new schema; was a numeric id under MeOS). */
+  id: string;
   controlId: number;
   controlCodes: string;
   controlName: string;

@@ -24,7 +24,7 @@ type CounterState = Record<string, number>;
 const POLL_INTERVAL_MS = 5_000;
 
 /**
- * Poll oCounter to detect external changes (e.g. from MeOS) and
+ * Poll the per-event counter to detect external writes (other Oxygen nodes) and
  * invalidate the corresponding TanStack Query caches so the UI
  * stays fresh without manual refresh.
  *

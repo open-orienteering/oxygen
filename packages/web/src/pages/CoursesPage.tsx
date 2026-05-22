@@ -155,8 +155,18 @@ export function CoursesPage() {
         <CourseImportDialog
           onClose={() => setShowImportDialog(false)}
           onSuccess={() => {
+            // Course/control lists drive the table.
             utils.course.list.invalidate();
             utils.control.list.invalidate();
+            // Map overlays are cached with `staleTime: Infinity` (the
+            // tile URLs key off `mapMetadata.uploadedAt`), so a re-
+            // import otherwise leaves the viewer rendering stale
+            // controls / leg lines until a full page refresh.
+            utils.course.controlCoordinates.invalidate();
+            utils.course.courseGeometries.invalidate();
+            utils.course.mapMetadata.invalidate();
+            utils.course.mapFileInfo.invalidate();
+            utils.course.geometry.invalidate();
           }}
         />
       )}
@@ -395,7 +405,10 @@ function CourseInlineDetail({ courseId }: { courseId: number }) {
       .map((s) => s.trim())
       .filter(Boolean);
     updateMutation.mutate(
-      { id: courseId, controlCodes: codes },
+      {
+        id: courseId,
+        controlIds: codes.map((c) => parseInt(c, 10)).filter((n) => !isNaN(n)),
+      },
       {
         onError: (err) => setControlsError(err.message),
       },
@@ -622,7 +635,7 @@ function CreateCourseForm({
       .filter(Boolean);
     createMutation.mutate({
       name: name.trim(),
-      controlCodes: codes,
+      controlIds: codes.map((c) => parseInt(c, 10)).filter((n) => !isNaN(n)),
       length: parseInt(length, 10) || 0,
       numberOfMaps: parseInt(numberOfMaps, 10) || 1,
       firstAsStart,

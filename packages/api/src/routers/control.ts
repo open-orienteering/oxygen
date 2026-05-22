@@ -1,455 +1,336 @@
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
-import { router, competitionProcedure } from "../trpc.js";
+import { router, eventProcedure } from "../trpc.js";
 import type { PrismaClient } from "@prisma/client";
-import {incrementCounter, ensureControlConfigTable, ensureControlPunchesTable, ensureControlUnitsTable, ensureCompetitionConfigTable, getZeroTime} from "../db.js";
-import { toRelative, toAbsolute } from "../timeConvert.js";
 import {
-  isWithdrawn,
-  type ControlInfo,
-  type ControlDetail,
-  type ControlConfig,
-  type ControlUnit,
-  type RadioType,
-  type AirPlusOverride,
-  type AutosendMode,
-  type RunnerStatusValue,
+  controlStatusToValue,
+  valueToControlStatus,
+  runnerStatusToValue,
+} from "../statusConvert.js";
+import type {
+  ControlInfo,
+  ControlDetail,
+  ControlConfig,
+  ControlUnit as ControlUnitDto,
 } from "@oxygen/shared";
 
-// ─── Helpers ──────────────────────────────────────────────
-
-/** Format a Date from MySQL DATETIME as an ISO-like local-time string.
- *  Prisma treats DATETIME as UTC, but MySQL NOW() returns server-local time.
- *  Using getUTC* avoids the double timezone shift. */
-function fmtDatetimeLocal(d: Date): string {
-  const Y = d.getUTCFullYear();
-  const M = String(d.getUTCMonth() + 1).padStart(2, "0");
-  const D = String(d.getUTCDate()).padStart(2, "0");
-  const h = String(d.getUTCHours()).padStart(2, "0");
-  const m = String(d.getUTCMinutes()).padStart(2, "0");
-  const s = String(d.getUTCSeconds()).padStart(2, "0");
-  return `${Y}-${M}-${D} ${h}:${m}:${s}`;
-}
-
-interface ControlConfigRow {
-  control_id: number;
-  radio_type: string;
-  air_plus: string;
-  autosend_mode: string | null;
-}
-
-interface ControlUnitRow {
-  station_serial: number;
-  control_id: number | null;
-  last_programmed_code: number | null;
-  battery_voltage: number | null;
-  battery_low: number;
-  checked_at: Date | null;
-  memory_cleared_at: Date | null;
-  firmware_version: string | null;
-  model_id: number | null;
-  model_name: string | null;
-  last_seen_at: Date | null;
-}
-
-function rowToUnit(row: ControlUnitRow): ControlUnit {
-  return {
-    stationSerial: Number(row.station_serial),
-    lastProgrammedCode: row.last_programmed_code,
-    batteryVoltage: row.battery_voltage,
-    batteryLow: row.battery_low !== 0,
-    checkedAt: row.checked_at?.toISOString() ?? null,
-    memoryClearedAt: row.memory_cleared_at?.toISOString() ?? null,
-    firmwareVersion: row.firmware_version,
-    modelId: row.model_id !== null ? Number(row.model_id) : null,
-    modelName: row.model_name,
-    lastSeenAt: row.last_seen_at?.toISOString() ?? null,
-  };
-}
-
-/** Aggregate the unit-level fields into the legacy flat ControlConfig shape.
- *  Picks the lowest battery voltage (worst case) and the earliest checked_at
- *  (stalest check) so the top-level row still surfaces concerning values. */
-function aggregateUnits(units: ControlUnit[]): Pick<ControlConfig,
-  "batteryVoltage" | "batteryLow" | "checkedAt" | "memoryClearedAt"
-> {
-  if (units.length === 0) {
-    return { batteryVoltage: null, batteryLow: null, checkedAt: null, memoryClearedAt: null };
-  }
-  let minVoltage: number | null = null;
-  let anyLow = false;
-  let earliestChecked: string | null = null;
-  let earliestCleared: string | null = null;
-  for (const u of units) {
-    if (u.batteryVoltage !== null && (minVoltage === null || u.batteryVoltage < minVoltage)) {
-      minVoltage = u.batteryVoltage;
-    }
-    if (u.batteryLow) anyLow = true;
-    if (u.checkedAt && (earliestChecked === null || u.checkedAt < earliestChecked)) {
-      earliestChecked = u.checkedAt;
-    }
-    if (u.memoryClearedAt && (earliestCleared === null || u.memoryClearedAt < earliestCleared)) {
-      earliestCleared = u.memoryClearedAt;
-    }
-  }
-  return {
-    batteryVoltage: minVoltage,
-    batteryLow: minVoltage !== null ? anyLow : null,
-    checkedAt: earliestChecked,
-    memoryClearedAt: earliestCleared,
-  };
-}
-
-type ControlConfigSettings = Pick<
-  ControlConfig,
-  "radioType" | "airPlus" | "autosendMode"
->;
-
-function rowAutosendMode(value: string | null | undefined): AutosendMode {
-  return value === "unsent" || value === "all" ? value : "last";
-}
-
-async function getConfigMap(
-  client: PrismaClient,
-  dbName: string,
-): Promise<Map<number, ControlConfigSettings>> {
-  await ensureControlConfigTable(client, dbName);
-  const rows = (await client.$queryRawUnsafe(
-    "SELECT control_id, radio_type, air_plus, autosend_mode FROM oxygen_control_config",
-  )) as ControlConfigRow[];
-  const map = new Map<number, ControlConfigSettings>();
-  for (const row of rows) {
-    map.set(row.control_id, {
-      radioType: row.radio_type as RadioType,
-      airPlus: row.air_plus as AirPlusOverride,
-      autosendMode: rowAutosendMode(row.autosend_mode),
+/**
+ * Resolve a control by its user-facing numeric identifier.
+ *
+ * Controls are addressed by their punch code (e.g. 50, 100, 150) — the same
+ * value runners see on the map. The page exposes the code as `id` in URLs
+ * (`?control=50`) and table keys, so all mutation endpoints accept it too.
+ * Falls back to per-event seq for legacy / non-coded controls (start /
+ * finish punches stored without a numeric code).
+ */
+async function getControlByCode(
+  db: PrismaClient,
+  eventId: bigint,
+  code: number,
+) {
+  const codeStr = String(code);
+  const c = await db.control.findFirst({
+    where: {
+      eventId,
+      removed: false,
+      OR: [
+        { codes: codeStr },
+        { codes: { startsWith: `${codeStr};` } },
+        { codes: { contains: `;${codeStr};` } },
+        { codes: { endsWith: `;${codeStr}` } },
+      ],
+    },
+  });
+  if (c) return c;
+  // Fallback: treat the input as a seq for controls without a code.
+  const bySeq = await db.control.findFirst({
+    where: { eventId, seq: code, removed: false },
+  });
+  if (!bySeq) {
+    throw new TRPCError({
+      code: "NOT_FOUND",
+      message: `Control ${code} not found`,
     });
   }
-  return map;
+  return bySeq;
 }
 
-async function getUnitsByControl(
-  client: PrismaClient,
-  dbName: string,
-): Promise<Map<number, ControlUnit[]>> {
-  await ensureControlUnitsTable(client, dbName);
-  const rows = (await client.$queryRawUnsafe(
-    "SELECT * FROM oxygen_control_units WHERE control_id IS NOT NULL",
-  )) as ControlUnitRow[];
-  const map = new Map<number, ControlUnit[]>();
-  for (const row of rows) {
-    if (row.control_id === null) continue;
-    const list = map.get(row.control_id) ?? [];
-    list.push(rowToUnit(row));
-    map.set(row.control_id, list);
-  }
-  return map;
+/** Extract the first numeric code from a control's `codes` string. */
+function firstCode(codes: string): number {
+  const head = codes.split(";")[0]?.trim();
+  const n = parseInt(head ?? "", 10);
+  return Number.isNaN(n) ? 0 : n;
 }
 
-/** Build a ControlConfig that merges per-control settings with per-unit
- *  aggregates. Returns null if neither settings nor units exist. */
-function buildControlConfig(
-  settings: ControlConfigSettings | undefined,
-  units: ControlUnit[],
-): ControlConfig | null {
-  if (!settings && units.length === 0) return null;
-  const agg = aggregateUnits(units);
+/** User-facing id for a control: first code, falling back to seq. */
+function publicControlId(c: { codes: string; seq: number }): number {
+  return firstCode(c.codes) || c.seq;
+}
+
+function unitToDto(u: {
+  stationSerial: number;
+  lastProgrammedCode: number | null;
+  batteryVoltageMv: number | null;
+  batteryLow: boolean;
+  checkedAt: Date | null;
+  memoryClearedAt: Date | null;
+  firmwareVersion: string | null;
+  modelId: number | null;
+  modelName: string | null;
+  srrCfg: boolean;
+  lastSeenAt: Date | null;
+}): ControlUnitDto {
   return {
-    radioType: settings?.radioType ?? "normal",
-    airPlus: settings?.airPlus ?? "default",
-    autosendMode: settings?.autosendMode ?? "last",
-    ...agg,
+    stationSerial: u.stationSerial,
+    lastProgrammedCode: u.lastProgrammedCode,
+    batteryVoltage: u.batteryVoltageMv != null ? u.batteryVoltageMv / 1000 : null,
+    batteryLow: u.batteryLow,
+    checkedAt: u.checkedAt?.toISOString() ?? null,
+    memoryClearedAt: u.memoryClearedAt?.toISOString() ?? null,
+    firmwareVersion: u.firmwareVersion,
+    modelId: u.modelId,
+    modelName: u.modelName,
+    srrCfg: u.srrCfg,
+    lastSeenAt: u.lastSeenAt?.toISOString() ?? null,
   };
 }
 
-// ─── Router ───────────────────────────────────────────────
+function aggregateConfig(
+  units: ControlUnitDto[],
+  radioType: string,
+  airPlus: string,
+  autosendMode: string,
+): ControlConfig | null {
+  if (units.length === 0) return null;
+  // Aggregate battery: lowest mv across units, OR'd low flag
+  const voltages = units.map((u) => u.batteryVoltage).filter((v): v is number => v != null);
+  const batteryVoltage = voltages.length ? Math.min(...voltages) : null;
+  const batteryLow = units.some((u) => u.batteryLow);
+  const checkedAt = units
+    .map((u) => u.checkedAt)
+    .filter((d): d is string => !!d)
+    .sort()
+    .at(-1) ?? null;
+  const memoryClearedAt = units
+    .map((u) => u.memoryClearedAt)
+    .filter((d): d is string => !!d)
+    .sort()
+    .at(-1) ?? null;
+  return {
+    radioType: radioType as ControlConfig["radioType"],
+    airPlus: airPlus as ControlConfig["airPlus"],
+    autosendMode: autosendMode as ControlConfig["autosendMode"],
+    batteryVoltage,
+    batteryLow,
+    checkedAt,
+    memoryClearedAt,
+  };
+}
 
 export const controlRouter = router({
-  /**
-   * List all controls with config data.
-   */
-  list: competitionProcedure
-    .input(
-      z
-        .object({
-          search: z.string().optional(),
-          status: z.number().optional(),
+  list: eventProcedure.query(async ({ ctx }): Promise<ControlInfo[]> => {
+    const eventId = ctx.event.id;
+    const controls = await ctx.db.control.findMany({
+      where: { eventId, removed: false },
+      orderBy: { seq: "asc" },
+    });
+    const units = await ctx.db.controlUnit.findMany({ where: { eventId } });
+    const unitsByControl = new Map<string, typeof units>();
+    for (const u of units) {
+      if (!u.controlId) continue;
+      const arr = unitsByControl.get(u.controlId) ?? [];
+      arr.push(u);
+      unitsByControl.set(u.controlId, arr);
+    }
+
+    // For each control, the number of runners on courses that include it.
+    const ccs = await ctx.db.courseControl.findMany({
+      select: { controlId: true, courseId: true },
+    });
+    const coursesByControl = new Map<string, Set<string>>();
+    for (const cc of ccs) {
+      const set = coursesByControl.get(cc.controlId) ?? new Set();
+      set.add(cc.courseId);
+      coursesByControl.set(cc.controlId, set);
+    }
+    const runnerCountByCourse = await ctx.db.class.findMany({
+      where: { eventId, removed: false, courseId: { not: null } },
+      select: { id: true, courseId: true },
+    });
+    const courseToClasses = new Map<string, Set<string>>();
+    for (const cls of runnerCountByCourse) {
+      if (!cls.courseId) continue;
+      const set = courseToClasses.get(cls.courseId) ?? new Set();
+      set.add(cls.id);
+      courseToClasses.set(cls.courseId, set);
+    }
+    const allClassIds = [...new Set(runnerCountByCourse.map((c) => c.id))];
+    const runnerCounts = allClassIds.length
+      ? await ctx.db.runner.groupBy({
+          by: ["classId"],
+          _count: { classId: true },
+          where: {
+            eventId,
+            removed: false,
+            classId: { in: allClassIds },
+          },
         })
-        .optional(),
-    )
-    .query(async ({ ctx, input }): Promise<ControlInfo[]> => {
-      const client = ctx.db;
+      : [];
+    const runnerCountByClass = new Map<string, number>(
+      runnerCounts.map((rc) => [rc.classId ?? "", rc._count.classId]),
+    );
 
-      const controls = await client.oControl.findMany({
-        where: { Removed: false },
-        orderBy: { Id: "asc" },
-      });
-
-      let filtered = controls;
-
-      // Filter by status
-      if (input?.status !== undefined) {
-        filtered = filtered.filter((c) => c.Status === input.status);
-      }
-
-      // Filter by search (name or code)
-      if (input?.search) {
-        const term = input.search.toLowerCase();
-        filtered = filtered.filter(
-          (c) =>
-            c.Name.toLowerCase().includes(term) ||
-            c.Numbers.toLowerCase().includes(term) ||
-            String(c.Id).includes(term),
-        );
-      }
-
-      // Compute runner counts per control
-      const courses = await client.oCourse.findMany({
-        where: { Removed: false },
-        select: { Id: true, Controls: true, StartName: true, FirstAsStart: true, LastAsFinish: true },
-      });
-      const classes = await client.oClass.findMany({
-        where: { Removed: false },
-        select: { Id: true, Course: true },
-      });
-      // Count only participants — withdrawn entries (Status=Cancel)
-      // must not inflate the per-control runner totals, mirroring the
-      // dashboard logic in routers/competition.ts.
-      const runners = await client.oRunner.findMany({
-        where: { Removed: false },
-        select: { Class: true, Status: true },
-      });
-      const runnersByClass = new Map<number, number>();
-      for (const r of runners) {
-        if (isWithdrawn(r.Status as RunnerStatusValue)) continue;
-        runnersByClass.set(r.Class, (runnersByClass.get(r.Class) ?? 0) + 1);
-      }
-      const runnersPerCourse = new Map<number, number>();
-      for (const cl of classes) {
-        if (cl.Course > 0) {
-          runnersPerCourse.set(cl.Course, (runnersPerCourse.get(cl.Course) ?? 0) + (runnersByClass.get(cl.Id) ?? 0));
+    return controls.map((c): ControlInfo => {
+      const u = (unitsByControl.get(c.id) ?? []).map(unitToDto);
+      const courseSet = coursesByControl.get(c.id) ?? new Set();
+      let runners = 0;
+      for (const courseId of courseSet) {
+        const classes = courseToClasses.get(courseId) ?? new Set();
+        for (const clsId of classes) {
+          runners += runnerCountByClass.get(clsId) ?? 0;
         }
       }
-      // controlId → total runner count
-      const controlRunnerCount = new Map<number, number>();
-      for (const course of courses) {
-        const courseRunners = runnersPerCourse.get(course.Id) ?? 0;
-        if (courseRunners === 0) continue;
-        const ctrlIds = new Set<number>();
-        for (const idStr of course.Controls.split(";").filter(Boolean)) {
-          const id = parseInt(idStr, 10);
-          if (!isNaN(id)) ctrlIds.add(id);
-        }
-        for (const ctrlId of ctrlIds) {
-          controlRunnerCount.set(ctrlId, (controlRunnerCount.get(ctrlId) ?? 0) + courseRunners);
-        }
-      }
-
-      // Handle Start (Status 4) and Finish (Status 5) controls.
-      const startControls = filtered.filter((c) => c.Status === 4);
-      const finishControls = filtered.filter((c) => c.Status === 5);
-
-      if (startControls.length > 0) {
-        const startNameToCtrl = new Map<string, number>();
-        for (const sc of startControls) {
-          startNameToCtrl.set(sc.Name.toUpperCase(), sc.Id);
-        }
-        const defaultStartId = startControls[0].Id;
-
-        for (const course of courses) {
-          if (course.FirstAsStart) continue;
-          const courseRunners = runnersPerCourse.get(course.Id) ?? 0;
-          if (courseRunners === 0) continue;
-          const startKey = course.StartName.trim().toUpperCase();
-          const startCtrlId = (startKey && startNameToCtrl.get(startKey)) || defaultStartId;
-          controlRunnerCount.set(startCtrlId, (controlRunnerCount.get(startCtrlId) ?? 0) + courseRunners);
-        }
-      }
-
-      if (finishControls.length > 0) {
-        const defaultFinishId = finishControls[0].Id;
-
-        for (const course of courses) {
-          if (course.LastAsFinish) continue;
-          const courseRunners = runnersPerCourse.get(course.Id) ?? 0;
-          if (courseRunners === 0) continue;
-          controlRunnerCount.set(defaultFinishId, (controlRunnerCount.get(defaultFinishId) ?? 0) + courseRunners);
-        }
-      }
-
-      // Load config + units data
-      const configMap = await getConfigMap(client, ctx.dbName);
-      const unitsMap = await getUnitsByControl(client, ctx.dbName);
-
-      return filtered.map((c): ControlInfo => {
-        const units = unitsMap.get(c.Id) ?? [];
-        return {
-          id: c.Id,
-          name: c.Name,
-          codes: c.Numbers,
-          status: c.Status as ControlInfo["status"],
-          timeAdjust: c.TimeAdjust,
-          minTime: c.MinTime,
-          runnerCount: controlRunnerCount.get(c.Id) ?? 0,
-          config: buildControlConfig(configMap.get(c.Id), units),
-          units,
-        };
-      });
-    }),
-
-  /**
-   * Get a single control with detailed course usage info.
-   */
-  detail: competitionProcedure
-    .input(z.object({ id: z.number().int() }))
-    .query(async ({ ctx, input }): Promise<ControlDetail | null> => {
-      const client = ctx.db;
-
-      const control = await client.oControl.findFirst({
-        where: { Id: input.id, Removed: false },
-      });
-      if (!control) return null;
-
-      // Get all courses and classes to compute usage
-      const courses = await client.oCourse.findMany({
-        where: { Removed: false },
-      });
-      const classes = await client.oClass.findMany({
-        where: { Removed: false },
-        select: { Id: true, Course: true },
-      });
-
-      // Count runners per class — exclude withdrawn entries
-      // (Status=Cancel) so the detail panel matches the dashboard.
-      const runners = await client.oRunner.findMany({
-        where: { Removed: false },
-        select: { Class: true, Status: true },
-      });
-      const runnersByClass = new Map<number, number>();
-      for (const r of runners) {
-        if (isWithdrawn(r.Status as RunnerStatusValue)) continue;
-        runnersByClass.set(r.Class, (runnersByClass.get(r.Class) ?? 0) + 1);
-      }
-
-      // Map course ID to runner count (sum of all classes using that course)
-      const runnersByCourse = new Map<number, number>();
-      for (const cls of classes) {
-        if (cls.Course > 0) {
-          const current = runnersByCourse.get(cls.Course) ?? 0;
-          runnersByCourse.set(
-            cls.Course,
-            current + (runnersByClass.get(cls.Id) ?? 0),
-          );
-        }
-      }
-
-      // Find which courses use this control (by checking the codes)
-      const controlCodes = control.Numbers.split(";")
-        .map((s) => s.trim())
-        .filter(Boolean);
-
-      const courseUsage: ControlDetail["courses"] = [];
-      for (const course of courses) {
-        const courseControls = course.Controls.split(";").filter(Boolean);
-        let occurrences = 0;
-        for (const cc of courseControls) {
-          if (controlCodes.includes(cc)) {
-            occurrences++;
-          }
-        }
-        if (occurrences > 0) {
-          courseUsage.push({
-            courseId: course.Id,
-            courseName: course.Name,
-            occurrences,
-            runnerCount: runnersByCourse.get(course.Id) ?? 0,
-          });
-        }
-      }
-
-      // Load config + units
-      const configMap = await getConfigMap(client, ctx.dbName);
-      const unitsMap = await getUnitsByControl(client, ctx.dbName);
-      const units = unitsMap.get(control.Id) ?? [];
-
       return {
-        id: control.Id,
-        name: control.Name,
-        codes: control.Numbers,
-        status: control.Status as ControlInfo["status"],
-        timeAdjust: control.TimeAdjust,
-        minTime: control.MinTime,
-        runnerCount: courseUsage.reduce((sum, c) => sum + c.runnerCount, 0),
-        courses: courseUsage,
-        config: buildControlConfig(configMap.get(control.Id), units),
-        units,
+        id: publicControlId(c),
+        name: c.name,
+        codes: c.codes,
+        status: controlStatusToValue(c.status),
+        timeAdjust: c.timeAdjust,
+        minTime: c.minTime,
+        runnerCount: runners,
+        config: aggregateConfig(u, c.radioType, c.airPlus, c.autosendMode),
+        units: u,
+      };
+    });
+  }),
+
+  getById: eventProcedure
+    .input(z.object({ id: z.number().int() }))
+    .query(async ({ ctx, input }): Promise<ControlDetail> => {
+      const c = await getControlByCode(ctx.db, ctx.event.id, input.id);
+      const units = await ctx.db.controlUnit.findMany({
+        where: { eventId: ctx.event.id, controlId: c.id },
+      });
+      const u = units.map(unitToDto);
+      const ccs = await ctx.db.courseControl.findMany({
+        where: { controlId: c.id },
+        include: { course: { select: { id: true, seq: true, name: true } } },
+      });
+      const courseOccurrences = new Map<string, { seq: number; name: string; count: number }>();
+      for (const cc of ccs) {
+        const existing = courseOccurrences.get(cc.course.id);
+        if (existing) existing.count++;
+        else
+          courseOccurrences.set(cc.course.id, {
+            seq: cc.course.seq,
+            name: cc.course.name,
+            count: 1,
+          });
+      }
+      const courses = await Promise.all(
+        [...courseOccurrences.entries()].map(async ([courseId, info]) => {
+          const classes = await ctx.db.class.findMany({
+            where: { eventId: ctx.event.id, courseId, removed: false },
+            select: { id: true },
+          });
+          const runnerCount = classes.length
+            ? await ctx.db.runner.count({
+                where: {
+                  eventId: ctx.event.id,
+                  removed: false,
+                  classId: { in: classes.map((cl) => cl.id) },
+                },
+              })
+            : 0;
+          return {
+            courseId: info.seq,
+            courseName: info.name,
+            occurrences: info.count,
+            runnerCount,
+          };
+        }),
+      );
+      return {
+        id: publicControlId(c),
+        name: c.name,
+        codes: c.codes,
+        status: controlStatusToValue(c.status),
+        timeAdjust: c.timeAdjust,
+        minTime: c.minTime,
+        runnerCount: courses.reduce((sum, c) => sum + c.runnerCount, 0),
+        config: aggregateConfig(u, c.radioType, c.airPlus, c.autosendMode),
+        units: u,
+        courses,
       };
     }),
 
-  /**
-   * Create a new control.
-   */
-  create: competitionProcedure
+  create: eventProcedure
     .input(
       z.object({
-        codes: z.string().min(1),
         name: z.string().optional().default(""),
+        codes: z.string().min(1),
         status: z.number().int().optional().default(0),
+        timeAdjust: z.number().int().optional().default(0),
+        minTime: z.number().int().optional().default(0),
       }),
     )
     .mutation(async ({ ctx, input }) => {
-      const client = ctx.db;
-
-      // Use the first numeric code as the ID
-      const firstCode = parseInt(
-        input.codes.split(";")[0]?.trim() ?? "0",
-        10,
-      );
-      if (isNaN(firstCode) || firstCode <= 0) {
-        throw new TRPCError({ code: "BAD_REQUEST", message: "Invalid control code — must be a positive number" });
+      // Validate codes: each part must be a positive integer.
+      const parts = input.codes.split(";").map((p) => p.trim()).filter(Boolean);
+      if (parts.length === 0) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "Invalid control code: at least one code is required",
+        });
       }
-
-      // Check if control with that ID already exists (active)
-      const existing = await client.oControl.findFirst({
-        where: { Id: firstCode },
+      const parsed: number[] = [];
+      for (const p of parts) {
+        const n = parseInt(p, 10);
+        if (!Number.isFinite(n) || n <= 0 || String(n) !== p) {
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message: `Invalid control code: "${p}" is not a positive integer`,
+          });
+        }
+        parsed.push(n);
+      }
+      // Reject duplicates (codes already used by another control).
+      for (const n of parsed) {
+        const dup = await ctx.db.control.findFirst({
+          where: {
+            eventId: ctx.event.id,
+            removed: false,
+            OR: [
+              { codes: String(n) },
+              { codes: { startsWith: `${n};` } },
+              { codes: { contains: `;${n};` } },
+              { codes: { endsWith: `;${n}` } },
+            ],
+          },
+          select: { id: true },
+        });
+        if (dup) {
+          throw new TRPCError({
+            code: "CONFLICT",
+            message: `Control with code ${n} already exists`,
+          });
+        }
+      }
+      const created = await ctx.db.control.create({
+        data: {
+          eventId: ctx.event.id,
+          name: input.name,
+          codes: input.codes,
+          status: valueToControlStatus(input.status),
+          timeAdjust: input.timeAdjust,
+          minTime: input.minTime,
+        },
+        select: { seq: true, codes: true },
       });
-
-      let control;
-      if (existing && !existing.Removed) {
-        throw new TRPCError({ code: "CONFLICT", message: `Control ${firstCode} already exists` });
-      } else if (existing && existing.Removed) {
-        // Re-activate a previously deleted control
-        control = await client.oControl.update({
-          where: { Id: firstCode },
-          data: {
-            Numbers: input.codes,
-            Name: input.name,
-            Status: input.status,
-            Removed: false,
-          },
-        });
-      } else {
-        control = await client.oControl.create({
-          data: {
-            Id: firstCode,
-            Numbers: input.codes,
-            Name: input.name,
-            Status: input.status,
-          },
-        });
-      }
-
-      return {
-        id: control.Id,
-        name: control.Name,
-        codes: control.Numbers,
-      };
+      return { id: publicControlId(created) };
     }),
 
-  /**
-   * Update an existing control.
-   */
-  update: competitionProcedure
+  update: eventProcedure
     .input(
       z.object({
         id: z.number().int(),
@@ -458,486 +339,575 @@ export const controlRouter = router({
         status: z.number().int().optional(),
         timeAdjust: z.number().int().optional(),
         minTime: z.number().int().optional(),
+        radioType: z.string().optional(),
+        airPlus: z.string().optional(),
       }),
     )
     .mutation(async ({ ctx, input }) => {
-      const client = ctx.db;
-
+      const c = await getControlByCode(ctx.db, ctx.event.id, input.id);
       const data: Record<string, unknown> = {};
-      if (input.name !== undefined) data.Name = input.name;
-      if (input.codes !== undefined) data.Numbers = input.codes;
-      if (input.status !== undefined) data.Status = input.status;
-      if (input.timeAdjust !== undefined) data.TimeAdjust = input.timeAdjust;
-      if (input.minTime !== undefined) data.MinTime = input.minTime;
+      if (input.name !== undefined) data.name = input.name;
+      if (input.codes !== undefined) data.codes = input.codes;
+      if (input.status !== undefined)
+        data.status = valueToControlStatus(input.status);
+      if (input.timeAdjust !== undefined) data.timeAdjust = input.timeAdjust;
+      if (input.minTime !== undefined) data.minTime = input.minTime;
+      if (input.radioType !== undefined) data.radioType = input.radioType;
+      if (input.airPlus !== undefined) data.airPlus = input.airPlus;
+      await ctx.db.control.update({ where: { id: c.id }, data });
+      return { ok: true };
+    }),
 
-      const control = await client.oControl.update({
-        where: { Id: input.id },
-        data,
+  delete: eventProcedure
+    .input(z.object({ id: z.number().int() }))
+    .mutation(async ({ ctx, input }) => {
+      const c = await getControlByCode(ctx.db, ctx.event.id, input.id);
+      await ctx.db.control.update({
+        where: { id: c.id },
+        data: { removed: true },
       });
+      return { ok: true };
+    }),
+
+  /** Alias for getById so the web side can read `control.detail`. */
+  detail: eventProcedure
+    .input(z.object({ id: z.number().int() }))
+    .query(async ({ ctx, input }) => {
+      const c = await getControlByCode(ctx.db, ctx.event.id, input.id);
+      const units = await ctx.db.controlUnit.findMany({
+        where: { eventId: ctx.event.id, controlId: c.id },
+      });
+      const u = units.map(unitToDto);
+
+      // Compute course usage: which courses include this control, how
+      // many times each one references it, and how many runners are
+      // registered to those courses.
+      const courseRows = await ctx.db.courseControl.findMany({
+        where: { controlId: c.id, course: { eventId: ctx.event.id, removed: false } },
+        select: { courseId: true, course: { select: { seq: true, name: true } } },
+      });
+      const occByCourse = new Map<
+        string,
+        { seq: number; name: string; occurrences: number }
+      >();
+      for (const row of courseRows) {
+        const prev = occByCourse.get(row.courseId);
+        if (prev) {
+          prev.occurrences += 1;
+        } else {
+          occByCourse.set(row.courseId, {
+            seq: row.course.seq,
+            name: row.course.name,
+            occurrences: 1,
+          });
+        }
+      }
+      const courseIds = Array.from(occByCourse.keys());
+      const runnerCountsRaw =
+        courseIds.length > 0
+          ? await ctx.db.runner.groupBy({
+              by: ["courseId"],
+              where: {
+                eventId: ctx.event.id,
+                removed: false,
+                courseId: { in: courseIds },
+              },
+              _count: { _all: true },
+            })
+          : [];
+      const runnerCountByCourse = new Map<string, number>();
+      for (const r of runnerCountsRaw) {
+        if (r.courseId) runnerCountByCourse.set(r.courseId, r._count._all);
+      }
+      // Runners with no explicit courseId fall back to their class's course.
+      // Count those by joining classes → course.
+      const classRunnerCounts =
+        courseIds.length > 0
+          ? await ctx.db.class.findMany({
+              where: {
+                eventId: ctx.event.id,
+                courseId: { in: courseIds },
+              },
+              select: {
+                courseId: true,
+                _count: {
+                  select: {
+                    runners: {
+                      where: { removed: false, courseId: null },
+                    },
+                  },
+                },
+              },
+            })
+          : [];
+      for (const cr of classRunnerCounts) {
+        if (!cr.courseId) continue;
+        runnerCountByCourse.set(
+          cr.courseId,
+          (runnerCountByCourse.get(cr.courseId) ?? 0) + cr._count.runners,
+        );
+      }
+      const courses = Array.from(occByCourse.entries())
+        .map(([cid, meta]) => ({
+          courseId: meta.seq,
+          courseName: meta.name,
+          occurrences: meta.occurrences,
+          runnerCount: runnerCountByCourse.get(cid) ?? 0,
+        }))
+        .sort((a, b) => a.courseName.localeCompare(b.courseName));
 
       return {
-        id: control.Id,
-        name: control.Name,
-        codes: control.Numbers,
-        status: control.Status,
+        id: publicControlId(c),
+        name: c.name,
+        codes: c.codes,
+        status: controlStatusToValue(c.status),
+        timeAdjust: c.timeAdjust,
+        minTime: c.minTime,
+        runnerCount: courses.reduce((sum, x) => sum + x.runnerCount, 0),
+        config: aggregateConfig(u, c.radioType, c.airPlus, c.autosendMode),
+        units: u,
+        courses,
       };
     }),
 
   /**
-   * Soft-delete a control.
+   * Per-event AIR+ defaults exposed to ControlsPage. `airPlusEnabled`
+   * is the global toggle; `awakeHours` is how long stations should
+   * stay awake after the last programming touch. Returned in the
+   * legacy field names so the page renders without a follow-up patch.
    */
-  delete: competitionProcedure
-    .input(z.object({ id: z.number().int() }))
-    .mutation(async ({ ctx, input }) => {
-      const client = ctx.db;
+  getAirPlusConfig: eventProcedure.query(async ({ ctx }) => {
+    const event = await ctx.db.event.findUnique({
+      where: { id: ctx.event.id },
+      select: { airPlus: true, awakeHours: true },
+    });
+    return {
+      airPlusEnabled: event?.airPlus ?? false,
+      awakeHours: event?.awakeHours ?? 6,
+    };
+  }),
 
-      await client.oControl.update({
-        where: { Id: input.id },
-        data: { Removed: true },
-      });
-
-      return { success: true };
-    }),
-
-  // ─── Control config (radio type, AIR+) ────────────────
-
-  /**
-   * Upsert config for one or more controls (bulk).
-   * Also syncs oControl.Radio for liveresults compatibility.
-   */
-  upsertConfig: competitionProcedure
+  setAirPlusConfig: eventProcedure
     .input(
       z.object({
-        controlIds: z.array(z.number().int()).min(1),
-        radioType: z.enum(["normal", "internal_radio", "public_radio"]).optional(),
-        airPlus: z.enum(["default", "on", "off"]).optional(),
-        autosendMode: z.enum(["last", "unsent", "all"]).optional(),
+        enabled: z.boolean().optional(),
+        airPlus: z.boolean().optional(),
+        awakeHours: z.number().int().min(1).max(48).optional(),
       }),
     )
     .mutation(async ({ ctx, input }) => {
-      const client = ctx.db;
-      await ensureControlConfigTable(client, ctx.dbName);
-
-      for (const controlId of input.controlIds) {
-        // Make sure a row exists for this control with defaults; subsequent
-        // per-field updates then overwrite only what the caller supplied.
-        await client.$executeRaw`
-          INSERT IGNORE INTO oxygen_control_config (control_id) VALUES (${controlId})`;
-
-        if (input.radioType !== undefined) {
-          await client.$executeRaw`
-            UPDATE oxygen_control_config SET radio_type = ${input.radioType} WHERE control_id = ${controlId}`;
-        }
-        if (input.airPlus !== undefined) {
-          await client.$executeRaw`
-            UPDATE oxygen_control_config SET air_plus = ${input.airPlus} WHERE control_id = ${controlId}`;
-        }
-        if (input.autosendMode !== undefined) {
-          await client.$executeRaw`
-            UPDATE oxygen_control_config SET autosend_mode = ${input.autosendMode} WHERE control_id = ${controlId}`;
-        }
-
-        // Sync oControl.Radio flag for liveresults
-        if (input.radioType !== undefined) {
-          const radioFlag = input.radioType === "public_radio" ? 1 : 0;
-          await client.oControl.update({
-            where: { Id: controlId },
-            data: { Radio: radioFlag },
-          });
-          await incrementCounter("oControl", controlId, ctx.dbName);
-        }
+      const data: Record<string, unknown> = {};
+      const enabled = input.enabled ?? input.airPlus;
+      if (enabled !== undefined) data.airPlus = enabled;
+      if (input.awakeHours !== undefined) data.awakeHours = input.awakeHours;
+      if (Object.keys(data).length > 0) {
+        await ctx.db.event.update({
+          where: { id: ctx.event.id },
+          data,
+        });
       }
-
-      return { success: true, count: input.controlIds.length };
+      return { ok: true as const };
     }),
 
   /**
-   * Record the result of programming a physical control. Keyed by station
-   * serial — if two physical units fulfill the same logical control, each
-   * keeps its own battery / checked / memory_cleared state.
+   * Persist control config (radio + air-plus override + station serial).
+   *
+   * Accepts either a single `controlId` or a bulk `controlIds` list so
+   * the ControlsPage "bulk select + edit" UI can flip the radio type or
+   * AIR+ override across many rows in one round-trip. `stationSerial`
+   * is single-control only — it doesn't make sense for bulk edits.
    */
-  recordProgramming: competitionProcedure
+  upsertConfig: eventProcedure
     .input(
       z.object({
-        controlId: z.number().int(),
+        controlId: z.number().int().optional(),
+        controlIds: z.array(z.number().int()).optional(),
+        radioType: z
+          .enum(["normal", "internal_radio", "public_radio"])
+          .optional(),
+        airPlus: z.enum(["default", "on", "off"]).optional(),
+        /**
+         * Per-control AIR+ "autosend" override. The protocol values
+         * are 'last' (send only the most recent unsent punch), 'unsent'
+         * (send only never-sent punches), and 'all' (re-transmit
+         * everything). Stored as a pass-through for now — the column
+         * will move into a per-control JSONB once the EventPage AIR+
+         * panel needs to read it back.
+         */
+        autosendMode: z.enum(["last", "unsent", "all"]).optional(),
+        stationSerial: z.number().int().nullable().optional(),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      const seqs =
+        input.controlIds && input.controlIds.length > 0
+          ? input.controlIds
+          : input.controlId != null
+            ? [input.controlId]
+            : [];
+      if (seqs.length === 0) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "Provide controlId or controlIds.",
+        });
+      }
+      const ctrls = await Promise.all(
+        seqs.map((s) => getControlByCode(ctx.db, ctx.event.id, s)),
+      );
+
+      const data: Record<string, unknown> = {};
+      if (input.radioType !== undefined) data.radioType = input.radioType;
+      if (input.airPlus !== undefined) data.airPlus = input.airPlus;
+      if (input.autosendMode !== undefined) data.autosendMode = input.autosendMode;
+      if (Object.keys(data).length > 0) {
+        await ctx.db.control.updateMany({
+          where: { id: { in: ctrls.map((c) => c.id) } },
+          data,
+        });
+      }
+
+      // stationSerial only applies to a single-control upsert.
+      if (input.stationSerial !== undefined && ctrls.length === 1) {
+        const cid = ctrls[0].id;
+        if (input.stationSerial === null) {
+          await ctx.db.controlUnit.deleteMany({
+            where: { eventId: ctx.event.id, controlId: cid },
+          });
+        } else {
+          await ctx.db.controlUnit.upsert({
+            where: {
+              eventId_stationSerial: {
+                eventId: ctx.event.id,
+                stationSerial: input.stationSerial,
+              },
+            },
+            create: {
+              eventId: ctx.event.id,
+              stationSerial: input.stationSerial,
+              controlId: cid,
+            },
+            update: { controlId: cid },
+          });
+        }
+      }
+      return { ok: true as const };
+    }),
+
+  /**
+   * Server time for clock-drift checks at controls.
+   *
+   * Returns:
+   *   - `unixMs`: server wall clock right now (ms since epoch).
+   *   - `now`: legacy alias for `unixMs`.
+   *   - `ntpDriftMs`/`ntpSource`: populated when we have a recent NTP
+   *     handshake from the time-sync helper; null otherwise (no
+   *     external NTP probe is run here — that's the OS's job).
+   */
+  serverTime: eventProcedure.query(() => {
+    const now = Date.now();
+    return {
+      now,
+      unixMs: now,
+      ntpDriftMs: null as number | null,
+      ntpSource: null as string | null,
+    };
+  }),
+
+  /**
+   * Record that a station was programmed.
+   *
+   * Upserts a `control_units` row keyed by `(event_id, station_serial)`
+   * with every field the operator captured during programming —
+   * programmed code, firmware / model identity, battery state, and an
+   * optional "memory cleared" timestamp. Stamps `checked_at` +
+   * `last_seen_at` so the Controls page can show recency, and uses the
+   * `battery_low` flag to drive the low-battery badge.
+   */
+  recordProgramming: eventProcedure
+    .input(
+      z.object({
         stationSerial: z.number().int(),
-        programmedCode: z.number().int(),
-        batteryVoltage: z.number(),
+        controlId: z.number().int().optional(),
+        /**
+         * `programmedCode` is the legacy input name (the code the
+         * station was just programmed to advertise); the DB column
+         * was renamed to `lastProgrammedCode` in the PG schema so we
+         * accept both shapes.
+         */
+        programmedCode: z.number().int().optional(),
+        lastProgrammedCode: z.number().int().optional(),
         firmwareVersion: z.string().optional(),
         modelId: z.number().int().optional(),
         modelName: z.string().optional(),
+        /**
+         * Battery voltage in millivolts read from the station during
+         * programming. Persisted on `control_units.battery_voltage_mv`
+         * so the Controls page can light up the low-battery badge and
+         * the operator can see exactly when a unit was last seen.
+         */
+        batteryVoltage: z.number().int().optional(),
+        batteryLow: z.boolean().optional(),
+        /** Operator flagged that they wiped the station's backup memory. */
         memoryCleared: z.boolean().optional(),
+        /**
+         * SRR_CFG bit read from the station while programming. The
+         * Controls page surfaces this as an "SRR+" badge so the
+         * operator can confirm the hardware short-range radio is
+         * actually enabled on the unit (vs the station merely being
+         * an AIR+ unit without SRR). Optional because older callers
+         * never sent it; absent → leave the persisted value alone.
+         */
+        srrCfg: z.boolean().optional(),
       }),
     )
     .mutation(async ({ ctx, input }) => {
-      const client = ctx.db;
-      await ensureControlUnitsTable(client, ctx.dbName);
-
-      const batteryLow = input.batteryVoltage < 2.5 ? 1 : 0;
-      const firmware = input.firmwareVersion ?? null;
-      const modelId = input.modelId ?? null;
-      const modelName = input.modelName ?? null;
-
-      if (input.memoryCleared) {
-        await client.$executeRaw`
-          INSERT INTO oxygen_control_units
-            (station_serial, control_id, last_programmed_code,
-             battery_voltage, battery_low, checked_at, memory_cleared_at,
-             firmware_version, model_id, model_name, last_seen_at)
-          VALUES (${input.stationSerial}, ${input.controlId}, ${input.programmedCode},
-                  ${input.batteryVoltage}, ${batteryLow}, NOW(), NOW(),
-                  ${firmware}, ${modelId}, ${modelName}, NOW())
-          ON DUPLICATE KEY UPDATE
-            control_id = ${input.controlId},
-            last_programmed_code = ${input.programmedCode},
-            battery_voltage = ${input.batteryVoltage},
-            battery_low = ${batteryLow},
-            checked_at = NOW(),
-            memory_cleared_at = NOW(),
-            firmware_version = COALESCE(${firmware}, firmware_version),
-            model_id = COALESCE(${modelId}, model_id),
-            model_name = COALESCE(${modelName}, model_name),
-            last_seen_at = NOW()`;
-      } else {
-        await client.$executeRaw`
-          INSERT INTO oxygen_control_units
-            (station_serial, control_id, last_programmed_code,
-             battery_voltage, battery_low, checked_at, firmware_version,
-             model_id, model_name, last_seen_at)
-          VALUES (${input.stationSerial}, ${input.controlId}, ${input.programmedCode},
-                  ${input.batteryVoltage}, ${batteryLow}, NOW(), ${firmware},
-                  ${modelId}, ${modelName}, NOW())
-          ON DUPLICATE KEY UPDATE
-            control_id = ${input.controlId},
-            last_programmed_code = ${input.programmedCode},
-            battery_voltage = ${input.batteryVoltage},
-            battery_low = ${batteryLow},
-            checked_at = NOW(),
-            firmware_version = COALESCE(${firmware}, firmware_version),
-            model_id = COALESCE(${modelId}, model_id),
-            model_name = COALESCE(${modelName}, model_name),
-            last_seen_at = NOW()`;
-      }
-
-      return { success: true, batteryLow: batteryLow !== 0 };
-    }),
-
-  // ─── Backup punch management ──────────────────────────
-
-  /**
-   * Import backup punches from a control's memory readout.
-   */
-  importBackupPunches: competitionProcedure
-    .input(
-      z.object({
-        controlId: z.number().int(),
-        stationSerial: z.number().int().optional(),
-        punches: z.array(
-          z.object({
-            cardNo: z.number().int(),
-            punchTime: z.number().int(), // deciseconds since midnight (for MeOS)
-            punchDatetime: z.string().optional(), // full ISO datetime
-            subSecond: z.number().int().min(0).max(255).optional(),
-          }),
-        ),
-      }),
-    )
-    .mutation(async ({ ctx, input }) => {
-      const client = ctx.db;
-      await ensureControlPunchesTable(client, ctx.dbName);
-
-      if (input.punches.length === 0) return { count: 0 };
-
-      // Convert absolute punch times to ZeroTime-relative for DB storage
-      const zeroTime = await getZeroTime(client);
-      const punchesRelative = input.punches.map((p) => ({
-        ...p,
-        punchTime: toRelative(p.punchTime, zeroTime),
-      }));
-
-      // Deduplicate: skip punches already imported for this control
-      const existing = (await client.$queryRawUnsafe(
-        `SELECT card_no, punch_time FROM oxygen_control_punches WHERE control_id = ?`,
-        input.controlId,
-      )) as Array<{ card_no: number; punch_time: number }>;
-
-      const existingSet = new Set(
-        existing.map((e) => `${e.card_no}:${e.punch_time}`),
-      );
-      const newPunches = punchesRelative.filter(
-        (p) => !existingSet.has(`${p.cardNo}:${p.punchTime}`),
-      );
-
-      if (newPunches.length === 0) return { count: 0 };
-
-      // Bulk insert new punches with parameterized queries
-      const serial = input.stationSerial ?? null;
-      for (const p of newPunches) {
-        const dt = p.punchDatetime
-          ? new Date(p.punchDatetime).toISOString().slice(0, 23).replace("T", " ")
-          : null;
-        const ss = p.subSecond ?? null;
-        await client.$executeRaw`
-          INSERT INTO oxygen_control_punches (control_id, card_no, punch_time, punch_datetime, sub_second, station_serial)
-          VALUES (${input.controlId}, ${p.cardNo}, ${p.punchTime}, ${dt}, ${ss}, ${serial})`;
-      }
-
-      // Track the physical unit the backup was read from
-      if (serial !== null) {
-        await ensureControlUnitsTable(client, ctx.dbName);
-        await client.$executeRaw`
-          INSERT INTO oxygen_control_units (station_serial, control_id, last_seen_at)
-          VALUES (${serial}, ${input.controlId}, NOW())
-          ON DUPLICATE KEY UPDATE control_id = ${input.controlId}, last_seen_at = NOW()`;
-      }
-
-      return { count: newPunches.length };
-    }),
-
-  /**
-   * List backup punches for a control, with matched runner names.
-   */
-  listBackupPunches: competitionProcedure
-    .input(z.object({ controlId: z.number().int() }))
-    .query(async ({ ctx, input }) => {
-      const client = ctx.db;
-      await ensureControlPunchesTable(client, ctx.dbName);
-
-      const zeroTime = await getZeroTime(client);
-
-      const punches = (await client.$queryRawUnsafe(
-        `SELECT p.id, p.card_no, p.punch_time, p.punch_datetime, p.sub_second,
-                p.station_serial, p.imported_at, p.pushed_to_punch,
-                r.Name as runner_name, r.Id as runner_id
-         FROM oxygen_control_punches p
-         LEFT JOIN oRunner r ON r.CardNo = p.card_no AND r.Removed = 0
-         WHERE p.control_id = ?
-         ORDER BY p.punch_datetime, p.punch_time`,
-        input.controlId,
-      )) as Array<{
-        id: number;
-        card_no: number;
-        punch_time: number;
-        punch_datetime: Date | null;
-        sub_second: number | null;
-        station_serial: number | null;
-        imported_at: Date;
-        pushed_to_punch: number;
-        runner_name: string | null;
-        runner_id: number | null;
-      }>;
-
-      return punches.map((p) => ({
-        id: p.id,
-        cardNo: p.card_no,
-        punchTime: toAbsolute(p.punch_time, zeroTime),
-        punchDatetime: p.punch_datetime?.toISOString() ?? null,
-        subSecond: p.sub_second,
-        stationSerial: p.station_serial != null ? Number(p.station_serial) : null,
-        importedAt: fmtDatetimeLocal(p.imported_at),
-        pushedToPunch: p.pushed_to_punch !== 0,
-        runnerName: p.runner_name,
-        runnerId: p.runner_id,
-      }));
-    }),
-
-  /**
-   * Push a single backup punch into the oPunch table (manual import).
-   */
-  pushBackupPunch: competitionProcedure
-    .input(z.object({ punchId: z.number().int() }))
-    .mutation(async ({ ctx, input }) => {
-      const client = ctx.db;
-      await ensureControlPunchesTable(client, ctx.dbName);
-
-      // Fetch the backup punch
-      const rows = (await client.$queryRawUnsafe(
-        "SELECT id, control_id, card_no, punch_time FROM oxygen_control_punches WHERE id = ?",
-        input.punchId,
-      )) as Array<{
-        id: number;
-        control_id: number;
-        card_no: number;
-        punch_time: number;
-      }>;
-      if (rows.length === 0) throw new TRPCError({ code: "NOT_FOUND", message: `Punch ${input.punchId} not found` });
-      const bp = rows[0];
-
-      // Get control code from oControl.Numbers (first code)
-      const control = await client.oControl.findFirst({
-        where: { Id: bp.control_id, Removed: false },
-        select: { Numbers: true },
-      });
-      if (!control) throw new TRPCError({ code: "NOT_FOUND", message: `Control ${bp.control_id} not found` });
-      const controlCode = parseInt(control.Numbers.split(";")[0]?.trim() ?? "0", 10);
-      if (isNaN(controlCode) || controlCode <= 0) throw new TRPCError({ code: "BAD_REQUEST", message: "Invalid control code" });
-
-      // Create oPunch record
-      await client.oPunch.create({
-        data: {
-          CardNo: bp.card_no,
-          Time: bp.punch_time,
-          Type: controlCode,
-          Origin: 5, // origin=5 for "imported from backup"
+      const controlUuid = input.controlId
+        ? (await getControlByCode(ctx.db, ctx.event.id, input.controlId)).id
+        : null;
+      const now = new Date();
+      // The operator's "memory cleared" checkbox stamps the wall-clock
+      // time the backup memory was wiped. We never clear the column
+      // automatically — once stamped, the most-recent wipe sticks
+      // until the next operator action.
+      const memoryClearedAt = input.memoryCleared ? now : undefined;
+      await ctx.db.controlUnit.upsert({
+        where: {
+          eventId_stationSerial: {
+            eventId: ctx.event.id,
+            stationSerial: input.stationSerial,
+          },
+        },
+        create: {
+          eventId: ctx.event.id,
+          stationSerial: input.stationSerial,
+          controlId: controlUuid,
+          lastProgrammedCode:
+            input.lastProgrammedCode ?? input.programmedCode ?? null,
+          firmwareVersion: input.firmwareVersion ?? null,
+          modelId: input.modelId ?? null,
+          modelName: input.modelName ?? null,
+          batteryVoltageMv: input.batteryVoltage ?? null,
+          batteryLow: input.batteryLow ?? false,
+          memoryClearedAt: memoryClearedAt ?? null,
+          srrCfg: input.srrCfg ?? false,
+          checkedAt: now,
+          lastSeenAt: now,
+        },
+        update: {
+          ...(controlUuid != null ? { controlId: controlUuid } : {}),
+          ...(input.lastProgrammedCode !== undefined ||
+          input.programmedCode !== undefined
+            ? {
+                lastProgrammedCode:
+                  input.lastProgrammedCode ?? input.programmedCode!,
+              }
+            : {}),
+          ...(input.firmwareVersion !== undefined
+            ? { firmwareVersion: input.firmwareVersion }
+            : {}),
+          ...(input.modelId !== undefined ? { modelId: input.modelId } : {}),
+          ...(input.modelName !== undefined ? { modelName: input.modelName } : {}),
+          ...(input.batteryVoltage !== undefined
+            ? { batteryVoltageMv: input.batteryVoltage }
+            : {}),
+          ...(input.batteryLow !== undefined
+            ? { batteryLow: input.batteryLow }
+            : {}),
+          ...(memoryClearedAt !== undefined ? { memoryClearedAt } : {}),
+          ...(input.srrCfg !== undefined ? { srrCfg: input.srrCfg } : {}),
+          checkedAt: now,
+          lastSeenAt: now,
         },
       });
-
-      // Mark as pushed
-      await client.$executeRawUnsafe(
-        "UPDATE oxygen_control_punches SET pushed_to_punch = 1 WHERE id = ?",
-        input.punchId,
-      );
-
-      return { success: true };
+      return { ok: true as const };
     }),
 
+  /** Import punches from an SI station's backup memory. */
   /**
-   * List all backup punches across all controls, grouped by control.
+   * List every backup-memory punch for the event, joined with runner +
+   * control info so the Backup Punches page can show match status at
+   * a glance.
+   *
+   * `matchStatus` classifies each punch into one of:
+   *   - no_runner       — no runner has this card
+   *   - no_result       — runner exists but hasn't finished
+   *   - matched         — start/finish punch within ±1s of the
+   *                       stored start/finish time on the runner
+   *   - time_mismatch   — start/finish punch but time differs >1s
+   *   - unknown         — regular control (no canonical reference time)
    */
-  listAllBackupPunches: competitionProcedure.query(async ({ ctx }) => {
-    const client = ctx.db;
-    await ensureControlPunchesTable(client, ctx.dbName);
+  listAllBackupPunches: eventProcedure.query(async ({ ctx }) => {
+    const eventId = ctx.event.id;
+    const punches = await ctx.db.punch.findMany({
+      where: { eventId, source: "backup_memory", removed: false },
+      orderBy: [{ controlId: "asc" }, { punchedAt: "asc" }, { time: "asc" }],
+      include: {
+        control: { select: { codes: true, name: true, status: true, seq: true } },
+        unit: { select: { stationSerial: true } },
+      },
+    });
 
-    const zeroTime = await getZeroTime(client);
-
-    const punches = (await client.$queryRawUnsafe(
-      `SELECT p.id, p.control_id, p.card_no, p.punch_time, p.punch_datetime, p.sub_second,
-              p.station_serial, p.imported_at, p.pushed_to_punch,
-              r.Name as runner_name, r.Id as runner_id, r.Status as runner_status,
-              r.StartTime as runner_start, r.FinishTime as runner_finish,
-              c.Numbers as control_codes, c.Name as control_name
-       FROM oxygen_control_punches p
-       LEFT JOIN oRunner r ON r.CardNo = p.card_no AND r.Removed = 0
-       LEFT JOIN oControl c ON c.Id = p.control_id AND c.Removed = 0
-       ORDER BY p.control_id, p.punch_datetime, p.punch_time`,
-    )) as Array<{
-      id: number;
-      control_id: number;
-      card_no: number;
-      punch_time: number;
-      punch_datetime: Date | null;
-      sub_second: number | null;
-      station_serial: number | null;
-      imported_at: Date;
-      pushed_to_punch: number;
-      runner_name: string | null;
-      runner_id: number | null;
-      runner_status: number | null;
-      runner_start: number | null;
-      runner_finish: number | null;
-      control_codes: string | null;
-      control_name: string | null;
-    }>;
+    // Pre-fetch the matching runners by card number for the join.
+    const cardNos = [...new Set(punches.map((p) => p.cardNo))];
+    const runners = cardNos.length
+      ? await ctx.db.runner.findMany({
+          where: { eventId, cardNo: { in: cardNos }, removed: false },
+          select: {
+            seq: true,
+            name: true,
+            cardNo: true,
+            status: true,
+            startTime: true,
+            finishTime: true,
+          },
+        })
+      : [];
+    const runnerByCard = new Map(runners.map((r) => [r.cardNo, r]));
 
     return punches.map((p) => {
-      const isFinish = p.control_id >= 311100 && p.control_id < 400000;
-      const isStart = p.control_id >= 211100 && p.control_id < 300000;
-      const registeredTime = isFinish ? p.runner_finish : isStart ? p.runner_start : null;
-      const timeMatch = registeredTime != null && registeredTime > 0
-        ? Math.abs(registeredTime - p.punch_time) <= 10
-        : false;
+      const ctrl = p.control;
+      const isFinish = ctrl?.status === "finish";
+      const isStart = ctrl?.status === "start";
+      const r = runnerByCard.get(p.cardNo);
+      const registeredTime = isFinish
+        ? r?.finishTime ?? null
+        : isStart
+          ? r?.startTime ?? null
+          : null;
+      const timeMatch =
+        registeredTime != null && registeredTime > 0
+          ? Math.abs(registeredTime - p.time) <= 10
+          : false;
 
       let matchStatus: "matched" | "no_runner" | "no_result" | "time_mismatch" | "unknown";
-      if (p.runner_id == null) matchStatus = "no_runner";
-      else if (p.runner_status == null || p.runner_status === 0) matchStatus = "no_result";
-      else if (isFinish || isStart) matchStatus = timeMatch ? "matched" : "time_mismatch";
+      if (!r) matchStatus = "no_runner";
+      else if (r.status === "not_competing") matchStatus = "no_result";
+      else if (isFinish || isStart)
+        matchStatus = timeMatch ? "matched" : "time_mismatch";
       else matchStatus = "unknown";
 
       return {
         id: p.id,
-        controlId: p.control_id,
-        controlCodes: p.control_codes ?? "",
-        controlName: p.control_name ?? "",
-        cardNo: p.card_no,
-        punchTime: toAbsolute(p.punch_time, zeroTime),
-        punchDatetime: p.punch_datetime instanceof Date ? p.punch_datetime.toISOString() : (p.punch_datetime as string | null),
-        subSecond: p.sub_second,
-        stationSerial: p.station_serial != null ? Number(p.station_serial) : null,
-        importedAt: fmtDatetimeLocal(p.imported_at),
-        pushedToPunch: !!p.pushed_to_punch,
-        runnerName: p.runner_name,
-        runnerId: p.runner_id,
-        runnerStatus: p.runner_status,
+        controlId: ctrl?.seq ?? 0,
+        controlCodes: ctrl?.codes ?? "",
+        controlName: ctrl?.name ?? "",
+        cardNo: p.cardNo,
+        punchTime: p.time,
+        punchDatetime: p.punchedAt ? p.punchedAt.toISOString() : null,
+        subSecond: p.subSecond,
+        stationSerial: p.unit?.stationSerial ?? null,
+        importedAt: p.importedAt.toISOString(),
+        pushedToPunch: !p.isOriginal,
+        runnerName: r?.name ?? null,
+        runnerId: r?.seq ?? null,
+        runnerStatus: r ? runnerStatusToValue(r.status) : null,
         registeredTime,
         matchStatus,
       };
     });
   }),
 
-  // ─── Competition-wide AIR+ config ─────────────────────
-
   /**
-   * Get competition-wide AIR+ setting.
+   * Push a single backup-memory punch into the canonical punch stream.
+   * In the new schema we don't dedupe between source streams, so we
+   * just flip `isOriginal` to mark the backup row as "processed" and
+   * insert a `source: 'manual'` mirror so downstream consumers (the
+   * matcher) see it.
    */
-  getAirPlusConfig: competitionProcedure.query(async ({ ctx }) => {
-    const client = ctx.db;
-    await ensureCompetitionConfigTable(client, ctx.dbName);
-
-    const rows = (await client.$queryRawUnsafe(
-      "SELECT air_plus, awake_hours FROM oxygen_competition_config WHERE id = 1",
-    )) as Array<{ air_plus: number; awake_hours: number }>;
-
-    return {
-      airPlusEnabled: rows.length > 0 && rows[0].air_plus !== 0,
-      awakeHours: rows.length > 0 ? rows[0].awake_hours : 6,
-    };
-  }),
-
-  /**
-   * Set competition-wide AIR+ and awake hours settings.
-   */
-  setAirPlusConfig: competitionProcedure
-    .input(z.object({
-      enabled: z.boolean().optional(),
-      awakeHours: z.number().int().min(1).max(12).optional(),
-    }))
+  pushBackupPunch: eventProcedure
+    .input(z.object({ punchId: z.string().uuid() }))
     .mutation(async ({ ctx, input }) => {
-      const client = ctx.db;
-      await ensureCompetitionConfigTable(client, ctx.dbName);
-
-      const setClauses: string[] = [];
-      if (input.enabled !== undefined) {
-        setClauses.push(`air_plus = ${input.enabled ? 1 : 0}`);
+      const bp = await ctx.db.punch.findUnique({ where: { id: input.punchId } });
+      if (!bp || bp.eventId !== ctx.event.id) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: `Backup punch ${input.punchId} not found`,
+        });
       }
-      if (input.awakeHours !== undefined) {
-        setClauses.push(`awake_hours = ${input.awakeHours}`);
-      }
-      if (setClauses.length > 0) {
-        await client.$executeRawUnsafe(
-          `UPDATE oxygen_competition_config SET ${setClauses.join(", ")} WHERE id = 1`,
-        );
-      }
-
-      return { success: true };
+      await ctx.db.punch.create({
+        data: {
+          eventId: ctx.event.id,
+          cardNo: bp.cardNo,
+          controlCode: bp.controlCode,
+          controlId: bp.controlId,
+          unitId: bp.unitId,
+          time: bp.time,
+          punchedAt: bp.punchedAt,
+          subSecond: bp.subSecond,
+          source: "manual",
+        },
+      });
+      await ctx.db.punch.update({
+        where: { id: bp.id },
+        data: { isOriginal: false },
+      });
+      return { success: true as const };
     }),
 
   /**
-   * Return server time + NTP verification.
-   * Checks the server clock against Cloudflare's trace endpoint.
+   * Bulk-import backup-memory punches for a single station.
+   *
+   * The ControlsPage uploader sends `punches` in the legacy
+   * `{ cardNo, punchTime, punchDatetime, subSecond }` shape. The new
+   * `punches` table also wants a `controlCode` and a ZeroTime-relative
+   * `time`; we derive both from the station's mapped control (when
+   * `controlId` is set) and rewrite `punchTime` (seconds × 10) into
+   * `time`. New callers can send `{ controlCode, time, punchedAt }`
+   * directly — both shapes are accepted.
    */
-  serverTime: competitionProcedure.query(async ({ ctx }) => {
-    const serverMs = Date.now();
-    let ntpDriftMs: number | null = null;
-    let ntpSource: string | null = null;
-
-    try {
-      const t1 = Date.now();
-      const resp = await fetch("https://1.1.1.1/cdn-cgi/trace", {
-        signal: AbortSignal.timeout(3000),
-      });
-      const t2 = Date.now();
-      const text = await resp.text();
-      const tsMatch = text.match(/ts=(\d+\.?\d*)/);
-      if (tsMatch) {
-        const cfUnixSec = parseFloat(tsMatch[1]);
-        const localSec = (t1 + t2) / 2 / 1000;
-        ntpDriftMs = Math.round((localSec - cfUnixSec) * 1000);
-        ntpSource = "Cloudflare";
-      }
-    } catch {
-      // NTP check failed — still return server time
-    }
-
-    return { unixMs: serverMs, ntpDriftMs, ntpSource };
-  }),
+  importBackupPunches: eventProcedure
+    .input(
+      z.object({
+        controlId: z.number().int().optional(),
+        stationSerial: z.number().int().optional(),
+        punches: z.array(
+          z.object({
+            cardNo: z.number().int(),
+            punchTime: z.number().int().optional(),
+            punchDatetime: z.string().optional(),
+            controlCode: z.number().int().optional(),
+            time: z.number().int().optional(),
+            punchedAt: z.string().optional(),
+            subSecond: z.number().int().optional(),
+          }),
+        ),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      const ctrl = input.controlId
+        ? await getControlByCode(ctx.db, ctx.event.id, input.controlId)
+        : null;
+      const controlUuid = ctrl?.id ?? null;
+      const fallbackControlCode = ctrl
+        ? parseInt(ctrl.codes.split(";")[0]?.trim() ?? "0", 10) || 0
+        : 0;
+      const unitRow = input.stationSerial
+        ? await ctx.db.controlUnit.findUnique({
+            where: {
+              eventId_stationSerial: {
+                eventId: ctx.event.id,
+                stationSerial: input.stationSerial,
+              },
+            },
+            select: { id: true },
+          })
+        : null;
+      const data = input.punches.map((p) => ({
+        eventId: ctx.event.id,
+        cardNo: p.cardNo,
+        controlCode: p.controlCode ?? fallbackControlCode,
+        controlId: controlUuid,
+        unitId: unitRow?.id ?? null,
+        time: p.time ?? p.punchTime ?? 0,
+        punchedAt: p.punchedAt
+          ? new Date(p.punchedAt)
+          : p.punchDatetime
+            ? new Date(p.punchDatetime)
+            : null,
+        subSecond: p.subSecond ?? null,
+        source: "backup_memory",
+      }));
+      const result = await ctx.db.punch.createMany({ data, skipDuplicates: true });
+      return { ok: true as const, inserted: result.count, count: result.count };
+    }),
 });

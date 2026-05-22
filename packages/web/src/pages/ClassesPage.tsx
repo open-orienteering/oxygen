@@ -90,7 +90,7 @@ export function ClassesPage() {
 
     bulkUpdateMutation.mutate({
       ids: Array.from(selection.selected),
-      data,
+      ...data,
     });
   };
 
@@ -178,7 +178,10 @@ export function ClassesPage() {
       sortIndex: (i + 1) * 10,
     }));
 
-    reorderMutation.mutate({ items: updates });
+    reorderMutation.mutate({
+      orderedIds: reordered.map((c) => c.id),
+    });
+    void updates;
   };
 
   return (
@@ -573,7 +576,7 @@ function ClassInlineDetail({ classId }: { classId: number }) {
 
   const handleCourseChange = (ids: number[]) => {
     setEditCourseIds(ids);
-    updateMutation.mutate({ id: classId, courseIds: ids });
+    updateMutation.mutate({ id: classId, courseId: ids[0] ?? null });
   };
 
   return (
@@ -865,7 +868,7 @@ function CreateClassForm({
     if (!name.trim()) return;
     createMutation.mutate({
       name: name.trim(),
-      courseIds,
+      courseId: courseIds[0] ?? undefined,
       sex,
       sortIndex: parseInt(sortIndex, 10) || 0,
     });

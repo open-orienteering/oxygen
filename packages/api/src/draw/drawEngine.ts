@@ -1,6 +1,10 @@
 /**
  * Draw engine — orchestrates the multi-class draw by combining
  * the corridor optimizer with per-class draw algorithms.
+ *
+ * The engine speaks **per-event integer seqs** publicly (matching the
+ * `@oxygen/shared` `ClassDrawConfig.classId` shape and what the web
+ * panel passes in), and resolves seq → UUID at the DB boundary.
  */
 
 import type { PrismaClient } from "@prisma/client";
@@ -19,105 +23,126 @@ import {
   simultaneousDraw,
   type DrawRunner,
 } from "./algorithms.js";
-import {
-  optimizeStartTimes,
-  type ClassCourseInfo,
-} from "./optimizer.js";
+import { optimizeStartTimes, type ClassCourseInfo } from "./optimizer.js";
+import { valueToRunnerStatus } from "../statusConvert.js";
 
 interface ClassData {
-  classId: number;
+  classSeq: number;
+  classUuid: string;
   className: string;
-  courseId: number;
+  courseSeq: number; // 0 if class has no course
+  courseUuid: string | null;
   courseName: string;
+  /** Up to 5 first-control codes, used for course-overlap detection. */
   initialControls: number[];
+  /** UUID-keyed runner records, ready for the draw algorithm. */
   runners: DrawRunner[];
 }
 
-/**
- * Load all data needed for the draw from the database.
- */
+const withdrawnEnums = WITHDRAWN_STATUSES.map(valueToRunnerStatus);
+
 async function loadClassData(
-  client: PrismaClient,
+  db: PrismaClient,
+  eventId: bigint,
   classConfigs: ClassDrawConfig[],
 ): Promise<{ classes: ClassData[]; warnings: string[] }> {
   const warnings: string[] = [];
-  const classIds = classConfigs.map((c) => c.classId);
+  const classSeqs = classConfigs.map((c) => c.classId);
 
-  const dbClasses = await client.oClass.findMany({
-    where: { Id: { in: classIds }, Removed: false },
-  });
-  const classMap = new Map(dbClasses.map((c) => [c.Id, c]));
-
-  const dbCourses = await client.oCourse.findMany({
-    where: { Removed: false },
-  });
-  const courseMap = new Map(dbCourses.map((c) => [c.Id, c]));
-
-  // Withdrawn entries (Cancel) are not part of the draw — they aren't
-  // running and shouldn't occupy a slot in the start grid.
-  const dbRunners = await client.oRunner.findMany({
-    where: {
-      Class: { in: classIds },
-      Removed: false,
-      Status: { notIn: [...WITHDRAWN_STATUSES] },
+  const dbClasses = await db.class.findMany({
+    where: { eventId, seq: { in: classSeqs }, removed: false },
+    include: {
+      course: {
+        select: {
+          id: true,
+          seq: true,
+          name: true,
+          courseControls: {
+            orderBy: { position: "asc" },
+            take: 5,
+            include: { control: { select: { codes: true } } },
+          },
+        },
+      },
     },
-    orderBy: { StartNo: "asc" },
+  });
+  const classBySeq = new Map(dbClasses.map((c) => [c.seq, c]));
+
+  const dbRunners = await db.runner.findMany({
+    where: {
+      eventId,
+      classId: { in: dbClasses.map((c) => c.id) },
+      removed: false,
+      status: { notIn: withdrawnEnums },
+    },
+    orderBy: { startNo: "asc" },
+    select: {
+      id: true,
+      name: true,
+      clubName: true,
+      eventorClubId: true,
+      startNo: true,
+      rank: true,
+      classId: true,
+    },
   });
 
-  const dbClubs = await client.oClub.findMany({
-    where: { Removed: false },
-    select: { Id: true, Name: true },
-  });
-  const clubMap = new Map(dbClubs.map((c) => [c.Id, c.Name]));
-
-  const runnersByClass = new Map<number, DrawRunner[]>();
+  const runnersByClassUuid = new Map<string, DrawRunner[]>();
   for (const r of dbRunners) {
-    const list = runnersByClass.get(r.Class) ?? [];
+    if (!r.classId) continue;
+    const list = runnersByClassUuid.get(r.classId) ?? [];
+    // Club key: prefer eventor_club_id; fall back to a stable hash of
+    // the free-text name so clubless / non-Eventor entries still get
+    // grouped together for the separation pass.
+    const clubKey = r.eventorClubId
+      ? Number(r.eventorClubId)
+      : r.clubName
+        ? -hashString(r.clubName.toLowerCase())
+        : 0;
     list.push({
-      id: r.Id,
-      name: r.Name,
-      clubId: r.Club,
-      clubName: clubMap.get(r.Club) ?? "",
-      startNo: r.StartNo,
-      rank: r.Rank,
+      id: r.id, // UUID
+      name: r.name,
+      clubId: clubKey,
+      clubName: r.clubName,
+      startNo: r.startNo,
+      rank: r.rank,
     });
-    runnersByClass.set(r.Class, list);
+    runnersByClassUuid.set(r.classId, list);
   }
 
   const classes: ClassData[] = [];
   for (const config of classConfigs) {
-    const cls = classMap.get(config.classId);
+    const cls = classBySeq.get(config.classId);
     if (!cls) {
       warnings.push(`Class ${config.classId} not found`);
       continue;
     }
-
-    const runners = runnersByClass.get(config.classId) ?? [];
+    const runners = runnersByClassUuid.get(cls.id) ?? [];
     if (runners.length === 0) {
-      warnings.push(`Class "${cls.Name}" has no runners`);
+      warnings.push(`Class "${cls.name}" has no runners`);
     }
-
-    const course = courseMap.get(cls.Course);
-    const initialControls = course
-      ? course.Controls.split(";")
-          .map((s) => parseInt(s, 10))
-          .filter((n) => !isNaN(n) && n > 0)
-          .slice(0, 5)
-      : [];
-
-    // Warn about runners without club assignment
+    const initialControls: number[] = [];
+    if (cls.course) {
+      for (const cc of cls.course.courseControls) {
+        const code = parseInt((cc.control.codes ?? "").split(";")[0] ?? "0", 10);
+        if (!isNaN(code) && code > 0) initialControls.push(code);
+      }
+    }
     const noClub = runners.filter((r) => r.clubId === 0);
     if (noClub.length > 0) {
       warnings.push(
-        `${noClub.length} runner${noClub.length > 1 ? "s" : ""} in "${cls.Name}" ha${noClub.length > 1 ? "ve" : "s"} no club (club separation may be less effective)`,
+        `${noClub.length} runner${noClub.length > 1 ? "s" : ""} in "${cls.name}" ha${
+          noClub.length > 1 ? "ve" : "s"
+        } no club (club separation may be less effective)`,
       );
     }
-
     classes.push({
-      classId: config.classId,
-      className: cls.Name,
-      courseId: cls.Course,
-      courseName: course?.Name ?? "",
+      classSeq: cls.seq,
+      classUuid: cls.id,
+      className: cls.name,
+      courseSeq: cls.course?.seq ?? 0,
+      courseUuid: cls.course?.id ?? null,
+      courseName: cls.course?.name ?? "",
       initialControls,
       runners,
     });
@@ -126,24 +151,35 @@ async function loadClassData(
   return { classes, warnings };
 }
 
+/** Tiny non-cryptographic hash for free-text club-name keys. */
+function hashString(s: string): number {
+  let h = 0;
+  for (let i = 0; i < s.length; i++) {
+    h = (h * 31 + s.charCodeAt(i)) | 0;
+  }
+  return Math.abs(h) || 1;
+}
+
 /**
  * Execute the draw algorithm and return a preview (no DB writes).
+ * The returned `entries[].runnerId` is the runner's UUID — the router
+ * decides what shape to expose to the UI.
  */
 export async function generateDrawPreview(
-  client: PrismaClient,
+  db: PrismaClient,
+  eventId: bigint,
   classConfigs: ClassDrawConfig[],
   settings: DrawSettings,
-): Promise<DrawPreviewResult> {
-  const { classes, warnings } = await loadClassData(client, classConfigs);
+): Promise<DrawPreviewResultInternal> {
+  const { classes, warnings } = await loadClassData(db, eventId, classConfigs);
 
-  // Build optimizer input
-  const configMap = new Map(classConfigs.map((c) => [c.classId, c]));
+  const configBySeq = new Map(classConfigs.map((c) => [c.classId, c]));
   const courseInfos: ClassCourseInfo[] = classes.map((cls) => {
-    const config = configMap.get(cls.classId)!;
+    const config = configBySeq.get(cls.classSeq)!;
     return {
-      classId: cls.classId,
+      classId: cls.classSeq,
       runnerCount: cls.runners.length,
-      courseId: cls.courseId,
+      courseId: cls.courseSeq,
       initialControls: cls.initialControls,
       interval: config.interval,
       fixedFirstStart: config.firstStart,
@@ -152,28 +188,27 @@ export async function generateDrawPreview(
     };
   });
 
-  // Run optimizer to get corridor assignments and first-start times
   const corridorAssignments = optimizeStartTimes(courseInfos, settings);
-  const assignmentMap = new Map(corridorAssignments.map((a) => [a.classId, a]));
+  const assignmentMap = new Map(
+    corridorAssignments.map((a) => [a.classId, a]),
+  );
 
-  // For each class, run the draw algorithm and assign start times
-  const resultClasses: DrawPreviewClass[] = [];
+  const resultClasses: DrawPreviewClassInternal[] = [];
   let globalStartNo = 1;
 
-  // Sort classes by computed first start for start number assignment
-  const sortedClasses = [...classes].sort((a, b) => {
-    const aStart = assignmentMap.get(a.classId)?.computedFirstStart ?? 0;
-    const bStart = assignmentMap.get(b.classId)?.computedFirstStart ?? 0;
-    return aStart - bStart;
+  // Sort by computed first start so start numbers go in chronological order.
+  const sorted = [...classes].sort((a, b) => {
+    const ai = assignmentMap.get(a.classSeq)?.computedFirstStart ?? 0;
+    const bi = assignmentMap.get(b.classSeq)?.computedFirstStart ?? 0;
+    return ai - bi;
   });
 
-  for (const cls of sortedClasses) {
-    const config = configMap.get(cls.classId)!;
-    const assignment = assignmentMap.get(cls.classId);
+  for (const cls of sorted) {
+    const config = configBySeq.get(cls.classSeq)!;
+    const assignment = assignmentMap.get(cls.classSeq);
     const firstStart = assignment?.computedFirstStart ?? settings.firstStart;
     const corridor = assignment?.corridor ?? 0;
 
-    // Run the appropriate draw algorithm
     let ordered: DrawRunner[];
     switch (config.method) {
       case "clubSeparation":
@@ -191,29 +226,41 @@ export async function generateDrawPreview(
         break;
     }
 
-    // Assign start times and start numbers
-    const entries: DrawPreviewEntry[] = ordered.map((runner, index) => ({
-      runnerId: runner.id,
-      name: runner.name,
-      clubName: runner.clubName,
+    const entries: DrawPreviewEntryInternal[] = ordered.map((r, idx) => ({
+      runnerId: r.id, // UUID
+      name: r.name,
+      clubName: r.clubName,
       startTime:
         config.method === "simultaneous"
           ? firstStart
-          : firstStart + index * config.interval,
-      startNo: globalStartNo + index,
+          : firstStart + idx * config.interval,
+      startNo: globalStartNo + idx,
     }));
 
     resultClasses.push({
-      classId: cls.classId,
+      classId: cls.classSeq,
+      classUuid: cls.classUuid,
       className: cls.className,
       courseName: cls.courseName,
       corridor,
       computedFirstStart: firstStart,
       entries,
     });
-
     globalStartNo += ordered.length;
   }
 
   return { classes: resultClasses, warnings };
+}
+
+/** Internal preview entry — keeps the UUID alongside the public seq. */
+export interface DrawPreviewEntryInternal extends Omit<DrawPreviewEntry, "runnerId"> {
+  /** Runner UUID. */
+  runnerId: string;
+}
+export interface DrawPreviewClassInternal extends Omit<DrawPreviewClass, "entries"> {
+  classUuid: string;
+  entries: DrawPreviewEntryInternal[];
+}
+export interface DrawPreviewResultInternal extends Omit<DrawPreviewResult, "classes"> {
+  classes: DrawPreviewClassInternal[];
 }

@@ -17,7 +17,8 @@ interface ExtraPunch {
   controlCode: number;
   time: number;
   source: "card" | "free";
-  freePunchId?: number;
+  /** Punch UUID (string in the new schema). */
+  freePunchId?: string;
 }
 
 export interface PunchTableData {
@@ -52,8 +53,8 @@ interface PunchTableProps {
   compact?: boolean;
   dark?: boolean;
   onAddPunch?: (controlCode: number, time: number) => void;
-  onRemovePunch?: (punchId: number) => void;
-  onUpdatePunchTime?: (punchId: number, newTime: number) => void;
+  onRemovePunch?: (punchId: string | number) => void;
+  onUpdatePunchTime?: (punchId: string | number, newTime: number) => void;
   onUpdateStartTime?: (time: number) => void;
   onUpdateFinishTime?: (time: number) => void;
 }
@@ -348,8 +349,8 @@ function ControlRow({
   idx: number;
   editable: boolean;
   dark?: boolean;
-  onRemovePunch?: (punchId: number) => void;
-  onUpdatePunchTime?: (punchId: number, newTime: number) => void;
+  onRemovePunch?: (punchId: string | number) => void;
+  onUpdatePunchTime?: (punchId: string | number, newTime: number) => void;
 }) {
   const { t: tr } = useTranslation("race");
   const mode = ctrl.positionMode ?? "required";

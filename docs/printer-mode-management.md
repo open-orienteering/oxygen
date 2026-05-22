@@ -227,10 +227,11 @@ configure unique serials with Citizen's own utility if it ever matters.
 
 The plan originally called for a non-blocking notification at competition
 close listing pending restores. The Oxygen codebase doesn't have an
-obvious "competition session ended" hook (competitions stay registered in
-MeOSMain across sessions). We instead surface the warning whenever the
-operator opens Printer Settings; the persistent badge survives reloads and
-across operators on the same kiosk because it lives in `localStorage`.
+obvious "competition session ended" hook (events live as long-lived rows
+in `oxygen.events` and outlive any single operator session). We instead
+surface the warning whenever the operator opens Printer Settings; the
+persistent badge survives reloads and across operators on the same kiosk
+because it lives in `localStorage`.
 
 If a stronger notification is needed later, candidate insertion points are
 the `RecentCards` panel close flow or a new banner in the

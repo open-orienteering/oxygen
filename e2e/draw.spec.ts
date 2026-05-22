@@ -1,7 +1,5 @@
 import { test, expect } from "@playwright/test";
-import mysql from "mysql2/promise";
-import { readFileSync } from "fs";
-import { resolve } from "path";
+import { reseed } from "./helpers/reseed";
 
 async function selectCompetition(page: import("@playwright/test").Page) {
   await page.goto("/");
@@ -17,31 +15,11 @@ function tabButton(page: import("@playwright/test").Page, name: string) {
     .getByRole("link", { name, exact: true });
 }
 
+// Backwards-compat shim: the legacy draw.spec.ts reseeded via mysqldump.
+// Under the PG backend we just delegate to the shared `reseed()` helper
+// which wipes & rebuilds the three E2E events programmatically.
 async function reseedItestDb() {
-  const conn = await mysql.createConnection({
-    host: "localhost",
-    user: "meos",
-    database: "itest",
-    multipleStatements: true,
-  });
-  try {
-    // Drop only MeOS tables (o*) without dropping the database or oxygen_* tables.
-    // This keeps Prisma connections alive and preserves oxygen_* schema.
-    await conn.query("SET FOREIGN_KEY_CHECKS = 0");
-    const [rows] = await conn.query(
-      "SELECT TABLE_NAME FROM information_schema.TABLES WHERE TABLE_SCHEMA = 'itest' AND TABLE_NAME NOT LIKE 'oxygen\\_%'",
-    );
-    for (const row of rows as Array<{ TABLE_NAME: string }>) {
-      await conn.query(`DROP TABLE IF EXISTS \`${row.TABLE_NAME}\``);
-    }
-    await conn.query("SET FOREIGN_KEY_CHECKS = 1");
-
-    // Re-import seed data (recreates MeOS tables)
-    const seedSql = readFileSync(resolve(__dirname, "seed.sql"), "utf-8");
-    await conn.query(seedSql);
-  } finally {
-    await conn.end();
-  }
+  await reseed();
 }
 
 async function openDrawPanel(page: import("@playwright/test").Page) {

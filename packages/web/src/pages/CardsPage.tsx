@@ -84,7 +84,7 @@ export function CardsPage() {
     [dashboard.data, clubs.data],
   );
 
-  type Card = NonNullable<typeof cards.data>[number];
+  type Card = CardListItem;
 
   const comparators = useMemo(
     () => ({
@@ -418,6 +418,35 @@ function CardDetailPanel({ cardNo, onReturnToggled }: { cardNo: number; onReturn
   const d = detail.data;
   const cardType = d.cardType || (d.cardNo > 0 ? getCardType(d.cardNo) : "Unknown");
   const isSIAC = cardType === "SIAC";
+  // Narrow the JSONB `metadata` value to the shape the battery block
+  // consumes. The widening through `unknown` is needed because Prisma
+  // emits `JsonValue` here, which trips TS2589 if compared against the
+  // nested optional-prop type directly. Reading via a `.metadata as
+  // unknown` cast first avoids the deep-instantiation explosion.
+  const metadataForBattery: { batteryDate?: string; productionDate?: string } | null =
+    (d as { metadata: unknown }).metadata as
+      | { batteryDate?: string; productionDate?: string }
+      | null;
+  // Same dance for the readout's free-form ownerData JSONB.
+  const ownerData = (d as { ownerData: unknown }).ownerData as
+    | {
+        firstName?: string;
+        lastName?: string;
+        birthDate?: string;
+        nationality?: string;
+        sex?: string;
+        clubName?: string;
+        clubId?: number;
+        club?: string;
+        clubAddress?: string;
+        country?: string;
+        phone?: string;
+        email?: string;
+        street?: string;
+        city?: string;
+        zip?: string;
+      }
+    | null;
 
   return (
     <div className="bg-slate-50/50 border-t border-slate-200 p-5 space-y-5">
@@ -436,28 +465,28 @@ function CardDetailPanel({ cardNo, onReturnToggled }: { cardNo: number; onReturn
               <dt className="text-slate-500 w-20">{t("type")}:</dt>
               <dd><CardTypeBadge type={String(cardType)} /></dd>
             </div>
-            {(d.ownerData as any) && (
+            {ownerData && (
               <>
-                {((d.ownerData as any).firstName || (d.ownerData as any).lastName) && (
+                {(ownerData.firstName || ownerData.lastName) && (
                   <div className="flex gap-2">
                     <dt className="text-slate-500 w-20">{t("owner")}:</dt>
                     <dd>
-                      {[(d.ownerData as any).firstName, (d.ownerData as any).lastName]
+                      {[ownerData.firstName, ownerData.lastName]
                         .filter(Boolean)
                         .join(" ")}
                     </dd>
                   </div>
                 )}
-                {(d.ownerData as any).club && (
+                {ownerData.club && (
                   <div className="flex gap-2">
                     <dt className="text-slate-500 w-20">{t("club")}:</dt>
-                    <dd>{(d.ownerData as any).club}</dd>
+                    <dd>{ownerData.club}</dd>
                   </div>
                 )}
-                {(d.ownerData as any).country && (
+                {ownerData.country && (
                   <div className="flex gap-2">
                     <dt className="text-slate-500 w-20">{t("countryLabel")}:</dt>
-                    <dd>{(d.ownerData as any).country}</dd>
+                    <dd>{ownerData.country}</dd>
                   </div>
                 )}
               </>
@@ -630,7 +659,10 @@ function CardDetailPanel({ cardNo, onReturnToggled }: { cardNo: number; onReturn
 
       {/* Battery & Card Info (SIAC only) */}
       {isSIAC && (
-        <BatteryDetailBlock batteryVoltage={d.batteryVoltage} metadata={d.metadata as any} />
+        <BatteryDetailBlock
+          batteryVoltage={d.batteryVoltage}
+          metadata={metadataForBattery ?? undefined}
+        />
       )}
 
       {/* Current Readout */}

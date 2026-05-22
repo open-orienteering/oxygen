@@ -31,7 +31,8 @@ export function ClubLogo({
     staleTime: 5 * 60_000, // cache 5 min
   });
 
-  const resolvedEventorId = eventorId ?? (clubId ? logoMap.data?.[clubId] : undefined);
+  const resolvedEventorId =
+    eventorId ?? (clubId ? logoMap.data?.[String(clubId)] : undefined);
 
   if (!resolvedEventorId) return null;
 

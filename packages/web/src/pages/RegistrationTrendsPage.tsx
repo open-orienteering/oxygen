@@ -81,16 +81,16 @@ export function RegistrationTrendsPage() {
   >({});
 
   const fetchComparison = trpc.registrationTrends.fetchComparison.useMutation();
+  const fetchEntryHistory =
+    trpc.eventor.fetchEntryHistory.useMutation();
 
   const loadComparison = useCallback(
     async (selections: ComparisonSelection[], force = false) => {
       if (selections.length === 0) return;
-      const result = await fetchComparison.mutateAsync({
+
+      // 1) Read whatever's in the cache today.
+      const initial = await fetchComparison.mutateAsync({
         eventIds: selections.map((s) => s.id),
-        // Pass the picker's known race date so the cache stores the
-        // correct startDate. Without this, writeCache falls back to
-        // "first entry timestamp" which shifts the days-before-race
-        // axis by however long registration was open.
         eventMeta: selections.map((s) => ({
           id: s.id,
           startDate: s.date,
@@ -99,12 +99,45 @@ export function RegistrationTrendsPage() {
         })),
         force,
       });
+
+      // 2) Decide which ids need a live Eventor refetch. On a force
+      //    refresh we refetch everything; otherwise we only chase
+      //    rows that came back as "missing" so the page doesn't hit
+      //    Eventor on every click.
+      const idsToFetch = force
+        ? selections.map((s) => s.id)
+        : initial.events
+            .filter((e) => e.error === "missing")
+            .map((e) => e.eventId);
+
+      let final = initial;
+      if (idsToFetch.length > 0) {
+        try {
+          await fetchEntryHistory.mutateAsync({ eventIds: idsToFetch, force });
+          // Re-read the cache after the sync so the page picks up the
+          // freshly-populated rows.
+          final = await fetchComparison.mutateAsync({
+            eventIds: selections.map((s) => s.id),
+            eventMeta: selections.map((s) => ({
+              id: s.id,
+              startDate: s.date,
+              name: s.name,
+              organiserName: s.organiserName,
+            })),
+          });
+        } catch (err) {
+          // Auth / config errors surface as a trpc error — fall
+          // through and let the per-event `error: "missing"` markers
+          // tell the user what happened. We don't want to fail the
+          // whole page render here; the operator can re-try once
+          // they've configured an Eventor key.
+          console.warn("[trends] fetchEntryHistory failed:", err);
+        }
+      }
+
       setComparisonData((prev) => {
         const next = { ...prev };
-        for (const r of result.events) {
-          // Prefer the picker's known race date over whatever the cache
-          // returned — the cache may be a legacy row written with the
-          // old buggy startDate-from-first-entry placeholder.
+        for (const r of final.events) {
           const sel = selections.find((s) => s.id === r.eventId);
           next[r.eventId] = {
             entries: r.entries.map((e) => ({ at: e.at, classId: e.classId })),
@@ -115,7 +148,7 @@ export function RegistrationTrendsPage() {
         return next;
       });
     },
-    [fetchComparison],
+    [fetchComparison, fetchEntryHistory],
   );
 
   // Fetch entry timelines for any newly-added comparison events.
@@ -369,9 +402,11 @@ export function RegistrationTrendsPage() {
             <button
               onClick={() => loadComparison(comparisons, true)}
               className="text-xs text-blue-600 hover:text-blue-800 font-medium cursor-pointer"
-              disabled={fetchComparison.isPending}
+              disabled={fetchComparison.isPending || fetchEntryHistory.isPending}
             >
-              {fetchComparison.isPending ? t("refreshing") : t("refresh")}
+              {fetchComparison.isPending || fetchEntryHistory.isPending
+                ? t("refreshing")
+                : t("refresh")}
             </button>
           )}
         </div>
@@ -402,7 +437,8 @@ export function RegistrationTrendsPage() {
                         {cmpData?.error
                           ? " · " + t("comparisonError", { message: cmpData.error })
                           : ""}
-                        {!cmpData && fetchComparison.isPending
+                        {!cmpData &&
+                        (fetchComparison.isPending || fetchEntryHistory.isPending)
                           ? " · " + t("loading")
                           : ""}
                       </div>

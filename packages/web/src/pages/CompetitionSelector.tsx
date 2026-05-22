@@ -112,14 +112,8 @@ export function CompetitionSelector() {
                           <span className="text-slate-400 font-mono text-xs">
                             {comp.nameId}
                           </span>
-                          {comp.remoteHost && (
-                            <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-purple-100 text-purple-700 text-[10px] font-medium" title={t("remoteDatabase", { host: comp.remoteHost })}>
-                              <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 12h14M5 12a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v4a2 2 0 01-2 2M5 12a2 2 0 00-2 2v4a2 2 0 002 2h14a2 2 0 002-2v-4a2 2 0 00-2-2" />
-                              </svg>
-                              {comp.remoteHost}
-                            </span>
-                          )}
+                          {/* remoteHost badge dropped in the PG migration —
+                              all events live in the single oxygen database now. */}
                           {comp.annotation && (
                             <span className="text-slate-400">
                               {comp.annotation}
@@ -305,20 +299,17 @@ function CreateCompetitionForm({
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!name.trim()) return;
+    // Remote-DB / per-event dbName settings are gone in the PG schema —
+    // every event lives in the single oxygen schema.
+    void dbName;
+    void dbHost;
+    void dbPort;
+    void dbUser;
+    void dbPassword;
+    void useRemoteDb;
     createMutation.mutate({
       name: name.trim(),
       date,
-      dbName: dbName.trim() || undefined,
-      ...(useRemoteDb && dbHost.trim()
-        ? {
-          dbConnection: {
-            host: dbHost.trim(),
-            port: parseInt(dbPort, 10) || 3306,
-            user: dbUser.trim() || undefined,
-            password: dbPassword || undefined,
-          },
-        }
-        : {}),
     });
   };
 

@@ -4,8 +4,8 @@
  * Scenario: a runner was previously stamped Status=Cancel (21) by an
  * earlier sync that detected them as withdrawn. The next Eventor sync
  * snapshot has them back in entries (without a result yet). The sync
- * must reset Status to 0 (or 22 if entry.noTiming) so they show up
- * again as a regular pre-race entry.
+ * must reset Status to 0 (or 22 if the class is noTiming) so they
+ * show up again as a regular pre-race entry.
  *
  * The Eventor HTTP fetches are mocked at the module level so the test
  * exercises only the routers/eventor.ts merge logic against a real DB.
@@ -15,7 +15,9 @@ import { describe, it, expect, beforeAll, afterAll, vi } from "vitest";
 
 vi.mock("../../eventor.js", async () => {
   const actual =
-    await vi.importActual<typeof import("../../eventor.js")>("../../eventor.js");
+    await vi.importActual<typeof import("../../eventor.js")>(
+      "../../eventor.js",
+    );
   return {
     ...actual,
     fetchEventClasses: vi.fn(),
@@ -33,266 +35,234 @@ import {
   fetchEventClasses,
   fetchEntries,
   fetchResults,
+  type EventorEntry,
+  type EventorEventClass,
 } from "../../eventor.js";
-import { getSetting, setSetting } from "../../db.js";
-import { createTestDb, type TestDbContext } from "../helpers/test-db.js";
+import { setSetting } from "../../db.js";
+import { createTestEvent, disconnect } from "../helpers/test-db.js";
 import { makeCaller } from "../helpers/caller.js";
 import { eventorKeyStore } from "../../eventorKeyStore.js";
 
-let ctx: TestDbContext;
-const EVENTOR_EVENT_ID = 99001;
-const EVENTOR_CLASS_ID = 12345;
-const EVENTOR_PERSON_ID = 67890;
-
-// Snapshot the developer's real prod Eventor key so we can restore it.
-// This file shares MeOSMain with the running dev stack, so writing a
-// fake key without restoring would silently wipe the developer's
-// credentials on every integration run. (Mirrors the pattern in
-// registration-trends.test.ts.)
-let savedEventorKey: string | null = null;
+const EVENTOR_EVENT_ID = 99_001;
+const CLASS_BASE = 12_345;
+const PERSON_BASE = 67_890;
 
 beforeAll(async () => {
-  savedEventorKey = await getSetting("eventor_api_key");
-
-  ctx = await createTestDb("eventor_reentry");
-
-  // Stamp the test competition with an Eventor event ID so the sync
-  // mutation will find it.
-  await ctx.client.oEvent.updateMany({
-    where: { Removed: false },
-    data: { ExtId: BigInt(EVENTOR_EVENT_ID) },
-  });
-
-  // Configure a fake API key so requireApiKey() doesn't throw. The
-  // store caches per-process; reset its in-memory state so the new
-  // setting is read on the next call.
   await setSetting("eventor_api_key", "test-key");
   eventorKeyStore._resetForTests();
-}, 60000);
+}, 30_000);
 
 afterAll(async () => {
-  // Restore the snapshotted Eventor API key. `setSetting(..., null)`
-  // deletes the row when the original was empty/absent. Reset the
-  // in-memory keystore so the restored value is read next time.
-  await setSetting("eventor_api_key", savedEventorKey);
+  await setSetting("eventor_api_key", null);
   eventorKeyStore._resetForTests();
-  await ctx.cleanup();
-}, 30000);
+  await disconnect();
+}, 30_000);
+
+function makeClass(
+  classId: number,
+  name: string,
+  noTiming = false,
+): EventorEventClass {
+  return {
+    classId,
+    name,
+    shortName: name,
+    sex: "M",
+    lowAge: 0,
+    highAge: 0,
+    sequence: 1,
+    classType: "",
+    noTiming,
+  };
+}
+
+function makeEntry(
+  classId: number,
+  personId: number,
+  personName: string,
+  cardNo: number,
+  className: string,
+  noTiming = false,
+): EventorEntry {
+  return {
+    personName,
+    personId,
+    birthYear: 1990,
+    sex: "M",
+    nationality: "SWE",
+    organisationId: 0,
+    organisationName: "",
+    organisationShortName: "",
+    organisationCountry: "SWE",
+    classId,
+    className,
+    cardNo,
+    eventorEntryId: personId,
+    entryDate: 0,
+    entryTime: 0,
+    fee: 0,
+    paid: 0,
+    taxable: 0,
+    rankingScore: 0,
+    noTiming,
+  };
+}
 
 describe("eventor.sync re-entry status reset", () => {
-  it("resets a previously-cancelled runner back to Status=0 when they reappear in entries (no result)", async () => {
-    // Arrange: a runner that was withdrawn last sync. They have ExtId
-    // pointing at an Eventor person ID and Status=21 (Cancel).
-    const cls = await ctx.client.oClass.create({
-      data: {
-        Name: "H21",
-        Course: 0,
-        FirstStart: 0,
-        StartInterval: 0,
-        SortIndex: 1,
-        Removed: false,
-        Counter: 0,
-        FreeStart: 0,
-        ExtId: BigInt(EVENTOR_CLASS_ID),
-      },
-    });
+  it("resets Status from Cancel back to Unknown when a runner reappears in entries (no result)", async () => {
+    const ctx = await createTestEvent("evr-reset");
+    try {
+      // Link the event to an Eventor event so the sync mutation finds it.
+      await ctx.db.event.update({
+        where: { id: ctx.eventId },
+        data: { eventorEventId: BigInt(EVENTOR_EVENT_ID), eventorEnv: "prod" },
+      });
 
-    const runner = await ctx.client.oRunner.create({
-      data: {
-        Name: "Reinstated Runner",
-        CardNo: 700001,
-        Class: cls.Id,
-        Club: 0,
-        Status: 21, // Cancel — set by a prior withdrawn-detection sync
-        ExtId: BigInt(EVENTOR_PERSON_ID),
-        EntrySource: EVENTOR_EVENT_ID,
-        Removed: false,
-        Counter: 0,
-      },
-    });
+      // Seed a previously-cancelled runner. The sync looks up by
+      // `eventorPersonId`, so the row must carry it.
+      const cls = await ctx.db.class.create({
+        data: {
+          eventId: ctx.eventId,
+          name: "H21",
+          eventorId: BigInt(CLASS_BASE),
+        },
+      });
+      const runner = await ctx.db.runner.create({
+        data: {
+          eventId: ctx.eventId,
+          name: "Reinstated Runner",
+          cardNo: 700_001,
+          classId: cls.id,
+          status: "cancel",
+          eventorPersonId: BigInt(PERSON_BASE),
+          entrySource: EVENTOR_EVENT_ID,
+        },
+      });
 
-    // Mock Eventor responses: classes unchanged, entries contain the
-    // runner again (no result yet).
-    vi.mocked(fetchEventClasses).mockResolvedValue([
-      {
-        classId: EVENTOR_CLASS_ID,
-        name: "H21",
-        shortName: "H21",
-        sex: "M",
-        lowAge: 0,
-        highAge: 0,
-        sequence: 1,
-        classType: "",
-        noTiming: false,
-      },
-    ]);
-    vi.mocked(fetchEntries).mockResolvedValue([
-      {
-        personName: "Reinstated Runner",
-        personId: EVENTOR_PERSON_ID,
-        birthYear: 1990,
-        sex: "M",
-        nationality: "SWE",
-        organisationId: 0,
-        organisationName: "",
-        organisationShortName: "",
-        organisationCountry: "SWE",
-        classId: EVENTOR_CLASS_ID,
-        className: "H21",
-        cardNo: 700001,
-        eventorEntryId: 1,
-        entryDate: 0,
-        entryTime: 0,
-        fee: 0,
-        paid: 0,
-        taxable: 0,
-        rankingScore: 0,
-        noTiming: false,
-      },
-    ]);
-    vi.mocked(fetchResults).mockResolvedValue([]);
+      vi.mocked(fetchEventClasses).mockResolvedValue([
+        makeClass(CLASS_BASE, "H21"),
+      ]);
+      vi.mocked(fetchEntries).mockResolvedValue([
+        makeEntry(CLASS_BASE, PERSON_BASE, "Reinstated Runner", 700_001, "H21"),
+      ]);
+      vi.mocked(fetchResults).mockResolvedValue([]);
 
-    // Act: run the sync mutation.
-    const caller = makeCaller({ dbName: ctx.dbName });
-    await caller.eventor.sync();
+      const caller = makeCaller(ctx.event);
+      await caller.eventor.sync();
 
-    // Assert: the runner's status was reset back to 0.
-    const updated = await ctx.client.oRunner.findUnique({
-      where: { Id: runner.Id },
-    });
-    expect(updated?.Status).toBe(0);
+      const after = await ctx.db.runner.findUnique({
+        where: { id: runner.id },
+        select: { status: true },
+      });
+      // unknown (0) — they're back in the start list as a normal entry.
+      expect(after?.status).toBe("unknown");
+    } finally {
+      await ctx.cleanup();
+    }
   });
 
-  it("uses NoTiming (22) when the entry's class is no-timing", async () => {
-    const cls = await ctx.client.oClass.create({
-      data: {
-        Name: "Open No-Timing",
-        Course: 0,
-        FirstStart: 0,
-        StartInterval: 0,
-        SortIndex: 2,
-        Removed: false,
-        Counter: 0,
-        FreeStart: 0,
-        ExtId: BigInt(EVENTOR_CLASS_ID + 1),
-        NoTiming: 1,
-      },
-    });
+  it("uses NoTiming when the reinstated entry's class is no-timing", async () => {
+    const ctx = await createTestEvent("evr-notiming");
+    try {
+      await ctx.db.event.update({
+        where: { id: ctx.eventId },
+        data: { eventorEventId: BigInt(EVENTOR_EVENT_ID), eventorEnv: "prod" },
+      });
 
-    const runner = await ctx.client.oRunner.create({
-      data: {
-        Name: "Reinstated NoTiming",
-        CardNo: 700002,
-        Class: cls.Id,
-        Club: 0,
-        Status: 21,
-        ExtId: BigInt(EVENTOR_PERSON_ID + 1),
-        EntrySource: EVENTOR_EVENT_ID,
-        Removed: false,
-        Counter: 0,
-      },
-    });
+      const cls = await ctx.db.class.create({
+        data: {
+          eventId: ctx.eventId,
+          name: "Open No-Timing",
+          eventorId: BigInt(CLASS_BASE + 1),
+          noTiming: true,
+        },
+      });
+      const runner = await ctx.db.runner.create({
+        data: {
+          eventId: ctx.eventId,
+          name: "Reinstated NoTiming",
+          cardNo: 700_002,
+          classId: cls.id,
+          status: "cancel",
+          eventorPersonId: BigInt(PERSON_BASE + 1),
+          entrySource: EVENTOR_EVENT_ID,
+        },
+      });
 
-    vi.mocked(fetchEventClasses).mockResolvedValue([
-      {
-        classId: EVENTOR_CLASS_ID + 1,
-        name: "Open No-Timing",
-        shortName: "OnT",
-        sex: "B",
-        lowAge: 0,
-        highAge: 0,
-        sequence: 1,
-        classType: "",
-        noTiming: true,
-      },
-    ]);
-    vi.mocked(fetchEntries).mockResolvedValue([
-      {
-        personName: "Reinstated NoTiming",
-        personId: EVENTOR_PERSON_ID + 1,
-        birthYear: 1990,
-        sex: "M",
-        nationality: "SWE",
-        organisationId: 0,
-        organisationName: "",
-        organisationShortName: "",
-        organisationCountry: "SWE",
-        classId: EVENTOR_CLASS_ID + 1,
-        className: "Open No-Timing",
-        cardNo: 700002,
-        eventorEntryId: 2,
-        entryDate: 0,
-        entryTime: 0,
-        fee: 0,
-        paid: 0,
-        taxable: 0,
-        rankingScore: 0,
-        noTiming: true,
-      },
-    ]);
-    vi.mocked(fetchResults).mockResolvedValue([]);
+      vi.mocked(fetchEventClasses).mockResolvedValue([
+        makeClass(CLASS_BASE + 1, "Open No-Timing", true),
+      ]);
+      vi.mocked(fetchEntries).mockResolvedValue([
+        makeEntry(
+          CLASS_BASE + 1,
+          PERSON_BASE + 1,
+          "Reinstated NoTiming",
+          700_002,
+          "Open No-Timing",
+          true,
+        ),
+      ]);
+      vi.mocked(fetchResults).mockResolvedValue([]);
 
-    const caller = makeCaller({ dbName: ctx.dbName });
-    await caller.eventor.sync();
+      const caller = makeCaller(ctx.event);
+      await caller.eventor.sync();
 
-    const updated = await ctx.client.oRunner.findUnique({
-      where: { Id: runner.Id },
-    });
-    expect(updated?.Status).toBe(22);
+      const after = await ctx.db.runner.findUnique({
+        where: { id: runner.id },
+        select: { status: true },
+      });
+      // Class is no-timing → reinstated status is NoTiming (PG
+      // enum `no_timing`, RunnerStatus.NoTiming = 2).
+      expect(after?.status).toBe("no_timing");
+    } finally {
+      await ctx.cleanup();
+    }
   });
 
   it("preserves Cancel for a runner who is still missing from the snapshot", async () => {
-    const cls = await ctx.client.oClass.create({
-      data: {
-        Name: "Stays Withdrawn",
-        Course: 0,
-        FirstStart: 0,
-        StartInterval: 0,
-        SortIndex: 3,
-        Removed: false,
-        Counter: 0,
-        FreeStart: 0,
-        ExtId: BigInt(EVENTOR_CLASS_ID + 2),
-      },
-    });
+    const ctx = await createTestEvent("evr-stay");
+    try {
+      await ctx.db.event.update({
+        where: { id: ctx.eventId },
+        data: { eventorEventId: BigInt(EVENTOR_EVENT_ID), eventorEnv: "prod" },
+      });
 
-    const runner = await ctx.client.oRunner.create({
-      data: {
-        Name: "Stays Withdrawn Runner",
-        CardNo: 700003,
-        Class: cls.Id,
-        Club: 0,
-        Status: 21,
-        ExtId: BigInt(EVENTOR_PERSON_ID + 2),
-        EntrySource: EVENTOR_EVENT_ID,
-        Removed: false,
-        Counter: 0,
-      },
-    });
+      const cls = await ctx.db.class.create({
+        data: {
+          eventId: ctx.eventId,
+          name: "Stays Withdrawn",
+          eventorId: BigInt(CLASS_BASE + 2),
+        },
+      });
+      const runner = await ctx.db.runner.create({
+        data: {
+          eventId: ctx.eventId,
+          name: "Stays Withdrawn Runner",
+          cardNo: 700_003,
+          classId: cls.id,
+          status: "cancel",
+          eventorPersonId: BigInt(PERSON_BASE + 2),
+          entrySource: EVENTOR_EVENT_ID,
+        },
+      });
 
-    vi.mocked(fetchEventClasses).mockResolvedValue([
-      {
-        classId: EVENTOR_CLASS_ID + 2,
-        name: "Stays Withdrawn",
-        shortName: "SW",
-        sex: "M",
-        lowAge: 0,
-        highAge: 0,
-        sequence: 1,
-        classType: "",
-        noTiming: false,
-      },
-    ]);
-    // Snapshot has no entries / results for this person — they're still gone.
-    vi.mocked(fetchEntries).mockResolvedValue([]);
-    vi.mocked(fetchResults).mockResolvedValue([]);
+      vi.mocked(fetchEventClasses).mockResolvedValue([
+        makeClass(CLASS_BASE + 2, "Stays Withdrawn"),
+      ]);
+      // Snapshot has no entries/results for this person — they're still gone.
+      vi.mocked(fetchEntries).mockResolvedValue([]);
+      vi.mocked(fetchResults).mockResolvedValue([]);
 
-    const caller = makeCaller({ dbName: ctx.dbName });
-    await caller.eventor.sync();
+      const caller = makeCaller(ctx.event);
+      await caller.eventor.sync();
 
-    const updated = await ctx.client.oRunner.findUnique({
-      where: { Id: runner.Id },
-    });
-    expect(updated?.Status).toBe(21);
+      const after = await ctx.db.runner.findUnique({
+        where: { id: runner.id },
+        select: { status: true },
+      });
+      expect(after?.status).toBe("cancel");
+    } finally {
+      await ctx.cleanup();
+    }
   });
 });

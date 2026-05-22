@@ -1,171 +1,234 @@
+/**
+ * LiveResults router. Exposes the config + manual sync + status surface
+ * to the EventPage; the actual periodic push is owned by
+ * `liveResultsPusherManager` in `../liveresults.ts`, which the API
+ * boot wires through `reconcileEnabledPushers()` so a restart re-arms
+ * every event whose `liveresultsConfig.enabled` is true.
+ *
+ * Settings live in `events.liveresultsConfig` (JSONB) so we don't need
+ * a per-event settings table.
+ */
+
 import { z } from "zod";
-import { TRPCError } from "@trpc/server";
-import { router, competitionProcedure } from "../trpc.js";
-import { getSetting } from "../db.js";
+import { router, eventProcedure } from "../trpc.js";
 import {
-    ensureCompetition,
-    updateCompetitionMeta,
-    liveResultsPusher,
-    getLiveResultsPool,
-    syncAll,
-    loadConfig,
-    persistConfig,
+  ensureCompetition,
+  liveResultsPusherManager,
+  syncAll,
+  updateCompetitionMeta,
 } from "../liveresults.js";
 
+export interface LRConfig {
+  enabled: boolean;
+  tavid: number | null;
+  intervalSeconds: number;
+  country: string;
+  isPublic: boolean;
+  publicUrl: string;
+}
+
+const DEFAULT_CFG: LRConfig = {
+  enabled: false,
+  tavid: null,
+  intervalSeconds: 30,
+  country: "SE",
+  isPublic: false,
+  publicUrl: "",
+};
+
+function readConfig(
+  jsonb: unknown,
+  tavidColumn: number | null,
+): LRConfig {
+  const j = (jsonb ?? {}) as Partial<LRConfig>;
+  return {
+    enabled: j.enabled === true,
+    tavid: tavidColumn ?? j.tavid ?? null,
+    intervalSeconds:
+      typeof j.intervalSeconds === "number"
+        ? j.intervalSeconds
+        : DEFAULT_CFG.intervalSeconds,
+    country: typeof j.country === "string" ? j.country : DEFAULT_CFG.country,
+    isPublic: j.isPublic === true,
+    publicUrl: typeof j.publicUrl === "string" ? j.publicUrl : "",
+  };
+}
+
 export const liveresultsRouter = router({
-    /**
-     * Get current LiveResults config for the active competition.
-     */
-    getConfig: competitionProcedure.query(async ({ ctx }) => {
-        const nameId = ctx.dbName;
-        const config = await loadConfig(nameId);
-        const tavid = await getSetting(`liveresults_tavid_${nameId}`);
-        return {
-            ...config,
-            tavid: tavid ? parseInt(tavid, 10) : null,
-            publicUrl: tavid
-                ? `https://liveresultat.orientering.se/followfull.php?comp=${tavid}`
-                : null,
-        };
+  getConfig: eventProcedure.query(async ({ ctx }) => {
+    const event = await ctx.db.event.findUnique({
+      where: { id: ctx.event.id },
+      select: { liveresultsTavid: true, liveresultsConfig: true },
+    });
+    return readConfig(event?.liveresultsConfig, event?.liveresultsTavid ?? null);
+  }),
+
+  /**
+   * Live snapshot for the status indicator. `running` reflects whether
+   * the in-process push timer is currently armed for this event (not
+   * just whether `config.enabled` is true) — that distinction matters
+   * during boot-time reconciliation and after a failed `enable`.
+   */
+  getStatus: eventProcedure.query(async ({ ctx }) => {
+    const event = await ctx.db.event.findUnique({
+      where: { id: ctx.event.id },
+      select: { liveresultsTavid: true, liveresultsConfig: true },
+    });
+    const cfg = readConfig(
+      event?.liveresultsConfig,
+      event?.liveresultsTavid ?? null,
+    );
+    const status = liveResultsPusherManager.getStatus(ctx.event.id);
+    return {
+      running: status.running,
+      tavid: cfg.tavid,
+      publicUrl: cfg.publicUrl,
+      lastPush: status.lastPush,
+      pushCount: status.pushCount,
+      lastError: status.lastError,
+    };
+  }),
+
+  /**
+   * Save the operator-editable subset of the config.
+   *
+   * We deliberately don't include `enabled` here — toggling that goes
+   * through `enable` / `disable` so the EventPage UI can render an
+   * unambiguous toggle that only flips the boolean.
+   */
+  saveConfig: eventProcedure
+    .input(
+      z.object({
+        intervalSeconds: z.number().int().min(5).max(3600).optional(),
+        country: z.string().max(8).optional(),
+        isPublic: z.boolean().optional(),
+        tavid: z.number().int().nullable().optional(),
+        publicUrl: z.string().optional(),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      const existing = await ctx.db.event.findUnique({
+        where: { id: ctx.event.id },
+        select: { liveresultsTavid: true, liveresultsConfig: true },
+      });
+      const cfg = readConfig(
+        existing?.liveresultsConfig,
+        existing?.liveresultsTavid ?? null,
+      );
+      if (input.intervalSeconds !== undefined)
+        cfg.intervalSeconds = input.intervalSeconds;
+      if (input.country !== undefined) cfg.country = input.country;
+      if (input.isPublic !== undefined) cfg.isPublic = input.isPublic;
+      if (input.publicUrl !== undefined) cfg.publicUrl = input.publicUrl;
+      const data: Record<string, unknown> = { liveresultsConfig: cfg as never };
+      if (input.tavid !== undefined) data.liveresultsTavid = input.tavid;
+      await ctx.db.event.update({ where: { id: ctx.event.id }, data });
+      return { ok: true as const };
     }),
 
-    /**
-     * Save LiveResults configuration. Also updates the LiveResults competition
-     * metadata if a competition has already been created (tavid exists).
-     */
-    saveConfig: competitionProcedure
-        .input(
-            z.object({
-                intervalSeconds: z.number().int().min(5).max(300).optional(),
-                isPublic: z.boolean().optional(),
-                country: z.string().length(2).optional(),
-            }),
-        )
-        .mutation(async ({ ctx, input }) => {
-            const nameId = ctx.dbName;
-            const config = await loadConfig(nameId);
+  enable: eventProcedure.mutation(async ({ ctx }) => {
+    const existing = await ctx.db.event.findUnique({
+      where: { id: ctx.event.id },
+      select: {
+        liveresultsTavid: true,
+        liveresultsConfig: true,
+        name: true,
+        organizerName: true,
+      },
+    });
+    const cfg = readConfig(
+      existing?.liveresultsConfig,
+      existing?.liveresultsTavid ?? null,
+    );
 
-            if (input.intervalSeconds !== undefined) config.intervalSeconds = input.intervalSeconds;
-            if (input.isPublic !== undefined) config.isPublic = input.isPublic;
-            if (input.country !== undefined) config.country = input.country;
+    // Allocate a tavid lazily on first enable so the operator never
+    // has to know what it is. ensureCompetition is idempotent.
+    const tavid = await ensureCompetition(ctx.event.id);
+    cfg.tavid = tavid;
+    cfg.enabled = true;
+    await ctx.db.event.update({
+      where: { id: ctx.event.id },
+      data: { liveresultsConfig: cfg as never, liveresultsTavid: tavid },
+    });
 
-            await persistConfig(nameId, config);
+    // Keep the remote `login` row in sync with the latest event name +
+    // organizer + public flag before the timer starts pushing
+    // splitcontrols/results into it.
+    try {
+      await updateCompetitionMeta(tavid, {
+        compName: existing?.name,
+        organizer: existing?.organizerName ?? "",
+        isPublic: cfg.isPublic,
+        country: cfg.country,
+      });
+    } catch (err) {
+      console.error("[LiveResults] updateCompetitionMeta failed:", err);
+    }
 
-            // Update LiveResults metadata if competition already exists
-            const tavidStr = await getSetting(`liveresults_tavid_${nameId}`);
-            if (tavidStr) {
-                await updateCompetitionMeta(parseInt(tavidStr, 10), {
-                    isPublic: config.isPublic,
-                    country: config.country,
-                });
-            }
+    liveResultsPusherManager.start(ctx.event.id, tavid, cfg.intervalSeconds);
+    return { ok: true as const, tavid };
+  }),
 
-            return { success: true };
-        }),
+  disable: eventProcedure.mutation(async ({ ctx }) => {
+    const existing = await ctx.db.event.findUnique({
+      where: { id: ctx.event.id },
+      select: { liveresultsTavid: true, liveresultsConfig: true },
+    });
+    const cfg = readConfig(
+      existing?.liveresultsConfig,
+      existing?.liveresultsTavid ?? null,
+    );
+    cfg.enabled = false;
+    await ctx.db.event.update({
+      where: { id: ctx.event.id },
+      data: { liveresultsConfig: cfg as never },
+    });
+    liveResultsPusherManager.stop(ctx.event.id);
+    return { ok: true as const };
+  }),
 
-    /**
-     * Enable LiveResults sync.
-     * Creates the competition in LiveResults if it doesn't exist yet,
-     * then starts the interval pusher.
-     */
-    enable: competitionProcedure.mutation(async ({ ctx }) => {
-        const nameId = ctx.dbName;
+  /**
+   * Manual one-shot push. Bypasses the interval timer entirely so the
+   * operator can verify connectivity / data shape on demand. Returns
+   * the same `{ runners, results, splitcontrols }` shape the timer
+   * exposes via status.
+   */
+  pushNow: eventProcedure.mutation(async ({ ctx }) => {
+    const event = await ctx.db.event.findUnique({
+      where: { id: ctx.event.id },
+      select: { liveresultsTavid: true },
+    });
+    let tavid = event?.liveresultsTavid ?? null;
+    if (!tavid) {
+      tavid = await ensureCompetition(ctx.event.id);
+    }
+    const stats = await syncAll(tavid, ctx.event.id);
+    return {
+      ok: true as const,
+      message: "LiveResults push complete.",
+      stats,
+    };
+  }),
 
-        const config = await loadConfig(nameId);
-        const tavid = await ensureCompetition(nameId);
-
-        // Update meta with current config
-        await updateCompetitionMeta(tavid, {
-            isPublic: config.isPublic,
-            country: config.country,
-        });
-
-        config.enabled = true;
-        config.tavid = tavid;
-        await persistConfig(nameId, config);
-
-        liveResultsPusher.start(nameId, tavid, config.intervalSeconds);
-
-        return {
-            success: true,
-            tavid,
-            publicUrl: `https://liveresultat.orientering.se/followfull.php?comp=${tavid}`,
-        };
-    }),
-
-    /**
-     * Disable LiveResults sync (stops the interval timer for this competition).
-     */
-    disable: competitionProcedure.mutation(async ({ ctx }) => {
-        const nameId = ctx.dbName;
-
-        liveResultsPusher.stop(nameId);
-
-        const config = await loadConfig(nameId);
-        config.enabled = false;
-        await persistConfig(nameId, config);
-
-        return { success: true };
-    }),
-
-    /**
-     * Trigger an immediate sync (useful for testing).
-     */
-    pushNow: competitionProcedure.mutation(async ({ ctx }) => {
-        const nameId = ctx.dbName;
-
-        const tavidStr = await getSetting(`liveresults_tavid_${nameId}`);
-        if (!tavidStr) throw new TRPCError({ code: "PRECONDITION_FAILED", message: "LiveResults not enabled for this competition" });
-
-        const tavid = parseInt(tavidStr, 10);
-        const stats = await syncAll(tavid, nameId);
-        return { success: true, stats };
-    }),
-
-    /**
-     * Clear all remote LiveResults data (results, runners, splitcontrols)
-     * for this competition. Useful when a tavid was reused and has stale data.
-     * Optionally re-syncs fresh data immediately after clearing.
-     */
-    clearRemoteData: competitionProcedure.mutation(async ({ ctx }) => {
-        const nameId = ctx.dbName;
-
-        const tavidStr = await getSetting(`liveresults_tavid_${nameId}`);
-        if (!tavidStr) throw new TRPCError({ code: "PRECONDITION_FAILED", message: "LiveResults not enabled for this competition" });
-
-        const tavid = parseInt(tavidStr, 10);
-        const pool = await getLiveResultsPool();
-        const conn = await pool.getConnection();
-        try {
-            await conn.execute("DELETE FROM results WHERE tavid = ?", [tavid]);
-            await conn.execute("DELETE FROM runners WHERE tavid = ?", [tavid]);
-            await conn.execute("DELETE FROM splitcontrols WHERE tavid = ?", [tavid]);
-        } finally {
-            conn.release();
-        }
-
-        const stats = await syncAll(tavid, nameId);
-        return { success: true, cleared: true, resyncStats: stats };
-    }),
-
-    /**
-     * Get current pusher status (running, last push time, errors, etc.).
-     */
-    getStatus: competitionProcedure.query(async ({ ctx }) => {
-        const nameId = ctx.dbName;
-
-        const status = liveResultsPusher.getStatus(nameId);
-        // Persisted tavid is the source of truth for the public URL — the
-        // pusher's tavid is only set while the timer is actually running.
-        const tavidStr = await getSetting(`liveresults_tavid_${nameId}`);
-        const tavid = tavidStr ? parseInt(tavidStr, 10) : status.tavid;
-
-        return {
-            ...status,
-            tavid,
-            publicUrl: tavid
-                ? `https://liveresultat.orientering.se/followfull.php?comp=${tavid}`
-                : null,
-        };
+  /**
+   * Legacy alias kept for internal tooling that wants to write the raw
+   * JSON blob (e.g. tests that bypass `saveConfig`). EventPage doesn't
+   * call it; flag it as a thin pass-through.
+   */
+  setConfig: eventProcedure
+    .input(
+      z.object({
+        tavid: z.number().int().nullable().optional(),
+        config: z.record(z.string(), z.unknown()).nullable().optional(),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      const data: Record<string, unknown> = {};
+      if (input.tavid !== undefined) data.liveresultsTavid = input.tavid;
+      if (input.config !== undefined) data.liveresultsConfig = input.config;
+      if (Object.keys(data).length > 0) {
+        await ctx.db.event.update({ where: { id: ctx.event.id }, data });
+      }
+      return { ok: true as const };
     }),
 });

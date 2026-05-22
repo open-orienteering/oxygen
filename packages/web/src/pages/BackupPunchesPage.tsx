@@ -68,7 +68,7 @@ export function BackupPunchesPage() {
     onSuccess: () => allPunches.refetch(),
   });
 
-  const punches = (allPunches.data ?? []) as BackupPunch[];
+  const punches = (allPunches.data ?? []) as unknown as BackupPunch[];
 
   const anchors = useMemo(
     () => createBackupPunchAnchors((key) => t(key as never)),
