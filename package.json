@@ -11,8 +11,13 @@
     "test:coverage": "pnpm --filter './packages/*' test:coverage",
     "test:integration": "pnpm --filter @oxygen/api test:integration",
     "test:e2e": "playwright test",
+    "test:db:up": "docker compose -f docker-compose.test.yml up -d",
+    "test:db:down": "docker compose -f docker-compose.test.yml down -v",
     "db:generate": "pnpm --filter @oxygen/api db:generate",
     "db:push": "pnpm --filter @oxygen/api db:push",
+    "db:migrate": "pnpm --filter @oxygen/api db:migrate",
+    "db:migrate:dev": "pnpm --filter @oxygen/api db:migrate:dev",
+    "migrate:mysql-to-pg": "pnpm --filter @oxygen/api migrate:mysql-to-pg",
     "docs:screenshots": "tsx docs/screenshots/capture.ts",
     "showcase:load": "bash scripts/load-showcase.sh"
   },

@@ -313,8 +313,7 @@ interface RouteRow {
 
 interface RoutePreviewData {
   raceStartMs: number | null;
-  waypoints: { lat: number; lng: number; timeMs: number }[];
-  interruptions: number[];
+  waypoints: { lat: number; lng: number; t?: number }[];
   liveloxClassId: number | null;
   courseName: string | null;
 }
@@ -347,8 +346,12 @@ function ExpandedDetail({
       ? {
           color: "#e6194b",
           raceStartMs: preview.raceStartMs,
-          waypoints: preview.waypoints,
-          interruptions: preview.interruptions,
+          waypoints: preview.waypoints.map((w) => ({
+            lat: w.lat,
+            lng: w.lng,
+            timeMs: w.t ?? 0,
+          })),
+          interruptions: [] as number[],
           liveloxClassId: preview.liveloxClassId,
           runnerName: route.runnerName,
           courseName: preview.courseName,

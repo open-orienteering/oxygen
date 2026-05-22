@@ -1,104 +1,215 @@
+/**
+ * Card readout router.
+ *
+ * Stores raw card readouts, links them to runners, and produces a fully
+ * matched result via the @oxygen/shared matcher.
+ *
+ * `performReadout(db, eventId, zeroTime, runnerUuid)` is the canonical
+ * orchestrator — it loads runner + card + free punches + course, runs
+ * `matchPunchesToCourse`, derives status via `computeStatus`, and
+ * returns the legacy nested shape so the existing receipt printer and
+ * web UI keep working.
+ */
+
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
-import { router, competitionProcedure } from "../trpc.js";
-import { ensureReadoutTable, incrementCounter, getZeroTime } from "../db.js";
-import { toRelative, toAbsolute } from "../timeConvert.js";
-import {
-  RunnerStatus, TransferFlags, hasTransferFlag,
-  // Re-exported from @oxygen/shared — shared between server and client
-  parsePunches, computeReadId, computeMatchScore, parseCourseControls,
-  matchPunchesToCourse, computeStatus,
-  PUNCH_START, PUNCH_FINISH, PUNCH_CHECK,
-  meosFromVolts, voltsFromMeos,
-  type ParsedPunch, type ControlMatch,
-} from "@oxygen/shared";
+import { router, eventProcedure } from "../trpc.js";
 import type { PrismaClient } from "@prisma/client";
-import { pushToGoogleSheet } from "../sheetsBackup.js";
+import {
+  parsePunches,
+  matchPunchesToCourse,
+  computeStatus,
+  computeMatchScore,
+  RunnerStatus,
+  type ParsedPunch,
+  type ControlMatch,
+} from "@oxygen/shared";
+import { toAbsolute, toRelative } from "../timeConvert.js";
+import {
+  runnerStatusToValue,
+  valueToRunnerStatus,
+} from "../statusConvert.js";
 import { resolveCourseExpectedPositions } from "./course.js";
+import { pushToGoogleSheet } from "../sheetsBackup.js";
 
-// Re-export shared functions so existing imports from this file continue to work
+// Re-exports kept for backwards compatibility with code that imports
+// these from this file.
 export {
-  parsePunches, computeReadId, computeMatchScore, parseCourseControls,
-  matchPunchesToCourse, computeStatus,
-  PUNCH_START, PUNCH_FINISH, PUNCH_CHECK,
-  type ParsedPunch, type ControlMatch,
+  parsePunches,
+  computeReadId,
+  computeMatchScore,
+  parseCourseControls,
+  matchPunchesToCourse,
+  computeStatus,
+  PUNCH_START,
+  PUNCH_FINISH,
+  PUNCH_CHECK,
+  type ParsedPunch,
+  type ControlMatch,
 } from "@oxygen/shared";
 
 /**
- * Core readout logic - shared between readout-by-card and readout-by-runner endpoints.
- * Exported so race.ts can reuse it for the finish receipt endpoint.
+ * Parse the semicolon-separated leg-length string written by the
+ * OCAD / IOF importer into a flat `number[]`. Empty / trailing
+ * separators are ignored; non-numeric chunks yield `0`. Returns
+ * `[]` for an empty input.
  */
-export async function performReadout(client: PrismaClient, runnerId: number) {
-  const runner = await client.oRunner.findFirst({
-    where: { Id: runnerId, Removed: false },
+export function parseLegsString(s: string | null | undefined): number[] {
+  if (!s) return [];
+  return s
+    .split(";")
+    .filter((chunk) => chunk.length > 0)
+    .map((chunk) => {
+      const n = parseInt(chunk, 10);
+      return Number.isFinite(n) && n >= 0 ? n : 0;
+    });
+}
+
+// ─── Core matcher ──────────────────────────────────────────
+
+export interface PerformReadoutResult {
+  runner: {
+    id: number; // seq
+    uuid: string;
+    name: string;
+    cardNo: number;
+    startNo: number;
+    clubName: string;
+    clubId: number; // eventor_club_id, 0 if none
+    className: string;
+    classId: number; // seq
+    dbStatus: number; // numeric RunnerStatus
+  };
+  isRentalCard: boolean;
+  cardReturned: boolean;
+  course: {
+    id: number; // seq
+    name: string;
+    length: number;
+    controlCount: number;
+    requiredControlCount: number;
+    /**
+     * Per-position leg lengths in metres, parsed from the
+     * semicolon-separated `Course.legs` string the importer writes.
+     * `legs[i]` is the length of the leg leading INTO position `i`
+     * (so `legs[0]` is start→1st control). The last entry covers the
+     * leg into the finish.
+     */
+    legs: number[];
+  } | null;
+  timing: {
+    cardStartTime: number;
+    assignedStartTime: number; // ZeroTime-relative, raw runner.startTime
+    startTime: number; // absolute deciseconds
+    finishTime: number; // absolute deciseconds
+    runningTime: number;
+    rawRunningTime: number;
+    runningTimeAdjustment: number;
+    status: number; // numeric RunnerStatus
+  };
+  controls: ControlMatch[];
+  extraPunches: Array<{
+    controlCode: number;
+    time: number;
+    source: "card" | "free";
+    freePunchId?: string;
+  }>;
+  missingControls: number[];
+  rawPunchCount: number;
+  freePunchCount: number;
+  hasCard: boolean;
+  /**
+   * 0..1 — how well do the card's punches match the runner's assigned
+   * course? Used by the DeviceManager to decide whether to treat a
+   * card-read as a real readout or as a pre-start scan with stale data.
+   */
+  matchScore: number;
+}
+
+/**
+ * Core readout: load runner + card + free punches + course, match
+ * punches, derive status. Returns the full nested shape used by both
+ * the receipt printer and the web readout view.
+ */
+export async function performReadout(
+  db: PrismaClient,
+  eventId: bigint,
+  zeroTime: number,
+  runnerUuid: string,
+): Promise<PerformReadoutResult | null> {
+  const runner = await db.runner.findUnique({
+    where: { id: runnerUuid },
+    include: {
+      class: {
+        select: {
+          seq: true,
+          name: true,
+          courseId: true,
+          maxTime: true,
+          noTiming: true,
+        },
+      },
+    },
   });
-  if (!runner) return null;
+  if (!runner || runner.eventId !== eventId || runner.removed) return null;
 
-  const club = runner.Club
-    ? await client.oClub.findUnique({ where: { Id: runner.Club }, select: { Name: true } })
-    : null;
-  const cls = runner.Class
-    ? await client.oClass.findUnique({
-      where: { Id: runner.Class },
-      select: { Name: true, Course: true, MaxTime: true, NoTiming: true },
-    })
-    : null;
+  // Card: prefer linked (runner.cardId), fall back to cardNo lookup.
+  const card = runner.cardId
+    ? await db.card.findUnique({ where: { id: runner.cardId } })
+    : runner.cardNo > 0
+      ? await db.card.findFirst({
+          where: { eventId, cardNo: runner.cardNo, removed: false },
+          orderBy: { updatedAt: "desc" },
+        })
+      : null;
 
-  const courseId = runner.Course || cls?.Course || 0;
+  // Free punches (radio + manual + online-input + backup-memory).
+  const freePunches =
+    runner.cardNo > 0
+      ? await db.punch.findMany({
+          where: { eventId, cardNo: runner.cardNo, removed: false },
+          orderBy: { time: "asc" },
+        })
+      : [];
+
+  // Course: per-runner override > per-class course.
+  const courseId = runner.courseId ?? runner.class?.courseId ?? null;
   const course = courseId
-    ? await client.oCourse.findUnique({ where: { Id: courseId } })
+    ? await db.course.findUnique({
+        where: { id: courseId },
+        select: { id: true, seq: true, name: true, lengthM: true, legs: true },
+      })
     : null;
 
-  // Get card data (original SI card readout)
-  // Prefer linked card (runner.Card FK), fall back to CardNo lookup
-  // (card may exist from a prior read before the runner was registered)
-  const card = runner.Card
-    ? await client.oCard.findUnique({ where: { Id: runner.Card } })
-    : await client.oCard.findFirst({
-        where: { CardNo: runner.CardNo, Removed: false },
-      });
+  // Parse card punches (the packed MeOS string format is preserved as
+  // punches_raw in the new schema).
+  const cardPunches = parsePunches(card?.punchesRaw ?? "");
 
-  // Get free punches (radio punches + manual corrections)
-  const freePunches = await client.oPunch.findMany({
-    where: { CardNo: runner.CardNo, Removed: false },
-    orderBy: { Time: "asc" },
-  });
-
-  // Parse card punches
-  const cardPunches = parsePunches(card?.Punches ?? "");
-
-  // Convert ZeroTime-relative DB times to absolute (MeOS stores all times relative to ZeroTime)
-  const zeroTime = await getZeroTime(client);
+  // DB stores all times ZeroTime-relative; matcher works in absolute.
   for (const p of cardPunches) {
     if (p.time !== 0) p.time = toAbsolute(p.time, zeroTime);
   }
-
-  // Convert free punches to our format (oPunch.Time is also ZeroTime-relative)
   const freeParsed: ParsedPunch[] = freePunches.map((p) => ({
-    type: p.Type,
-    time: p.Time !== 0 ? toAbsolute(p.Time, zeroTime) : 0,
+    type: p.controlCode,
+    time: p.time !== 0 ? toAbsolute(p.time, zeroTime) : 0,
     source: "free" as const,
-    freePunchId: p.Id,
+    freePunchId: p.id, // UUID string in the new schema
   }));
 
-  // Merge card + free punches, sorted chronologically so sequential matching works
-  const allPunches = [...cardPunches, ...freeParsed].sort((a, b) => a.time - b.time);
+  // Merge + sort chronologically so sequential matching works.
+  const allPunches = [...cardPunches, ...freeParsed].sort(
+    (a, b) => a.time - b.time,
+  );
 
-  // Resolve the course's stored Id list into status-aware per-position
-  // descriptors. The matcher then applies MeOS's full evaluation rules:
-  // - Multiple expansion (any-order code pool)
-  // - Bad / Optional / BadNoTiming positions skipped from missing-punch
-  //   accounting (but consumed if punched, mirroring oRunner.cpp:1424-1438)
-  // - NoTiming / propagated-from-BadNoTiming legs deducted from runningTime
-  //   (mirroring oRunner.cpp:1772-1786).
+  // Expected positions: full status-aware descriptors so MeOS evaluation
+  // rules (Multiple, Bad/Optional/BadNoTiming skipping, NoTiming leg
+  // deduction) all apply.
   const expectedPositions = course
-    ? await resolveCourseExpectedPositions(client, course.Controls)
+    ? await resolveCourseExpectedPositions(db, course.id)
     : [];
 
-  // Convert runner's assigned start time from ZeroTime-relative to absolute
-  const runnerStartTime = toAbsolute(runner.StartTime, zeroTime);
+  const runnerStartTime = toAbsolute(runner.startTime, zeroTime);
 
-  // Match punches to course (pass runner's assigned start time as fallback)
   const {
     matches,
     extraPunches,
@@ -109,64 +220,69 @@ export async function performReadout(client: PrismaClient, runnerId: number) {
     runningTimeAdjustment,
   } = matchPunchesToCourse(allPunches, expectedPositions, runnerStartTime);
 
-  const effectiveStartTime = startTime;
-  // Raw time across the card (finish - start). The adjusted running time
-  // subtracts NoTiming / BadNoTiming legs so that downstream consumers
-  // (kiosk, results, leaderboards, Eventor) all see the canonical value.
   const rawRunningTime =
-    finishTime !== 0 && effectiveStartTime !== 0
-      ? finishTime - effectiveStartTime
-      : 0;
+    finishTime !== 0 && startTime !== 0 ? finishTime - startTime : 0;
   const runningTime = Math.max(0, rawRunningTime - runningTimeAdjustment);
 
+  const dbStatusNumeric = runnerStatusToValue(runner.status);
   const status = computeStatus({
     finishTime,
-    startTime: effectiveStartTime,
+    startTime,
     missingCount,
     runningTime,
-    classMaxTime: cls?.MaxTime ?? 0,
-    classNoTiming: cls?.NoTiming === 1,
-    transferFlags: runner.TransferFlags,
-    currentStatus: runner.Status,
+    classMaxTime: runner.class?.maxTime ?? 0,
+    classNoTiming: runner.class?.noTiming ?? false,
+    transferFlags: runner.transferFlags,
+    currentStatus: dbStatusNumeric,
   });
 
-  // Only required positions that the runner failed to punch count as
-  // "missing" for status banners — skipped positions never bubble up.
   const missingControls = matches
     .filter((m) => m.status === "missing" && m.positionMode === "required")
     .map((m) => m.controlCode);
-
-  // Required positions only (skipped positions don't count toward the
-  // X/Y stat the kiosk shows; they were never expected to be punched).
   const requiredCount = matches.filter((m) => m.positionMode !== "skipped").length;
+
+  // Match score: how well the card's punches match the runner's course.
+  // Args: (courseControlCount, matchedCount, totalCardPunches, foreignPunchCount)
+  const matchedCount = matches.filter((m) => m.status === "ok").length;
+  const foreignPunchCount = extraPunches.filter(
+    (p) => p.source === "card",
+  ).length;
+  const matchScore = computeMatchScore(
+    requiredCount,
+    matchedCount,
+    cardPunches.length,
+    foreignPunchCount,
+  );
 
   return {
     runner: {
-      id: runner.Id,
-      name: runner.Name,
-      cardNo: runner.CardNo,
-      startNo: runner.StartNo,
-      clubName: club?.Name ?? "",
-      clubId: runner.Club,
-      className: cls?.Name ?? "",
-      classId: runner.Class,
-      dbStatus: runner.Status,
+      id: runner.seq,
+      uuid: runner.id,
+      name: runner.name,
+      cardNo: runner.cardNo,
+      startNo: runner.startNo,
+      clubName: runner.clubName,
+      clubId: runner.eventorClubId ? Number(runner.eventorClubId) : 0,
+      className: runner.class?.name ?? "",
+      classId: runner.class?.seq ?? 0,
+      dbStatus: dbStatusNumeric,
     },
-    isRentalCard: runner.CardFee !== 0,
-    cardReturned: runner.oos_card_returned === 1,
+    isRentalCard: runner.cardFeeCents !== 0,
+    cardReturned: runner.cardReturned,
     course: course
       ? {
-        id: course.Id,
-        name: course.Name,
-        length: course.Length,
-        controlCount: expectedPositions.length,
-        requiredControlCount: requiredCount,
-      }
+          id: course.seq,
+          name: course.name,
+          length: course.lengthM,
+          controlCount: expectedPositions.length,
+          requiredControlCount: requiredCount,
+          legs: parseLegsString(course.legs),
+        }
       : null,
     timing: {
       cardStartTime,
-      assignedStartTime: runner.StartTime,
-      startTime: effectiveStartTime,
+      assignedStartTime: runner.startTime,
+      startTime,
       finishTime,
       runningTime,
       rawRunningTime,
@@ -178,708 +294,598 @@ export async function performReadout(client: PrismaClient, runnerId: number) {
       controlCode: p.type,
       time: p.time,
       source: p.source,
-      freePunchId: p.freePunchId,
+      freePunchId: p.freePunchId as string | undefined,
     })),
     missingControls,
     rawPunchCount: cardPunches.length,
     freePunchCount: freeParsed.length,
     hasCard: !!card,
+    matchScore,
   };
 }
 
+/** Find a runner UUID by event + card number. */
+async function findRunnerUuidByCard(
+  db: PrismaClient,
+  eventId: bigint,
+  cardNo: number,
+): Promise<string | null> {
+  if (cardNo <= 0) return null;
+  const r = await db.runner.findFirst({
+    where: { eventId, cardNo, removed: false },
+    select: { id: true },
+  });
+  return r?.id ?? null;
+}
+
+// ─── Schemas ───────────────────────────────────────────────
+
+const storeReadoutInput = z.object({
+  cardNo: z.number().int().positive(),
+  cardType: z.string().optional().default(""),
+  punches: z.array(
+    z.object({
+      controlCode: z.number().int(),
+      time: z.number().int(),
+      subSecond: z.number().int().optional(),
+      unit: z.number().int().optional(),
+    }),
+  ),
+  /** Optional times read off the card itself (absolute deciseconds). */
+  checkTime: z.number().int().nullable().optional(),
+  startTime: z.number().int().nullable().optional(),
+  finishTime: z.number().int().nullable().optional(),
+  voltageMv: z.number().int().optional().default(0),
+  batteryVoltage: z.number().int().optional(), // mV — alias for voltageMv
+  batteryLow: z.boolean().optional(),
+  punchesFresh: z.boolean().optional(),
+  ownerData: z.record(z.string(), z.unknown()).optional(),
+  metadata: z.record(z.string(), z.unknown()).optional(),
+  stationId: z.string().optional(),
+});
+
+// ─── Helpers used by the router ────────────────────────────
+
+/**
+ * Encode a punch list back into the MeOS-style packed string stored in
+ * `cards.punches_raw`. The format `code-seconds.tenths` is what
+ * `parsePunches` round-trips (it multiplies the seconds component by 10
+ * to recover deciseconds).
+ *
+ * `time` is the canonical internal unit: ZeroTime-relative deciseconds.
+ */
+function encodePunchesRaw(
+  punches: Array<{ controlCode: number; time: number }>,
+): string {
+  return punches
+    .map((p) => {
+      if (p.time === 0) return `${p.controlCode}-0.0`;
+      const secs = Math.floor(p.time / 10);
+      const tenths = p.time % 10;
+      return `${p.controlCode}-${secs}.${tenths}`;
+    })
+    .join(";");
+}
+
+// ─── Router ────────────────────────────────────────────────
+
 export const cardReadoutRouter = router({
-  /** Full card readout by SI card number */
-  readout: competitionProcedure
-    .input(z.object({ cardNo: z.number().int().positive() }))
-    .query(async ({ ctx, input }) => {
-      const client = ctx.db;
-      const runner = await client.oRunner.findFirst({
-        where: { CardNo: input.cardNo, Removed: false },
-      });
-      if (!runner) {
-        return { found: false as const, cardNo: input.cardNo };
-      }
-      const result = await performReadout(client, runner.Id);
-      if (!result) {
-        return { found: false as const, cardNo: input.cardNo };
-      }
-      // Compute match score: how well do the card's punches match the course?
-      const matchedCount = result.controls.filter(
-        (c) => c.status === "ok",
-      ).length;
-
-      // Load competition controls to identify foreign punches
-      const allControls = await client.oControl.findMany({
-        where: { Removed: false },
-        select: { Numbers: true },
-      });
-      const competitionCodes = new Set<number>();
-      for (const c of allControls) {
-        const code = parseInt(c.Numbers.split(";")[0], 10);
-        if (!isNaN(code) && code > 0) competitionCodes.add(code);
-      }
-      const foreignPunchCount = competitionCodes.size > 0
-        ? result.extraPunches.filter(
-            (p) => !competitionCodes.has(p.controlCode),
-          ).length
-        : 0;
-
-      const matchScore = computeMatchScore(
-        result.controls.length,
-        matchedCount,
-        result.rawPunchCount,
-        foreignPunchCount,
-      );
-
-      return {
-        found: true as const,
-        cardNo: input.cardNo,
-        matchScore,
-        punchesMatchCourse: matchScore >= 0.2,
-        ...result,
-      };
-    }),
-
-  /** Card readout by runner ID (for inline detail) */
-  readoutByRunner: competitionProcedure
-    .input(z.object({ runnerId: z.number().int() }))
-    .query(async ({ ctx, input }) => {
-      const client = ctx.db;
-      const result = await performReadout(client, input.runnerId);
-      return result;
-    }),
-
-  /** Add a manual punch correction (stored in oPunch table) */
-  addPunch: competitionProcedure
-    .input(
-      z.object({
-        cardNo: z.number().int(),
-        controlCode: z.number().int(),
-        time: z.number().int(), // deciseconds
-      }),
-    )
-    .mutation(async ({ ctx, input }) => {
-      const client = ctx.db;
-      const zeroTime = await getZeroTime(client);
-      const punch = await client.oPunch.create({
-        data: {
-          CardNo: input.cardNo,
-          Type: input.controlCode,
-          Time: toRelative(input.time, zeroTime),
-          Origin: 0, // manual entry
-        },
-      });
-      return { id: punch.Id };
-    }),
-
-  /** Remove a manual punch correction (soft delete in oPunch table) */
-  removePunch: competitionProcedure
-    .input(z.object({ punchId: z.number().int() }))
-    .mutation(async ({ ctx, input }) => {
-      const client = ctx.db;
-      await client.oPunch.update({
-        where: { Id: input.punchId },
-        data: { Removed: true },
-      });
-      return { success: true };
-    }),
-
-  /** Update the time of a free punch */
-  updatePunchTime: competitionProcedure
-    .input(
-      z.object({
-        punchId: z.number().int(),
-        time: z.number().int(), // deciseconds
-      }),
-    )
-    .mutation(async ({ ctx, input }) => {
-      const client = ctx.db;
-      const zeroTime = await getZeroTime(client);
-      await client.oPunch.update({
-        where: { Id: input.punchId },
-        data: { Time: toRelative(input.time, zeroTime) },
-      });
-      return { success: true };
-    }),
-
   /**
-   * Store a full SI card readout from the WebSerial reader.
-   * Converts SI punch data (seconds since midnight) into MeOS format
-   * (deciseconds) and upserts into the oCard table.
+   * Store a raw card readout, upsert the per-event Card row, and
+   * (if the cardNo matches a runner) write any radio-style punches the
+   * card carries into the punches table.
    *
-   * MeOS punch format: "{controlCode}-{seconds}.{tenths}[@unit][#origin];"
-   * Special types: 1=CHECK, 2=FINISH, 3=START  (note: MeOS uses different numbering than SI)
-   *
-   * SI times are in seconds since midnight, MeOS times are in deciseconds.
+   * Returns a `punchesRelevant` flag the DeviceManager uses to decide
+   * whether to call applyResult immediately or keep the entry as a
+   * pre-start scan.
    */
-  storeReadout: competitionProcedure
-    .input(
-      z.object({
-        cardNo: z.number().int().positive(),
-        punches: z.array(
-          z.object({
-            controlCode: z.number().int(),
-            time: z.number().int(), // seconds since midnight
-          }),
-        ),
-        checkTime: z.number().int().optional(),
-        startTime: z.number().int().optional(),
-        finishTime: z.number().int().optional(),
-        cardType: z.string().optional(),
-        batteryVoltage: z.number().optional(),
-        punchesFresh: z.boolean().optional(), // client-side DOW freshness check result
-        ownerData: z
-          .object({
-            firstName: z.string().optional(),
-            lastName: z.string().optional(),
-            sex: z.string().optional(),
-            dateOfBirth: z.string().optional(),
-            club: z.string().optional(),
-            phone: z.string().optional(),
-            email: z.string().optional(),
-            country: z.string().optional(),
-          })
-          .optional(),
-        metadata: z
-          .object({
-            batteryDate: z.string().optional(),
-            productionDate: z.string().optional(),
-            hardwareVersion: z.string().optional(),
-            softwareVersion: z.string().optional(),
-            clearCount: z.number().optional(),
-          })
-          .optional(),
-      }),
-    )
+  storeReadout: eventProcedure
+    .input(storeReadoutInput)
     .mutation(async ({ ctx, input }) => {
-      const client = ctx.db;
-      const zeroTime = await getZeroTime(client);
+      const eventId = ctx.event.id;
+      const zeroTime = ctx.event.zeroTime;
+      const voltageMv = input.batteryVoltage ?? input.voltageMv;
 
-      // Helper: convert absolute seconds → ZeroTime-relative deciseconds punch token
-      const fmtPunch = (type: number, absSecs: number, unit?: number) => {
-        const relDs = toRelative(absSecs * 10, zeroTime);
-        const base = `${type}-${Math.floor(relDs / 10)}.${relDs % 10}`;
-        return unit && unit > 0 ? `${base}@${unit}` : base;
-      };
+      // 1. Immutable raw readout log row.
+      const readout = await ctx.db.cardReadout.create({
+        data: {
+          eventId,
+          cardNo: input.cardNo,
+          cardType: input.cardType,
+          punches: input.punches as never,
+          voltageMv,
+          batteryLow: input.batteryLow ?? null,
+          ownerData: (input.ownerData ?? undefined) as never,
+          metadata: (input.metadata ?? undefined) as never,
+          stationId: input.stationId,
+        },
+        select: { id: true, readAt: true },
+      });
 
-      // Build the MeOS punch string (ZeroTime-relative, matching MeOS convention)
-      const parts: string[] = [];
-
-      // Check time → special type 3 (PUNCH_CHECK)
-      if (input.checkTime != null && input.checkTime > 0) {
-        parts.push(fmtPunch(PUNCH_CHECK, input.checkTime));
+      // 2. Upsert the per-event Card row. punchesRaw is stored in
+      //    ZeroTime-relative deciseconds (MeOS-style `code-seconds.tenths`
+      //    so parsePunches round-trips correctly).
+      //
+      //    Synthesize a `start (1)` / `finish (2)` / `check (3)` punch
+      //    when the card supplied those header times — the course matcher
+      //    keys off them to derive startTime/finishTime.
+      const synthesized: Array<{ controlCode: number; time: number }> = [];
+      if (input.startTime && input.startTime > 0) {
+        synthesized.push({ controlCode: 1, time: input.startTime });
       }
-
-      // Start time → special type 1 (PUNCH_START)
-      if (input.startTime != null && input.startTime > 0) {
-        parts.push(fmtPunch(PUNCH_START, input.startTime));
+      if (input.finishTime && input.finishTime > 0) {
+        synthesized.push({ controlCode: 2, time: input.finishTime });
       }
-
-      // Control punches
-      for (const p of input.punches) {
-        parts.push(fmtPunch(p.controlCode, p.time));
+      if (input.checkTime && input.checkTime > 0) {
+        synthesized.push({ controlCode: 3, time: input.checkTime });
       }
+      const allInputPunches = [...synthesized, ...input.punches];
+      const relativePunches = allInputPunches.map((p) => ({
+        controlCode: p.controlCode,
+        time: p.time !== 0 ? toRelative(p.time, zeroTime) : 0,
+      }));
+      const punchesRaw = encodePunchesRaw(relativePunches);
 
-      // Finish time → special type 2 (PUNCH_FINISH)
-      if (input.finishTime != null && input.finishTime > 0) {
-        parts.push(fmtPunch(PUNCH_FINISH, input.finishTime));
-      }
+      const existingCard = await ctx.db.card.findFirst({
+        where: { eventId, cardNo: input.cardNo, removed: false },
+      });
+      const card = existingCard
+        ? await ctx.db.card.update({
+            where: { id: existingCard.id },
+            data: {
+              readoutId: readout.id,
+              readCount: existingCard.readCount + 1,
+              voltageMv,
+              punchesRaw,
+            },
+            select: { id: true, seq: true },
+          })
+        : await ctx.db.card.create({
+            data: {
+              eventId,
+              cardNo: input.cardNo,
+              readoutId: readout.id,
+              readCount: 1,
+              voltageMv,
+              punchesRaw,
+            },
+            select: { id: true, seq: true },
+          });
 
-      const punchString = parts.length > 0 ? parts.join(";") + ";" : "";
-
-      // ── Check for foreign controls (stale punch detection) ──
-      let punchesRelevant = true;
-      if (input.punches.length > 0) {
-        const controls = await client.oControl.findMany({
-          where: { Removed: false },
-          select: { Numbers: true },
+      // 3. Link the card to a runner if one matches by card number.
+      const runner = await ctx.db.runner.findFirst({
+        where: { eventId, cardNo: input.cardNo, removed: false },
+        select: { id: true, seq: true, classId: true },
+      });
+      if (runner) {
+        await ctx.db.runner.update({
+          where: { id: runner.id },
+          data: { cardId: card.id },
         });
-        const competitionCodes = new Set<number>();
-        for (const c of controls) {
-          // oControl.Numbers is semicolon-separated; first value is the code
-          const code = parseInt(c.Numbers.split(";")[0], 10);
-          if (!isNaN(code) && code > 0) competitionCodes.add(code);
-        }
+      }
 
-        if (competitionCodes.size > 0) {
-          const foreignCount = input.punches.filter(
-            (p) => !competitionCodes.has(p.controlCode),
-          ).length;
-          // Majority of punches must be for this competition's controls
-          if (foreignCount > input.punches.length * 0.5) {
-            punchesRelevant = false;
+      // 4. Quick relevance check: are *any* of these punch codes useful
+      //    for the runner's assigned course? We resolve the runner's
+      //    course controls and look for at least one overlapping code.
+      //    Used by the kiosk / device-manager to skip "stale-card"
+      //    pre-start punches from being applied.
+      let punchesRelevant = false;
+      let matchScore = 0;
+      if (!runner?.classId) {
+        // Unregistered card — fall back to event-level relevance: any
+        // punch code matching a known control in this event counts.
+        const codes = new Set(
+          input.punches.map((p) => p.controlCode).filter((c) => c >= 30),
+        );
+        if (codes.size > 0) {
+          const known = await ctx.db.control.findMany({
+            where: { eventId, removed: false },
+            select: { codes: true },
+          });
+          const knownCodes = new Set<number>();
+          for (const k of known) {
+            for (const c of k.codes.split(";")) {
+              const n = parseInt(c, 10);
+              if (Number.isFinite(n)) knownCodes.add(n);
+            }
+          }
+          for (const c of codes) {
+            if (knownCodes.has(c)) {
+              punchesRelevant = true;
+              break;
+            }
           }
         }
       }
-
-      // ── Save readout history (deduplicate by punch content) ─────────
-      // Only INSERT if punches differ from the most recent readout for this card.
-      // If punches are identical, UPDATE metadata (battery, owner data, timestamp).
-      // Voltage is stored as integer millivolts (matches MeOS oCard.Voltage).
-      const voltageStored = meosFromVolts(input.batteryVoltage) ?? 0;
-      const ownerDataJson = input.ownerData ? JSON.stringify(input.ownerData) : null;
-      const metadataJson = input.metadata ? JSON.stringify(input.metadata) : null;
-
-      try {
-        await ensureReadoutTable(client, ctx.dbName);
-        const latest = await client.$queryRawUnsafe<Array<{ Id: bigint; Punches: string }>>(
-          `SELECT Id, Punches FROM oxygen_card_readouts
-           WHERE CardNo = ? ORDER BY ReadAt DESC LIMIT 1`,
-          input.cardNo,
-        );
-        if (latest.length > 0 && latest[0].Punches === punchString) {
-          // Same punches — update metadata and timestamp on existing row
-          await client.$executeRawUnsafe(
-            `UPDATE oxygen_card_readouts
-             SET ReadAt = NOW(), CardType = ?, Voltage = ?, OwnerData = ?, Metadata = ?
-             WHERE Id = ?`,
-            input.cardType ?? "",
-            voltageStored,
-            ownerDataJson,
-            metadataJson,
-            latest[0].Id,
+      if (runner?.classId) {
+        const cls = await ctx.db.class.findUnique({
+          where: { id: runner.classId },
+          select: { courseId: true },
+        });
+        if (cls?.courseId) {
+          const expected = await resolveCourseExpectedPositions(
+            ctx.db,
+            cls.courseId,
           );
-        } else {
-          // New or different punches — insert new history row
-          await client.$executeRawUnsafe(
-            `INSERT INTO oxygen_card_readouts (CardNo, CardType, Punches, Voltage, OwnerData, Metadata)
-             VALUES (?, ?, ?, ?, ?, ?)`,
-            input.cardNo,
-            input.cardType ?? "",
-            punchString,
-            voltageStored,
-            ownerDataJson,
-            metadataJson,
+          const expectedCodes = new Set<number>(
+            expected.flatMap((e) => e.codes),
           );
+          const requiredCount = expected.filter((e) => !e.skipMatching).length;
+          let matchedCount = 0;
+          let foreignCount = 0;
+          for (const p of input.punches) {
+            if (expectedCodes.has(p.controlCode)) matchedCount++;
+            else if (p.controlCode >= 30) foreignCount++; // ignore start/finish/check
+          }
+          matchScore = computeMatchScore(
+            requiredCount,
+            matchedCount,
+            input.punches.length,
+            foreignCount,
+          );
+          punchesRelevant = matchScore >= 0.2;
         }
-      } catch {
-        // Non-critical — readout history is supplementary
-        console.warn("[cardReadout] Failed to save readout history");
       }
 
-      // ── Fire-and-forget Google Sheets backup ────────────────
-      {
-        const runner = await client.oRunner.findFirst({
-          where: { CardNo: input.cardNo, Removed: false },
-          select: { Name: true, Class: true, Club: true, StartNo: true },
-        });
-        const cls = runner?.Class
-          ? await client.oClass.findUnique({ where: { Id: runner.Class }, select: { Name: true } })
+      // 5. Best-effort Google Sheets push (fire-and-forget; no-op when
+      //    no webhook is configured).
+      try {
+        const fullName = runner
+          ? (
+              await ctx.db.runner.findUnique({
+                where: { id: runner.id },
+                select: { name: true, clubName: true, class: { select: { name: true } } },
+              })
+            )
           : null;
-        const club = runner?.Club
-          ? await client.oClub.findUnique({ where: { Id: runner.Club }, select: { Name: true } })
-          : null;
-
-        const fmtTime = (secs: number) => {
-          const h = Math.floor(secs / 3600);
-          const m = Math.floor((secs % 3600) / 60);
-          const s = secs % 60;
-          return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
-        };
-
-        pushToGoogleSheet(client, ctx.dbName, {
-          timestamp: new Date().toISOString(),
+        pushToGoogleSheet(ctx.db, eventId, {
+          timestamp: readout.readAt.toISOString(),
           cardNo: input.cardNo,
           cardType: input.cardType ?? "",
-          runnerName: runner?.Name ?? "",
-          className: cls?.Name ?? "",
-          clubName: club?.Name ?? "",
-          startNo: runner?.StartNo ?? 0,
+          runnerName: fullName?.name ?? "",
+          className: fullName?.class?.name ?? "",
+          clubName: fullName?.clubName ?? "",
+          startNo: 0,
           checkTime: input.checkTime ?? null,
           startTime: input.startTime ?? null,
           finishTime: input.finishTime ?? null,
           punchCount: input.punches.length,
-          punches: input.punches.map((p) => `${p.controlCode}:${fmtTime(p.time)}`).join(","),
+          punches: encodePunchesRaw(input.punches),
           punchesRelevant,
-          batteryVoltage: input.batteryVoltage ?? null,
+          batteryVoltage: voltageMv || null,
         });
-      }
-
-      // ── Upsert into oCard (only for real readouts, not registration scans) ──
-      // oCard should only contain real race data (matches MeOS behavior).
-      // Three conditions must ALL be true:
-      //   1. punchesRelevant — no foreign controls detected
-      //   2. hasControlPunches — not just check/start/finish
-      //   3. punchesFresh !== false — client DOW check didn't flag as stale
-      const hasControlPunches = input.punches.length > 0;
-      const shouldWriteOCard =
-        punchesRelevant && hasControlPunches && input.punchesFresh !== false;
-
-      if (!shouldWriteOCard) {
-        return { cardId: null as number | null, created: false, punchesRelevant };
-      }
-
-      // Find the runner to prefer their linked oCard
-      const runner = await client.oRunner.findFirst({
-        where: { CardNo: input.cardNo, Removed: false },
-        select: { Id: true, Card: true },
-      });
-
-      // Prefer runner-linked card, then non-removed by CardNo, then any by CardNo
-      const linkedCard =
-        runner?.Card
-          ? await client.oCard.findUnique({ where: { Id: runner.Card } })
-          : null;
-      const existing =
-        linkedCard ??
-        (await client.oCard.findFirst({
-          where: { CardNo: input.cardNo, Removed: false },
-        })) ??
-        (await client.oCard.findFirst({
-          where: { CardNo: input.cardNo },
-        }));
-
-      // MeOS stores oCard.Voltage as integer millivolts (e.g. 2980 = 2.98 V).
-      const voltageMv = meosFromVolts(input.batteryVoltage) ?? undefined;
-
-      // Compute ReadId hash for deduplication (matches MeOS's calculateHash)
-      const readId = computeReadId(input.punches, input.finishTime, input.startTime);
-
-      if (existing) {
-        // Skip update if identical data (ReadId deduplication)
-        if (existing.ReadId === readId) {
-          // Still link runner if not yet linked
-          if (runner && !runner.Card) {
-            await client.oRunner.update({
-              where: { Id: runner.Id },
-              data: { Card: existing.Id },
-            });
-          }
-          return { cardId: existing.Id as number | null, created: false, punchesRelevant };
-        }
-
-        await client.oCard.update({
-          where: { Id: existing.Id },
-          data: {
-            Punches: punchString,
-            ReadId: readId,
-            Removed: false, // ensure card is visible after re-read
-            ...(voltageMv != null && voltageMv > 0
-              ? { Voltage: voltageMv }
-              : {}),
-          },
-        });
-
-        // Link runner on update path too (not just create)
-        if (runner && !runner.Card) {
-          await client.oRunner.update({
-            where: { Id: runner.Id },
-            data: { Card: existing.Id },
-          });
-        }
-
-        return { cardId: existing.Id as number | null, created: false, punchesRelevant };
-      }
-
-      const card = await client.oCard.create({
-        data: {
-          CardNo: input.cardNo,
-          Punches: punchString,
-          ReadId: readId,
-          ...(voltageMv != null && voltageMv > 0
-            ? { Voltage: voltageMv }
-            : {}),
-        },
-      });
-
-      // Link the card to the runner if one exists with this card number
-      if (runner && !runner.Card) {
-        await client.oRunner.update({
-          where: { Id: runner.Id },
-          data: { Card: card.Id },
-        });
-      }
-
-      return { cardId: card.Id as number | null, created: true, punchesRelevant };
-    }),
-
-  /** List readout history for a card number */
-  readoutHistory: competitionProcedure
-    .input(z.object({ cardNo: z.number().int().positive() }))
-    .query(async ({ ctx, input }) => {
-      const client = ctx.db;
-      try {
-        await ensureReadoutTable(client, ctx.dbName);
-        const rows = await client.$queryRawUnsafe<
-          Array<{
-            Id: bigint | number;
-            CardNo: bigint | number;
-            CardType: string;
-            Punches: string;
-            Voltage: bigint | number;
-            OwnerData: string | null;
-            Metadata: string | null;
-            ReadAt: Date;
-          }>
-        >(
-          `SELECT Id, CardNo, CardType, Punches, Voltage, OwnerData, Metadata, ReadAt
-           FROM oxygen_card_readouts
-           WHERE CardNo = ?
-           ORDER BY ReadAt DESC
-           LIMIT 50`,
-          input.cardNo,
-        );
-        // Prisma raw SQL returns MySQL INT columns as BigInt — convert to Number
-        return rows.map((r) => ({
-          id: Number(r.Id),
-          cardNo: Number(r.CardNo),
-          cardType: r.CardType,
-          punches: r.Punches,
-          batteryVoltage: voltsFromMeos(r.Voltage),
-          ownerData: r.OwnerData ? (JSON.parse(r.OwnerData) as unknown) : null,
-          metadata: r.Metadata ? (JSON.parse(r.Metadata) as unknown) : null,
-          readAt: r.ReadAt.toISOString(),
-        }));
       } catch {
-        return [];
+        // Don't let webhook errors interfere with the readout flow.
       }
-    }),
-
-  // ─── Card list / detail endpoints ───────────────────────
-
-  /** List all cards with linked runner info */
-  cardList: competitionProcedure.query(async ({ ctx }) => {
-    const client = ctx.db;
-
-    // Ensure the voltage-encoding migration has run before we read oCard.Voltage.
-    await ensureReadoutTable(client, ctx.dbName);
-
-    const allCards = await client.oCard.findMany({
-      where: { Removed: false },
-      orderBy: { CardNo: "asc" },
-    });
-
-    // Deduplicate by CardNo — keep the record with the highest Id (newest)
-    const dedupMap = new Map<number, (typeof allCards)[number]>();
-    for (const card of allCards) {
-      const existing = dedupMap.get(card.CardNo);
-      if (!existing || card.Id > existing.Id) {
-        dedupMap.set(card.CardNo, card);
-      }
-    }
-    const cards = [...dedupMap.values()];
-
-    const runners = await client.oRunner.findMany({
-      where: { Removed: false },
-      select: {
-        Id: true,
-        Name: true,
-        CardNo: true,
-        Card: true,
-        Club: true,
-        Class: true,
-        Status: true,
-        CardFee: true,
-        oos_card_returned: true,
-      },
-    });
-
-    // Build a map: cardNo → runner
-    const runnerByCardNo = new Map<number, (typeof runners)[number]>();
-    const runnerByCardId = new Map<number, (typeof runners)[number]>();
-    for (const r of runners) {
-      if (r.CardNo > 0) runnerByCardNo.set(r.CardNo, r);
-      if (r.Card > 0) runnerByCardId.set(r.Card, r);
-    }
-
-    // Load clubs and classes for display
-    const clubs = await client.oClub.findMany({
-      where: { Removed: false },
-      select: { Id: true, Name: true },
-    });
-    const clubMap = new Map(clubs.map((c) => [c.Id, c.Name]));
-
-    const classes = await client.oClass.findMany({
-      where: { Removed: false },
-      select: { Id: true, Name: true },
-    });
-    const classMap = new Map(classes.map((c) => [c.Id, c.Name]));
-
-    // Try to get latest readout info (card type, voltage, metadata) from history
-    let cardInfoMap = new Map<
-      number,
-      { cardType: string; voltage: number; metadata: unknown }
-    >();
-    try {
-      await ensureReadoutTable(client, ctx.dbName);
-      const infoRows = await client.$queryRawUnsafe<
-        Array<{
-          CardNo: bigint | number;
-          CardType: string;
-          Voltage: bigint | number;
-          Metadata: string | null;
-        }>
-      >(
-        `SELECT r.CardNo, r.CardType, r.Voltage, r.Metadata FROM oxygen_card_readouts r
-         INNER JOIN (
-           SELECT CardNo, MAX(ReadAt) as MaxReadAt
-           FROM oxygen_card_readouts
-           GROUP BY CardNo
-         ) latest ON r.CardNo = latest.CardNo AND r.ReadAt = latest.MaxReadAt`,
-      );
-      cardInfoMap = new Map(
-        infoRows.map((r) => [
-          Number(r.CardNo),
-          {
-            cardType: r.CardType,
-            voltage: Number(r.Voltage),
-            metadata: r.Metadata ? (JSON.parse(r.Metadata) as unknown) : null,
-          },
-        ]),
-      );
-    } catch {
-      // ok
-    }
-
-    return cards.map((card) => {
-      const runner =
-        runnerByCardId.get(card.Id) ?? runnerByCardNo.get(card.CardNo);
-      const punchCount = card.Punches
-        ? card.Punches.split(";").filter(Boolean).length
-        : 0;
-      const historyInfo = cardInfoMap.get(card.CardNo);
-
-      // Battery voltage is stored as integer millivolts (MeOS-compatible).
-      // Prefer the readout-history reading if present (it's what we just
-      // observed at the readout station), otherwise fall back to oCard.Voltage.
-      const batteryVoltage =
-        voltsFromMeos(historyInfo?.voltage) ?? voltsFromMeos(card.Voltage);
 
       return {
-        id: card.Id,
-        cardNo: card.CardNo,
-        cardType: historyInfo?.cardType || "",
-        batteryVoltage, // volts, or null when not measured
+        readoutId: readout.id,
+        cardId: card.seq,
+        readAt: readout.readAt.toISOString(),
+        linkedRunnerId: runner?.seq ?? null,
+        punchesRelevant,
+        matchScore,
+      };
+    }),
+
+  /**
+   * Most-recent readout for a given card number — returns the matched,
+   * placed, status-derived result via the matcher. Returns the legacy
+   * `{ found: false }` shape when no runner is registered for this card.
+   */
+  readout: eventProcedure
+    .input(z.object({ cardNo: z.number().int() }))
+    .query(async ({ ctx, input }) => {
+      const eventId = ctx.event.id;
+      if (input.cardNo <= 0) {
+        return { found: false as const, cardNo: input.cardNo };
+      }
+      const runnerUuid = await findRunnerUuidByCard(
+        ctx.db,
+        eventId,
+        input.cardNo,
+      );
+      if (!runnerUuid) {
+        return { found: false as const, cardNo: input.cardNo };
+      }
+      const result = await performReadout(
+        ctx.db,
+        eventId,
+        ctx.event.zeroTime,
+        runnerUuid,
+      );
+      if (!result) return { found: false as const, cardNo: input.cardNo };
+      return { found: true as const, ...result };
+    }),
+
+  /**
+   * Same as readout but keyed by runner seq. Used by the standalone
+   * Card Readout page and by RunnerMapPreview.
+   */
+  readoutByRunner: eventProcedure
+    .input(z.object({ runnerId: z.number().int() }))
+    .query(async ({ ctx, input }) => {
+      const runner = await ctx.db.runner.findFirst({
+        where: { eventId: ctx.event.id, seq: input.runnerId, removed: false },
+        select: { id: true },
+      });
+      if (!runner) return null;
+      return performReadout(
+        ctx.db,
+        ctx.event.id,
+        ctx.event.zeroTime,
+        runner.id,
+      );
+    }),
+
+  /**
+   * Apply the matcher's computed result back to the runner row
+   * (start/finish/status). Used by the readout station after a card
+   * read produces a real result.
+   */
+  applyResult: eventProcedure
+    .input(
+      z.object({
+        runnerId: z.number().int(),
+        status: z.number().int(),
+        finishTime: z.number().int(), // absolute deciseconds
+        startTime: z.number().int(), // absolute deciseconds
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      const runner = await ctx.db.runner.findFirst({
+        where: {
+          eventId: ctx.event.id,
+          seq: input.runnerId,
+          removed: false,
+        },
+        select: { id: true, status: true, transferFlags: true },
+      });
+      if (!runner) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: `Runner ${input.runnerId} not found`,
+        });
+      }
+      const zeroTime = ctx.event.zeroTime;
+      await ctx.db.runner.update({
+        where: { id: runner.id },
+        data: {
+          status: valueToRunnerStatus(input.status),
+          finishTime:
+            input.finishTime > 0 ? toRelative(input.finishTime, zeroTime) : 0,
+          startTime:
+            input.startTime > 0 ? toRelative(input.startTime, zeroTime) : 0,
+        },
+      });
+      return { ok: true as const };
+    }),
+
+  /** History of recent card readouts for the active event. */
+  recent: eventProcedure
+    .input(
+      z
+        .object({ limit: z.number().int().min(1).max(500).default(50) })
+        .optional(),
+    )
+    .query(async ({ ctx, input }) => {
+      const rows = await ctx.db.cardReadout.findMany({
+        where: { eventId: ctx.event.id },
+        orderBy: { readAt: "desc" },
+        take: input?.limit ?? 50,
+      });
+      return rows.map((r) => ({
+        id: r.id,
+        cardNo: r.cardNo,
+        cardType: r.cardType,
+        voltageMv: r.voltageMv,
+        readAt: r.readAt.toISOString(),
+        stationId: r.stationId,
+      }));
+    }),
+
+  /** Look up a stored readout by id (UUID). */
+  getById: eventProcedure
+    .input(z.object({ id: z.string().uuid() }))
+    .query(async ({ ctx, input }) => {
+      const r = await ctx.db.cardReadout.findUnique({
+        where: { id: input.id },
+      });
+      if (!r || r.eventId !== ctx.event.id) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: "Readout not found",
+        });
+      }
+      return {
+        id: r.id,
+        cardNo: r.cardNo,
+        cardType: r.cardType,
+        punches: r.punches,
+        voltageMv: r.voltageMv,
+        readAt: r.readAt.toISOString(),
+      };
+    }),
+
+  /** All known cards for the event (one row per card_no). */
+  /**
+   * One row per card, joined with the runner that currently owns it.
+   *
+   * The CardsPage filter UI consumes a rich shape — `cardType`,
+   * `batteryVoltage` (volts!), `punchCount`, `runner.{status,
+   * isRentalCard, cardReturned}` — so we synthesise that here from the
+   * latest readout + the runner row. Cards with no readout yet still
+   * appear with `cardType: ""` and `batteryVoltage: null`.
+   */
+  cardList: eventProcedure.query(async ({ ctx }) => {
+    const cards = await ctx.db.card.findMany({
+      where: { eventId: ctx.event.id, removed: false },
+      orderBy: { cardNo: "asc" },
+    });
+    const cardNos = cards.map((c) => c.cardNo);
+    const runners = cardNos.length
+      ? await ctx.db.runner.findMany({
+          where: {
+            eventId: ctx.event.id,
+            cardNo: { in: cardNos },
+            removed: false,
+          },
+          select: {
+            seq: true,
+            cardNo: true,
+            name: true,
+            clubName: true,
+            eventorClubId: true,
+            status: true,
+            cardReturned: true,
+            cardFeeCents: true,
+            class: { select: { name: true } },
+          },
+        })
+      : [];
+    const runnerByCard = new Map(runners.map((r) => [r.cardNo, r]));
+
+    // Latest readout per card (for cardType + battery voltage). We
+    // query in one go and reduce client-side to avoid an N+1.
+    const readouts = cardNos.length
+      ? await ctx.db.cardReadout.findMany({
+          where: { eventId: ctx.event.id, cardNo: { in: cardNos } },
+          orderBy: { readAt: "desc" },
+          select: {
+            cardNo: true,
+            cardType: true,
+            voltageMv: true,
+            readAt: true,
+            punches: true,
+          },
+        })
+      : [];
+    const latestByCard = new Map<number, (typeof readouts)[number]>();
+    for (const r of readouts) {
+      if (!latestByCard.has(r.cardNo)) latestByCard.set(r.cardNo, r);
+    }
+
+    return cards.map((c) => {
+      const r = runnerByCard.get(c.cardNo);
+      const latest = latestByCard.get(c.cardNo) ?? null;
+      const punches = latest?.punches as unknown[] | null | undefined;
+      const punchCount = Array.isArray(punches) ? punches.length : 0;
+      const voltageMv = latest?.voltageMv ?? c.voltageMv ?? 0;
+      const batteryVoltage = voltageMv > 0 ? voltageMv / 1000 : null;
+      return {
+        id: c.seq,
+        cardNo: c.cardNo,
+        cardType: latest?.cardType ?? "",
+        batteryVoltage,
+        voltageMv,
+        readCount: c.readCount,
         punchCount,
         hasPunches: punchCount > 0,
-        modified: card.Modified?.toISOString() ?? null,
-        runner: runner
+        modified: (latest?.readAt ?? c.updatedAt).toISOString(),
+        runnerId: r?.seq ?? null,
+        runnerName: r?.name ?? "",
+        className: r?.class?.name ?? "",
+        clubName: r?.clubName ?? "",
+        runner: r
           ? {
-            id: runner.Id,
-            name: runner.Name,
-            clubName: clubMap.get(runner.Club) ?? "",
-            clubId: runner.Club,
-            className: classMap.get(runner.Class) ?? "",
-            status: runner.Status,
-            isRentalCard: runner.CardFee !== 0,
-            cardReturned: runner.oos_card_returned === 1,
-          }
+              id: r.seq,
+              name: r.name,
+              clubName: r.clubName,
+              clubId: r.eventorClubId ? Number(r.eventorClubId) : 0,
+              className: r.class?.name ?? "",
+              status: runnerStatusToValue(r.status),
+              // Rental cards are flagged with a non-zero cardFee
+              // (matches the legacy MeOS convention).
+              isRentalCard: r.cardFeeCents > 0,
+              cardReturned: r.cardReturned,
+            }
           : null,
       };
     });
   }),
 
-  /** Get detail for a single card (parsed punches + owner data from latest readout) */
-  cardDetail: competitionProcedure
-    .input(z.object({ cardNo: z.number().int().positive() }))
+  /**
+   * Full detail for a card — the structured shape the CardsPage drawer
+   * consumes. Surfaces the parsed punches, owner data + metadata from
+   * the latest readout, and the linked runner (with club + status +
+   * card-return flag).
+   *
+   * Returns `null` when neither the card nor a readout exists for the
+   * given `cardNo`, so the page can render "unknown card" gracefully.
+   */
+  cardDetail: eventProcedure
+    .input(z.object({ cardNo: z.number().int() }))
     .query(async ({ ctx, input }) => {
-      const client = ctx.db;
-
-      // Ensure the voltage-encoding migration has run before we read oCard.Voltage.
-      await ensureReadoutTable(client, ctx.dbName);
-
-      const card = await client.oCard.findFirst({
-        where: { CardNo: input.cardNo, Removed: false },
+      const card = await ctx.db.card.findFirst({
+        where: { eventId: ctx.event.id, cardNo: input.cardNo, removed: false },
+      });
+      const runner = await ctx.db.runner.findFirst({
+        where: {
+          eventId: ctx.event.id,
+          cardNo: input.cardNo,
+          removed: false,
+        },
+        select: {
+          seq: true,
+          name: true,
+          clubName: true,
+          eventorClubId: true,
+          status: true,
+          cardFeeCents: true,
+          cardReturned: true,
+          class: { select: { name: true } },
+        },
+      });
+      const latestReadout = await ctx.db.cardReadout.findFirst({
+        where: { eventId: ctx.event.id, cardNo: input.cardNo },
+        orderBy: { readAt: "desc" },
       });
 
-      if (!card) return null;
+      if (!card && !latestReadout) return null;
 
-      // Parse the MeOS punch string into structured data
-      const rawPunches = parsePunches(card.Punches ?? "");
-      const startPunch = rawPunches.find((p) => p.type === PUNCH_START);
-      const finishPunch = rawPunches.find((p) => p.type === PUNCH_FINISH);
-      const checkPunch = rawPunches.find((p) => p.type === PUNCH_CHECK);
-      const controlPunches = rawPunches.filter(
+      // Parsed punches from the latest readout. The readout `punches`
+      // column is JSONB matching the legacy
+      //   { type: number, time: number, ... } shape.
+      type Punch = { type: number; time: number };
+      const parsedPunches: Punch[] = Array.isArray(latestReadout?.punches)
+        ? (latestReadout!.punches as unknown as Punch[])
+        : [];
+      const PUNCH_START = 1;
+      const PUNCH_FINISH = 2;
+      const PUNCH_CHECK = 3;
+      const startPunch = parsedPunches.find((p) => p.type === PUNCH_START);
+      const finishPunch = parsedPunches.find((p) => p.type === PUNCH_FINISH);
+      const checkPunch = parsedPunches.find((p) => p.type === PUNCH_CHECK);
+      const controlPunches = parsedPunches.filter(
         (p) =>
           p.type !== PUNCH_START &&
           p.type !== PUNCH_FINISH &&
           p.type !== PUNCH_CHECK,
       );
 
-      // Get linked runner — use select to avoid BigInt fields (ExtId, ExtId2)
-      const runner = await client.oRunner.findFirst({
-        where: {
-          OR: [
-            { Card: card.Id, Removed: false },
-            { CardNo: input.cardNo, Removed: false },
-          ],
-        },
-        select: {
-          Id: true,
-          Name: true,
-          Club: true,
-          Class: true,
-          Status: true,
-          CardFee: true,
-          oos_card_returned: true,
-        },
-      });
-
-      let runnerInfo = null;
-      if (runner) {
-        const club = runner.Club
-          ? await client.oClub.findUnique({
-            where: { Id: runner.Club },
-            select: { Name: true },
-          })
-          : null;
-        const cls = runner.Class
-          ? await client.oClass.findUnique({
-            where: { Id: runner.Class },
-            select: { Name: true },
-          })
-          : null;
-        runnerInfo = {
-          id: runner.Id,
-          name: runner.Name,
-          clubName: club?.Name ?? "",
-          clubId: runner.Club,
-          className: cls?.Name ?? "",
-          status: runner.Status,
-          isRentalCard: runner.CardFee !== 0,
-          cardReturned: runner.oos_card_returned === 1,
-        };
-      }
-
-      // Get latest readout for card type / owner data / metadata
-      let cardType = "";
-      let ownerData: unknown = null;
-      let metadata: unknown = null;
-      try {
-        await ensureReadoutTable(client, ctx.dbName);
-        const latest = await client.$queryRawUnsafe<
-          Array<{
-            CardType: string;
-            OwnerData: string | null;
-            Metadata: string | null;
-            Voltage: bigint | number;
-          }>
-        >(
-          `SELECT CardType, OwnerData, Metadata, Voltage FROM oxygen_card_readouts
-           WHERE CardNo = ? ORDER BY ReadAt DESC LIMIT 1`,
-          input.cardNo,
-        );
-        if (latest.length > 0) {
-          cardType = latest[0].CardType;
-          ownerData = latest[0].OwnerData
-            ? (JSON.parse(latest[0].OwnerData) as unknown)
-            : null;
-          metadata = latest[0].Metadata
-            ? (JSON.parse(latest[0].Metadata) as unknown)
-            : null;
-        }
-      } catch {
-        // ok
-      }
+      const voltageMv = latestReadout?.voltageMv ?? card?.voltageMv ?? 0;
+      const batteryVoltage = voltageMv > 0 ? voltageMv / 1000 : null;
 
       return {
-        id: Number(card.Id),
-        cardNo: Number(card.CardNo),
-        cardType,
-        batteryVoltage: voltsFromMeos(card.Voltage),
-        ownerData,
-        metadata,
-        runner: runnerInfo,
+        cardNo: input.cardNo,
+        id: card?.seq ?? 0,
+        cardType: latestReadout?.cardType ?? "",
+        batteryVoltage,
+        voltageMv,
+        ownerData: latestReadout?.ownerData ?? null,
+        metadata: latestReadout?.metadata ?? null,
+        runner: runner
+          ? {
+              id: runner.seq,
+              name: runner.name,
+              className: runner.class?.name ?? "",
+              clubName: runner.clubName,
+              clubId: runner.eventorClubId ? Number(runner.eventorClubId) : 0,
+              status: runnerStatusToValue(runner.status),
+              isRentalCard: runner.cardFeeCents > 0,
+              cardReturned: runner.cardReturned,
+            }
+          : null,
         checkTime: checkPunch?.time ?? null,
         startTime: startPunch?.time ?? null,
         finishTime: finishPunch?.time ?? null,
@@ -887,86 +893,153 @@ export const cardReadoutRouter = router({
           controlCode: p.type,
           time: p.time,
         })),
-        rawPunchString: card.Punches,
-        modified: card.Modified?.toISOString() ?? null,
+        modified: (latestReadout?.readAt ?? card?.updatedAt ?? new Date()).toISOString(),
       };
     }),
 
-  /**
-   * Apply the computed result from a card readout to the runner record.
-   * This is the "readout station" step: after punches are evaluated,
-   * persist the status (OK/MP/DNF) and finish time back to oRunner.
-   */
-  applyResult: competitionProcedure
-    .input(
-      z.object({
-        runnerId: z.number().int(),
-        status: z.number().int(),
-        finishTime: z.number().int(),
-        startTime: z.number().int(),
-      }),
-    )
-    .mutation(async ({ ctx, input }) => {
-      const client = ctx.db;
-      const zeroTime = await getZeroTime(client);
-      await client.oRunner.update({
-        where: { Id: input.runnerId },
-        data: {
-          Status: input.status,
-          FinishTime: toRelative(input.finishTime, zeroTime),
-          StartTime: toRelative(input.startTime, zeroTime),
-        },
+  /** History of every readout for a card. */
+  readoutHistory: eventProcedure
+    .input(z.object({ cardNo: z.number().int() }))
+    .query(async ({ ctx, input }) => {
+      const rows = await ctx.db.cardReadout.findMany({
+        where: { eventId: ctx.event.id, cardNo: input.cardNo },
+        orderBy: { readAt: "desc" },
+        take: 100,
       });
-      await incrementCounter("oRunner", input.runnerId, ctx.dbName);
-      return { applied: true, runnerId: input.runnerId, status: input.status, finishTime: input.finishTime, startTime: input.startTime };
+      return rows.map((r) => ({
+        id: r.id,
+        cardType: r.cardType,
+        voltageMv: r.voltageMv,
+        readAt: r.readAt.toISOString(),
+        stationId: r.stationId,
+      }));
     }),
 
-  /** Manually link or unlink a card to/from a runner */
-  linkCardToRunner: competitionProcedure
+  /**
+   * Link a card to a runner manually.
+   *
+   * Accepts either `{ cardNo }` (the new shape) or `{ cardId }` (the
+   * legacy seq-based shape — the CardsPage drawer still passes this).
+   * `runnerId` is the runner's seq, or `null` to unlink. The card row
+   * is created if it doesn't exist yet.
+   */
+  linkCardToRunner: eventProcedure
     .input(
       z.object({
-        cardId: z.number().int().positive(),
+        cardNo: z.number().int().optional(),
+        cardId: z.number().int().optional(),
         runnerId: z.number().int().nullable(),
       }),
     )
     .mutation(async ({ ctx, input }) => {
-      const client = ctx.db;
-
-      const card = await client.oCard.findUnique({ where: { Id: input.cardId } });
-      if (!card) {
-        throw new TRPCError({ code: "NOT_FOUND", message: "Card not found" });
-      }
-
-      // Clear any runner currently linked to this card (by Card FK or CardNo)
-      const oldRunners = await client.oRunner.findMany({
-        where: {
-          OR: [{ Card: card.Id }, { CardNo: card.CardNo }],
-          Removed: false,
-        },
-        select: { Id: true },
-      });
-      for (const r of oldRunners) {
-        await client.oRunner.update({
-          where: { Id: r.Id },
-          data: { Card: 0, CardNo: 0 },
+      let cardNo = input.cardNo;
+      if (!cardNo && input.cardId) {
+        const c = await ctx.db.card.findFirst({
+          where: { eventId: ctx.event.id, seq: input.cardId },
+          select: { cardNo: true },
         });
-      }
-
-      // Link new runner if provided
-      if (input.runnerId) {
-        const runner = await client.oRunner.findUnique({
-          where: { Id: input.runnerId },
-          select: { Id: true, Removed: true },
-        });
-        if (!runner || runner.Removed) {
-          throw new TRPCError({ code: "NOT_FOUND", message: "Runner not found" });
+        if (!c) {
+          throw new TRPCError({
+            code: "NOT_FOUND",
+            message: `Card #${input.cardId} not found.`,
+          });
         }
-        await client.oRunner.update({
-          where: { Id: input.runnerId },
-          data: { CardNo: card.CardNo, Card: card.Id },
+        cardNo = c.cardNo;
+      }
+      if (!cardNo) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "Provide cardNo or cardId.",
         });
       }
+      if (input.runnerId === null) {
+        // Unlink: clear cardNo on any runner currently holding it.
+        await ctx.db.runner.updateMany({
+          where: { eventId: ctx.event.id, cardNo, removed: false },
+          data: { cardNo: 0 },
+        });
+        return { ok: true as const };
+      }
+      const runner = await ctx.db.runner.findFirst({
+        where: { eventId: ctx.event.id, seq: input.runnerId, removed: false },
+        select: { id: true },
+      });
+      if (!runner) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: "Runner not found",
+        });
+      }
+      const card = await ctx.db.card.findFirst({
+        where: { eventId: ctx.event.id, cardNo, removed: false },
+        select: { id: true },
+      });
+      await ctx.db.runner.update({
+        where: { id: runner.id },
+        data: { cardNo, cardId: card?.id ?? null },
+      });
+      return { ok: true as const };
+    }),
 
-      return { success: true };
+  /** Append a free punch to a card. */
+  addPunch: eventProcedure
+    .input(
+      z.object({
+        cardNo: z.number().int(),
+        controlCode: z.number().int(),
+        time: z.number().int(), // absolute deciseconds
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      const zeroTime = ctx.event.zeroTime;
+      const control = await ctx.db.control.findFirst({
+        where: {
+          eventId: ctx.event.id,
+          codes: { contains: String(input.controlCode) },
+          removed: false,
+        },
+        select: { id: true },
+      });
+      await ctx.db.punch.create({
+        data: {
+          eventId: ctx.event.id,
+          cardNo: input.cardNo,
+          controlCode: input.controlCode,
+          controlId: control?.id ?? null,
+          time: input.time > 0 ? toRelative(input.time, zeroTime) : 0,
+          source: "manual",
+          isOriginal: false,
+        },
+      });
+      return { ok: true as const };
+    }),
+
+  /** Remove a free punch by id (UUID). */
+  removePunch: eventProcedure
+    .input(z.object({ punchId: z.string().uuid() }))
+    .mutation(async ({ ctx, input }) => {
+      await ctx.db.punch.update({
+        where: { id: input.punchId },
+        data: { removed: true },
+      });
+      return { ok: true as const };
+    }),
+
+  /** Adjust the time on an existing free punch. */
+  updatePunchTime: eventProcedure
+    .input(z.object({ punchId: z.string().uuid(), time: z.number().int() }))
+    .mutation(async ({ ctx, input }) => {
+      const zeroTime = ctx.event.zeroTime;
+      await ctx.db.punch.update({
+        where: { id: input.punchId },
+        data: {
+          time: input.time > 0 ? toRelative(input.time, zeroTime) : 0,
+          isOriginal: false,
+        },
+      });
+      return { ok: true as const };
     }),
 });
+
+// Silence unused-import warning until other tooling consumes the constant.
+void RunnerStatus;

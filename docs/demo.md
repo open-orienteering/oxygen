@@ -4,7 +4,7 @@ Oxygen is a lightweight orienteering competition management system. This tutoria
 
 ## Step 1: Start the app with demo data
 
-This script starts MySQL, initialises the database schema, loads the **Demo Competition** showcase, and starts the full app:
+This script starts PostgreSQL 18, applies the `oxygen` schema, loads the **Demo Competition** showcase, and starts the full app:
 
 ```bash
 bash scripts/demo.sh
@@ -24,20 +24,25 @@ You'll land on the Demo Competition — a fully populated, anonymized showcase d
 - **Tracks & Replay** — GPS routes from the race, ready to scrub through
 - **Kiosk** — open in a second tab for the self-service registration view
 
-## Step 3: Load the showcase into another database (optional)
+## Step 3: Reload the showcase (optional)
 
-The showcase fixture lives in `docs/screenshots/fixtures/showcase.sql` and can be loaded into any MySQL instance with the standalone loader. Handy when you want a clean slate, or a second parallel DB to experiment in:
+The showcase fixture lives at `docs/screenshots/fixtures/showcase.sql` and is loaded by `scripts/load-showcase.sh` / `pnpm showcase:load`. The fixture is idempotent — it cascade-deletes any existing `demo_competition` event before re-inserting, so re-running is safe:
 
 ```bash
-# Reload into the Cloud Shell docker MySQL
-USE_DOCKER=1 FORCE=1 bash scripts/load-showcase.sh
+# Reload into the Cloud Shell docker PostgreSQL
+USE_DOCKER=1 bash scripts/load-showcase.sh
 
-# Load into a native MySQL on your host
+# Reload into a native PostgreSQL on your host
 pnpm showcase:load
-
-# Load into a second DB name alongside the first
-DB_NAME=demo2 bash scripts/load-showcase.sh
 ```
+
+To regenerate the committed fixture from your own live Vinterserien data (regenerates `docs/screenshots/fixtures/showcase.sql` in place):
+
+```bash
+pnpm tsx scripts/anonymize-vinterserien.ts
+```
+
+This reads the `Vinterserien` event from your local PostgreSQL, pseudonymises runners, remaps card numbers, and writes a fresh portable SQL fixture. Override `SRC_NAME_ID` to point at a different source event.
 
 ## Step 4: Connect your own data (optional)
 

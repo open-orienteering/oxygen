@@ -290,48 +290,55 @@ describe("backup punch anchors", () => {
   const anchors = createBackupPunchAnchors(lbl) as AnchorDef<BackupPunchRow>[];
   const rows: BackupPunchRow[] = [
     {
-      id: 1, controlId: 31, controlCodes: "31", controlName: "", cardNo: 12345,
+      id: "00000000-0000-7000-8000-000000000001", controlId: 31, controlCodes: "31", controlName: "", cardNo: 12345,
       punchTime: 0, punchDatetime: null, subSecond: null, stationSerial: null,
       importedAt: "2026-04-25", pushedToPunch: false, runnerName: "Anna",
       runnerId: 1, runnerStatus: 0, registeredTime: 36000, matchStatus: "matched",
     },
     {
-      id: 2, controlId: 42, controlCodes: "42", controlName: "Radio", cardNo: 67890,
+      id: "00000000-0000-7000-8000-000000000002", controlId: 42, controlCodes: "42", controlName: "Radio", cardNo: 67890,
       punchTime: 0, punchDatetime: null, subSecond: null, stationSerial: null,
       importedAt: "2026-04-25", pushedToPunch: false, runnerName: null,
       runnerId: null, runnerStatus: null, registeredTime: null, matchStatus: "no_runner",
     },
     {
-      id: 3, controlId: 31, controlCodes: "31", controlName: "", cardNo: 11111,
+      id: "00000000-0000-7000-8000-000000000003", controlId: 31, controlCodes: "31", controlName: "", cardNo: 11111,
       punchTime: 0, punchDatetime: null, subSecond: null, stationSerial: null,
       importedAt: "2026-04-25", pushedToPunch: true, runnerName: "Erik",
       runnerId: 2, runnerStatus: 0, registeredTime: null, matchStatus: "time_mismatch",
     },
   ];
 
+  // IDs are UUIDv7 strings now (post-PG migration); shorten to the
+  // last block in assertions so the tests stay readable.
+  const idTail = (id: string) => id.slice(-1);
+
   it("filters by match anomalies", () => {
     const tokens = [{ id: "1", anchor: "match", operator: "eq" as const, value: "anomalies" }];
-    expect(applyFilters(rows, tokens, anchors).map((r) => r.id)).toEqual([2, 3]);
+    expect(applyFilters(rows, tokens, anchors).map((r) => idTail(r.id))).toEqual([
+      "2",
+      "3",
+    ]);
   });
 
   it("filters by match matched", () => {
     const tokens = [{ id: "1", anchor: "match", operator: "eq" as const, value: "matched" }];
-    expect(applyFilters(rows, tokens, anchors).map((r) => r.id)).toEqual([1]);
+    expect(applyFilters(rows, tokens, anchors).map((r) => idTail(r.id))).toEqual(["1"]);
   });
 
   it("filters by control 42", () => {
     const tokens = [{ id: "1", anchor: "control", operator: "eq" as const, value: "42" }];
-    expect(applyFilters(rows, tokens, anchors).map((r) => r.id)).toEqual([2]);
+    expect(applyFilters(rows, tokens, anchors).map((r) => idTail(r.id))).toEqual(["2"]);
   });
 
   it("filters by pushed yes", () => {
     const tokens = [{ id: "1", anchor: "pushed", operator: "eq" as const, value: "yes" }];
-    expect(applyFilters(rows, tokens, anchors).map((r) => r.id)).toEqual([3]);
+    expect(applyFilters(rows, tokens, anchors).map((r) => idTail(r.id))).toEqual(["3"]);
   });
 
   it("filters by card eq", () => {
     const tokens = [{ id: "1", anchor: "card", operator: "eq" as const, value: "67890" }];
-    expect(applyFilters(rows, tokens, anchors).map((r) => r.id)).toEqual([2]);
+    expect(applyFilters(rows, tokens, anchors).map((r) => idTail(r.id))).toEqual(["2"]);
   });
 });
 

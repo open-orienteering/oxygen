@@ -1,4 +1,7 @@
 import { test, expect, type Page } from "@playwright/test";
+import { reseed } from "./helpers/reseed";
+
+test.beforeAll(reseed);
 
 const WIDE = { width: 2400, height: 1200 };
 const NARROW = { width: 1280, height: 800 };

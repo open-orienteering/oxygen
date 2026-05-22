@@ -1170,7 +1170,7 @@ function PreStartScreen({
       </h1>
       {(runner?.clubName || card.clubName) && (
         <p className="text-2xl text-slate-400 mb-1 flex items-center justify-center gap-2">
-          {runner?.clubId && <ClubLogo clubId={runner.clubId} size="md" />}
+          {runner?.clubId ? <ClubLogo clubId={runner.clubId} size="md" /> : null}
           {runner?.clubName || card.clubName}
         </p>
       )}

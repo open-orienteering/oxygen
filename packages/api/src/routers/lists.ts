@@ -1,319 +1,241 @@
 import { z } from "zod";
-import { router, competitionProcedure } from "../trpc.js";
-import {getZeroTime} from "../db.js";
+import { router, eventProcedure } from "../trpc.js";
 import { toAbsolute } from "../timeConvert.js";
+import { runnerStatusToValue } from "../statusConvert.js";
 import {
-  RunnerStatus,
-  WITHDRAWN_STATUSES,
+  parsePunches,
+  matchPunchesToCourse,
   type StartListEntry,
   type ResultEntry,
-  type ClassDetail,
-  matchPunchesToCourse,
-  parsePunches,
-  type ExpectedPosition,
 } from "@oxygen/shared";
-import { computeClassPlacements } from "../results.js";
 import { resolveCourseExpectedPositions } from "./course.js";
 
+/**
+ * Start list + result list endpoints. Minimal port — sorts and presents
+ * runners with their class/club context. Adjusted running time / split
+ * placements are coming in a follow-up alongside the punch matcher port.
+ */
 export const listsRouter = router({
-  /**
-   * Get start list, optionally filtered by class.
-   * Sorted by class sort index, then start time.
-   */
-  startList: competitionProcedure
-    .input(z.object({ classId: z.number().optional() }).optional())
+  startList: eventProcedure
+    .input(z.object({ classId: z.number().int().optional() }).optional())
     .query(async ({ ctx, input }): Promise<StartListEntry[]> => {
-      const client = ctx.db;
-
-      // Withdrawn entries (Cancel) never appear on the start list — they
-      // are not participating.
       const where: Record<string, unknown> = {
-        Removed: false,
-        Status: { notIn: [...WITHDRAWN_STATUSES] },
+        eventId: ctx.event.id,
+        removed: false,
       };
-      if (input?.classId) where.Class = input.classId;
-
-      const runners = await client.oRunner.findMany({
+      if (input?.classId) {
+        const cls = await ctx.db.class.findFirst({
+          where: { eventId: ctx.event.id, seq: input.classId },
+          select: { id: true },
+        });
+        if (!cls) return [];
+        where.classId = cls.id;
+      }
+      const runners = await ctx.db.runner.findMany({
         where,
-        orderBy: [{ StartTime: "asc" }, { StartNo: "asc" }],
+        include: { class: { select: { name: true, seq: true } } },
+        orderBy: [{ startTime: "asc" }, { startNo: "asc" }],
       });
+      const zeroTime = ctx.event.zeroTime;
 
-      const clubs = await client.oClub.findMany({
-        where: { Removed: false },
-        select: { Id: true, Name: true },
+      const punchCards = await ctx.db.punch.groupBy({
+        by: ["cardNo"],
+        where: { eventId: ctx.event.id, removed: false },
       });
-      const clubMap = new Map(clubs.map((c) => [c.Id, c.Name]));
+      const punchSet = new Set(punchCards.map((p) => p.cardNo));
 
-      const classes = await client.oClass.findMany({
-        where: { Removed: false },
-        select: { Id: true, Name: true, SortIndex: true },
-      });
-      const classMap = new Map(classes.map((c) => [c.Id, c]));
-
-      const zeroTime = await getZeroTime(client);
       const now = new Date();
-      const meosNow = (now.getHours() * 3600 + now.getMinutes() * 60 + now.getSeconds()) * 10;
+      const meosNow =
+        (now.getHours() * 3600 + now.getMinutes() * 60 + now.getSeconds()) * 10;
 
-      // Get punches to detect "In Forest"
-      const punchCounts = await client.oPunch.groupBy({
-        by: ["CardNo"],
-        _count: { Id: true },
-        where: { Removed: false },
-      });
-      const punchMap = new Map<number, number>(
-        punchCounts.map((p) => [p.CardNo, p._count.Id]),
+      return runners.map(
+        (r): StartListEntry => ({
+          id: r.seq,
+          startNo: r.startNo,
+          name: r.name,
+          clubId: r.eventorClubId ? Number(r.eventorClubId) : 0,
+          clubName: r.clubName,
+          className: r.class?.name ?? "",
+          classId: r.class?.seq ?? 0,
+          startTime: toAbsolute(r.startTime, zeroTime),
+          cardNo: r.cardNo,
+          bib: r.bib,
+          hasPunches: punchSet.has(r.cardNo) || undefined,
+          hasStarted:
+            (r.startTime > 0 &&
+              (r.startTime <= 1 ||
+                meosNow >= toAbsolute(r.startTime, zeroTime))) || undefined,
+        }),
       );
-
-      const entries: StartListEntry[] = runners.map((r) => ({
-        id: r.Id,
-        startNo: r.StartNo,
-        name: r.Name,
-        clubId: r.Club,
-        clubName: clubMap.get(r.Club) ?? "",
-        className: classMap.get(r.Class)?.Name ?? "",
-        classId: r.Class,
-        startTime: toAbsolute(r.StartTime, zeroTime),
-        cardNo: r.CardNo,
-        bib: r.Bib,
-        hasPunches: (punchMap.get(r.CardNo) ?? 0) > 0,
-        hasStarted: r.StartTime > 0 && (r.StartTime <= 1 || meosNow >= toAbsolute(r.StartTime, zeroTime)),
-      }));
-
-      // Sort by class sort index, then start time
-      entries.sort((a, b) => {
-        const classA = classMap.get(a.classId);
-        const classB = classMap.get(b.classId);
-        const sortA = classA?.SortIndex ?? 0;
-        const sortB = classB?.SortIndex ?? 0;
-        if (sortA !== sortB) return sortA - sortB;
-        return a.startTime - b.startTime;
-      });
-
-      return entries;
     }),
 
-  /**
-   * Get result list with place calculation, optionally filtered by class.
-   * Results are computed per class: OK runners sorted by time, then non-OK runners.
-   */
-  resultList: competitionProcedure
-    .input(z.object({ classId: z.number().optional() }).optional())
+  resultList: eventProcedure
+    .input(z.object({ classId: z.number().int().optional() }).optional())
     .query(async ({ ctx, input }): Promise<ResultEntry[]> => {
-      const client = ctx.db;
-
-      // Withdrawn entries (Cancel) are excluded from the result list —
-      // a withdrawn runner has no race result. DNS stays in (paid no-show).
       const where: Record<string, unknown> = {
-        Removed: false,
-        Status: { notIn: [...WITHDRAWN_STATUSES] },
+        eventId: ctx.event.id,
+        removed: false,
       };
-      if (input?.classId) where.Class = input.classId;
-
-      const runners = await client.oRunner.findMany({ where });
-
-      const clubs = await client.oClub.findMany({
-        where: { Removed: false },
-        select: { Id: true, Name: true },
+      if (input?.classId) {
+        const cls = await ctx.db.class.findFirst({
+          where: { eventId: ctx.event.id, seq: input.classId },
+          select: { id: true },
+        });
+        if (!cls) return [];
+        where.classId = cls.id;
+      }
+      const runners = await ctx.db.runner.findMany({
+        where,
+        include: {
+          class: { select: { name: true, seq: true, courseId: true } },
+        },
       });
-      const clubMap = new Map(clubs.map((c) => [c.Id, c.Name]));
+      const zeroTime = ctx.event.zeroTime;
 
-      const classes = await client.oClass.findMany({
-        where: { Removed: false },
-        select: { Id: true, Name: true, SortIndex: true, NoTiming: true },
-      });
-      const classMap = new Map(classes.map((c) => [c.Id, c]));
-
-      const zeroTime = await getZeroTime(client);
-      const now = new Date();
-      const meosNow = (now.getHours() * 3600 + now.getMinutes() * 60 + now.getSeconds()) * 10;
-
-      const punchCounts = await client.oPunch.groupBy({
-        by: ["CardNo"],
-        _count: { Id: true },
-        where: { Removed: false },
-      });
-      const punchMap = new Map<number, number>(
-        punchCounts.map((p) => [p.CardNo, p._count.Id]),
+      // Compute running-time adjustment per runner by running the
+      // matcher over each card's punches against the runner's course.
+      // This is the bulk equivalent of performReadout's adjustment step;
+      // cached per course so we don't re-resolve expectedPositions for
+      // every runner.
+      const cardNos = runners.map((r) => r.cardNo).filter((c) => c > 0);
+      const cards = cardNos.length
+        ? await ctx.db.card.findMany({
+            where: {
+              eventId: ctx.event.id,
+              cardNo: { in: cardNos },
+              removed: false,
+            },
+            select: { cardNo: true, punchesRaw: true },
+          })
+        : [];
+      const cardByNo = new Map<number, string>(
+        cards.map((c) => [c.cardNo, c.punchesRaw]),
       );
 
-      // ── Running-time adjustment (NoTiming / BadNoTiming legs) ──
-      // Resolve each course's status-aware ExpectedPosition[] once and
-      // reuse the matcher per runner so adjusted running time is the
-      // canonical value used for placements + results display.
-      const courseIdsForAdjust = new Set<number>();
-      const classCourseMap = new Map<number, number>();
-      for (const cls of await client.oClass.findMany({
-        where: { Removed: false },
-        select: { Id: true, Course: true },
-      })) {
-        classCourseMap.set(cls.Id, cls.Course);
-      }
+      const courseIds = new Set<string>();
       for (const r of runners) {
-        const cid = r.Course > 0 ? r.Course : (classCourseMap.get(r.Class) ?? 0);
-        if (cid > 0) courseIdsForAdjust.add(cid);
+        const cid = r.courseId ?? r.class?.courseId ?? null;
+        if (cid) courseIds.add(cid);
       }
-      const expectedPositionsByCourse = new Map<number, ExpectedPosition[]>();
-      if (courseIdsForAdjust.size > 0) {
-        const courseRows = await client.oCourse.findMany({
-          where: { Id: { in: [...courseIdsForAdjust] }, Removed: false },
-          select: { Id: true, Controls: true },
-        });
-        for (const c of courseRows) {
-          expectedPositionsByCourse.set(
-            c.Id,
-            await resolveCourseExpectedPositions(client, c.Controls),
-          );
-        }
-      }
-      const cardRows = await client.oCard.findMany({
-        where: { Removed: false, CardNo: { in: runners.map((r) => r.CardNo).filter((n) => n > 0) } },
-        select: { CardNo: true, Punches: true },
-      });
-      const cardPunchesByCardNo = new Map<number, ReturnType<typeof parsePunches>>();
-      for (const c of cardRows) {
-        cardPunchesByCardNo.set(c.CardNo, parsePunches(c.Punches));
-      }
-      const adjustmentByRunner = new Map<number, number>();
-      for (const r of runners) {
-        const cid = r.Course > 0 ? r.Course : (classCourseMap.get(r.Class) ?? 0);
-        const positions = expectedPositionsByCourse.get(cid);
-        const punches = cardPunchesByCardNo.get(r.CardNo);
-        if (!positions || positions.length === 0 || !punches) continue;
-        const absPunches = punches.map((p) => ({
-          ...p,
-          time: p.time !== 0 ? toAbsolute(p.time, zeroTime) : 0,
-        }));
-        const fallbackStart = toAbsolute(r.StartTime, zeroTime);
-        const { runningTimeAdjustment } = matchPunchesToCourse(absPunches, positions, fallbackStart);
-        if (runningTimeAdjustment > 0) adjustmentByRunner.set(r.Id, runningTimeAdjustment);
-      }
-
-      // Group runners by class
-      const byClass = new Map<number, typeof runners>();
-      for (const r of runners) {
-        const list = byClass.get(r.Class) ?? [];
-        list.push(r);
-        byClass.set(r.Class, list);
-      }
-
-      const allResults: ResultEntry[] = [];
-
-      const classIds = [...byClass.keys()].sort((a, b) => {
-        return (classMap.get(a)?.SortIndex ?? 0) - (classMap.get(b)?.SortIndex ?? 0);
-      });
-
-      for (const classId of classIds) {
-        const classRunners = byClass.get(classId) ?? [];
-        const cls = classMap.get(classId);
-        const noTiming = cls?.NoTiming === 1;
-
-        const placements = computeClassPlacements(
-          classRunners.map((r) => ({
-            id: r.Id,
-            status: r.Status,
-            startTime: r.StartTime,
-            finishTime: r.FinishTime,
-            runningTimeAdjustment: adjustmentByRunner.get(r.Id) ?? 0,
-          })),
-          noTiming,
+      const expectedByCourse = new Map<
+        string,
+        Awaited<ReturnType<typeof resolveCourseExpectedPositions>>
+      >();
+      for (const cid of courseIds) {
+        expectedByCourse.set(
+          cid,
+          await resolveCourseExpectedPositions(ctx.db, cid),
         );
+      }
 
-        // Sort: OK runners by running time first, then non-OK by status priority
-        const statusOrder = (s: number) => {
-          if (s === RunnerStatus.Unknown) return 99;
-          if (s === RunnerStatus.DNS) return 90;
-          return s;
-        };
+      const adjustmentByRunner = new Map<string, number>();
+      for (const r of runners) {
+        const courseId = r.courseId ?? r.class?.courseId ?? null;
+        const expected = courseId ? expectedByCourse.get(courseId) : null;
+        if (!expected || expected.length === 0) continue;
+        const raw = cardByNo.get(r.cardNo);
+        if (!raw) continue;
+        const punches = parsePunches(raw);
+        for (const p of punches) {
+          if (p.time !== 0) p.time = toAbsolute(p.time, zeroTime);
+        }
+        const fallbackStart = toAbsolute(r.startTime, zeroTime);
+        const { runningTimeAdjustment } = matchPunchesToCourse(
+          punches,
+          expected,
+          fallbackStart,
+        );
+        if (runningTimeAdjustment > 0)
+          adjustmentByRunner.set(r.id, runningTimeAdjustment);
+      }
 
-        const sorted = [...classRunners].sort((a, b) => {
-          const pa = placements.get(a.Id)!;
-          const pb = placements.get(b.Id)!;
-          // Runners with a place come first, sorted by place
-          if (pa.place > 0 && pb.place > 0) return pa.place - pb.place || pa.runningTime - pb.runningTime;
-          if (pa.place > 0) return -1;
-          if (pb.place > 0) return 1;
-          // OK runners without place (noTiming) sorted by running time
-          if (a.Status === RunnerStatus.OK && b.Status === RunnerStatus.OK)
-            return pa.runningTime - pb.runningTime;
-          if (a.Status === RunnerStatus.OK) return -1;
-          if (b.Status === RunnerStatus.OK) return 1;
-          return statusOrder(a.Status) - statusOrder(b.Status);
-        });
+      const enriched = runners.map((r) => {
+        const status = runnerStatusToValue(r.status);
+        const startAbs = toAbsolute(r.startTime, zeroTime);
+        const finishAbs = toAbsolute(r.finishTime, zeroTime);
+        const raw =
+          startAbs > 0 && finishAbs > 0 ? Math.max(0, finishAbs - startAbs) : 0;
+        const adj = adjustmentByRunner.get(r.id) ?? 0;
+        const runningTime = Math.max(0, raw - adj);
+        return { r, status, startAbs, finishAbs, runningTime, adj };
+      });
 
-        for (const r of sorted) {
-          const p = placements.get(r.Id)!;
-          const hasResult = r.Status !== RunnerStatus.Unknown;
-          allResults.push({
-            id: r.Id,
-            place: p.place,
-            name: r.Name,
-            clubId: r.Club,
-            clubName: clubMap.get(r.Club) ?? "",
-            className: cls?.Name ?? "",
-            classId: r.Class,
-            startTime: toAbsolute(r.StartTime, zeroTime),
-            finishTime: toAbsolute(r.FinishTime, zeroTime),
-            runningTime: p.runningTime,
-            timeBehind: p.timeBehind,
-            status: r.Status as ResultEntry["status"],
-            startNo: r.StartNo,
-            hasPunches: hasResult || (punchMap.get(r.CardNo) ?? 0) > 0,
-            hasStarted: r.StartTime > 0 && (r.StartTime <= 1 || meosNow >= toAbsolute(r.StartTime, zeroTime)),
-            ...(noTiming ? { noTiming: true } : {}),
+      enriched.sort((a, b) => {
+        const aOk = a.status === 1 ? 0 : 1;
+        const bOk = b.status === 1 ? 0 : 1;
+        if (aOk !== bOk) return aOk - bOk;
+        if (aOk === 0) return a.runningTime - b.runningTime;
+        return 0;
+      });
+
+      // Compute place + timeBehind within each class.
+      const placesByClass = new Map<string, { winner: number; place: number }>();
+      const result: ResultEntry[] = [];
+      for (const e of enriched) {
+        const classKey = e.r.classId ?? "";
+        if (e.status === 1 && e.runningTime > 0) {
+          let entry = placesByClass.get(classKey);
+          if (!entry) {
+            entry = { winner: e.runningTime, place: 0 };
+            placesByClass.set(classKey, entry);
+          }
+          entry.place++;
+          result.push({
+            id: e.r.seq,
+            place: entry.place,
+            name: e.r.name,
+            clubId: e.r.eventorClubId ? Number(e.r.eventorClubId) : 0,
+            clubName: e.r.clubName,
+            className: e.r.class?.name ?? "",
+            classId: e.r.class?.seq ?? 0,
+            startTime: e.startAbs,
+            finishTime: e.finishAbs,
+            runningTime: e.runningTime,
+            timeBehind: e.runningTime - entry.winner,
+            status: e.status,
+            startNo: e.r.startNo,
+          });
+        } else {
+          result.push({
+            id: e.r.seq,
+            place: 0,
+            name: e.r.name,
+            clubId: e.r.eventorClubId ? Number(e.r.eventorClubId) : 0,
+            clubName: e.r.clubName,
+            className: e.r.class?.name ?? "",
+            classId: e.r.class?.seq ?? 0,
+            startTime: e.startAbs,
+            finishTime: e.finishAbs,
+            runningTime: 0,
+            timeBehind: 0,
+            status: e.status,
+            startNo: e.r.startNo,
           });
         }
       }
-
-      return allResults;
+      return result;
     }),
 
-  /**
-   * Get all classes with course details and runner counts.
-   */
-  classes: competitionProcedure.query(async ({ ctx }): Promise<ClassDetail[]> => {
-    const client = ctx.db;
-    const zeroTime = await getZeroTime(client);
-
-    const classes = await client.oClass.findMany({
-      where: { Removed: false },
-      orderBy: { SortIndex: "asc" },
+  classesWithCounts: eventProcedure.query(async ({ ctx }) => {
+    const classes = await ctx.db.class.findMany({
+      where: { eventId: ctx.event.id, removed: false },
+      include: { course: { select: { name: true, lengthM: true } } },
+      orderBy: { sortIndex: "asc" },
     });
-
-    const courses = await client.oCourse.findMany({
-      where: { Removed: false },
+    const runnerCounts = await ctx.db.runner.groupBy({
+      by: ["classId"],
+      _count: { classId: true },
+      where: { eventId: ctx.event.id, removed: false },
     });
-    const courseMap = new Map(courses.map((c) => [c.Id, c]));
-
-    // Count participating runners per class (Cancel excluded).
-    const runners = await client.oRunner.findMany({
-      where: { Removed: false, Status: { notIn: [...WITHDRAWN_STATUSES] } },
-      select: { Class: true },
-    });
-    const runnerCountByClass = new Map<number, number>();
-    for (const r of runners) {
-      runnerCountByClass.set(
-        r.Class,
-        (runnerCountByClass.get(r.Class) ?? 0) + 1,
-      );
-    }
-
-    return classes.map((c) => {
-      const course = courseMap.get(c.Course);
-      const controlCount = course
-        ? course.Controls.split(";").filter(Boolean).length
-        : 0;
-      return {
-        id: c.Id,
-        name: c.Name,
-        courseId: c.Course,
-        courseName: course?.Name ?? "",
-        courseLength: course?.Length ?? 0,
-        controlCount,
-        runnerCount: runnerCountByClass.get(c.Id) ?? 0,
-        firstStart: toAbsolute(c.FirstStart, zeroTime),
-        startInterval: c.StartInterval,
-        sortIndex: c.SortIndex,
-      };
-    });
+    const counts = new Map<string, number>(
+      runnerCounts.map((r) => [r.classId ?? "", r._count.classId]),
+    );
+    return classes.map((c) => ({
+      id: c.seq,
+      name: c.name,
+      courseName: c.course?.name ?? "",
+      courseLength: c.course?.lengthM ?? 0,
+      runnerCount: counts.get(c.id) ?? 0,
+    }));
   }),
 });

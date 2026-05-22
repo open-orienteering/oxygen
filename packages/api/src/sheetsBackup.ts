@@ -1,5 +1,4 @@
 import type { PrismaClient } from "@prisma/client";
-import { ensureCompetitionConfigTable } from "./db.js";
 
 export interface SheetRow {
   sheet?: string;
@@ -41,18 +40,16 @@ let cachedWebhookUrl: string | null = null;
 let cacheTime = 0;
 const CACHE_TTL_MS = 60_000;
 
-async function getWebhookUrl(client: PrismaClient, dbName: string): Promise<string> {
+async function getWebhookUrl(client: PrismaClient, eventId: bigint): Promise<string> {
   if (cachedWebhookUrl !== null && Date.now() - cacheTime < CACHE_TTL_MS) {
     return cachedWebhookUrl;
   }
   try {
-    await ensureCompetitionConfigTable(client, dbName);
-    const rows = await client.$queryRawUnsafe<
-      Array<{ google_sheets_webhook_url: string }>
-    >(
-      "SELECT google_sheets_webhook_url FROM oxygen_competition_config WHERE id = 1",
-    );
-    cachedWebhookUrl = rows[0]?.google_sheets_webhook_url ?? "";
+    const row = await client.event.findUnique({
+      where: { id: eventId },
+      select: { googleSheetsWebhookUrl: true },
+    });
+    cachedWebhookUrl = row?.googleSheetsWebhookUrl ?? "";
   } catch {
     cachedWebhookUrl = "";
   }
@@ -66,9 +63,9 @@ export function clearSheetsCache(): void {
 }
 
 /** Fire-and-forget POST to the configured webhook. */
-function fireAndForget(client: PrismaClient, dbName: string, payload: Record<string, unknown>): void {
+function fireAndForget(client: PrismaClient, eventId: bigint, payload: Record<string, unknown>): void {
   void (async () => {
-    const url = await getWebhookUrl(client, dbName);
+    const url = await getWebhookUrl(client, eventId);
     if (!url) return;
 
     try {
@@ -89,10 +86,10 @@ function fireAndForget(client: PrismaClient, dbName: string, payload: Record<str
  */
 export function pushToGoogleSheet(
   client: PrismaClient,
-  dbName: string,
+  eventId: bigint,
   row: SheetRow,
 ): void {
-  fireAndForget(client, dbName, { ...row, sheet: "Readouts" });
+  fireAndForget(client, eventId, { ...row, sheet: "Readouts" });
 }
 
 /**
@@ -100,10 +97,10 @@ export function pushToGoogleSheet(
  */
 export function pushRegistrationToSheet(
   client: PrismaClient,
-  dbName: string,
+  eventId: bigint,
   row: RegistrationRow,
 ): void {
-  fireAndForget(client, dbName, { ...row, sheet: "Registrations" });
+  fireAndForget(client, eventId, { ...row, sheet: "Registrations" });
 }
 
 /**

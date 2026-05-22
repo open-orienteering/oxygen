@@ -305,10 +305,13 @@ export function RunnerInlineDetail({ runnerId, colSpan }: Props) {
                   });
                 }}
                 onRemovePunch={(punchId) => {
-                  removePunchMutation.mutate({ punchId });
+                  removePunchMutation.mutate({ punchId: String(punchId) });
                 }}
                 onUpdatePunchTime={(punchId, newTime) => {
-                  updatePunchTimeMutation.mutate({ punchId, time: newTime });
+                  updatePunchTimeMutation.mutate({
+                    punchId: String(punchId),
+                    time: newTime,
+                  });
                 }}
                 onUpdateStartTime={(time) => {
                   updateMutation.mutate(

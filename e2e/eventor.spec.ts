@@ -147,7 +147,11 @@ test.describe("Competition Selector — New Features", () => {
     ).toHaveCount(0, { timeout: 10000 });
   });
 
-  test("should create and delete a club", async ({ page }) => {
+  // Clubs are no longer first-class per-event entities after the Phase I
+  // refactor — they're derived from runners + the global club_directory.
+  // Per-event create/edit/delete don't exist anymore (the router stubs
+  // throw PRECONDITION_FAILED). The UI keeps these buttons disabled.
+  test.skip("should create and delete a club", async ({ page }) => {
     await page.goto("/");
     await page.getByText("My example tävling").first().click();
     await expect(page.getByText("Dashboard")).toBeVisible({ timeout: 5000 });

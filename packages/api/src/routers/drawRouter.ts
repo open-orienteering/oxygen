@@ -1,10 +1,10 @@
 import { z } from "zod";
-import { router, competitionProcedure } from "../trpc.js";
-import {incrementCounter, incrementCounterBatch, getZeroTime} from "../db.js";
+import { router, eventProcedure } from "../trpc.js";
 import { toRelative, toAbsolute } from "../timeConvert.js";
 import { generateDrawPreview } from "../draw/index.js";
 import type { DrawPreviewResult } from "@oxygen/shared";
 import { WITHDRAWN_STATUSES } from "@oxygen/shared";
+import { valueToRunnerStatus } from "../statusConvert.js";
 
 const classDrawConfigSchema = z.object({
   classId: z.number().int(),
@@ -27,118 +27,141 @@ const drawInputSchema = z.object({
   settings: drawSettingsSchema,
 });
 
+const withdrawnEnums = WITHDRAWN_STATUSES.map(valueToRunnerStatus);
+
 export const drawRouter = router({
-  /**
-   * Get default settings and class info for the draw panel.
-   */
-  defaults: competitionProcedure.query(async ({ ctx }) => {
-    const client = ctx.db;
-    const zeroTime = await getZeroTime(client);
+  /** Default settings + per-class meta for the draw panel. */
+  defaults: eventProcedure.query(async ({ ctx }) => {
+    const eventId = ctx.event.id;
+    const zeroTime = ctx.event.zeroTime;
 
-    const classes = await client.oClass.findMany({
-      where: { Removed: false },
-      orderBy: { SortIndex: "asc" },
+    const classes = await ctx.db.class.findMany({
+      where: { eventId, removed: false },
+      include: { course: { select: { seq: true, name: true } } },
+      orderBy: { sortIndex: "asc" },
     });
 
-    const courses = await client.oCourse.findMany({
-      where: { Removed: false },
-      select: { Id: true, Name: true },
+    const runners = await ctx.db.runner.findMany({
+      where: {
+        eventId,
+        removed: false,
+        status: { notIn: withdrawnEnums },
+      },
+      select: { classId: true },
     });
-    const courseMap = new Map(courses.map((c) => [c.Id, c.Name]));
-
-    // Withdrawn entries are not drawn — exclude them from the per-class count.
-    const runners = await client.oRunner.findMany({
-      where: { Removed: false, Status: { notIn: [...WITHDRAWN_STATUSES] } },
-      select: { Class: true },
-    });
-    const countByClass = new Map<number, number>();
+    const countByClassId = new Map<string, number>();
     for (const r of runners) {
-      countByClass.set(r.Class, (countByClass.get(r.Class) ?? 0) + 1);
+      if (!r.classId) continue;
+      countByClassId.set(r.classId, (countByClassId.get(r.classId) ?? 0) + 1);
     }
 
     return {
       zeroTime,
       classes: classes.map((c) => ({
-        id: c.Id,
-        name: c.Name,
-        courseId: c.Course,
-        courseName: courseMap.get(c.Course) ?? "",
-        runnerCount: countByClass.get(c.Id) ?? 0,
-        firstStart: toAbsolute(c.FirstStart, zeroTime),
-        startInterval: c.StartInterval,
-        freeStart: c.FreeStart === 1,
-        classType: c.ClassType,
+        id: c.seq,
+        name: c.name,
+        courseId: c.course?.seq ?? 0,
+        courseName: c.course?.name ?? "",
+        runnerCount: countByClassId.get(c.id) ?? 0,
+        firstStart: toAbsolute(c.firstStart, zeroTime),
+        startInterval: c.startInterval,
+        freeStart: c.freeStart,
+        classType: c.classType,
       })),
     };
   }),
 
-  /**
-   * Generate a draw preview without saving.
-   * Returns proposed start times and start numbers for review.
-   */
-  preview: competitionProcedure
+  /** Generate a draw preview without persisting. */
+  preview: eventProcedure
     .input(drawInputSchema)
     .mutation(async ({ ctx, input }): Promise<DrawPreviewResult> => {
-      const client = ctx.db;
-      return generateDrawPreview(client, input.classes, input.settings);
+      const result = await generateDrawPreview(
+        ctx.db,
+        ctx.event.id,
+        input.classes,
+        input.settings,
+      );
+      // Internal entries carry UUIDs; map back to runner seqs for the UI.
+      const runnerUuids = result.classes.flatMap((c) =>
+        c.entries.map((e) => e.runnerId),
+      );
+      const runnerSeqs = runnerUuids.length
+        ? await ctx.db.runner.findMany({
+            where: { id: { in: runnerUuids } },
+            select: { id: true, seq: true },
+          })
+        : [];
+      const seqByUuid = new Map(runnerSeqs.map((r) => [r.id, r.seq]));
+      return {
+        warnings: result.warnings,
+        classes: result.classes.map((c) => ({
+          classId: c.classId,
+          className: c.className,
+          courseName: c.courseName,
+          corridor: c.corridor,
+          computedFirstStart: c.computedFirstStart,
+          entries: c.entries.map((e) => ({
+            runnerId: seqByUuid.get(e.runnerId) ?? 0,
+            name: e.name,
+            clubName: e.clubName,
+            startTime: e.startTime,
+            startNo: e.startNo,
+          })),
+        })),
+      };
     }),
 
   /**
-   * Execute the draw: generate start times and persist to database.
-   * Updates oRunner.StartTime, oRunner.StartNo, oClass.FirstStart,
-   * and oClass.StartInterval for each drawn class.
+   * Execute the draw: writes start times + start numbers to runners,
+   * and FirstStart + StartInterval to each class. Times are stored
+   * ZeroTime-relative; the engine speaks absolute deciseconds.
    */
-  execute: competitionProcedure
+  execute: eventProcedure
     .input(drawInputSchema)
-    .mutation(async ({ ctx, input }): Promise<{ success: boolean; totalDrawn: number; warnings: string[] }> => {
-      const client = ctx.db;
-      const zeroTime = await getZeroTime(client);
-      const result = await generateDrawPreview(client, input.classes, input.settings);
+    .mutation(
+      async ({
+        ctx,
+        input,
+      }): Promise<{ success: boolean; totalDrawn: number; warnings: string[] }> => {
+        const zeroTime = ctx.event.zeroTime;
+        const result = await generateDrawPreview(
+          ctx.db,
+          ctx.event.id,
+          input.classes,
+          input.settings,
+        );
 
-      let totalDrawn = 0;
-      const configMap = new Map(input.classes.map((c) => [c.classId, c]));
+        const configByClassSeq = new Map(
+          input.classes.map((c) => [c.classId, c]),
+        );
 
-      const allRunnerIds: number[] = [];
-      const classIds: number[] = [];
+        let totalDrawn = 0;
+        for (const cls of result.classes) {
+          const config = configByClassSeq.get(cls.classId);
 
-      for (const cls of result.classes) {
-        const config = configMap.get(cls.classId);
+          for (const entry of cls.entries) {
+            await ctx.db.runner.update({
+              where: { id: entry.runnerId },
+              data: {
+                startTime: toRelative(entry.startTime, zeroTime),
+                startNo: entry.startNo,
+              },
+            });
+            totalDrawn++;
+          }
 
-        // Update each runner's start time and start number
-        // (each runner gets a unique StartTime/StartNo so individual updates needed)
-        for (const entry of cls.entries) {
-          await client.oRunner.update({
-            where: { Id: entry.runnerId },
-            data: {
-              StartTime: toRelative(entry.startTime, zeroTime),
-              StartNo: entry.startNo,
-            },
-          });
-          allRunnerIds.push(entry.runnerId);
-          totalDrawn++;
+          if (config) {
+            await ctx.db.class.update({
+              where: { id: cls.classUuid },
+              data: {
+                firstStart: toRelative(cls.computedFirstStart, zeroTime),
+                startInterval: config.interval,
+              },
+            });
+          }
         }
 
-        // Update class FirstStart and StartInterval
-        if (config) {
-          await client.oClass.update({
-            where: { Id: cls.classId },
-            data: {
-              FirstStart: toRelative(cls.computedFirstStart, zeroTime),
-              StartInterval: config.interval,
-            },
-          });
-          classIds.push(cls.classId);
-        }
-      }
-
-      // Batch counter increments (single lock/unlock per table instead of per-record)
-      await incrementCounterBatch("oRunner", allRunnerIds, ctx.dbName);
-      await incrementCounterBatch("oClass", classIds, ctx.dbName);
-
-      return {
-        success: true,
-        totalDrawn,
-        warnings: result.warnings,
-      };
-    }),
+        return { success: true, totalDrawn, warnings: result.warnings };
+      },
+    ),
 });

@@ -1,360 +1,325 @@
 import { z } from "zod";
-import { router, competitionProcedure } from "../trpc.js";
+import { TRPCError } from "@trpc/server";
+import { router, eventProcedure } from "../trpc.js";
 import {
-  parseMultiCourse,
-  encodeMultiCourse,
   WITHDRAWN_STATUSES,
-  isWithdrawn,
   type ClassSummary,
   type ClassManageDetail,
-  type RunnerStatusValue,
 } from "@oxygen/shared";
+import { valueToRunnerStatus, runnerStatusToValue } from "../statusConvert.js";
+
+async function getClassBySeq(
+  db: import("@prisma/client").PrismaClient,
+  eventId: bigint,
+  seq: number,
+) {
+  const c = await db.class.findFirst({
+    where: { eventId, seq, removed: false },
+  });
+  if (!c) {
+    throw new TRPCError({ code: "NOT_FOUND", message: `Class ${seq} not found` });
+  }
+  return c;
+}
+
+async function courseSeqToId(
+  db: import("@prisma/client").PrismaClient,
+  eventId: bigint,
+  seq: number,
+): Promise<string> {
+  const c = await db.course.findFirst({
+    where: { eventId, seq, removed: false },
+    select: { id: true },
+  });
+  if (!c) {
+    throw new TRPCError({ code: "NOT_FOUND", message: `Course ${seq} not found` });
+  }
+  return c.id;
+}
+
+const withdrawnEnums = WITHDRAWN_STATUSES.map(valueToRunnerStatus);
+
+async function loadClassDetail(
+  db: import("@prisma/client").PrismaClient,
+  eventId: bigint,
+  seq: number,
+): Promise<ClassManageDetail> {
+  const c = await getClassBySeq(db, eventId, seq);
+  const course = c.courseId
+    ? await db.course.findUnique({
+        where: { id: c.courseId },
+        select: { name: true, seq: true, lengthM: true },
+      })
+    : null;
+  const courseControlCount = c.courseId
+    ? await db.courseControl.count({ where: { courseId: c.courseId } })
+    : 0;
+  const runners = await db.runner.findMany({
+    where: { eventId, classId: c.id, removed: false },
+    select: { id: true, seq: true, name: true, status: true },
+    orderBy: { startNo: "asc" },
+  });
+  return {
+    id: c.seq,
+    name: c.name,
+    longName: c.longName,
+    courseId: course?.seq ?? 0,
+    courseName: course?.name ?? "",
+    courseIds: course ? [course.seq] : [],
+    courseNames: course ? [course.name] : [],
+    courseLength: course?.lengthM ?? 0,
+    controlCount: courseControlCount,
+    runnerCount: runners.length,
+    sortIndex: c.sortIndex,
+    sex: c.sex,
+    lowAge: c.lowAge,
+    highAge: c.highAge,
+    freeStart: c.freeStart,
+    noTiming: c.noTiming,
+    allowQuickEntry: c.allowQuickEntry,
+    classType: c.classType,
+    classFee: c.classFeeCents,
+    maxTime: c.maxTime,
+    firstStart: c.firstStart,
+    startInterval: c.startInterval,
+    runners: runners.map((r) => ({
+      id: r.seq,
+      name: r.name,
+      status: runnerStatusToValue(r.status),
+    })),
+  };
+}
 
 export const classRouter = router({
-  /**
-   * List all classes.
-   */
-  list: competitionProcedure
-    .input(
-      z.object({ search: z.string().optional() }).optional(),
-    )
+  list: eventProcedure
+    .input(z.object({ search: z.string().optional() }).optional())
     .query(async ({ ctx, input }): Promise<ClassSummary[]> => {
-      const client = ctx.db;
-
-      const classes = await client.oClass.findMany({
-        where: { Removed: false },
-        orderBy: { SortIndex: "asc" },
+      const eventId = ctx.event.id;
+      const classes = await ctx.db.class.findMany({
+        where: { eventId, removed: false },
+        include: { course: { select: { name: true, lengthM: true, seq: true } } },
+        orderBy: { sortIndex: "asc" },
       });
 
-      const courses = await client.oCourse.findMany({
-        where: { Removed: false },
+      const runners = await ctx.db.runner.findMany({
+        where: { eventId, removed: false, status: { notIn: withdrawnEnums } },
+        select: { classId: true },
       });
-      const courseMap = new Map(courses.map((c) => [c.Id, c]));
-
-      // Only count participating runners — withdrawn entries (Cancel)
-      // are not part of the class size.
-      const runners = await client.oRunner.findMany({
-        where: { Removed: false, Status: { notIn: [...WITHDRAWN_STATUSES] } },
-        select: { Class: true },
-      });
-      const runnerCountByClass = new Map<number, number>();
+      const counts = new Map<string, number>();
       for (const r of runners) {
-        runnerCountByClass.set(r.Class, (runnerCountByClass.get(r.Class) ?? 0) + 1);
+        if (r.classId) counts.set(r.classId, (counts.get(r.classId) ?? 0) + 1);
       }
 
-      let result = classes.map((c): ClassSummary => {
-        // Determine all course IDs (single or forked)
-        const multiStages = parseMultiCourse(c.MultiCourse);
-        const allForkedIds = multiStages.flat();
-        const courseIds =
-          allForkedIds.length > 0
-            ? allForkedIds
-            : c.Course > 0
-              ? [c.Course]
-              : [];
+      const courseIds = classes
+        .map((c) => c.courseId)
+        .filter((id): id is string => !!id);
+      const grouped = courseIds.length
+        ? await ctx.db.courseControl.groupBy({
+            by: ["courseId"],
+            _count: { courseId: true },
+            where: { courseId: { in: courseIds } },
+          })
+        : [];
+      const controlCountMap = new Map<string, number>(
+        grouped.map((g) => [g.courseId, g._count.courseId]),
+      );
+      void controlCountMap;
 
-        const courseNames = courseIds.map(
-          (id) => courseMap.get(id)?.Name ?? `#${id}`,
-        );
-        const primaryCourse = courseMap.get(c.Course);
-
+      const result = classes.map((c): ClassSummary => {
+        const courseSeq = c.course?.seq ?? 0;
+        const courseName = c.course?.name ?? "";
         return {
-          id: c.Id,
-          name: c.Name,
-          courseId: c.Course,
-          courseName: primaryCourse?.Name ?? "",
-          courseIds,
-          courseNames,
-          runnerCount: runnerCountByClass.get(c.Id) ?? 0,
-          sortIndex: c.SortIndex,
-          sex: c.Sex,
-          lowAge: c.LowAge,
-          highAge: c.HighAge,
-          freeStart: c.FreeStart === 1,
-          noTiming: c.NoTiming === 1,
-          allowQuickEntry: c.AllowQuickEntry === 1,
-          classType: c.ClassType,
-          classFee: c.ClassFee,
-          maxTime: c.MaxTime,
+          id: c.seq,
+          name: c.name,
+          courseId: courseSeq,
+          courseName,
+          courseIds: courseSeq ? [courseSeq] : [],
+          courseNames: courseSeq ? [courseName] : [],
+          runnerCount: counts.get(c.id) ?? 0,
+          sortIndex: c.sortIndex,
+          sex: c.sex,
+          lowAge: c.lowAge,
+          highAge: c.highAge,
+          freeStart: c.freeStart,
+          noTiming: c.noTiming,
+          allowQuickEntry: c.allowQuickEntry,
+          classType: c.classType,
+          classFee: c.classFeeCents,
+          maxTime: c.maxTime,
         };
       });
 
       if (input?.search) {
-        const term = input.search.toLowerCase();
-        result = result.filter(
-          (c) =>
-            c.name.toLowerCase().includes(term) ||
-            c.courseNames.some((n) => n.toLowerCase().includes(term)) ||
-            String(c.id).includes(term),
-        );
+        const s = input.search.toLowerCase();
+        return result.filter((c) => c.name.toLowerCase().includes(s));
       }
-
       return result;
     }),
 
-  /**
-   * Get a single class with full details.
-   */
-  detail: competitionProcedure
+  detail: eventProcedure
     .input(z.object({ id: z.number().int() }))
-    .query(async ({ ctx, input }): Promise<ClassManageDetail | null> => {
-      const client = ctx.db;
+    .query(async ({ ctx, input }) => loadClassDetail(ctx.db, ctx.event.id, input.id)),
 
-      const cls = await client.oClass.findFirst({
-        where: { Id: input.id, Removed: false },
-      });
-      if (!cls) return null;
+  getById: eventProcedure
+    .input(z.object({ id: z.number().int() }))
+    .query(async ({ ctx, input }) => loadClassDetail(ctx.db, ctx.event.id, input.id)),
 
-      const courses = await client.oCourse.findMany({
-        where: { Removed: false },
-      });
-      const courseMap = new Map(courses.map((c) => [c.Id, c]));
-
-      const multiStages = parseMultiCourse(cls.MultiCourse);
-      const allForkedIds = multiStages.flat();
-      const courseIds =
-        allForkedIds.length > 0
-          ? allForkedIds
-          : cls.Course > 0
-            ? [cls.Course]
-            : [];
-      const courseNames = courseIds.map(
-        (id) => courseMap.get(id)?.Name ?? `#${id}`,
-      );
-
-      const primaryCourse = courseMap.get(cls.Course);
-      const controlCount = primaryCourse
-        ? primaryCourse.Controls.split(";").filter(Boolean).length
-        : 0;
-
-      // Get runners in this class (limited fields). Withdrawn entries
-      // are returned so the management UI can still show them, but the
-      // headline runnerCount only reflects participants.
-      const runners = await client.oRunner.findMany({
-        where: { Removed: false, Class: cls.Id },
-        select: { Id: true, Name: true, Status: true },
-        orderBy: { StartNo: "asc" },
-      });
-      const participantCount = runners.filter(
-        (r) => !isWithdrawn(r.Status as RunnerStatusValue),
-      ).length;
-
-      return {
-        id: cls.Id,
-        name: cls.Name,
-        courseId: cls.Course,
-        courseName: primaryCourse?.Name ?? "",
-        courseIds,
-        courseNames,
-        runnerCount: participantCount,
-        sortIndex: cls.SortIndex,
-        sex: cls.Sex,
-        lowAge: cls.LowAge,
-        highAge: cls.HighAge,
-        freeStart: cls.FreeStart === 1,
-        noTiming: cls.NoTiming === 1,
-        allowQuickEntry: cls.AllowQuickEntry === 1,
-        classType: cls.ClassType,
-        classFee: cls.ClassFee,
-        maxTime: cls.MaxTime,
-        longName: cls.LongName,
-        firstStart: cls.FirstStart,
-        startInterval: cls.StartInterval,
-        courseLength: primaryCourse?.Length ?? 0,
-        controlCount,
-        runners: runners.map((r) => ({
-          id: r.Id,
-          name: r.Name,
-          status: r.Status,
-        })),
-      };
-    }),
-
-  /**
-   * Create a new class.
-   */
-  create: competitionProcedure
+  create: eventProcedure
     .input(
       z.object({
         name: z.string().min(1),
-        courseIds: z.array(z.number().int()).optional().default([]),
+        longName: z.string().optional().default(""),
+        courseId: z.number().int().optional(),
         sortIndex: z.number().int().optional().default(0),
         sex: z.string().optional().default(""),
         lowAge: z.number().int().optional().default(0),
         highAge: z.number().int().optional().default(0),
-        freeStart: z.boolean().optional().default(false),
-        noTiming: z.boolean().optional().default(false),
+        classFee: z.number().int().optional().default(0),
         allowQuickEntry: z.boolean().optional().default(false),
+        firstStart: z.number().int().optional().default(0),
+        startInterval: z.number().int().optional().default(0),
+        maxTime: z.number().int().optional().default(0),
       }),
     )
     .mutation(async ({ ctx, input }) => {
-      const client = ctx.db;
-
-      const courseId = input.courseIds.length > 0 ? input.courseIds[0] : 0;
-      const multiCourse =
-        input.courseIds.length > 1
-          ? encodeMultiCourse(input.courseIds)
-          : "";
-
-      const cls = await client.oClass.create({
+      const courseUuid = input.courseId
+        ? await courseSeqToId(ctx.db, ctx.event.id, input.courseId)
+        : null;
+      const created = await ctx.db.class.create({
         data: {
-          Name: input.name,
-          Course: courseId,
-          MultiCourse: multiCourse,
-          Qualification: "",
-          SortIndex: input.sortIndex,
-          Sex: input.sex,
-          LowAge: input.lowAge,
-          HighAge: input.highAge,
-          FreeStart: input.freeStart ? 1 : 0,
-          NoTiming: input.noTiming ? 1 : 0,
-          AllowQuickEntry: input.allowQuickEntry ? 1 : 0,
+          eventId: ctx.event.id,
+          name: input.name,
+          longName: input.longName,
+          courseId: courseUuid,
+          sortIndex: input.sortIndex,
+          sex: input.sex,
+          lowAge: input.lowAge,
+          highAge: input.highAge,
+          classFeeCents: input.classFee,
+          allowQuickEntry: input.allowQuickEntry,
+          firstStart: input.firstStart,
+          startInterval: input.startInterval,
+          maxTime: input.maxTime,
         },
+        select: { seq: true },
       });
-
-      return { id: cls.Id, name: cls.Name };
+      return { id: created.seq };
     }),
 
-  /**
-   * Update an existing class.
-   */
-  update: competitionProcedure
+  update: eventProcedure
     .input(
       z.object({
         id: z.number().int(),
-        name: z.string().optional(),
-        courseIds: z.array(z.number().int()).optional(),
+        name: z.string().min(1).optional(),
+        longName: z.string().optional(),
+        courseId: z.number().int().nullable().optional(),
         sortIndex: z.number().int().optional(),
         sex: z.string().optional(),
         lowAge: z.number().int().optional(),
         highAge: z.number().int().optional(),
-        freeStart: z.boolean().optional(),
-        noTiming: z.boolean().optional(),
+        classFee: z.number().int().optional(),
         allowQuickEntry: z.boolean().optional(),
         firstStart: z.number().int().optional(),
         startInterval: z.number().int().optional(),
-        classFee: z.number().int().optional(),
-        maxTime: z.number().int().min(0).optional(),
+        maxTime: z.number().int().optional(),
+        noTiming: z.boolean().optional(),
+        classType: z.string().optional(),
       }),
     )
     .mutation(async ({ ctx, input }) => {
-      const client = ctx.db;
-
+      const c = await getClassBySeq(ctx.db, ctx.event.id, input.id);
       const data: Record<string, unknown> = {};
-      if (input.name !== undefined) data.Name = input.name;
-      if (input.sortIndex !== undefined) data.SortIndex = input.sortIndex;
-      if (input.sex !== undefined) data.Sex = input.sex;
-      if (input.lowAge !== undefined) data.LowAge = input.lowAge;
-      if (input.highAge !== undefined) data.HighAge = input.highAge;
-      if (input.freeStart !== undefined)
-        data.FreeStart = input.freeStart ? 1 : 0;
-      if (input.noTiming !== undefined)
-        data.NoTiming = input.noTiming ? 1 : 0;
-      if (input.allowQuickEntry !== undefined)
-        data.AllowQuickEntry = input.allowQuickEntry ? 1 : 0;
-      if (input.firstStart !== undefined) data.FirstStart = input.firstStart;
-      if (input.startInterval !== undefined)
-        data.StartInterval = input.startInterval;
-      if (input.classFee !== undefined) data.ClassFee = input.classFee;
-      if (input.maxTime !== undefined) data.MaxTime = input.maxTime;
-
-      // Handle course assignment
-      if (input.courseIds !== undefined) {
-        data.Course = input.courseIds.length > 0 ? input.courseIds[0] : 0;
-        data.MultiCourse =
-          input.courseIds.length > 1
-            ? encodeMultiCourse(input.courseIds)
-            : "";
+      if (input.name !== undefined) data.name = input.name;
+      if (input.longName !== undefined) data.longName = input.longName;
+      if (input.courseId !== undefined) {
+        data.courseId =
+          input.courseId === null
+            ? null
+            : await courseSeqToId(ctx.db, ctx.event.id, input.courseId);
       }
+      if (input.sortIndex !== undefined) data.sortIndex = input.sortIndex;
+      if (input.sex !== undefined) data.sex = input.sex;
+      if (input.lowAge !== undefined) data.lowAge = input.lowAge;
+      if (input.highAge !== undefined) data.highAge = input.highAge;
+      if (input.classFee !== undefined) data.classFeeCents = input.classFee;
+      if (input.allowQuickEntry !== undefined)
+        data.allowQuickEntry = input.allowQuickEntry;
+      if (input.firstStart !== undefined) data.firstStart = input.firstStart;
+      if (input.startInterval !== undefined)
+        data.startInterval = input.startInterval;
+      if (input.maxTime !== undefined) data.maxTime = input.maxTime;
+      if (input.noTiming !== undefined) data.noTiming = input.noTiming;
+      if (input.classType !== undefined) data.classType = input.classType;
+      await ctx.db.class.update({ where: { id: c.id }, data });
+      return { ok: true };
+    }),
 
-      const cls = await client.oClass.update({
-        where: { Id: input.id },
+  bulkUpdate: eventProcedure
+    .input(
+      z.object({
+        ids: z.array(z.number().int()),
+        courseId: z.number().int().nullable().optional(),
+        sortIndex: z.number().int().optional(),
+        classFee: z.number().int().optional(),
+        firstStart: z.number().int().optional(),
+        startInterval: z.number().int().optional(),
+        maxTime: z.number().int().optional(),
+        allowQuickEntry: z.boolean().optional(),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      const rows = await ctx.db.class.findMany({
+        where: { eventId: ctx.event.id, seq: { in: input.ids } },
+        select: { id: true },
+      });
+      const data: Record<string, unknown> = {};
+      if (input.courseId !== undefined) {
+        data.courseId =
+          input.courseId === null
+            ? null
+            : await courseSeqToId(ctx.db, ctx.event.id, input.courseId);
+      }
+      if (input.sortIndex !== undefined) data.sortIndex = input.sortIndex;
+      if (input.classFee !== undefined) data.classFeeCents = input.classFee;
+      if (input.firstStart !== undefined) data.firstStart = input.firstStart;
+      if (input.startInterval !== undefined)
+        data.startInterval = input.startInterval;
+      if (input.maxTime !== undefined) data.maxTime = input.maxTime;
+      if (input.allowQuickEntry !== undefined)
+        data.allowQuickEntry = input.allowQuickEntry;
+      await ctx.db.class.updateMany({
+        where: { id: { in: rows.map((r) => r.id) } },
         data,
       });
-
-      return { id: cls.Id, name: cls.Name };
+      return { ok: true as const, count: rows.length };
     }),
 
-  /**
-   * Batch-reorder classes by updating SortIndex.
-   */
-  reorder: competitionProcedure
-    .input(
-      z.object({
-        items: z.array(
-          z.object({
-            id: z.number().int(),
-            sortIndex: z.number().int(),
-          }),
-        ),
-      }),
-    )
-    .mutation(async ({ ctx, input }) => {
-      const client = ctx.db;
-
-      await Promise.all(
-        input.items.map((item) =>
-          client.oClass.update({
-            where: { Id: item.id },
-            data: { SortIndex: item.sortIndex },
-          }),
-        ),
-      );
-
-      return { success: true };
-    }),
-
-  /**
-   * Bulk-update multiple classes at once.
-   */
-  bulkUpdate: competitionProcedure
-    .input(
-      z.object({
-        ids: z.array(z.number().int()).min(1).max(500),
-        data: z.object({
-          classFee: z.number().int().optional(),
-          freeStart: z.boolean().optional(),
-          noTiming: z.boolean().optional(),
-          allowQuickEntry: z.boolean().optional(),
-          maxTime: z.number().int().min(0).optional(),
-        }),
-      }),
-    )
-    .mutation(async ({ ctx, input }) => {
-      const client = ctx.db;
-
-      let updated = 0;
-      const data: Record<string, unknown> = {};
-      if (input.data.classFee !== undefined) data.ClassFee = input.data.classFee;
-      if (input.data.freeStart !== undefined) data.FreeStart = input.data.freeStart ? 1 : 0;
-      if (input.data.noTiming !== undefined) data.NoTiming = input.data.noTiming ? 1 : 0;
-      if (input.data.allowQuickEntry !== undefined) data.AllowQuickEntry = input.data.allowQuickEntry ? 1 : 0;
-      if (input.data.maxTime !== undefined) data.MaxTime = input.data.maxTime;
-
-      for (const id of input.ids) {
-        await client.oClass.update({
-          where: { Id: id },
-          data,
-        });
-        updated++;
-      }
-
-      return { updated };
-    }),
-
-  /**
-   * Soft-delete a class.
-   */
-  delete: competitionProcedure
+  delete: eventProcedure
     .input(z.object({ id: z.number().int() }))
     .mutation(async ({ ctx, input }) => {
-      const client = ctx.db;
-
-      await client.oClass.update({
-        where: { Id: input.id },
-        data: { Removed: true },
+      const c = await getClassBySeq(ctx.db, ctx.event.id, input.id);
+      await ctx.db.class.update({
+        where: { id: c.id },
+        data: { removed: true },
       });
+      return { ok: true };
+    }),
 
-      return { success: true };
+  reorder: eventProcedure
+    .input(z.object({ orderedIds: z.array(z.number().int()) }))
+    .mutation(async ({ ctx, input }) => {
+      for (let i = 0; i < input.orderedIds.length; i++) {
+        const c = await ctx.db.class.findFirst({
+          where: { eventId: ctx.event.id, seq: input.orderedIds[i] },
+          select: { id: true },
+        });
+        if (c) {
+          await ctx.db.class.update({
+            where: { id: c.id },
+            data: { sortIndex: i },
+          });
+        }
+      }
+      return { ok: true };
     }),
 });

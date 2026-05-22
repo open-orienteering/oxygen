@@ -1,87 +1,95 @@
-# Database Backup & Restore
+# Event Backup & Restore
 
-Oxygen ships with a one-click backup of the currently selected competition database, exposed on the **Event** page as a **Download backup** button. The endpoint streams a `mysqldump` directly to the browser; nothing is stored on the server.
+Oxygen ships with a one-click backup of the currently selected event, exposed on the **Event** page as a **Download backup** button. The endpoint streams a per-event PostgreSQL dump directly to the browser; nothing is stored on the server.
 
 ## What gets backed up
 
-A single competition database — every `o*` (MeOS) and `oxygen_*` (Oxygen-specific) table, with both schema and data. The backup also captures the metadata of the competition's row in the registry (`MeOSMain.oEvent`), but **only as a commented header**. The MeOSMain registry itself is never modified by a backup.
+A single event — every event-scoped row in the `oxygen` schema (`events`, `controls`, `courses`, `course_controls`, `classes`, `class_course_pools`, `runners`, `teams`, `cards`, `card_readouts`, `punches`, `control_units`, `event_log`, `map_files`, `rendered_maps`, `map_tiles`, `tracks`, `routes`, `event_seqs`), filtered to the active event's id.
+
+The dump is text — `psql \copy ... TO STDOUT WITH (FORMAT csv, HEADER true)` per table, with `\echo --- <table> ---` separator lines that make the file both human-readable and machine-parseable. Each table's section starts with the CSV header row and contains only that event's rows.
 
 What is **not** in the backup:
 
-- Other competitions on the same server
-- The `MeOSMain` database itself (club logos in `oxygen_club_db`, runner cache in `oxygen_runner_db`, remote-connection table, etc.)
-- Map tile cache files outside the database
+- Other events on the same server
+- Global / shared rows: `runner_directory`, `club_directory`, `eventor_event_meta`, `oxygen_settings`
+- Map tile files outside the database (there are none — tiles live in `map_tiles`)
 
-If you need a system-wide snapshot, run `mysqldump --databases MeOSMain <NameId> ...` from the host instead.
+If you need a system-wide snapshot, run `pg_dump --schema=oxygen oxygen > full.sql` from the host instead.
 
 ## File format
 
-The downloaded file is a plain SQL script in `mysqldump` format, with a header block prepended by Oxygen:
+The downloaded file is a UTF-8 text file. Header (a single SQL comment block) followed by `\echo`-delimited per-table CSV sections:
 
 ```sql
 -- Oxygen backup
 -- Created:    2026-04-25T20:14:55.123Z
--- Database:   Vinterserien
+-- Event:      Vinterserien
 -- Name:       Vinterserien
 -- Date:       2026-03-15
 -- ZeroTime:   324000
--- Version:    96
 -- Annotation:
 --
+-- This is a per-event dump filtered to event_id = 42.
 -- To restore:
---   1. Recreate the database (drop first if it exists):
---        mysql -e "CREATE DATABASE \`Vinterserien\` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci"
---   2. Load the dump:
---        mysql Vinterserien < this-file.sql
---   3. Re-register in MeOSMain by uncommenting and running the INSERT below:
+--   1. Apply the latest oxygen schema migration on a fresh database.
+--   2. Run the INSERT below to recreate the event row, capturing the
+--      new id (BIGSERIAL): the dump references the original id, which
+--      you'll need to rewrite via sed before loading the data.
 --
--- INSERT INTO MeOSMain.oEvent (Name, Date, NameId, Annotation, ZeroTime, Version, Removed) VALUES (...);
+-- INSERT INTO oxygen.events (name_id, name, date, zero_time, annotation) VALUES ('Vinterserien', 'Vinterserien', '2026-03-15', 324000, '');
 
--- MySQL dump 10.13 ...
-DROP TABLE IF EXISTS `oCard`;
-CREATE TABLE `oCard` (...) ENGINE=InnoDB ...;
+--- events ---
+id,name_id,name,date,zero_time,annotation,...
+42,Vinterserien,Vinterserien,2026-03-15,324000,,...
+--- controls ---
+id,event_id,seq,name,codes,...
 ...
 ```
 
-The filename follows the pattern `<NameId>_backup_<YYYYMMDD_HHMMSS>.sql`, matching the convention used by manual backups in this project.
+The filename follows the pattern `<NameId>_backup_<YYYYMMDD_HHMMSS>.sql`.
 
-If the underlying `mysqldump` exits with a non-zero status (e.g. credentials wrong, server unreachable), the stream is terminated with a `-- BACKUP FAILED (exit N): <stderr>` line so a partial download is detectable.
+If the underlying `psql` exits with a non-zero status (credentials wrong, server unreachable, etc.), the stream terminates with a `-- BACKUP FAILED (exit N): <stderr>` line so a partial download is detectable.
 
-## Restoring a competition
+## Restoring an event
+
+A restore is more involved than the MeOS-era flat-file dump because Oxygen now uses a single database with foreign keys and a `BIGSERIAL` event id. The recommended path:
 
 ```bash
-# 1. Recreate the empty database
-mysql -u meos -e "DROP DATABASE IF EXISTS \`Vinterserien\`;
-                  CREATE DATABASE \`Vinterserien\`
-                    CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci"
+# 1. Ensure the target database is on the current schema.
+pnpm db:push
 
-# 2. Load the dump
-mysql -u meos Vinterserien < Vinterserien_backup_20260425_201455.sql
+# 2. Recreate the event row. Copy the commented INSERT from the
+#    backup file's header and run it (Postgres assigns a fresh id).
+psql "$DATABASE_URL" -c "INSERT INTO oxygen.events (name_id, name, date, zero_time, annotation)
+                         VALUES ('Vinterserien', 'Vinterserien', '2026-03-15', 324000, '');"
 
-# 3. Re-register the competition in MeOSMain so it shows up in the UI.
-#    Open the .sql file and copy the INSERT statement from the header
-#    (it's the line starting with `-- INSERT INTO MeOSMain.oEvent (...)`),
-#    drop the leading `-- `, and run it against MeOSMain:
-mysql -u meos MeOSMain
+# 3. Capture the new event id.
+NEW_ID=$(psql "$DATABASE_URL" -tAc "SELECT id FROM oxygen.events WHERE name_id = 'Vinterserien'")
+
+# 4. Rewrite the dump's event_id references from the original id to NEW_ID,
+#    then re-import each table's CSV section with \copy ... FROM STDIN.
+#    There is no committed restore helper yet — split the file by the
+#    `--- <table> ---` separator lines, then for each section run:
+psql "$DATABASE_URL" -c "\copy oxygen.<table> FROM '<section>.csv' WITH (FORMAT csv, HEADER true)"
 ```
 
-After step 3, refresh the Oxygen UI and the competition will reappear in the picker with all data intact.
+After the import, refresh the Oxygen UI and the event reappears in the picker with all data intact.
 
-### Why the registry INSERT is required
+### Why an id rewrite is needed
 
-Oxygen's UI lists competitions from `MeOSMain.oEvent`. A raw restore of just the competition database recreates all the data, but `MeOSMain` is a separate database that is **not** touched by the backup file. The header INSERT exists so a restore is fully self-contained — no need to remember the exact `Name`, `Date`, `ZeroTime`, or `Version` values from before.
+`oxygen.events.id` is a `BIGSERIAL`. A fresh database hands out a new id when the header INSERT runs, but every dependent row in the dump (controls, courses, runners, …) references the original event id via foreign key. The restore script's job is to map old id → new id while replaying the CSV sections.
 
-If the restore is meant to overlay an existing MeOSMain row (e.g. you only lost the competition data, not the registry pointer), you can skip step 3 and the row already in MeOSMain will pick up the restored database transparently.
+If you're restoring into the *same* database where the event already exists (e.g. recovering from a botched delete), reuse the existing id instead — there's no need to rewrite anything.
 
 ## Security and access control
 
-The endpoint (`GET /api/backup/competition?name=<NameId>`) is reachable to anyone who can hit the API — same access model as the other `/api/...` routes. If you expose Oxygen on a public network, place it behind your usual auth proxy.
+The endpoint (`GET /api/backup/event?name=<NameId>`, with `GET /api/backup/competition` kept as a legacy alias for one transition release) is reachable to anyone who can hit the API — same access model as the other `/api/...` routes. If you expose Oxygen on a public network, place it behind your usual auth proxy.
 
-The MySQL password (when set) is passed to `mysqldump` via the `MYSQL_PWD` environment variable rather than the command line, so it does not appear in process listings.
+The PostgreSQL password (when set) is passed to `psql` via the `PGPASSWORD` environment variable rather than the command line, so it does not appear in process listings.
 
 ## Implementation
 
-- API: `packages/api/src/backup.ts` — Fastify route handler, header construction, `mysqldump` spawning.
+- API: `packages/api/src/backup.ts` — Fastify route handler, header construction, `psql \copy` spawning.
 - Web: the `DatabaseBackup` component in `packages/web/src/pages/EventPage.tsx`.
-- Docker: the `api` stage of `Dockerfile` installs `default-mysql-client` so `mysqldump` is on `PATH` in production.
+- Docker: the `api` stage of `Dockerfile` installs `postgresql-client` so `psql` is on `PATH` in production.
 - Tests: `packages/api/src/__tests__/integration/backup.test.ts` + `e2e/backup.spec.ts`.

@@ -1729,6 +1729,7 @@ function LiveloxSection({ eventorEventId }: { eventorEventId: number | null | un
   const lastSync = useMemo(() => {
     if (!syncedClasses.data?.length) return null;
     return syncedClasses.data.reduce<Date | null>((latest, c) => {
+      if (!c.syncedAt) return latest;
       const d = new Date(c.syncedAt);
       return latest == null || d > latest ? d : latest;
     }, null);

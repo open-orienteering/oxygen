@@ -89,11 +89,11 @@ describe("eventorKeyStore", () => {
       db.set(PROD_KEY, "abc123");
       // First call throws (DB hiccup), second succeeds.
       getSetting.mockImplementationOnce(async () => {
-        throw new Error("MySQL connection refused");
+        throw new Error("Postgres connection refused");
       });
       const store = createEventorKeyStore(deps);
 
-      await expect(store.getKey("prod")).rejects.toThrow("MySQL connection refused");
+      await expect(store.getKey("prod")).rejects.toThrow("Postgres connection refused");
       // The bug: previously the latch was set BEFORE the load, so a transient
       // DB error would permanently mark the key as "unconfigured". Verify
       // that's no longer the case — the next call must retry and find it.

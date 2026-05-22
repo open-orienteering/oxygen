@@ -4,8 +4,10 @@
  */
 
 export interface DrawRunner {
-  id: number;
+  /** Runner UUID — opaque to the algorithm. */
+  id: string;
   name: string;
+  /** Club key: positive Eventor club id, negative hashed name id, or 0 if clubless. */
   clubId: number;
   clubName: string;
   startNo: number;

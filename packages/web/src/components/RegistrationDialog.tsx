@@ -618,7 +618,8 @@ export function RegistrationDialog() {
           await createMutation.mutateAsync({
             name: trimmedName,
             classId: effectiveClassId,
-            clubId: clubId || 0,
+            clubName: selectedClubName,
+            eventorClubId: selectedClub?.extId ?? undefined,
             cardNo: cn,
             startTime: st ? parseMeosTime(st) : 0,
             birthYear: birthYear ? parseInt(birthYear, 10) : 0,
