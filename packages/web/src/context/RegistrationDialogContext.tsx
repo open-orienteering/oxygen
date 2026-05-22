@@ -13,8 +13,6 @@ import {
   useCallback,
   type ReactNode,
 } from "react";
-import { RegistrationDialog } from "../components/RegistrationDialog";
-
 interface RecentRegistration {
   name: string;
   className: string;
@@ -98,12 +96,7 @@ export function RegistrationDialogProvider({ children }: { children: ReactNode }
     addRecentRegistration,
   };
 
-  return (
-    <ctx.Provider value={value}>
-      {children}
-      {isOpen && <RegistrationDialog />}
-    </ctx.Provider>
-  );
+  return <ctx.Provider value={value}>{children}</ctx.Provider>;
 }
 
 export function useRegistrationDialog(): RegistrationDialogState {

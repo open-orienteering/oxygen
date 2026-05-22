@@ -134,22 +134,34 @@ async function getCourseBySeq(
   return c;
 }
 
+/**
+ * Resolve a public control id (the primary punch code, e.g. 31) to the
+ * internal control UUID. Falls back to matching by `seq` for backwards
+ * compatibility with legacy clients that still reference controls by
+ * their per-event sequence number.
+ */
 async function controlSeqToId(
   db: PrismaClient,
   eventId: bigint,
-  seq: number,
+  publicId: number,
 ): Promise<string> {
-  const c = await db.control.findFirst({
-    where: { eventId, seq, removed: false },
-    select: { id: true },
+  const target = String(publicId);
+  // Primary match: any control whose first code equals publicId.
+  const candidates = await db.control.findMany({
+    where: { eventId, removed: false },
+    select: { id: true, codes: true, seq: true },
   });
-  if (!c) {
-    throw new TRPCError({
-      code: "NOT_FOUND",
-      message: `Control ${seq} not found`,
-    });
-  }
-  return c.id;
+  const byCode = candidates.find((c) => {
+    const first = c.codes.split(";")[0];
+    return first && first.trim() === target;
+  });
+  if (byCode) return byCode.id;
+  const bySeq = candidates.find((c) => c.seq === publicId);
+  if (bySeq) return bySeq.id;
+  throw new TRPCError({
+    code: "NOT_FOUND",
+    message: `Control ${publicId} not found`,
+  });
 }
 
 /**
@@ -226,17 +238,27 @@ async function loadCourseDetail(
   return {
     id: c.seq,
     name: c.name,
-    controls: ccs.map((cc) => String(cc.control.seq)).join(";"),
+    controls: ccs
+      .map((cc) => {
+        const first = (cc.control.codes ?? "").split(";")[0];
+        const code = first ? parseInt(first, 10) : NaN;
+        return String(Number.isFinite(code) ? code : cc.control.seq);
+      })
+      .join(";"),
     controlCount: ccs.length,
     length: c.lengthM,
     climb: c.climbM,
     numberOfMaps: c.numberOfMaps,
     firstAsStart: c.firstAsStart,
     lastAsFinish: c.lastAsFinish,
-    controlCodes: ccs.map((cc) => ({
-      id: cc.control.seq,
-      code: (cc.control.codes ?? "").split(";")[0] ?? "",
-    })),
+    controlCodes: ccs.map((cc) => {
+      const first = (cc.control.codes ?? "").split(";")[0] ?? "";
+      const code = first ? parseInt(first, 10) : NaN;
+      return {
+        id: Number.isFinite(code) ? code : cc.control.seq,
+        code: first,
+      };
+    }),
     classes: classes.map((cl) => ({
       classId: cl.seq,
       className: cl.name,

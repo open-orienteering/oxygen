@@ -42,7 +42,7 @@
   "importSummary": "{{runners}} runners, {{classes}} classes, {{clubs}} clubs imported",
   "openCompetition": "Open Competition",
   "importFailed": "Import failed: {{message}}",
-  "footer": "Oxygen v0.1.0 · Connected to MeOS MySQL",
+  "footer": "Oxygen v0.1.0 · Connected to PostgreSQL",
   "cleanUpDeleted": "Clean up deleted records",
   "cleanUpTitle": "Remove soft-deleted competition records and orphaned databases from MySQL",
   "noDeletedRecords": "No deleted records to clean up",

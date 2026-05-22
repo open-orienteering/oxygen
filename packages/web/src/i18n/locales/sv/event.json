@@ -42,7 +42,7 @@
   "importSummary": "{{runners}} löpare, {{classes}} klasser, {{clubs}} klubbar importerade",
   "openCompetition": "Öppna tävling",
   "importFailed": "Import misslyckades: {{message}}",
-  "footer": "Oxygen v0.1.0 · Ansluten till MeOS MySQL",
+  "footer": "Oxygen v0.1.0 · Ansluten till PostgreSQL",
   "cleanUpDeleted": "Rensa borttagna poster",
   "cleanUpTitle": "Ta bort mjukraderade tävlingsposter och övergivna databaser från MySQL",
   "noDeletedRecords": "Inga borttagna poster att rensa",

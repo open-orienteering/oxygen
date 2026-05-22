@@ -11,7 +11,7 @@ Oxygen is an orienteering competition management system. It is a pnpm monorepo w
 - `packages/shared/` — Shared types and utilities
 - `e2e/` — Playwright E2E tests
 
-Database: MySQL 8 with full bidirectional MeOS compatibility (see §7).
+Database: PostgreSQL 18, single database `oxygen`, all tables in the `oxygen` schema. UUIDv7 PKs for client-mintable entities + per-event `seq INT` for human-friendly URLs. The legacy MeOS-compatible MySQL layout was retired in May 2026 (see `docs/migrations/2026-drop-meos.md`).
 
 See `docs/architecture.md` for the full system architecture.
 
@@ -21,14 +21,17 @@ See `docs/architecture.md` for the full system architecture.
 |------|---------|-------|
 | Start dev servers | `pnpm dev` | API on :3002, Web on :5173 |
 | TypeScript build | `pnpm build` | All 3 packages must compile cleanly |
-| Unit tests | `pnpm test` | ~371 tests across shared, api, web |
-| Integration tests | `pnpm --filter api exec vitest run --config vitest.integration.config.ts` | requires the test Postgres container (`docker compose -f docker-compose.test.yml up -d`) |
-| E2E tests | `pnpm test:e2e` | 139 tests, Playwright (Chromium, single worker) |
+| Unit tests | `pnpm test` | Vitest across shared, api, web (518+ tests) |
+| Integration tests | `pnpm --filter api exec vitest run --config vitest.integration.config.ts` | 69 tests, requires the test Postgres container (`pnpm test:db:up`) |
+| E2E tests | `pnpm test:e2e` | 195 tests, Playwright (Chromium, single worker) |
 | Test coverage | `pnpm test:coverage` | V8 coverage reports (HTML + LCOV) |
 | Lint | `pnpm lint` | ESLint |
 | Rebuild Docker | `docker compose -f docker-compose.host-db.yml up --build -d` | Rebuilds and restarts containers |
 | Generate Prisma client | `pnpm db:generate` | After schema.prisma changes |
-| Push schema to DB | `pnpm db:push` | Push schema changes to MySQL |
+| Apply migrations | `pnpm --filter @oxygen/api exec prisma migrate deploy` | Apply pending Prisma migrations to the configured DATABASE_URL |
+| Push schema to DB | `pnpm db:push` | Push schema changes to Postgres without creating a migration file |
+| Test DB up | `pnpm test:db:up` | Start the isolated Postgres test container (`:5433`) |
+| Test DB down | `pnpm test:db:down` | Stop the isolated test container |
 
 ## 3. Development Environment
 
@@ -38,21 +41,25 @@ See `docs/architecture.md` for the full system architecture.
 |---------|-----------|--------|
 | Web (Vite / nginx) | 5173 | 8080 |
 | API (Fastify) | 3002 | 3001 |
-| MySQL | 3306 | 3306 (shared) |
+| PostgreSQL (dev) | 5432 | 5432 (shared) |
+| PostgreSQL (test) | 5433 | 5433 (isolated, integration + E2E only) |
 
 ### Dev vs Docker
 
 - **All development happens on the dev servers** (`pnpm dev`). Do not restart or interact with Docker during active development.
-- Dev servers and Docker share the same MySQL instance on `localhost:3306`. They use different API ports (3002 vs 3001) so they do not conflict.
+- Dev servers and Docker share the same PostgreSQL instance on `localhost:5432`, database `oxygen`, schema `oxygen`. They use different API ports (3002 vs 3001) so they do not conflict.
+- A separate `localhost:5433` Postgres container (`postgres-oxygen-test`) hosts the integration test (`oxygen_test`) and E2E (`oxygen_e2e`) databases so tests never touch the working dev data.
 - Docker containers are only rebuilt as a final verification step after all tests pass (see §6).
 - The Vite dev server proxies `/trpc` and `/api` requests to the API dev server at port 3002.
 - Never commit `.env` files or credentials.
 
 ### Database
 
-- Connection: `mysql://meos@localhost:3306/itest` (dev default)
-- Two-tier design: **MeOSMain** (competition registry, global caches) + **per-competition databases** (MeOS schema)
-- The database is shared between dev servers and Docker — changes made during dev are visible to both.
+- Connection: `postgresql://oxygen:oxygen@localhost:5432/oxygen?schema=oxygen` (dev default).
+- Single database `oxygen`, single schema `oxygen`. Every event lives in the same set of tables, scoped by `event_id`.
+- Global directories (`runner_directory`, `club_directory`, `eventor_event_meta`, `oxygen_settings`) live in the same schema and are shared across events.
+- The dev database is shared between dev servers and the Docker stack on port 5432 — changes made during dev are visible to both.
+- Tests run against the isolated `postgres-oxygen-test` container on `:5433` so they never touch dev data.
 
 ## 4. Test-Driven Development
 
@@ -106,50 +113,74 @@ in your final message and explain why.
 
 Never push code that fails any of steps 1–5. "It built fine locally" is not a substitute for step 5 — the Docker images use a different build path (multi-stage, production `NODE_ENV`, no dev dependencies) and routinely catch things `pnpm build` misses. Step 6 is informational and never gating.
 
-## 7. MeOS Database Compatibility
+## 7. Database Schema Conventions
 
-Oxygen must maintain **full bidirectional compatibility** with MeOS. A database created by Oxygen must be openable by MeOS, and vice versa. This is a hard constraint that overrides convenience.
+Oxygen runs on PostgreSQL 18 with a single database (`oxygen`) and a single
+schema (`oxygen`). The MeOS bidirectional-compatibility constraint that
+shaped the original layout was retired in May 2026
+(see `docs/migrations/2026-drop-meos.md`).
 
-### Schema Rules
+### Primary Keys
 
-- The Prisma schema (`packages/api/prisma/schema.prisma`) must match MeOS column types, nullability, and defaults exactly.
-- All `MEDIUMTEXT` columns must be `NOT NULL` with `@default("")`.
-- All `Modified` columns must be `DateTime @default(now()) @updatedAt`.
-
-### Control IDs
-
-- Start controls: ID = `211100 + N`, Name = `"Start N"`
-- Finish controls: ID = `311100 + N`, Name = `"Mål N"`
-- Regular controls: `Name = ""`, `Numbers = code`
+- **Event-scoped, client-mintable entities** (`controls`, `courses`,
+  `course_controls`, `classes`, `class_course_pools`, `runners`, `teams`,
+  `cards`, `control_units`) use
+  `id UUID PRIMARY KEY DEFAULT uuidv7()` plus a per-event
+  `seq INT NOT NULL` populated by the `allocate_event_seq()` trigger from
+  `oxygen.event_seqs`. URLs and tRPC inputs use `seq`; joins use `id`.
+- **Append-only / immutable** (`card_readouts`, `punches`, `event_log`) use
+  UUID PK only.
+- **Pure server-side** (`map_files`, `rendered_maps`, `map_tiles`,
+  `tracks`, `routes`) use `BIGSERIAL`.
+- **Top-level entity** (`events`) uses `BIGSERIAL` — there is no offline-
+  authored event.
+- **Global directories** (`runner_directory`, `club_directory`,
+  `eventor_event_meta`) use their natural external IDs from Eventor.
 
 ### Coordinates
 
-- `xpos` / `ypos` store values × 10 (1 decimal place precision).
-- `latcrd` / `longcrd` store values × 1e6 (6 decimal place precision).
+- `xpos` / `ypos` are stored as `DOUBLE PRECISION` in meters (no x10 scaling).
+- `lat` / `lng` are stored as `DOUBLE PRECISION` in degrees (no x1e6 scaling).
 
-### Counters
+### Time storage
 
-- Increment the `Counter` column and update `oCounter` on every record create/update.
-- Use `incrementCounter()` from `packages/api/src/db.ts`.
+- Times are stored as **ZeroTime-relative deciseconds** (`INT`, default
+  `0`). Default `events.zero_time` is `324000` (09:00:00).
+- All API inputs and outputs use **absolute deciseconds**. Conversion
+  happens at the boundary via `toAbsolute` / `toRelative` in
+  `packages/api/src/timeConvert.ts`. Internal calculations stay in
+  deciseconds.
+- `cards.punches_raw` stores the legacy MeOS punch-list format
+  `code-seconds.tenths;...` so the `parsePunches` round-trip is stable
+  with the kiosk / matcher code that has not been ported yet.
 
-### Data Normalization
+### Statuses
 
-- **BirthYear**: MeOS may store `YYYYMMDD` (> 9999) or `YYYY`. Always normalize with `normalizeBirthYear()`.
-- **Organizer**: Store as plain text name, not `"name\tclubId"`.
+- `runners.status` and `controls.status` are native PostgreSQL ENUM types
+  (`runner_status`, `control_status`). The API converts to/from the legacy
+  integer codes at the boundary via `statusConvert.ts`.
 
-### Defaults
+### Triggers
 
-- `ZeroTime`: `324000` (09:00:00 in deciseconds) on competition creation.
-- `Features`: `"SL+BB+CL+CC+RF+NW+TA+RD"` on competition creation.
+- `oxygen.set_updated_at()` keeps `updated_at` current on every UPDATE.
+- `oxygen.allocate_event_seq()` fills `seq` from `oxygen.event_seqs` on
+  INSERT. Passing an explicit `seq` value is allowed (and is how the
+  migration tool preserves legacy IDs).
 
-### Tables
+### Conventions
 
-- Competition databases must include `dbRunner`, `dbClub`, and `oImage` tables (created during init).
-- Oxygen-only tables must use the `oos_` prefix to avoid collisions with MeOS tables.
+- Every event-scoped table has `event_id BIGINT REFERENCES oxygen.events(id) ON DELETE CASCADE`.
+  This is what gives integration tests their isolation: each suite owns
+  one `Event` row and cleanup is automatic.
+- JSONB columns are used for structured metadata (routes, courses
+  geometry, owner data, ROC raw payloads). Keep top-level keys
+  snake_case to match the rest of the schema.
 
 ### When in Doubt
 
-Reference MeOS source code from [melin.nu/meos](http://www.melin.nu/meos), especially `MeosSQL.cpp`, `oEvent.cpp`, and `oDataContainer.cpp`.
+Read the Prisma schema (`packages/api/prisma/schema.prisma`) and the
+initial migration (`packages/api/prisma/migrations/20260514_initial_pg_schema/`).
+They define the canonical column types, defaults, and triggers.
 
 ## 8. Code Conventions
 
@@ -162,9 +193,10 @@ Reference MeOS source code from [melin.nu/meos](http://www.melin.nu/meos), espec
 ### API (`packages/api/`)
 
 - **ESM with `.js` extensions**: All relative imports must use `.js` extensions (`import { foo } from "../bar.js"`), even though source files are `.ts`.
-- Get the competition database client with `const client = await getCompetitionClient()`. Do not create additional PrismaClient instances.
-- Use `incrementCounter(client)` after any write operation that modifies MeOS tables.
-- Error handling: throw `TRPCError` with appropriate codes (`NOT_FOUND`, `BAD_REQUEST`, `CONFLICT`).
+- Use the shared Prisma singleton via `prisma()` from `packages/api/src/db.ts`. Inside a tRPC procedure use `ctx.db` (which is the same instance). Do not create additional `PrismaClient` instances.
+- Inside event-scoped procedures use `eventProcedure` from `trpc.ts`; it parses the `x-event-id` (or legacy `x-competition-id`) header and exposes `ctx.event` with `id`, `nameId`, `name`, `zeroTime`.
+- Always convert times at the boundary: API inputs are absolute deciseconds, storage is `toRelative(input, ctx.event.zeroTime)`, reads multiply by `toAbsolute(row, zt)`.
+- Error handling: throw `TRPCError` with appropriate codes (`NOT_FOUND`, `BAD_REQUEST`, `CONFLICT`, `PRECONDITION_FAILED`).
 - Router files live in `packages/api/src/routers/` and are registered in `packages/api/src/routers/index.ts`.
 
 ### Web (`packages/web/`)
@@ -189,7 +221,7 @@ Reference MeOS source code from [melin.nu/meos](http://www.melin.nu/meos), espec
 - When adding new strings, add the key to **both** `en` and `sv` JSON files. Never leave a language incomplete.
 - Typed keys via `packages/web/src/i18n/i18next.d.ts` — the TypeScript compiler catches missing keys.
 - Use `useRunnerStatusLabel()` / `useControlStatusLabel()` hooks for translated status text, not the raw English-only `runnerStatusLabel()` function.
-- Technical identifiers that are intentionally untranslated (SI, MeOS, Eventor) are exempt.
+- Technical identifiers that are intentionally untranslated (SI, Eventor, Livelox, LiveResults, ROC) are exempt.
 
 ## 10. Documentation
 
@@ -204,7 +236,7 @@ Reference MeOS source code from [melin.nu/meos](http://www.melin.nu/meos), espec
 After completing a feature, perform a self-review covering these areas:
 
 1. **Correctness** — Does the code do what it claims? Are edge cases handled? Are error paths covered?
-2. **MeOS compatibility** — Do database writes maintain MeOS interop? Are counters incremented? Are column types correct? Do new tables use `oos_` prefix?
+2. **Schema discipline** — Do new columns have explicit defaults? Are FK references using `ON DELETE CASCADE` where appropriate? Does any new event-scoped table include an `event_id` column? Do migrations match the running Prisma schema?
 3. **Type safety** — Are there `any` types? Do Zod schemas cover all inputs? Do tRPC types flow end-to-end?
 4. **Security** — No SQL injection (use Prisma or parameterized queries for raw SQL). No XSS (watch `dangerouslySetInnerHTML`). No secrets in code or logs.
 5. **Performance** — Are queries efficient? No N+1 patterns? Do list endpoints paginate or limit?
@@ -215,15 +247,15 @@ After completing a feature, perform a self-review covering these areas:
 ## 12. E2E Test Hygiene
 
 - Tests must be self-contained: create any data they need, clean up after themselves.
-- If a test creates a competition database, prefix the `NameId` with `E2E_` for automatic cleanup by global setup.
+- If a test creates an event, prefix the `nameId` with `E2E_` or `Delete_` for automatic cleanup by global setup.
 - Use `data-testid` attributes for stable selectors. Prefer `data-testid` over text matching.
 - Never hard-code counts that could drift — use flexible assertions.
-- Use existing helpers from `e2e/helpers/` (`selectCompetition`, `tabButton`, `getMockWebSerialScript`, etc.) rather than reimplementing.
-- WebSerial is mocked via `page.addInitScript()` with the mock from `e2e/helpers/mock-webserial.ts`.
+- Use existing helpers from `e2e/helpers/` (`selectCompetition`, `tabButton`, `getMockWebSerialScript`, `reseed`, etc.) rather than reimplementing.
+- WebSerial is mocked via `page.addInitScript()` with the mock from `e2e/helpers/mock-webserial.ts`. Mock punch times are in **seconds since midnight** (matching the SI hardware protocol); the API contract is **absolute deciseconds**, so the WebSerial decoder + `DeviceManager` handle the conversion automatically.
 - Playwright runs sequentially: `fullyParallel: false`, `workers: 1`. Tests share a single Chromium instance.
-- Three seed databases (`itest`, `itest_multirace`, `meos_20251222_001121_2BC`) are recreated fresh by `e2e/global-setup.ts` before every run.
-- `MeOSMain.oxygen_settings` is shared with the developer's running stack. The Eventor API key rows (`eventor_api_key`, `eventor_api_key_test`) are snapshotted to a gitignored file at `e2e/.eventor-snapshot.json` by `e2e/global-setup.ts` and restored by `e2e/global-teardown.ts` so tests can freely call `eventor.clearKey` / `eventor.validateKey` without wiping real credentials. The snapshot is durable across interrupted runs and is refreshed whenever a real (non-placeholder) value is observed at setup. If you add another mutation that writes a globally-scoped row in `oxygen_settings`, extend the snapshot list in the same place.
-- The Playwright snapshot covers **E2E only**. Integration tests run against the isolated `oxygen_test` database on `:5433` (see Test Structure §4), so they never touch the developer's dev DB. The globally-scoped `oxygen.settings` rows inside *that* test DB are still shared between integration suites — snapshot/restore Eventor keys with `getSetting`/`setSetting` in `beforeAll`/`afterAll` (and `eventorKeyStore._resetForTests()` after restore) so suites stay independent.
+- Three seed events (`itest`, `itest_multirace`, `meos_20251222_001121_2BC`) are recreated fresh by `e2e/global-setup.ts` via the programmatic seed builders in `e2e/seed-builder/*.ts`. They run against a dedicated `oxygen_e2e` database on `:5433` — the dev DB on `:5432` is never touched by tests.
+- For spec files that mutate seed data (create / delete events, controls, runners), call `await reseed()` in `test.beforeAll` so subsequent suites get a clean state. The helper at `e2e/helpers/reseed.ts` deletes all `E2E_` / `Delete_` rows + the three seed events and re-runs the builders.
+- Integration tests run against the same `oxygen_e2e` container but use a separate database (`oxygen_test`). Each suite owns one `Event` row; cleanup is automatic via `ON DELETE CASCADE`.
 
 ## 13. Git Conventions
 
@@ -268,16 +300,16 @@ If those settings drift back on, you'll start getting Dependabot PRs; fix the se
 
 ## 15. Common Pitfalls
 
-1. **MySQL DATETIME timezone**: MySQL `DATETIME` has no timezone. Prisma treats it as UTC. If MySQL uses local time (e.g. CET), timestamps get double-shifted. Use `getUTC*()` methods for server-side formatting (see `fmtDatetimeLocal` in `control.ts`).
+1. **Time units in the kiosk pipeline**: SI hardware (and the WebSerial mock) speak **seconds since midnight**. The API contract is **absolute deciseconds**. `DeviceManager` multiplies by 10 before calling `cardReadout.storeReadout`. The API then converts to ZeroTime-relative deciseconds via `toRelative` before storage. Don't bypass either conversion.
 
-2. **Time format**: All times in the database are **deciseconds since midnight** (seconds × 10). Use `formatMeosTime()` for `HH:MM:SS` display, `formatRunningTime()` for `M:SS` or `H:MM:SS`.
+2. **Time display**: All times in the database are **ZeroTime-relative deciseconds**. The API returns **absolute deciseconds**. Use `formatMeosTime()` for `HH:MM:SS` display, `formatRunningTime()` for `M:SS` or `H:MM:SS`.
 
-3. **Start time priority**: Assigned (draw) start time takes priority over card start punch. Card punch is only used for punch-start events.
+3. **Start time priority**: Assigned (draw) start time takes priority over card start punch. The card start punch is only used when the runner has no assigned start time (punch-start events).
 
-4. **Stale punch detection**: SI cards retain punches from previous races. Three-layer detection: client DOW check, server foreign control check, server course matching. Do not bypass these checks.
+4. **Stale punch detection**: SI cards retain punches from previous races. Three-layer detection: client DOW check, server foreign-control check, server course matching. Do not bypass these checks.
 
-5. **Raw SQL tables**: Some Oxygen-specific tables (`oxygen_control_config`, `oxygen_competition_config`) use raw SQL via mysql2, not Prisma, because they are not in the Prisma schema. Follow the existing `ensureXxxTable()` pattern in `db.ts`.
+5. **Public control IDs are codes, not seqs**: After the May 2026 refactor, `control.list` / `control.detail` / `control.update` / `control.delete` accept the **primary punch code** (e.g. `50`) as the public id, with a fallback to `seq` for legacy clients. Internally the router resolves via `getControlByCode`. When wiring new endpoints that take a control id, use the same helper so behaviour stays consistent.
 
-6. **Prisma client singleton**: The competition Prisma client is managed by `getCompetitionClient()` in `db.ts`. Do not create additional PrismaClient instances.
+6. **Prisma client singleton**: The Prisma client is exposed via `prisma()` in `packages/api/src/db.ts` and via `ctx.db` inside tRPC procedures. Do not create additional `PrismaClient` instances; doing so leaks connections and breaks transactional consistency.
 
 7. **API `.js` import extensions**: The API package uses ESM with TypeScript. All relative imports in `packages/api/src/` must use `.js` extensions, even though the source files are `.ts`.

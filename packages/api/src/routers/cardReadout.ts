@@ -321,14 +321,24 @@ const storeReadoutInput = z.object({
 // ─── Helpers used by the router ────────────────────────────
 
 /**
- * Encode `ParsedPunch[]` back into the MeOS-style packed string used by
- * cards.punches_raw. Format: "code-time;code-time;..." where time is
- * absolute deciseconds since midnight.
+ * Encode a punch list back into the MeOS-style packed string stored in
+ * `cards.punches_raw`. The format `code-seconds.tenths` is what
+ * `parsePunches` round-trips (it multiplies the seconds component by 10
+ * to recover deciseconds).
+ *
+ * `time` is the canonical internal unit: ZeroTime-relative deciseconds.
  */
 function encodePunchesRaw(
   punches: Array<{ controlCode: number; time: number }>,
 ): string {
-  return punches.map((p) => `${p.controlCode}-${p.time}`).join(";");
+  return punches
+    .map((p) => {
+      if (p.time === 0) return `${p.controlCode}-0.0`;
+      const secs = Math.floor(p.time / 10);
+      const tenths = p.time % 10;
+      return `${p.controlCode}-${secs}.${tenths}`;
+    })
+    .join(";");
 }
 
 // ─── Router ────────────────────────────────────────────────
@@ -366,12 +376,25 @@ export const cardReadoutRouter = router({
         select: { id: true, readAt: true },
       });
 
-      // 2. Upsert the per-event Card row. Times in punchesRaw are absolute
-      //    (the matcher expects absolute deciseconds; performReadout's
-      //    later `toAbsolute` call is a no-op for these because they're
-      //    already absolute — see the cardPunches handling above. To
-      //    keep that branch happy, we store ZeroTime-relative here.)
-      const relativePunches = input.punches.map((p) => ({
+      // 2. Upsert the per-event Card row. punchesRaw is stored in
+      //    ZeroTime-relative deciseconds (MeOS-style `code-seconds.tenths`
+      //    so parsePunches round-trips correctly).
+      //
+      //    Synthesize a `start (1)` / `finish (2)` / `check (3)` punch
+      //    when the card supplied those header times — the course matcher
+      //    keys off them to derive startTime/finishTime.
+      const synthesized: Array<{ controlCode: number; time: number }> = [];
+      if (input.startTime && input.startTime > 0) {
+        synthesized.push({ controlCode: 1, time: input.startTime });
+      }
+      if (input.finishTime && input.finishTime > 0) {
+        synthesized.push({ controlCode: 2, time: input.finishTime });
+      }
+      if (input.checkTime && input.checkTime > 0) {
+        synthesized.push({ controlCode: 3, time: input.checkTime });
+      }
+      const allInputPunches = [...synthesized, ...input.punches];
+      const relativePunches = allInputPunches.map((p) => ({
         controlCode: p.controlCode,
         time: p.time !== 0 ? toRelative(p.time, zeroTime) : 0,
       }));
@@ -422,6 +445,32 @@ export const cardReadoutRouter = router({
       //    pre-start punches from being applied.
       let punchesRelevant = false;
       let matchScore = 0;
+      if (!runner?.classId) {
+        // Unregistered card — fall back to event-level relevance: any
+        // punch code matching a known control in this event counts.
+        const codes = new Set(
+          input.punches.map((p) => p.controlCode).filter((c) => c >= 30),
+        );
+        if (codes.size > 0) {
+          const known = await ctx.db.control.findMany({
+            where: { eventId, removed: false },
+            select: { codes: true },
+          });
+          const knownCodes = new Set<number>();
+          for (const k of known) {
+            for (const c of k.codes.split(";")) {
+              const n = parseInt(c, 10);
+              if (Number.isFinite(n)) knownCodes.add(n);
+            }
+          }
+          for (const c of codes) {
+            if (knownCodes.has(c)) {
+              punchesRelevant = true;
+              break;
+            }
+          }
+        }
+      }
       if (runner?.classId) {
         const cls = await ctx.db.class.findUnique({
           where: { id: runner.classId },

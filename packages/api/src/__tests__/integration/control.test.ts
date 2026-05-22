@@ -27,7 +27,8 @@ afterAll(async () => {
 describe("control.create / update / delete", () => {
   it("creates a control and exposes it through list / detail", async () => {
     const c = await caller.control.create({ codes: "31", name: "Top of hill" });
-    expect(c.id).toBe(1);
+    // The public id is the primary punch code (was previously the per-event seq).
+    expect(c.id).toBe(31);
     const list = await caller.control.list();
     const item = list.find((x) => x.id === c.id);
     expect(item?.codes).toBe("31");
@@ -49,7 +50,7 @@ describe("control.create / update / delete", () => {
     // directly. Aggregate behaviour is exercised in the stationSerial
     // sub-suite below.
     const row = await ctx.db.control.findFirst({
-      where: { eventId: ctx.eventId, seq: c.id },
+      where: { eventId: ctx.eventId, codes: "32" },
       select: { radioType: true, airPlus: true },
     });
     expect(row?.radioType).toBe("internal_radio");
@@ -79,7 +80,7 @@ describe("control.upsertConfig", () => {
       airPlus: "off",
     });
     const row = await ctx.db.control.findFirst({
-      where: { eventId: ctx.eventId, seq: c.id },
+      where: { eventId: ctx.eventId, codes: "40" },
       select: { radioType: true, airPlus: true },
     });
     expect(row?.radioType).toBe("public_radio");
@@ -94,7 +95,7 @@ describe("control.upsertConfig", () => {
       radioType: "internal_radio",
     });
     const rows = await ctx.db.control.findMany({
-      where: { eventId: ctx.eventId, seq: { in: [a.id, b.id] } },
+      where: { eventId: ctx.eventId, codes: { in: ["41", "42"] } },
       select: { radioType: true },
     });
     expect(rows.map((r) => r.radioType)).toEqual([

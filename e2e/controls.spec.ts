@@ -1,4 +1,7 @@
 import { test, expect } from "@playwright/test";
+import { reseed } from "./helpers/reseed";
+
+test.beforeAll(reseed);
 
 async function selectCompetition(page: import("@playwright/test").Page) {
   await page.goto("/");
