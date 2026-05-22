@@ -635,7 +635,9 @@ export const eventorRouter = router({
           entry.organisationName,
         );
         const runnerStatus: RunnerStatusValue = (result?.status as RunnerStatusValue) ??
-          ((entry.noTiming ? 22 : 0) as RunnerStatusValue);
+          ((entry.noTiming
+            ? RunnerStatus.NoTiming
+            : RunnerStatus.Unknown) as RunnerStatusValue);
         await db.runner.create({
           data: {
             eventId: event.id,
@@ -861,7 +863,9 @@ export const eventorRouter = router({
         const isReinstating =
           found.status === valueToRunnerStatus(21 as RunnerStatusValue) &&
           !result;
-        const reinstatedStatus: RunnerStatusValue = (entry.noTiming ? 22 : 0) as RunnerStatusValue;
+        const reinstatedStatus: RunnerStatusValue = (
+          entry.noTiming ? RunnerStatus.NoTiming : RunnerStatus.Unknown
+        ) as RunnerStatusValue;
 
         const needsUpdate =
           found.name !== entry.personName ||
@@ -934,7 +938,9 @@ export const eventorRouter = router({
       } else {
         const runnerStatus: RunnerStatusValue =
           (result?.status as RunnerStatusValue) ??
-          ((entry.noTiming ? 22 : 0) as RunnerStatusValue);
+          ((entry.noTiming
+            ? RunnerStatus.NoTiming
+            : RunnerStatus.Unknown) as RunnerStatusValue);
         await db.runner.create({
           data: {
             eventId: ctx.event.id,
