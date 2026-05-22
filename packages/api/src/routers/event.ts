@@ -490,39 +490,86 @@ export const eventRouter = router({
       };
     }),
 
-  /** DB status — surface basic stats for the load indicator. */
+  /**
+   * Postgres status — surface cumulative DB stats for the load
+   * indicator. The frontend differences successive snapshots to derive
+   * rates (queries/sec, tuples/sec) so all counters here are
+   * monotonically increasing values pulled straight from
+   * `pg_stat_database` and `pg_stat_activity`.
+   */
   dbStatus: publicProcedure.query(async () => {
     try {
-      const result = await prisma().$queryRawUnsafe<
+      const stats = await prisma().$queryRawUnsafe<
         Array<{
-          numbackends: number;
-          xact_commit: number;
-          xact_rollback: number;
-          tup_returned: number;
+          numbackends: number | bigint;
+          xact_commit: number | bigint;
+          xact_rollback: number | bigint;
+          tup_returned: number | bigint;
+          tup_fetched: number | bigint;
+          tup_inserted: number | bigint;
+          tup_updated: number | bigint;
+          tup_deleted: number | bigint;
+          blks_read: number | bigint;
+          blks_hit: number | bigint;
+          deadlocks: number | bigint;
+          temp_bytes: number | bigint;
+          stats_reset: Date | null;
         }>
       >(`
-        SELECT numbackends, xact_commit, xact_rollback, tup_returned
+        SELECT numbackends, xact_commit, xact_rollback,
+               tup_returned, tup_fetched, tup_inserted, tup_updated, tup_deleted,
+               blks_read, blks_hit,
+               deadlocks, temp_bytes,
+               stats_reset
         FROM pg_stat_database
         WHERE datname = current_database()
       `);
-      const row = result[0];
+      const row = stats[0];
       if (!row) return null;
+
+      const active = await prisma().$queryRawUnsafe<
+        Array<{ active: bigint }>
+      >(`
+        SELECT count(*)::bigint AS active
+        FROM pg_stat_activity
+        WHERE datname = current_database() AND state = 'active'
+      `);
+      const dbSize = await prisma().$queryRawUnsafe<
+        Array<{ size: bigint }>
+      >(`SELECT pg_database_size(current_database())::bigint AS size`);
+
+      const n = (v: number | bigint): number => Number(v);
       return {
-        Questions: Number(row.xact_commit) + Number(row.xact_rollback),
-        Com_select: Number(row.tup_returned),
-        Com_insert: 0,
-        Com_update: 0,
-        Com_delete: 0,
-        Threads_connected: Number(row.numbackends),
-        Threads_running: 0,
-        Slow_queries: 0,
-        Bytes_received: 0,
-        Bytes_sent: 0,
-        Uptime: 0,
-        Table_locks_waited: 0,
-        Table_locks_immediate: 0,
+        // Connection pool / activity
+        backends: n(row.numbackends),
+        activeBackends: Number(active[0]?.active ?? 0),
+
+        // Transaction throughput (xact_commit + xact_rollback ~ qps)
+        xactCommit: n(row.xact_commit),
+        xactRollback: n(row.xact_rollback),
+
+        // Per-operation counters (rate-derived in the UI)
+        tupReturned: n(row.tup_returned),
+        tupFetched: n(row.tup_fetched),
+        tupInserted: n(row.tup_inserted),
+        tupUpdated: n(row.tup_updated),
+        tupDeleted: n(row.tup_deleted),
+
+        // Buffer cache
+        blksRead: n(row.blks_read),
+        blksHit: n(row.blks_hit),
+
+        // Health
+        deadlocks: n(row.deadlocks),
+        tempBytes: n(row.temp_bytes),
+        dbSizeBytes: Number(dbSize[0]?.size ?? 0),
+
+        // ISO timestamp the stats counters were last reset (uptime
+        // proxy for the rate computations on the client).
+        statsReset: row.stats_reset?.toISOString() ?? null,
       };
-    } catch {
+    } catch (err) {
+      console.error("[dbStatus] query failed:", err);
       return null;
     }
   }),
@@ -709,6 +756,9 @@ function toEventInfo(row: {
   };
 }
 
-// Re-export with legacy name during the cutover transition. Web clients
-// importing `competitionRouter` keep working until phase E lands.
+// Backward-compat alias. The tRPC root exposes this router under both
+// `event.*` (preferred) and `competition.*` (legacy); the alias also
+// lets server-side modules import `competitionRouter` by name without
+// reaching across the rename. Safe to drop once both the API surface
+// and every web import standardise on `event.*`.
 export { eventRouter as competitionRouter };

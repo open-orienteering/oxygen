@@ -1,9 +1,10 @@
 /**
  * Registration dialog context. Manages the global "register a new
  * runner" dialog (used by the card-notification banner and operator
- * actions). The dialog body itself is currently stubbed during the
- * post-MeOS migration; the provider's contract is fully implemented so
- * consumers compile and work.
+ * actions). The dialog body lives in `components/RegistrationDialog.tsx`;
+ * this provider owns the open/close state, the recent-registration
+ * banner queue, and the sticky-mode toggle so the kiosk can keep the
+ * dialog up across consecutive readouts.
  */
 
 import {

@@ -85,7 +85,7 @@ function interpolateWp(
 export function ReplayViewer({ data, compact, className, style, replayConfig, nativeTileBase, extraRoutes, extraRoutesLoading, onNearbyModeChange }: Props) {
   const state = useReplayState(data, replayConfig);
 
-  // Pause shell-side background polls (counter probe, MySQL stats, queue
+  // Pause shell-side background polls (counter probe, DB stats, queue
   // refresh, version check, kiosk ping) only while playback is actually
   // running — their periodic React commits compete with the orchestrator
   // RAF and cause 1-2 frame stutters every few seconds. When the user

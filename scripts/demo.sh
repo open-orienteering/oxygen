@@ -1,39 +1,47 @@
 #!/usr/bin/env bash
-# Sets up and starts Oxygen with demo data, suitable for Google Cloud Shell.
-set -e
+# Sets up and starts Oxygen with demo data, suitable for Google Cloud Shell
+# or any local sandbox where you want a one-command "see it running".
+#
+# Steps:
+#   1. Start the PostgreSQL container (postgres:18-alpine).
+#   2. Apply the latest oxygen schema with `pnpm db:push`.
+#   3. Load the committed Demo Competition showcase fixture.
+#   4. Build and start the API + web containers.
+set -euo pipefail
 
-# ── 1. Start MySQL ───────────────────────────────────────────────────────────
-echo "Starting MySQL..."
-docker compose up -d mysql
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+cd "$REPO_ROOT"
 
-echo "Waiting for MySQL to accept connections..."
-until docker compose exec mysql mysql -u root -e "SELECT 1" >/dev/null 2>&1; do
-  sleep 2
+# ─── 1. Start PostgreSQL ─────────────────────────────────────────────────────
+echo "Starting PostgreSQL..."
+docker compose up -d postgres
+
+echo "Waiting for PostgreSQL to accept connections..."
+until docker compose exec -T postgres pg_isready -U oxygen -d oxygen >/dev/null 2>&1; do
+  sleep 1
 done
-echo "  MySQL is ready."
+echo "  PostgreSQL is ready."
 
-# ── 2. Create MeOSMain + MySQL user ──────────────────────────────────────────
-# The Demo Competition database itself is created by the loader in step 3.
-echo "Initialising MeOSMain and user..."
-docker compose exec mysql mysql -u root -e \
-  "CREATE DATABASE IF NOT EXISTS MeOSMain CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
-   CREATE USER IF NOT EXISTS 'meos'@'%' IDENTIFIED BY '';
-   GRANT ALL PRIVILEGES ON \`%\`.* TO 'meos'@'%';
-   FLUSH PRIVILEGES;"
-echo "  MeOSMain and user created."
+# Pick a DATABASE_URL that targets the docker postgres from the host.
+# The container exposes 5432 → 5432.
+export DATABASE_URL="postgresql://oxygen:oxygen@localhost:5432/oxygen?schema=oxygen"
 
-echo "  Applying MeOSMain schema..."
-docker compose exec -T mysql mysql -u root MeOSMain \
-  < packages/api/prisma/meos-schema.sql
+# ─── 2. Apply oxygen schema ──────────────────────────────────────────────────
+echo "Applying oxygen schema..."
+pnpm --filter @oxygen/api db:push >/dev/null
+echo "  Schema applied."
 
-# ── 3. Load Demo Competition showcase ────────────────────────────────────────
+# ─── 3. Load Demo Competition showcase ───────────────────────────────────────
 echo "Loading Demo Competition showcase..."
-USE_DOCKER=1 DB_NAME=demo_competition bash scripts/load-showcase.sh
+bash scripts/load-showcase.sh
+echo "  Loaded."
 
-# ── 4. Start API and web ─────────────────────────────────────────────────────
-echo "Building and starting Oxygen (this takes a minute on first run)..."
-docker compose up -d
+# ─── 4. Start API and web ────────────────────────────────────────────────────
+echo "Building and starting Oxygen (first run takes ~1 min)..."
+docker compose up -d --build api web
 
 echo ""
-echo "✓ Oxygen is running!"
+echo "✓ Oxygen is running with the Demo Competition."
 echo "  Open Web Preview on port 8080 to access the app."
+echo "  Or, locally: http://localhost:8080"

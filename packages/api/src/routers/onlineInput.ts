@@ -1,10 +1,11 @@
 /**
- * Online-input (ROC / SICenter) router. The puller itself is being
- * re-ported against the new schema; for now we persist config as JSON
- * keyed by event id inside the global `settings` table, and the
- * EventPage panel renders correctly while `pollNow` is a no-op.
+ * Online-input (ROC / SICenter) router. Exposes config + enable /
+ * disable + a manual `pollNow` to the EventPage panel; the actual
+ * pull pipeline lives in `../online-input/puller.ts` and the API
+ * boot calls `reconcileEnabledPullers()` so enabled events resume
+ * polling after a restart without manual intervention.
  *
- * Config shape mirrors the legacy MeOS surface:
+ * Config (persisted as JSON in `settings.online_input_<eventId>_config`):
  *   - `unitId`: ROC / SICenter station id (string, e.g. "12345")
  *   - `endpointUrl`: HTTP base URL
  *   - `intervalSeconds`: poll cadence (seconds)

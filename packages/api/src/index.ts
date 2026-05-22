@@ -11,10 +11,12 @@ import {
 import { appRouter, type AppRouter } from "./routers/index.js";
 export type { AppRouter };
 import { createContext } from "./trpc.js";
-import { disconnectAll, prisma, onMapUpload } from "./db.js";
+import { disconnectAll, prisma } from "./db.js";
 import { liveResultsPusher, reconcileEnabledPushers } from "./liveresults.js";
 import { onlineInputPuller, reconcileEnabledPullers } from "./online-input/puller.js";
 import { registerBackupRoute } from "./backup.js";
+import { registerMapTileRoutes } from "./map-tiles.js";
+import { registerLiveloxTileProxy } from "./livelox-tile-proxy.js";
 import "dotenv/config";
 
 const PORT = parseInt(process.env.PORT ?? "3002", 10);
@@ -58,6 +60,8 @@ async function main() {
   );
 
   registerBackupRoute(server);
+  registerMapTileRoutes(server);
+  registerLiveloxTileProxy(server);
 
   // Club logo endpoint — serves PNGs from the global club_directory.
   server.get<{ Params: { eventorId: string }; Querystring: { variant?: string } }>(
@@ -84,12 +88,6 @@ async function main() {
         .send(Buffer.from(data));
     },
   );
-
-  // Map upload invalidation listener — placeholder; downstream consumers
-  // (course geometry cache) subscribe here.
-  onMapUpload((eventId: bigint) => {
-    server.log.info({ eventId: eventId.toString() }, "map uploaded");
-  });
 
   // Background services. `liveResultsPusher` / `onlineInputPuller` are
   // process-wide registries; the reconcilers bring up one timer per

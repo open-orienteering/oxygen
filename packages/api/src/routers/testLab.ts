@@ -246,9 +246,10 @@ export const testLabRouter = router({
     return { deleted: result.count };
   }),
 
-  // ─── Stubs for the Test Lab UI ──────────────────────────
-  // The real simulation pipeline is being re-ported against the new
-  // schema. Until then these stubs let the page render without errors.
+  // ─── Test Lab UI surface ────────────────────────────────
+  // Counts + simulator status used by the TestLabPage header. The
+  // simulation pipeline itself lives further down (`startSimulation`,
+  // `simulationStatus`, `updateSpeed`, `stopSimulation`).
 
   status: eventProcedure.query(async ({ ctx }) => {
     const runnerCount = await ctx.db.runner.count({

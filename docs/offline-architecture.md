@@ -7,8 +7,8 @@ Oxygen is designed to work during internet outages — from brief drops to full-
 **Approach**: Custom event-based queue + React Query persistence + shared computation logic.
 
 **Why not PowerSync/ElectricSQL?**
-- PowerSync's MySQL support is beta; 14.2 MB client bundle is too large for weak-connectivity venues
-- ElectricSQL requires PostgreSQL (Oxygen currently uses MySQL for MeOS compatibility)
+- 14.2 MB client bundle (PowerSync) is too large for weak-connectivity venues
+- ElectricSQL targets PostgreSQL — which Oxygen now uses — but its sync model assumes a long-running websocket that we can't rely on at forest venues, and it requires opening up Postgres logical replication to clients
 - Competition data is small (< 5MB) — a sophisticated sync engine is overkill
 - Conflict resolution requirements are simple (each station processes different runners)
 

@@ -32,11 +32,11 @@ import { fireMapUpload } from "../db.js";
 
 export type ClassMatchType = "exact" | "normalized" | "substring" | "none";
 
-function normalizeClassName(name: string): string {
+export function normalizeClassName(name: string): string {
   return name.toLowerCase().replace(/[\s.,;:_\-/\\]+/g, "");
 }
 
-function findBestClassMatch<T extends { id: string; name: string; seq: number }>(
+export function findBestClassMatch<T extends { id: string; name: string; seq: number }>(
   xmlClassName: string,
   dbClasses: T[],
 ): { id: string; seq: number; name: string; matchType: Exclude<ClassMatchType, "none"> } | null {
@@ -84,7 +84,7 @@ function parseCourseFile(input: {
  * unless the OCD control positions have drifted noticeably from the
  * canonical XML ones (>30 m).
  */
-function isOcdGeometryStaleVsXml(
+export function isOcdGeometryStaleVsXml(
   ocd: GeoJSONFeatureCollection,
   xml: GeoJSONFeatureCollection,
 ): boolean {
@@ -274,28 +274,43 @@ export const courseRouter = router({
       where: { eventId, removed: false },
       orderBy: { name: "asc" },
     });
-    const counts = courses.length
-      ? await ctx.db.courseControl.groupBy({
-          by: ["courseId"],
-          _count: { courseId: true },
-          where: { courseId: { in: courses.map((c) => c.id) } },
+    const courseIds = courses.map((c) => c.id);
+    const ccs = courseIds.length
+      ? await ctx.db.courseControl.findMany({
+          where: { courseId: { in: courseIds } },
+          include: { control: { select: { seq: true, codes: true } } },
+          orderBy: [{ courseId: "asc" }, { position: "asc" }],
         })
       : [];
-    const countMap = new Map<string, number>(
-      counts.map((c) => [c.courseId, c._count.courseId]),
-    );
+    // Build a per-course ordered controls string. The web `MapPanel`
+    // fallback leg renderer relies on this when a course isn't the
+    // currently-highlighted one (which uses the richer `controlCodes`
+    // from `course.detail`). Without it, non-highlighted courses render
+    // controls but no leg lines.
+    const controlsByCourse = new Map<string, string[]>();
+    for (const cc of ccs) {
+      const first = (cc.control.codes ?? "").split(";")[0];
+      const code = first ? parseInt(first, 10) : NaN;
+      const token = String(Number.isFinite(code) ? code : cc.control.seq);
+      const arr = controlsByCourse.get(cc.courseId) ?? [];
+      arr.push(token);
+      controlsByCourse.set(cc.courseId, arr);
+    }
     return courses.map(
-      (c): CourseSummary => ({
-        id: c.seq,
-        name: c.name,
-        controls: "",
-        controlCount: countMap.get(c.id) ?? 0,
-        length: c.lengthM,
-        climb: c.climbM,
-        numberOfMaps: c.numberOfMaps,
-        firstAsStart: c.firstAsStart,
-        lastAsFinish: c.lastAsFinish,
-      }),
+      (c): CourseSummary => {
+        const tokens = controlsByCourse.get(c.id) ?? [];
+        return {
+          id: c.seq,
+          name: c.name,
+          controls: tokens.join(";"),
+          controlCount: tokens.length,
+          length: c.lengthM,
+          climb: c.climbM,
+          numberOfMaps: c.numberOfMaps,
+          firstAsStart: c.firstAsStart,
+          lastAsFinish: c.lastAsFinish,
+        };
+      },
     );
   }),
 
@@ -581,11 +596,20 @@ export const courseRouter = router({
       },
     });
 
-    // If any control has only map-mm coords (no lat/lng), fall back to
-    // converting via the OCAD CRS extracted from the uploaded map file.
+    // If any control has only map-mm coords (no usable lat/lng),
+    // fall back to converting via the OCAD CRS extracted from the
+    // uploaded map file.
+    //
+    // We treat both `null` *and* `0` as "no lat/lng" because the OCD
+    // parser used to emit `(0, 0)` for every control, leaving legacy
+    // rows with explicit zeros that would otherwise plot at the
+    // equator and be invisible. Real coordinates near the equator
+    // are not a concern for orienteering data.
     let crs: OcadCrs | null = null;
+    const isMissingLatLng = (c: { lat: number | null; lng: number | null }) =>
+      c.lat == null || c.lng == null || (c.lat === 0 && c.lng === 0);
     const needsConversion = controls.some(
-      (c) => (c.lat == null || c.lng == null) && (c.xpos !== 0 || c.ypos !== 0),
+      (c) => isMissingLatLng(c) && (c.xpos !== 0 || c.ypos !== 0),
     );
     if (needsConversion) {
       try {
@@ -612,12 +636,12 @@ export const courseRouter = router({
 
     return controls
       .filter(
-        (c) => c.lat != null || c.lng != null || c.xpos !== 0 || c.ypos !== 0,
+        (c) => !isMissingLatLng(c) || c.xpos !== 0 || c.ypos !== 0,
       )
       .map((c) => {
         let lat = c.lat ?? 0;
         let lng = c.lng ?? 0;
-        if ((lat === 0 && lng === 0) && crs && (c.xpos !== 0 || c.ypos !== 0)) {
+        if (isMissingLatLng(c) && crs && (c.xpos !== 0 || c.ypos !== 0)) {
           const wgs84 = mapMmToWgs84(c.xpos, c.ypos, crs);
           if (wgs84) {
             lat = wgs84.lat;
@@ -878,6 +902,42 @@ export const courseRouter = router({
       const parsed = parseCourseFile(input);
       const { courseGeometry, geometrySource } = parsed;
 
+      // ── 0a. Resolve WGS84 lat/lng for OCD imports ───────────
+      //
+      // The OCD parser only knows map-mm coordinates and emits
+      // `lat: 0, lng: 0` for every control. If we write those zeros
+      // through, two things break:
+      //   1. Subsequent reads see (0, 0) and plot controls at the
+      //      equator, so they disappear off the map.
+      //   2. Re-importing an OCD bundle silently clobbers any
+      //      previously-resolved lat/lng (e.g. imported earlier via
+      //      IOF XML or computed on the fly by `controlCoordinates`).
+      //
+      // Fix: when we have an OCD file we re-open it through
+      // `ocad2geojson` to recover the CRS, then convert each control's
+      // (mapX, mapY) → WGS84 up-front. Controls whose CRS we don't
+      // support fall back to lat/lng = null below, and
+      // `controlCoordinates` keeps its on-the-fly conversion as a
+      // belt-and-braces fallback. IOF XML imports already carry good
+      // lat/lng from the parser and are not affected.
+      let ocdCrs: OcadCrs | null = null;
+      if (input.ocdBase64) {
+        try {
+          const ocadMod = await import("ocad2geojson");
+          const readOcad = (ocadMod as Record<string, unknown>).readOcad as (
+            buf: Buffer,
+            opts?: Record<string, unknown>,
+          ) => Promise<{ getCrs(): OcadCrs }>;
+          const ocadFile = await readOcad(
+            Buffer.from(input.ocdBase64, "base64"),
+            { quietWarnings: true },
+          );
+          ocdCrs = ocadFile.getCrs();
+        } catch (err) {
+          console.warn("[importCourses] OCAD CRS load failed:", err);
+        }
+      }
+
       let controlsCreated = 0;
       let controlsUpdated = 0;
       let coursesCreated = 0;
@@ -949,19 +1009,58 @@ export const courseRouter = router({
           codes = pc.id;
         }
 
-        const matched = controlByKey.get(pc.id.toLowerCase());
-        const data = {
+        // Decide what to write for lat/lng. Priority:
+        //   1. Parser-provided non-zero lat/lng (IOF XML path).
+        //   2. CRS-converted (pc.mapX, pc.mapY) for OCD bundles
+        //      whose grid we recognise.
+        //   3. Leave existing values intact on update; on insert
+        //      store null so `controlCoordinates` can convert later.
+        let nextLat: number | null = pc.lat || 0;
+        let nextLng: number | null = pc.lng || 0;
+        if ((nextLat === 0 && nextLng === 0) && ocdCrs && (pc.mapX !== 0 || pc.mapY !== 0)) {
+          const wgs = mapMmToWgs84(pc.mapX, pc.mapY, ocdCrs);
+          if (wgs) {
+            nextLat = wgs.lat;
+            nextLng = wgs.lng;
+          } else {
+            nextLat = null;
+            nextLng = null;
+          }
+        } else if (nextLat === 0 && nextLng === 0) {
+          nextLat = null;
+          nextLng = null;
+        }
+
+        // Match priority:
+        //   1. By the parser-supplied id (e.g. "31", "STA1") — works for
+        //      regular controls whose `codes` we keyed by, and also for
+        //      OCD start/finish ids that happen to round-trip.
+        //   2. By the synthesized display name (e.g. "Start 1", "Mål 1") —
+        //      this is how start/finish controls survive a re-import,
+        //      because they're stored with name = "Start N"/"Mål N" and
+        //      empty `codes`, so step 1 never finds them on round two.
+        const matched =
+          controlByKey.get(pc.id.toLowerCase()) ??
+          (name ? controlByKey.get(name.toLowerCase()) : undefined);
+        const baseData = {
           name,
           codes,
           status,
-          lat: pc.lat,
-          lng: pc.lng,
           xpos: pc.mapX,
           ypos: pc.mapY,
           removed: false,
         };
 
         if (matched) {
+          // Only overwrite lat/lng when we have a real, non-zero pair.
+          // Otherwise preserve whatever the DB already has so a re-
+          // import of an OCD whose CRS we don't recognise doesn't blow
+          // away previously-resolved coordinates.
+          const data: Record<string, unknown> = { ...baseData };
+          if (nextLat !== null && nextLng !== null) {
+            data.lat = nextLat;
+            data.lng = nextLng;
+          }
           await ctx.db.control.update({
             where: { id: matched.id },
             data,
@@ -971,7 +1070,12 @@ export const courseRouter = router({
           else controlsUpdated++;
         } else {
           const created = await ctx.db.control.create({
-            data: { eventId, ...data },
+            data: {
+              eventId,
+              ...baseData,
+              lat: nextLat,
+              lng: nextLng,
+            },
             select: { id: true },
           });
           controlIdMap.set(pc.id, created.id);
@@ -1119,7 +1223,19 @@ export const courseRouter = router({
       }
 
       // ── 4. Invalidate map tile cache (course overlays changed) ──
+      //
+      // Course overlays (control circles + leg lines) are baked into
+      // the rendered tiles, so a course import must invalidate the
+      // tile cache. We also bump `map_files.uploaded_at` because the
+      // client uses that timestamp as the tile-URL cache buster — if
+      // we don't touch it, the browser keeps serving the stale tiles
+      // out of its HTTP cache even though the server-side `renderedMap`
+      // rows are gone.
       await ctx.db.renderedMap.deleteMany({ where: { eventId } });
+      await ctx.db.mapFile.updateMany({
+        where: { eventId },
+        data: { uploadedAt: new Date() },
+      });
       fireMapUpload(eventId);
 
       return {

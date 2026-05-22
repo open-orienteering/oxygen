@@ -1,33 +1,37 @@
 #!/usr/bin/env bash
-# Load the committed Demo Competition showcase fixture into a MySQL server.
+# Load the committed Demo Competition showcase fixture into PostgreSQL.
 #
-# Works against either a Dockerized MySQL (USE_DOCKER=1, typically the one in
-# docker-compose.yml) or a native MySQL running on the host. The fixture itself
-# is docs/screenshots/fixtures/showcase.sql — a portable, anonymized dump
-# derived from Vinterserien data (see scripts/anonymize-vinterserien.ts).
+# Works against either a Dockerized PostgreSQL (USE_DOCKER=1, typically the
+# one in docker-compose.yml) or a native PostgreSQL running on the host.
+# The fixture itself is docs/screenshots/fixtures/showcase.sql — a portable,
+# anonymized dump derived from Vinterserien data
+# (see scripts/anonymize-vinterserien.ts).
+#
+# The fixture is idempotent: it cascade-deletes any existing event whose
+# name_id matches before re-inserting, so re-running is safe.
 #
 # Usage:
-#   # Dockerized MySQL (Cloud Shell demo, local docker compose)
+#   # Dockerized PostgreSQL (Cloud Shell demo, local `docker compose`)
 #   USE_DOCKER=1 bash scripts/load-showcase.sh
 #
-#   # Native MySQL on host (typical dev setup)
+#   # Native PostgreSQL on the host (typical dev setup)
 #   bash scripts/load-showcase.sh
 #
-#   # Load into a custom database name (e.g. for parallel experiments)
-#   DB_NAME=demo2 bash scripts/load-showcase.sh
-#
-#   # Drop and recreate the target DB if it already exists
-#   FORCE=1 bash scripts/load-showcase.sh
-#
 # Environment variables:
-#   DB_NAME         Target competition database (default: demo_competition)
-#   MYSQL_HOST      MySQL host             (default: localhost)
-#   MYSQL_PORT      MySQL port             (default: 3306)
-#   MYSQL_USER      MySQL user             (default: root)
-#   MYSQL_PASSWORD  MySQL password         (default: empty)
-#   USE_DOCKER      If 1, use `docker compose exec mysql ...` instead of a
-#                   native `mysql` client. Host/port are ignored in that mode.
-#   FORCE           If 1, DROP DATABASE $DB_NAME before creating it.
+#   DATABASE_URL    Full connection string. Takes precedence over the
+#                   discrete PG_* variables below. Defaults to
+#                   postgresql://oxygen:oxygen@localhost:5432/oxygen?schema=oxygen
+#                   (mirrors packages/api/.env.example).
+#   PG_HOST         PostgreSQL host                       (default: localhost)
+#   PG_PORT         PostgreSQL port                       (default: 5432)
+#   PG_USER         PostgreSQL user                       (default: oxygen)
+#   PG_PASSWORD     PostgreSQL password                   (default: oxygen)
+#   PG_DATABASE     PostgreSQL database                   (default: oxygen)
+#   USE_DOCKER      If 1, exec `psql` inside the
+#                   `docker compose` postgres service instead of using a
+#                   native client. Host / port from PG_* are ignored.
+#   APPLY_SCHEMA    If 1, run `pnpm db:push` first to ensure the oxygen
+#                   schema exists in the target DB. Default: 0.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -40,132 +44,73 @@ if [[ ! -f "$FIXTURE" ]]; then
   exit 1
 fi
 
-DB_NAME="${DB_NAME:-demo_competition}"
-MYSQL_HOST="${MYSQL_HOST:-localhost}"
-MYSQL_PORT="${MYSQL_PORT:-3306}"
-MYSQL_USER="${MYSQL_USER:-root}"
-MYSQL_PASSWORD="${MYSQL_PASSWORD:-}"
 USE_DOCKER="${USE_DOCKER:-0}"
-FORCE="${FORCE:-0}"
+APPLY_SCHEMA="${APPLY_SCHEMA:-0}"
+PG_HOST="${PG_HOST:-localhost}"
+PG_PORT="${PG_PORT:-5432}"
+PG_USER="${PG_USER:-oxygen}"
+PG_PASSWORD="${PG_PASSWORD:-oxygen}"
+PG_DATABASE="${PG_DATABASE:-oxygen}"
+DATABASE_URL="${DATABASE_URL:-postgresql://${PG_USER}:${PG_PASSWORD}@${PG_HOST}:${PG_PORT}/${PG_DATABASE}?schema=oxygen}"
 
-# Anything that ran showcase.sql into a DB other than demo_competition needs
-# the oEvent.NameId inside the fixture rewritten so the backend can find it.
-# A simple sed on the piped SQL does the trick without touching the committed
-# fixture.
-prepare_sql() {
-  if [[ "$DB_NAME" == "demo_competition" ]]; then
-    cat "$FIXTURE"
-  else
-    sed "s/'demo_competition'/'${DB_NAME}'/g" "$FIXTURE"
-  fi
-}
-
-# Build the argv used to invoke the `mysql` CLI, plus a friendly label.
+echo "Loading showcase fixture into PostgreSQL"
+echo "  Fixture:  $FIXTURE  ($(du -h "$FIXTURE" | cut -f1))"
 if [[ "$USE_DOCKER" == "1" ]]; then
-  MYSQL_DESC="docker compose exec mysql (user=$MYSQL_USER)"
-  mysql_cmd() {
-    if [[ -n "$MYSQL_PASSWORD" ]]; then
-      docker compose exec -T mysql mysql -u "$MYSQL_USER" -p"$MYSQL_PASSWORD" "$@"
-    else
-      docker compose exec -T mysql mysql -u "$MYSQL_USER" "$@"
-    fi
-  }
+  echo "  Target:   docker compose postgres → $PG_DATABASE"
 else
-  MYSQL_DESC="$MYSQL_USER@$MYSQL_HOST:$MYSQL_PORT (native)"
-  mysql_cmd() {
-    if [[ -n "$MYSQL_PASSWORD" ]]; then
-      mysql -h "$MYSQL_HOST" -P "$MYSQL_PORT" -u "$MYSQL_USER" -p"$MYSQL_PASSWORD" "$@"
-    else
-      mysql -h "$MYSQL_HOST" -P "$MYSQL_PORT" -u "$MYSQL_USER" "$@"
-    fi
-  }
+  echo "  Target:   ${DATABASE_URL/:${PG_PASSWORD}@/:***@}"
+fi
+echo ""
+
+# ─── 1. (Optional) ensure schema is current ────────────────────
+if [[ "$APPLY_SCHEMA" == "1" ]]; then
+  echo "Applying oxygen schema (pnpm db:push)..."
+  ( cd "$REPO_ROOT" && DATABASE_URL="$DATABASE_URL" pnpm --filter @oxygen/api db:push ) >/dev/null
+  echo "  Schema applied."
 fi
 
-echo "Target MySQL : $MYSQL_DESC"
-echo "Target DB    : $DB_NAME"
-echo "Fixture      : $FIXTURE"
-echo
-
-# ── 1. Create target + MeOSMain (drop if FORCE=1) ──────────────────────────
-if [[ "$FORCE" == "1" ]]; then
-  echo "FORCE=1 — dropping existing $DB_NAME if present…"
-  mysql_cmd -e "DROP DATABASE IF EXISTS \`${DB_NAME}\`;"
-fi
-
-echo "Ensuring databases exist…"
-mysql_cmd -e "
-CREATE DATABASE IF NOT EXISTS \`${DB_NAME}\` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
-CREATE DATABASE IF NOT EXISTS MeOSMain CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
-"
-
-# ── 2. Make sure MeOSMain has the schema Oxygen expects ────────────────────
-# The loader is usable on fresh Cloud Shell boxes where MeOSMain is empty,
-# so apply the checked-in schema if (and only if) oEvent doesn't already exist.
-HAS_OEVENT="$(mysql_cmd -N -B -e "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema='MeOSMain' AND table_name='oEvent';" 2>/dev/null || echo 0)"
-if [[ "${HAS_OEVENT//[[:space:]]/}" == "0" ]]; then
-  echo "Applying MeOSMain schema (packages/api/prisma/meos-schema.sql)…"
-  if [[ "$USE_DOCKER" == "1" ]]; then
-    mysql_cmd MeOSMain < "$REPO_ROOT/packages/api/prisma/meos-schema.sql"
-  else
-    mysql_cmd MeOSMain < "$REPO_ROOT/packages/api/prisma/meos-schema.sql"
-  fi
-fi
-
-# ── 3. Pipe the fixture into the target DB ─────────────────────────────────
-echo "Loading fixture into \`${DB_NAME}\`…"
-prepare_sql | mysql_cmd "$DB_NAME"
-
-# ── 4. Register the competition in MeOSMain.oEvent ─────────────────────────
-# MeOS requires that MeOSMain.oEvent.Id == <competition_db>.oEvent.Id for a
-# given NameId. MeOSMain.oEvent has only a PRIMARY KEY on Id (no UNIQUE on
-# NameId), so we can't blindly INSERT … ON DUPLICATE KEY — if a row with the
-# same Id but a different NameId already exists (parallel demo DBs), that
-# would overwrite the wrong registration. Instead: pick an Id that actually
-# fits, then sync the competition DB's oEvent.Id to match.
-FIXTURE_EVENT_ID="$(mysql_cmd -N -B -e "SELECT Id FROM \`${DB_NAME}\`.oEvent LIMIT 1;")"
-FIXTURE_EVENT_ID="${FIXTURE_EVENT_ID//[[:space:]]/}"
-if [[ -z "$FIXTURE_EVENT_ID" ]]; then
-  echo "Could not read oEvent.Id from ${DB_NAME}. Fixture load likely failed." >&2
-  exit 1
-fi
-
-# Existing row for this NameId → reuse its Id (idempotent reloads).
-EXISTING_ID="$(mysql_cmd -N -B -e "SELECT Id FROM MeOSMain.oEvent WHERE NameId='${DB_NAME}' LIMIT 1;")"
-EXISTING_ID="${EXISTING_ID//[[:space:]]/}"
-
-if [[ -n "$EXISTING_ID" ]]; then
-  TARGET_ID="$EXISTING_ID"
-  mysql_cmd MeOSMain -e "
-    UPDATE oEvent
-    SET Name='Demo Competition', Date='2026-03-15', Version=96, Removed=0
-    WHERE Id=${TARGET_ID};
-  "
+# ─── 2. Verify schema exists ───────────────────────────────────
+if [[ "$USE_DOCKER" == "1" ]]; then
+  HAS_SCHEMA=$(docker compose exec -T postgres psql -U "$PG_USER" -d "$PG_DATABASE" -tAc \
+    "SELECT 1 FROM information_schema.schemata WHERE schema_name = 'oxygen'" 2>/dev/null \
+    | tr -d '[:space:]')
 else
-  FIXTURE_ID_FREE="$(mysql_cmd -N -B -e "SELECT COUNT(*) FROM MeOSMain.oEvent WHERE Id=${FIXTURE_EVENT_ID};")"
-  FIXTURE_ID_FREE="${FIXTURE_ID_FREE//[[:space:]]/}"
-  if [[ "$FIXTURE_ID_FREE" == "0" ]]; then
-    TARGET_ID="$FIXTURE_EVENT_ID"
-    mysql_cmd MeOSMain -e "
-      INSERT INTO oEvent (Id, Name, Date, NameId, Version, Annotation, Removed)
-      VALUES (${TARGET_ID}, 'Demo Competition', '2026-03-15', '${DB_NAME}', 96, '', 0);
-    "
-  else
-    mysql_cmd MeOSMain -e "
-      INSERT INTO oEvent (Name, Date, NameId, Version, Annotation, Removed)
-      VALUES ('Demo Competition', '2026-03-15', '${DB_NAME}', 96, '', 0);
-    "
-    TARGET_ID="$(mysql_cmd -N -B -e "SELECT Id FROM MeOSMain.oEvent WHERE NameId='${DB_NAME}' ORDER BY Id DESC LIMIT 1;")"
-    TARGET_ID="${TARGET_ID//[[:space:]]/}"
-  fi
+  HAS_SCHEMA=$(PGPASSWORD="$PG_PASSWORD" psql -h "$PG_HOST" -p "$PG_PORT" -U "$PG_USER" -d "$PG_DATABASE" -tAc \
+    "SELECT 1 FROM information_schema.schemata WHERE schema_name = 'oxygen'" 2>/dev/null \
+    | tr -d '[:space:]' || true)
+fi
+if [[ "$HAS_SCHEMA" != "1" ]]; then
+  echo "ERROR: the 'oxygen' schema doesn't exist in the target database." >&2
+  echo "       Run with APPLY_SCHEMA=1, or apply manually:" >&2
+  echo "         DATABASE_URL='$DATABASE_URL' pnpm --filter @oxygen/api db:push" >&2
+  exit 2
 fi
 
-# Keep the competition DB's oEvent.Id aligned with MeOSMain.oEvent.Id.
-if [[ "$TARGET_ID" != "$FIXTURE_EVENT_ID" ]]; then
-  mysql_cmd "$DB_NAME" -e "UPDATE oEvent SET Id=${TARGET_ID} WHERE Id=${FIXTURE_EVENT_ID};"
+# ─── 3. Load the fixture ───────────────────────────────────────
+echo "Loading showcase.sql..."
+if [[ "$USE_DOCKER" == "1" ]]; then
+  docker compose exec -T postgres psql -U "$PG_USER" -d "$PG_DATABASE" \
+    -v ON_ERROR_STOP=1 -q < "$FIXTURE"
+else
+  PGPASSWORD="$PG_PASSWORD" psql -h "$PG_HOST" -p "$PG_PORT" -U "$PG_USER" -d "$PG_DATABASE" \
+    -v ON_ERROR_STOP=1 -q -f "$FIXTURE"
+fi
+echo "  Loaded."
+
+# ─── 4. Smoke check ────────────────────────────────────────────
+if [[ "$USE_DOCKER" == "1" ]]; then
+  ROW_COUNT=$(docker compose exec -T postgres psql -U "$PG_USER" -d "$PG_DATABASE" -tAc \
+    "SELECT COUNT(*) FROM oxygen.runners r JOIN oxygen.events e ON e.id = r.event_id WHERE e.name_id = 'demo_competition'" \
+    | tr -d '[:space:]')
+else
+  ROW_COUNT=$(PGPASSWORD="$PG_PASSWORD" psql -h "$PG_HOST" -p "$PG_PORT" -U "$PG_USER" -d "$PG_DATABASE" -tAc \
+    "SELECT COUNT(*) FROM oxygen.runners r JOIN oxygen.events e ON e.id = r.event_id WHERE e.name_id = 'demo_competition'" \
+    | tr -d '[:space:]')
 fi
 
-echo "Registered competition in MeOSMain.oEvent (Id=${TARGET_ID}, NameId=${DB_NAME})."
-
-echo
-echo "✓ Demo Competition loaded into \`${DB_NAME}\`."
-echo "  Open Oxygen and pick 'Demo Competition' in the competition selector."
+echo ""
+echo "✓ Demo Competition loaded — $ROW_COUNT runners visible."
+echo ""
+echo "Next steps:"
+echo "  1. Start the app:  pnpm dev"
+echo "  2. Open http://localhost:5173 and pick 'Demo Competition'."

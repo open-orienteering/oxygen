@@ -672,6 +672,10 @@ export interface ControlUnit {
   modelId: number | null;
   /** Product name (e.g. "BSF8", "BS11-BL"). Persisted at programming time. */
   modelName: string | null;
+  /** SRR_CFG bit observed at programming time. True = short-range
+   *  radio enabled on this unit (drives the "SRR+" badge on the
+   *  Controls page). */
+  srrCfg: boolean;
   lastSeenAt: string | null; // ISO timestamp
 }
 

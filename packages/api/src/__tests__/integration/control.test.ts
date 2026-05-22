@@ -124,6 +124,76 @@ describe("control.upsertConfig", () => {
   });
 });
 
+describe("control.recordProgramming", () => {
+  it("persists battery + memory-cleared state on the control_units row", async () => {
+    const c = await caller.control.create({ codes: "60" });
+    const stationSerial = 600_001;
+    await caller.control.recordProgramming({
+      stationSerial,
+      controlId: c.id,
+      programmedCode: 60,
+      firmwareVersion: "5.93",
+      modelId: 105,
+      modelName: "BS11-BL",
+      batteryVoltage: 3210,
+      batteryLow: false,
+      memoryCleared: true,
+    });
+
+    const unit = await ctx.db.controlUnit.findUnique({
+      where: {
+        eventId_stationSerial: { eventId: ctx.eventId, stationSerial },
+      },
+    });
+    expect(unit).not.toBeNull();
+    expect(unit!.lastProgrammedCode).toBe(60);
+    expect(unit!.firmwareVersion).toBe("5.93");
+    expect(unit!.modelId).toBe(105);
+    expect(unit!.modelName).toBe("BS11-BL");
+    expect(unit!.batteryVoltageMv).toBe(3210);
+    expect(unit!.batteryLow).toBe(false);
+    expect(unit!.memoryClearedAt).not.toBeNull();
+    expect(unit!.checkedAt).not.toBeNull();
+    expect(unit!.lastSeenAt).not.toBeNull();
+  });
+
+  it("a second program call updates voltage in place without resetting memoryClearedAt", async () => {
+    const c = await caller.control.create({ codes: "61" });
+    const stationSerial = 600_002;
+    await caller.control.recordProgramming({
+      stationSerial,
+      controlId: c.id,
+      programmedCode: 61,
+      memoryCleared: true,
+    });
+    const initial = await ctx.db.controlUnit.findUnique({
+      where: {
+        eventId_stationSerial: { eventId: ctx.eventId, stationSerial },
+      },
+    });
+    const initialClearedAt = initial!.memoryClearedAt;
+    expect(initialClearedAt).not.toBeNull();
+
+    // Second call — no memoryCleared flag this time; voltage updates,
+    // the cleared-at stamp stays put.
+    await caller.control.recordProgramming({
+      stationSerial,
+      programmedCode: 61,
+      batteryVoltage: 2870,
+      batteryLow: true,
+    });
+
+    const after = await ctx.db.controlUnit.findUnique({
+      where: {
+        eventId_stationSerial: { eventId: ctx.eventId, stationSerial },
+      },
+    });
+    expect(after!.batteryVoltageMv).toBe(2870);
+    expect(after!.batteryLow).toBe(true);
+    expect(after!.memoryClearedAt?.getTime()).toBe(initialClearedAt!.getTime());
+  });
+});
+
 describe("control.getAirPlusConfig / setAirPlusConfig", () => {
   it("round-trips the event-level AIR+ defaults", async () => {
     const before = await caller.control.getAirPlusConfig();

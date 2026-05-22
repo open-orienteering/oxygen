@@ -155,8 +155,18 @@ export function CoursesPage() {
         <CourseImportDialog
           onClose={() => setShowImportDialog(false)}
           onSuccess={() => {
+            // Course/control lists drive the table.
             utils.course.list.invalidate();
             utils.control.list.invalidate();
+            // Map overlays are cached with `staleTime: Infinity` (the
+            // tile URLs key off `mapMetadata.uploadedAt`), so a re-
+            // import otherwise leaves the viewer rendering stale
+            // controls / leg lines until a full page refresh.
+            utils.course.controlCoordinates.invalidate();
+            utils.course.courseGeometries.invalidate();
+            utils.course.mapMetadata.invalidate();
+            utils.course.mapFileInfo.invalidate();
+            utils.course.geometry.invalidate();
           }}
         />
       )}
