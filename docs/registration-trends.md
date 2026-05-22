@@ -14,13 +14,13 @@ This document describes what data the page draws from, how comparison events are
 
 ### Own competition
 
-Per-runner registration timestamps live on `oRunner` in the competition's database:
+Per-runner registration timestamps live on `oxygen.runners`:
 
-| Column        | Type    | Meaning                                                              |
-|---------------|---------|----------------------------------------------------------------------|
-| `EntryDate`   | int     | YYYYMMDD as integer (MeOS format).                                    |
-| `EntryTime`   | int     | Deciseconds since midnight, local time.                                |
-| `EntrySource` | int     | `0` = manual, otherwise the Eventor event ID this runner came from.    |
+| Column         | Type | Meaning                                                              |
+|----------------|------|----------------------------------------------------------------------|
+| `entry_date`   | int  | YYYYMMDD as integer (carried over verbatim from the MeOS-era format).|
+| `entry_time`   | int  | Deciseconds since midnight, local time.                              |
+| `entry_source` | int  | `0` = manual, otherwise the Eventor event ID this runner came from. |
 
 Both columns are populated automatically:
 
@@ -50,24 +50,24 @@ If `findComparableEvents` 403s (typically because the configured API key has exp
 
 ## Cache layer
 
-Two MeOSMain tables, created on first use by `ensureEventorEntryHistoryTable` in [`packages/api/src/db.ts`](../packages/api/src/db.ts):
+Two shared tables in the `oxygen` schema (declared in [`packages/api/prisma/schema.prisma`](../packages/api/prisma/schema.prisma) as `EventorEventMeta` and `EventorEntryHistory`):
 
 ```sql
-CREATE TABLE oxygen_eventor_event_meta (
-  EventorEventId   INT NOT NULL PRIMARY KEY,
-  Name             VARCHAR(255) NOT NULL DEFAULT '',
-  StartDate        DATE NOT NULL,
-  ClassificationId INT NOT NULL DEFAULT 0,
-  Organiser        VARCHAR(255) NOT NULL DEFAULT '',
-  EntryCount       INT NOT NULL DEFAULT 0,
-  FetchedAt        DATETIME NOT NULL
+CREATE TABLE oxygen.eventor_event_meta (
+  eventor_event_id  INT          PRIMARY KEY,
+  name              TEXT         NOT NULL DEFAULT '',
+  start_date        DATE         NOT NULL,
+  classification_id INT          NOT NULL DEFAULT 0,
+  organiser         TEXT         NOT NULL DEFAULT '',
+  entry_count       INT          NOT NULL DEFAULT 0,
+  fetched_at        TIMESTAMPTZ  NOT NULL
 );
-CREATE TABLE oxygen_eventor_entry_history (
-  EventorEventId INT NOT NULL,
-  RowSeq         INT NOT NULL,
-  EntryClassId   INT NOT NULL DEFAULT 0,
-  EntryAt        DATETIME NOT NULL,
-  PRIMARY KEY (EventorEventId, RowSeq)
+CREATE TABLE oxygen.eventor_entry_history (
+  eventor_event_id INT         NOT NULL REFERENCES oxygen.eventor_event_meta ON DELETE CASCADE,
+  row_seq          INT         NOT NULL,
+  entry_class_id   INT         NOT NULL DEFAULT 0,
+  entry_at         TIMESTAMPTZ NOT NULL,
+  PRIMARY KEY (eventor_event_id, row_seq)
 );
 ```
 
@@ -117,6 +117,6 @@ A `trends` namespace ships with EN + SV translations (`packages/web/src/i18n/loc
 
 ## Operational notes
 
-- The page is fully read-only beyond the `oRunner` / `oxygen_eventor_*` writes. It does **not** modify any Eventor data.
+- The page is fully read-only beyond the `runners` / `eventor_*` writes. It does **not** modify any Eventor data.
 - Disabling Eventor (clearing the API key) leaves the **own** timeline intact; the comparison picker surfaces a "Connect an Eventor API key" message.
-- Cached comparison data is shared across all competitions on the same Oxygen instance — pulling the same comparison event from competition A's view of the chart will populate it for competition B too.
+- Cached comparison data is shared across all events on the same Oxygen instance — pulling the same comparison event from event A's view of the chart will populate it for event B too.

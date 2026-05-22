@@ -115,21 +115,61 @@ the CLI.
 - ✅ Core API routers ported and verified end-to-end:
   `event`, `runner`, `class`, `course`, `control`, `club`, `race`,
   `lists`, `cardReadout`, `events`, `external`.
-- ✅ Stub routers in place for the bigger pipelines (Eventor sync,
-  LiveResults push, Livelox sync, draw engine, online-input puller,
-  registration trends, test-lab simulator). Each stub returns a clear
-  `PRECONDITION_FAILED` so the UI can degrade gracefully.
+- ✅ Big pipelines fully ported and live:
+  Eventor sync + result/start-list push, LiveResults push pump,
+  Livelox sync + per-runner / per-class route lookups + standalone
+  class viewer, draw engine, online-input (ROC) puller,
+  registration trends, test-lab simulator, map-tile renderer.
 - ✅ `backup.ts` uses `psql \copy`-driven per-event extraction.
 - ✅ Docker compose: PG 18 on `:5432`, isolated `postgres-oxygen-test`
   on `:5433`. `pnpm test:db:up` / `down` helpers added.
-- 🔜 Web port: the existing web pages reference ~100 endpoints from the
-  pre-refactor API surface that aren't on the new routers yet. Each
-  needs either a stub on the API or a UI tweak.
-- 🔜 Migration tool: skeleton + per-table mapping documented;
-  implementation pending.
-- 🔜 Integration test suite: `packages/api/src/__tests__/integration/`
-  needs rewriting against the new schema + PG schema-isolation helper.
-- 🔜 E2E tests: `e2e/global-setup.ts` needs to switch from MySQL seeds
-  to a Prisma-based seed builder.
-- 🔜 Docs: `docs/architecture.md` and `AGENTS.md` need MeOS sections
-  removed and the new schema diagram inserted.
+- ✅ Web pages restored against the new schema (CompetitionSelector,
+  EventPage, Controls, Cards, Test Lab simulator, Registration Trends,
+  Tracks/Replay viewers).
+- ✅ Migration tool: one-shot CLI at
+  `packages/api/scripts/migrate-mysql-to-pg.ts`, exposed as
+  `pnpm migrate:mysql-to-pg`. Migrated Vinterserien + Bagissprinten.
+- ✅ Integration test suite rewritten against the new schema with PG
+  `Event`-row isolation. 97 tests across event / class / course /
+  control / runner / card / draw / kiosk-finish / eventor-reentry /
+  online-input / registration-trends / testlab / map-tiles / smoke /
+  cancellation-handling.
+- ✅ E2E global setup switched to Prisma-based seed builders; three
+  seed events (`itest`, `itest_multirace`, `meos_20251222_001121_2BC`)
+  rebuilt fresh per run. Per-spec `reseed()` for hermetic state.
+- ✅ Docs: `docs/architecture.md` and `AGENTS.md` rewritten for the
+  PostgreSQL / single-schema layout.
+
+### Remaining small items (not blockers)
+
+- ✅ API unit-test suite restored. `placeholder.test.ts` is gone; the
+  PG-shaped equivalents live in `packages/api/src/__tests__/`:
+  `timeConvert`, `runnerHelpers`, `courseHelpers`, `courseGeometryStale`,
+  `cardReadout`, `livelox-decoder`, `livelox-transform`,
+  `livelox-matcher`, `eventorKeyStore`, `results`, `online-input-roc`,
+  `liveresults-pusher`, `liveresults` (mapStatus), `bigint-json`,
+  `parse-legs-string`, and the existing `livelox-tile-proxy` /
+  `livelox-import-class`. ~251 unit tests at the time of writing, up
+  from the ~14 left after the migration.
+- ✅ `control_units` persists `batteryVoltage` / `batteryLow` /
+  `memoryClearedAt` (and now `srr_cfg`) from `recordProgramming`.
+- ✅ Per-control `autosend_mode` round-trips through `upsertConfig` →
+  `controls.autosend_mode` → `aggregateConfig` → ControlsPage AIR+
+  panel. Migration `20260522_control_autosend_srr` adds the column.
+- ✅ SRR+ badge on the Controls page is wired up. `control_units.srr_cfg`
+  is captured from the station's SYS_VAL SRR_CFG byte during programming
+  (already extracted by `parseStationInfo.srrEnabled`) and the
+  Controls list lights up an `SRR+` chip for any unit with the bit set.
+- ✅ `eventor.fetchEntryHistory` does a live Eventor re-fetch when the
+  Registration Trends page asks for events that aren't in the cache (or
+  when the operator forces a refresh). Cached rows older than 24h are
+  also refreshed implicitly; per-event failures are isolated so a
+  single bad id doesn't sink the whole batch.
+
+### Performance follow-ups
+
+- ✅ `race.finishReceipt` rank computation no longer fetches every
+  finished runner across the event. The class-rank now pushes down to
+  Postgres as two filtered counts (strictly-faster peers + class total)
+  using the existing `(event_id, class_id, removed)` index path,
+  trading an O(N) JS sort per readout for two trivial index-only counts.

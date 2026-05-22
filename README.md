@@ -5,6 +5,8 @@
 
 A modern web application for managing orienteering competitions — from entry and course setup through start draw, SI card readout, and live results. Built by [Open Orienteering](https://github.com/open-orienteering). Inspired by [MeOS](http://www.melin.nu/meos), rebuilt as a Progressive Web App with direct [Eventor](https://eventor.orientering.se) integration.
 
+> **Note (May 2026):** Oxygen previously stored data in a MeOS-compatible MySQL layout. That compatibility layer was dropped in May 2026 — the app now runs on a single PostgreSQL 18 database (`oxygen` schema). See [`docs/migrations/2026-drop-meos.md`](docs/migrations/2026-drop-meos.md) for the migration story and the one-shot CLI that moves a MeOS database into the new schema.
+
 ## Features
 
 - **Competition management** — create and manage events, races, and classes
@@ -14,7 +16,7 @@ A modern web application for managing orienteering competitions — from entry a
 - **SI card readout** — read SportIdent cards via Web Serial, process punches and compute results live
 - **Live results** — real-time result updates as cards are read
 - **Kiosk mode** — self-service registration and start/finish station interfaces
-- **MeOS-compatible** — reads and writes the same MySQL schema as MeOS; run both side by side
+- **PostgreSQL 18** — single-database design with UUIDv7 PKs, JSONB columns, native enums, and foreign-key integrity
 
 See the [feature showcase](docs/features.md) for screenshots of every view.
 
@@ -24,7 +26,7 @@ See the [feature showcase](docs/features.md) for screenshots of every view.
 |-------|-------------|
 | Frontend | React 19, Vite, Tailwind CSS v4, TanStack Query, React Router v7 |
 | Backend | Fastify, tRPC (end-to-end type safety), Zod |
-| Database | MySQL 8 (MeOS-compatible schema), Prisma ORM |
+| Database | PostgreSQL 18 (`oxygen` schema), Prisma ORM |
 | Testing | Playwright E2E, Vitest unit tests |
 
 ```
@@ -47,20 +49,23 @@ For a deeper dive into database design, deployment options, and subsystem detail
 git clone https://github.com/open-orienteering/oxygen
 cd oxygen
 cp packages/api/.env.example packages/api/.env
-docker compose up -d        # starts MySQL
+docker compose up -d        # starts PostgreSQL 18
 pnpm install
+pnpm db:push                # apply the oxygen schema
 pnpm db:generate
-pnpm dev                    # API on :3001, web on :5173
+pnpm dev                    # API on :3002, web on :5173
 ```
 
 ### Manual setup
 
-Prerequisites: Node.js >= 20, pnpm >= 10, MySQL 8
+Prerequisites: Node.js >= 20, pnpm >= 10, PostgreSQL 18
 
 ```bash
 pnpm install
+# Edit packages/api/.env so DATABASE_URL points at your PostgreSQL,
+# e.g. postgresql://oxygen:oxygen@localhost:5432/oxygen?schema=oxygen
+pnpm db:push
 pnpm db:generate
-# Edit packages/api/.env with your DATABASE_URL
 pnpm dev
 ```
 

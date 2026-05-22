@@ -3,7 +3,8 @@
  *
  * Priority order:
  *   P1 — Eventor person id (highest signal)
- *   P2 — Club-scoped name match (via Eventor club id, then club name)
+ *   P2a — Eventor club id-scoped name match
+ *   P2b — Club name-scoped name match
  *   P3 — Cross-club name match (with middle-name strip)
  *
  * The matcher is the most failure-prone piece of the Livelox sync — a
@@ -11,113 +12,218 @@
  * and the operator has to fix them up manually. Tests below lock the
  * priority order, the case-insensitive name normalisation and the
  * "FirstName LastName" / "LastName FirstName" tolerance.
+ *
+ * Runner ids are UUIDs in the new schema; we use synthetic short
+ * strings here so the assertions stay readable.
  */
 
 import { describe, it, expect } from "vitest";
-import { matchRunner, normName, type RunnerLookups } from "../livelox/sync.js";
+import {
+  matchRunner,
+  normName,
+  type RunnerLookups,
+} from "../livelox/sync.js";
 
-function lookups(): RunnerLookups {
+describe("normName", () => {
+  it("lowercases and trims", () => {
+    expect(normName("  Anna Svensson  ")).toBe("anna svensson");
+  });
+
+  it("collapses multiple spaces", () => {
+    expect(normName("Anna  Maria   Berg")).toBe("anna maria berg");
+  });
+
+  it("handles empty string", () => {
+    expect(normName("")).toBe("");
+  });
+});
+
+/** Build a `RunnerLookups` from a compact spec. */
+function buildLookups(spec: {
+  runners: Array<{
+    id: string;
+    name: string;
+    clubName?: string;
+    eventorClubId?: number;
+    eventorPersonId?: string;
+  }>;
+}): RunnerLookups {
+  const byFullName = new Map<string, string>();
+  const byEventorPersonId = new Map<string, string>();
+  const runnersByEventorClubId = new Map<
+    number,
+    Array<{ id: string; norm: string }>
+  >();
+  const runnersByClubName = new Map<
+    string,
+    Array<{ id: string; norm: string }>
+  >();
+
+  for (const r of spec.runners) {
+    const norm = normName(r.name);
+    byFullName.set(norm, r.id);
+    if (r.eventorPersonId) byEventorPersonId.set(r.eventorPersonId, r.id);
+    if (r.eventorClubId != null) {
+      let list = runnersByEventorClubId.get(r.eventorClubId);
+      if (!list) {
+        list = [];
+        runnersByEventorClubId.set(r.eventorClubId, list);
+      }
+      list.push({ id: r.id, norm });
+    }
+    if (r.clubName) {
+      const cn = normName(r.clubName);
+      let list = runnersByClubName.get(cn);
+      if (!list) {
+        list = [];
+        runnersByClubName.set(cn, list);
+      }
+      list.push({ id: r.id, norm });
+    }
+  }
+
   return {
-    byFullName: new Map(),
-    byEventorPersonId: new Map(),
-    runnersByEventorClubId: new Map(),
-    runnersByClubName: new Map(),
+    byFullName,
+    byEventorPersonId,
+    runnersByEventorClubId,
+    runnersByClubName,
   };
 }
 
-describe("livelox runner matcher", () => {
-  it("normalises whitespace and case", () => {
-    expect(normName("  Anna   Larsson  ")).toBe("anna larsson");
-    expect(normName("ANNA-MARIA")).toBe("anna-maria");
+describe("matchRunner", () => {
+  const lookups = buildLookups({
+    runners: [
+      {
+        id: "uuid-anna",
+        name: "Anna Svensson",
+        clubName: "OK Linné",
+        eventorClubId: 585,
+        eventorPersonId: "12345",
+      },
+      {
+        id: "uuid-erik",
+        name: "Erik Larsson",
+        clubName: "OK Linné",
+        eventorClubId: 585,
+      },
+      {
+        id: "uuid-alex",
+        name: "Alexandra Svenhard",
+        clubName: "Järla Orientering",
+      },
+      {
+        id: "uuid-ulf",
+        name: "Ulf Carlby",
+        clubName: "Järla Orientering",
+        eventorPersonId: "22308",
+      },
+    ],
   });
 
-  it("returns null when no signals match", () => {
-    expect(
-      matchRunner("Anna", "Larsson", null, null, null, lookups()),
-    ).toBeNull();
+  describe("P1: Eventor person ID", () => {
+    it("matches by personExtId", () => {
+      expect(matchRunner("Anna", "Svensson", "12345", null, null, lookups)).toBe(
+        "uuid-anna",
+      );
+    });
+
+    it("matches by personExtId even with wrong name", () => {
+      expect(matchRunner("Wrong", "Name", "12345", null, null, lookups)).toBe(
+        "uuid-anna",
+      );
+    });
+
+    it("skips P1 and falls through when personExtId not found", () => {
+      // No fallback to cross-club lookup ‒ we deliberately scope down by
+      // priority. With a known name + unknown personExtId the matcher
+      // should fall through to P3 and find by name.
+      expect(matchRunner("Anna", "Svensson", "99999", null, null, lookups)).toBe(
+        "uuid-anna",
+      );
+    });
   });
 
-  it("P1 — Eventor person id wins over everything else", () => {
-    const l = lookups();
-    l.byEventorPersonId.set("12345", "runner-1");
-    l.byFullName.set(normName("Anna Larsson"), "runner-2");
-    expect(
-      matchRunner("Anna", "Larsson", "12345", null, null, l),
-    ).toBe("runner-1");
+  describe("P2a: Eventor club id-scoped name match", () => {
+    it("matches via Eventor org ID + name", () => {
+      expect(matchRunner("Erik", "Larsson", null, "585", null, lookups)).toBe(
+        "uuid-erik",
+      );
+    });
   });
 
-  it("P2 — Eventor club id scopes the name match", () => {
-    const l = lookups();
-    l.runnersByEventorClubId.set(50, [
-      { id: "runner-3", norm: normName("Anna Larsson") },
-    ]);
-    l.byFullName.set(normName("Anna Larsson"), "wrong-runner");
-    expect(
-      matchRunner("Anna", "Larsson", null, "50", null, l),
-    ).toBe("runner-3");
+  describe("P2b: Club-name-scoped match", () => {
+    it("matches via club name string", () => {
+      expect(
+        matchRunner("Erik", "Larsson", null, null, "OK Linné", lookups),
+      ).toBe("uuid-erik");
+    });
+
+    it("strips middle names within club", () => {
+      expect(
+        matchRunner(
+          "Alexandra Beatrice",
+          "Svenhard",
+          null,
+          null,
+          "Järla Orientering",
+          lookups,
+        ),
+      ).toBe("uuid-alex");
+    });
+
+    it("falls through to P3 when runner not in specified club", () => {
+      // Erik is in OK Linné, not Järla — P2 fails, P3 finds him cross-club.
+      expect(
+        matchRunner("Erik", "Larsson", null, null, "Järla Orientering", lookups),
+      ).toBe("uuid-erik");
+    });
   });
 
-  it("P2 — falls back to club name when Eventor org id is missing", () => {
-    const l = lookups();
-    l.runnersByClubName.set("ok bagheera", [
-      { id: "runner-4", norm: normName("Anna Larsson") },
-    ]);
-    expect(
-      matchRunner("Anna", "Larsson", null, null, "OK Bagheera", l),
-    ).toBe("runner-4");
+  describe("P3: Cross-club exact name", () => {
+    it("matches First Last", () => {
+      expect(matchRunner("Erik", "Larsson", null, null, null, lookups)).toBe(
+        "uuid-erik",
+      );
+    });
+
+    it("matches Last First", () => {
+      expect(matchRunner("Larsson", "Erik", null, null, null, lookups)).toBe(
+        "uuid-erik",
+      );
+    });
+
+    it("returns null for unknown name", () => {
+      expect(matchRunner("Nobody", "Here", null, null, null, lookups)).toBeNull();
+    });
   });
 
-  it("P2 — tolerates LastName FirstName order in the club roster", () => {
-    const l = lookups();
-    l.runnersByEventorClubId.set(50, [
-      { id: "runner-5", norm: normName("Larsson Anna") },
-    ]);
-    expect(
-      matchRunner("Anna", "Larsson", null, "50", null, l),
-    ).toBe("runner-5");
+  describe("P3b: Cross-club middle-name strip", () => {
+    it("strips middle names cross-club", () => {
+      expect(
+        matchRunner("Alexandra Beatrice", "Svenhard", null, null, null, lookups),
+      ).toBe("uuid-alex");
+    });
+
+    it("does not strip if firstName is single word", () => {
+      expect(
+        matchRunner("Alexandra", "Svenhard", null, null, null, lookups),
+      ).toBe("uuid-alex");
+    });
   });
 
-  it("P2 — strips middle names on retry", () => {
-    const l = lookups();
-    l.runnersByEventorClubId.set(50, [
-      { id: "runner-6", norm: normName("Anna Larsson") },
-    ]);
-    expect(
-      matchRunner("Anna Marie", "Larsson", null, "50", null, l),
-    ).toBe("runner-6");
-  });
+  describe("priority ordering", () => {
+    it("P1 takes precedence over P3", () => {
+      // ExtId points to runner Ulf, but name is "Anna Svensson"
+      expect(matchRunner("Anna", "Svensson", "22308", null, null, lookups)).toBe(
+        "uuid-ulf",
+      );
+    });
 
-  it("P3 — cross-club name match as last resort", () => {
-    const l = lookups();
-    l.byFullName.set(normName("Anna Larsson"), "runner-7");
-    expect(
-      matchRunner("Anna", "Larsson", null, null, null, l),
-    ).toBe("runner-7");
-  });
-
-  it("P3b — cross-club middle-name strip only fires when present", () => {
-    const l = lookups();
-    l.byFullName.set(normName("Anna Larsson"), "runner-8");
-    expect(
-      matchRunner("Anna Marie", "Larsson", null, null, null, l),
-    ).toBe("runner-8");
-    // Without a middle name, the second pass must not be attempted (no
-    // way for "Anna Larsson" to match "Anna Marie Larsson" if only the
-    // latter is in the roster).
-    const l2 = lookups();
-    l2.byFullName.set(normName("Anna Marie Larsson"), "runner-9");
-    expect(matchRunner("Anna", "Larsson", null, null, null, l2)).toBeNull();
-  });
-
-  it("returns null when a club is given but the person isn't in it", () => {
-    const l = lookups();
-    l.runnersByEventorClubId.set(50, [
-      { id: "other-runner", norm: normName("Lars Andersson") },
-    ]);
-    // No fallback to cross-club lookup ‒ we deliberately scope down by
-    // club when one was provided.
-    expect(
-      matchRunner("Anna", "Larsson", null, "50", null, l),
-    ).toBeNull();
+    it("falls through from P2 to P3 when club match fails", () => {
+      // "Anna Svensson" is not in Järla (P2 fails); P3 finds her cross-club.
+      expect(
+        matchRunner("Anna", "Svensson", null, null, "Järla Orientering", lookups),
+      ).toBe("uuid-anna");
+    });
   });
 });

@@ -2,7 +2,7 @@
 
 ## Symptom
 
-The Eventor API key (`MeOSMain.oxygen_settings.eventor_api_key`) kept
+The Eventor API key (`oxygen.oxygen_settings.eventor_api_key`) kept
 disappearing — every "few hours of normal development", the user would
 open the app and find the production Eventor API key gone, while the
 test slot (`eventor_api_key_test`) was set to the literal placeholder
@@ -15,15 +15,15 @@ was no longer the culprit.
 
 ## Root cause
 
-`MeOSMain` is shared between the dev servers, the Docker stack, and
-**every E2E run**. The `oxygen_settings` table holds the Eventor keys
-globally, and the E2E suite was hitting the public tRPC mutations
-directly against that real database:
+The `oxygen` database is shared between the dev servers, the Docker
+stack, and **every E2E run**. The `oxygen.oxygen_settings` table holds
+the Eventor keys globally, and the E2E suite was hitting the public
+tRPC mutations directly against that real database:
 
 - `e2e/eventor.spec.ts` — `clearEventorKey()` posted to
   `/trpc/eventor.clearKey` with `data: {}`. The router defaults
   `env` to `"prod"`, so this issued a
-  `DELETE FROM oxygen_settings WHERE SettingKey = 'eventor_api_key'`
+  `DELETE FROM oxygen.oxygen_settings WHERE setting_key = 'eventor_api_key'`
   every time the test ran.
 - `e2e/event.spec.ts` — three tests posted to `/trpc/eventor.validateKey`
   with the placeholder string `df34af90a0c64ca4abfe9492be057e9c`,
@@ -103,7 +103,7 @@ entry for the snapshot file. No production code changes.
 
 Re-enter your Eventor API key from the competition selector once. Any
 existing competitions linked to `prod` will start working immediately
-(they only depend on the key being present in `MeOSMain.oxygen_settings`).
+(they only depend on the key being present in `oxygen.oxygen_settings`).
 
 ## How to verify
 

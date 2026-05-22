@@ -1,5 +1,10 @@
 # Consistent cancellation (Status=21) handling
 
+> **Historical note.** This bug fix predates the May 2026 MySQL → PostgreSQL
+> migration; the code paths and `oRunner.Status` values referenced here are
+> kept verbatim so the upstream MeOS source citations resolve. The same
+> semantics carry over to the new `runners.status` enum.
+
 ## Symptom
 
 Looking at the Bagissprinten dashboard with 58 runners, the "Finished"

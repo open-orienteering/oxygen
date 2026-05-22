@@ -30,7 +30,7 @@ The event page is mission control for external integrations. Everything the Swed
 - **Global Runner Database** — download the federation-wide runner directory for fast name/card lookup at registration.
 - **Club sync** — pull club metadata and logos.
 - **LiveResults** — push live splits to [liveresultat.se](https://liveresultat.se) on a configurable interval.
-- **Online Input (ROC)** — pull radio-control punches from [roc.olresultat.se](https://roc.olresultat.se) (or any ROC-protocol-compatible server) on a configurable interval. Punches land in `oPunch` with the MeOS-original `Origin` checksum so the same database round-trips cleanly between Oxygen and MeOS. See [docs/online-input-roc.md](online-input-roc.md).
+- **Online Input (ROC)** — pull radio-control punches from [roc.olresultat.se](https://roc.olresultat.se) (or any ROC-protocol-compatible server) on a configurable interval. Punches land in the `punches` table tagged with their source so the result engine can deduplicate against later card readouts. See [docs/online-input-roc.md](online-input-roc.md).
 - **Livelox** — link the event so GPS tracks flow back in automatically after the race (see the GPS section below).
 
 ![Event page with sync integrations](screenshots/event.png)
@@ -132,7 +132,7 @@ A dedicated readout workflow for organizers — type a card number (or scan one 
 
 ### Backup punches
 
-SI backup-memory punches (the unit's local fallback when the chip read failed) land in a dedicated reconciliation view. Each backup punch is matched to a registered card/runner; unmatched rows are highlighted, and a one-click action pushes the reconciled punch into `oPunch` for the result engine to pick up.
+SI backup-memory punches (the unit's local fallback when the chip read failed) land in a dedicated reconciliation view. Each backup punch is matched to a registered card/runner; unmatched rows are highlighted, and a one-click action pushes the reconciled punch into the `punches` table for the result engine to pick up.
 
 ![Backup-punch reconciliation](screenshots/backup-punches.png)
 
@@ -196,7 +196,7 @@ Under the hood, runner matching is a 3-tier strategy:
 2. **Club-scoped name match** with middle-name stripping — handles the common case where the Livelox name has an extra middle initial.
 3. **Cross-club name fallback** — last resort for runners whose club field is sparse.
 
-GPS waypoints land in an `oxygen_routes` table with nullable foreign keys to `oRunner` / `oClass`, so unmatched routes still appear and can be reconciled manually. Late GPS-lock correction derives the real start from `lastWaypoint - result.time` so a mass-start replay doesn't show someone visually arriving at the start a minute after everyone else.
+GPS waypoints land in a `routes` table with nullable foreign keys to `runners` / `classes`, so unmatched routes still appear and can be reconciled manually. Late GPS-lock correction derives the real start from `lastWaypoint - result.time` so a mass-start replay doesn't show someone visually arriving at the start a minute after everyone else.
 
 ---
 
@@ -219,15 +219,15 @@ Oxygen is a Progressive Web App designed to work during internet outages — fro
 
 See [offline-architecture.md](offline-architecture.md) for the technical details and [future-architecture.md](future-architecture.md) for the post-MeOS vision with event sourcing.
 
-### MeOS compatibility
+### MeOS migration
 
-Oxygen reads and writes the same MySQL schema as [MeOS](http://www.melin.nu/meos), the established Windows-based orienteering software. Both tools can operate on the same database simultaneously — changes in MeOS are immediately reflected in Oxygen and vice versa, enabling a gradual migration where organizers use Oxygen for web-based workflows while keeping MeOS for legacy ones.
+Oxygen began life as a MeOS-compatible Swiss-army knife and originally read/wrote the same MySQL layout as [MeOS](http://www.melin.nu/meos). That compatibility layer was retired in May 2026 in favour of a single PostgreSQL 18 database — see [`migrations/2026-drop-meos.md`](migrations/2026-drop-meos.md) for the rationale and the one-shot CLI that moves an existing MeOS database into the new schema.
 
-Status calculation is fully MeOS-compatible — Oxygen computes every result status MeOS does: OK, DNF, Missing Punch, Over Max Time, No Timing, and Out of Competition. Per-runner flags (`TransferFlags`) such as OutOfCompetition and NoTiming are respected by the result engine and surfaced as badges in the runner detail view. Punch data round-trips correctly, including MeOS's `@unit` metadata for multi-unit timing setups.
+The status-calculation rules that originated in MeOS are still honoured by Oxygen's result engine: OK, DNF, Missing Punch, Over Max Time, No Timing, and Out of Competition. Per-runner flags such as `OutOfCompetition` and `NoTiming` are respected and surfaced as badges in the runner detail view.
 
 ### Database backup
 
-The Event page exposes a one-click **Download backup** button that streams a `mysqldump` of the current competition's database to your browser as a `.sql` file. The dump is prefixed with a header that includes a ready-to-run (commented) `INSERT INTO MeOSMain.oEvent` statement, so a restore can re-register the competition in MeOSMain without manual SQL. See [backup-restore.md](backup-restore.md) for the full restore workflow.
+The Event page exposes a one-click **Download backup** button that streams a per-event PostgreSQL dump (CSV `\copy` of every event-scoped table) to your browser. The dump is prefixed with a header that includes a ready-to-run (commented) `INSERT INTO oxygen.events` statement, so a restore can re-create the event row on a fresh database without manual SQL. See [backup-restore.md](backup-restore.md) for the full restore workflow.
 
 ### Web Serial card reader
 
@@ -250,7 +250,7 @@ All UI strings flow through `react-i18next` with per-page translation files. Eng
 
 ### Architecture
 
-A single-command local dev loop (`pnpm dev`) brings up a Fastify + tRPC API and a Vite + React PWA that both speak directly to the same MySQL database MeOS uses. See [architecture.md](architecture.md) for the full picture.
+A single-command local dev loop (`pnpm dev`) brings up a Fastify + tRPC API and a Vite + React PWA that share a single PostgreSQL 18 database (`oxygen` schema). See [architecture.md](architecture.md) for the full picture.
 
 ---
 
@@ -264,7 +264,7 @@ pnpm dev
 pnpm docs:screenshots
 ```
 
-All screenshots on this page were generated by the last command, against a seeded Demo Competition. To reproduce the exact state for manual screenshots or exploration, load it into your own MySQL:
+All screenshots on this page were generated by the last command, against a seeded Demo Competition. To reproduce the exact state for manual screenshots or exploration, load it into your own PostgreSQL:
 
 ```
 pnpm showcase:load

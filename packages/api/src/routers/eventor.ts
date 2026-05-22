@@ -23,6 +23,7 @@ import {
   fetchEvents,
   fetchEventClasses,
   fetchEntries,
+  fetchEventMeta,
   fetchResults,
   fetchReferencedClubs,
   fetchClubs,
@@ -39,6 +40,7 @@ import {
   type ResultForUpload,
 } from "../eventor.js";
 import { eventorKeyStore } from "../eventorKeyStore.js";
+import { fetchLiveloxEventClasses } from "../livelox/fetcher.js";
 import {
   runnerStatusToValue,
   valueToRunnerStatus,
@@ -1369,17 +1371,36 @@ export const eventorRouter = router({
           message: `Eventor WebURL "${info.webUrl}" does not match a Livelox event pattern.`,
         });
       }
-      // Resolving the class list itself goes through the Livelox client,
-      // which the dedicated livelox router will own once it lands.
+      const liveloxEventId = parseInt(match[1], 10);
+
+      // Resolve the class list via Livelox's public SearchEvents API.
+      // Network / unknown-event failures are caught and surfaced as
+      // an empty class list with the metadata still populated, so the
+      // UI can show "no classes yet" without flipping the whole panel
+      // into an error state.
+      let classes: Array<{
+        id: number;
+        name: string;
+        participantCount: number;
+      }> = [];
+      let liveloxError: string | null = null;
+      try {
+        const summary = await fetchLiveloxEventClasses(
+          liveloxEventId,
+          info.date || undefined,
+        );
+        classes = summary.classes;
+      } catch (err) {
+        liveloxError =
+          err instanceof Error ? err.message : "Livelox lookup failed";
+      }
+
       return {
-        liveloxEventId: parseInt(match[1], 10),
+        liveloxEventId,
         eventName: info.name ?? "",
         webUrl: info.webUrl,
-        classes: [] as Array<{
-          id: number;
-          name: string;
-          participantCount: number;
-        }>,
+        classes,
+        liveloxError,
       };
     }),
 
@@ -1752,4 +1773,189 @@ export const eventorRouter = router({
         "Use `eventor.sync` instead — the legacy entries-only import has been folded into the full sync pass.",
     });
   }),
+
+  /**
+   * Live-fetch entry history for one or more Eventor events and persist
+   * it into the shared `eventor_event_meta` + `eventor_entry_history`
+   * caches. Designed to back the Registration Trends "Sync from Eventor"
+   * action: the page picks comparable events, names them by id, and asks
+   * the API to make sure the cache is populated before
+   * `registrationTrends.fetchComparison` reads it back.
+   *
+   * Strategy is deliberately conservative — we treat the cache as the
+   * source of truth and only call Eventor when:
+   *   - `force` is true, or
+   *   - the row is missing entirely, or
+   *   - the cached row is older than 24h (the entry count tends to be
+   *     stable post-deadline).
+   *
+   * Failures are isolated per event id (the caller passes a batch) so
+   * one bad id doesn't block the rest. Returns a per-event status the
+   * UI can show inline.
+   */
+  fetchEntryHistory: publicProcedure
+    .input(
+      z.object({
+        eventIds: z.array(z.number().int().positive()).min(1).max(20),
+        env: z.enum(["prod", "test"]).optional(),
+        /** Bypass the cache freshness check and re-fetch every id. */
+        force: z.boolean().optional(),
+      }),
+    )
+    .mutation(async ({ input }) => {
+      const env = input.env ?? "prod";
+      const { apiKey } = await requireApiKey(env);
+      const STALE_MS = 24 * 60 * 60 * 1000;
+      const now = new Date();
+
+      const cached = await prisma().eventorEventMeta.findMany({
+        where: { eventorEventId: { in: input.eventIds } },
+      });
+      const cachedById = new Map(cached.map((c) => [c.eventorEventId, c]));
+
+      const results: Array<{
+        eventorEventId: number;
+        status: "fetched" | "cached" | "missing" | "error";
+        entryCount: number;
+        error?: string;
+      }> = [];
+
+      for (const eid of input.eventIds) {
+        const existing = cachedById.get(eid);
+        const isFresh =
+          existing != null &&
+          now.getTime() - existing.fetchedAt.getTime() < STALE_MS;
+
+        if (!input.force && isFresh) {
+          results.push({
+            eventorEventId: eid,
+            status: "cached",
+            entryCount: existing!.entryCount,
+          });
+          continue;
+        }
+
+        try {
+          // 1) Resolve event meta. Eventor returns null for invalid
+          //    ids; treat that as a "missing" terminal state so the
+          //    operator can fix the id in the picker.
+          const meta = await fetchEventMeta(apiKey, eid, env);
+          if (!meta) {
+            results.push({
+              eventorEventId: eid,
+              status: "missing",
+              entryCount: 0,
+              error: `Eventor event ${eid} not found.`,
+            });
+            continue;
+          }
+
+          // 2) Fetch the entries. We don't care about the runner-level
+          //    detail here, only `entryDate` + `entryTime` + classId
+          //    so the trends comparison curve can be drawn.
+          const entries = await fetchEntries(apiKey, eid, env);
+
+          // 3) Write meta + entry-history atomically. The cascade on
+          //    `eventor_entry_history.eventor_event_id` means
+          //    deleteMany cleans up the old rows for free.
+          const startDate = parseEventorDate(meta.date) ?? now;
+          await prisma().$transaction(async (tx) => {
+            await tx.eventorEventMeta.upsert({
+              where: { eventorEventId: eid },
+              create: {
+                eventorEventId: eid,
+                name: meta.name,
+                startDate,
+                classificationId: meta.classificationId,
+                organiser: meta.organiserName,
+                entryCount: entries.length,
+                fetchedAt: now,
+              },
+              update: {
+                name: meta.name,
+                startDate,
+                classificationId: meta.classificationId,
+                organiser: meta.organiserName,
+                entryCount: entries.length,
+                fetchedAt: now,
+              },
+            });
+            await tx.eventorEntryHistory.deleteMany({
+              where: { eventorEventId: eid },
+            });
+            if (entries.length > 0) {
+              await tx.eventorEntryHistory.createMany({
+                data: entries
+                  .map((e, idx) => {
+                    const at = entryToTimestamp(e.entryDate, e.entryTime);
+                    return at
+                      ? {
+                          eventorEventId: eid,
+                          rowSeq: idx,
+                          entryClassId: e.classId,
+                          entryAt: at,
+                        }
+                      : null;
+                  })
+                  .filter((x): x is NonNullable<typeof x> => x != null),
+              });
+            }
+          });
+
+          results.push({
+            eventorEventId: eid,
+            status: "fetched",
+            entryCount: entries.length,
+          });
+        } catch (err) {
+          // Per-event isolation: surface the error in-band so the
+          // batch as a whole still succeeds. Auth errors are still
+          // worth bubbling up (the caller would just retry every
+          // event with the same bad key otherwise).
+          if (err instanceof EventorAuthError) throw err;
+          const msg = err instanceof Error ? err.message : String(err);
+          results.push({
+            eventorEventId: eid,
+            status: "error",
+            entryCount: 0,
+            error: msg,
+          });
+        }
+      }
+
+      return { results };
+    }),
 });
+
+/**
+ * "YYYY-MM-DD" → `Date` at UTC midnight, or null if unparseable. The
+ * incoming string comes from `<StartDate><Date>` in Eventor XML, which
+ * is always ISO-style.
+ */
+function parseEventorDate(input: string): Date | null {
+  if (!input) return null;
+  const m = input.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (!m) return null;
+  const [, y, mo, d] = m;
+  const dt = new Date(Date.UTC(+y, +mo - 1, +d));
+  return Number.isNaN(dt.getTime()) ? null : dt;
+}
+
+/**
+ * Combine a MeOS-style `entryDate` (YYYYMMDD) + `entryTime` (deciseconds
+ * since midnight) into a JS Date. Returns null when the date is missing
+ * or malformed so we can drop the row from the history (a row with no
+ * timestamp is useless for the trends curve).
+ */
+function entryToTimestamp(entryDate: number, entryTime: number): Date | null {
+  if (!entryDate || entryDate < 19000101) return null;
+  const y = Math.floor(entryDate / 10000);
+  const m = Math.floor((entryDate % 10000) / 100);
+  const d = entryDate % 100;
+  if (y < 1900 || m < 1 || m > 12 || d < 1 || d > 31) return null;
+  const secs = entryTime > 0 ? Math.floor(entryTime / 10) : 12 * 3600;
+  const h = Math.floor(secs / 3600);
+  const mm = Math.floor((secs % 3600) / 60);
+  const ss = secs % 60;
+  return new Date(Date.UTC(y, m - 1, d, h, mm, ss));
+}

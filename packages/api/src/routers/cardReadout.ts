@@ -48,6 +48,23 @@ export {
   type ControlMatch,
 } from "@oxygen/shared";
 
+/**
+ * Parse the semicolon-separated leg-length string written by the
+ * OCAD / IOF importer into a flat `number[]`. Empty / trailing
+ * separators are ignored; non-numeric chunks yield `0`. Returns
+ * `[]` for an empty input.
+ */
+export function parseLegsString(s: string | null | undefined): number[] {
+  if (!s) return [];
+  return s
+    .split(";")
+    .filter((chunk) => chunk.length > 0)
+    .map((chunk) => {
+      const n = parseInt(chunk, 10);
+      return Number.isFinite(n) && n >= 0 ? n : 0;
+    });
+}
+
 // ─── Core matcher ──────────────────────────────────────────
 
 export interface PerformReadoutResult {
@@ -71,6 +88,14 @@ export interface PerformReadoutResult {
     length: number;
     controlCount: number;
     requiredControlCount: number;
+    /**
+     * Per-position leg lengths in metres, parsed from the
+     * semicolon-separated `Course.legs` string the importer writes.
+     * `legs[i]` is the length of the leg leading INTO position `i`
+     * (so `legs[0]` is start→1st control). The last entry covers the
+     * leg into the finish.
+     */
+    legs: number[];
   } | null;
   timing: {
     cardStartTime: number;
@@ -152,7 +177,7 @@ export async function performReadout(
   const course = courseId
     ? await db.course.findUnique({
         where: { id: courseId },
-        select: { id: true, seq: true, name: true, lengthM: true },
+        select: { id: true, seq: true, name: true, lengthM: true, legs: true },
       })
     : null;
 
@@ -251,6 +276,7 @@ export async function performReadout(
           length: course.lengthM,
           controlCount: expectedPositions.length,
           requiredControlCount: requiredCount,
+          legs: parseLegsString(course.legs),
         }
       : null,
     timing: {

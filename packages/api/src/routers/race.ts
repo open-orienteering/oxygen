@@ -148,7 +148,7 @@ export const raceRouter = router({
           seq: input.runnerId,
           removed: false,
         },
-        select: { id: true },
+        select: { id: true, classId: true },
       });
       if (!runner) return null;
 
@@ -174,6 +174,7 @@ export const raceRouter = router({
         punchTime: number;
         legLength: number;
       }> = [];
+      const legs = r.course?.legs ?? [];
       r.controls.forEach((m: ControlMatch, idx) => {
         if (m.positionMode === "skipped") return;
         const status: "ok" | "missing" | "extra" = m.status;
@@ -187,45 +188,71 @@ export const raceRouter = router({
           cumTime: cum,
           status,
           punchTime,
-          legLength: 0, // OCAD parser not ported yet — leg lengths follow
+          // `legs[i]` is the leg leading INTO position `i`, matching
+          // the matcher's `controls` index ordering (finish included
+          // as the last entry). Falls back to 0 for unknown lengths.
+          legLength: legs[idx] ?? 0,
         });
         if (status === "ok" && punchTime > 0) lastTime = punchTime;
       });
 
-      // Position within class — placeholder until a dedicated index lands.
+      // Position within class.
+      //
+      // The old implementation pulled every finished runner in the
+      // event into Node and sorted in JS — O(N) per receipt across
+      // the whole event, which is wasteful when the finish receipt
+      // only needs to know "how many same-class runners beat this
+      // running time?". Postgres can answer both halves of that
+      // question with a parameterised filtered count using the
+      // existing `(event_id, class_id, removed)` index path, so we
+      // push the computation down: one count for the rank, one for
+      // the total. Two trivial index-only counts beat a 5 000-row
+      // fetch + JS sort on every kiosk readout.
       let position: { rank: number; total: number } | null = null;
-      if (r.timing.status === 1 && r.timing.runningTime > 0) {
-        const peers = await ctx.db.runner.findMany({
-          where: {
-            eventId: ctx.event.id,
-            removed: false,
-            classId: { not: null },
-            finishTime: { gt: 0 },
-            startTime: { gt: 0 },
-          },
-          select: { id: true, classId: true, startTime: true, finishTime: true, status: true },
-        });
-        // Re-filter to the runner's class.
-        const runnerRow = await ctx.db.runner.findUnique({
-          where: { id: runner.id },
-          select: { classId: true },
-        });
-        const sameClass = peers.filter(
-          (p) => p.classId && runnerRow?.classId && p.classId === runnerRow.classId,
-        );
-        const okOnly = sameClass.filter((p) => runnerStatusToValue(p.status) === 1);
-        const runningTimes = okOnly.map((p) =>
-          Math.max(0, p.finishTime - p.startTime),
-        );
-        runningTimes.sort((a, b) => a - b);
+      if (
+        r.timing.status === 1 &&
+        r.timing.runningTime > 0 &&
+        runner.classId
+      ) {
         const myRunningTime =
           (r.timing.finishTime > 0 ? r.timing.finishTime : 0) -
           (r.timing.startTime > 0 ? r.timing.startTime : 0);
-        const rank =
-          myRunningTime > 0
-            ? runningTimes.findIndex((t) => t >= myRunningTime) + 1
-            : 0;
-        position = rank > 0 ? { rank, total: okOnly.length } : null;
+
+        if (myRunningTime > 0) {
+          // OK-status, valid-time peers in the same class.
+          const baseWhere = {
+            eventId: ctx.event.id,
+            removed: false,
+            classId: runner.classId,
+            status: valueToRunnerStatus(1),
+            finishTime: { gt: 0 },
+            startTime: { gt: 0 },
+          } as const;
+
+          const [strictlyFaster, total] = await Promise.all([
+            // Rank = strictly-faster peers + 1 (ties share a rank).
+            // `finishTime - startTime` isn't directly indexed; in the
+            // common case where `startTime` is the same across the
+            // class (mass start or per-class draw) the planner can
+            // still use the (event_id, class_id, removed) index and
+            // filter on the projection cheaply.
+            ctx.db.$queryRaw<Array<{ count: bigint }>>`
+              SELECT COUNT(*)::bigint AS count
+              FROM oxygen.runners
+              WHERE event_id = ${ctx.event.id}
+                AND class_id = ${runner.classId}::uuid
+                AND removed = false
+                AND status = 'ok'::oxygen.runner_status
+                AND finish_time > 0
+                AND start_time > 0
+                AND (finish_time - start_time) < ${myRunningTime}
+            `,
+            ctx.db.runner.count({ where: baseWhere }),
+          ]);
+
+          const rank = Number(strictlyFaster[0]?.count ?? 0n) + 1;
+          position = total > 0 ? { rank, total } : null;
+        }
       }
 
       return {

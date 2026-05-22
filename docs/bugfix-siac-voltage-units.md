@@ -1,5 +1,10 @@
 # Bugfix: SIAC battery voltage stored in wrong units (and decoded as ~270 V)
 
+> **Historical note.** This bug fix predates the May 2026 MySQL → PostgreSQL
+> migration; the `oCard.Voltage` column name reflects the MeOS-compatible
+> layout that was in use at the time. The fix carried over to the new
+> `cards.voltage` column unchanged.
+
 ## Symptom
 
 The Cards page (`/Vinterserien/cards` and any other competition with cards

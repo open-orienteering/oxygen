@@ -80,6 +80,43 @@ async function buildFixture(label: string): Promise<Fixture> {
 }
 
 describe("kiosk finish flow", () => {
+  it("receipt carries per-leg distances when the course has legs populated", async () => {
+    const f = await buildFixture("kf-legs");
+    try {
+      // Populate the legs string the importer writes: 4 entries
+      // (3 controls + finish). Receipt splits should mirror legs[0..2]
+      // for the three controls; the finish leg is the last one and is
+      // consumed by the receipt printer separately.
+      await f.ctx.db.course.updateMany({
+        where: { eventId: f.ctx.eventId, name: "K1" },
+        data: { legs: "420;310;180;240;" },
+      });
+
+      await f.caller.cardReadout.storeReadout({
+        cardNo: f.cardNo,
+        cardType: "SI11",
+        punches: [
+          { controlCode: 31, time: 366_000 },
+          { controlCode: 32, time: 372_000 },
+          { controlCode: 33, time: 378_000 },
+        ],
+        startTime: 360_000,
+        finishTime: 384_000,
+      });
+
+      const receipt = await f.caller.race.finishReceipt({
+        runnerId: f.runnerSeq,
+      });
+      expect(receipt).not.toBeNull();
+      // `controls` is the legacy nested split list used by the kiosk
+      // receipt printer; each entry carries the leg-length leading
+      // into that control.
+      expect(receipt!.controls.map((s) => s.legLength)).toEqual([420, 310, 180]);
+    } finally {
+      await f.ctx.cleanup();
+    }
+  });
+
   it("complete clean run → OK status + finishTime + matching splits", async () => {
     const f = await buildFixture("kf-ok");
     try {

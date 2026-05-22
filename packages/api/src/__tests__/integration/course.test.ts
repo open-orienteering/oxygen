@@ -54,10 +54,18 @@ describe("course.create", () => {
     const list = await caller.course.list();
     const item = list.find((cc) => cc.id === c.id);
     expect(item?.controlCount).toBe(controlSeqs.length);
+    // Regression: `course.list` must include the ordered `;`-joined
+    // control-codes string. The web `MapPanel` fallback leg renderer
+    // (used for non-highlighted courses) relies on this to draw leg
+    // lines. When it was hard-coded to "" the map showed control
+    // circles but no leg lines for any course except the highlighted
+    // one.
+    expect(item?.controls).toBe(controlSeqs.join(";"));
 
     const detail = await caller.course.getById({ id: c.id });
-    // CourseDetail.controls is a ";"-joined string of seq values
-    // (legacy compatibility); the rich list is in controlCodes.
+    // CourseDetail.controls is a ";"-joined string of code values
+    // (or seq if the control has no codes); the rich list is in
+    // controlCodes.
     expect(detail.controls).toBe(controlSeqs.join(";"));
     expect(detail.controlCount).toBe(controlSeqs.length);
     expect(detail.controlCodes.map((c) => c.id)).toEqual(controlSeqs);

@@ -77,6 +77,7 @@ function unitToDto(u: {
   firmwareVersion: string | null;
   modelId: number | null;
   modelName: string | null;
+  srrCfg: boolean;
   lastSeenAt: Date | null;
 }): ControlUnitDto {
   return {
@@ -89,11 +90,17 @@ function unitToDto(u: {
     firmwareVersion: u.firmwareVersion,
     modelId: u.modelId,
     modelName: u.modelName,
+    srrCfg: u.srrCfg,
     lastSeenAt: u.lastSeenAt?.toISOString() ?? null,
   };
 }
 
-function aggregateConfig(units: ControlUnitDto[], radioType: string, airPlus: string): ControlConfig | null {
+function aggregateConfig(
+  units: ControlUnitDto[],
+  radioType: string,
+  airPlus: string,
+  autosendMode: string,
+): ControlConfig | null {
   if (units.length === 0) return null;
   // Aggregate battery: lowest mv across units, OR'd low flag
   const voltages = units.map((u) => u.batteryVoltage).filter((v): v is number => v != null);
@@ -112,7 +119,7 @@ function aggregateConfig(units: ControlUnitDto[], radioType: string, airPlus: st
   return {
     radioType: radioType as ControlConfig["radioType"],
     airPlus: airPlus as ControlConfig["airPlus"],
-    autosendMode: "default" as ControlConfig["autosendMode"],
+    autosendMode: autosendMode as ControlConfig["autosendMode"],
     batteryVoltage,
     batteryLow,
     checkedAt,
@@ -191,7 +198,7 @@ export const controlRouter = router({
         timeAdjust: c.timeAdjust,
         minTime: c.minTime,
         runnerCount: runners,
-        config: aggregateConfig(u, c.radioType, c.airPlus),
+        config: aggregateConfig(u, c.radioType, c.airPlus, c.autosendMode),
         units: u,
       };
     });
@@ -251,7 +258,7 @@ export const controlRouter = router({
         timeAdjust: c.timeAdjust,
         minTime: c.minTime,
         runnerCount: courses.reduce((sum, c) => sum + c.runnerCount, 0),
-        config: aggregateConfig(u, c.radioType, c.airPlus),
+        config: aggregateConfig(u, c.radioType, c.airPlus, c.autosendMode),
         units: u,
         courses,
       };
@@ -457,7 +464,7 @@ export const controlRouter = router({
         timeAdjust: c.timeAdjust,
         minTime: c.minTime,
         runnerCount: courses.reduce((sum, x) => sum + x.runnerCount, 0),
-        config: aggregateConfig(u, c.radioType, c.airPlus),
+        config: aggregateConfig(u, c.radioType, c.airPlus, c.autosendMode),
         units: u,
         courses,
       };
@@ -548,14 +555,10 @@ export const controlRouter = router({
         seqs.map((s) => getControlByCode(ctx.db, ctx.event.id, s)),
       );
 
-      // `autosendMode` doesn't have a column yet in the PG schema —
-      // it lived on the old `oxygen_control_config` table. Swallow it
-      // silently so the UI keeps working; we'll restore the toggle
-      // once we add a per-control config JSONB column.
-      void input.autosendMode;
       const data: Record<string, unknown> = {};
       if (input.radioType !== undefined) data.radioType = input.radioType;
       if (input.airPlus !== undefined) data.airPlus = input.airPlus;
+      if (input.autosendMode !== undefined) data.autosendMode = input.autosendMode;
       if (Object.keys(data).length > 0) {
         await ctx.db.control.updateMany({
           where: { id: { in: ctrls.map((c) => c.id) } },
@@ -610,7 +613,16 @@ export const controlRouter = router({
     };
   }),
 
-  /** Record that a station was programmed (stub — full hardware sync pending). */
+  /**
+   * Record that a station was programmed.
+   *
+   * Upserts a `control_units` row keyed by `(event_id, station_serial)`
+   * with every field the operator captured during programming —
+   * programmed code, firmware / model identity, battery state, and an
+   * optional "memory cleared" timestamp. Stamps `checked_at` +
+   * `last_seen_at` so the Controls page can show recency, and uses the
+   * `battery_low` flag to drive the low-battery badge.
+   */
   recordProgramming: eventProcedure
     .input(
       z.object({
@@ -629,23 +641,35 @@ export const controlRouter = router({
         modelName: z.string().optional(),
         /**
          * Battery voltage in millivolts read from the station during
-         * programming. Currently a no-op pass-through — the column
-         * lives on `oxygen_control_config` in the legacy schema and
-         * hasn't been migrated to the PG `control_units` table yet.
+         * programming. Persisted on `control_units.battery_voltage_mv`
+         * so the Controls page can light up the low-battery badge and
+         * the operator can see exactly when a unit was last seen.
          */
         batteryVoltage: z.number().int().optional(),
         batteryLow: z.boolean().optional(),
         /** Operator flagged that they wiped the station's backup memory. */
         memoryCleared: z.boolean().optional(),
+        /**
+         * SRR_CFG bit read from the station while programming. The
+         * Controls page surfaces this as an "SRR+" badge so the
+         * operator can confirm the hardware short-range radio is
+         * actually enabled on the unit (vs the station merely being
+         * an AIR+ unit without SRR). Optional because older callers
+         * never sent it; absent → leave the persisted value alone.
+         */
+        srrCfg: z.boolean().optional(),
       }),
     )
     .mutation(async ({ ctx, input }) => {
-      void input.batteryVoltage;
-      void input.batteryLow;
-      void input.memoryCleared;
       const controlUuid = input.controlId
         ? (await getControlByCode(ctx.db, ctx.event.id, input.controlId)).id
         : null;
+      const now = new Date();
+      // The operator's "memory cleared" checkbox stamps the wall-clock
+      // time the backup memory was wiped. We never clear the column
+      // automatically — once stamped, the most-recent wipe sticks
+      // until the next operator action.
+      const memoryClearedAt = input.memoryCleared ? now : undefined;
       await ctx.db.controlUnit.upsert({
         where: {
           eventId_stationSerial: {
@@ -662,7 +686,12 @@ export const controlRouter = router({
           firmwareVersion: input.firmwareVersion ?? null,
           modelId: input.modelId ?? null,
           modelName: input.modelName ?? null,
-          checkedAt: new Date(),
+          batteryVoltageMv: input.batteryVoltage ?? null,
+          batteryLow: input.batteryLow ?? false,
+          memoryClearedAt: memoryClearedAt ?? null,
+          srrCfg: input.srrCfg ?? false,
+          checkedAt: now,
+          lastSeenAt: now,
         },
         update: {
           ...(controlUuid != null ? { controlId: controlUuid } : {}),
@@ -678,7 +707,16 @@ export const controlRouter = router({
             : {}),
           ...(input.modelId !== undefined ? { modelId: input.modelId } : {}),
           ...(input.modelName !== undefined ? { modelName: input.modelName } : {}),
-          checkedAt: new Date(),
+          ...(input.batteryVoltage !== undefined
+            ? { batteryVoltageMv: input.batteryVoltage }
+            : {}),
+          ...(input.batteryLow !== undefined
+            ? { batteryLow: input.batteryLow }
+            : {}),
+          ...(memoryClearedAt !== undefined ? { memoryClearedAt } : {}),
+          ...(input.srrCfg !== undefined ? { srrCfg: input.srrCfg } : {}),
+          checkedAt: now,
+          lastSeenAt: now,
         },
       });
       return { ok: true as const };

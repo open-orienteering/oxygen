@@ -1,8 +1,10 @@
 /**
- * Livelox integration router — config + sync trigger stubs.
- * The fetcher / decoder / transform pipeline in src/livelox/ stays put
- * (it has no DB dependency); the route-writeback into `routes` is the
- * piece pending a re-port.
+ * Livelox integration router — config + sync triggers + per-runner /
+ * per-class route lookups + a standalone class viewer entry.
+ *
+ * The heavy lifting (HTTP fetch, blob decode, GPS-CRS reprojection,
+ * matching against local runners) lives in `src/livelox/`. This router
+ * owns the DB writeback into `routes` and the tRPC surface.
  */
 
 import { z } from "zod";
@@ -10,6 +12,11 @@ import { TRPCError } from "@trpc/server";
 import { router, eventProcedure, publicProcedure } from "../trpc.js";
 import type { ReplayData } from "@oxygen/shared";
 import { syncEvent } from "../livelox/sync.js";
+import {
+  fetchClassBlob,
+  fetchClassInfo,
+} from "../livelox/fetcher.js";
+import { transformToReplayData } from "../livelox/transform.js";
 
 export const liveloxRouter = router({
   getConfig: eventProcedure.query(async ({ ctx }) => {
@@ -239,18 +246,40 @@ export const liveloxRouter = router({
     }),
 
   /**
-   * Standalone Livelox class viewer entry. The web page expects a
-   * `ReplayData` payload; the full Livelox fetch+transform pipeline is
-   * staged, so for now we throw with a typed return so the page can
-   * render its "Failed to load map" graceful fallback.
+   * Standalone Livelox class viewer entry. Drives the public
+   * ReplayPage / TracksReplayPage which take a `classId` URL param
+   * and render the full live replay (map + GPS routes + splits).
+   *
+   * The pipeline is: ClassInfo (gives the Azure blob URL) → blob
+   * fetch (waypoints + map metadata + participant results) →
+   * transform into the wire-level `ReplayData` shape. Tile URLs are
+   * rewritten through `/api/livelox-tile` to avoid CORS issues and
+   * keep the viewer working when the Livelox CDN rotates URLs.
+   *
+   * Wrapped in our own TRPCError with the upstream message attached so
+   * the page can render its "Failed to load map" fallback gracefully
+   * (private / subscriber-only classes, deleted classes, network
+   * blips all fall into this path).
    */
   importClass: publicProcedure
-    .input(z.object({ classId: z.number().int() }))
-    .query(async (): Promise<ReplayData> => {
-      throw new TRPCError({
-        code: "PRECONDITION_FAILED",
-        message: "Livelox class import pending re-port.",
-      });
+    .input(z.object({ classId: z.number().int().positive() }))
+    .query(async ({ input }): Promise<ReplayData> => {
+      try {
+        const info = await fetchClassInfo(input.classId);
+        const blob = await fetchClassBlob(info.classBlobUrl);
+        return transformToReplayData(blob, {
+          eventName: info.eventName,
+          className: info.className,
+          tileProxyBase: "/api/livelox-tile",
+        });
+      } catch (err) {
+        const msg =
+          err instanceof Error ? err.message : "Livelox class import failed";
+        throw new TRPCError({
+          code: "PRECONDITION_FAILED",
+          message: msg,
+        });
+      }
     }),
 
   /** Route by runner seq. */

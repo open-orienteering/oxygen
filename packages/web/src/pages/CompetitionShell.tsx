@@ -112,7 +112,7 @@ export function CompetitionShell() {
   const [showMoreMenu, setShowMoreMenu] = useState(false);
   const [showPrinterSettings, setShowPrinterSettings] = useState(false);
 
-  // Poll oCounter for external changes (e.g. from MeOS) and auto-invalidate
+  // Poll the event counter for external writes (other Oxygen nodes) and auto-invalidate
   // caches. Hosted in a sibling component so the query subscription's
   // re-renders never cascade into the routed page tree.
   const utils = trpc.useUtils();
@@ -324,13 +324,20 @@ export function CompetitionShell() {
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
                 </svg>
               </button>
-              {organizerEventorId && organizerEventorId > 0 && (
+              {organizerEventorId && organizerEventorId > 0 ? (
+                // Ternary on purpose: a `eventorId && <ClubLogo …/>`
+                // shape leaks a literal `0` into the DOM whenever the
+                // organiser is on the books locally but has no Eventor
+                // id (`eventorId === 0`), because React renders `0` as
+                // text. Always feed `&&` with a strict boolean — or
+                // use a ternary like this — when the left operand can
+                // be a number.
                 <ClubLogo
                   eventorId={organizerEventorId}
                   size="md"
                   className="rounded"
                 />
-              )}
+              ) : null}
               <h1 className="text-lg font-semibold text-slate-900 leading-tight">
                 {competitionName}
               </h1>

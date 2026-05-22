@@ -563,10 +563,12 @@ function CapabilityBadge({ kind }: { kind: "airPlus" | "srrPlus" }) {
 /** Per-unit "Type" cell: model name + AIR+/SRR+ capability badges.
  *
  *  AIR+ badge: shown whenever the model is a BS11 family (these are the only
- *  stations that handle SIAC/Air+ punching). For BSF8-SRR variants we have no
- *  cleanly distinguishable MODEL_ID from a non-SRR BSF8, so we don't try to
- *  guess hardware-SRR for field stations from the model alone — the SRR+
- *  badge is currently a TODO that needs the SRR_CFG bit persisted per-unit. */
+ *  stations that handle SIAC/Air+ punching).
+ *
+ *  SRR+ badge: shown when the `srr_cfg` bit captured at programming time
+ *  is set. We can't rely on MODEL_ID alone to distinguish BSF8-SRR
+ *  variants from non-SRR BSF8s, so the persisted runtime configuration
+ *  is the truth here — see `control.recordProgramming`. */
 function UnitTypeCell({ unit }: { unit: ControlUnit }) {
   const name = unit.modelName ?? "";
   if (!name) return <span className="text-slate-300">—</span>;
@@ -575,6 +577,7 @@ function UnitTypeCell({ unit }: { unit: ControlUnit }) {
     <span className="inline-flex items-center gap-1">
       <span className="font-mono text-slate-700">{name}</span>
       {isAirPlus && <CapabilityBadge kind="airPlus" />}
+      {unit.srrCfg && <CapabilityBadge kind="srrPlus" />}
     </span>
   );
 }
@@ -1175,6 +1178,11 @@ function ProgrammingPanel({
       modelId: progInfo.modelId,
       modelName: progInfo.modelName,
       memoryCleared: true,
+      // Capture the hardware SRR_CFG bit so the Controls list can
+      // light up an "SRR+" badge alongside the existing AIR+/radio
+      // indicators. parseStationInfo flips this from the SYS_VAL
+      // SRR_CFG byte (offset 0x04, bit 0).
+      srrCfg: progInfo.srrEnabled,
     });
 
     lastProgrammedSerial.current = stationInfo.serialNo;

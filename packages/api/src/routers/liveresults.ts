@@ -1,13 +1,12 @@
 /**
- * LiveResults router. The push pipeline that pumps start lists / results
- * to liveresultat.orientering.se is being re-ported against the new
- * schema; this router exposes the config + status surface so the
- * EventPage panel can render, take the user's settings, and show the
- * live indicator. The actual periodic push is a no-op for now.
+ * LiveResults router. Exposes the config + manual sync + status surface
+ * to the EventPage; the actual periodic push is owned by
+ * `liveResultsPusherManager` in `../liveresults.ts`, which the API
+ * boot wires through `reconcileEnabledPushers()` so a restart re-arms
+ * every event whose `liveresultsConfig.enabled` is true.
  *
  * Settings live in `events.liveresultsConfig` (JSONB) so we don't need
- * a per-event settings table: the shape mirrors what the legacy MeOS
- * router exposed, which keeps `EventPage` unchanged.
+ * a per-event settings table.
  */
 
 import { z } from "zod";
