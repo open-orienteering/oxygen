@@ -87,12 +87,17 @@ async function main() {
     server.log.info({ eventId: eventId.toString() }, "map uploaded");
   });
 
-  // Background services (currently no-ops; the real pusher / puller
-  // re-ports re-enable these).
+  // Background services. `liveResultsPusher` / `onlineInputPuller` are
+  // process-wide registries; the reconcilers bring up one timer per
+  // enabled event on boot so a restart doesn't silently drop pushes.
   liveResultsPusher();
   onlineInputPuller();
-  void reconcileEnabledPushers();
-  void reconcileEnabledPullers();
+  void reconcileEnabledPushers().catch((err) =>
+    console.error("[liveresults] reconcile failed:", err),
+  );
+  void reconcileEnabledPullers().catch((err) =>
+    console.error("[online-input] reconcile failed:", err),
+  );
 
   await server.listen({ port: PORT, host: HOST });
 

@@ -18,6 +18,10 @@
 import { z } from "zod";
 import { router, eventProcedure } from "../trpc.js";
 import { getSetting, setSetting } from "../db.js";
+import {
+  setPullerEnabled,
+  pollOnceForEvent,
+} from "../online-input/puller.js";
 
 type SpecialTarget = 1 | 2 | 3;
 
@@ -80,12 +84,15 @@ export const onlineInputRouter = router({
     const importedRaw = await getSetting(
       settingKey(ctx.event.id, "punches_imported"),
     );
+    const lastError = await getSetting(
+      settingKey(ctx.event.id, "last_error"),
+    );
     return {
       running: cfg.enabled,
       lastPoll: lastPolledRaw,
       pollCount: pollCountRaw ? parseInt(pollCountRaw, 10) : 0,
       punchesImported: importedRaw ? parseInt(importedRaw, 10) : 0,
-      lastError: null as string | null,
+      lastError: lastError && lastError.length > 0 ? lastError : null,
     };
   }),
 
@@ -128,6 +135,7 @@ export const onlineInputRouter = router({
       cfg.protocol = input.protocol;
       if (input.url) cfg.endpointUrl = input.url;
       await saveLoadedConfig(ctx.event.id, cfg);
+      await setPullerEnabled(ctx.event.id, input.enabled);
       return { ok: true as const };
     }),
 
@@ -135,6 +143,7 @@ export const onlineInputRouter = router({
     const cfg = await loadConfig(ctx.event.id);
     cfg.enabled = true;
     await saveLoadedConfig(ctx.event.id, cfg);
+    await setPullerEnabled(ctx.event.id, true);
     return { ok: true as const };
   }),
 
@@ -142,19 +151,42 @@ export const onlineInputRouter = router({
     const cfg = await loadConfig(ctx.event.id);
     cfg.enabled = false;
     await saveLoadedConfig(ctx.event.id, cfg);
+    await setPullerEnabled(ctx.event.id, false);
     return { ok: true as const };
   }),
 
   /**
-   * One-shot poll. Stubbed until the puller is re-ported — returns a
-   * realistic `stats: { fetched, inserted }` shape so the EventPage
-   * status line doesn't need to special-case its absence.
+   * One-shot poll. Runs synchronously and returns whatever the puller
+   * managed to ingest. The interval poller keeps running independently.
    */
-  pollNow: eventProcedure.mutation(async () => ({
-    ok: true as const,
-    message: "Online-input puller pending re-port.",
-    stats: { fetched: 0, inserted: 0 },
-  })),
+  pollNow: eventProcedure.mutation(async ({ ctx }) => {
+    const cfg = await loadConfig(ctx.event.id);
+    if (!cfg.endpointUrl || !cfg.unitId) {
+      return {
+        ok: false as const,
+        message: "Configure endpoint URL and unit id first.",
+        stats: { fetched: 0, inserted: 0 },
+      };
+    }
+    // Force-enable for the duration of the poll so a manual click works
+    // before the operator has flipped the running toggle.
+    const wasEnabled = cfg.enabled;
+    if (!wasEnabled) {
+      cfg.enabled = true;
+      await saveLoadedConfig(ctx.event.id, cfg);
+    }
+    let stats = { fetched: 0, inserted: 0 };
+    try {
+      stats = await pollOnceForEvent(ctx.event.id);
+    } finally {
+      if (!wasEnabled) {
+        const c = await loadConfig(ctx.event.id);
+        c.enabled = false;
+        await saveLoadedConfig(ctx.event.id, c);
+      }
+    }
+    return { ok: true as const, message: "Poll complete.", stats };
+  }),
 
   clearLastId: eventProcedure.mutation(async ({ ctx }) => {
     const cfg = await loadConfig(ctx.event.id);
