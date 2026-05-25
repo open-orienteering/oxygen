@@ -1,3 +1,4 @@
+import { createSocket } from "node:dgram";
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import { router, eventProcedure } from "../trpc.js";
@@ -13,6 +14,104 @@ import type {
   ControlConfig,
   ControlUnit as ControlUnitDto,
 } from "@oxygen/shared";
+
+// ─── SNTP client (used by control.serverTime) ──────────────────────
+
+/** NTP epoch is 1900-01-01; Unix epoch is 1970-01-01. */
+const NTP_UNIX_EPOCH_DELTA_SEC = 2208988800;
+
+/** Decode an 8-byte NTP timestamp at `offset` into a Unix ms value. */
+function readNtpTimestampMs(buf: Buffer, offset: number): number {
+  const seconds = buf.readUInt32BE(offset);
+  const fraction = buf.readUInt32BE(offset + 4);
+  // Convert NTP seconds → Unix seconds, then add fractional component
+  // (fraction is /2^32 of a second).
+  return (seconds - NTP_UNIX_EPOCH_DELTA_SEC) * 1000 + (fraction / 0x1_0000_0000) * 1000;
+}
+
+/**
+ * Issue one SNTPv4 query to `host:123` and return offset + RTT.
+ *
+ * Offset formula (RFC 5905 §8): ((T2 - T1) + (T3 - T4)) / 2 where
+ *   T1 = client send time, T2 = server receive, T3 = server transmit,
+ *   T4 = client receive. A POSITIVE offset means local clock is BEHIND
+ *   the server; we flip the sign at the caller so a positive drift
+ *   means local is AHEAD (matches the user-visible "drift: +N ms" UI).
+ */
+async function sntpQuery(host: string, timeoutMs: number): Promise<{
+  driftMs: number;
+  rttMs: number;
+} | null> {
+  return new Promise((resolve) => {
+    const socket = createSocket("udp4");
+    const packet = Buffer.alloc(48);
+    // LI=0 (no warning), VN=4, Mode=3 (client) → 0x23
+    packet[0] = 0x23;
+
+    let settled = false;
+    const settle = (value: { driftMs: number; rttMs: number } | null) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      socket.removeAllListeners();
+      socket.close();
+      resolve(value);
+    };
+
+    const timer = setTimeout(() => settle(null), timeoutMs);
+    socket.on("error", () => settle(null));
+    socket.on("message", (msg) => {
+      const t4 = Date.now();
+      if (msg.length < 48) return settle(null);
+      const buf = Buffer.from(msg);
+      const t2 = readNtpTimestampMs(buf, 32); // server receive
+      const t3 = readNtpTimestampMs(buf, 40); // server transmit
+      // (t2 - t1) + (t3 - t4) / 2 — but flip the sign so positive = local ahead
+      const localOffsetMs = -((t2 - t1) + (t3 - t4)) / 2;
+      const rttMs = (t4 - t1) - (t3 - t2);
+      settle({ driftMs: localOffsetMs, rttMs: Math.max(0, rttMs) });
+    });
+
+    const t1 = Date.now();
+    socket.send(packet, 123, host, (err) => {
+      if (err) settle(null);
+    });
+  });
+}
+
+/**
+ * Measure local clock drift against a public NTP server. Takes 4 samples
+ * against `pool.ntp.org`, keeps the one with the lowest RTT (symmetric
+ * delay = most accurate offset), and returns the result. Falls through
+ * to {null, null} when all samples fail (UDP/123 blocked, offline).
+ */
+async function measureNtpDrift(): Promise<{
+  driftMs: number | null;
+  sourceLabel: string | null;
+}> {
+  const SAMPLES = 4;
+  const PER_SAMPLE_TIMEOUT_MS = 1500;
+  const samples: { rttMs: number; driftMs: number }[] = [];
+
+  for (let i = 0; i < SAMPLES; i++) {
+    const result = await sntpQuery("pool.ntp.org", PER_SAMPLE_TIMEOUT_MS);
+    if (result) samples.push(result);
+  }
+
+  if (samples.length === 0) {
+    return { driftMs: null, sourceLabel: null };
+  }
+  // Lowest-RTT sample wins. Tie-break by smaller |drift| for determinism.
+  const best = samples.reduce((a, b) =>
+    b.rttMs < a.rttMs || (b.rttMs === a.rttMs && Math.abs(b.driftMs) < Math.abs(a.driftMs))
+      ? b
+      : a,
+  );
+  return {
+    driftMs: Math.round(best.driftMs),
+    sourceLabel: `pool.ntp.org (best of ${samples.length}, RTT ${Math.round(best.rttMs)}ms)`,
+  };
+}
 
 /**
  * Resolve a control by its user-facing numeric identifier.
@@ -101,8 +200,9 @@ function aggregateConfig(
   airPlus: string,
   autosendMode: string,
 ): ControlConfig | null {
-  if (units.length === 0) return null;
-  // Aggregate battery: lowest mv across units, OR'd low flag
+  // Aggregate per-unit telemetry (battery, last-checked, last-cleared).
+  // Only present once at least one station has been programmed against
+  // this control — otherwise these fall back to null.
   const voltages = units.map((u) => u.batteryVoltage).filter((v): v is number => v != null);
   const batteryVoltage = voltages.length ? Math.min(...voltages) : null;
   const batteryLow = units.some((u) => u.batteryLow);
@@ -116,6 +216,9 @@ function aggregateConfig(
     .filter((d): d is string => !!d)
     .sort()
     .at(-1) ?? null;
+  // `radioType`, `airPlus`, `autosendMode` are persisted on the control
+  // row itself, not the unit — return them even when no unit exists yet
+  // so a freshly-created control's dropdowns reflect the saved values.
   return {
     radioType: radioType as ControlConfig["radioType"],
     airPlus: airPlus as ControlConfig["airPlus"],
@@ -596,20 +699,37 @@ export const controlRouter = router({
   /**
    * Server time for clock-drift checks at controls.
    *
+   * Speaks SNTPv4 over UDP/123 to a public NTP server. Takes several
+   * samples and keeps the one with the lowest round-trip time — that's
+   * the classic NTP technique, since low RTT means symmetric delay and
+   * therefore the most accurate offset estimate.
+   *
+   * Why SNTP rather than an HTTP time source:
+   *   - Cloudflare's `/cdn-cgi/trace` truncates `ts=` to whole seconds,
+   *     giving a ±500ms precision floor regardless of RTT.
+   *   - timeapi.io exposes ms-precision but its own server clock is
+   *     ~1 second behind UTC (verified against pool.ntp.org).
+   *   - HTTP `Date` headers are RFC 7231 second-precision.
+   *   - SNTP is what real NTP clients use; gives ms-or-better accuracy.
+   *
+   * Falls back to null/null if outbound UDP/123 is blocked or all
+   * samples time out — the page then shows browser-vs-server drift only.
+   *
    * Returns:
-   *   - `unixMs`: server wall clock right now (ms since epoch).
-   *   - `now`: legacy alias for `unixMs`.
-   *   - `ntpDriftMs`/`ntpSource`: populated when we have a recent NTP
-   *     handshake from the time-sync helper; null otherwise (no
-   *     external NTP probe is run here — that's the OS's job).
+   *   - `unixMs` / `now`: server wall clock right now (ms since epoch).
+   *   - `ntpDriftMs` / `ntpSource`: drift of THIS server's clock vs the
+   *     NTP reference, or null when the probe failed. `ntpSource`
+   *     includes the best sample's RTT so the operator can judge
+   *     trust — sub-50ms RTT means the reading is accurate to a couple ms.
    */
-  serverTime: eventProcedure.query(() => {
-    const now = Date.now();
+  serverTime: eventProcedure.query(async () => {
+    const serverMs = Date.now();
+    const { driftMs, sourceLabel } = await measureNtpDrift();
     return {
-      now,
-      unixMs: now,
-      ntpDriftMs: null as number | null,
-      ntpSource: null as string | null,
+      now: serverMs,
+      unixMs: serverMs,
+      ntpDriftMs: driftMs,
+      ntpSource: sourceLabel,
     };
   }),
 

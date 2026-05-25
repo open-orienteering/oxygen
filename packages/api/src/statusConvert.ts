@@ -63,6 +63,7 @@ const controlEnumToValue: Record<PgControlStatus, ControlStatusValue> = {
   bad_no_timing: ControlStatus.BadNoTiming,
   check: ControlStatus.Check,
   clear: ControlStatus.Clear,
+  readout: ControlStatus.Readout,
 };
 
 const controlValueToEnum: Record<number, PgControlStatus> = Object.fromEntries(

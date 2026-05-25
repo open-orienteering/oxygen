@@ -63,6 +63,8 @@
     "badNoTiming": "Bad (No Timing)",
     "rogainingRequired": "Rogaining Required",
     "check": "Check",
+    "clear": "Clear",
+    "readout": "Readout",
     "unknown": "Unknown"
   },
   "controlDescription": {
@@ -76,6 +78,8 @@
     "optional": "Optional control",
     "badNoTiming": "Bad, no timing impact",
     "rogainingRequired": "Required rogaining control",
-    "check": "Check control (pre-start)"
+    "check": "Check control (pre-start)",
+    "clear": "Clear station (erases SI cards)",
+    "readout": "Readout station (reads SI cards at the finish)"
   }
 }

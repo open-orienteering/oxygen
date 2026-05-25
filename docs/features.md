@@ -136,6 +136,10 @@ SI backup-memory punches (the unit's local fallback when the chip read failed) l
 
 ![Backup-punch reconciliation](screenshots/backup-punches.png)
 
+### Readout-station backup recovery
+
+The same Backup Punches page also recovers full card readouts from a SI **readout station's** internal flash. This is the last-line-of-defence when Oxygen itself is broken and runners have read out on a standalone readout station — Oxygen wasn't there to hear the readout, but the station's own beep confirmed it landed in flash. Later, the operator dumps the flash through the Read Controls panel, reviews the recovered card readouts on the Backup Punches page's "Card readouts" tab, and pushes selected rows through the normal `storeReadout` pipeline — each one gets results, splits, and (optionally) a retroactive receipt as if it had happened live. Full details in [`docs/registration-and-readout.md`](registration-and-readout.md#11-readout-station-backup-memory-recovery) and [`docs/si-protocol/readout-backup-format.md`](si-protocol/readout-backup-format.md).
+
 ### Start screen
 
 A dedicated big-board display for the start area. The screen auto-advances to the next starting group based on the current time, showing class, name, and start time in a format readable from across a field.

@@ -211,11 +211,17 @@ describe("control.getAirPlusConfig / setAirPlusConfig", () => {
 });
 
 describe("control.serverTime", () => {
-  it("returns wall-clock plus null ntp drift", async () => {
+  it("returns wall-clock plus optional NTP drift", async () => {
     const t = await caller.control.serverTime();
     expect(typeof t.now).toBe("number");
     expect(t.unixMs).toBe(t.now);
-    expect(t.ntpDriftMs).toBeNull();
-    expect(t.ntpSource).toBeNull();
+    // ntp fields are null when the Cloudflare probe is unreachable
+    // (offline test env, firewall), or both populated when it succeeds.
+    if (t.ntpDriftMs !== null) {
+      expect(typeof t.ntpDriftMs).toBe("number");
+      expect(typeof t.ntpSource).toBe("string");
+    } else {
+      expect(t.ntpSource).toBeNull();
+    }
   });
 });

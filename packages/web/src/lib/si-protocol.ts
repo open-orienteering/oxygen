@@ -1594,6 +1594,142 @@ export function isControlMode(mode: number): boolean {
   );
 }
 
+/** Check if a mode byte represents an SI readout-station mode (M_READOUT). */
+export function isReadoutMode(mode: number): boolean {
+  return (
+    mode === STATION_MODE.READOUT ||
+    mode === STATION_MODE.BC_READOUT
+  );
+}
+
+// ─── Readout-station backup (M_READOUT) parsing ────────────────────
+
+/**
+ * A parsed card readout recovered from a readout-station's backup flash.
+ *
+ * Format reverse-engineered from a Config+ capture against a BSM-family
+ * station in M_READOUT mode (see `docs/si-protocol/readout-backup/`).
+ */
+export interface ReadoutBackupRecord {
+  /** Flash address of this slot — for forensics + dedup debugging. */
+  slotAddress: number;
+  /** Raw 4-byte slot header. Likely a read-time stamp or CRC; not yet decoded. */
+  readAtRaw: Uint8Array;
+  /** Full raw slot bytes — kept for forensics and future format work. */
+  rawBytes: Uint8Array;
+  /** Parsed card data, in the same shape as a live readout. */
+  card: SICardReadout;
+}
+
+/**
+ * Parse a readout-station backup-memory buffer into card readout records.
+ *
+ * Slot layout from the captured pcap (see `docs/si-protocol/readout-backup/`):
+ *
+ *   - SI5: 1 block (0x80 bytes). No marker. Card image at slot offset 0.
+ *   - SI8 / SI9: 2 blocks (0x100 bytes). Marker `ea ea ea ea` at slot bytes 4-7
+ *     overwrites the card's clear-time field; we patch those bytes to 0xEE so
+ *     `parseSI8CardData()` returns `clearTime = null` instead of garbage.
+ *   - SI10 / SI11 / SIAC: 8 blocks (0x400 bytes). Same marker, same patch.
+ *
+ * Walker steps 0x80 bytes at a time so we hit every possible slot start.
+ * For each candidate offset:
+ *   - All `ee` → empty slot, skip 0x80.
+ *   - Marker `ea ea ea ea` at bytes 4-7 → SI8+ slot. Peek SIID at bytes 25-27,
+ *     compute card type, slot size = `BLOCKS_TO_READ[cardType] * 128`. Slice
+ *     and dispatch to `parseSI10CardData` (SI10/SI11/SIAC) or `parseSI8CardData`.
+ *     Advance by `slotSize`.
+ *   - Otherwise → candidate SI5 slot. Try `parseSI5CardData()` on the 128-byte
+ *     chunk; on success, emit a record. Advance 0x80.
+ *
+ * Never throws — unparseable chunks are logged and skipped.
+ */
+export function parseReadoutBackupBuffer(
+  buf: Uint8Array,
+  baseAddr: number = 0x100,
+  now?: Date,
+): ReadoutBackupRecord[] {
+  const records: ReadoutBackupRecord[] = [];
+  const STEP = 0x80;
+  let off = 0;
+  while (off + STEP <= buf.length) {
+    const chunk = buf.subarray(off, off + STEP);
+    if (isEmptyBackupChunk(chunk)) {
+      off += STEP;
+      continue;
+    }
+    const isSi8PlusMarker =
+      chunk[4] === 0xea && chunk[5] === 0xea &&
+      chunk[6] === 0xea && chunk[7] === 0xea;
+    if (isSi8PlusMarker) {
+      // Resolve card type from SIID at slot bytes 25-27 (with byte 24 as series).
+      const cnPrimary = (chunk[25] << 16) | (chunk[26] << 8) | chunk[27];
+      const cn = cnPrimary === 0
+        ? ((chunk[24] << 16) | (chunk[25] << 8) | chunk[26])
+        : cnPrimary;
+      if (cn === 0) {
+        siLog(`ReadoutBackup @0x${(baseAddr + off).toString(16)}: SI8+ marker but no SIID, skipping`);
+        off += STEP;
+        continue;
+      }
+      const cardType = getCardType(cn);
+      const slotBlocks = BLOCKS_TO_READ[cardType] ?? 8;
+      const slotSize = slotBlocks * 128;
+      if (off + slotSize > buf.length) {
+        console.warn(`[SI] ReadoutBackup @0x${(baseAddr + off).toString(16)}: slot would overrun buffer (need ${slotSize}, have ${buf.length - off}), skipping`);
+        off += STEP;
+        continue;
+      }
+      const slot = buf.subarray(off, off + slotSize);
+      // Patch the 4-byte marker so the existing parser reads clearTime as
+      // NO_TIME instead of decoding `ea ea` as a real time. We need to clear
+      // both the time bytes (6,7) AND the PTD byte (4) so the PM bit is 0.
+      const patched = new Uint8Array(slot);
+      patched[4] = 0xee; patched[5] = 0xee;
+      patched[6] = 0xee; patched[7] = 0xee;
+      const blocks: Uint8Array[] = [];
+      for (let b = 0; b < slotBlocks; b++) {
+        blocks.push(patched.subarray(b * 128, (b + 1) * 128));
+      }
+      const card = isLargeCardType(cardType)
+        ? parseSI10CardData(blocks)
+        : parseSI8CardData(blocks);
+      if (card) {
+        records.push({
+          slotAddress: baseAddr + off,
+          readAtRaw: new Uint8Array(slot.subarray(0, 4)),
+          rawBytes: new Uint8Array(slot),
+          card,
+        });
+      } else {
+        console.warn(`[SI] ReadoutBackup @0x${(baseAddr + off).toString(16)}: SI8+ slot parser returned null for cardNo=${cn} (${cardType})`);
+      }
+      off += slotSize;
+    } else {
+      // Try SI5: parse the 128-byte chunk and accept iff cardNumber > 0.
+      const card = parseSI5CardData([chunk], now);
+      if (card && card.cardNumber > 0) {
+        records.push({
+          slotAddress: baseAddr + off,
+          readAtRaw: new Uint8Array(chunk.subarray(0, 4)),
+          rawBytes: new Uint8Array(chunk),
+          card,
+        });
+      }
+      off += STEP;
+    }
+  }
+  return records;
+}
+
+/** True if every byte in the chunk is 0xEE (the empty-flash sentinel). */
+function isEmptyBackupChunk(chunk: Uint8Array): boolean {
+  for (let i = 0; i < chunk.length; i++) {
+    if (chunk[i] !== 0xee) return false;
+  }
+  return true;
+}
+
 /** Get a human-readable label for a station mode */
 export function stationModeLabel(mode: number): string {
   switch (mode) {

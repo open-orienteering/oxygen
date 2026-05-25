@@ -63,6 +63,8 @@
     "badNoTiming": "Felaktig (utan tidtagning)",
     "rogainingRequired": "Rogaining obligatorisk",
     "check": "Check",
+    "clear": "Nollställ",
+    "readout": "Avläsning",
     "unknown": "Okänd"
   },
   "controlDescription": {
@@ -76,6 +78,8 @@
     "optional": "Valfri kontroll",
     "badNoTiming": "Felaktig, ingen tidtagningspåverkan",
     "rogainingRequired": "Obligatorisk rogaining-kontroll",
-    "check": "Checkkontroll (före start)"
+    "check": "Checkkontroll (före start)",
+    "clear": "Nollställningsstation (raderar SI-bricka)",
+    "readout": "Avläsningsstation (läser SI-brickor i mål)"
   }
 }
