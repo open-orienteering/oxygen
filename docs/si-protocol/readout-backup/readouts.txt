@@ -1,0 +1,321 @@
+
+                 No:  1
+            Read at:  2026-05-24 16:13:24
+               SIID:  2164102
+              Clear:  (empty)
+              Check:  (empty)
+              Start:  (empty)
+             Finish:   11	Sa	11:37:35
+
+       Record count:  27
+           Record 1:  (empty)
+           Record 2:  (empty)
+           Record 3:  (empty)
+           Record 4:  (empty)
+           Record 5:  (empty)
+           Record 6:   72	Sa	11:27:37
+           Record 7:   62	Sa	11:27:06
+           Record 8:   81	Sa	11:29:39
+           Record 9:   83	Sa	11:29:07
+          Record 10:   88	Sa	11:29:20
+          Record 11:   71	Sa	11:32:47
+          Record 12:   70	Sa	11:33:03
+          Record 13:   90	Sa	11:33:56
+          Record 14:   91	Sa	11:34:25
+          Record 15:   80	Sa	11:34:46
+          Record 16:   64	Sa	11:34:54
+          Record 17:   63	Sa	11:37:07
+          Record 18:   85	Sa	11:37:29
+          Record 19:   84	Sa	11:37:39
+          Record 20:   42	Fr	05:43:11
+          Record 21:   42	Fr	05:45:22
+          Record 22:   42	Fr	05:57:47
+          Record 23:   42	Fr	06:49:03
+          Record 24:   42	Fr	07:03:15
+          Record 25:   42	Fr	08:09:04
+          Record 26:   42	Fr	08:18:52
+          Record 27:   42	Fr	08:27:15
+
+         First name:  
+          Last name:  
+               Club:  (not supported)
+            Country:  (not supported)
+              Email:  (not supported)
+      Date of birth:  (not supported)
+                Sex:  (not supported)
+              Phone:  (not supported)
+             Street:  (not supported)
+           Postcode:  (not supported)
+               City:  (not supported)
+
+
+
+
+                 No:  2
+            Read at:  2026-05-24 16:13:25
+               SIID:  8506707
+      Clear reserve:    1	We	18:21:54
+              Check:    2	We	18:21:57
+              Start:  	We	18:34:00.890
+      Start reserve:  	We	18:34:00.890
+             Finish:  	We	18:48:03.609
+     Finish reserve:  	We	18:48:03.609
+
+       Record count:  12
+           Record 1:   45	We	18:35:59
+           Record 2:   72	We	18:37:39
+           Record 3:   73	We	18:39:10
+           Record 4:   50	We	18:40:09
+           Record 5:   37	We	18:40:47
+           Record 6:   41	We	18:42:02
+           Record 7:   33	We	18:42:50
+           Record 8:   42	We	18:44:14
+           Record 9:   60	We	18:45:39
+          Record 10:   78	We	18:46:43
+          Record 11:   62	We	18:47:22
+          Record 12:  100	We	18:47:31
+          Record 13:  124	We	18:22:12
+
+         First name:  
+          Last name:  
+               Club:  
+            Country:  
+              Email:  
+      Date of birth:  
+                Sex:  
+              Phone:  
+             Street:  
+           Postcode:  
+               City:  
+
+    Production date:  2023-05-01
+   Hardware version:  1.6
+   Software version:  4.3
+       Battery date:  2023-05-30
+    Battery voltage:  2,98 V
+  Bat Low Threshold:  2,44 V
+        Clear count:  46
+      Character set:  1
+    Feedback signal:  default
+    
+    
+                 No:  3
+            Read at:  2026-05-24 16:13:28
+               SIID:  8007045
+      Clear reserve:    1	Tu	18:40:31
+              Check:    2	Tu	18:40:34
+              Start:  	Tu	18:48:15.472
+      Start reserve:  	Tu	18:48:15.472
+             Finish:  	Tu	19:17:03.890
+     Finish reserve:  	Tu	19:17:03.890
+
+       Record count:  18
+           Record 1:   32	Tu	18:50:02
+           Record 2:   54	Tu	18:53:20
+           Record 3:   64	Tu	18:54:09
+           Record 4:   36	Tu	18:55:25
+           Record 5:   37	Tu	18:55:56
+           Record 6:   38	Tu	18:56:35
+           Record 7:   37	Tu	18:57:21
+           Record 8:   67	Tu	18:58:13
+           Record 9:   57	Tu	18:59:41
+          Record 10:   65	Tu	19:00:54
+          Record 11:   70	Tu	19:04:18
+          Record 12:   59	Tu	19:04:45
+          Record 13:   75	Tu	19:06:12
+          Record 14:   43	Tu	19:10:57
+          Record 15:   63	Tu	19:11:47
+          Record 16:   50	Tu	19:12:58
+          Record 17:   56	Tu	19:15:25
+          Record 18:  100	Tu	19:16:54
+
+         First name:  Marcus
+          Last name:  Kempe
+               Club:  Skogsluffarnas OK
+            Country:  Swedish
+              Email:  marcus.kempe@gmail.com
+      Date of birth:  19790314
+                Sex:  male
+              Phone:  0046708956221
+             Street:  Lagmansplan 3
+           Postcode:  12838
+               City:  Skarpnäck
+
+    Production date:  2024-02-01
+   Hardware version:  1.6
+   Software version:  4.3
+       Battery date:  2024-02-12
+    Battery voltage:  2,98 V
+  Bat Low Threshold:  2,44 V
+        Clear count:  40
+      Character set:  1
+    Feedback signal:  default
+
+
+
+                 No:  4
+            Read at:  2026-05-24 16:13:29
+               SIID:  8408405
+      Clear reserve:    1	Th	17:49:30
+              Check:    6	Th	18:00:15
+              Start:  (empty)
+      Start reserve:  (empty)
+             Finish:   10	Th	18:26:38
+     Finish reserve:   10	Th	18:26:38
+
+       Record count:  8
+           Record 1:   33	Th	18:04:53
+           Record 2:   34	Th	18:06:11
+           Record 3:   35	Th	18:07:51
+           Record 4:   40	Th	18:12:46
+           Record 5:   44	Th	18:15:54
+           Record 6:   48	Th	18:22:31
+           Record 7:   53	Th	18:25:09
+           Record 8:  100	Th	18:26:20
+
+         First name:  
+          Last name:  
+               Club:  
+            Country:  
+              Email:  
+      Date of birth:  
+                Sex:  
+              Phone:  
+             Street:  
+           Postcode:  
+               City:  
+
+    Production date:  2026-03-01
+   Hardware version:  7.5
+   Software version:  4.9
+       Battery date:  2026-03-26
+    Battery voltage:  2,98 V
+  Bat Low Threshold:  2,44 V
+        Clear count:  5
+      Character set:  1
+    Feedback signal:  default
+
+
+
+                 No:  5
+            Read at:  2026-05-24 16:13:29
+               SIID:  452242
+              Check:  	  	11:29:10
+              Start:  	  	11:29:12
+             Finish:  	  	11:29:35
+
+       Record count:  10
+           Record 1:   87	  	11:29:15
+           Record 2:   88	  	11:29:16
+           Record 3:   90	  	11:29:17
+           Record 4:   80	  	11:29:20
+           Record 5:   93	  	11:29:24
+           Record 6:   80	  	11:29:28
+           Record 7:   70	  	11:29:28
+           Record 8:   74	  	11:29:31
+           Record 9:   75	  	11:29:31
+          Record 10:   77	  	11:29:34
+          Record 11:  (empty)
+          Record 12:  (empty)
+          Record 13:  (empty)
+          Record 14:  (empty)
+          Record 15:  (empty)
+          Record 16:  (empty)
+          Record 17:  (empty)
+          Record 18:  (empty)
+          Record 19:  (empty)
+          Record 20:  (empty)
+          Record 21:  (empty)
+          Record 22:  (empty)
+          Record 23:  (empty)
+          Record 24:  (empty)
+          Record 25:  (empty)
+          Record 26:  (empty)
+          Record 27:  (empty)
+          Record 28:  (empty)
+          Record 29:  (empty)
+          Record 30:  (empty)
+
+
+                 No:  6
+            Read at:  2026-05-24 16:13:30
+               SIID:  8060780
+      Clear reserve:    1	Th	17:56:34
+              Check:    6	Th	18:17:11
+              Start:  (empty)
+      Start reserve:  (empty)
+             Finish:   10	Th	18:44:35
+     Finish reserve:   10	Th	18:44:35
+
+       Record count:  8
+           Record 1:   34	Th	18:22:36
+           Record 2:   44	Th	18:29:43
+           Record 3:   40	Th	18:31:30
+           Record 4:   56	Th	18:34:52
+           Record 5:   62	Th	18:36:55
+           Record 6:   48	Th	18:40:12
+           Record 7:   50	Th	18:42:53
+           Record 8:  100	Th	18:44:22
+
+         First name:  
+          Last name:  
+               Club:  
+            Country:  
+              Email:  
+      Date of birth:  
+                Sex:  
+              Phone:  
+             Street:  
+           Postcode:  
+               City:  
+
+    Production date:  2026-03-01
+   Hardware version:  7.5
+   Software version:  4.9
+       Battery date:  2026-03-26
+    Battery voltage:  2,98 V
+  Bat Low Threshold:  2,44 V
+        Clear count:  6
+      Character set:  1
+    Feedback signal:  default
+
+
+
+                 No:  7
+            Read at:  2026-05-24 16:13:31
+               SIID:  2220164
+              Clear:    2	Sa	10:20:12
+              Check:    2	Sa	10:20:12
+              Start:  (empty)
+             Finish:   10	Sa	11:05:20
+
+       Record count:  10
+           Record 1:   48	Sa	10:27:46
+           Record 2:   56	Sa	10:32:35
+           Record 3:   53	Sa	10:41:21
+           Record 4:   41	Sa	10:43:56
+           Record 5:   57	Sa	10:50:50
+           Record 6:   44	Sa	10:54:48
+           Record 7:   45	Sa	10:57:26
+           Record 8:   31	Sa	10:59:33
+           Record 9:   32	Sa	11:02:50
+          Record 10:  100	Sa	11:04:42
+
+         First name:  2220164
+          Last name:  SPORTident Swede
+               Club:  (not supported)
+            Country:  (not supported)
+              Email:  (not supported)
+      Date of birth:  (not supported)
+                Sex:  (not supported)
+              Phone:  (not supported)
+             Street:  (not supported)
+           Postcode:  (not supported)
+               City:  (not supported)
+
+
+
+
+
+
+

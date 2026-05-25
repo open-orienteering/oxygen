@@ -1106,7 +1106,8 @@ function ProgrammingPanel({
     const airPlusOverride = config?.airPlus ?? "default";
     const isNonAirPlusType =
       matchedControl.status === ControlStatus.Check ||
-      matchedControl.status === ControlStatus.Clear;
+      matchedControl.status === ControlStatus.Clear ||
+      matchedControl.status === ControlStatus.Readout;
     const enableAirPlus = isNonAirPlusType
       ? false
       : airPlusOverride === "on" || (airPlusOverride === "default" && airPlusEnabled);
@@ -1125,6 +1126,9 @@ function ProgrammingPanel({
         break;
       case ControlStatus.Clear:
         stationMode = STATION_MODE.CLEAR;
+        break;
+      case ControlStatus.Readout:
+        stationMode = STATION_MODE.READOUT;
         break;
     }
 
@@ -1442,10 +1446,16 @@ function ProgrammingPanel({
 
 interface ReadoutResult {
   code: number;
+  /** Control-mode: punches in backup. Readout-mode: cards in backup. */
   punchCount: number;
+  /** Control-mode: punches imported. Readout-mode: card backups imported. */
   newPunches: number;
+  /** Readout-mode: duplicates skipped by the (eventId, punchesHash) constraint. */
+  duplicates?: number;
   batteryVoltage: number;
   success: boolean;
+  /** Discriminates which kind of station the result came from. */
+  mode?: "control" | "readout";
   error?: string;
   poweredOff?: boolean;
   cleared?: boolean;
@@ -1489,6 +1499,11 @@ function ReadoutPanel({
       utils.control.list.invalidate();
     },
   });
+  const importReadoutBackupsMutation = trpc.cardReadout.importReadoutBackups.useMutation({
+    onSuccess: () => {
+      utils.cardReadout.listReadoutBackups.invalidate();
+    },
+  });
 
   const readStation = useCallback(async (
     reader: ReturnType<typeof getReaderConnection>,
@@ -1496,6 +1511,86 @@ function ReadoutPanel({
   ) => {
     const code = stationData.stationCode;
 
+    // Read backup memory first. The result's `mode` tells us whether this is
+    // a control station (look up the control and import punches) or a
+    // readout station (stage the parsed card readouts for the BackupPunches
+    // page's Card readouts tab; no control-code match needed).
+    const backup = await reader.readBackupMemory(stationData.rawData);
+
+    let newPunches = 0;
+    let punchCount = 0;
+    let duplicates = 0;
+    let cleared = false;
+    let poweredOff = false;
+
+    if (backup.mode === "readout") {
+      // Readout-station backup recovery. Each record carries a full card
+      // image; we ship them to the server which stages them in
+      // `card_readout_backups` for review on the Backup Punches page.
+      const records = backup.records.map((r) => ({
+        slotAddress: r.slotAddress,
+        cardNo: r.card.cardNumber,
+        cardType: r.card.cardType,
+        punches: r.card.punches.map((p) => ({
+          controlCode: p.controlCode,
+          // SI card times are seconds-since-midnight; the server stores
+          // punches in deciseconds (same unit as live storeReadout).
+          time: p.time * 10,
+        })),
+        startTime: r.card.startTime != null ? r.card.startTime * 10 : null,
+        finishTime: r.card.finishTime != null ? r.card.finishTime * 10 : null,
+        checkTime: r.card.checkTime != null ? r.card.checkTime * 10 : null,
+        clearTime: r.card.clearTime != null ? r.card.clearTime * 10 : null,
+        ownerData: r.card.ownerData
+          ? (r.card.ownerData as unknown as Record<string, unknown>)
+          : undefined,
+        rawBytesHex: Array.from(r.rawBytes)
+          .map((b) => b.toString(16).padStart(2, "0"))
+          .join(""),
+      }));
+      punchCount = records.length;
+      if (records.length > 0) {
+        const result = await importReadoutBackupsMutation.mutateAsync({
+          stationSerial: stationData.serialNo,
+          records,
+        });
+        newPunches = result.inserted;
+        duplicates = result.duplicates;
+      }
+      // Clear / power-off are still wired but skip the control-side actions.
+      if (autoClear) {
+        try {
+          await reader.clearBackupMemory();
+          cleared = true;
+        } catch {
+          console.warn("Failed to clear backup memory after read");
+        }
+      }
+      if (beep) {
+        await reader.beep(1);
+      }
+      if (autoPowerOff) {
+        try {
+          await reader.powerOffStation();
+          poweredOff = true;
+        } catch {
+          // Ignore
+        }
+      }
+      lastReadSerial.current = stationData.serialNo;
+      setResults((prev) => [{
+        code, punchCount, newPunches, duplicates,
+        batteryVoltage: stationData.batteryVoltage,
+        success: true,
+        mode: "readout" as const,
+        poweredOff,
+        cleared,
+        timestamp: new Date(),
+      }, ...prev].slice(0, 20));
+      return;
+    }
+
+    // Control-mode backup: look up the control by its station code first.
     const matchedControl = controls.find((c) => {
       const codes = c.codes.split(";").map((s) => parseInt(s.trim(), 10));
       return codes.includes(code);
@@ -1514,11 +1609,9 @@ function ReadoutPanel({
       return;
     }
 
-    // Read backup memory. Pass the SYS_VAL data already obtained during
-    // probe/manual-read so readBackupMemory doesn't re-read it.
-    const records = await reader.readBackupMemory(stationData.rawData);
-
-    let newPunches = 0;
+    // Control-mode backup: existing punch-import path.
+    const records = backup.records;
+    punchCount = records.length;
     if (records.length > 0) {
       const punches = records.map((r) => ({
         cardNo: r.cardNo,
@@ -1537,7 +1630,6 @@ function ReadoutPanel({
     }
 
     // Clear backup memory after read (if auto-clear is enabled)
-    let cleared = false;
     if (autoClear) {
       try {
         await reader.clearBackupMemory();
@@ -1553,7 +1645,6 @@ function ReadoutPanel({
     }
 
     // Power off if enabled
-    let poweredOff = false;
     if (autoPowerOff) {
       try {
         await reader.powerOffStation();
@@ -1567,15 +1658,16 @@ function ReadoutPanel({
 
     setResults((prev) => [{
       code,
-      punchCount: records.length,
+      punchCount,
       newPunches,
       batteryVoltage: stationData.batteryVoltage,
       success: true,
+      mode: "control" as const,
       poweredOff,
       cleared,
       timestamp: new Date(),
     }, ...prev].slice(0, 20));
-  }, [controls, beep, autoPowerOff, autoClear, importMutation]);
+  }, [controls, beep, autoPowerOff, autoClear, importMutation, importReadoutBackupsMutation, t]);
 
   const handleReadMemory = async () => {
     const reader = getReaderConnection();
@@ -1584,6 +1676,27 @@ function ReadoutPanel({
 
     try {
       const { rawData, ...info } = await reader.readConnectedStation();
+      await readStation(reader, { ...info, rawData });
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Read failed");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  /**
+   * Read the directly-connected station's *own* backup memory — different
+   * from `handleReadMemory` which reads a field control coupled to a USB
+   * master station. Used when a BSM-family readout station that was
+   * deployed at the finish is now plugged in via USB and we want to
+   * recover the card readouts it stored to its own flash.
+   */
+  const handleReadLocalMemory = async () => {
+    const reader = getReaderConnection();
+    setBusy(true);
+    setError(null);
+    try {
+      const { rawData, ...info } = await reader.readLocalStation();
       await readStation(reader, { ...info, rawData });
     } catch (err) {
       setError(err instanceof Error ? err.message : "Read failed");
@@ -1692,8 +1805,17 @@ function ReadoutPanel({
                 onClick={handleReadMemory}
                 disabled={busy || autoMode}
                 className="px-3 py-1.5 text-sm bg-amber-600 text-white rounded-lg hover:bg-amber-700 disabled:opacity-50 cursor-pointer"
+                title={t("readMemoryHint")}
               >
                 {busy ? t("reading") : t("readMemory")}
+              </button>
+              <button
+                onClick={handleReadLocalMemory}
+                disabled={busy || autoMode}
+                className="px-3 py-1.5 text-sm bg-amber-700 text-white rounded-lg hover:bg-amber-800 disabled:opacity-50 cursor-pointer"
+                title={t("readLocalMemoryHint")}
+              >
+                {busy ? t("reading") : t("readLocalMemory")}
               </button>
               <button
                 onClick={handleClearMemory}
@@ -1780,6 +1902,14 @@ function ReadoutPanel({
                 {r.success ? (
                   r.code === 0 && r.cleared ? (
                     <span className="text-orange-600">{t("memoryClearedResult")}</span>
+                  ) : r.mode === "readout" ? (
+                    <span className="text-green-700">
+                      {t("readoutCardsImported", {
+                        total: r.punchCount,
+                        new: r.newPunches,
+                        dup: r.duplicates ?? 0,
+                      })}
+                    </span>
                   ) : (
                     <span className="text-green-700">
                       {t("punchesResult", { total: r.punchCount })}{r.newPunches > 0 ? ` ${t("punchesNew", { new: r.newPunches })}` : ` ${t("punchesAllKnown")}`}

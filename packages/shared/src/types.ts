@@ -524,6 +524,13 @@ export const ControlStatus = {
   RogainingRequired: 10,
   Check: 11,
   Clear: 12,
+  /**
+   * SI readout station (operating mode M_READOUT = 0x05). Not a logical
+   * course role like the rest — it's a physical station type. Lives in
+   * the same enum until the larger status / operating-mode separation
+   * lands; see docs/registration-and-readout.md § 11.
+   */
+  Readout: 13,
 } as const;
 
 export type ControlStatusValue =
@@ -544,6 +551,7 @@ export function controlStatusKey(status: ControlStatusValue): string {
     case ControlStatus.RogainingRequired: return "rogainingRequired";
     case ControlStatus.Check: return "check";
     case ControlStatus.Clear: return "clear";
+    case ControlStatus.Readout: return "readout";
     default: return "unknown";
   }
 }
@@ -574,6 +582,8 @@ export function controlStatusLabel(status: ControlStatusValue): string {
       return "Check";
     case ControlStatus.Clear:
       return "Clear";
+    case ControlStatus.Readout:
+      return "Readout";
     default:
       return "Unknown";
   }
@@ -605,6 +615,8 @@ export function controlStatusDescription(status: ControlStatusValue): string {
       return "Check control (pre-start)";
     case ControlStatus.Clear:
       return "Clear station (erases SI cards)";
+    case ControlStatus.Readout:
+      return "Readout station (reads SI cards at the finish)";
     default:
       return "";
   }
@@ -625,6 +637,7 @@ export const CONTROL_STATUS_OPTIONS: {
     { value: ControlStatus.Finish, label: "Finish", description: "Finish control" },
     { value: ControlStatus.Check, label: "Check", description: "Check control (pre-start)" },
     { value: ControlStatus.Clear, label: "Clear", description: "Clear station (erases SI cards)" },
+    { value: ControlStatus.Readout, label: "Readout", description: "Readout station (reads SI cards)" },
   ];
 
 /** Radio type for control configuration */

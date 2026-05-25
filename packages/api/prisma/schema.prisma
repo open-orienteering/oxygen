@@ -51,6 +51,7 @@ enum ControlStatus {
   bad_no_timing
   check
   clear
+  readout
 
   @@map("control_status")
   @@schema("oxygen")
@@ -154,6 +155,7 @@ model Event {
   teams        Team[]
   cards        Card[]
   cardReadouts CardReadout[]
+  cardReadoutBackups CardReadoutBackup[]
   punches      Punch[]
   controlUnits ControlUnit[]
   eventLog     EventLogEntry[]
@@ -633,6 +635,56 @@ model CardReadout {
   @@index([eventId, cardNo])
   @@index([eventId, readAt(sort: Desc)])
   @@map("card_readouts")
+  @@schema("oxygen")
+}
+
+/// Staging table for card readouts recovered from a readout-station's backup
+/// flash. Populated by `cardReadout.importReadoutBackups` after dumping
+/// SI station memory in M_READOUT mode (see docs/si-protocol/readout-backup/).
+/// Rows live here until promoted into `card_readouts` by `pushReadoutBackup`.
+model CardReadoutBackup {
+  id              String    @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  eventId         BigInt    @map("event_id")
+
+  /// SI serial of the readout station that produced this backup (debug).
+  stationSerial   Int?      @map("station_serial")
+  /// Address within the station's flash where this slot was found (debug).
+  slotAddress     Int       @map("slot_address")
+
+  cardNo          Int       @map("card_no")
+  cardType        String    @default("") @map("card_type")
+  /// [{controlCode,time,subSecond?}, ...]
+  punches         Json
+  /// Deciseconds since midnight; null when the card had no value.
+  startTime       Int?      @map("start_time")
+  finishTime      Int?      @map("finish_time")
+  checkTime       Int?      @map("check_time")
+  clearTime       Int?      @map("clear_time")
+  /// Original read-time stamp if decoded from the 4-byte slot header.
+  /// NULL until that header's semantics are known.
+  originalReadAt  DateTime? @map("original_read_at") @db.Timestamptz(6)
+  /// Card owner data (SI10/SIAC/SI11 only), if present on card.
+  ownerData       Json?     @map("owner_data")
+  /// Hash of (cardNo + sorted-by-time controlCode/time punches list).
+  /// Same card + same logical readout → same hash → unique constraint kicks
+  /// in on re-import, regardless of which station/slot it came from.
+  punchesHash     String    @map("punches_hash")
+
+  importedAt      DateTime  @default(now()) @map("imported_at") @db.Timestamptz(6)
+  /// Set when the backup is promoted into card_readouts by pushReadoutBackup.
+  pushedAt        DateTime? @map("pushed_at") @db.Timestamptz(6)
+  pushedReadoutId String?   @map("pushed_readout_id") @db.Uuid
+
+  /// Raw slot bytes — kept by default for forensics + future format work.
+  /// Can be cleared with a future cleanRawBytes mutation once an event closes.
+  rawBytes        Bytes?    @map("raw_bytes")
+
+  event           Event     @relation(fields: [eventId], references: [id], onDelete: Cascade)
+
+  @@unique([eventId, punchesHash])
+  @@index([eventId, cardNo])
+  @@index([eventId, pushedAt])
+  @@map("card_readout_backups")
   @@schema("oxygen")
 }
 

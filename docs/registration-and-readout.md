@@ -740,3 +740,43 @@ Sentinel value: `StartTime = 1` means "drawn with no specific time" (MeOS conven
 ### Counter Increments
 
 Every write to `oRunner` or `oCard` must call `incrementCounter()` to update the `oCounter` table. This is how MeOS detects external changes and refreshes its view.
+
+## 11. Readout-Station Backup Memory Recovery
+
+Last-line-of-defence when Oxygen itself is broken (server bug, hardware died, etc.) and the offline-architecture relay isn't available either. Runners can still read out on a standalone SI readout station (BSM-family in M_READOUT mode) — the station's own beep confirms the readout was stored in its internal flash. Later, when Oxygen is back, the operator places the station on a USB coupler, dumps the flash through Oxygen, and replays each readout through the normal `storeReadout` pipeline.
+
+**Operator flow:**
+
+1. **Connect** the readout station to a laptop (direct USB, or via coupler for a standalone station). Open `/:nameId/controls` → "Read Controls" panel.
+2. **Read backup**. The panel detects the station's operating mode from SYS_VAL `0x71`. If it's M_READOUT (`0x05`), the panel calls `parseReadoutBackupBuffer()` on the raw flash and ships the parsed records to `cardReadout.importReadoutBackups`.
+3. **Status line** in the panel: *"Imported N of M cards (K duplicates) → review on Backup Punches"*. The duplicates count is silent dedup via the `(eventId, punchesHash)` unique constraint — re-importing the same flash is always safe.
+4. **Review** on `/:nameId/backup-punches` → "Card readouts" tab. Each row shows: cardNo, cardType, runner (if registered), punch count, start/finish, match-status badge. Match-statuses are: `pushed` (already replayed), `pending` (ready to push), `no_runner` (cardNo not registered).
+5. **Push** rows individually. Push calls `pushReadoutBackup` which reuses `storeReadoutImpl` — the same core that powers a live `storeReadout`. The runner gets the same card upsert, runner link, result computation, and Google Sheets webhook as if the readout had just happened live. Idempotent: re-pushing the same row returns the existing `pushedReadoutId` without doing the work again.
+
+**Storage shape:**
+
+`card_readout_backups` is a staging table — not the same as the live `card_readouts`. Each row carries:
+
+- `station_serial`, `slot_address` — where in flash the slot was found (debug)
+- `card_no`, `card_type`, `punches`, `start_time`, `finish_time`, `check_time`, `clear_time`, `owner_data` — the parsed card readout, in the same shape `storeReadout` accepts
+- `punches_hash` — `sha256(cardNo + sorted-by-time controlCode:time list)`, the dedup key
+- `original_read_at` — populated from the 4-byte slot header if/when that decodes; currently NULL
+- `imported_at`, `pushed_at`, `pushed_readout_id` — lifecycle markers
+- `raw_bytes` — original slot bytes, kept by default for forensics
+
+The `@@unique([eventId, punchesHash])` constraint means re-imports of the same flash or imports from multiple stations that happen to share a card-readout are deduped silently. Operators do not need to be careful about double-importing.
+
+**Why a separate table** (vs reusing `card_readouts` with a flag): backup readouts have different lifecycle states (imported / reviewed / pushed) and bigger metadata (raw bytes, slot identity). Keeping them separate lets `applyResult` continue to fire unconditionally on every `card_readouts` row — no new branches, no new foot-guns. Cleanup is also a one-liner: `DELETE FROM card_readout_backups WHERE event_id = X`.
+
+**Wire-format details** (slot byte layouts, marker bytes, slot sizes per card type, paging) are in [`docs/si-protocol/readout-backup-format.md`](si-protocol/readout-backup-format.md), with the reference pcap + Config+ ground-truth file checked in alongside.
+
+**Out of scope** (intentionally — these belong to a separate larger rewrite):
+- Programming a station's operating-mode byte from Oxygen (writing `0x05` to SYS_VAL `0x71`). Operators continue to use Config+ to set a station as readout.
+- Untangling `ControlStatus` (the enum currently conflates *course role* like `ok`/`bad`/`multiple` with *physical operating mode* like `start`/`finish`/`check`/`clear`). Readout mode isn't represented at all today; that's part of the bigger cleanup.
+
+**Key files:**
+- `packages/web/src/lib/si-protocol.ts` — `parseReadoutBackupBuffer()`, `isReadoutMode()`
+- `packages/web/src/lib/webserial.ts` — `readBackupMemory()` (mode-aware)
+- `packages/api/src/routers/cardReadout.ts` — `importReadoutBackups`, `listReadoutBackups`, `pushReadoutBackup`, plus the extracted `storeReadoutImpl` helper
+- `packages/web/src/pages/ControlsPage.tsx` → `ReadoutPanel` — mode-aware import path
+- `packages/web/src/pages/BackupPunchesPage.tsx` — "Card readouts" tab

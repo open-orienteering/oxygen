@@ -40,6 +40,10 @@ import {
   parseStationInfo,
   parseTimeDrift,
   parseBackupPage,
+  parseReadoutBackupBuffer,
+  isControlMode,
+  isReadoutMode,
+  stationModeLabel,
   type AutosendMode,
   type SICardDetection,
   type SICardReadout,
@@ -48,7 +52,28 @@ import {
   type SIParsedFrame,
   type StationInfo,
   type BackupRecord,
+  type ReadoutBackupRecord,
 } from "./si-protocol";
+
+/**
+ * Result of `readBackupMemory()`. Discriminated by station operating mode:
+ *  - `'control'` → flat list of punch records (control-mode BUX format)
+ *  - `'readout'` → list of full card readouts recovered from a readout
+ *    station's backup flash
+ */
+export type BackupResult =
+  | {
+      mode: "control";
+      records: BackupRecord[];
+      stationSerial: number;
+      stationCode: number;
+    }
+  | {
+      mode: "readout";
+      records: ReadoutBackupRecord[];
+      stationSerial: number;
+      stationCode: number;
+    };
 
 // ─── Debug logging ─────────────────────────────────────────
 // Enable with: localStorage.setItem("oxygen-si-debug", "1")
@@ -693,6 +718,34 @@ export class SIReaderConnection extends EventTarget {
   }
 
   /**
+   * Read the *directly-connected* USB station's own SYS_VAL — different
+   * from `readConnectedStation()` which queries a field station coupled
+   * to the connected master.
+   *
+   * Required when reading the backup memory of a BSM-family readout
+   * station that's plugged in directly (no coupler), e.g. recovering
+   * readouts captured by a USB master station after the competition.
+   * Switches to DIRECT mode (the master answers for itself instead of
+   * forwarding via the coupling coil).
+   */
+  async readLocalStation(): Promise<StationInfo & { rawData: Uint8Array }> {
+    if (this._inRemoteMode) {
+      await this.sendAndWait(buildSetDirectMode(), CMD.SET_MS, 1500);
+      this._inRemoteMode = false;
+    }
+    const response = await this.sendAndWaitRetry(
+      buildGetSysVal(),
+      CMD.GET_SYSTEM_VALUE,
+    );
+    const info = parseStationInfo(response.data);
+    if (!info) throw new Error("Failed to parse local station info");
+    this.dispatchEvent(
+      new CustomEvent("si:station-read", { detail: info }),
+    );
+    return { ...info, rawData: response.data };
+  }
+
+  /**
    * Quick probe for a coupled field control. Returns station info if one is
    * present on the coupling stick, or null if nothing responds (timeout).
    *
@@ -811,17 +864,33 @@ export class SIReaderConnection extends EventTarget {
     // PROTO byte (offset 0x74): bit 1 (0x02) is the protocol-level
     // autosend gate. MODE high bits do nothing without it. Read-modify-
     // write so we don't disturb extended (bit 0), handshake (bit 2), etc.
+    //
+    // Set autosend for either:
+    //  - a BC mode whose autosend variant is not explicitly OFF (the
+    //    radio-broadcast use case), OR
+    //  - M_READOUT direct mode — the station emits a full card readout
+    //    over the serial link to the host on each card insertion. Without
+    //    this bit a standalone readout station silently writes to backup
+    //    flash but never beeps/responds while online. Matches the PROTO
+    //    byte (0x03) observed on a working readout station from a Config+
+    //    capture (see docs/si-protocol/readout-backup-format.md).
     const currentProto = sysValData[P + SYSVAL.PROTO];
-    const wantAutosend = isBcMode && autosend !== AUTOSEND_MODE.OFF;
+    const wantAutosend =
+      (isBcMode && autosend !== AUTOSEND_MODE.OFF) ||
+      baseMode === STATION_MODE.READOUT;
     const protoByte = wantAutosend
       ? (currentProto | 0x02)
       : (currentProto & ~0x02);
 
-    // Station code → CODE byte + high bits into FEEDBACK byte. Preserve
-    // existing feedback bits (optical/acoustic/flash and reserved).
+    // Station code → CODE byte + high bits into FEEDBACK byte. Force
+    // optical (bit 0), acoustic (bit 1), and flash (bit 2) feedback ON
+    // unconditionally — Oxygen never wants a station that silently reads
+    // cards without LED + beep + flash. encodeStationCode preserves the
+    // bits below 0xC0, so OR-ing 0x07 in before the call sticks.
+    const feedbackBase = sysValData[P + SYSVAL.FEEDBACK] | 0x07;
     const { codeByte, feedbackByte } = encodeStationCode(
       config.code,
-      sysValData[P + SYSVAL.FEEDBACK],
+      feedbackBase,
     );
 
     // Auto power-off (minutes, big-endian uint16). Default to whatever the
@@ -915,13 +984,18 @@ export class SIReaderConnection extends EventTarget {
   }
 
   /**
-   * Read the backup memory from the connected station/control.
-   * Returns all punch records stored in the backup.
+   * Read the backup memory from the connected station and parse it according
+   * to the station's operating mode.
+   *
+   * - Control-mode stations (M_CONTROL): returns 8-byte BUX punch records.
+   * - Readout-mode stations (M_READOUT): returns full card readouts recovered
+   *   from the station's backup flash.
+   * - Any other mode: throws.
    *
    * @param preReadData — raw GET_SYS_VAL response captured during a recent
    *   probe. When provided, skips the redundant SYS_VAL read at the start.
    */
-  async readBackupMemory(preReadData?: Uint8Array): Promise<BackupRecord[]> {
+  async readBackupMemory(preReadData?: Uint8Array): Promise<BackupResult> {
     let sysValData: Uint8Array;
     if (preReadData) {
       sysValData = preReadData;
@@ -932,7 +1006,10 @@ export class SIReaderConnection extends EventTarget {
     }
     const info = parseStationInfo(sysValData);
     if (!info) throw new Error("Failed to read station info");
-    siLog(`Backup read: station code=${info.stationCode}, serial=${info.serialNo}`);
+    siLog(
+      `Backup read: station code=${info.stationCode}, serial=${info.serialNo}, ` +
+      `mode=0x${info.mode.toString(16)} (${stationModeLabel(info.mode)})`,
+    );
 
     // Backup pointer from SYS_VAL is the write position (next free address).
     // After ERASE_BACKUP it resets to 0x100 (data start). Data lives at 0x100..pointer.
@@ -942,38 +1019,43 @@ export class SIReaderConnection extends EventTarget {
       `mem=${info.memSizeKB}KB`,
     );
 
-    if (endAddr <= 0x100) {
-      siLog("Backup pointer at start — no data");
-      this.dispatchEvent(
-        new CustomEvent("si:backup-read", { detail: { records: [] } }),
-      );
-      return [];
+    if (isControlMode(info.mode)) {
+      return this._readControlBackup(info, endAddr);
     }
+    if (isReadoutMode(info.mode)) {
+      return this._readReadoutBackup(info, endAddr);
+    }
+    throw new Error(
+      `Unsupported station mode for backup readback: 0x${info.mode.toString(16)} (${stationModeLabel(info.mode)})`,
+    );
+  }
 
-    const allRecords: BackupRecord[] = [];
-
-    // Backup data starts at address 0x100. Read 0x80 bytes at a time.
+  /**
+   * Walk backup flash from 0x100 to `endAddr` in 0x80-byte pages, returning
+   * the raw data bytes (without the 5-byte response header). Shared by both
+   * control- and readout-mode backup reads.
+   */
+  private async _walkBackupPages(
+    endAddr: number,
+  ): Promise<{ raw: Uint8Array[]; pageAddresses: number[] }> {
+    const raw: Uint8Array[] = [];
+    const pageAddresses: number[] = [];
     let readAddr = 0x100;
-
     while (readAddr < endAddr) {
       const count = Math.min(0x80, endAddr - readAddr);
       const adr2 = (readAddr >> 16) & 0xff;
       const adr1 = (readAddr >> 8) & 0xff;
       const adr0 = readAddr & 0xff;
 
-      siLog(`Backup page: readAddr=0x${readAddr.toString(16)} endAddr=0x${endAddr.toString(16)} count=${count}`);
-
       let resp: SIParsedFrame | null = null;
       for (let attempt = 0; attempt < 4; attempt++) {
         try {
           if (attempt > 0) {
+            // Retry the GET_BACKUP without touching DIRECT/REMOTE mode —
+            // the caller already configured the correct mode for whichever
+            // station we're reading (coupled field control vs the directly-
+            // connected master itself).
             siLog(`Backup page retry ${attempt}/3`);
-            // Only refresh SET_MS if we actually dropped out of remote.
-            // Skip the long sleep — Config+ retries back-to-back.
-            if (!this._inRemoteMode) {
-              await this.sendAndWait(buildSetRemoteMode(), CMD.SET_MS, 1000);
-              this._inRemoteMode = true;
-            }
           }
           resp = await this.sendAndWait(
             buildGetBackup(adr2, adr1, adr0, count, false),
@@ -992,29 +1074,97 @@ export class SIReaderConnection extends EventTarget {
         continue;
       }
 
-      siLog(
-        `Backup raw @0x${readAddr.toString(16)} (${resp.data.length} bytes): ` +
-        Array.from(resp.data).map(b => b.toString(16).padStart(2, "0")).join(" "),
-      );
-
-      const records = parseBackupPage(resp.data);
-      if (records.length > 0) {
-        siLog(`Backup @0x${readAddr.toString(16)}: ${records.length} records`);
-        allRecords.push(...records);
-      } else {
-        siLog(`Empty page at 0x${readAddr.toString(16)}, continuing to endAddr`);
-      }
-
+      raw.push(resp.data);
+      pageAddresses.push(readAddr);
       readAddr += count;
     }
+    return { raw, pageAddresses };
+  }
 
-    siLog(`Backup read complete: ${allRecords.length} records`);
+  /**
+   * Control-mode backup: parse each page's 5-byte-header response as a list
+   * of 8-byte BUX punch records.
+   */
+  private async _readControlBackup(
+    info: StationInfo,
+    endAddr: number,
+  ): Promise<BackupResult> {
+    if (endAddr <= 0x100) {
+      siLog("Backup pointer at start — no data");
+      const empty: BackupResult = {
+        mode: "control",
+        records: [],
+        stationSerial: info.serialNo,
+        stationCode: info.stationCode,
+      };
+      this.dispatchEvent(new CustomEvent("si:backup-read", { detail: empty }));
+      return empty;
+    }
 
-    this.dispatchEvent(
-      new CustomEvent("si:backup-read", { detail: { records: allRecords } }),
-    );
+    const { raw, pageAddresses } = await this._walkBackupPages(endAddr);
+    const allRecords: BackupRecord[] = [];
+    for (let i = 0; i < raw.length; i++) {
+      const records = parseBackupPage(raw[i]);
+      if (records.length > 0) {
+        siLog(`Backup @0x${pageAddresses[i].toString(16)}: ${records.length} records`);
+        allRecords.push(...records);
+      }
+    }
+    siLog(`Backup read complete: ${allRecords.length} control-mode records`);
+    const result: BackupResult = {
+      mode: "control",
+      records: allRecords,
+      stationSerial: info.serialNo,
+      stationCode: info.stationCode,
+    };
+    this.dispatchEvent(new CustomEvent("si:backup-read", { detail: result }));
+    return result;
+  }
 
-    return allRecords;
+  /**
+   * Readout-mode backup: concatenate the raw 128-byte flash bytes from each
+   * page (stripping the 5-byte response header) and hand the contiguous
+   * buffer to parseReadoutBackupBuffer().
+   */
+  private async _readReadoutBackup(
+    info: StationInfo,
+    endAddr: number,
+  ): Promise<BackupResult> {
+    if (endAddr <= 0x100) {
+      siLog("Backup pointer at start — no data");
+      const empty: BackupResult = {
+        mode: "readout",
+        records: [],
+        stationSerial: info.serialNo,
+        stationCode: info.stationCode,
+      };
+      this.dispatchEvent(new CustomEvent("si:backup-read", { detail: empty }));
+      return empty;
+    }
+
+    const { raw } = await this._walkBackupPages(endAddr);
+    // Strip the 5-byte response header [0x00, station_code, adr2, adr1, adr0]
+    // and concatenate the rest into a single contiguous flash buffer.
+    let totalLen = 0;
+    for (const page of raw) totalLen += Math.max(0, page.length - 5);
+    const buffer = new Uint8Array(totalLen);
+    let off = 0;
+    for (const page of raw) {
+      if (page.length <= 5) continue;
+      const bytes = page.subarray(5);
+      buffer.set(bytes, off);
+      off += bytes.length;
+    }
+    const records = parseReadoutBackupBuffer(buffer, 0x100);
+    siLog(`Backup read complete: ${records.length} readout-mode records (from ${totalLen} flash bytes)`);
+    const result: BackupResult = {
+      mode: "readout",
+      records,
+      stationSerial: info.serialNo,
+      stationCode: info.stationCode,
+    };
+    this.dispatchEvent(new CustomEvent("si:backup-read", { detail: result }));
+    return result;
   }
 
   /**
