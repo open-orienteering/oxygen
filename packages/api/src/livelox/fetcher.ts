@@ -16,6 +16,13 @@ const HEADERS: HeadersInit = {
 
 // ─── Raw response types (Livelox-specific) ──────────────────
 
+/** One relay leg as advertised by ClassInfo (`general.class.relayLegs`). */
+export interface LiveloxRelayLeg {
+  leg: number;
+  name: string;
+  participantCount: number;
+}
+
 export interface LiveloxClassInfo {
   general: {
     event: {
@@ -34,6 +41,8 @@ export interface LiveloxClassInfo {
         west: number;
         east: number;
       };
+      /** Present for relay classes; one entry per leg. */
+      relayLegs?: LiveloxRelayLeg[];
     };
   };
   personalized?: {
@@ -91,10 +100,12 @@ export interface LiveloxClassBlob {
   };
   courses: Array<{
     id: number;
+    /** Fork name, e.g. "J101". */
     name: string;
     length?: number;
     controls: Array<{
       control: {
+        /** Raw numeric control code; used to match runners to their fork. */
         numericCode: number;
         type: number; // 0=start, 1=control, 2=finish
         position: { latitude: number; longitude: number };
@@ -206,16 +217,29 @@ export async function fetchLiveloxEventClasses(
 
 /**
  * Fetch class info and extract the classBlobUrl.
+ *
+ * For relay classes the leg is selected with the `relayLegs` request field
+ * (array form — the singular `relayLeg` is ignored by the upstream API). When
+ * `relayLeg` is omitted, Livelox returns the first leg's blob. The advertised
+ * leg list (`general.class.relayLegs`) is returned regardless, so callers can
+ * render a leg switcher from a single request.
  */
-export async function fetchClassInfo(classId: number): Promise<{
+export async function fetchClassInfo(
+  classId: number,
+  relayLeg?: number,
+): Promise<{
   classBlobUrl: string;
   eventName: string;
   className: string;
+  relayLegs: LiveloxRelayLeg[];
 }> {
   const resp = await fetch(`${LIVELOX_BASE}/Data/ClassInfo`, {
     method: "POST",
     headers: HEADERS,
-    body: JSON.stringify({ classIds: [classId] }),
+    body: JSON.stringify({
+      classIds: [classId],
+      ...(relayLeg ? { relayLegs: [relayLeg] } : {}),
+    }),
   });
 
   if (!resp.ok) {
@@ -235,12 +259,15 @@ export async function fetchClassInfo(classId: number): Promise<{
   }
 
   const event = general?.event as { name?: string } | undefined;
-  const cls = general?.class as { name?: string } | undefined;
+  const cls = general?.class as
+    | { name?: string; relayLegs?: LiveloxRelayLeg[] }
+    | undefined;
 
   return {
     classBlobUrl,
     eventName: event?.name ?? "Unknown event",
     className: cls?.name ?? "Unknown class",
+    relayLegs: Array.isArray(cls?.relayLegs) ? cls!.relayLegs! : [],
   };
 }
 
