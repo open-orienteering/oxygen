@@ -3,7 +3,12 @@
  *
  * Supports:
  *   EPSG:3006 — SWEREF 99 TM (Sweden)
+ *   EPSG:3067 — ETRS-TM35FIN (Finland)
  *   Generic UTM zones
+ *
+ * All supported CRSs are Transverse Mercator on the GRS80 ellipsoid, so a
+ * single inverse-TM implementation parameterised by central meridian /
+ * scale / false origin covers them all.
  */
 
 const DEG = Math.PI / 180;
@@ -23,9 +28,32 @@ interface TMParams {
 }
 
 const CRS_PARAMS: Record<number, TMParams> = {
-  // SWEREF 99 TM
+  // SWEREF 99 TM (Sweden)
   3006: { centralMeridianDeg: 15, scaleFactor: 0.9996, falseEasting: 500000, falseNorthing: 0 },
+  // ETRS-TM35FIN (Finland) — UTM zone 35 on GRS80, central meridian 27°E.
+  3067: { centralMeridianDeg: 27, scaleFactor: 0.9996, falseEasting: 500000, falseNorthing: 0 },
 };
+
+/** Human-readable labels for supported CRSs, used in user-facing errors. */
+const CRS_NAMES: Record<number, string> = {
+  3006: "SWEREF 99 TM (Sweden)",
+  3067: "ETRS-TM35FIN (Finland)",
+};
+
+/** True if projected route data in the given EPSG code can be converted. */
+export function isSupportedProjection(epsgCode: number): boolean {
+  return epsgCode in CRS_PARAMS;
+}
+
+/**
+ * Human-readable list of every CRS we can convert, for error messages —
+ * e.g. "EPSG:3006 (SWEREF 99 TM (Sweden)), EPSG:3067 (ETRS-TM35FIN (Finland))".
+ */
+export function describeSupportedProjections(): string {
+  return Object.keys(CRS_PARAMS)
+    .map((code) => `EPSG:${code} (${CRS_NAMES[Number(code)] ?? "Transverse Mercator"})`)
+    .join(", ");
+}
 
 /**
  * Inverse Transverse Mercator: (easting, northing) → (lat, lng) in degrees.

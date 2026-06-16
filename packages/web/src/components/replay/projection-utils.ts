@@ -77,6 +77,47 @@ export function latLngToMapPx(
   return { px, py };
 }
 
+/**
+ * True if a projected map-pixel position is plausibly on (or near) the map
+ * image.
+ *
+ * Used to reject pathological coordinates before they can drag the
+ * follow-camera bounding box off the map — e.g. a single glitchy GPS
+ * sample, or (defence in depth) an unsupported CRS that slipped through and
+ * got mis-decoded as raw lat/lng, placing a runner ~1000 km away. The
+ * generous one-map-dimension margin keeps legitimate just-off-the-edge
+ * positions while excluding wildly-wrong ones.
+ */
+export function isOnMap(
+  px: number,
+  py: number,
+  mapW: number,
+  mapH: number,
+  marginFactor = 1,
+): boolean {
+  return (
+    Number.isFinite(px) &&
+    Number.isFinite(py) &&
+    px >= -marginFactor * mapW &&
+    px <= mapW + marginFactor * mapW &&
+    py >= -marginFactor * mapH &&
+    py <= mapH + marginFactor * mapH
+  );
+}
+
+/** Clamp a viewport centre (in map pixels) to the map image bounds. */
+export function clampToMap(
+  cx: number,
+  cy: number,
+  mapW: number,
+  mapH: number,
+): { cx: number; cy: number } {
+  return {
+    cx: Math.min(Math.max(cx, 0), mapW),
+    cy: Math.min(Math.max(cy, 0), mapH),
+  };
+}
+
 /** Convert map pixel (px, py) → (lat, lng). Inverse of the affine transform. */
 export function mapPxToLatLng(
   px: number,

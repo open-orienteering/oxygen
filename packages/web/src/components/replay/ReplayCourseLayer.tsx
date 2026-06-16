@@ -6,7 +6,7 @@
  */
 
 import { useRef, useEffect, useCallback } from "react";
-import type { ReplayData, ReplayControl } from "@oxygen/shared";
+import type { ReplayData, ReplayControl, ReplayCourse } from "@oxygen/shared";
 import type { ReplayMapLayerHandle, ViewportState } from "./ReplayMapLayer";
 import { latLngToMapPx } from "./projection-utils";
 
@@ -15,6 +15,20 @@ interface Props {
   /** Imperative handle to the map layer, used to read the live viewport. */
   mapRef: React.RefObject<ReplayMapLayerHandle | null>;
   containerSize: { w: number; h: number };
+  /**
+   * Fork drawn in detailed style: clipped connecting lines, control circles
+   * and sequential control numbers. For a non-forked event this is simply the
+   * single course.
+   */
+  primaryFork: ReplayCourse | null;
+  /**
+   * Forks drawn merged ("union"): every fork's connecting lines plus deduped
+   * control circles labelled with the control code (no sequential numbering,
+   * since the sequence differs per fork).
+   */
+  unionForks: ReplayCourse[];
+  /** Draw the union faint (a {@link primaryFork} is highlighted on top). */
+  unionFaint?: boolean;
   activeControlIdx?: number | null;
 }
 
@@ -153,14 +167,20 @@ function computeSymbolScale(
 
 // ─── Hit test (exported for use in ReplayViewer) ────────────
 
+/**
+ * Returns the index of the control hit at screen (x, y) within `fork`, or -1.
+ * Tested against the fork that is actually drawn so clicks land on visible
+ * circles. Callers pass `null` (e.g. forked relay legs) to disable hit testing.
+ */
 export function hitTestControl(
   x: number,
   y: number,
+  fork: ReplayCourse | null,
   data: ReplayData,
   viewport: ViewportState,
   containerSize: { w: number; h: number },
 ): number {
-  if (data.courses.length === 0) return -1;
+  if (!fork || fork.controls.length === 0) return -1;
   const proj = data.map.projection;
   const vp = viewport;
   const cos = Math.cos(vp.rotation);
@@ -169,8 +189,8 @@ export function hitTestControl(
   const halfH = containerSize.h / 2;
   const hitRadius = 20;
 
-  for (let i = 0; i < data.courses[0].controls.length; i++) {
-    const ctrl = data.courses[0].controls[i];
+  for (let i = 0; i < fork.controls.length; i++) {
+    const ctrl = fork.controls[i];
     const { px, py } = latLngToMapPx(ctrl.lat, ctrl.lng, proj);
     const dx = (px - vp.cx) * vp.scale;
     const dy = (py - vp.cy) * vp.scale;
@@ -189,6 +209,9 @@ export function ReplayCourseLayer({
   data,
   mapRef,
   containerSize,
+  primaryFork,
+  unionForks,
+  unionFaint,
   activeControlIdx,
 }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -213,7 +236,7 @@ export function ReplayCourseLayer({
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.clearRect(0, 0, containerSize.w, containerSize.h);
 
-    if (data.courses.length === 0) return;
+    if (!primaryFork && unionForks.length === 0) return;
 
     const proj = data.map.projection;
     const vp = viewport;
@@ -238,8 +261,6 @@ export function ReplayCourseLayer({
       return toScreen(px, py);
     };
 
-    const course = data.courses[0];
-
     // IOF sizes
     const controlRadius = 2.5 * ss;
     const strokeWidth = Math.max(0.5, 0.35 * ss);
@@ -249,44 +270,9 @@ export function ReplayCourseLayer({
     const labelSize = Math.max(8, 3.5 * ss);
     const lineStroke = Math.max(0.5, 0.35 * ss);
 
-    // Compute all control screen positions
-    const screenPts: Pt[] = course.controls.map(controlToScreen);
-    const obstacles: Pt[] = [...screenPts];
-
-    // ── Draw course lines (clipped around controls) ──
-    ctx.strokeStyle = COURSE_COLOR;
-    ctx.lineWidth = lineStroke;
-
-    const allLineSegs: { x1: number; y1: number; x2: number; y2: number }[] = [];
-
-    for (let i = 0; i < course.controls.length - 1; i++) {
-      const segs = clipLine(screenPts[i], screenPts[i + 1], obstacles, controlRadius * 1.2);
-      for (const seg of segs) {
-        ctx.beginPath();
-        ctx.moveTo(seg.x1, seg.y1);
-        ctx.lineTo(seg.x2, seg.y2);
-        ctx.stroke();
-        allLineSegs.push(seg);
-      }
-    }
-
-    // ── Draw control symbols ──
-    const labelPositions: { x: number; y: number; w: number; h: number }[] = [];
-
-    // Precompute sequence numbers (1…N) for "control" type only
-    let seqCounter = 0;
-    const seqNums: number[] = course.controls.map((c) =>
-      c.type === "control" ? ++seqCounter : 0,
-    );
-
-    for (let i = 0; i < course.controls.length; i++) {
-      const ctrl = course.controls[i];
-      const pos = screenPts[i];
-
-      const isActive = activeControlIdx === i;
-      ctx.strokeStyle = isActive ? ACTIVE_COLOR : COURSE_COLOR;
-      ctx.lineWidth = isActive ? strokeWidth * 2 : strokeWidth;
-
+    // ── Draw a control symbol (start triangle / finish double-circle /
+    //    control circle). Stroke style + width are set by the caller. ──
+    const drawSymbol = (ctrl: ReplayControl, pos: Pt) => {
       if (ctrl.type === "start") {
         const s = startSize;
         ctx.beginPath();
@@ -307,25 +293,121 @@ export function ReplayCourseLayer({
         ctx.arc(pos.x, pos.y, controlRadius, 0, Math.PI * 2);
         ctx.stroke();
       }
+    };
 
-      // Smart label placement for regular controls
-      if (ctrl.type === "control") {
-        const label = String(seqNums[i]);
-        const estW = label.length * labelSize * 0.65;
-        const estH = labelSize * 1.2;
-        const labelPos = findBestLabelPos(
-          pos, controlRadius, estW, estH,
-          obstacles, allLineSegs, labelPositions,
-        );
+    // ── Union of forks: every fork's lines + deduped circles, labelled by
+    //    control code (sequence numbers are fork-specific, so omitted). ──
+    const drawUnion = (forks: ReplayCourse[], faint: boolean) => {
+      const prevAlpha = ctx.globalAlpha;
+      ctx.globalAlpha = faint ? 0.3 : 0.85;
 
-        ctx.font = `bold ${Math.round(labelSize)}px Inter, sans-serif`;
-        ctx.fillStyle = isActive ? ACTIVE_COLOR : COURSE_COLOR;
-        ctx.textAlign = "center";
-        ctx.textBaseline = "middle";
-        ctx.fillText(label, labelPos.x, labelPos.y);
+      // Dedupe controls shared between forks (same physical position).
+      const seen = new Set<string>();
+      const controls: ReplayControl[] = [];
+      for (const fork of forks) {
+        for (const c of fork.controls) {
+          const key = `${c.type}|${c.lat.toFixed(6)}|${c.lng.toFixed(6)}`;
+          if (seen.has(key)) continue;
+          seen.add(key);
+          controls.push(c);
+        }
       }
-    }
-  }, [data, mapRef, containerSize, activeControlIdx]);
+      const ctrlPts = controls.map(controlToScreen);
+      const obstacles: Pt[] = [...ctrlPts];
+
+      ctx.strokeStyle = COURSE_COLOR;
+      ctx.lineWidth = lineStroke;
+      for (const fork of forks) {
+        const pts = fork.controls.map(controlToScreen);
+        for (let i = 0; i < pts.length - 1; i++) {
+          for (const seg of clipLine(pts[i], pts[i + 1], obstacles, controlRadius * 1.2)) {
+            ctx.beginPath();
+            ctx.moveTo(seg.x1, seg.y1);
+            ctx.lineTo(seg.x2, seg.y2);
+            ctx.stroke();
+          }
+        }
+      }
+
+      const labelPositions: { x: number; y: number; w: number; h: number }[] = [];
+      ctx.strokeStyle = COURSE_COLOR;
+      ctx.lineWidth = strokeWidth;
+      for (let i = 0; i < controls.length; i++) {
+        const ctrl = controls[i];
+        drawSymbol(ctrl, ctrlPts[i]);
+        if (ctrl.type === "control") {
+          const label = ctrl.code;
+          const estW = label.length * labelSize * 0.65;
+          const estH = labelSize * 1.2;
+          const labelPos = findBestLabelPos(
+            ctrlPts[i], controlRadius, estW, estH, obstacles, [], labelPositions,
+          );
+          ctx.font = `${Math.round(labelSize)}px Inter, sans-serif`;
+          ctx.fillStyle = COURSE_COLOR;
+          ctx.textAlign = "center";
+          ctx.textBaseline = "middle";
+          ctx.fillText(label, labelPos.x, labelPos.y);
+        }
+      }
+
+      ctx.globalAlpha = prevAlpha;
+    };
+
+    // ── A single fork in detail: clipped lines, circles, sequence numbers. ──
+    const drawDetailed = (course: ReplayCourse) => {
+      const screenPts: Pt[] = course.controls.map(controlToScreen);
+      const obstacles: Pt[] = [...screenPts];
+
+      ctx.strokeStyle = COURSE_COLOR;
+      ctx.lineWidth = lineStroke;
+      const allLineSegs: { x1: number; y1: number; x2: number; y2: number }[] = [];
+      for (let i = 0; i < course.controls.length - 1; i++) {
+        const segs = clipLine(screenPts[i], screenPts[i + 1], obstacles, controlRadius * 1.2);
+        for (const seg of segs) {
+          ctx.beginPath();
+          ctx.moveTo(seg.x1, seg.y1);
+          ctx.lineTo(seg.x2, seg.y2);
+          ctx.stroke();
+          allLineSegs.push(seg);
+        }
+      }
+
+      const labelPositions: { x: number; y: number; w: number; h: number }[] = [];
+      let seqCounter = 0;
+      const seqNums: number[] = course.controls.map((c) =>
+        c.type === "control" ? ++seqCounter : 0,
+      );
+
+      for (let i = 0; i < course.controls.length; i++) {
+        const ctrl = course.controls[i];
+        const pos = screenPts[i];
+
+        const isActive = activeControlIdx === i;
+        ctx.strokeStyle = isActive ? ACTIVE_COLOR : COURSE_COLOR;
+        ctx.lineWidth = isActive ? strokeWidth * 2 : strokeWidth;
+        drawSymbol(ctrl, pos);
+
+        if (ctrl.type === "control") {
+          const label = String(seqNums[i]);
+          const estW = label.length * labelSize * 0.65;
+          const estH = labelSize * 1.2;
+          const labelPos = findBestLabelPos(
+            pos, controlRadius, estW, estH, obstacles, allLineSegs, labelPositions,
+          );
+
+          ctx.font = `bold ${Math.round(labelSize)}px Inter, sans-serif`;
+          ctx.fillStyle = isActive ? ACTIVE_COLOR : COURSE_COLOR;
+          ctx.textAlign = "center";
+          ctx.textBaseline = "middle";
+          ctx.fillText(label, labelPos.x, labelPos.y);
+        }
+      }
+    };
+
+    // Union behind, highlighted primary fork on top.
+    if (unionForks.length > 0) drawUnion(unionForks, !!unionFaint);
+    if (primaryFork) drawDetailed(primaryFork);
+  }, [data, mapRef, containerSize, primaryFork, unionForks, unionFaint, activeControlIdx]);
 
   // Always read the latest draw fn from a ref so the viewport subscription
   // doesn't have to re-attach on every prop change.

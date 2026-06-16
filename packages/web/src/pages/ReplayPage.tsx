@@ -9,7 +9,7 @@
  * Livelox event via the Eventor API and shows a class picker.
  */
 
-import { useState, useMemo } from "react";
+import { useState, useMemo, useCallback } from "react";
 import { useSearchParams } from "react-router-dom";
 import { trpc } from "../lib/trpc";
 import { ReplayViewer } from "../components/replay/ReplayViewer";
@@ -20,6 +20,23 @@ export function ReplayPage() {
   const [searchParams, setSearchParams] = useSearchParams();
   const classIdParam = searchParams.get("classId");
   const classId = classIdParam ? parseInt(classIdParam, 10) : null;
+
+  // Relay leg selection (1-based). Absent for non-relay classes; the API
+  // returns the first leg when omitted.
+  const relayLegParam = searchParams.get("relayLeg");
+  const relayLegRaw = relayLegParam ? parseInt(relayLegParam, 10) : null;
+  const relayLeg = relayLegRaw != null && !isNaN(relayLegRaw) && relayLegRaw > 0 ? relayLegRaw : undefined;
+
+  const handleLegChange = useCallback(
+    (leg: number) => {
+      setSearchParams((prev) => {
+        const next = new URLSearchParams(prev);
+        next.set("relayLeg", String(leg));
+        return next;
+      });
+    },
+    [setSearchParams],
+  );
 
   const [mode, setMode] = useState<InputMode>("livelox");
   const [inputUrl, setInputUrl] = useState("");
@@ -50,11 +67,20 @@ export function ReplayPage() {
     { enabled: parsedEventorId != null && mode === "eventor", retry: 1, staleTime: 5 * 60_000 },
   );
 
-  // Load the selected class
-  const { data, isLoading, error, refetch } = trpc.livelox.importClass.useQuery(
-    { classId: classId! },
-    { enabled: classId != null && !isNaN(classId), retry: 1, staleTime: 5 * 60_000 },
-  );
+  // Load the selected class (and relay leg). Each (classId, relayLeg) pair is
+  // its own query key, so switching legs is lazy and switching back is
+  // instant. `placeholderData` keeps the previous leg on screen while the new
+  // one loads, so the viewer doesn't unmount/flash on every leg switch.
+  const { data, isLoading, error, refetch, isFetching, isPlaceholderData } =
+    trpc.livelox.importClass.useQuery(
+      { classId: classId!, relayLeg },
+      {
+        enabled: classId != null && !isNaN(classId),
+        retry: 1,
+        staleTime: 5 * 60_000,
+        placeholderData: (prev) => prev,
+      },
+    );
 
   // ── No classId yet — show input form ──
   if (classId == null) {
@@ -233,7 +259,13 @@ export function ReplayPage() {
 
   return (
     <div className="h-screen bg-slate-900">
-      <ReplayViewer data={data} />
+      <ReplayViewer
+        data={data}
+        relay={data.relay}
+        currentLeg={relayLeg ?? data.relay?.currentLeg}
+        onLegChange={handleLegChange}
+        legLoading={isFetching && isPlaceholderData}
+      />
     </div>
   );
 }

@@ -262,15 +262,23 @@ export const liveloxRouter = router({
    * blips all fall into this path).
    */
   importClass: publicProcedure
-    .input(z.object({ classId: z.number().int().positive() }))
+    .input(
+      z.object({
+        classId: z.number().int().positive(),
+        /** Relay leg to load (1-based). Defaults to the first leg. */
+        relayLeg: z.number().int().positive().optional(),
+      }),
+    )
     .query(async ({ input }): Promise<ReplayData> => {
       try {
-        const info = await fetchClassInfo(input.classId);
+        const info = await fetchClassInfo(input.classId, input.relayLeg);
         const blob = await fetchClassBlob(info.classBlobUrl);
         return transformToReplayData(blob, {
           eventName: info.eventName,
           className: info.className,
           tileProxyBase: "/api/livelox-tile",
+          relayLegs: info.relayLegs,
+          currentLeg: input.relayLeg ?? info.relayLegs?.[0]?.leg ?? 1,
         });
       } catch (err) {
         const msg =
