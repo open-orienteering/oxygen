@@ -20,7 +20,13 @@
  */
 
 import { useRef, useState, useCallback, useEffect, useMemo } from "react";
-import type { ReplayData, ReplayRoute, ReplayWaypoint } from "@oxygen/shared";
+import type {
+  ReplayData,
+  ReplayRoute,
+  ReplayWaypoint,
+  ReplayControl,
+  ReplayRelayInfo,
+} from "@oxygen/shared";
 import {
   ReplayMapLayer,
   type ReplayMapLayerHandle,
@@ -28,10 +34,12 @@ import {
 import { ReplayRouteLayer } from "./ReplayRouteLayer";
 import { ReplayCourseLayer, hitTestControl } from "./ReplayCourseLayer";
 import { ReplayHeatmapLayer } from "./ReplayHeatmapLayer";
+import { ReplaySpeedTrackLayer } from "./ReplaySpeedTrackLayer";
 import { ReplayControls } from "./ReplayControls";
 import { ParticipantList } from "./ParticipantList";
 import { useReplayState, type ReplayConfig } from "./useReplayState";
-import { latLngToMapPx } from "./projection-utils";
+import { latLngToMapPx, isOnMap, clampToMap } from "./projection-utils";
+import { selectForks } from "./fork-selection";
 import { usePerformanceLock } from "../../lib/performance-mode";
 
 const NEARBY_RADIUS_M = 500;
@@ -51,6 +59,14 @@ interface Props {
   extraRoutesLoading?: boolean;
   /** Called when the user toggles nearby mode on/off. */
   onNearbyModeChange?: (active: boolean) => void;
+  /** Relay leg metadata; when more than one leg, a leg switcher is shown. */
+  relay?: ReplayRelayInfo;
+  /** Currently selected relay leg (1-based); defaults to `relay.currentLeg`. */
+  currentLeg?: number;
+  /** Called when the user picks a different relay leg. */
+  onLegChange?: (leg: number) => void;
+  /** True while a newly selected leg is still loading. */
+  legLoading?: boolean;
 }
 
 /** Binary search for waypoint index at or before timeMs. */
@@ -82,7 +98,7 @@ function interpolateWp(
   };
 }
 
-export function ReplayViewer({ data, compact, className, style, replayConfig, nativeTileBase, extraRoutes, extraRoutesLoading, onNearbyModeChange }: Props) {
+export function ReplayViewer({ data, compact, className, style, replayConfig, nativeTileBase, extraRoutes, extraRoutesLoading, onNearbyModeChange, relay, currentLeg, onLegChange, legLoading }: Props) {
   const state = useReplayState(data, replayConfig);
 
   // Pause shell-side background polls (counter probe, DB stats, queue
@@ -96,6 +112,24 @@ export function ReplayViewer({ data, compact, className, style, replayConfig, na
     () => new Set(data.routes.map((r) => r.participantId)),
     [data.routes],
   );
+
+  // ── Forked-course selection ──
+  const isForked = data.courses.length > 1;
+  const forkByParticipant = useMemo(() => {
+    const m = new Map<string, string>();
+    for (const r of data.routes) if (r.courseId) m.set(r.participantId, r.courseId);
+    return m;
+  }, [data.routes]);
+  const [showAllForks, setShowAllForks] = useState(false);
+  // Reset the overlay when a new dataset (e.g. another leg) loads.
+  useEffect(() => {
+    setShowAllForks(false);
+  }, [data]);
+  const { primaryFork, unionForks, unionFaint } = useMemo(
+    () => selectForks(data.courses, forkByParticipant, state.visibleParticipants, showAllForks),
+    [data.courses, forkByParticipant, state.visibleParticipants, showAllForks],
+  );
+
   const mapRef = useRef<ReplayMapLayerHandle | null>(null);
   // We don't store the viewport in React state — it lives in mapRef. We do
   // need a "ready" flag so overlay components only mount once the map's
@@ -104,6 +138,7 @@ export function ReplayViewer({ data, compact, className, style, replayConfig, na
   const [containerSize, setContainerSize] = useState({ w: 0, h: 0 });
   const [sidebarOpen, setSidebarOpen] = useState(!compact);
   const [showHeatmap, setShowHeatmap] = useState(false);
+  const [showTracks, setShowTracks] = useState(false);
   const [nearbyMode, setNearbyMode] = useState(false);
 
   // The single target runner when nearby mode is active
@@ -195,16 +230,28 @@ export function ReplayViewer({ data, compact, className, style, replayConfig, na
       ? data.routes.find((r) => r.participantId === nearbyTargetId) ?? null
       : null;
     const proj = data.map.projection;
+    const mapW = data.map.widthPx;
+    const mapH = data.map.heightPx;
+
+    // Each runner may have run a different fork, so smart-follow indexes its
+    // "next un-punched control" against THAT runner's fork (via courseId),
+    // falling back to the first course for non-forked events.
+    const courseByIdLocal = new Map(data.courses.map((c) => [c.id, c]));
+    const fallbackControls = data.courses[0]?.controls ?? [];
+    const controlsByRoute: ReplayControl[][] = data.routes.map(
+      (route) =>
+        (route.courseId ? courseByIdLocal.get(route.courseId)?.controls : undefined) ??
+        fallbackControls,
+    );
 
     // Pre-compute per-route, per-control absolute split times so smart
     // follow can find each runner's next un-punched control without
     // walking splitTimes every frame. Indexed [routeIdx][ctrlIdx]; null
     // when no split exists for that control (e.g. start, missed punches).
-    const course = data.courses[0];
-    const courseControls = course?.controls ?? [];
-    const splitTimesByRoute: (number | null)[][] = data.routes.map((route) => {
+    const splitTimesByRoute: (number | null)[][] = data.routes.map((route, ri) => {
+      const ctrls = controlsByRoute[ri];
       const start = route.raceStartMs ?? route.waypoints[0]?.timeMs ?? 0;
-      return courseControls.map((ctrl) => {
+      return ctrls.map((ctrl) => {
         const split = route.result?.splitTimes?.find(
           (s) => s.controlCode === ctrl.code,
         );
@@ -234,16 +281,17 @@ export function ReplayViewer({ data, compact, className, style, replayConfig, na
      * returns 1 (the first real control).
      */
     const nextControlIdx = (routeIdx: number, t: number): number => {
-      if (courseControls.length === 0) return -1;
+      const ctrls = controlsByRoute[routeIdx];
+      if (ctrls.length === 0) return -1;
       let lastDone = 0;
       const splits = splitTimesByRoute[routeIdx];
-      for (let i = 1; i < courseControls.length; i++) {
+      for (let i = 1; i < ctrls.length; i++) {
         const splitT = splits[i];
         if (splitT !== null && splitT <= t) {
           lastDone = i;
         }
       }
-      return Math.min(lastDone + 1, courseControls.length - 1);
+      return Math.min(lastDone + 1, ctrls.length - 1);
     };
 
     const tick = (now: number) => {
@@ -280,8 +328,8 @@ export function ReplayViewer({ data, compact, className, style, replayConfig, na
           // (controls[currentLeg + 1]). Pre-compute it once so we don't
           // repeat the per-runner next-control lookup pointlessly.
           const isLegsMode = startModeRef.current === "legs";
-          const legsTargetIdx = isLegsMode && courseControls.length > 1
-            ? Math.min(currentLegRef.current + 1, courseControls.length - 1)
+          const legsTargetIdx = isLegsMode && fallbackControls.length > 1
+            ? Math.min(currentLegRef.current + 1, fallbackControls.length - 1)
             : -1;
 
           let minMx = Infinity, maxMx = -Infinity, minMy = Infinity, maxMy = -Infinity;
@@ -295,33 +343,48 @@ export function ReplayViewer({ data, compact, className, style, replayConfig, na
             if (idx < 0) continue;
             const pos = interpolateWp(route.waypoints, idx, t);
             const { px, py } = latLngToMapPx(pos.lat, pos.lng, proj);
+            // Ignore positions far outside the map: a single bad sample must
+            // not blow up the bbox and fling the camera off the map. If every
+            // visible runner is off-map, count stays 0 and the camera holds
+            // its current (fit) position instead of chasing garbage.
+            if (!isOnMap(px, py, mapW, mapH)) continue;
             if (px < minMx) minMx = px;
             if (px > maxMx) maxMx = px;
             if (py < minMy) minMy = py;
             if (py > maxMy) maxMy = py;
             count++;
 
-            if (isSmart && courseControls.length > 0) {
+            if (isSmart) {
+              const ctrls = controlsByRoute[r];
               const ctrlIdx = isLegsMode
                 ? legsTargetIdx
                 : nextControlIdx(r, t);
-              if (ctrlIdx >= 0) {
-                const ctrl = courseControls[ctrlIdx];
+              if (ctrlIdx >= 0 && ctrlIdx < ctrls.length) {
+                const ctrl = ctrls[ctrlIdx];
                 const { px: cPx, py: cPy } = latLngToMapPx(ctrl.lat, ctrl.lng, proj);
                 // Expand by the control symbol's radius + one diameter
                 // margin so the entire circle stays in frame, not just
-                // its centre point.
-                if (cPx - ctrlExtentMapPx < minMx) minMx = cPx - ctrlExtentMapPx;
-                if (cPx + ctrlExtentMapPx > maxMx) maxMx = cPx + ctrlExtentMapPx;
-                if (cPy - ctrlExtentMapPx < minMy) minMy = cPy - ctrlExtentMapPx;
-                if (cPy + ctrlExtentMapPx > maxMy) maxMy = cPy + ctrlExtentMapPx;
+                // its centre point. Skip controls that project off-map.
+                if (isOnMap(cPx, cPy, mapW, mapH)) {
+                  if (cPx - ctrlExtentMapPx < minMx) minMx = cPx - ctrlExtentMapPx;
+                  if (cPx + ctrlExtentMapPx > maxMx) maxMx = cPx + ctrlExtentMapPx;
+                  if (cPy - ctrlExtentMapPx < minMy) minMy = cPy - ctrlExtentMapPx;
+                  if (cPy + ctrlExtentMapPx > maxMy) maxMy = cPy + ctrlExtentMapPx;
+                }
               }
             }
           }
 
           if (count > 0) {
-            const cx = (minMx + maxMx) / 2;
-            const cy = (minMy + maxMy) / 2;
+            // Clamp the bbox centre to the map: even if smart-mode control
+            // expansion or a near-edge cluster pushes it out, the camera
+            // target stays on the image.
+            const { cx, cy } = clampToMap(
+              (minMx + maxMx) / 2,
+              (minMy + maxMy) / 2,
+              mapW,
+              mapH,
+            );
             const PAN_SPEED = 1.5; // 1/seconds — exponential lerp
             const alphaPan = 1 - Math.exp(-PAN_SPEED * dt / 1000);
             const newCx = vp.cx + (cx - vp.cx) * alphaPan;
@@ -367,13 +430,17 @@ export function ReplayViewer({ data, compact, className, style, replayConfig, na
           if (idx >= 0) {
             const pos = interpolateWp(targetRoute.waypoints, idx, t);
             const { px, py } = latLngToMapPx(pos.lat, pos.lng, proj);
-            const LERP_SPEED = 2.0;
-            const alpha = 1 - Math.exp(-LERP_SPEED * dt / 1000);
-            handle.setViewport({
-              ...vp,
-              cx: vp.cx + (px - vp.cx) * alpha,
-              cy: vp.cy + (py - vp.cy) * alpha,
-            });
+            // Skip a bad sample rather than jumping the camera off the map.
+            if (isOnMap(px, py, mapW, mapH)) {
+              const LERP_SPEED = 2.0;
+              const alpha = 1 - Math.exp(-LERP_SPEED * dt / 1000);
+              const { cx, cy } = clampToMap(px, py, mapW, mapH);
+              handle.setViewport({
+                ...vp,
+                cx: vp.cx + (cx - vp.cx) * alpha,
+                cy: vp.cy + (cy - vp.cy) * alpha,
+              });
+            }
           }
         }
       }
@@ -416,14 +483,18 @@ export function ReplayViewer({ data, compact, className, style, replayConfig, na
       if (!rect) return;
       const x = e.clientX - rect.left;
       const y = e.clientY - rect.top;
-      const idx = hitTestControl(x, y, data, vp, containerSize);
+      // Restart-from-control needs a single shared course to index into. For
+      // forked relay legs each runner ran a different fork, so we disable it
+      // there (clicks just toggle play) and only hit-test the lone course.
+      const hitFork = isForked ? null : data.courses[0] ?? null;
+      const idx = hitTestControl(x, y, hitFork, data, vp, containerSize);
       if (idx >= 0) {
         state.restartFromControl(state.restartControlIdx === idx ? null : idx);
       } else {
         state.togglePlay();
       }
     },
-    [containerSize, data, state.restartFromControl, state.restartControlIdx, state.togglePlay], // eslint-disable-line react-hooks/exhaustive-deps -- state methods are stable
+    [containerSize, data, isForked, state.restartFromControl, state.restartControlIdx, state.togglePlay], // eslint-disable-line react-hooks/exhaustive-deps -- state methods are stable
   );
 
   return (
@@ -432,14 +503,67 @@ export function ReplayViewer({ data, compact, className, style, replayConfig, na
       style={{ height: "100%", ...style }}
     >
       {/* Title bar */}
-      <div className="flex items-center justify-between px-4 py-2 bg-slate-50 border-b border-slate-200">
-        <h2 className="text-slate-900 text-sm font-semibold truncate">
+      <div className="flex items-center justify-between gap-3 px-4 py-2 bg-slate-50 border-b border-slate-200">
+        <h2 className="text-slate-900 text-sm font-semibold truncate min-w-0">
           {data.title}
         </h2>
-        <div className="flex items-center gap-2">
+
+        {/* Relay leg switcher */}
+        {relay && relay.legs.length > 1 && (
+          <div className="flex items-center gap-1 flex-shrink-0">
+            <span className="text-xs text-slate-500 mr-0.5">Leg</span>
+            {relay.legs.map((l) => {
+              const isCurrent = (currentLeg ?? relay.currentLeg) === l.leg;
+              return (
+                <button
+                  key={l.leg}
+                  onClick={() => !isCurrent && onLegChange?.(l.leg)}
+                  disabled={isCurrent}
+                  title={`Leg ${l.name} — ${l.participantCount} runners`}
+                  className={`text-xs w-7 h-6 rounded border transition-colors ${
+                    isCurrent
+                      ? "bg-blue-600 border-blue-600 text-white"
+                      : "text-slate-600 hover:text-slate-900 border-slate-300 cursor-pointer"
+                  }`}
+                >
+                  {l.name}
+                </button>
+              );
+            })}
+            {legLoading && (
+              <span className="w-3.5 h-3.5 border-2 border-slate-300 border-t-blue-500 rounded-full animate-spin ml-1" />
+            )}
+          </div>
+        )}
+
+        <div className="flex items-center gap-2 flex-shrink-0">
           <span className="text-xs text-slate-500">
             {data.routes.length} routes
           </span>
+          {isForked && (
+            <button
+              onClick={() => setShowAllForks((v) => !v)}
+              title="Overlay all forked course variants"
+              className={`text-xs px-2 py-0.5 rounded border transition-colors cursor-pointer ${
+                showAllForks
+                  ? "bg-purple-600 border-purple-600 text-white"
+                  : "text-slate-500 hover:text-slate-900 border-slate-300"
+              }`}
+            >
+              All forks
+            </button>
+          )}
+          <button
+            onClick={() => setShowTracks((t) => !t)}
+            title="Lay out full speed-coloured tracks for the selected runners"
+            className={`text-xs px-2 py-0.5 rounded border transition-colors cursor-pointer ${
+              showTracks
+                ? "bg-cyan-600 border-cyan-600 text-white"
+                : "text-slate-500 hover:text-slate-900 border-slate-300"
+            }`}
+          >
+            Tracks
+          </button>
           <button
             onClick={() => setShowHeatmap((h) => !h)}
             title="Toggle heatmap overlay"
@@ -500,12 +624,23 @@ export function ReplayViewer({ data, compact, className, style, replayConfig, na
               visibleParticipants={allParticipants}
             />
           )}
+          {mapReady && containerSize.w > 0 && showTracks && (
+            <ReplaySpeedTrackLayer
+              data={data}
+              mapRef={mapRef}
+              containerSize={containerSize}
+              visibleParticipants={state.visibleParticipants}
+            />
+          )}
           {mapReady && containerSize.w > 0 && (
             <>
               <ReplayCourseLayer
                 data={data}
                 mapRef={mapRef}
                 containerSize={containerSize}
+                primaryFork={primaryFork}
+                unionForks={unionForks}
+                unionFaint={unionFaint}
                 activeControlIdx={state.restartControlIdx}
               />
               <ReplayRouteLayer

@@ -135,6 +135,7 @@ describe("livelox.importClass", () => {
       classBlobUrl: "https://livelox.azureedge.net/blobs/abc.json",
       eventName: "Bagissprinten",
       className: "H21",
+      relayLegs: [],
     });
     fetchClassBlobMock.mockResolvedValue(makeBlob());
 
@@ -148,11 +149,32 @@ describe("livelox.importClass", () => {
     expect(data.map.tiles).toHaveLength(1);
   });
 
+  it("passes the requested relay leg to fetchClassInfo and emits relay metadata", async () => {
+    fetchClassInfoMock.mockResolvedValue({
+      classBlobUrl: "https://livelox.azureedge.net/blobs/abc.json",
+      eventName: "Kotka-Jukola",
+      className: "Jukola",
+      relayLegs: [
+        { leg: 1, name: "1", participantCount: 859 },
+        { leg: 2, name: "2", participantCount: 791 },
+      ],
+    });
+    fetchClassBlobMock.mockResolvedValue(makeBlob());
+
+    const caller = liveloxRouter.createCaller({} as never);
+    const data = await caller.importClass({ classId: 1208676, relayLeg: 2 });
+
+    expect(fetchClassInfoMock).toHaveBeenCalledWith(1208676, 2);
+    expect(data.relay?.currentLeg).toBe(2);
+    expect(data.relay?.legs).toHaveLength(2);
+  });
+
   it("rewrites all tile URLs through the /api/livelox-tile proxy", async () => {
     fetchClassInfoMock.mockResolvedValue({
       classBlobUrl: "https://livelox.azureedge.net/blobs/abc.json",
       eventName: "E",
       className: "C",
+      relayLegs: [],
     });
     fetchClassBlobMock.mockResolvedValue(makeBlob());
 
@@ -183,11 +205,34 @@ describe("livelox.importClass", () => {
     });
   });
 
+  it("surfaces an unsupported map projection as a TRPCError the page can show", async () => {
+    fetchClassInfoMock.mockResolvedValue({
+      classBlobUrl: "https://livelox.azureedge.net/blobs/abc.json",
+      eventName: "E",
+      className: "C",
+      relayLegs: [],
+    });
+    // Norway publishes routes in EPSG:25833, which we don't support.
+    fetchClassBlobMock.mockResolvedValue({
+      ...makeBlob(),
+      projectionEpsgCode: 25833,
+    });
+
+    const caller = liveloxRouter.createCaller({} as never);
+    await expect(
+      caller.importClass({ classId: 12345 }),
+    ).rejects.toMatchObject({
+      code: "PRECONDITION_FAILED",
+      message: expect.stringContaining("EPSG:25833"),
+    });
+  });
+
   it("wraps blob-fetch failures the same way (post-ClassInfo, pre-decode)", async () => {
     fetchClassInfoMock.mockResolvedValue({
       classBlobUrl: "https://livelox.azureedge.net/blobs/abc.json",
       eventName: "E",
       className: "C",
+      relayLegs: [],
     });
     fetchClassBlobMock.mockRejectedValue(
       new Error("Livelox blob fetch failed: 503"),

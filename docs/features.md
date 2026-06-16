@@ -190,7 +190,9 @@ A sortable table of every synced route with class and name filters. Expand any r
 
 ### Replay viewer
 
-Full animated GPS playback with mass-start / real-time / legs modes, variable speed (1x – 64x), follow mode, and per-runner visibility toggles. Light theme matching Oxygen's UI. Punch pulse animations at control points. Class selector in the header for quick switching between heats.
+Full animated GPS playback with mass-start / real-time / legs modes, variable speed (1x – 64x), follow mode, and per-runner visibility toggles. Light theme matching Oxygen's UI. Punch pulse animations at control points. Class selector in the header for quick switching between heats. A **Tracks** toggle lays out the selected runners' whole routes statically, coloured by speed on a cool blue→cyan→green range (distinct from the orange **Heatmap** it overlays) with time-tick dots that visualise pace — see [livelox-features.md](livelox-features.md#speed-coloured-track-overlay).
+
+**Relays** are first-class: for a multi-leg class (e.g. Jukola) the header shows a leg switcher (each leg loads lazily with its own map, courses, and runners). **Forked courses** are resolved per runner — each runner is matched to the fork they actually ran from their punch sequence. The course overlay draws a single numbered fork when one fork is in view, the merged "union" of forks (labelled by control code) when several are, and an **All forks** toggle overlays every variant. See [livelox-features.md](livelox-features.md#relay-legs-and-forked-courses).
 
 ![GPS replay with a class loaded](screenshots/replay.png)
 

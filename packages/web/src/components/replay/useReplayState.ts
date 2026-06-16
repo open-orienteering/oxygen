@@ -1,5 +1,6 @@
 import { useState, useRef, useCallback, useEffect, useMemo } from "react";
 import type { ReplayData } from "@oxygen/shared";
+import { buildRouteControlTimes } from "./leg-timing";
 
 export type StartMode = "real" | "mass" | "legs";
 /**
@@ -153,7 +154,10 @@ export function useReplayState(data: ReplayData | undefined, config?: ReplayConf
     return { start, end };
   }, [data?.routes, visibleParticipants, globalStart, globalEnd]);
 
-  // ── Per-participant split times at each control (for control restart + legs) ──
+  // ── Per-participant split times at each control of the reference course ──
+  // Keyed by `courses[0]` control index. Used only by restart-from-control,
+  // which is a non-forked-only feature (the viewer disables control hit-testing
+  // for forked relay legs). Legs mode uses the fork-aware `routeControlTimes`.
   const controlSplits = useMemo(() => {
     if (!data || data.courses.length === 0) return [];
     const course = data.courses[0];
@@ -173,24 +177,38 @@ export function useReplayState(data: ReplayData | undefined, config?: ReplayConf
     });
   }, [data, raceStarts]);
 
-  const totalLegs = data?.courses[0]?.controls ? data.courses[0].controls.length - 1 : 0;
+  // ── Fork-aware per-runner control times (for legs mode) ──
+  // times[pid][i] = absolute time the runner reached their OWN fork's i-th
+  // control (index 0 = race start). Legs mode caps each runner at their own
+  // leg-end control so forked runners wait at their controls, not a shared one.
+  const routeControlTimes = useMemo(
+    () => (data ? buildRouteControlTimes(data, raceStarts) : new Map<string, number[]>()),
+    [data, raceStarts],
+  );
+
+  // Total legs spans the longest fork, so every leg of every fork is reachable.
+  const totalLegs = useMemo(() => {
+    let max = 0;
+    for (const c of data?.courses ?? []) max = Math.max(max, c.controls.length - 1);
+    return max;
+  }, [data]);
 
   // ── Duration depends on mode ──
   const totalDurationMs = useMemo(() => {
     if (startMode === "real") return visibleBounds.end - visibleBounds.start;
-    if (startMode === "legs" && controlSplits.length > 1) {
-      // Duration of the current leg: slowest of the VISIBLE runners, plus 2s buffer
-      const fromSplits = controlSplits[currentLeg];
-      const toSplits = controlSplits[currentLeg + 1];
-      if (!fromSplits || !toSplits) return maxIndividualDuration;
+    if (startMode === "legs" && totalLegs >= 1) {
+      // Duration of the current leg: the slowest VISIBLE runner's own leg
+      // (their control `currentLeg` → `currentLeg + 1`), plus a 2s buffer.
+      // Fork-aware: each runner's boundaries come from their own fork.
       let maxLeg = 0;
-      for (const [pid, toTime] of toSplits) {
+      for (const [pid, times] of routeControlTimes) {
         if (!visibleParticipants.has(pid)) continue;
-        // For leg 0 the from time is raceStart, not fromSplits
-        const fromTime = currentLeg === 0
-          ? raceStarts.get(pid)
-          : fromSplits.get(pid);
-        if (fromTime !== undefined) {
+        const fromTime = times[currentLeg];
+        const toTime = times[currentLeg + 1];
+        if (
+          fromTime !== undefined && !Number.isNaN(fromTime) &&
+          toTime !== undefined && !Number.isNaN(toTime)
+        ) {
           const leg = toTime - fromTime;
           if (leg > maxLeg) maxLeg = leg;
         }
@@ -213,7 +231,7 @@ export function useReplayState(data: ReplayData | undefined, config?: ReplayConf
       return maxDur || maxIndividualDuration;
     }
     return maxIndividualDuration;
-  }, [startMode, visibleBounds, maxIndividualDuration, controlSplits, currentLeg, restartControlIdx, data, visibleParticipants, raceStarts]);
+  }, [startMode, visibleBounds, maxIndividualDuration, controlSplits, routeControlTimes, totalLegs, currentLeg, restartControlIdx, data, visibleParticipants, raceStarts]);
 
   // ── Refs that the orchestrator/advanceTime need to read each frame ──
   // Kept in sync via effects so the closure-free RAF can read the latest
@@ -401,27 +419,25 @@ export function useReplayState(data: ReplayData | undefined, config?: ReplayConf
       const liveCurrentLeg = currentLegRef.current;
       const liveRestartControlIdx = restartControlIdxRef.current;
 
-      // Legs mode: offset from split time at current leg's start control.
-      // For leg 0, the start control is the start triangle which has no split
-      // time — use raceStartMs directly instead.
-      // Each runner's time is capped at the leg's END control split time,
-      // so they freeze and wait for the slowest runner before the next leg.
+      // Legs mode: offset from the split time at the current leg's start
+      // control, using the runner's OWN fork (fork-aware). times[0] is the race
+      // start (the start triangle has no split). Each runner's time is capped
+      // at their own leg-END control split, so they freeze and wait for the
+      // slowest runner before the next leg — forked runners wait at the
+      // controls they actually ran, not a shared reference course.
       if (startMode === "legs") {
-        let legStartTime: number | undefined;
-        if (liveCurrentLeg === 0) {
-          legStartTime = raceStart;
-        } else {
-          legStartTime = controlSplits[liveCurrentLeg]?.get(participantId);
+        const times = routeControlTimes.get(participantId);
+        if (!times) return raceStart - 1;
+        const legStartTime = times[liveCurrentLeg];
+        if (legStartTime === undefined || Number.isNaN(legStartTime)) {
+          return raceStart - 1; // no split data for this leg → hide
         }
-        if (legStartTime !== undefined) {
-          // Cap at the end control split time (runner stops there when done)
-          const legEndSplit = controlSplits[liveCurrentLeg + 1]?.get(participantId);
-          const cappedElapsed = legEndSplit !== undefined
-            ? Math.min(elapsed, legEndSplit - legStartTime)
+        const legEndTime = times[liveCurrentLeg + 1];
+        const cappedElapsed =
+          legEndTime !== undefined && !Number.isNaN(legEndTime)
+            ? Math.min(elapsed, legEndTime - legStartTime)
             : elapsed;
-          return legStartTime + cappedElapsed;
-        }
-        return raceStart - 1; // no split data → hide
+        return legStartTime + cappedElapsed;
       }
 
       // Control restart: offset from split time at that control
@@ -436,7 +452,7 @@ export function useReplayState(data: ReplayData | undefined, config?: ReplayConf
       // Mass start: offset from each runner's race start
       return raceStart + elapsed;
     },
-    [startMode, raceStarts, globalStart, visibleBounds, controlSplits],
+    [startMode, raceStarts, globalStart, visibleBounds, controlSplits, routeControlTimes],
   );
 
   const getElapsedMs = useCallback(() => elapsedRef.current, []);

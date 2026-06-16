@@ -159,6 +159,8 @@ function LiveloxMapPreview({ route, liveloxClassId, height }: LiveloxMapPreviewP
             data={data}
             mapRef={mapRef}
             containerSize={containerSize}
+            primaryFork={data.courses[0] ?? null}
+            unionForks={[]}
             activeControlIdx={null}
           />
           <ReplayRouteLayer
