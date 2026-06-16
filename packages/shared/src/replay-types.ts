@@ -23,6 +23,12 @@ export interface ReplayRoute {
    * Used for mass-start alignment.
    */
   raceStartMs?: number;
+  /**
+   * Id of the {@link ReplayCourse} (fork) this runner actually ran. Only set
+   * for forked relay legs, where it is recovered by matching the runner's
+   * punched control sequence against each fork. Absent for non-forked events.
+   */
+  courseId?: string;
   result?: ReplayResult;
 }
 
@@ -50,6 +56,11 @@ export interface ReplayControl {
 
 /** Course definition — ordered sequence of controls. */
 export interface ReplayCourse {
+  /**
+   * Stable id for the course. For forked relay legs each fork is a distinct
+   * course with its own id; {@link ReplayRoute.courseId} references it.
+   */
+  id: string;
   name: string;
   controls: ReplayControl[];
   /** Course length in meters (if known). */
@@ -97,13 +108,41 @@ export interface ReplayMap {
   tiles?: ReplayMapTile[];
 }
 
+/** One relay leg of a multi-leg class. */
+export interface ReplayRelayLeg {
+  /** 1-based leg number. */
+  leg: number;
+  /** Display name (usually the leg number as a string). */
+  name: string;
+  /** Number of participants on this leg. */
+  participantCount: number;
+}
+
+/**
+ * Relay metadata for multi-leg classes. Present only when the loaded class
+ * has more than one relay leg; drives the leg switcher in the viewer. Each
+ * leg is loaded lazily as its own {@link ReplayData} (own map + forks +
+ * runners), so this just describes the available legs and which one is loaded.
+ */
+export interface ReplayRelayInfo {
+  legs: ReplayRelayLeg[];
+  /** The leg number this dataset was loaded for. */
+  currentLeg: number;
+}
+
 /** Complete replay dataset. */
 export interface ReplayData {
   title: string;
   sourceType: "livelox" | "oxygen" | "gpx";
   map: ReplayMap;
+  /**
+   * Course definitions. A single course for a normal event; one entry per
+   * fork for a forked relay leg.
+   */
   courses: ReplayCourse[];
   routes: ReplayRoute[];
   /** Absolute epoch ms of the earliest route start. Used for real-time mode. */
   referenceTimeMs: number;
+  /** Relay leg metadata; absent for non-relay classes. */
+  relay?: ReplayRelayInfo;
 }

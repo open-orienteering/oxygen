@@ -11,10 +11,11 @@ import type {
   ReplayRoute,
   ReplayResult,
   ReplaySplitTime,
+  ReplayRelayInfo,
 } from "@oxygen/shared";
-import type { LiveloxClassBlob } from "./fetcher.js";
+import type { LiveloxClassBlob, LiveloxRelayLeg } from "./fetcher.js";
 import { decodeRouteData } from "./decoder.js";
-import { getProjectedToLatLng } from "./crs.js";
+import { getProjectedToLatLng, describeSupportedProjections } from "./crs.js";
 
 // ─── Distinct color palette for participants ────────────────
 
@@ -114,6 +115,80 @@ export function decodeSplitTimes(
   return { splits, baseTimeMs };
 }
 
+// ─── Fork matching (relay forking) ──────────────────────────
+
+interface ForkSeq {
+  id: string;
+  seq: number[];
+}
+
+/**
+ * The numeric control codes a runner punched, in order. The start lives at
+ * `splitTimeData[1]` (not in the leg/code pairs) so it is excluded; the finish
+ * code IS included as the last entry. Mirrors `decodeSplitTimes`' indexing.
+ */
+export function extractPunchedCodes(splitTimeData: number[]): number[] {
+  const codes: number[] = [];
+  for (let i = 2; i < splitTimeData.length; i += 2) {
+    if (i + 1 < splitTimeData.length) codes.push(splitTimeData[i + 1]);
+  }
+  return codes;
+}
+
+/**
+ * Build the matchable code sequence for each fork: every control except the
+ * start (type 0), in course order, with the finish included — i.e. exactly
+ * what a runner punches.
+ */
+export function buildForkSeqs(courses: LiveloxClassBlob["courses"]): ForkSeq[] {
+  return (courses ?? []).map((c) => ({
+    id: String(c.id),
+    seq: c.controls
+      .filter((x) => x.control.type !== 0)
+      .map((x) => x.control.numericCode),
+  }));
+}
+
+/**
+ * Match a runner's punched control sequence to the fork they ran.
+ *
+ * Runners punch extra spectator/arena controls (e.g. a TV passage) that are in
+ * no course, so codes that appear in no fork are dropped first. An exact
+ * sequence match wins. For DNF/MP runners (truncated or off-by-a-control punch
+ * lists) we fall back to the fork sharing the most positions. Returns
+ * undefined when nothing plausibly matches.
+ */
+export function matchFork(
+  punched: number[],
+  forks: ForkSeq[],
+  validCodes: Set<number>,
+): string | undefined {
+  const filtered = punched.filter((c) => validCodes.has(c));
+  if (filtered.length === 0 || forks.length === 0) return undefined;
+
+  for (const f of forks) {
+    if (
+      f.seq.length === filtered.length &&
+      f.seq.every((v, i) => v === filtered[i])
+    ) {
+      return f.id;
+    }
+  }
+
+  let best: string | undefined;
+  let bestScore = 0;
+  for (const f of forks) {
+    let score = 0;
+    const n = Math.min(f.seq.length, filtered.length);
+    for (let i = 0; i < n; i++) if (f.seq[i] === filtered[i]) score++;
+    if (score > bestScore) {
+      bestScore = score;
+      best = f.id;
+    }
+  }
+  return bestScore > 0 ? best : undefined;
+}
+
 // ─── Main transform ─────────────────────────────────────────
 
 export function transformToReplayData(
@@ -123,13 +198,29 @@ export function transformToReplayData(
     className: string;
     /** Base URL for tile proxy (e.g. "/api/livelox-tile"). Tiles are rewritten to go through this. */
     tileProxyBase?: string;
+    /** Relay legs advertised by ClassInfo; drives the viewer leg switcher. */
+    relayLegs?: LiveloxRelayLeg[];
+    /** Which relay leg this blob was fetched for (1-based). */
+    currentLeg?: number;
   },
 ): ReplayData {
-  const { eventName, className, tileProxyBase } = options;
+  const { eventName, className, tileProxyBase, relayLegs, currentLeg } = options;
 
-  // CRS conversion for projected route data
+  // CRS conversion for projected route data. When the event publishes
+  // projected routes (`projectionEpsgCode` present) in a CRS we don't
+  // support, fail loudly: silently falling back to the lat/lng decoder
+  // mis-reads easting/northing as degrees, which dumps every runner
+  // ~1000 km off the map and (via the follow camera) blanks the view.
+  // A clear error is far better UX than a white map.
   const epsg = blob.projectionEpsgCode;
   const toLatLng = epsg ? getProjectedToLatLng(epsg) : null;
+  if (epsg && !toLatLng) {
+    throw new Error(
+      `Unsupported map projection EPSG:${epsg}. This event's GPS routes ` +
+        `can't be displayed yet. Supported projections: ` +
+        `${describeSupportedProjections()}.`,
+    );
+  }
   const isProjected = !!toLatLng;
 
   // ── Map ──
@@ -164,8 +255,9 @@ export function transformToReplayData(
       : blob.map.url;
   }
 
-  // ── Courses ──
+  // ── Courses (one entry per fork for forked relay legs) ──
   const courses: ReplayCourse[] = (blob.courses ?? []).map((c) => ({
+    id: String(c.id),
     name: c.name ?? className,
     controls: c.controls.map((ctrl) => ({
       code: ctrl.control.code,
@@ -176,11 +268,23 @@ export function transformToReplayData(
     lengthM: c.length,
   }));
 
-  // ── Course control lookup for split time decoding ──
-  const courseControls = (blob.courses?.[0]?.controls ?? []).map((c) => ({
-    code: c.control.code,
-    numericCode: c.control.numericCode,
-  }));
+  // ── Control-code → name lookup for split decoding ──
+  // Built across ALL forks: forks share the same physical controls, so a
+  // global map names every code a runner might punch regardless of fork.
+  const courseControls = (blob.courses ?? []).flatMap((c) =>
+    c.controls.map((ctrl) => ({
+      code: ctrl.control.code,
+      numericCode: ctrl.control.numericCode,
+    })),
+  );
+
+  // ── Fork matching setup (only meaningful when the leg is forked) ──
+  const forkSeqs = buildForkSeqs(blob.courses);
+  const isForked = forkSeqs.length > 1;
+  const validCodes = new Set<number>();
+  if (isForked) {
+    for (const f of forkSeqs) for (const code of f.seq) validCodes.add(code);
+  }
 
   // ── Routes ──
   const activeParticipants = (blob.participants ?? []).filter(
@@ -216,6 +320,16 @@ export function transformToReplayData(
       waypoints: decoded.waypoints,
       interruptions: decoded.interruptions,
     };
+
+    // Associate the runner with the fork they ran (forked relay legs only).
+    if (isForked && p.result?.splitTimeData) {
+      const courseId = matchFork(
+        extractPunchedCodes(p.result.splitTimeData),
+        forkSeqs,
+        validCodes,
+      );
+      if (courseId) route.courseId = courseId;
+    }
 
     if (p.result) {
       const { splits, baseTimeMs } = p.result.splitTimeData
@@ -272,6 +386,19 @@ export function transformToReplayData(
 
   if (!isFinite(earliestTimeMs)) earliestTimeMs = 0;
 
+  // ── Relay metadata (multi-leg classes only) ──
+  const relay: ReplayRelayInfo | undefined =
+    relayLegs && relayLegs.length > 1
+      ? {
+          legs: relayLegs.map((l) => ({
+            leg: l.leg,
+            name: l.name,
+            participantCount: l.participantCount,
+          })),
+          currentLeg: currentLeg ?? relayLegs[0]?.leg ?? 1,
+        }
+      : undefined;
+
   return {
     title: `${eventName} — ${className}`,
     sourceType: "livelox",
@@ -279,5 +406,6 @@ export function transformToReplayData(
     courses,
     routes,
     referenceTimeMs: earliestTimeMs,
+    ...(relay ? { relay } : {}),
   };
 }
