@@ -157,7 +157,7 @@ export async function performReadout(
   // Card: prefer linked (runner.cardId), fall back to cardNo lookup.
   const card = runner.cardId
     ? await db.card.findUnique({ where: { id: runner.cardId } })
-    : runner.cardNo > 0
+    : runner.cardNo != null
       ? await db.card.findFirst({
           where: { eventId, cardNo: runner.cardNo, removed: false },
           orderBy: { updatedAt: "desc" },
@@ -166,7 +166,7 @@ export async function performReadout(
 
   // Free punches (radio + manual + online-input + backup-memory).
   const freePunches =
-    runner.cardNo > 0
+    runner.cardNo != null
       ? await db.punch.findMany({
           where: { eventId, cardNo: runner.cardNo, removed: false },
           orderBy: { time: "asc" },
@@ -260,7 +260,7 @@ export async function performReadout(
       id: runner.seq,
       uuid: runner.id,
       name: runner.name,
-      cardNo: runner.cardNo,
+      cardNo: runner.cardNo ?? 0,
       startNo: runner.startNo,
       clubName: runner.clubName,
       clubId: runner.eventorClubId ? Number(runner.eventorClubId) : 0,
@@ -351,7 +351,7 @@ const storeReadoutInput = z.object({
   readAt: z.string().datetime().optional(),
 });
 
-type StoreReadoutInput = z.infer<typeof storeReadoutInput>;
+export type StoreReadoutInput = z.infer<typeof storeReadoutInput>;
 
 /**
  * Hash a logical card readout so duplicates can be detected without comparing
@@ -396,11 +396,12 @@ function encodePunchesRaw(
 
 /**
  * Core logic for storing a card readout. Shared between the live-readout
- * `storeReadout` mutation and the backup-replay `pushReadoutBackup`, so a
- * backup-imported readout goes through the same downstream pipeline as a
- * live one (card upsert, runner link, relevance score, Google Sheets push).
+ * `storeReadout` mutation, the backup-replay `pushReadoutBackup`, and the
+ * offline-outbox drain (`events.push` `card.read` entries), so every readout
+ * goes through the same downstream pipeline (card upsert, runner link,
+ * relevance score, Google Sheets push).
  */
-async function storeReadoutImpl(
+export async function storeReadoutImpl(
   db: PrismaClient,
   eventId: bigint,
   zeroTime: number,
@@ -1003,7 +1004,7 @@ export const cardReadoutRouter = router({
         // Unlink: clear cardNo on any runner currently holding it.
         await ctx.db.runner.updateMany({
           where: { eventId: ctx.event.id, cardNo, removed: false },
-          data: { cardNo: 0 },
+          data: { cardNo: null },
         });
         return { ok: true as const };
       }

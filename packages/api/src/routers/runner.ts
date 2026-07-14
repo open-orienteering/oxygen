@@ -59,10 +59,10 @@ async function classSeqToId(
 async function assertCardNotTaken(
   db: import("@prisma/client").PrismaClient,
   eventId: bigint,
-  cardNo: number,
+  cardNo: number | null | undefined,
   excludeId?: string,
 ): Promise<void> {
-  if (cardNo <= 0) return;
+  if (cardNo == null || cardNo <= 0) return;
   const existing = await db.runner.findFirst({
     where: {
       eventId,
@@ -84,7 +84,7 @@ async function assertCardNotTaken(
 
 const runnerCreateSchema = z.object({
   name: z.string().min(1),
-  cardNo: z.number().int().optional().default(0),
+  cardNo: z.number().int().nonnegative().nullable().optional(),
   clubName: z.string().optional().default(""),
   eventorClubId: z.number().int().optional(),
   classId: z.number().int(), // seq
@@ -104,7 +104,7 @@ const runnerCreateSchema = z.object({
 
 const runnerUpdateSchema = z.object({
   name: z.string().min(1).optional(),
-  cardNo: z.number().int().optional(),
+  cardNo: z.number().int().nonnegative().nullable().optional(),
   clubName: z.string().optional(),
   eventorClubId: z.number().int().nullable().optional(),
   classId: z.number().int().optional(),
@@ -156,7 +156,7 @@ export const runnerRouter = router({
       return {
         id: r.seq,
         name: r.name,
-        cardNo: r.cardNo,
+        cardNo: r.cardNo ?? 0,
         clubId: r.eventorClubId ? Number(r.eventorClubId) : 0,
         clubName: r.clubName,
         classId: cls?.seq ?? 0,
@@ -198,7 +198,7 @@ export const runnerRouter = router({
       return {
         id: r.seq,
         name: r.name,
-        cardNo: r.cardNo,
+        cardNo: r.cardNo ?? 0,
         clubId: r.eventorClubId ? Number(r.eventorClubId) : 0,
         clubName: r.clubName,
         classId: cls?.seq ?? 0,
@@ -265,7 +265,7 @@ export const runnerRouter = router({
       const filtered = sf
         ? runners.filter((r) => {
             const status = runnerStatusToValue(r.status);
-            const hasPunches = punchCardNos.has(r.cardNo);
+            const hasPunches = r.cardNo != null && punchCardNos.has(r.cardNo);
             const hasStartedByTime =
               r.startTime > 0 &&
               (r.startTime <= 1 ||
@@ -292,7 +292,7 @@ export const runnerRouter = router({
         (r): RunnerInfo => ({
           id: r.seq,
           name: r.name,
-          cardNo: r.cardNo,
+          cardNo: r.cardNo ?? 0,
           clubId: r.eventorClubId ? Number(r.eventorClubId) : 0,
           clubName: r.clubName,
           classId: r.class?.seq ?? 0,
@@ -324,7 +324,8 @@ export const runnerRouter = router({
         data: {
           eventId: ctx.event.id,
           name: input.name,
-          cardNo: input.cardNo,
+          // 0 (legacy sentinel) or absent → NULL (no card).
+          cardNo: input.cardNo && input.cardNo > 0 ? input.cardNo : null,
           clubName: input.clubName,
           eventorClubId: input.eventorClubId ?? null,
           classId: classUuid,
@@ -394,14 +395,14 @@ export const runnerRouter = router({
       const get = <T>(k: string): T | undefined =>
         (fields[k] === undefined ? undefined : (fields[k] as T));
 
-      const cardNo = get<number>("cardNo");
+      const cardNo = get<number | null>("cardNo");
       if (cardNo != null && cardNo !== r.cardNo) {
         await assertCardNotTaken(ctx.db, ctx.event.id, cardNo, r.id);
       }
 
       const data: Record<string, unknown> = {};
       if (get<string>("name") !== undefined) data.name = get<string>("name");
-      if (cardNo !== undefined) data.cardNo = cardNo;
+      if (cardNo !== undefined) data.cardNo = cardNo && cardNo > 0 ? cardNo : null;
       if (get<string>("clubName") !== undefined)
         data.clubName = get<string>("clubName");
       if (fields.eventorClubId !== undefined)

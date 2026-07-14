@@ -16,6 +16,7 @@
   "offline": "Offline",
   "pendingSync": "{{count}} väntar",
   "syncStatus": "Synkstatus",
+  "clockSkewWarning": "Enhetens klocka verkar gå ~{{seconds}}s fel. Tider som registreras här kan vara felaktiga.",
   "lastSynced": "Senast synkad",
   "justNow": "nyss",
   "neverSynced": "aldrig",

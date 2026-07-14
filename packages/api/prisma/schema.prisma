@@ -1,6 +1,6 @@
 // Oxygen schema — single PostgreSQL database, all tables in the `oxygen` schema.
 //
-// Conventions documented in docs/schema.md:
+// Conventions documented in docs/architecture.md (Database Architecture):
 //   - Per-event entities use UUID v7 PK + a per-event integer `seq` (URL-stable).
 //     `seq` is filled by a BEFORE INSERT trigger (see migration SQL).
 //   - Append-only / immutable tables use UUID v7 only.
@@ -158,7 +158,7 @@ model Event {
   cardReadoutBackups CardReadoutBackup[]
   punches      Punch[]
   controlUnits ControlUnit[]
-  eventLog     EventLogEntry[]
+  journal      JournalEntry[]
   mapFiles     MapFile[]
   renderedMaps RenderedMap[]
   mapTiles     MapTile[]
@@ -442,7 +442,10 @@ model Runner {
   courseId      String?      @map("course_id") @db.Uuid
   cardId        String?      @map("card_id") @db.Uuid
   name          String       @default("")
-  cardNo        Int          @default(0) @map("card_no")
+  /// SI card number. NULL = no card assigned (cardless runner). Enforced
+  /// unique per event — NULLs are distinct in Postgres, so cardless runners
+  /// coexist. Replaces the legacy `0`-as-sentinel.
+  cardNo        Int?         @map("card_no")
   startNo       Int          @default(0) @map("start_no")
   /// Deciseconds, ZeroTime-relative.
   startTime     Int          @default(0) @map("start_time")
@@ -500,9 +503,14 @@ model Runner {
   routes Route[]
 
   @@unique([eventId, seq])
+  // One-card-per-event is enforced by a PARTIAL unique index
+  // `runners_event_id_card_no_key` ON (event_id, card_no) WHERE removed = false
+  // (created in the 20260601120000 migration). Prisma's `@@unique` cannot
+  // express the `WHERE removed = false` predicate — soft-deleted runners must
+  // free their card — so the index lives in raw migration SQL. It also serves
+  // the (event_id, card_no) lookups, which all filter removed = false.
   @@index([eventId, classId, removed])
   @@index([eventId, eventorClubId, removed])
-  @@index([eventId, cardNo])
   @@index([eventId, status, removed])
   @@index([eventId, startTime])
   @@index([eventId, eventorPersonId])
@@ -717,22 +725,33 @@ model Punch {
   @@schema("oxygen")
 }
 
-/// Offline operational event log (was oxygen_events).
-/// eventId references the orienteering event; the log entry has its own UUID id.
-model EventLogEntry {
+/// Append-only journal of mutations — the offline-first CRDT wire format
+/// (was oxygen_events / event_log). eventId references the orienteering event;
+/// each entry has its own UUID id and an HLC sort key. See
+/// docs/offline-architecture.md.
+model JournalEntry {
   id              String   @id @default(dbgenerated("uuidv7()")) @db.Uuid
   eventId         BigInt   @map("event_id")
   type            String
   stationId       String   @map("station_id")
+  /// Verifiable "who did this" attribution. NULL until the permissions
+  /// system ships (every pre-permissions entry stays NULL).
+  actorId         String?  @map("actor_id") @db.Uuid
+  /// Encoded hybrid logical clock (physical_ms << 16 | logical), the journal's
+  /// canonical total-order sort key. Synthesised from clientTimestamp for
+  /// legacy clients that predate HLC.
+  hlc             BigInt   @default(0)
+  schemaVersion   Int      @default(1) @map("schema_version")
   clientTimestamp DateTime @map("client_timestamp") @db.Timestamptz(6)
   payload         Json
-  appliedAt       DateTime @default(now()) @map("applied_at") @db.Timestamptz(6)
+  receivedAt      DateTime @default(now()) @map("received_at") @db.Timestamptz(6)
 
   event Event @relation(fields: [eventId], references: [id], onDelete: Cascade)
 
+  @@index([eventId, hlc])
   @@index([eventId, clientTimestamp(sort: Desc)])
   @@index([eventId, type])
-  @@map("event_log")
+  @@map("journal")
   @@schema("oxygen")
 }
 

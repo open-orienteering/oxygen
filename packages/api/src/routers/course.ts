@@ -740,7 +740,7 @@ export const courseRouter = router({
         const codeSet = new Set(codes);
         let passed = 0;
         for (const r of expectedRunners) {
-          const raw = cardByNo.get(r.cardNo);
+          const raw = cardByNo.get(r.cardNo ?? -1);
           if (!raw) continue;
           // Quick scan of the packed punch string for any matching code.
           // Format is `code-time;code-time;...` so a simple regex

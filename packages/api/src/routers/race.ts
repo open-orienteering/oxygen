@@ -51,7 +51,7 @@ export const raceRouter = router({
         runner: {
           id: runner.seq,
           name: runner.name,
-          cardNo: runner.cardNo,
+          cardNo: runner.cardNo ?? 0,
           clubId: runner.eventorClubId ? Number(runner.eventorClubId) : 0,
           clubName: runner.clubName,
           classId: runner.class?.seq ?? 0,
@@ -277,7 +277,7 @@ export const raceRouter = router({
           name: r.runner.name,
           className: r.runner.className,
           clubName: r.runner.clubName,
-          cardNo: r.runner.cardNo,
+          cardNo: r.runner.cardNo ?? 0,
           startNo: r.runner.startNo,
           birthYear: 0, // omitted in fast path
         },
