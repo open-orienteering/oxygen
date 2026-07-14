@@ -4,6 +4,7 @@ import { trpc } from "../lib/trpc";
 import { formatMeosTime } from "@oxygen/shared";
 import { useSearchParam } from "../hooks/useSearchParam";
 import { useStationSync } from "../hooks/useStationSync";
+import { useLookupByCard } from "../lib/offline/projection-reads";
 
 export function StartStation() {
   // Pre-fetch and persist all competition data for offline use
@@ -18,10 +19,12 @@ export function StartStation() {
   });
 
   // Lookup runner by card
+  const nameId = window.location.pathname.match(/^\/([^/]+)/)?.[1] ?? "";
   const cardNo = parseInt(cardInput, 10);
-  const lookup = trpc.race.lookupByCard.useQuery(
-    { cardNo },
-    { enabled: cardInput.length >= 3 && !isNaN(cardNo) && cardNo > 0 },
+  const lookup = useLookupByCard(
+    nameId,
+    cardNo,
+    cardInput.length >= 3 && !isNaN(cardNo) && cardNo > 0,
   );
 
   useEffect(() => {

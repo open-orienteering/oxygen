@@ -1,14 +1,37 @@
 /**
- * Offline operational event-log router (formerly oxygen_events).
+ * Journal ingestion router (was the offline event-log router).
  *
- * Clients push events while online or offline; the queue is drained to
- * this endpoint when connectivity returns. Each event is applied
- * idempotently — duplicate IDs are silently skipped.
+ * Clients push journal entries while online or offline; the outbox drains here
+ * when connectivity returns. Each entry is applied idempotently — a duplicate
+ * `id` is silently skipped.
+ *
+ * Entries are applied over Postgres via Prisma. Race-state entries resolve the
+ * runner by `(eventId, cardNo)` so an offline-created runner can be matched
+ * before a `seq` has been assigned; cardless / manual entries fall back to the
+ * `seq` (`runnerId`). The wire fields `hlc`, `schemaVersion` and `actorId` are
+ * optional, so a legacy client that predates them keeps working byte-for-byte
+ * — `resolveHlc` synthesises an HLC from the wall-clock `timestamp` when none
+ * is sent.
+ *
+ * The receiving node is the single serialization point for its writes (see the
+ * per-event lease in docs/offline-architecture.md), so the per-type
+ * arrival-order guards below are sufficient; append-only types (`card.read`,
+ * `punch.recorded`) are guarded by dedupe keys instead and apply anywhere.
+ * This endpoint doubles as the node-to-node journal-shipping sink (pivot
+ * Step 3 in docs/future-architecture.md).
  */
 
 import { z } from "zod";
 import { router, eventProcedure } from "../trpc.js";
 import { toRelative } from "../timeConvert.js";
+import {
+  encodeHlc,
+  resolveHlc,
+  cardReadIsDuplicate,
+  CARD_READ_DEDUPE_WINDOW_MS,
+  meosFromVolts,
+} from "@oxygen/shared";
+import { storeReadoutImpl } from "./cardReadout.js";
 import type { PrismaClient } from "@prisma/client";
 
 const eventPayloadSchema = z.object({
@@ -25,6 +48,10 @@ const eventPayloadSchema = z.object({
   competitionId: z.string(),
   stationId: z.string(),
   timestamp: z.number(),
+  // Offline-first additions — all optional so legacy clients keep working.
+  hlc: z.object({ physical: z.number(), logical: z.number() }).optional(),
+  schemaVersion: z.number().int().optional(),
+  actorId: z.string().uuid().nullable().optional(),
   payload: z.record(z.string(), z.unknown()),
 });
 
@@ -38,7 +65,7 @@ export const eventsRouter = router({
       for (const event of input.events) {
         try {
           // Idempotency check — same UUID returns success.
-          const existing = await ctx.db.eventLogEntry.findUnique({
+          const existing = await ctx.db.journalEntry.findUnique({
             where: { id: event.id },
             select: { id: true },
           });
@@ -49,12 +76,24 @@ export const eventsRouter = router({
 
           await applyEvent(ctx.db, ctx.event.id, ctx.event.zeroTime, event);
 
-          await ctx.db.eventLogEntry.create({
+          const hlc = encodeHlc(
+            resolveHlc({
+              id: event.id,
+              stationId: event.stationId,
+              timestamp: event.timestamp,
+              hlc: event.hlc,
+            }),
+          );
+
+          await ctx.db.journalEntry.create({
             data: {
               id: event.id,
               eventId: ctx.event.id,
               type: event.type,
               stationId: event.stationId,
+              actorId: event.actorId ?? null,
+              hlc,
+              schemaVersion: event.schemaVersion ?? 1,
               clientTimestamp: new Date(event.timestamp),
               payload: event.payload as never,
             },
@@ -64,21 +103,63 @@ export const eventsRouter = router({
         } catch (err) {
           const message = err instanceof Error ? err.message : String(err);
           console.error(
-            `[events.push] Failed to apply event ${event.id} (${event.type}):`,
+            `[events.push] Failed to apply entry ${event.id} (${event.type}):`,
             message,
           );
           failed.push({ id: event.id, error: message });
         }
       }
 
-      return { synced, failed };
+      // serverTimeMs lets the client detect a skewed local clock (see the
+      // clock-skew banner). It is the cloud's wall clock at response time.
+      return { synced, failed, serverTimeMs: Date.now() };
     }),
 });
 
 interface OfflineEvent {
   id: string;
   type: string;
+  stationId: string;
+  timestamp: number;
   payload: Record<string, unknown>;
+}
+
+/**
+ * Resolve the runner a race-state entry refers to.
+ *
+ * Primary key is `(eventId, cardNo)` — robust to offline-created runners that
+ * have no `seq` yet. Falls back to `seq` (`runnerId`) for cardless / manual
+ * entries. Returns the active (non-removed) runner, or null.
+ */
+async function resolveRunner(
+  db: PrismaClient,
+  eventId: bigint,
+  payload: Record<string, unknown>,
+): Promise<{ id: string; finishTime: number } | null> {
+  const cardNo =
+    typeof payload.cardNo === "number" && payload.cardNo > 0
+      ? payload.cardNo
+      : null;
+  if (cardNo != null) {
+    const byCard = await db.runner.findFirst({
+      where: { eventId, cardNo, removed: false },
+      select: { id: true, finishTime: true },
+    });
+    if (byCard) return byCard;
+  }
+
+  const seq =
+    typeof payload.runnerId === "number" && payload.runnerId > 0
+      ? payload.runnerId
+      : null;
+  if (seq != null) {
+    return db.runner.findFirst({
+      where: { eventId, seq, removed: false },
+      select: { id: true, finishTime: true },
+    });
+  }
+
+  return null;
 }
 
 async function applyEvent(
@@ -89,14 +170,9 @@ async function applyEvent(
 ) {
   switch (event.type) {
     case "finish.recorded": {
-      const { runnerId, finishTime } = event.payload as {
-        runnerId: number;
-        finishTime: number;
-      };
-      const runner = await db.runner.findFirst({
-        where: { eventId, seq: runnerId, removed: false },
-        select: { id: true, finishTime: true },
-      });
+      const { finishTime } = event.payload as { finishTime: number };
+      const runner = await resolveRunner(db, eventId, event.payload);
+      // First non-zero finish wins (a runner crosses the line once).
       if (runner && runner.finishTime === 0) {
         await db.runner.update({
           where: { id: runner.id },
@@ -110,16 +186,12 @@ async function applyEvent(
     }
 
     case "result.applied": {
-      const { runnerId, status, finishTime, startTime } = event.payload as {
-        runnerId: number;
+      const { status, finishTime, startTime } = event.payload as {
         status: number;
         finishTime: number;
         startTime: number;
       };
-      const runner = await db.runner.findFirst({
-        where: { eventId, seq: runnerId, removed: false },
-        select: { id: true },
-      });
+      const runner = await resolveRunner(db, eventId, event.payload);
       if (runner) {
         await db.runner.update({
           where: { id: runner.id },
@@ -141,14 +213,8 @@ async function applyEvent(
     }
 
     case "start.recorded": {
-      const { runnerId, startTime } = event.payload as {
-        runnerId: number;
-        startTime: number;
-      };
-      const runner = await db.runner.findFirst({
-        where: { eventId, seq: runnerId, removed: false },
-        select: { id: true },
-      });
+      const { startTime } = event.payload as { startTime: number };
+      const runner = await resolveRunner(db, eventId, event.payload);
       if (runner) {
         await db.runner.update({
           where: { id: runner.id },
@@ -165,15 +231,19 @@ async function applyEvent(
           classId: number;
           eventorClubId?: number;
           clubName?: string;
-          cardNo: number;
+          cardNo?: number;
           startTime?: number;
         };
-      const existing = cardNo > 0
-        ? await db.runner.findFirst({
-            where: { eventId, cardNo, removed: false },
-            select: { id: true },
-          })
-        : null;
+      // 0 (legacy sentinel) or absent → NULL (no card).
+      const card = typeof cardNo === "number" && cardNo > 0 ? cardNo : null;
+      // Dedupe by (eventId, cardNo) — one card per event.
+      const existing =
+        card != null
+          ? await db.runner.findFirst({
+              where: { eventId, cardNo: card, removed: false },
+              select: { id: true },
+            })
+          : null;
       if (!existing) {
         const cls = await db.class.findFirst({
           where: { eventId, seq: classId, removed: false },
@@ -187,7 +257,7 @@ async function applyEvent(
               classId: cls.id,
               clubName: clubName ?? "",
               eventorClubId: eventorClubId ?? null,
-              cardNo,
+              cardNo: card,
               startTime: startTime ? toRelative(startTime, zeroTime) : 0,
             },
           });
@@ -210,6 +280,64 @@ async function applyEvent(
           time: toRelative(time, zeroTime),
           source: "card",
         },
+      });
+      break;
+    }
+
+    case "card.read": {
+      const p = event.payload as {
+        cardNo: number;
+        punches?: Array<{ controlCode: number; time: number }>;
+        checkTime?: number;
+        startTime?: number;
+        finishTime?: number;
+        cardType?: string;
+        /** Volts (straight from the SI card) — storage wants integer mV. */
+        batteryVoltage?: number;
+        punchesFresh?: boolean;
+        ownerData?: Record<string, unknown>;
+        metadata?: Record<string, unknown>;
+      };
+      // Dedupe: two reads of the same card within the window are one logical
+      // readout (SI cards get re-read; stations can race the drain). The
+      // entry stays in the journal either way — this guards the apply only.
+      const windowStart = new Date(
+        event.timestamp - CARD_READ_DEDUPE_WINDOW_MS,
+      );
+      const windowEnd = new Date(event.timestamp + CARD_READ_DEDUPE_WINDOW_MS);
+      const nearby = await db.cardReadout.findMany({
+        where: {
+          eventId,
+          cardNo: p.cardNo,
+          readAt: { gte: windowStart, lte: windowEnd },
+        },
+        select: { cardNo: true, readAt: true },
+      });
+      if (
+        cardReadIsDuplicate(
+          nearby.map((r) => ({ cardNo: r.cardNo, timestamp: r.readAt.getTime() })),
+          p.cardNo,
+          event.timestamp,
+        )
+      ) {
+        break;
+      }
+      // Same pipeline as an online storeReadout / backup replay. Payload
+      // times are absolute deciseconds (the outbox converts at emit);
+      // readAt preserves the original offline read time.
+      await storeReadoutImpl(db, eventId, zeroTime, {
+        cardNo: p.cardNo,
+        cardType: p.cardType ?? "",
+        punches: p.punches ?? [],
+        checkTime: p.checkTime ?? null,
+        startTime: p.startTime ?? null,
+        finishTime: p.finishTime ?? null,
+        voltageMv: meosFromVolts(p.batteryVoltage) ?? 0,
+        punchesFresh: p.punchesFresh,
+        ownerData: p.ownerData,
+        metadata: p.metadata,
+        stationId: event.stationId,
+        readAt: new Date(event.timestamp).toISOString(),
       });
       break;
     }

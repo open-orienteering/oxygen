@@ -369,7 +369,7 @@ export async function syncAll(
           const punches = await prisma().punch.findMany({
             where: {
               eventId,
-              cardNo: r.cardNo,
+              cardNo: r.cardNo ?? -1,
               removed: false,
               controlCode: { in: [...radioCodes] },
             },

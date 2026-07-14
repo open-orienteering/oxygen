@@ -8,8 +8,29 @@ import type {
   RunnerRegisteredPayload,
 } from "./db";
 import { offlineDb } from "./db";
+import { type Hlc, HLC_ZERO, tickHlc } from "@oxygen/shared";
 
 let stationId: string | null = null;
+
+const HLC_STORAGE_KEY = "oxygen-hlc";
+
+/**
+ * Stamp the next HLC for a locally-emitted entry, advancing the device's
+ * persisted clock. A per-device monotonic sort key — the server folds
+ * received stamps into its own clock on ingestion.
+ */
+function getNextHlc(): Hlc {
+  let last: Hlc = HLC_ZERO;
+  try {
+    const stored = localStorage.getItem(HLC_STORAGE_KEY);
+    if (stored) last = JSON.parse(stored) as Hlc;
+  } catch {
+    /* corrupt clock → restart from zero */
+  }
+  const next = tickHlc(last, Date.now());
+  localStorage.setItem(HLC_STORAGE_KEY, JSON.stringify(next));
+  return next;
+}
 
 function getStationId(): string {
   if (!stationId) {
@@ -35,6 +56,9 @@ function createEvent(
     competitionId,
     stationId: getStationId(),
     timestamp: Date.now(),
+    hlc: getNextHlc(),
+    schemaVersion: 1,
+    actorId: null,
     payload,
     status: "pending",
     attempts: 0,

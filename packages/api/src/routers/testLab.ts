@@ -459,7 +459,7 @@ export const testLabRouter = router({
 
         schedule.push({
           runnerId: r.id,
-          cardNo: r.cardNo,
+          cardNo: r.cardNo ?? 0,
           finishTimeDs: finishDs > 0 ? finishDs : cumulative,
           punchString,
           status,

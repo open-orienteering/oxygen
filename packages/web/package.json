@@ -26,6 +26,7 @@
     "@trpc/server": "^11.10.0",
     "buffer": "^6.0.3",
     "dexie": "^4.4.2",
+    "dexie-react-hooks": "^4.4.0",
     "i18next": "^26.0.8",
     "idb-keyval": "^6.2.2",
     "ocad2geojson": "github:marcus-kempe/ocad2geojson#v2.2.0-oxygen.0",

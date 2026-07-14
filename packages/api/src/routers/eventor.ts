@@ -1516,7 +1516,7 @@ export const eventorRouter = router({
           time: p.time !== 0 ? toAbsolute(p.time, event.zeroTime) : 0,
         }));
         const freePunches: ParsedPunch[] = (
-          freePunchesByCardNo.get(r.cardNo) ?? []
+          freePunchesByCardNo.get(r.cardNo ?? -1) ?? []
         ).map((p) => ({
           type: p.controlCode,
           time: p.time !== 0 ? toAbsolute(p.time, event.zeroTime) : 0,

@@ -309,6 +309,10 @@ export interface ClassInfo {
   highAge: number;
   /** Eventor / MeOS class type label (e.g. "Öppna klasser"). May be empty. */
   classType?: string;
+  /** Free-start class (no assigned start times). */
+  freeStart?: boolean;
+  /** Class runs without timing. */
+  noTiming?: boolean;
 }
 
 /** Club summary */

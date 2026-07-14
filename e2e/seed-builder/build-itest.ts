@@ -407,7 +407,9 @@ async function main() {
           courseId,
           cardId: cardRef?.cardId ?? null,
           name: r.name,
-          cardNo: r.cardNo,
+          // 0 in the fixture means "no card" (Vakant); store NULL so multiple
+          // cardless runners coexist under the partial unique index.
+          cardNo: r.cardNo > 0 ? r.cardNo : null,
           startNo: r.startNo,
           startTime: toRel(r.startTimeAbs),
           finishTime: toRel(r.finishTimeAbs),

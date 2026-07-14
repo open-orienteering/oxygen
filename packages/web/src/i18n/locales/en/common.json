@@ -16,6 +16,7 @@
   "offline": "Offline",
   "pendingSync": "{{count}} pending",
   "syncStatus": "Sync Status",
+  "clockSkewWarning": "This device's clock appears to be off by ~{{seconds}}s. Times recorded here may be inaccurate.",
   "lastSynced": "Last synced",
   "justNow": "just now",
   "neverSynced": "never",
