@@ -138,6 +138,40 @@ describe("online-input ROC puller", () => {
     }
   });
 
+  it("journals a punch.recorded (absolute ds) per ingested punch", async () => {
+    const f = await setupPuller("oi-journal");
+    try {
+      f.fetchSpy.mockResolvedValue(
+        new Response(
+          [
+            "1;31;2001;2026-01-01 10:00:00",
+            "2;32;2002;2026-01-01 10:01:00",
+          ].join("\n"),
+          { status: 200 },
+        ),
+      );
+
+      await pollOnceForEvent(f.ctx.eventId);
+
+      const entries = await f.ctx.db.journalEntry.findMany({
+        where: { eventId: f.ctx.eventId, type: "punch.recorded" },
+        orderBy: { hlc: "asc" },
+      });
+      expect(entries.length).toBe(2);
+      // Provenance station id carries the ROC unit; payload time is ABSOLUTE
+      // deciseconds (10:00:00 = 360000), not the ZeroTime-relative stored form.
+      expect(entries[0].stationId).toBe("roc-12345");
+      expect(entries[0].payload).toMatchObject({
+        cardNo: 2001,
+        controlCode: 31,
+        time: 360000,
+        origin: "online_input",
+      });
+    } finally {
+      await teardown(f);
+    }
+  });
+
   it("re-polling never re-inserts already-seen punches", async () => {
     const f = await setupPuller("oi-dedupe");
     try {

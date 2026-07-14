@@ -21,15 +21,18 @@ import {
   matchPunchesToCourse,
   computeStatus,
   computeMatchScore,
+  voltsFromMeos,
   RunnerStatus,
   type ParsedPunch,
   type ControlMatch,
+  type CardReadPayload,
 } from "@oxygen/shared";
 import { toAbsolute, toRelative } from "../timeConvert.js";
 import {
   runnerStatusToValue,
   valueToRunnerStatus,
 } from "../statusConvert.js";
+import { appendJournal } from "../journalEmit.js";
 import { resolveCourseExpectedPositions } from "./course.js";
 import { pushToGoogleSheet } from "../sheetsBackup.js";
 
@@ -608,12 +611,44 @@ export const cardReadoutRouter = router({
   storeReadout: eventProcedure
     .input(storeReadoutInput)
     .mutation(async ({ ctx, input }) => {
-      return storeReadoutImpl(
+      const result = await storeReadoutImpl(
         ctx.db,
         ctx.event.id,
         ctx.event.zeroTime,
         input,
       );
+      // Journal the readout so it ships to peers (venue ↔ cloud) — the
+      // online path is otherwise invisible to the journal, unlike the
+      // offline outbox which drains through `events.push`. Kept OUT of a
+      // transaction on purpose: `storeReadoutImpl` fires a fire-and-forget
+      // Google-Sheets push that must not run on a transaction client. The
+      // readout row is already durable here, so the entry-follows-the-write
+      // ordering still holds (a crash between the two only loses the ship,
+      // and the readout is independently recoverable from backup memory).
+      await appendJournal(ctx.db, {
+        eventId: ctx.event.id,
+        type: "card.read",
+        stationId: input.stationId,
+        payload: {
+          cardNo: input.cardNo,
+          punches: input.punches.map((p) => ({
+            controlCode: p.controlCode,
+            time: p.time,
+          })),
+          checkTime: input.checkTime ?? undefined,
+          startTime: input.startTime ?? undefined,
+          finishTime: input.finishTime ?? undefined,
+          cardType: input.cardType,
+          // The payload battery is in VOLTS (offline-emit contract); the
+          // storeReadout input carries integer mV, so convert.
+          batteryVoltage:
+            voltsFromMeos(input.batteryVoltage ?? input.voltageMv) ?? undefined,
+          punchesFresh: input.punchesFresh,
+          ownerData: input.ownerData as CardReadPayload["ownerData"],
+          metadata: input.metadata as CardReadPayload["metadata"],
+        },
+      });
+      return result;
     }),
 
   /**
@@ -687,7 +722,7 @@ export const cardReadoutRouter = router({
           seq: input.runnerId,
           removed: false,
         },
-        select: { id: true, status: true, transferFlags: true },
+        select: { id: true, status: true, transferFlags: true, cardNo: true },
       });
       if (!runner) {
         throw new TRPCError({
@@ -696,15 +731,29 @@ export const cardReadoutRouter = router({
         });
       }
       const zeroTime = ctx.event.zeroTime;
-      await ctx.db.runner.update({
-        where: { id: runner.id },
-        data: {
-          status: valueToRunnerStatus(input.status),
-          finishTime:
-            input.finishTime > 0 ? toRelative(input.finishTime, zeroTime) : 0,
-          startTime:
-            input.startTime > 0 ? toRelative(input.startTime, zeroTime) : 0,
-        },
+      // Table write + journal entry commit or roll back together.
+      await ctx.db.$transaction(async (tx) => {
+        await tx.runner.update({
+          where: { id: runner.id },
+          data: {
+            status: valueToRunnerStatus(input.status),
+            finishTime:
+              input.finishTime > 0 ? toRelative(input.finishTime, zeroTime) : 0,
+            startTime:
+              input.startTime > 0 ? toRelative(input.startTime, zeroTime) : 0,
+          },
+        });
+        await appendJournal(tx, {
+          eventId: ctx.event.id,
+          type: "result.applied",
+          payload: {
+            cardNo: runner.cardNo ?? null,
+            runnerId: input.runnerId,
+            status: input.status,
+            finishTime: input.finishTime,
+            startTime: input.startTime,
+          },
+        });
       });
       return { ok: true as const };
     }),
@@ -1002,15 +1051,30 @@ export const cardReadoutRouter = router({
       }
       if (input.runnerId === null) {
         // Unlink: clear cardNo on any runner currently holding it.
-        await ctx.db.runner.updateMany({
+        const affected = await ctx.db.runner.findMany({
           where: { eventId: ctx.event.id, cardNo, removed: false },
-          data: { cardNo: null },
+          select: { id: true, seq: true },
+        });
+        await ctx.db.$transaction(async (tx) => {
+          await tx.runner.updateMany({
+            where: { id: { in: affected.map((r) => r.id) } },
+            data: { cardNo: null },
+          });
+          for (const r of affected) {
+            await appendJournal(tx, {
+              eventId: ctx.event.id,
+              type: "runner.updated",
+              // Resolve by the card being unlinked; 0 → NULL on replay.
+              payload: { cardNo, runnerId: r.seq, fields: { cardNo: 0 } },
+            });
+          }
         });
         return { ok: true as const };
       }
+      const runnerSeq = input.runnerId; // narrowed to number by the guard above
       const runner = await ctx.db.runner.findFirst({
-        where: { eventId: ctx.event.id, seq: input.runnerId, removed: false },
-        select: { id: true },
+        where: { eventId: ctx.event.id, seq: runnerSeq, removed: false },
+        select: { id: true, cardNo: true },
       });
       if (!runner) {
         throw new TRPCError({
@@ -1022,9 +1086,20 @@ export const cardReadoutRouter = router({
         where: { eventId: ctx.event.id, cardNo, removed: false },
         select: { id: true },
       });
-      await ctx.db.runner.update({
-        where: { id: runner.id },
-        data: { cardNo, cardId: card?.id ?? null },
+      await ctx.db.$transaction(async (tx) => {
+        await tx.runner.update({
+          where: { id: runner.id },
+          data: { cardNo, cardId: card?.id ?? null },
+        });
+        await appendJournal(tx, {
+          eventId: ctx.event.id,
+          type: "runner.updated",
+          payload: {
+            cardNo: runner.cardNo ?? null, // pre-link card resolves the peer row
+            runnerId: runnerSeq,
+            fields: { cardNo },
+          },
+        });
       });
       return { ok: true as const };
     }),
@@ -1048,16 +1123,29 @@ export const cardReadoutRouter = router({
         },
         select: { id: true },
       });
-      await ctx.db.punch.create({
-        data: {
+      // Table write + journal entry commit or roll back together.
+      await ctx.db.$transaction(async (tx) => {
+        await tx.punch.create({
+          data: {
+            eventId: ctx.event.id,
+            cardNo: input.cardNo,
+            controlCode: input.controlCode,
+            controlId: control?.id ?? null,
+            time: input.time > 0 ? toRelative(input.time, zeroTime) : 0,
+            source: "manual",
+            isOriginal: false,
+          },
+        });
+        await appendJournal(tx, {
           eventId: ctx.event.id,
-          cardNo: input.cardNo,
-          controlCode: input.controlCode,
-          controlId: control?.id ?? null,
-          time: input.time > 0 ? toRelative(input.time, zeroTime) : 0,
-          source: "manual",
-          isOriginal: false,
-        },
+          type: "punch.recorded",
+          payload: {
+            cardNo: input.cardNo,
+            controlCode: input.controlCode,
+            time: input.time, // absolute deciseconds (portable)
+            origin: "manual",
+          },
+        });
       });
       return { ok: true as const };
     }),

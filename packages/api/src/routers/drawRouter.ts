@@ -5,6 +5,7 @@ import { generateDrawPreview } from "../draw/index.js";
 import type { DrawPreviewResult } from "@oxygen/shared";
 import { WITHDRAWN_STATUSES } from "@oxygen/shared";
 import { valueToRunnerStatus } from "../statusConvert.js";
+import { appendJournal } from "../journalEmit.js";
 
 const classDrawConfigSchema = z.object({
   classId: z.number().int(),
@@ -135,21 +136,51 @@ export const drawRouter = router({
           input.classes.map((c) => [c.classId, c]),
         );
 
+        // Map drawn runner UUIDs → { seq, cardNo } so the journal payloads are
+        // node-portable (resolve by card, fall back to seq).
+        const drawnUuids = result.classes.flatMap((c) =>
+          c.entries.map((e) => e.runnerId),
+        );
+        const drawnRunners = drawnUuids.length
+          ? await ctx.db.runner.findMany({
+              where: { id: { in: drawnUuids } },
+              select: { id: true, seq: true, cardNo: true },
+            })
+          : [];
+        const metaByUuid = new Map(drawnRunners.map((r) => [r.id, r]));
+
         let totalDrawn = 0;
         for (const cls of result.classes) {
           const config = configByClassSeq.get(cls.classId);
 
           for (const entry of cls.entries) {
-            await ctx.db.runner.update({
-              where: { id: entry.runnerId },
-              data: {
-                startTime: toRelative(entry.startTime, zeroTime),
-                startNo: entry.startNo,
-              },
+            const meta = metaByUuid.get(entry.runnerId);
+            // Runner start time + journal entry commit or roll back together.
+            await ctx.db.$transaction(async (tx) => {
+              await tx.runner.update({
+                where: { id: entry.runnerId },
+                data: {
+                  startTime: toRelative(entry.startTime, zeroTime),
+                  startNo: entry.startNo,
+                },
+              });
+              await appendJournal(tx, {
+                eventId: ctx.event.id,
+                type: "start.adjusted",
+                payload: {
+                  cardNo: meta?.cardNo ?? null,
+                  runnerId: meta?.seq,
+                  startTime: entry.startTime, // absolute deciseconds (portable)
+                },
+              });
             });
             totalDrawn++;
           }
 
+          // The per-class FirstStart / StartInterval write is class reference
+          // data (not journaled in pivot Step 2 — see docs/offline-architecture
+          // "Reference data" deferral). The runner start times above are the
+          // race-critical, journaled facts.
           if (config) {
             await ctx.db.class.update({
               where: { id: cls.classUuid },

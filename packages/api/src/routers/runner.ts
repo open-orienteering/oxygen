@@ -2,11 +2,12 @@ import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import { router, eventProcedure } from "../trpc.js";
 import { toAbsolute, toRelative, nowMeosDate, nowMeosTime } from "../timeConvert.js";
-import type { RunnerDetail, RunnerInfo } from "@oxygen/shared";
+import { RunnerStatus, type RunnerDetail, type RunnerInfo } from "@oxygen/shared";
 import {
   runnerStatusToValue,
   valueToRunnerStatus,
 } from "../statusConvert.js";
+import { appendJournal } from "../journalEmit.js";
 
 /**
  * Runner router. All inputs/outputs use the per-event integer `seq` as the
@@ -319,45 +320,63 @@ export const runnerRouter = router({
     .mutation(async ({ ctx, input }) => {
       await assertCardNotTaken(ctx.db, ctx.event.id, input.cardNo);
       const classUuid = await classSeqToId(ctx.db, ctx.event.id, input.classId);
+      const cardNo = input.cardNo && input.cardNo > 0 ? input.cardNo : null;
 
-      const created = await ctx.db.runner.create({
-        data: {
+      // Table write + journal entry commit or roll back together.
+      const created = await ctx.db.$transaction(async (tx) => {
+        const c = await tx.runner.create({
+          data: {
+            eventId: ctx.event.id,
+            name: input.name,
+            // 0 (legacy sentinel) or absent → NULL (no card).
+            cardNo,
+            clubName: input.clubName,
+            eventorClubId: input.eventorClubId ?? null,
+            classId: classUuid,
+            startNo: input.startNo,
+            // Inputs are absolute deciseconds; storage is ZeroTime-relative.
+            startTime:
+              input.startTime > 0
+                ? toRelative(input.startTime, ctx.event.zeroTime)
+                : input.startTime,
+            birthYear: input.birthYear,
+            sex: input.sex,
+            nationality: input.nationality,
+            phone: input.phone,
+            ...(input.status != null
+              ? { status: valueToRunnerStatus(input.status) }
+              : {}),
+            ...(input.finishTime != null
+              ? {
+                  finishTime:
+                    input.finishTime > 0
+                      ? toRelative(input.finishTime, ctx.event.zeroTime)
+                      : input.finishTime,
+                }
+              : {}),
+            feeCents: input.fee,
+            paidCents: input.paid,
+            payMode: input.payMode,
+            cardFeeCents: input.cardFee,
+            entryDate: nowMeosDate(),
+            entryTime: nowMeosTime(),
+          },
+          select: { id: true, seq: true },
+        });
+        await appendJournal(tx, {
           eventId: ctx.event.id,
-          name: input.name,
-          // 0 (legacy sentinel) or absent → NULL (no card).
-          cardNo: input.cardNo && input.cardNo > 0 ? input.cardNo : null,
-          clubName: input.clubName,
-          eventorClubId: input.eventorClubId ?? null,
-          classId: classUuid,
-          startNo: input.startNo,
-          // Inputs are absolute deciseconds; storage is ZeroTime-relative.
-          startTime:
-            input.startTime > 0
-              ? toRelative(input.startTime, ctx.event.zeroTime)
-              : input.startTime,
-          birthYear: input.birthYear,
-          sex: input.sex,
-          nationality: input.nationality,
-          phone: input.phone,
-          ...(input.status != null
-            ? { status: valueToRunnerStatus(input.status) }
-            : {}),
-          ...(input.finishTime != null
-            ? {
-                finishTime:
-                  input.finishTime > 0
-                    ? toRelative(input.finishTime, ctx.event.zeroTime)
-                    : input.finishTime,
-              }
-            : {}),
-          feeCents: input.fee,
-          paidCents: input.paid,
-          payMode: input.payMode,
-          cardFeeCents: input.cardFee,
-          entryDate: nowMeosDate(),
-          entryTime: nowMeosTime(),
-        },
-        select: { id: true, seq: true },
+          type: "runner.registered",
+          payload: {
+            tempId: c.id,
+            name: input.name,
+            classId: input.classId, // seq
+            clubName: input.clubName,
+            eventorClubId: input.eventorClubId,
+            cardNo,
+            startTime: input.startTime > 0 ? input.startTime : undefined,
+          },
+        });
+        return c;
       });
       return { id: created.seq };
     }),
@@ -454,7 +473,28 @@ export const runnerRouter = router({
       if (get<boolean>("cardReturned") !== undefined)
         data.cardReturned = get<boolean>("cardReturned");
 
-      await ctx.db.runner.update({ where: { id: r.id }, data });
+      // Portable patch for the journal: the raw (absolute-ds / seq / numeric)
+      // input fields, minus the routing keys. A peer replays it through this
+      // same mutation, so it must NOT carry the DB-shaped `data` values.
+      const journalFields: Record<string, unknown> = {};
+      for (const [k, v] of Object.entries(fields)) {
+        if (k === "id" || k === "data" || v === undefined) continue;
+        journalFields[k] = v;
+      }
+
+      // Table write + journal entry commit or roll back together.
+      await ctx.db.$transaction(async (tx) => {
+        await tx.runner.update({ where: { id: r.id }, data });
+        await appendJournal(tx, {
+          eventId: ctx.event.id,
+          type: "runner.updated",
+          payload: {
+            cardNo: r.cardNo ?? null, // pre-edit card resolves the peer row
+            runnerId: input.id, // seq
+            fields: journalFields,
+          },
+        });
+      });
       return { ok: true };
     }),
 
@@ -463,9 +503,17 @@ export const runnerRouter = router({
     .input(z.object({ id: z.number().int() }))
     .mutation(async ({ ctx, input }) => {
       const r = await getRunnerBySeq(ctx.db, ctx.event.id, input.id);
-      await ctx.db.runner.update({
-        where: { id: r.id },
-        data: { removed: true },
+      // Table write + journal entry commit or roll back together.
+      await ctx.db.$transaction(async (tx) => {
+        await tx.runner.update({
+          where: { id: r.id },
+          data: { removed: true },
+        });
+        await appendJournal(tx, {
+          eventId: ctx.event.id,
+          type: "runner.deleted",
+          payload: { cardNo: r.cardNo ?? null, runnerId: input.id },
+        });
       });
       return { ok: true };
     }),
@@ -480,11 +528,25 @@ export const runnerRouter = router({
           seq: { in: input.ids },
           removed: false,
         },
-        select: { id: true },
+        select: { id: true, seq: true, cardNo: true },
       });
-      await ctx.db.runner.updateMany({
-        where: { id: { in: rows.map((r) => r.id) } },
-        data: { status: "dns" },
+      // updateMany + one journal entry per affected runner, atomically.
+      await ctx.db.$transaction(async (tx) => {
+        await tx.runner.updateMany({
+          where: { id: { in: rows.map((r) => r.id) } },
+          data: { status: "dns" },
+        });
+        for (const r of rows) {
+          await appendJournal(tx, {
+            eventId: ctx.event.id,
+            type: "runner.updated",
+            payload: {
+              cardNo: r.cardNo ?? null,
+              runnerId: r.seq,
+              fields: { status: RunnerStatus.DNS },
+            },
+          });
+        }
       });
       return { ok: true, count: rows.length };
     }),
@@ -508,25 +570,52 @@ export const runnerRouter = router({
           seq: { in: input.ids },
           removed: false,
         },
-        select: { id: true },
+        select: { id: true, seq: true, cardNo: true },
       });
       const data: Record<string, unknown> = {};
+      // Portable patch mirrors the applied change in absolute-ds / seq / numeric
+      // form so a peer can replay it through the update path.
+      const journalFields: Record<string, unknown> = {};
       if (input.classId !== undefined) {
         data.classId = await classSeqToId(ctx.db, ctx.event.id, input.classId);
+        journalFields.classId = input.classId;
       }
-      if (input.clubName !== undefined) data.clubName = input.clubName;
-      if (input.eventorClubId !== undefined)
+      if (input.clubName !== undefined) {
+        data.clubName = input.clubName;
+        journalFields.clubName = input.clubName;
+      }
+      if (input.eventorClubId !== undefined) {
         data.eventorClubId = input.eventorClubId;
-      if (input.status !== undefined)
+        journalFields.eventorClubId = input.eventorClubId;
+      }
+      if (input.status !== undefined) {
         data.status = valueToRunnerStatus(input.status);
-      if (input.startTime !== undefined)
+        journalFields.status = input.status;
+      }
+      if (input.startTime !== undefined) {
         data.startTime =
           input.startTime > 0
             ? toRelative(input.startTime, ctx.event.zeroTime)
             : input.startTime;
-      await ctx.db.runner.updateMany({
-        where: { id: { in: rows.map((r) => r.id) } },
-        data,
+        journalFields.startTime = input.startTime;
+      }
+      // updateMany + one journal entry per affected runner, atomically.
+      await ctx.db.$transaction(async (tx) => {
+        await tx.runner.updateMany({
+          where: { id: { in: rows.map((r) => r.id) } },
+          data,
+        });
+        for (const r of rows) {
+          await appendJournal(tx, {
+            eventId: ctx.event.id,
+            type: "runner.updated",
+            payload: {
+              cardNo: r.cardNo ?? null,
+              runnerId: r.seq,
+              fields: journalFields,
+            },
+          });
+        }
       });
       return { ok: true as const, count: rows.length };
     }),
@@ -547,9 +636,22 @@ export const runnerRouter = router({
     .mutation(async ({ ctx, input }) => {
       const seq = input.id ?? input.runnerId!;
       const r = await getRunnerBySeq(ctx.db, ctx.event.id, seq);
-      await ctx.db.runner.update({
-        where: { id: r.id },
-        data: { cardReturned: input.returned },
+      // The runners table is venue-owned during a lease, so every write to it
+      // is journaled — even rental-admin fields that don't affect results.
+      await ctx.db.$transaction(async (tx) => {
+        await tx.runner.update({
+          where: { id: r.id },
+          data: { cardReturned: input.returned },
+        });
+        await appendJournal(tx, {
+          eventId: ctx.event.id,
+          type: "runner.updated",
+          payload: {
+            cardNo: r.cardNo ?? null,
+            runnerId: seq,
+            fields: { cardReturned: input.returned },
+          },
+        });
       });
       return { ok: true as const };
     }),
