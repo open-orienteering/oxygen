@@ -83,6 +83,19 @@ export interface FinishRecordedPayload {
   finishTime: number;
 }
 
+/**
+ * Explicit server-side finish set/correction (`race.recordFinish`). Unlike the
+ * station-emitted `finish.recorded` (first-write-wins), adjustments are
+ * deliberate operator actions and follow LWW. `status` is carried when the
+ * operator set one alongside the time.
+ */
+export interface FinishAdjustedPayload {
+  cardNo: number | null;
+  runnerId?: number;
+  finishTime: number;
+  status?: number;
+}
+
 export interface ResultAppliedPayload {
   cardNo: number | null;
   runnerId?: number;
@@ -109,7 +122,7 @@ export interface JournalPayloads {
   "start.recorded": StartRecordedPayload;
   "start.adjusted": StartRecordedPayload;
   "finish.recorded": FinishRecordedPayload;
-  "finish.adjusted": FinishRecordedPayload;
+  "finish.adjusted": FinishAdjustedPayload;
   "result.applied": ResultAppliedPayload;
   "runner.registered": RunnerRegisteredPayload;
   "runner.updated": Record<string, unknown>;

@@ -7,6 +7,7 @@ import {
   valueToRunnerStatus,
 } from "../statusConvert.js";
 import { performReadout } from "./cardReadout.js";
+import { appendJournal } from "../journalEmit.js";
 import type { ControlMatch } from "@oxygen/shared";
 
 /**
@@ -335,7 +336,7 @@ export const raceRouter = router({
       const finishAbs = input.finishTimeAbsolute ?? input.finishTime ?? 0;
       const r = await ctx.db.runner.findFirst({
         where: { eventId: ctx.event.id, seq, removed: false },
-        select: { id: true },
+        select: { id: true, cardNo: true },
       });
       if (!r) {
         throw new TRPCError({ code: "NOT_FOUND", message: "Runner not found" });
@@ -344,7 +345,20 @@ export const raceRouter = router({
       const finishRel = finishAbs > 0 ? toRelative(finishAbs, zeroTime) : 0;
       const data: Record<string, unknown> = { finishTime: finishRel };
       if (input.status != null) data.status = valueToRunnerStatus(input.status);
-      await ctx.db.runner.update({ where: { id: r.id }, data });
+      // Table write + journal entry commit or roll back together.
+      await ctx.db.$transaction(async (tx) => {
+        await tx.runner.update({ where: { id: r.id }, data });
+        await appendJournal(tx, {
+          eventId: ctx.event.id,
+          type: "finish.adjusted",
+          payload: {
+            cardNo: r.cardNo,
+            runnerId: seq,
+            finishTime: finishAbs,
+            ...(input.status != null ? { status: input.status } : {}),
+          },
+        });
+      });
 
       // Re-run the matcher so the caller gets the final result.
       const result = await performReadout(
