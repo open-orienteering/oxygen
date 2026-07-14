@@ -32,6 +32,7 @@ import {
   meosFromVolts,
 } from "@oxygen/shared";
 import { storeReadoutImpl } from "./cardReadout.js";
+import { foldServerHlc } from "../serverClock.js";
 import type { PrismaClient } from "@prisma/client";
 
 const eventPayloadSchema = z.object({
@@ -76,14 +77,17 @@ export const eventsRouter = router({
 
           await applyEvent(ctx.db, ctx.event.id, ctx.event.zeroTime, event);
 
-          const hlc = encodeHlc(
-            resolveHlc({
-              id: event.id,
-              stationId: event.stationId,
-              timestamp: event.timestamp,
-              hlc: event.hlc,
-            }),
-          );
+          const resolved = resolveHlc({
+            id: event.id,
+            stationId: event.stationId,
+            timestamp: event.timestamp,
+            hlc: event.hlc,
+          });
+          // Keep the node clock ahead of everything it has seen, so
+          // server-originated entries never sort behind station entries
+          // already ingested (HLC receive rule).
+          foldServerHlc(resolved);
+          const hlc = encodeHlc(resolved);
 
           await ctx.db.journalEntry.create({
             data: {
