@@ -14,6 +14,8 @@ import { createContext } from "./trpc.js";
 import { disconnectAll, prisma } from "./db.js";
 import { liveResultsPusher, reconcileEnabledPushers } from "./liveresults.js";
 import { onlineInputPuller, reconcileEnabledPullers } from "./online-input/puller.js";
+import { startShipper, stopShipper } from "./sync/shipper.js";
+import { SYNC_SECRET_HEADER } from "./sync/nodeIdentity.js";
 import { registerBackupRoute } from "./backup.js";
 import { registerMapTileRoutes } from "./map-tiles.js";
 import { registerLiveloxTileProxy } from "./livelox-tile-proxy.js";
@@ -42,7 +44,12 @@ async function main() {
       "http://localhost:8080",
     ],
     credentials: true,
-    allowedHeaders: ["content-type", "x-competition-id", "x-event-id"],
+    allowedHeaders: [
+      "content-type",
+      "x-competition-id",
+      "x-event-id",
+      SYNC_SECRET_HEADER,
+    ],
   });
 
   await server.register(fastifyTRPCPlugin, {
@@ -100,11 +107,14 @@ async function main() {
   void reconcileEnabledPullers().catch((err) =>
     console.error("[online-input] reconcile failed:", err),
   );
+  // Journal shipper — no-op unless SYNC_PEER_URL is configured (venue role).
+  startShipper();
 
   await server.listen({ port: PORT, host: HOST });
 
   const shutdown = async () => {
     server.log.info("Shutting down");
+    stopShipper();
     try {
       await server.close();
     } finally {

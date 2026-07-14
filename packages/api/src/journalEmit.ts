@@ -19,6 +19,7 @@ import {
   encodeHlc,
 } from "@oxygen/shared";
 import { nextServerHlc } from "./serverClock.js";
+import { nodeId } from "./sync/nodeIdentity.js";
 
 /** Works with both the singleton client and a `$transaction` client. */
 type Db = PrismaClient | Prisma.TransactionClient;
@@ -26,9 +27,9 @@ type Db = PrismaClient | Prisma.TransactionClient;
 /**
  * The journal `station_id` for entries this node originates itself (as
  * opposed to entries drained from a station outbox, which keep the station's
- * own id). Becomes the configured node identity in pivot Step 3.
+ * own id). The configured node identity — see `sync/nodeIdentity.ts`.
  */
-export const NODE_STATION_ID = process.env.NODE_ID ?? "cloud";
+export const NODE_STATION_ID = nodeId();
 
 /**
  * Append one journal entry. MUST be called with the same transaction client

@@ -239,19 +239,38 @@ box dies. Mitigations, in order of importance:
 
 ## Journal shipping
 
+> **Implementation status (pivot Step 3, 2026-07-14).** Landed:
+> `sync/nodeIdentity.ts`, `journal_sync_state`, secret-guarded
+> `events.since`, and `sync/shipper.ts`. The venue dials the cloud; the
+> shipper is enabled by setting `SYNC_PEER_URL` + `SYNC_SHARED_SECRET`.
+
 - **Node identity:** `NODE_ID` / `NODE_ROLE` (`cloud` | `venue`), peer
-  URL, and a shared secret via env config.
-- **`events.since`** — paginated pull, `{eventId, afterHlc}`.
+  URL, and a shared secret via env config (`SYNC_PEER_URL`,
+  `SYNC_SHARED_SECRET`, `SYNC_INTERVAL_MS`).
+- **`events.since`** — paginated pull in canonical `(hlc, id)` order,
+  guarded by the shared secret (`peerProcedure`); stations never call it.
 - **Shipper worker** (venue side): push local entries above the peer
   watermark to the peer's `events.push`; pull cloud-originated entries
-  (e.g. ROC punches) via `events.since`; apply idempotently.
-  `journal_sync_state` stores per-peer watermarks.
+  (e.g. ROC punches) via `events.since`; apply idempotently through the
+  same `ingestJournalEntries` path the push endpoint uses.
+  `journal_sync_state` stores per-peer `(hlc, id)` cursors for both
+  directions.
 - The **follower applies register entries verbatim** — the leaseholder
   already made every decision; the replica does not re-resolve conflicts.
-  Append-only types apply on any node via their dedupe keys.
+  `runner.updated` replays its portable field patch through the same
+  translation as the `runner.update` mutation, without re-running card
+  conflict validation. Append-only types apply on any node via their
+  dedupe keys (`punch.recorded` checks `(cardNo, controlCode, time)`
+  before insert; `card.read` uses the ±60 s readout window).
 - Watermarks advance only after contiguous application: entries are
   applied in HLC order per peer, so a watermark never skips past an
-  unapplied entry.
+  unapplied entry. A permanently failing entry therefore **blocks its
+  event's stream and logs loudly every cycle** — deliberate; quarantine
+  tooling arrives with the lease UI (Step 4).
+- Entries a node ingested from its peer are pushed back once as the
+  watermark passes them (no origin tracking); the peer acks them by id
+  without re-applying. One round of wasted bandwidth per entry, zero
+  correctness cost.
 
 ## Write routing summary
 
