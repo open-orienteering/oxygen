@@ -15,6 +15,7 @@ import { disconnectAll, prisma } from "./db.js";
 import { liveResultsPusher, reconcileEnabledPushers } from "./liveresults.js";
 import { onlineInputPuller, reconcileEnabledPullers } from "./online-input/puller.js";
 import { startShipper, stopShipper } from "./sync/shipper.js";
+import { registerVenueForwarder } from "./sync/venueForwarder.js";
 import { SYNC_SECRET_HEADER } from "./sync/nodeIdentity.js";
 import { registerBackupRoute } from "./backup.js";
 import { registerMapTileRoutes } from "./map-tiles.js";
@@ -51,6 +52,10 @@ async function main() {
       SYNC_SECRET_HEADER,
     ],
   });
+
+  // Venue role: cloud-owned mutations forward upstream before tRPC sees
+  // them. No-op on the cloud / single-node deployments.
+  registerVenueForwarder(server);
 
   await server.register(fastifyTRPCPlugin, {
     prefix: "/trpc",

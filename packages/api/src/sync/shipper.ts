@@ -111,6 +111,22 @@ export function httpPeerTransport(
   };
 }
 
+/** Test seam: the integration harness swaps in an in-process transport. */
+let transportFactory:
+  | ((baseUrl: string, secret: string) => PeerTransport)
+  | null = null;
+export function _setPeerTransportFactory(
+  f: ((baseUrl: string, secret: string) => PeerTransport) | null,
+): void {
+  transportFactory = f;
+}
+export function makePeerTransport(
+  baseUrl: string,
+  secret: string,
+): PeerTransport {
+  return (transportFactory ?? httpPeerTransport)(baseUrl, secret);
+}
+
 // ─── Watermarks ─────────────────────────────────────────────
 
 async function getSyncState(db: PrismaClient, peerId: string, eventId: bigint) {
@@ -291,7 +307,7 @@ export function startShipper(): void {
   }
   if (timer) return;
 
-  const transport = httpPeerTransport(peerUrl, secret);
+  const transport = makePeerTransport(peerUrl, secret);
   const tick = () => {
     if (busy) return; // Skip overlapping ticks.
     busy = true;

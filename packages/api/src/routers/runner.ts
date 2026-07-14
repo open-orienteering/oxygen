@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
-import { router, eventProcedure } from "../trpc.js";
+import { router, eventProcedure, raceProcedure } from "../trpc.js";
 import { toAbsolute, toRelative, nowMeosDate, nowMeosTime } from "../timeConvert.js";
 import { RunnerStatus, type RunnerDetail, type RunnerInfo } from "@oxygen/shared";
 import {
@@ -385,7 +385,7 @@ export const runnerRouter = router({
       );
     }),
 
-  create: eventProcedure
+  create: raceProcedure
     .input(runnerCreateSchema)
     .mutation(async ({ ctx, input }) => {
       await assertCardNotTaken(ctx.db, ctx.event.id, input.cardNo);
@@ -438,6 +438,10 @@ export const runnerRouter = router({
           type: "runner.registered",
           payload: {
             tempId: c.id,
+            // The allocated seq travels with the entry so a follower node
+            // inserts the same value instead of re-allocating (the
+            // leaseholder is the only seq allocator during a lease).
+            seq: c.seq,
             name: input.name,
             classId: input.classId, // seq
             clubName: input.clubName,
@@ -462,7 +466,7 @@ export const runnerRouter = router({
    *   - `clubName`: free-text club (sent when there's no Eventor link).
    *   - `eventorClubId`: explicit Eventor club id (preferred new shape).
    */
-  update: eventProcedure
+  update: raceProcedure
     .input(
       z.object({
         id: z.number().int(),
@@ -521,7 +525,7 @@ export const runnerRouter = router({
     }),
 
   /** Soft-delete a runner. */
-  delete: eventProcedure
+  delete: raceProcedure
     .input(z.object({ id: z.number().int() }))
     .mutation(async ({ ctx, input }) => {
       const r = await getRunnerBySeq(ctx.db, ctx.event.id, input.id);
@@ -541,7 +545,7 @@ export const runnerRouter = router({
     }),
 
   /** Mark several runners as DNS at once. */
-  bulkDns: eventProcedure
+  bulkDns: raceProcedure
     .input(z.object({ ids: z.array(z.number().int()) }))
     .mutation(async ({ ctx, input }) => {
       const rows = await ctx.db.runner.findMany({
@@ -574,7 +578,7 @@ export const runnerRouter = router({
     }),
 
   /** Apply the same change to many runners at once. */
-  bulkUpdate: eventProcedure
+  bulkUpdate: raceProcedure
     .input(
       z.object({
         ids: z.array(z.number().int()),
@@ -643,7 +647,7 @@ export const runnerRouter = router({
     }),
 
   /** Toggle the rental-card-returned flag. Accepts `id` or `runnerId`. */
-  setCardReturned: eventProcedure
+  setCardReturned: raceProcedure
     .input(
       z
         .object({

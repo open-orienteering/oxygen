@@ -38,6 +38,9 @@ export default defineConfig({
         DATABASE_URL:
           "postgresql://oxygen:oxygen@localhost:5433/oxygen_e2e?schema=oxygen",
         PORT: "3002",
+        // Lets lease.spec.ts drive the node-to-node lease surface
+        // (lease.acquire) the way a peer node would.
+        SYNC_SHARED_SECRET: "e2e-sync-secret",
       },
     },
     {

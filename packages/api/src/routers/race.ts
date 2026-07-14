@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
-import { router, eventProcedure } from "../trpc.js";
+import { router, eventProcedure, raceProcedure } from "../trpc.js";
 import { toAbsolute, toRelative } from "../timeConvert.js";
 import {
   runnerStatusToValue,
@@ -317,7 +317,7 @@ export const raceRouter = router({
    * running time, and status. Caller can pass either `id` or
    * `runnerId` (legacy field name; kept for compatibility).
    */
-  recordFinish: eventProcedure
+  recordFinish: raceProcedure
     .input(
       z
         .object({

@@ -195,6 +195,18 @@ early keeps the ordering honest.
 
 ## The lease
 
+> **Implementation status (pivot Step 4, 2026-07-15).** Landed:
+> `event_lease` table (partial unique index — at most one active lease per
+> event), the `raceProcedure` guard, the `lease` tRPC router
+> (status / acquire / release / exportSnapshot / checkout / checkin /
+> forceTakeover), the checkout snapshot import (UUIDs, `seq` values and
+> `event_seqs` counters preserved; `runner.registered` entries now carry
+> their `seq` so the follower applies with explicit values), the venue
+> forwarder for cloud-owned mutations, and the shell badge + EventPage
+> panel. The venue's periodic refresh of cloud-owned data is deferred to
+> the reference-data journaling work — the checkout-time copy is the
+> venue's copy for now.
+
 One row per checked-out event: `event_lease (event_id, holder_node_id,
 acquired_at, released_at, forced)`.
 
