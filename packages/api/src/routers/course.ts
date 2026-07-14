@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
-import { router, eventProcedure } from "../trpc.js";
+import { router, eventProcedure, raceProcedure } from "../trpc.js";
 import type { PrismaClient } from "@prisma/client";
 import {
   controlStatusToValue,
@@ -326,7 +326,7 @@ export const courseRouter = router({
       loadCourseDetail(ctx.db, ctx.event.id, input.id),
     ),
 
-  create: eventProcedure
+  create: raceProcedure
     .input(
       z.object({
         name: z.string().min(1),
@@ -368,7 +368,7 @@ export const courseRouter = router({
       return { id: created.seq };
     }),
 
-  update: eventProcedure
+  update: raceProcedure
     .input(
       z.object({
         id: z.number().int(),
@@ -415,7 +415,7 @@ export const courseRouter = router({
       return { ok: true };
     }),
 
-  bulkUpdate: eventProcedure
+  bulkUpdate: raceProcedure
     .input(
       z.object({
         ids: z.array(z.number().int()),
@@ -445,7 +445,7 @@ export const courseRouter = router({
       return { ok: true as const, count: rows.length };
     }),
 
-  delete: eventProcedure
+  delete: raceProcedure
     .input(z.object({ id: z.number().int() }))
     .mutation(async ({ ctx, input }) => {
       const c = await getCourseBySeq(ctx.db, ctx.event.id, input.id);
@@ -886,7 +886,7 @@ export const courseRouter = router({
    * GeoJSON geometry. When `replaceAll: true`, all existing courses and
    * controls are soft-deleted first and class→course assignments cleared.
    */
-  importCourses: eventProcedure
+  importCourses: raceProcedure
     .input(
       z.object({
         xmlContent: z.string().optional(),

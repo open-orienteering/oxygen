@@ -105,8 +105,19 @@ export interface ResultAppliedPayload {
 }
 
 export interface RunnerRegisteredPayload {
-  /** Client-minted UUID/temp id for the new runner row. */
+  /**
+   * The runner row's UUID. Station-emitted entries mint it client-side
+   * (hence "temp"); server-emitted entries carry the created row's id. A
+   * peer applying the entry reuses it so the row is identical on every node.
+   */
   tempId: string;
+  /**
+   * The allocated per-event `seq`, present on server-emitted entries. The
+   * follower inserts it explicitly (the `allocate_event_seq()` trigger
+   * honors supplied values) so it never re-allocates — see the lease's
+   * single-allocator rule in docs/offline-architecture.md.
+   */
+  seq?: number;
   name: string;
   /** Class `seq` reference. */
   classId: number;

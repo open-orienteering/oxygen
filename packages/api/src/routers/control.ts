@@ -1,7 +1,7 @@
 import { createSocket } from "node:dgram";
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
-import { router, eventProcedure } from "../trpc.js";
+import { router, eventProcedure, raceProcedure } from "../trpc.js";
 import type { PrismaClient } from "@prisma/client";
 import {
   controlStatusToValue,
@@ -367,7 +367,7 @@ export const controlRouter = router({
       };
     }),
 
-  create: eventProcedure
+  create: raceProcedure
     .input(
       z.object({
         name: z.string().optional().default(""),
@@ -433,7 +433,7 @@ export const controlRouter = router({
       return { id: publicControlId(created) };
     }),
 
-  update: eventProcedure
+  update: raceProcedure
     .input(
       z.object({
         id: z.number().int(),
@@ -461,7 +461,7 @@ export const controlRouter = router({
       return { ok: true };
     }),
 
-  delete: eventProcedure
+  delete: raceProcedure
     .input(z.object({ id: z.number().int() }))
     .mutation(async ({ ctx, input }) => {
       const c = await getControlByCode(ctx.db, ctx.event.id, input.id);
@@ -934,7 +934,7 @@ export const controlRouter = router({
    * insert a `source: 'manual'` mirror so downstream consumers (the
    * matcher) see it.
    */
-  pushBackupPunch: eventProcedure
+  pushBackupPunch: raceProcedure
     .input(z.object({ punchId: z.string().uuid() }))
     .mutation(async ({ ctx, input }) => {
       const bp = await ctx.db.punch.findUnique({ where: { id: input.punchId } });
@@ -975,7 +975,7 @@ export const controlRouter = router({
    * `time`. New callers can send `{ controlCode, time, punchedAt }`
    * directly — both shapes are accepted.
    */
-  importBackupPunches: eventProcedure
+  importBackupPunches: raceProcedure
     .input(
       z.object({
         controlId: z.number().int().optional(),

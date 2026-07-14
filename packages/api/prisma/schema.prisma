@@ -160,6 +160,7 @@ model Event {
   controlUnits ControlUnit[]
   journal      JournalEntry[]
   journalSyncStates JournalSyncState[]
+  leases       EventLease[]
   mapFiles     MapFile[]
   renderedMaps RenderedMap[]
   mapTiles     MapTile[]
@@ -753,6 +754,28 @@ model JournalEntry {
   @@index([eventId, clientTimestamp(sort: Desc)])
   @@index([eventId, type])
   @@map("journal")
+  @@schema("oxygen")
+}
+
+/// Per-event single-writer lease (pivot Step 4). One row per checkout; the
+/// active lease is the row with released_at IS NULL (enforced unique per
+/// event by a partial index in the migration). Race-critical mutations on a
+/// node that is NOT the holder get a typed PRECONDITION_FAILED — see
+/// `assertRaceWritable` in sync/lease.ts.
+model EventLease {
+  id           BigInt    @id @default(autoincrement())
+  eventId      BigInt    @map("event_id")
+  /// NODE_ID of the node that owns race-critical writes for this event.
+  holderNodeId String    @map("holder_node_id")
+  acquiredAt   DateTime  @default(now()) @map("acquired_at") @db.Timestamptz(6)
+  releasedAt   DateTime? @map("released_at") @db.Timestamptz(6)
+  /// True when the lease was ended by forceTakeover rather than checkin.
+  forced       Boolean   @default(false)
+
+  event Event @relation(fields: [eventId], references: [id], onDelete: Cascade)
+
+  @@index([eventId, releasedAt])
+  @@map("event_lease")
   @@schema("oxygen")
 }
 

@@ -14,7 +14,7 @@
 import { createHash } from "node:crypto";
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
-import { router, eventProcedure } from "../trpc.js";
+import { router, eventProcedure, raceProcedure } from "../trpc.js";
 import type { PrismaClient } from "@prisma/client";
 import {
   parsePunches,
@@ -608,7 +608,7 @@ export const cardReadoutRouter = router({
    * whether to call applyResult immediately or keep the entry as a
    * pre-start scan.
    */
-  storeReadout: eventProcedure
+  storeReadout: raceProcedure
     .input(storeReadoutInput)
     .mutation(async ({ ctx, input }) => {
       const result = await storeReadoutImpl(
@@ -706,7 +706,7 @@ export const cardReadoutRouter = router({
    * (start/finish/status). Used by the readout station after a card
    * read produces a real result.
    */
-  applyResult: eventProcedure
+  applyResult: raceProcedure
     .input(
       z.object({
         runnerId: z.number().int(),
@@ -1020,7 +1020,7 @@ export const cardReadoutRouter = router({
    * `runnerId` is the runner's seq, or `null` to unlink. The card row
    * is created if it doesn't exist yet.
    */
-  linkCardToRunner: eventProcedure
+  linkCardToRunner: raceProcedure
     .input(
       z.object({
         cardNo: z.number().int().optional(),
@@ -1105,7 +1105,7 @@ export const cardReadoutRouter = router({
     }),
 
   /** Append a free punch to a card. */
-  addPunch: eventProcedure
+  addPunch: raceProcedure
     .input(
       z.object({
         cardNo: z.number().int(),
@@ -1151,7 +1151,7 @@ export const cardReadoutRouter = router({
     }),
 
   /** Remove a free punch by id (UUID). */
-  removePunch: eventProcedure
+  removePunch: raceProcedure
     .input(z.object({ punchId: z.string().uuid() }))
     .mutation(async ({ ctx, input }) => {
       await ctx.db.punch.update({
@@ -1162,7 +1162,7 @@ export const cardReadoutRouter = router({
     }),
 
   /** Adjust the time on an existing free punch. */
-  updatePunchTime: eventProcedure
+  updatePunchTime: raceProcedure
     .input(z.object({ punchId: z.string().uuid(), time: z.number().int() }))
     .mutation(async ({ ctx, input }) => {
       const zeroTime = ctx.event.zeroTime;
@@ -1187,7 +1187,7 @@ export const cardReadoutRouter = router({
    * Bulk-import parsed readout-backup records. Idempotent: the
    * `(eventId, punchesHash)` unique constraint silently drops re-imports.
    */
-  importReadoutBackups: eventProcedure
+  importReadoutBackups: raceProcedure
     .input(
       z.object({
         stationSerial: z.number().int().optional(),
@@ -1337,7 +1337,7 @@ export const cardReadoutRouter = router({
    * Idempotent: re-pushing a row that was already pushed returns the
    * existing pushedReadoutId without doing the work twice.
    */
-  pushReadoutBackup: eventProcedure
+  pushReadoutBackup: raceProcedure
     .input(z.object({ backupId: z.string().uuid() }))
     .mutation(async ({ ctx, input }) => {
       const eventId = ctx.event.id;

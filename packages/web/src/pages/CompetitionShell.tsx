@@ -24,6 +24,7 @@ import { RegistrationDialog } from "../components/RegistrationDialog";
 import { DbLoadIndicator } from "../components/DbLoadIndicator";
 import { useExternalChanges } from "../hooks/useExternalChanges";
 import { SyncStatusIndicator } from "../components/SyncStatusIndicator";
+import { LeaseBadge } from "../components/VenueLease";
 import { ClockSkewBanner } from "../components/ClockSkewBanner";
 import { useProjectionSync } from "../hooks/useProjectionSync";
 import { useOfflineProjectionEnabled } from "../lib/feature-flags";
@@ -354,6 +355,7 @@ export function CompetitionShell() {
                   onShow={() => setPaneCollapsed(false)}
                 />
               )}
+              <LeaseBadge />
               <ReaderStatusIndicator />
               <PrinterStatusIndicator />
               <KioskLauncher nameId={nameId ?? ""} />

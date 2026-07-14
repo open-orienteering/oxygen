@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { router, eventProcedure } from "../trpc.js";
+import { router, eventProcedure, raceProcedure } from "../trpc.js";
 import { toRelative, toAbsolute } from "../timeConvert.js";
 import { generateDrawPreview } from "../draw/index.js";
 import type { DrawPreviewResult } from "@oxygen/shared";
@@ -117,7 +117,7 @@ export const drawRouter = router({
    * and FirstStart + StartInterval to each class. Times are stored
    * ZeroTime-relative; the engine speaks absolute deciseconds.
    */
-  execute: eventProcedure
+  execute: raceProcedure
     .input(drawInputSchema)
     .mutation(
       async ({

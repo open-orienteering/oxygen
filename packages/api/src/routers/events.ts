@@ -396,33 +396,60 @@ async function applyEvent(
     }
 
     case "runner.registered": {
-      const { name, classId, eventorClubId, clubName, cardNo, startTime } =
-        event.payload as {
-          name: string;
-          classId: number;
-          eventorClubId?: number;
-          clubName?: string;
-          cardNo?: number;
-          startTime?: number;
-        };
+      const {
+        tempId,
+        seq,
+        name,
+        classId,
+        eventorClubId,
+        clubName,
+        cardNo,
+        startTime,
+      } = event.payload as {
+        tempId?: string;
+        seq?: number;
+        name: string;
+        classId: number;
+        eventorClubId?: number;
+        clubName?: string;
+        cardNo?: number;
+        startTime?: number;
+      };
       // 0 (legacy sentinel) or absent → NULL (no card).
       const card = typeof cardNo === "number" && cardNo > 0 ? cardNo : null;
-      // Dedupe by (eventId, cardNo) — one card per event.
-      const existing =
-        card != null
+      // Dedupe: same row UUID (shipped twice / echoed), then by
+      // (eventId, cardNo) — one card per event.
+      const rowId =
+        typeof tempId === "string" && /^[0-9a-f-]{36}$/i.test(tempId)
+          ? tempId
+          : null;
+      const byId = rowId
+        ? await db.runner.findUnique({
+            where: { id: rowId },
+            select: { id: true },
+          })
+        : null;
+      const byCard =
+        !byId && card != null
           ? await db.runner.findFirst({
               where: { eventId, cardNo: card, removed: false },
               select: { id: true },
             })
           : null;
-      if (!existing) {
+      if (!byId && !byCard) {
         const cls = await db.class.findFirst({
           where: { eventId, seq: classId, removed: false },
           select: { id: true },
         });
         if (cls) {
+          // Reuse the originating node's UUID and seq so the row is
+          // identical on every node. The allocate_event_seq() trigger
+          // honors an explicit seq and never re-allocates it; entries
+          // without one (legacy stations) let the trigger mint.
           await db.runner.create({
             data: {
+              ...(rowId ? { id: rowId } : {}),
+              ...(typeof seq === "number" && seq > 0 ? { seq } : {}),
               eventId,
               name,
               classId: cls.id,

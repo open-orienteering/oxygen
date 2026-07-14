@@ -6,6 +6,7 @@ import {
   SYNC_SECRET_HEADER,
   syncSharedSecret,
 } from "./sync/nodeIdentity.js";
+import { assertRaceWritable } from "./sync/lease.js";
 
 /** Context available to all tRPC procedures. */
 export interface Context {
@@ -71,6 +72,19 @@ export const eventProcedure = publicProcedure.use(async ({ ctx, next }) => {
   return next({
     ctx: { ...ctx, event: ctx.event, db: prisma() } as EventContext,
   });
+});
+
+/**
+ * Event-scoped procedure for race-critical mutations (the journaled set).
+ * Adds the single-writer lease guard: when the event is checked out to
+ * another node, the mutation fails with a typed PRECONDITION_FAILED before
+ * any write happens. `events.push` is NOT guarded — it is the journal
+ * ingestion sink and must accept shipped/drained entries on every node.
+ */
+export const raceProcedure = eventProcedure.use(async ({ ctx, next }) => {
+  const ectx = ctx as EventContext;
+  await assertRaceWritable(ectx.db, ectx.event.id);
+  return next();
 });
 
 /**

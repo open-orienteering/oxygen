@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
-import { router, eventProcedure } from "../trpc.js";
+import { router, eventProcedure, raceProcedure } from "../trpc.js";
 import {
   WITHDRAWN_STATUSES,
   type ClassSummary,
@@ -164,7 +164,7 @@ export const classRouter = router({
     .input(z.object({ id: z.number().int() }))
     .query(async ({ ctx, input }) => loadClassDetail(ctx.db, ctx.event.id, input.id)),
 
-  create: eventProcedure
+  create: raceProcedure
     .input(
       z.object({
         name: z.string().min(1),
@@ -206,7 +206,7 @@ export const classRouter = router({
       return { id: created.seq };
     }),
 
-  update: eventProcedure
+  update: raceProcedure
     .input(
       z.object({
         id: z.number().int(),
@@ -254,7 +254,7 @@ export const classRouter = router({
       return { ok: true };
     }),
 
-  bulkUpdate: eventProcedure
+  bulkUpdate: raceProcedure
     .input(
       z.object({
         ids: z.array(z.number().int()),
@@ -294,7 +294,7 @@ export const classRouter = router({
       return { ok: true as const, count: rows.length };
     }),
 
-  delete: eventProcedure
+  delete: raceProcedure
     .input(z.object({ id: z.number().int() }))
     .mutation(async ({ ctx, input }) => {
       const c = await getClassBySeq(ctx.db, ctx.event.id, input.id);
@@ -305,7 +305,7 @@ export const classRouter = router({
       return { ok: true };
     }),
 
-  reorder: eventProcedure
+  reorder: raceProcedure
     .input(z.object({ orderedIds: z.array(z.number().int()) }))
     .mutation(async ({ ctx, input }) => {
       for (let i = 0; i < input.orderedIds.length; i++) {
