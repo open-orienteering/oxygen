@@ -60,11 +60,22 @@ each class points at its owner.
 ### Race-critical (journaled) data — owned by the leaseholder
 
 The journaled set is small and closed: punches (`punch.recorded`), card
-reads (`card.read`), starts, finishes, applied results, runner
-create/update/delete, draw start times — plus the class/course/control
-state that result computation depends on. This is the **dependency
-closure of live results**: state that must survive to the cloud and be
-visible there while the venue is the intermittently-connected writer.
+reads (`card.read`), starts, finishes (`finish.recorded` / `finish.adjusted`),
+applied results (`result.applied`), runner create/update/delete
+(`runner.registered` / `runner.updated` / `runner.deleted`), draw start times
+(`start.adjusted`) — plus the class/course/control state that result
+computation depends on. This is the **dependency closure of live results**:
+state that must survive to the cloud and be visible there while the venue is
+the intermittently-connected writer.
+
+> **Implementation status (pivot Step 2b, 2026-07-14).** Every mutation on
+> the runner-state / punch / readout surface now emits its journal entry in
+> the same transaction as the table write (`appendJournal`): online
+> `storeReadout`, `applyResult`, `addPunch`, `linkCardToRunner`, all
+> `runner.*` mutations (incl. bulk + card-return), the draw, and the ROC
+> puller. The class/course/control *reference-data* mutations are the one
+> part of the closure **not yet journaled** — see
+> [Reference data during a lease](#reference-data-during-a-lease).
 
 - No lease: the cloud is the writer, as today.
 - Lease active: the **venue node is the single writer**. Stations on the
@@ -117,6 +128,31 @@ nothing in that set feeds `performReadout`, `matchPunchesToCourse` or
 status derivation. When adding a new endpoint, test it against this rule.
 New endpoints default to the cheap non-journaled path; journaling is
 opt-in for race-critical writes only.
+
+### Reference data during a lease
+
+Classes, courses, controls and their links (course→course-controls,
+class→course, control codes/status) are inside the results closure and are
+therefore **venue-owned during a lease** — but their *mutations are not yet
+journaled* (pivot Step 2b journaled only the runner-state / punch / readout
+surface). This is a deliberate, bounded gap, not an oversight:
+
+- Reference data is a **mutable relational FK graph**, not a set of LWW
+  registers keyed by card. Portable payloads need the seq↔UUID and
+  codes-string mapping that Step 3 builds for node-to-node apply anyway, so
+  journaling it earlier would mean designing that machinery twice.
+- The **risk window is small**: class/course/control setup happens pre-race
+  while the cloud is the writer; mid-race edits are rare corrections (e.g.
+  voiding a control, fixing a wrong code).
+- The **checkout snapshot import** (Step 4) re-hydrates the venue's copy of
+  reference data at lease start, and a venue that edits it mid-lease
+  re-syncs at checkin until Step 3 journals these mutations end-to-end.
+
+Until then, treat reference-data edits during a lease as "cloud-first when
+possible." The `drawRouter.execute` per-class `FirstStart` / `StartInterval`
+write follows this rule — the race-critical part (each runner's start time)
+is journaled as `start.adjusted`; the class draw-settings write is reference
+data and is not.
 
 ### Consequence: checkin is cheap
 

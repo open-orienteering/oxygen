@@ -32,6 +32,7 @@ import {
   meosFromVolts,
 } from "@oxygen/shared";
 import { storeReadoutImpl } from "./cardReadout.js";
+import { valueToRunnerStatus } from "../statusConvert.js";
 import { foldServerHlc } from "../serverClock.js";
 import type { PrismaClient } from "@prisma/client";
 
@@ -40,10 +41,13 @@ const eventPayloadSchema = z.object({
   type: z.enum([
     "card.read",
     "finish.recorded",
+    "finish.adjusted",
     "result.applied",
     "start.recorded",
+    "start.adjusted",
     "runner.registered",
     "runner.updated",
+    "runner.deleted",
     "punch.recorded",
   ]),
   competitionId: z.string(),
@@ -189,6 +193,29 @@ async function applyEvent(
       break;
     }
 
+    case "finish.adjusted": {
+      // Operator correction — last-write-wins, unlike the first-write-wins
+      // station `finish.recorded`. The receiving node serializes writes, so
+      // "apply unconditionally" is the LWW rule at this arrival point.
+      const { finishTime, status } = event.payload as {
+        finishTime: number;
+        status?: number;
+      };
+      const runner = await resolveRunner(db, eventId, event.payload);
+      if (runner) {
+        await db.runner.update({
+          where: { id: runner.id },
+          data: {
+            finishTime: finishTime > 0 ? toRelative(finishTime, zeroTime) : 0,
+            ...(typeof status === "number"
+              ? { status: valueToRunnerStatus(status) }
+              : {}),
+          },
+        });
+      }
+      break;
+    }
+
     case "result.applied": {
       const { status, finishTime, startTime } = event.payload as {
         status: number;
@@ -223,6 +250,21 @@ async function applyEvent(
         await db.runner.update({
           where: { id: runner.id },
           data: { startTime: toRelative(startTime, zeroTime) },
+        });
+      }
+      break;
+    }
+
+    case "start.adjusted": {
+      // Draw / manual start-time set — last-write-wins.
+      const { startTime } = event.payload as { startTime: number };
+      const runner = await resolveRunner(db, eventId, event.payload);
+      if (runner) {
+        await db.runner.update({
+          where: { id: runner.id },
+          data: {
+            startTime: startTime > 0 ? toRelative(startTime, zeroTime) : 0,
+          },
         });
       }
       break;
@@ -266,6 +308,20 @@ async function applyEvent(
             },
           });
         }
+      }
+      break;
+    }
+
+    case "runner.deleted": {
+      // Soft-delete. `runner.updated` apply (field patch) lands with the
+      // node-to-node shipping work in pivot Step 3; it is journaled here
+      // (completeness) but its apply case is intentionally not yet wired.
+      const runner = await resolveRunner(db, eventId, event.payload);
+      if (runner) {
+        await db.runner.update({
+          where: { id: runner.id },
+          data: { removed: true },
+        });
       }
       break;
     }

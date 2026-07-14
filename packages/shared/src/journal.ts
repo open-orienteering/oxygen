@@ -116,6 +116,26 @@ export interface RunnerRegisteredPayload {
   startTime?: number;
 }
 
+/**
+ * A runner edit (`runner.update`, and the bulk / link / card-return variants).
+ * `fields` is the **portable** patch — absolute deciseconds, class `seq`, and
+ * numeric statuses, exactly as the tRPC input carries them — so a peer replays
+ * it through the same `runner.update` logic without any seq↔UUID guesswork.
+ * `cardNo` is the runner's card at emit time (pre-edit) so `(eventId, cardNo)`
+ * resolution finds the same row on the peer; `runnerId` (`seq`) is the fallback.
+ */
+export interface RunnerUpdatedPayload {
+  cardNo: number | null;
+  runnerId: number;
+  fields: Record<string, unknown>;
+}
+
+/** A soft-delete (`runner.delete`). Resolved by card, then by `seq`. */
+export interface RunnerDeletedPayload {
+  cardNo: number | null;
+  runnerId: number;
+}
+
 export interface JournalPayloads {
   "card.read": CardReadPayload;
   "punch.recorded": PunchRecordedPayload;
@@ -125,8 +145,8 @@ export interface JournalPayloads {
   "finish.adjusted": FinishAdjustedPayload;
   "result.applied": ResultAppliedPayload;
   "runner.registered": RunnerRegisteredPayload;
-  "runner.updated": Record<string, unknown>;
-  "runner.deleted": Record<string, unknown>;
+  "runner.updated": RunnerUpdatedPayload;
+  "runner.deleted": RunnerDeletedPayload;
 }
 
 // ─── Wire envelope ───────────────────────────────────────────
