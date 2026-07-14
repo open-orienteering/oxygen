@@ -13,7 +13,10 @@ import type { EventRef } from "../../db.js";
 
 const createCaller = createCallerFactory(appRouter);
 
-export function makeCaller(event: EventRef | null = null) {
-  const ctx: Context = { event };
+export function makeCaller(
+  event: EventRef | null = null,
+  extra: Partial<Omit<Context, "event">> = {},
+) {
+  const ctx: Context = { event, ...extra };
   return createCaller(ctx);
 }

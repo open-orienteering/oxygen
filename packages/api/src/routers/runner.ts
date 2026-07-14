@@ -56,6 +56,76 @@ async function classSeqToId(
   return cls.id;
 }
 
+/**
+ * Translate a portable runner patch (the flat `runner.update` input shape /
+ * the `runner.updated` journal `fields`) into Prisma `data`. Times arrive as
+ * absolute deciseconds, `classId` as a class `seq`, `status` numeric, and the
+ * legacy `clubId` as an Eventor club id — all converted here. Shared between
+ * the `runner.update` mutation and the journal apply path (`events.push`),
+ * so a shipped entry replays through exactly the same translation.
+ */
+export async function buildRunnerUpdateData(
+  db: import("@prisma/client").PrismaClient,
+  eventId: bigint,
+  zeroTime: number,
+  fields: Record<string, unknown>,
+): Promise<Record<string, unknown>> {
+  const get = <T>(k: string): T | undefined =>
+    (fields[k] === undefined ? undefined : (fields[k] as T));
+
+  const data: Record<string, unknown> = {};
+  const cardNo = get<number | null>("cardNo");
+  if (get<string>("name") !== undefined) data.name = get<string>("name");
+  if (cardNo !== undefined) data.cardNo = cardNo && cardNo > 0 ? cardNo : null;
+  if (get<string>("clubName") !== undefined)
+    data.clubName = get<string>("clubName");
+  if (fields.eventorClubId !== undefined)
+    data.eventorClubId = fields.eventorClubId;
+  // Legacy clubId → eventorClubId + (best-effort) clubName.
+  if (fields.clubId !== undefined) {
+    const cid = fields.clubId as number | null;
+    if (cid && cid > 0) {
+      data.eventorClubId = BigInt(cid);
+      const dir = await db.clubDirectory.findUnique({
+        where: { eventorId: BigInt(cid) },
+        select: { name: true },
+      });
+      if (dir?.name) data.clubName = dir.name;
+    } else {
+      data.eventorClubId = null;
+      data.clubName = "";
+    }
+  }
+  if (get<number>("classId") !== undefined) {
+    data.classId = await classSeqToId(db, eventId, get<number>("classId")!);
+  }
+  if (get<number>("startNo") !== undefined) data.startNo = get<number>("startNo");
+  if (get<number>("startTime") !== undefined) {
+    const st = get<number>("startTime")!;
+    data.startTime = st > 0 ? toRelative(st, zeroTime) : st;
+  }
+  if (get<number>("birthYear") !== undefined)
+    data.birthYear = get<number>("birthYear");
+  if (get<string>("sex") !== undefined) data.sex = get<string>("sex");
+  if (get<string>("nationality") !== undefined)
+    data.nationality = get<string>("nationality");
+  if (get<string>("phone") !== undefined) data.phone = get<string>("phone");
+  if (get<number>("status") !== undefined)
+    data.status = valueToRunnerStatus(get<number>("status")!);
+  if (get<number>("finishTime") !== undefined) {
+    const ft = get<number>("finishTime")!;
+    data.finishTime = ft > 0 ? toRelative(ft, zeroTime) : ft;
+  }
+  if (get<number>("fee") !== undefined) data.feeCents = get<number>("fee");
+  if (get<number>("paid") !== undefined) data.paidCents = get<number>("paid");
+  if (get<number>("payMode") !== undefined) data.payMode = get<number>("payMode");
+  if (get<number>("cardFee") !== undefined)
+    data.cardFeeCents = get<number>("cardFee");
+  if (get<boolean>("cardReturned") !== undefined)
+    data.cardReturned = get<boolean>("cardReturned");
+  return data;
+}
+
 /** Throw CONFLICT if `cardNo` is already used by another runner in this event. */
 async function assertCardNotTaken(
   db: import("@prisma/client").PrismaClient,
@@ -411,67 +481,19 @@ export const runnerRouter = router({
         string,
         unknown
       >;
-      const get = <T>(k: string): T | undefined =>
-        (fields[k] === undefined ? undefined : (fields[k] as T));
 
-      const cardNo = get<number | null>("cardNo");
+      const cardNo =
+        fields.cardNo === undefined ? undefined : (fields.cardNo as number | null);
       if (cardNo != null && cardNo !== r.cardNo) {
         await assertCardNotTaken(ctx.db, ctx.event.id, cardNo, r.id);
       }
 
-      const data: Record<string, unknown> = {};
-      if (get<string>("name") !== undefined) data.name = get<string>("name");
-      if (cardNo !== undefined) data.cardNo = cardNo && cardNo > 0 ? cardNo : null;
-      if (get<string>("clubName") !== undefined)
-        data.clubName = get<string>("clubName");
-      if (fields.eventorClubId !== undefined)
-        data.eventorClubId = fields.eventorClubId;
-      // Legacy clubId → eventorClubId + (best-effort) clubName.
-      if (fields.clubId !== undefined) {
-        const cid = fields.clubId as number | null;
-        if (cid && cid > 0) {
-          data.eventorClubId = BigInt(cid);
-          const dir = await ctx.db.clubDirectory.findUnique({
-            where: { eventorId: BigInt(cid) },
-            select: { name: true },
-          });
-          if (dir?.name) data.clubName = dir.name;
-        } else {
-          data.eventorClubId = null;
-          data.clubName = "";
-        }
-      }
-      if (get<number>("classId") !== undefined) {
-        data.classId = await classSeqToId(
-          ctx.db,
-          ctx.event.id,
-          get<number>("classId")!,
-        );
-      }
-      if (get<number>("startNo") !== undefined) data.startNo = get<number>("startNo");
-      if (get<number>("startTime") !== undefined) {
-        const st = get<number>("startTime")!;
-        data.startTime = st > 0 ? toRelative(st, ctx.event.zeroTime) : st;
-      }
-      if (get<number>("birthYear") !== undefined)
-        data.birthYear = get<number>("birthYear");
-      if (get<string>("sex") !== undefined) data.sex = get<string>("sex");
-      if (get<string>("nationality") !== undefined)
-        data.nationality = get<string>("nationality");
-      if (get<string>("phone") !== undefined) data.phone = get<string>("phone");
-      if (get<number>("status") !== undefined)
-        data.status = valueToRunnerStatus(get<number>("status")!);
-      if (get<number>("finishTime") !== undefined) {
-        const ft = get<number>("finishTime")!;
-        data.finishTime = ft > 0 ? toRelative(ft, ctx.event.zeroTime) : ft;
-      }
-      if (get<number>("fee") !== undefined) data.feeCents = get<number>("fee");
-      if (get<number>("paid") !== undefined) data.paidCents = get<number>("paid");
-      if (get<number>("payMode") !== undefined) data.payMode = get<number>("payMode");
-      if (get<number>("cardFee") !== undefined)
-        data.cardFeeCents = get<number>("cardFee");
-      if (get<boolean>("cardReturned") !== undefined)
-        data.cardReturned = get<boolean>("cardReturned");
+      const data = await buildRunnerUpdateData(
+        ctx.db,
+        ctx.event.id,
+        ctx.event.zeroTime,
+        fields,
+      );
 
       // Portable patch for the journal: the raw (absolute-ds / seq / numeric)
       // input fields, minus the routing keys. A peer replays it through this

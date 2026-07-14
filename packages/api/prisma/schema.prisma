@@ -159,6 +159,7 @@ model Event {
   punches      Punch[]
   controlUnits ControlUnit[]
   journal      JournalEntry[]
+  journalSyncStates JournalSyncState[]
   mapFiles     MapFile[]
   renderedMaps RenderedMap[]
   mapTiles     MapTile[]
@@ -752,6 +753,32 @@ model JournalEntry {
   @@index([eventId, clientTimestamp(sort: Desc)])
   @@index([eventId, type])
   @@map("journal")
+  @@schema("oxygen")
+}
+
+/// Per-peer journal-shipping watermarks (pivot Step 3). One row per
+/// (peer, event); cursors are (hlc, id) pairs because encoded HLCs can tie
+/// across stations. A watermark only advances after contiguous application,
+/// so it never skips past an unshipped/unapplied entry.
+model JournalSyncState {
+  /// Peer identifier — the normalized SYNC_PEER_URL of the peer node.
+  peerId  String @map("peer_id")
+  eventId BigInt @map("event_id")
+
+  /// Last local entry pushed to AND acked by the peer.
+  pushedHlc BigInt @default(0) @map("pushed_hlc")
+  pushedId  String @default("") @map("pushed_id")
+
+  /// Last peer entry pulled AND applied locally.
+  pulledHlc BigInt @default(0) @map("pulled_hlc")
+  pulledId  String @default("") @map("pulled_id")
+
+  updatedAt DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  event Event @relation(fields: [eventId], references: [id], onDelete: Cascade)
+
+  @@id([peerId, eventId])
+  @@map("journal_sync_state")
   @@schema("oxygen")
 }
 

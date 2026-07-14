@@ -2,11 +2,17 @@ import { initTRPC, TRPCError } from "@trpc/server";
 import type { CreateFastifyContextOptions } from "@trpc/server/adapters/fastify";
 import type { PrismaClient } from "@prisma/client";
 import { prisma, resolveEvent, type EventRef } from "./db.js";
+import {
+  SYNC_SECRET_HEADER,
+  syncSharedSecret,
+} from "./sync/nodeIdentity.js";
 
 /** Context available to all tRPC procedures. */
 export interface Context {
   /** Resolved active event from the x-competition-id header, or null. */
   event: EventRef | null;
+  /** Node-to-node shared secret from the request, if any (see peerProcedure). */
+  syncSecret?: string | null;
 }
 
 /**
@@ -22,7 +28,9 @@ export async function createContext(
     opts.req.headers["x-event-id"] ?? opts.req.headers["x-competition-id"];
   const nameId = (Array.isArray(raw) ? raw[0] : raw) ?? "";
   const event = nameId ? await resolveEvent(nameId) : null;
-  return { event };
+  const secretRaw = opts.req.headers[SYNC_SECRET_HEADER];
+  const syncSecret = (Array.isArray(secretRaw) ? secretRaw[0] : secretRaw) ?? null;
+  return { event, syncSecret };
 }
 
 const t = initTRPC.context<Context>().create();
@@ -63,4 +71,27 @@ export const eventProcedure = publicProcedure.use(async ({ ctx, next }) => {
   return next({
     ctx: { ...ctx, event: ctx.event, db: prisma() } as EventContext,
   });
+});
+
+/**
+ * Event-scoped procedure reserved for node-to-node calls (journal shipping).
+ * Requires `SYNC_SHARED_SECRET` to be configured on this node AND presented
+ * by the caller in the `x-oxygen-sync-secret` header. Without a configured
+ * secret every call is refused — peering is opt-in.
+ */
+export const peerProcedure = eventProcedure.use(async ({ ctx, next }) => {
+  const expected = syncSharedSecret();
+  if (!expected) {
+    throw new TRPCError({
+      code: "PRECONDITION_FAILED",
+      message: "Node-to-node sync is not configured on this node (no SYNC_SHARED_SECRET)",
+    });
+  }
+  if (ctx.syncSecret !== expected) {
+    throw new TRPCError({
+      code: "UNAUTHORIZED",
+      message: "Invalid or missing node sync secret",
+    });
+  }
+  return next();
 });
