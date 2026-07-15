@@ -132,3 +132,48 @@ export async function markFailed(eventId: string, error: string) {
     });
   }
 }
+
+// ─── Drain rejections (pivot Step 6) ────────────────────────
+//
+// A failed entry means the server REJECTED the apply (as opposed to a
+// network error, which leaves entries pending). These must be loud in the
+// station UI — a silently dropped finish is the one unforgivable failure
+// mode — and the operator decides: retry (after fixing the cause) or
+// discard (the entry is wrong, e.g. a stale-card artifact).
+
+export async function getFailedEvents(competitionId?: string) {
+  let query = offlineDb.events.where("status").equals("failed");
+  if (competitionId) {
+    query = query.and((e) => e.competitionId === competitionId);
+  }
+  return query.sortBy("timestamp");
+}
+
+export async function getFailedCount(competitionId?: string): Promise<number> {
+  let query = offlineDb.events.where("status").equals("failed");
+  if (competitionId) {
+    query = query.and((e) => e.competitionId === competitionId);
+  }
+  return query.count();
+}
+
+/** Requeue a failed entry — the next drain retries it. */
+export async function retryFailedEvent(eventId: string): Promise<void> {
+  await offlineDb.events.update(eventId, { status: "pending", error: undefined });
+}
+
+/** Requeue every failed entry (optionally for one event). */
+export async function retryAllFailedEvents(
+  competitionId?: string,
+): Promise<number> {
+  const failed = await getFailedEvents(competitionId);
+  for (const e of failed) {
+    await retryFailedEvent(e.id);
+  }
+  return failed.length;
+}
+
+/** Drop a failed entry for good. Deliberate operator action only. */
+export async function discardFailedEvent(eventId: string): Promise<void> {
+  await offlineDb.events.delete(eventId);
+}

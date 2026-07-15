@@ -68,14 +68,14 @@ computation depends on. This is the **dependency closure of live results**:
 state that must survive to the cloud and be visible there while the venue is
 the intermittently-connected writer.
 
-> **Implementation status (pivot Step 2b, 2026-07-14).** Every mutation on
-> the runner-state / punch / readout surface now emits its journal entry in
-> the same transaction as the table write (`appendJournal`): online
-> `storeReadout`, `applyResult`, `addPunch`, `linkCardToRunner`, all
-> `runner.*` mutations (incl. bulk + card-return), the draw, and the ROC
-> puller. The class/course/control *reference-data* mutations are the one
-> part of the closure **not yet journaled** — see
+> **Implementation status (2026-07-15).** The journaled set is complete:
+> every mutation in the closure emits its journal entry in the same
+> transaction as the table write (`appendJournal`) — the runner-state /
+> punch / readout surface (Step 2b), punch edits and backup replay, and the
+> class/course/control reference mutations — see
 > [Reference data during a lease](#reference-data-during-a-lease).
+> `punch.recorded` entries carry their punch row UUID so edits address the
+> same row on every node.
 
 - No lease: the cloud is the writer, as today.
 - Lease active: the **venue node is the single writer**. Stations on the
@@ -133,26 +133,26 @@ opt-in for race-critical writes only.
 
 Classes, courses, controls and their links (course→course-controls,
 class→course, control codes/status) are inside the results closure and are
-therefore **venue-owned during a lease** — but their *mutations are not yet
-journaled* (pivot Step 2b journaled only the runner-state / punch / readout
-surface). This is a deliberate, bounded gap, not an oversight:
+**venue-owned during a lease**, and since 2026-07-15 their mutations
+**journal like everything else**:
 
-- Reference data is a **mutable relational FK graph**, not a set of LWW
-  registers keyed by card. Portable payloads need the seq↔UUID and
-  codes-string mapping that Step 3 builds for node-to-node apply anyway, so
-  journaling it earlier would mean designing that machinery twice.
-- The **risk window is small**: class/course/control setup happens pre-race
-  while the cloud is the writer; mid-race edits are rare corrections (e.g.
-  voiding a control, fixing a wrong code).
-- The **checkout snapshot import** (Step 4) re-hydrates the venue's copy of
-  reference data at lease start, and a venue that edits it mid-lease
-  re-syncs at checkin until Step 3 journals these mutations end-to-end.
+- Each edit emits a full-row LWW upsert keyed by the row UUID
+  (`class.upserted` / `course.upserted` / `control.upserted`), with child
+  link tables travelling inside the parent's payload and replaced wholesale
+  on apply. Deletes are upserts with `removed: true`.
+- The OCAD/IOF course import emits one bulk `reference.imported` entry with
+  the complete post-import state; `replaceAll` mirrors the import's wipe on
+  the applying node. Course `geometry` blobs stay out of the journal — they
+  are derived artifacts that travel with the checkout snapshot.
+- Emission re-reads the post-write row inside the mutating transaction, so
+  the entry is exactly what landed. One documented exception:
+  `importCourses` emits after its (non-transactional) import completes — a
+  crash in between loses only the ship, and re-running the operator-driven
+  import re-emits.
 
-Until then, treat reference-data edits during a lease as "cloud-first when
-possible." The `drawRouter.execute` per-class `FirstStart` / `StartInterval`
-write follows this rule — the race-critical part (each runner's start time)
-is journaled as `start.adjusted`; the class draw-settings write is reference
-data and is not.
+The remaining non-journaled reference writer is the Eventor entry sync,
+which is cloud-owned and forwarded from venues; running it against a
+leased-out event is unsupported (it is a pre-race operation in practice).
 
 ### Consequence: checkin is cheap
 
@@ -203,9 +203,9 @@ early keeps the ordering honest.
 > `event_seqs` counters preserved; `runner.registered` entries now carry
 > their `seq` so the follower applies with explicit values), the venue
 > forwarder for cloud-owned mutations, and the shell badge + EventPage
-> panel. The venue's periodic refresh of cloud-owned data is deferred to
-> the reference-data journaling work — the checkout-time copy is the
-> venue's copy for now.
+> panel. The venue additionally refreshes its copy of cloud-owned event
+> settings on a slow cadence while a lease is held
+> (`SYNC_SETTINGS_REFRESH_MS`, default 5 min; closure fields excluded).
 
 One row per checked-out event: `event_lease (event_id, holder_node_id,
 acquired_at, released_at, forced)`.

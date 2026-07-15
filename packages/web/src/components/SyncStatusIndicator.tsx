@@ -3,6 +3,16 @@ import { useTranslation } from "react-i18next";
 import { useQueryClient } from "@tanstack/react-query";
 import { useOnlineStatus } from "../hooks/useOnlineStatus";
 import { useEventQueue } from "../hooks/useEventQueue";
+import {
+  getFailedEvents,
+  retryFailedEvent,
+  discardFailedEvent,
+} from "../lib/offline/events";
+import type { OxygenEvent } from "../lib/offline/db";
+import {
+  useOfflineProjectionEnabled,
+  setOfflineProjectionEnabled,
+} from "../lib/feature-flags";
 
 interface CachedQueryInfo {
   label: string;
@@ -82,11 +92,14 @@ function getCachedQueries(queryClient: ReturnType<typeof useQueryClient>): Cache
 export function SyncStatusIndicator({ competitionId }: { competitionId?: string }) {
   const { t } = useTranslation("common");
   const isOnline = useOnlineStatus();
-  const { pendingCount, syncing, manualDrain } = useEventQueue(competitionId);
+  const { pendingCount, failedCount, syncing, manualDrain } =
+    useEventQueue(competitionId);
   const queryClient = useQueryClient();
   const [showPanel, setShowPanel] = useState(false);
   const [cachedQueries, setCachedQueries] = useState<CachedQueryInfo[]>([]);
   const [totalCacheEntries, setTotalCacheEntries] = useState(0);
+  const [failedEvents, setFailedEvents] = useState<OxygenEvent[]>([]);
+  const resilienceMode = useOfflineProjectionEnabled();
 
   // Refresh cache info when panel is open
   useEffect(() => {
@@ -94,11 +107,12 @@ export function SyncStatusIndicator({ competitionId }: { competitionId?: string 
     const refresh = () => {
       setCachedQueries(getCachedQueries(queryClient));
       setTotalCacheEntries(queryClient.getQueryCache().getAll().length);
+      void getFailedEvents(competitionId).then(setFailedEvents);
     };
     refresh();
     const interval = setInterval(refresh, 2000);
     return () => clearInterval(interval);
-  }, [showPanel, queryClient]);
+  }, [showPanel, queryClient, competitionId]);
 
   // Estimate total cached data size
   const estimatedSize = useCallback(() => {
@@ -122,16 +136,19 @@ export function SyncStatusIndicator({ competitionId }: { competitionId?: string 
     <div className="relative">
       <button
         onClick={() => setShowPanel(!showPanel)}
+        data-testid="sync-status-button"
         className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium transition-colors cursor-pointer ${
-          isOnline
-            ? pendingCount > 0
-              ? "text-amber-700 bg-amber-50 hover:bg-amber-100"
-              : "text-emerald-700 bg-emerald-50 hover:bg-emerald-100"
-            : "text-amber-700 bg-amber-50 hover:bg-amber-100"
+          failedCount > 0
+            ? "text-red-700 bg-red-50 hover:bg-red-100"
+            : isOnline
+              ? pendingCount > 0
+                ? "text-amber-700 bg-amber-50 hover:bg-amber-100"
+                : "text-emerald-700 bg-emerald-50 hover:bg-emerald-100"
+              : "text-amber-700 bg-amber-50 hover:bg-amber-100"
         }`}
         title={t("syncStatus")}
       >
-        {isOnline && pendingCount === 0 && (
+        {isOnline && pendingCount === 0 && failedCount === 0 && (
           <span className="w-2 h-2 bg-emerald-500 rounded-full animate-pulse" />
         )}
         {/* Cloud icon */}
@@ -148,6 +165,14 @@ export function SyncStatusIndicator({ competitionId }: { competitionId?: string 
         {pendingCount > 0 && (
           <span className="bg-amber-500 text-white px-1.5 py-0.5 rounded-full text-[10px] leading-none font-bold">
             {pendingCount}
+          </span>
+        )}
+        {failedCount > 0 && (
+          <span
+            data-testid="sync-failed-badge"
+            className="bg-red-600 text-white px-1.5 py-0.5 rounded-full text-[10px] leading-none font-bold"
+          >
+            {failedCount}
           </span>
         )}
       </button>
@@ -197,6 +222,60 @@ export function SyncStatusIndicator({ competitionId }: { competitionId?: string 
               </div>
             )}
 
+            {/* Drain rejections — the server refused these entries. Loud on
+                purpose: a silently dropped finish is the one unforgivable
+                failure mode. The operator retries (after fixing the cause)
+                or explicitly discards. */}
+            {failedEvents.length > 0 && (
+              <div
+                data-testid="sync-failed-panel"
+                className="px-4 py-3 border-b border-slate-100 bg-red-50"
+              >
+                <div className="text-xs font-semibold text-red-800 uppercase tracking-wider mb-2">
+                  {t("rejectedEvents")}
+                </div>
+                <div className="space-y-2 max-h-48 overflow-y-auto">
+                  {failedEvents.map((e) => (
+                    <div key={e.id} className="text-xs bg-white rounded-lg border border-red-200 px-2.5 py-2">
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="font-mono font-medium text-slate-700">{e.type}</span>
+                        <span className="text-slate-400 tabular-nums">
+                          {new Date(e.timestamp).toLocaleTimeString()}
+                        </span>
+                      </div>
+                      {e.error && (
+                        <div className="text-red-700 mt-1 break-words">{e.error}</div>
+                      )}
+                      <div className="flex gap-2 mt-1.5">
+                        <button
+                          data-testid={`sync-retry-${e.id}`}
+                          onClick={async () => {
+                            await retryFailedEvent(e.id);
+                            setFailedEvents(await getFailedEvents(competitionId));
+                          }}
+                          className="px-2 py-0.5 text-[11px] font-medium rounded bg-slate-700 text-white hover:bg-slate-800 cursor-pointer"
+                        >
+                          {t("retry")}
+                        </button>
+                        <button
+                          data-testid={`sync-discard-${e.id}`}
+                          onClick={async () => {
+                            if (window.confirm(t("discardEventConfirm"))) {
+                              await discardFailedEvent(e.id);
+                              setFailedEvents(await getFailedEvents(competitionId));
+                            }
+                          }}
+                          className="px-2 py-0.5 text-[11px] font-medium rounded bg-red-600 text-white hover:bg-red-700 cursor-pointer"
+                        >
+                          {t("discard")}
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
             {/* Cached Data Table */}
             <div className="px-4 py-3">
               <div className="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-2">
@@ -229,6 +308,29 @@ export function SyncStatusIndicator({ competitionId }: { competitionId?: string 
                   <div className="text-xs text-slate-400 italic">No cached data</div>
                 )}
               </div>
+            </div>
+
+            {/* Offline resilience mode — station reads served from the
+                Dexie snapshot cache + own-writes overlay instead of live
+                tRPC (pivot Step 6). */}
+            <div className="px-4 py-2.5 border-t border-slate-100">
+              <label className="flex items-center justify-between gap-3 cursor-pointer">
+                <div>
+                  <div className="text-xs font-medium text-slate-700">
+                    {t("resilienceMode")}
+                  </div>
+                  <div className="text-[10px] text-slate-400">
+                    {t("resilienceModeHint")}
+                  </div>
+                </div>
+                <input
+                  type="checkbox"
+                  data-testid="resilience-mode-toggle"
+                  checked={resilienceMode}
+                  onChange={(e) => setOfflineProjectionEnabled(e.target.checked)}
+                  className="w-4 h-4 accent-blue-600 cursor-pointer"
+                />
+              </label>
             </div>
 
             {/* Footer — cache stats */}

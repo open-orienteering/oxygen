@@ -1,7 +1,7 @@
 import { useEffect, useState, useCallback } from "react";
 import { useOnlineStatus } from "./useOnlineStatus";
 import { usePageVisible } from "./usePageVisible";
-import { getPendingCount } from "../lib/offline/events";
+import { getPendingCount, getFailedCount, retryAllFailedEvents } from "../lib/offline/events";
 import { drainEventQueue, cleanupSyncedEvents } from "../lib/offline/sync";
 import { trpc } from "../lib/trpc";
 import { usePerformanceSensitive } from "../lib/performance-mode";
@@ -20,6 +20,7 @@ export function useEventQueue(competitionId?: string) {
   const performanceSensitive = usePerformanceSensitive();
   const pollingActive = visible && !performanceSensitive;
   const [pendingCount, setPendingCount] = useState(0);
+  const [failedCount, setFailedCount] = useState(0);
   const [syncing, setSyncing] = useState(false);
   const utils = trpc.useUtils();
 
@@ -35,6 +36,7 @@ export function useEventQueue(competitionId?: string) {
         console.log(`[event-queue] pending: ${filtered} (filtered by "${competitionId}"), ${total} (total)`);
       }
       setPendingCount(filtered);
+      setFailedCount(await getFailedCount(competitionId));
     };
     refresh();
     if (!pollingActive) return;
@@ -86,16 +88,26 @@ export function useEventQueue(competitionId?: string) {
       await drainEventQueue(competitionId);
       const remaining = await getPendingCount(competitionId);
       setPendingCount(remaining);
+      setFailedCount(await getFailedCount(competitionId));
       await utils.invalidate();
     } finally {
       setSyncing(false);
     }
   }, [competitionId, utils]);
 
+  /** Requeue every rejected entry and drain again. */
+  const retryFailed = useCallback(async () => {
+    await retryAllFailedEvents(competitionId);
+    setFailedCount(await getFailedCount(competitionId));
+    await manualDrain();
+  }, [competitionId, manualDrain]);
+
   return {
     pendingCount,
+    failedCount,
     syncing,
     isOnline,
     manualDrain,
+    retryFailed,
   };
 }
