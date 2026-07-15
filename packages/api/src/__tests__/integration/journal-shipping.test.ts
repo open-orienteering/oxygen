@@ -74,8 +74,12 @@ beforeAll(async () => {
 
   const bUrl = await provisionNodeB();
   dbB = new PrismaClient({ datasourceUrl: bUrl });
-  // Wipe stale rows from interrupted runs, then mirror the event row.
-  await dbB.event.deleteMany({ where: { nameId: { startsWith: "oxygen_test_" } } });
+  // Wipe stale rows from interrupted runs — scoped to THIS suite's prefix,
+  // because other two-node suites (lease.test.ts) share the node-B database
+  // in a parallel worker and their live rows must not be clobbered.
+  await dbB.event.deleteMany({
+    where: { nameId: { startsWith: "oxygen_test_shipping" } },
+  });
   const rowB = await dbB.event.create({
     data: {
       nameId: ctx.nameId,
