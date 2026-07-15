@@ -32,11 +32,14 @@ import {
   CARD_READ_DEDUPE_WINDOW_MS,
   meosFromVolts,
   type Hlc,
+  type ReferenceUpsertPayload,
+  type ReferenceImportedPayload,
 } from "@oxygen/shared";
 import { storeReadoutImpl } from "./cardReadout.js";
 import { buildRunnerUpdateData } from "./runner.js";
 import { valueToRunnerStatus } from "../statusConvert.js";
 import { foldServerHlc } from "../serverClock.js";
+import { pushToGoogleSheet } from "../sheetsBackup.js";
 import type { EventRef } from "../db.js";
 import type { PrismaClient } from "@prisma/client";
 
@@ -53,6 +56,12 @@ const eventPayloadSchema = z.object({
     "runner.updated",
     "runner.deleted",
     "punch.recorded",
+    "punch.removed",
+    "punch.updated",
+    "class.upserted",
+    "course.upserted",
+    "control.upserted",
+    "reference.imported",
   ]),
   competitionId: z.string(),
   stationId: z.string(),
@@ -500,7 +509,8 @@ async function applyEvent(
     }
 
     case "punch.recorded": {
-      const { cardNo, controlCode, time } = event.payload as {
+      const { id, cardNo, controlCode, time } = event.payload as {
+        id?: string;
         cardNo: number;
         controlCode: number;
         time: number;
@@ -514,31 +524,145 @@ async function applyEvent(
       ) {
         throw new Error("punch.recorded: malformed payload");
       }
-      // Grow-only set semantics: punches dedupe by (cardNo, controlCode,
-      // time) — see `punchDedupeKey` in @oxygen/shared. Without this guard
-      // the same physical punch arriving via two entry ids (two stations
-      // relaying one radio punch, or a crash between apply and journal
-      // insert) would duplicate the row.
+      const rowId = typeof id === "string" && UUID_RE.test(id) ? id : null;
+      // Dedupe: by origin row UUID first, then the grow-only-set key
+      // (cardNo, controlCode, time) — see `punchDedupeKey` in
+      // @oxygen/shared. Without this guard the same physical punch
+      // arriving via two entry ids (two stations relaying one radio
+      // punch) would duplicate the row.
       const relTime = toRelative(time, zeroTime);
-      const dup = await db.punch.findFirst({
-        where: {
-          eventId,
-          cardNo,
-          controlCode,
-          time: relTime,
-          removed: false,
-        },
-        select: { id: true },
-      });
+      const byId = rowId
+        ? await db.punch.findUnique({
+            where: { id: rowId },
+            select: { id: true },
+          })
+        : null;
+      const dup =
+        byId ??
+        (await db.punch.findFirst({
+          where: {
+            eventId,
+            cardNo,
+            controlCode,
+            time: relTime,
+            removed: false,
+          },
+          select: { id: true },
+        }));
       if (!dup) {
+        // The origin row UUID is inserted verbatim so later punch edits
+        // (`punch.removed` / `punch.updated`) address the same row on
+        // every node.
         await db.punch.create({
           data: {
+            ...(rowId ? { id: rowId } : {}),
             eventId,
             cardNo,
             controlCode,
             time: relTime,
             source: "card",
           },
+        });
+      }
+      break;
+    }
+
+    case "punch.removed": {
+      const p = event.payload as {
+        id?: string;
+        cardNo: number;
+        controlCode: number;
+        time: number;
+      };
+      const row = await resolvePunch(db, eventId, zeroTime, {
+        id: p.id,
+        cardNo: p.cardNo,
+        controlCode: p.controlCode,
+        time: p.time,
+      });
+      if (row) {
+        await db.punch.update({
+          where: { id: row.id },
+          data: { removed: true },
+        });
+      }
+      break;
+    }
+
+    case "punch.updated": {
+      const p = event.payload as {
+        id?: string;
+        cardNo: number;
+        controlCode: number;
+        oldTime: number;
+        time: number;
+      };
+      const row = await resolvePunch(db, eventId, zeroTime, {
+        id: p.id,
+        cardNo: p.cardNo,
+        controlCode: p.controlCode,
+        time: p.oldTime,
+      });
+      if (row) {
+        await db.punch.update({
+          where: { id: row.id },
+          data: {
+            time: p.time > 0 ? toRelative(p.time, zeroTime) : 0,
+            isOriginal: false,
+          },
+        });
+      }
+      break;
+    }
+
+    case "class.upserted":
+    case "course.upserted":
+    case "control.upserted": {
+      await applyReferenceUpsert(
+        db,
+        eventId,
+        event.type,
+        event.payload as unknown as ReferenceUpsertPayload,
+      );
+      break;
+    }
+
+    case "reference.imported": {
+      const p = event.payload as unknown as ReferenceImportedPayload;
+      // Upserts in FK-safe order: controls, then courses (reference
+      // controls), then classes (reference courses).
+      for (const c of p.controls ?? []) {
+        await applyReferenceUpsert(db, eventId, "control.upserted", c);
+      }
+      for (const c of p.courses ?? []) {
+        await applyReferenceUpsert(db, eventId, "course.upserted", c);
+      }
+      for (const c of p.classes ?? []) {
+        await applyReferenceUpsert(db, eventId, "class.upserted", c);
+      }
+      if (p.replaceAll) {
+        // Mirror importCourses' wipe: local active courses/controls that
+        // the import did not carry are soft-removed; classes not touched
+        // by the import lose their course assignment.
+        const courseIds = (p.courses ?? []).map((c) => c.id);
+        const controlIds = (p.controls ?? []).map((c) => c.id);
+        const classIds = (p.classes ?? []).map((c) => c.id);
+        await db.course.updateMany({
+          where: { eventId, removed: false, id: { notIn: courseIds } },
+          data: { removed: true },
+        });
+        await db.control.updateMany({
+          where: { eventId, removed: false, id: { notIn: controlIds } },
+          data: { removed: true },
+        });
+        await db.class.updateMany({
+          where: {
+            eventId,
+            removed: false,
+            courseId: { not: null },
+            id: { notIn: classIds },
+          },
+          data: { courseId: null },
         });
       }
       break;
@@ -557,14 +681,20 @@ async function applyEvent(
         punchesFresh?: boolean;
         ownerData?: Record<string, unknown>;
         metadata?: Record<string, unknown>;
+        /** Original read time (ms) — set by backup replays. */
+        readAt?: number;
       };
+      // The read moment: the payload's own readAt (backup replays) beats
+      // the entry emit time. Drives both the dedupe window and read_at.
+      const readMs =
+        typeof p.readAt === "number" && p.readAt > 0
+          ? p.readAt
+          : event.timestamp;
       // Dedupe: two reads of the same card within the window are one logical
       // readout (SI cards get re-read; stations can race the drain). The
       // entry stays in the journal either way — this guards the apply only.
-      const windowStart = new Date(
-        event.timestamp - CARD_READ_DEDUPE_WINDOW_MS,
-      );
-      const windowEnd = new Date(event.timestamp + CARD_READ_DEDUPE_WINDOW_MS);
+      const windowStart = new Date(readMs - CARD_READ_DEDUPE_WINDOW_MS);
+      const windowEnd = new Date(readMs + CARD_READ_DEDUPE_WINDOW_MS);
       const nearby = await db.cardReadout.findMany({
         where: {
           eventId,
@@ -577,15 +707,15 @@ async function applyEvent(
         cardReadIsDuplicate(
           nearby.map((r) => ({ cardNo: r.cardNo, timestamp: r.readAt.getTime() })),
           p.cardNo,
-          event.timestamp,
+          readMs,
         )
       ) {
         break;
       }
       // Same pipeline as an online storeReadout / backup replay. Payload
       // times are absolute deciseconds (the outbox converts at emit);
-      // readAt preserves the original offline read time.
-      await storeReadoutImpl(db, eventId, zeroTime, {
+      // readAt preserves the original read time.
+      const result = await storeReadoutImpl(db, eventId, zeroTime, {
         cardNo: p.cardNo,
         cardType: p.cardType ?? "",
         punches: p.punches ?? [],
@@ -597,9 +727,121 @@ async function applyEvent(
         ownerData: p.ownerData,
         metadata: p.metadata,
         stationId: event.stationId,
-        readAt: new Date(event.timestamp).toISOString(),
+        readAt: new Date(readMs).toISOString(),
       });
+      // Applied outside a transaction here (per-entry ingest), so the
+      // fire-and-forget Sheets push is safe.
+      pushToGoogleSheet(db, eventId, result.sheetRow);
       break;
+    }
+  }
+}
+
+// ─── Apply helpers ───────────────────────────────────────────
+
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * Resolve the punch a `punch.removed` / `punch.updated` entry addresses:
+ * origin row UUID first, then the dedupe key `(cardNo, controlCode, time)`
+ * (time arrives in absolute deciseconds). Returns null when the punch never
+ * made it to this node — the edit is then a no-op, matching "the follower
+ * applies verbatim, later entries can still land".
+ */
+async function resolvePunch(
+  db: PrismaClient,
+  eventId: bigint,
+  zeroTime: number,
+  ref: { id?: string; cardNo: number; controlCode: number; time: number },
+): Promise<{ id: string } | null> {
+  if (typeof ref.id === "string" && UUID_RE.test(ref.id)) {
+    const byId = await db.punch.findFirst({
+      where: { id: ref.id, eventId },
+      select: { id: true },
+    });
+    if (byId) return byId;
+  }
+  return db.punch.findFirst({
+    where: {
+      eventId,
+      cardNo: ref.cardNo,
+      controlCode: ref.controlCode,
+      time: ref.time !== 0 ? toRelative(ref.time, zeroTime) : 0,
+      removed: false,
+    },
+    select: { id: true },
+  });
+}
+
+/**
+ * Apply a reference-entity upsert (class / course / control): LWW on the
+ * full portable row, keyed by the shared UUID; the per-event `seq` is
+ * inserted explicitly on first apply (the allocate_event_seq() trigger
+ * honors it). Child link tables (course_controls, class_course_pools) are
+ * replaced wholesale from the payload.
+ */
+async function applyReferenceUpsert(
+  db: PrismaClient,
+  eventId: bigint,
+  type: "class.upserted" | "course.upserted" | "control.upserted",
+  payload: ReferenceUpsertPayload,
+): Promise<void> {
+  if (!UUID_RE.test(payload.id)) {
+    throw new Error(`${type}: malformed row id`);
+  }
+  const fields = (payload.fields ?? {}) as Record<string, never>;
+  const create = {
+    ...fields,
+    id: payload.id,
+    eventId,
+    ...(payload.seq > 0 ? { seq: payload.seq } : {}),
+  };
+
+  if (type === "control.upserted") {
+    await db.control.upsert({
+      where: { id: payload.id },
+      create: create as never,
+      update: fields,
+    });
+    return;
+  }
+
+  if (type === "course.upserted") {
+    await db.course.upsert({
+      where: { id: payload.id },
+      create: create as never,
+      update: fields,
+    });
+    if (payload.courseControls) {
+      await db.courseControl.deleteMany({ where: { courseId: payload.id } });
+      if (payload.courseControls.length > 0) {
+        await db.courseControl.createMany({
+          data: payload.courseControls.map((cc) => ({
+            courseId: payload.id,
+            position: cc.position,
+            controlId: cc.controlId,
+          })),
+        });
+      }
+    }
+    return;
+  }
+
+  await db.class.upsert({
+    where: { id: payload.id },
+    create: create as never,
+    update: fields,
+  });
+  if (payload.coursePools) {
+    await db.classCoursePool.deleteMany({ where: { classId: payload.id } });
+    if (payload.coursePools.length > 0) {
+      await db.classCoursePool.createMany({
+        data: payload.coursePools.map((cp) => ({
+          classId: payload.id,
+          stage: cp.stage,
+          courseId: cp.courseId,
+        })),
+      });
     }
   }
 }

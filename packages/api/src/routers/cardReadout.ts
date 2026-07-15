@@ -13,9 +13,10 @@
 
 import { createHash } from "node:crypto";
 import { z } from "zod";
+import { uuidv7 } from "uuidv7";
 import { TRPCError } from "@trpc/server";
 import { router, eventProcedure, raceProcedure } from "../trpc.js";
-import type { PrismaClient } from "@prisma/client";
+import type { Prisma, PrismaClient } from "@prisma/client";
 import {
   parsePunches,
   matchPunchesToCourse,
@@ -34,7 +35,10 @@ import {
 } from "../statusConvert.js";
 import { appendJournal } from "../journalEmit.js";
 import { resolveCourseExpectedPositions } from "./course.js";
-import { pushToGoogleSheet } from "../sheetsBackup.js";
+import { pushToGoogleSheet, type SheetRow } from "../sheetsBackup.js";
+
+/** Works with both the singleton client and a `$transaction` client. */
+type Db = PrismaClient | Prisma.TransactionClient;
 
 // Re-exports kept for backwards compatibility with code that imports
 // these from this file.
@@ -402,10 +406,16 @@ function encodePunchesRaw(
  * `storeReadout` mutation, the backup-replay `pushReadoutBackup`, and the
  * offline-outbox drain (`events.push` `card.read` entries), so every readout
  * goes through the same downstream pipeline (card upsert, runner link,
- * relevance score, Google Sheets push).
+ * relevance score).
+ *
+ * Transaction-safe: accepts a `$transaction` client, so callers can commit
+ * the readout and its `card.read` journal entry atomically. The Google
+ * Sheets push is therefore NOT fired here — the returned `sheetRow` is
+ * ready for `pushToGoogleSheet` after the caller's transaction commits (a
+ * fire-and-forget fetch must never run on a transaction client).
  */
 export async function storeReadoutImpl(
-  db: PrismaClient,
+  db: Db,
   eventId: bigint,
   zeroTime: number,
   input: StoreReadoutInput,
@@ -555,36 +565,30 @@ export async function storeReadoutImpl(
     }
   }
 
-  // 5. Best-effort Google Sheets push (fire-and-forget; no-op when
-  //    no webhook is configured).
-  try {
-    const fullName = runner
-      ? (
-          await db.runner.findUnique({
-            where: { id: runner.id },
-            select: { name: true, clubName: true, class: { select: { name: true } } },
-          })
-        )
-      : null;
-    pushToGoogleSheet(db, eventId, {
-      timestamp: readout.readAt.toISOString(),
-      cardNo: input.cardNo,
-      cardType: input.cardType ?? "",
-      runnerName: fullName?.name ?? "",
-      className: fullName?.class?.name ?? "",
-      clubName: fullName?.clubName ?? "",
-      startNo: 0,
-      checkTime: input.checkTime ?? null,
-      startTime: input.startTime ?? null,
-      finishTime: input.finishTime ?? null,
-      punchCount: input.punches.length,
-      punches: encodePunchesRaw(input.punches),
-      punchesRelevant,
-      batteryVoltage: voltageMv || null,
-    });
-  } catch {
-    // Don't let webhook errors interfere with the readout flow.
-  }
+  // 5. Build the Google Sheets row for the caller to fire AFTER its
+  //    transaction commits (no-op downstream when no webhook configured).
+  const fullName = runner
+    ? await db.runner.findUnique({
+        where: { id: runner.id },
+        select: { name: true, clubName: true, class: { select: { name: true } } },
+      })
+    : null;
+  const sheetRow: SheetRow = {
+    timestamp: readout.readAt.toISOString(),
+    cardNo: input.cardNo,
+    cardType: input.cardType ?? "",
+    runnerName: fullName?.name ?? "",
+    className: fullName?.class?.name ?? "",
+    clubName: fullName?.clubName ?? "",
+    startNo: 0,
+    checkTime: input.checkTime ?? null,
+    startTime: input.startTime ?? null,
+    finishTime: input.finishTime ?? null,
+    punchCount: input.punches.length,
+    punches: encodePunchesRaw(input.punches),
+    punchesRelevant,
+    batteryVoltage: voltageMv || null,
+  };
 
   return {
     readoutId: readout.id,
@@ -593,6 +597,7 @@ export async function storeReadoutImpl(
     linkedRunnerId: runner?.seq ?? null,
     punchesRelevant,
     matchScore,
+    sheetRow,
   };
 }
 
@@ -611,44 +616,44 @@ export const cardReadoutRouter = router({
   storeReadout: raceProcedure
     .input(storeReadoutInput)
     .mutation(async ({ ctx, input }) => {
-      const result = await storeReadoutImpl(
-        ctx.db,
-        ctx.event.id,
-        ctx.event.zeroTime,
-        input,
-      );
-      // Journal the readout so it ships to peers (venue ↔ cloud) — the
-      // online path is otherwise invisible to the journal, unlike the
-      // offline outbox which drains through `events.push`. Kept OUT of a
-      // transaction on purpose: `storeReadoutImpl` fires a fire-and-forget
-      // Google-Sheets push that must not run on a transaction client. The
-      // readout row is already durable here, so the entry-follows-the-write
-      // ordering still holds (a crash between the two only loses the ship,
-      // and the readout is independently recoverable from backup memory).
-      await appendJournal(ctx.db, {
-        eventId: ctx.event.id,
-        type: "card.read",
-        stationId: input.stationId,
-        payload: {
-          cardNo: input.cardNo,
-          punches: input.punches.map((p) => ({
-            controlCode: p.controlCode,
-            time: p.time,
-          })),
-          checkTime: input.checkTime ?? undefined,
-          startTime: input.startTime ?? undefined,
-          finishTime: input.finishTime ?? undefined,
-          cardType: input.cardType,
-          // The payload battery is in VOLTS (offline-emit contract); the
-          // storeReadout input carries integer mV, so convert.
-          batteryVoltage:
-            voltsFromMeos(input.batteryVoltage ?? input.voltageMv) ?? undefined,
-          punchesFresh: input.punchesFresh,
-          ownerData: input.ownerData as CardReadPayload["ownerData"],
-          metadata: input.metadata as CardReadPayload["metadata"],
-        },
+      // Readout + its card.read journal entry commit or roll back together
+      // (storeReadoutImpl is transaction-safe; the Sheets push fires after).
+      const result = await ctx.db.$transaction(async (tx) => {
+        const r = await storeReadoutImpl(
+          tx,
+          ctx.event.id,
+          ctx.event.zeroTime,
+          input,
+        );
+        await appendJournal(tx, {
+          eventId: ctx.event.id,
+          type: "card.read",
+          stationId: input.stationId,
+          payload: {
+            cardNo: input.cardNo,
+            punches: input.punches.map((p) => ({
+              controlCode: p.controlCode,
+              time: p.time,
+            })),
+            checkTime: input.checkTime ?? undefined,
+            startTime: input.startTime ?? undefined,
+            finishTime: input.finishTime ?? undefined,
+            cardType: input.cardType,
+            // The payload battery is in VOLTS (offline-emit contract); the
+            // storeReadout input carries integer mV, so convert.
+            batteryVoltage:
+              voltsFromMeos(input.batteryVoltage ?? input.voltageMv) ??
+              undefined,
+            punchesFresh: input.punchesFresh,
+            ownerData: input.ownerData as CardReadPayload["ownerData"],
+            metadata: input.metadata as CardReadPayload["metadata"],
+          },
+        });
+        return r;
       });
-      return result;
+      pushToGoogleSheet(ctx.db, ctx.event.id, result.sheetRow);
+      const { sheetRow: _sheetRow, ...response } = result;
+      return response;
     }),
 
   /**
@@ -1123,10 +1128,14 @@ export const cardReadoutRouter = router({
         },
         select: { id: true },
       });
-      // Table write + journal entry commit or roll back together.
+      // Table write + journal entry commit or roll back together. The punch
+      // id is minted here and travels in the payload so every node stores
+      // the row under the same UUID (punch edits address it by id).
+      const punchId = uuidv7();
       await ctx.db.$transaction(async (tx) => {
         await tx.punch.create({
           data: {
+            id: punchId,
             eventId: ctx.event.id,
             cardNo: input.cardNo,
             controlCode: input.controlCode,
@@ -1140,6 +1149,7 @@ export const cardReadoutRouter = router({
           eventId: ctx.event.id,
           type: "punch.recorded",
           payload: {
+            id: punchId,
             cardNo: input.cardNo,
             controlCode: input.controlCode,
             time: input.time, // absolute deciseconds (portable)
@@ -1154,9 +1164,28 @@ export const cardReadoutRouter = router({
   removePunch: raceProcedure
     .input(z.object({ punchId: z.string().uuid() }))
     .mutation(async ({ ctx, input }) => {
-      await ctx.db.punch.update({
-        where: { id: input.punchId },
-        data: { removed: true },
+      const p = await ctx.db.punch.findFirst({
+        where: { id: input.punchId, eventId: ctx.event.id },
+      });
+      if (!p) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "Punch not found" });
+      }
+      // Table write + journal entry commit or roll back together.
+      await ctx.db.$transaction(async (tx) => {
+        await tx.punch.update({
+          where: { id: p.id },
+          data: { removed: true },
+        });
+        await appendJournal(tx, {
+          eventId: ctx.event.id,
+          type: "punch.removed",
+          payload: {
+            id: p.id,
+            cardNo: p.cardNo,
+            controlCode: p.controlCode,
+            time: p.time !== 0 ? toAbsolute(p.time, ctx.event.zeroTime) : 0,
+          },
+        });
       });
       return { ok: true as const };
     }),
@@ -1166,12 +1195,32 @@ export const cardReadoutRouter = router({
     .input(z.object({ punchId: z.string().uuid(), time: z.number().int() }))
     .mutation(async ({ ctx, input }) => {
       const zeroTime = ctx.event.zeroTime;
-      await ctx.db.punch.update({
-        where: { id: input.punchId },
-        data: {
-          time: input.time > 0 ? toRelative(input.time, zeroTime) : 0,
-          isOriginal: false,
-        },
+      const p = await ctx.db.punch.findFirst({
+        where: { id: input.punchId, eventId: ctx.event.id },
+      });
+      if (!p) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "Punch not found" });
+      }
+      // Table write + journal entry commit or roll back together.
+      await ctx.db.$transaction(async (tx) => {
+        await tx.punch.update({
+          where: { id: p.id },
+          data: {
+            time: input.time > 0 ? toRelative(input.time, zeroTime) : 0,
+            isOriginal: false,
+          },
+        });
+        await appendJournal(tx, {
+          eventId: ctx.event.id,
+          type: "punch.updated",
+          payload: {
+            id: p.id,
+            cardNo: p.cardNo,
+            controlCode: p.controlCode,
+            oldTime: p.time !== 0 ? toAbsolute(p.time, zeroTime) : 0,
+            time: input.time,
+          },
+        });
       });
       return { ok: true as const };
     }),
@@ -1364,28 +1413,54 @@ export const cardReadoutRouter = router({
         time: number;
         subSecond?: number;
       }>;
-      const result = await storeReadoutImpl(ctx.db, eventId, zeroTime, {
-        cardNo: backup.cardNo,
-        cardType: backup.cardType,
-        punches,
-        startTime: backup.startTime,
-        finishTime: backup.finishTime,
-        checkTime: backup.checkTime,
-        voltageMv: 0,
-        ownerData:
-          (backup.ownerData as Record<string, unknown> | null) ?? undefined,
-        stationId: backup.stationSerial
-          ? `backup-${backup.stationSerial}`
-          : `backup-${input.backupId}`,
-        readAt: (backup.originalReadAt ?? backup.importedAt).toISOString(),
+      const stationId = backup.stationSerial
+        ? `backup-${backup.stationSerial}`
+        : `backup-${input.backupId}`;
+      const readAt = backup.originalReadAt ?? backup.importedAt;
+      // Readout, staging-row flip and the card.read journal entry commit or
+      // roll back together. The payload carries the ORIGINAL read time so
+      // the applying node's dedupe window and read_at both use it.
+      const result = await ctx.db.$transaction(async (tx) => {
+        const r = await storeReadoutImpl(tx, eventId, zeroTime, {
+          cardNo: backup.cardNo,
+          cardType: backup.cardType,
+          punches,
+          startTime: backup.startTime,
+          finishTime: backup.finishTime,
+          checkTime: backup.checkTime,
+          voltageMv: 0,
+          ownerData:
+            (backup.ownerData as Record<string, unknown> | null) ?? undefined,
+          stationId,
+          readAt: readAt.toISOString(),
+        });
+        await tx.cardReadoutBackup.update({
+          where: { id: backup.id },
+          data: {
+            pushedAt: new Date(),
+            pushedReadoutId: r.readoutId,
+          },
+        });
+        await appendJournal(tx, {
+          eventId,
+          type: "card.read",
+          stationId,
+          payload: {
+            cardNo: backup.cardNo,
+            punches: punches.map((p) => ({
+              controlCode: p.controlCode,
+              time: p.time,
+            })),
+            checkTime: backup.checkTime ?? undefined,
+            startTime: backup.startTime ?? undefined,
+            finishTime: backup.finishTime ?? undefined,
+            cardType: backup.cardType,
+            readAt: readAt.getTime(),
+          },
+        });
+        return r;
       });
-      await ctx.db.cardReadoutBackup.update({
-        where: { id: backup.id },
-        data: {
-          pushedAt: new Date(),
-          pushedReadoutId: result.readoutId,
-        },
-      });
+      pushToGoogleSheet(ctx.db, eventId, result.sheetRow);
       return {
         ok: true as const,
         alreadyPushed: false as const,

@@ -108,7 +108,7 @@ describe("cardReadout.applyResult → result.applied", () => {
 });
 
 describe("cardReadout.addPunch → punch.recorded", () => {
-  it("journals the manual punch with the absolute time and origin", async () => {
+  it("journals the manual punch with its row UUID, absolute time and origin", async () => {
     await caller.cardReadout.addPunch({
       cardNo: 500300,
       controlCode: 45,
@@ -122,6 +122,107 @@ describe("cardReadout.addPunch → punch.recorded", () => {
       time: 364500,
       origin: "manual",
     });
+    // The payload id is the actual punch row's UUID.
+    const p = entry!.payload as { id: string };
+    const row = await ctx.db.punch.findUnique({ where: { id: p.id } });
+    expect(row).not.toBeNull();
+    expect(row!.cardNo).toBe(500300);
+  });
+});
+
+describe("punch edits → punch.updated / punch.removed", () => {
+  it("journals a time correction with old + new absolute times", async () => {
+    await caller.cardReadout.addPunch({
+      cardNo: 500310,
+      controlCode: 46,
+      time: 364000,
+    });
+    const created = await ctx.db.punch.findFirst({
+      where: { eventId: ctx.eventId, cardNo: 500310, controlCode: 46 },
+    });
+    await caller.cardReadout.updatePunchTime({
+      punchId: created!.id,
+      time: 365000,
+    });
+    const entry = await latestEntry("punch.updated");
+    expect(entry!.payload).toMatchObject({
+      id: created!.id,
+      cardNo: 500310,
+      controlCode: 46,
+      oldTime: 364000,
+      time: 365000,
+    });
+  });
+
+  it("journals a removal addressing the row by id", async () => {
+    const created = await ctx.db.punch.findFirst({
+      where: { eventId: ctx.eventId, cardNo: 500310, controlCode: 46 },
+    });
+    await caller.cardReadout.removePunch({ punchId: created!.id });
+    const entry = await latestEntry("punch.removed");
+    expect(entry!.payload).toMatchObject({
+      id: created!.id,
+      cardNo: 500310,
+      controlCode: 46,
+      time: 365000,
+    });
+    const row = await ctx.db.punch.findUnique({ where: { id: created!.id } });
+    expect(row!.removed).toBe(true);
+  });
+});
+
+describe("reference mutations → *.upserted", () => {
+  it("class.create journals the full portable row + course pools", async () => {
+    const created = await caller.class.create({
+      name: "RefClass",
+      courseId: courseSeq,
+      startInterval: 600,
+    });
+    const entry = await latestEntry("class.upserted");
+    expect(entry).not.toBeNull();
+    const p = entry!.payload as {
+      id: string;
+      seq: number;
+      fields: Record<string, unknown>;
+      coursePools: unknown[];
+    };
+    expect(p.seq).toBe(created.id);
+    expect(p.fields.name).toBe("RefClass");
+    expect(p.fields.startInterval).toBe(600);
+    expect(p.fields).not.toHaveProperty("eventId");
+    expect(p.fields).not.toHaveProperty("seq");
+    const row = await ctx.db.class.findUnique({ where: { id: p.id } });
+    expect(row!.seq).toBe(created.id);
+  });
+
+  it("course.create journals the ordered control list", async () => {
+    const ctl = await caller.control.create({ codes: "91" });
+    const ctl2 = await caller.control.create({ codes: "92" });
+    const course = await caller.course.create({
+      name: "RefCourse",
+      length: 2500,
+      controlIds: [ctl.id, ctl2.id],
+    });
+    void course;
+    const entry = await latestEntry("course.upserted");
+    const p = entry!.payload as {
+      fields: Record<string, unknown>;
+      courseControls: Array<{ position: number; controlId: string }>;
+    };
+    expect(p.fields.name).toBe("RefCourse");
+    expect(p.courseControls).toHaveLength(2);
+    expect(p.courseControls[0].position).toBe(1);
+    // Geometry blobs stay out of the journal (snapshot-only artifacts).
+    expect(p.fields).not.toHaveProperty("geometry");
+  });
+
+  it("control.delete journals an upsert with removed: true", async () => {
+    const ctl = await caller.control.create({ codes: "93" });
+    await caller.control.delete({ id: ctl.id });
+    const entry = await latestEntry("control.upserted");
+    const p = entry!.payload as { fields: { removed: boolean; codes: string } };
+    expect(p.fields.codes).toBe("93");
+    expect(p.fields.removed).toBe(true);
   });
 });
 
