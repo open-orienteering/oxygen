@@ -266,11 +266,11 @@ After completing a feature, perform a self-review covering these areas:
 
 ## 14. Dependency Management
 
-Dependency hygiene is developer- and agent-driven, not Dependabot-driven. Dependabot in this repo is configured to surface alerts in the GitHub Security tab only; it does not open update or security PRs. The day-to-day loop runs through `pnpm audit`.
+Dependency hygiene is developer- and agent-driven, not Dependabot-driven. Dependabot in this repo is configured to surface alerts in the GitHub Security tab only; it does not open update or security PRs. The day-to-day loop runs through `pnpm run audit:prod` (a thin client for npm's bulk advisory endpoint — see `scripts/audit-prod.mjs`).
 
 ### On every PR that touches deps
 
-- Run `pnpm audit --prod --audit-level=high` locally before pushing. PRs must not introduce new high or critical advisories in the production tree. The same check runs in `.github/workflows/audit-pr.yml` and will fail the PR.
+- Run `pnpm run audit:prod` locally before pushing (npm retired the legacy audit endpoint `pnpm audit` ≤10.x used; the script queries the bulk advisory endpoint directly). PRs must not introduce new high or critical advisories in the production tree. The same check runs in `.github/workflows/audit-pr.yml` and will fail the PR.
 - If a transitive dep is vulnerable and upstream has no fix, pin via `pnpm.overrides` in the root `package.json`. The block currently covers `undici`, `minimatch`, `flatted`, `serialize-javascript`, `effect`, `postcss`, `rollup`, `picomatch`, `defu`, and `vite`; add new entries with a one-line comment explaining why.
 - Direct deps follow `^` ranges. Patch and minor bumps can land in any PR. Major bumps require a dedicated PR with the migration documented in `docs/`.
 
@@ -281,7 +281,7 @@ The §6 verification checklist's step 6 (`pnpm outdated -r --long`) reports majo
 ### Vulnerability backstop
 
 - Weekly: `.github/workflows/audit-weekly.yml` runs Mondays at 06:00 UTC. If any production high/critical advisory is unresolved, it opens (or comments on) a single open issue labelled `security-audit`. No issue → no notification.
-- Manual sweep: `pnpm audit --prod --audit-level=high` at any time tells you the current state in seconds.
+- Manual sweep: `pnpm run audit:prod` at any time tells you the current state in seconds.
 
 ### Repository settings (one-time, manual)
 
