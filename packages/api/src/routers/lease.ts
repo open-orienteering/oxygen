@@ -98,6 +98,14 @@ export const leaseRouter = router({
     return exportEventSnapshot(ctx.db, ctx.event);
   }),
 
+  /** The full event row — source for the venue's settings refresh. */
+  exportSettings: peerProcedure.query(async ({ ctx }) => {
+    const row = await ctx.db.event.findUniqueOrThrow({
+      where: { id: ctx.event.id },
+    });
+    return row as unknown as Record<string, unknown>;
+  }),
+
   // ─── Operator surface ─────────────────────────────────────
 
   /**

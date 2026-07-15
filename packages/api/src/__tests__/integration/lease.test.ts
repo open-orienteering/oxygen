@@ -38,6 +38,7 @@ import {
   _setPeerTransportFactory,
   type PeerTransport,
 } from "../../sync/shipper.js";
+import { refreshCloudOwnedSettings } from "../../sync/settingsRefresh.js";
 import {
   ingestJournalEntries,
   listJournalEntriesSince,
@@ -82,6 +83,10 @@ function leasePeerToB(): LeasePeer {
       await releaseLease(dbB, eventB.id, { expectedHolder: holder });
     },
     exportSnapshot: async () => exportEventSnapshot(dbB, eventB),
+    exportSettings: async () =>
+      (await dbB.event.findUniqueOrThrow({
+        where: { id: eventB.id },
+      })) as unknown as Record<string, unknown>,
   };
 }
 
@@ -264,6 +269,51 @@ describe("checkout → write → checkin lifecycle", () => {
       if (prevNodeId === undefined) delete process.env.NODE_ID;
       else process.env.NODE_ID = prevNodeId;
     }
+  });
+
+  it("refreshes cloud-owned settings from the peer without touching the closure", async () => {
+    const localEvent = await ctx.db.event.findUniqueOrThrow({
+      where: { nameId: CHECKOUT_NAME },
+      select: { id: true, nameId: true, zeroTime: true },
+    });
+
+    // A cloud-side operator edits a receipt message (cloud-owned) AND the
+    // zero time (closure — the venue owns it during the lease).
+    await dbB.event.update({
+      where: { id: eventB.id },
+      data: { finishReceiptMessage: "Grattis!", zeroTime: 999999 },
+    });
+
+    const refreshed = await refreshCloudOwnedSettings(
+      ctx.db,
+      localEvent,
+      leasePeerToB(),
+    );
+    expect(refreshed).toBe(true);
+
+    const after = await ctx.db.event.findUniqueOrThrow({
+      where: { id: localEvent.id },
+      select: { finishReceiptMessage: true, zeroTime: true },
+    });
+    expect(after.finishReceiptMessage).toBe("Grattis!");
+    // The closure field did NOT follow.
+    expect(after.zeroTime).toBe(localEvent.zeroTime);
+
+    // Restore B's zero time so later assertions stay valid.
+    await dbB.event.update({
+      where: { id: eventB.id },
+      data: { zeroTime: eventB.zeroTime },
+    });
+  });
+
+  it("does not refresh on a node that is not the holder", async () => {
+    // ctx's own test event has no lease held by anyone.
+    const refreshed = await refreshCloudOwnedSettings(
+      ctx.db,
+      ctx.event,
+      leasePeerToB(),
+    );
+    expect(refreshed).toBe(false);
   });
 
   it("checkin is blocked while entries are unshipped, then releases both sides", async () => {

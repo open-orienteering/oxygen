@@ -299,6 +299,8 @@ export interface LeasePeer {
   acquire(nameId: string, holderNodeId: string): Promise<void>;
   release(nameId: string, holderNodeId: string): Promise<void>;
   exportSnapshot(nameId: string): Promise<EventSnapshot>;
+  /** The peer's full event row — the settings-refresh source. */
+  exportSettings(nameId: string): Promise<Record<string, unknown>>;
 }
 
 export function httpLeasePeer(baseUrl: string, secret: string): LeasePeer {
@@ -327,6 +329,12 @@ export function httpLeasePeer(baseUrl: string, secret: string): LeasePeer {
     },
     async exportSnapshot(nameId) {
       return (await clientFor(nameId).lease.exportSnapshot.query()) as EventSnapshot;
+    },
+    async exportSettings(nameId) {
+      return (await clientFor(nameId).lease.exportSettings.query()) as Record<
+        string,
+        unknown
+      >;
     },
   };
 }
