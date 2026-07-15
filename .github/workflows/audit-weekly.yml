@@ -20,17 +20,19 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
 
-      - name: Count high/critical advisories in production tree
+      # scripts/audit-prod.mjs exits 1 on high/critical findings, 2 on
+      # registry/network failure (which must NOT open a security issue).
+      - name: Check high/critical advisories in production tree
         id: audit
         run: |
           set +e
-          report=$(pnpm audit --prod --audit-level=high --json 2>/dev/null)
+          pnpm run audit:prod
+          code=$?
           set -e
-          highs=$(echo "$report" | jq '
-            ([.advisories[]?, (.vulnerabilities[]?.via[]? | select(type=="object"))]
-             | map(select(.severity=="high" or .severity=="critical"))
-             | length) // 0' 2>/dev/null || echo 0)
-          echo "highs=${highs:-0}" >> "$GITHUB_OUTPUT"
+          if [ "$code" = "2" ]; then
+            echo "::warning::audit-prod could not reach the advisory registry — skipping"
+          fi
+          echo "highs=$([ "$code" = "1" ] && echo 1 || echo 0)" >> "$GITHUB_OUTPUT"
 
       - name: Render human-readable report
         if: steps.audit.outputs.highs != '0'
@@ -38,12 +40,12 @@ jobs:
         run: |
           {
             echo 'body<<__END__'
-            echo '`pnpm audit --prod --audit-level=high` reports unresolved high or critical advisories in the production dependency tree.'
+            echo '`pnpm run audit:prod` reports unresolved high or critical advisories in the production dependency tree.'
             echo ''
             echo 'Run locally to inspect:'
             echo ''
             echo '```'
-            echo 'pnpm audit --prod --audit-level=high'
+            echo 'pnpm run audit:prod'
             echo '```'
             echo ''
             echo "Last run: $(date -u +%Y-%m-%dT%H:%M:%SZ)"

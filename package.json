@@ -19,7 +19,8 @@
     "db:migrate:dev": "pnpm --filter @oxygen/api db:migrate:dev",
     "migrate:mysql-to-pg": "pnpm --filter @oxygen/api migrate:mysql-to-pg",
     "docs:screenshots": "tsx docs/screenshots/capture.ts",
-    "showcase:load": "bash scripts/load-showcase.sh"
+    "showcase:load": "bash scripts/load-showcase.sh",
+    "audit:prod": "node scripts/audit-prod.mjs --audit-level=high"
   },
   "engines": {
     "node": ">=20",
@@ -27,7 +28,9 @@
   },
   "devDependencies": {
     "@playwright/test": "^1.58.2",
+    "@types/semver": "^7.7.1",
     "mysql2": "^3.17.0",
+    "semver": "^7.8.5",
     "tsx": "^4.21.0"
   },
   "dependencies": {
