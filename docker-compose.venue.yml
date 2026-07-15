@@ -1,0 +1,77 @@
+# Venue-box stack (pivot Step 5): the same Oxygen images that run in the
+# cloud, packaged as a self-contained node for a competition venue — its own
+# Postgres, the API in venue role (journal shipper dialing the cloud), and
+# the nginx-served web UI for LAN stations without internet.
+#
+# The API listens on :3001 over plain HTTP. No TLS certificate is needed:
+# Chrome 142+ Local Network Access lets the HTTPS cloud PWA call the box
+# after a one-time permission prompt (see docs/venue-runbook.md).
+#
+# Required environment (put them in a `.env.venue` next to this file):
+#   VENUE_NODE_ID       e.g. "venue-kolmarden-1" — the journal station id
+#   SYNC_PEER_URL       the cloud's base URL, e.g. https://oxygen.example.com
+#   SYNC_SHARED_SECRET  the same secret configured on the cloud node
+#   CLOUD_WEB_ORIGIN    the cloud PWA origin for CORS, usually = SYNC_PEER_URL
+#
+# Usage:
+#   docker compose -f docker-compose.venue.yml --env-file .env.venue up --build -d
+#   docker compose -f docker-compose.venue.yml exec api \
+#     pnpm --filter @oxygen/api exec prisma migrate deploy
+
+services:
+  postgres:
+    image: postgres:18-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: oxygen
+      POSTGRES_PASSWORD: oxygen
+      POSTGRES_DB: oxygen
+    volumes:
+      - venue-pg-data:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U oxygen -d oxygen"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  api:
+    build:
+      context: .
+      target: api
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "3001:3001"
+    environment:
+      DATABASE_URL: "postgresql://oxygen:oxygen@postgres:5432/oxygen?schema=oxygen"
+      PORT: "3001"
+      HOST: "0.0.0.0"
+      NODE_OPTIONS: "--max-old-space-size=4096"
+      # ── Node identity + peering (see packages/api/src/sync/nodeIdentity.ts)
+      NODE_ID: "${VENUE_NODE_ID:?set VENUE_NODE_ID}"
+      NODE_ROLE: "venue"
+      SYNC_PEER_URL: "${SYNC_PEER_URL:?set SYNC_PEER_URL}"
+      SYNC_SHARED_SECRET: "${SYNC_SHARED_SECRET:?set SYNC_SHARED_SECRET}"
+      # The cloud PWA's origin — stations load the app over HTTPS from the
+      # cloud and call this box cross-origin on the LAN.
+      CORS_ORIGINS: "${CLOUD_WEB_ORIGIN:-}"
+
+  # LAN-served web UI: lets stations work even with zero internet (they
+  # browse http://<box-ip>:8080 directly — same origin as nothing, plain
+  # HTTP, no LNA needed).
+  web:
+    build:
+      context: .
+      target: web
+    restart: unless-stopped
+    depends_on:
+      - api
+    ports:
+      - "8080:80"
+    volumes:
+      - ./docker/nginx.conf:/etc/nginx/conf.d/default.conf:ro
+
+volumes:
+  venue-pg-data:

@@ -38,8 +38,13 @@ export default defineConfig({
         // Runtime caching for tRPC API calls
         runtimeCaching: [
           {
-            // tRPC batch requests — serve from cache when offline, refresh in background when online
-            urlPattern: /\/trpc\/.*/,
+            // tRPC batch requests — serve from cache when offline, refresh in
+            // background when online. Same-origin ONLY: requests rewritten to
+            // a venue node (node-discovery) must never be served from the
+            // cloud-tab SW cache — mixing the two writers' responses would
+            // undermine the single-writer lease.
+            urlPattern: (ctx: { sameOrigin: boolean; url: URL }) =>
+              ctx.sameOrigin && ctx.url.pathname.startsWith("/trpc/"),
             handler: "NetworkFirst",
             options: {
               cacheName: "trpc-api",

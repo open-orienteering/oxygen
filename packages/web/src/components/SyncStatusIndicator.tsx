@@ -13,6 +13,11 @@ import {
   useOfflineProjectionEnabled,
   setOfflineProjectionEnabled,
 } from "../lib/feature-flags";
+import {
+  useActiveNode,
+  getVenueCandidatesRaw,
+  setVenueCandidates,
+} from "../lib/node-discovery";
 
 interface CachedQueryInfo {
   label: string;
@@ -100,6 +105,8 @@ export function SyncStatusIndicator({ competitionId }: { competitionId?: string 
   const [totalCacheEntries, setTotalCacheEntries] = useState(0);
   const [failedEvents, setFailedEvents] = useState<OxygenEvent[]>([]);
   const resilienceMode = useOfflineProjectionEnabled();
+  const activeNode = useActiveNode();
+  const [venueUrls, setVenueUrls] = useState(getVenueCandidatesRaw);
 
   // Refresh cache info when panel is open
   useEffect(() => {
@@ -193,6 +200,15 @@ export function SyncStatusIndicator({ competitionId }: { competitionId?: string 
                   } ${isOnline ? "animate-pulse" : ""}`} />
                   {isOnline ? t("connected") : t("offline")}
                 </span>
+              </div>
+              {/* Connection mode: which node this client's API calls hit. */}
+              <div
+                data-testid="connection-mode"
+                className="text-xs text-slate-500 mt-1"
+              >
+                {activeNode
+                  ? t("viaVenueNode", { url: activeNode })
+                  : t("viaCloud")}
               </div>
               {oldestUpdate > 0 && (
                 <div className="text-xs text-slate-500 mt-1">
@@ -307,6 +323,29 @@ export function SyncStatusIndicator({ competitionId }: { competitionId?: string 
                 {cachedQueries.length === 0 && (
                   <div className="text-xs text-slate-400 italic">No cached data</div>
                 )}
+              </div>
+            </div>
+
+            {/* Venue node (pivot Step 5): pinned base URL(s) probed by the
+                discovery loop. Empty = cloud-direct. */}
+            <div className="px-4 py-2.5 border-t border-slate-100">
+              <div className="text-xs font-medium text-slate-700 mb-1">
+                {t("venueNodeUrl")}
+              </div>
+              <input
+                type="text"
+                data-testid="venue-url-input"
+                value={venueUrls}
+                onChange={(e) => setVenueUrls(e.target.value)}
+                onBlur={() => setVenueCandidates(venueUrls)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") setVenueCandidates(venueUrls);
+                }}
+                placeholder="http://192.168.1.10:3001"
+                className="w-full text-xs px-2 py-1.5 border border-slate-200 rounded-lg font-mono focus:outline-none focus:border-blue-400"
+              />
+              <div className="text-[10px] text-slate-400 mt-1">
+                {t("venueNodeUrlHint")}
               </div>
             </div>
 

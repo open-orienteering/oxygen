@@ -6,6 +6,7 @@ import { PersistQueryClientProvider } from "@tanstack/react-query-persist-client
 import { httpBatchLink } from "@trpc/client";
 import { trpc } from "./lib/trpc";
 import { createIdbPersister } from "./lib/offline/persister";
+import { startNodeDiscovery, venueAwareFetch } from "./lib/node-discovery";
 import App from "./App";
 import "./index.css";
 
@@ -31,10 +32,18 @@ const API_URL = import.meta.env.VITE_API_URL
   ? `${import.meta.env.VITE_API_URL}/trpc`
   : "/trpc";
 
+// Venue-node discovery (pivot Step 5): with a pinned venue URL, API calls
+// route to the healthy venue box over LAN (Chrome LNA); otherwise
+// everything stays same-origin against the cloud.
+startNodeDiscovery();
+
 const trpcClient = trpc.createClient({
   links: [
     httpBatchLink({
       url: API_URL,
+      // Rewrites onto the active venue node when one is up; pass-through
+      // otherwise.
+      fetch: venueAwareFetch,
       headers() {
         // Extract the first path segment as the competition nameId.
         // e.g. /my_competition/dashboard → "my_competition"
