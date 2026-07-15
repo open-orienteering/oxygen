@@ -27,6 +27,13 @@ import {
   type OcadCrs,
 } from "../map-projection.js";
 import { fireMapUpload } from "../db.js";
+import { appendJournal } from "../journalEmit.js";
+import {
+  emitCourseUpserted,
+  courseUpsertPayload,
+  controlUpsertPayload,
+  classUpsertPayload,
+} from "../referenceJournal.js";
 
 // ─── Class-name matching for the import preview ─────────────
 
@@ -166,10 +173,11 @@ async function controlSeqToId(
 
 /**
  * Resolve a course's status-aware ExpectedPosition[] used by the offline
- * matcher and start-list / dashboard pre-computations.
+ * matcher and start-list / dashboard pre-computations. Accepts a
+ * `$transaction` client so transactional callers (storeReadoutImpl) work.
  */
 export async function resolveCourseExpectedPositions(
-  db: PrismaClient,
+  db: PrismaClient | import("@prisma/client").Prisma.TransactionClient,
   courseId: string,
 ): Promise<ExpectedPosition[]> {
   const rows = await db.courseControl.findMany({
@@ -339,32 +347,40 @@ export const courseRouter = router({
       }),
     )
     .mutation(async ({ ctx, input }) => {
-      const created = await ctx.db.course.create({
-        data: {
-          eventId: ctx.event.id,
-          name: input.name,
-          lengthM: input.length,
-          climbM: input.climb,
-          numberOfMaps: input.numberOfMaps,
-          firstAsStart: input.firstAsStart,
-          lastAsFinish: input.lastAsFinish,
-        },
-        select: { id: true, seq: true },
-      });
-      if (input.controlIds.length > 0) {
-        const controlUuids = await Promise.all(
-          input.controlIds.map((seq) =>
-            controlSeqToId(ctx.db, ctx.event.id, seq),
-          ),
-        );
-        await ctx.db.courseControl.createMany({
-          data: controlUuids.map((uuid, idx) => ({
-            courseId: created.id,
-            position: idx + 1,
-            controlId: uuid,
-          })),
+      const controlUuids =
+        input.controlIds.length > 0
+          ? await Promise.all(
+              input.controlIds.map((seq) =>
+                controlSeqToId(ctx.db, ctx.event.id, seq),
+              ),
+            )
+          : [];
+      // Table writes + course.upserted journal entry commit together.
+      const created = await ctx.db.$transaction(async (tx) => {
+        const c = await tx.course.create({
+          data: {
+            eventId: ctx.event.id,
+            name: input.name,
+            lengthM: input.length,
+            climbM: input.climb,
+            numberOfMaps: input.numberOfMaps,
+            firstAsStart: input.firstAsStart,
+            lastAsFinish: input.lastAsFinish,
+          },
+          select: { id: true, seq: true },
         });
-      }
+        if (controlUuids.length > 0) {
+          await tx.courseControl.createMany({
+            data: controlUuids.map((uuid, idx) => ({
+              courseId: c.id,
+              position: idx + 1,
+              controlId: uuid,
+            })),
+          });
+        }
+        await emitCourseUpserted(tx, ctx.event.id, c.id);
+        return c;
+      });
       return { id: created.seq };
     }),
 
@@ -393,25 +409,31 @@ export const courseRouter = router({
         data.firstAsStart = input.firstAsStart;
       if (input.lastAsFinish !== undefined)
         data.lastAsFinish = input.lastAsFinish;
-      await ctx.db.course.update({ where: { id: c.id }, data });
-
-      if (input.controlIds !== undefined) {
-        await ctx.db.courseControl.deleteMany({ where: { courseId: c.id } });
-        if (input.controlIds.length > 0) {
-          const controlUuids = await Promise.all(
-            input.controlIds.map((seq) =>
-              controlSeqToId(ctx.db, ctx.event.id, seq),
-            ),
-          );
-          await ctx.db.courseControl.createMany({
-            data: controlUuids.map((uuid, idx) => ({
-              courseId: c.id,
-              position: idx + 1,
-              controlId: uuid,
-            })),
-          });
+      const controlUuids =
+        input.controlIds !== undefined && input.controlIds.length > 0
+          ? await Promise.all(
+              input.controlIds.map((seq) =>
+                controlSeqToId(ctx.db, ctx.event.id, seq),
+              ),
+            )
+          : [];
+      // Table writes + course.upserted journal entry commit together.
+      await ctx.db.$transaction(async (tx) => {
+        await tx.course.update({ where: { id: c.id }, data });
+        if (input.controlIds !== undefined) {
+          await tx.courseControl.deleteMany({ where: { courseId: c.id } });
+          if (controlUuids.length > 0) {
+            await tx.courseControl.createMany({
+              data: controlUuids.map((uuid, idx) => ({
+                courseId: c.id,
+                position: idx + 1,
+                controlId: uuid,
+              })),
+            });
+          }
         }
-      }
+        await emitCourseUpserted(tx, ctx.event.id, c.id);
+      });
       return { ok: true };
     }),
 
@@ -438,9 +460,14 @@ export const courseRouter = router({
         data.firstAsStart = input.firstAsStart;
       if (input.lastAsFinish !== undefined)
         data.lastAsFinish = input.lastAsFinish;
-      await ctx.db.course.updateMany({
-        where: { id: { in: rows.map((r) => r.id) } },
-        data,
+      await ctx.db.$transaction(async (tx) => {
+        await tx.course.updateMany({
+          where: { id: { in: rows.map((r) => r.id) } },
+          data,
+        });
+        for (const r of rows) {
+          await emitCourseUpserted(tx, ctx.event.id, r.id);
+        }
       });
       return { ok: true as const, count: rows.length };
     }),
@@ -449,9 +476,13 @@ export const courseRouter = router({
     .input(z.object({ id: z.number().int() }))
     .mutation(async ({ ctx, input }) => {
       const c = await getCourseBySeq(ctx.db, ctx.event.id, input.id);
-      await ctx.db.course.update({
-        where: { id: c.id },
-        data: { removed: true },
+      await ctx.db.$transaction(async (tx) => {
+        await tx.course.update({
+          where: { id: c.id },
+          data: { removed: true },
+        });
+        // Deletes are upserts with removed: true on the wire.
+        await emitCourseUpserted(tx, ctx.event.id, c.id);
       });
       return { ok: true };
     }),
@@ -1237,6 +1268,47 @@ export const courseRouter = router({
         data: { uploadedAt: new Date() },
       });
       fireMapUpload(eventId);
+
+      // ── 5. Journal the import as ONE reference.imported entry ──
+      //
+      // The full post-import reference state (active controls + courses +
+      // the classes the import touched), serialized from the DB so the
+      // entry reflects what actually landed. Emitted AFTER the import
+      // rather than wrapping the whole 300-line import in a transaction —
+      // a crash in between loses only the ship, and re-running the import
+      // (operator-driven, idempotent by name-matching) re-emits.
+      const activeControls = await ctx.db.control.findMany({
+        where: { eventId, removed: false },
+        select: { id: true },
+      });
+      const activeCourses = await ctx.db.course.findMany({
+        where: { eventId, removed: false },
+        select: { id: true },
+      });
+      const touchedClassIds = new Set<string>();
+      if (input.classMapping) {
+        const assigned = await ctx.db.class.findMany({
+          where: { eventId, removed: false, courseId: { not: null } },
+          select: { id: true },
+        });
+        for (const c of assigned) touchedClassIds.add(c.id);
+      }
+      await appendJournal(ctx.db, {
+        eventId,
+        type: "reference.imported",
+        payload: {
+          replaceAll: input.replaceAll,
+          controls: await Promise.all(
+            activeControls.map((c) => controlUpsertPayload(ctx.db, c.id)),
+          ),
+          courses: await Promise.all(
+            activeCourses.map((c) => courseUpsertPayload(ctx.db, c.id)),
+          ),
+          classes: await Promise.all(
+            [...touchedClassIds].map((id) => classUpsertPayload(ctx.db, id)),
+          ),
+        },
+      });
 
       return {
         controlsCreated,

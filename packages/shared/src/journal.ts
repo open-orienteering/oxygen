@@ -29,6 +29,8 @@ import { type Hlc, compareHlc } from "./hlc.js";
 export type JournalEntryType =
   | "card.read"
   | "punch.recorded"
+  | "punch.removed"
+  | "punch.updated"
   | "start.recorded"
   | "start.adjusted"
   | "finish.recorded"
@@ -36,7 +38,11 @@ export type JournalEntryType =
   | "result.applied"
   | "runner.registered"
   | "runner.updated"
-  | "runner.deleted";
+  | "runner.deleted"
+  | "class.upserted"
+  | "course.upserted"
+  | "control.upserted"
+  | "reference.imported";
 
 // ─── Payloads ────────────────────────────────────────────────
 
@@ -56,6 +62,12 @@ export interface CardReadPayload {
   punchesFresh?: boolean;
   ownerData?: Record<string, string | undefined>;
   metadata?: Record<string, string | number | undefined>;
+  /**
+   * Original read time (ms since epoch) when it differs from the entry's
+   * emit time — set by backup-memory replays so the applying node's dedupe
+   * window and `read_at` column both use the true read moment.
+   */
+  readAt?: number;
 }
 
 export interface PunchRecordedPayload {
@@ -63,6 +75,33 @@ export interface PunchRecordedPayload {
   controlCode: number;
   time: number;
   origin?: string;
+  /**
+   * The origin node's punch row UUID. The applying node inserts it verbatim
+   * so later `punch.removed` / `punch.updated` entries can address the row
+   * by id on every node. Absent on legacy entries — the dedupe key
+   * `(cardNo, controlCode, time)` is the fallback address.
+   */
+  id?: string;
+}
+
+/** Manual removal of a free punch. Addressed by id, dedupe key as fallback. */
+export interface PunchRemovedPayload {
+  id?: string;
+  cardNo: number;
+  controlCode: number;
+  /** Absolute deciseconds (the punch's time at removal). */
+  time: number;
+}
+
+/** Manual time correction on a free punch. */
+export interface PunchUpdatedPayload {
+  id?: string;
+  cardNo: number;
+  controlCode: number;
+  /** The pre-edit absolute time — the fallback address. */
+  oldTime: number;
+  /** The new absolute time. */
+  time: number;
 }
 
 /**
@@ -147,9 +186,42 @@ export interface RunnerDeletedPayload {
   runnerId: number;
 }
 
+/**
+ * Full-row LWW upsert for a reference entity (class / course / control).
+ * Deletes are upserts with `removed: true` in `fields`. `fields` carries the
+ * portable row (camelCase model fields, FKs as UUIDs) minus `id`, `eventId`,
+ * `seq`, timestamps — and minus derived server artifacts (course `geometry`),
+ * which travel with the checkout snapshot instead.
+ */
+export interface ReferenceUpsertPayload {
+  /** Row UUID — identical on every node. */
+  id: string;
+  /** Per-event seq, inserted explicitly on first apply. */
+  seq: number;
+  fields: Record<string, unknown>;
+  /** `course.upserted` only: the full ordered control list (replace-all). */
+  courseControls?: Array<{ position: number; controlId: string }>;
+  /** `class.upserted` only: course-pool rows (replace-all). */
+  coursePools?: Array<{ stage: number; courseId: string }>;
+}
+
+/**
+ * One bulk reference import (`course.importCourses`): the complete
+ * post-import reference state. Apply = upsert every row; `replaceAll`
+ * additionally soft-removes local courses/controls absent from the payload.
+ */
+export interface ReferenceImportedPayload {
+  replaceAll?: boolean;
+  controls: ReferenceUpsertPayload[];
+  courses: ReferenceUpsertPayload[];
+  classes: ReferenceUpsertPayload[];
+}
+
 export interface JournalPayloads {
   "card.read": CardReadPayload;
   "punch.recorded": PunchRecordedPayload;
+  "punch.removed": PunchRemovedPayload;
+  "punch.updated": PunchUpdatedPayload;
   "start.recorded": StartRecordedPayload;
   "start.adjusted": StartRecordedPayload;
   "finish.recorded": FinishRecordedPayload;
@@ -158,6 +230,10 @@ export interface JournalPayloads {
   "runner.registered": RunnerRegisteredPayload;
   "runner.updated": RunnerUpdatedPayload;
   "runner.deleted": RunnerDeletedPayload;
+  "class.upserted": ReferenceUpsertPayload;
+  "course.upserted": ReferenceUpsertPayload;
+  "control.upserted": ReferenceUpsertPayload;
+  "reference.imported": ReferenceImportedPayload;
 }
 
 // ─── Wire envelope ───────────────────────────────────────────

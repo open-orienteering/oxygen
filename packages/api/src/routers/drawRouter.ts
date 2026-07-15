@@ -6,6 +6,7 @@ import type { DrawPreviewResult } from "@oxygen/shared";
 import { WITHDRAWN_STATUSES } from "@oxygen/shared";
 import { valueToRunnerStatus } from "../statusConvert.js";
 import { appendJournal } from "../journalEmit.js";
+import { emitClassUpserted } from "../referenceJournal.js";
 
 const classDrawConfigSchema = z.object({
   classId: z.number().int(),
@@ -177,17 +178,18 @@ export const drawRouter = router({
             totalDrawn++;
           }
 
-          // The per-class FirstStart / StartInterval write is class reference
-          // data (not journaled in pivot Step 2 — see docs/offline-architecture
-          // "Reference data" deferral). The runner start times above are the
-          // race-critical, journaled facts.
           if (config) {
-            await ctx.db.class.update({
-              where: { id: cls.classUuid },
-              data: {
-                firstStart: toRelative(cls.computedFirstStart, zeroTime),
-                startInterval: config.interval,
-              },
+            // Class draw settings + class.upserted journal entry commit
+            // together (reference data journals as full-row LWW upserts).
+            await ctx.db.$transaction(async (tx) => {
+              await tx.class.update({
+                where: { id: cls.classUuid },
+                data: {
+                  firstStart: toRelative(cls.computedFirstStart, zeroTime),
+                  startInterval: config.interval,
+                },
+              });
+              await emitClassUpserted(tx, ctx.event.id, cls.classUuid);
             });
           }
         }

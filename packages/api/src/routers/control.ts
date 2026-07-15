@@ -14,6 +14,10 @@ import type {
   ControlConfig,
   ControlUnit as ControlUnitDto,
 } from "@oxygen/shared";
+import { uuidv7 } from "uuidv7";
+import { toAbsolute } from "../timeConvert.js";
+import { appendJournal } from "../journalEmit.js";
+import { emitControlUpserted } from "../referenceJournal.js";
 
 // ─── SNTP client (used by control.serverTime) ──────────────────────
 
@@ -419,16 +423,21 @@ export const controlRouter = router({
           });
         }
       }
-      const created = await ctx.db.control.create({
-        data: {
-          eventId: ctx.event.id,
-          name: input.name,
-          codes: input.codes,
-          status: valueToControlStatus(input.status),
-          timeAdjust: input.timeAdjust,
-          minTime: input.minTime,
-        },
-        select: { seq: true, codes: true },
+      // Table write + control.upserted journal entry commit together.
+      const created = await ctx.db.$transaction(async (tx) => {
+        const c = await tx.control.create({
+          data: {
+            eventId: ctx.event.id,
+            name: input.name,
+            codes: input.codes,
+            status: valueToControlStatus(input.status),
+            timeAdjust: input.timeAdjust,
+            minTime: input.minTime,
+          },
+          select: { id: true, seq: true, codes: true },
+        });
+        await emitControlUpserted(tx, ctx.event.id, c.id);
+        return c;
       });
       return { id: publicControlId(created) };
     }),
@@ -457,7 +466,10 @@ export const controlRouter = router({
       if (input.minTime !== undefined) data.minTime = input.minTime;
       if (input.radioType !== undefined) data.radioType = input.radioType;
       if (input.airPlus !== undefined) data.airPlus = input.airPlus;
-      await ctx.db.control.update({ where: { id: c.id }, data });
+      await ctx.db.$transaction(async (tx) => {
+        await tx.control.update({ where: { id: c.id }, data });
+        await emitControlUpserted(tx, ctx.event.id, c.id);
+      });
       return { ok: true };
     }),
 
@@ -465,9 +477,13 @@ export const controlRouter = router({
     .input(z.object({ id: z.number().int() }))
     .mutation(async ({ ctx, input }) => {
       const c = await getControlByCode(ctx.db, ctx.event.id, input.id);
-      await ctx.db.control.update({
-        where: { id: c.id },
-        data: { removed: true },
+      await ctx.db.$transaction(async (tx) => {
+        await tx.control.update({
+          where: { id: c.id },
+          data: { removed: true },
+        });
+        // Deletes are upserts with removed: true on the wire.
+        await emitControlUpserted(tx, ctx.event.id, c.id);
       });
       return { ok: true };
     }),
@@ -663,9 +679,16 @@ export const controlRouter = router({
       if (input.airPlus !== undefined) data.airPlus = input.airPlus;
       if (input.autosendMode !== undefined) data.autosendMode = input.autosendMode;
       if (Object.keys(data).length > 0) {
-        await ctx.db.control.updateMany({
-          where: { id: { in: ctrls.map((c) => c.id) } },
-          data,
+        // Radio / AIR+ config lives on the control row, so it journals like
+        // any other control edit (the per-unit telemetry below does not).
+        await ctx.db.$transaction(async (tx) => {
+          await tx.control.updateMany({
+            where: { id: { in: ctrls.map((c) => c.id) } },
+            data,
+          });
+          for (const c of ctrls) {
+            await emitControlUpserted(tx, ctx.event.id, c.id);
+          }
         });
       }
 
@@ -944,22 +967,40 @@ export const controlRouter = router({
           message: `Backup punch ${input.punchId} not found`,
         });
       }
-      await ctx.db.punch.create({
-        data: {
+      // Mirror insert + flag flip + punch.recorded journal entry commit or
+      // roll back together. The minted id travels in the payload so every
+      // node stores the mirror under the same UUID.
+      const mirrorId = uuidv7();
+      await ctx.db.$transaction(async (tx) => {
+        await tx.punch.create({
+          data: {
+            id: mirrorId,
+            eventId: ctx.event.id,
+            cardNo: bp.cardNo,
+            controlCode: bp.controlCode,
+            controlId: bp.controlId,
+            unitId: bp.unitId,
+            time: bp.time,
+            punchedAt: bp.punchedAt,
+            subSecond: bp.subSecond,
+            source: "manual",
+          },
+        });
+        await tx.punch.update({
+          where: { id: bp.id },
+          data: { isOriginal: false },
+        });
+        await appendJournal(tx, {
           eventId: ctx.event.id,
-          cardNo: bp.cardNo,
-          controlCode: bp.controlCode,
-          controlId: bp.controlId,
-          unitId: bp.unitId,
-          time: bp.time,
-          punchedAt: bp.punchedAt,
-          subSecond: bp.subSecond,
-          source: "manual",
-        },
-      });
-      await ctx.db.punch.update({
-        where: { id: bp.id },
-        data: { isOriginal: false },
+          type: "punch.recorded",
+          payload: {
+            id: mirrorId,
+            cardNo: bp.cardNo,
+            controlCode: bp.controlCode,
+            time: bp.time !== 0 ? toAbsolute(bp.time, ctx.event.zeroTime) : 0,
+            origin: "backup_memory",
+          },
+        });
       });
       return { success: true as const };
     }),
@@ -1012,7 +1053,10 @@ export const controlRouter = router({
             select: { id: true },
           })
         : null;
+      // Ids are minted up front so each punch.recorded entry can carry its
+      // row UUID; inserts + journal entries commit or roll back together.
       const data = input.punches.map((p) => ({
+        id: uuidv7(),
         eventId: ctx.event.id,
         cardNo: p.cardNo,
         controlCode: p.controlCode ?? fallbackControlCode,
@@ -1027,7 +1071,29 @@ export const controlRouter = router({
         subSecond: p.subSecond ?? null,
         source: "backup_memory",
       }));
-      const result = await ctx.db.punch.createMany({ data, skipDuplicates: true });
+      const result = await ctx.db.$transaction(
+        async (tx) => {
+          const r = await tx.punch.createMany({ data, skipDuplicates: true });
+          for (const row of data) {
+            await appendJournal(tx, {
+              eventId: ctx.event.id,
+              type: "punch.recorded",
+              payload: {
+                id: row.id,
+                cardNo: row.cardNo,
+                controlCode: row.controlCode,
+                time:
+                  row.time !== 0
+                    ? toAbsolute(row.time, ctx.event.zeroTime)
+                    : 0,
+                origin: "backup_memory",
+              },
+            });
+          }
+          return r;
+        },
+        { timeout: 60_000 },
+      );
       return { ok: true as const, inserted: result.count, count: result.count };
     }),
 });

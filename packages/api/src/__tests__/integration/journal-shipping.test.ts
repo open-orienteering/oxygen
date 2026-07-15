@@ -87,15 +87,11 @@ beforeAll(async () => {
   });
   eventB = { id: rowB.id, nameId: rowB.nameId, zeroTime: rowB.zeroTime };
 
-  // Reference data must exist on both nodes (not journaled in Step 2 —
-  // Step 4's checkout snapshot carries it). Same creation order ⇒ same seq.
+  // Reference data journals as class.upserted (full-row LWW keyed by UUID),
+  // so node B receives the class through the first ship cycle — no manual
+  // mirror needed.
   const clsA = await caller.class.create({ name: "H21" });
   classSeq = clsA.id;
-  const clsB = await dbB.class.create({
-    data: { eventId: eventB.id, name: "H21" },
-    select: { seq: true },
-  });
-  expect(clsB.seq).toBe(classSeq);
 
   transport = {
     push: (nameId, entries) => ingestJournalEntries(dbB, eventB, entries),
@@ -175,6 +171,40 @@ describe("push direction: venue writes converge on the peer", () => {
     });
     expect(runnerB!.name).toBe("Ship Sven II");
     expect(runnerB!.status).toBe("dnf");
+  });
+
+  it("converges reference edits and punch corrections on node B", async () => {
+    // A class rename (full-row LWW upsert) …
+    await caller.class.update({ id: classSeq, name: "H21 Elite" });
+    // … and a manual punch that then gets a time correction. The punch id
+    // travels with punch.recorded, so the correction addresses the same
+    // row on the peer.
+    await caller.cardReadout.addPunch({
+      cardNo: 700100,
+      controlCode: 66,
+      time: 362000,
+    });
+    const punchA = await ctx.db.punch.findFirst({
+      where: { eventId: ctx.eventId, cardNo: 700100, controlCode: 66 },
+    });
+    await caller.cardReadout.updatePunchTime({
+      punchId: punchA!.id,
+      time: 362500,
+    });
+
+    const stats = await shipEventOnce(ctx.db, ctx.event, PEER_ID, transport);
+    expect(stats.errors).toEqual([]);
+
+    const clsB = await dbB.class.findFirst({
+      where: { eventId: eventB.id, seq: classSeq },
+    });
+    expect(clsB!.name).toBe("H21 Elite");
+
+    // Same row UUID on B, with the corrected (relative) time applied.
+    const punchB = await dbB.punch.findUnique({ where: { id: punchA!.id } });
+    expect(punchB).not.toBeNull();
+    expect(punchB!.time).toBe(362500 - 324000);
+    expect(punchB!.isOriginal).toBe(false);
   });
 
   it("is idempotent: a second cycle ships nothing and changes nothing", async () => {
