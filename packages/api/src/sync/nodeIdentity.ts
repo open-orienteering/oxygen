@@ -52,5 +52,14 @@ export function syncIntervalMs(): number {
   return Number.isFinite(raw) && raw >= 250 ? raw : 5000;
 }
 
+/**
+ * Cadence for refreshing the venue's copy of cloud-owned event settings
+ * while a lease is held (default 5 min). `SYNC_SETTINGS_REFRESH_MS`.
+ */
+export function syncSettingsRefreshMs(): number {
+  const raw = parseInt(process.env.SYNC_SETTINGS_REFRESH_MS ?? "", 10);
+  return Number.isFinite(raw) && raw >= 5_000 ? raw : 300_000;
+}
+
 /** Request header carrying the shared secret on node-to-node calls. */
 export const SYNC_SECRET_HEADER = "x-oxygen-sync-secret";

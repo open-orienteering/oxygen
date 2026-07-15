@@ -46,8 +46,11 @@ import {
   SYNC_SECRET_HEADER,
   syncIntervalMs,
   syncPeerUrl,
+  syncSettingsRefreshMs,
   syncSharedSecret,
 } from "./nodeIdentity.js";
+import { makeLeasePeer } from "./lease.js";
+import { refreshCloudOwnedSettings } from "./settingsRefresh.js";
 
 const PUSH_BATCH = 200;
 const PULL_BATCH = 200;
@@ -286,10 +289,38 @@ export async function shipAllOnce(
   }
 }
 
+/**
+ * Slow-cadence pass: refresh the local copy of cloud-owned event settings
+ * for events this node holds a lease on. Piggybacks on the shipper timer
+ * with its own throttle (default 5 min).
+ */
+export async function refreshAllSettingsOnce(
+  db: PrismaClient,
+  peerUrl: string,
+  secret: string,
+): Promise<void> {
+  const peer = makeLeasePeer(peerUrl, secret);
+  const events = await db.event.findMany({
+    where: { removed: false },
+    select: { id: true, nameId: true, zeroTime: true },
+  });
+  for (const ev of events) {
+    try {
+      await refreshCloudOwnedSettings(db, ev, peer);
+    } catch (err) {
+      console.warn(
+        `[shipper] ${ev.nameId}: settings refresh failed:`,
+        err instanceof Error ? err.message : String(err),
+      );
+    }
+  }
+}
+
 // ─── Background worker ──────────────────────────────────────
 
 let timer: NodeJS.Timeout | null = null;
 let busy = false;
+let lastSettingsRefresh = 0;
 
 /**
  * Start the interval worker when a peer is configured. No-op otherwise —
@@ -311,13 +342,19 @@ export function startShipper(): void {
   const tick = () => {
     if (busy) return; // Skip overlapping ticks.
     busy = true;
-    shipAllOnce(prisma(), peerUrl, transport)
-      .catch((err) =>
-        console.error("[shipper] cycle crashed:", err),
-      )
-      .finally(() => {
+    void (async () => {
+      try {
+        await shipAllOnce(prisma(), peerUrl, transport);
+        if (Date.now() - lastSettingsRefresh >= syncSettingsRefreshMs()) {
+          lastSettingsRefresh = Date.now();
+          await refreshAllSettingsOnce(prisma(), peerUrl, secret);
+        }
+      } catch (err) {
+        console.error("[shipper] cycle crashed:", err);
+      } finally {
         busy = false;
-      });
+      }
+    })();
   };
   console.log(`[shipper] Journal shipping to ${peerUrl} every ${syncIntervalMs()}ms`);
   tick();
