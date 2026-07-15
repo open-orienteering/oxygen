@@ -38,11 +38,19 @@ async function main() {
     maxParamLength: 500,
   });
 
+  // CORS_ORIGINS (comma-separated) extends the dev defaults — a venue box
+  // must allow the cloud-served PWA's HTTPS origin so stations on the LAN
+  // can call it cross-origin (Chrome LNA lifts the mixed-content block).
+  const extraOrigins = (process.env.CORS_ORIGINS ?? "")
+    .split(",")
+    .map((o) => o.trim())
+    .filter(Boolean);
   await server.register(cors, {
     origin: [
       "http://localhost:5173",
       "http://localhost:4173",
       "http://localhost:8080",
+      ...extraOrigins,
     ],
     credentials: true,
     allowedHeaders: [

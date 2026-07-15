@@ -318,6 +318,14 @@ Stations are clients, not replicas. When a station loses its node
 
 ## Transport: Local Network Access (no TLS certificates)
 
+> **Implementation status (pivot Step 5, 2026-07-16).** Landed:
+> `packages/web/src/lib/node-discovery.ts` (pinned URL probes, cloud
+> fallback, climb-back, `venueAwareFetch` with the LNA annotation),
+> `docker-compose.venue.yml`, `CORS_ORIGINS` on the API, the sync-panel
+> venue-URL input + connection-mode line, and the same-origin restriction
+> on the service worker's tRPC cache. Ops guide:
+> [`venue-runbook.md`](venue-runbook.md).
+
 An HTTPS-served PWA calling `http://` on the LAN is normally blocked as
 mixed content. Chrome 142+ ships **Local Network Access (LNA)**: local
 network requests from secure contexts are gated behind a user permission,
