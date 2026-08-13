@@ -66,9 +66,11 @@ describe("runner.create", () => {
     ).rejects.toThrow(/already assigned/i);
   });
 
-  it("allows cardNo = 0 (unassigned) on multiple runners", async () => {
+  it("allows multiple cardless runners (omitted or legacy 0 → NULL)", async () => {
     await caller.runner.create({ name: "Dave", classId: classSeq });
-    await caller.runner.create({ name: "Eve", classId: classSeq });
+    // The legacy 0 sentinel is coerced to NULL on write; NULLs are distinct
+    // under the partial unique index, so this does not collide with Dave.
+    await caller.runner.create({ name: "Eve", classId: classSeq, cardNo: 0 });
     // No throw.
   });
 

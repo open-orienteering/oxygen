@@ -289,4 +289,116 @@ test.describe("Offline Support", () => {
     // Badge should disappear after sync
     await expect(badge).not.toBeVisible({ timeout: 5000 });
   });
+
+  test("surfaces server-rejected entries with retry/discard (no silent drops)", async ({
+    page,
+  }) => {
+    await selectCompetition(page);
+
+    // Inject a poison outbox entry directly into IndexedDB: a
+    // punch.recorded with an empty payload, which the server's apply
+    // validation rejects. The auto-drain picks it up within ~2s.
+    await page.evaluate(async () => {
+      const db = await new Promise<IDBDatabase>((resolve, reject) => {
+        const req = indexedDB.open("oxygen-offline");
+        req.onsuccess = () => resolve(req.result);
+        req.onerror = () => reject(req.error);
+      });
+      await new Promise<void>((resolve, reject) => {
+        const tx = db.transaction("events", "readwrite");
+        tx.objectStore("events").put({
+          id: crypto.randomUUID(),
+          type: "punch.recorded",
+          competitionId: "itest",
+          stationId: "e2e-poison",
+          timestamp: Date.now(),
+          hlc: { physical: Date.now(), logical: 0 },
+          schemaVersion: 1,
+          actorId: null,
+          payload: {}, // malformed on purpose — server rejects the apply
+          status: "pending",
+          attempts: 0,
+        });
+        tx.oncomplete = () => resolve();
+        tx.onerror = () => reject(tx.error);
+      });
+      db.close();
+    });
+
+    // The red rejected badge appears once the drain fails the entry.
+    const failedBadge = page.getByTestId("sync-failed-badge");
+    await expect(failedBadge).toBeVisible({ timeout: 15000 });
+    await expect(failedBadge).toHaveText("1");
+
+    // Open the panel: the rejection is listed with its error and actions.
+    await page.getByTestId("sync-status-button").click();
+    await expect(page.getByTestId("sync-failed-panel")).toBeVisible();
+    await expect(page.getByTestId("sync-failed-panel")).toContainText(
+      "punch.recorded",
+    );
+
+    // Discard it (deliberate operator action behind a confirm).
+    page.on("dialog", (dialog) => dialog.accept());
+    await page
+      .getByTestId("sync-failed-panel")
+      .locator("button", { hasText: /Discard|Släng/ })
+      .click();
+
+    await expect(page.getByTestId("sync-failed-panel")).not.toBeVisible({
+      timeout: 5000,
+    });
+    await expect(failedBadge).not.toBeVisible({ timeout: 10000 });
+  });
+
+  test("resilience mode toggle serves station reads from the snapshot cache", async ({
+    page,
+    context,
+  }) => {
+    await selectCompetition(page);
+    await warmStationCache(page);
+
+    // Flip the flag through the sync panel (persisted in localStorage).
+    await page.getByTestId("sync-status-button").click();
+    await page.getByTestId("resilience-mode-toggle").check();
+    await page.locator(".fixed.inset-0").click(); // close the panel
+
+    // Wait until the projection sync has hydrated the Dexie snapshot cache.
+    await expect(async () => {
+      const count = await page.evaluate(async () => {
+        const db = await new Promise<IDBDatabase>((resolve, reject) => {
+          const req = indexedDB.open("oxygen-offline");
+          req.onsuccess = () => resolve(req.result);
+          req.onerror = () => reject(req.error);
+        });
+        const n = await new Promise<number>((resolve, reject) => {
+          const tx = db.transaction("projRunners", "readonly");
+          const req = tx.objectStore("projRunners").count();
+          req.onsuccess = () => resolve(req.result);
+          req.onerror = () => reject(req.error);
+        });
+        db.close();
+        return n;
+      });
+      expect(count).toBeGreaterThan(0);
+    }).toPass({ intervals: [500, 1000, 1000, 2000], timeout: 15000 });
+
+    // Open the Finish Station while online (full page loads offline are the
+    // production service worker's job — the dev server has no SW precache),
+    // then cut the network. The card lookup must still resolve a seeded
+    // runner — served from the snapshot cache, not tRPC.
+    await page.goto("/itest/finish-station");
+    const cardInput = page.locator('input[type="number"]').first();
+    await expect(cardInput).toBeVisible({ timeout: 10000 });
+    await context.setOffline(true);
+    await cardInput.fill("500803");
+    await expect(page.getByText("Monica Henriksson")).toBeVisible({
+      timeout: 10000,
+    });
+
+    await context.setOffline(false);
+    // Reset the flag so later specs see default behaviour.
+    await page.evaluate(() =>
+      localStorage.removeItem("oxygen-offline-projection"),
+    );
+  });
 });

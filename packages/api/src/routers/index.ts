@@ -16,6 +16,7 @@ import { onlineInputRouter } from "./onlineInput.js";
 import { externalRouter } from "./external.js";
 import { liveloxRouter } from "./livelox.js";
 import { eventsRouter } from "./events.js";
+import { leaseRouter } from "./lease.js";
 import { registrationTrendsRouter } from "./registrationTrends.js";
 
 export const appRouter = router({
@@ -42,6 +43,7 @@ export const appRouter = router({
   external: externalRouter,
   livelox: liveloxRouter,
   events: eventsRouter,
+  lease: leaseRouter,
   registrationTrends: registrationTrendsRouter,
 });
 

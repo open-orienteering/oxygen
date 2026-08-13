@@ -1,5 +1,6 @@
 import { offlineDb, type OxygenEvent } from "./db";
 import { trpcVanillaClient } from "../trpc";
+import { recordClockSkew } from "./clock-skew";
 
 const BATCH_SIZE = 50;
 let draining = false;
@@ -35,6 +36,11 @@ export async function drainEventQueue(competitionId?: string): Promise<number> {
           events: events.map(serializeEvent),
         });
         console.log(`[offline-sync] Push result: ${result.synced.length} synced, ${result.failed.length} failed`);
+
+        // Detect a skewed local clock from the server's response time.
+        if (typeof result.serverTimeMs === "number") {
+          recordClockSkew(result.serverTimeMs, Date.now());
+        }
 
         // Mark synced events
         for (const id of result.synced) {
@@ -74,6 +80,9 @@ function serializeEvent(event: OxygenEvent) {
     competitionId: event.competitionId,
     stationId: event.stationId,
     timestamp: event.timestamp,
+    hlc: event.hlc,
+    schemaVersion: event.schemaVersion,
+    actorId: event.actorId,
     payload: event.payload as unknown as Record<string, unknown>,
   };
 }

@@ -122,7 +122,7 @@ export const clubRouter = router({
           id: r.seq,
           name: r.name,
           className: r.class?.name ?? "",
-          cardNo: r.cardNo,
+          cardNo: r.cardNo ?? 0,
         })),
       };
     }),
@@ -210,7 +210,7 @@ export const clubRouter = router({
           id: r.seq,
           name: r.name,
           className: r.class?.name ?? "",
-          cardNo: r.cardNo,
+          cardNo: r.cardNo ?? 0,
         })),
       };
     }),

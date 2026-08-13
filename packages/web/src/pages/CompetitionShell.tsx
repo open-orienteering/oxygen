@@ -24,6 +24,10 @@ import { RegistrationDialog } from "../components/RegistrationDialog";
 import { DbLoadIndicator } from "../components/DbLoadIndicator";
 import { useExternalChanges } from "../hooks/useExternalChanges";
 import { SyncStatusIndicator } from "../components/SyncStatusIndicator";
+import { LeaseBadge } from "../components/VenueLease";
+import { ClockSkewBanner } from "../components/ClockSkewBanner";
+import { useProjectionSync } from "../hooks/useProjectionSync";
+import { useOfflineProjectionEnabled } from "../lib/feature-flags";
 import { usePerformanceSensitive } from "../lib/performance-mode";
 import { useIsWideViewport } from "../components/map-pane-shared";
 import { useMapPanelProps } from "../lib/map-props-store";
@@ -118,6 +122,8 @@ export function CompetitionShell() {
   const utils = trpc.useUtils();
   const { setCompetitionNameId, getKioskChannel } = useDeviceManager();
   const { print: printerPrint } = usePrinter();
+  // Keep the offline Dexie snapshot cache warm when the flag is on.
+  useProjectionSync(nameId ?? "", useOfflineProjectionEnabled());
   const selectMutation = trpc.competition.select.useMutation({
     onSuccess: (data) => {
       setCompetitionName(data.name);
@@ -310,6 +316,7 @@ export function CompetitionShell() {
   return (
     <div className="min-h-screen bg-slate-50">
       <ExternalChangesProbe enabled={ready} />
+      <ClockSkewBanner />
       {/* Header */}
       <header className="bg-white border-b border-slate-200 sticky top-0 z-10">
         <div className={headerInnerClass}>
@@ -348,6 +355,7 @@ export function CompetitionShell() {
                   onShow={() => setPaneCollapsed(false)}
                 />
               )}
+              <LeaseBadge />
               <ReaderStatusIndicator />
               <PrinterStatusIndicator />
               <KioskLauncher nameId={nameId ?? ""} />

@@ -1,12 +1,13 @@
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
-import { router, eventProcedure } from "../trpc.js";
+import { router, eventProcedure, raceProcedure } from "../trpc.js";
 import { toAbsolute, toRelative, nowMeosDate, nowMeosTime } from "../timeConvert.js";
-import type { RunnerDetail, RunnerInfo } from "@oxygen/shared";
+import { RunnerStatus, type RunnerDetail, type RunnerInfo } from "@oxygen/shared";
 import {
   runnerStatusToValue,
   valueToRunnerStatus,
 } from "../statusConvert.js";
+import { appendJournal } from "../journalEmit.js";
 
 /**
  * Runner router. All inputs/outputs use the per-event integer `seq` as the
@@ -55,14 +56,84 @@ async function classSeqToId(
   return cls.id;
 }
 
+/**
+ * Translate a portable runner patch (the flat `runner.update` input shape /
+ * the `runner.updated` journal `fields`) into Prisma `data`. Times arrive as
+ * absolute deciseconds, `classId` as a class `seq`, `status` numeric, and the
+ * legacy `clubId` as an Eventor club id — all converted here. Shared between
+ * the `runner.update` mutation and the journal apply path (`events.push`),
+ * so a shipped entry replays through exactly the same translation.
+ */
+export async function buildRunnerUpdateData(
+  db: import("@prisma/client").PrismaClient,
+  eventId: bigint,
+  zeroTime: number,
+  fields: Record<string, unknown>,
+): Promise<Record<string, unknown>> {
+  const get = <T>(k: string): T | undefined =>
+    (fields[k] === undefined ? undefined : (fields[k] as T));
+
+  const data: Record<string, unknown> = {};
+  const cardNo = get<number | null>("cardNo");
+  if (get<string>("name") !== undefined) data.name = get<string>("name");
+  if (cardNo !== undefined) data.cardNo = cardNo && cardNo > 0 ? cardNo : null;
+  if (get<string>("clubName") !== undefined)
+    data.clubName = get<string>("clubName");
+  if (fields.eventorClubId !== undefined)
+    data.eventorClubId = fields.eventorClubId;
+  // Legacy clubId → eventorClubId + (best-effort) clubName.
+  if (fields.clubId !== undefined) {
+    const cid = fields.clubId as number | null;
+    if (cid && cid > 0) {
+      data.eventorClubId = BigInt(cid);
+      const dir = await db.clubDirectory.findUnique({
+        where: { eventorId: BigInt(cid) },
+        select: { name: true },
+      });
+      if (dir?.name) data.clubName = dir.name;
+    } else {
+      data.eventorClubId = null;
+      data.clubName = "";
+    }
+  }
+  if (get<number>("classId") !== undefined) {
+    data.classId = await classSeqToId(db, eventId, get<number>("classId")!);
+  }
+  if (get<number>("startNo") !== undefined) data.startNo = get<number>("startNo");
+  if (get<number>("startTime") !== undefined) {
+    const st = get<number>("startTime")!;
+    data.startTime = st > 0 ? toRelative(st, zeroTime) : st;
+  }
+  if (get<number>("birthYear") !== undefined)
+    data.birthYear = get<number>("birthYear");
+  if (get<string>("sex") !== undefined) data.sex = get<string>("sex");
+  if (get<string>("nationality") !== undefined)
+    data.nationality = get<string>("nationality");
+  if (get<string>("phone") !== undefined) data.phone = get<string>("phone");
+  if (get<number>("status") !== undefined)
+    data.status = valueToRunnerStatus(get<number>("status")!);
+  if (get<number>("finishTime") !== undefined) {
+    const ft = get<number>("finishTime")!;
+    data.finishTime = ft > 0 ? toRelative(ft, zeroTime) : ft;
+  }
+  if (get<number>("fee") !== undefined) data.feeCents = get<number>("fee");
+  if (get<number>("paid") !== undefined) data.paidCents = get<number>("paid");
+  if (get<number>("payMode") !== undefined) data.payMode = get<number>("payMode");
+  if (get<number>("cardFee") !== undefined)
+    data.cardFeeCents = get<number>("cardFee");
+  if (get<boolean>("cardReturned") !== undefined)
+    data.cardReturned = get<boolean>("cardReturned");
+  return data;
+}
+
 /** Throw CONFLICT if `cardNo` is already used by another runner in this event. */
 async function assertCardNotTaken(
   db: import("@prisma/client").PrismaClient,
   eventId: bigint,
-  cardNo: number,
+  cardNo: number | null | undefined,
   excludeId?: string,
 ): Promise<void> {
-  if (cardNo <= 0) return;
+  if (cardNo == null || cardNo <= 0) return;
   const existing = await db.runner.findFirst({
     where: {
       eventId,
@@ -84,7 +155,7 @@ async function assertCardNotTaken(
 
 const runnerCreateSchema = z.object({
   name: z.string().min(1),
-  cardNo: z.number().int().optional().default(0),
+  cardNo: z.number().int().nonnegative().nullable().optional(),
   clubName: z.string().optional().default(""),
   eventorClubId: z.number().int().optional(),
   classId: z.number().int(), // seq
@@ -104,7 +175,7 @@ const runnerCreateSchema = z.object({
 
 const runnerUpdateSchema = z.object({
   name: z.string().min(1).optional(),
-  cardNo: z.number().int().optional(),
+  cardNo: z.number().int().nonnegative().nullable().optional(),
   clubName: z.string().optional(),
   eventorClubId: z.number().int().nullable().optional(),
   classId: z.number().int().optional(),
@@ -156,7 +227,7 @@ export const runnerRouter = router({
       return {
         id: r.seq,
         name: r.name,
-        cardNo: r.cardNo,
+        cardNo: r.cardNo ?? 0,
         clubId: r.eventorClubId ? Number(r.eventorClubId) : 0,
         clubName: r.clubName,
         classId: cls?.seq ?? 0,
@@ -198,7 +269,7 @@ export const runnerRouter = router({
       return {
         id: r.seq,
         name: r.name,
-        cardNo: r.cardNo,
+        cardNo: r.cardNo ?? 0,
         clubId: r.eventorClubId ? Number(r.eventorClubId) : 0,
         clubName: r.clubName,
         classId: cls?.seq ?? 0,
@@ -265,7 +336,7 @@ export const runnerRouter = router({
       const filtered = sf
         ? runners.filter((r) => {
             const status = runnerStatusToValue(r.status);
-            const hasPunches = punchCardNos.has(r.cardNo);
+            const hasPunches = r.cardNo != null && punchCardNos.has(r.cardNo);
             const hasStartedByTime =
               r.startTime > 0 &&
               (r.startTime <= 1 ||
@@ -292,7 +363,7 @@ export const runnerRouter = router({
         (r): RunnerInfo => ({
           id: r.seq,
           name: r.name,
-          cardNo: r.cardNo,
+          cardNo: r.cardNo ?? 0,
           clubId: r.eventorClubId ? Number(r.eventorClubId) : 0,
           clubName: r.clubName,
           classId: r.class?.seq ?? 0,
@@ -314,49 +385,72 @@ export const runnerRouter = router({
       );
     }),
 
-  create: eventProcedure
+  create: raceProcedure
     .input(runnerCreateSchema)
     .mutation(async ({ ctx, input }) => {
       await assertCardNotTaken(ctx.db, ctx.event.id, input.cardNo);
       const classUuid = await classSeqToId(ctx.db, ctx.event.id, input.classId);
+      const cardNo = input.cardNo && input.cardNo > 0 ? input.cardNo : null;
 
-      const created = await ctx.db.runner.create({
-        data: {
+      // Table write + journal entry commit or roll back together.
+      const created = await ctx.db.$transaction(async (tx) => {
+        const c = await tx.runner.create({
+          data: {
+            eventId: ctx.event.id,
+            name: input.name,
+            // 0 (legacy sentinel) or absent → NULL (no card).
+            cardNo,
+            clubName: input.clubName,
+            eventorClubId: input.eventorClubId ?? null,
+            classId: classUuid,
+            startNo: input.startNo,
+            // Inputs are absolute deciseconds; storage is ZeroTime-relative.
+            startTime:
+              input.startTime > 0
+                ? toRelative(input.startTime, ctx.event.zeroTime)
+                : input.startTime,
+            birthYear: input.birthYear,
+            sex: input.sex,
+            nationality: input.nationality,
+            phone: input.phone,
+            ...(input.status != null
+              ? { status: valueToRunnerStatus(input.status) }
+              : {}),
+            ...(input.finishTime != null
+              ? {
+                  finishTime:
+                    input.finishTime > 0
+                      ? toRelative(input.finishTime, ctx.event.zeroTime)
+                      : input.finishTime,
+                }
+              : {}),
+            feeCents: input.fee,
+            paidCents: input.paid,
+            payMode: input.payMode,
+            cardFeeCents: input.cardFee,
+            entryDate: nowMeosDate(),
+            entryTime: nowMeosTime(),
+          },
+          select: { id: true, seq: true },
+        });
+        await appendJournal(tx, {
           eventId: ctx.event.id,
-          name: input.name,
-          cardNo: input.cardNo,
-          clubName: input.clubName,
-          eventorClubId: input.eventorClubId ?? null,
-          classId: classUuid,
-          startNo: input.startNo,
-          // Inputs are absolute deciseconds; storage is ZeroTime-relative.
-          startTime:
-            input.startTime > 0
-              ? toRelative(input.startTime, ctx.event.zeroTime)
-              : input.startTime,
-          birthYear: input.birthYear,
-          sex: input.sex,
-          nationality: input.nationality,
-          phone: input.phone,
-          ...(input.status != null
-            ? { status: valueToRunnerStatus(input.status) }
-            : {}),
-          ...(input.finishTime != null
-            ? {
-                finishTime:
-                  input.finishTime > 0
-                    ? toRelative(input.finishTime, ctx.event.zeroTime)
-                    : input.finishTime,
-              }
-            : {}),
-          feeCents: input.fee,
-          paidCents: input.paid,
-          payMode: input.payMode,
-          cardFeeCents: input.cardFee,
-          entryDate: nowMeosDate(),
-          entryTime: nowMeosTime(),
-        },
-        select: { id: true, seq: true },
+          type: "runner.registered",
+          payload: {
+            tempId: c.id,
+            // The allocated seq travels with the entry so a follower node
+            // inserts the same value instead of re-allocating (the
+            // leaseholder is the only seq allocator during a lease).
+            seq: c.seq,
+            name: input.name,
+            classId: input.classId, // seq
+            clubName: input.clubName,
+            eventorClubId: input.eventorClubId,
+            cardNo,
+            startTime: input.startTime > 0 ? input.startTime : undefined,
+          },
+        });
+        return c;
       });
       return { id: created.seq };
     }),
@@ -372,7 +466,7 @@ export const runnerRouter = router({
    *   - `clubName`: free-text club (sent when there's no Eventor link).
    *   - `eventorClubId`: explicit Eventor club id (preferred new shape).
    */
-  update: eventProcedure
+  update: raceProcedure
     .input(
       z.object({
         id: z.number().int(),
@@ -391,86 +485,67 @@ export const runnerRouter = router({
         string,
         unknown
       >;
-      const get = <T>(k: string): T | undefined =>
-        (fields[k] === undefined ? undefined : (fields[k] as T));
 
-      const cardNo = get<number>("cardNo");
+      const cardNo =
+        fields.cardNo === undefined ? undefined : (fields.cardNo as number | null);
       if (cardNo != null && cardNo !== r.cardNo) {
         await assertCardNotTaken(ctx.db, ctx.event.id, cardNo, r.id);
       }
 
-      const data: Record<string, unknown> = {};
-      if (get<string>("name") !== undefined) data.name = get<string>("name");
-      if (cardNo !== undefined) data.cardNo = cardNo;
-      if (get<string>("clubName") !== undefined)
-        data.clubName = get<string>("clubName");
-      if (fields.eventorClubId !== undefined)
-        data.eventorClubId = fields.eventorClubId;
-      // Legacy clubId → eventorClubId + (best-effort) clubName.
-      if (fields.clubId !== undefined) {
-        const cid = fields.clubId as number | null;
-        if (cid && cid > 0) {
-          data.eventorClubId = BigInt(cid);
-          const dir = await ctx.db.clubDirectory.findUnique({
-            where: { eventorId: BigInt(cid) },
-            select: { name: true },
-          });
-          if (dir?.name) data.clubName = dir.name;
-        } else {
-          data.eventorClubId = null;
-          data.clubName = "";
-        }
-      }
-      if (get<number>("classId") !== undefined) {
-        data.classId = await classSeqToId(
-          ctx.db,
-          ctx.event.id,
-          get<number>("classId")!,
-        );
-      }
-      if (get<number>("startNo") !== undefined) data.startNo = get<number>("startNo");
-      if (get<number>("startTime") !== undefined) {
-        const st = get<number>("startTime")!;
-        data.startTime = st > 0 ? toRelative(st, ctx.event.zeroTime) : st;
-      }
-      if (get<number>("birthYear") !== undefined)
-        data.birthYear = get<number>("birthYear");
-      if (get<string>("sex") !== undefined) data.sex = get<string>("sex");
-      if (get<string>("nationality") !== undefined)
-        data.nationality = get<string>("nationality");
-      if (get<string>("phone") !== undefined) data.phone = get<string>("phone");
-      if (get<number>("status") !== undefined)
-        data.status = valueToRunnerStatus(get<number>("status")!);
-      if (get<number>("finishTime") !== undefined) {
-        const ft = get<number>("finishTime")!;
-        data.finishTime = ft > 0 ? toRelative(ft, ctx.event.zeroTime) : ft;
-      }
-      if (get<number>("fee") !== undefined) data.feeCents = get<number>("fee");
-      if (get<number>("paid") !== undefined) data.paidCents = get<number>("paid");
-      if (get<number>("payMode") !== undefined) data.payMode = get<number>("payMode");
-      if (get<number>("cardFee") !== undefined)
-        data.cardFeeCents = get<number>("cardFee");
-      if (get<boolean>("cardReturned") !== undefined)
-        data.cardReturned = get<boolean>("cardReturned");
+      const data = await buildRunnerUpdateData(
+        ctx.db,
+        ctx.event.id,
+        ctx.event.zeroTime,
+        fields,
+      );
 
-      await ctx.db.runner.update({ where: { id: r.id }, data });
+      // Portable patch for the journal: the raw (absolute-ds / seq / numeric)
+      // input fields, minus the routing keys. A peer replays it through this
+      // same mutation, so it must NOT carry the DB-shaped `data` values.
+      const journalFields: Record<string, unknown> = {};
+      for (const [k, v] of Object.entries(fields)) {
+        if (k === "id" || k === "data" || v === undefined) continue;
+        journalFields[k] = v;
+      }
+
+      // Table write + journal entry commit or roll back together.
+      await ctx.db.$transaction(async (tx) => {
+        await tx.runner.update({ where: { id: r.id }, data });
+        await appendJournal(tx, {
+          eventId: ctx.event.id,
+          type: "runner.updated",
+          payload: {
+            cardNo: r.cardNo ?? null, // pre-edit card resolves the peer row
+            runnerId: input.id, // seq
+            fields: journalFields,
+          },
+        });
+      });
       return { ok: true };
     }),
 
   /** Soft-delete a runner. */
-  delete: eventProcedure
+  delete: raceProcedure
     .input(z.object({ id: z.number().int() }))
     .mutation(async ({ ctx, input }) => {
       const r = await getRunnerBySeq(ctx.db, ctx.event.id, input.id);
-      await ctx.db.runner.update({
-        where: { id: r.id },
-        data: { removed: true },
+      // Table write + journal entry commit or roll back together.
+      await ctx.db.$transaction(async (tx) => {
+        await tx.runner.update({
+          where: { id: r.id },
+          data: { removed: true },
+        });
+        await appendJournal(tx, {
+          eventId: ctx.event.id,
+          type: "runner.deleted",
+          payload: { cardNo: r.cardNo ?? null, runnerId: input.id },
+        });
       });
       return { ok: true };
     }),
 
   /** Mark several runners as DNS at once. */
-  bulkDns: eventProcedure
+  bulkDns: raceProcedure
     .input(z.object({ ids: z.array(z.number().int()) }))
     .mutation(async ({ ctx, input }) => {
       const rows = await ctx.db.runner.findMany({
@@ -479,17 +554,31 @@ export const runnerRouter = router({
           seq: { in: input.ids },
           removed: false,
         },
-        select: { id: true },
+        select: { id: true, seq: true, cardNo: true },
       });
-      await ctx.db.runner.updateMany({
-        where: { id: { in: rows.map((r) => r.id) } },
-        data: { status: "dns" },
+      // updateMany + one journal entry per affected runner, atomically.
+      await ctx.db.$transaction(async (tx) => {
+        await tx.runner.updateMany({
+          where: { id: { in: rows.map((r) => r.id) } },
+          data: { status: "dns" },
+        });
+        for (const r of rows) {
+          await appendJournal(tx, {
+            eventId: ctx.event.id,
+            type: "runner.updated",
+            payload: {
+              cardNo: r.cardNo ?? null,
+              runnerId: r.seq,
+              fields: { status: RunnerStatus.DNS },
+            },
+          });
+        }
       });
       return { ok: true, count: rows.length };
     }),
 
   /** Apply the same change to many runners at once. */
-  bulkUpdate: eventProcedure
+  bulkUpdate: raceProcedure
     .input(
       z.object({
         ids: z.array(z.number().int()),
@@ -507,31 +596,58 @@ export const runnerRouter = router({
           seq: { in: input.ids },
           removed: false,
         },
-        select: { id: true },
+        select: { id: true, seq: true, cardNo: true },
       });
       const data: Record<string, unknown> = {};
+      // Portable patch mirrors the applied change in absolute-ds / seq / numeric
+      // form so a peer can replay it through the update path.
+      const journalFields: Record<string, unknown> = {};
       if (input.classId !== undefined) {
         data.classId = await classSeqToId(ctx.db, ctx.event.id, input.classId);
+        journalFields.classId = input.classId;
       }
-      if (input.clubName !== undefined) data.clubName = input.clubName;
-      if (input.eventorClubId !== undefined)
+      if (input.clubName !== undefined) {
+        data.clubName = input.clubName;
+        journalFields.clubName = input.clubName;
+      }
+      if (input.eventorClubId !== undefined) {
         data.eventorClubId = input.eventorClubId;
-      if (input.status !== undefined)
+        journalFields.eventorClubId = input.eventorClubId;
+      }
+      if (input.status !== undefined) {
         data.status = valueToRunnerStatus(input.status);
-      if (input.startTime !== undefined)
+        journalFields.status = input.status;
+      }
+      if (input.startTime !== undefined) {
         data.startTime =
           input.startTime > 0
             ? toRelative(input.startTime, ctx.event.zeroTime)
             : input.startTime;
-      await ctx.db.runner.updateMany({
-        where: { id: { in: rows.map((r) => r.id) } },
-        data,
+        journalFields.startTime = input.startTime;
+      }
+      // updateMany + one journal entry per affected runner, atomically.
+      await ctx.db.$transaction(async (tx) => {
+        await tx.runner.updateMany({
+          where: { id: { in: rows.map((r) => r.id) } },
+          data,
+        });
+        for (const r of rows) {
+          await appendJournal(tx, {
+            eventId: ctx.event.id,
+            type: "runner.updated",
+            payload: {
+              cardNo: r.cardNo ?? null,
+              runnerId: r.seq,
+              fields: journalFields,
+            },
+          });
+        }
       });
       return { ok: true as const, count: rows.length };
     }),
 
   /** Toggle the rental-card-returned flag. Accepts `id` or `runnerId`. */
-  setCardReturned: eventProcedure
+  setCardReturned: raceProcedure
     .input(
       z
         .object({
@@ -546,9 +662,22 @@ export const runnerRouter = router({
     .mutation(async ({ ctx, input }) => {
       const seq = input.id ?? input.runnerId!;
       const r = await getRunnerBySeq(ctx.db, ctx.event.id, seq);
-      await ctx.db.runner.update({
-        where: { id: r.id },
-        data: { cardReturned: input.returned },
+      // The runners table is venue-owned during a lease, so every write to it
+      // is journaled — even rental-admin fields that don't affect results.
+      await ctx.db.$transaction(async (tx) => {
+        await tx.runner.update({
+          where: { id: r.id },
+          data: { cardReturned: input.returned },
+        });
+        await appendJournal(tx, {
+          eventId: ctx.event.id,
+          type: "runner.updated",
+          payload: {
+            cardNo: r.cardNo ?? null,
+            runnerId: seq,
+            fields: { cardReturned: input.returned },
+          },
+        });
       });
       return { ok: true as const };
     }),

@@ -27,8 +27,10 @@ import {
   type ProtocolId,
   type RemotePunch,
 } from "./protocol.js";
+import { uuidv7 } from "uuidv7";
 import { rocProtocol } from "./roc.js";
 import { loadMapping, applyMapping } from "./mapping.js";
+import { appendJournal } from "../journalEmit.js";
 
 const protocolById: Record<ProtocolId, Protocol> = {
   roc: rocProtocol,
@@ -205,14 +207,21 @@ async function pollOnce(eventId: bigint): Promise<void> {
 
   // Inserts run in a single transaction so a partial failure rolls
   // back cleanly. We *do not* defensively re-check punch existence —
-  // ROC's lastId protocol guarantees monotonicity.
+  // ROC's lastId protocol guarantees monotonicity. Each punch is a
+  // race-critical fact, so it is journaled in the same transaction
+  // (payload carries the ABSOLUTE decisecond time so it is node-portable).
+  const stationId = `roc-${cfg.unitId}`;
   await prisma().$transaction(async (tx) => {
     for (const p of newPunches) {
       const effectiveCode = applyMapping(mapping, p.rawCode);
       const time = p.absoluteTimeDs - event.zeroTime;
       const controlId = controlIdByCode.get(effectiveCode) ?? null;
+      // Minted here and carried in the payload so every node stores the
+      // punch under the same UUID (punch edits address rows by id).
+      const punchId = uuidv7();
       await tx.punch.create({
         data: {
+          id: punchId,
           eventId,
           cardNo: p.cardNo,
           controlCode: effectiveCode,
@@ -220,6 +229,18 @@ async function pollOnce(eventId: bigint): Promise<void> {
           time,
           source: "online_input",
           isOriginal: true,
+        },
+      });
+      await appendJournal(tx, {
+        eventId,
+        type: "punch.recorded",
+        stationId,
+        payload: {
+          id: punchId,
+          cardNo: p.cardNo,
+          controlCode: effectiveCode,
+          time: p.absoluteTimeDs,
+          origin: "online_input",
         },
       });
       if (p.punchId > maxId) maxId = p.punchId;

@@ -201,7 +201,7 @@ export const eventRouter = router({
           );
         }
 
-        const hasPunches = (punchMap.get(r.cardNo) ?? 0) > 0;
+        const hasPunches = (punchMap.get(r.cardNo ?? -1) ?? 0) > 0;
         const hasStartedByTime =
           r.startTime > 0 &&
           (r.startTime <= 1 || meosNow >= toAbsolute(r.startTime, zeroTime));
@@ -232,6 +232,8 @@ export const eventRouter = router({
         lowAge: c.lowAge,
         highAge: c.highAge,
         classType: c.classType || undefined,
+        freeStart: c.freeStart,
+        noTiming: c.noTiming,
       }));
 
       const courseInfos: CourseInfo[] = await Promise.all(
@@ -307,7 +309,7 @@ export const eventRouter = router({
         (r): RunnerInfo => ({
           id: r.seq,
           name: r.name,
-          cardNo: r.cardNo,
+          cardNo: r.cardNo ?? 0,
           clubId: r.eventorClubId ? Number(r.eventorClubId) : 0,
           clubName: r.clubName,
           classId: r.class?.seq ?? 0,

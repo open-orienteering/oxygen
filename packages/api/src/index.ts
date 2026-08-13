@@ -14,6 +14,9 @@ import { createContext } from "./trpc.js";
 import { disconnectAll, prisma } from "./db.js";
 import { liveResultsPusher, reconcileEnabledPushers } from "./liveresults.js";
 import { onlineInputPuller, reconcileEnabledPullers } from "./online-input/puller.js";
+import { startShipper, stopShipper } from "./sync/shipper.js";
+import { registerVenueForwarder } from "./sync/venueForwarder.js";
+import { SYNC_SECRET_HEADER } from "./sync/nodeIdentity.js";
 import { registerBackupRoute } from "./backup.js";
 import { registerMapTileRoutes } from "./map-tiles.js";
 import { registerLiveloxTileProxy } from "./livelox-tile-proxy.js";
@@ -35,15 +38,32 @@ async function main() {
     maxParamLength: 500,
   });
 
+  // CORS_ORIGINS (comma-separated) extends the dev defaults — a venue box
+  // must allow the cloud-served PWA's HTTPS origin so stations on the LAN
+  // can call it cross-origin (Chrome LNA lifts the mixed-content block).
+  const extraOrigins = (process.env.CORS_ORIGINS ?? "")
+    .split(",")
+    .map((o) => o.trim())
+    .filter(Boolean);
   await server.register(cors, {
     origin: [
       "http://localhost:5173",
       "http://localhost:4173",
       "http://localhost:8080",
+      ...extraOrigins,
     ],
     credentials: true,
-    allowedHeaders: ["content-type", "x-competition-id", "x-event-id"],
+    allowedHeaders: [
+      "content-type",
+      "x-competition-id",
+      "x-event-id",
+      SYNC_SECRET_HEADER,
+    ],
   });
+
+  // Venue role: cloud-owned mutations forward upstream before tRPC sees
+  // them. No-op on the cloud / single-node deployments.
+  registerVenueForwarder(server);
 
   await server.register(fastifyTRPCPlugin, {
     prefix: "/trpc",
@@ -100,11 +120,14 @@ async function main() {
   void reconcileEnabledPullers().catch((err) =>
     console.error("[online-input] reconcile failed:", err),
   );
+  // Journal shipper — no-op unless SYNC_PEER_URL is configured (venue role).
+  startShipper();
 
   await server.listen({ port: PORT, host: HOST });
 
   const shutdown = async () => {
     server.log.info("Shutting down");
+    stopShipper();
     try {
       await server.close();
     } finally {

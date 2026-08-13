@@ -13,25 +13,32 @@
 
 import { createHash } from "node:crypto";
 import { z } from "zod";
+import { uuidv7 } from "uuidv7";
 import { TRPCError } from "@trpc/server";
-import { router, eventProcedure } from "../trpc.js";
-import type { PrismaClient } from "@prisma/client";
+import { router, eventProcedure, raceProcedure } from "../trpc.js";
+import type { Prisma, PrismaClient } from "@prisma/client";
 import {
   parsePunches,
   matchPunchesToCourse,
   computeStatus,
   computeMatchScore,
+  voltsFromMeos,
   RunnerStatus,
   type ParsedPunch,
   type ControlMatch,
+  type CardReadPayload,
 } from "@oxygen/shared";
 import { toAbsolute, toRelative } from "../timeConvert.js";
 import {
   runnerStatusToValue,
   valueToRunnerStatus,
 } from "../statusConvert.js";
+import { appendJournal } from "../journalEmit.js";
 import { resolveCourseExpectedPositions } from "./course.js";
-import { pushToGoogleSheet } from "../sheetsBackup.js";
+import { pushToGoogleSheet, type SheetRow } from "../sheetsBackup.js";
+
+/** Works with both the singleton client and a `$transaction` client. */
+type Db = PrismaClient | Prisma.TransactionClient;
 
 // Re-exports kept for backwards compatibility with code that imports
 // these from this file.
@@ -157,7 +164,7 @@ export async function performReadout(
   // Card: prefer linked (runner.cardId), fall back to cardNo lookup.
   const card = runner.cardId
     ? await db.card.findUnique({ where: { id: runner.cardId } })
-    : runner.cardNo > 0
+    : runner.cardNo != null
       ? await db.card.findFirst({
           where: { eventId, cardNo: runner.cardNo, removed: false },
           orderBy: { updatedAt: "desc" },
@@ -166,7 +173,7 @@ export async function performReadout(
 
   // Free punches (radio + manual + online-input + backup-memory).
   const freePunches =
-    runner.cardNo > 0
+    runner.cardNo != null
       ? await db.punch.findMany({
           where: { eventId, cardNo: runner.cardNo, removed: false },
           orderBy: { time: "asc" },
@@ -260,7 +267,7 @@ export async function performReadout(
       id: runner.seq,
       uuid: runner.id,
       name: runner.name,
-      cardNo: runner.cardNo,
+      cardNo: runner.cardNo ?? 0,
       startNo: runner.startNo,
       clubName: runner.clubName,
       clubId: runner.eventorClubId ? Number(runner.eventorClubId) : 0,
@@ -351,7 +358,7 @@ const storeReadoutInput = z.object({
   readAt: z.string().datetime().optional(),
 });
 
-type StoreReadoutInput = z.infer<typeof storeReadoutInput>;
+export type StoreReadoutInput = z.infer<typeof storeReadoutInput>;
 
 /**
  * Hash a logical card readout so duplicates can be detected without comparing
@@ -396,12 +403,19 @@ function encodePunchesRaw(
 
 /**
  * Core logic for storing a card readout. Shared between the live-readout
- * `storeReadout` mutation and the backup-replay `pushReadoutBackup`, so a
- * backup-imported readout goes through the same downstream pipeline as a
- * live one (card upsert, runner link, relevance score, Google Sheets push).
+ * `storeReadout` mutation, the backup-replay `pushReadoutBackup`, and the
+ * offline-outbox drain (`events.push` `card.read` entries), so every readout
+ * goes through the same downstream pipeline (card upsert, runner link,
+ * relevance score).
+ *
+ * Transaction-safe: accepts a `$transaction` client, so callers can commit
+ * the readout and its `card.read` journal entry atomically. The Google
+ * Sheets push is therefore NOT fired here — the returned `sheetRow` is
+ * ready for `pushToGoogleSheet` after the caller's transaction commits (a
+ * fire-and-forget fetch must never run on a transaction client).
  */
-async function storeReadoutImpl(
-  db: PrismaClient,
+export async function storeReadoutImpl(
+  db: Db,
   eventId: bigint,
   zeroTime: number,
   input: StoreReadoutInput,
@@ -551,36 +565,30 @@ async function storeReadoutImpl(
     }
   }
 
-  // 5. Best-effort Google Sheets push (fire-and-forget; no-op when
-  //    no webhook is configured).
-  try {
-    const fullName = runner
-      ? (
-          await db.runner.findUnique({
-            where: { id: runner.id },
-            select: { name: true, clubName: true, class: { select: { name: true } } },
-          })
-        )
-      : null;
-    pushToGoogleSheet(db, eventId, {
-      timestamp: readout.readAt.toISOString(),
-      cardNo: input.cardNo,
-      cardType: input.cardType ?? "",
-      runnerName: fullName?.name ?? "",
-      className: fullName?.class?.name ?? "",
-      clubName: fullName?.clubName ?? "",
-      startNo: 0,
-      checkTime: input.checkTime ?? null,
-      startTime: input.startTime ?? null,
-      finishTime: input.finishTime ?? null,
-      punchCount: input.punches.length,
-      punches: encodePunchesRaw(input.punches),
-      punchesRelevant,
-      batteryVoltage: voltageMv || null,
-    });
-  } catch {
-    // Don't let webhook errors interfere with the readout flow.
-  }
+  // 5. Build the Google Sheets row for the caller to fire AFTER its
+  //    transaction commits (no-op downstream when no webhook configured).
+  const fullName = runner
+    ? await db.runner.findUnique({
+        where: { id: runner.id },
+        select: { name: true, clubName: true, class: { select: { name: true } } },
+      })
+    : null;
+  const sheetRow: SheetRow = {
+    timestamp: readout.readAt.toISOString(),
+    cardNo: input.cardNo,
+    cardType: input.cardType ?? "",
+    runnerName: fullName?.name ?? "",
+    className: fullName?.class?.name ?? "",
+    clubName: fullName?.clubName ?? "",
+    startNo: 0,
+    checkTime: input.checkTime ?? null,
+    startTime: input.startTime ?? null,
+    finishTime: input.finishTime ?? null,
+    punchCount: input.punches.length,
+    punches: encodePunchesRaw(input.punches),
+    punchesRelevant,
+    batteryVoltage: voltageMv || null,
+  };
 
   return {
     readoutId: readout.id,
@@ -589,6 +597,7 @@ async function storeReadoutImpl(
     linkedRunnerId: runner?.seq ?? null,
     punchesRelevant,
     matchScore,
+    sheetRow,
   };
 }
 
@@ -604,15 +613,47 @@ export const cardReadoutRouter = router({
    * whether to call applyResult immediately or keep the entry as a
    * pre-start scan.
    */
-  storeReadout: eventProcedure
+  storeReadout: raceProcedure
     .input(storeReadoutInput)
     .mutation(async ({ ctx, input }) => {
-      return storeReadoutImpl(
-        ctx.db,
-        ctx.event.id,
-        ctx.event.zeroTime,
-        input,
-      );
+      // Readout + its card.read journal entry commit or roll back together
+      // (storeReadoutImpl is transaction-safe; the Sheets push fires after).
+      const result = await ctx.db.$transaction(async (tx) => {
+        const r = await storeReadoutImpl(
+          tx,
+          ctx.event.id,
+          ctx.event.zeroTime,
+          input,
+        );
+        await appendJournal(tx, {
+          eventId: ctx.event.id,
+          type: "card.read",
+          stationId: input.stationId,
+          payload: {
+            cardNo: input.cardNo,
+            punches: input.punches.map((p) => ({
+              controlCode: p.controlCode,
+              time: p.time,
+            })),
+            checkTime: input.checkTime ?? undefined,
+            startTime: input.startTime ?? undefined,
+            finishTime: input.finishTime ?? undefined,
+            cardType: input.cardType,
+            // The payload battery is in VOLTS (offline-emit contract); the
+            // storeReadout input carries integer mV, so convert.
+            batteryVoltage:
+              voltsFromMeos(input.batteryVoltage ?? input.voltageMv) ??
+              undefined,
+            punchesFresh: input.punchesFresh,
+            ownerData: input.ownerData as CardReadPayload["ownerData"],
+            metadata: input.metadata as CardReadPayload["metadata"],
+          },
+        });
+        return r;
+      });
+      pushToGoogleSheet(ctx.db, ctx.event.id, result.sheetRow);
+      const { sheetRow: _sheetRow, ...response } = result;
+      return response;
     }),
 
   /**
@@ -670,7 +711,7 @@ export const cardReadoutRouter = router({
    * (start/finish/status). Used by the readout station after a card
    * read produces a real result.
    */
-  applyResult: eventProcedure
+  applyResult: raceProcedure
     .input(
       z.object({
         runnerId: z.number().int(),
@@ -686,7 +727,7 @@ export const cardReadoutRouter = router({
           seq: input.runnerId,
           removed: false,
         },
-        select: { id: true, status: true, transferFlags: true },
+        select: { id: true, status: true, transferFlags: true, cardNo: true },
       });
       if (!runner) {
         throw new TRPCError({
@@ -695,15 +736,29 @@ export const cardReadoutRouter = router({
         });
       }
       const zeroTime = ctx.event.zeroTime;
-      await ctx.db.runner.update({
-        where: { id: runner.id },
-        data: {
-          status: valueToRunnerStatus(input.status),
-          finishTime:
-            input.finishTime > 0 ? toRelative(input.finishTime, zeroTime) : 0,
-          startTime:
-            input.startTime > 0 ? toRelative(input.startTime, zeroTime) : 0,
-        },
+      // Table write + journal entry commit or roll back together.
+      await ctx.db.$transaction(async (tx) => {
+        await tx.runner.update({
+          where: { id: runner.id },
+          data: {
+            status: valueToRunnerStatus(input.status),
+            finishTime:
+              input.finishTime > 0 ? toRelative(input.finishTime, zeroTime) : 0,
+            startTime:
+              input.startTime > 0 ? toRelative(input.startTime, zeroTime) : 0,
+          },
+        });
+        await appendJournal(tx, {
+          eventId: ctx.event.id,
+          type: "result.applied",
+          payload: {
+            cardNo: runner.cardNo ?? null,
+            runnerId: input.runnerId,
+            status: input.status,
+            finishTime: input.finishTime,
+            startTime: input.startTime,
+          },
+        });
       });
       return { ok: true as const };
     }),
@@ -970,7 +1025,7 @@ export const cardReadoutRouter = router({
    * `runnerId` is the runner's seq, or `null` to unlink. The card row
    * is created if it doesn't exist yet.
    */
-  linkCardToRunner: eventProcedure
+  linkCardToRunner: raceProcedure
     .input(
       z.object({
         cardNo: z.number().int().optional(),
@@ -1001,15 +1056,30 @@ export const cardReadoutRouter = router({
       }
       if (input.runnerId === null) {
         // Unlink: clear cardNo on any runner currently holding it.
-        await ctx.db.runner.updateMany({
+        const affected = await ctx.db.runner.findMany({
           where: { eventId: ctx.event.id, cardNo, removed: false },
-          data: { cardNo: 0 },
+          select: { id: true, seq: true },
+        });
+        await ctx.db.$transaction(async (tx) => {
+          await tx.runner.updateMany({
+            where: { id: { in: affected.map((r) => r.id) } },
+            data: { cardNo: null },
+          });
+          for (const r of affected) {
+            await appendJournal(tx, {
+              eventId: ctx.event.id,
+              type: "runner.updated",
+              // Resolve by the card being unlinked; 0 → NULL on replay.
+              payload: { cardNo, runnerId: r.seq, fields: { cardNo: 0 } },
+            });
+          }
         });
         return { ok: true as const };
       }
+      const runnerSeq = input.runnerId; // narrowed to number by the guard above
       const runner = await ctx.db.runner.findFirst({
-        where: { eventId: ctx.event.id, seq: input.runnerId, removed: false },
-        select: { id: true },
+        where: { eventId: ctx.event.id, seq: runnerSeq, removed: false },
+        select: { id: true, cardNo: true },
       });
       if (!runner) {
         throw new TRPCError({
@@ -1021,15 +1091,26 @@ export const cardReadoutRouter = router({
         where: { eventId: ctx.event.id, cardNo, removed: false },
         select: { id: true },
       });
-      await ctx.db.runner.update({
-        where: { id: runner.id },
-        data: { cardNo, cardId: card?.id ?? null },
+      await ctx.db.$transaction(async (tx) => {
+        await tx.runner.update({
+          where: { id: runner.id },
+          data: { cardNo, cardId: card?.id ?? null },
+        });
+        await appendJournal(tx, {
+          eventId: ctx.event.id,
+          type: "runner.updated",
+          payload: {
+            cardNo: runner.cardNo ?? null, // pre-link card resolves the peer row
+            runnerId: runnerSeq,
+            fields: { cardNo },
+          },
+        });
       });
       return { ok: true as const };
     }),
 
   /** Append a free punch to a card. */
-  addPunch: eventProcedure
+  addPunch: raceProcedure
     .input(
       z.object({
         cardNo: z.number().int(),
@@ -1047,42 +1128,99 @@ export const cardReadoutRouter = router({
         },
         select: { id: true },
       });
-      await ctx.db.punch.create({
-        data: {
+      // Table write + journal entry commit or roll back together. The punch
+      // id is minted here and travels in the payload so every node stores
+      // the row under the same UUID (punch edits address it by id).
+      const punchId = uuidv7();
+      await ctx.db.$transaction(async (tx) => {
+        await tx.punch.create({
+          data: {
+            id: punchId,
+            eventId: ctx.event.id,
+            cardNo: input.cardNo,
+            controlCode: input.controlCode,
+            controlId: control?.id ?? null,
+            time: input.time > 0 ? toRelative(input.time, zeroTime) : 0,
+            source: "manual",
+            isOriginal: false,
+          },
+        });
+        await appendJournal(tx, {
           eventId: ctx.event.id,
-          cardNo: input.cardNo,
-          controlCode: input.controlCode,
-          controlId: control?.id ?? null,
-          time: input.time > 0 ? toRelative(input.time, zeroTime) : 0,
-          source: "manual",
-          isOriginal: false,
-        },
+          type: "punch.recorded",
+          payload: {
+            id: punchId,
+            cardNo: input.cardNo,
+            controlCode: input.controlCode,
+            time: input.time, // absolute deciseconds (portable)
+            origin: "manual",
+          },
+        });
       });
       return { ok: true as const };
     }),
 
   /** Remove a free punch by id (UUID). */
-  removePunch: eventProcedure
+  removePunch: raceProcedure
     .input(z.object({ punchId: z.string().uuid() }))
     .mutation(async ({ ctx, input }) => {
-      await ctx.db.punch.update({
-        where: { id: input.punchId },
-        data: { removed: true },
+      const p = await ctx.db.punch.findFirst({
+        where: { id: input.punchId, eventId: ctx.event.id },
+      });
+      if (!p) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "Punch not found" });
+      }
+      // Table write + journal entry commit or roll back together.
+      await ctx.db.$transaction(async (tx) => {
+        await tx.punch.update({
+          where: { id: p.id },
+          data: { removed: true },
+        });
+        await appendJournal(tx, {
+          eventId: ctx.event.id,
+          type: "punch.removed",
+          payload: {
+            id: p.id,
+            cardNo: p.cardNo,
+            controlCode: p.controlCode,
+            time: p.time !== 0 ? toAbsolute(p.time, ctx.event.zeroTime) : 0,
+          },
+        });
       });
       return { ok: true as const };
     }),
 
   /** Adjust the time on an existing free punch. */
-  updatePunchTime: eventProcedure
+  updatePunchTime: raceProcedure
     .input(z.object({ punchId: z.string().uuid(), time: z.number().int() }))
     .mutation(async ({ ctx, input }) => {
       const zeroTime = ctx.event.zeroTime;
-      await ctx.db.punch.update({
-        where: { id: input.punchId },
-        data: {
-          time: input.time > 0 ? toRelative(input.time, zeroTime) : 0,
-          isOriginal: false,
-        },
+      const p = await ctx.db.punch.findFirst({
+        where: { id: input.punchId, eventId: ctx.event.id },
+      });
+      if (!p) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "Punch not found" });
+      }
+      // Table write + journal entry commit or roll back together.
+      await ctx.db.$transaction(async (tx) => {
+        await tx.punch.update({
+          where: { id: p.id },
+          data: {
+            time: input.time > 0 ? toRelative(input.time, zeroTime) : 0,
+            isOriginal: false,
+          },
+        });
+        await appendJournal(tx, {
+          eventId: ctx.event.id,
+          type: "punch.updated",
+          payload: {
+            id: p.id,
+            cardNo: p.cardNo,
+            controlCode: p.controlCode,
+            oldTime: p.time !== 0 ? toAbsolute(p.time, zeroTime) : 0,
+            time: input.time,
+          },
+        });
       });
       return { ok: true as const };
     }),
@@ -1098,7 +1236,7 @@ export const cardReadoutRouter = router({
    * Bulk-import parsed readout-backup records. Idempotent: the
    * `(eventId, punchesHash)` unique constraint silently drops re-imports.
    */
-  importReadoutBackups: eventProcedure
+  importReadoutBackups: raceProcedure
     .input(
       z.object({
         stationSerial: z.number().int().optional(),
@@ -1248,7 +1386,7 @@ export const cardReadoutRouter = router({
    * Idempotent: re-pushing a row that was already pushed returns the
    * existing pushedReadoutId without doing the work twice.
    */
-  pushReadoutBackup: eventProcedure
+  pushReadoutBackup: raceProcedure
     .input(z.object({ backupId: z.string().uuid() }))
     .mutation(async ({ ctx, input }) => {
       const eventId = ctx.event.id;
@@ -1275,28 +1413,54 @@ export const cardReadoutRouter = router({
         time: number;
         subSecond?: number;
       }>;
-      const result = await storeReadoutImpl(ctx.db, eventId, zeroTime, {
-        cardNo: backup.cardNo,
-        cardType: backup.cardType,
-        punches,
-        startTime: backup.startTime,
-        finishTime: backup.finishTime,
-        checkTime: backup.checkTime,
-        voltageMv: 0,
-        ownerData:
-          (backup.ownerData as Record<string, unknown> | null) ?? undefined,
-        stationId: backup.stationSerial
-          ? `backup-${backup.stationSerial}`
-          : `backup-${input.backupId}`,
-        readAt: (backup.originalReadAt ?? backup.importedAt).toISOString(),
+      const stationId = backup.stationSerial
+        ? `backup-${backup.stationSerial}`
+        : `backup-${input.backupId}`;
+      const readAt = backup.originalReadAt ?? backup.importedAt;
+      // Readout, staging-row flip and the card.read journal entry commit or
+      // roll back together. The payload carries the ORIGINAL read time so
+      // the applying node's dedupe window and read_at both use it.
+      const result = await ctx.db.$transaction(async (tx) => {
+        const r = await storeReadoutImpl(tx, eventId, zeroTime, {
+          cardNo: backup.cardNo,
+          cardType: backup.cardType,
+          punches,
+          startTime: backup.startTime,
+          finishTime: backup.finishTime,
+          checkTime: backup.checkTime,
+          voltageMv: 0,
+          ownerData:
+            (backup.ownerData as Record<string, unknown> | null) ?? undefined,
+          stationId,
+          readAt: readAt.toISOString(),
+        });
+        await tx.cardReadoutBackup.update({
+          where: { id: backup.id },
+          data: {
+            pushedAt: new Date(),
+            pushedReadoutId: r.readoutId,
+          },
+        });
+        await appendJournal(tx, {
+          eventId,
+          type: "card.read",
+          stationId,
+          payload: {
+            cardNo: backup.cardNo,
+            punches: punches.map((p) => ({
+              controlCode: p.controlCode,
+              time: p.time,
+            })),
+            checkTime: backup.checkTime ?? undefined,
+            startTime: backup.startTime ?? undefined,
+            finishTime: backup.finishTime ?? undefined,
+            cardType: backup.cardType,
+            readAt: readAt.getTime(),
+          },
+        });
+        return r;
       });
-      await ctx.db.cardReadoutBackup.update({
-        where: { id: backup.id },
-        data: {
-          pushedAt: new Date(),
-          pushedReadoutId: result.readoutId,
-        },
-      });
+      pushToGoogleSheet(ctx.db, eventId, result.sheetRow);
       return {
         ok: true as const,
         alreadyPushed: false as const,
