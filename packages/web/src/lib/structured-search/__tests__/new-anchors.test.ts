@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import { applyFilters } from "../filter";
 import { createClassAnchors } from "../anchors/class-anchors";
 import { createCourseAnchors } from "../anchors/course-anchors";
-import { createControlAnchors } from "../anchors/control-anchors";
+import { createControlAnchors, buildControlOrdinals } from "../anchors/control-anchors";
 import { createCardAnchors, type CardListItem } from "../anchors/card-anchors";
 import { createTrackAnchors, type TrackRow } from "../anchors/track-anchors";
 import { createClubAnchors } from "../anchors/club-anchors";
@@ -158,6 +158,88 @@ describe("control anchors", () => {
   it("filters by checked yes", () => {
     const tokens = [{ id: "1", anchor: "checked", operator: "eq" as const, value: "yes" }];
     expect(applyFilters(ctrls, tokens, anchors).map((c) => c.id)).toEqual([31, 60]);
+  });
+});
+
+// ─── Control ordinal anchor ────────────────────────────────
+describe("control ordinal anchor", () => {
+  // Course A: 31 → 42 → 60; Course B: 42 → 31. Control 55 on no course.
+  const ordinals = buildControlOrdinals([
+    { controls: "31;42;60" },
+    { controls: "42;31" },
+  ]);
+  const anchors = createControlAnchors(lbl, ordinals) as AnchorDef<ControlInfo>[];
+  const mkCtrl = (id: number): ControlInfo => ({
+    id, name: "", codes: String(id), status: ControlStatus.OK,
+    timeAdjust: 0, minTime: 0, runnerCount: 0, config: null, units: [],
+  });
+  const ctrls = [mkCtrl(31), mkCtrl(42), mkCtrl(55), mkCtrl(60)];
+
+  const run = (value: string, op: "eq" | "in" = "eq", negated = false) =>
+    applyFilters(
+      ctrls,
+      [{ id: "1", anchor: "ordinal", operator: op, value, negated }],
+      anchors,
+    ).map((c) => c.id);
+
+  it("ordinal:1 matches the first control of any course", () => {
+    expect(run("1")).toEqual([31, 42]);
+  });
+
+  it("ordinal:2 matches second positions across courses", () => {
+    expect(run("2")).toEqual([31, 42]);
+  });
+
+  it("ordinal:-1 matches the last control before finish of any course", () => {
+    expect(run("-1")).toEqual([31, 60]);
+  });
+
+  it("ordinal:-2 matches the second-to-last control", () => {
+    expect(run("-2")).toEqual([42]);
+  });
+
+  it("supports comma lists (in operator)", () => {
+    expect(run("1,-1", "in")).toEqual([31, 42, 60]);
+  });
+
+  it("negation excludes matching controls", () => {
+    expect(run("1", "eq", true)).toEqual([55, 60]);
+  });
+
+  it("controls on no course never match", () => {
+    expect(run("3")).toEqual([60]);
+    expect(run("99")).toEqual([]);
+  });
+
+  it("non-numeric values match nothing", () => {
+    expect(run("first")).toEqual([]);
+  });
+
+  it("matches nothing when no course data is available", () => {
+    const bare = createControlAnchors(lbl) as AnchorDef<ControlInfo>[];
+    const tokens = [{ id: "1", anchor: "ordinal", operator: "eq" as const, value: "1" }];
+    expect(applyFilters(ctrls, tokens, bare)).toEqual([]);
+  });
+});
+
+describe("buildControlOrdinals", () => {
+  it("assigns both from-start and from-end ordinals", () => {
+    const map = buildControlOrdinals([{ controls: "31;42;60" }]);
+    expect([...map.get(31)!].sort((a, b) => a - b)).toEqual([-3, 1]);
+    expect([...map.get(42)!].sort((a, b) => a - b)).toEqual([-2, 2]);
+    expect([...map.get(60)!].sort((a, b) => a - b)).toEqual([-1, 3]);
+  });
+
+  it("records every occurrence for repeated controls (butterfly)", () => {
+    const map = buildControlOrdinals([{ controls: "31;42;31;60" }]);
+    expect([...map.get(31)!].sort((a, b) => a - b)).toEqual([-4, -2, 1, 3]);
+  });
+
+  it("ignores empty and malformed tokens", () => {
+    const map = buildControlOrdinals([{ controls: "31;;x;42;" }]);
+    expect([...map.get(31)!].sort((a, b) => a - b)).toEqual([-2, 1]);
+    expect([...map.get(42)!].sort((a, b) => a - b)).toEqual([-1, 2]);
+    expect(map.size).toBe(2);
   });
 });
 

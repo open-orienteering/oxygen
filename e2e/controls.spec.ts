@@ -177,4 +177,49 @@ test.describe("Controls Page", () => {
     await page.getByLabel("Clear all filters").click();
     await expect(page.getByText("23 controls")).toBeVisible({ timeout: 5000 });
   });
+
+  test("should filter controls by ordinal within a course", async ({ page }) => {
+    // Seed courses: Bana 1 = 67,...,54,100 · Bana 2 = 81,50,40,150,100 ·
+    // Bana 3 = 61,34,50,79,89,150,93,100. So ordinal:1 → {67, 81, 61},
+    // ordinal:-1 → {100}, ordinal:-2 → {54, 150, 93}.
+    await page.goto("/itest/controls");
+    await expect(page.getByText("23 controls")).toBeVisible({ timeout: 15000 });
+
+    // The ordinal key is discoverable in the autocomplete dropdown.
+    const input = page.getByRole("combobox", { name: "Search filter input" });
+    await input.click();
+    await input.fill("ord");
+    await expect(
+      page.getByRole("option", { name: /Ordinal/ }),
+    ).toBeVisible({ timeout: 5000 });
+
+    // Row lookup by the leading code in the row's accessible name — a bare
+    // cell match is ambiguous (a code can equal another row's runner count).
+    const rowFor = (code: string) =>
+      page.getByRole("row", { name: new RegExp(`^${code} `) });
+
+    // ordinal:1 — the first control of every course.
+    await input.fill("ordinal:1");
+    await input.press("Enter");
+    await expect(page.getByText("3 controls")).toBeVisible({ timeout: 5000 });
+    for (const code of ["67", "81", "61"]) {
+      await expect(rowFor(code)).toBeVisible();
+    }
+
+    // ordinal:-2 — second-to-last before finish, via deep link.
+    await page.goto(`/itest/controls?q=${encodeURIComponent("ordinal:-2")}`);
+    await expect(page.getByText("3 controls")).toBeVisible({ timeout: 15000 });
+    for (const code of ["54", "150", "93"]) {
+      await expect(rowFor(code)).toBeVisible();
+    }
+
+    // ordinal:-1 — the shared last control (code 100 on all three courses).
+    await page.goto(`/itest/controls?q=${encodeURIComponent("ordinal:-1")}`);
+    await expect(rowFor("100")).toBeVisible({ timeout: 15000 });
+    await expect(rowFor("67")).not.toBeVisible();
+
+    // Comma list ORs ordinals: first or last of any course.
+    await page.goto(`/itest/controls?q=${encodeURIComponent("ordinal:1,-1")}`);
+    await expect(page.getByText("4 controls")).toBeVisible({ timeout: 15000 });
+  });
 });

@@ -5,6 +5,7 @@
   "newControl": "New Control",
   "code": "Code",
   "name": "Name",
+  "ordinal": "Ordinal",
   "status": "Status",
   "radio": "Radio",
   "battery": "Battery",

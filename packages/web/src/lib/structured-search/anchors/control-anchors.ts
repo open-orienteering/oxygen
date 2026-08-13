@@ -101,8 +101,39 @@ export type ControlAnchorData = {
   courses?: { id: number; name: string }[];
 };
 
+/**
+ * Build the per-control ordinal sets used by the `ordinal:` filter from
+ * `course.list` rows. A control at 0-based index `i` of a course with `L`
+ * controls has ordinal `i + 1` counted from the start AND `-(L - i)`
+ * counted from the end (Python-style: -1 = last control before finish).
+ * Tokens in the course `controls` string are public control ids — the
+ * same first-punch-code-or-seq space as `ControlInfo.id`.
+ */
+export function buildControlOrdinals(
+  courses: ReadonlyArray<{ controls: string }>,
+): Map<number, Set<number>> {
+  const byId = new Map<number, Set<number>>();
+  for (const course of courses) {
+    const tokens = course.controls
+      .split(";")
+      .map((s) => parseInt(s.trim(), 10))
+      .filter((n) => Number.isFinite(n));
+    for (let i = 0; i < tokens.length; i++) {
+      let set = byId.get(tokens[i]);
+      if (!set) {
+        set = new Set<number>();
+        byId.set(tokens[i], set);
+      }
+      set.add(i + 1);
+      set.add(-(tokens.length - i));
+    }
+  }
+  return byId;
+}
+
 export function createControlAnchors(
   getLabel: (key: string) => string,
+  ordinalsById?: ReadonlyMap<number, ReadonlySet<number>>,
 ): AnchorDef<ControlInfo>[] {
   return [
     {
@@ -132,6 +163,25 @@ export function createControlAnchors(
           .map((c) => parseInt(c.trim(), 10))
           .filter((n) => !isNaN(n))
           .some((n) => matchNumber(n, op, value));
+      },
+    },
+    {
+      // Position within a course: ordinal:1 = first control after start,
+      // ordinal:-1 = last before finish, ordinal:-2 = second-to-last.
+      // Matches when ANY course has the control at that position.
+      key: "ordinal",
+      label: getLabel("ordinal"),
+      type: "number",
+      operators: ["eq", "in"],
+      defaultOperator: "eq",
+      color: "orange",
+      match: (item, op, value) => {
+        const ordinals = ordinalsById?.get(item.id);
+        if (!ordinals || ordinals.size === 0) return false;
+        const wanted = (op === "in" ? value.split(",") : [value]).map((v) =>
+          parseInt(v.trim(), 10),
+        );
+        return wanted.some((n) => Number.isFinite(n) && ordinals.has(n));
       },
     },
     {

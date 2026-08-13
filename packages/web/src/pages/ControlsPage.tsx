@@ -21,7 +21,10 @@ import { useDeviceManager } from "../context/DeviceManager";
 import { STATION_MODE, AUTOSEND_MODE, type StationInfo } from "../lib/si-protocol";
 import { StructuredSearchBar } from "../components/structured-search/StructuredSearchBar";
 import { useStructuredSearch } from "../hooks/useStructuredSearch";
-import { createControlAnchors } from "../lib/structured-search/anchors/control-anchors";
+import {
+  createControlAnchors,
+  buildControlOrdinals,
+} from "../lib/structured-search/anchors/control-anchors";
 import { ControlStatusHelp } from "../components/ControlStatusHelp";
 
 // ─── Types ────────────────────────────────────────────────
@@ -57,7 +60,20 @@ export function ControlsPage() {
 
   const utils = trpc.useUtils();
 
-  const anchors = useMemo(() => createControlAnchors((key) => t(key as never)), [t]);
+  // Course control sequences drive the ordinal: filter (position of a
+  // control within a course, negative = counted from the finish).
+  const courses = trpc.course.list.useQuery(undefined, {
+    staleTime: Number.POSITIVE_INFINITY,
+  });
+  const ordinalsById = useMemo(
+    () => buildControlOrdinals(courses.data ?? []),
+    [courses.data],
+  );
+
+  const anchors = useMemo(
+    () => createControlAnchors((key) => t(key as never), ordinalsById),
+    [t, ordinalsById],
+  );
   const { tokens, setTokens, filterItems } = useStructuredSearch<ControlInfo>(
     anchors,
     ["name", "codes"],
