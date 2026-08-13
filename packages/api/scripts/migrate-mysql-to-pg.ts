@@ -16,7 +16,8 @@
  */
 
 import mysql, { type RowDataPacket } from "mysql2/promise";
-import { PrismaClient } from "@prisma/client";
+import { PrismaClient } from "../src/generated/prisma/client.js";
+import { PrismaPg } from "@prisma/adapter-pg";
 import {
   valueToRunnerStatus,
   valueToControlStatus,
@@ -93,7 +94,9 @@ async function openConnections(): Promise<Connections> {
     );
   }
   const mysqlMain = await mysql.createConnection(legacyUrl);
-  const pg = new PrismaClient();
+  const pgUrl = process.env.DATABASE_URL;
+  if (!pgUrl) throw new Error("DATABASE_URL is not set");
+  const pg = new PrismaClient({ adapter: new PrismaPg({ connectionString: pgUrl }) });
   return { mysqlMain, legacyMysqlBaseUrl: legacyUrl, pg };
 }
 

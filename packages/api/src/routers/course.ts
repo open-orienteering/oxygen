@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import { router, eventProcedure, raceProcedure } from "../trpc.js";
-import type { PrismaClient } from "@prisma/client";
+import type { PrismaClient } from "../generated/prisma/client.js";
 import {
   controlStatusToValue,
   valueToControlStatus,
@@ -203,7 +203,7 @@ async function controlSeqToId(
  * `$transaction` client so transactional callers (storeReadoutImpl) work.
  */
 export async function resolveCourseExpectedPositions(
-  db: PrismaClient | import("@prisma/client").Prisma.TransactionClient,
+  db: PrismaClient | import("../generated/prisma/client.js").Prisma.TransactionClient,
   courseId: string,
 ): Promise<ExpectedPosition[]> {
   const rows = await db.courseControl.findMany({

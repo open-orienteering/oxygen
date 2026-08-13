@@ -9,6 +9,7 @@ dist/
 
 # Prisma
 packages/api/prisma/generated/
+packages/api/src/generated/
 
 # Playwright
 test-results/

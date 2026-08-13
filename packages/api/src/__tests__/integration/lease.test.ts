@@ -16,7 +16,8 @@
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import { execSync } from "child_process";
 import { Client } from "pg";
-import { PrismaClient } from "@prisma/client";
+import { PrismaClient } from "../../generated/prisma/client.js";
+import { PrismaPg } from "@prisma/adapter-pg";
 import { randomUUID } from "crypto";
 import {
   createTestEvent,
@@ -113,7 +114,7 @@ beforeAll(async () => {
   });
 
   const bUrl = await provisionNodeB();
-  dbB = new PrismaClient({ datasourceUrl: bUrl });
+  dbB = new PrismaClient({ adapter: new PrismaPg({ connectionString: bUrl }) });
   await dbB.event.deleteMany({
     where: { nameId: { startsWith: "oxygen_test_lease" } },
   });

@@ -7,20 +7,28 @@
  * MeOSMain registry). See docs/migrations/2026-drop-meos.md.
  */
 
-import { PrismaClient } from "@prisma/client";
+import { PrismaClient } from "./generated/prisma/client.js";
+import { PrismaPg } from "@prisma/adapter-pg";
 
 // ─── Singleton client ───────────────────────────────────────
 
 /**
  * Lazy singleton — created on first call so that scripts (migration tool,
  * test helpers) can swap `process.env.DATABASE_URL` before any tRPC code
- * touches the client.
+ * touches the client. Prisma 7 requires an explicit driver adapter and no
+ * longer reads the datasource URL itself.
  */
 let _prisma: PrismaClient | undefined;
 
 export function prisma(): PrismaClient {
   if (!_prisma) {
-    _prisma = new PrismaClient();
+    const connectionString = process.env.DATABASE_URL;
+    if (!connectionString) {
+      throw new Error("DATABASE_URL is not set");
+    }
+    _prisma = new PrismaClient({
+      adapter: new PrismaPg({ connectionString }),
+    });
   }
   return _prisma;
 }
@@ -137,4 +145,4 @@ export async function disconnectAll(): Promise<void> {
 
 // ─── Re-exported types ─────────────────────────────────────
 
-export type { PrismaClient } from "@prisma/client";
+export type { PrismaClient } from "./generated/prisma/client.js";

@@ -15,7 +15,7 @@
 
 import { randomBytes } from "crypto";
 import { prisma, disconnectAll, type EventRef } from "../../db.js";
-import type { PrismaClient } from "@prisma/client";
+import type { PrismaClient } from "../../generated/prisma/client.js";
 
 export interface TestEventContext {
   /** Resolved EventRef ready to pass to makeCaller. */

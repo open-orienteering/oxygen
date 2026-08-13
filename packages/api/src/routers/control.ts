@@ -2,7 +2,7 @@ import { createSocket } from "node:dgram";
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import { router, eventProcedure, raceProcedure } from "../trpc.js";
-import type { PrismaClient } from "@prisma/client";
+import type { PrismaClient } from "../generated/prisma/client.js";
 import {
   controlStatusToValue,
   valueToControlStatus,

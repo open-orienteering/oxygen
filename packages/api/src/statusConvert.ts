@@ -18,7 +18,7 @@ import {
 import {
   RunnerStatus as PgRunnerStatus,
   ControlStatus as PgControlStatus,
-} from "@prisma/client";
+} from "./generated/prisma/client.js";
 
 // ─── RunnerStatus ──────────────────────────────────────────
 
