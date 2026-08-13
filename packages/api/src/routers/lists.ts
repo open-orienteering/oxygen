@@ -58,9 +58,9 @@ export const listsRouter = router({
           className: r.class?.name ?? "",
           classId: r.class?.seq ?? 0,
           startTime: toAbsolute(r.startTime, zeroTime),
-          cardNo: r.cardNo,
+          cardNo: r.cardNo ?? 0,
           bib: r.bib,
-          hasPunches: punchSet.has(r.cardNo) || undefined,
+          hasPunches: (r.cardNo != null && punchSet.has(r.cardNo)) || undefined,
           hasStarted:
             (r.startTime > 0 &&
               (r.startTime <= 1 ||
@@ -97,7 +97,9 @@ export const listsRouter = router({
       // This is the bulk equivalent of performReadout's adjustment step;
       // cached per course so we don't re-resolve expectedPositions for
       // every runner.
-      const cardNos = runners.map((r) => r.cardNo).filter((c) => c > 0);
+      const cardNos = runners
+        .map((r) => r.cardNo)
+        .filter((c): c is number => c != null && c > 0);
       const cards = cardNos.length
         ? await ctx.db.card.findMany({
             where: {
@@ -133,7 +135,7 @@ export const listsRouter = router({
         const courseId = r.courseId ?? r.class?.courseId ?? null;
         const expected = courseId ? expectedByCourse.get(courseId) : null;
         if (!expected || expected.length === 0) continue;
-        const raw = cardByNo.get(r.cardNo);
+        const raw = cardByNo.get(r.cardNo ?? -1);
         if (!raw) continue;
         const punches = parsePunches(raw);
         for (const p of punches) {

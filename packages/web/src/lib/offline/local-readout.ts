@@ -9,7 +9,6 @@
 
 import type { QueryClient } from "@tanstack/react-query";
 import {
-  parsePunches,
   matchPunchesToCourse,
   computeStatus,
   computePosition,
@@ -20,9 +19,7 @@ import {
   type PositionResult,
   PUNCH_START,
   PUNCH_FINISH,
-  PUNCH_CHECK,
 } from "@oxygen/shared";
-import type { SICardReadout } from "../si-protocol";
 
 export interface LocalReadoutResult {
   runner: {
@@ -195,7 +192,7 @@ export function computeCardReadout(
   // Use runner's assigned start time as fallback (already in deciseconds from server cache)
   const fallbackStartTime = runner.startTime || 0;
 
-  const { matches, extraPunches, startTime, finishTime, missingCount, runningTimeAdjustment } =
+  const { matches, startTime, finishTime, missingCount, runningTimeAdjustment } =
     matchPunchesToCourse(allPunches, expectedPositions, fallbackStartTime);
 
   const rawRunningTime = finishTime > 0 && startTime > 0 ? finishTime - startTime : 0;

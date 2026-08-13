@@ -30,6 +30,7 @@
     "@oxygen/shared": "workspace:*",
     "@prisma/client": "^6.19.2",
     "@resvg/resvg-js": "^2.6.2",
+    "@trpc/client": "^11.10.0",
     "@trpc/server": "^11.10.0",
     "adm-zip": "^0.5.16",
     "dotenv": "^17.2.4",

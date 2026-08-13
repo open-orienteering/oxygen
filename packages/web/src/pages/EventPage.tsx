@@ -5,6 +5,7 @@ import { trpc } from "../lib/trpc";
 import { formatDateTime } from "../lib/format";
 import { useTimeAgo } from "../hooks/useTimeAgo";
 import { ClubLogo } from "../components/ClubLogo";
+import { VenueLeasePanel } from "../components/VenueLease";
 
 export function EventPage() {
   const { t } = useTranslation("event");
@@ -62,6 +63,9 @@ export function EventPage() {
           </div>
         </div>
       </div>
+
+      {/* Venue lease (single-writer checkout) */}
+      <VenueLeasePanel nameId={d.competition.nameId} />
 
       {/* Sync Section */}
       <div>

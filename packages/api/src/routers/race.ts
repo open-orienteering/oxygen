@@ -1,12 +1,13 @@
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
-import { router, eventProcedure } from "../trpc.js";
+import { router, eventProcedure, raceProcedure } from "../trpc.js";
 import { toAbsolute, toRelative } from "../timeConvert.js";
 import {
   runnerStatusToValue,
   valueToRunnerStatus,
 } from "../statusConvert.js";
 import { performReadout } from "./cardReadout.js";
+import { appendJournal } from "../journalEmit.js";
 import type { ControlMatch } from "@oxygen/shared";
 
 /**
@@ -51,7 +52,7 @@ export const raceRouter = router({
         runner: {
           id: runner.seq,
           name: runner.name,
-          cardNo: runner.cardNo,
+          cardNo: runner.cardNo ?? 0,
           clubId: runner.eventorClubId ? Number(runner.eventorClubId) : 0,
           clubName: runner.clubName,
           classId: runner.class?.seq ?? 0,
@@ -277,7 +278,7 @@ export const raceRouter = router({
           name: r.runner.name,
           className: r.runner.className,
           clubName: r.runner.clubName,
-          cardNo: r.runner.cardNo,
+          cardNo: r.runner.cardNo ?? 0,
           startNo: r.runner.startNo,
           birthYear: 0, // omitted in fast path
         },
@@ -316,7 +317,7 @@ export const raceRouter = router({
    * running time, and status. Caller can pass either `id` or
    * `runnerId` (legacy field name; kept for compatibility).
    */
-  recordFinish: eventProcedure
+  recordFinish: raceProcedure
     .input(
       z
         .object({
@@ -335,7 +336,7 @@ export const raceRouter = router({
       const finishAbs = input.finishTimeAbsolute ?? input.finishTime ?? 0;
       const r = await ctx.db.runner.findFirst({
         where: { eventId: ctx.event.id, seq, removed: false },
-        select: { id: true },
+        select: { id: true, cardNo: true },
       });
       if (!r) {
         throw new TRPCError({ code: "NOT_FOUND", message: "Runner not found" });
@@ -344,7 +345,20 @@ export const raceRouter = router({
       const finishRel = finishAbs > 0 ? toRelative(finishAbs, zeroTime) : 0;
       const data: Record<string, unknown> = { finishTime: finishRel };
       if (input.status != null) data.status = valueToRunnerStatus(input.status);
-      await ctx.db.runner.update({ where: { id: r.id }, data });
+      // Table write + journal entry commit or roll back together.
+      await ctx.db.$transaction(async (tx) => {
+        await tx.runner.update({ where: { id: r.id }, data });
+        await appendJournal(tx, {
+          eventId: ctx.event.id,
+          type: "finish.adjusted",
+          payload: {
+            cardNo: r.cardNo,
+            runnerId: seq,
+            finishTime: finishAbs,
+            ...(input.status != null ? { status: input.status } : {}),
+          },
+        });
+      });
 
       // Re-run the matcher so the caller gets the final result.
       const result = await performReadout(

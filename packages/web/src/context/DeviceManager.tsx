@@ -26,6 +26,7 @@ import { trpc } from "../lib/trpc";
 import { KioskChannel, recentCardToKioskMessage } from "../lib/kiosk-channel";
 import { RunnerStatus, runnerStatusLabel, type RunnerStatusValue } from "@oxygen/shared";
 import { emitEvent } from "../lib/offline/events";
+import { toOfflineCardReadPayload } from "../lib/offline/card-read-payload";
 import { computeCardReadout, lookupRunnerByCard } from "../lib/offline/local-readout";
 import { useQueryClient } from "@tanstack/react-query";
 
@@ -317,29 +318,21 @@ export function DeviceManagerProvider({ children }: { children: ReactNode }) {
         } catch {
           console.warn("[DeviceManager] Failed to store readout on server — queuing offline event");
           if (competitionNameIdRef.current) {
-            emitEvent("card.read", competitionNameIdRef.current, {
-              cardNo: readout.cardNumber,
-              punches: readout.punches.map((p) => ({ controlCode: p.controlCode, time: p.time })),
-              checkTime: readout.checkTime ?? undefined,
-              startTime: readout.startTime ?? undefined,
-              finishTime: readout.finishTime ?? undefined,
-              cardType: readout.cardType,
-              batteryVoltage: readout.batteryVoltage ?? undefined,
-            });
+            emitEvent(
+              "card.read",
+              competitionNameIdRef.current,
+              toOfflineCardReadPayload(readout, raceData),
+            );
           }
         }
       } else if (!isDuplicate && !navigator.onLine) {
         // Offline — queue the card read event immediately
         if (competitionNameIdRef.current) {
-          emitEvent("card.read", competitionNameIdRef.current, {
-            cardNo: readout.cardNumber,
-            punches: readout.punches.map((p) => ({ controlCode: p.controlCode, time: p.time })),
-            checkTime: readout.checkTime ?? undefined,
-            startTime: readout.startTime ?? undefined,
-            finishTime: readout.finishTime ?? undefined,
-            cardType: readout.cardType,
-            batteryVoltage: readout.batteryVoltage ?? undefined,
-          });
+          emitEvent(
+            "card.read",
+            competitionNameIdRef.current,
+            toOfflineCardReadPayload(readout, raceData),
+          );
         }
       }
 
@@ -437,6 +430,7 @@ export function DeviceManagerProvider({ children }: { children: ReactNode }) {
             if (competitionNameIdRef.current) {
               emitEvent("result.applied", competitionNameIdRef.current, {
                 runnerId: result.runner.id,
+                cardNo: result.runner.cardNo,
                 status: result.timing.status,
                 finishTime: result.timing.finishTime,
                 startTime: result.timing.startTime,
@@ -488,6 +482,7 @@ export function DeviceManagerProvider({ children }: { children: ReactNode }) {
           if (competitionNameId) {
             emitEvent("result.applied", competitionNameId, {
               runnerId: localResult.runner.id,
+              cardNo: localResult.runner.cardNo,
               status: localResult.timing.status,
               finishTime: localResult.timing.finishTime,
               startTime: localResult.timing.startTime,

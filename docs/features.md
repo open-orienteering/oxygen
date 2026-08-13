@@ -222,8 +222,9 @@ Oxygen is a Progressive Web App designed to work during internet outages — fro
 - **Pre-fetch on station pages** — runners, classes, courses, controls, and clubs are cached to IndexedDB when a start/finish/kiosk station mounts, and survive browser restarts and overnight power-off.
 - **Event-based mutation queue** — all finish recordings, registrations, and edits are stored locally and drained to the server when connectivity returns. A visible banner tells you how many events are queued.
 - **Local result computation** — the finish station runs the same course matching, status rules, and position ranking as the server, so it can print a valid receipt from cached data even while the network is down.
+- **Clock-skew warning** — every queued mutation is stamped with a hybrid logical clock, and each sync compares this device's clock to the server's. If they differ by more than 30 seconds a persistent banner warns that times recorded here may be inaccurate.
 
-See [offline-architecture.md](offline-architecture.md) for the technical details and [future-architecture.md](future-architecture.md) for the post-MeOS vision with event sourcing.
+See [offline-architecture.md](offline-architecture.md) for the technical details and [future-architecture.md](future-architecture.md) for the post-MeOS vision with event sourcing — its **Phase 1** (HLC-stamped journal, one-card-per-event invariant, idempotent ingestion) landed in June 2026.
 
 ### MeOS migration
 

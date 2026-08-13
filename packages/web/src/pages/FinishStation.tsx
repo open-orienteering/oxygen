@@ -10,6 +10,7 @@ import {
 import { StatusBadge } from "../components/StatusBadge";
 import { usePrinter } from "../context/PrinterContext";
 import type { FinishReceiptData } from "../lib/receipt-printer/index.js";
+import { useLookupByCard, useRecentActivity } from "../lib/offline/projection-reads";
 import { fetchLogoRaster } from "../lib/receipt-printer/index.js";
 import { getClubLogoUrl } from "../lib/club-logo";
 import { useStationSync } from "../hooks/useStationSync";
@@ -37,9 +38,12 @@ export function FinishStation() {
     refetchInterval: 10000,
   });
 
-  const lookup = trpc.race.lookupByCard.useQuery(
-    { cardNo: parseInt(cardInput, 10) },
-    { enabled: cardInput.length >= 3 && !isNaN(parseInt(cardInput, 10)) },
+  // Competition nameId — used for projection reads + event emission.
+  const nameId = window.location.pathname.match(/^\/([^/]+)/)?.[1] ?? "";
+  const lookup = useLookupByCard(
+    nameId,
+    parseInt(cardInput, 10),
+    cardInput.length >= 3 && !isNaN(parseInt(cardInput, 10)),
   );
 
   // Get competition name for the receipt header (cached from CompetitionShell)
@@ -139,14 +143,13 @@ export function FinishStation() {
     },
   });
 
-  const recentActivity = trpc.race.recentActivity.useQuery({ limit: 15 });
+  const recentActivity = useRecentActivity(nameId, 15);
 
   useEffect(() => {
     inputRef.current?.focus();
   }, []);
 
-  // Extract competition nameId for event emission
-  const nameId = window.location.pathname.match(/^\/([^/]+)/)?.[1] ?? "";
+  // nameId is defined near the top (projection reads + event emission).
 
   const handleOfflineFinish = useCallback(() => {
     if (!lookup.data?.found) return;

@@ -83,7 +83,9 @@ full migration story.
   `oxygen.event_seqs(event_id, table_name, next_seq)` table, so explicit
   values can be passed through (the migration tool relies on this).
 - **Append-only / immutable** — `card_readouts`, `punches`, `event_log`.
-  UUID PK only, no `seq`.
+  UUID PK only, no `seq`. The offline-first work renames `event_log` →
+  `journal` and adds `hlc` / `actor_id` / `schema_version` — see
+  [`offline-architecture.md`](offline-architecture.md).
 - **Pure server-side** — `map_files`, `rendered_maps`, `map_tiles`,
   `tracks`, `routes`. `BIGSERIAL` PK.
 - **Global directories** — `runner_directory`, `club_directory`,

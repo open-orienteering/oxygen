@@ -6,6 +6,7 @@ on:
       - "pnpm-lock.yaml"
       - "pnpm-workspace.yaml"
       - "packages/*/package.json"
+      - "scripts/audit-prod.mjs"
       - ".github/workflows/audit-pr.yml"
   workflow_dispatch:
 
@@ -24,5 +25,8 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
 
+      # `pnpm audit` (≤10.x) targets npm's retired legacy endpoint (410 since
+      # 2026); scripts/audit-prod.mjs queries the bulk advisory endpoint the
+      # way pnpm 11 does, without requiring the Node 22 toolchain bump.
       - name: Audit (production tree, fail on high/critical)
-        run: pnpm audit --prod --audit-level=high
+        run: pnpm run audit:prod

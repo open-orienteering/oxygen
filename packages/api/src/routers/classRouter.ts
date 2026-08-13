@@ -1,12 +1,13 @@
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
-import { router, eventProcedure } from "../trpc.js";
+import { router, eventProcedure, raceProcedure } from "../trpc.js";
 import {
   WITHDRAWN_STATUSES,
   type ClassSummary,
   type ClassManageDetail,
 } from "@oxygen/shared";
 import { valueToRunnerStatus, runnerStatusToValue } from "../statusConvert.js";
+import { emitClassUpserted } from "../referenceJournal.js";
 
 async function getClassBySeq(
   db: import("@prisma/client").PrismaClient,
@@ -164,7 +165,7 @@ export const classRouter = router({
     .input(z.object({ id: z.number().int() }))
     .query(async ({ ctx, input }) => loadClassDetail(ctx.db, ctx.event.id, input.id)),
 
-  create: eventProcedure
+  create: raceProcedure
     .input(
       z.object({
         name: z.string().min(1),
@@ -185,28 +186,33 @@ export const classRouter = router({
       const courseUuid = input.courseId
         ? await courseSeqToId(ctx.db, ctx.event.id, input.courseId)
         : null;
-      const created = await ctx.db.class.create({
-        data: {
-          eventId: ctx.event.id,
-          name: input.name,
-          longName: input.longName,
-          courseId: courseUuid,
-          sortIndex: input.sortIndex,
-          sex: input.sex,
-          lowAge: input.lowAge,
-          highAge: input.highAge,
-          classFeeCents: input.classFee,
-          allowQuickEntry: input.allowQuickEntry,
-          firstStart: input.firstStart,
-          startInterval: input.startInterval,
-          maxTime: input.maxTime,
-        },
-        select: { seq: true },
+      // Table write + class.upserted journal entry commit together.
+      const created = await ctx.db.$transaction(async (tx) => {
+        const c = await tx.class.create({
+          data: {
+            eventId: ctx.event.id,
+            name: input.name,
+            longName: input.longName,
+            courseId: courseUuid,
+            sortIndex: input.sortIndex,
+            sex: input.sex,
+            lowAge: input.lowAge,
+            highAge: input.highAge,
+            classFeeCents: input.classFee,
+            allowQuickEntry: input.allowQuickEntry,
+            firstStart: input.firstStart,
+            startInterval: input.startInterval,
+            maxTime: input.maxTime,
+          },
+          select: { id: true, seq: true },
+        });
+        await emitClassUpserted(tx, ctx.event.id, c.id);
+        return c;
       });
       return { id: created.seq };
     }),
 
-  update: eventProcedure
+  update: raceProcedure
     .input(
       z.object({
         id: z.number().int(),
@@ -250,11 +256,14 @@ export const classRouter = router({
       if (input.maxTime !== undefined) data.maxTime = input.maxTime;
       if (input.noTiming !== undefined) data.noTiming = input.noTiming;
       if (input.classType !== undefined) data.classType = input.classType;
-      await ctx.db.class.update({ where: { id: c.id }, data });
+      await ctx.db.$transaction(async (tx) => {
+        await tx.class.update({ where: { id: c.id }, data });
+        await emitClassUpserted(tx, ctx.event.id, c.id);
+      });
       return { ok: true };
     }),
 
-  bulkUpdate: eventProcedure
+  bulkUpdate: raceProcedure
     .input(
       z.object({
         ids: z.array(z.number().int()),
@@ -287,39 +296,51 @@ export const classRouter = router({
       if (input.maxTime !== undefined) data.maxTime = input.maxTime;
       if (input.allowQuickEntry !== undefined)
         data.allowQuickEntry = input.allowQuickEntry;
-      await ctx.db.class.updateMany({
-        where: { id: { in: rows.map((r) => r.id) } },
-        data,
+      await ctx.db.$transaction(async (tx) => {
+        await tx.class.updateMany({
+          where: { id: { in: rows.map((r) => r.id) } },
+          data,
+        });
+        for (const r of rows) {
+          await emitClassUpserted(tx, ctx.event.id, r.id);
+        }
       });
       return { ok: true as const, count: rows.length };
     }),
 
-  delete: eventProcedure
+  delete: raceProcedure
     .input(z.object({ id: z.number().int() }))
     .mutation(async ({ ctx, input }) => {
       const c = await getClassBySeq(ctx.db, ctx.event.id, input.id);
-      await ctx.db.class.update({
-        where: { id: c.id },
-        data: { removed: true },
+      await ctx.db.$transaction(async (tx) => {
+        await tx.class.update({
+          where: { id: c.id },
+          data: { removed: true },
+        });
+        // Deletes are upserts with removed: true on the wire.
+        await emitClassUpserted(tx, ctx.event.id, c.id);
       });
       return { ok: true };
     }),
 
-  reorder: eventProcedure
+  reorder: raceProcedure
     .input(z.object({ orderedIds: z.array(z.number().int()) }))
     .mutation(async ({ ctx, input }) => {
-      for (let i = 0; i < input.orderedIds.length; i++) {
-        const c = await ctx.db.class.findFirst({
-          where: { eventId: ctx.event.id, seq: input.orderedIds[i] },
-          select: { id: true },
-        });
-        if (c) {
-          await ctx.db.class.update({
-            where: { id: c.id },
-            data: { sortIndex: i },
+      await ctx.db.$transaction(async (tx) => {
+        for (let i = 0; i < input.orderedIds.length; i++) {
+          const c = await tx.class.findFirst({
+            where: { eventId: ctx.event.id, seq: input.orderedIds[i] },
+            select: { id: true },
           });
+          if (c) {
+            await tx.class.update({
+              where: { id: c.id },
+              data: { sortIndex: i },
+            });
+            await emitClassUpserted(tx, ctx.event.id, c.id);
+          }
         }
-      }
+      });
       return { ok: true };
     }),
 });
