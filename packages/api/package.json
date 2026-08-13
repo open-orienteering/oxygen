@@ -55,7 +55,7 @@
     "@vitest/coverage-v8": "^4.1.10",
     "prisma": "^7.9.1",
     "tsx": "^4.23.12",
-    "typescript": "~5.9.3",
+    "typescript": "~6.0.3",
     "vitest": "^4.1.10"
   }
 }
