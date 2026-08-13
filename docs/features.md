@@ -59,6 +59,8 @@ Programming now performs a post-write SYS_VAL refresh before persisting battery 
 
 When a control is programmed from the UI, the unit row is upserted automatically; backup-memory reads are attributed to the reading unit too.
 
+The structured search bar supports an `ordinal:` filter for a control's position within a course, matching when any course has it at that position — `ordinal:1` lists every course's first control, `ordinal:-2` the second-to-last before finish (negative values count from the end), and comma lists combine (`ordinal:1,-1`).
+
 ![Controls with unit status](screenshots/controls.png)
 
 ### Clubs

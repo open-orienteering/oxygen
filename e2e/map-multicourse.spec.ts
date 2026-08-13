@@ -111,17 +111,22 @@ test.describe("Multi-course map: class labels + combined descriptions", () => {
     // shared between the courses merge into "Öppen 1, Öppen 2" — the
     // substring match covers both cases). The pills are sized to the
     // course line's thickness and dropped below 5px, so they only render
-    // once zoomed in enough — click zoom-in until they appear.
-    const zoomIn = mapPanel.getByTitle("Zoom in");
-    await expect(zoomIn).toBeVisible({ timeout: 10000 });
-    for (let i = 0; i < 8; i++) {
-      if ((await overlayLabels.filter({ hasText: "Öppen 1" }).count()) > 0) break;
-      await zoomIn.click();
-      await page.waitForTimeout(250);
-    }
-    await expect(
-      overlayLabels.filter({ hasText: "Öppen 1" }).first(),
-    ).toBeVisible({ timeout: 10000 });
+    // once zoomed in enough — click zoom-in until they appear. Fit zoom
+    // sits near the visibility threshold, so never assert without
+    // zooming first.
+    const zoomUntilLegLabels = async () => {
+      const zoomIn = mapPanel.getByTitle("Zoom in");
+      await expect(zoomIn).toBeVisible({ timeout: 10000 });
+      for (let i = 0; i < 8; i++) {
+        if ((await overlayLabels.filter({ hasText: "Öppen 1" }).count()) > 0) break;
+        await zoomIn.click();
+        await page.waitForTimeout(250);
+      }
+      await expect(
+        overlayLabels.filter({ hasText: "Öppen 1" }).first(),
+      ).toBeVisible({ timeout: 10000 });
+    };
+    await zoomUntilLegLabels();
     await expect(
       overlayLabels.filter({ hasText: "Öppen 2" }).first(),
     ).toBeVisible();
@@ -130,11 +135,9 @@ test.describe("Multi-course map: class labels + combined descriptions", () => {
     // The Descriptions toggle lives in the persistent map-pane toolbar,
     // which renders on wide viewports (>=2200px) — resize into it. The
     // inline map unmounts and the pane MapPanel takes over with the same
-    // highlighted courses.
+    // highlighted courses, but back at fit zoom — zoom in again.
     await page.setViewportSize({ width: 2400, height: 1200 });
-    await expect(
-      overlayLabels.filter({ hasText: "Öppen 1" }).first(),
-    ).toBeVisible({ timeout: 20000 });
+    await zoomUntilLegLabels();
     await page.getByRole("button", { name: "Descriptions", exact: true }).click();
 
     // Map labels keep control CODES — the first codes of both courses
