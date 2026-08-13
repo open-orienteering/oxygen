@@ -165,8 +165,13 @@ function firstCode(codes: string): number {
   return Number.isNaN(n) ? 0 : n;
 }
 
-/** User-facing id for a control: first code, falling back to seq. */
-function publicControlId(c: { codes: string; seq: number }): number {
+/**
+ * User-facing id for a control: first code, falling back to seq.
+ * Exported because every endpoint that exposes control ids to the web
+ * app (control.list, course.controlCoordinates, …) must use the same
+ * ID space — the MapPanel filters compare them directly.
+ */
+export function publicControlId(c: { codes: string; seq: number }): number {
   return firstCode(c.codes) || c.seq;
 }
 

@@ -37,7 +37,7 @@ The event page is mission control for external integrations. Everything the Swed
 
 ### Courses and the map
 
-Courses come from OCAD (`.ocd` / `.xml` course export), IOF XML, or can be authored directly. Upload the map once and every view — dashboard, courses, tracks, replay — renders against it. Control circles are placed automatically from the course coordinate system.
+Courses come from OCAD (`.ocd` / `.xml` course export), IOF XML, or can be authored directly. The import preview auto-matches the file's class assignments to the event's classes — and when the file has none (common for OCAD exports where courses are simply named after classes), it falls back to suggesting classes from the course names (see [course-import-class-fallback.md](course-import-class-fallback.md)). Upload the map once and every view — dashboard, courses, tracks, replay — renders against it. Control circles are placed automatically from the course coordinate system.
 
 ![Courses with map overlay and control placement](screenshots/courses.png)
 

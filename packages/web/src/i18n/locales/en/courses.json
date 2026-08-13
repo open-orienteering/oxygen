@@ -74,6 +74,7 @@
   },
   "xmlClass": "XML Class",
   "dbClass": "DB Class",
+  "classesFromCourseNamesHint": "This file contains no class assignments, so classes were suggested by matching course names. Review the mapping below before importing.",
   "noneLabel": "None",
   "selectClassPlaceholder": "Select class...",
   "skip": "— Skip —",

@@ -226,6 +226,16 @@ export function CourseImportDialog({ onClose, onSuccess }: Props) {
                 <SummaryBox label={t("existing")} value={preview.existingControls} color="blue" />
               </div>
 
+              {/* Fallback notice: file had no class assignments */}
+              {preview.classNamesFromCourseNames && (
+                <div
+                  data-testid="course-import-fallback-banner"
+                  className="p-3 bg-amber-50 border border-amber-200 rounded-lg text-sm text-amber-800"
+                >
+                  {t("classesFromCourseNamesHint")}
+                </div>
+              )}
+
               {/* Replace vs append mode */}
               <fieldset className="border border-slate-200 rounded-lg p-3">
                 <legend className="px-2 text-xs font-semibold text-slate-600 uppercase tracking-wider">

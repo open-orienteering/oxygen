@@ -20,6 +20,7 @@ import {
   type GeoJSONFeatureCollection,
 } from "../iof-course-parser.js";
 import { parseOCDCourseData } from "../ocd-course-parser.js";
+import { publicControlId } from "./control.js";
 import {
   ocadBoundsToWgs84,
   computeMapNorthOffset,
@@ -69,6 +70,31 @@ export function findBestClassMatch<T extends { id: string; name: string; seq: nu
   return best
     ? { id: best.class.id, seq: best.class.seq, name: best.class.name, matchType: "substring" }
     : null;
+}
+
+/**
+ * Class assignments used by the import preview. When the file contains
+ * none — e.g. an OCAD export whose Course Setting project had no
+ * classes defined — fall back to treating each course name as its own
+ * class name. Course setters commonly name courses directly after
+ * classes ("D10", "H14", "U1"), so running the course names through
+ * the auto-matcher recovers the mapping; anything that doesn't match
+ * still gets a preview row with a manual class dropdown.
+ */
+export function deriveClassAssignments(parsed: {
+  courses: Array<{ name: string }>;
+  classAssignments: ClassAssignment[];
+}): { assignments: ClassAssignment[]; fromCourseNames: boolean } {
+  if (parsed.classAssignments.length > 0 || parsed.courses.length === 0) {
+    return { assignments: parsed.classAssignments, fromCourseNames: false };
+  }
+  return {
+    assignments: parsed.courses.map((c) => ({
+      className: c.name,
+      courseName: c.name,
+    })),
+    fromCourseNames: true,
+  };
 }
 
 /** Parse either an IOF XML or an OCAD OCD file into the unified ParsedCourseData. */
@@ -680,7 +706,11 @@ export const courseRouter = router({
           }
         }
         return {
-          id: c.seq,
+          // Public control id (first punch code, seq fallback) — the
+          // same ID space as control.list rows and the course.list
+          // `controls` tokens, so MapPanel's selection filters and the
+          // map→Controls-page click navigation resolve correctly.
+          id: publicControlId({ codes: c.codes ?? "", seq: c.seq }),
           name: c.name,
           code: (c.codes ?? "").split(";")[0] || c.name,
           status: controlStatusToValue(c.status),
@@ -711,9 +741,14 @@ export const courseRouter = router({
             select: { id: true },
           })
         : null;
-      // Collect (course → control) bindings to consider.
+      // Collect (course → control) bindings to consider. Always scope
+      // to the current event — without this, the no-courseId path
+      // (dashboard progress bar) aggregated bindings from every event
+      // in the database.
       const courseControls = await ctx.db.courseControl.findMany({
-        where: courseFilter ? { courseId: courseFilter.id } : undefined,
+        where: courseFilter
+          ? { courseId: courseFilter.id }
+          : { course: { eventId } },
         include: {
           control: { select: { id: true, seq: true, codes: true } },
           course: { select: { id: true } },
@@ -783,7 +818,12 @@ export const courseRouter = router({
           void codeSet;
         }
         out.push({
-          controlId: ccs[0].control.seq,
+          // Same public ID space as controlCoordinates so MapPanel can
+          // join completion rows onto its control overlays.
+          controlId: publicControlId({
+            codes: ccs[0].control.codes ?? "",
+            seq: ccs[0].control.seq,
+          }),
           code: codes[0] ?? 0,
           total: expectedRunners.length,
           passed,
@@ -855,6 +895,9 @@ export const courseRouter = router({
         }
       }
 
+      const { assignments: classAssignments, fromCourseNames } =
+        deriveClassAssignments(parsed);
+
       const classMap: Record<
         string,
         Array<{
@@ -864,7 +907,7 @@ export const courseRouter = router({
           matchType: ClassMatchType;
         }>
       > = {};
-      for (const a of parsed.classAssignments as ClassAssignment[]) {
+      for (const a of classAssignments) {
         const best = findBestClassMatch(a.className, dbClasses);
         if (!classMap[a.courseName]) classMap[a.courseName] = [];
         classMap[a.courseName].push({
@@ -877,7 +920,7 @@ export const courseRouter = router({
 
       const coursePreview = parsed.courses.map((c: ParsedCourse) => {
         const controlCount = c.controls.filter((cc) => cc.type === "Control").length;
-        const assignments = parsed.classAssignments
+        const assignments = classAssignments
           .filter((a) => a.courseName === c.name)
           .map((a) => a.className);
         return {
@@ -908,6 +951,7 @@ export const courseRouter = router({
         finishControls: parsed.controls.filter((c) => c.type === "Finish").length,
         mapScale: parsed.mapScale,
         dbClasses: dbClasses.map((c) => ({ id: c.seq, name: c.name })),
+        classNamesFromCourseNames: fromCourseNames,
       };
     }),
 

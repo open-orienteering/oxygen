@@ -143,8 +143,29 @@ test.describe("Courses Page", () => {
       }),
     ]);
 
-    await expect(page.getByRole("cell", { name: "A", exact: true })).toBeVisible();
-    await expect(page.getByRole("cell", { name: "E", exact: true })).toBeVisible();
+    // test.ocd has no class-assignment records, so the preview falls
+    // back to suggesting classes from course names: the banner explains
+    // this, and every course row gets a mapping dropdown (course name
+    // appears in both the Name and XML Class columns).
+    await expect(page.getByTestId("course-import-fallback-banner")).toBeVisible();
+    await expect(page.getByRole("cell", { name: "A", exact: true })).toHaveCount(2);
+    // Unmatched fallback rows get a usable dropdown defaulting to Skip
+    // (before the fallback these courses had no dropdown at all).
+    await expect(page.getByRole("button", { name: "— Skip —" }).first()).toBeVisible();
+    // Course "E" substring-matches the seed class "Öppen 1" (normalized
+    // "öppen1" contains "e"), so its dropdown is pre-filled with the
+    // heuristic suggestion.
+    const eDropdown = page.getByRole("button", { name: "Öppen 1" });
+    await expect(eDropdown).toBeVisible();
+    // Reset it to Skip via the dropdown: later spec files rely on the
+    // seed class→course assignments, so this append import must not
+    // steal Öppen 1 from Bana 1.
+    await eDropdown.click();
+    await page
+      .getByRole("row", { name: /^E / })
+      .getByRole("button", { name: "— Skip —", exact: true })
+      .click();
+    await expect(page.getByRole("button", { name: "Öppen 1" })).not.toBeVisible();
 
     // The replace-all toggle defaults to ON; assert that, then turn it
     // off so this test still appends to the seed data (3 + 5 = 8).
