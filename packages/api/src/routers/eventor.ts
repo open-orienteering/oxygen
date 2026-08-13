@@ -102,6 +102,49 @@ function clampInt32(n: number): number {
   return n | 0;
 }
 
+/**
+ * Normalize an Eventor card number for storage. The `runners` table uses
+ * NULL — not 0 — for "no card" and enforces a partial unique index on
+ * (event_id, card_no) WHERE removed = false, so writing 0 for a second
+ * cardless runner would violate the constraint. Non-positive → null.
+ */
+export function normalizeCardNo(
+  raw: number | null | undefined,
+): number | null {
+  const v = clampInt32(raw ?? 0);
+  return v > 0 ? v : null;
+}
+
+/**
+ * Card-number claimer for one import/sync pass, guarding the partial
+ * unique index on (event_id, card_no). The first owner to claim a card
+ * keeps it; a later claim by a different owner gets `fallback` instead
+ * (null for creates, the runner's current card for sync updates).
+ * Eventor data does contain duplicate card numbers (shared/loaned
+ * cards, data-entry mistakes), and one bad pair must not abort the
+ * whole import.
+ */
+export function makeCardNoClaimer(
+  existing: Iterable<{ ownerKey: string; cardNo: number | null }> = [],
+): (
+  raw: number | null | undefined,
+  ownerKey: string,
+  fallback?: number | null,
+) => number | null {
+  const ownerByCard = new Map<number, string>();
+  for (const e of existing) {
+    if (e.cardNo != null && e.cardNo > 0) ownerByCard.set(e.cardNo, e.ownerKey);
+  }
+  return (raw, ownerKey, fallback = null) => {
+    const v = normalizeCardNo(raw);
+    if (v === null) return null;
+    const owner = ownerByCard.get(v);
+    if (owner !== undefined && owner !== ownerKey) return fallback;
+    ownerByCard.set(v, ownerKey);
+    return v;
+  };
+}
+
 /** Per-cluster in-memory club-member cache (10 min TTL). */
 const MEMBER_CACHE_TTL_MS = 10 * 60_000;
 const clubMemberCache = new Map<
@@ -621,6 +664,7 @@ export const eventorRouter = router({
 
       // 6. Import runners from entries (then results-only late entries).
       const seenPersonIds = new Set<number>();
+      const claimCardNo = makeCardNoClaimer();
       let runnerCount = 0;
 
       for (const entry of entries) {
@@ -647,7 +691,10 @@ export const eventorRouter = router({
             clubName: club.clubName,
             eventorClubId: club.eventorClubId,
             name: entry.personName,
-            cardNo: clampInt32(result?.cardNo || entry.cardNo),
+            cardNo: claimCardNo(
+              result?.cardNo || entry.cardNo,
+              `person:${entry.personId}`,
+            ),
             eventorPersonId: BigInt(entry.personId),
             eventorEntryId:
               entry.eventorEntryId > 0 ? BigInt(entry.eventorEntryId) : null,
@@ -693,7 +740,7 @@ export const eventorRouter = router({
             clubName: club.clubName,
             eventorClubId: club.eventorClubId,
             name: result.personName,
-            cardNo: clampInt32(result.cardNo),
+            cardNo: claimCardNo(result.cardNo, `person:${result.personId}`),
             eventorPersonId: BigInt(result.personId),
             entrySource: clampInt32(input.eventId),
             birthYear: result.birthYear,
@@ -843,6 +890,17 @@ export const eventorRouter = router({
       existing.map((r) => [Number(r.eventorPersonId), r]),
     );
 
+    // Card claims must respect every non-removed runner in the event —
+    // including locally-registered ones without an Eventor person id —
+    // or an update/create would trip the (event_id, card_no) unique index.
+    const runnersWithCards = await db.runner.findMany({
+      where: { eventId: ctx.event.id, removed: false, cardNo: { not: null } },
+      select: { id: true, cardNo: true },
+    });
+    const claimCardNo = makeCardNoClaimer(
+      runnersWithCards.map((r) => ({ ownerKey: r.id, cardNo: r.cardNo })),
+    );
+
     const seen = new Set<number>();
 
     for (const entry of entries) {
@@ -869,9 +927,17 @@ export const eventorRouter = router({
           entry.noTiming ? RunnerStatus.NoTiming : RunnerStatus.Unknown
         ) as RunnerStatusValue;
 
+        // On a card conflict keep the runner's current card rather than
+        // stealing it from (or being stolen by) another runner.
+        const nextCardNo = claimCardNo(
+          result?.cardNo || entry.cardNo,
+          found.id,
+          found.cardNo,
+        );
+
         const needsUpdate =
           found.name !== entry.personName ||
-          found.cardNo !== clampInt32(result?.cardNo || entry.cardNo) ||
+          found.cardNo !== nextCardNo ||
           found.classId !== (cls?.id ?? null) ||
           (found.eventorClubId
             ? Number(found.eventorClubId) !== entry.organisationId
@@ -890,7 +956,7 @@ export const eventorRouter = router({
             where: { id: found.id },
             data: {
               name: entry.personName,
-              cardNo: clampInt32(result?.cardNo || entry.cardNo),
+              cardNo: nextCardNo,
               classId: cls?.id ?? null,
               clubName: club.clubName,
               eventorClubId: club.eventorClubId,
@@ -950,7 +1016,10 @@ export const eventorRouter = router({
             clubName: club.clubName,
             eventorClubId: club.eventorClubId,
             name: entry.personName,
-            cardNo: clampInt32(result?.cardNo || entry.cardNo),
+            cardNo: claimCardNo(
+              result?.cardNo || entry.cardNo,
+              `person:${entry.personId}`,
+            ),
             eventorPersonId: BigInt(entry.personId),
             eventorEntryId:
               entry.eventorEntryId > 0 ? BigInt(entry.eventorEntryId) : null,
@@ -999,7 +1068,7 @@ export const eventorRouter = router({
             clubName: club.clubName,
             eventorClubId: club.eventorClubId,
             name: result.personName,
-            cardNo: clampInt32(result.cardNo),
+            cardNo: claimCardNo(result.cardNo, `person:${result.personId}`),
             eventorPersonId: BigInt(result.personId),
             entrySource: clampInt32(eventorEventId),
             birthYear: result.birthYear,
