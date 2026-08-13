@@ -27,7 +27,14 @@ export function prisma(): PrismaClient {
       throw new Error("DATABASE_URL is not set");
     }
     _prisma = new PrismaClient({
-      adapter: new PrismaPg({ connectionString }),
+      adapter: new PrismaPg({
+        connectionString,
+        // node-postgres defaults to 10 connections — noticeably below the
+        // old Rust engine's default (2 × cores + 1) and small enough to
+        // starve under interactive-transaction load (observed as hung
+        // requests in the E2E suite). Keep the old headroom.
+        max: parseInt(process.env.DATABASE_POOL_MAX ?? "25", 10),
+      }),
     });
   }
   return _prisma;

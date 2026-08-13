@@ -5,7 +5,7 @@ import { reseed } from "./helpers/reseed";
 // start from a clean seed per the e2e hygiene convention.
 test.beforeAll(reseed);
 
-const API = "http://localhost:3002";
+const API = "http://127.0.0.1:3002";
 const EVENT = "itest";
 
 async function selectCompetition(page: Page) {

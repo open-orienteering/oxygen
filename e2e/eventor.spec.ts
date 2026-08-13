@@ -52,7 +52,7 @@ test.describe("Competition Selector — New Features", () => {
 
     // Clean up
     const dbName = uniqueName.replace(/[^a-zA-Z0-9]/g, "_");
-    await fetch("http://localhost:3002/trpc/competition.delete", {
+    await fetch("http://127.0.0.1:3002/trpc/competition.delete", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ nameId: dbName }),

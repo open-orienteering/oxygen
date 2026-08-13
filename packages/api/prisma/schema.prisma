@@ -13,6 +13,9 @@
 generator client {
   provider = "prisma-client"
   output   = "../src/generated/prisma"
+  // Node ESM (dist runs under plain `node`) needs explicit .js import
+  // extensions — the extensionless default only works under bundlers/tsx.
+  importFileExtension = "js"
 }
 
 datasource db {

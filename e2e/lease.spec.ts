@@ -10,7 +10,7 @@
 
 import { test, expect, type APIRequestContext } from "@playwright/test";
 
-const API = "http://localhost:3002";
+const API = "http://127.0.0.1:3002";
 const EVENT = "itest";
 const SECRET = "e2e-sync-secret";
 
