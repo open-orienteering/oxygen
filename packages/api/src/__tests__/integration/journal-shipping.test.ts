@@ -14,7 +14,8 @@
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import { execSync } from "child_process";
 import { Client } from "pg";
-import { PrismaClient } from "@prisma/client";
+import { PrismaClient } from "../../generated/prisma/client.js";
+import { PrismaPg } from "@prisma/adapter-pg";
 import { randomUUID } from "crypto";
 import {
   createTestEvent,
@@ -73,7 +74,7 @@ beforeAll(async () => {
   caller = makeCaller(ctx.event);
 
   const bUrl = await provisionNodeB();
-  dbB = new PrismaClient({ datasourceUrl: bUrl });
+  dbB = new PrismaClient({ adapter: new PrismaPg({ connectionString: bUrl }) });
   // Wipe stale rows from interrupted runs — scoped to THIS suite's prefix,
   // because other two-node suites (lease.test.ts) share the node-B database
   // in a parallel worker and their live rows must not be clobbered.

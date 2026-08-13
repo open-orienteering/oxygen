@@ -13,7 +13,7 @@
  * eventorClubId` instead of a per-event `clubs` table.
  */
 
-import { PrismaClient } from "@prisma/client";
+import { PrismaClient } from "../generated/prisma/client.js";
 import {
   fetchClassInfo,
   fetchClassBlob,
