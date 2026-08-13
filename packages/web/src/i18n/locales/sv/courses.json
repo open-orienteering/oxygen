@@ -74,6 +74,7 @@
   },
   "xmlClass": "XML-klass",
   "dbClass": "DB-klass",
+  "classesFromCourseNamesHint": "Filen innehåller inga klasstilldelningar, så klasser föreslogs genom matchning av bannamn. Granska mappningen nedan innan du importerar.",
   "noneLabel": "Ingen",
   "selectClassPlaceholder": "Välj klass...",
   "skip": "— Hoppa över —",

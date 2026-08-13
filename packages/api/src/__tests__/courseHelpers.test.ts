@@ -13,6 +13,7 @@ import { describe, it, expect } from "vitest";
 import {
   normalizeClassName,
   findBestClassMatch,
+  deriveClassAssignments,
 } from "../routers/course.js";
 import { normalizeExpectedCodes } from "@oxygen/shared";
 
@@ -131,6 +132,35 @@ describe("findBestClassMatch", () => {
 
   it("returns null when XML name normalizes to empty", () => {
     expect(findBestClassMatch("   ", dbClasses)).toBeNull();
+  });
+});
+
+describe("deriveClassAssignments", () => {
+  const courses = [{ name: "D10" }, { name: "U1" }];
+
+  it("passes through assignments when the file has them", () => {
+    const fromFile = [{ className: "D10", courseName: "Bana 1" }];
+    expect(
+      deriveClassAssignments({ courses, classAssignments: fromFile }),
+    ).toEqual({ assignments: fromFile, fromCourseNames: false });
+  });
+
+  it("falls back to course names when the file has no assignments", () => {
+    expect(
+      deriveClassAssignments({ courses, classAssignments: [] }),
+    ).toEqual({
+      assignments: [
+        { className: "D10", courseName: "D10" },
+        { className: "U1", courseName: "U1" },
+      ],
+      fromCourseNames: true,
+    });
+  });
+
+  it("does not flag fallback when there are no courses either", () => {
+    expect(
+      deriveClassAssignments({ courses: [], classAssignments: [] }),
+    ).toEqual({ assignments: [], fromCourseNames: false });
   });
 });
 
