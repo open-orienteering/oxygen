@@ -39,6 +39,8 @@ The event page is mission control for external integrations. Everything the Swed
 
 Courses come from OCAD (`.ocd` / `.xml` course export), IOF XML, or can be authored directly. The import preview auto-matches the file's class assignments to the event's classes — and when the file has none (common for OCAD exports where courses are simply named after classes), it falls back to suggesting classes from the course names (see [course-import-class-fallback.md](course-import-class-fallback.md)). Upload the map once and every view — dashboard, courses, tracks, replay — renders against it. Control circles are placed automatically from the course coordinate system.
 
+Selecting several courses shows all of them at once, with each leg labeled inline with the classes that run it — legs shared between courses carry the combined class list ("Öppen 1, Öppen 2"), so it's always clear which line belongs to whom. The labels render as pills embedded in the course line itself (exactly as tall as the line, centered on the visible span between the control circles), shrinking to fit short legs and disappearing rather than becoming unreadable — zoom in far enough for the line to carry them. With a single course selected, the Descriptions toggle renders a classic control card with sequence numbers (1, 2, 3, …); with several courses it keeps control codes on the map (no renumbering) and shows one combined, code-sorted description sheet covering every control on the selected courses.
+
 ![Courses with map overlay and control placement](screenshots/courses.png)
 
 ### Classes

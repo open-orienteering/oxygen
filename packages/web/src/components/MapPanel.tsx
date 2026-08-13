@@ -137,6 +137,27 @@ function MapPanelImpl({
   const courses = trpc.course.list.useQuery(undefined, {
     staleTime: Number.POSITIVE_INFINITY,
   });
+  // Class → course assignments, so multi-course display can label each
+  // course's legs with the classes that run it.
+  const classList = trpc.class.list.useQuery(undefined, {
+    staleTime: Number.POSITIVE_INFINITY,
+  });
+  const classNamesByCourse = useMemo(() => {
+    const byCourse = new Map<string, string[]>();
+    if (!classList.data) return byCourse;
+    for (const cls of classList.data) {
+      // courseNames carries every course the class runs (forked classes
+      // and course pools included); courseName is the single-course case.
+      const names = cls.courseNames.length > 0 ? cls.courseNames : [cls.courseName];
+      for (const courseName of names) {
+        if (!courseName) continue;
+        const arr = byCourse.get(courseName) ?? [];
+        arr.push(cls.name);
+        byCourse.set(courseName, arr);
+      }
+    }
+    return byCourse;
+  }, [classList.data]);
   // Completion status data
   const completionStatus = trpc.course.controlCompletionStatus.useQuery(
     completionCourseId ? { courseId: completionCourseId } : undefined,
@@ -157,7 +178,10 @@ function MapPanelImpl({
   // Merge per-course FeatureCollections into a single FeatureCollection so
   // the downstream MapViewer can keep its existing single-input contract.
   // Geometry features duplicated across courses (e.g. shared legs) are
-  // fine — they just draw over each other at identical coordinates.
+  // fine — they just draw over each other at identical coordinates. Each
+  // feature is tagged with its course name (fresh objects — the source
+  // collections live in the React Query cache) so the viewer can label
+  // legs per course in multi-course display.
   const courseGeometry = useMemo(() => {
     const byName = courseGeometriesQuery.data;
     if (!byName) return undefined;
@@ -166,7 +190,14 @@ function MapPanelImpl({
     const combinedFeatures: unknown[] = [];
     for (const name of names) {
       const fc = byName[name];
-      if (fc?.features) combinedFeatures.push(...fc.features);
+      if (fc?.features) {
+        for (const f of fc.features as Array<{ properties?: Record<string, unknown> }>) {
+          combinedFeatures.push({
+            ...f,
+            properties: { ...(f.properties ?? {}), courseName: name },
+          });
+        }
+      }
     }
     return { type: "FeatureCollection", features: combinedFeatures };
   }, [courseGeometriesQuery.data]);
@@ -344,9 +375,10 @@ function MapPanelImpl({
         name: c.name,
         controls: controlIds,
         highlight: effectiveCourseNames.has(c.name),
+        classNames: classNamesByCourse.get(c.name) ?? [],
       };
     });
-  }, [courses.data, controlCoords.data, effectiveCourseNames]);
+  }, [courses.data, controlCoords.data, effectiveCourseNames, classNamesByCourse]);
 
   // Compute the set of control IDs to focus on when selection changes
   const focusControlIds = useMemo(() => {

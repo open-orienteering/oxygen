@@ -13,6 +13,11 @@ import {
   buildAffineTransform,
 } from "../lib/geo-utils";
 import { rotatedBoundingBox } from "../lib/map-rotation";
+import {
+  buildCourseLegLabels,
+  courseLegLabelText,
+  pillHalfWidth,
+} from "../lib/course-leg-labels";
 
 // ─── Types ──────────────────────────────────────────────────
 
@@ -43,6 +48,11 @@ export interface CourseOverlay {
   name: string;
   controls: string[]; // ordered control IDs (including start/finish)
   highlight?: boolean;
+  /**
+   * Classes assigned to this course (all of them — several classes can
+   * share a course). Drives the per-leg labels in multi-course display.
+   */
+  classNames?: string[];
 }
 
 interface Props {
@@ -661,6 +671,15 @@ export function MapViewer({
 
     const elements: React.ReactNode[] = [];
 
+    // Highlighted courses drive fallback legs, multi-course leg labels
+    // and description numbering below.
+    const highlightedCourses = courses.filter(
+      (c) => c.highlight || c.name === highlightCourseName,
+    );
+    // With more than one course on screen it's hard to tell which lines
+    // belong to what — label each leg with the classes that run it.
+    const legLabelMode = highlightedCourses.length > 1;
+
     // ─── Course geometry (GeoJSON) ───────────────────────
 
     if (courseGeometry && affine) {
@@ -784,9 +803,6 @@ export function MapViewer({
     // Back-compat: when neither `coursesWithGeometry` nor `courseGeometry`
     // is provided, fall back to the legacy behaviour of drawing just one
     // highlighted course.
-    const highlightedCourses = courses.filter(
-      (c) => c.highlight || c.name === highlightCourseName,
-    );
     let coursesToDraw: typeof courses;
     if (coursesWithGeometry) {
       coursesToDraw = highlightedCourses.filter((c) => !coursesWithGeometry.has(c.name));
@@ -836,18 +852,18 @@ export function MapViewer({
     // Sort controls deterministically so label placement is stable across renders
     const sortedControls = [...controls].sort((a, b) => a.id.localeCompare(b.id, undefined, { numeric: true }));
 
-    // In description mode, map control IDs to sequence numbers (1, 2, 3, ...)
+    // In description mode with a SINGLE course, map control IDs to sequence
+    // numbers (1, 2, 3, …) — a proper course card. With multiple courses
+    // selected there is no meaningful shared sequence, so every control
+    // keeps its code and the description sheet lists all of them by code.
     const sequenceMap = new Map<string, number>();
-    if (showDescriptions) {
-      const activeCourse = courses.find(c => c.highlight || c.name === highlightCourseName);
-      if (activeCourse) {
-        let seq = 0;
-        for (const cid of activeCourse.controls) {
-          const ctrl = controls.find(c => c.id === cid);
-          if (ctrl && ctrl.type === "Control") {
-            seq++;
-            sequenceMap.set(cid, seq);
-          }
+    if (showDescriptions && highlightedCourses.length === 1) {
+      let seq = 0;
+      for (const cid of highlightedCourses[0].controls) {
+        const ctrl = controls.find(c => c.id === cid);
+        if (ctrl && ctrl.type === "Control") {
+          seq++;
+          sequenceMap.set(cid, seq);
         }
       }
     }
@@ -1013,6 +1029,65 @@ export function MapViewer({
       }
     }
 
+    // ─── Multi-course leg labels ──────────────────────────
+    //
+    // One label per unique leg (control pair), centered between the two
+    // controls; legs shared by several courses carry the union
+    // ("Öppen 1, Öppen 2"). Styled like the measure tool's per-leg
+    // distance pills, and rendered AFTER the control symbols so circles
+    // and code labels never cover them. Base size is the measure label's
+    // 11px, clamped to zoom: at deep zoom-in the pill never gets thinner
+    // than the course line (it exactly covers it), and at zoom-out the
+    // text never exceeds a third of the control-code font. Per label,
+    // text longer than its leg shrinks to fit or is dropped.
+    if (legLabelMode) {
+      // The pill is always exactly as tall as the course line — embedded
+      // in it, not riding on it — at every zoom level. A tight pill/font
+      // ratio keeps the text close to the full line width. Labels only
+      // shrink below this when their text wouldn't fit the leg length.
+      const pillRatio = 1.15; // pill height / font size
+      const baseFontSize = legStroke / pillRatio;
+      // The visible line stops at the circle edges — same clearances the
+      // leg clipping uses, with the finish's outer ring being the widest.
+      const typeById = new Map(controls.map((c) => [c.id, c.type]));
+      const clearance = (id: string) => {
+        const type = typeById.get(id);
+        if (type === "Finish") return finishOuter * 1.2;
+        if (type === "Start") return startSize * 1.2;
+        return radius * 1.2;
+      };
+      const placed = buildCourseLegLabels(
+        highlightedCourses.map((c) => ({
+          text: courseLegLabelText(c.name, c.classNames),
+          controlIds: c.controls,
+        })),
+        ctrlPixels,
+        { baseFontSize, minFontSize: 5, mapRotationDeg: rotDeg, clearance },
+      );
+      for (let li = 0; li < placed.length; li++) {
+        const l = placed[li];
+        const fs = l.fontSize;
+        const pillH = fs * pillRatio;
+        const halfW = pillHalfWidth(l.text.length, fs);
+        elements.push(
+          <g
+            key={`leg-label-${li}`}
+            transform={`translate(${l.x.toFixed(1)}, ${l.y.toFixed(1)}) rotate(${l.angleDeg.toFixed(1)})`}
+            style={{ pointerEvents: "none" }}
+          >
+            <rect x={-halfW} y={-pillH / 2} width={halfW * 2} height={pillH}
+              rx={fs * 0.27}
+              fill="rgba(255,255,255,0.85)" stroke="#d8b4fe"
+              strokeWidth={Math.max(0.4, fs * 0.045)} />
+            <text x={0} y={0} textAnchor="middle" dominantBaseline="central"
+              fontSize={fs} fill="#86198f" fontWeight={600}>
+              {l.text}
+            </text>
+          </g>
+        );
+      }
+    }
+
     // Description sheet rendered separately (outside rotated div)
 
     // ─── Measure overlay ────────────────────────────────
@@ -1074,14 +1149,15 @@ export function MapViewer({
 
   const descriptionSheet = useMemo(() => {
     if (!showDescriptions || !courseGeometry || containerSize.w === 0 || containerSize.h === 0) return null;
-    const activeCourse = courses.find(c => c.highlight || c.name === highlightCourseName);
+    const activeCourses = courses.filter(
+      (c) => c.highlight || c.name === highlightCourseName,
+    );
     return renderDescriptionSheet(
       courseGeometry,
       symbolScale,
       containerSize.w,
       containerSize.h,
-      activeCourse?.name,
-      activeCourse?.controls,
+      activeCourses,
       controls,
     );
   }, [showDescriptions, courseGeometry, symbolScale, containerSize, courses, highlightCourseName, controls]);
@@ -1352,9 +1428,8 @@ function renderDescriptionSheet(
   symbolScale: number,
   cw: number,
   ch: number,
-  courseName?: string,
-  /** Ordered list of control IDs for the active course (start/finish included). */
-  activeCourseControls?: string[],
+  /** The highlighted courses. 1 → sequence card; >1 → code-sorted union. */
+  activeCourses?: Array<Pick<CourseOverlay, "name" | "controls">>,
   /** All control overlays — used to resolve id → code/type when geometry is sparse. */
   controlOverlays?: ControlOverlay[],
 ): React.ReactNode | null {
@@ -1378,26 +1453,48 @@ function renderDescriptionSheet(
     }
   }
 
-  // Build the ordered list of rows. Prefer the active course's control
-  // list (proper sequence + skips controls not in the course). Fall back
-  // to whatever's in the geometry if no course is highlighted.
+  /** Resolve one course-control id to a row (null for start/finish). */
+  const toRow = (cid: string): { code: string; description?: unknown } | null => {
+    // Look up overlay first: it tells us the type so we can skip start/finish.
+    const overlay = controlOverlays?.find((o) => o.id === cid);
+    if (overlay && overlay.type !== "Control") return null;
+    // The id used by the course is normally the punch code (OCD parser
+    // sets `id: code`). For IOF-parsed courses the id may differ, so
+    // also fall back to the overlay's code.
+    const lookupKey = String(overlay?.code ?? cid);
+    return { code: lookupKey, description: featureByCode.get(lookupKey)?.description };
+  };
+
+  // Build the rows. One course → its ordered control list with sequence
+  // numbers (a proper course card). Several courses → the code-sorted
+  // UNION of all their controls, without sequence numbers (there is no
+  // shared sequence, and the map keeps showing codes). No course → all
+  // geometry codes.
   type Row = { code: string; description?: unknown };
   const rows: Row[] = [];
-  if (activeCourseControls && activeCourseControls.length > 0) {
-    for (const cid of activeCourseControls) {
-      // Look up overlay first: it tells us the type so we can skip start/finish.
-      const overlay = controlOverlays?.find((o) => o.id === cid);
-      if (overlay && overlay.type !== "Control") continue;
-      // The id used by the course is normally the punch code (OCD parser
-      // sets `id: code`). For IOF-parsed courses the id may differ, so
-      // also fall back to the overlay's code.
-      const lookupKey = overlay?.code ?? cid;
-      const f = featureByCode.get(String(lookupKey));
-      rows.push({
-        code: String(overlay?.code ?? lookupKey),
-        description: f?.description,
-      });
+  const single = activeCourses?.length === 1 ? activeCourses[0] : null;
+  const withSequence = single !== null;
+  let title = "";
+  if (single) {
+    title = single.name;
+    for (const cid of single.controls) {
+      const row = toRow(cid);
+      if (row) rows.push(row);
     }
+  } else if (activeCourses && activeCourses.length > 1) {
+    title = activeCourses.map((c) => c.name).join(" · ");
+    const byCode = new Map<string, Row>();
+    for (const course of activeCourses) {
+      for (const cid of course.controls) {
+        const row = toRow(cid);
+        if (row && !byCode.has(row.code)) byCode.set(row.code, row);
+      }
+    }
+    rows.push(
+      ...[...byCode.values()].sort((a, b) =>
+        a.code.localeCompare(b.code, undefined, { numeric: true }),
+      ),
+    );
   } else {
     for (const f of featureByCode.values()) {
       rows.push(f);
@@ -1430,17 +1527,18 @@ function renderDescriptionSheet(
       fill="white" stroke="#94a3b8" strokeWidth={1} rx={2} />
   );
 
-  // Header row: course name
+  // Header row: course name(s). Long multi-course titles shrink to fit.
   elements.push(
     <rect key="desc-header" x={sheetX} y={sheetY} width={sheetW} height={cellSize}
       fill="#e2e8f0" stroke="#94a3b8" strokeWidth={0.5} rx={2} />
   );
-  if (courseName) {
+  if (title) {
+    const titleFs = Math.min(cellSize * 0.5, (sheetW - 8) / (title.length * 0.62));
     elements.push(
       <text key="desc-title" x={sheetX + sheetW / 2} y={sheetY + cellSize * 0.5}
         textAnchor="middle" dominantBaseline="central"
-        fontSize={cellSize * 0.5} fill="#1e293b" fontWeight="bold">
-        {courseName}
+        fontSize={titleFs} fill="#1e293b" fontWeight="bold">
+        {title}
       </text>
     );
   }
@@ -1467,13 +1565,16 @@ function renderDescriptionSheet(
     const ry = sheetY + (i + headerRows) * cellSize;
     const fs = cellSize * 0.45;
 
-    // Column A: sequence number
-    elements.push(
-      <text key={`desc-seq-${i}`} x={sheetX + cellSize * 0.5} y={ry + cellSize * 0.5}
-        textAnchor="middle" dominantBaseline="central" fontSize={fs} fill="#475569">
-        {i + 1}
-      </text>
-    );
+    // Column A: sequence number — only meaningful for a single course.
+    // The multi-course union card is code-keyed, so A stays empty.
+    if (withSequence) {
+      elements.push(
+        <text key={`desc-seq-${i}`} x={sheetX + cellSize * 0.5} y={ry + cellSize * 0.5}
+          textAnchor="middle" dominantBaseline="central" fontSize={fs} fill="#475569">
+          {i + 1}
+        </text>
+      );
+    }
     // Column B: control code
     elements.push(
       <text key={`desc-code-${i}`} x={sheetX + cellSize * 1.5} y={ry + cellSize * 0.5}
