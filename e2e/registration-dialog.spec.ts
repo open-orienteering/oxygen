@@ -34,7 +34,7 @@ declare global {
 }
 
 const COMPETITION_NAME = "My example tävling";
-const API_BASE = "http://localhost:3002";
+const API_BASE = "http://127.0.0.1:3002";
 const COMPETITION_ID = "itest";
 const COMP_HEADERS = { "x-competition-id": COMPETITION_ID };
 
