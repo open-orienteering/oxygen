@@ -89,6 +89,35 @@ carry-over). Fix: `playwright.config.ts` baseURL and all E2E API
 constants now use `http://127.0.0.1:...`. If you add E2E helpers, never
 use `localhost` in URLs.
 
+## Audit follow-up: how the production tree is enumerated
+
+Two fixes landed on `main` after the sweep, both about `pnpm run audit:prod`
+seeing the right set of packages.
+
+**The workflows had no pnpm version.** `pnpm/action-setup@v4` does not guess
+one, so both audit workflows died before installing anything. The root
+`package.json` now carries `packageManager: "pnpm@10.29.3"`, which is the
+single source of truth for CI, for local corepack, and (kept in sync by hand)
+for the Dockerfile's `npm install -g pnpm@…`.
+
+**The tree now comes from the lockfile.** `scripts/audit-prod.mjs` used to
+enumerate packages with `pnpm licenses list -P --json`, which reads license
+metadata out of the pnpm store — and a CI-restored store is not guaranteed to
+have an index file for every package (`ERR_PNPM_MISSING_PACKAGE_INDEX_FILE` on
+`@napi-rs/lzma-linux-x64-gnu`). The script now walks `pnpm-lock.yaml`
+(`importers` → `snapshots`, production groups only), so it needs neither the
+store nor an installed `node_modules`. `pnpm list --depth Infinity` was
+considered and rejected: it prints deduplicated nodes without their children
+and silently dropped ~97 transitive packages.
+
+**`vite-plugin-pwa` moved to devDependencies.** It was declared as a
+production dependency of `@oxygen/web` even though the only import is in
+`vite.config.ts`. That single misclassification dragged Vite, tsx, esbuild and
+the whole `workbox-build` → Babel chain into the audited tree: 805 packages
+before, 417 after. The Docker build is unaffected — its `deps` stage installs
+without `NODE_ENV=production`, and `NODE_ENV` is only set in the API runtime
+stage, so build-time plugins are still present when `vite build` runs.
+
 ## TypeScript 6.0.3 — and why not 7.0.2
 
 TS 6.0 is the JS-based bridge release aligning APIs and deprecations
