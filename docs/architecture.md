@@ -53,14 +53,14 @@ Oxygen is a modern web application for managing orienteering competitions. It co
 
 | Layer | Technology | Why |
 |-------|-----------|-----|
-| **Frontend** | React 19, Vite, Tailwind CSS v4 | Modern component model, instant HMR, utility-first CSS with zero runtime |
+| **Frontend** | React 19, Vite 8, Tailwind CSS v4 | Modern component model, instant HMR, utility-first CSS with zero runtime |
 | **Routing** | React Router v7 | Nested routes with URL-driven state |
 | **Data fetching** | TanStack Query + tRPC React | Automatic caching, stale-while-revalidate, end-to-end type safety |
 | **Backend** | Fastify 5 + tRPC 11 | High-performance HTTP, type-safe RPC with zero code generation |
 | **Validation** | Zod 4 | Runtime schema validation shared between client and server |
-| **ORM** | Prisma 6 | Type-safe database access with migration support |
+| **ORM** | Prisma 7 (`prisma-client` generator + `@prisma/adapter-pg`) | Type-safe database access with migration support |
 | **Database** | PostgreSQL 18 | UUIDv7 PKs, JSONB columns, native ENUM types, row-level FKs |
-| **Testing** | Vitest (unit), Playwright (E2E) | Fast unit tests, reliable browser automation |
+| **Testing** | Vitest 4 (unit), Playwright 1.62 (E2E) | Fast unit tests, reliable browser automation |
 | **Build** | Docker multi-stage | Reproducible builds, separate API and web containers |
 
 ## Database Architecture

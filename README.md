@@ -24,10 +24,10 @@ See the [feature showcase](docs/features.md) for screenshots of every view.
 
 | Layer | Technologies |
 |-------|-------------|
-| Frontend | React 19, Vite, Tailwind CSS v4, TanStack Query, React Router v7 |
-| Backend | Fastify, tRPC (end-to-end type safety), Zod |
-| Database | PostgreSQL 18 (`oxygen` schema), Prisma ORM |
-| Testing | Playwright E2E, Vitest unit tests |
+| Frontend | React 19, Vite 8, Tailwind CSS v4, TanStack Query v5, React Router v7 |
+| Backend | Fastify 5, tRPC 11 (end-to-end type safety), Zod 4 |
+| Database | PostgreSQL 18 (`oxygen` schema), Prisma 7 ORM |
+| Testing | Playwright 1.62 E2E, Vitest 4 unit tests |
 
 ```
 oxygen/

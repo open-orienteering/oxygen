@@ -1,7 +1,9 @@
 # ─── Stage 1: Install dependencies ─────────────────────────
 FROM node:20-slim AS deps
 
-RUN npm install -g pnpm
+# Keep in sync with "packageManager" in the root package.json, otherwise pnpm
+# re-downloads the pinned version on every build.
+RUN npm install -g pnpm@10.29.3
 
 WORKDIR /app
 COPY package.json pnpm-workspace.yaml pnpm-lock.yaml ./
