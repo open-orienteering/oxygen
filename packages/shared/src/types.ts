@@ -103,8 +103,22 @@ export function isFinished(
   return status === RunnerStatus.Unknown && finishTime > 0;
 }
 
+/** i18n translation keys produced by {@link runnerStatusKey} */
+export type RunnerStatusKey =
+  | "ok"
+  | "dns"
+  | "dnf"
+  | "missingPunch"
+  | "dq"
+  | "overMaxTime"
+  | "cancelled"
+  | "noTiming"
+  | "outOfCompetition"
+  | "notCompeting"
+  | "unknown";
+
 /** Map a runner status to its i18n translation key (for use with status namespace) */
-export function runnerStatusKey(status: RunnerStatusValue): string {
+export function runnerStatusKey(status: RunnerStatusValue): RunnerStatusKey {
   switch (status) {
     case RunnerStatus.OK: return "ok";
     case RunnerStatus.DNS: return "dns";
@@ -540,8 +554,25 @@ export const ControlStatus = {
 export type ControlStatusValue =
   (typeof ControlStatus)[keyof typeof ControlStatus];
 
+/** i18n translation keys produced by {@link controlStatusKey} */
+export type ControlStatusKey =
+  | "ok"
+  | "bad"
+  | "multiple"
+  | "start"
+  | "finish"
+  | "rogaining"
+  | "noTiming"
+  | "optional"
+  | "badNoTiming"
+  | "rogainingRequired"
+  | "check"
+  | "clear"
+  | "readout"
+  | "unknown";
+
 /** Map a control status to its i18n translation key (for use with status namespace) */
-export function controlStatusKey(status: ControlStatusValue): string {
+export function controlStatusKey(status: ControlStatusValue): ControlStatusKey {
   switch (status) {
     case ControlStatus.OK: return "ok";
     case ControlStatus.Bad: return "bad";

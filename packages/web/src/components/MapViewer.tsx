@@ -71,7 +71,8 @@ interface Props {
   style?: React.CSSProperties;
   initialFitControls?: boolean;
   focusControlIds?: string[] | null;
-  courseGeometry?: any; // the GeoJSON from the API
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- untyped GeoJSON JSONB straight from the API; traversed dynamically
+  courseGeometry?: any;
   /**
    * Names of highlighted courses for which high-fidelity geometry is already
    * included in `courseGeometry` (i.e. imported as OCD/XML). Any highlighted
@@ -349,13 +350,6 @@ export function MapViewer({
       fitToControlBounds(focusControls, hideControls ? 0.02 : 0.05);
     }
   }, [viewport, focusControlIds, controls, containerSize, hideControls, fitToControlBounds]);
-
-  // Build control lookup by ID
-  const controlMap = useMemo(() => {
-    const map = new Map<string, ControlOverlay>();
-    for (const c of controls) map.set(c.id, c);
-    return map;
-  }, [controls]);
 
   // ─── Coordinate helpers ───────────────────────────────────
 
@@ -1106,7 +1100,6 @@ export function MapViewer({
         );
 
         // Per-leg distance labels
-        let cumDist = 0;
         for (let i = 1; i < allPts.length; i++) {
           const p1 = allPts[i - 1], p2 = allPts[i];
           const midX = (p1.x + p2.x) / 2;
@@ -1115,7 +1108,6 @@ export function MapViewer({
           const srcPt2 = i < measurePoints.length ? measurePoints[i] : measureCursor;
           if (srcPt1 && srcPt2) {
             const legM = mmToMeters(mapMmDist(srcPt1, srcPt2));
-            cumDist += legM;
             const label = formatDist(legM);
             const halfW = label.length * 3.5 + 6;
             elements.push(
@@ -1424,6 +1416,7 @@ function drawBrokenCircle(cx: number, cy: number, r: number, gaps: SlitGap[]): s
 // ─── Description sheet renderer ────────────────────────────
 
 function renderDescriptionSheet(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- untyped GeoJSON JSONB straight from the API; traversed dynamically
   courseGeometry: any,
   symbolScale: number,
   cw: number,

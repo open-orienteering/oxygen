@@ -214,7 +214,6 @@ function LiveloxClassReplay({
 
   const extraRoutes = useMemo(
     () => otherClassResults.flatMap((r) => r.data?.routes ?? []),
-    // eslint-disable-next-line react-hooks/exhaustive-deps
     [otherClassResults],
   );
 

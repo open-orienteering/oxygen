@@ -110,12 +110,42 @@ export type SIReaderStatus =
 
 export interface SIReaderInfo {
   status: SIReaderStatus;
-  portInfo?: any;
+  portInfo?: SerialPortInfoLike;
+}
+
+// ─── WebSerial types ───────────────────────────────────────
+// The WebSerial API is not part of the standard TS lib; these are the
+// minimal structural types this module needs.
+
+export interface SerialPortInfoLike {
+  usbVendorId?: number;
+  usbProductId?: number;
+}
+
+interface SerialOptionsLike {
+  baudRate: number;
+  dataBits?: number;
+  stopBits?: number;
+  parity?: string;
+  flowControl?: string;
+}
+
+interface SerialPortLike {
+  open(options: SerialOptionsLike): Promise<void>;
+  close(): Promise<void>;
+  getInfo(): SerialPortInfoLike;
+  readable: ReadableStream<Uint8Array> | null;
+  writable: WritableStream<Uint8Array>;
+}
+
+interface NavigatorSerialLike {
+  requestPort(): Promise<SerialPortLike>;
+  getPorts(): Promise<SerialPortLike[]>;
 }
 
 // ─── Serial config ─────────────────────────────────────────
 
-const SERIAL_OPTIONS: any = {
+const SERIAL_OPTIONS: SerialOptionsLike = {
   baudRate: 38400,
   dataBits: 8,
   stopBits: 1,
@@ -129,7 +159,7 @@ const BLOCK_TIMEOUT_MS = 2000;
 // ─── Connection class ──────────────────────────────────────
 
 export class SIReaderConnection extends EventTarget {
-  private port: any | null = null;
+  private port: SerialPortLike | null = null;
   private reader: ReadableStreamDefaultReader<Uint8Array> | null = null;
   private buffer = new Uint8Array(0);
   private _status: SIReaderStatus = "idle";
@@ -160,7 +190,7 @@ export class SIReaderConnection extends EventTarget {
     );
   }
 
-  get portInfo(): any | undefined {
+  get portInfo(): SerialPortInfoLike | undefined {
     return this.port?.getInfo();
   }
 
@@ -176,7 +206,7 @@ export class SIReaderConnection extends EventTarget {
 
     this.setStatus("connecting");
     try {
-      const port = await (navigator as any).serial.requestPort();
+      const port = await (navigator as Navigator & { serial: NavigatorSerialLike }).serial.requestPort();
       await this.connectToPort(port);
     } catch (err) {
       this.setStatus("error");
@@ -190,7 +220,7 @@ export class SIReaderConnection extends EventTarget {
   async tryAutoReconnect(): Promise<boolean> {
     if (!("serial" in navigator)) return false;
     try {
-      const ports = await (navigator as any).serial.getPorts();
+      const ports = await (navigator as Navigator & { serial: NavigatorSerialLike }).serial.getPorts();
       if (ports.length === 0) return false;
       this.setStatus("connecting");
       await this.connectToPort(ports[0]);
@@ -201,7 +231,7 @@ export class SIReaderConnection extends EventTarget {
     }
   }
 
-  private async connectToPort(port: any): Promise<void> {
+  private async connectToPort(port: SerialPortLike): Promise<void> {
     this.port = port;
     await port.open(SERIAL_OPTIONS);
     this.setStatus("connected");

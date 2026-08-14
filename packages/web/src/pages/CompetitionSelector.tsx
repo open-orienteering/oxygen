@@ -813,7 +813,7 @@ function PurgeButton({ onPurged }: { onPurged: () => void }) {
   const { t } = useTranslation("event");
   const [confirming, setConfirming] = useState(false);
   const purgeMutation = trpc.competition.purgeDeleted.useMutation({
-    onSuccess: (data) => {
+    onSuccess: () => {
       onPurged();
       setTimeout(() => {
         setConfirming(false);

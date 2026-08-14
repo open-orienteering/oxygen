@@ -75,7 +75,7 @@ export function useExternalChanges(enabled = true) {
 
       if (routersToInvalidate.size > 0) {
         for (const routerKey of routersToInvalidate) {
-          const router = (utils as any)[routerKey];
+          const router = (utils as unknown as Record<string, unknown>)[routerKey];
           if (router && typeof (router as { invalidate?: () => void }).invalidate === "function") {
             (router as { invalidate: () => void }).invalidate();
           }

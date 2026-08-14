@@ -3,7 +3,6 @@ import { useTranslation } from "react-i18next";
 import { trpc } from "../lib/trpc";
 import { type ClubSummary } from "@oxygen/shared";
 import { useSearchParam, useNumericSearchParam } from "../hooks/useSearchParam";
-import { formatDateTime } from "../lib/format";
 import { ClubLogo } from "../components/ClubLogo";
 import { SortHeader } from "../components/SortHeader";
 import { useSort } from "../hooks/useSort";
@@ -213,7 +212,7 @@ function ClubDetailPanel({ clubId }: { clubId: number }) {
     },
   });
 
-  const timerRef = useRef<any>(undefined);
+  const timerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const debouncedUpdate = useCallback(
     (data: { id: number; name?: string; shortName?: string }) => {
       if (timerRef.current) clearTimeout(timerRef.current);

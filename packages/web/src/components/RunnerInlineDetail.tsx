@@ -10,7 +10,7 @@ import {
   hasTransferFlag,
   type RunnerStatusValue,
 } from "@oxygen/shared";
-import { PunchTable, type PunchTableData } from "./PunchTable";
+import { PunchTable } from "./PunchTable";
 import { ClubLogo } from "./ClubLogo";
 import { SearchableSelect } from "./SearchableSelect";
 import { formatEntryDate } from "../lib/format";
@@ -430,7 +430,6 @@ function SexSelect({
 
 function SelectField({
   label,
-  runnerId,
   field,
   currentValue,
   debouncedSave,
@@ -516,7 +515,6 @@ function StatusSelect({
 
 function SelectClubField({
   label,
-  runnerId,
   currentValue,
   debouncedSave,
 }: {

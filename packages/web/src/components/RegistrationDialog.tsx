@@ -1,10 +1,10 @@
 import { useState, useEffect, useRef, useMemo, useCallback } from "react";
 import { useTranslation } from "react-i18next";
 import { trpc } from "../lib/trpc";
-import { parseMeosTime, formatMeosTime } from "@oxygen/shared";
+import { parseMeosTime } from "@oxygen/shared";
 import { SearchableSelect } from "./SearchableSelect";
 import { ClubLogo } from "./ClubLogo";
-import { useDeviceManager, type RecentCard } from "../context/DeviceManager";
+import { useDeviceManager } from "../context/DeviceManager";
 import { useRegistrationDialog } from "../context/RegistrationDialogContext";
 import { usePrinter } from "../context/PrinterContext";
 import { fetchLogoRaster } from "../lib/receipt-printer/index.js";
@@ -65,7 +65,7 @@ export function RegistrationDialog() {
   const nameInputRef = useRef<HTMLInputElement>(null);
   const manualCardInputRef = useRef<HTMLInputElement>(null);
   const suggestionsRef = useRef<HTMLDivElement>(null);
-  const debounceRef = useRef<any>(undefined);
+  const debounceRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
 
   const lastConsumedCardRef = useRef<string | null>(null);
   const lastPendingCardRef = useRef<number | null>(null);
@@ -520,7 +520,7 @@ export function RegistrationDialog() {
         const key = `${rName}|${rCardNo}`;
         if (seen.has(key)) continue;
 
-        let matches = false;
+        let matches: boolean;
         if (isNumeric) {
           matches = String(rCardNo).startsWith(query);
         } else {
@@ -715,8 +715,8 @@ export function RegistrationDialog() {
         // Don't send kiosk-reset here — the kiosk will display registration-complete
         // and auto-reset on its own. kiosk-reset is only sent on explicit close/cancel.
       }
-    } catch (err: any) {
-      setError(err.message ?? t("registrationFailed"));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : t("registrationFailed"));
     }
   };
 

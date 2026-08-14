@@ -411,7 +411,7 @@ function RunnerDbPanel({ env }: { env?: string }) {
   });
 
   const handleSync = () => {
-    syncMutation.mutate({ env: (env as any) || "prod" });
+    syncMutation.mutate({ env: env === "test" ? "test" : "prod" });
   };
 
   const [, setTick] = useState(0);
@@ -1368,7 +1368,7 @@ function ReceiptSettings() {
 
 // ─── Club Sync ──────────────────────────────────────────────
 
-function ClubSyncPanel({ env }: { env?: string }) {
+function ClubSyncPanel(_props: { env?: string }) {
   const { t } = useTranslation("event");
   const syncStatus = trpc.eventor.syncStatus.useQuery();
   const syncMutation = trpc.eventor.syncClubs.useMutation();

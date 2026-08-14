@@ -4,7 +4,6 @@ import { trpc } from "../lib/trpc";
 import {
   formatMeosTime,
   formatRunningTime,
-  runnerStatusLabel,
   type RunnerStatusValue,
 } from "@oxygen/shared";
 import { StatusBadge } from "../components/StatusBadge";
