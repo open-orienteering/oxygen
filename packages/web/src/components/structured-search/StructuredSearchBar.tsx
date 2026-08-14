@@ -132,6 +132,30 @@ export function StructuredSearchBar({
   const inputRef = useRef<HTMLInputElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
 
+  /**
+   * Latest token tree, updated EAGERLY on every edit made here. The
+   * `tokens` prop round-trips through the parent — typically the URL via
+   * `useSearchParams`, i.e. an async router navigation — so right after
+   * `onTokensChange` the prop is stale. Basing a second edit on the stale
+   * prop silently drops the first one (e.g. committing `class:A`, `|`,
+   * `class:B` in quick succession lost the `class:A` chip). All tree
+   * edits therefore read from this ref and emit via `emitTokens`. The
+   * sync effect below is keyed on the prop reference, so unrelated
+   * re-renders (same prop reference) cannot clobber a pending eager
+   * value; only a real prop change (URL updated) syncs it.
+   */
+  const latestTokensRef = useRef(tokens);
+  useEffect(() => {
+    latestTokensRef.current = tokens;
+  }, [tokens]);
+  const emitTokens = useCallback(
+    (next: FilterNode[]) => {
+      latestTokensRef.current = next;
+      onTokensChange(next);
+    },
+    [onTokensChange],
+  );
+
   const anchorMap = useMemo(
     () => new Map(anchors.map((a) => [a.key.toLowerCase(), a])),
     [anchors],
@@ -217,12 +241,12 @@ export function StructuredSearchBar({
   const appendNode = useCallback(
     (atom: Atom) => {
       const finalAtom: Atom = pendingNot ? { ...atom, negated: true } : atom;
-      const next = appendAtom(tokens, finalAtom, orMode, newTokenId);
-      onTokensChange(next);
+      const next = appendAtom(latestTokensRef.current, finalAtom, orMode, newTokenId);
+      emitTokens(next);
       setPendingNot(false);
       if (orMode) setOrMode(null);
     },
-    [tokens, onTokensChange, pendingNot, orMode],
+    [emitTokens, pendingNot, orMode],
   );
 
   const commitToken = useCallback(
@@ -259,21 +283,22 @@ export function StructuredSearchBar({
 
   const removeNode = useCallback(
     (id: string) => {
-      onTokensChange(tokens.filter((n) => n.id !== id));
+      emitTokens(latestTokensRef.current.filter((n) => n.id !== id));
     },
-    [tokens, onTokensChange],
+    [emitTokens],
   );
 
   const removeChildFromGroup = useCallback(
     (groupId: string, childId: string) => {
-      onTokensChange(removeChildFromGroupOp(tokens, groupId, childId));
+      emitTokens(removeChildFromGroupOp(latestTokensRef.current, groupId, childId));
     },
-    [tokens, onTokensChange],
+    [emitTokens],
   );
 
   const handlePillClick = useCallback(
     (id: string) => {
-      const node = tokens.find((n) => n.id === id);
+      const current = latestTokensRef.current;
+      const node = current.find((n) => n.id === id);
       if (!node || isOrGroup(node)) return;
       const atom = node;
 
@@ -282,7 +307,7 @@ export function StructuredSearchBar({
         if (anchor?.operators.includes("in") && anchor.suggest) {
           const values = atom.value.split(",").filter(Boolean);
           setPendingValues(new Set(values));
-          onTokensChange(tokens.filter((n) => n.id !== id));
+          emitTokens(current.filter((n) => n.id !== id));
           setInputValue(`${atom.anchor}:`);
           setPendingNot(!!atom.negated);
           setShowSuggestions(true);
@@ -291,24 +316,25 @@ export function StructuredSearchBar({
         }
       }
 
-      onTokensChange(tokens.filter((n) => n.id !== id));
+      emitTokens(current.filter((n) => n.id !== id));
       setInputValue(atomToText(atom));
       setPendingNot(!!atom.negated);
       setShowSuggestions(true);
       setTimeout(() => inputRef.current?.focus(), 0);
     },
-    [tokens, onTokensChange, anchorMap],
+    [emitTokens, anchorMap],
   );
 
   const handleEditChild = useCallback(
     (groupId: string, childId: string) => {
-      const group = tokens.find((n) => n.id === groupId);
+      const current = latestTokensRef.current;
+      const group = current.find((n) => n.id === groupId);
       if (!group || !isOrGroup(group)) return;
       const child = group.children.find((c) => c.id === childId);
       if (!child) return;
 
-      const next = removeChildFromGroupOp(tokens, groupId, childId);
-      onTokensChange(next);
+      const next = removeChildFromGroupOp(current, groupId, childId);
+      emitTokens(next);
       setInputValue(atomToText(child));
       setPendingNot(!!child.negated);
       // If the group survived (still ≥2 children), re-typing appends to it.
@@ -317,7 +343,7 @@ export function StructuredSearchBar({
       setShowSuggestions(true);
       setTimeout(() => inputRef.current?.focus(), 0);
     },
-    [tokens, onTokensChange],
+    [emitTokens],
   );
 
   const handleAddBranch = useCallback(
@@ -332,26 +358,26 @@ export function StructuredSearchBar({
 
   const toggleAtomNegation = useCallback(
     (id: string) => {
-      onTokensChange(
-        tokens.map((n) => {
+      emitTokens(
+        latestTokensRef.current.map((n) => {
           if (n.id !== id || isOrGroup(n)) return n;
           return { ...n, negated: !n.negated };
         }),
       );
     },
-    [tokens, onTokensChange],
+    [emitTokens],
   );
 
   const toggleGroupNegation = useCallback(
     (id: string) => {
-      onTokensChange(
-        tokens.map((n) => {
+      emitTokens(
+        latestTokensRef.current.map((n) => {
           if (n.id !== id || !isOrGroup(n)) return n;
           return { ...n, negated: !n.negated };
         }),
       );
     },
-    [tokens, onTokensChange],
+    [emitTokens],
   );
 
   // ─── Keyboard handling ─────────────────────────────────────────────
@@ -448,10 +474,11 @@ export function StructuredSearchBar({
           setOrMode(null);
           return;
         }
-        if (tokens.length > 0) {
-          const last = tokens[tokens.length - 1];
+        const current = latestTokensRef.current;
+        if (current.length > 0) {
+          const last = current[current.length - 1];
           if (isOrGroup(last)) {
-            onTokensChange(popLastEntry(tokens));
+            emitTokens(popLastEntry(current));
           } else {
             handlePillClick(last.id);
           }
@@ -469,7 +496,6 @@ export function StructuredSearchBar({
     },
     [
       inputValue,
-      tokens,
       suggestions,
       highlightIndex,
       commitToken,
@@ -483,7 +509,7 @@ export function StructuredSearchBar({
       anchorMap,
       pendingNot,
       orMode,
-      onTokensChange,
+      emitTokens,
     ],
   );
 
@@ -535,7 +561,7 @@ export function StructuredSearchBar({
           if (atom) {
             // appendNode would re-trigger via state; simulate inline.
             const finalAtom: Atom = pendingNot ? { ...atom, negated: true } : atom;
-            onTokensChange([...tokens, finalAtom]);
+            emitTokens([...latestTokensRef.current, finalAtom]);
           }
           setPendingValues(new Set());
           setInputValue("");
@@ -549,7 +575,7 @@ export function StructuredSearchBar({
     }
     document.addEventListener("mousedown", handleClickOutside);
     return () => document.removeEventListener("mousedown", handleClickOutside);
-  }, [pendingValues, suggestionContext.mode, suggestionContext.anchor, anchorMap, tokens, onTokensChange, pendingNot]);
+  }, [pendingValues, suggestionContext.mode, suggestionContext.anchor, anchorMap, emitTokens, pendingNot]);
 
   useEffect(() => {
     function handleGlobalKey(e: KeyboardEvent) {
@@ -565,12 +591,12 @@ export function StructuredSearchBar({
   }, []);
 
   const clearAll = useCallback(() => {
-    onTokensChange([]);
+    emitTokens([]);
     setInputValue("");
     setPendingNot(false);
     setOrMode(null);
     inputRef.current?.focus();
-  }, [onTokensChange]);
+  }, [emitTokens]);
 
   const hasContent = tokens.length > 0 || inputValue.length > 0 || pendingNot || orMode !== null;
   const effectivePlaceholder = placeholder ?? t("structuredSearchPlaceholder");
