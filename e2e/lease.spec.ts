@@ -9,8 +9,8 @@
  */
 
 import { test, expect, type APIRequestContext } from "@playwright/test";
+import { API_BASE as API } from "./helpers/api-base";
 
-const API = "http://127.0.0.1:3002";
 const EVENT = "itest";
 const SECRET = "e2e-sync-secret";
 

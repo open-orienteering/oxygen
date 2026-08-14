@@ -7,9 +7,9 @@
  */
 import { newPrisma, recreateEvent } from "./shared.js";
 
-async function main() {
+export async function buildTestCompetition(databaseUrl?: string) {
   console.log(`  [seed:test-competition] Building "meos_20251222_001121_2BC"...`);
-  const prisma = newPrisma();
+  const prisma = newPrisma(databaseUrl);
   try {
     await recreateEvent(prisma, {
       nameId: "meos_20251222_001121_2BC",
@@ -25,7 +25,13 @@ async function main() {
   }
 }
 
-main().catch((err) => {
-  console.error("[seed:test-competition] failed:", err);
-  process.exit(1);
-});
+// CLI entry (`pnpm exec tsx e2e/seed-builder/build-test-competition.ts`);
+// no-op when imported by global-setup / reseed. argv check instead of
+// import.meta — Playwright's TS transform compiles this file to CJS
+// where import.meta is unavailable.
+if (process.argv[1]?.endsWith("build-test-competition.ts")) {
+  buildTestCompetition().catch((err) => {
+    console.error("[seed:test-competition] failed:", err);
+    process.exit(1);
+  });
+}

@@ -11,9 +11,9 @@
  */
 
 import { test, expect, type Page } from "@playwright/test";
+import { API_BASE } from "./helpers/api-base";
 
 const COMPETITION_NAME = "My example tävling";
-const API_BASE = "http://127.0.0.1:3002";
 const NAMEID = "itest";
 
 // ─── Helpers ───────────────────────────────────────────────

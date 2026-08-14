@@ -1,4 +1,5 @@
 import { test, expect } from "@playwright/test";
+import { API_BASE } from "./helpers/api-base";
 
 /** Clear the stored Eventor API key via tRPC so tests start fresh. */
 async function clearEventorKey(page: import("@playwright/test").Page) {
@@ -52,7 +53,7 @@ test.describe("Competition Selector — New Features", () => {
 
     // Clean up
     const dbName = uniqueName.replace(/[^a-zA-Z0-9]/g, "_");
-    await fetch("http://127.0.0.1:3002/trpc/competition.delete", {
+    await fetch(`${API_BASE}/trpc/competition.delete`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ nameId: dbName }),

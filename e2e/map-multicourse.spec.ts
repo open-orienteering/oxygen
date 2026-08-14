@@ -1,11 +1,11 @@
 import { test, expect, type Page } from "@playwright/test";
 import { reseed } from "./helpers/reseed";
+import { API_BASE as API } from "./helpers/api-base";
 
 // Mutates seed data (imports courses, uploads a map, reassigns classes) —
 // start from a clean seed per the e2e hygiene convention.
 test.beforeAll(reseed);
 
-const API = "http://127.0.0.1:3002";
 const EVENT = "itest";
 
 async function selectCompetition(page: Page) {

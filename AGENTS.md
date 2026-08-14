@@ -23,7 +23,8 @@ See `docs/architecture.md` for the full system architecture.
 | TypeScript build | `pnpm build` | All 3 packages must compile cleanly |
 | Unit tests | `pnpm test` | Vitest across shared, api, web (518+ tests) |
 | Integration tests | `pnpm --filter api exec vitest run --config vitest.integration.config.ts` | 69 tests, requires the test Postgres container (`pnpm test:db:up`) |
-| E2E tests | `pnpm test:e2e` | 195 tests, Playwright (Chromium, single worker) |
+| E2E tests | `pnpm test:e2e` | 195 tests, Playwright — full runs are sharded across 4 isolated stacks (see `docs/e2e-sharding.md`); `pnpm test:e2e e2e/foo.spec.ts` runs a single spec unsharded |
+| E2E tests (serial) | `pnpm test:e2e:serial` | Escape hatch: plain single-stack `playwright test` |
 | Test coverage | `pnpm test:coverage` | V8 coverage reports (HTML + LCOV) |
 | Lint | `pnpm lint` | ESLint |
 | Rebuild Docker | `docker compose -f docker-compose.host-db.yml up --build -d` | Rebuilds and restarts containers |
@@ -48,7 +49,7 @@ See `docs/architecture.md` for the full system architecture.
 
 - **All development happens on the dev servers** (`pnpm dev`). Do not restart or interact with Docker during active development.
 - Dev servers and Docker share the same PostgreSQL instance on `localhost:5432`, database `oxygen`, schema `oxygen`. They use different API ports (3002 vs 3001) so they do not conflict.
-- A separate `localhost:5433` Postgres container (`postgres-oxygen-test`) hosts the integration test (`oxygen_test`) and E2E (`oxygen_e2e`) databases so tests never touch the working dev data.
+- A separate `localhost:5433` Postgres container (`postgres-oxygen-test`) hosts the integration test (`oxygen_test`) and E2E (`oxygen_e2e`, plus per-shard `oxygen_e2e_1..4`) databases so tests never touch the working dev data.
 - Docker containers are only rebuilt as a final verification step after all tests pass (see §6).
 - The Vite dev server proxies `/trpc` and `/api` requests to the API dev server at port 3002.
 - Never commit `.env` files or credentials.
@@ -89,7 +90,7 @@ This is a TDD-first project. All new features and bug fixes must be developed te
 
 - **Unit tests**: `packages/*/src/__tests__/*.test.ts` — Vitest, jsdom (web) / node (api). Fast, deterministic, no database.
 - **Integration tests**: `packages/api/src/__tests__/integration/*.test.ts` — Vitest against the dedicated `postgres-oxygen-test` container on `:5433`. The harness (`helpers/load-env.ts`) refuses to run if `DATABASE_URL` resolves to port 5432 (dev DB) — set `INTEGRATION_DATABASE_URL` to override. Per-suite isolation comes from giving each suite its own `Event` row and relying on `ON DELETE CASCADE`.
-- **E2E tests**: `e2e/*.spec.ts` — Playwright, Chromium, single worker, sequential. Full user flows through the browser.
+- **E2E tests**: `e2e/*.spec.ts` — Playwright, Chromium, single worker, sequential within a stack. Full user flows through the browser. Full runs are parallelized by `scripts/e2e-sharded.mjs`, which launches 4 isolated stacks (own DB `oxygen_e2e_<n>`, own API, own Vite server) and splits the spec files across them — serial semantics are preserved inside each shard. See `docs/e2e-sharding.md`.
 
 ## 5. Flaky Test Policy
 
@@ -107,7 +108,7 @@ in your final message and explain why.
 1. **`pnpm build`** — Zero TypeScript errors across all three packages.
 2. **`pnpm test`** — All unit tests pass. Always required.
 3. **Integration tests** — Run for any DB-related changes. Always required for features: `pnpm --filter api exec vitest run --config vitest.integration.config.ts`
-4. **`pnpm test:e2e`** — Full suite for features and significant changes. For minor, isolated fixes, selective tests covering the affected area are acceptable: `pnpm test:e2e -- e2e/specific-file.spec.ts`
+4. **E2E tests** — During iterative development, run only the spec files covering the affected area (`pnpm test:e2e e2e/specific-file.spec.ts` — runs unsharded against the default stack). Before declaring a task complete, run the full suite once: `pnpm test:e2e` (sharded across 4 isolated stacks, ~2-3 min; see `docs/e2e-sharding.md`). For minor fixes confined to `docs/` or other non-shipping files, E2E can be skipped — state so in your final message.
 5. **Rebuild Docker** — Run `docker compose -f docker-compose.host-db.yml up --build -d` so the running stack reflects the latest code. **Required for every change that touches `packages/api/`, `packages/web/`, `packages/shared/`, `docker/`, any `Dockerfile`, `docker-compose*.yml`, or `pnpm-lock.yaml`.** You may skip it only for changes confined to `docs/`, `AGENTS.md`, `.claude/`, or test fixtures that don't ship in either image — and when you skip it, state so in your final message. Verify the output ends with both `Image oxygen-api Built` / `Image oxygen-web Built` and both containers `Started`; treat anything else as a failure.
 6. **Major-version drift report** — After all other steps pass, run `pnpm outdated -r --long` and list any **direct** dependencies (production or dev) with a major-version update available. Format each as `package: current → latest — one-line note on what changes / "no notable changes documented"`. Informational only; do not bump majors as part of an unrelated PR. The user decides whether to act.
 
@@ -253,7 +254,7 @@ After completing a feature, perform a self-review covering these areas:
 - Use existing helpers from `e2e/helpers/` (`selectCompetition`, `tabButton`, `getMockWebSerialScript`, `reseed`, etc.) rather than reimplementing.
 - WebSerial is mocked via `page.addInitScript()` with the mock from `e2e/helpers/mock-webserial.ts`. Mock punch times are in **seconds since midnight** (matching the SI hardware protocol); the API contract is **absolute deciseconds**, so the WebSerial decoder + `DeviceManager` handle the conversion automatically.
 - Playwright runs sequentially: `fullyParallel: false`, `workers: 1`. Tests share a single Chromium instance.
-- Three seed events (`itest`, `itest_multirace`, `meos_20251222_001121_2BC`) are recreated fresh by `e2e/global-setup.ts` via the programmatic seed builders in `e2e/seed-builder/*.ts`. They run against a dedicated `oxygen_e2e` database on `:5433` — the dev DB on `:5432` is never touched by tests.
+- Three seed events (`itest`, `itest_multirace`, `meos_20251222_001121_2BC`) are recreated fresh by `e2e/global-setup.ts` via the programmatic seed builders in `e2e/seed-builder/*.ts`. Selective runs use the dedicated `oxygen_e2e` database on `:5433`; full sharded runs use one database per shard (`oxygen_e2e_1..4`, provisioned automatically). The dev DB on `:5432` is never touched by tests.
 - For spec files that mutate seed data (create / delete events, controls, runners), call `await reseed()` in `test.beforeAll` so subsequent suites get a clean state. The helper at `e2e/helpers/reseed.ts` deletes all `E2E_` / `Delete_` rows + the three seed events and re-runs the builders.
 - Integration tests run against the same `oxygen_e2e` container but use a separate database (`oxygen_test`). Each suite owns one `Event` row; cleanup is automatic via `ON DELETE CASCADE`.
 

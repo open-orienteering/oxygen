@@ -276,9 +276,9 @@ const CARDS: SeedCard[] = [
 
 // ─── Main ──────────────────────────────────────────────────
 
-async function main() {
+export async function buildItest(databaseUrl?: string) {
   console.log(`  [seed:itest] Building "${NAME_ID}"...`);
-  const prisma = newPrisma();
+  const prisma = newPrisma(databaseUrl);
 
   try {
     // 1. Recreate event (cascades children).
@@ -448,7 +448,13 @@ async function main() {
   }
 }
 
-main().catch((err) => {
-  console.error("[seed:itest] failed:", err);
-  process.exit(1);
-});
+// CLI entry (`pnpm exec tsx e2e/seed-builder/build-itest.ts`); no-op when
+// imported by global-setup / reseed. argv check instead of import.meta —
+// Playwright's TS transform compiles this file to CJS where import.meta
+// is unavailable.
+if (process.argv[1]?.endsWith("build-itest.ts")) {
+  buildItest().catch((err) => {
+    console.error("[seed:itest] failed:", err);
+    process.exit(1);
+  });
+}

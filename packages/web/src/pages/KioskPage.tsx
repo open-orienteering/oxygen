@@ -29,6 +29,12 @@ import { getClubLogoUrl } from "../lib/club-logo";
 import { SiCardAnimation } from "../components/SiCardAnimation";
 import { useStationSync } from "../hooks/useStationSync";
 
+// Registration-waiting watchdog timeout. E2E hook: tests override via
+// localStorage (set in an init script, i.e. before this module loads) so
+// they don't have to wait out the full production timeout — see
+// registration-dialog.spec.ts.
+const WATCHDOG_MS = Number(localStorage.getItem("oxygenKioskWatchdogMs") ?? 15_000);
+
 // ─── Types ──────────────────────────────────────────────────
 
 type KioskScreen =
@@ -144,7 +150,6 @@ export function KioskPage() {
   // If no admin messages arrive for 15s while in registration-waiting, reset to idle.
   // Admin sends registration-state heartbeat every 2s AND kiosk-ping every 5s,
   // so 15s = 3 missed pings — resilient while still recovering from a dead admin.
-  const WATCHDOG_MS = 15_000;
   const registrationWatchdogRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
 
   useEffect(() => {
