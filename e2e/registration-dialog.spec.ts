@@ -18,6 +18,7 @@
 
 import { test, expect, type Page, type BrowserContext } from "@playwright/test";
 import { getMockWebSerialScript } from "./helpers/mock-webserial";
+import { API_BASE } from "./helpers/api-base";
 
 declare global {
   interface Window {
@@ -34,7 +35,6 @@ declare global {
 }
 
 const COMPETITION_NAME = "My example tävling";
-const API_BASE = "http://127.0.0.1:3002";
 const COMPETITION_ID = "itest";
 const COMP_HEADERS = { "x-competition-id": COMPETITION_ID };
 
@@ -706,6 +706,12 @@ test.describe("Registration Dialog", () => {
     });
 
     test("heartbeat keeps registration watchdog alive", async ({ context }) => {
+      // Shorten the kiosk watchdog (production: 15s) so this test doesn't
+      // have to wait out the full timeout. The admin heartbeat stays at its
+      // real 2s interval, so the mechanism under test is unchanged.
+      await context.addInitScript(() => {
+        window.localStorage.setItem("oxygenKioskWatchdogMs", "4000");
+      });
       const { adminPage, kioskPage } = await setupAdminAndKiosk(context);
 
       await insertUnregisteredCard(adminPage, 2900043);
@@ -715,9 +721,10 @@ test.describe("Registration Dialog", () => {
       // Kiosk should be in registration-waiting
       await expect(kioskPage.getByText("Registration in progress")).toBeVisible({ timeout: 10000 });
 
-      // Wait beyond the 15s watchdog timeout (heartbeat at 2s intervals keeps it alive).
-      // This is an intentional fixed wait to verify the watchdog does NOT fire.
-      await adminPage.waitForTimeout(18000);
+      // Wait beyond the (shortened) 4s watchdog timeout — the 2s heartbeat
+      // must keep it alive. Intentional fixed wait to verify the watchdog
+      // does NOT fire.
+      await adminPage.waitForTimeout(6000);
 
       // Kiosk should STILL show registration-waiting (heartbeat kept it alive)
       await expect(kioskPage.getByText("Registration in progress")).toBeVisible();

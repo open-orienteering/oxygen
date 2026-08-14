@@ -72,11 +72,15 @@ export function punchStringToJsonb(
   return out;
 }
 
-/** Build a Prisma client bound to the current DATABASE_URL. */
-export function newPrisma(): PrismaClient {
-  guardDatabaseUrl();
+/**
+ * Build a Prisma client bound to the given connection string (falls back
+ * to DATABASE_URL for standalone CLI runs).
+ */
+export function newPrisma(databaseUrl?: string): PrismaClient {
+  const url = databaseUrl ?? process.env.DATABASE_URL;
+  guardDatabaseUrl(url);
   return new PrismaClient({
-    adapter: new PrismaPg({ connectionString: process.env.DATABASE_URL! }),
+    adapter: new PrismaPg({ connectionString: url! }),
   });
 }
 
@@ -88,8 +92,7 @@ export function newPrisma(): PrismaClient {
  * In practice, `e2e/global-setup.ts` always points us at
  * postgresql://oxygen:oxygen@localhost:5433/oxygen_e2e?schema=oxygen.
  */
-function guardDatabaseUrl(): void {
-  const url = process.env.DATABASE_URL;
+function guardDatabaseUrl(url: string | undefined): void {
   if (!url) {
     throw new Error(
       "[e2e-seed] DATABASE_URL not set. Refusing to run — set it explicitly to the test DB URL.",

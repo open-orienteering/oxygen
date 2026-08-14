@@ -89,14 +89,18 @@ export default defineConfig({
     },
   },
   server: {
-    port: 5173,
+    // WEB_PORT / API_PROXY_PORT are set by the E2E harness so each shard
+    // can run its own web+API pair. Normal dev is unaffected (defaults).
+    // Note: deliberately NOT `PORT`, which `pnpm dev` uses for the API.
+    port: Number(process.env.WEB_PORT ?? 5173),
+    strictPort: !!process.env.WEB_PORT,
     proxy: {
       "/trpc": {
-        target: "http://localhost:3002",
+        target: `http://localhost:${process.env.API_PROXY_PORT ?? 3002}`,
         changeOrigin: true,
       },
       "/api": {
-        target: "http://localhost:3002",
+        target: `http://localhost:${process.env.API_PROXY_PORT ?? 3002}`,
         changeOrigin: true,
       },
     },

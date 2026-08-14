@@ -20,7 +20,9 @@ const TEST_HOST = "localhost";
 const TEST_PORT = 5433;
 const TEST_USER = "oxygen";
 const TEST_PASSWORD = "oxygen";
-const E2E_DB_NAME = "oxygen_e2e";
+// Overridable so the sharded runner (`scripts/e2e-sharded.mjs`) can give
+// each shard its own isolated database (oxygen_e2e_1..N).
+const E2E_DB_NAME = process.env.E2E_DB_NAME ?? "oxygen_e2e";
 
 export const E2E_DATABASE_URL =
   `postgresql://${TEST_USER}:${TEST_PASSWORD}@${TEST_HOST}:${TEST_PORT}/${E2E_DB_NAME}?schema=oxygen`;
@@ -89,20 +91,12 @@ async function cleanStaleEvents(): Promise<void> {
 
 async function runSeeds(): Promise<void> {
   console.log(`  [setup] Seeding events via builders...`);
-  // Each builder is an isolated script that connects via DATABASE_URL.
-  // Run them in-process via tsx for fast startup.
-  const env = { ...process.env, DATABASE_URL: E2E_DATABASE_URL };
-  const builders = [
-    "e2e/seed-builder/build-itest.ts",
-    "e2e/seed-builder/build-multirace.ts",
-    "e2e/seed-builder/build-test-competition.ts",
-  ];
-  for (const builder of builders) {
-    execSync(`pnpm exec tsx ${builder}`, {
-      stdio: "inherit",
-      env,
-    });
-  }
+  // One tsx child process runs all three builders (see seed-all.ts for
+  // why this can't be an in-process import).
+  execSync("pnpm exec tsx e2e/seed-builder/seed-all.ts", {
+    stdio: "inherit",
+    env: { ...process.env, DATABASE_URL: E2E_DATABASE_URL },
+  });
 }
 
 export default async function globalSetup(): Promise<void> {

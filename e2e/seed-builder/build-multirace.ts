@@ -8,9 +8,9 @@
  */
 import { newPrisma, recreateEvent } from "./shared.js";
 
-async function main() {
+export async function buildMultirace(databaseUrl?: string) {
   console.log(`  [seed:multirace] Building "itest_multirace"...`);
-  const prisma = newPrisma();
+  const prisma = newPrisma(databaseUrl);
   try {
     const event = await recreateEvent(prisma, {
       nameId: "itest_multirace",
@@ -30,7 +30,13 @@ async function main() {
   }
 }
 
-main().catch((err) => {
-  console.error("[seed:multirace] failed:", err);
-  process.exit(1);
-});
+// CLI entry (`pnpm exec tsx e2e/seed-builder/build-multirace.ts`); no-op
+// when imported by global-setup / reseed. argv check instead of
+// import.meta — Playwright's TS transform compiles this file to CJS
+// where import.meta is unavailable.
+if (process.argv[1]?.endsWith("build-multirace.ts")) {
+  buildMultirace().catch((err) => {
+    console.error("[seed:multirace] failed:", err);
+    process.exit(1);
+  });
+}
