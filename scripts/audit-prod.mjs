@@ -5,10 +5,15 @@
  * `pnpm audit` (≤10.x) talks to the legacy `/-/npm/v1/security/audits`
  * endpoint, which the registry retired in 2026 (HTTP 410). pnpm 11 fixed it
  * but requires Node 22+, so this script does what pnpm 11 does with no new
- * toolchain: enumerate the installed production tree (via
- * `pnpm licenses list -P --json`, which reads the lockfile-resolved
- * packages), POST name→versions to `/-/npm/v1/security/advisories/bulk`,
- * and match the returned vulnerable ranges against the installed versions.
+ * toolchain: walk the production tree in `pnpm-lock.yaml`, POST name→versions
+ * to `/-/npm/v1/security/advisories/bulk`, and match the returned vulnerable
+ * ranges against the resolved versions.
+ *
+ * The tree is read from the lockfile rather than from an installed
+ * `node_modules`: `pnpm licenses list` needs store index files, which a
+ * CI-restored store does not always have (ERR_PNPM_MISSING_PACKAGE_INDEX_FILE),
+ * and `pnpm list` prints deduplicated nodes without their children, so it
+ * silently drops transitive packages.
  *
  * Usage:
  *   node scripts/audit-prod.mjs [--audit-level=high|critical|moderate|low]
@@ -17,8 +22,11 @@
  * Network/registry failures exit 2 (distinguishable from "vulnerable").
  */
 
-import { execFileSync } from "node:child_process";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import path from "node:path";
 import semver from "semver";
+import YAML from "yaml";
 
 const LEVELS = ["low", "moderate", "high", "critical"];
 const levelArg = process.argv
@@ -27,31 +35,93 @@ const levelArg = process.argv
 const auditLevel = LEVELS.includes(levelArg ?? "") ? levelArg : "high";
 const minRank = LEVELS.indexOf(auditLevel);
 
-// ── 1. Installed production packages (lockfile-resolved) ──────
-let licensesJson;
+// ── 1. Production packages, walked out of the lockfile ────────
+const repoRoot = path.resolve(
+  path.dirname(fileURLToPath(import.meta.url)),
+  "..",
+);
+const lockPath = path.join(repoRoot, "pnpm-lock.yaml");
+let lock;
 try {
-  licensesJson = execFileSync(
-    "pnpm",
-    ["licenses", "list", "-P", "--json"],
-    { encoding: "utf8", maxBuffer: 64 * 1024 * 1024 },
-  );
+  lock = YAML.parse(readFileSync(lockPath, "utf8"));
 } catch (err) {
-  console.error("[audit-prod] Failed to enumerate packages via pnpm licenses:", err.message);
-  if (err.stdout) console.error("[audit-prod] stdout:", String(err.stdout).slice(0, 4000));
-  if (err.stderr) console.error("[audit-prod] stderr:", String(err.stderr).slice(0, 4000));
+  console.error(`[audit-prod] Cannot read ${lockPath}:`, err.message);
   process.exit(2);
 }
 
-/** name → Set of installed versions. */
+/**
+ * Lockfile refs look like `name@version`, optionally followed by a
+ * parenthesised peer/patch suffix: `@prisma/client@7.9.1(prisma@7.9.1(…))`.
+ * Everything from the first `(` is suffix, so the version is what follows the
+ * last `@` of the remainder.
+ */
+function splitRef(ref) {
+  const paren = ref.indexOf("(");
+  const base = paren === -1 ? ref : ref.slice(0, paren);
+  const at = base.lastIndexOf("@");
+  if (at <= 0) return null;
+  return { name: base.slice(0, at), version: base.slice(at + 1) };
+}
+
+const snapshots = lock.snapshots ?? {};
+/** name → Set of resolved versions. */
 const installed = new Map();
-for (const group of Object.values(JSON.parse(licensesJson))) {
-  for (const pkg of group) {
-    const set = installed.get(pkg.name) ?? new Set();
-    for (const v of pkg.versions) set.add(v);
-    installed.set(pkg.name, set);
+const visited = new Set();
+const queue = [];
+
+const enqueue = (name, versionSpec) => {
+  // Workspace packages are covered by their own `importers` entry.
+  if (typeof versionSpec !== "string" || versionSpec.startsWith("link:")) return;
+  queue.push(`${name}@${versionSpec}`);
+};
+
+for (const importer of Object.values(lock.importers ?? {})) {
+  // devDependencies are deliberately skipped: this audit gates the shipped tree.
+  for (const group of [importer.dependencies, importer.optionalDependencies]) {
+    for (const [name, entry] of Object.entries(group ?? {})) {
+      enqueue(name, entry?.version);
+    }
   }
 }
+
+const unresolved = new Set();
+while (queue.length > 0) {
+  const ref = queue.pop();
+  if (visited.has(ref)) continue;
+  visited.add(ref);
+
+  const parsed = splitRef(ref);
+  if (parsed && semver.valid(parsed.version)) {
+    const set = installed.get(parsed.name) ?? new Set();
+    set.add(parsed.version);
+    installed.set(parsed.name, set);
+  }
+
+  const snapshot = snapshots[ref];
+  if (!snapshot) {
+    // Tarball/git refs resolve under a URL key; anything else means the
+    // lockfile and this walker disagree, which is worth knowing about.
+    if (parsed && semver.valid(parsed.version)) unresolved.add(ref);
+    continue;
+  }
+  for (const group of [snapshot.dependencies, snapshot.optionalDependencies]) {
+    for (const [name, versionSpec] of Object.entries(group ?? {})) {
+      enqueue(name, versionSpec);
+    }
+  }
+}
+
+if (installed.size === 0) {
+  console.error("[audit-prod] Walked the lockfile and found no production packages");
+  process.exit(2);
+}
 console.log(`[audit-prod] ${installed.size} production packages in the tree`);
+if (unresolved.size > 0) {
+  console.log(
+    `[audit-prod] ${unresolved.size} refs had no snapshot entry (checked anyway): ` +
+      [...unresolved].slice(0, 5).join(", "),
+  );
+}
 
 // ── 2. Bulk advisory lookup ───────────────────────────────────
 const body = Object.fromEntries(
