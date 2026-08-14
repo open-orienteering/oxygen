@@ -7,7 +7,7 @@
  * panel passes in), and resolves seq → UUID at the DB boundary.
  */
 
-import type { PrismaClient } from "@prisma/client";
+import type { PrismaClient } from "../generated/prisma/client.js";
 import type {
   ClassDrawConfig,
   DrawSettings,

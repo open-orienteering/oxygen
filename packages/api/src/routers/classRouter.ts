@@ -10,7 +10,7 @@ import { valueToRunnerStatus, runnerStatusToValue } from "../statusConvert.js";
 import { emitClassUpserted } from "../referenceJournal.js";
 
 async function getClassBySeq(
-  db: import("@prisma/client").PrismaClient,
+  db: import("../generated/prisma/client.js").PrismaClient,
   eventId: bigint,
   seq: number,
 ) {
@@ -24,7 +24,7 @@ async function getClassBySeq(
 }
 
 async function courseSeqToId(
-  db: import("@prisma/client").PrismaClient,
+  db: import("../generated/prisma/client.js").PrismaClient,
   eventId: bigint,
   seq: number,
 ): Promise<string> {
@@ -41,7 +41,7 @@ async function courseSeqToId(
 const withdrawnEnums = WITHDRAWN_STATUSES.map(valueToRunnerStatus);
 
 async function loadClassDetail(
-  db: import("@prisma/client").PrismaClient,
+  db: import("../generated/prisma/client.js").PrismaClient,
   eventId: bigint,
   seq: number,
 ): Promise<ClassManageDetail> {

@@ -108,11 +108,20 @@ export default defineConfig({
         entryFileNames: "assets/[name]-[hash].js",
         chunkFileNames: "assets/[name]-[hash].js",
         assetFileNames: "assets/[name]-[hash].[ext]",
-        manualChunks: {
-          // Split heavy vendor deps into cacheable chunks
-          "vendor-react": ["react", "react-dom", "react-router-dom"],
-          "vendor-i18n": ["i18next", "react-i18next"],
-          "vendor-trpc": ["@trpc/client", "@trpc/react-query", "@tanstack/react-query"],
+        // Split heavy vendor deps into cacheable chunks. Vite 8 only
+        // accepts the function form of manualChunks.
+        manualChunks: (id: string) => {
+          if (!id.includes("node_modules")) return undefined;
+          if (/node_modules\/(react|react-dom|react-router|react-router-dom)\//.test(id)) {
+            return "vendor-react";
+          }
+          if (/node_modules\/(i18next|react-i18next)\//.test(id)) {
+            return "vendor-i18n";
+          }
+          if (/node_modules\/(@trpc|@tanstack\/react-query|@tanstack\/query-core)\//.test(id)) {
+            return "vendor-trpc";
+          }
+          return undefined;
         },
       },
     },

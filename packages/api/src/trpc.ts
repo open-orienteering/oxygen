@@ -1,6 +1,6 @@
 import { initTRPC, TRPCError } from "@trpc/server";
 import type { CreateFastifyContextOptions } from "@trpc/server/adapters/fastify";
-import type { PrismaClient } from "@prisma/client";
+import type { PrismaClient } from "./generated/prisma/client.js";
 import { prisma, resolveEvent, type EventRef } from "./db.js";
 import {
   SYNC_SECRET_HEADER,

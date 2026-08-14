@@ -41,7 +41,7 @@ import { valueToRunnerStatus } from "../statusConvert.js";
 import { foldServerHlc } from "../serverClock.js";
 import { pushToGoogleSheet } from "../sheetsBackup.js";
 import type { EventRef } from "../db.js";
-import type { PrismaClient } from "@prisma/client";
+import type { PrismaClient } from "../generated/prisma/client.js";
 
 const eventPayloadSchema = z.object({
   id: z.string().uuid(),

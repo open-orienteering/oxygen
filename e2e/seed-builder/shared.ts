@@ -5,7 +5,11 @@
  * the database pointed at by DATABASE_URL (set by global-setup to the
  * dedicated `oxygen_e2e` database on :5433).
  */
-import { PrismaClient, RunnerStatus as PgRunnerStatus } from "@prisma/client";
+import {
+  PrismaClient,
+  RunnerStatus as PgRunnerStatus,
+} from "../../packages/api/src/generated/prisma/client.js";
+import { PrismaPg } from "@prisma/adapter-pg";
 
 export type PgRunnerStatusLiteral = `${PgRunnerStatus}`;
 
@@ -71,7 +75,9 @@ export function punchStringToJsonb(
 /** Build a Prisma client bound to the current DATABASE_URL. */
 export function newPrisma(): PrismaClient {
   guardDatabaseUrl();
-  return new PrismaClient();
+  return new PrismaClient({
+    adapter: new PrismaPg({ connectionString: process.env.DATABASE_URL! }),
+  });
 }
 
 /**

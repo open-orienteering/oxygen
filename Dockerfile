@@ -11,16 +11,19 @@ COPY packages/web/package.json packages/web/
 
 RUN pnpm install --frozen-lockfile
 
-# Generate Prisma client (only needs the schema + installed deps)
-COPY packages/api/prisma/ packages/api/prisma/
-RUN pnpm --filter @oxygen/api db:generate
-
 # ─── Stage 2: Build everything ─────────────────────────────
 FROM deps AS build
 
 COPY packages/shared/ packages/shared/
 COPY packages/api/ packages/api/
 COPY packages/web/ packages/web/
+
+# Generate the Prisma client (v7: prisma.config.ts + emits TS into
+# packages/api/src/generated, compiled together with the API below).
+# prisma.config.ts resolves DATABASE_URL eagerly, so give generate a
+# dummy URL — client generation never touches a database.
+RUN DATABASE_URL="postgresql://build:build@127.0.0.1:5432/build?schema=oxygen" \
+    pnpm --filter @oxygen/api db:generate
 
 # Build shared first (API references it via project references)
 RUN pnpm --filter @oxygen/shared build
