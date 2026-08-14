@@ -25,6 +25,17 @@ function dist(ax: number, ay: number, bx: number, by: number): number {
   return Math.hypot(bx - ax, by - ay);
 }
 
+/** Distance from a point to the closest point of a placed label box. */
+function rectEdgeDist(
+  px: number,
+  py: number,
+  r: { x: number; y: number; w: number; h: number },
+): number {
+  const dx = Math.max(Math.abs(px - r.x) - r.w / 2, 0);
+  const dy = Math.max(Math.abs(py - r.y) - r.h / 2, 0);
+  return Math.hypot(dx, dy);
+}
+
 /**
  * The 82/84 cluster from Ungdomsserien regionfinal SO, H16 (course seq 8),
  * in screen coords (map-mm with y negated). Legs are the H16 sequence
@@ -74,6 +85,7 @@ describe("placeControlLabels", () => {
     expect(l).toBeDefined();
     expect(l.x).toBeGreaterThan(100);
     expect(l.y).toBeLessThan(100);
+    expect(l.leader).toBeUndefined();
   });
 
   it("returns no entry for circles without a label (obstacles only)", () => {
@@ -100,6 +112,29 @@ describe("placeControlLabels", () => {
     const l = placed.get("a")!;
     const estH = OPTS.labelSize * 1.2;
     expect(Math.abs(l.x - 108)).toBeGreaterThanOrEqual(estH);
+  });
+
+  it("attaches no leader lines when every label owns its circle (82/84 cluster)", () => {
+    const placed = placeControlLabels(clusterCircles(), clusterLegs(), OPTS);
+    for (const [id, label] of placed) {
+      expect(label.leader, `label ${id} has an unexpected leader line`).toBeUndefined();
+    }
+  });
+
+  it("no label intrudes on a foreign circle's claim radius (82/84 cluster)", () => {
+    // Claim radius: the smallest center distance a circle's own label can
+    // ever have. A foreign label inside it is guaranteed to misread.
+    const claim = OPTS.radius + OPTS.labelSize * 0.2 + (OPTS.labelSize * 1.2) / 2;
+    const placed = placeControlLabels(clusterCircles(), clusterLegs(), OPTS);
+    for (const [id, label] of placed) {
+      for (const [otherId, other] of Object.entries(CLUSTER)) {
+        if (otherId === id) continue;
+        expect(
+          dist(label.x, label.y, other.x, other.y),
+          `label ${id} intrudes on circle ${otherId}'s claim radius`,
+        ).toBeGreaterThanOrEqual(claim);
+      }
+    }
   });
 
   it("keeps every label closest to its own circle (82/84 regression)", () => {
@@ -176,6 +211,13 @@ describe("placeControlLabels", () => {
       const s = scaled.get(id)!;
       expect(s.x / scale).toBeCloseTo(l.x, 6);
       expect(s.y / scale).toBeCloseTo(l.y, 6);
+      expect(s.leader === undefined).toBe(l.leader === undefined);
+      if (l.leader && s.leader) {
+        expect(s.leader.x1 / scale).toBeCloseTo(l.leader.x1, 6);
+        expect(s.leader.y1 / scale).toBeCloseTo(l.leader.y1, 6);
+        expect(s.leader.x2 / scale).toBeCloseTo(l.leader.x2, 6);
+        expect(s.leader.y2 / scale).toBeCloseTo(l.leader.y2, 6);
+      }
     }
   });
 
@@ -188,6 +230,22 @@ describe("placeControlLabels", () => {
     );
     for (const [id, l] of a) {
       expect(b.get(id)).toEqual(l);
+    }
+  });
+
+  it("places every label at the same edge gap regardless of digit count", () => {
+    // Coherence rule: an isolated "8" and an isolated "108" both sit with
+    // their box edge exactly gap away from the circle edge.
+    const gap = OPTS.labelSize * 0.2;
+    for (const label of ["8", "108"]) {
+      const placed = placeControlLabels(
+        [{ id: "a", x: 100, y: 100, label }],
+        [],
+        OPTS,
+      );
+      const l = placed.get("a")!;
+      const edge = rectEdgeDist(100, 100, l) - OPTS.radius;
+      expect(edge).toBeCloseTo(gap, 6);
     }
   });
 
@@ -205,5 +263,161 @@ describe("placeControlLabels", () => {
     );
     const l = placed.get("a")!;
     expect(dist(l.x, l.y, 110, 100)).toBeGreaterThan(finishOuter);
+  });
+});
+
+/**
+ * The ordinal-1 controls of Ungdomsserien regionfinal SO, in screen
+ * coords (map-mm, y negated). Real DB geometry. This is the second
+ * reported regression: 95's number sat on 73's circle, 87's and 108's
+ * numbers collided, 106's number drifted needlessly far out. The
+ * cluster is genuinely hard — the circles of 87/88, 87/108, 62/70 and
+ * 70/106 physically overlap each other (closer than 2·radius).
+ *
+ * The Controls page draws no legs, so there are no line obstacles.
+ */
+const ORDINAL1: Record<string, { x: number; y: number }> = {
+  "61": { x: 109.94, y: -2.28 },
+  "62": { x: 114.43, y: 4.16 },
+  "70": { x: 113.85, y: 7.54 },
+  "71": { x: 99.85, y: -1.28 },
+  "73": { x: 101.51, y: 3.26 },
+  "87": { x: 102.8, y: 13.32 },
+  "88": { x: 99.99, y: 13.32 },
+  "95": { x: 107.45, y: 4.77 },
+  "106": { x: 114.15, y: 10.92 },
+  "108": { x: 106.66, y: 12.24 },
+};
+
+function ordinal1Circles(): PlacementCircle[] {
+  return Object.entries(ORDINAL1).map(([code, p]) => ({
+    id: code,
+    x: p.x,
+    y: p.y,
+    label: code,
+  }));
+}
+
+describe("placeControlLabels — ordinal-1 cluster regressions", () => {
+  const placed = placeControlLabels(ordinal1Circles(), [], OPTS);
+
+  it("places all ten labels", () => {
+    expect(placed.size).toBe(10);
+  });
+
+  it("no label box intersects any circle (95-on-73 regression)", () => {
+    for (const [id, label] of placed) {
+      for (const [otherId, other] of Object.entries(ORDINAL1)) {
+        if (otherId === id) continue;
+        expect(
+          rectEdgeDist(other.x, other.y, label),
+          `label ${id}'s box overlaps circle ${otherId}`,
+        ).toBeGreaterThan(OPTS.radius);
+      }
+    }
+  });
+
+  it("no two label boxes intersect (87/108 regression)", () => {
+    const entries = [...placed.entries()];
+    for (let i = 0; i < entries.length; i++) {
+      for (let j = i + 1; j < entries.length; j++) {
+        const [idA, a] = entries[i];
+        const [idB, b] = entries[j];
+        const overlaps =
+          Math.abs(a.x - b.x) < (a.w + b.w) / 2 &&
+          Math.abs(a.y - b.y) < (a.h + b.h) / 2;
+        expect(overlaps, `labels ${idA} and ${idB} overlap`).toBe(false);
+      }
+    }
+  });
+
+  it("every label sits on a quantized ring, nearly all on the first (106 regression)", () => {
+    const gap = OPTS.labelSize * 0.2;
+    let beyondFirst = 0;
+    for (const [id, label] of placed) {
+      const own = ORDINAL1[id];
+      const edge = rectEdgeDist(own.x, own.y, label) - OPTS.radius;
+      // Edge clearance must be exactly gap + k·(labelSize/2) for a small
+      // integer k: labels never drift to arbitrary distances.
+      const k = (edge - gap) / (OPTS.labelSize / 2);
+      expect(
+        Math.abs(k - Math.round(k)),
+        `label ${id} sits at a non-ring clearance ${edge.toFixed(3)}`,
+      ).toBeLessThan(1e-6);
+      expect(Math.round(k)).toBeGreaterThanOrEqual(0);
+      expect(Math.round(k)).toBeLessThanOrEqual(4);
+      if (Math.round(k) > 0) beyondFirst++;
+    }
+    // 106 drifting out was the reported regression: it must be on the
+    // innermost ring. Only 95 — fully enclosed by six circles — may
+    // legitimately need a wider ring.
+    const gap106 =
+      rectEdgeDist(ORDINAL1["106"].x, ORDINAL1["106"].y, placed.get("106")!) -
+      OPTS.radius;
+    expect(gap106).toBeCloseTo(gap, 6);
+    expect(beyondFirst).toBeLessThanOrEqual(1);
+  });
+
+  it("only the geometrically-forced 95 may intrude on a foreign claim radius", () => {
+    // For every circle here the claim radius is radius + gap + halfH.
+    // Brute-force scanning shows every collision-free slot for 95 either
+    // intrudes on a neighbour's claim or lies ≥ 9.16 mm out, so 95 is
+    // exempt; everyone else must stay outside all foreign claims.
+    const claim = OPTS.radius + OPTS.labelSize * 0.2 + (OPTS.labelSize * 1.2) / 2;
+    for (const [id, label] of placed) {
+      if (id === "95") continue;
+      for (const [otherId, other] of Object.entries(ORDINAL1)) {
+        if (otherId === id) continue;
+        expect(
+          dist(label.x, label.y, other.x, other.y),
+          `label ${id} intrudes on circle ${otherId}'s claim radius`,
+        ).toBeGreaterThanOrEqual(claim);
+      }
+    }
+  });
+
+  it("gives the contested 95 a leader line to its own circle, nobody else", () => {
+    for (const [id, label] of placed) {
+      if (id !== "95") {
+        expect(label.leader, `label ${id} has an unexpected leader line`).toBeUndefined();
+      }
+    }
+    const own = ORDINAL1["95"];
+    const l = placed.get("95")!;
+    const leader = l.leader!;
+    expect(leader).toBeDefined();
+    // Circle-side endpoint sits exactly on the own circle's edge.
+    expect(dist(leader.x2, leader.y2, own.x, own.y)).toBeCloseTo(OPTS.radius, 6);
+    // Label-side endpoint sits inside the box (pulled in from the
+    // boundary so the tick visually connects with the digits).
+    expect(rectEdgeDist(leader.x1, leader.y1, l)).toBeCloseTo(0, 6);
+  });
+
+  it("keeps 95 in the nearby pocket instead of exiling it outward", () => {
+    // The closest collision-free slot that intrudes on no claim radius is
+    // ~9.16 mm out (razor-thin, tangent to circle 73); the chosen pocket
+    // at ~9.5 mm is the practical optimum. Treating claim intrusion as a
+    // hard constraint used to push 95 past 11.5 mm — this guards that.
+    const label = placed.get("95")!;
+    const own = ORDINAL1["95"];
+    expect(dist(label.x, label.y, own.x, own.y)).toBeLessThan(10);
+  });
+
+  it("gives every circle except enclosed 95 its own label as nearest", () => {
+    // 95 is surrounded by six circles within 7.5 mm — every collision-free
+    // pocket is nearer to some neighbour, so it is exempt. Everyone else
+    // must read unambiguously: the nearest label to a circle is its own.
+    for (const [id, label] of placed) {
+      if (id === "95") continue;
+      const own = ORDINAL1[id];
+      const dOwn = dist(label.x, label.y, own.x, own.y);
+      for (const [otherId, other] of Object.entries(ORDINAL1)) {
+        if (otherId === id) continue;
+        expect(
+          dist(label.x, label.y, other.x, other.y),
+          `label ${id} is closer to circle ${otherId} than to its own`,
+        ).toBeGreaterThan(dOwn);
+      }
+    }
   });
 });

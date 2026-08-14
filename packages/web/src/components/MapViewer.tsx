@@ -993,6 +993,16 @@ export function MapViewer({
             ? String(sequenceMap.get(c.id))
             : c.code;
           const labelColor = (c.completionPct !== undefined && c.completionPct >= 1) ? "#059669" : baseColor;
+          // Contested label (congested cluster): thin leader line from the
+          // number to its own circle, so the association stays readable.
+          if (placedLabel.leader) {
+            const ld = placedLabel.leader;
+            elements.push(
+              <line key={`leader-${c.id}`} x1={ld.x1} y1={ld.y1} x2={ld.x2} y2={ld.y2}
+                stroke={labelColor} strokeWidth={stroke * 0.7} opacity={0.9}
+                data-testid="control-label-leader" />
+            );
+          }
           elements.push(
             <text key={`label-${c.id}`} x={placedLabel.x} y={placedLabel.y}
               textAnchor="middle" dominantBaseline="central"
