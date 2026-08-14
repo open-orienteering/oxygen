@@ -18,6 +18,11 @@ import {
   courseLegLabelText,
   pillHalfWidth,
 } from "../lib/course-leg-labels";
+import {
+  placeControlLabels,
+  type PlacementCircle,
+  type PlacementSeg,
+} from "../lib/control-label-placement";
 
 // ─── Types ──────────────────────────────────────────────────
 
@@ -146,17 +151,6 @@ function clipLine(
     segs.push({ x1: a.x + s0 * ux, y1: a.y + s0 * uy, x2: a.x + len * ux, y2: a.y + len * uy });
   }
   return segs;
-}
-
-/** Distance from point (px,py) to line segment (ax,ay)-(bx,by), plus closest point. */
-function ptSegDist(px: number, py: number, ax: number, ay: number, bx: number, by: number) {
-  const dx = bx - ax, dy = by - ay;
-  const lenSq = dx * dx + dy * dy;
-  let t = lenSq > 0 ? ((px - ax) * dx + (py - ay) * dy) / lenSq : 0;
-  t = Math.max(0, Math.min(1, t));
-  const cx = ax + t * dx, cy = ay + t * dy;
-  const ddx = px - cx, ddy = py - cy;
-  return { dist: Math.sqrt(ddx * ddx + ddy * ddy), cx, cy };
 }
 
 // ─── Component ──────────────────────────────────────────────
@@ -665,6 +659,13 @@ export function MapViewer({
 
     const elements: React.ReactNode[] = [];
 
+    // Line segments actually drawn on screen (course legs, marked and
+    // forbidden routes — of every course rendered). Collected while
+    // rendering and fed to the control-number placement so numbers avoid
+    // exactly the lines the user sees, no more (courses that are not
+    // drawn must not push labels around) and no less.
+    const drawnLineSegs: PlacementSeg[] = [];
+
     // Highlighted courses drive fallback legs, multi-course leg labels
     // and description numbering below.
     const highlightedCourses = courses.filter(
@@ -693,6 +694,12 @@ export function MapViewer({
             const { lat, lng } = affine.toLatLng(mx, my);
             const { px, py } = latlngToPixel(lat, lng, viewport, cw, ch);
             screenPts.push({ x: px, y: py });
+          }
+          for (let si = 0; si < screenPts.length - 1; si++) {
+            drawnLineSegs.push({
+              x1: screenPts[si].x, y1: screenPts[si].y,
+              x2: screenPts[si + 1].x, y2: screenPts[si + 1].y,
+            });
           }
 
           if (props.preclipped) {
@@ -733,6 +740,12 @@ export function MapViewer({
             const { lat, lng } = affine.toLatLng(mx, my);
             return latlngToPixel(lat, lng, viewport, cw, ch);
           });
+          for (let si = 0; si < screenPts.length - 1; si++) {
+            drawnLineSegs.push({
+              x1: screenPts[si].px, y1: screenPts[si].py,
+              x2: screenPts[si + 1].px, y2: screenPts[si + 1].py,
+            });
+          }
           const d = screenPts.map((p, i) => `${i === 0 ? "M" : "L"}${p.px.toFixed(1)},${p.py.toFixed(1)}`).join(" ");
           elements.push(
             <path key={`route-${fi}`} d={d} stroke="#c026d3" strokeWidth={legStroke * 1.5}
@@ -744,6 +757,12 @@ export function MapViewer({
             const { lat, lng } = affine.toLatLng(mx, my);
             return latlngToPixel(lat, lng, viewport, cw, ch);
           });
+          for (let si = 0; si < screenPts.length - 1; si++) {
+            drawnLineSegs.push({
+              x1: screenPts[si].px, y1: screenPts[si].py,
+              x2: screenPts[si + 1].px, y2: screenPts[si + 1].py,
+            });
+          }
           const d = screenPts.map((p, i) => `${i === 0 ? "M" : "L"}${p.px.toFixed(1)},${p.py.toFixed(1)}`).join(" ");
           elements.push(
             <path key={`restrict-${fi}`} d={d} stroke="#c026d3" strokeWidth={legStroke * 2}
@@ -817,6 +836,7 @@ export function MapViewer({
         const fromPt = ctrlPixels.get(course.controls[i]);
         const toPt = ctrlPixels.get(course.controls[i + 1]);
         if (!fromPt || !toPt) continue;
+        drawnLineSegs.push({ x1: fromPt.x, y1: fromPt.y, x2: toPt.x, y2: toPt.y });
         const segs = clipLine(fromPt, toPt, obstacles, radius * 1.2);
         for (let segi = 0; segi < segs.length; segi++) {
           const seg = segs[segi];
@@ -831,19 +851,6 @@ export function MapViewer({
 
     // ─── Control symbols ─────────────────────────────────
 
-    const labelPositions: { x: number; y: number; w: number; h: number }[] = [];
-    const allCirclePts: Pt[] = [];
-    const allLineSegs: { x1: number; y1: number; x2: number; y2: number }[] = [];
-
-    for (const course of courses) {
-      for (let i = 0; i < course.controls.length - 1; i++) {
-        const a = ctrlPixels.get(course.controls[i]);
-        const b = ctrlPixels.get(course.controls[i + 1]);
-        if (a && b) allLineSegs.push({ x1: a.x, y1: a.y, x2: b.x, y2: b.y });
-      }
-    }
-
-    // Sort controls deterministically so label placement is stable across renders
     const sortedControls = [...controls].sort((a, b) => a.id.localeCompare(b.id, undefined, { numeric: true }));
 
     // In description mode with a SINGLE course, map control IDs to sequence
@@ -862,12 +869,32 @@ export function MapViewer({
       }
     }
 
+    // Control-number placement (pure module, unit-tested). Inputs are
+    // exactly what is on screen: every VISIBLE circle is an obstacle
+    // (start triangles and finish rings with their real extents), regular
+    // controls carry their label, and `drawnLineSegs` holds the legs of
+    // every drawn course. All cost terms scale with the symbol sizes, so
+    // the chosen slots don't change when zooming — only when the set of
+    // visible controls or drawn courses does.
+    const placementCircles: PlacementCircle[] = [];
     for (const c of sortedControls) {
       if (c.visible === false) continue;
       const pos = ctrlPixels.get(c.id);
       if (!pos) continue;
-      allCirclePts.push(pos);
+      if (c.type === "Start") {
+        placementCircles.push({ id: c.id, x: pos.x, y: pos.y, radius: startSize });
+      } else if (c.type === "Finish") {
+        placementCircles.push({ id: c.id, x: pos.x, y: pos.y, radius: finishOuter });
+      } else {
+        const label = showDescriptions && sequenceMap.has(c.id)
+          ? String(sequenceMap.get(c.id))
+          : c.code;
+        placementCircles.push({ id: c.id, x: pos.x, y: pos.y, label });
+      }
     }
+    const placedControlLabels = hideControls
+      ? new Map<string, never>()
+      : placeControlLabels(placementCircles, drawnLineSegs, { radius, labelSize });
 
     for (const c of sortedControls) {
       if (c.visible === false) continue;
@@ -958,62 +985,19 @@ export function MapViewer({
           );
         }
 
-        // Control code label (or sequence number in description mode)
-        if (!hideControls) {
+        // Control code label (or sequence number in description mode) —
+        // position chosen by the placement module above.
+        const placedLabel = placedControlLabels.get(c.id);
+        if (placedLabel) {
           const label = showDescriptions && sequenceMap.has(c.id)
             ? String(sequenceMap.get(c.id))
             : c.code;
-          const estW = label.length * labelSize * 0.65;
-          const estH = labelSize * 1.2;
-
-          const offsets = [
-            { dx: 1, dy: -1 }, { dx: 1, dy: 0 }, { dx: 1, dy: 1 },
-            { dx: 0, dy: -1 }, { dx: -1, dy: -1 }, { dx: -1, dy: 0 },
-            { dx: -1, dy: 1 }, { dx: 0, dy: 1 },
-            { dx: 1.3, dy: -0.7 }, { dx: -1.3, dy: -0.7 },
-            { dx: 1.3, dy: 0.7 }, { dx: -1.3, dy: 0.7 },
-          ];
-
-          let bestPos = { x: pos.x + radius * 1.3, y: pos.y - radius * 0.5 };
-          let bestCost = Infinity;
-
-          for (const off of offsets) {
-            const candX = pos.x + off.dx * (radius + estW * 0.55);
-            const candY = pos.y + off.dy * (radius + estH * 0.55);
-            const candRect = { x: candX - estW / 2, y: candY - estH / 2, w: estW, h: estH };
-
-            let cost = 0;
-            for (const cp of allCirclePts) {
-              if (cp === pos) continue;
-              const dx = candX - cp.x, dy = candY - cp.y;
-              const d = Math.sqrt(dx * dx + dy * dy);
-              if (d < radius * 2) cost += 100;
-              else if (d < radius * 3) cost += 20;
-            }
-            for (const lp of labelPositions) {
-              if (candRect.x < lp.x + lp.w && candRect.x + candRect.w > lp.x &&
-                  candRect.y < lp.y + lp.h && candRect.y + candRect.h > lp.y) {
-                cost += 50;
-              }
-            }
-            for (const seg of allLineSegs) {
-              const { dist } = ptSegDist(candX, candY, seg.x1, seg.y1, seg.x2, seg.y2);
-              if (dist < estH) cost += 30;
-            }
-            if (off.dx < 0) cost += 2;
-            if (off.dy > 0) cost += 1;
-
-            if (cost < bestCost) { bestCost = cost; bestPos = { x: candX, y: candY }; }
-          }
-
-          labelPositions.push({ x: bestPos.x - estW / 2, y: bestPos.y - estH / 2, w: estW, h: estH });
-
           const labelColor = (c.completionPct !== undefined && c.completionPct >= 1) ? "#059669" : baseColor;
           elements.push(
-            <text key={`label-${c.id}`} x={bestPos.x} y={bestPos.y}
+            <text key={`label-${c.id}`} x={placedLabel.x} y={placedLabel.y}
               textAnchor="middle" dominantBaseline="central"
               fontSize={labelSize} fill={labelColor} fontWeight="bold"
-              transform={rotDeg !== 0 ? `rotate(${-rotDeg}, ${bestPos.x}, ${bestPos.y})` : undefined}
+              transform={rotDeg !== 0 ? `rotate(${-rotDeg}, ${placedLabel.x}, ${placedLabel.y})` : undefined}
               style={{ cursor: onControlClick ? "pointer" : undefined }}
               onClick={onControlClick ? () => onControlClick(c.id) : undefined}>
               {label}
