@@ -13,7 +13,7 @@
 import { test, expect, type Page } from "@playwright/test";
 
 const COMPETITION_NAME = "My example tävling";
-const API_BASE = "http://localhost:3002";
+const API_BASE = "http://127.0.0.1:3002";
 const NAMEID = "itest";
 
 // ─── Helpers ───────────────────────────────────────────────

@@ -12,7 +12,7 @@
  * wire it into new endpoints unless they pass the boundary rule.
  */
 
-import type { Prisma, PrismaClient } from "@prisma/client";
+import type { Prisma, PrismaClient } from "./generated/prisma/client.js";
 import {
   type JournalEntryType,
   type JournalPayloads,

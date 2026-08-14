@@ -164,7 +164,7 @@ export async function updateCompetitionMeta(
   const conn = await (await getLiveResultsPool()).getConnection();
   try {
     const parts: string[] = [];
-    const vals: unknown[] = [];
+    const vals: (string | number)[] = [];
     if (opts.compName !== undefined) {
       parts.push("compName = ?");
       vals.push(opts.compName.slice(0, 50));

@@ -16,7 +16,7 @@ import { z } from "zod";
 import { uuidv7 } from "uuidv7";
 import { TRPCError } from "@trpc/server";
 import { router, eventProcedure, raceProcedure } from "../trpc.js";
-import type { Prisma, PrismaClient } from "@prisma/client";
+import type { Prisma, PrismaClient } from "../generated/prisma/client.js";
 import {
   parsePunches,
   matchPunchesToCourse,

@@ -11,7 +11,11 @@ export default defineConfig({
   reporter: [["html", { open: "never" }], ["list"]],
 
   use: {
-    baseURL: "http://localhost:5173",
+    // 127.0.0.1, NOT localhost: the dev servers listen on IPv4 only, and
+    // Playwright's request stack resolves localhost to ::1 first with a
+    // ~10s fallback — every page.request call would stall (observed after
+    // the 1.62 bump as 30s beforeEach timeouts).
+    baseURL: "http://127.0.0.1:5173",
     trace: "on-first-retry",
     screenshot: "only-on-failure",
   },

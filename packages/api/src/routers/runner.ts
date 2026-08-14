@@ -27,7 +27,7 @@ export function normalizeBirthYear(val: number): number {
  * which is needed for Prisma writes), or throws NOT_FOUND.
  */
 async function getRunnerBySeq(
-  db: import("@prisma/client").PrismaClient,
+  db: import("../generated/prisma/client.js").PrismaClient,
   eventId: bigint,
   seq: number,
 ) {
@@ -42,7 +42,7 @@ async function getRunnerBySeq(
 
 /** Resolve a class seq to its UUID. */
 async function classSeqToId(
-  db: import("@prisma/client").PrismaClient,
+  db: import("../generated/prisma/client.js").PrismaClient,
   eventId: bigint,
   seq: number,
 ): Promise<string> {
@@ -65,7 +65,7 @@ async function classSeqToId(
  * so a shipped entry replays through exactly the same translation.
  */
 export async function buildRunnerUpdateData(
-  db: import("@prisma/client").PrismaClient,
+  db: import("../generated/prisma/client.js").PrismaClient,
   eventId: bigint,
   zeroTime: number,
   fields: Record<string, unknown>,
@@ -128,7 +128,7 @@ export async function buildRunnerUpdateData(
 
 /** Throw CONFLICT if `cardNo` is already used by another runner in this event. */
 async function assertCardNotTaken(
-  db: import("@prisma/client").PrismaClient,
+  db: import("../generated/prisma/client.js").PrismaClient,
   eventId: bigint,
   cardNo: number | null | undefined,
   excludeId?: string,
