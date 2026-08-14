@@ -44,7 +44,7 @@ function BrokenShellHeader({ id }: { id: number | undefined }) {
   return (
     <header>
       <button>back</button>
-      {/* eslint-disable-next-line react/jsx-no-leaked-render */}
+      {/* The leaky pattern under test — do not "fix" this line. */}
       {id && id > 0 && <img alt="logo" data-id={id} />}
       <h1>Bagissprinten</h1>
     </header>

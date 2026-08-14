@@ -271,12 +271,6 @@ export function CompetitionShell() {
   );
   const wideContainer = isWide && !paneCollapsed;
 
-  const handleTabChange = (tab: Tab) => {
-    const tabDef = tabs.find((t) => t.id === tab);
-    const path = tabDef?.path ? `/${nameId}/${tabDef.path}` : `/${nameId}`;
-    navigate(path);
-  };
-
   if (selectMutation.isError && !ready) {
     return (
       <div className="min-h-screen bg-slate-50 flex items-center justify-center p-4">
@@ -799,7 +793,6 @@ function PrinterStatusIndicator() {
         onClick={() => connect().catch((err) => {
           // Don't crash the UI, but surface enough that the operator can
           // copy/paste an actionable message from DevTools.
-          // eslint-disable-next-line no-console
           console.warn("[Printer] Connect failed:", err);
         })}
         className={`inline-flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium rounded-full transition-colors cursor-pointer ${

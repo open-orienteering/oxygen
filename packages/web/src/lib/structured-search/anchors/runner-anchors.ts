@@ -1,6 +1,6 @@
 import { RunnerStatus, isFinished, isWithdrawn, type RunnerInfo } from "@oxygen/shared";
 import { getCardType, type SICardType } from "../../si-protocol";
-import type { AnchorDef, FilterOperator, SuggestionItem } from "../types";
+import type { AnchorDef, FilterOperator } from "../types";
 
 const CURRENT_YEAR = new Date().getFullYear();
 

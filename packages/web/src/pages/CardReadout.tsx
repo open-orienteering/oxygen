@@ -1,5 +1,7 @@
 import { useRef, useEffect, useState, useCallback } from "react";
 import { useTranslation } from "react-i18next";
+import type { inferRouterOutputs } from "@trpc/server";
+import type { AppRouter } from "@oxygen/api";
 import { trpc } from "../lib/trpc";
 import {
   formatRunningTime,
@@ -131,7 +133,13 @@ export function CardReadout() {
 
 // ─── Helpers ─────────────────────────────────────────────────
 
-function toPunchTableData(data: any): PunchTableData {
+/** The `found: true` branch of the cardReadout.readout query result. */
+type FoundReadout = Extract<
+  inferRouterOutputs<AppRouter>["cardReadout"]["readout"],
+  { found: true }
+>;
+
+function toPunchTableData(data: FoundReadout): PunchTableData {
   return {
     controls: data.controls,
     timing: data.timing,
@@ -143,7 +151,7 @@ function toPunchTableData(data: any): PunchTableData {
 
 // ─── READOUT VIEW ────────────────────────────────────────────
 
-function ReadoutView({ data, onCardReturnedChange }: { data: any; onCardReturnedChange?: () => void }) {
+function ReadoutView({ data, onCardReturnedChange }: { data: FoundReadout; onCardReturnedChange?: () => void }) {
   const { t: tr } = useTranslation("race");
   const statusLabel = useRunnerStatusLabel();
   const t = data.timing;

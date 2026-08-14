@@ -1,7 +1,7 @@
 import { Fragment, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { trpc } from "../lib/trpc";
-import { formatMeosTime } from "@oxygen/shared";
+import { formatMeosTime, type RunnerStatusValue } from "@oxygen/shared";
 import { StatusBadge } from "../components/StatusBadge";
 import { SortHeader } from "../components/SortHeader";
 import { ClubLogo } from "../components/ClubLogo";
@@ -197,7 +197,7 @@ export function CardsPage() {
                             {card.runner.name}
                           </span>
                           {card.runner.status > 0 && (
-                            <StatusBadge status={card.runner.status as any} />
+                            <StatusBadge status={card.runner.status as RunnerStatusValue} />
                           )}
                           {card.runner.isRentalCard && (
                             <span
@@ -565,7 +565,7 @@ function CardDetailPanel({ cardNo, onReturnToggled }: { cardNo: number; onReturn
               <div className="flex gap-2">
                 <dt className="text-slate-500 w-20">{t("status")}:</dt>
                 <dd>
-                  <StatusBadge status={d.runner.status as any} />
+                  <StatusBadge status={d.runner.status as RunnerStatusValue} />
                 </dd>
               </div>
             </dl>
@@ -737,7 +737,11 @@ function CardDetailPanel({ cardNo, onReturnToggled }: { cardNo: number; onReturn
 
       {/* Readout History */}
       {history.data && history.data.length > 0 && (
-        <ReadoutHistorySection history={history.data as any} />
+        // TODO: cardReadout.readoutHistory only returns {id, cardType,
+        // voltageMv, readAt, stationId} — the punch/battery/owner fields
+        // this section renders are never present, so the expanded view
+        // shows "no punch data". Needs an API-side fix.
+        <ReadoutHistorySection history={history.data as unknown as HistoryEntry[]} />
       )}
     </div>
   );

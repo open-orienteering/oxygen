@@ -171,9 +171,7 @@ describe("buildCommand", () => {
 
   it("builds frames that pass CRC validation", () => {
     const frame = buildCommand(CMD.SI8_READ, [0]);
-    // Extract and verify CRC
-    const crcData = frame.slice(2, 2 + 2 + 0); // CMD + LEN (no additional data beyond what we already verified)
-    // The full CRC data is CMD + LEN + PARAMS
+    // Extract and verify CRC — the CRC data is CMD + LEN + PARAMS
     const fullCrcData = frame.slice(2, 5); // 0xEF, 0x01, 0x00
     const calcCrc = calculateCRC(fullCrcData);
     const frameCrc = (frame[5] << 8) | frame[6];

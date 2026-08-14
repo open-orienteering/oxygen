@@ -10,19 +10,19 @@ import {
 export function useRunnerStatusLabel() {
   const { t } = useTranslation("status");
   return (status: RunnerStatusValue): string =>
-    t(`runner.${runnerStatusKey(status)}` as any);
+    t(`runner.${runnerStatusKey(status)}`);
 }
 
 /** Translate a runner status value to its localized description */
 export function useRunnerStatusDescription() {
   const { t } = useTranslation("status");
   return (status: RunnerStatusValue): string =>
-    t(`runnerDescription.${runnerStatusKey(status)}` as any);
+    t(`runnerDescription.${runnerStatusKey(status)}`);
 }
 
 /** Translate a control status value to its localized label */
 export function useControlStatusLabel() {
   const { t } = useTranslation("status");
   return (status: ControlStatusValue): string =>
-    t(`control.${controlStatusKey(status)}` as any);
+    t(`control.${controlStatusKey(status)}`);
 }

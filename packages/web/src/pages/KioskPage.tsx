@@ -575,8 +575,6 @@ function KioskSettingsPanel({
 
 // ─── Idle Content (text + clock below the shared reader) ────
 
-const API_BASE = import.meta.env.VITE_API_URL ?? "";
-
 function IdleContent() {
   const { t } = useTranslation("kiosk");
   const fmt = useCallback((d: Date) =>

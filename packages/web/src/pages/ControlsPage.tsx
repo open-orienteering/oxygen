@@ -18,7 +18,7 @@ import { useSort } from "../hooks/useSort";
 import { MapSlot } from "../components/MapSlot";
 import { BulkActionBar } from "../components/BulkActionBar";
 import { useDeviceManager } from "../context/DeviceManager";
-import { STATION_MODE, AUTOSEND_MODE, type StationInfo } from "../lib/si-protocol";
+import { STATION_MODE, AUTOSEND_MODE } from "../lib/si-protocol";
 import { StructuredSearchBar } from "../components/structured-search/StructuredSearchBar";
 import { useStructuredSearch } from "../hooks/useStructuredSearch";
 import {
@@ -1056,7 +1056,7 @@ function ProgrammingPanel({
   // Restore direct mode on unmount (navigation away, panel toggle, etc.)
   useEffect(() => {
     return () => {
-      try { getReaderConnection().restoreDirectMode().catch(() => {}); } catch {}
+      try { getReaderConnection().restoreDirectMode().catch(() => {}); } catch { /* reader already gone */ }
     };
   }, [getReaderConnection]);
 
@@ -1498,7 +1498,7 @@ function ReadoutPanel({
   // Restore direct mode on unmount (navigation away, panel toggle, etc.)
   useEffect(() => {
     return () => {
-      try { getReaderConnection().restoreDirectMode().catch(() => {}); } catch {}
+      try { getReaderConnection().restoreDirectMode().catch(() => {}); } catch { /* reader already gone */ }
     };
   }, [getReaderConnection]);
 
@@ -1960,10 +1960,3 @@ function ReadoutPanel({
   );
 }
 
-function formatDeciseconds(ds: number): string {
-  const totalSeconds = Math.floor(ds / 10);
-  const h = Math.floor(totalSeconds / 3600);
-  const m = Math.floor((totalSeconds % 3600) / 60);
-  const s = totalSeconds % 60;
-  return `${h.toString().padStart(2, "0")}:${m.toString().padStart(2, "0")}:${s.toString().padStart(2, "0")}`;
-}

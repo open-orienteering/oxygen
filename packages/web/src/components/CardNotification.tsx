@@ -27,7 +27,7 @@ export function CardNotification() {
 
   const [visible, setVisible] = useState(false);
   const [card, setCard] = useState<RecentCard | null>(null);
-  const timerRef = useRef<any>(undefined);
+  const timerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
 
   const onCardPage = location.pathname.includes("/card-readout");
 

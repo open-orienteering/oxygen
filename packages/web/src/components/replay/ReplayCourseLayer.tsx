@@ -172,6 +172,7 @@ function computeSymbolScale(
  * Tested against the fork that is actually drawn so clicks land on visible
  * circles. Callers pass `null` (e.g. forked relay legs) to disable hit testing.
  */
+// eslint-disable-next-line react-refresh/only-export-components -- pure helper co-located with the layer that draws the circles it hit-tests; only costs full-reload HMR for this file
 export function hitTestControl(
   x: number,
   y: number,

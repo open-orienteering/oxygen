@@ -206,31 +206,18 @@ export function buildAffineTransform(
   }
 
   if (points.length === 2) {
-    // Two points: compute scale + rotation from the pair
+    // Degenerate-pair check only — the actual solve falls through to the
+    // general least-squares below (underdetermined with 2 points, but the
+    // normal equations still work).
     const [p0, p1] = points;
     const dmx = p1.mapX - p0.mapX;
     const dmy = p1.mapY - p0.mapY;
-    const dlat = p1.lat - p0.lat;
-    const dlng = p1.lng - p0.lng;
-    const d2 = dmx * dmx + dmy * dmy;
-    if (d2 < 1e-12) return null;
-    // Solve for affine coefficients from the two-point system
-    const a1 = (dlat * dmx + dlng * dmy) / d2; // approximate
-    const a2 = (dlat * dmy - dlng * dmx) / d2;
-    const b1 = (dlng * dmx - dlat * dmy) / d2;
-    const b2 = (dlng * dmy + dlat * dmx) / d2;
-    // Wait — let me use a cleaner formulation. With 2 points we solve:
-    // [dlat] = [dmx dmy] [a1]   →   a1 = (dlat*dmx)/(dmx²+dmy²) ...
-    // [dlng]   [dmx dmy] [b1]
-    // But that's not right either. Let me just use the full least-squares
-    // with the 2 points (underdetermined, but the normal equations still work).
-    // Fall through to the general case.
+    if (dmx * dmx + dmy * dmy < 1e-12) return null;
   }
 
   // General case: least-squares with >= 2 points
   // Minimize || A * [a0 a1 a2; b0 b1 b2]^T - [lat; lng] ||^2
   // where each point contributes a row [1, mapX, mapY] to the design matrix.
-  const n = points.length;
   // Normal equations: (M^T M) x = M^T b  for each of lat, lng separately.
   // M is n×3 with rows [1, mapX, mapY].
   let s1 = 0, sx = 0, sy = 0, sxx = 0, sxy = 0, syy = 0;
