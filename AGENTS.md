@@ -266,7 +266,7 @@ After completing a feature, perform a self-review covering these areas:
 
 ## 14. Dependency Management
 
-Dependency hygiene is developer- and agent-driven, not Dependabot-driven. Dependabot in this repo is configured to surface alerts in the GitHub Security tab only; it does not open update or security PRs. The day-to-day loop runs through `pnpm run audit:prod` (a thin client for npm's bulk advisory endpoint — see `scripts/audit-prod.mjs`).
+Dependency hygiene is developer- and agent-driven, not Dependabot-driven. Dependabot in this repo is configured to surface alerts in the GitHub Security tab only; it does not open update or security PRs. The day-to-day loop runs through `pnpm run audit:prod` (a thin client for npm's bulk advisory endpoint — see `scripts/audit-prod.mjs`). It enumerates the production tree by walking `pnpm-lock.yaml`, so it does not depend on an installed `node_modules` or a fully populated pnpm store.
 
 ### On every PR that touches deps
 

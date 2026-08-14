@@ -27,6 +27,7 @@ jobs:
 
       # `pnpm audit` (≤10.x) targets npm's retired legacy endpoint (410 since
       # 2026); scripts/audit-prod.mjs queries the bulk advisory endpoint the
-      # way pnpm 11 does, without requiring the Node 22 toolchain bump.
+      # way pnpm 11 does, without requiring the Node 22 toolchain bump. It reads
+      # the tree from pnpm-lock.yaml, so a partially cached store is harmless.
       - name: Audit (production tree, fail on high/critical)
         run: pnpm run audit:prod
