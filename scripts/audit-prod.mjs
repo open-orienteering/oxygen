@@ -37,6 +37,8 @@ try {
   );
 } catch (err) {
   console.error("[audit-prod] Failed to enumerate packages via pnpm licenses:", err.message);
+  if (err.stdout) console.error("[audit-prod] stdout:", String(err.stdout).slice(0, 4000));
+  if (err.stderr) console.error("[audit-prod] stderr:", String(err.stderr).slice(0, 4000));
   process.exit(2);
 }
 
