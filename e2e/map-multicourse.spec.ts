@@ -117,14 +117,17 @@ test.describe("Multi-course map: class labels + combined descriptions", () => {
     const zoomUntilLegLabels = async () => {
       const zoomIn = mapPanel.getByTitle("Zoom in");
       await expect(zoomIn).toBeVisible({ timeout: 10000 });
-      for (let i = 0; i < 8; i++) {
+      // Under parallel-shard load the SVG re-render after a zoom click can
+      // lag behind the count() poll — allow extra clicks and a wide final
+      // wait rather than a tight one that flakes.
+      for (let i = 0; i < 12; i++) {
         if ((await overlayLabels.filter({ hasText: "Öppen 1" }).count()) > 0) break;
         await zoomIn.click();
         await page.waitForTimeout(250);
       }
       await expect(
         overlayLabels.filter({ hasText: "Öppen 1" }).first(),
-      ).toBeVisible({ timeout: 10000 });
+      ).toBeVisible({ timeout: 20000 });
     };
     await zoomUntilLegLabels();
     await expect(

@@ -360,6 +360,33 @@ const storeReadoutInput = z.object({
 
 export type StoreReadoutInput = z.infer<typeof storeReadoutInput>;
 
+// ─── readoutHistory response shapes ────────────────────────
+// `card_readouts.punches` / `owner_data` / `metadata` are JSONB written
+// verbatim from storeReadoutInput; these types recover that structure
+// for the client (Prisma types JSONB as JsonValue).
+
+type ReadoutHistoryPunch = {
+  controlCode: number;
+  /** Absolute deciseconds (the API contract). */
+  time: number;
+  subSecond?: number;
+  unit?: number;
+};
+
+type ReadoutHistoryOwnerData = {
+  firstName?: string;
+  lastName?: string;
+  club?: string;
+};
+
+type ReadoutHistoryMetadata = {
+  batteryDate?: string;
+  productionDate?: string;
+  hardwareVersion?: string;
+  softwareVersion?: string;
+  clearCount?: number;
+};
+
 /**
  * Hash a logical card readout so duplicates can be detected without comparing
  * the full punch list byte-for-byte. The same card + same set of punches
@@ -1010,8 +1037,17 @@ export const cardReadoutRouter = router({
       });
       return rows.map((r) => ({
         id: r.id,
+        cardNo: r.cardNo,
         cardType: r.cardType,
-        voltageMv: r.voltageMv,
+        // Stored verbatim from storeReadout input — absolute deciseconds,
+        // control punches only (start/finish/check header times live on
+        // the Card row, not the immutable readout log).
+        punches: r.punches as unknown as ReadoutHistoryPunch[],
+        /** Battery voltage in volts, or null when the station reported none. */
+        batteryVoltage: r.voltageMv > 0 ? r.voltageMv / 1000 : null,
+        batteryLow: r.batteryLow,
+        ownerData: r.ownerData as ReadoutHistoryOwnerData | null,
+        metadata: r.metadata as ReadoutHistoryMetadata | null,
         readAt: r.readAt.toISOString(),
         stationId: r.stationId,
       }));

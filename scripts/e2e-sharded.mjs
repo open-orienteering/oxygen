@@ -81,9 +81,15 @@ function runPlaywright(extraArgs, env, onLine) {
 }
 
 if (hasFileFilter) {
-  // Selective run: a single plain Playwright process against the default
-  // stack (ports 3002/5173, DB oxygen_e2e). No sharding needed.
-  const child = runPlaywright(args, {});
+  // Selective run: a single plain Playwright process, but on its own ports
+  // (API_PORT_BASE + 0 / WEB_PORT_BASE + 0) and DB so it never collides
+  // with a running `pnpm dev` stack on 3002/5173. Explicit E2E_* env vars
+  // still win.
+  const child = runPlaywright(args, {
+    E2E_API_PORT: process.env.E2E_API_PORT ?? String(API_PORT_BASE),
+    E2E_WEB_PORT: process.env.E2E_WEB_PORT ?? String(WEB_PORT_BASE),
+    E2E_DB_NAME: process.env.E2E_DB_NAME ?? "oxygen_e2e",
+  });
   child.on("exit", (code) => process.exit(code ?? 1));
 } else {
   // Full run: partition all spec files across N shards.

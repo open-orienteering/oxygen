@@ -1,5 +1,7 @@
 import { Fragment, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
+import type { inferRouterOutputs } from "@trpc/server";
+import type { AppRouter } from "@oxygen/api";
 import { trpc } from "../lib/trpc";
 import { formatMeosTime, type RunnerStatusValue } from "@oxygen/shared";
 import { StatusBadge } from "../components/StatusBadge";
@@ -737,68 +739,17 @@ function CardDetailPanel({ cardNo, onReturnToggled }: { cardNo: number; onReturn
 
       {/* Readout History */}
       {history.data && history.data.length > 0 && (
-        // TODO: cardReadout.readoutHistory only returns {id, cardType,
-        // voltageMv, readAt, stationId} — the punch/battery/owner fields
-        // this section renders are never present, so the expanded view
-        // shows "no punch data". Needs an API-side fix.
-        <ReadoutHistorySection history={history.data as unknown as HistoryEntry[]} />
+        <ReadoutHistorySection history={history.data} />
       )}
     </div>
   );
 }
 
-// ─── Parse MeOS punch string ────────────────────────────────
-
-interface ParsedPunchEntry {
-  type: number;
-  time: number; // deciseconds
-}
-
-function parseMeosPunches(punchString: string): ParsedPunchEntry[] {
-  if (!punchString) return [];
-  const punches: ParsedPunchEntry[] = [];
-  for (const part of punchString.split(";").filter(Boolean)) {
-    const dashIdx = part.indexOf("-");
-    if (dashIdx === -1) continue;
-    const type = parseInt(part.substring(0, dashIdx), 10);
-    let timeStr = part.substring(dashIdx + 1);
-    const atIdx = timeStr.indexOf("@");
-    if (atIdx !== -1) timeStr = timeStr.substring(0, atIdx);
-    const hashIdx = timeStr.indexOf("#");
-    if (hashIdx !== -1) timeStr = timeStr.substring(0, hashIdx);
-    const dotIdx = timeStr.indexOf(".");
-    let time: number;
-    if (dotIdx !== -1) {
-      time =
-        parseInt(timeStr.substring(0, dotIdx), 10) * 10 +
-        (parseInt(timeStr.substring(dotIdx + 1), 10) || 0);
-    } else {
-      time = parseInt(timeStr, 10) * 10;
-    }
-    if (!isNaN(type) && !isNaN(time)) punches.push({ type, time });
-  }
-  return punches;
-}
-
 // ─── Readout History Section ────────────────────────────────
 
-type HistoryEntry = {
-  id: number;
-  cardNo: number;
-  cardType: string;
-  punches: string;
-  /** Battery voltage in volts, or null when not measured. */
-  batteryVoltage: number | null;
-  ownerData: { firstName?: string; lastName?: string; club?: string } | null;
-  metadata: {
-    batteryDate?: string;
-    productionDate?: string;
-    hardwareVersion?: string;
-    softwareVersion?: string;
-    clearCount?: number;
-  } | null;
-  readAt: string;
-};
+/** One row of cardReadout.readoutHistory, inferred end-to-end from the API. */
+type HistoryEntry =
+  inferRouterOutputs<AppRouter>["cardReadout"]["readoutHistory"][number];
 
 function HistoryBatteryIndicator({ batteryVoltage }: { batteryVoltage: number | null }) {
   const { t } = useTranslation("devices");
@@ -817,26 +768,28 @@ function HistoryBatteryIndicator({ batteryVoltage }: { batteryVoltage: number | 
 
 function ReadoutHistorySection({ history }: { history: HistoryEntry[] }) {
   const { t } = useTranslation("devices");
-  const [expandedId, setExpandedId] = useState<number | null>(null);
+  const [expandedId, setExpandedId] = useState<string | null>(null);
 
   return (
-    <div>
+    <div data-testid="readout-history">
       <h4 className="text-xs font-medium text-slate-500 uppercase tracking-wider mb-2">
         {t("readoutHistory", { count: history.length })}
       </h4>
       <div className="space-y-2">
         {history.map((h) => {
-          const allPunches = parseMeosPunches(h.punches);
+          // Codes 1/2/3 are the synthesized start/finish/check punches;
+          // live readouts usually carry only real control punches here.
+          const allPunches = h.punches;
           const isExpanded = expandedId === h.id;
-          const checkPunch = allPunches.find((p) => p.type === 3);
-          const startPunch = allPunches.find((p) => p.type === 1);
-          const finishPunch = allPunches.find((p) => p.type === 2);
+          const checkPunch = allPunches.find((p) => p.controlCode === 3);
+          const startPunch = allPunches.find((p) => p.controlCode === 1);
+          const finishPunch = allPunches.find((p) => p.controlCode === 2);
           const controlPunches = allPunches.filter(
-            (p) => p.type !== 1 && p.type !== 2 && p.type !== 3,
+            (p) => p.controlCode !== 1 && p.controlCode !== 2 && p.controlCode !== 3,
           );
 
           return (
-            <div key={h.id} className="bg-white rounded-lg border border-slate-200 overflow-hidden">
+            <div key={h.id} data-testid="readout-history-row" className="bg-white rounded-lg border border-slate-200 overflow-hidden">
               {/* Summary row — clickable */}
               <button
                 onClick={() => setExpandedId(isExpanded ? null : h.id)}
@@ -893,7 +846,7 @@ function ReadoutHistorySection({ history }: { history: HistoryEntry[] }) {
                       {t("noPunchData")}
                     </p>
                   ) : (
-                    <table className="w-full text-xs">
+                    <table data-testid="readout-history-punches" className="w-full text-xs">
                       <thead>
                         <tr className="text-slate-400">
                           <th className="px-2 py-1 text-left w-10">#</th>
@@ -926,7 +879,7 @@ function ReadoutHistorySection({ history }: { history: HistoryEntry[] }) {
                               {i + 1}
                             </td>
                             <td className="px-2 py-1 font-mono font-medium">
-                              {p.type}
+                              {p.controlCode}
                             </td>
                             <td className="px-2 py-1 font-mono">
                               {formatMeosTime(p.time)}

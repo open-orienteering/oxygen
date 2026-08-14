@@ -40,10 +40,8 @@ with justification.
 
 ## Known issue found during the cleanup
 
-`cardReadout.readoutHistory` returns only `{id, cardType, voltageMv,
-readAt, stationId}`, but the `ReadoutHistorySection` in
-`CardsPage.tsx` renders punch, battery, and owner fields that are never
-present (the expanded row always shows "no punch data"). The previous
-`as any` cast hid this; it is now an explicit `as unknown as
-HistoryEntry[]` with a TODO. Fixing it needs an API-side change and is
-out of scope for the lint cleanup.
+`cardReadout.readoutHistory` returned only `{id, cardType, voltageMv,
+readAt, stationId}`, but the `ReadoutHistorySection` in `CardsPage.tsx`
+renders punch, battery, and owner fields — the old `as any` cast hid
+that they were never present. Fixed in the follow-up PR; see
+`docs/bugfix-readout-history-empty.md`.

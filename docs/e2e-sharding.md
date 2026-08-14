@@ -31,7 +31,7 @@ reference events — nothing to provision manually.
 | Command | What happens |
 |---------|--------------|
 | `pnpm test:e2e` | Full suite, sharded across 4 stacks (~2-3 min) |
-| `pnpm test:e2e e2e/kiosk.spec.ts` | Selective run — single plain Playwright process on the default stack (ports 3002/5173, db `oxygen_e2e`), no sharding |
+| `pnpm test:e2e e2e/kiosk.spec.ts` | Selective run — single plain Playwright process on its own isolated stack (ports 4100/4200, db `oxygen_e2e`), no sharding. Isolated ports mean it works while `pnpm dev` is running |
 | `E2E_SHARDS=2 pnpm test:e2e` | Fewer shards (lower peak CPU/RAM) |
 | `pnpm test:e2e:serial` | Escape hatch: plain `playwright test`, identical to the pre-sharding behavior |
 
