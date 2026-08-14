@@ -139,6 +139,82 @@ describe("cardReadout.linkCardToRunner", () => {
   });
 });
 
+describe("cardReadout.readoutHistory", () => {
+  it("returns the stored punches, battery, owner and metadata fields", async () => {
+    const cardNo = 700001;
+    await caller.cardReadout.storeReadout({
+      cardNo,
+      cardType: "SI Card 10",
+      punches: [
+        { controlCode: 31, time: 700_100 },
+        { controlCode: 32, time: 700_400 },
+      ],
+      voltageMv: 2870,
+      ownerData: { firstName: "Karin", lastName: "Karta", club: "OK Skogen" },
+      metadata: { batteryDate: "2024-03-01", clearCount: 42 },
+    });
+
+    const history = await caller.cardReadout.readoutHistory({ cardNo });
+    expect(history.length).toBe(1);
+    const h = history[0];
+    expect(h.cardNo).toBe(cardNo);
+    expect(h.cardType).toBe("SI Card 10");
+    // Punch times stay in absolute deciseconds (the API contract).
+    expect(h.punches).toEqual([
+      { controlCode: 31, time: 700_100 },
+      { controlCode: 32, time: 700_400 },
+    ]);
+    // Stored as integer millivolts, returned as volts.
+    expect(h.batteryVoltage).toBeCloseTo(2.87);
+    expect(h.ownerData).toMatchObject({
+      firstName: "Karin",
+      lastName: "Karta",
+      club: "OK Skogen",
+    });
+    expect(h.metadata).toMatchObject({
+      batteryDate: "2024-03-01",
+      clearCount: 42,
+    });
+    expect(typeof h.readAt).toBe("string");
+  });
+
+  it("returns null battery voltage when the station reported none", async () => {
+    const cardNo = 700002;
+    await caller.cardReadout.storeReadout({
+      cardNo,
+      cardType: "SI Card 9",
+      punches: [],
+    });
+    const [h] = await caller.cardReadout.readoutHistory({ cardNo });
+    expect(h.batteryVoltage).toBeNull();
+    expect(h.ownerData).toBeNull();
+    expect(h.metadata).toBeNull();
+  });
+
+  it("returns readouts newest-first, one row per readout", async () => {
+    const cardNo = 700003;
+    await caller.cardReadout.storeReadout({
+      cardNo,
+      cardType: "SI Card 9",
+      punches: [{ controlCode: 61, time: 700_100 }],
+      readAt: new Date("2026-08-01T10:00:00Z").toISOString(),
+    });
+    await caller.cardReadout.storeReadout({
+      cardNo,
+      cardType: "SI Card 9",
+      punches: [
+        { controlCode: 61, time: 700_100 },
+        { controlCode: 62, time: 700_200 },
+      ],
+      readAt: new Date("2026-08-01T11:00:00Z").toISOString(),
+    });
+    const history = await caller.cardReadout.readoutHistory({ cardNo });
+    expect(history.length).toBe(2);
+    expect(history[0].punches.length).toBe(2);
+    expect(history[1].punches.length).toBe(1);
+  });
+});
+
 describe("cardReadout.addPunch / removePunch / updatePunchTime", () => {
   it("appends, removes, and adjusts punches around an existing card", async () => {
     const cardNo = 600001;

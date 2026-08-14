@@ -45,9 +45,11 @@ test.describe("Competition Dashboard", () => {
   async function goToDashboard(page: import("@playwright/test").Page) {
     await page.goto("/");
     await page.getByText("My example tävling").click();
-    // Wait for dashboard to load by checking for the "Not Yet Started" status card
+    // Wait for dashboard to load by checking for the "Not Yet Started"
+    // status card. Wide timeout: under parallel-shard load the initial
+    // dashboard queries can exceed 10s.
     await expect(page.getByText("Not Yet Started")).toBeVisible({
-      timeout: 10000,
+      timeout: 20000,
     });
   }
 
