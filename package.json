@@ -22,6 +22,7 @@
     "showcase:load": "bash scripts/load-showcase.sh",
     "audit:prod": "node scripts/audit-prod.mjs --audit-level=high"
   },
+  "packageManager": "pnpm@10.29.3",
   "engines": {
     "node": ">=20",
     "pnpm": ">=10"
