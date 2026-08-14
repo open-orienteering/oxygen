@@ -74,3 +74,114 @@ event and asserts, among others:
 - no label overlaps another label or a foreign circle,
 - placement is scale-invariant and input-order-independent,
 - per-circle radius overrides (finish double ring) are respected.
+
+## Follow-up: coherent distances and hard collision constraints
+
+A second report (the ordinal-1 controls of the same event) showed three
+residual problems: "95" drawn on top of circle 73, the "87" and "108"
+numbers colliding, and "106" placed needlessly far from its circle while
+its neighbours hugged theirs.
+
+### Distance model
+
+The 12 hand-tuned per-axis offsets are gone. Candidates now lie on
+**rings**: 16 evenly spaced directions, and along each direction the box
+center distance is solved exactly (per closest-feature region of the
+box — x-edge, y-edge or corner) so that the label box's closest point
+sits at a fixed clearance from the circle edge:
+
+```
+clearance = gap + k · (labelSize / 2),  gap = 0.2 · labelSize,  k = 0..4
+```
+
+Every number on the map therefore sits at the *same visual distance*
+from its circle — regardless of direction and digit count — unless its
+inner rings are physically full. That is the coherence rule: everything
+is as close as geometry allows, uniformly.
+
+### Hard constraints
+
+Circle and label collisions are no longer soft costs:
+
+- a candidate whose box intersects any circle (closest-point-on-rect vs
+  circle test, using each circle's real radius) is rejected outright;
+- so is a candidate whose box intersects an already-placed label box.
+
+Rings are tried inner-to-outer; the first ring with a surviving
+candidate wins, and survivors are ranked by the existing graded soft
+costs (ambiguity/ownership, circle crowding, label crowding, line
+proximity, direction preference). If **every** ring is exhausted the
+least-penalized candidate overall is used — a number is never dropped.
+
+### Placement order
+
+Labels are placed greedily, **most-crowded circle first** (neighbour
+count within `2·radius + 2·labelSize`, ties broken by id). Enclosed
+controls get first pick of the scarce collision-free pockets; roomy
+controls always have another free direction. The order depends only on
+geometry, so results remain independent of input order.
+
+### Claim radii and the 95 case
+
+Each labeled circle has a **claim radius** — the smallest center distance
+its own label can ever have (innermost ring, narrowest box axis):
+
+```
+claim = radius + gap + min(labelWidth, labelHeight) / 2
+```
+
+A foreign label sitting inside a circle's claim radius is *guaranteed*
+to misread — no placement of the rightful number can reclaim nearest
+status. Candidates that intrude are heavily penalized, but as a **soft
+cost**, not a hard rejection: brute-force analysis of the reported
+cluster showed why. Control 95 is enclosed by six circles within
+7.5 map-mm, and:
+
+- its closest collision-free slot (6.2 mm out) sits 4.68 mm from circle
+  73 — inside 73's 5.30 mm claim, i.e. it would read as 73's number
+  (the original bug shape);
+- its closest *non-intruding* slot is 9.16 mm out and tangent to
+  circle 73 to the hundredth of a millimetre — unreachable by any sane
+  discrete search;
+- the chosen pocket at 9.5 mm is within 4 % of that theoretical
+  optimum, at the cost of grazing circle 88's claim by 0.2 mm.
+
+Treating intrusion as a hard constraint exiled 95's label past 11.5 mm
+and knocked 61 and 71 off their preferred slots — strictly worse. The
+soft cost keeps close slots viable while steering any cluster that
+*does* have a non-intruding same-ring alternative toward it. Unit tests
+pin both properties: no label except 95 intrudes on any claim radius,
+and 95 stays close (under 10 mm) instead of being exiled. Since 95 is
+contested wherever it goes, it also carries a leader line — see below.
+
+### Leader lines for contested labels
+
+When the chosen slot is contested — some foreign circle ends up closer
+to the number than its own circle, which is provably unavoidable in
+packs where circles overlap — the placement module emits a **leader
+line**: a thin tick from the digits to the edge of the label's own
+circle (`PlacedControlLabel.leader`, drawn by `MapViewer` in the
+overprint colour at 0.7× the circle stroke). Leader lines are not
+standard orienteering overprint, but the all-controls view is an
+organizer's working view with far more clutter than any competition
+map, and the tick resolves what proximity cannot. On ordinary maps no
+label is contested and no line is drawn.
+
+With ambiguity thus resolved by the line, contested labels no longer
+need to stand off at a distance: the direction grid was doubled to 32
+(half-steps of 11.25°) so tight clusters can thread needles the
+16-direction grid missed. Control 95 now sits on the innermost ring
+6.2 mm from its circle (the position a human picked when hand-testing
+in devtools) with a leader line, instead of 9.5 mm away in a pocket.
+
+### Outcome on the reported cluster
+
+With the real ordinal-1 geometry (where the circle pairs 87/88, 87/108,
+62/70 and 70/106 physically overlap): all ten labels sit on the
+innermost ring at the exact uniform gap, no box touches a circle or
+another box, and every label is nearest to its own circle — except 95,
+which is enclosed by six circles within 7.5 map-mm (its Voronoi cell is
+smaller than the minimum label clearance, so no unambiguous spot exists
+at all) and instead sits tight to its circle with a leader line. The
+regression tests in `control-label-placement.test.ts` encode exactly
+these properties.
