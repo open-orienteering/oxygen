@@ -29,7 +29,7 @@
     "dexie-react-hooks": "^4.4.0",
     "i18next": "^26.3.6",
     "idb-keyval": "^6.3.0",
-    "ocad2geojson": "github:marcus-kempe/ocad2geojson#v2.2.0-oxygen.0",
+    "ocad2geojson": "github:open-orienteering/ocad2geojson#v2.2.2-oxygen.0",
     "qrcode": "^1.5.4",
     "qrcode.react": "^4.2.0",
     "react": "^19.2.8",

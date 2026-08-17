@@ -134,7 +134,9 @@ describe("map-tile endpoint", () => {
       where: { eventId: ctx.eventId, z: Z, x, y },
     });
     expect(cachedRows).toBe(1);
-  }, 60_000);
+    // The first request triggers a full-map resvg render (~50s on dev
+    // hardware, longer under load), so this needs a generous timeout.
+  }, 180_000);
 
   it("returns 204 for a tile that's entirely outside the map bounds", async () => {
     // Equator @ z=10: definitely not overlapping a Stockholm map.
