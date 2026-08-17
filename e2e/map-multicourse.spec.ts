@@ -117,17 +117,26 @@ test.describe("Multi-course map: class labels + combined descriptions", () => {
     const zoomUntilLegLabels = async () => {
       const zoomIn = mapPanel.getByTitle("Zoom in");
       await expect(zoomIn).toBeVisible({ timeout: 10000 });
-      // Under parallel-shard load the SVG re-render after a zoom click can
-      // lag behind the count() poll — allow extra clicks and a wide final
-      // wait rather than a tight one that flakes.
-      for (let i = 0; i < 12; i++) {
-        if ((await overlayLabels.filter({ hasText: "Öppen 1" }).count()) > 0) break;
+      // Wait for the overlay to render before zooming: a freshly mounted
+      // panel (e.g. after the viewport resize below) re-fits once its
+      // geometry loads, which resets zoom — clicks fired before that are
+      // wasted. Control-code labels render at fit zoom, so this confirms
+      // the map is loaded and fitted.
+      await expect(overlayLabels.first()).toBeVisible({ timeout: 30000 });
+      // Keep clicking inside the wait window instead of exhausting a fixed
+      // click budget up front — under parallel-shard load the SVG re-render
+      // after a click can lag far behind the count() poll.
+      const deadline = Date.now() + 45_000;
+      while (
+        (await overlayLabels.filter({ hasText: "Öppen 1" }).count()) === 0 &&
+        Date.now() < deadline
+      ) {
         await zoomIn.click();
         await page.waitForTimeout(250);
       }
       await expect(
         overlayLabels.filter({ hasText: "Öppen 1" }).first(),
-      ).toBeVisible({ timeout: 20000 });
+      ).toBeVisible({ timeout: 5000 });
     };
     await zoomUntilLegLabels();
     await expect(

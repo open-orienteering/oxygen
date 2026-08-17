@@ -1,4 +1,4 @@
-import { useState, useMemo } from "react";
+import { Fragment, useState, useMemo } from "react";
 import { useTranslation } from "react-i18next";
 import { trpc } from "../lib/trpc";
 import { type CourseSummary } from "@oxygen/shared";
@@ -209,9 +209,8 @@ export function CoursesPage() {
               </thead>
               <tbody className="divide-y divide-slate-100">
                 {items.map((c) => (
-                  <>
+                  <Fragment key={c.id}>
                     <tr
-                      key={c.id}
                       className={`transition-colors cursor-pointer ${expandedId === c.id ? "bg-blue-50" : "hover:bg-slate-50"
                         }`}
                       onClick={() => handleToggleExpand(c.id)}
@@ -269,13 +268,13 @@ export function CoursesPage() {
                       </td>
                     </tr>
                     {expandedId === c.id && (
-                      <tr key={`detail-${c.id}`}>
+                      <tr>
                         <td colSpan={7} className="p-0">
                           <CourseInlineDetail courseId={c.id} />
                         </td>
                       </tr>
                     )}
-                  </>
+                  </Fragment>
                 ))}
               </tbody>
             </table>
