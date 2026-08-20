@@ -31,6 +31,7 @@ import type {
     GeoJSONMultiLineString,
     GeoJSONPolygon
 } from "./iof-course-parser.js";
+import type { ControlDescription } from "@oxygen/shared";
 
 // ─── Internal types ──────────────────────────────────────────────────────────
 
@@ -53,14 +54,9 @@ interface LegSegment {
     coordinates: [number, number][];
 }
 
-/** IOF control description parsed from 702000 object text. */
-interface ControlDescription {
-    d?: string;  // Column D: control feature (e.g., "2.001" = Terrace)
-    c?: string;  // Column C: which of similar features (e.g., "0.208" = Middle)
-    g?: string;  // Column G: location of flag (e.g., "11.143" = NE side)
-    s?: string;  // Column E/F: appearance/dimensions (e.g., "1,5" = 1.5m)
-    f?: string;  // Column F: combination/second feature
-}
+// IOF control description parsed from 702000 object text — the canonical
+// shape now lives in @oxygen/shared (it is also the `controls.description`
+// column type).
 
 const SYM_START = 701000;
 const SYM_CONTROL = 702000;
@@ -618,11 +614,13 @@ export function parseOCDCourseData(fileData: Buffer): ParsedOCDCourseData {
         const type = (code.startsWith("S") || code === "Start") ? "Start"
             : (code.startsWith("M") || code === "Finish" || code.startsWith("F")) ? "Finish"
             : "Control";
+        const desc = controlDescriptions.get(code);
         controls.push({
             id: code,
             type,
             lat: 0, lng: 0,
             mapX: p?.xMm ?? 0, mapY: p?.yMm ?? 0,
+            ...(desc ? { description: desc } : {}),
         });
     }
 

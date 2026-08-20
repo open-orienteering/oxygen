@@ -110,23 +110,23 @@ describe("control anchors", () => {
       id: 31, name: "", codes: "31", status: ControlStatus.OK, timeAdjust: 0, minTime: 0,
       runnerCount: 12,
       config: { radioType: "internal_radio", airPlus: "default", autosendMode: "last", batteryVoltage: 2.6, batteryLow: false, checkedAt: "2026-04-01T10:00:00Z", memoryClearedAt: null },
-      units: [],
+      units: [], description: null,
     },
     {
       id: 42, name: "Radio 1", codes: "42", status: ControlStatus.OK, timeAdjust: 0, minTime: 0,
       runnerCount: 5,
       config: { radioType: "public_radio", airPlus: "default", autosendMode: "last", batteryVoltage: 2.4, batteryLow: true, checkedAt: null, memoryClearedAt: null },
-      units: [],
+      units: [], description: null,
     },
     {
       id: 55, name: "Mål", codes: "55", status: ControlStatus.Finish, timeAdjust: 0, minTime: 0,
-      runnerCount: 0, config: null, units: [],
+      runnerCount: 0, config: null, units: [], description: null,
     },
     {
       id: 60, name: "", codes: "60", status: ControlStatus.OK, timeAdjust: 0, minTime: 0,
       runnerCount: 8,
       config: { radioType: "normal", airPlus: "default", autosendMode: "last", batteryVoltage: 3.0, batteryLow: false, checkedAt: "2026-04-02T10:00:00Z", memoryClearedAt: null },
-      units: [],
+      units: [], description: null,
     },
   ];
 
@@ -171,7 +171,7 @@ describe("control ordinal anchor", () => {
   const anchors = createControlAnchors(lbl, ordinals) as AnchorDef<ControlInfo>[];
   const mkCtrl = (id: number): ControlInfo => ({
     id, name: "", codes: String(id), status: ControlStatus.OK,
-    timeAdjust: 0, minTime: 0, runnerCount: 0, config: null, units: [],
+    timeAdjust: 0, minTime: 0, runnerCount: 0, config: null, units: [], description: null,
   });
   const ctrls = [mkCtrl(31), mkCtrl(42), mkCtrl(55), mkCtrl(60)];
 

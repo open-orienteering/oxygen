@@ -68,6 +68,7 @@
   "allStatuses": "Alla statusar",
   "removeConfirm": "Ta bort kontroll {{id}}?",
   "removeControl": "Ta bort kontroll",
+  "openInCourseEditor": "Öppna i banläggningen",
   "controlNotFound": "Kontroll hittades inte",
   "controlSettings": "Kontrollinställningar",
   "punchCodes": "Stämpelkod(er)",
@@ -196,5 +197,23 @@
     "multipleLabel": "Multipel",
     "multipleDesc": "Alla angivna koder (butterfly) måste stämplas i valfri ordning.",
     "multipleHint": "Varje kod blir en separat position i godtycklig ordning."
+  },
+  "descEditor": {
+    "title": "Kontrollbeskrivning — {{code}}",
+    "columnC": "Vilken av flera lika",
+    "columnD": "Kontrollföremål",
+    "columnE": "Dimensioner",
+    "columnF": "Kombination",
+    "columnG": "Skärmens placering",
+    "dGroup1": "Terrängformer",
+    "dGroup2": "Sten och berg",
+    "dGroup3": "Vatten och kärr",
+    "dGroup4": "Vegetation",
+    "dGroup5": "Anläggningar",
+    "dGroup6": "Specialföremål",
+    "dimensionsPlaceholder": "t.ex. 1,5 eller 2x3",
+    "clearAll": "Rensa allt",
+    "cancel": "Avbryt",
+    "save": "Spara"
   }
 }

@@ -12,12 +12,19 @@ import type {
   ControlInfo,
   ControlDetail,
   ControlConfig,
+  ControlDescription,
   ControlUnit as ControlUnitDto,
 } from "@oxygen/shared";
 import { uuidv7 } from "uuidv7";
 import { toAbsolute } from "../timeConvert.js";
 import { appendJournal } from "../journalEmit.js";
-import { emitControlUpserted } from "../referenceJournal.js";
+import { emitControlUpserted, emitCourseUpserted } from "../referenceJournal.js";
+import { Prisma as PrismaNs } from "../generated/prisma/client.js";
+import { loadEventCrs } from "../event-crs.js";
+import { loadEventMapObjects } from "../event-map-objects.js";
+import { suggestDescriptions } from "../description-autodetect.js";
+import { mapMmToWgs84 } from "../map-projection.js";
+import { rebuildCourseGeometry } from "../course-geometry.js";
 
 // ─── SNTP client (used by control.serverTime) ──────────────────────
 
@@ -158,6 +165,67 @@ async function getControlByCode(
   return bySeq;
 }
 
+/**
+ * Ids of every course whose geometry depends on a control: courses that
+ * visit it via `course_controls`, plus — for start/finish controls —
+ * courses that reference it by role (startName / finishControlId, or by
+ * the lowest-seq default when unset, mirroring rebuildCourseGeometry).
+ * Used by control.update (position moves) and control.delete (cascade).
+ */
+async function courseIdsUsingControl(
+  tx: PrismaNs.TransactionClient,
+  eventId: bigint,
+  c: { id: string; name: string; status: string },
+): Promise<string[]> {
+  const ccs = await tx.courseControl.findMany({
+    where: {
+      controlId: c.id,
+      course: { eventId, removed: false },
+    },
+    select: { courseId: true },
+  });
+  // Start/finish controls don't appear in course_controls — they are
+  // referenced by startName / finishControlId (with a lowest-seq
+  // fallback).
+  let asStartOrFinish: Array<{ id: string }> = [];
+  if (c.status === "start" || c.status === "finish") {
+    const peers = await tx.control.findMany({
+      where: { eventId, removed: false, status: c.status },
+      orderBy: { seq: "asc" },
+      select: { id: true },
+    });
+    const isDefault = peers[0]?.id === c.id;
+    asStartOrFinish = await tx.course.findMany({
+      where: {
+        eventId,
+        removed: false,
+        ...(c.status === "start"
+          ? {
+              firstAsStart: false,
+              OR: [
+                ...(c.name ? [{ startName: c.name }] : []),
+                ...(isDefault ? [{ startName: "" }] : []),
+              ],
+            }
+          : {
+              lastAsFinish: false,
+              OR: [
+                { finishControlId: c.id },
+                ...(isDefault ? [{ finishControlId: null }] : []),
+              ],
+            }),
+      },
+      select: { id: true },
+    });
+  }
+  return [
+    ...new Set([
+      ...ccs.map((cc) => cc.courseId),
+      ...asStartOrFinish.map((co) => co.id),
+    ]),
+  ];
+}
+
 /** Extract the first numeric code from a control's `codes` string. */
 function firstCode(codes: string): number {
   const head = codes.split(";")[0]?.trim();
@@ -173,6 +241,42 @@ function firstCode(codes: string): number {
  */
 export function publicControlId(c: { codes: string; seq: number }): number {
   return firstCode(c.codes) || c.seq;
+}
+
+/**
+ * IOF control description input ({ c, d, g, s, f } in the OCAD text
+ * encoding — see `ControlDescription` in @oxygen/shared).
+ */
+const controlDescriptionSchema = z.object({
+  c: z.string().max(20).optional(),
+  d: z.string().max(20).optional(),
+  g: z.string().max(20).optional(),
+  s: z.string().max(20).optional(),
+  f: z.string().max(20).optional(),
+});
+
+/** Read the JSONB description column into the shared DTO type. */
+function descriptionDto(row: { description: unknown }): ControlDescription | null {
+  return (row.description as ControlDescription | null) ?? null;
+}
+
+/**
+ * Derive WGS84 lat/lng from a paper-mm position via the event map's CRS.
+ * Returns nulls when there is no map, the grid is unsupported, or the
+ * position is the "unplaced" origin — `course.controlCoordinates` keeps
+ * its on-the-fly conversion as a fallback for the null case.
+ */
+async function positionToWgs84(
+  db: Parameters<typeof loadEventCrs>[0],
+  eventId: bigint,
+  xpos: number,
+  ypos: number,
+): Promise<{ lat: number | null; lng: number | null }> {
+  if (xpos === 0 && ypos === 0) return { lat: null, lng: null };
+  const crs = await loadEventCrs(db, eventId);
+  if (!crs) return { lat: null, lng: null };
+  const wgs = mapMmToWgs84(xpos, ypos, crs);
+  return wgs ? { lat: wgs.lat, lng: wgs.lng } : { lat: null, lng: null };
 }
 
 function unitToDto(u: {
@@ -312,6 +416,7 @@ export const controlRouter = router({
         runnerCount: runners,
         config: aggregateConfig(u, c.radioType, c.airPlus, c.autosendMode),
         units: u,
+        description: descriptionDto(c),
       };
     });
   }),
@@ -373,18 +478,27 @@ export const controlRouter = router({
         config: aggregateConfig(u, c.radioType, c.airPlus, c.autosendMode),
         units: u,
         courses,
+        description: descriptionDto(c),
       };
     }),
 
   create: raceProcedure
     .input(
-      z.object({
-        name: z.string().optional().default(""),
-        codes: z.string().min(1),
-        status: z.number().int().optional().default(0),
-        timeAdjust: z.number().int().optional().default(0),
-        minTime: z.number().int().optional().default(0),
-      }),
+      z
+        .object({
+          name: z.string().optional().default(""),
+          codes: z.string().min(1),
+          status: z.number().int().optional().default(0),
+          timeAdjust: z.number().int().optional().default(0),
+          minTime: z.number().int().optional().default(0),
+          /** Map position in paper mm (course editor). Both or neither. */
+          xpos: z.number().finite().optional(),
+          ypos: z.number().finite().optional(),
+          description: controlDescriptionSchema.optional(),
+        })
+        .refine((v) => (v.xpos === undefined) === (v.ypos === undefined), {
+          message: "xpos and ypos must be provided together",
+        }),
     )
     .mutation(async ({ ctx, input }) => {
       // Validate codes: each part must be a positive integer.
@@ -428,6 +542,13 @@ export const controlRouter = router({
           });
         }
       }
+      // Resolve WGS84 coordinates up-front (outside the transaction — the
+      // CRS load may parse the whole map file on a cache miss).
+      const hasPosition = input.xpos !== undefined && input.ypos !== undefined;
+      const wgs = hasPosition
+        ? await positionToWgs84(ctx.db, ctx.event.id, input.xpos!, input.ypos!)
+        : null;
+
       // Table write + control.upserted journal entry commit together.
       const created = await ctx.db.$transaction(async (tx) => {
         const c = await tx.control.create({
@@ -438,6 +559,12 @@ export const controlRouter = router({
             status: valueToControlStatus(input.status),
             timeAdjust: input.timeAdjust,
             minTime: input.minTime,
+            ...(hasPosition
+              ? { xpos: input.xpos!, ypos: input.ypos!, lat: wgs!.lat, lng: wgs!.lng }
+              : {}),
+            ...(input.description
+              ? { description: input.description as Record<string, string> }
+              : {}),
           },
           select: { id: true, seq: true, codes: true },
         });
@@ -449,16 +576,25 @@ export const controlRouter = router({
 
   update: raceProcedure
     .input(
-      z.object({
-        id: z.number().int(),
-        name: z.string().optional(),
-        codes: z.string().optional(),
-        status: z.number().int().optional(),
-        timeAdjust: z.number().int().optional(),
-        minTime: z.number().int().optional(),
-        radioType: z.string().optional(),
-        airPlus: z.string().optional(),
-      }),
+      z
+        .object({
+          id: z.number().int(),
+          name: z.string().optional(),
+          codes: z.string().optional(),
+          status: z.number().int().optional(),
+          timeAdjust: z.number().int().optional(),
+          minTime: z.number().int().optional(),
+          radioType: z.string().optional(),
+          airPlus: z.string().optional(),
+          /** Map position in paper mm (course editor). Both or neither. */
+          xpos: z.number().finite().optional(),
+          ypos: z.number().finite().optional(),
+          /** IOF description; null clears it. */
+          description: controlDescriptionSchema.nullable().optional(),
+        })
+        .refine((v) => (v.xpos === undefined) === (v.ypos === undefined), {
+          message: "xpos and ypos must be provided together",
+        }),
     )
     .mutation(async ({ ctx, input }) => {
       const c = await getControlByCode(ctx.db, ctx.event.id, input.id);
@@ -471,9 +607,37 @@ export const controlRouter = router({
       if (input.minTime !== undefined) data.minTime = input.minTime;
       if (input.radioType !== undefined) data.radioType = input.radioType;
       if (input.airPlus !== undefined) data.airPlus = input.airPlus;
+      if (input.description !== undefined) {
+        data.description = input.description === null ? PrismaNs.DbNull : input.description;
+      }
+
+      const positionChanged =
+        input.xpos !== undefined &&
+        input.ypos !== undefined &&
+        (input.xpos !== c.xpos || input.ypos !== c.ypos);
+      if (input.xpos !== undefined && input.ypos !== undefined) {
+        // Always re-derive lat/lng with the position so a stale WGS84 pair
+        // from the previous location can't survive a move.
+        const wgs = await positionToWgs84(ctx.db, ctx.event.id, input.xpos, input.ypos);
+        data.xpos = input.xpos;
+        data.ypos = input.ypos;
+        data.lat = wgs.lat;
+        data.lng = wgs.lng;
+      }
+
       await ctx.db.$transaction(async (tx) => {
         await tx.control.update({ where: { id: c.id }, data });
         await emitControlUpserted(tx, ctx.event.id, c.id);
+        if (positionChanged) {
+          // A moved control invalidates the stored overlay geometry of
+          // every course that visits it — regenerate straight-leg
+          // 'editor' geometry and ship the updated course rows.
+          const courseIds = await courseIdsUsingControl(tx, ctx.event.id, c);
+          await rebuildCourseGeometry(tx, ctx.event.id, courseIds);
+          for (const courseId of courseIds) {
+            await emitCourseUpserted(tx, ctx.event.id, courseId);
+          }
+        }
       });
       return { ok: true };
     }),
@@ -483,14 +647,90 @@ export const controlRouter = router({
     .mutation(async ({ ctx, input }) => {
       const c = await getControlByCode(ctx.db, ctx.event.id, input.id);
       await ctx.db.$transaction(async (tx) => {
+        // Dependent courses are computed while the control still counts
+        // as active — the start/finish default (lowest live seq) must
+        // see the pre-delete world.
+        const courseIds = await courseIdsUsingControl(tx, ctx.event.id, c);
         await tx.control.update({
           where: { id: c.id },
           data: { removed: true },
         });
+        // Cascade out of every course sequence. A soft-deleted control
+        // must not leave ghost rows behind: routes through a missing
+        // circle, symbol-less description rows, and sequence entries
+        // that can't be removed (course.update resolves ids against
+        // ACTIVE controls only and would 404 on the dead reference).
+        await tx.courseControl.deleteMany({ where: { controlId: c.id } });
         // Deletes are upserts with removed: true on the wire.
         await emitControlUpserted(tx, ctx.event.id, c.id);
+        await rebuildCourseGeometry(tx, ctx.event.id, courseIds);
+        for (const courseId of courseIds) {
+          await emitCourseUpserted(tx, ctx.event.id, courseId);
+        }
       });
       return { ok: true };
+    }),
+
+  /**
+   * Undo a soft delete. The course editor's undo stack needs this to
+   * reverse a control deletion without minting a new row (course
+   * references and journal identity stay intact).
+   */
+  restore: raceProcedure
+    .input(z.object({ id: z.number().int() }))
+    .mutation(async ({ ctx, input }) => {
+      const codeStr = String(input.id);
+      // Deleted controls are invisible to getControlByCode, so match the
+      // same code/seq ID space among removed rows. Most-recently-updated
+      // wins when several deleted rows share a code.
+      const c = await ctx.db.control.findFirst({
+        where: {
+          eventId: ctx.event.id,
+          removed: true,
+          OR: [
+            { codes: codeStr },
+            { codes: { startsWith: `${codeStr};` } },
+            { codes: { contains: `;${codeStr};` } },
+            { codes: { endsWith: `;${codeStr}` } },
+            { seq: input.id },
+          ],
+        },
+        orderBy: { updatedAt: "desc" },
+      });
+      if (!c) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: `Deleted control ${input.id} not found`,
+        });
+      }
+      // The code may have been reused by a new control in the meantime.
+      const activeDup = await ctx.db.control.findFirst({
+        where: {
+          eventId: ctx.event.id,
+          removed: false,
+          OR: [
+            { codes: codeStr },
+            { codes: { startsWith: `${codeStr};` } },
+            { codes: { contains: `;${codeStr};` } },
+            { codes: { endsWith: `;${codeStr}` } },
+          ],
+        },
+        select: { id: true },
+      });
+      if (activeDup) {
+        throw new TRPCError({
+          code: "CONFLICT",
+          message: `Control with code ${input.id} already exists`,
+        });
+      }
+      await ctx.db.$transaction(async (tx) => {
+        await tx.control.update({
+          where: { id: c.id },
+          data: { removed: false },
+        });
+        await emitControlUpserted(tx, ctx.event.id, c.id);
+      });
+      return { id: publicControlId(c) };
     }),
 
   /** Alias for getById so the web side can read `control.detail`. */
@@ -591,6 +831,35 @@ export const controlRouter = router({
         config: aggregateConfig(u, c.radioType, c.airPlus, c.autosendMode),
         units: u,
         courses,
+        description: descriptionDto(c),
+      };
+    }),
+
+  /**
+   * Description candidates for a point on the base map.
+   *
+   * The course editor calls this after placing a control: the terrain
+   * features around the point are ranked and offered as one-click
+   * column D (+ G) suggestions. Coordinates are paper mm, matching
+   * `controls.xpos/ypos`. No map, or a map with no recognised symbols
+   * nearby, simply yields an empty list — the editor then shows nothing
+   * extra.
+   */
+  suggestDescription: eventProcedure
+    .input(
+      z.object({
+        x: z.number().finite(),
+        y: z.number().finite(),
+        radiusMm: z.number().positive().max(20).optional(),
+      }),
+    )
+    .query(async ({ ctx, input }) => {
+      const objects = await loadEventMapObjects(ctx.db, ctx.event.id);
+      if (!objects || objects.length === 0) return { candidates: [] };
+      return {
+        candidates: suggestDescriptions(objects, input.x, input.y, {
+          radiusMm: input.radiusMm,
+        }),
       };
     }),
 

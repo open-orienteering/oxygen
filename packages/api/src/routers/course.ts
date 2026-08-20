@@ -9,6 +9,7 @@ import {
 import {
   type CourseSummary,
   type CourseDetail,
+  type ControlDescription,
   type ExpectedPosition,
   ControlStatus,
 } from "@oxygen/shared";
@@ -28,6 +29,8 @@ import {
   type OcadCrs,
 } from "../map-projection.js";
 import { fireMapUpload } from "../db.js";
+import { loadEventCrs } from "../event-crs.js";
+import { rebuildCourseGeometry } from "../course-geometry.js";
 import { appendJournal } from "../journalEmit.js";
 import {
   emitCourseUpserted,
@@ -403,6 +406,11 @@ export const courseRouter = router({
               controlId: uuid,
             })),
           });
+          // Generate straight-leg overlay geometry from the control
+          // positions. An explicit length wins over the computed one.
+          await rebuildCourseGeometry(tx, ctx.event.id, [c.id], {
+            updateLength: input.length === undefined || input.length === 0,
+          });
         }
         await emitCourseUpserted(tx, ctx.event.id, c.id);
         return c;
@@ -457,6 +465,12 @@ export const courseRouter = router({
               })),
             });
           }
+          // The stored overlay geometry lists the old sequence — rebuild
+          // straight-leg 'editor' geometry (and length, unless the caller
+          // supplied one explicitly).
+          await rebuildCourseGeometry(tx, ctx.event.id, [c.id], {
+            updateLength: input.length === undefined,
+          });
         }
         await emitCourseUpserted(tx, ctx.event.id, c.id);
       });
@@ -650,6 +664,7 @@ export const courseRouter = router({
         lng: true,
         xpos: true,
         ypos: true,
+        description: true,
       },
     });
 
@@ -669,26 +684,9 @@ export const courseRouter = router({
       (c) => isMissingLatLng(c) && (c.xpos !== 0 || c.ypos !== 0),
     );
     if (needsConversion) {
-      try {
-        const f = await ctx.db.mapFile.findFirst({
-          where: { eventId: ctx.event.id },
-          orderBy: { uploadedAt: "desc" },
-          select: { fileData: true },
-        });
-        if (f) {
-          const ocadMod = await import("ocad2geojson");
-          const readOcad = (ocadMod as Record<string, unknown>).readOcad as (
-            buf: Buffer,
-            opts?: Record<string, unknown>,
-          ) => Promise<{ getCrs(): OcadCrs }>;
-          const ocadFile = await readOcad(Buffer.from(f.fileData), {
-            quietWarnings: true,
-          });
-          crs = ocadFile.getCrs();
-        }
-      } catch (err) {
-        console.warn("[controlCoordinates] OCAD CRS load failed:", err);
-      }
+      // Cached per event — the course editor refetches this query after
+      // every placement, so avoid re-parsing the map file each time.
+      crs = await loadEventCrs(ctx.db, ctx.event.id);
     }
 
     return controls
@@ -718,6 +716,7 @@ export const courseRouter = router({
           lng,
           mapX: c.xpos,
           mapY: c.ypos,
+          description: (c.description as ControlDescription | null) ?? null,
         };
       });
   }),
@@ -855,6 +854,22 @@ export const courseRouter = router({
       await ctx.db.mapTile.deleteMany({ where: { eventId: ctx.event.id } });
       await ctx.db.renderedMap.deleteMany({ where: { eventId: ctx.event.id } });
       fireMapUpload(ctx.event.id);
+      // Automatic overprint cuts come from the base map, so editor-built
+      // course geometry must follow the new map. Imported ('ocd'/'xml')
+      // geometry keeps its file-authored cuts and is left alone.
+      const editorCourses = await ctx.db.course.findMany({
+        where: { eventId: ctx.event.id, removed: false, geometrySource: "editor" },
+        select: { id: true },
+      });
+      if (editorCourses.length > 0) {
+        const ids = editorCourses.map((c) => c.id);
+        await rebuildCourseGeometry(ctx.db, ctx.event.id, ids, {
+          updateLength: false,
+        });
+        for (const id of ids) {
+          await emitCourseUpserted(ctx.db, ctx.event.id, id);
+        }
+      }
       return {
         success: true as const,
         fileName: input.fileName,
@@ -1124,6 +1139,11 @@ export const courseRouter = router({
           xpos: pc.mapX,
           ypos: pc.mapY,
           removed: false,
+          // Descriptions belong to the control row. Only OCD bundles carry
+          // them; XML re-imports leave any existing description untouched.
+          ...(pc.description
+            ? { description: pc.description as Record<string, string> }
+            : {}),
         };
 
         if (matched) {
