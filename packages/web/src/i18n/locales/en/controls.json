@@ -68,6 +68,7 @@
   "allStatuses": "All statuses",
   "removeConfirm": "Remove control {{id}}?",
   "removeControl": "Remove control",
+  "openInCourseEditor": "Open in course editor",
   "controlNotFound": "Control not found",
   "controlSettings": "Control Settings",
   "punchCodes": "Punch Code(s)",
@@ -196,5 +197,23 @@
     "multipleLabel": "Multiple",
     "multipleDesc": "All listed codes (butterfly cluster) must be punched in any order.",
     "multipleHint": "Each code becomes a separate any-order position."
+  },
+  "descEditor": {
+    "title": "Control description — {{code}}",
+    "columnC": "Which of similar features",
+    "columnD": "Control feature",
+    "columnE": "Dimensions",
+    "columnF": "Combination",
+    "columnG": "Location of the control flag",
+    "dGroup1": "Landforms",
+    "dGroup2": "Rock and boulders",
+    "dGroup3": "Water and marsh",
+    "dGroup4": "Vegetation",
+    "dGroup5": "Man-made features",
+    "dGroup6": "Special items",
+    "dimensionsPlaceholder": "e.g. 1,5 or 2x3",
+    "clearAll": "Clear all",
+    "cancel": "Cancel",
+    "save": "Save"
   }
 }

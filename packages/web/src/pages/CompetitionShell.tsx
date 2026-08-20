@@ -45,6 +45,7 @@ const FinishStation = lazy(() => import("./FinishStation").then(m => ({ default:
 const CardReadout = lazy(() => import("./CardReadout").then(m => ({ default: m.CardReadout })));
 const ControlsPage = lazy(() => import("./ControlsPage").then(m => ({ default: m.ControlsPage })));
 const CoursesPage = lazy(() => import("./CoursesPage").then(m => ({ default: m.CoursesPage })));
+const CourseEditorPage = lazy(() => import("./CourseEditorPage").then(m => ({ default: m.CourseEditorPage })));
 const ClassesPage = lazy(() => import("./ClassesPage").then(m => ({ default: m.ClassesPage })));
 const ClubsPage = lazy(() => import("./ClubsPage").then(m => ({ default: m.ClubsPage })));
 const CardsPage = lazy(() => import("./CardsPage").then(m => ({ default: m.CardsPage })));
@@ -55,7 +56,7 @@ const TracksPage = lazy(() => import("./TracksPage").then(m => ({ default: m.Tra
 const TracksReplayPage = lazy(() => import("./TracksReplayPage").then(m => ({ default: m.TracksReplayPage })));
 const RegistrationTrendsPage = lazy(() => import("./RegistrationTrendsPage").then(m => ({ default: m.RegistrationTrendsPage })));
 
-type Tab = "dashboard" | "event" | "runners" | "startlist" | "results" | "classes" | "courses" | "controls" | "clubs" | "start-station" | "finish-station" | "card-readout" | "cards" | "backup-punches" | "test-lab" | "tracks" | "registration-trends";
+type Tab = "dashboard" | "event" | "runners" | "startlist" | "results" | "classes" | "courses" | "course-editor" | "controls" | "clubs" | "start-station" | "finish-station" | "card-readout" | "cards" | "backup-punches" | "test-lab" | "tracks" | "registration-trends";
 
 const tabLabelKeys = {
   "dashboard": "dashboard",
@@ -64,6 +65,7 @@ const tabLabelKeys = {
   "results": "results",
   "classes": "classes",
   "courses": "courses",
+  "course-editor": "courseEditor",
   "controls": "controls",
   "cards": "cards",
   "event": "event",
@@ -89,6 +91,7 @@ const tabs: { id: Tab; path: string; group?: string; countKey?: string; isOverfl
   { id: "tracks", path: "tracks" },
   // Overflow items
   { id: "event", path: "event", isOverflow: true },
+  { id: "course-editor", path: "course-editor", isOverflow: true },
   { id: "registration-trends", path: "registration-trends", isOverflow: true },
   { id: "clubs", path: "clubs", countKey: "clubs", isOverflow: true },
   { id: "start-station", path: "start-station", group: "race", isOverflow: true },
@@ -511,6 +514,7 @@ export function CompetitionShell() {
             <Route path="results" element={<ResultsPage />} />
             <Route path="classes" element={<ClassesPage />} />
             <Route path="courses" element={<CoursesPage />} />
+            <Route path="course-editor" element={<CourseEditorPage />} />
             <Route path="controls" element={<ControlsPage />} />
             <Route path="clubs" element={<ClubsPage />} />
             <Route path="cards" element={<CardsPage />} />

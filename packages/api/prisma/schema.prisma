@@ -287,6 +287,9 @@ model Control {
   /// everything every connection). Default 'last' matches stock SI
   /// firmware behaviour and what the operator picks 95% of the time.
   autosendMode String      @default("last") @map("autosend_mode")
+  /// IOF control description ({ c?, d?, g?, s?, f? } — OCAD text encoding).
+  /// The description belongs to the control site, not to any course.
+  description Json?
   removed    Boolean       @default(false)
   createdAt  DateTime      @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt  DateTime      @default(now()) @map("updated_at") @db.Timestamptz(6)

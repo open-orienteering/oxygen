@@ -1,4 +1,5 @@
 import { Fragment, useState, useMemo } from "react";
+import { Link, useParams } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { trpc } from "../lib/trpc";
 import { type CourseSummary } from "@oxygen/shared";
@@ -15,6 +16,7 @@ import { createCourseAnchors } from "../lib/structured-search/anchors/course-anc
 
 export function CoursesPage() {
   const { t } = useTranslation("courses");
+  const { nameId } = useParams<{ nameId: string }>();
   const [expandedId, setExpandedId] = useNumericSearchParam("course");
   const [showCreateForm, setShowCreateForm] = useState(false);
   const [showImportDialog, setShowImportDialog] = useState(false);
@@ -123,6 +125,20 @@ export function CoursesPage() {
           </svg>
           {t("importCourses")}
         </button>
+        {(courses.data?.length ?? 0) > 0 && (
+          <a
+            href={`/api/export/course-data?name=${encodeURIComponent(nameId ?? "")}`}
+            download
+            data-testid="course-export-link"
+            title={t("exportCoursesTitle")}
+            className="px-4 py-2 border border-blue-200 text-blue-700 text-sm font-medium rounded-lg hover:bg-blue-50 transition-colors cursor-pointer flex items-center gap-1.5 whitespace-nowrap"
+          >
+            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+            </svg>
+            {t("exportCourses")}
+          </a>
+        )}
         <button
           onClick={() => setShowCreateForm(true)}
           className="px-4 py-2 bg-blue-600 text-white text-sm font-medium rounded-lg hover:bg-blue-700 transition-colors cursor-pointer flex items-center gap-1.5 whitespace-nowrap"
@@ -204,7 +220,7 @@ export function CoursesPage() {
                   <SortHeader label={t("length")} active={sort.key === "length"} direction={sort.dir} onClick={() => toggle("length")} className="w-24" />
                   <SortHeader label={t("maps")} active={sort.key === "maps"} direction={sort.dir} onClick={() => toggle("maps")} className="hidden md:table-cell w-20" />
                   <th className="px-4 py-2.5 text-left font-medium text-slate-500 hidden lg:table-cell w-32">{t("options")}</th>
-                  <th className="px-4 py-2.5 text-right font-medium text-slate-500 w-20">{t("actions")}</th>
+                  <th className="px-4 py-2.5 text-right font-medium text-slate-500 w-24">{t("actions")}</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
@@ -255,16 +271,28 @@ export function CoursesPage() {
                           )}
                         </div>
                       </td>
-                      <td className="px-4 py-2.5 text-right" onClick={(e) => e.stopPropagation()}>
+                      <td className="px-4 py-2.5" onClick={(e) => e.stopPropagation()}>
+                        <div className="flex items-center justify-end gap-0.5">
+                        <Link
+                          to={`/${nameId}/course-editor?course=${c.id}`}
+                          data-testid="course-edit-link"
+                          className="p-1.5 text-slate-400 hover:text-purple-600 hover:bg-purple-50 rounded transition-colors flex items-center"
+                          title={t("openInCourseEditor")}
+                        >
+                          <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+                          </svg>
+                        </Link>
                         <button
                           onClick={() => handleDelete(c.id, c.name)}
-                          className="p-1.5 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded transition-colors cursor-pointer"
+                          className="p-1.5 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded transition-colors cursor-pointer flex items-center"
                           title={t("removeCourse")}
                         >
                           <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
                           </svg>
                         </button>
+                        </div>
                       </td>
                     </tr>
                     {expandedId === c.id && (

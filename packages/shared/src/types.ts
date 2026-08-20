@@ -727,6 +727,27 @@ export interface ControlUnit {
   lastSeenAt: string | null; // ISO timestamp
 }
 
+/**
+ * IOF control description, stored per control (JSONB `controls.description`).
+ *
+ * Values use the OCAD course-setting text encoding (e.g. "2.001" =
+ * Terrace in column D) — the same format the OCD importer has always
+ * parsed from 702000 objects. The web `iof-symbols.ts` module maps these
+ * codes to IOF symbol SVGs per column.
+ */
+export interface ControlDescription {
+  /** Column C: which of similar features (e.g. "0.208" = Middle). */
+  c?: string;
+  /** Column D: control feature (e.g. "2.001" = Terrace). */
+  d?: string;
+  /** Column G: location of the flag (e.g. "11.143" = NE side). */
+  g?: string;
+  /** Column E: appearance/dimensions text (e.g. "1,5" = 1.5 m). */
+  s?: string;
+  /** Column F: combination / second feature. */
+  f?: string;
+}
+
 /** Control summary (list view) */
 export interface ControlInfo {
   id: number;
@@ -738,6 +759,8 @@ export interface ControlInfo {
   runnerCount: number; // total runners on courses that include this control
   config: ControlConfig | null; // null if no oxygen_control_config row
   units: ControlUnit[]; // physical units currently mapped to this control
+  /** IOF control description symbols, or null when not set. */
+  description: ControlDescription | null;
 }
 
 /** Control detail with course usage */
