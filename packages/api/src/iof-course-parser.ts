@@ -9,6 +9,7 @@
  */
 
 import { XMLParser } from "fast-xml-parser";
+import type { ControlDescription } from "@oxygen/shared";
 // ─── GeoJSON types (subset) ─────────────────────────────────────────────────
 
 export interface GeoJSONPoint {
@@ -56,6 +57,8 @@ export interface ParsedControl {
   mapX: number;         // map position X in mm
   mapY: number;         // map position Y in mm
   cuts?: SlitGap[];     // Optional gap angles for OCAD circle masking
+  /** IOF control description (OCD imports only — parsed from 702000 text). */
+  description?: ControlDescription;
 }
 
 export interface ParsedCourseControl {

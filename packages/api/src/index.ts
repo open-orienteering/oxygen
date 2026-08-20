@@ -18,6 +18,7 @@ import { startShipper, stopShipper } from "./sync/shipper.js";
 import { registerVenueForwarder } from "./sync/venueForwarder.js";
 import { SYNC_SECRET_HEADER } from "./sync/nodeIdentity.js";
 import { registerBackupRoute } from "./backup.js";
+import { registerCourseExportRoute } from "./course-export.js";
 import { registerMapTileRoutes } from "./map-tiles.js";
 import { registerLiveloxTileProxy } from "./livelox-tile-proxy.js";
 import "dotenv/config";
@@ -80,6 +81,7 @@ async function main() {
   );
 
   registerBackupRoute(server);
+  registerCourseExportRoute(server);
   registerMapTileRoutes(server);
   registerLiveloxTileProxy(server);
 

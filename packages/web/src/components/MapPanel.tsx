@@ -1,7 +1,7 @@
 import { memo, useId, useState, useRef, useMemo, useEffect, useCallback } from "react";
 import { useTranslation } from "react-i18next";
 import { trpc } from "../lib/trpc";
-import { MapViewer, type ControlOverlay, type CourseOverlay } from "./MapViewer";
+import { MapViewer, type ControlOverlay, type CourseOverlay, type MapViewerEditorProps } from "./MapViewer";
 
 /**
  * Public prop surface for `<MapPanel>`. Exported so the shell-owned
@@ -29,6 +29,14 @@ export interface MapPanelPublicProps {
   height?: string;
   /** Auto-zoom to fit the controls area */
   fitToControls?: boolean;
+  /** Initial state of the descriptions toggle (default off) */
+  defaultShowDescriptions?: boolean;
+  /**
+   * Allow the descriptions toggle (and sheet) with no course highlighted:
+   * the sheet then lists every positioned control. Used by the course
+   * editor, where descriptions matter before a course is picked.
+   */
+  descriptionsAllControls?: boolean;
   /** Show only controls belonging to the highlighted course (when a course is highlighted) */
   filterMode?: "all" | "course" | "single-control";
   /** Show completion status overlay on controls */
@@ -39,6 +47,12 @@ export interface MapPanelPublicProps {
   completionCourseId?: number;
   /** Render a toolbar above the map (for class selectors, toggles, etc.). Stabilize via `useMemo`. */
   toolbar?: React.ReactNode;
+  /**
+   * Floating card rendered over the map's top-left corner. Unlike
+   * `toolbar` it lives inside the map box, so it stays visible in
+   * fullscreen. Stabilize via `useMemo`.
+   */
+  mapOverlay?: React.ReactNode;
   /** Per-control punch status for mispunch visualization (keyed by control code string e.g. "67") */
   punchStatusByCode?: Record<string, "ok" | "missing" | "extra">;
   /** Focus/zoom to controls with these codes (e.g. mispunched controls) */
@@ -61,6 +75,12 @@ export interface MapPanelPublicProps {
    * `data-testid="map-pane-collapse"` for the existing E2E tests.
    */
   onPaneCollapse?: () => void;
+  /**
+   * Course-editor gesture hooks, forwarded to the viewer. Only the
+   * course-editor page passes this. Memoize the object (and stabilize
+   * its callbacks) — MapPanel is memoized with shallow equality.
+   */
+  editor?: MapViewerEditorProps;
 }
 
 function MapPanelImpl({
@@ -72,17 +92,21 @@ function MapPanelImpl({
   className = "",
   height = "600px",
   fitToControls = false,
+  defaultShowDescriptions = false,
+  descriptionsAllControls = false,
   filterMode: externalFilterMode,
   showCompletion = false,
   onCompletionToggle,
   completionCourseId,
   toolbar,
+  mapOverlay,
   punchStatusByCode,
   focusControlCodes,
   hideToolbar = false,
   gpsRoutes,
   fillContainer = false,
   onPaneCollapse,
+  editor,
 }: MapPanelPublicProps) {
   const { t } = useTranslation("dashboard");
   // Stable for the lifetime of this MapPanel instance. Exposed as
@@ -233,7 +257,7 @@ function MapPanelImpl({
   const [dragOver, setDragOver] = useState(false);
   // Default to hiding unrelated controls when there's a highlighted selection
   const [showOnlyRelevant, setShowOnlyRelevant] = useState(true);
-  const [showDescriptions, setShowDescriptions] = useState(false);
+  const [showDescriptions, setShowDescriptions] = useState(defaultShowDescriptions);
 
   const handleFile = useCallback((file: File) => {
     if (!file.name.toLowerCase().endsWith(".ocd")) return;
@@ -316,6 +340,7 @@ function MapPanelImpl({
         visible,
         completionPct,
         punchStatus: punchStatusByCode?.[c.code],
+        description: c.description,
       };
     });
   }, [controlCoords.data, effectiveControlIds, filterMode, showOnlyRelevant, courseControlIds, showCompletion, completionStatus.data, punchStatusByCode]);
@@ -382,6 +407,10 @@ function MapPanelImpl({
 
   // Compute the set of control IDs to focus on when selection changes
   const focusControlIds = useMemo(() => {
+    // Editor mode: never auto-pan/zoom. The user is actively working on
+    // the map, and every sequence edit would otherwise change the focus
+    // set and yank the viewport around.
+    if (editor) return null;
     // Mispunch focus: zoom to specific control codes
     if (focusControlCodes && focusControlCodes.length > 0 && controlCoords.data) {
       const ids = controlCoords.data
@@ -401,7 +430,7 @@ function MapPanelImpl({
       return Array.from(effectiveControlIds, (id) => String(id));
     }
     return null;
-  }, [focusControlCodes, controlCoords.data, effectiveCourseNames, courseControlIds, effectiveControlIds]);
+  }, [editor, focusControlCodes, controlCoords.data, effectiveCourseNames, courseControlIds, effectiveControlIds]);
 
   const handleControlClick = useCallback((controlId: string) => {
     const numId = parseInt(controlId, 10);
@@ -428,6 +457,27 @@ function MapPanelImpl({
     return () => document.removeEventListener("fullscreenchange", onFsChange);
   }, []);
 
+  // While the editor is fullscreen, capture Escape via the Keyboard Lock
+  // API (Chromium; Oxygen targets Chromium anyway for WebSerial) so a
+  // short Esc press reaches the editor's dismissal cascade — phantom →
+  // selection → course — instead of instantly dropping out of
+  // fullscreen. Holding Esc still exits (browser-enforced escape hatch),
+  // and the editor exits programmatically once the cascade is empty.
+  // No-op where the API is unavailable.
+  useEffect(() => {
+    if (!editor || !isFullscreen) return;
+    const kb = (
+      navigator as Navigator & {
+        keyboard?: { lock?: (keys: string[]) => Promise<void>; unlock?: () => void };
+      }
+    ).keyboard;
+    if (!kb?.lock) return;
+    void kb.lock(["Escape"]).catch(() => {
+      /* unsupported / denied — Esc keeps its default fullscreen-exit */
+    });
+    return () => kb.unlock?.();
+  }, [editor, isFullscreen]);
+
   // Highlight attribute (intent, not render outcome) — also surfaced on
   // the upload-prompt / loading-state paths so E2E tests can observe the
   // requested highlight regardless of map upload state.
@@ -450,7 +500,10 @@ function MapPanelImpl({
       )}
       {toolbar}
       <div className="ml-auto flex items-center gap-2">
-        {canFilter && (
+        {/* In editor mode the page drives filtering through `filterMode`
+            and renders its own toggle — a second, internal toggle here
+            would fight it (two buttons, diverging state). */}
+        {canFilter && !editor && (
           <button
             onClick={() => setShowOnlyRelevant((v) => !v)}
             className={`text-xs px-2 py-1 rounded-md transition-colors cursor-pointer ${showOnlyRelevant
@@ -461,7 +514,7 @@ function MapPanelImpl({
             {showOnlyRelevant ? t("showAllControls") : t("hideOtherControls")}
           </button>
         )}
-        {highlightedCourseNamesList.length > 0 && (
+        {(highlightedCourseNamesList.length > 0 || descriptionsAllControls) && (
           <button
             onClick={() => setShowDescriptions((v) => !v)}
             className={`text-xs px-2 py-1 rounded-md transition-colors cursor-pointer ${showDescriptions
@@ -606,32 +659,52 @@ function MapPanelImpl({
     >
       {paneToolbar}
 
-      {/* Map viewer */}
-      <MapViewer
-        mapBounds={mapMetadata.data?.bounds}
-        mapScale={mapMetadata.data?.scale}
-        northOffset={mapMetadata.data?.northOffset}
-        mapVersion={mapMetadata.data?.uploadedAt}
-        controls={controlOverlays}
-        courses={courseOverlays}
-        courseGeometry={courseGeometry}
-        coursesWithGeometry={coursesWithGeometry}
-        highlightControlId={highlightControlId ? String(highlightControlId) : undefined}
-        highlightCourseName={highlightCourseName}
-        onControlClick={handleControlClick}
-        className="w-full"
-        style={{
-          height: isFullscreen || fillContainer ? undefined : height,
-          flex: isFullscreen || fillContainer ? "1 1 0" : undefined,
-        }}
-        initialFitControls={fitToControls}
-        focusControlIds={focusControlIds}
-        showDescriptions={showDescriptions}
-        onToggleFullscreen={toggleFullscreen}
-        isFullscreen={isFullscreen}
-        hideControls={false}
-        gpsRoutes={gpsRoutes}
-      />
+      {/* Map viewer + floating overlays. The wrapper keeps the viewer's
+          own flex sizing intact and gives absolutely positioned overlays
+          (e.g. the editor's course selector) a containing block that
+          follows the map into fullscreen. */}
+      <div
+        className={`relative ${isFullscreen || fillContainer ? "flex flex-col min-h-0" : ""}`}
+        style={{ flex: isFullscreen || fillContainer ? "1 1 0" : undefined }}
+      >
+        <MapViewer
+          mapBounds={mapMetadata.data?.bounds}
+          mapScale={mapMetadata.data?.scale}
+          northOffset={mapMetadata.data?.northOffset}
+          mapVersion={mapMetadata.data?.uploadedAt}
+          controls={controlOverlays}
+          courses={courseOverlays}
+          courseGeometry={courseGeometry}
+          coursesWithGeometry={coursesWithGeometry}
+          highlightControlId={highlightControlId ? String(highlightControlId) : undefined}
+          highlightCourseName={highlightCourseName}
+          onControlClick={handleControlClick}
+          className="w-full"
+          style={{
+            height: isFullscreen || fillContainer ? undefined : height,
+            flex: isFullscreen || fillContainer ? "1 1 0" : undefined,
+          }}
+          initialFitControls={fitToControls}
+          focusControlIds={focusControlIds}
+          showDescriptions={showDescriptions}
+          descriptionsAllControls={descriptionsAllControls}
+          allControlsTitle={descriptionsAllControls ? t("allControls") : undefined}
+          onToggleFullscreen={toggleFullscreen}
+          isFullscreen={isFullscreen}
+          hideControls={false}
+          gpsRoutes={gpsRoutes}
+          editor={editor}
+        />
+        {mapOverlay && (
+          // Spans the map's full height so a tall overlay (the editor's
+          // course panel) can scroll internally instead of overflowing;
+          // pointer events pass through everywhere the overlay isn't.
+          // z-[8] keeps it under the editor's context menus (zIndex 9).
+          <div className="absolute top-3 left-3 bottom-3 z-[8] pointer-events-none flex flex-col items-start">
+            {mapOverlay}
+          </div>
+        )}
+      </div>
 
       {/* Map info — below the map */}
       {!hideToolbar && <div className="flex items-center justify-between mt-1.5 px-0.5">

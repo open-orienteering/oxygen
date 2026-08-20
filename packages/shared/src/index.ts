@@ -6,3 +6,4 @@ export * from "./results.js";
 export * from "./voltage.js";
 export * from "./hlc.js";
 export * from "./journal.js";
+export * from "./isom-description-map.js";

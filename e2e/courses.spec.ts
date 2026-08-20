@@ -1,4 +1,5 @@
 import { test, expect } from "@playwright/test";
+import { readFileSync } from "node:fs";
 
 async function selectCompetition(page: import("@playwright/test").Page) {
   await page.goto("/");
@@ -120,6 +121,31 @@ test.describe("Courses Page", () => {
     await page.getByTestId("bulk-value-input").fill("1");
     await page.getByRole("button", { name: "Apply" }).click();
     await expect(bana1Row.getByRole("cell", { name: "1", exact: true })).toBeVisible({ timeout: 5000 });
+  });
+
+  test("should export all courses as IOF 3.0 CourseData XML", async ({ page }) => {
+    await selectCompetition(page);
+    await clickTab(page, "Courses");
+    await expect(page.getByText("3 courses")).toBeVisible({ timeout: 10000 });
+
+    const link = page.getByTestId("course-export-link");
+    await expect(link).toBeVisible();
+
+    const [download] = await Promise.all([
+      page.waitForEvent("download"),
+      link.click(),
+    ]);
+    expect(download.suggestedFilename()).toBe("itest-courses.xml");
+
+    const path = await download.path();
+    expect(path).toBeTruthy();
+    const xml = readFileSync(path!, "utf-8");
+    expect(xml).toContain("<CourseData");
+    expect(xml).toContain('iofVersion="3.0"');
+    expect(xml).toContain("<Name>Bana 1</Name>");
+    // The seed assigns classes to courses, so assignments come along.
+    expect(xml).toContain("<ClassCourseAssignment>");
+    expect(xml).toContain("<CourseName>Bana 2</CourseName>");
   });
 
   test("should import courses from OCAD OCD file (Replace-all default; toggle off to append)", async ({ page }) => {
