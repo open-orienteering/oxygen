@@ -196,7 +196,7 @@ const CARDINAL = new Set(["N", "E", "S", "W"]);
  * Convert an OCAD Column-D code ("X.YYY") to the IOF SVG filename key.
  * Example: "2.004" → "2.4", "1.010" → "1.10"
  */
-function ocadDtoIof(code: string): string | null {
+export function ocadDtoIof(code: string): string | null {
   const [grp, sub] = code.split(".");
   if (!sub) return null;
   const key = `${parseInt(grp, 10)}.${parseInt(sub, 10)}`;
@@ -208,7 +208,7 @@ function ocadDtoIof(code: string): string | null {
  * Handles compass directions (cardinal → 0.1+dir, inter-cardinal → 0.2+dir)
  * and non-directional (upper=0.3, lower=0.4, middle=0.5).
  */
-function ocadCtoIof(code: string): string | null {
+export function ocadCtoIof(code: string): string | null {
   const sub = parseInt(code.split(".")[1] ?? "0", 10);
   if (sub === 3 || sub === 300) return "0.3";
   if (sub === 4 || sub === 400) return "0.4";
@@ -251,7 +251,7 @@ const OCAD_G_TYPE_TO_IOF: Record<number, string> = {
 /**
  * Convert an OCAD Column-G code ("11.XXX") to the IOF SVG filename key.
  */
-function ocadGtoIof(code: string): string | null {
+export function ocadGtoIof(code: string): string | null {
   const sub = parseInt(code.split(".")[1] ?? "0", 10);
   if (sub < 100) {
     const mapped = OCAD_G_NONDIRECTIONAL[sub];
@@ -286,7 +286,7 @@ const OCAD_F_MAP: Record<string, string> = {
 /**
  * Convert an OCAD Column-F code to the IOF SVG filename key.
  */
-function ocadFtoIof(code: string): string | null {
+export function ocadFtoIof(code: string): string | null {
   const mapped = OCAD_F_MAP[code];
   if (mapped && mapped in IOF_SYMBOLS) return mapped;
   const [grp, sub] = code.split(".");

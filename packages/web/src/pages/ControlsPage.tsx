@@ -1,4 +1,5 @@
 import { useState, useMemo, useCallback, useEffect, useRef } from "react";
+import { Link, useParams } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { trpc } from "../lib/trpc";
 import {
@@ -333,7 +334,7 @@ export function ControlsPage() {
                   <SortHeader label={t("checked")} active={sort.key === "checked"} direction={sort.dir} onClick={() => toggle("checked")} className="hidden lg:table-cell w-32" />
                   <SortHeader label={t("battery")} active={sort.key === "battery"} direction={sort.dir} onClick={() => toggle("battery")} className="hidden lg:table-cell w-24" />
                   <SortHeader label={t("type")} active={sort.key === "type"} direction={sort.dir} onClick={() => toggle("type")} className="hidden xl:table-cell w-32" />
-                  <th className="px-4 py-2.5 text-right font-medium text-slate-500 w-20">{t("actions")}</th>
+                  <th className="px-4 py-2.5 text-right font-medium text-slate-500 w-24">{t("actions")}</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
@@ -414,6 +415,7 @@ function ControlRow({
   onDelete: () => void;
 }) {
   const { t } = useTranslation("controls");
+  const { nameId } = useParams<{ nameId: string }>();
   const config = ctrl.config;
   const firstCode = ctrl.codes.split(";")[0]?.trim() ?? "";
 
@@ -468,16 +470,28 @@ function ControlRow({
         <td className="px-4 py-2.5 hidden xl:table-cell">
           <UnitTypeSummary units={ctrl.units ?? []} />
         </td>
-        <td className="px-4 py-2.5 text-right" onClick={(e) => e.stopPropagation()}>
+        <td className="px-4 py-2.5" onClick={(e) => e.stopPropagation()}>
+          <div className="flex items-center justify-end gap-0.5">
+          <Link
+            to={`/${nameId}/course-editor?control=${ctrl.id}`}
+            data-testid="control-edit-link"
+            className="p-1.5 text-slate-400 hover:text-purple-600 hover:bg-purple-50 rounded transition-colors flex items-center"
+            title={t("openInCourseEditor")}
+          >
+            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+            </svg>
+          </Link>
           <button
             onClick={onDelete}
-            className="p-1.5 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded transition-colors cursor-pointer"
+            className="p-1.5 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded transition-colors cursor-pointer flex items-center"
             title={t("removeControl")}
           >
             <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
             </svg>
           </button>
+          </div>
         </td>
       </tr>
       {expanded && (

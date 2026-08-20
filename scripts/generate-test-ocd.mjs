@@ -15,6 +15,12 @@
  *     coordinates so WGS84 conversion yields non-zero lat/lng
  *   - a little synthetic "terrain" (one yellow area, a few black paths) so
  *     the map-tile renderer produces visible output
+ *   - two terrain features at fixed positions in the empty top-right corner,
+ *     outside the yellow blob: a boulder (ISOM 204) at 68/42 mm and a
+ *     building (ISOM 521) spanning 48–58 / 39–46 mm. The description
+ *     autodetect tests search around those coordinates, so moving them
+ *     means updating `packages/api/src/__tests__/integration/
+ *     description-autodetect.test.ts`
  *
  * Consumers this file must satisfy:
  *   - packages/api/src/ocd-course-parser.ts (custom binary parser)
@@ -360,6 +366,30 @@ const symbols = [
     colorIdx: 2,
     description: "Rough open land",
   }),
+  // Two mapped features the description autodetect can recognise.
+  pointSymbol({
+    symNum: 204000,
+    extent: 60,
+    colorIdx: 1,
+    description: "Boulder",
+    elements: [{ type: 3, color: 1, lineWidth: 20, diameter: 60, coords: [[0, 0]] }],
+  }),
+  areaSymbol({
+    symNum: 521000,
+    extent: 0,
+    colorIdx: 1,
+    description: "Building",
+  }),
+];
+
+/** Autodetect fixture geometry, in 1/100 mm. */
+const BOULDER = [6800, 4200];
+const BUILDING = [
+  [4800, 3900],
+  [5800, 3900],
+  [5800, 4600],
+  [4800, 4600],
+  [4800, 3900],
 ];
 
 const symbolIndexOffset = w.length;
@@ -395,6 +425,28 @@ for (let p = 0; p < 3; p++) {
     pts.push([x, y0 + Math.round((rand() - 0.5) * 1400)]);
   }
   objects.push({ sym: 505000, otp: 2, coords: pts });
+}
+
+// Recognisable terrain features in the corner the yellow blob doesn't reach,
+// so a search around them returns exactly one feature each.
+objects.push({ sym: 204000, otp: 1, coords: [BOULDER] });
+objects.push({ sym: 521000, otp: 3, coords: BUILDING });
+
+// Deterministic overprint-cut targets, positioned relative to the jittered
+// control layout so they stay correct if the seed changes: a boulder
+// exactly on control 79's circle rim (2.5 mm = 250 units north) and one
+// exactly on the midpoint of the 79→80 leg. The course-editor E2E builds
+// a course through 79 and 80 and asserts the automatic circle slit and
+// leg gap render (see docs/course-editor.md).
+{
+  const c79 = controlPos.get("79");
+  const c80 = controlPos.get("80");
+  objects.push({ sym: 204000, otp: 1, coords: [[c79.x, c79.y + 250]] });
+  objects.push({
+    sym: 204000,
+    otp: 1,
+    coords: [[Math.round((c79.x + c80.x) / 2), Math.round((c79.y + c80.y) / 2)]],
+  });
 }
 
 // Start, finish and controls. The `a<code>` text is what
