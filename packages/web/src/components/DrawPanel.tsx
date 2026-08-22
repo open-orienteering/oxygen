@@ -9,7 +9,12 @@ import {
   type ClassDrawConfig,
   type DrawSettings,
 } from "@oxygen/shared";
-import { DrawMethodHelp, CorridorTooltip, OverlapTooltip } from "./DrawHelpVisuals";
+import {
+  DrawMethodHelp,
+  CorridorTooltip,
+  OverlapTooltip,
+  StaggerTooltip,
+} from "./DrawHelpVisuals";
 import { DrawTimeline, type TimelineReorderEvent } from "./DrawTimeline";
 
 interface Props {
@@ -26,7 +31,10 @@ interface ClassConfig {
   selected: boolean;
   method: DrawMethod;
   interval: string; // MM:SS format for editing
+  offset: string; // MM:SS format for editing; empty = no manual offset
 }
+
+type HintMap = Map<number, { corridor?: number; order?: number }>;
 
 function useDrawMethods(): { value: DrawMethod; label: string }[] {
   const { t } = useTranslation("draw");
@@ -40,6 +48,14 @@ function useDrawMethods(): { value: DrawMethod; label: string }[] {
 
 function intervalToDeciseconds(mmss: string): number {
   return parseMeosTime(mmss);
+}
+
+/** Blank / zero offsets are sent as `undefined` so the optimizer keeps its own phase. */
+function offsetToDeciseconds(mmss: string): number | undefined {
+  const trimmed = mmss.trim();
+  if (trimmed === "") return undefined;
+  const ds = parseMeosTime(trimmed);
+  return ds > 0 ? ds : undefined;
 }
 
 function decisToInterval(ds: number): string {
@@ -60,6 +76,8 @@ export function DrawPanel({ onClose, onDrawComplete }: Props) {
   const [firstStart, setFirstStart] = useState<string | null>(null);
   const [detectOverlap, setDetectOverlap] = useState(true);
   const [maxParallel, setMaxParallel] = useState(10);
+  const [stagger, setStagger] = useState("0:00");
+  const [firstControlGap, setFirstControlGap] = useState("1:00");
   const [preview, setPreview] = useState<DrawPreviewResult | null>(null);
   const [expandedPreview, setExpandedPreview] = useState<Set<number>>(new Set());
   const [bulkMethod, setBulkMethod] = useState<DrawMethod>("clubSeparation");
@@ -67,7 +85,7 @@ export function DrawPanel({ onClose, onDrawComplete }: Props) {
   const [drawComplete, setDrawComplete] = useState(false);
 
   const [classConfigs, setClassConfigs] = useState<ClassConfig[] | null>(null);
-  const [hints, setHints] = useState<Map<number, { corridor?: number; order?: number }>>(new Map());
+  const [hints, setHints] = useState<HintMap>(new Map());
 
   // Initialize class configs from defaults
   const configs = useMemo(() => {
@@ -86,6 +104,7 @@ export function DrawPanel({ onClose, onDrawComplete }: Props) {
           selected: !c.freeStart,
           method: "clubSeparation",
           interval: c.startInterval > 0 ? decisToInterval(c.startInterval) : "2:00",
+          offset: "",
         }),
       );
   }, [classConfigs, defaults.data]);
@@ -138,30 +157,48 @@ export function DrawPanel({ onClose, onDrawComplete }: Props) {
     setHints(new Map());
   }, [configs, bulkInterval]);
 
-  const buildInput = useCallback((): {
-    classes: ClassDrawConfig[];
-    settings: DrawSettings;
-  } => {
-    const selected = configs.filter((c) => c.selected);
-    return {
-      classes: selected.map((c) => {
-        const h = hints.get(c.classId);
-        return {
-          classId: c.classId,
-          method: c.method,
-          interval: intervalToDeciseconds(c.interval),
-          corridorHint: h?.corridor,
-          orderHint: h?.order,
-        };
-      }),
-      settings: {
-        firstStart: parseMeosTime(firstStart ?? defaultFirstStart),
-        baseInterval: 600,
-        maxParallelStarts: maxParallel,
-        detectCourseOverlap: detectOverlap,
-      },
-    };
-  }, [configs, firstStart, defaultFirstStart, maxParallel, detectOverlap, hints]);
+  const buildInput = useCallback(
+    (
+      hintOverride?: HintMap,
+    ): {
+      classes: ClassDrawConfig[];
+      settings: DrawSettings;
+    } => {
+      const activeHints = hintOverride ?? hints;
+      const selected = configs.filter((c) => c.selected);
+      return {
+        classes: selected.map((c) => {
+          const h = activeHints.get(c.classId);
+          return {
+            classId: c.classId,
+            method: c.method,
+            interval: intervalToDeciseconds(c.interval),
+            corridorHint: h?.corridor,
+            orderHint: h?.order,
+            startOffset: offsetToDeciseconds(c.offset),
+          };
+        }),
+        settings: {
+          firstStart: parseMeosTime(firstStart ?? defaultFirstStart),
+          baseInterval: 600,
+          maxParallelStarts: maxParallel,
+          detectCourseOverlap: detectOverlap,
+          staggerOffset: parseMeosTime(stagger),
+          minFirstControlGap: parseMeosTime(firstControlGap),
+        },
+      };
+    },
+    [
+      configs,
+      firstStart,
+      defaultFirstStart,
+      maxParallel,
+      detectOverlap,
+      stagger,
+      firstControlGap,
+      hints,
+    ],
+  );
 
   const handlePreview = useCallback(() => {
     const input = buildInput();
@@ -179,7 +216,7 @@ export function DrawPanel({ onClose, onDrawComplete }: Props) {
       if (!preview) return;
       // Build new hints: assign corridor and order for all classes based on
       // current preview positions, with the dragged class moved.
-      const newHints = new Map<number, { corridor?: number; order?: number }>();
+      const newHints: HintMap = new Map();
 
       // Group current preview classes by corridor
       const byCorridor = new Map<number, number[]>();
@@ -210,34 +247,14 @@ export function DrawPanel({ onClose, onDrawComplete }: Props) {
 
       setHints(newHints);
 
-      // Re-preview with new hints
-      const selected = configs.filter((c) => c.selected);
-      const input = {
-        classes: selected.map((c) => {
-          const h = newHints.get(c.classId);
-          return {
-            classId: c.classId,
-            method: c.method,
-            interval: intervalToDeciseconds(c.interval),
-            corridorHint: h?.corridor,
-            orderHint: h?.order,
-          };
-        }),
-        settings: {
-          firstStart: parseMeosTime(firstStart ?? defaultFirstStart),
-          baseInterval: 600,
-          maxParallelStarts: maxParallel,
-          detectCourseOverlap: detectOverlap,
-        },
-      };
-      previewMutation.mutate(input, {
+      previewMutation.mutate(buildInput(newHints), {
         onSuccess: (data) => {
           setPreview(data);
           setExpandedPreview(new Set(data.classes.map((c) => c.classId)));
         },
       });
     },
-    [preview, configs, firstStart, defaultFirstStart, maxParallel, detectOverlap, previewMutation],
+    [preview, buildInput, previewMutation],
   );
 
   const handleExecute = useCallback(() => {
@@ -314,7 +331,7 @@ export function DrawPanel({ onClose, onDrawComplete }: Props) {
           <h3 className="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-3">
             {t("globalSettings")}
           </h3>
-          <div className="grid grid-cols-3 gap-4">
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
             <div>
               <label className="block text-xs font-medium text-slate-500 mb-1">
                 {t("firstStart")}
@@ -349,8 +366,26 @@ export function DrawPanel({ onClose, onDrawComplete }: Props) {
                 className="w-full px-3 py-1.5 border border-slate-200 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 tabular-nums"
               />
             </div>
-            <div className="flex items-end pb-1">
-              <label className="flex items-center gap-2 cursor-pointer">
+            <div>
+              <label className="flex items-center gap-1 text-xs font-medium text-slate-500 mb-1">
+                {t("staggerCorridors")}
+                <StaggerTooltip />
+              </label>
+              <input
+                type="text"
+                inputMode="numeric"
+                placeholder="0:00"
+                value={stagger}
+                onChange={(e) => {
+                  setStagger(e.target.value.replace(/[^\d:]/g, ""));
+                  setPreview(null);
+                }}
+                className="w-full px-3 py-1.5 border border-slate-200 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 tabular-nums"
+                data-testid="draw-stagger"
+              />
+            </div>
+            <div>
+              <label className="flex items-center gap-1.5 text-xs font-medium text-slate-500 mb-1 cursor-pointer">
                 <input
                   type="checkbox"
                   checked={detectOverlap}
@@ -359,12 +394,24 @@ export function DrawPanel({ onClose, onDrawComplete }: Props) {
                     setPreview(null);
                   }}
                   className="rounded border-slate-300 text-blue-600 focus:ring-blue-500 cursor-pointer"
+                  data-testid="draw-first-control-spacing-toggle"
                 />
-                <span className="text-sm text-slate-600 inline-flex items-center gap-1">
-                  {t("courseOverlap")}
-                  <OverlapTooltip />
-                </span>
+                {t("firstControlGap")}
+                <OverlapTooltip />
               </label>
+              <input
+                type="text"
+                inputMode="numeric"
+                placeholder="1:00"
+                value={firstControlGap}
+                disabled={!detectOverlap}
+                onChange={(e) => {
+                  setFirstControlGap(e.target.value.replace(/[^\d:]/g, ""));
+                  setPreview(null);
+                }}
+                className="w-full px-3 py-1.5 border border-slate-200 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 tabular-nums disabled:opacity-50"
+                data-testid="draw-first-control-gap"
+              />
             </div>
           </div>
         </div>
@@ -438,6 +485,7 @@ export function DrawPanel({ onClose, onDrawComplete }: Props) {
                   <th className="px-3 py-2 text-right font-medium text-slate-500 text-xs w-16">{t("runnersHeader")}</th>
                   <th className="px-3 py-2 text-left font-medium text-slate-500 text-xs">{t("method")}</th>
                   <th className="px-3 py-2 text-left font-medium text-slate-500 text-xs w-24">{t("interval")}</th>
+                  <th className="px-3 py-2 text-left font-medium text-slate-500 text-xs w-24">{t("offsetHeader")}</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
@@ -491,6 +539,22 @@ export function DrawPanel({ onClose, onDrawComplete }: Props) {
                         }}
                         disabled={!c.selected || c.method === "simultaneous"}
                         className="w-20 px-2 py-1 border border-slate-200 rounded text-xs bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 tabular-nums disabled:opacity-50"
+                      />
+                    </td>
+                    <td className="px-3 py-1.5">
+                      <input
+                        type="text"
+                        inputMode="numeric"
+                        placeholder={t("offsetPlaceholder")}
+                        value={c.offset}
+                        onChange={(e) => {
+                          const v = e.target.value.replace(/[^\d:]/g, "");
+                          updateConfig(c.classId, { offset: v });
+                        }}
+                        disabled={!c.selected}
+                        title={t("offsetHint")}
+                        className="w-20 px-2 py-1 border border-slate-200 rounded text-xs bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 tabular-nums disabled:opacity-50"
+                        data-testid={`draw-class-offset-${c.classId}`}
                       />
                     </td>
                   </tr>
@@ -554,7 +618,9 @@ export function DrawPanel({ onClose, onDrawComplete }: Props) {
                     </div>
                     <div className="flex items-center gap-2">
                       <span className="text-xs text-slate-500 tabular-nums">
-                        {formatMeosTime(cls.computedFirstStart)}
+                        <span data-testid="draw-preview-first-start">
+                          {formatMeosTime(cls.computedFirstStart)}
+                        </span>
                         {cls.entries.length > 1 && (
                           <> &ndash; {formatMeosTime(cls.entries[cls.entries.length - 1].startTime)}</>
                         )}

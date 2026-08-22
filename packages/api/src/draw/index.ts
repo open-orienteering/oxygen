@@ -1,5 +1,5 @@
 export { generateDrawPreview } from "./drawEngine.js";
-export { optimizeStartTimes } from "./optimizer.js";
+export { optimizeStartTimes, DEFAULT_FIRST_CONTROL_GAP } from "./optimizer.js";
 export {
   randomDraw,
   clubSeparationDraw,

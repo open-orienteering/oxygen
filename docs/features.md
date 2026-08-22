@@ -106,7 +106,15 @@ The draw engine allocates start times with configurable methods:
 - **Seeded** — preserves a specific order (e.g. ranking-based).
 - **Simultaneous** — mass start for all runners in a class.
 
-The graphical timeline shows how classes are distributed across corridors (parallel start lanes) and time. Classes sharing a first control are automatically separated; drag class bars to rearrange the schedule and re-run the draw without losing context.
+The graphical timeline shows how classes are distributed across corridors (parallel start lanes) and time. Each bar covers the class's whole start window, up to and including the last runner's slot, so consecutive classes in a corridor meet edge to edge. Classes on the same course share a corridor and run one after another. Drag class bars to rearrange the schedule and re-run the draw without losing context.
+
+Three settings control how the parallel lanes are phased:
+
+- **First-control gap** (global, MM:SS, default 1:00) is the minimum time between any two runners heading for the same first control. Classes that share a first control still run in parallel — the draw interleaves them. Two classes on a 2-minute interval sharing control 31 end up on alternating minutes rather than one waiting out the other. Unchecking the box next to the field turns the constraint off entirely.
+- **Stagger corridors** (global, MM:SS) shifts each corridor relative to the previous one, wrapped within the class interval. With 8 lanes on a 2-minute interval and a 1-minute stagger you get 4 starters every minute instead of 8 every second minute.
+- **Offset** (per class, MM:SS) shifts a single class's block. For the first class in a corridor it replaces the corridor's stagger phase; for a stacked class it shifts the block relative to where it would otherwise land.
+
+If a class's own start interval is shorter than the first-control gap, the draw warns — its runners are already closer together at the control than the gap allows.
 
 ![Draw panel with corridor timeline](screenshots/draw-panel.png)
 

@@ -15,6 +15,7 @@ const classDrawConfigSchema = z.object({
   firstStart: z.number().int().optional(),
   corridorHint: z.number().int().optional(),
   orderHint: z.number().int().optional(),
+  startOffset: z.number().int().optional(),
 });
 
 const drawSettingsSchema = z.object({
@@ -22,6 +23,8 @@ const drawSettingsSchema = z.object({
   baseInterval: z.number().int().min(0),
   maxParallelStarts: z.number().int().min(1).max(50),
   detectCourseOverlap: z.boolean(),
+  staggerOffset: z.number().int().min(0).optional(),
+  minFirstControlGap: z.number().int().min(0).optional(),
 });
 
 const drawInputSchema = z.object({
@@ -102,6 +105,7 @@ export const drawRouter = router({
           courseName: c.courseName,
           corridor: c.corridor,
           computedFirstStart: c.computedFirstStart,
+          interval: c.interval,
           entries: c.entries.map((e) => ({
             runnerId: seqByUuid.get(e.runnerId) ?? 0,
             name: e.name,

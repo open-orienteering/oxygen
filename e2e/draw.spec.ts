@@ -22,6 +22,11 @@ async function reseedItestDb() {
   await reseed();
 }
 
+function toSeconds(hhmmss: string): number {
+  const [h, m, s] = hhmmss.split(":").map(Number);
+  return h * 3600 + m * 60 + s;
+}
+
 async function openDrawPanel(page: import("@playwright/test").Page) {
   await selectCompetition(page);
   await tabButton(page, "Start List").click();
@@ -89,6 +94,63 @@ test.describe("Start Draw", () => {
       timeline.locator("[data-testid^='timeline-bar-']").first(),
     ).toBeVisible();
     await expect(panel.getByText(/Drag class bars/)).toBeVisible();
+  });
+
+  test("should stagger corridors so parallel lanes start on different minutes", async ({
+    page,
+  }) => {
+    const panel = await openDrawPanel(page);
+
+    // The three seed classes leave the start towards different first
+    // controls, so they get one corridor each and would otherwise all start
+    // at the same second.
+    await page.getByTestId("draw-stagger").fill("1:00");
+    await page.getByTestId("draw-preview-btn").click();
+    await expect(panel.getByRole("heading", { name: "Preview" })).toBeVisible({
+      timeout: 10000,
+    });
+
+    const starts = await panel
+      .getByTestId("draw-preview-first-start")
+      .allTextContents();
+    const distinct = [...new Set(starts.map((s) => s.trim()))].sort();
+    expect(distinct.length).toBeGreaterThan(1);
+    expect(toSeconds(distinct[1]) - toSeconds(distinct[0])).toBe(60);
+  });
+
+  test("should shift a class by its manual offset", async ({ page }) => {
+    const panel = await openDrawPanel(page);
+
+    await panel.locator("[data-testid^='draw-class-offset-']").first().fill("0:30");
+    await page.getByTestId("draw-preview-btn").click();
+    await expect(panel.getByRole("heading", { name: "Preview" })).toBeVisible({
+      timeout: 10000,
+    });
+
+    const starts = await panel
+      .getByTestId("draw-preview-first-start")
+      .allTextContents();
+    expect(starts.some((s) => s.trim().endsWith(":30"))).toBe(true);
+  });
+
+  test("should toggle the first-control gap with its checkbox", async ({
+    page,
+  }) => {
+    const panel = await openDrawPanel(page);
+
+    const gap = page.getByTestId("draw-first-control-gap");
+    await expect(gap).toBeEnabled();
+    await expect(gap).toHaveValue("1:00");
+
+    await page.getByTestId("draw-first-control-spacing-toggle").uncheck();
+    await expect(gap).toBeDisabled();
+
+    await page.getByTestId("draw-first-control-spacing-toggle").check();
+    await gap.fill("0:30");
+    await page.getByTestId("draw-preview-btn").click();
+    await expect(panel.getByRole("heading", { name: "Preview" })).toBeVisible({
+      timeout: 10000,
+    });
   });
 
   test("should apply bulk interval to all selected classes", async ({

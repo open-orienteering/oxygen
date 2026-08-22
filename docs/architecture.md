@@ -159,7 +159,11 @@ The start draw algorithm (`packages/api/src/draw/`) supports multiple methods:
 - **Seeded** — preserves a specific order
 - **Simultaneous** — mass start
 
-The draw uses corridor assignment (parallel start lanes) and accounts for course overlap — classes sharing a first control are separated in time. A graphical timeline visualization shows the draw result.
+The draw uses corridor assignment (parallel start lanes). Classes on the same course are grouped into one corridor and run sequentially; everything else may run in parallel.
+
+Within a corridor a class occupies the span from its first start to the end of its last runner's slot (`lastStart + interval`, widened to at least `baseInterval`), so the next class starts exactly when the previous window closes. Corridors can be phase-shifted against each other via `DrawSettings.staggerOffset` — corridor *k* is shifted by `k * staggerOffset` wrapped within the interval, which spreads parallel lanes across the minutes of the interval. `ClassDrawConfig.startOffset` overrides that phase for a single class.
+
+Terrain conflicts are handled as a spacing constraint rather than a grouping one. The scheduler books every start time against the course's first control and delays a class until all of its starts sit at least `DrawSettings.minFirstControlGap` (default 600 ds = 1 min, gated by `detectCourseOverlap`) away from the starts already booked on that control. Two classes on a 2-minute interval sharing control 31 therefore interleave onto alternating minutes instead of one blocking the other; a third class on the same control is pushed past the saturated window. A mass start (`simultaneous`) counts as a single instant at the control regardless of field size. A graphical timeline visualization (`packages/web/src/lib/draw-timeline.ts` → `DrawTimeline`) shows the draw result.
 
 ![Draw timeline](screenshots/draw-panel.png)
 
