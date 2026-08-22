@@ -23,7 +23,11 @@ import {
   simultaneousDraw,
   type DrawRunner,
 } from "./algorithms.js";
-import { optimizeStartTimes, type ClassCourseInfo } from "./optimizer.js";
+import {
+  optimizeStartTimes,
+  DEFAULT_FIRST_CONTROL_GAP,
+  type ClassCourseInfo,
+} from "./optimizer.js";
 import { valueToRunnerStatus } from "../statusConvert.js";
 
 interface ClassData {
@@ -151,6 +155,12 @@ async function loadClassData(
   return { classes, warnings };
 }
 
+/** Deciseconds as `M:SS` for warning text. */
+function formatGap(ds: number): string {
+  const totalSec = Math.round(ds / 10);
+  return `${Math.floor(totalSec / 60)}:${String(totalSec % 60).padStart(2, "0")}`;
+}
+
 /** Tiny non-cryptographic hash for free-text club-name keys. */
 function hashString(s: string): number {
   let h = 0;
@@ -174,6 +184,11 @@ export async function generateDrawPreview(
   const { classes, warnings } = await loadClassData(db, eventId, classConfigs);
 
   const configBySeq = new Map(classConfigs.map((c) => [c.classId, c]));
+  // A mass start is one instant, so it has no interval as far as the
+  // scheduler and the first-control spacing are concerned.
+  const intervalOf = (config: ClassDrawConfig): number =>
+    config.method === "simultaneous" ? 0 : config.interval;
+
   const courseInfos: ClassCourseInfo[] = classes.map((cls) => {
     const config = configBySeq.get(cls.classSeq)!;
     return {
@@ -181,12 +196,27 @@ export async function generateDrawPreview(
       runnerCount: cls.runners.length,
       courseId: cls.courseSeq,
       initialControls: cls.initialControls,
-      interval: config.interval,
+      interval: intervalOf(config),
       fixedFirstStart: config.firstStart,
       corridorHint: config.corridorHint,
       orderHint: config.orderHint,
+      startOffset: config.startOffset,
     };
   });
+
+  const gap = settings.detectCourseOverlap
+    ? (settings.minFirstControlGap ?? DEFAULT_FIRST_CONTROL_GAP)
+    : 0;
+  if (gap > 0) {
+    for (const cls of classes) {
+      const interval = intervalOf(configBySeq.get(cls.classSeq)!);
+      if (interval > 0 && interval < gap && cls.initialControls.length > 0) {
+        warnings.push(
+          `Class "${cls.className}" starts every ${formatGap(interval)}, which is closer than the ${formatGap(gap)} minimum at its first control`,
+        );
+      }
+    }
+  }
 
   const corridorAssignments = optimizeStartTimes(courseInfos, settings);
   const assignmentMap = new Map(
@@ -226,14 +256,12 @@ export async function generateDrawPreview(
         break;
     }
 
+    const interval = intervalOf(config);
     const entries: DrawPreviewEntryInternal[] = ordered.map((r, idx) => ({
       runnerId: r.id, // UUID
       name: r.name,
       clubName: r.clubName,
-      startTime:
-        config.method === "simultaneous"
-          ? firstStart
-          : firstStart + idx * config.interval,
+      startTime: firstStart + idx * interval,
       startNo: globalStartNo + idx,
     }));
 
@@ -244,6 +272,7 @@ export async function generateDrawPreview(
       courseName: cls.courseName,
       corridor,
       computedFirstStart: firstStart,
+      interval,
       entries,
     });
     globalStartNo += ordered.length;

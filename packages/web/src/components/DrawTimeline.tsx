@@ -1,6 +1,7 @@
 import { useRef, useState, useCallback, useMemo } from "react";
 import { useTranslation } from "react-i18next";
 import { formatMeosTime, type DrawPreviewResult } from "@oxygen/shared";
+import { buildTimelineBars, type TimelineBar } from "../lib/draw-timeline";
 
 const CORRIDOR_COLORS = [
   { bg: "bg-blue-400", border: "border-blue-500", text: "text-white" },
@@ -27,16 +28,6 @@ interface Props {
   onReorder: (event: TimelineReorderEvent) => void;
 }
 
-interface BarInfo {
-  classId: number;
-  className: string;
-  courseName: string;
-  corridor: number;
-  startTime: number;
-  endTime: number;
-  runnerCount: number;
-}
-
 export function DrawTimeline({ preview, totalCorridors, onReorder }: Props) {
   const { t } = useTranslation("draw");
   const containerRef = useRef<HTMLDivElement>(null);
@@ -47,22 +38,7 @@ export function DrawTimeline({ preview, totalCorridors, onReorder }: Props) {
     hoverX: number;
   } | null>(null);
 
-  const bars: BarInfo[] = useMemo(() => {
-    return preview.classes
-      .filter((c) => c.corridor >= 0)
-      .map((cls) => {
-        const lastEntry = cls.entries[cls.entries.length - 1];
-        return {
-          classId: cls.classId,
-          className: cls.className,
-          courseName: cls.courseName,
-          corridor: cls.corridor,
-          startTime: cls.computedFirstStart,
-          endTime: lastEntry ? lastEntry.startTime : cls.computedFirstStart,
-          runnerCount: cls.entries.length,
-        };
-      });
-  }, [preview]);
+  const bars = useMemo(() => buildTimelineBars(preview), [preview]);
 
   const maxUsedCorridor = useMemo(() => {
     if (bars.length === 0) return 0;
@@ -114,7 +90,7 @@ export function DrawTimeline({ preview, totalCorridors, onReorder }: Props) {
   }, [minTime, maxTime, totalRange]);
 
   const barsByCorr = useMemo(() => {
-    const map = new Map<number, BarInfo[]>();
+    const map = new Map<number, TimelineBar[]>();
     for (const id of corridorIds) map.set(id, []);
     for (const bar of bars) {
       map.get(bar.corridor)?.push(bar);
@@ -266,7 +242,7 @@ export function DrawTimeline({ preview, totalCorridors, onReorder }: Props) {
                       width: `${widthPercent(bar.startTime, bar.endTime)}%`,
                       minWidth: 24,
                     }}
-                    title={`${bar.className} (${bar.courseName}): ${formatMeosTime(bar.startTime)} – ${formatMeosTime(bar.endTime)} (${t("runnersTotal", { count: bar.runnerCount })})`}
+                    title={`${bar.className} (${bar.courseName}): ${formatMeosTime(bar.startTime)} – ${formatMeosTime(bar.lastStartTime)} (${t("runnersTotal", { count: bar.runnerCount })})`}
                     data-testid={`timeline-bar-${bar.classId}`}
                   >
                     {label}

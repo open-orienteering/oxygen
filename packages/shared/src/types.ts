@@ -865,13 +865,16 @@ export interface ClassDrawConfig {
   firstStart?: number; // override; if omitted, optimizer calculates it
   corridorHint?: number; // pin to a specific corridor (from previous preview)
   orderHint?: number; // stacking order within corridor (lower = earlier)
+  startOffset?: number; // manual shift of this class's block (deciseconds)
 }
 
 export interface DrawSettings {
   firstStart: number; // global first start (deciseconds, default ZeroTime)
   baseInterval: number; // minimum gap between any two starts (default 600 = 1 min)
   maxParallelStarts: number; // max corridors (default 10)
-  detectCourseOverlap: boolean; // default true
+  detectCourseOverlap: boolean; // enforce first-control spacing (default true)
+  staggerOffset?: number; // phase shift between adjacent corridors (deciseconds)
+  minFirstControlGap?: number; // min gap between starts sharing a first control (default 600 = 1 min)
 }
 
 export interface DrawPreviewEntry {
@@ -888,6 +891,8 @@ export interface DrawPreviewClass {
   courseName: string;
   corridor: number;
   computedFirstStart: number;
+  /** Interval used for this class — the width of each runner's start slot. */
+  interval: number;
   entries: DrawPreviewEntry[];
 }
 

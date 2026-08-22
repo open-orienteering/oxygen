@@ -17,6 +17,9 @@ import {
 } from "../helpers/test-db.js";
 import { makeCaller } from "../helpers/caller.js";
 
+const MIN = 600; // one minute in deciseconds
+const TEN_OCLOCK = 360_000;
+
 let ctx: TestEventContext;
 let caller: ReturnType<typeof makeCaller>;
 let classSeq: number;
@@ -170,5 +173,244 @@ describe("draw.execute", () => {
       select: { firstStart: true, startInterval: true },
     });
     expect(cls?.startInterval).toBe(600);
+  });
+});
+
+/**
+ * Start lanes: eight classes, each on its own course leaving the start
+ * towards a different first control — the layout you get when every lane
+ * has its own start flag. These suites cover the corridor stagger and the
+ * per-class offset end-to-end through the router.
+ */
+describe("draw — start lanes, stagger and offsets", () => {
+  let laneCtx: TestEventContext;
+  let laneCaller: ReturnType<typeof makeCaller>;
+  /** Class seqs for the four lanes with distinct first controls. */
+  const laneClasses: number[] = [];
+  /** Two classes whose courses share their first control. */
+  let sharedA: number;
+  let sharedB: number;
+
+  beforeAll(async () => {
+    laneCtx = await createTestEvent("draw_lanes");
+    laneCaller = makeCaller(laneCtx.event);
+
+    async function makeClassWithCourse(
+      name: string,
+      controlCodes: number[],
+    ): Promise<number> {
+      for (const code of controlCodes) {
+        const existing = await laneCtx.db.control.findFirst({
+          where: { eventId: laneCtx.eventId, codes: String(code) },
+          select: { id: true },
+        });
+        if (!existing) {
+          await laneCaller.control.create({ codes: String(code) });
+        }
+      }
+      const course = await laneCaller.course.create({
+        name: `Course ${name}`,
+        controlIds: controlCodes,
+      });
+      const cls = await laneCaller.class.create({ name, courseId: course.id });
+      // Three runners each: enough for a 2-minute block spanning 3 slots.
+      for (let i = 0; i < 3; i++) {
+        await laneCaller.runner.create({
+          name: `${name} Runner ${i}`,
+          classId: cls.id,
+          clubName: `OK ${i}`,
+        });
+      }
+      return cls.id;
+    }
+
+    // Four lanes: distinct first controls, shared later controls.
+    for (const [i, first] of [31, 32, 33, 34].entries()) {
+      laneClasses.push(await makeClassWithCourse(`Lane${i + 1}`, [first, 90, 91]));
+    }
+    // Two classes leaving towards the same first control.
+    sharedA = await makeClassWithCourse("SharedA", [41, 92]);
+    sharedB = await makeClassWithCourse("SharedB", [41, 93]);
+  });
+
+  afterAll(async () => {
+    await laneCtx.cleanup();
+  });
+
+  function laneConfig(classId: number, over: Record<string, unknown> = {}) {
+    return { classId, method: "random" as const, interval: 2 * MIN, ...over };
+  }
+
+  it("starts lanes with distinct first controls in parallel", async () => {
+    const res = await laneCaller.draw.preview({
+      classes: laneClasses.map((id) => laneConfig(id)),
+      settings: {
+        firstStart: TEN_OCLOCK,
+        baseInterval: MIN,
+        maxParallelStarts: 4,
+        detectCourseOverlap: true,
+      },
+    });
+
+    expect(res.classes.every((c) => c.computedFirstStart === TEN_OCLOCK)).toBe(true);
+    expect(new Set(res.classes.map((c) => c.corridor)).size).toBe(4);
+  });
+
+  it("spreads staggered lanes across the minutes of the interval", async () => {
+    const res = await laneCaller.draw.preview({
+      classes: laneClasses.map((id) => laneConfig(id)),
+      settings: {
+        firstStart: TEN_OCLOCK,
+        baseInterval: MIN,
+        maxParallelStarts: 4,
+        detectCourseOverlap: true,
+        staggerOffset: MIN,
+      },
+    });
+
+    // 4 lanes, 2-minute interval, 1-minute stagger => two lanes per minute.
+    const starts = res.classes.map((c) => c.computedFirstStart).sort();
+    expect(starts).toEqual([
+      TEN_OCLOCK,
+      TEN_OCLOCK,
+      TEN_OCLOCK + MIN,
+      TEN_OCLOCK + MIN,
+    ]);
+
+    // Every runner start falls on one of the two phases.
+    for (const cls of res.classes) {
+      for (const entry of cls.entries) {
+        expect((entry.startTime - TEN_OCLOCK) % MIN).toBe(0);
+      }
+    }
+  });
+
+  it("interleaves two classes sharing a first control", async () => {
+    const res = await laneCaller.draw.preview({
+      classes: [laneConfig(sharedA), laneConfig(sharedB)],
+      settings: {
+        firstStart: TEN_OCLOCK,
+        baseInterval: MIN,
+        maxParallelStarts: 4,
+        detectCourseOverlap: true,
+      },
+    });
+
+    // Both keep their 2-minute interval and run in parallel; the second one
+    // lands on the odd minutes.
+    const [a, b] = res.classes;
+    expect(a.corridor).not.toBe(b.corridor);
+    expect(Math.abs(a.computedFirstStart - b.computedFirstStart)).toBe(MIN);
+
+    const starts = res.classes
+      .flatMap((c) => c.entries.map((e) => e.startTime))
+      .sort((x, y) => x - y);
+    for (let i = 1; i < starts.length; i++) {
+      expect(starts[i] - starts[i - 1]).toBeGreaterThanOrEqual(MIN);
+    }
+  });
+
+  it("honours a custom first-control gap", async () => {
+    const res = await laneCaller.draw.preview({
+      classes: [laneConfig(sharedA), laneConfig(sharedB)],
+      settings: {
+        firstStart: TEN_OCLOCK,
+        baseInterval: MIN,
+        maxParallelStarts: 4,
+        detectCourseOverlap: true,
+        minFirstControlGap: 300,
+      },
+    });
+    const [a, b] = res.classes;
+    expect(Math.abs(a.computedFirstStart - b.computedFirstStart)).toBe(300);
+  });
+
+  it("lets classes share a first control freely when spacing is off", async () => {
+    const res = await laneCaller.draw.preview({
+      classes: [laneConfig(sharedA), laneConfig(sharedB)],
+      settings: {
+        firstStart: TEN_OCLOCK,
+        baseInterval: MIN,
+        maxParallelStarts: 4,
+        detectCourseOverlap: false,
+      },
+    });
+    expect(res.classes.every((c) => c.computedFirstStart === TEN_OCLOCK)).toBe(true);
+  });
+
+  it("warns when a class starts faster than the first-control gap", async () => {
+    const res = await laneCaller.draw.preview({
+      classes: [laneConfig(sharedA, { interval: 300 })],
+      settings: {
+        firstStart: TEN_OCLOCK,
+        baseInterval: MIN,
+        maxParallelStarts: 4,
+        detectCourseOverlap: true,
+      },
+    });
+    expect(res.warnings.some((w) => w.includes("first control"))).toBe(true);
+  });
+
+  it("returns the interval so the timeline can size each block", async () => {
+    const res = await laneCaller.draw.preview({
+      classes: [laneConfig(laneClasses[0], { interval: 3 * MIN })],
+      settings: {
+        firstStart: TEN_OCLOCK,
+        baseInterval: MIN,
+        maxParallelStarts: 4,
+        detectCourseOverlap: true,
+      },
+    });
+    expect(res.classes[0].interval).toBe(3 * MIN);
+  });
+
+  it("applies a per-class offset on top of the computed start", async () => {
+    const res = await laneCaller.draw.preview({
+      classes: [
+        laneConfig(laneClasses[0]),
+        laneConfig(laneClasses[1], { startOffset: 300 }),
+      ],
+      settings: {
+        firstStart: TEN_OCLOCK,
+        baseInterval: MIN,
+        maxParallelStarts: 4,
+        detectCourseOverlap: true,
+      },
+    });
+
+    const shifted = res.classes.find((c) => c.classId === laneClasses[1])!;
+    expect(shifted.computedFirstStart).toBe(TEN_OCLOCK + 300);
+    expect(shifted.entries[0].startTime).toBe(TEN_OCLOCK + 300);
+  });
+
+  it("persists offset start times on execute", async () => {
+    const offset = 300;
+    await laneCaller.draw.execute({
+      classes: [laneConfig(laneClasses[2], { startOffset: offset })],
+      settings: {
+        firstStart: TEN_OCLOCK,
+        baseInterval: MIN,
+        maxParallelStarts: 4,
+        detectCourseOverlap: true,
+      },
+    });
+
+    const cls = await laneCtx.db.class.findFirst({
+      where: { eventId: laneCtx.eventId, seq: laneClasses[2] },
+      select: { id: true, firstStart: true },
+    });
+    const zeroTime = laneCtx.event.zeroTime;
+    expect(cls?.firstStart).toBe(TEN_OCLOCK + offset - zeroTime);
+
+    const runners = await laneCtx.db.runner.findMany({
+      where: { eventId: laneCtx.eventId, classId: cls!.id, removed: false },
+      select: { startTime: true },
+      orderBy: { startTime: "asc" },
+    });
+    expect(runners.map((r) => r.startTime)).toEqual([
+      TEN_OCLOCK + offset - zeroTime,
+      TEN_OCLOCK + offset + 2 * MIN - zeroTime,
+      TEN_OCLOCK + offset + 4 * MIN - zeroTime,
+    ]);
   });
 });

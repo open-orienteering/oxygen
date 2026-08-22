@@ -241,6 +241,29 @@ export function CorridorTooltip() {
   );
 }
 
+export function StaggerTooltip() {
+  const { t } = useTranslation("draw");
+  return (
+    <Popover trigger={<InfoIcon />}>
+      <div data-testid="stagger-tooltip">
+        <p className="font-semibold text-slate-800 mb-1.5">{t("staggerTooltipTitle")}</p>
+        <p className="text-slate-600 mb-2">{t("staggerTooltipDesc")}</p>
+        <div className="space-y-1 font-mono text-[10px]">
+          <div className="flex items-center gap-1">
+            <span className="text-slate-400 w-5 shrink-0">C1</span>
+            <span className="text-slate-500 tabular-nums">10:00 10:02 10:04</span>
+          </div>
+          <div className="flex items-center gap-1">
+            <span className="text-slate-400 w-5 shrink-0">C2</span>
+            <span className="pl-6 text-slate-500 tabular-nums">10:01 10:03 10:05</span>
+          </div>
+          <p className="text-slate-500 pt-1 font-sans">{t("staggerTooltipExample")}</p>
+        </div>
+      </div>
+    </Popover>
+  );
+}
+
 export function OverlapTooltip() {
   const { t } = useTranslation("draw");
   return (
@@ -256,9 +279,7 @@ export function OverlapTooltip() {
             <span className="text-slate-400">S →</span>
             <ControlBadge code="31" match />
             <span className="text-slate-400">→</span>
-            <ControlBadge code="42" match />
-            <span className="text-slate-400">→</span>
-            <ControlBadge code="55" />
+            <ControlBadge code="42" />
             <span className="text-slate-400">→ ...</span>
           </div>
           <div className="flex items-center gap-1">
@@ -266,15 +287,21 @@ export function OverlapTooltip() {
             <span className="text-slate-400">S →</span>
             <ControlBadge code="31" match />
             <span className="text-slate-400">→</span>
-            <ControlBadge code="42" match />
-            <span className="text-slate-400">→</span>
             <ControlBadge code="67" />
             <span className="text-slate-400">→ ...</span>
           </div>
-          <div className="flex items-center gap-1 pt-1 text-slate-500">
+          <div className="flex items-center gap-1 pt-1">
+            <span className="text-slate-500 w-14 shrink-0">Class A:</span>
+            <span className="text-slate-500 tabular-nums">10:00 10:02 10:04</span>
+          </div>
+          <div className="flex items-center gap-1">
+            <span className="text-slate-500 w-14 shrink-0">Class B:</span>
+            <span className="pl-6 text-slate-500 tabular-nums">10:01 10:03 10:05</span>
+          </div>
+          <div className="flex items-start gap-1 pt-1 text-slate-500">
             <span className="w-14 shrink-0" />
-            <span className="inline-block w-2.5 h-2.5 rounded-sm bg-amber-400" />
-            <span>{t("overlapTooltipShared")}</span>
+            <span className="inline-block w-2.5 h-2.5 rounded-sm bg-amber-400 mt-0.5" />
+            <span className="font-sans">{t("overlapTooltipShared")}</span>
           </div>
         </div>
       </div>
