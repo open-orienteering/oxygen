@@ -1,6 +1,6 @@
 import type { AnchorDef, FilterOperator } from "../types";
 
-/** Shape of a route row from `trpc.livelox.listRoutes`. */
+/** Shape of a route row from `trpc.tracks.listRoutes`. */
 export interface TrackRow {
   id: number;
   runnerId: number | null;
@@ -8,7 +8,6 @@ export interface TrackRow {
   organisation: string;
   classId: number | null;
   className: string;
-  liveloxClassId: number | null;
   color: string;
   raceStartMs: number | null;
   result: {

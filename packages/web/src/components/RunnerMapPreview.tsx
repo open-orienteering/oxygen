@@ -25,7 +25,7 @@ interface Props {
  *   overview when no class filter is set).
  * - **Unfinished runner** → assigned course outline only.
  * - **Finished OK runner** → course outline + all controls coloured "ok"
- *   green + GPS overlay when a synced Livelox route exists.
+ *   green + GPS overlay when a synced route exists.
  * - **Mispunched runner** → course outline + mixed status colours
  *   (missing red, extra amber, ok green) + GPS overlay if available.
  */
@@ -34,7 +34,7 @@ export function RunnerMapPreview({ runnerId, defaultCourseNames }: Props) {
     { runnerId: runnerId ?? 0 },
     { enabled: !!runnerId, staleTime: 5_000 },
   );
-  const route = trpc.livelox.routeByRunner.useQuery(
+  const route = trpc.tracks.routeByRunner.useQuery(
     { runnerId: runnerId ?? 0 },
     { enabled: !!runnerId, staleTime: 60_000 },
   );

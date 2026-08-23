@@ -25,7 +25,7 @@ interface Props {
  *    matched course + per-control status. Cards without a linked runner
  *    yield `{ found: false }`, in which case we fall back to
  *    `defaultCourseNames` (page-level class filter) or plain overview.
- * 2. When a runner is linked, chain into `livelox.routeByRunner` to
+ * 2. When a runner is linked, chain into `tracks.routeByRunner` to
  *    overlay a synced GPS track if one exists.
  */
 export function CardMapPreview({ cardNo, defaultCourseNames }: Props) {
@@ -42,7 +42,7 @@ export function CardMapPreview({ cardNo, defaultCourseNames }: Props) {
       ? readout.data.runner.id
       : undefined;
 
-  const route = trpc.livelox.routeByRunner.useQuery(
+  const route = trpc.tracks.routeByRunner.useQuery(
     { runnerId: linkedRunnerId ?? 0 },
     { enabled: !!linkedRunnerId, staleTime: 60_000 },
   );

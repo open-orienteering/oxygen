@@ -55,7 +55,7 @@ interface Props {
   children?: React.ReactNode;
   /**
    * If provided, use native OCAD tiles from this base URL instead of the
-   * Livelox map image. Example: "/api/map-tile/my_competition"
+   * replay dataset's own map image. Example: "/api/map-tile/my_competition"
    */
   nativeTileBase?: string;
 }
@@ -70,14 +70,14 @@ function tileYToLat(y: number, n: number): number {
 
 /**
  * Choose a slippy-map zoom level so that one tile ≈ 256 screen pixels.
- * `scale` is "screen pixels per Livelox map pixel".
+ * `scale` is "screen pixels per map pixel".
  */
 function pickNativeZoom(scale: number, proj: ReplayProjection): number {
   const [a] = proj.matrix;
   const cosLat = Math.cos((proj.originLat * Math.PI) / 180);
-  // Livelox px per degree lng = |a| * DEG_TO_M_LNG
-  // A tile at zoom z spans 360/2^z degrees → tile_livelox_px = |a| * 111320 * cosLat * 360 / 2^z
-  // Want tile_livelox_px * scale ≈ 256
+  // map px per degree lng = |a| * DEG_TO_M_LNG
+  // A tile at zoom z spans 360/2^z degrees → tile_map_px = |a| * 111320 * cosLat * 360 / 2^z
+  // Want tile_map_px * scale ≈ 256
   const ideal = Math.log2((Math.abs(a) * 111320 * cosLat * 360 * scale) / 256);
   return Math.max(10, Math.min(17, Math.round(ideal)));
 }
@@ -85,8 +85,8 @@ function pickNativeZoom(scale: number, proj: ReplayProjection): number {
 /**
  * Draw native slippy-map tiles on the canvas.
  * Must be called with the DPR-scaled context active (but outside any
- * viewport save/restore block).  Tiles are projected from lat/lng → Livelox
- * map pixels → CSS screen pixels using the existing affine projection.
+ * viewport save/restore block).  Tiles are projected from lat/lng → map
+ * pixels → CSS screen pixels using the existing affine projection.
  */
 function drawNativeTilesOnCanvas(
   ctx: CanvasRenderingContext2D,
@@ -130,7 +130,7 @@ function drawNativeTilesOnCanvas(
 
   if (x1 - x0 > 30 || y1 - y0 > 30) return; // sanity guard
 
-  // Helper: Livelox map pixel → CSS screen pixel
+  // Helper: map pixel → CSS screen pixel
   const cos_v = Math.cos(vp.rotation);
   const sin_v = Math.sin(vp.rotation);
   const mts = (mx: number, my: number) => {
@@ -146,7 +146,7 @@ function drawNativeTilesOnCanvas(
       const lat0 = tileYToLat(ty, n);
       const lat1 = tileYToLat(ty + 1, n);
 
-      // 3 tile corners: lat/lng → Livelox px → CSS screen px
+      // 3 tile corners: lat/lng → map px → CSS screen px
       const tl_mp = latLngToMapPx(lat0, lng0, proj);
       const tr_mp = latLngToMapPx(lat0, lng1, proj);
       const bl_mp = latLngToMapPx(lat1, lng0, proj);
@@ -205,7 +205,7 @@ export const ReplayMapLayer = forwardRef<ReplayMapLayerHandle, Props>(
     // no-op resize otherwise reallocates the GPU surface and clears state.
     const lastCanvasDimsRef = useRef({ w: 0, h: 0, dpr: 0 });
 
-    // Livelox tile images cache
+    // Replay-map tile images cache
     const tileImagesRef = useRef<Map<string, HTMLImageElement>>(new Map());
 
     // Native (OCAD) tile images cache
@@ -258,7 +258,7 @@ export const ReplayMapLayer = forwardRef<ReplayMapLayerHandle, Props>(
       onViewportChange?.(vpRef.current);
     }, [containerSize.w, containerSize.h, map.widthPx, map.heightPx]);
 
-    // ─── Load Livelox tiles (skipped when using native tiles) ─
+    // ─── Load replay-map tiles (skipped when using native tiles) ─
     useEffect(() => {
       if (nativeTileBase) return; // native tiles loaded on demand in drawMap
 
@@ -384,14 +384,14 @@ export const ReplayMapLayer = forwardRef<ReplayMapLayerHandle, Props>(
       const vp = vpRef.current;
 
       if (nativeTileBase) {
-        // Draw native OCAD tiles using the Livelox affine projection
+        // Draw native OCAD tiles using the replay affine projection
         drawNativeTilesOnCanvas(
           ctx, vp, containerSize.w, containerSize.h,
           map.projection, nativeTileBase,
           nativeTileImagesRef.current, requestNativeTileLoad,
         );
       } else {
-        // Draw Livelox map tiles / image
+        // Draw the replay dataset's own map tiles / image
         ctx.save();
         ctx.translate(containerSize.w / 2, containerSize.h / 2);
         ctx.rotate(vp.rotation);

@@ -38,7 +38,7 @@ function route(
 function data(routes: ReplayRoute[]): ReplayData {
   return {
     title: "t",
-    sourceType: "livelox",
+    sourceType: "oxygen",
     map: {} as ReplayData["map"],
     courses: [forkA, forkB],
     routes,

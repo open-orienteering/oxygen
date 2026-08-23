@@ -24,7 +24,7 @@ Oxygen is a modern web application for managing orienteering competitions. It co
 |  |  event        runner  draw     testLab         |  |
 |  |  cardReadout  course  class    eventor         |  |
 |  |  liveresults  club    race     control         |  |
-|  |  onlineInput  livelox events                   |  |
+|  |  onlineInput  tracks  events                   |  |
 |  +------------------------+-----------------------+  |
 |                           | Prisma ORM               |
 +---------------------------+--------------------------+

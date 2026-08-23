@@ -30,7 +30,6 @@ import {
   fetchClubLogo,
   fetchCompetitors,
   fetchCachedCompetitors,
-  fetchEventWebUrl,
   uploadResults,
   uploadStartList,
   type EventorEntry,
@@ -40,7 +39,6 @@ import {
   type ResultForUpload,
 } from "../eventor.js";
 import { eventorKeyStore } from "../eventorKeyStore.js";
-import { fetchLiveloxEventClasses } from "../livelox/fetcher.js";
 import {
   runnerStatusToValue,
   valueToRunnerStatus,
@@ -1414,64 +1412,6 @@ export const eventorRouter = router({
       clubs: clubsObj,
     };
   }),
-
-  /** Resolve Livelox event id from the linked Eventor event's WebURL. */
-  getLiveloxClasses: publicProcedure
-    .input(
-      z.object({
-        eventorEventId: z.number().int().positive(),
-        env: z.enum(["prod", "test"]).default("prod"),
-      }),
-    )
-    .query(async ({ input }) => {
-      const { apiKey } = await requireApiKey(input.env);
-      const info = await fetchEventWebUrl(apiKey, input.eventorEventId, input.env);
-      if (!info?.webUrl) {
-        throw new TRPCError({
-          code: "NOT_FOUND",
-          message:
-            "This Eventor event has no external URL. Make sure the event links to Livelox.",
-        });
-      }
-      const match = info.webUrl.match(/\/Events\/Show\/(\d+)/i);
-      if (!match) {
-        throw new TRPCError({
-          code: "NOT_FOUND",
-          message: `Eventor WebURL "${info.webUrl}" does not match a Livelox event pattern.`,
-        });
-      }
-      const liveloxEventId = parseInt(match[1], 10);
-
-      // Resolve the class list via Livelox's public SearchEvents API.
-      // Network / unknown-event failures are caught and surfaced as
-      // an empty class list with the metadata still populated, so the
-      // UI can show "no classes yet" without flipping the whole panel
-      // into an error state.
-      let classes: Array<{
-        id: number;
-        name: string;
-        participantCount: number;
-      }> = [];
-      let liveloxError: string | null = null;
-      try {
-        const summary = await fetchLiveloxEventClasses(
-          liveloxEventId,
-          info.date || undefined,
-        );
-        classes = summary.classes;
-      } catch (err) {
-        liveloxError =
-          err instanceof Error ? err.message : "Livelox lookup failed";
-      }
-
-      return {
-        liveloxEventId,
-        eventName: info.name ?? "",
-        webUrl: info.webUrl,
-        classes,
-        liveloxError,
-      };
-    }),
 
   // ───────────── Push to Eventor (IOF v3 XML POST) ─────────────
 

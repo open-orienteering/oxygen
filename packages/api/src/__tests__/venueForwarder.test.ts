@@ -33,7 +33,7 @@ describe("isCloudOwnedMutation", () => {
   it("classifies directory / integration / lifecycle paths as cloud-owned", () => {
     expect(isCloudOwnedMutation("club.update")).toBe(true);
     expect(isCloudOwnedMutation("eventor.syncEntries")).toBe(true);
-    expect(isCloudOwnedMutation("livelox.importClass")).toBe(true);
+    expect(isCloudOwnedMutation("tracks.deleteRoute")).toBe(true);
     expect(isCloudOwnedMutation("liveresults.enable")).toBe(true);
     expect(isCloudOwnedMutation("event.create")).toBe(true);
     expect(isCloudOwnedMutation("event.delete")).toBe(true);

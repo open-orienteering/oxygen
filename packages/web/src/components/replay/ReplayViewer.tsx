@@ -51,7 +51,7 @@ interface Props {
   style?: React.CSSProperties;
   /** Initial replay configuration (speed, follow, autoPlay, visible runners). */
   replayConfig?: ReplayConfig;
-  /** If set, use native OCAD tiles instead of the Livelox map. E.g. "/api/map-tile/my_competition" */
+  /** If set, use native OCAD tiles instead of the dataset's own map. E.g. "/api/map-tile/my_competition" */
   nativeTileBase?: string;
   /** Routes from other classes, loaded on demand for nearby mode. */
   extraRoutes?: ReplayRoute[];
