@@ -222,7 +222,7 @@ They define the canonical column types, defaults, and triggers.
 - When adding new strings, add the key to **both** `en` and `sv` JSON files. Never leave a language incomplete.
 - Typed keys via `packages/web/src/i18n/i18next.d.ts` — the TypeScript compiler catches missing keys.
 - Use `useRunnerStatusLabel()` / `useControlStatusLabel()` hooks for translated status text, not the raw English-only `runnerStatusLabel()` function.
-- Technical identifiers that are intentionally untranslated (SI, Eventor, Livelox, LiveResults, ROC) are exempt.
+- Technical identifiers that are intentionally untranslated (SI, Eventor, LiveResults, ROC) are exempt.
 
 ## 10. Documentation
 

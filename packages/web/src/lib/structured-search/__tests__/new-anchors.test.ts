@@ -306,17 +306,17 @@ describe("track anchors", () => {
   const rows: TrackRow[] = [
     {
       id: 1, runnerId: 1, runnerName: "Anna", organisation: "OK Skog", classId: 1, className: "H21",
-      liveloxClassId: 100, color: "#e6194b", raceStartMs: 0,
+      color: "#e6194b", raceStartMs: 0,
       result: { status: "ok", timeMs: 1800000 }, syncedAt: "2026-04-25",
     },
     {
       id: 2, runnerId: 2, runnerName: "Erik", organisation: "IF Linné", classId: 2, className: "D21",
-      liveloxClassId: 101, color: "#ff0", raceStartMs: 0,
+      color: "#ff0", raceStartMs: 0,
       result: { status: "mp", timeMs: 2400000 }, syncedAt: "2026-04-25",
     },
     {
       id: 3, runnerId: 3, runnerName: "Lisa", organisation: "OK Skog", classId: 1, className: "H21",
-      liveloxClassId: 100, color: "#0f0", raceStartMs: 0,
+      color: "#0f0", raceStartMs: 0,
       result: null, syncedAt: "2026-04-25",
     },
   ];

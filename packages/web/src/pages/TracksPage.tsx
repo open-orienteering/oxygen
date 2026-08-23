@@ -1,9 +1,7 @@
 import { useState, useMemo, Fragment } from "react";
-import { useNavigate, useParams } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { trpc } from "../lib/trpc";
 import { MapSlot } from "../components/MapSlot";
-import { TrackMapPanel } from "../components/TrackMapPanel";
 import { SortHeader } from "../components/SortHeader";
 import { useSort } from "../hooks/useSort";
 import { StructuredSearchBar } from "../components/structured-search/StructuredSearchBar";
@@ -11,8 +9,6 @@ import { useStructuredSearch } from "../hooks/useStructuredSearch";
 import { createTrackAnchors, type TrackRow } from "../lib/structured-search/anchors/track-anchors";
 
 export function TracksPage() {
-  const { nameId = "" } = useParams<{ nameId: string }>();
-  const navigate = useNavigate();
   const { t } = useTranslation("tracks");
 
   const [expandedId, setExpandedId] = useState<number | null>(null);
@@ -23,9 +19,9 @@ export function TracksPage() {
     ["runnerName", "organisation", "className"],
   );
 
-  const syncedClasses = trpc.livelox.listSyncedClasses.useQuery();
-  const routes = trpc.livelox.listRoutes.useQuery();
-  const deleteRoute = trpc.livelox.deleteRoute.useMutation({
+  const syncedClasses = trpc.tracks.listSyncedClasses.useQuery();
+  const routes = trpc.tracks.listRoutes.useQuery();
+  const deleteRoute = trpc.tracks.deleteRoute.useMutation({
     onSuccess: () => routes.refetch(),
   });
 
@@ -36,13 +32,13 @@ export function TracksPage() {
   // the row or first lands on Tracks. `mapMetadata` is cached forever
   // by MapPanel itself (`staleTime: Infinity`), so this query is free
   // after first load; we use it here to know whether ExpandedDetail
-  // should render the Livelox fallback inline.
+  // should render the inline map fallback.
   const mapMetadata = trpc.course.mapMetadata.useQuery(undefined, {
     staleTime: Number.POSITIVE_INFINITY,
   });
   const hasOcdMap = mapMetadata.data != null;
 
-  const expandedPreview = trpc.livelox.getRoutePreview.useQuery(
+  const expandedPreview = trpc.tracks.getRoutePreview.useQuery(
     { routeId: expandedId ?? 0 },
     { enabled: !!expandedId, staleTime: 60_000 },
   );
@@ -152,12 +148,6 @@ export function TracksPage() {
           placeholder={t("searchPlaceholder")}
           suggestionData={suggestionData}
         />
-        <button
-          onClick={() => navigate(`/${nameId}/tracks/replay`)}
-          className="px-3 py-2 bg-blue-600 text-white text-sm font-medium rounded-lg hover:bg-blue-700 transition-colors cursor-pointer whitespace-nowrap"
-        >
-          {t("openClassReplay")}
-        </button>
       </div>
 
       {/* No data states */}
@@ -269,12 +259,9 @@ export function TracksPage() {
                       <tr>
                         <td colSpan={6} className="px-4 pb-4 pt-2 bg-slate-50">
                           <ExpandedDetail
-                            route={route}
                             preview={expandedPreview.data ?? null}
                             isPreviewLoading={expandedPreview.isLoading}
                             hasOcdMap={hasOcdMap}
-                            nameId={nameId}
-                            onNavigate={navigate}
                           />
                         </td>
                       </tr>
@@ -292,71 +279,22 @@ export function TracksPage() {
 
 // ─── Expanded detail row ──────────────────────────────────────
 
-interface RouteRow {
-  id: number;
-  runnerId: number | null;
-  runnerName: string;
-  organisation: string;
-  classId: number | null;
-  className: string;
-  liveloxClassId: number | null;
-  color: string;
-  raceStartMs: number | null;
-  result: {
-    status: "ok" | "mp" | "dnf" | "dns" | "dq" | "unknown";
-    timeMs?: number;
-    rank?: number;
-    splitTimes?: { controlCode: string; timeMs: number }[];
-  } | null;
-  syncedAt: string | Date;
-}
-
 interface RoutePreviewData {
   raceStartMs: number | null;
   waypoints: { lat: number; lng: number; t?: number }[];
-  liveloxClassId: number | null;
   courseName: string | null;
 }
 
 function ExpandedDetail({
-  route,
   preview,
   isPreviewLoading,
   hasOcdMap,
-  nameId,
-  onNavigate,
 }: {
-  route: RouteRow;
   preview: RoutePreviewData | null;
   isPreviewLoading: boolean;
   hasOcdMap: boolean;
-  nameId: string;
-  onNavigate: ReturnType<typeof useNavigate>;
 }) {
   const { t } = useTranslation("tracks");
-
-  // When an .ocd map is uploaded the GPS overlay lives in the
-  // persistent shell pane (via the page-level `<MapSlot>`), so we
-  // intentionally don't render an inline map here in that case. The
-  // Livelox fallback below only kicks in when there's no .ocd, which
-  // is rare in practice.
-  const showInlineFallback = !hasOcdMap && !!preview;
-  const livePreview =
-    preview && showInlineFallback
-      ? {
-          color: "#e6194b",
-          raceStartMs: preview.raceStartMs,
-          waypoints: preview.waypoints.map((w) => ({
-            lat: w.lat,
-            lng: w.lng,
-            timeMs: w.t ?? 0,
-          })),
-          interruptions: [] as number[],
-          liveloxClassId: preview.liveloxClassId,
-          runnerName: route.runnerName,
-          courseName: preview.courseName,
-        }
-      : null;
 
   return (
     <div className="space-y-3">
@@ -368,36 +306,14 @@ function ExpandedDetail({
         </div>
       )}
 
-      {/* Inline Livelox / no-map fallback. Only renders when there's
-          no .ocd map for the persistent pane to draw on. */}
-      {livePreview && (
-        <TrackMapPanel route={livePreview} height="640px" />
+      {/* Without an .ocd map there is no background to draw the track on.
+          The common case — .ocd uploaded — is handled by the page-level
+          `<MapSlot>`, which drives the shell's persistent MapPanel. */}
+      {!hasOcdMap && preview && (
+        <div className="h-[120px] flex items-center justify-center bg-slate-100 rounded-lg border border-slate-200 text-slate-400 text-sm">
+          {t("noMapAvailable")}
+        </div>
       )}
-
-      <div className="flex gap-2">
-        {route.liveloxClassId && (
-          <>
-            <button
-              onClick={() =>
-                onNavigate(`/${nameId}/tracks/replay?routeId=${route.id}${route.classId ? `&classId=${route.classId}` : ""}`)
-              }
-              className="px-3 py-1.5 bg-blue-600 text-white text-sm font-medium rounded-lg hover:bg-blue-700 transition-colors cursor-pointer"
-            >
-              {t("openReplay")}
-            </button>
-            {route.classId && (
-              <button
-                onClick={() =>
-                  onNavigate(`/${nameId}/tracks/replay?classId=${route.classId}`)
-                }
-                className="px-3 py-1.5 bg-slate-100 text-slate-700 text-sm font-medium rounded-lg hover:bg-slate-200 transition-colors cursor-pointer"
-              >
-                {t("fullClassReplay")}
-              </button>
-            )}
-          </>
-        )}
-      </div>
     </div>
   );
 }

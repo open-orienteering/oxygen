@@ -44,7 +44,7 @@ export interface EventorEvent {
   classificationId: number;
   organiserName: string;
   organiserId: number;
-  /** URL to the event's external page (e.g. Livelox), if set on Eventor. */
+  /** URL to the event's external page, if set on Eventor. */
   webUrl?: string;
 }
 
@@ -450,33 +450,8 @@ export async function fetchEventsBroad(
 }
 
 /**
- * Fetch the WebURL and date for a single event from Eventor.
- * Used to resolve a Livelox (or other external) link from an Eventor event ID.
- */
-export async function fetchEventWebUrl(
-  apiKey: string,
-  eventId: number,
-  env: EventorEnvironment = "prod",
-): Promise<{ webUrl: string; date: string; name: string } | null> {
-  try {
-    const xml = await eventorFetch(`event/${eventId}`, apiKey, env);
-    const parsed = parser.parse(xml);
-    const ev = parsed.Event ?? parsed;
-    const webUrl = safeStr(ev.WebURL ?? "");
-    const date = safeStr(ev.StartDate?.Date ?? ev.StartDate ?? "");
-    const name = safeStr(ev.Name ?? "");
-    if (!webUrl) return null;
-    return { webUrl, date, name };
-  } catch {
-    return null;
-  }
-}
-
-/**
  * Fetch lightweight metadata (name + date + organiser) for a single event
- * from Eventor by ID. Unlike {@link fetchEventWebUrl}, this does *not*
- * require the event to have a `WebURL`, so it works for any event the API
- * key can read.
+ * from Eventor by ID.
  *
  * Auth errors are propagated as {@link EventorAuthError} so callers can
  * surface a clear message to the user. Network/parse errors throw the

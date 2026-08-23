@@ -133,7 +133,7 @@ export interface ReplayRelayInfo {
 /** Complete replay dataset. */
 export interface ReplayData {
   title: string;
-  sourceType: "livelox" | "oxygen" | "gpx";
+  sourceType: "oxygen" | "gpx";
   map: ReplayMap;
   /**
    * Course definitions. A single course for a normal event; one entry per

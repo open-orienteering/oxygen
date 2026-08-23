@@ -53,7 +53,6 @@ const EventPage = lazy(() => import("./EventPage").then(m => ({ default: m.Event
 const TestLabPage = lazy(() => import("./TestLabPage").then(m => ({ default: m.TestLabPage })));
 const BackupPunchesPage = lazy(() => import("./BackupPunchesPage").then(m => ({ default: m.BackupPunchesPage })));
 const TracksPage = lazy(() => import("./TracksPage").then(m => ({ default: m.TracksPage })));
-const TracksReplayPage = lazy(() => import("./TracksReplayPage").then(m => ({ default: m.TracksReplayPage })));
 const RegistrationTrendsPage = lazy(() => import("./RegistrationTrendsPage").then(m => ({ default: m.RegistrationTrendsPage })));
 
 type Tab = "dashboard" | "event" | "runners" | "startlist" | "results" | "classes" | "courses" | "course-editor" | "controls" | "clubs" | "start-station" | "finish-station" | "card-readout" | "cards" | "backup-punches" | "test-lab" | "tracks" | "registration-trends";
@@ -525,7 +524,6 @@ export function CompetitionShell() {
             <Route path="backup-punches" element={<BackupPunchesPage />} />
             <Route path="test-lab" element={<TestLabPage />} />
             <Route path="tracks" element={<TracksPage />} />
-            <Route path="tracks/replay" element={<TracksReplayPage />} />
             <Route path="registration-trends" element={<RegistrationTrendsPage />} />
             <Route path="*" element={<Navigate to="" replace />} />
           </Routes>

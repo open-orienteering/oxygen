@@ -14,7 +14,7 @@ import { testLabRouter } from "./testLab.js";
 import { liveresultsRouter } from "./liveresults.js";
 import { onlineInputRouter } from "./onlineInput.js";
 import { externalRouter } from "./external.js";
-import { liveloxRouter } from "./livelox.js";
+import { tracksRouter } from "./tracks.js";
 import { eventsRouter } from "./events.js";
 import { leaseRouter } from "./lease.js";
 import { registrationTrendsRouter } from "./registrationTrends.js";
@@ -41,7 +41,7 @@ export const appRouter = router({
   liveresults: liveresultsRouter,
   onlineInput: onlineInputRouter,
   external: externalRouter,
-  livelox: liveloxRouter,
+  tracks: tracksRouter,
   events: eventsRouter,
   lease: leaseRouter,
   registrationTrends: registrationTrendsRouter,

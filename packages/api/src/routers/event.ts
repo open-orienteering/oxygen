@@ -714,26 +714,6 @@ export const eventRouter = router({
       });
       return { ok: true };
     }),
-
-  // ─── Livelox ───────────────────────────────────────────
-
-  getLiveloxEventId: eventProcedure.query(async ({ ctx }) => {
-    const event = await ctx.db.event.findUnique({
-      where: { id: ctx.event.id },
-      select: { liveloxEventId: true },
-    });
-    return { liveloxEventId: event?.liveloxEventId ?? null };
-  }),
-
-  setLiveloxEventId: eventProcedure
-    .input(z.object({ liveloxEventId: z.number().int().positive().nullable() }))
-    .mutation(async ({ ctx, input }) => {
-      await ctx.db.event.update({
-        where: { id: ctx.event.id },
-        data: { liveloxEventId: input.liveloxEventId },
-      });
-      return { ok: true };
-    }),
 });
 
 // ─── Helpers ──────────────────────────────────────────────

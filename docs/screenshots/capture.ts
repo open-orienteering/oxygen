@@ -473,28 +473,6 @@ const STEPS: CaptureStep[] = [
   },
 
   {
-    name: "replay",
-    description: "GPS replay viewer (mass-start, speed slider)",
-    async run({ page, nameId }) {
-      await gotoPage(page, `${WEB_URL}/${nameId}/tracks/replay`);
-      // The class <select> starts with just a placeholder and is populated
-      // asynchronously from listSyncedClasses. Wait until a real option shows
-      // up before trying to select.
-      const classDropdown = page.locator("select").first();
-      await classDropdown.waitFor({ state: "visible", timeout: 10_000 }).catch(() => {});
-      const realOption = classDropdown.locator('option[value]:not([value=""])').first();
-      await realOption.waitFor({ state: "attached", timeout: 10_000 }).catch(() => {});
-      const value = await realOption.getAttribute("value").catch(() => null);
-      if (value) {
-        await classDropdown.selectOption(value);
-      }
-      await page.waitForSelector(".leaflet-container", { timeout: 15_000 }).catch(() => {});
-      await page.waitForTimeout(5000);
-      await screenshot(page, "replay.png");
-    },
-  },
-
-  {
     name: "start-screen",
     description: "Public start screen (big board)",
     async run({ page, nameId }) {

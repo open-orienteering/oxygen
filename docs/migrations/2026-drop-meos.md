@@ -117,15 +117,14 @@ the CLI.
   `lists`, `cardReadout`, `events`, `external`.
 - ✅ Big pipelines fully ported and live:
   Eventor sync + result/start-list push, LiveResults push pump,
-  Livelox sync + per-runner / per-class route lookups + standalone
-  class viewer, draw engine, online-input (ROC) puller,
-  registration trends, test-lab simulator, map-tile renderer.
+  per-runner / per-class route lookups, draw engine, online-input (ROC)
+  puller, registration trends, test-lab simulator, map-tile renderer.
 - ✅ `backup.ts` uses `psql \copy`-driven per-event extraction.
 - ✅ Docker compose: PG 18 on `:5432`, isolated `postgres-oxygen-test`
   on `:5433`. `pnpm test:db:up` / `down` helpers added.
 - ✅ Web pages restored against the new schema (CompetitionSelector,
   EventPage, Controls, Cards, Test Lab simulator, Registration Trends,
-  Tracks/Replay viewers).
+  Tracks page).
 - ✅ Migration tool: one-shot CLI at
   `packages/api/scripts/migrate-mysql-to-pg.ts`, exposed as
   `pnpm migrate:mysql-to-pg`. Migrated Vinterserien + Bagissprinten.
@@ -145,11 +144,9 @@ the CLI.
 - ✅ API unit-test suite restored. `placeholder.test.ts` is gone; the
   PG-shaped equivalents live in `packages/api/src/__tests__/`:
   `timeConvert`, `runnerHelpers`, `courseHelpers`, `courseGeometryStale`,
-  `cardReadout`, `livelox-decoder`, `livelox-transform`,
-  `livelox-matcher`, `eventorKeyStore`, `results`, `online-input-roc`,
-  `liveresults-pusher`, `liveresults` (mapStatus), `bigint-json`,
-  `parse-legs-string`, and the existing `livelox-tile-proxy` /
-  `livelox-import-class`. ~251 unit tests at the time of writing, up
+  `cardReadout`, `eventorKeyStore`, `results`, `online-input-roc`,
+  `liveresults-pusher`, `liveresults` (mapStatus), `bigint-json`, and
+  `parse-legs-string`. ~251 unit tests at the time of writing, up
   from the ~14 left after the migration.
 - ✅ `control_units` persists `batteryVoltage` / `batteryLow` /
   `memoryClearedAt` (and now `srr_cfg`) from `recordProgramming`.

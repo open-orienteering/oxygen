@@ -20,7 +20,6 @@ import { SYNC_SECRET_HEADER } from "./sync/nodeIdentity.js";
 import { registerBackupRoute } from "./backup.js";
 import { registerCourseExportRoute } from "./course-export.js";
 import { registerMapTileRoutes } from "./map-tiles.js";
-import { registerLiveloxTileProxy } from "./livelox-tile-proxy.js";
 import "dotenv/config";
 
 const PORT = parseInt(process.env.PORT ?? "3002", 10);
@@ -83,7 +82,6 @@ async function main() {
   registerBackupRoute(server);
   registerCourseExportRoute(server);
   registerMapTileRoutes(server);
-  registerLiveloxTileProxy(server);
 
   // Club logo endpoint — serves PNGs from the global club_directory.
   server.get<{ Params: { eventorId: string }; Querystring: { variant?: string } }>(

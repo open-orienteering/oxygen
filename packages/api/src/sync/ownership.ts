@@ -18,7 +18,7 @@
 export const CLOUD_OWNED_MUTATION_PREFIXES: readonly string[] = [
   "club.",
   "eventor.",
-  "livelox.",
+  "tracks.",
   "liveresults.",
 ];
 
