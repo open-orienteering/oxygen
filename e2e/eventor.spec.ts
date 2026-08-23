@@ -80,10 +80,11 @@ test.describe("Competition Selector — New Features", () => {
     await expect(page.getByRole("button", { name: "Connect" })).toBeVisible();
   });
 
-  test.skip("should validate Eventor API key and show event list", async ({
+  test("should validate Eventor API key and show event list", async ({
     page,
   }) => {
-    // Skipped: requires a valid Eventor API key and live network access to api.orientering.se
+    // Served by e2e/eventor-stub.mjs, so this no longer needs a real key
+    // or a reachable Eventor.
     await clearEventorKey(page);
     await page.goto("/");
     await page.getByRole("button", { name: /Import from Eventor/ }).click();
@@ -96,11 +97,18 @@ test.describe("Competition Selector — New Features", () => {
       .fill("df34af90a0c64ca4abfe9492be057e9c");
     await page.getByRole("button", { name: "Connect" }).click();
 
+    // Assert against the stub's organisation and event names rather than
+    // just the surrounding chrome, so this fails if the event list stops
+    // reaching the UI.
     await expect(page.getByText(/Connected:/)).toBeVisible({ timeout: 15000 });
+    await expect(page.getByText(/E2E Test Club/)).toBeVisible();
     await expect(page.getByPlaceholder("Search events...")).toBeVisible();
+    await expect(page.getByText("E2E Stub Sprint")).toBeVisible({
+      timeout: 15000,
+    });
     await expect(
       page.locator("button", { hasText: "Import" }).first(),
-    ).toBeVisible({ timeout: 15000 });
+    ).toBeVisible();
   });
 
   test("should show delete confirmation dialog and allow cancel", async ({

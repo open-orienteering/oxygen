@@ -10,6 +10,7 @@ import { defineConfig, devices } from "@playwright/test";
  */
 const API_PORT = Number(process.env.E2E_API_PORT ?? 3002);
 const WEB_PORT = Number(process.env.E2E_WEB_PORT ?? 5173);
+const EVENTOR_PORT = Number(process.env.E2E_EVENTOR_PORT ?? 4300);
 const DB_NAME = process.env.E2E_DB_NAME ?? "oxygen_e2e";
 // Shard label (e.g. "1") — used to keep per-shard artifact dirs apart.
 const SHARD = process.env.E2E_SHARD;
@@ -64,6 +65,18 @@ export default defineConfig({
         // Lets lease.spec.ts drive the node-to-node lease surface
         // (lease.acquire) the way a peer node would.
         SYNC_SHARED_SECRET: "e2e-sync-secret",
+        // Keep Eventor calls inside the stack. Without this the suite
+        // depends on eventor.orientering.se being up and on it accepting
+        // the placeholder key, neither of which holds.
+        EVENTOR_API_BASE_URL: `http://127.0.0.1:${EVENTOR_PORT}/`,
+      },
+    },
+    {
+      command: "node e2e/eventor-stub.mjs",
+      port: EVENTOR_PORT,
+      reuseExistingServer: false,
+      env: {
+        EVENTOR_STUB_PORT: String(EVENTOR_PORT),
       },
     },
     {
