@@ -7,6 +7,21 @@ const EVENTOR_URLS: Record<EventorEnvironment, string> = {
   test: "https://eventor-sweden-test.orientering.se/api/",
 };
 
+/**
+ * Base URL for every Eventor call. `EVENTOR_API_BASE_URL` overrides both
+ * environments and exists so the E2E stack can point the API at a local
+ * stub (`e2e/eventor-stub.mjs`) instead of the live federation service —
+ * tests must not depend on a third party being reachable. It is read per
+ * call rather than at import time so a stub can be swapped in without
+ * reloading the module. Leave it unset everywhere except E2E.
+ */
+function eventorBaseUrl(env: EventorEnvironment): string {
+  const override = process.env.EVENTOR_API_BASE_URL;
+  if (!override) return EVENTOR_URLS[env];
+  // `new URL(relative, base)` resolves against the base's *directory*, so a
+  // missing trailing slash would silently drop the last path segment.
+  return override.endsWith("/") ? override : `${override}/`;
+}
 
 const parser = new XMLParser({
   ignoreAttributes: false,
@@ -192,7 +207,7 @@ async function eventorFetch(
   env: EventorEnvironment = "prod",
   params?: Record<string, string>,
 ): Promise<string> {
-  const url = new URL(endpoint, EVENTOR_URLS[env]);
+  const url = new URL(endpoint, eventorBaseUrl(env));
   if (params) {
     for (const [k, v] of Object.entries(params)) {
       url.searchParams.set(k, v);
@@ -1010,7 +1025,7 @@ export async function fetchCachedCompetitors(
   apiKey: string,
   env: EventorEnvironment = "prod",
 ): Promise<CachedCompetitor[]> {
-  const url = new URL("export/cachedcompetitors", EVENTOR_URLS[env]);
+  const url = new URL("export/cachedcompetitors", eventorBaseUrl(env));
   url.searchParams.set("includePreselectedClasses", "false");
   url.searchParams.set("zip", "true");
   url.searchParams.set("version", "3.0");
@@ -1127,7 +1142,7 @@ export async function fetchClubLogo(
   apiKey: string,
   type: "SmallIcon" | "LargeIcon" = "SmallIcon",
 ): Promise<Uint8Array | null> {
-  const url = new URL("organisation/logo", EVENTOR_URLS["prod"]);
+  const url = new URL("organisation/logo", eventorBaseUrl("prod"));
   url.searchParams.set("organisationId", String(organisationId));
   url.searchParams.set("type", type);
 
@@ -1378,7 +1393,7 @@ export async function uploadResults(
   zip.addFile("resultlist.xml", Buffer.from(xml, "utf-8"));
   const zipBuffer = new Uint8Array(zip.toBuffer());
 
-  const url = new URL("import/resultlist", EVENTOR_URLS[env]);
+  const url = new URL("import/resultlist", eventorBaseUrl(env));
   console.log(`[Eventor] Uploading to ${url.toString()} (env=${env})`);
   const resp = await fetch(url.toString(), {
     method: "POST",
@@ -1495,7 +1510,7 @@ export async function uploadStartList(
   zip.addFile("startlist.xml", Buffer.from(xml, "utf-8"));
   const zipBuffer = new Uint8Array(zip.toBuffer());
 
-  const url = new URL("import/startlist", EVENTOR_URLS[env]);
+  const url = new URL("import/startlist", eventorBaseUrl(env));
   const resp = await fetch(url.toString(), {
     method: "POST",
     headers: {

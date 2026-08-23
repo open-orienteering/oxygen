@@ -9,10 +9,11 @@
  *   - Postgres database  oxygen_e2e_<i>   (on the :5433 test container)
  *   - API server         port 4100 + i
  *   - Vite dev server    port 4200 + i
+ *   - Eventor API stub   port 4300 + i
  *
  * and runs a subset of the spec files in each with today's serial
  * semantics. `playwright.config.ts` reads E2E_SHARD / E2E_API_PORT /
- * E2E_WEB_PORT / E2E_DB_NAME to wire everything up.
+ * E2E_WEB_PORT / E2E_EVENTOR_PORT / E2E_DB_NAME to wire everything up.
  *
  * Usage:
  *   pnpm test:e2e                    # full suite, sharded (default 4)
@@ -33,6 +34,7 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const SHARD_COUNT = Math.max(1, Number(process.env.E2E_SHARDS ?? 4));
 const API_PORT_BASE = 4100;
 const WEB_PORT_BASE = 4200;
+const EVENTOR_PORT_BASE = 4300;
 
 /**
  * Relative run-time weights per spec file, used to balance the shards
@@ -88,6 +90,7 @@ if (hasFileFilter) {
   const child = runPlaywright(args, {
     E2E_API_PORT: process.env.E2E_API_PORT ?? String(API_PORT_BASE),
     E2E_WEB_PORT: process.env.E2E_WEB_PORT ?? String(WEB_PORT_BASE),
+    E2E_EVENTOR_PORT: process.env.E2E_EVENTOR_PORT ?? String(EVENTOR_PORT_BASE),
     E2E_DB_NAME: process.env.E2E_DB_NAME ?? "oxygen_e2e",
   });
   child.on("exit", (code) => process.exit(code ?? 1));
@@ -114,7 +117,7 @@ if (hasFileFilter) {
   console.log(`Running ${specs.length} spec files across ${SHARD_COUNT} shards:`);
   shards.forEach((s, i) => {
     console.log(
-      `  shard ${i + 1} (api :${API_PORT_BASE + i + 1}, web :${WEB_PORT_BASE + i + 1}, db oxygen_e2e_${i + 1}, weight ${s.weight}):`,
+      `  shard ${i + 1} (api :${API_PORT_BASE + i + 1}, web :${WEB_PORT_BASE + i + 1}, eventor :${EVENTOR_PORT_BASE + i + 1}, db oxygen_e2e_${i + 1}, weight ${s.weight}):`,
     );
     for (const f of s.files) console.log(`    ${f}`);
   });
@@ -145,6 +148,7 @@ if (hasFileFilter) {
         E2E_SHARD: String(n),
         E2E_API_PORT: String(API_PORT_BASE + n),
         E2E_WEB_PORT: String(WEB_PORT_BASE + n),
+        E2E_EVENTOR_PORT: String(EVENTOR_PORT_BASE + n),
         E2E_DB_NAME: `oxygen_e2e_${n}`,
       };
       const t0 = Date.now();

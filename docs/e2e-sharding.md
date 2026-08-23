@@ -15,10 +15,10 @@ semantics the suite has always had.
 pnpm test:e2e
    │
    └── scripts/e2e-sharded.mjs  (default N=4, override with E2E_SHARDS)
-         ├── shard 1: playwright test <files>  → vite :4201 → api :4101 → db oxygen_e2e_1
-         ├── shard 2: playwright test <files>  → vite :4202 → api :4102 → db oxygen_e2e_2
-         ├── shard 3: playwright test <files>  → vite :4203 → api :4103 → db oxygen_e2e_3
-         └── shard 4: playwright test <files>  → vite :4204 → api :4104 → db oxygen_e2e_4
+         ├── shard 1: playwright test <files>  → vite :4201 → api :4101 → db oxygen_e2e_1 (+ eventor stub :4301)
+         ├── shard 2: playwright test <files>  → vite :4202 → api :4102 → db oxygen_e2e_2 (+ eventor stub :4302)
+         ├── shard 3: playwright test <files>  → vite :4203 → api :4103 → db oxygen_e2e_3 (+ eventor stub :4303)
+         └── shard 4: playwright test <files>  → vite :4204 → api :4104 → db oxygen_e2e_4 (+ eventor stub :4304)
 ```
 
 All shard databases live in the existing `postgres-oxygen-test` container
@@ -43,13 +43,14 @@ unsharded.
 
 ### Env-var plumbing
 
-`playwright.config.ts` reads four variables (all optional — defaults
+`playwright.config.ts` reads five variables (all optional — defaults
 reproduce the historical single-stack behavior):
 
 | Variable | Default | Used for |
 |----------|---------|----------|
 | `E2E_API_PORT` | `3002` | API webServer port + `PORT`/`DATABASE_URL` env |
 | `E2E_WEB_PORT` | `5173` | Vite webServer port + Playwright `baseURL` |
+| `E2E_EVENTOR_PORT` | `4300` | Eventor stub port + the API's `EVENTOR_API_BASE_URL` |
 | `E2E_DB_NAME` | `oxygen_e2e` | Database on `:5433` (global-setup + reseed too) |
 | `E2E_SHARD` | unset | Artifact dirs: `test-results/shard-<n>`, `playwright-report/shard-<n>` |
 
@@ -84,6 +85,14 @@ DATABASE_URL="postgresql://oxygen:oxygen@localhost:5433/oxygen_e2e?schema=oxygen
   pnpm exec tsx e2e/seed-builder/build-itest.ts
 ```
 
+### Eventor stub
+
+Each stack runs a third webServer, `e2e/eventor-stub.mjs`, and the API
+process gets `EVENTOR_API_BASE_URL=http://127.0.0.1:<port>/` so every
+Eventor call stays inside the stack. See
+[`docs/e2e-eventor-stub.md`](e2e-eventor-stub.md) for what it serves and
+why the suite can no longer talk to the real Eventor.
+
 ### Kiosk watchdog test hook
 
 The kiosk registration-waiting watchdog (production: 15s) can be
@@ -95,9 +104,9 @@ heartbeat it verifies is unchanged.
 
 ## Ports
 
-Shard ports (`4101-410N` API, `4201-420N` web) deliberately avoid the dev
-servers (3002/5173) and the Docker stack (3001/8080), so the full E2E
-suite can run while `pnpm dev` is up.
+Shard ports (`4101-410N` API, `4201-420N` web, `4301-430N` Eventor stub)
+deliberately avoid the dev servers (3002/5173) and the Docker stack
+(3001/8080), so the full E2E suite can run while `pnpm dev` is up.
 
 ## Troubleshooting
 

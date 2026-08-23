@@ -1,5 +1,14 @@
 # Eventor API key wiped on every E2E run
 
+> **Superseded (August 2026).** The snapshot/restore dance described
+> below is gone. E2E now runs against dedicated `oxygen_e2e*` databases
+> on `:5433`, so it cannot reach the developer's keys at all —
+> `global-teardown.ts` is a no-op and `e2e/.eventor-snapshot.json` is no
+> longer written. The related discovery that the "placeholder" key was
+> being validated against the live Eventor is addressed in
+> [`e2e-eventor-stub.md`](e2e-eventor-stub.md). Kept for the history of
+> why the suite touches these rows at all.
+
 ## Symptom
 
 The Eventor API key (`oxygen.oxygen_settings.eventor_api_key`) kept
