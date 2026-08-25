@@ -19,7 +19,16 @@ import { useSort } from "../hooks/useSort";
 import { MapSlot } from "../components/MapSlot";
 import { BulkActionBar } from "../components/BulkActionBar";
 import { useDeviceManager } from "../context/DeviceManager";
-import { STATION_MODE, AUTOSEND_MODE } from "../lib/si-protocol";
+import { STATION_MODE } from "../lib/si-protocol";
+import { toRecordProgrammingInput } from "../lib/control-programming-payload";
+import {
+  resolveAutosendMode,
+  statusSupportsAutosend,
+} from "../lib/control-station-config";
+import {
+  compareByControlNumber,
+  sortByControlNumber,
+} from "../lib/control-order";
 import { StructuredSearchBar } from "../components/structured-search/StructuredSearchBar";
 import { useStructuredSearch } from "../hooks/useStructuredSearch";
 import {
@@ -144,7 +153,7 @@ export function ControlsPage() {
 
   type Ctrl = NonNullable<typeof controls.data>[number];
   const comparators = useMemo(() => ({
-    code: (a: Ctrl, b: Ctrl) => a.id - b.id,
+    code: compareByControlNumber,
     name: (a: Ctrl, b: Ctrl) => a.name.localeCompare(b.name),
     codes: (a: Ctrl, b: Ctrl) => a.codes.localeCompare(b.codes),
     status: (a: Ctrl, b: Ctrl) => a.status - b.status,
@@ -720,6 +729,7 @@ function ControlInlineDetail({ controlId }: { controlId: number }) {
           <div>
             <label className="block text-xs font-medium text-slate-500 mb-1">{t("status")}</label>
             <select
+              data-testid="control-status-select"
               value={editStatus ?? d.status}
               onChange={(e) => {
                 const val = parseInt(e.target.value, 10);
@@ -749,6 +759,7 @@ function ControlInlineDetail({ controlId }: { controlId: number }) {
           <div>
             <label className="block text-xs font-medium text-slate-500 mb-1">{t("radioType")}</label>
             <select
+              data-testid="radio-type-select"
               value={config?.radioType ?? "normal"}
               onChange={(e) => {
                 upsertConfigMutation.mutate({
@@ -784,12 +795,18 @@ function ControlInlineDetail({ controlId }: { controlId: number }) {
 
           {(() => {
             const radioType = config?.radioType ?? "normal";
-            const autosendDisabled = radioType === "normal";
+            const status = editStatus ?? d.status;
+            const applies = statusSupportsAutosend(status);
+            const autosendDisabled = radioType === "normal" || !applies;
+            const disabledHint = !applies
+              ? t("autosendNotApplicableHint")
+              : t("autosendDisabledHint");
             const autosendValue = config?.autosendMode ?? "last";
             return (
               <div>
                 <label className="block text-xs font-medium text-slate-500 mb-1">{t("autosendMode")}</label>
                 <select
+                  data-testid="autosend-mode-select"
                   value={autosendValue}
                   disabled={autosendDisabled}
                   onChange={(e) => {
@@ -801,7 +818,7 @@ function ControlInlineDetail({ controlId }: { controlId: number }) {
                   className={`w-full px-3 py-1.5 border border-slate-200 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 ${
                     autosendDisabled ? "opacity-50 cursor-not-allowed" : "cursor-pointer"
                   }`}
-                  title={autosendDisabled ? t("autosendDisabledHint") : undefined}
+                  title={autosendDisabled ? disabledHint : undefined}
                 >
                   <option value="last">{t("autosendLast")}</option>
                   <option value="unsent">{t("autosendUnsent")}</option>
@@ -1037,6 +1054,9 @@ function ProgrammingPanel({
   const [autoPowerOff, setAutoPowerOff] = useState(false);
   const [autoMode, setAutoMode] = useState(false);
   const [targetControlId, setTargetControlId] = useState<number | "auto">("auto");
+  // The picker is scanned by eye, so it follows control number rather than
+  // the import order `control.list` hands back.
+  const pickerControls = useMemo(() => sortByControlNumber(controls), [controls]);
   const [ntpStatus, setNtpStatus] = useState<{
     browserToServerMs: number;
     serverNtpMs: number | null;
@@ -1085,8 +1105,11 @@ function ProgrammingPanel({
 
   const connected = readerStatus === "connected" || readerStatus === "reading";
 
+  // A failed record leaves the station programmed but the Controls list
+  // without battery / checked values, so the operator has to be told.
   const recordMutation = trpc.control.recordProgramming.useMutation({
     onSuccess: () => onProgrammed(),
+    onError: (err) => setError(t("recordProgrammingFailed", { error: err.message })),
   });
 
   const programStation = useCallback(async (
@@ -1162,17 +1185,11 @@ function ProgrammingPanel({
         break;
     }
 
-    // Resolve autosend variant. Only meaningful when radio is enabled — for
-    // "normal" controls the stored value is ignored at the wire level since
-    // we use non-BC station modes there.
-    const autosendByCfg = config?.autosendMode ?? "last";
-    const autosendMode = !enableSRR
-      ? AUTOSEND_MODE.OFF
-      : autosendByCfg === "all"
-        ? AUTOSEND_MODE.SEND_ALL
-        : autosendByCfg === "unsent"
-          ? AUTOSEND_MODE.SEND_UNSENT
-          : AUTOSEND_MODE.SEND_LAST;
+    const autosendMode = resolveAutosendMode({
+      status: matchedControl.status,
+      radioType,
+      autosendMode: config?.autosendMode,
+    });
 
     // Program the field control (pass rawData to skip redundant read)
     const { batteryVoltage, stationInfo: progInfo, timeDriftMs } = await reader.programControl({
@@ -1203,21 +1220,16 @@ function ProgrammingPanel({
 
     // Record in DB — keyed by station serial so two physical units fulfilling
     // the same logical control keep independent battery / checked state.
-    recordMutation.mutate({
-      controlId: matchedControl.id,
-      stationSerial: stationInfo.serialNo,
-      programmedCode: targetCode,
-      batteryVoltage,
-      firmwareVersion: progInfo.firmwareVersion,
-      modelId: progInfo.modelId,
-      modelName: progInfo.modelName,
-      memoryCleared: true,
-      // Capture the hardware SRR_CFG bit so the Controls list can
-      // light up an "SRR+" badge alongside the existing AIR+/radio
-      // indicators. parseStationInfo flips this from the SYS_VAL
-      // SRR_CFG byte (offset 0x04, bit 0).
-      srrCfg: progInfo.srrEnabled,
-    });
+    // The builder owns the volts → millivolts conversion and also carries
+    // the hardware SRR_CFG bit that drives the list's "SRR+" badge.
+    recordMutation.mutate(
+      toRecordProgrammingInput({
+        controlId: matchedControl.id,
+        programmedCode: targetCode,
+        batteryVoltage,
+        stationInfo: { ...progInfo, serialNo: stationInfo.serialNo },
+      }),
+    );
 
     lastProgrammedSerial.current = stationInfo.serialNo;
 
@@ -1371,12 +1383,13 @@ function ProgrammingPanel({
       <div className="flex items-center gap-2 mb-2">
         <label className="text-xs text-slate-600">{t("targetControl")}:</label>
         <select
+          data-testid="target-control-select"
           value={targetControlId}
           onChange={(e) => setTargetControlId(e.target.value === "auto" ? "auto" : Number(e.target.value))}
           className="text-xs border border-slate-300 rounded-lg px-2 py-1 bg-white"
         >
           <option value="auto">{t("targetAuto")}</option>
-          {controls.map((c) => (
+          {pickerControls.map((c) => (
             <option key={c.id} value={c.id}>
               {c.codes}{c.name ? ` — ${c.name}` : ""} ({controlStatusLabel(c.status)})
             </option>

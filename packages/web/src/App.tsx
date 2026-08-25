@@ -2,6 +2,8 @@ import { lazy, Suspense } from "react";
 import { Routes, Route, Navigate } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { useVersionCheck } from "./hooks/useVersionCheck";
+import { useServiceWorkerUpdate } from "./hooks/useServiceWorkerUpdate";
+import { resolveUpdateAction } from "./lib/app-update";
 import { DeviceManagerProvider } from "./context/DeviceManager";
 import { PrinterProvider } from "./context/PrinterContext";
 import { ErrorBoundary } from "./components/ErrorBoundary";
@@ -21,7 +23,12 @@ function PageSpinner() {
 }
 
 export default function App() {
-  const { updateAvailable, reload } = useVersionCheck();
+  const { updateAvailable: apiRestarted, reload } = useVersionCheck();
+  const { bundleWaiting, activate } = useServiceWorkerUpdate();
+  const { updateAvailable, action } = resolveUpdateAction({
+    apiRestarted,
+    bundleWaiting,
+  });
   const { t } = useTranslation();
 
   return (
@@ -31,7 +38,7 @@ export default function App() {
         <div className="fixed top-0 left-0 right-0 z-[9999] bg-blue-600 text-white text-center py-1.5 px-4 text-sm shadow-lg flex items-center justify-center gap-3">
           <span>{t("versionUpdate")}</span>
           <button
-            onClick={reload}
+            onClick={action === "activate-service-worker" ? activate : reload}
             className="bg-white text-blue-600 px-3 py-0.5 rounded font-medium hover:bg-blue-50 transition-colors cursor-pointer"
           >
             {t("reload")}

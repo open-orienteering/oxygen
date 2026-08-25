@@ -192,6 +192,47 @@ describe("control.recordProgramming", () => {
     expect(after!.batteryLow).toBe(true);
     expect(after!.memoryClearedAt?.getTime()).toBe(initialClearedAt!.getTime());
   });
+
+  it("accepts the explicit batteryVoltageMv field name", async () => {
+    const c = await caller.control.create({ codes: "62" });
+    const stationSerial = 600_003;
+    await caller.control.recordProgramming({
+      stationSerial,
+      controlId: c.id,
+      programmedCode: 62,
+      batteryVoltageMv: 3140,
+    });
+    const unit = await ctx.db.controlUnit.findUnique({
+      where: {
+        eventId_stationSerial: { eventId: ctx.eventId, stationSerial },
+      },
+    });
+    expect(unit!.batteryVoltageMv).toBe(3140);
+  });
+
+  it("rejects a voltage sent in volts instead of millivolts", async () => {
+    const c = await caller.control.create({ codes: "63" });
+    // The station reports 3.21 V. Passing that through unconverted used to
+    // fail validation silently and lose the whole programming record.
+    await expect(
+      caller.control.recordProgramming({
+        stationSerial: 600_004,
+        controlId: c.id,
+        programmedCode: 63,
+        batteryVoltage: 3.21,
+      }),
+    ).rejects.toThrow();
+    // A rounded volts value is an integer, so only the plausibility range
+    // catches it.
+    await expect(
+      caller.control.recordProgramming({
+        stationSerial: 600_005,
+        controlId: c.id,
+        programmedCode: 63,
+        batteryVoltage: 3,
+      }),
+    ).rejects.toThrow();
+  });
 });
 
 describe("control.getAirPlusConfig / setAirPlusConfig", () => {

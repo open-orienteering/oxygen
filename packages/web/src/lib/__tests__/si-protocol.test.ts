@@ -8,6 +8,8 @@ import {
   lookupModelName,
   deriveCapabilities,
   combineModeByte,
+  isBeaconMode,
+  resolveProgrammingMode,
   AUTOSEND_MODE,
   STATION_MODE,
   SYSVAL,
@@ -1519,5 +1521,123 @@ describe("combineModeByte", () => {
     // are silently ignored.
     expect(combineModeByte(STATION_MODE.BC_CONTROL, 0xff))
       .toBe(STATION_MODE.BC_CONTROL | 0xe0);
+  });
+});
+
+describe("isBeaconMode", () => {
+  it("accepts the four BC modes", () => {
+    expect(isBeaconMode(STATION_MODE.BC_CONTROL)).toBe(true);
+    expect(isBeaconMode(STATION_MODE.BC_START)).toBe(true);
+    expect(isBeaconMode(STATION_MODE.BC_FINISH)).toBe(true);
+    expect(isBeaconMode(STATION_MODE.BC_READOUT)).toBe(true);
+  });
+
+  it("rejects every non-beacon mode, including check", () => {
+    expect(isBeaconMode(STATION_MODE.CONTROL)).toBe(false);
+    expect(isBeaconMode(STATION_MODE.CHECK)).toBe(false);
+    expect(isBeaconMode(STATION_MODE.CLEAR)).toBe(false);
+    expect(isBeaconMode(STATION_MODE.READOUT)).toBe(false);
+  });
+});
+
+describe("resolveProgrammingMode", () => {
+  const PROTO_AUTOSEND = 0x02;
+
+  it("matches the Config+ capture for a radio control (0x72 + PROTO gate)", () => {
+    const { modeByte, protoByte } = resolveProgrammingMode({
+      baseMode: STATION_MODE.BC_CONTROL,
+      autosendMode: AUTOSEND_MODE.SEND_LAST,
+      currentProto: 0x01,
+    });
+    expect(modeByte).toBe(0x72);
+    expect(protoByte).toBe(0x03);
+  });
+
+  it("defaults a beacon mode to SEND_LAST when no variant is given", () => {
+    const { modeByte, protoByte } = resolveProgrammingMode({
+      baseMode: STATION_MODE.BC_CONTROL,
+      currentProto: 0x01,
+    });
+    expect(modeByte).toBe(0x72);
+    expect(protoByte & PROTO_AUTOSEND).toBe(PROTO_AUTOSEND);
+  });
+
+  it("clears the PROTO gate for a beacon mode set to OFF (no radio)", () => {
+    const { modeByte, protoByte } = resolveProgrammingMode({
+      baseMode: STATION_MODE.BC_CONTROL,
+      autosendMode: AUTOSEND_MODE.OFF,
+      currentProto: 0x03,
+    });
+    expect(modeByte).toBe(0x32);
+    expect(protoByte).toBe(0x01);
+  });
+
+  // SI's mode table has no BC_CHECK, so a radio-equipped check station gets
+  // the plain CHECK mode byte plus the mode-independent PROTO gate.
+  it("gates autosend on a check station without touching the mode byte", () => {
+    const { modeByte, protoByte } = resolveProgrammingMode({
+      baseMode: STATION_MODE.CHECK,
+      autosendMode: AUTOSEND_MODE.SEND_LAST,
+      currentProto: 0x01,
+    });
+    expect(modeByte).toBe(STATION_MODE.CHECK);
+    expect(protoByte).toBe(0x03);
+  });
+
+  it("leaves a check station alone when autosend is OFF or unspecified", () => {
+    expect(
+      resolveProgrammingMode({
+        baseMode: STATION_MODE.CHECK,
+        autosendMode: AUTOSEND_MODE.OFF,
+        currentProto: 0x03,
+      }),
+    ).toEqual({ modeByte: STATION_MODE.CHECK, protoByte: 0x01 });
+
+    expect(
+      resolveProgrammingMode({
+        baseMode: STATION_MODE.CHECK,
+        currentProto: 0x03,
+      }),
+    ).toEqual({ modeByte: STATION_MODE.CHECK, protoByte: 0x01 });
+  });
+
+  // SRR radio and AIR+ are separate features: a plain control station with
+  // an SRR module transmits without ever entering beacon mode.
+  it("gates autosend on a plain control station (SRR without AIR+)", () => {
+    const { modeByte, protoByte } = resolveProgrammingMode({
+      baseMode: STATION_MODE.CONTROL,
+      autosendMode: AUTOSEND_MODE.SEND_ALL,
+      currentProto: 0x01,
+    });
+    expect(modeByte).toBe(STATION_MODE.CONTROL);
+    expect(protoByte).toBe(0x03);
+  });
+
+  it("always gates a direct readout station, even with no variant asked for", () => {
+    const { modeByte, protoByte } = resolveProgrammingMode({
+      baseMode: STATION_MODE.READOUT,
+      currentProto: 0x01,
+    });
+    expect(modeByte).toBe(STATION_MODE.READOUT);
+    expect(protoByte).toBe(0x03);
+  });
+
+  it("preserves the unrelated PROTO bits in both directions", () => {
+    const busy = 0x3d; // extended, handshake, legacy, sprint4ms, card6_192
+    expect(
+      resolveProgrammingMode({
+        baseMode: STATION_MODE.CHECK,
+        autosendMode: AUTOSEND_MODE.SEND_UNSENT,
+        currentProto: busy,
+      }).protoByte,
+    ).toBe(busy | PROTO_AUTOSEND);
+
+    expect(
+      resolveProgrammingMode({
+        baseMode: STATION_MODE.CLEAR,
+        autosendMode: AUTOSEND_MODE.OFF,
+        currentProto: busy | PROTO_AUTOSEND,
+      }).protoByte,
+    ).toBe(busy);
   });
 });

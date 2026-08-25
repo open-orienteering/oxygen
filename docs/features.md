@@ -24,7 +24,7 @@ A race director's workspace, kept fresh end to end — dashboard, draw, kiosk, a
 
 The event page is mission control for external integrations. Everything the Swedish orienteering stack relies on is wired into one screen:
 
-- **Eventor sync** — import entries, classes, clubs, and competitors; upload start lists and results in the IOF XML formats Eventor expects.
+- **Eventor sync** — import entries, classes, clubs, competitors, and published class-course lengths; upload start lists and results in the IOF XML formats Eventor expects.
 - **Global Runner Database** — download the federation-wide runner directory for fast name/card lookup at registration.
 - **Club sync** — pull club metadata and logos.
 - **LiveResults** — push live splits to [liveresultat.se](https://liveresultat.se) on a configurable interval.
@@ -52,7 +52,7 @@ The overprint also cuts itself automatically, the way a careful course setter wo
 
 ### Course export for printing
 
-Oxygen doesn't print maps yet, so the Courses page has an **Export IOF XML** button that writes the whole course set — controls with paper-millimetre positions, course sequences with leg lengths, and class assignments — as an IOF 3.0 CourseData file. Open it in Condes, Purple Pen or OCAD to print, or import it into another Oxygen event; the round-trip through Oxygen's own importer is lossless. See [iof-coursedata-export.md](iof-coursedata-export.md).
+Oxygen doesn't print maps yet, so the Courses page has an **Export IOF XML** button that writes the whole course set — controls with paper-millimetre positions, course sequences with leg lengths, and class assignments — as an IOF 3.0 CourseData file. Open it in Condes, Purple Pen or OCAD to print, or import it into another Oxygen event; the round-trip through Oxygen's own importer is lossless. Export derives legs from the current coordinates and OCAD CRS scale; edited courses also get a freshly-derived total, while untouched imports retain deliberate OCAD/IOF extra distance. For Eventor-linked events, sync can repair an untouched imported total from Eventor's published class-course length but never overwrites a course edited in Oxygen. See [iof-coursedata-export.md](iof-coursedata-export.md), [bugfix-ocad-course-scale-and-export-lengths.md](bugfix-ocad-course-scale-and-export-lengths.md), and [bugfix-eventor-course-lengths.md](bugfix-eventor-course-lengths.md).
 
 ### Classes
 
@@ -68,7 +68,11 @@ Battery voltage, last-checked time, programmed code, firmware, and hardware type
 
 Programming now performs a post-write SYS_VAL refresh before persisting battery data, which removes the old "freshly woken control shows exactly 3.00 V" artifact. The power-off sequence also returns the BSM8 to direct mode after OFF so the next coupling-coil probe doesn't immediately re-wake a just-programmed sleeping unit.
 
-When a control is programmed from the UI, the unit row is upserted automatically; backup-memory reads are attributed to the reading unit too.
+When a control is programmed from the UI, the unit row is upserted automatically; backup-memory reads are attributed to the reading unit too. The station's volts reading is converted to the millivolts the API stores, and a station that was programmed but whose record could not be saved now reports the failure instead of looking like a success — see [bugfix-control-programming-battery-units.md](bugfix-control-programming-battery-units.md).
+
+The pre-competition programming panel's target-control picker is ordered by control number rather than the import order the API returns, so a code can be found by scanning.
+
+Autosend follows the radio type rather than AIR+, since SRR transmission and contactless punching are independent features. A check station or a plain control with an SRR module therefore gets the protocol-level autosend gate without entering beacon mode, while clear and readout stations no longer offer a variant they would discard — see [bugfix-check-station-autosend.md](bugfix-check-station-autosend.md).
 
 The structured search bar supports an `ordinal:` filter for a control's position within a course, matching when any course has it at that position — `ordinal:1` lists every course's first control, `ordinal:-2` the second-to-last before finish (negative values count from the end), and comma lists combine (`ordinal:1,-1`).
 
@@ -199,6 +203,8 @@ Every readout lands here — card type, battery, owner, current punches, and sta
 
 Enable LiveResults on the event page and Oxygen will push splits to [liveresultat.se](https://liveresultat.se) on the interval you pick (typically 30 s during a race). Punches flow through the same pipeline that drives the local results view, so what's published matches what's on screen.
 
+Radio controls are stored in LiveResults' `visit × 1000 + code` form (first punch of 82 → `1082`) so a MeOS upload to the same competition can share the radio columns. Each sync only rewrites `splitcontrols` for Oxygen's own class names; it does not wipe radios another client attached under a different class name. Do not leave Oxygen's pusher and MeOS Resultat-online running against the same `tavid` at once — they still disagree on class names (`U4` vs `U4 3 km`) and runner ids.
+
 ---
 
 ## GPS Tracks
@@ -234,6 +240,7 @@ Every competition lives in its own database, so you can keep last year's series,
 Oxygen is a Progressive Web App designed to work during internet outages — from brief drops to full-day operation at forest venues with no connectivity.
 
 - **Service worker** precaches all static assets, so the app loads instantly even offline.
+- **Update prompt** — an open tab checks for a newly deployed bundle every minute and offers a reload, which activates the waiting service worker rather than serving the precached bundle again. The build timestamp is shown in the Sync Status footer and on the competition list, so a stale tab is recognisable — see [bugfix-stale-web-bundle-after-deploy.md](bugfix-stale-web-bundle-after-deploy.md).
 - **Pre-fetch on station pages** — runners, classes, courses, controls, and clubs are cached to IndexedDB when a start/finish/kiosk station mounts, and survive browser restarts and overnight power-off.
 - **Event-based mutation queue** — all finish recordings, registrations, and edits are stored locally and drained to the server when connectivity returns. A visible banner tells you how many events are queued.
 - **Local result computation** — the finish station runs the same course matching, status rules, and position ranking as the server, so it can print a valid receipt from cached data even while the network is down.
