@@ -1119,6 +1119,59 @@ export function combineModeByte(
   return (baseMode & 0x1f) | (autosend & 0xe0);
 }
 
+/** True if the mode byte is one of SI's beacon (AIR+) station modes. */
+export function isBeaconMode(baseMode: number): boolean {
+  return (
+    baseMode === STATION_MODE.BC_CONTROL ||
+    baseMode === STATION_MODE.BC_START ||
+    baseMode === STATION_MODE.BC_FINISH ||
+    baseMode === STATION_MODE.BC_READOUT
+  );
+}
+
+/** PROTO byte (offset 0x74) bit 1 — the protocol-level autosend gate. */
+const PROTO_AUTOSEND = 0x02;
+
+/**
+ * Resolve the MODE (0x71) and PROTO (0x74) bytes for a programming write.
+ *
+ * Two independent mechanisms decide whether a station transmits, which is
+ * why they are resolved together:
+ *
+ *  - MODE bits 5-7 carry the autosend *variant* — which records to send.
+ *    Config+ only ever emits them for beacon modes, so they stay clear for
+ *    every other operating mode. There is no BC_CHECK in SI's mode table,
+ *    so a check station can never carry a variant.
+ *  - PROTO bit 1 is the *gate*, and it is mode independent. Without it no
+ *    mode transmits; with it a non-beacon mode does. M_READOUT depends on
+ *    exactly that (see docs/si-protocol/readout-backup-format.md), and so
+ *    does an SRR-equipped check or plain control station.
+ *
+ * `autosendMode` is what the operator asked for. Beacon modes keep their
+ * historical default of SEND_LAST when it is omitted; every other mode
+ * defaults to no autosend. M_READOUT always gets the gate — a readout
+ * station that never pushes readouts to the host is useless.
+ */
+export function resolveProgrammingMode(args: {
+  baseMode: number;
+  autosendMode?: number;
+  currentProto: number;
+}): { modeByte: number; protoByte: number } {
+  const { baseMode, currentProto } = args;
+  const beacon = isBeaconMode(baseMode);
+  const requested =
+    args.autosendMode ?? (beacon ? AUTOSEND_MODE.SEND_LAST : AUTOSEND_MODE.OFF);
+  const variant = beacon ? requested : 0;
+  const gated =
+    requested !== AUTOSEND_MODE.OFF || baseMode === STATION_MODE.READOUT;
+  return {
+    modeByte: combineModeByte(baseMode, variant),
+    protoByte: gated
+      ? currentProto | PROTO_AUTOSEND
+      : currentProto & ~PROTO_AUTOSEND,
+  };
+}
+
 /**
  * SPORTident hardware MODEL_ID → product name lookup.
  *
