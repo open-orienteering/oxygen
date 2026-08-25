@@ -204,6 +204,8 @@ interface TextRecords {
     classes: { className: string; courseName: string; runners: number }[];
     legOverrides: LegOverride[];
     doglegMarkers: DoglegMarker[];
+    /** OCAD parameter string 1039 (`m<scale>`), e.g. m15000. */
+    mapScale: number | null;
 }
 
 function parseTextRecords(buf: Buffer, version: number): TextRecords {
@@ -211,6 +213,7 @@ function parseTextRecords(buf: Buffer, version: number): TextRecords {
     const classes: { className: string; courseName: string; runners: number }[] = [];
     const legOverrides: LegOverride[] = [];
     const doglegMarkers: DoglegMarker[] = [];
+    let mapScale: number | null = null;
 
     const stringParamIndexOff = version > 10 ? buf.readUInt32LE(32) : buf.readUInt32LE(20);
     let blockOff = stringParamIndexOff;
@@ -226,12 +229,17 @@ function parseTextRecords(buf: Buffer, version: number): TextRecords {
             const strType = buf.readInt32LE(eOff + 8);
             if (filePos > 0 && filePos < buf.length && len > 0) {
                 const txt = buf.slice(filePos, filePos + len).toString('utf8').replace(/\0+$/, '');
+                if (strType === 1039) {
+                    const match = txt.match(/(?:^|\t)m(\d+(?:\.\d+)?)(?:\t|$)/);
+                    const parsed = match ? Number(match[1]) : 0;
+                    if (parsed >= 1000) mapScale = parsed;
+                }
                 parseRecord(txt, courses, classes, legOverrides, doglegMarkers, strType);
             }
         }
         blockOff = nextBlock;
     }
-    return { courses, classes, legOverrides, doglegMarkers };
+    return { courses, classes, legOverrides, doglegMarkers, mapScale };
 }
 
 function parseRecord(txt: string, courses: Map<string, any>, classes: any[], legOverrides: any[], doglegMarkers: any[], strType?: number): void {
@@ -524,9 +532,11 @@ export function parseOCDCourseData(fileData: Buffer): ParsedOCDCourseData {
         }
     }
 
-    let mapScale = 7500;
-    const sMatch = fileData.toString("utf8", 0, 50000).match(/\bm(\d+)\b/);
-    if (sMatch) { const s = parseInt(sMatch[1], 10); if (s >= 1000) mapScale = s; }
+    // Parameter string 1039 is the canonical source. It can live anywhere
+    // in a multi-megabyte OCAD file; scanning only the first 50 kB caused
+    // real 1:15 000 maps to silently fall back to 1:7 500 and halved every
+    // imported course length.
+    const mapScale = textRecs.mapScale ?? 7500;
 
     // ─── Build per-course leg segment lookup ─────────────────────────────────
     // Key: "<courseId>:<from>-><to>", Value: array of coordinate arrays
@@ -636,6 +646,7 @@ export function parseOCDCourseData(fileData: Buffer): ParsedOCDCourseData {
         const all = [cDef.startId || "STA1", ...cDef.controls, cDef.finishId || "FIN1"];
 
         const courseSpecificLegs = legSegmentsByCourse.get(courseName);
+        let incomingLegLength = 0;
 
         for (let i = 0; i < all.length; i++) {
             const code = all[i];
@@ -644,6 +655,13 @@ export function parseOCDCourseData(fileData: Buffer): ParsedOCDCourseData {
             let type: "Start" | "Finish" | "Control" = "Control";
             if (i === 0) type = "Start";
             else if (i === all.length - 1) type = "Finish";
+            // ParsedCourseControl follows IOF CourseData semantics:
+            // LegLength belongs to the leg leading INTO this control.
+            cCtrls.push({
+                controlId: code,
+                type,
+                legLength: incomingLegLength,
+            });
 
             // Use slit data read from the 703000 object. The file stores the
             // exact slit angles placed by the course setter to reveal map detail.
@@ -670,7 +688,7 @@ export function parseOCDCourseData(fileData: Buffer): ParsedOCDCourseData {
                 if (nextPos) {
                     const d = Math.sqrt((nextPos.xMm - ctrlPos.xMm) ** 2 + (nextPos.yMm - ctrlPos.yMm) ** 2);
                     totalDistMm += d;
-                    cCtrls.push({ controlId: code, type, legLength: Math.round(d * mapScale / 1000) });
+                    incomingLegLength = Math.round(d * mapScale / 1000);
 
                     const legKey = `${code}->${nextCode}`;
 
@@ -696,8 +714,6 @@ export function parseOCDCourseData(fileData: Buffer): ParsedOCDCourseData {
                         });
                     }
                 }
-            } else {
-                cCtrls.push({ controlId: code, type, legLength: 0 });
             }
         }
 

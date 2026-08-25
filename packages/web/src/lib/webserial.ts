@@ -23,8 +23,7 @@ import {
   ACK,
   SYSVAL,
   STATION_MODE,
-  AUTOSEND_MODE,
-  combineModeByte,
+  resolveProgrammingMode,
   supportsFullReadout,
   buildCommand,
   buildSetSysVal,
@@ -881,36 +880,14 @@ export class SIReaderConnection extends EventTarget {
     const baseMode =
       config.stationMode ??
       (config.enableAirPlus ? STATION_MODE.BC_CONTROL : STATION_MODE.CONTROL);
-    const isBcMode =
-      baseMode === STATION_MODE.BC_CONTROL ||
-      baseMode === STATION_MODE.BC_START ||
-      baseMode === STATION_MODE.BC_FINISH ||
-      baseMode === STATION_MODE.BC_READOUT;
-    const autosend = isBcMode
-      ? (config.autosendMode ?? AUTOSEND_MODE.SEND_LAST)
-      : 0;
-    const modeByte = combineModeByte(baseMode, autosend);
-
-    // PROTO byte (offset 0x74): bit 1 (0x02) is the protocol-level
-    // autosend gate. MODE high bits do nothing without it. Read-modify-
-    // write so we don't disturb extended (bit 0), handshake (bit 2), etc.
-    //
-    // Set autosend for either:
-    //  - a BC mode whose autosend variant is not explicitly OFF (the
-    //    radio-broadcast use case), OR
-    //  - M_READOUT direct mode — the station emits a full card readout
-    //    over the serial link to the host on each card insertion. Without
-    //    this bit a standalone readout station silently writes to backup
-    //    flash but never beeps/responds while online. Matches the PROTO
-    //    byte (0x03) observed on a working readout station from a Config+
-    //    capture (see docs/si-protocol/readout-backup-format.md).
-    const currentProto = sysValData[P + SYSVAL.PROTO];
-    const wantAutosend =
-      (isBcMode && autosend !== AUTOSEND_MODE.OFF) ||
-      baseMode === STATION_MODE.READOUT;
-    const protoByte = wantAutosend
-      ? (currentProto | 0x02)
-      : (currentProto & ~0x02);
+    // MODE (0x71) carries the autosend variant for beacon modes only; PROTO
+    // (0x74) bit 1 is the mode-independent gate. Read-modify-write on PROTO
+    // so extended (bit 0), handshake (bit 2) and friends survive untouched.
+    const { modeByte, protoByte } = resolveProgrammingMode({
+      baseMode,
+      autosendMode: config.autosendMode,
+      currentProto: sysValData[P + SYSVAL.PROTO],
+    });
 
     // Station code → CODE byte + high bits into FEEDBACK byte. Force
     // optical (bit 0), acoustic (bit 1), and flash (bit 2) feedback ON
@@ -949,7 +926,7 @@ export class SIReaderConnection extends EventTarget {
       buildCommand(CMD.SET_SYSTEM_VALUE, [0x10, ...buf]),
       CMD.SET_SYSTEM_VALUE,
     );
-    lap(`SET_SYS_VAL(bulk 0x10-0x7F, mode=0x${modeByte.toString(16)}, autosend=0x${autosend.toString(16)})`);
+    lap(`SET_SYS_VAL(bulk 0x10-0x7F, mode=0x${modeByte.toString(16)}, proto=0x${protoByte.toString(16)})`);
 
     // 3. Sync time
     await this.sendAndWait(buildSetTime(new Date()), CMD.SET_TIME);

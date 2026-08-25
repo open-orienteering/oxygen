@@ -10,6 +10,16 @@ test.describe("Competition Selection", () => {
     ).toBeVisible();
   });
 
+  test("should show the build version in the footer", async ({ page }) => {
+    // An operator needs to be able to tell which build a tab is running —
+    // a stale tab after a deploy is otherwise invisible.
+    await page.goto("/");
+
+    const version = page.getByTestId("build-version");
+    await expect(version).toBeVisible({ timeout: 10000 });
+    await expect(version).toHaveText(/Build: \d{4}-\d{2}-\d{2} \d{2}:\d{2}/);
+  });
+
   test("should list competitions from the database", async ({ page }) => {
     await page.goto("/");
 

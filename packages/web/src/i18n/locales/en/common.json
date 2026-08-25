@@ -67,6 +67,7 @@
   "database": "Database",
   "versionUpdate": "A new version is available.",
   "reload": "Reload",
+  "buildVersion": "Build",
 
   "testLab": "Test Lab",
   "testLabDescription": "Generate test data and simulate races for stress testing. Work through the four stages in order — each stage depends on the previous one.",

@@ -94,12 +94,23 @@ export async function buildEventCourseDataXml(
 
   const starts = controls.filter((c) => c.status === "start");
   const finishes = controls.filter((c) => c.status === "finish");
+  const placedSiteById = new Map<string, ExportControlSite>();
+  for (const site of sites) {
+    if (
+      (site.xMm !== 0 || site.yMm !== 0) &&
+      !placedSiteById.has(site.id)
+    ) {
+      // buildCourseDataXml also resolves duplicate public ids first-wins.
+      placedSiteById.set(site.id, site);
+    }
+  }
 
   const courseRows = await db.course.findMany({
     where: { eventId: event.id, removed: false },
     orderBy: { seq: "asc" },
     select: {
       id: true, name: true, lengthM: true, climbM: true, legs: true,
+      geometrySource: true,
       firstAsStart: true, lastAsFinish: true, startName: true,
       finishControlId: true,
       courseControls: {
@@ -158,9 +169,40 @@ export async function buildEventCourseDataXml(
       for (let i = 1; i < seq.length; i++) seq[i].legLengthM = legs[i - 1];
     }
 
+    // Derive every exported leg from the current control coordinates and
+    // current OCAD scale. This makes export resilient to stale `legs` rows
+    // written by older imports. Unplaced controls are skipped exactly as
+    // buildCourseDataXml skips them.
+    let previous: ExportControlSite | null = null;
+    let computedLengthM = 0;
+    for (const cc of seq) {
+      const site = placedSiteById.get(cc.controlId);
+      if (!site) continue;
+      if (previous && mapScale > 0) {
+        const dx = site.xMm - previous.xMm;
+        const dy = site.yMm - previous.yMm;
+        const legLengthM =
+          Math.round((Math.sqrt(dx * dx + dy * dy) * mapScale) / 1000);
+        cc.legLengthM = legLengthM;
+        computedLengthM += legLengthM;
+      }
+      previous = site;
+    }
+
+    // Imported OCD/XML courses may carry an intentional published length
+    // (detours around forbidden terrain, marked routes, extra distance).
+    // Preserve that until the course is edited. Editor-owned courses are
+    // geometry-derived and are recomputed defensively at export time too.
+    const lengthM =
+      course.geometrySource === "editor" && computedLengthM > 0
+        ? computedLengthM
+        : course.lengthM > 0
+          ? course.lengthM
+          : computedLengthM;
+
     courses.push({
       name: course.name,
-      lengthM: course.lengthM,
+      lengthM,
       climbM: course.climbM,
       controls: seq,
     });

@@ -178,6 +178,88 @@ test.describe("Controls Page", () => {
     await expect(page.getByText("23 controls")).toBeVisible({ timeout: 5000 });
   });
 
+  test("should order the programming target picker by control number", async ({
+    page,
+  }) => {
+    // control.list hands back import (seq) order; the picker is scanned by
+    // eye, so its options must climb by control number instead. The seed is
+    // already in ascending code order, so create a low code last — in import
+    // order it would land at the bottom of the picker.
+    await page.goto("/itest/controls");
+    await expect(page.getByText("23 controls")).toBeVisible({ timeout: 15000 });
+
+    await page.getByRole("button", { name: "New Control" }).click();
+    await page.getByPlaceholder("e.g. 50 or 50;250").fill("5");
+    await page.getByPlaceholder("e.g. Radio 1 (optional)").fill("Late Low Code");
+    await page.getByRole("button", { name: "Create" }).click();
+    await expect(page.getByText("24 controls")).toBeVisible({ timeout: 5000 });
+
+    await page.getByRole("button", { name: "Program Controls" }).click();
+    const picker = page.getByTestId("target-control-select");
+    await expect(picker).toBeVisible({ timeout: 5000 });
+
+    const codes = await picker
+      .locator("option:not([value='auto'])")
+      .evaluateAll((opts) =>
+        opts.map((o) => parseInt(o.textContent?.split(/[;\s]/)[0] ?? "", 10)),
+      );
+
+    expect(codes).toEqual([...codes].sort((a, b) => a - b));
+    expect(codes[0]).toBe(5);
+
+    const search = page.getByPlaceholder("Search code, name...");
+    await search.fill("Late Low Code");
+    await search.press("Enter");
+    await expect(page.getByText("1 controls")).toBeVisible({ timeout: 5000 });
+    page.on("dialog", (dialog) => dialog.accept());
+    await page.getByTitle("Remove control").click();
+    await expect(page.getByText("No controls found")).toBeVisible({ timeout: 5000 });
+  });
+
+  test("should gate the autosend dropdown on radio type and station type", async ({
+    page,
+  }) => {
+    // Autosend needs a radio to transmit over, and it means nothing on a
+    // clear station. Operate on a throwaway control so the seed's radio
+    // config and statuses stay untouched for later suites.
+    await page.goto("/itest/controls");
+    await expect(page.getByText("23 controls")).toBeVisible({ timeout: 15000 });
+
+    await page.getByRole("button", { name: "New Control" }).click();
+    await page.getByPlaceholder("e.g. 50 or 50;250").fill("998");
+    await page.getByPlaceholder("e.g. Radio 1 (optional)").fill("Autosend Control");
+    await page.getByRole("button", { name: "Create" }).click();
+    await expect(page.getByRole("cell", { name: "Autosend Control" })).toBeVisible({
+      timeout: 5000,
+    });
+
+    await page.getByRole("cell", { name: "Autosend Control" }).click();
+    const autosend = page.getByTestId("autosend-mode-select");
+    await expect(autosend).toBeVisible({ timeout: 5000 });
+
+    // No radio configured yet.
+    await expect(autosend).toBeDisabled();
+
+    await page.getByTestId("radio-type-select").selectOption("internal_radio");
+    await expect(autosend).toBeEnabled({ timeout: 5000 });
+
+    // A clear station has nothing to transmit, radio or not.
+    await page.getByTestId("control-status-select").selectOption("12");
+    await expect(autosend).toBeDisabled({ timeout: 5000 });
+
+    // Back to a normal control and the selection applies again.
+    await page.getByTestId("control-status-select").selectOption("0");
+    await expect(autosend).toBeEnabled({ timeout: 5000 });
+
+    const search = page.getByPlaceholder("Search code, name...");
+    await search.fill("998");
+    await search.press("Enter");
+    await expect(page.getByText("1 controls")).toBeVisible({ timeout: 5000 });
+    page.on("dialog", (dialog) => dialog.accept());
+    await page.getByTitle("Remove control").click();
+    await expect(page.getByText("No controls found")).toBeVisible({ timeout: 5000 });
+  });
+
   test("should filter controls by ordinal within a course", async ({ page }) => {
     // Seed courses: Bana 1 = 67,...,54,100 · Bana 2 = 81,50,40,150,100 ·
     // Bana 3 = 61,34,50,79,89,150,93,100. So ordinal:1 → {67, 81, 61},

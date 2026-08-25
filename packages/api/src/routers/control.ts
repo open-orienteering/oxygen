@@ -244,6 +244,16 @@ export function publicControlId(c: { codes: string; seq: number }): number {
 }
 
 /**
+ * Station battery reading in millivolts.
+ *
+ * SI stations report volts (`(raw * 5) / 65536`, so at most ~5 V), and
+ * `control_units.battery_voltage_mv` is an INT. The range makes the
+ * volts-vs-millivolts mistake fail loudly at the boundary instead of
+ * storing a nonsense value.
+ */
+const batteryMvSchema = z.number().int().min(500).max(10_000).optional();
+
+/**
  * IOF control description input ({ c, d, g, s, f } in the OCAD text
  * encoding — see `ControlDescription` in @oxygen/shared).
  */
@@ -1057,12 +1067,19 @@ export const controlRouter = router({
         modelId: z.number().int().optional(),
         modelName: z.string().optional(),
         /**
-         * Battery voltage in millivolts read from the station during
+         * Battery voltage in **millivolts** read from the station during
          * programming. Persisted on `control_units.battery_voltage_mv`
          * so the Controls page can light up the low-battery badge and
          * the operator can see exactly when a unit was last seen.
+         *
+         * `batteryVoltage` is the legacy input name and carries the same
+         * unit; `batteryVoltageMv` spells it out. The lower bound rejects
+         * a reading accidentally passed through in volts (SI hardware
+         * reports volts), which would otherwise persist as a few mV and
+         * permanently mark the unit as flat.
          */
-        batteryVoltage: z.number().int().optional(),
+        batteryVoltage: batteryMvSchema,
+        batteryVoltageMv: batteryMvSchema,
         batteryLow: z.boolean().optional(),
         /** Operator flagged that they wiped the station's backup memory. */
         memoryCleared: z.boolean().optional(),
@@ -1087,6 +1104,7 @@ export const controlRouter = router({
       // automatically — once stamped, the most-recent wipe sticks
       // until the next operator action.
       const memoryClearedAt = input.memoryCleared ? now : undefined;
+      const batteryVoltageMv = input.batteryVoltageMv ?? input.batteryVoltage;
       await ctx.db.controlUnit.upsert({
         where: {
           eventId_stationSerial: {
@@ -1103,7 +1121,7 @@ export const controlRouter = router({
           firmwareVersion: input.firmwareVersion ?? null,
           modelId: input.modelId ?? null,
           modelName: input.modelName ?? null,
-          batteryVoltageMv: input.batteryVoltage ?? null,
+          batteryVoltageMv: batteryVoltageMv ?? null,
           batteryLow: input.batteryLow ?? false,
           memoryClearedAt: memoryClearedAt ?? null,
           srrCfg: input.srrCfg ?? false,
@@ -1124,9 +1142,7 @@ export const controlRouter = router({
             : {}),
           ...(input.modelId !== undefined ? { modelId: input.modelId } : {}),
           ...(input.modelName !== undefined ? { modelName: input.modelName } : {}),
-          ...(input.batteryVoltage !== undefined
-            ? { batteryVoltageMv: input.batteryVoltage }
-            : {}),
+          ...(batteryVoltageMv !== undefined ? { batteryVoltageMv } : {}),
           ...(input.batteryLow !== undefined
             ? { batteryLow: input.batteryLow }
             : {}),

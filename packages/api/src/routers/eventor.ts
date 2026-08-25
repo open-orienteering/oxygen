@@ -262,7 +262,18 @@ async function syncClassesFromEventor(
   const db = prisma();
   const existing = await db.class.findMany({
     where: { eventId, removed: false },
-    select: { id: true, name: true, eventorId: true, sortIndex: true, sex: true, lowAge: true, highAge: true, noTiming: true, classType: true },
+    select: {
+      id: true,
+      name: true,
+      eventorId: true,
+      courseId: true,
+      sortIndex: true,
+      sex: true,
+      lowAge: true,
+      highAge: true,
+      noTiming: true,
+      classType: true,
+    },
   });
   const byEventorId = new Map(
     existing
@@ -274,10 +285,16 @@ async function syncClassesFromEventor(
   let maxSortIdx = Math.max(0, ...existing.map((c) => c.sortIndex));
   let added = 0;
   let updated = 0;
+  const lengthsByCourseId = new Map<string, Set<number>>();
 
   for (const ec of eventorClasses) {
     const existingRow = byEventorId.get(ec.classId);
     if (existingRow) {
+      if (existingRow.courseId && (ec.courseLengthM ?? 0) > 0) {
+        const lengths = lengthsByCourseId.get(existingRow.courseId) ?? new Set();
+        lengths.add(ec.courseLengthM!);
+        lengthsByCourseId.set(existingRow.courseId, lengths);
+      }
       const needsUpdate =
         existingRow.name !== ec.name ||
         existingRow.sex !== (ec.sex || "") ||
@@ -322,6 +339,26 @@ async function syncClassesFromEventor(
       added++;
     }
   }
+
+  // Eventor's IOF start list is authoritative for the published class
+  // course length. Only update a shared course when every assigned class
+  // reported the same positive value; conflicting values indicate a bad
+  // class-course assignment and must not be resolved by last-write-wins.
+  for (const [courseId, lengths] of lengthsByCourseId) {
+    if (lengths.size !== 1) continue;
+    await db.course.updateMany({
+      // Once a course has been edited in Oxygen, its freshly-derived
+      // geometry/length supersedes Eventor's previously published snapshot.
+      where: {
+        id: courseId,
+        eventId,
+        removed: false,
+        geometrySource: { not: "editor" },
+      },
+      data: { lengthM: [...lengths][0] },
+    });
+  }
+
   return { added, updated, classByEventorId: result };
 }
 
