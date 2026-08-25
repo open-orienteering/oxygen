@@ -82,7 +82,7 @@ If you have access to the Swedish Orienteering Federation's Eventor system, you 
 1. Log in to [eventor.orientering.se](https://eventor.orientering.se) → your profile → API key
 2. Open Oxygen → Settings → paste the key
 
-This syncs entries, clubs, and competitors automatically and lets you upload results/start lists to Test-Eventor.
+This syncs entries, clubs, and competitors automatically and lets you upload results/start lists back to whichever Eventor the event is linked to — Test-Eventor or production.
 
 ## License
 
