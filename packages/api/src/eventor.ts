@@ -1248,8 +1248,39 @@ function buildCardRentalService(
 }
 
 /**
+ * POST a zipped IOF document to one of Eventor's import endpoints.
+ *
+ * Eventor accepts the XML only as a ZIP payload, keyed by the `ApiKey`
+ * header, and rejects it with a plain-text reason (e.g. "Must be exactly
+ * one event class"). The endpoint is named in the error so a failure says
+ * which of the two uploads it was.
+ */
+async function postZip(
+  apiKey: string,
+  endpoint: string,
+  zip: AdmZip,
+  env: EventorEnvironment,
+): Promise<void> {
+  const url = new URL(endpoint, eventorBaseUrl(env));
+  const resp = await fetch(url.toString(), {
+    method: "POST",
+    headers: { ApiKey: apiKey },
+    body: new Uint8Array(zip.toBuffer()),
+  });
+
+  if (!resp.ok) {
+    const text = await resp.text();
+    throw new Error(
+      `Eventor upload to ${endpoint} failed: ${resp.status} ${text}`,
+    );
+  }
+}
+
+/**
  * Upload results to Eventor.
- * Only enabled for Test-Eventor for safety.
+ *
+ * Targets whichever environment the event is linked to (`env`) — there is
+ * no production guard here; the caller decides.
  */
 export async function uploadResults(
   apiKey: string,
@@ -1384,34 +1415,18 @@ export async function uploadResults(
 
   const xml = `<?xml version="1.0" encoding="UTF-8"?>\n${builder.build(obj)}`;
 
-  // Debug: write XML to /tmp for inspection
-  const fs = await import("fs/promises");
-  await fs.writeFile("/tmp/eventor-resultlist.xml", xml, "utf-8");
-  console.log(`[Eventor] Result XML written to /tmp/eventor-resultlist.xml (${xml.length} bytes, ${results.length} runners)`);
-
   const zip = new AdmZip();
   zip.addFile("resultlist.xml", Buffer.from(xml, "utf-8"));
-  const zipBuffer = new Uint8Array(zip.toBuffer());
 
-  const url = new URL("import/resultlist", eventorBaseUrl(env));
-  console.log(`[Eventor] Uploading to ${url.toString()} (env=${env})`);
-  const resp = await fetch(url.toString(), {
-    method: "POST",
-    headers: {
-      ApiKey: apiKey,
-    },
-    body: zipBuffer,
-  });
-
-  if (!resp.ok) {
-    const text = await resp.text();
-    throw new Error(`Eventor upload failed: ${resp.status} ${text}`);
-  }
+  await postZip(apiKey, "import/resultlist", zip, env);
 }
 
 /**
  * Upload start list to Eventor.
- * Only enabled for Test-Eventor for safety.
+ *
+ * Carries name, class, club, card and start time per runner. Start numbers
+ * and bibs are not included, and neither is status — that goes up with the
+ * result upload.
  */
 export async function uploadStartList(
   apiKey: string,
@@ -1508,19 +1523,6 @@ export async function uploadStartList(
 
   const zip = new AdmZip();
   zip.addFile("startlist.xml", Buffer.from(xml, "utf-8"));
-  const zipBuffer = new Uint8Array(zip.toBuffer());
 
-  const url = new URL("import/startlist", eventorBaseUrl(env));
-  const resp = await fetch(url.toString(), {
-    method: "POST",
-    headers: {
-      ApiKey: apiKey,
-    },
-    body: zipBuffer,
-  });
-
-  if (!resp.ok) {
-    const text = await resp.text();
-    throw new Error(`Eventor upload failed: ${resp.status} ${text}`);
-  }
+  await postZip(apiKey, "import/startlist", zip, env);
 }

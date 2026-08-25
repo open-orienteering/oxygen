@@ -16,6 +16,7 @@ test-results/
 playwright-report/
 blob-report/
 e2e/.eventor-snapshot.json
+.eventor-cache/
 
 # Coverage reports
 coverage/
