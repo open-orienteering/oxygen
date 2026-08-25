@@ -73,6 +73,8 @@ export interface EventorEventClass {
   sequence: number;  // Eventor sort order
   classType: string; // e.g. "Åldersklasser", "Öppna klasser"
   noTiming: boolean; // resultListMode == "UnorderedNoTimes"
+  /** Published class-course length from Eventor's IOF 3.0 start list. */
+  courseLengthM?: number;
 }
 
 export interface EventorEntry {
@@ -569,19 +571,82 @@ export async function fetchEventClasses(
     },
   );
 
-  // Enrich with resultListMode from IOF 3.0 export endpoint
-  try {
-    const noTimingNames = await fetchNoTimingClassNames(apiKey, eventId, env);
-    for (const cls of classes) {
-      if (noTimingNames.has(cls.name)) {
-        cls.noTiming = true;
-      }
-    }
-  } catch {
-    // IOF 3.0 endpoint not available — noTiming stays false
-  }
+  // Enrich from the two IOF 3.0 endpoints independently. Either may be
+  // unavailable before Eventor has generated the corresponding list.
+  await Promise.all([
+    fetchNoTimingClassNames(apiKey, eventId, env)
+      .then((noTimingNames) => {
+        for (const cls of classes) {
+          if (noTimingNames.has(cls.name)) cls.noTiming = true;
+        }
+      })
+      .catch(() => {
+        // export/classes unavailable — noTiming stays false
+      }),
+    fetchStartListCourseLengths(apiKey, eventId, env)
+      .then((lengths) => {
+        const byId = new Map(lengths.map((x) => [x.classId, x.courseLengthM]));
+        const byName = new Map(
+          lengths.map((x) => [x.className, x.courseLengthM]),
+        );
+        for (const cls of classes) {
+          const length = byId.get(cls.classId) ?? byName.get(cls.name);
+          if (length && length > 0) cls.courseLengthM = length;
+        }
+      })
+      .catch(() => {
+        // starts/event/iofxml unavailable — keep the locally stored length
+      }),
+  ]);
 
   return classes;
+}
+
+export interface EventorClassCourseLength {
+  classId: number;
+  className: string;
+  courseLengthM: number;
+}
+
+/**
+ * Parse class-level course lengths from an IOF 3.0 Eventor StartList.
+ *
+ * Eventor's native `eventclasses` response does not expose these values,
+ * while `starts/event/iofxml` does:
+ * `<ClassStart><Class>…</Class><Course><Length>2480</Length></Course>`.
+ */
+export function parseEventorStartListCourseLengths(
+  xml: string,
+): EventorClassCourseLength[] {
+  const parsed = parser.parse(xml);
+  const root = parsed.StartList;
+  if (!root?.ClassStart) return [];
+  const starts = Array.isArray(root.ClassStart)
+    ? root.ClassStart
+    : [root.ClassStart];
+  const out: EventorClassCourseLength[] = [];
+  for (const start of starts as Array<Record<string, unknown>>) {
+    const cls = start.Class as Record<string, unknown> | undefined;
+    const course = start.Course as Record<string, unknown> | undefined;
+    const classId = safeInt(cls?.Id);
+    const className = safeStr(cls?.Name);
+    const courseLengthM = safeInt(course?.Length);
+    if (classId > 0 && className && courseLengthM > 0) {
+      out.push({ classId, className, courseLengthM });
+    }
+  }
+  return out;
+}
+
+async function fetchStartListCourseLengths(
+  apiKey: string,
+  eventId: number,
+  env: EventorEnvironment,
+): Promise<EventorClassCourseLength[]> {
+  const xml = await eventorFetch("starts/event/iofxml", apiKey, env, {
+    eventId: String(eventId),
+  });
+  return parseEventorStartListCourseLengths(xml);
 }
 
 /**

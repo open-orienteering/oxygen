@@ -62,6 +62,7 @@ function makeClass(
   classId: number,
   name: string,
   noTiming = false,
+  courseLengthM?: number,
 ): EventorEventClass {
   return {
     classId,
@@ -73,6 +74,7 @@ function makeClass(
     sequence: 1,
     classType: "",
     noTiming,
+    courseLengthM,
   };
 }
 
@@ -109,6 +111,85 @@ function makeEntry(
 }
 
 describe("eventor.sync re-entry status reset", () => {
+  it("updates an assigned course from Eventor's published class length", async () => {
+    const ctx = await createTestEvent("evr-course-length");
+    try {
+      await ctx.db.event.update({
+        where: { id: ctx.eventId },
+        data: { eventorEventId: BigInt(EVENTOR_EVENT_ID), eventorEnv: "prod" },
+      });
+      const course = await ctx.db.course.create({
+        data: { eventId: ctx.eventId, name: "U4", lengthM: 1200 },
+      });
+      await ctx.db.class.create({
+        data: {
+          eventId: ctx.eventId,
+          name: "U4",
+          eventorId: BigInt(CLASS_BASE + 10),
+          courseId: course.id,
+        },
+      });
+
+      vi.mocked(fetchEventClasses).mockResolvedValue([
+        makeClass(CLASS_BASE + 10, "U4", false, 2480),
+      ]);
+      vi.mocked(fetchEntries).mockResolvedValue([]);
+      vi.mocked(fetchResults).mockResolvedValue([]);
+
+      await makeCaller(ctx.event).eventor.sync();
+
+      const after = await ctx.db.course.findUnique({
+        where: { id: course.id },
+        select: { lengthM: true },
+      });
+      expect(after?.lengthM).toBe(2480);
+    } finally {
+      await ctx.cleanup();
+    }
+  });
+
+  it("does not overwrite an editor-owned course with Eventor's old published length", async () => {
+    const ctx = await createTestEvent("evr-edited-course-length");
+    try {
+      await ctx.db.event.update({
+        where: { id: ctx.eventId },
+        data: { eventorEventId: BigInt(EVENTOR_EVENT_ID), eventorEnv: "prod" },
+      });
+      const course = await ctx.db.course.create({
+        data: {
+          eventId: ctx.eventId,
+          name: "U4 edited",
+          lengthM: 2710,
+          geometrySource: "editor",
+        },
+      });
+      await ctx.db.class.create({
+        data: {
+          eventId: ctx.eventId,
+          name: "U4",
+          eventorId: BigInt(CLASS_BASE + 11),
+          courseId: course.id,
+        },
+      });
+
+      vi.mocked(fetchEventClasses).mockResolvedValue([
+        makeClass(CLASS_BASE + 11, "U4", false, 2480),
+      ]);
+      vi.mocked(fetchEntries).mockResolvedValue([]);
+      vi.mocked(fetchResults).mockResolvedValue([]);
+
+      await makeCaller(ctx.event).eventor.sync();
+
+      const after = await ctx.db.course.findUnique({
+        where: { id: course.id },
+        select: { lengthM: true },
+      });
+      expect(after?.lengthM).toBe(2710);
+    } finally {
+      await ctx.cleanup();
+    }
+  });
+
   it("resets Status from Cancel back to Unknown when a runner reappears in entries (no result)", async () => {
     const ctx = await createTestEvent("evr-reset");
     try {

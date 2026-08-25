@@ -30,7 +30,10 @@ export default defineConfig({
     react(),
     tailwindcss(),
     VitePWA({
-      registerType: "autoUpdate",
+      // "prompt", not "autoUpdate": an operator mid-readout should decide
+      // when the page reloads, and the banner in App.tsx makes a waiting
+      // bundle visible instead of leaving the tab silently stale.
+      registerType: "prompt",
       manifest: false, // We provide our own manifest.webmanifest
       workbox: {
         // Precache all built assets (JS, CSS, HTML)

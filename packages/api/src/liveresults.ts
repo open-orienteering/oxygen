@@ -15,6 +15,11 @@
  *   - Status maps from the new `RunnerStatus` enum via
  *     `runnerStatusToValue` (numeric) into LiveResults' 0/1/2/3/4/5/9.
  *   - Radio controls are identified by `controls.radio_type !== "normal"`.
+ *     LiveResults stores them as `visit × 1000 + punchCode` (first punch
+ *     of 82 → 1082, second → 2082). We encode the same way so MeOS and
+ *     the official uploader can share a competition without ghost radio
+ *     columns. The visit index is the Nth occurrence of that punch code
+ *     on the *whole* course, not just among radios.
  *
  * The push pipeline is intentionally a fire-and-forget background task:
  * any sync error is captured into `state.lastError` and surfaced via the
@@ -22,6 +27,7 @@
  * effort basis.
  */
 
+import { createHash } from "node:crypto";
 import mysql from "mysql2/promise";
 import { prisma } from "./db.js";
 import { toAbsolute } from "./timeConvert.js";
@@ -60,6 +66,107 @@ export function mapStatus(oxygenStatus: number, finishTime: number): number {
   if (oxygenStatus === RunnerStatus.NotCompeting) return 9;
   if (finishTime > 0) return 0;
   return 9;
+}
+
+/**
+ * LiveResults radio / split control identity. Visit is 1-based and
+ * counts every time `punchCode` appears on the course (or in the
+ * runner's punch sequence).
+ */
+export function liveResultsRadioCode(punchCode: number, visit: number): number {
+  if (visit < 1) {
+    throw new Error(`LiveResults radio visit must be >= 1, got ${visit}`);
+  }
+  return visit * 1000 + punchCode;
+}
+
+export interface CourseControlForRadio {
+  codes: string;
+  radioType: string;
+  name: string;
+}
+
+export interface EncodedRadioControl {
+  punchCode: number;
+  encoded: number;
+  name: string;
+}
+
+/**
+ * Walk a course in order and emit the radio controls with LiveResults
+ * visit encoding. A radio that is the second 82 on the course becomes
+ * 2082 even if the first 82 was a normal control.
+ */
+export function radioControlsFromCourse(
+  courseControls: CourseControlForRadio[],
+): EncodedRadioControl[] {
+  const visitByCode = new Map<number, number>();
+  const radios: EncodedRadioControl[] = [];
+  for (const ctrl of courseControls) {
+    const punchCode = parseInt((ctrl.codes ?? "").split(";")[0], 10);
+    if (!Number.isFinite(punchCode)) continue;
+    const visit = (visitByCode.get(punchCode) ?? 0) + 1;
+    visitByCode.set(punchCode, visit);
+    if (!ctrl.radioType || ctrl.radioType === "normal") continue;
+    radios.push({
+      punchCode,
+      encoded: liveResultsRadioCode(punchCode, visit),
+      name: ctrl.name || String(punchCode),
+    });
+  }
+  return radios;
+}
+
+export interface PunchForRadio {
+  controlCode: number;
+  time: number;
+}
+
+/**
+ * Map a runner's punches onto the class's encoded radio slots. Extra
+ * punches of the same code (redundant radio units) whose visit number
+ * is not on the course are dropped.
+ */
+export function encodedRadioPunches(
+  punches: PunchForRadio[],
+  expectedEncoded: Iterable<number>,
+): Array<{ encoded: number; time: number }> {
+  const expected = new Set(expectedEncoded);
+  const visitByCode = new Map<number, number>();
+  const out: Array<{ encoded: number; time: number }> = [];
+  for (const p of punches) {
+    const visit = (visitByCode.get(p.controlCode) ?? 0) + 1;
+    visitByCode.set(p.controlCode, visit);
+    const encoded = liveResultsRadioCode(p.controlCode, visit);
+    if (!expected.has(encoded)) continue;
+    out.push({ encoded, time: p.time });
+  }
+  return out;
+}
+
+/** 32-char hex md5 — the shape every official LiveResults client writes. */
+export function hashLiveResultsCredential(value: string): string {
+  return createHash("md5").update(value, "utf8").digest("hex");
+}
+
+/**
+ * Class names whose `splitcontrols` rows we own. A sync must DELETE
+ * only these, never every row for the tavid — MeOS (and other
+ * uploaders) store radios under different class names on the same
+ * competition.
+ */
+export function splitcontrolClassnamesToReplace(
+  classes: Array<{ name: string }>,
+): string[] {
+  const seen = new Set<string>();
+  const names: string[] = [];
+  for (const cls of classes) {
+    const name = cls.name.slice(0, 50);
+    if (!name || seen.has(name)) continue;
+    seen.add(name);
+    names.push(name);
+  }
+  return names;
 }
 
 // ─── Connection pool (process-wide, credentials cached) ─────
@@ -138,8 +245,8 @@ export async function ensureCompetition(eventId: bigint): Promise<number> {
         event.name.slice(0, 50),
         compDate,
         (event.organizerName ?? "").slice(0, 50),
-        "oxygen",
-        `oxygen_${eventId}`,
+        hashLiveResultsCredential("oxygen"),
+        hashLiveResultsCredential(`oxygen_${eventId}`),
       ],
     );
     await prisma().event.update({
@@ -228,27 +335,26 @@ export async function syncAll(
       },
     });
 
-    // courseId → ordered list of radio controls (first code only).
-    const radioByCourse = new Map<
-      string,
-      Array<{ code: number; name: string }>
-    >();
+    // courseId → ordered radio controls with LiveResults visit encoding.
+    const radioByCourse = new Map<string, EncodedRadioControl[]>();
     for (const c of courses) {
-      const radios = c.courseControls
-        .map((cc) => cc.control)
-        .filter((ctrl) => ctrl.radioType && ctrl.radioType !== "normal")
-        .map((ctrl) => {
-          const firstCode = parseInt((ctrl.codes ?? "").split(";")[0], 10);
-          return Number.isFinite(firstCode)
-            ? { code: firstCode, name: ctrl.name || String(firstCode) }
-            : null;
-        })
-        .filter((x): x is { code: number; name: string } => x !== null);
-      radioByCourse.set(c.id, radios);
+      radioByCourse.set(
+        c.id,
+        radioControlsFromCourse(c.courseControls.map((cc) => cc.control)),
+      );
     }
 
     // ── 1. splitcontrols: classname × radio ordering ──────
-    await conn.execute("DELETE FROM splitcontrols WHERE tavid = ?", [tavid]);
+    // Scope the wipe to Oxygen class names so a shared tavid (MeOS +
+    // Oxygen) does not lose the other client's radio definitions.
+    const ownedClassnames = splitcontrolClassnamesToReplace(classes);
+    if (ownedClassnames.length > 0) {
+      const placeholders = ownedClassnames.map(() => "?").join(",");
+      await conn.execute(
+        `DELETE FROM splitcontrols WHERE tavid = ? AND classname IN (${placeholders})`,
+        [tavid, ...ownedClassnames],
+      );
+    }
     for (const cls of classes) {
       if (!cls.courseId) continue;
       const radios = radioByCourse.get(cls.courseId) ?? [];
@@ -262,7 +368,7 @@ export async function syncAll(
             tavid,
             cls.name.slice(0, 50),
             order++,
-            r.code,
+            r.encoded,
             r.name.slice(0, 50),
           ],
         );
@@ -365,30 +471,28 @@ export async function syncAll(
       if (r.startTime > 0 && cls?.courseId) {
         const radios = radioByCourse.get(cls.courseId) ?? [];
         if (radios.length > 0) {
-          const radioCodes = new Set(radios.map((rad) => rad.code));
+          const punchCodes = [...new Set(radios.map((rad) => rad.punchCode))];
           const punches = await prisma().punch.findMany({
             where: {
               eventId,
               cardNo: r.cardNo ?? -1,
               removed: false,
-              controlCode: { in: [...radioCodes] },
+              controlCode: { in: punchCodes },
             },
             select: { controlCode: true, time: true },
             orderBy: { time: "asc" },
           });
-          // De-dupe: take the *first* punch per code (radios at a given
-          // location can punch multiple times for redundancy units).
-          const seen = new Set<number>();
-          for (const p of punches) {
-            if (seen.has(p.controlCode)) continue;
-            seen.add(p.controlCode);
-            const splitCenti = (p.time - r.startTime) * 10;
+          for (const hit of encodedRadioPunches(
+            punches,
+            radios.map((rad) => rad.encoded),
+          )) {
+            const splitCenti = (hit.time - r.startTime) * 10;
             if (splitCenti < 0) continue;
             await conn.execute(
               `INSERT INTO results (tavid, dbid, control, time, status, changed)
                VALUES (?, ?, ?, ?, 0, Now())
                ON DUPLICATE KEY UPDATE time = VALUES(time)`,
-              [tavid, r.seq, p.controlCode, splitCenti],
+              [tavid, r.seq, hit.encoded, splitCenti],
             );
             stats.results++;
           }

@@ -105,6 +105,34 @@ describe("buildEventCourseDataXml", () => {
     ]);
   });
 
+  it("derives editor-course lengths and legs from current coordinates at export time", async () => {
+    const course = await ctx.db.course.findFirstOrThrow({
+      where: { eventId: ctx.eventId, name: "Export A" },
+      select: { id: true },
+    });
+    // Simulate stale derived fields left by an old import/build. The export
+    // must not trust them for an editor-owned course.
+    await ctx.db.course.update({
+      where: { id: course.id },
+      data: { lengthM: 1, legs: "1;1;1;", geometrySource: "editor" },
+    });
+
+    const parsed = parseIOFCourseData(
+      await buildEventCourseDataXml(ctx.db, {
+        id: ctx.eventId,
+        name: ctx.event.name,
+      }),
+    );
+    const exported = parsed.courses.find((c) => c.name === "Export A")!;
+    // 0.5→20.5→60.5→100.5 mm: 100 mm × map scale / 1000.
+    expect(exported.length).toBe(Math.round((100 * mapScale) / 1000));
+    expect(exported.controls.slice(1).map((cc) => cc.legLength)).toEqual([
+      Math.round((20 * mapScale) / 1000),
+      Math.round((40 * mapScale) / 1000),
+      Math.round((40 * mapScale) / 1000),
+    ]);
+  });
+
   it("builds a safe attachment filename", () => {
     expect(buildCourseExportFilename("itest")).toBe("itest-courses.xml");
     expect(buildCourseExportFilename("a b/c")).toBe("a_b_c-courses.xml");

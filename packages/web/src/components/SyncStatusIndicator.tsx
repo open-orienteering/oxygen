@@ -18,6 +18,7 @@ import {
   getVenueCandidatesRaw,
   setVenueCandidates,
 } from "../lib/node-discovery";
+import { formatBuildVersion } from "../lib/app-update";
 
 interface CachedQueryInfo {
   label: string;
@@ -377,6 +378,9 @@ export function SyncStatusIndicator({ competitionId }: { competitionId?: string 
               <div className="flex justify-between text-[10px] text-slate-400">
                 <span>{t("cacheSize")}: ~{formatBytes(showPanel ? estimatedSize() : 0)}</span>
                 <span>{totalCacheEntries} {t("entries")}</span>
+              </div>
+              <div className="mt-1 text-[10px] text-slate-400" data-testid="build-version">
+                {t("buildVersion")}: {formatBuildVersion(__BUILD_VERSION__)}
               </div>
             </div>
           </div>
