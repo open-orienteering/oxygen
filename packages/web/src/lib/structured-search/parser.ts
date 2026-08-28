@@ -90,24 +90,102 @@ function lex(raw: string): LexToken[] {
 
 // ─── Atom-level helpers (operator detection, quoting) ──────────────────
 
-function detectOperator(
-  rawValue: string,
-  defaultOp: FilterOperator,
-): [FilterOperator, string] {
-  if (rawValue.startsWith(">=")) return ["gte", rawValue.slice(2)];
-  if (rawValue.startsWith("<=")) return ["lte", rawValue.slice(2)];
-  if (rawValue.startsWith(">")) return ["gt", rawValue.slice(1)];
-  if (rawValue.startsWith("<")) return ["lt", rawValue.slice(1)];
-  if (rawValue.includes(",")) return ["in", rawValue];
-  if (rawValue.includes("*")) return ["wildcard", rawValue];
-  return [defaultOp, rawValue];
+/**
+ * True when the whole value is wrapped in exactly one pair of double
+ * quotes. `"a","b"` is deliberately excluded — that is a list of two
+ * quoted items, not one quoted value.
+ */
+function isFullyQuoted(value: string): boolean {
+  if (value.length < 2 || !value.startsWith('"') || !value.endsWith('"')) {
+    return false;
+  }
+  return !value.slice(1, -1).includes('"');
 }
 
 function unquote(value: string): string {
-  if (value.startsWith('"') && value.endsWith('"') && value.length >= 2) {
-    return value.slice(1, -1);
+  return isFullyQuoted(value) ? value.slice(1, -1) : value;
+}
+
+/** True when the value contains a comma outside of any quoted run. */
+function hasTopLevelComma(value: string): boolean {
+  let inQuote = false;
+  for (const ch of value) {
+    if (ch === '"') inQuote = !inQuote;
+    else if (ch === "," && !inQuote) return true;
   }
-  return value;
+  return false;
+}
+
+/**
+ * Split an `in` list on its top-level commas and unquote each item, so
+ * `"Öppen 1","Öppen 2"` becomes `["Öppen 1", "Öppen 2"]`. Items may not
+ * themselves contain a comma — quote an item to keep spaces, not commas.
+ */
+function splitList(value: string): string[] {
+  const out: string[] = [];
+  let cur = "";
+  let inQuote = false;
+  for (const ch of value) {
+    if (ch === '"') {
+      inQuote = !inQuote;
+      cur += ch;
+    } else if (ch === "," && !inQuote) {
+      out.push(cur);
+      cur = "";
+    } else {
+      cur += ch;
+    }
+  }
+  out.push(cur);
+  return out.map((item) => unquote(item.trim())).filter(Boolean);
+}
+
+const RANGE_PREFIXES: [string, FilterOperator][] = [
+  [">=", "gte"],
+  ["<=", "lte"],
+  [">", "gt"],
+  ["<", "lt"],
+];
+
+/**
+ * Infer the comparison operator from a raw (still-quoted) value.
+ *
+ * Two rules keep inference from hijacking legitimate values:
+ *
+ *  • Quoting means "take this literally". A fully quoted value never
+ *    infers an operator from its own content, so the Eventor name format
+ *    `name:"Kempe, Hugo"` stays a single substring search instead of
+ *    being split into the `in` list `kempe` / `hugo`. Only commas
+ *    *outside* quotes separate list items.
+ *  • An operator is only inferred when the anchor declares support for
+ *    it. `name` allows ["contains", "wildcard"], so a comma can never
+ *    turn it into an `in` and a `>` prefix stays part of the value.
+ */
+function detectOperator(
+  rawValue: string,
+  anchor: Pick<AnchorDef<never>, "operators" | "defaultOperator">,
+): [FilterOperator, string] {
+  const { operators, defaultOperator } = anchor;
+
+  if (hasTopLevelComma(rawValue) && operators.includes("in")) {
+    return ["in", splitList(rawValue).join(",")];
+  }
+
+  if (isFullyQuoted(rawValue)) return [defaultOperator, unquote(rawValue)];
+
+  for (const [prefix, op] of RANGE_PREFIXES) {
+    if (rawValue.startsWith(prefix)) {
+      return operators.includes(op)
+        ? [op, rawValue.slice(prefix.length)]
+        : [defaultOperator, rawValue];
+    }
+  }
+
+  if (rawValue.includes("*") && operators.includes("wildcard")) {
+    return ["wildcard", rawValue];
+  }
+
+  return [defaultOperator, unquote(rawValue)];
 }
 
 /**
@@ -125,9 +203,10 @@ function segmentToAtom(
     const anchorKey = segment.slice(0, colonIdx).toLowerCase();
     const anchor = anchorMap.get(anchorKey);
     if (anchor) {
-      const rawValue = unquote(segment.slice(colonIdx + 1));
+      const rawValue = segment.slice(colonIdx + 1);
       if (!rawValue) return null;
-      const [operator, value] = detectOperator(rawValue, anchor.defaultOperator);
+      const [operator, value] = detectOperator(rawValue, anchor);
+      if (!value) return null;
       return {
         kind: "atom",
         id: uid(),
@@ -144,6 +223,25 @@ function segmentToAtom(
     operator: "contains",
     value: unquote(segment),
   };
+}
+
+/**
+ * Parse a single `anchor:value` (or free-text) segment into an Atom.
+ *
+ * Exported so the search bar's live input and a `?q=` deep link agree on
+ * operator inference and quoting — they used to carry separate copies of
+ * these rules and drift apart.
+ */
+export function parseSegment(
+  raw: string,
+  anchors: AnchorDef<never>[],
+): Atom | null {
+  const trimmed = raw.trim();
+  if (!trimmed) return null;
+  return segmentToAtom(
+    trimmed,
+    new Map(anchors.map((a) => [a.key.toLowerCase(), a])),
+  );
 }
 
 // ─── Parser ────────────────────────────────────────────────────────────
@@ -364,6 +462,9 @@ function parseRoot(s: ParserState): FilterNode[] {
  *   `(class:H21 | class:D21) ok`       — explicit grouping
  *   `!status:dns`  /  `class:H21 -- !(...)`  — negation
  *   `name:"Anna Svensson"`             — quoted value
+ *   `class:H21,D21`                    — in-list (unquoted commas split)
+ *   `class:"Öppen 1","Öppen 2"`        — in-list of multi-word items
+ *   `name:"Kempe, Hugo"`               — quoted: the comma is literal
  */
 export function parseExpression(
   raw: string,
@@ -404,32 +505,54 @@ export function parseQuery(
 
 // ─── Serializer ────────────────────────────────────────────────────────
 
+/**
+ * True when a value must be quoted to survive a parse round-trip: either
+ * it contains structural characters, or it contains a character that
+ * would otherwise be re-read as a different operator than the one the
+ * atom actually carries.
+ */
+function needsQuoting(value: string, operator: FilterOperator): boolean {
+  if (!value) return true;
+  if (/[\s()|&"]/.test(value)) return true;
+  if (value.startsWith("!")) return true;
+  if (operator !== "in" && value.includes(",")) return true;
+  if (operator !== "wildcard" && value.includes("*")) return true;
+  return false;
+}
+
+/** Quote a literal value when it would not otherwise survive a re-parse. */
+export function quoteLiteral(value: string): string {
+  return needsQuoting(value, "eq") ? `"${value}"` : value;
+}
+
+const RANGE_PREFIX_BY_OP: Partial<Record<FilterOperator, string>> = {
+  gt: ">",
+  lt: "<",
+  gte: ">=",
+  lte: "<=",
+};
+
 function serializeAtomValue(token: Atom): string {
-  const { operator, value } = token;
-  switch (operator) {
-    case "gt":
-      return `>${value}`;
-    case "lt":
-      return `<${value}`;
-    case "gte":
-      return `>=${value}`;
-    case "lte":
-      return `<=${value}`;
-    default:
-      return value;
+  // `in` lists are quoted per item so that a multi-word value keeps its
+  // spaces without the comma disappearing inside a quoted run.
+  if (token.operator === "in") {
+    return splitList(token.value).map(quoteLiteral).join(",");
   }
+  const prefix = RANGE_PREFIX_BY_OP[token.operator] ?? "";
+  const value = needsQuoting(token.value, token.operator)
+    ? `"${token.value}"`
+    : token.value;
+  return prefix + value;
+}
+
+/** Serialize an atom's `anchor:value` body, without the `!` negation prefix. */
+export function serializeAtomBody(token: Atom): string {
+  const value = serializeAtomValue(token);
+  return token.anchor ? `${token.anchor}:${value}` : value;
 }
 
 function serializeAtom(token: Atom): string {
-  const value = serializeAtomValue(token);
-  const needsQuote =
-    value.includes(" ") ||
-    value.includes("(") ||
-    value.includes(")") ||
-    value.includes("|") ||
-    value.includes("&");
-  const quotedValue = needsQuote ? `"${value}"` : value;
-  const body = token.anchor ? `${token.anchor}:${quotedValue}` : quotedValue;
+  const body = serializeAtomBody(token);
   return token.negated ? `!${body}` : body;
 }
 

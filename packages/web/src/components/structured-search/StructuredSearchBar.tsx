@@ -7,6 +7,11 @@ import type {
 } from "../../lib/structured-search/types";
 import { isOrGroup } from "../../lib/structured-search/types";
 import {
+  parseSegment,
+  quoteLiteral,
+  serializeAtomBody,
+} from "../../lib/structured-search/parser";
+import {
   appendAtom,
   popLastEntry,
   removeChildFromGroup as removeChildFromGroupOp,
@@ -34,79 +39,21 @@ function newTokenId(prefix = "st"): string {
 
 /**
  * Parse a raw input segment into an Atom.
- * Handles anchor:value, operator detection, etc.
+ *
+ * Delegates to the shared parser so text typed here and a `?q=` deep
+ * link infer the same operators. Ids come from the parser's counter,
+ * which is fine — they only need to be unique within the tree.
  */
 function parseInputToAtom(
   raw: string,
-  anchorMap: Map<string, AnchorDef>,
+  anchors: AnchorDef[],
 ): Atom | null {
-  const trimmed = raw.trim();
-  if (!trimmed) return null;
-
-  const colonIdx = trimmed.indexOf(":");
-  if (colonIdx > 0) {
-    const key = trimmed.slice(0, colonIdx).toLowerCase();
-    const anchor = anchorMap.get(key);
-    if (anchor) {
-      let value = trimmed.slice(colonIdx + 1);
-      if (value.startsWith('"') && value.endsWith('"'))
-        value = value.slice(1, -1);
-      if (!value) return null;
-
-      let operator = anchor.defaultOperator;
-      if (value.startsWith(">=")) {
-        operator = "gte";
-        value = value.slice(2);
-      } else if (value.startsWith("<=")) {
-        operator = "lte";
-        value = value.slice(2);
-      } else if (value.startsWith(">")) {
-        operator = "gt";
-        value = value.slice(1);
-      } else if (value.startsWith("<")) {
-        operator = "lt";
-        value = value.slice(1);
-      } else if (value.includes(",")) {
-        operator = "in";
-      } else if (value.includes("*")) {
-        operator = "wildcard";
-      }
-
-      if (!value) return null;
-      return {
-        kind: "atom",
-        id: newTokenId(),
-        anchor: anchor.key,
-        operator,
-        value,
-      };
-    }
-  }
-
-  let value = trimmed;
-  if (value.startsWith('"') && value.endsWith('"'))
-    value = value.slice(1, -1);
-  return {
-    kind: "atom",
-    id: newTokenId(),
-    anchor: "",
-    operator: "contains",
-    value,
-  };
+  return parseSegment(raw, anchors as AnchorDef<never>[]);
 }
 
 /** Format an atom back into editable text (with operator/quote prefixes). */
 function atomToText(atom: Atom): string {
-  if (!atom.anchor) {
-    return atom.value.includes(" ") ? `"${atom.value}"` : atom.value;
-  }
-  let val = atom.value;
-  if (atom.operator === "gt") val = `>${val}`;
-  else if (atom.operator === "lt") val = `<${val}`;
-  else if (atom.operator === "gte") val = `>=${val}`;
-  else if (atom.operator === "lte") val = `<=${val}`;
-  if (val.includes(" ")) val = `"${val}"`;
-  return `${atom.anchor}:${val}`;
+  return serializeAtomBody(atom);
 }
 
 export function StructuredSearchBar({
@@ -251,12 +198,12 @@ export function StructuredSearchBar({
 
   const commitToken = useCallback(
     (raw: string) => {
-      const atom = parseInputToAtom(raw, anchorMap);
+      const atom = parseInputToAtom(raw, anchors);
       if (atom) appendNode(atom);
       setInputValue("");
       setShowSuggestions(false);
     },
-    [anchorMap, appendNode],
+    [anchors, appendNode],
   );
 
   const togglePendingValue = useCallback(
@@ -276,7 +223,7 @@ export function StructuredSearchBar({
 
   const commitPendingValues = useCallback(() => {
     if (pendingValues.size === 0 || !suggestionContext.anchor) return;
-    const value = [...pendingValues].join(",");
+    const value = [...pendingValues].map(quoteLiteral).join(",");
     commitToken(`${suggestionContext.anchor.key}:${value}`);
     setPendingValues(new Set());
   }, [pendingValues, suggestionContext.anchor, commitToken]);
@@ -440,7 +387,9 @@ export function StructuredSearchBar({
               if (next.has(s.item.key)) next.delete(s.item.key);
               else next.add(s.item.key);
               if (next.size > 0 && suggestionContext.anchor) {
-                commitToken(`${suggestionContext.anchor.key}:${[...next].join(",")}`);
+                commitToken(
+                  `${suggestionContext.anchor.key}:${[...next].map(quoteLiteral).join(",")}`,
+                );
                 setPendingValues(new Set());
                 return;
               }
@@ -506,7 +455,6 @@ export function StructuredSearchBar({
       commitPendingValues,
       suggestionContext.anchor,
       suggestionContext.mode,
-      anchorMap,
       pendingNot,
       orMode,
       emitTokens,
@@ -525,16 +473,19 @@ export function StructuredSearchBar({
         togglePendingValue(suggestion.item.key);
         inputRef.current?.focus();
       } else {
+        // Suggested values are literals — a runner name is "Last, First"
+        // and a class can be "Öppen 1" — so they are quoted rather than
+        // left to operator inference.
         const key = suggestion.item.key;
         const colonIdx = inputValue.indexOf(":");
         if (colonIdx > 0) {
           const prefix = inputValue.slice(0, colonIdx + 1);
-          commitToken(`${prefix}${key}`);
+          commitToken(`${prefix}${quoteLiteral(key)}`);
         } else if (key.includes(":")) {
           const value = key.split(":").slice(1).join(":");
-          commitToken(`${key.split(":")[0]}:${value.includes(" ") ? `"${value}"` : value}`);
+          commitToken(`${key.split(":")[0]}:${quoteLiteral(value)}`);
         } else {
-          commitToken(key);
+          commitToken(quoteLiteral(key));
         }
       }
     },
@@ -555,9 +506,9 @@ export function StructuredSearchBar({
       const target = e.target as Node;
       if (containerRef.current && !containerRef.current.contains(target)) {
         if (pendingValues.size > 0 && suggestionContext.anchor) {
-          const value = [...pendingValues].join(",");
+          const value = [...pendingValues].map(quoteLiteral).join(",");
           const raw = `${suggestionContext.anchor.key}:${value}`;
-          const atom = parseInputToAtom(raw, anchorMap);
+          const atom = parseInputToAtom(raw, anchors);
           if (atom) {
             // appendNode would re-trigger via state; simulate inline.
             const finalAtom: Atom = pendingNot ? { ...atom, negated: true } : atom;
@@ -575,7 +526,7 @@ export function StructuredSearchBar({
     }
     document.addEventListener("mousedown", handleClickOutside);
     return () => document.removeEventListener("mousedown", handleClickOutside);
-  }, [pendingValues, suggestionContext.mode, suggestionContext.anchor, anchorMap, emitTokens, pendingNot]);
+  }, [pendingValues, suggestionContext.mode, suggestionContext.anchor, anchors, emitTokens, pendingNot]);
 
   useEffect(() => {
     function handleGlobalKey(e: KeyboardEvent) {
