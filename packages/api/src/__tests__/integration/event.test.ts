@@ -131,6 +131,67 @@ describe("event.changeWatermarks", () => {
   });
 });
 
+describe("event.list", () => {
+  it("returns kind and Eventor classificationId when meta is linked", async () => {
+    const slug = `oxygen_test_list_${Math.random().toString(36).slice(2, 8)}`;
+    const eventorEventId = 8_000_000 + Math.floor(Math.random() * 100_000);
+    const publicCaller = makeCaller(null);
+    await publicCaller.event.create({
+      name: "List classification test",
+      nameId: slug,
+      date: "2026-04-15",
+    });
+    const db = prisma();
+    try {
+      await db.event.update({
+        where: { nameId: slug },
+        data: { eventorEventId: BigInt(eventorEventId) },
+      });
+      await db.eventorEventMeta.create({
+        data: {
+          eventorEventId,
+          name: "List classification test",
+          startDate: new Date("2026-04-15"),
+          classificationId: 3,
+          organiser: "E2E",
+          entryCount: 0,
+          fetchedAt: new Date(),
+        },
+      });
+
+      const listed = await publicCaller.event.list();
+      const row = listed.find((e) => e.nameId === slug);
+      expect(row).toBeDefined();
+      expect(row!.kind).toBe("competition");
+      expect(row!.classificationId).toBe(3);
+    } finally {
+      await db.eventorEventMeta.deleteMany({ where: { eventorEventId } });
+      await publicCaller.event.delete({ nameId: slug });
+      await publicCaller.event.purgeDeleted();
+    }
+  });
+
+  it("omits classificationId when the event is not linked to Eventor meta", async () => {
+    const slug = `oxygen_test_list_plain_${Math.random().toString(36).slice(2, 8)}`;
+    const publicCaller = makeCaller(null);
+    await publicCaller.event.create({
+      name: "Plain list test",
+      nameId: slug,
+      date: "2026-04-15",
+    });
+    try {
+      const listed = await publicCaller.event.list();
+      const row = listed.find((e) => e.nameId === slug);
+      expect(row).toBeDefined();
+      expect(row!.kind).toBe("competition");
+      expect(row!.classificationId).toBeUndefined();
+    } finally {
+      await publicCaller.event.delete({ nameId: slug });
+      await publicCaller.event.purgeDeleted();
+    }
+  });
+});
+
 describe("event.counterState (legacy alias)", () => {
   it("returns numeric ms counters keyed by legacy table names", async () => {
     const slug = `oxygen_test_counter_${Math.random()
