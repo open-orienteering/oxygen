@@ -12,6 +12,7 @@ import { useTranslation } from "react-i18next";
 import { trpc } from "../lib/trpc";
 import { ClubLogo } from "../components/ClubLogo";
 import { LanguageSelector } from "../components/LanguageSelector";
+import { UserChip } from "../components/UserChip";
 import { useDeviceManager } from "../context/DeviceManager";
 import { usePrinter } from "../context/PrinterContext";
 import { fetchLogoRaster } from "../lib/receipt-printer/index.js";
@@ -342,6 +343,7 @@ export function CompetitionShell() {
                   onShow={() => setPaneCollapsed(false)}
                 />
               )}
+              <UserChip />
               <LeaseBadge />
               <ReaderStatusIndicator />
               <PrinterStatusIndicator />

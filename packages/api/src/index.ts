@@ -17,6 +17,7 @@ import { onlineInputPuller, reconcileEnabledPullers } from "./online-input/pulle
 import { startShipper, stopShipper } from "./sync/shipper.js";
 import { registerVenueForwarder } from "./sync/venueForwarder.js";
 import { SYNC_SECRET_HEADER } from "./sync/nodeIdentity.js";
+import { authHeaderName } from "./auth.js";
 import { registerBackupRoute } from "./backup.js";
 import { registerCourseExportRoute } from "./course-export.js";
 import { registerMapTileRoutes } from "./map-tiles.js";
@@ -58,6 +59,7 @@ async function main() {
       "x-competition-id",
       "x-event-id",
       SYNC_SECRET_HEADER,
+      authHeaderName(),
     ],
   });
 

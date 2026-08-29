@@ -18,6 +18,7 @@ import { tracksRouter } from "./tracks.js";
 import { eventsRouter } from "./events.js";
 import { leaseRouter } from "./lease.js";
 import { registrationTrendsRouter } from "./registrationTrends.js";
+import { usersRouter } from "./users.js";
 
 export const appRouter = router({
   // The active orienteering event. Kept under the `competition` namespace
@@ -45,6 +46,7 @@ export const appRouter = router({
   events: eventsRouter,
   lease: leaseRouter,
   registrationTrends: registrationTrendsRouter,
+  users: usersRouter,
 });
 
 export type AppRouter = typeof appRouter;

@@ -20,6 +20,7 @@
 import type { FastifyInstance, FastifyRequest } from "fastify";
 import { isCloudOwnedMutation } from "./ownership.js";
 import { nodeRole, syncPeerUrl } from "./nodeIdentity.js";
+import { authHeaderName } from "../auth.js";
 
 /** Parse the procedure paths out of a tRPC request URL (batched or not). */
 export function trpcProcedurePaths(url: string): string[] {
@@ -78,6 +79,12 @@ export function registerVenueForwarder(server: FastifyInstance): void {
           ...(req.headers["x-competition-id"]
             ? { "x-competition-id": String(req.headers["x-competition-id"]) }
             : {}),
+          ...(() => {
+            const name = authHeaderName();
+            const raw = req.headers[name];
+            if (raw == null) return {};
+            return { [name]: Array.isArray(raw) ? raw[0] : raw };
+          })(),
         },
         body: JSON.stringify(req.body),
       });
