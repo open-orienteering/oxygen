@@ -37,11 +37,11 @@ Oxygen is a modern web application for managing orienteering competitions. It co
 |    classes, class_course_pools, runners, teams,      |
 |    cards, card_readouts, punches, control_units,     |
 |    event_log, event_seqs, map_files, rendered_maps,  |
-|    map_tiles, tracks, routes                         |
+|    map_tiles, tracks, routes, users                  |
 |                                                      |
 |  global directories (schema `oxygen`):               |
 |    runner_directory, club_directory,                 |
-|    eventor_event_meta, oxygen_settings               |
+|    eventor_event_meta, oxygen_settings, users        |
 |                                                      |
 |  PK strategy:                                        |
 |    UUIDv7 (client-mintable) + per-event `seq INT`    |
@@ -89,7 +89,9 @@ full migration story.
 - **Pure server-side** — `map_files`, `rendered_maps`, `map_tiles`,
   `tracks`, `routes`. `BIGSERIAL` PK.
 - **Global directories** — `runner_directory`, `club_directory`,
-  `eventor_event_meta`. Keyed by their natural external IDs from Eventor.
+  `eventor_event_meta`, `users`. Eventor directories are keyed by their
+  natural external IDs; `users` is invite-only email identity (see
+  [authentication.md](authentication.md)).
 - **Settings** — `oxygen_settings` (Eventor API keys, runner-db revision,
   etc.); a flat key/value store shared by all events.
 
@@ -207,6 +209,8 @@ Communication between the admin window and kiosk uses the BroadcastChannel API, 
 ### Admin shell navigation
 
 `CompetitionShell` derives the tab bar from `competition.dashboard` `contentSignals` (`hasMap`, `hasClasses`, `hasCourses`, `hasRunners`, `hasResults`). Tabs that are not yet relevant collapse into More rather than disappearing. While the dashboard query is still loading, the shell uses the previous always-on layout so a mature event does not flash a planning-only bar. Layout rules live in `packages/web/src/lib/shell-tabs.ts`.
+
+Identity (optional): see [authentication.md](authentication.md). With `AUTH_MODE=off` nothing changes. With `proxy`/`dev`, event-scoped tRPC requires an invited user; kiosk and start screen stay renderable.
 
 ### Test Lab
 Built-in data generation and race simulation for development and demo purposes:

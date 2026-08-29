@@ -20,6 +20,7 @@ import {
 } from "@oxygen/shared";
 import { nextServerHlc } from "./serverClock.js";
 import { nodeId } from "./sync/nodeIdentity.js";
+import { currentActorId } from "./auth.js";
 
 /** Works with both the singleton client and a `$transaction` client. */
 type Db = PrismaClient | Prisma.TransactionClient;
@@ -44,7 +45,7 @@ export async function appendJournal<T extends JournalEntryType>(
     payload: JournalPayloads[T];
     /** Defaults to this node's identity. */
     stationId?: string;
-    /** Always null until the permissions system ships. */
+    /** Authenticated user id. Defaults to the current tRPC actor, else null. */
     actorId?: string | null;
   },
 ): Promise<void> {
@@ -54,7 +55,7 @@ export async function appendJournal<T extends JournalEntryType>(
       eventId: args.eventId,
       type: args.type,
       stationId: args.stationId ?? NODE_STATION_ID,
-      actorId: args.actorId ?? null,
+      actorId: args.actorId !== undefined ? args.actorId : currentActorId(),
       hlc: encodeHlc(hlc),
       schemaVersion: 1,
       clientTimestamp: new Date(hlc.physical),

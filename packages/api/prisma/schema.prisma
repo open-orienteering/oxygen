@@ -200,6 +200,22 @@ model Setting {
   @@schema("oxygen")
 }
 
+/// Invite-only operator identity. Email is the stable key (always lowercase).
+/// Passwords are never stored — identity arrives from a trusted proxy header.
+model User {
+  id          String    @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  email       String    @unique
+  displayName String    @default("") @map("display_name")
+  isAdmin     Boolean   @default(false) @map("is_admin")
+  active      Boolean   @default(true)
+  createdAt   DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt   DateTime  @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+  lastSeenAt  DateTime? @map("last_seen_at") @db.Timestamptz(6)
+
+  @@map("users")
+  @@schema("oxygen")
+}
+
 /// Global runner directory synced from Eventor (was oxygen_runner_db).
 model RunnerDirectory {
   eventorPersonId BigInt   @id @map("eventor_person_id")
@@ -741,8 +757,8 @@ model JournalEntry {
   eventId         BigInt   @map("event_id")
   type            String
   stationId       String   @map("station_id")
-  /// Verifiable "who did this" attribution. NULL until the permissions
-  /// system ships (every pre-permissions entry stays NULL).
+  /// Verifiable "who did this" attribution. NULL for background jobs,
+  /// pullers, and peer ingest; tRPC mutations stamp the authenticated user.
   actorId         String?  @map("actor_id") @db.Uuid
   /// Encoded hybrid logical clock (physical_ms << 16 | logical), the journal's
   /// canonical total-order sort key. Synthesised from clientTimestamp for

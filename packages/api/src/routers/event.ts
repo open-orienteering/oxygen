@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
-import { router, publicProcedure, eventProcedure } from "../trpc.js";
+import { router, publicProcedure, authedProcedure, eventProcedure } from "../trpc.js";
 import { prisma, sanitizeNameId, getZeroTime } from "../db.js";
 import { toAbsolute } from "../timeConvert.js";
 import { resolveCourseExpectedPositions } from "./course.js";
@@ -24,7 +24,7 @@ import { runnerStatusToValue, valueToRunnerStatus } from "../statusConvert.js";
  */
 export const eventRouter = router({
   /** List all events from the registry. */
-  list: publicProcedure.query(async (): Promise<EventInfo[]> => {
+  list: authedProcedure.query(async (): Promise<EventInfo[]> => {
     const rows = await prisma().event.findMany({
       where: { removed: false },
       orderBy: { date: "desc" },
@@ -61,7 +61,7 @@ export const eventRouter = router({
    * Verify the requested event exists. Returns its identity so the client
    * can confirm before setting `x-event-id` on subsequent requests.
    */
-  select: publicProcedure
+  select: authedProcedure
     .input(z.object({ nameId: z.string().min(1) }))
     .mutation(async ({ input }) => {
       const event = await prisma().event.findUnique({
@@ -77,7 +77,7 @@ export const eventRouter = router({
     }),
 
   /** Create a new empty event. */
-  create: publicProcedure
+  create: authedProcedure
     .input(
       z.object({
         name: z.string().min(1),
@@ -109,7 +109,7 @@ export const eventRouter = router({
     }),
 
   /** Soft-delete an event. */
-  delete: publicProcedure
+  delete: authedProcedure
     .input(z.object({ nameId: z.string().min(1) }))
     .mutation(async ({ input }) => {
       const event = await prisma().event.findUnique({
@@ -129,7 +129,7 @@ export const eventRouter = router({
     }),
 
   /** Hard-delete every soft-deleted event (and its cascading children). */
-  purgeDeleted: publicProcedure.mutation(async () => {
+  purgeDeleted: authedProcedure.mutation(async () => {
     const result = await prisma().event.deleteMany({
       where: { removed: true },
     });

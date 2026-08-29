@@ -7,6 +7,7 @@ import { httpBatchLink } from "@trpc/client";
 import { trpc } from "./lib/trpc";
 import { createIdbPersister } from "./lib/offline/persister";
 import { startNodeDiscovery, venueAwareFetch } from "./lib/node-discovery";
+import { CurrentUserProvider } from "./context/CurrentUserContext";
 import App from "./App";
 import "./index.css";
 
@@ -47,10 +48,11 @@ const trpcClient = trpc.createClient({
       headers() {
         // Extract the first path segment as the competition nameId.
         // e.g. /my_competition/dashboard → "my_competition"
-        // Pages outside a competition (e.g. the selector) won't have a nameId.
+        // Pages outside a competition (selector, /admin/…) have no nameId.
         const match = window.location.pathname.match(/^\/([^/]+)/);
         const nameId = match?.[1];
-        return nameId ? { "x-competition-id": nameId } : {};
+        const reserved = nameId === "admin";
+        return nameId && !reserved ? { "x-competition-id": nameId } : {};
       },
     }),
   ],
@@ -73,7 +75,9 @@ createRoot(document.getElementById("root")!).render(
         }}
       >
         <BrowserRouter>
-          <App />
+          <CurrentUserProvider>
+            <App />
+          </CurrentUserProvider>
         </BrowserRouter>
       </PersistQueryClientProvider>
     </trpc.Provider>

@@ -6,6 +6,8 @@ import { trpc } from "../lib/trpc";
 import { formatDate } from "../lib/format";
 import { formatBuildVersion } from "../lib/app-update";
 import { LanguageSelector } from "../components/LanguageSelector";
+import { UserChip } from "../components/UserChip";
+import { useCurrentUser } from "../context/CurrentUserContext";
 import {
   CLASSIFICATION_LABEL_KEYS,
   classificationLabelKey,
@@ -18,6 +20,8 @@ import {
 export function CompetitionSelector() {
   const navigate = useNavigate();
   const { t } = useTranslation("event");
+  const { t: ta } = useTranslation("auth");
+  const { user } = useCurrentUser();
   const competitions = trpc.competition.list.useQuery();
   const selectMutation = trpc.competition.select.useMutation({
     onSuccess: (data) => {
@@ -51,7 +55,8 @@ export function CompetitionSelector() {
     <div className="min-h-screen bg-gradient-to-br from-slate-50 to-blue-50 flex items-center justify-center p-4">
       <div className="w-full max-w-2xl">
         {/* Language Selector — top right */}
-        <div className="flex justify-end mb-2">
+        <div className="flex justify-end mb-2 items-center gap-3">
+          <UserChip />
           <LanguageSelector />
         </div>
 
@@ -277,6 +282,17 @@ export function CompetitionSelector() {
             {t("buildVersion", { ns: "common" })}: {formatBuildVersion(__BUILD_VERSION__)}
           </div>
           <PurgeButton onPurged={() => competitions.refetch()} />
+          {user?.isAdmin && (
+            <div>
+              <Link
+                to="/admin/users"
+                data-testid="admin-users-link"
+                className="text-xs text-blue-600 hover:text-blue-800"
+              >
+                {ta("usersLink")}
+              </Link>
+            </div>
+          )}
         </div>
       </div>
     </div>
