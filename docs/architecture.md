@@ -204,6 +204,10 @@ Communication between the admin window and kiosk uses the BroadcastChannel API, 
 
 ![Kiosk readout](screenshots/kiosk-readout.png)
 
+### Admin shell navigation
+
+`CompetitionShell` derives the tab bar from `competition.dashboard` `contentSignals` (`hasMap`, `hasClasses`, `hasCourses`, `hasRunners`, `hasResults`). Tabs that are not yet relevant collapse into More rather than disappearing. While the dashboard query is still loading, the shell uses the previous always-on layout so a mature event does not flash a planning-only bar. Layout rules live in `packages/web/src/lib/shell-tabs.ts`.
+
 ### Test Lab
 Built-in data generation and race simulation for development and demo purposes:
 - Generates realistic class structures, courses, and controls

@@ -492,6 +492,17 @@ export interface EventDashboard {
     name: string;
     eventorId: number;
   };
+  /** Cheap content flags used by the admin shell to decide which tabs sit in the bar vs More. */
+  contentSignals: ContentSignals;
+}
+
+/** Presence flags for progressive shell menus. */
+export interface ContentSignals {
+  hasMap: boolean;
+  hasClasses: boolean;
+  hasCourses: boolean;
+  hasRunners: boolean;
+  hasResults: boolean;
 }
 
 /** @deprecated alias for {@link EventDashboard}. */

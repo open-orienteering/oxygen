@@ -19,6 +19,7 @@
   "tracks": "Spår",
   "trends": "Trender",
   "more": "Mer",
+  "progressiveHint": "Fler sektioner visas automatiskt när tävlingen får anmälningar och resultat.",
   "backToCompetitions": "Tillbaka till tävlingslistan",
   "competitionNotFound": "Tävling hittades inte",
   "couldNotConnect": "Kunde inte ansluta till tävling \"{{nameId}}\".",

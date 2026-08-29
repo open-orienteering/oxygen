@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, useCallback, lazy, Suspense } from "react";
+import { useEffect, useRef, useState, useCallback, useMemo, lazy, Suspense } from "react";
 import {
   useParams,
   useNavigate,
@@ -34,6 +34,12 @@ import { useMapPanelProps } from "../lib/map-props-store";
 import { MapPanel } from "../components/MapPanel";
 import { MapPane } from "../components/MapPane";
 import { useLocalStorage } from "../hooks/useLocalStorage";
+import {
+  ALL_TABS,
+  computeTabLayout,
+  shouldShowProgressiveHint,
+  type ShellTabId,
+} from "../lib/shell-tabs";
 
 // Lazy-loaded page components — each becomes a separate chunk
 const CompetitionDashboard = lazy(() => import("./CompetitionDashboard").then(m => ({ default: m.CompetitionDashboard })));
@@ -55,7 +61,7 @@ const BackupPunchesPage = lazy(() => import("./BackupPunchesPage").then(m => ({ 
 const TracksPage = lazy(() => import("./TracksPage").then(m => ({ default: m.TracksPage })));
 const RegistrationTrendsPage = lazy(() => import("./RegistrationTrendsPage").then(m => ({ default: m.RegistrationTrendsPage })));
 
-type Tab = "dashboard" | "event" | "runners" | "startlist" | "results" | "classes" | "courses" | "course-editor" | "controls" | "clubs" | "start-station" | "finish-station" | "card-readout" | "cards" | "backup-punches" | "test-lab" | "tracks" | "registration-trends";
+type Tab = ShellTabId;
 
 const tabLabelKeys = {
   "dashboard": "dashboard",
@@ -78,28 +84,6 @@ const tabLabelKeys = {
   "registration-trends": "trends",
 } as const satisfies Record<Tab, string>;
 
-const tabs: { id: Tab; path: string; group?: string; countKey?: string; isOverflow?: boolean }[] = [
-  { id: "dashboard", path: "" },
-  { id: "runners", path: "runners", countKey: "runners" },
-  { id: "startlist", path: "startlist", countKey: "startlist" },
-  { id: "results", path: "results", countKey: "results" },
-  { id: "classes", path: "classes", countKey: "classes" },
-  { id: "courses", path: "courses", countKey: "courses" },
-  { id: "controls", path: "controls", countKey: "controls" },
-  { id: "cards", path: "cards", countKey: "cards" },
-  { id: "tracks", path: "tracks" },
-  // Overflow items
-  { id: "event", path: "event", isOverflow: true },
-  { id: "course-editor", path: "course-editor", isOverflow: true },
-  { id: "registration-trends", path: "registration-trends", isOverflow: true },
-  { id: "clubs", path: "clubs", countKey: "clubs", isOverflow: true },
-  { id: "start-station", path: "start-station", group: "race", isOverflow: true },
-  { id: "finish-station", path: "finish-station", group: "race", isOverflow: true },
-  { id: "card-readout", path: "card-readout", group: "race", isOverflow: true },
-  { id: "backup-punches", path: "backup-punches", group: "race", isOverflow: true },
-  { id: "test-lab", path: "test-lab", group: "dev", isOverflow: true },
-];
-
 export function CompetitionShell() {
   const { nameId } = useParams<{ nameId: string }>();
   const navigate = useNavigate();
@@ -110,7 +94,7 @@ export function CompetitionShell() {
   const pathAfterNameId = location.pathname.split(`/${nameId}/`)[1] ?? "";
   const firstSegment = pathAfterNameId.split("/")[0] || "";
   const activeTab: Tab =
-    tabs.find((t) => t.path === firstSegment)?.id ?? "dashboard";
+    ALL_TABS.find((t) => t.path === firstSegment)?.id ?? "dashboard";
 
   // Auto-select the competition on mount / nameId change
   const [competitionName, setCompetitionName] = useState<string>("");
@@ -162,6 +146,13 @@ export function CompetitionShell() {
     startlist: dashboard.data?.statusCounts?.startListCount ?? 0,
     results: dashboard.data?.statusCounts?.resultCount ?? 0,
   };
+
+  const { primary: primaryTabs, overflow: overflowTabs } = useMemo(
+    () => computeTabLayout(dashboard.data?.contentSignals ?? null),
+    [dashboard.data?.contentSignals],
+  );
+  const activeIsOverflow = overflowTabs.some((tab) => tab.id === activeTab);
+  const showProgressiveHint = shouldShowProgressiveHint(overflowTabs);
 
   const organizerEventorId = dashboard.data?.organizer?.eventorId;
 
@@ -364,7 +355,7 @@ export function CompetitionShell() {
           {/* Tabs */}
           <div className="flex items-center justify-between border-b border-slate-200">
             <nav className="-mb-px flex flex-1 gap-1 overflow-x-auto min-w-0" aria-label="Tabs" style={{ scrollbarWidth: 'none', msOverflowStyle: 'none' }}>
-              {tabs.filter((t) => !t.isOverflow).map((tab) => {
+              {primaryTabs.map((tab) => {
                 const path = tab.path ? `/${nameId}/${tab.path}` : `/${nameId}`;
                 return (
                   <Link
@@ -390,7 +381,7 @@ export function CompetitionShell() {
             {/* Active overflow tab — promoted into the top bar so the user can see
                 what page they're on. Disappears as soon as activeTab is no longer overflow. */}
             {(() => {
-              const activeOverflow = tabs.find((tt) => tt.id === activeTab && tt.isOverflow);
+              const activeOverflow = overflowTabs.find((tt) => tt.id === activeTab);
               if (!activeOverflow) return null;
               const path = activeOverflow.path
                 ? `/${nameId}/${activeOverflow.path}`
@@ -419,7 +410,7 @@ export function CompetitionShell() {
                 <button
                   onClick={() => setShowMoreMenu(!showMoreMenu)}
                   data-testid="more-menu-button"
-                  className={`px-3 py-2.5 text-sm font-medium border-b-2 transition-colors cursor-pointer whitespace-nowrap flex items-center gap-1 leading-none ${tabs.find(t => t.id === activeTab)?.isOverflow
+                  className={`px-3 py-2.5 text-sm font-medium border-b-2 transition-colors cursor-pointer whitespace-nowrap flex items-center gap-1 leading-none ${activeIsOverflow
                     ? "border-blue-600 text-blue-600"
                     : "border-transparent text-slate-500 hover:text-slate-700 hover:border-slate-300"
                     }`}
@@ -440,7 +431,15 @@ export function CompetitionShell() {
                       data-testid="more-menu-content"
                       className="absolute right-0 top-full mt-1 z-30 bg-white border border-slate-200 rounded-lg shadow-lg py-1 min-w-[200px]"
                     >
-                      {tabs.filter((t) => t.isOverflow).map((tab) => {
+                      {showProgressiveHint && (
+                        <p
+                          data-testid="progressive-hint"
+                          className="px-4 py-2 text-xs text-slate-400 leading-snug"
+                        >
+                          {t("progressiveHint")}
+                        </p>
+                      )}
+                      {overflowTabs.map((tab) => {
                         const path = tab.path ? `/${nameId}/${tab.path}` : `/${nameId}`;
                         return (
                           <Link
