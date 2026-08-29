@@ -29,7 +29,32 @@ export const eventRouter = router({
       where: { removed: false },
       orderBy: { date: "desc" },
     });
-    return rows.map(toEventInfo);
+    const eventorIds = [
+      ...new Set(
+        rows
+          .map((row) => row.eventorEventId)
+          .filter((id): id is bigint => id != null)
+          .map((id) => Number(id)),
+      ),
+    ];
+    const metaByEventorId = new Map<number, number>();
+    if (eventorIds.length > 0) {
+      const meta = await prisma().eventorEventMeta.findMany({
+        where: { eventorEventId: { in: eventorIds } },
+        select: { eventorEventId: true, classificationId: true },
+      });
+      for (const row of meta) {
+        if (row.classificationId > 0) {
+          metaByEventorId.set(row.eventorEventId, row.classificationId);
+        }
+      }
+    }
+    return rows.map((row) => {
+      const classificationId = row.eventorEventId
+        ? metaByEventorId.get(Number(row.eventorEventId))
+        : undefined;
+      return toEventInfo(row, classificationId);
+    });
   }),
 
   /**
@@ -718,23 +743,29 @@ export const eventRouter = router({
 
 // ─── Helpers ──────────────────────────────────────────────
 
-function toEventInfo(row: {
-  id: bigint;
-  nameId: string;
-  name: string;
-  annotation: string;
-  date: Date;
-  eventorEnv: string;
-  eventorEventId: bigint | null;
-}): EventInfo {
+function toEventInfo(
+  row: {
+    id: bigint;
+    nameId: string;
+    name: string;
+    annotation: string;
+    date: Date;
+    kind: string;
+    eventorEnv: string;
+    eventorEventId: bigint | null;
+  },
+  classificationId?: number,
+): EventInfo {
   return {
     id: Number(row.id),
     name: row.name,
     annotation: row.annotation,
     date: row.date.toISOString().slice(0, 10),
     nameId: row.nameId,
+    kind: row.kind,
     eventorEnv: row.eventorEnv as "prod" | "test" | undefined,
     eventorEventId: row.eventorEventId ? Number(row.eventorEventId) : undefined,
+    classificationId,
   };
 }
 

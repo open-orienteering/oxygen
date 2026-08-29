@@ -295,10 +295,17 @@ export interface EventInfo {
   annotation: string;
   date: string;
   nameId: string;
+  /** Event kind stored on the row (typically `"competition"`). */
+  kind: string;
   /** The Eventor environment this event is linked to, if any */
   eventorEnv?: EventorEnvironment;
   /** Eventor event ID. Used to build QR links on receipts. */
   eventorEventId?: number;
+  /**
+   * Eventor classification when `eventor_event_meta` is cached for this event.
+   * 1 Championship, 2 National, 3 District, 4 Local, 5 Club, 6 International.
+   */
+  classificationId?: number;
 }
 
 /** @deprecated alias for {@link EventInfo} kept during the post-MeOS rename window. */

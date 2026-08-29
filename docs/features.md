@@ -231,7 +231,11 @@ The components are in the tree and unit-tested, but no page currently feeds them
 
 ### Multiple competitions, side by side
 
-Every competition lives in its own database, so you can keep last year's series, this weekend's race, and a draft for next month loaded at once. The selector is the landing page — pick one and the whole app re-scopes to that event.
+Every event lives in the single `oxygen` database, scoped by `event_id`. The selector is the landing page — pick one and the whole app re-scopes to that event.
+
+The list is grouped into **Upcoming** (`date >= today`) and **Past**, denser than the original card so clubs can keep many events loaded. A search box matches name, slug, and annotation; when any listed event has an Eventor classification cached in `eventor_event_meta`, a type filter (championship through club/international, plus unclassified) appears.
+
+Creating an event asks only for name and date. The old per-event MySQL host fields are gone.
 
 ![Competition selector](screenshots/competition-selector.png)
 
