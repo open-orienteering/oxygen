@@ -159,6 +159,9 @@ export const eventRouter = router({
       const totalControls = await ctx.db.control.count({
         where: { eventId: ctx.event.id, removed: false },
       });
+      const mapCount = await ctx.db.mapFile.count({
+        where: { eventId: ctx.event.id },
+      });
 
       const runners = await ctx.db.runner.findMany({
         where: { eventId: ctx.event.id, removed: false },
@@ -301,6 +304,13 @@ export const eventRouter = router({
         totalControls,
         statusCounts,
         organizer,
+        contentSignals: {
+          hasMap: mapCount > 0,
+          hasClasses: classInfos.length > 0,
+          hasCourses: courseInfos.length > 0,
+          hasRunners: participantCount > 0,
+          hasResults: statusCounts.resultCount > 0,
+        },
       };
     },
   ),

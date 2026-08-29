@@ -237,6 +237,8 @@ The list is grouped into **Upcoming** (`date >= today`) and **Past**, denser tha
 
 Creating an event asks only for name and date. The old per-event MySQL host fields are gone.
 
+Inside an event, the admin tab bar starts with planning pages (Dashboard, Classes, Courses, Controls, Course editor). Runners, start lists, results, cards, and tracks move into the More menu until the event has entries or results — they are never unreachable. Race-day stations stay in More.
+
 ![Competition selector](screenshots/competition-selector.png)
 
 ### Offline and PWA

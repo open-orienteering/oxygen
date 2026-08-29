@@ -10,6 +10,7 @@ import { describe, it, expect, afterAll } from "vitest";
 import { disconnect } from "../helpers/test-db.js";
 import { makeCaller } from "../helpers/caller.js";
 import { resolveEvent, prisma } from "../../db.js";
+import { RunnerStatus } from "@oxygen/shared";
 
 afterAll(async () => {
   await disconnect();
@@ -89,6 +90,74 @@ describe("event.dashboard", () => {
       // Status counts have the right shape.
       expect(typeof dash.statusCounts.notStarted).toBe("number");
       expect(typeof dash.statusCounts.cancelled).toBe("number");
+      expect(dash.contentSignals).toEqual({
+        hasMap: false,
+        hasClasses: true,
+        hasCourses: false,
+        hasRunners: true,
+        hasResults: false,
+      });
+      expect(dash.contentSignals).toEqual({
+        hasMap: false,
+        hasClasses: true,
+        hasCourses: false,
+        hasRunners: true,
+        hasResults: false,
+      });
+    } finally {
+      await publicCaller.event.delete({ nameId: slug });
+      await publicCaller.event.purgeDeleted();
+    }
+  });
+});
+
+describe("event.dashboard contentSignals", () => {
+  it("is all-false on a fresh event, then reflects map / results", async () => {
+    const slug = `oxygen_test_signals_${Math.random().toString(36).slice(2, 8)}`;
+    const publicCaller = makeCaller(null);
+    await publicCaller.event.create({
+      name: "Signals test",
+      nameId: slug,
+      date: "2026-04-15",
+    });
+    const ref = (await resolveEvent(slug))!;
+    const caller = makeCaller(ref);
+    const db = prisma();
+    try {
+      const empty = await caller.event.dashboard();
+      expect(empty.contentSignals).toEqual({
+        hasMap: false,
+        hasClasses: false,
+        hasCourses: false,
+        hasRunners: false,
+        hasResults: false,
+      });
+
+      await db.mapFile.create({
+        data: {
+          eventId: ref.id,
+          fileName: "base.ocd",
+          fileData: Buffer.from([0]),
+        },
+      });
+      await caller.course.create({ name: "Bana 1" });
+      const cls = await caller.class.create({ name: "H21" });
+      await caller.runner.create({
+        name: "Finished",
+        classId: cls.id,
+        cardNo: 93001,
+        status: RunnerStatus.OK,
+        finishTime: 400000,
+      });
+
+      const filled = await caller.event.dashboard();
+      expect(filled.contentSignals).toEqual({
+        hasMap: true,
+        hasClasses: true,
+        hasCourses: true,
+        hasRunners: true,
+        hasResults: true,
+      });
     } finally {
       await publicCaller.event.delete({ nameId: slug });
       await publicCaller.event.purgeDeleted();
