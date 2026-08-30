@@ -1,6 +1,8 @@
 import { memo, useId, useState, useRef, useMemo, useEffect, useCallback } from "react";
 import { useTranslation } from "react-i18next";
 import { trpc } from "../lib/trpc";
+import { fileToBase64 } from "../lib/file-to-base64";
+import { useCurrentUser } from "../context/CurrentUserContext";
 import { MapViewer, type ControlOverlay, type CourseOverlay, type MapViewerEditorProps } from "./MapViewer";
 
 /**
@@ -109,6 +111,8 @@ function MapPanelImpl({
   editor,
 }: MapPanelPublicProps) {
   const { t } = useTranslation("dashboard");
+  const { t: tl } = useTranslation("library");
+  const { user, authEnabled } = useCurrentUser();
   // Stable for the lifetime of this MapPanel instance. Exposed as
   // `data-instance-id` on every render-path root so the E2E suite can
   // assert the persistent shell-pane MapPanel doesn't remount across
@@ -242,8 +246,25 @@ function MapPanelImpl({
   const fullscreenRef = useRef<HTMLDivElement>(null);
 
   const [uploadError, setUploadError] = useState<string | null>(null);
+  const [showLibraryPicker, setShowLibraryPicker] = useState(false);
+  const canQueryLibrary = !authEnabled || Boolean(user);
+  const clubMaps = trpc.clubMap.list.useQuery(undefined, {
+    enabled: canQueryLibrary,
+    staleTime: 30_000,
+  });
   const uploadMutation = trpc.course.uploadMap.useMutation({
     onSuccess: () => {
+      setUploadError(null);
+      mapInfo.refetch();
+      mapMetadata.refetch();
+    },
+    onError: (err) => {
+      setUploadError(`Map upload failed: ${err.message}`);
+    },
+  });
+  const useClubMap = trpc.course.useClubMap.useMutation({
+    onSuccess: () => {
+      setShowLibraryPicker(false);
       setUploadError(null);
       mapInfo.refetch();
       mapMetadata.refetch();
@@ -261,15 +282,9 @@ function MapPanelImpl({
 
   const handleFile = useCallback((file: File) => {
     if (!file.name.toLowerCase().endsWith(".ocd")) return;
-    const reader = new FileReader();
-    reader.onload = (e) => {
-      const buf = e.target?.result as ArrayBuffer;
-      const base64 = btoa(
-        new Uint8Array(buf).reduce((data, byte) => data + String.fromCharCode(byte), ""),
-      );
-      uploadMutation.mutate({ fileName: file.name, fileDataBase64: base64 });
-    };
-    reader.readAsArrayBuffer(file);
+    void fileToBase64(file).then((fileDataBase64) => {
+      uploadMutation.mutate({ fileName: file.name, fileDataBase64 });
+    });
   }, [uploadMutation]);
 
   const handleDrop = useCallback((e: React.DragEvent) => {
@@ -278,6 +293,52 @@ function MapPanelImpl({
     const file = e.dataTransfer.files[0];
     if (file) handleFile(file);
   }, [handleFile]);
+
+  const libraryPicker = showLibraryPicker ? (
+    <div
+      data-testid="club-map-picker"
+      className="fixed inset-0 z-[60] bg-black/40 flex items-center justify-center p-4"
+    >
+      <div className="bg-white rounded-xl shadow-lg max-w-md w-full p-5 space-y-3">
+        <div className="flex items-center justify-between">
+          <h2 className="font-semibold text-slate-900">{tl("pickerTitle")}</h2>
+          <button
+            type="button"
+            className="text-sm text-slate-500 cursor-pointer"
+            onClick={() => setShowLibraryPicker(false)}
+          >
+            {tl("cancel")}
+          </button>
+        </div>
+        <ul className="divide-y divide-slate-100 max-h-80 overflow-auto">
+          {(clubMaps.data ?? []).map((m) => (
+            <li key={m.id}>
+              <button
+                type="button"
+                data-testid={`club-map-pick-${m.id}`}
+                className="w-full text-left py-2 px-1 hover:bg-slate-50 cursor-pointer"
+                onClick={() => useClubMap.mutate({ clubMapId: m.id })}
+              >
+                <div className="font-medium text-sm text-slate-900">{m.name}</div>
+                <div className="text-xs text-slate-500">
+                  {m.scale
+                    ? `1:${Math.round(m.scale).toString().replace(/\B(?=(\d{3})+(?!\d))/g, " ")}`
+                    : tl("noScale")}
+                  {" · "}
+                  {m.sizeBytes < 1024 * 1024
+                    ? `${(m.sizeBytes / 1024).toFixed(1)} KB`
+                    : `${(m.sizeBytes / (1024 * 1024)).toFixed(1)} MB`}
+                </div>
+              </button>
+            </li>
+          ))}
+        </ul>
+        {useClubMap.isPending && (
+          <p className="text-xs text-blue-600">{t("uploading")}</p>
+        )}
+      </div>
+    </div>
+  ) : null;
 
   // Determine which control IDs belong to the highlighted course(s)
   const courseControlIds = useMemo(() => {
@@ -602,6 +663,16 @@ function MapPanelImpl({
             >
               {t("uploadMap")}
             </button>
+            {(clubMaps.data?.length ?? 0) > 0 && (
+              <button
+                type="button"
+                data-testid="use-club-map"
+                onClick={() => setShowLibraryPicker(true)}
+                className="ml-2 px-3 py-1.5 text-xs border border-blue-200 text-blue-700 rounded-lg hover:bg-blue-50 transition-colors cursor-pointer"
+              >
+                {tl("fromClubLibrary")}
+              </button>
+            )}
             <input
               ref={fileInputRef}
               type="file"
@@ -620,6 +691,7 @@ function MapPanelImpl({
             )}
           </div>
         </div>
+        {libraryPicker}
       </div>
     );
   }
@@ -672,6 +744,7 @@ function MapPanelImpl({
           mapScale={mapMetadata.data?.scale}
           northOffset={mapMetadata.data?.northOffset}
           mapVersion={mapMetadata.data?.uploadedAt}
+          calibration={mapMetadata.data?.calibration}
           controls={controlOverlays}
           courses={courseOverlays}
           courseGeometry={courseGeometry}
@@ -731,6 +804,16 @@ function MapPanelImpl({
           >
             {t("replaceMap")}
           </button>
+          {(clubMaps.data?.length ?? 0) > 0 && (
+            <button
+              type="button"
+              data-testid="use-club-map"
+              onClick={() => setShowLibraryPicker(true)}
+              className="text-xs text-blue-600 hover:text-blue-800 cursor-pointer"
+            >
+              {tl("fromClubLibrary")}
+            </button>
+          )}
         </div>
       </div>}
 
@@ -750,6 +833,7 @@ function MapPanelImpl({
       {uploadError && (
         <div className="mt-1 text-xs text-red-600">{uploadError}</div>
       )}
+      {libraryPicker}
     </div>
   );
 }

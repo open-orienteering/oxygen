@@ -40,6 +40,10 @@ export async function reseed(): Promise<void> {
       `DELETE FROM events WHERE name_id IN (${placeholders}) OR name_id LIKE 'E2E_%' OR name_id LIKE 'Delete_%'`,
       args,
     );
+    await client.query("DELETE FROM club_map_files");
+    await client.query("DELETE FROM club_control_series");
+    await client.query("DELETE FROM club_class_presets");
+    await client.query("DELETE FROM club_user_groups");
   } finally {
     await client.end();
   }

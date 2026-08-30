@@ -13,7 +13,7 @@
  */
 
 import { z } from "zod";
-import { router, publicProcedure, eventProcedure } from "../trpc.js";
+import { router, publicProcedure, viewProcedure } from "../trpc.js";
 import { prisma } from "../db.js";
 
 export interface RawEntry {
@@ -63,7 +63,7 @@ export const registrationTrendsRouter = router({
    * Returned shape matches the legacy MeOS-era router so the existing
    * `lib/registration-trends.ts` series builder works unchanged.
    */
-  ownTimeline: eventProcedure.query(async ({ ctx }) => {
+  ownTimeline: viewProcedure.query(async ({ ctx }) => {
     const event = await ctx.db.event.findUnique({
       where: { id: ctx.event.id },
       select: {

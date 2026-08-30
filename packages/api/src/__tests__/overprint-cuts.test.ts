@@ -50,10 +50,13 @@ describe("circleCuts", () => {
     expect(cuts).toHaveLength(1);
     expect(gapAt(cuts, 90)).toBe(true);
     expect(gapAt(cuts, 270)).toBe(false);
-    // Symmetric around east, and narrow.
+    // Symmetric around east, and tight: just the symbol plus half the
+    // overprint stroke, ~0.8 mm of rim. A wider cut fragments the circle
+    // without revealing more map.
     const width = (cuts[0].end - cuts[0].start + 360) % 360;
     expect(width).toBeGreaterThan(10);
-    expect(width).toBeLessThan(60);
+    expect(width).toBeLessThan(22);
+    expect((width / 360) * 2 * Math.PI * CIRCLE_RADIUS_MM).toBeLessThan(1);
   });
 
   it("includes knolls but leaves the circle whole for a centred feature", () => {
@@ -80,6 +83,11 @@ describe("circleCuts", () => {
     expect(gapAt(cuts, eastOfNorth)).toBe(true);
     expect(gapAt(cuts, 180 - eastOfNorth)).toBe(true);
     expect(gapAt(cuts, 270)).toBe(false);
+    // Each crossing clears the line and no more — the two slits stay
+    // well apart instead of merging into one long arc.
+    for (const cut of cuts) {
+      expect((cut.end - cut.start + 360) % 360).toBeLessThan(20);
+    }
   });
 
   it("cuts the rim stretch inside a building and merges overlaps", () => {
@@ -124,6 +132,8 @@ describe("legGaps", () => {
     // 0.5 (the projection) sits inside the gap.
     expect(gaps[0].from).toBeLessThan(0.5);
     expect(gaps[0].to).toBeGreaterThan(0.5);
+    // Tight: just wide enough to free the boulder, ~0.8 mm of a 40 mm leg.
+    expect((gaps[0].to - gaps[0].from) * 40).toBeLessThan(1);
   });
 
   it("excludes knolls from leg gaps", () => {
@@ -159,9 +169,15 @@ describe("legGaps", () => {
   });
 
   it("merges overlapping gaps and never erases most of the leg", () => {
-    const b1 = obj(204000, 1, [[19.5, 0]]);
-    const b2 = obj(204000, 1, [[20.5, 0]]);
+    // 0.5 mm apart — closer than the two 0.8 mm gaps, so they fuse.
+    const b1 = obj(204000, 1, [[19.75, 0]]);
+    const b2 = obj(204000, 1, [[20.25, 0]]);
     expect(legGaps(A, B, [b1, b2])).toHaveLength(1);
+    // Further apart they stay separate rather than erasing the stretch
+    // between them.
+    const far1 = obj(204000, 1, [[18, 0]]);
+    const far2 = obj(204000, 1, [[22, 0]]);
+    expect(legGaps(A, B, [far1, far2])).toHaveLength(2);
 
     // A building covering nearly the whole leg trips the sanity cap.
     const giant = obj(521000, 3, [[1, -5], [39, -5], [39, 5], [1, 5]]);

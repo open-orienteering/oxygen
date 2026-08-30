@@ -17,6 +17,12 @@ import {
   type AuthMode,
   type AuthUser,
 } from "./auth.js";
+import type { Capability } from "@oxygen/shared";
+import { ALL_CAPABILITIES } from "@oxygen/shared";
+import { resolveEventCapabilities } from "./permissions.js";
+import { timingSafeEqual } from "node:crypto";
+
+export const KIOSK_KEY_HEADER = "x-kiosk-key";
 
 /** Context available to all tRPC procedures. */
 export interface Context {
@@ -31,6 +37,8 @@ export interface Context {
   /** True when AUTH_MODE is proxy or dev. */
   authEnabled: boolean;
   authMode: AuthMode;
+  /** Device token from `x-kiosk-key` / `?k=`. */
+  kioskKey: string | null;
 }
 
 /**
@@ -48,6 +56,8 @@ export async function createContext(
   const event = nameId ? await resolveEvent(nameId) : null;
   const secretRaw = opts.req.headers[SYNC_SECRET_HEADER];
   const syncSecret = (Array.isArray(secretRaw) ? secretRaw[0] : secretRaw) ?? null;
+  const kioskRaw = opts.req.headers[KIOSK_KEY_HEADER];
+  const kioskKey = (Array.isArray(kioskRaw) ? kioskRaw[0] : kioskRaw)?.trim() || null;
 
   const mode = authMode();
   const enabled = mode !== "off";
@@ -69,6 +79,7 @@ export async function createContext(
     identityEmail,
     authEnabled: enabled,
     authMode: mode,
+    kioskKey,
   };
 }
 
@@ -112,6 +123,7 @@ export const adminProcedure = authedProcedure.use(async ({ ctx, next }) => {
 export interface EventContext extends Context {
   event: EventRef;
   db: PrismaClient;
+  capabilities?: Set<Capability>;
 }
 
 const requireEvent = middleware(async ({ ctx, next }) => {
@@ -174,5 +186,124 @@ export const peerProcedure = publicProcedure.use(requireEvent).use(async ({ ctx,
       message: "Invalid or missing node sync secret",
     });
   }
+  return next();
+});
+
+export function kioskKeyMatches(
+  presented: string | null | undefined,
+  stored: string | null | undefined,
+): boolean {
+  if (!presented || !stored) return false;
+  const a = Buffer.from(presented);
+  const b = Buffer.from(stored);
+  if (a.length !== b.length) return false;
+  return timingSafeEqual(a, b);
+}
+
+async function eventDateFor(
+  ctx: EventContext,
+): Promise<Date> {
+  if (ctx.event.date) return ctx.event.date;
+  const row = await ctx.db.event.findUnique({
+    where: { id: ctx.event.id },
+    select: { date: true },
+  });
+  return row?.date ?? new Date(0);
+}
+
+export async function capabilitiesForContext(
+  ctx: EventContext,
+): Promise<Set<Capability>> {
+  const date = await eventDateFor(ctx);
+  return resolveEventCapabilities({
+    db: ctx.db,
+    eventId: ctx.event.id,
+    eventDate: date,
+    user: ctx.user,
+    authEnabled: ctx.authEnabled,
+  });
+}
+
+function requireCapability(cap: Capability) {
+  return middleware(async ({ ctx, next }) => {
+    const ectx = ctx as EventContext;
+    const caps = await capabilitiesForContext(ectx);
+    if (!caps.has(cap)) {
+      throw new TRPCError({
+        code: "FORBIDDEN",
+        message: `Missing capability ${cap}`,
+      });
+    }
+    return next({ ctx: { ...ectx, capabilities: caps } });
+  });
+}
+
+/**
+ * Event-scoped, not user-gated. Allowed when AUTH_MODE=off, a valid kiosk
+ * key is presented, or the invited user holds `cap`.
+ */
+export function kioskOrCapProcedure(cap: Capability) {
+  return publicProcedure.use(requireEvent).use(async ({ ctx, next }) => {
+    const ectx = ctx as EventContext;
+    if (!ectx.authEnabled) {
+      return next({
+        ctx: { ...ectx, capabilities: new Set(ALL_CAPABILITIES) },
+      });
+    }
+    const stored = ectx.event.kioskKey ?? null;
+    if (kioskKeyMatches(ectx.kioskKey, stored)) {
+      return next({
+        ctx: { ...ectx, capabilities: new Set([cap]) },
+      });
+    }
+    if (!ectx.user) {
+      throw new TRPCError({
+        code: "UNAUTHORIZED",
+        message: "Not authenticated",
+      });
+    }
+    const caps = await capabilitiesForContext(ectx);
+    if (!caps.has(cap)) {
+      throw new TRPCError({
+        code: "FORBIDDEN",
+        message: `Missing capability ${cap}`,
+      });
+    }
+    return next({ ctx: { ...ectx, capabilities: caps } });
+  });
+}
+
+export const viewProcedure = eventProcedure.use(requireCapability("event.view"));
+export const manageProcedure = eventProcedure.use(requireCapability("event.manage"));
+export const manageRaceProcedure = raceProcedure.use(requireCapability("event.manage"));
+export const coursesViewProcedure = eventProcedure.use(requireCapability("courses.view"));
+export const coursesEditProcedure = eventProcedure.use(
+  requireCapability("courses.edit"),
+);
+export const coursesEditRaceProcedure = raceProcedure.use(
+  requireCapability("courses.edit"),
+);
+export const raceOperateProcedure = eventProcedure.use(
+  requireCapability("race.operate"),
+);
+export const raceOperateRaceProcedure = raceProcedure.use(
+  requireCapability("race.operate"),
+);
+export const resultsViewProcedure = eventProcedure.use(
+  requireCapability("results.view"),
+);
+export const kioskOrViewProcedure = kioskOrCapProcedure("event.view");
+/**
+ * Read-only course/map data. Kiosk-key devices need these for the
+ * post-readout course map (MapPanel), mirroring the REST map-tile rule
+ * that treats a kiosk key as sufficient for map access.
+ */
+export const kioskOrCoursesViewProcedure = kioskOrCapProcedure("courses.view");
+export const kioskOrRaceOperateProcedure = kioskOrCapProcedure("race.operate");
+export const kioskOrRaceOperateRaceProcedure = kioskOrCapProcedure(
+  "race.operate",
+).use(async ({ ctx, next }) => {
+  const ectx = ctx as EventContext;
+  await assertRaceWritable(ectx.db, ectx.event.id);
   return next();
 });

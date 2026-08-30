@@ -17,7 +17,7 @@
 
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
-import { router, eventProcedure, publicProcedure } from "../trpc.js";
+import { router, manageProcedure, publicProcedure } from "../trpc.js";
 import { sanitizeNameId, prisma } from "../db.js";
 import {
   MALE_FIRST_NAMES,
@@ -239,7 +239,7 @@ export const testLabRouter = router({
     }),
 
   /** Delete every runner for the active event. */
-  clearRunners: eventProcedure.mutation(async ({ ctx }) => {
+  clearRunners: manageProcedure.mutation(async ({ ctx }) => {
     const result = await ctx.db.runner.deleteMany({
       where: { eventId: ctx.event.id },
     });
@@ -251,7 +251,7 @@ export const testLabRouter = router({
   // simulation pipeline itself lives further down (`startSimulation`,
   // `simulationStatus`, `updateSpeed`, `stopSimulation`).
 
-  status: eventProcedure.query(async ({ ctx }) => {
+  status: manageProcedure.query(async ({ ctx }) => {
     const runnerCount = await ctx.db.runner.count({
       where: { eventId: ctx.event.id, removed: false },
     });
@@ -288,7 +288,7 @@ export const testLabRouter = router({
    * draw + course assignment are normally done from the EventPage
    * before pressing "Start simulation".
    */
-  startSimulation: eventProcedure
+  startSimulation: manageProcedure
     .input(
       z
         .object({
@@ -549,7 +549,7 @@ export const testLabRouter = router({
       };
     }),
 
-  stopSimulation: eventProcedure.mutation(async ({ ctx }) => {
+  stopSimulation: manageProcedure.mutation(async ({ ctx }) => {
     const key = String(ctx.event.id);
     const state = simulations.get(key);
     if (state?.timer) clearInterval(state.timer);
@@ -558,7 +558,7 @@ export const testLabRouter = router({
     return { ok: true as const };
   }),
 
-  simulationStatus: eventProcedure.query(async ({ ctx }) => {
+  simulationStatus: manageProcedure.query(async ({ ctx }) => {
     const state = simulations.get(String(ctx.event.id));
     if (!state) {
       return {
@@ -580,7 +580,7 @@ export const testLabRouter = router({
     };
   }),
 
-  updateSpeed: eventProcedure
+  updateSpeed: manageProcedure
     .input(z.object({ speedFactor: z.number().positive() }))
     .mutation(async ({ ctx, input }) => {
       const state = simulations.get(String(ctx.event.id));
@@ -603,7 +603,7 @@ export const testLabRouter = router({
       return { ok: true as const, speedFactor: input.speedFactor };
     }),
 
-  cardList: eventProcedure.query(async ({ ctx }) => {
+  cardList: manageProcedure.query(async ({ ctx }) => {
     const runners = await ctx.db.runner.findMany({
       where: { eventId: ctx.event.id, removed: false, cardNo: { gt: 0 } },
       select: { cardNo: true, name: true, seq: true },
@@ -618,7 +618,7 @@ export const testLabRouter = router({
    * simulator. Returns the resulting `runner.id` + `finishTime` so a
    * test can immediately assert on the after-state.
    */
-  generateReadout: eventProcedure
+  generateReadout: manageProcedure
     .input(z.object({ cardNo: z.number().int().positive() }))
     .mutation(async ({ ctx, input }) => {
       const runner = await ctx.db.runner.findFirst({
@@ -728,7 +728,7 @@ export const testLabRouter = router({
     }),
 
   /** Generate a starter set of classes for the event. */
-  generateClasses: eventProcedure
+  generateClasses: manageProcedure
     .input(z.object({ count: z.number().int().min(1).max(20).default(5) }).optional())
     .mutation(async ({ ctx, input }) => {
       const count = input?.count ?? 5;
@@ -752,7 +752,7 @@ export const testLabRouter = router({
     }),
 
   /** Generate a starter set of courses. */
-  generateCourses: eventProcedure
+  generateCourses: manageProcedure
     .input(z.object({ count: z.number().int().min(1).max(20).default(3) }).optional())
     .mutation(async ({ ctx, input }) => {
       const count = input?.count ?? 3;
@@ -776,7 +776,7 @@ export const testLabRouter = router({
     }),
 
   /** Register N fictional runners. */
-  registerFictionalRunners: eventProcedure
+  registerFictionalRunners: manageProcedure
     .input(z.object({ count: z.number().int().min(1).max(2000).default(20) }))
     .mutation(async ({ ctx, input }) => {
       const classes = await ctx.db.class.findMany({
@@ -813,7 +813,7 @@ export const testLabRouter = router({
     }),
 
   /** Register N runners onto a specific class. */
-  registerRunners: eventProcedure
+  registerRunners: manageProcedure
     .input(
       z.object({
         classId: z.number().int(),
@@ -851,7 +851,7 @@ export const testLabRouter = router({
     }),
 
   /** Push a synthetic backup-memory punch. */
-  pushBackupPunch: eventProcedure
+  pushBackupPunch: manageProcedure
     .input(
       z.object({
         cardNo: z.number().int(),
@@ -873,7 +873,7 @@ export const testLabRouter = router({
     }),
 
   /** List all backup-memory punches for the event. */
-  listAllBackupPunches: eventProcedure.query(async ({ ctx }) => {
+  listAllBackupPunches: manageProcedure.query(async ({ ctx }) => {
     const rows = await ctx.db.punch.findMany({
       where: {
         eventId: ctx.event.id,

@@ -8,10 +8,10 @@
 
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
-import { router, eventProcedure } from "../trpc.js";
+import { router, viewProcedure, manageProcedure } from "../trpc.js";
 
 export const tracksRouter = router({
-  listRoutes: eventProcedure.query(async ({ ctx }) => {
+  listRoutes: viewProcedure.query(async ({ ctx }) => {
     const routes = await ctx.db.route.findMany({
       where: { eventId: ctx.event.id },
       include: {
@@ -46,7 +46,7 @@ export const tracksRouter = router({
    * className alongside so the TracksPage filter chips can render without
    * an additional class lookup.
    */
-  listSyncedClasses: eventProcedure.query(async ({ ctx }) => {
+  listSyncedClasses: viewProcedure.query(async ({ ctx }) => {
     const rows = await ctx.db.route.groupBy({
       by: ["classId"],
       where: { eventId: ctx.event.id },
@@ -75,7 +75,7 @@ export const tracksRouter = router({
   }),
 
   /** Delete a single route by its numeric id. */
-  deleteRoute: eventProcedure
+  deleteRoute: manageProcedure
     .input(z.object({ routeId: z.number().int() }))
     .mutation(async ({ ctx, input }) => {
       await ctx.db.route.delete({ where: { id: BigInt(input.routeId) } });
@@ -86,7 +86,7 @@ export const tracksRouter = router({
    * Fetch the GPS waypoints for a single route so the TracksPage
    * "expanded row" can overlay one runner on the map.
    */
-  getRoutePreview: eventProcedure
+  getRoutePreview: viewProcedure
     .input(z.object({ routeId: z.number().int() }))
     .query(async ({ ctx, input }) => {
       const route = await ctx.db.route.findUnique({
@@ -118,7 +118,7 @@ export const tracksRouter = router({
     }),
 
   /** Bulk fetch of route GPS data for a whole class. */
-  getClassRoutes: eventProcedure
+  getClassRoutes: viewProcedure
     .input(z.object({ classId: z.number().int().optional() }))
     .query(async ({ ctx, input }) => {
       const where: Record<string, unknown> = { eventId: ctx.event.id };
@@ -150,7 +150,7 @@ export const tracksRouter = router({
     }),
 
   /** Route by runner seq. */
-  routeByRunner: eventProcedure
+  routeByRunner: viewProcedure
     .input(z.object({ runnerId: z.number().int() }))
     .query(async ({ ctx, input }) => {
       const runner = await ctx.db.runner.findFirst({

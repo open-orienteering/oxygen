@@ -48,12 +48,15 @@ const CLASS_BASE = 12_345;
 const PERSON_BASE = 67_890;
 
 beforeAll(async () => {
-  await setSetting("eventor_api_key", "test-key");
+  // This suite runs in parallel with eventor-import-cardless, which owns the
+  // production key setting. Use the test-environment key so either suite's
+  // cleanup cannot invalidate the other's in-flight sync.
+  await setSetting("eventor_api_key_test", "test-key");
   eventorKeyStore._resetForTests();
 }, 30_000);
 
 afterAll(async () => {
-  await setSetting("eventor_api_key", null);
+  await setSetting("eventor_api_key_test", null);
   eventorKeyStore._resetForTests();
   await disconnect();
 }, 30_000);
@@ -116,7 +119,7 @@ describe("eventor.sync re-entry status reset", () => {
     try {
       await ctx.db.event.update({
         where: { id: ctx.eventId },
-        data: { eventorEventId: BigInt(EVENTOR_EVENT_ID), eventorEnv: "prod" },
+        data: { eventorEventId: BigInt(EVENTOR_EVENT_ID), eventorEnv: "test" },
       });
       const course = await ctx.db.course.create({
         data: { eventId: ctx.eventId, name: "U4", lengthM: 1200 },
@@ -153,7 +156,7 @@ describe("eventor.sync re-entry status reset", () => {
     try {
       await ctx.db.event.update({
         where: { id: ctx.eventId },
-        data: { eventorEventId: BigInt(EVENTOR_EVENT_ID), eventorEnv: "prod" },
+        data: { eventorEventId: BigInt(EVENTOR_EVENT_ID), eventorEnv: "test" },
       });
       const course = await ctx.db.course.create({
         data: {
@@ -196,7 +199,7 @@ describe("eventor.sync re-entry status reset", () => {
       // Link the event to an Eventor event so the sync mutation finds it.
       await ctx.db.event.update({
         where: { id: ctx.eventId },
-        data: { eventorEventId: BigInt(EVENTOR_EVENT_ID), eventorEnv: "prod" },
+        data: { eventorEventId: BigInt(EVENTOR_EVENT_ID), eventorEnv: "test" },
       });
 
       // Seed a previously-cancelled runner. The sync looks up by
@@ -247,7 +250,7 @@ describe("eventor.sync re-entry status reset", () => {
     try {
       await ctx.db.event.update({
         where: { id: ctx.eventId },
-        data: { eventorEventId: BigInt(EVENTOR_EVENT_ID), eventorEnv: "prod" },
+        data: { eventorEventId: BigInt(EVENTOR_EVENT_ID), eventorEnv: "test" },
       });
 
       const cls = await ctx.db.class.create({
@@ -305,7 +308,7 @@ describe("eventor.sync re-entry status reset", () => {
     try {
       await ctx.db.event.update({
         where: { id: ctx.eventId },
-        data: { eventorEventId: BigInt(EVENTOR_EVENT_ID), eventorEnv: "prod" },
+        data: { eventorEventId: BigInt(EVENTOR_EVENT_ID), eventorEnv: "test" },
       });
 
       const cls = await ctx.db.class.create({

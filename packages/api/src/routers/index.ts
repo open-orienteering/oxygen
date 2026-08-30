@@ -19,6 +19,10 @@ import { eventsRouter } from "./events.js";
 import { leaseRouter } from "./lease.js";
 import { registrationTrendsRouter } from "./registrationTrends.js";
 import { usersRouter } from "./users.js";
+import { permissionRouter } from "./permission.js";
+import { clubMapRouter } from "./clubMap.js";
+import { controlSeriesRouter } from "./controlSeries.js";
+import { classPresetRouter } from "./classPreset.js";
 
 export const appRouter = router({
   // The active orienteering event. Kept under the `competition` namespace
@@ -47,6 +51,10 @@ export const appRouter = router({
   lease: leaseRouter,
   registrationTrends: registrationTrendsRouter,
   users: usersRouter,
+  permission: permissionRouter,
+  clubMap: clubMapRouter,
+  controlSeries: controlSeriesRouter,
+  classPreset: classPresetRouter,
 });
 
 export type AppRouter = typeof appRouter;

@@ -1,5 +1,51 @@
-import { describe, it, expect } from "vitest";
-import { resolveUpdateAction, formatBuildVersion } from "../app-update";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import {
+  resolveUpdateAction,
+  formatBuildVersion,
+  createUpdateActivator,
+} from "../app-update";
+
+describe("createUpdateActivator", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("activates the waiting worker immediately", () => {
+    const activate = vi.fn();
+    const reload = vi.fn();
+    createUpdateActivator({ activate, reload, fallbackMs: 2500 })();
+    expect(activate).toHaveBeenCalledTimes(1);
+    expect(reload).not.toHaveBeenCalled();
+  });
+
+  // The SW-driven reload never fires when the tab isn't controlled by a
+  // service worker or the waiting worker vanished — this is the "reload
+  // button doesn't register" bug. The fallback hard reload covers it.
+  it("hard-reloads when the worker activation doesn't reload the page", () => {
+    const activate = vi.fn();
+    const reload = vi.fn();
+    createUpdateActivator({ activate, reload, fallbackMs: 2500 })();
+    vi.advanceTimersByTime(2499);
+    expect(reload).not.toHaveBeenCalled();
+    vi.advanceTimersByTime(1);
+    expect(reload).toHaveBeenCalledTimes(1);
+  });
+
+  it("schedules only one fallback for repeated clicks", () => {
+    const activate = vi.fn();
+    const reload = vi.fn();
+    const run = createUpdateActivator({ activate, reload, fallbackMs: 2500 });
+    run();
+    run();
+    run();
+    vi.advanceTimersByTime(10_000);
+    expect(activate).toHaveBeenCalledTimes(3);
+    expect(reload).toHaveBeenCalledTimes(1);
+  });
+});
 
 describe("resolveUpdateAction", () => {
   it("reports nothing when both sources are quiet", () => {

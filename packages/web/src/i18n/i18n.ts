@@ -21,6 +21,7 @@ import enStatus from "./locales/en/status.json";
 import enTracks from "./locales/en/tracks.json";
 import enTrends from "./locales/en/trends.json";
 import enAuth from "./locales/en/auth.json";
+import enLibrary from "./locales/en/library.json";
 
 import svCommon from "./locales/sv/common.json";
 import svNav from "./locales/sv/nav.json";
@@ -42,6 +43,7 @@ import svStatus from "./locales/sv/status.json";
 import svTracks from "./locales/sv/tracks.json";
 import svTrends from "./locales/sv/trends.json";
 import svAuth from "./locales/sv/auth.json";
+import svLibrary from "./locales/sv/library.json";
 
 export const defaultNS = "common" as const;
 
@@ -67,6 +69,7 @@ export const resources = {
     tracks: enTracks,
     trends: enTrends,
     auth: enAuth,
+    library: enLibrary,
   },
   sv: {
     common: svCommon,
@@ -89,6 +92,7 @@ export const resources = {
     tracks: svTracks,
     trends: svTrends,
     auth: svAuth,
+    library: svLibrary,
   },
 } as const;
 

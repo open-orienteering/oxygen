@@ -28,6 +28,7 @@ import { shouldProcessStandaloneCard } from "../lib/kiosk-standalone-routing";
 import { getClubLogoUrl } from "../lib/club-logo";
 import { SiCardAnimation } from "../components/SiCardAnimation";
 import { useStationSync } from "../hooks/useStationSync";
+import { KioskAccessGate } from "../components/KioskAccessGate";
 
 // Registration-waiting watchdog timeout. E2E hook: tests override via
 // localStorage (set in an init script, i.e. before this module loads) so
@@ -75,6 +76,14 @@ function saveSettings(nameId: string, settings: KioskSettings): void {
 // ─── Main Kiosk Page ────────────────────────────────────────
 
 export function KioskPage() {
+  return (
+    <KioskAccessGate>
+      <KioskPageBody />
+    </KioskAccessGate>
+  );
+}
+
+function KioskPageBody() {
   const { t } = useTranslation("kiosk");
   const { nameId } = useParams<{ nameId: string }>();
   const [screen, setScreen] = useState<KioskScreen>({ mode: "idle" });

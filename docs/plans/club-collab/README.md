@@ -26,10 +26,18 @@ implementation agent without further architectural decisions.
 | 4 | [phase-4-permissions.md](phase-4-permissions.md) | 3 |
 | 5 | [phase-5-club-map-library.md](phase-5-club-map-library.md) | 3 (uploader attribution) |
 | 6 | [phase-6-control-series.md](phase-6-control-series.md) | 3; shares library UI with 5 |
+| 7 | [phase-7-library-polish.md](phase-7-library-polish.md) | 4, 5 |
+| 8 | [phase-8-editor-enhancements.md](phase-8-editor-enhancements.md) | 6 |
+| 9 | [phase-9-class-presets.md](phase-9-class-presets.md) | 5 (library UI) |
 
 Phases 1, 2, 3 are mutually independent and may be executed in any order or in
 parallel worktrees. Phase 4 requires 3. Phases 5 and 6 require 3 and should
 land after 5's "Club library" page exists (phase 6 adds a second tab to it).
+
+Phases 7–9 are follow-ups from the first user review of phases 4–6
+(library/visibility polish, course-editor enhancements, club class
+presets). They are mutually independent and may be executed in any
+order; each still follows the execution protocol below.
 
 ## Branch and workflow
 

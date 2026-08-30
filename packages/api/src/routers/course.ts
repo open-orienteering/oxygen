@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
-import { router, eventProcedure, raceProcedure } from "../trpc.js";
-import type { PrismaClient } from "../generated/prisma/client.js";
+import { router, coursesViewProcedure, kioskOrCoursesViewProcedure, coursesEditProcedure, coursesEditRaceProcedure } from "../trpc.js";
+import type { PrismaClient, Prisma as PrismaNs } from "../generated/prisma/client.js";
 import {
   controlStatusToValue,
   valueToControlStatus,
@@ -27,12 +27,19 @@ import {
   computeMapNorthOffset,
   mapMmToWgs84,
   type OcadCrs,
+  type WGS84Bounds,
 } from "../map-projection.js";
 import { fireMapUpload } from "../db.js";
+import {
+  applyEventMap,
+  parseOcadMapMetadata,
+  type MapCalibrationPoint,
+} from "../event-map.js";
 import { loadEventCrs } from "../event-crs.js";
 import { rebuildCourseGeometry } from "../course-geometry.js";
 import { appendJournal } from "../journalEmit.js";
 import {
+  emitClassUpserted,
   emitCourseUpserted,
   courseUpsertPayload,
   controlUpsertPayload,
@@ -170,6 +177,23 @@ async function getCourseBySeq(
   return c;
 }
 
+async function getClassBySeq(
+  db: PrismaClient | PrismaNs.TransactionClient,
+  eventId: bigint,
+  seq: number,
+) {
+  const row = await db.class.findFirst({
+    where: { eventId, seq, removed: false },
+  });
+  if (!row) {
+    throw new TRPCError({
+      code: "NOT_FOUND",
+      message: `Class ${seq} not found`,
+    });
+  }
+  return row;
+}
+
 /**
  * Resolve a public control id (the primary punch code, e.g. 31) to the
  * internal control UUID. Falls back to matching by `seq` for backwards
@@ -198,6 +222,30 @@ async function controlSeqToId(
     code: "NOT_FOUND",
     message: `Control ${publicId} not found`,
   });
+}
+
+/**
+ * Resolve a public control id to a control row that must have the given
+ * start/finish role. Used by course.update's start/finish assignment.
+ */
+async function resolveRoleControl(
+  db: PrismaClient,
+  eventId: bigint,
+  publicId: number,
+  role: "start" | "finish",
+): Promise<{ id: string; name: string }> {
+  const uuid = await controlSeqToId(db, eventId, publicId);
+  const row = await db.control.findUnique({
+    where: { id: uuid },
+    select: { id: true, name: true, status: true },
+  });
+  if (!row || row.status !== role) {
+    throw new TRPCError({
+      code: "BAD_REQUEST",
+      message: `Control ${publicId} is not a ${role} control`,
+    });
+  }
+  return row;
 }
 
 /**
@@ -272,9 +320,23 @@ async function loadCourseDetail(
   const runnerCountMap = new Map<string, number>(
     runnerCounts.map((rc) => [rc.classId ?? "", rc._count.classId]),
   );
+  // Resolve the explicit start/finish assignment to public ids (same
+  // mapping course.list uses).
+  const sfControls = await db.control.findMany({
+    where: { eventId, removed: false, status: { in: ["start", "finish"] } },
+    select: { id: true, seq: true, codes: true, name: true, status: true },
+  });
+  const startRow = c.startName
+    ? sfControls.find((x) => x.status === "start" && x.name === c.startName)
+    : undefined;
+  const finishRow = c.finishControlId
+    ? sfControls.find((x) => x.status === "finish" && x.id === c.finishControlId)
+    : undefined;
   return {
     id: c.seq,
     name: c.name,
+    startControlId: startRow ? publicControlId(startRow) : null,
+    finishControlId: finishRow ? publicControlId(finishRow) : null,
     controls: ccs
       .map((cc) => {
         const first = (cc.control.codes ?? "").split(";")[0];
@@ -305,7 +367,7 @@ async function loadCourseDetail(
 }
 
 export const courseRouter = router({
-  list: eventProcedure.query(async ({ ctx }): Promise<CourseSummary[]> => {
+  list: kioskOrCoursesViewProcedure.query(async ({ ctx }): Promise<CourseSummary[]> => {
     const eventId = ctx.event.id;
     const courses = await ctx.db.course.findMany({
       where: { eventId, removed: false },
@@ -333,6 +395,26 @@ export const courseRouter = router({
       arr.push(token);
       controlsByCourse.set(cc.courseId, arr);
     }
+    // Resolve start/finish assignments to public ids so the course
+    // editor can show and change which start/finish each course uses.
+    const sfControls = await ctx.db.control.findMany({
+      where: {
+        eventId,
+        removed: false,
+        status: { in: ["start", "finish"] },
+      },
+      select: { id: true, seq: true, codes: true, name: true, status: true },
+    });
+    const startIdByName = new Map(
+      sfControls
+        .filter((c) => c.status === "start")
+        .map((c) => [c.name, publicControlId(c)] as const),
+    );
+    const finishIdByUuid = new Map(
+      sfControls
+        .filter((c) => c.status === "finish")
+        .map((c) => [c.id, publicControlId(c)] as const),
+    );
     return courses.map(
       (c): CourseSummary => {
         const tokens = controlsByCourse.get(c.id) ?? [];
@@ -346,24 +428,30 @@ export const courseRouter = router({
           numberOfMaps: c.numberOfMaps,
           firstAsStart: c.firstAsStart,
           lastAsFinish: c.lastAsFinish,
+          startControlId: c.startName
+            ? startIdByName.get(c.startName) ?? null
+            : null,
+          finishControlId: c.finishControlId
+            ? finishIdByUuid.get(c.finishControlId) ?? null
+            : null,
         };
       },
     );
   }),
 
-  detail: eventProcedure
+  detail: coursesViewProcedure
     .input(z.object({ id: z.number().int() }))
     .query(async ({ ctx, input }) =>
       loadCourseDetail(ctx.db, ctx.event.id, input.id),
     ),
 
-  getById: eventProcedure
+  getById: coursesViewProcedure
     .input(z.object({ id: z.number().int() }))
     .query(async ({ ctx, input }) =>
       loadCourseDetail(ctx.db, ctx.event.id, input.id),
     ),
 
-  create: raceProcedure
+  create: coursesEditRaceProcedure
     .input(
       z.object({
         name: z.string().min(1),
@@ -373,6 +461,7 @@ export const courseRouter = router({
         firstAsStart: z.boolean().optional().default(false),
         lastAsFinish: z.boolean().optional().default(false),
         controlIds: z.array(z.number().int()).optional().default([]),
+        linkClassId: z.number().int().optional(),
       }),
     )
     .mutation(async ({ ctx, input }) => {
@@ -412,13 +501,95 @@ export const courseRouter = router({
             updateLength: input.length === undefined || input.length === 0,
           });
         }
+        if (input.linkClassId !== undefined) {
+          const classRow = await getClassBySeq(
+            tx,
+            ctx.event.id,
+            input.linkClassId,
+          );
+          if (classRow.courseId) {
+            throw new TRPCError({
+              code: "BAD_REQUEST",
+              message: `Class ${input.linkClassId} already has a course`,
+            });
+          }
+          await tx.class.update({
+            where: { id: classRow.id },
+            data: { courseId: c.id },
+          });
+          await emitClassUpserted(tx, ctx.event.id, classRow.id);
+        }
         await emitCourseUpserted(tx, ctx.event.id, c.id);
         return c;
       });
       return { id: created.seq };
     }),
 
-  update: raceProcedure
+  clone: coursesEditRaceProcedure
+    .input(
+      z.object({
+        id: z.number().int(),
+        name: z.string().trim().min(1),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      const source = await getCourseBySeq(ctx.db, ctx.event.id, input.id);
+      const conflict = await ctx.db.course.findFirst({
+        where: {
+          eventId: ctx.event.id,
+          removed: false,
+          name: input.name,
+        },
+        select: { id: true },
+      });
+      if (conflict) {
+        throw new TRPCError({
+          code: "CONFLICT",
+          message: `Course "${input.name}" already exists`,
+        });
+      }
+
+      const cloned = await ctx.db.$transaction(async (tx) => {
+        const created = await tx.course.create({
+          data: {
+            eventId: ctx.event.id,
+            name: input.name,
+            climbM: source.climbM,
+            numberOfMaps: source.numberOfMaps,
+            startName: source.startName,
+            legs: source.legs,
+            firstAsStart: source.firstAsStart,
+            lastAsFinish: source.lastAsFinish,
+            finishControlId: source.finishControlId,
+            shorten: source.shorten,
+          },
+          select: { id: true, seq: true },
+        });
+        const controls = await tx.courseControl.findMany({
+          where: { courseId: source.id },
+          select: { position: true, controlId: true },
+          orderBy: { position: "asc" },
+        });
+        if (controls.length > 0) {
+          await tx.courseControl.createMany({
+            data: controls.map((control) => ({
+              courseId: created.id,
+              position: control.position,
+              controlId: control.controlId,
+            })),
+          });
+        }
+        await rebuildCourseGeometry(tx, ctx.event.id, [created.id], {
+          updateLength: true,
+        });
+        await emitCourseUpserted(tx, ctx.event.id, created.id);
+        return created;
+      });
+
+      return { id: cloned.seq, name: input.name };
+    }),
+
+  update: coursesEditRaceProcedure
     .input(
       z.object({
         id: z.number().int(),
@@ -429,6 +600,14 @@ export const courseRouter = router({
         firstAsStart: z.boolean().optional(),
         lastAsFinish: z.boolean().optional(),
         controlIds: z.array(z.number().int()).optional(),
+        /**
+         * Assign a specific event start/finish control to this course
+         * (public control id, i.e. seq for code-less start/finish rows).
+         * `null` clears the assignment back to the lowest-seq default;
+         * `undefined` leaves it unchanged.
+         */
+        startControlId: z.number().int().nullable().optional(),
+        finishControlId: z.number().int().nullable().optional(),
       }),
     )
     .mutation(async ({ ctx, input }) => {
@@ -443,6 +622,38 @@ export const courseRouter = router({
         data.firstAsStart = input.firstAsStart;
       if (input.lastAsFinish !== undefined)
         data.lastAsFinish = input.lastAsFinish;
+      // Start/finish assignment. Courses reference starts by name
+      // (startName) and finishes by row id (finishControlId) — resolve
+      // the public id and validate the role.
+      if (input.startControlId !== undefined) {
+        if (input.startControlId === null) {
+          data.startName = "";
+        } else {
+          const start = await resolveRoleControl(
+            ctx.db,
+            ctx.event.id,
+            input.startControlId,
+            "start",
+          );
+          data.startName = start.name;
+        }
+      }
+      if (input.finishControlId !== undefined) {
+        if (input.finishControlId === null) {
+          data.finishControlId = null;
+        } else {
+          const finish = await resolveRoleControl(
+            ctx.db,
+            ctx.event.id,
+            input.finishControlId,
+            "finish",
+          );
+          data.finishControlId = finish.id;
+        }
+      }
+      const startFinishChanged =
+        input.startControlId !== undefined ||
+        input.finishControlId !== undefined;
       const controlUuids =
         input.controlIds !== undefined && input.controlIds.length > 0
           ? await Promise.all(
@@ -465,9 +676,11 @@ export const courseRouter = router({
               })),
             });
           }
-          // The stored overlay geometry lists the old sequence — rebuild
-          // straight-leg 'editor' geometry (and length, unless the caller
-          // supplied one explicitly).
+        }
+        if (input.controlIds !== undefined || startFinishChanged) {
+          // The stored overlay geometry lists the old sequence (or the
+          // old start/finish legs) — rebuild straight-leg 'editor'
+          // geometry (and length, unless the caller supplied one).
           await rebuildCourseGeometry(tx, ctx.event.id, [c.id], {
             updateLength: input.length === undefined,
           });
@@ -477,7 +690,7 @@ export const courseRouter = router({
       return { ok: true };
     }),
 
-  bulkUpdate: raceProcedure
+  bulkUpdate: coursesEditRaceProcedure
     .input(
       z.object({
         ids: z.array(z.number().int()),
@@ -512,7 +725,7 @@ export const courseRouter = router({
       return { ok: true as const, count: rows.length };
     }),
 
-  delete: raceProcedure
+  delete: coursesEditRaceProcedure
     .input(z.object({ id: z.number().int() }))
     .mutation(async ({ ctx, input }) => {
       const c = await getCourseBySeq(ctx.db, ctx.event.id, input.id);
@@ -528,7 +741,7 @@ export const courseRouter = router({
     }),
 
   /** GeoJSON FeatureCollection for one course (control circles + leg lines). */
-  geometry: eventProcedure
+  geometry: coursesViewProcedure
     .input(z.object({ id: z.number().int() }))
     .query(async ({ ctx, input }) => {
       const c = await ctx.db.course.findFirst({
@@ -548,7 +761,7 @@ export const courseRouter = router({
    * Returns a name-keyed map (legacy shape) — the web `MapPanel` joins
    * several feature collections into one before handing to the viewer.
    */
-  courseGeometries: eventProcedure
+  courseGeometries: kioskOrCoursesViewProcedure
     .input(
       z
         .object({
@@ -585,44 +798,76 @@ export const courseRouter = router({
     }),
 
   /**
-   * Lightweight map metadata (bounds, scale, north offset) for the
-   * tile-based MapViewer. Reads the latest uploaded OCD file and runs
-   * the OCAD parser to extract CRS + bounds.
+   * Lightweight map metadata (bounds, scale, north offset, calibration)
+   * for the tile-based MapViewer. Served from columns persisted at upload
+   * time — re-parsing the OCAD blob per query took multi-second on real
+   * club maps, long enough for the service worker's NetworkFirst timeout
+   * to serve a stale cached `null` (blank map until a full page reload).
+   * Rows from before the metadata migration are parsed once and
+   * backfilled.
    */
-  mapMetadata: eventProcedure.query(async ({ ctx }) => {
+  mapMetadata: kioskOrCoursesViewProcedure.query(async ({ ctx }) => {
     const row = await ctx.db.mapFile.findFirst({
       where: { eventId: ctx.event.id },
       orderBy: { uploadedAt: "desc" },
-      select: { fileData: true, uploadedAt: true },
+      select: {
+        id: true,
+        uploadedAt: true,
+        scale: true,
+        bounds: true,
+        northOffset: true,
+        calibration: true,
+      },
     });
     if (!row) return null;
-    try {
-      const ocadMod = await import("ocad2geojson");
-      const readOcad = (ocadMod as Record<string, unknown>).readOcad as (
-        buf: Buffer,
-        opts?: Record<string, unknown>,
-      ) => Promise<{ getCrs(): OcadCrs; getBounds(): number[] }>;
-      const ocadFile = await readOcad(Buffer.from(row.fileData), {
-        quietWarnings: true,
+
+    let scale = row.scale;
+    let bounds = row.bounds as unknown as WGS84Bounds | null;
+    let northOffset = row.northOffset;
+    let calibration = row.calibration as unknown as
+      | MapCalibrationPoint[]
+      | null;
+
+    const isLegacyRow =
+      scale === null &&
+      bounds === null &&
+      northOffset === null &&
+      calibration === null;
+    if (isLegacyRow) {
+      const blob = await ctx.db.mapFile.findUnique({
+        where: { id: row.id },
+        select: { fileData: true },
       });
-      const crs = ocadFile.getCrs();
-      const ocadBounds = ocadFile.getBounds();
-      const bounds = ocadBoundsToWgs84(ocadBounds, crs);
-      const northOffset = computeMapNorthOffset(ocadBounds, crs);
-      return {
-        scale: crs.scale,
-        bounds,
-        northOffset,
-        uploadedAt: row.uploadedAt.getTime(),
-      };
-    } catch (err) {
-      console.warn("[mapMetadata] OCAD parse failed:", err);
-      return null;
+      if (!blob) return null;
+      const meta = await parseOcadMapMetadata(Buffer.from(blob.fileData));
+      if (meta.scale === null && meta.bounds === null) return null;
+      ({ scale, bounds, northOffset, calibration } = meta);
+      await ctx.db.mapFile.update({
+        where: { id: row.id },
+        data: {
+          scale,
+          bounds: bounds
+            ? (bounds as unknown as PrismaNs.InputJsonValue)
+            : undefined,
+          northOffset,
+          calibration: calibration
+            ? (calibration as unknown as PrismaNs.InputJsonValue)
+            : undefined,
+        },
+      });
     }
+
+    return {
+      scale,
+      bounds,
+      northOffset,
+      calibration,
+      uploadedAt: row.uploadedAt.getTime(),
+    };
   }),
 
   /** Info about the uploaded OCAD map file (if any). */
-  mapFileInfo: eventProcedure.query(async ({ ctx }) => {
+  mapFileInfo: kioskOrCoursesViewProcedure.query(async ({ ctx }) => {
     const f = await ctx.db.mapFile.findFirst({
       where: { eventId: ctx.event.id },
       orderBy: { uploadedAt: "desc" },
@@ -638,7 +883,7 @@ export const courseRouter = router({
   }),
 
   /** Download the OCD map file (base64-encoded). */
-  downloadMap: eventProcedure.query(async ({ ctx }) => {
+  downloadMap: coursesViewProcedure.query(async ({ ctx }) => {
     const f = await ctx.db.mapFile.findFirst({
       where: { eventId: ctx.event.id },
       orderBy: { uploadedAt: "desc" },
@@ -652,7 +897,7 @@ export const courseRouter = router({
   }),
 
   /** Controls with their coordinates (for map overlay). */
-  controlCoordinates: eventProcedure.query(async ({ ctx }) => {
+  controlCoordinates: kioskOrCoursesViewProcedure.query(async ({ ctx }) => {
     const controls = await ctx.db.control.findMany({
       where: { eventId: ctx.event.id, removed: false },
       select: {
@@ -730,7 +975,7 @@ export const courseRouter = router({
    * Uses card.punches_raw as the source of punches; this is fast (one
    * cache row per card) and matches what the matcher consumes.
    */
-  controlCompletionStatus: eventProcedure
+  controlCompletionStatus: kioskOrCoursesViewProcedure
     .input(z.object({ courseId: z.number().int().optional() }).optional())
     .query(async ({ ctx, input }) => {
       const eventId = ctx.event.id;
@@ -832,7 +1077,7 @@ export const courseRouter = router({
     }),
 
   /** Upload an OCAD map file (base64). Replaces any previous file + tiles. */
-  uploadMap: eventProcedure
+  uploadMap: coursesEditProcedure
     .input(
       z.object({
         fileName: z.string(),
@@ -841,40 +1086,39 @@ export const courseRouter = router({
     )
     .mutation(async ({ ctx, input }) => {
       const buffer = Buffer.from(input.fileDataBase64, "base64");
-      // Only keep the latest map.
-      await ctx.db.mapFile.deleteMany({ where: { eventId: ctx.event.id } });
-      await ctx.db.mapFile.create({
-        data: {
-          eventId: ctx.event.id,
-          fileName: input.fileName,
-          fileData: buffer,
-        },
+      const result = await applyEventMap(
+        ctx.db,
+        ctx.event.id,
+        input.fileName,
+        buffer,
+      );
+      return { success: true as const, ...result };
+    }),
+
+  /**
+   * Copy a club-library OCAD file into this event. The event keeps its
+   * own blob; later library edits do not affect it.
+   */
+  useClubMap: coursesEditProcedure
+    .input(z.object({ clubMapId: z.number().int().positive() }))
+    .mutation(async ({ ctx, input }) => {
+      const row = await ctx.db.clubMapFile.findUnique({
+        where: { id: BigInt(input.clubMapId) },
+        select: { fileName: true, fileData: true },
       });
-      // Invalidate tile + rendered-map caches so the new map gets used.
-      await ctx.db.mapTile.deleteMany({ where: { eventId: ctx.event.id } });
-      await ctx.db.renderedMap.deleteMany({ where: { eventId: ctx.event.id } });
-      fireMapUpload(ctx.event.id);
-      // Automatic overprint cuts come from the base map, so editor-built
-      // course geometry must follow the new map. Imported ('ocd'/'xml')
-      // geometry keeps its file-authored cuts and is left alone.
-      const editorCourses = await ctx.db.course.findMany({
-        where: { eventId: ctx.event.id, removed: false, geometrySource: "editor" },
-        select: { id: true },
-      });
-      if (editorCourses.length > 0) {
-        const ids = editorCourses.map((c) => c.id);
-        await rebuildCourseGeometry(ctx.db, ctx.event.id, ids, {
-          updateLength: false,
+      if (!row) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: `Club map ${input.clubMapId} not found`,
         });
-        for (const id of ids) {
-          await emitCourseUpserted(ctx.db, ctx.event.id, id);
-        }
       }
-      return {
-        success: true as const,
-        fileName: input.fileName,
-        size: buffer.length,
-      };
+      const result = await applyEventMap(
+        ctx.db,
+        ctx.event.id,
+        row.fileName,
+        Buffer.from(row.fileData),
+      );
+      return { success: true as const, ...result };
     }),
 
   /**
@@ -882,7 +1126,7 @@ export const courseRouter = router({
    * auto-matches XML class names to DB classes, and returns the per-
    * course preview without writing anything.
    */
-  previewImport: eventProcedure
+  previewImport: coursesEditProcedure
     .input(
       z.object({
         xmlContent: z.string().optional(),
@@ -976,7 +1220,7 @@ export const courseRouter = router({
    * GeoJSON geometry. When `replaceAll: true`, all existing courses and
    * controls are soft-deleted first and class→course assignments cleared.
    */
-  importCourses: raceProcedure
+  importCourses: coursesEditRaceProcedure
     .input(
       z.object({
         xmlContent: z.string().optional(),

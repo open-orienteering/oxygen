@@ -1,4 +1,4 @@
-import type { ContentSignals } from "@oxygen/shared";
+import type { Capability, ContentSignals } from "@oxygen/shared";
 
 export type ShellTabId =
   | "dashboard"
@@ -33,27 +33,29 @@ export interface TabDef {
   group?: string;
   countKey?: string;
   relevantWhen: TabRelevance;
+  requiredCapability: Capability;
 }
 
 export const ALL_TABS: TabDef[] = [
-  { id: "dashboard", path: "", relevantWhen: "always" },
-  { id: "runners", path: "runners", countKey: "runners", relevantWhen: "whenRunners" },
-  { id: "startlist", path: "startlist", countKey: "startlist", relevantWhen: "whenRunners" },
-  { id: "results", path: "results", countKey: "results", relevantWhen: "whenResults" },
-  { id: "classes", path: "classes", countKey: "classes", relevantWhen: "always" },
-  { id: "courses", path: "courses", countKey: "courses", relevantWhen: "always" },
-  { id: "controls", path: "controls", countKey: "controls", relevantWhen: "always" },
-  { id: "cards", path: "cards", countKey: "cards", relevantWhen: "whenRunners" },
-  { id: "tracks", path: "tracks", relevantWhen: "whenResults" },
-  { id: "event", path: "event", relevantWhen: "never" },
-  { id: "course-editor", path: "course-editor", relevantWhen: "whenPlanning" },
-  { id: "registration-trends", path: "registration-trends", relevantWhen: "never" },
-  { id: "clubs", path: "clubs", countKey: "clubs", relevantWhen: "never" },
-  { id: "start-station", path: "start-station", group: "race", relevantWhen: "never" },
-  { id: "finish-station", path: "finish-station", group: "race", relevantWhen: "never" },
-  { id: "card-readout", path: "card-readout", group: "race", relevantWhen: "never" },
-  { id: "backup-punches", path: "backup-punches", group: "race", relevantWhen: "never" },
-  { id: "test-lab", path: "test-lab", group: "dev", relevantWhen: "never" },
+  { id: "dashboard", path: "", relevantWhen: "always", requiredCapability: "event.view" },
+  { id: "runners", path: "runners", countKey: "runners", relevantWhen: "whenRunners", requiredCapability: "event.view" },
+  { id: "startlist", path: "startlist", countKey: "startlist", relevantWhen: "whenRunners", requiredCapability: "event.view" },
+  { id: "results", path: "results", countKey: "results", relevantWhen: "whenResults", requiredCapability: "results.view" },
+  { id: "classes", path: "classes", countKey: "classes", relevantWhen: "always", requiredCapability: "event.view" },
+  { id: "courses", path: "courses", countKey: "courses", relevantWhen: "always", requiredCapability: "courses.view" },
+  { id: "controls", path: "controls", countKey: "controls", relevantWhen: "always", requiredCapability: "courses.view" },
+  // Card readout data (cardReadout.cardList etc.) is race.operate on the API.
+  { id: "cards", path: "cards", countKey: "cards", relevantWhen: "whenRunners", requiredCapability: "race.operate" },
+  { id: "tracks", path: "tracks", relevantWhen: "whenResults", requiredCapability: "results.view" },
+  { id: "event", path: "event", relevantWhen: "never", requiredCapability: "event.view" },
+  { id: "course-editor", path: "course-editor", relevantWhen: "whenPlanning", requiredCapability: "courses.view" },
+  { id: "registration-trends", path: "registration-trends", relevantWhen: "never", requiredCapability: "event.view" },
+  { id: "clubs", path: "clubs", countKey: "clubs", relevantWhen: "never", requiredCapability: "event.view" },
+  { id: "start-station", path: "start-station", group: "race", relevantWhen: "never", requiredCapability: "race.operate" },
+  { id: "finish-station", path: "finish-station", group: "race", relevantWhen: "never", requiredCapability: "race.operate" },
+  { id: "card-readout", path: "card-readout", group: "race", relevantWhen: "never", requiredCapability: "race.operate" },
+  { id: "backup-punches", path: "backup-punches", group: "race", relevantWhen: "never", requiredCapability: "race.operate" },
+  { id: "test-lab", path: "test-lab", group: "dev", relevantWhen: "never", requiredCapability: "event.manage" },
 ];
 
 function isPrimary(tab: TabDef, signals: ContentSignals): boolean {
@@ -76,14 +78,21 @@ function isPrimary(tab: TabDef, signals: ContentSignals): boolean {
  * `signals === null` (dashboard not loaded) uses the pre-progressive layout
  * so mature events do not flash a planning-only bar on every mount.
  */
-export function computeTabLayout(signals: ContentSignals | null): {
+export function computeTabLayout(
+  signals: ContentSignals | null,
+  capabilities?: ReadonlySet<Capability> | null,
+): {
   primary: TabDef[];
   overflow: TabDef[];
 } {
+  const allowed = (tab: TabDef) =>
+    !capabilities || capabilities.has(tab.requiredCapability);
+
   if (signals === null) {
     const primary: TabDef[] = [];
     const overflow: TabDef[] = [];
     for (const tab of ALL_TABS) {
+      if (!allowed(tab)) continue;
       const legacyOverflow =
         tab.relevantWhen === "never" || tab.relevantWhen === "whenPlanning";
       (legacyOverflow ? overflow : primary).push(tab);
@@ -94,6 +103,7 @@ export function computeTabLayout(signals: ContentSignals | null): {
   const primary: TabDef[] = [];
   const overflow: TabDef[] = [];
   for (const tab of ALL_TABS) {
+    if (!allowed(tab)) continue;
     (isPrimary(tab, signals) ? primary : overflow).push(tab);
   }
   return { primary, overflow };

@@ -23,6 +23,7 @@ export function makeCaller(
     identityEmail: null,
     authEnabled: false,
     authMode: "off",
+    kioskKey: null,
     ...extra,
   };
   return createCaller(ctx);

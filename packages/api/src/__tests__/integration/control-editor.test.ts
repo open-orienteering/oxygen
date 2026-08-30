@@ -269,6 +269,253 @@ describe("course geometry regeneration", () => {
   });
 });
 
+describe("course.clone", () => {
+  it("copies course settings and sequence, then rebuilds geometry and length", async () => {
+    const start = await caller.control.create({ status: 4, xpos: 0, ypos: 410 });
+    const finish = await caller.control.create({ status: 5, xpos: 90, ypos: 410 });
+    await caller.control.create({ codes: "201", xpos: 30, ypos: 410 });
+    await caller.control.create({ codes: "202", xpos: 60, ypos: 410 });
+    const source = await caller.course.create({
+      name: "Clone source",
+      controlIds: [201, 202],
+      climb: 37,
+      numberOfMaps: 4,
+      firstAsStart: true,
+    });
+    await caller.course.update({
+      id: source.id,
+      startControlId: start.id,
+      finishControlId: finish.id,
+    });
+    const sourceRow = await ctx.db.course.findFirstOrThrow({
+      where: { eventId: ctx.eventId, seq: source.id },
+    });
+    await ctx.db.course.update({
+      where: { id: sourceRow.id },
+      data: { legs: "123;456;", shorten: 12 },
+    });
+
+    const cloned = await caller.course.clone({
+      id: source.id,
+      name: "  Clone copy  ",
+    });
+
+    expect(cloned.name).toBe("Clone copy");
+    const detail = await caller.course.detail({ id: cloned.id });
+    expect(detail.controls.split(";")).toEqual(["201", "202"]);
+    expect(detail.startControlId).toBe(start.id);
+    expect(detail.finishControlId).toBe(finish.id);
+    expect(detail.firstAsStart).toBe(true);
+
+    const cloneRow = await ctx.db.course.findFirstOrThrow({
+      where: { eventId: ctx.eventId, seq: cloned.id },
+    });
+    expect(cloneRow.id).not.toBe(sourceRow.id);
+    expect(cloneRow.climbM).toBe(37);
+    expect(cloneRow.numberOfMaps).toBe(4);
+    expect(cloneRow.startName).toBe(sourceRow.startName);
+    expect(cloneRow.finishControlId).toBe(sourceRow.finishControlId);
+    expect(cloneRow.shorten).toBe(12);
+    expect(cloneRow.geometrySource).toBe("editor");
+    expect(cloneRow.lengthM).toBeGreaterThan(0);
+
+    const sourceAfter = await ctx.db.course.findUniqueOrThrow({
+      where: { id: sourceRow.id },
+    });
+    expect(sourceAfter.name).toBe("Clone source");
+    expect(sourceAfter.legs).toBe("123;456;");
+  });
+
+  it("rejects a duplicate active course name", async () => {
+    const source = await caller.course.create({ name: "Clone conflict source" });
+    await caller.course.create({ name: "Existing clone name" });
+    await expect(
+      caller.course.clone({ id: source.id, name: " Existing clone name " }),
+    ).rejects.toMatchObject({ code: "CONFLICT" });
+  });
+});
+
+describe("start/finish placement from the editor", () => {
+  /** Delete every active start/finish so auto-numbering is deterministic
+   *  (earlier suites in this file create coded start/finish rows). */
+  async function clearStartFinish() {
+    const rows = await ctx.db.control.findMany({
+      where: {
+        eventId: ctx.eventId,
+        status: { in: ["start", "finish"] },
+        removed: false,
+      },
+      select: { seq: true, codes: true },
+    });
+    for (const r of rows) {
+      const first = parseInt(r.codes.split(";")[0] ?? "", 10);
+      await caller.control.delete({
+        id: Number.isFinite(first) && first > 0 ? first : r.seq,
+      });
+    }
+  }
+
+  it("creates code-less start controls with sequential auto-names", async () => {
+    await clearStartFinish();
+    const s1 = await caller.control.create({ status: 4, xpos: 5, ypos: 5 });
+    const s2 = await caller.control.create({ status: 4, xpos: 6, ypos: 6 });
+
+    const rows = await ctx.db.control.findMany({
+      where: { eventId: ctx.eventId, status: "start", removed: false },
+      orderBy: { seq: "asc" },
+    });
+    expect(rows.map((r) => r.name)).toEqual(["Start 1", "Start 2"]);
+    expect(rows.every((r) => r.codes === "")).toBe(true);
+    // Code-less controls are addressed by seq.
+    expect(s1.id).toBe(rows[0].seq);
+    expect(s2.id).toBe(rows[1].seq);
+    // Position + WGS84 derivation work like for numbered controls.
+    expect(rows[0].xpos).toBe(5);
+    expect(rows[0].lat).not.toBeNull();
+
+    const coords = await caller.course.controlCoordinates();
+    const c1 = coords.find((c) => c.id === s1.id);
+    expect(c1?.status).toBe(4);
+    expect(c1?.code).toBe("Start 1");
+  });
+
+  it("creates a code-less finish control named Mål N", async () => {
+    const f = await caller.control.create({ status: 5, xpos: 90, ypos: 5 });
+    const row = await ctx.db.control.findFirst({
+      where: { eventId: ctx.eventId, status: "finish", removed: false },
+    });
+    expect(row?.name).toBe("Mål 1");
+    expect(row?.codes).toBe("");
+    expect(f.id).toBe(row?.seq);
+  });
+
+  it("still rejects a normal control without codes", async () => {
+    await expect(
+      caller.control.create({ status: 0, xpos: 1, ypos: 1 }),
+    ).rejects.toThrow(/code/i);
+  });
+
+  it("creating a start/finish rebuilds editor-course geometry", async () => {
+    await caller.control.create({ codes: "155", xpos: 50, ypos: 200 });
+    await caller.control.create({ codes: "156", xpos: 80, ypos: 200 });
+    const course = await caller.course.create({
+      name: "EditorGeom-SF",
+      controlIds: [155, 156],
+    });
+    // The event already has starts/finishes from earlier tests, so this
+    // course's geometry starts out complete — the rebuild-on-create path
+    // is what we're testing: add another start, then verify the course
+    // geometry was regenerated in the same mutation (updatedAt & feature
+    // count both move when the default start changes are re-derived).
+    const before = await ctx.db.course.findFirst({
+      where: { eventId: ctx.eventId, seq: course.id },
+      select: { geometry: true },
+    });
+    const beforeGeom = before?.geometry as unknown as GeoJSONFeatureCollection;
+    expect(
+      beforeGeom.features.some((f) => f.properties.symbolType === "start"),
+    ).toBe(true);
+
+    // Delete every start; geometry must lose the start leg…
+    const starts = await ctx.db.control.findMany({
+      where: { eventId: ctx.eventId, status: "start", removed: false },
+      select: { seq: true },
+    });
+    for (const s of starts) {
+      await caller.control.delete({ id: s.seq });
+    }
+    const without = await ctx.db.course.findFirst({
+      where: { eventId: ctx.eventId, seq: course.id },
+      select: { geometry: true },
+    });
+    const withoutGeom = without?.geometry as unknown as GeoJSONFeatureCollection;
+    expect(
+      withoutGeom.features.some((f) => f.properties.symbolType === "start"),
+    ).toBe(false);
+
+    // …and creating a new start must bring it back without any course edit.
+    await caller.control.create({ status: 4, xpos: 20, ypos: 200 });
+    const after = await ctx.db.course.findFirst({
+      where: { eventId: ctx.eventId, seq: course.id },
+      select: { geometry: true },
+    });
+    const afterGeom = after?.geometry as unknown as GeoJSONFeatureCollection;
+    expect(
+      afterGeom.features.some((f) => f.properties.symbolType === "start"),
+    ).toBe(true);
+  });
+
+  it("assigns a specific start and finish to a course", async () => {
+    // Clean slate: drop starts left over from earlier tests so the
+    // "default = lowest-seq start" assertions below are deterministic.
+    const leftovers = await ctx.db.control.findMany({
+      where: { eventId: ctx.eventId, status: "start", removed: false },
+      select: { seq: true },
+    });
+    for (const s of leftovers) {
+      await caller.control.delete({ id: s.seq });
+    }
+    const sA = await caller.control.create({ status: 4, xpos: 0, ypos: 300 });
+    const sB = await caller.control.create({ status: 4, xpos: 60, ypos: 300 });
+    const fin = await caller.control.create({ status: 5, xpos: 90, ypos: 300 });
+    await caller.control.create({ codes: "157", xpos: 30, ypos: 300 });
+    const course = await caller.course.create({
+      name: "EditorGeom-MultiStart",
+      controlIds: [157],
+    });
+
+    await caller.course.update({
+      id: course.id,
+      startControlId: sB.id,
+      finishControlId: fin.id,
+    });
+
+    const sBRow = await ctx.db.control.findFirst({
+      where: { eventId: ctx.eventId, seq: sB.id },
+    });
+    const row = await ctx.db.course.findFirst({
+      where: { eventId: ctx.eventId, seq: course.id },
+    });
+    expect(row?.startName).toBe(sBRow?.name);
+
+    // Geometry must use the assigned start's position, not the default's.
+    const geom = row?.geometry as unknown as GeoJSONFeatureCollection;
+    const startPt = geom.features.find(
+      (f) => f.properties.symbolType === "start",
+    );
+    expect(
+      (startPt!.geometry as { coordinates: number[] }).coordinates[0],
+    ).toBe(60);
+
+    // course.list exposes the assignment for the editor UI.
+    const summary = (await caller.course.list()).find(
+      (c) => c.id === course.id,
+    );
+    expect(summary?.startControlId).toBe(sB.id);
+    expect(summary?.finishControlId).toBe(fin.id);
+
+    // Clearing goes back to the default (lowest-seq start = sA).
+    await caller.course.update({
+      id: course.id,
+      startControlId: null,
+      finishControlId: null,
+    });
+    const cleared = await ctx.db.course.findFirst({
+      where: { eventId: ctx.eventId, seq: course.id },
+    });
+    expect(cleared?.startName).toBe("");
+    expect(cleared?.finishControlId).toBeNull();
+    const clearedGeom = cleared?.geometry as unknown as GeoJSONFeatureCollection;
+    const clearedStart = clearedGeom.features.find(
+      (f) => f.properties.symbolType === "start",
+    );
+    expect(
+      (clearedStart!.geometry as { coordinates: number[] }).coordinates[0],
+    ).toBe(0);
+    void sA;
+  });
+});
+
 describe("description backfill migration", () => {
   it("copies geometry-embedded descriptions onto matching control rows", async () => {
     // Legacy state: description only exists inside course geometry.
@@ -338,5 +585,54 @@ describe("control.restore", () => {
     await expect(caller.control.restore({ id: 9999 })).rejects.toThrow(
       /not found/i,
     );
+  });
+
+  it("restoring a start rebuilds editor-course geometry (undo of delete)", async () => {
+    // Isolate: no other start may absorb the implicit-start role.
+    const priorStarts = await ctx.db.control.findMany({
+      where: { eventId: ctx.eventId, status: "start", removed: false },
+      select: { seq: true, codes: true },
+    });
+    for (const r of priorStarts) {
+      const first = parseInt(r.codes.split(";")[0] ?? "", 10);
+      await caller.control.delete({
+        id: Number.isFinite(first) && first > 0 ? first : r.seq,
+      });
+    }
+
+    const start = await caller.control.create({ status: 4, xpos: 10, ypos: 300 });
+    await caller.control.create({ codes: "165", xpos: 40, ypos: 300 });
+    const course = await caller.course.create({
+      name: "RestoreGeom",
+      controlIds: [165],
+    });
+    const readGeom = async () => {
+      const row = await ctx.db.course.findFirst({
+        where: { eventId: ctx.eventId, seq: course.id },
+        select: { geometry: true },
+      });
+      return row?.geometry as unknown as GeoJSONFeatureCollection;
+    };
+    expect(
+      (await readGeom()).features.some(
+        (f) => f.properties.symbolType === "start",
+      ),
+    ).toBe(true);
+
+    // Delete drops the start leg from the geometry…
+    await caller.control.delete({ id: start.id });
+    expect(
+      (await readGeom()).features.some(
+        (f) => f.properties.symbolType === "start",
+      ),
+    ).toBe(false);
+
+    // …and restore (the editor's undo) must put it back.
+    await caller.control.restore({ id: start.id });
+    expect(
+      (await readGeom()).features.some(
+        (f) => f.properties.symbolType === "start",
+      ),
+    ).toBe(true);
   });
 });

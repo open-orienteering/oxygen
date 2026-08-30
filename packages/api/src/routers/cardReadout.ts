@@ -15,7 +15,7 @@ import { createHash } from "node:crypto";
 import { z } from "zod";
 import { uuidv7 } from "uuidv7";
 import { TRPCError } from "@trpc/server";
-import { router, eventProcedure, raceProcedure } from "../trpc.js";
+import { router, raceOperateProcedure, raceOperateRaceProcedure, kioskOrRaceOperateProcedure } from "../trpc.js";
 import type { Prisma, PrismaClient } from "../generated/prisma/client.js";
 import {
   parsePunches,
@@ -640,7 +640,7 @@ export const cardReadoutRouter = router({
    * whether to call applyResult immediately or keep the entry as a
    * pre-start scan.
    */
-  storeReadout: raceProcedure
+  storeReadout: raceOperateRaceProcedure
     .input(storeReadoutInput)
     .mutation(async ({ ctx, input }) => {
       // Readout + its card.read journal entry commit or roll back together
@@ -688,7 +688,7 @@ export const cardReadoutRouter = router({
    * placed, status-derived result via the matcher. Returns the legacy
    * `{ found: false }` shape when no runner is registered for this card.
    */
-  readout: eventProcedure
+  readout: kioskOrRaceOperateProcedure
     .input(z.object({ cardNo: z.number().int() }))
     .query(async ({ ctx, input }) => {
       const eventId = ctx.event.id;
@@ -717,7 +717,7 @@ export const cardReadoutRouter = router({
    * Same as readout but keyed by runner seq. Used by the standalone
    * Card Readout page and by RunnerMapPreview.
    */
-  readoutByRunner: eventProcedure
+  readoutByRunner: raceOperateProcedure
     .input(z.object({ runnerId: z.number().int() }))
     .query(async ({ ctx, input }) => {
       const runner = await ctx.db.runner.findFirst({
@@ -738,7 +738,7 @@ export const cardReadoutRouter = router({
    * (start/finish/status). Used by the readout station after a card
    * read produces a real result.
    */
-  applyResult: raceProcedure
+  applyResult: raceOperateRaceProcedure
     .input(
       z.object({
         runnerId: z.number().int(),
@@ -791,7 +791,7 @@ export const cardReadoutRouter = router({
     }),
 
   /** History of recent card readouts for the active event. */
-  recent: eventProcedure
+  recent: raceOperateProcedure
     .input(
       z
         .object({ limit: z.number().int().min(1).max(500).default(50) })
@@ -814,7 +814,7 @@ export const cardReadoutRouter = router({
     }),
 
   /** Look up a stored readout by id (UUID). */
-  getById: eventProcedure
+  getById: raceOperateProcedure
     .input(z.object({ id: z.string().uuid() }))
     .query(async ({ ctx, input }) => {
       const r = await ctx.db.cardReadout.findUnique({
@@ -846,7 +846,7 @@ export const cardReadoutRouter = router({
    * latest readout + the runner row. Cards with no readout yet still
    * appear with `cardType: ""` and `batteryVoltage: null`.
    */
-  cardList: eventProcedure.query(async ({ ctx }) => {
+  cardList: raceOperateProcedure.query(async ({ ctx }) => {
     const cards = await ctx.db.card.findMany({
       where: { eventId: ctx.event.id, removed: false },
       orderBy: { cardNo: "asc" },
@@ -942,7 +942,7 @@ export const cardReadoutRouter = router({
    * Returns `null` when neither the card nor a readout exists for the
    * given `cardNo`, so the page can render "unknown card" gracefully.
    */
-  cardDetail: eventProcedure
+  cardDetail: raceOperateProcedure
     .input(z.object({ cardNo: z.number().int() }))
     .query(async ({ ctx, input }) => {
       const card = await ctx.db.card.findFirst({
@@ -1027,7 +1027,7 @@ export const cardReadoutRouter = router({
     }),
 
   /** History of every readout for a card. */
-  readoutHistory: eventProcedure
+  readoutHistory: raceOperateProcedure
     .input(z.object({ cardNo: z.number().int() }))
     .query(async ({ ctx, input }) => {
       const rows = await ctx.db.cardReadout.findMany({
@@ -1061,7 +1061,7 @@ export const cardReadoutRouter = router({
    * `runnerId` is the runner's seq, or `null` to unlink. The card row
    * is created if it doesn't exist yet.
    */
-  linkCardToRunner: raceProcedure
+  linkCardToRunner: raceOperateRaceProcedure
     .input(
       z.object({
         cardNo: z.number().int().optional(),
@@ -1146,7 +1146,7 @@ export const cardReadoutRouter = router({
     }),
 
   /** Append a free punch to a card. */
-  addPunch: raceProcedure
+  addPunch: raceOperateRaceProcedure
     .input(
       z.object({
         cardNo: z.number().int(),
@@ -1197,7 +1197,7 @@ export const cardReadoutRouter = router({
     }),
 
   /** Remove a free punch by id (UUID). */
-  removePunch: raceProcedure
+  removePunch: raceOperateRaceProcedure
     .input(z.object({ punchId: z.string().uuid() }))
     .mutation(async ({ ctx, input }) => {
       const p = await ctx.db.punch.findFirst({
@@ -1227,7 +1227,7 @@ export const cardReadoutRouter = router({
     }),
 
   /** Adjust the time on an existing free punch. */
-  updatePunchTime: raceProcedure
+  updatePunchTime: raceOperateRaceProcedure
     .input(z.object({ punchId: z.string().uuid(), time: z.number().int() }))
     .mutation(async ({ ctx, input }) => {
       const zeroTime = ctx.event.zeroTime;
@@ -1272,7 +1272,7 @@ export const cardReadoutRouter = router({
    * Bulk-import parsed readout-backup records. Idempotent: the
    * `(eventId, punchesHash)` unique constraint silently drops re-imports.
    */
-  importReadoutBackups: raceProcedure
+  importReadoutBackups: raceOperateRaceProcedure
     .input(
       z.object({
         stationSerial: z.number().int().optional(),
@@ -1335,7 +1335,7 @@ export const cardReadoutRouter = router({
    * badges: linked runner (if any), and whether the row has already been
    * pushed into card_readouts.
    */
-  listReadoutBackups: eventProcedure.query(async ({ ctx }) => {
+  listReadoutBackups: raceOperateProcedure.query(async ({ ctx }) => {
     const eventId = ctx.event.id;
     const rows = await ctx.db.cardReadoutBackup.findMany({
       where: { eventId },
@@ -1422,7 +1422,7 @@ export const cardReadoutRouter = router({
    * Idempotent: re-pushing a row that was already pushed returns the
    * existing pushedReadoutId without doing the work twice.
    */
-  pushReadoutBackup: raceProcedure
+  pushReadoutBackup: raceOperateRaceProcedure
     .input(z.object({ backupId: z.string().uuid() }))
     .mutation(async ({ ctx, input }) => {
       const eventId = ctx.event.id;

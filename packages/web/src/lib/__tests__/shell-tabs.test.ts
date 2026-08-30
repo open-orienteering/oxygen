@@ -6,6 +6,7 @@ import {
   shouldShowProgressiveHint,
   type ShellTabId,
 } from "../shell-tabs";
+import type { Capability } from "@oxygen/shared";
 
 const empty: ContentSignals = {
   hasMap: false,
@@ -127,5 +128,26 @@ describe("computeTabLayout", () => {
       "test-lab",
     ]);
     expect(shouldShowProgressiveHint(overflow)).toBe(false);
+  });
+
+  it("hides tabs the user lacks capability for", () => {
+    const member = new Set<Capability>(["event.view", "results.view"]);
+    const { primary, overflow } = computeTabLayout(empty, member);
+    expect(ids(primary)).toEqual(["dashboard", "classes"]);
+    expect(ids(overflow)).not.toContain("courses");
+    expect(ids(overflow)).not.toContain("course-editor");
+    expect(ids(overflow)).not.toContain("start-station");
+  });
+
+  it("cards needs race.operate — its data endpoints do too", () => {
+    const member = new Set<Capability>(["event.view", "results.view"]);
+    const withRunners = { ...empty, hasRunners: true };
+    const forMember = computeTabLayout(withRunners, member);
+    expect(ids(forMember.primary)).not.toContain("cards");
+    expect(ids(forMember.overflow)).not.toContain("cards");
+
+    const crew = new Set<Capability>(["event.view", "race.operate"]);
+    const forCrew = computeTabLayout(withRunners, crew);
+    expect([...ids(forCrew.primary), ...ids(forCrew.overflow)]).toContain("cards");
   });
 });

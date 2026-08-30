@@ -59,6 +59,14 @@ enum ControlStatus {
   @@schema("oxygen")
 }
 
+enum ClubControlType {
+  normal
+  srr
+
+  @@map("club_control_type")
+  @@schema("oxygen")
+}
+
 // ─── Registry & global tables ──────────────────────────────
 
 /// An orienteering event — competition, training session, club evening, etc.
@@ -147,6 +155,8 @@ model Event {
   splitPrint  String @default("") @map("split_print")
 
   removed   Boolean  @default(false)
+  /// Device token for kiosk / start-screen URLs when AUTH_MODE is on.
+  kioskKey  String?  @map("kiosk_key")
   createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt DateTime @default(now()) @map("updated_at") @db.Timestamptz(6)
 
@@ -169,6 +179,7 @@ model Event {
   tracks       Track[]
   routes       Route[]
   eventSeqs    EventSeq[]
+  eventPermissions EventPermission[]
 
   @@index([removed])
   @@map("events")
@@ -212,7 +223,80 @@ model User {
   updatedAt   DateTime  @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
   lastSeenAt  DateTime? @map("last_seen_at") @db.Timestamptz(6)
 
+  eventPermissions EventPermission[]     @relation("GrantSubject")
+  grantsGiven      EventPermission[]     @relation("GrantActor")
+  clubMapFiles     ClubMapFile[]
+  clubGroupMemberships ClubUserGroupMember[]
+
   @@map("users")
+  @@schema("oxygen")
+}
+
+model PermissionGroup {
+  id           String   @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  name         String   @unique
+  capabilities Json
+  isSystem     Boolean  @default(false) @map("is_system")
+  createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt    DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  grants EventPermission[]
+
+  @@map("permission_groups")
+  @@schema("oxygen")
+}
+
+model EventPermission {
+  id      String @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  eventId BigInt @map("event_id")
+  /// Subject: exactly one of userId / clubGroupId (CHECK constraint).
+  userId      String?  @map("user_id") @db.Uuid
+  clubGroupId String?  @map("club_group_id") @db.Uuid
+  groupId     String   @map("group_id") @db.Uuid
+  grantedBy   String?  @map("granted_by") @db.Uuid
+  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  event     Event           @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  user      User?           @relation("GrantSubject", fields: [userId], references: [id], onDelete: Cascade)
+  clubGroup ClubUserGroup?  @relation(fields: [clubGroupId], references: [id], onDelete: Cascade)
+  group     PermissionGroup @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  granter   User?           @relation("GrantActor", fields: [grantedBy], references: [id], onDelete: SetNull)
+
+  @@unique([eventId, userId, groupId])
+  @@unique([eventId, clubGroupId, groupId])
+  @@index([eventId, userId])
+  @@index([eventId, clubGroupId])
+  @@map("event_permissions")
+  @@schema("oxygen")
+}
+
+/// Club-defined set of users ("Youth trainers", "Board", …). Grants can
+/// target a group instead of a single user; membership changes apply to
+/// every event the group is granted on, immediately.
+model ClubUserGroup {
+  id        String   @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  name      String   @unique
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  members ClubUserGroupMember[]
+  grants  EventPermission[]
+
+  @@map("club_user_groups")
+  @@schema("oxygen")
+}
+
+model ClubUserGroupMember {
+  groupId String   @map("group_id") @db.Uuid
+  userId  String   @map("user_id") @db.Uuid
+  addedAt DateTime @default(now()) @map("added_at") @db.Timestamptz(6)
+
+  group ClubUserGroup @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  user  User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@id([groupId, userId])
+  @@index([userId])
+  @@map("club_user_group_members")
   @@schema("oxygen")
 }
 
@@ -828,12 +912,89 @@ model JournalSyncState {
 
 // ─── Maps & GPS tracks ─────────────────────────────────────
 
+/// Club-wide OCAD base maps. Copied into an event via course.useClubMap.
+model ClubMapFile {
+  id          BigInt   @id @default(autoincrement())
+  name        String
+  fileName    String   @map("file_name")
+  fileData    Bytes    @map("file_data")
+  previewPng  Bytes?   @map("preview_png")
+  sizeBytes   Int      @map("size_bytes")
+  scale       Float?
+  bounds      Json?
+  northOffset Float?   @map("north_offset")
+  uploadedBy  String?  @map("uploaded_by") @db.Uuid
+  uploadedAt  DateTime @default(now()) @map("uploaded_at") @db.Timestamptz(6)
+  updatedAt   DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  uploader User? @relation(fields: [uploadedBy], references: [id], onDelete: SetNull)
+
+  @@map("club_map_files")
+  @@schema("oxygen")
+}
+
+model ClubClassPreset {
+  id              String   @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  name            String   @unique
+  sex             String   @default("")
+  lowAge          Int      @default(0) @map("low_age")
+  highAge         Int      @default(0) @map("high_age")
+  classType       String   @default("") @map("class_type")
+  noTiming        Boolean  @default(false) @map("no_timing")
+  freeStart       Boolean  @default(false) @map("free_start")
+  allowQuickEntry Boolean  @default(false) @map("allow_quick_entry")
+  sortIndex       Int      @default(0) @map("sort_index")
+  createdAt       DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt       DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  @@map("club_class_presets")
+  @@schema("oxygen")
+}
+
+model ClubControlSeries {
+  id        String   @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  name      String
+  ownerName String   @default("") @map("owner_name")
+  borrowed  Boolean  @default(false)
+  priority  Int
+  notes     String   @default("")
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  controls ClubSeriesControl[]
+
+  @@map("club_control_series")
+  @@schema("oxygen")
+}
+
+model ClubSeriesControl {
+  id       String          @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  seriesId String          @map("series_id") @db.Uuid
+  code     Int
+  type     ClubControlType @default(normal)
+  active   Boolean         @default(true)
+  notes    String          @default("")
+
+  series ClubControlSeries @relation(fields: [seriesId], references: [id], onDelete: Cascade)
+
+  @@unique([seriesId, code])
+  @@map("club_series_controls")
+  @@schema("oxygen")
+}
+
 model MapFile {
   id         BigInt   @id @default(autoincrement())
   eventId    BigInt   @map("event_id")
   fileName   String   @default("") @map("file_name")
   fileData   Bytes    @map("file_data")
   uploadedAt DateTime @default(now()) @map("uploaded_at") @db.Timestamptz(6)
+  // Parsed at upload (applyEventMap) so course.mapMetadata never re-parses
+  // the OCAD blob per query. Null on rows written before the migration —
+  // mapMetadata backfills those lazily.
+  scale       Float?
+  bounds      Json?
+  northOffset Float?   @map("north_offset")
+  calibration Json?
 
   event Event @relation(fields: [eventId], references: [id], onDelete: Cascade)
 

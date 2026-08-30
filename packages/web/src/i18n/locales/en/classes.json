@@ -63,5 +63,10 @@
   "bulkUpdated": "Updated {{count}} classes",
   "allowQuickEntry": "Direct registration",
   "maxTime": "Max time",
-  "noLimit": "No limit"
+  "noLimit": "No limit",
+  "addFromPresets": "Add from club presets",
+  "presetsDialogTitle": "Add classes from club presets",
+  "alreadyAdded": "Already added",
+  "presetsResult": "{{created}} added, {{skipped}} skipped",
+  "selectAllPresets": "Select all"
 }

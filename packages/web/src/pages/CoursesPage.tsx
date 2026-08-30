@@ -13,6 +13,11 @@ import { MapSlot } from "../components/MapSlot";
 import { StructuredSearchBar } from "../components/structured-search/StructuredSearchBar";
 import { useStructuredSearch } from "../hooks/useStructuredSearch";
 import { createCourseAnchors } from "../lib/structured-search/anchors/course-anchors";
+import { downloadSameOriginFile } from "../lib/download-api";
+import {
+  courselessClassNames,
+  matchCourselessClass,
+} from "../lib/course-editor";
 
 export function CoursesPage() {
   const { t } = useTranslation("courses");
@@ -38,7 +43,6 @@ export function CoursesPage() {
     },
   });
 
-  const [bulkField, setBulkField] = useState<"numberOfMaps" | "firstAsStart" | "lastAsFinish">("numberOfMaps");
   const [bulkValue, setBulkValue] = useState<string>("");
 
   const handleDelete = (id: number, name: string) => {
@@ -81,29 +85,17 @@ export function CoursesPage() {
 
   const handleApplyBulk = () => {
     if (bulkValue === "" || selection.count === 0) return;
-    const fieldLabel =
-      bulkField === "numberOfMaps" ? t("maps").toLowerCase() :
-      bulkField === "firstAsStart" ? t("firstAsStartShort").toLowerCase() :
-      t("lastAsFinishShort").toLowerCase();
-    const valueLabel = bulkField === "numberOfMaps"
-      ? bulkValue
-      : bulkValue === "1" ? t("yes") : t("no");
-
-    if (!window.confirm(t("bulkConfirm", { field: fieldLabel, value: valueLabel, count: selection.count }))) return;
-
-    const payload: { ids: number[]; numberOfMaps?: number; firstAsStart?: boolean; lastAsFinish?: boolean } = {
+    if (!window.confirm(t("bulkConfirm", {
+      field: t("maps").toLowerCase(),
+      value: bulkValue,
+      count: selection.count,
+    }))) return;
+    const value = parseInt(bulkValue, 10);
+    if (Number.isNaN(value) || value < 0) return;
+    bulkUpdateMutation.mutate({
       ids: Array.from(selection.selected),
-    };
-    if (bulkField === "numberOfMaps") {
-      const v = parseInt(bulkValue, 10);
-      if (Number.isNaN(v) || v < 0) return;
-      payload.numberOfMaps = v;
-    } else if (bulkField === "firstAsStart") {
-      payload.firstAsStart = bulkValue === "1";
-    } else {
-      payload.lastAsFinish = bulkValue === "1";
-    }
-    bulkUpdateMutation.mutate(payload);
+      numberOfMaps: value,
+    });
   };
 
   return (
@@ -126,9 +118,13 @@ export function CoursesPage() {
           {t("importCourses")}
         </button>
         {(courses.data?.length ?? 0) > 0 && (
-          <a
-            href={`/api/export/course-data?name=${encodeURIComponent(nameId ?? "")}`}
-            download
+          <button
+            type="button"
+            onClick={() =>
+              void downloadSameOriginFile(
+                `/api/export/course-data?name=${encodeURIComponent(nameId ?? "")}`,
+              )
+            }
             data-testid="course-export-link"
             title={t("exportCoursesTitle")}
             className="px-4 py-2 border border-blue-200 text-blue-700 text-sm font-medium rounded-lg hover:bg-blue-50 transition-colors cursor-pointer flex items-center gap-1.5 whitespace-nowrap"
@@ -137,7 +133,7 @@ export function CoursesPage() {
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
             </svg>
             {t("exportCourses")}
-          </a>
+          </button>
         )}
         <button
           onClick={() => setShowCreateForm(true)}
@@ -257,13 +253,19 @@ export function CoursesPage() {
                       <td className="px-4 py-2.5 hidden lg:table-cell">
                         <div className="flex gap-1.5">
                           {c.firstAsStart && (
-                            <span className="px-1.5 py-0.5 rounded text-xs font-medium bg-blue-100 text-blue-700">
-                              {t("start")}
+                            <span
+                              data-testid="course-legacy-first-start"
+                              className="px-1.5 py-0.5 rounded text-xs font-medium bg-blue-100 text-blue-700"
+                            >
+                              {t("legacyFirstAsStart")}
                             </span>
                           )}
                           {c.lastAsFinish && (
-                            <span className="px-1.5 py-0.5 rounded text-xs font-medium bg-emerald-100 text-emerald-700">
-                              {t("finish")}
+                            <span
+                              data-testid="course-legacy-last-finish"
+                              className="px-1.5 py-0.5 rounded text-xs font-medium bg-emerald-100 text-emerald-700"
+                            >
+                              {t("legacyLastAsFinish")}
                             </span>
                           )}
                           {!c.firstAsStart && !c.lastAsFinish && (
@@ -326,37 +328,22 @@ export function CoursesPage() {
       {/* Bulk action bar — floating at bottom, same as Classes/Runners */}
       <BulkActionBar count={selection.count} onDeselectAll={selection.clearSelection}>
         <select
-          value={bulkField}
-          onChange={(e) => { setBulkField(e.target.value as typeof bulkField); setBulkValue(""); }}
+          value="numberOfMaps"
+          disabled
           className="px-3 py-1.5 border border-slate-200 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 cursor-pointer"
           data-testid="bulk-field-select"
         >
           <option value="numberOfMaps">{t("maps")}</option>
-          <option value="firstAsStart">{t("firstAsStartShort")}</option>
-          <option value="lastAsFinish">{t("lastAsFinishShort")}</option>
         </select>
-        {bulkField === "numberOfMaps" ? (
-          <input
-            type="number"
-            min={0}
-            value={bulkValue}
-            onChange={(e) => setBulkValue(e.target.value)}
-            placeholder="0"
-            className="w-24 px-3 py-1.5 border border-slate-200 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 tabular-nums"
-            data-testid="bulk-value-input"
-          />
-        ) : (
-          <select
-            value={bulkValue}
-            onChange={(e) => setBulkValue(e.target.value)}
-            className="px-3 py-1.5 border border-slate-200 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 cursor-pointer"
-            data-testid="bulk-value-input"
-          >
-            <option value="">—</option>
-            <option value="1">{t("yes")}</option>
-            <option value="0">{t("no")}</option>
-          </select>
-        )}
+        <input
+          type="number"
+          min={0}
+          value={bulkValue}
+          onChange={(e) => setBulkValue(e.target.value)}
+          placeholder="0"
+          className="w-24 px-3 py-1.5 border border-slate-200 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 tabular-nums"
+          data-testid="bulk-value-input"
+        />
         <button
           onClick={handleApplyBulk}
           disabled={bulkValue === "" || bulkUpdateMutation.isPending}
@@ -575,27 +562,6 @@ function CourseInlineDetail({ courseId }: { courseId: number }) {
             </div>
           )}
 
-          {/* Options */}
-          <div className="flex gap-6">
-            <label className="flex items-center gap-2 cursor-pointer">
-              <input
-                type="checkbox"
-                checked={d.firstAsStart}
-                onChange={(e) => handleSave("firstAsStart", e.target.checked)}
-                className="rounded border-slate-300 text-blue-600 focus:ring-blue-500 cursor-pointer"
-              />
-              <span className="text-sm text-slate-600">{t("useFirstAsStart")}</span>
-            </label>
-            <label className="flex items-center gap-2 cursor-pointer">
-              <input
-                type="checkbox"
-                checked={d.lastAsFinish}
-                onChange={(e) => handleSave("lastAsFinish", e.target.checked)}
-                className="rounded border-slate-300 text-blue-600 focus:ring-blue-500 cursor-pointer"
-              />
-              <span className="text-sm text-slate-600">{t("useLastAsFinish")}</span>
-            </label>
-          </div>
         </div>
 
         {/* Class usage */}
@@ -642,13 +608,25 @@ function CreateCourseForm({
   const [controls, setControls] = useState("");
   const [length, setLength] = useState("");
   const [numberOfMaps, setNumberOfMaps] = useState("1");
-  const [firstAsStart, setFirstAsStart] = useState(false);
-  const [lastAsFinish, setLastAsFinish] = useState(false);
+  const utils = trpc.useUtils();
+  const classes = trpc.class.list.useQuery();
+  const courses = trpc.course.list.useQuery();
+  const suggestions = useMemo(
+    () =>
+      courselessClassNames(
+        classes.data ?? [],
+        (courses.data ?? []).map((course) => course.name),
+      ),
+    [classes.data, courses.data],
+  );
 
   const [createError, setCreateError] = useState<string | null>(null);
 
   const createMutation = trpc.course.create.useMutation({
-    onSuccess: () => onCreated(),
+    onSuccess: () => {
+      void utils.class.list.invalidate();
+      onCreated();
+    },
     onError: (err) => setCreateError(err.message),
   });
 
@@ -665,8 +643,8 @@ function CreateCourseForm({
       controlIds: codes.map((c) => parseInt(c, 10)).filter((n) => !isNaN(n)),
       length: parseInt(length, 10) || 0,
       numberOfMaps: parseInt(numberOfMaps, 10) || 1,
-      firstAsStart,
-      lastAsFinish,
+      linkClassId:
+        matchCourselessClass(name.trim(), classes.data ?? []) ?? undefined,
     });
   };
 
@@ -689,6 +667,7 @@ function CreateCourseForm({
             <label className="block text-xs font-medium text-slate-500 mb-1">{t("name")}</label>
             <input
               type="text"
+              list="course-create-suggestions"
               value={name}
               onChange={(e) => setName(e.target.value)}
               placeholder={t("namePlaceholder")}
@@ -696,6 +675,11 @@ function CreateCourseForm({
               autoFocus
               required
             />
+            <datalist id="course-create-suggestions">
+              {suggestions.map((suggestion) => (
+                <option key={suggestion} value={suggestion} />
+              ))}
+            </datalist>
           </div>
           <div className="sm:w-32">
             <label className="block text-xs font-medium text-slate-500 mb-1">{t("lengthM")}</label>
@@ -738,26 +722,6 @@ function CreateCourseForm({
           {createError && (
             <p className="text-xs text-rose-600 mt-1">{createError}</p>
           )}
-        </div>
-        <div className="flex gap-5">
-          <label className="flex items-center gap-2 cursor-pointer">
-            <input
-              type="checkbox"
-              checked={firstAsStart}
-              onChange={(e) => setFirstAsStart(e.target.checked)}
-              className="rounded border-slate-300 text-blue-600 focus:ring-blue-500 cursor-pointer"
-            />
-            <span className="text-sm text-slate-600">{t("firstAsStartShort")}</span>
-          </label>
-          <label className="flex items-center gap-2 cursor-pointer">
-            <input
-              type="checkbox"
-              checked={lastAsFinish}
-              onChange={(e) => setLastAsFinish(e.target.checked)}
-              className="rounded border-slate-300 text-blue-600 focus:ring-blue-500 cursor-pointer"
-            />
-            <span className="text-sm text-slate-600">{t("lastAsFinishShort")}</span>
-          </label>
         </div>
         <div className="flex items-center gap-2 pt-1">
           <button

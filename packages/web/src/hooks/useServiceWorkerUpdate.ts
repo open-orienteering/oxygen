@@ -1,4 +1,6 @@
+import { useMemo } from "react";
 import { useRegisterSW } from "virtual:pwa-register/react";
+import { createUpdateActivator } from "../lib/app-update";
 
 /**
  * How often to ask the browser whether a new bundle has been deployed.
@@ -31,10 +33,22 @@ export function useServiceWorkerUpdate(): {
     },
   });
 
+  // Activation with a hard-reload fallback: `updateServiceWorker(true)`
+  // silently does nothing when the tab isn't SW-controlled or the waiting
+  // worker is gone — see createUpdateActivator.
+  const activate = useMemo(
+    () =>
+      createUpdateActivator({
+        activate: () => {
+          void updateServiceWorker(true);
+        },
+        reload: () => window.location.reload(),
+      }),
+    [updateServiceWorker],
+  );
+
   return {
     bundleWaiting: needRefresh,
-    activate: () => {
-      void updateServiceWorker(true);
-    },
+    activate,
   };
 }
