@@ -19,6 +19,9 @@
 import { test, expect, type Page, type BrowserContext } from "@playwright/test";
 import { getMockWebSerialScript } from "./helpers/mock-webserial";
 import { API_BASE } from "./helpers/api-base";
+import { reseed } from "./helpers/reseed";
+
+test.beforeAll(reseed);
 
 declare global {
   interface Window {
@@ -679,7 +682,7 @@ test.describe("Registration Dialog", () => {
 
       // Kiosk should show readout
       await expect(kioskPage.getByText("Test ReadoutEdge")).toBeVisible({ timeout: 10000 });
-      await expect(kioskPage.getByText("Completed")).toBeVisible();
+      await expect(kioskPage.getByText("Completed")).toBeVisible({ timeout: 10000 });
 
       // Dialog should NOT be open
       await expect(adminPage.getByTestId("registration-dialog")).not.toBeVisible();

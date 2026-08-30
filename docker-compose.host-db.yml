@@ -25,6 +25,10 @@ services:
       PORT: "3001"
       HOST: "0.0.0.0"
       NODE_OPTIONS: "--max-old-space-size=4096"
+      AUTH_MODE: "${AUTH_MODE:-off}"
+      AUTH_HEADER: "${AUTH_HEADER:-x-forwarded-email}"
+      AUTH_DEV_EMAIL: "${AUTH_DEV_EMAIL:-dev@localhost}"
+      OXYGEN_ADMIN_EMAILS: "${OXYGEN_ADMIN_EMAILS:-}"
 
   web:
     build:

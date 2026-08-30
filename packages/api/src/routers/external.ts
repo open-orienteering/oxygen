@@ -6,11 +6,11 @@
  */
 
 import { z } from "zod";
-import { router, eventProcedure } from "../trpc.js";
+import { router, viewProcedure } from "../trpc.js";
 
 export const externalRouter = router({
   /** Public event metadata. */
-  event: eventProcedure.query(async ({ ctx }) => {
+  event: viewProcedure.query(async ({ ctx }) => {
     const e = await ctx.db.event.findUnique({ where: { id: ctx.event.id } });
     if (!e) return null;
     return {
@@ -22,7 +22,7 @@ export const externalRouter = router({
   }),
 
   /** Public class roster (id + name). */
-  classes: eventProcedure.query(async ({ ctx }) => {
+  classes: viewProcedure.query(async ({ ctx }) => {
     const classes = await ctx.db.class.findMany({
       where: { eventId: ctx.event.id, removed: false },
       orderBy: { sortIndex: "asc" },
@@ -32,7 +32,7 @@ export const externalRouter = router({
   }),
 
   /** Public start list (sorted by start time / start no). */
-  startList: eventProcedure
+  startList: viewProcedure
     .input(z.object({ classId: z.number().int().optional() }).optional())
     .query(async ({ ctx, input }) => {
       const where: Record<string, unknown> = {

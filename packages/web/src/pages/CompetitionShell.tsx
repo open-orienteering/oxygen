@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, useCallback, lazy, Suspense } from "react";
+import { useEffect, useRef, useState, useCallback, useMemo, lazy, Suspense, type ReactNode } from "react";
 import {
   useParams,
   useNavigate,
@@ -12,6 +12,10 @@ import { useTranslation } from "react-i18next";
 import { trpc } from "../lib/trpc";
 import { ClubLogo } from "../components/ClubLogo";
 import { LanguageSelector } from "../components/LanguageSelector";
+import { UserChip } from "../components/UserChip";
+import { ForbiddenPane } from "../components/ForbiddenPane";
+import { CapabilitiesProvider, useCapabilities } from "../context/CapabilitiesContext";
+import type { Capability } from "@oxygen/shared";
 import { useDeviceManager } from "../context/DeviceManager";
 import { usePrinter } from "../context/PrinterContext";
 import { fetchLogoRaster } from "../lib/receipt-printer/index.js";
@@ -34,6 +38,12 @@ import { useMapPanelProps } from "../lib/map-props-store";
 import { MapPanel } from "../components/MapPanel";
 import { MapPane } from "../components/MapPane";
 import { useLocalStorage } from "../hooks/useLocalStorage";
+import {
+  ALL_TABS,
+  computeTabLayout,
+  shouldShowProgressiveHint,
+  type ShellTabId,
+} from "../lib/shell-tabs";
 
 // Lazy-loaded page components — each becomes a separate chunk
 const CompetitionDashboard = lazy(() => import("./CompetitionDashboard").then(m => ({ default: m.CompetitionDashboard })));
@@ -55,7 +65,7 @@ const BackupPunchesPage = lazy(() => import("./BackupPunchesPage").then(m => ({ 
 const TracksPage = lazy(() => import("./TracksPage").then(m => ({ default: m.TracksPage })));
 const RegistrationTrendsPage = lazy(() => import("./RegistrationTrendsPage").then(m => ({ default: m.RegistrationTrendsPage })));
 
-type Tab = "dashboard" | "event" | "runners" | "startlist" | "results" | "classes" | "courses" | "course-editor" | "controls" | "clubs" | "start-station" | "finish-station" | "card-readout" | "cards" | "backup-punches" | "test-lab" | "tracks" | "registration-trends";
+type Tab = ShellTabId;
 
 const tabLabelKeys = {
   "dashboard": "dashboard",
@@ -78,39 +88,26 @@ const tabLabelKeys = {
   "registration-trends": "trends",
 } as const satisfies Record<Tab, string>;
 
-const tabs: { id: Tab; path: string; group?: string; countKey?: string; isOverflow?: boolean }[] = [
-  { id: "dashboard", path: "" },
-  { id: "runners", path: "runners", countKey: "runners" },
-  { id: "startlist", path: "startlist", countKey: "startlist" },
-  { id: "results", path: "results", countKey: "results" },
-  { id: "classes", path: "classes", countKey: "classes" },
-  { id: "courses", path: "courses", countKey: "courses" },
-  { id: "controls", path: "controls", countKey: "controls" },
-  { id: "cards", path: "cards", countKey: "cards" },
-  { id: "tracks", path: "tracks" },
-  // Overflow items
-  { id: "event", path: "event", isOverflow: true },
-  { id: "course-editor", path: "course-editor", isOverflow: true },
-  { id: "registration-trends", path: "registration-trends", isOverflow: true },
-  { id: "clubs", path: "clubs", countKey: "clubs", isOverflow: true },
-  { id: "start-station", path: "start-station", group: "race", isOverflow: true },
-  { id: "finish-station", path: "finish-station", group: "race", isOverflow: true },
-  { id: "card-readout", path: "card-readout", group: "race", isOverflow: true },
-  { id: "backup-punches", path: "backup-punches", group: "race", isOverflow: true },
-  { id: "test-lab", path: "test-lab", group: "dev", isOverflow: true },
-];
-
 export function CompetitionShell() {
+  return (
+    <CapabilitiesProvider>
+      <CompetitionShellInner />
+    </CapabilitiesProvider>
+  );
+}
+
+function CompetitionShellInner() {
   const { nameId } = useParams<{ nameId: string }>();
   const navigate = useNavigate();
   const location = useLocation();
   const { t } = useTranslation("nav");
+  const { capabilities } = useCapabilities();
 
   // Determine active tab from current URL path
   const pathAfterNameId = location.pathname.split(`/${nameId}/`)[1] ?? "";
   const firstSegment = pathAfterNameId.split("/")[0] || "";
   const activeTab: Tab =
-    tabs.find((t) => t.path === firstSegment)?.id ?? "dashboard";
+    ALL_TABS.find((t) => t.path === firstSegment)?.id ?? "dashboard";
 
   // Auto-select the competition on mount / nameId change
   const [competitionName, setCompetitionName] = useState<string>("");
@@ -162,6 +159,13 @@ export function CompetitionShell() {
     startlist: dashboard.data?.statusCounts?.startListCount ?? 0,
     results: dashboard.data?.statusCounts?.resultCount ?? 0,
   };
+
+  const { primary: primaryTabs, overflow: overflowTabs } = useMemo(
+    () => computeTabLayout(dashboard.data?.contentSignals ?? null, capabilities),
+    [dashboard.data?.contentSignals, capabilities],
+  );
+  const activeIsOverflow = overflowTabs.some((tab) => tab.id === activeTab);
+  const showProgressiveHint = shouldShowProgressiveHint(overflowTabs);
 
   const organizerEventorId = dashboard.data?.organizer?.eventorId;
 
@@ -351,6 +355,7 @@ export function CompetitionShell() {
                   onShow={() => setPaneCollapsed(false)}
                 />
               )}
+              <UserChip />
               <LeaseBadge />
               <ReaderStatusIndicator />
               <PrinterStatusIndicator />
@@ -364,7 +369,7 @@ export function CompetitionShell() {
           {/* Tabs */}
           <div className="flex items-center justify-between border-b border-slate-200">
             <nav className="-mb-px flex flex-1 gap-1 overflow-x-auto min-w-0" aria-label="Tabs" style={{ scrollbarWidth: 'none', msOverflowStyle: 'none' }}>
-              {tabs.filter((t) => !t.isOverflow).map((tab) => {
+              {primaryTabs.map((tab) => {
                 const path = tab.path ? `/${nameId}/${tab.path}` : `/${nameId}`;
                 return (
                   <Link
@@ -390,7 +395,7 @@ export function CompetitionShell() {
             {/* Active overflow tab — promoted into the top bar so the user can see
                 what page they're on. Disappears as soon as activeTab is no longer overflow. */}
             {(() => {
-              const activeOverflow = tabs.find((tt) => tt.id === activeTab && tt.isOverflow);
+              const activeOverflow = overflowTabs.find((tt) => tt.id === activeTab);
               if (!activeOverflow) return null;
               const path = activeOverflow.path
                 ? `/${nameId}/${activeOverflow.path}`
@@ -419,7 +424,7 @@ export function CompetitionShell() {
                 <button
                   onClick={() => setShowMoreMenu(!showMoreMenu)}
                   data-testid="more-menu-button"
-                  className={`px-3 py-2.5 text-sm font-medium border-b-2 transition-colors cursor-pointer whitespace-nowrap flex items-center gap-1 leading-none ${tabs.find(t => t.id === activeTab)?.isOverflow
+                  className={`px-3 py-2.5 text-sm font-medium border-b-2 transition-colors cursor-pointer whitespace-nowrap flex items-center gap-1 leading-none ${activeIsOverflow
                     ? "border-blue-600 text-blue-600"
                     : "border-transparent text-slate-500 hover:text-slate-700 hover:border-slate-300"
                     }`}
@@ -440,7 +445,15 @@ export function CompetitionShell() {
                       data-testid="more-menu-content"
                       className="absolute right-0 top-full mt-1 z-30 bg-white border border-slate-200 rounded-lg shadow-lg py-1 min-w-[200px]"
                     >
-                      {tabs.filter((t) => t.isOverflow).map((tab) => {
+                      {showProgressiveHint && (
+                        <p
+                          data-testid="progressive-hint"
+                          className="px-4 py-2 text-xs text-slate-400 leading-snug"
+                        >
+                          {t("progressiveHint")}
+                        </p>
+                      )}
+                      {overflowTabs.map((tab) => {
                         const path = tab.path ? `/${nameId}/${tab.path}` : `/${nameId}`;
                         return (
                           <Link
@@ -506,25 +519,25 @@ export function CompetitionShell() {
         >
           <Suspense fallback={<div className="flex justify-center py-12"><div className="w-8 h-8 border-4 border-blue-200 border-t-blue-600 rounded-full animate-spin" /></div>}>
           <Routes>
-            <Route index element={<CompetitionDashboard />} />
-            <Route path="event" element={<EventPage />} />
-            <Route path="runners" element={<RunnerManagement />} />
-            <Route path="startlist" element={<StartListPage />} />
-            <Route path="results" element={<ResultsPage />} />
-            <Route path="classes" element={<ClassesPage />} />
-            <Route path="courses" element={<CoursesPage />} />
-            <Route path="course-editor" element={<CourseEditorPage />} />
-            <Route path="controls" element={<ControlsPage />} />
-            <Route path="clubs" element={<ClubsPage />} />
-            <Route path="cards" element={<CardsPage />} />
-            <Route path="start-station" element={<StartStation />} />
-            <Route path="finish-station" element={<FinishStation />} />
-            <Route path="card-readout" element={<CardReadout />} />
+            <Route index element={<Guarded cap="event.view"><CompetitionDashboard /></Guarded>} />
+            <Route path="event" element={<Guarded cap="event.view"><EventPage /></Guarded>} />
+            <Route path="runners" element={<Guarded cap="event.view"><RunnerManagement /></Guarded>} />
+            <Route path="startlist" element={<Guarded cap="event.view"><StartListPage /></Guarded>} />
+            <Route path="results" element={<Guarded cap="results.view"><ResultsPage /></Guarded>} />
+            <Route path="classes" element={<Guarded cap="event.view"><ClassesPage /></Guarded>} />
+            <Route path="courses" element={<Guarded cap="courses.view"><CoursesPage /></Guarded>} />
+            <Route path="course-editor" element={<Guarded cap="courses.view"><CourseEditorPage /></Guarded>} />
+            <Route path="controls" element={<Guarded cap="courses.view"><ControlsPage /></Guarded>} />
+            <Route path="clubs" element={<Guarded cap="event.view"><ClubsPage /></Guarded>} />
+            <Route path="cards" element={<Guarded cap="race.operate"><CardsPage /></Guarded>} />
+            <Route path="start-station" element={<Guarded cap="race.operate"><StartStation /></Guarded>} />
+            <Route path="finish-station" element={<Guarded cap="race.operate"><FinishStation /></Guarded>} />
+            <Route path="card-readout" element={<Guarded cap="race.operate"><CardReadout /></Guarded>} />
             <Route path="registration" element={<Navigate to="" replace />} />
-            <Route path="backup-punches" element={<BackupPunchesPage />} />
-            <Route path="test-lab" element={<TestLabPage />} />
-            <Route path="tracks" element={<TracksPage />} />
-            <Route path="registration-trends" element={<RegistrationTrendsPage />} />
+            <Route path="backup-punches" element={<Guarded cap="race.operate"><BackupPunchesPage /></Guarded>} />
+            <Route path="test-lab" element={<Guarded cap="event.manage"><TestLabPage /></Guarded>} />
+            <Route path="tracks" element={<Guarded cap="results.view"><TracksPage /></Guarded>} />
+            <Route path="registration-trends" element={<Guarded cap="event.view"><RegistrationTrendsPage /></Guarded>} />
             <Route path="*" element={<Navigate to="" replace />} />
           </Routes>
           </Suspense>
@@ -909,6 +922,18 @@ function ReaderStatusIndicator() {
       )}
     </div>
   );
+}
+
+function Guarded({
+  cap,
+  children,
+}: {
+  cap: Capability;
+  children: ReactNode;
+}) {
+  const { has, loaded } = useCapabilities();
+  if (loaded && !has(cap)) return <ForbiddenPane />;
+  return children;
 }
 
 // ─── External changes probe ────────────────────────────────

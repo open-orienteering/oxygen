@@ -1,7 +1,7 @@
 import { createSocket } from "node:dgram";
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
-import { router, eventProcedure, raceProcedure } from "../trpc.js";
+import { router, coursesViewProcedure, coursesEditProcedure, coursesEditRaceProcedure, raceOperateProcedure, raceOperateRaceProcedure } from "../trpc.js";
 import type { PrismaClient } from "../generated/prisma/client.js";
 import {
   controlStatusToValue,
@@ -354,7 +354,7 @@ function aggregateConfig(
 }
 
 export const controlRouter = router({
-  list: eventProcedure.query(async ({ ctx }): Promise<ControlInfo[]> => {
+  list: coursesViewProcedure.query(async ({ ctx }): Promise<ControlInfo[]> => {
     const eventId = ctx.event.id;
     const controls = await ctx.db.control.findMany({
       where: { eventId, removed: false },
@@ -431,7 +431,7 @@ export const controlRouter = router({
     });
   }),
 
-  getById: eventProcedure
+  getById: coursesViewProcedure
     .input(z.object({ id: z.number().int() }))
     .query(async ({ ctx, input }): Promise<ControlDetail> => {
       const c = await getControlByCode(ctx.db, ctx.event.id, input.id);
@@ -492,12 +492,18 @@ export const controlRouter = router({
       };
     }),
 
-  create: raceProcedure
+  create: coursesEditRaceProcedure
     .input(
       z
         .object({
           name: z.string().optional().default(""),
-          codes: z.string().min(1),
+          /**
+           * Punch codes (`;`-separated positive integers). Required for
+           * normal controls; start/finish controls (status 4/5) are
+           * code-less by convention — omit or pass "" and they are
+           * addressed by seq (publicControlId falls back to it).
+           */
+          codes: z.string().optional().default(""),
           status: z.number().int().optional().default(0),
           timeAdjust: z.number().int().optional().default(0),
           minTime: z.number().int().optional().default(0),
@@ -511,9 +517,11 @@ export const controlRouter = router({
         }),
     )
     .mutation(async ({ ctx, input }) => {
+      const statusEnum = valueToControlStatus(input.status);
+      const isStartFinish = statusEnum === "start" || statusEnum === "finish";
       // Validate codes: each part must be a positive integer.
       const parts = input.codes.split(";").map((p) => p.trim()).filter(Boolean);
-      if (parts.length === 0) {
+      if (parts.length === 0 && !isStartFinish) {
         throw new TRPCError({
           code: "BAD_REQUEST",
           message: "Invalid control code: at least one code is required",
@@ -559,14 +567,24 @@ export const controlRouter = router({
         ? await positionToWgs84(ctx.db, ctx.event.id, input.xpos!, input.ypos!)
         : null;
 
+      // Auto-name start/finish rows following the import convention
+      // ("Start N" / "Mål N") — courses reference starts by this name.
+      let name = input.name;
+      if (!name && isStartFinish) {
+        const count = await ctx.db.control.count({
+          where: { eventId: ctx.event.id, status: statusEnum, removed: false },
+        });
+        name = `${statusEnum === "start" ? "Start" : "Mål"} ${count + 1}`;
+      }
+
       // Table write + control.upserted journal entry commit together.
       const created = await ctx.db.$transaction(async (tx) => {
         const c = await tx.control.create({
           data: {
             eventId: ctx.event.id,
-            name: input.name,
+            name,
             codes: input.codes,
-            status: valueToControlStatus(input.status),
+            status: statusEnum,
             timeAdjust: input.timeAdjust,
             minTime: input.minTime,
             ...(hasPosition
@@ -576,15 +594,27 @@ export const controlRouter = router({
               ? { description: input.description as Record<string, string> }
               : {}),
           },
-          select: { id: true, seq: true, codes: true },
+          select: { id: true, seq: true, codes: true, name: true, status: true },
         });
         await emitControlUpserted(tx, ctx.event.id, c.id);
+        // A new start/finish can become a course's implicit start/finish
+        // (lowest-seq default or startName match) — regenerate the stored
+        // overlay geometry of every course that now references it.
+        if (isStartFinish && hasPosition) {
+          const courseIds = await courseIdsUsingControl(tx, ctx.event.id, c);
+          if (courseIds.length > 0) {
+            await rebuildCourseGeometry(tx, ctx.event.id, courseIds);
+            for (const courseId of courseIds) {
+              await emitCourseUpserted(tx, ctx.event.id, courseId);
+            }
+          }
+        }
         return c;
       });
       return { id: publicControlId(created) };
     }),
 
-  update: raceProcedure
+  update: coursesEditRaceProcedure
     .input(
       z
         .object({
@@ -652,7 +682,7 @@ export const controlRouter = router({
       return { ok: true };
     }),
 
-  delete: raceProcedure
+  delete: coursesEditRaceProcedure
     .input(z.object({ id: z.number().int() }))
     .mutation(async ({ ctx, input }) => {
       const c = await getControlByCode(ctx.db, ctx.event.id, input.id);
@@ -686,7 +716,7 @@ export const controlRouter = router({
    * reverse a control deletion without minting a new row (course
    * references and journal identity stay intact).
    */
-  restore: raceProcedure
+  restore: coursesEditRaceProcedure
     .input(z.object({ id: z.number().int() }))
     .mutation(async ({ ctx, input }) => {
       const codeStr = String(input.id);
@@ -739,12 +769,24 @@ export const controlRouter = router({
           data: { removed: false },
         });
         await emitControlUpserted(tx, ctx.event.id, c.id);
+        // A restored start/finish becomes an implicit course reference
+        // again (delete rebuilt the geometry without it — undo must put
+        // the start/finish leg back).
+        if (c.status === "start" || c.status === "finish") {
+          const courseIds = await courseIdsUsingControl(tx, ctx.event.id, c);
+          if (courseIds.length > 0) {
+            await rebuildCourseGeometry(tx, ctx.event.id, courseIds);
+            for (const courseId of courseIds) {
+              await emitCourseUpserted(tx, ctx.event.id, courseId);
+            }
+          }
+        }
       });
       return { id: publicControlId(c) };
     }),
 
   /** Alias for getById so the web side can read `control.detail`. */
-  detail: eventProcedure
+  detail: coursesViewProcedure
     .input(z.object({ id: z.number().int() }))
     .query(async ({ ctx, input }) => {
       const c = await getControlByCode(ctx.db, ctx.event.id, input.id);
@@ -855,7 +897,7 @@ export const controlRouter = router({
    * nearby, simply yields an empty list — the editor then shows nothing
    * extra.
    */
-  suggestDescription: eventProcedure
+  suggestDescription: coursesViewProcedure
     .input(
       z.object({
         x: z.number().finite(),
@@ -879,7 +921,7 @@ export const controlRouter = router({
    * stay awake after the last programming touch. Returned in the
    * legacy field names so the page renders without a follow-up patch.
    */
-  getAirPlusConfig: eventProcedure.query(async ({ ctx }) => {
+  getAirPlusConfig: coursesViewProcedure.query(async ({ ctx }) => {
     const event = await ctx.db.event.findUnique({
       where: { id: ctx.event.id },
       select: { airPlus: true, awakeHours: true },
@@ -890,7 +932,7 @@ export const controlRouter = router({
     };
   }),
 
-  setAirPlusConfig: eventProcedure
+  setAirPlusConfig: coursesEditProcedure
     .input(
       z.object({
         enabled: z.boolean().optional(),
@@ -920,7 +962,7 @@ export const controlRouter = router({
    * AIR+ override across many rows in one round-trip. `stationSerial`
    * is single-control only — it doesn't make sense for bulk edits.
    */
-  upsertConfig: eventProcedure
+  upsertConfig: coursesEditProcedure
     .input(
       z.object({
         controlId: z.number().int().optional(),
@@ -1029,7 +1071,7 @@ export const controlRouter = router({
    *     includes the best sample's RTT so the operator can judge
    *     trust — sub-50ms RTT means the reading is accurate to a couple ms.
    */
-  serverTime: eventProcedure.query(async () => {
+  serverTime: coursesViewProcedure.query(async () => {
     const serverMs = Date.now();
     const { driftMs, sourceLabel } = await measureNtpDrift();
     return {
@@ -1050,7 +1092,7 @@ export const controlRouter = router({
    * `last_seen_at` so the Controls page can show recency, and uses the
    * `battery_low` flag to drive the low-battery badge.
    */
-  recordProgramming: eventProcedure
+  recordProgramming: coursesEditProcedure
     .input(
       z.object({
         stationSerial: z.number().int(),
@@ -1169,7 +1211,7 @@ export const controlRouter = router({
    *   - time_mismatch   — start/finish punch but time differs >1s
    *   - unknown         — regular control (no canonical reference time)
    */
-  listAllBackupPunches: eventProcedure.query(async ({ ctx }) => {
+  listAllBackupPunches: raceOperateProcedure.query(async ({ ctx }) => {
     const eventId = ctx.event.id;
     const punches = await ctx.db.punch.findMany({
       where: { eventId, source: "backup_memory", removed: false },
@@ -1247,7 +1289,7 @@ export const controlRouter = router({
    * insert a `source: 'manual'` mirror so downstream consumers (the
    * matcher) see it.
    */
-  pushBackupPunch: raceProcedure
+  pushBackupPunch: raceOperateRaceProcedure
     .input(z.object({ punchId: z.string().uuid() }))
     .mutation(async ({ ctx, input }) => {
       const bp = await ctx.db.punch.findUnique({ where: { id: input.punchId } });
@@ -1306,7 +1348,7 @@ export const controlRouter = router({
    * `time`. New callers can send `{ controlCode, time, punchedAt }`
    * directly — both shapes are accepted.
    */
-  importBackupPunches: raceProcedure
+  importBackupPunches: raceOperateRaceProcedure
     .input(
       z.object({
         controlId: z.number().int().optional(),

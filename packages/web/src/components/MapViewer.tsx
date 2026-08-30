@@ -3,6 +3,7 @@ import { useParams } from "react-router-dom";
 import type { ControlDescription } from "@oxygen/shared";
 import { getDescriptionSymbols } from "../iof-symbols";
 import { TileLayer } from "./TileLayer";
+import { kioskKeyFromUrl } from "../lib/kiosk-key";
 import {
   type TileViewport,
   type WGS84Bounds,
@@ -144,6 +145,10 @@ export interface MapViewerEditorProps {
   contextActions?: EditorContextAction[];
   /** Info line rendered above the context actions (no interaction). */
   contextInfo?: string | null;
+  /** Optional badge in the placed-control popover (e.g. SRR from club series). */
+  contextBadge?: { label: string; title?: string } | null;
+  /** Radio-state badge in the placed-control popover. */
+  contextRadioBadge?: { label: string; title?: string } | null;
   /** Base-map description suggestions, rendered above the actions. */
   suggestions?: EditorDescriptionSuggestion[];
   /** Heading for the suggestion block (the page localizes it). */
@@ -174,6 +179,18 @@ interface Props {
   northOffset?: number | null;
   /** Map upload timestamp for cache busting tile URLs */
   mapVersion?: number;
+  /**
+   * Map-mm ↔ WGS84 anchor points from the map's georeference
+   * (course.mapMetadata). Preferred source for the affine transform —
+   * without them a map with fewer than two placed controls has no
+   * mm↔latlng mapping and editor clicks go nowhere.
+   */
+  calibration?: Array<{
+    mapX: number;
+    mapY: number;
+    lat: number;
+    lng: number;
+  }> | null;
   controls?: ControlOverlay[];
   courses?: CourseOverlay[];
   highlightControlId?: string;
@@ -287,6 +304,7 @@ export function MapViewer({
   mapScale,
   northOffset,
   mapVersion,
+  calibration,
   controls = [],
   courses = [],
   highlightControlId,
@@ -325,7 +343,11 @@ export function MapViewer({
     if (!mapBounds) return; // no map
     const interval = setInterval(async () => {
       try {
-        const res = await fetch("/api/map-tile-progress", nameId ? { headers: { "x-competition-id": nameId } } : {});
+        const headers: Record<string, string> = {};
+        if (nameId) headers["x-competition-id"] = nameId;
+        const kioskKey = kioskKeyFromUrl();
+        if (kioskKey) headers["x-kiosk-key"] = kioskKey;
+        const res = await fetch("/api/map-tile-progress", { headers });
         if (res.ok) setTileProgress(await res.json());
       } catch { /* ignore */ }
     }, 2000);
@@ -418,13 +440,20 @@ export function MapViewer({
     containerSize.w, containerSize.h, rotDeg,
   );
 
-  // Build affine transform from control points (mm ↔ lat/lng)
+  // Build affine transform (mm ↔ lat/lng). The map's own calibration
+  // corners are exact and always well-conditioned, so they win when
+  // available; control-derived points remain the fallback for maps
+  // whose metadata predates calibration support.
   const affine: AffineTransform | null = useMemo(() => {
+    if (calibration && calibration.length >= 3) {
+      const fromCalibration = buildAffineTransform(calibration);
+      if (fromCalibration) return fromCalibration;
+    }
     const pts = controls
       .filter((c) => c.lat !== 0 && c.lng !== 0 && c.x !== 0 && c.y !== 0)
       .map((c) => ({ mapX: c.x, mapY: c.y, lat: c.lat, lng: c.lng }));
     return buildAffineTransform(pts);
-  }, [controls]);
+  }, [controls, calibration]);
 
   // ─── Viewport initialization from map bounds ────────────
 
@@ -1702,6 +1731,24 @@ export function MapViewer({
                 className="text-[11px] text-slate-500 px-2.5 pt-1 pb-0.5 whitespace-nowrap border-b border-slate-100"
               >
                 {editor.contextInfo}
+              </div>
+            )}
+            {editor.contextBadge && (
+              <div
+                data-testid="editor-srr-badge"
+                title={editor.contextBadge.title}
+                className="text-[10px] font-medium text-amber-800 bg-amber-100 rounded px-2 py-0.5 mx-1 mt-0.5 w-fit"
+              >
+                {editor.contextBadge.label}
+              </div>
+            )}
+            {editor.contextRadioBadge && (
+              <div
+                data-testid="editor-radio-badge"
+                title={editor.contextRadioBadge.title}
+                className="text-[10px] font-medium text-sky-800 bg-sky-100 rounded px-2 py-0.5 mx-1 mt-0.5 w-fit"
+              >
+                {editor.contextRadioBadge.label}
               </div>
             )}
             {editor.suggestions && editor.suggestions.length > 0 && (

@@ -38,6 +38,21 @@ describe("class.create + list", () => {
     const list = await caller.class.list();
     expect(list.map((c) => c.name)).toEqual(["D21", "H50", "H21"]);
   });
+
+  it("persists class type, no-timing, and free-start settings", async () => {
+    const created = await caller.class.create({
+      name: "Configured",
+      classType: "Open",
+      noTiming: true,
+      freeStart: true,
+    });
+    const detail = await caller.class.getById({ id: created.id });
+    expect(detail).toMatchObject({
+      classType: "Open",
+      noTiming: true,
+      freeStart: true,
+    });
+  });
 });
 
 describe("class.update", () => {
@@ -58,6 +73,12 @@ describe("class.update", () => {
       caller.class.update({ id: 9999, name: "Ghost" }),
     ).rejects.toThrow(/not found/i);
   });
+
+  it("persists freeStart updates", async () => {
+    const created = await caller.class.create({ name: "Free-start patch" });
+    await caller.class.update({ id: created.id, freeStart: true });
+    expect((await caller.class.getById({ id: created.id })).freeStart).toBe(true);
+  });
 });
 
 describe("class.bulkUpdate", () => {
@@ -73,6 +94,22 @@ describe("class.bulkUpdate", () => {
     const detB = await caller.class.getById({ id: b.id });
     expect(detA.classFee).toBe(15000);
     expect(detB.classFee).toBe(15000);
+  });
+
+  it("persists freeStart and noTiming bulk updates", async () => {
+    const a = await caller.class.create({ name: "Bulk flags A" });
+    const b = await caller.class.create({ name: "Bulk flags B" });
+    await caller.class.bulkUpdate({
+      ids: [a.id, b.id],
+      freeStart: true,
+      noTiming: true,
+    });
+    for (const id of [a.id, b.id]) {
+      expect(await caller.class.getById({ id })).toMatchObject({
+        freeStart: true,
+        noTiming: true,
+      });
+    }
   });
 });
 

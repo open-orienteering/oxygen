@@ -61,6 +61,10 @@ export interface EventRef {
   nameId: string;
   /** Deciseconds since midnight, the reference point for all race times. */
   zeroTime: number;
+  /** Calendar date — present when resolved via `resolveEvent`. */
+  date?: Date;
+  /** Kiosk/start-screen token; null until generated. */
+  kioskKey?: string | null;
 }
 
 /**
@@ -70,10 +74,16 @@ export interface EventRef {
 export async function resolveEvent(nameId: string): Promise<EventRef | null> {
   const row = await prisma().event.findUnique({
     where: { nameId },
-    select: { id: true, nameId: true, zeroTime: true, removed: true },
+    select: { id: true, nameId: true, zeroTime: true, removed: true, date: true, kioskKey: true },
   });
   if (!row || row.removed) return null;
-  return { id: row.id, nameId: row.nameId, zeroTime: row.zeroTime };
+  return {
+    id: row.id,
+    nameId: row.nameId,
+    zeroTime: row.zeroTime,
+    date: row.date,
+    kioskKey: row.kioskKey,
+  };
 }
 
 /**
@@ -103,6 +113,15 @@ export function sanitizeNameId(name: string): string {
       .replace(/_+/g, "_")
       .replace(/^_|_$/g, "")
       .substring(0, 64) || "event"
+  );
+}
+
+/** URL first-segments that must never be event slugs. */
+export const RESERVED_EVENT_SLUGS = ["admin", "library"] as const;
+
+export function isReservedEventSlug(slug: string): boolean {
+  return (RESERVED_EVENT_SLUGS as readonly string[]).includes(
+    slug.toLowerCase(),
   );
 }
 

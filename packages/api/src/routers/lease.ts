@@ -17,7 +17,8 @@ import { TRPCError } from "@trpc/server";
 import {
   router,
   publicProcedure,
-  eventProcedure,
+  viewProcedure,
+  manageProcedure,
   peerProcedure,
 } from "../trpc.js";
 import { prisma } from "../db.js";
@@ -54,7 +55,7 @@ function requirePeer(): { peerUrl: string; secret: string } {
 
 export const leaseRouter = router({
   /** Lease + shipping state for the shell badge and the EventPage panel. */
-  status: eventProcedure.query(async ({ ctx }) => {
+  status: viewProcedure.query(async ({ ctx }) => {
     const lease = await getActiveLease(ctx.db, ctx.event.id);
     const peerUrl = syncPeerUrl();
     const shipping = peerUrl
@@ -117,7 +118,13 @@ export const leaseRouter = router({
    */
   checkout: publicProcedure
     .input(z.object({ nameId: z.string().min(1) }))
-    .mutation(async ({ input }) => {
+    .mutation(async ({ ctx, input }) => {
+      if (ctx.authEnabled && !ctx.user) {
+        throw new TRPCError({
+          code: "UNAUTHORIZED",
+          message: "Not authenticated",
+        });
+      }
       const { peerUrl, secret } = requirePeer();
       const peer = makeLeasePeer(peerUrl, secret);
       const db = prisma();
@@ -167,7 +174,7 @@ export const leaseRouter = router({
    * writing. Runs one final ship cycle first, so a healthy link needs no
    * separate "wait for the shipper".
    */
-  checkin: eventProcedure.mutation(async ({ ctx }) => {
+  checkin: manageProcedure.mutation(async ({ ctx }) => {
     const { peerUrl, secret } = requirePeer();
     const lease = await getActiveLease(ctx.db, ctx.event.id);
     if (!lease || lease.holderNodeId !== nodeId()) {
@@ -203,7 +210,7 @@ export const leaseRouter = router({
    * is whatever the box shipped before dying. A revived box's un-shipped
    * entries drain later through `events.push` (loud, logged).
    */
-  forceTakeover: eventProcedure
+  forceTakeover: manageProcedure
     .input(z.object({ confirm: z.literal(true) }))
     .mutation(async ({ ctx }) => {
       const lease = await getActiveLease(ctx.db, ctx.event.id);

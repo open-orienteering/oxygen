@@ -14,10 +14,16 @@ import { IOF_SYMBOLS } from "../iof-symbols";
 import { iofSymbolName } from "../iof-symbol-meta";
 import { ocadToIof } from "../lib/control-description-options";
 import {
+  buildInventoryView,
+  codesHaveSrr,
   courseEditorReducer,
   courseMembership,
+  courselessClassNames,
+  effectiveRoleControlId,
   initialCourseEditorState,
-  nextFreeControlCode,
+  matchCourselessClass,
+  nextFreeSrrCode,
+  nextSeriesControlCode,
   sequenceLegMeters,
 } from "../lib/course-editor";
 import { UndoStack } from "../lib/undo-stack";
@@ -31,7 +37,7 @@ import { UndoStack } from "../lib/undo-stack";
  * actions (add control, add to course, insert into course, delete).
  * Drag moves a control; a floating panel inside the map box (so it
  * survives fullscreen) builds courses — course list, sequence rows with
- * per-leg distances, reorder/remove, start/finish flags; everything is
+ * per-leg distances and reorder/remove controls; sequence edits are
  * undoable via a bounded stack (Ctrl+Z / Ctrl+Shift+Z).
  *
  * For a placed control with no description yet, the same menu lists what
@@ -77,18 +83,39 @@ export function CourseEditorPage() {
   // so the autodetect also runs for this control even when it already
   // has a description. Cleared when the selection leaves it.
   const [lastMovedId, setLastMovedId] = useState<number | null>(null);
+  const exhaustedNoticeShown = useRef(false);
+  const [showExhausted, setShowExhausted] = useState(false);
+  const [showNoSrr, setShowNoSrr] = useState(false);
+  const [radioSwapOffer, setRadioSwapOffer] = useState<{
+    controlId: number;
+    from: string;
+    to: number;
+    series: string;
+  } | null>(null);
 
   // ─── Data ────────────────────────────────────────────────
 
   // Full control list (includes unpositioned controls) — the code
   // universe for next-free-code suggestions.
   const controlList = trpc.control.list.useQuery();
+  const seriesAllocation = trpc.controlSeries.allocation.useQuery(undefined, {
+    staleTime: 60_000,
+  });
   // Positioned controls — shares the React Query cache entry MapPanel
   // renders from, so the sidebar readouts match the map.
   const controlCoords = trpc.course.controlCoordinates.useQuery(undefined, {
     staleTime: Number.POSITIVE_INFINITY,
   });
   const courses = trpc.course.list.useQuery();
+  const classes = trpc.class.list.useQuery();
+  const newCourseSuggestions = useMemo(
+    () =>
+      courselessClassNames(
+        classes.data ?? [],
+        (courses.data ?? []).map((course) => course.name),
+      ),
+    [classes.data, courses.data],
+  );
   const mapInfo = trpc.course.mapFileInfo.useQuery(undefined, {
     staleTime: Number.POSITIVE_INFINITY,
   });
@@ -138,7 +165,10 @@ export function CourseEditorPage() {
     }> = [];
     const coords = controlCoords.data ?? [];
     if (!selectedCourse.firstAsStart) {
-      const start = coords.find((c) => c.status === 4);
+      const startId = effectiveRoleControlId(
+        coords, "start", selectedCourse.startControlId,
+      );
+      const start = startId != null ? coordsById.get(startId) : undefined;
       if (start) {
         rows.push({
           kind: "start", id: start.id, code: start.code,
@@ -156,7 +186,10 @@ export function CourseEditorPage() {
       });
     });
     if (!selectedCourse.lastAsFinish) {
-      const finish = coords.find((c) => c.status === 5);
+      const finishId = effectiveRoleControlId(
+        coords, "finish", selectedCourse.finishControlId,
+      );
+      const finish = finishId != null ? coordsById.get(finishId) : undefined;
       if (finish) {
         rows.push({
           kind: "finish", id: finish.id, code: finish.code,
@@ -183,6 +216,35 @@ export function CourseEditorPage() {
         ? coordsById.get(state.selectedControlId) ?? null
         : null,
     [state.selectedControlId, coordsById],
+  );
+  const selectedControlRow = useMemo(
+    () =>
+      state.selectedControlId != null
+        ? controlList.data?.find((control) => control.id === state.selectedControlId) ?? null
+        : null,
+    [state.selectedControlId, controlList.data],
+  );
+  const controlRowsById = useMemo(
+    () => new Map((controlList.data ?? []).map((control) => [control.id, control] as const)),
+    [controlList.data],
+  );
+  const inventoryView = useMemo(
+    () =>
+      buildInventoryView(
+        seriesAllocation.data ?? [],
+        (controlList.data ?? []).map((control) => control.codes),
+      ),
+    [seriesAllocation.data, controlList.data],
+  );
+  /** Series to allocate new control codes from; null = priority order. */
+  const [allocSeriesId, setAllocSeriesId] = useState<string | null>(null);
+  const effectiveAllocSeriesId = useMemo(
+    () =>
+      allocSeriesId !== null &&
+      inventoryView.some((series) => series.seriesId === allocSeriesId)
+        ? allocSeriesId
+        : null,
+    [allocSeriesId, inventoryView],
   );
 
   // ─── Mutation plumbing ───────────────────────────────────
@@ -215,19 +277,17 @@ export function CourseEditorPage() {
 
   const client = utils.client;
 
-  /** Update a course's sequence (and optionally flags), undoably. */
+  /** Update a course's control sequence, undoably. */
   const applySequence = useCallback(
     async (
       courseSeq: number,
-      prev: { ids: number[]; firstAsStart: boolean; lastAsFinish: boolean },
-      next: { ids: number[]; firstAsStart?: boolean; lastAsFinish?: boolean },
+      prevIds: number[],
+      nextIds: number[],
     ) => {
       const redo = () =>
         client.course.update.mutate({
           id: courseSeq,
-          controlIds: next.ids,
-          ...(next.firstAsStart !== undefined ? { firstAsStart: next.firstAsStart } : {}),
-          ...(next.lastAsFinish !== undefined ? { lastAsFinish: next.lastAsFinish } : {}),
+          controlIds: nextIds,
         });
       const done = await run(redo);
       if (done === undefined) return false;
@@ -236,9 +296,7 @@ export function CourseEditorPage() {
         undo: () =>
           client.course.update.mutate({
             id: courseSeq,
-            controlIds: prev.ids,
-            firstAsStart: prev.firstAsStart,
-            lastAsFinish: prev.lastAsFinish,
+            controlIds: prevIds,
           }),
       });
       bumpHistory();
@@ -252,11 +310,28 @@ export function CourseEditorPage() {
   const createControl = useCallback(
     async (pt: { x: number; y: number }, insertAt: number | null) => {
       if (!controlList.data) return;
-      const code = nextFreeControlCode(controlList.data.map((c) => c.codes));
+      const allocation = seriesAllocation.data ?? [];
+      const { code, entry } = nextSeriesControlCode(
+        allocation,
+        controlList.data.map((c) => c.codes),
+        effectiveAllocSeriesId,
+      );
+      if (!entry && allocation.length > 0 && !exhaustedNoticeShown.current) {
+        exhaustedNoticeShown.current = true;
+        setShowExhausted(true);
+      }
       const created = await run(() =>
         client.control.create.mutate({ codes: String(code), status: 0, xpos: pt.x, ypos: pt.y }),
       );
       if (!created) return;
+      if (entry?.type === "srr") {
+        await run(() =>
+          client.control.upsertConfig.mutate({
+            controlIds: [created.id],
+            radioType: "internal_radio",
+          }),
+        );
+      }
       const id = created.id;
 
       const course = selectedCourse;
@@ -289,12 +364,58 @@ export function CourseEditorPage() {
       }
       dispatch({ type: "placed", id });
     },
-    [controlList.data, run, client, selectedCourse, sequenceIds, undoStack, bumpHistory],
+    [controlList.data, seriesAllocation.data, effectiveAllocSeriesId, run, client, selectedCourse, sequenceIds, undoStack, bumpHistory],
+  );
+
+  /** Place a code-less start/finish control (auto-named server-side). */
+  const createRoleControl = useCallback(
+    async (pt: { x: number; y: number }, role: "start" | "finish") => {
+      const created = await run(() =>
+        client.control.create.mutate({
+          status: role === "start" ? 4 : 5,
+          xpos: pt.x,
+          ypos: pt.y,
+        }),
+      );
+      if (!created) return;
+      const id = created.id;
+      undoStack.push({
+        undo: () => client.control.delete.mutate({ id }),
+        redo: () => client.control.restore.mutate({ id }),
+      });
+      bumpHistory();
+      dispatch({ type: "placed", id });
+    },
+    [run, client, undoStack, bumpHistory],
+  );
+
+  /** Assign the selected start/finish control to the selected course. */
+  const assignRoleControl = useCallback(
+    (id: number, role: "start" | "finish") => {
+      const course = selectedCourse;
+      if (!course) return;
+      const key = role === "start" ? "startControlId" : "finishControlId";
+      const prev = course[key];
+      void (async () => {
+        const redo = () =>
+          client.course.update.mutate({ id: course.id, [key]: id });
+        const done = await run(redo);
+        if (done === undefined) return;
+        undoStack.push({
+          redo,
+          undo: () =>
+            client.course.update.mutate({ id: course.id, [key]: prev }),
+        });
+        bumpHistory();
+      })();
+    },
+    [selectedCourse, client, run, undoStack, bumpHistory],
   );
 
   // ─── Gesture callbacks (stabilized — they flow through MapPanel's memo) ──
 
   const handleMapClick = useCallback((pt: { x: number; y: number }) => {
+    setRadioSwapOffer(null);
     dispatch({ type: "map-click", x: pt.x, y: pt.y });
   }, []);
 
@@ -322,6 +443,7 @@ export function CourseEditorPage() {
   );
 
   const handleSelect = useCallback((idStr: string | null) => {
+    setRadioSwapOffer(null);
     if (idStr === null) {
       dispatch({ type: "select", id: null });
       return;
@@ -333,6 +455,7 @@ export function CourseEditorPage() {
   const handleLegClick = useCallback(
     (courseName: string, legIndex: number, pt: { x: number; y: number }) => {
       if (!selectedCourse || courseName !== selectedCourse.name) return;
+      setRadioSwapOffer(null);
       // Leg i of the rendered route connects positioned row i → i+1 of
       // the display sequence. Insert before the row the leg ends at
       // (append when it ends at the finish).
@@ -490,8 +613,8 @@ export function CourseEditorPage() {
       if (!selectedCourse) return;
       void applySequence(
         selectedCourse.id,
-        { ids: sequenceIds, firstAsStart: selectedCourse.firstAsStart, lastAsFinish: selectedCourse.lastAsFinish },
-        { ids: [...sequenceIds, id] },
+        sequenceIds,
+        [...sequenceIds, id],
       );
     },
     [selectedCourse, sequenceIds, applySequence],
@@ -504,12 +627,82 @@ export function CourseEditorPage() {
       if (!selectedCourse) return;
       void applySequence(
         selectedCourse.id,
-        { ids: sequenceIds, firstAsStart: selectedCourse.firstAsStart, lastAsFinish: selectedCourse.lastAsFinish },
-        { ids: sequenceIds.filter((x) => x !== id) },
+        sequenceIds,
+        sequenceIds.filter((x) => x !== id),
       );
     },
     [selectedCourse, sequenceIds, applySequence],
   );
+
+  const setRadioType = useCallback(
+    async (controlId: number, radioType: "normal" | "internal_radio") => {
+      await run(() =>
+        client.control.upsertConfig.mutate({
+          controlIds: [controlId],
+          radioType,
+        }),
+      );
+    },
+    [client, run],
+  );
+
+  const handleRadioToggle = useCallback(() => {
+    const control = selectedControlRow;
+    if (!control) return;
+    if ((control.config?.radioType ?? "normal") !== "normal") {
+      void setRadioType(control.id, "normal");
+      return;
+    }
+    const allocation = seriesAllocation.data ?? [];
+    if (allocation.length === 0 || codesHaveSrr(control.codes, allocation)) {
+      void setRadioType(control.id, "internal_radio");
+      return;
+    }
+    const replacement = nextFreeSrrCode(
+      allocation,
+      (controlList.data ?? []).map((row) => row.codes),
+    );
+    if (replacement) {
+      setRadioSwapOffer({
+        controlId: control.id,
+        from: control.codes,
+        to: replacement.code,
+        series: replacement.seriesName,
+      });
+      return;
+    }
+    setShowNoSrr(true);
+    void setRadioType(control.id, "internal_radio");
+  }, [
+    selectedControlRow,
+    seriesAllocation.data,
+    controlList.data,
+    setRadioType,
+  ]);
+
+  const confirmRadioSwap = useCallback(() => {
+    const offer = radioSwapOffer;
+    if (!offer) return;
+    setRadioSwapOffer(null);
+    void (async () => {
+      const updated = await run(() =>
+        client.control.update.mutate({
+          id: offer.controlId,
+          codes: String(offer.to),
+        }),
+      );
+      if (updated === undefined) return;
+      await setRadioType(offer.to, "internal_radio");
+      dispatch({ type: "select", id: offer.to });
+    })();
+  }, [radioSwapOffer, client, run, setRadioType]);
+
+  const declineRadioSwap = useCallback(() => {
+    const offer = radioSwapOffer;
+    if (!offer) return;
+    setRadioSwapOffer(null);
+    void setRadioType(offer.controlId, "internal_radio");
+  }, [radioSwapOffer, setRadioType]);
 
   // ─── Contextual actions (floating menu at the selection/phantom) ────
 
@@ -537,11 +730,44 @@ export function CourseEditorPage() {
           label: t("editor.actionAdd"),
           onClick: () => void createControl(pt, null),
         });
+        actions.push({
+          id: "add-start",
+          label: t("editor.actionAddStart"),
+          onClick: () => void createRoleControl(pt, "start"),
+        });
+        actions.push({
+          id: "add-finish",
+          label: t("editor.actionAddFinish"),
+          onClick: () => void createRoleControl(pt, "finish"),
+        });
       }
     } else if (state.selectedControlId != null) {
       const sel = state.selectedControlId;
       const c = coordsById.get(sel);
       const isStartFinish = c ? c.status === 4 || c.status === 5 : false;
+      if (selectedCourse && isStartFinish) {
+        // Multiple starts (or finishes): pick which one this course uses.
+        const role = c!.status === 4 ? "start" : "finish";
+        const effective = effectiveRoleControlId(
+          controlCoords.data ?? [],
+          role,
+          role === "start"
+            ? selectedCourse.startControlId
+            : selectedCourse.finishControlId,
+        );
+        if (effective !== sel) {
+          actions.push({
+            id: `use-as-${role}`,
+            label: t(
+              role === "start"
+                ? "editor.actionUseAsStart"
+                : "editor.actionUseAsFinish",
+              { name: selectedCourse.name },
+            ),
+            onClick: () => assignRoleControl(sel, role),
+          });
+        }
+      }
       if (selectedCourse && !isStartFinish) {
         actions.push({
           id: "append",
@@ -553,6 +779,30 @@ export function CourseEditorPage() {
             id: "remove-from-course",
             label: t("editor.actionRemoveFromCourse", { name: selectedCourse.name }),
             onClick: () => removeControlFromCourse(sel),
+          });
+        }
+      }
+      if (!isStartFinish) {
+        if (radioSwapOffer?.controlId === sel) {
+          actions.push({
+            id: "radio-swap-confirm",
+            label: t("yes"),
+            onClick: confirmRadioSwap,
+          });
+          actions.push({
+            id: "radio-swap-decline",
+            label: t("no"),
+            onClick: declineRadioSwap,
+          });
+        } else {
+          const radioOn = c
+            ? (controlRowsById.get(c.id)?.config?.radioType ?? "normal") !==
+              "normal"
+            : false;
+          actions.push({
+            id: "radio",
+            label: t(radioOn ? "actionRadioOff" : "actionMakeRadio"),
+            onClick: handleRadioToggle,
           });
         }
       }
@@ -570,8 +820,10 @@ export function CourseEditorPage() {
     }
     return actions;
   }, [state.phantom, state.selectedControlId, selectedCourse, sequenceIds,
-    coordsById, createControl, appendControlToCourse, removeControlFromCourse,
-    handleDelete, t]);
+    coordsById, controlCoords.data, createControl, createRoleControl,
+    assignRoleControl, appendControlToCourse, removeControlFromCourse,
+    radioSwapOffer, confirmRadioSwap, declineRadioSwap, controlRowsById,
+    handleRadioToggle, handleDelete, t]);
 
   /** Ids (as overlay strings) of the edited course's controls — these
    *  stay at full strength while everything else fades. */
@@ -593,10 +845,17 @@ export function CourseEditorPage() {
    *  than the one being edited). */
   const contextInfo = useMemo(() => {
     if (state.selectedControlId == null) return null;
+    if (radioSwapOffer?.controlId === state.selectedControlId) {
+      return t("radioSwapConfirm", {
+        from: radioSwapOffer.from,
+        to: radioSwapOffer.to,
+        series: radioSwapOffer.series,
+      });
+    }
     const names = membership.get(state.selectedControlId) ?? [];
     const others = selectedCourse ? names.filter((n) => n !== selectedCourse.name) : names;
     return others.length > 0 ? t("editor.alsoIn", { names: others.join(", ") }) : null;
-  }, [state.selectedControlId, membership, selectedCourse, t]);
+  }, [state.selectedControlId, membership, selectedCourse, radioSwapOffer, t]);
 
   /** Drag-time warning per control id: moving it affects these courses. */
   const moveWarnings = useMemo(() => {
@@ -610,6 +869,23 @@ export function CourseEditorPage() {
     return m;
   }, [membership, selectedCourse, t]);
 
+  const contextBadge = useMemo(() => {
+    if (!selectedControl) return null;
+    const e = (seriesAllocation.data ?? []).find(
+      (x) => x.code === Number(selectedControl.code) && x.type === "srr",
+    );
+    if (!e) return null;
+    return { label: t("editor.srrBadge"), title: e.seriesName };
+  }, [selectedControl, seriesAllocation.data, t]);
+  const contextRadioBadge = useMemo(
+    () =>
+      selectedControlRow &&
+      (selectedControlRow.config?.radioType ?? "normal") !== "normal"
+        ? { label: t("editor.radioBadge") }
+        : null,
+    [selectedControlRow, t],
+  );
+
   const editor: MapViewerEditorProps = useMemo(
     () => ({
       selectedControlId:
@@ -617,6 +893,8 @@ export function CourseEditorPage() {
       phantom: state.phantom ? { x: state.phantom.x, y: state.phantom.y } : null,
       contextActions,
       contextInfo,
+      contextBadge,
+      contextRadioBadge,
       suggestions,
       suggestionsHeading: t("editor.suggestedHeading"),
       courseControlIds: courseControlIdSet,
@@ -628,7 +906,8 @@ export function CourseEditorPage() {
       onSelect: handleSelect,
       ...(selectedCourse ? { onLegClick: handleLegClick } : {}),
     }),
-    [state.selectedControlId, state.phantom, contextActions, contextInfo,
+    [state.selectedControlId, state.phantom, contextActions, contextInfo, contextBadge,
+      contextRadioBadge,
       suggestions, t, courseControlIdSet, moveWarnings, moveEpoch, selectedCourse,
       handleMapClick, handleMoveEnd, handleSelect, handleLegClick],
   );
@@ -636,6 +915,9 @@ export function CourseEditorPage() {
   // ─── Sidebar actions ─────────────────────────────────────
 
   const [newCourseName, setNewCourseName] = useState("");
+  const [cloneName, setCloneName] = useState("");
+  const [showClone, setShowClone] = useState(false);
+  const [inventoryOpen, setInventoryOpen] = useState(false);
   /** Hide all controls except the selected course's (+ start/finish). */
   const [onlyCourse, setOnlyCourse] = useState(false);
   /** Expanded state of the in-map course selector card. */
@@ -646,20 +928,49 @@ export function CourseEditorPage() {
     void (async () => {
       // Not undoable: there is no course.restore, so an undo/redo pair
       // could not survive; the course can be deleted from the Courses page.
-      const created = await run(() => client.course.create.mutate({ name }));
+      const created = await run(() =>
+        client.course.create.mutate({
+          name,
+          linkClassId:
+            matchCourselessClass(name, classes.data ?? []) ?? undefined,
+        }),
+      );
       if (!created) return;
+      void utils.class.list.invalidate();
       setNewCourseName("");
       dispatch({ type: "select-course", id: created.id });
     })();
-  }, [newCourseName, run, client]);
+  }, [newCourseName, run, client, classes.data, utils]);
+
+  const openClone = useCallback(() => {
+    if (!selectedCourse) return;
+    setCloneName(`${selectedCourse.name} (copy)`);
+    setShowClone(true);
+  }, [selectedCourse]);
+
+  const handleCloneCourse = useCallback(() => {
+    if (!selectedCourse) return;
+    const name = cloneName.trim();
+    if (!name) return;
+    void (async () => {
+      // Course cloning is not undoable, matching course creation.
+      const cloned = await run(() =>
+        client.course.clone.mutate({ id: selectedCourse.id, name }),
+      );
+      if (!cloned) return;
+      setShowClone(false);
+      setCloneName("");
+      dispatch({ type: "select-course", id: cloned.id });
+    })();
+  }, [selectedCourse, cloneName, client, run]);
 
   const sequenceUpdate = useCallback(
     (nextIds: number[]) => {
       if (!selectedCourse) return;
       void applySequence(
         selectedCourse.id,
-        { ids: sequenceIds, firstAsStart: selectedCourse.firstAsStart, lastAsFinish: selectedCourse.lastAsFinish },
-        { ids: nextIds },
+        sequenceIds,
+        nextIds,
       );
     },
     [selectedCourse, sequenceIds, applySequence],
@@ -683,20 +994,6 @@ export function CourseEditorPage() {
       sequenceUpdate(next);
     },
     [sequenceIds, sequenceUpdate],
-  );
-
-  const toggleFlag = useCallback(
-    (flag: "firstAsStart" | "lastAsFinish") => {
-      if (!selectedCourse) return;
-      // controlIds is always included so the server rebuilds geometry —
-      // flag changes alter which start/finish legs exist.
-      void applySequence(
-        selectedCourse.id,
-        { ids: sequenceIds, firstAsStart: selectedCourse.firstAsStart, lastAsFinish: selectedCourse.lastAsFinish },
-        { ids: sequenceIds, [flag]: !selectedCourse[flag] },
-      );
-    },
-    [selectedCourse, sequenceIds, applySequence],
   );
 
   // ─── Undo / redo ─────────────────────────────────────────
@@ -754,6 +1051,7 @@ export function CourseEditorPage() {
         ) {
           void document.exitFullscreen().catch(() => {});
         } else {
+          setRadioSwapOffer(null);
           dispatch({ type: "escape" });
         }
       } else if (e.key === "h" || e.key === "H") {
@@ -853,6 +1151,33 @@ export function CourseEditorPage() {
               x: selectedControl.mapX.toFixed(1),
               y: selectedControl.mapY.toFixed(1),
             })}
+            {contextBadge && (
+              <span
+                data-testid="editor-toolbar-srr"
+                title={contextBadge.title}
+                className="ml-1.5 px-1.5 py-0.5 rounded-full text-[10px] font-medium bg-amber-100 text-amber-800"
+              >
+                {contextBadge.label}
+              </span>
+            )}
+            {contextRadioBadge && (
+              <span
+                data-testid="editor-radio-badge"
+                className="ml-1.5 px-1.5 py-0.5 rounded-full text-[10px] font-medium bg-sky-100 text-sky-800"
+              >
+                {contextRadioBadge.label}
+              </span>
+            )}
+          </span>
+        )}
+        {showExhausted && (
+          <span data-testid="series-exhausted" className="text-xs text-amber-700 truncate">
+            {t("seriesExhausted")}
+          </span>
+        )}
+        {showNoSrr && (
+          <span data-testid="editor-no-srr" className="text-xs text-amber-700 truncate">
+            {t("noSrrAvailable")}
           </span>
         )}
         {pendingOps > 0 && (
@@ -865,7 +1190,8 @@ export function CourseEditorPage() {
         )}
       </div>
     ),
-    [t, selectedCourse, selectedControl, onlyCourse,
+    [t, selectedCourse, selectedControl, onlyCourse, contextBadge, contextRadioBadge,
+      showExhausted, showNoSrr,
       pendingOps, errorMsg, canUndo, canRedo, runUndo, runRedo],
   );
 
@@ -875,37 +1201,49 @@ export function CourseEditorPage() {
   // (via MapPanel's `mapOverlay` slot) keeps it visible in fullscreen,
   // which the browser only grants to the map panel element. Contents:
   // create-course row, the course list, and — with a course selected —
-  // the full display sequence with per-leg meters, reorder/remove and
-  // the start/finish flags. The header row collapses everything down to
-  // the selected course's name.
+  // the full display sequence with per-leg meters, reorder/remove, and a
+  // clone footer. The header row collapses everything down to the
+  // selected course's name. The series inventory lives in its own card
+  // below (see inventoryPanel).
   const coursePanel = useMemo(
     () => (
       <div
         data-testid="editor-map-course-selector"
-        className="pointer-events-auto bg-white/95 backdrop-blur-sm border border-slate-200 rounded-lg shadow-sm text-xs w-64 max-h-full flex flex-col overflow-hidden"
+        className="pointer-events-auto bg-white/95 backdrop-blur-sm border border-slate-200 rounded-lg shadow-sm text-xs w-64 max-h-full min-h-0 flex flex-col overflow-hidden"
       >
-        <button
-          data-testid="editor-map-selector-toggle"
-          onClick={() => setMapSelectorOpen((v) => !v)}
-          title={t("editor.mapSelectorToggle")}
-          className="w-full shrink-0 flex items-center gap-2 px-2.5 py-1.5 text-left hover:bg-slate-50 cursor-pointer"
-        >
-          <span className="text-slate-400">{mapSelectorOpen ? "▾" : "▸"}</span>
-          <span className="flex-1 truncate font-medium text-slate-700">
-            {selectedCourse?.name ?? t("editor.mapSelectorNone")}
-          </span>
-        </button>
+        <div className="shrink-0 flex items-center">
+          <button
+            data-testid="editor-map-selector-toggle"
+            onClick={() => setMapSelectorOpen((v) => !v)}
+            title={t("editor.mapSelectorToggle")}
+            className="flex-1 min-w-0 flex items-center gap-2 px-2.5 py-1.5 text-left hover:bg-slate-50 cursor-pointer"
+          >
+            <span className="text-slate-400">{mapSelectorOpen ? "▾" : "▸"}</span>
+            <span className="flex-1 truncate font-medium text-slate-700">
+              {selectedCourse?.name ?? t("editor.mapSelectorNone")}
+            </span>
+          </button>
+        </div>
         {mapSelectorOpen && (
           <>
             <div className="shrink-0 flex gap-1.5 px-2 pb-1.5 border-b border-slate-100">
               <input
                 data-testid="editor-new-course-name"
+                list="editor-new-course-suggestions-list"
                 value={newCourseName}
                 onChange={(e) => setNewCourseName(e.target.value)}
                 onKeyDown={(e) => { if (e.key === "Enter") handleCreateCourse(); }}
                 placeholder={t("editor.newCoursePlaceholder")}
                 className="flex-1 min-w-0 px-2 py-1 border border-slate-200 rounded-md bg-white focus:outline-none focus:ring-2 focus:ring-purple-400"
               />
+              <datalist
+                id="editor-new-course-suggestions-list"
+                data-testid="editor-new-course-suggestions"
+              >
+                {newCourseSuggestions.map((name) => (
+                  <option key={name} value={name} />
+                ))}
+              </datalist>
               <button
                 data-testid="editor-create-course"
                 onClick={handleCreateCourse}
@@ -916,9 +1254,10 @@ export function CourseEditorPage() {
               </button>
             </div>
             {/* Scales with the viewport so a long course list can use the
-                room a big screen offers; the sequence below takes whatever
-                height remains (the card itself is capped to the map). */}
-            <div className="shrink-0 max-h-[40vh] overflow-y-auto divide-y divide-slate-50">
+                room a big screen offers, but shrinks (scrolling) when the
+                sequence below needs its guaranteed minimum height — the
+                card itself is capped to the map. */}
+            <div className="shrink min-h-16 max-h-[40vh] overflow-y-auto divide-y divide-slate-50">
               {(courses.data ?? []).map((c) => (
                 <button
                   key={c.id}
@@ -948,28 +1287,8 @@ export function CourseEditorPage() {
             </div>
             {selectedCourse ? (
               <>
-                <div className="shrink-0 px-2.5 py-1.5 flex items-center gap-3 border-t border-slate-200">
-                  <label className="flex items-center gap-1 text-slate-600 cursor-pointer">
-                    <input
-                      type="checkbox"
-                      data-testid="editor-toggle-first-start"
-                      checked={selectedCourse.firstAsStart}
-                      onChange={() => toggleFlag("firstAsStart")}
-                    />
-                    {t("firstAsStartShort")}
-                  </label>
-                  <label className="flex items-center gap-1 text-slate-600 cursor-pointer">
-                    <input
-                      type="checkbox"
-                      data-testid="editor-toggle-last-finish"
-                      checked={selectedCourse.lastAsFinish}
-                      onChange={() => toggleFlag("lastAsFinish")}
-                    />
-                    {t("lastAsFinishShort")}
-                  </label>
-                </div>
                 <ol
-                  className="flex-1 min-h-0 overflow-y-auto divide-y divide-slate-50 border-t border-slate-100"
+                  className="flex-1 min-h-24 overflow-y-auto divide-y divide-slate-50 border-t border-slate-100"
                   data-testid="editor-sequence"
                 >
                   {displaySeq.map((row, i) => (
@@ -984,6 +1303,22 @@ export function CourseEditorPage() {
                         {row.kind === "start" ? "S" : row.kind === "finish" ? "F" : row.seqIndex + 1}
                       </span>
                       <span className="flex-1 text-slate-700 truncate">{row.code}</span>
+                      {row.kind === "control" &&
+                        codesHaveSrr(row.code, seriesAllocation.data ?? []) && (
+                          <span className="rounded bg-amber-100 text-amber-800 px-1 text-[9px] font-medium">
+                            {t("editor.srrBadge")}
+                          </span>
+                        )}
+                      {row.kind === "control" &&
+                        (controlRowsById.get(row.id!)?.config?.radioType ?? "normal") !==
+                          "normal" && (
+                          <span
+                            data-testid="editor-radio-badge"
+                            className="rounded bg-sky-100 text-sky-800 px-1 text-[9px] font-medium"
+                          >
+                            {t("editor.radioBadge")}
+                          </span>
+                        )}
                       <span className="text-slate-400 w-12 text-right shrink-0">
                         {legMeters[i] != null ? `${legMeters[i]} m` : ""}
                       </span>
@@ -1021,6 +1356,39 @@ export function CourseEditorPage() {
                   <span>{t("controlCount", { count: sequenceIds.length })}</span>
                   <span className="font-semibold">{totalMeters} m</span>
                 </div>
+                <div className="shrink-0 px-2 py-1.5 border-t border-slate-100 flex gap-1.5 items-center">
+                  {showClone ? (
+                    <>
+                      <input
+                        data-testid="editor-clone-name"
+                        value={cloneName}
+                        onChange={(event) => setCloneName(event.target.value)}
+                        onKeyDown={(event) => {
+                          if (event.key === "Enter") handleCloneCourse();
+                          if (event.key === "Escape") setShowClone(false);
+                        }}
+                        placeholder={t("editor.clonePlaceholder")}
+                        className="flex-1 min-w-0 px-2 py-1 border border-purple-200 rounded-md bg-white focus:outline-none focus:ring-2 focus:ring-purple-400"
+                      />
+                      <button
+                        data-testid="editor-clone-confirm"
+                        onClick={handleCloneCourse}
+                        disabled={!cloneName.trim()}
+                        className="px-2 py-1 rounded-md bg-purple-600 text-white disabled:opacity-40 cursor-pointer"
+                      >
+                        {t("editor.cloneConfirm")}
+                      </button>
+                    </>
+                  ) : (
+                    <button
+                      data-testid="editor-clone-course"
+                      onClick={openClone}
+                      className="w-full px-2 py-1 rounded-md border border-purple-200 text-purple-700 hover:bg-purple-50 cursor-pointer"
+                    >
+                      {t("editor.clone")}
+                    </button>
+                  )}
+                </div>
               </>
             ) : (
               <p className="shrink-0 px-2.5 py-2 text-slate-400 border-t border-slate-100">
@@ -1032,8 +1400,116 @@ export function CourseEditorPage() {
       </div>
     ),
     [t, courses.data, state.selectedCourseId, selectedCourse, mapSelectorOpen,
-      newCourseName, handleCreateCourse, displaySeq, legMeters, totalMeters,
-      sequenceIds.length, moveInSequence, removeFromSequence, toggleFlag],
+      newCourseName, newCourseSuggestions, handleCreateCourse, displaySeq, legMeters, totalMeters,
+      sequenceIds.length, moveInSequence, removeFromSequence, openClone,
+      showClone, cloneName, handleCloneCourse,
+      controlRowsById, seriesAllocation.data],
+  );
+
+  // ─── In-map inventory panel ──────────────────────────────
+
+  // Separate card below the course panel: the club series inventory is
+  // reference data, not course state, so it gets its own collapsible
+  // surface instead of a section wedged between the course list and the
+  // sequence. Also hosts the allocation-source picker.
+  const inventoryPanel = useMemo(() => {
+    if (inventoryView.length === 0) return null;
+    const activeSeries = inventoryView.find(
+      (series) => series.seriesId === effectiveAllocSeriesId,
+    );
+    return (
+      <div
+        data-testid="editor-inventory-panel"
+        className="pointer-events-auto bg-white/95 backdrop-blur-sm border border-slate-200 rounded-lg shadow-sm text-xs w-64 mt-2 min-h-0 flex flex-col overflow-hidden"
+      >
+        <button
+          onClick={() => setInventoryOpen((open) => !open)}
+          className="w-full shrink-0 flex items-center gap-2 px-2.5 py-1.5 text-left text-slate-600 hover:bg-slate-50 cursor-pointer"
+        >
+          <span className="text-slate-400">{inventoryOpen ? "▾" : "▸"}</span>
+          <span className="font-medium">{t("editor.inventory")}</span>
+          <span className="ml-auto truncate max-w-[7rem] text-slate-400">
+            {activeSeries?.seriesName ?? t("editor.allocAuto")}
+          </span>
+        </button>
+        {inventoryOpen && (
+          <div className="shrink min-h-12 max-h-56 overflow-y-auto px-2.5 pb-2 space-y-2">
+            <label className="block text-[11px] text-slate-500">
+              {t("editor.allocFrom")}
+              <select
+                data-testid="editor-alloc-series"
+                value={effectiveAllocSeriesId ?? ""}
+                onChange={(event) => setAllocSeriesId(event.target.value || null)}
+                className="mt-0.5 w-full px-1.5 py-1 border border-slate-200 rounded-md bg-white text-xs focus:outline-none focus:ring-2 focus:ring-purple-400"
+              >
+                <option value="">{t("editor.allocAuto")}</option>
+                {inventoryView.map((series) => (
+                  <option key={series.seriesId} value={series.seriesId}>
+                    {series.seriesName}
+                  </option>
+                ))}
+              </select>
+            </label>
+            {inventoryView.map((series) => {
+              const free = series.codes.filter((code) => !code.used).length;
+              const active = series.seriesId === effectiveAllocSeriesId;
+              return (
+                <div
+                  key={series.seriesId}
+                  className={active ? "rounded-md bg-purple-50/70 -mx-1 px-1 py-0.5" : undefined}
+                >
+                  <div className="flex items-center gap-1 text-[11px] text-slate-600">
+                    <span className="font-medium truncate">{series.seriesName}</span>
+                    {series.borrowed && (
+                      <span className="rounded bg-amber-100 text-amber-800 px-1">
+                        {t("editor.borrowed")}
+                      </span>
+                    )}
+                    <span className="ml-auto text-slate-400">
+                      {t("editor.inventoryFree", {
+                        free,
+                        total: series.codes.length,
+                      })}
+                    </span>
+                  </div>
+                  <div className="flex flex-wrap gap-1 mt-1">
+                    {series.codes.map((code) => (
+                      <span
+                        key={`${series.seriesId}-${code.code}`}
+                        data-testid={`editor-inventory-code-${code.code}`}
+                        data-used={code.used ? "true" : "false"}
+                        className={`inline-flex items-center gap-0.5 rounded px-1 py-0.5 border ${
+                          code.used
+                            ? "bg-slate-200 border-slate-200 text-slate-500 line-through"
+                            : "bg-white border-slate-300 text-slate-700"
+                        }`}
+                      >
+                        {code.code}
+                        {code.type === "srr" && (
+                          <span className="text-[8px] font-semibold text-amber-700 no-underline">
+                            {t("editor.srrBadge")}
+                          </span>
+                        )}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+    );
+  }, [t, inventoryView, inventoryOpen, effectiveAllocSeriesId]);
+
+  const mapOverlay = useMemo(
+    () => (
+      <>
+        {coursePanel}
+        {inventoryPanel}
+      </>
+    ),
+    [coursePanel, inventoryPanel],
   );
 
   // ─── Render ──────────────────────────────────────────────
@@ -1056,7 +1532,7 @@ export function CourseEditorPage() {
             defaultShowDescriptions
             descriptionsAllControls
             toolbar={toolbar}
-            mapOverlay={coursePanel}
+            mapOverlay={mapOverlay}
             editor={editor}
             highlightCourseName={selectedCourse?.name}
           />

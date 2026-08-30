@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
-import { router, eventProcedure, raceProcedure } from "../trpc.js";
+import { router, viewProcedure, kioskOrViewProcedure, manageRaceProcedure } from "../trpc.js";
 import {
   WITHDRAWN_STATUSES,
   type ClassSummary,
@@ -92,7 +92,8 @@ async function loadClassDetail(
 }
 
 export const classRouter = router({
-  list: eventProcedure
+  // Kiosk devices read classes for the post-readout map's course labels.
+  list: kioskOrViewProcedure
     .input(z.object({ search: z.string().optional() }).optional())
     .query(async ({ ctx, input }): Promise<ClassSummary[]> => {
       const eventId = ctx.event.id;
@@ -157,15 +158,15 @@ export const classRouter = router({
       return result;
     }),
 
-  detail: eventProcedure
+  detail: viewProcedure
     .input(z.object({ id: z.number().int() }))
     .query(async ({ ctx, input }) => loadClassDetail(ctx.db, ctx.event.id, input.id)),
 
-  getById: eventProcedure
+  getById: viewProcedure
     .input(z.object({ id: z.number().int() }))
     .query(async ({ ctx, input }) => loadClassDetail(ctx.db, ctx.event.id, input.id)),
 
-  create: raceProcedure
+  create: manageRaceProcedure
     .input(
       z.object({
         name: z.string().min(1),
@@ -175,7 +176,10 @@ export const classRouter = router({
         sex: z.string().optional().default(""),
         lowAge: z.number().int().optional().default(0),
         highAge: z.number().int().optional().default(0),
+        classType: z.string().optional().default(""),
         classFee: z.number().int().optional().default(0),
+        noTiming: z.boolean().optional().default(false),
+        freeStart: z.boolean().optional().default(false),
         allowQuickEntry: z.boolean().optional().default(false),
         firstStart: z.number().int().optional().default(0),
         startInterval: z.number().int().optional().default(0),
@@ -198,7 +202,10 @@ export const classRouter = router({
             sex: input.sex,
             lowAge: input.lowAge,
             highAge: input.highAge,
+            classType: input.classType,
             classFeeCents: input.classFee,
+            noTiming: input.noTiming,
+            freeStart: input.freeStart,
             allowQuickEntry: input.allowQuickEntry,
             firstStart: input.firstStart,
             startInterval: input.startInterval,
@@ -212,7 +219,66 @@ export const classRouter = router({
       return { id: created.seq };
     }),
 
-  update: raceProcedure
+  createFromPresets: manageRaceProcedure
+    .input(
+      z.object({
+        presetIds: z.array(z.string().uuid()).min(1),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      const presetIds = [...new Set(input.presetIds)];
+      const presets = await ctx.db.clubClassPreset.findMany({
+        where: { id: { in: presetIds } },
+        orderBy: [{ sortIndex: "asc" }, { name: "asc" }],
+      });
+      if (presets.length !== presetIds.length) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: "One or more class presets were not found",
+        });
+      }
+
+      const existing = await ctx.db.class.findMany({
+        where: { eventId: ctx.event.id, removed: false },
+        select: { name: true },
+      });
+      const taken = new Set(existing.map((row) => row.name));
+      const skipped = presets
+        .filter((preset) => taken.has(preset.name))
+        .map((preset) => preset.name);
+      const toCreate = presets.filter((preset) => !taken.has(preset.name));
+      if (toCreate.length === 0) {
+        return { created: 0, skipped };
+      }
+
+      const created = await ctx.db.$transaction(async (tx) => {
+        let count = 0;
+        for (const preset of toCreate) {
+          const row = await tx.class.create({
+            data: {
+              eventId: ctx.event.id,
+              name: preset.name,
+              sex: preset.sex,
+              lowAge: preset.lowAge,
+              highAge: preset.highAge,
+              classType: preset.classType,
+              noTiming: preset.noTiming,
+              freeStart: preset.freeStart,
+              allowQuickEntry: preset.allowQuickEntry,
+              sortIndex: preset.sortIndex,
+            },
+            select: { id: true },
+          });
+          await emitClassUpserted(tx, ctx.event.id, row.id);
+          count++;
+        }
+        return count;
+      });
+
+      return { created, skipped };
+    }),
+
+  update: manageRaceProcedure
     .input(
       z.object({
         id: z.number().int(),
@@ -229,6 +295,7 @@ export const classRouter = router({
         startInterval: z.number().int().optional(),
         maxTime: z.number().int().optional(),
         noTiming: z.boolean().optional(),
+        freeStart: z.boolean().optional(),
         classType: z.string().optional(),
       }),
     )
@@ -255,6 +322,7 @@ export const classRouter = router({
         data.startInterval = input.startInterval;
       if (input.maxTime !== undefined) data.maxTime = input.maxTime;
       if (input.noTiming !== undefined) data.noTiming = input.noTiming;
+      if (input.freeStart !== undefined) data.freeStart = input.freeStart;
       if (input.classType !== undefined) data.classType = input.classType;
       await ctx.db.$transaction(async (tx) => {
         await tx.class.update({ where: { id: c.id }, data });
@@ -263,7 +331,7 @@ export const classRouter = router({
       return { ok: true };
     }),
 
-  bulkUpdate: raceProcedure
+  bulkUpdate: manageRaceProcedure
     .input(
       z.object({
         ids: z.array(z.number().int()),
@@ -273,6 +341,8 @@ export const classRouter = router({
         firstStart: z.number().int().optional(),
         startInterval: z.number().int().optional(),
         maxTime: z.number().int().optional(),
+        freeStart: z.boolean().optional(),
+        noTiming: z.boolean().optional(),
         allowQuickEntry: z.boolean().optional(),
       }),
     )
@@ -294,6 +364,8 @@ export const classRouter = router({
       if (input.startInterval !== undefined)
         data.startInterval = input.startInterval;
       if (input.maxTime !== undefined) data.maxTime = input.maxTime;
+      if (input.freeStart !== undefined) data.freeStart = input.freeStart;
+      if (input.noTiming !== undefined) data.noTiming = input.noTiming;
       if (input.allowQuickEntry !== undefined)
         data.allowQuickEntry = input.allowQuickEntry;
       await ctx.db.$transaction(async (tx) => {
@@ -308,7 +380,7 @@ export const classRouter = router({
       return { ok: true as const, count: rows.length };
     }),
 
-  delete: raceProcedure
+  delete: manageRaceProcedure
     .input(z.object({ id: z.number().int() }))
     .mutation(async ({ ctx, input }) => {
       const c = await getClassBySeq(ctx.db, ctx.event.id, input.id);
@@ -323,7 +395,7 @@ export const classRouter = router({
       return { ok: true };
     }),
 
-  reorder: raceProcedure
+  reorder: manageRaceProcedure
     .input(z.object({ orderedIds: z.array(z.number().int()) }))
     .mutation(async ({ ctx, input }) => {
       await ctx.db.$transaction(async (tx) => {

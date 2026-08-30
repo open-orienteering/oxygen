@@ -1,11 +1,12 @@
-import { lazy, Suspense } from "react";
-import { Routes, Route, Navigate } from "react-router-dom";
+import { lazy, Suspense, type ReactNode } from "react";
+import { Routes, Route, Navigate, useLocation } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { useVersionCheck } from "./hooks/useVersionCheck";
 import { useServiceWorkerUpdate } from "./hooks/useServiceWorkerUpdate";
 import { resolveUpdateAction } from "./lib/app-update";
 import { DeviceManagerProvider } from "./context/DeviceManager";
 import { PrinterProvider } from "./context/PrinterContext";
+import { useCurrentUser } from "./context/CurrentUserContext";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 import "./i18n/i18n";
 
@@ -13,6 +14,11 @@ const CompetitionSelector = lazy(() => import("./pages/CompetitionSelector").the
 const CompetitionShell = lazy(() => import("./pages/CompetitionShell").then(m => ({ default: m.CompetitionShell })));
 const KioskPage = lazy(() => import("./pages/KioskPage").then(m => ({ default: m.KioskPage })));
 const StartScreenPage = lazy(() => import("./pages/StartScreenPage").then(m => ({ default: m.StartScreenPage })));
+const AccessDeniedPage = lazy(() => import("./pages/AccessDeniedPage").then(m => ({ default: m.AccessDeniedPage })));
+const UsersAdminPage = lazy(() => import("./pages/UsersAdminPage").then(m => ({ default: m.UsersAdminPage })));
+const LibraryPage = lazy(() => import("./pages/LibraryPage").then(m => ({ default: m.LibraryPage })));
+
+const PUBLIC_SURFACE = /^\/[^/]+\/(kiosk|start-screen)(\/|$)/;
 
 function PageSpinner() {
   return (
@@ -30,6 +36,15 @@ export default function App() {
     bundleWaiting,
   });
   const { t } = useTranslation();
+  const location = useLocation();
+  const { user, authEnabled, isLoading } = useCurrentUser();
+  const isPublicSurface = PUBLIC_SURFACE.test(location.pathname);
+
+  let gated: ReactNode = null;
+  if (authEnabled && !isPublicSurface) {
+    if (isLoading) gated = <PageSpinner />;
+    else if (user === null) gated = <AccessDeniedPage />;
+  }
 
   return (
     <DeviceManagerProvider>
@@ -47,8 +62,11 @@ export default function App() {
       )}
       <ErrorBoundary>
         <Suspense fallback={<PageSpinner />}>
+          {gated ?? (
           <Routes>
             <Route path="/" element={<CompetitionSelector />} />
+            <Route path="/admin/users" element={<UsersAdminPage />} />
+            <Route path="/library" element={<LibraryPage />} />
             {/* Kiosk route — outside CompetitionShell (fullscreen, no admin UI) */}
             <Route path="/:nameId/kiosk" element={<KioskPage />} />
             <Route path="/:nameId/start-screen" element={<StartScreenPage />} />
@@ -56,6 +74,7 @@ export default function App() {
             {/* Catch-all redirect to home */}
             <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>
+          )}
         </Suspense>
       </ErrorBoundary>
     </PrinterProvider>

@@ -10,7 +10,7 @@
  */
 
 import { z } from "zod";
-import { router, eventProcedure } from "../trpc.js";
+import { router, viewProcedure, manageProcedure } from "../trpc.js";
 import {
   ensureCompetition,
   liveResultsPusherManager,
@@ -55,7 +55,7 @@ function readConfig(
 }
 
 export const liveresultsRouter = router({
-  getConfig: eventProcedure.query(async ({ ctx }) => {
+  getConfig: viewProcedure.query(async ({ ctx }) => {
     const event = await ctx.db.event.findUnique({
       where: { id: ctx.event.id },
       select: { liveresultsTavid: true, liveresultsConfig: true },
@@ -69,7 +69,7 @@ export const liveresultsRouter = router({
    * just whether `config.enabled` is true) — that distinction matters
    * during boot-time reconciliation and after a failed `enable`.
    */
-  getStatus: eventProcedure.query(async ({ ctx }) => {
+  getStatus: viewProcedure.query(async ({ ctx }) => {
     const event = await ctx.db.event.findUnique({
       where: { id: ctx.event.id },
       select: { liveresultsTavid: true, liveresultsConfig: true },
@@ -96,7 +96,7 @@ export const liveresultsRouter = router({
    * through `enable` / `disable` so the EventPage UI can render an
    * unambiguous toggle that only flips the boolean.
    */
-  saveConfig: eventProcedure
+  saveConfig: manageProcedure
     .input(
       z.object({
         intervalSeconds: z.number().int().min(5).max(3600).optional(),
@@ -126,7 +126,7 @@ export const liveresultsRouter = router({
       return { ok: true as const };
     }),
 
-  enable: eventProcedure.mutation(async ({ ctx }) => {
+  enable: manageProcedure.mutation(async ({ ctx }) => {
     const existing = await ctx.db.event.findUnique({
       where: { id: ctx.event.id },
       select: {
@@ -169,7 +169,7 @@ export const liveresultsRouter = router({
     return { ok: true as const, tavid };
   }),
 
-  disable: eventProcedure.mutation(async ({ ctx }) => {
+  disable: manageProcedure.mutation(async ({ ctx }) => {
     const existing = await ctx.db.event.findUnique({
       where: { id: ctx.event.id },
       select: { liveresultsTavid: true, liveresultsConfig: true },
@@ -193,7 +193,7 @@ export const liveresultsRouter = router({
    * the same `{ runners, results, splitcontrols }` shape the timer
    * exposes via status.
    */
-  pushNow: eventProcedure.mutation(async ({ ctx }) => {
+  pushNow: manageProcedure.mutation(async ({ ctx }) => {
     const event = await ctx.db.event.findUnique({
       where: { id: ctx.event.id },
       select: { liveresultsTavid: true },
@@ -215,7 +215,7 @@ export const liveresultsRouter = router({
    * JSON blob (e.g. tests that bypass `saveConfig`). EventPage doesn't
    * call it; flag it as a thin pass-through.
    */
-  setConfig: eventProcedure
+  setConfig: manageProcedure
     .input(
       z.object({
         tavid: z.number().int().nullable().optional(),

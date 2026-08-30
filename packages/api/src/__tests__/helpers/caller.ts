@@ -17,6 +17,14 @@ export function makeCaller(
   event: EventRef | null = null,
   extra: Partial<Omit<Context, "event">> = {},
 ) {
-  const ctx: Context = { event, ...extra };
+  const ctx: Context = {
+    event,
+    user: null,
+    identityEmail: null,
+    authEnabled: false,
+    authMode: "off",
+    kioskKey: null,
+    ...extra,
+  };
   return createCaller(ctx);
 }

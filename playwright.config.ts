@@ -39,6 +39,9 @@ export default defineConfig({
     baseURL: `http://127.0.0.1:${WEB_PORT}`,
     trace: "on-first-retry",
     screenshot: "only-on-failure",
+    extraHTTPHeaders: {
+      "x-forwarded-email": "e2e-admin@oxygen.test",
+    },
   },
 
   projects: [
@@ -69,6 +72,8 @@ export default defineConfig({
         // depends on eventor.orientering.se being up and on it accepting
         // the placeholder key, neither of which holds.
         EVENTOR_API_BASE_URL: `http://127.0.0.1:${EVENTOR_PORT}/`,
+        AUTH_MODE: "proxy",
+        OXYGEN_ADMIN_EMAILS: "e2e-admin@oxygen.test",
       },
     },
     {

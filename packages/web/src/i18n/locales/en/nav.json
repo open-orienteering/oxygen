@@ -19,6 +19,7 @@
   "tracks": "Tracks",
   "trends": "Trends",
   "more": "More",
+  "progressiveHint": "More sections appear automatically as the event gets entries and results.",
   "backToCompetitions": "Back to competition list",
   "competitionNotFound": "Competition not found",
   "couldNotConnect": "Could not connect to competition \"{{nameId}}\".",

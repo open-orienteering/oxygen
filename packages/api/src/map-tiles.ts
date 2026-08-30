@@ -36,6 +36,7 @@
 
 import type { FastifyInstance } from "fastify";
 import { prisma, onMapUpload } from "./db.js";
+import { assertRestAccess } from "./restGuard.js";
 import {
   ocadBoundsToWgs84,
   tileBoundsWgs84,
@@ -425,6 +426,9 @@ export function registerMapTileRoutes(server: FastifyInstance): void {
     const rawDbName = req.headers["x-competition-id"];
     const nameId =
       (Array.isArray(rawDbName) ? rawDbName[0] : rawDbName) ?? "";
+    if (nameId && !(await assertRestAccess(req, reply, { nameId, cap: "courses.view", allowKiosk: true }))) {
+      return;
+    }
     const eventId = await resolveEventId(nameId);
     if (eventId === null) {
       return reply.send({ total: 0, done: 0, rendering: false });
@@ -455,6 +459,10 @@ export function registerMapTileRoutes(server: FastifyInstance): void {
         !nameId
       ) {
         return reply.code(400).send({ error: "Invalid tile request" });
+      }
+
+      if (!(await assertRestAccess(req, reply, { nameId, cap: "courses.view", allowKiosk: true }))) {
+        return;
       }
 
       const eventId = await resolveEventId(nameId);

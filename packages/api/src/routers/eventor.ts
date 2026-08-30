@@ -3,7 +3,7 @@
  *
  * Public endpoints (key management + browsing) work without an event
  * context. Event-scoped endpoints (sync / import-related-to-event /
- * push) require the x-event-id header via `eventProcedure`.
+ * push) require the x-event-id header via `manageProcedure`.
  *
  * Notable schema changes vs. the legacy (MeOS) router:
  *  - No per-event clubs table. We sync clubs into the **global**
@@ -16,8 +16,10 @@
 
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
-import { router, publicProcedure, eventProcedure } from "../trpc.js";
-import { getSetting, setSetting, prisma, sanitizeNameId } from "../db.js";
+import { router, publicProcedure, authedProcedure, manageProcedure } from "../trpc.js";
+import { getSetting, setSetting, prisma, sanitizeNameId, isReservedEventSlug } from "../db.js";
+import { grantSystemGroup } from "../permissions.js";
+import { SYSTEM_GROUP_IDS } from "@oxygen/shared";
 import {
   EventorAuthError,
   fetchEvents,
@@ -546,7 +548,7 @@ export const eventorRouter = router({
       return { ok: true as const };
     }),
 
-  setEventEnv: eventProcedure
+  setEventEnv: manageProcedure
     .input(z.object({ env: z.enum(["prod", "test"]) }))
     .mutation(async ({ ctx, input }) => {
       await ctx.db.event.update({
@@ -639,7 +641,7 @@ export const eventorRouter = router({
    * classes + runners. Public because it's invoked from the event
    * selector before any event is open.
    */
-  importEvent: publicProcedure
+  importEvent: authedProcedure
     .input(
       z.object({
         eventId: z.number().int().positive(),
@@ -650,7 +652,7 @@ export const eventorRouter = router({
         env: z.enum(["prod", "test"]).default("prod"),
       }),
     )
-    .mutation(async ({ input }) => {
+    .mutation(async ({ ctx, input }) => {
       const { apiKey } = await requireApiKey(input.env);
       const db = prisma();
 
@@ -663,6 +665,12 @@ export const eventorRouter = router({
 
       // 2. Create the event row.
       const nameId = sanitizeNameId(input.eventName);
+      if (isReservedEventSlug(nameId)) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: `Slug "${nameId}" is reserved.`,
+        });
+      }
       const event = await db.event.create({
         data: {
           nameId,
@@ -676,6 +684,14 @@ export const eventorRouter = router({
         },
         select: { id: true, nameId: true },
       });
+      if (ctx.user) {
+        await grantSystemGroup(db, {
+          eventId: event.id,
+          userId: ctx.user.id,
+          groupId: SYSTEM_GROUP_IDS.eventAdmin,
+          grantedBy: ctx.user.id,
+        });
+      }
 
       // 3. Upsert classes.
       const { classByEventorId } = await syncClassesFromEventor(
@@ -806,7 +822,7 @@ export const eventorRouter = router({
 
   // ───────────── Per-event sync ─────────────
 
-  syncStatus: eventProcedure.query(async ({ ctx }) => {
+  syncStatus: manageProcedure.query(async ({ ctx }) => {
     const event = await ctx.db.event.findUnique({
       where: { id: ctx.event.id },
       select: {
@@ -840,7 +856,7 @@ export const eventorRouter = router({
   }),
 
   /** Incremental sync — classes + clubs + runners from Eventor. */
-  sync: eventProcedure.mutation(async ({ ctx }) => {
+  sync: manageProcedure.mutation(async ({ ctx }) => {
     const db = ctx.db;
     const event = await db.event.findUnique({
       where: { id: ctx.event.id },
@@ -1289,7 +1305,7 @@ export const eventorRouter = router({
    * Pull just the global club list (full address info) from Eventor.
    * Used by the in-app Club page.
    */
-  syncClubs: eventProcedure
+  syncClubs: manageProcedure
     .input(z.object({ env: z.enum(["prod", "test"]).default("prod") }).optional())
     .mutation(async ({ ctx, input }) => {
       const event = await ctx.db.event.findUnique({
@@ -1470,7 +1486,7 @@ export const eventorRouter = router({
    *
    * Returns `{ runnerCount }` for the UI status line.
    */
-  pushResults: eventProcedure
+  pushResults: manageProcedure
     .input(z.object({ dryRun: z.boolean().optional() }).optional())
     .mutation(async ({ ctx, input }): Promise<{ runnerCount: number }> => {
       const event = await ctx.db.event.findUnique({
@@ -1739,7 +1755,7 @@ export const eventorRouter = router({
    * only need name + class + start time + card + status, no matcher
    * pass.
    */
-  pushStartList: eventProcedure
+  pushStartList: manageProcedure
     .input(z.object({ dryRun: z.boolean().optional() }).optional())
     .mutation(async ({ ctx, input }): Promise<{ runnerCount: number }> => {
       const event = await ctx.db.event.findUnique({
@@ -1812,7 +1828,7 @@ export const eventorRouter = router({
    * working — the body delegates to a fresh sync against the configured
    * Eventor environment.
    */
-  importEntries: eventProcedure.mutation(async () => {
+  importEntries: manageProcedure.mutation(async () => {
     throw new TRPCError({
       code: "PRECONDITION_FAILED",
       message:

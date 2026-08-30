@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
-import { router, eventProcedure, raceProcedure } from "../trpc.js";
+import { router, viewProcedure, manageRaceProcedure, kioskOrRaceOperateProcedure } from "../trpc.js";
 import { toAbsolute, toRelative, nowMeosDate, nowMeosTime } from "../timeConvert.js";
 import { RunnerStatus, type RunnerDetail, type RunnerInfo } from "@oxygen/shared";
 import {
@@ -197,7 +197,7 @@ const runnerUpdateSchema = z.object({
 // ─── Router ────────────────────────────────────────────────
 
 export const runnerRouter = router({
-  getById: eventProcedure
+  getById: viewProcedure
     .input(z.object({ id: z.number().int() }))
     .query(async ({ ctx, input }): Promise<RunnerDetail> => {
       const r = await getRunnerBySeq(ctx.db, ctx.event.id, input.id);
@@ -251,7 +251,7 @@ export const runnerRouter = router({
       };
     }),
 
-  findByCard: eventProcedure
+  findByCard: kioskOrRaceOperateProcedure
     .input(z.object({ cardNo: z.number().int() }))
     .query(async ({ ctx, input }) => {
       if (input.cardNo <= 0) return null;
@@ -280,7 +280,7 @@ export const runnerRouter = router({
       };
     }),
 
-  list: eventProcedure
+  list: viewProcedure
     .input(
       z
         .object({
@@ -385,7 +385,7 @@ export const runnerRouter = router({
       );
     }),
 
-  create: raceProcedure
+  create: manageRaceProcedure
     .input(runnerCreateSchema)
     .mutation(async ({ ctx, input }) => {
       await assertCardNotTaken(ctx.db, ctx.event.id, input.cardNo);
@@ -466,7 +466,7 @@ export const runnerRouter = router({
    *   - `clubName`: free-text club (sent when there's no Eventor link).
    *   - `eventorClubId`: explicit Eventor club id (preferred new shape).
    */
-  update: raceProcedure
+  update: manageRaceProcedure
     .input(
       z.object({
         id: z.number().int(),
@@ -525,7 +525,7 @@ export const runnerRouter = router({
     }),
 
   /** Soft-delete a runner. */
-  delete: raceProcedure
+  delete: manageRaceProcedure
     .input(z.object({ id: z.number().int() }))
     .mutation(async ({ ctx, input }) => {
       const r = await getRunnerBySeq(ctx.db, ctx.event.id, input.id);
@@ -545,7 +545,7 @@ export const runnerRouter = router({
     }),
 
   /** Mark several runners as DNS at once. */
-  bulkDns: raceProcedure
+  bulkDns: manageRaceProcedure
     .input(z.object({ ids: z.array(z.number().int()) }))
     .mutation(async ({ ctx, input }) => {
       const rows = await ctx.db.runner.findMany({
@@ -578,7 +578,7 @@ export const runnerRouter = router({
     }),
 
   /** Apply the same change to many runners at once. */
-  bulkUpdate: raceProcedure
+  bulkUpdate: manageRaceProcedure
     .input(
       z.object({
         ids: z.array(z.number().int()),
@@ -647,7 +647,7 @@ export const runnerRouter = router({
     }),
 
   /** Toggle the rental-card-returned flag. Accepts `id` or `runnerId`. */
-  setCardReturned: raceProcedure
+  setCardReturned: manageRaceProcedure
     .input(
       z
         .object({

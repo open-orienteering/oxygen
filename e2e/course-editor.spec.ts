@@ -31,6 +31,10 @@ async function clickTab(page: Page, name: string) {
  * no tiles to draw on.
  */
 async function importCoursesAndMap(page: Page) {
+  // The import and the map upload each wait up to 60 s for server-side
+  // rendering, so whichever test happens to do the upload needs more
+  // than the 30 s default.
+  test.setTimeout(120_000);
   await clickTab(page, "Courses");
   await expect(page.getByText("3 courses")).toBeVisible({ timeout: 10000 });
 
@@ -92,14 +96,26 @@ async function openEditor(page: Page) {
   await expect(page.getByTestId("editor-control-hit").first()).toBeAttached({ timeout: 30000 });
 }
 
+/** Bounding boxes of the floating in-map overlay cards (course selector +
+ *  inventory), which swallow clicks over the map's top-left corner. */
+async function overlayCardBoxes(
+  page: Page,
+): Promise<Array<{ x: number; y: number; w: number; h: number }>> {
+  const boxes: Array<{ x: number; y: number; w: number; h: number }> = [];
+  for (const testId of ["editor-map-course-selector", "editor-inventory-panel"]) {
+    const overlay = page.getByTestId(testId);
+    const b = (await overlay.isVisible()) ? await overlay.boundingBox() : null;
+    if (b) boxes.push({ x: b.x, y: b.y, w: b.width, h: b.height });
+  }
+  return boxes;
+}
+
 /**
  * Codes of the first `n` positioned, numeric-coded (regular) controls whose
- * hit target is clickable — i.e. not hidden behind the floating in-map
- * course selector, which swallows clicks over the map's top-left corner.
+ * hit target is clickable — i.e. not hidden behind a floating overlay card.
  */
 async function pickClickableControlCodes(page: Page, n: number): Promise<string[]> {
-  const overlay = page.getByTestId("editor-map-course-selector");
-  const card = (await overlay.isVisible()) ? await overlay.boundingBox() : null;
+  const cards = await overlayCardBoxes(page);
   const hits = page.getByTestId("editor-control-hit");
   const count = await hits.count();
   const codes: string[] = [];
@@ -109,10 +125,11 @@ async function pickClickableControlCodes(page: Page, n: number): Promise<string[
     if (!code || !/^\d+$/.test(code)) continue;
     const b = await hit.boundingBox();
     if (!b) continue;
-    const covered =
-      card !== null &&
-      b.x < card.x + card.width && b.x + b.width > card.x &&
-      b.y < card.y + card.height && b.y + b.height > card.y;
+    const covered = cards.some(
+      (card) =>
+        b.x < card.x + card.w && b.x + b.width > card.x &&
+        b.y < card.y + card.h && b.y + b.height > card.y,
+    );
     if (!covered) codes.push(code);
   }
   return codes;
@@ -137,13 +154,9 @@ async function findEmptyMapPoint(page: Page): Promise<{ x: number; y: number }> 
     const b = await hits.nth(i).boundingBox();
     if (b) hitBoxes.push({ x: b.x, y: b.y, w: b.width, h: b.height });
   }
-  // The in-map course selector floats over the map's top-left corner and
-  // swallows clicks — treat it as an obstacle too.
-  const overlay = page.getByTestId("editor-map-course-selector");
-  if (await overlay.isVisible()) {
-    const b = await overlay.boundingBox();
-    if (b) hitBoxes.push({ x: b.x, y: b.y, w: b.width, h: b.height });
-  }
+  // The in-map overlay cards float over the map's top-left corner and
+  // swallow clicks — treat them as obstacles too.
+  hitBoxes.push(...(await overlayCardBoxes(page)));
 
   // Leg hit-lines are SVG paths in container-relative pixels; collect
   // their segments so the grid scan can keep its distance.
@@ -780,6 +793,62 @@ test.describe("Course editor", () => {
       courseName!,
       { timeout: 20000 },
     );
+  });
+
+  test("clones a course and keeps legacy start/finish flags read-only", async ({ page }) => {
+    await selectCompetition(page);
+    await ensureCoursesAndMap(page);
+
+    const legacyName = `E2E Legacy Flags ${Date.now()}`;
+    const response = await page.request.post("/trpc/course.create", {
+      headers: { "x-competition-id": "itest" },
+      data: {
+        name: legacyName,
+        firstAsStart: true,
+        lastAsFinish: true,
+      },
+    });
+    expect(response.ok()).toBe(true);
+
+    await page.reload();
+    const legacyRow = page.getByRole("row").filter({ hasText: legacyName });
+    await expect(legacyRow.getByTestId("course-legacy-first-start")).toBeVisible();
+    await expect(legacyRow.getByTestId("course-legacy-last-finish")).toBeVisible();
+    await expect(
+      page.getByTestId("bulk-field-select").locator('option[value="firstAsStart"]'),
+    ).toHaveCount(0);
+    await expect(
+      page.getByTestId("bulk-field-select").locator('option[value="lastAsFinish"]'),
+    ).toHaveCount(0);
+
+    await openEditor(page);
+    await expect(page.getByTestId("editor-toggle-first-start")).toHaveCount(0);
+    await expect(page.getByTestId("editor-toggle-last-finish")).toHaveCount(0);
+
+    const source = page.locator(
+      '[data-testid="editor-course-item"][data-course-name="A"]',
+    );
+    await source.click();
+    const sourceCount = await page
+      .locator('[data-testid="editor-seq-row"][data-kind="control"]')
+      .count();
+    expect(sourceCount).toBeGreaterThan(0);
+
+    await page.getByTestId("editor-clone-course").click();
+    await expect(page.getByTestId("editor-clone-name")).toHaveValue("A (copy)");
+    await page.getByTestId("editor-clone-name").fill("E2E A clone");
+    await page.getByTestId("editor-clone-confirm").click();
+    await expect(
+      page.locator(
+        '[data-testid="editor-course-item"][data-course-name="E2E A clone"]',
+      ),
+    ).toBeVisible({ timeout: 15000 });
+    await expect(page.getByTestId("editor-map-selector-toggle")).toContainText(
+      "E2E A clone",
+    );
+    await expect(
+      page.locator('[data-testid="editor-seq-row"][data-kind="control"]'),
+    ).toHaveCount(sourceCount);
   });
 
   test("in-map course panel switches courses and lives inside the map box", async ({ page }) => {

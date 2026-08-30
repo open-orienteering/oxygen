@@ -1,0 +1,97 @@
+# Club library
+
+Club-wide assets that are copied into events rather than living only on one
+competition. Identity (when `AUTH_MODE` is on) comes from the same invite-only
+`users` table as the rest of Oxygen — see [authentication.md](authentication.md).
+
+## Maps
+
+Operators upload OCAD (`.ocd`) base maps once on **Club library** (`/library`).
+Each row stores the file plus metadata parsed at upload (scale, WGS84 bounds,
+north offset) and a rendered PNG thumbnail. Existing rows render and persist
+their thumbnail on first view. Parse or render failure is non-fatal: the file
+is kept, scale/bounds stay empty, and the unavailable thumbnail is hidden.
+
+The list is global for the instance (one owning club). Anyone who can sign in
+can upload, rename, and download. Delete is allowed for the uploader or an
+instance admin (`AUTH_MODE=off` skips that check).
+
+### Copy-on-use
+
+On an event map panel, **From club library** copies the chosen file into that
+event's `map_files` row and runs the same pipeline as a direct upload
+(`applyEventMap`): replace the previous map, drop `map_tiles` /
+`rendered_maps`, fire map-upload listeners, rebuild `geometrySource: "editor"`
+course overlays. The event keeps an independent copy; later library rename or
+delete does not change events that already copied the map.
+
+### Route
+
+`/library` is a reserved slug (`admin` is reserved too). Creating an event
+named “library” is rejected so it cannot shadow the page.
+
+## Controls
+
+The club's physical punching units live as **series** on the Controls tab of
+**Club library**. Each series has a name, optional lender (`owner_name` /
+borrowed flag), a `priority` (ascending allocation order), and a list of
+codes unique **within that series** (two clubs can share a number; the event
+skips codes already placed).
+
+Codes 1–1023. Bulk add is a closed range of at most 500 codes; duplicates in
+that series are skipped. Inactive rows (lost/broken) stay in the library but
+are omitted from allocation. SRR-flagged units map to `internal_radio` when
+the course editor places them — planners can still change radio type on the
+Controls page (`public_radio` is not an inventory type).
+
+### Allocation
+
+`controlSeries.allocation` flattens active codes by series priority then
+code. The course editor's `nextSeriesControlCode` picks the first unused
+entry. With no series, or after the inventory is exhausted, it falls back to
+the old “smallest unused ≥ 31” heuristic and shows a one-time notice.
+
+The course editor exposes the allocation in a standalone collapsible
+**Inventory** card, grouped by series with used/free and SRR state. An
+**Assign codes from** selector can pin allocation to one series (its free
+codes are used first, then priority order once exhausted). The **Radio**
+action can swap a non-SRR control to the first free SRR code after inline
+confirmation; see [course-editor.md](course-editor.md).
+
+Later library edits do not change controls already placed in an event.
+
+## Classes
+
+The **Classes** tab stores the club's recurring class catalogue: name, sex and
+age bounds, type, free-start/no-timing/direct-registration flags, and sort
+order. Race-specific settings (entry fee, maximum time) are deliberately not
+part of presets — set those per event on the Classes page after bulk-adding.
+Any signed-in club member can curate presets. Preset sex
+is restricted to open (`""`), men (`M`), or women (`F`); event classes keep
+their broader legacy-compatible value handling.
+
+On an event's Classes page, **Add from club presets** selects any number of
+presets and creates only names that are not already active in the event. Every
+setting is copied, but no course is assigned. The copy and one
+`class.upserted` journal entry per new class commit in the same transaction.
+Existing names are reported as skipped. Later edits or deletion of a preset do
+not change event classes already created from it.
+
+## Groups
+
+The **Groups** tab defines club user groups — named sets of invited users
+that event admins can grant a role to in one step (the permissions panel on
+the Event page offers **User** / **Club group** as the grant subject).
+Membership is resolved when capabilities are checked, so adding or removing
+a member applies immediately to every event where the group holds a role.
+Deleting a group removes its event grants with it.
+
+Group management (create, rename, delete, membership) is instance-admin
+only, because membership directly gates event permissions. Everyone signed
+in can view the tab. See [authentication.md](authentication.md) for the
+data model.
+
+Group members must already be in the invite-only `users` table. If an admin
+tries to add an unknown email, the Groups tab keeps the error visible and
+offers **Invite and add**, which creates the user and retries the membership
+change. The tab also links admins to `/admin/users` for bulk invite management.
