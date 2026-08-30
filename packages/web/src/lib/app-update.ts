@@ -25,6 +25,31 @@ export function resolveUpdateAction(sources: {
 }
 
 /**
+ * Wrap the service-worker activation with a hard-reload fallback.
+ *
+ * `updateServiceWorker(true)` reloads via the `controlling` event — which
+ * never fires when the tab isn't controlled by a service worker (first
+ * visit, hard reload, DevTools bypass) or when the waiting worker has
+ * already been consumed by another tab. In those cases the button appeared
+ * to do nothing. If the SW-driven reload hasn't torn the page down within
+ * `fallbackMs`, force a plain reload; the page dies on reload, so a timer
+ * that became redundant never fires.
+ */
+export function createUpdateActivator(opts: {
+  activate: () => void;
+  reload: () => void;
+  fallbackMs?: number;
+}): () => void {
+  let fallbackScheduled = false;
+  return () => {
+    opts.activate();
+    if (fallbackScheduled) return;
+    fallbackScheduled = true;
+    setTimeout(opts.reload, opts.fallbackMs ?? 2500);
+  };
+}
+
+/**
  * Render the injected build timestamp as a compact local `YYYY-MM-DD HH:MM`.
  *
  * Non-date values (a placeholder in a dev build, say) are passed through so

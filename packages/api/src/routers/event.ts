@@ -1,7 +1,18 @@
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
-import { router, publicProcedure, eventProcedure } from "../trpc.js";
-import { prisma, sanitizeNameId, getZeroTime } from "../db.js";
+import { router, publicProcedure, authedProcedure, adminProcedure, viewProcedure, manageProcedure, kioskOrViewProcedure } from "../trpc.js";
+import { prisma, sanitizeNameId, getZeroTime, isReservedEventSlug } from "../db.js";
+import { kioskKeyMatches } from "../trpc.js";
+import {
+  grantSystemGroup,
+  resolveEventCapabilities,
+  parseCapabilities,
+  effectiveCapabilities,
+  isEventCompleted,
+  eventDateString,
+} from "../permissions.js";
+import { SYSTEM_GROUP_IDS } from "@oxygen/shared";
+import { randomBytes } from "node:crypto";
 import { toAbsolute } from "../timeConvert.js";
 import { resolveCourseExpectedPositions } from "./course.js";
 import { isWithdrawn, isFinished, WITHDRAWN_STATUSES } from "@oxygen/shared";
@@ -24,12 +35,111 @@ import { runnerStatusToValue, valueToRunnerStatus } from "../statusConvert.js";
  */
 export const eventRouter = router({
   /** List all events from the registry. */
-  list: publicProcedure.query(async (): Promise<EventInfo[]> => {
+  list: authedProcedure.query(async ({ ctx }): Promise<EventInfo[]> => {
     const rows = await prisma().event.findMany({
       where: { removed: false },
       orderBy: { date: "desc" },
     });
-    return rows.map(toEventInfo);
+    const eventorIds = [
+      ...new Set(
+        rows
+          .map((row) => row.eventorEventId)
+          .filter((id): id is bigint => id != null)
+          .map((id) => Number(id)),
+      ),
+    ];
+    const metaByEventorId = new Map<number, number>();
+    if (eventorIds.length > 0) {
+      const meta = await prisma().eventorEventMeta.findMany({
+        where: { eventorEventId: { in: eventorIds } },
+        select: { eventorEventId: true, classificationId: true },
+      });
+      for (const row of meta) {
+        if (row.classificationId > 0) {
+          metaByEventorId.set(row.eventorEventId, row.classificationId);
+        }
+      }
+    }
+
+    const ownerByEventId = new Map<bigint, string>();
+    if (rows.length > 0) {
+      const ownerGrants = await prisma().eventPermission.findMany({
+        where: {
+          eventId: { in: rows.map((row) => row.id) },
+          groupId: SYSTEM_GROUP_IDS.eventAdmin,
+          userId: { not: null },
+        },
+        orderBy: { createdAt: "asc" },
+        include: { user: { select: { displayName: true } } },
+      });
+      for (const grant of ownerGrants) {
+        if (!ownerByEventId.has(grant.eventId) && grant.user) {
+          ownerByEventId.set(grant.eventId, grant.user.displayName);
+        }
+      }
+    }
+
+    const manageById = new Map<bigint, boolean>();
+    const visible = new Set<bigint>(rows.map((r) => r.id));
+    if (ctx.authEnabled && ctx.user && !ctx.user.isAdmin) {
+      visible.clear();
+      const db = prisma();
+      const allGrants = await db.eventPermission.findMany({
+        where: {
+          OR: [
+            { userId: ctx.user.id },
+            { clubGroup: { members: { some: { userId: ctx.user.id } } } },
+          ],
+        },
+        include: { group: { select: { capabilities: true } } },
+      });
+      const grantsByEvent = new Map<bigint, import("@oxygen/shared").Capability[][]>();
+      for (const g of allGrants) {
+        const list = grantsByEvent.get(g.eventId) ?? [];
+        list.push(parseCapabilities(g.group.capabilities));
+        grantsByEvent.set(g.eventId, list);
+      }
+      const finished = await db.runner.groupBy({
+        by: ["eventId"],
+        where: {
+          eventId: { in: rows.map((r) => r.id) },
+          removed: false,
+          OR: [{ finishTime: { not: 0 } }, { status: { in: ["ok", "missing_punch", "dnf", "dq", "over_max_time"] } }],
+        },
+        _count: { _all: true },
+      });
+      const finishedByEvent = new Map(finished.map((f) => [f.eventId, f._count._all]));
+      for (const row of rows) {
+        const caps = effectiveCapabilities({
+          user: ctx.user,
+          grants: grantsByEvent.get(row.id) ?? [],
+          eventCompleted: isEventCompleted(
+            eventDateString(row.date),
+            finishedByEvent.get(row.id) ?? 0,
+          ),
+          authEnabled: true,
+        });
+        if (caps.size > 0) {
+          visible.add(row.id);
+          manageById.set(row.id, caps.has("event.manage"));
+        }
+      }
+    } else {
+      for (const row of rows) manageById.set(row.id, true);
+    }
+
+    return rows
+      .filter((row) => visible.has(row.id))
+      .map((row) => {
+        const classificationId = row.eventorEventId
+          ? metaByEventorId.get(Number(row.eventorEventId))
+          : undefined;
+        return {
+          ...toEventInfo(row, classificationId),
+          canManage: manageById.get(row.id) ?? false,
+          owner: ownerByEventId.get(row.id),
+        };
+      });
   }),
 
   /**
@@ -38,7 +148,7 @@ export const eventRouter = router({
    */
   select: publicProcedure
     .input(z.object({ nameId: z.string().min(1) }))
-    .mutation(async ({ input }) => {
+    .mutation(async ({ ctx, input }) => {
       const event = await prisma().event.findUnique({
         where: { nameId: input.nameId },
       });
@@ -48,11 +158,35 @@ export const eventRouter = router({
           message: `No event found with slug "${input.nameId}"`,
         });
       }
+      if (ctx.authEnabled) {
+        if (kioskKeyMatches(ctx.kioskKey, event.kioskKey)) {
+          return { success: true, nameId: event.nameId, name: event.name };
+        }
+        if (!ctx.user) {
+          throw new TRPCError({
+            code: "UNAUTHORIZED",
+            message: "Not authenticated",
+          });
+        }
+        const caps = await resolveEventCapabilities({
+          db: prisma(),
+          eventId: event.id,
+          eventDate: event.date,
+          user: ctx.user,
+          authEnabled: true,
+        });
+        if (!caps.has("event.view")) {
+          throw new TRPCError({
+            code: "FORBIDDEN",
+            message: "Missing capability event.view",
+          });
+        }
+      }
       return { success: true, nameId: event.nameId, name: event.name };
     }),
 
   /** Create a new empty event. */
-  create: publicProcedure
+  create: authedProcedure
     .input(
       z.object({
         name: z.string().min(1),
@@ -61,8 +195,14 @@ export const eventRouter = router({
         kind: z.string().optional(),
       }),
     )
-    .mutation(async ({ input }) => {
+    .mutation(async ({ ctx, input }) => {
       const slug = sanitizeNameId(input.nameId ?? input.name);
+      if (isReservedEventSlug(slug)) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: `Slug "${slug}" is reserved.`,
+        });
+      }
       const existing = await prisma().event.findUnique({
         where: { nameId: slug },
       });
@@ -80,13 +220,21 @@ export const eventRouter = router({
           kind: input.kind ?? "competition",
         },
       });
+      if (ctx.user) {
+        await grantSystemGroup(prisma(), {
+          eventId: created.id,
+          userId: ctx.user.id,
+          groupId: SYSTEM_GROUP_IDS.eventAdmin,
+          grantedBy: ctx.user.id,
+        });
+      }
       return { nameId: created.nameId, eventId: Number(created.id) };
     }),
 
   /** Soft-delete an event. */
-  delete: publicProcedure
+  delete: authedProcedure
     .input(z.object({ nameId: z.string().min(1) }))
-    .mutation(async ({ input }) => {
+    .mutation(async ({ ctx, input }) => {
       const event = await prisma().event.findUnique({
         where: { nameId: input.nameId },
       });
@@ -96,6 +244,24 @@ export const eventRouter = router({
           message: `Event "${input.nameId}" not found`,
         });
       }
+      if (ctx.authEnabled) {
+        if (!ctx.user) {
+          throw new TRPCError({ code: "UNAUTHORIZED", message: "Not authenticated" });
+        }
+        const caps = await resolveEventCapabilities({
+          db: prisma(),
+          eventId: event.id,
+          eventDate: event.date,
+          user: ctx.user,
+          authEnabled: true,
+        });
+        if (!caps.has("event.manage")) {
+          throw new TRPCError({
+            code: "FORBIDDEN",
+            message: "Missing capability event.manage",
+          });
+        }
+      }
       await prisma().event.update({
         where: { id: event.id },
         data: { removed: true },
@@ -104,7 +270,7 @@ export const eventRouter = router({
     }),
 
   /** Hard-delete every soft-deleted event (and its cascading children). */
-  purgeDeleted: publicProcedure.mutation(async () => {
+  purgeDeleted: adminProcedure.mutation(async () => {
     const result = await prisma().event.deleteMany({
       where: { removed: true },
     });
@@ -112,10 +278,10 @@ export const eventRouter = router({
   }),
 
   /** Return the currently selected event's slug. */
-  current: eventProcedure.query(({ ctx }) => ({ nameId: ctx.event.nameId })),
+  current: viewProcedure.query(({ ctx }) => ({ nameId: ctx.event.nameId })),
 
   /** Full dashboard. */
-  dashboard: eventProcedure.query(
+  dashboard: kioskOrViewProcedure.query(
     async ({ ctx }): Promise<EventDashboard> => {
       const event = await ctx.db.event.findUnique({
         where: { id: ctx.event.id },
@@ -133,6 +299,9 @@ export const eventRouter = router({
       });
       const totalControls = await ctx.db.control.count({
         where: { eventId: ctx.event.id, removed: false },
+      });
+      const mapCount = await ctx.db.mapFile.count({
+        where: { eventId: ctx.event.id },
       });
 
       const runners = await ctx.db.runner.findMany({
@@ -276,12 +445,19 @@ export const eventRouter = router({
         totalControls,
         statusCounts,
         organizer,
+        contentSignals: {
+          hasMap: mapCount > 0,
+          hasClasses: classInfos.length > 0,
+          hasCourses: courseInfos.length > 0,
+          hasRunners: participantCount > 0,
+          hasResults: statusCounts.resultCount > 0,
+        },
       };
     },
   ),
 
   /** Runners list, optionally filtered. */
-  runners: eventProcedure
+  runners: viewProcedure
     .input(
       z
         .object({
@@ -327,7 +503,7 @@ export const eventRouter = router({
    * runner). Eventor-linked clubs are deduped by `eventor_club_id`; clubless
    * free-text names by lowercased `club_name`.
    */
-  clubs: eventProcedure.query(async ({ ctx }): Promise<ClubInfo[]> => {
+  clubs: viewProcedure.query(async ({ ctx }): Promise<ClubInfo[]> => {
     const runners = await ctx.db.runner.findMany({
       where: {
         eventId: ctx.event.id,
@@ -363,7 +539,7 @@ export const eventRouter = router({
    * Change watermarks per table. Replaces `competition.counterState`
    * (which polled `oCounter`). Clients diff these to know what to invalidate.
    */
-  changeWatermarks: eventProcedure.query(async ({ ctx }) => {
+  changeWatermarks: viewProcedure.query(async ({ ctx }) => {
     const eventId = ctx.event.id;
     // Append-only tables (card_readouts, punches, event_log) use their
     // own timestamp columns; entity tables use updated_at.
@@ -399,7 +575,7 @@ export const eventRouter = router({
    * (oRunner, oClass, …) so we don't have to update the hook for the
    * cutover release.
    */
-  counterState: eventProcedure.query(async ({ ctx }) => {
+  counterState: viewProcedure.query(async ({ ctx }) => {
     const eventId = ctx.event.id;
     const tables = [
       { legacy: "oRunner", table: "runners" },
@@ -441,7 +617,7 @@ export const eventRouter = router({
    * Start-screen summary — runners with their start times for the active
    * event, plus event metadata. Used by the kiosk start-screen view.
    */
-  startScreen: eventProcedure
+  startScreen: kioskOrViewProcedure
     .input(
       z.object({
         classId: z.number().int().optional(),
@@ -578,7 +754,7 @@ export const eventRouter = router({
 
   // ─── Registration config ────────────────────────────────
 
-  getRegistrationConfig: eventProcedure.query(async ({ ctx }) => {
+  getRegistrationConfig: viewProcedure.query(async ({ ctx }) => {
     const event = await ctx.db.event.findUnique({ where: { id: ctx.event.id } });
     if (!event) {
       throw new TRPCError({ code: "NOT_FOUND", message: "Event not found" });
@@ -627,7 +803,7 @@ export const eventRouter = router({
     };
   }),
 
-  setRegistrationConfig: eventProcedure
+  setRegistrationConfig: manageProcedure
     .input(
       z.object({
         paymentMethods: z.array(z.string()).optional(),
@@ -670,7 +846,7 @@ export const eventRouter = router({
 
   // ─── Google Sheets backup ───────────────────────────────
 
-  getGoogleSheetsConfig: eventProcedure.query(async ({ ctx }) => {
+  getGoogleSheetsConfig: manageProcedure.query(async ({ ctx }) => {
     const event = await ctx.db.event.findUnique({
       where: { id: ctx.event.id },
       select: { googleSheetsWebhookUrl: true },
@@ -678,7 +854,7 @@ export const eventRouter = router({
     return { webhookUrl: event?.googleSheetsWebhookUrl ?? "" };
   }),
 
-  setGoogleSheetsConfig: eventProcedure
+  setGoogleSheetsConfig: manageProcedure
     .input(z.object({ webhookUrl: z.string() }))
     .mutation(async ({ ctx, input }) => {
       await ctx.db.event.update({
@@ -689,7 +865,7 @@ export const eventRouter = router({
       return { ok: true };
     }),
 
-  testGoogleSheetsWebhook: publicProcedure
+  testGoogleSheetsWebhook: manageProcedure
     .input(z.object({ webhookUrl: z.string().url() }))
     .mutation(async ({ input }) => {
       return testGoogleSheetPush(input.webhookUrl);
@@ -697,7 +873,7 @@ export const eventRouter = router({
 
   // ─── Rental card fee ────────────────────────────────────
 
-  getCardFee: eventProcedure.query(async ({ ctx }) => {
+  getCardFee: viewProcedure.query(async ({ ctx }) => {
     const event = await ctx.db.event.findUnique({
       where: { id: ctx.event.id },
       select: { cardFeeCents: true },
@@ -705,7 +881,7 @@ export const eventRouter = router({
     return { cardFee: event?.cardFeeCents ?? 0 };
   }),
 
-  setCardFee: eventProcedure
+  setCardFee: manageProcedure
     .input(z.object({ cardFee: z.number().int().min(0) }))
     .mutation(async ({ ctx, input }) => {
       await ctx.db.event.update({
@@ -714,27 +890,50 @@ export const eventRouter = router({
       });
       return { ok: true };
     }),
+
+  getKioskKey: manageProcedure.query(async ({ ctx }) => {
+    const row = await ctx.db.event.findUnique({
+      where: { id: ctx.event.id },
+      select: { kioskKey: true },
+    });
+    return { kioskKey: row?.kioskKey ?? null };
+  }),
+
+  regenerateKioskKey: manageProcedure.mutation(async ({ ctx }) => {
+    const kioskKey = randomBytes(24).toString("base64url");
+    await ctx.db.event.update({
+      where: { id: ctx.event.id },
+      data: { kioskKey },
+    });
+    return { kioskKey };
+  }),
 });
 
 // ─── Helpers ──────────────────────────────────────────────
 
-function toEventInfo(row: {
-  id: bigint;
-  nameId: string;
-  name: string;
-  annotation: string;
-  date: Date;
-  eventorEnv: string;
-  eventorEventId: bigint | null;
-}): EventInfo {
+function toEventInfo(
+  row: {
+    id: bigint;
+    nameId: string;
+    name: string;
+    annotation: string;
+    date: Date;
+    kind: string;
+    eventorEnv: string;
+    eventorEventId: bigint | null;
+  },
+  classificationId?: number,
+): EventInfo {
   return {
     id: Number(row.id),
     name: row.name,
     annotation: row.annotation,
     date: row.date.toISOString().slice(0, 10),
     nameId: row.nameId,
+    kind: row.kind,
     eventorEnv: row.eventorEnv as "prod" | "test" | undefined,
     eventorEventId: row.eventorEventId ? Number(row.eventorEventId) : undefined,
+    classificationId,
   };
 }
 

@@ -70,5 +70,6 @@
   "specialControls": "Special controls",
   "noTimingPill": "{{code}} · No timing",
   "skippedPunchedPill": "{{code}} · Optional",
-  "skippedMissingPill": "{{code}} · Skipped"
+  "skippedMissingPill": "{{code}} · Skipped",
+  "kioskKeyRequired": "This kiosk URL needs a key. Open the Event page, generate a kiosk key, and use the link shown there."
 }

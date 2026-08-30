@@ -16,6 +16,7 @@
 
 import type { FastifyInstance } from "fastify";
 import { prisma } from "./db.js";
+import { assertRestAccess } from "./restGuard.js";
 import { loadEventCrs } from "./event-crs.js";
 import { mapMmToWgs84 } from "./map-projection.js";
 import {
@@ -245,6 +246,9 @@ export function registerCourseExportRoute(server: FastifyInstance): void {
       }
       if (!/^[A-Za-z0-9_-]+$/.test(name)) {
         return reply.code(400).send({ error: "Invalid event name" });
+      }
+      if (!(await assertRestAccess(req, reply, { nameId: name, cap: "courses.view" }))) {
+        return;
       }
       const event = await prisma().event.findUnique({ where: { nameId: name } });
       if (!event || event.removed) {

@@ -17,7 +17,7 @@
  */
 
 import { z } from "zod";
-import { router, eventProcedure } from "../trpc.js";
+import { router, raceOperateProcedure } from "../trpc.js";
 import { getSetting, setSetting } from "../db.js";
 import {
   setPullerEnabled,
@@ -72,9 +72,9 @@ async function saveLoadedConfig(eventId: bigint, cfg: OnlineInputConfig) {
 }
 
 export const onlineInputRouter = router({
-  getConfig: eventProcedure.query(async ({ ctx }) => loadConfig(ctx.event.id)),
+  getConfig: raceOperateProcedure.query(async ({ ctx }) => loadConfig(ctx.event.id)),
 
-  getStatus: eventProcedure.query(async ({ ctx }) => {
+  getStatus: raceOperateProcedure.query(async ({ ctx }) => {
     const cfg = await loadConfig(ctx.event.id);
     const lastPolledRaw = await getSetting(
       settingKey(ctx.event.id, "last_polled"),
@@ -102,7 +102,7 @@ export const onlineInputRouter = router({
    * intentionally excluded — that goes through `enable` / `disable`
    * so the EventPage toggle is unambiguous.
    */
-  saveConfig: eventProcedure
+  saveConfig: raceOperateProcedure
     .input(
       z.object({
         protocol: z.enum(["roc", "sicenter"]).optional(),
@@ -122,7 +122,7 @@ export const onlineInputRouter = router({
       return { ok: true as const };
     }),
 
-  setConfig: eventProcedure
+  setConfig: raceOperateProcedure
     .input(
       z.object({
         enabled: z.boolean(),
@@ -140,7 +140,7 @@ export const onlineInputRouter = router({
       return { ok: true as const };
     }),
 
-  enable: eventProcedure.mutation(async ({ ctx }) => {
+  enable: raceOperateProcedure.mutation(async ({ ctx }) => {
     const cfg = await loadConfig(ctx.event.id);
     cfg.enabled = true;
     await saveLoadedConfig(ctx.event.id, cfg);
@@ -148,7 +148,7 @@ export const onlineInputRouter = router({
     return { ok: true as const };
   }),
 
-  disable: eventProcedure.mutation(async ({ ctx }) => {
+  disable: raceOperateProcedure.mutation(async ({ ctx }) => {
     const cfg = await loadConfig(ctx.event.id);
     cfg.enabled = false;
     await saveLoadedConfig(ctx.event.id, cfg);
@@ -160,7 +160,7 @@ export const onlineInputRouter = router({
    * One-shot poll. Runs synchronously and returns whatever the puller
    * managed to ingest. The interval poller keeps running independently.
    */
-  pollNow: eventProcedure.mutation(async ({ ctx }) => {
+  pollNow: raceOperateProcedure.mutation(async ({ ctx }) => {
     const cfg = await loadConfig(ctx.event.id);
     if (!cfg.endpointUrl || !cfg.unitId) {
       return {
@@ -189,7 +189,7 @@ export const onlineInputRouter = router({
     return { ok: true as const, message: "Poll complete.", stats };
   }),
 
-  clearLastId: eventProcedure.mutation(async ({ ctx }) => {
+  clearLastId: raceOperateProcedure.mutation(async ({ ctx }) => {
     const cfg = await loadConfig(ctx.event.id);
     cfg.lastId = 0;
     await saveLoadedConfig(ctx.event.id, cfg);
@@ -201,7 +201,7 @@ export const onlineInputRouter = router({
    * 1 (start), 2 (finish), 3 (check) — see legacy SPECIAL_PUNCH_OPTIONS
    * for the canonical names.
    */
-  addMapping: eventProcedure
+  addMapping: raceOperateProcedure
     .input(
       z.object({
         rawCode: z.number().int().positive(),
@@ -215,7 +215,7 @@ export const onlineInputRouter = router({
       return { ok: true as const };
     }),
 
-  removeMapping: eventProcedure
+  removeMapping: raceOperateProcedure
     .input(z.object({ rawCode: z.number().int().positive() }))
     .mutation(async ({ ctx, input }) => {
       const cfg = await loadConfig(ctx.event.id);

@@ -23,8 +23,8 @@ actions that apply there. There is no mode to switch first.
 
 | Click | Selection marker | Menu offers |
 |-------|------------------|-------------|
-| Empty map | Phantom ring at the point | **Add control** (`control.create`, code = smallest unused ≥ 31); with a course selected also **Add to \<course\>** (create + append, one undo entry) |
-| An existing control | Dashed selection ring, toolbar readout (code + mm position) | **Add to \<course\>** (append via `course.update { controlIds }`; hidden for start/finish — they are implicit), **Remove from \<course\>** (when the control is in the selected course's sequence — membership only, removes every visit, the control survives), **Edit description** (opens the IOF description editor, see below) and **Delete control** (with confirmation). An info line above the actions reads *"Also in: …"* when the control is used by courses other than the edited one |
+| Empty map | Phantom ring at the point | **Add control** (`control.create`, code from the club control-series allocation, falling back to smallest unused ≥ 31), **Add start** and **Add finish** (code-less `control.create` with status 4/5, auto-named "Start N" / "Mål N"); with a course selected also **Add to \<course\>** (create + append, one undo entry) |
+| An existing control | Dashed selection ring, toolbar readout (code + mm position) | **Add to \<course\>** (append via `course.update { controlIds }`; hidden for start/finish — they are implicit), **Remove from \<course\>**, **Radio** / **Radio off**, **Edit description** and **Delete control**. A selected start/finish that is not the one the selected course uses offers **Use as start/finish for \<course\>**. An info line above the actions reads *"Also in: …"* when the control is used by other courses |
 | A course leg (course selected) | Phantom ring on the leg | **Insert into course** — creates a control and inserts it into the sequence at that leg |
 
 Other gestures and keys:
@@ -44,10 +44,10 @@ All course building happens in a floating panel *inside* the map box
 
 | Action | Effect |
 |--------|--------|
-| Panel: name + **Create** | `course.create`; the new course is selected for editing (not undoable — there is no `course.restore`) |
+| Panel: name + **Create** | `course.create`; the name field suggests event classes that have no course and whose names are not already used by a course. An exact case-insensitive match links the new course to that class in the same transaction. The new course is selected for editing (not undoable — there is no `course.restore`) |
+| Panel: **Clone** | Opens an inline name field, then `course.clone` copies the sequence, start/finish assignment and course settings into a newly selected course. Class assignments are not copied |
 | Panel: click a course | Selects it — its sequence panel opens; on the map the course's controls stay full-strength purple with 1, 2, 3… numbering while every other control **fades** to ~30 % opacity (Purple Pen style, still clickable) |
 | Panel: ↑ / ↓ / ✕ per row | Reorder within, or remove from, the sequence |
-| Panel: first-as-start / last-as-finish | Toggles the course flags (sequence resent so geometry rebuilds) |
 | Toolbar: **Hide other controls** | Escalates the fade to fully hidden (start/finish stay) — MapPanel's `filterMode="course"` |
 
 The panel shows the display sequence the server's geometry builder
@@ -55,6 +55,25 @@ uses — event start, course controls, event finish — with per-leg terrain
 meters computed client-side (`sequenceLegMeters`: straight-line paper mm
 × map scale / 1000, mirroring `course-geometry.ts`) and the total +
 control count in the footer.
+
+The **Inventory** card is a separate collapsible panel below the course
+panel (`editor-inventory-panel`). It groups the club's active control
+allocation by series, shows free/total counts and borrowed/SRR badges, and
+marks every code already used anywhere in the event (including secondary
+codes). An **Assign codes from** selector (`editor-alloc-series`) overrides
+the allocation source: *Automatic (priority order)* walks the club's series
+priority as before, while picking a specific series allocates that series'
+free codes first (falling back to priority order once it is exhausted).
+The active series is highlighted in the list and named in the collapsed
+header. When **Radio** is enabled on a non-SRR code, the editor offers an
+inline swap to the first free SRR unit. Declining keeps the original code;
+an empty allocation enables radio directly, and an exhausted allocation
+enables it with a non-blocking notice.
+
+`firstAsStart` and `lastAsFinish` are legacy-only settings. The editor and
+Courses page no longer offer write controls for them. Existing migrated
+courses retain the flags, geometry/export continue honoring them, and the
+Courses list shows a read-only legacy badge.
 
 While the editor is open the map never auto-pans: `MapPanel` skips its
 focus-on-selection behaviour in editor mode, because every sequence edit
@@ -79,12 +98,13 @@ in a floating panel at the map's top-left
 (`data-testid="editor-map-course-selector"`): the create-course row,
 the course list (rows `editor-course-item`, each with control count and
 length, the selected one highlighted, scrolling at `40vh` so a big
-screen shows more courses), and — with a course selected — the
-start/finish flag toggles, the full display sequence
-(`editor-sequence`) with per-leg meters and ↑/↓/✕ buttons, and the
-count + total-length footer. The panel grows with its content up to the
-map's full height; the header row collapses everything down to the
-selected course's name.
+screen shows more courses), and — with a course selected — the full
+display sequence (`editor-sequence`) with per-leg meters and ↑/↓/✕
+buttons, the count + total-length footer, and a clone footer (button →
+inline name field). The panel grows with its content up to the map's
+full height; the header row collapses everything down to the selected
+course's name. The series inventory lives in its own card stacked below
+(see above), so reference data never interleaves with course editing.
 
 Mechanically it is a generic `mapOverlay?: React.ReactNode` slot on
 `MapPanelPublicProps`: MapPanel wraps the viewer in a `relative`
@@ -210,17 +230,21 @@ leg line passes over black features. Oxygen computes both automatically
   areas (boulder fields, stony ground) are excluded: their dots are
   symbol fill, not objects, so a cut at the invisible area boundary
   would look random. Blue/green/yellow symbols never cut.
-- **Geometry rules**: point features slit the rim when they sit within
-  0.6 mm of it, and gap a leg when within 0.6 mm of the line (centered
-  on the projection). Line features cut at each rim/leg crossing —
-  wider for oblique leg crossings (`half-width / sin θ`, capped at
-  2 mm). Solid black areas (buildings, canopies, ruins, gigantic
-  boulders) cut the whole stretch of rim/leg *inside* them (rim sampled
-  every 4°, leg via entry/exit intersection parameters). Overlapping
-  cuts merge; slivers (< 4° / < 0.6 mm) drop; sanity caps keep a circle
-  whole when > 300° would vanish and never erase more than 70 % of a
-  leg. Legs also keep 3 mm (1.2 × circle radius) at each end — the
-  viewer clips that zone around circles anyway.
+- **Geometry rules**: cuts are deliberately *tight* — the overprint
+  stroke is 0.35 mm wide and a compact ISOM point symbol ~0.5 mm across,
+  so clearing much more than the feature itself just fragments the
+  circle without revealing more map. Point features cut the rim (or the
+  leg, centered on the projection) when they sit within **0.45 mm** of
+  it, opening **±0.4 mm** of ink — about 18° of rim, 0.8 mm of leg. Line
+  features cut **±0.35 mm** at each rim/leg crossing, wider for oblique
+  leg crossings (`half-width / sin θ`, capped at 1.2 mm). Solid black
+  areas (buildings, canopies, ruins, gigantic boulders) cut the whole
+  stretch of rim/leg *inside* them (rim sampled every 4°, leg via
+  entry/exit intersection parameters). Overlapping cuts merge; slivers
+  (< 4° / < 0.6 mm) drop; sanity caps keep a circle whole when > 300°
+  would vanish and never erase more than 70 % of a leg. Legs also keep
+  3 mm (1.2 × circle radius) at each end — the viewer clips that zone
+  around circles anyway.
 - **Rendering**: circle `cuts` were already consumed by the viewer's
   `drawBrokenCircle` (OCD-imported slits used the same path). Leg `gaps`
   are new: `subtractLegGaps` in `MapViewer.tsx` splits the screen-space
@@ -229,12 +253,14 @@ leg line passes over black features. Oxygen computes both automatically
   segments carry `data-leg-gapped="true"` for tests.
 
 Placement and dragging work in **map millimetres** (the `xpos`/`ypos`
-paper coordinate space) — the viewer converts screen pixels via the
-affine transform it already builds from control coordinates for the
-measure tool. This means the editor needs at least a couple of
-positioned controls before click-to-place works; on a virgin event,
-import courses (or an OCD file) first. A map-calibration flow for truly
-empty events is future work.
+paper coordinate space) — the viewer converts screen pixels via an
+affine transform. When `course.mapMetadata` carries **calibration
+points** (three mm↔WGS84 corner pairs derived from the OCAD file's CRS
+at upload, persisted on `map_files`), those are preferred; otherwise the
+transform falls back to positioned control coordinates as before. The
+calibration path is what makes the editor fully usable on a virgin
+event: upload a map, click anywhere, place the first start/control
+before any other coordinate data exists.
 
 ## Architecture
 
@@ -260,14 +286,17 @@ MapViewer (components/MapViewer.tsx)
 
 - **`lib/course-editor.ts`** — a pure reducer (`selectedControlId`,
   `selectedCourseId`, `phantom {x, y, insertAt}`) plus
-  `nextFreeControlCode()`, `sequenceLegMeters()` and
+  `nextFreeControlCode()`, `nextSeriesControlCode()` (optional preferred
+  series, then club inventory priority, then the ≥ 31 gap-fill
+  fallback), inventory grouping and SRR
+  selection helpers, `sequenceLegMeters()` and
   `courseMembership()` (control id → names of the courses using it,
   driving the "Also in" info line and the drag warning chip).
   Unit-tested in `lib/__tests__/course-editor.test.ts`.
 - **`lib/undo-stack.ts`** — a bounded stack of `{ undo, redo }` closure
   pairs. The page pushes an entry after every successful mutation: move
   → `control.update` with the prior position, sequence change →
-  `course.update` with the prior `controlIds` + flags, delete →
+  `course.update` with the prior `controlIds`, delete →
   `control.restore`, create → `control.delete`/`control.restore`.
   Entries whose undo/redo throws are dropped (the error is surfaced in
   the toolbar); the rest of the stack stays usable. Unit-tested in
@@ -372,8 +401,10 @@ their hit targets so "click → Add to course" still works on them.
 - **Unit**: `packages/web/src/lib/__tests__/course-editor.test.ts` —
   reducer transitions (selection, phantom anchoring via map-click and
   leg-click, course selection clearing the phantom, escape cascade,
-  delete-clears-selection), `nextFreeControlCode` (gap filling,
-  multi-code controls, ≥ 31 floor), `courseMembership` (ordering,
+  delete-clears-selection),   `nextFreeControlCode` (gap filling,
+  multi-code controls, ≥ 31 floor), `nextSeriesControlCode` (priority
+  order, used-code skip, duplicate-code series, exhaustion fallback,
+  SRR passthrough), `courseMembership` (ordering,
   dedup for repeat visits, unused controls absent) and
   `sequenceLegMeters` (unit conversion, unpositioned-control bridging,
   no-scale fallback).

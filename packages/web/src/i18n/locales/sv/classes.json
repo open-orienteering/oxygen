@@ -63,5 +63,10 @@
   "bulkUpdated": "Uppdaterade {{count}} klasser",
   "allowQuickEntry": "Direktanmälan",
   "maxTime": "Maxtid",
-  "noLimit": "Ingen gräns"
+  "noLimit": "Ingen gräns",
+  "addFromPresets": "Lägg till från klubbens förinställningar",
+  "presetsDialogTitle": "Lägg till klasser från klubbens förinställningar",
+  "alreadyAdded": "Redan tillagd",
+  "presetsResult": "{{created}} tillagda, {{skipped}} överhoppade",
+  "selectAllPresets": "Välj alla"
 }

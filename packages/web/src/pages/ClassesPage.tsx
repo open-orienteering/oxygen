@@ -30,13 +30,23 @@ import { CSS } from "@dnd-kit/utilities";
 import { restrictToVerticalAxis } from "@dnd-kit/modifiers";
 import { MapSlot } from "../components/MapSlot";
 import { CourseMultiSelectDropdown } from "../components/CourseMultiSelectDropdown";
+import { useCapabilities } from "../context/CapabilitiesContext";
 
 export function ClassesPage() {
   const { t } = useTranslation("classes");
   const [expandedId, setExpandedId] = useNumericSearchParam("classId");
   const [showCreateForm, setShowCreateForm] = useState(false);
+  const [showPresets, setShowPresets] = useState(false);
+  const [selectedPresetIds, setSelectedPresetIds] = useState<Set<string>>(
+    () => new Set(),
+  );
+  const [presetResult, setPresetResult] = useState<{
+    created: number;
+    skipped: number;
+  } | null>(null);
 
   const utils = trpc.useUtils();
+  const { has } = useCapabilities();
 
   const anchors = useMemo(() => createClassAnchors((key) => t(key as never)), [t]);
   const { tokens, setTokens, filterItems } = useStructuredSearch<ClassSummary>(
@@ -46,6 +56,18 @@ export function ClassesPage() {
 
   const classes = trpc.class.list.useQuery();
   const courses = trpc.course.list.useQuery();
+  const presets = trpc.classPreset.list.useQuery();
+  const createFromPresets = trpc.class.createFromPresets.useMutation({
+    onSuccess: (result) => {
+      setPresetResult({
+        created: result.created,
+        skipped: result.skipped.length,
+      });
+      setShowPresets(false);
+      setSelectedPresetIds(new Set());
+      void utils.class.list.invalidate();
+    },
+  });
 
   const suggestionData = useMemo(
     () => ({
@@ -204,7 +226,26 @@ export function ClassesPage() {
           </svg>
           {t("newClass")}
         </button>
+        {has("event.manage") && (presets.data?.length ?? 0) > 0 && (
+          <button
+            type="button"
+            data-testid="classes-add-presets"
+            onClick={() => {
+              setSelectedPresetIds(new Set());
+              setShowPresets(true);
+            }}
+            className="whitespace-nowrap rounded-lg border border-blue-200 px-4 py-2 text-sm font-medium text-blue-700 hover:bg-blue-50"
+          >
+            {t("addFromPresets")}
+          </button>
+        )}
       </div>
+
+      {presetResult && (
+        <p className="mb-3 text-sm text-emerald-700">
+          {t("presetsResult", presetResult)}
+        </p>
+      )}
 
       <div className="flex items-center justify-between mb-3">
         <span className="text-sm text-slate-500">
@@ -224,6 +265,94 @@ export function ClassesPage() {
             utils.class.list.invalidate();
           }}
         />
+      )}
+
+      {showPresets && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+          <div className="w-full max-w-lg rounded-xl bg-white p-6 shadow-lg">
+            <h2 className="mb-4 font-semibold">{t("presetsDialogTitle")}</h2>
+            {(() => {
+              const existingNames = new Set((classes.data ?? []).map((cls) => cls.name));
+              const available = (presets.data ?? []).filter(
+                (preset) => !existingNames.has(preset.name),
+              );
+              const allChecked =
+                available.length > 0 &&
+                available.every((preset) => selectedPresetIds.has(preset.id));
+              return (
+                <>
+                  <label className="mb-3 flex items-center gap-2 border-b border-slate-100 pb-3 text-sm font-medium">
+                    <input
+                      type="checkbox"
+                      data-testid="preset-check-all"
+                      checked={allChecked}
+                      onChange={(event) =>
+                        setSelectedPresetIds(
+                          event.target.checked
+                            ? new Set(available.map((preset) => preset.id))
+                            : new Set(),
+                        )
+                      }
+                    />
+                    {t("selectAllPresets")}
+                  </label>
+                  <div className="max-h-80 space-y-2 overflow-y-auto">
+                    {(presets.data ?? []).map((preset) => {
+                      const alreadyAdded = existingNames.has(preset.name);
+                      return (
+                        <label
+                          key={preset.id}
+                          className={`flex items-center justify-between gap-3 rounded-lg border px-3 py-2 text-sm ${
+                            alreadyAdded ? "bg-slate-50 text-slate-400" : "border-slate-200"
+                          }`}
+                        >
+                          <span className="flex items-center gap-2">
+                            <input
+                              type="checkbox"
+                              data-testid={`preset-check-${preset.name}`}
+                              disabled={alreadyAdded}
+                              checked={selectedPresetIds.has(preset.id)}
+                              onChange={(event) => {
+                                const next = new Set(selectedPresetIds);
+                                if (event.target.checked) next.add(preset.id);
+                                else next.delete(preset.id);
+                                setSelectedPresetIds(next);
+                              }}
+                            />
+                            {preset.name}
+                          </span>
+                          {alreadyAdded && <span className="text-xs">{t("alreadyAdded")}</span>}
+                        </label>
+                      );
+                    })}
+                  </div>
+                  <div className="mt-5 flex justify-end gap-2">
+                    <button
+                      type="button"
+                      className="rounded-lg border px-3 py-1.5 text-sm"
+                      onClick={() => setShowPresets(false)}
+                    >
+                      {t("cancel")}
+                    </button>
+                    <button
+                      type="button"
+                      data-testid="presets-apply"
+                      disabled={selectedPresetIds.size === 0 || createFromPresets.isPending}
+                      className="rounded-lg bg-blue-600 px-3 py-1.5 text-sm text-white disabled:opacity-50"
+                      onClick={() =>
+                        createFromPresets.mutate({
+                          presetIds: Array.from(selectedPresetIds),
+                        })
+                      }
+                    >
+                      {t("apply")}
+                    </button>
+                  </div>
+                </>
+              );
+            })()}
+          </div>
+        </div>
       )}
 
       {/* Classes table */}

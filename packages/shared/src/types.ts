@@ -295,10 +295,21 @@ export interface EventInfo {
   annotation: string;
   date: string;
   nameId: string;
+  /** Event kind stored on the row (typically `"competition"`). */
+  kind: string;
   /** The Eventor environment this event is linked to, if any */
   eventorEnv?: EventorEnvironment;
   /** Eventor event ID. Used to build QR links on receipts. */
   eventorEventId?: number;
+  /**
+   * Eventor classification when `eventor_event_meta` is cached for this event.
+   * 1 Championship, 2 National, 3 District, 4 Local, 5 Club, 6 International.
+   */
+  classificationId?: number;
+  /** True when the current user has `event.manage` on this event. */
+  canManage?: boolean;
+  /** Display name of the user who created the event, when known. */
+  owner?: string;
 }
 
 /** @deprecated alias for {@link EventInfo} kept during the post-MeOS rename window. */
@@ -485,6 +496,17 @@ export interface EventDashboard {
     name: string;
     eventorId: number;
   };
+  /** Cheap content flags used by the admin shell to decide which tabs sit in the bar vs More. */
+  contentSignals: ContentSignals;
+}
+
+/** Presence flags for progressive shell menus. */
+export interface ContentSignals {
+  hasMap: boolean;
+  hasClasses: boolean;
+  hasCourses: boolean;
+  hasRunners: boolean;
+  hasResults: boolean;
 }
 
 /** @deprecated alias for {@link EventDashboard}. */
@@ -786,6 +808,13 @@ export interface CourseSummary {
   numberOfMaps: number;
   firstAsStart: boolean;
   lastAsFinish: boolean;
+  /**
+   * Public control id of the explicitly assigned start/finish control,
+   * or null when the course uses the lowest-seq default (or the
+   * first/last-control flags above).
+   */
+  startControlId: number | null;
+  finishControlId: number | null;
 }
 
 /** Course detail with class usage */

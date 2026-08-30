@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { router, eventProcedure } from "../trpc.js";
+import { router, viewProcedure, resultsViewProcedure } from "../trpc.js";
 import { toAbsolute } from "../timeConvert.js";
 import { runnerStatusToValue } from "../statusConvert.js";
 import {
@@ -16,7 +16,7 @@ import { resolveCourseExpectedPositions } from "./course.js";
  * placements are coming in a follow-up alongside the punch matcher port.
  */
 export const listsRouter = router({
-  startList: eventProcedure
+  startList: viewProcedure
     .input(z.object({ classId: z.number().int().optional() }).optional())
     .query(async ({ ctx, input }): Promise<StartListEntry[]> => {
       const where: Record<string, unknown> = {
@@ -69,7 +69,7 @@ export const listsRouter = router({
       );
     }),
 
-  resultList: eventProcedure
+  resultList: resultsViewProcedure
     .input(z.object({ classId: z.number().int().optional() }).optional())
     .query(async ({ ctx, input }): Promise<ResultEntry[]> => {
       const where: Record<string, unknown> = {
@@ -218,7 +218,7 @@ export const listsRouter = router({
       return result;
     }),
 
-  classesWithCounts: eventProcedure.query(async ({ ctx }) => {
+  classesWithCounts: viewProcedure.query(async ({ ctx }) => {
     const classes = await ctx.db.class.findMany({
       where: { eventId: ctx.event.id, removed: false },
       include: { course: { select: { name: true, lengthM: true } } },

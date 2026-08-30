@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
-import { router, eventProcedure, publicProcedure } from "../trpc.js";
+import { router, viewProcedure, manageProcedure, publicProcedure } from "../trpc.js";
 import { prisma } from "../db.js";
 import { WITHDRAWN_STATUSES, type ClubSummary, type ClubDetail } from "@oxygen/shared";
 import { valueToRunnerStatus } from "../statusConvert.js";
@@ -17,7 +17,7 @@ export const clubRouter = router({
   /** Aggregate clubs from the active event's runner roster.
    *  `showAll` includes clubs without participating runners (currently
    *  identical because clubs aren't first-class entities anymore). */
-  list: eventProcedure
+  list: viewProcedure
     .input(z.object({ showAll: z.boolean().optional() }).optional())
     .query(async ({ ctx }): Promise<ClubSummary[]> => {
     const runners = await ctx.db.runner.findMany({
@@ -85,7 +85,7 @@ export const clubRouter = router({
    * name rather than a per-event integer. The ClubsPage still calls
    * `detail({ id })` so we accept a numeric id and route it through.
    */
-  detail: eventProcedure
+  detail: viewProcedure
     .input(z.object({ id: z.number().int() }))
     .query(async ({ ctx, input }): Promise<ClubDetail> => {
       const where: Record<string, unknown> = {
@@ -133,7 +133,7 @@ export const clubRouter = router({
    * the new model — the ClubsPage UI surfaces these as disabled
    * operations and the API rejects them clearly.
    */
-  create: eventProcedure
+  create: manageProcedure
     .input(z.unknown())
     .mutation(async () => {
       throw new TRPCError({
@@ -143,7 +143,7 @@ export const clubRouter = router({
       });
     }),
 
-  update: eventProcedure
+  update: manageProcedure
     .input(z.unknown())
     .mutation(async () => {
       throw new TRPCError({
@@ -153,7 +153,7 @@ export const clubRouter = router({
       });
     }),
 
-  delete: eventProcedure
+  delete: manageProcedure
     .input(z.object({ id: z.number().int() }))
     .mutation(async () => {
       throw new TRPCError({
@@ -164,7 +164,7 @@ export const clubRouter = router({
     }),
 
   /** Detail for a club identified by eventor_id (or 0 + name for free-text). */
-  getById: eventProcedure
+  getById: viewProcedure
     .input(
       z.object({
         eventorId: z.number().int().optional(),
@@ -242,7 +242,7 @@ export const clubRouter = router({
    * for every club that *has* a directory entry with a logo (so the
    * caller knows which logos to load).
    */
-  logoMap: eventProcedure.query(async ({ ctx }) => {
+  logoMap: viewProcedure.query(async ({ ctx }) => {
     const runners = await ctx.db.runner.findMany({
       where: { eventId: ctx.event.id, removed: false },
       select: { eventorClubId: true },

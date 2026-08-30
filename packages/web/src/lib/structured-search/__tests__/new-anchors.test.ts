@@ -76,9 +76,9 @@ describe("class anchors", () => {
 describe("course anchors", () => {
   const anchors = createCourseAnchors(lbl) as AnchorDef<CourseSummary>[];
   const courses: CourseSummary[] = [
-    { id: 1, name: "Lång", controls: "31;42;55", controlCount: 3, length: 5200, climb: 100, numberOfMaps: 30, firstAsStart: false, lastAsFinish: true },
-    { id: 2, name: "Medel", controls: "31;42", controlCount: 2, length: 3200, climb: 50, numberOfMaps: 20, firstAsStart: true, lastAsFinish: false },
-    { id: 3, name: "Kort", controls: "31", controlCount: 1, length: 1500, climb: 20, numberOfMaps: 5, firstAsStart: true, lastAsFinish: true },
+    { id: 1, name: "Lång", controls: "31;42;55", controlCount: 3, length: 5200, climb: 100, numberOfMaps: 30, firstAsStart: false, lastAsFinish: true, startControlId: null, finishControlId: null },
+    { id: 2, name: "Medel", controls: "31;42", controlCount: 2, length: 3200, climb: 50, numberOfMaps: 20, firstAsStart: true, lastAsFinish: false, startControlId: null, finishControlId: null },
+    { id: 3, name: "Kort", controls: "31", controlCount: 1, length: 1500, climb: 20, numberOfMaps: 5, firstAsStart: true, lastAsFinish: true, startControlId: null, finishControlId: null },
   ];
 
   it("filters by length in km", () => {

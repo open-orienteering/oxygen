@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { router, eventProcedure, raceProcedure } from "../trpc.js";
+import { router, viewProcedure, manageRaceProcedure } from "../trpc.js";
 import { toRelative, toAbsolute } from "../timeConvert.js";
 import { generateDrawPreview } from "../draw/index.js";
 import type { DrawPreviewResult } from "@oxygen/shared";
@@ -36,7 +36,7 @@ const withdrawnEnums = WITHDRAWN_STATUSES.map(valueToRunnerStatus);
 
 export const drawRouter = router({
   /** Default settings + per-class meta for the draw panel. */
-  defaults: eventProcedure.query(async ({ ctx }) => {
+  defaults: viewProcedure.query(async ({ ctx }) => {
     const eventId = ctx.event.id;
     const zeroTime = ctx.event.zeroTime;
 
@@ -77,7 +77,7 @@ export const drawRouter = router({
   }),
 
   /** Generate a draw preview without persisting. */
-  preview: eventProcedure
+  preview: viewProcedure
     .input(drawInputSchema)
     .mutation(async ({ ctx, input }): Promise<DrawPreviewResult> => {
       const result = await generateDrawPreview(
@@ -122,7 +122,7 @@ export const drawRouter = router({
    * and FirstStart + StartInterval to each class. Times are stored
    * ZeroTime-relative; the engine speaks absolute deciseconds.
    */
-  execute: raceProcedure
+  execute: manageRaceProcedure
     .input(drawInputSchema)
     .mutation(
       async ({

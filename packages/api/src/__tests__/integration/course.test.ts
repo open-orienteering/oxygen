@@ -70,6 +70,45 @@ describe("course.create", () => {
     expect(detail.controlCount).toBe(controlSeqs.length);
     expect(detail.controlCodes.map((c) => c.id)).toEqual(controlSeqs);
   });
+
+  it("atomically links a newly created course to a class", async () => {
+    const cls = await caller.class.create({ name: "Auto-link class" });
+    const course = await caller.course.create({
+      name: "Auto-link class",
+      linkClassId: cls.id,
+    });
+    expect((await caller.class.getById({ id: cls.id })).courseId).toBe(course.id);
+    expect(
+      await ctx.db.journalEntry.count({
+        where: { eventId: ctx.eventId, type: "class.upserted" },
+      }),
+    ).toBeGreaterThan(0);
+  });
+
+  it("rolls back the course when the target class is already linked", async () => {
+    const cls = await caller.class.create({ name: "Already linked" });
+    await caller.course.create({
+      name: "First linked course",
+      linkClassId: cls.id,
+    });
+    const before = await ctx.db.course.count({
+      where: { eventId: ctx.eventId },
+    });
+    await expect(
+      caller.course.create({
+        name: "Must roll back",
+        linkClassId: cls.id,
+      }),
+    ).rejects.toMatchObject({ code: "BAD_REQUEST" });
+    expect(
+      await ctx.db.course.count({ where: { eventId: ctx.eventId } }),
+    ).toBe(before);
+    expect(
+      await ctx.db.course.findFirst({
+        where: { eventId: ctx.eventId, name: "Must roll back" },
+      }),
+    ).toBeNull();
+  });
 });
 
 describe("course.update — controlIds replacement", () => {

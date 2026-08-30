@@ -1,14 +1,27 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
 import { useNavigate, Link } from "react-router-dom";
 import { useTranslation } from "react-i18next";
+import type { EventInfo } from "@oxygen/shared";
 import { trpc } from "../lib/trpc";
 import { formatDate } from "../lib/format";
 import { formatBuildVersion } from "../lib/app-update";
 import { LanguageSelector } from "../components/LanguageSelector";
+import { UserChip } from "../components/UserChip";
+import { useCurrentUser } from "../context/CurrentUserContext";
+import {
+  CLASSIFICATION_LABEL_KEYS,
+  classificationLabelKey,
+  filterEvents,
+  groupEvents,
+  hasClassificationData,
+  type ClassificationFilter,
+} from "../lib/event-list";
 
 export function CompetitionSelector() {
   const navigate = useNavigate();
   const { t } = useTranslation("event");
+  const { t: ta } = useTranslation("auth");
+  const { user } = useCurrentUser();
   const competitions = trpc.competition.list.useQuery();
   const selectMutation = trpc.competition.select.useMutation({
     onSuccess: (data) => {
@@ -26,12 +39,24 @@ export function CompetitionSelector() {
 
   const [showCreate, setShowCreate] = useState(false);
   const [showEventor, setShowEventor] = useState(false);
+  const [search, setSearch] = useState("");
+  const [classification, setClassification] = useState<ClassificationFilter>("all");
+
+  const events = competitions.data ?? [];
+  const showTypeFilter = hasClassificationData(events);
+  const filtered = useMemo(
+    () => filterEvents(events, { query: search, classificationId: classification }),
+    [events, search, classification],
+  );
+  const grouped = useMemo(() => groupEvents(filtered, formatDate(new Date())), [filtered]);
+  const hasFilters = search.trim() !== "" || classification !== "all";
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-50 to-blue-50 flex items-center justify-center p-4">
-      <div className="w-full max-w-lg">
+      <div className="w-full max-w-2xl">
         {/* Language Selector — top right */}
-        <div className="flex justify-end mb-2">
+        <div className="flex justify-end mb-2 items-center gap-3">
+          <UserChip />
           <LanguageSelector />
         </div>
 
@@ -81,82 +106,71 @@ export function CompetitionSelector() {
           )}
 
           {competitions.data && competitions.data.length > 0 && (
-            <ul className="divide-y divide-slate-100">
-              {competitions.data.map((comp) => (
-                <li key={comp.id}>
-                  <div className="flex items-center hover:bg-blue-50 transition-colors group">
-                    <Link
-                      to={`/${comp.nameId}`}
-                      className="flex-1 px-6 py-4 text-left flex items-center justify-between cursor-pointer"
-                    >
-                      <div>
-                        <div className="font-semibold text-slate-900 group-hover:text-blue-700 transition-colors">
-                          {comp.name}
-                        </div>
-                        <div className="flex items-center gap-3 mt-1 text-sm text-slate-500">
-                          <span className="inline-flex items-center gap-1">
-                            <svg
-                              className="w-4 h-4"
-                              fill="none"
-                              viewBox="0 0 24 24"
-                              stroke="currentColor"
-                            >
-                              <path
-                                strokeLinecap="round"
-                                strokeLinejoin="round"
-                                strokeWidth={2}
-                                d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"
-                              />
-                            </svg>
-                            {comp.date}
-                          </span>
-                          <span className="text-slate-400 font-mono text-xs">
-                            {comp.nameId}
-                          </span>
-                          {/* remoteHost badge dropped in the PG migration —
-                              all events live in the single oxygen database now. */}
-                          {comp.annotation && (
-                            <span className="text-slate-400">
-                              {comp.annotation}
-                            </span>
-                          )}
-                          {comp.eventorEnv === "test" && (
-                            <span className="inline-flex items-center px-1.5 py-0.5 rounded bg-amber-100 text-amber-700 text-[10px] font-bold uppercase tracking-wider">
-                              {t("testEventor")}
-                            </span>
-                          )}
-                        </div>
-                      </div>
-                      <svg
-                        className="w-5 h-5 text-slate-300 group-hover:text-blue-500 transition-colors flex-shrink-0"
-                        fill="none"
-                        viewBox="0 0 24 24"
-                        stroke="currentColor"
-                      >
-                        <path
-                          strokeLinecap="round"
-                          strokeLinejoin="round"
-                          strokeWidth={2}
-                          d="M9 5l7 7-7 7"
-                        />
-                      </svg>
-                    </Link>
+            <>
+              <div className="flex gap-2 p-3 border-b border-slate-100">
+                <input
+                  type="search"
+                  data-testid="event-search"
+                  value={search}
+                  onChange={(e) => setSearch(e.target.value)}
+                  placeholder={t("searchPlaceholder")}
+                  className="flex-1 px-3 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                />
+                {showTypeFilter && (
+                  <select
+                    data-testid="event-type-filter"
+                    value={
+                      typeof classification === "number"
+                        ? String(classification)
+                        : classification
+                    }
+                    onChange={(e) => {
+                      const v = e.target.value;
+                      if (v === "all" || v === "unclassified") {
+                        setClassification(v);
+                      } else {
+                        setClassification(Number(v));
+                      }
+                    }}
+                    className="px-3 py-2 border border-slate-200 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  >
+                    <option value="all">{t("typeFilterAll")}</option>
+                    {Object.entries(CLASSIFICATION_LABEL_KEYS).map(([id, key]) => (
+                      <option key={id} value={id}>
+                        {t(key)}
+                      </option>
+                    ))}
+                    <option value="unclassified">{t("typeUnclassified")}</option>
+                  </select>
+                )}
+              </div>
+              {filtered.length === 0 ? (
+                <div className="p-8 text-center text-slate-500">
+                  <p>{t("noMatches")}</p>
+                  {hasFilters && (
                     <button
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        setDeleteConfirm({ nameId: comp.nameId, name: comp.name });
+                      type="button"
+                      data-testid="clear-event-filters"
+                      onClick={() => {
+                        setSearch("");
+                        setClassification("all");
                       }}
-                      className="px-3 py-4 text-slate-300 hover:text-red-500 transition-colors cursor-pointer opacity-0 group-hover:opacity-100"
-                      title={t("deleteCompetitionTitle")}
+                      className="mt-3 text-sm text-blue-600 hover:text-blue-800 cursor-pointer"
                     >
-                      <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
-                      </svg>
+                      {t("clearFilters")}
                     </button>
-                  </div>
-                </li>
-              ))}
-            </ul>
+                  )}
+                </div>
+              ) : (
+                <EventList
+                  upcoming={grouped.upcoming}
+                  past={grouped.past}
+                  onDelete={(comp) =>
+                    setDeleteConfirm({ nameId: comp.nameId, name: comp.name })
+                  }
+                />
+              )}
+            </>
           )}
         </div>
 
@@ -186,6 +200,15 @@ export function CompetitionSelector() {
             </svg>
             {t("importFromEventor")}
           </button>
+        </div>
+        <div className="mt-3">
+          <Link
+            to="/library"
+            data-testid="library-link"
+            className="flex w-full px-4 py-3 bg-white border border-slate-200 rounded-xl text-sm font-medium text-slate-700 hover:bg-slate-50 hover:border-slate-300 transition-colors items-center justify-center gap-2 shadow-sm"
+          >
+            {t("libraryLink", { ns: "library" })}
+          </Link>
         </div>
 
         {/* Create new competition form */}
@@ -268,8 +291,142 @@ export function CompetitionSelector() {
             {t("buildVersion", { ns: "common" })}: {formatBuildVersion(__BUILD_VERSION__)}
           </div>
           <PurgeButton onPurged={() => competitions.refetch()} />
+          {user?.isAdmin && (
+            <div>
+              <Link
+                to="/admin/users"
+                data-testid="admin-users-link"
+                className="text-xs text-blue-600 hover:text-blue-800"
+              >
+                {ta("usersLink")}
+              </Link>
+            </div>
+          )}
         </div>
       </div>
+    </div>
+  );
+}
+
+// ─── Event list (list view; calendar sibling can slot in later) ─
+
+function EventList({
+  upcoming,
+  past,
+  onDelete,
+}: {
+  upcoming: EventInfo[];
+  past: EventInfo[];
+  onDelete: (comp: EventInfo) => void;
+}) {
+  const { t } = useTranslation("event");
+  return (
+    <div>
+      {upcoming.length > 0 && (
+        <EventGroup
+          title={t("upcoming")}
+          testId="event-group-upcoming"
+          events={upcoming}
+          onDelete={onDelete}
+        />
+      )}
+      {past.length > 0 && (
+        <EventGroup
+          title={t("past")}
+          testId="event-group-past"
+          events={past}
+          onDelete={onDelete}
+        />
+      )}
+    </div>
+  );
+}
+
+function EventGroup({
+  title,
+  testId,
+  events,
+  onDelete,
+}: {
+  title: string;
+  testId: string;
+  events: EventInfo[];
+  onDelete: (comp: EventInfo) => void;
+}) {
+  const { t } = useTranslation("event");
+  return (
+    <div data-testid={testId}>
+      <div className="sticky top-0 z-10 px-4 py-1.5 bg-slate-50/95 backdrop-blur text-[11px] font-semibold uppercase tracking-wider text-slate-500 border-y border-slate-100">
+        {title}
+      </div>
+      <ul className="divide-y divide-slate-100">
+        {events.map((comp) => (
+          <li key={comp.id}>
+            <div className="flex items-center hover:bg-blue-50 transition-colors group">
+              <Link
+                to={`/${comp.nameId}`}
+                className="flex-1 min-w-0 px-4 py-2.5 text-left cursor-pointer"
+              >
+                <div className="flex items-baseline justify-between gap-3">
+                  <div className="font-semibold text-slate-900 group-hover:text-blue-700 transition-colors truncate">
+                    {comp.name}
+                  </div>
+                  <div className="text-sm text-slate-500 tabular-nums flex-shrink-0">
+                    {comp.date}
+                  </div>
+                </div>
+                <div className="flex items-center gap-2 mt-0.5 text-xs text-slate-400 min-w-0">
+                  <span className="font-mono truncate">{comp.nameId}</span>
+                  {comp.owner && (
+                    <span data-testid="event-owner" className="truncate">
+                      {t("eventOwner", { owner: comp.owner })}
+                    </span>
+                  )}
+                  {comp.canManage && (
+                    <span
+                      data-testid="event-manager-badge"
+                      className="flex-shrink-0 px-1.5 py-0.5 rounded bg-blue-50 text-blue-700 font-medium uppercase tracking-wide"
+                    >
+                      {t("managerBadge")}
+                    </span>
+                  )}
+                  {comp.annotation && (
+                    <span className="truncate">{comp.annotation}</span>
+                  )}
+                  {(() => {
+                    const labelKey =
+                      comp.classificationId != null
+                        ? classificationLabelKey(comp.classificationId)
+                        : undefined;
+                    return labelKey ? (
+                      <span className="inline-flex items-center px-1.5 py-0.5 rounded bg-slate-100 text-slate-600 text-[10px] font-medium flex-shrink-0">
+                        {t(labelKey)}
+                      </span>
+                    ) : null;
+                  })()}
+                  {comp.eventorEnv === "test" && (
+                    <span className="inline-flex items-center px-1.5 py-0.5 rounded bg-amber-100 text-amber-700 text-[10px] font-bold uppercase tracking-wider flex-shrink-0">
+                      {t("testEventor")}
+                    </span>
+                  )}
+                </div>
+              </Link>
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onDelete(comp);
+                }}
+                className="px-3 py-4 text-slate-300 hover:text-red-500 transition-colors cursor-pointer opacity-0 group-hover:opacity-100"
+                title={t("deleteCompetitionTitle")}
+              >
+                <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                </svg>
+              </button>
+            </div>
+          </li>
+        ))}
+      </ul>
     </div>
   );
 }
@@ -286,15 +443,6 @@ function CreateCompetitionForm({
   const { t } = useTranslation("event");
   const [name, setName] = useState("");
   const [date, setDate] = useState(formatDate(new Date()));
-  const [dbName, setDbName] = useState("");
-  const [showAdvanced, setShowAdvanced] = useState(false);
-
-  // Separate DB connection fields
-  const [useRemoteDb, setUseRemoteDb] = useState(false);
-  const [dbHost, setDbHost] = useState("");
-  const [dbPort, setDbPort] = useState("3306");
-  const [dbUser, setDbUser] = useState("");
-  const [dbPassword, setDbPassword] = useState("");
 
   const createMutation = trpc.competition.create.useMutation({
     onSuccess: (data) => onCreated(data.nameId),
@@ -303,14 +451,6 @@ function CreateCompetitionForm({
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!name.trim()) return;
-    // Remote-DB / per-event dbName settings are gone in the PG schema —
-    // every event lives in the single oxygen schema.
-    void dbName;
-    void dbHost;
-    void dbPort;
-    void dbUser;
-    void dbPassword;
-    void useRemoteDb;
     createMutation.mutate({
       name: name.trim(),
       date,
@@ -358,114 +498,6 @@ function CreateCompetitionForm({
             className="w-full px-4 py-2.5 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
             required
           />
-        </div>
-        <div>
-          <button
-            type="button"
-            onClick={() => setShowAdvanced(!showAdvanced)}
-            className="text-xs text-slate-400 hover:text-slate-600 cursor-pointer flex items-center gap-1"
-          >
-            <svg
-              className={`w-3 h-3 transition-transform ${showAdvanced ? "rotate-90" : ""}`}
-              fill="none"
-              viewBox="0 0 24 24"
-              stroke="currentColor"
-            >
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
-            </svg>
-            {showAdvanced ? t("hideAdvanced") : t("showAdvanced")}
-          </button>
-          {showAdvanced && (
-            <div className="mt-3 space-y-3 p-3 bg-slate-50 rounded-lg border border-slate-200">
-              <div>
-                <label className="block text-sm font-medium text-slate-600 mb-1">
-                  {t("databaseName")} <span className="text-slate-400 font-normal">({t("optional", { ns: "common" })})</span>
-                </label>
-                <input
-                  type="text"
-                  value={dbName}
-                  onChange={(e) => setDbName(e.target.value)}
-                  placeholder={t("databaseNamePlaceholder")}
-                  className="w-full px-4 py-2.5 border border-slate-200 rounded-lg text-sm font-mono focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent bg-white"
-                />
-              </div>
-
-              {/* Remote DB toggle */}
-              <div className="pt-1 border-t border-slate-200">
-                <label className="flex items-center gap-2 cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={useRemoteDb}
-                    onChange={(e) => setUseRemoteDb(e.target.checked)}
-                    className="rounded border-slate-300 text-blue-600 focus:ring-blue-500 cursor-pointer"
-                  />
-                  <span className="text-sm text-slate-600">{t("useSeparateDb")}</span>
-                </label>
-                <p className="text-xs text-slate-400 mt-1 ml-6">
-                  {t("useSeparateDbDesc")}
-                </p>
-              </div>
-
-              {useRemoteDb && (
-                <div className="space-y-3 pl-6">
-                  <div className="grid grid-cols-3 gap-3">
-                    <div className="col-span-2">
-                      <label className="block text-xs font-medium text-slate-500 mb-1">{t("host", { ns: "common" })}</label>
-                      <input
-                        type="text"
-                        value={dbHost}
-                        onChange={(e) => setDbHost(e.target.value)}
-                        placeholder="e.g. 192.168.1.100"
-                        className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm font-mono focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent bg-white"
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-xs font-medium text-slate-500 mb-1">{t("port", { ns: "common" })}</label>
-                      <input
-                        type="number"
-                        value={dbPort}
-                        onChange={(e) => setDbPort(e.target.value)}
-                        placeholder="3306"
-                        className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm font-mono focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent bg-white tabular-nums"
-                      />
-                    </div>
-                  </div>
-                  <div className="grid grid-cols-2 gap-3">
-                    <div>
-                      <label className="block text-xs font-medium text-slate-500 mb-1">
-                        {t("username", { ns: "common" })} <span className="text-slate-400 font-normal">({t("optional", { ns: "common" })})</span>
-                      </label>
-                      <input
-                        type="text"
-                        value={dbUser}
-                        onChange={(e) => setDbUser(e.target.value)}
-                        placeholder="meos"
-                        className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm font-mono focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent bg-white"
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-xs font-medium text-slate-500 mb-1">
-                        {t("password", { ns: "common" })} <span className="text-slate-400 font-normal">({t("optional", { ns: "common" })})</span>
-                      </label>
-                      <input
-                        type="password"
-                        value={dbPassword}
-                        onChange={(e) => setDbPassword(e.target.value)}
-                        placeholder="••••••"
-                        className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent bg-white"
-                      />
-                    </div>
-                  </div>
-                  <p className="text-xs text-amber-600 flex items-center gap-1">
-                    <svg className="w-3.5 h-3.5 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4c-.77-.833-1.964-.833-2.732 0L4.082 16.5c-.77.833.192 2.5 1.732 2.5z" />
-                    </svg>
-                    {t("remoteMeosWarning")}
-                  </p>
-                </div>
-              )}
-            </div>
-          )}
         </div>
         <div className="flex gap-3 pt-1">
           <button

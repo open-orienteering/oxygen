@@ -20,6 +20,7 @@ import { useTranslation } from "react-i18next";
 import { useParams } from "react-router-dom";
 import { trpc } from "../lib/trpc";
 import { ClubLogo } from "../components/ClubLogo";
+import { KioskAccessGate } from "../components/KioskAccessGate";
 
 // ─── Types ──────────────────────────────────────────────────
 
@@ -87,6 +88,14 @@ function getClassColor(classId: number) {
 // ─── Main Component ─────────────────────────────────────────
 
 export function StartScreenPage() {
+    return (
+        <KioskAccessGate>
+            <StartScreenPageBody />
+        </KioskAccessGate>
+    );
+}
+
+function StartScreenPageBody() {
     const { t } = useTranslation("race");
     const { nameId } = useParams<{ nameId: string }>();
     const [offsetMinutes, setOffsetMinutes] = useState(3);

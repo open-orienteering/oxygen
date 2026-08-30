@@ -74,10 +74,21 @@ const UNITS_PER_MM = 100;
 
 /** Control circle radius the viewer draws, paper mm (2.5 mm ≈ ISOM 5 mm ⌀). */
 export const CIRCLE_RADIUS_MM = 2.5;
-/** A point feature within this of the rim / leg centreline gets a cut. */
-const POINT_REACH_MM = 0.6;
+/**
+ * A point feature within this of the rim / leg centreline gets a cut.
+ * The overprint stroke is 0.35 mm wide, so it reaches ~0.18 mm either
+ * side of the line; a compact ISOM point symbol is ~0.5 mm across. Much
+ * beyond 0.45 mm the two no longer touch and a cut would be gratuitous.
+ */
+const POINT_REACH_MM = 0.45;
+/**
+ * Half-width of ink cleared around a point feature, paper mm — enough to
+ * free the symbol itself plus half the overprint stroke. Cutting wider
+ * only fragments the circle without revealing more map.
+ */
+const POINT_CUT_HALF_MM = 0.4;
 /** Half-width of ink to clear around a black line crossing, paper mm. */
-const LINE_REACH_MM = 0.45;
+const LINE_REACH_MM = 0.35;
 /** Rim sampling step for area-interior spans, degrees. */
 const AREA_STEP_DEG = 4;
 /** Slits narrower than this are dropped (invisible anyway). */
@@ -91,7 +102,7 @@ const MIN_LEG_GAP_MM = 0.6;
 /** Never gap away more than this fraction of a leg. */
 const MAX_TOTAL_LEG_GAP = 0.7;
 /** Longest half-gap a single oblique line crossing may open, paper mm. */
-const MAX_LINE_HALF_MM = 2.0;
+const MAX_LINE_HALF_MM = 1.2;
 
 type Pt = [number, number];
 
@@ -233,7 +244,7 @@ export function circleCuts(
   const c: Pt = [xMm, yMm];
   const gaps: ArcGap[] = [];
   const pointHalfDeg =
-    (Math.asin(Math.min(0.95, POINT_REACH_MM / radiusMm)) * 180) / Math.PI;
+    (Math.asin(Math.min(0.95, POINT_CUT_HALF_MM / radiusMm)) * 180) / Math.PI;
   const lineHalfDeg =
     (Math.asin(Math.min(0.95, LINE_REACH_MM / radiusMm)) * 180) / Math.PI;
 
@@ -351,7 +362,7 @@ export function legGaps(aMm: Pt, bMm: Pt, objects: SlimMapObject[]): LegGap[] {
 
     if (kind === "point") {
       const { dist, t } = pointSegDistance(pts[0], aMm, bMm);
-      if (dist <= POINT_REACH_MM) pushMm(t, POINT_REACH_MM + 0.2);
+      if (dist <= POINT_REACH_MM) pushMm(t, POINT_CUT_HALF_MM);
     } else if (kind === "line") {
       for (let i = 0; i < pts.length - 1; i++) {
         const hit = segSegIntersection(aMm, bMm, pts[i], pts[i + 1]);
