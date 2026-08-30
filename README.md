@@ -49,11 +49,11 @@ For a deeper dive into database design, deployment options, and subsystem detail
 git clone https://github.com/open-orienteering/oxygen
 cd oxygen
 cp packages/api/.env.example packages/api/.env
-docker compose up -d        # starts PostgreSQL 18
+docker compose up -d postgres   # start PostgreSQL 18
 pnpm install
-pnpm db:push                # apply the oxygen schema
+pnpm db:push                    # apply the oxygen schema
 pnpm db:generate
-pnpm dev                    # API on :3002, web on :5173
+pnpm dev                        # API on :3002, web on :5173
 ```
 
 ### Manual setup
