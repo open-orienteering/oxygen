@@ -10,6 +10,10 @@
  * keyboard and gesture handling on the page trivially unit-testable.
  */
 
+import type { SeriesAllocationEntry } from "@oxygen/shared";
+
+export type { SeriesAllocationEntry } from "@oxygen/shared";
+
 /** An empty-map or leg click: the anchor for contextual add/insert actions. */
 export interface PhantomPoint {
   /** Map mm. */
@@ -97,6 +101,18 @@ export function courseEditorReducer(
   }
 }
 
+/** Punch codes already placed in the event (semicolon-separated lists). */
+export function parseUsedCodes(existingCodes: Iterable<string>): Set<number> {
+  const used = new Set<number>();
+  for (const codes of existingCodes) {
+    for (const part of String(codes).split(";")) {
+      const n = parseInt(part.trim(), 10);
+      if (Number.isFinite(n) && n > 0 && String(n) === part.trim()) used.add(n);
+    }
+  }
+  return used;
+}
+
 /**
  * Suggest a punch code for a newly placed control: the smallest unused
  * code ≥ 31 (SI codes 1–30 are reserved for start/finish/check/clear
@@ -107,16 +123,98 @@ export function courseEditorReducer(
  *   (semicolon-separated lists of punch codes).
  */
 export function nextFreeControlCode(existingCodes: Iterable<string>): number {
-  const used = new Set<number>();
-  for (const codes of existingCodes) {
-    for (const part of String(codes).split(";")) {
-      const n = parseInt(part.trim(), 10);
-      if (Number.isFinite(n) && n > 0 && String(n) === part.trim()) used.add(n);
-    }
-  }
+  const used = parseUsedCodes(existingCodes);
   let code = 31;
   while (used.has(code)) code++;
   return code;
+}
+
+/**
+ * Next punch code from the club series inventory. Returns the first
+ * allocation entry whose code is unused in the event. When
+ * `preferredSeriesId` is set, that series' free codes are tried first;
+ * once it is exhausted allocation falls through to the normal priority
+ * order. Empty or exhausted inventory falls back to
+ * {@link nextFreeControlCode} with `entry: null`.
+ */
+export function nextSeriesControlCode(
+  allocation: SeriesAllocationEntry[],
+  existingCodes: Iterable<string>,
+  preferredSeriesId: string | null = null,
+): { code: number; entry: SeriesAllocationEntry | null } {
+  const used = parseUsedCodes(existingCodes);
+  if (preferredSeriesId !== null) {
+    for (const entry of allocation) {
+      if (entry.seriesId === preferredSeriesId && !used.has(entry.code)) {
+        return { code: entry.code, entry };
+      }
+    }
+  }
+  for (const entry of allocation) {
+    if (!used.has(entry.code)) {
+      return { code: entry.code, entry };
+    }
+  }
+  return { code: nextFreeControlCode(existingCodes), entry: null };
+}
+
+export interface InventorySeriesView {
+  seriesId: string;
+  seriesName: string;
+  borrowed: boolean;
+  codes: { code: number; type: "normal" | "srr"; used: boolean }[];
+}
+
+/**
+ * Group the flat allocation by series while preserving allocation order,
+ * and mark every occurrence of an event-used code.
+ */
+export function buildInventoryView(
+  allocation: SeriesAllocationEntry[],
+  existingCodes: Iterable<string>,
+): InventorySeriesView[] {
+  const used = parseUsedCodes(existingCodes);
+  const views: InventorySeriesView[] = [];
+  const byId = new Map<string, InventorySeriesView>();
+  for (const entry of allocation) {
+    let view = byId.get(entry.seriesId);
+    if (!view) {
+      view = {
+        seriesId: entry.seriesId,
+        seriesName: entry.seriesName,
+        borrowed: entry.borrowed,
+        codes: [],
+      };
+      byId.set(entry.seriesId, view);
+      views.push(view);
+    }
+    view.codes.push({
+      code: entry.code,
+      type: entry.type,
+      used: used.has(entry.code),
+    });
+  }
+  return views;
+}
+
+/** First unused SRR-capable code from the allocation, or null. */
+export function nextFreeSrrCode(
+  allocation: SeriesAllocationEntry[],
+  existingCodes: Iterable<string>,
+): SeriesAllocationEntry | null {
+  const used = parseUsedCodes(existingCodes);
+  return allocation.find((entry) => entry.type === "srr" && !used.has(entry.code)) ?? null;
+}
+
+/** Whether a single or semicolon-separated code string includes an SRR unit. */
+export function codesHaveSrr(
+  codes: string,
+  allocation: SeriesAllocationEntry[],
+): boolean {
+  const srrCodes = new Set(
+    allocation.filter((entry) => entry.type === "srr").map((entry) => entry.code),
+  );
+  return [...parseUsedCodes([codes])].some((code) => srrCodes.has(code));
 }
 
 /**
@@ -142,6 +240,35 @@ export function courseMembership(
     }
   }
   return out;
+}
+
+/**
+ * Resolve the start/finish control a course effectively uses, mirroring
+ * the server's geometry builder: the explicitly assigned control when it
+ * exists, otherwise the lowest-id control of that role (server default is
+ * lowest seq; code-less start/finish rows expose seq as their public id).
+ *
+ * @param coords positioned controls from `course.controlCoordinates`
+ *   (`status` uses the wire integers: 4 = start, 5 = finish).
+ * @param assignedId the course's `startControlId` / `finishControlId`.
+ * @returns the public id of the effective control, or `null` when the
+ *   event has none of that role.
+ */
+export function effectiveRoleControlId(
+  coords: ReadonlyArray<{ id: number; status: number }>,
+  role: "start" | "finish",
+  assignedId: number | null,
+): number | null {
+  const status = role === "start" ? 4 : 5;
+  const candidates = coords.filter((c) => c.status === status);
+  if (candidates.length === 0) return null;
+  if (assignedId != null && candidates.some((c) => c.id === assignedId)) {
+    return assignedId;
+  }
+  return candidates.reduce(
+    (min, c) => (c.id < min ? c.id : min),
+    candidates[0].id,
+  );
 }
 
 /**
@@ -175,4 +302,34 @@ export function sequenceLegMeters(
     prev = p;
   }
   return out;
+}
+
+/** Names of classes without a linked course, excluding names already used by courses. */
+export function courselessClassNames(
+  classes: { name: string; courseId: number }[],
+  courseNames: Iterable<string>,
+): string[] {
+  const usedNames = new Set(
+    Array.from(courseNames, (name) => name.toLocaleLowerCase()),
+  );
+  return classes
+    .filter(
+      (cls) =>
+        cls.courseId === 0 && !usedNames.has(cls.name.toLocaleLowerCase()),
+    )
+    .map((cls) => cls.name);
+}
+
+/** Case-insensitive exact match to an unlinked class; returns its public seq. */
+export function matchCourselessClass(
+  name: string,
+  classes: { id: number; name: string; courseId: number }[],
+): number | null {
+  const normalized = name.toLocaleLowerCase();
+  return (
+    classes.find(
+      (cls) =>
+        cls.courseId === 0 && cls.name.toLocaleLowerCase() === normalized,
+    )?.id ?? null
+  );
 }

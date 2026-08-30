@@ -11,6 +11,7 @@ import { spawn, type ChildProcessByStdio } from "node:child_process";
 import { PassThrough, Readable } from "node:stream";
 import type { FastifyInstance } from "fastify";
 import { prisma } from "./db.js";
+import { assertRestAccess } from "./restGuard.js";
 
 // ─── Types ─────────────────────────────────────────────────
 
@@ -253,6 +254,9 @@ export function registerBackupRoute(server: FastifyInstance): void {
       if (!/^[A-Za-z0-9_-]+$/.test(name)) {
         return reply.code(400).send({ error: "Invalid event name" });
       }
+      if (!(await assertRestAccess(req, reply, { nameId: name, cap: "event.manage" }))) {
+        return;
+      }
       const target = await getBackupTarget(name);
       if (!target) {
         return reply.code(404).send({ error: `Event "${name}" not found` });
@@ -276,6 +280,9 @@ export function registerBackupRoute(server: FastifyInstance): void {
       }
       if (!/^[A-Za-z0-9_-]+$/.test(name)) {
         return reply.code(400).send({ error: "Invalid event name" });
+      }
+      if (!(await assertRestAccess(req, reply, { nameId: name, cap: "event.manage" }))) {
+        return;
       }
       const target = await getBackupTarget(name);
       if (!target) {

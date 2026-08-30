@@ -208,9 +208,9 @@ Communication between the admin window and kiosk uses the BroadcastChannel API, 
 
 ### Admin shell navigation
 
-`CompetitionShell` derives the tab bar from `competition.dashboard` `contentSignals` (`hasMap`, `hasClasses`, `hasCourses`, `hasRunners`, `hasResults`). Tabs that are not yet relevant collapse into More rather than disappearing. While the dashboard query is still loading, the shell uses the previous always-on layout so a mature event does not flash a planning-only bar. Layout rules live in `packages/web/src/lib/shell-tabs.ts`.
+`CompetitionShell` derives the tab bar from `competition.dashboard` `contentSignals` (`hasMap`, `hasClasses`, `hasCourses`, `hasRunners`, `hasResults`) intersected with the user's capabilities. Tabs that are not yet relevant collapse into More; tabs the user cannot access are omitted. While the dashboard query is still loading, the shell uses the previous always-on layout (still capability-filtered) so a mature event does not flash a planning-only bar. Layout rules live in `packages/web/src/lib/shell-tabs.ts`.
 
-Identity (optional): see [authentication.md](authentication.md). With `AUTH_MODE=off` nothing changes. With `proxy`/`dev`, event-scoped tRPC requires an invited user; kiosk and start screen stay renderable.
+Identity (optional): see [authentication.md](authentication.md). With `AUTH_MODE=off` nothing changes. With `proxy`/`dev`, event-scoped tRPC requires an invited user plus a capability; kiosk and start screen stay renderable with a kiosk key (or a logged-in user who already has the matching capability).
 
 ### Test Lab
 Built-in data generation and race simulation for development and demo purposes:

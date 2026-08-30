@@ -201,6 +201,15 @@ export function CompetitionSelector() {
             {t("importFromEventor")}
           </button>
         </div>
+        <div className="mt-3">
+          <Link
+            to="/library"
+            data-testid="library-link"
+            className="flex w-full px-4 py-3 bg-white border border-slate-200 rounded-xl text-sm font-medium text-slate-700 hover:bg-slate-50 hover:border-slate-300 transition-colors items-center justify-center gap-2 shadow-sm"
+          >
+            {t("libraryLink", { ns: "library" })}
+          </Link>
+        </div>
 
         {/* Create new competition form */}
         {showCreate && (
@@ -368,6 +377,19 @@ function EventGroup({
                 </div>
                 <div className="flex items-center gap-2 mt-0.5 text-xs text-slate-400 min-w-0">
                   <span className="font-mono truncate">{comp.nameId}</span>
+                  {comp.owner && (
+                    <span data-testid="event-owner" className="truncate">
+                      {t("eventOwner", { owner: comp.owner })}
+                    </span>
+                  )}
+                  {comp.canManage && (
+                    <span
+                      data-testid="event-manager-badge"
+                      className="flex-shrink-0 px-1.5 py-0.5 rounded bg-blue-50 text-blue-700 font-medium uppercase tracking-wide"
+                    >
+                      {t("managerBadge")}
+                    </span>
+                  )}
                   {comp.annotation && (
                     <span className="truncate">{comp.annotation}</span>
                   )}

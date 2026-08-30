@@ -62,6 +62,7 @@ const WEIGHTS = {
   "phase2.spec.ts": 3,
   "printer-settings.spec.ts": 3,
   "wide-screen-map-pane.spec.ts": 3,
+  "control-series.spec.ts": 4, // library + map upload + 6 placements
 };
 const DEFAULT_WEIGHT = 2;
 

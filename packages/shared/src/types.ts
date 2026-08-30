@@ -306,6 +306,10 @@ export interface EventInfo {
    * 1 Championship, 2 National, 3 District, 4 Local, 5 Club, 6 International.
    */
   classificationId?: number;
+  /** True when the current user has `event.manage` on this event. */
+  canManage?: boolean;
+  /** Display name of the user who created the event, when known. */
+  owner?: string;
 }
 
 /** @deprecated alias for {@link EventInfo} kept during the post-MeOS rename window. */
@@ -804,6 +808,13 @@ export interface CourseSummary {
   numberOfMaps: number;
   firstAsStart: boolean;
   lastAsFinish: boolean;
+  /**
+   * Public control id of the explicitly assigned start/finish control,
+   * or null when the course uses the lowest-seq default (or the
+   * first/last-control flags above).
+   */
+  startControlId: number | null;
+  finishControlId: number | null;
 }
 
 /** Course detail with class usage */

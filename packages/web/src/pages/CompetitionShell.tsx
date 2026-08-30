@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, useCallback, useMemo, lazy, Suspense } from "react";
+import { useEffect, useRef, useState, useCallback, useMemo, lazy, Suspense, type ReactNode } from "react";
 import {
   useParams,
   useNavigate,
@@ -13,6 +13,9 @@ import { trpc } from "../lib/trpc";
 import { ClubLogo } from "../components/ClubLogo";
 import { LanguageSelector } from "../components/LanguageSelector";
 import { UserChip } from "../components/UserChip";
+import { ForbiddenPane } from "../components/ForbiddenPane";
+import { CapabilitiesProvider, useCapabilities } from "../context/CapabilitiesContext";
+import type { Capability } from "@oxygen/shared";
 import { useDeviceManager } from "../context/DeviceManager";
 import { usePrinter } from "../context/PrinterContext";
 import { fetchLogoRaster } from "../lib/receipt-printer/index.js";
@@ -86,10 +89,19 @@ const tabLabelKeys = {
 } as const satisfies Record<Tab, string>;
 
 export function CompetitionShell() {
+  return (
+    <CapabilitiesProvider>
+      <CompetitionShellInner />
+    </CapabilitiesProvider>
+  );
+}
+
+function CompetitionShellInner() {
   const { nameId } = useParams<{ nameId: string }>();
   const navigate = useNavigate();
   const location = useLocation();
   const { t } = useTranslation("nav");
+  const { capabilities } = useCapabilities();
 
   // Determine active tab from current URL path
   const pathAfterNameId = location.pathname.split(`/${nameId}/`)[1] ?? "";
@@ -149,8 +161,8 @@ export function CompetitionShell() {
   };
 
   const { primary: primaryTabs, overflow: overflowTabs } = useMemo(
-    () => computeTabLayout(dashboard.data?.contentSignals ?? null),
-    [dashboard.data?.contentSignals],
+    () => computeTabLayout(dashboard.data?.contentSignals ?? null, capabilities),
+    [dashboard.data?.contentSignals, capabilities],
   );
   const activeIsOverflow = overflowTabs.some((tab) => tab.id === activeTab);
   const showProgressiveHint = shouldShowProgressiveHint(overflowTabs);
@@ -507,25 +519,25 @@ export function CompetitionShell() {
         >
           <Suspense fallback={<div className="flex justify-center py-12"><div className="w-8 h-8 border-4 border-blue-200 border-t-blue-600 rounded-full animate-spin" /></div>}>
           <Routes>
-            <Route index element={<CompetitionDashboard />} />
-            <Route path="event" element={<EventPage />} />
-            <Route path="runners" element={<RunnerManagement />} />
-            <Route path="startlist" element={<StartListPage />} />
-            <Route path="results" element={<ResultsPage />} />
-            <Route path="classes" element={<ClassesPage />} />
-            <Route path="courses" element={<CoursesPage />} />
-            <Route path="course-editor" element={<CourseEditorPage />} />
-            <Route path="controls" element={<ControlsPage />} />
-            <Route path="clubs" element={<ClubsPage />} />
-            <Route path="cards" element={<CardsPage />} />
-            <Route path="start-station" element={<StartStation />} />
-            <Route path="finish-station" element={<FinishStation />} />
-            <Route path="card-readout" element={<CardReadout />} />
+            <Route index element={<Guarded cap="event.view"><CompetitionDashboard /></Guarded>} />
+            <Route path="event" element={<Guarded cap="event.view"><EventPage /></Guarded>} />
+            <Route path="runners" element={<Guarded cap="event.view"><RunnerManagement /></Guarded>} />
+            <Route path="startlist" element={<Guarded cap="event.view"><StartListPage /></Guarded>} />
+            <Route path="results" element={<Guarded cap="results.view"><ResultsPage /></Guarded>} />
+            <Route path="classes" element={<Guarded cap="event.view"><ClassesPage /></Guarded>} />
+            <Route path="courses" element={<Guarded cap="courses.view"><CoursesPage /></Guarded>} />
+            <Route path="course-editor" element={<Guarded cap="courses.view"><CourseEditorPage /></Guarded>} />
+            <Route path="controls" element={<Guarded cap="courses.view"><ControlsPage /></Guarded>} />
+            <Route path="clubs" element={<Guarded cap="event.view"><ClubsPage /></Guarded>} />
+            <Route path="cards" element={<Guarded cap="race.operate"><CardsPage /></Guarded>} />
+            <Route path="start-station" element={<Guarded cap="race.operate"><StartStation /></Guarded>} />
+            <Route path="finish-station" element={<Guarded cap="race.operate"><FinishStation /></Guarded>} />
+            <Route path="card-readout" element={<Guarded cap="race.operate"><CardReadout /></Guarded>} />
             <Route path="registration" element={<Navigate to="" replace />} />
-            <Route path="backup-punches" element={<BackupPunchesPage />} />
-            <Route path="test-lab" element={<TestLabPage />} />
-            <Route path="tracks" element={<TracksPage />} />
-            <Route path="registration-trends" element={<RegistrationTrendsPage />} />
+            <Route path="backup-punches" element={<Guarded cap="race.operate"><BackupPunchesPage /></Guarded>} />
+            <Route path="test-lab" element={<Guarded cap="event.manage"><TestLabPage /></Guarded>} />
+            <Route path="tracks" element={<Guarded cap="results.view"><TracksPage /></Guarded>} />
+            <Route path="registration-trends" element={<Guarded cap="event.view"><RegistrationTrendsPage /></Guarded>} />
             <Route path="*" element={<Navigate to="" replace />} />
           </Routes>
           </Suspense>
@@ -910,6 +922,18 @@ function ReaderStatusIndicator() {
       )}
     </div>
   );
+}
+
+function Guarded({
+  cap,
+  children,
+}: {
+  cap: Capability;
+  children: ReactNode;
+}) {
+  const { has, loaded } = useCapabilities();
+  if (loaded && !has(cap)) return <ForbiddenPane />;
+  return children;
 }
 
 // ─── External changes probe ────────────────────────────────

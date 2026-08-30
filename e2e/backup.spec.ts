@@ -33,7 +33,7 @@ test.describe("Database Backup", () => {
       timeout: 10000,
     });
     await expect(
-      page.getByRole("link", { name: /Download backup/i }),
+      page.getByRole("button", { name: /Download backup/i }),
     ).toBeVisible();
   });
 
@@ -43,7 +43,7 @@ test.describe("Database Backup", () => {
     await selectCompetition(page);
     await clickTab(page, "Event");
 
-    const downloadLink = page.getByRole("link", { name: /Download backup/i });
+    const downloadLink = page.getByRole("button", { name: /Download backup/i });
     await expect(downloadLink).toBeVisible({ timeout: 10000 });
 
     const [download] = await Promise.all([

@@ -11,6 +11,7 @@
 import { useState, useMemo, useRef, useCallback } from "react";
 import type { TileViewport } from "../lib/geo-utils";
 import { lngToTileX, latToTileY } from "../lib/geo-utils";
+import { kioskKeyFromUrl, tileQueryString } from "../lib/kiosk-key";
 
 interface Props {
   viewport: TileViewport;
@@ -36,7 +37,7 @@ function computeTiles(
   containerWidth: number,
   containerHeight: number,
   tileUrlBase: string,
-  tileVersion: number | undefined,
+  query: string,
   failedTiles: Set<string>,
 ): TileInfo[] {
   if (containerWidth === 0 || containerHeight === 0) return [];
@@ -81,7 +82,7 @@ function computeTiles(
 
       result.push({
         key,
-        src: `${tileUrlBase}/${z}/${wrappedX}/${ty}${tileVersion ? `?v=${tileVersion}` : ""}`,
+        src: `${tileUrlBase}/${z}/${wrappedX}/${ty}${query}`,
         x: left,
         y: top,
         width,
@@ -101,6 +102,10 @@ export function TileLayer({
 }: Props) {
   const failedTiles = useRef(new Set<string>());
   const [loadedKeys, setLoadedKeys] = useState(new Set<string>());
+  const query = useMemo(
+    () => tileQueryString(tileVersion, kioskKeyFromUrl()),
+    [tileVersion],
+  );
 
   const z = Math.ceil(viewport.zoom);
 
@@ -124,8 +129,8 @@ export function TileLayer({
 
   // Current zoom tiles
   const tiles = useMemo(
-    () => computeTiles(viewport, z, containerWidth, containerHeight, tileUrlBase, tileVersion, failedTiles.current),
-    [viewport, z, containerWidth, containerHeight, tileUrlBase, tileVersion],
+    () => computeTiles(viewport, z, containerWidth, containerHeight, tileUrlBase, query, failedTiles.current),
+    [viewport, z, containerWidth, containerHeight, tileUrlBase, query],
   );
 
   // Backdrop tiles from previous zoom — positioned for current viewport.
@@ -134,8 +139,8 @@ export function TileLayer({
   const backdropTiles = useMemo(() => {
     if (backdropZ === null || backdropZ === z) return [];
     return computeTiles(viewport, backdropZ, containerWidth, containerHeight,
-      tileUrlBase, tileVersion, failedTiles.current);
-  }, [viewport, backdropZ, z, containerWidth, containerHeight, tileUrlBase, tileVersion]);
+      tileUrlBase, query, failedTiles.current);
+  }, [viewport, backdropZ, z, containerWidth, containerHeight, tileUrlBase, query]);
 
   const allCurrentLoaded = tiles.length > 0 && tiles.every(t => loadedKeys.has(t.key));
 

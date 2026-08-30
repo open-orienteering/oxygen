@@ -21,6 +21,7 @@ import { authHeaderName } from "./auth.js";
 import { registerBackupRoute } from "./backup.js";
 import { registerCourseExportRoute } from "./course-export.js";
 import { registerMapTileRoutes } from "./map-tiles.js";
+import { registerClubMapPreviewRoute } from "./club-map-preview.js";
 import "dotenv/config";
 
 const PORT = parseInt(process.env.PORT ?? "3002", 10);
@@ -60,6 +61,7 @@ async function main() {
       "x-event-id",
       SYNC_SECRET_HEADER,
       authHeaderName(),
+      "x-kiosk-key",
     ],
   });
 
@@ -84,6 +86,7 @@ async function main() {
   registerBackupRoute(server);
   registerCourseExportRoute(server);
   registerMapTileRoutes(server);
+  registerClubMapPreviewRoute(server);
 
   // Club logo endpoint — serves PNGs from the global club_directory.
   server.get<{ Params: { eventorId: string }; Querystring: { variant?: string } }>(

@@ -6,11 +6,18 @@ import { formatDateTime } from "../lib/format";
 import { useTimeAgo } from "../hooks/useTimeAgo";
 import { ClubLogo } from "../components/ClubLogo";
 import { VenueLeasePanel } from "../components/VenueLease";
+import { PermissionsPanel } from "../components/PermissionsPanel";
+import { useCapabilities } from "../context/CapabilitiesContext";
+import { downloadSameOriginFile } from "../lib/download-api";
 
 export function EventPage() {
   const { t } = useTranslation("event");
+  const { has, loaded } = useCapabilities();
+  const canManage = loaded && has("event.manage");
   const dashboard = trpc.competition.dashboard.useQuery();
-  const syncStatus = trpc.eventor.syncStatus.useQuery();
+  const syncStatus = trpc.eventor.syncStatus.useQuery(undefined, {
+    enabled: canManage,
+  });
 
   if (dashboard.isLoading) {
     return (
@@ -64,6 +71,10 @@ export function EventPage() {
         </div>
       </div>
 
+      <PermissionsPanel />
+
+      {canManage && (
+        <>
       {/* Venue lease (single-writer checkout) */}
       <VenueLeasePanel nameId={d.competition.nameId} />
 
@@ -116,6 +127,8 @@ export function EventPage() {
 
       {/* Database Backup (mysqldump download) */}
       <DatabaseBackup nameId={d.competition.nameId} />
+        </>
+      )}
     </div>
   );
 }
@@ -1487,16 +1500,16 @@ function DatabaseBackup({ nameId }: { nameId: string }) {
               {t("databaseBackupDescription")}
             </div>
           </div>
-          <a
-            href={href}
-            download
+          <button
+            type="button"
+            onClick={() => void downloadSameOriginFile(href)}
             className="inline-flex items-center gap-2 px-4 py-2 bg-slate-700 text-white text-sm font-medium rounded-lg hover:bg-slate-800 transition-colors cursor-pointer whitespace-nowrap"
           >
             <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
             </svg>
             {t("downloadBackup")}
-          </a>
+          </button>
         </div>
       </div>
     </div>

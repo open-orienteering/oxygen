@@ -51,8 +51,12 @@ const trpcClient = trpc.createClient({
         // Pages outside a competition (selector, /admin/…) have no nameId.
         const match = window.location.pathname.match(/^\/([^/]+)/);
         const nameId = match?.[1];
-        const reserved = nameId === "admin";
-        return nameId && !reserved ? { "x-competition-id": nameId } : {};
+        const reserved = nameId === "admin" || nameId === "library";
+        const headers: Record<string, string> = {};
+        if (nameId && !reserved) headers["x-competition-id"] = nameId;
+        const kioskKey = new URLSearchParams(window.location.search).get("k");
+        if (kioskKey) headers["x-kiosk-key"] = kioskKey;
+        return headers;
       },
     }),
   ],

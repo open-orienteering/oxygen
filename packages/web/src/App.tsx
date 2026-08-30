@@ -16,6 +16,7 @@ const KioskPage = lazy(() => import("./pages/KioskPage").then(m => ({ default: m
 const StartScreenPage = lazy(() => import("./pages/StartScreenPage").then(m => ({ default: m.StartScreenPage })));
 const AccessDeniedPage = lazy(() => import("./pages/AccessDeniedPage").then(m => ({ default: m.AccessDeniedPage })));
 const UsersAdminPage = lazy(() => import("./pages/UsersAdminPage").then(m => ({ default: m.UsersAdminPage })));
+const LibraryPage = lazy(() => import("./pages/LibraryPage").then(m => ({ default: m.LibraryPage })));
 
 const PUBLIC_SURFACE = /^\/[^/]+\/(kiosk|start-screen)(\/|$)/;
 
@@ -65,6 +66,7 @@ export default function App() {
           <Routes>
             <Route path="/" element={<CompetitionSelector />} />
             <Route path="/admin/users" element={<UsersAdminPage />} />
+            <Route path="/library" element={<LibraryPage />} />
             {/* Kiosk route — outside CompetitionShell (fullscreen, no admin UI) */}
             <Route path="/:nameId/kiosk" element={<KioskPage />} />
             <Route path="/:nameId/start-screen" element={<StartScreenPage />} />

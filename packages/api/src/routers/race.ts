@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
-import { router, eventProcedure, raceProcedure } from "../trpc.js";
+import { router, kioskOrRaceOperateProcedure, kioskOrRaceOperateRaceProcedure, raceOperateProcedure } from "../trpc.js";
 import { toAbsolute, toRelative } from "../timeConvert.js";
 import {
   runnerStatusToValue,
@@ -17,7 +17,7 @@ import type { ControlMatch } from "@oxygen/shared";
  */
 export const raceRouter = router({
   /** Look up a runner by SI card number for start / finish stations. */
-  lookupByCard: eventProcedure
+  lookupByCard: kioskOrRaceOperateProcedure
     .input(z.object({ cardNo: z.number().int().positive() }))
     .query(async ({ ctx, input }) => {
       const runner = await ctx.db.runner.findFirst({
@@ -84,7 +84,7 @@ export const raceRouter = router({
    * deciseconds-since-midnight (`deciseconds`, in the event's local
    * timezone) for stations that want one or the other.
    */
-  serverTime: eventProcedure.query(() => {
+  serverTime: kioskOrRaceOperateProcedure.query(() => {
     const d = new Date();
     const deciseconds =
       (d.getHours() * 3600 + d.getMinutes() * 60 + d.getSeconds()) * 10 +
@@ -93,7 +93,7 @@ export const raceRouter = router({
   }),
 
   /** Most-recent finishers, for the activity feed. */
-  recentActivity: eventProcedure
+  recentActivity: kioskOrRaceOperateProcedure
     .input(
       z
         .object({ limit: z.number().int().min(1).max(50).default(10) })
@@ -140,7 +140,7 @@ export const raceRouter = router({
    * the legacy nested shape expected by the receipt printer + the
    * kiosk `kiosk-print-receipt` forwarder.
    */
-  finishReceipt: eventProcedure
+  finishReceipt: kioskOrRaceOperateProcedure
     .input(z.object({ runnerId: z.number().int() }))
     .query(async ({ ctx, input }) => {
       const runner = await ctx.db.runner.findFirst({
@@ -317,7 +317,7 @@ export const raceRouter = router({
    * running time, and status. Caller can pass either `id` or
    * `runnerId` (legacy field name; kept for compatibility).
    */
-  recordFinish: raceProcedure
+  recordFinish: kioskOrRaceOperateRaceProcedure
     .input(
       z
         .object({

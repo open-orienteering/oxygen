@@ -9,9 +9,9 @@ test.describe("no identity header", () => {
     await expect(page.getByTestId("access-denied-no-identity")).toBeVisible();
   });
 
-  test("kiosk still renders without identity", async ({ page }) => {
+  test("kiosk without a key shows an error", async ({ page }) => {
     await page.goto("/itest/kiosk");
-    await expect(page.getByText("Insert your SI card")).toBeVisible({
+    await expect(page.getByTestId("kiosk-key-required")).toBeVisible({
       timeout: 10000,
     });
   });
