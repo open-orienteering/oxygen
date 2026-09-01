@@ -278,4 +278,51 @@ describe("online-input ROC puller", () => {
       await teardown(f);
     }
   });
+
+  it("imports a punch range exactly once when two pollers race it", async () => {
+    // The background-jobs lease should mean a single poller, but
+    // leadership changes hands and ROC de-dupes purely by watermark, so
+    // the import has to be safe on its own. Duplicate punches are not
+    // something an operator can easily unpick after the fact.
+    const f = await setupPuller("oi-race");
+    try {
+      f.fetchSpy.mockResolvedValue(
+        new Response(
+          [
+            "1;31;1001;2026-01-01 10:00:00",
+            "2;32;1002;2026-01-01 10:01:00",
+            "3;31;1003;2026-01-01 10:02:00",
+          ].join("\n"),
+          { status: 200, headers: { "Content-Type": "text/plain" } },
+        ),
+      );
+
+      const [a, b] = await Promise.all([
+        pollOnceForEvent(f.ctx.eventId),
+        pollOnceForEvent(f.ctx.eventId),
+      ]);
+
+      const punches = await f.ctx.db.punch.findMany({
+        where: { eventId: f.ctx.eventId, source: "online_input" },
+        select: { cardNo: true },
+      });
+      expect(punches).toHaveLength(3);
+      expect(punches.map((p) => p.cardNo).sort()).toEqual([1001, 1002, 1003]);
+
+      // Exactly one of the two claimed the range; the loser wrote nothing.
+      expect([a.inserted, b.inserted].filter((n) => n > 0)).toHaveLength(1);
+
+      // The watermark moved once, so a third poll of the same response
+      // is a no-op.
+      const again = await pollOnceForEvent(f.ctx.eventId);
+      expect(again).toEqual({ fetched: 0, inserted: 0 });
+
+      const journal = await f.ctx.db.journalEntry.count({
+        where: { eventId: f.ctx.eventId, type: "punch.recorded" },
+      });
+      expect(journal).toBe(3);
+    } finally {
+      await teardown(f);
+    }
+  });
 });

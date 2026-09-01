@@ -1,9 +1,11 @@
 /**
  * LiveResults router. Exposes the config + manual sync + status surface
- * to the EventPage; the actual periodic push is owned by
- * `liveResultsPusherManager` in `../liveresults.ts`, which the API
- * boot wires through `reconcileEnabledPushers()` so a restart re-arms
- * every event whose `liveresultsConfig.enabled` is true.
+ * to the EventPage. The periodic push itself is owned by whichever
+ * instance holds the background-jobs lease: these mutations write
+ * `events.liveresultsConfig` and ask the holder to reconcile, and
+ * `reconcileEnabledPushers()` re-arms every enabled event there. That
+ * indirection is what keeps two instances from pushing the same results
+ * twice — see ../background/supervisor.ts.
  *
  * Settings live in `events.liveresultsConfig` (JSONB) so we don't need
  * a per-event settings table.
@@ -13,10 +15,11 @@ import { z } from "zod";
 import { router, viewProcedure, manageProcedure } from "../trpc.js";
 import {
   ensureCompetition,
-  liveResultsPusherManager,
+  loadPushStatus,
   syncAll,
   updateCompetitionMeta,
 } from "../liveresults.js";
+import { requestBackgroundReconcile } from "../background/supervisor.js";
 
 export interface LRConfig {
   enabled: boolean;
@@ -64,10 +67,15 @@ export const liveresultsRouter = router({
   }),
 
   /**
-   * Live snapshot for the status indicator. `running` reflects whether
-   * the in-process push timer is currently armed for this event (not
-   * just whether `config.enabled` is true) — that distinction matters
-   * during boot-time reconciliation and after a failed `enable`.
+   * Live snapshot for the status indicator.
+   *
+   * Everything here comes from the database rather than the local
+   * pusher's memory: the timer runs on whichever instance holds the
+   * background-jobs lease, so an in-process reading would report
+   * "not running" on every other instance. `running` is therefore the
+   * configured intent, and `lastPush` / `lastError` are what the holder
+   * last recorded — which is what tells the operator whether the intent
+   * is actually being carried out.
    */
   getStatus: viewProcedure.query(async ({ ctx }) => {
     const event = await ctx.db.event.findUnique({
@@ -78,9 +86,9 @@ export const liveresultsRouter = router({
       event?.liveresultsConfig,
       event?.liveresultsTavid ?? null,
     );
-    const status = liveResultsPusherManager.getStatus(ctx.event.id);
+    const status = await loadPushStatus(ctx.event.id);
     return {
-      running: status.running,
+      running: cfg.enabled,
       tavid: cfg.tavid,
       publicUrl: cfg.publicUrl,
       lastPush: status.lastPush,
@@ -165,7 +173,7 @@ export const liveresultsRouter = router({
       console.error("[LiveResults] updateCompetitionMeta failed:", err);
     }
 
-    liveResultsPusherManager.start(ctx.event.id, tavid, cfg.intervalSeconds);
+    await requestBackgroundReconcile();
     return { ok: true as const, tavid };
   }),
 
@@ -183,7 +191,7 @@ export const liveresultsRouter = router({
       where: { id: ctx.event.id },
       data: { liveresultsConfig: cfg as never },
     });
-    liveResultsPusherManager.stop(ctx.event.id);
+    await requestBackgroundReconcile();
     return { ok: true as const };
   }),
 
