@@ -50,8 +50,6 @@ import {
   type WGS84Bounds,
 } from "./map-projection.js";
 import {
-  PRECACHE_MAX_ZOOM,
-  PRECACHE_MIN_ZOOM,
   blockOrigin,
   blockRange,
   boundsOfPoints,
@@ -71,7 +69,10 @@ import {
   Semaphore,
   blockTiles,
   evictForInsert,
+  precacheBlockDelayMs,
   precacheEnabled,
+  precacheMaxZoom,
+  precacheMinZoom,
   renderConcurrency,
   supersample,
   svgCacheEvents,
@@ -117,6 +118,7 @@ function gate(): Semaphore {
 function invalidate(eventId: bigint): void {
   svgCache.delete(eventId);
   svgLoadInFlight.delete(eventId);
+  preCacheConsidered.delete(eventId);
   for (const key of [...blockInFlight.keys()]) {
     if (key.startsWith(`${eventId}:`)) blockInFlight.delete(key);
   }
@@ -246,10 +248,15 @@ async function rasterise(
 
   const size = windowPixelSize(rect, density);
   const resvgMod = await import("@resvg/resvg-js");
-  const rendered = new resvgMod.Resvg(withViewBox(source.svg, viewBox), {
+  // renderAsync, not Resvg#render: rasterising runs on the libuv thread
+  // pool instead of blocking the event loop. The renderer is called far
+  // more often than the whole-map version it replaced — once per block
+  // per zoom rather than once per map — so a synchronous render stalls
+  // every other request in the process while tiles are being produced.
+  const rendered = await resvgMod.renderAsync(withViewBox(source.svg, viewBox), {
     fitTo: { mode: "width" as const, value: size.width },
     background: "white",
-  }).render();
+  });
 
   if (rendered.width === 0 || rendered.height === 0) return null;
   return {
@@ -344,6 +351,7 @@ async function renderBlockUncached(
   bx: number,
   by: number,
   size: number,
+  background: boolean,
 ): Promise<Map<string, Buffer>> {
   const quads = new Map<string, OcadQuad>();
   for (let x = bx; x < bx + size; x++) {
@@ -369,7 +377,9 @@ async function renderBlockUncached(
   const rect = boundsOfPoints(corners, 2 / wanted);
   const density = clampDensity(rect, wanted, windowMaxPixels());
 
-  const win = await gate().run(() => rasterise(source, rect, density));
+  const win = await gate().run(() => rasterise(source, rect, density), {
+    background,
+  });
   if (!win) return result;
 
   for (const [key, quad] of quads) {
@@ -388,6 +398,7 @@ async function renderBlock(
   z: number,
   x: number,
   y: number,
+  background = false,
 ): Promise<Map<string, Buffer>> {
   const size = blockTiles();
   const bx = blockOrigin(x, size);
@@ -397,7 +408,7 @@ async function renderBlock(
   const inFlight = blockInFlight.get(key);
   if (inFlight) return inFlight;
 
-  const promise = renderBlockUncached(eventId, source, z, bx, by, size);
+  const promise = renderBlockUncached(eventId, source, z, bx, by, size, background);
   blockInFlight.set(key, promise);
   try {
     return await promise;
@@ -440,15 +451,23 @@ async function persistTiles(
 
 /**
  * Fill `map_tiles` for the pre-cache zoom span in the background, so the
- * first viewer after an upload doesn't pay for every tile. Idempotent:
- * skips a block whose tiles are already cached, and bails out entirely
- * once the database stops accepting writes.
+ * first view after an upload is instant. Zoom levels whose tiles are all
+ * present are skipped, so a restart resumes rather than redoing work,
+ * and the loop bails out entirely once the database stops accepting
+ * writes (shutdown, test teardown).
+ *
+ * Deliberately unhurried: it pauses between blocks so that foreground
+ * tile requests — and everything else sharing the process — keep their
+ * latency. Deep zooms are left out of the span entirely; see
+ * PRECACHE_MAX_ZOOM.
  */
 async function preCacheTiles(eventId: bigint, source: MapSource): Promise<void> {
   const db = prisma();
   const size = blockTiles();
+  const delayMs = precacheBlockDelayMs();
+  const maxZoom = precacheMaxZoom();
 
-  for (let z = PRECACHE_MIN_ZOOM; z <= PRECACHE_MAX_ZOOM; z++) {
+  for (let z = precacheMinZoom(); z <= maxZoom; z++) {
     const range = tileRangeForBounds(source.mapWgs84, z);
     const expected = (range.x1 - range.x0 + 1) * (range.y1 - range.y0 + 1);
     const have = await db.mapTile.count({ where: { eventId, z } });
@@ -457,7 +476,7 @@ async function preCacheTiles(eventId: bigint, source: MapSource): Promise<void> 
     for (const bx of blockRange(range.x0, range.x1, size)) {
       for (const by of blockRange(range.y0, range.y1, size)) {
         try {
-          await renderBlock(eventId, source, z, bx, by);
+          await renderBlock(eventId, source, z, bx, by, true);
         } catch (err) {
           const msg = String((err as Error)?.message ?? "");
           if (
@@ -471,6 +490,9 @@ async function preCacheTiles(eventId: bigint, source: MapSource): Promise<void> 
             err,
           );
         }
+        if (delayMs > 0) {
+          await new Promise((resolve) => setTimeout(resolve, delayMs));
+        }
       }
     }
   }
@@ -479,14 +501,11 @@ async function preCacheTiles(eventId: bigint, source: MapSource): Promise<void> 
 // ─── Progress ───────────────────────────────────────────────
 
 /**
- * Pre-cache progress straight from the database. The denominator is a
- * function of the map's stored WGS84 bounds and the numerator is a row
- * count, so a request served by any instance reports the same figures —
- * unlike the in-process counter this replaced.
+ * The map's WGS84 bounds as stored at upload. Reading them back beats
+ * re-deriving them from the OCAD: it is one small query rather than a
+ * parse, so the progress endpoint and the pre-cache check stay cheap.
  */
-async function tileProgress(
-  eventId: bigint,
-): Promise<{ total: number; done: number; rendering: boolean }> {
+async function storedBounds(eventId: bigint): Promise<WGS84Bounds | null> {
   const row = await prisma().mapFile.findFirst({
     where: { eventId },
     orderBy: { uploadedAt: "desc" },
@@ -500,12 +519,28 @@ async function tileProgress(
     typeof bounds.east !== "number" ||
     typeof bounds.west !== "number"
   ) {
-    return { total: 0, done: 0, rendering: false };
+    return null;
   }
+  return bounds;
+}
 
-  const total = expectedTileCount(bounds);
+/**
+ * Pre-cache progress straight from the database. The denominator is a
+ * function of the map's stored WGS84 bounds and the numerator is a row
+ * count, so a request served by any instance reports the same figures —
+ * unlike the in-process counter this replaced.
+ */
+async function tileProgress(
+  eventId: bigint,
+): Promise<{ total: number; done: number; rendering: boolean }> {
+  const bounds = await storedBounds(eventId);
+  if (!bounds) return { total: 0, done: 0, rendering: false };
+
+  const minZoom = precacheMinZoom();
+  const maxZoom = precacheMaxZoom();
+  const total = expectedTileCount(bounds, minZoom, maxZoom);
   const done = await prisma().mapTile.count({
-    where: { eventId, z: { gte: PRECACHE_MIN_ZOOM, lte: PRECACHE_MAX_ZOOM } },
+    where: { eventId, z: { gte: minZoom, lte: maxZoom } },
   });
   return { total, done: Math.min(done, total), rendering: done < total };
 }
@@ -570,6 +605,7 @@ export function registerMapTileRoutes(server: FastifyInstance): void {
         select: { tileData: true },
       });
       if (cached) {
+        kickOffPreCache(eventId);
         return reply
           .header("Content-Type", "image/png")
           .header("Cache-Control", "public, max-age=604800")
@@ -589,9 +625,9 @@ export function registerMapTileRoutes(server: FastifyInstance): void {
             .send();
         }
 
-        // First tile of a fresh map: fill the overview zooms in the
-        // background so panning and zooming out are instant.
-        void kickOffPreCache(eventId, source);
+        // Fill the overview zooms in the background so the next viewer's
+        // first paint is instant.
+        kickOffPreCache(eventId);
 
         return reply
           .header("Content-Type", "image/png")
@@ -605,14 +641,44 @@ export function registerMapTileRoutes(server: FastifyInstance): void {
   );
 }
 
-// One background pre-cache per event per process.
-const preCacheStarted = new Set<bigint>();
+/**
+ * Events this process has already considered for pre-caching, whether or
+ * not it went on to render anything. Requests arrive in viewport-sized
+ * bursts, so without this the completeness check below would run twenty
+ * times over.
+ */
+const preCacheConsidered = new Set<bigint>();
 
-function kickOffPreCache(eventId: bigint, source: MapSource): void {
-  if (!precacheEnabled()) return;
-  if (preCacheStarted.has(eventId)) return;
-  preCacheStarted.add(eventId);
-  preCacheTiles(eventId, source)
-    .catch((err) => console.error("[map-tiles] preCacheTiles failed:", err))
-    .finally(() => preCacheStarted.delete(eventId));
+/**
+ * Start the background pre-cache if this event still needs it.
+ *
+ * Called from the cache-hit path as well as the render path, so a
+ * process that restarts mid-pre-cache (or inherits a partially filled
+ * cache from another instance) finishes the job rather than waiting for
+ * someone to happen upon an uncached tile. The completeness check runs
+ * off the stored bounds and a row count, so the common "already done"
+ * case costs two queries and never touches the OCAD.
+ */
+async function maybePreCache(eventId: bigint): Promise<void> {
+  if (!precacheEnabled() || preCacheConsidered.has(eventId)) return;
+  preCacheConsidered.add(eventId);
+
+  const bounds = await storedBounds(eventId);
+  if (!bounds) return;
+
+  const minZoom = precacheMinZoom();
+  const maxZoom = precacheMaxZoom();
+  const done = await prisma().mapTile.count({
+    where: { eventId, z: { gte: minZoom, lte: maxZoom } },
+  });
+  if (done >= expectedTileCount(bounds, minZoom, maxZoom)) return;
+
+  const source = await getMapSource(eventId);
+  await preCacheTiles(eventId, source);
+}
+
+function kickOffPreCache(eventId: bigint): void {
+  void maybePreCache(eventId).catch((err) =>
+    console.error("[map-tiles] pre-cache failed:", err),
+  );
 }
