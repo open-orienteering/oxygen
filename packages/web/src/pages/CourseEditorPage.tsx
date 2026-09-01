@@ -1106,6 +1106,7 @@ export function CourseEditorPage() {
   const toolbar = useMemo(
     () => (
       <div className="flex items-center gap-2 min-w-0" data-testid="course-editor-toolbar">
+        <EditorHelp hint={t("editor.hint")} label={t("editor.helpAria")} />
         <button
           data-testid="editor-undo"
           disabled={!canUndo}
@@ -1514,15 +1515,9 @@ export function CourseEditorPage() {
 
   // ─── Render ──────────────────────────────────────────────
 
-  const hint = t("editor.hint");
-
   return (
     <div data-testid="course-editor-page">
-      <div className="mb-4 flex items-center justify-between gap-4">
-        <h1 className="text-2xl font-bold text-slate-800">{t("editor.title")}</h1>
-        <p className="text-sm text-slate-500" data-testid="editor-hint">{hint}</p>
-      </div>
-      <div className="h-[calc(100vh-240px)] min-h-[420px]">
+      <div className="h-[calc(100vh-200px)] min-h-[420px]">
         {/* ── Map (the course panel floats inside it, see coursePanel) ── */}
         <div className="h-full bg-white rounded-xl border border-slate-200 overflow-hidden">
           <MapPanel
@@ -1546,6 +1541,60 @@ export function CourseEditorPage() {
           onSave={saveDescription}
           onCancel={closeDescription}
         />
+      )}
+    </div>
+  );
+}
+
+/** Same i-circle popover as the start-draw settings (CorridorTooltip etc.). */
+function EditorHelp({ hint, label }: { hint: string; label: string }) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    function handleClick(e: MouseEvent) {
+      if (ref.current && !ref.current.contains(e.target as Node)) {
+        setOpen(false);
+      }
+    }
+    document.addEventListener("mousedown", handleClick);
+    return () => document.removeEventListener("mousedown", handleClick);
+  }, [open]);
+
+  return (
+    <div className="relative inline-flex items-center shrink-0" ref={ref}>
+      <button
+        type="button"
+        data-testid="editor-help"
+        aria-label={label}
+        aria-expanded={open}
+        onClick={() => setOpen((v) => !v)}
+        className="text-slate-400 hover:text-blue-600 cursor-pointer p-0.5"
+      >
+        <svg
+          width={14}
+          height={14}
+          viewBox="0 0 20 20"
+          fill="currentColor"
+          className="shrink-0"
+          aria-hidden="true"
+        >
+          <path
+            fillRule="evenodd"
+            d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a.75.75 0 000 1.5h.253a.25.25 0 01.244.304l-.459 2.066A1.75 1.75 0 0010.747 15H11a.75.75 0 000-1.5h-.253a.25.25 0 01-.244-.304l.459-2.066A1.75 1.75 0 009.253 9H9z"
+            clipRule="evenodd"
+          />
+        </svg>
+      </button>
+      {open && (
+        <div
+          data-testid="editor-hint"
+          role="note"
+          className="absolute top-full left-0 mt-1.5 z-50 w-80 p-3 bg-white border border-slate-200 rounded-lg shadow-lg text-xs text-slate-700"
+        >
+          {hint}
+        </div>
       )}
     </div>
   );

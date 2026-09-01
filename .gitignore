@@ -2,6 +2,10 @@ node_modules/
 dist/
 .env
 .env.local
+scripts/gcp/env.sh
+# Holds the IAP OAuth client secret while it is being applied.
+scripts/gcp/iap-settings.yaml
+packages/api/tmp-analysis/
 *.log
 .DS_Store
 .vite/

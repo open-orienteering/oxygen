@@ -22,6 +22,7 @@ import { registerBackupRoute } from "./backup.js";
 import { registerCourseExportRoute } from "./course-export.js";
 import { registerMapTileRoutes } from "./map-tiles.js";
 import { registerClubMapPreviewRoute } from "./club-map-preview.js";
+import { registerStaticServe } from "./staticServe.js";
 import "dotenv/config";
 
 const PORT = parseInt(process.env.PORT ?? "3002", 10);
@@ -78,15 +79,28 @@ async function main() {
   });
 
   const SERVER_START = new Date().toISOString();
+  // Baked in at image build time (Dockerfile ARG BUILD_ID). Gives the web
+  // client a version identity that survives process restarts — on Cloud Run
+  // the process restarts constantly (scale-to-zero, instance swaps) without
+  // any code change, so startedAt alone triggers false update prompts.
+  const BUILD_ID = process.env.OXYGEN_BUILD_ID || null;
   server.get("/health", async () => ({ status: "ok", startedAt: SERVER_START }));
   server.get("/api/version", async (_req, reply) =>
-    reply.header("Cache-Control", "no-store").send({ startedAt: SERVER_START }),
+    reply
+      .header("Cache-Control", "no-store")
+      .send({ startedAt: SERVER_START, buildId: BUILD_ID }),
   );
 
   registerBackupRoute(server);
   registerCourseExportRoute(server);
   registerMapTileRoutes(server);
   registerClubMapPreviewRoute(server);
+
+  // Single-container deployments (Cloud Run) serve the web bundle from the
+  // API itself; compose deployments keep nginx and leave this unset.
+  if (process.env.WEB_DIST_DIR) {
+    await registerStaticServe(server, process.env.WEB_DIST_DIR);
+  }
 
   // Club logo endpoint — serves PNGs from the global club_directory.
   server.get<{ Params: { eventorId: string }; Querystring: { variant?: string } }>(

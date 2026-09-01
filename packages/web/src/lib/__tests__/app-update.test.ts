@@ -3,7 +3,38 @@ import {
   resolveUpdateAction,
   formatBuildVersion,
   createUpdateActivator,
+  versionIdentity,
 } from "../app-update";
+
+describe("versionIdentity", () => {
+  // Cloud Run restarts the process constantly (scale-to-zero, instance
+  // swaps) without any code change — the deploy-time build id is the only
+  // stable identity there. Comparing startedAt produced a false "update
+  // available" prompt on every cold start.
+  it("uses the build id when the server provides one", () => {
+    expect(
+      versionIdentity({ startedAt: "2026-08-31T10:00:00Z", buildId: "abc123" }),
+    ).toBe("abc123");
+  });
+
+  it("is stable across process restarts of the same build", () => {
+    const a = versionIdentity({ startedAt: "2026-08-31T10:00:00Z", buildId: "abc123" });
+    const b = versionIdentity({ startedAt: "2026-08-31T11:30:00Z", buildId: "abc123" });
+    expect(a).toBe(b);
+  });
+
+  it("falls back to startedAt for dev / compose servers without a build id", () => {
+    expect(versionIdentity({ startedAt: "2026-08-31T10:00:00Z" })).toBe(
+      "2026-08-31T10:00:00Z",
+    );
+    expect(
+      versionIdentity({ startedAt: "2026-08-31T10:00:00Z", buildId: null }),
+    ).toBe("2026-08-31T10:00:00Z");
+    expect(
+      versionIdentity({ startedAt: "2026-08-31T10:00:00Z", buildId: "" }),
+    ).toBe("2026-08-31T10:00:00Z");
+  });
+});
 
 describe("createUpdateActivator", () => {
   beforeEach(() => {

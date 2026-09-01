@@ -1,19 +1,22 @@
 import { useEffect, useRef, useState } from "react";
 import { usePageVisible } from "./usePageVisible";
 import { usePerformanceSensitive } from "../lib/performance-mode";
+import { versionIdentity } from "../lib/app-update";
 
 const API_BASE = import.meta.env.VITE_API_URL ?? "";
 const CHECK_INTERVAL_MS = 30_000; // Check every 30 seconds
 
 /**
  * Periodically checks the API server version.
- * If the server has restarted (new startedAt), shows an "update available" state.
- * Build version is baked in at compile time so the user sees stale UI if
- * the dev server recompiled but the browser tab wasn't refreshed.
+ * If the server's version identity changes (new build id, or new startedAt
+ * for servers without one — see versionIdentity), shows an "update
+ * available" state. Build version is baked in at compile time so the user
+ * sees stale UI if the dev server recompiled but the browser tab wasn't
+ * refreshed.
  */
 export function useVersionCheck() {
   const [updateAvailable, setUpdateAvailable] = useState(false);
-  const knownStartedAt = useRef<string | null>(null);
+  const knownIdentity = useRef<string | null>(null);
   const visible = usePageVisible();
   const performanceSensitive = usePerformanceSensitive();
   const pollingActive = visible && !performanceSensitive;
@@ -25,14 +28,15 @@ export function useVersionCheck() {
       try {
         const resp = await fetch(`${API_BASE}/api/version`, { cache: "no-store" });
         if (!resp.ok) return;
-        const data = await resp.json() as { startedAt: string };
+        const data = await resp.json() as { startedAt: string; buildId?: string | null };
         if (!active) return;
 
-        if (knownStartedAt.current === null) {
-          // First check — record the server start time
-          knownStartedAt.current = data.startedAt;
-        } else if (data.startedAt !== knownStartedAt.current) {
-          // Server restarted → new code is available
+        const identity = versionIdentity(data);
+        if (knownIdentity.current === null) {
+          // First check — record the server's version identity
+          knownIdentity.current = identity;
+        } else if (identity !== knownIdentity.current) {
+          // New build (or restart of a build-id-less server) → new code
           setUpdateAvailable(true);
         }
       } catch {

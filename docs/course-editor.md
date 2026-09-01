@@ -84,7 +84,9 @@ the Courses/Controls map panes), so a map with wide empty borders opens
 zoomed to where the action is; container resizes (e.g. fullscreen)
 refit the same bounds. The control-descriptions overlay is on by
 default (`defaultShowDescriptions`) — toggleable from the map toolbar
-as usual. With **no course selected** the sheet lists every positioned
+as usual. Gesture help lives in an i-circle popover on that toolbar
+(same pattern as the start-draw settings), not a page heading — the
+shell tab already names the page. With **no course selected** the sheet lists every positioned
 control instead of nothing (`descriptionsAllControls`, titled with the
 localized "All controls" via MapViewer's `allControlsTitle` prop — the
 viewer itself stays i18n-free), so descriptions are usable while
@@ -444,7 +446,8 @@ their hit targets so "click → Add to course" still works on them.
   pages' pencil icons; the description sheet listing all controls
   (titled "All controls") until a course is selected; the in-map course
   panel (containment in the fullscreen root, selecting through it,
-  collapsing list + sequence); the base-map
+  collapsing list + sequence); the toolbar i-popover for the
+  gesture hint (no extra page heading); the base-map
   suggestion (place a control in mapped terrain, apply the first
   suggestion, confirm a column-D symbol is set, `Ctrl+Z` clears it);
   the automatic overprint cuts (the fixture plants a boulder on control

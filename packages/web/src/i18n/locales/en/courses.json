@@ -103,6 +103,7 @@
     "deleteControl": "Delete control",
     "saving": "Saving...",
     "hint": "Click the map or a control for actions, drag a control to move it. H hides/shows other controls.",
+    "helpAria": "Course editor help",
     "selectedControl": "Control {{code}}",
     "position": "x {{x}} mm, y {{y}} mm",
     "deleteConfirm": "Delete control {{code}}?",
