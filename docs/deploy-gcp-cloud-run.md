@@ -252,26 +252,33 @@ image ships `postgresql-client`.
 
 ## Sizing notes
 
-- **Map raster memory budget.** The tile renderer rasterises the whole
-OCAD map into one RGBA bitmap (4 bytes/pixel) and briefly holds ~2× that
-while the SVG rasteriser hands over its pixels. The default budget of
-800M pixels (3.2 GB bitmap, ~6.5 GB peak) fits a dev machine but
-OOM-kills a 4 GiB container — the failure mode is `Memory limit of
-4096 MiB exceeded` + `Container terminated on signal 9` in Cloud Logging,
-an instance restart loop, and map tiles that never load. `deploy.sh`
-therefore sets `MAP_RASTER_MAX_PIXELS=200000000` (~1.6 GB peak, slightly
-lower max-zoom sharpness on very large maps) and
-`MAP_RASTER_CACHE_EVENTS=1` (each cached event bitmap holds up to
-800 MB; the default of 4 assumes dev-machine RAM). If z20+ tiles look
-too soft, raise the budget together with memory:
-`gcloud run services update "$SERVICE" --region="$REGION" --memory=8Gi --cpu=2 --update-env-vars=MAP_RASTER_MAX_PIXELS=400000000`
-(8 GiB requires 2 vCPU; roughly doubles the event-mode day rate). Note
-that Node's `--max-old-space-size` does *not* bound these allocations —
-map bitmaps are native Buffers outside the JS heap.
-- **`--max-instances=1`.** The app keeps per-process state (map bitmap
-cache, tile pre-cache progress) and is designed around a single writer
-node; a second instance doubles memory pressure without helping, and one
-instance handles a club competition comfortably.
+- **Map tile memory.** The renderer rasterises one *window* — the region
+covered by a block of tiles — per render, so peak memory follows the
+block size rather than the map size. With the defaults (4×4 tiles,
+2× supersampling, 2 concurrent renders) that is a few hundred MB for any
+map. The knobs are in `packages/api/src/map-render-limits.ts` and all
+have env overrides (`MAP_TILE_BLOCK_TILES`, `MAP_TILE_SUPERSAMPLE`,
+`MAP_RENDER_CONCURRENCY`, `MAP_SVG_CACHE_EVENTS`,
+`MAP_WINDOW_MAX_PIXELS`); none needs setting in normal operation.
+The 4 GiB allocation is headroom for parsing a large club OCAD into an
+SVG DOM, which still spikes, not for the tiles themselves.
+  This replaced a design that rasterised the whole map into one bitmap
+  and resampled every tile from it. That bitmap reached 3.2 GB (~6.5 GB
+  peak) on a large map, OOM-killed the 4 GiB container — `Memory limit of
+  4096 MiB exceeded` plus `Container terminated on signal 9`, an instance
+  restart loop and tiles that never loaded — and the cap that made it fit
+  also made deep zoom blurry. Both problems are gone; if you still have
+  `MAP_RASTER_MAX_PIXELS` or `MAP_RASTER_CACHE_EVENTS` set on a revision,
+  they are ignored and can be removed.
+- **`--max-instances=1`.** Tiles no longer need it: any instance can
+render any tile cheaply, and `/api/map-tile-progress` is computed from
+the database so every instance answers the same. What still assumes a
+single process is the set of background timers started in
+`packages/api/src/index.ts` (sync shipper, lease renewal). Raising the
+cap requires leader election (a Postgres advisory lock) for those first.
+- **Background tile pre-caching** can be disabled with
+`MAP_TILE_PRECACHE=off` if you would rather spend request CPU on
+requests. Tiles are then rendered purely on demand.
 - **Tile pre-caching after a map upload** renders thousands of tiles into
 `map_tiles` (visible as elevated Cloud SQL write throughput for a few
 minutes). In idle mode the background job only gets CPU while requests
@@ -290,11 +297,13 @@ false-positives; the identity is therefore the `BUILD_ID` baked in by
 `deploy.sh` at image build. If prompts recur without a deploy, check
 that the running revision has `OXYGEN_BUILD_ID` set
 (`gcloud run services describe "$SERVICE" --region="$REGION" --format=yaml | grep -A1 OXYGEN_BUILD_ID`).
-- **Map never loads / instance restart loop / high DB load.** Almost
-always the raster OOM described under Sizing notes — confirm with
+- **Map never loads / instance restart loop / high DB load.** Confirm
+with
 `gcloud logging read 'resource.labels.service_name="oxygen" severity>=WARNING' --limit=20`
-and look for `Memory limit … exceeded`. Lower `MAP_RASTER_MAX_PIXELS`
-or raise `--memory`.
+and look for `Memory limit … exceeded`. On revisions predating the
+windowed tile renderer this was the whole-map raster OOM (see Sizing
+notes); since then the likely culprit is parsing an unusually large
+OCAD, so raise `--memory` or lower `MAP_SVG_CACHE_EVENTS`.
 
 ## What this deployment does NOT change
 

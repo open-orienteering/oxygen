@@ -5,33 +5,38 @@
  *
  *   GET /api/map-tile/:nameId/:z/:x/:y
  *     Returns a 256×256 PNG tile for the event identified by `nameId`
- *     (the URL slug, matching `Event.nameId`). Tiles are pre-rendered
- *     into `map_tiles` once a map upload lands; this endpoint serves
- *     cached tiles when available, and renders on-demand (writing back
- *     to the cache) on the first miss for a tile.
+ *     (the URL slug, matching `Event.nameId`). Tiles are cached in the
+ *     `map_tiles` table; a miss renders the block of tiles around the
+ *     request and writes them all back.
  *
  *   GET /api/map-tile-progress
- *     Returns the current pre-cache progress for the event identified
- *     by the `x-competition-id` header. Polled by the frontend during
- *     the "Generating tiles…" overlay so the operator sees real
- *     progress instead of an indefinite spinner.
+ *     Pre-cache progress for the event identified by the
+ *     `x-competition-id` header, polled by the frontend during the
+ *     "Generating tiles…" overlay. Both numbers come from the database
+ *     (expected count from the map's WGS84 bounds, done from a row
+ *     count), so any instance answers identically.
  *
- * Internally:
- *   - The full OCAD file (BLOB in `map_files`) is rasterised to one
- *     large bitmap on first request (cached in-process per event).
- *     Each tile is then resampled from that bitmap with bilinear
- *     interpolation so adjacent tiles share their geographic edges
- *     pixel-perfectly (the +0.5 centre-sample is what kills seams).
- *   - After the first render we kick off `preCacheTiles()` in the
- *     background to fill `map_tiles` for zoom levels 10–17 over the
- *     map's WGS84 footprint.
- *   - `onMapUpload(eventId)` (fired from `course.uploadMap`)
- *     invalidates the in-process bitmap and tile-cache progress.
+ * Rendering works a *window* at a time. For a missing tile the renderer
+ * takes the block of `blockTiles`² tiles it belongs to, rasterises just
+ * the region those tiles cover — as a viewBox sub-rectangle of the map
+ * SVG (see map-window.ts) — at a density derived from the tiles
+ * themselves, then warps each tile out of that window. Two consequences
+ * matter:
  *
- * MeOS-compat / migration note: legacy router used a per-competition
- * MySQL database with raw `INSERT IGNORE`. The new schema folds
- * everything into the shared `oxygen` schema in Postgres with
- * `ON CONFLICT (event_id, z, x, y) DO NOTHING`.
+ *   - Deep zoom stays sharp. The window is rendered denser than its
+ *     tiles (`supersample`), so the sampler never reads a source coarser
+ *     than its output. The previous design rasterised the entire map once
+ *     at a fixed budget and resampled every tile from it, which went soft
+ *     at high zoom on large maps and had to be starved further to fit a
+ *     memory-capped container.
+ *   - Any instance can render any tile of any event in a few hundred MB,
+ *     so nothing forces a single process (see map-render-limits.ts).
+ *
+ * Tiles are rotated quads in OCAD space (projection convergence plus the
+ * map's grivation), hence the bilinear warp rather than a straight crop.
+ * Sampling happens at pixel centres (`u, v ∈ [(0.5)/N, (N-0.5)/N]`) so
+ * adjacent tiles share their edge samples exactly and no hairline seam
+ * appears between them.
  */
 
 import type { FastifyInstance } from "fastify";
@@ -42,47 +47,81 @@ import {
   tileBoundsWgs84,
   wgs84ToOcad,
   type OcadCrs,
+  type WGS84Bounds,
 } from "./map-projection.js";
 import {
+  blockOrigin,
+  blockRange,
+  boundsOfPoints,
+  clampDensity,
+  expectedTileCount,
+  parseViewBox,
+  quadDensity,
+  tileRangeForBounds,
+  windowPixelSize,
+  windowViewBox,
+  withViewBox,
+  type OcadQuad,
+  type OcadRect,
+  type ViewBox,
+} from "./map-window.js";
+import {
+  Semaphore,
+  blockTiles,
   evictForInsert,
-  rasterCacheCap,
-  rasterPixelBudget,
-  rasterPxPerUnit,
-} from "./map-raster-budget.js";
+  precacheBlockDelayMs,
+  precacheEnabled,
+  precacheMaxZoom,
+  precacheMinZoom,
+  renderConcurrency,
+  supersample,
+  svgCacheEvents,
+  windowMaxPixels,
+} from "./map-render-limits.js";
 
-interface BitmapInfo {
-  data: Buffer;
-  width: number;
-  height: number;
-  /** Bitmap pixels per OCAD unit (hundredths of mm). */
-  scale: number;
-}
+const TILE_SIZE = 256;
 
-interface PreRenderedMap {
-  bitmap: BitmapInfo;
+/** The parsed map: an SVG document plus the georeferencing to place it. */
+interface MapSource {
+  svg: string;
+  rootViewBox: ViewBox;
   crs: OcadCrs;
   ocadBounds: number[];
+  mapWgs84: WGS84Bounds;
 }
 
-interface TileProgress {
-  total: number;
-  done: number;
-  rendering: boolean;
+/** A rasterised region of the map, in OCAD coordinates. */
+interface RenderedWindow {
+  pixels: Buffer;
+  width: number;
+  height: number;
+  rect: OcadRect;
+  /** Achieved pixels per OCAD unit — read back from the raster, not assumed. */
+  densityX: number;
+  densityY: number;
 }
 
-// Per-event in-process state. Keyed by `event.id` (bigserial).
-const mapCache = new Map<bigint, PreRenderedMap>();
-const mapRenderInFlight = new Map<bigint, Promise<PreRenderedMap>>();
-const tileCacheProgress = new Map<bigint, TileProgress>();
+// Per-event parsed SVG (a few MB each), keyed by `event.id`.
+const svgCache = new Map<bigint, MapSource>();
+const svgLoadInFlight = new Map<bigint, Promise<MapSource>>();
+// De-dupes concurrent renders of the same block: a viewport fetches ~20
+// tiles at once, which is one or two blocks.
+const blockInFlight = new Map<string, Promise<Map<string, Buffer>>>();
 
-/**
- * Drop in-memory state for `eventId` — called whenever a new map is
- * uploaded so the next tile request re-rasters the latest file.
- */
+let renderGate: Semaphore | null = null;
+function gate(): Semaphore {
+  renderGate ??= new Semaphore(renderConcurrency());
+  return renderGate;
+}
+
+/** Drop cached state for `eventId` — called whenever a new map is uploaded. */
 function invalidate(eventId: bigint): void {
-  mapCache.delete(eventId);
-  mapRenderInFlight.delete(eventId);
-  tileCacheProgress.delete(eventId);
+  svgCache.delete(eventId);
+  svgLoadInFlight.delete(eventId);
+  preCacheConsidered.delete(eventId);
+  for (const key of [...blockInFlight.keys()]) {
+    if (key.startsWith(`${eventId}:`)) blockInFlight.delete(key);
+  }
 }
 
 async function resolveEventId(nameId: string): Promise<bigint | null> {
@@ -94,53 +133,36 @@ async function resolveEventId(nameId: string): Promise<bigint | null> {
   return row?.id ?? null;
 }
 
-/**
- * Return the pre-rendered bitmap + CRS for `eventId`, rasterising the
- * OCAD file lazily on first request. A second concurrent request for
- * the same event awaits the in-flight render instead of starting a
- * duplicate raster job (the in-flight map can cost 100s of MB +
- * several seconds).
- */
-async function getPreRenderedMap(eventId: bigint): Promise<PreRenderedMap> {
-  const cached = mapCache.get(eventId);
+const tileKey = (z: number, x: number, y: number) => `${z}/${x}/${y}`;
+
+// ─── Map source ─────────────────────────────────────────────
+
+async function getMapSource(eventId: bigint): Promise<MapSource> {
+  const cached = svgCache.get(eventId);
   if (cached) return cached;
 
-  const inFlight = mapRenderInFlight.get(eventId);
+  const inFlight = svgLoadInFlight.get(eventId);
   if (inFlight) return inFlight;
 
-  // Evict older bitmaps *before* rendering so their memory is reclaimable
-  // during the new render's allocation peak (see map-raster-budget.ts).
-  evictForInsert(mapCache, rasterCacheCap());
-
-  const promise = doPreRenderMap(eventId);
-  mapRenderInFlight.set(eventId, promise);
+  const promise = loadMapSource(eventId);
+  svgLoadInFlight.set(eventId, promise);
   try {
-    const result = await promise;
-    mapCache.set(eventId, result);
-    return result;
+    const source = await promise;
+    evictForInsert(svgCache, svgCacheEvents());
+    svgCache.set(eventId, source);
+    return source;
   } finally {
-    mapRenderInFlight.delete(eventId);
+    svgLoadInFlight.delete(eventId);
   }
 }
 
-/**
- * Actually load + rasterise the OCAD file for `eventId`. The raster is
- * capped at MAP_RASTER_MAX_PIXELS (default ~800M px ≈ 3.2 GB RGBA;
- * memory-constrained deployments like Cloud Run set a smaller budget —
- * see map-raster-budget.ts for the sizing math). After rendering, kick
- * off `preCacheTiles` in the background so the first viewer pays
- * nothing for subsequent tiles.
- */
-async function doPreRenderMap(eventId: bigint): Promise<PreRenderedMap> {
-  const db = prisma();
-  const row = await db.mapFile.findFirst({
+async function loadMapSource(eventId: bigint): Promise<MapSource> {
+  const row = await prisma().mapFile.findFirst({
     where: { eventId },
     orderBy: { id: "desc" },
     select: { fileData: true },
   });
   if (!row) throw new Error("No map file uploaded");
-
-  const buffer = Buffer.from(row.fileData);
 
   // Lazy-load OCAD + JSDOM so the dependencies don't add to API
   // cold-start latency for events that never look at a map.
@@ -151,10 +173,6 @@ async function doPreRenderMap(eventId: bigint): Promise<PreRenderedMap> {
   ) => Promise<{
     getCrs(): OcadCrs;
     getBounds(): number[];
-    objects: unknown[];
-    symbols: unknown[];
-    colors: unknown[];
-    parameterStrings: Record<string, unknown[]>;
   }>;
   const ocadToSvg = (ocadMod as Record<string, unknown>).ocadToSvg as (
     file: unknown,
@@ -162,126 +180,131 @@ async function doPreRenderMap(eventId: bigint): Promise<PreRenderedMap> {
   ) => { outerHTML: string };
 
   const jsdomMod = await import("jsdom");
-  const dom = new jsdomMod.JSDOM(
-    "<!DOCTYPE html><html><body></body></html>",
-  );
-  const document = dom.window.document;
+  const dom = new jsdomMod.JSDOM("<!DOCTYPE html><html><body></body></html>");
 
-  const ocadFile = await readOcad(buffer, { quietWarnings: true });
-  const svgElement = ocadToSvg(ocadFile, {
-    document,
+  const ocadFile = await readOcad(Buffer.from(row.fileData), {
+    quietWarnings: true,
+  });
+  const svg = ocadToSvg(ocadFile, {
+    document: dom.window.document,
     generateSymbolElements: true,
     exportHidden: false,
-  });
+  }).outerHTML;
 
   const crs = ocadFile.getCrs();
   const ocadBounds = ocadFile.getBounds();
+  const mapWgs84 = ocadBoundsToWgs84(ocadBounds, crs);
+  if (!mapWgs84) throw new Error("Map has no usable georeference");
 
-  const [bMinX, bMinY, bMaxX, bMaxY] = ocadBounds;
-  const ocadW = bMaxX - bMinX;
-  const ocadH = bMaxY - bMinY;
+  const rootViewBox = parseViewBox(svg);
+  if (!rootViewBox) throw new Error("Map SVG has no root viewBox");
 
-  const pxPerUnit = rasterPxPerUnit(ocadW, ocadH, rasterPixelBudget());
-  const bitmapW = Math.ceil(ocadW * pxPerUnit);
-  const bitmapH = Math.ceil(ocadH * pxPerUnit);
-
-  const resvgMod = await import("@resvg/resvg-js");
-  const resvg = new resvgMod.Resvg(svgElement.outerHTML, {
-    fitTo: { mode: "width" as const, value: bitmapW },
-    background: "white",
-  });
-  const rendered = resvg.render();
-
-  const bitmap: BitmapInfo = {
-    data: Buffer.from(rendered.pixels),
-    width: rendered.width,
-    height: rendered.height,
-    scale: rendered.width / ocadW,
-  };
-
-  // Pre-cache tiles in background — don't block the first request.
-  preCacheTiles(eventId, bitmap, crs, ocadBounds).catch((err) => {
-    console.error("[map-tiles] preCacheTiles failed:", err);
-  });
-
-  return { bitmap, crs, ocadBounds };
+  return { svg, rootViewBox, crs, ocadBounds, mapWgs84 };
 }
 
-/**
- * Render a single tile from the pre-rendered bitmap. Returns the PNG
- * bytes, or `null` if the tile doesn't overlap the map's bounds at
- * all (caller turns this into a 204).
- *
- * Sampling happens at pixel centres (`u, v ∈ [(0.5)/N, (N-0.5)/N]`)
- * — the legacy +0.5 fix that makes adjacent tiles share the exact
- * same geographic edge sample, eliminating the 1-pixel hairline you
- * see when neighbours sample at corners.
- */
-async function renderTile(
+// ─── Geometry ───────────────────────────────────────────────
+
+/** The tile's four corners in OCAD coordinates, or null outside the map. */
+function tileQuad(
   z: number,
   x: number,
   y: number,
-  bitmap: BitmapInfo,
-  crs: OcadCrs,
-  ocadBounds: number[],
-): Promise<Buffer | null> {
-  const tileBds = tileBoundsWgs84(z, x, y);
-  const mapWgs84 = ocadBoundsToWgs84(ocadBounds, crs);
-  if (!mapWgs84) return null;
-
-  // Quick AABB rejection in WGS84.
-  if (
-    tileBds.west > mapWgs84.east ||
-    tileBds.east < mapWgs84.west ||
-    tileBds.south > mapWgs84.north ||
-    tileBds.north < mapWgs84.south
-  ) {
+  source: MapSource,
+): OcadQuad | null {
+  const t = tileBoundsWgs84(z, x, y);
+  const m = source.mapWgs84;
+  if (t.west > m.east || t.east < m.west || t.south > m.north || t.north < m.south) {
     return null;
   }
-
-  const nw = wgs84ToOcad(tileBds.north, tileBds.west, crs);
-  const ne = wgs84ToOcad(tileBds.north, tileBds.east, crs);
-  const sw = wgs84ToOcad(tileBds.south, tileBds.west, crs);
-  const se = wgs84ToOcad(tileBds.south, tileBds.east, crs);
+  const nw = wgs84ToOcad(t.north, t.west, source.crs);
+  const ne = wgs84ToOcad(t.north, t.east, source.crs);
+  const sw = wgs84ToOcad(t.south, t.west, source.crs);
+  const se = wgs84ToOcad(t.south, t.east, source.crs);
   if (!nw || !ne || !sw || !se) return null;
+  return { nw, ne, sw, se };
+}
 
-  const tileSize = 256;
-  const {
-    data: bitmapData,
-    width: bmpW,
-    height: bmpH,
-    scale: pxPerUnit,
-  } = bitmap;
-  const [bMinX, , , bMaxY] = ocadBounds;
+// ─── Rendering ──────────────────────────────────────────────
 
-  const ocadToBitmapPx = (ocadX: number, ocadY: number) => ({
-    bx: (ocadX - bMinX) * pxPerUnit,
-    by: (bMaxY - ocadY) * pxPerUnit,
+/**
+ * Rasterise `rect` out of the map SVG at `density` pixels per OCAD unit.
+ * The density that comes back is measured from the produced image rather
+ * than assumed, so the sampler is immune to the rasteriser's rounding.
+ */
+async function rasterise(
+  source: MapSource,
+  rect: OcadRect,
+  density: number,
+): Promise<RenderedWindow | null> {
+  const viewBox = windowViewBox(source.rootViewBox, source.ocadBounds, rect);
+  if (!viewBox) {
+    // The generator's root viewBox no longer spans the OCAD bounds, so the
+    // window placement can't be trusted. Fail loudly instead of silently
+    // serving tiles from the wrong part of the map.
+    throw new Error(
+      "Map SVG viewBox does not span the OCAD bounds; windowed rendering cannot place the window",
+    );
+  }
+
+  const size = windowPixelSize(rect, density);
+  const resvgMod = await import("@resvg/resvg-js");
+  // renderAsync, not Resvg#render: rasterising runs on the libuv thread
+  // pool instead of blocking the event loop. The renderer is called far
+  // more often than the whole-map version it replaced — once per block
+  // per zoom rather than once per map — so a synchronous render stalls
+  // every other request in the process while tiles are being produced.
+  const rendered = await resvgMod.renderAsync(withViewBox(source.svg, viewBox), {
+    fitTo: { mode: "width" as const, value: size.width },
+    background: "white",
   });
 
-  const nwPx = ocadToBitmapPx(nw.x, nw.y);
-  const nePx = ocadToBitmapPx(ne.x, ne.y);
-  const swPx = ocadToBitmapPx(sw.x, sw.y);
-  const sePx = ocadToBitmapPx(se.x, se.y);
+  if (rendered.width === 0 || rendered.height === 0) return null;
+  return {
+    pixels: Buffer.from(rendered.pixels),
+    width: rendered.width,
+    height: rendered.height,
+    rect,
+    densityX: rendered.width / (rect.maxX - rect.minX),
+    densityY: rendered.height / (rect.maxY - rect.minY),
+  };
+}
 
-  const tilePixels = Buffer.alloc(tileSize * tileSize * 4);
+/**
+ * Warp one tile out of a rendered window with bilinear sampling. Returns
+ * null when the tile has no content at all (fully transparent), which the
+ * caller turns into a 204.
+ */
+async function sampleTile(
+  quad: OcadQuad,
+  win: RenderedWindow,
+): Promise<Buffer | null> {
+  const toPx = (p: { x: number; y: number }) => ({
+    bx: (p.x - win.rect.minX) * win.densityX,
+    by: (win.rect.maxY - p.y) * win.densityY,
+  });
+  const nwPx = toPx(quad.nw);
+  const nePx = toPx(quad.ne);
+  const swPx = toPx(quad.sw);
+  const sePx = toPx(quad.se);
+
+  const out = Buffer.alloc(TILE_SIZE * TILE_SIZE * 4);
   let hasContent = false;
 
-  for (let ty = 0; ty < tileSize; ty++) {
-    const v = (ty + 0.5) / tileSize;
+  for (let ty = 0; ty < TILE_SIZE; ty++) {
+    const v = (ty + 0.5) / TILE_SIZE;
     const leftBx = nwPx.bx + (swPx.bx - nwPx.bx) * v;
     const leftBy = nwPx.by + (swPx.by - nwPx.by) * v;
     const rightBx = nePx.bx + (sePx.bx - nePx.bx) * v;
     const rightBy = nePx.by + (sePx.by - nePx.by) * v;
 
-    for (let tx = 0; tx < tileSize; tx++) {
-      const u = (tx + 0.5) / tileSize;
+    for (let tx = 0; tx < TILE_SIZE; tx++) {
+      const u = (tx + 0.5) / TILE_SIZE;
       const srcX = leftBx + (rightBx - leftBx) * u;
       const srcY = leftBy + (rightBy - leftBy) * u;
 
       const x0 = Math.floor(srcX);
       const y0 = Math.floor(srcY);
-      if (x0 < 0 || y0 < 0 || x0 + 1 >= bmpW || y0 + 1 >= bmpH) continue;
+      if (x0 < 0 || y0 < 0 || x0 + 1 >= win.width || y0 + 1 >= win.height) continue;
 
       const fx = srcX - x0;
       const fy = srcY - y0;
@@ -290,21 +313,21 @@ async function renderTile(
       const w01 = (1 - fx) * fy;
       const w11 = fx * fy;
 
-      const i00 = (y0 * bmpW + x0) * 4;
-      const i10 = (y0 * bmpW + (x0 + 1)) * 4;
-      const i01 = ((y0 + 1) * bmpW + x0) * 4;
-      const i11 = ((y0 + 1) * bmpW + (x0 + 1)) * 4;
+      const i00 = (y0 * win.width + x0) * 4;
+      const i10 = (y0 * win.width + (x0 + 1)) * 4;
+      const i01 = ((y0 + 1) * win.width + x0) * 4;
+      const i11 = ((y0 + 1) * win.width + (x0 + 1)) * 4;
 
-      const dstOff = (ty * tileSize + tx) * 4;
+      const dstOff = (ty * TILE_SIZE + tx) * 4;
       for (let ch = 0; ch < 4; ch++) {
-        tilePixels[dstOff + ch] = Math.round(
-          bitmapData[i00 + ch] * w00 +
-            bitmapData[i10 + ch] * w10 +
-            bitmapData[i01 + ch] * w01 +
-            bitmapData[i11 + ch] * w11,
+        out[dstOff + ch] = Math.round(
+          win.pixels[i00 + ch] * w00 +
+            win.pixels[i10 + ch] * w10 +
+            win.pixels[i01 + ch] * w01 +
+            win.pixels[i11 + ch] * w11,
         );
       }
-      if (tilePixels[dstOff + 3] > 0) hasContent = true;
+      if (out[dstOff + 3] > 0) hasContent = true;
     }
   }
 
@@ -312,109 +335,217 @@ async function renderTile(
 
   const sharpMod = await import("sharp");
   return sharpMod
-    .default(tilePixels, {
-      raw: { width: tileSize, height: tileSize, channels: 4 },
-    })
+    .default(out, { raw: { width: TILE_SIZE, height: TILE_SIZE, channels: 4 } })
     .png()
     .toBuffer();
 }
 
 /**
- * Render every overlapping tile for zoom levels 10–17 in the
- * background. Idempotent: skips entirely if the cache already has
- * more than 10 tiles for this event (a previously-completed pre-cache
- * is a strong "we already did this" signal). Per-event progress is
- * exposed via `/api/map-tile-progress`.
+ * Render every tile of one aligned block and persist them. Returns the
+ * PNGs keyed by `z/x/y`; tiles that fall outside the map are absent.
  */
-async function preCacheTiles(
+async function renderBlockUncached(
   eventId: bigint,
-  bitmap: BitmapInfo,
-  crs: OcadCrs,
-  ocadBounds: number[],
-): Promise<void> {
-  const mapWgs84 = ocadBoundsToWgs84(ocadBounds, crs);
-  if (!mapWgs84) return;
-
-  const db = prisma();
-  const existingCount = await db.mapTile.count({ where: { eventId } });
-  if (existingCount > 10) return;
-
-  const lonToTileX = (lon: number, z: number) =>
-    Math.floor(((lon + 180) / 360) * Math.pow(2, z));
-  const latToTileY = (lat: number, z: number) => {
-    const rad = (lat * Math.PI) / 180;
-    return Math.floor(
-      ((1 - Math.log(Math.tan(rad) + 1 / Math.cos(rad)) / Math.PI) / 2) *
-        Math.pow(2, z),
-    );
-  };
-
-  let totalTiles = 0;
-  for (let z = 10; z <= 17; z++) {
-    const minTileX = lonToTileX(mapWgs84.west, z);
-    const maxTileX = lonToTileX(mapWgs84.east, z);
-    const minTileY = latToTileY(mapWgs84.north, z);
-    const maxTileY = latToTileY(mapWgs84.south, z);
-    totalTiles += (maxTileX - minTileX + 1) * (maxTileY - minTileY + 1);
+  source: MapSource,
+  z: number,
+  bx: number,
+  by: number,
+  size: number,
+  background: boolean,
+): Promise<Map<string, Buffer>> {
+  const quads = new Map<string, OcadQuad>();
+  for (let x = bx; x < bx + size; x++) {
+    for (let y = by; y < by + size; y++) {
+      const quad = tileQuad(z, x, y, source);
+      if (quad) quads.set(tileKey(z, x, y), quad);
+    }
   }
-  tileCacheProgress.set(eventId, {
-    total: totalTiles,
-    done: 0,
-    rendering: true,
+  const result = new Map<string, Buffer>();
+  if (quads.size === 0) return result;
+
+  // Density comes from a single tile: every tile at a zoom level spans
+  // very nearly the same ground distance, and using one keeps the figure
+  // independent of how much of the block the map actually covers.
+  const first = quads.values().next().value as OcadQuad;
+  const tileDensity = quadDensity(first, TILE_SIZE, TILE_SIZE);
+  if (tileDensity <= 0) return result;
+  const wanted = tileDensity * supersample();
+
+  // A margin of two source pixels keeps bilinear sampling of edge pixels
+  // inside the window instead of clipping against its border.
+  const corners = [...quads.values()].flatMap((q) => [q.nw, q.ne, q.sw, q.se]);
+  const rect = boundsOfPoints(corners, 2 / wanted);
+  const density = clampDensity(rect, wanted, windowMaxPixels());
+
+  const win = await gate().run(() => rasterise(source, rect, density), {
+    background,
   });
+  if (!win) return result;
 
-  for (let z = 10; z <= 17; z++) {
-    const minTileX = lonToTileX(mapWgs84.west, z);
-    const maxTileX = lonToTileX(mapWgs84.east, z);
-    const minTileY = latToTileY(mapWgs84.north, z);
-    const maxTileY = latToTileY(mapWgs84.south, z);
+  for (const [key, quad] of quads) {
+    const png = await sampleTile(quad, win);
+    if (png) result.set(key, png);
+  }
 
-    for (let tx = minTileX; tx <= maxTileX; tx++) {
-      for (let ty = minTileY; ty <= maxTileY; ty++) {
+  await persistTiles(eventId, result);
+  return result;
+}
+
+/** Render a block, joining an in-flight render of the same block. */
+async function renderBlock(
+  eventId: bigint,
+  source: MapSource,
+  z: number,
+  x: number,
+  y: number,
+  background = false,
+): Promise<Map<string, Buffer>> {
+  const size = blockTiles();
+  const bx = blockOrigin(x, size);
+  const by = blockOrigin(y, size);
+  const key = `${eventId}:${z}:${bx}:${by}`;
+
+  const inFlight = blockInFlight.get(key);
+  if (inFlight) return inFlight;
+
+  const promise = renderBlockUncached(eventId, source, z, bx, by, size, background);
+  blockInFlight.set(key, promise);
+  try {
+    return await promise;
+  } finally {
+    blockInFlight.delete(key);
+  }
+}
+
+/**
+ * Write tiles to the cache. `ON CONFLICT DO NOTHING` because another
+ * instance (or the background pre-cache) may have rendered the same block
+ * concurrently — the rows are identical either way.
+ */
+async function persistTiles(
+  eventId: bigint,
+  tiles: Map<string, Buffer>,
+): Promise<void> {
+  if (tiles.size === 0) return;
+  const values: unknown[] = [];
+  const rows: string[] = [];
+  let i = 1;
+  for (const [key, png] of tiles) {
+    const [z, x, y] = key.split("/").map(Number);
+    rows.push(`($${i++}::bigint, $${i++}, $${i++}, $${i++}, $${i++})`);
+    values.push(eventId, z, x, y, png);
+  }
+  try {
+    await prisma().$executeRawUnsafe(
+      `INSERT INTO oxygen.map_tiles (event_id, z, x, y, tile_data)
+       VALUES ${rows.join(", ")}
+       ON CONFLICT (event_id, z, x, y) DO NOTHING`,
+      ...values,
+    );
+  } catch (err) {
+    // A closed pool (test teardown, shutdown) must not fail the request:
+    // the tiles were rendered and are being served, only caching is lost.
+    console.warn("[map-tiles] tile cache write failed:", err);
+  }
+}
+
+/**
+ * Fill `map_tiles` for the pre-cache zoom span in the background, so the
+ * first view after an upload is instant. Zoom levels whose tiles are all
+ * present are skipped, so a restart resumes rather than redoing work,
+ * and the loop bails out entirely once the database stops accepting
+ * writes (shutdown, test teardown).
+ *
+ * Deliberately unhurried: it pauses between blocks so that foreground
+ * tile requests — and everything else sharing the process — keep their
+ * latency. Deep zooms are left out of the span entirely; see
+ * PRECACHE_MAX_ZOOM.
+ */
+async function preCacheTiles(eventId: bigint, source: MapSource): Promise<void> {
+  const db = prisma();
+  const size = blockTiles();
+  const delayMs = precacheBlockDelayMs();
+  const maxZoom = precacheMaxZoom();
+
+  for (let z = precacheMinZoom(); z <= maxZoom; z++) {
+    const range = tileRangeForBounds(source.mapWgs84, z);
+    const expected = (range.x1 - range.x0 + 1) * (range.y1 - range.y0 + 1);
+    const have = await db.mapTile.count({ where: { eventId, z } });
+    if (have >= expected) continue;
+
+    for (const bx of blockRange(range.x0, range.x1, size)) {
+      for (const by of blockRange(range.y0, range.y1, size)) {
         try {
-          const png = await renderTile(z, tx, ty, bitmap, crs, ocadBounds);
-          if (png) {
-            // ON CONFLICT DO NOTHING — a concurrent on-demand render of
-            // the same tile may have written ahead of us.
-            await db.$executeRawUnsafe(
-              `INSERT INTO oxygen.map_tiles (event_id, z, x, y, tile_data)
-               VALUES ($1::bigint, $2, $3, $4, $5)
-               ON CONFLICT (event_id, z, x, y) DO NOTHING`,
-              eventId,
-              z,
-              tx,
-              ty,
-              png,
-            );
-          }
+          await renderBlock(eventId, source, z, bx, by, true);
         } catch (err) {
-          // The Prisma client may have closed (test teardown, server
-          // shutdown). "Response from the Engine was empty" / "Engine
-          // is not yet connected" both mean the pool is gone — bail
-          // out of the entire pre-cache loop instead of spamming the
-          // log with per-tile failures.
           const msg = String((err as Error)?.message ?? "");
           if (
             msg.includes("Response from the Engine was empty") ||
             msg.includes("Engine is not yet connected")
           ) {
-            const prog = tileCacheProgress.get(eventId);
-            if (prog) prog.rendering = false;
             return;
           }
           console.error(
-            `[map-tiles] precache failed at z=${z} x=${tx} y=${ty}:`,
+            `[map-tiles] precache failed at z=${z} block=${bx},${by}:`,
             err,
           );
         }
-        const prog = tileCacheProgress.get(eventId);
-        if (prog) prog.done++;
+        if (delayMs > 0) {
+          await new Promise((resolve) => setTimeout(resolve, delayMs));
+        }
       }
     }
   }
-  const prog = tileCacheProgress.get(eventId);
-  if (prog) prog.rendering = false;
 }
+
+// ─── Progress ───────────────────────────────────────────────
+
+/**
+ * The map's WGS84 bounds as stored at upload. Reading them back beats
+ * re-deriving them from the OCAD: it is one small query rather than a
+ * parse, so the progress endpoint and the pre-cache check stay cheap.
+ */
+async function storedBounds(eventId: bigint): Promise<WGS84Bounds | null> {
+  const row = await prisma().mapFile.findFirst({
+    where: { eventId },
+    orderBy: { uploadedAt: "desc" },
+    select: { bounds: true },
+  });
+  const bounds = row?.bounds as unknown as WGS84Bounds | null;
+  if (
+    !bounds ||
+    typeof bounds.north !== "number" ||
+    typeof bounds.south !== "number" ||
+    typeof bounds.east !== "number" ||
+    typeof bounds.west !== "number"
+  ) {
+    return null;
+  }
+  return bounds;
+}
+
+/**
+ * Pre-cache progress straight from the database. The denominator is a
+ * function of the map's stored WGS84 bounds and the numerator is a row
+ * count, so a request served by any instance reports the same figures —
+ * unlike the in-process counter this replaced.
+ */
+async function tileProgress(
+  eventId: bigint,
+): Promise<{ total: number; done: number; rendering: boolean }> {
+  const bounds = await storedBounds(eventId);
+  if (!bounds) return { total: 0, done: 0, rendering: false };
+
+  const minZoom = precacheMinZoom();
+  const maxZoom = precacheMaxZoom();
+  const total = expectedTileCount(bounds, minZoom, maxZoom);
+  const done = await prisma().mapTile.count({
+    where: { eventId, z: { gte: minZoom, lte: maxZoom } },
+  });
+  return { total, done: Math.min(done, total), rendering: done < total };
+}
+
+// ─── Routes ─────────────────────────────────────────────────
 
 /**
  * Register the two `/api/map-tile*` Fastify routes and subscribe the
@@ -438,13 +569,7 @@ export function registerMapTileRoutes(server: FastifyInstance): void {
     if (eventId === null) {
       return reply.send({ total: 0, done: 0, rendering: false });
     }
-    return reply.send(
-      tileCacheProgress.get(eventId) ?? {
-        total: 0,
-        done: 0,
-        rendering: false,
-      },
-    );
+    return reply.send(await tileProgress(eventId));
   });
 
   server.get<{
@@ -480,6 +605,7 @@ export function registerMapTileRoutes(server: FastifyInstance): void {
         select: { tileData: true },
       });
       if (cached) {
+        kickOffPreCache(eventId);
         return reply
           .header("Content-Type", "image/png")
           .header("Cache-Control", "public, max-age=604800")
@@ -487,32 +613,22 @@ export function registerMapTileRoutes(server: FastifyInstance): void {
       }
 
       try {
-        const { bitmap, crs, ocadBounds } = await getPreRenderedMap(eventId);
-        const png = await renderTile(z, x, y, bitmap, crs, ocadBounds);
+        const source = await getMapSource(eventId);
+        const rendered = await renderBlock(eventId, source, z, x, y);
+        const png = rendered.get(tileKey(z, x, y));
         if (!png) {
-          // Tile falls outside the map — cache the "empty" response
-          // for a week so the browser stops asking.
+          // Outside the map, or an empty tile — cache the "nothing here"
+          // answer for a week so the browser stops asking.
           return reply
             .header("Cache-Control", "public, max-age=604800")
             .code(204)
             .send();
         }
-        // Best-effort cache write — race with the background
-        // pre-cacher is benign because of ON CONFLICT DO NOTHING.
-        try {
-          await prisma().$executeRawUnsafe(
-            `INSERT INTO oxygen.map_tiles (event_id, z, x, y, tile_data)
-             VALUES ($1::bigint, $2, $3, $4, $5)
-             ON CONFLICT (event_id, z, x, y) DO NOTHING`,
-            eventId,
-            z,
-            x,
-            y,
-            png,
-          );
-        } catch (err) {
-          server.log.warn({ err }, "tile cache write failed");
-        }
+
+        // Fill the overview zooms in the background so the next viewer's
+        // first paint is instant.
+        kickOffPreCache(eventId);
+
         return reply
           .header("Content-Type", "image/png")
           .header("Cache-Control", "public, max-age=604800")
@@ -522,5 +638,47 @@ export function registerMapTileRoutes(server: FastifyInstance): void {
         return reply.code(500).send({ error: "Failed to render tile" });
       }
     },
+  );
+}
+
+/**
+ * Events this process has already considered for pre-caching, whether or
+ * not it went on to render anything. Requests arrive in viewport-sized
+ * bursts, so without this the completeness check below would run twenty
+ * times over.
+ */
+const preCacheConsidered = new Set<bigint>();
+
+/**
+ * Start the background pre-cache if this event still needs it.
+ *
+ * Called from the cache-hit path as well as the render path, so a
+ * process that restarts mid-pre-cache (or inherits a partially filled
+ * cache from another instance) finishes the job rather than waiting for
+ * someone to happen upon an uncached tile. The completeness check runs
+ * off the stored bounds and a row count, so the common "already done"
+ * case costs two queries and never touches the OCAD.
+ */
+async function maybePreCache(eventId: bigint): Promise<void> {
+  if (!precacheEnabled() || preCacheConsidered.has(eventId)) return;
+  preCacheConsidered.add(eventId);
+
+  const bounds = await storedBounds(eventId);
+  if (!bounds) return;
+
+  const minZoom = precacheMinZoom();
+  const maxZoom = precacheMaxZoom();
+  const done = await prisma().mapTile.count({
+    where: { eventId, z: { gte: minZoom, lte: maxZoom } },
+  });
+  if (done >= expectedTileCount(bounds, minZoom, maxZoom)) return;
+
+  const source = await getMapSource(eventId);
+  await preCacheTiles(eventId, source);
+}
+
+function kickOffPreCache(eventId: bigint): void {
+  void maybePreCache(eventId).catch((err) =>
+    console.error("[map-tiles] pre-cache failed:", err),
   );
 }
