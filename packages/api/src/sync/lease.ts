@@ -22,6 +22,7 @@ import { createTRPCClient, httpLink, type TRPCClient } from "@trpc/client";
 import type { AppRouter } from "../routers/index.js";
 import type { EventRef, PrismaClient } from "../db.js";
 import { nodeId, SYNC_SECRET_HEADER } from "./nodeIdentity.js";
+import { makeSyncHeaders } from "./googleIdToken.js";
 
 // ─── Active lease + write guard ─────────────────────────────
 
@@ -312,7 +313,12 @@ export function httpLeasePeer(baseUrl: string, secret: string): LeasePeer {
         links: [
           httpLink({
             url: `${baseUrl}/trpc`,
-            headers: { "x-event-id": nameId, [SYNC_SECRET_HEADER]: secret },
+            // Async provider with a Bearer ID token when the cloud peer
+            // sits behind IAP (SYNC_GOOGLE_AUDIENCE); plain headers otherwise.
+            headers: makeSyncHeaders({
+              "x-event-id": nameId,
+              [SYNC_SECRET_HEADER]: secret,
+            }),
           }),
         ],
       });
