@@ -46,6 +46,14 @@ RUN cd packages/web && npx vite build
 # ─── Stage 3: API production image ────────────────────────
 FROM node:20-slim AS api
 
+# Deploy-time build identity, reported by /api/version. The web client
+# treats a change as "new version deployed"; without it the client falls
+# back to comparing process start time, which false-positives on platforms
+# that restart containers without a code change (Cloud Run). deploy.sh
+# passes the git SHA + timestamp; compose builds may leave it empty.
+ARG BUILD_ID=""
+ENV OXYGEN_BUILD_ID=$BUILD_ID
+
 WORKDIR /app
 
 # pg_dump is required for the event backup download endpoint
@@ -79,3 +87,17 @@ COPY --from=build /app/packages/web/dist /usr/share/nginx/html
 COPY docker/nginx.conf /etc/nginx/conf.d/default.conf
 
 EXPOSE 80
+
+# ─── Stage 5: Cloud single-container image (API + web) ─────
+# Cloud Run runs one container per service, so this target bundles the
+# built web app into the API image; staticServe.ts serves it (SPA
+# fallback + asset caching) when WEB_DIST_DIR is set. See
+# docs/deploy-gcp-cloud-run.md.
+FROM api AS cloud
+
+COPY --from=build /app/packages/web/dist /app/web-dist
+
+ENV WEB_DIST_DIR=/app/web-dist
+# Cloud Run injects PORT (conventionally 8080); the API honors it at boot.
+ENV PORT=8080
+EXPOSE 8080

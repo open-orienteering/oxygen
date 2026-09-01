@@ -43,6 +43,12 @@ import {
   wgs84ToOcad,
   type OcadCrs,
 } from "./map-projection.js";
+import {
+  evictForInsert,
+  rasterCacheCap,
+  rasterPixelBudget,
+  rasterPxPerUnit,
+} from "./map-raster-budget.js";
 
 interface BitmapInfo {
   data: Buffer;
@@ -102,6 +108,10 @@ async function getPreRenderedMap(eventId: bigint): Promise<PreRenderedMap> {
   const inFlight = mapRenderInFlight.get(eventId);
   if (inFlight) return inFlight;
 
+  // Evict older bitmaps *before* rendering so their memory is reclaimable
+  // during the new render's allocation peak (see map-raster-budget.ts).
+  evictForInsert(mapCache, rasterCacheCap());
+
   const promise = doPreRenderMap(eventId);
   mapRenderInFlight.set(eventId, promise);
   try {
@@ -114,11 +124,12 @@ async function getPreRenderedMap(eventId: bigint): Promise<PreRenderedMap> {
 }
 
 /**
- * Actually load + rasterise the OCAD file for `eventId`. Caps the
- * raster at ~800M pixels (~3.2 GB RGBA in memory) — Node's default
- * old-space cap is 4 GB. After rendering, kick off `preCacheTiles` in
- * the background so the first viewer pays nothing for subsequent
- * tiles.
+ * Actually load + rasterise the OCAD file for `eventId`. The raster is
+ * capped at MAP_RASTER_MAX_PIXELS (default ~800M px ≈ 3.2 GB RGBA;
+ * memory-constrained deployments like Cloud Run set a smaller budget —
+ * see map-raster-budget.ts for the sizing math). After rendering, kick
+ * off `preCacheTiles` in the background so the first viewer pays
+ * nothing for subsequent tiles.
  */
 async function doPreRenderMap(eventId: bigint): Promise<PreRenderedMap> {
   const db = prisma();
@@ -170,13 +181,7 @@ async function doPreRenderMap(eventId: bigint): Promise<PreRenderedMap> {
   const ocadW = bMaxX - bMinX;
   const ocadH = bMaxY - bMinY;
 
-  const maxPixels = 800_000_000;
-  const idealPxPerUnit = 1.0;
-  const idealPixels = ocadW * idealPxPerUnit * ocadH * idealPxPerUnit;
-  const pxPerUnit =
-    idealPixels > maxPixels
-      ? Math.sqrt(maxPixels / (ocadW * ocadH))
-      : idealPxPerUnit;
+  const pxPerUnit = rasterPxPerUnit(ocadW, ocadH, rasterPixelBudget());
   const bitmapW = Math.ceil(ocadW * pxPerUnit);
   const bitmapH = Math.ceil(ocadH * pxPerUnit);
 

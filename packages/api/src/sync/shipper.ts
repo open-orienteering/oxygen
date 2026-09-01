@@ -49,6 +49,7 @@ import {
   syncSettingsRefreshMs,
   syncSharedSecret,
 } from "./nodeIdentity.js";
+import { makeSyncHeaders } from "./googleIdToken.js";
 import { makeLeasePeer } from "./lease.js";
 import { refreshCloudOwnedSettings } from "./settingsRefresh.js";
 
@@ -85,10 +86,12 @@ export function httpPeerTransport(
         links: [
           httpLink({
             url: `${baseUrl}/trpc`,
-            headers: {
+            // With SYNC_GOOGLE_AUDIENCE set (cloud behind IAP) this is an
+            // async provider that adds a Bearer ID token per request.
+            headers: makeSyncHeaders({
               "x-event-id": nameId,
               [SYNC_SECRET_HEADER]: secret,
-            },
+            }),
           }),
         ],
       });
