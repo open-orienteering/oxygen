@@ -103,6 +103,7 @@
     "deleteControl": "Ta bort kontroll",
     "saving": "Sparar...",
     "hint": "Klicka på kartan eller en kontroll för åtgärder, dra en kontroll för att flytta den. H döljer/visar övriga kontroller.",
+    "helpAria": "Hjälp för banläggning",
     "selectedControl": "Kontroll {{code}}",
     "position": "x {{x}} mm, y {{y}} mm",
     "deleteConfirm": "Ta bort kontroll {{code}}?",
