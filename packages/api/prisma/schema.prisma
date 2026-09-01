@@ -211,6 +211,22 @@ model Setting {
   @@schema("oxygen")
 }
 
+/// Cluster-wide singleton lease, one row per named responsibility (today
+/// only "background-jobs"). The holder renews it on a timer; any instance
+/// may take it over once `expires_at` has passed, which is how leadership
+/// survives an instance being recycled. Expiry is compared against the
+/// database's `now()`, so instance clock skew never affects the outcome.
+model InstanceLease {
+  name       String   @id @db.VarChar(64)
+  holderId   String   @map("holder_id") @db.VarChar(64)
+  acquiredAt DateTime @default(now()) @map("acquired_at") @db.Timestamptz(6)
+  renewedAt  DateTime @default(now()) @map("renewed_at") @db.Timestamptz(6)
+  expiresAt  DateTime @map("expires_at") @db.Timestamptz(6)
+
+  @@map("instance_lease")
+  @@schema("oxygen")
+}
+
 /// Invite-only operator identity. Email is the stable key (always lowercase).
 /// Passwords are never stored — identity arrives from a trusted proxy header.
 model User {
