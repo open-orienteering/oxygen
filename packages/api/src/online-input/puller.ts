@@ -21,6 +21,7 @@
  */
 
 import { prisma, getSetting, setSetting } from "../db.js";
+import type { Prisma } from "../generated/prisma/client.js";
 import {
   type Protocol,
   type ProtocolConfig,
@@ -84,6 +85,36 @@ async function saveConfig(
   cfg: OnlineInputConfig,
 ): Promise<void> {
   await setSetting(settingKey(eventId, "config"), JSON.stringify(cfg));
+}
+
+/**
+ * Advance the `lastId` watermark, but only if it still reads `expected`.
+ *
+ * ROC's protocol de-dupes purely by watermark, so whoever moves it owns
+ * the punches in that range. Running this inside the insert transaction
+ * makes the pair atomic: a second poller that fetched the same range
+ * finds the watermark moved, fails the compare, and rolls its inserts
+ * back instead of writing duplicate punches. The leader lease should
+ * mean there is only ever one poller, but leadership changes hands and
+ * duplicated punches are not something an operator can easily undo.
+ *
+ * Updating just this one key also stops a poll from clobbering config
+ * edits an operator made while the fetch was in flight.
+ */
+async function advanceWatermark(
+  tx: Prisma.TransactionClient,
+  eventId: bigint,
+  expected: number,
+  next: number,
+): Promise<boolean> {
+  const key = settingKey(eventId, "config");
+  const updated = await tx.$executeRaw`
+    UPDATE oxygen.settings
+       SET value = jsonb_set(value::jsonb, '{lastId}', to_jsonb(${next}::int))::text
+     WHERE key = ${key}
+       AND COALESCE((value::jsonb->>'lastId')::int, 0) = ${expected}
+  `;
+  return updated === 1;
 }
 
 async function bumpCounter(
@@ -203,15 +234,20 @@ async function pollOnce(eventId: bigint): Promise<void> {
 
   const mapping = await loadMapping(event.nameId);
   const controlIdByCode = await buildControlIndex(eventId);
-  let maxId = cfg.lastId;
 
   // Inserts run in a single transaction so a partial failure rolls
-  // back cleanly. We *do not* defensively re-check punch existence —
-  // ROC's lastId protocol guarantees monotonicity. Each punch is a
-  // race-critical fact, so it is journaled in the same transaction
-  // (payload carries the ABSOLUTE decisecond time so it is node-portable).
+  // back cleanly, and the watermark moves in the same transaction so
+  // claiming the range and importing it cannot come apart. Each punch is
+  // a race-critical fact, so it is journaled here too (payload carries
+  // the ABSOLUTE decisecond time so it is node-portable).
   const stationId = `roc-${cfg.unitId}`;
+  const maxId = newPunches.reduce((m, p) => Math.max(m, p.punchId), cfg.lastId);
+  let claimed = false;
+
   await prisma().$transaction(async (tx) => {
+    claimed = await advanceWatermark(tx, eventId, cfg.lastId, maxId);
+    if (!claimed) return;
+
     for (const p of newPunches) {
       const effectiveCode = applyMapping(mapping, p.rawCode);
       const time = p.absoluteTimeDs - event.zeroTime;
@@ -243,12 +279,19 @@ async function pollOnce(eventId: bigint): Promise<void> {
           origin: "online_input",
         },
       });
-      if (p.punchId > maxId) maxId = p.punchId;
     }
   });
 
-  cfg.lastId = maxId;
-  await saveConfig(eventId, cfg);
+  if (!claimed) {
+    // Another poller already took this range. Nothing was written, and
+    // the punches are its responsibility now.
+    await bumpCounter(eventId, "poll_count", 1);
+    await setSetting(
+      settingKey(eventId, "last_polled"),
+      new Date().toISOString(),
+    );
+    return;
+  }
 
   await bumpCounter(eventId, "poll_count", 1);
   await bumpCounter(eventId, "punches_imported", newPunches.length);
@@ -264,6 +307,7 @@ async function pollOnce(eventId: bigint): Promise<void> {
  * `setEnabled(true)` starts an interval, `setEnabled(false)` stops it.
  */
 interface PullerHandle {
+  readonly intervalSeconds: number;
   start(): void;
   stop(): void;
   isRunning(): boolean;
@@ -287,6 +331,7 @@ function eventPuller(eventId: bigint, intervalSeconds: number): PullerHandle {
       });
   };
   return {
+    intervalSeconds,
     start() {
       if (timer) return;
       // Fire one immediate poll so the operator sees the indicator move
@@ -315,20 +360,28 @@ export function onlineInputPuller(): { start(): void; stop(): void } {
     start() {
       // The puller is event-scoped; the global handle just exists for
       // symmetry with `liveResultsPusher()`. Real work happens in
-      // `reconcileEnabledPullers` and via `setPullerEnabled` from the
-      // tRPC router.
+      // `reconcileEnabledPullers`, driven by whichever instance holds
+      // the background-jobs lease.
     },
-    stop() {
-      for (const handle of registry.values()) handle.stop();
-      registry.clear();
-    },
+    stop: stopAllPullers,
   };
 }
 
+/** Drop every local poll timer. The "lost leadership" hook. */
+export function stopAllPullers(): void {
+  for (const handle of registry.values()) handle.stop();
+  registry.clear();
+}
+
+/** Which events this instance is currently polling. */
+export function activePullerEventIds(): bigint[] {
+  return [...registry.keys()].map((k) => BigInt(k));
+}
+
 /**
- * Enable / disable the per-event puller from outside (tRPC enable /
- * disable mutations call this). Reads the persisted config to figure
- * out the interval.
+ * Enable / disable the per-event puller on *this* instance. Only the
+ * lease holder should call it — everyone else writes config and lets
+ * the holder's next reconcile pass pick the change up.
  */
 export async function setPullerEnabled(
   eventId: bigint,
@@ -336,43 +389,75 @@ export async function setPullerEnabled(
 ): Promise<void> {
   const cfg = await loadConfig(eventId);
   if (!cfg) return;
-  const key = String(eventId);
-  const existing = registry.get(key);
-  if (enabled) {
-    if (existing) existing.stop();
-    const handle = eventPuller(eventId, cfg.intervalSeconds);
-    registry.set(key, handle);
-    handle.start();
-  } else if (existing) {
-    existing.stop();
-    registry.delete(key);
-  }
+  applyPullerState(eventId, enabled ? cfg.intervalSeconds : null);
 }
 
 /**
- * On API startup, scan every event with an enabled online-input config
- * and bring up the corresponding puller. Settings live in a single
- * table so this is one Prisma query.
+ * Bring the local timer for one event in line with the desired state:
+ * `null` means "not polling", a number means "polling at this cadence".
+ * A timer already running at the right cadence is left strictly alone —
+ * restarting it would fire an immediate poll, so a reconcile pass every
+ * few seconds would turn into a poll every few seconds.
+ */
+function applyPullerState(eventId: bigint, intervalSeconds: number | null): void {
+  const key = String(eventId);
+  const existing = registry.get(key);
+
+  if (intervalSeconds === null) {
+    if (existing) {
+      existing.stop();
+      registry.delete(key);
+    }
+    return;
+  }
+
+  if (existing?.isRunning() && existing.intervalSeconds === intervalSeconds) {
+    return;
+  }
+
+  existing?.stop();
+  const handle = eventPuller(eventId, intervalSeconds);
+  registry.set(key, handle);
+  handle.start();
+}
+
+/**
+ * Bring every local poll timer in line with the persisted configs.
+ *
+ * Called on gaining the background-jobs lease and periodically while
+ * holding it, so a config change made on another instance takes effect
+ * without that instance having to run the timer itself. Settings live in
+ * one table, so this is a single query.
  */
 export async function reconcileEnabledPullers(): Promise<void> {
   const rows = await prisma().setting.findMany({
     where: { key: { startsWith: "online_input_" } },
     select: { key: true, value: true },
   });
+
+  const desired = new Map<string, number>();
   for (const row of rows) {
     const m = /^online_input_(\d+)_config$/.exec(row.key);
-    if (!m) continue;
-    const eventId = BigInt(m[1]);
-    if (row.value == null) continue;
+    if (!m || row.value == null) continue;
     let cfg: Partial<OnlineInputConfig> | null = null;
     try {
       cfg = JSON.parse(row.value) as Partial<OnlineInputConfig>;
     } catch {
       continue;
     }
-    if (cfg?.enabled === true) {
-      await setPullerEnabled(eventId, true).catch(() => {});
-    }
+    if (cfg?.enabled !== true) continue;
+    const interval =
+      typeof cfg.intervalSeconds === "number" && cfg.intervalSeconds > 0
+        ? cfg.intervalSeconds
+        : 10;
+    desired.set(m[1], interval);
+  }
+
+  for (const [key, interval] of desired) {
+    applyPullerState(BigInt(key), interval);
+  }
+  for (const key of [...registry.keys()]) {
+    if (!desired.has(key)) applyPullerState(BigInt(key), null);
   }
 }
 

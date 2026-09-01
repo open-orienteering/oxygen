@@ -29,7 +29,7 @@
 
 import { createHash } from "node:crypto";
 import mysql from "mysql2/promise";
-import { prisma } from "./db.js";
+import { prisma, getSetting, setSetting } from "./db.js";
 import { toAbsolute } from "./timeConvert.js";
 import { runnerStatusToValue } from "./statusConvert.js";
 import { RunnerStatus } from "@oxygen/shared";
@@ -511,6 +511,8 @@ export async function syncAll(
 export interface PusherStatus {
   running: boolean;
   tavid: number | null;
+  /** Cadence of the armed timer — null when nothing is running. */
+  intervalSeconds: number | null;
   lastPush: string | null;
   lastError: string | null;
   pushCount: number;
@@ -536,6 +538,7 @@ class LiveResultsPusherManager {
       return {
         running: false,
         tavid: null,
+        intervalSeconds: null,
         lastPush: null,
         lastError: null,
         pushCount: 0,
@@ -544,6 +547,7 @@ class LiveResultsPusherManager {
     return {
       running: true,
       tavid: t.tavid,
+      intervalSeconds: t.intervalSeconds,
       lastPush: t.lastPush,
       lastError: t.lastError,
       pushCount: t.pushCount,
@@ -622,7 +626,84 @@ export function liveResultsPusher(): { start(): void; stop(): void } {
   };
 }
 
-// ─── Boot reconciler ───────────────────────────────────────
+// ─── Persisted push status ─────────────────────────────────
+
+/**
+ * Push status lives in `settings`, not just in the pusher's memory,
+ * because the timer runs on whichever instance holds the background-jobs
+ * lease while the operator's status query can land on any of them. The
+ * online-input puller already reports itself this way; this brings
+ * LiveResults in line.
+ */
+export interface PersistedPushStatus {
+  lastPush: string | null;
+  pushCount: number;
+  lastError: string | null;
+}
+
+const EMPTY_PUSH_STATUS: PersistedPushStatus = {
+  lastPush: null,
+  pushCount: 0,
+  lastError: null,
+};
+
+function pushStatusKey(eventId: bigint): string {
+  return `liveresults_${String(eventId)}_status`;
+}
+
+export async function loadPushStatus(
+  eventId: bigint,
+): Promise<PersistedPushStatus> {
+  const raw = await getSetting(pushStatusKey(eventId));
+  if (!raw) return { ...EMPTY_PUSH_STATUS };
+  try {
+    const parsed = JSON.parse(raw) as Partial<PersistedPushStatus>;
+    return {
+      lastPush: typeof parsed.lastPush === "string" ? parsed.lastPush : null,
+      pushCount: typeof parsed.pushCount === "number" ? parsed.pushCount : 0,
+      lastError: typeof parsed.lastError === "string" ? parsed.lastError : null,
+    };
+  } catch {
+    return { ...EMPTY_PUSH_STATUS };
+  }
+}
+
+/**
+ * Record the outcome of one push cycle. Only the lease holder pushes, so
+ * the read-modify-write on `pushCount` has a single writer.
+ */
+async function recordPush(eventId: bigint, error: string | null): Promise<void> {
+  const prev = await loadPushStatus(eventId);
+  const next: PersistedPushStatus = error
+    ? { ...prev, lastError: error }
+    : {
+        lastPush: new Date().toISOString(),
+        pushCount: prev.pushCount + 1,
+        lastError: null,
+      };
+  await setSetting(pushStatusKey(eventId), JSON.stringify(next));
+}
+
+/**
+ * `syncAll` wrapped so every cycle leaves a trace in the database. Used
+ * by the reconciler; the manager itself stays storage-free so its unit
+ * tests can drive it with plain stubs.
+ */
+const persistingSync: SyncFn = async (tavid, eventId) => {
+  try {
+    const stats = await syncAll(tavid, eventId);
+    await recordPush(eventId, null).catch(() => {});
+    return stats;
+  } catch (err) {
+    await recordPush(
+      eventId,
+      err instanceof Error ? err.message : String(err),
+    ).catch(() => {});
+    throw err;
+  }
+};
+
+// ─── Reconciler ────────────────────────────────────────────
 
 export interface ReconcileResult {
   started: bigint[];
@@ -631,10 +712,17 @@ export interface ReconcileResult {
 }
 
 /**
- * Re-arm push timers on API startup. Reads every event that has both
- * `liveresultsTavid` and an enabled `liveresultsConfig.enabled` flag.
- * Orphan rows (no event) cannot exist by construction since the config
- * lives on the event row itself.
+ * Bring this instance's push timers in line with what the database
+ * says should be running: every event with a `liveresultsTavid` and
+ * `liveresultsConfig.enabled`. Orphan rows cannot exist by construction
+ * since the config lives on the event row itself.
+ *
+ * Run on gaining the background-jobs lease and periodically while
+ * holding it, so an operator toggling the push on any instance takes
+ * effect without that instance running the timer. Timers already armed
+ * with the right tavid and cadence are left alone — restarting one
+ * fires an immediate push, which would turn a reconcile every few
+ * seconds into a push every few seconds.
  */
 export async function reconcileEnabledPushers(): Promise<ReconcileResult> {
   const result: ReconcileResult = { started: [], skipped: [], failed: [] };
@@ -657,6 +745,8 @@ export async function reconcileEnabledPushers(): Promise<ReconcileResult> {
     return result;
   }
 
+  const wanted = new Set<string>();
+
   for (const row of rows) {
     try {
       const cfg = (row.liveresultsConfig ?? {}) as Partial<{
@@ -675,7 +765,22 @@ export async function reconcileEnabledPushers(): Promise<ReconcileResult> {
         typeof cfg.intervalSeconds === "number" && cfg.intervalSeconds > 0
           ? cfg.intervalSeconds
           : 30;
-      liveResultsPusherManager.start(row.id, row.liveresultsTavid, interval);
+      wanted.add(String(row.id));
+
+      const current = liveResultsPusherManager.getStatus(row.id);
+      if (
+        current.running &&
+        current.tavid === row.liveresultsTavid &&
+        current.intervalSeconds === interval
+      ) {
+        continue;
+      }
+      liveResultsPusherManager.start(
+        row.id,
+        row.liveresultsTavid,
+        interval,
+        persistingSync,
+      );
       result.started.push(row.id);
     } catch (err) {
       result.failed.push({
@@ -684,5 +789,12 @@ export async function reconcileEnabledPushers(): Promise<ReconcileResult> {
       });
     }
   }
+
+  // Anything running here that the database no longer wants — disabled
+  // on another instance, or the event was deleted.
+  for (const eventId of liveResultsPusherManager.activeEventIds()) {
+    if (!wanted.has(String(eventId))) liveResultsPusherManager.stop(eventId);
+  }
+
   return result;
 }
