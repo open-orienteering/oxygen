@@ -29,6 +29,10 @@ services:
       AUTH_HEADER: "${AUTH_HEADER:-x-forwarded-email}"
       AUTH_DEV_EMAIL: "${AUTH_DEV_EMAIL:-dev@localhost}"
       OXYGEN_ADMIN_EMAILS: "${OXYGEN_ADMIN_EMAILS:-}"
+      # This stack shares the dev database with `pnpm dev` (AGENTS.md §3).
+      # Its own lease scope keeps the two from stealing each other's
+      # background timers — they are separate deployments, not peers.
+      LEADER_LEASE_SCOPE: "docker"
 
   web:
     build:
