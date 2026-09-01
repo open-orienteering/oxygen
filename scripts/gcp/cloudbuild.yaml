@@ -1,0 +1,21 @@
+# Cloud Build config: builds the single-container `cloud` Dockerfile target
+# (API + web bundle) and pushes it to Artifact Registry. Invoked by
+# deploy.sh with _IMAGE substituted.
+steps:
+  - name: gcr.io/cloud-builders/docker
+    args:
+      - build
+      - --target=cloud
+      - --build-arg
+      - BUILD_ID=${_BUILD_ID}
+      - -t
+      - ${_IMAGE}:latest
+      - .
+images:
+  - ${_IMAGE}:latest
+substitutions:
+  _BUILD_ID: ""
+options:
+  machineType: E2_HIGHCPU_8
+  logging: CLOUD_LOGGING_ONLY
+timeout: 1800s

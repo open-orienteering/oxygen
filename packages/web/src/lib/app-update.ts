@@ -11,6 +11,23 @@
 
 export type UpdateAction = "activate-service-worker" | "reload";
 
+/**
+ * The identity the version poller compares between checks.
+ *
+ * Deployments that bake a build id into the image (Cloud Run) report it in
+ * `/api/version`; the process there restarts all the time without a code
+ * change (scale-to-zero, instance swaps), so `startedAt` alone would show
+ * a false "update available" prompt on every cold start. Dev and compose
+ * servers have no build id and keep the restart-based behavior, where a
+ * process restart really does imply new code.
+ */
+export function versionIdentity(payload: {
+  startedAt: string;
+  buildId?: string | null;
+}): string {
+  return payload.buildId || payload.startedAt;
+}
+
 export function resolveUpdateAction(sources: {
   apiRestarted: boolean;
   bundleWaiting: boolean;

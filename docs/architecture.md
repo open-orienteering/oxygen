@@ -140,6 +140,9 @@ Node.js 20+, pnpm 10+, and a PostgreSQL 18 instance. The API proxies through Vit
 ### Cloud Shell demo
 One-click deployment via Google Cloud Shell — no local install needed. See [demo.md](demo.md).
 
+### GCP production (Cloud Run + Cloud SQL + IAP)
+Club-facing hosted deployment: a single-container image (Docker target `cloud`, the API serving the web bundle via `WEB_DIST_DIR`) on Cloud Run behind Identity-Aware Proxy, backed by Cloud SQL. Scales to zero between competitions. See [deploy-gcp-cloud-run.md](deploy-gcp-cloud-run.md).
+
 ## Offline / Local-First Vision
 
 Oxygen is designed for field conditions where internet connectivity is unreliable. The database is always hosted remotely (cloud VM or dedicated server), keeping the competition data safe and accessible from anywhere. The planned approach makes each client station resilient to connectivity loss:
