@@ -856,6 +856,18 @@ test.describe("Course editor", () => {
     await ensureCoursesAndMap(page);
     await openEditor(page);
 
+    // No extra page heading — the shell tab already names the page. Help
+    // lives in a startlist-style i popover on the map toolbar.
+    await expect(
+      page.getByTestId("course-editor-page").getByRole("heading", { name: "Course Editor" }),
+    ).toHaveCount(0);
+    await expect(page.getByTestId("editor-hint")).toHaveCount(0);
+    await page.getByTestId("editor-help").click();
+    await expect(page.getByTestId("editor-hint")).toBeVisible();
+    await expect(page.getByTestId("editor-hint")).toContainText("Click the map");
+    await page.getByTestId("editor-help").click();
+    await expect(page.getByTestId("editor-hint")).toHaveCount(0);
+
     // The panel is a child of the map panel — the element the browser
     // promotes in fullscreen — so it stays visible while editing there.
     // It is the ONLY course UI: there is no page sidebar.
