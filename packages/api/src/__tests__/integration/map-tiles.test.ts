@@ -32,7 +32,11 @@ import {
   ocadBoundsToWgs84,
   type OcadCrs,
 } from "../../map-projection.js";
-import { expectedTileCount } from "../../map-window.js";
+import {
+  PRECACHE_MAX_ZOOM,
+  PRECACHE_MIN_ZOOM,
+  expectedTileCount,
+} from "../../map-window.js";
 import { DEFAULTS } from "../../map-render-limits.js";
 
 let server: FastifyInstance;
@@ -237,17 +241,81 @@ describe("map-tile endpoint", () => {
 
     // The denominator is a pure function of the stored bounds, so it must
     // match what any other instance would compute for the same map.
-    expect(body.total).toBe(expectedTileCount(mapBounds));
+    expect(body.total).toBe(
+      expectedTileCount(mapBounds, PRECACHE_MIN_ZOOM, PRECACHE_MAX_ZOOM),
+    );
 
-    // The numerator is the row count for the pre-cache zoom span. Earlier
-    // tests rendered tiles at z=13 and z=16, both inside that span.
+    // The numerator is the row count over the same span. An earlier test
+    // rendered a block at z=13, inside it; the z=16 and z=20 blocks are
+    // above the ceiling and must not be counted.
     const rows = await ctx.db.mapTile.count({
-      where: { eventId: ctx.eventId, z: { gte: 10, lte: 17 } },
+      where: {
+        eventId: ctx.eventId,
+        z: { gte: PRECACHE_MIN_ZOOM, lte: PRECACHE_MAX_ZOOM },
+      },
     });
     expect(body.done).toBe(rows);
     expect(body.done).toBeGreaterThan(0);
     expect(body.rendering).toBe(body.done < body.total);
   });
+
+  it("pre-caches the overview zooms in the background until complete", async () => {
+    // The pre-cache is kicked off from the cache-hit path too, so a
+    // process that inherits a partly filled cache finishes the job
+    // instead of waiting for someone to hit an uncached tile.
+    const other = await createTestEvent("map_tiles_precache");
+    const saved = {
+      precache: process.env.MAP_TILE_PRECACHE,
+      delay: process.env.MAP_PRECACHE_BLOCK_DELAY_MS,
+    };
+    process.env.MAP_TILE_PRECACHE = "on";
+    process.env.MAP_PRECACHE_BLOCK_DELAY_MS = "0";
+    try {
+      await other.db.mapFile.create({
+        data: {
+          eventId: other.eventId,
+          fileName: "test.ocd",
+          fileData: readFileSync(FIXTURE),
+          bounds: mapBounds,
+        },
+      });
+
+      const { x, y } = centerTile(mapBounds, PRECACHE_MIN_ZOOM);
+      const first = await server.inject({
+        method: "GET",
+        url: `/api/map-tile/${other.nameId}/${PRECACHE_MIN_ZOOM}/${x}/${y}`,
+      });
+      expect(first.statusCode).toBe(200);
+
+      const deadline = Date.now() + 60_000;
+      let progress = { total: 0, done: 0, rendering: true };
+      while (Date.now() < deadline) {
+        const res = await server.inject({
+          method: "GET",
+          url: "/api/map-tile-progress",
+          headers: { "x-competition-id": other.nameId },
+        });
+        progress = res.json();
+        if (!progress.rendering) break;
+        await new Promise((r) => setTimeout(r, 250));
+      }
+
+      expect(progress.total).toBeGreaterThan(0);
+      expect(progress.done).toBe(progress.total);
+      expect(progress.rendering).toBe(false);
+
+      // Nothing above the ceiling was rendered — that is the point of it.
+      const deep = await other.db.mapTile.count({
+        where: { eventId: other.eventId, z: { gt: PRECACHE_MAX_ZOOM } },
+      });
+      expect(deep).toBe(0);
+    } finally {
+      process.env.MAP_TILE_PRECACHE = saved.precache;
+      if (saved.delay === undefined) delete process.env.MAP_PRECACHE_BLOCK_DELAY_MS;
+      else process.env.MAP_PRECACHE_BLOCK_DELAY_MS = saved.delay;
+      await other.cleanup();
+    }
+  }, 90_000);
 
   it("reports no progress for a map whose bounds were never parsed", async () => {
     // Older uploads (and unparseable georeferences) have a null `bounds`,

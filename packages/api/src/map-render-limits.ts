@@ -16,6 +16,8 @@
  * map-tiles.ts always reads from a source finer than its output.
  */
 
+import { PRECACHE_MAX_ZOOM, PRECACHE_MIN_ZOOM } from "./map-window.js";
+
 export const DEFAULTS = {
   /** Tiles per side in one render window. Amortizes the ~70 ms SVG parse. */
   blockTiles: 4,
@@ -83,6 +85,27 @@ export function precacheEnabled(): boolean {
   return (process.env.MAP_TILE_PRECACHE ?? "on").trim().toLowerCase() !== "off";
 }
 
+export function precacheMinZoom(): number {
+  return intSetting(process.env.MAP_PRECACHE_MIN_ZOOM, PRECACHE_MIN_ZOOM, 0);
+}
+
+export function precacheMaxZoom(): number {
+  return Math.max(
+    precacheMinZoom(),
+    intSetting(process.env.MAP_PRECACHE_MAX_ZOOM, PRECACHE_MAX_ZOOM, 0),
+  );
+}
+
+/**
+ * Pause between pre-cache blocks. The pre-cache is background work and
+ * must not crowd out the requests it is meant to speed up: without a
+ * gap it renders blocks back to back, and on a busy host that shows up
+ * as latency everywhere else.
+ */
+export function precacheBlockDelayMs(): number {
+  return intSetting(process.env.MAP_PRECACHE_BLOCK_DELAY_MS, 50, 0);
+}
+
 /**
  * Make room in an insertion-ordered cache so one more entry fits within
  * `cap`. Evicting before the work starts (rather than after) keeps the
@@ -96,17 +119,28 @@ export function evictForInsert<K, V>(cache: Map<K, V>, cap: number): void {
   }
 }
 
-/** Counting semaphore bounding concurrent renders. */
+/**
+ * Counting semaphore bounding concurrent renders, with two priorities.
+ *
+ * Background work (the pre-cache) must never make a user wait longer than
+ * the one block already in flight, so foreground waiters are always served
+ * first. Without this a pre-cache sweep can hold every permit and a tile
+ * request queues behind the entire sweep.
+ */
 export class Semaphore {
   private available: number;
-  private readonly waiting: Array<() => void> = [];
+  private readonly foreground: Array<() => void> = [];
+  private readonly background: Array<() => void> = [];
 
   constructor(limit: number) {
     this.available = Math.max(1, limit);
   }
 
-  async run<T>(task: () => Promise<T>): Promise<T> {
-    await this.acquire();
+  async run<T>(
+    task: () => Promise<T>,
+    opts: { background?: boolean } = {},
+  ): Promise<T> {
+    await this.acquire(opts.background === true);
     try {
       return await task();
     } finally {
@@ -114,16 +148,17 @@ export class Semaphore {
     }
   }
 
-  private async acquire(): Promise<void> {
+  private async acquire(isBackground: boolean): Promise<void> {
     if (this.available > 0) {
       this.available--;
       return;
     }
-    await new Promise<void>((resolve) => this.waiting.push(resolve));
+    const queue = isBackground ? this.background : this.foreground;
+    await new Promise<void>((resolve) => queue.push(resolve));
   }
 
   private release(): void {
-    const next = this.waiting.shift();
+    const next = this.foreground.shift() ?? this.background.shift();
     if (next) {
       next();
       return;

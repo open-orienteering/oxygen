@@ -101,6 +101,17 @@ between them. Windows are aligned to a global block lattice
 (`blockOrigin`), which means the same tile always comes from the same
 window regardless of which request triggered the render.
 
+## Keeping the event loop free
+
+Rasterising goes through `renderAsync`, not `Resvg#render`, so it runs on
+the libuv thread pool. This matters much more than it did for the
+whole-map raster: that ran once per event, while this runs once per block
+per zoom. Measured on a real club map, the synchronous call blocks the
+event loop for **269 ms per render** and the asynchronous one for **1 ms**
+— and a blocked loop stalls every other request in the process, not just
+tiles. Symptoms of getting this wrong are diffuse and look nothing like a
+map bug: unrelated queries time out while someone pans a map.
+
 ## Caching and concurrency
 
 | Layer | Scope | Notes |
@@ -108,7 +119,7 @@ window regardless of which request triggered the render.
 | `map_tiles` table | Shared | The real cache. Written with `ON CONFLICT DO NOTHING`, so concurrent renders of the same block across instances are harmless. |
 | SVG cache | Per process | Parsed map SVGs, `MAP_SVG_CACHE_EVENTS` of them. Amortises the ~70 ms parse and the OCAD read. |
 | In-flight block map | Per process | A viewport fetches ~20 tiles at once; they collapse onto one render per block. |
-| Render semaphore | Per process | Bounds concurrent rasterisations (`MAP_RENDER_CONCURRENCY`). |
+| Render semaphore | Per process | Bounds concurrent rasterisations (`MAP_RENDER_CONCURRENCY`). Foreground requests are served before pre-cache work, so background rendering never queues a user behind a whole sweep. |
 
 Everything above the database is a per-process optimisation, and losing
 it costs time rather than correctness. Nothing in the tile path requires
@@ -121,14 +132,24 @@ any in-flight blocks for that event; `applyEventMap` deletes the event's
 ## Pre-caching and progress
 
 After the first tile of an event renders, a background pass fills zooms
-`PRECACHE_MIN_ZOOM`..`PRECACHE_MAX_ZOOM` (10–17) so panning and zooming
-out are instant. It skips zoom levels whose row count already matches
-what the bounds imply, so a restart resumes rather than redoing work.
+`PRECACHE_MIN_ZOOM`..`PRECACHE_MAX_ZOOM` (10–15) so the next viewer's
+first paint is instant. It skips zoom levels whose row count already
+matches what the bounds imply, so a restart resumes rather than redoing
+work, and it pauses `MAP_PRECACHE_BLOCK_DELAY_MS` between blocks so
+background rendering does not crowd out foreground requests.
+
+The ceiling is low on purpose. Tile counts quadruple per level — for a
+sprint map, zooms 10–15 are 27 tiles while 16 and 17 add another 198 —
+and this renderer rasterises per block per zoom rather than amortising
+one whole-map raster across the pyramid, so an exhaustive pre-cache
+costs roughly eight times as much work for levels most viewers never
+reach. A miss above the ceiling now costs a couple of hundred
+milliseconds and fills a whole block, which is cheaper than rendering
+those levels for everyone up front.
+
 Set `MAP_TILE_PRECACHE=off` to render purely on demand — worth doing
 where background CPU is not free, such as a scale-to-zero container that
 only gets CPU while a request is in flight.
-
-Above zoom 17 tiles are always rendered on demand.
 
 `/api/map-tile-progress` reports both numbers from the database:
 
@@ -154,6 +175,8 @@ machine and a 4 GiB container.
 | `MAP_SVG_CACHE_EVENTS` | 4 | Parsed map SVGs held in memory. |
 | `MAP_WINDOW_MAX_PIXELS` | 64M | Backstop against a pathological projection; normally never binds. |
 | `MAP_TILE_PRECACHE` | `on` | `off` disables background pre-rendering. |
+| `MAP_PRECACHE_MIN_ZOOM` / `MAP_PRECACHE_MAX_ZOOM` | 10 / 15 | Pre-cache zoom span. Also the span the progress endpoint reports. |
+| `MAP_PRECACHE_BLOCK_DELAY_MS` | 50 | Pause between pre-cache blocks. |
 
 Peak render memory is roughly
 `4 bytes × (blockTiles × 256 × supersample × √2)² × concurrency`, about

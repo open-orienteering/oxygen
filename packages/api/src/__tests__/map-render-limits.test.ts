@@ -1,9 +1,13 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, afterEach } from "vitest";
 import {
   DEFAULTS,
   Semaphore,
   evictForInsert,
   intSetting,
+  precacheBlockDelayMs,
+  precacheEnabled,
+  precacheMaxZoom,
+  precacheMinZoom,
 } from "../map-render-limits.js";
 
 describe("intSetting", () => {
@@ -41,6 +45,45 @@ describe("DEFAULTS", () => {
 
   it("renders more than one tile per window so the SVG parse amortizes", () => {
     expect(DEFAULTS.blockTiles).toBeGreaterThan(1);
+  });
+});
+
+describe("pre-cache settings", () => {
+  const saved = { ...process.env };
+  afterEach(() => {
+    process.env = { ...saved };
+  });
+
+  it("is on unless explicitly switched off", () => {
+    delete process.env.MAP_TILE_PRECACHE;
+    expect(precacheEnabled()).toBe(true);
+    process.env.MAP_TILE_PRECACHE = "on";
+    expect(precacheEnabled()).toBe(true);
+    process.env.MAP_TILE_PRECACHE = "OFF";
+    expect(precacheEnabled()).toBe(false);
+    process.env.MAP_TILE_PRECACHE = " off ";
+    expect(precacheEnabled()).toBe(false);
+  });
+
+  it("pauses between blocks by default so background work stays polite", () => {
+    delete process.env.MAP_PRECACHE_BLOCK_DELAY_MS;
+    expect(precacheBlockDelayMs()).toBeGreaterThan(0);
+    process.env.MAP_PRECACHE_BLOCK_DELAY_MS = "0";
+    expect(precacheBlockDelayMs()).toBe(0);
+  });
+
+  // An inverted span would make the progress denominator zero and the
+  // pre-cache loop a no-op, so the ceiling is clamped up to the floor.
+  it("never lets the ceiling fall below the floor", () => {
+    process.env.MAP_PRECACHE_MIN_ZOOM = "12";
+    process.env.MAP_PRECACHE_MAX_ZOOM = "9";
+    expect(precacheMaxZoom()).toBe(12);
+  });
+
+  it("uses the module defaults when unset", () => {
+    delete process.env.MAP_PRECACHE_MIN_ZOOM;
+    delete process.env.MAP_PRECACHE_MAX_ZOOM;
+    expect(precacheMinZoom()).toBeLessThan(precacheMaxZoom());
   });
 });
 
@@ -90,6 +133,25 @@ describe("Semaphore", () => {
     const sem = new Semaphore(1);
     await expect(sem.run(async () => { throw new Error("boom"); })).rejects.toThrow("boom");
     await expect(sem.run(async () => "ok")).resolves.toBe("ok");
+  });
+
+  // The pre-cache must not put a user behind a whole background sweep.
+  it("serves foreground waiters before background ones", async () => {
+    const sem = new Semaphore(1);
+    const order: string[] = [];
+    const blocker = sem.run(async () => {
+      await new Promise((r) => setTimeout(r, 20));
+    });
+    // Both queue behind the blocker; the background one arrived first.
+    const bg = sem.run(async () => { order.push("background"); }, { background: true });
+    const fg = sem.run(async () => { order.push("foreground"); });
+    await Promise.all([blocker, bg, fg]);
+    expect(order).toEqual(["foreground", "background"]);
+  });
+
+  it("still runs background work when nothing competes", async () => {
+    const sem = new Semaphore(1);
+    await expect(sem.run(async () => "bg", { background: true })).resolves.toBe("bg");
   });
 
   it("serialises when the limit is 1", async () => {

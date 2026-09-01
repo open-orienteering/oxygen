@@ -1,5 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
+  PRECACHE_MAX_ZOOM,
+  PRECACHE_MIN_ZOOM,
   blockOrigin,
   blockRange,
   boundsOfPoints,
@@ -213,10 +215,20 @@ describe("tileRangeForBounds / expectedTileCount", () => {
     expect(atZ(17)).toBeGreaterThan(atZ(10));
   });
 
-  it("sums the pre-cache zoom span", () => {
+  it("sums the pre-cache zoom span by default", () => {
     let sum = 0;
-    for (let z = 10; z <= 17; z++) sum += expectedTileCount(bounds, z, z);
+    for (let z = PRECACHE_MIN_ZOOM; z <= PRECACHE_MAX_ZOOM; z++) {
+      sum += expectedTileCount(bounds, z, z);
+    }
     expect(expectedTileCount(bounds)).toBe(sum);
+  });
+
+  // Tile counts quadruple per level, so the ceiling dominates the cost of
+  // pre-caching. Keeping it low is what stops background rendering from
+  // crowding out the requests it exists to speed up.
+  it("keeps the default span far cheaper than an exhaustive one", () => {
+    const exhaustive = expectedTileCount(bounds, PRECACHE_MIN_ZOOM, 17);
+    expect(expectedTileCount(bounds) * 4).toBeLessThan(exhaustive);
   });
 
   it("is deterministic, so any instance computes the same denominator", () => {

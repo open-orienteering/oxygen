@@ -20,9 +20,22 @@
 
 import type { WGS84Bounds } from "./map-projection.js";
 
-/** Zoom levels the background pre-cache fills after a map upload. */
+/**
+ * Default zoom span the background pre-cache fills after a map upload.
+ *
+ * The ceiling is deliberately low. Tile counts quadruple per level — for
+ * a typical sprint map, zooms 10-15 are 27 tiles while 16 and 17 add
+ * another 198 — and since the windowed renderer produces a whole block
+ * in a couple of hundred milliseconds, the deeper levels are cheaper to
+ * render when someone actually zooms in than to render for everyone up
+ * front. The pre-cache exists to make the *first view* instant, not to
+ * materialise the whole pyramid.
+ *
+ * Overridable via `MAP_PRECACHE_MIN_ZOOM` / `MAP_PRECACHE_MAX_ZOOM`
+ * (see map-render-limits.ts).
+ */
 export const PRECACHE_MIN_ZOOM = 10;
-export const PRECACHE_MAX_ZOOM = 17;
+export const PRECACHE_MAX_ZOOM = 15;
 
 export interface OcadPoint {
   x: number;
