@@ -27,7 +27,7 @@ gcloud run deploy "$SERVICE" \
   --service-account="oxygen-run@${PROJECT_ID}.iam.gserviceaccount.com" \
   --add-cloudsql-instances="$SQL_CONNECTION" \
   --set-secrets="DATABASE_URL=oxygen-database-url:latest" \
-  --set-env-vars="NODE_OPTIONS=--max-old-space-size=3328,MAP_RASTER_MAX_PIXELS=200000000,MAP_RASTER_CACHE_EVENTS=1" \
+  --set-env-vars="NODE_OPTIONS=--max-old-space-size=3328" \
   --memory=4Gi \
   --cpu=1 \
   --timeout=300 \
@@ -37,12 +37,14 @@ gcloud run deploy "$SERVICE" \
   --no-allow-unauthenticated
 
 # Why these limits (see docs/deploy-gcp-cloud-run.md §Sizing):
-#  - MAP_RASTER_MAX_PIXELS=200M: map rasterisation peaks at ~2× 4 bytes/px;
-#    the 800M-px default OOM-killed the 4 GiB container (signal 9 loops).
-#  - MAP_RASTER_CACHE_EVENTS=1: each cached event bitmap holds up to 800 MB.
-#  - max-instances=1: the app keeps per-process state (map bitmap cache,
-#    tile pre-cache progress); a second instance doubles memory pressure
-#    and made /api/version flip-flop between instances.
+#  - 4 GiB: the tile renderer itself now needs only a few hundred MB (it
+#    rasterises a window per block of tiles, not the whole map), but
+#    parsing a large club OCAD into an SVG DOM still spikes. The
+#    MAP_RASTER_* caps that used to be needed here are gone with the
+#    whole-map raster they bounded.
+#  - max-instances=1: tiles no longer require a single process, but the
+#    background timers in index.ts (sync shipper, lease) still assume one
+#    writer. Raising this needs the advisory-lock leader election first.
 
 echo
 echo "Deployed. If this is the first deploy:"
