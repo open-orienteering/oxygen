@@ -317,6 +317,52 @@ describe("map-tile endpoint", () => {
     }
   }, 90_000);
 
+  it("notices a map replaced by another instance", async () => {
+    // `onMapUpload` only fires in the process that handled the upload,
+    // so on every other instance the parsed SVG is stale from the moment
+    // someone re-uploads. The renderer therefore re-checks the map
+    // file's `uploadedAt` before trusting its cache.
+    //
+    // The replacement here is deliberately unparseable, because that is
+    // the one outcome the stale cache cannot produce: an instance still
+    // holding the old parse would happily answer 200.
+    const other = await createTestEvent("map_tiles_replaced");
+    try {
+      await other.db.mapFile.create({
+        data: {
+          eventId: other.eventId,
+          fileName: "test.ocd",
+          fileData: readFileSync(FIXTURE),
+          bounds: mapBounds,
+        },
+      });
+
+      const Z = 14;
+      const { x, y } = centerTile(mapBounds, Z);
+      const url = `/api/map-tile/${other.nameId}/${Z}/${x}/${y}`;
+
+      const first = await server.inject({ method: "GET", url });
+      expect(first.statusCode).toBe(200);
+
+      // What a re-upload looks like from another instance's point of
+      // view: new bytes, a newer `uploadedAt`, and the event's tiles
+      // purged — with no in-process notification.
+      await other.db.mapTile.deleteMany({ where: { eventId: other.eventId } });
+      await other.db.mapFile.updateMany({
+        where: { eventId: other.eventId },
+        data: {
+          fileData: Buffer.from("not an ocad file"),
+          uploadedAt: new Date(Date.now() + 60_000),
+        },
+      });
+
+      const second = await server.inject({ method: "GET", url });
+      expect(second.statusCode).toBe(500);
+    } finally {
+      await other.cleanup();
+    }
+  }, 60_000);
+
   it("reports no progress for a map whose bounds were never parsed", async () => {
     // Older uploads (and unparseable georeferences) have a null `bounds`,
     // which must not divide-by-zero the progress bar.
