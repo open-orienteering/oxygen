@@ -19,6 +19,11 @@ gcloud builds submit "$REPO_ROOT" \
   --config="$REPO_ROOT/scripts/gcp/cloudbuild.yaml" \
   --substitutions="_IMAGE=${IMAGE},_BUILD_ID=${BUILD_ID}"
 
+if [[ -z "${OXYGEN_ADMIN_EMAILS:-}" ]]; then
+  echo "!! OXYGEN_ADMIN_EMAILS is unset in env.sh — with AUTH_MODE=proxy nobody" >&2
+  echo "   will be able to open /admin/users. See env.sh.example." >&2
+fi
+
 echo "── Deploying to Cloud Run…"
 gcloud run deploy "$SERVICE" \
   --project="$PROJECT_ID" \
@@ -27,7 +32,7 @@ gcloud run deploy "$SERVICE" \
   --service-account="oxygen-run@${PROJECT_ID}.iam.gserviceaccount.com" \
   --add-cloudsql-instances="$SQL_CONNECTION" \
   --set-secrets="DATABASE_URL=oxygen-database-url:latest" \
-  --set-env-vars="^@^NODE_OPTIONS=--max-old-space-size=3328@DATABASE_POOL_MAX=10@AUTH_MODE=proxy@AUTH_HEADER=x-goog-authenticated-user-email@AUTH_AUTO_PROVISION=member@OXYGEN_ADMIN_EMAILS=${OXYGEN_ADMIN_EMAILS:-}" \
+  --set-env-vars="^;^NODE_OPTIONS=--max-old-space-size=3328;DATABASE_POOL_MAX=10;AUTH_MODE=proxy;AUTH_HEADER=x-goog-authenticated-user-email;AUTH_AUTO_PROVISION=member;OXYGEN_ADMIN_EMAILS=${OXYGEN_ADMIN_EMAILS:-}" \
   --memory=4Gi \
   --cpu=1 \
   --timeout=300 \
@@ -36,6 +41,10 @@ gcloud run deploy "$SERVICE" \
   --cpu-throttling \
   --no-allow-unauthenticated
 
+# The ^;^ prefix picks ';' as the env-var separator. The default ',' would
+# split a multi-admin OXYGEN_ADMIN_EMAILS list, and '@' splits inside every
+# email address; ';' is legal in neither an address nor any value below.
+#
 # Why these limits (see docs/deploy-gcp-cloud-run.md §Sizing):
 #  - 4 GiB: the tile renderer itself now needs only a few hundred MB (it
 #    rasterises a window per block of tiles, not the whole map), but
