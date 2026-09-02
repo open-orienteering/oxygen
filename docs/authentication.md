@@ -17,7 +17,7 @@ on every request.
 | `AUTH_MODE` | `off` | `off`: no gating (legacy). `proxy`: read `AUTH_HEADER`. `dev`: fixed `AUTH_DEV_EMAIL`, auto-provisioned as an instance admin. |
 | `AUTH_HEADER` | `x-forwarded-email` | Header carrying the authenticated email. Fastify lowercases header names. |
 | `AUTH_DEV_EMAIL` | `dev@localhost` | Identity used in `dev` mode. |
-| `OXYGEN_ADMIN_EMAILS` | empty | Comma-separated bootstrap admins. On first request with that identity, Oxygen creates an active admin row (display name = email local part). |
+| `OXYGEN_ADMIN_EMAILS` | empty | Comma-separated bootstrap admins. On every request with that identity Oxygen guarantees an active admin row — creating it (display name = email local part) or promoting and reactivating an existing one. Grant-only: dropping an email never demotes. |
 | `AUTH_AUTO_PROVISION` | unset (off) | `member` / `on` / `true` / `1`: create an active non-admin user for any authenticated email that is not yet in `users`. IAP (or the proxy) is then the allowlist; Oxygen still assigns admin and event roles. Leave unset for invite-only. |
 
 Header parsing: trim, lowercase; if the value contains `:`, take the substring
@@ -48,6 +48,15 @@ invited user is present.
 
 Bootstrap: put the first operator in `OXYGEN_ADMIN_EMAILS`. They can promote
 everyone else from **Manage users** (`/admin/users`) on the start page.
+
+`OXYGEN_ADMIN_EMAILS` is the break-glass path, so it is reconciled on every
+resolve rather than only at row creation — otherwise an account that already
+exists (a restored dump, or a member auto-provisioned before the variable was
+set) could never be promoted by it, and setting it would silently do nothing.
+It only ever grants: an email you remove keeps whatever the Users page says,
+and admins granted in the UI are never touched. To revoke a bootstrap admin,
+take them out of the variable *and* clear the flag in **Manage users** —
+otherwise the next request restores it.
 
 ### `AUTH_MODE=dev`
 
@@ -104,7 +113,8 @@ path to the load balancer.
 2. Enable `AUTH_MODE=proxy` behind the IdP.
 3. Optionally set `AUTH_AUTO_PROVISION=member` so anyone the proxy admits
    is created as a member (Cloud Run deploy does this).
-4. Sign in; the bootstrap admin is created on first request.
+4. Sign in; the bootstrap admin is created — or promoted, if the row already
+   exists — on first request.
 5. Open **Manage users** on the event selector and invite clubmates or
    grant admin. The table shows role, club groups, last seen, and active.
 6. Deactivating a user locks them out on the next request (`resolveUser`
