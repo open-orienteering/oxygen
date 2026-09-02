@@ -12,9 +12,7 @@ import { appRouter, type AppRouter } from "./routers/index.js";
 export type { AppRouter };
 import { createContext } from "./trpc.js";
 import { disconnectAll, prisma } from "./db.js";
-import { liveResultsPusher, reconcileEnabledPushers } from "./liveresults.js";
-import { onlineInputPuller, reconcileEnabledPullers } from "./online-input/puller.js";
-import { startShipper, stopShipper } from "./sync/shipper.js";
+import { backgroundSupervisor } from "./background/supervisor.js";
 import { registerVenueForwarder } from "./sync/venueForwarder.js";
 import { SYNC_SECRET_HEADER } from "./sync/nodeIdentity.js";
 import { authHeaderName } from "./auth.js";
@@ -128,25 +126,24 @@ async function main() {
     },
   );
 
-  // Background services. `liveResultsPusher` / `onlineInputPuller` are
-  // process-wide registries; the reconcilers bring up one timer per
-  // enabled event on boot so a restart doesn't silently drop pushes.
-  liveResultsPusher();
-  onlineInputPuller();
-  void reconcileEnabledPushers().catch((err) =>
-    console.error("[liveresults] reconcile failed:", err),
-  );
-  void reconcileEnabledPullers().catch((err) =>
-    console.error("[online-input] reconcile failed:", err),
-  );
-  // Journal shipper — no-op unless SYNC_PEER_URL is configured (venue role).
-  startShipper();
+  // Background services (LiveResults push, ROC polling, journal
+  // shipping). Exactly one instance runs them, decided by a lease; the
+  // holder keeps its timers in line with the per-event configuration so
+  // a restart doesn't silently drop pushes and a change made on another
+  // instance still takes effect. See background/supervisor.ts.
+  void backgroundSupervisor()
+    .start()
+    .catch((err) => console.error("[background] startup failed:", err));
 
   await server.listen({ port: PORT, host: HOST });
 
   const shutdown = async () => {
     server.log.info("Shutting down");
-    stopShipper();
+    // Hands the lease back so the replacement instance picks the
+    // background jobs up immediately instead of waiting out the TTL.
+    await backgroundSupervisor()
+      .stop()
+      .catch((err) => console.error("[background] shutdown failed:", err));
     try {
       await server.close();
     } finally {

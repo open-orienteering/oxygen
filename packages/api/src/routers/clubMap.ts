@@ -3,6 +3,7 @@ import { TRPCError } from "@trpc/server";
 import { router, authedProcedure } from "../trpc.js";
 import { prisma } from "../db.js";
 import { parseOcadMapMetadata } from "../event-map.js";
+import { canDownloadClubLibraryMap } from "../ocad-export.js";
 import { renderOcadPreview } from "../club-map-preview.js";
 import type { WGS84Bounds } from "../map-projection.js";
 import type { Prisma } from "../generated/prisma/client.js";
@@ -122,15 +123,27 @@ export const clubMapRouter = router({
 
   download: authedProcedure
     .input(z.object({ id: z.number().int().positive() }))
-    .query(async ({ input }) => {
+    .query(async ({ ctx, input }) => {
       const row = await prisma().clubMapFile.findUnique({
         where: { id: BigInt(input.id) },
-        select: { fileName: true, fileData: true },
+        select: { fileName: true, fileData: true, uploadedBy: true },
       });
       if (!row) {
         throw new TRPCError({
           code: "NOT_FOUND",
           message: `Club map ${input.id} not found`,
+        });
+      }
+      if (
+        !canDownloadClubLibraryMap({
+          authEnabled: ctx.authEnabled,
+          isAdmin: Boolean(ctx.user?.isAdmin),
+          isUploader: Boolean(ctx.user && row.uploadedBy === ctx.user.id),
+        })
+      ) {
+        throw new TRPCError({
+          code: "FORBIDDEN",
+          message: "Only the uploader or an admin can download this map",
         });
       }
       return {

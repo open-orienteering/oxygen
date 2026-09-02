@@ -88,6 +88,12 @@ interface MapSource {
   crs: OcadCrs;
   ocadBounds: number[];
   mapWgs84: WGS84Bounds;
+  /**
+   * `uploadedAt` of the map file this was parsed from. Used to notice a
+   * map that was replaced on a different instance — `onMapUpload` only
+   * fires in the process that handled the upload.
+   */
+  uploadedAtMs: number;
 }
 
 /** A rasterised region of the map, in OCAD coordinates. */
@@ -137,14 +143,29 @@ const tileKey = (z: number, x: number, y: number) => `${z}/${x}/${y}`;
 
 // ─── Map source ─────────────────────────────────────────────
 
+/**
+ * The parsed SVG for an event's current map.
+ *
+ * The cache is validated against the map file's `uploadedAt` rather than
+ * trusted outright: `onMapUpload` only fires in the process that handled
+ * the upload, so on any other instance this metadata read is the only
+ * thing standing between a replaced map and tiles rendered from the old
+ * one. It costs one indexed row read, and only on the tile-miss path —
+ * a cache hit never gets here, and a miss is about to spend two orders
+ * of magnitude more time rasterising.
+ */
 async function getMapSource(eventId: bigint): Promise<MapSource> {
+  const stamp = await currentMapStamp(eventId);
+  if (stamp === null) throw new Error("No map file uploaded");
+
   const cached = svgCache.get(eventId);
-  if (cached) return cached;
+  if (cached?.uploadedAtMs === stamp) return cached;
+  if (cached) invalidate(eventId);
 
   const inFlight = svgLoadInFlight.get(eventId);
   if (inFlight) return inFlight;
 
-  const promise = loadMapSource(eventId);
+  const promise = loadMapSource(eventId, stamp);
   svgLoadInFlight.set(eventId, promise);
   try {
     const source = await promise;
@@ -156,7 +177,20 @@ async function getMapSource(eventId: bigint): Promise<MapSource> {
   }
 }
 
-async function loadMapSource(eventId: bigint): Promise<MapSource> {
+/** `uploadedAt` of the event's newest map file, or null if it has none. */
+async function currentMapStamp(eventId: bigint): Promise<number | null> {
+  const meta = await prisma().mapFile.findFirst({
+    where: { eventId },
+    orderBy: { id: "desc" },
+    select: { uploadedAt: true },
+  });
+  return meta ? meta.uploadedAt.getTime() : null;
+}
+
+async function loadMapSource(
+  eventId: bigint,
+  uploadedAtMs: number,
+): Promise<MapSource> {
   const row = await prisma().mapFile.findFirst({
     where: { eventId },
     orderBy: { id: "desc" },
@@ -199,7 +233,7 @@ async function loadMapSource(eventId: bigint): Promise<MapSource> {
   const rootViewBox = parseViewBox(svg);
   if (!rootViewBox) throw new Error("Map SVG has no root viewBox");
 
-  return { svg, rootViewBox, crs, ocadBounds, mapWgs84 };
+  return { svg, rootViewBox, crs, ocadBounds, mapWgs84, uploadedAtMs };
 }
 
 // ─── Geometry ───────────────────────────────────────────────

@@ -56,6 +56,19 @@ export function authDevEmail(): string {
   return (process.env.AUTH_DEV_EMAIL ?? "dev@localhost").trim().toLowerCase();
 }
 
+/**
+ * When true, an authenticated email that is not yet in `users` is created
+ * as an active non-admin member. IAP (or any proxy) is then the allowlist;
+ * Oxygen still assigns admin and event roles itself.
+ *
+ * Off by default so invite-only deployments and the E2E suite keep
+ * rejecting unknown emails.
+ */
+export function authAutoProvision(): boolean {
+  const raw = (process.env.AUTH_AUTO_PROVISION ?? "").trim().toLowerCase();
+  return raw === "member" || raw === "on" || raw === "true" || raw === "1";
+}
+
 export function parseOxygenAdminEmails(): string[] {
   const raw = process.env.OXYGEN_ADMIN_EMAILS ?? "";
   return raw
@@ -100,8 +113,9 @@ function toAuthUser(row: {
 
 /**
  * Look up an invited user. Bootstrap admins (OXYGEN_ADMIN_EMAILS, or
- * `implicitAdmin` for AUTH_MODE=dev) are created on first sight.
- * Inactive users resolve to null (lockout).
+ * `implicitAdmin` for AUTH_MODE=dev) are created on first sight. With
+ * AUTH_AUTO_PROVISION, anyone else who gets through the proxy is created
+ * as a plain member. Inactive users resolve to null (lockout).
  */
 export async function resolveUser(
   email: string,
@@ -114,13 +128,13 @@ export async function resolveUser(
   const bootstrap =
     (opts?.implicitAdmin === true) ||
     parseOxygenAdminEmails().includes(normalized);
-  if (!row && bootstrap) {
+  if (!row && (bootstrap || authAutoProvision())) {
     try {
       row = await db.user.create({
         data: {
           email: normalized,
           displayName: displayNameFromEmail(normalized),
-          isAdmin: true,
+          isAdmin: bootstrap,
           active: true,
         },
       });

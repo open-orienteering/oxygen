@@ -36,30 +36,37 @@ export interface RegistrationRow {
   payMode: number;
 }
 
-let cachedWebhookUrl: string | null = null;
-let cacheTime = 0;
+const webhookCache = new Map<string, { url: string; at: number }>();
 const CACHE_TTL_MS = 60_000;
 
-async function getWebhookUrl(client: PrismaClient, eventId: bigint): Promise<string> {
-  if (cachedWebhookUrl !== null && Date.now() - cacheTime < CACHE_TTL_MS) {
-    return cachedWebhookUrl;
-  }
+/**
+ * The webhook URL for one event. Cached per event so two competitions
+ * on the same process cannot send each other's readouts.
+ */
+export async function getWebhookUrl(
+  client: PrismaClient,
+  eventId: bigint,
+): Promise<string> {
+  const key = String(eventId);
+  const hit = webhookCache.get(key);
+  if (hit && Date.now() - hit.at < CACHE_TTL_MS) return hit.url;
+
+  let url = "";
   try {
     const row = await client.event.findUnique({
       where: { id: eventId },
       select: { googleSheetsWebhookUrl: true },
     });
-    cachedWebhookUrl = row?.googleSheetsWebhookUrl ?? "";
+    url = row?.googleSheetsWebhookUrl ?? "";
   } catch {
-    cachedWebhookUrl = "";
+    url = "";
   }
-  cacheTime = Date.now();
-  return cachedWebhookUrl;
+  webhookCache.set(key, { url, at: Date.now() });
+  return url;
 }
 
 export function clearSheetsCache(): void {
-  cachedWebhookUrl = null;
-  cacheTime = 0;
+  webhookCache.clear();
 }
 
 /** Fire-and-forget POST to the configured webhook. */
