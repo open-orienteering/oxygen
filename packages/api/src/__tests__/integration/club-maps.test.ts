@@ -15,6 +15,9 @@ import {
   getOrCreateClubMapPreview,
   registerClubMapPreviewRoute,
 } from "../../club-map-preview.js";
+import { grantSystemGroup } from "../../permissions.js";
+import { SYSTEM_GROUP_IDS } from "@oxygen/shared";
+import { registerBackupRoute } from "../../backup.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const FIXTURE = resolve(__dirname, "../../../../../e2e/test.ocd");
@@ -41,6 +44,9 @@ afterAll(async () => {
   if (uploadedIds.length > 0) {
     await ctx.db.clubMapFile.deleteMany({ where: { id: { in: uploadedIds } } });
   }
+  await ctx.db.user.deleteMany({
+    where: { email: { endsWith: "@club-map-test.example" } },
+  });
   await ctx.cleanup();
 });
 
@@ -254,6 +260,7 @@ describe("club map library", () => {
     });
     expect(mapRow?.fileName).toBe("event-copy.ocd");
     expect(Buffer.from(mapRow!.fileData).equals(buf)).toBe(true);
+    expect(mapRow!.fromClubLibrary).toBe(true);
     // Metadata is parsed once at apply time and persisted, so
     // course.mapMetadata never has to re-parse the OCAD blob per query
     // (a multi-second stall on real maps that made the SW's NetworkFirst
@@ -286,6 +293,7 @@ describe("club map library", () => {
       where: { eventId: ctx.eventId },
     });
     expect(replaced?.fileName).toBe("replaced.ocd");
+    expect(replaced?.fromClubLibrary).toBe(false);
     expect(await ctx.db.mapFile.count({ where: { eventId: ctx.eventId } })).toBe(1);
   });
 
@@ -314,5 +322,180 @@ describe("club map library", () => {
     await expect(
       caller.competition.create({ name: "library", date: "2099-01-01" }),
     ).rejects.toMatchObject({ code: "BAD_REQUEST" });
+  });
+
+  it("forbids club-map download by a non-uploader non-admin when auth is on", async () => {
+    const buf = readFileSync(FIXTURE);
+    const uploader = asUser(
+      await ctx.db.user.create({
+        data: {
+          email: `dl-up-${suffix}@club-map-test.example`,
+          displayName: "Downloader",
+          isAdmin: false,
+          active: true,
+        },
+      }),
+    );
+    const stranger = asUser(
+      await ctx.db.user.create({
+        data: {
+          email: `dl-str-${suffix}@club-map-test.example`,
+          displayName: "Stranger",
+          isAdmin: false,
+          active: true,
+        },
+      }),
+    );
+    const asUploader = makeCaller(null, {
+      user: uploader,
+      authEnabled: true,
+      identityEmail: uploader.email,
+    });
+    const created = await asUploader.clubMap.upload({
+      fileName: "secret.ocd",
+      fileDataBase64: buf.toString("base64"),
+    });
+    uploadedIds.push(BigInt(created.id));
+
+    const asStranger = makeCaller(null, {
+      user: stranger,
+      authEnabled: true,
+      identityEmail: stranger.email,
+    });
+    await expect(
+      asStranger.clubMap.download({ id: created.id }),
+    ).rejects.toMatchObject({ code: "FORBIDDEN" });
+
+    const roundTrip = await asUploader.clubMap.download({ id: created.id });
+    expect(Buffer.from(roundTrip.fileDataBase64, "base64").equals(buf)).toBe(
+      true,
+    );
+  });
+
+  it("lets an event manager download an uploaded map but not a club-library copy", async () => {
+    const buf = readFileSync(FIXTURE);
+    const manager = asUser(
+      await ctx.db.user.create({
+        data: {
+          email: `mgr-${suffix}@club-map-test.example`,
+          displayName: "Manager",
+          isAdmin: false,
+          active: true,
+        },
+      }),
+    );
+    const admin = asUser(
+      await ctx.db.user.create({
+        data: {
+          email: `adm-${suffix}@club-map-test.example`,
+          displayName: "Admin",
+          isAdmin: true,
+          active: true,
+        },
+      }),
+    );
+    await grantSystemGroup(ctx.db, {
+      eventId: ctx.eventId,
+      userId: manager.id,
+      groupId: SYSTEM_GROUP_IDS.eventAdmin,
+      grantedBy: admin.id,
+    });
+    const asManager = makeCaller(ctx.event, {
+      user: manager,
+      authEnabled: true,
+      identityEmail: manager.email,
+    });
+    const asAdmin = makeCaller(ctx.event, {
+      user: admin,
+      authEnabled: true,
+      identityEmail: admin.email,
+    });
+
+    await asManager.course.uploadMap({
+      fileName: "own.ocd",
+      fileDataBase64: buf.toString("base64"),
+    });
+    const own = await asManager.course.downloadMap();
+    expect(own?.fileName).toBe("own.ocd");
+
+    const library = await asAdmin.clubMap.upload({
+      fileName: "library.ocd",
+      fileDataBase64: buf.toString("base64"),
+    });
+    uploadedIds.push(BigInt(library.id));
+    await asManager.course.useClubMap({ clubMapId: library.id });
+    await expect(asManager.course.downloadMap()).rejects.toMatchObject({
+      code: "FORBIDDEN",
+    });
+    const adminDl = await asAdmin.course.downloadMap();
+    expect(adminDl?.fileName).toBe("library.ocd");
+  });
+
+  it("requires instance admin to back up an event whose map came from the club library", async () => {
+    const buf = readFileSync(FIXTURE);
+    const manager = asUser(
+      await ctx.db.user.create({
+        data: {
+          email: `bak-mgr-${suffix}@club-map-test.example`,
+          displayName: "BackupMgr",
+          isAdmin: false,
+          active: true,
+        },
+      }),
+    );
+    const admin = asUser(
+      await ctx.db.user.create({
+        data: {
+          email: `bak-adm-${suffix}@club-map-test.example`,
+          displayName: "BackupAdm",
+          isAdmin: true,
+          active: true,
+        },
+      }),
+    );
+    await grantSystemGroup(ctx.db, {
+      eventId: ctx.eventId,
+      userId: manager.id,
+      groupId: SYSTEM_GROUP_IDS.eventAdmin,
+      grantedBy: admin.id,
+    });
+    const library = await makeCaller(ctx.event, {
+      user: admin,
+      authEnabled: true,
+      identityEmail: admin.email,
+    }).clubMap.upload({
+      fileName: "backup-lib.ocd",
+      fileDataBase64: buf.toString("base64"),
+    });
+    uploadedIds.push(BigInt(library.id));
+    await makeCaller(ctx.event, {
+      user: manager,
+      authEnabled: true,
+      identityEmail: manager.email,
+    }).course.useClubMap({ clubMapId: library.id });
+
+    const server = Fastify();
+    registerBackupRoute(server);
+    const previousMode = process.env.AUTH_MODE;
+    process.env.AUTH_MODE = "proxy";
+    try {
+      const asManager = await server.inject({
+        method: "GET",
+        url: `/api/backup/event?name=${ctx.nameId}`,
+        headers: { "x-forwarded-email": manager.email },
+      });
+      expect(asManager.statusCode).toBe(403);
+
+      const asAdmin = await server.inject({
+        method: "GET",
+        url: `/api/backup/event?name=${ctx.nameId}`,
+        headers: { "x-forwarded-email": admin.email },
+      });
+      expect(asAdmin.statusCode).toBe(200);
+    } finally {
+      if (previousMode === undefined) delete process.env.AUTH_MODE;
+      else process.env.AUTH_MODE = previousMode;
+      await server.close();
+    }
   });
 });

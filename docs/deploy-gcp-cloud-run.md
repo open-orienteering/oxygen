@@ -73,8 +73,12 @@ source scripts/gcp/env.sh
 gcloud beta run services update "$SERVICE" --region="$REGION" --iap
 ```
 
-Then grant each person access (this *is* the allowlist — no other user
-management exists or is needed):
+Then grant each person access. IAP is the network allowlist; Oxygen then
+auto-creates anyone who gets through as a plain member
+(`AUTH_AUTO_PROVISION=member` on `deploy.sh`). Put your own email in
+`OXYGEN_ADMIN_EMAILS` in `env.sh` so the first request makes you an
+instance admin — from there, **Manage users** on the start page is where
+you promote others.
 
 ```bash
 gcloud beta iap web add-iam-policy-binding \
@@ -87,7 +91,9 @@ gcloud beta iap web add-iam-policy-binding \
 Remove someone with `remove-iam-policy-binding` and the same arguments.
 Any Google account works (gmail.com included); users hit a Google sign-in
 page and non-allowlisted accounts get a 403 from Google before reaching
-the app. The app itself needs no auth code for this.
+the app. Deactivating a user in Oxygen locks them out of the app without
+revoking IAP (they still reach the Access denied page until you also
+drop the IAP binding).
 
 #### One-time: custom OAuth client (required for projects without an organization)
 
@@ -270,12 +276,20 @@ SVG DOM, which still spikes, not for the tiles themselves.
   also made deep zoom blurry. Both problems are gone; if you still have
   `MAP_RASTER_MAX_PIXELS` or `MAP_RASTER_CACHE_EVENTS` set on a revision,
   they are ignored and can be removed.
-- **`--max-instances=1`.** Tiles no longer need it: any instance can
-render any tile cheaply, and `/api/map-tile-progress` is computed from
-the database so every instance answers the same. What still assumes a
-single process is the set of background timers started in
-`packages/api/src/index.ts` (sync shipper, lease renewal). Raising the
-cap requires leader election (a Postgres advisory lock) for those first.
+- **`--max-instances=2` and `DATABASE_POOL_MAX=10`.** These two belong
+together: the binding constraint on scale-out is Cloud SQL connections,
+not the application. A `db-f1-micro` allows 25 and reserves 3 for
+superuser use, and each instance opens up to `DATABASE_POOL_MAX`, so two
+instances at 10 leaves room for the migration job. To scale further,
+raise the Cloud SQL tier first (`db-g1-small` allows 50) and then raise
+both numbers together — raising `--max-instances` alone buys you
+`FATAL: sorry, too many clients already` under load.
+  The code side no longer objects. Tiles are stateless (any instance can
+  render any tile, and `/api/map-tile-progress` comes from the database),
+  and the background jobs that must not run twice elect a single runner
+  through the `oxygen.instance_lease` table — see
+  [background-jobs-lease.md](background-jobs-lease.md). Extra instances
+  therefore only serve requests.
 - **Background tile pre-caching** can be disabled with
 `MAP_TILE_PRECACHE=off` if you would rather spend request CPU on
 requests. Tiles are then rendered purely on demand.

@@ -27,11 +27,11 @@ gcloud run deploy "$SERVICE" \
   --service-account="oxygen-run@${PROJECT_ID}.iam.gserviceaccount.com" \
   --add-cloudsql-instances="$SQL_CONNECTION" \
   --set-secrets="DATABASE_URL=oxygen-database-url:latest" \
-  --set-env-vars="NODE_OPTIONS=--max-old-space-size=3328" \
+  --set-env-vars="^@^NODE_OPTIONS=--max-old-space-size=3328@DATABASE_POOL_MAX=10@AUTH_MODE=proxy@AUTH_HEADER=x-goog-authenticated-user-email@AUTH_AUTO_PROVISION=member@OXYGEN_ADMIN_EMAILS=${OXYGEN_ADMIN_EMAILS:-}" \
   --memory=4Gi \
   --cpu=1 \
   --timeout=300 \
-  --max-instances=1 \
+  --max-instances=2 \
   --min-instances=0 \
   --cpu-throttling \
   --no-allow-unauthenticated
@@ -42,9 +42,14 @@ gcloud run deploy "$SERVICE" \
 #    parsing a large club OCAD into an SVG DOM still spikes. The
 #    MAP_RASTER_* caps that used to be needed here are gone with the
 #    whole-map raster they bounded.
-#  - max-instances=1: tiles no longer require a single process, but the
-#    background timers in index.ts (sync shipper, lease) still assume one
-#    writer. Raising this needs the advisory-lock leader election first.
+#  - max-instances=2 + DATABASE_POOL_MAX=10: the ceiling here is Cloud
+#    SQL connections, not the code. A db-f1-micro allows 25 and reserves
+#    3 for superuser, so two instances at 10 each leaves room for the
+#    migration job. The background jobs that genuinely need one runner
+#    (LiveResults push, ROC polling, journal shipping) elect a leader
+#    through oxygen.instance_lease, so extra instances only serve
+#    requests. To scale further, raise the Cloud SQL tier first —
+#    db-g1-small allows 50 — then raise both numbers together.
 
 echo
 echo "Deployed. If this is the first deploy:"

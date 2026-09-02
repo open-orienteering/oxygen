@@ -19,10 +19,8 @@
 import { z } from "zod";
 import { router, raceOperateProcedure } from "../trpc.js";
 import { getSetting, setSetting } from "../db.js";
-import {
-  setPullerEnabled,
-  pollOnceForEvent,
-} from "../online-input/puller.js";
+import { pollOnceForEvent } from "../online-input/puller.js";
+import { requestBackgroundReconcile } from "../background/supervisor.js";
 
 type SpecialTarget = 1 | 2 | 3;
 
@@ -136,7 +134,7 @@ export const onlineInputRouter = router({
       cfg.protocol = input.protocol;
       if (input.url) cfg.endpointUrl = input.url;
       await saveLoadedConfig(ctx.event.id, cfg);
-      await setPullerEnabled(ctx.event.id, input.enabled);
+      await requestBackgroundReconcile();
       return { ok: true as const };
     }),
 
@@ -144,7 +142,7 @@ export const onlineInputRouter = router({
     const cfg = await loadConfig(ctx.event.id);
     cfg.enabled = true;
     await saveLoadedConfig(ctx.event.id, cfg);
-    await setPullerEnabled(ctx.event.id, true);
+    await requestBackgroundReconcile();
     return { ok: true as const };
   }),
 
@@ -152,7 +150,7 @@ export const onlineInputRouter = router({
     const cfg = await loadConfig(ctx.event.id);
     cfg.enabled = false;
     await saveLoadedConfig(ctx.event.id, cfg);
-    await setPullerEnabled(ctx.event.id, false);
+    await requestBackgroundReconcile();
     return { ok: true as const };
   }),
 
