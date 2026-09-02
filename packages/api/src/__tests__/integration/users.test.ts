@@ -170,6 +170,57 @@ describe("resolveUser", () => {
   });
 });
 
+describe("OXYGEN_ADMIN_EMAILS reconciliation", () => {
+  const previous = process.env.OXYGEN_ADMIN_EMAILS;
+
+  afterAll(() => {
+    if (previous === undefined) delete process.env.OXYGEN_ADMIN_EMAILS;
+    else process.env.OXYGEN_ADMIN_EMAILS = previous;
+  });
+
+  it("promotes a pre-existing member row that is listed as a bootstrap admin", async () => {
+    const email = `promote-${suffix}@users-test.example`;
+    await ctx.db.user.create({
+      data: { email, displayName: "Was Member", isAdmin: false, active: true },
+    });
+    process.env.OXYGEN_ADMIN_EMAILS = email;
+
+    const user = await resolveUser(email);
+
+    expect(user?.isAdmin).toBe(true);
+    const row = await ctx.db.user.findUnique({ where: { email } });
+    expect(row?.isAdmin).toBe(true);
+    // The promotion must not clobber a display name the operator already set.
+    expect(row?.displayName).toBe("Was Member");
+  });
+
+  it("revives a deactivated bootstrap admin so the operator cannot be locked out", async () => {
+    const email = `revive-${suffix}@users-test.example`;
+    await ctx.db.user.create({
+      data: { email, displayName: "Locked Out", isAdmin: false, active: false },
+    });
+    process.env.OXYGEN_ADMIN_EMAILS = email;
+
+    const user = await resolveUser(email);
+
+    expect(user).not.toBeNull();
+    expect(user!.isAdmin).toBe(true);
+    expect(user!.active).toBe(true);
+  });
+
+  it("leaves an admin alone when the env var does not mention them", async () => {
+    const email = `keepadmin-${suffix}@users-test.example`;
+    await ctx.db.user.create({
+      data: { email, displayName: "UI Admin", isAdmin: true, active: true },
+    });
+    process.env.OXYGEN_ADMIN_EMAILS = `someone-else-${suffix}@users-test.example`;
+
+    const user = await resolveUser(email);
+
+    expect(user?.isAdmin).toBe(true);
+  });
+});
+
 describe("journal attribution", () => {
   it("stamps actorId from the authenticated user on a journaled mutation", async () => {
     const caller = adminCaller(ctx.event);

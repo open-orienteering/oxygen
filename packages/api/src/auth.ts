@@ -113,7 +113,8 @@ function toAuthUser(row: {
 
 /**
  * Look up an invited user. Bootstrap admins (OXYGEN_ADMIN_EMAILS, or
- * `implicitAdmin` for AUTH_MODE=dev) are created on first sight. With
+ * `implicitAdmin` for AUTH_MODE=dev) are created on first sight, and an
+ * existing row is promoted and reactivated to match. With
  * AUTH_AUTO_PROVISION, anyone else who gets through the proxy is created
  * as a plain member. Inactive users resolve to null (lockout).
  */
@@ -146,6 +147,19 @@ export async function resolveUser(
       }
     }
   }
+  // Bootstrap admin status is reconciled on every resolve, not just at
+  // creation: the row often predates OXYGEN_ADMIN_EMAILS being set (a
+  // restored dump, an earlier auto-provisioned member), and an operator
+  // who can set the env var must always be able to get back in. This
+  // only ever grants — removing an email here never demotes, so the
+  // in-app Users page stays the authority for everyone else.
+  if (row && bootstrap && (!row.isAdmin || !row.active)) {
+    row = await db.user.update({
+      where: { id: row.id },
+      data: { isAdmin: true, active: true },
+    });
+  }
+
   if (!row || !row.active) return null;
 
   const lastSeen = row.lastSeenAt?.getTime() ?? 0;
