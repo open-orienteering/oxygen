@@ -1011,6 +1011,10 @@ model MapFile {
   bounds      Json?
   northOffset Float?   @map("north_offset")
   calibration Json?
+  /// True when this blob was copied from `club_map_files`. Club maps
+  /// stay club property even after an event adopts them, so downloads
+  /// and event backups of those rows require an instance admin.
+  fromClubLibrary Boolean @default(false) @map("from_club_library")
 
   event Event @relation(fields: [eventId], references: [id], onDelete: Cascade)
 

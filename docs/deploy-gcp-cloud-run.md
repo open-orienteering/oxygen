@@ -73,8 +73,12 @@ source scripts/gcp/env.sh
 gcloud beta run services update "$SERVICE" --region="$REGION" --iap
 ```
 
-Then grant each person access (this *is* the allowlist — no other user
-management exists or is needed):
+Then grant each person access. IAP is the network allowlist; Oxygen then
+auto-creates anyone who gets through as a plain member
+(`AUTH_AUTO_PROVISION=member` on `deploy.sh`). Put your own email in
+`OXYGEN_ADMIN_EMAILS` in `env.sh` so the first request makes you an
+instance admin — from there, **Manage users** on the start page is where
+you promote others.
 
 ```bash
 gcloud beta iap web add-iam-policy-binding \
@@ -87,7 +91,9 @@ gcloud beta iap web add-iam-policy-binding \
 Remove someone with `remove-iam-policy-binding` and the same arguments.
 Any Google account works (gmail.com included); users hit a Google sign-in
 page and non-allowlisted accounts get a 403 from Google before reaching
-the app. The app itself needs no auth code for this.
+the app. Deactivating a user in Oxygen locks them out of the app without
+revoking IAP (they still reach the Access denied page until you also
+drop the IAP binding).
 
 #### One-time: custom OAuth client (required for projects without an organization)
 

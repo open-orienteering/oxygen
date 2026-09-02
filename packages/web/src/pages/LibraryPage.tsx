@@ -65,7 +65,7 @@ export function LibraryPage() {
     [upload],
   );
 
-  const canDelete = (uploadedBy: string | null) => {
+  const canManageSource = (uploadedBy: string | null) => {
     if (!authEnabled) return true;
     if (!user) return false;
     return user.isAdmin || uploadedBy === user.id;
@@ -281,6 +281,7 @@ export function LibraryPage() {
                 </span>
               </div>
               <div className="mt-3 flex gap-2">
+                {canManageSource(row.uploadedBy) && (
                 <button
                   type="button"
                   data-testid="library-map-download"
@@ -300,7 +301,8 @@ export function LibraryPage() {
                 >
                   {t("download")}
                 </button>
-                {canDelete(row.uploadedBy) && (
+                )}
+                {canManageSource(row.uploadedBy) && (
                   <button
                     type="button"
                     data-testid="library-map-delete"
