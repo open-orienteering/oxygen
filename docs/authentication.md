@@ -18,6 +18,7 @@ on every request.
 | `AUTH_HEADER` | `x-forwarded-email` | Header carrying the authenticated email. Fastify lowercases header names. |
 | `AUTH_DEV_EMAIL` | `dev@localhost` | Identity used in `dev` mode. |
 | `OXYGEN_ADMIN_EMAILS` | empty | Comma-separated bootstrap admins. On first request with that identity, Oxygen creates an active admin row (display name = email local part). |
+| `AUTH_AUTO_PROVISION` | unset (off) | `member` / `on` / `true` / `1`: create an active non-admin user for any authenticated email that is not yet in `users`. IAP (or the proxy) is then the allowlist; Oxygen still assigns admin and event roles. Leave unset for invite-only. |
 
 Header parsing: trim, lowercase; if the value contains `:`, take the substring
 after the **last** `:` (GCP IAP sends `accounts.google.com:user@example.com`).
@@ -37,14 +38,16 @@ wired, and typically on LAN venue boxes that do not terminate SSO.
 
 Every request except `users.me`, health/version, and kiosk/start-screen
 pages (which still render without an invite) is gated at the tRPC layer once
-`eventProcedure` / `authedProcedure` run. Unknown or uninvited emails get
-`UNAUTHORIZED` from event-scoped procedures. The UI shows **Access denied**
-for every route except `/:nameId/kiosk` and `/:nameId/start-screen`. Those
+`eventProcedure` / `authedProcedure` run. Unknown emails get `UNAUTHORIZED`
+from event-scoped procedures unless `AUTH_AUTO_PROVISION` is on, in which
+case they are created as members on first sight. The UI shows **Access denied**
+for every route except `/:nameId/kiosk` and `/:nameId/start-screen` when there
+is no identity, or when the account exists but is deactivated. Those
 public pages require a valid kiosk key (`?k=` / `x-kiosk-key`) when no
 invited user is present.
 
-Bootstrap: put the first operator in `OXYGEN_ADMIN_EMAILS`. They can invite
-everyone else from `/admin/users`.
+Bootstrap: put the first operator in `OXYGEN_ADMIN_EMAILS`. They can promote
+everyone else from **Manage users** (`/admin/users`) on the start page.
 
 ### `AUTH_MODE=dev`
 
@@ -99,9 +102,12 @@ path to the load balancer.
 
 1. Set `OXYGEN_ADMIN_EMAILS` to at least one real mailbox.
 2. Enable `AUTH_MODE=proxy` behind the IdP.
-3. Sign in; the bootstrap admin is created on first request.
-4. Open **Users** on the event selector footer and invite clubmates.
-5. Deactivating a user locks them out on the next request (`resolveUser`
+3. Optionally set `AUTH_AUTO_PROVISION=member` so anyone the proxy admits
+   is created as a member (Cloud Run deploy does this).
+4. Sign in; the bootstrap admin is created on first request.
+5. Open **Manage users** on the event selector and invite clubmates or
+   grant admin. The table shows role, club groups, last seen, and active.
+6. Deactivating a user locks them out on the next request (`resolveUser`
    returns null for `active = false`). Admins cannot deactivate or de-admin
    themselves.
 
@@ -191,11 +197,17 @@ accept the key.
 
 | Route | Required |
 |-------|----------|
-| `/api/backup/*` | `event.manage` |
+| `/api/backup/*` | `event.manage`; **instance admin** if the event's current map was copied from the club library (the dump contains the OCAD blob) |
 | `/api/export/course-data` | `courses.view` |
 | `/api/map-tile/*` | `courses.view` or valid kiosk key (`?k=` or header) |
 | `/api/club-map-preview/*` | any invited user |
 | `/health`, `/api/version`, `/api/club-logo/*` | open |
+
+`course.downloadMap` requires `event.manage`, and instance admin when
+`map_files.from_club_library` is set. `clubMap.download` matches delete:
+uploader or instance admin. Tiles and previews are rendered views and stay
+on the existing capability / invited-user gates — they are not the source
+file. See [club-library.md](club-library.md#ocad-source-files).
 
 `events.push` (venue journal) stays on `eventProcedure` without an extra
 capability check. Instance `users` and Eventor API-key admin stay

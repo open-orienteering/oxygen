@@ -34,10 +34,26 @@ export const usersRouter = router({
   })),
 
   list: adminProcedure.query(async () => {
-    return prisma().user.findMany({
+    const rows = await prisma().user.findMany({
       orderBy: { email: "asc" },
-      select: userPublicSelect,
+      select: {
+        ...userPublicSelect,
+        clubGroupMemberships: {
+          select: { group: { select: { id: true, name: true } } },
+          orderBy: { group: { name: "asc" } },
+        },
+      },
     });
+    return rows.map((row) => ({
+      id: row.id,
+      email: row.email,
+      displayName: row.displayName,
+      isAdmin: row.isAdmin,
+      active: row.active,
+      createdAt: row.createdAt,
+      lastSeenAt: row.lastSeenAt,
+      groups: row.clubGroupMemberships.map((m) => m.group),
+    }));
   }),
 
   invite: adminProcedure

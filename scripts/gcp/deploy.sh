@@ -27,7 +27,7 @@ gcloud run deploy "$SERVICE" \
   --service-account="oxygen-run@${PROJECT_ID}.iam.gserviceaccount.com" \
   --add-cloudsql-instances="$SQL_CONNECTION" \
   --set-secrets="DATABASE_URL=oxygen-database-url:latest" \
-  --set-env-vars="NODE_OPTIONS=--max-old-space-size=3328,DATABASE_POOL_MAX=10" \
+  --set-env-vars="^@^NODE_OPTIONS=--max-old-space-size=3328@DATABASE_POOL_MAX=10@AUTH_MODE=proxy@AUTH_HEADER=x-goog-authenticated-user-email@AUTH_AUTO_PROVISION=member@OXYGEN_ADMIN_EMAILS=${OXYGEN_ADMIN_EMAILS:-}" \
   --memory=4Gi \
   --cpu=1 \
   --timeout=300 \

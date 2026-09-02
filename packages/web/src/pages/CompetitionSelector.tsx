@@ -56,6 +56,15 @@ export function CompetitionSelector() {
       <div className="w-full max-w-2xl">
         {/* Language Selector — top right */}
         <div className="flex justify-end mb-2 items-center gap-3">
+          {user?.isAdmin && (
+            <Link
+              to="/admin/users"
+              data-testid="admin-users-link"
+              className="px-3 py-1.5 text-sm font-medium text-blue-700 bg-blue-50 border border-blue-100 rounded-lg hover:bg-blue-100"
+            >
+              {ta("usersLink")}
+            </Link>
+          )}
           <UserChip />
           <LanguageSelector />
         </div>
@@ -291,17 +300,6 @@ export function CompetitionSelector() {
             {t("buildVersion", { ns: "common" })}: {formatBuildVersion(__BUILD_VERSION__)}
           </div>
           <PurgeButton onPurged={() => competitions.refetch()} />
-          {user?.isAdmin && (
-            <div>
-              <Link
-                to="/admin/users"
-                data-testid="admin-users-link"
-                className="text-xs text-blue-600 hover:text-blue-800"
-              >
-                {ta("usersLink")}
-              </Link>
-            </div>
-          )}
         </div>
       </div>
     </div>

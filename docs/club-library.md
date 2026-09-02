@@ -13,8 +13,22 @@ their thumbnail on first view. Parse or render failure is non-fatal: the file
 is kept, scale/bounds stay empty, and the unavailable thumbnail is hidden.
 
 The list is global for the instance (one owning club). Anyone who can sign in
-can upload, rename, and download. Delete is allowed for the uploader or an
+can upload and rename. Download and delete are allowed for the uploader or an
 instance admin (`AUTH_MODE=off` skips that check).
+
+### OCAD source files
+
+The `.ocd` blob is the club's map. Tiles and course overprints are rendered
+views and stay available to whoever can run the race; the source file does
+not. `map_files.from_club_library` is set when an event adopts a library
+map via **From club library**, and cleared if the event later uploads its
+own file. That flag gates:
+
+- `course.downloadMap` — event managers may download a map the event
+  uploaded itself; a club-library copy requires an instance admin.
+- `/api/backup/event` — same rule, because the dump includes
+  `map_files.file_data`.
+- `clubMap.download` — uploader or instance admin, matching delete.
 
 ### Copy-on-use
 

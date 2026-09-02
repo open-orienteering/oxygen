@@ -137,6 +137,37 @@ describe("resolveUser", () => {
     });
     expect(await resolveUser(email)).toBeNull();
   });
+
+  it("auto-provisions an unknown email as a non-admin member when enabled", async () => {
+    const previous = process.env.AUTH_AUTO_PROVISION;
+    process.env.AUTH_AUTO_PROVISION = "member";
+    const email = `autoprov-${suffix}@users-test.example`;
+    try {
+      const user = await resolveUser(email);
+      expect(user).not.toBeNull();
+      expect(user!.email).toBe(email);
+      expect(user!.isAdmin).toBe(false);
+      expect(user!.active).toBe(true);
+      const row = await ctx.db.user.findUnique({ where: { email } });
+      expect(row?.displayName).toBe("autoprov-" + suffix);
+    } finally {
+      if (previous === undefined) delete process.env.AUTH_AUTO_PROVISION;
+      else process.env.AUTH_AUTO_PROVISION = previous;
+    }
+  });
+
+  it("does not auto-provision when AUTH_AUTO_PROVISION is unset", async () => {
+    const previous = process.env.AUTH_AUTO_PROVISION;
+    delete process.env.AUTH_AUTO_PROVISION;
+    const email = `noauto-${suffix}@users-test.example`;
+    try {
+      expect(await resolveUser(email)).toBeNull();
+      expect(await ctx.db.user.findUnique({ where: { email } })).toBeNull();
+    } finally {
+      if (previous === undefined) delete process.env.AUTH_AUTO_PROVISION;
+      else process.env.AUTH_AUTO_PROVISION = previous;
+    }
+  });
 });
 
 describe("journal attribution", () => {
