@@ -32,13 +32,17 @@ test.describe("uninvited identity", () => {
 test.describe("admin invite then guest login", () => {
   test("invited email can open the selector", async ({ page, browser }) => {
     const email = `guest-${Date.now()}@oxygen.test`;
-    await page.goto("/admin/users");
+    await page.goto("/");
+    await page.getByTestId("admin-users-link").click();
     await expect(page.getByTestId("users-admin-page")).toBeVisible({
       timeout: 15000,
     });
     await page.getByTestId("invite-email").fill(email);
     await page.getByTestId("invite-submit").click();
     await expect(page.getByText(email)).toBeVisible({ timeout: 10000 });
+    await expect(page.getByTestId("user-last-seen").first()).toBeVisible();
+    await page.getByTestId("users-search").fill(email);
+    await expect(page.getByText(email)).toBeVisible();
 
     const guest = await browser.newContext({
       extraHTTPHeaders: { "x-forwarded-email": email },

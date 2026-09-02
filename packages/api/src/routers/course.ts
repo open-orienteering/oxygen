@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
-import { router, coursesViewProcedure, kioskOrCoursesViewProcedure, coursesEditProcedure, coursesEditRaceProcedure } from "../trpc.js";
+import { router, coursesViewProcedure, kioskOrCoursesViewProcedure, coursesEditProcedure, coursesEditRaceProcedure, manageProcedure } from "../trpc.js";
 import type { PrismaClient, Prisma as PrismaNs } from "../generated/prisma/client.js";
 import {
   controlStatusToValue,
@@ -35,6 +35,7 @@ import {
   parseOcadMapMetadata,
   type MapCalibrationPoint,
 } from "../event-map.js";
+import { canDownloadEventMap } from "../ocad-export.js";
 import { loadEventCrs } from "../event-crs.js";
 import { rebuildCourseGeometry } from "../course-geometry.js";
 import { appendJournal } from "../journalEmit.js";
@@ -882,14 +883,30 @@ export const courseRouter = router({
     };
   }),
 
-  /** Download the OCD map file (base64-encoded). */
-  downloadMap: coursesViewProcedure.query(async ({ ctx }) => {
+  /**
+   * Download the OCD map file (base64-encoded). Event managers may take
+   * a map the event uploaded itself. A copy adopted from the club library
+   * stays club property — only an instance admin may export it.
+   */
+  downloadMap: manageProcedure.query(async ({ ctx }) => {
     const f = await ctx.db.mapFile.findFirst({
       where: { eventId: ctx.event.id },
       orderBy: { uploadedAt: "desc" },
-      select: { fileName: true, fileData: true },
+      select: { fileName: true, fileData: true, fromClubLibrary: true },
     });
     if (!f) return null;
+    if (
+      !canDownloadEventMap({
+        authEnabled: ctx.authEnabled,
+        isAdmin: Boolean(ctx.user?.isAdmin),
+        fromClubLibrary: f.fromClubLibrary,
+      })
+    ) {
+      throw new TRPCError({
+        code: "FORBIDDEN",
+        message: "Club library maps can only be downloaded by an instance admin",
+      });
+    }
     return {
       fileName: f.fileName,
       fileDataBase64: Buffer.from(f.fileData).toString("base64"),
@@ -1117,6 +1134,7 @@ export const courseRouter = router({
         ctx.event.id,
         row.fileName,
         Buffer.from(row.fileData),
+        { fromClubLibrary: true },
       );
       return { success: true as const, ...result };
     }),

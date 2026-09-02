@@ -98,6 +98,7 @@ export async function applyEventMap(
   eventId: bigint,
   fileName: string,
   buffer: Buffer,
+  opts: { fromClubLibrary?: boolean } = {},
 ): Promise<{ fileName: string; size: number }> {
   const metadata = await parseOcadMapMetadata(buffer);
   await db.mapFile.deleteMany({ where: { eventId } });
@@ -114,6 +115,7 @@ export async function applyEventMap(
       calibration: metadata.calibration
         ? (metadata.calibration as unknown as Prisma.InputJsonValue)
         : undefined,
+      fromClubLibrary: opts.fromClubLibrary === true,
     },
   });
   await db.mapTile.deleteMany({ where: { eventId } });

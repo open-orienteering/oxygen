@@ -96,3 +96,25 @@ export async function assertRestAccess(
   }
   return true;
 }
+
+/**
+ * Instance-admin REST gate. Used for OCAD-bearing dumps: an event manager
+ * can back up their own uploaded map, but a club-library copy is club
+ * property and only an instance admin may take it out.
+ */
+export async function assertRestAdmin(
+  req: FastifyRequest,
+  reply: FastifyReply,
+): Promise<boolean> {
+  const { user, authEnabled } = await identityFromRequest(req);
+  if (!authEnabled) return true;
+  if (!user) {
+    void reply.code(401).send({ error: "Not authenticated" });
+    return false;
+  }
+  if (!user.isAdmin) {
+    void reply.code(403).send({ error: "Instance admin required" });
+    return false;
+  }
+  return true;
+}
