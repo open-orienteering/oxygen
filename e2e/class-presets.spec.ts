@@ -1,5 +1,6 @@
 import { expect, test, type Page } from "@playwright/test";
 import { reseed } from "./helpers/reseed";
+import { uploadEventMap } from "./helpers/map-upload";
 
 test.describe("club class presets", () => {
   test.beforeAll(reseed);
@@ -72,9 +73,8 @@ test.describe("club class presets", () => {
     await page.getByRole("button", { name: "Cancel" }).click();
 
     await clickTab(page, "Courses");
-    const chooserPromise = page.waitForEvent("filechooser");
-    await page.getByTestId("map-panel").getByRole("button", { name: "Upload map" }).click();
-    await (await chooserPromise).setFiles("e2e/test.ocd");
+    await expect(page.getByText("No courses found")).toBeVisible();
+    await uploadEventMap(page);
     await expect(page.getByTestId("map-viewer")).toBeVisible({ timeout: 60_000 });
 
     await clickTab(page, "Course Editor");

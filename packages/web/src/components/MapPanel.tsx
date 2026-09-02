@@ -280,11 +280,24 @@ function MapPanelImpl({
   const [showOnlyRelevant, setShowOnlyRelevant] = useState(true);
   const [showDescriptions, setShowDescriptions] = useState(defaultShowDescriptions);
 
+  // Every failure path here has to end in `uploadError`. Returning
+  // quietly leaves the drop zone looking untouched, which reads as "the
+  // click did nothing" — the user has no way to tell a rejected file
+  // from a lost one.
   const handleFile = useCallback((file: File) => {
-    if (!file.name.toLowerCase().endsWith(".ocd")) return;
-    void fileToBase64(file).then((fileDataBase64) => {
-      uploadMutation.mutate({ fileName: file.name, fileDataBase64 });
-    });
+    if (!file.name.toLowerCase().endsWith(".ocd")) {
+      setUploadError(`Map upload failed: ${file.name} is not an .ocd file`);
+      return;
+    }
+    setUploadError(null);
+    void fileToBase64(file)
+      .then((fileDataBase64) => {
+        uploadMutation.mutate({ fileName: file.name, fileDataBase64 });
+      })
+      .catch((err: unknown) => {
+        const message = err instanceof Error ? err.message : String(err);
+        setUploadError(`Map upload failed: could not read ${file.name} (${message})`);
+      });
   }, [uploadMutation]);
 
   const handleDrop = useCallback((e: React.DragEvent) => {
