@@ -4,6 +4,7 @@ import {
   parseOxygenAdminEmails,
   authMode,
   authHeaderName,
+  authAutoProvision,
 } from "../auth.js";
 
 describe("parseIdentityEmail", () => {
@@ -59,7 +60,7 @@ describe("parseOxygenAdminEmails", () => {
 });
 
 describe("auth env accessors", () => {
-  const keys = ["AUTH_MODE", "AUTH_HEADER"] as const;
+  const keys = ["AUTH_MODE", "AUTH_HEADER", "AUTH_AUTO_PROVISION"] as const;
   const saved: Record<string, string | undefined> = {};
 
   afterEach(() => {
@@ -83,5 +84,17 @@ describe("auth env accessors", () => {
     process.env.AUTH_HEADER = "X-Goog-Authenticated-User-Email";
     expect(authMode()).toBe("proxy");
     expect(authHeaderName()).toBe("x-goog-authenticated-user-email");
+  });
+
+  it("treats AUTH_AUTO_PROVISION as off unless explicitly enabled", () => {
+    for (const k of keys) saved[k] = process.env[k];
+    delete process.env.AUTH_AUTO_PROVISION;
+    expect(authAutoProvision()).toBe(false);
+    process.env.AUTH_AUTO_PROVISION = "off";
+    expect(authAutoProvision()).toBe(false);
+    process.env.AUTH_AUTO_PROVISION = "member";
+    expect(authAutoProvision()).toBe(true);
+    process.env.AUTH_AUTO_PROVISION = "ON";
+    expect(authAutoProvision()).toBe(true);
   });
 });

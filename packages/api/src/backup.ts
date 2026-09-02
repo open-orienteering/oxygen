@@ -9,9 +9,9 @@
 
 import { spawn, type ChildProcessByStdio } from "node:child_process";
 import { PassThrough, Readable } from "node:stream";
-import type { FastifyInstance } from "fastify";
+import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { prisma } from "./db.js";
-import { assertRestAccess } from "./restGuard.js";
+import { assertRestAccess, assertRestAdmin } from "./restGuard.js";
 
 // ─── Types ─────────────────────────────────────────────────
 
@@ -243,6 +243,32 @@ export function createBackupStream(
 
 // ─── Fastify route ─────────────────────────────────────────
 
+async function authorizeEventBackup(
+  req: FastifyRequest,
+  reply: FastifyReply,
+  name: string,
+): Promise<boolean> {
+  if (
+    !(await assertRestAccess(req, reply, { nameId: name, cap: "event.manage" }))
+  ) {
+    return false;
+  }
+  const event = await prisma().event.findUnique({
+    where: { nameId: name },
+    select: { id: true },
+  });
+  if (!event) return true;
+  const map = await prisma().mapFile.findFirst({
+    where: { eventId: event.id },
+    orderBy: { uploadedAt: "desc" },
+    select: { fromClubLibrary: true },
+  });
+  if (map?.fromClubLibrary !== true) return true;
+  // The dump contains the OCAD blob. Club-library copies stay club
+  // property — event.manage is not enough.
+  return assertRestAdmin(req, reply);
+}
+
 export function registerBackupRoute(server: FastifyInstance): void {
   server.get<{ Querystring: { name?: string } }>(
     "/api/backup/event",
@@ -254,7 +280,7 @@ export function registerBackupRoute(server: FastifyInstance): void {
       if (!/^[A-Za-z0-9_-]+$/.test(name)) {
         return reply.code(400).send({ error: "Invalid event name" });
       }
-      if (!(await assertRestAccess(req, reply, { nameId: name, cap: "event.manage" }))) {
+      if (!(await authorizeEventBackup(req, reply, name))) {
         return;
       }
       const target = await getBackupTarget(name);
@@ -281,7 +307,7 @@ export function registerBackupRoute(server: FastifyInstance): void {
       if (!/^[A-Za-z0-9_-]+$/.test(name)) {
         return reply.code(400).send({ error: "Invalid event name" });
       }
-      if (!(await assertRestAccess(req, reply, { nameId: name, cap: "event.manage" }))) {
+      if (!(await authorizeEventBackup(req, reply, name))) {
         return;
       }
       const target = await getBackupTarget(name);

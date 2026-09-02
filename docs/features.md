@@ -239,7 +239,22 @@ Creating an event asks only for name and date. For events created by an
 invited user, the selector also shows that creator. The old per-event MySQL
 host fields are gone.
 
-When `AUTH_MODE=proxy` (or `dev`), the selector and event shell require an invited user. Identity comes from a trusted reverse-proxy header — Oxygen never stores passwords. Instance admins invite people from **Users** (`/admin/users`). Per-event **roles** (Event admin, Course setter, Race crew, Member) hide tabs and block APIs the user is not granted; a role can be given to a single user or to a **club group** — a named set of users defined on the club library's Groups tab, whose membership changes apply to every granted event immediately. After a race is completed, every invited user can view courses, maps, and results. Kiosk and start screen stay reachable without an invite when the URL includes a kiosk key (`?k=`); see [authentication.md](authentication.md).
+When `AUTH_MODE=proxy` (or `dev`), the selector and event shell require a
+signed-in user. Identity comes from a trusted reverse-proxy header — Oxygen
+never stores passwords. With `AUTH_AUTO_PROVISION=member` (Cloud Run),
+anyone IAP admits is created as a plain member on first sight; otherwise
+the account must be invited. Instance admins manage people from **Manage
+users** (`/admin/users`) on the start page — role, club groups, last seen,
+and active. Per-event **roles** (Event admin, Course setter, Race crew,
+Member) hide tabs and block APIs the user is not granted; a role can be
+given to a single user or to a **club group** — a named set of users
+defined on the club library's Groups tab, whose membership changes apply
+to every granted event immediately. After a race is completed, every
+invited user can view courses, maps, and results. Kiosk and start screen
+stay reachable without an invite when the URL includes a kiosk key
+(`?k=`); see [authentication.md](authentication.md). Club OCAD source
+files stay behind admin (or the library uploader); see
+[club-library.md](club-library.md#ocad-source-files).
 
 Inside an event, the admin tab bar starts with planning pages (Dashboard, Classes, Courses, Controls, Course editor). Runners, start lists, results, cards, and tracks move into the More menu until the event has entries or results — they are never unreachable. Race-day stations stay in More.
 
