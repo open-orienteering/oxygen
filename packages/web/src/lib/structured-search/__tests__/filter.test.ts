@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi, afterEach } from "vitest";
 import { applyFilters } from "../filter";
 import { createRunnerAnchors, parseTimeValue } from "../anchors/runner-anchors";
 import type { RunnerInfo } from "@oxygen/shared";
@@ -6,6 +6,10 @@ import { RunnerStatus } from "@oxygen/shared";
 import type { AnchorDef } from "../types";
 
 const anchors = createRunnerAnchors((k) => k) as AnchorDef<RunnerInfo>[];
+
+afterEach(() => {
+  vi.useRealTimers();
+});
 
 const runners: RunnerInfo[] = [
   {
@@ -267,11 +271,16 @@ describe("applyFilters", () => {
 
   it("filters by forest time (finished runner)", () => {
     // Anna: 39600 - 36000 = 3600ds = 6:00, Olof: 40800 - 37200 = 3600ds = 6:00
-    // Use a high threshold to only match finished runners with known times
+    // Use a high threshold to only match finished runners with known times.
+    // Erik has no finish time, so his forest time is measured against the
+    // wall clock — pin it, or this assertion flips whenever the suite runs
+    // within seven minutes of his 1:01:00 start.
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(2026, 0, 1, 12, 0, 0));
     const tokens = [{ id: "1", anchor: "forest", operator: "lt" as const, value: "0:07:00" }];
     const result = applyFilters(runners, tokens, anchors);
     // Anna 3600ds(6:00) < 4200ds(7:00) ✓, Olof 3600ds(6:00) < 4200ds(7:00) ✓
-    // Erik has finishTime=0, startTime=36600 → in-forest using meosNow (varies), excluded by lt
+    // Erik in forest since 1:01:00, so 10:59:00 elapsed — excluded by lt
     // Lisa has startTime=0, excluded
     expect(result.map(r => r.id)).toEqual([1, 4]);
   });
