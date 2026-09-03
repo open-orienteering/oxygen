@@ -126,3 +126,33 @@ peer range at `typescript <6.1.0`**, so jumping to 7.0.2 would break
 the web package's lint toolchain. 6.0.3 compiled the whole workspace
 with zero code changes. Revisit 7.x when typescript-eslint announces
 support; the compile surface is already 7-aligned after this bump.
+
+## September 2026 follow-up: fast-uri and mysql2 overrides
+
+`pnpm run audit:prod` went red again with nine high advisories, all from two
+transitive packages. Both are fixed with `pnpm.overrides` in the root
+`package.json`; neither needed a direct dependency bump.
+
+**`fast-uri`** (via Fastify → `ajv`). The existing
+`"fast-uri@<3.1.5": "^3.1.5"` entry had gone stale: 3.1.5 is itself
+vulnerable to four advisories (IDN canonicalization, IPv6 SSRF, hostname
+percent-decoding, percent-encoded scheme confusion), and the 4.x line that
+had since appeared in the tree at 4.1.2 was never covered by the range at
+all. Replaced with two entries:
+
+```json
+"fast-uri@<3.1.6": "^3.1.6",
+"fast-uri@>=4.0.0 <4.1.3": "^4.1.3",
+```
+
+Both major lines are present because different Fastify/ajv versions in the
+tree pin different ranges — a single override cannot span them.
+
+**`mysql2`** (auth-plugin downgrade to `mysql_clear_password`, leaking
+plaintext credentials, `<3.22.0`). Oxygen's own dependency is already
+`^3.23.3` — it drives the LiveResults push — but the `prisma@7.9.1` CLI
+package drags in 3.15.3 alongside it. `"mysql2@<3.22.0": "^3.23.3"`
+collapses both onto the patched version.
+
+After `pnpm install`, `pnpm run audit:prod` reports no high or critical
+advisories in the production tree.
