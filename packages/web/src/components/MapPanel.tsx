@@ -566,7 +566,10 @@ function MapPanelImpl({
   // (render only when the page supplied a toolbar or we're fullscreen).
   const renderToolbar = !hideToolbar && (fillContainer || toolbar || isFullscreen);
   const paneToolbar = renderToolbar ? (
-    <div className="relative z-10 flex items-center gap-3 px-3 py-2 border-b border-slate-200 flex-shrink-0">
+    <div
+      data-testid="map-toolbar"
+      className="relative z-10 flex items-center gap-3 px-3 py-2 border-b border-slate-200 flex-shrink-0"
+    >
       {fillContainer && !toolbar && (
         <h2 className="text-sm font-semibold text-slate-500 uppercase tracking-wider">
           {t("map")}

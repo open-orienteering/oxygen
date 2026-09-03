@@ -317,8 +317,12 @@ function CompetitionShellInner() {
     <div className="min-h-screen bg-slate-50">
       <ExternalChangesProbe enabled={ready} />
       <ClockSkewBanner />
-      {/* Header */}
-      <header className="bg-white border-b border-slate-200 sticky top-0 z-10">
+      {/* Header. z-40 (not z-10) because the overflow menus inside it are
+          z-30 within *this* stacking context — a sibling context at the
+          same z-10, like the MapPanel toolbar, would otherwise paint its
+          buttons straight through an open menu. Full-screen modals are
+          z-50 and still win. */}
+      <header className="bg-white border-b border-slate-200 sticky top-0 z-40">
         <div className={headerInnerClass}>
           <div className="flex items-center justify-between h-14">
             <div className="flex items-center gap-3">
