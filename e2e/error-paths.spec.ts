@@ -139,8 +139,8 @@ test.describe("Invalid Navigation", () => {
   test("navigating to a non-existent competition shows error page", async ({ page }) => {
     await page.goto("/this_competition_does_not_exist_xyz");
 
-    // Should show error state with "Competition not found" message
-    await expect(page.getByText("Competition not found")).toBeVisible({ timeout: 15000 });
+    // Should show error state with "Event not found" message
+    await expect(page.getByText("Event not found")).toBeVisible({ timeout: 15000 });
     await expect(page.getByText(/could not connect/i)).toBeVisible();
 
     // Should have a link/button to go back to competition list

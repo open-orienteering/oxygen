@@ -42,7 +42,7 @@
   "linkedRunner": "Linked Runner",
   "name": "Name",
   "status": "Status",
-  "notLinkedToRunner": "Not linked to any runner in this competition",
+  "notLinkedToRunner": "Not linked to any runner in this event",
   "batteryAndCardInfo": "Battery & Card Info",
   "voltage": "Voltage",
   "notMeasured": "Not measured — re-read card to measure",

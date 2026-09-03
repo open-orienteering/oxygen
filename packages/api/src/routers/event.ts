@@ -274,7 +274,7 @@ export const eventRouter = router({
     const result = await prisma().event.deleteMany({
       where: { removed: true },
     });
-    return { purged: result.count, droppedDatabases: 0, orphanedPurged: 0 };
+    return { purged: result.count };
   }),
 
   /** Return the currently selected event's slug. */

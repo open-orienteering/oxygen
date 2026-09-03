@@ -24,12 +24,12 @@ async function clickTab(page: import("@playwright/test").Page, name: string) {
   }
 }
 
-test.describe("Database Backup", () => {
-  test("Event page surfaces a Database Backup section", async ({ page }) => {
+test.describe("Event Backup", () => {
+  test("Event page surfaces an Event backup section", async ({ page }) => {
     await selectCompetition(page);
     await clickTab(page, "Event");
 
-    await expect(page.getByText("Database Backup").first()).toBeVisible({
+    await expect(page.getByText("Event backup").first()).toBeVisible({
       timeout: 10000,
     });
     await expect(

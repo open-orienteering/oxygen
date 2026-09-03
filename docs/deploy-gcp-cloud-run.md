@@ -77,7 +77,7 @@ Then grant each person access. IAP is the network allowlist; Oxygen then
 auto-creates anyone who gets through as a plain member
 (`AUTH_AUTO_PROVISION=member` on `deploy.sh`). Put your own email in
 `OXYGEN_ADMIN_EMAILS` in `env.sh` so the first request makes you an
-instance admin — from there, **Manage users** on the start page is where
+instance admin — from there, **Settings → Users** is where
 you promote others. This also covers the case where a `users` row for your
 address already exists (for example after restoring a dev dump, below):
 the row is promoted and reactivated rather than left as a member.

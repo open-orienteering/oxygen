@@ -64,7 +64,7 @@
   "username": "Användarnamn",
   "password": "Lösenord",
   "optional": "valfritt",
-  "database": "Databas",
+  "settingsLink": "Inställningar",
   "versionUpdate": "En ny version finns tillgänglig.",
   "reload": "Ladda om",
   "buildVersion": "Build",

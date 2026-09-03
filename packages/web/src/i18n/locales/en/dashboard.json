@@ -10,7 +10,7 @@
   "awaitingFinish": "Started, awaiting finish",
   "finished": "Finished",
   "resultBooked": "Result booked (including DNS)",
-  "competitionProgress": "Competition Progress",
+  "competitionProgress": "Event Progress",
   "complete": "Complete",
   "controlPunches": "control punches",
   "runnersCount": "{{count}} runners",

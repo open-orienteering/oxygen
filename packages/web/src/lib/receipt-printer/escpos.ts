@@ -24,7 +24,7 @@ const DEFAULT_FINISH_LABELS: Required<FinishReceiptLabels> = {
   fin: "Fin",
   battery: "Battery",
   position: "Position",
-  competitionInfo: "Competition information:",
+  competitionInfo: "Event information:",
   tagline: "Lightweight orienteering management",
   missing: "--- MISSING ---",
 };

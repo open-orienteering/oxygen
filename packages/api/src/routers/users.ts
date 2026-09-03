@@ -93,7 +93,9 @@ export const usersRouter = router({
     .input(
       z.object({
         id: z.string().uuid(),
-        displayName: z.string().optional(),
+        // Trimmed and non-empty: a blank rename would leave the Users
+        // table with an unidentifiable row.
+        displayName: z.string().trim().min(1).max(200).optional(),
         isAdmin: z.boolean().optional(),
         active: z.boolean().optional(),
       }),

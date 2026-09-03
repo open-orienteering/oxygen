@@ -47,10 +47,12 @@ describe("parseOcadMapMetadata", () => {
 });
 
 describe("reserved event slugs", () => {
-  it("blocks library and admin after sanitization", () => {
+  it("blocks the top-level UI routes after sanitization", () => {
     expect(isReservedEventSlug(sanitizeNameId("library"))).toBe(true);
     expect(isReservedEventSlug(sanitizeNameId("admin"))).toBe(true);
+    expect(isReservedEventSlug(sanitizeNameId("settings"))).toBe(true);
     expect(isReservedEventSlug(sanitizeNameId("Library"))).toBe(true);
+    expect(isReservedEventSlug(sanitizeNameId("Settings"))).toBe(true);
     expect(isReservedEventSlug(sanitizeNameId("itest"))).toBe(false);
   });
 });

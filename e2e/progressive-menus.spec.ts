@@ -27,7 +27,7 @@ test.describe("Progressive shell menus", () => {
     const uniqueName = `E2E Progressive ${Date.now()}`;
 
     await page.goto("/");
-    await page.getByRole("button", { name: /New Competition/ }).click();
+    await page.getByRole("button", { name: /New Event/ }).click();
     await page.getByPlaceholder(/Klubbmästerskap/).fill(uniqueName);
     await page.getByRole("button", { name: "Create" }).click();
     await expect(page.getByRole("link", { name: "Dashboard" })).toBeVisible({

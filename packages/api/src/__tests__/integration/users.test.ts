@@ -118,6 +118,26 @@ describe("users invite / list / update", () => {
     ).rejects.toMatchObject({ code: "FORBIDDEN" });
   });
 
+  it("trims a renamed display name and rejects a blank one", async () => {
+    const caller = adminCaller(null);
+    const invited = await caller.users.invite({
+      email: `rename-${suffix}@users-test.example`,
+      displayName: "Before",
+    });
+
+    const renamed = await caller.users.update({
+      id: invited.id,
+      displayName: "  After  ",
+    });
+    expect(renamed.displayName).toBe("After");
+
+    await expect(
+      caller.users.update({ id: invited.id, displayName: "   " }),
+    ).rejects.toThrow();
+    const row = await ctx.db.user.findUnique({ where: { id: invited.id } });
+    expect(row?.displayName).toBe("After");
+  });
+
   it("blocks self-deactivation and self de-admin", async () => {
     const caller = adminCaller(null);
     await expect(

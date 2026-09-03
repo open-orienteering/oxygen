@@ -24,14 +24,14 @@ test.describe("Event Page", () => {
     await clickTab(page, "Event");
 
     expect(page.url()).toContain("/event");
-    await expect(page.getByText("Competition Info")).toBeVisible({ timeout: 10000 });
+    await expect(page.getByText("Event Info")).toBeVisible({ timeout: 10000 });
   });
 
   test("should display competition info", async ({ page }) => {
     await selectCompetition(page);
     await clickTab(page, "Event");
 
-    await expect(page.getByText("Competition Info")).toBeVisible({ timeout: 10000 });
+    await expect(page.getByText("Event Info")).toBeVisible({ timeout: 10000 });
     // Scope to main content area to avoid matching the header title
     const main = page.getByRole("main");
     await expect(main.getByText("My example tävling")).toBeVisible();
