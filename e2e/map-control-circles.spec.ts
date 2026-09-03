@@ -113,5 +113,39 @@ test.describe("Map control visibility with active selection", () => {
     // so the label count should be less than the full control set.
     const visibleCount = await overlayLabels.count();
     expect(visibleCount).toBeGreaterThanOrEqual(codes.length - 1);
+
+    // ── Regression: the map toolbar used to share the header's z-10, so
+    // its "Show progress" / "Hide descriptions" buttons painted straight
+    // through an open More menu. The dashboard is where they live, and it
+    // now has a map thanks to the upload above.
+    await clickTab(page, "Dashboard");
+    await expect(page.getByTestId("map-toolbar")).toBeVisible({ timeout: 30000 });
+    const stacking = await page.evaluate(() => {
+      const zOf = (el: Element | null) =>
+        el ? Number.parseInt(getComputedStyle(el).zIndex, 10) : Number.NaN;
+      return {
+        header: zOf(document.querySelector("header")),
+        toolbar: zOf(document.querySelector('[data-testid="map-toolbar"]')),
+      };
+    });
+    expect(stacking.toolbar).toBeGreaterThan(0);
+    expect(stacking.header).toBeGreaterThan(stacking.toolbar);
+
+    await page.getByTestId("more-menu-button").click();
+    const menu = page.getByTestId("more-menu-content");
+    await expect(menu).toBeVisible();
+    const lastItem = menu.getByRole("link").last();
+    const box = await lastItem.boundingBox();
+    expect(box).not.toBeNull();
+    const hitsTheMenu = await page.evaluate(
+      ({ x, y }) =>
+        Boolean(
+          document
+            .elementFromPoint(x, y)
+            ?.closest('[data-testid="more-menu-content"]'),
+        ),
+      { x: box!.x + box!.width / 2, y: box!.y + box!.height / 2 },
+    );
+    expect(hitsTheMenu).toBe(true);
   });
 });
