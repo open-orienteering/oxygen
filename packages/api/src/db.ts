@@ -117,7 +117,11 @@ export function sanitizeNameId(name: string): string {
 }
 
 /** URL first-segments that must never be event slugs. */
-export const RESERVED_EVENT_SLUGS = ["admin", "library"] as const;
+export const RESERVED_EVENT_SLUGS = [
+  "admin",
+  "library",
+  "settings",
+] as const;
 
 export function isReservedEventSlug(slug: string): boolean {
   return (RESERVED_EVENT_SLUGS as readonly string[]).includes(

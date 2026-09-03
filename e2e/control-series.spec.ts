@@ -17,7 +17,7 @@ test.describe("club control series", () => {
     // for server-side tile rendering — more than the 30 s default.
     test.setTimeout(120_000);
     await page.goto("/");
-    await page.getByTestId("library-link").click();
+    await page.getByTestId("settings-link").click();
     await page.getByTestId("library-tab-controls").click();
     await expect(page.getByTestId("series-create-form")).toBeVisible({
       timeout: 15000,
@@ -48,7 +48,7 @@ test.describe("club control series", () => {
     const stamp = Date.now();
     const eventName = `E2E Series ${stamp}`;
     await page.goto("/");
-    await page.getByRole("button", { name: /New Competition/ }).click();
+    await page.getByRole("button", { name: /New Event/ }).click();
     await page.getByPlaceholder(/Klubbmästerskap/).fill(eventName);
     await page.getByRole("button", { name: "Create" }).click();
     await expect(page.getByRole("link", { name: "Dashboard" })).toBeVisible({

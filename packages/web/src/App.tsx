@@ -15,8 +15,7 @@ const CompetitionShell = lazy(() => import("./pages/CompetitionShell").then(m =>
 const KioskPage = lazy(() => import("./pages/KioskPage").then(m => ({ default: m.KioskPage })));
 const StartScreenPage = lazy(() => import("./pages/StartScreenPage").then(m => ({ default: m.StartScreenPage })));
 const AccessDeniedPage = lazy(() => import("./pages/AccessDeniedPage").then(m => ({ default: m.AccessDeniedPage })));
-const UsersAdminPage = lazy(() => import("./pages/UsersAdminPage").then(m => ({ default: m.UsersAdminPage })));
-const LibraryPage = lazy(() => import("./pages/LibraryPage").then(m => ({ default: m.LibraryPage })));
+const SettingsPage = lazy(() => import("./pages/SettingsPage").then(m => ({ default: m.SettingsPage })));
 
 const PUBLIC_SURFACE = /^\/[^/]+\/(kiosk|start-screen)(\/|$)/;
 
@@ -65,8 +64,16 @@ export default function App() {
           {gated ?? (
           <Routes>
             <Route path="/" element={<CompetitionSelector />} />
-            <Route path="/admin/users" element={<UsersAdminPage />} />
-            <Route path="/library" element={<LibraryPage />} />
+            <Route path="/settings" element={<SettingsPage />} />
+            {/* Former standalone pages, now settings tabs. */}
+            <Route
+              path="/library"
+              element={<Navigate to="/settings" replace />}
+            />
+            <Route
+              path="/admin/users"
+              element={<Navigate to="/settings?tab=users" replace />}
+            />
             {/* Kiosk route — outside CompetitionShell (fullscreen, no admin UI) */}
             <Route path="/:nameId/kiosk" element={<KioskPage />} />
             <Route path="/:nameId/start-screen" element={<StartScreenPage />} />

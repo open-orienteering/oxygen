@@ -6,7 +6,7 @@ test.describe("Competition Selection", () => {
 
     await expect(page.getByRole("heading", { name: "Oxygen" })).toBeVisible();
     await expect(
-      page.getByText("Select a competition to manage"),
+      page.getByText("Select an event to manage"),
     ).toBeVisible();
   });
 
@@ -135,7 +135,7 @@ test.describe("Competition Dashboard", () => {
     await goToDashboard(page);
 
     await page
-      .getByRole("button", { name: "Back to competition list" })
+      .getByRole("button", { name: "Back to event list" })
       .click();
 
     await expect(page.getByRole("heading", { name: "Oxygen" })).toBeVisible();

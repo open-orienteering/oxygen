@@ -13,7 +13,7 @@ test.describe("club class presets", () => {
     // parallel-shard load.
     test.setTimeout(120_000);
     await page.goto("/");
-    await page.getByTestId("library-link").click();
+    await page.getByTestId("settings-link").click();
     await page.getByTestId("library-tab-classes").click();
 
     await addPreset(page, "H21", {
@@ -38,7 +38,7 @@ test.describe("club class presets", () => {
 
     const eventName = `E2E Presets ${Date.now()}`;
     await page.goto("/");
-    await page.getByRole("button", { name: /New Competition/ }).click();
+    await page.getByRole("button", { name: /New Event/ }).click();
     await page.getByPlaceholder(/Klubbmästerskap/).fill(eventName);
     await page.getByRole("button", { name: "Create" }).click();
     await expect(page.getByRole("link", { name: "Dashboard" })).toBeVisible({

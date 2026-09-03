@@ -7,7 +7,6 @@ import { formatDate } from "../lib/format";
 import { formatBuildVersion } from "../lib/app-update";
 import { LanguageSelector } from "../components/LanguageSelector";
 import { UserChip } from "../components/UserChip";
-import { useCurrentUser } from "../context/CurrentUserContext";
 import {
   CLASSIFICATION_LABEL_KEYS,
   classificationLabelKey,
@@ -20,8 +19,6 @@ import {
 export function CompetitionSelector() {
   const navigate = useNavigate();
   const { t } = useTranslation("event");
-  const { t: ta } = useTranslation("auth");
-  const { user } = useCurrentUser();
   const competitions = trpc.competition.list.useQuery();
   const selectMutation = trpc.competition.select.useMutation({
     onSuccess: (data) => {
@@ -56,15 +53,6 @@ export function CompetitionSelector() {
       <div className="w-full max-w-2xl">
         {/* Language Selector — top right */}
         <div className="flex justify-end mb-2 items-center gap-3">
-          {user?.isAdmin && (
-            <Link
-              to="/admin/users"
-              data-testid="admin-users-link"
-              className="px-3 py-1.5 text-sm font-medium text-blue-700 bg-blue-50 border border-blue-100 rounded-lg hover:bg-blue-100"
-            >
-              {ta("usersLink")}
-            </Link>
-          )}
           <UserChip />
           <LanguageSelector />
         </div>
@@ -212,11 +200,15 @@ export function CompetitionSelector() {
         </div>
         <div className="mt-3">
           <Link
-            to="/library"
-            data-testid="library-link"
+            to="/settings"
+            data-testid="settings-link"
             className="flex w-full px-4 py-3 bg-white border border-slate-200 rounded-xl text-sm font-medium text-slate-700 hover:bg-slate-50 hover:border-slate-300 transition-colors items-center justify-center gap-2 shadow-sm"
           >
-            {t("libraryLink", { ns: "library" })}
+            <svg className="w-5 h-5 text-slate-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+            </svg>
+            {t("settingsLink", { ns: "common" })}
           </Link>
         </div>
 
@@ -247,7 +239,10 @@ export function CompetitionSelector() {
         {/* Delete confirmation dialog */}
         {deleteConfirm && (
           <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
-            <div className="bg-white rounded-2xl shadow-xl border border-slate-200 p-6 max-w-sm w-full">
+            <div
+              data-testid="delete-event-dialog"
+              className="bg-white rounded-2xl shadow-xl border border-slate-200 p-6 max-w-sm w-full"
+            >
               <div className="flex items-center gap-3 mb-4">
                 <div className="w-10 h-10 rounded-full bg-red-100 flex items-center justify-center flex-shrink-0">
                   <svg className="w-5 h-5 text-red-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -265,8 +260,11 @@ export function CompetitionSelector() {
               <p className="text-sm font-semibold text-slate-900 mb-1">
                 {deleteConfirm.name}
               </p>
-              <p className="text-xs text-slate-400 font-mono mb-5">
-                {t("database", { ns: "common" })}: {deleteConfirm.nameId}
+              <p className="text-xs text-slate-400 font-mono mb-3">
+                {t("eventId")}: {deleteConfirm.nameId}
+              </p>
+              <p className="text-xs text-slate-500 mb-5">
+                {t("deleteSoftNote")}
               </p>
               <div className="flex gap-3 justify-end">
                 <button
@@ -277,6 +275,7 @@ export function CompetitionSelector() {
                   {t("cancel", { ns: "common" })}
                 </button>
                 <button
+                  data-testid="delete-event-confirm"
                   onClick={() => deleteMutation.mutate({ nameId: deleteConfirm.nameId })}
                   disabled={deleteMutation.isPending}
                   className="px-4 py-2 bg-red-600 text-white text-sm font-medium rounded-lg hover:bg-red-700 disabled:opacity-50 transition-colors cursor-pointer"
@@ -299,7 +298,6 @@ export function CompetitionSelector() {
           <div className="text-xs" data-testid="build-version">
             {t("buildVersion", { ns: "common" })}: {formatBuildVersion(__BUILD_VERSION__)}
           </div>
-          <PurgeButton onPurged={() => competitions.refetch()} />
         </div>
       </div>
     </div>
@@ -373,13 +371,12 @@ function EventGroup({
                     {comp.date}
                   </div>
                 </div>
+                {/* Line 2: slug + badges hug the left and keep their size;
+                    the owner is pushed right and ellipsizes, so a long
+                    "Created by …" no longer wraps the slug onto its own
+                    line. It drops out entirely on narrow screens. */}
                 <div className="flex items-center gap-2 mt-0.5 text-xs text-slate-400 min-w-0">
-                  <span className="font-mono truncate">{comp.nameId}</span>
-                  {comp.owner && (
-                    <span data-testid="event-owner" className="truncate">
-                      {t("eventOwner", { owner: comp.owner })}
-                    </span>
-                  )}
+                  <span className="font-mono truncate min-w-0">{comp.nameId}</span>
                   {comp.canManage && (
                     <span
                       data-testid="event-manager-badge"
@@ -387,9 +384,6 @@ function EventGroup({
                     >
                       {t("managerBadge")}
                     </span>
-                  )}
-                  {comp.annotation && (
-                    <span className="truncate">{comp.annotation}</span>
                   )}
                   {(() => {
                     const labelKey =
@@ -407,20 +401,38 @@ function EventGroup({
                       {t("testEventor")}
                     </span>
                   )}
+                  {comp.annotation && (
+                    <span className="hidden sm:block truncate min-w-0">
+                      {comp.annotation}
+                    </span>
+                  )}
+                  {comp.owner && (
+                    <span
+                      data-testid="event-owner"
+                      className="ml-auto hidden sm:block flex-shrink-0 max-w-[45%] truncate text-right"
+                    >
+                      {t("eventOwner", { owner: comp.owner })}
+                    </span>
+                  )}
                 </div>
               </Link>
-              <button
-                onClick={(e) => {
-                  e.stopPropagation();
-                  onDelete(comp);
-                }}
-                className="px-3 py-4 text-slate-300 hover:text-red-500 transition-colors cursor-pointer opacity-0 group-hover:opacity-100"
-                title={t("deleteCompetitionTitle")}
-              >
-                <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
-                </svg>
-              </button>
+              {/* `event.delete` is gated on `event.manage` server-side;
+                  with auth off every row reports canManage. */}
+              {comp.canManage && (
+                <button
+                  data-testid="event-delete"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onDelete(comp);
+                  }}
+                  className="px-3 py-4 text-slate-300 hover:text-red-500 transition-colors cursor-pointer opacity-0 group-hover:opacity-100"
+                  title={t("deleteCompetitionTitle")}
+                >
+                  <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                  </svg>
+                </button>
+              )}
             </div>
           </li>
         ))}
@@ -841,67 +853,3 @@ function EventorEventList({
   );
 }
 
-// ─── Purge Deleted Records Button ────────────────────────────
-
-function PurgeButton({ onPurged }: { onPurged: () => void }) {
-  const { t } = useTranslation("event");
-  const [confirming, setConfirming] = useState(false);
-  const purgeMutation = trpc.competition.purgeDeleted.useMutation({
-    onSuccess: () => {
-      onPurged();
-      setTimeout(() => {
-        setConfirming(false);
-        purgeMutation.reset();
-      }, 3000);
-    },
-  });
-
-  if (purgeMutation.isSuccess && purgeMutation.data) {
-    const { purged, droppedDatabases } = purgeMutation.data;
-    if (purged === 0) {
-      return (
-        <span className="text-xs text-slate-400">
-          {t("noDeletedRecords")}
-        </span>
-      );
-    }
-    return (
-      <span className="text-xs text-emerald-600">
-        {t("purgedRecords", { count: purged })}
-        {droppedDatabases > 0 && t("droppedDatabases", { count: droppedDatabases })}
-      </span>
-    );
-  }
-
-  if (confirming) {
-    return (
-      <span className="inline-flex items-center gap-2 text-xs">
-        <span className="text-slate-500">{t("purgeConfirm")}</span>
-        <button
-          onClick={() => purgeMutation.mutate()}
-          disabled={purgeMutation.isPending}
-          className="text-red-500 hover:text-red-700 font-medium cursor-pointer"
-        >
-          {purgeMutation.isPending ? t("purging") : t("yesPurge")}
-        </button>
-        <button
-          onClick={() => setConfirming(false)}
-          disabled={purgeMutation.isPending}
-          className="text-slate-400 hover:text-slate-600 cursor-pointer"
-        >
-          {t("cancel", { ns: "common" })}
-        </button>
-      </span>
-    );
-  }
-
-  return (
-    <button
-      onClick={() => setConfirming(true)}
-      className="text-xs text-slate-400 hover:text-slate-600 cursor-pointer"
-      title={t("cleanUpTitle")}
-    >
-      {t("cleanUpDeleted")}
-    </button>
-  );
-}

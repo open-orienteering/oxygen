@@ -10,12 +10,12 @@ async function clearEventorKey(page: import("@playwright/test").Page) {
 }
 
 test.describe("Competition Selector — New Features", () => {
-  test("should display New Competition and Import from Eventor buttons", async ({
+  test("should display New Event and Import from Eventor buttons", async ({
     page,
   }) => {
     await page.goto("/");
     await expect(
-      page.getByRole("button", { name: /New Competition/ }),
+      page.getByRole("button", { name: /New Event/ }),
     ).toBeVisible({ timeout: 10000 });
     await expect(
       page.getByRole("button", { name: /Import from Eventor/ }),
@@ -29,12 +29,12 @@ test.describe("Competition Selector — New Features", () => {
 
     await page.goto("/");
     await expect(
-      page.getByRole("button", { name: /New Competition/ }),
+      page.getByRole("button", { name: /New Event/ }),
     ).toBeVisible({ timeout: 10000 });
 
-    await page.getByRole("button", { name: /New Competition/ }).click();
+    await page.getByRole("button", { name: /New Event/ }).click();
     await expect(
-      page.getByRole("heading", { name: "New Competition" }),
+      page.getByRole("heading", { name: "New Event" }),
     ).toBeVisible({ timeout: 3000 });
 
     await page.getByPlaceholder(/Klubbmästerskap/).fill(uniqueName);
@@ -119,21 +119,24 @@ test.describe("Competition Selector — New Features", () => {
 
     const entry = page.locator("li").filter({ hasText: "My example tävling" }).first();
     await entry.hover();
-    const deleteBtn = entry.locator("button[title='Delete competition']");
+    const deleteBtn = entry.getByTestId("event-delete");
     await expect(deleteBtn).toBeVisible();
     await deleteBtn.click();
 
-    await expect(page.getByText("Delete Competition")).toBeVisible();
-    await expect(page.getByText("This cannot be undone.")).toBeVisible();
+    const dialog = page.getByTestId("delete-event-dialog");
+    await expect(dialog).toBeVisible();
+    // Deleting is a soft delete: the copy must not promise permanence.
+    await expect(dialog).toContainText("disappears from the list");
+    await expect(dialog).toContainText("Settings → Maintenance");
 
     await page.getByRole("button", { name: "Cancel" }).click();
-    await expect(page.getByText("Delete Competition")).not.toBeVisible();
+    await expect(dialog).not.toBeVisible();
   });
 
   test("should delete a test competition via the dialog", async ({ page }) => {
     const uniqueName = `Delete Test ${Date.now()}`;
     await page.goto("/");
-    await page.getByRole("button", { name: "New Competition" }).click();
+    await page.getByRole("button", { name: "New Event" }).click();
     await expect(
       page.getByPlaceholder("e.g. Klubbmästerskap 2026"),
     ).toBeVisible({ timeout: 5000 });
@@ -146,11 +149,12 @@ test.describe("Competition Selector — New Features", () => {
     await expect(page.getByText(uniqueName)).toBeVisible({ timeout: 10000 });
 
     const entry = page.locator("li").filter({ hasText: uniqueName }).first();
-    await entry.locator("button[title='Delete competition']").click({ force: true });
-    await expect(page.getByText("Delete Competition")).toBeVisible();
-    await page.getByRole("button", { name: "Delete Permanently" }).click();
+    await entry.getByTestId("event-delete").click({ force: true });
+    const dialog = page.getByTestId("delete-event-dialog");
+    await expect(dialog).toBeVisible();
+    await page.getByTestId("delete-event-confirm").click();
 
-    await expect(page.getByText("Delete Competition")).not.toBeVisible({ timeout: 10000 });
+    await expect(dialog).not.toBeVisible({ timeout: 10000 });
     await expect(
       page.locator("li").filter({ hasText: uniqueName }),
     ).toHaveCount(0, { timeout: 10000 });

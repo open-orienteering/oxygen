@@ -205,7 +205,7 @@ export function LibraryGroupsTab() {
                     {t("groups.inviteHint")}{" "}
                     {user?.isAdmin ? (
                       <Link
-                        to="/admin/users"
+                        to="/settings?tab=users"
                         className="text-blue-600 hover:text-blue-800"
                       >
                         {t("groups.inviteHintLink")}

@@ -1,12 +1,18 @@
 # Club library
 
 Club-wide assets that are copied into events rather than living only on one
-competition. Identity (when `AUTH_MODE` is on) comes from the same invite-only
+event. Identity (when `AUTH_MODE` is on) comes from the same invite-only
 `users` table as the rest of Oxygen — see [authentication.md](authentication.md).
+
+The library lives on the **Settings** page (`/settings`), reached from the
+button under the event list on the start page. Its four tabs — Maps,
+Controls, Classes, Groups — are open to any signed-in user; two further
+tabs (Users, Maintenance) are instance-admin only and are described in
+[authentication.md](authentication.md).
 
 ## Maps
 
-Operators upload OCAD (`.ocd`) base maps once on **Club library** (`/library`).
+Operators upload OCAD (`.ocd`) base maps once on **Settings → Maps**.
 Each row stores the file plus metadata parsed at upload (scale, WGS84 bounds,
 north offset) and a rendered PNG thumbnail. Existing rows render and persist
 their thumbnail on first view. Parse or render failure is non-fatal: the file
@@ -41,13 +47,16 @@ delete does not change events that already copied the map.
 
 ### Route
 
-`/library` is a reserved slug (`admin` is reserved too). Creating an event
-named “library” is rejected so it cannot shadow the page.
+`settings`, `library`, and `admin` are all reserved slugs
+(`RESERVED_EVENT_SLUGS` in `packages/api/src/db.ts`, mirrored by the header
+logic in `packages/web/src/main.tsx`). Creating an event named after one of
+them is rejected so it cannot shadow the page. `/library` and `/admin/users`
+still resolve — they redirect to `/settings` and `/settings?tab=users`.
 
 ## Controls
 
 The club's physical punching units live as **series** on the Controls tab of
-**Club library**. Each series has a name, optional lender (`owner_name` /
+**Settings**. Each series has a name, optional lender (`owner_name` /
 borrowed flag), a `priority` (ascending allocation order), and a list of
 codes unique **within that series** (two clubs can share a number; the event
 skips codes already placed).
@@ -108,4 +117,19 @@ data model.
 Group members must already be in the invite-only `users` table. If an admin
 tries to add an unknown email, the Groups tab keeps the error visible and
 offers **Invite and add**, which creates the user and retries the membership
-change. The tab also links admins to `/admin/users` for bulk invite management.
+change. The tab also links admins to the **Users** tab for bulk invite
+management.
+
+## Settings tabs for instance admins
+
+Two tabs appear only when the signed-in user is an instance admin (with
+`AUTH_MODE=off` they always appear):
+
+- **Users** — invite, rename, grant/revoke instance admin, deactivate. The
+  same table as the old `/admin/users` page. See
+  [authentication.md](authentication.md).
+- **Maintenance** — **Clean up deleted records** permanently removes every
+  soft-deleted event and cascades its data away. This used to sit in the
+  start-page footer where every user could see it, even though the
+  underlying `competition.purgeDeleted` procedure has always been
+  admin-only.

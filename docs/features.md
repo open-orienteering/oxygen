@@ -34,7 +34,7 @@ The event page is mission control for external integrations. Everything the Swed
 
 ### Courses and the map
 
-Courses come from OCAD (`.ocd` / `.xml` course export), IOF XML, or can be authored directly. The import preview auto-matches the file's class assignments to the event's classes — and when the file has none (common for OCAD exports where courses are simply named after classes), it falls back to suggesting classes from the course names (see [course-import-class-fallback.md](course-import-class-fallback.md)). Upload the map once and every view — dashboard, courses, tracks — renders against it. Control circles are placed automatically from the course coordinate system. Club-wide base maps live in the **Club library** (`/library`): upload an OCAD file once, see its rendered preview thumbnail, then **From club library** on the event map panel copies it into that event. Later library edits do not change events that already copied the map. The same page’s **Controls** tab holds prioritized punch-code series (own units first, borrowed ranges after). The course editor allocates those codes instead of the bare ≥ 31 heuristic, and SRR-flagged units become internal radio controls on placement. See [club-library.md](club-library.md).
+Courses come from OCAD (`.ocd` / `.xml` course export), IOF XML, or can be authored directly. The import preview auto-matches the file's class assignments to the event's classes — and when the file has none (common for OCAD exports where courses are simply named after classes), it falls back to suggesting classes from the course names (see [course-import-class-fallback.md](course-import-class-fallback.md)). Upload the map once and every view — dashboard, courses, tracks — renders against it. Control circles are placed automatically from the course coordinate system. Club-wide base maps live in the club library, now the **Maps** tab of **Settings** (`/settings`): upload an OCAD file once, see its rendered preview thumbnail, then **From club library** on the event map panel copies it into that event. Later library edits do not change events that already copied the map. The same page’s **Controls** tab holds prioritized punch-code series (own units first, borrowed ranges after). The course editor allocates those codes instead of the bare ≥ 31 heuristic, and SRR-flagged units become internal radio controls on placement. See [club-library.md](club-library.md).
 
 Control numbers are placed by a collision-aware algorithm: every number sits at the same visual distance from its circle, never on top of another circle or number, and in congested clusters where a number cannot be nearest to its own circle it gets a thin leader line tying it to the right circle (see [bugfix-control-number-placement.md](bugfix-control-number-placement.md)).
 
@@ -243,12 +243,12 @@ When `AUTH_MODE=proxy` (or `dev`), the selector and event shell require a
 signed-in user. Identity comes from a trusted reverse-proxy header — Oxygen
 never stores passwords. With `AUTH_AUTO_PROVISION=member` (Cloud Run),
 anyone IAP admits is created as a plain member on first sight; otherwise
-the account must be invited. Instance admins manage people from **Manage
-users** (`/admin/users`) on the start page — role, club groups, last seen,
-and active. Per-event **roles** (Event admin, Course setter, Race crew,
+the account must be invited. Instance admins manage people from **Settings
+→ Users** (`/settings?tab=users`) — display name, role, club groups, last
+seen, and active. Per-event **roles** (Event admin, Course setter, Race crew,
 Member) hide tabs and block APIs the user is not granted; a role can be
 given to a single user or to a **club group** — a named set of users
-defined on the club library's Groups tab, whose membership changes apply
+defined on the Settings page's Groups tab, whose membership changes apply
 to every granted event immediately. After a race is completed, every
 invited user can view courses, maps, and results. Kiosk and start screen
 stay reachable without an invite when the URL includes a kiosk key
@@ -279,9 +279,15 @@ Oxygen began life as a MeOS-compatible Swiss-army knife and originally read/wrot
 
 The status-calculation rules that originated in MeOS are still honoured by Oxygen's result engine: OK, DNF, Missing Punch, Over Max Time, No Timing, and Out of Competition. Per-runner flags such as `OutOfCompetition` and `NoTiming` are respected and surfaced as badges in the runner detail view.
 
-### Database backup
+### Settings
 
-The Event page exposes a one-click **Download backup** button that streams a per-event PostgreSQL dump (CSV `\copy` of every event-scoped table) to your browser. The dump is prefixed with a header that includes a ready-to-run (commented) `INSERT INTO oxygen.events` statement, so a restore can re-create the event row on a fresh database without manual SQL. See [backup-restore.md](backup-restore.md) for the full restore workflow.
+Everything that is club-wide rather than event-wide lives on one **Settings** page (`/settings`), reached from the button under the event list. Its tabs are Maps, Controls, Classes, and Groups (the club library, open to any signed-in user) plus Users and Maintenance (instance admins only). Maintenance holds **Clean up deleted records**, which permanently purges events that were soft-deleted from the event list. The older `/library` and `/admin/users` URLs redirect here. See [club-library.md](club-library.md).
+
+Deleting an event from the start page is a soft delete: it disappears from the list, and the data survives until an admin purges it under Settings → Maintenance.
+
+### Event backup
+
+The Event page exposes a one-click **Download backup** button that streams a per-event PostgreSQL dump (CSV `\copy` of every event-scoped table) to your browser. The scope is exactly one event: its courses, classes, runners, cards, punches, readouts, map and tiles, and tracks — not other events, and not the shared runner and club directories. The dump is prefixed with a header that includes a ready-to-run (commented) `INSERT INTO oxygen.events` statement, so a restore can re-create the event row on a fresh database without manual SQL. See [backup-restore.md](backup-restore.md) for the full restore workflow.
 
 ### Web Serial card reader
 

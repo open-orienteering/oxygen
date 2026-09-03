@@ -64,7 +64,7 @@
   "username": "Username",
   "password": "Password",
   "optional": "optional",
-  "database": "Database",
+  "settingsLink": "Settings",
   "versionUpdate": "A new version is available.",
   "reload": "Reload",
   "buildVersion": "Build",

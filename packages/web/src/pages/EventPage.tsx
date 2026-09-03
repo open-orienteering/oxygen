@@ -58,7 +58,7 @@ export function EventPage() {
                 )}
               </div>
               <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-slate-400">
-                <span>{t("database")}: <span className="font-mono">{d.competition.nameId}</span></span>
+                <span>{t("eventId")}: <span className="font-mono">{d.competition.nameId}</span></span>
                 {d.competition.annotation && (
                   <span>{d.competition.annotation}</span>
                 )}
@@ -125,7 +125,7 @@ export function EventPage() {
       {/* Google Sheets Backup */}
       <GoogleSheetsBackup />
 
-      {/* Database Backup (mysqldump download) */}
+      {/* Event Backup (pg_dump download) */}
       <DatabaseBackup nameId={d.competition.nameId} />
         </>
       )}
@@ -1474,7 +1474,7 @@ const APPS_SCRIPT_TEMPLATE = `function doPost(e) {
     .setMimeType(ContentService.MimeType.JSON);
 }`;
 
-// ─── Database Backup (mysqldump download) ───────────────────
+// ─── Event Backup (pg_dump download) ────────────────────────
 
 function DatabaseBackup({ nameId }: { nameId: string }) {
   const { t } = useTranslation("event");

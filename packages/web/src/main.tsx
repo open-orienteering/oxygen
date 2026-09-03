@@ -48,10 +48,12 @@ const trpcClient = trpc.createClient({
       headers() {
         // Extract the first path segment as the competition nameId.
         // e.g. /my_competition/dashboard → "my_competition"
-        // Pages outside a competition (selector, /admin/…) have no nameId.
+        // Pages outside a competition (selector, /settings) have no nameId.
+        // Keep this list in sync with RESERVED_EVENT_SLUGS in the API.
         const match = window.location.pathname.match(/^\/([^/]+)/);
         const nameId = match?.[1];
-        const reserved = nameId === "admin" || nameId === "library";
+        const reserved =
+          nameId === "admin" || nameId === "library" || nameId === "settings";
         const headers: Record<string, string> = {};
         if (nameId && !reserved) headers["x-competition-id"] = nameId;
         const kioskKey = new URLSearchParams(window.location.search).get("k");

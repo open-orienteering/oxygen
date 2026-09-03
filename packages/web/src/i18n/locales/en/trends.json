@@ -1,6 +1,6 @@
 {
   "title": "Registration trends",
-  "subtitle": "When runners signed up for this competition",
+  "subtitle": "When runners signed up for this event",
   "loading": "Loading registration data...",
   "noData": "No registration timestamps recorded yet. Runners imported from Eventor and runners added manually after this update will appear here.",
   "controls": "Controls",
@@ -57,7 +57,7 @@
   "open": "Open trends",
   "openShort": "Trends",
   "viewTrends": "View registration trends",
-  "thisCompetition": "This competition",
+  "thisCompetition": "This event",
   "tooltipEntries": "{{count}} entries",
   "tooltipDayLabel": "Day {{day}}",
   "axisDate": "Date",

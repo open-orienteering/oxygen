@@ -47,7 +47,7 @@ public pages require a valid kiosk key (`?k=` / `x-kiosk-key`) when no
 invited user is present.
 
 Bootstrap: put the first operator in `OXYGEN_ADMIN_EMAILS`. They can promote
-everyone else from **Manage users** (`/admin/users`) on the start page.
+everyone else from **Settings → Users** (`/settings?tab=users`).
 
 `OXYGEN_ADMIN_EMAILS` is the break-glass path, so it is reconciled on every
 resolve rather than only at row creation — otherwise an account that already
@@ -55,7 +55,7 @@ exists (a restored dump, or a member auto-provisioned before the variable was
 set) could never be promoted by it, and setting it would silently do nothing.
 It only ever grants: an email you remove keeps whatever the Users page says,
 and admins granted in the UI are never touched. To revoke a bootstrap admin,
-take them out of the variable *and* clear the flag in **Manage users** —
+take them out of the variable *and* clear the flag in **Settings → Users** —
 otherwise the next request restores it.
 
 ### `AUTH_MODE=dev`
@@ -115,7 +115,7 @@ path to the load balancer.
    is created as a member (Cloud Run deploy does this).
 4. Sign in; the bootstrap admin is created — or promoted, if the row already
    exists — on first request.
-5. Open **Manage users** on the event selector and invite clubmates or
+5. Open **Settings → Users** and invite clubmates or
    grant admin. The table shows role, club groups, last seen, and active.
 6. Deactivating a user locks them out on the next request (`resolveUser`
    returns null for `active = false`). Admins cannot deactivate or de-admin
@@ -172,8 +172,8 @@ UI yet; the `permission_groups` table already supports extra rows.
 ### Club user groups
 
 `club_user_groups` + `club_user_group_members` define named sets of users
-("Trainers", "Board", …), managed on the **Groups** tab of the club library
-(`/library`). A grant row (`event_permissions`) targets exactly one of
+("Trainers", "Board", …), managed on the **Groups** tab of the settings page
+(`/settings?tab=groups`). A grant row (`event_permissions`) targets exactly one of
 `user_id` / `club_group_id` (enforced by a CHECK constraint). Group grants
 are resolved **live**: capability checks match
 `clubGroup.members.some(userId)`, so adding or removing a member takes
@@ -183,8 +183,8 @@ rows to update. Deleting a group cascades its grants away.
 Because membership gates event permissions, group CRUD and membership
 mutations require an instance admin (`adminProcedure`); any authed user can
 read the list (the grant form and the library tab need it). Members must first
-be invited through `/admin/users`. When an admin enters an unknown email on
-the Groups tab, **Invite and add** composes `users.invite` with the membership
+be invited through **Settings → Users**. When an admin enters an unknown email
+on the Groups tab, **Invite and add** composes `users.invite` with the membership
 mutation and retries the add.
 
 ### Kiosk key

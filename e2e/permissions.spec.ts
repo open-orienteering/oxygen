@@ -1,8 +1,8 @@
 import { test, expect, type Browser, type Page } from "@playwright/test";
 
 async function inviteUser(page: Page, email: string) {
-  await page.goto("/admin/users");
-  await expect(page.getByTestId("users-admin-page")).toBeVisible({ timeout: 15000 });
+  await page.goto("/settings?tab=users");
+  await expect(page.getByTestId("users-admin-panel")).toBeVisible({ timeout: 15000 });
   await page.getByTestId("invite-email").fill(email);
   await page.getByTestId("invite-submit").click();
   await expect(page.getByText(email)).toBeVisible({ timeout: 10000 });
@@ -34,7 +34,7 @@ test.describe("event permissions", () => {
     await inviteUser(page, memberEmail);
 
     await page.goto("/");
-    await page.getByRole("button", { name: /New Competition/ }).click();
+    await page.getByRole("button", { name: /New Event/ }).click();
     await page.getByPlaceholder(/Klubbmästerskap/).fill(eventName);
     await page.getByRole("button", { name: "Create" }).click();
     await expect(page.getByRole("link", { name: "Dashboard" })).toBeVisible({
@@ -135,11 +135,64 @@ test.describe("event permissions", () => {
     await expect(page.getByTestId("event-manager-badge").first()).toBeVisible();
   });
 
+  test("delete button only appears on events the user can manage", async ({
+    browser,
+    page,
+  }) => {
+    await page.goto("/");
+    const adminRow = page.locator("li", { hasText: eventName });
+    await expect(adminRow).toBeVisible({ timeout: 15000 });
+    await expect(adminRow.getByTestId("event-delete")).toHaveCount(1);
+
+    const ctx = await browser.newContext({
+      extraHTTPHeaders: { "x-forwarded-email": memberEmail },
+    });
+    const memberPage = await ctx.newPage();
+    await memberPage.goto("/");
+    const memberRow = memberPage.locator("li", { hasText: eventName });
+    await expect(memberRow).toBeVisible({ timeout: 15000 });
+    await expect(memberRow.getByTestId("event-delete")).toHaveCount(0);
+    await ctx.close();
+  });
+
+  test("settings hub: admin-only tabs are hidden from members", async ({
+    browser,
+    page,
+  }) => {
+    await page.goto("/settings");
+    await expect(page.getByTestId("library-tab-users")).toBeVisible({
+      timeout: 15000,
+    });
+    await expect(page.getByTestId("library-tab-maintenance")).toBeVisible();
+
+    const ctx = await browser.newContext({
+      extraHTTPHeaders: { "x-forwarded-email": memberEmail },
+    });
+    const memberPage = await ctx.newPage();
+    await memberPage.goto("/settings?tab=users");
+    await expect(memberPage.getByTestId("library-tab-maps")).toBeVisible({
+      timeout: 15000,
+    });
+    await expect(memberPage.getByTestId("library-tab-users")).toHaveCount(0);
+    await expect(memberPage.getByTestId("library-tab-maintenance")).toHaveCount(0);
+    // A deep link to an admin tab falls back to Maps rather than 404-ing.
+    await expect(memberPage.getByTestId("library-dropzone")).toBeVisible();
+    await ctx.close();
+  });
+
+  test("settings hub: legacy library and users URLs redirect", async ({ page }) => {
+    await page.goto("/library");
+    await expect(page).toHaveURL(/\/settings$/, { timeout: 15000 });
+    await page.goto("/admin/users");
+    await expect(page).toHaveURL(/\/settings\?tab=users$/, { timeout: 15000 });
+    await expect(page.getByTestId("users-admin-panel")).toBeVisible();
+  });
+
   test("club group can invite and add an unknown email inline", async ({ page }) => {
     const email = `inline-group-${stamp}@oxygen.test`;
     const groupName = `E2E Inline ${stamp}`;
 
-    await page.goto("/library");
+    await page.goto("/settings");
     await page.getByTestId("library-tab-groups").click();
     await page.getByTestId("group-create-name").fill(groupName);
     await page.getByTestId("group-create-submit").click();
@@ -165,7 +218,7 @@ test.describe("event permissions", () => {
     await inviteUser(page, groupUserEmail);
 
     // Define the group in the club library and add the member.
-    await page.goto("/library");
+    await page.goto("/settings");
     await page.getByTestId("library-tab-groups").click();
     await expect(page.getByTestId("group-create-form")).toBeVisible({
       timeout: 15000,

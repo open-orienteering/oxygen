@@ -7,7 +7,7 @@
   "newRunner": "New Runner",
   "deleteRunner": "Delete Runner",
   "deleteConfirm": "Are you sure you want to delete this runner?",
-  "removeConfirm": "Remove \"{{name}}\" from the competition?",
+  "removeConfirm": "Remove \"{{name}}\" from the event?",
   "noRunners": "No runners found",
   "noRunnersMatch": "No runners match your search",
   "runnersCount": "{{count}} runners",

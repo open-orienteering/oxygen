@@ -14,7 +14,7 @@ test.describe("club map library", () => {
     const eventName = `E2E Library ${stamp}`;
 
     await page.goto("/");
-    await page.getByTestId("library-link").click();
+    await page.getByTestId("settings-link").click();
     await expect(page.getByTestId("library-tab-maps")).toBeVisible({
       timeout: 15000,
     });
@@ -41,7 +41,7 @@ test.describe("club map library", () => {
     });
 
     await page.goto("/");
-    await page.getByRole("button", { name: /New Competition/ }).click();
+    await page.getByRole("button", { name: /New Event/ }).click();
     await page.getByPlaceholder(/Klubbmästerskap/).fill(eventName);
     await page.getByRole("button", { name: "Create" }).click();
     await expect(page.getByRole("link", { name: "Dashboard" })).toBeVisible({
@@ -70,7 +70,7 @@ test.describe("club map library", () => {
       )
       .toBeGreaterThan(0);
 
-    await page.goto("/library");
+    await page.goto("/settings");
     await expect(page.getByTestId("library-map-name")).toHaveText(mapName);
     await page.getByTestId("library-map-delete").click();
     await expect(page.getByTestId("library-delete-confirm")).toBeVisible();
