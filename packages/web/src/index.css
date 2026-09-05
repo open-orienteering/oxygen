@@ -1,5 +1,10 @@
 @import "tailwindcss";
 
+html {
+  /* Belt-and-braces page-zoom lock on iOS Safari (meta tag alone is ignored in-browser). */
+  touch-action: pan-x pan-y;
+}
+
 :root {
   --color-primary: #1e40af;
   --color-primary-light: #3b82f6;

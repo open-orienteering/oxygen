@@ -10,6 +10,7 @@ import type {
   EditorDescriptionSuggestion,
   MapViewerEditorProps,
 } from "../components/MapViewer";
+import { useMediaQuery } from "../hooks/useMediaQuery";
 import { IOF_SYMBOLS } from "../iof-symbols";
 import { iofSymbolName } from "../iof-symbol-meta";
 import { ocadToIof } from "../lib/control-description-options";
@@ -61,6 +62,7 @@ import { UndoStack } from "../lib/undo-stack";
  */
 export function CourseEditorPage() {
   const { t, i18n } = useTranslation("courses");
+  const isMobile = useMediaQuery("(max-width: 639px)");
   const utils = trpc.useUtils();
   const [state, dispatch] = useReducer(courseEditorReducer, initialCourseEditorState);
   const [searchParams] = useSearchParams();
@@ -510,6 +512,8 @@ export function CourseEditorPage() {
   const [descControlId, setDescControlId] = useState<number | null>(null);
   const descControl = descControlId != null ? coordsById.get(descControlId) ?? null : null;
 
+  const openDescription = useCallback((id: number) => setDescControlId(id), []);
+
   const saveDescription = useCallback(
     (next: ControlDescription | null) => {
       const id = descControlId;
@@ -809,7 +813,7 @@ export function CourseEditorPage() {
       actions.push({
         id: "description",
         label: t("editor.actionDescription"),
-        onClick: () => setDescControlId(sel),
+        onClick: () => openDescription(sel),
       });
       actions.push({
         id: "delete",
@@ -823,7 +827,7 @@ export function CourseEditorPage() {
     coordsById, controlCoords.data, createControl, createRoleControl,
     assignRoleControl, appendControlToCourse, removeControlFromCourse,
     radioSwapOffer, confirmRadioSwap, declineRadioSwap, controlRowsById,
-    handleRadioToggle, handleDelete, t]);
+    handleRadioToggle, handleDelete, openDescription, t]);
 
   /** Ids (as overlay strings) of the edited course's controls — these
    *  stay at full strength while everything else fades. */
@@ -886,6 +890,11 @@ export function CourseEditorPage() {
     [selectedControlRow, t],
   );
 
+  const handleDismiss = useCallback(() => {
+    setRadioSwapOffer(null);
+    dispatch({ type: "escape" });
+  }, []);
+
   const editor: MapViewerEditorProps = useMemo(
     () => ({
       selectedControlId:
@@ -904,12 +913,13 @@ export function CourseEditorPage() {
       onMapClick: handleMapClick,
       onMoveEnd: handleMoveEnd,
       onSelect: handleSelect,
+      onDismiss: handleDismiss,
       ...(selectedCourse ? { onLegClick: handleLegClick } : {}),
     }),
     [state.selectedControlId, state.phantom, contextActions, contextInfo, contextBadge,
       contextRadioBadge,
       suggestions, t, courseControlIdSet, moveWarnings, moveEpoch, selectedCourse,
-      handleMapClick, handleMoveEnd, handleSelect, handleLegClick],
+      handleMapClick, handleMoveEnd, handleSelect, handleLegClick, handleDismiss],
   );
 
   // ─── Sidebar actions ─────────────────────────────────────
@@ -1517,31 +1527,32 @@ export function CourseEditorPage() {
 
   return (
     <div data-testid="course-editor-page">
-      <div className="h-[calc(100vh-200px)] min-h-[420px]">
+      <div className="h-[calc(100dvh-8rem)] sm:h-[calc(100dvh-200px)] min-h-[420px]">
         {/* ── Map (the course panel floats inside it, see coursePanel) ── */}
         <div className="h-full bg-white rounded-xl border border-slate-200 overflow-hidden">
           <MapPanel
             fillContainer
             fitToControls
+            showMapInfo
             filterMode={onlyCourse && selectedCourse ? "course" : "all"}
-            defaultShowDescriptions
+            defaultShowDescriptions={!isMobile}
             descriptionsAllControls
             toolbar={toolbar}
             mapOverlay={mapOverlay}
+            fullscreenOverlay={descControl ? (
+              <ControlDescriptionEditor
+                controlCode={descControl.code}
+                initial={descControl.description}
+                onSave={saveDescription}
+                onCancel={closeDescription}
+              />
+            ) : null}
             editor={editor}
             highlightCourseName={selectedCourse?.name}
           />
         </div>
       </div>
 
-      {descControl && (
-        <ControlDescriptionEditor
-          controlCode={descControl.code}
-          initial={descControl.description}
-          onSave={saveDescription}
-          onCancel={closeDescription}
-        />
-      )}
     </div>
   );
 }

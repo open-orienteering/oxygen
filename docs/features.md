@@ -16,6 +16,10 @@ A race director's workspace, kept fresh end to end — dashboard, draw, kiosk, a
 
 ![Tracks page with GPS overlay on the competition map](screenshots/tracks.png)
 
+### Mobile and tablets
+
+On phones and tablets the page zoom is locked, the competition shell header compacts to icon-only status pills with a sticky tab row, and inline maps nearly fill the viewport. One finger scrolls the page; two fingers pan and pinch-zoom the map. The course editor supports full touch editing (tap-select, drag-to-move controls, leg insert, dismiss button). Map toolbars include a **My location** control (Google Maps-style follow mode) for placing and collecting controls in the field. See [mobile-layout.md](mobile-layout.md).
+
 ---
 
 ## Before the Race
@@ -24,6 +28,11 @@ A race director's workspace, kept fresh end to end — dashboard, draw, kiosk, a
 
 The event page is mission control for external integrations. Everything the Swedish orienteering stack relies on is wired into one screen:
 
+- **Editable event type** — choose a competition, training, weekly course, or
+  custom label during creation and change it later under Event Info. Eventor
+  initializes the label on import but later syncs cannot overwrite it; raw
+  Eventor classification remains separate for reporting. See
+  [event-types.md](event-types.md).
 - **Eventor sync** — import entries, classes, clubs, competitors, and published class-course lengths; upload start lists and results in the IOF XML formats Eventor expects.
 - **Global Runner Database** — download the federation-wide runner directory for fast name/card lookup at registration.
 - **Club sync** — pull club metadata and logos.
@@ -233,9 +242,9 @@ The components are in the tree and unit-tested, but no page currently feeds them
 
 Every event lives in the single `oxygen` database, scoped by `event_id`. The selector is the landing page — pick one and the whole app re-scopes to that event.
 
-The list is grouped into **Upcoming** (`date >= today`) and **Past**, denser than the original card so clubs can keep many events loaded. A search box matches name, slug, and annotation; when any listed event has an Eventor classification cached in `eventor_event_meta`, a type filter (championship through club/international, plus unclassified) appears.
+The list is grouped into **Upcoming** (`date >= today`) and **Past**, denser than the original card so clubs can keep many events loaded. A search box matches name, slug, annotation, and custom event type. The type filter uses Oxygen's editable type catalogue, including club training, weekly course, and a stable Other bucket for custom labels.
 
-Creating an event asks only for name and date. For events created by an
+Creating an event asks for name, type, and date. For events created by an
 invited user, the selector also shows that creator. The old per-event MySQL
 host fields are gone.
 
@@ -266,6 +275,7 @@ Oxygen is a Progressive Web App designed to work during internet outages — fro
 
 - **Service worker** precaches all static assets, so the app loads instantly even offline.
 - **Update prompt** — an open tab checks for a newly deployed bundle every minute and offers a reload, which activates the waiting service worker rather than serving the precached bundle again. The build timestamp is shown in the Sync Status footer and on the competition list, so a stale tab is recognisable — see [bugfix-stale-web-bundle-after-deploy.md](bugfix-stale-web-bundle-after-deploy.md).
+- **IAP session recovery** — if a dormant installed PWA wakes with an expired Google IAP cookie, `/trpc` fails as CORS `Failed to fetch`. The shell shows **Reconnecting…** (not **Event not found**), retries once, and may reload to refresh the cookie — see [bugfix-pwa-iap-session-recovery.md](bugfix-pwa-iap-session-recovery.md).
 - **Pre-fetch on station pages** — runners, classes, courses, controls, and clubs are cached to IndexedDB when a start/finish/kiosk station mounts, and survive browser restarts and overnight power-off.
 - **Event-based mutation queue** — all finish recordings, registrations, and edits are stored locally and drained to the server when connectivity returns. A visible banner tells you how many events are queued.
 - **Local result computation** — the finish station runs the same course matching, status rules, and position ranking as the server, so it can print a valid receipt from cached data even while the network is down.

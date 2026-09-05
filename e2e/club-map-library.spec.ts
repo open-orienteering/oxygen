@@ -55,11 +55,10 @@ test.describe("club map library", () => {
     await mapPanel.getByTestId("use-club-map").click();
     await expect(page.getByTestId("club-map-picker")).toBeVisible();
     await page.getByRole("button", { name: mapName }).click();
-    await expect(mapPanel.getByText("test.ocd")).toBeVisible({ timeout: 20000 });
-    // Regression: the map must actually render (viewer mounted and at least
-    // one tile image loaded) without a full page reload.
     const viewer = mapPanel.getByTestId("map-viewer");
     await expect(viewer).toBeVisible({ timeout: 20000 });
+    // Regression: the map must actually render (viewer mounted and at least
+    // one tile image loaded) without a full page reload.
     await expect
       .poll(
         async () =>
@@ -79,7 +78,7 @@ test.describe("club map library", () => {
 
     await page.goto("/");
     await page.getByText(eventName).click();
-    await expect(page.getByTestId("map-panel").first().getByText("test.ocd")).toBeVisible({
+    await expect(page.getByTestId("map-panel").first().getByTestId("map-viewer")).toBeVisible({
       timeout: 15000,
     });
   });

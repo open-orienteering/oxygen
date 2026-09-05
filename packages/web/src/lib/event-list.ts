@@ -1,25 +1,47 @@
-import type { EventInfo } from "@oxygen/shared";
+import { EVENT_KINDS, type EventInfo, type EventKind } from "@oxygen/shared";
 
-/** i18n keys in the `event` namespace for Eventor classification ids 1–6. */
-export const CLASSIFICATION_LABEL_KEYS = {
-  1: "classification1",
-  2: "classification2",
-  3: "classification3",
-  4: "classification4",
-  5: "classification5",
-  6: "classification6",
+/** i18n keys in the `event` namespace for editable Oxygen event kinds. */
+export const EVENT_KIND_LABEL_KEYS: Record<EventKind,
+  | "eventKindCompetition"
+  | "eventKindChampionship"
+  | "eventKindInternational"
+  | "eventKindNational"
+  | "eventKindDistrict"
+  | "eventKindLocal"
+  | "eventKindClub"
+  | "eventKindClubTraining"
+  | "eventKindWeeklyCourse"
+  | "eventKindTraining"
+  | "eventKindOther"
+> = {
+  competition: "eventKindCompetition",
+  championship: "eventKindChampionship",
+  international: "eventKindInternational",
+  national: "eventKindNational",
+  district: "eventKindDistrict",
+  local: "eventKindLocal",
+  club: "eventKindClub",
+  club_training: "eventKindClubTraining",
+  weekly_course: "eventKindWeeklyCourse",
+  training: "eventKindTraining",
+  other: "eventKindOther",
 } as const;
 
-export function classificationLabelKey(
-  id: number,
-): (typeof CLASSIFICATION_LABEL_KEYS)[keyof typeof CLASSIFICATION_LABEL_KEYS] | undefined {
-  if (id === 1 || id === 2 || id === 3 || id === 4 || id === 5 || id === 6) {
-    return CLASSIFICATION_LABEL_KEYS[id];
-  }
-  return undefined;
+export function eventKindLabelKey(kind: EventKind) {
+  return EVENT_KIND_LABEL_KEYS[kind];
 }
 
-export type ClassificationFilter = "all" | "unclassified" | number;
+export function eventKindDisplayLabel(
+  event: Pick<EventInfo, "kind" | "kindCustom">,
+  translate: (key: (typeof EVENT_KIND_LABEL_KEYS)[EventKind]) => string,
+): string {
+  return event.kind === "other"
+    ? event.kindCustom
+    : translate(eventKindLabelKey(event.kind));
+}
+
+export const EVENT_KIND_OPTIONS = EVENT_KINDS;
+export type EventKindFilter = "all" | EventKind;
 
 export function groupEvents(
   events: EventInfo[],
@@ -38,21 +60,17 @@ export function groupEvents(
 
 export function filterEvents(
   events: EventInfo[],
-  opts: { query: string; classificationId?: ClassificationFilter },
+  opts: { query: string; kind?: EventKindFilter },
 ): EventInfo[] {
   const query = opts.query.trim().toLowerCase();
-  const classification = opts.classificationId ?? "all";
+  const kind = opts.kind ?? "all";
   return events.filter((event) => {
     if (query) {
-      const haystack = `${event.name} ${event.nameId} ${event.annotation}`.toLowerCase();
+      const haystack =
+        `${event.name} ${event.nameId} ${event.annotation} ${event.kind} ${event.kindCustom}`
+          .toLowerCase();
       if (!haystack.includes(query)) return false;
     }
-    if (classification === "all") return true;
-    if (classification === "unclassified") return event.classificationId == null;
-    return event.classificationId === classification;
+    return kind === "all" || event.kind === kind;
   });
-}
-
-export function hasClassificationData(events: EventInfo[]): boolean {
-  return events.some((event) => event.classificationId != null);
 }

@@ -1,10 +1,10 @@
 import { describe, it, expect } from "vitest";
 import type { EventInfo } from "@oxygen/shared";
 import {
-  CLASSIFICATION_LABEL_KEYS,
+  EVENT_KIND_LABEL_KEYS,
+  eventKindDisplayLabel,
   filterEvents,
   groupEvents,
-  hasClassificationData,
 } from "../event-list";
 
 function ev(over: Partial<EventInfo> & Pick<EventInfo, "name" | "date" | "nameId">): EventInfo {
@@ -12,6 +12,7 @@ function ev(over: Partial<EventInfo> & Pick<EventInfo, "name" | "date" | "nameId
     id: over.id ?? 1,
     annotation: over.annotation ?? "",
     kind: over.kind ?? "competition",
+    kindCustom: over.kindCustom ?? "",
     ...over,
   };
 }
@@ -61,14 +62,14 @@ describe("filterEvents", () => {
       nameId: "km_2026",
       date: "2026-09-01",
       annotation: "Night-O",
-      classificationId: 5,
+      kind: "club",
     }),
     ev({
       id: 2,
       name: "District Champs",
       nameId: "dm_h21",
       date: "2026-05-01",
-      classificationId: 3,
+      kind: "district",
     }),
     ev({
       id: 3,
@@ -84,44 +85,40 @@ describe("filterEvents", () => {
     expect(filterEvents(list, { query: "night" }).map((e) => e.nameId)).toEqual(["km_2026"]);
   });
 
-  it("filters by classification id and the unclassified bucket", () => {
-    expect(filterEvents(list, { query: "", classificationId: 3 }).map((e) => e.nameId)).toEqual([
+  it("filters by editable Oxygen event type", () => {
+    expect(filterEvents(list, { query: "", kind: "district" }).map((e) => e.nameId)).toEqual([
       "dm_h21",
     ]);
-    expect(
-      filterEvents(list, { query: "", classificationId: "unclassified" }).map((e) => e.nameId),
-    ).toEqual(["train"]);
+    expect(filterEvents(list, { query: "", kind: "competition" }).map((e) => e.nameId))
+      .toEqual(["train"]);
   });
 
-  it("combines query and classification", () => {
+  it("combines query and event type", () => {
     expect(
-      filterEvents(list, { query: "champs", classificationId: 3 }).map((e) => e.nameId),
+      filterEvents(list, { query: "champs", kind: "district" }).map((e) => e.nameId),
     ).toEqual(["dm_h21"]);
-    expect(filterEvents(list, { query: "champs", classificationId: 5 })).toEqual([]);
+    expect(filterEvents(list, { query: "champs", kind: "club" })).toEqual([]);
   });
 
-  it("treats missing classification filter as all", () => {
+  it("treats missing event type filter as all", () => {
     expect(filterEvents(list, { query: "" })).toHaveLength(3);
-    expect(filterEvents(list, { query: "", classificationId: "all" })).toHaveLength(3);
-  });
-});
-
-describe("hasClassificationData / label keys", () => {
-  it("is false when no event has a classification", () => {
-    expect(hasClassificationData([ev({ name: "A", date: "2026-01-01", nameId: "a" })])).toBe(
-      false,
-    );
+    expect(filterEvents(list, { query: "", kind: "all" })).toHaveLength(3);
   });
 
-  it("is true when any event is classified", () => {
-    expect(
-      hasClassificationData([
-        ev({ name: "A", date: "2026-01-01", nameId: "a", classificationId: 1 }),
-      ]),
-    ).toBe(true);
+  it("includes custom labels in search and filters them by the stable other code", () => {
+    const custom = ev({
+      name: "Tuesday run",
+      date: "2026-09-08",
+      nameId: "tuesday",
+      kind: "other",
+      kindCustom: "Night cup",
+    });
+    expect(filterEvents([custom], { query: "night" })).toEqual([custom]);
+    expect(filterEvents([custom], { query: "", kind: "other" })).toEqual([custom]);
+    expect(eventKindDisplayLabel(custom, (key) => key)).toBe("Night cup");
   });
 
-  it("maps Eventor classification ids 1–6", () => {
-    expect(Object.keys(CLASSIFICATION_LABEL_KEYS).map(Number).sort()).toEqual([1, 2, 3, 4, 5, 6]);
+  it("has a label for every curated kind", () => {
+    expect(Object.keys(EVENT_KIND_LABEL_KEYS)).toHaveLength(11);
   });
 });
