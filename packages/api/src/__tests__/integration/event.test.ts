@@ -45,6 +45,54 @@ describe("event.create / delete / purgeDeleted", () => {
     expect(row).toBeNull();
   });
 
+  it("validates and stores curated and custom event types", async () => {
+    const caller = makeCaller(null);
+    const curatedSlug = `oxygen_test_kind_${Math.random().toString(36).slice(2, 8)}`;
+    const customSlug = `oxygen_test_kind_custom_${Math.random().toString(36).slice(2, 8)}`;
+    try {
+      await caller.event.create({
+        name: "District kind",
+        nameId: curatedSlug,
+        date: "2026-04-15",
+        kind: "district",
+      });
+      await caller.event.create({
+        name: "Custom kind",
+        nameId: customSlug,
+        date: "2026-04-15",
+        kind: "other",
+        kindCustom: "Night cup",
+      });
+
+      const curatedRef = (await resolveEvent(curatedSlug))!;
+      const customRef = (await resolveEvent(customSlug))!;
+      const updated = await makeCaller(customRef).event.updateType({
+        kind: "weekly_course",
+      });
+
+      expect(updated).toMatchObject({ kind: "weekly_course", kindCustom: "" });
+      expect((await caller.event.list()).find((e) => e.nameId === curatedSlug))
+        .toMatchObject({ kind: "district", kindCustom: "" });
+      expect((await caller.event.list()).find((e) => e.nameId === customSlug))
+        .toMatchObject({ kind: "weekly_course", kindCustom: "" });
+      expect((await makeCaller(curatedRef).event.dashboard()).event)
+        .toMatchObject({ kind: "district", kindCustom: "" });
+
+      await expect(
+        caller.event.create({
+          name: "Invalid custom kind",
+          date: "2026-04-15",
+          kind: "other",
+        }),
+      ).rejects.toMatchObject({ code: "BAD_REQUEST" });
+    } finally {
+      for (const nameId of [curatedSlug, customSlug]) {
+        const row = await prisma().event.findUnique({ where: { nameId } });
+        if (row) await prisma().event.delete({ where: { id: row.id } });
+      }
+    }
+  });
+
   it("event.select returns a 404-ish error for an unknown nameId", async () => {
     const publicCaller = makeCaller(null);
     await expect(
@@ -232,6 +280,7 @@ describe("event.list", () => {
       const row = listed.find((e) => e.nameId === slug);
       expect(row).toBeDefined();
       expect(row!.kind).toBe("competition");
+      expect(row!.kindCustom).toBe("");
       expect(row!.classificationId).toBe(3);
     } finally {
       await db.eventorEventMeta.deleteMany({ where: { eventorEventId } });
@@ -253,6 +302,7 @@ describe("event.list", () => {
       const row = listed.find((e) => e.nameId === slug);
       expect(row).toBeDefined();
       expect(row!.kind).toBe("competition");
+      expect(row!.kindCustom).toBe("");
       expect(row!.classificationId).toBeUndefined();
     } finally {
       await publicCaller.event.delete({ nameId: slug });

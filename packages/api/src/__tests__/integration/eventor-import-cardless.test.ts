@@ -137,6 +137,7 @@ async function importMockedEvent(label: string) {
     eventId: EVENTOR_EVENT_ID,
     eventName: `oxygen_test_evimport_${label}_${Date.now()}`,
     eventDate: "2026-08-11",
+    classificationId: 3,
   });
   const cleanup = async () => {
     try {
@@ -144,11 +145,34 @@ async function importMockedEvent(label: string) {
     } catch {
       // Already gone — fine.
     }
+    await prisma().eventorEventMeta.deleteMany({
+      where: { eventorEventId: EVENTOR_EVENT_ID },
+    });
   };
   return { res, cleanup };
 }
 
 describe("eventor.importEvent card number handling", () => {
+  it("initializes the editable type and raw Eventor metadata", async () => {
+    vi.mocked(fetchEventClasses).mockResolvedValue([]);
+    vi.mocked(fetchEntries).mockResolvedValue([]);
+    vi.mocked(fetchResults).mockResolvedValue([]);
+
+    const { res, cleanup } = await importMockedEvent("classification");
+    try {
+      const event = await prisma().event.findUniqueOrThrow({
+        where: { id: BigInt(res.eventId) },
+      });
+      const meta = await prisma().eventorEventMeta.findUniqueOrThrow({
+        where: { eventorEventId: EVENTOR_EVENT_ID },
+      });
+      expect(event.kind).toBe("district");
+      expect(meta.classificationId).toBe(3);
+    } finally {
+      await cleanup();
+    }
+  });
+
   it("imports multiple cardless runners as cardNo NULL without violating the unique index", async () => {
     vi.mocked(fetchEventClasses).mockResolvedValue([
       makeClass(CLASS_ID, "H14"),

@@ -29,7 +29,9 @@ test.describe("Tab Navigation", () => {
     await expect(page.getByRole("link", { name: "Results" })).toBeVisible();
 
     // Event is in More menu
-    await expect(page.getByRole("link", { name: "Event", exact: true })).not.toBeVisible();
+    await expect(
+      page.locator("nav[aria-label='Tabs']").getByRole("link", { name: "Event", exact: true }),
+    ).not.toBeVisible();
     await page.getByTestId("more-menu-button").click();
     await expect(
       page.getByTestId("more-menu-content").getByRole("link", { name: "Event", exact: true }),

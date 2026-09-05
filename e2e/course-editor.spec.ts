@@ -633,7 +633,10 @@ test.describe("Course editor", () => {
 
     // ── Open the editor dialog from the context menu.
     await clickControl();
+    await page.getByTestId("map-panel").getByTitle("Fullscreen").first().click();
+    await expect.poll(() => page.evaluate(() => Boolean(document.fullscreenElement))).toBe(true);
     await page.getByTestId("editor-action-description").click();
+    await expect.poll(() => page.evaluate(() => Boolean(document.fullscreenElement))).toBe(true);
     await expect(dialog).toBeVisible();
 
     // Escape closes only the dialog — the map selection stays.

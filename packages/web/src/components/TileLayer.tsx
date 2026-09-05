@@ -31,6 +31,17 @@ interface TileInfo {
   height: number;
 }
 
+/** Identity for React/load/error state; event and map version are significant. */
+export function tileRequestKey(
+  tileUrlBase: string,
+  query: string,
+  z: number,
+  x: number,
+  y: number,
+): string {
+  return `${tileUrlBase}${query}|${z}/${x}/${y}`;
+}
+
 function computeTiles(
   viewport: TileViewport,
   z: number,
@@ -63,7 +74,7 @@ function computeTiles(
       if (ty < 0 || ty >= maxTile) continue;
       const wrappedX = ((tx % maxTile) + maxTile) % maxTile;
 
-      const key = `${z}/${wrappedX}/${ty}`;
+      const key = tileRequestKey(tileUrlBase, query, z, wrappedX, ty);
       if (failedTiles.has(key)) continue;
 
       // Snap tile placement to integer pixel boundaries so adjacent tiles

@@ -11,7 +11,11 @@ import {
   isEventCompleted,
   eventDateString,
 } from "../permissions.js";
-import { SYSTEM_GROUP_IDS } from "@oxygen/shared";
+import {
+  EVENT_KINDS,
+  SYSTEM_GROUP_IDS,
+  isEventKind,
+} from "@oxygen/shared";
 import { randomBytes } from "node:crypto";
 import { toAbsolute } from "../timeConvert.js";
 import { resolveCourseExpectedPositions } from "./course.js";
@@ -28,6 +32,31 @@ import type {
 } from "@oxygen/shared";
 import { clearSheetsCache, testGoogleSheetPush } from "../sheetsBackup.js";
 import { runnerStatusToValue, valueToRunnerStatus } from "../statusConvert.js";
+
+const eventKindFields = {
+  kind: z.enum(EVENT_KINDS).default("competition"),
+  kindCustom: z.string().trim().max(80).default(""),
+};
+
+function validateEventKind(
+  value: { kind: (typeof EVENT_KINDS)[number]; kindCustom: string },
+  ctx: z.RefinementCtx,
+): void {
+  if (value.kind === "other" && value.kindCustom.length === 0) {
+    ctx.addIssue({
+      code: "custom",
+      path: ["kindCustom"],
+      message: "A custom event type is required for Other.",
+    });
+  }
+  if (value.kind !== "other" && value.kindCustom.length > 0) {
+    ctx.addIssue({
+      code: "custom",
+      path: ["kindCustom"],
+      message: "A custom event type is only valid for Other.",
+    });
+  }
+}
 
 /**
  * Event router (formerly competition router). All operations on the active
@@ -192,8 +221,8 @@ export const eventRouter = router({
         name: z.string().min(1),
         date: z.string().min(1),
         nameId: z.string().optional(),
-        kind: z.string().optional(),
-      }),
+        ...eventKindFields,
+      }).superRefine(validateEventKind),
     )
     .mutation(async ({ ctx, input }) => {
       const slug = sanitizeNameId(input.nameId ?? input.name);
@@ -217,7 +246,8 @@ export const eventRouter = router({
           nameId: slug,
           name: input.name,
           date: new Date(input.date),
-          kind: input.kind ?? "competition",
+          kind: input.kind,
+          kindCustom: input.kindCustom,
         },
       });
       if (ctx.user) {
@@ -229,6 +259,19 @@ export const eventRouter = router({
         });
       }
       return { nameId: created.nameId, eventId: Number(created.id) };
+    }),
+
+  updateType: manageProcedure
+    .input(z.object(eventKindFields).superRefine(validateEventKind))
+    .mutation(async ({ ctx, input }) => {
+      const event = await ctx.db.event.update({
+        where: { id: ctx.event.id },
+        data: {
+          kind: input.kind,
+          kindCustom: input.kindCustom,
+        },
+      });
+      return toEventInfo(event);
     }),
 
   /** Soft-delete an event. */
@@ -919,6 +962,7 @@ function toEventInfo(
     annotation: string;
     date: Date;
     kind: string;
+    kindCustom: string;
     eventorEnv: string;
     eventorEventId: bigint | null;
   },
@@ -930,7 +974,8 @@ function toEventInfo(
     annotation: row.annotation,
     date: row.date.toISOString().slice(0, 10),
     nameId: row.nameId,
-    kind: row.kind,
+    kind: isEventKind(row.kind) ? row.kind : "competition",
+    kindCustom: row.kindCustom,
     eventorEnv: row.eventorEnv as "prod" | "test" | undefined,
     eventorEventId: row.eventorEventId ? Number(row.eventorEventId) : undefined,
     classificationId,

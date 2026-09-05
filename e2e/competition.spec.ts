@@ -92,7 +92,7 @@ test.describe("Competition Dashboard", () => {
     // The itest competition may or may not have a map uploaded
     await expect(
       page.getByRole("button", { name: "Upload map" })
-        .or(page.getByText("Replace map"))
+        .or(page.getByTestId("map-viewer"))
     ).toBeVisible({ timeout: 5000 });
   });
 
@@ -110,7 +110,7 @@ test.describe("Competition Dashboard", () => {
       const fileChooser = await fileChooserPromise;
       await fileChooser.setFiles("e2e/test.ocd");
       // Wait for map to load
-      await expect(page.getByText("Replace map")).toBeVisible({ timeout: 15000 });
+      await expect(page.getByTestId("map-viewer").first()).toBeVisible({ timeout: 15000 });
     }
 
     // Select a class in the map panel's filter dropdown
