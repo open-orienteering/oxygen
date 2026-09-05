@@ -1,19 +1,19 @@
 import { useState, useEffect, useMemo } from "react";
 import { useNavigate, Link } from "react-router-dom";
 import { useTranslation } from "react-i18next";
-import type { EventInfo } from "@oxygen/shared";
+import type { EventInfo, EventKind } from "@oxygen/shared";
 import { trpc } from "../lib/trpc";
 import { formatDate } from "../lib/format";
 import { formatBuildVersion } from "../lib/app-update";
 import { LanguageSelector } from "../components/LanguageSelector";
 import { UserChip } from "../components/UserChip";
 import {
-  CLASSIFICATION_LABEL_KEYS,
-  classificationLabelKey,
+  EVENT_KIND_OPTIONS,
+  eventKindDisplayLabel,
+  eventKindLabelKey,
   filterEvents,
   groupEvents,
-  hasClassificationData,
-  type ClassificationFilter,
+  type EventKindFilter,
 } from "../lib/event-list";
 
 export function CompetitionSelector() {
@@ -37,16 +37,15 @@ export function CompetitionSelector() {
   const [showCreate, setShowCreate] = useState(false);
   const [showEventor, setShowEventor] = useState(false);
   const [search, setSearch] = useState("");
-  const [classification, setClassification] = useState<ClassificationFilter>("all");
+  const [kind, setKind] = useState<EventKindFilter>("all");
 
-  const events = competitions.data ?? [];
-  const showTypeFilter = hasClassificationData(events);
+  const events = useMemo(() => competitions.data ?? [], [competitions.data]);
   const filtered = useMemo(
-    () => filterEvents(events, { query: search, classificationId: classification }),
-    [events, search, classification],
+    () => filterEvents(events, { query: search, kind }),
+    [events, search, kind],
   );
   const grouped = useMemo(() => groupEvents(filtered, formatDate(new Date())), [filtered]);
-  const hasFilters = search.trim() !== "" || classification !== "all";
+  const hasFilters = search.trim() !== "" || kind !== "all";
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-50 to-blue-50 flex items-center justify-center p-4">
@@ -113,33 +112,19 @@ export function CompetitionSelector() {
                   placeholder={t("searchPlaceholder")}
                   className="flex-1 px-3 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
                 />
-                {showTypeFilter && (
-                  <select
-                    data-testid="event-type-filter"
-                    value={
-                      typeof classification === "number"
-                        ? String(classification)
-                        : classification
-                    }
-                    onChange={(e) => {
-                      const v = e.target.value;
-                      if (v === "all" || v === "unclassified") {
-                        setClassification(v);
-                      } else {
-                        setClassification(Number(v));
-                      }
-                    }}
-                    className="px-3 py-2 border border-slate-200 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-500"
-                  >
-                    <option value="all">{t("typeFilterAll")}</option>
-                    {Object.entries(CLASSIFICATION_LABEL_KEYS).map(([id, key]) => (
-                      <option key={id} value={id}>
-                        {t(key)}
-                      </option>
-                    ))}
-                    <option value="unclassified">{t("typeUnclassified")}</option>
-                  </select>
-                )}
+                <select
+                  data-testid="event-type-filter"
+                  value={kind}
+                  onChange={(e) => setKind(e.target.value as EventKindFilter)}
+                  className="px-3 py-2 border border-slate-200 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+                >
+                  <option value="all">{t("typeFilterAll")}</option>
+                  {EVENT_KIND_OPTIONS.map((option) => (
+                    <option key={option} value={option}>
+                      {t(eventKindLabelKey(option))}
+                    </option>
+                  ))}
+                </select>
               </div>
               {filtered.length === 0 ? (
                 <div className="p-8 text-center text-slate-500">
@@ -150,7 +135,7 @@ export function CompetitionSelector() {
                       data-testid="clear-event-filters"
                       onClick={() => {
                         setSearch("");
-                        setClassification("all");
+                        setKind("all");
                       }}
                       className="mt-3 text-sm text-blue-600 hover:text-blue-800 cursor-pointer"
                     >
@@ -371,12 +356,16 @@ function EventGroup({
                     {comp.date}
                   </div>
                 </div>
-                {/* Line 2: slug + badges hug the left and keep their size;
-                    the owner is pushed right and ellipsizes, so a long
-                    "Created by …" no longer wraps the slug onto its own
-                    line. It drops out entirely on narrow screens. */}
+                {/* Line 2: event type + badges hug the left; creator stays
+                    visible on mobile and truncates against the badges. The
+                    internal event slug is intentionally omitted here. */}
                 <div className="flex items-center gap-2 mt-0.5 text-xs text-slate-400 min-w-0">
-                  <span className="font-mono truncate min-w-0">{comp.nameId}</span>
+                  <span
+                    data-testid="event-type"
+                    className="inline-flex items-center px-1.5 py-0.5 rounded bg-slate-100 text-slate-600 text-[10px] font-medium flex-shrink-0"
+                  >
+                    {eventKindDisplayLabel(comp, (key) => t(key))}
+                  </span>
                   {comp.canManage && (
                     <span
                       data-testid="event-manager-badge"
@@ -385,17 +374,6 @@ function EventGroup({
                       {t("managerBadge")}
                     </span>
                   )}
-                  {(() => {
-                    const labelKey =
-                      comp.classificationId != null
-                        ? classificationLabelKey(comp.classificationId)
-                        : undefined;
-                    return labelKey ? (
-                      <span className="inline-flex items-center px-1.5 py-0.5 rounded bg-slate-100 text-slate-600 text-[10px] font-medium flex-shrink-0">
-                        {t(labelKey)}
-                      </span>
-                    ) : null;
-                  })()}
                   {comp.eventorEnv === "test" && (
                     <span className="inline-flex items-center px-1.5 py-0.5 rounded bg-amber-100 text-amber-700 text-[10px] font-bold uppercase tracking-wider flex-shrink-0">
                       {t("testEventor")}
@@ -409,7 +387,7 @@ function EventGroup({
                   {comp.owner && (
                     <span
                       data-testid="event-owner"
-                      className="ml-auto hidden sm:block flex-shrink-0 max-w-[45%] truncate text-right"
+                      className="ml-auto min-w-0 max-w-[55%] truncate text-right"
                     >
                       {t("eventOwner", { owner: comp.owner })}
                     </span>
@@ -453,6 +431,8 @@ function CreateCompetitionForm({
   const { t } = useTranslation("event");
   const [name, setName] = useState("");
   const [date, setDate] = useState(formatDate(new Date()));
+  const [kind, setKind] = useState<EventKind>("competition");
+  const [kindCustom, setKindCustom] = useState("");
 
   const createMutation = trpc.competition.create.useMutation({
     onSuccess: (data) => onCreated(data.nameId),
@@ -464,6 +444,8 @@ function CreateCompetitionForm({
     createMutation.mutate({
       name: name.trim(),
       date,
+      kind,
+      kindCustom: kind === "other" ? kindCustom.trim() : "",
     });
   };
 
@@ -499,6 +481,41 @@ function CreateCompetitionForm({
         </div>
         <div>
           <label className="block text-sm font-medium text-slate-600 mb-1">
+            {t("eventType")}
+          </label>
+          <select
+            data-testid="new-event-type"
+            value={kind}
+            onChange={(e) => setKind(e.target.value as EventKind)}
+            className="w-full px-4 py-2.5 border border-slate-200 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+          >
+            {EVENT_KIND_OPTIONS.map((option) => (
+              <option key={option} value={option}>
+                {t(eventKindLabelKey(option))}
+              </option>
+            ))}
+          </select>
+          <p className="mt-1 text-xs text-slate-400">{t("eventTypeHelp")}</p>
+        </div>
+        {kind === "other" && (
+          <div>
+            <label className="block text-sm font-medium text-slate-600 mb-1">
+              {t("eventTypeCustom")}
+            </label>
+            <input
+              type="text"
+              data-testid="new-event-type-custom"
+              value={kindCustom}
+              onChange={(e) => setKindCustom(e.target.value)}
+              placeholder={t("eventTypeCustomPlaceholder")}
+              maxLength={80}
+              required
+              className="w-full px-4 py-2.5 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+            />
+          </div>
+        )}
+        <div>
+          <label className="block text-sm font-medium text-slate-600 mb-1">
             {t("date", { ns: "common" })}
           </label>
           <input
@@ -512,7 +529,11 @@ function CreateCompetitionForm({
         <div className="flex gap-3 pt-1">
           <button
             type="submit"
-            disabled={createMutation.isPending || !name.trim()}
+            disabled={
+              createMutation.isPending ||
+              !name.trim() ||
+              (kind === "other" && !kindCustom.trim())
+            }
             className="px-6 py-2.5 bg-blue-600 text-white text-sm font-medium rounded-lg hover:bg-blue-700 disabled:opacity-50 transition-colors cursor-pointer"
           >
             {createMutation.isPending ? t("creating", { ns: "common" }) : t("create", { ns: "common" })}
@@ -711,6 +732,7 @@ function EventorEventList({
     eventId: number,
     name: string,
     date: string,
+    classificationId: number,
     organiserName?: string,
     organiserId?: number,
   ) => {
@@ -719,6 +741,7 @@ function EventorEventList({
       eventId,
       eventName: name,
       eventDate: date,
+      classificationId,
       organiserName,
       organiserId,
       env,
@@ -831,7 +854,14 @@ function EventorEventList({
                 </div>
               </div>
               <button
-                onClick={() => handleImport(ev.eventId, ev.name, ev.date, ev.organiserName, ev.organiserId)}
+                onClick={() => handleImport(
+                  ev.eventId,
+                  ev.name,
+                  ev.date,
+                  ev.classificationId,
+                  ev.organiserName,
+                  ev.organiserId,
+                )}
                 disabled={importMutation.isPending}
                 className="px-3 py-1.5 bg-blue-600 text-white text-xs font-medium rounded-lg hover:bg-blue-700 disabled:opacity-50 transition-colors cursor-pointer whitespace-nowrap flex-shrink-0"
               >

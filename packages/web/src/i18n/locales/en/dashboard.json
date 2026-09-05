@@ -31,5 +31,11 @@
   "showProgress": "Show progress",
   "hideProgress": "Hide progress",
   "replaceMap": "Replace map",
-  "uploadingNewMap": "Uploading new map..."
+  "uploadingNewMap": "Uploading new map...",
+  "twoFingerMapHint": "Use two fingers to move the map",
+  "editorDismiss": "Dismiss selection",
+  "locateMe": "My location",
+  "locateErrorDenied": "Location permission denied",
+  "locateErrorUnsupported": "Location unavailable in this browser",
+  "locateErrorUnavailable": "Could not determine your location"
 }

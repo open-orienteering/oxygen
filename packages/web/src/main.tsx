@@ -4,9 +4,9 @@ import { BrowserRouter } from "react-router-dom";
 import { QueryClient } from "@tanstack/react-query";
 import { PersistQueryClientProvider } from "@tanstack/react-query-persist-client";
 import { httpBatchLink } from "@trpc/client";
-import { trpc } from "./lib/trpc";
+import { eventScopedTrpcFetch, trpc } from "./lib/trpc";
 import { createIdbPersister } from "./lib/offline/persister";
-import { startNodeDiscovery, venueAwareFetch } from "./lib/node-discovery";
+import { startNodeDiscovery } from "./lib/node-discovery";
 import { CurrentUserProvider } from "./context/CurrentUserContext";
 import App from "./App";
 import "./index.css";
@@ -44,7 +44,7 @@ const trpcClient = trpc.createClient({
       url: API_URL,
       // Rewrites onto the active venue node when one is up; pass-through
       // otherwise.
-      fetch: venueAwareFetch,
+      fetch: eventScopedTrpcFetch,
       headers() {
         // Extract the first path segment as the competition nameId.
         // e.g. /my_competition/dashboard → "my_competition"

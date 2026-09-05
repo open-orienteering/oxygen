@@ -288,6 +288,40 @@ export function parseMeosTime(time: string): number {
 
 export type EventorEnvironment = "prod" | "test";
 
+/** Editable Oxygen event kinds. Eventor classifications map to a subset. */
+export const EVENT_KINDS = [
+  "competition",
+  "championship",
+  "international",
+  "national",
+  "district",
+  "local",
+  "club",
+  "club_training",
+  "weekly_course",
+  "training",
+  "other",
+] as const;
+
+export type EventKind = (typeof EVENT_KINDS)[number];
+
+export function isEventKind(value: string): value is EventKind {
+  return (EVENT_KINDS as readonly string[]).includes(value);
+}
+
+export const EVENTOR_CLASSIFICATION_KINDS: Readonly<Record<number, EventKind>> = {
+  1: "championship",
+  2: "national",
+  3: "district",
+  4: "local",
+  5: "club",
+  6: "international",
+};
+
+export function eventKindFromClassification(classificationId: number): EventKind {
+  return EVENTOR_CLASSIFICATION_KINDS[classificationId] ?? "competition";
+}
+
 /** Event summary as returned by the registry. */
 export interface EventInfo {
   id: number;
@@ -295,8 +329,10 @@ export interface EventInfo {
   annotation: string;
   date: string;
   nameId: string;
-  /** Event kind stored on the row (typically `"competition"`). */
-  kind: string;
+  /** Editable Oxygen event kind. */
+  kind: EventKind;
+  /** User-defined label when `kind === "other"`. */
+  kindCustom: string;
   /** The Eventor environment this event is linked to, if any */
   eventorEnv?: EventorEnvironment;
   /** Eventor event ID. Used to build QR links on receipts. */
