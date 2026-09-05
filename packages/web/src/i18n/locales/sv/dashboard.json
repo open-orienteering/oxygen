@@ -31,5 +31,11 @@
   "showProgress": "Visa förlopp",
   "hideProgress": "Dölj förlopp",
   "replaceMap": "Byt karta",
-  "uploadingNewMap": "Laddar upp ny karta..."
+  "uploadingNewMap": "Laddar upp ny karta...",
+  "twoFingerMapHint": "Använd två fingrar för att flytta kartan",
+  "editorDismiss": "Avmarkera",
+  "locateMe": "Min position",
+  "locateErrorDenied": "Platsbehörighet nekad",
+  "locateErrorUnsupported": "Plats saknas i den här webbläsaren",
+  "locateErrorUnavailable": "Kunde inte bestämma din position"
 }

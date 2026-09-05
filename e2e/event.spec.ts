@@ -81,7 +81,7 @@ test.describe("Event Page — Eventor-linked competition", () => {
     });
 
     await page.goto("/");
-    const multiraceEntry = page.getByText("itest_multirace").first();
+    const multiraceEntry = page.locator('a[href="/itest_multirace"]').first();
     await expect(multiraceEntry).toBeVisible({ timeout: 10000 });
     await multiraceEntry.click();
 

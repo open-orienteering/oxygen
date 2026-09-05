@@ -9,8 +9,13 @@ import {
   Link,
 } from "react-router-dom";
 import { useTranslation } from "react-i18next";
+import { usePageVisible } from "../hooks/usePageVisible";
+import {
+  attemptSessionReload,
+  isNetworkClassError,
+  isNotFoundError,
+} from "../lib/session-recovery";
 import { trpc } from "../lib/trpc";
-import { ClubLogo } from "../components/ClubLogo";
 import { LanguageSelector } from "../components/LanguageSelector";
 import { UserChip } from "../components/UserChip";
 import { ForbiddenPane } from "../components/ForbiddenPane";
@@ -140,6 +145,51 @@ function CompetitionShellInner() {
     },
   });
 
+  const pageVisible = usePageVisible();
+  const [reconnecting, setReconnecting] = useState(false);
+  const networkRetryDoneRef = useRef(false);
+  const selectError = selectMutation.error;
+  const selectFailedNetwork =
+    selectMutation.isError && !ready && isNetworkClassError(selectError);
+  const selectFailedNotFound =
+    selectMutation.isError && !ready && isNotFoundError(selectError);
+  const selectFailedOther =
+    selectMutation.isError && !ready && !selectFailedNetwork && !selectFailedNotFound;
+
+  // Reset recovery bookkeeping when navigating to another event.
+  useEffect(() => {
+    networkRetryDoneRef.current = false;
+    setReconnecting(false);
+  }, [nameId]);
+
+  // Network-class select failure (expired IAP / CORS): retry once, then reload.
+  // `selectError` is in the dep list so a second failure after the retry
+  // re-enters this effect (selectFailedNetwork alone stays true).
+  useEffect(() => {
+    if (!selectFailedNetwork || !nameId) return;
+    if (!navigator.onLine) return;
+    setReconnecting(true);
+    if (!networkRetryDoneRef.current) {
+      networkRetryDoneRef.current = true;
+      const timer = window.setTimeout(() => {
+        selectMutation.mutate({ nameId });
+      }, 600);
+      return () => window.clearTimeout(timer);
+    }
+    attemptSessionReload();
+  }, [selectFailedNetwork, selectError, nameId]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // When a dormant PWA wakes up while still in a failed select state, try again.
+  useEffect(() => {
+    if (!pageVisible || ready || !nameId) return;
+    if (!selectMutation.isError) return;
+    if (!isNetworkClassError(selectMutation.error)) return;
+    networkRetryDoneRef.current = false;
+    setReconnecting(true);
+    selectMutation.mutate({ nameId });
+  }, [pageVisible]); // eslint-disable-line react-hooks/exhaustive-deps
+
+
   // Fetch dashboard data for counts and organizer logo
   const dashboard = trpc.competition.dashboard.useQuery(undefined, {
     enabled: ready,
@@ -167,23 +217,37 @@ function CompetitionShellInner() {
   const activeIsOverflow = overflowTabs.some((tab) => tab.id === activeTab);
   const showProgressiveHint = shouldShowProgressiveHint(overflowTabs);
 
-  const organizerEventorId = dashboard.data?.organizer?.eventorId;
-
   useEffect(() => {
+    let cancelled = false;
     if (nameId) {
       setReady(false);
       setCompetitionNameId(nameId);
       if (navigator.onLine) {
-        utils.invalidate().then(() => {
-          selectMutation.mutate({ nameId });
-        });
+        void (async () => {
+          // Event-scoped tRPC procedures have `undefined` input, so their
+          // React Query keys do not contain nameId. Clear map data rather than
+          // briefly mounting the next event with the previous event's bounds,
+          // controls and tile-load state.
+          await Promise.all([
+            utils.course.mapFileInfo.reset(),
+            utils.course.mapMetadata.reset(),
+            utils.course.controlCoordinates.reset(),
+            utils.course.list.reset(),
+            utils.class.list.reset(),
+          ]);
+          await utils.invalidate();
+          if (!cancelled) selectMutation.mutate({ nameId });
+        })();
       } else {
         // Offline: skip cache invalidation (we need that data!) and try select
         // (will fail and trigger onError fallback to cached data)
         selectMutation.mutate({ nameId });
       }
     }
-    return () => setCompetitionNameId(null);
+    return () => {
+      cancelled = true;
+      setCompetitionNameId(null);
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [nameId]);
 
@@ -277,12 +341,12 @@ function CompetitionShellInner() {
   );
   const wideContainer = isWide && !paneCollapsed;
 
-  if (selectMutation.isError && !ready) {
+  if (selectFailedNotFound || selectFailedOther) {
     return (
       <div className="min-h-screen bg-slate-50 flex items-center justify-center p-4">
         <div className="text-center">
           <div className="text-red-500 text-lg font-medium mb-2">
-            {t("competitionNotFound")}
+            {selectFailedNotFound ? t("competitionNotFound") : t("connectionError")}
           </div>
           <p className="text-slate-500 text-sm mb-4">
             {t("couldNotConnect", { nameId })}
@@ -300,10 +364,24 @@ function CompetitionShellInner() {
 
   if (!ready) {
     return (
-      <div className="min-h-screen bg-slate-50 flex items-center justify-center">
+      <div className="min-h-screen bg-slate-50 flex items-center justify-center p-4">
         <div className="text-center">
           <div className="inline-block w-8 h-8 border-4 border-blue-200 border-t-blue-600 rounded-full animate-spin" />
-          <p className="text-slate-500 mt-4">{t("loadingCompetition")}</p>
+          <p className="text-slate-500 mt-4" data-testid="session-reconnecting">
+            {reconnecting || selectFailedNetwork
+              ? t("reconnectingSession")
+              : t("loadingCompetition")}
+          </p>
+          {(reconnecting || selectFailedNetwork) && (
+            <button
+              type="button"
+              data-testid="session-reload"
+              onClick={() => attemptSessionReload()}
+              className="mt-4 px-4 py-2 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors cursor-pointer"
+            >
+              {t("reloadToSignIn")}
+            </button>
+          )}
         </div>
       </div>
     );
@@ -321,46 +399,41 @@ function CompetitionShellInner() {
           z-30 within *this* stacking context — a sibling context at the
           same z-10, like the MapPanel toolbar, would otherwise paint its
           buttons straight through an open menu. Full-screen modals are
-          z-50 and still win. */}
-      <header className="bg-white border-b border-slate-200 sticky top-0 z-40">
+          z-50 and still win. On narrow viewports only the tab row stays
+          sticky so the event name row can scroll away. */}
+      <header className="relative z-50 bg-white border-b border-slate-200 sm:sticky sm:top-0 sm:z-40">
         <div className={headerInnerClass}>
-          <div className="flex items-center justify-between h-14">
-            <div className="flex items-center gap-3">
+          <div className="relative flex items-center justify-between h-14 min-w-0">
+            <div className="flex items-center gap-2 sm:gap-3 min-w-0">
               <button
                 onClick={() => navigate("/")}
-                className="p-2 -ml-2 text-slate-500 hover:text-slate-700 hover:bg-slate-100 rounded-lg transition-colors cursor-pointer"
+                className="p-2 -ml-2 flex-shrink-0 text-slate-500 hover:text-slate-700 hover:bg-slate-100 rounded-lg transition-colors cursor-pointer"
                 title={t("backToCompetitions")}
               >
                 <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
                 </svg>
               </button>
-              {organizerEventorId && organizerEventorId > 0 ? (
-                // Ternary on purpose: a `eventorId && <ClubLogo …/>`
-                // shape leaks a literal `0` into the DOM whenever the
-                // organiser is on the books locally but has no Eventor
-                // id (`eventorId === 0`), because React renders `0` as
-                // text. Always feed `&&` with a strict boolean — or
-                // use a ternary like this — when the left operand can
-                // be a number.
-                <ClubLogo
-                  eventorId={organizerEventorId}
-                  size="md"
-                  className="rounded"
-                />
-              ) : null}
-              <h1 className="text-lg font-semibold text-slate-900 leading-tight">
-                {competitionName}
-              </h1>
+              <Link
+                to={`/${nameId}/event`}
+                data-testid="event-header-link"
+                aria-label={t("event")}
+                className="flex items-center gap-2 min-w-0 max-w-[9rem] sm:max-w-none rounded-md hover:bg-slate-50 transition-colors"
+                title={t("event")}
+              >
+                <h1 className="text-sm sm:text-lg font-semibold text-slate-800 sm:text-slate-900 leading-tight truncate">
+                  {competitionName}
+                </h1>
+              </Link>
             </div>
-            <div className="flex items-center gap-2">
+            <div className="absolute right-0 sm:static flex items-center gap-0.5 sm:gap-2 flex-shrink-0 p-1 sm:p-0 bg-white rounded-l-lg sm:rounded-none shadow-[-8px_0_10px_4px_rgba(255,255,255,0.98)] sm:shadow-none">
               {isWide && paneCollapsed && (
                 <ShellHeaderMapPaneButton
                   onShow={() => setPaneCollapsed(false)}
                 />
               )}
-              <UserChip />
-              <LeaseBadge />
+              <div className="hidden sm:block"><UserChip /></div>
+              <div className="hidden sm:block"><LeaseBadge /></div>
               <ReaderStatusIndicator />
               <PrinterStatusIndicator />
               <KioskLauncher nameId={nameId ?? ""} />
@@ -370,8 +443,8 @@ function CompetitionShellInner() {
             </div>
           </div>
 
-          {/* Tabs */}
-          <div className="flex items-center justify-between border-b border-slate-200">
+          {/* Tabs — sticky on narrow viewports so navigation stays reachable */}
+          <div className="flex items-center justify-between border-b border-slate-200 sticky top-0 z-40 bg-white sm:static sm:z-auto">
             <nav className="-mb-px flex flex-1 gap-1 overflow-x-auto min-w-0" aria-label="Tabs" style={{ scrollbarWidth: 'none', msOverflowStyle: 'none' }}>
               {primaryTabs.map((tab) => {
                 const path = tab.path ? `/${nameId}/${tab.path}` : `/${nameId}`;
@@ -497,6 +570,10 @@ function CompetitionShellInner() {
                       <div className="my-1 border-t border-slate-100" />
                       <div className="px-4 py-1.5">
                         <LanguageSelector />
+                      </div>
+                      <div className="sm:hidden my-1 border-t border-slate-100" />
+                      <div className="sm:hidden px-4 py-1.5">
+                        <UserChip />
                       </div>
                     </div>
                   </>
@@ -689,7 +766,7 @@ function ShowMapPaneButton({ onShow }: { onShow: () => void }) {
           d="M9 20l-5.447-2.724A1 1 0 013 16.382V5.618a1 1 0 011.447-.894L9 7m0 13l6-3m-6 3V7m6 10l4.553 2.276A1 1 0 0021 18.382V7.618a1 1 0 00-.553-.894L15 4m0 13V4m0 0L9 7"
         />
       </svg>
-      {t("showMapPane")}
+      <span className="hidden sm:inline">{t("showMapPane")}</span>
     </button>
   );
 }
@@ -747,7 +824,7 @@ function KioskLauncher({ nameId }: { nameId: string }) {
       <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
         <path strokeLinecap="round" strokeLinejoin="round" d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
       </svg>
-      {t("kiosk")}
+      <span className="hidden sm:inline">{t("kiosk")}</span>
     </button>
   );
 }
@@ -767,7 +844,7 @@ function PrinterSettingsLauncher({ onLaunch }: { onLaunch: () => void }) {
         <path strokeLinecap="round" strokeLinejoin="round" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
         <path strokeLinecap="round" strokeLinejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
       </svg>
-      {t("printerSettingsLauncher")}
+      <span className="hidden sm:inline">{t("printerSettingsLauncher")}</span>
     </button>
   );
 }
@@ -792,7 +869,7 @@ function StartScreenLauncher({ nameId, onLaunch }: { nameId: string; onLaunch?: 
       <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
         <path strokeLinecap="round" strokeLinejoin="round" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
       </svg>
-      {t("startScreen")}
+      <span className="hidden sm:inline">{t("startScreen")}</span>
     </button>
   );
 }
@@ -824,7 +901,7 @@ function PrinterStatusIndicator() {
         <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
           <path strokeLinecap="round" strokeLinejoin="round" d="M17 17h2a2 2 0 002-2v-4a2 2 0 00-2-2H5a2 2 0 00-2 2v4a2 2 0 002 2h2m2 4h6a2 2 0 002-2v-4a2 2 0 00-2-2H9a2 2 0 00-2 2v4a2 2 0 002 2zm8-12V5a2 2 0 00-2-2H9a2 2 0 00-2 2v4h10z" />
         </svg>
-        {t("connectPrinter")}
+        <span className="hidden sm:inline">{t("connectPrinter")}</span>
       </button>
     );
   }
@@ -837,7 +914,7 @@ function PrinterStatusIndicator() {
         title={t("printerConnectedTitle")}
       >
         <span className="w-2 h-2 bg-emerald-500 rounded-full animate-pulse" />
-        {t("printer")}
+        <span className="hidden sm:inline">{t("printer")}</span>
       </button>
       {showMenu && (
         <>
@@ -886,7 +963,7 @@ function ReaderStatusIndicator() {
         <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
         </svg>
-        {t("connectReader")}
+        <span className="hidden sm:inline">{t("connectReader")}</span>
       </button>
     );
   }
@@ -899,7 +976,7 @@ function ReaderStatusIndicator() {
         data-testid="reader-status"
       >
         <span className="w-2 h-2 bg-emerald-500 rounded-full animate-pulse" />
-        {t("siReader")}
+        <span className="hidden sm:inline">{t("siReader")}</span>
       </button>
       {showMenu && (
         <>

@@ -193,7 +193,7 @@ export function DbLoadIndicator({ enabled = true }: { enabled?: boolean }) {
     return (
       <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-slate-100 text-slate-400">
         <DbIcon className="w-3.5 h-3.5" />
-        <span className="tabular-nums">—</span>
+        <span className="hidden sm:inline tabular-nums">—</span>
       </span>
     );
   }
@@ -204,12 +204,13 @@ export function DbLoadIndicator({ enabled = true }: { enabled?: boolean }) {
     <div className="relative">
       <button
         onClick={() => setShowPanel(!showPanel)}
+        data-testid="db-status-button"
         className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium transition-colors cursor-pointer ${tpsBgColor(tps)} ${tpsColor(tps)}`}
         title={`${tps.toFixed(0)} transactions/sec — click for details`}
       >
         <DbIcon className="w-3.5 h-3.5" />
-        <span className="tabular-nums">{tps.toFixed(0)}</span>
-        <span className="text-[10px] opacity-60">tx/s</span>
+        <span className="hidden sm:inline tabular-nums">{tps.toFixed(0)}</span>
+        <span className="hidden sm:inline text-[10px] opacity-60">tx/s</span>
       </button>
 
       {showPanel && (
@@ -218,7 +219,7 @@ export function DbLoadIndicator({ enabled = true }: { enabled?: boolean }) {
             className="fixed inset-0 z-20"
             onClick={() => setShowPanel(false)}
           />
-          <div className="absolute right-0 top-full mt-1 z-30 bg-white border border-slate-200 rounded-lg shadow-lg p-4 min-w-[280px]">
+          <div data-testid="db-status-panel" className="absolute right-0 top-full mt-1 z-30 bg-white border border-slate-200 rounded-lg shadow-lg p-4 min-w-[280px]">
             <div className="flex items-center justify-between mb-3">
               <h4 className="text-sm font-semibold text-slate-900">
                 PostgreSQL status

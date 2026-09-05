@@ -1,7 +1,13 @@
 import { useState, useEffect, useRef } from "react";
 import { useTranslation } from "react-i18next";
 import { Link } from "react-router-dom";
+import type { EventInfo, EventKind } from "@oxygen/shared";
 import { trpc } from "../lib/trpc";
+import {
+  EVENT_KIND_OPTIONS,
+  eventKindDisplayLabel,
+  eventKindLabelKey,
+} from "../lib/event-list";
 import { formatDateTime } from "../lib/format";
 import { useTimeAgo } from "../hooks/useTimeAgo";
 import { ClubLogo } from "../components/ClubLogo";
@@ -63,6 +69,11 @@ export function EventPage() {
                   <span>{d.competition.annotation}</span>
                 )}
               </div>
+              <EventTypeEditor
+                key={d.event.nameId}
+                event={d.event}
+                canManage={canManage}
+              />
               <div className="mt-3">
                 <RegistrationTrendsLink />
               </div>
@@ -128,6 +139,106 @@ export function EventPage() {
       {/* Event Backup (pg_dump download) */}
       <DatabaseBackup nameId={d.competition.nameId} />
         </>
+      )}
+    </div>
+  );
+}
+
+function EventTypeEditor({
+  event,
+  canManage,
+}: {
+  event: EventInfo;
+  canManage: boolean;
+}) {
+  const { t } = useTranslation("event");
+  const utils = trpc.useUtils();
+  const [kind, setKind] = useState<EventKind>(event.kind);
+  const [kindCustom, setKindCustom] = useState(event.kindCustom);
+  const [saved, setSaved] = useState(false);
+  const updateType = trpc.event.updateType.useMutation({
+    onSuccess: async () => {
+      setSaved(true);
+      await Promise.all([
+        utils.event.list.invalidate(),
+        utils.event.dashboard.invalidate(),
+      ]);
+    },
+  });
+
+  if (!canManage) {
+    return (
+      <div className="mt-3 text-sm text-slate-600">
+        <span className="font-medium">{t("eventType")}:</span>{" "}
+        {eventKindDisplayLabel(event, (key) => t(key))}
+      </div>
+    );
+  }
+
+  const dirty =
+    kind !== event.kind ||
+    (kind === "other" ? kindCustom.trim() : "") !== event.kindCustom;
+
+  return (
+    <div className="mt-3 max-w-md" data-testid="event-type-editor">
+      <label className="block text-xs font-medium text-slate-500 mb-1">
+        {t("eventType")}
+      </label>
+      <div className="flex flex-col sm:flex-row gap-2">
+        <select
+          data-testid="event-type-select"
+          value={kind}
+          onChange={(e) => {
+            setKind(e.target.value as EventKind);
+            setSaved(false);
+          }}
+          className="flex-1 px-3 py-2 border border-slate-200 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+        >
+          {EVENT_KIND_OPTIONS.map((option) => (
+            <option key={option} value={option}>
+              {t(eventKindLabelKey(option))}
+            </option>
+          ))}
+        </select>
+        <button
+          type="button"
+          data-testid="event-type-save"
+          disabled={
+            updateType.isPending ||
+            !dirty ||
+            (kind === "other" && !kindCustom.trim())
+          }
+          onClick={() =>
+            updateType.mutate({
+              kind,
+              kindCustom: kind === "other" ? kindCustom.trim() : "",
+            })
+          }
+          className="px-4 py-2 bg-blue-600 text-white text-sm font-medium rounded-lg hover:bg-blue-700 disabled:opacity-50 cursor-pointer"
+        >
+          {updateType.isPending ? t("saving") : t("save")}
+        </button>
+      </div>
+      {kind === "other" && (
+        <input
+          type="text"
+          data-testid="event-type-custom"
+          value={kindCustom}
+          onChange={(e) => {
+            setKindCustom(e.target.value);
+            setSaved(false);
+          }}
+          placeholder={t("eventTypeCustomPlaceholder")}
+          maxLength={80}
+          className="mt-2 w-full px-3 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+        />
+      )}
+      <p className="mt-1 text-xs text-slate-400">{t("eventTypeHelp")}</p>
+      {saved && <p className="mt-1 text-xs text-green-600">{t("eventTypeSaved")}</p>}
+      {updateType.isError && (
+        <p className="mt-1 text-xs text-red-600">
+          {t("eventTypeSaveFailed", { message: updateType.error.message })}
+        </p>
       )}
     </div>
   );

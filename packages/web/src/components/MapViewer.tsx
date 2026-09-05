@@ -1,4 +1,5 @@
 import { useState, useRef, useEffect, useCallback, useMemo } from "react";
+import { useTranslation } from "react-i18next";
 import { useParams } from "react-router-dom";
 import type { ControlDescription } from "@oxygen/shared";
 import { getDescriptionSymbols } from "../iof-symbols";
@@ -15,6 +16,12 @@ import {
   buildAffineTransform,
 } from "../lib/geo-utils";
 import { rotatedBoundingBox } from "../lib/map-rotation";
+import { useGeolocationWatch } from "../hooks/useGeolocationWatch";
+import {
+  accuracyRadiusPx,
+  nextLocateMode,
+  type LocateMode,
+} from "../lib/locate-mode";
 import {
   buildCourseLegLabels,
   courseLegLabelText,
@@ -25,6 +32,7 @@ import {
   type PlacementCircle,
   type PlacementSeg,
 } from "../lib/control-label-placement";
+import { useMediaQuery } from "../hooks/useMediaQuery";
 
 // ─── Types ──────────────────────────────────────────────────
 
@@ -80,7 +88,7 @@ export interface CourseOverlay {
  *   (rendered without network round-trips); mouse-up fires `onMoveEnd`
  *   once. The viewer keeps rendering the dragged position until the
  *   `controls` prop catches up, so no snap-back while the mutation and
- *   refetch are in flight. Mouse-only for now — touch still pans.
+ *   refetch are in flight. Touch and mouse share the same drag path.
  * - *Select*: clicking a control fires `onSelect(id)` (replacing
  *   `onControlClick`). The control matching `selectedControlId` gets a
  *   selection ring.
@@ -170,6 +178,8 @@ export interface MapViewerEditorProps {
   onMoveEnd?: (id: string, pt: { x: number; y: number }) => void;
   onSelect?: (id: string | null) => void;
   onLegClick?: (courseName: string, legIndex: number, pt: { x: number; y: number }) => void;
+  /** Touch-friendly dismiss (mirrors Escape cascade on the owning page). */
+  onDismiss?: () => void;
 }
 
 interface Props {
@@ -326,10 +336,16 @@ export function MapViewer({
   editor,
 }: Props) {
   const { nameId } = useParams<{ nameId: string }>();
+  const { t } = useTranslation("dashboard");
+  const isCoarsePointer = useMediaQuery("(pointer: coarse)");
+  const allowOneFingerMapPan = isFullscreen || !isCoarsePointer;
+  const [showTwoFingerHint, setShowTwoFingerHint] = useState(false);
   const tileUrlBase = nameId ? `/api/map-tile/${nameId}` : "/api/map-tile";
 
   const containerRef = useRef<HTMLDivElement>(null);
   const [viewport, setViewport] = useState<TileViewport | null>(null);
+  const viewportRef = useRef<TileViewport | null>(null);
+  viewportRef.current = viewport;
 
   const isPanningRef = useRef(false);
   const lastPosRef = useRef({ x: 0, y: 0 });
@@ -358,8 +374,77 @@ export function MapViewer({
   const [measuring, setMeasuring] = useState(false);
   const [measurePoints, setMeasurePoints] = useState<Pt[]>([]);
   const [measureCursor, setMeasureCursor] = useState<Pt | null>(null);
+
+  // ─── My-location (GPS) ───────────────────────────────────
+  const [locateMode, setLocateMode] = useState<LocateMode>("off");
+  const locateModeRef = useRef<LocateMode>("off");
+  locateModeRef.current = locateMode;
+  const geo = useGeolocationWatch();
+  const [locateErrorFlash, setLocateErrorFlash] = useState<string | null>(null);
+  const breakLocateFollow = useCallback(() => {
+    setLocateMode((mode) => nextLocateMode(mode, "userGesture"));
+  }, []);
+  const breakLocateFollowRef = useRef(breakLocateFollow);
+  breakLocateFollowRef.current = breakLocateFollow;
+
+  // Recenter while following GPS.
+  useEffect(() => {
+    if (locateMode !== "following" || !geo.position) return;
+    const { lat, lng } = geo.position;
+    setViewport((prev) =>
+      prev ? { ...prev, centerLat: lat, centerLng: lng } : prev,
+    );
+  }, [locateMode, geo.position]);
+
+  // Surface geolocation errors and drop back to off.
+  useEffect(() => {
+    if (!geo.error) return;
+    setLocateMode("off");
+    const key =
+      geo.error === "denied"
+        ? "locateErrorDenied"
+        : geo.error === "insecure" || geo.error === "unsupported"
+          ? "locateErrorUnsupported"
+          : "locateErrorUnavailable";
+    setLocateErrorFlash(t(key));
+    const id = window.setTimeout(() => setLocateErrorFlash(null), 3500);
+    return () => window.clearTimeout(id);
+  }, [geo.error, t]);
+
+  const handleLocateClick = useCallback(() => {
+    const next = nextLocateMode(locateMode, "toggle");
+    if (next === "off") {
+      geo.stop();
+      setLocateMode("off");
+      return;
+    }
+    setLocateMode(next);
+    setLocateErrorFlash(null);
+    if (!geo.watching) geo.start();
+    if (geo.position) {
+      setViewport((prev) =>
+        prev
+          ? { ...prev, centerLat: geo.position!.lat, centerLng: geo.position!.lng }
+          : prev,
+      );
+    }
+  }, [locateMode, geo]);
+
   const mouseDownPosRef = useRef<Pt | null>(null);
   const lastClickTimeRef = useRef(0);
+  const lastTouchRef = useRef<{ x: number; y: number; dist?: number } | null>(null);
+  const touchGestureBaseRef = useRef<{
+    x: number;
+    y: number;
+    dist: number;
+    viewport: TileViewport;
+  } | null>(null);
+  const touchGestureFrameRef = useRef<number | null>(null);
+  const pendingTouchGestureRef = useRef<{ x: number; y: number; dist: number } | null>(null);
+  const touchStartPosRef = useRef<Pt | null>(null);
+  const hadMultiTouchRef = useRef(false);
+  const touchOnEditorTargetRef = useRef(false);
+  const suppressEditorSelectionUntilRef = useRef(0);
 
   // ─── Editor gesture state ────────────────────────────────
   // Drag-in-progress: candidate is armed on control mouse-down; it becomes
@@ -496,6 +581,10 @@ export function MapViewer({
   // Re-fit when container size changes (e.g. fullscreen toggle).
   useEffect(() => {
     if (!viewport || containerSize.w === 0 || containerSize.h === 0) return;
+    // Course editing is spatial work: opening a selection menu or wrapping
+    // the editor toolbar may resize the map by a few pixels, but must never
+    // replace the user's current pan/zoom with an automatic fit.
+    if (editor) return;
     if (!hasInitialFitRef.current) return;
     const visibleControls = controls.filter((c) => c.visible !== false);
     if (visibleControls.length < 2) {
@@ -664,6 +753,7 @@ export function MapViewer({
       const zoomDelta = e.deltaY > 0 ? -0.15 : 0.15;
       const newZoom = Math.max(1, Math.min(22, viewport.zoom + zoomDelta));
 
+      breakLocateFollowRef.current();
       setViewport((prev) => {
         if (!prev) return prev;
         const newVp = { ...prev, zoom: newZoom };
@@ -677,6 +767,38 @@ export function MapViewer({
     el.addEventListener("wheel", onWheel, { passive: false });
     return () => el.removeEventListener("wheel", onWheel);
   }, [viewport, containerSize, rotRad, renderW, renderH]);
+
+  const finishEditorDrag = useCallback((clientX: number, clientY: number, cancelled: boolean) => {
+    const drag = editorDragRef.current;
+    if (!editor || !drag) return;
+    editorDragRef.current = null;
+    isPanningRef.current = false;
+    mouseDownPosRef.current = null;
+    if (cancelled) {
+      setEditorDragPos(null);
+      return;
+    }
+    if (drag.moved) {
+      const pt = screenToMapMm(clientX, clientY);
+      setEditorDragPos(null);
+      if (pt) {
+        setPendingMoves((prev) => {
+          const next = new Map<string, { from: Pt; to: Pt }>();
+          for (const [id, m] of prev) {
+            const c = controls.find((k) => k.id === id);
+            if (c && Math.abs(c.x - m.from.x) < 1e-9 && Math.abs(c.y - m.from.y) < 1e-9) {
+              next.set(id, m);
+            }
+          }
+          next.set(drag.id, { from: { x: drag.origX, y: drag.origY }, to: pt });
+          return next;
+        });
+        editor.onMoveEnd?.(drag.id, pt);
+      }
+    } else {
+      editor.onSelect?.(drag.id);
+    }
+  }, [editor, screenToMapMm, controls]);
 
   const handleMouseDown = useCallback((e: React.MouseEvent) => {
     if (e.button !== 0) return;
@@ -717,49 +839,23 @@ export function MapViewer({
       const rh = renderH || 1;
       const center = latlngToPixel(viewport.centerLat, viewport.centerLng, viewport, rw, rh);
       const newCenter = pixelToLatlng(center.px - dx, center.py - dy, viewport, rw, rh);
+      breakLocateFollow();
       setViewport((prev) => prev ? { ...prev, centerLat: newCenter.lat, centerLng: newCenter.lng } : prev);
     }
     if (measuring) {
       const pt = screenToMapMm(e.clientX, e.clientY);
       if (pt) setMeasureCursor(pt);
     }
-  }, [measuring, viewport, renderW, renderH, rotRad, screenToMapMm, editor]);
+  }, [measuring, viewport, renderW, renderH, rotRad, screenToMapMm, editor, breakLocateFollow]);
 
   const handleMouseUp = useCallback((e: React.MouseEvent) => {
-    // Editor: finish a control drag (fire onMoveEnd once) or, when the
-    // mouse never moved, treat it as a control click → onSelect. A
-    // mouse-leave mid-drag cancels silently.
     const drag = editorDragRef.current;
     if (editor && drag) {
-      editorDragRef.current = null;
-      isPanningRef.current = false;
-      mouseDownPosRef.current = null;
       if (e.type === "mouseleave") {
-        setEditorDragPos(null);
+        finishEditorDrag(e.clientX, e.clientY, true);
         return;
       }
-      if (drag.moved) {
-        const pt = screenToMapMm(e.clientX, e.clientY);
-        setEditorDragPos(null);
-        if (pt) {
-          setPendingMoves((prev) => {
-            const next = new Map<string, { from: Pt; to: Pt }>();
-            // Garbage-collect entries that are no longer bridging a
-            // stale position (data caught up or control disappeared).
-            for (const [id, m] of prev) {
-              const c = controls.find((k) => k.id === id);
-              if (c && Math.abs(c.x - m.from.x) < 1e-9 && Math.abs(c.y - m.from.y) < 1e-9) {
-                next.set(id, m);
-              }
-            }
-            next.set(drag.id, { from: { x: drag.origX, y: drag.origY }, to: pt });
-            return next;
-          });
-          editor.onMoveEnd?.(drag.id, pt);
-        }
-      } else {
-        editor.onSelect?.(drag.id);
-      }
+      finishEditorDrag(e.clientX, e.clientY, false);
       return;
     }
     isPanningRef.current = false;
@@ -778,9 +874,6 @@ export function MapViewer({
         }
       }
     }
-    // Editor: click on empty map — report it so the page can anchor a
-    // phantom selection there. Movement past the threshold is a pan, and
-    // clicks landing on the zoom/measure buttons don't count.
     if (editor && !measuring && mouseDownPosRef.current && e.type !== "mouseleave") {
       const dx = Math.abs(e.clientX - mouseDownPosRef.current.x);
       const dy = Math.abs(e.clientY - mouseDownPosRef.current.y);
@@ -791,37 +884,17 @@ export function MapViewer({
       }
     }
     mouseDownPosRef.current = null;
-  }, [measuring, screenToMapMm, editor, controls]);
+  }, [measuring, screenToMapMm, editor, finishEditorDrag]);
 
-  const lastTouchRef = useRef<{ x: number; y: number; dist?: number } | null>(null);
-  const touchStartPosRef = useRef<Pt | null>(null);
-  const handleTouchStart = useCallback((e: React.TouchEvent) => {
-    if (e.touches.length === 1) {
-      lastTouchRef.current = { x: e.touches[0].clientX, y: e.touches[0].clientY };
-      touchStartPosRef.current = { x: e.touches[0].clientX, y: e.touches[0].clientY };
-    } else if (e.touches.length === 2) {
-      const dx = e.touches[0].clientX - e.touches[1].clientX;
-      const dy = e.touches[0].clientY - e.touches[1].clientY;
-      lastTouchRef.current = {
-        x: (e.touches[0].clientX + e.touches[1].clientX) / 2,
-        y: (e.touches[0].clientY + e.touches[1].clientY) / 2,
-        dist: Math.sqrt(dx * dx + dy * dy),
-      };
-      touchStartPosRef.current = null;
-    }
-  }, []);
+  // Native touch listeners — React root touch handlers are passive, so
+  // preventDefault() there does not block page scroll. On coarse pointers
+  // outside fullscreen, one finger scrolls the page; two fingers pan/pinch
+  // the map. Fullscreen (or fine pointer) keeps one-finger map pan.
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el || !viewportRef.current) return;
 
-  const handleTouchMove = useCallback((e: React.TouchEvent) => {
-    e.preventDefault();
-    if (!viewport) return;
-    const rw = renderW || 1;
-    const rh = renderH || 1;
-
-    if (e.touches.length === 1 && lastTouchRef.current) {
-      let dx = e.touches[0].clientX - lastTouchRef.current.x;
-      let dy = e.touches[0].clientY - lastTouchRef.current.y;
-      lastTouchRef.current = { x: e.touches[0].clientX, y: e.touches[0].clientY };
-      // Rotate pixel delta to account for map rotation
+    const panByDelta = (dx: number, dy: number) => {
       if (rotRad !== 0) {
         const cos = Math.cos(-rotRad);
         const sin = Math.sin(-rotRad);
@@ -829,71 +902,294 @@ export function MapViewer({
         const rdy = dx * sin + dy * cos;
         dx = rdx; dy = rdy;
       }
-      const center = latlngToPixel(viewport.centerLat, viewport.centerLng, viewport, rw, rh);
-      const newCenter = pixelToLatlng(center.px - dx, center.py - dy, viewport, rw, rh);
-      setViewport((prev) => prev ? { ...prev, centerLat: newCenter.lat, centerLng: newCenter.lng } : prev);
-    } else if (e.touches.length === 2 && lastTouchRef.current?.dist) {
-      const dx = e.touches[0].clientX - e.touches[1].clientX;
-      const dy = e.touches[0].clientY - e.touches[1].clientY;
-      const dist = Math.sqrt(dx * dx + dy * dy);
-      const midX = (e.touches[0].clientX + e.touches[1].clientX) / 2;
-      const midY = (e.touches[0].clientY + e.touches[1].clientY) / 2;
-      const prevDist = lastTouchRef.current.dist;
+      const rw = renderW || 1;
+      const rh = renderH || 1;
+      breakLocateFollowRef.current();
+      setViewport((prev) => {
+        if (!prev) return prev;
+        const center = latlngToPixel(prev.centerLat, prev.centerLng, prev, rw, rh);
+        const newCenter = pixelToLatlng(center.px - dx, center.py - dy, prev, rw, rh);
+        return { ...prev, centerLat: newCenter.lat, centerLng: newCenter.lng };
+      });
+    };
 
-      const rect = containerRef.current?.getBoundingClientRect();
-      const sx = rect ? midX - rect.left : containerSize.w / 2;
-      const sy = rect ? midY - rect.top : containerSize.h / 2;
-      // Transform screen pinch point to inner (rotated) coords
-      let ix = sx, iy = sy;
-      if (rotRad !== 0) {
-        const cx = containerSize.w / 2, cy = containerSize.h / 2;
-        const ddx = sx - cx, ddy = sy - cy;
-        const cos = Math.cos(-rotRad), sin = Math.sin(-rotRad);
-        ix = ddx * cos - ddy * sin + rw / 2;
-        iy = ddx * sin + ddy * cos + rh / 2;
-      }
+    const maybeShowTwoFingerHint = (clientX: number, clientY: number) => {
+      if (!isCoarsePointer || isFullscreen || !touchStartPosRef.current) return;
+      const totalDx = Math.abs(clientX - touchStartPosRef.current.x);
+      const totalDy = Math.abs(clientY - touchStartPosRef.current.y);
+      if (totalDx + totalDy <= 8) return;
+      try {
+        if (!localStorage.getItem("oxygen.map.twoFingerHintShown")) {
+          setShowTwoFingerHint(true);
+          localStorage.setItem("oxygen.map.twoFingerHintShown", "1");
+        }
+      } catch { /* ignore quota / private mode */ }
+    };
 
-      const pinchGeo = pixelToLatlng(ix, iy, viewport, rw, rh);
-      const zoomDelta = Math.log2(dist / prevDist);
-      const newZoom = Math.max(1, Math.min(22, viewport.zoom + zoomDelta));
-
-      const newVp: TileViewport = { ...viewport, zoom: newZoom };
-      const afterPinch = latlngToPixel(pinchGeo.lat, pinchGeo.lng, newVp, rw, rh);
-      const dxPx = ix - afterPinch.px;
-      const dyPx = iy - afterPinch.py;
-      const newCenter = pixelToLatlng(rw / 2 - dxPx, rh / 2 - dyPx, newVp, rw, rh);
-
-      lastTouchRef.current = { x: midX, y: midY, dist };
-      setViewport({ centerLat: newCenter.lat, centerLng: newCenter.lng, zoom: newZoom });
-    }
-  }, [viewport, containerSize, renderW, renderH, rotRad]);
-
-  const handleTouchEnd = useCallback((e: React.TouchEvent) => {
-    if (e.touches.length === 0) {
-      if (measuring && touchStartPosRef.current) {
-        const pt = screenToMapMm(touchStartPosRef.current.x, touchStartPosRef.current.y);
-        if (pt) setMeasurePoints((prev) => [...prev, pt]);
-      }
-      // Editor: a tap (finger didn't travel) mirrors the mouse empty-map
-      // click. Drag-to-move stays mouse-only for now.
+    const onTouchStart = (e: TouchEvent) => {
+      // In fullscreen, one-finger map panning calls preventDefault(). Exempt
+      // controls before that path so real mobile browsers can synthesize the
+      // button click after touchend.
+      const target = e.target;
       if (
-        editor && !measuring &&
-        touchStartPosRef.current && e.changedTouches.length > 0
-      ) {
-        const t = e.changedTouches[0];
-        const dx = Math.abs(t.clientX - touchStartPosRef.current.x);
-        const dy = Math.abs(t.clientY - touchStartPosRef.current.y);
-        if (dx + dy < 10) {
+        target instanceof Element &&
+        target.closest("button, a, input, select, textarea, [role='button']")
+      ) return;
+      if (e.touches.length === 2) {
+        hadMultiTouchRef.current = true;
+        suppressEditorSelectionUntilRef.current = Date.now() + 400;
+        // A first finger may have landed on a control before the second
+        // finger joined. That is a map gesture, not a control drag.
+        editorDragRef.current = null;
+        setEditorDragPos(null);
+        const dx = e.touches[0].clientX - e.touches[1].clientX;
+        const dy = e.touches[0].clientY - e.touches[1].clientY;
+        const midpointX = (e.touches[0].clientX + e.touches[1].clientX) / 2;
+        const midpointY = (e.touches[0].clientY + e.touches[1].clientY) / 2;
+        const distance = Math.sqrt(dx * dx + dy * dy);
+        lastTouchRef.current = {
+          x: midpointX,
+          y: midpointY,
+          dist: distance,
+        };
+        const baseViewport = viewportRef.current;
+        if (baseViewport) {
+          touchGestureBaseRef.current = {
+            x: midpointX,
+            y: midpointY,
+            dist: distance,
+            viewport: baseViewport,
+          };
+        }
+        touchStartPosRef.current = null;
+        if (isCoarsePointer && !isFullscreen) e.preventDefault();
+        return;
+      }
+      if (e.touches.length !== 1) return;
+      const t = e.touches[0];
+      lastTouchRef.current = { x: t.clientX, y: t.clientY };
+      touchStartPosRef.current = { x: t.clientX, y: t.clientY };
+      touchOnEditorTargetRef.current = false;
+      if (allowOneFingerMapPan && !measuring) isPanningRef.current = true;
+      if (measuring || allowOneFingerMapPan) e.preventDefault();
+    };
+
+    const onTouchMove = (e: TouchEvent) => {
+      const drag = editorDragRef.current;
+      if (drag && e.touches.length === 1) {
+        e.preventDefault();
+        const t = e.touches[0];
+        const dx = Math.abs(t.clientX - drag.startX);
+        const dy = Math.abs(t.clientY - drag.startY);
+        if (drag.moved || dx + dy > 3) {
+          drag.moved = true;
           const pt = screenToMapMm(t.clientX, t.clientY);
-          if (pt) editor.onMapClick?.(pt);
+          if (pt) setEditorDragPos({ id: drag.id, x: pt.x, y: pt.y });
+        }
+        return;
+      }
+
+      const rw = renderW || 1;
+      const rh = renderH || 1;
+
+      if (e.touches.length === 2 && lastTouchRef.current?.dist) {
+        e.preventDefault();
+        hadMultiTouchRef.current = true;
+        suppressEditorSelectionUntilRef.current = Date.now() + 400;
+        const dx = e.touches[0].clientX - e.touches[1].clientX;
+        const dy = e.touches[0].clientY - e.touches[1].clientY;
+        const dist = Math.sqrt(dx * dx + dy * dy);
+        const midX = (e.touches[0].clientX + e.touches[1].clientX) / 2;
+        const midY = (e.touches[0].clientY + e.touches[1].clientY) / 2;
+        lastTouchRef.current = { x: midX, y: midY, dist };
+        pendingTouchGestureRef.current = { x: midX, y: midY, dist };
+
+        // Touch hardware may emit substantially more than 60 move events per
+        // second. Rendering every event is especially expensive when many
+        // control overlays are visible, so coalesce to one viewport update
+        // per animation frame.
+        if (touchGestureFrameRef.current === null) {
+          touchGestureFrameRef.current = requestAnimationFrame(() => {
+            touchGestureFrameRef.current = null;
+            const base = touchGestureBaseRef.current;
+            const current = pendingTouchGestureRef.current;
+            if (!base || !current) return;
+
+            const rect = el.getBoundingClientRect();
+            const toInner = (clientX: number, clientY: number) => {
+              const sx = clientX - rect.left;
+              const sy = clientY - rect.top;
+              if (rotRad === 0) return { x: sx, y: sy };
+              const cx = containerSize.w / 2;
+              const cy = containerSize.h / 2;
+              const ddx = sx - cx;
+              const ddy = sy - cy;
+              const cos = Math.cos(-rotRad);
+              const sin = Math.sin(-rotRad);
+              return {
+                x: ddx * cos - ddy * sin + rw / 2,
+                y: ddx * sin + ddy * cos + rh / 2,
+              };
+            };
+
+            // The geographical point under the gesture's original midpoint
+            // must move to the current midpoint. This single transform
+            // combines midpoint translation (pan) and distance change (zoom).
+            const from = toInner(base.x, base.y);
+            const to = toInner(current.x, current.y);
+            const anchorGeo = pixelToLatlng(
+              from.x,
+              from.y,
+              base.viewport,
+              rw,
+              rh,
+            );
+            const newZoom = Math.max(
+              1,
+              Math.min(
+                22,
+                base.viewport.zoom + Math.log2(current.dist / base.dist),
+              ),
+            );
+            const zoomed: TileViewport = {
+              ...base.viewport,
+              zoom: newZoom,
+            };
+            const anchorAfterZoom = latlngToPixel(
+              anchorGeo.lat,
+              anchorGeo.lng,
+              zoomed,
+              rw,
+              rh,
+            );
+            const center = pixelToLatlng(
+              rw / 2 - (to.x - anchorAfterZoom.px),
+              rh / 2 - (to.y - anchorAfterZoom.py),
+              zoomed,
+              rw,
+              rh,
+            );
+            const next = {
+              centerLat: center.lat,
+              centerLng: center.lng,
+              zoom: newZoom,
+            };
+            breakLocateFollowRef.current();
+            viewportRef.current = next;
+            setViewport(next);
+          });
+        }
+        return;
+      }
+
+      if (e.touches.length === 1 && lastTouchRef.current) {
+        const t = e.touches[0];
+        const dx = t.clientX - lastTouchRef.current.x;
+        const dy = t.clientY - lastTouchRef.current.y;
+        if (allowOneFingerMapPan || measuring) {
+          e.preventDefault();
+          panByDelta(dx, dy);
+          lastTouchRef.current = { x: t.clientX, y: t.clientY };
+          if (measuring) {
+            const pt = screenToMapMm(t.clientX, t.clientY);
+            if (pt) setMeasureCursor(pt);
+          }
+        } else {
+          maybeShowTwoFingerHint(t.clientX, t.clientY);
         }
       }
-      lastTouchRef.current = null;
-      touchStartPosRef.current = null;
-    } else if (e.touches.length === 1) {
-      lastTouchRef.current = { x: e.touches[0].clientX, y: e.touches[0].clientY };
-    }
-  }, [measuring, screenToMapMm, editor]);
+    };
+
+    const onTouchEnd = (e: TouchEvent) => {
+      const drag = editorDragRef.current;
+      if (drag && e.changedTouches.length > 0 && e.touches.length === 0) {
+        if (
+          hadMultiTouchRef.current ||
+          Date.now() < suppressEditorSelectionUntilRef.current
+        ) {
+          editorDragRef.current = null;
+          setEditorDragPos(null);
+          lastTouchRef.current = null;
+          touchStartPosRef.current = null;
+          hadMultiTouchRef.current = false;
+          isPanningRef.current = false;
+          return;
+        }
+        const t = e.changedTouches[0];
+        finishEditorDrag(t.clientX, t.clientY, false);
+        return;
+      }
+
+      if (e.touches.length === 0) {
+        if (hadMultiTouchRef.current) {
+          suppressEditorSelectionUntilRef.current = Date.now() + 400;
+        }
+        if (measuring && touchStartPosRef.current && e.changedTouches.length > 0) {
+          const t = e.changedTouches[0];
+          const dx = Math.abs(t.clientX - touchStartPosRef.current.x);
+          const dy = Math.abs(t.clientY - touchStartPosRef.current.y);
+          if (dx + dy < 10) {
+            const now = Date.now();
+            if (now - lastClickTimeRef.current < 300) {
+              lastClickTimeRef.current = 0;
+              setMeasureCursor(null);
+            } else {
+              lastClickTimeRef.current = now;
+              const pt = screenToMapMm(t.clientX, t.clientY);
+              if (pt) setMeasurePoints((prev) => [...prev, pt]);
+            }
+          }
+        }
+        if (
+          editor && !measuring && !hadMultiTouchRef.current &&
+          !touchOnEditorTargetRef.current &&
+          touchStartPosRef.current && e.changedTouches.length > 0
+        ) {
+          const t = e.changedTouches[0];
+          const dx = Math.abs(t.clientX - touchStartPosRef.current.x);
+          const dy = Math.abs(t.clientY - touchStartPosRef.current.y);
+          const target = e.target as HTMLElement;
+          const onButton = target.closest?.("button");
+          if (dx + dy < 10 && !onButton) {
+            const pt = screenToMapMm(t.clientX, t.clientY);
+            if (pt) editor.onMapClick?.(pt);
+          }
+        }
+        lastTouchRef.current = null;
+        touchStartPosRef.current = null;
+        hadMultiTouchRef.current = false;
+        isPanningRef.current = false;
+      } else if (e.touches.length === 1) {
+        lastTouchRef.current = { x: e.touches[0].clientX, y: e.touches[0].clientY };
+      }
+    };
+
+    el.addEventListener("touchstart", onTouchStart, { passive: false });
+    el.addEventListener("touchmove", onTouchMove, { passive: false });
+    el.addEventListener("touchend", onTouchEnd, { passive: false });
+    el.addEventListener("touchcancel", onTouchEnd, { passive: false });
+    return () => {
+      if (touchGestureFrameRef.current !== null) {
+        cancelAnimationFrame(touchGestureFrameRef.current);
+        touchGestureFrameRef.current = null;
+      }
+      el.removeEventListener("touchstart", onTouchStart);
+      el.removeEventListener("touchmove", onTouchMove);
+      el.removeEventListener("touchend", onTouchEnd);
+      el.removeEventListener("touchcancel", onTouchEnd);
+    };
+  }, [
+    viewport !== null,
+    containerSize, renderW, renderH, rotRad, measuring, editor,
+    isFullscreen, isCoarsePointer, allowOneFingerMapPan, screenToMapMm,
+    finishEditorDrag,
+  ]);
+
+  useEffect(() => {
+    if (!showTwoFingerHint) return;
+    const timer = window.setTimeout(() => setShowTwoFingerHint(false), 2500);
+    return () => window.clearTimeout(timer);
+  }, [showTwoFingerHint]);
 
   // Escape / Backspace to cancel / undo measure
   useEffect(() => {
@@ -916,15 +1212,67 @@ export function MapViewer({
   // happen in render scope) — the JSX inside the memo only closes over
   // these stable callbacks.
 
-  /** Arm a control drag on mouse-down over a control hit target. */
+  /** Arm a control drag on pointer-down over a control hit target. */
   const beginControlDrag = useCallback(
-    (id: string, origX: number, origY: number, e: React.MouseEvent) => {
-      if (e.button !== 0) return;
-      e.stopPropagation();
-      editorDragRef.current = { id, startX: e.clientX, startY: e.clientY, moved: false, origX, origY };
+    (id: string, origX: number, origY: number, clientX: number, clientY: number) => {
+      editorDragRef.current = { id, startX: clientX, startY: clientY, moved: false, origX, origY };
     },
     [],
   );
+
+  const beginControlDragMouse = useCallback(
+    (id: string, origX: number, origY: number, e: React.MouseEvent) => {
+      if (e.button !== 0) return;
+      e.stopPropagation();
+      beginControlDrag(id, origX, origY, e.clientX, e.clientY);
+    },
+    [beginControlDrag],
+  );
+
+  const beginControlDragTouch = useCallback(
+    (id: string, origX: number, origY: number, e: React.TouchEvent) => {
+      if (e.touches.length !== 1) return;
+      const t = e.touches[0];
+      if (!t) return;
+      e.stopPropagation();
+      touchOnEditorTargetRef.current = true;
+      if (Date.now() < suppressEditorSelectionUntilRef.current) return;
+      beginControlDrag(id, origX, origY, t.clientX, t.clientY);
+    },
+    [beginControlDrag],
+  );
+
+  const handleControlTouchMove = useCallback((e: React.TouchEvent) => {
+    const drag = editorDragRef.current;
+    if (!drag) return;
+    e.preventDefault();
+    e.stopPropagation();
+    const t = e.touches[0];
+    if (!t) return;
+    const dx = Math.abs(t.clientX - drag.startX);
+    const dy = Math.abs(t.clientY - drag.startY);
+    if (drag.moved || dx + dy > 3) {
+      drag.moved = true;
+      const pt = screenToMapMm(t.clientX, t.clientY);
+      if (pt) setEditorDragPos({ id: drag.id, x: pt.x, y: pt.y });
+    }
+  }, [screenToMapMm]);
+
+  const handleControlTouchEnd = useCallback((e: React.TouchEvent) => {
+    e.stopPropagation();
+    if (!editorDragRef.current) return;
+    if (
+      hadMultiTouchRef.current ||
+      Date.now() < suppressEditorSelectionUntilRef.current
+    ) {
+      editorDragRef.current = null;
+      setEditorDragPos(null);
+      return;
+    }
+    const t = e.changedTouches[0];
+    if (!t) return;
+    finishEditorDrag(t.clientX, t.clientY, false);
+  }, [finishEditorDrag]);
 
   const legHitMouseDown = useCallback(
     (course: string, index: number, e: React.MouseEvent) => {
@@ -940,9 +1288,39 @@ export function MapViewer({
       const ld = legDownRef.current;
       legDownRef.current = null;
       if (!ld || ld.course !== course || ld.index !== index) return;
+      if (
+        hadMultiTouchRef.current ||
+        Date.now() < suppressEditorSelectionUntilRef.current
+      ) return;
       if (Math.abs(e.clientX - ld.x) + Math.abs(e.clientY - ld.y) >= 5) return;
       e.stopPropagation();
       const pt = screenToMapMm(e.clientX, e.clientY);
+      if (pt) editor?.onLegClick?.(course, index, pt);
+    },
+    [screenToMapMm, editor],
+  );
+
+  const legHitTouchStart = useCallback(
+    (course: string, index: number, e: React.TouchEvent) => {
+      const t = e.touches[0];
+      if (!t) return;
+      e.stopPropagation();
+      touchOnEditorTargetRef.current = true;
+      legDownRef.current = { course, index, x: t.clientX, y: t.clientY };
+    },
+    [],
+  );
+
+  const legHitTouchEnd = useCallback(
+    (course: string, index: number, e: React.TouchEvent) => {
+      const ld = legDownRef.current;
+      legDownRef.current = null;
+      if (!ld || ld.course !== course || ld.index !== index) return;
+      const t = e.changedTouches[0];
+      if (!t) return;
+      if (Math.abs(t.clientX - ld.x) + Math.abs(t.clientY - ld.y) >= 5) return;
+      e.stopPropagation();
+      const pt = screenToMapMm(t.clientX, t.clientY);
       if (pt) editor?.onLegClick?.(course, index, pt);
     },
     [screenToMapMm, editor],
@@ -1690,7 +2068,7 @@ export function MapViewer({
 
   let editorMenu: React.ReactNode = null;
   const menuEntries =
-    (editor?.contextActions?.length ?? 0) + (editor?.suggestions?.length ?? 0);
+    (editor?.contextActions?.length ?? 0) + (editor?.suggestions?.length ?? 0) + (editor?.onDismiss ? 1 : 0);
   if (editor && menuEntries > 0 && overlayContent && !editorDragPos) {
     let inner: Pt | null = null;
     let anchorR = overlayContent.radiusPx;
@@ -1714,7 +2092,7 @@ export function MapViewer({
         editorMenu = (
           <div
             data-testid="editor-context-menu"
-            className="flex flex-col gap-0.5 bg-white/95 backdrop-blur-sm rounded-lg border border-slate-200 shadow-lg p-1"
+            className="relative flex flex-col gap-0.5 bg-white/95 backdrop-blur-sm rounded-lg border border-slate-200 shadow-lg p-1"
             style={{
               position: "absolute",
               left: pos.x + anchorR + 10,
@@ -1725,10 +2103,31 @@ export function MapViewer({
             onMouseDown={(e) => e.stopPropagation()}
             onTouchStart={(e) => e.stopPropagation()}
           >
+            {editor.onDismiss && (
+              <button
+                type="button"
+                data-testid="editor-dismiss"
+                onPointerDown={(e) => e.stopPropagation()}
+                onTouchStart={(e) => e.stopPropagation()}
+                onTouchEnd={(e) => {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  editor.onDismiss?.();
+                }}
+                onClick={editor.onDismiss}
+                className="absolute right-1 top-1 z-10 p-1 rounded-md text-slate-400 hover:text-slate-700 hover:bg-slate-100 transition-colors cursor-pointer"
+                title={t("editorDismiss")}
+                aria-label={t("editorDismiss")}
+              >
+                <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
+            )}
             {editor.contextInfo && (
               <div
                 data-testid="editor-context-info"
-                className="text-[11px] text-slate-500 px-2.5 pt-1 pb-0.5 whitespace-nowrap border-b border-slate-100"
+                className="text-[11px] text-slate-500 pl-2.5 pr-8 pt-1.5 pb-1 whitespace-nowrap border-b border-slate-100"
               >
                 {editor.contextInfo}
               </div>
@@ -1737,7 +2136,7 @@ export function MapViewer({
               <div
                 data-testid="editor-srr-badge"
                 title={editor.contextBadge.title}
-                className="text-[10px] font-medium text-amber-800 bg-amber-100 rounded px-2 py-0.5 mx-1 mt-0.5 w-fit"
+                className="text-[10px] font-medium text-amber-800 bg-amber-100 rounded pl-2 pr-8 py-0.5 mx-1 mt-0.5 w-fit"
               >
                 {editor.contextBadge.label}
               </div>
@@ -1746,7 +2145,7 @@ export function MapViewer({
               <div
                 data-testid="editor-radio-badge"
                 title={editor.contextRadioBadge.title}
-                className="text-[10px] font-medium text-sky-800 bg-sky-100 rounded px-2 py-0.5 mx-1 mt-0.5 w-fit"
+                className="text-[10px] font-medium text-sky-800 bg-sky-100 rounded pl-2 pr-8 py-0.5 mx-1 mt-0.5 w-fit"
               >
                 {editor.contextRadioBadge.label}
               </div>
@@ -1757,7 +2156,7 @@ export function MapViewer({
                 className="border-b border-slate-100 pb-0.5 mb-0.5"
               >
                 {editor.suggestionsHeading && (
-                  <div className="text-[11px] text-slate-500 px-2.5 pt-1 pb-0.5 whitespace-nowrap">
+                  <div className="text-[11px] text-slate-500 pl-2.5 pr-8 pt-1 pb-0.5 whitespace-nowrap">
                     {editor.suggestionsHeading}
                   </div>
                 )}
@@ -1793,7 +2192,7 @@ export function MapViewer({
                 key={a.id}
                 data-testid={`editor-action-${a.id}`}
                 onClick={a.onClick}
-                className={`text-xs text-left px-2.5 py-1.5 rounded-md whitespace-nowrap transition-colors cursor-pointer ${
+                className={`text-xs text-left pl-2.5 pr-8 py-1.5 rounded-md whitespace-nowrap transition-colors cursor-pointer ${
                   a.variant === "danger"
                     ? "text-red-600 hover:bg-red-50"
                     : "text-slate-700 hover:bg-slate-100"
@@ -1837,25 +2236,39 @@ export function MapViewer({
     }
   }
 
+  const containerTouchAction =
+    measuring || allowOneFingerMapPan ? "none" : "pan-y";
+
   return (
     <div
       ref={containerRef}
       data-testid="map-viewer"
+      data-center-lat={viewport?.centerLat}
+      data-center-lng={viewport?.centerLng}
+      data-zoom={viewport?.zoom}
       className={`relative overflow-hidden select-none bg-white ${hideControls ? "" : "rounded-lg border border-slate-200"} ${className}`}
       style={{
         cursor: hideControls ? "default"
           : measuring ? "crosshair"
           : isPanningRef.current ? "grabbing" : "grab",
+        touchAction: containerTouchAction,
         ...style,
       }}
       onMouseDown={handleMouseDown}
       onMouseMove={handleMouseMove}
       onMouseUp={handleMouseUp}
       onMouseLeave={handleMouseUp}
-      onTouchStart={handleTouchStart}
-      onTouchMove={handleTouchMove}
-      onTouchEnd={handleTouchEnd}
     >
+      {showTwoFingerHint && (
+        <div
+          data-testid="map-two-finger-hint"
+          className="pointer-events-none absolute inset-x-0 top-1/2 z-20 flex justify-center -translate-y-1/2 px-4"
+        >
+          <div className="rounded-lg bg-black/70 px-4 py-2 text-sm text-white text-center shadow-lg">
+            {t("twoFingerMapHint")}
+          </div>
+        </div>
+      )}
       {/* Rotated map layer (tiles + overlay) — corrects map north offset */}
       <div style={{
         position: "absolute",
@@ -1880,6 +2293,40 @@ export function MapViewer({
         >
           <g style={{ pointerEvents: "auto" }}>
             {overlayContent?.nodes}
+            {locateMode !== "off" && geo.position && viewport && (() => {
+              const { px, py } = latlngToPixel(
+                geo.position.lat,
+                geo.position.lng,
+                viewport,
+                renderW,
+                renderH,
+              );
+              const mpp = metersPerPixel(geo.position.lat, viewport.zoom);
+              const radius = accuracyRadiusPx(geo.position.accuracy, mpp);
+              return (
+                <g data-testid="my-location-marker" style={{ pointerEvents: "none" }}>
+                  {radius > 2 && (
+                    <circle
+                      cx={px}
+                      cy={py}
+                      r={Math.min(radius, Math.max(renderW, renderH))}
+                      fill="rgba(66, 133, 244, 0.15)"
+                      stroke="rgba(66, 133, 244, 0.45)"
+                      strokeWidth={1}
+                    />
+                  )}
+                  <circle cx={px} cy={py} r={14} fill="rgba(66, 133, 244, 0.25)" />
+                  <circle
+                    cx={px}
+                    cy={py}
+                    r={7}
+                    fill="#4285F4"
+                    stroke="#ffffff"
+                    strokeWidth={2.5}
+                  />
+                </g>
+              );
+            })()}
             {/* Editor hit targets — topmost, so grabbing a control or a
                 leg always wins over decorative overlay shapes. Handlers
                 live here (not in the memo) because they write refs. */}
@@ -1890,16 +2337,21 @@ export function MapViewer({
                 data-course-name={h.course}
                 data-leg-index={h.index}
                 onMouseDown={(e) => legHitMouseDown(h.course, h.index, e)}
-                onMouseUp={(e) => legHitMouseUp(h.course, h.index, e)} />
+                onMouseUp={(e) => legHitMouseUp(h.course, h.index, e)}
+                onTouchStart={(e) => legHitTouchStart(h.course, h.index, e)}
+                onTouchEnd={(e) => legHitTouchEnd(h.course, h.index, e)} />
             ))}
             {editor && overlayContent && overlayContent.controlHits.map((h) => (
               <circle key={`edit-hit-${h.id}`} cx={h.px} cy={h.py} r={h.r}
                 fill="transparent" stroke="none"
-                style={{ pointerEvents: "all", cursor: "move" }}
+                style={{ pointerEvents: "all", cursor: "move", touchAction: "none" }}
                 data-testid="editor-control-hit"
                 data-control-id={h.id}
                 data-control-code={h.code}
-                onMouseDown={(ev) => beginControlDrag(h.id, h.mmX, h.mmY, ev)} />
+                onMouseDown={(ev) => beginControlDragMouse(h.id, h.mmX, h.mmY, ev)}
+                onTouchStart={(ev) => beginControlDragTouch(h.id, h.mmX, h.mmY, ev)}
+                onTouchMove={handleControlTouchMove}
+                onTouchEnd={handleControlTouchEnd} />
             ))}
             {/* Phantom selection — where the user clicked empty map / a leg */}
             {overlayContent && phantomPos && !editorDragPos && (
@@ -1935,18 +2387,33 @@ export function MapViewer({
       {/* Measure HUD */}
       {measureHud}
 
+      {locateErrorFlash && (
+        <div
+          data-testid="locate-error"
+          className="absolute bottom-14 right-12 z-20 max-w-[12rem] rounded-md bg-slate-900/90 px-2.5 py-1.5 text-xs text-white shadow-lg"
+        >
+          {locateErrorFlash}
+        </div>
+      )}
+
       {/* Control buttons */}
       {!hideControls && (
-        <div style={{
+        <div className="touch-manipulation" style={{
           position: "absolute", bottom: 12, right: 12, display: "flex", flexDirection: "column", gap: 4, zIndex: 10,
         }}>
           <button
-            onClick={() => setViewport((prev) => prev ? { ...prev, zoom: Math.min(22, prev.zoom + 0.5) } : prev)}
+            onClick={() => {
+              breakLocateFollow();
+              setViewport((prev) => prev ? { ...prev, zoom: Math.min(22, prev.zoom + 0.5) } : prev);
+            }}
             className="w-8 h-8 bg-white rounded shadow hover:bg-slate-50 flex items-center justify-center text-slate-600 font-bold text-lg"
             title="Zoom in"
           >+</button>
           <button
-            onClick={() => setViewport((prev) => prev ? { ...prev, zoom: Math.max(1, prev.zoom - 0.5) } : prev)}
+            onClick={() => {
+              breakLocateFollow();
+              setViewport((prev) => prev ? { ...prev, zoom: Math.max(1, prev.zoom - 0.5) } : prev);
+            }}
             className="w-8 h-8 bg-white rounded shadow hover:bg-slate-50 flex items-center justify-center text-slate-600 font-bold text-lg"
             title="Zoom out"
           >−</button>
@@ -1975,6 +2442,25 @@ export function MapViewer({
             <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth={1.5} className="w-4 h-4">
               <path d="M3 17L17 3" strokeLinecap="round" />
               <path d="M6 14l1.5-1.5M9 11l1.5-1.5M12 8l1.5-1.5" strokeLinecap="round" />
+            </svg>
+          </button>
+          <button
+            type="button"
+            data-testid="locate-button"
+            onClick={handleLocateClick}
+            className={`w-8 h-8 rounded shadow flex items-center justify-center ${
+              locateMode === "following"
+                ? "bg-blue-500 text-white"
+                : locateMode === "located"
+                  ? "bg-blue-100 text-blue-600"
+                  : "bg-white hover:bg-slate-50 text-slate-600"
+            }`}
+            title={t("locateMe")}
+            aria-label={t("locateMe")}
+            aria-pressed={locateMode !== "off"}
+          >
+            <svg viewBox="0 0 20 20" fill="currentColor" className="w-4 h-4">
+              <path fillRule="evenodd" d="M10 3.5a.75.75 0 01.75.75v1.042a5.252 5.252 0 014.0 4.0H16.5a.75.75 0 010 1.5h-1.042a5.252 5.252 0 01-4.0 4.0V16.5a.75.75 0 01-1.5 0v-1.042a5.252 5.252 0 01-4.0-4.0H3.5a.75.75 0 010-1.5h1.042a5.252 5.252 0 014.0-4.0V4.25A.75.75 0 0110 3.5zm0 3.25a3.25 3.25 0 100 6.5 3.25 3.25 0 000-6.5zM10 9a1 1 0 100 2 1 1 0 000-2z" clipRule="evenodd" />
             </svg>
           </button>
           {onToggleFullscreen && (

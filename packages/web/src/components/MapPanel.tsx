@@ -1,9 +1,11 @@
 import { memo, useId, useState, useRef, useMemo, useEffect, useCallback } from "react";
 import { useTranslation } from "react-i18next";
+import { useParams } from "react-router-dom";
 import { trpc } from "../lib/trpc";
 import { fileToBase64 } from "../lib/file-to-base64";
 import { useCurrentUser } from "../context/CurrentUserContext";
 import { MapViewer, type ControlOverlay, type CourseOverlay, type MapViewerEditorProps } from "./MapViewer";
+import { useIsWideViewport } from "./map-pane-shared";
 
 /**
  * Public prop surface for `<MapPanel>`. Exported so the shell-owned
@@ -55,12 +57,22 @@ export interface MapPanelPublicProps {
    * fullscreen. Stabilize via `useMemo`.
    */
   mapOverlay?: React.ReactNode;
+  /**
+   * Fixed modal content that must remain inside the browser fullscreen
+   * subtree. Rendered as a direct child of the MapPanel fullscreen element.
+   */
+  fullscreenOverlay?: React.ReactNode;
   /** Per-control punch status for mispunch visualization (keyed by control code string e.g. "67") */
   punchStatusByCode?: Record<string, "ok" | "missing" | "extra">;
   /** Focus/zoom to controls with these codes (e.g. mispunched controls) */
   focusControlCodes?: string[];
   /** Hide the toolbar (filter/description/fullscreen buttons) entirely */
   hideToolbar?: boolean;
+  /**
+   * Show the map-name / replace-map footer row below the viewer. Only the
+   * course editor needs this — other pages hide it to save vertical space.
+   */
+  showMapInfo?: boolean;
   /** GPS route traces to overlay on the map. */
   gpsRoutes?: Array<{ color: string; points: Array<{ lat: number; lng: number }> }>;
   /**
@@ -102,14 +114,17 @@ function MapPanelImpl({
   completionCourseId,
   toolbar,
   mapOverlay,
+  fullscreenOverlay,
   punchStatusByCode,
   focusControlCodes,
   hideToolbar = false,
+  showMapInfo = false,
   gpsRoutes,
   fillContainer = false,
   onPaneCollapse,
   editor,
 }: MapPanelPublicProps) {
+  const { nameId } = useParams<{ nameId: string }>();
   const { t } = useTranslation("dashboard");
   const { t: tl } = useTranslation("library");
   const { user, authEnabled } = useCurrentUser();
@@ -119,6 +134,7 @@ function MapPanelImpl({
   // route changes — the value rotates when (and only when) the React
   // fibre is torn down and a new one is mounted.
   const instanceId = useId();
+  const isWide = useIsWideViewport();
   // When rendered inside the persistent right pane, strip caller-provided
   // layout margins (typically `mt-6`) and let the map fill the available
   // height of the pane instead of using the fixed pixel `height` prop.
@@ -244,6 +260,17 @@ function MapPanelImpl({
 
   const [isFullscreen, setIsFullscreen] = useState(false);
   const fullscreenRef = useRef<HTMLDivElement>(null);
+
+  // On narrow viewports, cap inline map height to nearly fill the screen
+  // so the user gets maximum map real estate while one-finger page scroll
+  // (over the map) still reaches content above.
+  const inlineHeightStyle = useMemo((): React.CSSProperties | undefined => {
+    if (fillContainer || isFullscreen) return undefined;
+    if (isWide) return { height: effectiveHeight };
+    const match = /^(\d+(?:\.\d+)?)px$/.exec(effectiveHeight);
+    const callerPx = match ? Number(match[1]) : 600;
+    return { height: `min(${callerPx}px, calc(100dvh - 8rem))` };
+  }, [fillContainer, isFullscreen, isWide, effectiveHeight]);
 
   const [uploadError, setUploadError] = useState<string | null>(null);
   const [showLibraryPicker, setShowLibraryPicker] = useState(false);
@@ -756,6 +783,7 @@ function MapPanelImpl({
         style={{ flex: isFullscreen || fillContainer ? "1 1 0" : undefined }}
       >
         <MapViewer
+          key={`${nameId ?? "current"}:${mapMetadata.data?.uploadedAt ?? "loading"}:${JSON.stringify(mapMetadata.data?.bounds ?? null)}`}
           mapBounds={mapMetadata.data?.bounds}
           mapScale={mapMetadata.data?.scale}
           northOffset={mapMetadata.data?.northOffset}
@@ -770,8 +798,9 @@ function MapPanelImpl({
           onControlClick={handleControlClick}
           className="w-full"
           style={{
-            height: isFullscreen || fillContainer ? undefined : height,
+            height: isFullscreen || fillContainer ? undefined : effectiveHeight,
             flex: isFullscreen || fillContainer ? "1 1 0" : undefined,
+            ...inlineHeightStyle,
           }}
           initialFitControls={fitToControls}
           focusControlIds={focusControlIds}
@@ -795,8 +824,8 @@ function MapPanelImpl({
         )}
       </div>
 
-      {/* Map info — below the map */}
-      {!hideToolbar && <div className="flex items-center justify-between mt-1.5 px-0.5">
+      {/* Map info — below the map (course editor only) */}
+      {showMapInfo && !hideToolbar && <div className="flex items-center justify-between mt-1.5 px-0.5">
         <div className="flex items-center gap-2">
           {mapInfo.data && (
             <span className="text-xs text-slate-400">{mapInfo.data.fileName}</span>
@@ -850,6 +879,7 @@ function MapPanelImpl({
         <div className="mt-1 text-xs text-red-600">{uploadError}</div>
       )}
       {libraryPicker}
+      {fullscreenOverlay}
     </div>
   );
 }

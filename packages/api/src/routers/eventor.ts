@@ -19,7 +19,10 @@ import { TRPCError } from "@trpc/server";
 import { router, publicProcedure, authedProcedure, manageProcedure } from "../trpc.js";
 import { getSetting, setSetting, prisma, sanitizeNameId, isReservedEventSlug } from "../db.js";
 import { grantSystemGroup } from "../permissions.js";
-import { SYSTEM_GROUP_IDS } from "@oxygen/shared";
+import {
+  SYSTEM_GROUP_IDS,
+  eventKindFromClassification,
+} from "@oxygen/shared";
 import {
   EventorAuthError,
   fetchEvents,
@@ -647,6 +650,7 @@ export const eventorRouter = router({
         eventId: z.number().int().positive(),
         eventName: z.string().min(1),
         eventDate: z.string().min(1),
+        classificationId: z.number().int().nonnegative(),
         organiserName: z.string().optional(),
         organiserId: z.number().int().optional(),
         env: z.enum(["prod", "test"]).default("prod"),
@@ -671,18 +675,42 @@ export const eventorRouter = router({
           message: `Slug "${nameId}" is reserved.`,
         });
       }
-      const event = await db.event.create({
-        data: {
-          nameId,
-          name: input.eventName,
-          date: new Date(input.eventDate),
-          eventorEventId: BigInt(input.eventId),
-          eventorEnv: input.env,
-          eventorLastSync: new Date(),
-          organizerName: input.organiserName ?? "",
-          organizerEventorId: input.organiserId ?? 0,
-        },
-        select: { id: true, nameId: true },
+      const event = await db.$transaction(async (tx) => {
+        const created = await tx.event.create({
+          data: {
+            nameId,
+            name: input.eventName,
+            date: new Date(input.eventDate),
+            kind: eventKindFromClassification(input.classificationId),
+            eventorEventId: BigInt(input.eventId),
+            eventorEnv: input.env,
+            eventorLastSync: new Date(),
+            organizerName: input.organiserName ?? "",
+            organizerEventorId: input.organiserId ?? 0,
+          },
+          select: { id: true, nameId: true },
+        });
+        await tx.eventorEventMeta.upsert({
+          where: { eventorEventId: input.eventId },
+          create: {
+            eventorEventId: input.eventId,
+            name: input.eventName,
+            startDate: new Date(input.eventDate),
+            classificationId: input.classificationId,
+            organiser: input.organiserName ?? "",
+            entryCount: entries.length,
+            fetchedAt: new Date(),
+          },
+          update: {
+            name: input.eventName,
+            startDate: new Date(input.eventDate),
+            classificationId: input.classificationId,
+            organiser: input.organiserName ?? "",
+            entryCount: entries.length,
+            fetchedAt: new Date(),
+          },
+        });
+        return created;
       });
       if (ctx.user) {
         await grantSystemGroup(db, {

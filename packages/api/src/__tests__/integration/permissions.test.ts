@@ -91,6 +91,20 @@ afterAll(async () => {
   await disconnect();
 });
 
+describe("event type permissions", () => {
+  it("allows event managers and rejects users without event.manage", async () => {
+    await expect(
+      callerFor(setter).event.updateType({ kind: "training" }),
+    ).rejects.toMatchObject({ code: "FORBIDDEN" });
+
+    const updated = await callerFor(admin).event.updateType({
+      kind: "other",
+      kindCustom: "Night cup",
+    });
+    expect(updated).toMatchObject({ kind: "other", kindCustom: "Night cup" });
+  });
+});
+
 describe("permission grant/revoke", () => {
   it("grant → list → revoke", async () => {
     const email = `extra-${suffix}@perms-test.example`;
