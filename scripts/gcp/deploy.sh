@@ -32,14 +32,25 @@ gcloud run deploy "$SERVICE" \
   --service-account="oxygen-run@${PROJECT_ID}.iam.gserviceaccount.com" \
   --add-cloudsql-instances="$SQL_CONNECTION" \
   --set-secrets="DATABASE_URL=oxygen-database-url:latest" \
-  --set-env-vars="^;^NODE_OPTIONS=--max-old-space-size=3328;DATABASE_POOL_MAX=10;AUTH_MODE=proxy;AUTH_HEADER=x-goog-authenticated-user-email;AUTH_AUTO_PROVISION=member;OXYGEN_ADMIN_EMAILS=${OXYGEN_ADMIN_EMAILS:-}" \
+  --set-env-vars="^;^NODE_OPTIONS=--max-old-space-size=3328;DATABASE_POOL_MAX=8;MAP_RENDER_CONCURRENCY=3;AUTH_MODE=proxy;AUTH_HEADER=x-goog-authenticated-user-email;AUTH_AUTO_PROVISION=member;OXYGEN_ADMIN_EMAILS=${OXYGEN_ADMIN_EMAILS:-}" \
   --memory=4Gi \
-  --cpu=1 \
+  --cpu=2 \
   --timeout=300 \
   --max-instances=2 \
   --min-instances=0 \
   --cpu-throttling \
   --no-allow-unauthenticated
+
+# `--max-instances` above is a *revision* setting. Cloud Run also keeps a
+# *service*-level cap (`run.googleapis.com/maxScale`) that is divided across
+# revisions and wins when the two disagree — and `gcloud run deploy` has no
+# flag for it, so a value set in the console survives every deploy silently.
+# Normalise it here so the connection budget below can't drift unnoticed.
+echo "── Normalising service-level max instances…"
+gcloud run services update "$SERVICE" \
+  --project="$PROJECT_ID" \
+  --region="$REGION" \
+  --max=2
 
 # The ^;^ prefix picks ';' as the env-var separator. The default ',' would
 # split a multi-admin OXYGEN_ADMIN_EMAILS list, and '@' splits inside every
@@ -51,10 +62,22 @@ gcloud run deploy "$SERVICE" \
 #    parsing a large club OCAD into an SVG DOM still spikes. The
 #    MAP_RASTER_* caps that used to be needed here are gone with the
 #    whole-map raster they bounded.
-#  - max-instances=2 + DATABASE_POOL_MAX=10: the ceiling here is Cloud
+#  - cpu=2 + MAP_RENDER_CONCURRENCY=3: tile rendering is the one
+#    CPU-bound thing this service does, and on one throttled vCPU a
+#    fresh club map takes minutes to fill. Two vCPUs let the render
+#    semaphore actually run in parallel. Three concurrent block renders
+#    at a few hundred MB each stay inside the 3328 MB old-space. Cost is
+#    ~zero: CPU is billed per vCPU-second of *request* time and club
+#    traffic sits far below the 180k vCPU-s/month free tier.
+#  - max-instances=2 + DATABASE_POOL_MAX=8: the ceiling here is Cloud
 #    SQL connections, not the code. A db-f1-micro allows 25 and reserves
-#    3 for superuser, so two instances at 10 each leaves room for the
-#    migration job. The background jobs that genuinely need one runner
+#    3 for superuser, leaving ~22, so two instances at 8 each use 16 and
+#    leave 6 for the migration job and an interactive psql. Do not raise
+#    this pair on f1-micro: at 2x10 the budget is 20/22, which has no
+#    headroom and fails as dropped connector TLS handshakes ("dial error:
+#    handshake failed ... EOF", Prisma P2010) rather than a clean
+#    "too many clients" — see docs/bugfix-cloud-sql-handshake-eof.md.
+#    The background jobs that genuinely need one runner
 #    (LiveResults push, ROC polling, journal shipping) elect a leader
 #    through oxygen.instance_lease, so extra instances only serve
 #    requests. To scale further, raise the Cloud SQL tier first —

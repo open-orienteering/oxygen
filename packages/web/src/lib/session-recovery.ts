@@ -6,7 +6,14 @@
  * a network-class error with no tRPC `data.code`. A full document
  * navigation refreshes the cookie; these helpers classify the failure
  * and guard against reload loops.
+ *
+ * Some IAP / proxy setups return the login page as same-origin HTML
+ * instead of a CORS-failing redirect. That becomes
+ * `Unexpected token '<', "<html><hea"... is not valid JSON` — also a
+ * session-class failure (see `isHtmlResponseError`).
  */
+
+import { isHtmlResponseError } from "./html-api-response";
 
 const RELOAD_KEY = "oxygen.sessionRecovery.lastReloadAt";
 const DEFAULT_MIN_INTERVAL_MS = 15_000;
@@ -26,6 +33,8 @@ export function isNetworkClassError(err: unknown): boolean {
       : typeof err === "string"
         ? err
         : String((err as { message?: unknown }).message ?? "");
+
+  if (isHtmlResponseError(err)) return true;
 
   return /failed to fetch|networkerror|load failed|network request failed|fetch failed/i.test(
     message,

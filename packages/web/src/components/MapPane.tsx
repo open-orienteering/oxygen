@@ -117,10 +117,9 @@ export function MapPane({
         visible ? "block" : "hidden"
       }`}
       style={{
-        height: "calc(100vh - 6rem)",
+        height: "calc(100vh - 7.75rem)",
       }}
-    >
-      <div
+    >      <div
         role="separator"
         aria-orientation="vertical"
         aria-label={t("resizeMapPane")}

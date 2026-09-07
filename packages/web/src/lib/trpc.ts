@@ -1,6 +1,7 @@
 import { createTRPCReact } from "@trpc/react-query";
 import { createTRPCClient, httpBatchLink } from "@trpc/client";
 import type { AppRouter } from "@oxygen/api";
+import { rejectHtmlApiResponse } from "./html-api-response";
 import { venueAwareFetch } from "./node-discovery";
 
 export const trpc = createTRPCReact<AppRouter>();
@@ -35,19 +36,26 @@ export function scopeTrpcUrl(url: string, nameId: string | null): string {
   return `${url}${separator}event=${encodeURIComponent(nameId)}`;
 }
 
+async function fetchJsonApi(
+  input: RequestInfo | URL,
+  init?: RequestInit,
+): Promise<Response> {
+  return rejectHtmlApiResponse(await venueAwareFetch(input, init));
+}
+
 export function eventScopedTrpcFetch(
   input: RequestInfo | URL,
   init?: RequestInit,
 ): Promise<Response> {
   const nameId = activeEventNameId();
   if (typeof input === "string") {
-    return venueAwareFetch(scopeTrpcUrl(input, nameId), init);
+    return fetchJsonApi(scopeTrpcUrl(input, nameId), init);
   }
   if (input instanceof URL) {
-    return venueAwareFetch(new URL(scopeTrpcUrl(input.href, nameId)), init);
+    return fetchJsonApi(new URL(scopeTrpcUrl(input.href, nameId)), init);
   }
-  if (!nameId) return venueAwareFetch(input, init);
-  return venueAwareFetch(
+  if (!nameId) return fetchJsonApi(input, init);
+  return fetchJsonApi(
     new Request(scopeTrpcUrl(input.url, nameId), input),
     init,
   );

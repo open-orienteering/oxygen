@@ -46,6 +46,7 @@ import {
   ocadBoundsToWgs84,
   tileBoundsWgs84,
   wgs84ToOcad,
+  withGrivationCorrection,
   type OcadCrs,
   type WGS84Bounds,
 } from "./map-projection.js";
@@ -55,6 +56,7 @@ import {
   boundsOfPoints,
   clampDensity,
   expectedTileCount,
+  missingBlocks,
   parseViewBox,
   quadDensity,
   tileRangeForBounds,
@@ -113,6 +115,18 @@ const svgLoadInFlight = new Map<bigint, Promise<MapSource>>();
 // De-dupes concurrent renders of the same block: a viewport fetches ~20
 // tiles at once, which is one or two blocks.
 const blockInFlight = new Map<string, Promise<Map<string, Buffer>>>();
+
+/**
+ * 1×1 fully transparent PNG — returned for empty / out-of-map tiles
+ * (was 204). RGBA(0,0,0,0); the previous constant here accidentally
+ * encoded RGBA(255,0,0,127) and painted red bands around every map
+ * (see docs/bugfix-red-empty-tiles.md). The integration test decodes
+ * the pixel to keep this honest.
+ */
+const TRANSPARENT_TILE_PNG = Buffer.from(
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVR4nGNgAAIAAAUAAXpeqz8AAAAASUVORK5CYII=",
+  "base64",
+);
 
 let renderGate: Semaphore | null = null;
 function gate(): Semaphore {
@@ -194,7 +208,7 @@ async function loadMapSource(
   const row = await prisma().mapFile.findFirst({
     where: { eventId },
     orderBy: { id: "desc" },
-    select: { fileData: true },
+    select: { fileData: true, rotationCorrection: true },
   });
   if (!row) throw new Error("No map file uploaded");
 
@@ -225,7 +239,12 @@ async function loadMapSource(
     exportHidden: false,
   }).outerHTML;
 
-  const crs = ocadFile.getCrs();
+  // Apply the same north/grivation correction used when deriving
+  // bounds / northOffset so tiles warp into true-north mercator.
+  const crs = withGrivationCorrection(
+    ocadFile.getCrs(),
+    row.rotationCorrection,
+  );
   const ocadBounds = ocadFile.getBounds();
   const mapWgs84 = ocadBoundsToWgs84(ocadBounds, crs);
   if (!mapWgs84) throw new Error("Map has no usable georeference");
@@ -306,7 +325,7 @@ async function rasterise(
 /**
  * Warp one tile out of a rendered window with bilinear sampling. Returns
  * null when the tile has no content at all (fully transparent), which the
- * caller turns into a 204.
+ * caller turns into a 200 transparent PNG.
  */
 async function sampleTile(
   quad: OcadQuad,
@@ -532,6 +551,76 @@ async function preCacheTiles(eventId: bigint, source: MapSource): Promise<void> 
   }
 }
 
+/**
+ * How many blocks one work-stealing chunk renders. Two is enough to
+ * make visible progress between 2 s polls without holding the progress
+ * response open long enough for the client to time out.
+ */
+const CHUNK_BLOCKS = 2;
+
+/** Serialises work-stealing chunks so overlapping polls don't pile up. */
+const chunkInFlight = new Set<bigint>();
+
+/**
+ * Render up to `CHUNK_BLOCKS` still-missing blocks, inline.
+ *
+ * Cloud Run throttles CPU to near zero outside request handling, so the
+ * detached `preCacheTiles` loop crawls once the burst of tile requests
+ * that started it dies down — exactly the situation right after an
+ * upload, when there is nothing left to request. Doing a bounded slice
+ * of the same work *inside* the progress request puts it back on the
+ * clock: each poll buys a couple of blocks, and a client sitting on the
+ * "Generating tiles…" overlay drives the map to completion by itself.
+ *
+ * Returns the number of tiles written so the caller can fold them into
+ * the progress figures it already read.
+ */
+async function preCacheChunk(eventId: bigint): Promise<number> {
+  if (!precacheEnabled() || chunkInFlight.has(eventId)) return 0;
+  chunkInFlight.add(eventId);
+  try {
+    const bounds = await storedBounds(eventId);
+    if (!bounds) return 0;
+
+    const db = prisma();
+    const size = blockTiles();
+    const maxZoom = precacheMaxZoom();
+    let written = 0;
+
+    for (let z = precacheMinZoom(); z <= maxZoom; z++) {
+      const range = tileRangeForBounds(bounds, z);
+      const expected =
+        (range.x1 - range.x0 + 1) * (range.y1 - range.y0 + 1);
+      const have = await db.mapTile.count({ where: { eventId, z } });
+      if (have >= expected) continue;
+
+      const rows = await db.mapTile.findMany({
+        where: { eventId, z },
+        select: { x: true, y: true },
+      });
+      const present = new Set(rows.map((r) => `${r.x}/${r.y}`));
+      const blocks = missingBlocks(range, size, present, CHUNK_BLOCKS);
+
+      const source = await getMapSource(eventId);
+      for (const { bx, by } of blocks) {
+        try {
+          const tiles = await renderBlock(eventId, source, z, bx, by, true);
+          written += tiles.size;
+        } catch (err) {
+          console.error(
+            `[map-tiles] chunk render failed at z=${z} block=${bx},${by}:`,
+            err,
+          );
+        }
+      }
+      return written;
+    }
+    return written;
+  } finally {
+    chunkInFlight.delete(eventId);
+  }
+}
+
 // ─── Progress ───────────────────────────────────────────────
 
 /**
@@ -592,6 +681,11 @@ export function registerMapTileRoutes(server: FastifyInstance): void {
   // "Generating tiles…" overlay. The event is identified by the
   // `x-competition-id` header so the call doesn't have to re-mint a
   // URL on every poll.
+  //
+  // The poll doubles as the pre-cache's engine: while rendering is
+  // incomplete it renders a bounded chunk before answering (see
+  // `preCacheChunk`), because a throttled Cloud Run instance gives the
+  // detached background loop almost no CPU between requests.
   server.get("/api/map-tile-progress", async (req, reply) => {
     const rawDbName = req.headers["x-competition-id"];
     const nameId =
@@ -603,6 +697,10 @@ export function registerMapTileRoutes(server: FastifyInstance): void {
     if (eventId === null) {
       return reply.send({ total: 0, done: 0, rendering: false });
     }
+    const progress = await tileProgress(eventId);
+    if (!progress.rendering) return reply.send(progress);
+
+    await preCacheChunk(eventId);
     return reply.send(await tileProgress(eventId));
   });
 
@@ -651,12 +749,14 @@ export function registerMapTileRoutes(server: FastifyInstance): void {
         const rendered = await renderBlock(eventId, source, z, x, y);
         const png = rendered.get(tileKey(z, x, y));
         if (!png) {
-          // Outside the map, or an empty tile — cache the "nothing here"
-          // answer for a week so the browser stops asking.
+          // Outside the map, or an empty tile — return a transparent PNG
+          // (not 204) so the client's <img>/fetch path treats it as a
+          // normal load. Caching the answer for a week keeps browsers
+          // from re-asking.
           return reply
+            .header("Content-Type", "image/png")
             .header("Cache-Control", "public, max-age=604800")
-            .code(204)
-            .send();
+            .send(TRANSPARENT_TILE_PNG);
         }
 
         // Fill the overview zooms in the background so the next viewer's

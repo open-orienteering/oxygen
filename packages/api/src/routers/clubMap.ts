@@ -2,10 +2,14 @@ import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import { router, authedProcedure } from "../trpc.js";
 import { prisma } from "../db.js";
-import { parseOcadMapMetadata } from "../event-map.js";
+import {
+  applyClubMapRotationCorrection,
+  resolveMapNorth,
+} from "../event-map.js";
 import { canDownloadClubLibraryMap } from "../ocad-export.js";
 import { renderOcadPreview } from "../club-map-preview.js";
 import type { WGS84Bounds } from "../map-projection.js";
+import type { NorthDetection } from "../map-north.js";
 import type { Prisma } from "../generated/prisma/client.js";
 
 function toId(id: bigint): number {
@@ -23,6 +27,9 @@ export const clubMapRouter = router({
         sizeBytes: true,
         scale: true,
         bounds: true,
+        northOffset: true,
+        rotationCorrection: true,
+        northDetection: true,
         uploadedAt: true,
         uploadedBy: true,
         uploader: { select: { email: true, displayName: true } },
@@ -35,6 +42,9 @@ export const clubMapRouter = router({
       sizeBytes: row.sizeBytes,
       scale: row.scale,
       bounds: (row.bounds as WGS84Bounds | null) ?? null,
+      northOffset: row.northOffset,
+      rotationCorrection: row.rotationCorrection,
+      northDetection: (row.northDetection as NorthDetection | null) ?? null,
       uploadedAt: row.uploadedAt.toISOString(),
       uploadedBy: row.uploadedBy,
       uploader: row.uploader,
@@ -51,7 +61,7 @@ export const clubMapRouter = router({
     )
     .mutation(async ({ ctx, input }) => {
       const buffer = Buffer.from(input.fileDataBase64, "base64");
-      const meta = await parseOcadMapMetadata(buffer);
+      const resolved = await resolveMapNorth(buffer);
       const previewPng = await renderOcadPreview(buffer);
       const name = input.name?.trim() || input.fileName;
       const row = await prisma().clubMapFile.create({
@@ -61,19 +71,61 @@ export const clubMapRouter = router({
           fileData: Uint8Array.from(buffer),
           previewPng: previewPng ? Uint8Array.from(previewPng) : undefined,
           sizeBytes: buffer.length,
-          scale: meta.scale,
-          bounds: (meta.bounds ?? undefined) as Prisma.InputJsonValue | undefined,
-          northOffset: meta.northOffset,
+          scale: resolved.metadata.scale,
+          bounds: (resolved.metadata.bounds ?? undefined) as
+            | Prisma.InputJsonValue
+            | undefined,
+          northOffset: resolved.metadata.northOffset,
+          rotationCorrection: resolved.rotationCorrection,
+          northDetection: resolved.northDetection
+            ? (resolved.northDetection as unknown as Prisma.InputJsonValue)
+            : undefined,
           uploadedBy: ctx.user?.id ?? null,
         },
-        select: { id: true, name: true, fileName: true, sizeBytes: true },
+        select: {
+          id: true,
+          name: true,
+          fileName: true,
+          sizeBytes: true,
+          rotationCorrection: true,
+        },
       });
       return {
         id: toId(row.id),
         name: row.name,
         fileName: row.fileName,
         sizeBytes: row.sizeBytes,
+        rotationCorrection: row.rotationCorrection,
       };
+    }),
+
+  /**
+   * Set a manual north/grivation correction on a club-library map.
+   * Re-derives bounds / northOffset. Events that already copied this
+   * map keep their own MapFile.rotationCorrection until re-copied.
+   */
+  setRotation: authedProcedure
+    .input(
+      z.object({
+        id: z.number().int().positive(),
+        degrees: z.number().min(-180).max(180),
+      }),
+    )
+    .mutation(async ({ input }) => {
+      try {
+        const result = await applyClubMapRotationCorrection(
+          prisma(),
+          BigInt(input.id),
+          input.degrees,
+        );
+        return { success: true as const, ...result };
+      } catch (err) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message:
+            err instanceof Error ? err.message : `Club map ${input.id} not found`,
+        });
+      }
     }),
 
   rename: authedProcedure
