@@ -62,6 +62,23 @@ export function SettingsPage() {
       void utils.clubMap.list.invalidate();
     },
   });
+  const setRotation = trpc.clubMap.setRotation.useMutation({
+    onSuccess: (_data, variables) => {
+      void utils.clubMap.list.invalidate();
+      // Drop the draft so the input reflects the refetched server value —
+      // keeping the draft would mask a failed/aborted save behind stale
+      // local state.
+      setRotationDrafts((prev) => {
+        const next = { ...prev };
+        delete next[variables.id];
+        return next;
+      });
+    },
+  });
+  const [rotationDrafts, setRotationDrafts] = useState<Record<number, string>>(
+    {},
+  );
+  const [rotationError, setRotationError] = useState<string | null>(null);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [dragOver, setDragOver] = useState(false);
@@ -302,6 +319,79 @@ export function SettingsPage() {
                         {new Date(row.uploadedAt).toLocaleString(i18n.language)}
                       </span>
                     </div>
+                    <div className="mt-3 flex flex-wrap items-center gap-2">
+                      <label
+                        htmlFor={`north-correction-${row.id}`}
+                        className="text-xs font-medium text-slate-700"
+                      >
+                        {t("northCorrection")}
+                      </label>
+                      <input
+                        id={`north-correction-${row.id}`}
+                        data-testid="library-map-north-correction"
+                        // Server-confirmed value; the visible value may be a
+                        // local draft. E2E waits on this for the round-trip.
+                        data-rotation-correction={String(
+                          row.rotationCorrection ?? 0,
+                        )}
+                        type="number"
+                        step="0.1"
+                        min={-180}
+                        max={180}
+                        value={
+                          rotationDrafts[row.id] ??
+                          String(row.rotationCorrection ?? 0)
+                        }
+                        onChange={(e) =>
+                          setRotationDrafts((prev) => ({
+                            ...prev,
+                            [row.id]: e.target.value,
+                          }))
+                        }
+                        aria-label={t("northCorrectionDegrees")}
+                        className="w-20 rounded-md border border-slate-200 px-1.5 py-0.5 text-xs"
+                      />
+                      <button
+                        type="button"
+                        data-testid="library-map-north-save"
+                        disabled={setRotation.isPending}
+                        className="px-2 py-0.5 text-xs rounded-md bg-slate-100 text-slate-700 hover:bg-slate-200 disabled:opacity-50 cursor-pointer"
+                        onClick={() => {
+                          const raw =
+                            rotationDrafts[row.id] ??
+                            String(row.rotationCorrection ?? 0);
+                          const degrees = Number(raw);
+                          if (!Number.isFinite(degrees)) {
+                            setRotationError(t("northCorrectionInvalid"));
+                            return;
+                          }
+                          setRotationError(null);
+                          setRotation.mutate({ id: row.id, degrees });
+                        }}
+                      >
+                        {setRotation.isPending
+                          ? t("northCorrectionSaving")
+                          : t("northCorrectionSave")}
+                      </button>
+                      {row.northDetection?.suggestedCorrectionDeg != null && (
+                        <span className="text-xs text-slate-400">
+                          {t("northCorrectionSuggested", {
+                            degrees:
+                              row.northDetection.suggestedCorrectionDeg.toFixed(
+                                1,
+                              ),
+                          })}
+                        </span>
+                      )}
+                    </div>
+                    <p className="mt-1 text-xs text-slate-400">
+                      {t("northCorrectionScope")}
+                    </p>
+                    {rotationError && (
+                      <div className="mt-1 text-xs text-red-600">
+                        {rotationError}
+                      </div>
+                    )}
                     <div className="mt-3 flex gap-2">
                       {canManageSource(row.uploadedBy) && (
                         <button

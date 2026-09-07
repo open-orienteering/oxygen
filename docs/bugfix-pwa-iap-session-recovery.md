@@ -25,8 +25,10 @@ the IAP cookie — matching the observed "reload fixes it instantly".
 ## Fix
 
 1. **`packages/web/src/lib/session-recovery.ts`** — classify network-class
-   vs `NOT_FOUND` errors; guard `location.reload()` with a sessionStorage
-   timestamp so a genuine outage cannot loop.
+   vs `NOT_FOUND` errors (including HTML-as-JSON login pages; see
+   [bugfix-map-upload-html-json.md](bugfix-map-upload-html-json.md));
+   guard `location.reload()` with a sessionStorage timestamp so a genuine
+   outage cannot loop.
 2. **`CompetitionShell`** — show "Event not found" only for `NOT_FOUND`;
    on network-class failure while online, show **Reconnecting…**, retry
    select once, then attempt a guarded reload. On `visibilitychange` →

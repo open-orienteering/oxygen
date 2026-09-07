@@ -225,6 +225,14 @@ describe("club map library", () => {
     });
     uploadedIds.push(BigInt(uploaded.id));
 
+    // Manual library correction must flow into the event MapFile.
+    await caller.clubMap.setRotation({ id: uploaded.id, degrees: 4.5 });
+    const clubRow = await ctx.db.clubMapFile.findUnique({
+      where: { id: BigInt(uploaded.id) },
+      select: { rotationCorrection: true, northOffset: true },
+    });
+    expect(clubRow!.rotationCorrection).toBe(4.5);
+
     await caller.control.create({ codes: "201", xpos: 10, ypos: 20 });
     await caller.control.create({ codes: "202", xpos: 40, ypos: 20 });
     const course = await caller.course.create({
@@ -254,6 +262,7 @@ describe("club map library", () => {
     expect(used.success).toBe(true);
     expect(used.fileName).toBe("event-copy.ocd");
     expect(used.size).toBe(buf.length);
+    expect(used.rotationCorrection).toBe(4.5);
 
     const mapRow = await ctx.db.mapFile.findFirst({
       where: { eventId: ctx.eventId },
@@ -261,6 +270,7 @@ describe("club map library", () => {
     expect(mapRow?.fileName).toBe("event-copy.ocd");
     expect(Buffer.from(mapRow!.fileData).equals(buf)).toBe(true);
     expect(mapRow!.fromClubLibrary).toBe(true);
+    expect(mapRow!.rotationCorrection).toBe(4.5);
     // Metadata is parsed once at apply time and persisted, so
     // course.mapMetadata never has to re-parse the OCAD blob per query
     // (a multi-second stall on real maps that made the SW's NetworkFirst
@@ -274,6 +284,7 @@ describe("club map library", () => {
     expect(meta!.scale).toBeGreaterThan(0);
     expect(meta!.bounds.north).toBeGreaterThan(meta!.bounds.south);
     expect(meta!.calibration!.length).toBeGreaterThanOrEqual(3);
+    expect(meta!.rotationCorrection).toBe(4.5);
 
     const tiles = await ctx.db.mapTile.count({ where: { eventId: ctx.eventId } });
     expect(tiles).toBe(0);
@@ -295,6 +306,12 @@ describe("club map library", () => {
     expect(replaced?.fileName).toBe("replaced.ocd");
     expect(replaced?.fromClubLibrary).toBe(false);
     expect(await ctx.db.mapFile.count({ where: { eventId: ctx.eventId } })).toBe(1);
+  });
+
+  it("setRotation rejects unknown club map ids", async () => {
+    await expect(
+      makeCaller().clubMap.setRotation({ id: 999_999_999, degrees: 1 }),
+    ).rejects.toMatchObject({ code: "NOT_FOUND" });
   });
 
   it("backfills metadata for a legacy map row on first mapMetadata read", async () => {

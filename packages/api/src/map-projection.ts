@@ -58,6 +58,42 @@ export interface OcadCrs {
   toProjectedCoord(coord: number[]): number[];
 }
 
+/**
+ * Return a CRS whose grivation is the file's own plus `correctionDeg`
+ * (degrees, clockwise positive). `toProjectedCoord` is reimplemented so
+ * it honors the corrected angle — spreading `{...crs, grivation}` would
+ * leave the original method closed over the file's grivation.
+ *
+ * Used for mis-georeferenced club maps whose drawing is magnetic-north-up
+ * but ScalePar declares a=0.
+ */
+export function withGrivationCorrection(
+  crs: OcadCrs,
+  correctionDeg: number,
+): OcadCrs {
+  if (!correctionDeg) return crs;
+  const grivation = crs.grivation + (correctionDeg * Math.PI) / 180;
+  const { easting, northing, scale, code, catalog } = crs;
+  return {
+    easting,
+    northing,
+    scale,
+    grivation,
+    code,
+    catalog,
+    toProjectedCoord([x, y]: number[]): number[] {
+      // Forward (matches ocad2geojson): rotate by -grivation, then
+      // scale hundredths-of-mm → meters and offset to grid origin.
+      const cosG = Math.cos(-grivation);
+      const sinG = Math.sin(-grivation);
+      const rx = x * cosG - y * sinG;
+      const ry = x * sinG + y * cosG;
+      const factor = scale / 100_000;
+      return [rx * factor + easting, ry * factor + northing];
+    },
+  };
+}
+
 export interface WGS84Bounds {
   north: number;
   south: number;

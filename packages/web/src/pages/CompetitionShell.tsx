@@ -351,6 +351,11 @@ function CompetitionShellInner() {
           <p className="text-slate-500 text-sm mb-4">
             {t("couldNotConnect", { nameId })}
           </p>
+          {selectFailedOther && selectError?.message ? (
+            <p className="text-xs text-slate-400 mb-4 max-w-md mx-auto break-words">
+              {selectError.message}
+            </p>
+          ) : null}
           <button
             onClick={() => navigate("/")}
             className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors cursor-pointer"

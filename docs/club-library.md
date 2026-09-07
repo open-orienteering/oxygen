@@ -14,9 +14,18 @@ tabs (Users, Maintenance) are instance-admin only and are described in
 
 Operators upload OCAD (`.ocd`) base maps once on **Settings → Maps**.
 Each row stores the file plus metadata parsed at upload (scale, WGS84 bounds,
-north offset) and a rendered PNG thumbnail. Existing rows render and persist
-their thumbnail on first view. Parse or render failure is non-fatal: the file
-is kept, scale/bounds stay empty, and the unavailable thumbnail is hidden.
+north offset, optional **north correction**) and a rendered PNG thumbnail.
+Import-time auto-detect (`map-north.ts`) suggests a rotation correction when
+magnetic-north lines are present and ScalePar under-reports grivation; the
+card exposes a single "North correction (°)" input to override it. The
+correction affects the GPS georeference only — on-screen orientation follows
+the map's drawn north lines automatically (`northOffset` fold, see
+[bugfix-map-north-correction.md](bugfix-map-north-correction.md)). Events
+copy the value when the map is added via **From club library**; changing it
+afterwards requires re-adding the map to the event. Existing
+rows render and persist their thumbnail on first view. Parse or render
+failure is non-fatal: the file is kept, scale/bounds stay empty, and the
+unavailable thumbnail is hidden.
 
 The list is global for the instance (one owning club). Anyone who can sign in
 can upload and rename. Download and delete are allowed for the uploader or an

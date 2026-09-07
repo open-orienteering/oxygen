@@ -273,17 +273,42 @@ test.describe("Wide-screen map pane (>=2200px viewport)", () => {
     await gotoControls(page);
     await waitForPaneVisible(page);
 
-    // Shrink → pane chrome disappears, MapSlot's inline fallback renders
-    // on the page instead.
     await page.setViewportSize(NARROW);
     await expect(page.getByTestId("map-pane")).toHaveCount(0);
     await expect(page.getByTestId("map-panel")).toHaveCount(1);
 
-    // Grow back → pane reappears with its own MapPanel.
     await page.setViewportSize(WIDE);
     await waitForPaneVisible(page);
     await expect(
       page.getByTestId("map-pane").getByTestId("map-panel"),
     ).toHaveCount(1);
+  });
+
+  test("sticky map pane fits inside the viewport without page scroll", async ({
+    page,
+  }) => {
+    await page.setViewportSize(WIDE);
+    await gotoControls(page);
+    await waitForPaneVisible(page);
+
+    // The sticky pane (top-24 + 7.5rem height) must land inside the
+    // viewport — otherwise a page scrollbar appears solely because the
+    // pane overflows past the shell's py-6 padding. Assert on the pane
+    // itself: the Controls table may legitimately make the document
+    // taller than the viewport.
+    const geometry = await page.evaluate(() => {
+      const pane = document.querySelector('[data-testid="map-pane"]');
+      if (!pane) return null;
+      const rect = pane.getBoundingClientRect();
+      return {
+        top: rect.top,
+        bottom: rect.bottom,
+        innerHeight: window.innerHeight,
+      };
+    });
+    expect(geometry).not.toBeNull();
+    expect(geometry!.top).toBeGreaterThanOrEqual(0);
+    // Allow a couple of CSS subpixels / borders (100vh vs innerHeight).
+    expect(geometry!.bottom).toBeLessThanOrEqual(geometry!.innerHeight + 2);
   });
 });
