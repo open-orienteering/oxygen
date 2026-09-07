@@ -6,6 +6,10 @@ import { fileToBase64 } from "../lib/file-to-base64";
 import { useCurrentUser } from "../context/CurrentUserContext";
 import { MapViewer, type ControlOverlay, type CourseOverlay, type MapViewerEditorProps } from "./MapViewer";
 import { useIsWideViewport } from "./map-pane-shared";
+import {
+  IconFullscreenEnter,
+  IconFullscreenExit,
+} from "./map-icons";
 
 /**
  * Public prop surface for `<MapPanel>`. Exported so the shell-owned
@@ -300,7 +304,6 @@ function MapPanelImpl({
       setUploadError(`Map upload failed: ${err.message}`);
     },
   });
-
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [dragOver, setDragOver] = useState(false);
   // Default to hiding unrelated controls when there's a highlighted selection
@@ -643,12 +646,13 @@ function MapPanelImpl({
         <button
           onClick={toggleFullscreen}
           className="text-xs px-2 py-1 rounded-md text-slate-500 hover:text-slate-700 hover:bg-slate-100 cursor-pointer"
-          title={isFullscreen ? "Exit fullscreen" : "Fullscreen"}
+          title={isFullscreen ? t("exitFullscreen") : t("enterFullscreen")}
+          aria-label={isFullscreen ? t("exitFullscreen") : t("enterFullscreen")}
         >
           {isFullscreen ? (
-            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 9V4.5M9 9H4.5M9 9L3.75 3.75M9 15v4.5M9 15H4.5M9 15l-5.25 5.25M15 9h4.5M15 9V4.5M15 9l5.25-5.25M15 15h4.5M15 15v4.5m0-4.5l5.25 5.25" /></svg>
+            <IconFullscreenExit className="w-4 h-4" />
           ) : (
-            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3.75 3.75v4.5m0-4.5h4.5m-4.5 0L9 9M3.75 20.25v-4.5m0 4.5h4.5m-4.5 0L9 15M20.25 3.75h-4.5m4.5 0v4.5m0-4.5L15 9m5.25 11.25h-4.5m4.5 0v-4.5m0 4.5L15 15" /></svg>
+            <IconFullscreenEnter className="w-4 h-4" />
           )}
         </button>
         {onPaneCollapse && (
@@ -825,42 +829,46 @@ function MapPanelImpl({
       </div>
 
       {/* Map info — below the map (course editor only) */}
-      {showMapInfo && !hideToolbar && <div className="flex items-center justify-between mt-1.5 px-0.5">
-        <div className="flex items-center gap-2">
-          {mapInfo.data && (
-            <span className="text-xs text-slate-400">{mapInfo.data.fileName}</span>
-          )}
+      {showMapInfo && !hideToolbar && (
+        <div className="mt-1.5 px-0.5 space-y-1.5">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              {mapInfo.data && (
+                <span className="text-xs text-slate-400">{mapInfo.data.fileName}</span>
+              )}
+            </div>
+            <div className="flex items-center gap-2">
+              {!isFullscreen && canFilter && !toolbar && (
+                <button
+                  onClick={() => setShowOnlyRelevant((v) => !v)}
+                  className={`text-xs px-2 py-1 rounded-md transition-colors cursor-pointer ${showOnlyRelevant
+                      ? "bg-purple-100 text-purple-700 font-medium"
+                      : "text-slate-500 hover:text-slate-700 hover:bg-slate-100"
+                    }`}
+                >
+                  {showOnlyRelevant ? t("showAllControls") : t("hideOtherControls")}
+                </button>
+              )}
+              <button
+                onClick={() => fileInputRef.current?.click()}
+                className="text-xs text-blue-600 hover:text-blue-800 cursor-pointer"
+              >
+                {t("replaceMap")}
+              </button>
+              {(clubMaps.data?.length ?? 0) > 0 && (
+                <button
+                  type="button"
+                  data-testid="use-club-map"
+                  onClick={() => setShowLibraryPicker(true)}
+                  className="text-xs text-blue-600 hover:text-blue-800 cursor-pointer"
+                >
+                  {tl("fromClubLibrary")}
+                </button>
+              )}
+            </div>
+          </div>
         </div>
-        <div className="flex items-center gap-2">
-          {!isFullscreen && canFilter && !toolbar && (
-            <button
-              onClick={() => setShowOnlyRelevant((v) => !v)}
-              className={`text-xs px-2 py-1 rounded-md transition-colors cursor-pointer ${showOnlyRelevant
-                  ? "bg-purple-100 text-purple-700 font-medium"
-                  : "text-slate-500 hover:text-slate-700 hover:bg-slate-100"
-                }`}
-            >
-              {showOnlyRelevant ? t("showAllControls") : t("hideOtherControls")}
-            </button>
-          )}
-          <button
-            onClick={() => fileInputRef.current?.click()}
-            className="text-xs text-blue-600 hover:text-blue-800 cursor-pointer"
-          >
-            {t("replaceMap")}
-          </button>
-          {(clubMaps.data?.length ?? 0) > 0 && (
-            <button
-              type="button"
-              data-testid="use-club-map"
-              onClick={() => setShowLibraryPicker(true)}
-              className="text-xs text-blue-600 hover:text-blue-800 cursor-pointer"
-            >
-              {tl("fromClubLibrary")}
-            </button>
-          )}
-        </div>
-      </div>}
+      )}
 
       <input
         ref={fileInputRef}

@@ -8,6 +8,7 @@ import {
   clampDensity,
   expectedTileCount,
   latToTileY,
+  missingBlocks,
   parseViewBox,
   quadDensity,
   tileRangeForBounds,
@@ -50,6 +51,50 @@ describe("blockRange", () => {
   it("handles an exact block boundary without adding an empty block", () => {
     expect(blockRange(4, 7, 4)).toEqual([4]);
     expect(blockRange(4, 8, 4)).toEqual([4, 8]);
+  });
+});
+
+describe("missingBlocks", () => {
+  const range = { x0: 0, x1: 3, y0: 0, y1: 3 };
+  const allKeys = (): Set<string> => {
+    const s = new Set<string>();
+    for (let x = 0; x <= 3; x++) for (let y = 0; y <= 3; y++) s.add(`${x}/${y}`);
+    return s;
+  };
+
+  it("returns nothing when every tile is present", () => {
+    expect(missingBlocks(range, 2, allKeys(), 4)).toEqual([]);
+  });
+
+  it("returns every block when the cache is empty", () => {
+    expect(missingBlocks(range, 2, new Set(), 4)).toEqual([
+      { bx: 0, by: 0 },
+      { bx: 0, by: 2 },
+      { bx: 2, by: 0 },
+      { bx: 2, by: 2 },
+    ]);
+  });
+
+  it("flags a block when a single tile inside it is missing", () => {
+    const have = allKeys();
+    have.delete("3/3");
+    expect(missingBlocks(range, 2, have, 4)).toEqual([{ bx: 2, by: 2 }]);
+  });
+
+  it("stops scanning once the limit is reached", () => {
+    expect(missingBlocks(range, 2, new Set(), 2)).toEqual([
+      { bx: 0, by: 0 },
+      { bx: 0, by: 2 },
+    ]);
+    expect(missingBlocks(range, 2, new Set(), 0)).toEqual([]);
+  });
+
+  it("ignores lattice cells that fall outside the range", () => {
+    // Block (2,2) extends to tile 3,3 but the range stops at 2,2 —
+    // the out-of-range corner must not count as missing.
+    const partial = { x0: 1, x1: 2, y0: 1, y1: 2 };
+    const have = new Set(["1/1", "1/2", "2/1", "2/2"]);
+    expect(missingBlocks(partial, 2, have, 4)).toEqual([]);
   });
 });
 

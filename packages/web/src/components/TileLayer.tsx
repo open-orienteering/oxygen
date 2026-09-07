@@ -1,17 +1,17 @@
 /**
  * Lightweight slippy-map tile renderer with smooth zoom transitions.
  *
- * Renders absolutely-positioned 256×256 PNG tiles from the server's
- * /api/map-tile/:z/:x/:y endpoint. Supports fractional zoom via CSS scaling.
- *
- * To prevent flickering during zoom transitions, tiles from the previous
- * integer zoom level are kept visible underneath until all new tiles load.
+ * Fetches tiles via a concurrency-capped queue (not bare `<img src>`) so
+ * large maps do not storm Cloud Run into 429s, and so failed tiles are
+ * retried with backoff instead of being blacklisted forever.
  */
 
-import { useState, useMemo, useRef, useCallback } from "react";
+import { useState, useMemo, useRef, useEffect, useCallback } from "react";
 import type { TileViewport } from "../lib/geo-utils";
 import { lngToTileX, latToTileY } from "../lib/geo-utils";
 import { kioskKeyFromUrl, tileQueryString } from "../lib/kiosk-key";
+import { TileFetcher } from "../lib/tile-fetcher";
+import { TileRetryBook } from "../lib/tile-retry";
 
 interface Props {
   viewport: TileViewport;
@@ -29,6 +29,8 @@ interface TileInfo {
   y: number;
   width: number;
   height: number;
+  /** Distance² from viewport centre in tile units — fetch priority. */
+  priority: number;
 }
 
 /** Identity for React/load/error state; event and map version are significant. */
@@ -49,7 +51,6 @@ function computeTiles(
   containerHeight: number,
   tileUrlBase: string,
   query: string,
-  failedTiles: Set<string>,
 ): TileInfo[] {
   if (containerWidth === 0 || containerHeight === 0) return [];
 
@@ -75,7 +76,6 @@ function computeTiles(
       const wrappedX = ((tx % maxTile) + maxTile) % maxTile;
 
       const key = tileRequestKey(tileUrlBase, query, z, wrappedX, ty);
-      if (failedTiles.has(key)) continue;
 
       // Snap tile placement to integer pixel boundaries so adjacent tiles
       // share an exact pixel column/row. At fractional zoom levels both the
@@ -90,6 +90,8 @@ function computeTiles(
       const top = Math.floor(y0);
       const width = Math.ceil(x0 + tileDisplaySize) - left;
       const height = Math.ceil(y0 + tileDisplaySize) - top;
+      const priority =
+        (tx + 0.5 - centerTileX) ** 2 + (ty + 0.5 - centerTileY) ** 2;
 
       result.push({
         key,
@@ -98,6 +100,7 @@ function computeTiles(
         y: top,
         width,
         height,
+        priority,
       });
     }
   }
@@ -111,8 +114,12 @@ export function TileLayer({
   tileUrlBase = "/api/map-tile",
   tileVersion,
 }: Props) {
-  const failedTiles = useRef(new Set<string>());
-  const [loadedKeys, setLoadedKeys] = useState(new Set<string>());
+  const fetcherRef = useRef<TileFetcher | null>(null);
+  if (!fetcherRef.current) fetcherRef.current = new TileFetcher();
+  const retryBookRef = useRef(new TileRetryBook());
+  const blobUrlsRef = useRef(new Map<string, string>());
+  const [blobUrls, setBlobUrls] = useState(new Map<string, string>());
+  const [tick, setTick] = useState(0);
   const query = useMemo(
     () => tileQueryString(tileVersion, kioskKeyFromUrl()),
     [tileVersion],
@@ -140,20 +147,106 @@ export function TileLayer({
 
   // Current zoom tiles
   const tiles = useMemo(
-    () => computeTiles(viewport, z, containerWidth, containerHeight, tileUrlBase, query, failedTiles.current),
-    [viewport, z, containerWidth, containerHeight, tileUrlBase, query],
+    () => computeTiles(viewport, z, containerWidth, containerHeight, tileUrlBase, query),
+    // tick forces recompute when a retry window opens
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [viewport, z, containerWidth, containerHeight, tileUrlBase, query, tick],
   );
 
   // Backdrop tiles from previous zoom — positioned for current viewport.
-  // computeTiles handles the math: subZoomScale = 2^(viewport.zoom - backdropZ)
-  // correctly positions old-zoom tiles at the current fractional zoom.
   const backdropTiles = useMemo(() => {
     if (backdropZ === null || backdropZ === z) return [];
     return computeTiles(viewport, backdropZ, containerWidth, containerHeight,
-      tileUrlBase, query, failedTiles.current);
-  }, [viewport, backdropZ, z, containerWidth, containerHeight, tileUrlBase, query]);
+      tileUrlBase, query);
+  }, [viewport, backdropZ, z, containerWidth, containerHeight, tileUrlBase, query, tick]);
 
-  const allCurrentLoaded = tiles.length > 0 && tiles.every(t => loadedKeys.has(t.key));
+  const publishBlob = useCallback((key: string, url: string) => {
+    const prev = blobUrlsRef.current.get(key);
+    if (prev && prev !== url) URL.revokeObjectURL(prev);
+    blobUrlsRef.current.set(key, url);
+    setBlobUrls(new Map(blobUrlsRef.current));
+  }, []);
+
+  const dropBlob = useCallback((key: string) => {
+    const prev = blobUrlsRef.current.get(key);
+    if (prev) {
+      URL.revokeObjectURL(prev);
+      blobUrlsRef.current.delete(key);
+      setBlobUrls(new Map(blobUrlsRef.current));
+    }
+  }, []);
+
+  // Fetch desired tiles; abort ones that left the viewport.
+  useEffect(() => {
+    const fetcher = fetcherRef.current!;
+    const retryBook = retryBookRef.current;
+    const now = Date.now();
+    const desired = new Map<string, TileInfo>();
+    for (const t of [...tiles, ...backdropTiles]) desired.set(t.key, t);
+
+    fetcher.cancelExcept(new Set(desired.keys()));
+
+    // Drop blob URLs for tiles that are long gone (keep a small cache of
+    // currently desired keys only — backdrop + current).
+    for (const key of [...blobUrlsRef.current.keys()]) {
+      if (!desired.has(key)) dropBlob(key);
+    }
+
+    const waitingKeys: string[] = [];
+    for (const tile of desired.values()) {
+      if (blobUrlsRef.current.has(tile.key)) continue;
+      const decision = retryBook.decision(tile.key, now);
+      if (decision.action === "wait") {
+        waitingKeys.push(tile.key);
+        continue;
+      }
+      const failures = retryBook.failures(tile.key);
+      const url =
+        failures > 0
+          ? `${tile.src}${tile.src.includes("?") ? "&" : "?"}r=${failures}`
+          : tile.src;
+
+      void fetcher
+        .enqueue({ key: tile.key, url, priority: tile.priority })
+        .then((result) => {
+          if (result.ok) {
+            retryBook.clear(tile.key);
+            // Effect may have attached multiple .then handlers while the
+            // same fetch was pending — only create one object URL.
+            if (!blobUrlsRef.current.has(tile.key)) {
+              publishBlob(tile.key, URL.createObjectURL(result.blob));
+            }
+            return;
+          }
+          if (result.aborted) return;
+          retryBook.recordFailure(tile.key, Date.now(), {
+            retryAfterHeader: result.retryAfter,
+          });
+          setTick((n) => n + 1);
+        });
+    }
+
+    const nextAt = retryBook.earliestRetryAt(waitingKeys, now);
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    if (nextAt != null) {
+      timer = setTimeout(() => setTick((n) => n + 1), Math.max(0, nextAt - now));
+    }
+    return () => {
+      if (timer) clearTimeout(timer);
+    };
+  }, [tiles, backdropTiles, publishBlob, dropBlob]);
+
+  // Revoke all blobs on unmount.
+  useEffect(() => {
+    return () => {
+      for (const url of blobUrlsRef.current.values()) URL.revokeObjectURL(url);
+      blobUrlsRef.current.clear();
+      fetcherRef.current?.cancelExcept(new Set());
+    };
+  }, []);
+
+  const allCurrentLoaded =
+    tiles.length > 0 && tiles.every((t) => blobUrls.has(t.key));
 
   // Once all current tiles are loaded, mark this zoom as loaded and clear backdrop
   if (allCurrentLoaded) {
@@ -163,15 +256,6 @@ export function TileLayer({
     }
   }
 
-  const handleLoad = useCallback((key: string) => {
-    setLoadedKeys(prev => {
-      if (prev.has(key)) return prev;
-      const next = new Set(prev);
-      next.add(key);
-      return next;
-    });
-  }, []);
-
   return (
     <div
       style={{
@@ -179,66 +263,55 @@ export function TileLayer({
         inset: 0,
         overflow: "hidden",
         pointerEvents: "none",
-        // Hide alt text and broken image icons for tiles that haven't loaded yet
         color: "transparent",
       }}
     >
-      {/* Backdrop: previous zoom tiles — visible until all current tiles load */}
-      {backdropTiles.map((tile) => (
-        <img
-          key={`bd-${tile.key}`}
-          src={tile.src}
-          alt=""
-          draggable={false}
-          decoding="async"
-          style={{
-            position: "absolute",
-            left: tile.x,
-            top: tile.y,
-            width: tile.width,
-            height: tile.height,
-            imageRendering: "auto",
-          }}
-          onLoad={(e) => {
-            const img = e.target as HTMLImageElement;
-            if (img.naturalWidth === 0) { img.style.display = "none"; failedTiles.current.add(tile.key); }
-            handleLoad(tile.key);
-          }}
-          onError={(e) => {
-            (e.target as HTMLImageElement).style.display = "none";
-            failedTiles.current.add(tile.key);
-            handleLoad(tile.key);
-          }}
-        />
-      ))}
-      {/* Current zoom tiles */}
-      {tiles.map((tile) => (
-        <img
-          key={tile.key}
-          src={tile.src}
-          alt=""
-          draggable={false}
-          decoding="async"
-          style={{
-            position: "absolute",
-            left: tile.x,
-            top: tile.y,
-            width: tile.width,
-            height: tile.height,
-            imageRendering: "auto",
-          }}
-          onLoad={(e) => {
-            const img = e.target as HTMLImageElement;
-            if (img.naturalWidth === 0) { img.style.display = "none"; failedTiles.current.add(tile.key); }
-            handleLoad(tile.key);
-          }}
-          onError={(e) => {
-            (e.target as HTMLImageElement).style.display = "none";
-            failedTiles.current.add(tile.key);
-            handleLoad(tile.key);
-          }}
-        />
-      ))}
+      {backdropTiles.map((tile) => {
+        const src = blobUrls.get(tile.key);
+        if (!src) return null;
+        return (
+          <img
+            key={`bd-${tile.key}`}
+            src={src}
+            // Blob URLs hide which tile an <img> shows; expose the API URL
+            // for tests and debugging.
+            data-tile-url={tile.src}
+            alt=""
+            draggable={false}
+            decoding="async"
+            style={{
+              position: "absolute",
+              left: tile.x,
+              top: tile.y,
+              width: tile.width,
+              height: tile.height,
+              imageRendering: "auto",
+            }}
+          />
+        );
+      })}
+      {tiles.map((tile) => {
+        const src = blobUrls.get(tile.key);
+        if (!src) return null;
+        return (
+          <img
+            key={tile.key}
+            src={src}
+            data-tile-url={tile.src}
+            alt=""
+            draggable={false}
+            decoding="async"
+            style={{
+              position: "absolute",
+              left: tile.x,
+              top: tile.y,
+              width: tile.width,
+              height: tile.height,
+              imageRendering: "auto",
+            }}
+          />
+        );
+      })}
     </div>
   );
 }

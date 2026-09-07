@@ -47,6 +47,14 @@ describe("isNetworkClassError", () => {
     expect(isNetworkClassError(null)).toBe(false);
     expect(isNetworkClassError(new Error("something else"))).toBe(false);
   });
+
+  it("treats HTML-as-JSON parse failures as session-class (IAP login page)", () => {
+    expect(
+      isNetworkClassError(
+        new SyntaxError(`Unexpected token '<', "<html><hea"... is not valid JSON`),
+      ),
+    ).toBe(true);
+  });
 });
 
 describe("isNotFoundError", () => {

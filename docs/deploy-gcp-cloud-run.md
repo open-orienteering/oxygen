@@ -8,7 +8,7 @@ when enabled directly on Cloud Run, no load balancer needed.
 ```
 allowlisted user ──Google sign-in──▶ IAP ──▶ Cloud Run "oxygen"        Eventor / ROC /
                                              (cloud image target)  ──▶ LiveResults /
-venue box ──SA ID token + secret──▶ IAP ──▶  1 vCPU / 4 GiB            Sheets (outbound)
+venue box ──SA ID token + secret──▶ IAP ──▶  2 vCPU / 4 GiB            Sheets (outbound)
                                                 │ /cloudsql unix socket
                                                 ▼
                                              Cloud SQL Postgres
@@ -21,7 +21,7 @@ Two operating modes, flipped with one command:
 | Mode           | Command                     | Billing                        | Timers (LiveResults/ROC) | Cost       |
 | -------------- | --------------------------- | ------------------------------ | ------------------------ | ---------- |
 | Idle (default) | `scripts/gcp/idle-mode.sh`  | Request-based, scales to zero  | Dormant                  | ~$0        |
-| Event          | `scripts/gcp/event-mode.sh` | Instance-based, min 1 instance | Running                  | ~$2.10/day |
+| Event          | `scripts/gcp/event-mode.sh` | Instance-based, min 1 instance | Running                  | ~$3.70/day |
 
 
 Map-making and admin work function fully in idle mode — the container cold
@@ -35,7 +35,7 @@ after the last one. Only the background timers need event mode.
 | ---------------------------------------------- | --------------- |
 | Cloud SQL db-f1-micro + 10 GB SSD + backups    | ~$10–12         |
 | Cloud Run, idle mode                           | ~$0 (free tier) |
-| Cloud Run, event mode                          | ~$2.10/day      |
+| Cloud Run, event mode                          | ~$3.70/day      |
 | IAP                                            | $0              |
 | Artifact Registry + egress                     | ~$1             |
 | **Typical month with one competition weekend** | **~$13–18**     |
@@ -176,7 +176,7 @@ scripts/gcp/idle-mode.sh    # after prize-giving: back to scale-to-zero
 
 In event mode the LiveResults pusher and ROC online-punch puller run
 continuously, exactly as in the docker-compose deployment. Forgetting
-idle-mode costs ~$63/month, so put it in the tear-down checklist.
+idle-mode costs ~$110/month, so put it in the tear-down checklist.
 
 ## Venue-box sync through IAP
 
@@ -270,6 +270,17 @@ have env overrides (`MAP_TILE_BLOCK_TILES`, `MAP_TILE_SUPERSAMPLE`,
 `MAP_WINDOW_MAX_PIXELS`); none needs setting in normal operation.
 The 4 GiB allocation is headroom for parsing a large club OCAD into an
 SVG DOM, which still spikes, not for the tiles themselves.
+- **`--cpu=2` and `MAP_RENDER_CONCURRENCY=3`.** Tile rendering is the
+only genuinely CPU-bound thing the service does, and on a single
+throttled vCPU a fresh club map took minutes to fill — the render
+semaphore had nothing to overlap onto. Two vCPUs let it run for real.
+The extra CPU is free in idle mode: request-based billing charges per
+vCPU-second of *request* time, and club traffic sits far under the
+180,000 vCPU-second monthly free tier. Event mode is instance-based and
+bills the whole instance lifetime, so the second vCPU costs
+$0.000018/vCPU-second there — about $1.55/day. That is the one place
+this setting shows up on a bill; flip back to idle mode after the
+weekend as usual.
   This replaced a design that rasterised the whole map into one bitmap
   and resampled every tile from it. That bitmap reached 3.2 GB (~6.5 GB
   peak) on a large map, OOM-killed the 4 GiB container — `Memory limit of
@@ -278,14 +289,42 @@ SVG DOM, which still spikes, not for the tiles themselves.
   also made deep zoom blurry. Both problems are gone; if you still have
   `MAP_RASTER_MAX_PIXELS` or `MAP_RASTER_CACHE_EVENTS` set on a revision,
   they are ignored and can be removed.
-- **`--max-instances=2` and `DATABASE_POOL_MAX=10`.** These two belong
+- **`--max-instances=2` and `DATABASE_POOL_MAX=8`.** These two belong
 together: the binding constraint on scale-out is Cloud SQL connections,
 not the application. A `db-f1-micro` allows 25 and reserves 3 for
-superuser use, and each instance opens up to `DATABASE_POOL_MAX`, so two
-instances at 10 leaves room for the migration job. To scale further,
-raise the Cloud SQL tier first (`db-g1-small` allows 50) and then raise
-both numbers together — raising `--max-instances` alone buys you
-`FATAL: sorry, too many clients already` under load.
+superuser use, leaving about 22. Each instance opens up to
+`DATABASE_POOL_MAX`, so two instances at 8 use 16 and leave 6 for the
+migration job and an interactive `psql`. To scale further, raise the
+Cloud SQL tier first (`db-g1-small` allows 50) and then raise both
+numbers together — raising `--max-instances` alone exhausts the budget.
+
+  **Budget the connections, and leave headroom.** The rule is
+  `max_instances × DATABASE_POOL_MAX + 6 ≤ (max_connections − 3)`. The
+  earlier pairing of `2 × 10` satisfied the limit arithmetically (20 of
+  22) but had no slack, and a shared-core instance at the edge does not
+  fail cleanly: instead of `FATAL: sorry, too many clients already` from
+  Postgres, the Cloud SQL connector's TLS handshake is dropped before it
+  reaches Postgres. What you see is
+  `dial error: handshake failed (connection name = …): EOF` in the Cloud
+  Run log and Prisma `P2010 DatabaseNotReachable`, while the instance
+  itself looks perfectly healthy (low CPU, no query errors, `RUNNABLE`).
+  See [bugfix-cloud-sql-handshake-eof.md](bugfix-cloud-sql-handshake-eof.md).
+
+  **Two different max-instances settings exist.** `--max-instances` is a
+  *revision* setting; Cloud Run also stores a *service*-level cap in the
+  `run.googleapis.com/maxScale` annotation, which is divided across
+  revisions and takes precedence when the two disagree. `gcloud run
+  deploy` cannot set it (there is no flag), so a value changed in the
+  console persists through every subsequent deploy even though the
+  revision still reports the old number. `deploy.sh` therefore follows
+  each deploy with `gcloud run services update --max=2`. To inspect both:
+
+  ```bash
+  gcloud run services describe oxygen --region=europe-north1 --format=export \
+    | grep -E 'maxScale|containerConcurrency'
+  # run.googleapis.com/maxScale: '2'        <- service level, wins
+  #   autoscaling.knative.dev/maxScale: '2' <- revision level
+  ```
   The code side no longer objects. Tiles are stateless (any instance can
   render any tile, and `/api/map-tile-progress` comes from the database),
   and the background jobs that must not run twice elect a single runner
@@ -298,8 +337,27 @@ requests. Tiles are then rendered purely on demand.
 - **Tile pre-caching after a map upload** renders thousands of tiles into
 `map_tiles` (visible as elevated Cloud SQL write throughput for a few
 minutes). In idle mode the background job only gets CPU while requests
-are in flight, so it finishes fastest if you keep the map open in a tab
-— or upload maps while in event mode.
+are in flight, which is why `/api/map-tile-progress` renders a couple of
+blocks itself on each poll: keeping the map open in a tab is what drives
+it to completion, and the polling client now keeps asking until the
+server reports it done. See
+[map-tile-rendering.md](map-tile-rendering.md#the-progress-poll-is-also-the-engine).
+Uploading while in event mode is still faster, since CPU is allocated
+continuously there.
+- **Cloud CDN for tiles: evaluated, deferred.** Tempting, because tiles
+are immutable per upload and dominate request volume. The blockers are
+cost and topology, not caching: Cloud CDN attaches only to a *global
+external Application Load Balancer* via a serverless NEG, which means a
+forwarding rule at $0.025/hour (~$18/month, versus ~$0 today for
+Cloud-Run-native IAP) and moving IAP off the Cloud Run integration onto
+the LB, with a URL-map split so `/api/map-tile/*` reaches a
+CDN-enabled backend while everything else stays behind IAP. That split
+also needs the tile route to carry its own unguessable token, since
+tile paths are enumerable `/api/map-tile/<event-slug>/z/x/y` — the
+per-event kiosk key (`randomBytes(24)`) is the existing building block.
+Worth revisiting if events start drawing many simultaneous viewers; the
+service-worker tile cache and the 2 vCPU bump cover club-scale use for
+nothing.
 - Cloud SQL `db-f1-micro` (0.6 GB shared core) is enough for club-scale
 events. If map blobs push the DB hard, `db-g1-small` (~$26/mo) is the
 next step up.

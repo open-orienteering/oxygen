@@ -38,6 +38,11 @@ export default defineConfig({
       workbox: {
         // Precache all built assets (JS, CSS, HTML)
         globPatterns: ["**/*.{js,css,html,svg,woff,woff2}"],
+        // Never serve the SPA shell for API calls. Without this denylist a
+        // navigation (or a Workbox fallback) to /trpc/... returns
+        // index.html and the tRPC client JSON.parse()s "<html><head>…".
+        navigateFallback: "index.html",
+        navigateFallbackDenylist: [/^\/trpc/, /^\/api/, /^\/health/],
         // Runtime caching for tRPC API calls
         runtimeCaching: [
           {
@@ -58,6 +63,31 @@ export default defineConfig({
               },
               cacheableResponse: {
                 statuses: [0, 200],
+              },
+            },
+          },
+          {
+            // Map tiles — immutable for a given upload, so CacheFirst.
+            // The `?v=<upload timestamp>` in every tile URL means a
+            // re-upload lands on fresh cache keys rather than needing
+            // invalidation, and the trailing slash keeps
+            // /api/map-tile-progress (which must stay live) out.
+            // Serving these from the SW takes IAP, Cloud Run and Cloud
+            // SQL out of the loop entirely on revisits.
+            urlPattern: (ctx: { sameOrigin: boolean; url: URL }) =>
+              ctx.sameOrigin && ctx.url.pathname.startsWith("/api/map-tile/"),
+            handler: "CacheFirst",
+            options: {
+              cacheName: "map-tiles",
+              expiration: {
+                maxEntries: 2000,
+                maxAgeSeconds: 7 * 24 * 60 * 60, // matches Cache-Control
+                purgeOnQuotaError: true,
+              },
+              cacheableResponse: {
+                // 200 only: a 401/403/5xx must not be cached as a tile,
+                // or the retry book never gets a chance to recover it.
+                statuses: [200],
               },
             },
           },

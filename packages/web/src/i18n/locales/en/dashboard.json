@@ -37,5 +37,14 @@
   "locateMe": "My location",
   "locateErrorDenied": "Location permission denied",
   "locateErrorUnsupported": "Location unavailable in this browser",
-  "locateErrorUnavailable": "Could not determine your location"
+  "locateErrorUnavailable": "Could not determine your location",
+  "undoMeasurePoint": "Remove last measure point",
+  "zoomIn": "Zoom in",
+  "zoomOut": "Zoom out",
+  "fitMap": "Fit map",
+  "measureDistance": "Measure distance",
+  "exitMeasure": "Exit measure",
+  "compassReset": "Reset map north",
+  "enterFullscreen": "Fullscreen",
+  "exitFullscreen": "Exit fullscreen"
 }

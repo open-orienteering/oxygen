@@ -16,6 +16,22 @@ import {
   buildAffineTransform,
 } from "../lib/geo-utils";
 import { rotatedBoundingBox } from "../lib/map-rotation";
+import {
+  shouldSuppressSyntheticMouse,
+  isMeasureTap,
+  dist2d,
+} from "../lib/measure-tap";
+import {
+  IconZoomIn,
+  IconZoomOut,
+  IconFitView,
+  IconRuler,
+  IconLocate,
+  IconCompass,
+  IconFullscreenEnter,
+  IconFullscreenExit,
+  IconUndo,
+} from "./map-icons";
 import { useGeolocationWatch } from "../hooks/useGeolocationWatch";
 import {
   accuracyRadiusPx,
@@ -185,7 +201,12 @@ export interface MapViewerEditorProps {
 interface Props {
   mapBounds?: WGS84Bounds | null;
   mapScale?: number | null;
-  /** Map north offset in degrees (bearing from true north to map north). Applied as CSS rotation. */
+  /**
+   * Bearing from true north to the map's display-up direction, degrees.
+   * The server folds the meridian-line tilt into this (see
+   * `metadataFromOcad`), so negating it puts the map's magnetic-north
+   * lines vertical on screen. Applied as CSS rotation.
+   */
   northOffset?: number | null;
   /** Map upload timestamp for cache busting tile URLs */
   mapVersion?: number;
@@ -352,28 +373,53 @@ export function MapViewer({
   const hasInitialFitRef = useRef(false);
   const lastFocusKeyRef = useRef<string>("");
 
-  // ─── Tile progress polling (while loading) ────────────────
+  // ─── Tile progress polling ────────────────────────────────
+  // Runs until the server reports the pre-cache complete, not just
+  // until the first tiles paint: the endpoint renders a chunk of the
+  // remaining blocks on each poll, so a viewer that stops asking leaves
+  // a freshly uploaded map half-rendered for the next one. The progress
+  // bar itself only shows in the pre-viewport branch below.
   const [tileProgress, setTileProgress] = useState<{ total: number; done: number; rendering: boolean } | null>(null);
+  const renderCompleteForRef = useRef<string | null>(null);
   useEffect(() => {
-    if (viewport) return; // already loaded, stop polling
     if (!mapBounds) return; // no map
-    const interval = setInterval(async () => {
+    if (renderCompleteForRef.current === (nameId ?? "")) return;
+
+    let cancelled = false;
+    // Chained timeouts, not setInterval: a poll that renders a chunk can
+    // outlast the interval, and overlapping polls would just queue.
+    let timer: ReturnType<typeof setTimeout>;
+    const tick = async () => {
       try {
         const headers: Record<string, string> = {};
         if (nameId) headers["x-competition-id"] = nameId;
         const kioskKey = kioskKeyFromUrl();
         if (kioskKey) headers["x-kiosk-key"] = kioskKey;
         const res = await fetch("/api/map-tile-progress", { headers });
-        if (res.ok) setTileProgress(await res.json());
+        if (res.ok) {
+          const progress = await res.json();
+          if (cancelled) return;
+          setTileProgress(progress);
+          if (!progress.rendering) {
+            renderCompleteForRef.current = nameId ?? "";
+            return;
+          }
+        }
       } catch { /* ignore */ }
-    }, 2000);
-    return () => clearInterval(interval);
-  }, [viewport, mapBounds]);
+      if (!cancelled) timer = setTimeout(tick, 2000);
+    };
+    timer = setTimeout(tick, 2000);
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, [mapBounds, nameId]);
 
   // ─── Measure tool state ──────────────────────────────────
   const [measuring, setMeasuring] = useState(false);
   const [measurePoints, setMeasurePoints] = useState<Pt[]>([]);
   const [measureCursor, setMeasureCursor] = useState<Pt | null>(null);
+  const [userBearing, setUserBearing] = useState(0);
 
   // ─── My-location (GPS) ───────────────────────────────────
   const [locateMode, setLocateMode] = useState<LocateMode>("off");
@@ -432,6 +478,7 @@ export function MapViewer({
 
   const mouseDownPosRef = useRef<Pt | null>(null);
   const lastClickTimeRef = useRef(0);
+  const lastClickPosRef = useRef<Pt | null>(null);
   const lastTouchRef = useRef<{ x: number; y: number; dist?: number } | null>(null);
   const touchGestureBaseRef = useRef<{
     x: number;
@@ -443,6 +490,11 @@ export function MapViewer({
   const pendingTouchGestureRef = useRef<{ x: number; y: number; dist: number } | null>(null);
   const touchStartPosRef = useRef<Pt | null>(null);
   const hadMultiTouchRef = useRef(false);
+  const lastTouchEndAtRef = useRef<number | null>(null);
+  const touchStartViewportCenterRef = useRef<Pt | null>(null);
+  const pinchStartAngleRef = useRef<number | null>(null);
+  const pinchStartBearingRef = useRef(0);
+  const rotateActivatedRef = useRef(false);
   const touchOnEditorTargetRef = useRef(false);
   const suppressEditorSelectionUntilRef = useRef(0);
 
@@ -514,8 +566,9 @@ export function MapViewer({
     return () => ro.disconnect();
   }, []);
 
-  // Map rotation: negate northOffset so map north points up on screen
-  const rotDeg = northOffset ? -northOffset : 0;
+  // Map rotation: negate northOffset so map north (the meridian-line
+  // direction when the file has one) points up on screen
+  const rotDeg = (northOffset ? -northOffset : 0) + userBearing;
   const rotRad = (rotDeg * Math.PI) / 180;
   // Effective render dimensions: minimum bounding box of a rectangle that
   // fully covers the outer container after rotation. See rotatedBoundingBox
@@ -663,17 +716,24 @@ export function MapViewer({
     [rotRad, containerSize, renderW, renderH],
   );
 
-  /** Convert screen pixel to map mm via affine. */
+  // Keep affine on a ref so touchend placement (native listeners) never
+  // samples a stale viewport/affine pair after a pan frame.
+  const affineRef = useRef(affine);
+  affineRef.current = affine;
+
+  /** Convert screen pixel to map mm via affine (always reads live refs). */
   const screenToMapMm = useCallback(
     (clientX: number, clientY: number): Pt | null => {
-      if (!viewport || !affine || !containerRef.current) return null;
+      const vp = viewportRef.current;
+      const af = affineRef.current;
+      if (!vp || !af || !containerRef.current) return null;
       const rect = containerRef.current.getBoundingClientRect();
       const { ix, iy } = screenToInner(clientX - rect.left, clientY - rect.top);
-      const { lat, lng } = pixelToLatlng(ix, iy, viewport, renderW, renderH);
-      const mm = affine.toMapMm(lat, lng);
+      const { lat, lng } = pixelToLatlng(ix, iy, vp, renderW, renderH);
+      const mm = af.toMapMm(lat, lng);
       return { x: mm.mapX, y: mm.mapY };
     },
-    [viewport, affine, renderW, renderH, screenToInner],
+    [renderW, renderH, screenToInner],
   );
 
   /** Convert map mm coords to screen pixel (in the rotated inner space). */
@@ -860,15 +920,31 @@ export function MapViewer({
     }
     isPanningRef.current = false;
     if (measuring && mouseDownPosRef.current) {
+      if (shouldSuppressSyntheticMouse(Date.now(), lastTouchEndAtRef.current)) {
+        mouseDownPosRef.current = null;
+        return;
+      }
+      const onButton = (e.target as HTMLElement).closest?.("button");
       const dx = Math.abs(e.clientX - mouseDownPosRef.current.x);
       const dy = Math.abs(e.clientY - mouseDownPosRef.current.y);
-      if (dx + dy < 5) {
+      if (dx + dy < 5 && !onButton) {
         const now = Date.now();
-        if (now - lastClickTimeRef.current < 300) {
+        // Double-click clears the rubber-band cursor (mouse/hover only).
+        // Require spatial proximity too: two quick clicks at *different*
+        // spots are two measure points, not a double-click — without the
+        // distance check a fast second click anywhere swallowed the point.
+        const lastPos = lastClickPosRef.current;
+        const isDoubleClick =
+          now - lastClickTimeRef.current < 300 &&
+          lastPos != null &&
+          Math.hypot(e.clientX - lastPos.x, e.clientY - lastPos.y) < 8;
+        if (isDoubleClick) {
           lastClickTimeRef.current = 0;
+          lastClickPosRef.current = null;
           setMeasureCursor(null);
         } else {
           lastClickTimeRef.current = now;
+          lastClickPosRef.current = { x: e.clientX, y: e.clientY };
           const pt = screenToMapMm(e.clientX, e.clientY);
           if (pt) setMeasurePoints((prev) => [...prev, pt]);
         }
@@ -909,7 +985,11 @@ export function MapViewer({
         if (!prev) return prev;
         const center = latlngToPixel(prev.centerLat, prev.centerLng, prev, rw, rh);
         const newCenter = pixelToLatlng(center.px - dx, center.py - dy, prev, rw, rh);
-        return { ...prev, centerLat: newCenter.lat, centerLng: newCenter.lng };
+        const next = { ...prev, centerLat: newCenter.lat, centerLng: newCenter.lng };
+        // Sync immediately so a tap on the same gesture frame sees the
+        // post-pan viewport (React state alone would still be stale).
+        viewportRef.current = next;
+        return next;
       });
     };
 
@@ -952,6 +1032,9 @@ export function MapViewer({
           y: midpointY,
           dist: distance,
         };
+        pinchStartAngleRef.current = Math.atan2(dy, dx);
+        pinchStartBearingRef.current = userBearing;
+        rotateActivatedRef.current = false;
         const baseViewport = viewportRef.current;
         if (baseViewport) {
           touchGestureBaseRef.current = {
@@ -970,6 +1053,14 @@ export function MapViewer({
       lastTouchRef.current = { x: t.clientX, y: t.clientY };
       touchStartPosRef.current = { x: t.clientX, y: t.clientY };
       touchOnEditorTargetRef.current = false;
+      if (viewportRef.current) {
+        touchStartViewportCenterRef.current = {
+          x: viewportRef.current.centerLng,
+          y: viewportRef.current.centerLat,
+        };
+      } else {
+        touchStartViewportCenterRef.current = null;
+      }
       if (allowOneFingerMapPan && !measuring) isPanningRef.current = true;
       if (measuring || allowOneFingerMapPan) e.preventDefault();
     };
@@ -1003,6 +1094,20 @@ export function MapViewer({
         const midY = (e.touches[0].clientY + e.touches[1].clientY) / 2;
         lastTouchRef.current = { x: midX, y: midY, dist };
         pendingTouchGestureRef.current = { x: midX, y: midY, dist };
+
+        // Two-finger rotate: activate after ~8° so plain pinch-zoom stays stable.
+        if (pinchStartAngleRef.current != null) {
+          const angle = Math.atan2(dy, dx);
+          let deltaDeg = ((angle - pinchStartAngleRef.current) * 180) / Math.PI;
+          if (deltaDeg > 180) deltaDeg -= 360;
+          if (deltaDeg < -180) deltaDeg += 360;
+          if (!rotateActivatedRef.current && Math.abs(deltaDeg) >= 8) {
+            rotateActivatedRef.current = true;
+          }
+          if (rotateActivatedRef.current) {
+            setUserBearing(pinchStartBearingRef.current + deltaDeg);
+          }
+        }
 
         // Touch hardware may emit substantially more than 60 move events per
         // second. Rendering every event is especially expensive when many
@@ -1124,22 +1229,31 @@ export function MapViewer({
         if (hadMultiTouchRef.current) {
           suppressEditorSelectionUntilRef.current = Date.now() + 400;
         }
-        if (measuring && touchStartPosRef.current && e.changedTouches.length > 0) {
+        lastTouchEndAtRef.current = Date.now();
+        // Touch has no hover: clear the rubber-band so a pan-end position
+        // never sticks as a phantom measure endpoint.
+        if (measuring) setMeasureCursor(null);
+        if (measuring && touchStartPosRef.current && e.changedTouches.length > 0 && !hadMultiTouchRef.current) {
           const t = e.changedTouches[0];
-          const dx = Math.abs(t.clientX - touchStartPosRef.current.x);
-          const dy = Math.abs(t.clientY - touchStartPosRef.current.y);
-          if (dx + dy < 10) {
-            const now = Date.now();
-            if (now - lastClickTimeRef.current < 300) {
-              lastClickTimeRef.current = 0;
-              setMeasureCursor(null);
-            } else {
-              lastClickTimeRef.current = now;
-              const pt = screenToMapMm(t.clientX, t.clientY);
-              if (pt) setMeasurePoints((prev) => [...prev, pt]);
-            }
+          const fingerMovementPx = dist2d(
+            touchStartPosRef.current,
+            { x: t.clientX, y: t.clientY },
+          );
+          let viewportCenterDeltaPx = 0;
+          const startCenter = touchStartViewportCenterRef.current;
+          const vp = viewportRef.current;
+          if (startCenter && vp) {
+            // Approximate geo-center drift in CSS pixels at current zoom.
+            const a = latlngToPixel(startCenter.y, startCenter.x, vp, renderW || 1, renderH || 1);
+            const b = latlngToPixel(vp.centerLat, vp.centerLng, vp, renderW || 1, renderH || 1);
+            viewportCenterDeltaPx = Math.hypot(a.px - b.px, a.py - b.py);
+          }
+          if (isMeasureTap({ fingerMovementPx, viewportCenterDeltaPx })) {
+            const pt = screenToMapMm(t.clientX, t.clientY);
+            if (pt) setMeasurePoints((prev) => [...prev, pt]);
           }
         }
+        touchStartViewportCenterRef.current = null;
         if (
           editor && !measuring && !hadMultiTouchRef.current &&
           !touchOnEditorTargetRef.current &&
@@ -2012,16 +2126,31 @@ export function MapViewer({
       total += mmToMeters(mapMmDist(measurePoints[measurePoints.length - 1], measureCursor));
     }
     return (
-      <div style={{
-        position: "absolute", top: 8, left: "50%", transform: "translateX(-50%)",
-        background: "rgba(255,255,255,0.9)", borderRadius: 6, padding: "4px 12px",
-        fontSize: 13, fontWeight: 600, color: "#1e3a8a", boxShadow: "0 1px 4px rgba(0,0,0,0.15)", zIndex: 10,
-      }}>
+      <button
+        type="button"
+        data-testid="measure-undo"
+        onMouseDown={(e) => e.stopPropagation()}
+        onTouchStart={(e) => e.stopPropagation()}
+        onClick={(e) => {
+          e.stopPropagation();
+          setMeasurePoints((prev) => prev.slice(0, -1));
+        }}
+        title={t("undoMeasurePoint")}
+        aria-label={t("undoMeasurePoint")}
+        className="cursor-pointer"
+        style={{
+          position: "absolute", top: 8, left: "50%", transform: "translateX(-50%)",
+          background: "rgba(255,255,255,0.9)", borderRadius: 6, padding: "4px 12px",
+          fontSize: 13, fontWeight: 600, color: "#1e3a8a", boxShadow: "0 1px 4px rgba(0,0,0,0.15)", zIndex: 10,
+          display: "flex", alignItems: "center", gap: 6, border: "none",
+        }}
+      >
+        <IconUndo className="w-4 h-4" />
         {formatDist(total)} · {measurePoints.length} pt{measurePoints.length > 1 ? "s" : ""}
-      </div>
+      </button>
     );
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [measuring, measurePoints, measureCursor, mapScale]);
+  }, [measuring, measurePoints, measureCursor, mapScale, t]);
 
   // ─── Render ───────────────────────────────────────────
 
@@ -2246,6 +2375,9 @@ export function MapViewer({
       data-center-lat={viewport?.centerLat}
       data-center-lng={viewport?.centerLng}
       data-zoom={viewport?.zoom}
+      data-user-bearing={userBearing}
+      data-measure-points={measurePoints.length}
+      data-measure-cursor={measureCursor ? "1" : "0"}
       className={`relative overflow-hidden select-none bg-white ${hideControls ? "" : "rounded-lg border border-slate-200"} ${className}`}
       style={{
         cursor: hideControls ? "default"
@@ -2402,34 +2534,42 @@ export function MapViewer({
           position: "absolute", bottom: 12, right: 12, display: "flex", flexDirection: "column", gap: 4, zIndex: 10,
         }}>
           <button
+            type="button"
             onClick={() => {
               breakLocateFollow();
               setViewport((prev) => prev ? { ...prev, zoom: Math.min(22, prev.zoom + 0.5) } : prev);
             }}
-            className="w-8 h-8 bg-white rounded shadow hover:bg-slate-50 flex items-center justify-center text-slate-600 font-bold text-lg"
-            title="Zoom in"
-          >+</button>
+            className="w-8 h-8 bg-white rounded shadow hover:bg-slate-50 flex items-center justify-center text-slate-600"
+            title={t("zoomIn")}
+            aria-label={t("zoomIn")}
+          >
+            <IconZoomIn className="w-4 h-4" />
+          </button>
           <button
+            type="button"
             onClick={() => {
               breakLocateFollow();
               setViewport((prev) => prev ? { ...prev, zoom: Math.max(1, prev.zoom - 0.5) } : prev);
             }}
-            className="w-8 h-8 bg-white rounded shadow hover:bg-slate-50 flex items-center justify-center text-slate-600 font-bold text-lg"
-            title="Zoom out"
-          >−</button>
+            className="w-8 h-8 bg-white rounded shadow hover:bg-slate-50 flex items-center justify-center text-slate-600"
+            title={t("zoomOut")}
+            aria-label={t("zoomOut")}
+          >
+            <IconZoomOut className="w-4 h-4" />
+          </button>
           <button
+            type="button"
             onClick={() => {
               if (mapBounds) setViewport(fitBounds(mapBounds, containerSize.w, containerSize.h, 0.05));
             }}
-            className="w-8 h-8 bg-white rounded shadow hover:bg-slate-50 flex items-center justify-center"
-            title="Reset view"
+            className="w-8 h-8 bg-white rounded shadow hover:bg-slate-50 flex items-center justify-center text-slate-600"
+            title={t("fitMap")}
+            aria-label={t("fitMap")}
           >
-            <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth={1.8} className="w-4 h-4 text-slate-600">
-              <path d="M3 7V3h4M13 3h4v4M17 13v4h-4M7 17H3v-4" strokeLinecap="round" strokeLinejoin="round" />
-              <rect x="7" y="7" width="6" height="6" rx="0.5" fill="currentColor" opacity="0.3" />
-            </svg>
+            <IconFitView className="w-4 h-4" />
           </button>
           <button
+            type="button"
             onClick={() => {
               setMeasuring((prev) => {
                 if (prev) { setMeasurePoints([]); setMeasureCursor(null); }
@@ -2437,12 +2577,11 @@ export function MapViewer({
               });
             }}
             className={`w-8 h-8 rounded shadow flex items-center justify-center ${measuring ? "bg-blue-500 text-white" : "bg-white hover:bg-slate-50 text-slate-600"}`}
-            title="Measure distance"
+            title={t("measureDistance")}
+            aria-label={measuring ? t("exitMeasure") : t("measureDistance")}
+            aria-pressed={measuring}
           >
-            <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth={1.5} className="w-4 h-4">
-              <path d="M3 17L17 3" strokeLinecap="round" />
-              <path d="M6 14l1.5-1.5M9 11l1.5-1.5M12 8l1.5-1.5" strokeLinecap="round" />
-            </svg>
+            <IconRuler className="w-4 h-4" />
           </button>
           <button
             type="button"
@@ -2459,23 +2598,34 @@ export function MapViewer({
             aria-label={t("locateMe")}
             aria-pressed={locateMode !== "off"}
           >
-            <svg viewBox="0 0 20 20" fill="currentColor" className="w-4 h-4">
-              <path fillRule="evenodd" d="M10 3.5a.75.75 0 01.75.75v1.042a5.252 5.252 0 014.0 4.0H16.5a.75.75 0 010 1.5h-1.042a5.252 5.252 0 01-4.0 4.0V16.5a.75.75 0 01-1.5 0v-1.042a5.252 5.252 0 01-4.0-4.0H3.5a.75.75 0 010-1.5h1.042a5.252 5.252 0 014.0-4.0V4.25A.75.75 0 0110 3.5zm0 3.25a3.25 3.25 0 100 6.5 3.25 3.25 0 000-6.5zM10 9a1 1 0 100 2 1 1 0 000-2z" clipRule="evenodd" />
-            </svg>
+            <IconLocate className="w-4 h-4" />
           </button>
+          {userBearing !== 0 && (
+            <button
+              type="button"
+              data-testid="compass-reset"
+              onClick={() => setUserBearing(0)}
+              className="w-8 h-8 bg-white rounded shadow hover:bg-slate-50 flex items-center justify-center text-slate-600"
+              title={t("compassReset")}
+              aria-label={t("compassReset")}
+              style={{ transform: `rotate(${userBearing}deg)` }}
+            >
+              <IconCompass className="w-4 h-4" />
+            </button>
+          )}
           {onToggleFullscreen && (
             <button
+              type="button"
               onClick={onToggleFullscreen}
               className="w-8 h-8 bg-white rounded shadow hover:bg-slate-50 flex items-center justify-center text-slate-600"
-              title={isFullscreen ? "Exit fullscreen" : "Fullscreen"}
+              title={isFullscreen ? t("exitFullscreen") : t("enterFullscreen")}
+              aria-label={isFullscreen ? t("exitFullscreen") : t("enterFullscreen")}
             >
-              <svg viewBox="0 0 20 20" fill="currentColor" className="w-4 h-4">
-                {isFullscreen ? (
-                  <path fillRule="evenodd" d="M3.28 2.22a.75.75 0 00-1.06 1.06L5.44 6.5H2.75a.75.75 0 000 1.5h4.5a.75.75 0 00.75-.75v-4.5a.75.75 0 00-1.5 0v2.69L3.28 2.22zm13.44 0a.75.75 0 10-1.06 1.06L18.88 6.5h-2.69a.75.75 0 000 1.5h4.5a.75.75 0 00.75-.75v-4.5a.75.75 0 00-1.5 0v2.69L16.72 2.22zM3.28 17.78a.75.75 0 001.06 1.06L7.56 15.5h-2.69a.75.75 0 010-1.5h4.5a.75.75 0 01.75.75v4.5a.75.75 0 01-1.5 0v-2.69L3.28 17.78zm13.44 0a.75.75 0 11-1.06 1.06L12.44 15.5h2.69a.75.75 0 010-1.5h-4.5a.75.75 0 01-.75.75v4.5a.75.75 0 011.5 0v-2.69l3.22 3.22z" clipRule="evenodd" />
-                ) : (
-                  <path fillRule="evenodd" d="M4.25 2A2.25 2.25 0 002 4.25v2a.75.75 0 001.5 0v-2a.75.75 0 01.75-.75h2a.75.75 0 000-1.5h-2zm9.5 0a.75.75 0 000 1.5h2a.75.75 0 01.75.75v2a.75.75 0 001.5 0v-2A2.25 2.25 0 0015.75 2h-2zM3.5 13.75a.75.75 0 00-1.5 0v2A2.25 2.25 0 004.25 18h2a.75.75 0 000-1.5h-2a.75.75 0 01-.75-.75v-2zm15 0a.75.75 0 00-1.5 0v2a.75.75 0 01-.75.75h-2a.75.75 0 000 1.5h2A2.25 2.25 0 0018.5 15.75v-2z" clipRule="evenodd" />
-                )}
-              </svg>
+              {isFullscreen ? (
+                <IconFullscreenExit className="w-4 h-4" />
+              ) : (
+                <IconFullscreenEnter className="w-4 h-4" />
+              )}
             </button>
           )}
         </div>
