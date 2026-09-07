@@ -89,6 +89,46 @@ export function blockRange(
   return origins;
 }
 
+/**
+ * The first `limit` blocks in `range` that still have at least one tile
+ * missing from `have` (a set of `"x/y"` keys at this zoom).
+ *
+ * Used by the work-stealing progress endpoint to pick up where the
+ * background pre-cache left off. Scanning stops as soon as `limit`
+ * blocks are found, so a mostly-complete zoom costs a short walk rather
+ * than a full sweep of a deep tile range.
+ */
+export function missingBlocks(
+  range: TileRange,
+  blockSize: number,
+  have: ReadonlySet<string>,
+  limit: number,
+): Array<{ bx: number; by: number }> {
+  const found: Array<{ bx: number; by: number }> = [];
+  if (limit <= 0) return found;
+
+  for (const bx of blockRange(range.x0, range.x1, blockSize)) {
+    for (const by of blockRange(range.y0, range.y1, blockSize)) {
+      const xEnd = Math.min(bx + blockSize - 1, range.x1);
+      const yEnd = Math.min(by + blockSize - 1, range.y1);
+      let incomplete = false;
+      for (let x = Math.max(bx, range.x0); x <= xEnd && !incomplete; x++) {
+        for (let y = Math.max(by, range.y0); y <= yEnd; y++) {
+          if (!have.has(`${x}/${y}`)) {
+            incomplete = true;
+            break;
+          }
+        }
+      }
+      if (incomplete) {
+        found.push({ bx, by });
+        if (found.length >= limit) return found;
+      }
+    }
+  }
+  return found;
+}
+
 export function boundsOfPoints(
   points: OcadPoint[],
   marginUnits = 0,

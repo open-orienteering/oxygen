@@ -82,4 +82,37 @@ test.describe("club map library", () => {
       timeout: 15000,
     });
   });
+
+  test("north correction input on Settings → Maps saves a library rotation", async ({
+    page,
+  }) => {
+    await page.goto("/");
+    await page.getByTestId("settings-link").click();
+    await expect(page.getByTestId("library-tab-maps")).toBeVisible({
+      timeout: 15000,
+    });
+
+    await page.getByTestId("library-map-upload").setInputFiles("e2e/test.ocd");
+    const card = page.locator('[data-testid^="library-map-card-"]').first();
+    await expect(card).toBeVisible({ timeout: 20000 });
+    const input = card.getByTestId("library-map-north-correction");
+    await expect(input).toBeVisible();
+    await input.fill("4.5");
+    await card.getByTestId("library-map-north-save").click();
+    // Wait for the *server-confirmed* value, not the local draft — the
+    // input echoes the draft immediately, so asserting the value alone
+    // let page.reload() abort the still-in-flight mutation (flake).
+    await expect(input).toHaveAttribute("data-rotation-correction", "4.5", {
+      timeout: 15000,
+    });
+    await expect(input).toHaveValue("4.5");
+    // Round-trip after reload.
+    await page.reload();
+    await expect(
+      page
+        .locator('[data-testid^="library-map-card-"]')
+        .first()
+        .getByTestId("library-map-north-correction"),
+    ).toHaveValue("4.5");
+  });
 });

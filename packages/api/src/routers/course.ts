@@ -32,6 +32,7 @@ import {
 import { fireMapUpload } from "../db.js";
 import {
   applyEventMap,
+  applyMapRotationCorrection,
   parseOcadMapMetadata,
   type MapCalibrationPoint,
 } from "../event-map.js";
@@ -818,6 +819,7 @@ export const courseRouter = router({
         bounds: true,
         northOffset: true,
         calibration: true,
+        rotationCorrection: true,
       },
     });
     if (!row) return null;
@@ -828,6 +830,7 @@ export const courseRouter = router({
     let calibration = row.calibration as unknown as
       | MapCalibrationPoint[]
       | null;
+    const rotationCorrection = row.rotationCorrection;
 
     const isLegacyRow =
       scale === null &&
@@ -840,7 +843,10 @@ export const courseRouter = router({
         select: { fileData: true },
       });
       if (!blob) return null;
-      const meta = await parseOcadMapMetadata(Buffer.from(blob.fileData));
+      const meta = await parseOcadMapMetadata(
+        Buffer.from(blob.fileData),
+        rotationCorrection,
+      );
       if (meta.scale === null && meta.bounds === null) return null;
       ({ scale, bounds, northOffset, calibration } = meta);
       await ctx.db.mapFile.update({
@@ -863,6 +869,7 @@ export const courseRouter = router({
       bounds,
       northOffset,
       calibration,
+      rotationCorrection,
       uploadedAt: row.uploadedAt.getTime(),
     };
   }),
@@ -1113,6 +1120,33 @@ export const courseRouter = router({
     }),
 
   /**
+   * Set a manual north/grivation correction (degrees, clockwise positive)
+   * for the current event map. Re-derives bounds / northOffset /
+   * calibration and clears tile caches.
+   */
+  setMapRotation: coursesEditProcedure
+    .input(
+      z.object({
+        degrees: z.number().min(-180).max(180),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      try {
+        const result = await applyMapRotationCorrection(
+          ctx.db,
+          ctx.event.id,
+          input.degrees,
+        );
+        return { success: true as const, ...result };
+      } catch (err) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: err instanceof Error ? err.message : "No map file uploaded",
+        });
+      }
+    }),
+
+  /**
    * Copy a club-library OCAD file into this event. The event keeps its
    * own blob; later library edits do not affect it.
    */
@@ -1121,7 +1155,11 @@ export const courseRouter = router({
     .mutation(async ({ ctx, input }) => {
       const row = await ctx.db.clubMapFile.findUnique({
         where: { id: BigInt(input.clubMapId) },
-        select: { fileName: true, fileData: true },
+        select: {
+          fileName: true,
+          fileData: true,
+          rotationCorrection: true,
+        },
       });
       if (!row) {
         throw new TRPCError({
@@ -1134,7 +1172,10 @@ export const courseRouter = router({
         ctx.event.id,
         row.fileName,
         Buffer.from(row.fileData),
-        { fromClubLibrary: true },
+        {
+          fromClubLibrary: true,
+          rotationCorrection: row.rotationCorrection,
+        },
       );
       return { success: true as const, ...result };
     }),

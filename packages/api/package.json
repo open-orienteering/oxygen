@@ -38,6 +38,7 @@
     "dotenv": "^17.4.2",
     "fast-xml-parser": "^5.10.1",
     "fastify": "^5.12.0",
+    "geomagnetism": "^0.2.0",
     "google-auth-library": "^11.0.2",
     "jsdom": "^30.0.1",
     "mysql2": "^3.23.3",

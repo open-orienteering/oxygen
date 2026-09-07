@@ -941,6 +941,11 @@ model ClubMapFile {
   scale       Float?
   bounds      Json?
   northOffset Float?   @map("north_offset")
+  /// Extra grivation (degrees, clockwise positive) — same semantics as
+  /// MapFile.rotationCorrection. Copied into the event MapFile on use.
+  rotationCorrection Float @default(0) @map("rotation_correction")
+  /// Diagnostic from import-time north detection (declination, meridian…).
+  northDetection Json? @map("north_detection")
   uploadedBy  String?  @map("uploaded_by") @db.Uuid
   uploadedAt  DateTime @default(now()) @map("uploaded_at") @db.Timestamptz(6)
   updatedAt   DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
@@ -1013,6 +1018,12 @@ model MapFile {
   bounds      Json?
   northOffset Float?   @map("north_offset")
   calibration Json?
+  /// Extra grivation (degrees, clockwise positive) applied on top of the
+  /// OCAD file's own angle. Used when the drawing is magnetic-north-up
+  /// but ScalePar declares a=0 — common for Swedish club exports.
+  rotationCorrection Float @default(0) @map("rotation_correction")
+  /// Diagnostic from import-time north detection (declination, meridian…).
+  northDetection Json? @map("north_detection")
   /// True when this blob was copied from `club_map_files`. Club maps
   /// stay club property even after an event adopts them, so downloads
   /// and event backups of those rows require an instance admin.

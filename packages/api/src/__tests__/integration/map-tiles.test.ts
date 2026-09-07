@@ -9,7 +9,7 @@
  *   - rendering one tile fills its whole block, since the renderer
  *     rasterises a window covering a block at a time
  *   - deep zoom renders on demand (the zoom range the pre-cache skips)
- *   - an off-bounds tile returns 204
+ *   - an off-bounds tile returns a 200 transparent PNG
  *   - an unknown event slug returns 404
  *   - `/api/map-tile-progress` reports counts derived from the map's
  *     stored bounds and the `map_tiles` rows, not from process state
@@ -214,16 +214,39 @@ describe("map-tile endpoint", () => {
     );
   }, 60_000);
 
-  it("returns 204 for a tile that's entirely outside the map bounds", async () => {
+  it("returns a transparent PNG for a tile that's entirely outside the map bounds", async () => {
     // Equator @ z=10: definitely not overlapping a Stockholm map.
     const res = await server.inject({
       method: "GET",
       url: `/api/map-tile/${ctx.nameId}/10/0/512`,
     });
-    expect([204, 200]).toContain(res.statusCode);
-    if (res.statusCode === 204) {
-      expect(res.rawPayload.length).toBe(0);
+    expect(res.statusCode).toBe(200);
+    expect(res.headers["content-type"]).toBe("image/png");
+    expect(res.rawPayload.slice(0, 8)).toEqual(
+      Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+    );
+    // Decode the actual pixel: it must be fully transparent. A previous
+    // version of the placeholder constant accidentally encoded
+    // RGBA(255,0,0,127) and painted red bands around every map.
+    const { inflateSync } = await import("node:zlib");
+    const png = res.rawPayload;
+    let pos = 8;
+    let pixel: Buffer | null = null;
+    while (pos < png.length) {
+      const len = png.readUInt32BE(pos);
+      const type = png.subarray(pos + 4, pos + 8).toString("ascii");
+      if (type === "IHDR") {
+        expect(png.readUInt32BE(pos + 8)).toBe(1); // width
+        expect(png.readUInt32BE(pos + 12)).toBe(1); // height
+      }
+      if (type === "IDAT") {
+        const raw = inflateSync(png.subarray(pos + 8, pos + 8 + len));
+        pixel = raw.subarray(1, 5); // skip scanline filter byte
+      }
+      pos += 12 + len;
     }
+    expect(pixel).not.toBeNull();
+    expect(Array.from(pixel!)).toEqual([0, 0, 0, 0]);
   });
 
   it("reports progress from the database, not from process state", async () => {
@@ -258,6 +281,54 @@ describe("map-tile endpoint", () => {
     expect(body.done).toBeGreaterThan(0);
     expect(body.rendering).toBe(body.done < body.total);
   });
+
+  it("advances the pre-cache from the progress poll alone", async () => {
+    // Cloud Run throttles CPU outside request handling, so the detached
+    // background loop stalls once tile requests stop. The progress
+    // endpoint therefore renders a bounded chunk itself. Proven here by
+    // never requesting a tile: nothing calls `kickOffPreCache`, so any
+    // progress at all can only have come from the poll.
+    const other = await createTestEvent("map_tiles_chunk");
+    const saved = process.env.MAP_TILE_PRECACHE;
+    process.env.MAP_TILE_PRECACHE = "on";
+    try {
+      await other.db.mapFile.create({
+        data: {
+          eventId: other.eventId,
+          fileName: "test.ocd",
+          fileData: readFileSync(FIXTURE),
+          bounds: mapBounds,
+        },
+      });
+
+      const poll = async () => {
+        const res = await server.inject({
+          method: "GET",
+          url: "/api/map-tile-progress",
+          headers: { "x-competition-id": other.nameId },
+        });
+        expect(res.statusCode).toBe(200);
+        return res.json() as {
+          total: number;
+          done: number;
+          rendering: boolean;
+        };
+      };
+
+      const first = await poll();
+      expect(first.total).toBeGreaterThan(0);
+      expect(first.done).toBeGreaterThan(0);
+      expect(first.rendering).toBe(true);
+
+      // Each poll picks up where the last left off rather than redoing
+      // the same block.
+      const second = await poll();
+      expect(second.done).toBeGreaterThan(first.done);
+    } finally {
+      process.env.MAP_TILE_PRECACHE = saved;
+      await other.cleanup();
+    }
+  }, 90_000);
 
   it("pre-caches the overview zooms in the background until complete", async () => {
     // The pre-cache is kicked off from the cache-hit path too, so a

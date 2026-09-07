@@ -429,7 +429,9 @@ test.describe.serial("mobile layout", () => {
 });
 
 async function expectCurrentEventTile(viewer: Locator, nameId: string) {
-  const tiles = viewer.locator(`img[src*="/api/map-tile/${nameId}/"]`);
+  // Tiles are fetched into blob: URLs, so the API URL lives on a data
+  // attribute rather than src (see TileLayer).
+  const tiles = viewer.locator(`img[data-tile-url*="/api/map-tile/${nameId}/"]`);
   await expect(tiles.first()).toBeAttached({ timeout: 30_000 });
   await expect
     .poll(() => tiles.evaluateAll(

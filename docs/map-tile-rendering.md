@@ -27,7 +27,7 @@ tiles around it, writes them all back, and serves the one asked for.
 
 | Route | Purpose |
 |---|---|
-| `GET /api/map-tile/:nameId/:z/:x/:y` | One 256×256 PNG. 204 when the tile is outside the map, 404 for an unknown event. |
+| `GET /api/map-tile/:nameId/:z/:x/:y` | One 256×256 PNG. Empty / out-of-map tiles return a **200 transparent PNG** (not 204; see `docs/bugfix-red-empty-tiles.md` for the time the "transparent" pixel was red). 404 for an unknown event. 500 on render failure. |
 | `GET /api/map-tile-progress` | Pre-cache progress for the event in the `x-competition-id` header. |
 
 Both are guarded by `assertRestAccess` with the `courses.view` capability
@@ -162,6 +162,28 @@ A map whose georeference could not be parsed has no stored bounds and
 reports `{ total: 0, done: 0, rendering: false }`, which the frontend
 renders as a plain spinner rather than a progress bar.
 
+### The progress poll is also the engine
+
+On Cloud Run the container's CPU is throttled to near zero whenever no
+request is in flight, so the detached `preCacheTiles` loop above makes
+almost no progress between requests. That bites hardest right after an
+upload, when there is no traffic left to keep the instance awake and the
+map most needs filling.
+
+So the progress endpoint steals work. When it finds rendering
+incomplete it renders up to `CHUNK_BLOCKS` (2) still-missing blocks
+inline before answering, picking them with `missingBlocks()` over the
+rows already present at that zoom. The work now happens inside a request
+lifetime, on the clock. `MapViewer` keeps polling every 2 s until the
+server reports `rendering: false` — past first paint, not just while the
+loading overlay is up — so one viewer opening a new map drives it to
+completion for everyone after.
+
+Two guards keep this from compounding: a per-event `chunkInFlight` flag
+serialises overlapping polls, and the client chains `setTimeout` rather
+than using `setInterval`, so a poll that spends a second rendering does
+not stack up behind the next tick.
+
 ## Configuration
 
 All optional; the defaults in `map-render-limits.ts` suit both a dev
@@ -171,7 +193,7 @@ machine and a 4 GiB container.
 |---|---|---|
 | `MAP_TILE_BLOCK_TILES` | 4 | Tiles per side per window. Larger amortises the SVG parse further but squares the memory. |
 | `MAP_TILE_SUPERSAMPLE` | 2 | Window density relative to the tiles. 1 is cheaper and slightly softer. |
-| `MAP_RENDER_CONCURRENCY` | 2 | Concurrent rasterisations per process. |
+| `MAP_RENDER_CONCURRENCY` | 2 | Concurrent rasterisations per process. Cloud Run runs 3 (see `scripts/gcp/deploy.sh`), which its 2 vCPUs can actually overlap. |
 | `MAP_SVG_CACHE_EVENTS` | 4 | Parsed map SVGs held in memory. |
 | `MAP_WINDOW_MAX_PIXELS` | 64M | Backstop against a pathological projection; normally never binds. |
 | `MAP_TILE_PRECACHE` | `on` | `off` disables background pre-rendering. |
@@ -182,6 +204,85 @@ Peak render memory is roughly
 `4 bytes × (blockTiles × 256 × supersample × √2)² × concurrency`, about
 300 MB at the defaults.
 
+## North correction
+
+Some OCAD files declare ScalePar `a=0` while the drawing is rotated
+relative to true north. Projection code already honours the file's
+grivation, so those maps need a stored override:
+
+- Columns `map_files.rotation_correction` and
+  `club_map_files.rotation_correction` (degrees, CW positive).
+- Import-time auto-detect in `map-north.ts`:
+  `suggested = declination + trueNorthFromGrid − declaredGrivation − meridianTilt`
+  (~1.7° for Nackareservatet — not the physics-only 4.5°/5°, and not
+  the earlier unverified ~11°). The meridian-tilt term matters because
+  the drawn 601.x north lines are the ground truth and can be tilted
+  inside the paper drawing (3.3° at Nacka). Meridian clusters also gate
+  auto-apply.
+- `withGrivationCorrection` in `map-projection.ts` adds the correction
+  to grivation and reimplements `toProjectedCoord`.
+- `parseOcadMapMetadata` / `resolveMapNorth` and `loadMapSource` all
+  apply the wrapper, so bounds, `northOffset`, calibration, and tile
+  warps stay consistent.
+- **Display vs georeference:** the correction only fixes the
+  georeference (GPS overlays). On-screen uprightness comes from
+  `northOffset`, which `metadataFromOcad` computes as the bearing of
+  the *display-up* direction — the meridian-line direction when the
+  file has one, else paper +Y. The viewer rotates by `-northOffset`,
+  so meridian lines render vertical regardless of the correction
+  value. (Changing the correction alone can never straighten the map:
+  it rotates the tiles and `northOffset` by the same amount, which
+  cancels on screen.)
+- Admin UI: single input on **Settings → Maps** (`clubMap.setRotation`).
+  `course.useClubMap` copies the library correction into the event.
+  `course.setMapRotation` remains for ops/API. See
+  `docs/bugfix-map-north-correction.md`.
+
+## Client tile loading
+
+`TileLayer` does **not** use bare `<img src>` — that hid HTTP status and
+let a viewport fire ~20–30 uncapped requests, which on Cloud Run
+(`--max-instances=2`) produced 429 storms. Worse, the old client
+blacklisted every failed key forever in a `failedTiles` Set, so one
+429 blanked that tile for the session.
+
+Current behaviour (`tile-fetcher.ts` + `tile-retry.ts`):
+
+| Condition | Behaviour |
+|---|---|
+| Empty / out-of-map | Server 200 transparent PNG — normal success |
+| 429 | Back off, honour `Retry-After` when present |
+| 500 / network error | Back off 2s → 10s → 30s → 60s |
+| Concurrency | Max 12 fetches in flight, nearest-to-centre first |
+| Scroll-out | `AbortController` cancels queued/in-flight work |
+| Success | Object URL; retry state cleared |
+
+The concurrency cap bounds connection pressure, not render load: a
+cached tile is one indexed read, and an uncached one queues behind the
+server's own render semaphore however many the client asks for.
+
+Not every 429 comes from tile load. Cloud Run also returns 429 at the
+admission layer when instances are saturated for unrelated reasons — an
+exhausted Cloud SQL connection budget makes every request hang until the
+300 s timeout, which jams admission and produces 429s on static assets
+too. If you see 429 on `/api/version` or `/manifest.webmanifest`, the
+cause is not the tile pipeline; see
+[bugfix-cloud-sql-handshake-eof.md](bugfix-cloud-sql-handshake-eof.md).
+
+### Service-worker cache
+
+The PWA caches `/api/map-tile/…` with Workbox `CacheFirst` (cache
+`map-tiles`, 2000 entries, 7 days — matching the `Cache-Control` the
+route sends). A revisit therefore paints without touching IAP, Cloud
+Run or Cloud SQL at all.
+
+No invalidation is needed: every tile URL carries `?v=<upload
+timestamp>`, so re-uploading a map lands on fresh cache keys and the old
+entries age out. Only 200s are cached — caching a 401 or 5xx as a tile
+would strand it permanently, since the retry book never gets to see it.
+The rule matches `/api/map-tile/` with the trailing slash so
+`/api/map-tile-progress` stays live.
+
 ## Tests
 
 - `packages/api/src/__tests__/map-window.test.ts` — window and tile
@@ -189,6 +290,16 @@ Peak render memory is roughly
   root viewBox.
 - `packages/api/src/__tests__/map-render-limits.test.ts` — setting
   parsing, cache eviction, semaphore.
+- `packages/api/src/__tests__/map-projection-correction.test.ts` —
+  grivation correction composition and OCAD ↔ WGS84 round-trip.
+- `packages/api/src/__tests__/map-north.test.ts` — declination /
+  convergence formula and meridian clustering.
+- `packages/web/src/lib/__tests__/tile-retry.test.ts` — backoff,
+  Retry-After, concurrency cap, abort.
 - `packages/api/src/__tests__/integration/map-tiles.test.ts` — the
   routes end to end against `e2e/test.ocd`: render, cache hit, whole
-  block cached, deep zoom on demand, progress from the database.
+  block cached, deep zoom on demand, progress from the database, and
+  the progress poll advancing the pre-cache with no tile request to
+  trigger the background loop.
+- `packages/api/src/__tests__/integration/map-rotation.test.ts` —
+  `setMapRotation` re-derives metadata and drops tiles.
