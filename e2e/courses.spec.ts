@@ -1,6 +1,7 @@
 import { test, expect } from "@playwright/test";
 import { readFileSync } from "node:fs";
 import { reseed } from "./helpers/reseed";
+import { uploadEventMap } from "./helpers/map-upload";
 
 test.beforeAll(reseed);
 
@@ -131,6 +132,7 @@ test.describe("Courses Page", () => {
     await clickTab(page, "Courses");
     await expect(page.getByText("3 courses")).toBeVisible({ timeout: 10000 });
 
+    await page.getByTestId("course-export-menu").click();
     const link = page.getByTestId("course-export-link");
     await expect(link).toBeVisible();
 
@@ -151,13 +153,39 @@ test.describe("Courses Page", () => {
     expect(xml).toContain("<CourseName>Bana 2</CourseName>");
   });
 
+  test("should export all courses as Purple Pen .ppen", async ({ page }) => {
+    await selectCompetition(page);
+    await clickTab(page, "Courses");
+    await expect(page.getByText("3 courses")).toBeVisible({ timeout: 10000 });
+
+    await page.getByTestId("course-export-menu").click();
+    const link = page.getByTestId("course-export-ppen");
+    await expect(link).toBeVisible();
+
+    const [download] = await Promise.all([
+      page.waitForEvent("download"),
+      link.click(),
+    ]);
+    expect(download.suggestedFilename()).toBe("itest-courses.ppen");
+
+    const path = await download.path();
+    expect(path).toBeTruthy();
+    const xml = readFileSync(path!, "utf-8");
+    expect(xml).toContain("<course-scribe-event>");
+    expect(xml).toContain("<title>My example tävling</title>");
+    // Seed controls may be unplaced (0,0); courses with no placed
+    // sites are omitted. Placement + sequences are covered by the
+    // API integration suite.
+    expect(xml).toContain('scale="');
+  });
+
   test("should import courses from OCAD OCD file (Replace-all default; toggle off to append)", async ({ page }) => {
     await selectCompetition(page);
     await clickTab(page, "Courses");
     await expect(page.getByText("3 courses")).toBeVisible({ timeout: 10000 });
 
     await page.getByRole("button", { name: "Import courses" }).click();
-    await expect(page.getByText("Import Courses (IOF XML or OCAD OCD)")).toBeVisible();
+    await expect(page.getByText("Import Courses (IOF XML, Purple Pen, or OCAD)")).toBeVisible();
 
     const fileChooserPromise = page.waitForEvent("filechooser");
     await page.getByRole("button", { name: "Browse files" }).click();
@@ -211,5 +239,87 @@ test.describe("Courses Page", () => {
 
     await page.getByRole("button", { name: "Done" }).click();
     await expect(page.getByText("8 courses")).toBeVisible({ timeout: 5000 });
+  });
+
+  test("should import courses from a Purple Pen .ppen file", async ({ page }) => {
+    await selectCompetition(page);
+    await clickTab(page, "Courses");
+    // Runs after the OCD append import in this suite (3 seed + 5 OCD).
+    await expect(page.getByText("8 courses")).toBeVisible({ timeout: 10000 });
+
+    await page.getByRole("button", { name: "Import courses" }).click();
+    await expect(
+      page.getByText("Import Courses (IOF XML, Purple Pen, or OCAD)"),
+    ).toBeVisible();
+
+    const fileChooserPromise = page.waitForEvent("filechooser");
+    await page.getByRole("button", { name: "Browse files" }).click();
+    const fileChooser = await fileChooserPromise;
+    await fileChooser.setFiles("e2e/fixtures/ppen-import.ppen");
+
+    const errorMsg = page.locator(".text-red-700");
+    await Promise.race([
+      expect(page.getByText("Courses and Class Assignments")).toBeVisible({
+        timeout: 20000,
+      }),
+      expect(errorMsg)
+        .toBeVisible({ timeout: 20000 })
+        .then(async () => {
+          throw new Error("Preview failed: " + (await errorMsg.innerText()));
+        }),
+    ]);
+
+    await expect(page.getByRole("cell", { name: "E2E Ppen", exact: true }).first()).toBeVisible();
+
+    const replaceAll = page.getByTestId("course-import-replace-all");
+    await expect(replaceAll).toBeChecked();
+    await replaceAll.uncheck();
+
+    await page.getByRole("button", { name: "Import 1 course" }).click();
+    await expect(page.getByText("Import Complete")).toBeVisible({ timeout: 15000 });
+    await expect(page.getByText("1 courses created")).toBeVisible();
+
+    await page.getByRole("button", { name: "Done" }).click();
+    await expect(page.getByText("9 courses")).toBeVisible({ timeout: 5000 });
+    await expect(page.getByText("E2E Ppen")).toBeVisible();
+  });
+
+  test("should warn and skip positions when a .ppen belongs to another map", async ({
+    page,
+  }) => {
+    // The map upload renders tiles server-side, so this one needs room.
+    test.setTimeout(120_000);
+    await selectCompetition(page);
+    await clickTab(page, "Courses");
+    await expect(page.getByText("9 courses")).toBeVisible({ timeout: 10000 });
+
+    // Purple Pen coordinates only mean something against a map, so the
+    // event needs one before the alignment check can say anything.
+    await uploadEventMap(page);
+    await expect(page.getByTestId("map-viewer")).toBeVisible({ timeout: 60000 });
+
+    await page.getByRole("button", { name: "Import courses" }).click();
+    const fileChooserPromise = page.waitForEvent("filechooser");
+    await page.getByRole("button", { name: "Browse files" }).click();
+    await (await fileChooserPromise).setFiles("e2e/fixtures/ppen-other-map.ppen");
+
+    await expect(page.getByTestId("course-import-map-mismatch-banner")).toBeVisible({
+      timeout: 20000,
+    });
+    await expect(page.getByTestId("course-import-map-mismatch-banner")).toContainText(
+      "annan-karta.ocd",
+    );
+    // Dropping the unusable positions is the default for a mismatch.
+    await expect(page.getByTestId("course-import-skip-positions")).toBeChecked();
+
+    await page.getByTestId("course-import-replace-all").uncheck();
+    await page.getByRole("button", { name: "Import 1 course" }).click();
+    await expect(page.getByText("Import Complete")).toBeVisible({ timeout: 15000 });
+    await expect(
+      page.getByTestId("course-import-skipped-positions-note"),
+    ).toBeVisible();
+
+    await page.getByRole("button", { name: "Done" }).click();
+    await expect(page.getByText("10 courses")).toBeVisible({ timeout: 5000 });
   });
 });

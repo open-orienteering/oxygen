@@ -1,17 +1,18 @@
 /**
- * Course export endpoint (IOF 3.0 CourseData XML).
+ * Course export endpoints (IOF 3.0 CourseData XML and Purple Pen `.ppen`).
  *
- * `GET /api/export/course-data?name=<nameId>` returns every course of the
- * event as an attachment. The intended use is round-tripping to Condes /
- * Purple Pen / OCAD for printing, and re-importing into another Oxygen
- * event.
+ * `GET /api/export/course-data?name=<nameId>&format=iofxml|ppen` returns
+ * every course of the event as an attachment. Default format is `iofxml`
+ * (for Condes / Purple Pen / OCAD via the interchange format). `ppen`
+ * writes native CourseScribe XML that Purple Pen opens directly.
  *
- * The document layout lives in `iof-course-export.ts` (pure); this module
- * only maps DB rows onto it. Sequence construction mirrors
- * `rebuildCourseGeometry` in `course-geometry.ts`: `course_controls` holds
- * regular controls only, the start is the event start control matched by
- * `startName` (unless `firstAsStart`) and the finish is `finishControlId`
- * or the event's first finish control (unless `lastAsFinish`).
+ * Document layout lives in `iof-course-export.ts` / `ppen-course-export.ts`
+ * (pure); this module maps DB rows onto them. Sequence construction
+ * mirrors `rebuildCourseGeometry` in `course-geometry.ts`:
+ * `course_controls` holds regular controls only, the start is the event
+ * start control matched by `startName` (unless `firstAsStart`) and the
+ * finish is `finishControlId` or the event's first finish control
+ * (unless `lastAsFinish`).
  */
 
 import type { FastifyInstance } from "fastify";
@@ -21,10 +22,12 @@ import { loadEventCrs } from "./event-crs.js";
 import { mapMmToWgs84 } from "./map-projection.js";
 import {
   buildCourseDataXml,
+  type CourseDataExport,
   type ExportControlSite,
   type ExportCourse,
   type ExportCourseControl,
 } from "./iof-course-export.js";
+import { buildPpenXml } from "./ppen-course-export.js";
 import type { PrismaClient, Prisma } from "./generated/prisma/client.js";
 
 type Db = PrismaClient | Prisma.TransactionClient;
@@ -45,18 +48,28 @@ function parseLegs(legs: string): number[] {
     .filter((n) => Number.isFinite(n));
 }
 
+export type CourseExportFormat = "iofxml" | "ppen";
+
+export interface GatheredCourseExport extends CourseDataExport {
+  mapFileName?: string;
+}
+
 /**
- * Build the CourseData XML for one event.
- *
- * Exported separately from the route so integration tests (and any future
- * tRPC caller) can get the document without going through HTTP.
+ * Load the event's controls, courses and class assignments into the
+ * shared export shape used by both IOF and Purple Pen writers.
  */
-export async function buildEventCourseDataXml(
+export async function gatherEventCourseExport(
   db: Db,
   event: { id: bigint; name: string },
-): Promise<string> {
+): Promise<GatheredCourseExport> {
   const crs = await loadEventCrs(db, event.id);
   const mapScale = crs?.scale ?? 15000;
+
+  const mapFile = await db.mapFile.findFirst({
+    where: { eventId: event.id },
+    orderBy: { uploadedAt: "desc" },
+    select: { fileName: true },
+  });
 
   const controls = await db.control.findMany({
     where: { eventId: event.id, removed: false },
@@ -144,7 +157,7 @@ export async function buildEventCourseDataXml(
         type:
           row.status === "start" ? "Start"
             : row.status === "finish" ? "Finish"
-            : "Control",
+              : "Control",
       });
     }
 
@@ -222,22 +235,58 @@ export async function buildEventCourseDataXml(
     }))
     .filter((a) => a.className !== "" && a.courseName !== "");
 
-  return buildCourseDataXml({
+  return {
     eventName: event.name,
     mapScale,
     controls: sites,
     courses,
     classAssignments,
-  });
+    mapFileName: mapFile?.fileName,
+  };
 }
 
-/** `<nameId>-courses.xml`, safe for a Content-Disposition header. */
-export function buildCourseExportFilename(nameId: string): string {
-  return `${nameId.replace(/[^A-Za-z0-9_-]/g, "_")}-courses.xml`;
+/**
+ * Build the CourseData XML for one event.
+ *
+ * Exported separately from the route so integration tests (and any future
+ * tRPC caller) can get the document without going through HTTP.
+ */
+export async function buildEventCourseDataXml(
+  db: Db,
+  event: { id: bigint; name: string },
+): Promise<string> {
+  const data = await gatherEventCourseExport(db, event);
+  return buildCourseDataXml(data);
+}
+
+/** Build a Purple Pen `.ppen` document for one event. */
+export async function buildEventPpenXml(
+  db: Db,
+  event: { id: bigint; name: string },
+): Promise<string> {
+  const data = await gatherEventCourseExport(db, event);
+  return buildPpenXml(data);
+}
+
+/** `<nameId>-courses.xml` / `.ppen`, safe for a Content-Disposition header. */
+export function buildCourseExportFilename(
+  nameId: string,
+  format: CourseExportFormat = "iofxml",
+): string {
+  const base = nameId.replace(/[^A-Za-z0-9_-]/g, "_");
+  return format === "ppen" ? `${base}-courses.ppen` : `${base}-courses.xml`;
+}
+
+function parseFormat(raw: string | undefined): CourseExportFormat | null {
+  if (raw == null || raw === "" || raw === "iofxml" || raw === "xml") {
+    return "iofxml";
+  }
+  if (raw === "ppen") return "ppen";
+  return null;
 }
 
 export function registerCourseExportRoute(server: FastifyInstance): void {
-  server.get<{ Querystring: { name?: string } }>(
+  server.get<{ Querystring: { name?: string; format?: string } }>(
     "/api/export/course-data",
     async (req, reply) => {
       const name = (req.query.name ?? "").trim();
@@ -247,6 +296,12 @@ export function registerCourseExportRoute(server: FastifyInstance): void {
       if (!/^[A-Za-z0-9_-]+$/.test(name)) {
         return reply.code(400).send({ error: "Invalid event name" });
       }
+      const format = parseFormat(req.query.format);
+      if (!format) {
+        return reply.code(400).send({
+          error: "Invalid 'format' query parameter (use iofxml or ppen)",
+        });
+      }
       if (!(await assertRestAccess(req, reply, { nameId: name, cap: "courses.view" }))) {
         return;
       }
@@ -254,18 +309,28 @@ export function registerCourseExportRoute(server: FastifyInstance): void {
       if (!event || event.removed) {
         return reply.code(404).send({ error: `Event "${name}" not found` });
       }
-      const xml = await buildEventCourseDataXml(prisma(), {
-        id: event.id,
-        name: event.name,
-      });
+      const body =
+        format === "ppen"
+          ? await buildEventPpenXml(prisma(), {
+              id: event.id,
+              name: event.name,
+            })
+          : await buildEventCourseDataXml(prisma(), {
+              id: event.id,
+              name: event.name,
+            });
+      const contentType =
+        format === "ppen"
+          ? "application/xml; charset=utf-8"
+          : "application/xml; charset=utf-8";
       return reply
-        .header("Content-Type", "application/xml; charset=utf-8")
+        .header("Content-Type", contentType)
         .header(
           "Content-Disposition",
-          `attachment; filename="${buildCourseExportFilename(event.nameId)}"`,
+          `attachment; filename="${buildCourseExportFilename(event.nameId, format)}"`,
         )
         .header("Cache-Control", "no-store")
-        .send(xml);
+        .send(body);
     },
   );
 }
