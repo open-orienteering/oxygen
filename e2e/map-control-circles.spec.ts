@@ -49,7 +49,7 @@ test.describe("Map control visibility with active selection", () => {
     // ── Import courses from test.ocd (append mode) so the event has
     // controls WITH coordinates and seq ≠ code.
     await page.getByRole("button", { name: "Import courses" }).click();
-    await expect(page.getByText("Import Courses (IOF XML or OCAD OCD)")).toBeVisible();
+    await expect(page.getByText("Import Courses (IOF XML, Purple Pen, or OCAD)")).toBeVisible();
 
     const importChooserPromise = page.waitForEvent("filechooser");
     await page.getByRole("button", { name: "Browse files" }).click();

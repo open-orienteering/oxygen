@@ -141,7 +141,7 @@ async function clickTab(page: Page, name: string) {
 async function importCoursesAndMap(page: Page) {
   await clickTab(page, "Courses");
   await page.getByRole("button", { name: "Import courses" }).click();
-  await expect(page.getByText("Import Courses (IOF XML or OCAD OCD)")).toBeVisible();
+  await expect(page.getByText("Import Courses (IOF XML, Purple Pen, or OCAD)")).toBeVisible();
   const importChooserPromise = page.waitForEvent("filechooser");
   await page.getByRole("button", { name: "Browse files" }).click();
   await (await importChooserPromise).setFiles("e2e/test.ocd");

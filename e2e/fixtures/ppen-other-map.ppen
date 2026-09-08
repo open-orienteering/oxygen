@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Courses set on a map Oxygen does not have. The positions are paper mm
+  anchored to that file's origin, so against `test.ocd` (x −76…76 mm,
+  y −48…46 mm) they land far off the map — the case the import dialog
+  must warn about instead of silently scattering controls.
+-->
+<course-scribe-event>
+  <event id="1">
+    <title>E2E Other Map</title>
+    <map kind="OCAD" scale="10000">annan-karta.ocd</map>
+    <standards map="2017" description="2018" />
+  </event>
+  <control id="10" kind="start">
+    <location x="-900" y="-400" />
+  </control>
+  <control id="11" kind="normal">
+    <code>51</code>
+    <location x="-880" y="-380" />
+  </control>
+  <control id="12" kind="normal">
+    <code>52</code>
+    <location x="-860" y="-360" />
+  </control>
+  <control id="14" kind="finish">
+    <location x="-840" y="-340" />
+  </control>
+  <course id="1" kind="normal" order="1">
+    <name>E2E Off Map</name>
+    <first course-control="100" />
+  </course>
+  <course-control id="100" control="10">
+    <next course-control="101" />
+  </course-control>
+  <course-control id="101" control="11">
+    <next course-control="102" />
+  </course-control>
+  <course-control id="102" control="12">
+    <next course-control="103" />
+  </course-control>
+  <course-control id="103" control="14" />
+</course-scribe-event>

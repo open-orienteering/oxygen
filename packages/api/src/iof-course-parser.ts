@@ -79,11 +79,30 @@ export interface ClassAssignment {
   courseName: string;
 }
 
+/**
+ * The map file a course file was set on, when the format records it.
+ *
+ * Only Purple Pen does. It matters because paper-mm coordinates are
+ * anchored to one specific map file's paper origin: importing them
+ * against a different map of the same terrain puts every control off
+ * by the two maps' georeference difference. See `course-import-align.ts`.
+ */
+export interface SourceMapInfo {
+  /** Base file name as recorded in the course file, e.g. "Brotorp.ocd". */
+  fileName: string;
+  /** "OCAD", "PDF", "Bitmap", … as recorded by the course setter's tool. */
+  kind: string;
+  /** Map scale denominator the coordinates are expressed at. */
+  scale: number;
+}
+
 export interface ParsedCourseData {
   controls: ParsedControl[];
   courses: ParsedCourse[];
   classAssignments: ClassAssignment[];
   mapScale: number;
+  /** Present only for formats that name their map file (.ppen). */
+  sourceMap?: SourceMapInfo;
   /** Per-course GeoJSON geometry. Key = course name (e.g., "A", "B"). */
   courseGeometry: Record<string, GeoJSONFeatureCollection>;
   /** General map features (restricted areas, leg cuts). */
