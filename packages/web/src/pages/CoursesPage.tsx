@@ -1,4 +1,4 @@
-import { Fragment, useState, useMemo } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { trpc } from "../lib/trpc";
@@ -18,6 +18,81 @@ import {
   courselessClassNames,
   matchCourselessClass,
 } from "../lib/course-editor";
+
+function CourseExportMenu({ nameId }: { nameId: string }) {
+  const { t } = useTranslation("courses");
+  const [open, setOpen] = useState(false);
+  const containerRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const onDocClick = (e: MouseEvent) => {
+      if (!containerRef.current?.contains(e.target as Node)) setOpen(false);
+    };
+    const onEsc = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setOpen(false);
+    };
+    document.addEventListener("mousedown", onDocClick);
+    document.addEventListener("keydown", onEsc);
+    return () => {
+      document.removeEventListener("mousedown", onDocClick);
+      document.removeEventListener("keydown", onEsc);
+    };
+  }, [open]);
+
+  const download = (format: "iofxml" | "ppen") => {
+    setOpen(false);
+    const qs = new URLSearchParams({ name: nameId, format });
+    void downloadSameOriginFile(`/api/export/course-data?${qs.toString()}`);
+  };
+
+  return (
+    <div ref={containerRef} className="relative">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        data-testid="course-export-menu"
+        title={t("exportCoursesTitle")}
+        aria-haspopup="menu"
+        aria-expanded={open}
+        className="px-4 py-2 border border-blue-200 text-blue-700 text-sm font-medium rounded-lg hover:bg-blue-50 transition-colors cursor-pointer flex items-center gap-1.5 whitespace-nowrap"
+      >
+        <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+        </svg>
+        {t("exportCourses")}
+        <svg className="w-3.5 h-3.5 opacity-70" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+        </svg>
+      </button>
+      {open && (
+        <div
+          role="menu"
+          className="absolute right-0 z-20 mt-1 min-w-[14rem] rounded-lg border border-slate-200 bg-white py-1 shadow-lg"
+        >
+          <button
+            type="button"
+            role="menuitem"
+            data-testid="course-export-link"
+            onClick={() => download("iofxml")}
+            className="w-full px-3 py-2 text-left text-sm text-slate-700 hover:bg-blue-50 cursor-pointer"
+          >
+            {t("exportIofXml")}
+          </button>
+          <button
+            type="button"
+            role="menuitem"
+            data-testid="course-export-ppen"
+            onClick={() => download("ppen")}
+            className="w-full px-3 py-2 text-left text-sm text-slate-700 hover:bg-blue-50 cursor-pointer"
+          >
+            {t("exportPpen")}
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
 
 export function CoursesPage() {
   const { t } = useTranslation("courses");
@@ -117,23 +192,8 @@ export function CoursesPage() {
           </svg>
           {t("importCourses")}
         </button>
-        {(courses.data?.length ?? 0) > 0 && (
-          <button
-            type="button"
-            onClick={() =>
-              void downloadSameOriginFile(
-                `/api/export/course-data?name=${encodeURIComponent(nameId ?? "")}`,
-              )
-            }
-            data-testid="course-export-link"
-            title={t("exportCoursesTitle")}
-            className="px-4 py-2 border border-blue-200 text-blue-700 text-sm font-medium rounded-lg hover:bg-blue-50 transition-colors cursor-pointer flex items-center gap-1.5 whitespace-nowrap"
-          >
-            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
-            </svg>
-            {t("exportCourses")}
-          </button>
+        {(courses.data?.length ?? 0) > 0 && nameId && (
+          <CourseExportMenu nameId={nameId} />
         )}
         <button
           onClick={() => setShowCreateForm(true)}
