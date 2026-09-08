@@ -19,9 +19,11 @@ import {
 import { makeCaller } from "../helpers/caller.js";
 import {
   buildEventCourseDataXml,
+  buildEventPpenXml,
   buildCourseExportFilename,
 } from "../../course-export.js";
 import { parseIOFCourseData } from "../../iof-course-parser.js";
+import { parsePpenCourseData } from "../../ppen-course-parser.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const FIXTURE = resolve(__dirname, "../../../../../e2e/test.ocd");
@@ -136,5 +138,35 @@ describe("buildEventCourseDataXml", () => {
   it("builds a safe attachment filename", () => {
     expect(buildCourseExportFilename("itest")).toBe("itest-courses.xml");
     expect(buildCourseExportFilename("a b/c")).toBe("a_b_c-courses.xml");
+    expect(buildCourseExportFilename("itest", "ppen")).toBe("itest-courses.ppen");
+  });
+});
+
+describe("buildEventPpenXml", () => {
+  it("exports a Purple Pen document that round-trips through the parser", async () => {
+    const xml = await buildEventPpenXml(ctx.db, {
+      id: ctx.eventId,
+      name: ctx.event.name,
+    });
+    expect(xml).toContain("<course-scribe-event>");
+    expect(xml).toContain(">test.ocd</map>");
+
+    const parsed = parsePpenCourseData(xml);
+    expect(parsed.mapScale).toBe(mapScale);
+    expect(parsed.controls.some((c) => c.id === "31")).toBe(true);
+    expect(parsed.controls.some((c) => c.id === "32")).toBe(true);
+    expect(parsed.controls.some((c) => c.id === "33")).toBe(false);
+
+    const courseA = parsed.courses.find((c) => c.name === "Export A")!;
+    expect(courseA.controls.map((cc) => cc.type)).toEqual([
+      "Start",
+      "Control",
+      "Control",
+      "Finish",
+    ]);
+    expect(courseA.controls.map((cc) => cc.controlId).slice(1, 3)).toEqual([
+      "31",
+      "32",
+    ]);
   });
 });

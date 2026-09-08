@@ -8,19 +8,23 @@ through the existing course importer.
 
 ## Using it
 
-Courses page → **Export IOF XML** (next to *Import courses*). The button
-is hidden when the event has no courses.
+Courses page → **Export** → **IOF XML 3.0 (.xml)** (next to *Import courses*).
+The menu is hidden when the event has no courses. The same dropdown also
+offers **Purple Pen (.ppen)** — see [ppen-import-export.md](ppen-import-export.md).
 
 Under the hood it is a plain download link:
 
 ```
 GET /api/export/course-data?name=<nameId>
+GET /api/export/course-data?name=<nameId>&format=iofxml
 → 200 application/xml; charset=utf-8
   Content-Disposition: attachment; filename="<nameId>-courses.xml"
 ```
 
-`400` when `name` is missing or not `[A-Za-z0-9_-]+`, `404` when no such
-event. Registered next to the backup route in `packages/api/src/index.ts`.
+`format` defaults to `iofxml` (`xml` is accepted as an alias). `400` when
+`name` is missing or not `[A-Za-z0-9_-]+`, or when `format` is unknown;
+`404` when no such event. Registered next to the backup route in
+`packages/api/src/index.ts`.
 
 ```bash
 curl -OJ 'http://localhost:3002/api/export/course-data?name=itest'

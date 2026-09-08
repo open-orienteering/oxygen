@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="utf-8"?>
+<course-scribe-event>
+  <event id="1">
+    <title>E2E Purple Pen</title>
+    <map kind="OCAD" scale="10000">map.ocd</map>
+    <standards map="2017" description="2018" />
+  </event>
+  <control id="10" kind="start">
+    <location x="-40" y="-30" />
+  </control>
+  <control id="11" kind="normal">
+    <code>41</code>
+    <location x="-10" y="0" />
+  </control>
+  <control id="12" kind="normal">
+    <code>42</code>
+    <location x="20" y="20" />
+  </control>
+  <control id="14" kind="finish">
+    <location x="50" y="35" />
+  </control>
+  <course id="1" kind="normal" order="1">
+    <name>E2E Ppen</name>
+    <first course-control="100" />
+  </course>
+  <course-control id="100" control="10">
+    <next course-control="101" />
+  </course-control>
+  <course-control id="101" control="11">
+    <next course-control="102" />
+  </course-control>
+  <course-control id="102" control="12">
+    <next course-control="103" />
+  </course-control>
+  <course-control id="103" control="14" />
+</course-scribe-event>

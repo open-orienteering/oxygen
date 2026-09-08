@@ -21,6 +21,8 @@ import {
   type GeoJSONFeatureCollection,
 } from "../iof-course-parser.js";
 import { parseOCDCourseData } from "../ocd-course-parser.js";
+import { isPpenContent, parsePpenCourseData } from "../ppen-course-parser.js";
+import { resolveImportAlignment } from "../course-import-align.js";
 import { publicControlId } from "./control.js";
 import {
   ocadBoundsToWgs84,
@@ -109,7 +111,11 @@ export function deriveClassAssignments(parsed: {
   };
 }
 
-/** Parse either an IOF XML or an OCAD OCD file into the unified ParsedCourseData. */
+/**
+ * Parse IOF XML, Purple Pen `.ppen`, or OCAD OCD into the unified
+ * ParsedCourseData. XML payloads are sniffed by root element so the
+ * client can send both IOF and ppen as `xmlContent`.
+ */
 function parseCourseFile(input: {
   xmlContent?: string;
   ocdBase64?: string;
@@ -118,6 +124,9 @@ function parseCourseFile(input: {
     return parseOCDCourseData(Buffer.from(input.ocdBase64, "base64"));
   }
   if (input.xmlContent) {
+    if (isPpenContent(input.xmlContent)) {
+      return parsePpenCourseData(input.xmlContent);
+    }
     return parseIOFCourseDataWithGeometry(input.xmlContent);
   }
   throw new Error("No course data: supply xmlContent or ocdBase64");
@@ -1193,7 +1202,12 @@ export const courseRouter = router({
       }),
     )
     .mutation(async ({ ctx, input }) => {
-      const parsed = parseCourseFile(input);
+      const alignment = await resolveImportAlignment(
+        ctx.db,
+        ctx.event.id,
+        parseCourseFile(input),
+      );
+      const parsed = alignment.parsed;
 
       const dbClasses = await ctx.db.class.findMany({
         where: { eventId: ctx.event.id, removed: false },
@@ -1270,6 +1284,13 @@ export const courseRouter = router({
         mapScale: parsed.mapScale,
         dbClasses: dbClasses.map((c) => ({ id: c.seq, name: c.name })),
         classNamesFromCourseNames: fromCourseNames,
+        // Coordinate provenance: lets the dialog warn when the file's
+        // control positions belong to a different map than the event's.
+        coordinateAlignment: alignment.status,
+        sourceMapName: alignment.sourceMapName,
+        sourceMapKind: alignment.sourceMapKind,
+        alignedFromMapName: alignment.alignedFromMapName,
+        eventMapName: alignment.eventMapName,
       };
     }),
 
@@ -1288,11 +1309,24 @@ export const courseRouter = router({
           .record(z.string(), z.array(z.number().int()))
           .optional(),
         replaceAll: z.boolean().optional().default(false),
+        /**
+         * Import courses and controls without their coordinates. The
+         * escape hatch for a Purple Pen file whose map Oxygen does not
+         * have: codes, sequences and leg lengths are still correct, and
+         * the controls can be placed in the course editor afterwards.
+         */
+        skipPositions: z.boolean().optional().default(false),
       }),
     )
     .mutation(async ({ ctx, input }) => {
       const eventId = ctx.event.id;
-      const parsed = parseCourseFile(input);
+      const alignment = await resolveImportAlignment(
+        ctx.db,
+        eventId,
+        parseCourseFile(input),
+      );
+      const parsed = alignment.parsed;
+      const skipPositions = input.skipPositions;
       const { courseGeometry, geometrySource } = parsed;
 
       // ── 0a. Resolve WGS84 lat/lng for OCD imports ───────────
@@ -1408,9 +1442,12 @@ export const courseRouter = router({
         //      whose grid we recognise.
         //   3. Leave existing values intact on update; on insert
         //      store null so `controlCoordinates` can convert later.
-        let nextLat: number | null = pc.lat || 0;
-        let nextLng: number | null = pc.lng || 0;
-        if ((nextLat === 0 && nextLng === 0) && ocdCrs && (pc.mapX !== 0 || pc.mapY !== 0)) {
+        let nextLat: number | null = skipPositions ? null : pc.lat || 0;
+        let nextLng: number | null = skipPositions ? null : pc.lng || 0;
+        if (skipPositions) {
+          nextLat = null;
+          nextLng = null;
+        } else if ((nextLat === 0 && nextLng === 0) && ocdCrs && (pc.mapX !== 0 || pc.mapY !== 0)) {
           const wgs = mapMmToWgs84(pc.mapX, pc.mapY, ocdCrs);
           if (wgs) {
             nextLat = wgs.lat;
@@ -1439,8 +1476,9 @@ export const courseRouter = router({
           name,
           codes,
           status,
-          xpos: pc.mapX,
-          ypos: pc.mapY,
+          // A position-less import leaves existing coordinates alone and
+          // creates new controls unplaced (0, 0) for the course editor.
+          ...(skipPositions ? {} : { xpos: pc.mapX, ypos: pc.mapY }),
           removed: false,
           // Descriptions belong to the control row. Only OCD bundles carry
           // them; XML re-imports leave any existing description untouched.
@@ -1514,7 +1552,7 @@ export const courseRouter = router({
         const legsStr = legsArr.length ? legsArr.join(";") + ";" : "";
 
         // Per-course geometry: prefer OCD when fresh; otherwise XML.
-        const geom = courseGeometry[pc.name] ?? null;
+        const geom = skipPositions ? null : courseGeometry[pc.name] ?? null;
         const startCtrl = pc.controls.find((cc) => cc.type === "Start");
         const startName = startCtrl
           ? (() => {
@@ -1556,8 +1594,11 @@ export const courseRouter = router({
               lastAsFinish: false,
               removed: false,
               geometry: (nextGeom ?? undefined) as never,
-              geometrySource:
-                nextGeom === geom ? geometrySource : prev?.geometrySource ?? "",
+              geometrySource: !nextGeom
+                ? prev?.geometrySource ?? ""
+                : nextGeom === geom
+                  ? geometrySource
+                  : prev?.geometrySource ?? "",
             },
           });
           courseUuid = existing.id;
@@ -1597,6 +1638,17 @@ export const courseRouter = router({
             })),
           });
         }
+      }
+
+      // A position-less import must not leave geometry drawn from the
+      // file's unusable coordinates (or from a previous import of the
+      // same course names). Derive it from whatever positions the
+      // controls actually have — none, for freshly created ones.
+      // Lengths stay as the file stated them: those are real metres.
+      if (skipPositions) {
+        await rebuildCourseGeometry(ctx.db, eventId, [...courseIdMap.values()], {
+          updateLength: false,
+        });
       }
 
       // ── 3. Class → Course assignments ───────────────────────
@@ -1683,6 +1735,10 @@ export const courseRouter = router({
         coursesCreated,
         coursesUpdated,
         classesAssigned,
+        coordinateAlignment: skipPositions
+          ? ("skipped" as const)
+          : alignment.status,
+        alignedFromMapName: alignment.alignedFromMapName,
       };
     }),
 });

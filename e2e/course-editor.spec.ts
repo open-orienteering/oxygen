@@ -39,7 +39,7 @@ async function importCoursesAndMap(page: Page) {
   await expect(page.getByText("3 courses")).toBeVisible({ timeout: 10000 });
 
   await page.getByRole("button", { name: "Import courses" }).click();
-  await expect(page.getByText("Import Courses (IOF XML or OCAD OCD)")).toBeVisible();
+  await expect(page.getByText("Import Courses (IOF XML, Purple Pen, or OCAD)")).toBeVisible();
 
   const importChooserPromise = page.waitForEvent("filechooser");
   await page.getByRole("button", { name: "Browse files" }).click();

@@ -28,11 +28,16 @@ export function CourseImportDialog({ onClose, onSuccess }: Props) {
   // when adding a course set on top of an existing one (e.g. a relay
   // added on top of an individual race).
   const [replaceAll, setReplaceAll] = useState(true);
+  // Purple Pen coordinates are anchored to the map the courses were set
+  // on. When that map is not the event's and we cannot re-project, the
+  // safe default is to import codes and sequences only.
+  const [skipPositions, setSkipPositions] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const previewMutation = trpc.course.previewImport.useMutation({
     onSuccess: (data) => {
       setPreview(data);
+      setSkipPositions(data.coordinateAlignment === "mismatch");
       // Build initial class mapping from auto-matches, position-aligned with
       // course.classMatches so each row's SearchableSelect can read its own
       // index. Unmatched rows start at 0 ("Skip"); the user can fill them in.
@@ -55,8 +60,9 @@ export function CourseImportDialog({ onClose, onSuccess }: Props) {
   });
 
   const handleFile = useCallback((file: File) => {
-    const isXml = file.name.toLowerCase().endsWith(".xml");
-    const isOcd = file.name.toLowerCase().endsWith(".ocd");
+    const lower = file.name.toLowerCase();
+    const isXml = lower.endsWith(".xml") || lower.endsWith(".ppen");
+    const isOcd = lower.endsWith(".ocd");
     if (!isXml && !isOcd) return;
 
     setFileName(file.name);
@@ -102,6 +108,7 @@ export function CourseImportDialog({ onClose, onSuccess }: Props) {
       ...(fileType === "xml" ? { xmlContent: fileData } : { ocdBase64: fileData }),
       classMapping,
       replaceAll,
+      skipPositions,
     });
   };
 
@@ -189,7 +196,7 @@ export function CourseImportDialog({ onClose, onSuccess }: Props) {
               <input
                 ref={fileInputRef}
                 type="file"
-                accept=".xml,.ocd"
+                accept=".xml,.ppen,.ocd"
                 className="hidden"
                 onChange={(e) => {
                   const file = e.target.files?.[0];
@@ -225,6 +232,47 @@ export function CourseImportDialog({ onClose, onSuccess }: Props) {
                 <SummaryBox label={t("newControls")} value={preview.newControls} color="emerald" />
                 <SummaryBox label={t("existing")} value={preview.existingControls} color="blue" />
               </div>
+
+              {/* Coordinates re-projected from a club-library map */}
+              {preview.coordinateAlignment === "transformed" && (
+                <div
+                  data-testid="course-import-transformed-banner"
+                  className="p-3 bg-blue-50 border border-blue-200 rounded-lg text-sm text-blue-800"
+                >
+                  {t("positionsTransformedHint", {
+                    sourceMap: preview.alignedFromMapName ?? preview.sourceMapName ?? "",
+                    eventMap: preview.eventMapName ?? "",
+                  })}
+                </div>
+              )}
+
+              {/* Positions belong to a map Oxygen doesn't have */}
+              {preview.coordinateAlignment === "mismatch" && (
+                <div
+                  data-testid="course-import-map-mismatch-banner"
+                  className="p-3 bg-amber-50 border border-amber-200 rounded-lg text-sm text-amber-800 space-y-2"
+                >
+                  <p>
+                    {t("positionsMismatchWarning", {
+                      sourceMap: preview.sourceMapName ?? "",
+                      eventMap: preview.eventMapName ?? "",
+                    })}
+                  </p>
+                  <p className="text-xs">{t("positionsMismatchRemedy")}</p>
+                  <label className="flex items-start gap-2 cursor-pointer select-none">
+                    <input
+                      type="checkbox"
+                      data-testid="course-import-skip-positions"
+                      checked={skipPositions}
+                      onChange={(e) => setSkipPositions(e.target.checked)}
+                      className="mt-0.5 w-4 h-4 rounded border-amber-300 text-amber-600 focus:ring-amber-500 cursor-pointer"
+                    />
+                    <span className="text-sm font-medium">
+                      {t("skipPositionsLabel")}
+                    </span>
+                  </label>
+                </div>
+              )}
 
               {/* Fallback notice: file had no class assignments */}
               {preview.classNamesFromCourseNames && (
@@ -480,6 +528,11 @@ export function CourseImportDialog({ onClose, onSuccess }: Props) {
                   <p>{t("controlsCreatedUpdated", { created: importMutation.data.controlsCreated, updated: importMutation.data.controlsUpdated })}</p>
                   {importMutation.data.classesAssigned > 0 && (
                     <p>{t("classAssignmentsMade", { count: importMutation.data.classesAssigned })}</p>
+                  )}
+                  {importMutation.data.coordinateAlignment === "skipped" && (
+                    <p data-testid="course-import-skipped-positions-note">
+                      {t("positionsSkippedNote")}
+                    </p>
                   )}
                 </div>
               </div>
