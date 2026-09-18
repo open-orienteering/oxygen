@@ -30,8 +30,11 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - name: Generate Prisma client
         run: DATABASE_URL="$PRISMA_GENERATE_DATABASE_URL" pnpm db:generate
-      - run: pnpm lint
+      # API `tsc --noEmit` consumes `@oxygen/shared` via project references
+      # (`packages/shared/dist`). Build first so a clean CI checkout matches
+      # a local tree that has already been compiled.
       - run: pnpm build
+      - run: pnpm lint
       - run: pnpm test
       - name: Helper script tests
         run: pnpm test:scripts
