@@ -64,6 +64,8 @@ describe("computeTabLayout", () => {
       "dashboard",
       "classes",
       "courses",
+      "maps",
+      "map-templates",
       "controls",
       "course-editor",
     ]);
@@ -83,10 +85,12 @@ describe("computeTabLayout", () => {
       "startlist",
       "classes",
       "courses",
+      "maps",
       "controls",
       "cards",
     ]);
     expect(ids(overflow)).toContain("course-editor");
+    expect(ids(overflow)).toContain("map-templates");
     expect(ids(overflow)).toContain("results");
     expect(ids(overflow)).toContain("tracks");
   });
@@ -112,11 +116,13 @@ describe("computeTabLayout", () => {
       "results",
       "classes",
       "courses",
+      "maps",
       "controls",
       "cards",
       "tracks",
     ]);
     expect(ids(overflow)).toEqual([
+      "map-templates",
       "event",
       "course-editor",
       "registration-trends",

@@ -24,7 +24,8 @@ Oxygen is a modern web application for managing orienteering competitions. It co
 |  |  event        runner  draw     testLab         |  |
 |  |  cardReadout  course  class    eventor         |  |
 |  |  liveresults  club    race     control         |  |
-|  |  onlineInput  tracks  events                   |  |
+|  |  onlineInput  tracks  events  mapTemplate      |  |
+|  |  courseMap                                      |  |
 |  +------------------------+-----------------------+  |
 |                           | Prisma ORM               |
 +---------------------------+--------------------------+
@@ -37,6 +38,7 @@ Oxygen is a modern web application for managing orienteering competitions. It co
 |    classes, class_course_pools, runners, teams,      |
 |    cards, card_readouts, punches, control_units,     |
 |    event_log, event_seqs, map_files, rendered_maps,  |
+|    map_templates, course_maps, club_map_templates,   |
 |    map_tiles, tracks, routes, users                  |
 |                                                      |
 |  global directories (schema `oxygen`):               |
@@ -201,6 +203,17 @@ Per-event pull from a remote radio-control service. Currently supports the ROC p
 
 ### Map tile rendering
 Uploaded OCAD maps are served to the web viewer as slippy-map tiles. A tile request that misses the `map_tiles` cache rasterises a *window* — the region covered by a small block of tiles, expressed as a `viewBox` sub-rectangle of the map SVG — at a density derived from those tiles, then warps each tile out of it. Peak memory follows the block rather than the map, deep zoom stays sharp because the window is rendered denser than its tiles, and nothing in the path requires a single process: the cache is the `map_tiles` table and `/api/map-tile-progress` is computed from the database. See [map-tile-rendering.md](map-tile-rendering.md).
+
+### Printable course maps
+
+The course-map renderer uses the OCAD SVG source directly rather than the
+slippy tile cache. It composes a paper-mm SVG from a fixed-scale map window,
+course overlay, control descriptions, and layout objects, then converts it to
+vector PDF with librsvg. `map_templates` hold reusable event layouts;
+`course_maps` are printable sheets and can be many-to-one with a course.
+Shared geometry and SVG generators live in `@oxygen/shared`; the web layout
+editor and API therefore render the same document model. See
+[course-maps.md](course-maps.md).
 
 ### Background jobs and horizontal scaling
 Almost everything in the API scales out without coordination, because every request reads and writes Postgres. The exceptions are the timers that are not driven by a request and have effects outside the database: the LiveResults push, ROC polling, and journal shipping. Running any of them twice means duplicate pushes or duplicate punches, so exactly one instance runs them at a time, chosen by a renewable lease row in `oxygen.instance_lease`. The holder reconciles its timers against the per-event configuration every few seconds, which is also how a change made on another instance takes effect. See [background-jobs-lease.md](background-jobs-lease.md).

@@ -74,6 +74,7 @@ export default defineConfig({
         EVENTOR_API_BASE_URL: `http://127.0.0.1:${EVENTOR_PORT}/`,
         AUTH_MODE: "proxy",
         OXYGEN_ADMIN_EMAILS: "e2e-admin@oxygen.test",
+        RSVG_CONVERT_COMMAND: `${process.cwd()}/e2e/helpers/fake-rsvg-convert.mjs`,
       },
     },
     {

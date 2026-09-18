@@ -1,28 +1,33 @@
 /**
- * Auto-detect a north/grivation correction for OCAD maps whose meridian
- * (magnetic north) lines don't match the declared grivation — common for
- * Swedish club exports where ScalePar declares a=0.
+ * North analysis for OCAD maps: locate the drawn magnetic-north lines
+ * (ISOM 601.x), measure their in-paper tilt, and compare them with the
+ * magnetic declination the WMM predicts for the map area today.
  *
- * The meridian lines drawn in the file (ISOM 601.x) are ground truth:
- * they mark magnetic north, so with a correct georeference their true
- * bearing equals the magnetic declination at survey time. The lines are
- * often *tilted inside the paper drawing* (Nackareservatet: 3.3° from
- * paper +Y — the drawing was rotated to fit the sheet), so the correction
- * must subtract that tilt:
+ * Three independent "norths" meet here and must not be conflated:
  *
- *   suggested = declination + trueNorthFromGrid − declaredGrivation − meridianTilt
+ * - **Georeference** — ScalePar (grid, offset, scale, grivation angle).
+ *   This is a registration to the earth and does not change with time.
+ *   Oxygen treats it as authoritative; it is never adjusted from
+ *   magnetic physics. `MapFile.rotationCorrection` exists only as a
+ *   manual ops override (`course.setMapRotation`) and defaults to 0.
+ * - **Drawn meridian lines** — a compass aid laid down by the mapper for
+ *   the declination on the production date. Declination drifts (Sweden:
+ *   ≈ 0.1–0.2°/yr eastward), so the lines go stale. That staleness is
+ *   what `computeMeridianStalenessDeg` reports:
  *
- * At Nacka (EPSG:3006) that is ≈ 7.8° + (−2.8°) − 0° − 3.3° ≈ +1.7°.
- * Without detected meridians the tilt term is 0 (assume magnetic-up
- * drawing) and the formula degrades to the pure physics estimate.
- * The earlier "~11°" note was an unverified eyeball estimate; the
- * earlier "+4.5°/5°" figure omitted the meridian tilt. Both are wrong.
+ *     staleness = declination(now) + trueNorthFromGrid − declaredGrivation − meridianTilt
  *
- * Note the correction only fixes the *georeference* (GPS overlays, geo
- * bounds). What makes the meridian lines look vertical on screen is the
- * display-north fold in `event-map.ts` (`metadataFromOcad`), which adds
- * the meridian tilt to `northOffset` so the viewer's `-northOffset`
- * rotation aligns screen-up with the meridians instead of paper +Y.
+ *   i.e. today's grivation minus the grivation the lines were drawn at.
+ *   Positive means the lines lag behind current magnetic north.
+ * - **Display orientation** — what is "up" on screen and paper. The
+ *   viewer and print pipeline put the meridian lines vertical by folding
+ *   `meridianTiltDeg` into `northOffset` (`displayNorthOffsetDeg`).
+ *   Pure presentation; it never moves anything geographically.
+ *
+ * History: an earlier version read the staleness formula as a
+ * georeference error and auto-applied it as `rotationCorrection`, which
+ * shifted GPS positions by ~200 m on Nackareservatet. See
+ * `docs/bugfix-map-north-correction.md`.
  *
  * Club files often reuse 601.x for track symbols, so we cluster by exact
  * symbol id and require many near-parallel long lines.
@@ -30,12 +35,15 @@
 
 import proj4 from "proj4";
 import geomagnetism from "geomagnetism";
-import type { OcadCrs } from "./map-projection.js";
-// Register Nordic EPSG defs used by computeTrueNorthFromGrid.
-import "./map-projection.js";
+// Importing map-projection also registers the Nordic EPSG defs proj4 needs.
+import { getEpsgString, type OcadCrs } from "./map-projection.js";
 
-/** Minimum |suggested| (degrees) before we auto-apply on upload. */
-export const NORTH_AUTO_APPLY_MIN_DEG = 1.5;
+/**
+ * |staleness| at or above this is surfaced as a warning. WMM declination
+ * uncertainty is ≈ 0.1–0.3° and the tilt measurement spread is ≈ 0.05°,
+ * so 1° is well clear of noise (≈ 6 years of drift in Sweden).
+ */
+export const MERIDIAN_STALE_WARN_DEG = 1.0;
 
 /** Minimum parallel lines in a 601.x cluster to count as meridians. */
 export const MERIDIAN_MIN_COUNT = 10;
@@ -51,20 +59,34 @@ export type MeridianProbe = {
   stddevDeg: number;
 };
 
+/**
+ * Persisted per map (`north_detection` JSONB). Everything except
+ * `declinationDeg` / `meridianStalenessDeg` / `asOf` is static, so the
+ * staleness can be re-evaluated for "today" from the stored row without
+ * re-parsing the OCAD blob — see `meridianStalenessFromDetection`.
+ */
 export type NorthDetection = {
   declaredGrivationDeg: number;
+  /** WMM declination at `asOf` (import time). */
   declinationDeg: number | null;
   /** atan2(de, dn) of a true-north step in grid coords (degrees). */
   trueNorthFromGridDeg: number | null;
   meridian: MeridianProbe | null;
-  suggestedCorrectionDeg: number | null;
-  /** True when a meridian cluster was found (magnetic-north convention). */
-  meridianGate: boolean;
-  /** True when we recommend applying `suggestedCorrectionDeg` on upload. */
-  shouldAutoApply: boolean;
+  /** Drawn-meridian staleness at `asOf`; null without meridians or grid. */
+  meridianStalenessDeg: number | null;
   centerLat: number | null;
   centerLng: number | null;
   asOf: string;
+};
+
+/**
+ * Shape of `north_detection` rows written before the auto-apply removal.
+ * Only the reset migration path needs these fields.
+ */
+export type LegacyNorthDetection = NorthDetection & {
+  suggestedCorrectionDeg?: number | null;
+  shouldAutoApply?: boolean;
+  meridianGate?: boolean;
 };
 
 export type OcadNorthSource = {
@@ -74,7 +96,6 @@ export type OcadNorthSource = {
     objType?: number;
     coordinates?: number[][];
   }>;
-  header?: { fileDate?: Date | string | number };
 };
 
 /**
@@ -87,7 +108,7 @@ export function computeTrueNorthFromGrid(
   easting = crs.easting,
   northing = crs.northing,
 ): { angleDeg: number; lat: number; lng: number } | null {
-  const epsg = epsgString(crs);
+  const epsg = getEpsgString(crs);
   if (!epsg) return null;
   try {
     const [lng, lat] = proj4(epsg, "EPSG:4326", [easting, northing]) as [
@@ -106,14 +127,25 @@ export function computeTrueNorthFromGrid(
   }
 }
 
-/** WMM magnetic declination (degrees, east positive) at a WGS84 point. */
+/**
+ * WMM magnetic declination (degrees, east positive) at a WGS84 point.
+ * Returns null when the bundled coefficients do not cover `asOf` — the
+ * `geomagnetism` package ships WMM epochs with a hard validity window
+ * and throws outside it, which must never take a map upload down.
+ */
 export function computeDeclination(
   lat: number,
   lng: number,
   asOf: Date = new Date(),
-): number {
-  const model = geomagnetism.model(asOf);
-  return model.point([lat, lng]).decl;
+): number | null {
+  try {
+    const model = geomagnetism.model(asOf);
+    const decl = model.point([lat, lng]).decl;
+    return Number.isFinite(decl) ? decl : null;
+  } catch (err) {
+    console.warn("[map-north] WMM declination unavailable:", err);
+    return null;
+  }
 }
 
 /**
@@ -185,29 +217,68 @@ export function roundTenths(deg: number): number {
 }
 
 /**
- * Suggested georeference correction (degrees, clockwise positive — same
- * sign convention as `withGrivationCorrection` / `MapFile.rotationCorrection`).
+ * How far the drawn magnetic-north lines lag behind the magnetic
+ * declination at `declinationDeg`'s date (degrees, positive = lines point
+ * west of current magnetic north, the usual case in Sweden).
  *
- *   suggested = declination + trueNorthFromGrid − declaredGrivation − meridianTilt
+ *   staleness = declination + trueNorthFromGrid − declaredGrivation − meridianTilt
  *
- * The meridian lines mark magnetic north on the ground, so a correct
- * georeference points them at the declination. When they are tilted
- * inside the paper drawing (`meridianTiltDeg` from `probeMeridianLines`),
- * the paper needs that much *less* rotation. Pass 0 / omit when no
- * meridian cluster was found (assumes a magnetic-north-up drawing).
+ * `declination + trueNorthFromGrid` is today's magnetic bearing measured
+ * from grid north; `declaredGrivation + meridianTilt` is the bearing the
+ * mapper drew the lines at (paper rotation plus in-paper tilt). This is
+ * a statement about the *lines*, not the georeference — a stale set of
+ * meridians is normal on a map that is a few years old.
  */
-export function suggestCorrectionDeg(opts: {
+export function computeMeridianStalenessDeg(opts: {
   declinationDeg: number;
   trueNorthFromGridDeg: number;
   declaredGrivationDeg: number;
-  meridianTiltDeg?: number;
+  meridianTiltDeg: number;
 }): number {
   return roundTenths(
     opts.declinationDeg +
       opts.trueNorthFromGridDeg -
       opts.declaredGrivationDeg -
-      (opts.meridianTiltDeg ?? 0),
+      opts.meridianTiltDeg,
   );
+}
+
+/**
+ * Re-evaluate meridian staleness for `asOf` (default: now) from a stored
+ * detection row. Cheap — a WMM point evaluation — so list endpoints can
+ * call it per map and a map that was fine at import starts to warn as
+ * the years pass. Null when the map has no meridian cluster, no usable
+ * grid, or the WMM cannot cover `asOf`.
+ */
+export function meridianStalenessFromDetection(
+  detection: Pick<
+    NorthDetection,
+    | "meridian"
+    | "declaredGrivationDeg"
+    | "trueNorthFromGridDeg"
+    | "centerLat"
+    | "centerLng"
+  > | null | undefined,
+  asOf: Date = new Date(),
+): number | null {
+  if (!detection?.meridian) return null;
+  const { trueNorthFromGridDeg, centerLat, centerLng } = detection;
+  if (trueNorthFromGridDeg == null || centerLat == null || centerLng == null) {
+    return null;
+  }
+  const declinationDeg = computeDeclination(centerLat, centerLng, asOf);
+  if (declinationDeg == null) return null;
+  return computeMeridianStalenessDeg({
+    declinationDeg,
+    trueNorthFromGridDeg,
+    declaredGrivationDeg: detection.declaredGrivationDeg,
+    meridianTiltDeg: detection.meridian.medianTiltDeg,
+  });
+}
+
+/** True when the drawn north lines are worth flagging to the user. */
+export function isMeridianStale(stalenessDeg: number | null | undefined): boolean {
+  return stalenessDeg != null && Math.abs(stalenessDeg) >= MERIDIAN_STALE_WARN_DEG;
 }
 
 /**
@@ -226,67 +297,41 @@ export function displayNorthOffsetDeg(
 }
 
 /**
- * Run full north detection against a parsed OCAD file.
+ * Analyse a parsed OCAD file's north situation. Pure diagnostics: the
+ * result never changes how the map is georeferenced. `asOf` defaults to
+ * now because the question the caller asks is "are the drawn north
+ * lines stale *today*", not at the file's last-saved date.
  */
-export function detectNorthCorrection(
+export function detectMapNorth(
   ocad: OcadNorthSource,
-  asOf: Date = resolveAsOf(ocad),
+  asOf: Date = new Date(),
 ): NorthDetection {
   const crs = ocad.getCrs();
   const declaredGrivationDeg = (crs.grivation * 180) / Math.PI;
   const grid = computeTrueNorthFromGrid(crs);
   const meridian = probeMeridianLines(ocad.objects ?? []);
-  const meridianGate = meridian != null;
 
-  let declinationDeg: number | null = null;
-  let suggestedCorrectionDeg: number | null = null;
-  if (grid) {
-    declinationDeg = computeDeclination(grid.lat, grid.lng, asOf);
-    suggestedCorrectionDeg = suggestCorrectionDeg({
-      declinationDeg,
-      trueNorthFromGridDeg: grid.angleDeg,
-      declaredGrivationDeg,
-      meridianTiltDeg: meridian?.medianTiltDeg,
-    });
-  }
-
-  const shouldAutoApply =
-    meridianGate &&
-    suggestedCorrectionDeg != null &&
-    Math.abs(suggestedCorrectionDeg) >= NORTH_AUTO_APPLY_MIN_DEG;
+  const declinationDeg = grid
+    ? computeDeclination(grid.lat, grid.lng, asOf)
+    : null;
+  const meridianStalenessDeg =
+    grid && meridian && declinationDeg != null
+      ? computeMeridianStalenessDeg({
+          declinationDeg,
+          trueNorthFromGridDeg: grid.angleDeg,
+          declaredGrivationDeg,
+          meridianTiltDeg: meridian.medianTiltDeg,
+        })
+      : null;
 
   return {
     declaredGrivationDeg,
     declinationDeg,
     trueNorthFromGridDeg: grid?.angleDeg ?? null,
     meridian,
-    suggestedCorrectionDeg,
-    meridianGate,
-    shouldAutoApply,
+    meridianStalenessDeg,
     centerLat: grid?.lat ?? null,
     centerLng: grid?.lng ?? null,
     asOf: asOf.toISOString(),
   };
-}
-
-function resolveAsOf(ocad: OcadNorthSource): Date {
-  const raw = ocad.header?.fileDate;
-  if (raw instanceof Date && !Number.isNaN(raw.getTime())) return raw;
-  if (typeof raw === "string" || typeof raw === "number") {
-    const d = new Date(raw);
-    if (!Number.isNaN(d.getTime())) return d;
-  }
-  return new Date();
-}
-
-function epsgString(crs: OcadCrs): string | null {
-  const code = crs.code;
-  if (!code) return null;
-  const epsg = `EPSG:${code}`;
-  try {
-    proj4(epsg);
-    return epsg;
-  } catch {
-    return null;
-  }
 }

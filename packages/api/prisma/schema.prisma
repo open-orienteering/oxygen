@@ -11,8 +11,8 @@
 //   - JSONB for structured blobs.
 
 generator client {
-  provider = "prisma-client"
-  output   = "../src/generated/prisma"
+  provider            = "prisma-client"
+  output              = "../src/generated/prisma"
   // Node ESM (dist runs under plain `node`) needs explicit .js import
   // extensions — the extensionless default only works under bundlers/tsx.
   importFileExtension = "js"
@@ -71,21 +71,21 @@ enum ClubControlType {
 
 /// An orienteering event — competition, training session, club evening, etc.
 model Event {
-  id             BigInt   @id @default(autoincrement())
-  nameId         String   @unique @map("name_id")
-  name           String
+  id              BigInt    @id @default(autoincrement())
+  nameId          String    @unique @map("name_id")
+  name            String
   /// Subtitle shown beneath the event name in UI.
-  annotation     String   @default("")
-  date           DateTime @db.Date
+  annotation      String    @default("")
+  date            DateTime  @db.Date
   /// Deciseconds since midnight. Default 324000 = 09:00:00.
-  zeroTime       Int      @default(324000) @map("zero_time")
-  kind           String   @default("competition")
+  zeroTime        Int       @default(324000) @map("zero_time")
+  kind            String    @default("competition")
   /// User-defined display label when kind is "other".
-  kindCustom     String   @default("") @map("kind_custom")
-  eventorEventId   BigInt?   @map("eventor_event_id")
-  eventorEnv       String    @default("prod") @map("eventor_env")
+  kindCustom      String    @default("") @map("kind_custom")
+  eventorEventId  BigInt?   @map("eventor_event_id")
+  eventorEnv      String    @default("prod") @map("eventor_env")
   /// Timestamp of the last successful Eventor sync. NULL = never synced.
-  eventorLastSync  DateTime? @map("eventor_last_sync") @db.Timestamptz(6)
+  eventorLastSync DateTime? @map("eventor_last_sync") @db.Timestamptz(6)
 
   liveresultsTavid  Int?  @map("liveresults_tavid")
   liveresultsConfig Json? @map("liveresults_config")
@@ -162,26 +162,29 @@ model Event {
   createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt DateTime @default(now()) @map("updated_at") @db.Timestamptz(6)
 
-  controls     Control[]
-  courses      Course[]
-  classes      Class[]
-  runners      Runner[]
-  teams        Team[]
-  cards        Card[]
-  cardReadouts CardReadout[]
+  controls           Control[]
+  courses            Course[]
+  classes            Class[]
+  runners            Runner[]
+  teams              Team[]
+  cards              Card[]
+  cardReadouts       CardReadout[]
   cardReadoutBackups CardReadoutBackup[]
-  punches      Punch[]
-  controlUnits ControlUnit[]
-  journal      JournalEntry[]
-  journalSyncStates JournalSyncState[]
-  leases       EventLease[]
-  mapFiles     MapFile[]
-  renderedMaps RenderedMap[]
-  mapTiles     MapTile[]
-  tracks       Track[]
-  routes       Route[]
-  eventSeqs    EventSeq[]
-  eventPermissions EventPermission[]
+  punches            Punch[]
+  controlUnits       ControlUnit[]
+  journal            JournalEntry[]
+  journalSyncStates  JournalSyncState[]
+  leases             EventLease[]
+  mapFiles           MapFile[]
+  renderedMaps       RenderedMap[]
+  mapTiles           MapTile[]
+  mapTemplates       MapTemplate[]
+  courseMaps         CourseMap[]
+  graphics           Graphic[]
+  tracks             Track[]
+  routes             Route[]
+  eventSeqs          EventSeq[]
+  eventPermissions   EventPermission[]
 
   @@index([removed])
   @@map("events")
@@ -241,9 +244,10 @@ model User {
   updatedAt   DateTime  @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
   lastSeenAt  DateTime? @map("last_seen_at") @db.Timestamptz(6)
 
-  eventPermissions EventPermission[]     @relation("GrantSubject")
-  grantsGiven      EventPermission[]     @relation("GrantActor")
-  clubMapFiles     ClubMapFile[]
+  eventPermissions     EventPermission[]     @relation("GrantSubject")
+  grantsGiven          EventPermission[]     @relation("GrantActor")
+  clubMapFiles         ClubMapFile[]
+  clubMapTemplates     ClubMapTemplate[]
   clubGroupMemberships ClubUserGroupMember[]
 
   @@map("users")
@@ -265,8 +269,8 @@ model PermissionGroup {
 }
 
 model EventPermission {
-  id      String @id @default(dbgenerated("uuidv7()")) @db.Uuid
-  eventId BigInt @map("event_id")
+  id          String   @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  eventId     BigInt   @map("event_id")
   /// Subject: exactly one of userId / clubGroupId (CHECK constraint).
   userId      String?  @map("user_id") @db.Uuid
   clubGroupId String?  @map("club_group_id") @db.Uuid
@@ -383,34 +387,34 @@ model EventorEntryHistory {
 // ─── Per-event entities ────────────────────────────────────
 
 model Control {
-  id         String        @id @default(dbgenerated("uuidv7()")) @db.Uuid
-  eventId    BigInt        @map("event_id")
-  seq        Int           @default(0)
-  name       String        @default("")
+  id           String        @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  eventId      BigInt        @map("event_id")
+  seq          Int           @default(0)
+  name         String        @default("")
   /// ';'-separated list of accepted punch codes (multi-code controls).
-  codes      String        @default("")
-  status     ControlStatus @default(ok)
-  timeAdjust Int           @default(0) @map("time_adjust")
-  minTime    Int           @default(0) @map("min_time")
+  codes        String        @default("")
+  status       ControlStatus @default(ok)
+  timeAdjust   Int           @default(0) @map("time_adjust")
+  minTime      Int           @default(0) @map("min_time")
   /// OCD map X coordinate (real decimal value).
-  xpos       Float         @default(0) @db.DoublePrecision
-  ypos       Float         @default(0) @db.DoublePrecision
+  xpos         Float         @default(0) @db.DoublePrecision
+  ypos         Float         @default(0) @db.DoublePrecision
   /// WGS84 latitude (real decimal value). NULL until coords are imported.
-  lat        Float?        @db.DoublePrecision
-  lng        Float?        @db.DoublePrecision
-  radioType  String        @default("normal") @map("radio_type")
-  airPlus    String        @default("default") @map("air_plus")
+  lat          Float?        @db.DoublePrecision
+  lng          Float?        @db.DoublePrecision
+  radioType    String        @default("normal") @map("radio_type")
+  airPlus      String        @default("default") @map("air_plus")
   /// AIR+ autosend override. One of 'last' (only most recent unsent
   /// punch), 'unsent' (every never-sent punch), 'all' (resend
   /// everything every connection). Default 'last' matches stock SI
   /// firmware behaviour and what the operator picks 95% of the time.
-  autosendMode String      @default("last") @map("autosend_mode")
+  autosendMode String        @default("last") @map("autosend_mode")
   /// IOF control description ({ c?, d?, g?, s?, f? } — OCAD text encoding).
   /// The description belongs to the control site, not to any course.
-  description Json?
-  removed    Boolean       @default(false)
-  createdAt  DateTime      @default(now()) @map("created_at") @db.Timestamptz(6)
-  updatedAt  DateTime      @default(now()) @map("updated_at") @db.Timestamptz(6)
+  description  Json?
+  removed      Boolean       @default(false)
+  createdAt    DateTime      @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt    DateTime      @default(now()) @map("updated_at") @db.Timestamptz(6)
 
   event           Event           @relation(fields: [eventId], references: [id], onDelete: Cascade)
   finishOfCourses Course[]        @relation("CourseFinishControl")
@@ -452,6 +456,7 @@ model Course {
   classes        Class[]
   runners        Runner[]
   classPools     ClassCoursePool[]
+  courseMaps     CourseMap[]
 
   @@unique([eventId, seq])
   @@index([eventId, removed])
@@ -471,6 +476,58 @@ model CourseControl {
   @@id([courseId, position])
   @@index([controlId])
   @@map("course_controls")
+  @@schema("oxygen")
+}
+
+/// Reusable paper/layout settings for printable course maps in one event.
+model MapTemplate {
+  id            String   @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  eventId       BigInt   @map("event_id")
+  seq           Int      @default(0)
+  name          String
+  paper         String   @default("A4")
+  paperWidthMm  Float?   @map("paper_width_mm") @db.DoublePrecision
+  paperHeightMm Float?   @map("paper_height_mm") @db.DoublePrecision
+  orientation   String   @default("portrait")
+  printScale    Int      @map("print_scale")
+  settings      Json     @default("{}")
+  objects       Json     @default("[]")
+  createdAt     DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt     DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  event Event       @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  maps  CourseMap[]
+
+  @@unique([eventId, seq])
+  @@unique([eventId, name])
+  @@map("map_templates")
+  @@schema("oxygen")
+}
+
+/// One printable sheet. Several rows may point at the same course.
+model CourseMap {
+  id           String   @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  eventId      BigInt   @map("event_id")
+  seq          Int      @default(0)
+  name         String
+  kind         String   @default("course")
+  courseId     String?  @map("course_id") @db.Uuid
+  templateId   String?  @map("template_id") @db.Uuid
+  windowCenter Json?    @map("window_center")
+  overrides    Json     @default("{}")
+  objects      Json     @default("[]")
+  sortOrder    Int      @default(0) @map("sort_order")
+  createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt    DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  event    Event        @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  course   Course?      @relation(fields: [courseId], references: [id], onDelete: Cascade)
+  template MapTemplate? @relation(fields: [templateId], references: [id], onDelete: SetNull)
+
+  @@unique([eventId, seq])
+  @@index([eventId, courseId, sortOrder])
+  @@index([templateId])
+  @@map("course_maps")
   @@schema("oxygen")
 }
 
@@ -776,32 +833,32 @@ model CardReadout {
 /// SI station memory in M_READOUT mode (see docs/si-protocol/readout-backup/).
 /// Rows live here until promoted into `card_readouts` by `pushReadoutBackup`.
 model CardReadoutBackup {
-  id              String    @id @default(dbgenerated("uuidv7()")) @db.Uuid
-  eventId         BigInt    @map("event_id")
+  id      String @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  eventId BigInt @map("event_id")
 
   /// SI serial of the readout station that produced this backup (debug).
-  stationSerial   Int?      @map("station_serial")
+  stationSerial Int? @map("station_serial")
   /// Address within the station's flash where this slot was found (debug).
-  slotAddress     Int       @map("slot_address")
+  slotAddress   Int  @map("slot_address")
 
-  cardNo          Int       @map("card_no")
-  cardType        String    @default("") @map("card_type")
+  cardNo         Int       @map("card_no")
+  cardType       String    @default("") @map("card_type")
   /// [{controlCode,time,subSecond?}, ...]
-  punches         Json
+  punches        Json
   /// Deciseconds since midnight; null when the card had no value.
-  startTime       Int?      @map("start_time")
-  finishTime      Int?      @map("finish_time")
-  checkTime       Int?      @map("check_time")
-  clearTime       Int?      @map("clear_time")
+  startTime      Int?      @map("start_time")
+  finishTime     Int?      @map("finish_time")
+  checkTime      Int?      @map("check_time")
+  clearTime      Int?      @map("clear_time")
   /// Original read-time stamp if decoded from the 4-byte slot header.
   /// NULL until that header's semantics are known.
-  originalReadAt  DateTime? @map("original_read_at") @db.Timestamptz(6)
+  originalReadAt DateTime? @map("original_read_at") @db.Timestamptz(6)
   /// Card owner data (SI10/SIAC/SI11 only), if present on card.
-  ownerData       Json?     @map("owner_data")
+  ownerData      Json?     @map("owner_data")
   /// Hash of (cardNo + sorted-by-time controlCode/time punches list).
   /// Same card + same logical readout → same hash → unique constraint kicks
   /// in on re-import, regardless of which station/slot it came from.
-  punchesHash     String    @map("punches_hash")
+  punchesHash    String    @map("punches_hash")
 
   importedAt      DateTime  @default(now()) @map("imported_at") @db.Timestamptz(6)
   /// Set when the backup is promoted into card_readouts by pushReadoutBackup.
@@ -810,9 +867,9 @@ model CardReadoutBackup {
 
   /// Raw slot bytes — kept by default for forensics + future format work.
   /// Can be cleared with a future cleanRawBytes mutation once an event closes.
-  rawBytes        Bytes?    @map("raw_bytes")
+  rawBytes Bytes? @map("raw_bytes")
 
-  event           Event     @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  event Event @relation(fields: [eventId], references: [id], onDelete: Cascade)
 
   @@unique([eventId, punchesHash])
   @@index([eventId, cardNo])
@@ -932,27 +989,62 @@ model JournalSyncState {
 
 /// Club-wide OCAD base maps. Copied into an event via course.useClubMap.
 model ClubMapFile {
-  id          BigInt   @id @default(autoincrement())
-  name        String
-  fileName    String   @map("file_name")
-  fileData    Bytes    @map("file_data")
-  previewPng  Bytes?   @map("preview_png")
-  sizeBytes   Int      @map("size_bytes")
-  scale       Float?
-  bounds      Json?
-  northOffset Float?   @map("north_offset")
+  id                 BigInt   @id @default(autoincrement())
+  name               String
+  fileName           String   @map("file_name")
+  fileData           Bytes    @map("file_data")
+  previewPng         Bytes?   @map("preview_png")
+  sizeBytes          Int      @map("size_bytes")
+  scale              Float?
+  bounds             Json?
+  northOffset        Float?   @map("north_offset")
   /// Extra grivation (degrees, clockwise positive) — same semantics as
   /// MapFile.rotationCorrection. Copied into the event MapFile on use.
-  rotationCorrection Float @default(0) @map("rotation_correction")
+  rotationCorrection Float    @default(0) @map("rotation_correction")
   /// Diagnostic from import-time north detection (declination, meridian…).
-  northDetection Json? @map("north_detection")
-  uploadedBy  String?  @map("uploaded_by") @db.Uuid
-  uploadedAt  DateTime @default(now()) @map("uploaded_at") @db.Timestamptz(6)
-  updatedAt   DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+  northDetection     Json?    @map("north_detection")
+  uploadedBy         String?  @map("uploaded_by") @db.Uuid
+  uploadedAt         DateTime @default(now()) @map("uploaded_at") @db.Timestamptz(6)
+  updatedAt          DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
 
   uploader User? @relation(fields: [uploadedBy], references: [id], onDelete: SetNull)
 
   @@map("club_map_files")
+  @@schema("oxygen")
+}
+
+/// Uploaded SVG/PNG graphics placeable on printable course maps.
+/// event_id NULL = club-library graphic shared across events.
+model Graphic {
+  id        BigInt   @id @default(autoincrement())
+  eventId   BigInt?  @map("event_id")
+  name      String
+  /// "image/svg+xml" or "image/png", validated at upload.
+  mime      String
+  data      Bytes
+  sizeBytes Int      @map("size_bytes")
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  event Event? @relation(fields: [eventId], references: [id], onDelete: Cascade)
+
+  @@index([eventId])
+  @@map("graphics")
+  @@schema("oxygen")
+}
+
+/// Reusable map-template payload shared across events in this installation.
+model ClubMapTemplate {
+  id         BigInt   @id @default(autoincrement())
+  name       String   @unique
+  payload    Json
+  uploadedBy String?  @map("uploaded_by") @db.Uuid
+  createdAt  DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt  DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  uploader User? @relation(fields: [uploadedBy], references: [id], onDelete: SetNull)
+
+  @@map("club_map_templates")
   @@schema("oxygen")
 }
 
@@ -1006,28 +1098,28 @@ model ClubSeriesControl {
 }
 
 model MapFile {
-  id         BigInt   @id @default(autoincrement())
-  eventId    BigInt   @map("event_id")
-  fileName   String   @default("") @map("file_name")
-  fileData   Bytes    @map("file_data")
-  uploadedAt DateTime @default(now()) @map("uploaded_at") @db.Timestamptz(6)
+  id                 BigInt   @id @default(autoincrement())
+  eventId            BigInt   @map("event_id")
+  fileName           String   @default("") @map("file_name")
+  fileData           Bytes    @map("file_data")
+  uploadedAt         DateTime @default(now()) @map("uploaded_at") @db.Timestamptz(6)
   // Parsed at upload (applyEventMap) so course.mapMetadata never re-parses
   // the OCAD blob per query. Null on rows written before the migration —
   // mapMetadata backfills those lazily.
-  scale       Float?
-  bounds      Json?
-  northOffset Float?   @map("north_offset")
-  calibration Json?
+  scale              Float?
+  bounds             Json?
+  northOffset        Float?   @map("north_offset")
+  calibration        Json?
   /// Extra grivation (degrees, clockwise positive) applied on top of the
   /// OCAD file's own angle. Used when the drawing is magnetic-north-up
   /// but ScalePar declares a=0 — common for Swedish club exports.
-  rotationCorrection Float @default(0) @map("rotation_correction")
+  rotationCorrection Float    @default(0) @map("rotation_correction")
   /// Diagnostic from import-time north detection (declination, meridian…).
-  northDetection Json? @map("north_detection")
+  northDetection     Json?    @map("north_detection")
   /// True when this blob was copied from `club_map_files`. Club maps
   /// stay club property even after an event adopts them, so downloads
   /// and event backups of those rows require an instance admin.
-  fromClubLibrary Boolean @default(false) @map("from_club_library")
+  fromClubLibrary    Boolean  @default(false) @map("from_club_library")
 
   event Event @relation(fields: [eventId], references: [id], onDelete: Cascade)
 

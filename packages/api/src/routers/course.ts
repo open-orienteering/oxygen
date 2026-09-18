@@ -35,7 +35,10 @@ import { fireMapUpload } from "../db.js";
 import {
   applyEventMap,
   applyMapRotationCorrection,
+  currentMeridianStaleness,
+  detectNorthFromBuffer,
   parseOcadMapMetadata,
+  synchronizePositionedControlCoordinates,
   type MapCalibrationPoint,
 } from "../event-map.js";
 import { canDownloadEventMap } from "../ocad-export.js";
@@ -829,6 +832,7 @@ export const courseRouter = router({
         northOffset: true,
         calibration: true,
         rotationCorrection: true,
+        northDetection: true,
       },
     });
     if (!row) return null;
@@ -841,21 +845,32 @@ export const courseRouter = router({
       | null;
     const rotationCorrection = row.rotationCorrection;
 
+    // Rows with every derived column null are either pre-metadata legacy
+    // uploads or rows the auto-correction reset migration deliberately
+    // cleared so they re-derive with correction 0 on first read.
     const isLegacyRow =
       scale === null &&
       bounds === null &&
       northOffset === null &&
       calibration === null;
-    if (isLegacyRow) {
+    // Rows from before the north_detection column need the analysis run
+    // once, so the UI can distinguish "no north lines in the file" from
+    // "never looked". Shares the blob fetch with the metadata backfill.
+    let northDetection = row.northDetection;
+    const needsDetection = northDetection == null;
+
+    let blobBuffer: Buffer | null = null;
+    if (isLegacyRow || needsDetection) {
       const blob = await ctx.db.mapFile.findUnique({
         where: { id: row.id },
         select: { fileData: true },
       });
-      if (!blob) return null;
-      const meta = await parseOcadMapMetadata(
-        Buffer.from(blob.fileData),
-        rotationCorrection,
-      );
+      if (blob) blobBuffer = Buffer.from(blob.fileData);
+    }
+
+    if (isLegacyRow) {
+      if (!blobBuffer) return null;
+      const meta = await parseOcadMapMetadata(blobBuffer, rotationCorrection);
       if (meta.scale === null && meta.bounds === null) return null;
       ({ scale, bounds, northOffset, calibration } = meta);
       await ctx.db.mapFile.update({
@@ -871,6 +886,20 @@ export const courseRouter = router({
             : undefined,
         },
       });
+      // Stored control lat/lng were computed against whatever correction
+      // was in force before; bring them in line with the current CRS.
+      await synchronizePositionedControlCoordinates(ctx.db, ctx.event.id);
+    }
+
+    if (needsDetection && blobBuffer) {
+      const detection = await detectNorthFromBuffer(blobBuffer);
+      await ctx.db.mapFile.update({
+        where: { id: row.id },
+        data: {
+          northDetection: detection as unknown as PrismaNs.InputJsonValue,
+        },
+      });
+      northDetection = detection as unknown as PrismaNs.JsonValue;
     }
 
     return {
@@ -879,6 +908,7 @@ export const courseRouter = router({
       northOffset,
       calibration,
       rotationCorrection,
+      meridianStalenessDeg: currentMeridianStaleness(northDetection),
       uploadedAt: row.uploadedAt.getTime(),
     };
   }),
@@ -946,9 +976,9 @@ export const courseRouter = router({
       },
     });
 
-    // If any control has only map-mm coords (no usable lat/lng),
-    // fall back to converting via the OCAD CRS extracted from the
-    // uploaded map file.
+    // Positioned controls use map-mm as their authoritative location.
+    // Always derive WGS84 through the current corrected event CRS so
+    // legacy stored lat/lng cannot drift from map calibration.
     //
     // We treat both `null` *and* `0` as "no lat/lng" because the OCD
     // parser used to emit `(0, 0)` for every control, leaving legacy
@@ -958,10 +988,10 @@ export const courseRouter = router({
     let crs: OcadCrs | null = null;
     const isMissingLatLng = (c: { lat: number | null; lng: number | null }) =>
       c.lat == null || c.lng == null || (c.lat === 0 && c.lng === 0);
-    const needsConversion = controls.some(
-      (c) => isMissingLatLng(c) && (c.xpos !== 0 || c.ypos !== 0),
+    const hasPositionedControls = controls.some(
+      (c) => c.xpos !== 0 || c.ypos !== 0,
     );
-    if (needsConversion) {
+    if (hasPositionedControls) {
       // Cached per event — the course editor refetches this query after
       // every placement, so avoid re-parsing the map file each time.
       crs = await loadEventCrs(ctx.db, ctx.event.id);
@@ -974,7 +1004,7 @@ export const courseRouter = router({
       .map((c) => {
         let lat = c.lat ?? 0;
         let lng = c.lng ?? 0;
-        if (isMissingLatLng(c) && crs && (c.xpos !== 0 || c.ypos !== 0)) {
+        if (crs && (c.xpos !== 0 || c.ypos !== 0)) {
           const wgs84 = mapMmToWgs84(c.xpos, c.ypos, crs);
           if (wgs84) {
             lat = wgs84.lat;
@@ -1129,9 +1159,12 @@ export const courseRouter = router({
     }),
 
   /**
-   * Set a manual north/grivation correction (degrees, clockwise positive)
-   * for the current event map. Re-derives bounds / northOffset /
-   * calibration and clears tile caches.
+   * Ops-only escape hatch: override the event map's georeference by a
+   * manual grivation correction (degrees, clockwise positive). Not
+   * exposed in the UI — the OCAD file's ScalePar is authoritative and a
+   * genuinely mis-registered file should be fixed in OCAD and re-uploaded.
+   * Re-derives bounds / northOffset / calibration, re-syncs control
+   * coordinates and clears tile caches.
    */
   setMapRotation: coursesEditProcedure
     .input(
@@ -1340,28 +1373,37 @@ export const courseRouter = router({
       //      previously-resolved lat/lng (e.g. imported earlier via
       //      IOF XML or computed on the fly by `controlCoordinates`).
       //
-      // Fix: when we have an OCD file we re-open it through
-      // `ocad2geojson` to recover the CRS, then convert each control's
-      // (mapX, mapY) → WGS84 up-front. Controls whose CRS we don't
+      // Fix: after import alignment, use the event map's corrected CRS
+      // to convert each control's (mapX, mapY) → WGS84 up-front.
+      // Controls whose CRS we don't
       // support fall back to lat/lng = null below, and
       // `controlCoordinates` keeps its on-the-fly conversion as a
       // belt-and-braces fallback. IOF XML imports already carry good
       // lat/lng from the parser and are not affected.
       let ocdCrs: OcadCrs | null = null;
       if (input.ocdBase64) {
-        try {
-          const ocadMod = await import("ocad2geojson");
-          const readOcad = (ocadMod as Record<string, unknown>).readOcad as (
-            buf: Buffer,
-            opts?: Record<string, unknown>,
-          ) => Promise<{ getCrs(): OcadCrs }>;
-          const ocadFile = await readOcad(
-            Buffer.from(input.ocdBase64, "base64"),
-            { quietWarnings: true },
-          );
-          ocdCrs = ocadFile.getCrs();
-        } catch (err) {
-          console.warn("[importCourses] OCAD CRS load failed:", err);
+        // Alignment has already put parsed map-mm coordinates into the
+        // event map's paper space, so convert them with that map's
+        // corrected CRS rather than the raw CRS embedded in the import.
+        ocdCrs = await loadEventCrs(ctx.db, eventId);
+        // A standalone OCD course bundle can be imported before the event
+        // has a base map. In that case its own CRS remains the only valid
+        // conversion source.
+        if (!ocdCrs) {
+          try {
+            const ocadMod = await import("ocad2geojson");
+            const readOcad = (ocadMod as Record<string, unknown>).readOcad as (
+              buf: Buffer,
+              opts?: Record<string, unknown>,
+            ) => Promise<{ getCrs(): OcadCrs }>;
+            const imported = await readOcad(
+              Buffer.from(input.ocdBase64, "base64"),
+              { quietWarnings: true },
+            );
+            ocdCrs = imported.getCrs();
+          } catch (error) {
+            console.warn("[importCourses] OCAD CRS load failed:", error);
+          }
         }
       }
 

@@ -4,6 +4,8 @@ import { router, authedProcedure } from "../trpc.js";
 import { prisma } from "../db.js";
 import {
   applyClubMapRotationCorrection,
+  currentMeridianStaleness,
+  detectNorthFromBuffer,
   resolveMapNorth,
 } from "../event-map.js";
 import { canDownloadClubLibraryMap } from "../ocad-export.js";
@@ -35,6 +37,29 @@ export const clubMapRouter = router({
         uploader: { select: { email: true, displayName: true } },
       },
     });
+
+    // Rows uploaded before the north_detection column exist with NULL,
+    // which is indistinguishable from "analysed, no 601 lines" in the UI.
+    // Backfill once on first read — same pattern as the preview
+    // thumbnail backfill. Unparseable blobs persist an all-null
+    // detection so they are not re-parsed on every list call.
+    for (const row of rows) {
+      if (row.northDetection != null) continue;
+      const blob = await prisma().clubMapFile.findUnique({
+        where: { id: row.id },
+        select: { fileData: true },
+      });
+      if (!blob) continue;
+      const detection = await detectNorthFromBuffer(Buffer.from(blob.fileData));
+      await prisma().clubMapFile.update({
+        where: { id: row.id },
+        data: {
+          northDetection: detection as unknown as Prisma.InputJsonValue,
+        },
+      });
+      row.northDetection = detection as unknown as Prisma.JsonValue;
+    }
+
     return rows.map((row) => ({
       id: toId(row.id),
       name: row.name,
@@ -45,6 +70,9 @@ export const clubMapRouter = router({
       northOffset: row.northOffset,
       rotationCorrection: row.rotationCorrection,
       northDetection: (row.northDetection as NorthDetection | null) ?? null,
+      // Evaluated for today, not import time, so a library map starts
+      // to flag its north lines as the declination drifts away from them.
+      meridianStalenessDeg: currentMeridianStaleness(row.northDetection),
       uploadedAt: row.uploadedAt.toISOString(),
       uploadedBy: row.uploadedBy,
       uploader: row.uploader,
@@ -96,13 +124,16 @@ export const clubMapRouter = router({
         fileName: row.fileName,
         sizeBytes: row.sizeBytes,
         rotationCorrection: row.rotationCorrection,
+        meridianStalenessDeg: resolved.meridianStalenessDeg,
       };
     }),
 
   /**
-   * Set a manual north/grivation correction on a club-library map.
-   * Re-derives bounds / northOffset. Events that already copied this
-   * map keep their own MapFile.rotationCorrection until re-copied.
+   * Ops-only escape hatch: manual georeference correction on a
+   * club-library map. Not exposed in the UI — ScalePar is authoritative
+   * and a mis-registered file belongs back in OCAD. Re-derives bounds /
+   * northOffset. Events that already copied this map keep their own
+   * MapFile.rotationCorrection until re-copied.
    */
   setRotation: authedProcedure
     .input(

@@ -60,6 +60,8 @@ const FinishStation = lazy(() => import("./FinishStation").then(m => ({ default:
 const CardReadout = lazy(() => import("./CardReadout").then(m => ({ default: m.CardReadout })));
 const ControlsPage = lazy(() => import("./ControlsPage").then(m => ({ default: m.ControlsPage })));
 const CoursesPage = lazy(() => import("./CoursesPage").then(m => ({ default: m.CoursesPage })));
+const MapsPage = lazy(() => import("./MapsPage").then(m => ({ default: m.MapsPage })));
+const MapTemplatesPage = lazy(() => import("./MapTemplatesPage").then(m => ({ default: m.MapTemplatesPage })));
 const CourseEditorPage = lazy(() => import("./CourseEditorPage").then(m => ({ default: m.CourseEditorPage })));
 const ClassesPage = lazy(() => import("./ClassesPage").then(m => ({ default: m.ClassesPage })));
 const ClubsPage = lazy(() => import("./ClubsPage").then(m => ({ default: m.ClubsPage })));
@@ -79,6 +81,8 @@ const tabLabelKeys = {
   "results": "results",
   "classes": "classes",
   "courses": "courses",
+  "maps": "maps",
+  "map-templates": "mapTemplates",
   "course-editor": "courseEditor",
   "controls": "controls",
   "cards": "cards",
@@ -612,6 +616,8 @@ function CompetitionShellInner() {
             <Route path="results" element={<Guarded cap="results.view"><ResultsPage /></Guarded>} />
             <Route path="classes" element={<Guarded cap="event.view"><ClassesPage /></Guarded>} />
             <Route path="courses" element={<Guarded cap="courses.view"><CoursesPage /></Guarded>} />
+            <Route path="maps" element={<Guarded cap="courses.view"><MapsPage /></Guarded>} />
+            <Route path="map-templates" element={<Guarded cap="courses.view"><MapTemplatesPage /></Guarded>} />
             <Route path="course-editor" element={<Guarded cap="courses.view"><CourseEditorPage /></Guarded>} />
             <Route path="controls" element={<Guarded cap="courses.view"><ControlsPage /></Guarded>} />
             <Route path="clubs" element={<Guarded cap="event.view"><ClubsPage /></Guarded>} />

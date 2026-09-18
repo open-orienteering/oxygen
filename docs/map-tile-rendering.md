@@ -204,39 +204,42 @@ Peak render memory is roughly
 `4 bytes × (blockTiles × 256 × supersample × √2)² × concurrency`, about
 300 MB at the defaults.
 
-## North correction
+## North: georeference, meridian lines, display
 
-Some OCAD files declare ScalePar `a=0` while the drawing is rotated
-relative to true north. Projection code already honours the file's
-grivation, so those maps need a stored override:
+Three independent things, deliberately kept apart
+(`map-north.ts`, `event-map.ts`):
 
-- Columns `map_files.rotation_correction` and
-  `club_map_files.rotation_correction` (degrees, CW positive).
-- Import-time auto-detect in `map-north.ts`:
-  `suggested = declination + trueNorthFromGrid − declaredGrivation − meridianTilt`
-  (~1.7° for Nackareservatet — not the physics-only 4.5°/5°, and not
-  the earlier unverified ~11°). The meridian-tilt term matters because
-  the drawn 601.x north lines are the ground truth and can be tilted
-  inside the paper drawing (3.3° at Nacka). Meridian clusters also gate
-  auto-apply.
-- `withGrivationCorrection` in `map-projection.ts` adds the correction
-  to grivation and reimplements `toProjectedCoord`.
-- `parseOcadMapMetadata` / `resolveMapNorth` and `loadMapSource` all
-  apply the wrapper, so bounds, `northOffset`, calibration, and tile
-  warps stay consistent.
-- **Display vs georeference:** the correction only fixes the
-  georeference (GPS overlays). On-screen uprightness comes from
-  `northOffset`, which `metadataFromOcad` computes as the bearing of
-  the *display-up* direction — the meridian-line direction when the
-  file has one, else paper +Y. The viewer rotates by `-northOffset`,
-  so meridian lines render vertical regardless of the correction
-  value. (Changing the correction alone can never straighten the map:
-  it rotates the tiles and `northOffset` by the same amount, which
-  cancels on screen.)
-- Admin UI: single input on **Settings → Maps** (`clubMap.setRotation`).
-  `course.useClubMap` copies the library correction into the event.
-  `course.setMapRotation` remains for ops/API. See
-  `docs/bugfix-map-north-correction.md`.
+- **Georeference** — the file's ScalePar (grid, offset, scale, angle)
+  is authoritative. `rotation_correction` on `map_files` /
+  `club_map_files` defaults to 0 and is never set automatically; it is
+  an ops-only override (`course.setMapRotation`, `clubMap.setRotation`)
+  for a file that is genuinely mis-registered. `withGrivationCorrection`
+  applies it, and `loadEventCrs`, `parseOcadMapMetadata`,
+  `loadMapSource` and the tile warp all go through the same wrapper.
+- **Drawn meridian lines** (ISOM 601.x) — a compass aid at the
+  declination of the production date. `detectMapNorth` finds the
+  cluster, measures its in-paper tilt and computes
+
+  `staleness = declination(now) + trueNorthFromGrid − declaredGrivation − meridianTilt`
+
+  i.e. today's grivation minus the grivation the lines were drawn at
+  (≈ 0.1–0.2°/yr drift in Sweden). The static parts are persisted in
+  `north_detection`; `meridianStalenessFromDetection` re-evaluates the
+  WMM for today, so `clubMap.list` and `course.mapMetadata` return a
+  live `meridianStalenessDeg`. `|staleness| ≥ 1°` is shown as an amber
+  badge (Settings → Maps, course-editor map panel) and as a one-off
+  notice after upload. Purely informational.
+- **Display orientation** — `northOffset` is the bearing of the
+  *display-up* direction: the meridian direction when the file has one
+  (`displayNorthOffsetDeg` folds the tilt in), else paper +Y. The viewer
+  rotates by `-northOffset` and the print pipeline by `-meridianTiltDeg`,
+  so north lines render vertical. Presentation only; nothing moves
+  geographically.
+
+History: an earlier version read the staleness as a georeference error
+and auto-applied it, shifting GPS by ~200 m. See
+`docs/bugfix-auto-north-correction-gps-offset.md` (and the superseded
+`docs/bugfix-map-north-correction.md`).
 
 ## Client tile loading
 
@@ -292,8 +295,8 @@ The rule matches `/api/map-tile/` with the trailing slash so
   parsing, cache eviction, semaphore.
 - `packages/api/src/__tests__/map-projection-correction.test.ts` —
   grivation correction composition and OCAD ↔ WGS84 round-trip.
-- `packages/api/src/__tests__/map-north.test.ts` — declination /
-  convergence formula and meridian clustering.
+- `packages/api/src/__tests__/map-north.test.ts` — meridian clustering,
+  staleness arithmetic and its re-evaluation from a stored row.
 - `packages/web/src/lib/__tests__/tile-retry.test.ts` — backoff,
   Retry-After, concurrency cap, abort.
 - `packages/api/src/__tests__/integration/map-tiles.test.ts` — the
@@ -302,4 +305,7 @@ The rule matches `/api/map-tile/` with the trailing slash so
   the progress poll advancing the pre-cache with no tile request to
   trigger the background loop.
 - `packages/api/src/__tests__/integration/map-rotation.test.ts` —
-  `setMapRotation` re-derives metadata and drops tiles.
+  `setMapRotation` (ops override) re-derives metadata, re-syncs control
+  coordinates and drops tiles.
+- `packages/api/src/__tests__/integration/reset-auto-north-corrections.test.ts`
+  — the data migration that undoes auto-applied corrections.

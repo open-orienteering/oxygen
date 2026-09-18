@@ -9,7 +9,10 @@
  * (which `uploadMap` and `importCourses` both bump on any change).
  */
 
-import type { OcadCrs } from "./map-projection.js";
+import {
+  withGrivationCorrection,
+  type OcadCrs,
+} from "./map-projection.js";
 
 /** The subset of the Prisma client this helper needs (works inside $transaction too). */
 interface MapFileReader {
@@ -18,11 +21,18 @@ interface MapFileReader {
       where: { eventId: bigint };
       orderBy: { uploadedAt: "desc" };
       select: Record<string, boolean>;
-    }): Promise<{ uploadedAt?: Date; fileData?: Uint8Array } | null>;
+    }): Promise<{
+      uploadedAt?: Date;
+      fileData?: Uint8Array;
+      rotationCorrection?: number;
+    } | null>;
   };
 }
 
-const cache = new Map<string, { uploadedAtMs: number; crs: OcadCrs | null }>();
+const cache = new Map<
+  string,
+  { uploadedAtMs: number; rotationCorrection: number; crs: OcadCrs | null }
+>();
 
 /**
  * Return the CRS of the event's latest uploaded map, or null when there is
@@ -37,15 +47,22 @@ export async function loadEventCrs(
   const meta = await db.mapFile.findFirst({
     where: { eventId },
     orderBy: { uploadedAt: "desc" },
-    select: { uploadedAt: true },
+    select: { uploadedAt: true, rotationCorrection: true },
   });
   if (!meta?.uploadedAt) {
     cache.delete(key);
     return null;
   }
   const uploadedAtMs = meta.uploadedAt.getTime();
+  const rotationCorrection = meta.rotationCorrection ?? 0;
   const cached = cache.get(key);
-  if (cached && cached.uploadedAtMs === uploadedAtMs) return cached.crs;
+  if (
+    cached &&
+    cached.uploadedAtMs === uploadedAtMs &&
+    cached.rotationCorrection === rotationCorrection
+  ) {
+    return cached.crs;
+  }
 
   let crs: OcadCrs | null = null;
   try {
@@ -63,12 +80,15 @@ export async function loadEventCrs(
       const ocadFile = await readOcad(Buffer.from(row.fileData), {
         quietWarnings: true,
       });
-      crs = ocadFile.getCrs();
+      crs = withGrivationCorrection(
+        ocadFile.getCrs(),
+        rotationCorrection,
+      );
     }
   } catch (err) {
     console.warn("[event-crs] OCAD CRS load failed:", err);
     crs = null;
   }
-  cache.set(key, { uploadedAtMs, crs });
+  cache.set(key, { uploadedAtMs, rotationCorrection, crs });
   return crs;
 }

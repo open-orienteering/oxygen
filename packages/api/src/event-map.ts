@@ -12,18 +12,21 @@ import { emitCourseUpserted } from "./referenceJournal.js";
 import {
   ocadBoundsToWgs84,
   ocadToWgs84,
+  mapMmToWgs84,
   computeMapNorthOffset,
   withGrivationCorrection,
   type OcadCrs,
   type WGS84Bounds,
 } from "./map-projection.js";
 import {
-  detectNorthCorrection,
+  detectMapNorth,
   displayNorthOffsetDeg,
+  meridianStalenessFromDetection,
   probeMeridianLines,
   type NorthDetection,
   type OcadNorthSource,
 } from "./map-north.js";
+import { loadEventCrs } from "./event-crs.js";
 
 type Db = PrismaClient | Prisma.TransactionClient;
 
@@ -51,6 +54,8 @@ export type ResolvedMapNorth = {
   metadata: ClubMapMetadata;
   rotationCorrection: number;
   northDetection: NorthDetection | null;
+  /** Drawn-meridian staleness today; null when the file has no north lines. */
+  meridianStalenessDeg: number | null;
 };
 
 type OcadParsed = OcadNorthSource & {
@@ -125,15 +130,19 @@ export async function parseOcadMapMetadata(
 }
 
 /**
- * Parse OCAD, run north detection, and resolve the rotation correction
- * to apply. When `forcedCorrection` is set (e.g. copying from the club
- * library) it wins; otherwise auto-apply the physics suggestion when
- * the meridian gate passes.
+ * Parse OCAD, run the north diagnostics, and derive metadata.
+ *
+ * The file's ScalePar georeference is authoritative: `rotationCorrection`
+ * is `forcedCorrection` when given (a club-library copy carries the
+ * library row's manual value along) and 0 otherwise. North detection is
+ * diagnostic only — it reports how stale the drawn meridian lines are,
+ * it never adjusts the georeference.
  */
 export async function resolveMapNorth(
   buffer: Buffer,
   opts: { forcedCorrection?: number } = {},
 ): Promise<ResolvedMapNorth> {
+  const rotationCorrection = opts.forcedCorrection ?? 0;
   const empty: ResolvedMapNorth = {
     metadata: {
       scale: null,
@@ -141,38 +150,74 @@ export async function resolveMapNorth(
       northOffset: null,
       calibration: null,
     },
-    rotationCorrection: opts.forcedCorrection ?? 0,
+    rotationCorrection,
     northDetection: null,
+    meridianStalenessDeg: null,
   };
   const ocad = await readOcadQuiet(buffer);
   if (!ocad) return empty;
 
   let northDetection: NorthDetection | null = null;
   try {
-    northDetection = detectNorthCorrection(ocad);
+    northDetection = detectMapNorth(ocad);
   } catch (err) {
     console.warn("[resolveMapNorth] north detection failed:", err);
   }
-
-  let rotationCorrection = opts.forcedCorrection ?? 0;
-  if (opts.forcedCorrection === undefined) {
-    if (
-      northDetection?.shouldAutoApply &&
-      northDetection.suggestedCorrectionDeg != null
-    ) {
-      rotationCorrection = northDetection.suggestedCorrectionDeg;
-    }
-  }
+  const meridianStalenessDeg = northDetection?.meridianStalenessDeg ?? null;
 
   try {
     return {
       metadata: metadataFromOcad(ocad, rotationCorrection),
       rotationCorrection,
       northDetection,
+      meridianStalenessDeg,
     };
   } catch (err) {
     console.warn("[resolveMapNorth] metadata derive failed:", err);
-    return { ...empty, rotationCorrection, northDetection };
+    return { ...empty, northDetection, meridianStalenessDeg };
+  }
+}
+
+/**
+ * Today's drawn-meridian staleness for a stored `north_detection` row.
+ * Thin wrapper so routers do not need to know the JSON shape.
+ */
+export function currentMeridianStaleness(
+  northDetection: unknown,
+): number | null {
+  return meridianStalenessFromDetection(
+    (northDetection as NorthDetection | null | undefined) ?? null,
+  );
+}
+
+/**
+ * North analysis for a raw OCAD buffer, for backfilling rows uploaded
+ * before the `north_detection` column existed. An unparseable file (or a
+ * detection crash) yields an all-null detection rather than null, so the
+ * caller persists *something* and the same blob is never re-parsed on
+ * every read — and the UI can honestly say "no north lines found" instead
+ * of "not analysed".
+ */
+export async function detectNorthFromBuffer(
+  buffer: Buffer,
+): Promise<NorthDetection> {
+  const empty: NorthDetection = {
+    declaredGrivationDeg: 0,
+    declinationDeg: null,
+    trueNorthFromGridDeg: null,
+    meridian: null,
+    meridianStalenessDeg: null,
+    centerLat: null,
+    centerLng: null,
+    asOf: new Date().toISOString(),
+  };
+  const ocad = await readOcadQuiet(buffer);
+  if (!ocad) return empty;
+  try {
+    return detectMapNorth(ocad);
+  } catch (err) {
+    console.warn("[detectNorthFromBuffer] north detection failed:", err);
+    return empty;
   }
 }
 
@@ -208,6 +253,40 @@ function detectionJson(
   return detection as unknown as Prisma.InputJsonValue;
 }
 
+/**
+ * Recompute stored WGS84 coordinates from authoritative map-mm positions.
+ * This keeps list/map consumers that read lat/lng directly aligned with
+ * the corrected event CRS.
+ */
+export async function synchronizePositionedControlCoordinates(
+  db: Db,
+  eventId: bigint,
+): Promise<number> {
+  const crs = await loadEventCrs(db, eventId);
+  if (!crs) return 0;
+  const controls = await db.control.findMany({
+    where: {
+      eventId,
+      removed: false,
+      OR: [{ xpos: { not: 0 } }, { ypos: { not: 0 } }],
+    },
+    select: { id: true, xpos: true, ypos: true },
+  });
+  const updates = controls.flatMap((control) => {
+    const position = mapMmToWgs84(control.xpos, control.ypos, crs);
+    return position
+      ? [
+          db.control.update({
+            where: { id: control.id },
+            data: { lat: position.lat, lng: position.lng },
+          }),
+        ]
+      : [];
+  });
+  await Promise.all(updates);
+  return updates.length;
+}
+
 /** Replace the event map, drop tile caches, rebuild editor course geometry. */
 export async function applyEventMap(
   db: Db,
@@ -216,10 +295,15 @@ export async function applyEventMap(
   buffer: Buffer,
   opts: {
     fromClubLibrary?: boolean;
-    /** When set (club-library copy), skip auto-detect apply and use this. */
+    /** Club-library copy: carry the library row's manual correction along. */
     rotationCorrection?: number;
   } = {},
-): Promise<{ fileName: string; size: number; rotationCorrection: number }> {
+): Promise<{
+  fileName: string;
+  size: number;
+  rotationCorrection: number;
+  meridianStalenessDeg: number | null;
+}> {
   const resolved = await resolveMapNorth(buffer, {
     forcedCorrection: opts.rotationCorrection,
   });
@@ -245,6 +329,7 @@ export async function applyEventMap(
   await db.mapTile.deleteMany({ where: { eventId } });
   await db.renderedMap.deleteMany({ where: { eventId } });
   fireMapUpload(eventId);
+  await synchronizePositionedControlCoordinates(db, eventId);
 
   const editorCourses = await db.course.findMany({
     where: { eventId, removed: false, geometrySource: "editor" },
@@ -262,6 +347,7 @@ export async function applyEventMap(
     fileName,
     size: buffer.length,
     rotationCorrection: resolved.rotationCorrection,
+    meridianStalenessDeg: resolved.meridianStalenessDeg,
   };
 }
 
@@ -306,6 +392,7 @@ export async function applyMapRotationCorrection(
   await db.mapTile.deleteMany({ where: { eventId } });
   await db.renderedMap.deleteMany({ where: { eventId } });
   fireMapUpload(eventId);
+  await synchronizePositionedControlCoordinates(db, eventId);
 
   const editorCourses = await db.course.findMany({
     where: { eventId, removed: false, geometrySource: "editor" },

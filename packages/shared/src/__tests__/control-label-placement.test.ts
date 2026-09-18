@@ -16,7 +16,7 @@ import {
   placeControlLabels,
   type PlacementCircle,
   type PlacementSeg,
-} from "../control-label-placement";
+} from "../course-maps/control-label-placement.js";
 
 /** Nominal overprint dimensions in map mm — same ratios MapViewer uses. */
 const OPTS = { radius: 2.5, labelSize: 3.5 };

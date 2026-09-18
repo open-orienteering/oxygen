@@ -1,7 +1,15 @@
 import { useState, useRef, useEffect, useCallback, useMemo } from "react";
 import { useTranslation } from "react-i18next";
 import { useParams } from "react-router-dom";
-import type { ControlDescription } from "@oxygen/shared";
+import {
+  clipLine,
+  drawBrokenCircle,
+  placeControlLabels,
+  subtractLegGaps,
+  type ControlDescription,
+  type PlacementCircle,
+  type PlacementSeg,
+} from "@oxygen/shared";
 import { getDescriptionSymbols } from "../iof-symbols";
 import { TileLayer } from "./TileLayer";
 import { kioskKeyFromUrl } from "../lib/kiosk-key";
@@ -43,12 +51,10 @@ import {
   courseLegLabelText,
   pillHalfWidth,
 } from "../lib/course-leg-labels";
-import {
-  placeControlLabels,
-  type PlacementCircle,
-  type PlacementSeg,
-} from "../lib/control-label-placement";
 import { useMediaQuery } from "../hooks/useMediaQuery";
+
+/** Persisted compass state: "1"/absent = rotation locked (north up). */
+const ROTATION_LOCK_STORAGE_KEY = "oxygen.map.rotationLock";
 
 // ─── Types ──────────────────────────────────────────────────
 
@@ -274,60 +280,6 @@ interface EditorControlHit {
 }
 interface EditorLegHit { key: string; d: string; course: string; index: number }
 
-/**
- * Clip a line segment (a→b) around ALL nearby control circles.
- * Returns visible sub-segments that don't pass through any clearance zone.
- */
-function clipLine(
-  a: Pt, b: Pt,
-  obstacles: Pt[],
-  clearance: number,
-): { x1: number; y1: number; x2: number; y2: number }[] {
-  const dx = b.x - a.x, dy = b.y - a.y;
-  const len = Math.sqrt(dx * dx + dy * dy);
-  if (len < 1) return [];
-  const ux = dx / len, uy = dy / len;
-
-  const blocks: [number, number][] = [];
-  for (const obs of obstacles) {
-    const vx = obs.x - a.x, vy = obs.y - a.y;
-    const t = vx * ux + vy * uy;
-    const px = a.x + t * ux - obs.x;
-    const py = a.y + t * uy - obs.y;
-    const perpDist = Math.sqrt(px * px + py * py);
-    if (perpDist < clearance) {
-      const half = Math.sqrt(clearance * clearance - perpDist * perpDist);
-      blocks.push([t - half, t + half]);
-    }
-  }
-
-  blocks.sort((ba, bb) => ba[0] - bb[0]);
-  const merged: [number, number][] = [];
-  for (const bl of blocks) {
-    if (merged.length > 0 && bl[0] <= merged[merged.length - 1][1]) {
-      merged[merged.length - 1][1] = Math.max(merged[merged.length - 1][1], bl[1]);
-    } else {
-      merged.push([bl[0], bl[1]]);
-    }
-  }
-
-  const segs: { x1: number; y1: number; x2: number; y2: number }[] = [];
-  let cursor = 0;
-  for (const [bs, be] of merged) {
-    const s0 = Math.max(cursor, 0);
-    const s1 = Math.min(bs, len);
-    if (s1 - s0 > 1) {
-      segs.push({ x1: a.x + s0 * ux, y1: a.y + s0 * uy, x2: a.x + s1 * ux, y2: a.y + s1 * uy });
-    }
-    cursor = be;
-  }
-  const s0 = Math.max(cursor, 0);
-  if (len - s0 > 1) {
-    segs.push({ x1: a.x + s0 * ux, y1: a.y + s0 * uy, x2: a.x + len * ux, y2: a.y + len * uy });
-  }
-  return segs;
-}
-
 // ─── Component ──────────────────────────────────────────────
 
 export function MapViewer({
@@ -420,6 +372,28 @@ export function MapViewer({
   const [measurePoints, setMeasurePoints] = useState<Pt[]>([]);
   const [measureCursor, setMeasureCursor] = useState<Pt | null>(null);
   const [userBearing, setUserBearing] = useState(0);
+  // Two-finger rotate is easy to trigger by accident while pinch-zooming,
+  // so rotation is opt-in: locked (north up) by default, remembered per
+  // browser. The compass button below cycles reset → unlock/lock.
+  const [rotationLocked, setRotationLocked] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem(ROTATION_LOCK_STORAGE_KEY) !== "0";
+    } catch {
+      return true;
+    }
+  });
+  // Mirror for the native touch listeners (registered in an effect whose
+  // dependency list should not grow for this).
+  const rotationLockedRef = useRef(rotationLocked);
+  rotationLockedRef.current = rotationLocked;
+  const persistRotationLock = (locked: boolean) => {
+    setRotationLocked(locked);
+    try {
+      localStorage.setItem(ROTATION_LOCK_STORAGE_KEY, locked ? "1" : "0");
+    } catch {
+      // Private mode etc. — the session still gets the chosen state.
+    }
+  };
 
   // ─── My-location (GPS) ───────────────────────────────────
   const [locateMode, setLocateMode] = useState<LocateMode>("off");
@@ -1095,8 +1069,10 @@ export function MapViewer({
         lastTouchRef.current = { x: midX, y: midY, dist };
         pendingTouchGestureRef.current = { x: midX, y: midY, dist };
 
-        // Two-finger rotate: activate after ~8° so plain pinch-zoom stays stable.
-        if (pinchStartAngleRef.current != null) {
+        // Two-finger rotate: activate after ~8° so plain pinch-zoom stays
+        // stable — and only when the compass is unlocked, since even 8°
+        // is easy to hit by accident mid-pinch.
+        if (pinchStartAngleRef.current != null && !rotationLockedRef.current) {
           const angle = Math.atan2(dy, dx);
           let deltaDeg = ((angle - pinchStartAngleRef.current) * 180) / Math.PI;
           if (deltaDeg > 180) deltaDeg -= 360;
@@ -2600,19 +2576,66 @@ export function MapViewer({
           >
             <IconLocate className="w-4 h-4" />
           </button>
-          {userBearing !== 0 && (
-            <button
-              type="button"
-              data-testid="compass-reset"
-              onClick={() => setUserBearing(0)}
-              className="w-8 h-8 bg-white rounded shadow hover:bg-slate-50 flex items-center justify-center text-slate-600"
-              title={t("compassReset")}
-              aria-label={t("compassReset")}
-              style={{ transform: `rotate(${userBearing}deg)` }}
+          {/* Compass — three states: rotated (tap resets to north up),
+              unlocked at north up (tap locks), locked (tap unlocks).
+              Locked is the default: an accidental two-finger twist while
+              pinch-zooming must not turn the map. */}
+          <button
+            type="button"
+            data-testid="map-compass"
+            data-rotation-locked={rotationLocked ? "1" : "0"}
+            onClick={() => {
+              if (userBearing !== 0) {
+                setUserBearing(0);
+                return;
+              }
+              persistRotationLock(!rotationLocked);
+            }}
+            className={`w-8 h-8 rounded shadow flex items-center justify-center ${
+              rotationLocked
+                ? "bg-white hover:bg-slate-50 text-slate-600"
+                : "bg-blue-100 hover:bg-blue-200 text-blue-600"
+            }`}
+            title={
+              userBearing !== 0
+                ? t("compassReset")
+                : rotationLocked
+                  ? t("compassLocked")
+                  : t("compassUnlocked")
+            }
+            aria-label={
+              userBearing !== 0
+                ? t("compassReset")
+                : rotationLocked
+                  ? t("compassLocked")
+                  : t("compassUnlocked")
+            }
+            aria-pressed={!rotationLocked}
+          >
+            <span
+              className="relative flex items-center justify-center"
+              style={{
+                transform:
+                  userBearing !== 0 ? `rotate(${userBearing}deg)` : undefined,
+              }}
             >
               <IconCompass className="w-4 h-4" />
-            </button>
-          )}
+              {rotationLocked && (
+                <svg
+                  aria-hidden="true"
+                  className="absolute -right-1.5 -bottom-1.5 h-2.5 w-2.5 text-slate-500"
+                  viewBox="0 0 20 20"
+                  fill="currentColor"
+                >
+                  <path
+                    fillRule="evenodd"
+                    d="M10 1a4.5 4.5 0 0 0-4.5 4.5V9H5a2 2 0 0 0-2 2v6a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-6a2 2 0 0 0-2-2h-.5V5.5A4.5 4.5 0 0 0 10 1Zm3 8V5.5a3 3 0 1 0-6 0V9h6Z"
+                    clipRule="evenodd"
+                  />
+                </svg>
+              )}
+            </span>
+          </button>
           {onToggleFullscreen && (
             <button
               type="button"
@@ -2632,121 +2655,6 @@ export function MapViewer({
       )}
     </div>
   );
-}
-
-// ─── Subtract leg gaps from a screen-space polyline ────────
-
-/**
- * Split a leg polyline into the kept sub-polylines outside the given
- * gaps. Gaps are fractions 0..1 of the leg's total length (the parameter
- * space the server computed them in); fractions survive the map
- * projection because a leg is short enough to be locally linear.
- */
-function subtractLegGaps(
-  pts: Pt[],
-  gaps: { from: number; to: number }[],
-): Pt[][] {
-  const cum: number[] = [0];
-  for (let i = 1; i < pts.length; i++) {
-    cum.push(cum[i - 1] + Math.hypot(pts[i].x - pts[i - 1].x, pts[i].y - pts[i - 1].y));
-  }
-  const total = cum[cum.length - 1];
-  if (total === 0) return [pts];
-
-  const sorted = gaps
-    .map((g): [number, number] => [Math.max(0, g.from), Math.min(1, g.to)])
-    .filter(([a, b]) => b > a)
-    .sort((a, b) => a[0] - b[0]);
-
-  const kept: [number, number][] = [];
-  let cursor = 0;
-  for (const [a, b] of sorted) {
-    if (a > cursor) kept.push([cursor, a]);
-    cursor = Math.max(cursor, b);
-  }
-  if (cursor < 1) kept.push([cursor, 1]);
-
-  const pointAt = (t: number): Pt => {
-    const d = t * total;
-    let i = 1;
-    while (i < cum.length - 1 && cum[i] < d) i++;
-    const segLen = cum[i] - cum[i - 1] || 1;
-    const f = (d - cum[i - 1]) / segLen;
-    return {
-      x: pts[i - 1].x + f * (pts[i].x - pts[i - 1].x),
-      y: pts[i - 1].y + f * (pts[i].y - pts[i - 1].y),
-    };
-  };
-
-  return kept.map(([a, b]) => {
-    const out: Pt[] = [pointAt(a)];
-    for (let i = 0; i < pts.length; i++) {
-      const t = cum[i] / total;
-      if (t > a && t < b) out.push(pts[i]);
-    }
-    out.push(pointAt(b));
-    return out;
-  });
-}
-
-// ─── Draw broken circle with slit gaps ─────────────────────
-
-function drawBrokenCircle(cx: number, cy: number, r: number, gaps: SlitGap[]): string {
-  const normalized: { start: number; end: number }[] = [];
-  for (const g of gaps) {
-    const s = ((g.start % 360) + 360) % 360;
-    const e = ((g.end % 360) + 360) % 360;
-    if (Math.abs(s - e) < 0.5) continue;
-    normalized.push({ start: s, end: e });
-  }
-
-  if (normalized.length === 0) {
-    return `M${cx + r},${cy} A${r},${r} 0 1 1 ${cx - r},${cy} A${r},${r} 0 1 1 ${cx + r},${cy}`;
-  }
-
-  const gapAngles: [number, number][] = [];
-  for (const g of normalized) {
-    if (g.start < g.end) {
-      gapAngles.push([g.start, g.end]);
-    } else {
-      gapAngles.push([g.start, 360]);
-      gapAngles.push([0, g.end]);
-    }
-  }
-  gapAngles.sort((a, b) => a[0] - b[0]);
-
-  const merged: [number, number][] = [];
-  for (const g of gapAngles) {
-    if (merged.length > 0 && g[0] <= merged[merged.length - 1][1]) {
-      merged[merged.length - 1][1] = Math.max(merged[merged.length - 1][1], g[1]);
-    } else {
-      merged.push([g[0], g[1]]);
-    }
-  }
-
-  const arcs: { start: number; end: number }[] = [];
-  let cursor = 0;
-  for (const [gs, ge] of merged) {
-    if (gs > cursor) arcs.push({ start: cursor, end: gs });
-    cursor = ge;
-  }
-  if (cursor < 360) arcs.push({ start: cursor, end: 360 });
-
-  let d = "";
-  for (const arc of arcs) {
-    const sweep = arc.end - arc.start;
-    if (sweep < 0.5) continue;
-    const startRad = ((90 - arc.start) * Math.PI) / 180;
-    const endRad = ((90 - arc.end) * Math.PI) / 180;
-    const x1 = cx + r * Math.cos(startRad);
-    const y1 = cy - r * Math.sin(startRad);
-    const x2 = cx + r * Math.cos(endRad);
-    const y2 = cy - r * Math.sin(endRad);
-    const largeArc = sweep > 180 ? 1 : 0;
-    d += `M${x1.toFixed(1)},${y1.toFixed(1)} A${r},${r} 0 ${largeArc} 1 ${x2.toFixed(1)},${y2.toFixed(1)} `;
-  }
-
-  return d;
 }
 
 // ─── Description sheet renderer ────────────────────────────

@@ -56,10 +56,14 @@ ENV OXYGEN_BUILD_ID=$BUILD_ID
 
 WORKDIR /app
 
-# pg_dump is required for the event backup download endpoint
-# (GET /api/backup/event). postgresql-client provides it.
+# pg_dump is required for event backup downloads. rsvg-convert provides
+# vector SVG→PDF conversion for printable course maps; Liberation Sans is
+# used for deterministic overlay text metrics.
 RUN apt-get update \
- && apt-get install -y --no-install-recommends postgresql-client \
+ && apt-get install -y --no-install-recommends \
+      postgresql-client \
+      librsvg2-bin \
+      fonts-liberation \
  && rm -rf /var/lib/apt/lists/*
 
 # Copy the monorepo structure with deps (includes generated Prisma client)
