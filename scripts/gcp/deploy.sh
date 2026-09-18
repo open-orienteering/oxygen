@@ -1,89 +1,198 @@
 #!/usr/bin/env bash
-# Build the `cloud` image with Cloud Build and deploy it to Cloud Run.
-# Deploys in idle mode (scale-to-zero, request-based billing); run
-# ./event-mode.sh before a competition. See docs/deploy-gcp-cloud-run.md.
+# Deploy a published GHCR image to Cloud Run, then apply Prisma migrations
+# with that same image. Club Cloud Run is never updated from GitHub Actions.
+#
+# Usage:
+#   ./deploy.sh                 # DEPLOY_TAG from env.sh, else :stable
+#   ./deploy.sh v1.2.3
+#   ./deploy.sh edge
+#   ./deploy.sh sha-<40-char-commit>
+#   ./deploy.sh --from-source   # Cloud Build from this working tree (fallback)
+#   ./deploy.sh --migrate-only [tag]
+#
+# Scaling (idle vs event mode) is preserved from the running service.
+# See docs/deploy-gcp-cloud-run.md and docs/releases-and-images.md.
 set -euo pipefail
 cd "$(dirname "$0")"
+
+usage() {
+  cat <<EOF
+Usage: $(basename "$0") [--from-source | --migrate-only] [tag]
+
+  tag            GHCR tag (v1.2.3, edge, sha-<commit>), digest, or full image ref.
+                 Default: \$DEPLOY_TAG from env.sh, otherwise stable.
+  --from-source  Build this working tree with Cloud Build and deploy :latest
+                 from Artifact Registry instead of GHCR.
+  --migrate-only Apply Prisma migrations without changing the Cloud Run service.
+EOF
+}
+
+if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
+  usage
+  exit 0
+fi
+
 source ./env.sh
 
 REPO_ROOT="$(git -C ../.. rev-parse --show-toplevel)"
+GHCR_IMAGE="${GHCR_IMAGE:-ghcr.io/open-orienteering/oxygen}"
+export GHCR_IMAGE
 
-# Version identity reported by /api/version — the web client shows its
-# "update available" prompt when this changes, so it must be unique per
-# build but stable across container restarts.
-BUILD_ID="$(git -C "$REPO_ROOT" rev-parse --short HEAD 2>/dev/null || echo dev)-$(date +%Y%m%d%H%M%S)"
+FROM_SOURCE=0
+MIGRATE_ONLY=0
+TAG_INPUT=""
 
-echo "── Building image with Cloud Build (BUILD_ID=${BUILD_ID})…"
-gcloud builds submit "$REPO_ROOT" \
-  --project="$PROJECT_ID" \
-  --config="$REPO_ROOT/scripts/gcp/cloudbuild.yaml" \
-  --substitutions="_IMAGE=${IMAGE},_BUILD_ID=${BUILD_ID}"
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --from-source)
+      FROM_SOURCE=1
+      shift
+      ;;
+    --migrate-only)
+      MIGRATE_ONLY=1
+      shift
+      ;;
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    -*)
+      echo "Unknown option: $1" >&2
+      usage >&2
+      exit 1
+      ;;
+    *)
+      if [[ -n "$TAG_INPUT" ]]; then
+        echo "Unexpected extra argument: $1" >&2
+        usage >&2
+        exit 1
+      fi
+      TAG_INPUT="$1"
+      shift
+      ;;
+  esac
+done
 
-if [[ -z "${OXYGEN_ADMIN_EMAILS:-}" ]]; then
-  echo "!! OXYGEN_ADMIN_EMAILS is unset in env.sh — with AUTH_MODE=proxy nobody" >&2
-  echo "   will be able to open /admin/users. See env.sh.example." >&2
+if [[ "$FROM_SOURCE" -eq 1 && -n "$TAG_INPUT" ]]; then
+  echo "--from-source cannot be combined with an image tag." >&2
+  exit 1
 fi
 
-echo "── Deploying to Cloud Run…"
-gcloud run deploy "$SERVICE" \
-  --project="$PROJECT_ID" \
-  --region="$REGION" \
-  --image="${IMAGE}:latest" \
-  --service-account="oxygen-run@${PROJECT_ID}.iam.gserviceaccount.com" \
-  --add-cloudsql-instances="$SQL_CONNECTION" \
-  --set-secrets="DATABASE_URL=oxygen-database-url:latest" \
-  --set-env-vars="^;^NODE_OPTIONS=--max-old-space-size=3328;DATABASE_POOL_MAX=8;MAP_RENDER_CONCURRENCY=3;AUTH_MODE=proxy;AUTH_HEADER=x-goog-authenticated-user-email;AUTH_AUTO_PROVISION=member;OXYGEN_ADMIN_EMAILS=${OXYGEN_ADMIN_EMAILS:-}" \
-  --memory=4Gi \
-  --cpu=2 \
-  --timeout=300 \
-  --max-instances=2 \
-  --min-instances=0 \
-  --cpu-throttling \
-  --no-allow-unauthenticated
+resolve_image_ref() {
+  node "$REPO_ROOT/scripts/ghcr-ref.mjs" resolve "$1"
+}
 
-# `--max-instances` above is a *revision* setting. Cloud Run also keeps a
-# *service*-level cap (`run.googleapis.com/maxScale`) that is divided across
-# revisions and wins when the two disagree — and `gcloud run deploy` has no
-# flag for it, so a value set in the console survives every deploy silently.
-# Normalise it here so the connection budget below can't drift unnoticed.
-echo "── Normalising service-level max instances…"
-gcloud run services update "$SERVICE" \
-  --project="$PROJECT_ID" \
-  --region="$REGION" \
-  --max=2
+# Read min-instances / CPU throttling from the live service so a deploy
+# during a competition does not flip the club back to idle mode.
+read_scaling() {
+  local json min throttle
+  if ! json="$(gcloud run services describe "$SERVICE" \
+    --project="$PROJECT_ID" --region="$REGION" --format=json 2>/dev/null)"; then
+    MIN_INSTANCES=0
+    CPU_THROTTLING=1
+    return
+  fi
+  min="$(printf '%s' "$json" | node -e '
+const d = JSON.parse(require("fs").readFileSync(0, "utf8"));
+const ann = d.spec?.template?.metadata?.annotations || {};
+process.stdout.write(String(ann["autoscaling.knative.dev/minScale"] || "0"));
+')"
+  throttle="$(printf '%s' "$json" | node -e '
+const d = JSON.parse(require("fs").readFileSync(0, "utf8"));
+const ann = d.spec?.template?.metadata?.annotations || {};
+process.stdout.write(String(ann["run.googleapis.com/cpu-throttling"] || "true"));
+')"
+  MIN_INSTANCES="${min:-0}"
+  if [[ "$throttle" == "false" ]]; then
+    CPU_THROTTLING=0
+  else
+    CPU_THROTTLING=1
+  fi
+}
 
-# The ^;^ prefix picks ';' as the env-var separator. The default ',' would
-# split a multi-admin OXYGEN_ADMIN_EMAILS list, and '@' splits inside every
-# email address; ';' is legal in neither an address nor any value below.
-#
-# Why these limits (see docs/deploy-gcp-cloud-run.md §Sizing):
-#  - 4 GiB: the tile renderer itself now needs only a few hundred MB (it
-#    rasterises a window per block of tiles, not the whole map), but
-#    parsing a large club OCAD into an SVG DOM still spikes. The
-#    MAP_RASTER_* caps that used to be needed here are gone with the
-#    whole-map raster they bounded.
-#  - cpu=2 + MAP_RENDER_CONCURRENCY=3: tile rendering is the one
-#    CPU-bound thing this service does, and on one throttled vCPU a
-#    fresh club map takes minutes to fill. Two vCPUs let the render
-#    semaphore actually run in parallel. Three concurrent block renders
-#    at a few hundred MB each stay inside the 3328 MB old-space. Cost is
-#    ~zero: CPU is billed per vCPU-second of *request* time and club
-#    traffic sits far below the 180k vCPU-s/month free tier.
-#  - max-instances=2 + DATABASE_POOL_MAX=8: the ceiling here is Cloud
-#    SQL connections, not the code. A db-f1-micro allows 25 and reserves
-#    3 for superuser, leaving ~22, so two instances at 8 each use 16 and
-#    leave 6 for the migration job and an interactive psql. Do not raise
-#    this pair on f1-micro: at 2x10 the budget is 20/22, which has no
-#    headroom and fails as dropped connector TLS handshakes ("dial error:
-#    handshake failed ... EOF", Prisma P2010) rather than a clean
-#    "too many clients" — see docs/bugfix-cloud-sql-handshake-eof.md.
-#    The background jobs that genuinely need one runner
-#    (LiveResults push, ROC polling, journal shipping) elect a leader
-#    through oxygen.instance_lease, so extra instances only serve
-#    requests. To scale further, raise the Cloud SQL tier first —
-#    db-g1-small allows 50 — then raise both numbers together.
+run_migrate() {
+  local image_ref="$1"
+  local job="${SERVICE}-migrate"
+  echo "── Applying Prisma migrations with ${image_ref}…"
+  gcloud run jobs deploy "$job" \
+    --project="$PROJECT_ID" \
+    --region="$REGION" \
+    --image="$image_ref" \
+    --service-account="oxygen-run@${PROJECT_ID}.iam.gserviceaccount.com" \
+    --set-cloudsql-instances="$SQL_CONNECTION" \
+    --set-secrets="DATABASE_URL=oxygen-database-url:latest" \
+    --memory=1Gi \
+    --max-retries=0 \
+    --task-timeout=600 \
+    --command=sh \
+    --args=-c,"cd packages/api && node_modules/.bin/prisma migrate deploy"
+  gcloud run jobs execute "$job" --project="$PROJECT_ID" --region="$REGION" --wait
+}
+
+run_cloud_run_deploy() {
+  local image_ref="$1"
+  local cpu_flag="--cpu-throttling"
+  if [[ "$CPU_THROTTLING" -eq 0 ]]; then
+    cpu_flag="--no-cpu-throttling"
+  fi
+
+  if [[ -z "${OXYGEN_ADMIN_EMAILS:-}" ]]; then
+    echo "!! OXYGEN_ADMIN_EMAILS is unset in env.sh — with AUTH_MODE=proxy nobody" >&2
+    echo "   will be able to open /admin/users. See env.sh.example." >&2
+  fi
+
+  echo "── Deploying ${image_ref} to Cloud Run (min-instances=${MIN_INSTANCES}, cpu-throttling=${CPU_THROTTLING})…"
+  gcloud run deploy "$SERVICE" \
+    --project="$PROJECT_ID" \
+    --region="$REGION" \
+    --image="$image_ref" \
+    --service-account="oxygen-run@${PROJECT_ID}.iam.gserviceaccount.com" \
+    --add-cloudsql-instances="$SQL_CONNECTION" \
+    --set-secrets="DATABASE_URL=oxygen-database-url:latest" \
+    --set-env-vars="^;^NODE_OPTIONS=--max-old-space-size=3328;DATABASE_POOL_MAX=8;MAP_RENDER_CONCURRENCY=3;AUTH_MODE=proxy;AUTH_HEADER=x-goog-authenticated-user-email;AUTH_AUTO_PROVISION=member;OXYGEN_ADMIN_EMAILS=${OXYGEN_ADMIN_EMAILS:-}" \
+    --memory=4Gi \
+    --cpu=2 \
+    --timeout=300 \
+    --max-instances=2 \
+    --min-instances="$MIN_INSTANCES" \
+    "$cpu_flag" \
+    --no-allow-unauthenticated
+
+  echo "── Normalising service-level max instances…"
+  gcloud run services update "$SERVICE" \
+    --project="$PROJECT_ID" \
+    --region="$REGION" \
+    --max=2
+}
+
+IMAGE_REF=""
+if [[ "$FROM_SOURCE" -eq 1 ]]; then
+  BUILD_ID="$(git -C "$REPO_ROOT" rev-parse --short HEAD 2>/dev/null || echo dev)-$(date +%Y%m%d%H%M%S)"
+  echo "── Building working tree with Cloud Build (BUILD_ID=${BUILD_ID})…"
+  gcloud builds submit "$REPO_ROOT" \
+    --project="$PROJECT_ID" \
+    --config="$REPO_ROOT/scripts/gcp/cloudbuild.yaml" \
+    --substitutions="_IMAGE=${IMAGE},_BUILD_ID=${BUILD_ID}"
+  IMAGE_REF="${IMAGE}:latest"
+else
+  SELECTED="${TAG_INPUT:-${DEPLOY_TAG:-stable}}"
+  IMAGE_REF="$(resolve_image_ref "$SELECTED")"
+  echo "── Using published image ${IMAGE_REF}"
+fi
+
+run_migrate "$IMAGE_REF"
+
+if [[ "$MIGRATE_ONLY" -eq 1 ]]; then
+  echo
+  echo "Migrations applied. Cloud Run service was not updated."
+  exit 0
+fi
+
+read_scaling
+run_cloud_run_deploy "$IMAGE_REF"
 
 echo
-echo "Deployed. If this is the first deploy:"
-echo "  1. Run ./migrate.sh to apply the Prisma migrations."
-echo "  2. Enable IAP + grant users access (docs/deploy-gcp-cloud-run.md §IAP)."
+echo "Deployed ${IMAGE_REF}."
+echo "  If this is the first deploy:"
+echo "    1. Enable IAP + grant users access (docs/deploy-gcp-cloud-run.md §IAP)."
+echo "  Idle vs event mode is unchanged; use ./event-mode.sh / ./idle-mode.sh to switch."

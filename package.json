@@ -21,7 +21,8 @@
     "migrate:mysql-to-pg": "pnpm --filter @oxygen/api migrate:mysql-to-pg",
     "docs:screenshots": "tsx docs/screenshots/capture.ts",
     "showcase:load": "bash scripts/load-showcase.sh",
-    "audit:prod": "node scripts/audit-prod.mjs --audit-level=high"
+    "audit:prod": "node scripts/audit-prod.mjs --audit-level=high",
+    "test:scripts": "node --test scripts/__tests__/*.test.mjs"
   },
   "packageManager": "pnpm@10.29.3",
   "engines": {

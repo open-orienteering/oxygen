@@ -43,7 +43,20 @@ For a deeper dive into database design, deployment options, and subsystem detail
 
 ## Quick Start
 
-### With Docker (recommended)
+### Self-host from the published image
+
+Pre-built multi-arch images live on GHCR (`ghcr.io/open-orienteering/oxygen`).
+See [releases and images](docs/releases-and-images.md) for tags (`stable`,
+`edge`, `vX.Y.Z`) and how GitHub Releases are cut.
+
+```bash
+docker compose -f docker-compose.release.yml up -d
+# app: http://localhost:8080
+```
+
+Pin a release with `OXYGEN_IMAGE=ghcr.io/open-orienteering/oxygen:v1.2.3`.
+
+### Development (source)
 
 ```bash
 git clone https://github.com/open-orienteering/oxygen

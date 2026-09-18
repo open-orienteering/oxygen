@@ -49,8 +49,9 @@ FROM node:20-slim AS api
 # Deploy-time build identity, reported by /api/version. The web client
 # treats a change as "new version deployed"; without it the client falls
 # back to comparing process start time, which false-positives on platforms
-# that restart containers without a code change (Cloud Run). deploy.sh
-# passes the git SHA + timestamp; compose builds may leave it empty.
+# that restart containers without a code change (Cloud Run). GHCR publishes
+# pass the full git SHA; `deploy.sh --from-source` passes SHA + timestamp;
+# local compose builds may leave it empty.
 ARG BUILD_ID=""
 ENV OXYGEN_BUILD_ID=$BUILD_ID
 

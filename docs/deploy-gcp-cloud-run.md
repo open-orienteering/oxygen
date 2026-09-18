@@ -1,9 +1,13 @@
 # Deploying Oxygen to GCP (Cloud Run + Cloud SQL + IAP)
 
 Production deployment for a club: a single IAP-protected Cloud Run service
-(API + web bundle in one container) backed by Cloud SQL Postgres. Access is
-restricted to allowlisted Google accounts via Identity-Aware Proxy — free
-when enabled directly on Cloud Run, no load balancer needed.
+(API + web bundle in one container) backed by Cloud SQL Postgres. The
+container is the public GHCR image `ghcr.io/open-orienteering/oxygen`
+(see [releases-and-images.md](releases-and-images.md)). GitHub Actions
+never authenticates to the club project — an operator with `gcloud`
+runs `scripts/gcp/deploy.sh` locally. Access is restricted to allowlisted
+Google accounts via Identity-Aware Proxy — free when enabled directly on
+Cloud Run, no load balancer needed.
 
 ```
 allowlisted user ──Google sign-in──▶ IAP ──▶ Cloud Run "oxygen"        Eventor / ROC /
@@ -49,7 +53,11 @@ storage-only — but then nothing works until you start it again (1–2 min).
 
 - A GCP project with billing enabled, `gcloud` CLI authenticated
 (`gcloud auth login`) — new billing accounts get $300 in credits.
-- Repo checked out locally (the deploy builds from your working tree).
+- Repo checked out locally for the `scripts/gcp/` helpers (`env.sh` is
+  gitignored). Default deploys **pull a published GHCR tag**; they do not
+  build from the working tree.
+- Node.js on the operator machine (`deploy.sh` resolves image refs with
+  `scripts/ghcr-ref.mjs`).
 
 ## First-time setup
 
@@ -57,9 +65,14 @@ storage-only — but then nothing works until you start it again (1–2 min).
 cd scripts/gcp
 cp env.sh.example env.sh   # fill in PROJECT_ID + REGION; env.sh is gitignored
 ./provision.sh             # APIs, Artifact Registry, Cloud SQL, secret, runtime SA
-./deploy.sh                # Cloud Build (--target cloud) + Cloud Run deploy
-./migrate.sh               # prisma migrate deploy via a Cloud Run job
+./deploy.sh edge           # pull GHCR, migrate, Cloud Run (use a vX.Y.Z tag once released)
 ```
+
+`deploy.sh` applies Prisma migrations and then rolls out Cloud Run in one
+go. `./migrate.sh` is a thin wrapper (`deploy.sh --migrate-only`). Pass a
+tag (`v1.2.3`, `edge`, `sha-<full-commit>`) or set `DEPLOY_TAG` in `env.sh`
+(default `stable`). `./deploy.sh --from-source` is the old Cloud Build →
+Artifact Registry path, for an unreleased local tree only.
 
 `provision.sh` generates the DB password and stores the full `DATABASE_URL`
 (unix-socket form, `?host=/cloudsql/…&schema=oxygen`) in Secret Manager;
@@ -160,11 +173,20 @@ gcloud beta run domain-mappings create \
 ## Deploying updates
 
 ```bash
-scripts/gcp/deploy.sh      # rebuild + roll out; run migrate.sh if the schema changed
+scripts/gcp/deploy.sh           # GHCR :stable (or DEPLOY_TAG in env.sh)
+scripts/gcp/deploy.sh v1.2.3    # a GitHub Release
+scripts/gcp/deploy.sh edge      # latest verified main
+scripts/gcp/deploy.sh --from-source   # Cloud Build this working tree (fallback)
 ```
 
-Cloud Run keeps the previous revision; roll back from the console or with
-`gcloud run services update-traffic` if a deploy goes wrong.
+Migrations run first against the chosen image, then Cloud Run is updated.
+Idle vs event mode on the live service is **preserved** (a deploy during a
+competition will not flip you back to scale-to-zero). Use
+`./event-mode.sh` / `./idle-mode.sh` to change that on purpose.
+
+Cloud Run keeps the previous revision; roll back by deploying an older
+tag (`./deploy.sh v1.2.2` or `sha-…`) or with
+`gcloud run services update-traffic`.
 
 ## Competition runbook
 
@@ -367,8 +389,9 @@ next step up.
 - **"Update available" prompts on every visit.** The web client compares
 the version identity from `/api/version`. Cloud Run restarts the process
 constantly (scale-to-zero, instance swaps), so process start time alone
-false-positives; the identity is therefore the `BUILD_ID` baked in by
-`deploy.sh` at image build. If prompts recur without a deploy, check
+false-positives; the identity is therefore the `BUILD_ID` baked into the
+image (`OXYGEN_BUILD_ID`). GHCR publishes use the git SHA; `--from-source`
+uses SHA + timestamp. If prompts recur without a deploy, check
 that the running revision has `OXYGEN_BUILD_ID` set
 (`gcloud run services describe "$SERVICE" --region="$REGION" --format=yaml | grep -A1 OXYGEN_BUILD_ID`).
 - **Map never loads / instance restart loop / high DB load.** Confirm
@@ -381,9 +404,11 @@ OCAD, so raise `--memory` or lower `MAP_SVG_CACHE_EVENTS`.
 
 ## What this deployment does NOT change
 
-- docker-compose deployments (`docker-compose.yml`, `host-db`, `venue`)
-are untouched; the `cloud` Docker target and `WEB_DIST_DIR` static
-serving are additive.
+- Source-building docker-compose files (`docker-compose.yml`, `host-db`,
+`venue`) are unchanged. Self-hosters who want the published image use
+[`docker-compose.release.yml`](../docker-compose.release.yml) — see
+[releases-and-images.md](releases-and-images.md). The `cloud` Docker
+target and `WEB_DIST_DIR` static serving are what GHCR and Cloud Run run.
 - Spectator results still flow outbound to liveresultat.se — nothing
 public is served from the IAP-protected instance.
 

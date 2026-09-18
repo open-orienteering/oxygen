@@ -67,5 +67,5 @@ gcloud secrets add-iam-policy-binding oxygen-database-url \
   --member="serviceAccount:${RUNTIME_SA}" --role="roles/secretmanager.secretAccessor" >/dev/null
 
 echo
-echo "Provisioning done. Next: ./deploy.sh, then ./migrate.sh, then enable IAP"
+echo "Provisioning done. Next: ./deploy.sh edge  (or a vX.Y.Z tag), then enable IAP"
 echo "(see docs/deploy-gcp-cloud-run.md §IAP)."

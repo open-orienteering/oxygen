@@ -1,6 +1,7 @@
 # Cloud Build config: builds the single-container `cloud` Dockerfile target
-# (API + web bundle) and pushes it to Artifact Registry. Invoked by
-# deploy.sh with _IMAGE substituted.
+# and pushes it to Artifact Registry. Invoked only by
+# `deploy.sh --from-source` (unreleased local tree). Normal deploys pull
+# `ghcr.io/open-orienteering/oxygen` instead.
 steps:
   - name: gcr.io/cloud-builders/docker
     args:

@@ -63,7 +63,7 @@ Oxygen is a modern web application for managing orienteering competitions. It co
 | **ORM** | Prisma 7 (`prisma-client` generator + `@prisma/adapter-pg`) | Type-safe database access with migration support |
 | **Database** | PostgreSQL 18 | UUIDv7 PKs, JSONB columns, native ENUM types, row-level FKs |
 | **Testing** | Vitest 4 (unit), Playwright 1.62 (E2E) | Fast unit tests, reliable browser automation |
-| **Build** | Docker multi-stage | Reproducible builds, separate API and web containers |
+| **Build** | Docker multi-stage + GHCR | Reproducible `cloud` image (API + web); public tags at `ghcr.io/open-orienteering/oxygen` |
 
 ## Database Architecture
 
@@ -121,11 +121,19 @@ deciseconds** and converts at the boundary (`toAbsolute` / `toRelative` in
 
 ## Deployment Options
 
-### Docker (full stack)
+### Published GHCR image (self-host)
+```bash
+docker compose -f docker-compose.release.yml up -d
+```
+Pulls `ghcr.io/open-orienteering/oxygen` (API + web, port 8080) and Postgres 18.
+Same image works on Cloud Run, Fargate, or Kubernetes. Tags and release process:
+[releases-and-images.md](releases-and-images.md).
+
+### Docker (build from source)
 ```bash
 docker compose up -d        # PostgreSQL + API + Web
 ```
-Starts PostgreSQL 18, the API server, and an Nginx-served web frontend. Suitable for dedicated servers or cloud VMs.
+Starts PostgreSQL 18, the API server, and an Nginx-served web frontend. Suitable when you are developing the images locally.
 
 ### Docker (host database)
 ```bash
@@ -143,7 +151,7 @@ Node.js 20+, pnpm 10+, and a PostgreSQL 18 instance. The API proxies through Vit
 One-click deployment via Google Cloud Shell — no local install needed. See [demo.md](demo.md).
 
 ### GCP production (Cloud Run + Cloud SQL + IAP)
-Club-facing hosted deployment: a single-container image (Docker target `cloud`, the API serving the web bundle via `WEB_DIST_DIR`) on Cloud Run behind Identity-Aware Proxy, backed by Cloud SQL. Scales to zero between competitions. See [deploy-gcp-cloud-run.md](deploy-gcp-cloud-run.md).
+Club-facing hosted deployment: the public GHCR `cloud` image on Cloud Run behind Identity-Aware Proxy, backed by Cloud SQL. GitHub Actions publish the image; the club operator runs `scripts/gcp/deploy.sh [tag]` locally to roll it out and migrate. Scales to zero between competitions. See [deploy-gcp-cloud-run.md](deploy-gcp-cloud-run.md).
 
 ## Offline / Local-First Vision
 

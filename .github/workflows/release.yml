@@ -1,0 +1,58 @@
+name: GitHub Release
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+permissions:
+  contents: write
+  packages: write
+  id-token: write
+  attestations: write
+
+jobs:
+  release:
+    name: Promote GHCR image and create GitHub Release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 20
+      - name: Parse git tag
+        id: tag
+        run: |
+          node scripts/ghcr-ref.mjs parse-release-tag "${GITHUB_REF_NAME}" > /tmp/release.json
+          echo "version=$(node -e 'console.log(JSON.parse(require("fs").readFileSync("/tmp/release.json","utf8")).version)')" >> "$GITHUB_OUTPUT"
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Promote existing SHA image (no rebuild)
+        env:
+          IMAGE: ghcr.io/${{ github.repository }}
+        run: |
+          IMAGE="${IMAGE,,}"
+          SHA_TAG="$(node scripts/ghcr-ref.mjs sha-tag "${GITHUB_SHA}")"
+          SOURCE="${IMAGE}:${SHA_TAG}"
+          echo "Inspecting ${SOURCE}…"
+          if ! docker buildx imagetools inspect "${SOURCE}" >/dev/null; then
+            echo "::error::No GHCR image ${SOURCE}. Tag vX.Y.Z only on a commit already published from main."
+            exit 1
+          fi
+          TAGS=()
+          while IFS= read -r tag; do
+            [[ -n "$tag" ]] && TAGS+=(--tag "${IMAGE}:${tag}")
+          done < <(node -e 'for (const t of JSON.parse(require("fs").readFileSync("/tmp/release.json","utf8")).imageTags) console.log(t)')
+          docker buildx imagetools create "${TAGS[@]}" "${SOURCE}"
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "${GITHUB_REF_NAME}" \
+            --verify-tag \
+            --generate-notes \
+            --title "Oxygen ${GITHUB_REF_NAME}"

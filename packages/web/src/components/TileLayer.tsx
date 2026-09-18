@@ -34,6 +34,7 @@ interface TileInfo {
 }
 
 /** Identity for React/load/error state; event and map version are significant. */
+// eslint-disable-next-line react-refresh/only-export-components -- pure URL key helper co-located with the tile layer that uses it; only costs full-reload HMR for this file
 export function tileRequestKey(
   tileUrlBase: string,
   query: string,

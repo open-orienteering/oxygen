@@ -34,9 +34,9 @@ intentionally unused binding.
 React context modules export a provider component plus its companion
 hook(s) — the standard pattern. Fast-refresh purity can't be satisfied
 there without splitting every context into two files for no runtime
-benefit. The rule stays on everywhere else; the one non-context exception
-(`hitTestControl` in `ReplayCourseLayer.tsx`) carries an inline disable
-with justification.
+benefit. The rule stays on everywhere else; the non-context exceptions
+(`hitTestControl` in `ReplayCourseLayer.tsx`, `tileRequestKey` in
+`TileLayer.tsx`) carry an inline disable with justification.
 
 ## Known issue found during the cleanup
 
