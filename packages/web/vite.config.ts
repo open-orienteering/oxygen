@@ -127,13 +127,16 @@ export default defineConfig({
     // Note: deliberately NOT `PORT`, which `pnpm dev` uses for the API.
     port: Number(process.env.WEB_PORT ?? 5173),
     strictPort: !!process.env.WEB_PORT,
+    // Playwright's baseURL is 127.0.0.1 (not localhost) so IPv6-only
+    // `localhost` binds on GitHub Actions make every E2E goto() refuse.
+    host: "127.0.0.1",
     proxy: {
       "/trpc": {
-        target: `http://localhost:${process.env.API_PROXY_PORT ?? 3002}`,
+        target: `http://127.0.0.1:${process.env.API_PROXY_PORT ?? 3002}`,
         changeOrigin: true,
       },
       "/api": {
-        target: `http://localhost:${process.env.API_PROXY_PORT ?? 3002}`,
+        target: `http://127.0.0.1:${process.env.API_PROXY_PORT ?? 3002}`,
         changeOrigin: true,
       },
     },
