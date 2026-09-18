@@ -14,18 +14,26 @@ tabs (Users, Maintenance) are instance-admin only and are described in
 
 Operators upload OCAD (`.ocd`) base maps once on **Settings → Maps**.
 Each row stores the file plus metadata parsed at upload (scale, WGS84 bounds,
-north offset, optional **north correction**) and a rendered PNG thumbnail.
-Import-time auto-detect (`map-north.ts`) suggests a rotation correction when
-magnetic-north lines are present and ScalePar under-reports grivation; the
-card exposes a single "North correction (°)" input to override it. The
-correction affects the GPS georeference only — on-screen orientation follows
-the map's drawn north lines automatically (`northOffset` fold, see
-[bugfix-map-north-correction.md](bugfix-map-north-correction.md)). Events
-copy the value when the map is added via **From club library**; changing it
-afterwards requires re-adding the map to the event. Existing
-rows render and persist their thumbnail on first view. Parse or render
+north offset, north-line diagnostics) and a rendered PNG thumbnail. The
+file's ScalePar georeference is taken as authoritative — there is no
+correction input. Instead the card shows a **north lines** badge: the
+angle between the map's drawn magnetic-north lines (ISOM 601) and today's
+magnetic north, evaluated live from the World Magnetic Model. Declination
+drifts ≈ 0.1–0.2°/yr in Sweden, so an older map's lines go stale; at ≥ 1°
+the badge turns amber as a hint to redraw them before printing. On-screen
+orientation follows the drawn north lines regardless (`northOffset` fold,
+see [bugfix-auto-north-correction-gps-offset.md](bugfix-auto-north-correction-gps-offset.md)).
+Existing rows render and persist their thumbnail on first view. Parse or render
 failure is non-fatal: the file is kept, scale/bounds stay empty, and the
 unavailable thumbnail is hidden.
+
+Rows uploaded before north-line diagnostics existed are backfilled the same
+lazy way: the first `clubMap.list` read parses the blob, runs the north
+analysis, and persists it (an unparseable file persists an all-null result
+so it is not re-parsed on every read). Event map rows get the identical
+backfill on the first `course.mapMetadata` read. "No magnetic north lines
+found" therefore always means the analysis actually ran and found none —
+never "not analysed yet".
 
 The list is global for the instance (one owning club). Anyone who can sign in
 can upload and rename. Download and delete are allowed for the uploader or an

@@ -45,6 +45,8 @@
   "measureDistance": "Mät avstånd",
   "exitMeasure": "Avsluta mätning",
   "compassReset": "Återställ kartnord",
+  "compassLocked": "Rotation låst (norr uppåt) — tryck för att låsa upp",
+  "compassUnlocked": "Rotation upplåst — tryck för att låsa norr uppåt",
   "enterFullscreen": "Helskärm",
   "exitFullscreen": "Lämna helskärm"
 }

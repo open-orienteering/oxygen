@@ -288,6 +288,7 @@ const strings = [];
 strings.push({ recType: 9, text: "Purple\tn0\tc35.0\tm85.0\ty0.0\tk0.0" });
 strings.push({ recType: 9, text: "Black\tn1\tc0.0\tm0.0\ty0.0\tk100.0" });
 strings.push({ recType: 9, text: "Yellow\tn2\tc0.0\tm27.0\ty79.0\tk0.0" });
+strings.push({ recType: 9, text: "Blue\tn3\tc100.0\tm0.0\ty0.0\tk0.0" });
 // Georeference (type 1039): grid 1000 = SWEREF99 TM (EPSG:3006).
 strings.push({
   recType: 1039,
@@ -366,6 +367,19 @@ const symbols = [
     colorIdx: 2,
     description: "Rough open land",
   }),
+  // Magnetic north lines (ISOM 601). Drawn exactly along paper +Y with
+  // ScalePar a=0, i.e. as if magnetic north coincided with grid north.
+  // At 15°E / 58.6°N the real declination is ≈ 6° E, so the north
+  // detection reports the lines as several degrees stale — the E2E
+  // suite asserts the resulting warning badge. Tilt 0 keeps the display
+  // orientation of every existing consumer unchanged.
+  lineSymbol({
+    symNum: 601000,
+    extent: 10,
+    colorIdx: 3,
+    description: "Magnetic north line",
+    lineWidth: 10,
+  }),
   // Two mapped features the description autodetect can recognise.
   pointSymbol({
     symNum: 204000,
@@ -416,6 +430,20 @@ objects.push({
     [-7400, -4600],
   ],
 });
+
+// Magnetic north lines: 12 vertical lines, 12 mm apart, spanning the
+// map height. `probeMeridianLines` needs ≥ 10 near-parallel lines of
+// ≥ 5 mm on one exact symbol id.
+for (let x = -6600; x <= 6600; x += 1200) {
+  objects.push({
+    sym: 601000,
+    otp: 2,
+    coords: [
+      [x, -5000],
+      [x, 5000],
+    ],
+  });
+}
 
 // A few black paths crossing the map.
 for (let p = 0; p < 3; p++) {

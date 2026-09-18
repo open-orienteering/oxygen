@@ -21,6 +21,7 @@ none of that.
 | Class records | None (strType 3 absent) — the class-name-fallback tests depend on this |
 | Georeference | String 1039: grid id 1000 (SWEREF99 TM / EPSG:3006), easting 500000, northing 6500000, scale 1:7500 — round, non-identifying values (~15°E, 58.6°N, generic inland Sweden) |
 | Terrain | One yellow area (403) and three black paths (505), purely so map tiles render something visible |
+| North lines | Twelve ISOM 601 magnetic-north lines (blue, 12 mm apart, exactly along paper +Y with ScalePar `a=0`). The real declination at the georeference is ≈ 6.5° E, so north detection reports the lines as ≈ 6.5° stale — the club-map-library E2E asserts the warning badge. Zero tilt keeps the display orientation of every other consumer unchanged |
 | Autodetect features | A boulder (ISOM 204) at 68 / 42 mm and a building (ISOM 521) spanning 48–58 / 39–46 mm, both in the corner the yellow blob doesn't reach, so a description-autodetect search around either returns exactly that feature |
 | Overprint-cut targets | Two more boulders placed relative to the jittered control layout: one exactly 2.5 mm north of control 79 (on its circle rim) and one exactly on the midpoint of the 79→80 leg — the course-editor E2E builds a course through 79 and 80 and asserts the automatic circle slit and leg gap render |
 

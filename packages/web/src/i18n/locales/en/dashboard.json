@@ -45,6 +45,8 @@
   "measureDistance": "Measure distance",
   "exitMeasure": "Exit measure",
   "compassReset": "Reset map north",
+  "compassLocked": "Rotation locked (north up) — tap to unlock",
+  "compassUnlocked": "Rotation unlocked — tap to lock north up",
   "enterFullscreen": "Fullscreen",
   "exitFullscreen": "Exit fullscreen"
 }

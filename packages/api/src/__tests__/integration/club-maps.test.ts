@@ -18,6 +18,7 @@ import {
 import { grantSystemGroup } from "../../permissions.js";
 import { SYSTEM_GROUP_IDS } from "@oxygen/shared";
 import { registerBackupRoute } from "../../backup.js";
+import { parseOcadMapMetadata } from "../../event-map.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const FIXTURE = resolve(__dirname, "../../../../../e2e/test.ocd");
@@ -77,6 +78,18 @@ describe("club map library", () => {
     });
     expect(stored?.previewPng).not.toBeNull();
 
+    // The fixture's north lines are drawn at grid north while the real
+    // declination at 15°E/58.6°N is ≈ 6.5° E: the detection must report
+    // that as *staleness* of the lines and must NOT touch the
+    // georeference — ScalePar is authoritative.
+    expect(uploaded.rotationCorrection).toBe(0);
+    expect(uploaded.meridianStalenessDeg).toBeGreaterThan(5);
+    expect(uploaded.meridianStalenessDeg).toBeLessThan(8);
+    expect(row!.rotationCorrection).toBe(0);
+    expect(row!.meridianStalenessDeg).toBeCloseTo(uploaded.meridianStalenessDeg!, 1);
+    expect(row!.northDetection).not.toHaveProperty("shouldAutoApply");
+    expect(row!.northDetection).not.toHaveProperty("suggestedCorrectionDeg");
+
     await caller.clubMap.rename({
       id: uploaded.id,
       name: `Renamed ${suffix}`,
@@ -87,6 +100,59 @@ describe("club map library", () => {
     const dl = await caller.clubMap.download({ id: uploaded.id });
     expect(dl.fileName).toBe("test.ocd");
     expect(Buffer.from(dl.fileDataBase64, "base64").equals(buf)).toBe(true);
+  });
+
+  it("backfills north detection for a legacy club map row on list", async () => {
+    const buf = readFileSync(FIXTURE);
+    // Simulate a row from before the north_detection column: blob only.
+    const legacy = await ctx.db.clubMapFile.create({
+      data: {
+        name: `Legacy north ${suffix}`,
+        fileName: "legacy-north.ocd",
+        fileData: buf,
+        sizeBytes: buf.length,
+      },
+    });
+    uploadedIds.push(legacy.id);
+
+    const listed = (await makeCaller().clubMap.list()).find(
+      (m) => m.id === Number(legacy.id),
+    );
+    // The fixture has 601 lines ≈ 6.5° stale — the backfilled analysis
+    // must surface that on the very first list read.
+    expect(listed?.meridianStalenessDeg).toBeGreaterThan(5);
+
+    const persisted = await ctx.db.clubMapFile.findUniqueOrThrow({
+      where: { id: legacy.id },
+      select: { northDetection: true },
+    });
+    expect(persisted.northDetection).toMatchObject({
+      meridian: { count: 12 },
+    });
+  });
+
+  it("persists an all-null detection for an unparseable legacy row (no re-parse loop)", async () => {
+    const legacy = await ctx.db.clubMapFile.create({
+      data: {
+        name: `Legacy garbage ${suffix}`,
+        fileName: "legacy-garbage.ocd",
+        fileData: Buffer.from("not an OCAD file"),
+        sizeBytes: 16,
+      },
+    });
+    uploadedIds.push(legacy.id);
+
+    const listed = (await makeCaller().clubMap.list()).find(
+      (m) => m.id === Number(legacy.id),
+    );
+    // Analysed, nothing found — reported as "no north lines".
+    expect(listed?.meridianStalenessDeg).toBeNull();
+    const persisted = await ctx.db.clubMapFile.findUniqueOrThrow({
+      where: { id: legacy.id },
+      select: { northDetection: true },
+    });
+    // Not NULL: the marker prevents re-parsing on every future list call.
+    expect(persisted.northDetection).toMatchObject({ meridian: null });
   });
 
   it("backfills and persists a preview for a legacy club map", async () => {
@@ -308,16 +374,39 @@ describe("club map library", () => {
     expect(await ctx.db.mapFile.count({ where: { eventId: ctx.eventId } })).toBe(1);
   });
 
+  it("event map upload keeps ScalePar and reports north-line staleness", async () => {
+    const buf = readFileSync(FIXTURE);
+    const caller = makeCaller(ctx.event);
+    const result = await caller.course.uploadMap({
+      fileName: "stale-lines.ocd",
+      fileDataBase64: buf.toString("base64"),
+    });
+    // ≈ 6.5° stale would have been auto-applied by the retired detector.
+    expect(result.rotationCorrection).toBe(0);
+    expect(result.meridianStalenessDeg).toBeGreaterThan(5);
+
+    const meta = await caller.course.mapMetadata();
+    expect(meta!.rotationCorrection).toBe(0);
+    expect(meta!.meridianStalenessDeg).toBeCloseTo(result.meridianStalenessDeg!, 1);
+    // Bounds must be the file's own georeference, i.e. identical to a
+    // parse with correction 0.
+    const expected = await parseOcadMapMetadata(buf, 0);
+    expect(meta!.bounds.north).toBeCloseTo(expected.bounds!.north, 9);
+    expect(meta!.bounds.west).toBeCloseTo(expected.bounds!.west, 9);
+    expect(meta!.northOffset).toBeCloseTo(expected.northOffset!, 9);
+  });
+
   it("setRotation rejects unknown club map ids", async () => {
     await expect(
       makeCaller().clubMap.setRotation({ id: 999_999_999, degrees: 1 }),
     ).rejects.toMatchObject({ code: "NOT_FOUND" });
   });
 
-  it("backfills metadata for a legacy map row on first mapMetadata read", async () => {
+  it("backfills metadata and north detection for a legacy map row on first mapMetadata read", async () => {
     const buf = readFileSync(FIXTURE);
     const caller = makeCaller(ctx.event);
-    // Simulate a pre-migration row: blob only, no parsed metadata.
+    // Simulate a pre-migration row: blob only, no parsed metadata, no
+    // north detection.
     await ctx.db.mapFile.deleteMany({ where: { eventId: ctx.eventId } });
     await ctx.db.mapFile.create({
       data: { eventId: ctx.eventId, fileName: "legacy.ocd", fileData: buf },
@@ -326,12 +415,16 @@ describe("club map library", () => {
     const meta = await caller.course.mapMetadata();
     expect(meta).toBeTruthy();
     expect(meta!.bounds.north).toBeGreaterThan(meta!.bounds.south);
+    // North analysis runs on the same first read, so the stale-lines
+    // badge appears for old events too.
+    expect(meta!.meridianStalenessDeg).toBeGreaterThan(5);
 
     const row = await ctx.db.mapFile.findFirst({
       where: { eventId: ctx.eventId },
     });
     expect(row!.bounds).toBeTruthy();
     expect(row!.calibration).toBeTruthy();
+    expect(row!.northDetection).toMatchObject({ meridian: { count: 12 } });
   });
 
   it("rejects creating an event whose slug would be library", async () => {
