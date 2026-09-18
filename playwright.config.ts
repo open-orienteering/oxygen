@@ -56,7 +56,7 @@ export default defineConfig({
    * In CI, servers are started fresh by these commands. */
   webServer: [
     {
-      command: "pnpm exec tsx packages/api/src/index.ts",
+      command: "pnpm exec tsx e2e/helpers/ensure-e2e-db.ts && pnpm exec tsx packages/api/src/index.ts",
       port: API_PORT,
       reuseExistingServer: false,
       env: {

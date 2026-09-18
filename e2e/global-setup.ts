@@ -12,23 +12,22 @@
  * All seeding is done with the Prisma client. The previous mysqldump-based
  * `seed*.sql` files are gone — see `e2e/seed-builder/` for the source of
  * truth (run automatically as part of this setup).
+ *
+ * The API webServer process also runs ensure-e2e-db before listen, because
+ * Playwright starts webServer before this globalSetup.
  */
 import { Client } from "pg";
 import { execSync } from "child_process";
+import {
+  applyE2eMigrations,
+  e2eDatabaseUrl,
+  e2eDbName,
+  ensureE2eDatabase,
+} from "./helpers/ensure-e2e-db";
 
-const TEST_HOST = "localhost";
-const TEST_PORT = 5433;
-const TEST_USER = "oxygen";
-const TEST_PASSWORD = "oxygen";
-// Overridable so the sharded runner (`scripts/e2e-sharded.mjs`) can give
-// each shard its own isolated database (oxygen_e2e_1..N).
-const E2E_DB_NAME = process.env.E2E_DB_NAME ?? "oxygen_e2e";
+const E2E_DB_NAME = e2eDbName();
 
-export const E2E_DATABASE_URL =
-  `postgresql://${TEST_USER}:${TEST_PASSWORD}@${TEST_HOST}:${TEST_PORT}/${E2E_DB_NAME}?schema=oxygen`;
-
-const ADMIN_URL =
-  `postgresql://${TEST_USER}:${TEST_PASSWORD}@${TEST_HOST}:${TEST_PORT}/postgres`;
+export const E2E_DATABASE_URL = e2eDatabaseUrl(E2E_DB_NAME);
 
 /** Seed event slugs known to this suite. Kept here so cleanup matches them. */
 export const SEED_NAME_IDS = [
@@ -36,37 +35,6 @@ export const SEED_NAME_IDS = [
   "itest_multirace",
   "meos_20251222_001121_2BC",
 ] as const;
-
-async function ensureDatabase(): Promise<void> {
-  const admin = new Client({ connectionString: ADMIN_URL });
-  await admin.connect();
-  try {
-    const exists = await admin.query<{ datname: string }>(
-      "SELECT datname FROM pg_database WHERE datname = $1",
-      [E2E_DB_NAME],
-    );
-    if (exists.rows.length === 0) {
-      console.log(`  [setup] Creating database "${E2E_DB_NAME}"...`);
-      await admin.query(`CREATE DATABASE "${E2E_DB_NAME}"`);
-    }
-  } finally {
-    await admin.end();
-  }
-}
-
-function applyMigrations(): void {
-  console.log(`  [setup] Applying Prisma migrations to ${E2E_DB_NAME}...`);
-  try {
-    execSync("pnpm --filter @oxygen/api exec prisma migrate deploy", {
-      stdio: "inherit",
-      env: { ...process.env, DATABASE_URL: E2E_DATABASE_URL },
-    });
-  } catch (err) {
-    throw new Error(
-      `[global-setup] prisma migrate deploy failed against ${E2E_DB_NAME}: ${String(err)}`,
-    );
-  }
-}
 
 async function cleanStaleEvents(): Promise<void> {
   const client = new Client({ connectionString: E2E_DATABASE_URL });
@@ -101,8 +69,8 @@ async function runSeeds(): Promise<void> {
 
 export default async function globalSetup(): Promise<void> {
   console.log("  [setup] Provisioning E2E Postgres database...");
-  await ensureDatabase();
-  applyMigrations();
+  await ensureE2eDatabase(E2E_DB_NAME);
+  applyE2eMigrations(E2E_DB_NAME);
   await cleanStaleEvents();
   await runSeeds();
   console.log("  [setup] E2E database ready.");
