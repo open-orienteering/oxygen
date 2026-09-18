@@ -145,7 +145,7 @@ export async function resolveImportAlignment(
   const eventMap = await db.mapFile.findFirst({
     where: { eventId },
     orderBy: { uploadedAt: "desc" },
-    select: { fileName: true, calibration: true, rotationCorrection: true },
+    select: { fileName: true, calibration: true },
   });
   if (!eventMap) return base;
 
@@ -173,10 +173,8 @@ export async function resolveImportAlignment(
     const fromCrs = row?.fileData
       ? await crsFromBuffer(row.fileData, row.rotationCorrection)
       : null;
-    const eventCrs = await loadEventCrs(db, eventId);
-    const toCrs = eventCrs
-      ? withGrivationCorrection(eventCrs, eventMap.rotationCorrection)
-      : null;
+    // loadEventCrs already includes the event map's persisted correction.
+    const toCrs = await loadEventCrs(db, eventId);
     if (fromCrs && toCrs) {
       const moved = transferParsedCoordinates(parsed, fromCrs, toCrs);
       if (moved) {

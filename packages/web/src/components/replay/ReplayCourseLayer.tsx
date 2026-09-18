@@ -6,7 +6,12 @@
  */
 
 import { useRef, useEffect, useCallback } from "react";
-import type { ReplayData, ReplayControl, ReplayCourse } from "@oxygen/shared";
+import {
+  clipLine,
+  type ReplayData,
+  type ReplayControl,
+  type ReplayCourse,
+} from "@oxygen/shared";
 import type { ReplayMapLayerHandle, ViewportState } from "./ReplayMapLayer";
 import { latLngToMapPx } from "./projection-utils";
 
@@ -36,58 +41,6 @@ const COURSE_COLOR = "#d000d0";
 const ACTIVE_COLOR = "#ff6600";
 
 interface Pt { x: number; y: number }
-
-// ─── clipLine: clip a line segment around control circles ───
-
-function clipLine(
-  a: Pt, b: Pt,
-  obstacles: Pt[],
-  clearance: number,
-): { x1: number; y1: number; x2: number; y2: number }[] {
-  const dx = b.x - a.x, dy = b.y - a.y;
-  const len = Math.sqrt(dx * dx + dy * dy);
-  if (len < 1) return [];
-  const ux = dx / len, uy = dy / len;
-
-  const blocks: [number, number][] = [];
-  for (const obs of obstacles) {
-    const vx = obs.x - a.x, vy = obs.y - a.y;
-    const t = vx * ux + vy * uy;
-    const px = a.x + t * ux - obs.x;
-    const py = a.y + t * uy - obs.y;
-    const perpDist = Math.sqrt(px * px + py * py);
-    if (perpDist < clearance) {
-      const half = Math.sqrt(clearance * clearance - perpDist * perpDist);
-      blocks.push([t - half, t + half]);
-    }
-  }
-
-  blocks.sort((ba, bb) => ba[0] - bb[0]);
-  const merged: [number, number][] = [];
-  for (const bl of blocks) {
-    if (merged.length > 0 && bl[0] <= merged[merged.length - 1][1]) {
-      merged[merged.length - 1][1] = Math.max(merged[merged.length - 1][1], bl[1]);
-    } else {
-      merged.push([bl[0], bl[1]]);
-    }
-  }
-
-  const segs: { x1: number; y1: number; x2: number; y2: number }[] = [];
-  let cursor = 0;
-  for (const [bs, be] of merged) {
-    const s0 = Math.max(cursor, 0);
-    const s1 = Math.min(bs, len);
-    if (s1 - s0 > 1) {
-      segs.push({ x1: a.x + s0 * ux, y1: a.y + s0 * uy, x2: a.x + s1 * ux, y2: a.y + s1 * uy });
-    }
-    cursor = be;
-  }
-  const s0 = Math.max(cursor, 0);
-  if (len - s0 > 1) {
-    segs.push({ x1: a.x + s0 * ux, y1: a.y + s0 * uy, x2: a.x + len * ux, y2: a.y + len * uy });
-  }
-  return segs;
-}
 
 // ─── Smart label placement ──────────────────────────────────
 

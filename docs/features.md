@@ -43,11 +43,11 @@ The event page is mission control for external integrations. Everything the Swed
 
 ### Courses and the map
 
-Courses come from OCAD (`.ocd` / `.xml` course export), IOF XML, Purple Pen (`.ppen`), or can be authored directly. The import preview auto-matches the file's class assignments to the event's classes — and when the file has none (common for OCAD exports and always for `.ppen`, where courses are simply named after classes), it falls back to suggesting classes from the course names (see [course-import-class-fallback.md](course-import-class-fallback.md)). Upload the map once and every view — dashboard, courses, tracks — renders against it. Control circles are placed automatically from the course coordinate system. Club-wide base maps live in the club library, now the **Maps** tab of **Settings** (`/settings`): upload an OCAD file once, see its rendered preview thumbnail, then **From club library** on the event map panel copies it into that event. Later library edits do not change events that already copied the map. The same page’s **Controls** tab holds prioritized punch-code series (own units first, borrowed ranges after). The course editor allocates those codes instead of the bare ≥ 31 heuristic, and SRR-flagged units become internal radio controls on placement. See [club-library.md](club-library.md).
+Courses come from OCAD (`.ocd` / `.xml` course export), IOF XML, Purple Pen (`.ppen`), or can be authored directly. The import preview auto-matches the file's class assignments to the event's classes — and when the file has none (common for OCAD exports and always for `.ppen`, where courses are simply named after classes), it falls back to suggesting classes from the course names (see [course-import-class-fallback.md](course-import-class-fallback.md)). Upload the map once and every view — dashboard, courses, tracks — renders against it. Control circles are placed automatically from the course coordinate system. Club-wide base maps live in the club library, now the **Maps** tab of **Settings** (`/settings`): upload an OCAD file once, see its rendered preview thumbnail, then **From club library** on the event map panel copies it into that event. Later library edits do not change events that already copied the map. The OCAD file's own georeference is trusted as-is; what Oxygen checks is the map's drawn magnetic-north lines — an amber **north lines** badge (library card, course-editor map panel, and a one-off notice after upload) says how many degrees they lag behind today's magnetic north, so a course setter knows when to redraw them before printing. The same page’s **Controls** tab holds prioritized punch-code series (own units first, borrowed ranges after). The course editor allocates those codes instead of the bare ≥ 31 heuristic, and SRR-flagged units become internal radio controls on placement. See [club-library.md](club-library.md).
 
 Control numbers are placed by a collision-aware algorithm: every number sits at the same visual distance from its circle, never on top of another circle or number, and in congested clusters where a number cannot be nearest to its own circle it gets a thin leader line tying it to the right circle (see [bugfix-control-number-placement.md](bugfix-control-number-placement.md)).
 
-Selecting several courses shows all of them at once, with each leg labeled inline with the classes that run it — legs shared between courses carry the combined class list ("Öppen 1, Öppen 2"), so it's always clear which line belongs to whom. The labels render as pills embedded in the course line itself (exactly as tall as the line, centered on the visible span between the control circles), shrinking to fit short legs and disappearing rather than becoming unreadable — zoom in far enough for the line to carry them. With a single course selected, the Descriptions toggle renders a classic control card with sequence numbers (1, 2, 3, …); with several courses it keeps control codes on the map (no renumbering) and shows one combined, code-sorted description sheet covering every control on the selected courses.
+Selecting several courses shows all of them at once, with each leg labeled inline with the classes that run it — legs shared between courses carry the combined class list ("Öppen 1, Öppen 2"), so it's always clear which line belongs to whom. The labels render as pills embedded in the course line itself (exactly as tall as the line, centered on the visible span between the control circles), shrinking to fit short legs and disappearing rather than becoming unreadable — zoom in far enough for the line to carry them. With a single course selected, the Descriptions toggle renders a classic control card with sequence numbers (1, 2, 3, …); with several courses it keeps control codes on the map (no renumbering) and shows one combined, code-sorted description sheet covering every control on the selected courses. Map rotation is locked north-up by default — an accidental two-finger twist while pinch-zooming will not turn the map. The always-visible compass button cycles through the states: tap to unlock two-finger rotation, tap a rotated view back to north-up, tap again to relock; the choice is remembered per browser.
 
 ![Courses with map overlay and control placement](screenshots/courses.png)
 
@@ -59,9 +59,35 @@ Descriptions get a head start from the map itself: place a control and the same 
 
 The overprint also cuts itself automatically, the way a careful course setter would by hand: control circles get slits where they would hide black map features (boulders, cliffs, walls, paths, buildings) or knolls, and leg lines get gaps where they pass over black features — recomputed on every edit and after a map upload, with no manual cut tool needed. The cuts are kept tight, clearing the feature and no more, so circles stay readable instead of fragmenting. Imported OCAD courses keep the slits authored in the file.
 
-### Course export for printing
+### Course maps and export for printing
 
-Oxygen doesn't print maps yet, so the Courses page has an **Export** dropdown that can write the whole course set — controls with paper-millimetre positions, course sequences with leg lengths, and (for IOF) class assignments — as either an IOF 3.0 CourseData file or a native Purple Pen `.ppen`. Open the IOF file in Condes, Purple Pen or OCAD to print, or import either format into another Oxygen event; the round-trip through Oxygen's own importer is lossless for the punchable course model. Export derives legs from the current coordinates and OCAD CRS scale; edited courses also get a freshly-derived total, while untouched imports retain deliberate OCAD/IOF extra distance. For Eventor-linked events, sync can repair an untouched imported total from Eventor's published class-course length but never overwrites a course edited in Oxygen. See [iof-coursedata-export.md](iof-coursedata-export.md), [ppen-import-export.md](ppen-import-export.md), [bugfix-ocad-course-scale-and-export-lengths.md](bugfix-ocad-course-scale-and-export-lengths.md), and [bugfix-eventor-course-lengths.md](bugfix-eventor-course-lengths.md).
+The **Map templates / Kartmallar** page defines reusable paper, orientation,
+scale, margins and shared layout objects. Structured search and expandable
+rows match the other planning pages; club templates are imported from a
+dedicated modal. The separate **Maps / Kartor** table lists every course,
+assigns templates inline or in bulk, and expands to manage several
+independently positioned sheets for one course. The paper-centric editor
+preloads a cached high-resolution sheet so zoom and pan are immediate — and
+**Align map** moves map and course as one; both preview and PDF are rotated so
+meridian lines stand vertical on the page. Collapsible course-editor-style
+panels (Tools, Page, Graphics, Objects, Properties) keep the canvas usable on
+mobile; the Objects card lists and deletes anything, including perfectly
+stacked objects, and warns when items sit outside the printable area. The
+editor supports click-to-place text, rectangles, polygons and paths with a
+shared fill mode (none / solid / white-out / ISOM 709 out-of-bounds hatch),
+editable Bezier paths, and uploaded SVG/PNG graphics (free resize, Ctrl/Cmd
+proportional, Shift crop) from a per-event or club library. Course overprint
+follows ISOM: circles, numbers and lines enlarge with the map when the print
+scale is larger than the base map scale (1:15000 printed at 1:7500 → 2×).
+Layout changes autosave; the header matches the course editor (help, undo/redo,
+zoom, fullscreen, close). The control-description block previews the real rows
+of the selected course. Validation messages name the offending object rather
+than an opaque id. Importing a club template drops map-anchored objects that
+belonged to another event's map. Export produces one map, a whole course, all
+controls, or the complete event as vector PDF. See
+[course-maps.md](course-maps.md).
+
+The Courses page also keeps its format **Export** dropdown. It writes the whole course set — controls with paper-millimetre positions, course sequences with leg lengths, and (for IOF) class assignments — as either an IOF 3.0 CourseData file or a native Purple Pen `.ppen`. Open the IOF file in Condes, Purple Pen or OCAD, or import either format into another Oxygen event; the round-trip through Oxygen's own importer is lossless for the punchable course model. Export derives legs from the current coordinates and OCAD CRS scale; edited courses also get a freshly-derived total, while untouched imports retain deliberate OCAD/IOF extra distance. For Eventor-linked events, sync can repair an untouched imported total from Eventor's published class-course length but never overwrites a course edited in Oxygen. See [iof-coursedata-export.md](iof-coursedata-export.md), [ppen-import-export.md](ppen-import-export.md), [bugfix-ocad-course-scale-and-export-lengths.md](bugfix-ocad-course-scale-and-export-lengths.md), and [bugfix-eventor-course-lengths.md](bugfix-eventor-course-lengths.md).
 
 ### Classes
 

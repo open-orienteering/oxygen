@@ -14,6 +14,8 @@ import {
 } from "../helpers/test-db.js";
 import { makeCaller } from "../helpers/caller.js";
 import { parseOcadMapMetadata } from "../../event-map.js";
+import { loadEventCrs } from "../../event-crs.js";
+import { mapMmToWgs84 } from "../../map-projection.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const FIXTURE = resolve(__dirname, "../../../../../e2e/test.ocd");
@@ -38,6 +40,17 @@ afterAll(async () => {
 
 describe("course.setMapRotation", () => {
   it("stores the correction, re-derives metadata, and drops tiles", async () => {
+    const control = await ctx.db.control.create({
+      data: {
+        eventId: ctx.eventId,
+        codes: "31",
+        xpos: 10,
+        ypos: 20,
+        // Deliberately stale: rotation update must replace these.
+        lat: 1,
+        lng: 2,
+      },
+    });
     // Seed a fake cached tile so we can assert it gets deleted.
     await ctx.db.mapTile.create({
       data: {
@@ -57,6 +70,23 @@ describe("course.setMapRotation", () => {
     expect(result.success).toBe(true);
     expect(result.rotationCorrection).toBe(11);
     expect(result.northOffset).not.toBeNull();
+
+    const correctedCrs = await loadEventCrs(ctx.db, ctx.eventId);
+    const expectedControl = correctedCrs
+      ? mapMmToWgs84(10, 20, correctedCrs)
+      : null;
+    expect(expectedControl).not.toBeNull();
+    const persistedControl = await ctx.db.control.findUniqueOrThrow({
+      where: { id: control.id },
+      select: { lat: true, lng: true },
+    });
+    expect(persistedControl.lat).toBeCloseTo(expectedControl!.lat, 8);
+    expect(persistedControl.lng).toBeCloseTo(expectedControl!.lng, 8);
+    const listedControl = (await caller.course.controlCoordinates()).find(
+      (entry) => entry.code === "31",
+    );
+    expect(listedControl?.lat).toBeCloseTo(expectedControl!.lat, 8);
+    expect(listedControl?.lng).toBeCloseTo(expectedControl!.lng, 8);
 
     const expected = await parseOcadMapMetadata(readFileSync(FIXTURE), 11);
     expect(result.northOffset).toBeCloseTo(expected.northOffset!, 6);

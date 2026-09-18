@@ -265,9 +265,12 @@ function inferEpsgFromCoords(easting: number, northing: number): number | null {
 }
 
 /**
- * Get the EPSG string for a CRS, or null if unsupported.
+ * Get the EPSG string for a CRS, or null if unsupported. Falls back to a
+ * coordinate-range inference when the file declares no grid code, so
+ * every WGS84 conversion in the API (bounds, controls, north analysis)
+ * agrees on the projection.
  */
-function getEpsgString(crs: OcadCrs): string | null {
+export function getEpsgString(crs: OcadCrs): string | null {
   let code = crs.code;
 
   // Some OCAD files lack a grid code but have valid easting/northing.

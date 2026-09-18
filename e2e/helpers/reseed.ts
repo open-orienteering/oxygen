@@ -41,6 +41,7 @@ export async function reseed(): Promise<void> {
       args,
     );
     await client.query("DELETE FROM club_map_files");
+    await client.query("DELETE FROM club_map_templates");
     await client.query("DELETE FROM club_control_series");
     await client.query("DELETE FROM club_class_presets");
     await client.query("DELETE FROM club_user_groups");

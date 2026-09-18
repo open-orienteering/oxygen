@@ -1,5 +1,13 @@
 # Bugfix: map north correction for mis-georeferenced OCAD files
 
+> **Superseded (Sep 2026).** The georeference half of this fix was wrong:
+> the "suggested correction" measures how stale the drawn north lines
+> are, not a registration error, and auto-applying it displaced GPS by
+> ~200 m. Auto-apply is removed, the Settings input is gone, and the
+> number is now shown as a north-line staleness warning. See
+> [bugfix-auto-north-correction-gps-offset.md](bugfix-auto-north-correction-gps-offset.md).
+> The display-orientation half (§2, `northOffset` fold) still stands.
+
 ## Symptom
 
 Some club maps (e.g. Nackareservatet) declare ScalePar `a=0` (no

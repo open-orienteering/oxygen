@@ -20,6 +20,7 @@ import { registerBackupRoute } from "./backup.js";
 import { registerCourseExportRoute } from "./course-export.js";
 import { registerMapTileRoutes } from "./map-tiles.js";
 import { registerClubMapPreviewRoute } from "./club-map-preview.js";
+import { registerCourseMapRoutes } from "./course-maps/routes.js";
 import { registerStaticServe } from "./staticServe.js";
 import "dotenv/config";
 
@@ -93,6 +94,7 @@ async function main() {
   registerCourseExportRoute(server);
   registerMapTileRoutes(server);
   registerClubMapPreviewRoute(server);
+  registerCourseMapRoutes(server);
 
   // Single-container deployments (Cloud Run) serve the web bundle from the
   // API itself; compose deployments keep nginx and leave this unset.

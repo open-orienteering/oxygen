@@ -1,5 +1,12 @@
-import { test, expect } from "@playwright/test";
+import { test, expect, type Page } from "@playwright/test";
 import { reseed } from "./helpers/reseed";
+import { uploadEventMap } from "./helpers/map-upload";
+
+/** Event slug from the current URL (`/<nameId>/...`). */
+async function currentNameId(page: Page): Promise<string> {
+  const path = new URL(page.url()).pathname;
+  return path.split("/").filter(Boolean)[0];
+}
 
 test.describe("club map library", () => {
   test.beforeAll(async () => {
@@ -83,7 +90,7 @@ test.describe("club map library", () => {
     });
   });
 
-  test("north correction input on Settings → Maps saves a library rotation", async ({
+  test("Settings → Maps flags stale magnetic-north lines and offers no correction input", async ({
     page,
   }) => {
     await page.goto("/");
@@ -92,27 +99,53 @@ test.describe("club map library", () => {
       timeout: 15000,
     });
 
+    // The fixture draws its 601 north lines along grid north; the real
+    // declination there is ≈ 6.5° E, so the lines are stale.
     await page.getByTestId("library-map-upload").setInputFiles("e2e/test.ocd");
     const card = page.locator('[data-testid^="library-map-card-"]').first();
     await expect(card).toBeVisible({ timeout: 20000 });
-    const input = card.getByTestId("library-map-north-correction");
-    await expect(input).toBeVisible();
-    await input.fill("4.5");
-    await card.getByTestId("library-map-north-save").click();
-    // Wait for the *server-confirmed* value, not the local draft — the
-    // input echoes the draft immediately, so asserting the value alone
-    // let page.reload() abort the still-in-flight mutation (flake).
-    await expect(input).toHaveAttribute("data-rotation-correction", "4.5", {
+    const badge = card.getByTestId("north-lines-badge");
+    await expect(badge).toBeVisible({ timeout: 15000 });
+    await expect(badge).toHaveAttribute("data-north-lines", "stale");
+    const degrees = Number(await badge.getAttribute("data-north-lines-degrees"));
+    expect(degrees).toBeGreaterThan(5);
+    expect(degrees).toBeLessThan(8);
+
+    // The georeference is authoritative: no manual correction UI anymore.
+    await expect(card.getByTestId("library-map-north-correction")).toHaveCount(0);
+    await expect(card.getByTestId("library-map-north-save")).toHaveCount(0);
+  });
+
+  test("uploading a map with stale north lines warns the course setter", async ({
+    page,
+  }) => {
+    const stamp = Date.now();
+    const eventName = `E2E Stale north ${stamp}`;
+    await page.goto("/");
+    await page.getByRole("button", { name: /New Event/ }).click();
+    await page.getByPlaceholder(/Klubbmästerskap/).fill(eventName);
+    await page.getByRole("button", { name: "Create" }).click();
+    await expect(page.getByRole("link", { name: "Dashboard" })).toBeVisible({
       timeout: 15000,
     });
-    await expect(input).toHaveValue("4.5");
-    // Round-trip after reload.
-    await page.reload();
-    await expect(
-      page
-        .locator('[data-testid^="library-map-card-"]')
-        .first()
-        .getByTestId("library-map-north-correction"),
-    ).toHaveValue("4.5");
+
+    await uploadEventMap(page);
+    await expect(page.getByTestId("map-viewer").first()).toBeVisible({
+      timeout: 60000,
+    });
+
+    // One-off notice right after the upload …
+    const notice = page.getByTestId("map-upload-notice");
+    await expect(notice).toBeVisible({ timeout: 30000 });
+    await expect(notice).toContainText(/north lines/i);
+
+    // … and a persistent badge in the course editor's map info row.
+    await page.goto(`/${await currentNameId(page)}/course-editor`);
+    await expect(page.getByTestId("course-editor-page")).toBeVisible({
+      timeout: 15000,
+    });
+    const badge = page.getByTestId("map-panel").first().getByTestId("north-lines-badge");
+    await expect(badge).toBeVisible({ timeout: 30000 });
+    await expect(badge).toHaveAttribute("data-north-lines", "stale");
   });
 });

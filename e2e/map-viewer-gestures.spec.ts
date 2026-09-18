@@ -68,24 +68,39 @@ test.describe("map viewer gestures (touch)", () => {
     // Exit measure before rotate.
     await viewer.getByTitle("Measure distance").tap();
 
-    // ── Two-finger rotate + compass reset ──
+    // ── Rotation lock + two-finger rotate + compass reset ──
+    const compass = viewer.getByTestId("map-compass");
     await expect(viewer).toHaveAttribute("data-user-bearing", "0");
-    await expect(viewer.getByTestId("compass-reset")).toHaveCount(0);
-
+    // Locked by default: a rotate gesture must not turn the map.
+    await expect(compass).toHaveAttribute("data-rotation-locked", "1");
     await twoFingerRotate(page, viewer, {
       center: { x: cx, y: cy },
       radius: 60,
       fromDeg: 0,
       toDeg: 45,
     });
+    await page.waitForTimeout(100);
+    await expect(viewer).toHaveAttribute("data-user-bearing", "0");
 
+    // Unlock, then the same gesture rotates.
+    await compass.tap();
+    await expect(compass).toHaveAttribute("data-rotation-locked", "0");
+    await twoFingerRotate(page, viewer, {
+      center: { x: cx, y: cy },
+      radius: 60,
+      fromDeg: 0,
+      toDeg: 45,
+    });
     await expect
       .poll(async () => Number(await viewer.getAttribute("data-user-bearing")))
       .not.toBe(0);
 
-    await viewer.getByTestId("compass-reset").tap();
+    // First tap resets to north up (stays unlocked); second tap locks.
+    await compass.tap();
     await expect(viewer).toHaveAttribute("data-user-bearing", "0");
-    await expect(viewer.getByTestId("compass-reset")).toHaveCount(0);
+    await expect(compass).toHaveAttribute("data-rotation-locked", "0");
+    await compass.tap();
+    await expect(compass).toHaveAttribute("data-rotation-locked", "1");
   });
 });
 

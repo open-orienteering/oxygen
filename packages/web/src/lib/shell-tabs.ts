@@ -8,6 +8,8 @@ export type ShellTabId =
   | "results"
   | "classes"
   | "courses"
+  | "maps"
+  | "map-templates"
   | "course-editor"
   | "controls"
   | "clubs"
@@ -43,6 +45,8 @@ export const ALL_TABS: TabDef[] = [
   { id: "results", path: "results", countKey: "results", relevantWhen: "whenResults", requiredCapability: "results.view" },
   { id: "classes", path: "classes", countKey: "classes", relevantWhen: "always", requiredCapability: "event.view" },
   { id: "courses", path: "courses", countKey: "courses", relevantWhen: "always", requiredCapability: "courses.view" },
+  { id: "maps", path: "maps", relevantWhen: "always", requiredCapability: "courses.view" },
+  { id: "map-templates", path: "map-templates", relevantWhen: "whenPlanning", requiredCapability: "courses.view" },
   { id: "controls", path: "controls", countKey: "controls", relevantWhen: "always", requiredCapability: "courses.view" },
   // Card readout data (cardReadout.cardList etc.) is race.operate on the API.
   { id: "cards", path: "cards", countKey: "cards", relevantWhen: "whenRunners", requiredCapability: "race.operate" },

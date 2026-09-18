@@ -1,9 +1,9 @@
 #!/usr/bin/env node
-// Generates packages/web/src/iof-symbol-meta.ts from the
+// Generates packages/shared/src/course-maps/iof-symbol-meta.ts from the
 // svg-control-descriptions package's lang.json (names extracted from
 // Purple Pen's symbols.xml). Only kinds used by the control description
 // editor are emitted (C, D, F, G), filtered to symbols that actually
-// exist in packages/web/src/iof-symbols.ts, and only the languages
+// exist in packages/shared/src/course-maps/iof-symbols.ts, and only the languages
 // Oxygen ships (en, sv).
 //
 // Usage: node scripts/generate-iof-symbol-meta.mjs
@@ -14,8 +14,8 @@ import { fileURLToPath } from "node:url";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const langPath = join(root, "node_modules/svg-control-descriptions/symbols/lang.json");
-const symbolsPath = join(root, "packages/web/src/iof-symbols.ts");
-const outPath = join(root, "packages/web/src/iof-symbol-meta.ts");
+const symbolsPath = join(root, "packages/shared/src/course-maps/iof-symbols.ts");
+const outPath = join(root, "packages/shared/src/course-maps/iof-symbol-meta.ts");
 
 const lang = JSON.parse(readFileSync(langPath, "utf8"));
 

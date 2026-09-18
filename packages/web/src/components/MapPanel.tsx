@@ -10,6 +10,8 @@ import {
   IconFullscreenEnter,
   IconFullscreenExit,
 } from "./map-icons";
+import { NorthLinesBadge } from "./NorthLinesBadge";
+import { formatStalenessDeg, isMeridianStale } from "../lib/north-lines";
 
 /**
  * Public prop surface for `<MapPanel>`. Exported so the shell-owned
@@ -283,9 +285,21 @@ function MapPanelImpl({
     enabled: canQueryLibrary,
     staleTime: 30_000,
   });
+  // Non-blocking: shown once after an upload whose drawn north lines have
+  // drifted from today's magnetic north. The persistent badge next to
+  // the file name carries the same information afterwards.
+  const [uploadNotice, setUploadNotice] = useState<string | null>(null);
+  const noticeForStaleness = useCallback(
+    (stalenessDeg: number | null) =>
+      isMeridianStale(stalenessDeg)
+        ? tl("northLinesStale", { degrees: formatStalenessDeg(stalenessDeg!) })
+        : null,
+    [tl],
+  );
   const uploadMutation = trpc.course.uploadMap.useMutation({
-    onSuccess: () => {
+    onSuccess: (result) => {
       setUploadError(null);
+      setUploadNotice(noticeForStaleness(result.meridianStalenessDeg));
       mapInfo.refetch();
       mapMetadata.refetch();
     },
@@ -294,9 +308,10 @@ function MapPanelImpl({
     },
   });
   const useClubMap = trpc.course.useClubMap.useMutation({
-    onSuccess: () => {
+    onSuccess: (result) => {
       setShowLibraryPicker(false);
       setUploadError(null);
+      setUploadNotice(noticeForStaleness(result.meridianStalenessDeg));
       mapInfo.refetch();
       mapMetadata.refetch();
     },
@@ -320,6 +335,7 @@ function MapPanelImpl({
       return;
     }
     setUploadError(null);
+    setUploadNotice(null);
     void fileToBase64(file)
       .then((fileDataBase64) => {
         uploadMutation.mutate({ fileName: file.name, fileDataBase64 });
@@ -836,6 +852,11 @@ function MapPanelImpl({
               {mapInfo.data && (
                 <span className="text-xs text-slate-400">{mapInfo.data.fileName}</span>
               )}
+              <NorthLinesBadge
+                stalenessDeg={mapMetadata.data?.meridianStalenessDeg}
+                compact
+                hideCurrent
+              />
             </div>
             <div className="flex items-center gap-2">
               {!isFullscreen && canFilter && !toolbar && (
@@ -885,6 +906,22 @@ function MapPanelImpl({
       )}
       {uploadError && (
         <div className="mt-1 text-xs text-red-600">{uploadError}</div>
+      )}
+      {uploadNotice && (
+        <div
+          data-testid="map-upload-notice"
+          className="mt-1 flex items-start gap-2 rounded-md border border-amber-200 bg-amber-50 px-2 py-1 text-xs text-amber-800"
+        >
+          <span className="flex-1">{uploadNotice}</span>
+          <button
+            type="button"
+            className="cursor-pointer text-amber-700 hover:text-amber-900"
+            aria-label={tl("cancel")}
+            onClick={() => setUploadNotice(null)}
+          >
+            ×
+          </button>
+        </div>
       )}
       {libraryPicker}
       {fullscreenOverlay}

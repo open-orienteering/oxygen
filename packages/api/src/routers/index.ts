@@ -23,6 +23,9 @@ import { permissionRouter } from "./permission.js";
 import { clubMapRouter } from "./clubMap.js";
 import { controlSeriesRouter } from "./controlSeries.js";
 import { classPresetRouter } from "./classPreset.js";
+import { mapTemplateRouter } from "./mapTemplate.js";
+import { courseMapRouter } from "./courseMap.js";
+import { graphicsRouter } from "./graphics.js";
 
 export const appRouter = router({
   // The active orienteering event. Kept under the `competition` namespace
@@ -55,6 +58,9 @@ export const appRouter = router({
   clubMap: clubMapRouter,
   controlSeries: controlSeriesRouter,
   classPreset: classPresetRouter,
+  mapTemplate: mapTemplateRouter,
+  courseMap: courseMapRouter,
+  graphics: graphicsRouter,
 });
 
 export type AppRouter = typeof appRouter;
