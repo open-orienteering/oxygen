@@ -3,7 +3,8 @@
  *
  * Seeds a competition from the committed showcase fixture
  * (docs/screenshots/fixtures/showcase.sql — an anonymized Vinterserien dump
- * with real controls, courses, classes, GPS tracks, and pre-rendered map tiles)
+ * with real controls, courses, classes, cached overview tiles, and a
+ * synthetic OCAD backing map)
  * and then drives the frontend through every major user-facing feature
  * with Playwright, capturing one PNG per screen.
  *

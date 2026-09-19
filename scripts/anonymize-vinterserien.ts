@@ -30,6 +30,9 @@
  *   - club_directory: filtered to the subset of clubs referenced by
  *     the demo runners, with logos preserved. Emitted ON CONFLICT DO
  *     NOTHING so it never overwrites an operator's real club rows.
+ *   - map_files: file_name / file_data always replaced with a generated
+ *     synthetic OCAD that keeps the source CRS and paper extent. A source
+ *     map export is never written into the fixture.
  *   - map_tiles: filtered to z <= MAX_ZOOM.
  *   - All BIGSERIAL ids on map_files / rendered_maps / tracks / routes
  *     are stripped from the INSERTs so Postgres allocates fresh ones
@@ -45,6 +48,10 @@ import {
   FEMALE_FIRST_NAMES,
   LAST_NAMES,
 } from "../packages/api/src/routers/fictional-names.js";
+import {
+  SHOWCASE_OCAD,
+  buildShowcaseOcad,
+} from "./lib/ocad-fixture.mjs";
 
 // ─── Config ──────────────────────────────────────────────────
 
@@ -78,7 +85,8 @@ type Mode =
   | "remapPunch"
   | "filterTiles"
   | "anonymizeEvent"
-  | "stripSerialId";
+  | "stripSerialId"
+  | "syntheticMap";
 
 /**
  * Table emission order. Each child table must come after its UUID
@@ -104,7 +112,7 @@ const TABLES: { name: string; mode: Mode; whereExtra?: string }[] = [
   { name: "runners", mode: "anonymizeRunner" },
   { name: "teams", mode: "anonymizeTeam" },
   // Map / GPS.
-  { name: "map_files", mode: "stripSerialId" },
+  { name: "map_files", mode: "syntheticMap" },
   { name: "map_tiles", mode: "filterTiles" },
   { name: "tracks", mode: "stripSerialId" },
   { name: "routes", mode: "stripSerialId" },
@@ -295,7 +303,7 @@ async function main(): Promise<void> {
     "--           courses / classes, pseudonymous runners, cards with\n",
   );
   write(
-    "--           remapped CardNo, the OCAD source file, cached low-zoom\n",
+    "--           remapped CardNo, a synthetic OCAD backing map, cached\n",
   );
   write(
     `--           map tiles (z <= ${MAX_ZOOM}), and the subset of\n`,
@@ -315,7 +323,11 @@ async function main(): Promise<void> {
 
   write("SET search_path = oxygen;\n");
   write("BEGIN;\n\n");
-  write("-- Idempotency: cascade-delete any previous demo load.\n");
+  write("-- Idempotency: drop course_controls before cascading the event so\n");
+  write("-- Restrict FKs on control_id do not block the delete.\n");
+  write(
+    `DELETE FROM course_controls WHERE course_id IN (SELECT id FROM courses WHERE event_id IN (SELECT id FROM events WHERE name_id = '${DEMO_NAME_ID}'));\n`,
+  );
   write(
     `DELETE FROM events WHERE name_id = '${DEMO_NAME_ID}';\n\n`,
   );
@@ -382,7 +394,11 @@ async function main(): Promise<void> {
 
     // Filter columns we'll emit (strip BIGSERIAL ids when requested).
     const emitCols = cols.filter((c) => {
-      if (t.mode === "stripSerialId" && c.name === "id") return false;
+      if (
+        (t.mode === "stripSerialId" || t.mode === "syntheticMap") &&
+        c.name === "id"
+      )
+        return false;
       return true;
     });
     const colIdxMap = emitCols.map((c) =>
@@ -582,6 +598,11 @@ function transform(
     case "remapPunch": {
       const cn = numOr0(r[colIndex(cols, "card_no")]);
       setBy(r, cols, "card_no", remapCard(cn));
+      return r;
+    }
+    case "syntheticMap": {
+      setBy(r, cols, "file_name", SHOWCASE_OCAD.fileName);
+      setBy(r, cols, "file_data", buildShowcaseOcad());
       return r;
     }
   }

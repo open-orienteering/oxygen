@@ -4,8 +4,9 @@
 # Works against either a Dockerized PostgreSQL (USE_DOCKER=1, typically the
 # one in docker-compose.yml) or a native PostgreSQL running on the host.
 # The fixture itself is docs/screenshots/fixtures/showcase.sql — a portable,
-# anonymized dump derived from Vinterserien data
-# (see scripts/anonymize-vinterserien.ts).
+# anonymized dump derived from Vinterserien data. The OCAD source is a
+# generated synthetic file; overview tiles (z <= 13) are retained.
+# (see scripts/anonymize-vinterserien.ts and scripts/lib/ocad-fixture.mjs).
 #
 # The fixture is idempotent: it cascade-deletes any existing event whose
 # name_id matches before re-inserting, so re-running is safe.

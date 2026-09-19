@@ -28,12 +28,11 @@ The first run takes a minute while Docker pulls the image.
 
 Click **Web Preview** (the icon in the top-right of Cloud Shell) and select port **8080**.
 
-You'll land on the Demo Competition — a fully populated, anonymized showcase derived from a real Swedish forest race: 5 classes, 169 runners across 38 clubs, a real OCAD map, completed runs with splits, 66 GPS tracks, and 2 700+ radio/finish punches. Everything is pre-wired so you can explore:
+You'll land on the Demo Competition — a fully populated, anonymized showcase derived from a Swedish forest race: 5 classes, 169 runners across 38 clubs, completed runs with splits, and 2 700+ radio/finish punches. Overview map tiles (zoom 10–13) are cached in the fixture; the OCAD served for download and on-demand rendering is a generated synthetic file with a matching SWEREF99 TM georeference, so zooming past those cached levels shows synthetic terrain. The fixture currently has no GPS tracks or routes. Everything is pre-wired so you can explore:
 
 - **Runners / Start list / Results** — full field with classes, clubs, start times and splits
-- **Courses** — controls and legs overlaid on the real map
+- **Courses** — controls and legs overlaid on the overview tiles
 - **Cards** — process SI card readouts against the existing field
-- **Tracks & Replay** — GPS routes from the race, ready to scrub through
 - **Kiosk** — open in a second tab for the self-service registration view
 
 ## Step 3: Reload the showcase (optional)
@@ -55,7 +54,7 @@ To regenerate the committed fixture from your own live Vinterserien data (regene
 pnpm tsx scripts/anonymize-vinterserien.ts
 ```
 
-This reads the `Vinterserien` event from your local PostgreSQL, pseudonymises runners, remaps card numbers, and writes a fresh portable SQL fixture. Override `SRC_NAME_ID` to point at a different source event.
+This reads the `Vinterserien` event from your local PostgreSQL, pseudonymises runners, remaps card numbers, replaces `map_files.file_data` with the generated showcase OCAD (`scripts/lib/ocad-fixture.mjs`), keeps cached tiles at `z <= 13`, and writes a fresh portable SQL fixture. Override `SRC_NAME_ID` to point at a different source event. To swap only the map blob in an existing fixture without a live source event, run `node scripts/patch-showcase-map.mjs`.
 
 ## Step 4: Connect your own data (optional)
 
