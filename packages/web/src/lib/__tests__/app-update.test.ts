@@ -2,6 +2,8 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import {
   resolveUpdateAction,
   formatBuildVersion,
+  formatBuildCommit,
+  formatDeployRef,
   createUpdateActivator,
   versionIdentity,
 } from "../app-update";
@@ -121,5 +123,38 @@ describe("formatBuildVersion", () => {
   it("falls back to the raw string when it isn't a date", () => {
     expect(formatBuildVersion("dev")).toBe("dev");
     expect(formatBuildVersion("")).toBe("");
+  });
+});
+
+describe("formatBuildCommit", () => {
+  it("shortens the full SHA baked into GHCR images", () => {
+    expect(
+      formatBuildCommit("e81729be4f7fd564c47bb2098137403ef6dcb922"),
+    ).toBe("e81729b");
+  });
+
+  it("extracts the SHA from legacy source-build identities", () => {
+    expect(formatBuildCommit("bfdbf0e-20260918230000")).toBe("bfdbf0e");
+  });
+
+  it("omits missing identities", () => {
+    expect(formatBuildCommit(null)).toBeNull();
+    expect(formatBuildCommit("")).toBeNull();
+  });
+});
+
+describe("formatDeployRef", () => {
+  it("shows only the tag from a full GHCR image reference", () => {
+    expect(
+      formatDeployRef("ghcr.io/open-orienteering/oxygen:v1.2.3"),
+    ).toBe("v1.2.3");
+  });
+
+  it("keeps operator-friendly tag and digest values", () => {
+    expect(formatDeployRef("edge")).toBe("edge");
+    expect(formatDeployRef("sha-abcdef0")).toBe("sha-abcdef0");
+    expect(formatDeployRef("ghcr.io/open-orienteering/oxygen@sha256:abc")).toBe(
+      "sha256:abc",
+    );
   });
 });

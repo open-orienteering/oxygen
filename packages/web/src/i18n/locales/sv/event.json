@@ -79,7 +79,7 @@
   "importSummary": "{{runners}} löpare, {{classes}} klasser, {{clubs}} klubbar importerade",
   "openCompetition": "Öppna tävling",
   "importFailed": "Import misslyckades: {{message}}",
-  "footer": "Oxygen v0.1.0 · Ansluten till PostgreSQL",
+  "footer": "Oxygen v{{version}} · Ansluten till PostgreSQL",
   "maintenanceHelp": "Underhåll för hela instansen. Åtgärderna påverkar alla tävlingar, inte bara en.",
   "cleanUpDeleted": "Rensa borttagna poster",
   "cleanUpTitle": "Ta bort varje tidigare borttagen tävling permanent, tillsammans med all dess data. Detta kan inte ångras.",

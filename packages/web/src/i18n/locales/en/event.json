@@ -79,7 +79,7 @@
   "importSummary": "{{runners}} runners, {{classes}} classes, {{clubs}} clubs imported",
   "openCompetition": "Open Event",
   "importFailed": "Import failed: {{message}}",
-  "footer": "Oxygen v0.1.0 · Connected to PostgreSQL",
+  "footer": "Oxygen v{{version}} · Connected to PostgreSQL",
   "maintenanceHelp": "Instance-wide housekeeping. These actions affect every event, not just one.",
   "cleanUpDeleted": "Clean up deleted records",
   "cleanUpTitle": "Permanently remove every event that was deleted earlier, along with all of its data. This cannot be undone.",

@@ -3,9 +3,16 @@ import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
 import { VitePWA } from "vite-plugin-pwa";
 import path from "path";
+import { readFileSync } from "node:fs";
 
 // Build version: timestamp at build time, used for cache busting
 const BUILD_VERSION = new Date().toISOString();
+// Application version is deliberately manual: releases update package.json.
+const APP_VERSION = (
+  JSON.parse(
+    readFileSync(path.resolve(import.meta.dirname, "../../package.json"), "utf8"),
+  ) as { version: string }
+).version;
 
 // https://vite.dev/config/
 export default defineConfig({
@@ -112,13 +119,14 @@ export default defineConfig({
   ],
   define: {
     __BUILD_VERSION__: JSON.stringify(BUILD_VERSION),
+    __APP_VERSION__: JSON.stringify(APP_VERSION),
     // Buffer polyfill for ocad2geojson (uses Node-style Buffer.isBuffer)
     "global": "globalThis",
   },
   resolve: {
     alias: {
       // ocad2geojson imports 'fs' but only uses it for file-path loading (we always pass Buffers)
-      fs: path.resolve(__dirname, "src/lib/empty-module.ts"),
+      fs: path.resolve(import.meta.dirname, "src/lib/empty-module.ts"),
     },
   },
   server: {

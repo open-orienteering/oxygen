@@ -4,9 +4,9 @@ import { useTranslation } from "react-i18next";
 import type { EventInfo, EventKind } from "@oxygen/shared";
 import { trpc } from "../lib/trpc";
 import { formatDate } from "../lib/format";
-import { formatBuildVersion } from "../lib/app-update";
 import { LanguageSelector } from "../components/LanguageSelector";
 import { UserChip } from "../components/UserChip";
+import { BuildInfoLine } from "../components/BuildInfoLine";
 import {
   EVENT_KIND_OPTIONS,
   eventKindDisplayLabel,
@@ -279,10 +279,8 @@ export function CompetitionSelector() {
 
         {/* Footer */}
         <div className="text-center mt-6 text-sm text-slate-400 space-y-1">
-          <div>{t("footer")}</div>
-          <div className="text-xs" data-testid="build-version">
-            {t("buildVersion", { ns: "common" })}: {formatBuildVersion(__BUILD_VERSION__)}
-          </div>
+          <div>{t("footer", { version: __APP_VERSION__ })}</div>
+          <BuildInfoLine className="text-xs" />
         </div>
       </div>
     </div>

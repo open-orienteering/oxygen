@@ -22,6 +22,19 @@ Ordinary pushes to `main` do **not** move `latest`.
 Until the first GitHub Release exists, `stable` / `latest` are absent — use
 `edge` or a `sha-…` tag.
 
+The event-selector footer separates the deliberately manual application
+version from build provenance:
+
+```text
+Oxygen v0.1.0 · Connected to PostgreSQL
+Build: 2026-09-19 09:15 · Image: edge · Commit: abcdef0
+```
+
+The application version comes from the root `package.json` and changes only
+when a release deliberately updates it. The image reference is recorded by
+`scripts/gcp/deploy.sh` (or `OXYGEN_DEPLOY_REF` on another host), while the
+commit is baked into the published image as `OXYGEN_BUILD_ID`.
+
 ## Make the GHCR package public (one-time)
 
 The first publish creates an org package that defaults to private. In GitHub:

@@ -180,6 +180,9 @@ scripts/gcp/deploy.sh --from-source   # Cloud Build this working tree (fallback)
 ```
 
 Migrations run first against the chosen image, then Cloud Run is updated.
+The script records the selected argument as `OXYGEN_DEPLOY_REF`, so the UI
+footer shows `Image: edge`, `Image: v1.2.3`, or the chosen SHA alongside
+the baked commit identity.
 Idle vs event mode on the live service is **preserved** (a deploy during a
 competition will not flip you back to scale-to-zero). Use
 `./event-mode.sh` / `./idle-mode.sh` to change that on purpose.

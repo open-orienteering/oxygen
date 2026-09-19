@@ -3,3 +3,4 @@
 
 /** Injected at build time by vite.config.ts */
 declare const __BUILD_VERSION__: string;
+declare const __APP_VERSION__: string;

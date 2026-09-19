@@ -149,7 +149,7 @@ run_cloud_run_deploy() {
     --service-account="oxygen-run@${PROJECT_ID}.iam.gserviceaccount.com" \
     --add-cloudsql-instances="$SQL_CONNECTION" \
     --set-secrets="DATABASE_URL=oxygen-database-url:latest" \
-    --set-env-vars="^;^NODE_OPTIONS=--max-old-space-size=3328;DATABASE_POOL_MAX=8;MAP_RENDER_CONCURRENCY=3;AUTH_MODE=proxy;AUTH_HEADER=x-goog-authenticated-user-email;AUTH_AUTO_PROVISION=member;OXYGEN_ADMIN_EMAILS=${OXYGEN_ADMIN_EMAILS:-}" \
+    --set-env-vars="^;^NODE_OPTIONS=--max-old-space-size=3328;DATABASE_POOL_MAX=8;MAP_RENDER_CONCURRENCY=3;AUTH_MODE=proxy;AUTH_HEADER=x-goog-authenticated-user-email;AUTH_AUTO_PROVISION=member;OXYGEN_ADMIN_EMAILS=${OXYGEN_ADMIN_EMAILS:-};OXYGEN_DEPLOY_REF=${DEPLOY_REF}" \
     --memory=4Gi \
     --cpu=2 \
     --timeout=300 \
@@ -166,6 +166,7 @@ run_cloud_run_deploy() {
 }
 
 IMAGE_REF=""
+DEPLOY_REF=""
 if [[ "$FROM_SOURCE" -eq 1 ]]; then
   BUILD_ID="$(git -C "$REPO_ROOT" rev-parse --short HEAD 2>/dev/null || echo dev)-$(date +%Y%m%d%H%M%S)"
   echo "── Building working tree with Cloud Build (BUILD_ID=${BUILD_ID})…"
@@ -174,9 +175,11 @@ if [[ "$FROM_SOURCE" -eq 1 ]]; then
     --config="$REPO_ROOT/scripts/gcp/cloudbuild.yaml" \
     --substitutions="_IMAGE=${IMAGE},_BUILD_ID=${BUILD_ID}"
   IMAGE_REF="${IMAGE}:latest"
+  DEPLOY_REF="source-${BUILD_ID}"
 else
   SELECTED="${TAG_INPUT:-${DEPLOY_TAG:-stable}}"
   IMAGE_REF="$(resolve_image_ref "$SELECTED")"
+  DEPLOY_REF="$SELECTED"
   echo "── Using published image ${IMAGE_REF}"
 fi
 

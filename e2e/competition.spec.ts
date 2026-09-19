@@ -18,6 +18,8 @@ test.describe("Competition Selection", () => {
     const version = page.getByTestId("build-version");
     await expect(version).toBeVisible({ timeout: 10000 });
     await expect(version).toHaveText(/Build: \d{4}-\d{2}-\d{2} \d{2}:\d{2}/);
+    await expect(version).toContainText("Image: e2e");
+    await expect(version).toContainText("Commit: e81729b");
   });
 
   test("should list competitions from the database", async ({ page }) => {

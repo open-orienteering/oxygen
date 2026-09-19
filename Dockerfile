@@ -54,6 +54,8 @@ FROM node:20-slim AS api
 # local compose builds may leave it empty.
 ARG BUILD_ID=""
 ENV OXYGEN_BUILD_ID=$BUILD_ID
+ARG BUILD_REF=""
+ENV OXYGEN_DEPLOY_REF=$BUILD_REF
 
 WORKDIR /app
 

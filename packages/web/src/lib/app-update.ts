@@ -81,3 +81,19 @@ export function formatBuildVersion(iso: string): string {
     ` ${pad(d.getHours())}:${pad(d.getMinutes())}`
   );
 }
+
+/** Compact commit identity for the footer (`abcdef0`). */
+export function formatBuildCommit(buildId: string | null | undefined): string | null {
+  if (!buildId) return null;
+  const sha = buildId.split("-", 1)[0];
+  return sha.slice(0, 7);
+}
+
+/** Reduce a full container reference to the tag/digest operators recognize. */
+export function formatDeployRef(deployRef: string): string {
+  const digestAt = deployRef.lastIndexOf("@");
+  if (digestAt >= 0) return deployRef.slice(digestAt + 1);
+  const tagAt = deployRef.lastIndexOf(":");
+  const slashAt = deployRef.lastIndexOf("/");
+  return tagAt > slashAt ? deployRef.slice(tagAt + 1) : deployRef;
+}

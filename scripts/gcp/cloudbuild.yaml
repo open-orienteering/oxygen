@@ -9,6 +9,8 @@ steps:
       - --target=cloud
       - --build-arg
       - BUILD_ID=${_BUILD_ID}
+      - --build-arg
+      - BUILD_REF=source-${_BUILD_ID}
       - -t
       - ${_IMAGE}:latest
       - .

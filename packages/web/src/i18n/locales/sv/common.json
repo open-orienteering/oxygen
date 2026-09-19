@@ -68,6 +68,8 @@
   "versionUpdate": "En ny version finns tillgänglig.",
   "reload": "Ladda om",
   "buildVersion": "Build",
+  "imageVersion": "Image",
+  "commitVersion": "Commit",
 
   "testLab": "Testlabb",
   "testLabDescription": "Generera testdata och simulera tävlingar för stresstestning. Arbeta genom de fyra stegen i ordning — varje steg beror på det föregående.",

@@ -83,11 +83,15 @@ async function main() {
   // the process restarts constantly (scale-to-zero, instance swaps) without
   // any code change, so startedAt alone triggers false update prompts.
   const BUILD_ID = process.env.OXYGEN_BUILD_ID || null;
+  // The image reference selected by the operator (`edge`, `v1.2.3`,
+  // `sha-…`). Images carry their immutable SHA ref by default; deploy
+  // tooling overrides it with the actual tag used for the rollout.
+  const DEPLOY_REF = process.env.OXYGEN_DEPLOY_REF || null;
   server.get("/health", async () => ({ status: "ok", startedAt: SERVER_START }));
   server.get("/api/version", async (_req, reply) =>
     reply
       .header("Cache-Control", "no-store")
-      .send({ startedAt: SERVER_START, buildId: BUILD_ID }),
+      .send({ startedAt: SERVER_START, buildId: BUILD_ID, deployRef: DEPLOY_REF }),
   );
 
   registerBackupRoute(server);
