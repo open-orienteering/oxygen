@@ -1,5 +1,19 @@
-# ─── Stage 1: Install dependencies ─────────────────────────
-FROM node:20-slim AS deps
+# ─── Stage 1: Runtime OS dependencies ──────────────────────
+FROM node:20-slim AS base
+
+# Prisma's install script selects a native schema engine by probing OpenSSL.
+# Without the CLI present it falls back to debian-openssl-1.1.x; the runtime
+# is OpenSSL 3 and then tries to download a replacement during migrations.
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends \
+      openssl \
+      postgresql-client \
+      librsvg2-bin \
+      fonts-liberation \
+ && rm -rf /var/lib/apt/lists/*
+
+# ─── Stage 2: Install JavaScript dependencies ──────────────
+FROM base AS deps
 
 # Keep in sync with "packageManager" in the root package.json, otherwise pnpm
 # re-downloads the pinned version on every build.
@@ -13,7 +27,7 @@ COPY packages/web/package.json packages/web/
 
 RUN pnpm install --frozen-lockfile
 
-# ─── Stage 2: Build everything ─────────────────────────────
+# ─── Stage 3: Build everything ─────────────────────────────
 FROM deps AS build
 
 COPY packages/shared/ packages/shared/
@@ -43,8 +57,8 @@ RUN node -e "\
 # Build the web frontend (vite build only — skip tsc type-check for speed)
 RUN cd packages/web && npx vite build
 
-# ─── Stage 3: API production image ────────────────────────
-FROM node:20-slim AS api
+# ─── Stage 4: API production image ────────────────────────
+FROM base AS api
 
 # Deploy-time build identity, reported by /api/version. The web client
 # treats a change as "new version deployed"; without it the client falls
@@ -59,15 +73,9 @@ ENV OXYGEN_DEPLOY_REF=$BUILD_REF
 
 WORKDIR /app
 
-# pg_dump is required for event backup downloads. rsvg-convert provides
-# vector SVG→PDF conversion for printable course maps; Liberation Sans is
-# used for deterministic overlay text metrics.
-RUN apt-get update \
- && apt-get install -y --no-install-recommends \
-      postgresql-client \
-      librsvg2-bin \
-      fonts-liberation \
- && rm -rf /var/lib/apt/lists/*
+# The base stage supplies pg_dump for event backups, rsvg-convert for
+# printable course maps, Liberation Sans for deterministic text metrics,
+# and the same OpenSSL environment Prisma saw during dependency installation.
 
 # Copy the monorepo structure with deps (includes generated Prisma client)
 COPY --from=deps /app/node_modules ./node_modules
@@ -87,7 +95,7 @@ EXPOSE 3001
 
 CMD ["node", "packages/api/dist/index.js"]
 
-# ─── Stage 4: Web production image (nginx) ─────────────────
+# ─── Stage 5: Web production image (nginx) ─────────────────
 FROM nginx:alpine AS web
 
 COPY --from=build /app/packages/web/dist /usr/share/nginx/html
@@ -95,7 +103,7 @@ COPY docker/nginx.conf /etc/nginx/conf.d/default.conf
 
 EXPOSE 80
 
-# ─── Stage 5: Cloud single-container image (API + web) ─────
+# ─── Stage 6: Cloud single-container image (API + web) ─────
 # Cloud Run runs one container per service, so this target bundles the
 # built web app into the API image; staticServe.ts serves it (SPA
 # fallback + asset caching) when WEB_DIST_DIR is set. See

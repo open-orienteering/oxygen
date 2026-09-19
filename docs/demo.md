@@ -4,13 +4,25 @@ Oxygen is a lightweight orienteering competition management system. This tutoria
 
 ## Step 1: Start the app with demo data
 
-This script starts PostgreSQL 18, applies the `oxygen` schema, loads the **Demo Competition** showcase, and starts the full app:
+This script pulls the published multi-architecture GHCR image, starts
+PostgreSQL 18, applies the `oxygen` migrations from that image, loads the
+**Demo Competition** showcase, and starts the full app. Only Docker with the
+Compose plugin is required — Cloud Shell does not need Node.js, pnpm, or a
+dependency install:
 
 ```bash
 bash scripts/demo.sh
 ```
 
-The first run takes a minute while Docker builds the images.
+The demo defaults to `ghcr.io/open-orienteering/oxygen:edge`, the latest
+verified `main` build. To test a release or immutable build:
+
+```bash
+OXYGEN_IMAGE=ghcr.io/open-orienteering/oxygen:v1.2.3 bash scripts/demo.sh
+# or: OXYGEN_IMAGE=ghcr.io/open-orienteering/oxygen:sha-<full-commit> ...
+```
+
+The first run takes a minute while Docker pulls the image.
 
 ## Step 2: Open the app
 
@@ -30,7 +42,8 @@ The showcase fixture lives at `docs/screenshots/fixtures/showcase.sql` and is lo
 
 ```bash
 # Reload into the Cloud Shell docker PostgreSQL
-USE_DOCKER=1 bash scripts/load-showcase.sh
+COMPOSE_FILE=docker-compose.release.yml USE_DOCKER=1 \
+  bash scripts/load-showcase.sh
 
 # Reload into a native PostgreSQL on your host
 pnpm showcase:load

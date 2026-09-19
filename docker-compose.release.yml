@@ -30,6 +30,7 @@ services:
 
   migrate:
     image: ${OXYGEN_IMAGE:-ghcr.io/open-orienteering/oxygen:stable}
+    pull_policy: ${OXYGEN_PULL_POLICY:-always}
     restart: "no"
     depends_on:
       postgres:
@@ -43,6 +44,7 @@ services:
 
   oxygen:
     image: ${OXYGEN_IMAGE:-ghcr.io/open-orienteering/oxygen:stable}
+    pull_policy: ${OXYGEN_PULL_POLICY:-always}
     restart: unless-stopped
     depends_on:
       postgres:
@@ -50,7 +52,7 @@ services:
       migrate:
         condition: service_completed_successfully
     ports:
-      - "8080:8080"
+      - "${OXYGEN_PORT:-8080}:8080"
     environment:
       DATABASE_URL: "postgresql://oxygen:oxygen@postgres:5432/oxygen?schema=oxygen"
       PORT: "8080"

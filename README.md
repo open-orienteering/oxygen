@@ -86,7 +86,11 @@ See [packages/api/.env.example](packages/api/.env.example) for all environment v
 
 ## Try It Online
 
-Click the **Open in Cloud Shell** button at the top of this page to spin up a fully working instance in your browser — no local install needed. The [Cloud Shell tutorial](docs/demo.md) walks you through loading demo data or connecting your Eventor API key.
+Click the **Open in Cloud Shell** button at the top of this page to pull the
+published GHCR image and spin up a fully working instance in your browser — no
+Node.js, pnpm, dependency install, or source build needed. The
+[Cloud Shell tutorial](docs/demo.md) walks you through loading demo data or
+connecting your Eventor API key.
 
 ## Eventor API Key
 

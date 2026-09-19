@@ -2,46 +2,45 @@
 # Sets up and starts Oxygen with demo data, suitable for Google Cloud Shell
 # or any local sandbox where you want a one-command "see it running".
 #
-# Steps:
-#   1. Start the PostgreSQL container (postgres:18-alpine).
-#   2. Apply the latest oxygen schema with `pnpm db:push`.
-#   3. Load the committed Demo Competition showcase fixture.
-#   4. Build and start the API + web containers.
+# Uses the published GHCR image, so the host only needs Docker + Compose:
+# no Node.js, pnpm, dependency install, or source build is required.
+#
+# Override OXYGEN_IMAGE to test a release or immutable SHA image.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 cd "$REPO_ROOT"
 
-# ─── 1. Start PostgreSQL ─────────────────────────────────────────────────────
-echo "Starting PostgreSQL..."
-docker compose up -d postgres
+# Use the release topology (published cloud image + PostgreSQL). COMPOSE_FILE
+# also makes load-showcase.sh exec psql in this stack.
+export COMPOSE_FILE="$REPO_ROOT/docker-compose.release.yml"
+export OXYGEN_IMAGE="${OXYGEN_IMAGE:-ghcr.io/open-orienteering/oxygen:edge}"
+export OXYGEN_PORT="${OXYGEN_PORT:-8080}"
+export OXYGEN_PULL_POLICY="${OXYGEN_PULL_POLICY:-always}"
 
-echo "Waiting for PostgreSQL to accept connections..."
-until docker compose exec -T postgres pg_isready -U oxygen -d oxygen >/dev/null 2>&1; do
-  sleep 1
-done
-echo "  PostgreSQL is ready."
+# ─── 1. Pull and start the published app ─────────────────────────────────────
+echo "Starting Oxygen from $OXYGEN_IMAGE..."
+if [[ "$OXYGEN_PULL_POLICY" != "never" ]]; then
+  docker compose pull
+fi
+docker compose up -d --wait oxygen
+echo "  Published image is healthy."
 
-# Pick a DATABASE_URL that targets the docker postgres from the host.
-# The container exposes 5432 → 5432.
-export DATABASE_URL="postgresql://oxygen:oxygen@localhost:5432/oxygen?schema=oxygen"
-
-# ─── 2. Apply oxygen schema ──────────────────────────────────────────────────
-echo "Applying oxygen schema..."
-pnpm --filter @oxygen/api db:push >/dev/null
-echo "  Schema applied."
-
-# ─── 3. Load Demo Competition showcase ───────────────────────────────────────
+# ─── 2. Load Demo Competition showcase ───────────────────────────────────────
 echo "Loading Demo Competition showcase..."
-bash scripts/load-showcase.sh
+USE_DOCKER=1 bash scripts/load-showcase.sh
 echo "  Loaded."
 
-# ─── 4. Start API and web ────────────────────────────────────────────────────
-echo "Building and starting Oxygen (first run takes ~1 min)..."
-docker compose up -d --build api web
+# ─── 3. Verify the running image over HTTP ───────────────────────────────────
+BASE_URL="http://127.0.0.1:$OXYGEN_PORT"
+HEALTH_RESPONSE="$(curl --fail --silent --show-error "$BASE_URL/health")"
+INDEX_RESPONSE="$(curl --fail --silent --show-error "$BASE_URL/")"
+grep -q '"status":"ok"' <<<"$HEALTH_RESPONSE"
+grep -q '<div id="root">' <<<"$INDEX_RESPONSE"
 
 echo ""
 echo "✓ Oxygen is running with the Demo Competition."
-echo "  Open Web Preview on port 8080 to access the app."
-echo "  Or, locally: http://localhost:8080"
+echo "  Image: $OXYGEN_IMAGE"
+echo "  Open Web Preview on port $OXYGEN_PORT to access the app."
+echo "  Or, locally: http://localhost:$OXYGEN_PORT"

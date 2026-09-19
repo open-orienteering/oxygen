@@ -51,3 +51,15 @@ jobs:
             org.opencontainers.image.revision=${{ github.sha }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+      - name: Smoke-test the published SHA image
+        env:
+          COMPOSE_PROJECT_NAME: oxygen-ghcr-smoke
+          OXYGEN_IMAGE: ${{ steps.meta.outputs.image }}:${{ steps.meta.outputs.sha_tag }}
+          OXYGEN_PORT: "18080"
+        run: bash scripts/demo.sh
+      - name: Clean up smoke-test stack
+        if: always()
+        env:
+          COMPOSE_PROJECT_NAME: oxygen-ghcr-smoke
+          OXYGEN_PORT: "18080"
+        run: docker compose -f docker-compose.release.yml down -v

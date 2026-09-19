@@ -111,6 +111,10 @@ fi
 echo ""
 echo "✓ Demo Competition loaded — $ROW_COUNT runners visible."
 echo ""
-echo "Next steps:"
-echo "  1. Start the app:  pnpm dev"
-echo "  2. Open http://localhost:5173 and pick 'Demo Competition'."
+if [[ "${COMPOSE_FILE:-}" == *"docker-compose.release.yml"* ]]; then
+  echo "The published-image app is ready; pick 'Demo Competition' in the browser."
+else
+  echo "Next steps:"
+  echo "  1. Start the app:  pnpm dev"
+  echo "  2. Open http://localhost:5173 and pick 'Demo Competition'."
+fi
