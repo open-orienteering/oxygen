@@ -7,6 +7,7 @@ import { formatDate } from "../lib/format";
 import { LanguageSelector } from "../components/LanguageSelector";
 import { UserChip } from "../components/UserChip";
 import { BuildInfoLine } from "../components/BuildInfoLine";
+import { LiveCompassLogo } from "../components/OxygenLogo";
 import {
   EVENT_KIND_OPTIONS,
   eventKindDisplayLabel,
@@ -58,8 +59,8 @@ export function CompetitionSelector() {
 
         {/* Logo / Header */}
         <div className="text-center mb-8">
-          <div className="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-blue-600 text-white text-2xl font-bold mb-4 shadow-lg">
-            O2
+          <div className="mb-4">
+            <LiveCompassLogo className="w-16 h-16 drop-shadow-lg" />
           </div>
           <h1 className="text-3xl font-bold text-slate-900">
             {t("title")}

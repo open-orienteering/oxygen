@@ -1,5 +1,37 @@
-<?xml version="1.0" encoding="UTF-8"?>
-<svg xmlns="http://www.w3.org/2000/svg" width="500" height="500">
-<path d="M502,0H0V502" fill="#FFF"/>
-<path d="M0,500H500V0" fill="#F76D22"/>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 120">
+  <!--
+    Oxygen mark: orienteering flag (white / IOF orange on the diagonal) with a
+    compass-rose "O" cut out of the orange. Mirrored in
+    src/components/OxygenLogo.tsx (inline, with a live needle) — keep in sync.
+    PNG app icons are rendered from this file by scripts/generate-app-icons.mjs.
+  -->
+  <defs>
+    <clipPath id="squircle"><rect width="120" height="120" rx="28" /></clipPath>
+    <linearGradient id="orangeGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#FF7A00" /><stop offset="100%" stop-color="#D94000" />
+    </linearGradient>
+    <linearGradient id="blueGrad" x1="0%" y1="100%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#06B6D4" /><stop offset="100%" stop-color="#3B82F6" />
+    </linearGradient>
+  </defs>
+  <g clip-path="url(#squircle)">
+    <rect width="120" height="120" fill="#F8FAFC" />
+    <path d="M0,120 L120,0 L120,120 Z" fill="url(#orangeGrad)" />
+
+    <!-- White halo cut from the orange -->
+    <circle cx="60" cy="60" r="34" fill="#F8FAFC" />
+
+    <!-- Compass rose: the ring is the O, four cardinal points at two-thirds size -->
+    <g fill="url(#blueGrad)">
+      <path d="M60,28 L64,40 L56,40 Z" />
+      <path d="M60,92 L64,80 L56,80 Z" />
+      <path d="M28,60 L40,56 L40,64 Z" />
+      <path d="M92,60 L80,56 L80,64 Z" />
+    </g>
+    <circle cx="60" cy="60" r="20" fill="none" stroke="url(#blueGrad)" stroke-width="8" />
+
+    <!-- Needle: orange north, grey south -->
+    <path d="M60,44 L65,60 L55,60 Z" fill="url(#orangeGrad)" />
+    <path d="M60,76 L65,60 L55,60 Z" fill="#94A3B8" />
+  </g>
 </svg>

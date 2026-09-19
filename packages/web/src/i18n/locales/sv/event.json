@@ -1,5 +1,8 @@
 {
   "title": "Oxygen",
+  "logoAlt": "Oxygen-logotyp",
+  "compassEnable": "Tryck för att låta kompassen peka mot norr",
+  "compassHeading": "Oxygen-logotyp — kompassriktning {{heading}}°",
   "leaseTitle": "Arenaläge",
   "leaseBadgeVenueMode": "Arenaläge",
   "leaseBadgeCheckedOut": "Utcheckad till {{node}}",

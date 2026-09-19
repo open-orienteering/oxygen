@@ -73,6 +73,71 @@ test.describe("Event selector", () => {
     );
     await expect((await request.get("/pwa-192.png")).ok()).toBeTruthy();
     await expect((await request.get("/pwa-512.png")).ok()).toBeTruthy();
+    await expect((await request.get("/apple-touch-icon.png")).ok()).toBeTruthy();
+
+    // The favicon is the compass-rose mark, not the bare flag it used to be.
+    const favicon = await request.get("/favicon.svg");
+    expect(favicon.ok()).toBeTruthy();
+    expect(await favicon.text()).toContain("Compass rose");
+  });
+
+  test("landing page shows the compass logo and turns the needle to a live heading", async ({
+    page,
+  }) => {
+    await page.goto("/");
+    const logo = page.getByTestId("oxygen-logo");
+    await expect(logo).toBeVisible();
+    // The old text badge is gone.
+    await expect(page.getByText("O2", { exact: true })).toHaveCount(0);
+
+    // Desktop Chromium needs no permission prompt, so the live wrapper is
+    // rendered and listening; with no sensor the needle rests at north.
+    const live = page.getByTestId("oxygen-logo-live");
+    await expect(live).toBeVisible();
+    const needle = page.getByTestId("oxygen-logo-needle");
+    await expect(needle).toHaveAttribute("data-angle", "0");
+
+    // Fake a device pointing east: alpha is counter-clockwise from north,
+    // so alpha 270 ⇒ heading 90 ⇒ the needle swings 90° counter-clockwise.
+    await page.evaluate(() => {
+      window.dispatchEvent(
+        new DeviceOrientationEvent("deviceorientationabsolute", {
+          alpha: 270,
+          beta: 0,
+          gamma: 0,
+          absolute: true,
+        }),
+      );
+    });
+    await expect(live).toHaveAttribute("data-heading", "90");
+    await expect(needle).toHaveAttribute("data-angle", "-90");
+
+    // Crossing the 0/360 seam takes the short way round (continuous angle).
+    await page.evaluate(() => {
+      window.dispatchEvent(
+        new DeviceOrientationEvent("deviceorientationabsolute", {
+          alpha: 10, // heading 350
+          beta: 0,
+          gamma: 0,
+          absolute: true,
+        }),
+      );
+    });
+    await expect(live).toHaveAttribute("data-heading", "350");
+    await expect(needle).toHaveAttribute("data-angle", "10");
+
+    // A relative (non-absolute) reading must be ignored.
+    await page.evaluate(() => {
+      window.dispatchEvent(
+        new DeviceOrientationEvent("deviceorientationabsolute", {
+          alpha: 180,
+          beta: 0,
+          gamma: 0,
+          absolute: false,
+        }),
+      );
+    });
+    await expect(live).toHaveAttribute("data-heading", "350");
   });
 
   test("create form has no advanced MySQL fields and can open an event", async ({

@@ -1,5 +1,8 @@
 {
   "title": "Oxygen",
+  "logoAlt": "Oxygen logo",
+  "compassEnable": "Tap to let the compass point to real north",
+  "compassHeading": "Oxygen logo — compass heading {{heading}}°",
   "leaseTitle": "Venue mode",
   "leaseBadgeVenueMode": "Venue mode",
   "leaseBadgeCheckedOut": "Checked out to {{node}}",
