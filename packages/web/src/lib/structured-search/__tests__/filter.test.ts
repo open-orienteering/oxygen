@@ -201,6 +201,28 @@ describe("applyFilters", () => {
     expect(result.map(r => r.id)).toEqual([1, 2, 3]);
   });
 
+  it("matches Eventor surname-first names in displayed first-name order", () => {
+    const tokens = [{ id: "1", anchor: "name", operator: "contains" as const, value: "Emmy K" }];
+    const result = applyFilters(
+      [{ ...runners[0], id: 5, name: "Kempe, Emmy" }],
+      tokens,
+      anchors,
+    );
+    expect(result.map(r => r.id)).toEqual([5]);
+  });
+
+  it("suggests Eventor surname-first names in displayed first-name order", () => {
+    const nameAnchor = anchors.find((anchor) => anchor.key === "name");
+    const suggestions = nameAnchor?.suggest?.("Emmy K", {
+      classes: [],
+      clubs: [],
+      runners: [{ name: "Kempe, Emmy" }, { name: "Johansson, Erik" }],
+    });
+    expect(suggestions).toEqual([
+      { key: "Kempe, Emmy", label: "Kempe, Emmy" },
+    ]);
+  });
+
   it("complex compound filter", () => {
     const tokens = [
       { id: "1", anchor: "class", operator: "in" as const, value: "H21,H35" },

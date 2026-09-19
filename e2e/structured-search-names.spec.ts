@@ -20,6 +20,7 @@ const CLASS_NAME = "Öppen 1";
 const RUNNERS = [
   { name: "E2E_Kempe, Hugo", cardNo: 8907001 },
   { name: "E2E_Kempe, Marcus", cardNo: 8907002 },
+  { name: "Kempe_E2E, Emmy", cardNo: 8907003 },
 ];
 
 async function getClassId(request: APIRequestContext, className: string): Promise<number> {
@@ -130,6 +131,24 @@ test.describe("Structured search — comma-separated names", () => {
     await page.reload();
     await expect(runnerCell(page, "E2E_Kempe, Hugo")).toBeVisible({ timeout: 15000 });
     expect(await readRunnerCount(page)).toBe(1);
+  });
+
+  test("autocomplete finds surname-first names when typed in displayed order", async ({
+    page,
+  }) => {
+    await page.goto("/itest/runners");
+    await expect(page.locator("span", { hasText: "runners" }).first()).toBeVisible({
+      timeout: 15000,
+    });
+
+    const input = page.getByRole("combobox", { name: "Search filter input" });
+    await input.fill("Emmy K");
+    const suggestion = page.getByRole("option", { name: "Kempe_E2E, Emmy" });
+    await expect(suggestion).toBeVisible();
+    await suggestion.click();
+
+    await expect(runnerCell(page, "Kempe_E2E, Emmy")).toBeVisible();
+    await expect.poll(() => readRunnerCount(page), { timeout: 10000 }).toBe(1);
   });
 
   test("comma-separated in-lists still filter on multi-word class names", async ({ page }) => {

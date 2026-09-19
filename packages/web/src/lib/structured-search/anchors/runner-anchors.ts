@@ -45,6 +45,32 @@ function matchString(
   }
 }
 
+/**
+ * Eventor directory names commonly arrive as "Surname, Given name", while
+ * users naturally search for the displayed order "Given name Surname".
+ * Keep both forms searchable without changing the stored/exported name.
+ */
+function runnerNameVariants(name: string): string[] {
+  const normalized = name.trim().replace(/\s+/g, " ");
+  const comma = normalized.indexOf(",");
+  if (comma < 0) return [normalized];
+
+  const surname = normalized.slice(0, comma).trim();
+  const givenNames = normalized.slice(comma + 1).trim();
+  if (!surname || !givenNames) return [normalized];
+  return [normalized, `${givenNames} ${surname}`];
+}
+
+function matchRunnerName(
+  actual: string,
+  op: FilterOperator,
+  value: string,
+): boolean {
+  return runnerNameVariants(actual).some((variant) =>
+    matchString(variant, op, value),
+  );
+}
+
 function matchNumber(
   actual: number,
   op: FilterOperator,
@@ -173,14 +199,19 @@ export function createRunnerAnchors(
         return d.runners
           .filter((r) => {
             if (seen.has(r.name)) return false;
-            if (!r.name.toLowerCase().includes(lower)) return false;
+            if (
+              !runnerNameVariants(r.name).some((variant) =>
+                variant.toLowerCase().includes(lower),
+              )
+            )
+              return false;
             seen.add(r.name);
             return true;
           })
           .slice(0, 8)
           .map((r) => ({ key: r.name, label: r.name }));
       },
-      match: (item, op, value) => matchString(item.name, op, value),
+      match: (item, op, value) => matchRunnerName(item.name, op, value),
     },
     {
       key: "class",
