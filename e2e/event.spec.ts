@@ -117,6 +117,28 @@ test.describe("Event Page — Eventor-linked competition", () => {
     await expect(page.getByText("Runner Database")).toBeVisible({ timeout: 10000 });
   });
 
+  test("should explain a runner database upstream timeout", async ({ page }) => {
+    await page.request.post("/trpc/eventor.validateKey", {
+      headers: { "x-competition-id": "itest" },
+      data: { apiKey: "df34af90a0c64ca4abfe9492be057e9c" },
+    });
+    await page.route("**/trpc/eventor.syncRunnerDb*", async (route) => {
+      await route.fulfill({
+        status: 504,
+        contentType: "text/plain",
+        body: "upstream request timeout",
+      });
+    });
+
+    await page.goto("/itest/event");
+    await expect(page.getByText("Runner Database")).toBeVisible({ timeout: 10000 });
+    await page.getByRole("button", { name: /^(Download|Re-sync)$/ }).click();
+
+    await expect(
+      page.getByText(/Sync failed: The server timed out while processing the request/i),
+    ).toBeVisible();
+  });
+
   test("should show club sync panel when API key is configured", async ({ page }) => {
     // Ensure API key is set
     await page.request.post("/trpc/eventor.validateKey", {

@@ -61,6 +61,10 @@ import type {
   EventorEnvironment,
   RunnerStatusValue,
 } from "@oxygen/shared";
+import {
+  upsertClubDirectoryEntries,
+  upsertRunnerDirectoryEntries,
+} from "../runner-directory-sync.js";
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 
@@ -170,29 +174,27 @@ async function syncClubDirectoryEntries(clubs: EventorClub[]): Promise<{
   });
   const existingSet = new Set(existing.map((c) => c.eventorId.toString()));
 
-  let added = 0;
-  let updated = 0;
-  for (const c of clubs) {
-    if (!c.id || !c.name) continue;
-    const data = {
-      name: c.name,
-      shortName: (c.shortName || c.name).substring(0, 17),
-      countryCode: (c.countryCode || "").substring(0, 3),
-      updatedAt: new Date(),
-    };
-    if (existingSet.has(BigInt(c.id).toString())) {
-      await db.clubDirectory.update({
-        where: { eventorId: BigInt(c.id) },
-        data,
-      });
-      updated++;
-    } else {
-      await db.clubDirectory.create({
-        data: { eventorId: BigInt(c.id), ...data },
-      });
-      added++;
-    }
-  }
+  const valid = [
+    ...new Map(
+      clubs
+        .filter((c) => c.id && c.name)
+        .map((c) => [
+          c.id,
+          {
+            eventorId: BigInt(c.id),
+            name: c.name,
+            shortName: (c.shortName || c.name).substring(0, 17),
+            countryCode: (c.countryCode || "").substring(0, 3),
+          },
+        ] as const),
+    ).values(),
+  ];
+  await upsertClubDirectoryEntries(db, valid);
+
+  const added = valid.filter(
+    (c) => !existingSet.has(c.eventorId.toString()),
+  ).length;
+  const updated = valid.length - added;
   return { added, updated };
 }
 
@@ -1240,38 +1242,27 @@ export const eventorRouter = router({
         console.warn("[syncRunnerDb] full club fetch failed:", err);
       }
 
-      // 5. Upsert runner directory in chunks. Replace strategy: delete-all-
-      //    insert is too aggressive for a global table; we instead chunk-
-      //    upsert by primary key.
-      const valid = competitors.filter((c) => c.extId > 0);
-      const CHUNK = 1000;
-      for (let i = 0; i < valid.length; i += CHUNK) {
-        const chunk = valid.slice(i, i + CHUNK);
-        // Build (eventorPersonId, ...) inserts and overwrite on conflict.
-        for (const c of chunk) {
-          await db.runnerDirectory.upsert({
-            where: { eventorPersonId: BigInt(c.extId) },
-            create: {
-              eventorPersonId: BigInt(c.extId),
-              name: c.name,
-              cardNo: clampInt32(c.cardNo),
-              eventorClubId: clampInt32(c.clubEventorId),
-              birthYear: c.birthYear,
-              sex: c.sex,
-              nationality: c.nationality,
-            },
-            update: {
-              name: c.name,
-              cardNo: clampInt32(c.cardNo),
-              eventorClubId: clampInt32(c.clubEventorId),
-              birthYear: c.birthYear,
-              sex: c.sex,
-              nationality: c.nationality,
-              updatedAt: new Date(),
-            },
-          });
-        }
-      }
+      // 5. Upsert runner directory with one SQL statement per 1,000 rows.
+      //    Keep the global table in place so readers never see it empty.
+      const valid = [
+        ...new Map(
+          competitors
+            .filter((c) => c.extId > 0)
+            .map((c) => [c.extId, c] as const),
+        ).values(),
+      ];
+      await upsertRunnerDirectoryEntries(
+        db,
+        valid.map((c) => ({
+          eventorPersonId: BigInt(c.extId),
+          name: c.name,
+          cardNo: clampInt32(c.cardNo),
+          eventorClubId: clampInt32(c.clubEventorId),
+          birthYear: c.birthYear,
+          sex: c.sex,
+          nationality: c.nationality,
+        })),
+      );
 
       // 6. Background logo fetch for clubs that still lack a small logo.
       void (async () => {

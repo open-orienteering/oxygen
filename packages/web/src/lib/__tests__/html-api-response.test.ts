@@ -24,6 +24,12 @@ describe("htmlApiErrorMessage", () => {
     ).toMatch(/timed out|crashed/i);
   });
 
+  it("calls out a plain-text upstream timeout", () => {
+    expect(
+      htmlApiErrorMessage(504, "text/plain", "upstream request timeout"),
+    ).toMatch(/timed out/i);
+  });
+
   it("ignores real JSON API bodies", () => {
     expect(
       htmlApiErrorMessage(500, "application/json", '{"error":{"message":"nope"}}'),
@@ -56,5 +62,13 @@ describe("rejectHtmlApiResponse", () => {
     });
     const passed = await rejectHtmlApiResponse(json);
     await expect(passed.json()).resolves.toEqual({ result: { data: true } });
+  });
+
+  it("rejects a plain-text response before tRPC tries to parse it as JSON", async () => {
+    const timeout = new Response("upstream request timeout", {
+      status: 504,
+      headers: { "content-type": "text/plain" },
+    });
+    await expect(rejectHtmlApiResponse(timeout)).rejects.toThrow(/timed out/i);
   });
 });

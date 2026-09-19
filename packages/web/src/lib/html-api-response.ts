@@ -11,19 +11,31 @@ export function htmlApiErrorMessage(
   preview: string,
 ): string | null {
   const trimmed = preview.trimStart();
+  if (contentType.includes("application/json") || contentType.includes("trpc")) {
+    return null;
+  }
+  if (
+    status === 502 ||
+    status === 504 ||
+    /upstream (?:request )?timeout|upstream request timed out/i.test(trimmed)
+  ) {
+    return "The server timed out while processing the request. Please try again.";
+  }
+  if (status === 413) {
+    return "Upload is too large for the server.";
+  }
   const looksHtml =
     contentType.includes("text/html") ||
     trimmed.startsWith("<!DOCTYPE") ||
     trimmed.startsWith("<!doctype") ||
     trimmed.startsWith("<html");
-  if (!looksHtml) return null;
-  if (status === 413) {
-    return "Upload is too large for the server.";
+  if (looksHtml) {
+    return "Server returned a web page instead of an API response. The sign-in session may have expired — reload the page.";
   }
-  if (status === 502 || status === 504) {
-    return "The server timed out or crashed while handling the upload.";
+  if (status >= 400) {
+    return `Server returned a non-JSON API response (HTTP ${status}).`;
   }
-  return "Server returned a web page instead of an API response. The sign-in session may have expired — reload the page.";
+  return null;
 }
 
 export function isHtmlResponseError(err: unknown): boolean {
