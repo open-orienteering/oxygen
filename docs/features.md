@@ -303,9 +303,11 @@ Inside an event, the admin tab bar starts with planning pages (Dashboard, Classe
 The Oxygen mark at the top of the competition list — an orienteering flag
 with a compass-rose "O" — is a **live compass** on phones: the needle turns
 to real north from the device orientation sensor. On iOS the first tap on
-the logo asks for motion permission; on Android it just works; on a desktop
-without a sensor the needle rests at north. The same mark is the favicon and
-the PWA / home-screen icon. See [app-icon.md](app-icon.md).
+the logo asks for motion permission — once only, since the grant is
+remembered and silently restored on later app starts; on Android it just
+works; on a desktop without a sensor the needle rests at north. The same
+mark is the favicon and the PWA / home-screen icon. See
+[app-icon.md](app-icon.md).
 
 ### Offline and PWA
 

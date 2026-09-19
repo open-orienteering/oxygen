@@ -69,7 +69,8 @@ Platform quirks handled in `packages/web/src/lib/compass-heading.ts` and
   clockwise from north. Since iOS 13 the sensor is gated behind
   `DeviceOrientationEvent.requestPermission()`, which throws unless called
   from a user gesture — so on iOS the logo is rendered as a `<button>` and
-  the first tap requests permission.
+  the first tap requests permission. That tap is needed **once**, not on
+  every app start; see below.
 - **Relative-only readings** (`absolute: false`, no `webkitCompassHeading`)
   are ignored; pointing the needle at an arbitrary reference frame would be
   worse than leaving it at north.
@@ -84,16 +85,66 @@ Platform quirks handled in `packages/web/src/lib/compass-heading.ts` and
 - **Update rate**: sensors tick at ~60 Hz; state is only updated on
   whole-degree changes to avoid re-rendering the page on every event.
 
+### Remembering the iOS grant
+
+WebKit implements no way to *query* the motion permission —
+`navigator.permissions.query({ name: "deviceorientation" })` does not
+exist there — so a fresh page load cannot tell "never asked" from "already
+granted". Calling `requestPermission()` is the only probe available, and it
+behaves asymmetrically:
+
+| Current state | Gesture-less `requestPermission()` |
+|---------------|------------------------------------|
+| already granted | resolves `"granted"`, no prompt |
+| not granted | rejects `NotAllowedError` (it wants to prompt) |
+
+`lib/compass-permission.ts` exploits that. When the user grants, a hint is
+written to `localStorage` under `oxygen.compass.granted`; on the next start
+the hook begins in a `restoring` state and probes without a gesture:
+
+```
+localStorage hint?
+  no  → "prompt"      logo is a <button>, sensor shut
+  yes → "restoring"   probe requestPermission() with no gesture
+          ├─ resolves "granted" → "granted", needle goes live, no tap
+          └─ rejects            → drop the stale hint, back to "prompt"
+```
+
+The flag is only ever a *hint*: the sensor stays shut until iOS itself says
+`granted`, so clearing site data, reinstalling the PWA, or revoking the
+permission in Settings just puts the tap target back. `restoring` renders
+the plain (non-button) logo, so there is no button flash on startup for the
+common case.
+
+State machine (`CompassPermission`):
+
+| State | Meaning |
+|-------|---------|
+| `not-needed` | Android / desktop: listening already |
+| `prompt` | iOS, no grant remembered — logo is a tap target |
+| `restoring` | iOS, grant remembered — silent probe in flight |
+| `granted` | listening |
+| `denied` | no API, or the user said no |
+
 ### Testing
 
 - Unit: `packages/web/src/lib/__tests__/compass-heading.test.ts` covers
   the alpha/webkit conversions, screen-angle compensation, and the
   short-way-round needle maths.
+  `compass-permission.test.ts` covers the initial-state decision table and
+  the localStorage memo (including Safari private mode, where
+  `localStorage` throws).
 - E2E: `e2e/event-selector.spec.ts` dispatches synthetic
   `DeviceOrientationEvent`s on the landing page and asserts on the needle's
   `data-angle` and the wrapper's `data-heading`, including a seam crossing
   and an ignored relative reading. It also checks the favicon and all three
-  PNGs are served.
+  PNGs are served. A second test stubs `requestPermission()` to stand in for
+  iOS and walks the whole grant lifecycle: prompt on first visit, silent
+  restore after a reload with no second prompt, and fallback to the tap
+  target once the grant is revoked. The stub tracks transient activation
+  with its own `pointerdown`/`click` listener — `navigator.userActivation`
+  stays active across a Playwright reload and would let the gesture-less
+  probe through, hiding the very bug the test is for.
 
 To try it on a real phone, open the competition list over HTTPS (the Docker
 stack behind a TLS proxy, or `pnpm dev` through a tunnel) — browsers refuse

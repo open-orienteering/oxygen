@@ -1,5 +1,12 @@
 import { test, expect } from "@playwright/test";
 
+declare global {
+  interface Window {
+    /** Set by the iOS permission stub below — counts real prompts shown. */
+    __iosPromptCount?: number;
+  }
+}
+
 test.describe("Event selector", () => {
   test("groups seed events under Past and filters by search", async ({ page }) => {
     await page.goto("/");
@@ -138,6 +145,87 @@ test.describe("Event selector", () => {
       );
     });
     await expect(live).toHaveAttribute("data-heading", "350");
+  });
+
+  test("iOS motion permission is asked once and restored on later starts", async ({ page }) => {
+    // Chromium needs no permission, so stand in for iOS by bolting a
+    // requestPermission() onto DeviceOrientationEvent. It mimics WebKit: an
+    // existing grant resolves silently, otherwise the call needs a user
+    // gesture to prompt and rejects without one. Transient activation is
+    // tracked with our own listener rather than navigator.userActivation,
+    // which stays active across a Playwright reload and would let the
+    // gesture-less probe through. The grant itself lives in sessionStorage
+    // so it survives a reload the way iOS remembers it per origin.
+    const GRANT = "ios-compass-granted";
+    const installIosStub = (revoked = false) => `
+      (() => {
+        const revoked = ${String(revoked)};
+        if (revoked) sessionStorage.removeItem(${JSON.stringify(GRANT)});
+        let gestureAt = 0;
+        const mark = () => { gestureAt = Date.now(); };
+        addEventListener("pointerdown", mark, true);
+        addEventListener("click", mark, true);
+        window.__iosPromptCount = 0;
+        window.DeviceOrientationEvent.requestPermission = () => {
+          if (sessionStorage.getItem(${JSON.stringify(GRANT)})) return Promise.resolve("granted");
+          if (Date.now() - gestureAt > 1000) {
+            return Promise.reject(new DOMException("needs a user gesture", "NotAllowedError"));
+          }
+          window.__iosPromptCount++;
+          sessionStorage.setItem(${JSON.stringify(GRANT)}, "1");
+          return Promise.resolve("granted");
+        };
+      })();
+    `;
+
+    await page.addInitScript(installIosStub());
+    await page.goto("/");
+
+    // First visit: nothing remembered, so the logo is a tap target and the
+    // sensor stays shut.
+    const enable = page.getByTestId("oxygen-logo-enable-compass");
+    await expect(enable).toBeVisible();
+    await expect(page.getByTestId("oxygen-logo-live")).toHaveCount(0);
+
+    await enable.click();
+    const live = page.getByTestId("oxygen-logo-live");
+    await expect(live).toHaveAttribute("data-permission", "granted");
+    expect(await page.evaluate(() => window.__iosPromptCount)).toBe(1);
+    expect(
+      await page.evaluate(() => localStorage.getItem("oxygen.compass.granted")),
+    ).toBe("1");
+
+    // Restart the app: the remembered grant is restored without a tap and
+    // without a second prompt.
+    await page.reload();
+    await expect(page.getByTestId("oxygen-logo-live")).toHaveAttribute(
+      "data-permission",
+      "granted",
+    );
+    await expect(page.getByTestId("oxygen-logo-enable-compass")).toHaveCount(0);
+    expect(await page.evaluate(() => window.__iosPromptCount)).toBe(0);
+
+    // The needle is live straight away, no interaction needed.
+    await page.evaluate(() => {
+      window.dispatchEvent(
+        new DeviceOrientationEvent("deviceorientationabsolute", {
+          alpha: 270,
+          beta: 0,
+          gamma: 0,
+          absolute: true,
+        }),
+      );
+    });
+    await expect(page.getByTestId("oxygen-logo-needle")).toHaveAttribute("data-angle", "-90");
+
+    // If iOS has since revoked the grant the gesture-less probe rejects, so
+    // the tap target comes back and the stale memo is dropped.
+    await page.addInitScript(installIosStub(true));
+    await page.reload();
+    await expect(page.getByTestId("oxygen-logo-enable-compass")).toBeVisible();
+    expect(
+      await page.evaluate(() => localStorage.getItem("oxygen.compass.granted")),
+    ).toBeNull();
   });
 
   test("create form has no advanced MySQL fields and can open an event", async ({

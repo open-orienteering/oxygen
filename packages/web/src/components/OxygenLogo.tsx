@@ -97,8 +97,10 @@ export function OxygenLogo({ heading = null, className, title }: OxygenLogoProps
 /**
  * The logo wired to the device compass. On iOS the sensor needs a
  * user-gesture permission prompt, so the logo becomes a button until the
- * user taps it; everywhere else it starts listening immediately and the
- * needle just stays north-up when no sensor reports in (desktop).
+ * user taps it — once only: the grant is remembered and silently restored on
+ * later app starts (see `lib/compass-permission.ts`). Everywhere else it
+ * starts listening immediately and the needle just stays north-up when no
+ * sensor reports in (desktop).
  */
 export function LiveCompassLogo({ className }: { className?: string }) {
   const { t } = useTranslation("event");
@@ -128,7 +130,12 @@ export function LiveCompassLogo({ className }: { className?: string }) {
   }
 
   return (
-    <div className="inline-flex" data-testid="oxygen-logo-live" data-heading={heading ?? ""}>
+    <div
+      className="inline-flex"
+      data-testid="oxygen-logo-live"
+      data-heading={heading ?? ""}
+      data-permission={permission}
+    >
       {logo}
     </div>
   );
