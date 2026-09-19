@@ -25,8 +25,8 @@ jobs:
         run: |
           node scripts/ghcr-ref.mjs parse-release-tag "${GITHUB_REF_NAME}" > /tmp/release.json
           echo "version=$(node -e 'console.log(JSON.parse(require("fs").readFileSync("/tmp/release.json","utf8")).version)')" >> "$GITHUB_OUTPUT"
-      - uses: docker/setup-buildx-action@v3
-      - uses: docker/login-action@v3
+      - uses: docker/setup-buildx-action@v4
+      - uses: docker/login-action@v4
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
