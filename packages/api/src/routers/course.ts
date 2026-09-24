@@ -56,6 +56,11 @@ import {
   colorStackOverridesSchema,
 } from "@oxygen/shared";
 import { applyIofColorStack, type StackOcadFile } from "../map-color-stack.js";
+import {
+  cachedProfileResolution,
+  rememberProfileResolution,
+  type ProfileResolvedBy,
+} from "../map-profile-cache.js";
 import { canDownloadEventMap } from "../ocad-export.js";
 import { loadEventCrs } from "../event-crs.js";
 import {
@@ -988,11 +993,7 @@ export const courseRouter = router({
     let resolvedProfile = stackMeta.colorProfile === "auto"
       ? (scale != null && scale > 0 && scale <= 5000 ? "issprom" : "isom")
       : stackMeta.colorProfile;
-    let resolvedBy:
-      | "explicit"
-      | "file-colour"
-      | "scale"
-      | "default" =
+    let resolvedBy: ProfileResolvedBy =
       stackMeta.colorProfile === "auto"
         ? scale != null
           ? "scale"
@@ -1000,30 +1001,47 @@ export const courseRouter = router({
         : "explicit";
 
     if (stackMeta.colorProfile === "auto") {
-      if (!blobBuffer) {
-        const blob = await ctx.db.mapFile.findUnique({
-          where: { id: row.id },
-          select: { fileData: true },
-        });
-        if (blob) blobBuffer = Buffer.from(blob.fileData);
-      }
-      if (blobBuffer) {
-        try {
-          const ocadMod = await import("ocad2geojson");
-          const readOcad = (ocadMod as Record<string, unknown>).readOcad as (
-            buf: Buffer,
-            opts?: Record<string, unknown>,
-          ) => Promise<StackOcadFile>;
-          const ocad = await readOcad(blobBuffer, { quietWarnings: true });
-          const classified = applyIofColorStack(ocad, {
-            profile: "auto",
-            overrides: stackMeta.colorOverrides,
-            scale,
+      // Classifying the colour table needs the OCAD blob. The outcome is
+      // fixed for a render key, so pay for it once per process rather
+      // than on every page load (this query runs on each map view).
+      const remembered = cachedProfileResolution(stackMeta.renderKey);
+      if (remembered) {
+        ({ resolvedProfile, resolvedBy } = remembered);
+      } else {
+        if (!blobBuffer) {
+          const blob = await ctx.db.mapFile.findUnique({
+            where: { id: row.id },
+            select: { fileData: true },
           });
-          resolvedProfile = classified.resolvedProfile;
-          resolvedBy = classified.resolvedBy;
-        } catch {
-          // Keep the scale heuristic.
+          if (blob) blobBuffer = Buffer.from(blob.fileData);
+        }
+        if (blobBuffer) {
+          try {
+            const ocadMod = await import("ocad2geojson");
+            const readOcad = (ocadMod as Record<string, unknown>).readOcad as (
+              buf: Buffer,
+              opts?: Record<string, unknown>,
+            ) => Promise<StackOcadFile>;
+            const ocad = await readOcad(blobBuffer, { quietWarnings: true });
+            const classified = applyIofColorStack(ocad, {
+              profile: "auto",
+              overrides: stackMeta.colorOverrides,
+              scale,
+            });
+            resolvedProfile = classified.resolvedProfile;
+            resolvedBy = classified.resolvedBy;
+            rememberProfileResolution(stackMeta.renderKey, {
+              resolvedProfile,
+              resolvedBy,
+            });
+          } catch (err) {
+            // Keep the scale heuristic, but say so: a map that cannot be
+            // classified is worth knowing about.
+            console.warn(
+              `[map-color-stack] event ${ctx.event.id}: profile classification failed, using scale heuristic:`,
+              err,
+            );
+          }
         }
       }
     }
@@ -1052,17 +1070,26 @@ export const courseRouter = router({
 
   /** Info about the uploaded OCAD map file (if any). */
   mapFileInfo: kioskOrCoursesViewProcedure.query(async ({ ctx }) => {
-    const f = await ctx.db.mapFile.findFirst({
-      where: { eventId: ctx.event.id },
-      orderBy: { uploadedAt: "desc" },
-      select: { id: true, fileName: true, uploadedAt: true, fileData: true },
-    });
+    // Size comes from octet_length in SQL: this query runs on every map
+    // view and the blob itself is routinely 5–40 MB — fetching it just to
+    // read `.length` was a full download per page load.
+    const rows = await ctx.db.$queryRaw<
+      Array<{ id: bigint; fileName: string; uploadedAt: Date; size: number }>
+    >`
+      SELECT id, file_name AS "fileName", uploaded_at AS "uploadedAt",
+             octet_length(file_data)::int AS size
+      FROM oxygen.map_files
+      WHERE event_id = ${ctx.event.id}
+      ORDER BY uploaded_at DESC
+      LIMIT 1
+    `;
+    const f = rows[0];
     if (!f) return null;
     return {
       id: Number(f.id),
       fileName: f.fileName,
       uploadedAt: f.uploadedAt.toISOString(),
-      size: f.fileData.length,
+      size: f.size,
     };
   }),
 

@@ -5,11 +5,12 @@
  *
  *   4 bytes x (blockTiles x 256 x supersample x rotationSlack)^2
  *
- * doubled while the rasteriser hands its pixels over, times
- * `renderConcurrency`. The defaults put that near 300 MB, which leaves
- * plenty of headroom in a 4 GiB container — unlike the whole-map raster
- * this replaced, which needed gigabytes for a single large map and had to
- * be starved down to a blurry resolution to fit.
+ * doubled while the rasteriser hands its pixels over, doubled again
+ * because one permit rasterises the composite and the ink layer side by
+ * side, times `renderConcurrency`. The defaults put that near 600 MB,
+ * which leaves plenty of headroom in a 4 GiB container — unlike the
+ * whole-map raster this replaced, which needed gigabytes for a single
+ * large map and had to be starved down to a blurry resolution to fit.
  *
  * `supersample` is why deep zoom looks crisp: the window is rendered
  * denser than the tiles that come out of it, so the sampler in
@@ -25,8 +26,16 @@ export const DEFAULTS = {
   supersample: 2,
   /** Backstop against a pathological projection blowing up a window. */
   windowMaxPixels: 64_000_000,
-  /** Concurrent window renders per process. */
+  /** Concurrent block renders per process (each rasterises composite + ink). */
   renderConcurrency: 2,
+  /**
+   * Foreground blocks allowed to wait for a permit before further tile
+   * requests are refused with 503 + Retry-After. A cold block costs
+   * roughly 10–15 s on a 2 vCPU Cloud Run instance, so four waiters keep
+   * the worst case near a minute — far inside the platform's 300 s cap,
+   * which is where unbounded queueing ended up in September 2026.
+   */
+  renderMaxQueue: 4,
   /** Parsed map SVGs kept in memory (a few MB each). */
   svgCacheEvents: 4,
 } as const;
@@ -63,6 +72,14 @@ export function renderConcurrency(): number {
     process.env.MAP_RENDER_CONCURRENCY,
     DEFAULTS.renderConcurrency,
     1,
+  );
+}
+
+export function renderMaxQueue(): number {
+  return intSetting(
+    process.env.MAP_RENDER_MAX_QUEUE,
+    DEFAULTS.renderMaxQueue,
+    0,
   );
 }
 
@@ -120,12 +137,31 @@ export function evictForInsert<K, V>(cache: Map<K, V>, cap: number): void {
 }
 
 /**
+ * Thrown by `Semaphore.run` when a bounded foreground task finds the
+ * queue already full. Callers turn it into a fast 503 + Retry-After so
+ * the client backs off instead of the request sitting in the platform's
+ * admission queue until it is killed.
+ */
+export class RenderBusyError extends Error {
+  constructor(readonly waiting: number) {
+    super(`render queue full (${waiting} waiting)`);
+    this.name = "RenderBusyError";
+  }
+}
+
+/**
  * Counting semaphore bounding concurrent renders, with two priorities.
  *
  * Background work (the pre-cache) must never make a user wait longer than
  * the one block already in flight, so foreground waiters are always served
  * first. Without this a pre-cache sweep can hold every permit and a tile
  * request queues behind the entire sweep.
+ *
+ * Foreground tasks may also pass `maxQueue`: if that many foreground
+ * tasks are already waiting, the call fails immediately with
+ * `RenderBusyError` rather than joining the line. Background tasks are
+ * never refused — they are polite by construction and nothing is waiting
+ * on them.
  */
 export class Semaphore {
   private available: number;
@@ -136,11 +172,16 @@ export class Semaphore {
     this.available = Math.max(1, limit);
   }
 
+  /** Foreground tasks currently waiting for a permit. */
+  get foregroundWaiting(): number {
+    return this.foreground.length;
+  }
+
   async run<T>(
     task: () => Promise<T>,
-    opts: { background?: boolean } = {},
+    opts: { background?: boolean; maxQueue?: number } = {},
   ): Promise<T> {
-    await this.acquire(opts.background === true);
+    await this.acquire(opts.background === true, opts.maxQueue);
     try {
       return await task();
     } finally {
@@ -148,10 +189,20 @@ export class Semaphore {
     }
   }
 
-  private async acquire(isBackground: boolean): Promise<void> {
+  private async acquire(
+    isBackground: boolean,
+    maxQueue: number | undefined,
+  ): Promise<void> {
     if (this.available > 0) {
       this.available--;
       return;
+    }
+    if (
+      !isBackground &&
+      maxQueue !== undefined &&
+      this.foreground.length >= maxQueue
+    ) {
+      throw new RenderBusyError(this.foreground.length);
     }
     const queue = isBackground ? this.background : this.foreground;
     await new Promise<void>((resolve) => queue.push(resolve));

@@ -70,6 +70,7 @@ import {
   type ViewBox,
 } from "./map-window.js";
 import {
+  RenderBusyError,
   Semaphore,
   blockTiles,
   evictForInsert,
@@ -78,6 +79,7 @@ import {
   precacheMaxZoom,
   precacheMinZoom,
   renderConcurrency,
+  renderMaxQueue,
   supersample,
   svgCacheEvents,
   windowMaxPixels,
@@ -89,9 +91,24 @@ import {
   type StackOcadFile,
 } from "./map-color-stack.js";
 import { ensureEventMapRenderKey } from "./map-render-cache.js";
-import type { ColorProfile, ColorStackOverrides } from "@oxygen/shared";
 
 const TILE_SIZE = 256;
+
+/**
+ * Seconds a refused (503) tile client should wait before asking again.
+ * Long enough for a block to finish and free a permit; short enough that
+ * a viewport fills in visibly rather than stalling.
+ */
+export const RENDER_BUSY_RETRY_AFTER_S = 5;
+
+/**
+ * Everything a tile request needs to know about the event's map, read
+ * once per request from `map_files` (metadata columns only) and threaded
+ * through the render path. Earlier code re-resolved this at each step —
+ * three times per tile miss — and each read dragged the OCAD blob along;
+ * see docs/bugfix-map-tile-cold-render-cloud-timeouts.md.
+ */
+type MapMeta = NonNullable<Awaited<ReturnType<typeof ensureEventMapRenderKey>>>;
 
 /**
  * Bumped when the on-wire tile format changes so browsers' week-long
@@ -193,9 +210,7 @@ const tileKey = (z: number, x: number, y: number) => `${z}/${x}/${y}`;
 /**
  * The parsed SVG for an event's current map, keyed by renderKey.
  */
-async function getMapSource(eventId: bigint): Promise<MapSource> {
-  const meta = await ensureEventMapRenderKey(prisma(), eventId);
-  if (!meta) throw new Error("No map file uploaded");
+async function getMapSource(eventId: bigint, meta: MapMeta): Promise<MapSource> {
   const { renderKey } = meta;
 
   const cached = svgCache.get(renderKey);
@@ -218,19 +233,13 @@ async function getMapSource(eventId: bigint): Promise<MapSource> {
 
 async function loadMapSource(
   eventId: bigint,
-  meta: {
-    renderKey: string;
-    rotationCorrection: number;
-    colorProfile: ColorProfile;
-    colorOverrides: ColorStackOverrides;
-    northLinesBelow: boolean;
-    scale: number | null;
-  },
+  meta: MapMeta,
 ): Promise<MapSource> {
-  const row = await prisma().mapFile.findFirst({
-    where: { eventId },
-    orderBy: { id: "desc" },
-    select: { fileData: true, rotationCorrection: true },
+  // The one place on the tile path that reads the OCAD blob: once per
+  // render key per process, then the parsed SVG lives in `svgCache`.
+  const row = await prisma().mapFile.findUnique({
+    where: { id: meta.mapFileId },
+    select: { fileData: true },
   });
   if (!row) throw new Error("No map file uploaded");
 
@@ -531,35 +540,37 @@ async function renderBlockUncached(
   const rect = boundsOfPoints(corners, 2 / wanted);
   const density = clampDensity(rect, wanted, windowMaxPixels());
 
-  const win = await gate().run(
+  // One permit per block. Composite and ink are rasterised side by side
+  // under it: resvg re-parses the SVG on every call and that parse is
+  // ~90 % of a render, so running the two in parallel cuts block latency
+  // to roughly the slower of the pair instead of their sum. Foreground
+  // requests are refused (RenderBusyError → 503) once the queue is full
+  // rather than being allowed to wait indefinitely.
+  const [win, inkWin] = await gate().run(
     () =>
-      rasterise(
-        source.svg,
-        source.rootViewBox,
-        source.ocadBounds,
-        rect,
-        density,
-        false,
-      ),
-    { background },
-  );
-  if (!win) return result;
-
-  let inkWin: RenderedWindow | null = null;
-  if (source.svgInk) {
-    inkWin = await gate().run(
-      () =>
+      Promise.all([
         rasterise(
-          source.svgInk!,
+          source.svg,
           source.rootViewBox,
           source.ocadBounds,
           rect,
           density,
-          true,
+          false,
         ),
-      { background },
-    );
-  }
+        source.svgInk
+          ? rasterise(
+              source.svgInk,
+              source.rootViewBox,
+              source.ocadBounds,
+              rect,
+              density,
+              true,
+            )
+          : Promise.resolve<RenderedWindow | null>(null),
+      ]),
+    background ? { background } : { maxQueue: renderMaxQueue() },
+  );
+  if (!win) return result;
 
   for (const [key, quad] of quads) {
     const composite = sampleTileRgba(quad, win, false);
@@ -703,9 +714,8 @@ const chunkInFlight = new Set<string>();
  * Returns the number of tiles written so the caller can fold them into
  * the progress figures it already read.
  */
-async function preCacheChunk(eventId: bigint): Promise<number> {
-  const meta = await ensureEventMapRenderKey(prisma(), eventId);
-  if (!meta || !precacheEnabled() || chunkInFlight.has(meta.renderKey)) return 0;
+async function preCacheChunk(eventId: bigint, meta: MapMeta): Promise<number> {
+  if (!precacheEnabled() || chunkInFlight.has(meta.renderKey)) return 0;
   const { renderKey } = meta;
   chunkInFlight.add(renderKey);
   try {
@@ -731,7 +741,7 @@ async function preCacheChunk(eventId: bigint): Promise<number> {
       const present = new Set(rows.map((r) => `${r.x}/${r.y}`));
       const blocks = missingBlocks(range, size, present, CHUNK_BLOCKS);
 
-      const source = await getMapSource(eventId);
+      const source = await getMapSource(eventId, meta);
       for (const { bx, by } of blocks) {
         try {
           const tiles = await renderBlock(source, z, bx, by, true);
@@ -768,26 +778,15 @@ function parseBounds(raw: unknown): WGS84Bounds | null {
 }
 
 /**
- * The map's WGS84 bounds as stored at upload. Reading them back beats
- * re-deriving them from the OCAD: it is one small query rather than a
- * parse, so the progress endpoint and the pre-cache check stay cheap.
- */
-async function storedBounds(eventId: bigint): Promise<WGS84Bounds | null> {
-  const meta = await ensureEventMapRenderKey(prisma(), eventId);
-  return meta ? parseBounds(meta.bounds) : null;
-}
-
-/**
  * Pre-cache progress straight from the database. The denominator is a
- * function of the map's stored WGS84 bounds and the numerator is a row
+ * function of the map's stored WGS84 bounds (read back from `map_files`
+ * rather than re-derived from the OCAD) and the numerator is a row
  * count, so a request served by any instance reports the same figures —
  * unlike the in-process counter this replaced.
  */
 async function tileProgress(
-  eventId: bigint,
+  meta: MapMeta,
 ): Promise<{ total: number; done: number; rendering: boolean }> {
-  const meta = await ensureEventMapRenderKey(prisma(), eventId);
-  if (!meta) return { total: 0, done: 0, rendering: false };
   const bounds = parseBounds(meta.bounds);
   if (!bounds) return { total: 0, done: 0, rendering: false };
 
@@ -829,11 +828,13 @@ export function registerMapTileRoutes(server: FastifyInstance): void {
     if (eventId === null) {
       return reply.send({ total: 0, done: 0, rendering: false });
     }
-    const progress = await tileProgress(eventId);
+    const meta = await ensureEventMapRenderKey(prisma(), eventId);
+    if (!meta) return reply.send({ total: 0, done: 0, rendering: false });
+    const progress = await tileProgress(meta);
     if (!progress.rendering) return reply.send(progress);
 
-    await preCacheChunk(eventId);
-    return reply.send(await tileProgress(eventId));
+    await preCacheChunk(eventId, meta);
+    return reply.send(await tileProgress(meta));
   });
 
   server.get<{
@@ -876,7 +877,7 @@ export function registerMapTileRoutes(server: FastifyInstance): void {
         select: { tileData: true },
       });
       if (cached) {
-        kickOffPreCache(eventId);
+        kickOffPreCache(eventId, meta);
         return reply
           .header("Content-Type", "image/png")
           .header("Cache-Control", "public, max-age=604800")
@@ -884,7 +885,7 @@ export function registerMapTileRoutes(server: FastifyInstance): void {
       }
 
       try {
-        const source = await getMapSource(eventId);
+        const source = await getMapSource(eventId, meta);
         const rendered = await renderBlock(source, z, x, y);
         const png = rendered.get(tileKey(z, x, y));
         if (!png) {
@@ -900,13 +901,24 @@ export function registerMapTileRoutes(server: FastifyInstance): void {
 
         // Fill the overview zooms in the background so the next viewer's
         // first paint is instant.
-        kickOffPreCache(eventId);
+        kickOffPreCache(eventId, meta);
 
         return reply
           .header("Content-Type", "image/png")
           .header("Cache-Control", "public, max-age=604800")
           .send(png);
       } catch (err) {
+        if (err instanceof RenderBusyError) {
+          // The render queue is full. Answer now so the client backs off
+          // (its retry book honours Retry-After) instead of holding the
+          // request until the platform's admission timeout kills it —
+          // and starves every other route on the instance meanwhile.
+          return reply
+            .code(503)
+            .header("Retry-After", String(RENDER_BUSY_RETRY_AFTER_S))
+            .header("Cache-Control", "no-store")
+            .send({ error: "Map renderer busy", waiting: err.waiting });
+        }
         server.log.error({ err }, "Failed to render map tile");
         return reply.code(500).send({ error: "Failed to render tile" });
       }
@@ -924,11 +936,11 @@ const preCacheConsidered = new Set<string>();
 
 /**
  * Start the background pre-cache if this event's render key still needs it.
+ * The `preCacheConsidered` check-and-mark happens before the first await
+ * so a viewport-sized burst of requests cannot all slip past it.
  */
-async function maybePreCache(eventId: bigint): Promise<void> {
+async function maybePreCache(eventId: bigint, meta: MapMeta): Promise<void> {
   if (!precacheEnabled()) return;
-  const meta = await ensureEventMapRenderKey(prisma(), eventId);
-  if (!meta) return;
   if (preCacheConsidered.has(meta.renderKey)) return;
   preCacheConsidered.add(meta.renderKey);
 
@@ -945,12 +957,12 @@ async function maybePreCache(eventId: bigint): Promise<void> {
   });
   if (done >= expectedTileCount(bounds, minZoom, maxZoom)) return;
 
-  const source = await getMapSource(eventId);
+  const source = await getMapSource(eventId, meta);
   await preCacheTiles(source);
 }
 
-function kickOffPreCache(eventId: bigint): void {
-  void maybePreCache(eventId).catch((err) =>
+function kickOffPreCache(eventId: bigint, meta: MapMeta): void {
+  void maybePreCache(eventId, meta).catch((err) =>
     console.error("[map-tiles] pre-cache failed:", err),
   );
 }

@@ -288,13 +288,25 @@ image ships `postgresql-client`.
 - **Map tile memory.** The renderer rasterises one *window* — the region
 covered by a block of tiles — per render, so peak memory follows the
 block size rather than the map size. With the defaults (4×4 tiles,
-2× supersampling, 2 concurrent renders) that is a few hundred MB for any
-map. The knobs are in `packages/api/src/map-render-limits.ts` and all
-have env overrides (`MAP_TILE_BLOCK_TILES`, `MAP_TILE_SUPERSAMPLE`,
-`MAP_RENDER_CONCURRENCY`, `MAP_SVG_CACHE_EVENTS`,
+2× supersampling, 2 concurrent renders, composite + ink side by side)
+that is roughly 600 MB for any map. The knobs are in
+`packages/api/src/map-render-limits.ts` and all have env overrides
+(`MAP_TILE_BLOCK_TILES`, `MAP_TILE_SUPERSAMPLE`,
+`MAP_RENDER_CONCURRENCY`, `MAP_RENDER_MAX_QUEUE`, `MAP_SVG_CACHE_EVENTS`,
 `MAP_WINDOW_MAX_PIXELS`); none needs setting in normal operation.
 The 4 GiB allocation is headroom for parsing a large club OCAD into an
 SVG DOM, which still spikes, not for the tiles themselves.
+- **Tile requests never wait longer than the queue bound.** Cloud Run
+admits 160 requests per instance and holds each for up to 300 s, while
+the renderer runs 3 blocks at a time. Left unbounded, a cold viewport
+queued past the cap and every tile 504'd while the waiting requests
+starved tRPC of connections (September 2026, see
+[bugfix-map-tile-cold-render-cloud-timeouts.md](bugfix-map-tile-cold-render-cloud-timeouts.md)).
+The route now refuses with `503 Retry-After: 5` once
+`MAP_RENDER_MAX_QUEUE` (4) blocks are already waiting; the client backs
+off and the viewport fills in progressively. Brief 503 bursts right
+after a render-key change are expected; a steady stream means the
+renderer is under-provisioned for the load.
 - **`--cpu=2` and `MAP_RENDER_CONCURRENCY=3`.** Tile rendering is the
 only genuinely CPU-bound thing the service does, and on a single
 throttled vCPU a fresh club map took minutes to fill — the render

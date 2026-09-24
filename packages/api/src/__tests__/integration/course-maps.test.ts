@@ -169,6 +169,33 @@ afterAll(async () => {
   await disconnect();
 });
 
+describe("map file info and metadata", () => {
+  // `size` is now computed in SQL (octet_length) so the query no longer
+  // ships the blob to the API just to read `.length`.
+  it("reports the uploaded file's exact byte size without fetching it", async () => {
+    const info = await caller.course.mapFileInfo();
+    expect(info).not.toBeNull();
+    expect(info!.fileName).toBe("test.ocd");
+    expect(info!.size).toBe(readFileSync(fixture).byteLength);
+    expect(Number.isInteger(info!.id)).toBe(true);
+  });
+
+  // The auto-profile classification reads and parses the OCAD; the
+  // result is memoised per render key so repeat calls agree and are cheap.
+  it("resolves the auto colour profile consistently across calls", async () => {
+    const first = await caller.course.mapMetadata();
+    const second = await caller.course.mapMetadata();
+    expect(first).not.toBeNull();
+    expect(first!.colorProfile).toBe("auto");
+    expect(["isom", "issprom", "isskiom", "ismtbom"]).toContain(
+      first!.resolvedProfile,
+    );
+    expect(second!.resolvedProfile).toBe(first!.resolvedProfile);
+    expect(second!.resolvedBy).toBe(first!.resolvedBy);
+    expect(second!.renderKey).toBe(first!.renderKey);
+  });
+});
+
 describe("map templates and course maps", () => {
   it("creates, duplicates and applies an event template idempotently", async () => {
     const template = await caller.mapTemplate.create({

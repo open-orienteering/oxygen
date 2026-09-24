@@ -2,6 +2,14 @@
  * Ensure a map_files / club_map_files row has file_hash + render_key.
  * Used by tile serving, print SVG load, and mapMetadata so the key is
  * filled lazily (same pattern as the north_detection backfill).
+ *
+ * These run on the tile hot path — once per tile request, cache hits
+ * included — so they read metadata columns only. The OCAD blob
+ * (`file_data`, routinely 5–40 MB) is fetched with a second query and
+ * only when `file_hash` is still null, i.e. once per row for the life of
+ * the upload. Selecting it unconditionally is what saturated Cloud SQL
+ * in the September 2026 incident
+ * (docs/bugfix-map-tile-cold-render-cloud-timeouts.md).
  */
 
 import type { ColorProfile, ColorStackOverrides } from "@oxygen/shared";
@@ -31,6 +39,41 @@ export interface MapStackSettings {
   scale: number | null;
 }
 
+/** Metadata-only projection shared by every read in this module. */
+const STACK_COLUMNS = {
+  id: true,
+  scale: true,
+  rotationCorrection: true,
+  colorProfile: true,
+  colorOverrides: true,
+  northLinesBelow: true,
+  fileHash: true,
+  renderKey: true,
+} as const;
+
+type StackRow = {
+  id: bigint;
+  scale: number | null;
+  rotationCorrection: number;
+  colorProfile: string | null;
+  colorOverrides: unknown;
+  northLinesBelow: boolean;
+  fileHash: string | null;
+  renderKey: string | null;
+};
+
+/** Either delegate, narrowed to the two calls this module makes. */
+type BlobDelegate = {
+  findUnique(args: {
+    where: { id: bigint };
+    select: { fileData: true };
+  }): Promise<{ fileData: Uint8Array } | null>;
+  update(args: {
+    where: { id: bigint };
+    data: { fileHash: string; renderKey: string };
+  }): Promise<unknown>;
+};
+
 function parseProfile(raw: string | null | undefined): ColorProfile {
   const parsed = colorProfileSchema.safeParse(raw ?? "auto");
   return parsed.success ? parsed.data : "auto";
@@ -42,6 +85,53 @@ function parseOverrides(raw: unknown): ColorStackOverrides {
 }
 
 /**
+ * Resolve (and persist when changed) file_hash + render_key for one row.
+ * The blob is read only when no hash is stored yet.
+ */
+async function settleRow(
+  delegate: BlobDelegate,
+  row: StackRow,
+): Promise<MapStackSettings> {
+  const colorProfile = parseProfile(row.colorProfile);
+  const colorOverrides = parseOverrides(row.colorOverrides);
+
+  let fileHash = row.fileHash;
+  if (!fileHash) {
+    const blob = await delegate.findUnique({
+      where: { id: row.id },
+      select: { fileData: true },
+    });
+    if (!blob) throw new Error("Map file row vanished during hash backfill");
+    fileHash = hashMapFileData(Buffer.from(blob.fileData));
+  }
+
+  const renderKey = computeRenderKey({
+    fileHash,
+    rotationCorrection: row.rotationCorrection,
+    colorProfile,
+    colorOverrides,
+    northLinesBelow: row.northLinesBelow,
+  });
+
+  if (row.fileHash !== fileHash || row.renderKey !== renderKey) {
+    await delegate.update({
+      where: { id: row.id },
+      data: { fileHash, renderKey },
+    });
+  }
+
+  return {
+    scale: row.scale,
+    colorProfile,
+    colorOverrides,
+    northLinesBelow: row.northLinesBelow,
+    rotationCorrection: row.rotationCorrection,
+    fileHash,
+    renderKey,
+  };
+}
+
+/**
  * Read the event's current map stack settings, computing and persisting
  * `file_hash` / `render_key` when missing. Returns null when the event
  * has no map file.
@@ -49,65 +139,22 @@ function parseOverrides(raw: unknown): ColorStackOverrides {
 export async function ensureEventMapRenderKey(
   db: MapFileDb,
   eventId: bigint,
-): Promise<(MapStackSettings & { mapFileId: bigint; uploadedAtMs: number; bounds: unknown }) | null> {
+): Promise<
+  (MapStackSettings & { mapFileId: bigint; uploadedAtMs: number; bounds: unknown }) | null
+> {
   const row = await db.mapFile.findFirst({
     where: { eventId },
     orderBy: { id: "desc" },
-    select: {
-      id: true,
-      uploadedAt: true,
-      bounds: true,
-      scale: true,
-      rotationCorrection: true,
-      colorProfile: true,
-      colorOverrides: true,
-      northLinesBelow: true,
-      fileHash: true,
-      renderKey: true,
-      fileData: true,
-    },
+    select: { ...STACK_COLUMNS, uploadedAt: true, bounds: true },
   });
   if (!row) return null;
 
-  const colorProfile = parseProfile(row.colorProfile);
-  const colorOverrides = parseOverrides(row.colorOverrides);
-  const northLinesBelow = row.northLinesBelow;
-  const rotationCorrection = row.rotationCorrection;
-
-  let fileHash = row.fileHash;
-  if (!fileHash) {
-    fileHash = hashMapFileData(Buffer.from(row.fileData));
-  }
-  let renderKey = row.renderKey;
-  const expected = computeRenderKey({
-    fileHash,
-    rotationCorrection,
-    colorProfile,
-    colorOverrides,
-    northLinesBelow,
-  });
-  if (renderKey !== expected) {
-    renderKey = expected;
-  }
-
-  if (row.fileHash !== fileHash || row.renderKey !== renderKey) {
-    await db.mapFile.update({
-      where: { id: row.id },
-      data: { fileHash, renderKey },
-    });
-  }
-
+  const settings = await settleRow(db.mapFile as unknown as BlobDelegate, row);
   return {
+    ...settings,
     mapFileId: row.id,
     uploadedAtMs: row.uploadedAt.getTime(),
     bounds: row.bounds,
-    scale: row.scale,
-    colorProfile,
-    colorOverrides,
-    northLinesBelow,
-    rotationCorrection,
-    fileHash,
-    renderKey,
   };
 }
 
@@ -120,53 +167,10 @@ export async function ensureClubMapRenderKey(
 ): Promise<MapStackSettings | null> {
   const row = await db.clubMapFile.findUnique({
     where: { id: clubMapId },
-    select: {
-      id: true,
-      scale: true,
-      rotationCorrection: true,
-      colorProfile: true,
-      colorOverrides: true,
-      northLinesBelow: true,
-      fileHash: true,
-      renderKey: true,
-      fileData: true,
-    },
+    select: STACK_COLUMNS,
   });
   if (!row) return null;
-
-  const colorProfile = parseProfile(row.colorProfile);
-  const colorOverrides = parseOverrides(row.colorOverrides);
-  const northLinesBelow = row.northLinesBelow;
-  const rotationCorrection = row.rotationCorrection;
-
-  let fileHash = row.fileHash;
-  if (!fileHash) {
-    fileHash = hashMapFileData(Buffer.from(row.fileData));
-  }
-  const renderKey = computeRenderKey({
-    fileHash,
-    rotationCorrection,
-    colorProfile,
-    colorOverrides,
-    northLinesBelow,
-  });
-
-  if (row.fileHash !== fileHash || row.renderKey !== renderKey) {
-    await db.clubMapFile.update({
-      where: { id: row.id },
-      data: { fileHash, renderKey },
-    });
-  }
-
-  return {
-    scale: row.scale,
-    colorProfile,
-    colorOverrides,
-    northLinesBelow,
-    rotationCorrection,
-    fileHash,
-    renderKey,
-  };
+  return settleRow(db.clubMapFile as unknown as BlobDelegate, row);
 }
 
 /**
@@ -196,28 +200,10 @@ export async function refreshMapFileRenderKey(
 ): Promise<string> {
   const row = await db.mapFile.findUniqueOrThrow({
     where: { id: mapFileId },
-    select: {
-      rotationCorrection: true,
-      colorProfile: true,
-      colorOverrides: true,
-      northLinesBelow: true,
-      fileHash: true,
-      fileData: true,
-    },
+    select: STACK_COLUMNS,
   });
-  const fileHash = row.fileHash ?? hashMapFileData(Buffer.from(row.fileData));
-  const renderKey = computeRenderKey({
-    fileHash,
-    rotationCorrection: row.rotationCorrection,
-    colorProfile: parseProfile(row.colorProfile),
-    colorOverrides: parseOverrides(row.colorOverrides),
-    northLinesBelow: row.northLinesBelow,
-  });
-  await db.mapFile.update({
-    where: { id: mapFileId },
-    data: { fileHash, renderKey },
-  });
-  return renderKey;
+  const settings = await settleRow(db.mapFile as unknown as BlobDelegate, row);
+  return settings.renderKey;
 }
 
 export async function refreshClubMapRenderKey(
@@ -226,26 +212,11 @@ export async function refreshClubMapRenderKey(
 ): Promise<string> {
   const row = await db.clubMapFile.findUniqueOrThrow({
     where: { id: clubMapId },
-    select: {
-      rotationCorrection: true,
-      colorProfile: true,
-      colorOverrides: true,
-      northLinesBelow: true,
-      fileHash: true,
-      fileData: true,
-    },
+    select: STACK_COLUMNS,
   });
-  const fileHash = row.fileHash ?? hashMapFileData(Buffer.from(row.fileData));
-  const renderKey = computeRenderKey({
-    fileHash,
-    rotationCorrection: row.rotationCorrection,
-    colorProfile: parseProfile(row.colorProfile),
-    colorOverrides: parseOverrides(row.colorOverrides),
-    northLinesBelow: row.northLinesBelow,
-  });
-  await db.clubMapFile.update({
-    where: { id: clubMapId },
-    data: { fileHash, renderKey },
-  });
-  return renderKey;
+  const settings = await settleRow(
+    db.clubMapFile as unknown as BlobDelegate,
+    row,
+  );
+  return settings.renderKey;
 }
