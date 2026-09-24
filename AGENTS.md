@@ -23,7 +23,7 @@ See `docs/architecture.md` for the full system architecture.
 | TypeScript build | `pnpm build` | All 3 packages must compile cleanly |
 | Unit tests | `pnpm test` | Vitest across shared, api, web (518+ tests) |
 | Integration tests | `pnpm --filter api exec vitest run --config vitest.integration.config.ts` | 69 tests, requires the test Postgres container (`pnpm test:db:up`) |
-| E2E tests | `pnpm test:e2e` | 195 tests, Playwright — full runs are sharded across 4 isolated stacks (see `docs/e2e-sharding.md`); `pnpm test:e2e e2e/foo.spec.ts` runs a single spec unsharded |
+| E2E tests | `pnpm test:e2e` | 195 tests, Playwright — full runs are sharded across up to 4 isolated stacks, scaled to the machine (see `docs/e2e-sharding.md`); `pnpm test:e2e e2e/foo.spec.ts` runs a single spec unsharded |
 | E2E tests (serial) | `pnpm test:e2e:serial` | Escape hatch: plain single-stack `playwright test` |
 | Test coverage | `pnpm test:coverage` | V8 coverage reports (HTML + LCOV) |
 | Lint | `pnpm lint` | ESLint |
@@ -90,7 +90,7 @@ This is a TDD-first project. All new features and bug fixes must be developed te
 
 - **Unit tests**: `packages/*/src/__tests__/*.test.ts` — Vitest, jsdom (web) / node (api). Fast, deterministic, no database.
 - **Integration tests**: `packages/api/src/__tests__/integration/*.test.ts` — Vitest against the dedicated `postgres-oxygen-test` container on `:5433`. The harness (`helpers/load-env.ts`) refuses to run if `DATABASE_URL` resolves to port 5432 (dev DB) — set `INTEGRATION_DATABASE_URL` to override. Per-suite isolation comes from giving each suite its own `Event` row and relying on `ON DELETE CASCADE`.
-- **E2E tests**: `e2e/*.spec.ts` — Playwright, Chromium, single worker, sequential within a stack. Full user flows through the browser. Full runs are parallelized by `scripts/e2e-sharded.mjs`, which launches 4 isolated stacks (own DB `oxygen_e2e_<n>`, own API, own Vite server) and splits the spec files across them — serial semantics are preserved inside each shard. See `docs/e2e-sharding.md`.
+- **E2E tests**: `e2e/*.spec.ts` — Playwright, Chromium, single worker, sequential within a stack. Full user flows through the browser. Full runs are parallelized by `scripts/e2e-sharded.mjs`, which launches up to 4 isolated stacks — `min(4, cores/2)` — (own DB `oxygen_e2e_<n>`, own API, own Vite server) and splits the spec files across them — serial semantics are preserved inside each shard. See `docs/e2e-sharding.md`.
 
 ## 5. Flaky Test Policy
 
@@ -108,7 +108,7 @@ in your final message and explain why.
 1. **`pnpm build`** — Zero TypeScript errors across all three packages.
 2. **`pnpm test`** — All unit tests pass. Always required.
 3. **Integration tests** — Run for any DB-related changes. Always required for features: `pnpm --filter api exec vitest run --config vitest.integration.config.ts`
-4. **E2E tests** — During iterative development, run only the spec files covering the affected area (`pnpm test:e2e e2e/specific-file.spec.ts` — runs unsharded against the default stack). Before declaring a task complete, run the full suite once: `pnpm test:e2e` (sharded across 4 isolated stacks, ~2-3 min; see `docs/e2e-sharding.md`). For minor fixes confined to `docs/` or other non-shipping files, E2E can be skipped — state so in your final message.
+4. **E2E tests** — During iterative development, run only the spec files covering the affected area (`pnpm test:e2e e2e/specific-file.spec.ts` — runs unsharded against the default stack). Before declaring a task complete, run the full suite once: `pnpm test:e2e` (sharded across up to 4 isolated stacks, ~3-5 min; see `docs/e2e-sharding.md`). For minor fixes confined to `docs/` or other non-shipping files, E2E can be skipped — state so in your final message.
 5. **Rebuild Docker** — Run `docker compose -f docker-compose.host-db.yml up --build -d` so the running stack reflects the latest code. **Required for every change that touches `packages/api/`, `packages/web/`, `packages/shared/`, `docker/`, any `Dockerfile`, `docker-compose*.yml`, or `pnpm-lock.yaml`.** You may skip it only for changes confined to `docs/`, `AGENTS.md`, `.claude/`, or test fixtures that don't ship in either image — and when you skip it, state so in your final message. Verify the output ends with both `Image oxygen-api Built` / `Image oxygen-web Built` and both containers `Started`; treat anything else as a failure.
 6. **Major-version drift report** — After all other steps pass, run `pnpm outdated -r --long` and list any **direct** dependencies (production or dev) with a major-version update available. Format each as `package: current → latest — one-line note on what changes / "no notable changes documented"`. Informational only; do not bump majors as part of an unrelated PR. The user decides whether to act.
 

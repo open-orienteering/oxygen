@@ -299,6 +299,10 @@ test.describe("Course editor", () => {
   });
 
   test("build a course by clicking, reorder, undo/redo, persist", async ({ page }) => {
+    // Many round trips (place, reorder, undo, redo, reload) plus tile
+    // rendering in the background: legitimately long, and it runs into
+    // the 30 s test timeout on a loaded CI runner.
+    test.slow();
     await selectCompetition(page);
     await ensureCoursesAndMap(page);
     await openEditor(page);
@@ -763,6 +767,9 @@ test.describe("Course editor", () => {
   });
 
   test("suggests a description from the base map for a placed control", async ({ page }) => {
+    // Waits on the base-map object lookup after placing a control; slow
+    // under CI load.
+    test.slow();
     page.on("dialog", (dialog) => dialog.accept());
 
     await selectCompetition(page);
