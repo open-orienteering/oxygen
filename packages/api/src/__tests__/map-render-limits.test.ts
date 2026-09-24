@@ -1,6 +1,7 @@
 import { describe, it, expect, afterEach } from "vitest";
 import {
   DEFAULTS,
+  RenderBusyError,
   Semaphore,
   evictForInsert,
   intSetting,
@@ -8,6 +9,7 @@ import {
   precacheEnabled,
   precacheMaxZoom,
   precacheMinZoom,
+  renderMaxQueue,
 } from "../map-render-limits.js";
 
 describe("intSetting", () => {
@@ -167,5 +169,83 @@ describe("Semaphore", () => {
     });
     await Promise.all([a, b]);
     expect(order).toEqual(["a-start", "a-end", "b-start"]);
+  });
+
+  // Cloud Run holds a request open for up to 300 s; a tile that would wait
+  // longer than that behind other renders must be refused immediately so
+  // the client can back off and retry instead of the platform 504-ing it.
+  describe("maxQueue", () => {
+    function deferred() {
+      let resolve!: () => void;
+      const promise = new Promise<void>((r) => (resolve = r));
+      return { promise, resolve };
+    }
+
+    it("rejects a foreground task once the foreground queue is full", async () => {
+      const sem = new Semaphore(1);
+      const gate = deferred();
+      const blocker = sem.run(() => gate.promise);
+      const release = gate.resolve;
+      const waiting = sem.run(async () => "waited", { maxQueue: 1 });
+      await expect(
+        sem.run(async () => "refused", { maxQueue: 1 }),
+      ).rejects.toBeInstanceOf(RenderBusyError);
+      expect(sem.foregroundWaiting).toBe(1);
+      release();
+      await expect(waiting).resolves.toBe("waited");
+      await blocker;
+    });
+
+    it("runs immediately when a permit is free, regardless of maxQueue", async () => {
+      const sem = new Semaphore(1);
+      await expect(sem.run(async () => "ok", { maxQueue: 0 })).resolves.toBe("ok");
+    });
+
+    it("never refuses background work and does not count it towards the bound", async () => {
+      const sem = new Semaphore(1);
+      const gate = deferred();
+      const blocker = sem.run(() => gate.promise);
+      const release = gate.resolve;
+      const bg1 = sem.run(async () => "bg1", { background: true, maxQueue: 0 });
+      const bg2 = sem.run(async () => "bg2", { background: true, maxQueue: 0 });
+      // Only background waiters so far: a bounded foreground task still fits.
+      const fg = sem.run(async () => "fg", { maxQueue: 1 });
+      expect(sem.foregroundWaiting).toBe(1);
+      release();
+      await expect(Promise.all([bg1, bg2, fg])).resolves.toEqual(["bg1", "bg2", "fg"]);
+      await blocker;
+    });
+
+    it("waits without limit when maxQueue is not given", async () => {
+      const sem = new Semaphore(1);
+      const gate = deferred();
+      const blocker = sem.run(() => gate.promise);
+      const release = gate.resolve;
+      const many = Array.from({ length: 20 }, (_, i) => sem.run(async () => i));
+      expect(sem.foregroundWaiting).toBe(20);
+      release();
+      await expect(Promise.all(many)).resolves.toHaveLength(20);
+      await blocker;
+    });
+  });
+});
+
+describe("renderMaxQueue", () => {
+  const saved = process.env.MAP_RENDER_MAX_QUEUE;
+  afterEach(() => {
+    if (saved === undefined) delete process.env.MAP_RENDER_MAX_QUEUE;
+    else process.env.MAP_RENDER_MAX_QUEUE = saved;
+  });
+
+  it("defaults to a handful of blocks so a full queue answers well inside a 300 s request cap", () => {
+    delete process.env.MAP_RENDER_MAX_QUEUE;
+    expect(renderMaxQueue()).toBe(DEFAULTS.renderMaxQueue);
+    expect(DEFAULTS.renderMaxQueue).toBeGreaterThanOrEqual(2);
+    expect(DEFAULTS.renderMaxQueue).toBeLessThanOrEqual(8);
+  });
+
+  it("accepts zero to refuse any queueing at all", () => {
+    process.env.MAP_RENDER_MAX_QUEUE = "0";
+    expect(renderMaxQueue()).toBe(0);
   });
 });

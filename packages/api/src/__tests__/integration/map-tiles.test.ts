@@ -26,7 +26,10 @@ import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import { readFileSync } from "fs";
 import { resolve } from "path";
 import Fastify, { type FastifyInstance } from "fastify";
-import { registerMapTileRoutes } from "../../map-tiles.js";
+import {
+  RENDER_BUSY_RETRY_AFTER_S,
+  registerMapTileRoutes,
+} from "../../map-tiles.js";
 import { createTestEvent, disconnect } from "../helpers/test-db.js";
 import { ensureEventMapRenderKey, gcOrphanTiles } from "../../map-render-cache.js";
 import { makeCaller } from "../helpers/caller.js";
@@ -222,6 +225,61 @@ describe("map-tile endpoint", () => {
       url: `/api/map-tile/${ctx.nameId}/${Z}/${x + 1 < bx + size ? x + 1 : x - 1}/${y}`,
     });
     expect([200, 204]).toContain(neighbour.statusCode);
+  }, 60_000);
+
+  it("refuses with 503 + Retry-After when the render queue is full, then serves the tile on retry", async () => {
+    // Cloud Run holds a request for up to 300 s. With an unbounded queue a
+    // cold viewport queued far past that and every tile 504'd (September
+    // 2026). With the bound, surplus requests get an immediate 503 and the
+    // client's retry book comes back after Retry-After.
+    const savedQueue = process.env.MAP_RENDER_MAX_QUEUE;
+    process.env.MAP_RENDER_MAX_QUEUE = "0";
+    try {
+      // Distinct, never-rendered blocks: the first `renderConcurrency`
+      // take the permits, the surplus must be refused rather than queued.
+      const Z = 18;
+      const { x, y } = centerTile(mapBounds, Z);
+      const size = DEFAULTS.blockTiles;
+      // Four blocks hugging the map centre so they all intersect the map
+      // (a block entirely off-map is answered without touching the gate).
+      const blocks = [
+        { x, y },
+        { x: x - size, y },
+        { x, y: y - size },
+        { x: x - size, y: y - size },
+      ];
+      const results = await Promise.all(
+        blocks.map((b) =>
+          server.inject({
+            method: "GET",
+            url: `/api/map-tile/${ctx.nameId}/${Z}/${b.x}/${b.y}`,
+          }),
+        ),
+      );
+      const statuses = results.map((r) => r.statusCode);
+      expect(statuses.filter((s) => s === 200).length).toBeGreaterThanOrEqual(
+        DEFAULTS.renderConcurrency,
+      );
+      const refused = results.filter((r) => r.statusCode === 503);
+      expect(refused.length).toBeGreaterThanOrEqual(1);
+      expect(statuses.filter((s) => s !== 200 && s !== 503)).toEqual([]);
+      for (const r of refused) {
+        expect(Number(r.headers["retry-after"])).toBe(RENDER_BUSY_RETRY_AFTER_S);
+        expect(r.headers["cache-control"]).toBe("no-store");
+        expect(r.json()).toMatchObject({ error: "Map renderer busy" });
+      }
+
+      // Once the queue drains the same tile renders normally.
+      const retry = await server.inject({
+        method: "GET",
+        url: `/api/map-tile/${ctx.nameId}/${Z}/${blocks.at(-1)!.x}/${blocks.at(-1)!.y}`,
+      });
+      expect(retry.statusCode).toBe(200);
+      expect(retry.headers["content-type"]).toBe("image/png");
+    } finally {
+      if (savedQueue === undefined) delete process.env.MAP_RENDER_MAX_QUEUE;
+      else process.env.MAP_RENDER_MAX_QUEUE = savedQueue;
+    }
   }, 60_000);
 
   it("renders deep-zoom tiles on demand", async () => {

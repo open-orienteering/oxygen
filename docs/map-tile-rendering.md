@@ -123,11 +123,42 @@ map bug: unrelated queries time out while someone pans a map.
 | `map_tiles` table | Shared | The real cache. Written with `ON CONFLICT DO NOTHING`, so concurrent renders of the same block across instances are harmless. |
 | SVG cache | Per process | Parsed map SVGs, `MAP_SVG_CACHE_EVENTS` of them. Amortises the ~70 ms parse and the OCAD read. |
 | In-flight block map | Per process | A viewport fetches ~20 tiles at once; they collapse onto one render per block. |
-| Render semaphore | Per process | Bounds concurrent rasterisations (`MAP_RENDER_CONCURRENCY`). Foreground requests are served before pre-cache work, so background rendering never queues a user behind a whole sweep. |
+| Render semaphore | Per process | Bounds concurrent block renders (`MAP_RENDER_CONCURRENCY`). One permit covers a block's composite **and** ink rasters, run side by side. Foreground requests are served before pre-cache work, so background rendering never queues a user behind a whole sweep. |
+| Queue bound | Per process | At most `MAP_RENDER_MAX_QUEUE` foreground blocks may wait for a permit. Beyond that the tile route answers **503 + `Retry-After: 5`** immediately instead of letting the request sit until the platform kills it. |
 
 Everything above the database is a per-process optimisation, and losing
 it costs time rather than correctness. Nothing in the tile path requires
 a single instance.
+
+### What one tile request costs
+
+The request handler resolves the event's map settings **once** —
+`ensureEventMapRenderKey`, a metadata-only read of `map_files` — and
+threads that object through the render path and the pre-cache kick-off.
+The OCAD blob is read in exactly one place, `loadMapSource`, once per
+render key per process; `ensureEventMapRenderKey` only touches
+`file_data` when `file_hash` is still null (one-off backfill). A cache
+hit is therefore three or four indexed reads and no blob traffic. Keep
+it that way: in September 2026 the same helper selected `file_data`
+unconditionally and was called three times per miss, which pulled ~30 MB
+through Cloud SQL per tile and took the service down — see
+[bugfix-map-tile-cold-render-cloud-timeouts.md](bugfix-map-tile-cold-render-cloud-timeouts.md).
+
+### Where a cold block's time goes
+
+Measured on a 9.8 MB forest map (45 k objects, 16.7 MB composite SVG),
+one 4×4 block at zoom 15–16 on a dev machine:
+
+| Step | Cost | When |
+|---|---|---|
+| `readOcad` + `ocadToSvg` ×2 | ~7.5 s | Once per render key per process (`svgCache`) |
+| resvg composite raster | ~6 s, **~5.7 s of it parsing the SVG** | Every block |
+| resvg ink raster | ~2 s | Every block, in parallel with the composite |
+| Sample 16 tiles + PNG encode + insert | <1 s | Every block |
+
+resvg re-parses the whole SVG per call and exposes no way to reuse the
+tree, so the parse dominates and the block size is the lever: doubling
+`MAP_TILE_BLOCK_TILES` halves parses per tile at ~4× the window memory.
 
 Uploading a map fires `onMapUpload`, which drops the SVG cache entry and
 any in-flight blocks for that **render key**. `applyEventMap`, rotation
@@ -162,6 +193,26 @@ is already inside the key; `f=` stays for week-old browser caches.
 
 Backup / showcase dumps omit `map_tiles` (pure cache; regenerates on
 first view).
+
+### Deploying a render-key change
+
+Anything folded into the key — `TILE_FORMAT`, the colour-stack rules,
+the hash inputs — orphans **every** cached tile on deploy, and the first
+viewer of each map gets a fully cold render at every zoom they touch.
+The overview zooms refill themselves (the progress poll drives
+`preCacheChunk`; see below), but the deep zooms a course setter is
+actually looking at render on demand, block by block, under the queue
+bound. Plan for it:
+
+- Deploy when nobody is setting courses, or accept a few minutes of
+  progressive fill per map with tiles arriving under the 503/retry
+  cadence.
+- Because tiles are content-addressed, rows rendered anywhere are valid
+  everywhere. A dev machine that has already viewed the same map holds
+  rows with the identical `render_key`; copying them into the production
+  `map_tiles` table (`pg_dump -t oxygen.map_tiles --data-only`) is a
+  legitimate pre-warm.
+- Do not bump `TILE_FORMAT` for changes the key already covers.
 
 ## Pre-caching and progress
 
@@ -227,7 +278,8 @@ machine and a 4 GiB container.
 |---|---|---|
 | `MAP_TILE_BLOCK_TILES` | 4 | Tiles per side per window. Larger amortises the SVG parse further but squares the memory. |
 | `MAP_TILE_SUPERSAMPLE` | 2 | Window density relative to the tiles. 1 is cheaper and slightly softer. |
-| `MAP_RENDER_CONCURRENCY` | 2 | Concurrent rasterisations per process. Cloud Run runs 3 (see `scripts/gcp/deploy.sh`), which its 2 vCPUs can actually overlap. |
+| `MAP_RENDER_CONCURRENCY` | 2 | Concurrent block renders per process (each rasterises composite + ink in parallel). Cloud Run runs 3 (see `scripts/gcp/deploy.sh`), which its 2 vCPUs can actually overlap. |
+| `MAP_RENDER_MAX_QUEUE` | 4 | Foreground blocks allowed to wait for a permit before further tile requests get 503 + `Retry-After`. `0` refuses any queueing. Background (pre-cache) work is never refused. |
 | `MAP_SVG_CACHE_EVENTS` | 4 | Parsed map SVGs held in memory. |
 | `MAP_WINDOW_MAX_PIXELS` | 64M | Backstop against a pathological projection; normally never binds. |
 | `MAP_TILE_PRECACHE` | `on` | `off` disables background pre-rendering. |
@@ -235,8 +287,13 @@ machine and a 4 GiB container.
 | `MAP_PRECACHE_BLOCK_DELAY_MS` | 50 | Pause between pre-cache blocks. |
 
 Peak render memory is roughly
-`4 bytes × (blockTiles × 256 × supersample × √2)² × concurrency`, about
-300 MB at the defaults.
+`4 bytes × (blockTiles × 256 × supersample × √2)² × 2 layers × concurrency`,
+about 600 MB at the defaults.
+
+Sizing `MAP_RENDER_MAX_QUEUE`: a cold block costs 10–15 s on a 2 vCPU
+Cloud Run instance, so with concurrency 3 and four waiters the worst
+case is about a minute — well inside the platform's 300 s request
+timeout, which is what the unbounded queue used to run into.
 
 ## North: georeference, meridian lines, display
 
@@ -289,6 +346,7 @@ Current behaviour (`tile-fetcher.ts` + `tile-retry.ts`):
 |---|---|
 | Empty / out-of-map | Server 200 transparent PNG — normal success |
 | 429 | Back off, honour `Retry-After` when present |
+| 503 (renderer busy) | Server refused to queue the block; retry after `Retry-After` (5 s). Expected during a cold fill, not an error. |
 | 500 / network error | Back off 2s → 10s → 30s → 60s |
 | Concurrency | Max 12 fetches in flight, nearest-to-centre first |
 | Scroll-out | `AbortController` cancels queued/in-flight work |

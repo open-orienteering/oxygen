@@ -220,10 +220,18 @@ describe("course.previewImport — Purple Pen coordinate alignment", () => {
       replaceAll: true,
     });
     const coords = await mapCaller.course.controlCoordinates();
-    const start = coords.find((c) => c.mapX < -800);
-    expect(start).toBeDefined();
+    // The file places start / control / finish at x, x+5, x+10 and the
+    // row order is not defined, so pick by position rather than by
+    // whichever the database happens to return first.
+    const imported = coords
+      .filter((c) => c.mapX < -800)
+      .sort((a, b) => a.mapX - b.mapX);
+    expect(imported.length).toBeGreaterThanOrEqual(3);
+    const [start, , finish] = imported;
     expect(start!.mapX).toBeCloseTo(-900, 1);
     expect(start!.mapY).toBeCloseTo(-400, 1);
+    expect(finish!.mapX).toBeCloseTo(-890, 1);
+    expect(finish!.mapY).toBeCloseTo(-390, 1);
   }, 60_000);
 
   it("imports codes and sequence without positions when asked", async () => {
