@@ -69,4 +69,41 @@ describe("slimObject", () => {
     ]);
     expect(slim!.bbox).toEqual([0, 0, 100, 100]);
   });
+
+  it("flattens Bezier segments onto the drawn curve instead of keeping the handles", () => {
+    const bez1 = (x: number, y: number) =>
+      Object.assign([x, y] as unknown as ArrayLike<number>, { isFirstBezier: () => true });
+    const bez2 = (x: number, y: number) =>
+      Object.assign([x, y] as unknown as ArrayLike<number>, { isSecondBezier: () => true });
+    // A path from (0,0) to (1000,0) bowing north: handles 800 units above
+    // the chord. The drawn curve peaks at 0.75 × 800 = 600 — never at the
+    // handle height, and never at the handle x positions' raw values.
+    const slim = slimObject({
+      sym: 505000,
+      objType: 2,
+      coordinates: [coord(0, 0), bez1(0, 800), bez2(1000, 800), coord(1000, 0)],
+    });
+    expect(slim).not.toBeNull();
+    const ys = slim!.coordinates.map((c) => c[1]);
+    expect(Math.max(...ys)).toBeCloseTo(600, 0);
+    expect(slim!.coordinates[0]).toEqual([0, 0]);
+    expect(slim!.coordinates.at(-1)).toEqual([1000, 0]);
+    // 1 anchor + 8 flattened steps.
+    expect(slim!.coordinates).toHaveLength(9);
+    expect(slim!.bbox[3]).toBeCloseTo(600, 0);
+  });
+
+  it("keeps a lone Bezier-flagged vertex when the segment is incomplete", () => {
+    const bez1 = (x: number, y: number) =>
+      Object.assign([x, y] as unknown as ArrayLike<number>, { isFirstBezier: () => true });
+    const slim = slimObject({
+      sym: 505000,
+      objType: 2,
+      coordinates: [coord(0, 0), bez1(50, 50)],
+    });
+    expect(slim!.coordinates).toEqual([
+      [0, 0],
+      [50, 50],
+    ]);
+  });
 });

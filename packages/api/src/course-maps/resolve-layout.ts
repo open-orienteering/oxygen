@@ -10,15 +10,19 @@
  */
 
 import {
+  buildDescriptionSheet,
   mapTemplateSettingsSchema,
   mapWindowForFrame,
   courseMapObjectSchema,
+  type ControlDescription,
+  type CourseDescriptionInstructions,
   type CourseMapDocument,
   type CourseMapObject,
   type CourseMapOverrides,
   type CourseOverlayControl,
   type CourseOverlayLeg,
   type DescriptionRow,
+  type DescriptionSheetHeader,
   type MapPoint,
   type MapTextValues,
   type MapWindow,
@@ -60,6 +64,36 @@ export interface LayoutCourseSource {
   classes?: Array<{ name: string }>;
   /** Course controls in course order. */
   controls: LayoutControlSource[];
+  /** `courses.description_instructions` JSONB (specials + finish variant). */
+  descriptionInstructions?: unknown;
+}
+
+/** Loose reader for the instructions JSONB — anything malformed → null. */
+function readInstructions(raw: unknown): CourseDescriptionInstructions | null {
+  if (!raw || typeof raw !== "object") return null;
+  const obj = raw as Record<string, unknown>;
+  const out: CourseDescriptionInstructions = {};
+  if (Array.isArray(obj.specials)) {
+    out.specials = obj.specials
+      .filter((s): s is Record<string, unknown> => !!s && typeof s === "object")
+      .filter((s) => typeof s.kind === "string")
+      .map((s) => ({
+        afterControlId:
+          typeof s.afterControlId === "number" ? s.afterControlId : null,
+        kind: s.kind as string,
+        ...(typeof s.lengthM === "number" ? { lengthM: s.lengthM } : {}),
+      }));
+  }
+  if (obj.finish && typeof obj.finish === "object") {
+    const f = obj.finish as Record<string, unknown>;
+    if (typeof f.kind === "string") {
+      out.finish = {
+        kind: f.kind,
+        ...(typeof f.lengthM === "number" ? { lengthM: f.lengthM } : {}),
+      };
+    }
+  }
+  return out;
 }
 
 export interface ResolveMapLayoutInput {
@@ -97,7 +131,16 @@ export interface ResolvedMapLayout {
   window: MapWindow;
   controls: CourseOverlayControl[];
   legs: CourseOverlayLeg[];
+  /**
+   * Description block rows. Course maps carry the full IOF sheet (start,
+   * controls, specials, finish); all-controls maps list control rows only.
+   */
   descriptionRows: DescriptionRow[];
+  /**
+   * Three-row IOF header (event / classes / course · length · climb) for
+   * course maps; null for all-controls maps, which keep a single title row.
+   */
+  descriptionHeader: DescriptionSheetHeader | null;
   textValues: MapTextValues;
   /**
    * ISOM overprint enlargement `mapScale / printScale` (1 when the base
@@ -282,13 +325,54 @@ export function resolveMapLayout(
           return rest;
         });
 
-  const descriptionRows: DescriptionRow[] = regularControls
-    .filter((control) => control.type === "control")
-    .map((control, index) => ({
-      ...(input.kind === "course" ? { sequence: index + 1 } : {}),
+  const controlRows = regularControls.filter(
+    (control) => control.type === "control",
+  );
+  let descriptionRows: DescriptionRow[];
+  let descriptionHeader: DescriptionSheetHeader | null = null;
+  if (input.kind === "course" && input.course) {
+    // Same row model as the on-map sheet in the course editor, so print
+    // and screen agree on header, start, specials and finish.
+    const finishGeom = geometryControls.find((c) => c.type === "finish");
+    const lastControl = controlRows[controlRows.length - 1];
+    const finishLengthM =
+      finishGeom && lastControl && input.mapScale
+        ? (Math.hypot(finishGeom.x - lastControl.x, finishGeom.y - lastControl.y) *
+            input.mapScale) /
+          1000
+        : null;
+    const sheet = buildDescriptionSheet({
+      eventName: input.event?.name ?? "",
+      classNames: input.course.classes?.map((c) => c.name) ?? [],
+      courseName: input.course.name,
+      lengthM: input.course.lengthM,
+      climbM: input.course.climbM,
+      controls: controlRows.map((control, index) => {
+        const source = rawControls[regularControls.indexOf(control)];
+        return {
+          id: source?.seq ?? index + 1,
+          code: control.code,
+          description: (control.description ?? null) as ControlDescription | null,
+        };
+      }),
+      instructions: readInstructions(input.course.descriptionInstructions),
+      finishLengthM,
+    });
+    descriptionHeader = sheet.header;
+    descriptionRows = sheet.rows.map((row) => ({
+      kind: row.kind,
+      code: row.code,
+      ...(row.sequence !== undefined ? { sequence: row.sequence } : {}),
+      ...(row.description !== undefined ? { description: row.description } : {}),
+      ...(row.symbolKey !== undefined ? { symbolKey: row.symbolKey } : {}),
+      ...(row.lengthM !== undefined ? { lengthM: row.lengthM } : {}),
+    }));
+  } else {
+    descriptionRows = controlRows.map((control) => ({
       code: control.code,
       description: control.description as DescriptionRow["description"],
     }));
+  }
 
   const legs =
     input.kind === "course"
@@ -352,6 +436,7 @@ export function resolveMapLayout(
     controls,
     legs,
     descriptionRows,
+    descriptionHeader,
     overprintScale: (input.mapScale ?? printScale) / printScale,
     textValues: {
       event: input.event?.name ?? "",

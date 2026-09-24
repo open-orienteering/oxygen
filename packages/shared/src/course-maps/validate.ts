@@ -41,6 +41,8 @@ export interface ValidateCourseMapOptions {
   windows?: MapWindow[];
   variants: CourseMapVariant[];
   descriptionRowCount?: number;
+  /** Header rows above the description rows (1 title row, or 3 for the IOF header). */
+  descriptionHeaderRows?: number;
 }
 
 export function printablePageRect(document: CourseMapDocument): MapRect {
@@ -182,6 +184,7 @@ export function validateCourseMap(
       options.descriptionRowCount ??
         Math.max(0, ...options.variants.map((variant) => variant.controls.length)),
       options.document.description.cellSizeMm,
+      options.descriptionHeaderRows ?? 1,
     );
     if (
       !rectInside(

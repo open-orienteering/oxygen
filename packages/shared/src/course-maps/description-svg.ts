@@ -1,5 +1,15 @@
 import type { ControlDescription } from "../types.js";
 import { escapeSvgText } from "./text.js";
+import {
+  descriptionCells,
+  ocadDescriptionCodeToIof,
+  type DescriptionCell,
+} from "./iof-symbols.js";
+import {
+  DESCRIPTION_THICK_COLUMNS,
+  hasThickRuleBelow,
+  type DescriptionSheetRow,
+} from "./description-rows.js";
 
 export type IofSymbolResolver = (iofKey: string) => string | null | undefined;
 
@@ -7,6 +17,14 @@ export interface DescriptionRow {
   sequence?: number;
   code: string;
   description?: ControlDescription | null;
+  /**
+   * Row kind from `description-rows.ts`. Absent / "control" draws a
+   * normal A–H row; "start" draws the triangle in A; "special" and
+   * "finish" draw `symbolKey` across the full width with `lengthM`.
+   */
+  kind?: "start" | "control" | "special" | "finish";
+  symbolKey?: string;
+  lengthM?: number;
 }
 
 export interface RenderDescriptionBlockOptions {
@@ -17,66 +35,38 @@ export interface RenderDescriptionBlockOptions {
   rows: DescriptionRow[];
   symbolResolver: IofSymbolResolver;
   color?: string;
+  /**
+   * When set, draw the full IOF header (event / classes / course·length·climb)
+   * instead of a single title row. `title` is ignored in that mode; use
+   * `header` fields instead. Special / finish rows can be mixed into
+   * `rows` via `kind: "special" | "finish" | "start"` on an extended row
+   * type — see `description-rows.ts`.
+   */
+  header?: {
+    eventName: string;
+    classNames: string;
+    courseName: string;
+    lengthKm: string;
+    climbM: string;
+  };
 }
 
-const COMPASS = ["", "N", "NE", "E", "SE", "S", "SW", "W", "NW"] as const;
-const CARDINAL = new Set(["N", "E", "S", "W"]);
+export { ocadDescriptionCodeToIof };
 
-export function ocadDescriptionCodeToIof(
-  column: "c" | "d" | "f" | "g",
-  code: string,
-): string | null {
-  const [group, rawSub] = code.split(".");
-  if (!rawSub) return null;
-  const sub = Number.parseInt(rawSub, 10);
-  if (!Number.isFinite(sub)) return null;
-  if (column === "d") return `${Number.parseInt(group, 10)}.${sub}`;
-  if (column === "f") {
-    const mapped: Record<string, string> = {
-      "10.001": "10.1",
-      "10.002": "10.2",
-      "11.001": "11.7",
-    };
-    return mapped[code] ?? `${Number.parseInt(group, 10)}.${sub}`;
+function renderCellContent(
+  x: number,
+  y: number,
+  size: number,
+  cell: DescriptionCell | null,
+  color: string,
+): string {
+  if (!cell) return "";
+  if (cell.kind === "text") {
+    return `<text x="${x + size / 2}" y="${y + size * 0.67}" font-size="${size * 0.34}" text-anchor="middle" fill="${color}">${escapeSvgText(cell.text)}</text>`;
   }
-  if (column === "c") {
-    if (sub === 3 || sub === 300) return "0.3";
-    if (sub === 4 || sub === 400) return "0.4";
-    if (sub === 5 || sub === 500) return "0.5";
-    const direction = COMPASS[sub >= 100 ? sub % 10 : sub];
-    if (!direction) return null;
-    return `${CARDINAL.has(direction) ? "0.1" : "0.2"}${direction}`;
-  }
-
-  const nonDirectional: Record<number, string> = {
-    8: "11.9",
-    9: "11.10",
-    10: "11.11",
-    11: "11.13",
-    13: "11.12",
-    14: "11.15",
-  };
-  if (sub < 100) return nonDirectional[sub] ?? null;
-  const direction = COMPASS[sub % 10];
-  if (!direction) return null;
-  const rangeBase: Record<number, string> = {
-    12: "11.14",
-    14: "11.14",
-    15: "11.5",
-    16: "11.6",
-    17: "11.8",
-  };
-  const typeBase: Record<number, string> = {
-    1: "11.1",
-    2: "11.2",
-    3: "11.3",
-    4: "11.4",
-    5: "11.5",
-    6: "11.6",
-    7: "11.8",
-  };
-  const base = rangeBase[Math.floor(sub / 10)] ?? typeBase[Math.floor(sub / 100)];
-  return base ? `${base}${direction}` : null;
+  const inset = size * 0.1;
+  const colored = cell.svg.replace(/ stroke-width="null"/g, "");
+  return `<svg x="${x + inset}" y="${y + inset}" width="${size - inset * 2}" height="${size - inset * 2}" viewBox="-100 -100 200 200" preserveAspectRatio="xMidYMid meet">${colored}</svg>`;
 }
 
 function renderCellSymbol(
@@ -101,8 +91,12 @@ function renderCellSymbol(
 export function descriptionBlockSize(
   rowCount: number,
   cellSizeMm: number,
+  headerRows = 1,
 ): { width: number; height: number } {
-  return { width: cellSizeMm * 8, height: cellSizeMm * (rowCount + 1) };
+  return {
+    width: cellSizeMm * 8,
+    height: cellSizeMm * (rowCount + headerRows),
+  };
 }
 
 export function renderDescriptionBlockSvg(
@@ -110,62 +104,126 @@ export function renderDescriptionBlockSvg(
 ): string {
   const { x, y, cellSizeMm: cell, rows } = options;
   const color = options.color ?? "#000000";
-  const size = descriptionBlockSize(rows.length, cell);
+  const headerRows = options.header ? 3 : 1;
+  const size = descriptionBlockSize(rows.length, cell, headerRows);
+  // IOF sheet rules: thick outer border and header cells, thick rule
+  // under the start row and above the finish row (so the control rows
+  // are boxed in), thick verticals after columns C and F (A B C | D E F
+  // | G H). Everything else thin. Header text is bold throughout.
+  const THIN = 0.15;
+  const THICK = 0.35;
   const parts = [
     `<g data-map-layer="description-block" font-family="DejaVu Sans, Liberation Sans, Arial, sans-serif" fill="${color}">`,
-    `<rect x="${x}" y="${y}" width="${size.width}" height="${size.height}" fill="#ffffff" stroke="${color}" stroke-width="0.2"/>`,
-    `<line x1="${x}" y1="${y + cell}" x2="${x + size.width}" y2="${y + cell}" stroke="${color}" stroke-width="0.2"/>`,
-    `<text x="${x + size.width / 2}" y="${y + cell * 0.68}" font-size="${cell * 0.48}" text-anchor="middle">${escapeSvgText(options.title)}</text>`,
+    `<rect x="${x}" y="${y}" width="${size.width}" height="${size.height}" fill="#ffffff" stroke="${color}" stroke-width="${THICK}"/>`,
   ];
+  if (options.header) {
+    const { eventName, classNames, courseName, lengthKm, climbM } = options.header;
+    // Row 1: event name (full width)
+    parts.push(
+      `<line x1="${x}" y1="${y + cell}" x2="${x + size.width}" y2="${y + cell}" stroke="${color}" stroke-width="${THICK}"/>`,
+      `<text x="${x + size.width / 2}" y="${y + cell * 0.68}" font-size="${cell * 0.42}" font-weight="bold" text-anchor="middle">${escapeSvgText(eventName)}</text>`,
+    );
+    // Row 2: class names (full width)
+    parts.push(
+      `<line x1="${x}" y1="${y + cell * 2}" x2="${x + size.width}" y2="${y + cell * 2}" stroke="${color}" stroke-width="${THICK}"/>`,
+      `<text x="${x + size.width / 2}" y="${y + cell * 1.68}" font-size="${cell * 0.4}" font-weight="bold" text-anchor="middle">${escapeSvgText(classNames)}</text>`,
+    );
+    // Row 3: course (3) · length (3) · climb (2)
+    parts.push(
+      `<line x1="${x}" y1="${y + cell * 3}" x2="${x + size.width}" y2="${y + cell * 3}" stroke="${color}" stroke-width="${THICK}"/>`,
+      `<line x1="${x + cell * 3}" y1="${y + cell * 2}" x2="${x + cell * 3}" y2="${y + cell * 3}" stroke="${color}" stroke-width="${THICK}"/>`,
+      `<line x1="${x + cell * 6}" y1="${y + cell * 2}" x2="${x + cell * 6}" y2="${y + cell * 3}" stroke="${color}" stroke-width="${THICK}"/>`,
+      `<text x="${x + cell * 1.5}" y="${y + cell * 2.68}" font-size="${cell * 0.4}" font-weight="bold" text-anchor="middle">${escapeSvgText(courseName)}</text>`,
+      `<text x="${x + cell * 4.5}" y="${y + cell * 2.68}" font-size="${cell * 0.4}" font-weight="bold" text-anchor="middle">${escapeSvgText(lengthKm)}</text>`,
+      `<text x="${x + cell * 7}" y="${y + cell * 2.68}" font-size="${cell * 0.4}" font-weight="bold" text-anchor="middle">${escapeSvgText(climbM)}</text>`,
+    );
+  } else {
+    parts.push(
+      `<line x1="${x}" y1="${y + cell}" x2="${x + size.width}" y2="${y + cell}" stroke="${color}" stroke-width="${THICK}"/>`,
+      `<text x="${x + size.width / 2}" y="${y + cell * 0.68}" font-size="${cell * 0.48}" font-weight="bold" text-anchor="middle">${escapeSvgText(options.title)}</text>`,
+    );
+  }
 
   for (let rowIndex = 0; rowIndex < rows.length; rowIndex += 1) {
     const row = rows[rowIndex];
-    const top = y + cell * (rowIndex + 1);
-    for (let column = 1; column < 8; column += 1) {
-      const lineX = x + cell * column;
-      parts.push(
-        `<line x1="${lineX}" y1="${top}" x2="${lineX}" y2="${top + cell}" stroke="${color}" stroke-width="0.15"/>`,
-      );
+    const top = y + cell * (rowIndex + headerRows);
+    const wide = row.kind === "special" || row.kind === "finish";
+    if (!wide) {
+      for (let column = 1; column < 8; column += 1) {
+        const lineX = x + cell * column;
+        const thick = DESCRIPTION_THICK_COLUMNS.includes(column);
+        parts.push(
+          `<line x1="${lineX}" y1="${top}" x2="${lineX}" y2="${top + cell}" stroke="${color}" stroke-width="${thick ? THICK : THIN}"/>`,
+        );
+      }
     }
     if (rowIndex < rows.length - 1) {
+      const thick = hasThickRuleBelow(rows as DescriptionSheetRow[], rowIndex);
       parts.push(
-        `<line x1="${x}" y1="${top + cell}" x2="${x + size.width}" y2="${top + cell}" stroke="${color}" stroke-width="0.15"/>`,
+        `<line x1="${x}" y1="${top + cell}" x2="${x + size.width}" y2="${top + cell}" stroke="${color}" stroke-width="${thick ? THICK : THIN}"/>`,
       );
     }
     const textY = top + cell * 0.67;
     const textSize = cell * 0.43;
-    parts.push(
-      `<text x="${x + cell * 0.5}" y="${textY}" font-size="${textSize}" text-anchor="middle">${row.sequence ?? ""}</text>`,
-      `<text x="${x + cell * 1.5}" y="${textY}" font-size="${textSize}" text-anchor="middle">${escapeSvgText(row.code)}</text>`,
-    );
+
+    if (wide) {
+      // Full-width 13.x / 14.x symbol with the optional length centred.
+      const key = row.symbolKey;
+      const fragment = key ? options.symbolResolver(key) : null;
+      if (fragment) {
+        const colored = fragment
+          .replace(/stroke="black"/g, `stroke="${color}"`)
+          .replace(/fill="black"/g, `fill="${color}"`)
+          .replace(/ stroke-width="null"/g, "");
+        const inset = cell * 0.1;
+        parts.push(
+          `<svg x="${x + inset}" y="${top + inset}" width="${size.width - inset * 2}" height="${cell - inset * 2}" viewBox="-800 -100 1600 200" preserveAspectRatio="xMidYMid meet">${colored}</svg>`,
+        );
+      }
+      if (row.lengthM != null && row.lengthM > 0) {
+        parts.push(
+          `<text x="${x + size.width / 2}" y="${textY}" font-size="${textSize * 0.9}" font-weight="bold" text-anchor="middle">${Math.round(row.lengthM)} m</text>`,
+        );
+      }
+      continue;
+    }
+
+    if (row.kind === "start") {
+      parts.push(renderCellSymbol(x, top, cell, "start", options.symbolResolver, color));
+    } else {
+      parts.push(
+        `<text x="${x + cell * 0.5}" y="${textY}" font-size="${textSize}" text-anchor="middle">${row.sequence ?? ""}</text>`,
+        `<text x="${x + cell * 1.5}" y="${textY}" font-size="${textSize}" text-anchor="middle">${escapeSvgText(row.code)}</text>`,
+      );
+    }
 
     const description = row.description;
     if (!description) continue;
-    const symbolColumns: Array<["c" | "d" | "f" | "g", number]> = [
-      ["c", 2],
-      ["d", 3],
-      ["f", 5],
-      ["g", 6],
+    const cells = descriptionCells(description, color);
+    const order: Array<[keyof typeof cells, number]> = [
+      ["C", 2],
+      ["D", 3],
+      ["E", 4],
+      ["F", 5],
+      ["G", 6],
+      ["H", 7],
     ];
-    for (const [key, column] of symbolColumns) {
-      const value = description[key];
-      parts.push(
-        renderCellSymbol(
-          x + cell * column,
-          top,
-          cell,
-          value ? ocadDescriptionCodeToIof(key, value) : null,
-          options.symbolResolver,
-          color,
-        ),
-      );
-    }
-    if (description.s) {
-      parts.push(
-        `<text x="${x + cell * 4.5}" y="${textY}" font-size="${cell * 0.34}" text-anchor="middle">${escapeSvgText(description.s.replace(",", ".") + "m")}</text>`,
-      );
+    for (const [key, column] of order) {
+      parts.push(renderCellContent(x + cell * column, top, cell, cells[key], color));
     }
   }
   parts.push("</g>");
   return parts.join("");
+}
+
+/** @deprecated Kept for callers that still resolve a single key via a resolver. */
+export function renderLegacyCellSymbol(
+  x: number,
+  y: number,
+  size: number,
+  key: string | null,
+  resolver: IofSymbolResolver,
+  color: string,
+): string {
+  return renderCellSymbol(x, y, size, key, resolver, color);
 }

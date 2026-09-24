@@ -6,6 +6,7 @@ export * from "./course-overlay-svg.js";
 export * from "./overlay-geometry.js";
 export * from "./control-label-placement.js";
 export * from "./description-svg.js";
+export * from "./description-rows.js";
 export * from "./validate.js";
 export * from "./iof-symbols.js";
 export * from "./iof-symbol-meta.js";

@@ -11,8 +11,15 @@ import {
   type PlacementSeg,
   defaultMapAppearance,
 } from "@oxygen/shared";
-import { getDescriptionSymbols } from "../iof-symbols";
+import { descriptionCells, IOF_SYMBOLS } from "../iof-symbols";
+import {
+  buildDescriptionSheet,
+  DESCRIPTION_THICK_COLUMNS,
+  hasThickRuleBelow,
+  type DescriptionSheetRow,
+} from "@oxygen/shared";
 import { TileBlobCacheProvider, TileLayer } from "./TileLayer";
+import { MapLoupe } from "./MapLoupe";
 import { kioskKeyFromUrl } from "../lib/kiosk-key";
 import {
   type TileViewport,
@@ -97,6 +104,11 @@ export interface CourseOverlay {
    * share a course). Drives the per-leg labels in multi-course display.
    */
   classNames?: string[];
+  /** Course length / climb for the description-sheet header row 3. */
+  lengthM?: number;
+  climbM?: number;
+  /** Special / finish instructions for the description sheet. */
+  descriptionInstructions?: import("@oxygen/shared").CourseDescriptionInstructions | null;
 }
 
 /**
@@ -149,6 +161,8 @@ export interface EditorContextAction {
   label: string;
   onClick: () => void;
   variant?: "default" | "danger";
+  /** Greyed out and inert — e.g. while an earlier edit is still saving. */
+  disabled?: boolean;
 }
 
 /**
@@ -259,6 +273,8 @@ interface Props {
   descriptionsAllControls?: boolean;
   /** Localized sheet title for the all-controls listing ("All controls"). */
   allControlsTitle?: string;
+  /** Event name for the single-course sheet's first header row. */
+  eventName?: string;
   onToggleFullscreen?: () => void;
   isFullscreen?: boolean;
   /** Hide all interactive controls (zoom, measure, reset, fullscreen) */
@@ -306,6 +322,7 @@ export function MapViewer({
   showDescriptions = false,
   descriptionsAllControls = false,
   allControlsTitle,
+  eventName,
   onToggleFullscreen,
   isFullscreen = false,
   hideControls = false,
@@ -485,8 +502,10 @@ export function MapViewer({
   // stale position.
   const editorDragRef = useRef<{
     id: string; startX: number; startY: number; moved: boolean; origX: number; origY: number;
+    touch: boolean;
   } | null>(null);
   const [editorDragPos, setEditorDragPos] = useState<{ id: string; x: number; y: number } | null>(null);
+  const [editorDragTouch, setEditorDragTouch] = useState(false);
   // Moves already sent via onMoveEnd but not yet reflected in the
   // `controls` prop (mutation + refetch in flight). Rendering `to`
   // prevents the control snapping back to its stale position. An entry
@@ -812,6 +831,7 @@ export function MapViewer({
     editorDragRef.current = null;
     isPanningRef.current = false;
     mouseDownPosRef.current = null;
+    setEditorDragTouch(false);
     if (cancelled) {
       setEditorDragPos(null);
       return;
@@ -1308,8 +1328,11 @@ export function MapViewer({
 
   /** Arm a control drag on pointer-down over a control hit target. */
   const beginControlDrag = useCallback(
-    (id: string, origX: number, origY: number, clientX: number, clientY: number) => {
-      editorDragRef.current = { id, startX: clientX, startY: clientY, moved: false, origX, origY };
+    (id: string, origX: number, origY: number, clientX: number, clientY: number, touch = false) => {
+      editorDragRef.current = {
+        id, startX: clientX, startY: clientY, moved: false, origX, origY, touch,
+      };
+      setEditorDragTouch(touch);
     },
     [],
   );
@@ -1318,7 +1341,7 @@ export function MapViewer({
     (id: string, origX: number, origY: number, e: React.MouseEvent) => {
       if (e.button !== 0) return;
       e.stopPropagation();
-      beginControlDrag(id, origX, origY, e.clientX, e.clientY);
+      beginControlDrag(id, origX, origY, e.clientX, e.clientY, false);
     },
     [beginControlDrag],
   );
@@ -1331,7 +1354,7 @@ export function MapViewer({
       e.stopPropagation();
       touchOnEditorTargetRef.current = true;
       if (Date.now() < suppressEditorSelectionUntilRef.current) return;
-      beginControlDrag(id, origX, origY, t.clientX, t.clientY);
+      beginControlDrag(id, origX, origY, t.clientX, t.clientY, true);
     },
     [beginControlDrag],
   );
@@ -2074,8 +2097,9 @@ export function MapViewer({
       controls,
       allControlsMode,
       allControlsTitle,
+      { eventName, mapScale: mapScale ?? null },
     );
-  }, [showDescriptions, courseGeometry, descriptionsAllControls, allControlsTitle, symbolScale, containerSize, courses, highlightCourseName, controls]);
+  }, [showDescriptions, courseGeometry, descriptionsAllControls, allControlsTitle, symbolScale, containerSize, courses, highlightCourseName, controls, eventName, mapScale]);
 
   // ─── Scale bar ─────────────────────────────────────────
 
@@ -2308,10 +2332,11 @@ export function MapViewer({
                 key={a.id}
                 data-testid={`editor-action-${a.id}`}
                 onClick={a.onClick}
-                className={`text-xs text-left pl-2.5 pr-8 py-1.5 rounded-md whitespace-nowrap transition-colors cursor-pointer ${
+                disabled={a.disabled}
+                className={`text-xs text-left pl-2.5 pr-8 py-1.5 rounded-md whitespace-nowrap transition-colors cursor-pointer disabled:opacity-40 disabled:cursor-default ${
                   a.variant === "danger"
-                    ? "text-red-600 hover:bg-red-50"
-                    : "text-slate-700 hover:bg-slate-100"
+                    ? "text-red-600 hover:bg-red-50 disabled:hover:bg-transparent"
+                    : "text-slate-700 hover:bg-slate-100 disabled:hover:bg-transparent"
                 }`}
               >
                 {a.label}
@@ -2368,7 +2393,8 @@ export function MapViewer({
       className={`relative overflow-hidden select-none bg-white ${hideControls ? "" : "rounded-lg border border-slate-200"} ${className}`}
       style={{
         cursor: hideControls ? "default"
-          : measuring ? "crosshair"
+          : measuring || (editor && !editorDragPos) ? "crosshair"
+          : editorDragPos ? "crosshair"
           : isPanningRef.current ? "grabbing" : "grab",
         touchAction: containerTouchAction,
         ...style,
@@ -2388,6 +2414,7 @@ export function MapViewer({
           </div>
         </div>
       )}
+      <TileBlobCacheProvider>
       {/* Rotated map layer (tiles + overlay) — corrects map north offset */}
       <div style={{
         position: "absolute",
@@ -2396,7 +2423,6 @@ export function MapViewer({
         transformOrigin: "center center",
         ...(rotDeg !== 0 ? { width: renderW, height: renderH, left: (containerSize.w - renderW) / 2, top: (containerSize.h - renderH) / 2 } : {}),
       }}>
-        <TileBlobCacheProvider>
         {/* Base map tiles (composite half) */}
         <TileLayer
           viewport={viewport}
@@ -2491,7 +2517,7 @@ export function MapViewer({
             {editor && overlayContent && overlayContent.controlHits.map((h) => (
               <circle key={`edit-hit-${h.id}`} cx={h.px} cy={h.py} r={h.r}
                 fill="transparent" stroke="none"
-                style={{ pointerEvents: "all", cursor: "move", touchAction: "none" }}
+                style={{ pointerEvents: "all", cursor: editorDragPos ? "crosshair" : "move", touchAction: "none" }}
                 data-testid="editor-control-hit"
                 data-control-id={h.id}
                 data-control-code={h.code}
@@ -2512,13 +2538,32 @@ export function MapViewer({
             )}
           </g>
         </svg>
-        </TileBlobCacheProvider>
       </div>
 
       {/* Editor contextual actions — unrotated HTML, anchored at the
           selection/phantom */}
       {editorMenu}
       {dragWarning}
+      {editor && editorDragPos && viewport && (() => {
+        const inner = mapMmToScreen(editorDragPos.x, editorDragPos.y);
+        if (!inner) return null;
+        const pos = innerToContainer(inner.x, inner.y);
+        return (
+          <MapLoupe
+            anchorX={pos.x}
+            anchorY={pos.y}
+            containerWidth={containerSize.w}
+            containerHeight={containerSize.h}
+            viewport={viewport}
+            tileUrlBase={tileUrlBase}
+            tileVersion={mapVersion}
+            rotDeg={rotDeg}
+            controlRadiusPx={overlayContent?.radiusPx ?? 12}
+            touch={editorDragTouch}
+          />
+        );
+      })()}
+      </TileBlobCacheProvider>
 
       {/* Description sheet (not rotated) */}
       {descriptionSheet && (
@@ -2706,7 +2751,7 @@ function renderDescriptionSheet(
   cw: number,
   ch: number,
   /** The highlighted courses. 1 → sequence card; >1 → code-sorted union. */
-  activeCourses?: Array<Pick<CourseOverlay, "name" | "controls">>,
+  activeCourses?: Array<Pick<CourseOverlay, "name" | "controls" | "classNames" | "lengthM" | "climbM" | "descriptionInstructions">>,
   /** All control overlays — used to resolve id → code/type when geometry is sparse. */
   controlOverlays?: ControlOverlay[],
   /**
@@ -2717,6 +2762,12 @@ function renderDescriptionSheet(
   allControlsMode = false,
   /** Localized title for the all-controls listing. */
   allControlsTitle?: string,
+  sheetContext: {
+    /** Event name for header row 1 of a single-course sheet. */
+    eventName?: string;
+    /** Map scale (1:N) — turns the last-control → finish leg into metres. */
+    mapScale?: number | null;
+  } = {},
 ): React.ReactNode | null {
   if (!courseGeometry?.features && !allControlsMode) return null;
 
@@ -2770,16 +2821,95 @@ function renderDescriptionSheet(
   // UNION of all their controls, without sequence numbers (there is no
   // shared sequence, and the map keeps showing codes). No course → every
   // positioned control (`allControlsMode`) or all geometry codes.
-  type Row = { code: string; description?: unknown };
+  type Row = {
+    code: string;
+    description?: unknown;
+    sequence?: number;
+    kind?: string;
+    symbolKey?: string;
+    lengthM?: number;
+  };
   const rows: Row[] = [];
   const single = activeCourses?.length === 1 ? activeCourses[0] : null;
   const withSequence = single !== null;
   let title = "";
+  let headerRows = 1;
+  let sheetHeader: {
+    eventName: string;
+    classNames: string;
+    courseName: string;
+    lengthKm: string;
+    climbM: string;
+  } | null = null;
+
   if (single) {
     title = single.name;
+    // Prefer the full IOF sheet (start + specials + finish + 3-row header)
+    // when we have course metadata; otherwise fall back to control rows only.
+    const controlRows: Array<{
+      id: number;
+      code: string;
+      description?: unknown;
+    }> = [];
     for (const cid of single.controls) {
+      const overlay = controlOverlays?.find((o) => o.id === cid);
+      if (overlay && overlay.type !== "Control") continue;
       const row = toRow(cid);
-      if (row) rows.push(row);
+      if (!row) continue;
+      const idNum = Number.parseInt(String(overlay?.code ?? cid), 10);
+      controlRows.push({
+        id: Number.isFinite(idNum) ? idNum : controlRows.length + 1,
+        code: row.code,
+        description: row.description,
+      });
+    }
+    const startOverlay = controlOverlays?.find(
+      (o) => o.type === "Start" && single.controls.includes(o.id),
+    );
+    // Last control → finish in terrain metres, from the overlay positions
+    // (map mm) and the map scale. Only when the course actually ends at a
+    // finish control.
+    let finishLengthM: number | null = null;
+    const finishOverlay = controlOverlays?.find(
+      (o) => o.type === "Finish" && single.controls.includes(o.id),
+    );
+    if (finishOverlay && sheetContext.mapScale) {
+      const lastId = [...single.controls]
+        .reverse()
+        .find((cid) => controlOverlays?.find((o) => o.id === cid)?.type === "Control");
+      const last = lastId ? controlOverlays?.find((o) => o.id === lastId) : undefined;
+      if (last) {
+        const mm = Math.hypot(finishOverlay.x - last.x, finishOverlay.y - last.y);
+        finishLengthM = (mm * sheetContext.mapScale) / 1000;
+      }
+    }
+    const sheet = buildDescriptionSheet({
+      // Course name stands in when the caller has no event name yet.
+      eventName: sheetContext.eventName || single.name,
+      classNames: single.classNames ?? [],
+      courseName: single.name,
+      lengthM: single.lengthM ?? 0,
+      climbM: single.climbM ?? 0,
+      startDescription: startOverlay?.description ?? null,
+      controls: controlRows.map((c) => ({
+        id: c.id,
+        code: c.code,
+        description: c.description as never,
+      })),
+      instructions: single.descriptionInstructions ?? null,
+      finishLengthM,
+    });
+    sheetHeader = sheet.header;
+    headerRows = 3;
+    for (const r of sheet.rows as DescriptionSheetRow[]) {
+      rows.push({
+        code: r.code,
+        description: r.description,
+        sequence: r.sequence,
+        kind: r.kind,
+        symbolKey: r.symbolKey,
+        lengthM: r.lengthM,
+      });
     }
   } else if (activeCourses && activeCourses.length > 1) {
     title = activeCourses.map((c) => c.name).join(" · ");
@@ -2812,10 +2942,9 @@ function renderDescriptionSheet(
 
   if (rows.length === 0) return null;
 
-  // IOF standard: 8 columns (A=seq, B=code, C-G=description symbols, H=dimensions)
+  // IOF standard: 8 columns (A=seq, B=code, C–H=description symbols)
   const cellSize = Math.max(20, Math.min(36, 7 * symbolScale));
   const cols = 8;
-  const headerRows = 1; // course name header
   const sheetW = cols * cellSize;
   const sheetY = 12;
 
@@ -2846,39 +2975,108 @@ function renderDescriptionSheet(
       <rect key={`desc-shadow-${bi}`} x={sheetX + 2} y={sheetY + 2} width={sheetW} height={sheetH}
         fill="rgba(0,0,0,0.1)" rx={2} />
     );
+    // IOF sheet rules: thick outer border and header cells, thick rule
+    // under the start row and above the finish row (the control rows sit
+    // boxed in between), thick verticals after columns C and F
+    // (A B C | D E F | G H). Everything else thin. No shaded header —
+    // bold text and the rules do the separating.
+    const THIN = 0.5;
+    const THICK = 1.5;
+    const RULE = "#64748b";
     elements.push(
       <rect key={`desc-bg-${bi}`} x={sheetX} y={sheetY} width={sheetW} height={sheetH}
-        fill="white" stroke="#94a3b8" strokeWidth={1} rx={2} />
+        fill="white" stroke={RULE} strokeWidth={THICK} rx={2} />
     );
 
-    // Header row: course name(s). Long multi-course titles shrink to fit.
-    elements.push(
-      <rect key={`desc-header-${bi}`} x={sheetX} y={sheetY} width={sheetW} height={cellSize}
-        fill="#e2e8f0" stroke="#94a3b8" strokeWidth={0.5} rx={2} />
-    );
-    if (title && bi === 0) {
+    if (sheetHeader) {
+      const h = sheetHeader;
+      if (bi === 0) {
+        const fs1 = Math.min(cellSize * 0.42, (sheetW - 8) / Math.max(1, h.eventName.length * 0.6));
+        const fs2 = Math.min(cellSize * 0.38, (sheetW - 8) / Math.max(1, h.classNames.length * 0.6));
+        elements.push(
+          <text key="desc-title" x={sheetX + sheetW / 2} y={sheetY + cellSize * 0.5}
+            textAnchor="middle" dominantBaseline="central"
+            fontSize={fs1} fill="#0f172a" fontWeight="bold" data-testid="desc-title">
+            {h.eventName}
+          </text>,
+          <text key="desc-classes" x={sheetX + sheetW / 2} y={sheetY + cellSize * 1.5}
+            textAnchor="middle" dominantBaseline="central"
+            fontSize={fs2} fill="#0f172a" fontWeight="bold" data-testid="desc-classes">
+            {h.classNames}
+          </text>,
+          <line key="desc-h3a" x1={sheetX + cellSize * 3} y1={sheetY + cellSize * 2}
+            x2={sheetX + cellSize * 3} y2={sheetY + cellSize * 3} stroke={RULE} strokeWidth={THICK} />,
+          <line key="desc-h3b" x1={sheetX + cellSize * 6} y1={sheetY + cellSize * 2}
+            x2={sheetX + cellSize * 6} y2={sheetY + cellSize * 3} stroke={RULE} strokeWidth={THICK} />,
+          <text key="desc-course" x={sheetX + cellSize * 1.5} y={sheetY + cellSize * 2.5}
+            textAnchor="middle" dominantBaseline="central"
+            fontSize={cellSize * 0.38} fill="#0f172a" fontWeight="bold" data-testid="desc-course-name">
+            {h.courseName}
+          </text>,
+          <text key="desc-length" x={sheetX + cellSize * 4.5} y={sheetY + cellSize * 2.5}
+            textAnchor="middle" dominantBaseline="central"
+            fontSize={cellSize * 0.38} fill="#0f172a" fontWeight="bold" data-testid="desc-length">
+            {h.lengthKm}
+          </text>,
+          <text key="desc-climb" x={sheetX + cellSize * 7} y={sheetY + cellSize * 2.5}
+            textAnchor="middle" dominantBaseline="central"
+            fontSize={cellSize * 0.38} fill="#0f172a" fontWeight="bold" data-testid="desc-climb">
+            {h.climbM}
+          </text>,
+        );
+      }
+    } else if (title && bi === 0) {
       const titleFs = Math.min(cellSize * 0.5, (sheetW - 8) / (title.length * 0.62));
       elements.push(
         <text key="desc-title" x={sheetX + sheetW / 2} y={sheetY + cellSize * 0.5}
           textAnchor="middle" dominantBaseline="central"
-          fontSize={titleFs} fill="#1e293b" fontWeight="bold" data-testid="desc-title">
+          fontSize={titleFs} fill="#0f172a" fontWeight="bold" data-testid="desc-title">
           {title}
-        </text>
+        </text>,
       );
     }
 
-    // Grid lines
-    for (let r = 0; r <= totalRows; r++) {
+    // Alternate row shading, under the grid so the rules stay crisp.
+    for (let i = 0; i < blockRows.length; i++) {
+      const n = bi * rowsPerBlock + i;
+      if (n % 2 !== 1) continue;
+      const top = sheetY + (headerRows + i) * cellSize;
       elements.push(
-        <line key={`desc-hr-${bi}-${r}`} x1={sheetX} y1={sheetY + r * cellSize}
-          x2={sheetX + sheetW} y2={sheetY + r * cellSize} stroke="#cbd5e1" strokeWidth={0.5} />
+        <rect key={`desc-row-bg-${n}`} x={sheetX + 0.5} y={top + 0.5}
+          width={sheetW - 1} height={cellSize - 1} fill="#f8fafc" />,
       );
     }
-    for (let c = 0; c <= cols; c++) {
+
+    // Horizontal rules: every header rule thick; below the rows thick only
+    // under start and above finish (evaluated against the whole sheet so a
+    // block split right before the finish row still gets its rule).
+    const allRows = rows as unknown as DescriptionSheetRow[];
+    for (let r = 0; r <= totalRows; r++) {
+      const rowIdx = bi * rowsPerBlock + (r - headerRows - 1); // row whose bottom edge this is
+      const thick =
+        r <= headerRows ||
+        (r > headerRows && r < totalRows && hasThickRuleBelow(allRows, rowIdx));
       elements.push(
-        <line key={`desc-vr-${bi}-${c}`} x1={sheetX + c * cellSize} y1={sheetY + cellSize}
-          x2={sheetX + c * cellSize} y2={sheetY + sheetH} stroke="#cbd5e1" strokeWidth={0.5} />
+        <line key={`desc-hr-${bi}-${r}`} x1={sheetX} y1={sheetY + r * cellSize}
+          x2={sheetX + sheetW} y2={sheetY + r * cellSize}
+          stroke={thick ? RULE : "#cbd5e1"} strokeWidth={thick ? THICK : THIN}
+          data-testid={thick && r > headerRows && r < totalRows ? "desc-thick-rule" : undefined} />
       );
+    }
+    // Column dividers per row — thick after C and F, none on full-width
+    // special / finish rows.
+    for (let i = 0; i < blockRows.length; i++) {
+      const kind = blockRows[i].kind;
+      if (kind === "special" || kind === "finish") continue;
+      const top = sheetY + (headerRows + i) * cellSize;
+      for (let c = 1; c < cols; c++) {
+        const thick = DESCRIPTION_THICK_COLUMNS.includes(c);
+        elements.push(
+          <line key={`desc-vr-${bi}-${i}-${c}`} x1={sheetX + c * cellSize} y1={top}
+            x2={sheetX + c * cellSize} y2={top + cellSize}
+            stroke={thick ? RULE : "#cbd5e1"} strokeWidth={thick ? THICK : THIN} />
+        );
+      }
     }
 
     renderDescriptionRows(elements, blockRows, bi * rowsPerBlock, withSequence, {
@@ -2900,10 +3098,17 @@ function renderDescriptionSheet(
   return <g key="desc-sheet">{elements}</g>;
 }
 
-/** One block of description rows (code + IOF symbol cells). */
+/** One block of description rows (code + IOF symbol cells C–H). */
 function renderDescriptionRows(
   elements: React.ReactNode[],
-  rows: Array<{ code: string; description?: unknown }>,
+  rows: Array<{
+    code: string;
+    description?: unknown;
+    sequence?: number;
+    kind?: string;
+    symbolKey?: string;
+    lengthM?: number;
+  }>,
   /** Index of the first row within the whole sheet (column A numbering). */
   rowOffset: number,
   withSequence: boolean,
@@ -2911,68 +3116,121 @@ function renderDescriptionRows(
 ): void {
   const { sheetX, sheetY, sheetW, cellSize, headerRows } = geom;
 
-  // Control rows
   for (let i = 0; i < rows.length; i++) {
     const row = rows[i];
     const code = row.code;
-    const desc = row.description;
+    const desc = row.description as
+      | { c?: string; d?: string; e?: string; g?: string; s?: string; f?: string; h?: string }
+      | undefined;
     const n = rowOffset + i;
     const ry = sheetY + (i + headerRows) * cellSize;
     const fs = cellSize * 0.45;
 
-    // Alternate row shading for readability — drawn first so the row
-    // content lands on top of it.
-    if (n % 2 === 1) {
-      elements.push(
-        <rect key={`desc-row-bg-${n}`} x={sheetX + 0.5} y={ry + 0.5}
-          width={sheetW - 1} height={cellSize - 1} fill="#f8fafc" />
-      );
+    // Special / finish rows: full-width symbol spanning columns A–H.
+    if (row.kind === "special" || row.kind === "finish" || row.kind === "start") {
+      const key = row.symbolKey ?? (row.kind === "start" ? "start" : undefined);
+      if (key && IOF_SYMBOLS[key]) {
+        // Start: triangle in column A, optional C–H description.
+        if (row.kind === "start") {
+          elements.push(
+            <svg key={`desc-start-${n}`} x={sheetX + 1} y={ry + 1}
+              width={cellSize - 2} height={cellSize - 2}
+              viewBox="-100 -100 200 200"
+              dangerouslySetInnerHTML={{ __html: IOF_SYMBOLS.start }} />,
+          );
+          if (desc) {
+            const cells = descriptionCells(desc, "#c026d3");
+            const order = ["C", "D", "E", "F", "G", "H"] as const;
+            order.forEach((col, ci) => {
+              const cell = cells[col];
+              if (!cell) return;
+              const sx = sheetX + (ci + 2) * cellSize;
+              if (cell.kind === "text") {
+                elements.push(
+                  <text key={`desc-sym-${n}-${ci}`} x={sx + cellSize * 0.5} y={ry + cellSize * 0.5}
+                    textAnchor="middle" dominantBaseline="central" fontSize={fs * 0.85} fill="#475569">
+                    {cell.text}
+                  </text>,
+                );
+              } else {
+                elements.push(
+                  <svg key={`desc-sym-${n}-${ci}`} x={sx + 1} y={ry + 1}
+                    width={cellSize - 2} height={cellSize - 2}
+                    viewBox="-100 -100 200 200"
+                    dangerouslySetInnerHTML={{ __html: cell.svg }} />,
+                );
+              }
+            });
+          }
+          continue;
+        }
+        // Special / finish: symbol drawn across the full width with optional length.
+        elements.push(
+          <svg key={`desc-wide-${n}`} x={sheetX + 2} y={ry + 2}
+            width={sheetW - 4} height={cellSize - 4}
+            viewBox="-800 -100 1600 200"
+            preserveAspectRatio="xMidYMid meet"
+            dangerouslySetInnerHTML={{ __html: IOF_SYMBOLS[key] }} />,
+        );
+        if (row.lengthM != null && row.lengthM > 0) {
+          elements.push(
+            <text key={`desc-len-${n}`} x={sheetX + sheetW / 2} y={ry + cellSize * 0.55}
+              textAnchor="middle" dominantBaseline="central"
+              fontSize={fs * 0.9} fill="#1e293b" fontWeight="bold"
+              data-testid="desc-row-length">
+              {`${Math.round(row.lengthM)} m`}
+            </text>,
+          );
+        }
+        continue;
+      }
     }
 
-    // Column A: sequence number — only meaningful for a single course.
-    // The multi-course union card is code-keyed, so A stays empty.
-    if (withSequence) {
+    if (withSequence && row.sequence != null) {
+      elements.push(
+        <text key={`desc-seq-${n}`} x={sheetX + cellSize * 0.5} y={ry + cellSize * 0.5}
+          textAnchor="middle" dominantBaseline="central" fontSize={fs} fill="#475569">
+          {row.sequence}
+        </text>,
+      );
+    } else if (withSequence && !row.kind) {
       elements.push(
         <text key={`desc-seq-${n}`} x={sheetX + cellSize * 0.5} y={ry + cellSize * 0.5}
           textAnchor="middle" dominantBaseline="central" fontSize={fs} fill="#475569">
           {n + 1}
-        </text>
+        </text>,
       );
     }
-    // Column B: control code
     elements.push(
       <text key={`desc-code-${n}`} x={sheetX + cellSize * 1.5} y={ry + cellSize * 0.5}
         textAnchor="middle" dominantBaseline="central" fontSize={fs} fill="#1e293b" fontWeight="bold"
         data-testid="desc-row-code" data-code={code}>
         {code}
-      </text>
+      </text>,
     );
 
-    // Columns C-G: IOF description symbols (empty if no description)
-    const symbols = desc ? getDescriptionSymbols(desc, "#c026d3") : ({} as ReturnType<typeof getDescriptionSymbols>);
-    const colKeys = ["colC", "colD", "colE", "colF", "colG"] as const;
-    for (let ci = 0; ci < colKeys.length; ci++) {
-      const content = symbols[colKeys[ci]];
-      if (content) {
-        const sx = sheetX + (ci + 2) * cellSize;
-        if (colKeys[ci] === "colE") {
-          // colE is dimensions text (e.g. "3m"), render as SVG text
-          elements.push(
-            <text key={`desc-sym-${n}-${ci}`} x={sx + cellSize * 0.5} y={ry + cellSize * 0.5}
-              textAnchor="middle" dominantBaseline="central" fontSize={fs * 0.85} fill="#475569">
-              {content}
-            </text>
-          );
-        } else {
-          // IOF symbol SVG — render as nested <svg> (foreignObject + HTML can't render raw SVG paths)
-          elements.push(
-            <svg key={`desc-sym-${n}-${ci}`} x={sx + 1} y={ry + 1}
-              width={cellSize - 2} height={cellSize - 2}
-              viewBox="-100 -100 200 200"
-              dangerouslySetInnerHTML={{ __html: content }} />
-          );
-        }
+    if (!desc) continue;
+    const cells = descriptionCells(desc, "#c026d3");
+    const order = ["C", "D", "E", "F", "G", "H"] as const;
+    order.forEach((col, ci) => {
+      const cell = cells[col];
+      if (!cell) return;
+      const sx = sheetX + (ci + 2) * cellSize;
+      if (cell.kind === "text") {
+        elements.push(
+          <text key={`desc-sym-${n}-${ci}`} x={sx + cellSize * 0.5} y={ry + cellSize * 0.5}
+            textAnchor="middle" dominantBaseline="central" fontSize={fs * 0.85} fill="#475569">
+            {cell.text}
+          </text>,
+        );
+      } else {
+        elements.push(
+          <svg key={`desc-sym-${n}-${ci}`} x={sx + 1} y={ry + 1}
+            width={cellSize - 2} height={cellSize - 2}
+            viewBox="-100 -100 200 200"
+            dangerouslySetInnerHTML={{ __html: cell.svg }} />,
+        );
       }
-    }
+    });
   }
 }

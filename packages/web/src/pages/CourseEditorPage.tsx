@@ -324,7 +324,13 @@ export function CourseEditorPage() {
         setShowExhausted(true);
       }
       const created = await run(() =>
-        client.control.create.mutate({ codes: String(code), status: 0, xpos: pt.x, ypos: pt.y }),
+        client.control.create.mutate({
+          codes: String(code),
+          status: 0,
+          xpos: pt.x,
+          ypos: pt.y,
+          autoDescribe: true,
+        }),
       );
       if (!created) return;
       if (entry?.type === "srr") {
@@ -432,12 +438,27 @@ export function CourseEditorPage() {
       // suggestion query keys off the new position once it refetches).
       setLastMovedId(id);
       void (async () => {
-        const redo = () => client.control.update.mutate({ id, xpos: pt.x, ypos: pt.y });
+        const redo = () =>
+          client.control.update.mutate({
+            id,
+            xpos: pt.x,
+            ypos: pt.y,
+            // The server replaces an *untouched* auto description with the
+            // new spot's suggestion; a hand-edited one stays and the menu
+            // offers the new top suggestion if it differs.
+            autoDescribe: true,
+          });
         const done = await run(redo);
         if (done === undefined || !prev) return;
         undoStack.push({
           redo,
-          undo: () => client.control.update.mutate({ id, xpos: prev.mapX, ypos: prev.mapY }),
+          undo: () =>
+            client.control.update.mutate({
+              id,
+              xpos: prev.mapX,
+              ypos: prev.mapY,
+              description: prev.description ?? null,
+            }),
         });
         bumpHistory();
       })();
@@ -541,10 +562,10 @@ export function CourseEditorPage() {
   const closeDescription = useCallback(() => setDescControlId(null), []);
 
   // ─── Description autodetect ──────────────────────────────
-  // What does the base map say the selected control sits on? Asked for a
-  // placed control with no description yet (the freshly placed one, which
-  // the reducer auto-selects) — and for the just-moved control, even if
-  // it already has one (see `lastMovedId`).
+  // After a move of a hand-described control, offer the single top
+  // suggestion if it differs from the current description. Fresh places
+  // get autoDescribe on create and moves of untouched auto descriptions
+  // are re-described server-side, so the menu rarely has anything to say.
 
   useEffect(() => {
     if (lastMovedId != null && state.selectedControlId !== lastMovedId) {
@@ -554,7 +575,8 @@ export function CourseEditorPage() {
 
   const suggestFor =
     selectedControl &&
-    (!selectedControl.description || selectedControl.id === lastMovedId) &&
+    selectedControl.id === lastMovedId &&
+    !!selectedControl.description &&
     (selectedControl.mapX !== 0 || selectedControl.mapY !== 0) &&
     !state.phantom &&
     descControlId === null
@@ -570,7 +592,6 @@ export function CourseEditorPage() {
   const applyDescription = useCallback(
     (id: number, next: ControlDescription) => {
       const prev = coordsById.get(id)?.description ?? null;
-      // Applying settles the description question a move re-opened.
       setLastMovedId((v) => (v === id ? null : v));
       void (async () => {
         const redo = () => client.control.update.mutate({ id, description: next });
@@ -587,30 +608,64 @@ export function CourseEditorPage() {
   );
 
   /**
-   * Suggestion rows for the context menu. The viewer takes labels and
-   * SVG fragments ready-made, so symbol lookup and localization stay
-   * here (same contract as `moveWarnings`).
+   * Single top suggestion for the context menu (only after a move, and
+   * only when it differs from the control's current description).
    */
   const suggestions = useMemo<EditorDescriptionSuggestion[]>(() => {
     const id = suggestFor?.id;
+    const current = suggestFor?.description;
     if (id == null) return [];
-    const rows: EditorDescriptionSuggestion[] = [];
-    for (const c of suggestQuery.data?.candidates ?? []) {
-      const iofD = ocadToIof("d", c.d);
-      if (!iofD) continue;
-      const iofG = c.g ? ocadToIof("g", c.g) : null;
-      const name = iofSymbolName(iofD, i18n.language);
-      rows.push({
-        id: String(c.isom),
-        label: iofG ? `${name} · ${iofSymbolName(iofG, i18n.language)}` : name,
+    const top = suggestQuery.data?.candidates?.[0];
+    if (!top) return [];
+    const next: ControlDescription = {
+      d: top.d,
+      ...(top.c ? { c: top.c } : {}),
+      ...(top.e ? { e: top.e } : {}),
+      ...(top.f ? { f: top.f } : {}),
+      ...(top.g ? { g: top.g } : {}),
+    };
+    // Same D (+ optional G/C/F/E) → nothing useful to offer.
+    if (
+      current &&
+      current.d === next.d &&
+      current.g === next.g &&
+      current.c === next.c &&
+      current.f === next.f &&
+      current.e === next.e
+    ) {
+      return [];
+    }
+    const iofD = ocadToIof("d", top.d);
+    if (!iofD) return [];
+    const parts: string[] = [];
+    if (top.c) {
+      const iofC = ocadToIof("c", top.c);
+      if (iofC) parts.push(iofSymbolName(iofC, i18n.language));
+    }
+    parts.push(iofSymbolName(iofD, i18n.language));
+    if (top.e) {
+      const iofE = ocadToIof("e", top.e);
+      if (iofE) parts.push(iofSymbolName(iofE, i18n.language));
+    }
+    if (top.f) {
+      const iofF = ocadToIof("f", top.f);
+      if (iofF) parts.push(iofSymbolName(iofF, i18n.language));
+    }
+    if (top.g) {
+      const iofG = ocadToIof("g", top.g);
+      if (iofG) parts.push(iofSymbolName(iofG, i18n.language));
+    }
+    const iofG = top.g ? ocadToIof("g", top.g) : null;
+    return [
+      {
+        id: String(top.isom),
+        label: t("editor.suggestedSingle", { label: parts.join(" · ") }),
         symbolSvg: IOF_SYMBOLS[iofD] ?? null,
         sideSvg: iofG ? IOF_SYMBOLS[iofG] ?? null : null,
-        onApply: () =>
-          applyDescription(id, { d: c.d, ...(c.g ? { g: c.g } : {}) }),
-      });
-    }
-    return rows;
-  }, [suggestFor?.id, suggestQuery.data, i18n.language, applyDescription]);
+        onApply: () => applyDescription(id, next),
+      },
+    ];
+  }, [suggestFor, suggestQuery.data, i18n.language, applyDescription, t]);
 
   /** Append an existing control to the selected course, undoably. */
   const appendControlToCourse = useCallback(
@@ -713,6 +768,9 @@ export function CourseEditorPage() {
 
   const contextActions = useMemo<EditorContextAction[]>(() => {
     const actions: EditorContextAction[] = [];
+    // createControl needs the code universe to pick the next free code
+    // and bails out silently without it — show that as disabled instead.
+    const codesReady = !!controlList.data;
     if (state.phantom) {
       const pt = { x: state.phantom.x, y: state.phantom.y };
       if (state.phantom.insertAt !== null && selectedCourse) {
@@ -721,6 +779,7 @@ export function CourseEditorPage() {
           id: "insert",
           label: t("editor.actionInsert"),
           onClick: () => void createControl(pt, at),
+          disabled: !codesReady,
         });
       } else {
         if (selectedCourse) {
@@ -728,12 +787,14 @@ export function CourseEditorPage() {
             id: "add-to-course",
             label: t("editor.actionAddToCourse", { name: selectedCourse.name }),
             onClick: () => void createControl(pt, sequenceIds.length),
+            disabled: !codesReady,
           });
         }
         actions.push({
           id: "add",
           label: t("editor.actionAdd"),
           onClick: () => void createControl(pt, null),
+          disabled: !codesReady,
         });
         actions.push({
           id: "add-start",
@@ -821,14 +882,17 @@ export function CourseEditorPage() {
         label: t("editor.deleteControl"),
         variant: "danger",
         onClick: handleDelete,
+        // handleDelete refuses while a save is in flight; show that
+        // instead of swallowing the click.
+        disabled: pendingOps > 0,
       });
     }
     return actions;
   }, [state.phantom, state.selectedControlId, selectedCourse, sequenceIds,
-    coordsById, controlCoords.data, createControl, createRoleControl,
+    coordsById, controlCoords.data, controlList.data, createControl, createRoleControl,
     assignRoleControl, appendControlToCourse, removeControlFromCourse,
     radioSwapOffer, confirmRadioSwap, declineRadioSwap, controlRowsById,
-    handleRadioToggle, handleDelete, openDescription, t]);
+    handleRadioToggle, handleDelete, openDescription, pendingOps, t]);
 
   /** Ids (as overlay strings) of the edited course's controls — these
    *  stay at full strength while everything else fades. */
@@ -1396,6 +1460,52 @@ export function CourseEditorPage() {
                   <span>{t("controlCount", { count: sequenceIds.length })}</span>
                   <span className="font-semibold">{totalMeters} m</span>
                 </div>
+                <div
+                  className="shrink-0 px-2 py-1.5 border-t border-slate-100 flex flex-col gap-1"
+                  data-testid="editor-finish-instructions"
+                >
+                  <label className="text-[11px] text-slate-500 flex items-center gap-2">
+                    <span>{t("editor.finishVariant")}</span>
+                    <select
+                      data-testid="editor-finish-kind"
+                      className="flex-1 text-xs border border-slate-200 rounded px-1 py-0.5"
+                      value={selectedCourse.descriptionInstructions?.finish?.kind ?? "14.3"}
+                      onChange={(e) => {
+                        const kind = e.target.value;
+                        const prev = selectedCourse.descriptionInstructions;
+                        const next = {
+                          ...(prev ?? {}),
+                          finish: {
+                            kind,
+                            lengthM: prev?.finish?.lengthM,
+                          },
+                        };
+                        void (async () => {
+                          const redo = () =>
+                            client.course.update.mutate({
+                              id: selectedCourse.id,
+                              descriptionInstructions: next,
+                            });
+                          const done = await run(redo);
+                          if (done === undefined) return;
+                          undoStack.push({
+                            redo,
+                            undo: () =>
+                              client.course.update.mutate({
+                                id: selectedCourse.id,
+                                descriptionInstructions: prev ?? null,
+                              }),
+                          });
+                          bumpHistory();
+                        })();
+                      }}
+                    >
+                      <option value="14.1">14.1 taped</option>
+                      <option value="14.2">14.2 funnel</option>
+                      <option value="14.3">14.3 no tapes</option>
+                    </select>
+                  </label>
+                </div>
                 <div className="shrink-0 px-2 py-1.5 border-t border-slate-100 flex gap-1.5 items-center">
                   {showClone ? (
                     <>
@@ -1443,7 +1553,7 @@ export function CourseEditorPage() {
       newCourseName, newCourseSuggestions, handleCreateCourse, displaySeq, legMeters, totalMeters,
       sequenceIds.length, moveInSequence, removeFromSequence, openClone,
       showClone, cloneName, handleCloneCourse,
-      controlRowsById, seriesAllocation.data],
+      controlRowsById, seriesAllocation.data, client, run, undoStack, bumpHistory],
   );
 
   // ─── In-map inventory panel ──────────────────────────────

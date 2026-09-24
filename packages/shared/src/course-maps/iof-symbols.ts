@@ -296,35 +296,136 @@ export function ocadFtoIof(code: string): string | null {
 }
 
 /**
- * Get the IOF symbol SVG inner content for a given OCAD description,
- * organized by IOF column (C, D, E, F, G).
- * Returns an object with symbol SVG strings (already colored) for each column,
- * or null for columns with no matching symbol.
+ * Column E: appearance (8.x) **or** a second feature (column-D family).
+ * Both use the same "grp.sub" → "grp.subInt" encoding.
+ */
+export function ocadEtoIof(code: string): string | null {
+  return ocadDtoIof(code);
+}
+
+/** Column H: other information (12.x). */
+export function ocadHtoIof(code: string): string | null {
+  return ocadDtoIof(code);
+}
+
+/**
+ * Unified OCAD→IOF key lookup for any description column. Prefer this
+ * over the per-column helpers when the column is dynamic.
+ */
+export function ocadDescriptionCodeToIof(
+  column: "c" | "d" | "e" | "f" | "g" | "h",
+  code: string,
+): string | null {
+  switch (column) {
+    case "c": return ocadCtoIof(code);
+    case "d": return ocadDtoIof(code);
+    case "e": return ocadEtoIof(code);
+    case "f": return ocadFtoIof(code);
+    case "g": return ocadGtoIof(code);
+    case "h": return ocadHtoIof(code);
+  }
+}
+
+export type DescriptionCell =
+  | { kind: "svg"; key: string; svg: string }
+  | { kind: "text"; text: string };
+
+export type DescriptionCells = {
+  C: DescriptionCell | null;
+  D: DescriptionCell | null;
+  E: DescriptionCell | null;
+  F: DescriptionCell | null;
+  G: DescriptionCell | null;
+  H: DescriptionCell | null;
+};
+
+function colorizeSvg(svg: string, color: string): string {
+  return svg
+    .replace(/stroke="black"/g, `stroke="${color}"`)
+    .replace(/fill="black"/g, `fill="${color}"`);
+}
+
+function svgCell(key: string | null, color: string): DescriptionCell | null {
+  if (!key || !(key in IOF_SYMBOLS)) return null;
+  return { kind: "svg", key, svg: colorizeSvg(IOF_SYMBOLS[key], color) };
+}
+
+/**
+ * Resolve an OCAD description into the six IOF sheet cells C–H.
+ *
+ * Layout (IOF 2018/2024):
+ *   C which-of-similar · D feature · E appearance / 2nd feature ·
+ *   F dimensions OR combination · G flag location · H other info.
+ *
+ * Dimensions (`s`) draw in F as plain text (no unit suffix) when no
+ * combination symbol (`f`) is set — matching the printed sheet. The
+ * legacy helper `getDescriptionSymbols` used to put size in E with an
+ * "m" suffix; callers should migrate to this.
+ */
+export function descriptionCells(
+  desc: {
+    c?: string;
+    d?: string;
+    e?: string;
+    g?: string;
+    s?: string;
+    f?: string;
+    h?: string;
+  },
+  color = "#c026d3",
+): DescriptionCells {
+  const fKey = desc.f ? ocadFtoIof(desc.f) : null;
+  let F: DescriptionCell | null = svgCell(fKey, color);
+  if (!F && desc.s) {
+    F = { kind: "text", text: desc.s.replace(",", ".") };
+  }
+
+  return {
+    C: svgCell(desc.c ? ocadCtoIof(desc.c) : null, color),
+    D: svgCell(desc.d ? ocadDtoIof(desc.d) : null, color),
+    E: svgCell(desc.e ? ocadEtoIof(desc.e) : null, color),
+    F,
+    G: svgCell(desc.g ? ocadGtoIof(desc.g) : null, color),
+    H: svgCell(desc.h ? ocadHtoIof(desc.h) : null, color),
+  };
+}
+
+/**
+ * @deprecated Prefer `descriptionCells`. Kept for a few call sites that
+ * still expect the old colE-as-dimensions shape; maps F's text/svg into
+ * colF and leaves colE empty unless `e` is set.
  */
 export function getDescriptionSymbols(
-  desc: { c?: string; d?: string; g?: string; s?: string; f?: string },
+  desc: {
+    c?: string;
+    d?: string;
+    e?: string;
+    g?: string;
+    s?: string;
+    f?: string;
+    h?: string;
+  },
   color = "#c026d3",
 ): {
   colC: string | null;
   colD: string | null;
-  colE: string | null; // dimensions text, not a symbol
+  colE: string | null;
   colF: string | null;
   colG: string | null;
+  colH: string | null;
 } {
-  const colorize = (svg: string) =>
-    svg.replace(/stroke="black"/g, `stroke="${color}"`)
-       .replace(/fill="black"/g, `fill="${color}"`);
-
-  const dKey = desc.d ? ocadDtoIof(desc.d) : null;
-  const cKey = desc.c ? ocadCtoIof(desc.c) : null;
-  const gKey = desc.g ? ocadGtoIof(desc.g) : null;
-  const fKey = desc.f ? ocadFtoIof(desc.f) : null;
-
+  const cells = descriptionCells(desc, color);
+  const svgOrText = (cell: DescriptionCell | null): string | null => {
+    if (!cell) return null;
+    return cell.kind === "svg" ? cell.svg : cell.text;
+  };
   return {
-    colC: cKey ? colorize(IOF_SYMBOLS[cKey]) : null,
-    colD: dKey ? colorize(IOF_SYMBOLS[dKey]) : null,
-    colE: desc.s ? desc.s.replace(",", ".") + "m" : null,
-    colF: fKey ? colorize(IOF_SYMBOLS[fKey]) : null,
-    colG: gKey ? colorize(IOF_SYMBOLS[gKey]) : null,
+    colC: svgOrText(cells.C),
+    colD: svgOrText(cells.D),
+    colE: svgOrText(cells.E),
+    colF: svgOrText(cells.F),
+    colG: svgOrText(cells.G),
+    colH: svgOrText(cells.H),
   };
 }
+

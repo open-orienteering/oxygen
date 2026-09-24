@@ -38,6 +38,11 @@ interface Props {
   half?: "top" | "bottom";
   /** Stacking order relative to sibling overlays. */
   zIndex?: number;
+  /**
+   * Render from the shared blob cache without fetching or cancelling.
+   * Used by the placement loupe so it never fights the main map's queue.
+   */
+  passive?: boolean;
   /** Optional test id on the outer container. */
   "data-testid"?: string;
 }
@@ -295,6 +300,7 @@ export function TileLayer({
   tileVersion,
   half = "top",
   zIndex,
+  passive = false,
   "data-testid": testId,
 }: Props) {
   const cache = useTileBlobCache();
@@ -368,8 +374,9 @@ export function TileLayer({
 
   // Fetch desired tiles; abort ones that left the viewport.
   // Only the top half drives fetching so the ink layer does not double
-  // the queue when both share a cache.
+  // the queue when both share a cache. Passive layers skip entirely.
   useEffect(() => {
+    if (passive) return;
     if (half !== "top" && cache) {
       // Ink layer: still need to fetch if used alone, but when shared the
       // top half owns the queue. Mirror desired keys so blobs stay warm.
@@ -430,7 +437,7 @@ export function TileLayer({
     return () => {
       if (timer) clearTimeout(timer);
     };
-  }, [tiles, backdropTiles, cache, half]);
+  }, [tiles, backdropTiles, cache, half, passive]);
 
   const allCurrentLoaded =
     tiles.length > 0 && tiles.every((t) => cache.blobUrls.has(t.key));

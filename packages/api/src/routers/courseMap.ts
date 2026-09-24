@@ -9,6 +9,7 @@ import {
   type CourseMapOverrides,
   type CourseOverlayLeg,
   type DescriptionRow,
+  type DescriptionSheetHeader,
   type MapPoint,
   type MapWindow,
 } from "@oxygen/shared";
@@ -61,6 +62,8 @@ export interface CourseMapListItem {
   >;
   legs: CourseOverlayLeg[];
   descriptionRows: DescriptionRow[];
+  /** IOF 3-row header for course maps; null → single title row. */
+  descriptionHeader: DescriptionSheetHeader | null;
   resolved: { document: CourseMapDocument; window: MapWindow } | null;
   validation: {
     valid: boolean;
@@ -100,7 +103,7 @@ function notFound(): never {
 
 export const courseMapRouter = router({
   list: coursesViewProcedure.query(async ({ ctx }): Promise<CourseMapListItem[]> => {
-    const [rows, mapInfo] = await Promise.all([
+    const [rows, mapInfo, eventRow] = await Promise.all([
       ctx.db.courseMap.findMany({
         where: { eventId: ctx.event.id },
         include: {
@@ -122,6 +125,10 @@ export const courseMapRouter = router({
         ],
       }),
       getBaseMapInfoOrNull(ctx.db, ctx.event.id),
+      ctx.db.event.findUnique({
+        where: { id: ctx.event.id },
+        select: { name: true, date: true },
+      }),
     ]);
 
     const controlsForAll = await ctx.db.control.findMany({
@@ -170,9 +177,11 @@ export const courseMapRouter = router({
               controls: row.course.courseControls.map(
                 ({ control }) => control,
               ),
+              descriptionInstructions: row.course.descriptionInstructions,
             }
           : null,
         allControls: controlsForAll,
+        ...(eventRow ? { event: eventRow } : {}),
         windowCenter: row.windowCenter,
         mapScale: mapInfo?.scale ?? null,
         meridianTiltDeg: mapInfo?.meridianTiltDeg ?? null,
@@ -188,6 +197,7 @@ export const courseMapRouter = router({
         controls: layout.controls,
         legs: layout.legs,
         descriptionRows: layout.descriptionRows,
+        descriptionHeader: layout.descriptionHeader,
         validation: { valid: true, issues: [] },
       };
     });
@@ -201,15 +211,16 @@ export const courseMapRouter = router({
               window: row.resolved.window,
               windows: windowsByCourse.get(row.courseId ?? "all_controls"),
               variants: [{ key: "", controls: row.controls }],
-              descriptionRowCount: row.controls.filter(
-                (control) => control.type === "control",
-              ).length,
+              descriptionRowCount: row.descriptionRows.length,
+              descriptionHeaderRows: row.descriptionHeader ? 3 : 1,
             })
           : row.validation;
       const controls = "controls" in row ? row.controls : [];
       const legs = "legs" in row ? row.legs : [];
       const descriptionRows =
         "descriptionRows" in row ? row.descriptionRows : [];
+      const descriptionHeader =
+        "descriptionHeader" in row ? row.descriptionHeader : null;
       const resolved = "resolved" in row ? row.resolved : null;
       return {
         id: row.id,
@@ -237,6 +248,7 @@ export const courseMapRouter = router({
         controls,
         legs,
         descriptionRows,
+        descriptionHeader,
         resolved,
         validation,
       };

@@ -32,6 +32,7 @@ import {
   type CourseOverlayLeg,
   type DescriptionBlockSettings,
   type DescriptionRow,
+  type DescriptionSheetHeader,
   type MapFillMode,
   type MapFontFamily,
   type MapPoint,
@@ -111,6 +112,8 @@ interface MapLayoutEditorProps {
   descriptionRows?: DescriptionRow[];
   /** Title row of the description block (course name in print). */
   descriptionTitle?: string;
+  /** IOF 3-row header (course maps); replaces the single title row. */
+  descriptionHeader?: DescriptionSheetHeader | null;
   previewCourses?: Array<{ id: number; name: string }>;
   previewCourseId?: number;
   onPreviewCourseChange?: (courseId: number | undefined) => void;
@@ -538,6 +541,7 @@ export function MapLayoutEditor({
   textValues,
   descriptionRows = [],
   descriptionTitle,
+  descriptionHeader = null,
   previewCourses = [],
   previewCourseId,
   onPreviewCourseChange,
@@ -833,9 +837,11 @@ export function MapLayoutEditor({
   );
 
   const descriptionRowCount = descriptionRows.length;
+  const descriptionHeaderRows = descriptionHeader ? 3 : 1;
   const descriptionSize = descriptionBlockSize(
     descriptionRowCount,
     history.present.description.cellSizeMm,
+    descriptionHeaderRows,
   );
   const descriptionBlockSvg = useMemo(
     () =>
@@ -846,12 +852,14 @@ export function MapLayoutEditor({
             cellSizeMm: history.present.description.cellSizeMm,
             title: descriptionTitle ?? mapName,
             rows: descriptionRows,
+            ...(descriptionHeader ? { header: descriptionHeader } : {}),
             symbolResolver: (key) => IOF_SYMBOLS[key],
           })
         : "",
     [
       descriptionRows,
       descriptionTitle,
+      descriptionHeader,
       history.present.description,
       mapName,
     ],
@@ -1338,6 +1346,7 @@ export function MapLayoutEditor({
       const size = descriptionBlockSize(
         descriptionRowCount,
         drag.snapshot.description.cellSizeMm,
+        descriptionHeaderRows,
       );
       replace({
         ...drag.snapshot,
@@ -1353,7 +1362,7 @@ export function MapLayoutEditor({
         ),
       });
     } else if (drag.kind === "resize-description") {
-      const rows = Math.max(1, descriptionRowCount + 1);
+      const rows = Math.max(1, descriptionRowCount + descriptionHeaderRows);
       const nextCellSize = Math.max(
         3,
         Math.min(
@@ -1362,7 +1371,11 @@ export function MapLayoutEditor({
             Math.max(dx / 8, dy / rows),
         ),
       );
-      const size = descriptionBlockSize(descriptionRowCount, nextCellSize);
+      const size = descriptionBlockSize(
+        descriptionRowCount,
+        nextCellSize,
+        descriptionHeaderRows,
+      );
       replace({
         ...drag.snapshot,
         description: constrainDescription(
@@ -1942,6 +1955,7 @@ export function MapLayoutEditor({
                     const size = descriptionBlockSize(
                       descriptionRowCount,
                       cellSizeMm,
+                      descriptionHeaderRows,
                     );
                     commit({
                       ...history.present,

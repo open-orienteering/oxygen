@@ -2,25 +2,36 @@ import { describe, expect, it } from "vitest";
 import {
   C_OPTIONS,
   D_GROUPS,
+  E_OPTIONS,
   F_OPTIONS,
   G_DIRECTIONAL,
   G_OPTIONS,
   G_PLAIN,
+  H_OPTIONS,
   OPTIONS_BY_FIELD,
   ocadToIof,
 } from "../control-description-options";
-import { IOF_SYMBOLS, getDescriptionSymbols } from "../../iof-symbols";
+import { IOF_SYMBOLS, descriptionCells } from "../../iof-symbols";
 import { IOF_SYMBOL_META, iofSymbolName } from "../../iof-symbol-meta";
 
-/** Column rendered by getDescriptionSymbols for each description field. */
-const RENDER_COLUMN = { c: "colC", d: "colD", f: "colF", g: "colG" } as const;
+/** Sheet column that a description field renders into. */
+const RENDER_COLUMN = {
+  c: "C",
+  d: "D",
+  e: "E",
+  f: "F",
+  g: "G",
+  h: "H",
+} as const;
 
 describe("control description options", () => {
   it("covers the full IOF symbol sets per column", () => {
     expect(C_OPTIONS).toHaveLength(11);
     expect(D_GROUPS.flatMap((g) => g.options)).toHaveLength(73);
+    expect(E_OPTIONS.length).toBeGreaterThanOrEqual(11);
     expect(F_OPTIONS).toHaveLength(3);
     expect(G_OPTIONS).toHaveLength(8 * 8 + 6);
+    expect(H_OPTIONS.length).toBeGreaterThanOrEqual(3);
   });
 
   it("groups column D by IOF family 1..6", () => {
@@ -49,32 +60,50 @@ describe("control description options", () => {
     }
   });
 
-  // The core guarantee: what the editor stores renders as the symbol
-  // the user picked, via the untouched converters in iof-symbols.ts.
-  it("round-trips every option's OCAD code to its IOF symbol via the renderer", () => {
+  it("round-trips every option's OCAD code to its IOF symbol via descriptionCells", () => {
     for (const [field, options] of Object.entries(OPTIONS_BY_FIELD)) {
       const column = RENDER_COLUMN[field as keyof typeof RENDER_COLUMN];
       for (const opt of options) {
         expect(IOF_SYMBOLS[opt.iof], `${field} ${opt.iof} has an SVG`).toBeTruthy();
-        const rendered = getDescriptionSymbols({ [field]: opt.ocad }, "black");
-        expect(rendered[column], `${field} ${opt.ocad} → ${opt.iof}`).toBe(
-          IOF_SYMBOLS[opt.iof],
-        );
+        const cells = descriptionCells({ [field]: opt.ocad }, "black");
+        const cell = cells[column];
+        expect(cell, `${field} ${opt.ocad} → ${opt.iof}`).toEqual({
+          kind: "svg",
+          key: opt.iof,
+          svg: IOF_SYMBOLS[opt.iof],
+        });
       }
     }
   });
 
+  it("puts dimensions in column F (not E) and appearance in E", () => {
+    const sized = descriptionCells({ d: "2.004", s: "1,5" }, "black");
+    expect(sized.E).toBeNull();
+    expect(sized.F).toEqual({ kind: "text", text: "1.5" });
+
+    const appearance = descriptionCells({ d: "2.004", e: "8.001" }, "black");
+    expect(appearance.E?.kind).toBe("svg");
+    expect(appearance.E && appearance.E.kind === "svg" && appearance.E.key).toBe("8.1");
+
+    // Combination wins over dimensions in F.
+    const crossing = descriptionCells(
+      { d: "5.002", e: "5.001", f: "10.001", s: "2" },
+      "black",
+    );
+    expect(crossing.F?.kind).toBe("svg");
+    expect(crossing.F && crossing.F.kind === "svg" && crossing.F.key).toBe("10.1");
+  });
+
   it("resolves stored OCAD codes back to IOF keys, including imported encodings", () => {
-    // Canonical editor codes.
     expect(ocadToIof("c", "0.201")).toBe("0.1N");
     expect(ocadToIof("d", "2.004")).toBe("2.4");
+    expect(ocadToIof("e", "8.001")).toBe("8.1");
     expect(ocadToIof("f", "10.001")).toBe("10.1");
     expect(ocadToIof("g", "11.101")).toBe("11.1N");
-    // OCD-imported variants that differ from the canonical encoding.
+    expect(ocadToIof("h", "12.001")).toBe("12.1");
     expect(ocadToIof("c", "0.3")).toBe("0.3");
     expect(ocadToIof("d", "2.4")).toBe("2.4");
     expect(ocadToIof("g", "11.143")).toBe("11.14E");
-    // Garbage stays null.
     expect(ocadToIof("d", "99.999")).toBeNull();
     expect(ocadToIof("g", "")).toBeNull();
   });
@@ -90,7 +119,9 @@ describe("control description options", () => {
     }
     expect(iofSymbolName("2.4", "en")).toBe("Boulder");
     expect(iofSymbolName("2.4", "sv")).toBe("Sten");
-    expect(iofSymbolName("2.4", "de")).toBe("Boulder"); // falls back to English
+    expect(iofSymbolName("8.1", "en")).toBe("Low");
+    expect(iofSymbolName("12.1", "sv")).toBe("Sjukvård");
+    expect(iofSymbolName("2.4", "de")).toBe("Boulder");
     expect(iofSymbolName("nope", "en")).toBe("nope");
   });
 });

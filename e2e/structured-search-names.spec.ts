@@ -153,9 +153,11 @@ test.describe("Structured search — comma-separated names", () => {
 
   test("comma-separated in-lists still filter on multi-word class names", async ({ page }) => {
     await page.goto("/itest/runners");
-    await expect(page.locator("span", { hasText: "runners" }).first()).toBeVisible({
-      timeout: 15000,
-    });
+    // The count span renders "0 runners" before the list query resolves —
+    // wait for a real baseline rather than reading the placeholder.
+    await expect
+      .poll(() => readRunnerCount(page), { timeout: 15000 })
+      .toBeGreaterThan(0);
     const baseline = await readRunnerCount(page);
 
     // Per-item quoting keeps the list splittable while preserving spaces.

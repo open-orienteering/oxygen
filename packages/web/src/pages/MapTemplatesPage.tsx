@@ -512,6 +512,7 @@ export function MapTemplatesPage() {
               controls={data.controls}
               legs={data.legs}
               descriptionRows={data.descriptionRows}
+              descriptionHeader={data.descriptionHeader ?? null}
               descriptionTitle={data.textValues.course || editingTemplate.name}
               mapObjects={[]}
               templateObjects={editingTemplate.objects}

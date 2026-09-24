@@ -8,6 +8,7 @@ import {
   type CourseOverlayControl,
   type CourseOverlayLeg,
   type DescriptionRow,
+  type DescriptionSheetHeader,
   type MapTemplateSettings,
   type MapTextValues,
   type MapWindow,
@@ -49,6 +50,8 @@ export interface CourseMapView {
   controls: CourseOverlayControl[];
   legs: CourseOverlayLeg[];
   descriptionRows: DescriptionRow[];
+  /** IOF 3-row header for course maps; null/undefined → single title row. */
+  descriptionHeader?: DescriptionSheetHeader | null;
   validation: {
     valid: boolean;
     issues: Array<{
@@ -67,6 +70,7 @@ export interface TemplateLayoutPreview {
   controls: CourseOverlayControl[];
   legs: CourseOverlayLeg[];
   descriptionRows: DescriptionRow[];
+  descriptionHeader?: DescriptionSheetHeader | null;
   textValues: MapTextValues;
 }
 

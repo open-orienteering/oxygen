@@ -794,16 +794,49 @@ export interface ControlUnit {
  * codes to IOF symbol SVGs per column.
  */
 export interface ControlDescription {
-  /** Column C: which of similar features (e.g. "0.208" = Middle). */
+  /** Column C: which of similar features (e.g. "0.201" = Northern). */
   c?: string;
-  /** Column D: control feature (e.g. "2.001" = Terrace). */
+  /** Column D: control feature (e.g. "2.004" = Boulder). */
   d?: string;
-  /** Column G: location of the flag (e.g. "11.143" = NE side). */
-  g?: string;
-  /** Column E: appearance/dimensions text (e.g. "1,5" = 1.5 m). */
+  /**
+   * Column E: appearance (8.x, e.g. "8.001" = Low) **or** the second
+   * feature of a crossing/junction (a column-D code like "5.001").
+   */
+  e?: string;
+  /**
+   * Free-text dimensions (e.g. "1,5" or "2x3"). Drawn in column F when
+   * no combination symbol (`f`) is set — IOF puts size in F, appearance
+   * in E.
+   */
   s?: string;
-  /** Column F: combination / second feature. */
+  /** Column F: combination — crossing / junction / bend (e.g. "10.001"). */
   f?: string;
+  /** Column G: location of the flag (e.g. "11.101" = N side). */
+  g?: string;
+  /** Column H: other information (12.x, e.g. "12.001" = First aid). */
+  h?: string;
+}
+
+/**
+ * Course-level description-sheet instructions that sit between / around
+ * control rows (taped routes, map exchange, finish variants). Anchored
+ * to public control ids so they drop out when a control leaves the
+ * sequence.
+ */
+export interface CourseDescriptionInstructions {
+  specials?: Array<{
+    /** Public control id after which the row appears; null = after start. */
+    afterControlId: number | null;
+    /** IOF special-instruction key, e.g. "13.1". */
+    kind: string;
+    /** Optional length shown in the centre of the symbol, metres. */
+    lengthM?: number;
+  }>;
+  finish?: {
+    /** IOF finish variant, e.g. "14.1" / "14.2" / "14.3". */
+    kind: string;
+    lengthM?: number;
+  };
 }
 
 /** Control summary (list view) */
@@ -851,6 +884,11 @@ export interface CourseSummary {
    */
   startControlId: number | null;
   finishControlId: number | null;
+  /**
+   * Course-level description-sheet instructions. `afterControlId` uses
+   * the public control id (punch code / seq); null = after start.
+   */
+  descriptionInstructions: CourseDescriptionInstructions | null;
 }
 
 /** Course detail with class usage */

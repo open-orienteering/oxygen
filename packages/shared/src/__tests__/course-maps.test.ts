@@ -284,8 +284,63 @@ describe("course map SVG generators", () => {
     });
     expect(svg).toContain("A &amp; B");
     expect(svg).toContain('viewBox="-100 -100 200 200"');
-    expect(svg).toContain("1.5m");
+    expect(svg).toContain("1.5");
     expect(svg).toContain(">31</text>");
+  });
+
+  it("draws the IOF header bold, boxes the controls with thick rules and wide finish rows", () => {
+    const rows = [
+      { kind: "start" as const, code: "", symbolKey: "start" },
+      ...[31, 32, 33, 34].map((code, i) => ({
+        kind: "control" as const,
+        sequence: i + 1,
+        code: String(code),
+      })),
+      { kind: "finish" as const, code: "", symbolKey: "14.3", lengthM: 120 },
+    ];
+    const svg = renderDescriptionBlockSvg({
+      x: 0,
+      y: 0,
+      cellSizeMm: 10,
+      title: "ignored",
+      header: {
+        eventName: "Spring Cup",
+        classNames: "H40, D40",
+        courseName: "A",
+        lengthKm: "4.20 km",
+        climbM: "85 m",
+      },
+      rows,
+      symbolResolver: (key) =>
+        key === "start"
+          ? '<path d="M0 -50 L50 50 L-50 50 Z"/>'
+          : key === "14.3"
+            ? '<circle cx="0" cy="0" r="40"/>'
+            : null,
+    });
+    // Header rows are bold and every header rule is thick (y=10, 20, 30).
+    expect(svg).toContain('font-weight="bold" text-anchor="middle">Spring Cup</text>');
+    expect(svg).toContain('font-weight="bold" text-anchor="middle">H40, D40</text>');
+    for (const yy of [10, 20, 30]) {
+      expect(svg).toContain(`y1="${yy}" x2="80" y2="${yy}" stroke="#000000" stroke-width="0.35"`);
+    }
+    // Rows: start 30–40, controls 1–4 at 40–80, finish 80–90. Thick under
+    // start (y=40), after the third control (y=70) and above finish
+    // (y=80); thin between the other controls (y=50, 60).
+    expect(svg).toContain('y1="40" x2="80" y2="40" stroke="#000000" stroke-width="0.35"');
+    expect(svg).toContain('y1="70" x2="80" y2="70" stroke="#000000" stroke-width="0.35"');
+    expect(svg).toContain('y1="80" x2="80" y2="80" stroke="#000000" stroke-width="0.35"');
+    expect(svg).toContain('y1="50" x2="80" y2="50" stroke="#000000" stroke-width="0.15"');
+    expect(svg).toContain('y1="60" x2="80" y2="60" stroke="#000000" stroke-width="0.15"');
+    // Column groups A B C | D E F | G H: thick verticals at x=30 and 60 in
+    // a control row (y 40–50), thin at x=10.
+    expect(svg).toContain('<line x1="30" y1="40" x2="30" y2="50" stroke="#000000" stroke-width="0.35"');
+    expect(svg).toContain('<line x1="60" y1="40" x2="60" y2="50" stroke="#000000" stroke-width="0.35"');
+    expect(svg).toContain('<line x1="10" y1="40" x2="10" y2="50" stroke="#000000" stroke-width="0.15"');
+    // Finish row: wide symbol + centred length, no per-column dividers.
+    expect(svg).toContain('viewBox="-800 -100 1600 200"');
+    expect(svg).toContain(">120 m</text>");
+    expect(svg).not.toContain(">ignored<");
   });
 
   it("renders page and map anchored objects in layer order", () => {

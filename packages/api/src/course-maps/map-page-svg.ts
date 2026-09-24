@@ -11,6 +11,7 @@ import {
   type CourseOverlayControl,
   type CourseOverlayLeg,
   type DescriptionRow,
+  type DescriptionSheetHeader,
   type MapRect,
   type MapTextValues,
   type MapWindow,
@@ -41,6 +42,8 @@ export interface ComposeMapPageOptions {
   controls: CourseOverlayControl[];
   legs: CourseOverlayLeg[];
   descriptionRows: DescriptionRow[];
+  /** Three-row IOF header for course maps; omitted → single `title` row. */
+  descriptionHeader?: DescriptionSheetHeader | null;
   title: string;
   textValues: MapTextValues;
   allControls?: boolean;
@@ -164,6 +167,7 @@ export function composeMapPageSvg(options: ComposeMapPageOptions): string {
         cellSizeMm: document.description.cellSizeMm,
         title: options.title,
         rows: options.descriptionRows,
+        ...(options.descriptionHeader ? { header: options.descriptionHeader } : {}),
         symbolResolver: (key) => IOF_SYMBOLS[key],
       })
     : "";

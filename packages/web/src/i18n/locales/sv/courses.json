@@ -149,7 +149,12 @@
     "moveDown": "Flytta ner",
     "removeFromCourse": "Ta bort från banan",
     "srrBadge": "SRR",
-    "radioBadge": "Radio"
+    "radioBadge": "Radio",
+    "addSpecial": "Lägg till anvisning",
+    "finishVariant": "Mål",
+    "specialLength": "Längd (m)",
+    "removeSpecial": "Ta bort anvisning",
+    "suggestedSingle": "Förslag: {{label}}"
   },
   "openInCourseEditor": "Öppna i banläggningen",
   "seriesExhausted": "Klubbens serier är slut — tilldelar nästa lediga kod ≥ 31."

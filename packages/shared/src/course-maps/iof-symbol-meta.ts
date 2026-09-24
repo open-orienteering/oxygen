@@ -3,8 +3,8 @@
 // svg-control-descriptions package (extracted from Purple Pen).
 
 export interface IofSymbolMeta {
-  /** Description sheet column: C, D, F or G. */
-  kind: "C" | "D" | "F" | "G";
+  /** Description sheet column / row kind. */
+  kind: "A" | "C" | "D" | "E" | "F" | "G" | "H" | "W" | "X" | "Y" | "Z" | "V";
   en: string;
   sv: string;
 }
@@ -94,6 +94,17 @@ export const IOF_SYMBOL_META: Record<string, IofSymbolMeta> = {
   "5.26": { kind: "D", en: "Railway", sv: "Järnväg" },
   "6.1": { kind: "D", en: "Special item", sv: "Speciellt föremål" },
   "6.2": { kind: "D", en: "Special item", sv: "Speciellt föremål" },
+  "8.1": { kind: "E", en: "Low", sv: "Låg" },
+  "8.2": { kind: "E", en: "Shallow", sv: "Flack" },
+  "8.3": { kind: "E", en: "Deep", sv: "Djup" },
+  "8.4": { kind: "E", en: "Overgrown", sv: "Bevuxen" },
+  "8.5": { kind: "E", en: "Open", sv: "Öppen" },
+  "8.6": { kind: "E", en: "Rocky, stony", sv: "Stenig" },
+  "8.7": { kind: "E", en: "Marshy", sv: "Sank" },
+  "8.8": { kind: "E", en: "Sandy", sv: "Sandig" },
+  "8.9": { kind: "E", en: "Needle-leaved", sv: "Barrträd" },
+  "8.10": { kind: "E", en: "Broad-leaved", sv: "Lövträd" },
+  "8.11": { kind: "E", en: "Ruined", sv: "Raserad" },
   "10.1": { kind: "F", en: "Crossing", sv: "Korsning" },
   "10.2": { kind: "F", en: "Junction", sv: "Förgrening" },
   "11.1E": { kind: "G", en: "East side", sv: "Östra sidan" },
@@ -167,6 +178,21 @@ export const IOF_SYMBOL_META: Record<string, IofSymbolMeta> = {
   "11.14SW": { kind: "G", en: "South-west foot", sv: "Sydvästra foten" },
   "11.14W": { kind: "G", en: "West foot", sv: "Västra foten" },
   "11.15": { kind: "G", en: "Between", sv: "Mellan" },
+  "12.1": { kind: "H", en: "First aid post", sv: "Sjukvård" },
+  "12.2": { kind: "H", en: "Refreshment point", sv: "Vätska" },
+  "12.4": { kind: "H", en: "Control check", sv: "Bemannad kontroll" },
+  "13.1": { kind: "W", en: "Taped route away from control", sv: "Snitsel bort från kontroll" },
+  "13.2": { kind: "W", en: "Taped route between controls", sv: "Snitsel mellan kontroller" },
+  "13.3": { kind: "X", en: "Mandatory crossing point or points", sv: "Obligatorisk passerpunkt" },
+  "13.4": { kind: "X", en: "Mandatory passage", sv: "Obligatorisk passage" },
+  "13.5": { kind: "W", en: "Map exchange", sv: "Kartbyte" },
+  "13.5control": { kind: "Y", en: "Map exchange at a control", sv: "Kartbyte vid kontroll" },
+  "13.6": { kind: "V", en: "Map issue point", sv: "Kartutdelningsplats" },
+  "14.1": { kind: "Z", en: "Taped route to finish", sv: "Snitsel till mål" },
+  "14.2": { kind: "Z", en: "Navigate to finish funnel", sv: "Uppfångande snitsel till mål" },
+  "14.3": { kind: "Z", en: "Navigate to finish (no tapes)", sv: "Ingen snitsel till mål" },
+  "15.6": { kind: "Y", en: "Map flip", sv: "Kartvändning" },
+  "start": { kind: "A", en: "Start", sv: "Start" },
 };
 
 /** Localized symbol name; falls back to English for unknown languages. */
