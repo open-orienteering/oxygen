@@ -109,6 +109,75 @@ describe("control.suggestDescription", () => {
     expect(codes).toContain("5.002");
   });
 
+});
+
+describe("autoDescribe on create / move", () => {
+  it("fills the suggestion on create and re-describes an untouched auto description on move", async () => {
+    const created = await caller.control.create({
+      codes: "301",
+      xpos: BOULDER.x,
+      ypos: BOULDER.y + 1,
+      autoDescribe: true,
+    });
+    let detail = await caller.control.detail({ id: created.id });
+    expect(detail.description).toEqual({ d: "2.004", g: "11.101" }); // N side
+
+    // Move to the west side: the auto description follows.
+    await caller.control.update({
+      id: created.id,
+      xpos: BOULDER.x - 1.5,
+      ypos: BOULDER.y,
+      autoDescribe: true,
+    });
+    detail = await caller.control.detail({ id: created.id });
+    expect(detail.description).toEqual({ d: "2.004", g: "11.107" }); // W side
+
+    // Move somewhere featureless: the stale auto description is cleared.
+    await caller.control.update({
+      id: created.id,
+      xpos: 500,
+      ypos: 500,
+      autoDescribe: true,
+    });
+    detail = await caller.control.detail({ id: created.id });
+    expect(detail.description).toBeNull();
+  });
+
+  it("leaves a hand-edited description alone on move", async () => {
+    const created = await caller.control.create({
+      codes: "302",
+      xpos: BOULDER.x,
+      ypos: BOULDER.y + 1,
+      autoDescribe: true,
+    });
+    // The user adds a size — no longer the raw autodetect result.
+    await caller.control.update({
+      id: created.id,
+      description: { d: "2.004", g: "11.101", s: "1,5" },
+    });
+    await caller.control.update({
+      id: created.id,
+      xpos: BOULDER.x - 1.5,
+      ypos: BOULDER.y,
+      autoDescribe: true,
+    });
+    const detail = await caller.control.detail({ id: created.id });
+    expect(detail.description).toEqual({ d: "2.004", g: "11.101", s: "1,5" });
+  });
+
+  it("does nothing without autoDescribe", async () => {
+    const created = await caller.control.create({
+      codes: "303",
+      xpos: BOULDER.x,
+      ypos: BOULDER.y + 1,
+    });
+    await caller.control.update({ id: created.id, xpos: BOULDER.x - 1.5, ypos: BOULDER.y });
+    const detail = await caller.control.detail({ id: created.id });
+    expect(detail.description).toBeNull();
+  });
+});
+
+describe("control.suggestDescription — no map", () => {
   it("returns an empty list for an event with no map", async () => {
     const other = await createTestEvent("desc_autodetect_nomap");
     try {

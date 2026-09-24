@@ -235,9 +235,18 @@ graphics, saves an event graphic to the club library, and arms click-to-place
 for image objects. Image resize is free by default; **Ctrl/Cmd** keeps the
 aspect ratio and **Shift** crops the source graphic.
 
-The control-description block previews the real rows of the selected preview
-course through the shared `renderDescriptionBlockSvg`, so its printed height
-is visible while laying out the page.
+The control-description block is the same sheet the course editor shows on
+the map: `resolve-layout.ts` builds it with the shared `buildDescriptionSheet`
+(three-row IOF header — event / classes / course · length · climb — start row,
+control rows, special-instruction rows, finish row with the measured
+last-control → finish distance) and `renderDescriptionBlockSvg` draws it with
+the IOF rules: thick header cells, thick rule under the start row, after every
+third control and on either side of a special instruction, above the finish,
+and thick verticals after columns C and F (A B C | D E F | G H). The layout
+editor previews the identical block, so its printed height (3 header rows +
+sheet rows) is visible while placing it; `validateCourseMap` uses the same
+row/header count for the `description_outside_page` check. All-controls maps
+keep a single title row over code-sorted control rows.
 
 Choose an object tool and click its intended page position to create it;
 `Escape` cancels an armed tool. Rectangles and polygons share a **Fill**

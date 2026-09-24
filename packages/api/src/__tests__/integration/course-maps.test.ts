@@ -225,10 +225,26 @@ describe("map templates and course maps", () => {
     ]);
     expect(maps[0].legs).toHaveLength(3);
     expect(maps[0].legs[0].gaps).toEqual([{ from: 0.4, to: 0.6 }]);
-    expect(maps[0].descriptionRows).toEqual([
-      { sequence: 1, code: "31", description: { d: "2.004" } },
-      { sequence: 2, code: "32", description: null },
+    // Print sheet = the course editor's sheet: header + start + controls +
+    // finish (with the measured last-control → finish distance).
+    expect(maps[0].descriptionHeader).toMatchObject({ courseName: "Blue" });
+    expect(maps[0].descriptionRows.map((row) => row.kind)).toEqual([
+      "start",
+      "control",
+      "control",
+      "finish",
     ]);
+    expect(maps[0].descriptionRows[1]).toMatchObject({
+      sequence: 1,
+      code: "31",
+      description: { d: "2.004" },
+    });
+    expect(maps[0].descriptionRows[2]).toMatchObject({
+      sequence: 2,
+      code: "32",
+      description: null,
+    });
+    expect(maps[0].descriptionRows[3]).toMatchObject({ kind: "finish", symbolKey: "14.3" });
   });
 
   it("supports several maps per course and a single all-controls map", async () => {

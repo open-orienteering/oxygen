@@ -134,6 +134,7 @@ export const mapTemplateRouter = router({
               geometry: course.geometry,
               classes: course.classes,
               controls: course.courseControls.map(({ control }) => control),
+              descriptionInstructions: course.descriptionInstructions,
             }
           : null,
         mapScale: mapInfo?.scale ?? null,

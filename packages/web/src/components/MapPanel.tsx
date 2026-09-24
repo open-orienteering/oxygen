@@ -187,6 +187,12 @@ function MapPanelImpl({
   const courses = trpc.course.list.useQuery(undefined, {
     staleTime: Number.POSITIVE_INFINITY,
   });
+  // Event name for the description sheet's first header row. Same query
+  // key as the shell's dashboard call, so this normally hits the cache.
+  const dashboard = trpc.competition.dashboard.useQuery(undefined, {
+    staleTime: Number.POSITIVE_INFINITY,
+  });
+  const eventName = dashboard.data?.event?.name ?? undefined;
   // Class → course assignments, so multi-course display can label each
   // course's legs with the classes that run it.
   const classList = trpc.class.list.useQuery(undefined, {
@@ -526,6 +532,9 @@ function MapPanelImpl({
         controls: controlIds,
         highlight: effectiveCourseNames.has(c.name),
         classNames: classNamesByCourse.get(c.name) ?? [],
+        lengthM: c.length,
+        climbM: c.climb,
+        descriptionInstructions: c.descriptionInstructions ?? null,
       };
     });
   }, [courses.data, controlCoords.data, effectiveCourseNames, classNamesByCourse]);
@@ -833,6 +842,7 @@ function MapPanelImpl({
           showDescriptions={showDescriptions}
           descriptionsAllControls={descriptionsAllControls}
           allControlsTitle={descriptionsAllControls ? t("allControls") : undefined}
+          eventName={eventName}
           onToggleFullscreen={toggleFullscreen}
           isFullscreen={isFullscreen}
           hideControls={false}

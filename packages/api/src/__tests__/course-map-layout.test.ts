@@ -46,7 +46,7 @@ const controls = [
 ];
 
 describe("resolveMapLayout description rows", () => {
-  it("builds sequenced rows with control descriptions for course maps", () => {
+  it("builds the full IOF sheet (header, start, controls, finish) for course maps", () => {
     const layout = resolveMapLayout({
       kind: "course",
       template,
@@ -54,15 +54,62 @@ describe("resolveMapLayout description rows", () => {
         name: "H40",
         lengthM: 3200,
         climbM: 40,
+        classes: [{ name: "H40" }, { name: "H45" }],
         controls,
+        descriptionInstructions: {
+          specials: [{ afterControlId: 1, kind: "13.1", lengthM: 60 }],
+          finish: { kind: "14.1" },
+        },
+        // Finish 40 mm east of the last control → 600 m at 1:15000.
+        geometry: {
+          type: "FeatureCollection",
+          features: [
+            {
+              type: "Feature",
+              geometry: { type: "Point", coordinates: [70, 40] },
+              properties: { symbolType: "finish", code: "F" },
+            },
+          ],
+        },
       },
+      event: { name: "Spring Cup", date: new Date("2026-05-01") },
       mapScale: 15_000,
     });
+    // Same model as the on-map sheet in the course editor.
+    expect(layout.descriptionHeader).toEqual({
+      eventName: "Spring Cup",
+      classNames: "H40, H45",
+      courseName: "H40",
+      lengthKm: "3.20 km",
+      climbM: "40 m",
+    });
     expect(layout.descriptionRows).toEqual([
-      { sequence: 1, code: "31", description: { column_d: "boulder" } },
-      { sequence: 2, code: "45", description: { column_d: "path" } },
+      { kind: "start", code: "", description: null, symbolKey: "start" },
+      { kind: "control", sequence: 1, code: "31", description: { column_d: "boulder" } },
+      { kind: "special", code: "", symbolKey: "13.1", lengthM: 60 },
+      { kind: "control", sequence: 2, code: "45", description: { column_d: "path" } },
+      { kind: "finish", code: "", symbolKey: "14.1", lengthM: 600 },
     ]);
     expect(layout.textValues.controls).toBe("2");
+  });
+
+  it("falls back to the course name and no header text when no event is given", () => {
+    const layout = resolveMapLayout({
+      kind: "course",
+      template,
+      course: { name: "H40", lengthM: 0, climbM: 0, controls },
+    });
+    expect(layout.descriptionHeader).toMatchObject({
+      eventName: "",
+      courseName: "H40",
+      lengthKm: "",
+    });
+    // No finish geometry / no map scale → no measured finish distance.
+    expect(layout.descriptionRows.at(-1)).toEqual({
+      kind: "finish",
+      code: "",
+      symbolKey: "14.3",
+    });
   });
 
   it("builds unsequenced numerically sorted rows for all-controls maps", () => {
@@ -99,6 +146,8 @@ describe("resolveMapLayout description rows", () => {
       "100",
     ]);
     expect(layout.descriptionRows[0]).not.toHaveProperty("sequence");
+    // All-controls maps keep the single title row.
+    expect(layout.descriptionHeader).toBeNull();
     expect(layout.controls).toEqual(
       expect.arrayContaining([
         expect.objectContaining({ id: "start", code: "20", type: "start" }),

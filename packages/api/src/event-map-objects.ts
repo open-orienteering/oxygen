@@ -13,9 +13,11 @@
  * bulk of a club map — so the retained set stays small.
  *
  * Coordinates are OCAD's native 1/100 mm paper units (`TdPoly` already
- * applies the `>> 8` shift). Bezier control points are treated as
- * ordinary polyline vertices: for a distance-to-feature estimate at
- * millimetre scale the difference is irrelevant.
+ * applies the `>> 8` shift). Bezier segments are flattened into short
+ * polyline runs: junction / crossing / corner detection compares
+ * geometry at a few tenths of a millimetre, and a curved path whose
+ * control handles sit a millimetre off the drawn line would otherwise
+ * never register as meeting the path it ends on.
  */
 
 import { isomDescriptionFor } from "@oxygen/shared";
@@ -57,12 +59,79 @@ const cache = new Map<
  */
 const MAX_CACHED_EVENTS = 3;
 
+/** One `TdPoly` coordinate as ocad2geojson exposes it. */
+export type RawOcadCoordinate = ArrayLike<number> & {
+  isFirstHolePoint?: () => boolean;
+  isFirstBezier?: () => boolean;
+  isSecondBezier?: () => boolean;
+};
+
 interface RawOcadObject {
   sym: number;
   objType: number;
-  coordinates: Array<
-    ArrayLike<number> & { isFirstHolePoint?: () => boolean }
-  >;
+  coordinates: RawOcadCoordinate[];
+}
+
+/** Straight segments per cubic Bezier when flattening. */
+const BEZIER_STEPS = 8;
+
+function finitePoint(c: RawOcadCoordinate): [number, number] | null {
+  const x = c[0];
+  const y = c[1];
+  return Number.isFinite(x) && Number.isFinite(y) ? [x, y] : null;
+}
+
+/**
+ * Flatten an OCAD coordinate list. A cubic segment is stored as
+ * `P0, C1 (first-bezier flag), C2 (second-bezier flag), P3`; everything
+ * else is a plain vertex. Stops at the first hole point of an area.
+ */
+export function flattenOcadCoordinates(
+  raw: RawOcadCoordinate[],
+  objType: number,
+): Array<[number, number]> {
+  const out: Array<[number, number]> = [];
+  let i = 0;
+  while (i < raw.length) {
+    const c = raw[i];
+    // Areas may carry holes after the outer ring; the search only needs
+    // the outline, and ignoring holes at most makes a control inside a
+    // hole look "on" the feature — acceptable for a suggestion.
+    if (out.length > 0 && objType === 3 && c.isFirstHolePoint?.()) break;
+
+    if (
+      out.length > 0 &&
+      c.isFirstBezier?.() &&
+      i + 2 < raw.length &&
+      raw[i + 1].isSecondBezier?.()
+    ) {
+      const p0 = out[out.length - 1];
+      const c1 = finitePoint(c);
+      const c2 = finitePoint(raw[i + 1]);
+      const p3 = finitePoint(raw[i + 2]);
+      if (c1 && c2 && p3) {
+        for (let s = 1; s <= BEZIER_STEPS; s++) {
+          const t = s / BEZIER_STEPS;
+          const mt = 1 - t;
+          const a = mt * mt * mt;
+          const b = 3 * mt * mt * t;
+          const cc = 3 * mt * t * t;
+          const d = t * t * t;
+          out.push([
+            a * p0[0] + b * c1[0] + cc * c2[0] + d * p3[0],
+            a * p0[1] + b * c1[1] + cc * c2[1] + d * p3[1],
+          ]);
+        }
+        i += 3;
+        continue;
+      }
+    }
+
+    const p = finitePoint(c);
+    if (p) out.push(p);
+    i++;
+  }
+  return out;
 }
 
 /** Slim one OCAD object down, or null when it isn't searchable. */
@@ -70,17 +139,7 @@ export function slimObject(obj: RawOcadObject): SlimMapObject | null {
   if (obj.objType !== 1 && obj.objType !== 2 && obj.objType !== 3) return null;
   if (!isomDescriptionFor(obj.sym)) return null;
 
-  const coords: Array<[number, number]> = [];
-  for (const c of obj.coordinates ?? []) {
-    // Areas may carry holes after the outer ring; the search only needs
-    // the outline, and ignoring holes at most makes a control inside a
-    // hole look "on" the feature — acceptable for a suggestion.
-    if (coords.length > 0 && obj.objType === 3 && c.isFirstHolePoint?.()) break;
-    const x = c[0];
-    const y = c[1];
-    if (!Number.isFinite(x) || !Number.isFinite(y)) continue;
-    coords.push([x, y]);
-  }
+  const coords = flattenOcadCoordinates(obj.coordinates ?? [], obj.objType);
   if (coords.length === 0) return null;
 
   let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;

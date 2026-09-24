@@ -22,7 +22,7 @@ import { emitControlUpserted, emitCourseUpserted } from "../referenceJournal.js"
 import { Prisma as PrismaNs } from "../generated/prisma/client.js";
 import { loadEventCrs } from "../event-crs.js";
 import { loadEventMapObjects } from "../event-map-objects.js";
-import { suggestDescriptions } from "../description-autodetect.js";
+import { suggestDescriptions, type DescriptionCandidate } from "../description-autodetect.js";
 import { mapMmToWgs84 } from "../map-projection.js";
 import { rebuildCourseGeometry } from "../course-geometry.js";
 
@@ -260,10 +260,72 @@ const batteryMvSchema = z.number().int().min(500).max(10_000).optional();
 const controlDescriptionSchema = z.object({
   c: z.string().max(20).optional(),
   d: z.string().max(20).optional(),
+  e: z.string().max(20).optional(),
   g: z.string().max(20).optional(),
   s: z.string().max(20).optional(),
   f: z.string().max(20).optional(),
+  h: z.string().max(20).optional(),
 });
+
+/** Map an autodetect candidate onto a storable ControlDescription. */
+function candidateToDescription(
+  c: DescriptionCandidate,
+): ControlDescription {
+  return {
+    d: c.d,
+    ...(c.c ? { c: c.c } : {}),
+    ...(c.e ? { e: c.e } : {}),
+    ...(c.f ? { f: c.f } : {}),
+    ...(c.g ? { g: c.g } : {}),
+  };
+}
+
+async function autoDescribeAt(
+  db: PrismaClient,
+  eventId: bigint,
+  x: number,
+  y: number,
+): Promise<ControlDescription | null> {
+  if (x === 0 && y === 0) return null;
+  try {
+    const objects = await loadEventMapObjects(db, eventId);
+    if (!objects || objects.length === 0) return null;
+    const [top] = suggestDescriptions(objects, x, y, { limit: 1 });
+    return top ? candidateToDescription(top) : null;
+  } catch {
+    return null;
+  }
+}
+
+const DESCRIPTION_FIELDS = ["c", "d", "e", "s", "f", "g", "h"] as const;
+
+/** Field-wise equality of two descriptions (empty strings count as unset). */
+function descriptionsEqual(
+  a: ControlDescription | null | undefined,
+  b: ControlDescription | null | undefined,
+): boolean {
+  if (!a || !b) return !a && !b;
+  return DESCRIPTION_FIELDS.every(
+    (k) => (a[k] || undefined) === (b[k] || undefined),
+  );
+}
+
+/**
+ * Was this control's description produced by the autodetect at its
+ * current position and never touched since? Then a move may replace it
+ * with the suggestion for the new spot; a hand-edited description is
+ * left alone (the editor offers the new suggestion in the menu instead).
+ */
+async function isUntouchedAutoDescription(
+  db: PrismaClient,
+  eventId: bigint,
+  control: { xpos: number; ypos: number; description: unknown },
+): Promise<boolean> {
+  const current = control.description as ControlDescription | null;
+  if (!current) return true;
+  const auto = await autoDescribeAt(db, eventId, control.xpos, control.ypos);
+  return descriptionsEqual(auto, current);
+}
 
 /** Read the JSONB description column into the shared DTO type. */
 function descriptionDto(row: { description: unknown }): ControlDescription | null {
@@ -511,6 +573,11 @@ export const controlRouter = router({
           xpos: z.number().finite().optional(),
           ypos: z.number().finite().optional(),
           description: controlDescriptionSchema.optional(),
+          /**
+           * When true and no explicit `description` is given, fill the
+           * top map-based suggestion at (xpos, ypos) in the same write.
+           */
+          autoDescribe: z.boolean().optional(),
         })
         .refine((v) => (v.xpos === undefined) === (v.ypos === undefined), {
           message: "xpos and ypos must be provided together",
@@ -577,6 +644,22 @@ export const controlRouter = router({
         name = `${statusEnum === "start" ? "Start" : "Mål"} ${count + 1}`;
       }
 
+      let description = input.description as ControlDescription | undefined;
+      if (
+        !description &&
+        input.autoDescribe &&
+        hasPosition &&
+        !isStartFinish
+      ) {
+        description =
+          (await autoDescribeAt(
+            ctx.db,
+            ctx.event.id,
+            input.xpos!,
+            input.ypos!,
+          )) ?? undefined;
+      }
+
       // Table write + control.upserted journal entry commit together.
       const created = await ctx.db.$transaction(async (tx) => {
         const c = await tx.control.create({
@@ -590,8 +673,8 @@ export const controlRouter = router({
             ...(hasPosition
               ? { xpos: input.xpos!, ypos: input.ypos!, lat: wgs!.lat, lng: wgs!.lng }
               : {}),
-            ...(input.description
-              ? { description: input.description as Record<string, string> }
+            ...(description
+              ? { description: description as Record<string, string> }
               : {}),
           },
           select: { id: true, seq: true, codes: true, name: true, status: true },
@@ -631,6 +714,13 @@ export const controlRouter = router({
           ypos: z.number().finite().optional(),
           /** IOF description; null clears it. */
           description: controlDescriptionSchema.nullable().optional(),
+          /**
+           * When true, fill the top map-based suggestion at the (new)
+           * position if the control has no description, or if its current
+           * description is the untouched autodetect result for the old
+           * position. Hand-edited descriptions are left alone.
+           */
+          autoDescribe: z.boolean().optional(),
         })
         .refine((v) => (v.xpos === undefined) === (v.ypos === undefined), {
           message: "xpos and ypos must be provided together",
@@ -663,6 +753,30 @@ export const controlRouter = router({
         data.ypos = input.ypos;
         data.lat = wgs.lat;
         data.lng = wgs.lng;
+      }
+
+      // Auto-describe on request when the control has no description, or
+      // when the one it has is the untouched autodetect result for its
+      // old position (so a move keeps "N side of boulder" honest). A
+      // hand-edited description is never overwritten here — the editor
+      // menu offers the new suggestion instead.
+      if (
+        input.autoDescribe &&
+        input.description === undefined &&
+        input.xpos !== undefined &&
+        input.ypos !== undefined &&
+        (!c.description ||
+          (positionChanged &&
+            (await isUntouchedAutoDescription(ctx.db, ctx.event.id, c))))
+      ) {
+        const suggested = await autoDescribeAt(
+          ctx.db,
+          ctx.event.id,
+          input.xpos,
+          input.ypos,
+        );
+        if (suggested) data.description = suggested;
+        else if (c.description) data.description = PrismaNs.DbNull;
       }
 
       await ctx.db.$transaction(async (tx) => {

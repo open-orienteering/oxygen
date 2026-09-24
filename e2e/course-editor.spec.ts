@@ -583,6 +583,74 @@ test.describe("Course editor", () => {
     await expect(page.getByTestId("editor-selection-ring")).toBeAttached({ timeout: 15000 });
   });
 
+  test("column C which-of-similar shows names and persists", async ({ page }) => {
+    // Column C used to be unlabeled arrow icons (same glyphs as column G)
+    // with names only in hover tooltips — unusable on mobile and easy to
+    // confuse with "side of". The picker must show the written title on
+    // every option, and the selection must round-trip through save/reload.
+    await selectCompetition(page);
+    await ensureCoursesAndMap(page);
+    await openEditor(page);
+
+    const [code] = await pickClickableControlCodes(page, 1);
+    expect(code).toBeTruthy();
+
+    const hit = page.locator(
+      `[data-testid="editor-control-hit"][data-control-code="${code}"]`,
+    );
+    const box = await hit.boundingBox();
+    expect(box).not.toBeNull();
+    await page.mouse.click(box!.x + box!.width / 2, box!.y + box!.height / 2);
+    await expect(page.getByTestId("editor-selected-info")).toContainText(
+      `Control ${code}`,
+      { timeout: 10000 },
+    );
+
+    await page.getByTestId("editor-action-description").click();
+    const dialog = page.getByTestId("desc-editor");
+    await expect(dialog).toBeVisible();
+
+    // Visible written title next to / under the Northern option — not only
+    // a title= tooltip.
+    const northern = page.getByTestId("desc-opt-0.1N");
+    await expect(northern).toBeVisible();
+    await expect(page.getByTestId("desc-opt-label-0.1N")).toContainText(/Northern|Norra/i);
+
+    await northern.click();
+    await expect(northern).toHaveAttribute("aria-pressed", "true");
+    // Boulder so the row is non-empty — scope to column D (E can reuse D codes).
+    await dialog.getByTestId("desc-section-d").getByTestId("desc-opt-2.4").click();
+
+    const waitForSave = () =>
+      page.waitForResponse(
+        (res) => res.ok() && res.url().includes("control.update"),
+        { timeout: 15000 },
+      );
+    await Promise.all([waitForSave(), page.getByTestId("desc-save").click()]);
+    await expect(dialog).not.toBeVisible();
+
+    await page.reload();
+    await expect(page.getByTestId("map-viewer")).toBeVisible({ timeout: 60000 });
+    await expect(page.getByTestId("editor-control-hit").first()).toBeAttached({
+      timeout: 30000,
+    });
+    const box2 = await hit.boundingBox();
+    expect(box2).not.toBeNull();
+    await page.mouse.click(box2!.x + box2!.width / 2, box2!.y + box2!.height / 2);
+    await page.getByTestId("editor-action-description").click();
+    await expect(dialog).toBeVisible();
+    await expect(page.getByTestId("desc-opt-0.1N")).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+    await expect(page.getByTestId("desc-summary")).toContainText(/Northern|Norra/i);
+    // Wipe so the next test does not inherit a partially-filled description
+    // on the same seed control (symbol buttons toggle on re-click).
+    await page.getByTestId("desc-clear").click();
+    await Promise.all([waitForSave(), page.getByTestId("desc-save").click()]);
+    await expect(dialog).not.toBeVisible();
+  });
+
   test("edit a control description via the contextual action", async ({ page }) => {
     await selectCompetition(page);
     await ensureCoursesAndMap(page);
@@ -608,7 +676,7 @@ test.describe("Course editor", () => {
     };
 
     const dialog = page.getByTestId("desc-editor");
-    const boulder = page.getByTestId("desc-opt-2.4");
+    const boulder = dialog.getByTestId("desc-section-d").getByTestId("desc-opt-2.4");
     const dimInput = page.getByTestId("desc-dim-input");
 
     /**
@@ -645,15 +713,21 @@ test.describe("Course editor", () => {
     await expect(page.getByTestId("editor-selection-ring")).toBeAttached();
 
     // ── Pick symbols (D: boulder, G: north side), type dimensions;
-    // the preview row renders the dimension text live.
+    // the preview row renders the dimension text live. Clear first so a
+    // leftover description from an earlier test cannot toggle-deselect.
     await page.getByTestId("editor-action-description").click();
     await expect(dialog).toBeVisible();
+    if (await page.getByTestId("desc-clear").isEnabled()) {
+      await page.getByTestId("desc-clear").click();
+    }
     await boulder.click();
     await expect(boulder).toHaveAttribute("aria-pressed", "true");
-    await page.getByTestId("desc-opt-11.1N").click();
-    await expect(page.getByTestId("desc-opt-11.1N")).toHaveAttribute("aria-pressed", "true");
+    await dialog.getByTestId("desc-section-g").getByTestId("desc-opt-11.1N").click();
+    await expect(
+      dialog.getByTestId("desc-section-g").getByTestId("desc-opt-11.1N"),
+    ).toHaveAttribute("aria-pressed", "true");
     await dimInput.fill("1,5");
-    await expect(page.getByTestId("desc-preview")).toContainText("1.5m");
+    await expect(page.getByTestId("desc-preview")).toContainText("1.5");
     // Save closes the dialog immediately and fires control.update in the
     // background — wait for the round-trip before reload, otherwise a
     // heavy map (stacked ink tiles) can abort the in-flight mutation.
@@ -695,9 +769,9 @@ test.describe("Course editor", () => {
     await ensureCoursesAndMap(page);
     await openEditor(page);
 
-    // Place a control in the mapped terrain: the fixture's rough-open
-    // area and paths cover the control cluster, so the autodetect always
-    // has something to propose there.
+    // Place a control in the mapped terrain: autoDescribe fills the top
+    // suggestion on create, so the menu should NOT list suggestions for
+    // a freshly placed (already described) control.
     const spot = await findEmptyMapPoint(page);
     await page.mouse.click(spot.x, spot.y);
     await expect(page.getByTestId("editor-phantom")).toBeAttached({ timeout: 10000 });
@@ -707,18 +781,9 @@ test.describe("Course editor", () => {
     await expect(info).toBeVisible({ timeout: 15000 });
     const newCode = ((await info.textContent()) ?? "").match(/(\d+)/)![1];
 
-    // The new control has no description yet, so the menu offers what the
-    // map says it sits on.
     const suggestions = page.getByTestId("editor-suggestions");
-    await expect(suggestions).toBeVisible({ timeout: 20000 });
-    const firstSuggestion = suggestions.locator("button").first();
-    const label = await firstSuggestion.getAttribute("data-suggestion-label");
-    expect(label).toBeTruthy();
-
-    // Applying it fills column D (and the block disappears — the control
-    // now has a description).
-    await firstSuggestion.click();
-    await expect(suggestions).not.toBeVisible({ timeout: 20000 });
+    // Auto-applied on create → no suggestion menu for a fresh control.
+    await expect(suggestions).toHaveCount(0);
 
     const dialog = page.getByTestId("desc-editor");
     const pressed = dialog.locator('[data-testid^="desc-opt-"][aria-pressed="true"]');
@@ -727,25 +792,16 @@ test.describe("Course editor", () => {
       await expect(dialog).toBeVisible();
     };
 
+    // The auto-applied description should show up in the editor.
     await openDescription();
     await expect(async () => {
       expect(await pressed.count()).toBeGreaterThan(0);
     }).toPass({ timeout: 15000 });
     await page.getByTestId("desc-cancel").click();
 
-    // Ctrl+Z takes the applied description back off.
-    await page.keyboard.press("Control+z");
-    await expect(suggestions).toBeVisible({ timeout: 20000 });
-    await openDescription();
-    await expect(pressed).toHaveCount(0);
-    await page.getByTestId("desc-cancel").click();
-
-    // Re-apply, then MOVE the control: a just-moved control gets
-    // suggestions again even though it already has a description — the
-    // old one described the old spot.
-    await firstSuggestion.click();
-    await expect(suggestions).not.toBeVisible({ timeout: 20000 });
-    await page.keyboard.press("Escape"); // close the menu so the empty-spot scan is unobstructed
+    // MOVE the control: a just-moved, already-described control may get
+    // a single top suggestion if the new spot differs.
+    await page.keyboard.press("Escape");
     const hit = page.locator(
       `[data-testid="editor-control-hit"][data-control-code="${newCode}"]`,
     );
@@ -755,11 +811,24 @@ test.describe("Course editor", () => {
     await page.mouse.move(box!.x + box!.width / 2, box!.y + box!.height / 2);
     await page.mouse.down();
     await page.mouse.move(dest.x, dest.y, { steps: 8 });
+    // Loupe appears while dragging for precise placement.
+    await expect(page.getByTestId("editor-loupe")).toBeVisible();
+    // The move re-describes the control server-side; wait for that
+    // round-trip so later steps see the settled state.
+    const moveSaved = page.waitForResponse(
+      (res) => res.ok() && res.url().includes("control.update"),
+      { timeout: 15000 },
+    );
     await page.mouse.up();
-    await expect(suggestions).toBeVisible({ timeout: 20000 });
+    await moveSaved;
 
-    // Deselecting settles it: reselecting the (described) control shows
-    // no suggestions.
+    // After a move the menu may or may not show a suggestion depending
+    // on whether the new spot's top candidate differs — either way the
+    // loupe must be gone and the control still selected.
+    await expect(page.getByTestId("editor-loupe")).toHaveCount(0);
+    await expect(page.getByTestId("editor-context-menu")).toBeVisible({ timeout: 10000 });
+
+    // Deselecting settles it.
     await page.keyboard.press("Escape");
     const movedBox = await hit.boundingBox();
     expect(movedBox).not.toBeNull();
@@ -794,16 +863,30 @@ test.describe("Course editor", () => {
     }).toPass({ timeout: 15000 });
     await expect(sheet.locator('[data-testid="desc-title"]')).toHaveText("All controls");
 
-    // Selecting a course switches the sheet to that course's card.
-    const firstCourse = page.getByTestId("editor-course-item").first();
-    const courseName = await firstCourse.getAttribute("data-course-name");
-    expect(courseName).toBeTruthy();
-    await firstCourse.click();
+    // Selecting a course switches the sheet to that course's card: the
+    // IOF header carries the event name (row 1) and the course name with
+    // length / climb (row 3) — not the course name twice.
+    // Course E is the fixture's shortest (8 controls), so the whole card
+    // — including the finish row — fits the on-map sheet at 720 px.
+    const courseName = "E";
+    const courseItem = page.locator(
+      `[data-testid="editor-course-item"][data-course-name="${courseName}"]`,
+    );
+    await courseItem.click();
     await expect(page.getByTestId("editor-sequence")).toBeVisible({ timeout: 15000 });
-    await expect(sheet.locator('[data-testid="desc-title"]')).toHaveText(
-      courseName!,
+    await expect(sheet.locator('[data-testid="desc-course-name"]')).toHaveText(
+      courseName,
       { timeout: 20000 },
     );
+    await expect(sheet.locator('[data-testid="desc-title"]')).toHaveText(
+      "My example tävling",
+    );
+    // The finish row shows the measured last-control → finish distance
+    // even though no explicit finish length has been set on the course.
+    const finishLength = sheet.locator('[data-testid="desc-row-length"]').last();
+    await expect(finishLength).toHaveText(/^\d+ m$/);
+    // Header block and every third control row close with a thick rule.
+    await expect(sheet.locator('[data-testid="desc-thick-rule"]').first()).toBeAttached();
   });
 
   test("clones a course and keeps legacy start/finish flags read-only", async ({ page }) => {

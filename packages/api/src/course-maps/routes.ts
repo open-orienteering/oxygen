@@ -197,6 +197,7 @@ async function renderPage(
           geometry: row.course.geometry,
           classes: row.course.classes,
           controls: row.course.courseControls.map(({ control }) => control),
+          descriptionInstructions: row.course.descriptionInstructions,
         }
       : null,
     allControls,
@@ -218,6 +219,7 @@ async function renderPage(
     controls: layout.controls,
     legs: layout.legs,
     descriptionRows: layout.descriptionRows,
+    descriptionHeader: layout.descriptionHeader,
     title: row.course?.name ?? row.name,
     allControls: row.kind === "all_controls",
     textValues: layout.textValues,

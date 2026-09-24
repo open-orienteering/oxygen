@@ -149,7 +149,12 @@
     "moveDown": "Move down",
     "removeFromCourse": "Remove from course",
     "srrBadge": "SRR",
-    "radioBadge": "Radio"
+    "radioBadge": "Radio",
+    "addSpecial": "Add instruction",
+    "finishVariant": "Finish",
+    "specialLength": "Length (m)",
+    "removeSpecial": "Remove instruction",
+    "suggestedSingle": "Suggested: {{label}}"
   },
   "openInCourseEditor": "Open in course editor",
   "seriesExhausted": "Club series exhausted — assigning the next free code ≥ 31."

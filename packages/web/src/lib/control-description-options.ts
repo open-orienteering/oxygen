@@ -10,7 +10,14 @@
  * symbol (round-trip verified by unit tests).
  */
 
-import { ocadCtoIof, ocadDtoIof, ocadFtoIof, ocadGtoIof } from "../iof-symbols";
+import {
+  ocadCtoIof,
+  ocadDtoIof,
+  ocadEtoIof,
+  ocadFtoIof,
+  ocadGtoIof,
+  ocadHtoIof,
+} from "../iof-symbols";
 import { IOF_SYMBOL_META } from "../iof-symbol-meta";
 
 export interface DescriptionOption {
@@ -25,11 +32,31 @@ export const COMPASS_DIRECTIONS = ["N", "NE", "E", "SE", "S", "SW", "W", "NW"] a
 
 const dirIndex = (dir: string): number => COMPASS_DIRECTIONS.indexOf(dir as never) + 1;
 
+function optionsOfKind(kind: string): DescriptionOption[] {
+  const keys = Object.keys(IOF_SYMBOL_META)
+    .filter((k) => IOF_SYMBOL_META[k].kind === kind)
+    .sort((a, b) => a.localeCompare(b, "en", { numeric: true }));
+  return keys.map((iof) => {
+    const [grp, sub] = iof.split(".");
+    // Directional keys like "0.1N" / "11.1NE" keep the direction suffix
+    // out of the OCAD sub — callers that need directions build them
+    // themselves (C_OPTIONS, G_DIRECTIONAL). Plain numeric keys pad the
+    // sub to 3 digits.
+    const numeric = /^\d+$/.test(sub ?? "");
+    return {
+      iof,
+      ocad: numeric
+        ? `${grp}.${sub.padStart(3, "0")}`
+        : `${grp}.${sub}`, // unused for directional; overwritten below
+    };
+  });
+}
+
 // ─── Column C: which of similar features ─────────────────────────────
 
 const C_CARDINAL = new Set(["N", "E", "S", "W"]);
 
-/** 8 compass directions ("N side of…") followed by upper/lower/middle. */
+/** 8 compass directions ("Northern…") followed by upper/lower/middle. */
 export const C_OPTIONS: DescriptionOption[] = [
   ...COMPASS_DIRECTIONS.map((dir) => ({
     iof: `${C_CARDINAL.has(dir) ? "0.1" : "0.2"}${dir}`,
@@ -63,6 +90,16 @@ export const D_GROUPS: { group: number; options: DescriptionOption[] }[] = (() =
     .sort(([a], [b]) => a - b)
     .map(([group, options]) => ({ group, options }));
 })();
+
+// ─── Column E: appearance (8.x) ──────────────────────────────────────
+
+/** Appearance symbols (Low, Shallow, Deep, …). Second-feature picks reuse D_GROUPS. */
+export const E_OPTIONS: DescriptionOption[] = optionsOfKind("E").filter((o) =>
+  /^\d+\.\d+$/.test(o.iof),
+).map((o) => {
+  const [grp, sub] = o.iof.split(".");
+  return { iof: o.iof, ocad: `${grp}.${sub.padStart(3, "0")}` };
+});
 
 // ─── Column F: combination ───────────────────────────────────────────
 
@@ -114,12 +151,42 @@ export const G_OPTIONS: DescriptionOption[] = [
   ...G_PLAIN,
 ];
 
+// ─── Column H: other information ─────────────────────────────────────
+
+export const H_OPTIONS: DescriptionOption[] = optionsOfKind("H").filter((o) =>
+  /^\d+\.\d+$/.test(o.iof),
+).map((o) => {
+  const [grp, sub] = o.iof.split(".");
+  return { iof: o.iof, ocad: `${grp}.${sub.padStart(3, "0")}` };
+});
+
+// ─── Special-instruction / finish row kinds ──────────────────────────
+
+/** Between-control specials (13.x) + map-issue (13.6). */
+export const SPECIAL_OPTIONS: DescriptionOption[] = [
+  { iof: "13.1", ocad: "13.001" },
+  { iof: "13.2", ocad: "13.002" },
+  { iof: "13.3", ocad: "13.003" },
+  { iof: "13.4", ocad: "13.004" },
+  { iof: "13.5", ocad: "13.005" },
+  { iof: "13.6", ocad: "13.006" },
+];
+
+/** Finish-row variants (14.x). */
+export const FINISH_OPTIONS: DescriptionOption[] = [
+  { iof: "14.1", ocad: "14.001" },
+  { iof: "14.2", ocad: "14.002" },
+  { iof: "14.3", ocad: "14.003" },
+];
+
 /** All options for one ControlDescription field. */
 export const OPTIONS_BY_FIELD = {
   c: C_OPTIONS,
   d: D_GROUPS.flatMap((g) => g.options),
+  e: E_OPTIONS,
   f: F_OPTIONS,
   g: G_OPTIONS,
+  h: H_OPTIONS,
 } as const;
 
 /**
@@ -129,11 +196,16 @@ export const OPTIONS_BY_FIELD = {
  * encoding than the editor's canonical one (several OCAD sub-codes can
  * mean the same symbol).
  */
-export function ocadToIof(field: "c" | "d" | "f" | "g", ocad: string): string | null {
+export function ocadToIof(
+  field: "c" | "d" | "e" | "f" | "g" | "h",
+  ocad: string,
+): string | null {
   switch (field) {
     case "c": return ocadCtoIof(ocad);
     case "d": return ocadDtoIof(ocad);
+    case "e": return ocadEtoIof(ocad);
     case "f": return ocadFtoIof(ocad);
     case "g": return ocadGtoIof(ocad);
+    case "h": return ocadHtoIof(ocad);
   }
 }

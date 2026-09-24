@@ -29,16 +29,38 @@ what the parser has always produced (`ControlDescription` in
 
 ```jsonc
 {
-  "c": "0.208",   // Column C: which of similar features
-  "d": "2.001",   // Column D: control feature (e.g. Terrace)
-  "g": "11.143",  // Column G: location of the flag (e.g. NE side)
-  "s": "1,5",     // Column E: dimensions text (1.5 m)
-  "f": "10.1"     // Column F: combination / second feature
+  "c": "0.201",   // Column C: which of similar (Northern)
+  "d": "2.004",   // Column D: control feature (Boulder)
+  "e": "8.001",   // Column E: appearance (Low) — or a second D-code for crossings
+  "s": "1,5",     // Dimensions text — drawn in column F when no combination
+  "f": "10.001",  // Column F: combination (crossing / junction / bend)
+  "g": "11.101",  // Column G: location of the flag (N side)
+  "h": "12.001"   // Column H: other information (First aid)
 }
 ```
 
-The web `iof-symbols.ts` module maps these codes to IOF symbol SVGs per
-sheet column, exactly as before.
+Shared `descriptionCells()` in `iof-symbols.ts` is the single converter
+used by the on-map sheet, the print block, and the editor preview.
+
+### Course-level instructions
+
+`courses.description_instructions` (JSONB, migration
+`20260924180000_course_description_instructions`) holds special rows and
+the finish variant:
+
+```jsonc
+{
+  "specials": [
+    { "afterControlId": null, "kind": "13.1", "lengthM": 60 },
+    { "afterControlId": 31, "kind": "13.2", "lengthM": 120 }
+  ],
+  "finish": { "kind": "14.1", "lengthM": 150 }
+}
+```
+
+`afterControlId` is the public control id; `null` means after start.
+Specials whose control leaves the sequence are pruned on
+`course.update`.
 
 ### Migration + backfill
 

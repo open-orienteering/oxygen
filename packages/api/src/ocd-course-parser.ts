@@ -372,8 +372,10 @@ export function parseOCDCourseData(fileData: Buffer): ParsedOCDCourseData {
                         if (part.startsWith("d")) desc.d = part.slice(1);
                         else if (part.startsWith("g")) desc.g = part.slice(1);
                         else if (part.startsWith("c") && part.includes(".")) desc.c = part.slice(1);
+                        else if (part.startsWith("e") && part.includes(".")) desc.e = part.slice(1);
                         else if (part.startsWith("s") && /^s\d/.test(part)) desc.s = part.slice(1);
                         else if (part.startsWith("f") && part.includes(".")) desc.f = part.slice(1);
+                        else if (part.startsWith("h") && part.includes(".")) desc.h = part.slice(1);
                     }
                     if (desc.d) controlDescriptions.set(resolvedCode, desc);
                 }

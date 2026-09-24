@@ -1,7 +1,8 @@
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import { router, coursesViewProcedure, kioskOrCoursesViewProcedure, coursesEditProcedure, coursesEditRaceProcedure, manageProcedure } from "../trpc.js";
-import type { PrismaClient, Prisma as PrismaNs } from "../generated/prisma/client.js";
+import type { PrismaClient } from "../generated/prisma/client.js";
+import { Prisma as PrismaNs } from "../generated/prisma/client.js";
 import {
   controlStatusToValue,
   valueToControlStatus,
@@ -10,8 +11,10 @@ import {
   type CourseSummary,
   type CourseDetail,
   type ControlDescription,
+  type CourseDescriptionInstructions,
   type ExpectedPosition,
   ControlStatus,
+  pruneDescriptionInstructions,
 } from "@oxygen/shared";
 import {
   parseIOFCourseDataWithGeometry,
@@ -68,6 +71,32 @@ import {
   controlUpsertPayload,
   classUpsertPayload,
 } from "../referenceJournal.js";
+
+/** Course-level description-sheet instructions (specials + finish). */
+const descriptionInstructionsSchema = z
+  .object({
+    specials: z
+      .array(
+        z.object({
+          afterControlId: z.number().int().nullable(),
+          kind: z.string().min(1).max(20),
+          lengthM: z.number().finite().nonnegative().optional(),
+        }),
+      )
+      .optional(),
+    finish: z
+      .object({
+        kind: z.string().min(1).max(20),
+        lengthM: z.number().finite().nonnegative().optional(),
+      })
+      .optional(),
+  })
+  .nullable();
+
+function instructionsDto(raw: unknown): CourseDescriptionInstructions | null {
+  if (!raw || typeof raw !== "object") return null;
+  return raw as CourseDescriptionInstructions;
+}
 
 // ─── Class-name matching for the import preview ─────────────
 
@@ -393,6 +422,7 @@ async function loadCourseDetail(
       className: cl.name,
       runnerCount: runnerCountMap.get(cl.id) ?? 0,
     })),
+    descriptionInstructions: instructionsDto(c.descriptionInstructions),
   };
 }
 
@@ -464,6 +494,7 @@ export const courseRouter = router({
           finishControlId: c.finishControlId
             ? finishIdByUuid.get(c.finishControlId) ?? null
             : null,
+          descriptionInstructions: instructionsDto(c.descriptionInstructions),
         };
       },
     );
@@ -638,6 +669,7 @@ export const courseRouter = router({
          */
         startControlId: z.number().int().nullable().optional(),
         finishControlId: z.number().int().nullable().optional(),
+        descriptionInstructions: descriptionInstructionsSchema.optional(),
       }),
     )
     .mutation(async ({ ctx, input }) => {
@@ -692,6 +724,36 @@ export const courseRouter = router({
               ),
             )
           : [];
+      if (input.descriptionInstructions !== undefined) {
+        // When the sequence is also changing, prune specials that would
+        // otherwise dangle off a control that's leaving the course.
+        const nextIds =
+          input.controlIds !== undefined
+            ? new Set(input.controlIds)
+            : undefined;
+        const pruned =
+          nextIds && input.descriptionInstructions
+            ? pruneDescriptionInstructions(
+                input.descriptionInstructions,
+                nextIds,
+              )
+            : input.descriptionInstructions;
+        data.descriptionInstructions =
+          pruned === null ? PrismaNs.DbNull : pruned;
+      } else if (input.controlIds !== undefined) {
+        // Sequence-only update: keep instructions but drop orphans.
+        const pruned = pruneDescriptionInstructions(
+          instructionsDto(c.descriptionInstructions),
+          new Set(input.controlIds),
+        );
+        if (
+          JSON.stringify(pruned) !==
+          JSON.stringify(c.descriptionInstructions)
+        ) {
+          data.descriptionInstructions =
+            pruned === null ? PrismaNs.DbNull : pruned;
+        }
+      }
       // Table writes + course.upserted journal entry commit together.
       await ctx.db.$transaction(async (tx) => {
         await tx.course.update({ where: { id: c.id }, data });

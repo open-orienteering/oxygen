@@ -697,6 +697,7 @@ export function MapsPage() {
           controls={editingMap.controls}
           legs={editingMap.legs}
           descriptionRows={editingMap.descriptionRows}
+          descriptionHeader={editingMap.descriptionHeader ?? null}
           descriptionTitle={
             editingMap.kind === "all_controls"
               ? editingMap.name
