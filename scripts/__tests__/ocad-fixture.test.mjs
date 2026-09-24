@@ -65,11 +65,6 @@ describe("showcase SQL map substitution", () => {
     const sql = [
       "-- header",
       `INSERT INTO map_files ("event_id", "file_name", "file_data", "uploaded_at") VALUES (9876543, E'Vinter Flaten kartutsitt.ocd', '\\x${"aa".repeat(100)}'::bytea, '2026-01-01T00:00:00.000Z');`,
-      `INSERT INTO map_tiles ("event_id", "z", "x", "y", "tile_data") VALUES (9876543, 10, 563, 301, '\\x89504e47');`,
-      `INSERT INTO map_tiles ("event_id", "z", "x", "y", "tile_data") VALUES (9876543, 11, 1127, 603, '\\x89504e47');`,
-      `INSERT INTO map_tiles ("event_id", "z", "x", "y", "tile_data") VALUES (9876543, 12, 2254, 1206, '\\x89504e47');`,
-      `INSERT INTO map_tiles ("event_id", "z", "x", "y", "tile_data") VALUES (9876543, 13, 4508, 2412, '\\x89504e47');`,
-      `INSERT INTO map_tiles ("event_id", "z", "x", "y", "tile_data") VALUES (9876543, 13, 4509, 2412, '\\x89504e47');`,
       "-- H:\\Delade enheter\\Skogsluffarna\\Arrangemang",
     ].join("\n");
 
@@ -78,7 +73,7 @@ describe("showcase SQL map substitution", () => {
     assert.doesNotMatch(out, /Vinter Flaten/);
     assert.doesNotMatch(out, /kartutsitt/);
     assert.match(out, new RegExp(pgByteaLiteral(ocad).replace(/\\/g, "\\\\")));
-    assert.equal((out.match(/INSERT INTO map_tiles/g) || []).length, 5);
+    assert.equal((out.match(/INSERT INTO map_tiles/g) || []).length, 0);
   });
 
   it("keeps the committed fixture on the generated showcase OCAD", () => {
@@ -86,7 +81,7 @@ describe("showcase SQL map substitution", () => {
       path.join(ROOT, "docs/screenshots/fixtures/showcase.sql"),
       "utf8",
     );
-    assert.equal(countMapTileInserts(sql), 5);
+    assert.equal(countMapTileInserts(sql), 0);
     const map = extractMapFileFromSql(sql);
     assert.equal(map?.fileName, SHOWCASE_OCAD.fileName);
     assert.ok(map?.data);

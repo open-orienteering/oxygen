@@ -1114,6 +1114,18 @@ export function CourseEditorPage() {
   const canUndo = undoStack.canUndo;
   const canRedo = undoStack.canRedo;
 
+  const cutsQuery = trpc.course.getOverprintCuts.useQuery(undefined, {
+    staleTime: Number.POSITIVE_INFINITY,
+  });
+  const setCuts = trpc.course.setOverprintCuts.useMutation({
+    onSuccess: async () => {
+      await cutsQuery.refetch();
+      await utils.course.geometry.invalidate();
+      await utils.course.list.invalidate();
+    },
+  });
+  const cutsEnabled = cutsQuery.data?.enabled !== false;
+
   const toolbar = useMemo(
     () => (
       <div className="flex items-center gap-2 min-w-0" data-testid="course-editor-toolbar">
@@ -1151,6 +1163,21 @@ export function CourseEditorPage() {
           }`}
         >
           {t("editor.hideOtherControls")}
+        </button>
+        <button
+          data-testid="editor-toggle-cuts"
+          type="button"
+          disabled={setCuts.isPending || cutsQuery.isLoading}
+          onClick={() => setCuts.mutate({ enabled: !cutsEnabled })}
+          title={t("editor.toggleCutsTitle")}
+          aria-pressed={cutsEnabled}
+          className={`text-xs px-2.5 py-1 rounded-md transition-colors ${
+            cutsEnabled
+              ? "bg-purple-100 text-purple-700 font-medium cursor-pointer"
+              : "text-slate-500 hover:text-slate-700 hover:bg-slate-100 cursor-pointer"
+          }`}
+        >
+          {t("editor.toggleCuts")}
         </button>
         {selectedControl && (
           <span
@@ -1204,7 +1231,8 @@ export function CourseEditorPage() {
     ),
     [t, selectedCourse, selectedControl, onlyCourse, contextBadge, contextRadioBadge,
       showExhausted, showNoSrr,
-      pendingOps, errorMsg, canUndo, canRedo, runUndo, runRedo],
+      pendingOps, errorMsg, canUndo, canRedo, runUndo, runRedo,
+      cutsEnabled, setCuts, cutsQuery.isLoading],
   );
 
   // ─── In-map course panel ─────────────────────────────────

@@ -31,7 +31,13 @@ export interface BaseMapSvg {
 export interface ComposeMapPageOptions {
   document: CourseMapDocument;
   window: MapWindow;
+  /** Full opaque base map. */
   baseMap: BaseMapSvg;
+  /**
+   * Transparent ink layer (black/brown/blue 100% lines and points) drawn
+   * above lower purple. Null when the colour stack found nothing above.
+   */
+  inkMap?: BaseMapSvg | null;
   controls: CourseOverlayControl[];
   legs: CourseOverlayLeg[];
   descriptionRows: DescriptionRow[];
@@ -72,6 +78,7 @@ export function renderBaseMapWindow(
   baseMap: BaseMapSvg,
   window: MapWindow,
   frame: MapRect,
+  options: { dataLayer?: string; forceTransparentFill?: boolean } = {},
 ): string {
   const rotation = windowRotationDeg(window);
   const bbox = windowBoundingBox(window);
@@ -91,7 +98,13 @@ export function renderBaseMapWindow(
     width: bbox.width * scale,
     height: bbox.height * scale,
   };
-  const nested = `<svg x="${crop.x}" y="${crop.y}" width="${crop.width}" height="${crop.height}" viewBox="${viewBox}" fill="${svgRootFill(baseMap.svg)}" preserveAspectRatio="none">
+  const fill = options.forceTransparentFill
+    ? "transparent"
+    : svgRootFill(baseMap.svg);
+  const layerAttr = options.dataLayer
+    ? ` data-map-layer="${options.dataLayer}"`
+    : "";
+  const nested = `<svg${layerAttr} x="${crop.x}" y="${crop.y}" width="${crop.width}" height="${crop.height}" viewBox="${viewBox}" fill="${fill}" preserveAspectRatio="none">
       ${svgInner(baseMap.svg)}
     </svg>`;
   if (rotation === 0) return nested;
@@ -154,7 +167,15 @@ export function composeMapPageSvg(options: ComposeMapPageOptions): string {
         symbolResolver: (key) => IOF_SYMBOLS[key],
       })
     : "";
+  const ink = options.inkMap
+    ? renderBaseMapWindow(options.inkMap, window, frame, {
+        dataLayer: "map-ink",
+        forceTransparentFill: true,
+      })
+    : "";
 
+  // IOF digital stack: full map → lower purple → ink → whiteouts →
+  // upper purple → descriptions → foreground layout objects.
   return `<?xml version="1.0" encoding="UTF-8"?>
 <svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="${paper.width}mm" height="${paper.height}mm" viewBox="0 0 ${paper.width} ${paper.height}">
   <rect width="${paper.width}" height="${paper.height}" fill="#ffffff"/>
@@ -162,12 +183,16 @@ export function composeMapPageSvg(options: ComposeMapPageOptions): string {
     <clipPath id="map-frame-clip"><rect x="${frame.x}" y="${frame.y}" width="${frame.width}" height="${frame.height}"/></clipPath>
   </defs>
   <g clip-path="url(#map-frame-clip)">
-    ${renderBaseMapWindow(options.baseMap, window, frame)}
+    ${renderBaseMapWindow(options.baseMap, window, frame, { dataLayer: "map-full" })}
+    ${course.lower}
+    ${ink}
+  </g>
+  <g clip-path="url(#map-frame-clip)">
     ${renderMapObjectsSvg({ ...objectOpts, objects: mapWhiteouts })}
   </g>
   ${renderMapObjectsSvg({ ...objectOpts, objects: pageWhiteouts })}
   <g clip-path="url(#map-frame-clip)">
-    ${course}
+    ${course.upper}
   </g>
   ${descriptions}
   <g clip-path="url(#map-frame-clip)">

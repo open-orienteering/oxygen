@@ -13,6 +13,13 @@ import { renderOcadPreview } from "../club-map-preview.js";
 import type { WGS84Bounds } from "../map-projection.js";
 import type { NorthDetection } from "../map-north.js";
 import type { Prisma } from "../generated/prisma/client.js";
+import { computeRenderKey, hashMapFileData } from "../map-render-key.js";
+import {
+  gcOrphanTiles,
+  refreshClubMapRenderKey,
+} from "../map-render-cache.js";
+import { colorProfileSchema, colorStackOverridesSchema } from "@oxygen/shared";
+import { invalidateRenderKey } from "../map-tiles.js";
 
 function toId(id: bigint): number {
   return Number(id);
@@ -32,6 +39,9 @@ export const clubMapRouter = router({
         northOffset: true,
         rotationCorrection: true,
         northDetection: true,
+        colorProfile: true,
+        northLinesBelow: true,
+        renderKey: true,
         uploadedAt: true,
         uploadedBy: true,
         uploader: { select: { email: true, displayName: true } },
@@ -70,6 +80,9 @@ export const clubMapRouter = router({
       northOffset: row.northOffset,
       rotationCorrection: row.rotationCorrection,
       northDetection: (row.northDetection as NorthDetection | null) ?? null,
+      colorProfile: row.colorProfile,
+      northLinesBelow: row.northLinesBelow,
+      renderKey: row.renderKey,
       // Evaluated for today, not import time, so a library map starts
       // to flag its north lines as the declination drifts away from them.
       meridianStalenessDeg: currentMeridianStaleness(row.northDetection),
@@ -92,6 +105,15 @@ export const clubMapRouter = router({
       const resolved = await resolveMapNorth(buffer);
       const previewPng = await renderOcadPreview(buffer);
       const name = input.name?.trim() || input.fileName;
+      const fileHash = hashMapFileData(buffer);
+      const colorProfile = "auto" as const;
+      const northLinesBelow = true;
+      const renderKey = computeRenderKey({
+        fileHash,
+        rotationCorrection: resolved.rotationCorrection,
+        colorProfile,
+        northLinesBelow,
+      });
       const row = await prisma().clubMapFile.create({
         data: {
           name,
@@ -108,6 +130,10 @@ export const clubMapRouter = router({
           northDetection: resolved.northDetection
             ? (resolved.northDetection as unknown as Prisma.InputJsonValue)
             : undefined,
+          colorProfile,
+          northLinesBelow,
+          fileHash,
+          renderKey,
           uploadedBy: ctx.user?.id ?? null,
         },
         select: {
@@ -116,6 +142,7 @@ export const clubMapRouter = router({
           fileName: true,
           sizeBytes: true,
           rotationCorrection: true,
+          renderKey: true,
         },
       });
       return {
@@ -124,8 +151,49 @@ export const clubMapRouter = router({
         fileName: row.fileName,
         sizeBytes: row.sizeBytes,
         rotationCorrection: row.rotationCorrection,
+        renderKey: row.renderKey,
         meridianStalenessDeg: resolved.meridianStalenessDeg,
       };
+    }),
+
+  setColorStack: authedProcedure
+    .input(
+      z.object({
+        id: z.number().int().positive(),
+        profile: colorProfileSchema.optional(),
+        northLinesBelow: z.boolean().optional(),
+        overrides: colorStackOverridesSchema.optional(),
+      }),
+    )
+    .mutation(async ({ input }) => {
+      const id = BigInt(input.id);
+      const existing = await prisma().clubMapFile.findUnique({
+        where: { id },
+        select: { id: true, renderKey: true },
+      });
+      if (!existing) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: `Club map ${input.id} not found`,
+        });
+      }
+      const data: Record<string, unknown> = {};
+      if (input.profile !== undefined) data.colorProfile = input.profile;
+      if (input.northLinesBelow !== undefined) {
+        data.northLinesBelow = input.northLinesBelow;
+      }
+      if (input.overrides !== undefined) {
+        data.colorOverrides = input.overrides;
+      }
+      if (Object.keys(data).length > 0) {
+        await prisma().clubMapFile.update({ where: { id }, data });
+      }
+      const oldKey = existing.renderKey;
+      const renderKey = await refreshClubMapRenderKey(prisma(), id);
+      if (oldKey && oldKey !== renderKey) invalidateRenderKey(oldKey);
+      invalidateRenderKey(renderKey);
+      await gcOrphanTiles(prisma());
+      return { success: true as const, renderKey };
     }),
 
   /**
@@ -201,6 +269,7 @@ export const clubMapRouter = router({
         }
       }
       await prisma().clubMapFile.delete({ where: { id: BigInt(input.id) } });
+      await gcOrphanTiles(prisma());
       return { success: true as const };
     }),
 

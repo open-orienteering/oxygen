@@ -3,9 +3,14 @@ import { test, expect, type Browser, type Page } from "@playwright/test";
 async function inviteUser(page: Page, email: string) {
   await page.goto("/settings?tab=users");
   await expect(page.getByTestId("users-admin-panel")).toBeVisible({ timeout: 15000 });
-  await page.getByTestId("invite-email").fill(email);
+  const emailInput = page.getByTestId("invite-email");
+  await emailInput.fill(email);
   await page.getByTestId("invite-submit").click();
-  await expect(page.getByText(email)).toBeVisible({ timeout: 10000 });
+  // onSuccess clears the controlled input before invalidating the user list.
+  // Waiting for that explicit mutation-complete signal avoids racing the
+  // list refresh on busy full-suite shards.
+  await expect(emailInput).toHaveValue("", { timeout: 15000 });
+  await expect(page.getByText(email)).toBeVisible({ timeout: 20000 });
 }
 
 async function grantRole(page: Page, email: string, roleName: string) {

@@ -529,7 +529,20 @@ describe("course map REST rendering", () => {
     const pdf = await PDFDocument.load(response.rawPayload);
     expect(pdf.getPageCount()).toBe(2);
     expect(convertedSvgs).not.toHaveLength(0);
-    expect(convertedSvgs.at(-1)).toContain("mix-blend-mode: multiply");
+    const last = convertedSvgs.at(-1)!;
+    expect(last).toContain("course-overlay-lower");
+    expect(last).toContain("course-overlay-upper");
+    expect(last).not.toContain("mix-blend-mode");
+    // Ink (when present) sits between lower and upper purple.
+    const lowerAt = last.indexOf("course-overlay-lower");
+    const upperAt = last.indexOf("course-overlay-upper");
+    expect(lowerAt).toBeGreaterThanOrEqual(0);
+    expect(upperAt).toBeGreaterThan(lowerAt);
+    const inkAt = last.indexOf('data-map-layer="map-ink"');
+    if (inkAt >= 0) {
+      expect(inkAt).toBeGreaterThan(lowerAt);
+      expect(inkAt).toBeLessThan(upperAt);
+    }
   });
 
   it("exports all-controls starts and finishes as symbols", async () => {

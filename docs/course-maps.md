@@ -102,16 +102,19 @@ Structured JSON is validated at every tRPC boundary with the Zod schemas in
 ```text
 map_files.file_data
   -> readOcad
+  -> applyIofColorStack (rewrite colour renderOrder)
   -> discard objects outside print window + 20 mm
-  -> ocadToSvg
-  -> nested SVG clipped to map frame
-  -> white-outs
-  -> course overlay
+  -> ocadToSvg (full) + ocadToSvg (ink, toColor)
+  -> nested SVGs clipped to map frame:
+       full map → lower purple → ink → whiteouts → upper purple
   -> IOF control descriptions
   -> text / lines / rectangles
   -> rsvg-convert --format=pdf
   -> pdf-lib page merge
 ```
+
+See [`map-color-stack.md`](map-color-stack.md) for IOF lower/upper purple
+stacking (no blend modes).
 
 Course symbols start from norm dimensions in output millimetres: 2.5 mm
 control radius and 0.35 mm stroke by default. When a base map is enlarged
@@ -262,8 +265,9 @@ objects rather than UUIDs.
 The layout editor and PDF composer use the same course-overlay geometry as the
 regular map view: legs are clipped around controls, imported overprint gaps
 and control-circle slits are retained, and control numbers avoid symbols and
-course lines. Print output uses multiply blending so map detail remains
-visible beneath the purple ink.
+course lines. Print (and the live map) use IOF colour stacking — lower purple
+under the map ink layer, upper purple on top — instead of blend modes; see
+[`map-color-stack.md`](map-color-stack.md).
 
 Appearance dimensions (circle radius, line width, number height) are ISOM
 dimensions **at the base map scale** — the defaults match ISOM 2017-2:

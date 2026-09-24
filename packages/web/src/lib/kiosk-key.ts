@@ -15,13 +15,19 @@ export function kioskKeyFromUrl(
  * Query string for a map-tile `<img>` src. Image requests can't carry the
  * `x-kiosk-key` header, so key-only devices (kiosk, start screen) must
  * pass the key as `?k=` — the REST guard accepts either.
+ *
+ * `f=2` marks the stacked 256×512 tile format (composite + ink) so a
+ * browser that still holds a week-old 256×256 PNG from before the
+ * format change cannot feed it into the half-slicer.
  */
+export const TILE_FORMAT = 2;
+
 export function tileQueryString(
-  tileVersion: number | undefined,
+  tileVersion: number | string | undefined,
   kioskKey: string | null,
 ): string {
-  const parts: string[] = [];
+  const parts: string[] = [`f=${TILE_FORMAT}`];
   if (tileVersion) parts.push(`v=${tileVersion}`);
   if (kioskKey) parts.push(`k=${encodeURIComponent(kioskKey)}`);
-  return parts.length > 0 ? `?${parts.join("&")}` : "";
+  return `?${parts.join("&")}`;
 }

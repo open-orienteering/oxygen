@@ -53,7 +53,8 @@ describe("map page SVG composition", () => {
       'width="194" height="194" viewBox="0 0 10000 10000" fill="transparent"',
     );
     expect(svg).toContain('id="terrain"');
-    expect(svg).toContain('data-map-layer="course-overlay"');
+    expect(svg).toContain('data-map-layer="course-overlay-lower"');
+    expect(svg).toContain('data-map-layer="course-overlay-upper"');
     expect(svg).toContain('data-pattern-tile="7-7"');
   });
 });

@@ -117,6 +117,8 @@
     "undo": "Ångra (Ctrl+Z)",
     "redo": "Gör om (Ctrl+Shift+Z)",
     "hideOtherControls": "Dölj övriga kontroller",
+    "toggleCuts": "Autoklipp",
+    "toggleCutsTitle": "Automatiska slits i cirklar och luckor i sträckor över kartdetaljer",
     "alsoIn": "Även i: {{names}}",
     "affects": "Påverkar: {{names}}",
     "actionAdd": "Lägg till kontroll",

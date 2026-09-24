@@ -159,6 +159,11 @@ model Event {
   removed   Boolean  @default(false)
   /// Device token for kiosk / start-screen URLs when AUTH_MODE is on.
   kioskKey  String?  @map("kiosk_key")
+  /// When true, editor geometry rebuilds insert automatic circle slits
+  /// and leg gaps around compact knoll / rock point features.
+  autoOverprintCuts Boolean @default(true) @map("auto_overprint_cuts")
+  /// Algorithm version last applied to every editor-authored course.
+  overprintCutsVersion Int @default(2) @map("overprint_cuts_version")
   createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt DateTime @default(now()) @map("updated_at") @db.Timestamptz(6)
 
@@ -177,7 +182,6 @@ model Event {
   leases             EventLease[]
   mapFiles           MapFile[]
   renderedMaps       RenderedMap[]
-  mapTiles           MapTile[]
   mapTemplates       MapTemplate[]
   courseMaps         CourseMap[]
   graphics           Graphic[]
@@ -1003,12 +1007,19 @@ model ClubMapFile {
   rotationCorrection Float    @default(0) @map("rotation_correction")
   /// Diagnostic from import-time north detection (declination, meridian…).
   northDetection     Json?    @map("north_detection")
+  /// IOF colour-stack profile — copied into the event MapFile on use.
+  colorProfile       String   @default("auto") @map("color_profile")
+  colorOverrides     Json     @default("{}") @map("color_overrides")
+  northLinesBelow    Boolean  @default(true) @map("north_lines_below")
+  fileHash           String?  @map("file_hash")
+  renderKey          String?  @map("render_key")
   uploadedBy         String?  @map("uploaded_by") @db.Uuid
   uploadedAt         DateTime @default(now()) @map("uploaded_at") @db.Timestamptz(6)
   updatedAt          DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
 
   uploader User? @relation(fields: [uploadedBy], references: [id], onDelete: SetNull)
 
+  @@index([renderKey])
   @@map("club_map_files")
   @@schema("oxygen")
 }
@@ -1120,10 +1131,21 @@ model MapFile {
   /// stay club property even after an event adopts them, so downloads
   /// and event backups of those rows require an instance admin.
   fromClubLibrary    Boolean  @default(false) @map("from_club_library")
+  /// IOF colour-stack profile (`auto` | `isom` | `issprom` | …).
+  colorProfile       String   @default("auto") @map("color_profile")
+  /// Per-colour force-above / force-below overrides (`{ above, below }`).
+  colorOverrides     Json     @default("{}") @map("color_overrides")
+  /// When true, ISOM 601.x north lines are omitted from the ink tile half.
+  northLinesBelow    Boolean  @default(true) @map("north_lines_below")
+  /// SHA-256 hex of `file_data` — content identity for shared tiles.
+  fileHash           String?  @map("file_hash")
+  /// Content-keyed tile/print cache id; lazily filled on first read.
+  renderKey          String?  @map("render_key")
 
   event Event @relation(fields: [eventId], references: [id], onDelete: Cascade)
 
   @@index([eventId])
+  @@index([renderKey])
   @@map("map_files")
   @@schema("oxygen")
 }
@@ -1147,15 +1169,15 @@ model RenderedMap {
 }
 
 model MapTile {
-  eventId  BigInt @map("event_id")
-  z        Int
-  x        Int
-  y        Int
-  tileData Bytes  @map("tile_data")
+  /// Content-keyed cache identity (see `computeRenderKey`). Shared
+  /// across events that use the same map blob + colour-stack settings.
+  renderKey String @map("render_key")
+  z         Int
+  x         Int
+  y         Int
+  tileData  Bytes  @map("tile_data")
 
-  event Event @relation(fields: [eventId], references: [id], onDelete: Cascade)
-
-  @@id([eventId, z, x, y])
+  @@id([renderKey, z, x, y])
   @@map("map_tiles")
   @@schema("oxygen")
 }

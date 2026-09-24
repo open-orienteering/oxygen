@@ -49,7 +49,22 @@ function migrationStatements(): string[] {
     .join("\n")
     .split(";")
     .map((s) => s.trim())
-    .filter(Boolean);
+    .filter(Boolean)
+    // map_tiles dropped event_id in 20260923180000; rewrite the historical
+    // DELETE to the content-keyed form so this suite still validates the
+    // correction-reset logic against the current schema.
+    .map((sql) =>
+      sql.includes("DELETE FROM oxygen.map_tiles")
+        ? `DELETE FROM oxygen.map_tiles t
+USING oxygen.map_files m
+WHERE t.render_key = m.render_key
+  AND m.rotation_correction <> 0
+  AND m.north_detection IS NOT NULL
+  AND (m.north_detection->>'shouldAutoApply')::boolean IS TRUE
+  AND (m.north_detection->>'suggestedCorrectionDeg') IS NOT NULL
+  AND abs(m.rotation_correction - (m.north_detection->>'suggestedCorrectionDeg')::double precision) < 1e-6`
+        : sql,
+    );
 }
 
 let autoCtx: TestEventContext;
@@ -88,10 +103,17 @@ describe("reset_auto_north_corrections migration", () => {
         bounds: shifted.bounds as unknown as Prisma.InputJsonValue,
         northOffset: shifted.northOffset,
         calibration: shifted.calibration as unknown as Prisma.InputJsonValue,
+        renderKey: "reset-auto-key",
       },
     });
     await db.mapTile.create({
-      data: { eventId: autoCtx.eventId, z: 3, x: 1, y: 1, tileData: Buffer.from([1]) },
+      data: {
+        renderKey: "reset-auto-key",
+        z: 3,
+        x: 1,
+        y: 1,
+        tileData: Buffer.from([1]),
+      },
     });
     // A positioned control whose lat/lng were computed under +1.7°.
     const control = await db.control.create({
@@ -111,10 +133,17 @@ describe("reset_auto_north_corrections migration", () => {
         bounds: shifted.bounds as unknown as Prisma.InputJsonValue,
         northOffset: shifted.northOffset,
         calibration: shifted.calibration as unknown as Prisma.InputJsonValue,
+        renderKey: "reset-manual-key",
       },
     });
     await manualCtx.db.mapTile.create({
-      data: { eventId: manualCtx.eventId, z: 3, x: 1, y: 1, tileData: Buffer.from([1]) },
+      data: {
+        renderKey: "reset-manual-key",
+        z: 3,
+        x: 1,
+        y: 1,
+        tileData: Buffer.from([1]),
+      },
     });
 
     // Club-library rows: one auto, one manual.
@@ -155,7 +184,7 @@ describe("reset_auto_north_corrections migration", () => {
     expect(autoAfter.calibration).toBeNull();
     expect(autoAfter.uploadedAt.getTime()).toBeGreaterThan(autoRow.uploadedAt.getTime());
     expect(autoAfter.northDetection).toMatchObject({ autoCorrectionResetFromDeg: 1.7 });
-    expect(await db.mapTile.count({ where: { eventId: autoCtx.eventId } })).toBe(0);
+    expect(await db.mapTile.count({ where: { renderKey: "reset-auto-key" } })).toBe(0);
 
     const manualAfter = await manualCtx.db.mapFile.findUniqueOrThrow({
       where: { id: manualRow.id },
@@ -164,7 +193,7 @@ describe("reset_auto_north_corrections migration", () => {
     expect(manualAfter.scale).toBe(shifted.scale);
     expect(manualAfter.calibration).not.toBeNull();
     expect(
-      await manualCtx.db.mapTile.count({ where: { eventId: manualCtx.eventId } }),
+      await manualCtx.db.mapTile.count({ where: { renderKey: "reset-manual-key" } }),
     ).toBe(1);
 
     const clubAutoAfter = await db.clubMapFile.findUniqueOrThrow({ where: { id: clubAuto.id } });

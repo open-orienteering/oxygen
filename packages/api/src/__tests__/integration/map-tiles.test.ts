@@ -28,6 +28,8 @@ import { resolve } from "path";
 import Fastify, { type FastifyInstance } from "fastify";
 import { registerMapTileRoutes } from "../../map-tiles.js";
 import { createTestEvent, disconnect } from "../helpers/test-db.js";
+import { ensureEventMapRenderKey, gcOrphanTiles } from "../../map-render-cache.js";
+import { makeCaller } from "../helpers/caller.js";
 import {
   ocadBoundsToWgs84,
   type OcadCrs,
@@ -50,6 +52,12 @@ let mapBounds: {
 };
 
 const FIXTURE = resolve(__dirname, "../../../../../e2e/test.ocd");
+
+async function eventRenderKey(eventId: bigint): Promise<string> {
+  const meta = await ensureEventMapRenderKey(ctx.db, eventId);
+  if (!meta?.renderKey) throw new Error("missing renderKey");
+  return meta.renderKey;
+}
 
 /** Slippy-map XYZ coords for the centre of a WGS84 bbox at zoom `z`. */
 function centerTile(
@@ -139,6 +147,23 @@ describe("map-tile endpoint", () => {
       Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
     );
     expect(res.rawPayload.length).toBeGreaterThan(200);
+    // Stacked tile: composite (top) + ink (bottom) = 256×512.
+    const { default: sharp } = await import("sharp");
+    const meta = await sharp(res.rawPayload).metadata();
+    expect(meta.width).toBe(256);
+    expect(meta.height).toBe(512);
+    // Ink half (bottom) must carry some opaque pixels — black paths /
+    // blue north lines from the fixture colour stack.
+    const ink = await sharp(res.rawPayload)
+      .extract({ left: 0, top: 256, width: 256, height: 256 })
+      .ensureAlpha()
+      .raw()
+      .toBuffer();
+    let opaque = 0;
+    for (let i = 3; i < ink.length; i += 4) {
+      if (ink[i]! > 0) opaque += 1;
+    }
+    expect(opaque).toBeGreaterThan(100);
 
     // Second request — same tile, served from the map_tiles cache.
     const cached = await server.inject({
@@ -149,7 +174,7 @@ describe("map-tile endpoint", () => {
     expect(cached.rawPayload.length).toBe(res.rawPayload.length);
 
     const cachedRows = await ctx.db.mapTile.count({
-      where: { eventId: ctx.eventId, z: Z, x, y },
+      where: { renderKey: await eventRenderKey(ctx.eventId), z: Z, x, y },
     });
     expect(cachedRows).toBe(1);
   }, 60_000);
@@ -164,9 +189,10 @@ describe("map-tile endpoint", () => {
     const bx = Math.floor(x / size) * size;
     const by = Math.floor(y / size) * size;
 
+    const renderKey = await eventRenderKey(ctx.eventId);
     const before = await ctx.db.mapTile.count({
       where: {
-        eventId: ctx.eventId,
+        renderKey,
         z: Z,
         x: { gte: bx, lt: bx + size },
         y: { gte: by, lt: by + size },
@@ -182,7 +208,7 @@ describe("map-tile endpoint", () => {
 
     const after = await ctx.db.mapTile.count({
       where: {
-        eventId: ctx.eventId,
+        renderKey,
         z: Z,
         x: { gte: bx, lt: bx + size },
         y: { gte: by, lt: by + size },
@@ -273,7 +299,7 @@ describe("map-tile endpoint", () => {
     // above the ceiling and must not be counted.
     const rows = await ctx.db.mapTile.count({
       where: {
-        eventId: ctx.eventId,
+        renderKey: await eventRenderKey(ctx.eventId),
         z: { gte: PRECACHE_MIN_ZOOM, lte: PRECACHE_MAX_ZOOM },
       },
     });
@@ -342,13 +368,15 @@ describe("map-tile endpoint", () => {
     process.env.MAP_TILE_PRECACHE = "on";
     process.env.MAP_PRECACHE_BLOCK_DELAY_MS = "0";
     try {
-      await other.db.mapFile.create({
-        data: {
-          eventId: other.eventId,
-          fileName: "test.ocd",
-          fileData: readFileSync(FIXTURE),
-          bounds: mapBounds,
-        },
+      const caller = makeCaller(other.event);
+      await caller.course.uploadMap({
+        fileName: "test.ocd",
+        fileDataBase64: readFileSync(FIXTURE).toString("base64"),
+      });
+      // Unique stack settings so this event's render_key does not share
+      // deep-zoom tiles rendered earlier by the suite's primary event.
+      await caller.course.setMapColorStack({
+        overrides: { above: [424242] },
       });
 
       const { x, y } = centerTile(mapBounds, PRECACHE_MIN_ZOOM);
@@ -377,7 +405,11 @@ describe("map-tile endpoint", () => {
 
       // Nothing above the ceiling was rendered — that is the point of it.
       const deep = await other.db.mapTile.count({
-        where: { eventId: other.eventId, z: { gt: PRECACHE_MAX_ZOOM } },
+        where: {
+          renderKey: (await ensureEventMapRenderKey(other.db, other.eventId))!
+            .renderKey,
+          z: { gt: PRECACHE_MAX_ZOOM },
+        },
       });
       expect(deep).toBe(0);
     } finally {
@@ -416,13 +448,17 @@ describe("map-tile endpoint", () => {
       expect(first.statusCode).toBe(200);
 
       // What a re-upload looks like from another instance's point of
-      // view: new bytes, a newer `uploadedAt`, and the event's tiles
-      // purged — with no in-process notification.
-      await other.db.mapTile.deleteMany({ where: { eventId: other.eventId } });
+      // view: new bytes, a newer `uploadedAt`, and the old render_key
+      // cleared — with no in-process notification.
+      const oldKey = (await ensureEventMapRenderKey(other.db, other.eventId))!
+        .renderKey;
+      await other.db.mapTile.deleteMany({ where: { renderKey: oldKey } });
       await other.db.mapFile.updateMany({
         where: { eventId: other.eventId },
         data: {
           fileData: Buffer.from("not an ocad file"),
+          fileHash: null,
+          renderKey: null,
           uploadedAt: new Date(Date.now() + 60_000),
         },
       });
@@ -466,4 +502,125 @@ describe("map-tile endpoint", () => {
     expect(res.statusCode).toBe(200);
     expect(res.json()).toEqual({ total: 0, done: 0, rendering: false });
   });
+
+  it("two events with the same map blob share tile rows", async () => {
+    const a = await createTestEvent("map_tiles_share_a");
+    const b = await createTestEvent("map_tiles_share_b");
+    try {
+      const buf = readFileSync(FIXTURE);
+      const callerA = makeCaller(a.event);
+      const callerB = makeCaller(b.event);
+      await callerA.course.uploadMap({
+        fileName: "test.ocd",
+        fileDataBase64: buf.toString("base64"),
+      });
+      await callerB.course.uploadMap({
+        fileName: "test.ocd",
+        fileDataBase64: buf.toString("base64"),
+      });
+      const keyA = (await ensureEventMapRenderKey(a.db, a.eventId))!.renderKey;
+      const keyB = (await ensureEventMapRenderKey(b.db, b.eventId))!.renderKey;
+      expect(keyA).toBe(keyB);
+
+      const Z = 13;
+      const { x, y } = centerTile(mapBounds, Z);
+      const first = await server.inject({
+        method: "GET",
+        url: `/api/map-tile/${a.nameId}/${Z}/${x}/${y}`,
+      });
+      expect(first.statusCode).toBe(200);
+      const rowsAfterA = await a.db.mapTile.count({
+        where: { renderKey: keyA, z: Z, x, y },
+      });
+      expect(rowsAfterA).toBe(1);
+
+      const second = await server.inject({
+        method: "GET",
+        url: `/api/map-tile/${b.nameId}/${Z}/${x}/${y}`,
+      });
+      expect(second.statusCode).toBe(200);
+      expect(second.rawPayload.length).toBe(first.rawPayload.length);
+      // Still one row — B hit A's cache.
+      expect(
+        await a.db.mapTile.count({ where: { renderKey: keyA, z: Z, x, y } }),
+      ).toBe(1);
+    } finally {
+      await a.cleanup();
+      await b.cleanup();
+    }
+  }, 90_000);
+
+  it("changing colour profile yields a new key; GC drops unreferenced tiles", async () => {
+    const ev = await createTestEvent("map_tiles_profile");
+    try {
+      const caller = makeCaller(ev.event);
+      await caller.course.uploadMap({
+        fileName: "test.ocd",
+        fileDataBase64: readFileSync(FIXTURE).toString("base64"),
+      });
+      // Mint a unique key so the suite's primary event (same blob + auto)
+      // does not keep the old key alive after we switch profile.
+      await caller.course.setMapColorStack({
+        overrides: { above: [777001] },
+      });
+      const oldKey = (await ensureEventMapRenderKey(ev.db, ev.eventId))!
+        .renderKey;
+      const Z = 13;
+      const { x, y } = centerTile(mapBounds, Z);
+      await server.inject({
+        method: "GET",
+        url: `/api/map-tile/${ev.nameId}/${Z}/${x}/${y}`,
+      });
+      expect(
+        await ev.db.mapTile.count({ where: { renderKey: oldKey, z: Z, x, y } }),
+      ).toBe(1);
+
+      const result = await caller.course.setMapColorStack({ profile: "issprom" });
+      expect(result.renderKey).not.toBe(oldKey);
+      await gcOrphanTiles(ev.db);
+      expect(
+        await ev.db.mapTile.count({ where: { renderKey: oldKey } }),
+      ).toBe(0);
+
+      const meta = await caller.course.mapMetadata();
+      expect(meta?.renderKey).toBe(result.renderKey);
+      expect(meta?.colorProfile).toBe("issprom");
+      expect(meta?.cutRotationDeg).toBeDefined();
+    } finally {
+      await ev.cleanup();
+    }
+  }, 90_000);
+
+  it("club-library map keeps tiles after the event drops the map", async () => {
+    const clubCaller = makeCaller(null);
+    const uploaded = await clubCaller.clubMap.upload({
+      fileName: "test.ocd",
+      fileDataBase64: readFileSync(FIXTURE).toString("base64"),
+    });
+    const ev = await createTestEvent("map_tiles_club_keep");
+    try {
+      const caller = makeCaller(ev.event);
+      await caller.course.useClubMap({ clubMapId: uploaded.id });
+      const key = (await ensureEventMapRenderKey(ev.db, ev.eventId))!.renderKey;
+      const Z = 13;
+      const { x, y } = centerTile(mapBounds, Z);
+      await server.inject({
+        method: "GET",
+        url: `/api/map-tile/${ev.nameId}/${Z}/${x}/${y}`,
+      });
+      expect(
+        await ev.db.mapTile.count({ where: { renderKey: key, z: Z, x, y } }),
+      ).toBe(1);
+
+      await ev.cleanup();
+      await gcOrphanTiles(ev.db);
+      // Club library still references the key → tiles survive.
+      expect(
+        await ev.db.mapTile.count({ where: { renderKey: key, z: Z, x, y } }),
+      ).toBe(1);
+    } finally {
+      await clubCaller.clubMap.remove({ id: uploaded.id });
+      await gcOrphanTiles(ev.db);
+    }
+  }, 90_000);
 });

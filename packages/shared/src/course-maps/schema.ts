@@ -253,3 +253,33 @@ export const defaultMapAppearance: MapAppearance = {
   lineWidthMm: 0.35,
   numberHeightMm: 4,
 };
+
+/**
+ * IOF colour-stack profile for lower/upper purple placement.
+ * See docs/map-color-stack.md and IOF Printing and Colour Definitions
+ * rev. 4 ch. 7. `auto` resolves from the file's own "Lower purple"
+ * colour or map scale.
+ */
+export const colorProfileSchema = z.enum([
+  "auto",
+  "isom",
+  "issprom",
+  "isskiom",
+  "ismtbom",
+]);
+export type ColorProfile = z.infer<typeof colorProfileSchema>;
+
+/** Explicit rule-set values after `auto` resolution (never `auto`). */
+export const resolvedColorProfileSchema = z.enum([
+  "isom",
+  "issprom",
+  "isskiom",
+  "ismtbom",
+]);
+export type ResolvedColorProfile = z.infer<typeof resolvedColorProfileSchema>;
+
+export const colorStackOverridesSchema = z.object({
+  above: z.array(z.number().int()).optional(),
+  below: z.array(z.number().int()).optional(),
+});
+export type ColorStackOverrides = z.infer<typeof colorStackOverridesSchema>;

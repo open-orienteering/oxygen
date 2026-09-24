@@ -179,8 +179,14 @@ test("creates templates, lays out several maps and exports PDFs", async ({
   await expect(
     page
       .getByTestId("map-course-overlay")
-      .locator('[data-map-layer="course-overlay"]'),
+      .locator('[data-map-layer="course-overlay-upper"]'),
   ).toBeVisible();
+  await expect(
+    page
+      .getByTestId("map-course-overlay-lower")
+      .locator('[data-map-layer="course-overlay-lower"]'),
+  ).toBeVisible();
+  await expect(page.getByTestId("map-preview-ink")).toBeVisible();
   await expect(page.getByTestId("map-print-margin")).toHaveCount(0);
   await page.getByTestId("map-panel-properties-toggle").click();
   await expect(page.getByText("Template objects are locked")).toBeVisible();

@@ -21,6 +21,9 @@ import { Prisma as PrismaNs } from "./generated/prisma/client.js";
 import { loadEventCrs } from "./event-crs.js";
 import { loadEventMapObjects } from "./event-map-objects.js";
 import { decorateOverprintCuts } from "./overprint-cuts.js";
+/** Increment when stored automatic cut/gap semantics change. */
+export const OVERPRINT_CUTS_VERSION = 2;
+
 
 /** One entry of a course's rendered sequence (start + controls + finish). */
 export interface GeometrySeqControl {
@@ -132,10 +135,17 @@ export async function rebuildCourseGeometry(
   const crs = await loadEventCrs(db, eventId);
   const mapScale = crs?.scale ?? null;
 
-  // Base-map objects for automatic overprint cuts (circle slits over
-  // black features / knolls, leg gaps over black features). Cached per
-  // event, null when there is no map.
-  const mapObjects = await loadEventMapObjects(db, eventId);
+  // Base-map objects for automatic overprint cuts around compact knoll /
+  // rock point features. Cached per event, null when there is no map —
+  // and skipped when the event has auto overprint cuts turned off.
+  const eventRow = await db.event.findUnique({
+    where: { id: eventId },
+    select: { autoOverprintCuts: true },
+  });
+  const mapObjects =
+    eventRow?.autoOverprintCuts === false
+      ? null
+      : await loadEventMapObjects(db, eventId);
 
   // Event-level start/finish controls, shared across all rebuilt courses.
   const startFinish = await db.control.findMany({
@@ -236,4 +246,34 @@ export async function rebuildCourseGeometry(
 
     await db.course.update({ where: { id: courseUuid }, data });
   }
+}
+
+/**
+ * Lazily migrate editor-authored geometry after an overprint-cut algorithm
+ * change. Imported OCD/XML geometry is deliberately untouched.
+ */
+export async function ensureOverprintCutsCurrent(
+  db: Db,
+  eventId: bigint,
+): Promise<void> {
+  const event = await db.event.findUnique({
+    where: { id: eventId },
+    select: { overprintCutsVersion: true },
+  });
+  if (!event || event.overprintCutsVersion >= OVERPRINT_CUTS_VERSION) return;
+
+  const courses = await db.course.findMany({
+    where: { eventId, removed: false, geometrySource: "editor" },
+    select: { id: true },
+  });
+  await rebuildCourseGeometry(
+    db,
+    eventId,
+    courses.map((course) => course.id),
+    { updateLength: false },
+  );
+  await db.event.update({
+    where: { id: eventId },
+    data: { overprintCutsVersion: OVERPRINT_CUTS_VERSION },
+  });
 }

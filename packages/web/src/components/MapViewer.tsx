@@ -9,9 +9,10 @@ import {
   type ControlDescription,
   type PlacementCircle,
   type PlacementSeg,
+  defaultMapAppearance,
 } from "@oxygen/shared";
 import { getDescriptionSymbols } from "../iof-symbols";
-import { TileLayer } from "./TileLayer";
+import { TileBlobCacheProvider, TileLayer } from "./TileLayer";
 import { kioskKeyFromUrl } from "../lib/kiosk-key";
 import {
   type TileViewport,
@@ -214,8 +215,10 @@ interface Props {
    * lines vertical on screen. Applied as CSS rotation.
    */
   northOffset?: number | null;
-  /** Map upload timestamp for cache busting tile URLs */
-  mapVersion?: number;
+  /** Rotation for circle slits (paper north only — excludes meridian tilt). */
+  cutRotationDeg?: number | null;
+  /** Render key / upload stamp for cache-busting tile URLs. */
+  mapVersion?: number | string;
   /**
    * Map-mm ↔ WGS84 anchor points from the map's georeference
    * (course.mapMetadata). Preferred source for the affine transform —
@@ -286,6 +289,7 @@ export function MapViewer({
   mapBounds,
   mapScale,
   northOffset,
+  cutRotationDeg,
   mapVersion,
   calibration,
   controls = [],
@@ -1484,7 +1488,9 @@ export function MapViewer({
       }
     }
 
-    const elements: React.ReactNode[] = [];
+    const purple = defaultMapAppearance.purple;
+    const lowerElements: React.ReactNode[] = [];
+    const upperElements: React.ReactNode[] = [];
     // Editor hit-target metadata. The JSX (with its ref-writing event
     // handlers) is materialized OUTSIDE this memo — the React Compiler
     // lint treats everything inside useMemo as render-scope, where ref
@@ -1559,13 +1565,12 @@ export function MapViewer({
 
           if (props.preclipped) {
             const d = screenPts.map((p, i) => `${i === 0 ? "M" : "L"}${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(" ");
-            elements.push(
-              <path key={`leg-${fi}`} d={d} stroke="#c026d3" strokeWidth={legStroke} fill="none" opacity={0.85} />
+            lowerElements.push(
+              <path key={`leg-${fi}`} d={d} stroke={purple} strokeWidth={legStroke} fill="none" />
             );
           } else {
-            // Automatic overprint gaps (black map features under the
-            // leg), computed server-side into the geometry as fractions
-            // of the full leg.
+            // Automatic gaps around compact knoll / rock point features,
+            // computed server-side as fractions of the full leg.
             const legGaps: { from: number; to: number }[] = Array.isArray(props.gaps)
               ? props.gaps
               : [];
@@ -1592,11 +1597,11 @@ export function MapViewer({
                 const segs = clipLine(pts[si], pts[si + 1], obstacles, radius * 1.2);
                 for (let segi = 0; segi < segs.length; segi++) {
                   const seg = segs[segi];
-                  elements.push(
+                  lowerElements.push(
                     <line key={`leg-${fi}-${pi}-${si}-${segi}`}
                       x1={seg.x1} y1={seg.y1} x2={seg.x2} y2={seg.y2}
                       data-leg-gapped={gapped}
-                      stroke="#c026d3" strokeWidth={legStroke} opacity={0.85} />
+                      stroke={purple} strokeWidth={legStroke} />
                   );
                 }
               }
@@ -1615,9 +1620,9 @@ export function MapViewer({
             });
           }
           const d = screenPts.map((p, i) => `${i === 0 ? "M" : "L"}${p.px.toFixed(1)},${p.py.toFixed(1)}`).join(" ");
-          elements.push(
-            <path key={`route-${fi}`} d={d} stroke="#c026d3" strokeWidth={legStroke * 1.5}
-              fill="none" opacity={0.7} strokeDasharray={`${legStroke * 4} ${legStroke * 2}`} />
+          upperElements.push(
+            <path key={`route-${fi}`} d={d} stroke={purple} strokeWidth={legStroke * 1.5}
+              fill="none" strokeDasharray={`${legStroke * 4} ${legStroke * 2}`} />
           );
         } else if ((props.symbolType === "forbidden_route" || props.symbolType === "restricted_line") && geom.type === "LineString") {
           const coords = geom.coordinates as [number, number][];
@@ -1632,9 +1637,10 @@ export function MapViewer({
             });
           }
           const d = screenPts.map((p, i) => `${i === 0 ? "M" : "L"}${p.px.toFixed(1)},${p.py.toFixed(1)}`).join(" ");
-          elements.push(
-            <path key={`restrict-${fi}`} d={d} stroke="#c026d3" strokeWidth={legStroke * 2}
-              fill="none" opacity={0.6}
+          const target = props.symbolType === "restricted_line" ? lowerElements : upperElements;
+          target.push(
+            <path key={`restrict-${fi}`} d={d} stroke={purple} strokeWidth={legStroke * 2}
+              fill="none"
               strokeDasharray={props.symbolType === "forbidden_route" ? `${legStroke * 6} ${legStroke * 3}` : "none"} />
           );
         }
@@ -1656,7 +1662,7 @@ export function MapViewer({
         const d = screenPts
           .map((p, i) => `${i === 0 ? "M" : "L"}${p.px.toFixed(1)},${p.py.toFixed(1)}`)
           .join(" ");
-        elements.push(
+        upperElements.push(
           <path
             key={`gps-${ri}`}
             d={d}
@@ -1714,10 +1720,10 @@ export function MapViewer({
         const segs = clipLine(fromPt, toPt, obstacles, radius * 1.2);
         for (let segi = 0; segi < segs.length; segi++) {
           const seg = segs[segi];
-          elements.push(
+          lowerElements.push(
             <line key={`fleg-${course.name}-${i}-${segi}`}
               x1={seg.x1} y1={seg.y1} x2={seg.x2} y2={seg.y2}
-              stroke="#c026d3" strokeWidth={legStroke} opacity={0.85} />
+              stroke={purple} strokeWidth={legStroke} />
           );
         }
       }
@@ -1785,7 +1791,7 @@ export function MapViewer({
         c.punchStatus === "extra" ? "#f59e0b" :
         c.punchStatus === "ok" ? "#059669" :
         isHighlighted ? "#ef4444" :
-        "#c026d3";
+        purple;
       // Editor fading: while a course is selected, regular controls off
       // the course recede (Purple Pen style) — still purple, still
       // clickable. Start/finish stay at full strength.
@@ -1797,13 +1803,13 @@ export function MapViewer({
       if (c.type === "Start") {
         const s = startSize;
         const triPath = `M${pos.x},${pos.y - s} L${pos.x - s * 0.866},${pos.y + s * 0.5} L${pos.x + s * 0.866},${pos.y + s * 0.5} Z`;
-        elements.push(
+        lowerElements.push(
           <path key={`start-${c.id}`} d={triPath} stroke={baseColor} strokeWidth={stroke} fill="none"
             style={{ cursor: onControlClick ? "pointer" : undefined }}
             onClick={onControlClick ? () => onControlClick(c.id) : undefined} />
         );
       } else if (c.type === "Finish") {
-        elements.push(
+        lowerElements.push(
           <g key={`finish-${c.id}`} style={{ cursor: onControlClick ? "pointer" : undefined }}
             onClick={onControlClick ? () => onControlClick(c.id) : undefined}>
             <circle cx={pos.x} cy={pos.y} r={finishOuter} stroke={baseColor} strokeWidth={stroke} fill="none" />
@@ -1814,9 +1820,10 @@ export function MapViewer({
         const cuts = getCourseGeomCuts(c.code);
 
         if (cuts && cuts.length > 0) {
-          const adj = cuts.map(g => ({ start: g.start + (northOffset || 0), end: g.end + (northOffset || 0) }));
+          const rot = cutRotationDeg ?? 0;
+          const adj = cuts.map(g => ({ start: g.start + rot, end: g.end + rot }));
           const arcs = drawBrokenCircle(pos.x, pos.y, radius, adj);
-          elements.push(
+          lowerElements.push(
             <path key={`ctrl-${c.id}`} d={arcs} stroke={baseColor} strokeWidth={stroke} fill="none"
               data-testid="control-circle-cut"
               opacity={fade}
@@ -1824,7 +1831,7 @@ export function MapViewer({
               onClick={onControlClick ? () => onControlClick(c.id) : undefined} />
           );
         } else {
-          elements.push(
+          lowerElements.push(
             <circle key={`ctrl-${c.id}`} cx={pos.x} cy={pos.y} r={radius} stroke={baseColor} strokeWidth={stroke} fill="none"
               opacity={fade}
               style={{ cursor: onControlClick ? "pointer" : undefined }}
@@ -1837,7 +1844,7 @@ export function MapViewer({
           const ringR = radius;
           const pct = Math.min(c.completionPct, 1);
           if (pct >= 1) {
-            elements.push(
+            lowerElements.push(
               <circle key={`comp-${c.id}`} cx={pos.x} cy={pos.y} r={ringR}
                 stroke="#059669" strokeWidth={stroke * 2.5} fill="none" opacity={0.8} />
             );
@@ -1850,7 +1857,7 @@ export function MapViewer({
             const x2 = pos.x + ringR * Math.cos(endAngle);
             const y2 = pos.y + ringR * Math.sin(endAngle);
             const largeArc = angle > Math.PI ? 1 : 0;
-            elements.push(
+            lowerElements.push(
               <path key={`comp-${c.id}`}
                 d={`M${x1},${y1} A${ringR},${ringR} 0 ${largeArc} 1 ${x2},${y2}`}
                 stroke="#059669" strokeWidth={stroke * 2.5} fill="none" opacity={0.8} />
@@ -1861,7 +1868,7 @@ export function MapViewer({
         // Punch count badge
         if (c.punchCount !== undefined && c.punchCount > 0) {
           const badgeR = Math.max(6, labelSize * 0.5);
-          elements.push(
+          upperElements.push(
             <g key={`badge-${c.id}`}
               transform={rotDeg !== 0 ? `rotate(${-rotDeg}, ${pos.x}, ${pos.y})` : undefined}>
               <circle cx={pos.x} cy={pos.y} r={badgeR} fill="#2563eb" opacity={0.85} />
@@ -1885,16 +1892,20 @@ export function MapViewer({
           // number to its own circle, so the association stays readable.
           if (placedLabel.leader) {
             const ld = placedLabel.leader;
-            elements.push(
+            upperElements.push(
               <line key={`leader-${c.id}`} x1={ld.x1} y1={ld.y1} x2={ld.x2} y2={ld.y2}
                 stroke={labelColor} strokeWidth={stroke * 0.7} opacity={fade ?? 0.9}
                 data-testid="control-label-leader" />
             );
           }
-          elements.push(
+          upperElements.push(
             <text key={`label-${c.id}`} x={placedLabel.x} y={placedLabel.y}
+              data-testid="control-label"
+              data-control-id={c.id}
               textAnchor="middle" dominantBaseline="central"
               fontSize={labelSize} fill={labelColor} fontWeight="bold"
+              stroke="#fff" strokeWidth={labelSize * 0.12}
+              strokeLinejoin="round" paintOrder="stroke fill"
               opacity={fade}
               transform={rotDeg !== 0 ? `rotate(${-rotDeg}, ${placedLabel.x}, ${placedLabel.y})` : undefined}
               style={{ cursor: onControlClick ? "pointer" : undefined }}
@@ -1912,7 +1923,7 @@ export function MapViewer({
       if (editor) {
         const symbolR = c.type === "Start" ? startSize : c.type === "Finish" ? finishOuter : radius;
         if (editor.selectedControlId === c.id) {
-          elements.push(
+          upperElements.push(
             <circle key={`edit-sel-${c.id}`} cx={pos.x} cy={pos.y} r={symbolR * 1.45}
               stroke="#2563eb" strokeWidth={Math.max(1, stroke * 0.8)} fill="none"
               strokeDasharray={`${Math.max(2, stroke * 2)} ${Math.max(2, stroke * 2)}`}
@@ -1968,7 +1979,7 @@ export function MapViewer({
         const fs = l.fontSize;
         const pillH = fs * pillRatio;
         const halfW = pillHalfWidth(l.text.length, fs);
-        elements.push(
+        upperElements.push(
           <g
             key={`leg-label-${li}`}
             transform={`translate(${l.x.toFixed(1)}, ${l.y.toFixed(1)}) rotate(${l.angleDeg.toFixed(1)})`}
@@ -2000,7 +2011,7 @@ export function MapViewer({
 
       if (allPts.length >= 2) {
         const d = allPts.map((p, i) => `${i === 0 ? "M" : "L"}${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(" ");
-        elements.push(
+        upperElements.push(
           <path key="measure-line" d={d} stroke="#2563eb" strokeWidth={3} fill="none" strokeDasharray="10 5" />
         );
 
@@ -2015,7 +2026,7 @@ export function MapViewer({
             const legM = mmToMeters(mapMmDist(srcPt1, srcPt2));
             const label = formatDist(legM);
             const halfW = label.length * 3.5 + 6;
-            elements.push(
+            upperElements.push(
               <g key={`mleg-${i}`}>
                 <rect x={midX - halfW} y={midY - 9} width={halfW * 2} height={16} rx={3}
                   fill="rgba(255,255,255,0.85)" stroke="#93c5fd" strokeWidth={0.5} />
@@ -2028,14 +2039,14 @@ export function MapViewer({
       }
 
       for (let i = 0; i < screenMeasurePts.length; i++) {
-        elements.push(
+        upperElements.push(
           <circle key={`mpt-${i}`} cx={screenMeasurePts[i].x} cy={screenMeasurePts[i].y}
             r={5} fill="#2563eb" stroke="white" strokeWidth={2} />
         );
       }
     }
 
-    return { nodes: elements, controlHits, legHits, radiusPx: radius, strokePx: stroke };
+    return { lowerNodes: lowerElements, upperNodes: upperElements, controlHits, legHits, radiusPx: radius, strokePx: stroke };
 
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [viewport, containerSize, renderW, renderH, controls, courses, courseGeometry, coursesWithGeometry, highlightControlId, highlightCourseName,
@@ -2385,22 +2396,50 @@ export function MapViewer({
         transformOrigin: "center center",
         ...(rotDeg !== 0 ? { width: renderW, height: renderH, left: (containerSize.w - renderW) / 2, top: (containerSize.h - renderH) / 2 } : {}),
       }}>
-        {/* Base map tiles */}
+        <TileBlobCacheProvider>
+        {/* Base map tiles (composite half) */}
         <TileLayer
           viewport={viewport}
           containerWidth={renderW}
           containerHeight={renderH}
           tileUrlBase={tileUrlBase}
           tileVersion={mapVersion}
+          half="top"
+          zIndex={1}
+          data-testid="map-tiles-composite"
         />
 
-        {/* Overlay SVG */}
+        {/* Lower purple: legs, circles, start, finish */}
         <svg
+          data-testid="map-course-overlay-lower"
           style={{ position: "absolute", inset: 0, width: "100%", height: "100%", pointerEvents: "none", zIndex: 2 }}
           viewBox={`0 0 ${renderW} ${renderH}`}
         >
           <g style={{ pointerEvents: "auto" }}>
-            {overlayContent?.nodes}
+            {overlayContent?.lowerNodes}
+          </g>
+        </svg>
+
+        {/* Ink half — black/brown/blue 100% lines and points above lower purple */}
+        <TileLayer
+          viewport={viewport}
+          containerWidth={renderW}
+          containerHeight={renderH}
+          tileUrlBase={tileUrlBase}
+          tileVersion={mapVersion}
+          half="bottom"
+          zIndex={3}
+          data-testid="map-tiles-ink"
+        />
+
+        {/* Upper purple + GPS + editor hits */}
+        <svg
+          data-testid="map-course-overlay-upper"
+          style={{ position: "absolute", inset: 0, width: "100%", height: "100%", pointerEvents: "none", zIndex: 4 }}
+          viewBox={`0 0 ${renderW} ${renderH}`}
+        >
+          <g style={{ pointerEvents: "auto" }}>
+            {overlayContent?.upperNodes}
             {locateMode !== "off" && geo.position && viewport && (() => {
               const { px, py } = latlngToPixel(
                 geo.position.lat,
@@ -2473,6 +2512,7 @@ export function MapViewer({
             )}
           </g>
         </svg>
+        </TileBlobCacheProvider>
       </div>
 
       {/* Editor contextual actions — unrotated HTML, anchored at the

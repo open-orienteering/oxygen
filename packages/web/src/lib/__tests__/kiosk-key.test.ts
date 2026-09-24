@@ -17,11 +17,12 @@ describe("kioskKeyFromUrl", () => {
 
 describe("tileQueryString", () => {
   // `<img>` tile requests cannot send the x-kiosk-key header, so the key
-  // must ride in the query string for key-only kiosk devices.
-  it("combines version and kiosk key", () => {
-    expect(tileQueryString(undefined, null)).toBe("");
-    expect(tileQueryString(42, null)).toBe("?v=42");
-    expect(tileQueryString(undefined, "secret")).toBe("?k=secret");
-    expect(tileQueryString(42, "s+cret")).toBe("?v=42&k=s%2Bcret");
+  // must ride in the query string for key-only kiosk devices. `f=2` marks
+  // the stacked 256×512 tile format so stale 256×256 caches miss.
+  it("combines format, version and kiosk key", () => {
+    expect(tileQueryString(undefined, null)).toBe("?f=2");
+    expect(tileQueryString(42, null)).toBe("?f=2&v=42");
+    expect(tileQueryString(undefined, "secret")).toBe("?f=2&k=secret");
+    expect(tileQueryString(42, "s+cret")).toBe("?f=2&v=42&k=s%2Bcret");
   });
 });

@@ -297,6 +297,29 @@ export function displayNorthOffsetDeg(
 }
 
 /**
+ * Rotation to apply to automatic circle slits when drawing in screen
+ * space. Cuts are authored in paper-mm compass bearings (0° = paper +Y);
+ * the viewer rotates the whole map by `-northOffset` which already
+ * folds in meridian tilt, so slits must use only the paper-to-true-north
+ * part — otherwise a 3° meridian tilt biases every slit clockwise.
+ *
+ * `northOffset` is the stored display value (`displayNorthOffsetDeg`);
+ * `meridianTiltDeg` is the in-paper tilt of ISOM 601.x lines (0 when the
+ * file has none).
+ */
+export function cutRotationDeg(
+  northOffset: number | null | undefined,
+  meridianTiltDeg: number | null | undefined,
+): number | null {
+  if (northOffset == null || !Number.isFinite(northOffset)) return null;
+  const tilt =
+    meridianTiltDeg != null && Number.isFinite(meridianTiltDeg)
+      ? meridianTiltDeg
+      : 0;
+  return northOffset - tilt;
+}
+
+/**
  * Analyse a parsed OCAD file's north situation. Pure diagnostics: the
  * result never changes how the map is georeferenced. `asOf` defaults to
  * now because the question the caller asks is "are the drawn north

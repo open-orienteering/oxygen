@@ -171,7 +171,9 @@ function drawNativeTilesOnCanvas(
 
       ctx.save();
       ctx.transform(a, b, c, d, tl.sx, tl.sy);
-      ctx.drawImage(img, 0, 0, 256, 256);
+      // Stacked tiles are 256×512 (composite + ink); draw the top half only.
+      const srcH = Math.min(256, img.naturalHeight || 256);
+      ctx.drawImage(img, 0, 0, 256, srcH, 0, 0, 256, 256);
       ctx.restore();
     }
   }

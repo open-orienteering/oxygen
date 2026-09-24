@@ -348,6 +348,7 @@ function renderObject(
   window: MapWindow,
   onPointerDown?: (event: ReactPointerEvent<SVGElement>) => void,
   graphicHref?: (graphicId: number) => string,
+  purple = "#a626ff",
 ): ReactNode {
   const common = {
     "data-object-id": object.id,
@@ -464,7 +465,7 @@ function renderObject(
             dangerouslySetInnerHTML={{
               __html: outOfBoundsPatternDef(
                 patternId,
-                "#a626ff",
+                purple,
                 1,
               ),
             }}
@@ -476,11 +477,7 @@ function renderObject(
           fill={fill}
           stroke={object.stroke ?? "none"}
           strokeWidth={object.strokeWidthMm}
-          style={
-            fillMode === "outOfBounds"
-              ? { ...common.style, mixBlendMode: "multiply" }
-              : common.style
-          }
+          style={common.style}
         />
       </g>
     );
@@ -504,7 +501,7 @@ function renderObject(
             dangerouslySetInnerHTML={{
               __html: outOfBoundsPatternDef(
                 patternId,
-                "#a626ff",
+                purple,
                 1,
               ),
             }}
@@ -519,11 +516,7 @@ function renderObject(
           fill={fill}
           stroke={object.stroke ?? "none"}
           strokeWidth={object.strokeWidthMm}
-          style={
-            fillMode === "outOfBounds"
-              ? { ...common.style, mixBlendMode: "multiply" }
-              : common.style
-          }
+          style={common.style}
         />
       </g>
     );
@@ -618,6 +611,7 @@ export function MapLayoutEditor({
   const dirtyRef = useRef(false);
   const [displayedPreview, setDisplayedPreview] = useState<{
     url: string;
+    inkUrl: string;
     center: MapPoint;
     printScale: number;
   } | null>(null);
@@ -731,63 +725,89 @@ export function MapLayoutEditor({
   }, [history.present.center, history.present.printScale]);
 
   const previewUrls = useMemo(() => {
-    const makeUrl = (dpi: number) => {
-    const params = new URLSearchParams({
+    const makeUrl = (dpi: number, layer: "full" | "ink") => {
+      const params = new URLSearchParams({
         cx: String(previewState.center.x),
         cy: String(previewState.center.y),
         wMm: String(document.mapFrame.width),
         hMm: String(document.mapFrame.height),
-      printScale: String(previewState.printScale),
+        printScale: String(previewState.printScale),
         dpi: String(dpi),
-    });
+        layer,
+      });
       if (rotationDeg !== 0) params.set("rot", rotationDeg.toFixed(2));
-    return `/api/maps/${encodeURIComponent(nameId)}/window.png?${params}`;
+      return `/api/maps/${encodeURIComponent(nameId)}/window.png?${params}`;
     };
+    const dpiHigh = editorPreviewDpi(document.mapFrame);
     return {
-      low: makeUrl(120),
-      high: makeUrl(editorPreviewDpi(document.mapFrame)),
+      full: { low: makeUrl(120, "full"), high: makeUrl(dpiHigh, "full") },
+      ink: { low: makeUrl(120, "ink"), high: makeUrl(dpiHigh, "ink") },
     };
   }, [document.mapFrame, nameId, previewState, rotationDeg]);
   useEffect(() => {
     let active = true;
-    const shown = { center: previewState.center, printScale: previewState.printScale };
-    const high = new Image();
-    const loadHigh = () => {
-      high.onload = () => {
-        if (active) {
-          setDisplayedPreview({ url: previewUrls.high, ...shown });
-          setPreviewErrorUrl(null);
-        }
-      };
-      high.onerror = () => {
-        if (active) setPreviewErrorUrl(previewUrls.high);
-      };
-      high.src = previewUrls.high;
+    const shown = {
+      center: previewState.center,
+      printScale: previewState.printScale,
     };
-    const low = new Image();
-    low.onload = () => {
+    const apply = (fullUrl: string, inkUrl: string) => {
       if (!active) return;
-      setDisplayedPreview({ url: previewUrls.low, ...shown });
+      setDisplayedPreview({ url: fullUrl, inkUrl, ...shown });
       setPreviewErrorUrl(null);
-      loadHigh();
     };
-    low.onerror = () => {
-      if (active) setPreviewErrorUrl(previewUrls.low);
+    const highFull = new Image();
+    const highInk = new Image();
+    let highPending = 2;
+    const loadHigh = () => {
+      const done = () => {
+        highPending -= 1;
+        if (highPending === 0) apply(previewUrls.full.high, previewUrls.ink.high);
+      };
+      highFull.onload = done;
+      highInk.onload = done;
+      highFull.onerror = () => {
+        if (active) setPreviewErrorUrl(previewUrls.full.high);
+      };
+      highInk.onerror = done; // ink may be empty; still show full
+      highFull.src = previewUrls.full.high;
+      highInk.src = previewUrls.ink.high;
     };
-    low.src = previewUrls.low;
+    const lowFull = new Image();
+    const lowInk = new Image();
+    let lowPending = 2;
+    const lowDone = () => {
+      lowPending -= 1;
+      if (lowPending === 0) {
+        apply(previewUrls.full.low, previewUrls.ink.low);
+        loadHigh();
+      }
+    };
+    lowFull.onload = lowDone;
+    lowInk.onload = lowDone;
+    lowFull.onerror = () => {
+      if (active) setPreviewErrorUrl(previewUrls.full.low);
+    };
+    lowInk.onerror = lowDone;
+    lowFull.src = previewUrls.full.low;
+    lowInk.src = previewUrls.ink.low;
     return () => {
       active = false;
-      low.onload = null;
-      low.onerror = null;
-      high.onload = null;
-      high.onerror = null;
+      lowFull.onload = null;
+      lowFull.onerror = null;
+      lowInk.onload = null;
+      lowInk.onerror = null;
+      highFull.onload = null;
+      highFull.onerror = null;
+      highInk.onload = null;
+      highInk.onerror = null;
     };
     // The shown window is snapshotted when the URLs change.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [previewUrls]);
-  const previewReady = displayedPreview?.url === previewUrls.high;
+  const previewReady = displayedPreview?.url === previewUrls.full.high;
   const previewError =
-    previewErrorUrl === previewUrls.low || previewErrorUrl === previewUrls.high;
+    previewErrorUrl === previewUrls.full.low ||
+    previewErrorUrl === previewUrls.full.high;
   const courseOverlaySvg = useMemo(
     () =>
       renderCourseOverlaySvg({
@@ -2608,15 +2628,35 @@ export function MapLayoutEditor({
                       currentWindow,
                     );
                     return (
-                      <image
-                        data-testid="map-preview-image"
-                        href={displayedPreview.url}
-                        x={placement.x}
-                        y={placement.y}
-                        width={placement.width}
-                        height={placement.height}
-                        preserveAspectRatio="none"
-                      />
+                      <>
+                        <image
+                          data-testid="map-preview-image"
+                          href={displayedPreview.url}
+                          x={placement.x}
+                          y={placement.y}
+                          width={placement.width}
+                          height={placement.height}
+                          preserveAspectRatio="none"
+                        />
+                        <g
+                          data-testid="map-course-overlay-lower"
+                          pointerEvents="none"
+                          style={{ userSelect: "none" }}
+                          dangerouslySetInnerHTML={{
+                            __html: courseOverlaySvg.lower,
+                          }}
+                        />
+                        <image
+                          data-testid="map-preview-ink"
+                          href={displayedPreview.inkUrl}
+                          x={placement.x}
+                          y={placement.y}
+                          width={placement.width}
+                          height={placement.height}
+                          preserveAspectRatio="none"
+                          pointerEvents="none"
+                        />
+                      </>
                     );
                   })()}
                 <g opacity={mode === "map" ? 0.65 : 1}>
@@ -2632,7 +2672,8 @@ export function MapLayoutEditor({
                         document.mapFrame,
                         currentWindow,
                         objectDragHandler(object, mode === "template"),
-                      graphicHref,
+                        graphicHref,
+                        document.appearance.purple,
                       ),
                     )}
                 </g>
@@ -2649,6 +2690,7 @@ export function MapLayoutEditor({
                       currentWindow,
                       objectDragHandler(object, mode === "map"),
                       graphicHref,
+                      document.appearance.purple,
                     ),
                   )}
               </g>
@@ -2666,6 +2708,7 @@ export function MapLayoutEditor({
                       currentWindow,
                       objectDragHandler(object, mode === "template"),
                       graphicHref,
+                      document.appearance.purple,
                     ),
                   )}
               </g>
@@ -2681,7 +2724,8 @@ export function MapLayoutEditor({
                     document.mapFrame,
                     currentWindow,
                     objectDragHandler(object, mode === "map"),
-                      graphicHref,
+                    graphicHref,
+                    document.appearance.purple,
                   ),
                 )}
               <g clipPath="url(#map-editor-frame)">
@@ -2692,7 +2736,7 @@ export function MapLayoutEditor({
                   data-testid="map-course-overlay"
                   pointerEvents="none"
                   style={{ userSelect: "none" }}
-                  dangerouslySetInnerHTML={{ __html: courseOverlaySvg }}
+                  dangerouslySetInnerHTML={{ __html: courseOverlaySvg.upper }}
                 />
                 <g opacity={mode === "map" ? 0.65 : 1}>
                   {history.present.templateObjects
@@ -2707,7 +2751,8 @@ export function MapLayoutEditor({
                         document.mapFrame,
                         currentWindow,
                         objectDragHandler(object, mode === "template"),
-                      graphicHref,
+                        graphicHref,
+                        document.appearance.purple,
                       ),
                     )}
                 </g>
@@ -2724,6 +2769,7 @@ export function MapLayoutEditor({
                       currentWindow,
                       objectDragHandler(object, mode === "map"),
                       graphicHref,
+                      document.appearance.purple,
                     ),
                   )}
               </g>
@@ -2741,6 +2787,7 @@ export function MapLayoutEditor({
                       currentWindow,
                       objectDragHandler(object, mode === "template"),
                       graphicHref,
+                      document.appearance.purple,
                     ),
                   )}
               </g>
@@ -2756,7 +2803,8 @@ export function MapLayoutEditor({
                     document.mapFrame,
                     currentWindow,
                     objectDragHandler(object, mode === "map"),
-                      graphicHref,
+                    graphicHref,
+                    document.appearance.purple,
                   ),
                 )}
               {history.present.description.visible && (

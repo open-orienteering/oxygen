@@ -314,9 +314,10 @@ describe("club map library", () => {
       data: { geometry: { type: "FeatureCollection", features: [] } },
     });
 
+    // Seed an orphan tile row so we can assert GC after the map is replaced.
     await ctx.db.mapTile.create({
       data: {
-        eventId: ctx.eventId,
+        renderKey: "orphan-club-maps-seed",
         z: 1,
         x: 0,
         y: 0,
@@ -352,7 +353,9 @@ describe("club map library", () => {
     expect(meta!.calibration!.length).toBeGreaterThanOrEqual(3);
     expect(meta!.rotationCorrection).toBe(4.5);
 
-    const tiles = await ctx.db.mapTile.count({ where: { eventId: ctx.eventId } });
+    const tiles = await ctx.db.mapTile.count({
+      where: { renderKey: "orphan-club-maps-seed" },
+    });
     expect(tiles).toBe(0);
 
     const after = await ctx.db.course.findFirst({

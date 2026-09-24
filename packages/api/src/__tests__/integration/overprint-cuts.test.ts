@@ -2,7 +2,7 @@
  * Integration tests for automatic overprint cuts: circle slits and leg
  * gaps computed from the base map at geometry-rebuild time.
  *
- * Uses the synthetic OCAD fixture's known black features in the otherwise
+ * Uses the synthetic OCAD fixture's known features in the otherwise
  * empty top-right corner (see `scripts/generate-test-ocd.mjs`): a boulder
  * (ISOM 204) at 68/42 mm and a building (ISOM 521) spanning
  * 48–58 / 39–46 mm.
@@ -71,7 +71,7 @@ describe("automatic overprint cuts in editor geometry", () => {
     expect(inEmpty?.properties.cuts).toBeUndefined();
   });
 
-  it("gaps a leg crossing the building", async () => {
+  it("does not gap a leg crossing a building", async () => {
     await caller.control.create({ codes: "163", xpos: 44, ypos: 42 });
     await caller.control.create({ codes: "164", xpos: 64, ypos: 42 });
     const course = await caller.course.create({
@@ -83,11 +83,25 @@ describe("automatic overprint cuts in editor geometry", () => {
     const leg = geom.features.find(
       (f) => f.properties.from === "163" && f.properties.to === "164",
     );
+    expect(leg?.properties.gaps).toBeUndefined();
+  });
+
+  it("gaps a leg crossing the boulder", async () => {
+    await caller.control.create({ codes: "167", xpos: 60, ypos: 42 });
+    await caller.control.create({ codes: "168", xpos: 76, ypos: 42 });
+    const course = await caller.course.create({
+      name: "Cuts-Boulder-Leg",
+      controlIds: [167, 168],
+    });
+
+    const geom = await storedGeometry(course.id);
+    const leg = geom.features.find(
+      (f) => f.properties.from === "167" && f.properties.to === "168",
+    );
     const gaps = leg?.properties.gaps as Array<{ from: number; to: number }>;
     expect(gaps).toHaveLength(1);
-    // Building spans x 48–58 on the 44→64 leg → fractions ≈ 0.2–0.7.
-    expect(gaps[0].from).toBeCloseTo(0.2, 1);
-    expect(gaps[0].to).toBeCloseTo(0.7, 1);
+    expect(gaps[0].from).toBeLessThan(0.5);
+    expect(gaps[0].to).toBeGreaterThan(0.5);
   });
 
   it("recomputes cuts when a control moves", async () => {
@@ -153,5 +167,103 @@ describe("automatic overprint cuts in editor geometry", () => {
     } finally {
       await other.cleanup();
     }
+  });
+
+  it("lazily rebuilds editor geometry stored by the previous cut algorithm", async () => {
+    const other = await createTestEvent("overprint_cuts_version");
+    try {
+      const otherCaller = makeCaller(other.event);
+      await otherCaller.course.uploadMap({
+        fileName: "test.ocd",
+        fileDataBase64: readFileSync(FIXTURE).toString("base64"),
+      });
+      await otherCaller.control.create({ codes: "175", xpos: 44, ypos: 42 });
+      await otherCaller.control.create({ codes: "176", xpos: 64, ypos: 42 });
+      const course = await otherCaller.course.create({
+        name: "Legacy long-object gap",
+        controlIds: [175, 176],
+      });
+      const row = await other.db.course.findFirstOrThrow({
+        where: { eventId: other.eventId, seq: course.id },
+      });
+      const stale = row.geometry as unknown as GeoJSONFeatureCollection;
+      const leg = stale.features.find(
+        (feature) =>
+          feature.properties.from === "175" &&
+          feature.properties.to === "176",
+      );
+      leg!.properties.gaps = [{ from: 0.2, to: 0.7 }];
+      await other.db.course.update({
+        where: { id: row.id },
+        data: { geometry: stale as never },
+      });
+      await other.db.event.update({
+        where: { id: other.eventId },
+        data: { overprintCutsVersion: 1 },
+      });
+
+      const rebuilt = await otherCaller.course.geometry({ id: course.id });
+      const rebuiltLeg = rebuilt.features.find(
+        (feature) =>
+          (feature as GeoJSONFeatureCollection["features"][number]).properties
+            .from === "175",
+      ) as GeoJSONFeatureCollection["features"][number];
+      expect(rebuiltLeg.properties.gaps).toBeUndefined();
+      expect(
+        (
+          await other.db.event.findUniqueOrThrow({
+            where: { id: other.eventId },
+          })
+        ).overprintCutsVersion,
+      ).toBe(2);
+    } finally {
+      await other.cleanup();
+    }
+  });
+
+  it("setOverprintCuts(false) strips cuts/gaps; true restores them", async () => {
+    await caller.control.create({ codes: "181", xpos: 68, ypos: 39.5 });
+    await caller.control.create({ codes: "182", xpos: 60, ypos: 42 });
+    await caller.control.create({ codes: "183", xpos: 76, ypos: 42 });
+    const course = await caller.course.create({
+      name: "Cuts-Toggle",
+      controlIds: [181, 182, 183],
+    });
+
+    let geom = await storedGeometry(course.id);
+    expect(
+      geom.features.find((f) => f.properties.code === "181")?.properties.cuts,
+    ).toHaveLength(1);
+    expect(
+      geom.features.find(
+        (f) => f.properties.from === "182" && f.properties.to === "183",
+      )?.properties.gaps,
+    ).toHaveLength(1);
+
+    const off = await caller.course.setOverprintCuts({ enabled: false });
+    expect(off.enabled).toBe(false);
+    expect((await caller.course.getOverprintCuts()).enabled).toBe(false);
+
+    geom = await storedGeometry(course.id);
+    expect(
+      geom.features.find((f) => f.properties.code === "181")?.properties.cuts,
+    ).toBeUndefined();
+    expect(
+      geom.features.find(
+        (f) => f.properties.from === "182" && f.properties.to === "183",
+      )?.properties.gaps,
+    ).toBeUndefined();
+
+    const on = await caller.course.setOverprintCuts({ enabled: true });
+    expect(on.enabled).toBe(true);
+    geom = await storedGeometry(course.id);
+    expect(
+      geom.features.find((f) => f.properties.code === "181")?.properties.cuts,
+    ).toHaveLength(1);
+    expect(
+      geom.features.find(
+        (f) => f.properties.from === "182" && f.properties.to === "183",
+      )?.properties.gaps,
+    ).toHaveLength(1);
   });
 });

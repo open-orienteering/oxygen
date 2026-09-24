@@ -208,51 +208,69 @@ missing suggestion is cheaper than a wrong one.
 
 ### Automatic overprint cuts
 
-The purple overprint must not hide important map detail, so course
-setters cut it: **circle slits** where a control circle crosses black
-features (rock and man-made symbols) or knolls, and **leg gaps** where a
-leg line passes over black features. Oxygen computes both automatically
-— there is no manual cut UX (yet); the cuts simply follow the map.
+The purple overprint must not hide compact map detail, so course setters
+cut it around **small point objects only**: control-circle slits and leg
+gaps reveal knolls, elongated knolls, rocky pits, boulders, large
+boulders and boulder clusters. Long objects (cliffs, paths, walls,
+buildings and areas) remain uncut; the IOF colour stack keeps their ink
+readable without fragmenting the purple. Oxygen computes the cuts
+automatically — there is no manual cut UX (yet).
+  An event-level **Auto cuts** toolbar toggle
+  (`course.getOverprintCuts` / `course.setOverprintCuts`,
+  `events.auto_overprint_cuts`, default on) skips
+  `decorateOverprintCuts` for editor geometry when off; imported
+  OCD/XML geometry keeps its file-authored cuts either way.
 
 - **When**: at every geometry rebuild (`rebuildCourseGeometry` — course
   create/update, control move/delete) and after a map upload, which
   rebuilds all `geometrySource: "editor"` courses so cuts follow the new
   map. Imported (`ocd`/`xml`) geometry keeps its file-authored cuts and
-  is never touched.
+  is never touched. Toggling auto cuts rebuilds every editor course.
 - **Where**: `packages/api/src/overprint-cuts.ts`, pure and unit-tested.
   It reuses the slimmed base-map object cache built for the description
   autodetect (`event-map-objects.ts`) and stores the result *in* the
   course GeoJSON: `properties.cuts` (`{start, end}` compass degrees, the
   same convention the OCD importer writes) on control point features,
   `properties.gaps` (`{from, to}` fractions of the leg) on leg features.
-  No schema change — it all rides in the existing `geometry` JSONB.
-- **Which symbols**: a static ISOM-number table (`CUT_KINDS`) — rock
-  (201–207, 215), black man-made (502–518, 521–532), and knolls
-  (109/110, slits only — a leg over a knoll is normal). Pattern-fill
-  areas (boulder fields, stony ground) are excluded: their dots are
-  symbol fill, not objects, so a cut at the invisible area boundary
-  would look random. Blue/green/yellow symbols never cut.
+  The cuts ride in the existing `geometry` JSONB.
+- **Which symbols**: `CUT_SYMBOLS` contains ISOM 109/110 and
+  203/204/205/207. The object must also be an OCAD point object. Knolls
+  are treated exactly like rocks for both circle slits and leg gaps.
+  Cliffs (201/202), gigantic boulder areas (206), trenches, black
+  man-made objects, pattern fills, water and vegetation never cut.
 - **Geometry rules**: cuts are deliberately *tight* — the overprint
   stroke is 0.35 mm wide and a compact ISOM point symbol ~0.5 mm across,
   so clearing much more than the feature itself just fragments the
   circle without revealing more map. Point features cut the rim (or the
   leg, centered on the projection) when they sit within **0.45 mm** of
-  it, opening **±0.4 mm** of ink — about 18° of rim, 0.8 mm of leg. Line
-  features cut **±0.35 mm** at each rim/leg crossing, wider for oblique
-  leg crossings (`half-width / sin θ`, capped at 1.2 mm). Solid black
-  areas (buildings, canopies, ruins, gigantic boulders) cut the whole
-  stretch of rim/leg *inside* them (rim sampled every 4°, leg via
-  entry/exit intersection parameters). Overlapping cuts merge; slivers
-  (< 4° / < 0.6 mm) drop; sanity caps keep a circle whole when > 300°
-  would vanish and never erase more than 70 % of a leg. Legs also keep
+  it, opening **±0.4 mm** of ink — about 18° of rim, 0.8 mm of leg.
+  Overlapping cuts merge and slivers (< 4° / < 0.6 mm) drop. Legs keep
   3 mm (1.2 × circle radius) at each end — the viewer clips that zone
   around circles anyway.
+- **Stored-geometry migration**: `events.overprint_cuts_version` marks
+  which algorithm decorated every editor course. Existing v1 events are
+  rebuilt lazily on their first geometry read and advanced to v2;
+  imported geometry is untouched.
+- **Screen rotation**: stored cut angles are paper-relative. The viewer
+  adds `cutRotationDeg` (= `northOffset − meridianTiltDeg`) when drawing
+  slits so they stay aligned with map features after the map is rotated
+  to true north. Using full `northOffset` (which includes meridian tilt)
+  skewed every slit by the tilt (see
+  [bugfix-overprint-cut-meridian-tilt.md](bugfix-overprint-cut-meridian-tilt.md)).
 - **Rendering**: circle `cuts` were already consumed by the viewer's
   `drawBrokenCircle` (OCD-imported slits used the same path). Leg `gaps`
   are new: `subtractLegGaps` in `MapViewer.tsx` splits the screen-space
   polyline into kept sub-polylines (fractions survive the projection —
   a leg is locally linear) before the usual circle clipping; gapped
   segments carry `data-leg-gapped="true"` for tests.
+
+### Control-number contrast
+
+Control numbers always render with a narrow opaque white halo
+(`paint-order="stroke fill"`, stroke width 12 % of the font size). The
+purple glyph remains unchanged, while the small knockout separates it
+from dense map ink. The same default is used by the interactive SVG and
+the print/PDF overlay.
 
 Placement and dragging work in **map millimetres** (the `xpos`/`ypos`
 paper coordinate space) — the viewer converts screen pixels via an
@@ -420,12 +438,11 @@ their hit targets so "click → Add to course" still works on them.
   distance, area containment, per-column-D-code dedupe, all eight
   bearings, unmapped symbols ignored.
   `packages/api/src/__tests__/overprint-cuts.test.ts` — automatic cuts
-  over synthetic objects: rim slits for boulders/knolls (not for a
-  feature under the circle centre), both crossings of a line, buried
-  rim stretches inside a building, wrap-around slits, non-black symbols
-  ignored, leg gaps for points / oblique line crossings / building
-  interiors, end-zone preservation, merging and both sanity caps, and
-  the geometry decorator (start/finish untouched, stale cuts removed).
+  over synthetic objects: rim slits and leg gaps for compact boulders /
+  knolls (not for a feature under the circle centre), long line and area
+  objects ignored, wrap-around slits, end-zone preservation, merging,
+  and the geometry decorator (start/finish untouched, stale cuts
+  removed).
 - **E2E**: `e2e/course-editor.spec.ts` — imports `test.ocd` for
   coordinates + map, then: place a control via the contextual **Add
   control** action, read the suggested code from the toolbar, drag it to
@@ -466,9 +483,10 @@ their hit targets so "click → Add to course" still works on them.
   boulder and building (see
   [e2e-test-ocd-fixture.md](e2e-test-ocd-fixture.md));
   `integration/overprint-cuts.test.ts` proves the cuts land in the
-  stored geometry (rim slit over the fixture boulder, leg gap through
-  the building), recompute when a control moves away, and that a map
-  upload rebuilds editor-course geometry with fresh cuts.
+  stored geometry (rim slit and leg gap over fixture boulders, no gap
+  through the building), recompute when a control moves away, lazily
+  migrate v1 geometry, and that a map upload rebuilds editor-course
+  geometry with fresh cuts.
 
 Printing goes through
 [iof-coursedata-export.md](iof-coursedata-export.md): the Courses page

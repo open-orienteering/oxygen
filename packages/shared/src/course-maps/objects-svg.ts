@@ -239,13 +239,11 @@ function renderObject(
         defs.push(outOfBoundsPatternDef(patternId, purple, overprintScale));
       }
       const fill = resolveFill(fillMode, object.fill, patternId);
-      const blend =
-        fillMode === "outOfBounds" ? ` style="mix-blend-mode:multiply"` : "";
       const closed =
         object.closed ||
         fillMode === "whiteout" ||
         fillMode === "outOfBounds";
-      return `<path ${common} d="${pathData(points, closed)}" ${strokeAttrs(object.stroke, object.strokeWidthMm)} fill="${fill}"${blend}/>`;
+      return `<path ${common} d="${pathData(points, closed)}" ${strokeAttrs(object.stroke, object.strokeWidthMm)} fill="${fill}"/>`;
     }
     case "rectangle": {
       const p =
@@ -270,9 +268,7 @@ function renderObject(
         defs.push(outOfBoundsPatternDef(patternId, purple, overprintScale));
       }
       const fill = resolveFill(fillMode, object.fill, patternId);
-      const blend =
-        fillMode === "outOfBounds" ? ` style="mix-blend-mode:multiply"` : "";
-      return `<rect ${common} x="${p.x}" y="${p.y}" width="${size.width}" height="${size.height}" fill="${fill}" ${strokeAttrs(object.stroke, object.strokeWidthMm)}${blend}/>`;
+      return `<rect ${common} x="${p.x}" y="${p.y}" width="${size.width}" height="${size.height}" fill="${fill}" ${strokeAttrs(object.stroke, object.strokeWidthMm)}/>`;
     }
     case "image": {
       const p =

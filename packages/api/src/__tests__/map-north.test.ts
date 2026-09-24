@@ -3,6 +3,7 @@ import {
   computeDeclination,
   computeMeridianStalenessDeg,
   computeTrueNorthFromGrid,
+  cutRotationDeg,
   detectMapNorth,
   displayNorthOffsetDeg,
   foldLineAngleDeg,
@@ -282,6 +283,19 @@ describe("displayNorthOffsetDeg", () => {
   it("passes the paper offset through when there is no meridian cluster", () => {
     expect(displayNorthOffsetDeg(2.7, null)).toBe(2.7);
     expect(displayNorthOffsetDeg(null, null)).toBeNull();
+  });
+});
+
+describe("cutRotationDeg", () => {
+  it("subtracts meridian tilt from display northOffset", () => {
+    // Display northOffset 6.0 = paper 2.7 + tilt 3.3 → cuts need 2.7.
+    expect(cutRotationDeg(6.0, 3.3)).toBeCloseTo(2.7, 5);
+  });
+
+  it("passes northOffset through when tilt is missing", () => {
+    expect(cutRotationDeg(2.7, null)).toBe(2.7);
+    expect(cutRotationDeg(2.7, undefined)).toBe(2.7);
+    expect(cutRotationDeg(null, 3.3)).toBeNull();
   });
 });
 
