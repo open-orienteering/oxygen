@@ -41,9 +41,25 @@ import {
   synchronizePositionedControlCoordinates,
   type MapCalibrationPoint,
 } from "../event-map.js";
+import { cutRotationDeg } from "../map-north.js";
+import {
+  ensureEventMapRenderKey,
+  gcOrphanTiles,
+  refreshMapFileRenderKey,
+} from "../map-render-cache.js";
+import { invalidateRenderKey } from "../map-tiles.js";
+import {
+  colorProfileSchema,
+  colorStackOverridesSchema,
+} from "@oxygen/shared";
+import { applyIofColorStack, type StackOcadFile } from "../map-color-stack.js";
 import { canDownloadEventMap } from "../ocad-export.js";
 import { loadEventCrs } from "../event-crs.js";
-import { rebuildCourseGeometry } from "../course-geometry.js";
+import {
+  ensureOverprintCutsCurrent,
+  OVERPRINT_CUTS_VERSION,
+  rebuildCourseGeometry,
+} from "../course-geometry.js";
 import { appendJournal } from "../journalEmit.js";
 import {
   emitClassUpserted,
@@ -758,6 +774,7 @@ export const courseRouter = router({
   geometry: coursesViewProcedure
     .input(z.object({ id: z.number().int() }))
     .query(async ({ ctx, input }) => {
+      await ensureOverprintCutsCurrent(ctx.db, ctx.event.id);
       const c = await ctx.db.course.findFirst({
         where: { eventId: ctx.event.id, seq: input.id },
         select: { geometry: true },
@@ -785,6 +802,7 @@ export const courseRouter = router({
         .optional(),
     )
     .query(async ({ ctx, input }) => {
+      await ensureOverprintCutsCurrent(ctx.db, ctx.event.id);
       const where: Record<string, unknown> = {
         eventId: ctx.event.id,
         removed: false,
@@ -902,6 +920,52 @@ export const courseRouter = router({
       northDetection = detection as unknown as PrismaNs.JsonValue;
     }
 
+    const stackMeta = await ensureEventMapRenderKey(ctx.db, ctx.event.id);
+    if (!stackMeta) return null;
+
+    let resolvedProfile = stackMeta.colorProfile === "auto"
+      ? (scale != null && scale > 0 && scale <= 5000 ? "issprom" : "isom")
+      : stackMeta.colorProfile;
+    let resolvedBy:
+      | "explicit"
+      | "file-colour"
+      | "scale"
+      | "default" =
+      stackMeta.colorProfile === "auto"
+        ? scale != null
+          ? "scale"
+          : "default"
+        : "explicit";
+
+    if (stackMeta.colorProfile === "auto") {
+      if (!blobBuffer) {
+        const blob = await ctx.db.mapFile.findUnique({
+          where: { id: row.id },
+          select: { fileData: true },
+        });
+        if (blob) blobBuffer = Buffer.from(blob.fileData);
+      }
+      if (blobBuffer) {
+        try {
+          const ocadMod = await import("ocad2geojson");
+          const readOcad = (ocadMod as Record<string, unknown>).readOcad as (
+            buf: Buffer,
+            opts?: Record<string, unknown>,
+          ) => Promise<StackOcadFile>;
+          const ocad = await readOcad(blobBuffer, { quietWarnings: true });
+          const classified = applyIofColorStack(ocad, {
+            profile: "auto",
+            overrides: stackMeta.colorOverrides,
+            scale,
+          });
+          resolvedProfile = classified.resolvedProfile;
+          resolvedBy = classified.resolvedBy;
+        } catch {
+          // Keep the scale heuristic.
+        }
+      }
+    }
+
     return {
       scale,
       bounds,
@@ -910,6 +974,17 @@ export const courseRouter = router({
       rotationCorrection,
       meridianStalenessDeg: currentMeridianStaleness(northDetection),
       uploadedAt: row.uploadedAt.getTime(),
+      cutRotationDeg: cutRotationDeg(
+        northOffset,
+        (northDetection as { meridian?: { medianTiltDeg?: number } } | null)
+          ?.meridian?.medianTiltDeg ?? null,
+      ),
+      colorProfile: stackMeta.colorProfile,
+      colorOverrides: stackMeta.colorOverrides,
+      northLinesBelow: stackMeta.northLinesBelow,
+      resolvedProfile,
+      resolvedBy,
+      renderKey: stackMeta.renderKey,
     };
   }),
 
@@ -1201,6 +1276,10 @@ export const courseRouter = router({
           fileName: true,
           fileData: true,
           rotationCorrection: true,
+          colorProfile: true,
+          colorOverrides: true,
+          northLinesBelow: true,
+          fileHash: true,
         },
       });
       if (!row) {
@@ -1217,9 +1296,103 @@ export const courseRouter = router({
         {
           fromClubLibrary: true,
           rotationCorrection: row.rotationCorrection,
+          colorProfile: row.colorProfile as
+            | "auto"
+            | "isom"
+            | "issprom"
+            | "isskiom"
+            | "ismtbom",
+          colorOverrides: (row.colorOverrides ?? {}) as {
+            above?: number[];
+            below?: number[];
+          },
+          northLinesBelow: row.northLinesBelow,
+          fileHash: row.fileHash ?? undefined,
         },
       );
       return { success: true as const, ...result };
+    }),
+
+  /**
+   * Update the event map's IOF colour-stack profile / north-line setting.
+   * Recomputes `render_key` and GCs orphaned tiles.
+   */
+  setMapColorStack: coursesEditProcedure
+    .input(
+      z.object({
+        profile: colorProfileSchema.optional(),
+        northLinesBelow: z.boolean().optional(),
+        overrides: colorStackOverridesSchema.optional(),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      const row = await ctx.db.mapFile.findFirst({
+        where: { eventId: ctx.event.id },
+        orderBy: { uploadedAt: "desc" },
+        select: { id: true, renderKey: true },
+      });
+      if (!row) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: "No map file uploaded",
+        });
+      }
+      const data: Record<string, unknown> = {};
+      if (input.profile !== undefined) data.colorProfile = input.profile;
+      if (input.northLinesBelow !== undefined) {
+        data.northLinesBelow = input.northLinesBelow;
+      }
+      if (input.overrides !== undefined) {
+        data.colorOverrides = input.overrides;
+      }
+      if (Object.keys(data).length > 0) {
+        await ctx.db.mapFile.update({ where: { id: row.id }, data });
+      }
+      const oldKey = row.renderKey;
+      const renderKey = await refreshMapFileRenderKey(ctx.db, row.id);
+      if (oldKey && oldKey !== renderKey) invalidateRenderKey(oldKey);
+      invalidateRenderKey(renderKey);
+      await gcOrphanTiles(ctx.db);
+      fireMapUpload(ctx.event.id);
+      return { success: true as const, renderKey };
+    }),
+
+  getOverprintCuts: coursesViewProcedure.query(async ({ ctx }) => {
+    const row = await ctx.db.event.findUnique({
+      where: { id: ctx.event.id },
+      select: { autoOverprintCuts: true },
+    });
+    return { enabled: row?.autoOverprintCuts !== false };
+  }),
+
+  setOverprintCuts: coursesEditProcedure
+    .input(z.object({ enabled: z.boolean() }))
+    .mutation(async ({ ctx, input }) => {
+      await ctx.db.event.update({
+        where: { id: ctx.event.id },
+        data: {
+          autoOverprintCuts: input.enabled,
+          overprintCutsVersion: OVERPRINT_CUTS_VERSION,
+        },
+      });
+      const editorCourses = await ctx.db.course.findMany({
+        where: {
+          eventId: ctx.event.id,
+          removed: false,
+          geometrySource: "editor",
+        },
+        select: { id: true },
+      });
+      if (editorCourses.length > 0) {
+        const ids = editorCourses.map((c) => c.id);
+        await rebuildCourseGeometry(ctx.db, ctx.event.id, ids, {
+          updateLength: false,
+        });
+        for (const id of ids) {
+          await emitCourseUpserted(ctx.db, ctx.event.id, id);
+        }
+      }
+      return { success: true as const, enabled: input.enabled };
     }),
 
   /**

@@ -319,6 +319,11 @@ function MapPanelImpl({
       setUploadError(`Map upload failed: ${err.message}`);
     },
   });
+  const setColorStack = trpc.course.setMapColorStack.useMutation({
+    onSuccess: () => {
+      mapMetadata.refetch();
+    },
+  });
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [dragOver, setDragOver] = useState(false);
   // Default to hiding unrelated controls when there's a highlighted selection
@@ -807,7 +812,8 @@ function MapPanelImpl({
           mapBounds={mapMetadata.data?.bounds}
           mapScale={mapMetadata.data?.scale}
           northOffset={mapMetadata.data?.northOffset}
-          mapVersion={mapMetadata.data?.uploadedAt}
+          cutRotationDeg={mapMetadata.data?.cutRotationDeg}
+          mapVersion={mapMetadata.data?.renderKey ?? mapMetadata.data?.uploadedAt}
           calibration={mapMetadata.data?.calibration}
           controls={controlOverlays}
           courses={courseOverlays}
@@ -847,16 +853,71 @@ function MapPanelImpl({
       {/* Map info — below the map (course editor only) */}
       {showMapInfo && !hideToolbar && (
         <div className="mt-1.5 px-0.5 space-y-1.5">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-2">
+          <div className="flex items-center justify-between gap-2 flex-wrap">
+            <div className="flex items-center gap-2 flex-wrap min-w-0">
               {mapInfo.data && (
-                <span className="text-xs text-slate-400">{mapInfo.data.fileName}</span>
+                <span className="text-xs text-slate-400 truncate">{mapInfo.data.fileName}</span>
               )}
               <NorthLinesBadge
                 stalenessDeg={mapMetadata.data?.meridianStalenessDeg}
                 compact
                 hideCurrent
               />
+              {mapMetadata.data && (
+                <>
+                  <label className="flex items-center gap-1 text-xs text-slate-500">
+                    <span className="sr-only">{tl("colorProfile")}</span>
+                    <select
+                      data-testid="map-color-profile"
+                      className="text-xs border border-slate-200 rounded-md px-1.5 py-0.5 bg-white cursor-pointer"
+                      value={mapMetadata.data.colorProfile}
+                      disabled={setColorStack.isPending}
+                      title={
+                        mapMetadata.data.colorProfile === "auto"
+                          ? mapMetadata.data.resolvedBy === "file-colour"
+                            ? tl("colorProfileResolvedFile")
+                            : mapMetadata.data.resolvedBy === "scale" && mapMetadata.data.scale
+                              ? tl("colorProfileResolvedScale", {
+                                  profile: mapMetadata.data.resolvedProfile.toUpperCase(),
+                                  scale: Math.round(mapMetadata.data.scale),
+                                })
+                              : tl("colorProfileResolvedDefault", {
+                                  profile: mapMetadata.data.resolvedProfile.toUpperCase(),
+                                })
+                          : tl("colorProfile")
+                      }
+                      onChange={(e) => {
+                        const profile = e.target.value as
+                          | "auto"
+                          | "isom"
+                          | "issprom"
+                          | "isskiom"
+                          | "ismtbom";
+                        setColorStack.mutate({ profile });
+                      }}
+                    >
+                      <option value="auto">{tl("colorProfileAuto")}</option>
+                      <option value="isom">{tl("colorProfileIsom")}</option>
+                      <option value="issprom">{tl("colorProfileIssprom")}</option>
+                      <option value="isskiom">{tl("colorProfileIsskiom")}</option>
+                      <option value="ismtbom">{tl("colorProfileIsmtbom")}</option>
+                    </select>
+                  </label>
+                  <label className="flex items-center gap-1 text-xs text-slate-500 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      data-testid="map-north-lines-below"
+                      className="rounded border-slate-300"
+                      checked={mapMetadata.data.northLinesBelow}
+                      disabled={setColorStack.isPending}
+                      onChange={(e) => {
+                        setColorStack.mutate({ northLinesBelow: e.target.checked });
+                      }}
+                    />
+                    {tl("northLinesBelow")}
+                  </label>
+                </>
+              )}
             </div>
             <div className="flex items-center gap-2">
               {!isFullscreen && canFilter && !toolbar && (

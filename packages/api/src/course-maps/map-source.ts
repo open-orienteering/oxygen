@@ -1,10 +1,18 @@
 import { JSDOM } from "jsdom";
 import { windowBoundingBox, type MapWindow } from "@oxygen/shared";
-import { parseViewBox, type ViewBox } from "../map-window.js";
+import { parseViewBox } from "../map-window.js";
 import { probeMeridianLines } from "../map-north.js";
+import {
+  applyIofColorStack,
+  filterNorthLineObjects,
+  inkToColor,
+  type StackOcadFile,
+} from "../map-color-stack.js";
+import { ensureEventMapRenderKey } from "../map-render-cache.js";
 import type { BaseMapSvg } from "./map-page-svg.js";
 import type { PrismaClient } from "../generated/prisma/client.js";
 import { LruCache } from "./lru-cache.js";
+import type { ColorProfile, ColorStackOverrides } from "@oxygen/shared";
 
 type MapFileReader = Pick<PrismaClient, "mapFile">;
 
@@ -13,15 +21,22 @@ interface RawObject {
   coordinates?: Array<ArrayLike<number>>;
 }
 
-interface ParsedOcad {
+interface ParsedOcad extends StackOcadFile {
   objects: RawObject[];
   getBounds(): number[];
   getCrs(): { scale?: number };
 }
 
+export interface BaseMapLayers {
+  /** Full opaque composite (all colours). */
+  full: BaseMapSvg;
+  /** Transparent ink layer (above lower purple), or null when empty. */
+  ink: BaseMapSvg | null;
+}
+
 interface CachedMap {
   id: bigint;
-  uploadedAtMs: number;
+  renderKey: string;
   file: ParsedOcad;
   scale: number | null;
   /**
@@ -34,11 +49,14 @@ interface CachedMap {
    * by exactly this tilt.
    */
   meridianTiltDeg: number;
+  /** Ink-layer `toColor` after IOF stack rewrite, or null when empty. */
+  inkTo: number | null;
+  northLinesBelow: boolean;
 }
 
 const cache = new Map<string, CachedMap>();
 const MAX_CACHE = 3;
-const svgCache = new LruCache<{ baseMap: BaseMapSvg; scale: number }>(8);
+const svgCache = new LruCache<{ layers: BaseMapLayers; scale: number }>(8);
 const SVG_NS = "http://www.w3.org/2000/svg";
 const DEFAULT_PATTERN_INFLATION = 8;
 
@@ -101,28 +119,22 @@ export function inflateUserSpacePatterns(
 }
 
 async function parsedMap(db: MapFileReader, eventId: bigint): Promise<CachedMap> {
+  const stackMeta = await ensureEventMapRenderKey(db, eventId);
+  if (!stackMeta) throw new Error("No base map uploaded");
+
+  const existing = cache.get(stackMeta.renderKey);
+  if (existing && existing.id === stackMeta.mapFileId) {
+    cache.delete(stackMeta.renderKey);
+    cache.set(stackMeta.renderKey, existing);
+    return existing;
+  }
+
   const row = await db.mapFile.findFirst({
     where: { eventId },
     orderBy: { uploadedAt: "desc" },
-    select: {
-      id: true,
-      fileData: true,
-      scale: true,
-      uploadedAt: true,
-    },
+    select: { id: true, fileData: true, scale: true },
   });
   if (!row) throw new Error("No base map uploaded");
-  const key = eventId.toString();
-  const existing = cache.get(key);
-  if (
-    existing &&
-    existing.id === row.id &&
-    existing.uploadedAtMs === row.uploadedAt.getTime()
-  ) {
-    cache.delete(key);
-    cache.set(key, existing);
-    return existing;
-  }
 
   const ocadModule = await import("ocad2geojson");
   const readOcad = (ocadModule as Record<string, unknown>).readOcad as (
@@ -132,17 +144,29 @@ async function parsedMap(db: MapFileReader, eventId: bigint): Promise<CachedMap>
   const file = await readOcad(Buffer.from(row.fileData), {
     quietWarnings: true,
   });
-  const value = {
+  const stack = applyIofColorStack(file, {
+    profile: stackMeta.colorProfile as ColorProfile,
+    overrides: stackMeta.colorOverrides as ColorStackOverrides,
+    scale: stackMeta.scale,
+  });
+  if (stack.warnings.length > 0) {
+    console.warn(
+      `[map-color-stack] event ${eventId}: ${stack.warnings.join("; ")}`,
+    );
+  }
+  const value: CachedMap = {
     id: row.id,
-    uploadedAtMs: row.uploadedAt.getTime(),
+    renderKey: stackMeta.renderKey,
     file,
     scale: row.scale ?? file.getCrs().scale ?? null,
     meridianTiltDeg:
       probeMeridianLines(
         file.objects as Parameters<typeof probeMeridianLines>[0],
       )?.medianTiltDeg ?? 0,
+    inkTo: inkToColor(stack),
+    northLinesBelow: stackMeta.northLinesBelow,
   };
-  cache.set(key, value);
+  cache.set(stackMeta.renderKey, value);
   while (cache.size > MAX_CACHE) {
     cache.delete(cache.keys().next().value!);
   }
@@ -196,15 +220,13 @@ export async function loadBaseMapSvg(
   db: MapFileReader,
   eventId: bigint,
   window: MapWindow,
-): Promise<{ baseMap: BaseMapSvg; scale: number }> {
+): Promise<{ layers: BaseMapLayers; scale: number }> {
   const source = await parsedMap(db, eventId);
   if (!source.scale || source.scale <= 0) {
     throw new Error("Base map has no usable scale");
   }
   const cacheKey = [
-    eventId.toString(),
-    source.id.toString(),
-    source.uploadedAtMs,
+    source.renderKey,
     roundedWindowKey(window),
   ].join(":");
   const cached = svgCache.get(cacheKey);
@@ -217,21 +239,45 @@ export async function loadBaseMapSvg(
   const document = new JSDOM(
     "<!DOCTYPE html><html><body></body></html>",
   ).window.document;
-  const svg = inflateUserSpacePatterns(
+  const objects = objectsInWindow(source.file.objects, window, 20);
+  const ocadBounds = source.file.getBounds();
+
+  const fullSvg = inflateUserSpacePatterns(
     ocadToSvg(source.file, {
       document,
       generateSymbolElements: true,
       exportHidden: false,
-      objects: objectsInWindow(source.file.objects, window, 20),
+      objects,
     }).outerHTML,
   );
-  const rootViewBox: ViewBox | null = parseViewBox(svg);
-  if (!rootViewBox) throw new Error("Base map SVG has no viewBox");
+  const fullViewBox = parseViewBox(fullSvg);
+  if (!fullViewBox) throw new Error("Base map SVG has no viewBox");
+
+  let ink: BaseMapSvg | null = null;
+  if (source.inkTo != null) {
+    const inkObjects = source.northLinesBelow
+      ? filterNorthLineObjects(objects) ?? []
+      : objects;
+    const inkSvg = inflateUserSpacePatterns(
+      ocadToSvg(source.file, {
+        document,
+        generateSymbolElements: true,
+        exportHidden: false,
+        objects: inkObjects,
+        toColor: source.inkTo,
+        // Transparent fill so the ink layer does not paint a white sheet.
+        fill: "transparent",
+      }).outerHTML,
+    );
+    const inkViewBox = parseViewBox(inkSvg);
+    if (!inkViewBox) throw new Error("Ink layer SVG has no viewBox");
+    ink = { svg: inkSvg, rootViewBox: inkViewBox, ocadBounds };
+  }
+
   const result = {
-    baseMap: {
-      svg,
-      rootViewBox,
-      ocadBounds: source.file.getBounds(),
+    layers: {
+      full: { svg: fullSvg, rootViewBox: fullViewBox, ocadBounds },
+      ink,
     },
     scale: source.scale,
   };
@@ -261,7 +307,7 @@ export async function getBaseMapInfo(
   return {
     scale: source.scale,
     meridianTiltDeg: source.meridianTiltDeg,
-    version: `${source.id.toString()}-${source.uploadedAtMs}`,
+    version: source.renderKey,
   };
 }
 

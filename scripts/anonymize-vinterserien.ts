@@ -15,8 +15,6 @@
  *                     packages/api/.env's value, or
  *                     postgresql://oxygen:oxygen@localhost:5432/oxygen?schema=oxygen)
  *   SRC_NAME_ID    — source event name_id (default: Vinterserien)
- *   MAX_ZOOM       — maximum cached tile zoom to include (default: 13).
- *                     Deeper tiles render on demand from the OCAD blob.
  *
  * Transformations:
  *   - events: rename to "Demo Competition" / "demo_competition",
@@ -33,7 +31,7 @@
  *   - map_files: file_name / file_data always replaced with a generated
  *     synthetic OCAD that keeps the source CRS and paper extent. A source
  *     map export is never written into the fixture.
- *   - map_tiles: filtered to z <= MAX_ZOOM.
+ *   - map_tiles: omitted (content-keyed cache; regenerates on first view).
  *   - All BIGSERIAL ids on map_files / rendered_maps / tracks / routes
  *     are stripped from the INSERTs so Postgres allocates fresh ones
  *     against the freshly-created demo event.
@@ -59,7 +57,6 @@ const DATABASE_URL =
   process.env.DATABASE_URL ??
   "postgresql://oxygen:oxygen@localhost:5432/oxygen?schema=oxygen";
 const SRC_NAME_ID = process.env.SRC_NAME_ID ?? "Vinterserien";
-const MAX_ZOOM = parseInt(process.env.MAX_ZOOM ?? "13", 10);
 const OUT_PATH = path.resolve("docs/screenshots/fixtures/showcase.sql");
 const CARD_REMAP_OFFSET = 9_000_000;
 
@@ -83,7 +80,6 @@ type Mode =
   | "remapCard"
   | "remapCardReadout"
   | "remapPunch"
-  | "filterTiles"
   | "anonymizeEvent"
   | "stripSerialId"
   | "syntheticMap";
@@ -113,7 +109,6 @@ const TABLES: { name: string; mode: Mode; whereExtra?: string }[] = [
   { name: "teams", mode: "anonymizeTeam" },
   // Map / GPS.
   { name: "map_files", mode: "syntheticMap" },
-  { name: "map_tiles", mode: "filterTiles" },
   { name: "tracks", mode: "stripSerialId" },
   { name: "routes", mode: "stripSerialId" },
 ];
@@ -303,13 +298,10 @@ async function main(): Promise<void> {
     "--           courses / classes, pseudonymous runners, cards with\n",
   );
   write(
-    "--           remapped CardNo, a synthetic OCAD backing map, cached\n",
+    "--           remapped CardNo, a synthetic OCAD backing map, and the\n",
   );
-  write(
-    `--           map tiles (z <= ${MAX_ZOOM}), and the subset of\n`,
-  );
-  write("--           club_directory referenced by demo runners.\n");
-  write("-- Excluded: renderer caches, event_log, eventor_* caches.\n");
+  write("--           subset of club_directory referenced by demo runners.\n");
+  write("-- Excluded: map_tiles cache, renderer caches, event_log, eventor_* caches.\n");
   write("--\n");
   write(
     `-- Load with:   psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f showcase.sql\n`,
@@ -380,9 +372,6 @@ async function main(): Promise<void> {
     } else {
       // Tables without event_id are joined via a parent table.
       where = scopeByJoin(t.name, srcEventId);
-    }
-    if (t.name === "map_tiles") {
-      where += ` AND z <= ${MAX_ZOOM}`;
     }
 
     const result = await client.query({
@@ -521,7 +510,7 @@ function transform(
   cols: ColumnInfo[],
   mode: Mode,
 ): unknown[] | null {
-  if (mode === "keep" || mode === "stripSerialId" || mode === "filterTiles")
+  if (mode === "keep" || mode === "stripSerialId")
     return row;
 
   const r = [...row];

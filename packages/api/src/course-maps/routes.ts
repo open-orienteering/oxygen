@@ -209,11 +209,12 @@ async function renderPage(
     event: { name: event.name, date: event.date },
     mapName: row.name,
   });
-  const { baseMap } = await loadBaseMapSvg(db, event.id, layout.window);
+  const { layers } = await loadBaseMapSvg(db, event.id, layout.window);
   return composeMapPageSvg({
     document: layout.document,
     window: layout.window,
-    baseMap,
+    baseMap: layers.full,
+    inkMap: layers.ink,
     controls: layout.controls,
     legs: layout.legs,
     descriptionRows: layout.descriptionRows,
@@ -307,6 +308,7 @@ export function registerCourseMapRoutes(
       printScale?: string;
       dpi?: string;
       rot?: string;
+      layer?: string;
     };
   }>("/api/maps/:nameId/window.png", async (req, reply) => {
     const { nameId } = req.params;
@@ -336,6 +338,11 @@ export function registerCourseMapRoutes(
       if (!Number.isFinite(rotation) || Math.abs(rotation) > 180) {
         throw new Error("rot must be a rotation between -180 and 180 degrees");
       }
+      const layerRaw = (req.query.layer ?? "full").toLowerCase();
+      if (layerRaw !== "full" && layerRaw !== "ink") {
+        throw new Error('layer must be "full" or "ink"');
+      }
+      const layer = layerRaw as "full" | "ink";
       const widthPx = Math.max(1, Math.round((widthMm / 25.4) * dpi));
       const heightPx = Math.max(1, Math.round((heightMm / 25.4) * dpi));
       if (widthPx > MAX_RENDER_PX || heightPx > MAX_RENDER_PX) {
@@ -354,6 +361,7 @@ export function registerCourseMapRoutes(
         printScale.toFixed(2),
         dpi.toFixed(2),
         rotation.toFixed(2),
+        layer,
       ].join(":");
       const cached = windowPngCache.get(cacheKey);
       if (cached) {
@@ -379,12 +387,41 @@ export function registerCourseMapRoutes(
         printScale,
         rotation,
       );
-      const { baseMap } = await loadBaseMapSvg(db, event.id, window);
-      const svg = `<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="${widthMm}mm" height="${heightMm}mm" viewBox="0 0 ${widthMm} ${heightMm}">${renderBaseMapWindow(baseMap, window, frame)}</svg>`;
+      const { layers } = await loadBaseMapSvg(db, event.id, window);
+      const source =
+        layer === "ink"
+          ? layers.ink
+          : layers.full;
+      if (!source) {
+        // Empty ink layer: 1×1 transparent PNG.
+        const { default: sharp } = await import("sharp");
+        const body = await sharp({
+          create: {
+            width: 1,
+            height: 1,
+            channels: 4,
+            background: { r: 0, g: 0, b: 0, alpha: 0 },
+          },
+        })
+          .png()
+          .toBuffer();
+        const etag = `"${createHash("sha256").update(body).digest("base64url")}"`;
+        windowPngCache.set(cacheKey, { body, etag });
+        return reply
+          .header("Content-Type", "image/png")
+          .header("Cache-Control", "private, max-age=3600")
+          .header("ETag", etag)
+          .header("X-Cache", "miss")
+          .send(body);
+      }
+      const svg = `<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="${widthMm}mm" height="${heightMm}mm" viewBox="0 0 ${widthMm} ${heightMm}">${renderBaseMapWindow(source, window, frame, {
+        forceTransparentFill: layer === "ink",
+        dataLayer: layer === "ink" ? "map-ink" : "map-full",
+      })}</svg>`;
       const { renderAsync } = await import("@resvg/resvg-js");
       const rendered = await renderAsync(svg, {
         fitTo: { mode: "width", value: widthPx },
-        background: "white",
+        ...(layer === "ink" ? {} : { background: "white" }),
       });
       const body = Buffer.from(rendered.asPng());
       const etag = `"${createHash("sha256").update(body).digest("base64url")}"`;

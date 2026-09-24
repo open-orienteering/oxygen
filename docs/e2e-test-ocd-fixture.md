@@ -38,8 +38,8 @@ none of that.
   (the overprint-cut targets above).
 - Integration tests: `course-import-class-fallback`, `course-import-coords`,
   `map-tiles`, `course-export`, `description-autodetect` (asserts the
-  boulder/building coordinates above), `overprint-cuts` (rim slit over
-  the 68/42 boulder, leg gap through the building).
+  boulder/building coordinates above), `overprint-cuts` (rim slit and
+  leg gap over the 68/42 boulder; no gap through the building).
 
 ## Regenerating
 

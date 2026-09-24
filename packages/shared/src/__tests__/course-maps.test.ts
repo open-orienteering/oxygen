@@ -208,22 +208,31 @@ describe("course map SVG generators", () => {
         { points: [{ x: 40, y: 40 }, { x: 80, y: 80 }] },
       ],
     });
-    expect(svg).toContain('data-map-layer="course-overlay"');
-    expect(svg).toContain('stroke-width="0.35"');
-    expect(svg).toContain('data-control-code="31"');
-    expect(svg).toContain("<path");
-    expect(svg).toContain(">1</text>");
-    expect(svg.match(/<circle/g)).toHaveLength(2);
-    expect(svg).toContain("mix-blend-mode: multiply");
-    // ISOM 704: Arial (Liberation Sans), non-bold.
-    expect(svg).not.toContain("font-weight");
+    const { lower, upper } = svg;
+    expect(lower).toContain('data-map-layer="course-overlay-lower"');
+    expect(upper).toContain('data-map-layer="course-overlay-upper"');
+    expect(lower).toContain('stroke-width="0.35"');
+    expect(lower).toContain('data-control-code="31"');
+    expect(lower).toContain("<path");
+    expect(upper).toContain(">1</text>");
+    expect(lower.match(/<circle/g)).toHaveLength(2);
+    expect(lower).not.toContain("mix-blend-mode");
+    expect(upper).not.toContain("mix-blend-mode");
+    expect(lower).not.toContain("opacity=");
+    // ISOM 704: Arial (Liberation Sans), non-bold — in the upper layer.
+    expect(upper).not.toContain("font-weight");
     // font-size is scaled up from the digit height by the cap-height ratio.
-    expect(svg).toContain(
-      `font-size="${document.appearance.numberHeightMm / (1409 / 2048)}"`,
-    );
-    expect(svg).toContain("<line");
-    expect(svg).toContain('data-leg-gapped="true"');
-    expect(svg).not.toContain("<polyline");
+    const labelFontSize =
+      document.appearance.numberHeightMm / (1409 / 2048);
+    expect(upper).toContain(`font-size="${labelFontSize}"`);
+    // Always-on white halo keeps numbers readable over map ink.
+    expect(upper).toContain('data-control-label="31"');
+    expect(upper).toContain('stroke="#fff"');
+    expect(upper).toContain(`stroke-width="${labelFontSize * 0.12}"`);
+    expect(upper).toContain('paint-order="stroke fill"');
+    expect(lower).toContain("<line");
+    expect(lower).toContain('data-leg-gapped="true"');
+    expect(lower).not.toContain("<polyline");
   });
 
   it("enlarges the overprint with the map (ISOM enlargement factor)", () => {
@@ -245,16 +254,16 @@ describe("course map SVG generators", () => {
     };
     // 1:15000 base map printed at 1:7500 doubles every overprint dimension.
     const enlarged = renderCourseOverlaySvg({ ...options, overprintScale: 2 });
-    expect(enlarged).toContain('stroke-width="0.7"');
-    expect(enlarged).toContain(
+    expect(enlarged.lower).toContain('stroke-width="0.7"');
+    expect(enlarged.upper).toContain(
       `font-size="${(document.appearance.numberHeightMm * 2) / (1409 / 2048)}"`,
     );
-    expect(enlarged).toContain('r="6"'); // finish outer 3 mm -> 6 mm
-    expect(enlarged).toContain('r="4"'); // finish inner 2 mm -> 4 mm
+    expect(enlarged.lower).toContain('r="6"'); // finish outer 3 mm -> 6 mm
+    expect(enlarged.lower).toContain('r="4"'); // finish inner 2 mm -> 4 mm
     // Default factor 1 keeps ISOM base dimensions.
     const plain = renderCourseOverlaySvg(options);
-    expect(plain).toContain('stroke-width="0.35"');
-    expect(plain).toContain('r="3"');
+    expect(plain.lower).toContain('stroke-width="0.35"');
+    expect(plain.lower).toContain('r="3"');
   });
 
   it("renders descriptions with symbols and escaped text", () => {
@@ -390,7 +399,7 @@ describe("course map SVG generators", () => {
     expect(svg).toContain('fill="#ffffff"');
     expect(svg).toContain('id="oob-oob"');
     expect(svg).toContain('stroke-width="0.4"'); // 0.2 mm * overprintScale 2
-    expect(svg).toContain("mix-blend-mode:multiply");
+    expect(svg).not.toContain("mix-blend-mode");
   });
 });
 

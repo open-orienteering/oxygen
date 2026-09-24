@@ -11,23 +11,27 @@ Code: `packages/api/src/map-tiles.ts` (pipeline and routes),
 
 ```
 map_files.file_data (OCD blob)
-  │  readOcad + ocadToSvg            (ocad2geojson, cached per event)
+  │  readOcad + applyIofColorStack + ocadToSvg×2
   ▼
-SVG document  ──── viewBox rewrite ────►  window raster   (resvg)
+SVG full + SVG ink  ─ viewBox rewrite ─► window rasters (resvg)
   │                                            │
   │                                            │  bilinear warp per tile
   │                                            ▼
-  └─ getCrs()/getBounds() ──► tile geometry ──► 256×256 PNG ──► map_tiles
+  └─ getCrs()/getBounds() ──► tile geometry ──► 256×512 stacked PNG ──► map_tiles
+                                                 (composite top, ink bottom)
 ```
 
 A tile request that misses `map_tiles` renders the whole *block* of
 tiles around it, writes them all back, and serves the one asked for.
+The ink half is transparent line art (colours above lower purple); the
+viewer slices the PNG so course purple can sit between the halves. See
+[`map-color-stack.md`](map-color-stack.md).
 
 ## Routes
 
 | Route | Purpose |
 |---|---|
-| `GET /api/map-tile/:nameId/:z/:x/:y` | One 256×256 PNG. Empty / out-of-map tiles return a **200 transparent PNG** (not 204; see `docs/bugfix-red-empty-tiles.md` for the time the "transparent" pixel was red). 404 for an unknown event. 500 on render failure. |
+| `GET /api/map-tile/:nameId/:z/:x/:y` | One **256×512** stacked PNG (composite top, ink bottom). Empty / out-of-map tiles return a **200 transparent PNG** (not 204; see `docs/bugfix-red-empty-tiles.md`). 404 for an unknown event. 500 on render failure. Client URLs include `f=2` so caches cannot serve pre-stack 256×256 tiles. |
 | `GET /api/map-tile-progress` | Pre-cache progress for the event in the `x-competition-id` header. |
 
 Both are guarded by `assertRestAccess` with the `courses.view` capability
@@ -126,8 +130,38 @@ it costs time rather than correctness. Nothing in the tile path requires
 a single instance.
 
 Uploading a map fires `onMapUpload`, which drops the SVG cache entry and
-any in-flight blocks for that event; `applyEventMap` deletes the event's
-`map_tiles` rows in the same transaction.
+any in-flight blocks for that **render key**. `applyEventMap`, rotation
+changes, and colour-stack updates recompute `map_files.render_key` and
+call `gcOrphanTiles()` — they no longer `DELETE FROM map_tiles WHERE
+event_id = …`.
+
+## Content-keyed tile cache
+
+`map_tiles` is keyed by `render_key`, not `event_id`:
+
+```
+renderKey = sha256(
+  file_hash | rotationCorrection | profile | JSON(overrides)
+  | northLinesBelow | TILE_FORMAT
+).slice(0, 32)
+```
+
+Pure helper: `computeRenderKey()` in `packages/api/src/map-render-key.ts`.
+`file_hash` is `sha256(file_data)` (backfilled on migrate; lazily filled
+on upload). `render_key` is nullable and filled on first
+`ensureEventMapRenderKey` / tile / metadata read.
+
+Two events that adopt the same club-library map (same blob + same stack
+settings) share tile rows. Changing profile or north-lines on one event
+mints a new key; `gcOrphanTiles` drops rows whose key is no longer
+referenced by any `map_files` or `club_map_files` row. A club-library
+map keeps its tiles even when every event drops it — re-add is instant.
+
+Client `tileVersion` is the `renderKey` string (`?v=<key>`). `TILE_FORMAT`
+is already inside the key; `f=` stays for week-old browser caches.
+
+Backup / showcase dumps omit `map_tiles` (pure cache; regenerates on
+first view).
 
 ## Pre-caching and progress
 

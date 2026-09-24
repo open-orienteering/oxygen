@@ -117,6 +117,8 @@
     "undo": "Undo (Ctrl+Z)",
     "redo": "Redo (Ctrl+Shift+Z)",
     "hideOtherControls": "Hide other controls",
+    "toggleCuts": "Auto slits",
+    "toggleCutsTitle": "Automatic circle slits and leg gaps over map features",
     "alsoIn": "Also in: {{names}}",
     "affects": "Affects: {{names}}",
     "actionAdd": "Add control",

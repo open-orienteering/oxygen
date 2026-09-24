@@ -1,8 +1,7 @@
 /**
  * Unit tests for the automatic overprint-cut computation
- * (`overprint-cuts.ts`): circle slits over black features and knolls,
- * leg gaps over black features, merging and sanity caps, and the
- * geometry decorator.
+ * (`overprint-cuts.ts`): circle slits and leg gaps over small rock
+ * features and knolls, plus merging and the geometry decorator.
  */
 
 import { describe, it, expect } from "vitest";
@@ -74,38 +73,14 @@ describe("circleCuts", () => {
     expect(circleCuts([waterhole, tree], 0, 0)).toEqual([]);
   });
 
-  it("slits both crossings of a black line through the circle", () => {
-    // Vertical path 1 mm east of centre crosses the rim twice (NNE + SSE).
+  it("does not slit long line objects", () => {
     const path = obj(505000, 2, [[1, -10], [1, 10]]);
-    const cuts = circleCuts([path], 0, 0);
-    expect(cuts).toHaveLength(2);
-    const eastOfNorth = Math.round((Math.asin(1 / CIRCLE_RADIUS_MM) * 180) / Math.PI);
-    expect(gapAt(cuts, eastOfNorth)).toBe(true);
-    expect(gapAt(cuts, 180 - eastOfNorth)).toBe(true);
-    expect(gapAt(cuts, 270)).toBe(false);
-    // Each crossing clears the line and no more — the two slits stay
-    // well apart instead of merging into one long arc.
-    for (const cut of cuts) {
-      expect((cut.end - cut.start + 360) % 360).toBeLessThan(20);
-    }
+    const cliff = obj(201000, 2, [[-10, 1], [10, 1]]);
+    expect(circleCuts([path, cliff], 0, 0)).toEqual([]);
   });
 
-  it("cuts the rim stretch inside a building and merges overlaps", () => {
-    // Building covering everything west of x = 0: the west half of the
-    // rim is buried.
+  it("does not slit area objects", () => {
     const building = obj(521000, 3, [[-20, -20], [0, -20], [0, 20], [-20, 20]]);
-    const cuts = circleCuts([building], 0, 0);
-    expect(cuts).toHaveLength(1);
-    expect(gapAt(cuts, 270)).toBe(true); // due west
-    expect(gapAt(cuts, 90)).toBe(false); // due east untouched
-    // A boulder inside the buried stretch merges into the same gap.
-    const boulder = obj(204000, 1, [[-CIRCLE_RADIUS_MM, 0]]);
-    expect(circleCuts([building, boulder], 0, 0)).toHaveLength(1);
-  });
-
-  it("keeps the circle whole when cuts would erase almost all of it", () => {
-    // Circle entirely inside a building.
-    const building = obj(521000, 3, [[-20, -20], [20, -20], [20, 20], [-20, 20]]);
     expect(circleCuts([building], 0, 0)).toEqual([]);
   });
 
@@ -136,29 +111,24 @@ describe("legGaps", () => {
     expect((gaps[0].to - gaps[0].from) * 40).toBeLessThan(1);
   });
 
-  it("excludes knolls from leg gaps", () => {
+  it("includes knolls in leg gaps", () => {
     const knoll = obj(109000, 1, [[20, 0]]);
-    expect(legGaps(A, B, [knoll])).toEqual([]);
+    const gaps = legGaps(A, B, [knoll]);
+    expect(gaps).toHaveLength(1);
+    expect(gaps[0].from).toBeLessThan(0.5);
+    expect(gaps[0].to).toBeGreaterThan(0.5);
   });
 
-  it("gaps a black line crossing, wider when oblique", () => {
+  it("does not gap long line objects", () => {
     const perpendicular = obj(505000, 2, [[10, -5], [10, 5]]);
     const oblique = obj(505000, 2, [[25, -1], [35, 1]]);
-    const gaps = legGaps(A, B, [perpendicular, oblique]);
-    expect(gaps).toHaveLength(2);
-    const wPerp = gaps[0].to - gaps[0].from;
-    const wObl = gaps[1].to - gaps[1].from;
-    expect(gaps[0].from).toBeLessThan(10 / 40);
-    expect(gaps[0].to).toBeGreaterThan(10 / 40);
-    expect(wObl).toBeGreaterThan(wPerp);
+    expect(legGaps(A, B, [perpendicular, oblique])).toEqual([]);
   });
 
-  it("gaps the stretch of leg inside a building", () => {
+  it("does not gap area objects", () => {
     const building = obj(521000, 3, [[15, -3], [25, -3], [25, 3], [15, 3]]);
-    const gaps = legGaps(A, B, [building]);
-    expect(gaps).toHaveLength(1);
-    expect(gaps[0].from).toBeCloseTo(15 / 40, 1);
-    expect(gaps[0].to).toBeCloseTo(25 / 40, 1);
+    const giantBoulder = obj(206000, 3, [[15, -3], [25, -3], [25, 3], [15, 3]]);
+    expect(legGaps(A, B, [building, giantBoulder])).toEqual([]);
   });
 
   it("preserves the leg ends near the circles", () => {
@@ -179,9 +149,6 @@ describe("legGaps", () => {
     const far2 = obj(204000, 1, [[22, 0]]);
     expect(legGaps(A, B, [far1, far2])).toHaveLength(2);
 
-    // A building covering nearly the whole leg trips the sanity cap.
-    const giant = obj(521000, 3, [[1, -5], [39, -5], [39, 5], [1, 5]]);
-    expect(legGaps(A, B, [giant])).toEqual([]);
   });
 
   it("skips short legs entirely", () => {
@@ -193,7 +160,7 @@ describe("legGaps", () => {
 describe("decorateOverprintCuts", () => {
   it("adds cuts to control circles and gaps to legs, leaving start/finish alone", () => {
     const boulderOnRim = obj(204000, 1, [[10 + CIRCLE_RADIUS_MM, 0]]);
-    const pathAcrossLeg = obj(505000, 2, [[25, -5], [25, 5]]);
+    const knollOnLeg = obj(109000, 1, [[25, 0]]);
     const geometry = {
       features: [
         {
@@ -214,7 +181,7 @@ describe("decorateOverprintCuts", () => {
         },
       ],
     };
-    decorateOverprintCuts(geometry, [boulderOnRim, pathAcrossLeg]);
+    decorateOverprintCuts(geometry, [boulderOnRim, knollOnLeg]);
 
     expect(geometry.features[0].properties).not.toHaveProperty("cuts");
     expect(geometry.features[1].properties?.cuts).toHaveLength(1);

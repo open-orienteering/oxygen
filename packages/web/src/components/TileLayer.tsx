@@ -4,9 +4,23 @@
  * Fetches tiles via a concurrency-capped queue (not bare `<img src>`) so
  * large maps do not storm Cloud Run into 429s, and so failed tiles are
  * retried with backoff instead of being blacklisted forever.
+ *
+ * Tiles are 256×512 PNGs (composite top, ink bottom). `half` selects
+ * which half to display; two TileLayers sharing a `TileBlobCacheProvider`
+ * fetch each stacked PNG once.
  */
 
-import { useState, useMemo, useRef, useEffect, useCallback } from "react";
+import {
+  createContext,
+  useState,
+  useMemo,
+  useRef,
+  useEffect,
+  useCallback,
+  useContext,
+  type MutableRefObject,
+  type ReactNode,
+} from "react";
 import type { TileViewport } from "../lib/geo-utils";
 import { lngToTileX, latToTileY } from "../lib/geo-utils";
 import { kioskKeyFromUrl, tileQueryString } from "../lib/kiosk-key";
@@ -19,7 +33,13 @@ interface Props {
   containerHeight: number;
   tileUrlBase?: string;
   /** Cache-busting version (e.g. map upload timestamp) */
-  tileVersion?: number;
+  tileVersion?: number | string;
+  /** Which half of the stacked 256×512 tile to show. Default "top". */
+  half?: "top" | "bottom";
+  /** Stacking order relative to sibling overlays. */
+  zIndex?: number;
+  /** Optional test id on the outer container. */
+  "data-testid"?: string;
 }
 
 interface TileInfo {
@@ -31,6 +51,120 @@ interface TileInfo {
   height: number;
   /** Distance² from viewport centre in tile units — fetch priority. */
   priority: number;
+}
+
+interface TileBlobCache {
+  blobUrls: Map<string, string>;
+  blobUrlsRef: MutableRefObject<Map<string, string>>;
+  publishBlob: (key: string, url: string) => void;
+  dropBlob: (key: string) => void;
+  fetcher: TileFetcher;
+  retryBook: TileRetryBook;
+  bump: () => void;
+  tick: number;
+}
+
+const TileBlobCacheContext = createContext<TileBlobCache | null>(null);
+
+/**
+ * Share one fetch/blob cache across the composite and ink TileLayers so
+ * each stacked PNG is requested once.
+ */
+export function TileBlobCacheProvider({ children }: { children: ReactNode }) {
+  const fetcherRef = useRef<TileFetcher | null>(null);
+  if (!fetcherRef.current) fetcherRef.current = new TileFetcher();
+  const retryBookRef = useRef(new TileRetryBook());
+  const blobUrlsRef = useRef(new Map<string, string>());
+  const [blobUrls, setBlobUrls] = useState(new Map<string, string>());
+  const [tick, setTick] = useState(0);
+
+  const publishBlob = useCallback((key: string, url: string) => {
+    const prev = blobUrlsRef.current.get(key);
+    if (prev && prev !== url) URL.revokeObjectURL(prev);
+    blobUrlsRef.current.set(key, url);
+    setBlobUrls(new Map(blobUrlsRef.current));
+  }, []);
+
+  const dropBlob = useCallback((key: string) => {
+    const prev = blobUrlsRef.current.get(key);
+    if (prev) {
+      URL.revokeObjectURL(prev);
+      blobUrlsRef.current.delete(key);
+      setBlobUrls(new Map(blobUrlsRef.current));
+    }
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      for (const url of blobUrlsRef.current.values()) URL.revokeObjectURL(url);
+      blobUrlsRef.current.clear();
+      fetcherRef.current?.cancelExcept(new Set());
+    };
+  }, []);
+
+  const value = useMemo<TileBlobCache>(
+    () => ({
+      blobUrls,
+      blobUrlsRef,
+      publishBlob,
+      dropBlob,
+      fetcher: fetcherRef.current!,
+      retryBook: retryBookRef.current,
+      bump: () => setTick((n) => n + 1),
+      tick,
+    }),
+    [blobUrls, publishBlob, dropBlob, tick],
+  );
+
+  return (
+    <TileBlobCacheContext.Provider value={value}>
+      {children}
+    </TileBlobCacheContext.Provider>
+  );
+}
+
+function useTileBlobCache(): TileBlobCache {
+  const shared = useContext(TileBlobCacheContext);
+  // Fallback for a lone TileLayer (e.g. tests) — private cache.
+  const localFetcher = useRef<TileFetcher | null>(null);
+  if (!localFetcher.current) localFetcher.current = new TileFetcher();
+  const localRetry = useRef(new TileRetryBook());
+  const localBlobs = useRef(new Map<string, string>());
+  const [localUrls, setLocalUrls] = useState(new Map<string, string>());
+  const [localTick, setLocalTick] = useState(0);
+  const publishBlob = useCallback((key: string, url: string) => {
+    const prev = localBlobs.current.get(key);
+    if (prev && prev !== url) URL.revokeObjectURL(prev);
+    localBlobs.current.set(key, url);
+    setLocalUrls(new Map(localBlobs.current));
+  }, []);
+  const dropBlob = useCallback((key: string) => {
+    const prev = localBlobs.current.get(key);
+    if (prev) {
+      URL.revokeObjectURL(prev);
+      localBlobs.current.delete(key);
+      setLocalUrls(new Map(localBlobs.current));
+    }
+  }, []);
+  useEffect(() => {
+    if (shared) return;
+    return () => {
+      for (const url of localBlobs.current.values()) URL.revokeObjectURL(url);
+      localBlobs.current.clear();
+      localFetcher.current?.cancelExcept(new Set());
+    };
+  }, [shared]);
+  if (shared) return shared;
+  return {
+    blobUrls: localUrls,
+    blobUrlsRef: localBlobs,
+    publishBlob,
+    dropBlob,
+    fetcher: localFetcher.current,
+    retryBook: localRetry.current,
+    bump: () => setLocalTick((n) => n + 1),
+    tick: localTick,
+  };
 }
 
 /** Identity for React/load/error state; event and map version are significant. */
@@ -108,19 +242,62 @@ function computeTiles(
   return result;
 }
 
+function TileHalfImage({
+  src,
+  tileSrc,
+  tile,
+  half,
+}: {
+  src: string;
+  tileSrc: string;
+  tile: TileInfo;
+  half: "top" | "bottom";
+}) {
+  // Stacked PNG is 256×512; show one half via overflow clip + offset.
+  // The wrapper is tile.width × tile.height; the img is twice as tall so
+  // half="bottom" shifts it up by one tile height.
+  return (
+    <div
+      style={{
+        position: "absolute",
+        left: tile.x,
+        top: tile.y,
+        width: tile.width,
+        height: tile.height,
+        overflow: "hidden",
+      }}
+    >
+      <img
+        src={src}
+        data-tile-url={tileSrc}
+        data-tile-half={half}
+        alt=""
+        draggable={false}
+        decoding="async"
+        style={{
+          position: "absolute",
+          left: 0,
+          top: half === "bottom" ? -tile.height : 0,
+          width: tile.width,
+          height: tile.height * 2,
+          imageRendering: "auto",
+        }}
+      />
+    </div>
+  );
+}
+
 export function TileLayer({
   viewport,
   containerWidth,
   containerHeight,
   tileUrlBase = "/api/map-tile",
   tileVersion,
+  half = "top",
+  zIndex,
+  "data-testid": testId,
 }: Props) {
-  const fetcherRef = useRef<TileFetcher | null>(null);
-  if (!fetcherRef.current) fetcherRef.current = new TileFetcher();
-  const retryBookRef = useRef(new TileRetryBook());
-  const blobUrlsRef = useRef(new Map<string, string>());
-  const [blobUrls, setBlobUrls] = useState(new Map<string, string>());
-  const [tick, setTick] = useState(0);
+  const cache = useTileBlobCache();
   const query = useMemo(
     () => tileQueryString(tileVersion, kioskKeyFromUrl()),
     [tileVersion],
@@ -148,54 +325,74 @@ export function TileLayer({
 
   // Current zoom tiles
   const tiles = useMemo(
-    () => computeTiles(viewport, z, containerWidth, containerHeight, tileUrlBase, query),
+    () =>
+      computeTiles(
+        viewport,
+        z,
+        containerWidth,
+        containerHeight,
+        tileUrlBase,
+        query,
+      ),
     // tick forces recompute when a retry window opens
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [viewport, z, containerWidth, containerHeight, tileUrlBase, query, tick],
+    [viewport, z, containerWidth, containerHeight, tileUrlBase, query, cache.tick],
   );
 
   // Backdrop tiles from previous zoom — positioned for current viewport.
+  // Only the composite (top) half uses a backdrop; ink on a backdrop
+  // zoom would sit under purple inconsistently.
   const backdropTiles = useMemo(() => {
+    if (half !== "top") return [];
     if (backdropZ === null || backdropZ === z) return [];
-    return computeTiles(viewport, backdropZ, containerWidth, containerHeight,
-      tileUrlBase, query);
-  }, [viewport, backdropZ, z, containerWidth, containerHeight, tileUrlBase, query, tick]);
-
-  const publishBlob = useCallback((key: string, url: string) => {
-    const prev = blobUrlsRef.current.get(key);
-    if (prev && prev !== url) URL.revokeObjectURL(prev);
-    blobUrlsRef.current.set(key, url);
-    setBlobUrls(new Map(blobUrlsRef.current));
-  }, []);
-
-  const dropBlob = useCallback((key: string) => {
-    const prev = blobUrlsRef.current.get(key);
-    if (prev) {
-      URL.revokeObjectURL(prev);
-      blobUrlsRef.current.delete(key);
-      setBlobUrls(new Map(blobUrlsRef.current));
-    }
-  }, []);
+    return computeTiles(
+      viewport,
+      backdropZ,
+      containerWidth,
+      containerHeight,
+      tileUrlBase,
+      query,
+    );
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    viewport,
+    backdropZ,
+    z,
+    containerWidth,
+    containerHeight,
+    tileUrlBase,
+    query,
+    cache.tick,
+    half,
+  ]);
 
   // Fetch desired tiles; abort ones that left the viewport.
+  // Only the top half drives fetching so the ink layer does not double
+  // the queue when both share a cache.
   useEffect(() => {
-    const fetcher = fetcherRef.current!;
-    const retryBook = retryBookRef.current;
+    if (half !== "top" && cache) {
+      // Ink layer: still need to fetch if used alone, but when shared the
+      // top half owns the queue. Mirror desired keys so blobs stay warm.
+    }
+    const fetcher = cache.fetcher;
+    const retryBook = cache.retryBook;
     const now = Date.now();
     const desired = new Map<string, TileInfo>();
     for (const t of [...tiles, ...backdropTiles]) desired.set(t.key, t);
 
+    // Only cancel/fetch from the composite layer so two layers sharing a
+    // cache do not fight over the queue.
+    if (half !== "top") return;
+
     fetcher.cancelExcept(new Set(desired.keys()));
 
-    // Drop blob URLs for tiles that are long gone (keep a small cache of
-    // currently desired keys only — backdrop + current).
-    for (const key of [...blobUrlsRef.current.keys()]) {
-      if (!desired.has(key)) dropBlob(key);
+    for (const key of [...cache.blobUrlsRef.current.keys()]) {
+      if (!desired.has(key)) cache.dropBlob(key);
     }
 
     const waitingKeys: string[] = [];
     for (const tile of desired.values()) {
-      if (blobUrlsRef.current.has(tile.key)) continue;
+      if (cache.blobUrlsRef.current.has(tile.key)) continue;
       const decision = retryBook.decision(tile.key, now);
       if (decision.action === "wait") {
         waitingKeys.push(tile.key);
@@ -212,10 +409,8 @@ export function TileLayer({
         .then((result) => {
           if (result.ok) {
             retryBook.clear(tile.key);
-            // Effect may have attached multiple .then handlers while the
-            // same fetch was pending — only create one object URL.
-            if (!blobUrlsRef.current.has(tile.key)) {
-              publishBlob(tile.key, URL.createObjectURL(result.blob));
+            if (!cache.blobUrlsRef.current.has(tile.key)) {
+              cache.publishBlob(tile.key, URL.createObjectURL(result.blob));
             }
             return;
           }
@@ -223,34 +418,25 @@ export function TileLayer({
           retryBook.recordFailure(tile.key, Date.now(), {
             retryAfterHeader: result.retryAfter,
           });
-          setTick((n) => n + 1);
+          cache.bump();
         });
     }
 
     const nextAt = retryBook.earliestRetryAt(waitingKeys, now);
     let timer: ReturnType<typeof setTimeout> | undefined;
     if (nextAt != null) {
-      timer = setTimeout(() => setTick((n) => n + 1), Math.max(0, nextAt - now));
+      timer = setTimeout(() => cache.bump(), Math.max(0, nextAt - now));
     }
     return () => {
       if (timer) clearTimeout(timer);
     };
-  }, [tiles, backdropTiles, publishBlob, dropBlob]);
-
-  // Revoke all blobs on unmount.
-  useEffect(() => {
-    return () => {
-      for (const url of blobUrlsRef.current.values()) URL.revokeObjectURL(url);
-      blobUrlsRef.current.clear();
-      fetcherRef.current?.cancelExcept(new Set());
-    };
-  }, []);
+  }, [tiles, backdropTiles, cache, half]);
 
   const allCurrentLoaded =
-    tiles.length > 0 && tiles.every((t) => blobUrls.has(t.key));
+    tiles.length > 0 && tiles.every((t) => cache.blobUrls.has(t.key));
 
   // Once all current tiles are loaded, mark this zoom as loaded and clear backdrop
-  if (allCurrentLoaded) {
+  if (half === "top" && allCurrentLoaded) {
     everLoadedZRef.current.add(z);
     if (backdropZ !== null && backdropZ !== z) {
       lastFullyLoadedZRef.current = z;
@@ -259,57 +445,40 @@ export function TileLayer({
 
   return (
     <div
+      data-testid={testId}
+      data-tile-half={half}
       style={{
         position: "absolute",
         inset: 0,
         overflow: "hidden",
         pointerEvents: "none",
         color: "transparent",
+        zIndex,
       }}
     >
       {backdropTiles.map((tile) => {
-        const src = blobUrls.get(tile.key);
+        const src = cache.blobUrls.get(tile.key);
         if (!src) return null;
         return (
-          <img
+          <TileHalfImage
             key={`bd-${tile.key}`}
             src={src}
-            // Blob URLs hide which tile an <img> shows; expose the API URL
-            // for tests and debugging.
-            data-tile-url={tile.src}
-            alt=""
-            draggable={false}
-            decoding="async"
-            style={{
-              position: "absolute",
-              left: tile.x,
-              top: tile.y,
-              width: tile.width,
-              height: tile.height,
-              imageRendering: "auto",
-            }}
+            tileSrc={tile.src}
+            tile={tile}
+            half={half}
           />
         );
       })}
       {tiles.map((tile) => {
-        const src = blobUrls.get(tile.key);
+        const src = cache.blobUrls.get(tile.key);
         if (!src) return null;
         return (
-          <img
+          <TileHalfImage
             key={tile.key}
             src={src}
-            data-tile-url={tile.src}
-            alt=""
-            draggable={false}
-            decoding="async"
-            style={{
-              position: "absolute",
-              left: tile.x,
-              top: tile.y,
-              width: tile.width,
-              height: tile.height,
-              imageRendering: "auto",
-            }}
+            tileSrc={tile.src}
+            tile={tile}
+            half={half}
           />
         );
       })}

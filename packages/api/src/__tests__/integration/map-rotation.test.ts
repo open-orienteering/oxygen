@@ -51,10 +51,19 @@ describe("course.setMapRotation", () => {
         lng: 2,
       },
     });
-    // Seed a fake cached tile so we can assert it gets deleted.
+    // Unique stack settings so GC of this event's old key is not blocked
+    // by other suites that share the same OCAD blob at rotation 0.
+    await caller.course.setMapColorStack({
+      overrides: { above: [313131] },
+    });
+    // Seed a fake cached tile under the pre-rotation render key so we can
+    // assert GC drops it when rotation changes the key.
+    const beforeMeta = await caller.course.mapMetadata();
+    expect(beforeMeta?.renderKey).toBeTruthy();
+    const oldRenderKey = beforeMeta!.renderKey!;
     await ctx.db.mapTile.create({
       data: {
-        eventId: ctx.eventId,
+        renderKey: oldRenderKey,
         z: 12,
         x: 1,
         y: 1,
@@ -62,7 +71,7 @@ describe("course.setMapRotation", () => {
       },
     });
 
-    const before = await caller.course.mapMetadata();
+    const before = beforeMeta;
     expect(before).not.toBeNull();
     expect(before!.rotationCorrection).toBe(0);
 
@@ -98,9 +107,10 @@ describe("course.setMapRotation", () => {
     const after = await caller.course.mapMetadata();
     expect(after!.rotationCorrection).toBe(11);
     expect(after!.northOffset).toBeCloseTo(expected.northOffset!, 6);
+    expect(after!.renderKey).not.toBe(oldRenderKey);
 
     const tiles = await ctx.db.mapTile.count({
-      where: { eventId: ctx.eventId },
+      where: { renderKey: oldRenderKey },
     });
     expect(tiles).toBe(0);
 

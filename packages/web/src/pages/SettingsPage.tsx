@@ -63,6 +63,9 @@ export function SettingsPage() {
       void utils.clubMap.list.invalidate();
     },
   });
+  const setColorStack = trpc.clubMap.setColorStack.useMutation({
+    onSuccess: () => void utils.clubMap.list.invalidate(),
+  });
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [dragOver, setDragOver] = useState(false);
   const [editingId, setEditingId] = useState<number | null>(null);
@@ -312,6 +315,52 @@ export function SettingsPage() {
                           {t("northLinesNone")}
                         </span>
                       )}
+                      <label className="flex items-center gap-1 text-xs text-slate-500">
+                        <span className="sr-only">{t("colorProfile")}</span>
+                        <select
+                          data-testid="library-map-color-profile"
+                          className="text-xs border border-slate-200 rounded-md px-1.5 py-0.5 bg-white cursor-pointer"
+                          value={row.colorProfile}
+                          disabled={
+                            setColorStack.isPending ||
+                            !canManageSource(row.uploadedBy)
+                          }
+                          onChange={(e) => {
+                            const profile = e.target.value as
+                              | "auto"
+                              | "isom"
+                              | "issprom"
+                              | "isskiom"
+                              | "ismtbom";
+                            setColorStack.mutate({ id: row.id, profile });
+                          }}
+                        >
+                          <option value="auto">{t("colorProfileAuto")}</option>
+                          <option value="isom">{t("colorProfileIsom")}</option>
+                          <option value="issprom">{t("colorProfileIssprom")}</option>
+                          <option value="isskiom">{t("colorProfileIsskiom")}</option>
+                          <option value="ismtbom">{t("colorProfileIsmtbom")}</option>
+                        </select>
+                      </label>
+                      <label className="flex items-center gap-1 text-xs text-slate-500 cursor-pointer">
+                        <input
+                          type="checkbox"
+                          data-testid="library-map-north-lines-below"
+                          className="rounded border-slate-300"
+                          checked={row.northLinesBelow}
+                          disabled={
+                            setColorStack.isPending ||
+                            !canManageSource(row.uploadedBy)
+                          }
+                          onChange={(e) => {
+                            setColorStack.mutate({
+                              id: row.id,
+                              northLinesBelow: e.target.checked,
+                            });
+                          }}
+                        />
+                        {t("northLinesBelow")}
+                      </label>
                     </div>
                     <div className="mt-3 flex gap-2">
                       {canManageSource(row.uploadedBy) && (

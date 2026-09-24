@@ -144,7 +144,6 @@ export function spawnPgDump(eventId: bigint): PgDumpProcess {
     "event_log",
     "map_files",
     "rendered_maps",
-    "map_tiles",
     "tracks",
     "routes",
     "event_seqs",

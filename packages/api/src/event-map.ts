@@ -7,7 +7,10 @@
 
 import type { PrismaClient, Prisma } from "./generated/prisma/client.js";
 import { fireMapUpload } from "./db.js";
-import { rebuildCourseGeometry } from "./course-geometry.js";
+import {
+  OVERPRINT_CUTS_VERSION,
+  rebuildCourseGeometry,
+} from "./course-geometry.js";
 import { emitCourseUpserted } from "./referenceJournal.js";
 import {
   ocadBoundsToWgs84,
@@ -27,6 +30,14 @@ import {
   type OcadNorthSource,
 } from "./map-north.js";
 import { loadEventCrs } from "./event-crs.js";
+import { computeRenderKey, hashMapFileData } from "./map-render-key.js";
+import {
+  gcOrphanTiles,
+  refreshMapFileRenderKey,
+  refreshClubMapRenderKey,
+} from "./map-render-cache.js";
+import type { ColorProfile, ColorStackOverrides } from "@oxygen/shared";
+import { colorProfileSchema, colorStackOverridesSchema } from "@oxygen/shared";
 
 type Db = PrismaClient | Prisma.TransactionClient;
 
@@ -287,7 +298,7 @@ export async function synchronizePositionedControlCoordinates(
   return updates.length;
 }
 
-/** Replace the event map, drop tile caches, rebuild editor course geometry. */
+/** Replace the event map, drop rendered-map caches, rebuild editor course geometry. */
 export async function applyEventMap(
   db: Db,
   eventId: bigint,
@@ -297,16 +308,40 @@ export async function applyEventMap(
     fromClubLibrary?: boolean;
     /** Club-library copy: carry the library row's manual correction along. */
     rotationCorrection?: number;
+    colorProfile?: ColorProfile;
+    colorOverrides?: ColorStackOverrides;
+    northLinesBelow?: boolean;
+    /** When copying from club library, reuse its content hash. */
+    fileHash?: string;
   } = {},
 ): Promise<{
   fileName: string;
   size: number;
   rotationCorrection: number;
   meridianStalenessDeg: number | null;
+  renderKey: string;
 }> {
   const resolved = await resolveMapNorth(buffer, {
     forcedCorrection: opts.rotationCorrection,
   });
+  const colorProfile = (() => {
+    const p = colorProfileSchema.safeParse(opts.colorProfile ?? "auto");
+    return p.success ? p.data : "auto";
+  })();
+  const colorOverrides = (() => {
+    const p = colorStackOverridesSchema.safeParse(opts.colorOverrides ?? {});
+    return p.success ? p.data : {};
+  })();
+  const northLinesBelow = opts.northLinesBelow !== false;
+  const fileHash = opts.fileHash ?? hashMapFileData(buffer);
+  const renderKey = computeRenderKey({
+    fileHash,
+    rotationCorrection: resolved.rotationCorrection,
+    colorProfile,
+    colorOverrides,
+    northLinesBelow,
+  });
+
   await db.mapFile.deleteMany({ where: { eventId } });
   await db.mapFile.create({
     data: {
@@ -324,10 +359,15 @@ export async function applyEventMap(
       rotationCorrection: resolved.rotationCorrection,
       northDetection: detectionJson(resolved.northDetection),
       fromClubLibrary: opts.fromClubLibrary === true,
+      colorProfile,
+      colorOverrides: colorOverrides as unknown as Prisma.InputJsonValue,
+      northLinesBelow,
+      fileHash,
+      renderKey,
     },
   });
-  await db.mapTile.deleteMany({ where: { eventId } });
   await db.renderedMap.deleteMany({ where: { eventId } });
+  await gcOrphanTiles(db);
   fireMapUpload(eventId);
   await synchronizePositionedControlCoordinates(db, eventId);
 
@@ -342,12 +382,17 @@ export async function applyEventMap(
       await emitCourseUpserted(db, eventId, id);
     }
   }
+  await db.event.update({
+    where: { id: eventId },
+    data: { overprintCutsVersion: OVERPRINT_CUTS_VERSION },
+  });
 
   return {
     fileName,
     size: buffer.length,
     rotationCorrection: resolved.rotationCorrection,
     meridianStalenessDeg: resolved.meridianStalenessDeg,
+    renderKey,
   };
 }
 
@@ -385,12 +430,13 @@ export async function applyMapRotationCorrection(
       calibration: metadata.calibration
         ? (metadata.calibration as unknown as Prisma.InputJsonValue)
         : undefined,
-      // Bump stamp so clients and the tile SVG cache invalidate.
+      // Bump stamp so clients invalidate; render_key is refreshed below.
       uploadedAt: new Date(),
     },
   });
-  await db.mapTile.deleteMany({ where: { eventId } });
+  await refreshMapFileRenderKey(db, row.id);
   await db.renderedMap.deleteMany({ where: { eventId } });
+  await gcOrphanTiles(db);
   fireMapUpload(eventId);
   await synchronizePositionedControlCoordinates(db, eventId);
 
@@ -405,6 +451,10 @@ export async function applyMapRotationCorrection(
       await emitCourseUpserted(db, eventId, id);
     }
   }
+  await db.event.update({
+    where: { id: eventId },
+    data: { overprintCutsVersion: OVERPRINT_CUTS_VERSION },
+  });
 
   return { ...metadata, rotationCorrection: rotationCorrectionDeg };
 }
@@ -440,5 +490,7 @@ export async function applyClubMapRotationCorrection(
       northOffset: metadata.northOffset,
     },
   });
+  await refreshClubMapRenderKey(db, row.id);
+  await gcOrphanTiles(db);
   return { ...metadata, rotationCorrection: rotationCorrectionDeg };
 }

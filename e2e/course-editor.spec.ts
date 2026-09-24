@@ -654,7 +654,15 @@ test.describe("Course editor", () => {
     await expect(page.getByTestId("desc-opt-11.1N")).toHaveAttribute("aria-pressed", "true");
     await dimInput.fill("1,5");
     await expect(page.getByTestId("desc-preview")).toContainText("1.5m");
-    await page.getByTestId("desc-save").click();
+    // Save closes the dialog immediately and fires control.update in the
+    // background — wait for the round-trip before reload, otherwise a
+    // heavy map (stacked ink tiles) can abort the in-flight mutation.
+    const waitForDescriptionSave = () =>
+      page.waitForResponse(
+        (res) => res.ok() && res.url().includes("control.update"),
+        { timeout: 15000 },
+      );
+    await Promise.all([waitForDescriptionSave(), page.getByTestId("desc-save").click()]);
     await expect(dialog).not.toBeVisible();
 
     // ── Persists across reload.
@@ -670,7 +678,7 @@ test.describe("Course editor", () => {
     await expect(dialog).toBeVisible();
     await page.getByTestId("desc-clear").click();
     await expect(boulder).toHaveAttribute("aria-pressed", "false");
-    await page.getByTestId("desc-save").click();
+    await Promise.all([waitForDescriptionSave(), page.getByTestId("desc-save").click()]);
     await expect(dialog).not.toBeVisible();
     await expectSavedState(false, "");
     await page.getByTestId("desc-cancel").click();
@@ -980,7 +988,7 @@ test.describe("Course editor", () => {
       .toBe(false);
   });
 
-  test("renders automatic circle slits and leg gaps over black map features", async ({ page }) => {
+  test("renders automatic circle slits and leg gaps over compact rocks", async ({ page }) => {
     await selectCompetition(page);
     await ensureCoursesAndMap(page);
     await openEditor(page);
@@ -1026,5 +1034,69 @@ test.describe("Course editor", () => {
     await expect(
       page.locator('[data-testid="map-viewer"] line[data-leg-gapped="true"]').first(),
     ).toBeAttached({ timeout: 20000 });
+
+    const cutCount = await page.getByTestId("control-circle-cut").count();
+    const gapCount = await page
+      .locator('[data-testid="map-viewer"] line[data-leg-gapped="true"]')
+      .count();
+    expect(cutCount).toBeGreaterThan(0);
+    expect(gapCount).toBeGreaterThan(0);
+
+    // Control numbers always carry a narrow white knockout for contrast.
+    const label = page.getByTestId("control-label").first();
+    await expect(label).toBeVisible();
+    await expect(label).toHaveAttribute("stroke", "#fff");
+    await expect(label).toHaveAttribute("paint-order", "stroke fill");
+
+    // Event-level toggle strips automatic cuts from editor geometry.
+    const toggle = page.getByTestId("editor-toggle-cuts");
+    await expect(toggle).toHaveAttribute("aria-pressed", "true");
+    await toggle.click();
+    await expect(toggle).toHaveAttribute("aria-pressed", "false", { timeout: 15000 });
+    await expect(page.getByTestId("control-circle-cut")).toHaveCount(0, {
+      timeout: 20000,
+    });
+    await expect(
+      page.locator('[data-testid="map-viewer"] line[data-leg-gapped="true"]'),
+    ).toHaveCount(0);
+
+    await toggle.click();
+    await expect(toggle).toHaveAttribute("aria-pressed", "true", { timeout: 15000 });
+    await expect(page.getByTestId("control-circle-cut")).toHaveCount(cutCount, {
+      timeout: 20000,
+    });
+    await expect(
+      page.locator('[data-testid="map-viewer"] line[data-leg-gapped="true"]'),
+    ).toHaveCount(gapCount);
+  });
+
+  test("colour profile change busts tile version and keeps ink layer", async ({
+    page,
+  }) => {
+    await selectCompetition(page);
+    await ensureCoursesAndMap(page);
+    await openEditor(page);
+
+    const profile = page.getByTestId("map-color-profile");
+    await expect(profile).toBeVisible({ timeout: 20000 });
+    await expect(profile).toHaveValue("auto");
+
+    const inkTiles = page.locator(
+      '[data-testid="map-tiles-ink"] img[data-tile-url*="/api/map-tile/"]',
+    );
+    await expect(inkTiles.first()).toBeAttached({ timeout: 30000 });
+    const beforeUrl = await inkTiles.first().getAttribute("data-tile-url");
+    expect(beforeUrl).toMatch(/[?&]v=/);
+
+    await profile.selectOption("issprom");
+    await expect
+      .poll(async () => {
+        const url = await inkTiles.first().getAttribute("data-tile-url");
+        return url && url !== beforeUrl ? url : null;
+      }, { timeout: 30000 })
+      .not.toBeNull();
+    await expect(profile).toHaveValue("issprom");
+    await expect(inkTiles.first()).toBeAttached();
+    await expect(page.getByTestId("map-tiles-ink")).toBeVisible();
   });
 });
