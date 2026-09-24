@@ -325,12 +325,47 @@ describe("event.counterState (legacy alias)", () => {
     const ref = (await resolveEvent(slug))!;
     const caller = makeCaller(ref);
     try {
-      await caller.class.create({ name: "H21" });
+      const cls = await caller.class.create({ name: "H21" });
       const counters = await caller.event.counterState();
-      expect(typeof counters.oRunner).toBe("number");
-      expect(typeof counters.oClass).toBe("number");
+      // Every legacy key the web hook diffs against, all numeric ms.
+      for (const key of [
+        "oRunner",
+        "oClass",
+        "oCourse",
+        "oControl",
+        "oCard",
+        "oTeam",
+        "oPunch",
+        "oEvent",
+        "oClub",
+      ]) {
+        expect(typeof counters[key]).toBe("number");
+        expect(Number.isInteger(counters[key])).toBe(true);
+      }
       expect(counters.oClass).toBeGreaterThan(0);
+      expect(counters.oEvent).toBeGreaterThan(0);
+      expect(counters.oRunner).toBe(0);
       expect(counters.oPunch).toBe(0);
+
+      // A runner bumps oRunner and oClub alike; a *removed* runner only
+      // bumps oRunner — oClub tracks live entries, which is what the
+      // club list on the web keys off.
+      await caller.runner.create({ name: "A", classId: cls.id, clubName: "OK A" });
+      const after = await caller.event.counterState();
+      expect(after.oRunner).toBeGreaterThan(0);
+      expect(after.oClub).toBe(after.oRunner);
+
+      await new Promise((r) => setTimeout(r, 5));
+      await caller.runner.create({ name: "B", classId: cls.id, clubName: "OK B" });
+      const db = prisma();
+      const b = await db.runner.findFirstOrThrow({
+        where: { eventId: ref.id, name: "B" },
+        select: { id: true },
+      });
+      await db.runner.update({ where: { id: b.id }, data: { removed: true } });
+      const removed = await caller.event.counterState();
+      expect(removed.oRunner).toBeGreaterThan(after.oRunner);
+      expect(removed.oClub).toBeLessThan(removed.oRunner);
     } finally {
       await publicCaller.event.delete({ nameId: slug });
       await publicCaller.event.purgeDeleted();

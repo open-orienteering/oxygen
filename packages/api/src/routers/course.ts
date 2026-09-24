@@ -1235,16 +1235,44 @@ export const courseRouter = router({
       const classCourse = new Map<string, string>();
       for (const c of classes) if (c.courseId) classCourse.set(c.id, c.courseId);
 
+      // Polled every 15 s by the dashboard and the map panel. When a
+      // course is given, only its runners matter — either assigned to it
+      // directly or via their class — so ask the database for just those
+      // rather than every entry in the event.
+      const courseClassIds = courseFilter
+        ? classes.filter((c) => c.courseId === courseFilter.id).map((c) => c.id)
+        : [];
       const runners = await ctx.db.runner.findMany({
-        where: { eventId, removed: false, classId: { not: null } },
+        where: courseFilter
+          ? {
+              eventId,
+              removed: false,
+              classId: { not: null },
+              OR: [
+                { courseId: courseFilter.id },
+                { courseId: null, classId: { in: courseClassIds } },
+              ],
+            }
+          : { eventId, removed: false, classId: { not: null } },
         select: { id: true, cardNo: true, classId: true, courseId: true },
       });
       if (runners.length === 0) return [];
 
-      const cards = await ctx.db.card.findMany({
-        where: { eventId, removed: false },
-        select: { cardNo: true, punchesRaw: true },
-      });
+      // Only the cards those runners carry; `punches_raw` is the whole
+      // punch list per card, so this is the bulk of the payload.
+      const cardNos = [
+        ...new Set(
+          runners
+            .map((r) => r.cardNo)
+            .filter((n): n is number => typeof n === "number" && n > 0),
+        ),
+      ];
+      const cards = cardNos.length
+        ? await ctx.db.card.findMany({
+            where: { eventId, removed: false, cardNo: { in: cardNos } },
+            select: { cardNo: true, punchesRaw: true },
+          })
+        : [];
       const cardByNo = new Map<number, string>(
         cards.map((c) => [c.cardNo, c.punchesRaw]),
       );
@@ -1274,19 +1302,18 @@ export const courseRouter = router({
           .split(";")
           .map((s) => parseInt(s.trim(), 10))
           .filter((n) => !isNaN(n) && n > 0);
-        const codeSet = new Set(codes);
+        // Quick scan of the packed punch string for any matching code.
+        // Format is `code-time;code-time;...` so one regex per control
+        // catches it without parsing every punch into objects.
+        const anyCode = codes.length
+          ? new RegExp(`(?:^|;)(?:${codes.join("|")})-`)
+          : null;
         let passed = 0;
-        for (const r of expectedRunners) {
-          const raw = cardByNo.get(r.cardNo ?? -1);
-          if (!raw) continue;
-          // Quick scan of the packed punch string for any matching code.
-          // Format is `code-time;code-time;...` so a simple regex
-          // catches it without parsing every punch into objects.
-          const hit = codes.some((c) =>
-            new RegExp(`(?:^|;)${c}-`).test(raw),
-          );
-          if (hit) passed++;
-          void codeSet;
+        if (anyCode) {
+          for (const r of expectedRunners) {
+            const raw = cardByNo.get(r.cardNo ?? -1);
+            if (raw && anyCode.test(raw)) passed++;
+          }
         }
         out.push({
           // Same public ID space as controlCoordinates so MapPanel can

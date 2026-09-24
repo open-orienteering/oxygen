@@ -137,6 +137,13 @@ export function evictForInsert<K, V>(cache: Map<K, V>, cap: number): void {
 }
 
 /**
+ * Seconds a client refused with 503 should wait before asking again.
+ * Long enough for a block to finish and free a permit; short enough that
+ * a viewport fills in visibly rather than stalling.
+ */
+export const RENDER_BUSY_RETRY_AFTER_S = 5;
+
+/**
  * Thrown by `Semaphore.run` when a bounded foreground task finds the
  * queue already full. Callers turn it into a fast 503 + Retry-After so
  * the client backs off instead of the request sitting in the platform's
@@ -216,4 +223,17 @@ export class Semaphore {
     }
     this.available++;
   }
+}
+
+let processGate: Semaphore | null = null;
+
+/**
+ * The one render semaphore for the process. Every resvg rasterisation of
+ * a base map — slippy tiles and the course-map layout preview alike —
+ * goes through it, so the two cannot together exceed
+ * `MAP_RENDER_CONCURRENCY` and compete for the same two vCPUs.
+ */
+export function renderGate(): Semaphore {
+  processGate ??= new Semaphore(renderConcurrency());
+  return processGate;
 }

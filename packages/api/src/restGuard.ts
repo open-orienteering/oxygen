@@ -8,7 +8,7 @@ import {
   resolveUser,
   type AuthUser,
 } from "./auth.js";
-import { prisma, resolveEvent } from "./db.js";
+import { prisma, resolveEvent, type EventRef } from "./db.js";
 import { resolveEventCapabilities } from "./permissions.js";
 import { kioskKeyMatches, KIOSK_KEY_HEADER } from "./trpc.js";
 
@@ -54,7 +54,12 @@ export async function assertClubRestAccess(
 }
 
 /**
- * Returns true if the request may proceed. On failure the reply is already sent.
+ * Returns the resolved event if the request may proceed, or `null` after
+ * sending the failure reply (404 unknown event, 401, 403).
+ *
+ * The event is always resolved — auth on or off — and returned so route
+ * handlers reuse it instead of looking the slug up a second time. On the
+ * tile path that second lookup ran for every tile in a viewport.
  */
 export async function assertRestAccess(
   req: FastifyRequest,
@@ -63,24 +68,27 @@ export async function assertRestAccess(
     nameId: string;
     cap: Capability;
     allowKiosk?: boolean;
+    /** Already-resolved event, when the caller had to look it up anyway. */
+    event?: EventRef | null;
   },
-): Promise<boolean> {
-  const { user, authEnabled, kioskKey } = await identityFromRequest(req);
-  if (!authEnabled) return true;
-
-  const event = await resolveEvent(args.nameId);
+): Promise<EventRef | null> {
+  const [{ user, authEnabled, kioskKey }, event] = await Promise.all([
+    identityFromRequest(req),
+    args.event !== undefined ? args.event : resolveEvent(args.nameId),
+  ]);
   if (!event) {
     void reply.code(404).send({ error: "Unknown event" });
-    return false;
+    return null;
   }
+  if (!authEnabled) return event;
 
   if (args.allowKiosk && kioskKeyMatches(kioskKey, event.kioskKey ?? null)) {
-    return true;
+    return event;
   }
 
   if (!user) {
     void reply.code(401).send({ error: "Not authenticated" });
-    return false;
+    return null;
   }
 
   const caps = await resolveEventCapabilities({
@@ -92,9 +100,9 @@ export async function assertRestAccess(
   });
   if (!caps.has(args.cap)) {
     void reply.code(403).send({ error: `Missing capability ${args.cap}` });
-    return false;
+    return null;
   }
-  return true;
+  return event;
 }
 
 /**
