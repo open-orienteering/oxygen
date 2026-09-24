@@ -32,6 +32,20 @@ import type {
 } from "@oxygen/shared";
 import { clearSheetsCache, testGoogleSheetPush } from "../sheetsBackup.js";
 import { runnerStatusToValue, valueToRunnerStatus } from "../statusConvert.js";
+import { ttlMemo } from "../ttl-memo.js";
+
+/**
+ * `pg_database_size()` stats every file under the database directory,
+ * which is not free on a shared-core Cloud SQL instance and was being
+ * asked every 3 s per open tab by the load indicator. The figure only
+ * moves slowly, so a minute-old answer is as good as a fresh one.
+ */
+const databaseSizeBytes = ttlMemo(60_000, async () => {
+  const rows = await prisma().$queryRawUnsafe<Array<{ size: bigint }>>(
+    `SELECT pg_database_size(current_database())::bigint AS size`,
+  );
+  return Number(rows[0]?.size ?? 0);
+}).get;
 
 const eventKindFields = {
   kind: z.enum(EVENT_KINDS).default("competition"),
@@ -622,39 +636,41 @@ export const eventRouter = router({
    */
   counterState: viewProcedure.query(async ({ ctx }) => {
     const eventId = ctx.event.id;
-    const tables = [
-      { legacy: "oRunner", table: "runners" },
-      { legacy: "oClass", table: "classes" },
-      { legacy: "oCourse", table: "courses" },
-      { legacy: "oControl", table: "controls" },
-      { legacy: "oCard", table: "cards" },
-      { legacy: "oTeam", table: "teams" },
-    ] as const;
+    // Every open tab polls this every 5 s. One statement with scalar
+    // subselects instead of nine sequential round trips: on Cloud SQL
+    // the round trip, not the scan, is what the poll was paying for.
+    const ms = (column: string, table: string, extra = "") =>
+      `(SELECT EXTRACT(EPOCH FROM MAX(${column})) * 1000 FROM oxygen.${table} WHERE event_id = $1${extra})`;
+    const rows = await ctx.db.$queryRawUnsafe<
+      Array<Record<string, number | string | null>>
+    >(
+      `SELECT
+         ${ms("updated_at", "runners")}  AS "oRunner",
+         ${ms("updated_at", "classes")}  AS "oClass",
+         ${ms("updated_at", "courses")}  AS "oCourse",
+         ${ms("updated_at", "controls")} AS "oControl",
+         ${ms("updated_at", "cards")}    AS "oCard",
+         ${ms("updated_at", "teams")}    AS "oTeam",
+         ${ms("imported_at", "punches")} AS "oPunch",
+         (SELECT EXTRACT(EPOCH FROM MAX(updated_at)) * 1000 FROM oxygen.events WHERE id = $1) AS "oEvent",
+         ${ms("updated_at", "runners", " AND removed = false")} AS "oClub"`,
+      eventId,
+    );
+    const row = rows[0] ?? {};
     const out: Record<string, number> = {};
-    for (const { legacy, table } of tables) {
-      const row = await ctx.db.$queryRawUnsafe<Array<{ ms: number | null }>>(
-        `SELECT EXTRACT(EPOCH FROM MAX(updated_at)) * 1000 AS ms FROM oxygen.${table} WHERE event_id = $1`,
-        eventId,
-      );
-      out[legacy] = Math.floor(Number(row[0]?.ms) || 0);
+    for (const key of [
+      "oRunner",
+      "oClass",
+      "oCourse",
+      "oControl",
+      "oCard",
+      "oTeam",
+      "oPunch",
+      "oEvent",
+      "oClub",
+    ]) {
+      out[key] = Math.floor(Number(row[key]) || 0);
     }
-    const punches = await ctx.db.$queryRawUnsafe<Array<{ ms: number | null }>>(
-      `SELECT EXTRACT(EPOCH FROM MAX(imported_at)) * 1000 AS ms FROM oxygen.punches WHERE event_id = $1`,
-      eventId,
-    );
-    out.oPunch = Math.floor(Number(punches[0]?.ms) || 0);
-    const eventRow = await ctx.db.$queryRawUnsafe<Array<{ ms: number | null }>>(
-      `SELECT EXTRACT(EPOCH FROM MAX(updated_at)) * 1000 AS ms FROM oxygen.events WHERE id = $1`,
-      eventId,
-    );
-    out.oEvent = Math.floor(Number(eventRow[0]?.ms) || 0);
-    const club = await ctx.db.runner.aggregate({
-      _max: { updatedAt: true },
-      where: { eventId, removed: false },
-    });
-    out.oClub = club._max.updatedAt
-      ? Math.floor(club._max.updatedAt.getTime())
-      : 0;
     return out;
   }),
 
@@ -722,6 +738,8 @@ export const eventRouter = router({
    */
   dbStatus: publicProcedure.query(async () => {
     try {
+      // Polled every 3 s by every tab showing the load indicator, so the
+      // stats and the active-backend count come back in one round trip.
       const stats = await prisma().$queryRawUnsafe<
         Array<{
           numbackends: number | bigint;
@@ -737,35 +755,29 @@ export const eventRouter = router({
           deadlocks: number | bigint;
           temp_bytes: number | bigint;
           stats_reset: Date | null;
+          active: number | bigint;
         }>
       >(`
         SELECT numbackends, xact_commit, xact_rollback,
                tup_returned, tup_fetched, tup_inserted, tup_updated, tup_deleted,
                blks_read, blks_hit,
                deadlocks, temp_bytes,
-               stats_reset
+               stats_reset,
+               (SELECT count(*)::bigint FROM pg_stat_activity
+                 WHERE datname = current_database() AND state = 'active') AS active
         FROM pg_stat_database
         WHERE datname = current_database()
       `);
       const row = stats[0];
       if (!row) return null;
 
-      const active = await prisma().$queryRawUnsafe<
-        Array<{ active: bigint }>
-      >(`
-        SELECT count(*)::bigint AS active
-        FROM pg_stat_activity
-        WHERE datname = current_database() AND state = 'active'
-      `);
-      const dbSize = await prisma().$queryRawUnsafe<
-        Array<{ size: bigint }>
-      >(`SELECT pg_database_size(current_database())::bigint AS size`);
+      const dbSizeBytes = await databaseSizeBytes();
 
       const n = (v: number | bigint): number => Number(v);
       return {
         // Connection pool / activity
         backends: n(row.numbackends),
-        activeBackends: Number(active[0]?.active ?? 0),
+        activeBackends: n(row.active ?? 0),
 
         // Transaction throughput (xact_commit + xact_rollback ~ qps)
         xactCommit: n(row.xact_commit),
@@ -785,7 +797,7 @@ export const eventRouter = router({
         // Health
         deadlocks: n(row.deadlocks),
         tempBytes: n(row.temp_bytes),
-        dbSizeBytes: Number(dbSize[0]?.size ?? 0),
+        dbSizeBytes,
 
         // ISO timestamp the stats counters were last reset (uptime
         // proxy for the rate computations on the client).

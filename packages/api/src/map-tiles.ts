@@ -42,7 +42,7 @@
  */
 
 import type { FastifyInstance } from "fastify";
-import { prisma, onMapUpload } from "./db.js";
+import { prisma, onMapUpload, resolveEvent } from "./db.js";
 import { assertRestAccess } from "./restGuard.js";
 import {
   ocadBoundsToWgs84,
@@ -70,15 +70,15 @@ import {
   type ViewBox,
 } from "./map-window.js";
 import {
+  RENDER_BUSY_RETRY_AFTER_S,
   RenderBusyError,
-  Semaphore,
   blockTiles,
   evictForInsert,
   precacheBlockDelayMs,
   precacheEnabled,
   precacheMaxZoom,
   precacheMinZoom,
-  renderConcurrency,
+  renderGate,
   renderMaxQueue,
   supersample,
   svgCacheEvents,
@@ -94,12 +94,7 @@ import { ensureEventMapRenderKey } from "./map-render-cache.js";
 
 const TILE_SIZE = 256;
 
-/**
- * Seconds a refused (503) tile client should wait before asking again.
- * Long enough for a block to finish and free a permit; short enough that
- * a viewport fills in visibly rather than stalling.
- */
-export const RENDER_BUSY_RETRY_AFTER_S = 5;
+export { RENDER_BUSY_RETRY_AFTER_S };
 
 /**
  * Everything a tile request needs to know about the event's map, read
@@ -161,11 +156,7 @@ const TRANSPARENT_TILE_PNG = Buffer.from(
   "base64",
 );
 
-let renderGate: Semaphore | null = null;
-function gate(): Semaphore {
-  renderGate ??= new Semaphore(renderConcurrency());
-  return renderGate;
-}
+const gate = renderGate;
 
 /** Drop in-process caches for a render key (profile/rotation change). */
 export function invalidateRenderKey(renderKey: string): void {
@@ -192,15 +183,6 @@ function invalidateEvent(eventId: bigint): void {
   svgLoadInFlight.clear();
   blockInFlight.clear();
   void eventId;
-}
-
-async function resolveEventId(nameId: string): Promise<bigint | null> {
-  if (!nameId) return null;
-  const row = await prisma().event.findUnique({
-    where: { nameId },
-    select: { id: true },
-  });
-  return row?.id ?? null;
 }
 
 const tileKey = (z: number, x: number, y: number) => `${z}/${x}/${y}`;
@@ -821,13 +803,20 @@ export function registerMapTileRoutes(server: FastifyInstance): void {
     const rawDbName = req.headers["x-competition-id"];
     const nameId =
       (Array.isArray(rawDbName) ? rawDbName[0] : rawDbName) ?? "";
-    if (nameId && !(await assertRestAccess(req, reply, { nameId, cap: "courses.view", allowKiosk: true }))) {
-      return;
-    }
-    const eventId = await resolveEventId(nameId);
-    if (eventId === null) {
+    // An unknown or missing event is not an error here — the poll simply
+    // has nothing to report — so resolve first and only then run the guard.
+    const ref = nameId ? await resolveEvent(nameId) : null;
+    if (!ref) {
       return reply.send({ total: 0, done: 0, rendering: false });
     }
+    const event = await assertRestAccess(req, reply, {
+      nameId,
+      cap: "courses.view",
+      allowKiosk: true,
+      event: ref,
+    });
+    if (!event) return;
+    const eventId = event.id;
     const meta = await ensureEventMapRenderKey(prisma(), eventId);
     if (!meta) return reply.send({ total: 0, done: 0, rendering: false });
     const progress = await tileProgress(meta);
@@ -856,14 +845,15 @@ export function registerMapTileRoutes(server: FastifyInstance): void {
         return reply.code(400).send({ error: "Invalid tile request" });
       }
 
-      if (!(await assertRestAccess(req, reply, { nameId, cap: "courses.view", allowKiosk: true }))) {
-        return;
-      }
-
-      const eventId = await resolveEventId(nameId);
-      if (eventId === null) {
-        return reply.code(404).send({ error: "Unknown event" });
-      }
+      // One lookup for auth and routing alike: the guard resolves the
+      // event and hands it back (404 already sent when it is unknown).
+      const event = await assertRestAccess(req, reply, {
+        nameId,
+        cap: "courses.view",
+        allowKiosk: true,
+      });
+      if (!event) return;
+      const eventId = event.id;
 
       const meta = await ensureEventMapRenderKey(prisma(), eventId);
       if (!meta) {

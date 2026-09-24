@@ -123,7 +123,7 @@ map bug: unrelated queries time out while someone pans a map.
 | `map_tiles` table | Shared | The real cache. Written with `ON CONFLICT DO NOTHING`, so concurrent renders of the same block across instances are harmless. |
 | SVG cache | Per process | Parsed map SVGs, `MAP_SVG_CACHE_EVENTS` of them. Amortises the ~70 ms parse and the OCAD read. |
 | In-flight block map | Per process | A viewport fetches ~20 tiles at once; they collapse onto one render per block. |
-| Render semaphore | Per process | Bounds concurrent block renders (`MAP_RENDER_CONCURRENCY`). One permit covers a block's composite **and** ink rasters, run side by side. Foreground requests are served before pre-cache work, so background rendering never queues a user behind a whole sweep. |
+| Render semaphore | Per process | `renderGate()` in `map-render-limits.ts` bounds concurrent rasterisations (`MAP_RENDER_CONCURRENCY`). One permit covers a block's composite **and** ink rasters, run side by side. The course-map layout preview (`/api/maps/:nameId/window.png`) takes permits from the same pool. Foreground requests are served before pre-cache work, so background rendering never queues a user behind a whole sweep. |
 | Queue bound | Per process | At most `MAP_RENDER_MAX_QUEUE` foreground blocks may wait for a permit. Beyond that the tile route answers **503 + `Retry-After: 5`** immediately instead of letting the request sit until the platform kills it. |
 
 Everything above the database is a per-process optimisation, and losing

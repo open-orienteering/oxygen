@@ -9,6 +9,12 @@ import {
 import { z } from "zod";
 import { prisma } from "../db.js";
 import { assertRestAccess } from "../restGuard.js";
+import {
+  RENDER_BUSY_RETRY_AFTER_S,
+  RenderBusyError,
+  renderGate,
+  renderMaxQueue,
+} from "../map-render-limits.js";
 import { composeMapPageSvg, renderBaseMapWindow } from "./map-page-svg.js";
 import { graphicToResolved } from "./graphics.js";
 import { getBaseMapInfo, loadBaseMapSvg } from "./map-source.js";
@@ -314,15 +320,10 @@ export function registerCourseMapRoutes(
     };
   }>("/api/maps/:nameId/window.png", async (req, reply) => {
     const { nameId } = req.params;
-    if (!(await assertRestAccess(req, reply, { nameId, cap: "courses.view" }))) {
-      return;
-    }
+    const event = await assertRestAccess(req, reply, { nameId, cap: "courses.view" });
+    if (!event) return;
     try {
       const db = prisma();
-      const event = await db.event.findUnique({ where: { nameId } });
-      if (!event || event.removed) {
-        return reply.code(404).send({ error: "Event not found" });
-      }
       const cx = Number(req.query.cx);
       const cy = Number(req.query.cy);
       if (!Number.isFinite(cx) || !Number.isFinite(cy)) {
@@ -421,10 +422,18 @@ export function registerCourseMapRoutes(
         dataLayer: layer === "ink" ? "map-ink" : "map-full",
       })}</svg>`;
       const { renderAsync } = await import("@resvg/resvg-js");
-      const rendered = await renderAsync(svg, {
-        fitTo: { mode: "width", value: widthPx },
-        ...(layer === "ink" ? {} : { background: "white" }),
-      });
+      // Same permit pool as the slippy tiles: a layout-editor preview is
+      // a full print-window rasterisation and must not run on top of
+      // `MAP_RENDER_CONCURRENCY` tile renders. Refused with 503 when the
+      // queue is full, like a tile; the editor simply retries.
+      const rendered = await renderGate().run(
+        () =>
+          renderAsync(svg, {
+            fitTo: { mode: "width", value: widthPx },
+            ...(layer === "ink" ? {} : { background: "white" }),
+          }),
+        { maxQueue: renderMaxQueue() },
+      );
       const body = Buffer.from(rendered.asPng());
       const etag = `"${createHash("sha256").update(body).digest("base64url")}"`;
       windowPngCache.set(cacheKey, { body, etag });
@@ -435,6 +444,13 @@ export function registerCourseMapRoutes(
         .header("X-Cache", "miss")
         .send(body);
     } catch (error) {
+      if (error instanceof RenderBusyError) {
+        return reply
+          .code(503)
+          .header("Retry-After", String(RENDER_BUSY_RETRY_AFTER_S))
+          .header("Cache-Control", "no-store")
+          .send({ error: "Map renderer busy", waiting: error.waiting });
+      }
       return reply.code(400).send({
         error:
           error instanceof Error ? error.message : "Could not render map window",
@@ -446,18 +462,13 @@ export function registerCourseMapRoutes(
     Params: { nameId: string; id: string };
   }>("/api/maps/:nameId/graphics/:id", async (req, reply) => {
     const { nameId } = req.params;
-    if (!(await assertRestAccess(req, reply, { nameId, cap: "courses.view" }))) {
-      return;
-    }
+    const event = await assertRestAccess(req, reply, { nameId, cap: "courses.view" });
+    if (!event) return;
     const id = Number(req.params.id);
     if (!Number.isInteger(id) || id <= 0) {
       return reply.code(400).send({ error: "Invalid graphic id" });
     }
     const db = prisma();
-    const event = await db.event.findUnique({ where: { nameId } });
-    if (!event || event.removed) {
-      return reply.code(404).send({ error: "Event not found" });
-    }
     const graphic = await db.graphic.findFirst({
       where: {
         id: BigInt(id),

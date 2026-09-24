@@ -16,7 +16,7 @@
  * E2E_WEB_PORT / E2E_EVENTOR_PORT / E2E_DB_NAME to wire everything up.
  *
  * Usage:
- *   pnpm test:e2e                    # full suite, sharded (default 4)
+ *   pnpm test:e2e                    # full suite, sharded (default: min(4, cores/2))
  *   pnpm test:e2e e2e/kiosk.spec.ts  # selective run → single plain
  *                                    # playwright process, no sharding
  *   E2E_SHARDS=2 pnpm test:e2e       # fewer shards (lower peak load)
@@ -26,12 +26,25 @@
  */
 import { spawn } from "node:child_process";
 import { readdirSync } from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import readline from "node:readline";
 import { fileURLToPath } from "node:url";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const SHARD_COUNT = Math.max(1, Number(process.env.E2E_SHARDS ?? 4));
+/**
+ * Each shard is a full stack — API, Vite, eventor stub and a Chromium —
+ * so it wants about two cores to itself. Default to half the available
+ * parallelism, capped at four: a 16-core dev box keeps four shards, a
+ * 4 vCPU GitHub runner gets two instead of four stacks fighting for the
+ * same cores (which is what turned tight `expect` budgets into failures
+ * after the map specs started rendering two tile layers).
+ */
+const DEFAULT_SHARDS = Math.max(
+  1,
+  Math.min(4, Math.floor(os.availableParallelism() / 2)),
+);
+const SHARD_COUNT = Math.max(1, Number(process.env.E2E_SHARDS ?? DEFAULT_SHARDS));
 const API_PORT_BASE = 4100;
 const WEB_PORT_BASE = 4200;
 const EVENTOR_PORT_BASE = 4300;
@@ -115,7 +128,9 @@ if (hasFileFilter) {
     lightest.weight += WEIGHTS[file] ?? DEFAULT_WEIGHT;
   }
 
-  console.log(`Running ${specs.length} spec files across ${SHARD_COUNT} shards:`);
+  console.log(
+    `Running ${specs.length} spec files across ${SHARD_COUNT} shards (${os.availableParallelism()} cores available):`,
+  );
   shards.forEach((s, i) => {
     console.log(
       `  shard ${i + 1} (api :${API_PORT_BASE + i + 1}, web :${WEB_PORT_BASE + i + 1}, eventor :${EVENTOR_PORT_BASE + i + 1}, db oxygen_e2e_${i + 1}, weight ${s.weight}):`,
