@@ -55,11 +55,33 @@ export function effectiveCapabilities(args: {
     for (const c of group) caps.add(c);
   }
   if (args.eventCompleted) {
-    caps.add("event.view");
-    caps.add("results.view");
-    caps.add("courses.view");
+    for (const c of COMPLETION_CAPABILITIES) caps.add(c);
   }
   return caps;
+}
+
+/** What a completed event grants every signed-in user. */
+export const COMPLETION_CAPABILITIES = [
+  "event.view",
+  "results.view",
+  "courses.view",
+] as const satisfies readonly Capability[];
+
+/**
+ * Whether `countFinishedRunners` can affect the capability set at all.
+ * It only feeds `isEventCompleted`, which only adds
+ * `COMPLETION_CAPABILITIES` — so when the date already completes the
+ * event, or the grants already carry all three, the count is a wasted
+ * query on every authenticated request.
+ */
+export function finishedCountMatters(
+  grants: Capability[][],
+  eventDate: string,
+): boolean {
+  if (isEventCompleted(eventDate, 0)) return false;
+  const granted = new Set<Capability>();
+  for (const group of grants) for (const c of group) granted.add(c);
+  return !COMPLETION_CAPABILITIES.every((c) => granted.has(c));
 }
 
 const FINISHED_STATUSES = [
@@ -117,14 +139,17 @@ export async function resolveEventCapabilities(args: {
   if (!args.user) return new Set();
   if (args.user.isAdmin) return new Set(ALL_CAPABILITIES);
 
-  const [grants, finishedCount] = await Promise.all([
-    loadGrantCapabilities(args.db, args.eventId, args.user.id),
-    countFinishedRunners(args.db, args.eventId),
-  ]);
+  const grants = await loadGrantCapabilities(args.db, args.eventId, args.user.id);
+  const day = eventDateString(args.eventDate);
+  // Only count finished runners when the answer can still swing the
+  // capability set; on most requests it cannot (see finishedCountMatters).
+  const finishedCount = finishedCountMatters(grants, day)
+    ? await countFinishedRunners(args.db, args.eventId)
+    : 0;
   return effectiveCapabilities({
     user: args.user,
     grants,
-    eventCompleted: isEventCompleted(eventDateString(args.eventDate), finishedCount),
+    eventCompleted: isEventCompleted(day, finishedCount),
     authEnabled: true,
   });
 }

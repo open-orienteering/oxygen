@@ -1,7 +1,9 @@
 import { describe, it, expect } from "vitest";
 import {
   ALL_CAPABILITIES,
+  COMPLETION_CAPABILITIES,
   effectiveCapabilities,
+  finishedCountMatters,
   isEventCompleted,
 } from "../permissions.js";
 import type { AuthUser } from "../auth.js";
@@ -113,5 +115,30 @@ describe("isEventCompleted", () => {
 
   it("treats a future date with no results as not completed", () => {
     expect(isEventCompleted("2099-12-31", 0)).toBe(false);
+  });
+});
+
+// The finished-runner count runs on every authenticated request purely to
+// decide whether completion should add the three view capabilities. It
+// is skipped whenever it cannot change the outcome.
+describe("finishedCountMatters", () => {
+  it("is false when the date alone completes the event", () => {
+    expect(finishedCountMatters([["courses.edit"]], "2020-01-01")).toBe(false);
+  });
+
+  it("is false when the grants already include every completion capability", () => {
+    expect(finishedCountMatters([[...COMPLETION_CAPABILITIES]], "2099-12-31")).toBe(false);
+    // Spread across groups counts too.
+    expect(
+      finishedCountMatters(
+        [["event.view"], ["results.view", "courses.view"]],
+        "2099-12-31",
+      ),
+    ).toBe(false);
+  });
+
+  it("is true for a current or future event whose grants leave a completion capability out", () => {
+    expect(finishedCountMatters([["courses.view", "courses.edit"]], "2099-12-31")).toBe(true);
+    expect(finishedCountMatters([], "2099-12-31")).toBe(true);
   });
 });

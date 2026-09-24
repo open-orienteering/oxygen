@@ -68,7 +68,16 @@ test.describe("Runner Management", () => {
     await expect(page.locator("span", { hasText: "runners" })).toBeVisible();
   });
 
-  test("should create, edit, and delete a runner", async ({ page }) => {
+  test("should create, edit, and delete a runner", async ({ page }, testInfo) => {
+    // Unique per attempt: a retry after a slow first attempt must not
+    // find the previous attempt's runner (the dialog would then show the
+    // duplicate-card warning and never close — the deterministic CI
+    // failure of September 2026).
+    const tag = `${testInfo.retry}-${Date.now().toString(36).slice(-4)}`;
+    const createdName = `Test Runner E2E ${tag}`;
+    const updatedName = `Test Runner Updated ${tag}`;
+    const cardNo = String(990000 + (Date.now() % 9000) + testInfo.retry);
+
     await goToTab(page, "Runners");
     await expect(page.locator("span", { hasText: "runners" })).toBeVisible({ timeout: 10000 });
 
@@ -80,33 +89,36 @@ test.describe("Runner Management", () => {
     ).toBeVisible({ timeout: 3000 });
 
     const dialog = page.getByTestId("registration-dialog");
-    await dialog.locator("input[placeholder='First Last']").fill("Test Runner E2E");
+    await dialog.locator("input[placeholder='First Last']").fill(createdName);
     await dialog.getByTestId("reg-class").click();
     await expect(dialog.getByText("Öppen 1", { exact: true })).toBeVisible({ timeout: 3000 });
     await dialog.getByText("Öppen 1", { exact: true }).click();
-    await dialog.locator("input[placeholder='e.g. 500123']").fill("999999");
+    await dialog.locator("input[placeholder='e.g. 500123']").fill(cardNo);
     await dialog.getByTestId("reg-submit").click();
 
-    await expect(page.getByText("Test Runner E2E")).toBeVisible({ timeout: 5000 });
+    // Dialog closes, then the list refetches — two round trips on a
+    // loaded CI runner.
+    await expect(dialog).not.toBeVisible({ timeout: 15000 });
+    await expect(page.getByText(createdName)).toBeVisible({ timeout: 15000 });
 
     // EDIT (inline autosave)
-    await page.getByRole("cell", { name: "Test Runner E2E" }).click();
+    await page.getByRole("cell", { name: createdName }).click();
     const expandedPanel = page.locator(".bg-blue-50\\/60");
     await expect(expandedPanel).toBeVisible({ timeout: 3000 });
 
     const nameInput = expandedPanel.locator("input").first();
     await nameInput.clear();
-    await nameInput.fill("Test Runner Updated");
-    await expect(page.getByText("Saved")).toBeVisible({ timeout: 3000 });
+    await nameInput.fill(updatedName);
+    await expect(page.getByText("Saved")).toBeVisible({ timeout: 10000 });
 
-    await page.getByRole("cell", { name: "Test Runner Updated", exact: true }).first().click();
+    await page.getByRole("cell", { name: updatedName, exact: true }).first().click();
     await expect(expandedPanel).not.toBeVisible({ timeout: 3000 });
 
     // DELETE
     page.on("dialog", (dialog) => dialog.accept());
-    const updatedRow = page.locator("tr").filter({ hasText: "Test Runner Updated" }).first();
+    const updatedRow = page.locator("tr").filter({ hasText: updatedName }).first();
     await updatedRow.getByTitle("Remove runner").click();
-    await expect(page.getByText("Test Runner Updated")).not.toBeVisible({ timeout: 5000 });
+    await expect(page.getByText(updatedName)).not.toBeVisible({ timeout: 10000 });
     await expect(page.locator("span", { hasText: "runners" })).toBeVisible();
   });
 

@@ -100,14 +100,17 @@ test.describe("Online Input panel", () => {
     await page.getByTestId("online-input-new-target").selectOption("2"); // PunchFinish
     await page.getByTestId("online-input-add-mapping").click();
 
+    // The row appears after the mutation round trip *and* the config
+    // refetch it triggers; under a full sharded run that can exceed the
+    // default 5 s expect timeout.
     const mapping = page.getByTestId("online-input-mapping-100");
-    await expect(mapping).toBeVisible();
+    await expect(mapping).toBeVisible({ timeout: 15000 });
     await expect(mapping).toContainText("100");
     await expect(mapping).toContainText("Finish");
 
     // Remove it again
     await mapping.getByRole("button", { name: "Remove mapping" }).click();
-    await expect(mapping).toHaveCount(0);
+    await expect(mapping).toHaveCount(0, { timeout: 15000 });
   });
 
   test("Reset button on lastId becomes enabled after a poll has advanced it", async ({

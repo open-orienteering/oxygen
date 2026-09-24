@@ -14,7 +14,7 @@ semantics the suite has always had.
 ```
 pnpm test:e2e
    │
-   └── scripts/e2e-sharded.mjs  (default N=4, override with E2E_SHARDS)
+   └── scripts/e2e-sharded.mjs  (N = min(4, cores/2) by default, override with E2E_SHARDS)
          ├── shard 1: playwright test <files>  → vite :4201 → api :4101 → db oxygen_e2e_1 (+ eventor stub :4301)
          ├── shard 2: playwright test <files>  → vite :4202 → api :4102 → db oxygen_e2e_2 (+ eventor stub :4302)
          ├── shard 3: playwright test <files>  → vite :4203 → api :4103 → db oxygen_e2e_3 (+ eventor stub :4303)
@@ -30,7 +30,7 @@ reference events — nothing to provision manually.
 
 | Command | What happens |
 |---------|--------------|
-| `pnpm test:e2e` | Full suite, sharded across 4 stacks (~2-3 min) |
+| `pnpm test:e2e` | Full suite, sharded across `min(4, floor(cores/2))` stacks — 4 on a 16-core dev box (~3-5 min), 2 on a 4 vCPU GitHub runner |
 | `pnpm test:e2e e2e/kiosk.spec.ts` | Selective run — single plain Playwright process on its own isolated stack (ports 4100/4200, db `oxygen_e2e`), no sharding. Isolated ports mean it works while `pnpm dev` is running |
 | `E2E_SHARDS=2 pnpm test:e2e` | Fewer shards (lower peak CPU/RAM) |
 | `pnpm test:e2e:serial` | Escape hatch: plain `playwright test`, identical to the pre-sharding behavior |
@@ -117,3 +117,15 @@ deliberately avoid the dev servers (3002/5173) and the Docker stack
 - **Port already in use** — a previous run crashed without cleanup; kill
   leftover `tsx`/`vite` processes bound to 41xx/42xx ports.
 - **Machine too loaded** — `E2E_SHARDS=2 pnpm test:e2e`.
+- **Timeouts only in CI** — each shard is a whole stack (API + Vite +
+  eventor stub + Chromium) and wants about two cores. Four shards on a
+  4 vCPU runner ran every shard at half speed (6-10 min instead of 3-5)
+  and pushed tests with 5 s `expect` budgets over the edge; the default
+  now scales with `os.availableParallelism()`. Tests that are
+  legitimately long (many round trips, tile rendering in the background)
+  should say so with `test.slow()` rather than the whole suite growing
+  its timeouts. Tests that create named records must also be
+  **retry-safe**: Playwright retries twice in CI, and a retry that finds
+  the previous attempt's runner / card in place fails for a different
+  reason than the first attempt did (`phase2.spec.ts` derives its names
+  and card number from `testInfo.retry`).
