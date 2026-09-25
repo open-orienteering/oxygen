@@ -5,10 +5,12 @@ import {
   createObjectAt,
   displayedPreviewPlacement,
   editorPreviewDpi,
+  fillModePatch,
   initialEditorViewport,
   panEditorViewport,
   pinchEditorViewport,
   parseClampedNumberDraft,
+  parseLiveNumberDraft,
   insertPolygonVertex,
   removePolygonVertex,
   resizeMapObject,
@@ -262,6 +264,70 @@ describe("map layout editor geometry", () => {
     expect(parseClampedNumberDraft("", 7500, 1000, 100000)).toBe(7500);
     expect(parseClampedNumberDraft("8000", 7500, 1000, 100000)).toBe(8000);
     expect(parseClampedNumberDraft("oops", 7500, 1000, 100000)).toBe(7500);
+  });
+
+  it("parses live number drafts without snapping empty or partial values", () => {
+    expect(parseLiveNumberDraft("", 0.1, 20)).toBeNull();
+    expect(parseLiveNumberDraft("0.", 0.1, 20)).toBeNull();
+    expect(parseLiveNumberDraft("-", 0.1, 20)).toBeNull();
+    expect(parseLiveNumberDraft("0.05", 0.1, 20)).toBeNull();
+    expect(parseLiveNumberDraft("25", 0.1, 20)).toBeNull();
+    expect(parseLiveNumberDraft("0.4", 0.1, 20)).toBe(0.4);
+    expect(parseLiveNumberDraft("1.5", 1, 100)).toBe(1.5);
+  });
+
+  it("patches fill mode with OOB purple lock and inverted closed paths", () => {
+    const rect = {
+      id: "r",
+      kind: "rectangle" as const,
+      anchor: "page" as const,
+      x: 10,
+      y: 10,
+      width: 20,
+      height: 15,
+      fillMode: "none" as const,
+    };
+    expect(fillModePatch(rect, "outOfBounds", "#a626ff")).toEqual({
+      fillMode: "outOfBounds",
+      stroke: "#a626ff",
+      strokeWidthMm: 0.4,
+    });
+    expect(fillModePatch(rect, "solid", "#a626ff")).toEqual({
+      fillMode: "solid",
+      fill: "#ffffff",
+    });
+    const path = {
+      id: "p",
+      kind: "path" as const,
+      anchor: "page" as const,
+      points: [
+        { x: 0, y: 0 },
+        { x: 10, y: 0 },
+        { x: 5, y: 8 },
+      ],
+      fillMode: "none" as const,
+      closed: false,
+    };
+    expect(fillModePatch(path, "whiteoutInverted", "#a626ff")).toEqual({
+      fillMode: "whiteoutInverted",
+      closed: true,
+    });
+  });
+
+  it("enforces a three-vertex minimum for inverted white-out paths", () => {
+    const inverted = {
+      id: "inv",
+      kind: "path" as const,
+      anchor: "page" as const,
+      points: [
+        { x: 0, y: 0 },
+        { x: 10, y: 0 },
+        { x: 10, y: 10 },
+      ],
+      fillMode: "whiteoutInverted" as const,
+      closed: true,
+    };
+    expect(removePolygonVertex(inverted, 1)).toBe(inverted);
   });
 
   it("places image objects at the click point clamped to the printable area", () => {

@@ -3,8 +3,10 @@ import {
   mapToPage,
   pageToMap,
   rectInside,
+  OUT_OF_BOUNDS_BORDER_MM,
   type CourseMapObject,
   type DescriptionBlockSettings,
+  type MapFillMode,
   type MapPoint,
   type MapRect,
   type MapWindow,
@@ -12,6 +14,7 @@ import {
   type PaperDimensions,
 } from "@oxygen/shared";
 
+export { OUT_OF_BOUNDS_BORDER_MM };
 export type ResizeHandle =
   | "nw"
   | "ne"
@@ -591,6 +594,7 @@ export function removePolygonVertex<T extends VertexMapObject>(
 ): T {
   const filled =
     object.fillMode === "whiteout" ||
+    object.fillMode === "whiteoutInverted" ||
     object.fillMode === "outOfBounds" ||
     object.fillMode === "solid" ||
     object.closed;
@@ -732,5 +736,54 @@ export function parseClampedNumberDraft(
   return Number.isFinite(value)
     ? Math.max(min, Math.min(max, value))
     : fallback;
+}
+
+/**
+ * Parse a live number-field draft while the user is typing. Returns `null`
+ * when the draft is empty or not yet a finite number in range, so the
+ * caller can keep showing the draft without forcing a snap-back value.
+ */
+export function parseLiveNumberDraft(
+  draft: string,
+  min: number,
+  max: number,
+): number | null {
+  const trimmed = draft.trim();
+  if (trimmed === "" || trimmed === "-" || trimmed === "." || trimmed === "-.") {
+    return null;
+  }
+  const value = Number(trimmed);
+  if (!Number.isFinite(value) || value < min || value > max) return null;
+  return value;
+}
+
+type FillableObject = Extract<CourseMapObject, { kind: "path" | "rectangle" }>;
+
+/**
+ * Patch applied when the user changes Fill mode on a rect/path. Locks
+ * out-of-bounds borders to the course purple at 0.4 mm, closes paths for
+ * area fills, and seeds a solid fill colour when needed.
+ */
+export function fillModePatch(
+  object: FillableObject,
+  fillMode: MapFillMode,
+  purple: string,
+): Partial<FillableObject> {
+  const patch: Record<string, unknown> = { fillMode };
+  if (object.kind === "path" && (
+    fillMode === "outOfBounds" ||
+    fillMode === "whiteout" ||
+    fillMode === "whiteoutInverted"
+  )) {
+    patch.closed = true;
+  }
+  if (fillMode === "solid" && !object.fill) {
+    patch.fill = "#ffffff";
+  }
+  if (fillMode === "outOfBounds") {
+    patch.stroke = purple;
+    patch.strokeWidthMm = OUT_OF_BOUNDS_BORDER_MM;
+  }
+  return patch as Partial<FillableObject>;
 }
 

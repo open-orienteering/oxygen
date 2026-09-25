@@ -235,6 +235,15 @@ test("creates templates, lays out several maps and exports PDFs", async ({
   await expect(page.getByTestId("map-object-fill-mode")).toHaveValue(
     "outOfBounds",
   );
+  await expect(page.getByTestId("map-object-border")).toBeChecked();
+  await expect(page.getByTestId("map-object-stroke-follows-purple")).toBeVisible();
+  await expect(page.getByTestId("map-object-stroke-color")).toHaveCount(0);
+  await expect(page.getByTestId("map-object-stroke-width")).toHaveValue("0.4");
+  await page.getByTestId("map-object-stroke-width").fill("");
+  await expect(page.getByTestId("map-object-stroke-width")).toHaveValue("");
+  await page.getByTestId("map-object-stroke-width").fill("0.6");
+  await expect(page.getByTestId("map-object-stroke-width")).toHaveValue("0.6");
+
   const rectangle = page.locator("[data-object-id]").last();
   const beforeResize = await rectangle.boundingBox();
   const resizeHandle = page.getByTestId("map-resize-se");
@@ -262,6 +271,39 @@ test("creates templates, lays out several maps and exports PDFs", async ({
   await page.mouse.up();
   const constrainedBox = await rectangle.boundingBox();
   expect(constrainedBox!.x).toBeGreaterThanOrEqual(printableBox!.x - 1);
+
+  await page.getByTestId("map-object-fill-mode").selectOption("whiteoutInverted");
+  await expect(page.getByTestId("map-object-fill-mode")).toHaveValue(
+    "whiteoutInverted",
+  );
+  const invertedPath = page.locator(
+    'path[data-object-id][fill-rule="evenodd"]',
+  );
+  await expect(invertedPath).toHaveCount(1);
+  const invertedBox = await invertedPath.boundingBox();
+  expect(invertedBox).not.toBeNull();
+  // Switch selection via the object list (empty-canvas click is covered by
+  // the frame-sized white-out ring).
+  await page.getByTestId("map-panel-objects-toggle").click();
+  await page.getByTestId("map-object-list").locator("button").first().click();
+  await expect(page.getByTestId("map-object-text")).toBeVisible();
+  // White ring (frame corner opposite the constrained shape) re-selects.
+  await page.mouse.click(
+    invertedBox!.x + invertedBox!.width - 12,
+    invertedBox!.y + invertedBox!.height - 12,
+  );
+  await expect(page.getByTestId("map-object-fill-mode")).toHaveValue(
+    "whiteoutInverted",
+  );
+  // Hole falls through: click inside the shape does not select the inverted
+  // white-out (fill-mode control stays absent after selecting text first).
+  await page.getByTestId("map-object-list").locator("button").first().click();
+  await expect(page.getByTestId("map-object-text")).toBeVisible();
+  await page.mouse.click(
+    constrainedBox!.x + constrainedBox!.width / 2,
+    constrainedBox!.y + constrainedBox!.height / 2,
+  );
+  await expect(page.getByTestId("map-object-fill-mode")).toHaveCount(0);
 
   await page.getByTestId("map-print-scale").fill("8000");
   await expect(page.getByTestId("map-layout-save-status")).toHaveText("Saved", { timeout: 5_000 });

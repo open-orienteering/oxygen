@@ -20,12 +20,14 @@ import {
   isWhiteoutObject,
   mapToPage,
   outOfBoundsPatternDef,
+  OUT_OF_BOUNDS_BORDER_MM,
   pageToMap,
   pathData,
   printablePageRect,
   rectInside,
   renderCourseOverlaySvg,
   renderDescriptionBlockSvg,
+  resolveObjectStroke,
   windowRotationDeg,
   type CourseMapDocument,
   type CourseMapObject,
@@ -54,12 +56,14 @@ import {
   createObjectAt,
   displayedPreviewPlacement,
   editorPreviewDpi,
+  fillModePatch,
   initialEditorViewport,
   insertPolygonVertex,
   panEditorViewport,
   pinchEditorViewport,
   pageDeltaToObject,
   parseClampedNumberDraft,
+  parseLiveNumberDraft,
   removePolygonVertex,
   resizeMapObject,
   translateMapObject,
@@ -345,6 +349,59 @@ const FONT_STACKS: Record<MapFontFamily, string> = {
   condensed: "Liberation Sans Narrow, Arial Narrow, sans-serif",
 };
 
+/**
+ * Number input that keeps a string draft while focused so the user can
+ * clear the field and type a new value without `Number("")` snapping back.
+ */
+function NumberField({
+  value,
+  min,
+  max,
+  step,
+  onCommit,
+  "data-testid": testId,
+  className,
+}: {
+  value: number;
+  min: number;
+  max: number;
+  step?: number;
+  onCommit: (next: number) => void;
+  "data-testid"?: string;
+  className?: string;
+}) {
+  const [draft, setDraft] = useState<string | null>(null);
+  const display = draft ?? String(value);
+  return (
+    <input
+      type="number"
+      data-testid={testId}
+      min={min}
+      max={max}
+      step={step}
+      value={display}
+      onFocus={() => setDraft(String(value))}
+      onChange={(event) => {
+        const next = event.target.value;
+        setDraft(next);
+        const parsed = parseLiveNumberDraft(next, min, max);
+        if (parsed !== null) onCommit(parsed);
+      }}
+      onBlur={() => {
+        if (draft !== null) {
+          const parsed = parseLiveNumberDraft(draft, min, max);
+          if (parsed !== null) onCommit(parsed);
+        }
+        setDraft(null);
+      }}
+      onKeyDown={(event) => {
+        if (event.key === "Enter") event.currentTarget.blur();
+      }}
+      className={className}
+    />
+  );
+}
+
 function renderObject(
   object: CourseMapObject,
   frame: CourseMapDocument["mapFrame"],
@@ -353,12 +410,19 @@ function renderObject(
   graphicHref?: (graphicId: number) => string,
   purple = "#a626ff",
 ): ReactNode {
+  const inverted =
+    (object.kind === "rectangle" || object.kind === "path") &&
+    object.fillMode === "whiteoutInverted";
   const common = {
     "data-object-id": object.id,
     "data-map-editor-target": onPointerDown ? "true" : undefined,
     onPointerDown,
     className: onPointerDown ? "cursor-move" : undefined,
-    pointerEvents: onPointerDown ? ("bounding-box" as const) : undefined,
+    pointerEvents: onPointerDown
+      ? inverted
+        ? ("fill" as const)
+        : ("bounding-box" as const)
+      : undefined,
     style: onPointerDown
       ? ({ touchAction: "none", userSelect: "none" } as const)
       : undefined,
@@ -450,7 +514,7 @@ function renderObject(
     const fillMode = object.fillMode ?? "none";
     const patternId = fillMode === "outOfBounds" ? `oob-${object.id}` : null;
     const fill =
-      fillMode === "whiteout"
+      fillMode === "whiteout" || fillMode === "whiteoutInverted"
         ? "#ffffff"
         : fillMode === "solid"
           ? object.fill ?? "none"
@@ -460,26 +524,53 @@ function renderObject(
     const closed =
       object.closed ||
       fillMode === "whiteout" ||
+      fillMode === "whiteoutInverted" ||
       fillMode === "outOfBounds";
+    const shapePath = pathData(vertices, closed);
+    const stroke = resolveObjectStroke(
+      fillMode,
+      object.stroke,
+      object.strokeWidthMm,
+      purple,
+    );
+    if (fillMode === "whiteoutInverted") {
+      const ring = `M ${frame.x} ${frame.y} L ${frame.x + frame.width} ${frame.y} L ${frame.x + frame.width} ${frame.y + frame.height} L ${frame.x} ${frame.y + frame.height} Z ${shapePath}`;
+      return (
+        <g key={object.id}>
+          <path
+            {...common}
+            d={ring}
+            fill={fill}
+            fillRule="evenodd"
+            stroke="none"
+          />
+          {stroke.stroke !== undefined && (
+            <path
+              d={shapePath}
+              fill="none"
+              stroke={stroke.stroke}
+              strokeWidth={stroke.strokeWidthMm}
+              pointerEvents="none"
+            />
+          )}
+        </g>
+      );
+    }
     return (
       <g key={object.id}>
         {patternId && (
           <defs
             dangerouslySetInnerHTML={{
-              __html: outOfBoundsPatternDef(
-                patternId,
-                purple,
-                1,
-              ),
+              __html: outOfBoundsPatternDef(patternId, purple, 1),
             }}
           />
         )}
         <path
           {...common}
-          d={pathData(vertices, closed)}
+          d={shapePath}
           fill={fill}
-          stroke={object.stroke ?? "none"}
-          strokeWidth={object.strokeWidthMm}
+          stroke={stroke.stroke ?? "none"}
+          strokeWidth={stroke.strokeWidthMm}
           style={common.style}
         />
       </g>
@@ -490,23 +581,49 @@ function renderObject(
     const fillMode = object.fillMode ?? "none";
     const patternId = fillMode === "outOfBounds" ? `oob-${object.id}` : null;
     const fill =
-      fillMode === "whiteout"
+      fillMode === "whiteout" || fillMode === "whiteoutInverted"
         ? "#ffffff"
         : fillMode === "solid"
           ? object.fill ?? "none"
           : fillMode === "outOfBounds"
             ? `url(#${patternId})`
             : "none";
+    const stroke = resolveObjectStroke(
+      fillMode,
+      object.stroke,
+      object.strokeWidthMm,
+      purple,
+    );
+    if (fillMode === "whiteoutInverted") {
+      const shapePath = `M ${bounds.x} ${bounds.y} L ${bounds.x + bounds.width} ${bounds.y} L ${bounds.x + bounds.width} ${bounds.y + bounds.height} L ${bounds.x} ${bounds.y + bounds.height} Z`;
+      const ring = `M ${frame.x} ${frame.y} L ${frame.x + frame.width} ${frame.y} L ${frame.x + frame.width} ${frame.y + frame.height} L ${frame.x} ${frame.y + frame.height} Z ${shapePath}`;
+      return (
+        <g key={object.id}>
+          <path
+            {...common}
+            d={ring}
+            fill={fill}
+            fillRule="evenodd"
+            stroke="none"
+          />
+          {stroke.stroke !== undefined && (
+            <path
+              d={shapePath}
+              fill="none"
+              stroke={stroke.stroke}
+              strokeWidth={stroke.strokeWidthMm}
+              pointerEvents="none"
+            />
+          )}
+        </g>
+      );
+    }
     return (
       <g key={object.id}>
         {patternId && (
           <defs
             dangerouslySetInnerHTML={{
-              __html: outOfBoundsPatternDef(
-                patternId,
-                purple,
-                1,
-              ),
+              __html: outOfBoundsPatternDef(patternId, purple, 1),
             }}
           />
         )}
@@ -517,8 +634,8 @@ function renderObject(
           width={bounds.width}
           height={bounds.height}
           fill={fill}
-          stroke={object.stroke ?? "none"}
-          strokeWidth={object.strokeWidthMm}
+          stroke={stroke.stroke ?? "none"}
+          strokeWidth={stroke.strokeWidthMm}
           style={common.style}
         />
       </g>
@@ -1616,17 +1733,21 @@ export function MapLayoutEditor({
       case "path":
         return object.fillMode === "whiteout"
           ? t("objectKindWhiteout")
-          : object.fillMode === "outOfBounds"
-            ? t("objectKindOutOfBounds")
-            : object.closed
-              ? t("objectKindPolygon")
-              : t("objectKindPath");
+          : object.fillMode === "whiteoutInverted"
+            ? t("objectKindWhiteoutInverted")
+            : object.fillMode === "outOfBounds"
+              ? t("objectKindOutOfBounds")
+              : object.closed
+                ? t("objectKindPolygon")
+                : t("objectKindPath");
       case "rectangle":
         return object.fillMode === "whiteout"
           ? t("objectKindWhiteout")
-          : object.fillMode === "outOfBounds"
-            ? t("objectKindOutOfBounds")
-            : t("objectKindRectangle");
+          : object.fillMode === "whiteoutInverted"
+            ? t("objectKindWhiteoutInverted")
+            : object.fillMode === "outOfBounds"
+              ? t("objectKindOutOfBounds")
+              : t("objectKindRectangle");
       case "image":
         return t("objectKindImage");
     }
@@ -2285,16 +2406,15 @@ export function MapLayoutEditor({
                     </div>
                     <label className="block text-xs font-medium text-slate-600">
                       {t("fontSize")}
-                      <input
-                        type="number"
+                      <NumberField
+                        key={`font-${selected.id}`}
+                        data-testid="map-object-font-size"
                         min={1}
                         max={100}
                         step={0.5}
                         value={selected.fontSizeMm}
-                        onChange={(event) =>
-                          updateSelected({
-                            fontSizeMm: Number(event.target.value),
-                          })
+                        onCommit={(fontSizeMm) =>
+                          updateSelected({ fontSizeMm })
                         }
                         className="mt-1 w-full rounded border border-slate-300 px-2 py-1.5"
                       />
@@ -2385,23 +2505,22 @@ export function MapLayoutEditor({
                         onChange={(event) => {
                           const fillMode = event.target
                             .value as MapFillMode;
-                          updateSelected({
-                            fillMode,
-                            ...(fillMode === "solid" && !selected.fill
-                              ? { fill: "#ffffff" }
-                              : {}),
-                            ...(selected.kind === "path" &&
-                            (fillMode === "outOfBounds" ||
-                              fillMode === "whiteout")
-                              ? { closed: true }
-                              : {}),
-                          });
+                          updateSelected(
+                            fillModePatch(
+                              selected,
+                              fillMode,
+                              document.appearance.purple,
+                            ),
+                          );
                         }}
                         className="mt-1 w-full rounded border border-slate-300 px-2 py-1.5"
                       >
                         <option value="none">{t("fillModeNone")}</option>
                         <option value="solid">{t("fillModeSolid")}</option>
                         <option value="whiteout">{t("fillModeWhiteout")}</option>
+                        <option value="whiteoutInverted">
+                          {t("fillModeWhiteoutInverted")}
+                        </option>
                         <option value="outOfBounds">
                           {t("fillModeOutOfBounds")}
                         </option>
@@ -2430,9 +2549,15 @@ export function MapLayoutEditor({
                           updateSelected(
                             event.target.checked
                               ? {
-                                  stroke: selected.stroke ?? "#000000",
+                                  stroke:
+                                    selected.fillMode === "outOfBounds"
+                                      ? document.appearance.purple
+                                      : (selected.stroke ?? "#000000"),
                                   strokeWidthMm:
-                                    selected.strokeWidthMm ?? 0.35,
+                                    selected.strokeWidthMm ??
+                                    (selected.fillMode === "outOfBounds"
+                                      ? OUT_OF_BOUNDS_BORDER_MM
+                                      : 0.35),
                                 }
                               : {
                                   stroke: undefined,
@@ -2450,25 +2575,40 @@ export function MapLayoutEditor({
                     selected.kind === "rectangle") &&
                     selected.stroke !== undefined)) && (
                   <>
-                    <label className="block text-xs font-medium text-slate-600">
-                      {t("strokeColor")}
-                      <input
-                        type="color"
-                        value={
-                          selected.kind === "line"
-                            ? selected.stroke
-                            : (selected.stroke ?? "#000000")
-                        }
-                        onChange={(event) =>
-                          updateSelected({ stroke: event.target.value })
-                        }
-                        className="mt-1 h-9 w-full rounded border border-slate-300"
-                      />
-                    </label>
+                    {!(
+                      (selected.kind === "path" ||
+                        selected.kind === "rectangle") &&
+                      selected.fillMode === "outOfBounds"
+                    ) ? (
+                      <label className="block text-xs font-medium text-slate-600">
+                        {t("strokeColor")}
+                        <input
+                          type="color"
+                          data-testid="map-object-stroke-color"
+                          value={
+                            selected.kind === "line"
+                              ? selected.stroke
+                              : (selected.stroke ?? "#000000")
+                          }
+                          onChange={(event) =>
+                            updateSelected({ stroke: event.target.value })
+                          }
+                          className="mt-1 h-9 w-full rounded border border-slate-300"
+                        />
+                      </label>
+                    ) : (
+                      <p
+                        className="text-xs text-slate-500"
+                        data-testid="map-object-stroke-follows-purple"
+                      >
+                        {t("strokeColorFollowsPurple")}
+                      </p>
+                    )}
                     <label className="block text-xs font-medium text-slate-600">
                       {t("strokeWidth")}
-                      <input
-                        type="number"
+                      <NumberField
+                        key={`stroke-${selected.id}`}
+                        data-testid="map-object-stroke-width"
                         min={0.1}
                         max={20}
                         step={0.1}
@@ -2477,17 +2617,14 @@ export function MapLayoutEditor({
                             ? selected.strokeWidthMm
                             : (selected.strokeWidthMm ?? 0.35)
                         }
-                        onChange={(event) =>
-                          updateSelected({
-                            strokeWidthMm: Number(event.target.value),
-                          })
+                        onCommit={(strokeWidthMm) =>
+                          updateSelected({ strokeWidthMm })
                         }
                         className="mt-1 w-full rounded border border-slate-300 px-2 py-1.5"
                       />
                     </label>
                   </>
-                )}
-                <button
+                )}                <button
                   type="button"
                   data-testid="map-object-delete"
                   onClick={() => deleteObjectById(selected.id)}
