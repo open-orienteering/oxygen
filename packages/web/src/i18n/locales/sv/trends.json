@@ -36,7 +36,7 @@
   "classificationInternational": "Internationell",
   "loadingEvents": "Hämtar tävlingar från Eventor…",
   "noEventsFound": "Inga tävlingar matchar filtret.",
-  "noKeyConfigured": "Anslut en Eventor API-nyckel för att aktivera jämförelse.",
+  "noKeyConfigured": "En instansadministratör måste lägga till en Eventor API-nyckel under Inställningar → Eventor för att aktivera jämförelse.",
   "addByIdHeading": "Lägg till med Eventor-tävlings-ID eller URL",
   "addByIdHelp": "Klistra in ett Eventor-tävlings-ID (t.ex. 12345) eller en URL som eventor.orientering.se/Events/Show/12345. Användbart när du redan vet vilken tävling du vill jämföra mot.",
   "addByIdPlaceholder": "Tävlings-ID eller URL",

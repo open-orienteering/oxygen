@@ -105,6 +105,10 @@ export const eventRouter = router({
     }
 
     const ownerByEventId = new Map<bigint, string>();
+    // Events where the caller holds a direct Event admin grant (creator or
+    // co-admin). Feeds `ownedByMe` for the selector's "My events" filter.
+    const ownedByMe = new Set<bigint>();
+    const me = ctx.authEnabled ? ctx.user?.id : undefined;
     if (rows.length > 0) {
       const ownerGrants = await prisma().eventPermission.findMany({
         where: {
@@ -119,6 +123,7 @@ export const eventRouter = router({
         if (!ownerByEventId.has(grant.eventId) && grant.user) {
           ownerByEventId.set(grant.eventId, grant.user.displayName);
         }
+        if (me && grant.userId === me) ownedByMe.add(grant.eventId);
       }
     }
 
@@ -181,6 +186,7 @@ export const eventRouter = router({
           ...toEventInfo(row, classificationId),
           canManage: manageById.get(row.id) ?? false,
           owner: ownerByEventId.get(row.id),
+          ownedByMe: ownedByMe.has(row.id),
         };
       });
   }),

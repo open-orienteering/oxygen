@@ -346,6 +346,12 @@ export interface EventInfo {
   canManage?: boolean;
   /** Display name of the user who created the event, when known. */
   owner?: string;
+  /**
+   * True when the current user holds a direct Event admin grant on this
+   * event — the creator or a co-admin. Drives the selector's "My events"
+   * filter. Always false when auth is off (there is no "me").
+   */
+  ownedByMe?: boolean;
 }
 
 /** @deprecated alias for {@link EventInfo} kept during the post-MeOS rename window. */

@@ -7,9 +7,14 @@ import { useCurrentUser } from "../context/CurrentUserContext";
 import { MapViewer, type ControlOverlay, type CourseOverlay, type MapViewerEditorProps } from "./MapViewer";
 import { useIsWideViewport } from "./map-pane-shared";
 import {
+  IconDescriptions,
+  IconEye,
+  IconEyeOff,
   IconFullscreenEnter,
   IconFullscreenExit,
+  IconProgress,
 } from "./map-icons";
+import { ToolbarButton } from "./ToolbarButton";
 import { NorthLinesBadge } from "./NorthLinesBadge";
 import { formatStalenessDeg, isMeridianStale } from "../lib/north-lines";
 
@@ -628,7 +633,7 @@ function MapPanelImpl({
   const paneToolbar = renderToolbar ? (
     <div
       data-testid="map-toolbar"
-      className="relative z-10 flex items-center gap-3 px-3 py-2 border-b border-slate-200 flex-shrink-0"
+      className="relative z-10 flex items-center gap-2 sm:gap-3 px-2 sm:px-3 py-1.5 sm:py-2 border-b border-slate-200 flex-shrink-0"
     >
       {fillContainer && !toolbar && (
         <h2 className="text-sm font-semibold text-slate-500 uppercase tracking-wider">
@@ -636,61 +641,51 @@ function MapPanelImpl({
         </h2>
       )}
       {toolbar}
-      <div className="ml-auto flex items-center gap-2">
+      {/* Every toggle here is icon + label from `sm` up and icon-only on
+          a phone (ToolbarButton), so the row fits a 390px screen without
+          the buttons overlapping each other. */}
+      <div className="ml-auto flex items-center gap-1 sm:gap-2 shrink-0">
         {/* In editor mode the page drives filtering through `filterMode`
             and renders its own toggle — a second, internal toggle here
             would fight it (two buttons, diverging state). */}
         {canFilter && !editor && (
-          <button
+          <ToolbarButton
+            icon={showOnlyRelevant ? <IconEye /> : <IconEyeOff />}
+            label={showOnlyRelevant ? t("showAllControls") : t("hideOtherControls")}
+            active={showOnlyRelevant}
             onClick={() => setShowOnlyRelevant((v) => !v)}
-            className={`text-xs px-2 py-1 rounded-md transition-colors cursor-pointer ${showOnlyRelevant
-                ? "bg-purple-100 text-purple-700 font-medium"
-                : "text-slate-500 hover:text-slate-700 hover:bg-slate-100"
-              }`}
-          >
-            {showOnlyRelevant ? t("showAllControls") : t("hideOtherControls")}
-          </button>
+          />
         )}
         {(highlightedCourseNamesList.length > 0 || descriptionsAllControls) && (
-          <button
+          <ToolbarButton
+            testId="map-toggle-descriptions"
+            icon={<IconDescriptions />}
+            label={showDescriptions ? t("hideDescriptions") : t("descriptions")}
+            active={showDescriptions}
             onClick={() => setShowDescriptions((v) => !v)}
-            className={`text-xs px-2 py-1 rounded-md transition-colors cursor-pointer ${showDescriptions
-                ? "bg-purple-100 text-purple-700 font-medium"
-                : "text-slate-500 hover:text-slate-700 hover:bg-slate-100"
-              }`}
-          >
-            {showDescriptions ? t("hideDescriptions") : t("descriptions")}
-          </button>
+          />
         )}
         {onCompletionToggle && (
-          <button
+          <ToolbarButton
+            icon={<IconProgress />}
+            label={showCompletion ? t("hideProgress") : t("showProgress")}
+            active={showCompletion}
+            tone="emerald"
             onClick={() => onCompletionToggle(!showCompletion)}
-            className={`text-xs px-2 py-1 rounded-md transition-colors cursor-pointer ${showCompletion
-                ? "bg-emerald-100 text-emerald-700 font-medium"
-                : "text-slate-500 hover:text-slate-700 hover:bg-slate-100"
-              }`}
-          >
-            {showCompletion ? t("hideProgress") : t("showProgress")}
-          </button>
+          />
         )}
-        <button
+        <ToolbarButton
+          iconOnly
+          icon={isFullscreen ? <IconFullscreenExit /> : <IconFullscreenEnter />}
+          label={isFullscreen ? t("exitFullscreen") : t("enterFullscreen")}
           onClick={toggleFullscreen}
-          className="text-xs px-2 py-1 rounded-md text-slate-500 hover:text-slate-700 hover:bg-slate-100 cursor-pointer"
-          title={isFullscreen ? t("exitFullscreen") : t("enterFullscreen")}
-          aria-label={isFullscreen ? t("exitFullscreen") : t("enterFullscreen")}
-        >
-          {isFullscreen ? (
-            <IconFullscreenExit className="w-4 h-4" />
-          ) : (
-            <IconFullscreenEnter className="w-4 h-4" />
-          )}
-        </button>
+        />
         {onPaneCollapse && (
           <button
             onClick={onPaneCollapse}
             data-testid="map-pane-collapse"
             title={t("hideMapPaneTitle", { ns: "nav" })}
-            className="text-xs px-2 py-1 rounded-md text-slate-500 hover:text-slate-700 hover:bg-slate-100 cursor-pointer"
+            className="text-xs p-2 sm:px-2 sm:py-1 rounded-md text-slate-500 hover:text-slate-700 hover:bg-slate-100 cursor-pointer"
           >
             <span className="sr-only">{t("hideMapPane", { ns: "nav" })}</span>
             <svg
@@ -913,19 +908,11 @@ function MapPanelImpl({
                       <option value="ismtbom">{tl("colorProfileIsmtbom")}</option>
                     </select>
                   </label>
-                  <label className="flex items-center gap-1 text-xs text-slate-500 cursor-pointer">
-                    <input
-                      type="checkbox"
-                      data-testid="map-north-lines-below"
-                      className="rounded border-slate-300"
-                      checked={mapMetadata.data.northLinesBelow}
-                      disabled={setColorStack.isPending}
-                      onChange={(e) => {
-                        setColorStack.mutate({ northLinesBelow: e.target.checked });
-                      }}
-                    />
-                    {tl("northLinesBelow")}
-                  </label>
+                  {/* The "north lines under course purple" checkbox used to
+                      sit here too. It is a property of the base map, not of
+                      one event's course work, and IOF's colour order puts
+                      blue/black 100 % lines *above* lower purple — so it
+                      now lives only on the club-library map card. */}
                 </>
               )}
             </div>

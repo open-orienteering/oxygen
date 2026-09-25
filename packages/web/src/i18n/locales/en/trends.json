@@ -36,7 +36,7 @@
   "classificationInternational": "International",
   "loadingEvents": "Looking up events on Eventor…",
   "noEventsFound": "No events match those filters.",
-  "noKeyConfigured": "Connect an Eventor API key to enable comparison.",
+  "noKeyConfigured": "An instance admin must add an Eventor API key under Settings → Eventor to enable comparison.",
   "addByIdHeading": "Add by Eventor event ID or URL",
   "addByIdHelp": "Paste an Eventor event ID (e.g. 12345) or a full URL like eventor.orientering.se/Events/Show/12345. Useful when you already know the event you want to compare against.",
   "addByIdPlaceholder": "Event ID or URL",

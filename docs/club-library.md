@@ -6,9 +6,10 @@ event. Identity (when `AUTH_MODE` is on) comes from the same invite-only
 
 The library lives on the **Settings** page (`/settings`), reached from the
 button under the event list on the start page. Its four tabs — Maps,
-Controls, Classes, Groups — are open to any signed-in user; two further
-tabs (Users, Maintenance) are instance-admin only and are described in
-[authentication.md](authentication.md).
+Controls, Classes, Groups — are open to any signed-in user; three further
+tabs (Users, Eventor, Maintenance) are instance-admin only. Users and the
+Eventor API keys are described in [authentication.md](authentication.md)
+and [features.md](features.md#eventor-api-keys).
 
 ## Maps
 

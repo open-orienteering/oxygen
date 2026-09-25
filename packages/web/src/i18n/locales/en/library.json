@@ -4,6 +4,7 @@
   "tabMaps": "Base maps",
   "tabControls": "Controls",
   "tabUsers": "Users",
+  "tabEventor": "Eventor",
   "tabMaintenance": "Maintenance",
   "mapsHeading": "Base maps",
   "mapsHelp": "Upload OCAD maps once for the club. When you set up an event, pick a map from this list — Oxygen copies it into the event.",

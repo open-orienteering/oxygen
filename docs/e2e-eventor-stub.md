@@ -96,11 +96,13 @@ which elements must be arrays). No Playwright config change is needed.
 
 ## Coverage this recovered
 
-`e2e/eventor.spec.ts` → "should validate Eventor API key and show event
-list" was `test.skip`ped with the comment *"requires a valid Eventor API
-key and live network access"*. It now runs, and asserts against the
-stub's organisation and event names so it fails if the list stops
-reaching the UI.
+`e2e/eventor.spec.ts` → "admin stores the key under Settings → Eventor
+and the import panel lists events" (formerly "should validate Eventor
+API key and show event list") was `test.skip`ped with the comment
+*"requires a valid Eventor API key and live network access"*. It now
+runs: it enters the key on the admin-only Settings → Eventor tab, then
+asserts against the stub's organisation and event names on the selector's
+import panel so it fails if the list stops reaching the UI.
 
 ## What is still not covered
 

@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from "react";
+import { useState, useMemo } from "react";
 import { useNavigate, Link } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import type { EventInfo, EventKind } from "@oxygen/shared";
@@ -8,6 +8,7 @@ import { LanguageSelector } from "../components/LanguageSelector";
 import { UserChip } from "../components/UserChip";
 import { BuildInfoLine } from "../components/BuildInfoLine";
 import { LiveCompassLogo } from "../components/OxygenLogo";
+import { useCurrentUser } from "../context/CurrentUserContext";
 import {
   EVENT_KIND_OPTIONS,
   eventKindDisplayLabel,
@@ -39,33 +40,45 @@ export function CompetitionSelector() {
   const [showEventor, setShowEventor] = useState(false);
   const [search, setSearch] = useState("");
   const [kind, setKind] = useState<EventKindFilter>("all");
+  const [onlyMine, setOnlyMine] = useState(false);
+
+  // "My events" only means something when there is a signed-in user to
+  // own anything; with auth off every row reports ownedByMe=false.
+  const { user, authEnabled } = useCurrentUser();
+  const canFilterMine = authEnabled && user !== null;
 
   const events = useMemo(() => competitions.data ?? [], [competitions.data]);
   const filtered = useMemo(
-    () => filterEvents(events, { query: search, kind }),
-    [events, search, kind],
+    () =>
+      filterEvents(events, {
+        query: search,
+        kind,
+        onlyMine: canFilterMine && onlyMine,
+      }),
+    [events, search, kind, onlyMine, canFilterMine],
   );
   const grouped = useMemo(() => groupEvents(filtered, formatDate(new Date())), [filtered]);
-  const hasFilters = search.trim() !== "" || kind !== "all";
+  const hasFilters = search.trim() !== "" || kind !== "all" || onlyMine;
+  const clearFilters = () => {
+    setSearch("");
+    setKind("all");
+    setOnlyMine(false);
+  };
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-50 to-blue-50 flex items-center justify-center p-4">
       <div className="w-full max-w-2xl">
-        {/* Language Selector — top right */}
-        <div className="flex justify-end mb-2 items-center gap-3">
-          <UserChip />
-          <LanguageSelector />
-        </div>
-
         {/* Logo / Header */}
-        <div className="text-center mb-8">
+        <div className="text-center mb-6 sm:mb-8">
           <div className="mb-4">
             <LiveCompassLogo className="w-16 h-16 drop-shadow-lg" />
           </div>
           <h1 className="text-3xl font-bold text-slate-900">
             {t("title")}
           </h1>
-          <p className="text-slate-500 mt-2">{t("selectCompetition")}</p>
+          {/* The tagline earns its space on a desktop; on a phone the list
+              itself is the explanation. */}
+          <p className="hidden sm:block text-slate-500 mt-2">{t("selectCompetition")}</p>
         </div>
 
         {/* Competition List */}
@@ -104,28 +117,52 @@ export function CompetitionSelector() {
 
           {competitions.data && competitions.data.length > 0 && (
             <>
-              <div className="flex gap-2 p-3 border-b border-slate-100">
+              {/* Search on its own line on phones; the type select and the
+                  "mine" toggle share the second line. A native <select>
+                  refuses to shrink below its widest option unless min-w-0
+                  lets it, which is what used to push it off-screen. */}
+              <div
+                data-testid="event-filters"
+                className="flex flex-col sm:flex-row gap-2 p-3 border-b border-slate-100"
+              >
                 <input
                   type="search"
                   data-testid="event-search"
                   value={search}
                   onChange={(e) => setSearch(e.target.value)}
                   placeholder={t("searchPlaceholder")}
-                  className="flex-1 px-3 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                  className="w-full sm:flex-1 min-w-0 px-3 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
                 />
-                <select
-                  data-testid="event-type-filter"
-                  value={kind}
-                  onChange={(e) => setKind(e.target.value as EventKindFilter)}
-                  className="px-3 py-2 border border-slate-200 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-500"
-                >
-                  <option value="all">{t("typeFilterAll")}</option>
-                  {EVENT_KIND_OPTIONS.map((option) => (
-                    <option key={option} value={option}>
-                      {t(eventKindLabelKey(option))}
-                    </option>
-                  ))}
-                </select>
+                <div className="flex gap-2 min-w-0">
+                  <select
+                    data-testid="event-type-filter"
+                    value={kind}
+                    onChange={(e) => setKind(e.target.value as EventKindFilter)}
+                    className="flex-1 sm:flex-none min-w-0 px-3 py-2 border border-slate-200 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  >
+                    <option value="all">{t("typeFilterAll")}</option>
+                    {EVENT_KIND_OPTIONS.map((option) => (
+                      <option key={option} value={option}>
+                        {t(eventKindLabelKey(option))}
+                      </option>
+                    ))}
+                  </select>
+                  {canFilterMine && (
+                    <button
+                      type="button"
+                      data-testid="event-mine-filter"
+                      aria-pressed={onlyMine}
+                      onClick={() => setOnlyMine((v) => !v)}
+                      className={`shrink-0 px-3 py-2 rounded-lg text-sm font-medium border transition-colors cursor-pointer ${
+                        onlyMine
+                          ? "bg-blue-600 border-blue-600 text-white hover:bg-blue-700"
+                          : "bg-white border-slate-200 text-slate-600 hover:bg-slate-50 hover:border-slate-300"
+                      }`}
+                    >
+                      {t("filterMine")}
+                    </button>
+                  )}
+                </div>
               </div>
               {filtered.length === 0 ? (
                 <div className="p-8 text-center text-slate-500">
@@ -134,10 +171,7 @@ export function CompetitionSelector() {
                     <button
                       type="button"
                       data-testid="clear-event-filters"
-                      onClick={() => {
-                        setSearch("");
-                        setKind("all");
-                      }}
+                      onClick={clearFilters}
                       className="mt-3 text-sm text-blue-600 hover:text-blue-800 cursor-pointer"
                     >
                       {t("clearFilters")}
@@ -278,11 +312,22 @@ export function CompetitionSelector() {
           </div>
         )}
 
-        {/* Footer */}
-        <div className="text-center mt-6 text-sm text-slate-400 space-y-1">
-          <div>{t("footer", { version: __APP_VERSION__ })}</div>
-          <BuildInfoLine className="text-xs" />
-        </div>
+        {/* Footer: who is signed in and which language, then build info.
+            Both used to sit above the logo, where they competed with the
+            header for the little vertical room a phone has. */}
+        <footer
+          data-testid="selector-footer"
+          className="mt-6 flex flex-col items-center gap-3 text-sm text-slate-400"
+        >
+          <div className="flex items-center gap-3">
+            <UserChip />
+            <LanguageSelector />
+          </div>
+          <div className="text-center space-y-1">
+            <div>{t("footer", { version: __APP_VERSION__ })}</div>
+            <BuildInfoLine className="text-xs" />
+          </div>
+        </footer>
       </div>
     </div>
   );
@@ -387,14 +432,22 @@ function EventGroup({
                     <span
                       data-testid="event-owner"
                       className="ml-auto min-w-0 max-w-[55%] truncate text-right"
+                      title={t("eventOwner", { owner: comp.owner })}
                     >
-                      {t("eventOwner", { owner: comp.owner })}
+                      {/* "Created by" is dead weight on a phone — the bare
+                          name reads fine next to the type badge. */}
+                      <span className="sm:hidden">{comp.owner}</span>
+                      <span className="hidden sm:inline">
+                        {t("eventOwner", { owner: comp.owner })}
+                      </span>
                     </span>
                   )}
                 </div>
               </Link>
               {/* `event.delete` is gated on `event.manage` server-side;
-                  with auth off every row reports canManage. */}
+                  with auth off every row reports canManage.
+                  Hover-reveal only where hover exists: on touch devices the
+                  button is always visible, otherwise it is unreachable. */}
               {comp.canManage && (
                 <button
                   data-testid="event-delete"
@@ -402,7 +455,7 @@ function EventGroup({
                     e.stopPropagation();
                     onDelete(comp);
                   }}
-                  className="px-3 py-4 text-slate-300 hover:text-red-500 transition-colors cursor-pointer opacity-0 group-hover:opacity-100"
+                  className="px-3 py-4 text-slate-300 hover:text-red-500 transition-colors cursor-pointer [@media(hover:hover)]:opacity-0 group-hover:opacity-100 focus-visible:opacity-100"
                   title={t("deleteCompetitionTitle")}
                 >
                   <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -565,30 +618,14 @@ function EventorImportPanel({
   onImported: (nameId: string) => void;
 }) {
   const { t } = useTranslation("event");
-  const [stepOverride, setStepOverride] = useState<"key" | "events" | null>(null);
-  const [apiKey, setApiKey] = useState("");
   const [env, setEnv] = useState<"prod" | "test">("prod");
-
   const keyStatus = trpc.eventor.keyStatus.useQuery({ env });
-  const validateMutation = trpc.eventor.validateKey.useMutation({
-    onSuccess: () => {
-      setStepOverride(null);
-      keyStatus.refetch();
-    },
-  });
 
-  const step = stepOverride || (keyStatus.data?.connected ? "events" : "key");
-
-  // When environment changes, reset the manual step override
-  useEffect(() => {
-    setStepOverride(null);
-  }, [env]);
-
-  const handleValidateKey = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!apiKey.trim()) return;
-    validateMutation.mutate({ apiKey: apiKey.trim(), env });
-  };
+  // The key itself is entered on Settings → Eventor, which is admin-only
+  // (and so are the mutations behind it). Here we only tell the user
+  // where to go.
+  const { user, authEnabled } = useCurrentUser();
+  const canManageKeys = !authEnabled || Boolean(user?.isAdmin);
 
   return (
     <div className="mt-4 bg-white rounded-2xl shadow-lg border border-blue-200 p-6">
@@ -635,64 +672,43 @@ function EventorImportPanel({
         </button>
       </div>
 
-      {/* Step indicator */}
-      <div className="flex items-center gap-2 mb-5 text-xs text-slate-400">
-        <span
-          className={
-            step === "key" ? "text-blue-600 font-medium" : "text-green-600"
-          }
-        >
-          {t("apiKeyStep")}
-        </span>
-        <span>&rarr;</span>
-        <span className={step === "events" ? "text-blue-600 font-medium" : ""}>
-          {t("selectImportStep")}
-        </span>
-      </div>
-
-
-      {/* Step 1: API Key */}
-      {step === "key" && (
-        <form onSubmit={handleValidateKey} className="space-y-3">
-          <p className="text-sm text-slate-500">
-            {t("apiKeyPrompt")}
-          </p>
-          <div>
-            <input
-              type="text"
-              value={apiKey}
-              onChange={(e) => setApiKey(e.target.value)}
-              placeholder={t("apiKeyPlaceholder")}
-              className="w-full px-4 py-2.5 border border-slate-200 rounded-lg text-sm font-mono focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-              autoFocus
-            />
-          </div>
-          <button
-            type="submit"
-            disabled={validateMutation.isPending || !apiKey.trim()}
-            className="px-6 py-2.5 bg-blue-600 text-white text-sm font-medium rounded-lg hover:bg-blue-700 disabled:opacity-50 transition-colors cursor-pointer"
-          >
-            {validateMutation.isPending ? t("validating") : t("connect")}
-          </button>
-          {validateMutation.isError && (
-            <div className="text-sm text-red-600">
-              {validateMutation.error.message}
-            </div>
-          )}
-        </form>
+      {keyStatus.isLoading && (
+        <div className="p-6 text-center">
+          <div className="inline-block w-6 h-6 border-3 border-blue-200 border-t-blue-600 rounded-full animate-spin" />
+        </div>
       )}
 
-      {/* Step 2: Event list with inline import */}
-      {step === "events" && (
+      {keyStatus.isError && (
+        <div className="text-sm text-red-600">{keyStatus.error.message}</div>
+      )}
+
+      {keyStatus.data && !keyStatus.data.connected && (
+        <div
+          data-testid="eventor-import-no-key"
+          className="rounded-lg border border-dashed border-slate-200 bg-slate-50 p-4 text-sm text-slate-600 space-y-2"
+        >
+          <p>{t("importNoKey")}</p>
+          {canManageKeys ? (
+            <Link
+              to="/settings?tab=eventor"
+              data-testid="eventor-import-settings-link"
+              className="inline-flex items-center gap-1 font-medium text-blue-600 hover:text-blue-800"
+            >
+              {t("importNoKeyAdmin")}
+              <span aria-hidden="true">&rarr;</span>
+            </Link>
+          ) : (
+            <p className="text-xs text-slate-500">{t("importNoKeyMember")}</p>
+          )}
+        </div>
+      )}
+
+      {keyStatus.data?.connected && (
         <EventorEventList
           env={env}
-          orgName={
-            keyStatus.data?.connected
-              ? keyStatus.data.organisationName ?? ""
-              : ""
-          }
+          orgName={keyStatus.data.organisationName ?? ""}
           onImported={onImported}
-          onChangeKey={() => setStepOverride("key")}
+          canManageKeys={canManageKeys}
         />
       )}
     </div>
@@ -706,12 +722,12 @@ function EventorEventList({
   orgName,
   env,
   onImported,
-  onChangeKey,
+  canManageKeys,
 }: {
   orgName: string;
   env: "prod" | "test";
   onImported: (nameId: string) => void;
-  onChangeKey: () => void;
+  canManageKeys: boolean;
 }) {
   const { t } = useTranslation("event");
   const [search, setSearch] = useState("");
@@ -792,12 +808,15 @@ function EventorEventList({
           <span className="w-2 h-2 rounded-full bg-green-500 inline-block" />
           {t("connectedTo", { name: orgName })}
         </span>
-        <button
-          onClick={onChangeKey}
-          className="text-slate-400 hover:text-slate-600 cursor-pointer"
-        >
-          {t("changeKey")}
-        </button>
+        {canManageKeys && (
+          <Link
+            to="/settings?tab=eventor"
+            data-testid="eventor-manage-keys-link"
+            className="text-slate-400 hover:text-slate-600"
+          >
+            {t("manageKeys")}
+          </Link>
+        )}
       </div>
 
       {/* Search */}

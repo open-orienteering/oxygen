@@ -81,6 +81,47 @@ scroll the page underneath. A two-finger map gesture cancels any armed control
 tap and suppresses editor selections for 400 ms after movement, giving both
 fingers time to leave the screen. Descriptions start hidden below `sm`.
 
+### Map toolbar buttons
+
+Every toggle on the map toolbar — **Hide other controls**, **Auto slits**,
+**Descriptions**, **Show progress** — is a `ToolbarButton`
+(`packages/web/src/components/ToolbarButton.tsx`): an icon from
+`map-icons.tsx` plus a label that is visible from `sm` up and collapses to the
+icon alone below it. The label always feeds `aria-label` and the tooltip, so
+the accessible name (and `getByRole("button", { name })` in E2E) is the same
+on both breakpoints. Undo / redo are icon-only everywhere. On phones the
+buttons get `p-2` and 20px icons — a ~36px touch target — instead of the
+12px `⟲` / `⟳` glyphs the editor used to ship. Without this the row of text
+buttons did not fit 390px and **Auto slits** rendered on top of
+**Descriptions**.
+
+The selected-control readout keeps the code and SRR/radio badges on phones
+but hides the millimetre position (`hidden sm:inline`).
+
+The **North lines under course purple** checkbox is no longer on the editor's
+map footer. It is a property of the base map, not of one event's course work,
+so it lives only on the club-library map card (**Settings → Base maps**). See
+[map-color-stack.md](map-color-stack.md#north-lines-under-the-course) for what
+the IOF colour order actually says about it.
+
+### Map layout / template editor header
+
+`MapLayoutEditor`'s header is one row from `sm` up and two rows below: title +
+help + fullscreen/close first, then undo / redo / zoom / preview-course select
+/ save status. The two row wrappers switch to `display: contents` at `sm`
+(`sm:contents`), so their children join the header's flex line directly and
+`order` puts the window controls last. The **Preview course** caption is gone;
+the select carries the name as `aria-label` / `title`, and its "no course"
+option reads as the label. On phones the "Rendering map preview…" pill is
+spinner-only.
+
+### Controls page toolbar
+
+The count / AIR+ / awake-hours group and the **Program Controls** / **Read
+Controls** buttons are two `flex-wrap` groups inside a wrapping row
+(`data-testid="controls-toolbar"`), so on a phone the station buttons drop to
+their own line instead of pushing the page wider than the screen.
+
 ## Shell header (narrow viewports)
 
 Below the `sm` breakpoint (~640px):
@@ -152,7 +193,10 @@ to Google Accounts and the cross-origin OAuth response is rejected by CORS.
 | Map gestures | `packages/web/src/components/MapViewer.tsx` |
 | GPS locate | `packages/web/src/lib/locate-mode.ts`, `useGeolocationWatch` |
 | Session recovery | `packages/web/src/lib/session-recovery.ts`, `CompetitionShell` |
-| Map footer / height | `packages/web/src/components/MapPanel.tsx` |
+| Map footer / height / toolbar | `packages/web/src/components/MapPanel.tsx` |
+| Toolbar buttons + icons | `packages/web/src/components/ToolbarButton.tsx`, `map-icons.tsx` |
+| Template editor header | `packages/web/src/components/MapLayoutEditor.tsx` |
+| Controls page toolbar | `packages/web/src/pages/ControlsPage.tsx` |
 | Shell header | `packages/web/src/pages/CompetitionShell.tsx` |
 | Editor dismiss wire-up | `packages/web/src/pages/CourseEditorPage.tsx` |
 | E2E | `e2e/mobile-layout.spec.ts`, `e2e/session-recovery.spec.ts` |

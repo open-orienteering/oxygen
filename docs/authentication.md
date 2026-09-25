@@ -220,5 +220,10 @@ on the existing capability / invited-user gates — they are not the source
 file. See [club-library.md](club-library.md#ocad-source-files).
 
 `events.push` (venue journal) stays on `eventProcedure` without an extra
-capability check. Instance `users` and Eventor API-key admin stay
-`adminProcedure`.
+capability check. Instance `users` and Eventor API-key admin are
+`adminProcedure`: `eventor.validateKey`, `eventor.setKey` and
+`eventor.clearKey` back the **Settings → Eventor** tab
+(`/settings?tab=eventor`), which is hidden from members like the Users
+and Maintenance tabs. `eventor.keyStatus` / `eventor.getKey` are
+`authedProcedure` — they only say whether a key exists, and the import
+panel and registration dialog need that for any invited user.

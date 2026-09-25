@@ -274,11 +274,34 @@ The components are in the tree and unit-tested, but no page currently feeds them
 
 Every event lives in the single `oxygen` database, scoped by `event_id`. The selector is the landing page — pick one and the whole app re-scopes to that event.
 
-The list is grouped into **Upcoming** (`date >= today`) and **Past**, denser than the original card so clubs can keep many events loaded. A search box matches name, slug, annotation, and custom event type. The type filter uses Oxygen's editable type catalogue, including club training, weekly course, and a stable Other bucket for custom labels.
+The list is grouped into **Upcoming** (`date >= today`) and **Past**, denser than the original card so clubs can keep many events loaded. A search box matches name, slug, annotation, and custom event type. The type filter uses Oxygen's editable type catalogue, including club training, weekly course, and a stable Other bucket for custom labels. When a user is signed in, a **My events** toggle narrows the list to events they hold a direct Event admin grant on — the ones they created or were made co-admin of (`EventInfo.ownedByMe`). An instance admin sees every event but owns none of them, so the toggle is a genuine filter for them too.
 
 Creating an event asks for name, type, and date. For events created by an
 invited user, the selector also shows that creator. The old per-event MySQL
 host fields are gone.
+
+The selector is laid out for phones as much as for desktops. The
+signed-in user chip and language switcher live in the footer, under the
+action buttons, instead of crowding the header; the "Select an event to
+manage" tagline is desktop-only; the search box takes its own row on
+narrow screens so the type select cannot run off the edge; the creator
+attribution collapses to the bare name; and the per-row delete icon is
+always visible on touch devices (it is hover-revealed only where
+`(hover: hover)` holds, since a phone has no hover to reveal it with).
+
+#### Eventor API keys
+
+The club's Eventor API keys — one for production, one for Test-Eventor —
+are stored once per instance in `oxygen_settings` and shared by every
+event. They are entered and removed under **Settings → Eventor**
+(`/settings?tab=eventor`), which is an instance-admin tab; the
+`eventor.validateKey` / `setKey` / `clearKey` mutations behind it are
+`adminProcedure`, so a member cannot reach them through the API either.
+Reading whether a key is configured (`eventor.keyStatus`) stays open to
+any invited user because the import panel and the registration dialog
+gate their UI on it. **Import from Eventor** on the selector therefore
+no longer asks for a key: with none configured it links admins to the
+Settings tab and tells members to ask an admin.
 
 When `AUTH_MODE=proxy` (or `dev`), the selector and event shell require a
 signed-in user. Identity comes from a trusted reverse-proxy header — Oxygen

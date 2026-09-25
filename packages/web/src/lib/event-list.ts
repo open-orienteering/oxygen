@@ -60,11 +60,12 @@ export function groupEvents(
 
 export function filterEvents(
   events: EventInfo[],
-  opts: { query: string; kind?: EventKindFilter },
+  opts: { query: string; kind?: EventKindFilter; onlyMine?: boolean },
 ): EventInfo[] {
   const query = opts.query.trim().toLowerCase();
   const kind = opts.kind ?? "all";
   return events.filter((event) => {
+    if (opts.onlyMine && event.ownedByMe !== true) return false;
     if (query) {
       const haystack =
         `${event.name} ${event.nameId} ${event.annotation} ${event.kind} ${event.kindCustom}`

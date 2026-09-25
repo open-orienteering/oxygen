@@ -5,6 +5,8 @@ import { trpc } from "../lib/trpc";
 import type { ControlDescription } from "@oxygen/shared";
 import { MapPanel } from "../components/MapPanel";
 import { EditorHelp } from "../components/EditorHelp";
+import { ToolbarButton } from "../components/ToolbarButton";
+import { IconEyeOff, IconRedo, IconScissors, IconUndo } from "../components/map-icons";
 import { ControlDescriptionEditor } from "../components/ControlDescriptionEditor";
 import type {
   EditorContextAction,
@@ -1192,68 +1194,60 @@ export function CourseEditorPage() {
 
   const toolbar = useMemo(
     () => (
-      <div className="flex items-center gap-2 min-w-0" data-testid="course-editor-toolbar">
+      <div className="flex items-center gap-1 sm:gap-2 min-w-0" data-testid="course-editor-toolbar">
         <EditorHelp hint={t("editor.hint")} label={t("editor.helpAria")} />
-        <button
-          data-testid="editor-undo"
+        {/* Undo / redo are icon-only everywhere but sized as touch targets
+            on phones; the toggles keep their text from `sm` up and fall
+            back to the icon below it (see ToolbarButton). */}
+        <ToolbarButton
+          testId="editor-undo"
+          iconOnly
+          icon={<IconUndo />}
+          label={t("editor.undo")}
           disabled={!canUndo}
           onClick={runUndo}
-          title={t("editor.undo")}
-          className={`text-xs px-2 py-1 rounded-md transition-colors ${canUndo ? "text-slate-500 hover:text-slate-700 hover:bg-slate-100 cursor-pointer" : "text-slate-300 cursor-not-allowed"}`}
-        >
-          ⟲
-        </button>
-        <button
-          data-testid="editor-redo"
+        />
+        <ToolbarButton
+          testId="editor-redo"
+          iconOnly
+          icon={<IconRedo />}
+          label={t("editor.redo")}
           disabled={!canRedo}
           onClick={runRedo}
-          title={t("editor.redo")}
-          className={`text-xs px-2 py-1 rounded-md transition-colors ${canRedo ? "text-slate-500 hover:text-slate-700 hover:bg-slate-100 cursor-pointer" : "text-slate-300 cursor-not-allowed"}`}
-        >
-          ⟳
-        </button>
-        <span className="w-px h-4 bg-slate-200" />
-        <button
-          data-testid="editor-hide-others"
+        />
+        <span className="w-px h-4 bg-slate-200 shrink-0" />
+        <ToolbarButton
+          testId="editor-hide-others"
+          icon={<IconEyeOff />}
+          label={t("editor.hideOtherControls")}
           disabled={!selectedCourse}
+          active={onlyCourse}
           onClick={() => setOnlyCourse((v) => !v)}
-          title={t("editor.hideOtherControls")}
-          className={`text-xs px-2.5 py-1 rounded-md transition-colors ${
-            !selectedCourse
-              ? "text-slate-300 cursor-not-allowed"
-              : onlyCourse
-                ? "bg-purple-100 text-purple-700 font-medium cursor-pointer"
-                : "text-slate-500 hover:text-slate-700 hover:bg-slate-100 cursor-pointer"
-          }`}
-        >
-          {t("editor.hideOtherControls")}
-        </button>
-        <button
-          data-testid="editor-toggle-cuts"
-          type="button"
-          disabled={setCuts.isPending || cutsQuery.isLoading}
-          onClick={() => setCuts.mutate({ enabled: !cutsEnabled })}
+        />
+        <ToolbarButton
+          testId="editor-toggle-cuts"
+          icon={<IconScissors />}
+          label={t("editor.toggleCuts")}
           title={t("editor.toggleCutsTitle")}
-          aria-pressed={cutsEnabled}
-          className={`text-xs px-2.5 py-1 rounded-md transition-colors ${
-            cutsEnabled
-              ? "bg-purple-100 text-purple-700 font-medium cursor-pointer"
-              : "text-slate-500 hover:text-slate-700 hover:bg-slate-100 cursor-pointer"
-          }`}
-        >
-          {t("editor.toggleCuts")}
-        </button>
+          disabled={setCuts.isPending || cutsQuery.isLoading}
+          active={cutsEnabled}
+          onClick={() => setCuts.mutate({ enabled: !cutsEnabled })}
+        />
         {selectedControl && (
           <span
             data-testid="editor-selected-info"
             className="text-xs text-slate-600 truncate"
           >
             {t("editor.selectedControl", { code: selectedControl.code })}
-            {" · "}
-            {t("editor.position", {
-              x: selectedControl.mapX.toFixed(1),
-              y: selectedControl.mapY.toFixed(1),
-            })}
+            {/* Coordinates are desktop-only; on a phone the code plus
+                badges is all the row has room for. */}
+            <span className="hidden sm:inline">
+              {" · "}
+              {t("editor.position", {
+                x: selectedControl.mapX.toFixed(1),
+                y: selectedControl.mapY.toFixed(1),
+              })}
+            </span>
             {contextBadge && (
               <span
                 data-testid="editor-toolbar-srr"
