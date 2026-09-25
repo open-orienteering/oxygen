@@ -50,6 +50,8 @@ export interface RenderMapObjectsOptions {
 /** ISOM 2017-2 symbol 709 (2022 revision) at 1:15 000. */
 export const OUT_OF_BOUNDS_LINE_MM = 0.2;
 export const OUT_OF_BOUNDS_GAP_MM = 1.2;
+/** ISOM 709 bounding line width (Feb 2024 revision). */
+export const OUT_OF_BOUNDS_BORDER_MM = 0.4;
 
 const FONT_STACKS = {
   sans: "Liberation Sans, Arial, sans-serif",
@@ -142,6 +144,7 @@ function resolveFill(
     case "solid":
       return fill ?? "none";
     case "whiteout":
+    case "whiteoutInverted":
       return "#ffffff";
     case "outOfBounds":
       return patternId ? `url(#${patternId})` : "none";
@@ -159,6 +162,42 @@ function strokeAttrs(
     return `stroke="none"`;
   }
   return `stroke="${stroke}" stroke-width="${strokeWidthMm}"`;
+}
+
+/**
+ * Resolve stroke for a rect/path. Out-of-bounds borders always use the
+ * course purple (ISOM 709), ignoring any stored stroke colour.
+ */
+export function resolveObjectStroke(
+  fillMode: MapFillMode | undefined,
+  stroke: string | undefined,
+  strokeWidthMm: number | undefined,
+  purple: string,
+): { stroke: string | undefined; strokeWidthMm: number | undefined } {
+  if (!stroke || strokeWidthMm === undefined) {
+    return { stroke: undefined, strokeWidthMm: undefined };
+  }
+  if (fillMode === "outOfBounds") {
+    return { stroke: purple, strokeWidthMm };
+  }
+  return { stroke, strokeWidthMm };
+}
+
+function frameRingPath(frame: MapRect): string {
+  const { x, y, width, height } = frame;
+  return `M ${x} ${y} L ${x + width} ${y} L ${x + width} ${y + height} L ${x} ${y + height} Z`;
+}
+
+function rectPathData(x: number, y: number, width: number, height: number): string {
+  return `M ${x} ${y} L ${x + width} ${y} L ${x + width} ${y + height} L ${x} ${y + height} Z`;
+}
+
+function isClosedFill(fillMode: MapFillMode): boolean {
+  return (
+    fillMode === "whiteout" ||
+    fillMode === "whiteoutInverted" ||
+    fillMode === "outOfBounds"
+  );
 }
 
 /**
@@ -239,11 +278,23 @@ function renderObject(
         defs.push(outOfBoundsPatternDef(patternId, purple, overprintScale));
       }
       const fill = resolveFill(fillMode, object.fill, patternId);
-      const closed =
-        object.closed ||
-        fillMode === "whiteout" ||
-        fillMode === "outOfBounds";
-      return `<path ${common} d="${pathData(points, closed)}" ${strokeAttrs(object.stroke, object.strokeWidthMm)} fill="${fill}"/>`;
+      const closed = object.closed || isClosedFill(fillMode);
+      const shapePath = pathData(points, closed);
+      const resolved = resolveObjectStroke(
+        fillMode,
+        object.stroke,
+        object.strokeWidthMm,
+        purple,
+      );
+      if (fillMode === "whiteoutInverted") {
+        const ring = `${frameRingPath(options.frame)} ${shapePath}`;
+        const border =
+          resolved.stroke !== undefined
+            ? `<path d="${shapePath}" fill="none" ${strokeAttrs(resolved.stroke, resolved.strokeWidthMm)}/>`
+            : "";
+        return `<g ${common}><path d="${ring}" fill="${fill}" fill-rule="evenodd" stroke="none"/>${border}</g>`;
+      }
+      return `<path ${common} d="${shapePath}" ${strokeAttrs(resolved.stroke, resolved.strokeWidthMm)} fill="${fill}"/>`;
     }
     case "rectangle": {
       const p =
@@ -268,7 +319,22 @@ function renderObject(
         defs.push(outOfBoundsPatternDef(patternId, purple, overprintScale));
       }
       const fill = resolveFill(fillMode, object.fill, patternId);
-      return `<rect ${common} x="${p.x}" y="${p.y}" width="${size.width}" height="${size.height}" fill="${fill}" ${strokeAttrs(object.stroke, object.strokeWidthMm)}/>`;
+      const resolved = resolveObjectStroke(
+        fillMode,
+        object.stroke,
+        object.strokeWidthMm,
+        purple,
+      );
+      if (fillMode === "whiteoutInverted") {
+        const shapePath = rectPathData(p.x, p.y, size.width, size.height);
+        const ring = `${frameRingPath(options.frame)} ${shapePath}`;
+        const border =
+          resolved.stroke !== undefined
+            ? `<path d="${shapePath}" fill="none" ${strokeAttrs(resolved.stroke, resolved.strokeWidthMm)}/>`
+            : "";
+        return `<g ${common}><path d="${ring}" fill="${fill}" fill-rule="evenodd" stroke="none"/>${border}</g>`;
+      }
+      return `<rect ${common} x="${p.x}" y="${p.y}" width="${size.width}" height="${size.height}" fill="${fill}" ${strokeAttrs(resolved.stroke, resolved.strokeWidthMm)}/>`;
     }
     case "image": {
       const p =

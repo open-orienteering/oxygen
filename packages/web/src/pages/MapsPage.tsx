@@ -744,7 +744,7 @@ export function MapsPage() {
 }
 
 function formatMapIssue(
-  t: (key: "templateMissing" | "mapScaleMissing" | "controlOutsideFrame" | "descriptionOutsidePage" | "objectOutsidePageNamed" | "objectKindText" | "objectKindLine" | "objectKindPath" | "objectKindRectangle" | "objectKindWhiteout" | "objectKindOutOfBounds" | "objectKindPolygon" | "objectKindImage", options?: Record<string, string>) => string,
+  t: (key: "templateMissing" | "mapScaleMissing" | "controlOutsideFrame" | "descriptionOutsidePage" | "objectOutsidePageNamed" | "objectKindText" | "objectKindLine" | "objectKindPath" | "objectKindRectangle" | "objectKindWhiteout" | "objectKindWhiteoutInverted" | "objectKindOutOfBounds" | "objectKindPolygon" | "objectKindImage", options?: Record<string, string>) => string,
   issue: { code: string; controlId?: string; objectId?: string; message?: string },
   objects: CourseMapView["objects"],
 ): string {
@@ -774,18 +774,22 @@ function formatMapIssue(
         label =
           object.fillMode === "whiteout"
             ? t("objectKindWhiteout")
-            : object.fillMode === "outOfBounds"
-              ? t("objectKindOutOfBounds")
-              : object.closed
-                ? t("objectKindPolygon")
-                : t("objectKindPath");
+            : object.fillMode === "whiteoutInverted"
+              ? t("objectKindWhiteoutInverted")
+              : object.fillMode === "outOfBounds"
+                ? t("objectKindOutOfBounds")
+                : object.closed
+                  ? t("objectKindPolygon")
+                  : t("objectKindPath");
       } else if (object?.kind === "rectangle") {
         label =
           object.fillMode === "whiteout"
             ? t("objectKindWhiteout")
-            : object.fillMode === "outOfBounds"
-              ? t("objectKindOutOfBounds")
-              : t("objectKindRectangle");
+            : object.fillMode === "whiteoutInverted"
+              ? t("objectKindWhiteoutInverted")
+              : object.fillMode === "outOfBounds"
+                ? t("objectKindOutOfBounds")
+                : t("objectKindRectangle");
       }
       return t("objectOutsidePageNamed", { name: label });
     }

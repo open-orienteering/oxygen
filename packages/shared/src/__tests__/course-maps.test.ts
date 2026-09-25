@@ -7,6 +7,7 @@ import {
   defaultMapFrame,
   expandMapText,
   getPaperDimensions,
+  isWhiteoutObject,
   mapToPage,
   mapWindowForFrame,
   pageToMap,
@@ -50,6 +51,26 @@ describe("course map schemas and geometry", () => {
         printScale: 0,
       }),
     ).toThrow();
+  });
+
+  it("parses whiteoutInverted and treats it as a white-out", () => {
+    const inverted = courseMapObjectSchema.parse({
+      id: "inv",
+      kind: "path",
+      anchor: "page",
+      points: [
+        { x: 10, y: 10 },
+        { x: 50, y: 10 },
+        { x: 30, y: 40 },
+      ],
+      fillMode: "whiteoutInverted",
+      closed: true,
+    });
+    expect(inverted).toMatchObject({
+      kind: "path",
+      fillMode: "whiteoutInverted",
+    });
+    expect(isWhiteoutObject(inverted as CourseMapObject)).toBe(true);
   });
 
   it("normalizes legacy whiteout kinds into fillMode whiteout", () => {
@@ -440,6 +461,30 @@ describe("course map SVG generators", () => {
           height: 15,
           fillMode: "outOfBounds",
         },
+        {
+          id: "oob-border",
+          kind: "rectangle",
+          anchor: "page",
+          x: 70,
+          y: 40,
+          width: 20,
+          height: 15,
+          fillMode: "outOfBounds",
+          stroke: "#ff0000",
+          strokeWidthMm: 0.4,
+        },
+        {
+          id: "inverted",
+          kind: "rectangle",
+          anchor: "page",
+          x: 20,
+          y: 20,
+          width: 30,
+          height: 25,
+          fillMode: "whiteoutInverted",
+          stroke: "#000000",
+          strokeWidthMm: 0.35,
+        },
       ],
       frame: document.mapFrame,
       window: { minX: 0, minY: 0, width: 100, height: 100 },
@@ -455,6 +500,22 @@ describe("course map SVG generators", () => {
     expect(svg).toContain('id="oob-oob"');
     expect(svg).toContain('stroke-width="0.4"'); // 0.2 mm * overprintScale 2
     expect(svg).not.toContain("mix-blend-mode");
+    // OOB border ignores stored stroke colour and uses purple.
+    expect(svg).toContain('data-object-id="oob-border"');
+    expect(svg).toMatch(
+      /data-object-id="oob-border"[^>]*stroke="#a626ff"/,
+    );
+    expect(svg).not.toMatch(
+      /data-object-id="oob-border"[^>]*stroke="#ff0000"/,
+    );
+    // OOB without border has stroke="none".
+    expect(svg).toMatch(/data-object-id="oob"[^>]*stroke="none"/);
+    // Inverted white-out is an even-odd ring against the map frame.
+    expect(svg).toContain('data-object-id="inverted"');
+    expect(svg).toContain('fill-rule="evenodd"');
+    expect(svg).toContain(
+      `M ${document.mapFrame.x} ${document.mapFrame.y} L ${document.mapFrame.x + document.mapFrame.width} ${document.mapFrame.y}`,
+    );
   });
 });
 

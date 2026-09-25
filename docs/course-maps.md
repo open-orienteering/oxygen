@@ -250,10 +250,17 @@ keep a single title row over code-sorted control rows.
 
 Choose an object tool and click its intended page position to create it;
 `Escape` cancels an armed tool. Rectangles and polygons share a **Fill**
-property: none, solid colour, white-out, or ISOM 709 out-of-bounds purple
-cross-hatch (0.2 mm lines / 1.2 mm gap at the base map scale, enlarged by
-`overprintScale`). An optional border toggle controls stroke. Paths support
-inserting and removing vertices. Alt-drag
+property: none, solid colour, white-out, white-out outside (ink saver), or
+ISOM 709 out-of-bounds purple cross-hatch (0.2 mm lines / 1.2 mm gap at the
+base map scale, enlarged by `overprintScale`). An optional border toggle
+controls stroke. Out-of-bounds borders default to the ISOM 709 bounding line
+(0.4 mm, Feb 2024 revision) and always use the course purple — the colour
+picker is locked so a later purple change recolours them. **White-out
+outside** draws an even-odd ring against the map frame (everything inside
+the frame except the shape is opaque white), so print ink is only spent on
+the area of interest; click the white ring to select it, click inside the
+shape hole to pass through to objects underneath. Paths support inserting
+and removing vertices. Alt-drag
 a selected vertex to create symmetric cubic Bezier handles. Text supports
 sans-serif, serif, condensed and monospace fonts; clicking a variable inserts
 it at the current text cursor. Objects can be fixed to paper or anchored to

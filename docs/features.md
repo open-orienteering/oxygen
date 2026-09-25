@@ -79,7 +79,8 @@ panels (Tools, Page, Graphics, Objects, Properties) keep the canvas usable on
 mobile; the Objects card lists and deletes anything, including perfectly
 stacked objects, and warns when items sit outside the printable area. The
 editor supports click-to-place text, rectangles, polygons and paths with a
-shared fill mode (none / solid / white-out / ISOM 709 out-of-bounds hatch),
+shared fill mode (none / solid / white-out / white-out outside for ink
+saving / ISOM 709 out-of-bounds hatch with purple-locked 0.4 mm border),
 editable Bezier paths, and uploaded SVG/PNG graphics (free resize, Ctrl/Cmd
 proportional, Shift crop) from a per-event or club library. Course overprint
 follows ISOM: circles, numbers and lines enlarge with the map when the print

@@ -81,12 +81,15 @@ export const mapLineObjectSchema = z.object({
  * - `none` — stroke only (or invisible if no stroke)
  * - `solid` — solid colour from `fill`
  * - `whiteout` — opaque white, drawn under the course overlay
+ * - `whiteoutInverted` — opaque white outside the shape (even-odd ring
+ *   against the map frame), for ink-saving print areas
  * - `outOfBounds` — ISOM 709 purple cross-hatch
  */
 export const mapFillModeSchema = z.enum([
   "none",
   "solid",
   "whiteout",
+  "whiteoutInverted",
   "outOfBounds",
 ]);
 export type MapFillMode = z.infer<typeof mapFillModeSchema>;
@@ -170,7 +173,15 @@ export type CourseMapObject = z.infer<typeof courseMapObjectUnion>;
 export function isWhiteoutObject(object: CourseMapObject): boolean {
   return (
     (object.kind === "rectangle" || object.kind === "path") &&
-    object.fillMode === "whiteout"
+    (object.fillMode === "whiteout" || object.fillMode === "whiteoutInverted")
+  );
+}
+
+/** True when the white-out fills everything outside the shape (ink saver). */
+export function isInvertedWhiteoutObject(object: CourseMapObject): boolean {
+  return (
+    (object.kind === "rectangle" || object.kind === "path") &&
+    object.fillMode === "whiteoutInverted"
   );
 }
 
