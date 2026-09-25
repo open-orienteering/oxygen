@@ -45,6 +45,8 @@ import { EditorHelp } from "./EditorHelp";
 import {
   IconFullscreenEnter,
   IconFullscreenExit,
+  IconRedo,
+  IconUndo,
 } from "./map-icons";
 import { fileToBase64 } from "../lib/file-to-base64";
 import {
@@ -1659,100 +1661,156 @@ export function MapLayoutEditor({
       data-testid="map-layout-editor"
       className="fixed inset-0 z-50 flex flex-col bg-slate-100"
     >
-      <header className="flex flex-wrap items-center gap-1.5 border-b border-slate-200 bg-white px-3 py-1.5 shadow-sm">
-        <h2 className="mr-1 truncate text-sm font-semibold text-slate-900">
-          {t("editorTitle")}: {mapName}
-        </h2>
-        <EditorHelp
-          testId="map-editor-help"
-          label={t("editorHelpAria")}
-          hint={t(mode === "template" ? "editorHelpTemplate" : "editorHelpMap")}
-        />
-        <span className="mx-1 hidden h-4 w-px bg-slate-200 sm:inline-block" />
-        <button
-          type="button"
-          data-testid="map-editor-undo"
-          disabled={history.past.length === 0}
-          onClick={undo}
-          title={t("undo")}
-          className={`rounded-md px-2 py-1.5 text-lg leading-none transition-colors ${
-            history.past.length > 0
-              ? "cursor-pointer text-slate-500 hover:bg-slate-100 hover:text-slate-700"
-              : "cursor-not-allowed text-slate-300"
-          }`}
-        >
-          ⟲
-        </button>
-        <button
-          type="button"
-          data-testid="map-editor-redo"
-          disabled={history.future.length === 0}
-          onClick={redo}
-          title={t("redo")}
-          className={`rounded-md px-2 py-1.5 text-lg leading-none transition-colors ${
-            history.future.length > 0
-              ? "cursor-pointer text-slate-500 hover:bg-slate-100 hover:text-slate-700"
-              : "cursor-not-allowed text-slate-300"
-          }`}
-        >
-          ⟳
-        </button>
-        <div className="flex items-center rounded-md border border-slate-200">
-          <button
-            type="button"
-            title={t("zoomOut")}
-            onClick={() =>
-              setViewport((current) =>
-                zoomEditorViewport(
-                  current,
-                  paper,
-                  {
-                    x: current.x + current.width / 2,
-                    y: current.y + current.height / 2,
-                  },
-                  current.zoom / 1.25,
-                ),
-              )
-            }
-            className="px-2 py-1 text-sm text-slate-600 hover:bg-slate-50"
-          >
-            −
-          </button>
-          <button
-            type="button"
-            data-testid="map-zoom-reset"
-            title={t("resetZoom")}
-            onClick={() => setViewport(initialEditorViewport(paper))}
-            className="border-x border-slate-200 px-2 py-1 text-xs text-slate-600 hover:bg-slate-50"
-          >
-            {Math.round(viewport.zoom * 100)}%
-          </button>
-          <button
-            type="button"
-            title={t("zoomIn")}
-            onClick={() =>
-              setViewport((current) =>
-                zoomEditorViewport(
-                  current,
-                  paper,
-                  {
-                    x: current.x + current.width / 2,
-                    y: current.y + current.height / 2,
-                  },
-                  current.zoom * 1.25,
-                ),
-              )
-            }
-            className="px-2 py-1 text-sm text-slate-600 hover:bg-slate-50"
-          >
-            +
-          </button>
+      {/* Two rows on a phone — title + window controls, then the tools —
+          and a single row from `sm` up. The row wrappers switch to
+          `display: contents` at `sm`, so their children join the header's
+          flex line directly and `order` puts the window controls last. */}
+      <header
+        data-testid="map-editor-header"
+        className="flex flex-wrap items-center gap-1.5 border-b border-slate-200 bg-white px-2 py-1.5 shadow-sm sm:px-3"
+      >
+        <div className="flex w-full min-w-0 items-center gap-1.5 sm:contents">
+          <h2 className="min-w-0 flex-1 truncate text-sm font-semibold text-slate-900 sm:mr-1 sm:flex-none">
+            {t("editorTitle")}: {mapName}
+          </h2>
+          <EditorHelp
+            testId="map-editor-help"
+            label={t("editorHelpAria")}
+            hint={t(mode === "template" ? "editorHelpTemplate" : "editorHelpMap")}
+          />
+          <div className="ml-auto flex shrink-0 items-center gap-1.5 sm:order-last">
+            <button
+              type="button"
+              data-testid="map-editor-fullscreen"
+              onClick={toggleFullscreen}
+              title={isFullscreen ? t("exitFullscreen") : t("enterFullscreen")}
+              aria-label={
+                isFullscreen ? t("exitFullscreen") : t("enterFullscreen")
+              }
+              className="rounded-md p-2 text-slate-500 hover:bg-slate-100 hover:text-slate-700 sm:p-1.5"
+            >
+              {isFullscreen ? (
+                <IconFullscreenExit className="h-5 w-5 sm:h-4 sm:w-4" />
+              ) : (
+                <IconFullscreenEnter className="h-5 w-5 sm:h-4 sm:w-4" />
+              )}
+            </button>
+            <button
+              type="button"
+              data-testid="map-editor-close"
+              onClick={() => void requestClose()}
+              title={t("closeEditor")}
+              aria-label={t("closeEditor")}
+              className="rounded-md p-2 text-slate-500 hover:bg-slate-100 hover:text-slate-700 sm:p-1.5"
+            >
+              <svg
+                className="h-5 w-5 sm:h-4 sm:w-4"
+                fill="none"
+                viewBox="0 0 24 24"
+                stroke="currentColor"
+                aria-hidden="true"
+              >
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  strokeWidth={2}
+                  d="M6 18L18 6M6 6l12 12"
+                />
+              </svg>
+            </button>
+          </div>
         </div>
-        {mode === "template" && onPreviewCourseChange && (
-          <label className="ml-1 flex items-center gap-1.5 text-xs font-medium text-slate-600">
-            {t("previewCourse")}
+        <div className="flex w-full min-w-0 items-center gap-1.5 sm:contents">
+          <span className="mx-1 hidden h-4 w-px bg-slate-200 sm:inline-block" />
+          <button
+            type="button"
+            data-testid="map-editor-undo"
+            disabled={history.past.length === 0}
+            onClick={undo}
+            title={t("undo")}
+            aria-label={t("undo")}
+            className={`rounded-md p-2 transition-colors sm:p-1.5 ${
+              history.past.length > 0
+                ? "cursor-pointer text-slate-500 hover:bg-slate-100 hover:text-slate-700"
+                : "cursor-not-allowed text-slate-300"
+            }`}
+          >
+            <IconUndo className="h-5 w-5" />
+          </button>
+          <button
+            type="button"
+            data-testid="map-editor-redo"
+            disabled={history.future.length === 0}
+            onClick={redo}
+            title={t("redo")}
+            aria-label={t("redo")}
+            className={`rounded-md p-2 transition-colors sm:p-1.5 ${
+              history.future.length > 0
+                ? "cursor-pointer text-slate-500 hover:bg-slate-100 hover:text-slate-700"
+                : "cursor-not-allowed text-slate-300"
+            }`}
+          >
+            <IconRedo className="h-5 w-5" />
+          </button>
+          <div className="flex shrink-0 items-center rounded-md border border-slate-200">
+            <button
+              type="button"
+              title={t("zoomOut")}
+              onClick={() =>
+                setViewport((current) =>
+                  zoomEditorViewport(
+                    current,
+                    paper,
+                    {
+                      x: current.x + current.width / 2,
+                      y: current.y + current.height / 2,
+                    },
+                    current.zoom / 1.25,
+                  ),
+                )
+              }
+              className="px-2 py-1 text-sm text-slate-600 hover:bg-slate-50"
+            >
+              −
+            </button>
+            <button
+              type="button"
+              data-testid="map-zoom-reset"
+              title={t("resetZoom")}
+              onClick={() => setViewport(initialEditorViewport(paper))}
+              className="border-x border-slate-200 px-2 py-1 text-xs text-slate-600 hover:bg-slate-50"
+            >
+              {Math.round(viewport.zoom * 100)}%
+            </button>
+            <button
+              type="button"
+              title={t("zoomIn")}
+              onClick={() =>
+                setViewport((current) =>
+                  zoomEditorViewport(
+                    current,
+                    paper,
+                    {
+                      x: current.x + current.width / 2,
+                      y: current.y + current.height / 2,
+                    },
+                    current.zoom * 1.25,
+                  ),
+                )
+              }
+              className="px-2 py-1 text-sm text-slate-600 hover:bg-slate-50"
+            >
+              +
+            </button>
+          </div>
+          {mode === "template" && onPreviewCourseChange && (
+            // No visible caption: the "no course" option reads as the label,
+            // and the caption was what pushed the header onto a third row on
+            // phones. The name stays on the control for screen readers.
             <select
               data-testid="map-template-preview-course"
+              aria-label={t("previewCourse")}
+              title={t("previewCourse")}
               value={previewCourseId ?? ""}
               onChange={(event) =>
                 onPreviewCourseChange(
@@ -1761,7 +1819,7 @@ export function MapLayoutEditor({
                     : undefined,
                 )
               }
-              className="rounded-md border border-slate-200 px-2 py-1 text-sm"
+              className="min-w-0 max-w-[11rem] rounded-md border border-slate-200 px-2 py-1.5 text-sm sm:ml-1 sm:max-w-none sm:py-1"
             >
               <option value="">{t("noPreviewCourse")}</option>
               {previewCourses.map((course) => (
@@ -1770,70 +1828,31 @@ export function MapLayoutEditor({
                 </option>
               ))}
             </select>
-          </label>
-        )}
-        <div className="ml-auto flex items-center gap-1.5">
-          {!previewReady && !previewError && (
-            <span
-              data-testid="map-preview-loading"
-              className="inline-flex items-center gap-1.5 rounded-full bg-slate-100 px-2.5 py-1 text-xs text-slate-600"
-            >
-              <span className="h-3 w-3 animate-spin rounded-full border-2 border-slate-300 border-t-blue-600" />
-              {t("previewLoading")}
-            </span>
           )}
-          {saveStatusLabel && (
-            <span
-              data-testid="map-layout-save-status"
-              className="text-xs text-slate-500"
-            >
-              {saveStatusLabel}
-            </span>
-          )}
-          {saveError && (
-            <span className="text-xs text-red-600" role="alert">
-              {saveError}
-            </span>
-          )}
-          <button
-            type="button"
-            data-testid="map-editor-fullscreen"
-            onClick={toggleFullscreen}
-            title={isFullscreen ? t("exitFullscreen") : t("enterFullscreen")}
-            aria-label={
-              isFullscreen ? t("exitFullscreen") : t("enterFullscreen")
-            }
-            className="rounded-md p-1.5 text-slate-500 hover:bg-slate-100 hover:text-slate-700"
-          >
-            {isFullscreen ? (
-              <IconFullscreenExit className="h-4 w-4" />
-            ) : (
-              <IconFullscreenEnter className="h-4 w-4" />
+          <div className="ml-auto flex min-w-0 items-center gap-1.5">
+            {!previewReady && !previewError && (
+              <span
+                data-testid="map-preview-loading"
+                className="inline-flex items-center gap-1.5 rounded-full bg-slate-100 px-2.5 py-1 text-xs text-slate-600"
+              >
+                <span className="h-3 w-3 animate-spin rounded-full border-2 border-slate-300 border-t-blue-600" />
+                <span className="hidden sm:inline">{t("previewLoading")}</span>
+              </span>
             )}
-          </button>
-          <button
-            type="button"
-            data-testid="map-editor-close"
-            onClick={() => void requestClose()}
-            title={t("closeEditor")}
-            aria-label={t("closeEditor")}
-            className="rounded-md p-1.5 text-slate-500 hover:bg-slate-100 hover:text-slate-700"
-          >
-            <svg
-              className="h-4 w-4"
-              fill="none"
-              viewBox="0 0 24 24"
-              stroke="currentColor"
-              aria-hidden="true"
-            >
-              <path
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                strokeWidth={2}
-                d="M6 18L18 6M6 6l12 12"
-              />
-            </svg>
-          </button>
+            {saveStatusLabel && (
+              <span
+                data-testid="map-layout-save-status"
+                className="truncate text-xs text-slate-500"
+              >
+                {saveStatusLabel}
+              </span>
+            )}
+            {saveError && (
+              <span className="truncate text-xs text-red-600" role="alert">
+                {saveError}
+              </span>
+            )}
+          </div>
         </div>
       </header>
 

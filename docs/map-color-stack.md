@@ -58,11 +58,26 @@ renders pass
 `objects: file.objects.filter(o => Math.floor(o.sym / 1000) !== 601)`
 into `ocadToSvg` / `objectsInWindow`. The composite keeps all objects.
 
+**What the spec says.** ISOM 2017 Appendix 1 (chapter 4, colour order)
+puts *Black* and *Blue 100 % lines and point symbols* **above** *Purple
+(course setting)* — the lower purple — and ISOM 601 magnetic north lines
+are black or blue 100 % line symbols. So by the letter of the IOF colour
+order north lines sit **on top of** control circles and legs (still under
+upper purple: control numbers, marked routes). `north_lines_below = true`
+is therefore a deliberate deviation for legibility, not the default the
+spec prescribes. The option is kept because some clubs prefer it, but it
+is a base-map property: it is set on the club-library map card
+(**Settings → Base maps**) and is no longer offered per event on the
+course editor's map footer.
+
 ## UI / API
 
 - Event map: `course.setMapColorStack` + MapPanel select
-  (`data-testid="map-color-profile"`) and north-lines checkbox.
-- Club library: `clubMap.setColorStack` + Settings → Maps card controls.
+  (`data-testid="map-color-profile"`). The north-lines checkbox was
+  removed from the editor in September 2026 (see above); the API field
+  remains.
+- Club library: `clubMap.setColorStack` + Settings → Maps card controls
+  (colour profile select + north-lines checkbox).
 - `course.mapMetadata` exposes `colorProfile`, `northLinesBelow`,
   `resolvedProfile`, `resolvedBy`, and `renderKey`.
 

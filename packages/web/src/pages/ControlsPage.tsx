@@ -214,9 +214,14 @@ export function ControlsPage() {
         </button>
       </div>
 
-      {/* AIR+ toggle + station mode buttons */}
-      <div className="flex items-center justify-between mb-4">
-        <div className="flex items-center gap-4">
+      {/* AIR+ toggle + station mode buttons. Both groups wrap so the row
+          never runs past a phone screen: the station buttons drop to their
+          own line, and inside each group the items reflow. */}
+      <div
+        data-testid="controls-toolbar"
+        className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2 mb-4"
+      >
+        <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
           <span className="text-sm text-slate-500">
             {t("controlsCount", { count: items.length })}
           </span>
@@ -248,10 +253,10 @@ export function ControlsPage() {
             </select>
           </label>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           <button
             onClick={() => setStationMode(stationMode === "programming" ? null : "programming")}
-            className={`px-3 py-1.5 text-sm font-medium rounded-lg transition-colors cursor-pointer flex items-center gap-1.5 ${
+            className={`px-3 py-1.5 text-sm font-medium rounded-lg transition-colors cursor-pointer flex items-center gap-1.5 whitespace-nowrap ${
               stationMode === "programming"
                 ? "bg-blue-600 text-white"
                 : "bg-white border border-slate-200 text-slate-700 hover:bg-slate-50"
@@ -265,7 +270,7 @@ export function ControlsPage() {
           </button>
           <button
             onClick={() => setStationMode(stationMode === "readout" ? null : "readout")}
-            className={`px-3 py-1.5 text-sm font-medium rounded-lg transition-colors cursor-pointer flex items-center gap-1.5 ${
+            className={`px-3 py-1.5 text-sm font-medium rounded-lg transition-colors cursor-pointer flex items-center gap-1.5 whitespace-nowrap ${
               stationMode === "readout"
                 ? "bg-amber-600 text-white"
                 : "bg-white border border-slate-200 text-slate-700 hover:bg-slate-50"

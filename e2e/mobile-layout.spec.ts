@@ -231,6 +231,109 @@ test.describe.serial("mobile layout", () => {
     }
   });
 
+  test("editor, template and controls toolbars fit a phone", async ({ page }) => {
+    test.setTimeout(120_000);
+    await page.goto("/");
+    await page.getByText("My example tävling").click();
+    await expect(page.getByRole("link", { name: "Dashboard" })).toBeVisible({
+      timeout: 15000,
+    });
+    // Map was uploaded in the first serial test.
+    await expect(page.getByTestId("map-viewer").first()).toBeVisible({ timeout: 60000 });
+
+    // ── Course editor: icon-only toggles, touch-sized undo/redo, one row.
+    await clickTab(page, "Course Editor");
+    await expect(page.getByTestId("course-editor-page")).toBeVisible({ timeout: 15000 });
+    const mapToolbar = page.getByTestId("map-toolbar");
+    await expect(mapToolbar).toBeVisible();
+    const toolbarBox = (await mapToolbar.boundingBox())!;
+    expect(toolbarBox.x + toolbarBox.width).toBeLessThanOrEqual(390);
+    // Every control sits inside the toolbar's own box — nothing spills
+    // over or overlaps a neighbour (the "Auto slits" over "Descriptions"
+    // bug).
+    const controls = [
+      page.getByTestId("editor-undo"),
+      page.getByTestId("editor-redo"),
+      page.getByTestId("editor-hide-others"),
+      page.getByTestId("editor-toggle-cuts"),
+      page.getByTestId("map-toggle-descriptions"),
+    ];
+    const boxes = [];
+    for (const control of controls) {
+      await expect(control).toBeVisible();
+      const box = (await control.boundingBox())!;
+      expect(box.x).toBeGreaterThanOrEqual(toolbarBox.x);
+      expect(box.x + box.width).toBeLessThanOrEqual(toolbarBox.x + toolbarBox.width + 0.5);
+      boxes.push(box);
+    }
+    for (let i = 1; i < boxes.length; i++) {
+      expect(boxes[i].x, `control ${i} overlaps its neighbour`).toBeGreaterThanOrEqual(
+        boxes[i - 1].x + boxes[i - 1].width - 0.5,
+      );
+    }
+    // Undo / redo are real touch targets now, not 12px glyphs.
+    expect(boxes[0].height).toBeGreaterThanOrEqual(36);
+    expect(boxes[0].width).toBeGreaterThanOrEqual(36);
+    // Labels collapse to icons below `sm`; the accessible names stay.
+    await expect(page.getByTestId("editor-toggle-cuts").getByText("Auto slits")).toBeHidden();
+    await expect(
+      page.getByTestId("editor-hide-others").getByText("Hide other controls"),
+    ).toBeHidden();
+    await expect(page.getByRole("button", { name: "Auto slits" })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Descriptions" })).toBeVisible();
+    // The per-event "north lines under purple" checkbox is gone from the
+    // editor; it stays a club-library map setting.
+    await expect(page.getByTestId("map-north-lines-below")).toHaveCount(0);
+
+    // ── Controls page: the AIR+ / station-mode row wraps instead of
+    // pushing the page wider than the screen.
+    await clickTab(page, "Controls");
+    await expect(page.getByTestId("controls-toolbar")).toBeVisible({ timeout: 15000 });
+    const controlsToolbar = (await page.getByTestId("controls-toolbar").boundingBox())!;
+    expect(controlsToolbar.x + controlsToolbar.width).toBeLessThanOrEqual(390);
+    await expect(page.getByRole("button", { name: "Program Controls" })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Read Controls" })).toBeVisible();
+    expect(
+      await page.evaluate(() => document.documentElement.scrollWidth),
+    ).toBeLessThanOrEqual(390);
+
+    // ── Template editor: two header rows, no "Preview course" caption.
+    await clickTab(page, "Map templates");
+    await expect(page.getByTestId("map-templates-page")).toBeVisible({ timeout: 15000 });
+    await page.getByTestId("new-map-template").click();
+    await page.getByTestId("map-template-name").fill("E2E Mobile header");
+    await page.getByTestId("map-template-submit").click();
+    const templateRow = page
+      .locator("[data-testid^='map-template-']")
+      .filter({ hasText: "E2E Mobile header" });
+    await expect(templateRow).toBeVisible({ timeout: 15000 });
+    const templateSeq = (await templateRow.getAttribute("data-testid"))!.replace(
+      "map-template-",
+      "",
+    );
+    await page.getByTestId(`edit-template-layout-${templateSeq}`).click();
+    await expect(page.getByTestId("map-layout-editor")).toBeVisible();
+
+    const header = page.getByTestId("map-editor-header");
+    const headerBox = (await header.boundingBox())!;
+    expect(headerBox.x + headerBox.width).toBeLessThanOrEqual(390);
+    const undoBox = (await page.getByTestId("map-editor-undo").boundingBox())!;
+    const closeBox = (await page.getByTestId("map-editor-close").boundingBox())!;
+    expect(undoBox.height).toBeGreaterThanOrEqual(36);
+    // Window controls on the first row, tools on the second — and nothing
+    // on a third: the header is no taller than those two rows.
+    expect(undoBox.y).toBeGreaterThan(closeBox.y + closeBox.height - 1);
+    expect(headerBox.height).toBeLessThan(undoBox.height * 2 + 24);
+    await expect(page.getByText("Preview course")).toHaveCount(0);
+    const previewSelect = page.getByTestId("map-template-preview-course");
+    await expect(previewSelect).toBeVisible();
+    await expect(previewSelect).toHaveAccessibleName("Preview course");
+    const selectBox = (await previewSelect.boundingBox())!;
+    expect(selectBox.x + selectBox.width).toBeLessThanOrEqual(390);
+    await page.getByTestId("map-editor-close").click();
+    await expect(page.getByTestId("map-layout-editor")).toHaveCount(0);
+  });
+
   test("switching events resets viewport and tile state", async ({ page }) => {
     test.setTimeout(120_000);
     const uniqueName = `E2E Mobile Map Switch ${Date.now()}`;
