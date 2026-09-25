@@ -415,6 +415,81 @@ describe("competition.list filtering and create grant", () => {
       await ctx.db.event.delete({ where: { id: event.id } });
     }
   });
+
+  it("flags ownedByMe for the creator and co-admins only", async () => {
+    // The "My events" filter on the selector keys off this flag, so it has
+    // to follow the direct Event admin grant rather than instance admin
+    // status: an instance admin sees every event but owns none of them.
+    const created = await callerFor(member, null).competition.create({
+      name: "Owned for filter",
+      nameId: `oxygen_test_owned_by_me_${suffix}`,
+      date: "2099-08-03",
+    });
+    const event = await ctx.db.event.findUniqueOrThrow({
+      where: { nameId: created.nameId },
+    });
+    try {
+      await grantSystemGroup(ctx.db, {
+        eventId: event.id,
+        userId: setter.id,
+        groupId: SYSTEM_GROUP_IDS.eventAdmin,
+        grantedBy: admin.id,
+      });
+      const find = (list: { id: number; ownedByMe?: boolean }[]) =>
+        list.find((candidate) => candidate.id === Number(event.id));
+
+      expect(find(await callerFor(member, null).competition.list())?.ownedByMe).toBe(true);
+      expect(find(await callerFor(setter, null).competition.list())?.ownedByMe).toBe(true);
+      expect(find(await callerFor(admin, null).competition.list())?.ownedByMe).toBe(false);
+      // Crew has a role on the suite event, not on this one — invisible.
+      expect(find(await callerFor(crew, null).competition.list())).toBeUndefined();
+
+      // With auth off there is no "me": the flag is false everywhere.
+      expect(find(await makeCaller(null).competition.list())?.ownedByMe).toBe(false);
+    } finally {
+      await ctx.db.event.delete({ where: { id: event.id } });
+    }
+  });
+});
+
+describe("Eventor API key management", () => {
+  // The key is a club-wide credential kept in oxygen_settings. Reading
+  // whether one is configured is fine for any invited user (the import
+  // panel and the registration dialog need it), but storing or clearing
+  // one is an instance-admin action on the Settings → Eventor tab.
+  it("rejects key mutations from non-admins and allows the status read", async () => {
+    await expect(
+      callerFor(member, null).eventor.validateKey({ apiKey: "deadbeef", env: "test" }),
+    ).rejects.toMatchObject({ code: "FORBIDDEN" });
+    await expect(
+      callerFor(member, null).eventor.setKey({ apiKey: "deadbeef", env: "test" }),
+    ).rejects.toMatchObject({ code: "FORBIDDEN" });
+    await expect(
+      callerFor(member, null).eventor.clearKey({ env: "test" }),
+    ).rejects.toMatchObject({ code: "FORBIDDEN" });
+
+    const status = await callerFor(member, null).eventor.keyStatus({ env: "test" });
+    expect(typeof status.connected).toBe("boolean");
+  });
+
+  it("rejects identity-less callers when auth is on", async () => {
+    const anon = makeCaller(null, { user: null, authEnabled: true, identityEmail: null });
+    await expect(anon.eventor.keyStatus({ env: "test" })).rejects.toMatchObject({
+      code: "UNAUTHORIZED",
+    });
+    await expect(anon.eventor.clearKey({ env: "test" })).rejects.toMatchObject({
+      code: "UNAUTHORIZED",
+    });
+  });
+
+  it("lets an instance admin clear the key", async () => {
+    // clearKey never contacts Eventor, so it is safe to exercise for real.
+    // (validateKey does, and is covered end-to-end against the E2E stub.)
+    const result = await callerFor(admin, null).eventor.clearKey({ env: "test" });
+    expect(result).toEqual({ success: true });
+    const status = await callerFor(admin, null).eventor.keyStatus({ env: "test" });
+    expect(status.connected).toBe(false);
+  });
 });
 
 describe("kiosk key", () => {

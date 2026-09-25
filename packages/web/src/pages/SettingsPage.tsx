@@ -11,10 +11,11 @@ import { LibraryGroupsTab } from "./LibraryGroupsTab";
 import { LibraryClassesTab } from "./LibraryClassesTab";
 import { UsersAdminPanel } from "../components/UsersAdminPanel";
 import { MaintenancePanel } from "../components/MaintenancePanel";
+import { EventorKeysPanel } from "../components/EventorKeysPanel";
 import { NorthLinesBadge } from "../components/NorthLinesBadge";
 
 const CLUB_TABS = ["maps", "controls", "classes", "groups"] as const;
-const ADMIN_TABS = ["users", "maintenance"] as const;
+const ADMIN_TABS = ["users", "eventor", "maintenance"] as const;
 
 type SettingsTab = (typeof CLUB_TABS)[number] | (typeof ADMIN_TABS)[number];
 
@@ -24,6 +25,7 @@ const TAB_LABEL_KEYS = {
   classes: "tabClasses",
   groups: "tabGroups",
   users: "tabUsers",
+  eventor: "tabEventor",
   maintenance: "tabMaintenance",
 } as const satisfies Record<SettingsTab, string>;
 
@@ -157,6 +159,8 @@ export function SettingsPage() {
 
         {tab === "users" ? (
           <UsersAdminPanel />
+        ) : tab === "eventor" ? (
+          <EventorKeysPanel />
         ) : tab === "maintenance" ? (
           <MaintenancePanel />
         ) : tab === "groups" ? (

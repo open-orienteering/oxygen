@@ -121,4 +121,33 @@ describe("filterEvents", () => {
   it("has a label for every curated kind", () => {
     expect(Object.keys(EVENT_KIND_LABEL_KEYS)).toHaveLength(11);
   });
+
+  describe("onlyMine", () => {
+    const mixed = [
+      ev({ id: 1, name: "Mine", nameId: "mine", date: "2026-09-01", ownedByMe: true, kind: "club" }),
+      ev({ id: 2, name: "Theirs", nameId: "theirs", date: "2026-09-02", ownedByMe: false }),
+      // Auth off / legacy server: the flag is absent, which must read as
+      // "not mine" rather than crash or match.
+      ev({ id: 3, name: "Unknown", nameId: "unknown", date: "2026-09-03" }),
+    ];
+
+    it("keeps only events the current user owns", () => {
+      expect(filterEvents(mixed, { query: "", onlyMine: true }).map((e) => e.nameId)).toEqual([
+        "mine",
+      ]);
+    });
+
+    it("is off by default", () => {
+      expect(filterEvents(mixed, { query: "" })).toHaveLength(3);
+      expect(filterEvents(mixed, { query: "", onlyMine: false })).toHaveLength(3);
+    });
+
+    it("composes with query and kind", () => {
+      expect(
+        filterEvents(mixed, { query: "mine", kind: "club", onlyMine: true }).map((e) => e.nameId),
+      ).toEqual(["mine"]);
+      expect(filterEvents(mixed, { query: "", kind: "competition", onlyMine: true })).toEqual([]);
+      expect(filterEvents(mixed, { query: "theirs", onlyMine: true })).toEqual([]);
+    });
+  });
 });

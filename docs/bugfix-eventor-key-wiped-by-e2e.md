@@ -110,7 +110,9 @@ entry for the snapshot file. No production code changes.
 
 ## Recovery
 
-Re-enter your Eventor API key from the competition selector once. Any
+Re-enter your Eventor API key once under **Settings → Eventor**
+(`/settings?tab=eventor`; it used to be entered from the competition
+selector's import panel). Any
 existing competitions linked to `prod` will start working immediately
 (they only depend on the key being present in `oxygen.oxygen_settings`).
 

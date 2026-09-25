@@ -60,9 +60,11 @@ test.describe("Competition Selector — New Features", () => {
     });
   });
 
-  test("should open the Eventor import panel with API key step", async ({
+  test("import panel without a key points admins at Settings → Eventor", async ({
     page,
   }) => {
+    // The key form itself moved off the selector: it is now an admin-only
+    // Settings tab. The import panel only says where to go.
     await clearEventorKey(page);
     await page.goto("/");
     await expect(
@@ -74,34 +76,53 @@ test.describe("Competition Selector — New Features", () => {
       page.getByRole("heading", { name: "Import from Eventor" }),
     ).toBeVisible({ timeout: 3000 });
 
-    await expect(page.getByText("1. API Key")).toBeVisible();
-    await expect(page.getByText("2. Select & Import")).toBeVisible();
-    await expect(page.getByPlaceholder(/API key/)).toBeVisible();
-    await expect(page.getByRole("button", { name: "Connect" })).toBeVisible();
+    await expect(page.getByTestId("eventor-import-no-key")).toBeVisible();
+    await expect(page.getByPlaceholder(/API key/)).toHaveCount(0);
+    await expect(page.getByText("1. API Key")).toHaveCount(0);
+
+    await page.getByTestId("eventor-import-settings-link").click();
+    await expect(page).toHaveURL(/\/settings\?tab=eventor/);
+    await expect(page.getByTestId("eventor-keys-panel")).toBeVisible();
   });
 
-  test("should validate Eventor API key and show event list", async ({
+  test("admin stores the key under Settings → Eventor and the import panel lists events", async ({
     page,
   }) => {
-    // Served by e2e/eventor-stub.mjs, so this no longer needs a real key
-    // or a reachable Eventor.
+    // Served by e2e/eventor-stub.mjs, so this needs neither a real key
+    // nor a reachable Eventor.
     await clearEventorKey(page);
-    await page.goto("/");
-    await page.getByRole("button", { name: /Import from Eventor/ }).click();
-    await expect(page.getByPlaceholder(/API key/)).toBeVisible({
-      timeout: 3000,
-    });
+    await page.goto("/settings?tab=eventor");
+    const prod = page.getByTestId("eventor-key-card-prod");
+    await expect(prod).toBeVisible({ timeout: 10000 });
+    await expect(prod.getByTestId("eventor-key-status-prod")).toHaveText(
+      /No key configured/,
+    );
+    // The test-environment card is independent and starts empty too.
+    await expect(
+      page.getByTestId("eventor-key-card-test").getByTestId("eventor-key-status-test"),
+    ).toHaveText(/No key configured/);
 
-    await page
-      .getByPlaceholder(/API key/)
+    await prod
+      .getByTestId("eventor-key-input-prod")
       .fill("df34af90a0c64ca4abfe9492be057e9c");
-    await page.getByRole("button", { name: "Connect" }).click();
+    await prod.getByTestId("eventor-key-connect-prod").click();
+    await expect(prod.getByTestId("eventor-key-status-prod")).toHaveText(
+      /Connected: E2E Test Club/,
+      { timeout: 15000 },
+    );
+    await expect(prod.getByTestId("eventor-key-clear-prod")).toBeVisible();
+    await expect(prod.getByTestId("eventor-key-input-prod")).toHaveCount(0);
 
+    // Back on the selector the import panel goes straight to the list.
     // Assert against the stub's organisation and event names rather than
     // just the surrounding chrome, so this fails if the event list stops
     // reaching the UI.
+    await page.goto("/");
+    await page.getByRole("button", { name: /Import from Eventor/ }).click();
     await expect(page.getByText(/Connected:/)).toBeVisible({ timeout: 15000 });
     await expect(page.getByText(/E2E Test Club/)).toBeVisible();
+    await expect(page.getByTestId("eventor-import-no-key")).toHaveCount(0);
+    await expect(page.getByTestId("eventor-manage-keys-link")).toBeVisible();
     await expect(page.getByPlaceholder("Search events...")).toBeVisible();
     await expect(page.getByText("E2E Stub Sprint")).toBeVisible({
       timeout: 15000,
@@ -109,6 +130,68 @@ test.describe("Competition Selector — New Features", () => {
     await expect(
       page.locator("button", { hasText: "Import" }).first(),
     ).toBeVisible();
+
+    // Removing the key flips the status back and empties the import panel.
+    await page.goto("/settings?tab=eventor");
+    await page.getByTestId("eventor-key-clear-prod").click();
+    await expect(page.getByTestId("eventor-key-status-prod")).toHaveText(
+      /No key configured/,
+      { timeout: 10000 },
+    );
+    await page.goto("/");
+    await page.getByRole("button", { name: /Import from Eventor/ }).click();
+    await expect(page.getByTestId("eventor-import-no-key")).toBeVisible({
+      timeout: 10000,
+    });
+  });
+
+  test("Eventor tab is hidden from members and its mutations are refused", async ({
+    browser,
+    page,
+  }) => {
+    // Invite a plain member, then look at Settings as them: no Eventor tab,
+    // deep link falls back to Base maps, and the API refuses the mutation.
+    const email = `eventor-member-${Date.now()}@oxygen.test`;
+    await clearEventorKey(page);
+    await page.goto("/settings?tab=users");
+    await expect(page.getByTestId("users-admin-panel")).toBeVisible({
+      timeout: 15000,
+    });
+    await page.getByTestId("invite-email").fill(email);
+    await page.getByTestId("invite-submit").click();
+    await expect(page.getByText(email)).toBeVisible({ timeout: 10000 });
+
+    const member = await browser.newContext({
+      extraHTTPHeaders: { "x-forwarded-email": email },
+    });
+    try {
+      const memberPage = await member.newPage();
+      await memberPage.goto("/settings?tab=eventor");
+      await expect(memberPage.getByTestId("library-tab-maps")).toBeVisible({
+        timeout: 15000,
+      });
+      await expect(memberPage.getByTestId("library-tab-eventor")).toHaveCount(0);
+      await expect(memberPage.getByTestId("eventor-keys-panel")).toHaveCount(0);
+      await expect(memberPage.getByTestId("library-dropzone")).toBeVisible();
+
+      const refused = await memberPage.request.post("/trpc/eventor.clearKey", {
+        data: { env: "test" },
+      });
+      expect(refused.status()).toBe(403);
+
+      // The import panel tells a member to ask an admin, without a link.
+      await memberPage.goto("/");
+      await memberPage.getByRole("button", { name: /Import from Eventor/ }).click();
+      await expect(memberPage.getByTestId("eventor-import-no-key")).toBeVisible({
+        timeout: 10000,
+      });
+      await expect(memberPage.getByText(/Ask an instance admin/)).toBeVisible();
+      await expect(
+        memberPage.getByTestId("eventor-import-settings-link"),
+      ).toHaveCount(0);
+    } finally {
+      await member.close();
+    }
   });
 
   test("should show delete confirmation dialog and allow cancel", async ({

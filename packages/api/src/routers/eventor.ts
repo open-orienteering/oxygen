@@ -16,7 +16,13 @@
 
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
-import { router, publicProcedure, authedProcedure, manageProcedure } from "../trpc.js";
+import {
+  router,
+  publicProcedure,
+  authedProcedure,
+  adminProcedure,
+  manageProcedure,
+} from "../trpc.js";
 import { getSetting, setSetting, prisma, sanitizeNameId, isReservedEventSlug } from "../db.js";
 import { grantSystemGroup } from "../permissions.js";
 import {
@@ -485,8 +491,14 @@ async function syncClubsFromEntries(
 
 export const eventorRouter = router({
   // ───────────── Key management ─────────────
+  //
+  // The API key is a club-wide credential (one row per environment in
+  // oxygen_settings), so writing it is an instance-admin action that lives
+  // on Settings → Eventor. Reading whether a key exists stays open to every
+  // invited user: the import panel and the registration dialog gate their
+  // UI on it. With AUTH_MODE=off both collapse to "anyone".
 
-  validateKey: publicProcedure
+  validateKey: adminProcedure
     .input(
       z.object({
         apiKey: z.string().min(1),
@@ -511,14 +523,14 @@ export const eventorRouter = router({
       }
     }),
 
-  clearKey: publicProcedure
+  clearKey: adminProcedure
     .input(z.object({ env: z.enum(["prod", "test"]).default("prod") }))
     .mutation(async ({ input }) => {
       await eventorKeyStore.clearKey(input.env);
       return { success: true as const };
     }),
 
-  keyStatus: publicProcedure
+  keyStatus: authedProcedure
     .input(z.object({ env: z.enum(["prod", "test"]).default("prod") }))
     .query(async ({ input }) => {
       const apiKey = await eventorKeyStore.getKey(input.env);
@@ -534,14 +546,14 @@ export const eventorRouter = router({
       };
     }),
 
-  getKey: publicProcedure
+  getKey: authedProcedure
     .input(z.object({ env: z.enum(["prod", "test"]).default("prod") }))
     .query(async ({ input }) => {
       const apiKey = await eventorKeyStore.getKey(input.env);
       return { hasKey: !!apiKey, env: input.env };
     }),
 
-  setKey: publicProcedure
+  setKey: adminProcedure
     .input(
       z.object({
         env: z.enum(["prod", "test"]).default("prod"),

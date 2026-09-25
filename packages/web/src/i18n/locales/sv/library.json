@@ -4,6 +4,7 @@
   "tabMaps": "Baskartor",
   "tabControls": "Kontroller",
   "tabUsers": "Användare",
+  "tabEventor": "Eventor",
   "tabMaintenance": "Underhåll",
   "mapsHeading": "Baskartor",
   "mapsHelp": "Ladda upp OCAD-kartor en gång för klubben. När du skapar en tävling väljer du en karta i listan — Oxygen kopierar den till tävlingen.",
