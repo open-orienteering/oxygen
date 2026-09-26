@@ -19,57 +19,28 @@ async function clickTab(page: import("@playwright/test").Page, name: string) {
 }
 
 test.describe("Event Page", () => {
-  test("should navigate to event page via tab", async ({ page }) => {
+  test("Event page shows info, data sync, and payment methods", async ({ page }) => {
     await selectCompetition(page);
     await clickTab(page, "Event");
 
     expect(page.url()).toContain("/event");
     await expect(page.getByText("Event Info")).toBeVisible({ timeout: 10000 });
-  });
 
-  test("should display competition info", async ({ page }) => {
-    await selectCompetition(page);
-    await clickTab(page, "Event");
-
-    await expect(page.getByText("Event Info")).toBeVisible({ timeout: 10000 });
-    // Scope to main content area to avoid matching the header title
     const main = page.getByRole("main");
     await expect(main.getByText("My example tävling")).toBeVisible();
     await expect(main.getByText("2026-04-15")).toBeVisible();
     await expect(main.getByText("itest")).toBeVisible();
-  });
 
-  test("should display data sync section", async ({ page }) => {
-    await selectCompetition(page);
-    await clickTab(page, "Event");
-
-    await expect(page.getByText("Data Sync")).toBeVisible({ timeout: 10000 });
-  });
-
-  test("should display registration settings section", async ({ page }) => {
-    await selectCompetition(page);
-    await clickTab(page, "Event");
-
-    await expect(page.getByText("Registration Settings")).toBeVisible({ timeout: 10000 });
-    await expect(page.getByText("Invoice")).toBeVisible();
-  });
-
-  test("should show payment method list in registration settings", async ({ page }) => {
-    await selectCompetition(page);
-    await clickTab(page, "Event");
-
-    await expect(page.getByText("Registration Settings")).toBeVisible({ timeout: 10000 });
+    await expect(page.getByText("Data Sync")).toBeVisible();
+    await expect(page.getByText("Registration Settings")).toBeVisible();
     await expect(page.getByText("Payment methods")).toBeVisible();
 
-    // Payment method names should be visible in the sortable list
-    const main = page.getByRole("main");
     await expect(main.getByText("Invoice")).toBeVisible();
     await expect(main.getByText("Pay on site")).toBeVisible();
     await expect(main.getByText("Card", { exact: true })).toBeVisible();
     await expect(main.getByText("Swish")).toBeVisible();
     await expect(main.getByText("Cash")).toBeVisible();
   });
-
 });
 
 test.describe("Event Page — Eventor-linked competition", () => {

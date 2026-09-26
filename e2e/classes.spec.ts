@@ -19,7 +19,9 @@ async function clickTab(page: import("@playwright/test").Page, name: string) {
 }
 
 test.describe("Classes Page", () => {
-  test("should navigate to classes tab and display class list", async ({ page }) => {
+  test("should expand class to show details, course dropdown, and runner list", async ({
+    page,
+  }) => {
     await selectCompetition(page);
     await clickTab(page, "Classes");
     expect(page.url()).toContain("/classes");
@@ -28,14 +30,6 @@ test.describe("Classes Page", () => {
     await expect(page.getByRole("cell", { name: "Öppen 1" })).toBeVisible();
     await expect(page.getByRole("cell", { name: "Öppen 2" })).toBeVisible();
     await expect(page.getByRole("cell", { name: "Öppen 3" })).toBeVisible();
-  });
-
-  test("should expand class to show details, course dropdown, and runner list", async ({
-    page,
-  }) => {
-    await selectCompetition(page);
-    await clickTab(page, "Classes");
-    await expect(page.getByText("3 classes")).toBeVisible({ timeout: 10000 });
 
     await page.getByRole("cell", { name: "Öppen 2" }).click();
     await expect(page.getByText("Class Settings")).toBeVisible({ timeout: 5000 });

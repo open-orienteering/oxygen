@@ -55,21 +55,14 @@ test.describe("Printer Settings dialog", () => {
     });
   });
 
-  test("opens from More menu and shows printer identity", async ({ page }) => {
+  test("opens from More menu showing identity and USB mode switch", async ({ page }) => {
     await selectCompetition(page);
     await openPrinterSettings(page);
 
     await expect(page.getByText("0x1D90")).toBeVisible();
     await expect(page.getByText("0x2060")).toBeVisible();
     await expect(page.getByText("Thermal Printer")).toBeVisible();
-  });
 
-  test("shows current USB mode and offers to switch", async ({ page }) => {
-    await selectCompetition(page);
-    await openPrinterSettings(page);
-
-    // The CT-S310II is in printer-class mode in this test, so the action
-    // button should be "Switch to Virtual COM".
     await expect(page.getByTestId("printer-flash-button")).toHaveText(
       /Virtual COM/,
     );
@@ -186,7 +179,7 @@ test.describe("Printer Settings dialog — Star TSP100", () => {
     });
   });
 
-  test("identifies the printer as Star with raster transport", async ({ page }) => {
+  test("identifies Star raster transport and hides Citizen sections", async ({ page }) => {
     await selectCompetition(page);
     await openPrinterSettings(page);
 
@@ -194,13 +187,7 @@ test.describe("Printer Settings dialog — Star TSP100", () => {
     await expect(page.getByText("0x0003")).toBeVisible();
     await expect(page.getByText("Star TSP143")).toBeVisible();
     await expect(page.getByTestId("printer-transport")).toContainText("Star raster");
-  });
 
-  test("hides Citizen-specific sections (Memory Switches, USB Mode flasher)", async ({ page }) => {
-    await selectCompetition(page);
-    await openPrinterSettings(page);
-
-    // None of the Citizen-only test IDs should be visible.
     await expect(page.getByTestId("printer-flash-button")).not.toBeVisible();
     await expect(page.getByTestId("printer-memory-switches")).not.toBeVisible();
     await expect(page.getByTestId("printer-read-switches-button")).not.toBeVisible();

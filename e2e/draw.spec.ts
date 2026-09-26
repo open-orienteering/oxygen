@@ -44,18 +44,6 @@ test.describe("Start Draw", () => {
     await reseedItestDb();
   });
 
-  test("should open draw panel and generate a preview", async ({ page }) => {
-    const panel = await openDrawPanel(page);
-
-    await page.getByTestId("draw-preview-btn").click();
-    await expect(
-      panel.getByRole("heading", { name: "Preview" }),
-    ).toBeVisible({ timeout: 10000 });
-
-    // Apply button should now be enabled
-    await expect(page.getByTestId("draw-execute-btn")).toBeEnabled();
-  });
-
   test("should apply draw, update start list, and reseed", async ({ page }) => {
     const panel = await openDrawPanel(page);
 
@@ -63,6 +51,8 @@ test.describe("Start Draw", () => {
     await expect(
       panel.getByRole("heading", { name: "Preview" }),
     ).toBeVisible({ timeout: 10000 });
+
+    await expect(page.getByTestId("draw-execute-btn")).toBeEnabled();
 
     await page.getByTestId("draw-execute-btn").click();
     await expect(panel.getByText("Draw complete")).toBeVisible({

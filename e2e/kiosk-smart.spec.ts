@@ -103,35 +103,22 @@ test.describe("Registration: Auto-fill from Runner DB", () => {
 // ─── Duplicate card prevention on Registration page ─────────
 
 test.describe("Registration: Duplicate Card Prevention", () => {
-  test("should show warning when entering a card already assigned to a runner", async ({
+  test("warns for assigned cards and stays quiet for unassigned ones", async ({
     page,
   }) => {
     await openRegistrationDialog(page);
 
     const dialog = page.getByTestId("registration-dialog");
-
-    // Enter card 501438 which belongs to Malin Johannesson in the seed data
     const cardInput = dialog.locator("input[placeholder='e.g. 500123']");
+
+    // Card 501438 belongs to Malin Johannesson in the seed data
     await cardInput.fill("501438");
-    await cardInput.press("Tab"); // Trigger lookup
+    await cardInput.press("Tab");
+    await expect(dialog.getByText(/already assigned/)).toBeVisible({ timeout: 10000 });
 
-    // Wait for the duplicate card warning to appear (async fetch + query)
-    await expect(
-      dialog.getByText(/already assigned/),
-    ).toBeVisible({ timeout: 10000 });
-  });
-
-  test("should not show warning for an unassigned card number", async ({
-    page,
-  }) => {
-    await openRegistrationDialog(page);
-
-    const dialog = page.getByTestId("registration-dialog");
-    const cardInput = dialog.locator("input[placeholder='e.g. 500123']");
+    await cardInput.clear();
     await cardInput.fill("999888");
-    await cardInput.press("Tab"); // Trigger lookup
-
-    // No warning should appear (wait long enough for async fetch to complete)
+    await cardInput.press("Tab");
     await expect(dialog.getByText(/already assigned/)).not.toBeVisible({ timeout: 3000 });
   });
 
@@ -151,10 +138,10 @@ test.describe("Registration: Duplicate Card Prevention", () => {
     const nameInput = dialog.locator("input[placeholder='First Last']");
     await nameInput.click();
     await nameInput.fill("Test Unique");
-    // Select a class using the SearchableSelect
+    // Select a class using the SearchableSelect (Öppen 2 keeps maps after earlier suites)
     await dialog.getByTestId("reg-class").click();
-    await expect(dialog.getByText("Öppen 1", { exact: true })).toBeVisible({ timeout: 3000 });
-    await dialog.getByText("Öppen 1", { exact: true }).click();
+    await expect(dialog.getByText("Öppen 2", { exact: true })).toBeVisible({ timeout: 3000 });
+    await dialog.getByText("Öppen 2", { exact: true }).click();
 
     // Submit
     await dialog.getByTestId("reg-submit").click();
@@ -244,31 +231,6 @@ test.describe("Kiosk: Smart Readout", () => {
 
     // Server should return missing controls info
     await expect(page.getByText(/Missing controls/)).toBeVisible({ timeout: 8000 });
-  });
-
-  test("should show pre-start screen for registered runner with no result", async ({
-    page,
-  }) => {
-    await goToKiosk(page);
-    const nameId = getNameId(page);
-
-    // Albin Bergman (2220164) has status=0, finishTime=0 in seed data
-    await sendKioskMessage(page, nameId, {
-      type: "card-readout",
-      card: {
-        id: "smart-prestart-1",
-        cardNumber: 2220164,
-        cardType: "SIAC",
-        action: "pre-start",
-        hasRaceData: false,
-        runnerName: "Albin Bergman",
-        className: "H21",
-        clubName: "Test Club",
-      },
-    });
-
-    await expect(page.getByText("Ready to Start")).toBeVisible({ timeout: 5000 });
-    await expect(page.getByText("Albin Bergman")).toBeVisible();
   });
 
   test("should show readout for DNF runner", async ({ page }) => {
@@ -365,14 +327,13 @@ test.describe("Kiosk: Registration Flow", () => {
 // ─── Kiosk: Re-scanning a registered card ───────────────────
 
 test.describe("Kiosk: Re-scan Known Card", () => {
-  test("should show pre-start (not registration) when re-scanning a known runner's card", async ({
+  test("re-scanning a known runner shows pre-start, not registration", async ({
     page,
   }) => {
     await goToKiosk(page);
     const nameId = getNameId(page);
 
     // Albin Bergman (card 2220164) is already registered with no finish time
-    // Sending with action "pre-start" (as DeviceManager would after DB lookup)
     await sendKioskMessage(page, nameId, {
       type: "card-readout",
       card: {
@@ -387,7 +348,6 @@ test.describe("Kiosk: Re-scan Known Card", () => {
       },
     });
 
-    // Should show pre-start screen, NOT registration-waiting
     await expect(page.getByText("Ready to Start")).toBeVisible({ timeout: 5000 });
     await expect(page.getByText("Albin Bergman")).toBeVisible();
     await expect(page.getByText("Registration in progress")).not.toBeVisible();
@@ -439,11 +399,10 @@ test.describe("Kiosk: Re-scan Known Card", () => {
 // ─── Stale punch detection via API ──────────────────────────
 
 test.describe("Stale Punch Detection", () => {
-  test("storeReadout rejects punches with foreign control codes", async ({ page }) => {
+  test("storeReadout rejects foreign codes and accepts matching controls", async ({ page }) => {
     await selectCompetition(page);
 
-    // Call storeReadout via tRPC with foreign control codes (not in competition)
-    const result = await page.evaluate(async () => {
+    const foreign = await page.evaluate(async () => {
       const resp = await fetch("/trpc/cardReadout.storeReadout", {
         method: "POST",
         headers: { "Content-Type": "application/json", "x-competition-id": "itest" },
@@ -461,16 +420,10 @@ test.describe("Stale Punch Detection", () => {
       });
       return resp.json();
     });
+    expect(foreign?.result?.data?.punchesRelevant).toBe(false);
 
-    // The server should flag punches as not relevant
-    expect(result?.result?.data?.punchesRelevant).toBe(false);
-  });
-
-  test("storeReadout accepts punches matching competition controls", async ({ page }) => {
-    await selectCompetition(page);
-
-    // Use controls from the seed data competition (e.g. 67, 39, 78 from Bana 1)
-    const result = await page.evaluate(async () => {
+    // Controls from seed data (e.g. 67, 39, 78 from Bana 1)
+    const matching = await page.evaluate(async () => {
       const resp = await fetch("/trpc/cardReadout.storeReadout", {
         method: "POST",
         headers: { "Content-Type": "application/json", "x-competition-id": "itest" },
@@ -488,8 +441,7 @@ test.describe("Stale Punch Detection", () => {
       });
       return resp.json();
     });
-
-    expect(result?.result?.data?.punchesRelevant).toBe(true);
+    expect(matching?.result?.data?.punchesRelevant).toBe(true);
   });
 
   test("kiosk shows pre-start for known runner with stale punch data", async ({ page }) => {

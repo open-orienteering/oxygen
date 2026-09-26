@@ -49,36 +49,29 @@ async function sendKioskMessage(page: Page, nameId: string, message: Record<stri
 // ─── Tests ─────────────────────────────────────────────────
 
 test.describe("Kiosk Mode", () => {
-  test("should display idle screen with card prompt and competition name", async ({ page }) => {
+  test("idle screen, settings panel, fullscreen, and write-to-card options", async ({
+    page,
+  }) => {
     await goToKiosk(page);
 
     await expect(page.getByText("Insert your SI card")).toBeVisible();
     await expect(
       page.getByText("Place your card in the reader and wait for the beep"),
     ).toBeVisible();
-    // Competition name should be visible on the idle screen (as a heading)
-    await expect(page.getByRole("heading", { name: COMPETITION_NAME })).toBeVisible({ timeout: 10000 });
-  });
+    await expect(page.getByRole("heading", { name: COMPETITION_NAME })).toBeVisible({
+      timeout: 10000,
+    });
 
-  test("should have settings panel accessible", async ({ page }) => {
-    await goToKiosk(page);
+    const fullscreenBtn = page.locator('button[title="Toggle fullscreen"]');
+    await expect(fullscreenBtn).toBeVisible();
 
-    // Click the settings gear
     await page.locator('button[title="Kiosk Settings"]').click();
-
-    // Settings panel should appear
     await expect(page.getByText("Kiosk Settings")).toBeVisible();
     await expect(page.getByText("Standalone mode")).toBeVisible();
     await expect(page.getByText("Require clear/check")).toBeVisible();
     await expect(page.getByText("Auto-reset after (seconds)")).toBeVisible();
     await expect(page.getByText("Write details to empty cards")).toBeVisible();
-  });
-
-  test("should have fullscreen toggle button", async ({ page }) => {
-    await goToKiosk(page);
-
-    const fullscreenBtn = page.locator('button[title="Toggle fullscreen"]');
-    await expect(fullscreenBtn).toBeVisible();
+    await expect(page.getByText("Save runner details to SI card")).toBeVisible();
   });
 
   test("should show do-not-remove screen when card-reading message is received", async ({
@@ -99,53 +92,21 @@ test.describe("Kiosk Mode", () => {
     await expect(page.getByText("Card 501438")).toBeVisible();
   });
 
-  test("should transition from reading to readout screen", async ({
-    page,
-  }) => {
+  test("reading transitions to readout with race data", async ({ page }) => {
     await goToKiosk(page);
     const nameId = getNameId(page);
 
-    // First show reading screen
     await sendKioskMessage(page, nameId, {
       type: "card-reading",
       cardNumber: 777001,
     });
     await expect(page.getByText("Reading card...")).toBeVisible({ timeout: 5000 });
 
-    // Then send the full readout (use unknown card so fallback status applies)
     await sendKioskMessage(page, nameId, {
       type: "card-readout",
       card: {
         id: "test-transition-1",
         cardNumber: 777001,
-        cardType: "SI8",
-        action: "readout",
-        hasRaceData: true,
-        runnerName: "Fake Runner",
-        className: "H21",
-        clubName: "Test Club",
-        status: "OK",
-        runningTime: 12340,
-      },
-    });
-
-    // Should now show readout, not reading
-    await expect(page.getByText("Fake Runner")).toBeVisible({ timeout: 5000 });
-    await expect(page.getByText("Completed")).toBeVisible();
-  });
-
-  test("should switch to readout screen when card-readout message with race data is received", async ({
-    page,
-  }) => {
-    await goToKiosk(page);
-    const nameId = getNameId(page);
-
-    // Simulate admin sending a readout card event (use unknown card so fallback status applies)
-    await sendKioskMessage(page, nameId, {
-      type: "card-readout",
-      card: {
-        id: "test-1",
-        cardNumber: 777002,
         cardType: "SI8",
         action: "readout",
         hasRaceData: true,
@@ -157,10 +118,7 @@ test.describe("Kiosk Mode", () => {
       },
     });
 
-    // Should show the readout screen
-    await expect(page.getByText("Fake Runner OK")).toBeVisible({
-      timeout: 5000,
-    });
+    await expect(page.getByText("Fake Runner OK")).toBeVisible({ timeout: 5000 });
     await expect(page.getByText("Completed")).toBeVisible();
     await expect(page.getByText("Test Club")).toBeVisible();
     await expect(page.getByText("H21")).toBeVisible();
@@ -220,7 +178,7 @@ test.describe("Kiosk Mode", () => {
     await expect(page.getByText("Malin Johannesson")).toBeVisible();
   });
 
-  test("should switch to registration waiting screen for unknown card", async ({
+  test("registration waiting, live fields, then complete without re-insert", async ({
     page,
   }) => {
     await goToKiosk(page);
@@ -229,7 +187,7 @@ test.describe("Kiosk Mode", () => {
     await sendKioskMessage(page, nameId, {
       type: "card-readout",
       card: {
-        id: "test-register-1",
+        id: "test-register-3",
         cardNumber: 999999,
         cardType: "SI8",
         action: "register",
@@ -241,31 +199,7 @@ test.describe("Kiosk Mode", () => {
       timeout: 5000,
     });
     await expect(page.getByText("999999")).toBeVisible();
-  });
 
-  test("should show live form fields during registration", async ({
-    page,
-  }) => {
-    await goToKiosk(page);
-    const nameId = getNameId(page);
-
-    // First trigger registration mode
-    await sendKioskMessage(page, nameId, {
-      type: "card-readout",
-      card: {
-        id: "test-register-2",
-        cardNumber: 999999,
-        cardType: "SI8",
-        action: "register",
-        hasRaceData: false,
-      },
-    });
-
-    await expect(page.getByText("Registration in progress")).toBeVisible({
-      timeout: 5000,
-    });
-
-    // Admin sends form state — fields should appear live on waiting screen
     await sendKioskMessage(page, nameId, {
       type: "registration-state",
       form: {
@@ -283,76 +217,11 @@ test.describe("Kiosk Mode", () => {
       ready: true,
     });
 
-    // Fields should appear on the waiting screen
     await expect(page.getByText("New Runner")).toBeVisible({ timeout: 5000 });
     await expect(page.getByText("Sprint Club")).toBeVisible();
     await expect(page.getByText("D21")).toBeVisible();
     await expect(page.getByText("Pay on site")).toBeVisible();
-  });
 
-  test("should go directly from registration to complete (no re-insert)", async ({
-    page,
-  }) => {
-    await goToKiosk(page);
-    const nameId = getNameId(page);
-
-    // Trigger registration flow
-    await sendKioskMessage(page, nameId, {
-      type: "card-readout",
-      card: {
-        id: "test-register-3",
-        cardNumber: 999999,
-        cardType: "SI8",
-        action: "register",
-        hasRaceData: false,
-      },
-    });
-
-    await expect(page.getByText("Registration in progress")).toBeVisible({
-      timeout: 5000,
-    });
-
-    // Admin sends form state
-    await sendKioskMessage(page, nameId, {
-      type: "registration-state",
-      form: {
-        name: "New Runner",
-        clubName: "Sprint Club",
-        className: "D21",
-        courseName: "",
-        cardNo: 999999,
-        startTime: "12:30:00",
-        sex: "F",
-        birthYear: "1995",
-        phone: "",
-        paymentMode: "billed",
-      },
-      ready: true,
-    });
-
-    // Admin completes registration directly (no re-insert step)
-    await sendKioskMessage(page, nameId, {
-      type: "registration-complete",
-      runner: {
-        name: "New Runner",
-        className: "D21",
-        clubName: "Sprint Club",
-        startTime: "12:30:00",
-        cardNo: 999999,
-      },
-    });
-
-    // Should show registration complete
-    await expect(page.getByText("Registration Complete!")).toBeVisible({
-      timeout: 5000,
-    });
-  });
-
-  test("should show registration complete screen", async ({ page }) => {
-    await goToKiosk(page);
-    const nameId = getNameId(page);
-
-    // Send registration complete message directly
     await sendKioskMessage(page, nameId, {
       type: "registration-complete",
       runner: {
@@ -464,20 +333,6 @@ test.describe("Kiosk Mode", () => {
     const gotPong = await pongPromise;
     expect(gotPong).toBe(true);
   });
-
-  test("should show write-to-card setting in settings panel", async ({
-    page,
-  }) => {
-    await goToKiosk(page);
-
-    // Open settings
-    await page.locator('button[title="Kiosk Settings"]').click();
-
-    // The writeToCard toggle should be present
-    await expect(page.getByText("Write details to empty cards")).toBeVisible();
-    await expect(page.getByText("Save runner details to SI card")).toBeVisible();
-  });
-
 });
 
 test.describe("Kiosk Launch from Admin", () => {

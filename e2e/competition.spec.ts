@@ -1,15 +1,6 @@
 import { test, expect } from "@playwright/test";
 
 test.describe("Competition Selection", () => {
-  test("should display the competition selector page", async ({ page }) => {
-    await page.goto("/");
-
-    await expect(page.getByRole("heading", { name: "Oxygen" })).toBeVisible();
-    await expect(
-      page.getByText("Select an event to manage"),
-    ).toBeVisible();
-  });
-
   test("should show the build version in the footer", async ({ page }) => {
     // An operator needs to be able to tell which build a tab is running —
     // a stale tab after a deploy is otherwise invisible.
@@ -24,6 +15,9 @@ test.describe("Competition Selection", () => {
 
   test("should list competitions from the database", async ({ page }) => {
     await page.goto("/");
+
+    await expect(page.getByRole("heading", { name: "Oxygen" })).toBeVisible();
+    await expect(page.getByText("Select an event to manage")).toBeVisible();
 
     await expect(page.getByText("My example tävling")).toBeVisible({
       timeout: 10000,

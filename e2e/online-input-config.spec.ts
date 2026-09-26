@@ -57,32 +57,21 @@ test.describe("Online Input panel", () => {
     });
   });
 
-  test("displays the panel with default ROC endpoint and disabled toggle", async ({ page }) => {
+  test("saving a unit ID enables the toggle button", async ({ page }) => {
     await selectCompetition(page);
     await clickTab(page, "Event");
 
     const panelHeading = page.getByText("Online Input (ROC)");
     await expect(panelHeading).toBeVisible({ timeout: 10000 });
 
-    // Default endpoint visible
     await expect(
       page.locator('input[type="text"][value*="roc.olresultat.se"]'),
     ).toBeVisible();
-
-    // First-time help is shown when no unitId is set
     await expect(page.getByText(/roc\.olresultat\.se/i).first()).toBeVisible();
-  });
-
-  test("saving a unit ID enables the toggle button", async ({ page }) => {
-    await selectCompetition(page);
-    await clickTab(page, "Event");
-
-    await expect(page.getByText("Online Input (ROC)")).toBeVisible({ timeout: 10000 });
 
     const unitInput = page.getByTestId("online-input-unit-id");
     await unitInput.fill("E2E-UNIT-12345");
 
-    // The Save button is only rendered when the form is dirty
     const saveBtn = page.getByTestId("online-input-save");
     await expect(saveBtn).toBeVisible();
     await saveBtn.click();

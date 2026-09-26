@@ -107,24 +107,16 @@ test.describe("Rental Cards — Competition Settings", () => {
     await setCardFee(request, 0);
   });
 
-  test("should display rental card fee input in Registration Settings", async ({ page }) => {
+  test("displays and persists rental card fee in Registration Settings", async ({ page, request }) => {
     await selectCompetition(page);
     await clickTab(page, "Event");
 
     await expect(page.getByText("Registration Settings")).toBeVisible({ timeout: 10000 });
-    await expect(page.getByTestId("rental-card-fee-input")).toBeVisible();
-  });
-
-  test("should persist rental card fee when saved", async ({ page, request }) => {
-    await selectCompetition(page);
-    await clickTab(page, "Event");
-
     await expect(page.getByTestId("rental-card-fee-input")).toBeVisible({ timeout: 10000 });
 
     await page.getByTestId("rental-card-fee-input").fill("50");
     await page.getByTestId("rental-card-fee-input").blur();
 
-    // Wait for the save API call to complete after blur
     await page.waitForResponse(
       (resp) => resp.url().includes("/trpc/competition.setCardFee") && resp.status() === 200,
     );
@@ -145,19 +137,7 @@ test.describe("Rental Cards — Registration Dialog", () => {
     await setCardFee(request, 0);
   });
 
-  test("should show rental card checkbox in registration dialog", async ({ page }) => {
-    await page.addInitScript(getMockWebSerialScript());
-    await selectCompetition(page);
-    const nameId = getNameId(page);
-    await page.goto(`/${nameId}/runners`);
-
-    await page.getByRole("button", { name: "Add Runner" }).click();
-    await expect(page.getByTestId("registration-dialog")).toBeVisible({ timeout: 5000 });
-
-    await expect(page.getByTestId("rental-card-checkbox")).toBeVisible();
-  });
-
-  test("should store CardFee on runner when rental card is checked", async ({ page, request }) => {
+  test("shows rental checkbox and stores CardFee when checked", async ({ page, request }) => {
     await setCardFee(request, 50);
 
     await page.addInitScript(getMockWebSerialScript());
@@ -169,26 +149,22 @@ test.describe("Rental Cards — Registration Dialog", () => {
     const dialog = page.getByTestId("registration-dialog");
     await expect(dialog).toBeVisible({ timeout: 5000 });
 
-    // Fill name
+    await expect(page.getByTestId("rental-card-checkbox")).toBeVisible();
+
     await dialog.locator("input[placeholder='First Last']").fill("E2E_Rental Register Test");
 
-    // Select class
     await dialog.getByTestId("reg-class").click();
     await expect(dialog.getByText("Öppen 2", { exact: true })).toBeVisible({ timeout: 3000 });
     await dialog.getByText("Öppen 2", { exact: true }).click();
 
-    // Fill card number
     await dialog.locator("input[placeholder='e.g. 500123']").fill("2988801");
 
-    // Check rental card
     await page.getByTestId("rental-card-checkbox").check();
     await expect(page.getByTestId("rental-card-checkbox")).toBeChecked();
 
-    // Submit
     await dialog.getByTestId("reg-submit").click();
     await expect(dialog).not.toBeVisible({ timeout: 5000 });
 
-    // Verify CardFee stored
     const listResp = await request.get(`${API_BASE}/trpc/runner.list`, { headers: COMP_HEADERS });
     const listBody = await listResp.json();
     const runners = (listBody?.result?.data ?? []) as Array<{ id: number; name: string; cardFee?: number }>;

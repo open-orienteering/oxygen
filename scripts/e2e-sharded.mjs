@@ -55,27 +55,36 @@ const EVENTOR_PORT_BASE = 4300;
  * only — rebalance using the per-shard durations printed after each run.
  */
 const WEIGHTS = {
-  "registration-dialog.spec.ts": 10, // 23 tests, dual pages, 1 long watchdog test
-  "kiosk.spec.ts": 7, // 17 tests, 5s auto-reset waits
-  "kiosk-smart.spec.ts": 6,
-  "kiosk-readout.spec.ts": 5, // dual contexts + 5s auto-reset
-  "webserial.spec.ts": 5,
-  "phase3.spec.ts": 4,
-  "courses.spec.ts": 4, // OCAD import
-  "map-multicourse.spec.ts": 4, // OCAD + map render (30s timeouts)
-  "offline.spec.ts": 4, // drain polling
-  "rental-cards.spec.ts": 4,
-  "classes.spec.ts": 3,
-  "competition.spec.ts": 3,
-  "controls.spec.ts": 3,
-  "error-paths.spec.ts": 3,
-  "event.spec.ts": 3,
-  "eventor.spec.ts": 3,
+  // Measured from a full sharded run after the 2026-09 merge pass
+  // (sum of Playwright test durations; reseed/setup overhead included).
+  "course-editor.spec.ts": 12, // ~104s — OCAD+map, 12 editor flows
+  "registration-dialog.spec.ts": 8, // ~63s — reseed, dual pages, watchdog
+  "rental-cards.spec.ts": 4, // ~28s
+  "kiosk.spec.ts": 3, // ~22s after merges (still has 5s auto-reset)
+  "controls.spec.ts": 3, // ~22s
+  "courses.spec.ts": 3, // ~21s — OCAD/ppen imports
+  "phase2.spec.ts": 3, // ~21s
+  "course-maps.spec.ts": 4, // ~21s — PDF exports
+  "phase3.spec.ts": 3, // ~20s
+  "kiosk-readout.spec.ts": 3, // ~20s — dual contexts + 5s auto-reset
+  "offline.spec.ts": 3, // ~19s — drain polling
+  "draw.spec.ts": 3, // ~18s
+  "wide-screen-map-pane.spec.ts": 3, // ~18s
+  "editor-start-finish.spec.ts": 3, // ~18s — fresh event + map
+  "mobile-layout.spec.ts": 3, // ~18s — touch + map upload
+  "permissions.spec.ts": 3, // ~18s
+  "webserial.spec.ts": 2, // ~16s after merges
+  "control-series.spec.ts": 3, // ~15s — library + map upload
+  "map-multicourse.spec.ts": 4, // OCAD replace-all + wide viewport
   "map-control-circles.spec.ts": 3,
-  "phase2.spec.ts": 3,
-  "printer-settings.spec.ts": 3,
-  "wide-screen-map-pane.spec.ts": 3,
-  "control-series.spec.ts": 4, // library + map upload + 6 placements
+  "kiosk-smart.spec.ts": 2, // ~14s after merges
+  "printer-settings.spec.ts": 2,
+  "eventor.spec.ts": 2,
+  "classes.spec.ts": 2,
+  "error-paths.spec.ts": 2,
+  "competition.spec.ts": 2,
+  "event.spec.ts": 2,
+  "club-map-library.spec.ts": 2,
 };
 const DEFAULT_WEIGHT = 2;
 

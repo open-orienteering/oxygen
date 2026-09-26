@@ -37,25 +37,18 @@ async function clickTab(page: import("@playwright/test").Page, name: string) {
 // ─── Tests ─────────────────────────────────────────────────
 
 test.describe("Empty Data States", () => {
-  test("courses page shows empty state when competition has no courses", async ({ page }) => {
+  test("courses and controls pages show empty states when competition has none", async ({ page }) => {
     await selectCompetition(page, TEST_COMPETITION);
     await clickTab(page, "Courses");
-
-    // Should display empty-state message, not crash
     await expect(page.getByText("No courses found")).toBeVisible({ timeout: 10000 });
-  });
 
-  test("controls page shows empty state when competition has no controls", async ({ page }) => {
-    await selectCompetition(page, TEST_COMPETITION);
     await clickTab(page, "Controls");
-
-    // Should display empty-state message, not crash
     await expect(page.getByText("No controls found")).toBeVisible({ timeout: 10000 });
   });
 });
 
 test.describe("Validation Errors", () => {
-  test("creating a control with invalid code (0) shows error", async ({ page }) => {
+  test("creating a control with invalid code shows error", async ({ page }) => {
     await selectCompetition(page, MAIN_COMPETITION);
     await clickTab(page, "Controls");
     await expect(page.getByText("23 controls")).toBeVisible({ timeout: 10000 });
@@ -63,27 +56,12 @@ test.describe("Validation Errors", () => {
     await page.getByRole("button", { name: "New Control" }).click();
     await expect(page.getByRole("heading", { name: "New Control" })).toBeVisible({ timeout: 3000 });
 
-    // Enter invalid code "0"
     await page.getByPlaceholder("e.g. 50 or 50;250").fill("0");
     await page.getByRole("button", { name: "Create" }).click();
-
-    // Server should reject with error message
     await expect(page.getByText("Invalid control code")).toBeVisible({ timeout: 5000 });
-  });
 
-  test("creating a control with non-numeric code shows error", async ({ page }) => {
-    await selectCompetition(page, MAIN_COMPETITION);
-    await clickTab(page, "Controls");
-    await expect(page.getByText("23 controls")).toBeVisible({ timeout: 10000 });
-
-    await page.getByRole("button", { name: "New Control" }).click();
-    await expect(page.getByRole("heading", { name: "New Control" })).toBeVisible({ timeout: 3000 });
-
-    // Enter non-numeric code
     await page.getByPlaceholder("e.g. 50 or 50;250").fill("abc");
     await page.getByRole("button", { name: "Create" }).click();
-
-    // Server should reject with error message
     await expect(page.getByText("Invalid control code")).toBeVisible({ timeout: 5000 });
   });
 

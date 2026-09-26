@@ -19,20 +19,7 @@ async function goToRunners(page: import("@playwright/test").Page) {
 }
 
 test.describe("Runners Bulk Editing", () => {
-  test("should select multiple runners and show bulk action bar", async ({ page }) => {
-    await goToRunners(page);
-    const rows = page.locator("tr").filter({ has: page.locator('input[type="checkbox"]') });
-
-    await rows.nth(1).locator('input[type="checkbox"]').click();
-    await rows.nth(2).locator('input[type="checkbox"]').click();
-
-    const actionBar = page.locator(".animate-slide-up");
-    await expect(actionBar).toBeVisible();
-    await expect(actionBar.locator("div", { hasText: "2" }).first()).toBeVisible();
-    await expect(actionBar.getByText("selected", { exact: true })).toBeVisible();
-  });
-
-  test("should update status for multiple runners via bulk action", async ({ page }) => {
+  test("selects multiple runners and updates status via bulk action", async ({ page }) => {
     await goToRunners(page);
     page.on("dialog", (dialog) => dialog.accept());
 
@@ -41,6 +28,10 @@ test.describe("Runners Bulk Editing", () => {
     await rows.nth(2).locator('input[type="checkbox"]').click();
 
     const actionBar = page.locator(".animate-slide-up");
+    await expect(actionBar).toBeVisible();
+    await expect(actionBar.locator("div", { hasText: "2" }).first()).toBeVisible();
+    await expect(actionBar.getByText("selected", { exact: true })).toBeVisible();
+
     await actionBar.locator("select").nth(1).selectOption({ label: "DNS -- Did Not Start" });
     await actionBar.getByRole("button", { name: "Apply to 2" }).click();
 

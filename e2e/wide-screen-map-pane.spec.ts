@@ -42,7 +42,7 @@ test.describe("Wide-screen map pane (>=2200px viewport)", () => {
     await resetPaneStorage(page);
   });
 
-  test("renders the persistent MapPanel inside the right pane on a wide viewport", async ({
+  test("renders persistent MapPanel sticky inside the viewport on a wide screen", async ({
     page,
   }) => {
     await page.setViewportSize(WIDE);
@@ -50,13 +50,30 @@ test.describe("Wide-screen map pane (>=2200px viewport)", () => {
 
     await waitForPaneVisible(page);
 
-    // The single shell-owned MapPanel should live inside the pane.
     const pane = page.getByTestId("map-pane");
     await expect(pane.getByTestId("map-panel")).toHaveCount(1);
 
-    // The shell container should be laid out as a 2-column grid.
     const shell = page.getByTestId("shell-container");
     await expect(shell).toHaveAttribute("data-pane-visible", "true");
+
+    // The sticky pane (top-24 + 7.5rem height) must land inside the
+    // viewport — otherwise a page scrollbar appears solely because the
+    // pane overflows past the shell's py-6 padding.
+    const geometry = await page.evaluate(() => {
+      const paneEl = document.querySelector(
+        '[data-testid="map-pane"]',
+      ) as HTMLElement | null;
+      if (!paneEl) return null;
+      const rect = paneEl.getBoundingClientRect();
+      return {
+        top: rect.top,
+        bottom: rect.bottom,
+        viewportHeight: window.innerHeight,
+      };
+    });
+    expect(geometry).not.toBeNull();
+    expect(geometry!.top).toBeGreaterThanOrEqual(0);
+    expect(geometry!.bottom).toBeLessThanOrEqual(geometry!.viewportHeight + 1);
   });
 
   test("renders the map inline on a narrow viewport and does not mount the pane", async ({
@@ -168,38 +185,9 @@ test.describe("Wide-screen map pane (>=2200px viewport)", () => {
     expect(Math.round(persistedBox!.width)).toBe(afterWidth);
   });
 
-  test("pane stays visible across Runners \u2192 StartList \u2192 Results \u2192 Cards \u2192 Tracks on wide viewport", async ({
+  test("pane stays visible with the same MapPanel instance across navigation", async ({
     page,
   }) => {
-    await page.setViewportSize(WIDE);
-
-    // Each of these non-overflow tabs publishes map state on mount, so the
-    // pane shouldn't flip on/off during navigation. We visit each in turn
-    // and assert the pane stays data-visible=true the whole way. Tracks
-    // is included to lock down the page-level MapSlot push that survives
-    // regardless of row expansion (previously gated on an expanded row).
-    for (const path of ["runners", "startlist", "results", "cards", "tracks"]) {
-      await page.goto(`/itest/${path}`);
-      await waitForPaneVisible(page);
-      const pane = page.getByTestId("map-pane");
-      // Exactly one MapPanel inside the pane at all times.
-      await expect(pane.getByTestId("map-panel")).toHaveCount(1);
-    }
-  });
-
-  test("persistent MapPanel keeps its instance across navigation", async ({
-    page,
-  }) => {
-    // The shell-owned MapPanel is mounted once for the wide-pane's
-    // lifetime. Switching routes only updates its props via the
-    // map-props-store; the React fibre — and therefore `useId()` —
-    // stays the same. If this assertion fails, MapPanel is remounting
-    // per navigation and the perf win of this refactor is gone.
-    //
-    // Tracks is included in the path because it's the page that
-    // historically only published map state from an expanded-row
-    // subcomponent — visiting it with no row expanded used to clear
-    // the store and unmount the persistent MapPanel.
     await page.setViewportSize(WIDE);
 
     async function paneInstanceId(): Promise<string | null> {
@@ -214,13 +202,13 @@ test.describe("Wide-screen map pane (>=2200px viewport)", () => {
     const initialId = await paneInstanceId();
     expect(initialId).toBeTruthy();
 
-    for (const path of ["results", "tracks", "cards", "runners"]) {
+    for (const path of ["startlist", "results", "cards", "tracks", "runners"]) {
       await page.goto(`/itest/${path}`);
       await waitForPaneVisible(page);
+      const pane = page.getByTestId("map-pane");
+      await expect(pane.getByTestId("map-panel")).toHaveCount(1);
       const id = await paneInstanceId();
-      expect(id, `MapPanel remounted when navigating to /${path}`).toBe(
-        initialId,
-      );
+      expect(id, `MapPanel remounted when navigating to /${path}`).toBe(initialId);
     }
   });
 
@@ -282,33 +270,5 @@ test.describe("Wide-screen map pane (>=2200px viewport)", () => {
     await expect(
       page.getByTestId("map-pane").getByTestId("map-panel"),
     ).toHaveCount(1);
-  });
-
-  test("sticky map pane fits inside the viewport without page scroll", async ({
-    page,
-  }) => {
-    await page.setViewportSize(WIDE);
-    await gotoControls(page);
-    await waitForPaneVisible(page);
-
-    // The sticky pane (top-24 + 7.5rem height) must land inside the
-    // viewport — otherwise a page scrollbar appears solely because the
-    // pane overflows past the shell's py-6 padding. Assert on the pane
-    // itself: the Controls table may legitimately make the document
-    // taller than the viewport.
-    const geometry = await page.evaluate(() => {
-      const pane = document.querySelector('[data-testid="map-pane"]');
-      if (!pane) return null;
-      const rect = pane.getBoundingClientRect();
-      return {
-        top: rect.top,
-        bottom: rect.bottom,
-        innerHeight: window.innerHeight,
-      };
-    });
-    expect(geometry).not.toBeNull();
-    expect(geometry!.top).toBeGreaterThanOrEqual(0);
-    // Allow a couple of CSS subpixels / borders (100vh vs innerHeight).
-    expect(geometry!.bottom).toBeLessThanOrEqual(geometry!.innerHeight + 2);
   });
 });

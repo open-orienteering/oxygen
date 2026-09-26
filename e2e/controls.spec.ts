@@ -22,7 +22,9 @@ async function clickTab(page: import("@playwright/test").Page, name: string) {
 }
 
 test.describe("Controls Page", () => {
-  test("should navigate to controls tab and display control list", async ({ page }) => {
+  test("should expand a control to show course usage and editable fields", async ({
+    page,
+  }) => {
     await selectCompetition(page);
     await clickTab(page, "Controls");
     expect(page.url()).toContain("/controls");
@@ -31,14 +33,6 @@ test.describe("Controls Page", () => {
     await expect(page.getByRole("cell", { name: "Radio 1" })).toBeVisible();
     await expect(page.getByRole("cell", { name: "Radio 2" })).toBeVisible();
     await expect(page.getByRole("cell", { name: "Pre-start" })).toBeVisible();
-  });
-
-  test("should expand a control to show course usage and editable fields", async ({
-    page,
-  }) => {
-    await selectCompetition(page);
-    await clickTab(page, "Controls");
-    await expect(page.getByText("23 controls")).toBeVisible({ timeout: 10000 });
 
     await page.getByRole("cell", { name: "Radio 1" }).click();
 

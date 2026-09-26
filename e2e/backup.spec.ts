@@ -25,24 +25,15 @@ async function clickTab(page: import("@playwright/test").Page, name: string) {
 }
 
 test.describe("Event Backup", () => {
-  test("Event page surfaces an Event backup section", async ({ page }) => {
-    await selectCompetition(page);
-    await clickTab(page, "Event");
-
-    await expect(page.getByText("Event backup").first()).toBeVisible({
-      timeout: 10000,
-    });
-    await expect(
-      page.getByRole("button", { name: /Download backup/i }),
-    ).toBeVisible();
-  });
-
   test("Download backup button delivers a non-empty .sql file", async ({
     page,
   }) => {
     await selectCompetition(page);
     await clickTab(page, "Event");
 
+    await expect(page.getByText("Event backup").first()).toBeVisible({
+      timeout: 10000,
+    });
     const downloadLink = page.getByRole("button", { name: /Download backup/i });
     await expect(downloadLink).toBeVisible({ timeout: 10000 });
 

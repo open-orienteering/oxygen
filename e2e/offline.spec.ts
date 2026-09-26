@@ -216,7 +216,7 @@ test.describe("Offline Support", () => {
     await context.setOffline(true);
 
     // 3. Register runner via dialog (offline)
-    await registerRunnerViaDialog(page, runnerName, "Öppen 1");
+    await registerRunnerViaDialog(page, runnerName, "Öppen 3");
 
     // 4. Verify event was queued in IndexedDB
     const pendingCount = await getPendingEventCount(page);
@@ -266,7 +266,7 @@ test.describe("Offline Support", () => {
 
     // Go offline and register
     await context.setOffline(true);
-    await registerRunnerViaDialog(page, runnerName, "Öppen 1");
+    await registerRunnerViaDialog(page, runnerName, "Öppen 3");
 
     // The sync status button should show a pending count badge
     // The button has a title of "Sync Status" or "Synkstatus"

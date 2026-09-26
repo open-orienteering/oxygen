@@ -128,18 +128,21 @@ test.describe("Kiosk Readout Station Flow", () => {
     }
   });
 
-  test("OK readout updates runner status and shows readout on kiosk", async ({ context, request }) => {
+  test("OK readout updates kiosk and persists runner status to DB", async ({ context, request }) => {
     const { adminPage, kioskPage } = await setupAdminAndKiosk(context);
 
-    // Look up Öppen 2 class and create a fresh runner with SI8 card
     const classId = await getClassId(request, "Öppen 2");
-    const cardNo = 2800001;
-    const startTimeDs = 363000; // 10:05:00 in deciseconds
-    const runner = await createRunner(request, "Test OkRunner", cardNo, classId, startTimeDs);
+    const cardNo = 2800003;
+    const startTimeDs = 363000;
+    const runner = await createRunner(request, "Test PersistRunner", cardNo, classId, startTimeDs);
     createdRunnerIds.push(runner.id);
     expect(runner.id).toBeGreaterThan(0);
 
-    // Wait for the full DeviceManager pipeline to complete
+    const beforeResp = await request.get(`${API_BASE}/trpc/runner.getById?input=${encodeURIComponent(JSON.stringify({ id: runner.id }))}`, { headers: COMP_HEADERS });
+    const beforeBody = await beforeResp.json();
+    const beforeStatus = beforeBody?.result?.data?.status ?? beforeBody?.result?.data?.json?.status;
+    expect(beforeStatus).toBe(0);
+
     const readoutPromise = adminPage.waitForResponse(
       (resp) => resp.url().includes("/trpc/cardReadout.readout") && resp.status() === 200,
     );
@@ -147,12 +150,11 @@ test.describe("Kiosk Readout Station Flow", () => {
       (resp) => resp.url().includes("/trpc/cardReadout.applyResult") && resp.status() === 200,
     );
 
-    // Insert SI8 card with all 5 course controls → computed status = OK
     await adminPage.evaluate(
       ({ cardNo, controls }) => {
         const punches = controls.map((code: number, i: number) => ({
           controlCode: code,
-          time: 36600 + i * 120, // 10:10:00, +2min intervals (seconds)
+          time: 36600 + i * 120,
         }));
         window.__siMock.insertCard(cardNo, punches);
       },
@@ -161,14 +163,17 @@ test.describe("Kiosk Readout Station Flow", () => {
 
     await readoutPromise;
 
-    // Kiosk should show readout screen with runner info
-    await expect(kioskPage.getByText("Test OkRunner")).toBeVisible({ timeout: 10000 });
+    await expect(kioskPage.getByText("Test PersistRunner")).toBeVisible({ timeout: 10000 });
     await expect(kioskPage.getByText("Completed")).toBeVisible();
     await expect(kioskPage.getByText("Öppen 2")).toBeVisible();
 
-    // Verify applyResult was called and succeeded (runner status persisted in DB)
     const applyResponse = await applyPromise;
     expect(applyResponse.status()).toBe(200);
+
+    const afterResp = await request.get(`${API_BASE}/trpc/runner.getById?input=${encodeURIComponent(JSON.stringify({ id: runner.id }))}`, { headers: COMP_HEADERS });
+    const afterBody = await afterResp.json();
+    const afterStatus = afterBody?.result?.data?.status ?? afterBody?.result?.data?.json?.status;
+    expect(afterStatus).toBe(1); // RunnerStatus.OK = 1
   });
 
   test("MP readout shows missing punch on kiosk", async ({ context, request }) => {
@@ -209,55 +214,6 @@ test.describe("Kiosk Readout Station Flow", () => {
     // Verify applyResult was called
     const applyResponse = await applyPromise;
     expect(applyResponse.status()).toBe(200);
-  });
-
-  test("applyResult persists runner status to DB for subsequent scans", async ({ context, request }) => {
-    const { adminPage, kioskPage } = await setupAdminAndKiosk(context);
-
-    const classId = await getClassId(request, "Öppen 2");
-    const cardNo = 2800003;
-    const startTimeDs = 363000;
-    const runner = await createRunner(request, "Test PersistRunner", cardNo, classId, startTimeDs);
-    createdRunnerIds.push(runner.id);
-
-    // Verify runner starts with Status=0 (unknown)
-    const beforeResp = await request.get(`${API_BASE}/trpc/runner.getById?input=${encodeURIComponent(JSON.stringify({ id: runner.id }))}`, { headers: COMP_HEADERS });
-    const beforeBody = await beforeResp.json();
-    const beforeStatus = beforeBody?.result?.data?.status ?? beforeBody?.result?.data?.json?.status;
-    expect(beforeStatus).toBe(0);
-
-    // Scan card with all controls → OK
-    const readoutPromise = adminPage.waitForResponse(
-      (resp) => resp.url().includes("/trpc/cardReadout.readout") && resp.status() === 200,
-    );
-    const applyPromise = adminPage.waitForResponse(
-      (resp) => resp.url().includes("/trpc/cardReadout.applyResult") && resp.status() === 200,
-    );
-
-    await adminPage.evaluate(
-      ({ cardNo, controls }) => {
-        const punches = controls.map((code: number, i: number) => ({
-          controlCode: code,
-          time: 36600 + i * 120,
-        }));
-        window.__siMock.insertCard(cardNo, punches);
-      },
-      { cardNo, controls: COURSE_2_CONTROLS },
-    );
-
-    await readoutPromise;
-    await applyPromise;
-
-    // Verify kiosk shows readout
-    await expect(kioskPage.getByText("Test PersistRunner")).toBeVisible({ timeout: 10000 });
-    await expect(kioskPage.getByText("Completed")).toBeVisible();
-
-    // Verify runner status was persisted to DB (Status=1 = OK)
-    // This ensures subsequent scans will have hasDbResult=true → action="readout" (not "pre-start")
-    const afterResp = await request.get(`${API_BASE}/trpc/runner.getById?input=${encodeURIComponent(JSON.stringify({ id: runner.id }))}`, { headers: COMP_HEADERS });
-    const afterBody = await afterResp.json();
-    const afterStatus = afterBody?.result?.data?.status ?? afterBody?.result?.data?.json?.status;
-    expect(afterStatus).toBe(1); // RunnerStatus.OK = 1
   });
 
   test("re-reading same card after registration shows pre-start (not register)", async ({ context, request }) => {
@@ -441,36 +397,6 @@ test.describe("Standalone mode: re-read after idle", () => {
     return nameId;
   }
 
-  test("first card read shows readout screen in standalone mode", async ({ context, request }) => {
-    const nameId = await resolveNameId(context);
-    const kioskPage = await setupStandaloneKiosk(context, nameId);
-
-    const classId = await getClassId(request, "Öppen 2");
-    const cardNo = 2800020;
-    const runner = await createRunner(request, "E2E StandaloneFirst", cardNo, classId, 363000);
-    createdRunnerIds.push(runner.id);
-
-    const readoutPromise = kioskPage.waitForResponse(
-      (resp) => resp.url().includes("/trpc/cardReadout.readout") && resp.status() === 200,
-    );
-
-    await kioskPage.evaluate(
-      ({ cardNo, controls }) => {
-        const punches = controls.map((code: number, i: number) => ({
-          controlCode: code,
-          time: 36600 + i * 120,
-        }));
-        window.__siMock.insertCard(cardNo, punches);
-      },
-      { cardNo, controls: COURSE_2_CONTROLS },
-    );
-
-    await readoutPromise;
-
-    await expect(kioskPage.getByRole("heading", { name: "E2E StandaloneFirst" })).toBeVisible({ timeout: 10000 });
-    await expect(kioskPage.getByText("Completed")).toBeVisible();
-  });
-
   test("same card re-read after auto-reset shows readout again — regression test for lastProcessedRef bug", async ({
     context,
     request,
@@ -478,6 +404,7 @@ test.describe("Standalone mode: re-read after idle", () => {
     // This test caught the bug where lastCardIdRef was never reset on idle,
     // meaning re-reading the same card after the kiosk auto-reset would be silently
     // ignored and the kiosk would stay stuck on the idle screen.
+    // The first half also covers "first card read shows readout in standalone mode".
     const nameId = await resolveNameId(context);
     const kioskPage = await setupStandaloneKiosk(context, nameId, 5); // 5 s auto-reset
 

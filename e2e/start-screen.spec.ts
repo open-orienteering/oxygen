@@ -33,15 +33,25 @@ async function goToStartScreen(page: Page) {
 // ─── Tests ─────────────────────────────────────────────────
 
 test.describe("Start Screen", () => {
-    test("should display competition name and call-up clock", async ({ page }) => {
+    test("clock, fullscreen, and runners layout on one visit", async ({ page }) => {
         await goToStartScreen(page);
         await expect(page.getByText(COMPETITION_NAME)).toBeVisible();
         await expect(page.getByText("Call-up")).toBeVisible();
 
-        // Check the advance clock via test-id
         const clock = page.getByTestId("advance-clock");
         await expect(clock).toBeVisible();
         await expect(clock).toHaveText(/\d{2}:\d{2}:\d{2}/);
+
+        const fullscreenBtn = page.getByText("⛶");
+        await expect(fullscreenBtn).toBeVisible();
+
+        await expect(page.getByTestId("upcoming-section")).toBeVisible();
+
+        const noRunnersMsg = page.getByText(/No runners starting at/);
+        const hasNoRunners = await noRunnersMsg.count() > 0;
+        if (hasNoRunners) {
+            await expect(noRunnersMsg).toBeVisible();
+        }
     });
 
     test("should have settings panel with offset options", async ({ page }) => {
@@ -60,27 +70,6 @@ test.describe("Start Screen", () => {
         // Change offset
         await page.getByText("5m").click();
         await expect(settingsBtn).toContainText("5m");
-    });
-
-    test("should have fullscreen toggle button", async ({ page }) => {
-        await goToStartScreen(page);
-        const fullscreenBtn = page.getByText("⛶");
-        await expect(fullscreenBtn).toBeVisible();
-    });
-
-    test("should show runners layout or no-runners message", async ({ page }) => {
-        await goToStartScreen(page);
-
-        // Check for the "upcoming" section container via test-id
-        await expect(page.getByTestId("upcoming-section")).toBeVisible();
-
-        // Since seed data is old, we expect either a list or the "No runners" message
-        const noRunnersMsg = page.getByText(/No runners starting at/);
-        const hasNoRunners = await noRunnersMsg.count() > 0;
-
-        if (hasNoRunners) {
-            await expect(noRunnersMsg).toBeVisible();
-        }
     });
 
     test("launcher button should be present in competition header", async ({ page }) => {

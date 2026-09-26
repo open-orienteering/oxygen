@@ -22,7 +22,7 @@ async function clickTab(page: import("@playwright/test").Page, name: string) {
 }
 
 test.describe("Registration Trends", () => {
-  test("opens via the More menu and renders the page header", async ({ page }) => {
+  test("shows controls and toggles axis modes", async ({ page }) => {
     await selectCompetition(page);
     await clickTab(page, "Trends");
 
@@ -30,23 +30,17 @@ test.describe("Registration Trends", () => {
     await expect(
       page.getByRole("heading", { name: "Registration trends" }),
     ).toBeVisible({ timeout: 10000 });
-  });
-
-  test("shows controls and toggles axis modes", async ({ page }) => {
-    await selectCompetition(page);
-    await clickTab(page, "Trends");
 
     await expect(page.getByRole("button", { name: "Cumulative" })).toBeVisible({
       timeout: 10000,
     });
     await page.getByRole("button", { name: "Per day" }).click();
-    // After toggling, the per-day button becomes the selected one (white-on-blue)
     await expect(page.getByRole("button", { name: "Per day" })).toHaveClass(
       /bg-blue-600/,
     );
   });
 
-  test("offers an Add comparison events button that opens the picker", async ({ page }) => {
+  test("opens comparison picker and rejects junk event IDs", async ({ page }) => {
     await selectCompetition(page);
     await clickTab(page, "Trends");
 
@@ -57,29 +51,15 @@ test.describe("Registration Trends", () => {
       .getByRole("button", { name: "Add comparison events" })
       .first()
       .click();
-    // The dialog header repeats the same label
     await expect(
       page.getByRole("heading", { name: "Add comparison events" }),
     ).toBeVisible();
-    // The picker exposes an "Add by event ID or URL" section that bypasses
-    // the org-scoped browse flow — this is the workhorse for comparing
-    // against unrelated competitions and must always be reachable, even
-    // when /api/events 403s for the configured key.
     await expect(
       page.getByRole("heading", { name: /Add by Eventor event ID/i }),
     ).toBeVisible();
     await expect(
       page.getByPlaceholder(/Event ID or URL/i),
     ).toBeVisible();
-  });
-
-  test("rejects junk input in the Add by Event ID field", async ({ page }) => {
-    await selectCompetition(page);
-    await clickTab(page, "Trends");
-    await page
-      .getByRole("button", { name: "Add comparison events" })
-      .first()
-      .click();
 
     const input = page.getByPlaceholder(/Event ID or URL/i);
     await input.fill("not a url");

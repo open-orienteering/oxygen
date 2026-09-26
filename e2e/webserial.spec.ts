@@ -38,11 +38,6 @@ async function selectCompetition(page: import("@playwright/test").Page) {
   });
 }
 
-async function goToTab(page: import("@playwright/test").Page, tab: string) {
-  await selectCompetition(page);
-  await page.getByRole("link", { name: tab, exact: true }).click();
-}
-
 // Inject mock WebSerial before each test
 test.beforeEach(async ({ page }) => {
   await page.addInitScript(getMockWebSerialScript());
@@ -51,73 +46,42 @@ test.beforeEach(async ({ page }) => {
 // ─── Tests ─────────────────────────────────────────────────
 
 test.describe("WebSerial SI Reader", () => {
-  test("should show Connect Reader button when WebSerial is available", async ({
-    page,
-  }) => {
+  test("connects reader and shows status indicator", async ({ page }) => {
     await selectCompetition(page);
     await expect(page.getByTestId("connect-reader")).toBeVisible();
-    await expect(page.getByTestId("connect-reader")).toHaveText(
-      /Connect Reader/,
-    );
-  });
+    await expect(page.getByTestId("connect-reader")).toHaveText(/Connect Reader/);
 
-  test("should connect reader and show status indicator", async ({ page }) => {
-    await selectCompetition(page);
-
-    // Click connect
     await page.getByTestId("connect-reader").click();
 
-    // Should now show "SI Reader" status instead of "Connect Reader"
-    await expect(page.getByTestId("reader-status")).toBeVisible({
-      timeout: 5000,
-    });
+    await expect(page.getByTestId("reader-status")).toBeVisible({ timeout: 5000 });
     await expect(page.getByTestId("reader-status")).toHaveText(/SI Reader/);
 
-    // Verify the mock reports connected
-    const isConnected = await page.evaluate(() =>
-      window.__siMock.isConnected(),
-    );
+    const isConnected = await page.evaluate(() => window.__siMock.isConnected());
     expect(isConnected).toBe(true);
   });
 
   test("should disconnect reader via status menu", async ({ page }) => {
     await selectCompetition(page);
 
-    // Connect
     await page.getByTestId("connect-reader").click();
-    await expect(page.getByTestId("reader-status")).toBeVisible({
-      timeout: 5000,
-    });
+    await expect(page.getByTestId("reader-status")).toBeVisible({ timeout: 5000 });
 
-    // Click the status to open menu
     await page.getByTestId("reader-status").click();
-
-    // Click disconnect
     await page.getByTestId("disconnect-reader").click();
 
-    // Should go back to "Connect Reader" button
-    await expect(page.getByTestId("connect-reader")).toBeVisible({
-      timeout: 5000,
-    });
+    await expect(page.getByTestId("connect-reader")).toBeVisible({ timeout: 5000 });
   });
 
-  test("should show readout notification for known runner with race data", async ({
-    page,
-  }) => {
+  test("readout notification navigates to card readout", async ({ page }) => {
     await selectCompetition(page);
 
-    // Connect reader
     await page.getByTestId("connect-reader").click();
-    await expect(page.getByTestId("reader-status")).toBeVisible({
-      timeout: 5000,
-    });
+    await expect(page.getByTestId("reader-status")).toBeVisible({ timeout: 5000 });
 
-    // Wait for the runner resolution API call to complete after inserting the card
     const resolutionPromise = page.waitForResponse(
       (resp) => resp.url().includes("/trpc/cardReadout.readout") && resp.status() === 200,
     );
 
-    // Insert card 501438 (Malin Johannesson, exists in test DB)
     await page.evaluate(() =>
       window.__siMock.insertCard(501438, [
         { controlCode: 31, time: 36360 },
@@ -128,56 +92,14 @@ test.describe("WebSerial SI Reader", () => {
 
     await resolutionPromise;
 
-    // Notification banner should appear
-    await expect(page.getByTestId("card-notification")).toBeVisible({
-      timeout: 5000,
-    });
+    await expect(page.getByTestId("card-notification")).toBeVisible({ timeout: 5000 });
     await expect(page.getByTestId("card-notification")).toContainText("501438");
+    await expect(page.getByTestId("card-notification-view")).toContainText("View Readout");
 
-    // Known runner with race data → "View Readout" action
-    await expect(page.getByTestId("card-notification-view")).toContainText(
-      "View Readout",
-    );
-  });
-
-  test("should navigate to card readout from readout notification", async ({
-    page,
-  }) => {
-    await selectCompetition(page);
-
-    // Connect reader
-    await page.getByTestId("connect-reader").click();
-    await expect(page.getByTestId("reader-status")).toBeVisible({
-      timeout: 5000,
-    });
-
-    // Wait for the runner resolution API call to complete after inserting the card
-    const resolutionPromise = page.waitForResponse(
-      (resp) => resp.url().includes("/trpc/cardReadout.readout") && resp.status() === 200,
-    );
-
-    // Insert card 501438 (known runner with race data)
-    await page.evaluate(() =>
-      window.__siMock.insertCard(501438, [
-        { controlCode: 31, time: 36360 },
-      ]),
-    );
-
-    await resolutionPromise;
-
-    // Wait for notification
-    await expect(page.getByTestId("card-notification")).toBeVisible({
-      timeout: 5000,
-    });
-
-    // Click "View Readout"
     await page.getByTestId("card-notification-view").click();
 
-    // Should navigate to card readout page
     await expect(page).toHaveURL(/card-readout.*card=501438/);
-    await expect(
-      page.getByPlaceholder("Enter SI card number..."),
-    ).toHaveValue("501438");
+    await expect(page.getByPlaceholder("Enter SI card number...")).toHaveValue("501438");
   });
 
   test("should auto-populate card readout page on card read", async ({

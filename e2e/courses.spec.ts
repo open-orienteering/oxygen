@@ -24,7 +24,7 @@ async function clickTab(page: import("@playwright/test").Page, name: string) {
 }
 
 test.describe("Courses Page", () => {
-  test("should navigate to courses tab and display course list", async ({ page }) => {
+  test("lists courses, expands details, and deep-links", async ({ page }) => {
     await selectCompetition(page);
     await clickTab(page, "Courses");
     expect(page.url()).toContain("/courses");
@@ -33,14 +33,6 @@ test.describe("Courses Page", () => {
     await expect(page.getByRole("cell", { name: "Bana 1" })).toBeVisible();
     await expect(page.getByRole("cell", { name: "Bana 2" })).toBeVisible();
     await expect(page.getByRole("cell", { name: "Bana 3" })).toBeVisible();
-  });
-
-  test("should expand a course to show details, class usage, and control sequence", async ({
-    page,
-  }) => {
-    await selectCompetition(page);
-    await clickTab(page, "Courses");
-    await expect(page.getByText("3 courses")).toBeVisible({ timeout: 10000 });
 
     await page.getByRole("cell", { name: "Bana 2" }).click();
 
@@ -50,9 +42,7 @@ test.describe("Courses Page", () => {
     await expect(page.locator("label", { hasText: "Controls" })).toBeVisible();
     await expect(page.getByText("Control Sequence")).toBeVisible();
     expect(page.url()).toContain("course=2");
-  });
 
-  test("should deep link to courses page with expanded course", async ({ page }) => {
     await page.goto("/itest/courses?course=2");
     await expect(page.getByText("Used by Classes")).toBeVisible({ timeout: 15000 });
     await expect(page.getByText("Öppen 2")).toBeVisible();

@@ -952,7 +952,7 @@ test.describe("Course editor", () => {
     ).toHaveCount(sourceCount);
   });
 
-  test("in-map course panel switches courses and lives inside the map box", async ({ page }) => {
+  test("editor chrome: course panel, Escape cascade, and H hide-others", async ({ page }) => {
     await selectCompetition(page);
     await ensureCoursesAndMap(page);
     await openEditor(page);
@@ -969,16 +969,12 @@ test.describe("Course editor", () => {
     await page.getByTestId("editor-help").click();
     await expect(page.getByTestId("editor-hint")).toHaveCount(0);
 
-    // The panel is a child of the map panel — the element the browser
-    // promotes in fullscreen — so it stays visible while editing there.
-    // It is the ONLY course UI: there is no page sidebar.
     const card = page
       .getByTestId("map-panel")
       .getByTestId("editor-map-course-selector");
     await expect(card).toBeVisible({ timeout: 15000 });
     await expect(card).toContainText("No course");
 
-    // Selecting a course shows its sequence inside the same panel.
     const item = card.getByTestId("editor-course-item").first();
     const courseName = await item.getAttribute("data-course-name");
     expect(courseName).toBeTruthy();
@@ -989,37 +985,31 @@ test.describe("Course editor", () => {
       card.locator(`[data-testid="editor-course-item"][data-course-name="${courseName}"]`),
     ).toHaveClass(/bg-purple-50/);
 
-    // Regression: enabling "Hide other controls" must not sprout a second,
-    // internal MapPanel toggle next to the editor's own — one button, one
-    // state.
     await page.getByTestId("editor-hide-others").click();
     await expect(page.getByRole("button", { name: "Show all controls" })).toHaveCount(0);
     await page.getByTestId("editor-hide-others").click();
 
-    // Collapsing hides list + sequence but keeps the selected course readable.
     await card.getByTestId("editor-map-selector-toggle").click();
     await expect(card.getByTestId("editor-course-item")).toHaveCount(0);
     await expect(card.getByTestId("editor-sequence")).toHaveCount(0);
     await expect(card).toContainText(courseName!);
-  });
 
-  test("escape dismisses the phantom, then the control selection", async ({ page }) => {
-    await selectCompetition(page);
-    await ensureCoursesAndMap(page);
-    await openEditor(page);
+    // Re-expand and clear course selection so Escape phantom tests start clean
+    await card.getByTestId("editor-map-selector-toggle").click();
+    await expect(card.getByTestId("editor-course-item").first()).toBeVisible({ timeout: 5000 });
+    await page.keyboard.press("Escape");
+    await expect(card.getByTestId("editor-sequence")).toHaveCount(0);
 
-    // Click empty map: phantom ring + context menu appear.
+    // Escape dismisses phantom, then control selection
     const spot = await findEmptyMapPoint(page);
     await page.mouse.click(spot.x, spot.y);
     await expect(page.getByTestId("editor-phantom")).toBeAttached({ timeout: 10000 });
     await expect(page.getByTestId("editor-context-menu")).toBeVisible();
 
-    // Escape #1: phantom (and its menu) dismissed.
     await page.keyboard.press("Escape");
     await expect(page.getByTestId("editor-phantom")).not.toBeAttached();
     await expect(page.getByTestId("editor-context-menu")).not.toBeVisible();
 
-    // Select a control by clicking its hit target.
     const [code] = await pickClickableControlCodes(page, 1);
     expect(code).toBeTruthy();
     const box = await page
@@ -1031,24 +1021,16 @@ test.describe("Course editor", () => {
     await expect(page.getByTestId("editor-selection-ring")).toBeAttached();
     await expect(page.getByTestId("editor-context-menu")).toBeVisible();
 
-    // Escape #2: selection cleared.
     await page.keyboard.press("Escape");
     await expect(page.getByTestId("editor-selected-info")).not.toBeVisible();
     await expect(page.getByTestId("editor-selection-ring")).not.toBeAttached();
-  });
 
-  test("H toggles hide-other-controls; Escape walks the cascade before exiting fullscreen", async ({ page }) => {
-    await selectCompetition(page);
-    await ensureCoursesAndMap(page);
-    await openEditor(page);
-
+    // H toggles hide-other-controls; Escape walks cascade before exiting fullscreen
     const hideOthers = page.getByTestId("editor-hide-others");
 
-    // Without a course, H is a no-op (the toggle has nothing to hide).
     await page.keyboard.press("h");
     await expect(hideOthers).not.toHaveClass(/bg-purple-100/);
 
-    // Select a course, then H toggles the filter on and off again.
     const firstCourse = page.getByTestId("editor-course-item").first();
     await firstCourse.click();
     await expect(page.getByTestId("editor-sequence")).toBeVisible({ timeout: 15000 });
@@ -1057,19 +1039,13 @@ test.describe("Course editor", () => {
     await page.keyboard.press("h");
     await expect(hideOthers).not.toHaveClass(/bg-purple-100/);
 
-    // Fullscreen: with a course still selected, Escape deselects it and
-    // STAYS fullscreen; only the next Escape (empty cascade) exits.
-    // (Playwright's synthetic Esc never triggers the browser's own
-    // fullscreen exit, so this exercises exactly the page-side logic —
-    // in a real Chromium session the keyboard lock keeps the browser
-    // from swallowing the short press.)
     await page.getByRole("button", { name: "Fullscreen" }).first().click();
     await expect
       .poll(() => page.evaluate(() => !!document.fullscreenElement), { timeout: 10000 })
       .toBe(true);
 
     await page.keyboard.press("Escape");
-    await expect(page.getByTestId("editor-sequence")).toHaveCount(0); // course deselected
+    await expect(page.getByTestId("editor-sequence")).toHaveCount(0);
     expect(await page.evaluate(() => !!document.fullscreenElement)).toBe(true);
 
     await page.keyboard.press("Escape");

@@ -204,29 +204,21 @@ test.describe("Registration Dialog", () => {
       await expect(page.getByTestId("registration-dialog")).toBeVisible({ timeout: 5000 });
     });
 
-    test("closes on ESC when not in sticky mode", async ({ page }) => {
+    test("closes on ESC and on backdrop click when not in sticky mode", async ({ page }) => {
       await setupAdmin(page);
       await insertUnregisteredCard(page, 2900003);
       await page.getByTestId("card-notification-view").click();
       await expect(page.getByTestId("registration-dialog")).toBeVisible({ timeout: 5000 });
 
-      // Press ESC
       await page.keyboard.press("Escape");
-
-      // Dialog should close
       await expect(page.getByTestId("registration-dialog")).not.toBeVisible({ timeout: 3000 });
-    });
 
-    test("closes on backdrop click", async ({ page }) => {
-      await setupAdmin(page);
+      await page.evaluate(() => window.__siMock.removeCard());
       await insertUnregisteredCard(page, 2900004);
       await page.getByTestId("card-notification-view").click();
       await expect(page.getByTestId("registration-dialog")).toBeVisible({ timeout: 5000 });
 
-      // Click the backdrop (outside the dialog content)
       await page.getByTestId("registration-dialog-backdrop").click({ position: { x: 10, y: 10 } });
-
-      // Dialog should close
       await expect(page.getByTestId("registration-dialog")).not.toBeVisible({ timeout: 3000 });
     });
   });
@@ -332,72 +324,30 @@ test.describe("Registration Dialog", () => {
   // ── Group 3: Registration + Kiosk Integration ──────────
 
   test.describe("Registration + Kiosk", () => {
-    test("complete registration updates kiosk and closes dialog", async ({ context }) => {
-      const { adminPage, kioskPage } = await setupAdminAndKiosk(context);
-
-      // Insert unregistered card
-      await insertUnregisteredCard(adminPage, 2900020);
-
-      // Open dialog
-      await adminPage.getByTestId("card-notification-view").click();
-      await expect(adminPage.getByTestId("registration-dialog")).toBeVisible({ timeout: 5000 });
-
-      const dialog = adminPage.getByTestId("registration-dialog");
-
-      // Fill form
-      await dialog.locator("input[placeholder='First Last']").fill("Test KioskReg");
-      await dialog.getByTestId("reg-class").click();
-      await expect(adminPage.getByText("Öppen 1", { exact: true })).toBeVisible({ timeout: 3000 });
-      await adminPage.getByText("Öppen 1", { exact: true }).click();
-
-      // Submit
-      await dialog.getByTestId("reg-submit").click();
-
-      // Kiosk should show registration-complete
-      await expect(kioskPage.getByText("Test KioskReg")).toBeVisible({ timeout: 10000 });
-      await expect(kioskPage.getByText("Registration Complete!")).toBeVisible({ timeout: 5000 });
-
-      // Dialog should close (non-sticky mode)
-      await expect(adminPage.getByTestId("registration-dialog")).not.toBeVisible({ timeout: 5000 });
-
-      // Clean up
-      const runnerId = await adminPage.evaluate(async () => {
-        const resp = await fetch(`/trpc/runner.findByCard?input=${encodeURIComponent(JSON.stringify({ cardNo: 2900020 }))}`, { headers: { "x-competition-id": "itest" } });
-        const data = await resp.json();
-        return data?.result?.data?.id;
-      });
-      if (runnerId) createdRunnerIds.push(runnerId);
-    });
-
-    test("kiosk shows form progress during registration", async ({ context }) => {
+    test("kiosk shows form progress then completes and closes dialog", async ({ context }) => {
       const { adminPage, kioskPage } = await setupAdminAndKiosk(context);
 
       await insertUnregisteredCard(adminPage, 2900021);
       await adminPage.getByTestId("card-notification-view").click();
       await expect(adminPage.getByTestId("registration-dialog")).toBeVisible({ timeout: 5000 });
 
-      // Kiosk should show registration-waiting
       await expect(kioskPage.getByText("Registration in progress")).toBeVisible({ timeout: 10000 });
 
-      // Fill name → kiosk should update
       const dialog = adminPage.getByTestId("registration-dialog");
       await dialog.locator("input[placeholder='First Last']").fill("Test KioskProgress");
-
-      // Kiosk should show the name
       await expect(kioskPage.getByText("Test KioskProgress")).toBeVisible({ timeout: 5000 });
 
-      // Fill class → kiosk should update
       await dialog.getByTestId("reg-class").click();
       await expect(adminPage.getByText("Öppen 2", { exact: true })).toBeVisible({ timeout: 3000 });
       await adminPage.getByText("Öppen 2", { exact: true }).click();
-
       await expect(kioskPage.getByText("Öppen 2")).toBeVisible({ timeout: 5000 });
 
-      // Submit to complete
       await dialog.getByTestId("reg-submit").click();
+
+      await expect(kioskPage.getByText("Test KioskProgress")).toBeVisible({ timeout: 10000 });
+      await expect(kioskPage.getByText("Registration Complete!")).toBeVisible({ timeout: 5000 });
       await expect(adminPage.getByTestId("registration-dialog")).not.toBeVisible({ timeout: 5000 });
 
-      // Clean up
       const runnerId = await adminPage.evaluate(async () => {
         const resp = await fetch(`/trpc/runner.findByCard?input=${encodeURIComponent(JSON.stringify({ cardNo: 2900021 }))}`, { headers: { "x-competition-id": "itest" } });
         const data = await resp.json();
@@ -460,89 +410,34 @@ test.describe("Registration Dialog", () => {
       await expect(page.getByTestId("reg-sticky-toggle")).toBeChecked();
     });
 
-    test("form clears after submit but dialog stays open in sticky mode", async ({ page }) => {
-      await setupAdmin(page);
-      await insertUnregisteredCard(page, 2900032);
-      await page.getByTestId("card-notification-view").click();
-      await expect(page.getByTestId("registration-dialog")).toBeVisible({ timeout: 5000 });
-
-      // Enable sticky
-      await page.getByTestId("reg-sticky-toggle").click();
-
-      const dialog = page.getByTestId("registration-dialog");
-      await dialog.locator("input[placeholder='First Last']").fill("Test Sticky1");
-      await dialog.getByTestId("reg-class").click();
-      await expect(page.getByRole("button", { name: "Öppen 1" }).first()).toBeVisible({ timeout: 3000 });
-      await page.getByRole("button", { name: "Öppen 1" }).first().click();
-      await dialog.getByTestId("reg-submit").click();
-
-      // Dialog should stay open
-      await expect(page.getByTestId("registration-dialog")).toBeVisible({ timeout: 3000 });
-
-      // Form should be cleared
-      await expect(dialog.locator("input[placeholder='First Last']")).toHaveValue("");
-
-      // Clean up
-      const runnerId = await page.evaluate(async () => {
-        const resp = await fetch(`/trpc/runner.findByCard?input=${encodeURIComponent(JSON.stringify({ cardNo: 2900032 }))}`, { headers: { "x-competition-id": "itest" } });
-        const data = await resp.json();
-        return data?.result?.data?.id;
-      });
-      if (runnerId) createdRunnerIds.push(runnerId);
-    });
-
-    test("ESC clears dirty form in sticky mode", async ({ page }) => {
+    test("ESC clears dirty form and never closes dialog in sticky mode", async ({ page }) => {
       await setupAdmin(page);
       await insertUnregisteredCard(page, 2900033);
       await page.getByTestId("card-notification-view").click();
       await expect(page.getByTestId("registration-dialog")).toBeVisible({ timeout: 5000 });
 
-      // Enable sticky
       await page.getByTestId("reg-sticky-toggle").click();
 
-      // Fill some fields (making form dirty)
       const dialog = page.getByTestId("registration-dialog");
       await dialog.locator("input[placeholder='First Last']").fill("Test DirtyForm");
 
-      // Press ESC — should clear form, NOT close dialog
       await page.keyboard.press("Escape");
-
-      // Dialog still visible
       await expect(page.getByTestId("registration-dialog")).toBeVisible();
-      // Form cleared
       await expect(dialog.locator("input[placeholder='First Last']")).toHaveValue("");
-    });
-
-    test("ESC never closes the dialog in sticky mode", async ({ page }) => {
-      await setupAdmin(page);
-      await insertUnregisteredCard(page, 2900034);
-      await page.getByTestId("card-notification-view").click();
-      await expect(page.getByTestId("registration-dialog")).toBeVisible({ timeout: 5000 });
-
-      // Enable sticky
-      await page.getByTestId("reg-sticky-toggle").click();
-
-      // First ESC clears the pre-filled card data; dialog must stay open
-      await page.keyboard.press("Escape");
-      await expect(page.getByTestId("registration-dialog")).toBeVisible();
 
       // Form is now clean — a second ESC must still NOT close the dialog
-      // when sticky mode is on (the whole point of sticky mode is to keep
-      // the registration surface up between card reads).
       await page.keyboard.press("Escape");
       await expect(page.getByTestId("registration-dialog")).toBeVisible();
     });
 
-    test("next card auto-fills in sticky mode", async ({ page }) => {
+    test("sticky submit clears form and next card auto-fills", async ({ page }) => {
       await setupAdmin(page);
       await insertUnregisteredCard(page, 2900035);
       await page.getByTestId("card-notification-view").click();
       await expect(page.getByTestId("registration-dialog")).toBeVisible({ timeout: 5000 });
 
-      // Enable sticky
       await page.getByTestId("reg-sticky-toggle").click();
 
-      // Register first runner
       const dialog = page.getByTestId("registration-dialog");
       await dialog.locator("input[placeholder='First Last']").fill("Test Sticky2");
       await dialog.getByTestId("reg-class").click();
@@ -550,13 +445,11 @@ test.describe("Registration Dialog", () => {
       await page.getByRole("button", { name: "Öppen 1" }).first().click();
       await dialog.getByTestId("reg-submit").click();
 
-      // Form cleared, dialog still open
+      await expect(page.getByTestId("registration-dialog")).toBeVisible({ timeout: 3000 });
       await expect(dialog.locator("input[placeholder='First Last']")).toHaveValue("");
 
-      // Remove old card and insert new one
       await page.evaluate(() => window.__siMock.removeCard());
 
-      // Insert new unregistered SIAC card with owner data (must be 7000001-9999999 for ownerData)
       const resolutionPromise = page.waitForResponse(
         (resp) => resp.url().includes("/trpc/cardReadout.readout") && resp.status() === 200,
       );
@@ -567,13 +460,11 @@ test.describe("Registration Dialog", () => {
       );
       await resolutionPromise;
 
-      // Dialog should auto-fill with new card data
       await expect(dialog.locator("input[placeholder='First Last']")).toHaveValue(
         "Nils Berg",
         { timeout: 5000 },
       );
 
-      // Clean up first runner
       const runnerId = await page.evaluate(async () => {
         const resp = await fetch(`/trpc/runner.findByCard?input=${encodeURIComponent(JSON.stringify({ cardNo: 2900035 }))}`, { headers: { "x-competition-id": "itest" } });
         const data = await resp.json();

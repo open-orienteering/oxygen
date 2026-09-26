@@ -10,18 +10,6 @@ async function clearEventorKey(page: import("@playwright/test").Page) {
 }
 
 test.describe("Competition Selector — New Features", () => {
-  test("should display New Event and Import from Eventor buttons", async ({
-    page,
-  }) => {
-    await page.goto("/");
-    await expect(
-      page.getByRole("button", { name: /New Event/ }),
-    ).toBeVisible({ timeout: 10000 });
-    await expect(
-      page.getByRole("button", { name: /Import from Eventor/ }),
-    ).toBeVisible();
-  });
-
   test("should create a new empty competition and navigate to it", async ({
     page,
   }) => {
@@ -31,6 +19,9 @@ test.describe("Competition Selector — New Features", () => {
     await expect(
       page.getByRole("button", { name: /New Event/ }),
     ).toBeVisible({ timeout: 10000 });
+    await expect(
+      page.getByRole("button", { name: /Import from Eventor/ }),
+    ).toBeVisible();
 
     await page.getByRole("button", { name: /New Event/ }).click();
     await expect(
