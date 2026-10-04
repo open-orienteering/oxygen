@@ -174,6 +174,30 @@ need to stand off at a distance: the direction grid was doubled to 32
 6.2 mm from its circle (the position a human picked when hand-testing
 in devtools) with a leader line, instead of 9.5 mm away in a pocket.
 
+### Follow-up: course lines as hard obstacles, and manual offsets
+
+A later report (beginner course Vit 1, number 5 sitting on the leg)
+showed that line avoidance was only a *soft* cost, measured from the
+label centre. Neighbour-circle ambiguity in the line-free directions
+could outweigh it, so the cheapest slot was often on the line.
+
+Drawn segments are now a **hard** obstacle: a candidate whose box,
+padded by `0.1·labelSize`, intersects any drawn course line is
+rejected the same way circle and label collisions are. The remaining
+soft cost is graded on box-edge clearance (`< 0.5·labelSize`), and the
+never-drop fallback adds `+600` per crossing line.
+
+Course setters can also **drag a number** in the course editor. The
+drop is stored as `course_controls.label_dx` / `label_dy` (map mm from
+the control centre), keyed per course so two courses sharing a control
+can place the digit differently. `placeControlLabels` accepts
+`fixedLabel` for those positions: they are emitted first, never get a
+leader, and become obstacles for auto-placed neighbours. Print/PDF
+uses the same path via `CourseOverlayControl.labelPosition`.
+
+The live-replay overlay (`ReplayCourseLayer.tsx`) still has its own
+legacy placer and is unchanged.
+
 ### Outcome on the reported cluster
 
 With the real ordinal-1 geometry (where the circle pairs 87/88, 87/108,

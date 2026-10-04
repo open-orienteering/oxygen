@@ -200,7 +200,12 @@ export interface ReferenceUpsertPayload {
   seq: number;
   fields: Record<string, unknown>;
   /** `course.upserted` only: the full ordered control list (replace-all). */
-  courseControls?: Array<{ position: number; controlId: string }>;
+  courseControls?: Array<{
+    position: number;
+    controlId: string;
+    labelDx?: number | null;
+    labelDy?: number | null;
+  }>;
   /** `class.upserted` only: course-pool rows (replace-all). */
   coursePools?: Array<{ stage: number; courseId: string }>;
 }

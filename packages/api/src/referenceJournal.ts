@@ -61,7 +61,7 @@ export async function courseUpsertPayload(
   const ccs = await db.courseControl.findMany({
     where: { courseId: courseUuid },
     orderBy: { position: "asc" },
-    select: { position: true, controlId: true },
+    select: { position: true, controlId: true, labelDx: true, labelDy: true },
   });
   return {
     id: row.id,

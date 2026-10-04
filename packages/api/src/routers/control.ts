@@ -730,7 +730,36 @@ export const controlRouter = router({
       const c = await getControlByCode(ctx.db, ctx.event.id, input.id);
       const data: Record<string, unknown> = {};
       if (input.name !== undefined) data.name = input.name;
-      if (input.codes !== undefined) data.codes = input.codes;
+      if (input.codes !== undefined && input.codes !== c.codes) {
+        const parts = input.codes.split(";").map((p) => p.trim()).filter(Boolean);
+        for (const p of parts) {
+          const n = parseInt(p, 10);
+          if (!Number.isFinite(n) || n <= 0) continue;
+          const dup = await ctx.db.control.findFirst({
+            where: {
+              eventId: ctx.event.id,
+              removed: false,
+              id: { not: c.id },
+              OR: [
+                { codes: String(n) },
+                { codes: { startsWith: `${n};` } },
+                { codes: { contains: `;${n};` } },
+                { codes: { endsWith: `;${n}` } },
+              ],
+            },
+            select: { id: true },
+          });
+          if (dup) {
+            throw new TRPCError({
+              code: "CONFLICT",
+              message: `Control with code ${n} already exists`,
+            });
+          }
+        }
+        data.codes = input.codes;
+      } else if (input.codes !== undefined) {
+        data.codes = input.codes;
+      }
       if (input.status !== undefined)
         data.status = valueToControlStatus(input.status);
       if (input.timeAdjust !== undefined) data.timeAdjust = input.timeAdjust;

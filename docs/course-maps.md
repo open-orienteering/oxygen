@@ -281,7 +281,9 @@ objects rather than UUIDs.
 The layout editor and PDF composer use the same course-overlay geometry as the
 regular map view: legs are clipped around controls, imported overprint gaps
 and control-circle slits are retained, and control numbers avoid symbols and
-course lines. Print (and the live map) use IOF colour stacking — lower purple
+course lines (a number box that would sit on a drawn leg is rejected; a
+course-setter can also drag the number in the editor, storing a per-course
+offset that print honours as `labelPosition`). Print (and the live map) use IOF colour stacking — lower purple
 under the map ink layer, upper purple on top — instead of blend modes; see
 [`map-color-stack.md`](map-color-stack.md).
 

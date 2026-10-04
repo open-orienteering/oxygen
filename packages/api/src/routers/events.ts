@@ -820,6 +820,8 @@ async function applyReferenceUpsert(
             courseId: payload.id,
             position: cc.position,
             controlId: cc.controlId,
+            labelDx: cc.labelDx ?? null,
+            labelDy: cc.labelDy ?? null,
           })),
         });
       }

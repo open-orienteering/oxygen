@@ -207,6 +207,9 @@ export function renderCourseOverlaySvg(
           : control.type === "finish"
             ? finishOuter
             : radius,
+      ...(control.labelPosition !== undefined
+        ? { fixedLabel: mapToPage(control.labelPosition, frame, window) }
+        : {}),
     });
   }
   const labels = placeControlLabels(placementCircles, drawnSegments, {
@@ -241,14 +244,7 @@ export function renderCourseOverlaySvg(
     lower.push(
       `<path ${data} d="${drawBrokenCircle(point.x, point.y, radius, cuts)}"/>`,
     );
-    const label =
-      control.labelPosition === undefined
-        ? labels.get(control.id)
-        : {
-            ...mapToPage(control.labelPosition, frame, window),
-            w: labelFontSize,
-            h: labelFontSize,
-          };
+    const label = labels.get(control.id);
     if (!label) continue;
     if (label.leader) {
       upper.push(

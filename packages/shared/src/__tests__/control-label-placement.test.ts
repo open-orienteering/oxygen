@@ -21,6 +21,38 @@ import {
 /** Nominal overprint dimensions in map mm — same ratios MapViewer uses. */
 const OPTS = { radius: 2.5, labelSize: 3.5 };
 
+/** True when a closed segment overlaps a closed AABB. */
+function segmentHitsRect(
+  seg: PlacementSeg,
+  rect: { x: number; y: number; w: number; h: number },
+): boolean {
+  let t0 = 0, t1 = 1;
+  const dx = seg.x2 - seg.x1, dy = seg.y2 - seg.y1;
+  const minX = rect.x - rect.w / 2, maxX = rect.x + rect.w / 2;
+  const minY = rect.y - rect.h / 2, maxY = rect.y + rect.h / 2;
+  const tests: [number, number][] = [
+    [-dx, seg.x1 - minX],
+    [dx, maxX - seg.x1],
+    [-dy, seg.y1 - minY],
+    [dy, maxY - seg.y1],
+  ];
+  for (const [p, q] of tests) {
+    if (p === 0) {
+      if (q < 0) return false;
+      continue;
+    }
+    const r = q / p;
+    if (p < 0) {
+      if (r > t1) return false;
+      if (r > t0) t0 = r;
+    } else {
+      if (r < t0) return false;
+      if (r < t1) t1 = r;
+    }
+  }
+  return t0 <= t1;
+}
+
 function dist(ax: number, ay: number, bx: number, by: number): number {
   return Math.hypot(bx - ax, by - ay);
 }
@@ -110,8 +142,13 @@ describe("placeControlLabels", () => {
       OPTS,
     );
     const l = placed.get("a")!;
-    const estH = OPTS.labelSize * 1.2;
-    expect(Math.abs(l.x - 108)).toBeGreaterThanOrEqual(estH);
+    const pad = OPTS.labelSize * 0.1;
+    expect(
+      segmentHitsRect(
+        { x1: 108, y1: 0, x2: 108, y2: 200 },
+        { ...l, w: l.w + 2 * pad, h: l.h + 2 * pad },
+      ),
+    ).toBe(false);
   });
 
   it("attaches no leader lines when every label owns its circle (82/84 cluster)", () => {
@@ -247,6 +284,53 @@ describe("placeControlLabels", () => {
       const edge = rectEdgeDist(100, 100, l) - OPTS.radius;
       expect(edge).toBeCloseTo(gap, 6);
     }
+  });
+
+  it("never places a label box on a course line when a free slot exists", () => {
+    // Beginner-course shape: incoming SW→NE legs through the preferred
+    // up-right slot, with neighbours to the right and above so the
+    // cheap remaining pocket is on the line. The line is a hard
+    // obstacle — the number must sit off it.
+    const circles: PlacementCircle[] = [
+      { id: "5", x: 100, y: 100, label: "5" },
+      { id: "4", x: 118, y: 100, label: "4" },
+      { id: "6", x: 100, y: 82, label: "6" },
+    ];
+    const lines: PlacementSeg[] = [
+      { x1: 80, y1: 120, x2: 100, y2: 100 },
+      { x1: 100, y1: 100, x2: 120, y2: 80 },
+    ];
+    const placed = placeControlLabels(circles, lines, OPTS);
+    const pad = OPTS.labelSize * 0.1;
+    for (const [id, label] of placed) {
+      const padded = { ...label, w: label.w + 2 * pad, h: label.h + 2 * pad };
+      for (const seg of lines) {
+        expect(
+          segmentHitsRect(seg, padded),
+          `label ${id} sits on a course line`,
+        ).toBe(false);
+      }
+    }
+  });
+
+  it("keeps a fixed label where the caller put it and treats it as an obstacle", () => {
+    const placed = placeControlLabels(
+      [
+        { id: "a", x: 100, y: 100, label: "1", fixedLabel: { x: 120, y: 100 } },
+        { id: "b", x: 130, y: 100, label: "2" },
+      ],
+      [],
+      OPTS,
+    );
+    const a = placed.get("a")!;
+    const b = placed.get("b")!;
+    expect(a.x).toBe(120);
+    expect(a.y).toBe(100);
+    expect(a.leader).toBeUndefined();
+    const overlap =
+      Math.abs(a.x - b.x) < (a.w + b.w) / 2 &&
+      Math.abs(a.y - b.y) < (a.h + b.h) / 2;
+    expect(overlap).toBe(false);
   });
 
   it("honours per-circle radius overrides (finish double ring)", () => {

@@ -192,6 +192,26 @@ describe("resolveMapLayout orientation", () => {
   });
 });
 
+describe("resolveMapLayout label offset", () => {
+  it("turns a stored offset into a labelPosition on the overlay control", () => {
+    const layout = resolveMapLayout({
+      kind: "course",
+      template,
+      course: {
+        name: "H40",
+        lengthM: 1000,
+        climbM: 0,
+        controls: [{ ...controls[0], labelOffset: { dx: 5, dy: -3 } }],
+      },
+    });
+    const overlay = layout.controls.find((c) => c.code === "31");
+    expect(overlay?.labelPosition).toEqual({
+      x: controls[0].xpos + 5,
+      y: controls[0].ypos - 3,
+    });
+  });
+});
+
 describe("graphic upload validation", () => {
   it("detects PNG by magic bytes and rejects empty or oversized files", () => {
     const png = Buffer.concat([

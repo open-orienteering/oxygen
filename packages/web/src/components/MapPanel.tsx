@@ -540,6 +540,7 @@ function MapPanelImpl({
         lengthM: c.length,
         climbM: c.climb,
         descriptionInstructions: c.descriptionInstructions ?? null,
+        labelOffsets: c.labelOffsets,
       };
     });
   }, [courses.data, controlCoords.data, effectiveCourseNames, classNamesByCourse]);

@@ -42,6 +42,8 @@ export interface LayoutControlSource {
   ypos: number;
   /** IOF description JSONB from `oxygen.controls.description`. */
   description?: unknown;
+  /** Manual number offset from the control centre, map millimetres. */
+  labelOffset?: { dx: number; dy: number };
 }
 
 /** Map template row — `settings` / `objects` are raw JSONB. */
@@ -94,6 +96,22 @@ function readInstructions(raw: unknown): CourseDescriptionInstructions | null {
     }
   }
   return out;
+}
+
+/** Attach a course-control's stored number offset onto the control row. */
+export function layoutControlsFromCourseControls(
+  rows: Array<{
+    control: LayoutControlSource;
+    labelDx?: number | null;
+    labelDy?: number | null;
+  }>,
+): LayoutControlSource[] {
+  return rows.map(({ control, labelDx, labelDy }) => ({
+    ...control,
+    ...(labelDx != null && labelDy != null
+      ? { labelOffset: { dx: labelDx, dy: labelDy } }
+      : {}),
+  }));
 }
 
 export interface ResolveMapLayoutInput {
@@ -295,14 +313,24 @@ export function resolveMapLayout(
       (control.status === "start" || control.status === "finish")
         ? control.status
         : "control";
+    const x = geometryControl?.x ?? control.xpos;
+    const y = geometryControl?.y ?? control.ypos;
     return {
       id: control.id,
       code,
       type,
-      x: geometryControl?.x ?? control.xpos,
-      y: geometryControl?.y ?? control.ypos,
+      x,
+      y,
       cuts: geometryControl?.cuts,
       description: control.description,
+      ...(control.labelOffset
+        ? {
+            labelPosition: {
+              x: x + control.labelOffset.dx,
+              y: y + control.labelOffset.dy,
+            },
+          }
+        : {}),
     };
   });
   if (input.kind === "all_controls") {

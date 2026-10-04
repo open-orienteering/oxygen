@@ -109,6 +109,12 @@ export interface CourseOverlay {
   climbM?: number;
   /** Special / finish instructions for the description sheet. */
   descriptionInstructions?: import("@oxygen/shared").CourseDescriptionInstructions | null;
+  /**
+   * Per-control number offsets (map mm from the control centre), keyed
+   * by overlay control id. Used when this course is the single
+   * highlighted course (sequence numbering).
+   */
+  labelOffsets?: Record<string, { dx: number; dy: number }>;
 }
 
 /**
@@ -213,6 +219,8 @@ export interface MapViewerEditorProps {
   moveEpoch?: number;
   onMapClick?: (pt: { x: number; y: number }) => void;
   onMoveEnd?: (id: string, pt: { x: number; y: number }) => void;
+  /** Drop of a dragged control-number; offset is map mm from the control centre. */
+  onLabelMoveEnd?: (id: string, offset: { dx: number; dy: number }) => void;
   onSelect?: (id: string | null) => void;
   onLegClick?: (courseName: string, legIndex: number, pt: { x: number; y: number }) => void;
   /** Touch-friendly dismiss (mirrors Escape cascade on the owning page). */
@@ -298,6 +306,14 @@ interface EditorControlHit {
   mmX: number; mmY: number;
 }
 interface EditorLegHit { key: string; d: string; course: string; index: number }
+interface EditorLabelHit {
+  id: string;
+  px: number; py: number;
+  w: number; h: number;
+  /** Control position in map mm — the offset is drop − this. */
+  mmX: number; mmY: number;
+  from: { dx: number; dy: number } | null;
+}
 
 // ─── Component ──────────────────────────────────────────────
 
@@ -513,6 +529,16 @@ export function MapViewer({
   // soon as the data catches up to `to` (effect below) so that a later
   // genuine return to `from` — an undone move — renders truthfully.
   const [pendingMoves, setPendingMoves] = useState<Map<string, { from: Pt; to: Pt }>>(new Map());
+  const editorLabelDragRef = useRef<{
+    id: string; startX: number; startY: number; moved: boolean;
+    ctrlX: number; ctrlY: number;
+    from: { dx: number; dy: number } | null;
+    touch: boolean;
+  } | null>(null);
+  const [editorLabelDragPos, setEditorLabelDragPos] = useState<{ id: string; x: number; y: number } | null>(null);
+  const [pendingLabelMoves, setPendingLabelMoves] = useState<
+    Map<string, { from: { dx: number; dy: number } | null; to: { dx: number; dy: number } }>
+  >(new Map());
   // Mouse-down bookkeeping for the leg-insert hit lines.
   const legDownRef = useRef<{ course: string; index: number; x: number; y: number } | null>(null);
 
@@ -536,12 +562,39 @@ export function MapViewer({
     });
   }, [controls]);
 
+  useEffect(() => {
+    setPendingLabelMoves((prev) => {
+      if (prev.size === 0) return prev;
+      const highlighted = courses.find(
+        (c) => c.highlight || c.name === highlightCourseName,
+      );
+      let changed = false;
+      const next = new Map(prev);
+      for (const [id, m] of prev) {
+        const stored = highlighted?.labelOffsets?.[id] ?? null;
+        const from = m.from;
+        const stillAtFrom =
+          (stored == null && from == null) ||
+          (stored != null &&
+            from != null &&
+            Math.abs(stored.dx - from.dx) < 1e-9 &&
+            Math.abs(stored.dy - from.dy) < 1e-9);
+        if (!stillAtFrom) {
+          next.delete(id);
+          changed = true;
+        }
+      }
+      return changed ? next : prev;
+    });
+  }, [courses, highlightCourseName]);
+
   // Undo/redo ran on the page: drop every bridge immediately, even ones
   // whose move round-trip hasn't refetched yet — the user asked for the
   // authoritative (restored) positions.
   const moveEpoch = editor?.moveEpoch;
   useEffect(() => {
     setPendingMoves((prev) => (prev.size === 0 ? prev : new Map()));
+    setPendingLabelMoves((prev) => (prev.size === 0 ? prev : new Map()));
   }, [moveEpoch]);
 
   // Track container size
@@ -858,6 +911,33 @@ export function MapViewer({
     }
   }, [editor, screenToMapMm, controls]);
 
+  const finishEditorLabelDrag = useCallback((clientX: number, clientY: number, cancelled: boolean) => {
+    const drag = editorLabelDragRef.current;
+    if (!editor || !drag) return;
+    editorLabelDragRef.current = null;
+    isPanningRef.current = false;
+    mouseDownPosRef.current = null;
+    if (cancelled) {
+      setEditorLabelDragPos(null);
+      return;
+    }
+    if (drag.moved) {
+      const pt = screenToMapMm(clientX, clientY);
+      setEditorLabelDragPos(null);
+      if (pt) {
+        const to = { dx: pt.x - drag.ctrlX, dy: pt.y - drag.ctrlY };
+        setPendingLabelMoves((prev) => {
+          const next = new Map(prev);
+          next.set(drag.id, { from: drag.from, to });
+          return next;
+        });
+        editor.onLabelMoveEnd?.(drag.id, to);
+      }
+    } else {
+      editor.onSelect?.(drag.id);
+    }
+  }, [editor, screenToMapMm]);
+
   const handleMouseDown = useCallback((e: React.MouseEvent) => {
     if (e.button !== 0) return;
     if (!measuring) isPanningRef.current = true;
@@ -878,6 +958,17 @@ export function MapViewer({
         drag.moved = true;
         const pt = screenToMapMm(e.clientX, e.clientY);
         if (pt) setEditorDragPos({ id: drag.id, x: pt.x, y: pt.y });
+      }
+      return;
+    }
+    const labelDrag = editorLabelDragRef.current;
+    if (editor && labelDrag) {
+      const dx = Math.abs(e.clientX - labelDrag.startX);
+      const dy = Math.abs(e.clientY - labelDrag.startY);
+      if (labelDrag.moved || dx + dy > 3) {
+        labelDrag.moved = true;
+        const pt = screenToMapMm(e.clientX, e.clientY);
+        if (pt) setEditorLabelDragPos({ id: labelDrag.id, x: pt.x, y: pt.y });
       }
       return;
     }
@@ -914,6 +1005,15 @@ export function MapViewer({
         return;
       }
       finishEditorDrag(e.clientX, e.clientY, false);
+      return;
+    }
+    const labelDrag = editorLabelDragRef.current;
+    if (editor && labelDrag) {
+      if (e.type === "mouseleave") {
+        finishEditorLabelDrag(e.clientX, e.clientY, true);
+        return;
+      }
+      finishEditorLabelDrag(e.clientX, e.clientY, false);
       return;
     }
     isPanningRef.current = false;
@@ -958,7 +1058,7 @@ export function MapViewer({
       }
     }
     mouseDownPosRef.current = null;
-  }, [measuring, screenToMapMm, editor, finishEditorDrag]);
+  }, [measuring, screenToMapMm, editor, finishEditorDrag, finishEditorLabelDrag]);
 
   // Native touch listeners — React root touch handlers are passive, so
   // preventDefault() there does not block page scroll. On coarse pointers
@@ -1020,6 +1120,8 @@ export function MapViewer({
         // finger joined. That is a map gesture, not a control drag.
         editorDragRef.current = null;
         setEditorDragPos(null);
+        editorLabelDragRef.current = null;
+        setEditorLabelDragPos(null);
         const dx = e.touches[0].clientX - e.touches[1].clientX;
         const dy = e.touches[0].clientY - e.touches[1].clientY;
         const midpointX = (e.touches[0].clientX + e.touches[1].clientX) / 2;
@@ -1074,6 +1176,19 @@ export function MapViewer({
           drag.moved = true;
           const pt = screenToMapMm(t.clientX, t.clientY);
           if (pt) setEditorDragPos({ id: drag.id, x: pt.x, y: pt.y });
+        }
+        return;
+      }
+      const labelDrag = editorLabelDragRef.current;
+      if (labelDrag && e.touches.length === 1) {
+        e.preventDefault();
+        const t = e.touches[0];
+        const dx = Math.abs(t.clientX - labelDrag.startX);
+        const dy = Math.abs(t.clientY - labelDrag.startY);
+        if (labelDrag.moved || dx + dy > 3) {
+          labelDrag.moved = true;
+          const pt = screenToMapMm(t.clientX, t.clientY);
+          if (pt) setEditorLabelDragPos({ id: labelDrag.id, x: pt.x, y: pt.y });
         }
         return;
       }
@@ -1224,6 +1339,24 @@ export function MapViewer({
         finishEditorDrag(t.clientX, t.clientY, false);
         return;
       }
+      const labelDrag = editorLabelDragRef.current;
+      if (labelDrag && e.changedTouches.length > 0 && e.touches.length === 0) {
+        if (
+          hadMultiTouchRef.current ||
+          Date.now() < suppressEditorSelectionUntilRef.current
+        ) {
+          editorLabelDragRef.current = null;
+          setEditorLabelDragPos(null);
+          lastTouchRef.current = null;
+          touchStartPosRef.current = null;
+          hadMultiTouchRef.current = false;
+          isPanningRef.current = false;
+          return;
+        }
+        const t = e.changedTouches[0];
+        finishEditorLabelDrag(t.clientX, t.clientY, false);
+        return;
+      }
 
       if (e.touches.length === 0) {
         if (hadMultiTouchRef.current) {
@@ -1297,6 +1430,7 @@ export function MapViewer({
     containerSize, renderW, renderH, rotRad, measuring, editor,
     isFullscreen, isCoarsePointer, allowOneFingerMapPan, screenToMapMm,
     finishEditorDrag,
+    finishEditorLabelDrag,
   ]);
 
   useEffect(() => {
@@ -1390,6 +1524,89 @@ export function MapViewer({
     if (!t) return;
     finishEditorDrag(t.clientX, t.clientY, false);
   }, [finishEditorDrag]);
+
+  const beginLabelDrag = useCallback(
+    (
+      id: string,
+      ctrlX: number,
+      ctrlY: number,
+      from: { dx: number; dy: number } | null,
+      clientX: number,
+      clientY: number,
+      touch = false,
+    ) => {
+      editorLabelDragRef.current = {
+        id, startX: clientX, startY: clientY, moved: false, ctrlX, ctrlY, from, touch,
+      };
+    },
+    [],
+  );
+
+  const beginLabelDragMouse = useCallback(
+    (
+      id: string,
+      ctrlX: number,
+      ctrlY: number,
+      from: { dx: number; dy: number } | null,
+      e: React.MouseEvent,
+    ) => {
+      if (e.button !== 0) return;
+      e.stopPropagation();
+      beginLabelDrag(id, ctrlX, ctrlY, from, e.clientX, e.clientY, false);
+    },
+    [beginLabelDrag],
+  );
+
+  const beginLabelDragTouch = useCallback(
+    (
+      id: string,
+      ctrlX: number,
+      ctrlY: number,
+      from: { dx: number; dy: number } | null,
+      e: React.TouchEvent,
+    ) => {
+      if (e.touches.length !== 1) return;
+      const t = e.touches[0];
+      if (!t) return;
+      e.stopPropagation();
+      touchOnEditorTargetRef.current = true;
+      if (Date.now() < suppressEditorSelectionUntilRef.current) return;
+      beginLabelDrag(id, ctrlX, ctrlY, from, t.clientX, t.clientY, true);
+    },
+    [beginLabelDrag],
+  );
+
+  const handleLabelTouchMove = useCallback((e: React.TouchEvent) => {
+    const drag = editorLabelDragRef.current;
+    if (!drag) return;
+    e.preventDefault();
+    e.stopPropagation();
+    const t = e.touches[0];
+    if (!t) return;
+    const dx = Math.abs(t.clientX - drag.startX);
+    const dy = Math.abs(t.clientY - drag.startY);
+    if (drag.moved || dx + dy > 3) {
+      drag.moved = true;
+      const pt = screenToMapMm(t.clientX, t.clientY);
+      if (pt) setEditorLabelDragPos({ id: drag.id, x: pt.x, y: pt.y });
+    }
+  }, [screenToMapMm]);
+
+  const handleLabelTouchEnd = useCallback((e: React.TouchEvent) => {
+    e.stopPropagation();
+    if (!editorLabelDragRef.current) return;
+    if (
+      hadMultiTouchRef.current ||
+      Date.now() < suppressEditorSelectionUntilRef.current
+    ) {
+      editorLabelDragRef.current = null;
+      setEditorLabelDragPos(null);
+      return;
+    }
+    const t = e.changedTouches[0];
+    if (!t) return;
+    finishEditorLabelDrag(t.clientX, t.clientY, false);
+  }, [finishEditorLabelDrag]);
 
   const legHitMouseDown = useCallback(
     (course: string, index: number, e: React.MouseEvent) => {
@@ -1520,6 +1737,7 @@ export function MapViewer({
     // access is forbidden. The memo only computes positions.
     const controlHits: EditorControlHit[] = [];
     const legHits: EditorLegHit[] = [];
+    const labelHits: EditorLabelHit[] = [];
 
     // Line segments actually drawn on screen (course legs, marked and
     // forbidden routes — of every course rendered). Collected while
@@ -1776,6 +1994,21 @@ export function MapViewer({
       }
     }
 
+    const storedOffsets = sequenceNumbering
+      ? highlightedCourses[0]?.labelOffsets
+      : undefined;
+    const offsetFor = (id: string): { dx: number; dy: number } | undefined => {
+      if (!sequenceNumbering) return undefined;
+      if (editorLabelDragPos?.id === id) {
+        const ctrl = controls.find((k) => k.id === id);
+        if (!ctrl) return undefined;
+        return { dx: editorLabelDragPos.x - ctrl.x, dy: editorLabelDragPos.y - ctrl.y };
+      }
+      const pending = pendingLabelMoves.get(id);
+      if (pending) return pending.to;
+      return storedOffsets?.[id];
+    };
+
     // Control-number placement (pure module, unit-tested). Inputs are
     // exactly what is on screen: every VISIBLE circle is an obstacle
     // (start triangles and finish rings with their real extents), regular
@@ -1796,7 +2029,13 @@ export function MapViewer({
         const label = sequenceNumbering && sequenceMap.has(c.id)
           ? String(sequenceMap.get(c.id))
           : c.code;
-        placementCircles.push({ id: c.id, x: pos.x, y: pos.y, label });
+        const off = offsetFor(c.id);
+        let fixedLabel: { x: number; y: number } | undefined;
+        if (off) {
+          const screen = mapMmToScreen(c.x + off.dx, c.y + off.dy);
+          if (screen) fixedLabel = { x: screen.x, y: screen.y };
+        }
+        placementCircles.push({ id: c.id, x: pos.x, y: pos.y, label, ...(fixedLabel ? { fixedLabel } : {}) });
       }
     }
     const placedControlLabels = hideControls
@@ -1936,6 +2175,18 @@ export function MapViewer({
               {label}
             </text>
           );
+          if (editor && sequenceMap.has(c.id)) {
+            labelHits.push({
+              id: c.id,
+              px: placedLabel.x,
+              py: placedLabel.y,
+              w: Math.max(placedLabel.w, 16),
+              h: Math.max(placedLabel.h, 16),
+              mmX: c.x,
+              mmY: c.y,
+              from: offsetFor(c.id) ?? null,
+            });
+          }
         }
       }
 
@@ -2069,12 +2320,12 @@ export function MapViewer({
       }
     }
 
-    return { lowerNodes: lowerElements, upperNodes: upperElements, controlHits, legHits, radiusPx: radius, strokePx: stroke };
+    return { lowerNodes: lowerElements, upperNodes: upperElements, controlHits, legHits, labelHits, radiusPx: radius, strokePx: stroke };
 
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [viewport, containerSize, renderW, renderH, controls, courses, courseGeometry, coursesWithGeometry, highlightControlId, highlightCourseName,
       symbolScale, affine, measuring, measurePoints, measureCursor, showDescriptions, hideControls, onControlClick,
-      mapMmToScreen, rotDeg, gpsRoutes, editor, editorDragPos, pendingMoves]);
+      mapMmToScreen, rotDeg, gpsRoutes, editor, editorDragPos, pendingMoves, editorLabelDragPos, pendingLabelMoves]);
 
   // ─── Description sheet (outside rotation) ──────────────
 
@@ -2209,7 +2460,7 @@ export function MapViewer({
   let editorMenu: React.ReactNode = null;
   const menuEntries =
     (editor?.contextActions?.length ?? 0) + (editor?.suggestions?.length ?? 0) + (editor?.onDismiss ? 1 : 0);
-  if (editor && menuEntries > 0 && overlayContent && !editorDragPos) {
+  if (editor && menuEntries > 0 && overlayContent && !editorDragPos && !editorLabelDragPos) {
     let inner: Pt | null = null;
     let anchorR = overlayContent.radiusPx;
     if (editor.phantom) {
@@ -2525,6 +2776,18 @@ export function MapViewer({
                 onTouchStart={(ev) => beginControlDragTouch(h.id, h.mmX, h.mmY, ev)}
                 onTouchMove={handleControlTouchMove}
                 onTouchEnd={handleControlTouchEnd} />
+            ))}
+            {editor && overlayContent && overlayContent.labelHits.map((h) => (
+              <rect key={`edit-label-${h.id}`}
+                x={h.px - h.w / 2} y={h.py - h.h / 2} width={h.w} height={h.h}
+                fill="transparent" stroke="none"
+                style={{ pointerEvents: "all", cursor: editorLabelDragPos ? "grabbing" : "grab", touchAction: "none" }}
+                data-testid="editor-label-hit"
+                data-control-id={h.id}
+                onMouseDown={(ev) => beginLabelDragMouse(h.id, h.mmX, h.mmY, h.from, ev)}
+                onTouchStart={(ev) => beginLabelDragTouch(h.id, h.mmX, h.mmY, h.from, ev)}
+                onTouchMove={handleLabelTouchMove}
+                onTouchEnd={handleLabelTouchEnd} />
             ))}
             {/* Phantom selection — where the user clicked empty map / a leg */}
             {overlayContent && phantomPos && !editorDragPos && (

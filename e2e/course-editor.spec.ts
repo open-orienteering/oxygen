@@ -1165,4 +1165,165 @@ test.describe("Course editor", () => {
     await expect(inkTiles.first()).toBeAttached();
     await expect(page.getByTestId("map-tiles-ink")).toBeVisible();
   });
+
+  test("drag a control number, persist, reset, and undo", async ({ page }) => {
+    test.slow();
+    await selectCompetition(page);
+    await ensureCoursesAndMap(page);
+    await openEditor(page);
+
+    await page.getByTestId("editor-new-course-name").fill("E2E_LabelOffset");
+    await page.getByTestId("editor-create-course").click();
+    await expect(page.getByTestId("editor-sequence")).toBeVisible({ timeout: 15000 });
+
+    const codes = await pickClickableControlCodes(page, 1);
+    expect(codes.length).toBe(1);
+    const code = codes[0];
+    const hit = page.locator(`[data-testid="editor-control-hit"][data-control-code="${code}"]`);
+    const box = await hit.boundingBox();
+    expect(box).not.toBeNull();
+    if (await page.getByTestId("editor-context-menu").isVisible()) {
+      await page.keyboard.press("Escape");
+    }
+    await page.mouse.click(box!.x + box!.width / 2, box!.y + box!.height / 2);
+    await expect(page.getByTestId("editor-selected-info")).toContainText(
+      `Control ${code}`,
+      { timeout: 10000 },
+    );
+    await page.getByTestId("editor-action-append").click();
+    await expect(
+      page.locator('[data-testid="editor-seq-row"][data-kind="control"]'),
+    ).toHaveCount(1, { timeout: 15000 });
+
+    const labelHit = page.locator(
+      `[data-testid="editor-label-hit"][data-control-id="${code}"]`,
+    );
+    await expect(labelHit).toBeAttached({ timeout: 15000 });
+    const start = await labelHit.boundingBox();
+    expect(start).not.toBeNull();
+    const destX = start!.x + start!.width / 2 + 48;
+    const destY = start!.y + start!.height / 2 + 24;
+    const offsetSaved = page.waitForResponse(
+      (res) => res.ok() && res.url().includes("course.setControlLabelOffset"),
+      { timeout: 15000 },
+    );
+    await page.mouse.move(start!.x + start!.width / 2, start!.y + start!.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(destX, destY, { steps: 8 });
+    await page.mouse.up();
+    await offsetSaved;
+
+    await expect(async () => {
+      const moved = await labelHit.boundingBox();
+      expect(moved).not.toBeNull();
+      expect(Math.abs(moved!.x - start!.x) + Math.abs(moved!.y - start!.y)).toBeGreaterThan(10);
+    }).toPass({ timeout: 15000 });
+
+    await expect(page.getByTestId("editor-action-reset-label")).toBeVisible({
+      timeout: 10000,
+    });
+
+    await page.reload();
+    await expect(page.getByTestId("map-viewer")).toBeVisible({ timeout: 60000 });
+    await page.getByTestId("editor-course-item").filter({ hasText: "E2E_LabelOffset" }).click();
+    await expect(labelHit).toBeAttached({ timeout: 15000 });
+    const clickLabel = async () => {
+      const lb = await labelHit.boundingBox();
+      expect(lb).not.toBeNull();
+      await page.mouse.click(lb!.x + lb!.width / 2, lb!.y + lb!.height / 2);
+    };
+    await clickLabel();
+    // Offset survived reload — the reset action is only offered when one
+    // is stored for this course + control.
+    await expect(page.getByTestId("editor-action-reset-label")).toBeVisible({
+      timeout: 10000,
+    });
+    const dragged = await labelHit.boundingBox();
+    expect(dragged).not.toBeNull();
+
+    const resetSaved = page.waitForResponse(
+      (res) => res.ok() && res.url().includes("course.setControlLabelOffset"),
+      { timeout: 15000 },
+    );
+    await page.getByTestId("editor-action-reset-label").click();
+    await resetSaved;
+    await expect(page.getByTestId("editor-action-reset-label")).not.toBeVisible({
+      timeout: 10000,
+    });
+    await expect(async () => {
+      const reset = await labelHit.boundingBox();
+      expect(reset).not.toBeNull();
+      expect(
+        Math.abs(reset!.x - dragged!.x) + Math.abs(reset!.y - dragged!.y),
+      ).toBeGreaterThan(8);
+    }).toPass({ timeout: 15000 });
+
+    await page.getByTestId("editor-undo").click();
+    await expect(page.getByTestId("editor-action-reset-label")).toBeVisible({
+      timeout: 10000,
+    });
+    await expect(async () => {
+      const undone = await labelHit.boundingBox();
+      expect(undone).not.toBeNull();
+      expect(Math.abs(undone!.x - dragged!.x)).toBeLessThan(8);
+      expect(Math.abs(undone!.y - dragged!.y)).toBeLessThan(8);
+    }).toPass({ timeout: 15000 });
+  });
+
+  test("inline-edit a control code from the course panel", async ({ page }) => {
+    test.slow();
+    await selectCompetition(page);
+    await ensureCoursesAndMap(page);
+    await openEditor(page);
+
+    await page.getByTestId("editor-new-course-name").fill("E2E_SeqCode");
+    await page.getByTestId("editor-create-course").click();
+    await expect(page.getByTestId("editor-sequence")).toBeVisible({ timeout: 15000 });
+
+    const codes = await pickClickableControlCodes(page, 2);
+    expect(codes.length).toBe(2);
+    const [codeA, codeB] = codes;
+    const append = async (code: string) => {
+      if (await page.getByTestId("editor-context-menu").isVisible()) {
+        await page.keyboard.press("Escape");
+        await expect(page.getByTestId("editor-context-menu")).not.toBeVisible();
+      }
+      const hit = page.locator(`[data-testid="editor-control-hit"][data-control-code="${code}"]`);
+      const box = await hit.boundingBox();
+      expect(box).not.toBeNull();
+      await page.mouse.click(box!.x + box!.width / 2, box!.y + box!.height / 2);
+      await expect(page.getByTestId("editor-selected-info")).toContainText(
+        `Control ${code}`,
+        { timeout: 10000 },
+      );
+      await page.getByTestId("editor-action-append").click();
+    };
+    await append(codeA);
+    const rows = page.locator('[data-testid="editor-seq-row"][data-kind="control"]');
+    await expect(rows).toHaveCount(1, { timeout: 15000 });
+
+    await rows.nth(0).getByTestId("editor-seq-code").click();
+    const input = page.getByTestId("editor-seq-code-input");
+    await expect(input).toBeVisible();
+    await input.fill("997");
+    await input.press("Enter");
+    await expect(rows.nth(0)).toHaveAttribute("data-code", "997", { timeout: 15000 });
+    await expect(
+      page.locator('[data-testid="editor-control-hit"][data-control-code="997"]'),
+    ).toBeAttached({ timeout: 15000 });
+
+    await page.keyboard.press("Control+z");
+    await expect(rows.nth(0)).toHaveAttribute("data-code", codeA, { timeout: 15000 });
+
+    await append(codeB);
+    await expect(rows).toHaveCount(2, { timeout: 15000 });
+    await rows.nth(0).getByTestId("editor-seq-code").click();
+    await expect(page.getByTestId("editor-seq-code-input")).toBeVisible();
+    await page.getByTestId("editor-seq-code-input").fill(codeB);
+    await page.getByTestId("editor-seq-code-input").press("Enter");
+    await expect(page.getByTestId("editor-error")).toContainText(
+      "already exists",
+      { timeout: 10000 },
+    );
+  });
 });

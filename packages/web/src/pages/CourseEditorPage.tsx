@@ -468,6 +468,63 @@ export function CourseEditorPage() {
     [coordsById, client, run, undoStack, bumpHistory],
   );
 
+  const handleLabelMoveEnd = useCallback(
+    (idStr: string, offset: { dx: number; dy: number }) => {
+      const id = parseInt(idStr, 10);
+      if (Number.isNaN(id) || !selectedCourse) return;
+      const prev = selectedCourse.labelOffsets?.[idStr] ?? null;
+      dispatch({ type: "select", id });
+      void (async () => {
+        const redo = () =>
+          client.course.setControlLabelOffset.mutate({
+            id: selectedCourse.id,
+            controlId: id,
+            offset,
+          });
+        const done = await run(redo);
+        if (done === undefined) return;
+        undoStack.push({
+          redo,
+          undo: () =>
+            client.course.setControlLabelOffset.mutate({
+              id: selectedCourse.id,
+              controlId: id,
+              offset: prev,
+            }),
+        });
+        bumpHistory();
+      })();
+    },
+    [selectedCourse, client, run, undoStack, bumpHistory],
+  );
+
+  const resetLabelOffset = useCallback(() => {
+    if (!selectedCourse || state.selectedControlId == null) return;
+    const id = state.selectedControlId;
+    const prev = selectedCourse.labelOffsets?.[String(id)] ?? null;
+    if (!prev) return;
+    void (async () => {
+      const redo = () =>
+        client.course.setControlLabelOffset.mutate({
+          id: selectedCourse.id,
+          controlId: id,
+          offset: null,
+        });
+      const done = await run(redo);
+      if (done === undefined) return;
+      undoStack.push({
+        redo,
+        undo: () =>
+          client.course.setControlLabelOffset.mutate({
+            id: selectedCourse.id,
+            controlId: id,
+            offset: prev,
+          }),
+      });
+      bumpHistory();
+    })();
+  }, [selectedCourse, state.selectedControlId, client, run, undoStack, bumpHistory]);
+
   const handleSelect = useCallback((idStr: string | null) => {
     setRadioSwapOffer(null);
     if (idStr === null) {
@@ -848,6 +905,13 @@ export function CourseEditorPage() {
             label: t("editor.actionRemoveFromCourse", { name: selectedCourse.name }),
             onClick: () => removeControlFromCourse(sel),
           });
+          if (selectedCourse.labelOffsets?.[String(sel)]) {
+            actions.push({
+              id: "reset-label",
+              label: t("editor.actionResetLabel"),
+              onClick: resetLabelOffset,
+            });
+          }
         }
       }
       if (!isStartFinish) {
@@ -894,7 +958,8 @@ export function CourseEditorPage() {
     coordsById, controlCoords.data, controlList.data, createControl, createRoleControl,
     assignRoleControl, appendControlToCourse, removeControlFromCourse,
     radioSwapOffer, confirmRadioSwap, declineRadioSwap, controlRowsById,
-    handleRadioToggle, handleDelete, openDescription, pendingOps, t]);
+    handleRadioToggle, handleDelete, openDescription, pendingOps, t,
+    resetLabelOffset]);
 
   /** Ids (as overlay strings) of the edited course's controls — these
    *  stay at full strength while everything else fades. */
@@ -979,6 +1044,7 @@ export function CourseEditorPage() {
       moveEpoch,
       onMapClick: handleMapClick,
       onMoveEnd: handleMoveEnd,
+      onLabelMoveEnd: handleLabelMoveEnd,
       onSelect: handleSelect,
       onDismiss: handleDismiss,
       ...(selectedCourse ? { onLegClick: handleLegClick } : {}),
@@ -986,7 +1052,7 @@ export function CourseEditorPage() {
     [state.selectedControlId, state.phantom, contextActions, contextInfo, contextBadge,
       contextRadioBadge,
       suggestions, t, courseControlIdSet, moveWarnings, moveEpoch, selectedCourse,
-      handleMapClick, handleMoveEnd, handleSelect, handleLegClick, handleDismiss],
+      handleMapClick, handleMoveEnd, handleLabelMoveEnd, handleSelect, handleLegClick, handleDismiss],
   );
 
   // ─── Sidebar actions ─────────────────────────────────────
@@ -999,6 +1065,9 @@ export function CourseEditorPage() {
   const [onlyCourse, setOnlyCourse] = useState(false);
   /** Expanded state of the in-map course selector card. */
   const [mapSelectorOpen, setMapSelectorOpen] = useState(true);
+  const [editingSeqIndex, setEditingSeqIndex] = useState<number | null>(null);
+  const [editingCodes, setEditingCodes] = useState("");
+  const skipSeqCodeBlurRef = useRef(false);
   const handleCreateCourse = useCallback(() => {
     const name = newCourseName.trim();
     if (!name) return;
@@ -1071,6 +1140,31 @@ export function CourseEditorPage() {
       sequenceUpdate(next);
     },
     [sequenceIds, sequenceUpdate],
+  );
+
+  const commitSeqCode = useCallback(
+    (rowId: number, currentCodes: string, nextCodes: string) => {
+      setEditingSeqIndex(null);
+      const next = nextCodes.trim();
+      if (!next || next === currentCodes) return;
+      const first = parseInt(next.split(";")[0] ?? "", 10);
+      const publicNew = Number.isFinite(first) && first > 0 ? first : rowId;
+      void (async () => {
+        const done = await run(() =>
+          client.control.update.mutate({ id: rowId, codes: next }),
+        );
+        if (done === undefined) return;
+        undoStack.push({
+          redo: () =>
+            client.control.update.mutate({ id: publicNew, codes: next }),
+          undo: () =>
+            client.control.update.mutate({ id: publicNew, codes: currentCodes }),
+        });
+        bumpHistory();
+        dispatch({ type: "select", id: publicNew });
+      })();
+    },
+    [client, run, undoStack, bumpHistory],
   );
 
   // ─── Undo / redo ─────────────────────────────────────────
@@ -1400,7 +1494,51 @@ export function CourseEditorPage() {
                       <span className={`w-5 shrink-0 font-semibold ${row.kind === "control" ? "text-purple-700" : "text-slate-400"}`}>
                         {row.kind === "start" ? "S" : row.kind === "finish" ? "F" : row.seqIndex + 1}
                       </span>
-                      <span className="flex-1 text-slate-700 truncate">{row.code}</span>
+                      {row.kind === "control" && editingSeqIndex === row.seqIndex ? (
+                        <input
+                          data-testid="editor-seq-code-input"
+                          autoFocus
+                          value={editingCodes}
+                          onChange={(e) => setEditingCodes(e.target.value)}
+                          onBlur={() => {
+                            if (skipSeqCodeBlurRef.current) {
+                              skipSeqCodeBlurRef.current = false;
+                              return;
+                            }
+                            commitSeqCode(
+                              row.id!,
+                              controlRowsById.get(row.id!)?.codes ?? row.code,
+                              editingCodes,
+                            );
+                          }}
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter") {
+                              e.currentTarget.blur();
+                            } else if (e.key === "Escape") {
+                              e.preventDefault();
+                              skipSeqCodeBlurRef.current = true;
+                              setEditingSeqIndex(null);
+                            }
+                          }}
+                          className="flex-1 min-w-0 px-1 py-0.5 border border-purple-300 rounded bg-white focus:outline-none focus:ring-2 focus:ring-purple-400"
+                        />
+                      ) : row.kind === "control" ? (
+                        <button
+                          type="button"
+                          data-testid="editor-seq-code"
+                          onClick={() => {
+                            if (row.id == null) return;
+                            setEditingSeqIndex(row.seqIndex);
+                            setEditingCodes(controlRowsById.get(row.id)?.codes ?? row.code);
+                          }}
+                          className="flex-1 text-left text-slate-700 truncate hover:text-purple-800 cursor-text"
+                          title={t("editor.editCode")}
+                        >
+                          {row.code}
+                        </button>
+                      ) : (
+                        <span className="flex-1 text-slate-700 truncate">{row.code}</span>
+                      )}
                       {row.kind === "control" &&
                         codesHaveSrr(row.code, seriesAllocation.data ?? []) && (
                           <span className="rounded bg-amber-100 text-amber-800 px-1 text-[9px] font-medium">
@@ -1547,7 +1685,8 @@ export function CourseEditorPage() {
       newCourseName, newCourseSuggestions, handleCreateCourse, displaySeq, legMeters, totalMeters,
       sequenceIds.length, moveInSequence, removeFromSequence, openClone,
       showClone, cloneName, handleCloneCourse,
-      controlRowsById, seriesAllocation.data, client, run, undoStack, bumpHistory],
+      controlRowsById, seriesAllocation.data, client, run, undoStack, bumpHistory,
+      editingSeqIndex, editingCodes, commitSeqCode],
   );
 
   // ─── In-map inventory panel ──────────────────────────────
