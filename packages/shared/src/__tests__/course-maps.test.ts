@@ -256,6 +256,46 @@ describe("course map SVG generators", () => {
     expect(lower).not.toContain("<polyline");
   });
 
+  it("honours a manual labelPosition and keeps neighbours off it", () => {
+    const options = {
+      frame: document.mapFrame,
+      window: { minX: 0, minY: 0, width: 100, height: 100 },
+      appearance: document.appearance,
+      controls: [
+        {
+          id: "31",
+          code: "31",
+          type: "control" as const,
+          x: 40,
+          y: 40,
+          labelPosition: { x: 10, y: 70 },
+        },
+        { id: "32", code: "32", type: "control" as const, x: 50, y: 40 },
+      ],
+      legs: [] as never[],
+    };
+    const auto = renderCourseOverlaySvg({
+      ...options,
+      controls: options.controls.map(({ labelPosition: _lp, ...rest }) => rest),
+    });
+    const manual = renderCourseOverlaySvg(options);
+    const autoMatch = auto.upper.match(
+      /data-control-label="31"[^>]*x="([^"]+)" y="([^"]+)"/,
+    );
+    const manualMatch = manual.upper.match(
+      /data-control-label="31"[^>]*x="([^"]+)" y="([^"]+)"/,
+    );
+    expect(autoMatch).toBeTruthy();
+    expect(manualMatch).toBeTruthy();
+    expect(manualMatch![1]).not.toBe(autoMatch![1]);
+    const neighbour = manual.upper.match(
+      /data-control-label="32"[^>]*x="([^"]+)" y="([^"]+)"/,
+    );
+    expect(neighbour).toBeTruthy();
+    expect(neighbour![1]).not.toBe(manualMatch![1]);
+    expect(neighbour![2]).not.toBe(manualMatch![2]);
+  });
+
   it("enlarges the overprint with the map (ISOM enlargement factor)", () => {
     const options = {
       frame: document.mapFrame,

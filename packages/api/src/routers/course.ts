@@ -103,6 +103,30 @@ function instructionsDto(raw: unknown): CourseDescriptionInstructions | null {
   return raw as CourseDescriptionInstructions;
 }
 
+function controlToken(codes: string, seq: number): string {
+  const first = (codes ?? "").split(";")[0];
+  const code = first ? parseInt(first, 10) : NaN;
+  return String(Number.isFinite(code) ? code : seq);
+}
+
+function courseLabelOffsets(
+  rows: Array<{
+    labelDx: number | null;
+    labelDy: number | null;
+    control: { codes: string; seq: number };
+  }>,
+): Record<string, { dx: number; dy: number }> {
+  const out: Record<string, { dx: number; dy: number }> = {};
+  for (const row of rows) {
+    if (row.labelDx == null || row.labelDy == null) continue;
+    out[controlToken(row.control.codes, row.control.seq)] = {
+      dx: row.labelDx,
+      dy: row.labelDy,
+    };
+  }
+  return out;
+}
+
 // ─── Class-name matching for the import preview ─────────────
 
 export type ClassMatchType = "exact" | "normalized" | "substring" | "none";
@@ -428,6 +452,7 @@ async function loadCourseDetail(
       runnerCount: runnerCountMap.get(cl.id) ?? 0,
     })),
     descriptionInstructions: instructionsDto(c.descriptionInstructions),
+    labelOffsets: courseLabelOffsets(ccs),
   };
 }
 
@@ -452,13 +477,17 @@ export const courseRouter = router({
     // from `course.detail`). Without it, non-highlighted courses render
     // controls but no leg lines.
     const controlsByCourse = new Map<string, string[]>();
+    const offsetsByCourse = new Map<string, Record<string, { dx: number; dy: number }>>();
     for (const cc of ccs) {
-      const first = (cc.control.codes ?? "").split(";")[0];
-      const code = first ? parseInt(first, 10) : NaN;
-      const token = String(Number.isFinite(code) ? code : cc.control.seq);
+      const token = controlToken(cc.control.codes, cc.control.seq);
       const arr = controlsByCourse.get(cc.courseId) ?? [];
       arr.push(token);
       controlsByCourse.set(cc.courseId, arr);
+      if (cc.labelDx != null && cc.labelDy != null) {
+        const rec = offsetsByCourse.get(cc.courseId) ?? {};
+        rec[token] = { dx: cc.labelDx, dy: cc.labelDy };
+        offsetsByCourse.set(cc.courseId, rec);
+      }
     }
     // Resolve start/finish assignments to public ids so the course
     // editor can show and change which start/finish each course uses.
@@ -500,6 +529,7 @@ export const courseRouter = router({
             ? finishIdByUuid.get(c.finishControlId) ?? null
             : null,
           descriptionInstructions: instructionsDto(c.descriptionInstructions),
+          labelOffsets: offsetsByCourse.get(c.id) ?? {},
         };
       },
     );
@@ -633,7 +663,7 @@ export const courseRouter = router({
         });
         const controls = await tx.courseControl.findMany({
           where: { courseId: source.id },
-          select: { position: true, controlId: true },
+          select: { position: true, controlId: true, labelDx: true, labelDy: true },
           orderBy: { position: "asc" },
         });
         if (controls.length > 0) {
@@ -642,6 +672,8 @@ export const courseRouter = router({
               courseId: created.id,
               position: control.position,
               controlId: control.controlId,
+              labelDx: control.labelDx,
+              labelDy: control.labelDy,
             })),
           });
         }
@@ -763,14 +795,35 @@ export const courseRouter = router({
       await ctx.db.$transaction(async (tx) => {
         await tx.course.update({ where: { id: c.id }, data });
         if (input.controlIds !== undefined) {
+          const existing = await tx.courseControl.findMany({
+            where: { courseId: c.id },
+            select: { controlId: true, labelDx: true, labelDy: true },
+          });
+          const offsetByControl = new Map<string, { dx: number; dy: number }>();
+          for (const row of existing) {
+            if (
+              row.labelDx != null &&
+              row.labelDy != null &&
+              !offsetByControl.has(row.controlId)
+            ) {
+              offsetByControl.set(row.controlId, {
+                dx: row.labelDx,
+                dy: row.labelDy,
+              });
+            }
+          }
           await tx.courseControl.deleteMany({ where: { courseId: c.id } });
           if (controlUuids.length > 0) {
             await tx.courseControl.createMany({
-              data: controlUuids.map((uuid, idx) => ({
-                courseId: c.id,
-                position: idx + 1,
-                controlId: uuid,
-              })),
+              data: controlUuids.map((uuid, idx) => {
+                const off = offsetByControl.get(uuid);
+                return {
+                  courseId: c.id,
+                  position: idx + 1,
+                  controlId: uuid,
+                  ...(off ? { labelDx: off.dx, labelDy: off.dy } : {}),
+                };
+              }),
             });
           }
         }
@@ -785,6 +838,52 @@ export const courseRouter = router({
         await emitCourseUpserted(tx, ctx.event.id, c.id);
       });
       return { ok: true };
+    }),
+
+  /**
+   * Store or clear a per-course control-number offset (map mm from the
+   * control centre). Null restores auto-placement. Applies to every
+   * visit of the control on the course (butterfly loops share one
+   * offset).
+   */
+  setControlLabelOffset: coursesEditRaceProcedure
+    .input(
+      z.object({
+        id: z.number().int(),
+        controlId: z.number().int(),
+        offset: z
+          .object({ dx: z.number().finite(), dy: z.number().finite() })
+          .nullable(),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      const course = await getCourseBySeq(ctx.db, ctx.event.id, input.id);
+      const controlUuid = await controlSeqToId(
+        ctx.db,
+        ctx.event.id,
+        input.controlId,
+      );
+      const onCourse = await ctx.db.courseControl.count({
+        where: { courseId: course.id, controlId: controlUuid },
+      });
+      if (onCourse === 0) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: `Control ${input.controlId} is not on course ${input.id}`,
+        });
+      }
+      const data =
+        input.offset === null
+          ? { labelDx: null, labelDy: null }
+          : { labelDx: input.offset.dx, labelDy: input.offset.dy };
+      await ctx.db.$transaction(async (tx) => {
+        await tx.courseControl.updateMany({
+          where: { courseId: course.id, controlId: controlUuid },
+          data,
+        });
+        await emitCourseUpserted(tx, ctx.event.id, course.id);
+      });
+      return { ok: true as const };
     }),
 
   bulkUpdate: coursesEditRaceProcedure

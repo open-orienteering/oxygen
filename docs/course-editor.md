@@ -24,7 +24,7 @@ actions that apply there. There is no mode to switch first.
 | Click | Selection marker | Menu offers |
 |-------|------------------|-------------|
 | Empty map | Phantom ring at the point | **Add control** (`control.create`, code from the club control-series allocation, falling back to smallest unused ≥ 31), **Add start** and **Add finish** (code-less `control.create` with status 4/5, auto-named "Start N" / "Mål N"); with a course selected also **Add to \<course\>** (create + append, one undo entry) |
-| An existing control | Dashed selection ring, toolbar readout (code + mm position) | **Add to \<course\>** (append via `course.update { controlIds }`; hidden for start/finish — they are implicit), **Remove from \<course\>**, **Radio** / **Radio off**, **Edit description** and **Delete control**. A selected start/finish that is not the one the selected course uses offers **Use as start/finish for \<course\>**. An info line above the actions reads *"Also in: …"* when the control is used by other courses |
+| An existing control | Dashed selection ring, toolbar readout (code + mm position) | **Add to \<course\>** (append via `course.update { controlIds }`; hidden for start/finish — they are implicit), **Remove from \<course\>**, **Reset number position** (when this course has a dragged number offset for the control), **Radio** / **Radio off**, **Edit description** and **Delete control**. A selected start/finish that is not the one the selected course uses offers **Use as start/finish for \<course\>**. An info line above the actions reads *"Also in: …"* when the control is used by other courses |
 | A course leg (course selected) | Phantom ring on the leg | **Insert into course** — creates a control and inserts it into the sequence at that leg |
 
 Other gestures and keys:
@@ -32,6 +32,7 @@ Other gestures and keys:
 | Gesture | Effect |
 |---------|--------|
 | Drag a control | Local render during the drag; one `control.update { xpos, ypos }` on release. If the control is used by other courses, an amber chip follows the drag: *"Affects: Lång, Kort"* — the move rebuilds those courses' geometry too |
+| Drag a control number | Local render during the drag; one `course.setControlLabelOffset { dx, dy }` (map millimetres from the control centre) on release. The offset is per-course and survives sequence reorder and clone. **Reset number position** in the selection menu (or undo) restores auto-placement |
 | `Delete` / `Backspace` | Deletes the selected control (with confirmation). The server cascades it out of every course sequence and rebuilds their geometry — no ghost rows (see [bugfix-control-delete-course-cascade.md](bugfix-control-delete-course-cascade.md)); the undo entry restores the control **and** its course memberships |
 | `Escape` | Dismisses the phantom, then the control selection, then deselects the course — and only with nothing left to dismiss exits fullscreen. In fullscreen, MapPanel holds a [Keyboard Lock](https://developer.mozilla.org/en-US/docs/Web/API/Keyboard/lock) on `Escape` (Chromium) so a short press reaches this cascade instead of the browser instantly dropping out of fullscreen; holding Esc still exits (browser-enforced) |
 | `H` | Toggles **Hide other controls** (needs a selected course, same as the toolbar button) |
@@ -48,6 +49,7 @@ All course building happens in a floating panel *inside* the map box
 | Panel: **Clone** | Opens an inline name field, then `course.clone` copies the sequence, start/finish assignment and course settings into a newly selected course. Class assignments are not copied |
 | Panel: click a course | Selects it — its sequence panel opens; on the map the course's controls stay full-strength purple with 1, 2, 3… numbering while every other control **fades** to ~30 % opacity (Purple Pen style, still clickable) |
 | Panel: ↑ / ↓ / ✕ per row | Reorder within, or remove from, the sequence |
+| Panel: click a punch code | Inline-edit the control's codes (`control.update { codes }`) — the same write as the Controls page, so every course using that control sees the new code |
 | Toolbar: **Hide other controls** | Escalates the fade to fully hidden (start/finish stay) — MapPanel's `filterMode="course"` |
 
 The panel shows the display sequence the server's geometry builder
@@ -103,7 +105,9 @@ length, the selected one highlighted, scrolling at `40vh` so a big
 screen shows more courses), and — with a course selected — the full
 display sequence (`editor-sequence`) with per-leg meters and ↑/↓/✕
 buttons, the count + total-length footer, and a clone footer (button →
-inline name field). The panel grows with its content up to the map's
+inline name field). Clicking a control row's punch code opens an inline
+editor (`editor-seq-code` / `editor-seq-code-input`) that writes
+`control.update { codes }`. The panel grows with its content up to the map's
 full height; the header row collapses everything down to the selected
 course's name. The series inventory lives in its own card stacked below
 (see above), so reference data never interleaves with course editing.
@@ -340,6 +344,10 @@ MapViewer (components/MapViewer.tsx)
   `onLegClick`. Editing is enabled iff the prop is set, so every other
   MapPanel call site is untouched. Callbacks must be stabilized by the
   caller — the object flows through MapPanel's shallow-equality `memo`.
+  `onLabelMoveEnd` reports a dragged number as `{dx, dy}` in map mm;
+  `course.list` exposes the stored offsets as `labelOffsets` keyed by
+  control token, and print maps feed them into `placeControlLabels` as
+  `fixedLabel`.
 - The page renders its **own inline MapPanel** (`fillContainer` inside a
   fixed-height container) instead of driving the shared wide-screen
   shell pane via `MapSlot`. Editing gestures stay scoped to the page and
@@ -391,10 +399,12 @@ invisible **filled** circle per control (`data-testid="editor-control-hit"`,
 symbol interior becomes grabbable, and E2E tests get a stable selector.
 Similarly, every drawn leg of a highlighted course gets an invisible fat
 hit-line (`data-testid="editor-leg-hit"`, 12 px stroke) that fires
-`onLegClick(courseName, legIndex, pt)`. The page wires it only while a
-course is selected; the click anchors a phantom carrying the insert
-position — nothing is created until the user picks **Insert into
-course** from the menu.
+`onLegClick(courseName, legIndex, pt)`. The page wires leg clicks only
+while a course is selected; the click anchors a phantom carrying the
+insert position — nothing is created until the user picks **Insert into
+course** from the menu. Course-control numbers get an invisible hit-rect
+(`data-testid="editor-label-hit"`) so they can be dragged independently
+of the circle.
 
 ### Insert-on-leg index mapping
 

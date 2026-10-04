@@ -17,9 +17,10 @@
  * coherent placement. Directions are ordered by preference (right/above
  * first), so uncontested controls look conventional.
  *
- * CONSTRAINTS — a candidate whose box would intersect any circle or an
- * already-placed label box is rejected outright (closest-point tests,
- * not center heuristics). Survivors are ranked by soft costs:
+ * CONSTRAINTS — a candidate whose box would intersect any circle, an
+ * already-placed label box, or a drawn course line (padded by
+ * `0.1·labelSize`) is rejected outright (closest-point tests, not
+ * center heuristics). Survivors are ranked by soft costs:
  *
  *  - ambiguity: being close to a foreign circle relative to one's own
  *    (heavily penalized when the label is outright closer to the
@@ -30,7 +31,9 @@
  *    penalized, but soft, because in pathological packs the only sane
  *    slot may intrude and exiling the label outward reads worse,
  *  - crowding: the box passing near a foreign circle or another label,
- *  - proximity to drawn course lines (all courses on screen),
+ *  - proximity of the box edge to drawn course lines (all courses on
+ *    screen) — surviving candidates that merely graze a line still
+ *    cost more than ones with clearance,
  *  - a small direction-preference bias as a tie-break.
  *
  * If a ring yields no valid candidate (clusters whose circles overlap),
@@ -61,6 +64,13 @@ export interface PlacementCircle {
   label?: string;
   /** Obstacle radius override (finish outer ring); defaults to opts.radius. */
   radius?: number;
+  /**
+   * Caller-supplied label center (same units as x/y). Used for a
+   * course-setter's manual number position: the box is emitted as-is,
+   * never gets a leader, and becomes an obstacle for auto-placed
+   * neighbours. Absent → the algorithm chooses a slot.
+   */
+  fixedLabel?: { x: number; y: number };
 }
 
 export interface PlacementSeg {
@@ -145,6 +155,57 @@ function ptRectDist(
   return Math.hypot(dx, dy);
 }
 
+/** True when the closed segment overlaps the closed AABB. */
+function segmentIntersectsAabb(
+  x1: number, y1: number, x2: number, y2: number,
+  minX: number, minY: number, maxX: number, maxY: number,
+): boolean {
+  let t0 = 0, t1 = 1;
+  const dx = x2 - x1, dy = y2 - y1;
+  const tests: [number, number][] = [
+    [-dx, x1 - minX],
+    [dx, maxX - x1],
+    [-dy, y1 - minY],
+    [dy, maxY - y1],
+  ];
+  for (const [p, q] of tests) {
+    if (p === 0) {
+      if (q < 0) return false;
+      continue;
+    }
+    const r = q / p;
+    if (p < 0) {
+      if (r > t1) return false;
+      if (r > t0) t0 = r;
+    } else {
+      if (r < t0) return false;
+      if (r < t1) t1 = r;
+    }
+  }
+  return t0 <= t1;
+}
+
+/**
+ * Distance from a line segment to an axis-aligned box. Zero when the
+ * segment crosses or touches the box.
+ */
+function segRectDist(seg: PlacementSeg, rect: PlacedControlLabel): number {
+  const hw = rect.w / 2, hh = rect.h / 2;
+  const minX = rect.x - hw, maxX = rect.x + hw;
+  const minY = rect.y - hh, maxY = rect.y + hh;
+  if (segmentIntersectsAabb(seg.x1, seg.y1, seg.x2, seg.y2, minX, minY, maxX, maxY)) {
+    return 0;
+  }
+  return Math.min(
+    ptRectDist(seg.x1, seg.y1, rect.x, rect.y, rect.w, rect.h),
+    ptRectDist(seg.x2, seg.y2, rect.x, rect.y, rect.w, rect.h),
+    ptSegDist(minX, minY, seg.x1, seg.y1, seg.x2, seg.y2),
+    ptSegDist(maxX, minY, seg.x1, seg.y1, seg.x2, seg.y2),
+    ptSegDist(maxX, maxY, seg.x1, seg.y1, seg.x2, seg.y2),
+    ptSegDist(minX, maxY, seg.x1, seg.y1, seg.x2, seg.y2),
+  );
+}
+
 /**
  * Distance from the circle center to the box center, along direction
  * (a, b) = (|ux|, |uy|), such that the box's closest point to the
@@ -218,6 +279,36 @@ export function placeControlLabels(
     )
     .map((e) => e.c);
 
+  const labelBox = (c: PlacementCircle, x: number, y: number): PlacedControlLabel => ({
+    x,
+    y,
+    w: c.label!.length * labelSize * CHAR_WIDTH_RATIO,
+    h: labelSize * LINE_HEIGHT_RATIO,
+  });
+  const linePad = labelSize * 0.1;
+  const paddedBox = (rect: PlacedControlLabel): PlacedControlLabel => ({
+    ...rect,
+    w: rect.w + 2 * linePad,
+    h: rect.h + 2 * linePad,
+  });
+  const hitsLine = (rect: PlacedControlLabel): boolean => {
+    const padded = paddedBox(rect);
+    return lines.some((seg) => segRectDist(seg, padded) <= 0);
+  };
+
+  // Manual (dragged) positions are obstacles for everyone else and are
+  // never re-placed — a number the setter put somewhere stays there.
+  const autoLabeled: PlacementCircle[] = [];
+  for (const c of labeled) {
+    if (!c.fixedLabel) {
+      autoLabeled.push(c);
+      continue;
+    }
+    const rect = labelBox(c, c.fixedLabel.x, c.fixedLabel.y);
+    out.set(c.id, rect);
+    placedRects.push(rect);
+  }
+
   // A labeled circle's "claim radius": the smallest center distance its
   // own label can ever have (innermost ring, narrowest box axis). Any
   // foreign label sitting closer than this is *guaranteed* to read as
@@ -229,7 +320,7 @@ export function placeControlLabels(
     gap +
     Math.min((o.label!.length * labelSize * CHAR_WIDTH_RATIO) / 2, halfH);
 
-  for (const c of labeled) {
+  for (const c of autoLabeled) {
     const label = c.label!;
     const estW = label.length * labelSize * CHAR_WIDTH_RATIO;
     const estH = labelSize * LINE_HEIGHT_RATIO;
@@ -276,9 +367,10 @@ export function placeControlLabels(
         const s = Math.max(sepX, sepY);
         if (s < estH) cost += 25 * (1 - Math.max(s, 0) / estH);
       }
+      const lineClear = 0.5 * labelSize;
       for (const seg of lines) {
-        const d = ptSegDist(rect.x, rect.y, seg.x1, seg.y1, seg.x2, seg.y2);
-        if (d < estH) cost += 12 + 38 * (1 - d / estH);
+        const d = segRectDist(seg, rect);
+        if (d < lineClear) cost += 12 + 38 * (1 - d / lineClear);
       }
       return cost;
     };
@@ -301,6 +393,9 @@ export function placeControlLabels(
       }
       for (const lp of placedRects) {
         if (rectsOverlap(rect, lp, 0)) penalty += 800;
+      }
+      for (const seg of lines) {
+        if (segRectDist(seg, paddedBox(rect)) <= 0) penalty += 600;
       }
       return penalty;
     };
@@ -328,10 +423,10 @@ export function placeControlLabels(
           h: estH,
         };
 
-        // Hard constraints: the box must not intersect any circle or an
-        // already-placed label box. (The own circle is safe by
-        // construction: the box's closest point is exactly radius+gap
-        // from the center.)
+        // Hard constraints: the box must not intersect any circle, an
+        // already-placed label box, or a drawn course line. (The own
+        // circle is safe by construction: the box's closest point is
+        // exactly radius+gap from the center.)
         let collides = false;
         for (const o of circles) {
           if (o === c) continue;
@@ -348,6 +443,7 @@ export function placeControlLabels(
             }
           }
         }
+        if (!collides && hitsLine(rect)) collides = true;
 
         const cost = softCost(rect, di) + ringExtra * 5;
         if (!collides && cost < ringBestCost) {

@@ -15,7 +15,7 @@ import {
 } from "@oxygen/shared";
 import { z } from "zod";
 import { Prisma } from "../generated/prisma/client.js";
-import { resolveMapLayout } from "../course-maps/resolve-layout.js";
+import { layoutControlsFromCourseControls, resolveMapLayout } from "../course-maps/resolve-layout.js";
 import { getBaseMapInfoOrNull } from "../course-maps/map-source.js";
 import {
   coursesEditProcedure,
@@ -174,8 +174,8 @@ export const courseMapRouter = router({
               climbM: row.course.climbM,
               geometry: row.course.geometry,
               classes: row.course.classes,
-              controls: row.course.courseControls.map(
-                ({ control }) => control,
+              controls: layoutControlsFromCourseControls(
+                row.course.courseControls,
               ),
               descriptionInstructions: row.course.descriptionInstructions,
             }

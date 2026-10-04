@@ -63,6 +63,16 @@ describe("control.create / update / delete", () => {
     const list = await caller.control.list();
     expect(list.find((x) => x.id === c.id)).toBeUndefined();
   });
+
+  it("refuses to update codes onto another control's punch code", async () => {
+    await caller.control.create({ codes: "34" });
+    const b = await caller.control.create({ codes: "35" });
+    await expect(
+      caller.control.update({ id: b.id, codes: "34" }),
+    ).rejects.toThrow(/already exists/i);
+    const still = await caller.control.detail({ id: 35 });
+    expect(still.codes).toBe("35");
+  });
 });
 
 describe("control.upsertConfig", () => {

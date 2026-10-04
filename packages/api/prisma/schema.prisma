@@ -476,6 +476,10 @@ model CourseControl {
   courseId  String @map("course_id") @db.Uuid
   position  Int
   controlId String @map("control_id") @db.Uuid
+  /// Manual control-number offset from the control centre, map millimetres.
+  /// Null = auto-placed. Both set together; never one without the other.
+  labelDx Float? @map("label_dx") @db.DoublePrecision
+  labelDy Float? @map("label_dy") @db.DoublePrecision
 
   course  Course  @relation(fields: [courseId], references: [id], onDelete: Cascade)
   control Control @relation(fields: [controlId], references: [id], onDelete: Restrict)

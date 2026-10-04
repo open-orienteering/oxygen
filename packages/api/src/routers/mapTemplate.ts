@@ -14,6 +14,7 @@ import {
 } from "../generated/prisma/client.js";
 import {
   resolveMapLayout,
+  layoutControlsFromCourseControls,
   type ResolvedMapLayout,
 } from "../course-maps/resolve-layout.js";
 import { getBaseMapInfoOrNull } from "../course-maps/map-source.js";
@@ -133,7 +134,7 @@ export const mapTemplateRouter = router({
               climbM: course.climbM,
               geometry: course.geometry,
               classes: course.classes,
-              controls: course.courseControls.map(({ control }) => control),
+              controls: layoutControlsFromCourseControls(course.courseControls),
               descriptionInstructions: course.descriptionInstructions,
             }
           : null,

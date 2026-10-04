@@ -895,6 +895,12 @@ export interface CourseSummary {
    * the public control id (punch code / seq); null = after start.
    */
   descriptionInstructions: CourseDescriptionInstructions | null;
+  /**
+   * Per-control manual number offsets keyed by the same token as
+   * `controls` (punch code, or seq when the control has no code).
+   * Absent keys are auto-placed.
+   */
+  labelOffsets: Record<string, { dx: number; dy: number }>;
 }
 
 /** Course detail with class usage */

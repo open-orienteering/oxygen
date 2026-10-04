@@ -193,3 +193,65 @@ describe("course.delete (soft)", () => {
     expect(row?.removed).toBe(true);
   });
 });
+
+describe("course.setControlLabelOffset", () => {
+  it("stores, lists, survives reorder, copies on clone, and clears", async () => {
+    const c = await caller.course.create({
+      name: "Offset Course",
+      controlIds: [controlSeqs[0], controlSeqs[1]],
+    });
+    await caller.course.setControlLabelOffset({
+      id: c.id,
+      controlId: controlSeqs[0],
+      offset: { dx: 4.5, dy: -2 },
+    });
+    const listed = (await caller.course.list()).find((row) => row.id === c.id);
+    expect(listed?.labelOffsets[String(controlSeqs[0])]).toEqual({
+      dx: 4.5,
+      dy: -2,
+    });
+    expect(listed?.labelOffsets[String(controlSeqs[1])]).toBeUndefined();
+
+    await caller.course.update({
+      id: c.id,
+      controlIds: [controlSeqs[1], controlSeqs[0]],
+    });
+    const reordered = (await caller.course.list()).find((row) => row.id === c.id);
+    expect(reordered?.labelOffsets[String(controlSeqs[0])]).toEqual({
+      dx: 4.5,
+      dy: -2,
+    });
+
+    const cloned = await caller.course.clone({
+      id: c.id,
+      name: "Offset Clone",
+    });
+    const cloneList = (await caller.course.list()).find((row) => row.id === cloned.id);
+    expect(cloneList?.labelOffsets[String(controlSeqs[0])]).toEqual({
+      dx: 4.5,
+      dy: -2,
+    });
+
+    await caller.course.setControlLabelOffset({
+      id: c.id,
+      controlId: controlSeqs[0],
+      offset: null,
+    });
+    const cleared = (await caller.course.list()).find((row) => row.id === c.id);
+    expect(cleared?.labelOffsets).toEqual({});
+  });
+
+  it("rejects a control that is not on the course", async () => {
+    const c = await caller.course.create({
+      name: "Offset Missing",
+      controlIds: [controlSeqs[0]],
+    });
+    await expect(
+      caller.course.setControlLabelOffset({
+        id: c.id,
+        controlId: controlSeqs[3],
+        offset: { dx: 1, dy: 1 },
+      }),
+    ).rejects.toMatchObject({ code: "NOT_FOUND" });
+  });
+});

@@ -18,7 +18,7 @@ import {
 import { composeMapPageSvg, renderBaseMapWindow } from "./map-page-svg.js";
 import { graphicToResolved } from "./graphics.js";
 import { getBaseMapInfo, loadBaseMapSvg } from "./map-source.js";
-import { resolveMapLayout } from "./resolve-layout.js";
+import { layoutControlsFromCourseControls, resolveMapLayout } from "./resolve-layout.js";
 import { LruCache } from "./lru-cache.js";
 import { RsvgConverter, mergePdfPages } from "./svg-to-pdf.js";
 
@@ -202,7 +202,7 @@ async function renderPage(
           climbM: row.course.climbM,
           geometry: row.course.geometry,
           classes: row.course.classes,
-          controls: row.course.courseControls.map(({ control }) => control),
+          controls: layoutControlsFromCourseControls(row.course.courseControls),
           descriptionInstructions: row.course.descriptionInstructions,
         }
       : null,
