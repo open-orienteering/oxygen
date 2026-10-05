@@ -280,6 +280,15 @@ purple glyph remains unchanged, while the small knockout separates it
 from dense map ink. The same default is used by the interactive SVG and
 the print/PDF overlay.
 
+The editor draws numbers exactly as print does — the appearance's
+4 mm digit height (`defaultMapAppearance.numberHeightMm`), Liberation
+Sans / Arial regular, anchored on the alphabetic baseline half a digit
+below the placed centre (`controlNumberBaselineY`) — and runs the
+auto-placer in the map frame (overlay space rotated so map east is +x)
+on the *clipped* leg pieces it renders. That is what makes a number
+land on the same spot in the editor, the layout preview and the PDF;
+see [`bugfix-control-number-placement.md`](bugfix-control-number-placement.md).
+
 Placement and dragging work in **map millimetres** (the `xpos`/`ypos`
 paper coordinate space) — the viewer converts screen pixels via an
 affine transform. When `course.mapMetadata` carries **calibration

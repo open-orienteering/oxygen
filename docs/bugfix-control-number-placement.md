@@ -198,6 +198,46 @@ uses the same path via `CourseOverlayControl.labelPosition`.
 The live-replay overlay (`ReplayCourseLayer.tsx`) still has its own
 legacy placer and is unchanged.
 
+### Follow-up: editor, layout preview and PDF must agree
+
+After manual offsets shipped, a dragged number looked right in the
+course editor, "almost right" in the layout preview and clearly wrong
+in the PDF. Three independent causes, all fixed in
+`course-overlay-svg.ts` / `MapViewer.tsx`:
+
+1. **librsvg ignores `dominant-baseline`.** The `<text>` was centred
+   with `dominant-baseline="central"`; browsers honour it, librsvg
+   (the PDF converter) does not, so every PDF number sat half a digit
+   higher than its stored centre. The attribute is gone. Numbers are
+   anchored on the alphabetic baseline and shifted down by half a digit
+   (`controlNumberBaselineY(centerY, digitHeight)`), which both engines
+   render identically.
+2. **Different glyphs on screen and on paper.** The editor drew 3.5 mm
+   bold Inter, print 4.0 mm regular Liberation Sans, so even with
+   identical centres the digits looked offset, and the placer sized
+   its boxes differently. The editor now uses the print appearance:
+   `defaultMapAppearance.numberHeightMm` digit height,
+   `CONTROL_NUMBER_FONT_FAMILY`, non-bold, the same em = digit /
+   `CONTROL_NUMBER_CAP_HEIGHT_RATIO` rule.
+3. **Auto-placement ran in different frames.** The candidate directions
+   are axis-relative (up-right first). The editor placed in overlay
+   space (rotated by the viewer bearing), print in page space (rotated
+   by the window tilt), so the same control could get different rings
+   in each. Both now place in the **map frame**: print undoes the
+   window rotation about the frame centre before placing and rotates
+   only the chosen centres (and leaders) back; the editor measures the
+   map-east direction via `mapMmToScreen` and rotates its inputs the
+   same way. Two smaller parity fixes went with it: the editor feeds
+   the placer the *clipped* leg pieces it draws (as print always did),
+   and `placeControlLabels` breaks equal-pressure ties by label text
+   before id, since editor ids are punch codes and print ids are
+   database ids.
+
+`course-maps.test.ts` renders the same course at window rotations 0,
+−6, 37, 90 and 180° and asserts each number maps back to the same map
+coordinate; `control-label-placement.test.ts` asserts the id-agnostic
+tie-break.
+
 ### Outcome on the reported cluster
 
 With the real ordinal-1 geometry (where the circle pairs 87/88, 87/108,

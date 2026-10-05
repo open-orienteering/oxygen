@@ -84,7 +84,7 @@ export function windowRotationDeg(window: MapWindow): number {
 }
 
 /** Rotate `point` about `center` by `deg` in page space (y-down, CW+). */
-function rotatePagePoint(
+export function rotatePagePoint(
   point: MapPoint,
   center: MapPoint,
   deg: number,

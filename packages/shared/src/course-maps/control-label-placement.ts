@@ -270,12 +270,20 @@ export function placeControlLabels(
     return n;
   };
 
+  // Ties are broken by label text before id: the label is the one key
+  // that is identical in every renderer (editor ids are punch codes,
+  // print ids are database ids), and greedy order decides who wins a
+  // contested slot — so it must not depend on which caller is asking.
+  const numeric = (a: string, b: string) =>
+    a.localeCompare(b, undefined, { numeric: true });
   const labeled = circles
     .filter((c) => c.label !== undefined && c.label !== "")
     .map((c) => ({ c, p: pressure(c) }))
     .sort(
       (a, b) =>
-        b.p - a.p || a.c.id.localeCompare(b.c.id, undefined, { numeric: true }),
+        b.p - a.p ||
+        numeric(a.c.label!, b.c.label!) ||
+        numeric(a.c.id, b.c.id),
     )
     .map((e) => e.c);
 

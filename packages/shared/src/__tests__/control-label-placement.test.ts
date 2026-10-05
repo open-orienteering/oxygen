@@ -133,6 +133,32 @@ describe("placeControlLabels", () => {
     expect(placed.has("finish")).toBe(false);
   });
 
+  it("breaks equal-pressure ties by label, not by caller id", () => {
+    // The editor identifies controls by punch code, the print pipeline by
+    // database id. Greedy order decides who wins a contested slot, so the
+    // tie-break must use something both sides agree on: the label text.
+    // Two coincident circles: whoever is placed first gets the preferred
+    // up-right slot.
+    const circles = (): PlacementCircle[] => [
+      { id: "zzz", x: 100, y: 100, label: "1" },
+      { id: "aaa", x: 100, y: 100, label: "2" },
+    ];
+    const byLabel = placeControlLabels(circles(), [], OPTS);
+    const first = byLabel.get("zzz")!;
+    expect(first.x).toBeGreaterThan(100);
+    expect(first.y).toBeLessThan(100);
+    // Same result when the caller renames the ids the other way round.
+    const renamed = placeControlLabels(
+      circles().map((c) => ({ ...c, id: c.id === "zzz" ? "aaa" : "zzz" })),
+      [],
+      OPTS,
+    );
+    expect(renamed.get("aaa")!.x).toBeCloseTo(first.x, 9);
+    expect(renamed.get("aaa")!.y).toBeCloseTo(first.y, 9);
+    expect(renamed.get("zzz")!.x).toBeCloseTo(byLabel.get("aaa")!.x, 9);
+    expect(renamed.get("zzz")!.y).toBeCloseTo(byLabel.get("aaa")!.y, 9);
+  });
+
   it("avoids course lines passing the preferred side", () => {
     // Vertical line hugging the right side of the circle: the default
     // up-right slot must lose to a slot clear of the line.

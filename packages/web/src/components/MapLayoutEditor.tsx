@@ -108,6 +108,8 @@ interface MapLayoutEditorProps {
     cuts?: Array<{ start: number; end: number }>;
     x: number;
     y: number;
+    /** Course-setter's dragged number position (map mm); see course editor. */
+    labelPosition?: { x: number; y: number };
   }>;
   legs: CourseOverlayLeg[];
   allControls?: boolean;

@@ -293,7 +293,15 @@ dimensions **at the base map scale** — the defaults match ISOM 2017-2:
 Arial, non-bold — rendered in Liberation Sans, metrically compatible).
 `numberHeightMm` is the printed **digit height**; the renderer divides by
 Liberation Sans's cap-height ratio (1409/2048) to get the SVG font-size,
-since font-size is the em box, not the glyph height. The default purple is
+since font-size is the em box, not the glyph height. Numbers are anchored
+on the alphabetic baseline half a digit below the placed centre
+(`controlNumberBaselineY`) rather than with `dominant-baseline`, which
+librsvg does not implement; the course editor draws its numbers with the
+same font, size and anchor rule, and auto-placement runs in the unrotated
+map frame in both, so editor, layout preview and PDF put every number on
+the same spot (see
+[`bugfix-control-number-placement.md`](bugfix-control-number-placement.md)).
+The default purple is
 `#a626ff`, the sRGB equivalent of the offset CMYK 35·85·0·0 / PMS Purple
 from ISOM Appendix 1 (the same definition course-setting software uses).
 
