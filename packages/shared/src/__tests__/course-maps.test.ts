@@ -4,6 +4,8 @@ import {
   courseMapObjectPageBounds,
   courseMapObjectSchema,
   clipLine,
+  controlNumberBaselineY,
+  CONTROL_NUMBER_CAP_HEIGHT_RATIO,
   defaultMapFrame,
   expandMapText,
   getPaperDimensions,
@@ -244,8 +246,11 @@ describe("course map SVG generators", () => {
     expect(upper).not.toContain("font-weight");
     // font-size is scaled up from the digit height by the cap-height ratio.
     const labelFontSize =
-      document.appearance.numberHeightMm / (1409 / 2048);
+      document.appearance.numberHeightMm / CONTROL_NUMBER_CAP_HEIGHT_RATIO;
     expect(upper).toContain(`font-size="${labelFontSize}"`);
+    // librsvg (the PDF converter) ignores dominant-baseline; the number is
+    // anchored on the alphabetic baseline instead.
+    expect(upper).not.toContain("dominant-baseline");
     // Always-on white halo keeps numbers readable over map ink.
     expect(upper).toContain('data-control-label="31"');
     expect(upper).toContain('stroke="#fff"');
@@ -296,6 +301,97 @@ describe("course map SVG generators", () => {
     expect(neighbour![2]).not.toBe(manualMatch![2]);
   });
 
+  it("centres the digit on the manual position: baseline half a digit below it", () => {
+    // Regression: with dominant-baseline="central" the browser centred
+    // the number on labelPosition but librsvg put the baseline there, so
+    // the PDF showed every number half a digit higher than the editor.
+    const window = { minX: 0, minY: 0, width: 100, height: 100 };
+    const labelPosition = { x: 10, y: 70 };
+    for (const overprintScale of [1, 2]) {
+      const { upper } = renderCourseOverlaySvg({
+        frame: document.mapFrame,
+        window,
+        appearance: document.appearance,
+        overprintScale,
+        controls: [
+          {
+            id: "31",
+            code: "31",
+            type: "control" as const,
+            x: 40,
+            y: 40,
+            labelPosition,
+          },
+        ],
+        legs: [],
+      });
+      const match = upper.match(
+        /data-control-label="31"[^>]*x="([^"]+)" y="([^"]+)"/,
+      );
+      expect(match).toBeTruthy();
+      const center = mapToPage(labelPosition, document.mapFrame, window);
+      const digitHeight = document.appearance.numberHeightMm * overprintScale;
+      expect(Number(match![1])).toBeCloseTo(center.x, 9);
+      expect(Number(match![2])).toBeCloseTo(
+        controlNumberBaselineY(center.y, digitHeight),
+        9,
+      );
+      expect(Number(match![2])).toBeCloseTo(center.y + digitHeight / 2, 9);
+    }
+  });
+
+  it("auto-places numbers in the map frame, independent of window rotation", () => {
+    // The editor, the layout preview and the PDF may show the same course
+    // under different rotations (viewer bearing vs. print window tilt).
+    // Auto-placement must pick the same slot *on the map* in all of them,
+    // so the placer runs in the unrotated map frame and only the result is
+    // rotated onto the page.
+    const controls = [
+      { id: "s", code: "S", type: "start" as const, x: 20, y: 20 },
+      { id: "31", code: "31", type: "control" as const, x: 40, y: 40 },
+      { id: "32", code: "32", type: "control" as const, x: 47, y: 44 },
+      { id: "33", code: "33", type: "control" as const, x: 60, y: 70 },
+      { id: "f", code: "F", type: "finish" as const, x: 80, y: 80 },
+    ];
+    const legs = [
+      { points: controls.map(({ x, y }) => ({ x, y })) },
+    ];
+    const labelCentreOnMap = (rotationDeg: number) => {
+      const window = { minX: 0, minY: 0, width: 100, height: 100, rotationDeg };
+      const { upper } = renderCourseOverlaySvg({
+        frame: document.mapFrame,
+        window,
+        appearance: document.appearance,
+        controls,
+        legs,
+      });
+      const out: Record<string, { x: number; y: number }> = {};
+      for (const id of ["31", "32", "33"]) {
+        const match = upper.match(
+          new RegExp(`data-control-label="${id}"[^>]*x="([^"]+)" y="([^"]+)"`),
+        );
+        expect(match).toBeTruthy();
+        const baseline = { x: Number(match![1]), y: Number(match![2]) };
+        const centre = {
+          x: baseline.x,
+          y: baseline.y - document.appearance.numberHeightMm / 2,
+        };
+        out[id] = pageToMap(centre, document.mapFrame, window);
+      }
+      return out;
+    };
+    const flat = labelCentreOnMap(0);
+    for (const rotation of [-6, 37, 90, 180]) {
+      const rotated = labelCentreOnMap(rotation);
+      for (const id of ["31", "32", "33"]) {
+        expect(rotated[id].x).toBeCloseTo(flat[id].x, 6);
+        expect(rotated[id].y).toBeCloseTo(flat[id].y, 6);
+      }
+    }
+    // Sanity: the numbers really are offset from their circles.
+    expect(Math.hypot(flat["31"].x - 40, flat["31"].y - 40)).toBeGreaterThan(1);
+  });
+
   it("enlarges the overprint with the map (ISOM enlargement factor)", () => {
     const options = {
       frame: document.mapFrame,
@@ -317,7 +413,7 @@ describe("course map SVG generators", () => {
     const enlarged = renderCourseOverlaySvg({ ...options, overprintScale: 2 });
     expect(enlarged.lower).toContain('stroke-width="0.7"');
     expect(enlarged.upper).toContain(
-      `font-size="${(document.appearance.numberHeightMm * 2) / (1409 / 2048)}"`,
+      `font-size="${(document.appearance.numberHeightMm * 2) / CONTROL_NUMBER_CAP_HEIGHT_RATIO}"`,
     );
     expect(enlarged.lower).toContain('r="6"'); // finish outer 3 mm -> 6 mm
     expect(enlarged.lower).toContain('r="4"'); // finish inner 2 mm -> 4 mm

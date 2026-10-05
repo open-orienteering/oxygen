@@ -3,10 +3,14 @@ import { useTranslation } from "react-i18next";
 import { useParams } from "react-router-dom";
 import {
   clipLine,
+  controlNumberBaselineY,
+  CONTROL_NUMBER_CAP_HEIGHT_RATIO,
+  CONTROL_NUMBER_FONT_FAMILY,
   drawBrokenCircle,
   placeControlLabels,
   subtractLegGaps,
   type ControlDescription,
+  type PlacedControlLabel,
   type PlacementCircle,
   type PlacementSeg,
   defaultMapAppearance,
@@ -1681,7 +1685,13 @@ export function MapViewer({
 
     const radius = 2.5 * symbolScale;
     const stroke = Math.max(0.5, 0.35 * symbolScale);
-    const labelSize = 3.5 * symbolScale;
+    // Control numbers use the print appearance's digit height (ISOM 704,
+    // 4 mm) so the editor, the layout preview and the PDF draw the same
+    // glyph at the same spot. `labelSize` is the em (SVG font-size) that
+    // yields that digit height — it is also what the placer sizes boxes
+    // from, so auto-placement picks the same ring in all three.
+    const labelDigitHeight = defaultMapAppearance.numberHeightMm * symbolScale;
+    const labelSize = labelDigitHeight / CONTROL_NUMBER_CAP_HEIGHT_RATIO;
     const startSize = 3.5 * symbolScale;
     const finishInner = 2.0 * symbolScale;
     const finishOuter = 3.0 * symbolScale;
@@ -1739,11 +1749,13 @@ export function MapViewer({
     const legHits: EditorLegHit[] = [];
     const labelHits: EditorLabelHit[] = [];
 
-    // Line segments actually drawn on screen (course legs, marked and
-    // forbidden routes — of every course rendered). Collected while
-    // rendering and fed to the control-number placement so numbers avoid
-    // exactly the lines the user sees, no more (courses that are not
-    // drawn must not push labels around) and no less.
+    // Line segments actually drawn on screen (course legs AS CLIPPED
+    // around the circles, marked and forbidden routes — of every course
+    // rendered). Collected while rendering and fed to the control-number
+    // placement so numbers avoid exactly the lines the user sees, no more
+    // (courses that are not drawn must not push labels around) and no
+    // less. The print renderer feeds the placer the same clipped pieces,
+    // which is part of what makes editor and PDF agree.
     const drawnLineSegs: PlacementSeg[] = [];
 
     // Highlighted courses drive fallback legs, multi-course leg labels
@@ -1785,12 +1797,6 @@ export function MapViewer({
             const { px, py } = latlngToPixel(lat, lng, viewport, cw, ch);
             screenPts.push({ x: px, y: py });
           }
-          for (let si = 0; si < screenPts.length - 1; si++) {
-            drawnLineSegs.push({
-              x1: screenPts[si].x, y1: screenPts[si].y,
-              x2: screenPts[si + 1].x, y2: screenPts[si + 1].y,
-            });
-          }
 
           // Insert-on-leg hit line spanning the full (unclipped) leg.
           {
@@ -1805,6 +1811,12 @@ export function MapViewer({
           }
 
           if (props.preclipped) {
+            for (let si = 0; si < screenPts.length - 1; si++) {
+              drawnLineSegs.push({
+                x1: screenPts[si].x, y1: screenPts[si].y,
+                x2: screenPts[si + 1].x, y2: screenPts[si + 1].y,
+              });
+            }
             const d = screenPts.map((p, i) => `${i === 0 ? "M" : "L"}${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(" ");
             lowerElements.push(
               <path key={`leg-${fi}`} d={d} stroke={purple} strokeWidth={legStroke} fill="none" />
@@ -1838,6 +1850,7 @@ export function MapViewer({
                 const segs = clipLine(pts[si], pts[si + 1], obstacles, radius * 1.2);
                 for (let segi = 0; segi < segs.length; segi++) {
                   const seg = segs[segi];
+                  drawnLineSegs.push(seg);
                   lowerElements.push(
                     <line key={`leg-${fi}-${pi}-${si}-${segi}`}
                       x1={seg.x1} y1={seg.y1} x2={seg.x2} y2={seg.y2}
@@ -1951,7 +1964,6 @@ export function MapViewer({
         const fromPt = ctrlPixels.get(course.controls[i]);
         const toPt = ctrlPixels.get(course.controls[i + 1]);
         if (!fromPt || !toPt) continue;
-        drawnLineSegs.push({ x1: fromPt.x, y1: fromPt.y, x2: toPt.x, y2: toPt.y });
         pushLegHit(
           `edit-fleg-${course.name}-${i}`,
           `M${fromPt.x.toFixed(1)},${fromPt.y.toFixed(1)} L${toPt.x.toFixed(1)},${toPt.y.toFixed(1)}`,
@@ -1961,6 +1973,7 @@ export function MapViewer({
         const segs = clipLine(fromPt, toPt, obstacles, radius * 1.2);
         for (let segi = 0; segi < segs.length; segi++) {
           const seg = segs[segi];
+          drawnLineSegs.push(seg);
           lowerElements.push(
             <line key={`fleg-${course.name}-${i}-${segi}`}
               x1={seg.x1} y1={seg.y1} x2={seg.x2} y2={seg.y2}
@@ -2016,15 +2029,36 @@ export function MapViewer({
     // every drawn course. All cost terms scale with the symbol sizes, so
     // the chosen slots don't change when zooming — only when the set of
     // visible controls or drawn courses does.
+    //
+    // The placer runs in the MAP frame — overlay space rotated so map
+    // east points +x and map north up — exactly like the print renderer
+    // (which undoes the window rotation). The viewer's bearing and the
+    // print window's tilt differ, and the candidate directions are
+    // axis-relative, so placing in a shared frame is what makes a number
+    // land on the same spot on the map in the editor, the layout preview
+    // and the PDF. Rotation is rigid, so sizes/distances are unchanged;
+    // only the chosen centres are rotated back into overlay space.
+    let frameRot = 0;
+    if (affine) {
+      const anchor = controls[0] ? { x: controls[0].x, y: controls[0].y } : { x: 0, y: 0 };
+      const o = mapMmToScreen(anchor.x, anchor.y);
+      const e = mapMmToScreen(anchor.x + 1, anchor.y);
+      if (o && e) frameRot = Math.atan2(e.y - o.y, e.x - o.x);
+    }
+    const cosF = Math.cos(frameRot), sinF = Math.sin(frameRot);
+    const toFrame = (p: Pt): Pt => ({ x: p.x * cosF + p.y * sinF, y: -p.x * sinF + p.y * cosF });
+    const fromFrame = (p: Pt): Pt => ({ x: p.x * cosF - p.y * sinF, y: p.x * sinF + p.y * cosF });
+
     const placementCircles: PlacementCircle[] = [];
     for (const c of sortedControls) {
       if (c.visible === false) continue;
       const pos = ctrlPixels.get(c.id);
       if (!pos) continue;
+      const fp = toFrame(pos);
       if (c.type === "Start") {
-        placementCircles.push({ id: c.id, x: pos.x, y: pos.y, radius: startSize });
+        placementCircles.push({ id: c.id, x: fp.x, y: fp.y, radius: startSize });
       } else if (c.type === "Finish") {
-        placementCircles.push({ id: c.id, x: pos.x, y: pos.y, radius: finishOuter });
+        placementCircles.push({ id: c.id, x: fp.x, y: fp.y, radius: finishOuter });
       } else {
         const label = sequenceNumbering && sequenceMap.has(c.id)
           ? String(sequenceMap.get(c.id))
@@ -2033,14 +2067,29 @@ export function MapViewer({
         let fixedLabel: { x: number; y: number } | undefined;
         if (off) {
           const screen = mapMmToScreen(c.x + off.dx, c.y + off.dy);
-          if (screen) fixedLabel = { x: screen.x, y: screen.y };
+          if (screen) fixedLabel = toFrame(screen);
         }
-        placementCircles.push({ id: c.id, x: pos.x, y: pos.y, label, ...(fixedLabel ? { fixedLabel } : {}) });
+        placementCircles.push({ id: c.id, x: fp.x, y: fp.y, label, ...(fixedLabel ? { fixedLabel } : {}) });
       }
     }
-    const placedControlLabels = hideControls
-      ? new Map<string, never>()
-      : placeControlLabels(placementCircles, drawnLineSegs, { radius, labelSize });
+    const frameSegs: PlacementSeg[] = drawnLineSegs.map((s) => {
+      const a = toFrame({ x: s.x1, y: s.y1 });
+      const b = toFrame({ x: s.x2, y: s.y2 });
+      return { x1: a.x, y1: a.y, x2: b.x, y2: b.y };
+    });
+    const placedControlLabels = new Map<string, PlacedControlLabel>();
+    if (!hideControls) {
+      for (const [id, l] of placeControlLabels(placementCircles, frameSegs, { radius, labelSize })) {
+        const centre = fromFrame(l);
+        let leader: PlacedControlLabel["leader"];
+        if (l.leader) {
+          const a = fromFrame({ x: l.leader.x1, y: l.leader.y1 });
+          const b = fromFrame({ x: l.leader.x2, y: l.leader.y2 });
+          leader = { x1: a.x, y1: a.y, x2: b.x, y2: b.y };
+        }
+        placedControlLabels.set(id, { ...l, x: centre.x, y: centre.y, ...(leader ? { leader } : {}) });
+      }
+    }
 
     for (const c of sortedControls) {
       if (c.visible === false) continue;
@@ -2160,12 +2209,18 @@ export function MapViewer({
                 data-testid="control-label-leader" />
             );
           }
+          // Same anchor rule as the print renderer: alphabetic baseline
+          // half a digit below the centre (no dominant-baseline), same
+          // font stack, non-bold (ISOM 704). Rotation pivots on the
+          // centre so the glyph stays centred on the placed point.
           upperElements.push(
-            <text key={`label-${c.id}`} x={placedLabel.x} y={placedLabel.y}
+            <text key={`label-${c.id}`} x={placedLabel.x}
+              y={controlNumberBaselineY(placedLabel.y, labelDigitHeight)}
               data-testid="control-label"
               data-control-id={c.id}
-              textAnchor="middle" dominantBaseline="central"
-              fontSize={labelSize} fill={labelColor} fontWeight="bold"
+              textAnchor="middle"
+              fontFamily={CONTROL_NUMBER_FONT_FAMILY}
+              fontSize={labelSize} fill={labelColor}
               stroke="#fff" strokeWidth={labelSize * 0.12}
               strokeLinejoin="round" paintOrder="stroke fill"
               opacity={fade}

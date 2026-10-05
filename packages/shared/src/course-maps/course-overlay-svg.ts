@@ -1,4 +1,4 @@
-import { mapToPage, windowRotationDeg } from "./geometry.js";
+import { mapToPage, rotatePagePoint, windowRotationDeg } from "./geometry.js";
 import type { MapAppearance, MapPoint, MapRect, MapWindow } from "./schema.js";
 import { escapeSvgText } from "./text.js";
 import {
@@ -58,6 +58,33 @@ export interface CourseOverlayLayers {
   upper: string;
 }
 
+/**
+ * Cap/digit height of Liberation Sans (metrically Arial-compatible) as a
+ * fraction of the em box: 1409/2048. ISOM 704 specifies the control
+ * number by digit height, SVG `font-size` is the em box, so
+ * `font-size = digitHeight / CONTROL_NUMBER_CAP_HEIGHT_RATIO`.
+ */
+export const CONTROL_NUMBER_CAP_HEIGHT_RATIO = 1409 / 2048;
+
+/** Font stack for control numbers — identical in print and on screen. */
+export const CONTROL_NUMBER_FONT_FAMILY = "Liberation Sans, Arial, sans-serif";
+
+/**
+ * Baseline `y` that puts the visual centre of a digit at `centerY`.
+ *
+ * Digits span from the alphabetic baseline up to the cap height, so the
+ * centre of the glyph is half a digit height above the baseline. This is
+ * used instead of `dominant-baseline="central"`, which librsvg (the PDF
+ * converter) does not implement — with it, browsers centred the number
+ * while the PDF rendered it half a digit higher.
+ */
+export function controlNumberBaselineY(
+  centerY: number,
+  digitHeight: number,
+): number {
+  return centerY + digitHeight / 2;
+}
+
 function openGroup(layer: "lower" | "upper", purple: string, stroke: number): string {
   return `<g data-map-layer="course-overlay-${layer}" fill="none" stroke="${purple}" stroke-width="${stroke}" stroke-linecap="round" stroke-linejoin="round">`;
 }
@@ -82,10 +109,9 @@ export function renderCourseOverlaySvg(
   const radius = appearance.circleRadiusMm * enlarge;
   const labelSize = appearance.numberHeightMm * enlarge;
   // ISOM 704 gives the control-number size as the digit height (4.0 mm,
-  // Arial, non-bold). SVG font-size is the em box, and Liberation Sans
-  // (metrically Arial-compatible) has cap/digit height 1409/2048 of the
-  // em, so scale up to make the printed digits measure `labelSize` mm.
-  const labelFontSize = labelSize / (1409 / 2048);
+  // Arial, non-bold). SVG font-size is the em box, so scale up to make
+  // the printed digits measure `labelSize` mm.
+  const labelFontSize = labelSize / CONTROL_NUMBER_CAP_HEIGHT_RATIO;
   // A narrow opaque knockout keeps purple numbers readable over dense map
   // ink without turning them into large white labels.
   const labelHaloWidth = labelFontSize * 0.12;
@@ -187,6 +213,23 @@ export function renderCourseOverlaySvg(
     }
   }
 
+  // Auto-placement runs in the MAP frame (page coordinates with the
+  // window rotation undone), not in page coordinates: the course editor,
+  // the layout preview and the PDF may each show the course under a
+  // different rotation, and a number must land on the same spot on the
+  // map in all of them. Rotation about the frame centre is rigid, so the
+  // clipped segments can simply be rotated back; only the chosen label
+  // centres (and leaders) are rotated onto the page afterwards.
+  const rotation = windowRotationDeg(window);
+  const frameCenter = {
+    x: frame.x + frame.width / 2,
+    y: frame.y + frame.height / 2,
+  };
+  const toMapFrame = (point: MapPoint): MapPoint =>
+    rotation === 0 ? point : rotatePagePoint(point, frameCenter, -rotation);
+  const toPageFrame = (point: MapPoint): MapPoint =>
+    rotation === 0 ? point : rotatePagePoint(point, frameCenter, rotation);
+
   const placementCircles: PlacementCircle[] = [];
   let sequence = 0;
   for (const { control, point } of controls) {
@@ -196,10 +239,11 @@ export function renderCourseOverlaySvg(
           ? control.code
           : String(++sequence)
         : undefined;
+    const framePoint = toMapFrame(point);
     placementCircles.push({
       id: control.id,
-      x: point.x,
-      y: point.y,
+      x: framePoint.x,
+      y: framePoint.y,
       label: value,
       radius:
         control.type === "start"
@@ -208,11 +252,20 @@ export function renderCourseOverlaySvg(
             ? finishOuter
             : radius,
       ...(control.labelPosition !== undefined
-        ? { fixedLabel: mapToPage(control.labelPosition, frame, window) }
+        ? {
+            fixedLabel: toMapFrame(
+              mapToPage(control.labelPosition, frame, window),
+            ),
+          }
         : {}),
     });
   }
-  const labels = placeControlLabels(placementCircles, drawnSegments, {
+  const placementSegments = drawnSegments.map((segment) => {
+    const a = toMapFrame({ x: segment.x1, y: segment.y1 });
+    const b = toMapFrame({ x: segment.x2, y: segment.y2 });
+    return { x1: a.x, y1: a.y, x2: b.x, y2: b.y };
+  });
+  const labels = placeControlLabels(placementCircles, placementSegments, {
     radius,
     labelSize: labelFontSize,
   });
@@ -235,7 +288,6 @@ export function renderCourseOverlaySvg(
 
     // Cut gaps are authored relative to map north; when the window is
     // rotated for display north the gaps rotate with the map features.
-    const rotation = windowRotationDeg(window);
     const cuts = (control.cuts ?? []).map((cut) =>
       rotation === 0
         ? cut
@@ -244,18 +296,23 @@ export function renderCourseOverlaySvg(
     lower.push(
       `<path ${data} d="${drawBrokenCircle(point.x, point.y, radius, cuts)}"/>`,
     );
-    const label = labels.get(control.id);
-    if (!label) continue;
-    if (label.leader) {
+    const placed = labels.get(control.id);
+    if (!placed) continue;
+    const label = toPageFrame(placed);
+    if (placed.leader) {
+      const from = toPageFrame({ x: placed.leader.x1, y: placed.leader.y1 });
+      const to = toPageFrame({ x: placed.leader.x2, y: placed.leader.y2 });
       upper.push(
-        `<line data-control-label-leader="${escapeSvgText(control.id)}" x1="${label.leader.x1}" y1="${label.leader.y1}" x2="${label.leader.x2}" y2="${label.leader.y2}" stroke-width="${stroke * 0.7}"/>`,
+        `<line data-control-label-leader="${escapeSvgText(control.id)}" x1="${from.x}" y1="${from.y}" x2="${to.x}" y2="${to.y}" stroke-width="${stroke * 0.7}"/>`,
       );
     }
     const placement = placementCircles.find((circle) => circle.id === control.id);
     // ISOM 704: Arial, non-bold — upper purple with a narrow white
-    // knockout so numbers stay legible over map ink.
+    // knockout so numbers stay legible over map ink. The anchor is the
+    // alphabetic baseline (no dominant-baseline: librsvg ignores it), so
+    // shift down by half a digit so the glyph is centred on `label`.
     upper.push(
-      `<text data-control-label="${escapeSvgText(control.id)}" x="${label.x}" y="${label.y}" fill="${purple}" stroke="#fff" stroke-width="${labelHaloWidth}" stroke-linejoin="round" paint-order="stroke fill" font-family="Liberation Sans, Arial, sans-serif" font-size="${labelFontSize}" text-anchor="middle" dominant-baseline="central">${escapeSvgText(placement?.label ?? control.code)}</text>`,
+      `<text data-control-label="${escapeSvgText(control.id)}" x="${label.x}" y="${controlNumberBaselineY(label.y, labelSize)}" fill="${purple}" stroke="#fff" stroke-width="${labelHaloWidth}" stroke-linejoin="round" paint-order="stroke fill" font-family="${CONTROL_NUMBER_FONT_FAMILY}" font-size="${labelFontSize}" text-anchor="middle">${escapeSvgText(placement?.label ?? control.code)}</text>`,
     );
   }
 

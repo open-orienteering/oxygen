@@ -1195,11 +1195,28 @@ test.describe("Course editor", () => {
       page.locator('[data-testid="editor-seq-row"][data-kind="control"]'),
     ).toHaveCount(1, { timeout: 15000 });
 
+    // The context menu stays open after "append" and is anchored next to
+    // the control — right where the number lands. Close it so the drag
+    // starts on the label hit, not on the menu.
+    await page.keyboard.press("Escape");
+    await expect(page.getByTestId("editor-context-menu")).toBeHidden({ timeout: 10000 });
+    // Legs drawn for the new sequence are placement obstacles: wait for
+    // them, then for the label to settle, before measuring its start box.
+    await expect(page.getByTestId("editor-leg-hit").first()).toBeAttached({ timeout: 15000 });
     const labelHit = page.locator(
       `[data-testid="editor-label-hit"][data-control-id="${code}"]`,
     );
     await expect(labelHit).toBeAttached({ timeout: 15000 });
-    const start = await labelHit.boundingBox();
+    let start = await labelHit.boundingBox();
+    await expect(async () => {
+      const again = await labelHit.boundingBox();
+      expect(again).not.toBeNull();
+      expect(start).not.toBeNull();
+      const settled =
+        Math.abs(again!.x - start!.x) < 0.5 && Math.abs(again!.y - start!.y) < 0.5;
+      start = again;
+      expect(settled).toBe(true);
+    }).toPass({ timeout: 15000 });
     expect(start).not.toBeNull();
     const destX = start!.x + start!.width / 2 + 48;
     const destY = start!.y + start!.height / 2 + 24;
