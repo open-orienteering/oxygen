@@ -185,7 +185,14 @@ export async function performReadout(
   const course = courseId
     ? await db.course.findUnique({
         where: { id: courseId },
-        select: { id: true, seq: true, name: true, lengthM: true, legs: true },
+        select: {
+          id: true,
+          seq: true,
+          name: true,
+          lengthM: true,
+          legs: true,
+          orderMode: true,
+        },
       })
     : null;
 
@@ -226,7 +233,9 @@ export async function performReadout(
     finishTime,
     missingCount,
     runningTimeAdjustment,
-  } = matchPunchesToCourse(allPunches, expectedPositions, runnerStartTime);
+  } = matchPunchesToCourse(allPunches, expectedPositions, runnerStartTime, {
+    orderMode: course?.orderMode ?? "ordered",
+  });
 
   const rawRunningTime =
     finishTime !== 0 && startTime !== 0 ? finishTime - startTime : 0;

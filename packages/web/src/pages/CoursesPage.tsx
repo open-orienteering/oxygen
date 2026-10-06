@@ -119,6 +119,9 @@ export function CoursesPage() {
   });
 
   const [bulkValue, setBulkValue] = useState<string>("");
+  const [bulkField, setBulkField] = useState<"numberOfMaps" | "orderMode">(
+    "numberOfMaps",
+  );
 
   const handleDelete = (id: number, name: string) => {
     if (window.confirm(t("removeConfirm", { name }))) {
@@ -160,11 +163,27 @@ export function CoursesPage() {
 
   const handleApplyBulk = () => {
     if (bulkValue === "" || selection.count === 0) return;
+    const fieldLabel =
+      bulkField === "orderMode" ? t("orderMode") : t("maps");
+    const displayValue =
+      bulkField === "orderMode"
+        ? bulkValue === "free_order"
+          ? t("orderModeFreeOrder")
+          : t("orderModeOrdered")
+        : bulkValue;
     if (!window.confirm(t("bulkConfirm", {
-      field: t("maps").toLowerCase(),
-      value: bulkValue,
+      field: fieldLabel.toLowerCase(),
+      value: displayValue,
       count: selection.count,
     }))) return;
+    if (bulkField === "orderMode") {
+      if (bulkValue !== "ordered" && bulkValue !== "free_order") return;
+      bulkUpdateMutation.mutate({
+        ids: Array.from(selection.selected),
+        orderMode: bulkValue,
+      });
+      return;
+    }
     const value = parseInt(bulkValue, 10);
     if (Number.isNaN(value) || value < 0) return;
     bulkUpdateMutation.mutate({
@@ -296,7 +315,17 @@ export function CoursesPage() {
                         />
                       </td>
                       <td className="px-4 py-2.5 font-medium text-slate-700">
-                        {c.name}
+                        <span className="inline-flex items-center gap-1.5">
+                          {c.name}
+                          {c.orderMode === "free_order" && (
+                            <span
+                              data-testid="course-free-order-badge"
+                              className="px-1.5 py-0.5 rounded text-xs font-medium bg-amber-100 text-amber-800"
+                            >
+                              {t("orderModeFreeOrderBadge")}
+                            </span>
+                          )}
+                        </span>
                       </td>
                       <td className="px-4 py-2.5 tabular-nums text-slate-600">
                         {c.controlCount}
@@ -388,22 +417,39 @@ export function CoursesPage() {
       {/* Bulk action bar — floating at bottom, same as Classes/Runners */}
       <BulkActionBar count={selection.count} onDeselectAll={selection.clearSelection}>
         <select
-          value="numberOfMaps"
-          disabled
+          value={bulkField}
+          onChange={(e) => {
+            setBulkField(e.target.value as "numberOfMaps" | "orderMode");
+            setBulkValue("");
+          }}
           className="px-3 py-1.5 border border-slate-200 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 cursor-pointer"
           data-testid="bulk-field-select"
         >
           <option value="numberOfMaps">{t("maps")}</option>
+          <option value="orderMode">{t("orderMode")}</option>
         </select>
-        <input
-          type="number"
-          min={0}
-          value={bulkValue}
-          onChange={(e) => setBulkValue(e.target.value)}
-          placeholder="0"
-          className="w-24 px-3 py-1.5 border border-slate-200 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 tabular-nums"
-          data-testid="bulk-value-input"
-        />
+        {bulkField === "orderMode" ? (
+          <select
+            value={bulkValue}
+            onChange={(e) => setBulkValue(e.target.value)}
+            className="px-3 py-1.5 border border-slate-200 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+            data-testid="bulk-value-input"
+          >
+            <option value="">{t("noneLabel")}</option>
+            <option value="ordered">{t("orderModeOrdered")}</option>
+            <option value="free_order">{t("orderModeFreeOrder")}</option>
+          </select>
+        ) : (
+          <input
+            type="number"
+            min={0}
+            value={bulkValue}
+            onChange={(e) => setBulkValue(e.target.value)}
+            placeholder="0"
+            className="w-24 px-3 py-1.5 border border-slate-200 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 tabular-nums"
+            data-testid="bulk-value-input"
+          />
+        )}
         <button
           onClick={handleApplyBulk}
           disabled={bulkValue === "" || bulkUpdateMutation.isPending}
@@ -562,6 +608,21 @@ function CourseInlineDetail({ courseId }: { courseId: number }) {
 
           <div>
             <label className="block text-xs font-medium text-slate-500 mb-1">
+              {t("orderMode")}
+            </label>
+            <select
+              data-testid="course-order-mode"
+              value={d.orderMode ?? "ordered"}
+              onChange={(e) => handleSave("orderMode", e.target.value)}
+              className="w-full sm:w-56 px-3 py-1.5 border border-slate-200 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+            >
+              <option value="ordered">{t("orderModeOrdered")}</option>
+              <option value="free_order">{t("orderModeFreeOrder")}</option>
+            </select>
+          </div>
+
+          <div>
+            <label className="block text-xs font-medium text-slate-500 mb-1">
               {t("controls")}
             </label>
             <input
@@ -668,6 +729,7 @@ function CreateCourseForm({
   const [controls, setControls] = useState("");
   const [length, setLength] = useState("");
   const [numberOfMaps, setNumberOfMaps] = useState("1");
+  const [orderMode, setOrderMode] = useState<"ordered" | "free_order">("ordered");
   const utils = trpc.useUtils();
   const classes = trpc.class.list.useQuery();
   const courses = trpc.course.list.useQuery();
@@ -703,6 +765,7 @@ function CreateCourseForm({
       controlIds: codes.map((c) => parseInt(c, 10)).filter((n) => !isNaN(n)),
       length: parseInt(length, 10) || 0,
       numberOfMaps: parseInt(numberOfMaps, 10) || 1,
+      orderMode,
       linkClassId:
         matchCourselessClass(name.trim(), classes.data ?? []) ?? undefined,
     });
@@ -761,6 +824,20 @@ function CreateCourseForm({
               className="w-full px-3 py-1.5 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 tabular-nums"
               min={0}
             />
+          </div>
+          <div className="sm:w-40">
+            <label className="block text-xs font-medium text-slate-500 mb-1">{t("orderMode")}</label>
+            <select
+              data-testid="create-order-mode"
+              value={orderMode}
+              onChange={(e) =>
+                setOrderMode(e.target.value as "ordered" | "free_order")
+              }
+              className="w-full px-3 py-1.5 border border-slate-200 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+            >
+              <option value="ordered">{t("orderModeOrdered")}</option>
+              <option value="free_order">{t("orderModeFreeOrder")}</option>
+            </select>
           </div>
         </div>
         <div>

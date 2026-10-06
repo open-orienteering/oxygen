@@ -113,6 +113,8 @@ interface MapLayoutEditorProps {
   }>;
   legs: CourseOverlayLeg[];
   allControls?: boolean;
+  /** Override control-number labelling (free-order → `"code"`). */
+  labelMode?: "sequence" | "code";
   mapObjects: CourseMapObject[];
   templateObjects: CourseMapObject[];
   textValues: MapTextValues;
@@ -657,6 +659,7 @@ export function MapLayoutEditor({
   controls,
   legs,
   allControls = false,
+  labelMode,
   mapObjects,
   templateObjects,
   textValues,
@@ -942,6 +945,7 @@ export function MapLayoutEditor({
         controls,
         legs,
         allControls,
+        labelMode,
         // ISOM: overprint enlarges with the map (base scale / print scale).
         overprintScale: baseMapScale / history.present.printScale,
       }),
@@ -953,6 +957,7 @@ export function MapLayoutEditor({
       document.appearance,
       document.mapFrame,
       history.present.printScale,
+      labelMode,
       legs,
     ],
   );

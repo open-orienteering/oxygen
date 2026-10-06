@@ -42,6 +42,12 @@ export interface RenderCourseOverlayOptions {
   legs: CourseOverlayLeg[];
   allControls?: boolean;
   /**
+   * How control numbers are labelled. Defaults to `"code"` when
+   * `allControls` is set, otherwise `"sequence"`. Free-order course maps
+   * pass `"code"` explicitly so punch codes replace 1,2,3…
+   */
+  labelMode?: "sequence" | "code";
+  /**
    * Enlargement factor `mapScale / printScale`. ISOM specifies overprint
    * dimensions at the base map scale (circle Ø 5–6 mm, 0.35 mm lines at
    * 1:15000); when the map is printed enlarged the overprint must enlarge
@@ -230,12 +236,14 @@ export function renderCourseOverlaySvg(
   const toPageFrame = (point: MapPoint): MapPoint =>
     rotation === 0 ? point : rotatePagePoint(point, frameCenter, rotation);
 
+  const labelMode =
+    options.labelMode ?? (options.allControls ? "code" : "sequence");
   const placementCircles: PlacementCircle[] = [];
   let sequence = 0;
   for (const { control, point } of controls) {
     const value =
       control.type === "control"
-        ? options.allControls
+        ? labelMode === "code"
           ? control.code
           : String(++sequence)
         : undefined;

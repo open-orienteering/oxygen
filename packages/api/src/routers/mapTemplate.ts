@@ -132,6 +132,7 @@ export const mapTemplateRouter = router({
               name: course.name,
               lengthM: course.lengthM,
               climbM: course.climbM,
+              orderMode: course.orderMode,
               geometry: course.geometry,
               classes: course.classes,
               controls: layoutControlsFromCourseControls(course.courseControls),

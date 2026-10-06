@@ -81,6 +81,22 @@ describe("buildEditorGeometry", () => {
     expect(fc.features).toHaveLength(1);
     expect(fc.features[0].geometry.type).toBe("Point");
   });
+
+  it("free_order emits control points but no leg lines", () => {
+    const fc = buildEditorGeometry(
+      seq([
+        ["S1", "Start", 0, 10],
+        ["31", "Control", 30, 10],
+        ["32", "Control", 30, 50],
+        ["F1", "Finish", 60, 50],
+      ]),
+      "free_order",
+    );
+    const points = fc.features.filter((f) => f.geometry.type === "Point");
+    const legs = fc.features.filter((f) => f.geometry.type === "LineString");
+    expect(points).toHaveLength(4);
+    expect(legs).toHaveLength(0);
+  });
 });
 
 describe("legDistancesMm", () => {

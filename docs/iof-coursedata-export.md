@@ -39,7 +39,7 @@ curl -OJ 'http://localhost:3002/api/export/course-data?name=itest'
 | `Map > MapPositionTopLeft` / `BottomRight` | bounding box of the exported controls — the schema wants image corners and we ship no image |
 | `Control` (one per **placed** control) | `Id` = primary punch code (name, then `seq`, as fallbacks); `@_type` = `Start` / `Control` / `Finish` from `controls.status`; `MapPosition @_x/@_y` in paper mm; `Position @_lat/@_lng` from the stored WGS84, or derived via the map CRS |
 | `Course` | `Name`, `Length`, `Climb` (omitted when 0). Editor-owned courses derive `Length` from current coordinates × map scale; untouched imports keep their declared `courses.length_m` so intentional extra distance survives |
-| `CourseControl` | the full display sequence: start row, `course_controls` in order, finish row; `LegLength` is recalculated from current coordinates × map scale (`courses.legs` is only a fallback when no map CRS is available) |
+| `CourseControl` | the full display sequence: start row, `course_controls` in order, finish row; `LegLength` is recalculated from current coordinates × map scale (`courses.legs` is only a fallback when no map CRS is available). Free-order courses emit `randomOrder="true"` on every Control-type row and omit `LegLength` — see [free-order-courses.md](free-order-courses.md) |
 | `ClassCourseAssignment` | every `classes` row with a non-null `course_id` |
 
 Two deliberate omissions:
@@ -80,8 +80,9 @@ test cheap: the unit tests feed hand-written data straight into
 - `packages/api/src/__tests__/iof-course-export.test.ts` — structure
   assertions plus a **round-trip** through `parseIOFCourseData`: control
   ids/types/positions, course sequences, lengths, class assignments.
-  Edge cases: `firstAsStart` / `lastAsFinish`, missing lat/lng, unplaced
-  controls, duplicate ids, an empty event.
+  Edge cases: `firstAsStart` / `lastAsFinish`, free-order `randomOrder`
+  round-trip, missing lat/lng, unplaced controls, duplicate ids, an
+  empty event.
 - `packages/api/src/__tests__/integration/course-export.test.ts` — seeds
   an event with the OCD fixture as its map, exports, re-parses, and
   checks the synthesized start/finish rows, derived WGS84 coordinates and

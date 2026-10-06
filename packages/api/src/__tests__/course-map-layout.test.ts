@@ -212,6 +212,75 @@ describe("resolveMapLayout label offset", () => {
   });
 });
 
+describe("resolveMapLayout free_order", () => {
+  it("drops connecting legs, uses code labels, and omits sequence on the sheet", () => {
+    const layout = resolveMapLayout({
+      kind: "course",
+      template,
+      course: {
+        name: "Free",
+        lengthM: 0,
+        climbM: 0,
+        orderMode: "free_order",
+        controls,
+        geometry: {
+          type: "FeatureCollection",
+          features: [
+            {
+              type: "Feature",
+              geometry: {
+                type: "LineString",
+                coordinates: [
+                  [10, 20],
+                  [30, 40],
+                ],
+              },
+              properties: { symbolType: "leg" },
+            },
+            {
+              type: "Feature",
+              geometry: {
+                type: "LineString",
+                coordinates: [
+                  [0, 0],
+                  [5, 5],
+                ],
+              },
+              properties: { symbolType: "marked_route" },
+            },
+          ],
+        },
+      },
+    });
+    expect(layout.labelMode).toBe("code");
+    expect(layout.legs.map((l) => l.kind)).toEqual(["marked_route"]);
+    expect(
+      layout.descriptionRows
+        .filter((r) => r.kind === "control")
+        .every((r) => r.sequence === undefined),
+    ).toBe(true);
+  });
+
+  it("honours manual number offsets on free-order courses", () => {
+    const layout = resolveMapLayout({
+      kind: "course",
+      template,
+      course: {
+        name: "Free",
+        lengthM: 0,
+        climbM: 0,
+        orderMode: "free_order",
+        controls: [{ ...controls[0], labelOffset: { dx: 5, dy: -3 } }],
+      },
+    });
+    const overlay = layout.controls.find((c) => c.code === "31");
+    expect(overlay?.labelPosition).toEqual({
+      x: controls[0].xpos + 5,
+      y: controls[0].ypos - 3,
+    });
+  });
+});
+
 describe("graphic upload validation", () => {
   it("detects PNG by magic bytes and rejects empty or oversized files", () => {
     const png = Buffer.concat([

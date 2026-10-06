@@ -43,6 +43,33 @@ describe("buildDescriptionSheet", () => {
     });
   });
 
+  it("free_order omits sequence numbers on control rows", () => {
+    const sheet = buildDescriptionSheet({
+      eventName: "E",
+      classNames: [],
+      courseName: "Score",
+      lengthM: 0,
+      climbM: 0,
+      orderMode: "free_order",
+      controls: [
+        { id: 31, code: "31" },
+        { id: 32, code: "32" },
+        { id: 33, code: "33" },
+      ],
+    });
+    const controls = sheet.rows.filter((r) => r.kind === "control");
+    expect(controls).toHaveLength(3);
+    for (const row of controls) {
+      expect(row.sequence).toBeUndefined();
+      expect(row.code).toMatch(/^\d+$/);
+    }
+    // Thick rule still fires under every third control row.
+    const thirdControlIdx = sheet.rows.findIndex(
+      (r) => r.kind === "control" && r.code === "33",
+    );
+    expect(hasThickRuleBelow(sheet.rows, thirdControlIdx)).toBe(true);
+  });
+
   it("inserts specials after start and after a named control", () => {
     const sheet = buildDescriptionSheet({
       eventName: "E",

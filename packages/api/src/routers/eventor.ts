@@ -1619,7 +1619,10 @@ export const eventorRouter = router({
           (a, b) => a.time - b.time,
         );
         const fallbackStart = toAbsolute(r.startTime, event.zeroTime);
-        const matched = matchPunchesToCourse(merged, positions, fallbackStart);
+        const course = courseById.get(courseId);
+        const matched = matchPunchesToCourse(merged, positions, fallbackStart, {
+          orderMode: course?.orderMode ?? "ordered",
+        });
         matchByRunner.set(r.id, matched);
         if (matched.runningTimeAdjustment > 0) {
           adjustmentByRunner.set(r.id, matched.runningTimeAdjustment);

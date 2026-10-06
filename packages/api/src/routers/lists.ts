@@ -123,6 +123,16 @@ export const listsRouter = router({
         string,
         Awaited<ReturnType<typeof resolveCourseExpectedPositions>>
       >();
+      const orderModeByCourse = new Map<string, "ordered" | "free_order">();
+      if (courseIds.size > 0) {
+        const courseRows = await ctx.db.course.findMany({
+          where: { id: { in: [...courseIds] } },
+          select: { id: true, orderMode: true },
+        });
+        for (const row of courseRows) {
+          orderModeByCourse.set(row.id, row.orderMode);
+        }
+      }
       for (const cid of courseIds) {
         expectedByCourse.set(
           cid,
@@ -146,6 +156,7 @@ export const listsRouter = router({
           punches,
           expected,
           fallbackStart,
+          { orderMode: orderModeByCourse.get(courseId!) ?? "ordered" },
         );
         if (runningTimeAdjustment > 0)
           adjustmentByRunner.set(r.id, runningTimeAdjustment);

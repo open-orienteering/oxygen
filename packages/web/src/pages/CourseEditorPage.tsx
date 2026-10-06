@@ -1492,7 +1492,13 @@ export function CourseEditorPage() {
                       className="flex items-center gap-1.5 px-2.5 py-1"
                     >
                       <span className={`w-5 shrink-0 font-semibold ${row.kind === "control" ? "text-purple-700" : "text-slate-400"}`}>
-                        {row.kind === "start" ? "S" : row.kind === "finish" ? "F" : row.seqIndex + 1}
+                        {row.kind === "start"
+                          ? "S"
+                          : row.kind === "finish"
+                            ? "F"
+                            : selectedCourse.orderMode === "free_order"
+                              ? "•"
+                              : row.seqIndex + 1}
                       </span>
                       {row.kind === "control" && editingSeqIndex === row.seqIndex ? (
                         <input
@@ -1555,25 +1561,31 @@ export function CourseEditorPage() {
                             {t("editor.radioBadge")}
                           </span>
                         )}
-                      <span className="text-slate-400 w-12 text-right shrink-0">
-                        {legMeters[i] != null ? `${legMeters[i]} m` : ""}
-                      </span>
+                      {selectedCourse.orderMode !== "free_order" && (
+                        <span className="text-slate-400 w-12 text-right shrink-0">
+                          {legMeters[i] != null ? `${legMeters[i]} m` : ""}
+                        </span>
+                      )}
                       {row.kind === "control" && (
                         <span className="flex gap-0.5 shrink-0">
-                          <button
-                            data-testid="editor-seq-up"
-                            disabled={row.seqIndex === 0}
-                            onClick={() => moveInSequence(row.seqIndex, -1)}
-                            className={`px-1 rounded ${row.seqIndex === 0 ? "text-slate-200 cursor-not-allowed" : "text-slate-400 hover:text-slate-700 hover:bg-slate-100 cursor-pointer"}`}
-                            title={t("editor.moveUp")}
-                          >↑</button>
-                          <button
-                            data-testid="editor-seq-down"
-                            disabled={row.seqIndex === sequenceIds.length - 1}
-                            onClick={() => moveInSequence(row.seqIndex, 1)}
-                            className={`px-1 rounded ${row.seqIndex === sequenceIds.length - 1 ? "text-slate-200 cursor-not-allowed" : "text-slate-400 hover:text-slate-700 hover:bg-slate-100 cursor-pointer"}`}
-                            title={t("editor.moveDown")}
-                          >↓</button>
+                          {selectedCourse.orderMode !== "free_order" && (
+                            <>
+                              <button
+                                data-testid="editor-seq-up"
+                                disabled={row.seqIndex === 0}
+                                onClick={() => moveInSequence(row.seqIndex, -1)}
+                                className={`px-1 rounded ${row.seqIndex === 0 ? "text-slate-200 cursor-not-allowed" : "text-slate-400 hover:text-slate-700 hover:bg-slate-100 cursor-pointer"}`}
+                                title={t("editor.moveUp")}
+                              >↑</button>
+                              <button
+                                data-testid="editor-seq-down"
+                                disabled={row.seqIndex === sequenceIds.length - 1}
+                                onClick={() => moveInSequence(row.seqIndex, 1)}
+                                className={`px-1 rounded ${row.seqIndex === sequenceIds.length - 1 ? "text-slate-200 cursor-not-allowed" : "text-slate-400 hover:text-slate-700 hover:bg-slate-100 cursor-pointer"}`}
+                                title={t("editor.moveDown")}
+                              >↓</button>
+                            </>
+                          )}
                           <button
                             data-testid="editor-seq-remove"
                             onClick={() => removeFromSequence(row.seqIndex)}
@@ -1590,7 +1602,39 @@ export function CourseEditorPage() {
                   data-testid="editor-course-total"
                 >
                   <span>{t("controlCount", { count: sequenceIds.length })}</span>
-                  <span className="font-semibold">{totalMeters} m</span>
+                  {selectedCourse.orderMode !== "free_order" && (
+                    <span className="font-semibold">{totalMeters} m</span>
+                  )}
+                </div>
+                <div
+                  className="shrink-0 px-2 py-1.5 border-t border-slate-100 flex flex-col gap-1"
+                  data-testid="editor-order-mode-row"
+                >
+                  <label className="text-[11px] text-slate-500 flex items-center gap-2">
+                    <span>{t("editor.orderMode")}</span>
+                    <select
+                      data-testid="editor-order-mode"
+                      className="flex-1 text-xs border border-slate-200 rounded px-1 py-0.5"
+                      value={selectedCourse.orderMode ?? "ordered"}
+                      onChange={(e) => {
+                        const mode = e.target.value as "ordered" | "free_order";
+                        void run(() =>
+                          client.course.update.mutate({
+                            id: selectedCourse.id,
+                            orderMode: mode,
+                          }),
+                        );
+                      }}
+                    >
+                      <option value="ordered">{t("orderModeOrdered")}</option>
+                      <option value="free_order">{t("orderModeFreeOrder")}</option>
+                    </select>
+                  </label>
+                  {selectedCourse.orderMode === "free_order" && (
+                    <p className="text-[10px] text-slate-400 leading-snug" data-testid="editor-free-order-hint">
+                      {t("editor.freeOrderHint")}
+                    </p>
+                  )}
                 </div>
                 <div
                   className="shrink-0 px-2 py-1.5 border-t border-slate-100 flex flex-col gap-1"

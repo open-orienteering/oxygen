@@ -193,7 +193,9 @@ export function computeCardReadout(
   const fallbackStartTime = runner.startTime || 0;
 
   const { matches, startTime, finishTime, missingCount, runningTimeAdjustment } =
-    matchPunchesToCourse(allPunches, expectedPositions, fallbackStartTime);
+    matchPunchesToCourse(allPunches, expectedPositions, fallbackStartTime, {
+      orderMode: course?.orderMode ?? "ordered",
+    });
 
   const rawRunningTime = finishTime > 0 && startTime > 0 ? finishTime - startTime : 0;
   // Subtract NoTiming/BadNoTiming leg deductions so the offline result
@@ -312,6 +314,8 @@ interface CourseItem {
   length: number;
   /** Raw oCourse.Controls Id list (kept for diagnostics). */
   controls: string;
+  /** Visit-order mode from the dashboard cache. */
+  orderMode?: import("@oxygen/shared").CourseOrderMode;
   /**
    * Status-aware per-position descriptors resolved server-side. Used
    * for offline punch matching so the client applies the same MeOS
