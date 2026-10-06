@@ -483,6 +483,7 @@ export const eventRouter = router({
             controls: "", // deprecated raw string; clients use expectedPositions
             controlCount: expectedPositions.length,
             numberOfMaps: c.numberOfMaps > 0 ? c.numberOfMaps : undefined,
+            orderMode: c.orderMode,
             expectedPositions,
           };
         }),

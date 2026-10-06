@@ -238,6 +238,19 @@ describe("course map SVG generators", () => {
     expect(lower).toContain('data-control-code="31"');
     expect(lower).toContain("<path");
     expect(upper).toContain(">1</text>");
+    // Free-order / all-controls: punch codes instead of sequence numbers.
+    const byCode = renderCourseOverlaySvg({
+      frame: document.mapFrame,
+      window: { minX: 0, minY: 0, width: 100, height: 100 },
+      appearance: document.appearance,
+      controls: [
+        { id: "31", code: "31", type: "control", x: 40, y: 40 },
+      ],
+      legs: [],
+      labelMode: "code",
+    });
+    expect(byCode.upper).toContain(">31</text>");
+    expect(byCode.upper).not.toContain(">1</text>");
     expect(lower.match(/<circle/g)).toHaveLength(2);
     expect(lower).not.toContain("mix-blend-mode");
     expect(upper).not.toContain("mix-blend-mode");

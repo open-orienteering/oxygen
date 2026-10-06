@@ -1343,4 +1343,118 @@ test.describe("Course editor", () => {
       { timeout: 10000 },
     );
   });
+
+  test("free-order mode: no sequence arrows, code labels, no leg lines", async ({
+    page,
+  }) => {
+    test.slow();
+    await selectCompetition(page);
+    await ensureCoursesAndMap(page);
+    await openEditor(page);
+
+    const courseName = `E2E Free ${Date.now()}`;
+    await page.getByTestId("editor-new-course-name").fill(courseName);
+    await page.getByTestId("editor-create-course").click();
+    await expect(page.getByTestId("editor-sequence")).toBeVisible({
+      timeout: 15000,
+    });
+
+    const codes = await pickClickableControlCodes(page, 2);
+    expect(codes.length).toBe(2);
+    const controlRows = page.locator(
+      '[data-testid="editor-seq-row"][data-kind="control"]',
+    );
+    const hitFor = (code: string) =>
+      page.locator(
+        `[data-testid="editor-control-hit"][data-control-code="${code}"]`,
+      );
+    // Append one-at-a-time and wait — concurrent course.update races on
+    // (course_id, position) unique.
+    for (let i = 0; i < codes.length; i++) {
+      const code = codes[i]!;
+      if (await page.getByTestId("editor-context-menu").isVisible()) {
+        await page.keyboard.press("Escape");
+        await expect(page.getByTestId("editor-context-menu")).not.toBeVisible();
+      }
+      const box = await hitFor(code).boundingBox();
+      expect(box).not.toBeNull();
+      await page.mouse.click(box!.x + box!.width / 2, box!.y + box!.height / 2);
+      await expect(page.getByTestId("editor-selected-info")).toContainText(
+        `Control ${code}`,
+        { timeout: 10000 },
+      );
+      await page.getByTestId("editor-action-append").click();
+      await expect(controlRows).toHaveCount(i + 1, { timeout: 15000 });
+    }
+
+    // Ordered: up/down arrows present; insert-on-leg hit targets exist.
+    await expect(page.getByTestId("editor-seq-up").first()).toBeVisible();
+    await expect(page.getByTestId("editor-leg-hit").first()).toBeAttached({
+      timeout: 15000,
+    });
+
+    await page.getByTestId("editor-order-mode").selectOption("free_order");
+    await expect(page.getByTestId("editor-free-order-hint")).toBeVisible({
+      timeout: 10000,
+    });
+    await expect(page.getByTestId("editor-seq-up")).toHaveCount(0);
+    await expect(page.getByTestId("editor-seq-down")).toHaveCount(0);
+    // Sequence column shows a bullet, not 1/2.
+    await expect(controlRows.nth(0)).toContainText("•");
+
+    // No insert-on-leg hit targets once connecting legs are gone.
+    await expect(page.getByTestId("editor-leg-hit")).toHaveCount(0, {
+      timeout: 15000,
+    });
+    // On-map labels switch to punch codes (not 1, 2).
+    for (const code of codes) {
+      await expect(
+        page
+          .locator(`[data-testid="map-viewer"] svg text:text-is("${code}")`)
+          .first(),
+      ).toBeAttached({ timeout: 10000 });
+    }
+
+    // Numbers stay draggable in free-order mode — the offset lives on
+    // course_controls regardless of visit order.
+    await page.keyboard.press("Escape");
+    const code = codes[0]!;
+    const labelHit = page.locator(
+      `[data-testid="editor-label-hit"][data-control-id="${code}"]`,
+    );
+    await expect(labelHit).toBeAttached({ timeout: 15000 });
+    let start = await labelHit.boundingBox();
+    await expect(async () => {
+      const again = await labelHit.boundingBox();
+      expect(again).not.toBeNull();
+      expect(start).not.toBeNull();
+      const settled =
+        Math.abs(again!.x - start!.x) < 0.5 && Math.abs(again!.y - start!.y) < 0.5;
+      start = again;
+      expect(settled).toBe(true);
+    }).toPass({ timeout: 15000 });
+    const offsetSaved = page.waitForResponse(
+      (res) => res.ok() && res.url().includes("course.setControlLabelOffset"),
+      { timeout: 15000 },
+    );
+    await page.mouse.move(start!.x + start!.width / 2, start!.y + start!.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(
+      start!.x + start!.width / 2 + 48,
+      start!.y + start!.height / 2 + 24,
+      { steps: 8 },
+    );
+    await page.mouse.up();
+    await offsetSaved;
+    await expect(async () => {
+      const moved = await labelHit.boundingBox();
+      expect(moved).not.toBeNull();
+      expect(
+        Math.abs(moved!.x - start!.x) + Math.abs(moved!.y - start!.y),
+      ).toBeGreaterThan(10);
+    }).toPass({ timeout: 15000 });
+    await expect(page.getByTestId("editor-action-reset-label")).toBeVisible({
+      timeout: 10000,
+    });
+  });
 });

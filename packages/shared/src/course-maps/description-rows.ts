@@ -17,6 +17,7 @@
 import type {
   ControlDescription,
   CourseDescriptionInstructions,
+  CourseOrderMode,
 } from "../types.js";
 
 export type DescriptionSheetRowKind =
@@ -74,6 +75,11 @@ export interface BuildDescriptionSheetInput {
    * not carry an explicit `finish.lengthM`.
    */
   finishLengthM?: number | null;
+  /**
+   * Visit-order mode. Free-order sheets omit the A-column sequence
+   * number on control rows (controls are listed by code only).
+   */
+  orderMode?: CourseOrderMode;
 }
 
 /**
@@ -83,7 +89,8 @@ export interface BuildDescriptionSheetInput {
  * are boxed in by thick rules. Returns true when the line *below*
  * `rows[index]` should be drawn thick:
  *  - under the start row,
- *  - under every third control (sequence 3, 6, 9, …),
+ *  - under every third control (1-based ordinal among control rows —
+ *    works for free-order sheets that omit `sequence`),
  *  - above and below a special-instruction row,
  *  - above the finish row.
  */
@@ -94,8 +101,12 @@ export function hasThickRuleBelow(
   const row = rows[index];
   if (!row) return false;
   if (row.kind === "start" || row.kind === "special") return true;
-  if (row.kind === "control" && row.sequence != null && row.sequence % 3 === 0) {
-    return true;
+  if (row.kind === "control") {
+    let ordinal = 0;
+    for (let i = 0; i <= index; i++) {
+      if (rows[i]?.kind === "control") ordinal++;
+    }
+    if (ordinal > 0 && ordinal % 3 === 0) return true;
   }
   const next = rows[index + 1]?.kind;
   return next === "special" || next === "finish";
@@ -153,10 +164,11 @@ export function buildDescriptionSheet(
     });
   }
 
+  const freeOrder = input.orderMode === "free_order";
   input.controls.forEach((c, i) => {
     rows.push({
       kind: "control",
-      sequence: i + 1,
+      ...(freeOrder ? {} : { sequence: i + 1 }),
       code: c.code,
       description: c.description ?? null,
     });

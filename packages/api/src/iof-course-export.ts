@@ -42,6 +42,8 @@ export interface ExportCourse {
   name: string;
   lengthM: number;
   climbM: number;
+  /** Visit-order mode — free-order emits `randomOrder="true"` on Controls. */
+  orderMode?: "ordered" | "free_order";
   /** Full display sequence: start, controls, finish. */
   controls: ExportCourseControl[];
 }
@@ -96,6 +98,7 @@ export function buildCourseDataXml(input: CourseDataExport): string {
     const node: Record<string, unknown> = { Name: course.name };
     if (course.lengthM > 0) node.Length = round(course.lengthM, 1);
     if (course.climbM > 0) node.Climb = round(course.climbM, 1);
+    const freeOrder = course.orderMode === "free_order";
     node.CourseControl = course.controls
       .filter((cc) => byId.has(cc.controlId))
       .map((cc) => {
@@ -103,7 +106,17 @@ export function buildCourseDataXml(input: CourseDataExport): string {
           "@_type": cc.type,
           Control: cc.controlId,
         };
-        if (cc.legLengthM != null && cc.legLengthM > 0) {
+        if (freeOrder && cc.type === "Control") {
+          // Valued attr (builder has suppressBooleanAttributes: false) so
+          // XMLParser round-trips; bare `randomOrder` is dropped on parse.
+          n["@_randomOrder"] = "true";
+        }
+        // Free-order courses have no meaningful legs — omit LegLength.
+        if (
+          !freeOrder &&
+          cc.legLengthM != null &&
+          cc.legLengthM > 0
+        ) {
           n.LegLength = round(cc.legLengthM, 1);
         }
         return n;
@@ -148,6 +161,9 @@ export function buildCourseDataXml(input: CourseDataExport): string {
     ignoreAttributes: false,
     format: true,
     suppressEmptyNode: true,
+    // Keep randomOrder="true" (and other boolean attrs) valued so
+    // XMLParser round-trips them — bare `randomOrder` is dropped on parse.
+    suppressBooleanAttributes: false,
   });
   const body = builder.build({
     CourseData: {

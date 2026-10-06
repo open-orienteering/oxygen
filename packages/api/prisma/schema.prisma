@@ -67,6 +67,16 @@ enum ClubControlType {
   @@schema("oxygen")
 }
 
+/// How a course's controls must be visited. `score` (rogaining) is reserved
+/// for a follow-up — add via `ALTER TYPE ... ADD VALUE` when that lands.
+enum CourseOrderMode {
+  ordered
+  free_order
+
+  @@map("course_order_mode")
+  @@schema("oxygen")
+}
+
 // ─── Registry & global tables ──────────────────────────────
 
 /// An orienteering event — competition, training session, club evening, etc.
@@ -453,6 +463,8 @@ model Course {
   /// Course-level description-sheet instructions (special rows + finish variant).
   /// Shape: { specials?: [{afterControlId, kind, lengthM?}], finish?: {kind, lengthM?} }.
   descriptionInstructions Json? @map("description_instructions")
+  /// Visit order: `ordered` (default) or `free_order` (any order, no leg lines).
+  orderMode       CourseOrderMode @default(ordered) @map("order_mode")
   removed         Boolean  @default(false)
   createdAt       DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt       DateTime @default(now()) @map("updated_at") @db.Timestamptz(6)

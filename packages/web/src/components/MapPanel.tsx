@@ -539,6 +539,7 @@ function MapPanelImpl({
         classNames: classNamesByCourse.get(c.name) ?? [],
         lengthM: c.length,
         climbM: c.climb,
+        orderMode: c.orderMode ?? "ordered",
         descriptionInstructions: c.descriptionInstructions ?? null,
         labelOffsets: c.labelOffsets,
       };

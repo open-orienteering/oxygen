@@ -77,6 +77,14 @@ Courses page no longer offer write controls for them. Existing migrated
 courses retain the flags, geometry/export continue honoring them, and the
 Courses list shows a read-only legacy badge.
 
+### Visit order (free-order courses)
+
+The course panel has a **Visit order** select (`editor-order-mode`):
+*Ordered* (default) or *Free order*. Free-order courses may be punched
+in any sequence; the map drops connecting legs and shows punch codes
+instead of 1,2,3…; the sidebar hides ↑/↓ reorder and leg metres. See
+[free-order-courses.md](free-order-courses.md).
+
 While the editor is open the map never auto-pans: `MapPanel` skips its
 focus-on-selection behaviour in editor mode, because every sequence edit
 changes the highlighted course's control set and would otherwise refit

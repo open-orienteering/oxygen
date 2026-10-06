@@ -12,10 +12,16 @@ import {
   type CourseDetail,
   type ControlDescription,
   type CourseDescriptionInstructions,
+  type CourseOrderMode,
   type ExpectedPosition,
+  COURSE_ORDER_MODES,
   ControlStatus,
   pruneDescriptionInstructions,
 } from "@oxygen/shared";
+
+const orderModeSchema = z.enum(
+  COURSE_ORDER_MODES as unknown as [CourseOrderMode, ...CourseOrderMode[]],
+);
 import {
   parseIOFCourseDataWithGeometry,
   type ParsedCourse,
@@ -436,6 +442,7 @@ async function loadCourseDetail(
     length: c.lengthM,
     climb: c.climbM,
     numberOfMaps: c.numberOfMaps,
+    orderMode: c.orderMode as CourseOrderMode,
     firstAsStart: c.firstAsStart,
     lastAsFinish: c.lastAsFinish,
     controlCodes: ccs.map((cc) => {
@@ -520,6 +527,7 @@ export const courseRouter = router({
           length: c.lengthM,
           climb: c.climbM,
           numberOfMaps: c.numberOfMaps,
+          orderMode: c.orderMode as CourseOrderMode,
           firstAsStart: c.firstAsStart,
           lastAsFinish: c.lastAsFinish,
           startControlId: c.startName
@@ -554,6 +562,7 @@ export const courseRouter = router({
         length: z.number().int().optional().default(0),
         climb: z.number().int().optional().default(0),
         numberOfMaps: z.number().int().optional().default(0),
+        orderMode: orderModeSchema.optional().default("ordered"),
         firstAsStart: z.boolean().optional().default(false),
         lastAsFinish: z.boolean().optional().default(false),
         controlIds: z.array(z.number().int()).optional().default([]),
@@ -578,6 +587,7 @@ export const courseRouter = router({
             lengthM: input.length,
             climbM: input.climb,
             numberOfMaps: input.numberOfMaps,
+            orderMode: input.orderMode,
             firstAsStart: input.firstAsStart,
             lastAsFinish: input.lastAsFinish,
           },
@@ -652,6 +662,7 @@ export const courseRouter = router({
             name: input.name,
             climbM: source.climbM,
             numberOfMaps: source.numberOfMaps,
+            orderMode: source.orderMode,
             startName: source.startName,
             legs: source.legs,
             firstAsStart: source.firstAsStart,
@@ -695,6 +706,7 @@ export const courseRouter = router({
         length: z.number().int().optional(),
         climb: z.number().int().optional(),
         numberOfMaps: z.number().int().optional(),
+        orderMode: orderModeSchema.optional(),
         firstAsStart: z.boolean().optional(),
         lastAsFinish: z.boolean().optional(),
         controlIds: z.array(z.number().int()).optional(),
@@ -717,6 +729,7 @@ export const courseRouter = router({
       if (input.climb !== undefined) data.climbM = input.climb;
       if (input.numberOfMaps !== undefined)
         data.numberOfMaps = input.numberOfMaps;
+      if (input.orderMode !== undefined) data.orderMode = input.orderMode;
       if (input.firstAsStart !== undefined)
         data.firstAsStart = input.firstAsStart;
       if (input.lastAsFinish !== undefined)
@@ -827,10 +840,15 @@ export const courseRouter = router({
             });
           }
         }
-        if (input.controlIds !== undefined || startFinishChanged) {
+        if (
+          input.controlIds !== undefined ||
+          startFinishChanged ||
+          input.orderMode !== undefined
+        ) {
           // The stored overlay geometry lists the old sequence (or the
           // old start/finish legs) — rebuild straight-leg 'editor'
           // geometry (and length, unless the caller supplied one).
+          // Free-order rebuilds drop leg features; ordered restores them.
           await rebuildCourseGeometry(tx, ctx.event.id, [c.id], {
             updateLength: input.length === undefined,
           });
@@ -892,6 +910,7 @@ export const courseRouter = router({
         ids: z.array(z.number().int()),
         numberOfMaps: z.number().int().optional(),
         climb: z.number().int().optional(),
+        orderMode: orderModeSchema.optional(),
         firstAsStart: z.boolean().optional(),
         lastAsFinish: z.boolean().optional(),
       }),
@@ -905,6 +924,7 @@ export const courseRouter = router({
       if (input.numberOfMaps !== undefined)
         data.numberOfMaps = input.numberOfMaps;
       if (input.climb !== undefined) data.climbM = input.climb;
+      if (input.orderMode !== undefined) data.orderMode = input.orderMode;
       if (input.firstAsStart !== undefined)
         data.firstAsStart = input.firstAsStart;
       if (input.lastAsFinish !== undefined)
@@ -914,6 +934,14 @@ export const courseRouter = router({
           where: { id: { in: rows.map((r) => r.id) } },
           data,
         });
+        if (input.orderMode !== undefined) {
+          await rebuildCourseGeometry(
+            tx,
+            ctx.event.id,
+            rows.map((r) => r.id),
+            { updateLength: false },
+          );
+        }
         for (const r of rows) {
           await emitCourseUpserted(tx, ctx.event.id, r.id);
         }
@@ -1982,7 +2010,18 @@ export const courseRouter = router({
         const legsStr = legsArr.length ? legsArr.join(";") + ";" : "";
 
         // Per-course geometry: prefer OCD when fresh; otherwise XML.
-        const geom = skipPositions ? null : courseGeometry[pc.name] ?? null;
+        // Free-order courses never keep connecting leg lines.
+        let geom = skipPositions ? null : courseGeometry[pc.name] ?? null;
+        if (geom && (pc.orderMode ?? "ordered") === "free_order") {
+          geom = {
+            ...geom,
+            features: geom.features.filter(
+              (f) =>
+                (f.properties as { symbolType?: string } | null)?.symbolType !==
+                "leg",
+            ),
+          };
+        }
         const startCtrl = pc.controls.find((cc) => cc.type === "Start");
         const startName = startCtrl
           ? (() => {
@@ -2018,6 +2057,7 @@ export const courseRouter = router({
               name: pc.name,
               lengthM: Math.round(pc.length),
               climbM: Math.round(pc.climb),
+              orderMode: pc.orderMode ?? "ordered",
               legs: legsStr,
               startName,
               firstAsStart: false,
@@ -2041,6 +2081,7 @@ export const courseRouter = router({
               name: pc.name,
               lengthM: Math.round(pc.length),
               climbM: Math.round(pc.climb),
+              orderMode: pc.orderMode ?? "ordered",
               legs: legsStr,
               startName,
               firstAsStart: false,

@@ -188,6 +188,46 @@ describe("kiosk finish flow", () => {
     }
   });
 
+  it("free-order course: scrambled punch order → OK; same card on ordered → MP", async () => {
+    const f = await buildFixture("kf-free");
+    try {
+      // Scrambled order: 33, 31, 32 — MP on ordered, OK on free_order.
+      const punches = [
+        { controlCode: 33, time: 366_000 },
+        { controlCode: 31, time: 372_000 },
+        { controlCode: 32, time: 378_000 },
+      ];
+
+      await f.caller.cardReadout.storeReadout({
+        cardNo: f.cardNo,
+        cardType: "SI11",
+        punches,
+        startTime: 360_000,
+        finishTime: 384_000,
+      });
+
+      const orderedReceipt = await f.caller.race.finishReceipt({
+        runnerId: f.runnerSeq,
+      });
+      expect(orderedReceipt!.status).toBe(3); // MP
+
+      await f.ctx.db.course.updateMany({
+        where: { eventId: f.ctx.eventId, name: "K1" },
+        data: { orderMode: "free_order" },
+      });
+
+      const freeReceipt = await f.caller.race.finishReceipt({
+        runnerId: f.runnerSeq,
+      });
+      expect(freeReceipt!.status).toBe(1); // OK
+      expect(
+        freeReceipt!.controls.filter((s) => s.status === "missing"),
+      ).toHaveLength(0);
+    } finally {
+      await f.ctx.cleanup();
+    }
+  });
+
   it("applyResult writes the matcher's verdict back to the runner row", async () => {
     const f = await buildFixture("kf-apply");
     try {

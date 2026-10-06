@@ -61,6 +61,8 @@ export interface CourseMapListItem {
     }
   >;
   legs: CourseOverlayLeg[];
+  /** How control numbers are labelled on the overprint. */
+  labelMode: "sequence" | "code";
   descriptionRows: DescriptionRow[];
   /** IOF 3-row header for course maps; null → single title row. */
   descriptionHeader: DescriptionSheetHeader | null;
@@ -172,6 +174,7 @@ export const courseMapRouter = router({
               name: row.course.name,
               lengthM: row.course.lengthM,
               climbM: row.course.climbM,
+              orderMode: row.course.orderMode,
               geometry: row.course.geometry,
               classes: row.course.classes,
               controls: layoutControlsFromCourseControls(
@@ -196,6 +199,7 @@ export const courseMapRouter = router({
         resolved: { document: layout.document, window: layout.window },
         controls: layout.controls,
         legs: layout.legs,
+        labelMode: layout.labelMode,
         descriptionRows: layout.descriptionRows,
         descriptionHeader: layout.descriptionHeader,
         validation: { valid: true, issues: [] },
@@ -217,6 +221,8 @@ export const courseMapRouter = router({
           : row.validation;
       const controls = "controls" in row ? row.controls : [];
       const legs = "legs" in row ? row.legs : [];
+      const labelMode =
+        "labelMode" in row ? row.labelMode : ("sequence" as const);
       const descriptionRows =
         "descriptionRows" in row ? row.descriptionRows : [];
       const descriptionHeader =
@@ -247,6 +253,7 @@ export const courseMapRouter = router({
           : null,
         controls,
         legs,
+        labelMode,
         descriptionRows,
         descriptionHeader,
         resolved,
