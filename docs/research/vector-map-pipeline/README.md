@@ -47,7 +47,7 @@ research document is marked as such.
 | 01 | Delivery: tiles vs. whole document | Decided (whole document) | [01-tiling-vs-whole-document.md](01-tiling-vs-whole-document.md) |
 | 02 | Map document format (encoding, coordinate flags, symbols, colours, georeferencing) | Decided (hybrid JSON header + binary geometry) | [02-document-format.md](02-document-format.md) |
 | 03 | Symbol model: render IR, canonical IOF library, colour palette and stack, OCAD/OMAP symbol matching, fallbacks | Decided (one IR; library authored in it; staged reviewable matching) | [03-symbol-model.md](03-symbol-model.md) |
-| 04 | GL rendering: stack choice, colour-order drawing, lines/dashes/patterns/text on the GPU | Not started | — |
+| 04 | Render core: shared symbolisation stage + backends, GPU stack choice, per-primitive techniques, colour-order drawing, editing hooks, fixtures | Proposed (shared pass stream; custom WebGL2 backend) | [04-render-core.md](04-render-core.md) |
 | 05 | Print: PDF generation from the same document, CMYK, print profiles | Not started | — |
 | 06 | Import pipeline: OCAD/OMAP parsing, review, versioning, caching | Not started | — |
 | 07 | Storage and delivery: Postgres vs. object storage, immutability, offline | Not started | — |
