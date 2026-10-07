@@ -41,8 +41,8 @@ research document is marked as such.
 | # | Topic | Status | Document |
 |---|-------|--------|----------|
 | 01 | Delivery: tiles vs. whole document | Decided (whole document) | [01-tiling-vs-whole-document.md](01-tiling-vs-whole-document.md) |
-| 02 | Map document format (encoding, coordinate flags, symbols, colours, georeferencing) | In progress | [02-document-format.md](02-document-format.md) |
-| 03 | Symbol model: canonical IOF library, OCAD symbol matching, fallbacks | Not started | — |
+| 02 | Map document format (encoding, coordinate flags, symbols, colours, georeferencing) | Decided (hybrid JSON header + binary geometry) | [02-document-format.md](02-document-format.md) |
+| 03 | Symbol model: render IR, canonical IOF library, colour palette and stack, OCAD/OMAP symbol matching, fallbacks | Research complete, recommendation pending | [03-symbol-model.md](03-symbol-model.md) |
 | 04 | GL rendering: stack choice, colour-order drawing, lines/dashes/patterns/text on the GPU | Not started | — |
 | 05 | Print: PDF generation from the same document, CMYK, print profiles | Not started | — |
 | 06 | Import pipeline: OCAD/OMAP parsing, review, versioning, caching | Not started | — |
@@ -72,3 +72,4 @@ document so the numbers can be regenerated.
 | Date | Topic | Decision | Rationale |
 |------|-------|----------|-----------|
 | 2026-10-07 | 01 Delivery | Whole document (Option A). Range-indexed loading (Option C) only if club-library browsing of very large maps needs it; no server-cut vector tiles. | Event maps are < 1 MB and prepare in < 100 ms; tiles would be a second product with permanent seam defects in ISOM line/area styling. See [01](01-tiling-vs-whole-document.md) §9. |
+| 2026-10-07 | 02 Format | Hybrid document: JSON header (provenance, scale, georeferencing, colours, source symbols, matches) + fixed-width attribute/bbox sections + delta-zigzag-varint geometry; int32 paper units with `unitsPerMm`, y-up; SHA-256 identity; content-addressed `map_documents`. | Half the size of gzipped JSON, decodes in < 10 ms for event maps, keeps every OCAD flag bit, no codec dependency. See [02](02-document-format.md) §9. |
