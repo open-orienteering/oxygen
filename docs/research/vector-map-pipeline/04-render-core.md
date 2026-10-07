@@ -1,6 +1,8 @@
 # 04 — Render core
 
-Status: proposed 2026-10-07 (recommendation §10); awaiting decision.
+Status: decided 2026-10-07 (recommendation §10; filter-region and
+georeference requirements added to §1/§7/§8 at decision time). Spikes
+(Appendix B) deferred until the research topics are complete.
 Depends on: [01](01-tiling-vs-whole-document.md) (whole-document delivery,
 client-side buckets, budgets), [02](02-document-format.md) (int32 paper
 units, coordinate flags, colour table), [03](03-symbol-model.md) (the
@@ -50,6 +52,8 @@ tessellation measurements from 01.
 | Import review (06) | Render one symbol in isolation (library entry or source symbol) to a small image for the matching review UI; render a whole document to a thumbnail server-side. |
 | Course editor (08) | Hit-testing from screen point to object(s) with the symbol's drawn shape (not just bbox); per-object show/hide and move without re-preparing the whole map; a dynamic layer for the object under edit; course symbols 7xx drawn as objects in upper purple. |
 | Light map editing (future, 08) | Everything the course editor needs, plus re-symbolisation of a single object after an edit and appending objects to a resident document without a reload. |
+| Filter regions (08) | A course-layer polygon that suppresses a chosen set of base-map objects inside it — by symbol, by colour, or "everything" (a whiteout) — either hiding whole objects or clipping them at the boundary, with the choice visible **in real time while the polygon is dragged** and identical in print. |
+| GPS and live positions (mobile viewer, 08) | Positions arrive in WGS 84 and are drawn in paper space through the document's georeference (02): a shared `geoToPaper` / `paperToGeo` pair, grid-to-paper affine including the file's rotation and `rotation_correction` (`docs/map-tile-rendering.md` "North"), applied once per fix on the CPU — never a second coordinate system inside the renderer. Markers are UI layer (screen-fixed size); recorded tracks are paper-space polylines drawn above the map. |
 | Tests | Deterministic, backend-independent output of the shared stage (dash counts and positions, instance transforms, text layout) assertable in unit tests; golden images per 03 §6.9 rule; the GL backend testable in headless Chromium (Playwright) against the CPU reference. |
 | Operations | No native dependencies for the screen path; the server-side paths (PDF, thumbnails) must build in the production Docker image (`docs/course-maps.md` lists today's `librsvg2-bin fonts-liberation`). |
 
@@ -221,7 +225,9 @@ type Pass =
 
 interface PassStream {
   objectIdx: Uint32Array;      // per pass → owning object (hit-testing, per-object hide)
-  passes: Pass[];              // sorted by (colour, kind) within a bucket
+  symbolIdx: Uint32Array;      // per pass → source symbol (filter regions by symbol, §7)
+  passes: Pass[];              // sorted by (colour, kind, symbol) within a bucket, so a
+                               // symbol subset of a colour is a few contiguous index ranges
   glyphTable: GlyphMesh[];     // one entry per distinct Glyph part, geometry in glyph-local µm
   fontTable: FontRef[];
 }
@@ -635,6 +641,31 @@ Decided now so 08 does not have to retrofit them:
   bucket plus, on commit, a bucket re-prepare; symbols materialised into
   the source table (03 §1) are just new `glyphTable`/IR entries. Nothing
   in the renderer assumes a closed document.
+- **Filter regions** (§1) are course-layer objects, so they are part of
+  the symbolisation input and reach print by construction. Two modes,
+  both needed:
+  - *Clip* (geometry cut at the boundary — a whiteout, "no contours in
+    this quarry"): the shared stage emits the region as a clip mask on the
+    affected passes; the GL backend writes the region to the stencil
+    buffer and draws the selected `(colour, symbol)` index ranges with
+    the inverse stencil test; the PDF backend emits a clip path with the
+    region as an even-odd hole (05). Since affected passes are selected
+    by stack position and symbol, nothing is re-tessellated when the
+    region moves: a drag is one stencil pass per frame.
+  - *Hide whole objects* (object centre or bbox inside): the shared stage
+    evaluates the predicate against flatbush candidates (a few thousand
+    objects, microseconds) and the backend skips their index ranges when
+    building the visible-set buffers (§6.8 point 2, 1–2 ms). While
+    dragging, the backend may apply the bbox predicate itself on its
+    per-object range table and let the shared stage confirm on commit;
+    a fixture asserts the two agree.
+  Both modes therefore run at interaction rate without touching GPU
+  buffers, and both produce the same result on paper because the region
+  and its predicate are stream data, not a viewer setting.
+- **Georeferenced inputs** (GPS fixes, tracks, imported GPX) are
+  converted to paper µm once, by the shared `geoToPaper` (02's
+  georeference block + `rotation_correction`), and then behave like any
+  paper-space overlay. The renderer never sees latitude/longitude.
 
 ## 8. Determinism and test fixtures
 
@@ -669,6 +700,8 @@ Fixture list derived from 03 §6.9 (one file per row under
 | 10 | Minimum sizes (screen only) | 101 contours at 0.03× | PDF backend emits 0.14 mm; GL backend width uniform clamps and alpha scales; image tiers differ by design — assert the stream, not the image |
 | + | Colour order | A stack of fills/strokes/glyphs across 10 colours including lower and upper purple | pixel probes at overlap points |
 | + | Precision | Objects at the far corner of a 1.2 m document at 20× | no visible jitter vs reference |
+| + | Filter regions | A polygon over a 101/505/407 mix, mode clip "all brown", mode hide "505 only"; the same polygon moved by half its width | stream: clipped pass set and hidden object set; image: contours stop at the boundary, paths inside vanish whole; the fast bbox predicate equals the shared-stage result |
+| + | Georeference | A WGS 84 fix at a known grid point of a rotated map | `geoToPaper` within 10 µm of the hand-computed paper position; round-trip through `paperToGeo` |
 
 ## 9. Effort
 
