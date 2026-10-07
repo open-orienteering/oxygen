@@ -389,6 +389,10 @@ download and a 30 ms decode; event maps are 0.17–0.35 MB and < 10 ms.
 - **Graphic and image objects** (`sym` -2/-3): keep with their own
   colour/width (recommended, they occur in real files) — confirm the
   renderer treats them as single-colour primitives.
-- **Patch layer for edits** (whiteouts, hidden objects, object mutations):
-  separate artifact keyed by document hash, or a new document version per
-  edit? Topic 08.
+- **Patch layer for edits** (whiteouts, hidden objects, object mutations,
+  and — per the 2026-10-07 decision on light map editing — *new objects*
+  drawn with the document's symbols, which may require appending
+  materialised source symbols to the symbol table): separate artifact keyed
+  by document hash, or a new document version per edit? Topic 08. The
+  format must at least allow appending symbols and objects without
+  invalidating `(documentHash, objectIndex)` references to existing ones.

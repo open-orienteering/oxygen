@@ -1,6 +1,7 @@
 # 03 — Symbol model
 
-Status: research complete, recommendation at §9 pending decision.
+Status: decided 2026-10-07 (recommendation §9, with the light-map-editing
+scope note in §1 added at decision time).
 Depends on: [02](02-document-format.md) (three symbol layers, source symbol
 table, colour table). Feeds: 04 (GL renderer — the IR defined here is its
 input), 05 (print — CMYK palette and colour order), 06 (import — matching
@@ -41,11 +42,30 @@ what symbol tables look like in the wild.
 | Course editor (08) | Course-setting symbols 701–715 as library entries per specification (dimensions differ between ISOM and ISSprOM, and so does the purple layer of 704), so one overlay implementation serves both. Colour-stack placement of lower purple without per-map heuristics. |
 | Colour stack (today's `map-color-stack.ts`) | A replacement for the name/CMYK classification of "what sits above lower purple": with matched symbols the answer is known per symbol, not guessed per colour. |
 | OCAD export (02) | The source symbol table must survive untouched; matching never rewrites it. |
+| Light map editing (future, 08) | A palette of symbols the user may draw new objects with (a path, a boulder, a fence, a whiteout), every entry of which is a *source* symbol of the document so a new object is an ordinary object; a deterministic IR → source-symbol conversion for symbols the document lacks. |
 | Tests | Every library entry renderable in isolation to a golden image; every corpus map renderable with zero unsupported-primitive warnings. |
 
-Non-goals: Oxygen is not a mapping program. The library does not need
-editing tools for symbols, and the IR does not need to round-trip back into
-OCAD symbol definitions (export keeps the original table).
+Scope note. Oxygen is not a mapping program: the library needs no symbol
+*editing* tools, and matching never rewrites the source table. But **light
+map editing is an explicit future requirement** (decision log, 2026-10-07):
+the small corrections a course setter makes the week before an event —
+a new path, a boulder, a fence that has gone, a whiteout. Nothing in this
+topic implements it, but the model must not preclude it:
+
+- A new object references a **source symbol** (`symbolIdx`), exactly like
+  an imported one, so the renderer, the document format and OCAD export
+  need no special case. Drawing with a canonical symbol the document has no
+  match for therefore means *materialising* a source symbol from the
+  canonical IR definition into the document's source table (the IR covers
+  both formats' fields — Appendix C read right-to-left — so IR → OCAD/OMAP
+  symbol is a deterministic conversion, with the colours aligned to the
+  document's stack by §6.3). The object never points at the library.
+- The drawing palette is the document's source table *presented through
+  its matches* (so the UI can offer "505 Footpath" even when the source
+  calls it `505.1 Stor stig`), plus the canonical entries that can be
+  materialised.
+- Where edited objects live — a patch layer keyed by document hash, or a
+  new document version — is 02 §10 / 08. The symbol model is indifferent.
 
 ## 2. Primary sources: the IOF specifications
 
@@ -939,6 +959,11 @@ costs the same authoring as B and removes the second code path.
    of 04, with fixture files per rule, before any library authoring beyond
    a pilot family (5xx paths and fences, which exercise dashes, glyphs and
    borders together).
+10. **Keep light map editing possible** (§1 scope note): new objects
+    reference source symbols only; canonical symbols are materialised into
+    the source table on first use via the IR → source-symbol conversion;
+    the matcher's results double as the palette's labels. No implementation
+    in this topic.
 
 ## 10. Open questions carried forward
 
