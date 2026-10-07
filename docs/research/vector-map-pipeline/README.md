@@ -40,8 +40,8 @@ research document is marked as such.
 
 | # | Topic | Status | Document |
 |---|-------|--------|----------|
-| 01 | Delivery: tiles vs. whole document | Research complete, recommendation pending decision | [01-tiling-vs-whole-document.md](01-tiling-vs-whole-document.md) |
-| 02 | Map document format (encoding, coordinate flags, symbols, colours, georeferencing) | Not started | — |
+| 01 | Delivery: tiles vs. whole document | Decided (whole document) | [01-tiling-vs-whole-document.md](01-tiling-vs-whole-document.md) |
+| 02 | Map document format (encoding, coordinate flags, symbols, colours, georeferencing) | In progress | [02-document-format.md](02-document-format.md) |
 | 03 | Symbol model: canonical IOF library, OCAD symbol matching, fallbacks | Not started | — |
 | 04 | GL rendering: stack choice, colour-order drawing, lines/dashes/patterns/text on the GPU | Not started | — |
 | 05 | Print: PDF generation from the same document, CMYK, print profiles | Not started | — |
@@ -71,4 +71,4 @@ document so the numbers can be regenerated.
 
 | Date | Topic | Decision | Rationale |
 |------|-------|----------|-----------|
-| — | 01 Delivery | pending | see document |
+| 2026-10-07 | 01 Delivery | Whole document (Option A). Range-indexed loading (Option C) only if club-library browsing of very large maps needs it; no server-cut vector tiles. | Event maps are < 1 MB and prepare in < 100 ms; tiles would be a second product with permanent seam defects in ISOM line/area styling. See [01](01-tiling-vs-whole-document.md) §9. |
