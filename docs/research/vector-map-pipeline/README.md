@@ -48,7 +48,7 @@ research document is marked as such.
 | 02 | Map document format (encoding, coordinate flags, symbols, colours, georeferencing) | Decided (hybrid JSON header + binary geometry) | [02-document-format.md](02-document-format.md) |
 | 03 | Symbol model: render IR, canonical IOF library, colour palette and stack, OCAD/OMAP symbol matching, fallbacks | Decided (one IR; library authored in it; staged reviewable matching) | [03-symbol-model.md](03-symbol-model.md) |
 | 04 | Render core: shared symbolisation stage + backends, GPU stack choice, per-primitive techniques, colour-order drawing, editing hooks, fixtures | Decided (shared pass stream; custom WebGL2 backend) | [04-render-core.md](04-render-core.md) |
-| 05 | Print: PDF generation from the same document, CMYK, print profiles | Not started | — |
+| 05 | Print: PDF as a backend of the shared stage, CMYK and overprint policy, print profiles, fonts, PDF/X-4, geospatial PDF, writer choice | Proposed (pdf-lib low-level ops; CMYK + IOF layering default; club print profiles) | [05-print-pdf.md](05-print-pdf.md) |
 | 06 | Import pipeline: OCAD/OMAP parsing, review, versioning, caching | Not started | — |
 | 07 | Storage and delivery: Postgres vs. object storage, immutability, offline | Not started | — |
 | 08 | Course editor domain model and feature roadmap, incl. the light-map-editing patch layer | Not started | — |
