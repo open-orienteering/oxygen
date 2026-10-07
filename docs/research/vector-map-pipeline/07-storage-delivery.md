@@ -1,6 +1,7 @@
 # 07 — Storage and delivery
 
-Status: proposed 2026-10-07 (recommendation §13); awaiting decision.
+Status: decided 2026-10-07 (recommendation §13). Open items in §15 carry
+into implementation and 09.
 Depends on: [01](01-tiling-vs-whole-document.md) (whole-document delivery,
 budgets, offline is one file), [02](02-document-format.md) (content hash
 as identity, `map_documents`, source retained), [05](05-print-pdf.md)
