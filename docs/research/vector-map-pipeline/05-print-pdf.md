@@ -1,6 +1,9 @@
 # 05 — Print: PDF from the same pass stream
 
-Status: proposed 2026-10-07 (recommendation §9); awaiting decision.
+Status: decided 2026-10-07 (recommendation §9; the §10 suggestions —
+`qpdf --check` + structural tests with one print-shop preflight per
+release, Liberation Serif/Mono for the layout font menu — accepted at
+decision time).
 Depends on: [03](03-symbol-model.md) (CMYK per colour, colour order,
 overprint hint, library symbols for the overprint), [04](04-render-core.md)
 (the shared symbolisation stage and its pass stream — this topic is its
