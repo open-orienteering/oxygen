@@ -1,6 +1,8 @@
 # 06 — Import pipeline
 
-Status: proposed 2026-10-07 (recommendation §12); awaiting decision.
+Status: decided 2026-10-07 (recommendation §12). Open items (§13: OCAD 2024
+sample, OMAP y-axis verification, retention of unreferenced documents)
+carry into implementation and 07.
 Depends on: [02](02-document-format.md) (the document the importer
 produces; identity by hash; `sourceIndex`), [03](03-symbol-model.md)
 (normalisation into the IR, staged matching, `SymbolMatch[]`, review),
@@ -297,6 +299,10 @@ sets of codes rather than on prose, and so the UI can translate them
   "Keeping the event loop free"). The job is tracked in memory with a
   status endpoint; the client polls (or subscribes, if a push channel
   exists by then). One job at a time per instance is enough.
+  *Refined in 07 §8:* job state lives in a `map_import_jobs` row so a
+  second API instance can report or resume it, and the status poll
+  re-claims jobs whose heartbeat went stale (Cloud Run request-scoped
+  CPU).
 - **Browser, later.** The same stages can run in the PWA for an instant
   local preview before upload, or for fully offline import of a club map
   onto a device — not phase 1, but the reason stages 3–8 have no Node
@@ -422,7 +428,12 @@ schema.
   `application/octet-stream`, `x-event-id` as today), streamed to a temp
   file, limit 128 MB (Club-full is 36 MB; OCAD files with embedded
   bitmaps in symbol icons stay below this), returns `{ uploadId,
-  fileHash, bytes }`. `mapImport.start` then references the upload. The
+  fileHash, bytes }`. `mapImport.start` then references the upload.
+  *Mechanism refined in 07 §7:* Cloud Run caps HTTP/1 requests at
+  32 MiB and two instances share no temp directory, so the upload is
+  chunked (8 MiB) into a staging table and finalised into `map_sources`
+  by streaming hash; the client contract (`fileHash` → `start`) is
+  unchanged. The
   tRPC `uploadMap(fileDataBase64)` is kept for one release for E2E and
   small files, then removed (09).
 - **Progress**: byte progress from the browser's upload, stage progress
