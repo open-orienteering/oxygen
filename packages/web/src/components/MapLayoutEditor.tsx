@@ -7,6 +7,7 @@ import {
   useState,
   type PointerEvent as ReactPointerEvent,
   type ReactNode,
+  type SVGProps,
   type WheelEvent as ReactWheelEvent,
 } from "react";
 import { useTranslation } from "react-i18next";
@@ -39,9 +40,11 @@ import {
   type MapFontFamily,
   type MapPoint,
   type MapRect,
+  type MapStrokeDash,
   type MapTextValues,
   type MapWindow,
   type PathVertex,
+  strokeDashArrayMm,
 } from "@oxygen/shared";
 import { EditorHelp } from "./EditorHelp";
 import {
@@ -57,6 +60,7 @@ import {
   createImageObjectAt,
   createObjectAt,
   displayedPreviewPlacement,
+  editorHandleScale,
   editorPreviewDpi,
   fillModePatch,
   initialEditorViewport,
@@ -512,6 +516,7 @@ function renderObject(
         y2={b.y}
         stroke={object.stroke}
         strokeWidth={object.strokeWidthMm}
+        strokeDasharray={strokeDashArrayMm(object.dash, object.strokeWidthMm)}
       />
     );
   }
@@ -539,6 +544,10 @@ function renderObject(
       object.strokeWidthMm,
       purple,
     );
+    const dashArray =
+      stroke.strokeWidthMm !== undefined
+        ? strokeDashArrayMm(object.dash, stroke.strokeWidthMm)
+        : undefined;
     if (fillMode === "whiteoutInverted") {
       const ring = `M ${frame.x} ${frame.y} L ${frame.x + frame.width} ${frame.y} L ${frame.x + frame.width} ${frame.y + frame.height} L ${frame.x} ${frame.y + frame.height} Z ${shapePath}`;
       return (
@@ -556,6 +565,7 @@ function renderObject(
               fill="none"
               stroke={stroke.stroke}
               strokeWidth={stroke.strokeWidthMm}
+              strokeDasharray={dashArray}
               pointerEvents="none"
             />
           )}
@@ -577,6 +587,7 @@ function renderObject(
           fill={fill}
           stroke={stroke.stroke ?? "none"}
           strokeWidth={stroke.strokeWidthMm}
+          strokeDasharray={dashArray}
           style={common.style}
         />
       </g>
@@ -600,6 +611,10 @@ function renderObject(
       object.strokeWidthMm,
       purple,
     );
+    const dashArray =
+      stroke.strokeWidthMm !== undefined
+        ? strokeDashArrayMm(object.dash, stroke.strokeWidthMm)
+        : undefined;
     if (fillMode === "whiteoutInverted") {
       const shapePath = `M ${bounds.x} ${bounds.y} L ${bounds.x + bounds.width} ${bounds.y} L ${bounds.x + bounds.width} ${bounds.y + bounds.height} L ${bounds.x} ${bounds.y + bounds.height} Z`;
       const ring = `M ${frame.x} ${frame.y} L ${frame.x + frame.width} ${frame.y} L ${frame.x + frame.width} ${frame.y + frame.height} L ${frame.x} ${frame.y + frame.height} Z ${shapePath}`;
@@ -618,6 +633,7 @@ function renderObject(
               fill="none"
               stroke={stroke.stroke}
               strokeWidth={stroke.strokeWidthMm}
+              strokeDasharray={dashArray}
               pointerEvents="none"
             />
           )}
@@ -642,12 +658,106 @@ function renderObject(
           fill={fill}
           stroke={stroke.stroke ?? "none"}
           strokeWidth={stroke.strokeWidthMm}
+          strokeDasharray={dashArray}
           style={common.style}
         />
       </g>
     );
   }
   return null;
+}
+
+/**
+ * Editor handle glyphs. Two visually distinct families so a user can tell
+ * at a glance what a handle does: **squares move** (vertices, line ends,
+ * resize corners, the description-block corner) and the **round "+" adds**
+ * (edge midpoints that split a path segment). Dimensions are page mm
+ * pre-multiplied by `scale` (see `editorHandleScale`) so they stop growing
+ * past 150 % zoom.
+ */
+const HANDLE_BASE = {
+  /** Half-side of a move handle square. */
+  move: 1.2,
+  /** Radius of an add-vertex handle. */
+  add: 1.1,
+  /** Radius of a Bezier control-point handle. */
+  bezier: 1,
+  /** Radius of the invisible touch target behind every handle. */
+  touch: 5,
+  stroke: 0.45,
+  thinStroke: 0.35,
+} as const;
+
+function MoveHandle({
+  x,
+  y,
+  scale,
+  half = HANDLE_BASE.move,
+  title,
+  className,
+  ...rest
+}: {
+  x: number;
+  y: number;
+  scale: number;
+  half?: number;
+  title?: string;
+  className?: string;
+} & Omit<SVGProps<SVGRectElement>, "x" | "y" | "scale" | "className">) {
+  const h = half * scale;
+  return (
+    <rect
+      x={x - h}
+      y={y - h}
+      width={h * 2}
+      height={h * 2}
+      fill="#ffffff"
+      stroke="#2563eb"
+      strokeWidth={HANDLE_BASE.stroke * scale}
+      data-handle-role="move"
+      className={className}
+      style={{ touchAction: "none" }}
+      {...rest}
+    >
+      {title && <title>{title}</title>}
+    </rect>
+  );
+}
+
+function AddVertexHandle({
+  x,
+  y,
+  scale,
+  title,
+  ...rest
+}: {
+  x: number;
+  y: number;
+  scale: number;
+  title?: string;
+} & Omit<SVGProps<SVGGElement>, "x" | "y" | "scale">) {
+  const r = HANDLE_BASE.add * scale;
+  const arm = r * 0.55;
+  const sw = HANDLE_BASE.thinStroke * scale;
+  return (
+    <g
+      data-handle-role="add"
+      className="cursor-copy"
+      style={{ touchAction: "none" }}
+      {...rest}
+    >
+      {title && <title>{title}</title>}
+      <circle cx={x} cy={y} r={r} fill="#eff6ff" stroke="#2563eb" strokeWidth={sw} />
+      <path
+        d={`M ${x - arm} ${y} H ${x + arm} M ${x} ${y - arm} V ${y + arm}`}
+        stroke="#2563eb"
+        strokeWidth={sw * 1.2}
+        strokeLinecap="round"
+        fill="none"
+        pointerEvents="none"
+      />
+    </g>
+  );
 }
 
 export function MapLayoutEditor({
@@ -762,6 +872,9 @@ export function MapLayoutEditor({
   );
   const viewportRef = useRef(viewport);
   viewportRef.current = viewport;
+  // Page-mm multiplier that keeps handles a constant screen size past
+  // 150 % zoom (see editorHandleScale).
+  const handleScale = editorHandleScale(viewport.zoom);
   const touchGestureRef = useRef<{
     viewport: EditorViewport;
     anchor: MapPoint;
@@ -2649,8 +2762,28 @@ export function MapLayoutEditor({
                         className="mt-1 w-full rounded border border-slate-300 px-2 py-1.5"
                       />
                     </label>
+                    <label className="block text-xs font-medium text-slate-600">
+                      {t("lineStyle")}
+                      <select
+                        data-testid="map-object-dash"
+                        value={selected.dash ?? "solid"}
+                        onChange={(event) => {
+                          const dash = event.target.value as MapStrokeDash;
+                          // Solid is the schema default — store it as
+                          // "absent" so older documents and new ones agree.
+                          updateSelected({
+                            dash: dash === "solid" ? undefined : dash,
+                          });
+                        }}
+                        className="mt-1 w-full rounded border border-slate-300 px-2 py-1.5"
+                      >
+                        <option value="solid">{t("lineStyleSolid")}</option>
+                        <option value="dashed">{t("lineStyleDashed")}</option>
+                      </select>
+                    </label>
                   </>
-                )}                <button
+                )}
+                <button
                   type="button"
                   data-testid="map-object-delete"
                   onClick={() => deleteObjectById(selected.id)}
@@ -3011,7 +3144,7 @@ export function MapLayoutEditor({
                     <circle
                       cx={history.present.description.x + descriptionSize.width}
                       cy={history.present.description.y + descriptionSize.height}
-                      r={5}
+                      r={HANDLE_BASE.touch * handleScale}
                       fill="transparent"
                       data-map-editor-target="true"
                       onPointerDown={(event) =>
@@ -3020,20 +3153,18 @@ export function MapLayoutEditor({
                       style={{ touchAction: "none" }}
                     />
                   )}
-                  <circle
+                  <MoveHandle
                     data-testid="map-description-resize"
                     data-map-editor-target="true"
-                    cx={history.present.description.x + descriptionSize.width}
-                    cy={history.present.description.y + descriptionSize.height}
-                    r={1.4}
-                    fill="#ffffff"
-                    stroke="#2563eb"
-                    strokeWidth={0.45}
+                    x={history.present.description.x + descriptionSize.width}
+                    y={history.present.description.y + descriptionSize.height}
+                    scale={handleScale}
+                    half={1.4}
+                    title={t("handleResizeHint")}
                     onPointerDown={(event) =>
                       beginDrag("resize-description", event)
                     }
                     className="cursor-nwse-resize"
-                    style={{ touchAction: "none" }}
                   />
                 </g>
               )}
@@ -3044,17 +3175,22 @@ export function MapLayoutEditor({
                     document.mapFrame,
                     currentWindow,
                   );
+                  const outlinePad = 1 * handleScale;
+                  // Vertices / line ends move a point; the four bounding
+                  // corners of text, rectangles and images resize.
+                  const isPointHandle =
+                    selected.kind === "line" || selected.kind === "path";
                   return (
                     <g>
                       <rect
-                        x={bounds.x - 1}
-                        y={bounds.y - 1}
-                        width={bounds.width + 2}
-                        height={bounds.height + 2}
+                        x={bounds.x - outlinePad}
+                        y={bounds.y - outlinePad}
+                        width={bounds.width + outlinePad * 2}
+                        height={bounds.height + outlinePad * 2}
                         fill="none"
                         stroke="#2563eb"
-                        strokeWidth={0.5}
-                        strokeDasharray="2 1"
+                        strokeWidth={0.5 * handleScale}
+                        strokeDasharray={`${2 * handleScale} ${1 * handleScale}`}
                         pointerEvents="none"
                       />
                       {objectResizeHandles(
@@ -3070,7 +3206,7 @@ export function MapLayoutEditor({
                             <circle
                               cx={x}
                               cy={y}
-                              r={5}
+                              r={HANDLE_BASE.touch * handleScale}
                               fill="transparent"
                               data-map-editor-target="true"
                               onPointerDown={(event) => {
@@ -3089,15 +3225,17 @@ export function MapLayoutEditor({
                               style={{ touchAction: "none" }}
                             />
                           )}
-                          <circle
+                          <MoveHandle
                             data-testid={`map-resize-${handle}`}
                             data-map-editor-target="true"
-                            cx={x}
-                            cy={y}
-                            r={1.2}
-                            fill="#ffffff"
-                            stroke="#2563eb"
-                            strokeWidth={0.45}
+                            x={x}
+                            y={y}
+                            scale={handleScale}
+                            title={t(
+                              isPointHandle
+                                ? "handleMoveHint"
+                                : "handleResizeHint",
+                            )}
                             onPointerDown={(event) => {
                               if (handle.startsWith("vertex-")) {
                                 setSelectedVertex(
@@ -3111,8 +3249,9 @@ export function MapLayoutEditor({
                                 handle,
                               );
                             }}
-                            className="cursor-nwse-resize"
-                            style={{ touchAction: "none" }}
+                            className={
+                              isPointHandle ? "cursor-move" : "cursor-nwse-resize"
+                            }
                           />
                           </g>
                         ))}
@@ -3139,7 +3278,7 @@ export function MapLayoutEditor({
                                     <circle
                                       cx={(a.x + b.x) / 2}
                                       cy={(a.y + b.y) / 2}
-                                      r={5}
+                                      r={HANDLE_BASE.touch * handleScale}
                                       fill="transparent"
                                       data-map-editor-target="true"
                                       onPointerDown={(event) => {
@@ -3155,16 +3294,13 @@ export function MapLayoutEditor({
                                       style={{ touchAction: "none" }}
                                     />
                                   )}
-                                  <circle
+                                  <AddVertexHandle
                                     data-testid={`map-add-vertex-${index}`}
                                     data-map-editor-target="true"
-                                    cx={(a.x + b.x) / 2}
-                                    cy={(a.y + b.y) / 2}
-                                    r={0.9}
-                                    fill="#ffffff"
-                                    stroke="#60a5fa"
-                                    strokeWidth={0.35}
-                                    style={{ touchAction: "none" }}
+                                    x={(a.x + b.x) / 2}
+                                    y={(a.y + b.y) / 2}
+                                    scale={handleScale}
+                                    title={t("handleAddVertexHint")}
                                     onPointerDown={(event) => {
                                       event.preventDefault();
                                       event.stopPropagation();
@@ -3199,14 +3335,14 @@ export function MapLayoutEditor({
                                             x2={x}
                                             y2={y}
                                             stroke="#60a5fa"
-                                            strokeWidth={0.3}
+                                            strokeWidth={0.3 * handleScale}
                                             pointerEvents="none"
                                           />
                                           {isCoarsePointer && (
                                             <circle
                                               cx={x}
                                               cy={y}
-                                              r={5}
+                                              r={HANDLE_BASE.touch * handleScale}
                                               fill="transparent"
                                               data-map-editor-target="true"
                                               onPointerDown={(event) =>
@@ -3223,12 +3359,16 @@ export function MapLayoutEditor({
                                           <circle
                                             data-testid={`map-resize-${handle}`}
                                             data-map-editor-target="true"
+                                            data-handle-role="bezier"
                                             cx={x}
                                             cy={y}
-                                            r={1}
+                                            r={HANDLE_BASE.bezier * handleScale}
                                             fill="#dbeafe"
                                             stroke="#2563eb"
-                                            strokeWidth={0.35}
+                                            strokeWidth={
+                                              HANDLE_BASE.thinStroke * handleScale
+                                            }
+                                            className="cursor-move"
                                             style={{ touchAction: "none" }}
                                             onPointerDown={(event) =>
                                               beginDrag(
@@ -3238,7 +3378,9 @@ export function MapLayoutEditor({
                                                 handle,
                                               )
                                             }
-                                          />
+                                          >
+                                            <title>{t("handleBezierHint")}</title>
+                                          </circle>
                                         </g>
                                       );
                                     },

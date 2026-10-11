@@ -18,6 +18,7 @@ import {
   renderCourseOverlaySvg,
   renderDescriptionBlockSvg,
   renderMapObjectsSvg,
+  strokeDashArrayMm,
   validateCourseMap,
   subtractLegGaps,
   drawBrokenCircle,
@@ -562,6 +563,101 @@ describe("course map SVG generators", () => {
     expect(svg).toContain('font-family="Liberation Serif, Times New Roman, serif"');
     expect(svg).toContain('fill="#abcdef"');
     expect(svg).toContain('fill="#ffffff"');
+  });
+
+  it("emits a width-proportional dash pattern for dashed strokes only", () => {
+    expect(strokeDashArrayMm(undefined, 0.35)).toBeUndefined();
+    expect(strokeDashArrayMm("solid", 0.35)).toBeUndefined();
+    // Thin lines bottom out at a readable 2 mm dash / 1 mm gap …
+    expect(strokeDashArrayMm("dashed", 0.35)).toBe("2 1");
+    // … and scale with the stroke once it is wide enough to matter.
+    expect(strokeDashArrayMm("dashed", 1)).toBe("5 2.5");
+
+    const svg = renderMapObjectsSvg({
+      objects: [
+        {
+          id: "dashed-line",
+          kind: "line",
+          anchor: "page",
+          x1: 0,
+          y1: 0,
+          x2: 20,
+          y2: 0,
+          stroke: "#000000",
+          strokeWidthMm: 0.35,
+          dash: "dashed",
+        },
+        {
+          id: "solid-line",
+          kind: "line",
+          anchor: "page",
+          x1: 0,
+          y1: 5,
+          x2: 20,
+          y2: 5,
+          stroke: "#000000",
+          strokeWidthMm: 0.35,
+        },
+        {
+          id: "dashed-path",
+          kind: "path",
+          anchor: "page",
+          points: [
+            { x: 0, y: 10 },
+            { x: 10, y: 15 },
+          ],
+          stroke: "#000000",
+          strokeWidthMm: 1,
+          fillMode: "none",
+          closed: false,
+          dash: "dashed",
+        },
+        {
+          id: "dashed-rect",
+          kind: "rectangle",
+          anchor: "page",
+          x: 30,
+          y: 30,
+          width: 10,
+          height: 10,
+          stroke: "#000000",
+          strokeWidthMm: 0.35,
+          fillMode: "none",
+          dash: "dashed",
+        },
+      ],
+      frame: document.mapFrame,
+      window: { minX: 0, minY: 0, width: 100, height: 100 },
+    });
+    const dashedLine = svg.match(/<line data-object-id="dashed-line"[^>]*>/)![0];
+    expect(dashedLine).toContain('stroke-dasharray="2 1"');
+    const solidLine = svg.match(/<line data-object-id="solid-line"[^>]*>/)![0];
+    expect(solidLine).not.toContain("stroke-dasharray");
+    const dashedPath = svg.match(/<path data-object-id="dashed-path"[^>]*>/)![0];
+    expect(dashedPath).toContain('stroke-dasharray="5 2.5"');
+    const dashedRect = svg.match(/<rect data-object-id="dashed-rect"[^>]*>/)![0];
+    expect(dashedRect).toContain('stroke-dasharray="2 1"');
+  });
+
+  it("parses the optional dash style and rejects unknown values", () => {
+    const line = {
+      id: "l",
+      kind: "line",
+      anchor: "page",
+      x1: 0,
+      y1: 0,
+      x2: 1,
+      y2: 1,
+      stroke: "#000000",
+      strokeWidthMm: 0.35,
+    };
+    expect(courseMapObjectSchema.parse({ ...line, dash: "dashed" })).toMatchObject({
+      dash: "dashed",
+    });
+    expect(courseMapObjectSchema.parse(line)).not.toHaveProperty("dash");
+    expect(() =>
+      courseMapObjectSchema.parse({ ...line, dash: "wavy" }),
+    ).toThrow();
   });
 
   it("renders straight and cubic paths plus whiteout and out-of-bounds fills", () => {

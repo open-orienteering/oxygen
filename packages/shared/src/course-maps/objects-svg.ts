@@ -5,6 +5,7 @@ import {
   type MapFillMode,
   type MapPoint,
   type MapRect,
+  type MapStrokeDash,
   type MapWindow,
   type PathVertex,
 } from "./schema.js";
@@ -154,14 +155,39 @@ function resolveFill(
   }
 }
 
+/**
+ * SVG `stroke-dasharray` (page mm) for a dash style. Dash and gap grow
+ * with the stroke so wide lines don't look like dots, but never drop
+ * below 2 mm / 1 mm so hairlines stay legibly dashed on paper. `undefined`
+ * for solid (omit the attribute).
+ */
+export function strokeDashArrayMm(
+  dash: MapStrokeDash | undefined,
+  strokeWidthMm: number,
+): string | undefined {
+  if (dash !== "dashed") return undefined;
+  const w = Number.isFinite(strokeWidthMm) && strokeWidthMm > 0 ? strokeWidthMm : 0.35;
+  const dashMm = Math.max(2, 5 * w);
+  const gapMm = Math.max(1, 2.5 * w);
+  return `${round(dashMm)} ${round(gapMm)}`;
+}
+
+function round(value: number): number {
+  return Math.round(value * 1000) / 1000;
+}
+
 function strokeAttrs(
   stroke: string | undefined,
   strokeWidthMm: number | undefined,
+  dash?: MapStrokeDash,
 ): string {
   if (!stroke || strokeWidthMm === undefined) {
     return `stroke="none"`;
   }
-  return `stroke="${stroke}" stroke-width="${strokeWidthMm}"`;
+  const dashArray = strokeDashArrayMm(dash, strokeWidthMm);
+  return `stroke="${stroke}" stroke-width="${strokeWidthMm}"${
+    dashArray ? ` stroke-dasharray="${dashArray}"` : ""
+  }`;
 }
 
 /**
@@ -265,7 +291,7 @@ function renderObject(
         options.frame,
         options.window,
       );
-      return `<line ${common} x1="${p1.x}" y1="${p1.y}" x2="${p2.x}" y2="${p2.y}" stroke="${object.stroke}" stroke-width="${object.strokeWidthMm}" fill="none"/>`;
+      return `<line ${common} x1="${p1.x}" y1="${p1.y}" x2="${p2.x}" y2="${p2.y}" ${strokeAttrs(object.stroke, object.strokeWidthMm, object.dash)} fill="none"/>`;
     }
     case "path": {
       const points = object.points.map((point) =>
@@ -290,11 +316,11 @@ function renderObject(
         const ring = `${frameRingPath(options.frame)} ${shapePath}`;
         const border =
           resolved.stroke !== undefined
-            ? `<path d="${shapePath}" fill="none" ${strokeAttrs(resolved.stroke, resolved.strokeWidthMm)}/>`
+            ? `<path d="${shapePath}" fill="none" ${strokeAttrs(resolved.stroke, resolved.strokeWidthMm, object.dash)}/>`
             : "";
         return `<g ${common}><path d="${ring}" fill="${fill}" fill-rule="evenodd" stroke="none"/>${border}</g>`;
       }
-      return `<path ${common} d="${shapePath}" ${strokeAttrs(resolved.stroke, resolved.strokeWidthMm)} fill="${fill}"/>`;
+      return `<path ${common} d="${shapePath}" ${strokeAttrs(resolved.stroke, resolved.strokeWidthMm, object.dash)} fill="${fill}"/>`;
     }
     case "rectangle": {
       const p =
@@ -330,11 +356,11 @@ function renderObject(
         const ring = `${frameRingPath(options.frame)} ${shapePath}`;
         const border =
           resolved.stroke !== undefined
-            ? `<path d="${shapePath}" fill="none" ${strokeAttrs(resolved.stroke, resolved.strokeWidthMm)}/>`
+            ? `<path d="${shapePath}" fill="none" ${strokeAttrs(resolved.stroke, resolved.strokeWidthMm, object.dash)}/>`
             : "";
         return `<g ${common}><path d="${ring}" fill="${fill}" fill-rule="evenodd" stroke="none"/>${border}</g>`;
       }
-      return `<rect ${common} x="${p.x}" y="${p.y}" width="${size.width}" height="${size.height}" fill="${fill}" ${strokeAttrs(resolved.stroke, resolved.strokeWidthMm)}/>`;
+      return `<rect ${common} x="${p.x}" y="${p.y}" width="${size.width}" height="${size.height}" fill="${fill}" ${strokeAttrs(resolved.stroke, resolved.strokeWidthMm, object.dash)}/>`;
     }
     case "image": {
       const p =

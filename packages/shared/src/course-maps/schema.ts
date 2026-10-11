@@ -65,6 +65,10 @@ export const mapTextObjectSchema = z.object({
   align: z.enum(["left", "center", "right"]).optional(),
 });
 
+/** Stroke pattern for lines, paths and rectangle borders. Absent = solid. */
+export const mapStrokeDashSchema = z.enum(["solid", "dashed"]);
+export type MapStrokeDash = z.infer<typeof mapStrokeDashSchema>;
+
 export const mapLineObjectSchema = z.object({
   ...objectBase,
   kind: z.literal("line"),
@@ -74,6 +78,7 @@ export const mapLineObjectSchema = z.object({
   y2: z.number().finite(),
   stroke: z.string().regex(/^#[0-9a-f]{6}$/i),
   strokeWidthMm: z.number().finite().positive().max(20),
+  dash: mapStrokeDashSchema.optional(),
 });
 
 /**
@@ -103,6 +108,7 @@ export const mapPathObjectSchema = z.object({
   fill: z.string().regex(/^#[0-9a-f]{6}$/i).optional(),
   fillMode: mapFillModeSchema.default("none"),
   closed: z.boolean().default(false),
+  dash: mapStrokeDashSchema.optional(),
 });
 
 export const mapRectangleObjectSchema = z.object({
@@ -113,6 +119,7 @@ export const mapRectangleObjectSchema = z.object({
   strokeWidthMm: z.number().finite().positive().max(20).optional(),
   fill: z.string().regex(/^#[0-9a-f]{6}$/i).optional(),
   fillMode: mapFillModeSchema.default("none"),
+  dash: mapStrokeDashSchema.optional(),
 });
 
 /** Uploaded SVG/PNG graphic (club logo, sponsor art …) placed on the page. */

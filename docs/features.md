@@ -81,7 +81,9 @@ stacked objects, and warns when items sit outside the printable area. The
 editor supports click-to-place text, rectangles, polygons and paths with a
 shared fill mode (none / solid / white-out / white-out outside for ink
 saving / ISOM 709 out-of-bounds hatch with purple-locked 0.4 mm border),
-editable Bezier paths, and uploaded SVG/PNG graphics (free resize, Ctrl/Cmd
+solid or dashed strokes on lines, paths and borders, editable Bezier paths
+(square handles move, round "+" handles split a segment; handles stop growing
+past 150 % zoom), and uploaded SVG/PNG graphics (free resize, Ctrl/Cmd
 proportional, Shift crop) from a per-event or club library. Course overprint
 follows ISOM: circles, numbers and lines enlarge with the map when the print
 scale is larger than the base map scale (1:15000 printed at 1:7500 → 2×).

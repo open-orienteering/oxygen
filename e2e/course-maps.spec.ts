@@ -100,6 +100,30 @@ test("creates templates, lays out several maps and exports PDFs", async ({
   await page.getByTestId("map-text-font").selectOption("serif");
   await placeObject(page, "map-tool-line");
   await expect(page.getByTestId("map-resize-vertex-0")).toBeVisible();
+  // Line style: solid by default, dashed emits a stroke-dasharray on the
+  // drawn line (the line tool creates a two-point path; the print
+  // renderer shares the same dash helper).
+  const drawnLine = page.locator("path[data-object-id]").last();
+  await expect(page.getByTestId("map-object-dash")).toHaveValue("solid");
+  await expect(drawnLine).not.toHaveAttribute("stroke-dasharray", /.+/);
+  await page.getByTestId("map-object-dash").selectOption("dashed");
+  await expect(drawnLine).toHaveAttribute("stroke-dasharray", /^\d/);
+  await page.getByTestId("map-object-dash").selectOption("solid");
+  await expect(drawnLine).not.toHaveAttribute("stroke-dasharray", /.+/);
+  // Handles stop growing past 150 % zoom so they don't bury the detail.
+  const vertexAtFit = await page.getByTestId("map-resize-vertex-0").boundingBox();
+  expect(vertexAtFit).not.toBeNull();
+  for (let i = 0; i < 10; i += 1) {
+    await page.getByTitle("Zoom in").click();
+  }
+  await expect(page.getByTestId("map-zoom-reset")).toHaveText("800%");
+  const vertexZoomed = await page.getByTestId("map-resize-vertex-0").boundingBox();
+  expect(vertexZoomed).not.toBeNull();
+  // Uncapped it would be 8× — the cap holds it at 1.5×.
+  expect(vertexZoomed!.width).toBeLessThan(vertexAtFit!.width * 2);
+  expect(vertexZoomed!.width).toBeGreaterThan(vertexAtFit!.width * 1.2);
+  await page.getByTestId("map-zoom-reset").click();
+  await expect(page.getByTestId("map-zoom-reset")).toHaveText("100%");
   const vertex = await page.getByTestId("map-resize-vertex-0").boundingBox();
   expect(vertex).not.toBeNull();
   await page.mouse.move(
@@ -123,6 +147,16 @@ test("creates templates, lays out several maps and exports PDFs", async ({
     timeout: 5_000,
   });
   await expect(page.getByTestId("map-resize-handle-out-0")).toBeVisible();
+  // Move handles are squares, split handles are round "+" — distinct
+  // roles so the user can tell them apart before touching anything.
+  await expect(page.getByTestId("map-resize-vertex-0")).toHaveAttribute(
+    "data-handle-role",
+    "move",
+  );
+  await expect(page.getByTestId("map-add-vertex-0")).toHaveAttribute(
+    "data-handle-role",
+    "add",
+  );
   await page.getByTestId("map-add-vertex-0").click();
   await expect(page.getByTestId("map-resize-vertex-2")).toBeVisible();
   await page.getByTestId("map-resize-vertex-1").click();

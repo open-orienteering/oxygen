@@ -612,6 +612,20 @@ export function removePolygonVertex<T extends VertexMapObject>(
   };
 }
 
+/**
+ * Zoom up to which editor handles (vertex squares, add-vertex dots,
+ * selection outline) scale with the paper. Beyond it they shrink in page
+ * mm by the same factor the view grows, so they stay a constant size on
+ * screen instead of covering the detail the user zoomed in to see.
+ */
+export const HANDLE_FULL_SIZE_ZOOM = 1.5;
+
+/** Multiply page-mm handle dimensions by this for the current zoom. */
+export function editorHandleScale(zoom: number): number {
+  if (!Number.isFinite(zoom) || zoom <= HANDLE_FULL_SIZE_ZOOM) return 1;
+  return HANDLE_FULL_SIZE_ZOOM / zoom;
+}
+
 export function initialEditorViewport(
   paper: PaperDimensions,
 ): EditorViewport {

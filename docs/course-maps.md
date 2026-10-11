@@ -259,9 +259,25 @@ picker is locked so a later purple change recolours them. **White-out
 outside** draws an even-odd ring against the map frame (everything inside
 the frame except the shape is opaque white), so print ink is only spent on
 the area of interest; click the white ring to select it, click inside the
-shape hole to pass through to objects underneath. Paths support inserting
+shape hole to pass through to objects underneath. Lines, paths and rectangle
+borders have a **Line style** (solid or dashed). Dashed strokes store
+`dash: "dashed"` on the object; the shared `strokeDashArrayMm` helper turns
+that into a `stroke-dasharray` of 5 × / 2.5 × the stroke width, floored at
+2 mm / 1 mm so hairlines stay legibly dashed on paper — the editor preview
+and the PDF use the same helper. Paths support inserting
 and removing vertices. Alt-drag
-a selected vertex to create symmetric cubic Bezier handles. Text supports
+a selected vertex to create symmetric cubic Bezier handles.
+
+Handles come in two visually distinct families so their job is readable
+before touching them: **squares move** (path vertices, line ends, resize
+corners, the description-block corner; tooltip "Drag to move this point" /
+"Drag to resize") and the **round "+" splits** (edge midpoints; tooltip
+"Click to split the segment here"). Bezier control points are small filled
+circles on a leader line. Every handle carries `data-handle-role`
+(`move` / `add` / `bezier`). Handles scale with the paper up to 150 % zoom and
+then hold a constant screen size (`editorHandleScale` in
+`map-layout-editor.ts`), so zooming in to inspect detail never buries it
+under the handles. Touch hit areas shrink with the same factor. Text supports
 sans-serif, serif, condensed and monospace fonts; clicking a variable inserts
 it at the current text cursor. Objects can be fixed to paper or anchored to
 the map. `Ctrl/Cmd+Z`, `Ctrl/Cmd+Shift+Z` and `Ctrl/Cmd+Y` control undo/redo.
