@@ -463,6 +463,56 @@ the document (07 §9.2). Layout and print stay cloud-only during a lease.
 | `H` | Hide other courses' controls | — | Hide course overprint |
 | Snapping | Toggle: control centre snaps to point objects' centres and line vertices within 0.5 mm (uses hit-testing) | Grid 1 mm, edges | Node snapping |
 
+#### Placement flow (armed creation tools)
+
+The tool rail exists for the "place ten controls in a row" case, so the
+flow is specified precisely:
+
+- **Arming.** `K` (or the rail button) arms the control tool and it
+  **stays armed** until explicitly exited. The cursor becomes a crosshair
+  with a *ghost*: a control circle at true paper size, the next sequence
+  number and the next code from the club allocation, and the top
+  autodetect description for the point under the cursor ("N side of
+  boulder", live, since hit-testing is shared-stage). If a course is
+  selected, a dashed **pending leg** rubber-bands from the insertion
+  anchor to the cursor with the leg length in the status bar. The ghost
+  and the pending leg are UI layer; **no model object exists and nothing
+  is being dragged** between clicks.
+- **Click on empty map** commits one `control.create` (+ append/insert
+  into the selected course) as one undo entry. The tool remains armed;
+  the new control becomes the anchor, the pending leg now starts from it,
+  the ghost shows the next number and code. Ten controls are ten clicks.
+  The placed control gets a short "last placed" highlight and the
+  inspector sequence scrolls to it, but the **action bar does not open**
+  — it would cover the map and need dismissing on every placement.
+- **Click on an existing control** while armed reuses it: the site is
+  appended/inserted into the course (no new site). The ghost snaps onto
+  the control and reads "Add 47". This is how a course is built from
+  existing sites without leaving the tool.
+- **Drag** while armed pans; wheel zooms. Placement happens only on a
+  click without movement (same threshold as today), so moving around
+  mid-chain needs no modifier.
+- **Insertion point** is the control or leg selected when the tool was
+  armed (two dashed lines: anchor → cursor → next control), otherwise
+  the item before the finish. It advances after each placement.
+- **`Ctrl+Z`** while armed removes the last placed control and moves the
+  anchor back; the tool stays armed.
+- **Exit**: `Esc` (first press drops the ghost and returns to `V`;
+  further presses follow the existing cascade), `V`, or `Enter`. `S`
+  places a start and becomes the chain's anchor; `M` places a finish and
+  **ends the chain** (returns to `V`), since a section has one finish.
+  Right-click while armed exits the tool.
+- **One-shot** placement without arming remains: click empty map →
+  *Add control* in the action bar, as today.
+- **Touch** (no hover): an armed tool shows a fixed centre crosshair
+  with the ghost; the user pans the map under it and taps **Place** in
+  the bottom bar (the pin-drop pattern); *Done* exits the tool.
+
+Area tools (`A`) follow the usual polygon flow: click per vertex, drag a
+vertex to adjust before closing, double-click or click the first vertex
+to close, `Esc` cancels; after closing the tool returns to `V` and the
+new object is selected with its properties in the inspector.
+
 Variation authoring: select a leg → *Create variation here* splits the leg
 into a group with alternatives A and B, each initially empty between the
 anchors; *Add alternative*; drag controls into an alternative; *Loop*
