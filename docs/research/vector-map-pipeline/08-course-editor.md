@@ -1,6 +1,8 @@
 # 08 — Course editor: domain model, editing experience, roadmap
 
-Status: proposed 2026-10-07 (recommendation §11); awaiting decision.
+Status: decided 2026-10-12 (recommendation §11; the armed-tool placement
+flow in §5.3 was specified at decision time). Open items in §12 carry
+into implementation and 09.
 Depends on: [02](02-document-format.md) (`(documentHash, objectIndex)`
 references, patch-layer constraints §10), [03](03-symbol-model.md) (7xx
 overprint symbols as library entries, materialised source symbols for
