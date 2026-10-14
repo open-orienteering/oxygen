@@ -10,3 +10,4 @@ export * from "./isom-description-map.js";
 export * from "./permissions.js";
 export * from "./clubAssets.js";
 export * from "./course-maps/index.js";
+export * as render from "./render/index.js";
