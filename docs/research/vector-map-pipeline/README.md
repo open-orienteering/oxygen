@@ -29,7 +29,7 @@ Spec chapters by slice:
 | Slice | Spec documents (`docs/`) | Source topics |
 |-------|--------------------------|---------------|
 | A | `map-document-format.md`, `map-import.md`, `map-storage.md` | 02, 06, 07 |
-| B | `map-symbols.md`, `map-rendering.md` (shared stage, WebGL2, viewer) — `map-rendering.md` §1–4, §5.1, §6 drafted by S1 steps 1–2 | 03, 04, 01 |
+| B | `map-symbols.md`, `map-rendering.md` (shared stage, WebGL2, viewer) — `map-rendering.md` §1–4, §5.1–5.2, §6 drafted by S1 steps 1–3 | 03, 04, 01 |
 | C | `course-layer.md`, `course-print.md` | 08 §4.1, 05 |
 | D | `course-editor.md` (rewritten), `course-layout.md` | 08 |
 | E–F | `migrations/2026-vector-map-pipeline.md`, `AGENTS.md` §7/§15 | 09 |

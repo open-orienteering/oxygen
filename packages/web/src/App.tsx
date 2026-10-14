@@ -16,6 +16,10 @@ const KioskPage = lazy(() => import("./pages/KioskPage").then(m => ({ default: m
 const StartScreenPage = lazy(() => import("./pages/StartScreenPage").then(m => ({ default: m.StartScreenPage })));
 const AccessDeniedPage = lazy(() => import("./pages/AccessDeniedPage").then(m => ({ default: m.AccessDeniedPage })));
 const SettingsPage = lazy(() => import("./pages/SettingsPage").then(m => ({ default: m.SettingsPage })));
+// Dev-only: WebGL2 map backend fixture page for the golden-image tests (docs/map-rendering.md §6.2).
+const MapGlFixturePage = import.meta.env.DEV
+  ? lazy(() => import("./pages/dev/MapGlFixturePage").then(m => ({ default: m.MapGlFixturePage })))
+  : null;
 
 const PUBLIC_SURFACE = /^\/[^/]+\/(kiosk|start-screen)(\/|$)/;
 
@@ -74,6 +78,7 @@ export default function App() {
               path="/admin/users"
               element={<Navigate to="/settings?tab=users" replace />}
             />
+            {MapGlFixturePage && <Route path="/dev/map-gl" element={<MapGlFixturePage />} />}
             {/* Kiosk route — outside CompetitionShell (fullscreen, no admin UI) */}
             <Route path="/:nameId/kiosk" element={<KioskPage />} />
             <Route path="/:nameId/start-screen" element={<StartScreenPage />} />

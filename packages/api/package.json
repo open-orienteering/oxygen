@@ -23,7 +23,8 @@
     "db:push": "prisma db push",
     "db:migrate": "prisma migrate deploy",
     "db:migrate:dev": "prisma migrate dev",
-    "migrate:mysql-to-pg": "tsx scripts/migrate-mysql-to-pg.ts"
+    "migrate:mysql-to-pg": "tsx scripts/migrate-mysql-to-pg.ts",
+    "golden:render": "tsx scripts/render-golden.ts"
   },
   "dependencies": {
     "@fastify/cors": "^11.3.0",

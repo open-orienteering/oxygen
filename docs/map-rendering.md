@@ -1,14 +1,14 @@
 # Map rendering
 
 Status: **draft** — chapter of the vector map pipeline specification,
-started by spike S1 (steps 1–2: harness and pilot symbolisation stage).
-Sections marked *not yet specified* are filled in as S1 step 3 and
-slice B land. The research record this
+started by spike S1 (steps 1–3: harness, pilot symbolisation stage,
+WebGL2 backend with golden images). Sections marked *not yet specified*
+are filled in as slice B / C land. The research record this
 chapter derives from is `docs/research/vector-map-pipeline/04-render-core.md`;
 when the two disagree, this document wins.
 
 This chapter is normative for the code in `packages/shared/src/render/`,
-`packages/api/src/render/` and (later) `packages/web/src/map-gl/`.
+`packages/api/src/render/` and `packages/web/src/map-gl/`.
 
 ## 1. Shape of the pipeline
 
@@ -394,10 +394,81 @@ purpose and is never used for production rendering.
 
 ### 5.2 WebGL2 (web)
 
-*Not yet specified.* S1 step 3. Fixed points from 04: custom WebGL2 in
-`packages/web/src/map-gl/`, arena buffers prepared in a worker, even-odd
-fills via stencil, strokes extruded on the CPU, glyphs instanced, hatches
-by stripe shader, text as MSDF, colour-major draw order from the stream.
+`packages/web/src/map-gl/`, two files with a hard line between them:
+
+```
+prepare.ts   pass stream ──► PreparedStream        pure TS, typed arrays, no GL
+renderer.ts  PreparedStream + View ──► pixels       WebGL2, five small programs
+```
+
+Status: S1 step 3 spike — one VBO per pass, no arena, no worker, no
+buckets, no MSDF text. Everything below is what the spike **proved**;
+the arena / worker / tiling layer of 04 sits on top of it unchanged.
+
+#### Preparation (CPU)
+
+Backend decisions only — nothing here moves a dash or a glyph:
+
+| Pass | Becomes | How |
+|---|---|---|
+| fill | `fan` + `cover` | rings flattened (default 10 µm); one triangle per ring edge from a fan origin just outside the bounds; a two-triangle bounding quad |
+| stroke | `verts` (x, y, ox, oy) | each slice (or ring) flattened from its Bézier sub-range, then extruded *directionally*: the vertex carries the centre-line point and a unit (or mitre) offset; the shader multiplies by the half width |
+| glyph | instanced fill fan + strokes | the `GlyphMesh` in glyph-local units, flattened at ¼ tolerance; instances are the pass's `x, y, cos, sin, scale` buffer as-is |
+| hatch | `fan` + `cover` + stripe params | the area like a fill; stripes are evaluated in the fragment shader |
+| text | one instanced item per distinct glyph id | outline in font units, instance scale `sizeUm / unitsPerEm`; a halo pass is the same outlines **stroked** (round/round) with `haloWidthUm / k` |
+
+Extrusion emits one quad per segment, a join wedge per interior vertex
+(mitre with the 4× limit → bevel, or round at 8 steps per π) and the
+caps (flat; square = quads extended by one half width; round = half
+circle). Because the width is applied in the shader, the same buffer
+serves every zoom and the minimum on-screen width is a uniform.
+
+#### Drawing (GPU)
+
+Items are drawn in stream order; the stream is already colour-major so no
+sorting happens here. Projection subtracts `u_centre` and scales by
+px/µm per axis; the stream is y-up and so is clip space, so there is no
+flip anywhere.
+
+* **Even-odd fills** — the stencil trick, never a triangulation: the fan
+  is drawn colour-masked with `stencilOp(INVERT)`, then the cover quad is
+  drawn where `stencil == 1` with `stencilOp(ZERO)`, which paints the
+  fill and clears the stencil in one pass. Holes come for free and the
+  result is exactly §3.1's rule.
+* **Strokes** — plain triangles; `halfWidth = max(widthUm/2, minPx/2/pxPerUm)`.
+* **Instanced glyphs and text** — `drawArraysInstanced` over the glyph's
+  fan with a per-instance `(x, y, cos, sin)` + `scale` attribute, then
+  the cover quad instanced the same way. Overlapping instances of the
+  same pass XOR each other (known caveat, no map symbol in the pilot set
+  triggers it; a per-instance stencil clear would fix it at the cost of
+  a draw per instance).
+* **Pattern clip** — two stencil bits: bit 0 holds the clip area (fan,
+  INVERT, mask 0x01), bit 1 the instances' parity; the instanced cover
+  tests `EQUAL 0x03` and clears bit 1, a final cover clears bit 0.
+* **Hatch** — the area goes through the stencil like a fill; the cover
+  quad runs a stripe shader (`d = dot(p, n) − offset`, distance to the
+  nearest multiple of `spacing`) with a one-pixel coverage ramp and
+  alpha blending. The fragment never `discard`s so the stencil clear
+  always runs.
+* **Anti-aliasing** — the context's MSAA (4× in practice). Optional
+  `supersample: 2`: draw into a 2× multisampled renderbuffer, resolve
+  into a texture, draw that onto the canvas with linear filtering (a
+  2×2 box at exactly 2×; a scaled `blitFramebuffer` into the canvas is
+  illegal because the default framebuffer is itself multisampled). The
+  golden page uses it; the production default is 1.
+
+Resources: `MapGlRenderer.setStream(prepared)` uploads, `render(view,
+opts)` draws, `dispose()` frees. Measured on the pilot scene in headless
+Chromium (SwiftShader): 36 items, prepare 3.8 ms, upload ~10 ms, draw
+< 1 ms.
+
+#### Dev page
+
+`/dev/map-gl?fixture=<golden scene>` (`pages/dev/MapGlFixturePage.tsx`,
+routed only when `import.meta.env.DEV`) draws one golden scene into a
+canvas sized by `render.goldenFrame` (§6.2) with
+`preserveDrawingBuffer`, sets `data-ready` when done and shows the
+timings. Fonts are fetched from `packages/shared/fonts/` via Vite `?url`.
 
 ### 5.3 PDF (api)
 
@@ -424,14 +495,73 @@ rule it tests is under-specified.
 ### 6.2 Golden images
 
 Three-way. The reference raster (§5.1) renders the fixture at 10 px/mm
-(254 dpi) unless the fixture says otherwise. The WebGL2 backend renders
-the same stream in headless Chromium (Playwright) and the PDF backend's
-page is rasterised with `pdftoppm` at the same density. Each is compared
-with the oracle by `diffImages(a, b, channelTolerance = 16)`: a pixel
-differs when any channel differs by more than 16/255; the fixture passes
-when the fraction of differing pixels is ≤ 0.5 % (04 §9 budget), or a
-tighter per-fixture budget. Backends are compared with the oracle, never
-with each other.
+(254 dpi). The WebGL2 backend renders the same stream in headless
+Chromium (Playwright) and the PDF backend's page is rasterised with
+`pdftoppm` at the same density. Each is compared with the oracle by
+`diffImages(a, b, channelTolerance = 16)`: a pixel differs when any
+channel differs by more than 16/255; the fixture passes when the fraction
+of differing pixels is ≤ 0.5 % (04 §9 budget). Backends are compared
+with the oracle, never with each other.
+
+**Golden scenes** are the six contract fixtures (§6.3) plus the
+`pilot-scene` (`__fixtures__/pilot-scene.ts`: one object per pilot
+symbol, hand-placed). `render.goldenScene(name, fonts)` resolves a name
+to `{ stream, colour }` identically on every side, and
+`render.goldenFrame(stream)` fixes the image frame: bounds + 1 mm
+margin, grown symmetrically to a **whole number of pixels** (a 57.5 px
+viewBox leaves quarter-pixel rows that are background on one side and
+transparent on the other).
+
+Mechanics of the WebGL2 leg:
+
+```
+pnpm --filter @oxygen/api golden:render      scripts/render-golden.ts
+      │  reference raster at 4× density, box-filtered to 10 px/mm
+      ▼
+e2e/__golden__/map-gl/<scene>.png            committed, reviewed in the PR
+      ▲                           ▲
+      │ must equal the oracle     │ ≤ 0.5 % differing pixels
+packages/api/src/render/          e2e/map-gl-golden.spec.ts
+  __tests__/golden-files.test.ts    /dev/map-gl?fixture=<scene> → canvas.toDataURL
+```
+
+The api unit test fails whenever a committed golden no longer matches
+the current oracle, so a stale golden cannot be what the browser test
+compares against; the browser test is the only place the GPU output is
+judged, and on failure it attaches the actual image and a red-marked
+diff.
+
+Why the oracle is **supersampled 4×** for goldens (`GOLDEN_SUPERSAMPLE`):
+resvg flattens curves to ~¼ px chords and both rasterisers round edge
+coverage differently; at 1× those two effects alone put 1–6 % of the
+pixels of a curve-heavy scene outside the 16-level tolerance, with the
+backend drawing the right thing. Zooming the same SVG 4× (exactly 4× the
+pixel size, same centring) and averaging 4×4 blocks pushes the oracle's
+own error below the tolerance so the comparison measures the backend.
+The GL side renders the goldens with `supersample: 2` (16 effective
+samples). Measured ratios, headless Chromium / SwiftShader:
+
+| Scene | Differing pixels |
+|---|---|
+| `fill-with-holes` | 0 / 48 400 (0.000 %) |
+| `dashed-bezier-stroke` | 136 / 66 000 (0.206 %) |
+| `glyph-instances` | 10 / 26 076 (0.038 %) |
+| `hatch-area` | 6 / 67 200 (0.009 %) |
+| `colour-order` | 0 / 48 400 (0.000 %) |
+| `text-with-halo` | 23 / 5 220 (0.441 %) |
+| `pilot-scene` | 1 130 / 385 640 (0.293 %) |
+
+What remains is coverage quantisation: every residual differs by 17–26
+levels and the GL values are multiples of 16. **The ratio therefore
+depends on the edge density of the scene**, not only on the backend —
+`text-with-halo` is 90 × 58 px of glyph edges and sits near the budget
+while the pilot scene has margin. Two consequences for the spec: the
+golden tier certifies *geometry* (right thing, right place, right
+colour, right order) under the backend's high-quality mode; it does not
+certify production anti-aliasing (4× MSAA at 1× cannot meet a 16-level
+tolerance on edge pixels and is not asked to). And a 3× supersample is
+*worse* than 2× with the linear resolve (4 of 9 texels sampled) — a
+higher factor needs a real box-filter pass.
 
 The oracle itself is checked by **pixel probes**: hand-computed paper
 coordinates where a given colour must appear (`sampleAt(img, xUm, yUm)`),
@@ -482,11 +612,15 @@ library's own fixtures (04 §8 table, one per rule) are added in slice B.
 | `packages/shared/src/render/glyph-table.ts` | IR glyph → `GlyphMesh`, registry |
 | `packages/shared/src/render/truetype.ts`, `text.ts` | font reader, shaping |
 | `packages/shared/src/render/symbolise.ts` | the stage |
-| `packages/shared/src/render/__fixtures__/` | contract fixtures (`streams/`), pilot symbols |
+| `packages/shared/src/render/__fixtures__/` | contract fixtures (`streams/`), pilot symbols, `pilot-scene.ts`, `golden.ts` (scene list, frame) |
 | `packages/shared/fonts/` | bundled Liberation faces |
 | `packages/api/src/render/reference-raster.ts` | resvg rasterisation, `sampleAt`, `diffImages` |
 | `packages/api/src/render/fonts.ts` | bundled-font loader for the server backends |
-| `packages/web/src/map-gl/` | WebGL2 backend (*not yet*) |
+| `packages/api/src/render/golden.ts`, `scripts/render-golden.ts` | golden PNG generation (`pnpm --filter @oxygen/api golden:render`) |
+| `packages/web/src/map-gl/prepare.ts` | WebGL2 backend, CPU stage (fans, extrusion, instancing) |
+| `packages/web/src/map-gl/renderer.ts` | WebGL2 backend, GPU stage (programs, stencil, supersampling) |
+| `packages/web/src/pages/dev/MapGlFixturePage.tsx` | dev-only golden page `/dev/map-gl` |
+| `e2e/__golden__/map-gl/`, `e2e/map-gl-golden.spec.ts` | committed goldens and the browser comparison |
 
 The shared module is exported as a namespace: `import { render } from
 "@oxygen/shared"` → `render.PassStream`, `render.passStreamFromJson`, …

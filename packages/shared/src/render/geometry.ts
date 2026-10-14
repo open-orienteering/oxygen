@@ -33,6 +33,14 @@ function flattenSegment(s: Segment, toleranceUm: number, out: number[]): void {
   }
 }
 
+/** Flattens a segment run into one polyline (x,y pairs, first point included). */
+export function flattenSegments(segs: Segment[], toleranceUm = 5): number[] {
+  if (segs.length === 0) return [];
+  const out: number[] = [segs[0].x0, segs[0].y0];
+  for (const s of segs) flattenSegment(s, toleranceUm, out);
+  return out;
+}
+
 /** Flattens each ring of a path. Open paths produce one polyline (first point included). */
 export function flattenRings(path: RenderPath, toleranceUm = 5): FlatRing[] {
   return pathRings(path).map((ring) => {

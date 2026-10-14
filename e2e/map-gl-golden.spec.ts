@@ -1,0 +1,80 @@
+/**
+ * Golden-image tests of the WebGL2 map backend (docs/map-rendering.md §6.2).
+ *
+ * Each golden scene is drawn by `/dev/map-gl?fixture=<name>` into a canvas
+ * sized exactly like the reference raster, read back as PNG, and compared
+ * with `e2e/__golden__/map-gl/<name>.png` using the contract's metric:
+ * pixels whose largest channel difference exceeds 16 must be at most
+ * 0.5 % of the image. The goldens are written by the reference raster
+ * (`pnpm --filter @oxygen/api golden:render`), never by this test.
+ *
+ * On failure the actual image and a diff (differing pixels in red) are
+ * attached to the report.
+ */
+
+import { test, expect } from "@playwright/test";
+import { readFileSync, existsSync } from "node:fs";
+import { PNG } from "pngjs";
+
+/** Playwright runs with the repo root as cwd (see other specs' `e2e/test.ocd`). */
+const GOLDEN_DIR = "e2e/__golden__/map-gl/";
+const CHANNEL_TOLERANCE = 16;
+const MAX_DIFF_RATIO = 0.005;
+
+const scenes = [
+  "fill-with-holes",
+  "dashed-bezier-stroke",
+  "glyph-instances",
+  "hatch-area",
+  "colour-order",
+  "text-with-halo",
+  "pilot-scene",
+] as const;
+
+function diffPng(actual: PNG, golden: PNG): { differing: number; total: number; diff: PNG } {
+  const diff = new PNG({ width: golden.width, height: golden.height });
+  let differing = 0;
+  for (let i = 0; i < golden.width * golden.height; i++) {
+    const o = i * 4;
+    let m = 0;
+    for (let c = 0; c < 3; c++) m = Math.max(m, Math.abs(actual.data[o + c] - golden.data[o + c]));
+    const bad = m > CHANNEL_TOLERANCE;
+    if (bad) differing++;
+    const g = Math.round(((golden.data[o] + golden.data[o + 1] + golden.data[o + 2]) / 3) * 0.3 + 178);
+    diff.data[o] = bad ? 255 : g;
+    diff.data[o + 1] = bad ? 0 : g;
+    diff.data[o + 2] = bad ? 0 : g;
+    diff.data[o + 3] = 255;
+  }
+  return { differing, total: golden.width * golden.height, diff };
+}
+
+test.describe("WebGL2 map backend — golden images", () => {
+  for (const name of scenes) {
+    test(`${name} matches the reference raster`, async ({ page }, testInfo) => {
+      const goldenPath = `${GOLDEN_DIR}${name}.png`;
+      expect(existsSync(goldenPath), `missing golden ${name}.png — run pnpm --filter @oxygen/api golden:render`).toBe(true);
+      const golden = PNG.sync.read(readFileSync(goldenPath));
+
+      await page.goto(`/dev/map-gl?fixture=${name}`);
+      const canvas = page.getByTestId("map-gl-canvas");
+      await expect(canvas).toHaveAttribute("data-ready", "true");
+      const stats = await page.getByTestId("map-gl-stats").textContent();
+      testInfo.annotations.push({ type: "map-gl", description: stats ?? "" });
+
+      const dataUrl = await canvas.evaluate((c) => (c as HTMLCanvasElement).toDataURL("image/png"));
+      const actual = PNG.sync.read(Buffer.from(dataUrl.split(",")[1], "base64"));
+      await testInfo.attach(`${name}-actual.png`, { body: PNG.sync.write(actual), contentType: "image/png" });
+
+      expect({ width: actual.width, height: actual.height }).toEqual({ width: golden.width, height: golden.height });
+
+      const { differing, total, diff } = diffPng(actual, golden);
+      const ratio = differing / total;
+      testInfo.annotations.push({ type: "map-gl-diff", description: `${differing}/${total} = ${(ratio * 100).toFixed(3)} %` });
+      if (ratio > MAX_DIFF_RATIO) {
+        await testInfo.attach(`${name}-diff.png`, { body: PNG.sync.write(diff), contentType: "image/png" });
+      }
+      expect(ratio, `${differing} of ${total} pixels differ by more than ${CHANNEL_TOLERANCE} levels`).toBeLessThanOrEqual(MAX_DIFF_RATIO);
+    });
+  }
+});

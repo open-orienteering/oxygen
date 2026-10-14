@@ -19,6 +19,8 @@ export interface ReferenceRasterOptions {
   pxPerMm?: number;
   background?: string;
   glyphOutline?: render.ReferenceSvgOptions["glyphOutline"];
+  /** Render at this multiple of `pxPerMm` and box-filter down. Default 1. */
+  supersample?: number;
 }
 
 export interface RasterImage {
@@ -37,17 +39,42 @@ export async function rasterisePassStream(stream: render.PassStream, opts: Refer
   const bounds: render.Bounds = opts.bounds
     ? raw
     : { minX: raw.minX - margin, minY: raw.minY - margin, maxX: raw.maxX + margin, maxY: raw.maxY + margin };
-  const svg = render.passStreamToSvg(stream, { ...opts, bounds, marginUm: 0 });
+  const ss = Math.max(1, Math.round(opts.supersample ?? 1));
+  const pxPerMm = opts.pxPerMm ?? 10;
+  const svg = render.passStreamToSvg(stream, { ...opts, bounds, marginUm: 0, pxPerMm });
   const { renderAsync } = await import("@resvg/resvg-js");
-  const widthPx = Math.max(1, Math.round(((bounds.maxX - bounds.minX) / 1000) * (opts.pxPerMm ?? 10)));
-  const rendered = await renderAsync(svg, { fitTo: { mode: "width", value: widthPx } });
-  return {
-    width: rendered.width,
-    height: rendered.height,
-    pixels: new Uint8Array(rendered.pixels.buffer, rendered.pixels.byteOffset, rendered.pixels.byteLength),
-    bounds,
-    svg,
-  };
+  // The SVG carries its own pixel size (width and height rounded
+  // independently from the paper size) — the same formula the WebGL2
+  // fixture page uses for its canvas, so goldens and screenshots match.
+  // Supersampling zooms that same SVG by ss (exactly ss× the pixel size,
+  // same centring) and averages ss×ss blocks.
+  const rendered = await renderAsync(svg, ss === 1 ? { fitTo: { mode: "original" } } : { fitTo: { mode: "zoom", value: ss } });
+  const px = new Uint8Array(rendered.pixels.buffer, rendered.pixels.byteOffset, rendered.pixels.byteLength);
+  const width = Math.round(rendered.width / ss);
+  const height = Math.round(rendered.height / ss);
+  return { width, height, pixels: ss === 1 ? px : boxDown(px, rendered.width, rendered.height, width, height, ss), bounds, svg };
+}
+
+/** Averages ss×ss blocks. */
+function boxDown(src: Uint8Array, sw: number, sh: number, w: number, h: number, ss: number): Uint8Array {
+  const out = new Uint8Array(w * h * 4);
+  const n = ss * ss;
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      let r = 0, g = 0, b = 0, a = 0;
+      for (let dy = 0; dy < ss; dy++) {
+        const sy = Math.min(sh - 1, y * ss + dy);
+        for (let dx = 0; dx < ss; dx++) {
+          const sx = Math.min(sw - 1, x * ss + dx);
+          const o = (sy * sw + sx) * 4;
+          r += src[o]; g += src[o + 1]; b += src[o + 2]; a += src[o + 3];
+        }
+      }
+      const o = (y * w + x) * 4;
+      out[o] = Math.round(r / n); out[o + 1] = Math.round(g / n); out[o + 2] = Math.round(b / n); out[o + 3] = Math.round(a / n);
+    }
+  }
+  return out;
 }
 
 /** RGBA at a paper coordinate (µm, y-up). Returns undefined outside the image. */
