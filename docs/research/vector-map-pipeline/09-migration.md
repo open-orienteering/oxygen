@@ -1,6 +1,8 @@
 # 09 — Migration and rollback
 
-Status: proposed 2026-10-12 (recommendation §9); awaiting decision.
+Status: decided 2026-10-14 (recommendation §9). The specification is
+written incrementally per slice as the living `docs/*.md` (README,
+"Method"); this directory freezes as the record.
 Depends on: every earlier topic — this one orders their delivery. Feeds:
 the implementation plan (the specification that follows this research)
 and the spike list (README).

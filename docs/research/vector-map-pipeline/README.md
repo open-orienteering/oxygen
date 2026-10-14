@@ -11,6 +11,30 @@ Nothing in this directory is shipped. Documents here may be superseded; when
 a topic lands, its decision is copied into the relevant `docs/*.md` and the
 research document is marked as such.
 
+## Method, after the research (decided 2026-10-14)
+
+All nine topics are decided. The **specification** is not a separate
+volume: it is written incrementally, one slice at a time (09 §4), as the
+normative `docs/*.md` that the slice's PRs are reviewed against — only
+what was decided, stated as schemas, interfaces, rule tables and
+acceptance checklists, without rationale or rejected options. The research
+documents freeze as the record of why; where a later topic refined an
+earlier one (07 → 06 upload and job model; 08 → 05 page ownership) the
+spec states the refined form. The spikes (09 §7) run before the slice they
+protect and may amend a spec chapter before it is written, never after
+the slice has shipped.
+
+Spec chapters by slice:
+
+| Slice | Spec documents (`docs/`) | Source topics |
+|-------|--------------------------|---------------|
+| A | `map-document-format.md`, `map-import.md`, `map-storage.md` | 02, 06, 07 |
+| B | `map-symbols.md`, `map-rendering.md` (shared stage, WebGL2, viewer) | 03, 04, 01 |
+| C | `course-layer.md`, `course-print.md` | 08 §4.1, 05 |
+| D | `course-editor.md` (rewritten), `course-layout.md` | 08 |
+| E–F | `migrations/2026-vector-map-pipeline.md`, `AGENTS.md` §7/§15 | 09 |
+| G | `map-editing.md` | 08 §4.7, 03 §1 |
+
 ## Objectives
 
 1. One vector representation of the base map, in map paper space, that is
@@ -52,7 +76,7 @@ research document is marked as such.
 | 06 | Import pipeline: OCAD/OMAP readers and one normaliser, staged job, report, review API and decisions, club map versions, immutable caching, binary upload | Decided (two readers + shared normaliser; two-level identity; club symbol decisions by fingerprint) | [06-import-pipeline.md](06-import-pipeline.md) |
 | 07 | Storage and delivery: blob store choice, content-addressed schema (sources, documents, club map versions, decisions, print profiles), GC, routes and auth, chunked upload, serverless job execution, PWA and venue offline, backups | Decided (Postgres `bytea` content-addressed; RESTRICT FKs + GC; immutable hash routes; chunked upload; documents in the checkout snapshot) | [07-storage-delivery.md](07-storage-delivery.md) |
 | 08 | Course editor: domain model (sites, course structure with variations and map exchange, course-setting objects incl. filter regions, layout templates and sheets, patch layer), redesigned editing experience with a mobile field mode, roadmap | Decided (derived course layer; structure + materialised variants; `course_objects`; auto templates; event-scoped patch; one canvas, four modes; field mode on phones) | [08-course-editor.md](08-course-editor.md) |
-| 09 | Migration: release slices, per-event switch and coexistence, data backfill, rollback matrix, retirement schedule, spikes S0–S4, per-slice gates | Proposed (seven slices A–G behind `events.map_pipeline`; additive schema until retirement; backfill job by hash; S1 phone spike before the viewer slice) | [09-migration.md](09-migration.md) |
+| 09 | Migration: release slices, per-event switch and coexistence, data backfill, rollback matrix, retirement schedule, spikes S0–S4, per-slice gates | Decided (seven slices A–G behind `events.map_pipeline`; additive schema until retirement; backfill job by hash; S1 phone spike before the viewer slice) | [09-migration.md](09-migration.md) |
 
 ## Measurement corpus
 
@@ -83,4 +107,6 @@ document so the numbers can be regenerated.
 | 2026-10-07 | 06 Import | Keep the fork's OCAD reader, add a streaming OMAP reader, resolve every format difference in one fixture-tested `normalise()`; ten-stage job in a worker thread with a structured, code-keyed report; source document keyed by `(fileHash, importerVersion)` and final document by content hash so review never reparses; review API with reference-raster previews; club symbol decisions persisted by fingerprint and applied as the matcher's first stage; club maps as versioned series pinned by events; immutable delivery by hash; binary upload route. | Two formats converge before symbol matching, review stays fast and repeatable, and a club's mapping choices survive new editions of its map. See [06](06-import-pipeline.md) §12. |
 | 2026-10-07 | 07 Storage | Postgres `bytea` as the single content-addressed store (`STORAGE EXTERNAL`, thin `BlobStore` seam); `map_sources` / `map_documents` / previews, `club_maps` + `club_map_versions` pinned by `map_files`, club symbol decisions and print profiles, upload and job tables; blobs never updated, `RESTRICT` FKs + daily GC with grace; `/api/map-documents/:hash` immutable with reference-based auth, ranges, route-scoped compression, streamed sources; chunked upload into the DB; import jobs as rows resumed by heartbeat; CacheFirst + `storage.persist()` on devices; documents join the venue checkout snapshot; backups by hash. | The only store all three deployments share is Postgres; the FK graph is the reference counter; Cloud Run's 32 MiB HTTP/1 ceiling and two-instance topology rule out temp files and in-memory jobs; a 0.2–3.5 MB document is small enough to travel to the venue where tiles were not. See [07](07-storage-delivery.md) §13. |
 | 2026-10-12 | 08 Course editor | Course layer derived by one shared function for screen, print and kiosk; course structure as items with variation groups and map-exchange sections in `courses.structure`, materialised into child variant rows for timing and export; controls stay sites (+ kind, manual gaps, notes, field check-off); `course_objects` with scope (OOB, whiteout, filter regions clip/hide/show-only, toner saver, text, images); layout templates auto-keyed by paper/orientation/scale with explicit extras, sheets per section and class override, `resolveSheet` as 05's single page producer; event-scoped patch layer keyed by document hash, promoted to a club version on demand; one editor with Course/Layout/Field/Map modes, contextual selection plus sticky creation tools with a ghost and pending leg; Field mode as the phone default with a bottom-sheet inspector; advisory live checks. | One geometry implementation instead of three; structure edited whole and journaled as one row while timing keeps reading flat rows; a patch avoids invalidating every hash reference per edit; the mobile requirement is met by chrome and gestures, not a second model. See [08](08-course-editor.md) §11. |
+| 2026-10-14 | 09 Migration | Seven release slices A–G, each additive in schema and gated by an instance flag plus per-event `events.map_pipeline` switch that governs reads only; imports and derived artifacts dual-written from slice A; resumable hash-keyed backfill; retirement in two steps one release after the last consumer; spikes S0–S4 scheduled against the slices they protect, S1 (phone budgets) before the viewer slice is committed. | Rollback stays an image tag plus a switch at every step; the document is useful before any consumer exists; the only decision a spike can still change (04's backend) is tested before the code that depends on it. See [09](09-migration.md) §9. |
+| 2026-10-14 | Method | Specification written incrementally per slice as the living `docs/*.md`; research directory frozen as the record; spikes before their slice. | Avoids a second document set that drifts; lets S1 amend a spec chapter that does not exist yet. See "Method" above. |
 | 2026-10-07 | Scope | Light map editing (new/changed objects with existing or materialised symbols) is a stated future requirement. Not implemented initially; every topic keeps it possible. | Avoids a bolted-on editing layer later: objects reference source symbols only, canonical symbols are materialised into the source table, the format allows appends (02 §10, 03 §1). |
