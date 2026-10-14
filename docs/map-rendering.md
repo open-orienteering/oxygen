@@ -1,8 +1,9 @@
 # Map rendering
 
 Status: **draft** — chapter of the vector map pipeline specification,
-started by spike S1 (render harness). Sections marked *not yet specified*
-are filled in as S1 steps 2–3 and slice B land. The research record this
+started by spike S1 (steps 1–2: harness and pilot symbolisation stage).
+Sections marked *not yet specified* are filled in as S1 step 3 and
+slice B land. The research record this
 chapter derives from is `docs/research/vector-map-pipeline/04-render-core.md`;
 when the two disagree, this document wins.
 
@@ -179,10 +180,200 @@ canonical in memory. All-zero flag arrays are omitted. Parsing sorts.
 
 ## 4. Symbolisation rules
 
-*Not yet specified.* S1 step 2 brings the pilot symbol set (101 contour,
-505 footpath with OCAD and OMAP dash fitting, 418 point glyph, 407/213
-patterns, 709 hatch, 704 text with halo); the rules land here as each is
-implemented, with the fixture in §6.3 that proves it.
+Status: pilot rules (S1 step 2), proven by
+`packages/shared/src/render/__tests__/{measure,dash,placement,pattern,text,symbolise}.test.ts`
+and in image form by `packages/api/src/render/__tests__/pilot-raster.test.ts`.
+Rules marked **provisional** reproduce the documented behaviour of OCAD /
+Mapper from their field semantics; the exact constants are confirmed
+against exports of the corpus maps in the S0/slice A corpus run and
+amended here if they differ. The *structure* of each rule (what is
+computed where, what the stream carries) is not provisional.
+
+The stage's entry point is `symbolise({ objects, symbols, fonts })` in
+`render/symbolise.ts`. An object is `{ symbolIdx, path, angleDeg?, text? }`;
+a symbol is a `RenderSymbol` (`render/symbol.ts`, Zod-validated; the IR of
+03 §6.2 with defaults applied). Unknown symbols, empty geometry, text
+without text and text without a font produce a warning per object and no
+passes — the stage never throws on data.
+
+### 4.1 Arc length and sections
+
+- Lengths along a path are computed by `PathMeasure` (`render/measure.ts`):
+  lines exactly, cubics by uniform parameter sampling with
+  `max(8, min(256, ⌈controlPolygonLength / 100 µm⌉))` pieces and linear
+  inversion inside a piece. This is a fixed rule of the stage, so two
+  backends get the same positions regardless of how they flatten.
+- A **section** is the run between consecutive split points. Corner (4)
+  and dash (8) points both split; a closed path without split points is
+  one *closed-loop* section; a closed path with split points is cut at
+  them and the wrap-around piece through the start point is a section of
+  its own (the start point is not an implicit split).
+- `shortenStartUm` / `shortenEndUm` shrink the first / last section of an
+  open path before layout.
+- **Gap points** (128): from one gap point to the next, the main stroke is
+  not drawn. Intervals are subtracted after dash layout, so dashes keep
+  their phase across the gap. An unpaired gap point at the last point
+  runs to the end of the line.
+
+### 4.2 Dash layout — `layout: "ocad"` (provisional)
+
+Per section, with dash `D`, gap `G`, end dash `E` (= `D` unless
+`endDashUm` is given), gap count `n`:
+
+1. `n = round((L − 2E + D) / (D + G))`, then `n = max(n, minGaps)`. On a
+   closed loop `E = D/2` and `n ≥ 1`, so the two half end dashes meet at
+   the start point and form one ordinary dash.
+2. If `n = 0` the section is one solid dash.
+3. Otherwise **gaps keep their nominal length** and all dashes are scaled
+   by one ratio `r = (L − n·G) / (2E + (n − 1)·D)` so the section starts
+   and ends with a full end dash. The last dash is snapped to the section
+   end. If even the gaps do not fit (`L − n·G ≤ 0`), `n` is reduced until
+   they do.
+4. `endGapUm` shortens the fitted range by that much at both ends.
+5. `secondaryGapUm` splits every dash into `dashesInGroup` (default 2)
+   equal parts separated by the secondary gap; end dashes with an
+   explicit, different end length stay whole.
+
+What stretches is the provisional part: the implementation keeps gaps
+fixed (visibly uniform gaps, varying dashes, which is what OCAD maps
+show); if the corpus run shows OCAD scaling gaps too, step 3 changes and
+nothing else does.
+
+### 4.3 Dash layout — `layout: "omap"` (provisional)
+
+Mapper's adjustment: a group is `k` dashes (`dashesInGroup`) of `D`
+with `secondaryGapUm` between them; `n` groups and the breaks `B`
+between them are **all scaled by one factor** `f = L / nominal`.
+
+- Without half outer dashes: `n = max(1, round((L + B) / (group + B)))`,
+  nominal `n·group + (n − 1)·B`. A line too short for one group still
+  gets one (scaled-down) dash unless `showAtLeastOne` is `false`, in
+  which case it is drawn solid.
+- `halfOuterDashes`: the pattern is `D/2, B, [group, B]×n, D/2` with
+  `n = max(0, round((L − D − B) / (group + B)))`.
+- Closed loop: `n = max(1, round(L / (group + B)))` groups around the
+  loop with the first group centred on the start point (its negative
+  half wraps to the end).
+
+### 4.4 Strokes, halos, borders
+
+- A line symbol's `main` stroke becomes one `StrokePass` on the object's
+  own path (Béziers intact), with `slices` from §4.2/4.3 when dashed,
+  shortened or gapped, otherwise no slices. `cap: flat` maps to `butt`.
+- A `main.halo` (OCAD line framing, the club sets' 502 band) is a
+  **separate** stroke pass in the halo colour, width
+  `main.widthUm + 2·halo.widthUm`, same slices, same caps. It sorts to its
+  own colour's position (03 §6.9 item 9) — nothing fuses it with the main
+  pass.
+- **Borders** (`borders.left` / `right`, 502/509-style double lines) are
+  stroke passes on an **offset polyline**: the main path flattened at
+  5 µm and offset by `±shiftUm` (left = +normal in y-up) with mitred
+  joins limited to 4× the offset, then bevelled. Border paths are
+  therefore polylines, not Béziers — a stage decision, identical in every
+  backend and invisible on paper.
+- A dashed border is laid out on the **main** line's sections and the
+  intervals transferred to the offset path proportionally
+  (`× L_border / L_main`), so both borders and a dashed main line share
+  phase (item 6). `noLeft` (32) / `noRight` (64) points suppress the
+  respective border from that point to the next point.
+- `borders.backgroundColour` becomes a stroke of width
+  `left.shiftUm + right.shiftUm` in that colour (on the main path when
+  the shifts are symmetric, else on the centre offset).
+
+### 4.5 Glyphs on lines
+
+Placement (`render/placement.ts`) yields `(length, angle, scale)` per
+glyph; the instance transform is the point at that length with
+`cos/sin` of the angle (tangent angle when the glyph is `rotatable`,
+0 otherwise).
+
+| `placement.at` | Rule |
+|---|---|
+| `start` / `end` | the path's ends, tangent angle |
+| `corners` / `dashPoints` | every point with flag 4 / 8 strictly inside the path, at the **bisector** of the incoming and outgoing tangents; the ends of an open path too unless `ignoreEnds`; on a closed path the start point only when it carries the flag. `scaleAtCorners` scales by `1 / cos(turn/2)` (mitre length), clamped at 4× |
+| `dashCentres` / `gapCentres` | centres of the dashes / gaps of the main stroke's dash layout per section. The layout is run in *virtual* mode so a solid line (`gapUm 0`) with spaced symbols — OCAD's 516 power line — still gets positions: with zero gaps the dashes touch and the glyphs sit at the joints |
+| `spaced` | Mapper semantics per **corner** section (dash points do not restart spacing): `first = firstUm ?? distance/2`, `last` likewise, `inner = L − first − last`; `n = round(inner / distance) + 1` (0 if `inner < 0`), `n = max(n, minCount)` (`minCountClosed` on closed paths); spots at `first + i·inner/(n − 1)`, a single spot centred. On a closed loop: `n = max(minCount, round(L / distance))` spots every `L/n` from the start point. `perSpot` glyphs are spread `spotSpacingUm` apart symmetrically around the spot |
+
+### 4.6 Point symbols and the glyph table
+
+- IR glyph parts become one `GlyphMesh` per part (`render/glyph-table.ts`):
+  `fill` → closed path; `stroke` → path + width/cap/join; `disc` → a
+  four-cubic Bézier circle fill; `ring` → the same circle stroked at
+  radius `(diameter − width) / 2` (diameter is the outer diameter).
+- A pass per part, in the part's colour, with one instance per
+  placement; the same `Glyph` object registers once.
+- A point object's angle applies only when `orientation` is `object`
+  and the glyph is `rotatable`; otherwise the glyph is north-up.
+
+### 4.7 Areas: fill, hatch, pattern, border
+
+- `fill` → one even-odd `FillPass` on the object's path; an open area
+  path is treated as closed.
+- Each `hatches[]` entry → one `HatchPass` with the symbol's width,
+  spacing, offset and `angleDeg + objectAngle` (object angle ignored
+  when `rotate: never`). Two directions are two passes.
+- `patterns[]` → glyph passes with instances from `render/pattern.ts`
+  (§4.8). In mode `clip` the pass carries the area as `clip`.
+- `border` (OCAD border symbol / OMAP combined part) is symbolised as a
+  line symbol on the closed path.
+
+### 4.8 Pattern grids and clip modes
+
+- The grid is anchored at the **paper origin**, rotated by
+  `angleDeg + objectAngle` (object angle ignored when `rotate: never`),
+  cell `(w, h)`, offsets `(offsetX, offsetY)`; `shiftedRows` moves every
+  odd row by `w/2`. Because the anchor is the origin and not the object,
+  adjacent areas with the same symbol and angle share one grid.
+- Candidate cells are those over the area's bounds (in grid space,
+  padded by the glyph's extent). Inclusion, with the glyph's ink extent
+  as an axis-aligned box rotated with the grid:
+  - `centreInside` — the cell centre is inside the area (even-odd over
+    all rings);
+  - `completelyInside` — all four box corners inside and no area edge
+    crosses the box;
+  - `partiallyInside` — the centre or any corner inside, or an area edge
+    crosses the box;
+  - `clip` — same predicate as `partiallyInside`; the backend clips the
+    glyph geometry to the area (stencil / clip path).
+  The inclusion polygon is the area flattened at 5 µm. Points exactly on
+  the boundary are not defined (the ray-casting test decides); fixtures
+  avoid them.
+
+### 4.9 Text
+
+- Font resolution: the first font in `fonts` whose `family` matches the
+  symbol (weight/italic ignored in the pilot). Fonts are read by the
+  shared TrueType reader (`render/truetype.ts`: `head`, `hhea`, `hmtx`,
+  `maxp`, `cmap` 4/12, `kern` 0, `loca`/`glyf` incl. composites), so
+  shaping and outlines come from the same numbers on every side.
+- Em size: `digitHeightUm · unitsPerEm / font.digitHeight` when the
+  symbol is specified by digit height (ISOM 704 "4.0 mm"), where
+  `digitHeight` is measured from the outline of "0"; otherwise
+  `fontSizeUm`.
+- Shaping (`render/text.ts`): left-to-right, pen advance =
+  `advance(glyph)·k + kerning(prev, glyph)·k + charSpacing·em`
+  (+ `wordSpacing·em` after a space), `k = em / unitsPerEm`. Spaces
+  advance but are not emitted. Lines split on `\n`, baseline-to-baseline
+  `lineSpacing · em` downward. Alignment shifts each line by `0`,
+  `−width/2`, `−width` for left / centre / right (justify = left in the
+  pilot). The whole block rotates about the anchor by the object angle.
+  Paragraph spacing and line breaking inside boxes belong to formatted
+  text, which is not in the pilot.
+- A `halo` is a separate `TextPass` in the halo colour with
+  `haloWidthUm`, identical glyphs and positions. Sorted by colour it
+  lands at the halo colour's stack position — the ISSprOM 704 white
+  outline is "upper white", one below upper purple.
+
+### 4.10 Fonts shipped
+
+`packages/shared/fonts/` holds Liberation Sans Regular and Liberation
+Sans Narrow Regular from the Liberation **1.07** series — the only series
+with the Narrow face (metric-compatible with Arial Narrow, which the
+corpus uses). Note the licence: 1.07 is GPLv2 with the font-embedding
+exception, not the SIL OFL of Liberation 2.x as 04 §4.4 assumed; both are
+compatible with Oxygen's AGPL and with embedding in PDFs. `LICENSE` in
+the directory is the upstream text. The server loads them through
+`packages/api/src/render/fonts.ts`.
 
 ## 5. Backends
 
@@ -266,8 +457,14 @@ symbolisation, and every backend must draw all of them:
 | `colour-order` | passes pushed out of order; the sort decides what covers what |
 | `text-with-halo` | halo pass under text pass, same positions, different colours |
 
-Symbolisation fixtures (one per rule, 04 §8 table) are added alongside
-each rule in §4.
+The symbolisation rules of §4 are proven by the **pilot symbol family**
+(`packages/shared/src/render/__fixtures__/pilot-symbols.ts`, exported as
+`render.pilotSymbols` / `render.PILOT` / `render.pilotColours`): 101, 505
+(OCAD and OMAP), 502, 503 with framing, 516, 529, 418, 403, 407, 213,
+709, 714, 704. Its stream-level assertions are in
+`__tests__/symbolise.test.ts`; its pixel probes through the oracle in
+`packages/api/src/render/__tests__/pilot-raster.test.ts`. The canonical
+library's own fixtures (04 §8 table, one per rule) are added in slice B.
 
 ## 7. Where things live
 
@@ -277,8 +474,18 @@ each rule in §4.
 | `packages/shared/src/render/path.ts` | path walkers, Bézier split, arc length, hatch lines |
 | `packages/shared/src/render/stream-json.ts` | JSON projection, `diffPassStreams` |
 | `packages/shared/src/render/reference-svg.ts` | SVG serialiser (oracle, stage 1) |
-| `packages/shared/src/render/__fixtures__/streams/` | contract fixtures |
+| `packages/shared/src/render/symbol.ts` | `RenderSymbol` IR, Zod schemas, colour stack types |
+| `packages/shared/src/render/measure.ts` | arc length, sections, gap intervals |
+| `packages/shared/src/render/dash.ts` | OCAD / OMAP dash layout |
+| `packages/shared/src/render/placement.ts` | glyphs along lines |
+| `packages/shared/src/render/pattern.ts`, `geometry.ts` | pattern grids, inclusion, offsetting |
+| `packages/shared/src/render/glyph-table.ts` | IR glyph → `GlyphMesh`, registry |
+| `packages/shared/src/render/truetype.ts`, `text.ts` | font reader, shaping |
+| `packages/shared/src/render/symbolise.ts` | the stage |
+| `packages/shared/src/render/__fixtures__/` | contract fixtures (`streams/`), pilot symbols |
+| `packages/shared/fonts/` | bundled Liberation faces |
 | `packages/api/src/render/reference-raster.ts` | resvg rasterisation, `sampleAt`, `diffImages` |
+| `packages/api/src/render/fonts.ts` | bundled-font loader for the server backends |
 | `packages/web/src/map-gl/` | WebGL2 backend (*not yet*) |
 
 The shared module is exported as a namespace: `import { render } from
