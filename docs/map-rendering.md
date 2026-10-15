@@ -417,7 +417,8 @@ depth-buffer fill path. Everything below is what the spike **proved**;
 the arena / worker / tiling layer of 04 sits on top of it unchanged.
 `renderer.ts` keeps the step-3 one-draw-per-pass path (`setStream` /
 `render`) for the golden page; the document path is `setBatches` /
-`renderBatches`.
+`renderBatches`. The spike's verdict and its amendments to 04 are in
+`docs/research/vector-map-pipeline/S1-render-spike.md`.
 
 #### Preparation (CPU)
 
