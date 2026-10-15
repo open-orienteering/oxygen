@@ -20,6 +20,9 @@ const SettingsPage = lazy(() => import("./pages/SettingsPage").then(m => ({ defa
 const MapGlFixturePage = import.meta.env.DEV
   ? lazy(() => import("./pages/dev/MapGlFixturePage").then(m => ({ default: m.MapGlFixturePage })))
   : null;
+const MapGlDocPage = import.meta.env.DEV
+  ? lazy(() => import("./pages/dev/MapGlDocPage").then(m => ({ default: m.MapGlDocPage })))
+  : null;
 
 const PUBLIC_SURFACE = /^\/[^/]+\/(kiosk|start-screen)(\/|$)/;
 
@@ -79,6 +82,7 @@ export default function App() {
               element={<Navigate to="/settings?tab=users" replace />}
             />
             {MapGlFixturePage && <Route path="/dev/map-gl" element={<MapGlFixturePage />} />}
+            {MapGlDocPage && <Route path="/dev/map-gl-doc" element={<MapGlDocPage />} />}
             {/* Kiosk route — outside CompetitionShell (fullscreen, no admin UI) */}
             <Route path="/:nameId/kiosk" element={<KioskPage />} />
             <Route path="/:nameId/start-screen" element={<StartScreenPage />} />

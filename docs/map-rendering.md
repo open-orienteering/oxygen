@@ -338,6 +338,15 @@ glyph; the instance transform is the point at that length with
   The inclusion polygon is the area flattened at 5 µm. Points exactly on
   the boundary are not defined (the ray-casting test decides); fixtures
   avoid them.
+- Implementation: a **scanline in grid space**. The rings are rotated
+  into grid space once; for each candidate row the ring/scanline
+  crossings give the inside spans for the centre and corner tests, and
+  the edges that intersect the row's band are projected onto the cells
+  they cross (exact segment/box test). Cost is O(rows × edges) instead
+  of O(cells × edges); on the Sprint map's 213 areas this took the
+  pattern stage from 82 ms to 1.5 ms. Results are identical to the
+  per-cell test — the predicates above are the contract, the scanline is
+  how they are evaluated.
 
 ### 4.9 Text
 
@@ -394,16 +403,21 @@ purpose and is never used for production rendering.
 
 ### 5.2 WebGL2 (web)
 
-`packages/web/src/map-gl/`, two files with a hard line between them:
+`packages/web/src/map-gl/`, three files with hard lines between them:
 
 ```
 prepare.ts   pass stream ──► PreparedStream        pure TS, typed arrays, no GL
-renderer.ts  PreparedStream + View ──► pixels       WebGL2, five small programs
+batch.ts     PreparedStream ──► Batch[]            pure TS, merges per (colour run, kind)
+renderer.ts  Batch[] + View ──► pixels             WebGL2, six small programs
 ```
 
-Status: S1 step 3 spike — one VBO per pass, no arena, no worker, no
-buckets, no MSDF text. Everything below is what the spike **proved**;
+Status: S1 steps 3–4 spike — whole document drawn every frame, no
+arena, no worker, no buckets / visible set, no MSDF text, no
+depth-buffer fill path. Everything below is what the spike **proved**;
 the arena / worker / tiling layer of 04 sits on top of it unchanged.
+`renderer.ts` keeps the step-3 one-draw-per-pass path (`setStream` /
+`render`) for the golden page; the document path is `setBatches` /
+`renderBatches`.
 
 #### Preparation (CPU)
 
@@ -462,13 +476,145 @@ opts)` draws, `dispose()` frees. Measured on the pilot scene in headless
 Chromium (SwiftShader): 36 items, prepare 3.8 ms, upload ~10 ms, draw
 < 1 ms.
 
-#### Dev page
+#### Batching (`batch.ts`)
+
+One draw per pass does not scale: a real document has 2 000–113 000
+passes (table below). The stream is colour-major and every pass inside
+one colour is opaque and of that colour, so items of the same kind
+within a **colour run** can be merged without changing the picture.
+`buildBatches(prepared)` emits, per colour run and in the stream's kind
+order:
+
+| Batch | Merge | Notes |
+|---|---|---|
+| `fill` | all fills of the run → one position buffer + one `Uint32` index buffer | rings triangulated with **earcut** (holes as earcut hole indices). The stencil parity trick of the per-pass path cannot merge *overlapping* fills of one colour (they would XOR), so merged fills are triangulated. earcut's known failure modes (self-intersecting rings) are tolerated in the spike; the reference raster is the oracle |
+| `hatch` | none, one per pass | each has its own stencil area and stripe parameters |
+| `stroke` | all strokes of the run → one buffer | the half width moves from a uniform into a fifth vertex component (`x, y, ox, oy, hw`, program `strokeW`) so widths can mix |
+| `instanced` | per (fill mesh, stroke meshes) object identity → instance arrays concatenated | glyph instances and text glyphs; pattern-clipped items stay alone because they own the stencil |
+
+Draws per frame on the corpus: 14–75 (event maps) and 114–345 (club
+maps) for 451–113 000 passes — inside 04 §9's ≤ 300 for everything but
+Club-full envelope, which is the deliberately pessimistic upper bound.
+`renderer.setBatches` uploads once; `renderBatches(view)` returns
+`FrameStats { drawCalls, cpuMs, gpuMs? }`, the GPU time from
+`EXT_disjoint_timer_query_webgl2` where available (resolved a frame
+late).
+
+#### Loading an OCAD document (`ocad-objects.ts`, shared)
+
+To feed real maps in before the 02 document format exists,
+`render.ocadObjectsToRender(objects, symbols, { mode })` turns
+`ocad2geojson`'s object list into `RenderObject`s: OCAD 1/100 mm → µm,
+coordinate flags mapped to §2.1's (`bezierFirst/Second`, `corner`,
+`hole`, `noLeft/noRight`, `gap`, `dash`), symbol matched on
+`floor(sym / 1000)` with a kind check. Two modes:
+
+- `pilot` — objects whose symbol is not in the supplied set are
+  **dropped**. This is the pilot family's true coverage: 11–18 % of the
+  objects on every corpus map (501/520/521 roads, 103/109 contour
+  variants, 202/204 rock, 401/406/410 vegetation dominate the rest).
+- `envelope` — unmatched objects are drawn with a **proxy symbol per
+  kind** (`proxy:line` 140 µm, `proxy:area` plain fill, `proxy:point`
+  0.5 mm disc, `proxy:text` 3 mm Liberation Sans) so that *every*
+  object is in the stream. Geometry and pass counts are a realistic
+  upper bound for a full symbol library; the picture is not.
+
+#### Whole-document measurements (S1 step 4)
+
+Measured through `/dev/map-gl-doc` with
+`.local/research/oxygen-measurements/gl/measure-gl.mjs` (Playwright,
+headed Chromium on the dev laptop's Alder Lake-P iGPU, GPU timer
+available). Objects = matched + proxied. Load times are the browser's,
+cold per page load, with `ocad2geojson` doing the decode (`read`) —
+that stage is replaced by the 02 document reader and is shown
+separately. All numbers in ms.
+
+Desktop, 1280×800 @ 1×, 240-frame bench zooming 1→4→1 with pan:
+
+| Map | Mode | Objects | Passes | Batches | Draws | GPU MB | read | symbolise | prepare | batch+upload | **total** | GPU avg / p95 | CPU avg |
+|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| Sprint | pilot | 1 275 | 2 241 | 115 | 325 | 5.0 | 120 | 14 | 25 | 7 | **168** | 3.7 / 3.9 | 1.0 |
+| Sprint | envelope | 10 680 | 11 644 | 117 | 328 | 19.4 | 207 | 28 | 66 | 43 | **349** | 6.9 / 7.8 | 1.0 |
+| Crop-B | pilot | 342 | 451 | 9 | 14 | 6.0 | 73 | 8 | 28 | 4 | **113** | 1.6 / 2.0 | 0.4 |
+| Crop-B | envelope | 3 073 | 3 182 | 40 | 75 | 16.5 | 136 | 21 | 60 | 15 | **235** | 3.9 / 4.3 | 0.5 |
+| Crop-A | pilot | 639 | 844 | 11 | 22 | 8.3 | 86 | 13 | 33 | 7 | **140** | 2.0 / 2.4 | 0.4 |
+| Crop-A | envelope | 4 983 | 5 188 | 24 | 47 | 19.8 | 151 | 24 | 64 | 16 | **258** | 4.9 / 5.6 | 0.4 |
+| Club-2026 | pilot | 7 980 | 12 097 | 39 | 114 | 70 | 477 | 103 | 190 | 58 | **837** | 9.5 / 11.1 | 0.6 |
+| Club-2026 | envelope | 45 884 | 50 001 | 100 | 235 | 154 | 924 | 275 | 407 | 158 | **1 784** | 10.8 / 12.3 | 1.0 |
+| Club-full | pilot | 17 550 | 28 756 | 61 | 192 | 157 | 1 108 | 225 | 432 | 135 | **1 915** | 10.2 / 19.4 | 0.8 |
+| Club-full | envelope | 101 727 | 112 933 | 138 | 345 | 338 | 2 034 | 654 | 994 | 468 | **4 197** | 21.5 / 23.2 | 1.2 |
+
+Phone proxy — same machine, 412×915 @ 2.625× (Pixel-7 metrics, 2.6 M
+canvas pixels) with CDP `Emulation.setCPUThrottlingRate(4)`:
+
+| Map | Mode | read | symbolise | prepare | batch+upload | **total** | **total − read** | GPU avg / p95 |
+|---|---|---:|---:|---:|---:|---:|---:|---:|
+| Sprint | pilot | 368 | 35 | 118 | 24 | **555** | 187 | 4.0 / 4.2 |
+| Sprint | envelope | 683 | 101 | 266 | 164 | **1 235** | 552 | 7.1 / 8.5 |
+| Crop-B | pilot | 232 | 32 | 100 | 17 | **386** | 154 | 1.8 / 2.2 |
+| Crop-B | envelope | 484 | 64 | 233 | 58 | **847** | 363 | 4.4 / 5.1 |
+| Crop-A | pilot | 275 | 77 | 123 | 24 | **510** | 235 | 2.1 / 2.4 |
+| Crop-A | envelope | 524 | 88 | 251 | 62 | **936** | 412 | 5.1 / 5.6 |
+| Club-2026 | pilot | 1 554 | 550 | 743 | 204 | **3 079** | 1 525 | 6.7 / 9.8 |
+| Club-2026 | envelope | 3 084 | 881 | 1 493 | 585 | **6 111** | 3 027 | 12.0 / 13.1 |
+| Club-full | pilot | 3 484 | 1 105 | 1 797 | 433 | **6 876** | 3 393 | 10.0 / 11.0 |
+| Club-full | envelope | 6 886 | 2 236 | 3 600 | 1 373 | **14 265** | 7 380 | 20.9 / 21.5 |
+
+Every run held 60 fps (frame p95 ≈ 17 ms, vsync) on the laptop; render
+CPU per frame is 0.4–1.6 ms in every configuration.
+
+Against the budgets (04 §9, 09 §7):
+
+| Budget | Event maps | Club maps | Verdict |
+|---|---|---|---|
+| symbolise whole document ≤ 100 / 800 ms | 8–28 ms (35–101 throttled) | 225–654 ms (1 105–2 236 throttled) | event ✓; club ✓ unthrottled, pilot ✓ / envelope ✗ at 4× — the 04 worker hides it |
+| draw calls ≤ 300 | 14–328 | 114–345 | ✓ except Sprint (325 — 115 glyph meshes in one colour run; merging meshes into one atlas buffer fixes it) and Club-full envelope |
+| frame CPU ≤ 4 ms | 0.4–1.0 ms | 0.6–1.6 ms | ✓ with margin, even throttled |
+| frame GPU ≤ 8 ms on a mid-range phone | 1.6–3.9 pilot, 3.9–7.8 envelope on the iGPU | 10–23 on the iGPU | **not shown**: the whole-document draw is vertex-bound (time did not move between 1 M and 2.6 M canvas pixels) and a phone GPU is 2–4× slower than this iGPU, so the envelope would land at 8–30 ms. 04's visible set per bucket is what brings the vertex count down to the view; it is required, not optional |
+| first frame ≤ 500 ms (event) / ≤ 2.5 s (club) | pilot 113–168 desktop, 386–555 throttled; envelope 235–349 / 847–1 235 | 0.8–4.2 s desktop, 3.1–14.3 s throttled | event ✓ once `read` is subtracted (154–552 ms throttled); club ✗ for the whole document — as 04 expected, Club maps need zoom gating and the worker. `prepare` is the dominant remaining stage |
+| resident GPU ≤ 30 / 150 MB | 5–20 MB | 70–338 MB | event ✓; club ✗ for the whole document; see the stroke note below |
+
+Findings carried into the 04 implementation:
+
+1. **Stroke geometry is the memory.** 95 % of the bytes are extruded
+   strokes: a non-indexed triangle list at 16 B per vertex is 48 B per
+   triangle, and Club-full pilot has 2.7 M of them. An indexed strip (two
+   vertices per polyline point) cuts this by ~3×; zoom-gated flattening
+   tolerance (10 µm everywhere today) cuts it again. Both belong to the
+   arena.
+2. **The pilot family covers 11–18 % of the objects**, so pilot-mode
+   numbers understate the load by 3–7×; the envelope overstates it
+   slightly (proxy strokes are 140 µm solid, with no dashes). The truth
+   for a full library is between the two columns, nearer the envelope.
+3. **Batching works and is cheap** (3–280 ms CPU, once), and the per-frame
+   CPU side is a non-issue at 1–2 ms with ≤ 345 draws.
+4. **Not done in the spike**: the depth-buffer fill path (04 §6.8 point
+   3), cell size and large-object threshold tuning (04 §6.11) — both need the
+   bucket layer that does not exist yet, and the frame-GPU result above
+   says the bucket layer is the next thing to build. Not measured on a
+   physical phone; the 4× CPU throttle is Chromium's proxy and the GPU
+   column is the laptop's. To measure on a device: `pnpm --filter
+   @oxygen/web dev -- --host 0.0.0.0`, open
+   `http://<laptop>:5173/dev/map-gl-doc?mode=envelope` on the phone, pick
+   the `.ocd` with the file input, press *bench*.
+
+#### Dev pages
 
 `/dev/map-gl?fixture=<golden scene>` (`pages/dev/MapGlFixturePage.tsx`,
 routed only when `import.meta.env.DEV`) draws one golden scene into a
 canvas sized by `render.goldenFrame` (§6.2) with
 `preserveDrawingBuffer`, sets `data-ready` when done and shows the
 timings. Fonts are fetched from `packages/shared/fonts/` via Vite `?url`.
+
+`/dev/map-gl-doc?mode=pilot|envelope[&url=…][&bench=1]`
+(`pages/dev/MapGlDocPage.tsx`) runs the whole pipeline on an OCAD file
+chosen with the file input (or fetched from `url`, e.g. a Vite `/@fs/`
+path), shows the `LoadReport` (stage timings, pass kinds, batch
+statistics, GPU bytes, draws) and runs a 240-frame zoom/pan bench with
+CPU and GPU percentiles. Pan by drag, zoom by wheel or pinch. Both
+reports are published on `window.__mapGlDoc` for Playwright; the E2E
+spec `e2e/map-gl-doc.spec.ts` runs it on the synthetic `e2e/test.ocd` in
+both modes.
 
 ### 5.3 PDF (api)
 
@@ -617,10 +763,14 @@ library's own fixtures (04 §8 table, one per rule) are added in slice B.
 | `packages/api/src/render/reference-raster.ts` | resvg rasterisation, `sampleAt`, `diffImages` |
 | `packages/api/src/render/fonts.ts` | bundled-font loader for the server backends |
 | `packages/api/src/render/golden.ts`, `scripts/render-golden.ts` | golden PNG generation (`pnpm --filter @oxygen/api golden:render`) |
+| `packages/shared/src/render/ocad-objects.ts` | `ocad2geojson` objects → `RenderObject`s (pilot / envelope modes, proxy symbols) |
 | `packages/web/src/map-gl/prepare.ts` | WebGL2 backend, CPU stage (fans, extrusion, instancing) |
-| `packages/web/src/map-gl/renderer.ts` | WebGL2 backend, GPU stage (programs, stencil, supersampling) |
+| `packages/web/src/map-gl/batch.ts` | WebGL2 backend, batching per colour run (earcut fills, mixed-width strokes, merged instances) |
+| `packages/web/src/map-gl/renderer.ts` | WebGL2 backend, GPU stage (programs, stencil, supersampling, GPU timer) |
 | `packages/web/src/pages/dev/MapGlFixturePage.tsx` | dev-only golden page `/dev/map-gl` |
+| `packages/web/src/pages/dev/MapGlDocPage.tsx` | dev-only whole-document page `/dev/map-gl-doc` (load report, bench) |
 | `e2e/__golden__/map-gl/`, `e2e/map-gl-golden.spec.ts` | committed goldens and the browser comparison |
+| `e2e/map-gl-doc.spec.ts` | whole-document pipeline on `e2e/test.ocd` |
 
 The shared module is exported as a namespace: `import { render } from
 "@oxygen/shared"` → `render.PassStream`, `render.passStreamFromJson`, …

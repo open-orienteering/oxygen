@@ -38,6 +38,8 @@ export interface FanGeometry {
   fan: Float32Array;
   /** Two triangles covering the bounds. */
   cover: Float32Array;
+  /** The flattened rings the fan was built from (outer first, then holes); for triangulating batches. */
+  rings: number[][];
 }
 
 export interface StrokeGeometry {
@@ -101,6 +103,7 @@ export function prepareStream(stream: render.PassStream, opts: PrepareOptions = 
     if (f) fonts.set(ref.fontId, f);
   });
   const meshGeomCache = new Map<string, { fill?: FanGeometry; strokes: StrokeGeometry[] }>();
+  const textGeomCache = new Map<string, FanGeometry | StrokeGeometry>();
   const items: Prepared[] = [];
   const bounds = render.passStreamBounds(stream);
 
@@ -143,7 +146,7 @@ export function prepareStream(stream: render.PassStream, opts: PrepareOptions = 
         break;
       }
       case "text":
-        items.push(...textItems(pass, fonts.get(pass.fontId), tol));
+        items.push(...textItems(pass, fonts.get(pass.fontId), tol, textGeomCache));
         break;
     }
   }
@@ -173,7 +176,7 @@ export function fanFromRings(rings: number[][]): FanGeometry {
       if (y > maxY) maxY = y;
     }
   }
-  if (triCount === 0) return { fan: new Float32Array(0), cover: new Float32Array(0) };
+  if (triCount === 0) return { fan: new Float32Array(0), cover: new Float32Array(0), rings: [] };
   // Fan origin outside the geometry keeps every triangle well-formed and
   // makes the parity argument obvious: a point is inside iff an odd number
   // of (origin, vi, vi+1) triangles cover it.
@@ -191,7 +194,7 @@ export function fanFromRings(rings: number[][]): FanGeometry {
     }
   }
   const cover = Float32Array.from([minX, minY, maxX, minY, maxX, maxY, minX, minY, maxX, maxY, minX, maxY]);
-  return { fan, cover };
+  return { fan, cover, rings };
 }
 
 // ---- strokes -------------------------------------------------------------
@@ -351,7 +354,12 @@ function meshGeometry(mesh: GlyphMesh, tol: number): { fill?: FanGeometry; strok
  * in font units scaled by `sizeUm / unitsPerEm` through the instance
  * scale. A halo pass strokes the outlines instead of filling them.
  */
-function textItems(pass: render.TextPass, font: render.FontMetrics | undefined, tol: number): PreparedInstanced[] {
+function textItems(
+  pass: render.TextPass,
+  font: render.FontMetrics | undefined,
+  tol: number,
+  cache: Map<string, FanGeometry | StrokeGeometry>,
+): PreparedInstanced[] {
   if (!font || !font.outline) return [];
   const k = pass.sizeUm / font.unitsPerEm;
   const byGlyph = new Map<number, number[]>();
@@ -362,17 +370,33 @@ function textItems(pass: render.TextPass, font: render.FontMetrics | undefined, 
     byGlyph.set(g, arr);
   }
   const items: PreparedInstanced[] = [];
-  const ft = Math.max(1, tol / k / 2); // tolerance in font units
+  // Geometry is cached per (font, glyph, size class, halo) so the same
+  // letter in many passes shares one buffer and batches into one draw.
+  const ft = Math.max(1, Math.round(tol / k / 2)); // tolerance in font units
   for (const [g, inst] of byGlyph) {
-    const outline = font.outline(g);
-    if (!outline) continue;
-    const rings = render.flattenRings(outline, ft);
     if (pass.haloWidthUm) {
-      const out: number[] = [];
-      for (const r of rings) extrudePolyline(r, true, "round", "round", out);
-      items.push({ kind: "instanced", colour: pass.colour, instances: Float32Array.from(inst), strokes: [{ verts: Float32Array.from(out), halfWidth: pass.haloWidthUm / k }] });
+      const hw = pass.haloWidthUm / k;
+      const key = `${font.family}/${g}/${ft}/halo${hw.toFixed(2)}`;
+      let geom = cache.get(key) as StrokeGeometry | undefined;
+      if (!geom) {
+        const outline = font.outline(g);
+        if (!outline) continue;
+        const out: number[] = [];
+        for (const r of render.flattenRings(outline, ft)) extrudePolyline(r, true, "round", "round", out);
+        geom = { verts: Float32Array.from(out), halfWidth: hw };
+        cache.set(key, geom);
+      }
+      items.push({ kind: "instanced", colour: pass.colour, instances: Float32Array.from(inst), strokes: [geom] });
     } else {
-      items.push({ kind: "instanced", colour: pass.colour, instances: Float32Array.from(inst), fill: fanFromRings(rings), strokes: [] });
+      const key = `${font.family}/${g}/${ft}/fill`;
+      let geom = cache.get(key) as FanGeometry | undefined;
+      if (!geom) {
+        const outline = font.outline(g);
+        if (!outline) continue;
+        geom = fanFromRings(render.flattenRings(outline, ft));
+        cache.set(key, geom);
+      }
+      items.push({ kind: "instanced", colour: pass.colour, instances: Float32Array.from(inst), fill: geom, strokes: [] });
     }
   }
   return items;

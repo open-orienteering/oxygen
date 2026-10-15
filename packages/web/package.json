@@ -27,6 +27,7 @@
     "buffer": "^6.0.3",
     "dexie": "^4.4.4",
     "dexie-react-hooks": "^4.4.0",
+    "earcut": "^3.2.4",
     "i18next": "^26.3.6",
     "idb-keyval": "^6.3.0",
     "ocad2geojson": "github:open-orienteering/ocad2geojson#v2.2.2-oxygen.0",
