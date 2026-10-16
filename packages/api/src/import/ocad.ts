@@ -34,19 +34,26 @@ export function sha256Hex(data: Uint8Array): string {
   return createHash("sha256").update(data).digest("hex");
 }
 
+/** Import stages as reported to a job row (docs/map-import.md §1). */
+export type ImportStage = "parse" | "normalise" | "encode";
+
 export async function importOcadToDocument(
   file: Buffer,
   fileName: string,
-  opts: Pick<mapImport.OcadSourceOptions, "importer" | "renderFor"> = {},
+  opts: Pick<mapImport.OcadSourceOptions, "importer" | "renderFor"> & { onStage?: (stage: ImportStage) => void } = {},
 ): Promise<OcadImportResult> {
+  const { onStage, ...sourceOpts } = opts;
   const readOcad = await loadReader();
+  onStage?.("parse");
   let t = performance.now();
   const ocad = await readOcad(file, { quietWarnings: true });
   const read = performance.now() - t;
   const fileHash = sha256Hex(file);
+  onStage?.("normalise");
   t = performance.now();
-  const { input, counts, warnings } = mapImport.ocadToDocumentInput(ocad, { fileName, fileHash, fileBytes: file.byteLength, ...opts });
+  const { input, counts, warnings } = mapImport.ocadToDocumentInput(ocad, { fileName, fileHash, fileBytes: file.byteLength, ...sourceOpts });
   const normalise = performance.now() - t;
+  onStage?.("encode");
   t = performance.now();
   const bytes = mapDocument.encodeMapDocument(input);
   const encode = performance.now() - t;

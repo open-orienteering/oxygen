@@ -21,7 +21,7 @@ upload bytes ──sha256──▶ map_sources(file_hash)      the file as uploa
   same bytes uploaded twice, under any name, are one source row and one
   document row (06 §4.2).
 - Every reference to a blob is a foreign key with `ON DELETE RESTRICT`.
-  Only the garbage collector (pending, §6) deletes blobs, and only rows
+  Only the garbage collector (pending, §8) deletes blobs, and only rows
   nothing points at any more.
 - The upload name is **not** part of the document: it lives on
   `map_sources.file_name` and in the import report. The document header's
@@ -31,7 +31,8 @@ upload bytes ──sha256──▶ map_sources(file_hash)      the file as uploa
 
 ## 2. Tables
 
-Migration `20261016190000_map_documents_storage`. All in schema `oxygen`.
+Migrations `20261016190000_map_documents_storage` and
+`20261016210000_map_uploads_and_import_jobs`. All in schema `oxygen`.
 
 | Table | Key | Columns | Notes |
 |---|---|---|---|
@@ -41,13 +42,18 @@ Migration `20261016190000_map_documents_storage`. All in schema `oxygen`.
 | `club_maps` | `id UUID` | `name`, `colour_profile`, `colour_overrides JSONB`, `north_lines_below`, `rotation_correction`, `created_by`, timestamps | a club's map as a series (06 §8) |
 | `club_map_versions` | `id UUID` | `club_map_id → club_maps CASCADE`, `seq`, `label`, `source_hash RESTRICT`, `document_hash RESTRICT`, `uploaded_by`, `uploaded_at`; `UNIQUE(club_map_id, seq)` | one edition; `uploadedAt` ordering, `seq` for display |
 | `map_files` (+) | — | `source_hash RESTRICT`, `document_hash RESTRICT`, `club_map_version_id → club_map_versions SET NULL` | the event's pins; nullable so the raster path keeps working when the import fails |
+| `club_map_files` (+) | — | `club_map_id → club_maps SET NULL` | links the legacy library row to its series while both exist (§6.5) |
+| `map_uploads` | `id UUID` | `event_id → events CASCADE` (nullable), `file_name`, `kind`, `declared_bytes`, `chunk_bytes`, `uploaded_by SET NULL`, `created_at`, `finalised_hash → map_sources SET NULL` | one chunked upload in flight (§5); `kind` is set from the first chunk |
+| `map_upload_chunks` | `(upload_id, n)` | `bytes BYTEA` | `upload_id → map_uploads CASCADE`; `STORAGE EXTERNAL`; deleted at finalise |
+| `map_import_jobs` | `id UUID` | `event_id CASCADE` / `club_map_id CASCADE` (the target, either nullable), `source_hash → map_sources CASCADE`, `decisions JSONB`, `state`, `stage`, `progress REAL`, `claimed_by`, `heartbeat_at`, `document_hash → map_documents SET NULL`, `error`, timestamps | one import run (§6); indexed on `(state, heartbeat_at)` for the claim query and on each target |
 
 `STORAGE EXTERNAL` on the two blob columns keeps TOAST from compressing
 the bytes (compact binary that gains little) so `substring(bytes FROM … FOR …)`
 reads only the chunks a range request needs instead of inflating the row.
 
 Prisma models: `MapSource`, `MapDocument`, `MapPreview`, `ClubMap`,
-`ClubMapVersion`; `MapFile.sourceHash / documentHash / clubMapVersionId`.
+`ClubMapVersion`, `MapUpload`, `MapUploadChunk`, `MapImportJob`;
+`MapFile.sourceHash / documentHash / clubMapVersionId`; `ClubMapFile.clubMapId`.
 
 ## 3. Store stage (import stage 9)
 
@@ -77,19 +83,28 @@ storeImportedDocument(db, { source: { bytes, fileHash, kind, fileName, uploadedB
 - `touchDocument(db, hash)` bumps `last_referenced_at`; called whenever a
   reference is created. GC grace is measured from it.
 
-### 3.1 Producer today: the event map upload
+### 3.1 Producers
 
-`applyEventMap` (`packages/api/src/event-map.ts`, used by
-`course.uploadMap` and `course.useClubMap`) runs the store stage inline
-before the raster pipeline and writes `source_hash` / `document_hash` on
-the new `map_files` row. The import is best-effort at this stage: a
-failure is logged as `[map-store] event <id>: document import failed` and
-the raster path continues with `document_hash = NULL`. Re-uploads that
-change the pinned document log `[map-store] event <id>: document A → B`.
-`course.mapMetadata` returns `documentHash` (nullable).
+The store stage no longer runs inline. Every producer writes the
+`map_sources` row itself (`createMany … skipDuplicates`) and then
+`startImportJob` (§6) with the source hash and a target; the job runs the
+import in a worker thread and, when it finishes, stores the document and
+applies the pins:
 
-Moving the import into the 07 §9 job model (worker thread, heartbeat,
-resumable) is the next step; the schema does not change for it.
+| Producer | Source row written by | Target | Pin applied by the job |
+|---|---|---|---|
+| `course.uploadMap` (base64, ≤ 8 MiB) → `applyEventMap` | `applyEventMap` | `eventId` | `map_files.document_hash` on every row of the event with that `source_hash` |
+| chunked upload → `course.applyUploadedMap` → `applyEventMap` | finalise route (§5) | `eventId` | same |
+| `course.useClubMap` → `applyEventMap` | `applyEventMap` (bytes from the library row) | `eventId` | same; the router then pins `club_map_version_id` to the series version with that `source_hash` |
+| `clubMap.upload` (base64) / `clubMap.addFromSource` (chunked) | router / finalise route | `clubMapId` | a new `club_map_versions` row (§6.4) |
+
+`applyEventMap` creates the `map_files` row with `source_hash` set and
+`document_hash = NULL`, starts the job, runs the raster pipeline while the
+job works, then awaits the job up to the hold (§6.2) and returns
+`importJob {id, state, error}` plus `documentHash` when the job is done.
+A failed job is logged by the engine and leaves `document_hash = NULL`;
+the raster path is unaffected. `course.mapMetadata` returns
+`documentHash` (nullable); `mapImport.latestForEvent` returns the job.
 
 ## 4. Delivery: `GET /api/map-documents/:hash`
 
@@ -154,7 +169,7 @@ event is not enough: the member group has no `courses.view`.
 Positive decisions are cached in-process for 60 s per
 `(hash, user, kiosk key, event)`; negative ones are not. The cache is
 `resetDocumentAccessCache()` for tests. Pending: "own running import
-job" as a fourth clause (07 §4, with the job model).
+job" as a fourth clause (07 §4).
 
 ### 4.3 Blob access
 
@@ -170,7 +185,176 @@ deleteBlob(db, table, hash)                                    // raw DELETE; fa
 Everything above the seam talks in hashes and `Buffer`s; a future object
 store implements the same three calls.
 
-## 5. Client side
+## 5. Chunked upload: `/api/map-uploads`
+
+07 §7. Browsers upload map files in slices so a 100 MB OCAD file survives
+a flaky venue connection and never has to fit one request body or a
+base64 string. `packages/api/src/map-store/upload-routes.ts`; pure rules
+in `uploads.ts`.
+
+### 5.1 Contract
+
+```
+POST /api/map-uploads                      {fileName, bytes, chunkBytes?}      → 201 {uploadId, chunkCount, chunkBytes}
+PUT  /api/map-uploads/:id/chunks/:n        application/octet-stream body       → 204
+POST /api/map-uploads/:id/finalise                                             → 200 {fileHash, bytes, deduplicated}
+```
+
+Scope comes from the headers: with `x-event-id` (or `x-competition-id`)
+the upload belongs to that event; without, it is a club-library upload.
+Limits: `bytes ≤ 128 MiB`, `chunkBytes ≤ 8 MiB` (default 8 MiB), chunk
+bodies capped at `chunkBytes + 64 KiB` by Fastify's `bodyLimit`.
+
+| Condition | Route | Status |
+|---|---|---|
+| auth on, anonymous | all | 401 |
+| event scope without `courses.edit`; club scope without a user | all | 403 |
+| unknown event / upload id not a UUID or not found | init / chunk, finalise | 404 |
+| missing or non-positive `fileName`/`bytes`, `chunkBytes` > 8 MiB | init | 400 |
+| `bytes` > 128 MiB | init | 413 |
+| `n` out of range, body size ≠ expected size for `n` | chunk | 400 |
+| first chunk is neither OCAD nor OMAP | chunk 0 | 415 |
+| upload already finalised | chunk | 409 |
+| chunks missing | finalise | 409 `{missing: [n…]}` |
+| kind never sniffed (chunk 0 never arrived) | finalise | 415 |
+| assembled size ≠ declared | finalise | 400 |
+
+Chunks may arrive in any order and may be re-sent (upsert); the client
+retries per chunk. Kind is sniffed from chunk 0 (`AD 0C` OCAD magic;
+`<map` + `openorienteering` for OMAP) and stored on the upload row so a
+mistaken file is rejected before the rest is sent. Finalise concatenates
+the chunks in order, hashes them (SHA-256 → `fileHash`), writes the
+`map_sources` row with `createMany … skipDuplicates` (`deduplicated: true`
+when the bytes were already there), stores `finalised_hash` and deletes
+the chunk rows. Finalising twice returns the same 200. Uploads never
+finalised are deleted after 24 h by housekeeping (§6.6).
+
+The route only produces a source; importing it is the caller's next
+step — `course.applyUploadedMap {fileHash, fileName?}` for an event,
+`clubMap.addFromSource {fileHash, fileName?, name?}` for the library.
+Both reject a `fileHash` whose source kind is not `ocad` (the only
+importable kind today). `fileName` overrides the name recorded on the
+upload — the source row keeps whatever the first uploader called it, so
+the event's `map_files.file_name` and the version label come from the
+request, not the shared row.
+
+### 5.2 Client
+
+`packages/web/src/lib/map-upload.ts`. `shouldUseChunkedUpload(bytes)` is
+true above 8 MiB; below that `MapPanel` and the club-library settings page
+keep the base64 tRPC mutations (`course.uploadMap`, `clubMap.upload`), so
+small files — including every E2E fixture — take one request.
+`uploadMapFileChunked(file, {eventNameId?, onProgress?, signal?})` runs
+init → 4 chunks in flight (`File.slice()`, 3 retries each on network
+errors / 5xx / 408 / 429, none on other 4xx) → finalise and resolves with
+`{fileHash, bytes, deduplicated}`; the caller then applies the hash.
+
+## 6. Import jobs
+
+07 §8. An import is a `map_import_jobs` row, not an in-process object:
+anything that polls it can also finish it, so a restart or a second API
+instance loses nothing. `packages/api/src/map-store/jobs.ts`.
+
+### 6.1 Lifecycle
+
+```
+startImportJob(db, {sourceHash, eventId? | clubMapId?, holdMs?})
+  │
+  ├─ a map_documents row exists for (sourceHash, importer ocad-3, library none)
+  │     → insert state=done with that document_hash, applyJobResult, return   (06 §8 dedup, no worker)
+  │
+  └─ insert state=queued → kickImportJobs → hold ≤ holdMs for the result → return the row
+
+kickImportJobs: one loop per instance
+  claim (atomic updateMany: queued, or running with heartbeat older than 60 s)
+  → running, claimed_by = INSTANCE_ID, stage parse
+  → worker thread: parse → normalise → encode        (stage + progress written at each boundary,
+  → store: storeImportedDocument (§3)                 heartbeat every 10 s while it runs)
+  → applyJobResult: pins (§6.4)
+  → done | failed(error)
+```
+
+| `state` | meaning |
+|---|---|
+| `queued` | inserted, not yet claimed |
+| `running` | claimed by `claimed_by`; alive while `heartbeat_at` is < 60 s old |
+| `done` | `document_hash` set, pins applied |
+| `failed` | `error` set (≤ 2000 chars); `UNSUPPORTED_FORMAT: …` for a non-OCAD source, the importer's message otherwise |
+
+`stage` ∈ `parse 0.1 → normalise 0.4 → encode 0.7 → store 0.9 → done 1`;
+`progress` is that fixed ladder, not a byte count. Every progress and
+terminal write is guarded by `claimed_by = INSTANCE_ID`, so an instance
+whose job was re-claimed after a stall cannot overwrite the new owner's
+state. Re-runs are deterministic (`docs/map-import.md` §5): a re-claimed
+job produces the same document hash.
+
+### 6.2 Engine
+
+The poll is the engine. `mapImport.status` calls `kickImportJobs` whenever
+the job it reads is claimable, so a job orphaned by a crash resumes on the
+next status request from any client. For unattended instances
+`startImportJobEngine` (started in `index.ts`) ticks every 60 s: kick,
+then housekeeping (§6.6). One worker runs per instance at a time; jobs
+are taken oldest first.
+
+`startImportJob` holds the request open up to `holdMs`
+(default 30 s, `MAP_IMPORT_HOLD_MS`) waiting for the terminal row, so the
+common small-map case returns `state: "done"` in the upload response and
+the UI needs no polling. Larger maps return `running`; the client polls
+`mapImport.status`. A ten-minute worker timeout terminates a runaway
+import and fails the job.
+
+### 6.3 Worker
+
+`import-worker.ts` runs `importOcadToDocument` (with `onStage` posting
+`parse` / `normalise` / `encode`) and `buildImportReport`, and posts the
+document bytes, hashes and report back. It is launched with
+`new Worker(bootstrap, { eval: true })`: when the API runs from TypeScript
+(`tsx watch`, vitest, the E2E stack) the bootstrap registers
+`tsx/esm/api` inside the worker before importing the `.ts` body — tsx's
+loader does not reach `worker_threads` on Node 20 — and from `dist/` it
+imports the `.js` body directly. The worker is terminated as soon as it
+settles.
+
+### 6.4 Pins (`applyJobResult`)
+
+Idempotent; also run for dedup hits:
+
+- `eventId` set → `map_files.document_hash = hash` on every row of that
+  event with `source_hash = job.source_hash`.
+- `clubMapId` set and no `club_map_versions` row for `(clubMapId,
+  source_hash)` → insert one with `seq = max + 1`, label and uploader
+  copied from the source row. `clubMap.upload` / `addFromSource` then
+  overwrite label and uploader with the request's name and user when the
+  job finished within the hold, since the source row keeps the first
+  uploader's values.
+- `touchDocument(hash)`.
+
+### 6.5 Club library dual-write
+
+Until the library UI reads from the new tables, every `club_map_files`
+row created now also gets a `club_maps` series (`club_map_files.club_map_id`
+links them), the job writes version 1, and the legacy mutations mirror:
+`rename` → `club_maps.name`, `setColorStack` → `colour_overrides`,
+`setRotation` → `rotation_correction`, `remove` → deletes the series (its
+versions cascade; the document stays for GC). `course.useClubMap` pins
+`map_files.club_map_version_id` to the version matching the row's
+`file_hash` when one exists.
+
+### 6.6 Status API and housekeeping
+
+```
+mapImport.status {jobId}          authed; event jobs require courses.view on the event
+  → {id, state, stage, progress, sourceHash, documentHash, error, eventId, clubMapId, createdAt, updatedAt, report}
+mapImport.latestForEvent          coursesView; newest job for the current event or null
+```
+
+`report` is the stored document's import report (§3), present once the
+job is done. Housekeeping (`sweepImportHousekeeping`, 07 §4.4): uploads
+without `finalised_hash` older than 24 h, and `done` / `failed` job rows
+not updated for 7 days, are deleted on each engine tick.
+
+## 7. Client side
 
 The GL dev page loads a stored document straight from the route:
 `/dev/map-gl-doc?url=/api/map-documents/<hash>?event=<nameId>`. The
@@ -178,25 +362,29 @@ viewer (slice B) and the service-worker CacheFirst layer (07 §7,
 `storage.persist()`) are pending; both key on the hash and may rely on
 `immutable` and the `ETag`.
 
-## 6. Pending in this chapter
+## 8. Pending in this chapter
 
-Import job rows, heartbeat and resume (07 §9); chunked upload route
-(07 §8); `GET /api/map-sources/:hash` streamed; previews route and rows
-(review slice); club map CRUD on `club_maps` / `club_map_versions` and
-the `useClubMap` pin (`club_map_version_id` is written as `NULL` today);
-daily GC with a 30-day grace from `last_referenced_at` (07 §5); venue
-checkout snapshot; backups by hash. Each lands with its own section here
-and its own tests.
+`GET /api/map-sources/:hash` streamed; previews route and rows (review
+slice); club map CRUD that reads from `club_maps` / `club_map_versions`
+instead of mirroring into them, plus the backfill of existing
+`club_map_files` rows into series (today only rows created since this
+step have a `club_map_id`); "own running import job" as a fourth
+authorisation clause on the document route (§4.2); daily GC with a 30-day
+grace from `last_referenced_at` (07 §5); venue checkout snapshot; backups
+by hash. Each lands with its own section here and its own tests.
 
-## 7. Tests
+## 9. Tests
 
 | Level | File | Covers |
 |---|---|---|
 | Unit (api) | `packages/api/src/__tests__/map-document-route.test.ts` | `parseRangeHeader` (forms, clamping, suffix, multi → ignored, unsatisfiable), `negotiateEncoding` (q-values, wildcard, refusal), `authoriseDocumentAccess` matrix over stub queries, `documentHeaderSummary` |
 | Integration (api) | `packages/api/src/__tests__/integration/map-documents.test.ts` | store + dedup under another name, source/hash mismatch refused, `RESTRICT` on a pinned document, blob reads whole/range, `applyEventMap` pins + `mapMetadata`, route 400/401/403/404/200 with headers, `?event=` + kiosk key, brotli/gzip round trip, 304, 206/416/multi-range, club-version visibility, auth off |
-| E2E | `e2e/map-documents.spec.ts` | UI upload on `itest` → `documentHash` → route 200/304/206/403 → dev page `?url=` loads it natively |
+| Unit (api) | `packages/api/src/__tests__/map-import-jobs.test.ts` | `isClaimable` matrix, `stageProgress` monotonic, worker import produces the same hashes as the inline importer with stages `parse → normalise → encode`, worker rejects garbage, upload validators (`validateUploadInit`, `expectedChunkSize`, `sniffMapKind`, `missingChunks`, `assembleChunks`) |
+| Integration (api) | `packages/api/src/__tests__/integration/map-import-jobs.test.ts` | `applyEventMap` job done + pins + report, dedup under another name, garbage / OMAP failures, `holdMs: 0` queued then finished by the engine, stale reclaim vs live job, `mapImport.status` auth (stranger 403, course setter ok) + `latestForEvent`, housekeeping sweep, club upload → series + version 1, `useClubMap` pin, rename / colour-stack mirroring, `addFromSource`, `remove` deletes the series, upload routes 401/403/404/400/413/201, out-of-order and repeated chunks, 415, 409 missing, finalise dedup + idempotency, 409 after finalise, `applyUploadedMap` under the upload's name, `applyJobResult` idempotent |
+| Unit (web) | `packages/web/src/__tests__/map-upload.test.ts` | threshold, init → chunks → finalise call order and progress, per-chunk retry on 5xx, no retry on 4xx, `x-event-id` only for event uploads |
+| E2E | `e2e/map-documents.spec.ts` | UI upload on `itest` → `documentHash` → route 200/304/206/403 → dev page `?url=` loads it natively → `latestForEvent` done with report; chunked route (chunks out of order) → `applyUploadedMap` → `mapMetadata`; `clubMap.upload` → `mapImport.status` done |
 
-## 8. Where things live
+## 10. Where things live
 
 | Path | Contents |
 |---|---|
@@ -204,5 +392,12 @@ and its own tests.
 | `packages/api/src/map-store/blob-store.ts` | `BlobStore` seam |
 | `packages/api/src/map-store/documents.ts` | store stage, report builder, `touchDocument` |
 | `packages/api/src/map-store/routes.ts` | document route, range/encoding helpers, auth predicate |
-| `packages/api/src/event-map.ts` | `applyEventMap` pins documents on event uploads |
+| `packages/api/src/map-store/uploads.ts` | pure upload rules: limits, chunk sizes, kind sniffing, assembly |
+| `packages/api/src/map-store/upload-routes.ts` | `POST /api/map-uploads`, `PUT …/chunks/:n`, `POST …/finalise` |
+| `packages/api/src/map-store/jobs.ts` | job rows, claim / heartbeat / stale reclaim, worker launcher, `applyJobResult`, housekeeping, engine tick |
+| `packages/api/src/map-store/import-worker.ts` | worker-thread body: `importOcadToDocument` + report |
+| `packages/api/src/routers/mapImport.ts` | `mapImport.status`, `mapImport.latestForEvent` |
+| `packages/api/src/event-map.ts` | `applyEventMap` writes the source row and starts the event job |
+| `packages/api/src/routers/course.ts` / `clubMap.ts` | `applyUploadedMap`, `useClubMap` version pin; `createClubMap`, `addFromSource`, series mirroring |
+| `packages/web/src/lib/map-upload.ts` | client chunked uploader |
 | `packages/shared/src/import/report.ts` | `importReportSchema` |

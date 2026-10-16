@@ -3,6 +3,7 @@ import { useTranslation } from "react-i18next";
 import { useParams } from "react-router-dom";
 import { trpc } from "../lib/trpc";
 import { fileToBase64 } from "../lib/file-to-base64";
+import { shouldUseChunkedUpload, uploadMapFileChunked } from "../lib/map-upload";
 import { useCurrentUser } from "../context/CurrentUserContext";
 import { MapViewer, type ControlOverlay, type CourseOverlay, type MapViewerEditorProps } from "./MapViewer";
 import { useIsWideViewport } from "./map-pane-shared";
@@ -318,6 +319,19 @@ function MapPanelImpl({
       setUploadError(`Map upload failed: ${err.message}`);
     },
   });
+  // Second half of the chunked path (docs/map-storage.md §5): the bytes are
+  // already in map_sources; this makes them the event map.
+  const applyUploaded = trpc.course.applyUploadedMap.useMutation({
+    onSuccess: (result) => {
+      setUploadError(null);
+      setUploadNotice(noticeForStaleness(result.meridianStalenessDeg));
+      mapInfo.refetch();
+      mapMetadata.refetch();
+    },
+    onError: (err) => {
+      setUploadError(`Map upload failed: ${err.message}`);
+    },
+  });
   const useClubMap = trpc.course.useClubMap.useMutation({
     onSuccess: (result) => {
       setShowLibraryPicker(false);
@@ -352,6 +366,17 @@ function MapPanelImpl({
     }
     setUploadError(null);
     setUploadNotice(null);
+    if (shouldUseChunkedUpload(file.size)) {
+      // Large files go up in 8 MiB chunks (Cloud Run's request ceiling,
+      // resumable per chunk) and are applied by hash afterwards.
+      void uploadMapFileChunked(file, { eventNameId: nameId ?? null })
+        .then(({ fileHash }) => applyUploaded.mutate({ fileHash, fileName: file.name }))
+        .catch((err: unknown) => {
+          const message = err instanceof Error ? err.message : String(err);
+          setUploadError(`Map upload failed: ${message}`);
+        });
+      return;
+    }
     void fileToBase64(file)
       .then((fileDataBase64) => {
         uploadMutation.mutate({ fileName: file.name, fileDataBase64 });
@@ -360,7 +385,7 @@ function MapPanelImpl({
         const message = err instanceof Error ? err.message : String(err);
         setUploadError(`Map upload failed: could not read ${file.name} (${message})`);
       });
-  }, [uploadMutation]);
+  }, [uploadMutation, applyUploaded, nameId]);
 
   const handleDrop = useCallback((e: React.DragEvent) => {
     e.preventDefault();

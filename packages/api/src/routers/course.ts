@@ -1453,6 +1453,37 @@ export const courseRouter = router({
     }),
 
   /**
+   * Second half of the chunked upload (docs/map-storage.md §5): the file
+   * already sits in `map_sources` under `fileHash`; make it the event map.
+   */
+  applyUploadedMap: coursesEditProcedure
+    .input(z.object({
+      fileHash: z.string().regex(/^[0-9a-f]{64}$/),
+      /** The name the user uploaded under; the source row keeps the first-ever name for these bytes. */
+      fileName: z.string().min(1).max(512).optional(),
+    }))
+    .mutation(async ({ ctx, input }) => {
+      const source = await ctx.db.mapSource.findUnique({
+        where: { fileHash: input.fileHash },
+        select: { kind: true, fileName: true, bytes: true },
+      });
+      if (!source) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "Uploaded file not found; upload it again" });
+      }
+      if (source.kind !== "ocad") {
+        throw new TRPCError({ code: "BAD_REQUEST", message: `${source.kind} files cannot be used as an event map yet` });
+      }
+      const result = await applyEventMap(
+        ctx.db,
+        ctx.event.id,
+        input.fileName?.trim() || source.fileName,
+        Buffer.from(source.bytes),
+        { uploadedBy: ctx.user?.id ?? null, fileHash: input.fileHash },
+      );
+      return { success: true as const, ...result };
+    }),
+
+  /**
    * Ops-only escape hatch: override the event map's georeference by a
    * manual grivation correction (degrees, clockwise positive). Not
    * exposed in the UI — the OCAD file's ScalePar is authoritative and a
@@ -1500,6 +1531,7 @@ export const courseRouter = router({
           northLinesBelow: true,
           fileHash: true,
           uploadedBy: true,
+          clubMapId: true,
         },
       });
       if (!row) {
@@ -1531,6 +1563,20 @@ export const courseRouter = router({
           fileHash: row.fileHash ?? undefined,
         },
       );
+      // Pin the club version the copy came from when the series already
+      // has one for these bytes; otherwise the backfill links it later.
+      if (row.clubMapId && row.fileHash) {
+        const version = await ctx.db.clubMapVersion.findFirst({
+          where: { clubMapId: row.clubMapId, sourceHash: row.fileHash },
+          select: { id: true },
+        });
+        if (version) {
+          await ctx.db.mapFile.updateMany({
+            where: { eventId: ctx.event.id, sourceHash: row.fileHash },
+            data: { clubMapVersionId: version.id },
+          });
+        }
+      }
       return { success: true as const, ...result };
     }),
 

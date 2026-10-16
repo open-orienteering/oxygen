@@ -9,15 +9,15 @@ implemented and marks what is still pending.
 ## 1. Stages
 
 ```
- 1 receive      binary upload → Buffer; sha256 → fileHash                 api        pending (07 upload route)
- 2 detect       0x0CAD → OCAD; "<?xml" + Mapper namespace → OMAP          api        pending
+ 1 receive      binary upload → Buffer; sha256 → fileHash                 api        done: base64 ≤ 8 MiB, chunked route above (docs/map-storage.md §5)
+ 2 detect       0x0CAD → OCAD; "<?xml" + Mapper namespace → OMAP          api        done on the chunked route (first chunk sniff, 415 otherwise); base64 path assumes OCAD
  3 parse        reader → source model                                     api/shared done (OCAD, via ocad2geojson fork)
  4 normalise    source model → objects, symbols, colours, georef, warnings shared     done (OCAD, §3; symbol IR §3.3)
  5 analyse      bounds, north, fonts, feature usage                       shared     bounds only (encoder)
  6 match        03 §6.5 staged matcher → SymbolMatch[]                    shared     pending
  7 align        colour stack alignment (03 §6.3)                          shared     pending
  8 encode       02 codec → bytes; sha256 → documentHash                   shared     done
- 9 store        map_sources + map_documents rows, event pin, report      api        done inline in applyEventMap (docs/map-storage.md §3); job model pending
+ 9 store        map_sources + map_documents rows, event pin, report      api        done, as an import job in a worker thread (docs/map-storage.md §3, §6)
 10 derive       thumbnail, metadata columns                               api        pending
 ```
 
@@ -52,10 +52,16 @@ package does not depend on the reader.
 
 ```ts
 import { importOcadToDocument } from "./import/ocad.js";
-const r = await importOcadToDocument(buffer, "map.ocd", { renderFor });
+const r = await importOcadToDocument(buffer, "map.ocd", { renderFor, onStage });
 // r.bytes, r.documentHash, r.fileHash, r.counts, r.warnings,
 // r.timings { read, normalise, encode } (ms)
+// onStage?: (stage: "parse" | "normalise" | "encode") => void — called as each
+// stage begins; the import job (docs/map-storage.md §6) writes it to the row.
 ```
+
+In the API this runs inside a worker thread
+(`packages/api/src/map-store/import-worker.ts`) launched by the import
+job, never on the request thread.
 
 ### 2.3 CLI
 
@@ -254,7 +260,7 @@ index), floating-point sums (keep source integers), `Date`/random ids.
 | Unit (shared) | `packages/shared/src/map-document/__tests__/codec.test.ts`, `projection-bridge.test.ts` | encode/decode round trip, Hilbert order, validation errors, truncation, JSON projection, render bridge |
 | Unit (api) | `packages/api/src/__tests__/import-ocad.test.ts` | reader → document on `e2e/test.ocd`, determinism, bboxes, all fixture symbols converted, symbolise without proxies |
 | E2E | `e2e/map-gl-doc.spec.ts` | document path = reader path in the browser, native `.oxvm` round trip, `mode=source` draws the fixture from its own definitions with no proxies |
-| Unit + integration + E2E (api) | see `docs/map-storage.md` §7 | stage 9: store, dedup, pins, report row, delivery route |
+| Unit + integration + E2E (api, web) | see `docs/map-storage.md` §9 | stages 1 and 9: chunked upload route, import jobs, store, dedup, pins, report row, delivery route |
 
 The S0 corpus check (09 §7: whole corpus, every OMAP construct) is
 pending the OMAP reader; the OCAD half runs today via the measurement
@@ -264,8 +270,7 @@ script and is recorded in `docs/map-document-format.md` §9.
 
 Matcher and colour alignment (stages 6–7), S2 confirmation of the
 *provisional* §3.3 rows against OCAD output,
-OMAP reader and the shared `normalise()` fixtures (06 §3.3), import job
-model (worker thread, heartbeat, resume — the store stage runs inline in
-`applyEventMap` today), review API and previews (06 §5), chunked upload
-route (`docs/map-storage.md` §6, 07). Each lands with its own section
-here and its own tests.
+OMAP reader and the shared `normalise()` fixtures (06 §3.3), review API
+and previews (06 §5), the `decisions` input to a job (06 §5.3 — the column
+exists, nothing reads it yet). Each lands with its own section here and
+its own tests.

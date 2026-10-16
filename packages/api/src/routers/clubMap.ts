@@ -20,9 +20,118 @@ import {
 } from "../map-render-cache.js";
 import { colorProfileSchema, colorStackOverridesSchema } from "@oxygen/shared";
 import { invalidateRenderKey } from "../map-tiles.js";
+import { startImportJob, type ImportJobRow } from "../map-store/jobs.js";
 
 function toId(id: bigint): number {
   return Number(id);
+}
+
+const UPLOAD_SELECT = {
+  id: true,
+  name: true,
+  fileName: true,
+  sizeBytes: true,
+  rotationCorrection: true,
+  renderKey: true,
+} as const;
+
+/**
+ * Create a club-library map from bytes: the legacy `club_map_files` row
+ * the UI lists today, plus — dual-written for the document pipeline
+ * (docs/map-storage.md §3.2) — a `club_maps` series, the content-
+ * addressed source row, and an import job that adds the first
+ * `club_map_versions` entry when it finishes.
+ */
+async function createClubMap(
+  buffer: Buffer,
+  fileName: string,
+  name: string | undefined,
+  userId: string | null,
+  opts: { fileHash?: string } = {},
+) {
+  const resolved = await resolveMapNorth(buffer);
+  const previewPng = await renderOcadPreview(buffer);
+  const displayName = name?.trim() || fileName;
+  const fileHash = opts.fileHash ?? hashMapFileData(buffer);
+  const colorProfile = "auto" as const;
+  const northLinesBelow = true;
+  const renderKey = computeRenderKey({
+    fileHash,
+    rotationCorrection: resolved.rotationCorrection,
+    colorProfile,
+    northLinesBelow,
+  });
+  const series = await prisma().clubMap.create({
+    data: {
+      name: displayName,
+      colourProfile: colorProfile,
+      northLinesBelow,
+      rotationCorrection: resolved.rotationCorrection,
+      createdBy: userId,
+    },
+    select: { id: true },
+  });
+  const row = await prisma().clubMapFile.create({
+    data: {
+      name: displayName,
+      fileName,
+      fileData: Uint8Array.from(buffer),
+      previewPng: previewPng ? Uint8Array.from(previewPng) : undefined,
+      sizeBytes: buffer.length,
+      scale: resolved.metadata.scale,
+      bounds: (resolved.metadata.bounds ?? undefined) as
+        | Prisma.InputJsonValue
+        | undefined,
+      northOffset: resolved.metadata.northOffset,
+      rotationCorrection: resolved.rotationCorrection,
+      northDetection: resolved.northDetection
+        ? (resolved.northDetection as unknown as Prisma.InputJsonValue)
+        : undefined,
+      colorProfile,
+      northLinesBelow,
+      fileHash,
+      renderKey,
+      uploadedBy: userId,
+      clubMapId: series.id,
+    },
+    select: UPLOAD_SELECT,
+  });
+  await prisma().mapSource.createMany({
+    data: [{ fileHash, kind: "ocad", bytes: Uint8Array.from(buffer), sizeBytes: buffer.length, fileName, uploadedBy: userId }],
+    skipDuplicates: true,
+  });
+  const job: ImportJobRow | null = await startImportJob(prisma(), { sourceHash: fileHash, clubMapId: series.id })
+    .catch((err: unknown) => {
+      console.error(`[map-import] club map ${series.id}: could not start the import of ${fileName}:`, err);
+      return null;
+    });
+  // The job labels the version from the source row (whoever first uploaded
+  // these bytes); when it finished inside the hold, prefer this upload's
+  // name and uploader. A slow import keeps the source's — the backfill
+  // does not revisit labels.
+  if (job?.state === "done") {
+    await prisma().clubMapVersion.updateMany({
+      where: { clubMapId: series.id, sourceHash: fileHash },
+      data: { label: fileName, uploadedBy: userId },
+    });
+  }
+  return {
+    id: toId(row.id),
+    name: row.name,
+    fileName: row.fileName,
+    sizeBytes: row.sizeBytes,
+    rotationCorrection: row.rotationCorrection,
+    renderKey: row.renderKey,
+    meridianStalenessDeg: resolved.meridianStalenessDeg,
+    clubMapId: series.id,
+    importJob: job ? { id: job.id, state: job.state, error: job.error } : null,
+  };
+}
+
+/** Mirror a legacy-row settings change onto its series, when linked. */
+async function mirrorToSeries(legacyId: bigint, data: Prisma.ClubMapUpdateInput): Promise<void> {
+  const row = await prisma().clubMapFile.findUnique({ where: { id: legacyId }, select: { clubMapId: true } });
+  if (row?.clubMapId) await prisma().clubMap.update({ where: { id: row.clubMapId }, data });
 }
 
 export const clubMapRouter = router({
@@ -102,58 +211,35 @@ export const clubMapRouter = router({
     )
     .mutation(async ({ ctx, input }) => {
       const buffer = Buffer.from(input.fileDataBase64, "base64");
-      const resolved = await resolveMapNorth(buffer);
-      const previewPng = await renderOcadPreview(buffer);
-      const name = input.name?.trim() || input.fileName;
-      const fileHash = hashMapFileData(buffer);
-      const colorProfile = "auto" as const;
-      const northLinesBelow = true;
-      const renderKey = computeRenderKey({
-        fileHash,
-        rotationCorrection: resolved.rotationCorrection,
-        colorProfile,
-        northLinesBelow,
+      return createClubMap(buffer, input.fileName, input.name, ctx.user?.id ?? null);
+    }),
+
+  /**
+   * Second half of the chunked upload (docs/map-storage.md §5): the file
+   * already sits in `map_sources` under `fileHash`; create the library
+   * entry from it.
+   */
+  addFromSource: authedProcedure
+    .input(
+      z.object({
+        fileHash: z.string().regex(/^[0-9a-f]{64}$/),
+        /** The name the user uploaded under; the source row keeps the first-ever name for these bytes. */
+        fileName: z.string().min(1).max(512).optional(),
+        name: z.string().min(1).optional(),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      const source = await prisma().mapSource.findUnique({
+        where: { fileHash: input.fileHash },
+        select: { kind: true, fileName: true, bytes: true },
       });
-      const row = await prisma().clubMapFile.create({
-        data: {
-          name,
-          fileName: input.fileName,
-          fileData: Uint8Array.from(buffer),
-          previewPng: previewPng ? Uint8Array.from(previewPng) : undefined,
-          sizeBytes: buffer.length,
-          scale: resolved.metadata.scale,
-          bounds: (resolved.metadata.bounds ?? undefined) as
-            | Prisma.InputJsonValue
-            | undefined,
-          northOffset: resolved.metadata.northOffset,
-          rotationCorrection: resolved.rotationCorrection,
-          northDetection: resolved.northDetection
-            ? (resolved.northDetection as unknown as Prisma.InputJsonValue)
-            : undefined,
-          colorProfile,
-          northLinesBelow,
-          fileHash,
-          renderKey,
-          uploadedBy: ctx.user?.id ?? null,
-        },
-        select: {
-          id: true,
-          name: true,
-          fileName: true,
-          sizeBytes: true,
-          rotationCorrection: true,
-          renderKey: true,
-        },
-      });
-      return {
-        id: toId(row.id),
-        name: row.name,
-        fileName: row.fileName,
-        sizeBytes: row.sizeBytes,
-        rotationCorrection: row.rotationCorrection,
-        renderKey: row.renderKey,
-        meridianStalenessDeg: resolved.meridianStalenessDeg,
-      };
+      if (!source) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "Uploaded file not found; upload it again" });
+      }
+      if (source.kind !== "ocad") {
+        throw new TRPCError({ code: "BAD_REQUEST", message: `${source.kind} files cannot be used as a club map yet` });
+      }
+      return createClubMap(Buffer.from(source.bytes), input.fileName?.trim() || source.fileName, input.name, ctx.user?.id ?? null, { fileHash: input.fileHash });
     }),
 
   setColorStack: authedProcedure
@@ -187,6 +273,11 @@ export const clubMapRouter = router({
       }
       if (Object.keys(data).length > 0) {
         await prisma().clubMapFile.update({ where: { id }, data });
+        await mirrorToSeries(id, {
+          ...(input.profile !== undefined ? { colourProfile: input.profile } : {}),
+          ...(input.northLinesBelow !== undefined ? { northLinesBelow: input.northLinesBelow } : {}),
+          ...(input.overrides !== undefined ? { colourOverrides: input.overrides as Prisma.InputJsonValue } : {}),
+        });
       }
       const oldKey = existing.renderKey;
       const renderKey = await refreshClubMapRenderKey(prisma(), id);
@@ -217,6 +308,7 @@ export const clubMapRouter = router({
           BigInt(input.id),
           input.degrees,
         );
+        await mirrorToSeries(BigInt(input.id), { rotationCorrection: input.degrees });
         return { success: true as const, ...result };
       } catch (err) {
         throw new TRPCError({
@@ -235,6 +327,7 @@ export const clubMapRouter = router({
           where: { id: BigInt(input.id) },
           data: { name: input.name.trim() },
         });
+        await mirrorToSeries(BigInt(input.id), { name: input.name.trim() });
       } catch {
         throw new TRPCError({
           code: "NOT_FOUND",
@@ -249,7 +342,7 @@ export const clubMapRouter = router({
     .mutation(async ({ ctx, input }) => {
       const row = await prisma().clubMapFile.findUnique({
         where: { id: BigInt(input.id) },
-        select: { uploadedBy: true },
+        select: { uploadedBy: true, clubMapId: true },
       });
       if (!row) {
         throw new TRPCError({
@@ -269,6 +362,9 @@ export const clubMapRouter = router({
         }
       }
       await prisma().clubMapFile.delete({ where: { id: BigInt(input.id) } });
+      // The series goes with its legacy row while the two are dual-written;
+      // versions cascade, documents stay for the GC, event pins null out.
+      if (row.clubMapId) await prisma().clubMap.delete({ where: { id: row.clubMapId } });
       await gcOrphanTiles(prisma());
       return { success: true as const };
     }),

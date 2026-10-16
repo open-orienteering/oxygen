@@ -5,6 +5,7 @@ import { trpc } from "../lib/trpc";
 import { LanguageSelector } from "../components/LanguageSelector";
 import { UserChip } from "../components/UserChip";
 import { fileToBase64 } from "../lib/file-to-base64";
+import { shouldUseChunkedUpload, uploadMapFileChunked } from "../lib/map-upload";
 import { useCurrentUser } from "../context/CurrentUserContext";
 import { LibraryControlsTab } from "./LibraryControlsTab";
 import { LibraryGroupsTab } from "./LibraryGroupsTab";
@@ -56,6 +57,9 @@ export function SettingsPage() {
   const upload = trpc.clubMap.upload.useMutation({
     onSuccess: () => void utils.clubMap.list.invalidate(),
   });
+  const addFromSource = trpc.clubMap.addFromSource.useMutation({
+    onSuccess: () => void utils.clubMap.list.invalidate(),
+  });
   const rename = trpc.clubMap.rename.useMutation({
     onSuccess: () => void utils.clubMap.list.invalidate(),
   });
@@ -100,13 +104,18 @@ export function SettingsPage() {
       if (!file.name.toLowerCase().endsWith(".ocd")) return;
       setUploadError(null);
       try {
-        const fileDataBase64 = await fileToBase64(file);
-        await upload.mutateAsync({ fileName: file.name, fileDataBase64 });
+        if (shouldUseChunkedUpload(file.size)) {
+          const { fileHash } = await uploadMapFileChunked(file);
+          await addFromSource.mutateAsync({ fileHash, fileName: file.name });
+        } else {
+          const fileDataBase64 = await fileToBase64(file);
+          await upload.mutateAsync({ fileName: file.name, fileDataBase64 });
+        }
       } catch (err) {
         setUploadError(err instanceof Error ? err.message : String(err));
       }
     },
-    [upload],
+    [upload, addFromSource],
   );
 
   const canManageSource = (uploadedBy: string | null) => {

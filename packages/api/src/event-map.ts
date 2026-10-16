@@ -6,7 +6,7 @@
  */
 
 import type { PrismaClient, Prisma } from "./generated/prisma/client.js";
-import { fireMapUpload } from "./db.js";
+import { fireMapUpload, prisma } from "./db.js";
 import {
   OVERPRINT_CUTS_VERSION,
   rebuildCourseGeometry,
@@ -38,7 +38,7 @@ import {
 } from "./map-render-cache.js";
 import type { ColorProfile, ColorStackOverrides } from "@oxygen/shared";
 import { colorProfileSchema, colorStackOverridesSchema } from "@oxygen/shared";
-import { importAndStoreOcad, touchDocument } from "./map-store/documents.js";
+import { startImportJob, type ImportJobRow } from "./map-store/jobs.js";
 
 type Db = PrismaClient | Prisma.TransactionClient;
 
@@ -316,6 +316,8 @@ export async function applyEventMap(
     fileHash?: string;
     /** Recorded on the content-addressed source row (docs/map-storage.md). */
     uploadedBy?: string | null;
+    /** How long to wait for the import job before returning (default 30 s; 0 = don't wait). */
+    importHoldMs?: number;
   } = {},
 ): Promise<{
   fileName: string;
@@ -323,8 +325,10 @@ export async function applyEventMap(
   rotationCorrection: number;
   meridianStalenessDeg: number | null;
   renderKey: string;
-  /** Pinned map document, or null when the import failed (logged). */
+  /** Pinned map document; null while the import job is still running or if it failed. */
   documentHash: string | null;
+  /** The import job recording this upload (docs/map-storage.md §6); null only if it could not be created. */
+  importJob: { id: string; state: ImportJobRow["state"]; error: string | null } | null;
 }> {
   const resolved = await resolveMapNorth(buffer, {
     forcedCorrection: opts.rotationCorrection,
@@ -347,22 +351,16 @@ export async function applyEventMap(
     northLinesBelow,
   });
 
-  // Stage 3–9 of the document pipeline (docs/map-import.md): the upload
-  // additionally produces a content-addressed source + document the
-  // event pins. A failure here is logged and leaves the pins null — the
-  // tile path does not depend on it, and the backfill job retries.
-  const previous = await db.mapFile.findFirst({ where: { eventId }, select: { documentHash: true } });
-  let pins: { sourceHash: string; documentHash: string } | null = null;
-  try {
-    const stored = await importAndStoreOcad(db, buffer, fileName, { uploadedBy: opts.uploadedBy });
-    pins = { sourceHash: stored.sourceHash, documentHash: stored.documentHash };
-    await touchDocument(db, stored.documentHash);
-    if (previous?.documentHash && previous.documentHash !== stored.documentHash) {
-      console.info(`[map-store] event ${eventId}: document ${previous.documentHash} → ${stored.documentHash} (${fileName})`);
-    }
-  } catch (err) {
-    console.error(`[map-store] event ${eventId}: document import failed for ${fileName}:`, err);
-  }
+  // Stage 9 of the document pipeline (docs/map-storage.md §3): the upload
+  // is also a content-addressed source row the event pins; the import job
+  // started below produces the document and writes `document_hash` onto
+  // this map_files row when it finishes. The tile path does not depend on
+  // either, so a failed import leaves the pin null and is retried by the
+  // backfill.
+  await db.mapSource.createMany({
+    data: [{ fileHash, kind: "ocad", bytes: Uint8Array.from(buffer), sizeBytes: buffer.byteLength, fileName, uploadedBy: opts.uploadedBy ?? null }],
+    skipDuplicates: true,
+  });
 
   await db.mapFile.deleteMany({ where: { eventId } });
   await db.mapFile.create({
@@ -370,8 +368,7 @@ export async function applyEventMap(
       eventId,
       fileName,
       fileData: Uint8Array.from(buffer),
-      sourceHash: pins?.sourceHash ?? null,
-      documentHash: pins?.documentHash ?? null,
+      sourceHash: fileHash,
       scale: resolved.metadata.scale,
       bounds: resolved.metadata.bounds
         ? (resolved.metadata.bounds as unknown as Prisma.InputJsonValue)
@@ -390,6 +387,14 @@ export async function applyEventMap(
       renderKey,
     },
   });
+  // Runs on the instance's import worker while the raster work below
+  // proceeds; awaited (up to the hold) before returning.
+  const importJob = startImportJob(prisma(), { sourceHash: fileHash, eventId, holdMs: opts.importHoldMs })
+    .catch((err: unknown) => {
+      console.error(`[map-import] event ${eventId}: could not start the import of ${fileName}:`, err);
+      return null;
+    });
+
   await db.renderedMap.deleteMany({ where: { eventId } });
   await gcOrphanTiles(db);
   fireMapUpload(eventId);
@@ -411,13 +416,15 @@ export async function applyEventMap(
     data: { overprintCutsVersion: OVERPRINT_CUTS_VERSION },
   });
 
+  const job = await importJob;
   return {
     fileName,
     size: buffer.length,
     rotationCorrection: resolved.rotationCorrection,
     meridianStalenessDeg: resolved.meridianStalenessDeg,
     renderKey,
-    documentHash: pins?.documentHash ?? null,
+    documentHash: job?.state === "done" ? job.documentHash : null,
+    importJob: job ? { id: job.id, state: job.state, error: job.error } : null,
   };
 }
 

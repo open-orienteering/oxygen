@@ -181,6 +181,8 @@ model Event {
   journalSyncStates  JournalSyncState[]
   leases             EventLease[]
   mapFiles           MapFile[]
+  mapUploads         MapUpload[]
+  mapImportJobs      MapImportJob[]
   renderedMaps       RenderedMap[]
   mapTemplates       MapTemplate[]
   courseMaps         CourseMap[]
@@ -254,6 +256,7 @@ model User {
   clubMapTemplates     ClubMapTemplate[]
   clubGroupMemberships ClubUserGroupMember[]
   mapSources           MapSource[]
+  mapUploads           MapUpload[]
   clubMapsCreated      ClubMap[]
   clubMapVersions      ClubMapVersion[]
 
@@ -1026,10 +1029,14 @@ model ClubMapFile {
   uploadedBy         String?  @map("uploaded_by") @db.Uuid
   uploadedAt         DateTime @default(now()) @map("uploaded_at") @db.Timestamptz(6)
   updatedAt          DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+  /// The club_maps series this legacy row is dual-written to (docs/map-storage.md §3.2).
+  clubMapId          String?  @map("club_map_id") @db.Uuid
 
-  uploader User? @relation(fields: [uploadedBy], references: [id], onDelete: SetNull)
+  uploader User?    @relation(fields: [uploadedBy], references: [id], onDelete: SetNull)
+  clubMap  ClubMap? @relation(fields: [clubMapId], references: [id], onDelete: SetNull)
 
   @@index([renderKey])
+  @@index([clubMapId])
   @@map("club_map_files")
   @@schema("oxygen")
 }
@@ -1189,6 +1196,8 @@ model MapSource {
   documents MapDocument[]
   mapFiles  MapFile[]
   versions  ClubMapVersion[]
+  uploads   MapUpload[]
+  jobs      MapImportJob[]
 
   @@map("map_sources")
   @@schema("oxygen")
@@ -1217,6 +1226,7 @@ model MapDocument {
   previews MapPreview[]
   mapFiles MapFile[]
   versions ClubMapVersion[]
+  jobs     MapImportJob[]
 
   @@index([sourceHash])
   @@map("map_documents")
@@ -1253,8 +1263,10 @@ model ClubMap {
   createdAt          DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt          DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
 
-  creator  User?            @relation(fields: [createdBy], references: [id], onDelete: SetNull)
-  versions ClubMapVersion[]
+  creator    User?            @relation(fields: [createdBy], references: [id], onDelete: SetNull)
+  versions   ClubMapVersion[]
+  legacyRows ClubMapFile[]
+  importJobs MapImportJob[]
 
   @@map("club_maps")
   @@schema("oxygen")
@@ -1280,6 +1292,77 @@ model ClubMapVersion {
   @@unique([clubMapId, seq])
   @@index([documentHash])
   @@map("club_map_versions")
+  @@schema("oxygen")
+}
+
+/// Chunked upload staging (docs/map-storage.md §5). Deleted once finalised
+/// into map_sources, or by the GC after 24 h.
+model MapUpload {
+  id            String    @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  /// NULL for club-library uploads.
+  eventId       BigInt?   @map("event_id")
+  fileName      String    @map("file_name")
+  /// Sniffed from the first chunk: "ocad" | "omap".
+  kind          String?
+  declaredBytes Int       @map("declared_bytes")
+  chunkBytes    Int       @map("chunk_bytes")
+  uploadedBy    String?   @map("uploaded_by") @db.Uuid
+  createdAt     DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  finalisedHash String?   @map("finalised_hash")
+
+  event     Event?           @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  uploader  User?            @relation(fields: [uploadedBy], references: [id], onDelete: SetNull)
+  finalised MapSource?       @relation(fields: [finalisedHash], references: [fileHash], onDelete: SetNull)
+  chunks    MapUploadChunk[]
+
+  @@index([createdAt])
+  @@map("map_uploads")
+  @@schema("oxygen")
+}
+
+model MapUploadChunk {
+  uploadId String @map("upload_id") @db.Uuid
+  n        Int
+  bytes    Bytes
+
+  upload MapUpload @relation(fields: [uploadId], references: [id], onDelete: Cascade)
+
+  @@id([uploadId, n])
+  @@map("map_upload_chunks")
+  @@schema("oxygen")
+}
+
+/// One import of one source (docs/map-storage.md §6). State lives here so
+/// any instance can report it and a stale one can be re-claimed.
+model MapImportJob {
+  id           String    @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  eventId      BigInt?   @map("event_id")
+  clubMapId    String?   @map("club_map_id") @db.Uuid
+  sourceHash   String    @map("source_hash")
+  /// Review-round input (06 §5.1); empty until the review UI ships.
+  decisions    Json      @default("[]")
+  /// queued | running | done | failed (review: later).
+  state        String
+  /// Import stage name while running.
+  stage        String?
+  progress     Float     @default(0) @db.Real
+  claimedBy    String?   @map("claimed_by")
+  heartbeatAt  DateTime? @map("heartbeat_at") @db.Timestamptz(6)
+  documentHash String?   @map("document_hash")
+  error        String?
+  createdAt    DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt    DateTime  @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  event    Event?       @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  clubMap  ClubMap?     @relation(fields: [clubMapId], references: [id], onDelete: Cascade)
+  source   MapSource    @relation(fields: [sourceHash], references: [fileHash], onDelete: Cascade)
+  document MapDocument? @relation(fields: [documentHash], references: [hash], onDelete: SetNull)
+
+  @@index([state, heartbeatAt], map: "map_import_jobs_state_heartbeat_idx")
+  @@index([eventId, createdAt])
+  @@index([clubMapId, createdAt])
+  @@index([sourceHash])
+  @@map("map_import_jobs")
   @@schema("oxygen")
 }
 

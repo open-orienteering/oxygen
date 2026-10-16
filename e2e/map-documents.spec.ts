@@ -1,4 +1,6 @@
 import { test, expect, type Page } from "@playwright/test";
+import { readFileSync } from "node:fs";
+import { createHash } from "node:crypto";
 import { reseed } from "./helpers/reseed";
 import { uploadEventMap } from "./helpers/map-upload";
 import { API_BASE } from "./helpers/api-base";
@@ -8,7 +10,8 @@ import { API_BASE } from "./helpers/api-base";
  * event map additionally stores an immutable document the event pins,
  * `course.mapMetadata` exposes its hash, and `/api/map-documents/:hash`
  * serves it — gated by the event, cached as immutable, range-capable —
- * so the GL dev page can load it straight from the API.
+ * so the GL dev page can load it straight from the API. The second test
+ * drives the chunked upload route and the import job status end to end.
  */
 
 const EVENT = "itest";
@@ -73,5 +76,59 @@ test.describe("Map documents", () => {
     const load = await page.evaluate(() => (window as unknown as { __mapGlDoc?: { load?: { document?: { hash: string }; objects: { matched: number } } } }).__mapGlDoc?.load);
     expect(load?.document?.hash).toBe(hash);
     expect(load?.objects.matched).toBeGreaterThan(0);
+
+    // The upload ran as an import job; the latest one for the event is done
+    // and carries the report (docs/map-storage.md §6).
+    const latest = await request.get(`${API_BASE}/trpc/mapImport.latestForEvent`, { headers: HEADERS });
+    expect(latest.ok()).toBe(true);
+    const job = (await latest.json())?.result?.data as { state: string; documentHash: string; report: { source: { fileName: string } } };
+    expect(job).toMatchObject({ state: "done", documentHash: hash });
+    expect(job.report.source.fileName).toBe("test.ocd");
+  });
+
+  test("the chunked upload route feeds applyUploadedMap, and a club upload imports as a job", async ({ request }) => {
+    const file = readFileSync("e2e/test.ocd");
+    const chunkBytes = 8192;
+
+    // Init → chunks (last one first, chunk 1 twice) → finalise.
+    const init = await request.post(`${API_BASE}/api/map-uploads`, { headers: HEADERS, data: { fileName: "chunked.ocd", bytes: file.byteLength, chunkBytes } });
+    expect(init.status()).toBe(201);
+    const { uploadId, chunkCount } = (await init.json()) as { uploadId: string; chunkCount: number };
+    expect(chunkCount).toBe(Math.ceil(file.byteLength / chunkBytes));
+    const order = [chunkCount - 1, ...Array.from({ length: chunkCount - 1 }, (_, i) => i), 1];
+    for (const n of order) {
+      const put = await request.put(`${API_BASE}/api/map-uploads/${uploadId}/chunks/${n}`, {
+        headers: { ...HEADERS, "content-type": "application/octet-stream" },
+        data: file.subarray(n * chunkBytes, (n + 1) * chunkBytes),
+      });
+      expect(put.status(), `chunk ${n}`).toBe(204);
+    }
+    const fin = await request.post(`${API_BASE}/api/map-uploads/${uploadId}/finalise`, { headers: HEADERS });
+    expect(fin.status()).toBe(200);
+    const { fileHash, bytes } = (await fin.json()) as { fileHash: string; bytes: number };
+    expect(bytes).toBe(file.byteLength);
+    expect(fileHash).toBe(createHash("sha256").update(file).digest("hex"));
+
+    // Apply by hash: the event map is now the chunked upload, under its own name.
+    const applied = await request.post(`${API_BASE}/trpc/course.applyUploadedMap`, { headers: HEADERS, data: { fileHash, fileName: "chunked.ocd" } });
+    expect(applied.ok()).toBe(true);
+    const result = (await applied.json())?.result?.data as { fileName: string; documentHash: string | null; importJob: { id: string; state: string } };
+    expect(result.fileName).toBe("chunked.ocd");
+    expect(result.importJob.state).toBe("done");
+    expect(result.documentHash).toMatch(/^[0-9a-f]{64}$/);
+    const meta = await request.get(`${API_BASE}/trpc/course.mapMetadata`, { headers: HEADERS });
+    expect((await meta.json())?.result?.data?.documentHash).toBe(result.documentHash);
+
+    // Same bytes as a club-library map: its own series, imported by a job
+    // that dedups against the document already stored.
+    const club = await request.post(`${API_BASE}/trpc/clubMap.upload`, { data: { name: "E2E chunked club map", fileName: "club.ocd", fileDataBase64: file.toString("base64") } });
+    expect(club.ok()).toBe(true);
+    const created = (await club.json())?.result?.data as { id: number; clubMapId: string; importJob: { id: string; state: string } };
+    expect(created.importJob.state).toBe("done");
+    const status = await request.get(`${API_BASE}/trpc/mapImport.status?input=${encodeURIComponent(JSON.stringify({ jobId: created.importJob.id }))}`);
+    expect(status.ok()).toBe(true);
+    expect((await status.json())?.result?.data).toMatchObject({ state: "done", documentHash: result.documentHash, clubMapId: created.clubMapId });
+    const removed = await request.post(`${API_BASE}/trpc/clubMap.remove`, { data: { id: created.id } });
+    expect(removed.ok()).toBe(true);
   });
 });

@@ -152,7 +152,10 @@ export function resetDocumentAccessCache(): void {
   accessCache.clear();
 }
 
-async function identity(req: FastifyRequest): Promise<Omit<DocumentAccessInput, "hash">> {
+export type RequestIdentity = Omit<DocumentAccessInput, "hash">;
+
+/** Who is calling a REST map route: user per AUTH_MODE, kiosk key, event (header or `?event=`). */
+export async function identity(req: FastifyRequest): Promise<RequestIdentity> {
   const mode = authMode();
   const q = (req.query ?? {}) as Record<string, string | undefined>;
   const header = (name: string) => {

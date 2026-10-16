@@ -45,7 +45,8 @@ const get = (url: string, headers: Record<string, string> = {}) => server.inject
 
 beforeAll(async () => {
   ctx = await createTestEvent("map_documents");
-  fixture = readFileSync(FIXTURE);
+  // Per-run trailer: content-addressed rows are global, so the suite must not share bytes with other suites (see map-import-jobs.test.ts).
+  fixture = Buffer.concat([readFileSync(FIXTURE), Buffer.from(`map-docs-${suffix}`)]);
   const admin = await mkUser("admin", true);
   member = await mkUser("member");
   stranger = await mkUser("stranger");
