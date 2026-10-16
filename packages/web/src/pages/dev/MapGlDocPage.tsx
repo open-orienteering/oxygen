@@ -13,8 +13,11 @@
  * reports frame-time percentiles; `?bench=1` runs it after loading.
  * Results are also published as `window.__mapGlDoc` for Playwright.
  *
- * Query: `mode=pilot|envelope` (default pilot), `via=document|reader`,
- * `url=`, `bench=1`.
+ * Query: `mode=source|pilot|envelope` (default source), `via=document|reader`,
+ * `url=`, `bench=1`. `source` draws the document's own symbol definitions
+ * (the OCAD → IR conversion, docs/map-import.md §3.3) in the document's
+ * colours; `pilot` / `envelope` swap in the S1 pilot family by code.
+ * `source` always goes via the document.
  * Not routed in production builds.
  */
 
@@ -28,7 +31,7 @@ import { MapGlRenderer, hexToRgb, type FrameStats, type View } from "../../map-g
 import liberationSansUrl from "../../../../shared/fonts/LiberationSans-Regular.ttf?url";
 import liberationSansNarrowUrl from "../../../../shared/fonts/LiberationSansNarrow-Regular.ttf?url";
 
-type Mode = render.OcadConvertMode;
+type Mode = render.OcadConvertMode | "source";
 
 /** The 02 document path: what the codec did in the browser. */
 interface DocumentReport {
@@ -83,7 +86,23 @@ declare global {
   }
 }
 
-const PROXY_COLOURS = { line: 8, area: 3, point: 8, text: 8 };
+/** Proxy colours in the pilot stack. */
+const PILOT_PROXY_COLOURS = { line: 8, area: 3, point: 8, text: 8 };
+
+/** Proxy colours for a document's own stack: lines / points / text in its darkest colour, areas in its lightest non-white one. */
+function documentProxyColours(colours: render.ColourStack): { line: number; area: number; point: number; text: number } {
+  if (!colours.length) return { line: 0, area: 0, point: 0, text: 0 };
+  const lum = (i: number) => {
+    const [c, m, y, k] = colours[i].cmyk;
+    return (1 - Math.min(1, k)) * (3 - Math.min(1, c) - Math.min(1, m) - Math.min(1, y));
+  };
+  let dark = 0, light = 0;
+  for (let i = 1; i < colours.length; i++) {
+    if (lum(i) < lum(dark)) dark = i;
+    if (lum(i) > lum(light) && lum(i) < 2.9) light = i;
+  }
+  return { line: dark, area: light, point: dark, text: dark };
+}
 
 let fontsPromise: Promise<render.TrueTypeFont[]> | undefined;
 function loadFonts(): Promise<render.TrueTypeFont[]> {
@@ -111,9 +130,10 @@ const r = (x: number) => Math.round(x * 100) / 100;
 
 export function MapGlDocPage() {
   const [params] = useSearchParams();
-  const mode = (params.get("mode") === "envelope" ? "envelope" : "pilot") as Mode;
+  const modeParam = params.get("mode");
+  const mode: Mode = modeParam === "envelope" || modeParam === "pilot" ? modeParam : "source";
   const url = params.get("url");
-  const via: LoadReport["via"] = params.get("via") === "reader" ? "reader" : "document";
+  const via: LoadReport["via"] = params.get("via") === "reader" && mode !== "source" ? "reader" : "document";
   const autoBench = params.get("bench") === "1";
 
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -186,6 +206,7 @@ export function MapGlDocPage() {
         let documentReport: DocumentReport | undefined;
         let encodedDocument: Uint8Array | undefined;
         let t1: number;
+        let colourHex: (i: number) => string = (i) => render.pilotColours[i]?.hex ?? "#ff00ff";
         const isDocument = bytes.byteLength >= 4 && new TextDecoder().decode(new Uint8Array(bytes, 0, 4)) === mapDocument.MAP_DOCUMENT_MAGIC;
         if (via === "document" || isDocument) {
           const pilotByCode = new Map(render.pilotSymbols.map((sym) => [sym.code, sym]));
@@ -202,7 +223,7 @@ export function MapGlDocPage() {
             const tHash = performance.now();
             const { input } = mapImport.ocadToDocumentInput(ocad, {
               fileName: name, fileHash, fileBytes: bytes.byteLength,
-              renderFor: (sym) => pilotByCode.get(String(Math.floor(sym.symNum / 1000))) ?? null,
+              renderFor: mode === "source" ? undefined : (sym) => pilotByCode.get(String(Math.floor(sym.symNum / 1000))) ?? null,
             });
             const tNorm = performance.now();
             encoded = mapDocument.encodeMapDocument(input);
@@ -214,7 +235,14 @@ export function MapGlDocPage() {
           const tDec = performance.now();
           const doc = mapDocument.decodeMapDocument(encoded);
           const tDecEnd = performance.now();
-          const bridge = mapDocument.documentRenderInput(doc, { unmatched: mode === "pilot" ? "drop" : "proxy", proxyColours: PROXY_COLOURS });
+          const bridge = mapDocument.documentRenderInput(doc, {
+            unmatched: mode === "pilot" ? "drop" : "proxy",
+            proxyColours: mode === "source" ? documentProxyColours(doc.header.colours) : PILOT_PROXY_COLOURS,
+          });
+          if (mode === "source") {
+            const hex = doc.header.colours.map((c) => render.cmykToHex(c.cmyk));
+            colourHex = (i) => hex[i] ?? "#ff00ff";
+          }
           t1 = performance.now();
           conv = {
             objects: bridge.objects,
@@ -242,7 +270,7 @@ export function MapGlDocPage() {
           ) => Promise<{ objects: render.OcadObjectLike[] }>;
           const ocad = await readOcad(Buffer.from(bytes), { quietWarnings: true });
           t1 = performance.now();
-          conv = render.ocadObjectsToRender(ocad.objects, render.pilotSymbols, { mode, proxyColours: PROXY_COLOURS });
+          conv = render.ocadObjectsToRender(ocad.objects, render.pilotSymbols, { mode: mode === "source" ? "envelope" : mode, proxyColours: PILOT_PROXY_COLOURS });
         }
         const t2 = performance.now();
         const { stream, warnings } = render.symbolise({ objects: conv.objects, symbols: conv.symbols, fonts });
@@ -260,7 +288,7 @@ export function MapGlDocPage() {
         const fit: View = { centreX: (b.minX + b.maxX) / 2, centreY: (b.minY + b.maxY) / 2, pxPerUm, widthPx: w, heightPx: h };
         fitRef.current = { ...fit };
         viewRef.current = { ...fit };
-        colourRef.current = (i) => hexToRgb(render.pilotColours[i]?.hex ?? "#ff00ff");
+        colourRef.current = (i) => hexToRgb(colourHex(i));
         const first = draw()!;
         renderer.gl.finish();
         const t7 = performance.now();
@@ -463,9 +491,11 @@ export function MapGlDocPage() {
       <div className="p-2 flex flex-wrap items-center gap-3 border-b border-slate-300 bg-white">
         <input type="file" accept=".ocd,.oxvm" onChange={onFile} data-testid="map-gl-doc-file" />
         <span>mode: <b>{mode}</b></span>
-        <a className="underline" href={`/dev/map-gl-doc?mode=${mode === "pilot" ? "envelope" : "pilot"}${url ? `&url=${encodeURIComponent(url)}` : ""}`}>
-          switch to {mode === "pilot" ? "envelope" : "pilot"}
-        </a>
+        {(["source", "pilot", "envelope"] as Mode[]).filter((m) => m !== mode).map((m) => (
+          <a key={m} className="underline" href={`/dev/map-gl-doc?mode=${m}${url ? `&url=${encodeURIComponent(url)}` : ""}`}>
+            switch to {m}
+          </a>
+        ))}
         <button
           className="px-2 py-0.5 rounded border border-slate-400 bg-slate-50 disabled:opacity-50"
           onClick={() => void runBench()}

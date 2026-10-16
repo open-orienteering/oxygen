@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { PILOT, pilotSymbols } from "../__fixtures__/pilot-symbols.js";
 import { COORD_FLAG, type Pass, type PassStream, makePath } from "../pass-stream.js";
 import { type RenderObject, symbolise } from "../symbolise.js";
+import { parseRenderSymbol } from "../symbol.js";
 import { liberation } from "./fonts.js";
 
 const F = COORD_FLAG;
@@ -90,6 +91,34 @@ describe("symbolise — lines", () => {
       { seg0: 2, t0: 0, seg1: 2, t1: 1 },
     ]);
     expect(right.slices).toBeUndefined();
+  });
+
+  it("a continuous halo stays solid under a dashed main line (OCAD framing, 509 railway)", () => {
+    const base = { type: "line" as const, id: "t", code: "t", name: "t" };
+    const dash = { layout: "ocad" as const, dashUm: 1000, gapUm: 1500 };
+    const objects = [{ symbolIdx: 0, path: makePath([0, 0, 10000, 0]) }];
+    const dashed = symbolise({ objects, symbols: [parseRenderSymbol({ ...base, main: { colour: 8, widthUm: 250, dash, halo: { colour: 5, widthUm: 100 } } })], fonts: [] }).stream;
+    const [haloA, mainA] = only(dashed, "stroke");
+    expect(haloA.slices).toEqual(mainA.slices);
+    const framed = symbolise({ objects, symbols: [parseRenderSymbol({ ...base, main: { colour: 8, widthUm: 250, dash, halo: { colour: 5, widthUm: 100, continuous: true } } })], fonts: [] }).stream;
+    const [haloB, mainB] = only(framed, "stroke");
+    expect(haloB.slices).toBeUndefined();
+    expect(haloB.widthUm).toBe(450);
+    expect(mainB.slices!.length).toBeGreaterThan(1);
+  });
+
+  it("backgroundWidthUm sets the infill band width and allows a band without both edges", () => {
+    const sym = parseRenderSymbol({
+      type: "line", id: "t", code: "t", name: "t",
+      borders: { left: { colour: 8, widthUm: 140, shiftUm: 320 }, right: { colour: 8, widthUm: 140, shiftUm: 320 }, backgroundColour: 5, backgroundWidthUm: 500 },
+    });
+    const { stream } = symbolise({ objects: [{ symbolIdx: 0, path: makePath([0, 0, 10000, 0]) }], symbols: [sym], fonts: [] });
+    const strokes = only(stream, "stroke");
+    expect(strokes.map((s) => [s.colour, s.widthUm])).toEqual([[5, 500], [8, 140], [8, 140]]);
+    const bandOnly = parseRenderSymbol({ type: "line", id: "t", code: "t", name: "t", borders: { backgroundColour: 5, backgroundWidthUm: 500 } });
+    const alone = symbolise({ objects: [{ symbolIdx: 0, path: makePath([0, 0, 10000, 0]) }], symbols: [bandOnly], fonts: [] }).stream;
+    expect(only(alone, "stroke").map((s) => [s.colour, s.widthUm])).toEqual([[5, 500]]);
+    expect(Array.from(only(alone, "stroke")[0].path.coords)).toEqual([0, 0, 10000, 0]);
   });
 
   it("503 framed road: the halo is a separate, wider stroke pass in its own colour, sorted below", () => {

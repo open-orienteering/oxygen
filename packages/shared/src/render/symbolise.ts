@@ -157,11 +157,12 @@ class Stage {
       if (gaps.length) mainIntervals = subtractIntervals(mainIntervals ?? [[0, m.totalLength]], gaps);
       const slices = mainIntervals ? toSlices(m, mainIntervals) : undefined;
       if (sym.main.halo) {
+        const haloSlices = sym.main.halo.continuous ? (gaps.length ? toSlices(m, subtractIntervals([[0, m.totalLength]], gaps)) : undefined) : slices;
         this.push({
           kind: "stroke",
           colour: sym.main.halo.colour,
           path,
-          ...(slices ? { slices } : {}),
+          ...(haloSlices ? { slices: haloSlices } : {}),
           widthUm: sym.main.widthUm + 2 * sym.main.halo.widthUm,
           cap: mapCap(sym.main.cap),
           join: mapJoin(sym.main.join),
@@ -182,10 +183,10 @@ class Stage {
 
     if (sym.borders) {
       const flat = flattenRings(path, 5)[0] ?? [];
-      const { left, right, backgroundColour } = sym.borders;
-      if (backgroundColour !== undefined && left && right) {
-        const width = left.shiftUm + right.shiftUm;
-        const centre = (left.shiftUm - right.shiftUm) / 2;
+      const { left, right, backgroundColour, backgroundWidthUm } = sym.borders;
+      const width = backgroundWidthUm ?? (left && right ? left.shiftUm + right.shiftUm : undefined);
+      if (backgroundColour !== undefined && width !== undefined) {
+        const centre = left && right ? (left.shiftUm - right.shiftUm) / 2 : 0;
         const bgPath = centre === 0 ? path : polyPath(offsetPolyline(flat, centre, path.closed), path.closed);
         this.push({ kind: "stroke", colour: backgroundColour, path: bgPath, widthUm: width, cap: "butt", join: "miter" });
       }

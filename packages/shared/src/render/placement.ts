@@ -111,6 +111,28 @@ export function placeGlyphs(m: PathMeasure, placement: GlyphPlacement, opts: Pla
       }
       break;
     }
+    case "dashGroupCentres": {
+      // The dash grid before the secondary split; a glyph in every dash
+      // that the split cuts (OCAD puts the main symbol in the secondary
+      // gap), or in every dash when nothing is cut.
+      if (!opts.dash) break;
+      const whole: DashPattern = { ...opts.dash, secondaryGapUm: undefined, endGapUm: undefined };
+      const cutsInterior = (opts.dash.secondaryGapUm ?? 0) > 0;
+      const cutsEnds = (opts.dash.endGapUm ?? 0) > 0;
+      for (const sec of pathSections(m)) {
+        const dashes = layoutDashes(sec.endLen - sec.startLen, whole, { closedLoop: sec.closedLoop, virtual: true });
+        dashes.forEach(([a, b], i) => {
+          const isEnd = !sec.closedLoop && (i === 0 || i === dashes.length - 1);
+          const cut = isEnd ? cutsEnds : cutsInterior;
+          if (cut || (!cutsInterior && !cutsEnds)) at(sec.startLen + (a + b) / 2);
+        });
+      }
+      break;
+    }
+    case "sectionCentres": {
+      for (const sec of pathSections(m)) at((sec.startLen + sec.endLen) / 2);
+      break;
+    }
     case "spaced": {
       const per = placement.perSpot ?? 1;
       const spacing = placement.spotSpacingUm ?? 0;

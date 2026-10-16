@@ -42,13 +42,19 @@ describe("layoutDashesOcad — gaps fixed, dashes stretched", () => {
     expect(layoutDashesOcad(900, { ...p505, minGaps: 3 })).toEqual([[0, 200], [700, 900]]);
   });
 
-  it("splits each dash by the secondary gap, end dashes of a different length excepted", () => {
+  it("splits each interior dash by the secondary gap; end dashes only by the end gap", () => {
+    // 8 dashes: the 6 interior ones are cut in two, the end dashes stay whole (no end gap).
     const d = layoutDashesOcad(20000, { ...p505, secondaryGapUm: 200 });
-    expect(d).toHaveLength(16);
-    expect(d[1][0] - d[0][1]).toBeCloseTo(200);
+    expect(d).toHaveLength(1 + 6 * 2 + 1);
+    expect(d[0][1] - d[0][0]).toBeCloseTo(2000 * ((20000 - 7 * 500) / 16000));
+    expect(d[2][0] - d[1][1]).toBeCloseTo(200);
     const e = layoutDashesOcad(20000, { ...p505, endDashUm: 1000, secondaryGapUm: 200 });
     expect(e).toHaveLength(1 + 7 * 2 + 1);
     expect(e[0]).toEqual([0, 1000]);
+    // ISOM 507: endGap = secGap cuts the end dashes too.
+    const f = layoutDashesOcad(20000, { ...p505, secondaryGapUm: 200, endGapUm: 200 });
+    expect(f).toHaveLength(16);
+    expect(f[1][0] - f[0][1]).toBeCloseTo(200);
   });
 
   it("on a closed loop the two end dashes are halves that meet at the start point", () => {
@@ -59,10 +65,14 @@ describe("layoutDashesOcad — gaps fixed, dashes stretched", () => {
     expect(d[4]).toEqual([9000, 10000]);
   });
 
-  it("end gaps shorten the fitted range at both ends", () => {
-    const d = layoutDashesOcad(21000, { ...p505, endGapUm: 500 });
-    expect(d[0][0]).toBe(500);
-    expect(d[d.length - 1][1]).toBe(20500);
+  it("a secondary gap without a main gap lays out touching dashes and cuts them (517 ruined fence)", () => {
+    const d = layoutDashesOcad(8000, { layout: "ocad", dashUm: 2000, gapUm: 0, endDashUm: 1000, secondaryGapUm: 350 });
+    // 1000 + 3×2000 + 1000 = 8000 exactly: end dashes whole, three interior dashes cut at their centres.
+    expect(d).toHaveLength(1 + 3 * 2 + 1);
+    expect(d[0]).toEqual([0, 1000]);
+    expect(d[1]).toEqual([1000, 1825]);
+    expect(d[2]).toEqual([2175, 3000]);
+    expect(d[7]).toEqual([7000, 8000]);
   });
 
   it("a zero gap is a solid line", () => {

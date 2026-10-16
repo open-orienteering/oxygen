@@ -21,6 +21,7 @@ interface DocWindow {
   __mapGlDoc?: {
     documentBytes?: Uint8Array;
     load?: {
+      mode: "source" | "pilot" | "envelope";
       via: "document" | "reader";
       document?: {
         bytes: number;
@@ -144,6 +145,32 @@ test.describe("WebGL2 map backend — whole document", () => {
     expect(native.load.passes).toBe(viaDocument.load.passes);
     expect(native.load.objects.coordinates).toBe(viaDocument.load.objects.coordinates);
     await expect(page.getByTestId("map-gl-doc-document")).toContainText("native");
+  });
+
+  test("source mode draws the fixture with its own converted symbol definitions, no proxies", async ({ page }, testInfo) => {
+    // Default mode: the OCAD → IR conversion (docs/map-import.md §3.3) renders every fixture symbol natively.
+    await page.goto("/dev/map-gl-doc");
+    await page.getByTestId("map-gl-doc-file").setInputFiles("e2e/test.ocd");
+    await expect(page.getByTestId("map-gl-doc-canvas")).toHaveAttribute("data-ready", "true", { timeout: 30_000 });
+    await expect(page.getByTestId("map-gl-doc-error")).toHaveCount(0);
+    await expect(page.getByTestId("map-gl-doc-stats")).toContainText("proxied 0");
+    const load = await page.evaluate(() => (window as unknown as DocWindow).__mapGlDoc?.load);
+    expect(load).toBeDefined();
+    testInfo.annotations.push({ type: "map-gl-doc-source", description: JSON.stringify({ objects: load!.objects, warnings: load!.document?.warnings }) });
+    expect(load!.mode).toBe("source");
+    expect(load!.via).toBe("document");
+    expect(load!.objects.matched).toBeGreaterThan(0);
+    expect(load!.objects.proxied).toBe(0);
+    expect(load!.objects.dropped).toBe(0);
+    expect(load!.passes).toBeGreaterThan(0);
+    expect(load!.document?.warnings ?? {}).not.toHaveProperty("SYMBOL_COLOUR_UNKNOWN");
+    expect(load!.document?.warnings ?? {}).not.toHaveProperty("SYMBOL_EMPTY");
+    // Something was drawn: the canvas is not uniformly the paper colour.
+    const dataUrl = await page.getByTestId("map-gl-doc-canvas").evaluate((c) => (c as HTMLCanvasElement).toDataURL("image/png"));
+    const png = PNG.sync.read(Buffer.from(dataUrl.split(",")[1], "base64"));
+    const seen = new Set<number>();
+    for (let i = 0; i < png.data.length; i += 4 * 97) seen.add((png.data[i] << 16) | (png.data[i + 1] << 8) | png.data[i + 2]);
+    expect(seen.size).toBeGreaterThan(1);
   });
 
   test("reports a decode error for a file that is not OCAD", async ({ page }) => {

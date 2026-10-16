@@ -229,10 +229,15 @@ Per section, with dash `D`, gap `G`, end dash `E` (= `D` unless
    and ends with a full end dash. The last dash is snapped to the section
    end. If even the gaps do not fit (`L − n·G ≤ 0`), `n` is reduced until
    they do.
-4. `endGapUm` shortens the fitted range by that much at both ends.
-5. `secondaryGapUm` splits every dash into `dashesInGroup` (default 2)
-   equal parts separated by the secondary gap; end dashes with an
-   explicit, different end length stay whole.
+4. `secondaryGapUm` splits every **interior** dash into `dashesInGroup`
+   (default 2) equal parts separated by the secondary gap; `endGapUm` is
+   the secondary gap applied to the two **end** dashes (OCAD's "end gap"
+   — 507 footpath: `secGap 25, endGap 25`; 0 / absent leaves the end
+   dashes whole). On a closed loop every dash is interior.
+5. A secondary or end gap forces the virtual grid: a pattern with
+   `gapUm 0` and `secondaryGapUm > 0` (517 ruined fence) lays out
+   touching dashes and cuts each one, so the line reads as a solid line
+   with a short gap every `D`.
 
 What stretches is the provisional part: the implementation keeps gaps
 fixed (visibly uniform gaps, varying dashes, which is what OCAD maps
@@ -262,8 +267,11 @@ between them are **all scaled by one factor** `f = L / nominal`.
   shortened or gapped, otherwise no slices. `cap: flat` maps to `butt`.
 - A `main.halo` (OCAD line framing, the club sets' 502 band) is a
   **separate** stroke pass in the halo colour, width
-  `main.widthUm + 2·halo.widthUm`, same slices, same caps. It sorts to its
-  own colour's position (03 §6.9 item 9) — nothing fuses it with the main
+  `main.widthUm + 2·halo.widthUm`, same slices, same caps. With
+  `halo.continuous` the halo ignores the main line's dashes and
+  shortening (OCAD framing is one solid line under a dashed main line —
+  509 railway); gap points still interrupt it. It sorts to its own
+  colour's position (03 §6.9 item 9) — nothing fuses it with the main
   pass.
 - **Borders** (`borders.left` / `right`, 502/509-style double lines) are
   stroke passes on an **offset polyline**: the main path flattened at
@@ -277,8 +285,11 @@ between them are **all scaled by one factor** `f = L / nominal`.
   phase (item 6). `noLeft` (32) / `noRight` (64) points suppress the
   respective border from that point to the next point.
 - `borders.backgroundColour` becomes a stroke of width
-  `left.shiftUm + right.shiftUm` in that colour (on the main path when
-  the shifts are symmetric, else on the centre offset).
+  `backgroundWidthUm` — default `left.shiftUm + right.shiftUm` — in that
+  colour (on the main path when the shifts are symmetric or an edge is
+  missing, else on the centre offset). OCAD's double-line fill is
+  `dblWidth` wide, between the edges, so the importer sets
+  `backgroundWidthUm` explicitly; a band without edges is allowed.
 
 ### 4.5 Glyphs on lines
 
@@ -292,6 +303,8 @@ glyph; the instance transform is the point at that length with
 | `start` / `end` | the path's ends, tangent angle |
 | `corners` / `dashPoints` | every point with flag 4 / 8 strictly inside the path, at the **bisector** of the incoming and outgoing tangents; the ends of an open path too unless `ignoreEnds`; on a closed path the start point only when it carries the flag. `scaleAtCorners` scales by `1 / cos(turn/2)` (mitre length), clamped at 4× |
 | `dashCentres` / `gapCentres` | centres of the dashes / gaps of the main stroke's dash layout per section. The layout is run in *virtual* mode so a solid line (`gapUm 0`) with spaced symbols — OCAD's 516 power line — still gets positions: with zero gaps the dashes touch and the glyphs sit at the joints |
+| `dashGroupCentres` | centre of each dash **before** its secondary split, i.e. in the secondary gap (OCAD's main symbol on a line with `secGap` — 517 ruined fence); only dashes that are actually cut get a glyph (end dashes only with `endGapUm`); without any secondary gap it equals `dashCentres` |
+| `sectionCentres` | once per corner-delimited section, at its midpoint (OCAD's secondary symbol) |
 | `spaced` | Mapper semantics per **corner** section (dash points do not restart spacing): `first = firstUm ?? distance/2`, `last` likewise, `inner = L − first − last`; `n = round(inner / distance) + 1` (0 if `inner < 0`), `n = max(n, minCount)` (`minCountClosed` on closed paths); spots at `first + i·inner/(n − 1)`, a single spot centred. On a closed loop: `n = max(minCount, round(L / distance))` spots every `L/n` from the start point. `perSpot` glyphs are spread `spotSpacingUm` apart symmetrically around the spot |
 
 ### 4.6 Point symbols and the glyph table
@@ -607,7 +620,7 @@ canvas sized by `render.goldenFrame` (§6.2) with
 `preserveDrawingBuffer`, sets `data-ready` when done and shows the
 timings. Fonts are fetched from `packages/shared/fonts/` via Vite `?url`.
 
-`/dev/map-gl-doc?mode=pilot|envelope[&via=document|reader][&url=…][&bench=1]`
+`/dev/map-gl-doc?mode=source|pilot|envelope[&via=document|reader][&url=…][&bench=1]`
 (`pages/dev/MapGlDocPage.tsx`) runs the whole pipeline on an OCAD or
 `.oxvm` file chosen with the file input (or fetched from `url`, e.g. a
 Vite `/@fs/` path), shows the `LoadReport` (stage timings, pass kinds,
@@ -617,11 +630,15 @@ map document — read → normalise → encode → decode → render bridge
 (`docs/map-document-format.md`) and reports the document's size,
 sections, hash and codec timings; `via=reader` is the S1 path straight
 from the reader (`ocadObjectsToRender`). A `.oxvm` file is decoded
-natively without the OCAD reader. Pan by drag, zoom by wheel or pinch.
-Both reports and the encoded document bytes are published on
+natively without the OCAD reader. `mode=source` (default) draws the
+file's own symbol definitions as converted by the importer
+(`docs/map-import.md` §3.3) in the document's colour stack, proxies for
+whatever stayed `null`; `pilot` / `envelope` swap in the S1 pilot family
+by symbol code (`source` is document-only). Pan by drag, zoom by wheel
+or pinch. Both reports and the encoded document bytes are published on
 `window.__mapGlDoc` for Playwright; the E2E spec `e2e/map-gl-doc.spec.ts`
-runs it on the synthetic `e2e/test.ocd` in both modes and both paths and
-feeds the encoded document back in as a native file.
+runs it on the synthetic `e2e/test.ocd` in all three modes and both
+paths and feeds the encoded document back in as a native file.
 
 ### 5.3 PDF (api)
 

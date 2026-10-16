@@ -89,5 +89,25 @@ describe("placeGlyphs — dash engine placements", () => {
   });
   it("needs a dash pattern", () => {
     expect(placeGlyphs(line(20000), { at: "gapCentres" }, { rotatable: false })).toEqual([]);
+    expect(placeGlyphs(line(20000), { at: "dashGroupCentres" }, { rotatable: false })).toEqual([]);
+  });
+  it("dashGroupCentres sits in the secondary gap of each split dash (517 ruined fence)", () => {
+    // Touching 1000 µm dashes, cut by a 200 µm secondary gap; end dashes stay whole and get no glyph.
+    const split = { layout: "ocad" as const, dashUm: 1000, gapUm: 0, secondaryGapUm: 200 };
+    expect(lens(placeGlyphs(line(8000), { at: "dashGroupCentres" }, { rotatable: false, dash: split }))).toEqual([1500, 2500, 3500, 4500, 5500, 6500]);
+    // With an end gap (507 footpath) the end dashes are cut too.
+    expect(lens(placeGlyphs(line(8000), { at: "dashGroupCentres" }, { rotatable: false, dash: { ...split, endGapUm: 200 } }))).toEqual([
+      500, 1500, 2500, 3500, 4500, 5500, 6500, 7500,
+    ]);
+    // Without any split it degrades to dash centres.
+    const plain = { layout: "ocad" as const, dashUm: 1000, gapUm: 1000 };
+    expect(lens(placeGlyphs(line(8000), { at: "dashGroupCentres" }, { rotatable: false, dash: plain }))).toEqual(
+      lens(placeGlyphs(line(8000), { at: "dashCentres" }, { rotatable: false, dash: plain })),
+    );
+  });
+  it("sectionCentres puts one glyph in the middle of each corner-delimited section", () => {
+    expect(lens(placeGlyphs(line(20000), { at: "sectionCentres" }, { rotatable: false }))).toEqual([10000]);
+    const m = new PathMeasure(makePath([0, 0, 10000, 0, 20000, 0], [0, F.corner, 0]));
+    expect(lens(placeGlyphs(m, { at: "sectionCentres" }, { rotatable: false }))).toEqual([5000, 15000]);
   });
 });

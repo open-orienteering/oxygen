@@ -33,11 +33,23 @@ describe("importOcadToDocument", () => {
     }
   });
 
-  it("feeds the shared stage through the render bridge", async () => {
-    const { bytes } = await importOcadToDocument(fixture, "test.ocd");
+  it("converts every symbol definition of the fixture to the render IR and symbolises without proxies", async () => {
+    const { bytes, counts, warnings } = await importOcadToDocument(fixture, "test.ocd");
     const doc = mapDocument.decodeMapDocument(bytes);
-    const input = mapDocument.documentRenderInput(doc);
-    expect(input.objects.length).toBeGreaterThan(0);
+    const source = doc.header.symbols.filter((s) => s.origin === "source");
+    expect(source.length).toBeGreaterThanOrEqual(8);
+    expect(source.filter((s) => s.render === null).map((s) => s.code)).toEqual([]);
+    expect(counts.symbolsUnrendered).toBe(0);
+    expect(counts.symbolsRendered).toBe(source.length);
+    expect(warnings.map((w) => w.code)).not.toContain("SYMBOL_COLOUR_UNKNOWN");
+    const byCode = new Map(source.map((s) => [s.code, s.render!]));
+    expect(byCode.get("505.0")).toMatchObject({ type: "line", main: { widthUm: 250 } });
+    expect(byCode.get("702.0")).toMatchObject({ type: "point", glyph: { parts: [{ kind: "ring", diameterUm: 6000, widthUm: 350 }] } });
+    expect(byCode.get("403.0")).toMatchObject({ type: "area" });
+    const input = mapDocument.documentRenderInput(doc, { unmatched: "drop" });
+    expect(input.stats.rendered).toBeGreaterThan(0);
+    expect(input.stats.proxied).toBe(0);
+    expect(input.stats.dropped).toBe(0);
     const { stream } = render.symbolise({ objects: input.objects, symbols: input.symbols, fonts: [] });
     expect(stream.passes.length).toBeGreaterThan(0);
   });

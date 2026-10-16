@@ -9,20 +9,22 @@
  * draw order, the symbol table as metadata, georeferencing from ScalePar,
  * the print window, and stable warning codes for what was dropped.
  *
- * Not here yet: the source symbol definitions → render IR conversion
- * (03 Appendix C) — every symbol's `render` is `null` until that stage
- * lands, and the render bridge draws proxies — and the 03 matcher.
+ * Symbol definitions are converted to the render IR by `ocad-symbols.ts`
+ * (03 Appendix C); a symbol whose definition cannot be expressed keeps
+ * `render: null` and the render bridge draws a proxy. Not here yet: the
+ * 03 matcher and colour alignment.
  */
 
 import { ocadFlags } from "../render/ocad-objects.js";
 import { parseRenderSymbol, type RenderSymbol } from "../render/symbol.js";
+import { type OcadSymbolDefLike, ocadSymbolToRender } from "./ocad-symbols.js";
 import type { MapDocumentInput, MapObjectInput } from "../map-document/codec.js";
 import { OBJECT_TYPE } from "../map-document/header.js";
 import type { DocumentColour, DocumentSymbolInput, DocumentWarning, Georeferencing, MapDocumentHeaderInput } from "../map-document/header.js";
 
 /** OCAD coordinates are 1/100 mm. */
 export const OCAD_UNITS_PER_MM = 100;
-export const OCAD_IMPORTER_VERSION = "ocad-1";
+export const OCAD_IMPORTER_VERSION = "ocad-2";
 
 export interface OcadCoordinateLike {
   0: number;
@@ -76,7 +78,8 @@ export interface OcadFileLike {
   header: { version: number; subVersion?: number; subSubVersion?: number };
   /** Sparse: indexed by colour number. */
   colors: ArrayLike<OcadColourLike | undefined>;
-  symbols: ArrayLike<OcadSymbolLike>;
+  /** Full definitions (see `ocad-symbols.ts`); only the base fields are required. */
+  symbols: ArrayLike<OcadSymbolDefLike>;
   objects: ArrayLike<OcadObjectLike>;
   parameterStrings: Record<string, OcadParameterStringLike[] | undefined>;
   warnings?: ArrayLike<unknown>;
@@ -90,15 +93,19 @@ export interface OcadSourceOptions {
   fileBytes: number;
   importer?: string;
   /**
-   * Optional source-symbol → render IR hook (the 03 Appendix C conversion
-   * when it exists; the dev page uses it to plug in the pilot family).
+   * Replaces the built-in symbol conversion when given (the dev page
+   * plugs in the S1 pilot family this way). Return `null` for "no render".
    */
-  renderFor?: (symbol: OcadSymbolLike) => RenderSymbol | null;
+  renderFor?: (symbol: OcadSymbolDefLike) => RenderSymbol | null;
 }
 
 export interface OcadSourceResult {
   input: MapDocumentInput;
-  counts: { objects: number; coordinates: number; symbols: number; colours: number; texts: number; graphicObjects: number; missingSymbolObjects: number };
+  counts: {
+    objects: number; coordinates: number; symbols: number; colours: number; texts: number; graphicObjects: number; missingSymbolObjects: number;
+    /** Source symbols with a render definition / without one. */
+    symbolsRendered: number; symbolsUnrendered: number;
+  };
   warnings: DocumentWarning[];
 }
 
@@ -200,11 +207,28 @@ export function ocadToDocumentInput(ocad: OcadFileLike, opts: OcadSourceOptions)
   const stackIdxByNumber = new Map<number, number>();
   colours.forEach((c, i) => stackIdxByNumber.set(c.sourceNumber!, i));
 
-  // Symbol table in source order.
+  // Symbol table in source order; definitions converted to the render IR.
   const symbols: DocumentSymbolInput[] = [];
   const symbolIdxBySymNum = new Map<number, number>();
+  const defBySymNum = new Map<number, OcadSymbolDefLike>();
   for (let i = 0; i < ocad.symbols.length; i++) {
     const s = ocad.symbols[i];
+    if (!defBySymNum.has(s.symNum)) defBySymNum.set(s.symNum, s);
+  }
+  const conversionCtx = { colourIndex: (n: number) => stackIdxByNumber.get(n), symbolByNumber: (n: number) => defBySymNum.get(n) };
+  let symbolsRendered = 0, symbolsUnrendered = 0;
+  for (let i = 0; i < ocad.symbols.length; i++) {
+    const s = ocad.symbols[i];
+    let render: RenderSymbol | null;
+    if (opts.renderFor) {
+      render = opts.renderFor(s);
+    } else {
+      const conv = ocadSymbolToRender(s, conversionCtx);
+      render = conv.render;
+      for (const w of conv.warnings) warn(w.code, w.message);
+    }
+    if (render) symbolsRendered++;
+    else symbolsUnrendered++;
     const entry: DocumentSymbolInput = {
       code: s.number,
       name: s.description ?? "",
@@ -212,7 +236,7 @@ export function ocadToDocumentInput(ocad: OcadFileLike, opts: OcadSourceOptions)
       origin: "source",
       hidden: ((s.status ?? 0) & 0x02) === 0x02,
       sourceIndex: i,
-      render: opts.renderFor ? opts.renderFor(s) : null,
+      render,
     };
     if (s.fontName) entry.sourceFont = s.fontName;
     if (!symbolIdxBySymNum.has(s.symNum)) symbolIdxBySymNum.set(s.symNum, symbols.length);
@@ -223,7 +247,7 @@ export function ocadToDocumentInput(ocad: OcadFileLike, opts: OcadSourceOptions)
   const graphicIdx = new Map<string, number>();
   const missingIdx = new Map<number, number>();
   const objects: MapObjectInput[] = [];
-  const counts = { objects: 0, coordinates: 0, symbols: 0, colours: colours.length, texts: 0, graphicObjects: 0, missingSymbolObjects: 0 };
+  const counts = { objects: 0, coordinates: 0, symbols: 0, colours: colours.length, texts: 0, graphicObjects: 0, missingSymbolObjects: 0, symbolsRendered, symbolsUnrendered };
 
   for (let i = 0; i < ocad.objects.length; i++) {
     const o = ocad.objects[i];

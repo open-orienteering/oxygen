@@ -14,11 +14,12 @@ function source(): OcadFileLike {
     header: { version: 2018, subVersion: 8, subSubVersion: 3 },
     colors,
     symbols: [
-      { symNum: 101000, number: "101.0", type: 2, status: 0, description: "Höjdkurva" },
-      { symNum: 401000, number: "401.0", type: 3, status: 0, description: "Öppen mark" },
-      { symNum: 601000, number: "601.0", type: 2, status: 2, description: "Meridian" },
-      { symNum: 821000, number: "821.0", type: 4, status: 16, description: "Text", fontName: "Arial Narrow" },
-      { symNum: 101000, number: "101.0", type: 2, status: 0, description: "Duplicate" },
+      { symNum: 101000, number: "101.0", type: 2, status: 0, description: "Höjdkurva", lineColor: 3, lineWidth: 14, lineStyle: 1 },
+      { symNum: 401000, number: "401.0", type: 3, status: 0, description: "Öppen mark", fillOn: true, fillColor: 0 },
+      { symNum: 601000, number: "601.0", type: 2, status: 2, description: "Meridian", lineColor: 0, lineWidth: 10 },
+      { symNum: 821000, number: "821.0", type: 4, status: 16, description: "Text", fontName: "Arial Narrow", fontColor: 7, fontSize: 80 },
+      // Duplicate number, and one that converts to nothing (no colour known for 99).
+      { symNum: 101000, number: "101.0", type: 2, status: 0, description: "Duplicate", lineColor: 99, lineWidth: 14 },
     ],
     objects: [
       { sym: 101000, otp: 2, ang: 0, coordinates: [c(0, 0), c(100, 50, 1), c(200, 50, 2), c(300, 0, 0, 1)] },
@@ -85,7 +86,10 @@ describe("ocadToDocumentInput", () => {
   const { input } = result;
 
   it("keeps every object with verbatim coordinates and OCAD flag bits", () => {
-    expect(result.counts).toEqual({ objects: 9, coordinates: 4 + 7 + 2 + 5 + 2 + 2 + 3 + 4 + 4, symbols: 5 + 2 + 1, colours: 3, texts: 1, graphicObjects: 3, missingSymbolObjects: 2 });
+    expect(result.counts).toEqual({
+      objects: 9, coordinates: 4 + 7 + 2 + 5 + 2 + 2 + 3 + 4 + 4, symbols: 5 + 2 + 1, colours: 3, texts: 1, graphicObjects: 3, missingSymbolObjects: 2,
+      symbolsRendered: 4, symbolsUnrendered: 1,
+    });
     const contour = input.objects[0];
     expect(Array.from(contour.coords)).toEqual([0, 0, 100, 50, 200, 50, 300, 0]);
     expect(Array.from(contour.flags)).toEqual([0, COORD_FLAG.bezierFirst, COORD_FLAG.bezierSecond, COORD_FLAG.corner]);
@@ -109,7 +113,11 @@ describe("ocadToDocumentInput", () => {
     ]);
     expect(syms[3].sourceFont).toBe("Arial Narrow");
     expect(syms[3].sourceIndex).toBe(3);
-    expect(syms.every((s) => s.render === null || s.origin === "graphic")).toBe(true);
+    // Definitions converted to the IR against the document's colour stack (Brun 0, Svart 1, Violett 2).
+    expect(syms[0].render).toMatchObject({ type: "line", id: "src:101000", main: { colour: 0, widthUm: 140, cap: "round", join: "round" } });
+    expect(syms[1].render).toMatchObject({ type: "area", fill: 1 });
+    expect(syms[3].render).toMatchObject({ type: "text", fontFamily: "liberation-sans-narrow", fontSizeUm: 2822, colour: 2 });
+    expect(syms[4].render).toBeNull();
     // Objects of the duplicated number resolve to the first definition.
     expect(input.objects[0].symbolIdx).toBe(0);
   });
@@ -135,13 +143,15 @@ describe("ocadToDocumentInput", () => {
 
   it("records what was dropped as stable warning codes", () => {
     const codes = Object.fromEntries(result.warnings.map((w) => [w.code, w.count]));
-    expect(codes).toEqual({ DUPLICATE_SYMBOL_NUMBER: 1, EMPTY_GEOMETRY_DROPPED: 1, MISSING_SYMBOL: 1, TEMPLATES_DROPPED: 2, READER_WARNING: 1 });
+    expect(codes).toEqual({
+      SYMBOL_COLOUR_UNKNOWN: 1, SYMBOL_EMPTY: 1, DUPLICATE_SYMBOL_NUMBER: 1, EMPTY_GEOMETRY_DROPPED: 1, MISSING_SYMBOL: 1, TEMPLATES_DROPPED: 2, READER_WARNING: 1,
+    });
     expect(input.header.warnings).toEqual(result.warnings);
   });
 
   it("fills the header: provenance, units, scale, print window, export rectangles", () => {
     const h = input.header;
-    expect(h.format).toEqual({ version: 1, importer: "ocad-1" });
+    expect(h.format).toEqual({ version: 1, importer: "ocad-2" });
     expect(h.source).toEqual({ kind: "ocad", version: "2018.8.3", name: "test.ocd", hash: "ff".repeat(32), bytes: 4242 });
     expect(h.unitsPerMm).toBe(OCAD_UNITS_PER_MM);
     expect(h.mapScale).toBe(15000);
@@ -154,10 +164,11 @@ describe("ocadToDocumentInput", () => {
     expect(doc.header.objects.count).toBe(9);
     expect(doc.header.bounds).toEqual({ minX: 0, minY: 0, maxX: 1000, maxY: 5000 });
     const r = documentRenderInput(doc);
-    // 9 objects − 1 hidden (601) − 0 text without text = 8 drawn; graphic lines render natively, the rest via proxies.
+    // 9 objects − 1 hidden (601) = 8 drawn; contour, area, text and the two graphic lines render natively,
+    // the unknown-colour graphic area and the two missing-symbol rectangles via proxies.
     expect(r.stats.hidden).toBe(1);
-    expect(r.stats.rendered).toBe(2);
-    expect(r.stats.proxied).toBe(6);
+    expect(r.stats.rendered).toBe(5);
+    expect(r.stats.proxied).toBe(3);
   });
 
   it("honours a renderFor hook for source symbols", () => {

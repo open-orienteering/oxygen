@@ -41,27 +41,26 @@ export function layoutDashesOcad(length: number, p: DashPattern, opts: DashLayou
   if (length <= 0) return [];
   const D = p.dashUm;
   const G = p.gapUm;
-  const endGap = p.endGapUm ?? 0;
   // A closed loop has no ends: the two end dashes meet and form one
   // ordinary dash at the start point, so each "end dash" is half a dash.
   const E = opts.closedLoop ? D / 2 : (p.endDashUm ?? D);
-  // Usable length after optional end gaps.
-  const start = endGap;
-  const L = length - 2 * endGap;
-  if (L <= 0) return [];
-  if (G <= 0 && !opts.virtual) return [[start, start + L]];
+  const L = length;
+  // Secondary / end gaps need the dash grid even when the main gap is zero
+  // (OCAD 517 ruined fence: touching 2.0 mm dashes, each cut by 0.35).
+  const virtual = opts.virtual || (p.secondaryGapUm ?? 0) > 0 || (p.endGapUm ?? 0) > 0;
+  if (G <= 0 && !virtual) return [[0, L]];
 
   let n = Math.round((L - 2 * E + D) / (D + G));
   n = Math.max(n, p.minGaps ?? 0, 0);
   if (opts.closedLoop) n = Math.max(n, 1);
   // Not even the gaps fit: fall back to fewer gaps until the dashes have positive length.
   while (n > 0 && L - n * G <= 0) n--;
-  if (n === 0) return [[start, start + L]];
+  if (n === 0) return splitSecondary([[0, L]], p, [0]);
 
   // Gaps stay nominal; the dashes share what is left in proportion.
   const r = (L - n * G) / (ocadNominal(p, n, E) - n * G);
   const out: Interval[] = [];
-  let pos = start;
+  let pos = 0;
   for (let i = 0; i <= n; i++) {
     const nominal = i === 0 || i === n ? E : D;
     const d = nominal * r;
@@ -69,32 +68,32 @@ export function layoutDashesOcad(length: number, p: DashPattern, opts: DashLayou
     pos += d + G;
   }
   // Numerical closure: the last dash must end exactly at the section end.
-  out[out.length - 1][1] = start + L;
-  return splitSecondary(out, p, E !== D && !opts.closedLoop ? [0, out.length - 1] : []);
+  out[out.length - 1][1] = L;
+  return splitSecondary(out, p, opts.closedLoop ? [] : [0, out.length - 1]);
 }
 
 /**
- * Secondary gaps split each dash into `dashesInGroup` equal parts. End
- * dashes with an explicit, different end length are left whole (indices
- * in `skip`), since OCAD's end dash is a single short dash.
+ * Secondary gaps split each interior dash into `dashesInGroup` equal
+ * parts separated by `secondaryGapUm`; the end dashes (indices in `ends`)
+ * are split by `endGapUm` instead and stay whole when it is 0 — OCAD's
+ * "Sec. gap" / "End gap" pair (ISOM 507: 2.25 dashes each cut by 0.25,
+ * end dashes too because `endGap` = 0.25).
  */
-function splitSecondary(dashes: Interval[], p: DashPattern, skip: number[]): Interval[] {
+function splitSecondary(dashes: Interval[], p: DashPattern, ends: number[]): Interval[] {
   const sec = p.secondaryGapUm ?? 0;
-  const k = sec > 0 ? (p.dashesInGroup ?? 2) : (p.dashesInGroup ?? 1);
-  if (k <= 1 || sec <= 0) return dashes;
+  const endSec = p.endGapUm ?? 0;
+  const k = Math.max(1, p.dashesInGroup ?? 2);
+  if (k <= 1 || (sec <= 0 && endSec <= 0)) return dashes;
   const out: Interval[] = [];
   dashes.forEach(([a, b], idx) => {
-    if (skip.includes(idx)) {
-      out.push([a, b]);
-      return;
-    }
-    const part = (b - a - (k - 1) * sec) / k;
-    if (part <= 0) {
+    const gap = ends.includes(idx) ? endSec : sec;
+    const part = (b - a - (k - 1) * gap) / k;
+    if (gap <= 0 || part <= 0) {
       out.push([a, b]);
       return;
     }
     for (let j = 0; j < k; j++) {
-      const s = a + j * (part + sec);
+      const s = a + j * (part + gap);
       out.push([s, s + part]);
     }
   });

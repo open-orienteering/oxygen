@@ -48,7 +48,11 @@ export const glyphPlacementSchema = z.discriminatedUnion("at", [
   z.object({ at: z.literal("corners"), ignoreEnds: z.boolean().optional() }),
   z.object({ at: z.literal("dashPoints"), ignoreEnds: z.boolean().optional() }),
   z.object({ at: z.literal("dashCentres") }),
+  /** Centre of each dash *before* its secondary split (OCAD main symbol in the secondary gap). */
+  z.object({ at: z.literal("dashGroupCentres") }),
   z.object({ at: z.literal("gapCentres") }),
+  /** Once at the centre of each section between corner / dash points (OCAD secondary symbol). */
+  z.object({ at: z.literal("sectionCentres") }),
   z.object({
     at: z.literal("spaced"),
     distanceUm: um.positive(),
@@ -68,6 +72,7 @@ export const dashPatternSchema = z.object({
   endDashUm: um.optional(),
   secondaryGapUm: um.optional(),
   dashesInGroup: z.number().int().min(1).optional(),
+  /** OCAD `endGap`: the secondary gap applied to the *end* dashes (0 / absent = end dashes stay whole). */
   endGapUm: um.optional(),
   minGaps: z.number().int().min(0).optional(),
   /** OMAP `half_outer_dashes`. */
@@ -84,7 +89,12 @@ export const strokeSpecSchema = z.object({
   dash: dashPatternSchema.optional(),
   shortenStartUm: um.optional(),
   shortenEndUm: um.optional(),
-  halo: z.object({ colour: colourRef, widthUm: um.positive() }).optional(),
+  /**
+   * Stroke drawn under the main line, `widthUm` wider on each side. Follows
+   * the main line's dashes unless `continuous` (OCAD's framing line, which
+   * is solid under a dashed main line — 509 railway).
+   */
+  halo: z.object({ colour: colourRef, widthUm: um.positive(), continuous: z.boolean().optional() }).optional(),
 });
 
 export const borderSpecSchema = z.object({
@@ -101,7 +111,10 @@ export const lineSymbolBodySchema = z.object({
     .object({
       left: borderSpecSchema.optional(),
       right: borderSpecSchema.optional(),
+      /** Band drawn under the borders, centred on the main line. */
       backgroundColour: colourRef.optional(),
+      /** Width of that band; default `left.shiftUm + right.shiftUm` (edge to edge). OCAD's double-line fill is `dblWidth`. */
+      backgroundWidthUm: um.positive().optional(),
     })
     .optional(),
   glyphs: z
