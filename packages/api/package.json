@@ -25,7 +25,8 @@
     "db:migrate:dev": "prisma migrate dev",
     "migrate:mysql-to-pg": "tsx scripts/migrate-mysql-to-pg.ts",
     "golden:render": "tsx scripts/render-golden.ts",
-    "document:from-ocd": "tsx scripts/ocd-to-document.ts"
+    "document:from-ocd": "tsx scripts/ocd-to-document.ts",
+    "map:backfill": "tsx src/cli/map-backfill.ts"
   },
   "dependencies": {
     "@fastify/cors": "^11.3.0",

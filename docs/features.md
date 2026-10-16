@@ -355,7 +355,7 @@ The status-calculation rules that originated in MeOS are still honoured by Oxyge
 
 ### Settings
 
-Everything that is club-wide rather than event-wide lives on one **Settings** page (`/settings`), reached from the button under the event list. Its tabs are Maps, Controls, Classes, and Groups (the club library, open to any signed-in user) plus Users and Maintenance (instance admins only). Maintenance holds **Clean up deleted records**, which permanently purges events that were soft-deleted from the event list. The older `/library` and `/admin/users` URLs redirect here. See [club-library.md](club-library.md).
+Everything that is club-wide rather than event-wide lives on one **Settings** page (`/settings`), reached from the button under the event list. Its tabs are Maps, Controls, Classes, and Groups (the club library, open to any signed-in user) plus Users and Maintenance (instance admins only). Maintenance holds **Clean up deleted records**, which permanently purges events that were soft-deleted from the event list, and **Map documents**, which imports maps uploaded before the vector map pipeline into the content-addressed document store (also available as `pnpm map:backfill`; see [map-storage.md](map-storage.md) §6.7). The older `/library` and `/admin/users` URLs redirect here. See [club-library.md](club-library.md).
 
 Deleting an event from the start page is a soft delete: it disappears from the list, and the data survives until an admin purges it under Settings → Maintenance.
 

@@ -6,10 +6,11 @@
 
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
-import { router, authedProcedure, coursesViewProcedure } from "../trpc.js";
+import { router, authedProcedure, adminProcedure, coursesViewProcedure } from "../trpc.js";
 import { prisma } from "../db.js";
 import { resolveEventCapabilities } from "../permissions.js";
 import { getImportJob, isClaimable, kickImportJobs, latestImportJobForEvent, type ImportJobRow } from "../map-store/jobs.js";
+import { backfillStatus, planBackfill, startBackfill, type BackfillRun } from "../map-store/backfill.js";
 import type { PrismaClient } from "../generated/prisma/client.js";
 
 const jobIdSchema = z.string().uuid();
@@ -36,6 +37,27 @@ async function present(db: PrismaClient, row: ImportJobRow) {
 
 function kickIfClaimable(db: PrismaClient, row: ImportJobRow): void {
   if (isClaimable(row)) void kickImportJobs(db);
+}
+
+function presentRun(run: BackfillRun | null) {
+  if (!run) return null;
+  return {
+    state: run.state,
+    startedAt: run.startedAt.toISOString(),
+    finishedAt: run.finishedAt?.toISOString() ?? null,
+    total: run.total,
+    processed: run.processed,
+    done: run.done,
+    failed: run.failed,
+    current: run.current,
+    failures: run.failures.map((f) => ({ kind: f.kind, id: f.id, name: f.name, error: f.error })),
+    error: run.error,
+  };
+}
+
+async function presentBackfill() {
+  const db = prisma();
+  return { plan: await planBackfill(db), run: presentRun(backfillStatus()) };
 }
 
 export const mapImportRouter = router({
@@ -71,4 +93,20 @@ export const mapImportRouter = router({
     kickIfClaimable(ctx.db, row);
     return present(ctx.db, row);
   }),
+
+  /**
+   * Backfill of pre-pipeline rows (docs/map-storage.md §6.7). `plan` is
+   * what is still missing a document; `run` is this instance's current
+   * or last run, null if none since start.
+   */
+  backfillStatus: adminProcedure.query(() => presentBackfill()),
+
+  /** Start a backfill run in the background; one at a time per instance. */
+  backfillStart: adminProcedure
+    .input(z.object({ limit: z.number().int().positive().max(10_000).optional() }).optional())
+    .mutation(async ({ input }) => {
+      const started = startBackfill(prisma(), { limit: input?.limit });
+      if (!started) throw new TRPCError({ code: "CONFLICT", message: "A map backfill is already running" });
+      return presentBackfill();
+    }),
 });

@@ -1029,7 +1029,7 @@ model ClubMapFile {
   uploadedBy         String?  @map("uploaded_by") @db.Uuid
   uploadedAt         DateTime @default(now()) @map("uploaded_at") @db.Timestamptz(6)
   updatedAt          DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
-  /// The club_maps series this legacy row is dual-written to (docs/map-storage.md §3.2).
+  /// The club_maps series this legacy row is dual-written to (docs/map-storage.md §6.5).
   clubMapId          String?  @map("club_map_id") @db.Uuid
 
   uploader User?    @relation(fields: [uploadedBy], references: [id], onDelete: SetNull)

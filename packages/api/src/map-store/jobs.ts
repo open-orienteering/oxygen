@@ -326,6 +326,25 @@ export async function getImportJob(db: Db, id: string): Promise<ImportJobRow | n
   return row ? asRow(row) : null;
 }
 
+/**
+ * Wait for a job to reach a terminal state, however it gets there: the
+ * local waiter fires when this instance finishes it, and a DB poll
+ * covers a job executed by another instance (the CLI next to a running
+ * API) or one that went stale and needs re-claiming. Returns the last
+ * row seen when `timeoutMs` elapses first.
+ */
+export async function awaitImportJob(db: Db, id: string, opts: { timeoutMs?: number; pollMs?: number } = {}): Promise<ImportJobRow | null> {
+  const until = Date.now() + (opts.timeoutMs ?? JOB_TIMEOUT_MS + STALE_MS);
+  const pollMs = opts.pollMs ?? 1_000;
+  let row = await getImportJob(db, id);
+  while (row && !isTerminal(row.state) && Date.now() < until) {
+    if (isClaimable(row)) void kickImportJobs(db);
+    const local = await waitFor(id, pollMs);
+    row = local ?? (await getImportJob(db, id));
+  }
+  return row;
+}
+
 export async function latestImportJobForEvent(db: Db, eventId: bigint): Promise<ImportJobRow | null> {
   const row = await db.mapImportJob.findFirst({ where: { eventId }, orderBy: { createdAt: "desc" }, select: JOB_SELECT });
   return row ? asRow(row) : null;

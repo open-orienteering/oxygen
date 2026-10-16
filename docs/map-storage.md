@@ -354,6 +354,46 @@ job is done. Housekeeping (`sweepImportHousekeeping`, 07 §4.4): uploads
 without `finalised_hash` older than 24 h, and `done` / `failed` job rows
 not updated for 7 days, are deleted on each engine tick.
 
+### 6.7 Backfill of pre-pipeline rows
+
+09 slice A. Rows written before this chapter existed have bytes but no
+document: `club_map_files` without a `club_maps` series (or whose series
+has no version — a previous attempt failed), and `map_files` with
+`document_hash IS NULL` in events that are not soft-deleted.
+`packages/api/src/map-store/backfill.ts` walks them one map at a time,
+club rows first:
+
+```
+club row     file_hash ?? sha256(file_data) → map_sources (name, uploader, upload time from the row)
+             no series yet → club_maps copied from the row (name, colour profile / overrides,
+                             north lines, rotation, created_by / created_at), club_map_id set
+             startImportJob {clubMapId} → version 1 (label, uploader, uploaded_at from the row)
+
+event row    source_hash ?? file_hash ?? sha256(file_data) → map_sources; file_hash / source_hash set
+             startImportJob {eventId} → map_files.document_hash (§6.4)
+             a club_map_versions row has that source_hash → club_map_version_id (oldest edition)
+```
+
+Each map is an ordinary import job (§6.1), so dedup applies — an event
+copy of a club map, or the same map in two events, imports once — and a
+failure is a `failed` job plus an entry in the run's failure list, never
+an abort. Everything is keyed by content hash and guarded by "does it
+exist already", so a re-run only revisits rows still missing a document;
+the gate for the slice is a run with zero failures on the development
+and the club's production database.
+
+Two front ends, same `runBackfill`:
+
+| | |
+|---|---|
+| Settings → Maintenance → **Map documents** | `mapImport.backfillStatus` (admin): `plan {clubRows, eventRows}` still missing + this instance's current / last `run`; `mapImport.backfillStart {limit?}` (admin) starts one in the background, `CONFLICT` while one runs; the card polls every second until the run finishes and lists failed maps by name |
+| `pnpm map:backfill [--event <nameId>] [--limit n] [--dry-run]` | `src/cli/map-backfill.ts` (`docker exec <api> node packages/api/dist/cli/map-backfill.js` inside the image); one line per map, summary, exit 1 if any map failed. `--event` restricts the event rows (club rows are always processed); `--dry-run` lists what a run would touch. The restore procedure for a pre-vector dump ends with this command |
+
+The CLI is its own job instance: if an API next to it claims the jobs
+it inserts, `awaitImportJob` notices through the DB poll rather than the
+in-process waiter, so a run finishes either way.
+
+
 ## 7. Client side
 
 The GL dev page loads a stored document straight from the route:
@@ -366,9 +406,7 @@ viewer (slice B) and the service-worker CacheFirst layer (07 §7,
 
 `GET /api/map-sources/:hash` streamed; previews route and rows (review
 slice); club map CRUD that reads from `club_maps` / `club_map_versions`
-instead of mirroring into them, plus the backfill of existing
-`club_map_files` rows into series (today only rows created since this
-step have a `club_map_id`); "own running import job" as a fourth
+instead of mirroring into them; "own running import job" as a fourth
 authorisation clause on the document route (§4.2); daily GC with a 30-day
 grace from `last_referenced_at` (07 §5); venue checkout snapshot; backups
 by hash. Each lands with its own section here and its own tests.
@@ -381,7 +419,10 @@ by hash. Each lands with its own section here and its own tests.
 | Integration (api) | `packages/api/src/__tests__/integration/map-documents.test.ts` | store + dedup under another name, source/hash mismatch refused, `RESTRICT` on a pinned document, blob reads whole/range, `applyEventMap` pins + `mapMetadata`, route 400/401/403/404/200 with headers, `?event=` + kiosk key, brotli/gzip round trip, 304, 206/416/multi-range, club-version visibility, auth off |
 | Unit (api) | `packages/api/src/__tests__/map-import-jobs.test.ts` | `isClaimable` matrix, `stageProgress` monotonic, worker import produces the same hashes as the inline importer with stages `parse → normalise → encode`, worker rejects garbage, upload validators (`validateUploadInit`, `expectedChunkSize`, `sniffMapKind`, `missingChunks`, `assembleChunks`) |
 | Integration (api) | `packages/api/src/__tests__/integration/map-import-jobs.test.ts` | `applyEventMap` job done + pins + report, dedup under another name, garbage / OMAP failures, `holdMs: 0` queued then finished by the engine, stale reclaim vs live job, `mapImport.status` auth (stranger 403, course setter ok) + `latestForEvent`, housekeeping sweep, club upload → series + version 1, `useClubMap` pin, rename / colour-stack mirroring, `addFromSource`, `remove` deletes the series, upload routes 401/403/404/400/413/201, out-of-order and repeated chunks, 415, 409 missing, finalise dedup + idempotency, 409 after finalise, `applyUploadedMap` under the upload's name, `applyJobResult` idempotent |
+| Unit (api) | `packages/api/src/__tests__/map-backfill-cli.test.ts` | CLI argument parsing, per-map lines and summary |
+| Integration (api) | `packages/api/src/__tests__/integration/map-backfill.test.ts` | plan counts and ordering, dry run writes nothing, legacy club row → series (settings copied) + version 1 (label / uploader / time from the row), event rows → pins with dedup and club-version pin, unreadable rows reported and left unpinned, second run revisits only what is missing, `--event` scope and soft-deleted events skipped, `backfillStatus` / `backfillStart` admin-only, background run and `CONFLICT` |
 | Unit (web) | `packages/web/src/__tests__/map-upload.test.ts` | threshold, init → chunks → finalise call order and progress, per-chunk retry on 5xx, no retry on 4xx, `x-event-id` only for event uploads |
+| E2E | `e2e/map-backfill.spec.ts` | legacy club row inserted directly → Maintenance card shows it pending → Import now → "Imported n, failed 0" → series + version exist → no longer pending |
 | E2E | `e2e/map-documents.spec.ts` | UI upload on `itest` → `documentHash` → route 200/304/206/403 → dev page `?url=` loads it natively → `latestForEvent` done with report; chunked route (chunks out of order) → `applyUploadedMap` → `mapMetadata`; `clubMap.upload` → `mapImport.status` done |
 
 ## 10. Where things live
@@ -396,7 +437,10 @@ by hash. Each lands with its own section here and its own tests.
 | `packages/api/src/map-store/upload-routes.ts` | `POST /api/map-uploads`, `PUT …/chunks/:n`, `POST …/finalise` |
 | `packages/api/src/map-store/jobs.ts` | job rows, claim / heartbeat / stale reclaim, worker launcher, `applyJobResult`, housekeeping, engine tick |
 | `packages/api/src/map-store/import-worker.ts` | worker-thread body: `importOcadToDocument` + report |
-| `packages/api/src/routers/mapImport.ts` | `mapImport.status`, `mapImport.latestForEvent` |
+| `packages/api/src/map-store/backfill.ts` | plan, per-row backfill, run loop, in-process run for the Maintenance tab |
+| `packages/api/src/cli/map-backfill.ts` (+ `-args.ts`) | `pnpm map:backfill` |
+| `packages/api/src/routers/mapImport.ts` | `mapImport.status`, `latestForEvent`, `backfillStatus`, `backfillStart` |
+| `packages/web/src/components/MaintenancePanel.tsx` | Map documents card |
 | `packages/api/src/event-map.ts` | `applyEventMap` writes the source row and starts the event job |
 | `packages/api/src/routers/course.ts` / `clubMap.ts` | `applyUploadedMap`, `useClubMap` version pin; `createClubMap`, `addFromSource`, series mirroring |
 | `packages/web/src/lib/map-upload.ts` | client chunked uploader |

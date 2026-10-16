@@ -8,8 +8,11 @@ export default defineConfig({
     globalSetup: ["src/__tests__/helpers/global-setup.ts"],
     testTimeout: 30000,
     hookTimeout: 30000,
-    // Integration tests share module state (DB singleton) — run sequentially
+    // Integration tests share one database and module state (DB singleton,
+    // the import-job engine) — run files sequentially. `singleFork` was
+    // dropped in Vitest 4 and silently ignored; `fileParallelism` is the
+    // supported switch.
     pool: "forks",
-    singleFork: true,
+    fileParallelism: false,
   },
 });

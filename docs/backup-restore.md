@@ -75,6 +75,14 @@ psql "$DATABASE_URL" -c "\copy oxygen.<table> FROM '<section>.csv' WITH (FORMAT 
 
 After the import, refresh the Oxygen UI and the event reappears in the picker with all data intact.
 
+The dump carries `map_files.file_data` but not the content-addressed `map_sources` / `map_documents` rows the vector map pipeline reads (they are global, not event-scoped). After restoring a dump taken before the pipeline existed (`source_hash` / `document_hash` empty), run the backfill for that event so its map gets a document again:
+
+```bash
+pnpm map:backfill --event <name_id>      # or Settings → Maintenance → Map documents
+```
+
+See [map-storage.md](map-storage.md) §6.7. Dumps taken after the pipeline carry the hashes, and `\copy` into `map_files` needs the referenced `map_sources` / `map_documents` rows to exist first (the FKs are `RESTRICT`); including the blobs in the per-event dump is pending (research 07 §10).
+
 ### Why an id rewrite is needed
 
 `oxygen.events.id` is a `BIGSERIAL`. A fresh database hands out a new id when the header INSERT runs, but every dependent row in the dump (controls, courses, runners, …) references the original event id via foreign key. The restore script's job is to map old id → new id while replaying the CSV sections.

@@ -38,7 +38,7 @@ const UPLOAD_SELECT = {
 /**
  * Create a club-library map from bytes: the legacy `club_map_files` row
  * the UI lists today, plus — dual-written for the document pipeline
- * (docs/map-storage.md §3.2) — a `club_maps` series, the content-
+ * (docs/map-storage.md §6.5) — a `club_maps` series, the content-
  * addressed source row, and an import job that adds the first
  * `club_map_versions` entry when it finishes.
  */
@@ -107,8 +107,8 @@ async function createClubMap(
     });
   // The job labels the version from the source row (whoever first uploaded
   // these bytes); when it finished inside the hold, prefer this upload's
-  // name and uploader. A slow import keeps the source's — the backfill
-  // does not revisit labels.
+  // name and uploader. A slow import keeps the source's; the backfill
+  // (§6.7) only relabels versions it creates itself.
   if (job?.state === "done") {
     await prisma().clubMapVersion.updateMany({
       where: { clubMapId: series.id, sourceHash: fileHash },
