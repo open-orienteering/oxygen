@@ -13,3 +13,4 @@ export * from "./course-maps/index.js";
 export * as render from "./render/index.js";
 export * as mapDocument from "./map-document/index.js";
 export * as mapImport from "./import/index.js";
+export * as symbolLibrary from "./symbol-library/index.js";
