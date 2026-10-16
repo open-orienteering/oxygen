@@ -40,9 +40,8 @@ complete. Field order below is the schema's.
 |---|---|---|
 | `format.version` | `1` | Major format version (§6) |
 | `format.importer` | string | Importer version; bumped when the same file would encode differently (`docs/map-import.md`) |
-| `source.kind` | `"ocad" \| "omap"` | Reader that produced the document |
+| `source.kind` | `"ocad" \| "omap"` | Reader that produced the document. `source` deliberately omits the upload name so the hash depends on the bytes only (`docs/map-storage.md` §1) |
 | `source.version` | string | Source file version, e.g. `"2018.8.3"` |
-| `source.name` | string | File name as uploaded |
 | `source.hash` | hex | SHA-256 of the source file |
 | `source.bytes` | int | Source file size |
 | `unitsPerMm` | int | Native paper unit: **100** for OCAD (1/100 mm), **1000** for OMAP (1/1000 mm) |
@@ -305,3 +304,4 @@ typed arrays, warm.
 | `packages/api/scripts/ocd-to-document.ts` | `pnpm --filter @oxygen/api document:from-ocd <in.ocd> [out.oxvm] [--json]` |
 | `packages/web/src/pages/dev/MapGlDocPage.tsx` | `/dev/map-gl-doc?via=document` — browser-side encode/decode report; accepts `.oxvm` |
 | `e2e/map-gl-doc.spec.ts` | document path = reader path on `e2e/test.ocd`; native `.oxvm` round trip |
+| `packages/api/src/map-store/` | storage and delivery of encoded documents — `docs/map-storage.md` |

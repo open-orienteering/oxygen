@@ -17,7 +17,7 @@ describe("importOcadToDocument", () => {
     expect(a.counts.coordinates).toBeGreaterThan(a.counts.objects);
 
     const doc = mapDocument.decodeMapDocument(a.bytes);
-    expect(doc.header.source).toMatchObject({ kind: "ocad", name: "test.ocd", hash: a.fileHash, bytes: fixture.byteLength });
+    expect(doc.header.source).toMatchObject({ kind: "ocad", hash: a.fileHash, bytes: fixture.byteLength });
     expect(doc.header.unitsPerMm).toBe(100);
     expect(doc.header.objects.count).toBe(a.counts.objects);
     expect(doc.header.symbols.length).toBe(a.counts.symbols);

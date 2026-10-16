@@ -17,7 +17,7 @@ implemented and marks what is still pending.
  6 match        03 §6.5 staged matcher → SymbolMatch[]                    shared     pending
  7 align        colour stack alignment (03 §6.3)                          shared     pending
  8 encode       02 codec → bytes; sha256 → documentHash                   shared     done
- 9 store        map_documents(hash), links, report row                    api        pending (07)
+ 9 store        map_sources + map_documents rows, event pin, report      api        done inline in applyEventMap (docs/map-storage.md §3); job model pending
 10 derive       thumbnail, metadata columns                               api        pending
 ```
 
@@ -224,12 +224,16 @@ symbol icons, course-setting data) is dropped silently per 02 §1.
 
 ## 4. Header provenance
 
-`format.importer` is `"ocad-2"` today (`OCAD_IMPORTER_VERSION`; `ocad-1`
-had `render: null` for every source symbol). Bump it
+`format.importer` is `"ocad-3"` today (`OCAD_IMPORTER_VERSION`; `ocad-1`
+had `render: null` for every source symbol, `ocad-2` carried the upload
+name in the header). Bump it
 whenever stages 3–8 would produce different bytes for the same file —
 reader fix, normaliser rule, codec change, matcher thresholds, library
-edition. `source` carries the reader's file version, the upload name,
-`fileHash` and size.
+edition. `source` carries the reader's file version, `fileHash` and size
+— not the upload name, so the same bytes give the same document whatever
+the file was called (06 §4.2). The name is kept on `map_sources.file_name`
+and in the import report (`mapImport.importReportSchema`,
+`packages/shared/src/import/report.ts`; shape in `docs/map-storage.md` §3).
 
 ## 5. Determinism
 
@@ -250,6 +254,7 @@ index), floating-point sums (keep source integers), `Date`/random ids.
 | Unit (shared) | `packages/shared/src/map-document/__tests__/codec.test.ts`, `projection-bridge.test.ts` | encode/decode round trip, Hilbert order, validation errors, truncation, JSON projection, render bridge |
 | Unit (api) | `packages/api/src/__tests__/import-ocad.test.ts` | reader → document on `e2e/test.ocd`, determinism, bboxes, all fixture symbols converted, symbolise without proxies |
 | E2E | `e2e/map-gl-doc.spec.ts` | document path = reader path in the browser, native `.oxvm` round trip, `mode=source` draws the fixture from its own definitions with no proxies |
+| Unit + integration + E2E (api) | see `docs/map-storage.md` §7 | stage 9: store, dedup, pins, report row, delivery route |
 
 The S0 corpus check (09 §7: whole corpus, every OMAP construct) is
 pending the OMAP reader; the OCAD half runs today via the measurement
@@ -260,6 +265,7 @@ script and is recorded in `docs/map-document-format.md` §9.
 Matcher and colour alignment (stages 6–7), S2 confirmation of the
 *provisional* §3.3 rows against OCAD output,
 OMAP reader and the shared `normalise()` fixtures (06 §3.3), import job
-and report persistence, review API and previews (06 §5), upload route
-and storage (`docs/map-storage.md`, 07). Each lands with its own section
+model (worker thread, heartbeat, resume — the store stage runs inline in
+`applyEventMap` today), review API and previews (06 §5), chunked upload
+route (`docs/map-storage.md` §6, 07). Each lands with its own section
 here and its own tests.

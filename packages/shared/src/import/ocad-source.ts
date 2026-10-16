@@ -24,7 +24,7 @@ import type { DocumentColour, DocumentSymbolInput, DocumentWarning, Georeferenci
 
 /** OCAD coordinates are 1/100 mm. */
 export const OCAD_UNITS_PER_MM = 100;
-export const OCAD_IMPORTER_VERSION = "ocad-2";
+export const OCAD_IMPORTER_VERSION = "ocad-3";
 
 export interface OcadCoordinateLike {
   0: number;
@@ -87,6 +87,7 @@ export interface OcadFileLike {
 }
 
 export interface OcadSourceOptions {
+  /** Upload name; goes into the import report, not into the document. */
   fileName: string;
   /** SHA-256 hex of the file. */
   fileHash: string;
@@ -336,7 +337,7 @@ export function ocadToDocumentInput(ocad: OcadFileLike, opts: OcadSourceOptions)
   const h = ocad.header;
   const header: Omit<MapDocumentHeaderInput, "bounds" | "strings" | "objects"> = {
     format: { version: 1, importer: opts.importer ?? OCAD_IMPORTER_VERSION },
-    source: { kind: "ocad", version: [h.version, h.subVersion, h.subSubVersion].filter((v) => v !== undefined).join("."), name: opts.fileName, hash: opts.fileHash, bytes: opts.fileBytes },
+    source: { kind: "ocad", version: [h.version, h.subVersion, h.subSubVersion].filter((v) => v !== undefined).join("."), hash: opts.fileHash, bytes: opts.fileBytes },
     unitsPerMm: OCAD_UNITS_PER_MM,
     mapScale,
     georeferencing,

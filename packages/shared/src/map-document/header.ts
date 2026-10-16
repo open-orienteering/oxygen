@@ -121,10 +121,14 @@ export const mapDocumentHeaderSchema = z.object({
     /** Importer version string; bumped whenever the same file would encode differently (06 §4.3). */
     importer: z.string(),
   }),
+  /**
+   * Source file identity. Deliberately without the upload name: the same
+   * bytes must produce the same document whatever the file was called
+   * (06 §4.2 dedup); the name lives on the source row and in the report.
+   */
   source: z.object({
     kind: z.enum(["ocad", "omap"]),
     version: z.string(),
-    name: z.string(),
     /** SHA-256 hex of the source file. */
     hash: z.string(),
     bytes: z.number().int().min(0),

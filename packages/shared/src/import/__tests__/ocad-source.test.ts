@@ -151,8 +151,8 @@ describe("ocadToDocumentInput", () => {
 
   it("fills the header: provenance, units, scale, print window, export rectangles", () => {
     const h = input.header;
-    expect(h.format).toEqual({ version: 1, importer: "ocad-2" });
-    expect(h.source).toEqual({ kind: "ocad", version: "2018.8.3", name: "test.ocd", hash: "ff".repeat(32), bytes: 4242 });
+    expect(h.format).toEqual({ version: 1, importer: "ocad-3" });
+    expect(h.source).toEqual({ kind: "ocad", version: "2018.8.3", hash: "ff".repeat(32), bytes: 4242 });
     expect(h.unitsPerMm).toBe(OCAD_UNITS_PER_MM);
     expect(h.mapScale).toBe(15000);
     expect(h.printWindow).toEqual({ scale: 15000, left: -197.6, bottom: 49.5, right: -97.9, top: 91.9 });

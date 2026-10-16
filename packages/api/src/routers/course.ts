@@ -1017,6 +1017,7 @@ export const courseRouter = router({
         calibration: true,
         rotationCorrection: true,
         northDetection: true,
+        documentHash: true,
       },
     });
     if (!row) return null;
@@ -1153,6 +1154,8 @@ export const courseRouter = router({
       rotationCorrection,
       meridianStalenessDeg: currentMeridianStaleness(northDetection),
       uploadedAt: row.uploadedAt.getTime(),
+      /** Content hash of the pinned map document (`/api/map-documents/:hash`); null before the backfill. */
+      documentHash: row.documentHash,
       cutRotationDeg: cutRotationDeg(
         northOffset,
         (northDetection as { meridian?: { medianTiltDeg?: number } } | null)
@@ -1444,6 +1447,7 @@ export const courseRouter = router({
         ctx.event.id,
         input.fileName,
         buffer,
+        { uploadedBy: ctx.user?.id ?? null },
       );
       return { success: true as const, ...result };
     }),
@@ -1495,6 +1499,7 @@ export const courseRouter = router({
           colorOverrides: true,
           northLinesBelow: true,
           fileHash: true,
+          uploadedBy: true,
         },
       });
       if (!row) {
@@ -1510,6 +1515,7 @@ export const courseRouter = router({
         Buffer.from(row.fileData),
         {
           fromClubLibrary: true,
+          uploadedBy: row.uploadedBy ?? ctx.user?.id ?? null,
           rotationCorrection: row.rotationCorrection,
           colorProfile: row.colorProfile as
             | "auto"

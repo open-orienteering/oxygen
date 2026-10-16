@@ -38,6 +38,7 @@ import {
 } from "./map-render-cache.js";
 import type { ColorProfile, ColorStackOverrides } from "@oxygen/shared";
 import { colorProfileSchema, colorStackOverridesSchema } from "@oxygen/shared";
+import { importAndStoreOcad, touchDocument } from "./map-store/documents.js";
 
 type Db = PrismaClient | Prisma.TransactionClient;
 
@@ -313,6 +314,8 @@ export async function applyEventMap(
     northLinesBelow?: boolean;
     /** When copying from club library, reuse its content hash. */
     fileHash?: string;
+    /** Recorded on the content-addressed source row (docs/map-storage.md). */
+    uploadedBy?: string | null;
   } = {},
 ): Promise<{
   fileName: string;
@@ -320,6 +323,8 @@ export async function applyEventMap(
   rotationCorrection: number;
   meridianStalenessDeg: number | null;
   renderKey: string;
+  /** Pinned map document, or null when the import failed (logged). */
+  documentHash: string | null;
 }> {
   const resolved = await resolveMapNorth(buffer, {
     forcedCorrection: opts.rotationCorrection,
@@ -342,12 +347,31 @@ export async function applyEventMap(
     northLinesBelow,
   });
 
+  // Stage 3–9 of the document pipeline (docs/map-import.md): the upload
+  // additionally produces a content-addressed source + document the
+  // event pins. A failure here is logged and leaves the pins null — the
+  // tile path does not depend on it, and the backfill job retries.
+  const previous = await db.mapFile.findFirst({ where: { eventId }, select: { documentHash: true } });
+  let pins: { sourceHash: string; documentHash: string } | null = null;
+  try {
+    const stored = await importAndStoreOcad(db, buffer, fileName, { uploadedBy: opts.uploadedBy });
+    pins = { sourceHash: stored.sourceHash, documentHash: stored.documentHash };
+    await touchDocument(db, stored.documentHash);
+    if (previous?.documentHash && previous.documentHash !== stored.documentHash) {
+      console.info(`[map-store] event ${eventId}: document ${previous.documentHash} → ${stored.documentHash} (${fileName})`);
+    }
+  } catch (err) {
+    console.error(`[map-store] event ${eventId}: document import failed for ${fileName}:`, err);
+  }
+
   await db.mapFile.deleteMany({ where: { eventId } });
   await db.mapFile.create({
     data: {
       eventId,
       fileName,
       fileData: Uint8Array.from(buffer),
+      sourceHash: pins?.sourceHash ?? null,
+      documentHash: pins?.documentHash ?? null,
       scale: resolved.metadata.scale,
       bounds: resolved.metadata.bounds
         ? (resolved.metadata.bounds as unknown as Prisma.InputJsonValue)
@@ -393,6 +417,7 @@ export async function applyEventMap(
     rotationCorrection: resolved.rotationCorrection,
     meridianStalenessDeg: resolved.meridianStalenessDeg,
     renderKey,
+    documentHash: pins?.documentHash ?? null,
   };
 }
 

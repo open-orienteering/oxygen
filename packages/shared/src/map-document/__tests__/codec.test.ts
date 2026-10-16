@@ -19,7 +19,7 @@ const sameBytes = (a: Uint8Array, b: Uint8Array): boolean => a.byteLength === b.
 
 const baseHeader: MapDocumentInput["header"] = {
   format: { version: 1, importer: "test-1" },
-  source: { kind: "ocad", version: "2018.8.3", name: "test.ocd", hash: "00".repeat(32), bytes: 123 },
+  source: { kind: "ocad", version: "2018.8.3", hash: "00".repeat(32), bytes: 123 },
   unitsPerMm: 100,
   mapScale: 15000,
   georeferencing: { crs: { authority: "EPSG", code: 3006, name: "SWEREF99 TM" }, paperOrigin: { x: 679000, y: 6575000 }, gridRotationDeg: 4.98 },
