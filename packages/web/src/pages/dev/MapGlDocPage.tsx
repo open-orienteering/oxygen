@@ -2,23 +2,26 @@
  * Dev-only measurement page for the WebGL2 map backend on real documents
  * (`/dev/map-gl-doc`, spike S1 step 4; docs/map-rendering.md §5.2).
  *
- * Loads an `.ocd` (file picker, or `?url=` — in dev Vite serves any file
+ * Loads an `.ocd` or `.oxvm` (file picker, or `?url=` — in dev Vite serves any file
  * under the repo as `/@fs/<abs path>`), runs it through
- * `readOcad → ocadObjectsToRender → symbolise → prepareStream →
- * buildBatches → GPU`, draws it full-window at the device pixel ratio
+ * `readOcad → ocadToDocumentInput → encode → decode → documentRenderInput
+ * → symbolise → prepareStream → buildBatches → GPU` (`via=document`,
+ * the default; an `.oxvm` skips straight to decode) or through the S1
+ * step-4 converter (`via=reader`), draws it full-window at the device pixel ratio
  * and reports every stage's time, the batch counts, GPU bytes and the
  * per-frame cost. "Bench" animates a zoom + pan for 240 frames and
  * reports frame-time percentiles; `?bench=1` runs it after loading.
  * Results are also published as `window.__mapGlDoc` for Playwright.
  *
- * Query: `mode=pilot|envelope` (default pilot), `url=`, `bench=1`.
+ * Query: `mode=pilot|envelope` (default pilot), `via=document|reader`,
+ * `url=`, `bench=1`.
  * Not routed in production builds.
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { Buffer } from "buffer";
-import { render } from "@oxygen/shared";
+import { mapDocument, mapImport, render } from "@oxygen/shared";
 import { prepareStream, type PreparedStream } from "../../map-gl/prepare";
 import { buildBatches, type Batch, type BatchStats } from "../../map-gl/batch";
 import { MapGlRenderer, hexToRgb, type FrameStats, type View } from "../../map-gl/renderer";
@@ -27,10 +30,29 @@ import liberationSansNarrowUrl from "../../../../shared/fonts/LiberationSansNarr
 
 type Mode = render.OcadConvertMode;
 
+/** The 02 document path: what the codec did in the browser. */
+interface DocumentReport {
+  /** Encoded document size. */
+  bytes: number;
+  headerBytes: number;
+  sections: { attrs: number; bboxes: number; geometry: number };
+  ms: { hash: number; normalise: number; encode: number; decode: number };
+  hash: string;
+  objects: number;
+  symbols: number;
+  colours: number;
+  warnings: Record<string, number>;
+  /** True when the input was already a document (`.oxvm`) and no OCAD reader ran. */
+  native: boolean;
+}
+
 interface LoadReport {
   file: string;
   bytes: number;
   mode: Mode;
+  /** `document`: reader → normalise → encode → decode → bridge; `reader`: the S1 step-4 converter. */
+  via: "document" | "reader";
+  document?: DocumentReport;
   objects: render.OcadConvertResult["stats"];
   ms: { read: number; convert: number; symbolise: number; prepare: number; batch: number; upload: number; firstFrame: number; total: number };
   passes: number;
@@ -57,7 +79,7 @@ interface BenchReport {
 
 declare global {
   interface Window {
-    __mapGlDoc?: { load?: LoadReport; bench?: BenchReport; error?: string };
+    __mapGlDoc?: { load?: LoadReport; bench?: BenchReport; error?: string; documentBytes?: Uint8Array };
   }
 }
 
@@ -91,6 +113,7 @@ export function MapGlDocPage() {
   const [params] = useSearchParams();
   const mode = (params.get("mode") === "envelope" ? "envelope" : "pilot") as Mode;
   const url = params.get("url");
+  const via: LoadReport["via"] = params.get("via") === "reader" ? "reader" : "document";
   const autoBench = params.get("bench") === "1";
 
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -159,14 +182,68 @@ export function MapGlDocPage() {
         const renderer = rendererRef.current;
 
         const tStart = performance.now();
-        const ocadMod = await import("ocad2geojson");
-        const readOcad = (ocadMod as Record<string, unknown>).readOcad as (
-          buf: Buffer,
-          opts?: Record<string, unknown>,
-        ) => Promise<{ objects: render.OcadObjectLike[] }>;
-        const ocad = await readOcad(Buffer.from(bytes), { quietWarnings: true });
-        const t1 = performance.now();
-        const conv = render.ocadObjectsToRender(ocad.objects, render.pilotSymbols, { mode, proxyColours: PROXY_COLOURS });
+        let conv: { objects: render.RenderObject[]; symbols: render.RenderSymbol[]; stats: render.OcadConvertResult["stats"] };
+        let documentReport: DocumentReport | undefined;
+        let encodedDocument: Uint8Array | undefined;
+        let t1: number;
+        const isDocument = bytes.byteLength >= 4 && new TextDecoder().decode(new Uint8Array(bytes, 0, 4)) === mapDocument.MAP_DOCUMENT_MAGIC;
+        if (via === "document" || isDocument) {
+          const pilotByCode = new Map(render.pilotSymbols.map((sym) => [sym.code, sym]));
+          let encoded: Uint8Array;
+          let msHash = 0, msNormalise = 0, msEncode = 0;
+          if (isDocument) {
+            encoded = new Uint8Array(bytes);
+          } else {
+            const ocadMod = await import("ocad2geojson");
+            const readOcad = (ocadMod as Record<string, unknown>).readOcad as (buf: Buffer, opts?: Record<string, unknown>) => Promise<mapImport.OcadFileLike>;
+            const ocad = await readOcad(Buffer.from(bytes), { quietWarnings: true });
+            const tRead = performance.now();
+            const fileHash = await mapDocument.mapDocumentHash(new Uint8Array(bytes));
+            const tHash = performance.now();
+            const { input } = mapImport.ocadToDocumentInput(ocad, {
+              fileName: name, fileHash, fileBytes: bytes.byteLength,
+              renderFor: (sym) => pilotByCode.get(String(Math.floor(sym.symNum / 1000))) ?? null,
+            });
+            const tNorm = performance.now();
+            encoded = mapDocument.encodeMapDocument(input);
+            msHash = tHash - tRead;
+            msNormalise = tNorm - tHash;
+            msEncode = performance.now() - tNorm;
+          }
+          encodedDocument = encoded;
+          const tDec = performance.now();
+          const doc = mapDocument.decodeMapDocument(encoded);
+          const tDecEnd = performance.now();
+          const bridge = mapDocument.documentRenderInput(doc, { unmatched: mode === "pilot" ? "drop" : "proxy", proxyColours: PROXY_COLOURS });
+          t1 = performance.now();
+          conv = {
+            objects: bridge.objects,
+            symbols: bridge.symbols,
+            stats: { total: bridge.stats.total, matched: bridge.stats.rendered, proxied: bridge.stats.proxied, dropped: bridge.stats.dropped + bridge.stats.hidden, coordinates: bridge.stats.coordinates, unmatched: [] },
+          };
+          const { bodyOffset } = mapDocument.readMapDocumentHeader(encoded);
+          const sec = doc.header.objects.sections;
+          const docWarnings: Record<string, number> = {};
+          for (const wn of doc.header.warnings) docWarnings[wn.code] = wn.count;
+          documentReport = {
+            bytes: encoded.byteLength, headerBytes: bodyOffset,
+            sections: { attrs: sec.attrs.length, bboxes: sec.bboxes.length, geometry: sec.geometry.length },
+            ms: { hash: r(msHash), normalise: r(msNormalise), encode: r(msEncode), decode: r(tDecEnd - tDec) },
+            hash: await mapDocument.mapDocumentHash(encoded),
+            objects: doc.header.objects.count, symbols: doc.header.symbols.length, colours: doc.header.colours.length,
+            warnings: docWarnings,
+            native: isDocument,
+          };
+        } else {
+          const ocadMod = await import("ocad2geojson");
+          const readOcad = (ocadMod as Record<string, unknown>).readOcad as (
+            buf: Buffer,
+            opts?: Record<string, unknown>,
+          ) => Promise<{ objects: render.OcadObjectLike[] }>;
+          const ocad = await readOcad(Buffer.from(bytes), { quietWarnings: true });
+          t1 = performance.now();
+          conv = render.ocadObjectsToRender(ocad.objects, render.pilotSymbols, { mode, proxyColours: PROXY_COLOURS });
+        }
         const t2 = performance.now();
         const { stream, warnings } = render.symbolise({ objects: conv.objects, symbols: conv.symbols, fonts });
         const t3 = performance.now();
@@ -196,6 +273,8 @@ export function MapGlDocPage() {
           file: name,
           bytes: bytes.byteLength,
           mode,
+          via: documentReport ? "document" : "reader",
+          document: documentReport,
           objects: conv.stats,
           ms: {
             read: r(t1 - tStart), convert: r(t2 - t1), symbolise: r(t3 - t2), prepare: r(t4 - t3), batch: r(t5 - t4), upload: r(t6 - t5),
@@ -214,7 +293,7 @@ export function MapGlDocPage() {
         };
         setLoad(report);
         setFrame(first);
-        window.__mapGlDoc = { load: report };
+        window.__mapGlDoc = { load: report, documentBytes: encodedDocument };
         setStatus("ready");
       } catch (e) {
         console.error(e);
@@ -224,7 +303,7 @@ export function MapGlDocPage() {
         setStatus("error");
       }
     },
-    [draw, mode, sizeCanvas],
+    [draw, mode, via, sizeCanvas],
   );
 
   const runBench = useCallback(async () => {
@@ -382,7 +461,7 @@ export function MapGlDocPage() {
   return (
     <div className="h-screen flex flex-col bg-slate-100 font-mono text-xs text-slate-800">
       <div className="p-2 flex flex-wrap items-center gap-3 border-b border-slate-300 bg-white">
-        <input type="file" accept=".ocd" onChange={onFile} data-testid="map-gl-doc-file" />
+        <input type="file" accept=".ocd,.oxvm" onChange={onFile} data-testid="map-gl-doc-file" />
         <span>mode: <b>{mode}</b></span>
         <a className="underline" href={`/dev/map-gl-doc?mode=${mode === "pilot" ? "envelope" : "pilot"}${url ? `&url=${encodeURIComponent(url)}` : ""}`}>
           switch to {mode === "pilot" ? "envelope" : "pilot"}
@@ -416,6 +495,16 @@ export function MapGlDocPage() {
               <br />
               canvas {load.canvasPx.w}×{load.canvasPx.h} @ {load.dpr}× · GPU timer {load.gpuTimer ? "yes" : "no"}
               {Object.keys(load.warnings).length > 0 && <> · warnings {JSON.stringify(load.warnings)}</>}
+              <br />
+              via <b>{load.via}</b>
+              {load.document && (
+                <span data-testid="map-gl-doc-document">
+                  {" "}· document {mb(load.document.bytes)} (header {(load.document.headerBytes / 1024).toFixed(0)} KB, attrs {mb(load.document.sections.attrs)}, bboxes {mb(load.document.sections.bboxes)}, geometry {mb(load.document.sections.geometry)})
+                  {" "}· {load.document.native ? "native" : `hash ${load.document.ms.hash} · normalise ${load.document.ms.normalise} · encode ${load.document.ms.encode}`} · <b>decode {load.document.ms.decode} ms</b>
+                  {" "}· {load.document.objects} objects, {load.document.symbols} symbols, {load.document.colours} colours · {load.document.hash.slice(0, 12)}…
+                  {Object.keys(load.document.warnings).length > 0 && <> · {JSON.stringify(load.document.warnings)}</>}
+                </span>
+              )}
             </div>
             <div>
               frame: draws <b>{frame?.drawCalls}</b> · cpu {frame?.cpuMs.toFixed(2)} ms{frame?.gpuMs !== undefined && <> · gpu {frame.gpuMs.toFixed(2)} ms</>}

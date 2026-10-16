@@ -607,15 +607,21 @@ canvas sized by `render.goldenFrame` (§6.2) with
 `preserveDrawingBuffer`, sets `data-ready` when done and shows the
 timings. Fonts are fetched from `packages/shared/fonts/` via Vite `?url`.
 
-`/dev/map-gl-doc?mode=pilot|envelope[&url=…][&bench=1]`
-(`pages/dev/MapGlDocPage.tsx`) runs the whole pipeline on an OCAD file
-chosen with the file input (or fetched from `url`, e.g. a Vite `/@fs/`
-path), shows the `LoadReport` (stage timings, pass kinds, batch
-statistics, GPU bytes, draws) and runs a 240-frame zoom/pan bench with
-CPU and GPU percentiles. Pan by drag, zoom by wheel or pinch. Both
-reports are published on `window.__mapGlDoc` for Playwright; the E2E
-spec `e2e/map-gl-doc.spec.ts` runs it on the synthetic `e2e/test.ocd` in
-both modes.
+`/dev/map-gl-doc?mode=pilot|envelope[&via=document|reader][&url=…][&bench=1]`
+(`pages/dev/MapGlDocPage.tsx`) runs the whole pipeline on an OCAD or
+`.oxvm` file chosen with the file input (or fetched from `url`, e.g. a
+Vite `/@fs/` path), shows the `LoadReport` (stage timings, pass kinds,
+batch statistics, GPU bytes, draws) and runs a 240-frame zoom/pan bench
+with CPU and GPU percentiles. `via=document` (default) goes through the
+map document — read → normalise → encode → decode → render bridge
+(`docs/map-document-format.md`) and reports the document's size,
+sections, hash and codec timings; `via=reader` is the S1 path straight
+from the reader (`ocadObjectsToRender`). A `.oxvm` file is decoded
+natively without the OCAD reader. Pan by drag, zoom by wheel or pinch.
+Both reports and the encoded document bytes are published on
+`window.__mapGlDoc` for Playwright; the E2E spec `e2e/map-gl-doc.spec.ts`
+runs it on the synthetic `e2e/test.ocd` in both modes and both paths and
+feeds the encoded document back in as a native file.
 
 ### 5.3 PDF (api)
 
