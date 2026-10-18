@@ -1,6 +1,6 @@
 /**
- * OCAD file → map document (docs/map-import.md, stages 3–8 of 06 §4.1 as
- * far as slice A has them: parse, normalise, encode, hash).
+ * OCAD file → map document (docs/map-import.md, stages 3–8 of 06 §4.1:
+ * parse, normalise, match + align, encode, hash).
  *
  * The reader is the fork's `ocad2geojson`; everything after it is the
  * shared, isomorphic normaliser and codec. This module adds only the
@@ -8,7 +8,7 @@
  */
 
 import { createHash } from "node:crypto";
-import { mapDocument, mapImport } from "@oxygen/shared";
+import { mapDocument, mapImport, symbolLibrary } from "@oxygen/shared";
 
 type ReadOcad = (buf: Buffer, opts?: Record<string, unknown>) => Promise<mapImport.OcadFileLike>;
 
@@ -27,7 +27,12 @@ export interface OcadImportResult {
   fileHash: string;
   counts: mapImport.OcadSourceResult["counts"];
   warnings: mapImport.OcadSourceResult["warnings"];
-  timings: { read: number; normalise: number; encode: number };
+  /** Stage 6–7 summaries (docs/map-symbols.md §9). */
+  matching: mapImport.MatchingSummary;
+  colourStack: mapImport.ColourStackSummary;
+  /** `<library id>@<library version>` — part of the document's identity for dedup. */
+  libraryVersion: string;
+  timings: { read: number; normalise: number; match: number; encode: number };
 }
 
 export function sha256Hex(data: Uint8Array): string {
@@ -35,14 +40,19 @@ export function sha256Hex(data: Uint8Array): string {
 }
 
 /** Import stages as reported to a job row (docs/map-import.md §1). */
-export type ImportStage = "parse" | "normalise" | "encode";
+export type ImportStage = "parse" | "normalise" | "match" | "encode";
+
+/** The library version string stored on `map_documents.library_version` (docs/map-storage.md §3). */
+export function documentLibraryVersion(libraryId: string): string {
+  return `${libraryId}@${symbolLibrary.SYMBOL_LIBRARY_VERSION}`;
+}
 
 export async function importOcadToDocument(
   file: Buffer,
   fileName: string,
-  opts: Pick<mapImport.OcadSourceOptions, "importer" | "renderFor"> & { onStage?: (stage: ImportStage) => void } = {},
+  opts: Pick<mapImport.OcadSourceOptions, "importer" | "renderFor"> & { onStage?: (stage: ImportStage) => void; match?: mapImport.MatchDocumentOptions } = {},
 ): Promise<OcadImportResult> {
-  const { onStage, ...sourceOpts } = opts;
+  const { onStage, match: matchOpts, ...sourceOpts } = opts;
   const readOcad = await loadReader();
   onStage?.("parse");
   let t = performance.now();
@@ -51,11 +61,25 @@ export async function importOcadToDocument(
   const fileHash = sha256Hex(file);
   onStage?.("normalise");
   t = performance.now();
-  const { input, counts, warnings } = mapImport.ocadToDocumentInput(ocad, { fileName, fileHash, fileBytes: file.byteLength, ...sourceOpts });
+  const { input: sourceInput, counts, warnings } = mapImport.ocadToDocumentInput(ocad, { fileName, fileHash, fileBytes: file.byteLength, ...sourceOpts });
   const normalise = performance.now() - t;
+  onStage?.("match");
+  t = performance.now();
+  const matched = mapImport.matchDocument(sourceInput, matchOpts);
+  const match = performance.now() - t;
   onStage?.("encode");
   t = performance.now();
-  const bytes = mapDocument.encodeMapDocument(input);
+  const bytes = mapDocument.encodeMapDocument(matched.input);
   const encode = performance.now() - t;
-  return { bytes, documentHash: sha256Hex(bytes), fileHash, counts, warnings, timings: { read, normalise, encode } };
+  return {
+    bytes,
+    documentHash: sha256Hex(bytes),
+    fileHash,
+    counts,
+    warnings: [...warnings, ...matched.warnings.map((w) => ({ code: w.code, count: w.count, message: w.message }))],
+    matching: matched.matching,
+    colourStack: matched.colourStack,
+    libraryVersion: documentLibraryVersion(matched.matching.library.id),
+    timings: { read, normalise, match, encode },
+  };
 }

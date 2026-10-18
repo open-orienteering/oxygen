@@ -20,7 +20,7 @@ export interface ImportWorkerData {
 
 export type ImportWorkerMessage =
   | { type: "stage"; stage: ImportStage }
-  | { type: "done"; bytes: Uint8Array; documentHash: string; fileHash: string; report: ReturnType<typeof buildImportReport> }
+  | { type: "done"; bytes: Uint8Array; documentHash: string; fileHash: string; libraryVersion: string; report: ReturnType<typeof buildImportReport> }
   | { type: "error"; message: string };
 
 const port = parentPort;
@@ -32,6 +32,6 @@ if (port) {
     const result = await importOcadToDocument(file, fileName, { onStage: (stage) => post({ type: "stage", stage }) });
     const { header } = mapDocument.readMapDocumentHeader(result.bytes);
     const report = buildImportReport(result, header, fileName);
-    post({ type: "done", bytes: result.bytes, documentHash: result.documentHash, fileHash: result.fileHash, report });
+    post({ type: "done", bytes: result.bytes, documentHash: result.documentHash, fileHash: result.fileHash, libraryVersion: result.libraryVersion, report });
   })().catch((err: unknown) => post({ type: "error", message: err instanceof Error ? err.message : String(err) }));
 }

@@ -44,10 +44,10 @@ export const landforms: LibraryEntryInput[] = [
   }),
   entry("109", "Small knoll", "P", point(disc(B, 750)), { footprintM: 3 }),
   entry("110", "Small elongated knoll", "P", point(fillPart(B, arcCoords(0, 0, 300, 600, 0, 360, 24)), "object"), { notes: "Ellipse 0.6 × 1.2 mm." }),
-  entry("111", "Small depression", "P", point(stroke(B, 250, [475, 135, 475, -127, ...arcCoords(0, -127, 475, 213, 0, -180, 10), -475, 135]), "object"), {
+  entry("111", "Small depression", "P", point(stroke(B, 250, [475, 135, 475, -127, ...arcCoords(0, -127, 475, 213, 0, -180, 10), -475, 135]), "north"), {
     notes: "U shape 1.2 × 0.6 mm (outside measure), 0.25 mm line.",
   }),
-  entry("112", "Pit or hole", "P", point(fillPart(B, [-546, 409, -274, 409, 0, -217, 274, 409, 546, 409, 0, -841]), "object"), {
+  entry("112", "Pit or hole", "P", point(fillPart(B, [-546, 409, -274, 409, 0, -217, 274, 409, 546, 409, 0, -841]), "north"), {
     footprintM: 4.4, notes: "V shape 1.1 × 1.25 mm (outside measure), arms 0.25 mm.",
   }),
   entry("113", "Broken ground", "A", area({ patterns: [pattern(glyph(disc(B, 300), false), 700)] }), {

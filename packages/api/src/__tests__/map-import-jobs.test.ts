@@ -31,7 +31,7 @@ describe("import job state rules", () => {
   });
 
   it("orders stage progress monotonically and ends at 1", () => {
-    const p = (["parse", "normalise", "encode", "store", "done"] as const).map(stageProgress);
+    const p = (["parse", "normalise", "match", "encode", "store", "done"] as const).map(stageProgress);
     expect(p).toEqual([...p].sort((a, b) => a - b));
     expect(p[0]).toBeGreaterThan(0);
     expect(p.at(-1)).toBe(1);
@@ -53,7 +53,8 @@ describe("import worker", () => {
     expect(Buffer.from(worker.bytes).equals(Buffer.from(inline.bytes))).toBe(true);
     expect(worker.report.source.fileName).toBe("test.ocd");
     expect(worker.report.counts.objects).toBe(inline.counts.objects);
-    expect(stages).toEqual(["parse", "normalise", "encode"]);
+    expect(worker.libraryVersion).toBe(inline.libraryVersion);
+    expect(stages).toEqual(["parse", "normalise", "match", "encode"]);
   }, 60_000);
 
   it("rejects with the reader's error for bytes that are not OCAD", async () => {

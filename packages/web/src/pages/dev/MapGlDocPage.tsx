@@ -4,7 +4,7 @@
  *
  * Loads an `.ocd` or `.oxvm` (file picker, or `?url=` — in dev Vite serves any file
  * under the repo as `/@fs/<abs path>`), runs it through
- * `readOcad → ocadToDocumentInput → encode → decode → documentRenderInput
+ * `readOcad → ocadToDocumentInput → matchDocument (source mode) → encode → decode → documentRenderInput
  * → symbolise → prepareStream → buildBatches → GPU` (`via=document`,
  * the default; an `.oxvm` skips straight to decode) or through the S1
  * step-4 converter (`via=reader`), draws it full-window at the device pixel ratio
@@ -39,10 +39,12 @@ interface DocumentReport {
   bytes: number;
   headerBytes: number;
   sections: { attrs: number; bboxes: number; geometry: number };
-  ms: { hash: number; normalise: number; encode: number; decode: number };
+  ms: { hash: number; normalise: number; match: number; encode: number; decode: number };
   hash: string;
   objects: number;
   symbols: number;
+  /** Source symbols drawn from the canonical library (applied matches), per the bridge. */
+  canonicalSymbols: number;
   colours: number;
   warnings: Record<string, number>;
   /** True when the input was already a document (`.oxvm`) and no OCAD reader ran. */
@@ -211,7 +213,7 @@ export function MapGlDocPage() {
         if (via === "document" || isDocument) {
           const pilotByCode = new Map(render.pilotSymbols.map((sym) => [sym.code, sym]));
           let encoded: Uint8Array;
-          let msHash = 0, msNormalise = 0, msEncode = 0;
+          let msHash = 0, msNormalise = 0, msMatch = 0, msEncode = 0;
           if (isDocument) {
             encoded = new Uint8Array(bytes);
           } else {
@@ -226,10 +228,14 @@ export function MapGlDocPage() {
               renderFor: mode === "source" ? undefined : (sym) => pilotByCode.get(String(Math.floor(sym.symNum / 1000))) ?? null,
             });
             const tNorm = performance.now();
-            encoded = mapDocument.encodeMapDocument(input);
+            // Stages 6–7 only for source renders: the pilot renders carry their own palette.
+            const document = mode === "source" ? mapImport.matchDocument(input).input : input;
+            const tMatch = performance.now();
+            encoded = mapDocument.encodeMapDocument(document);
             msHash = tHash - tRead;
             msNormalise = tNorm - tHash;
-            msEncode = performance.now() - tNorm;
+            msMatch = tMatch - tNorm;
+            msEncode = performance.now() - tMatch;
           }
           encodedDocument = encoded;
           const tDec = performance.now();
@@ -256,9 +262,9 @@ export function MapGlDocPage() {
           documentReport = {
             bytes: encoded.byteLength, headerBytes: bodyOffset,
             sections: { attrs: sec.attrs.length, bboxes: sec.bboxes.length, geometry: sec.geometry.length },
-            ms: { hash: r(msHash), normalise: r(msNormalise), encode: r(msEncode), decode: r(tDecEnd - tDec) },
+            ms: { hash: r(msHash), normalise: r(msNormalise), match: r(msMatch), encode: r(msEncode), decode: r(tDecEnd - tDec) },
             hash: await mapDocument.mapDocumentHash(encoded),
-            objects: doc.header.objects.count, symbols: doc.header.symbols.length, colours: doc.header.colours.length,
+            objects: doc.header.objects.count, symbols: doc.header.symbols.length, canonicalSymbols: bridge.stats.canonicalSymbols, colours: doc.header.colours.length,
             warnings: docWarnings,
             native: isDocument,
           };
@@ -530,8 +536,8 @@ export function MapGlDocPage() {
               {load.document && (
                 <span data-testid="map-gl-doc-document">
                   {" "}· document {mb(load.document.bytes)} (header {(load.document.headerBytes / 1024).toFixed(0)} KB, attrs {mb(load.document.sections.attrs)}, bboxes {mb(load.document.sections.bboxes)}, geometry {mb(load.document.sections.geometry)})
-                  {" "}· {load.document.native ? "native" : `hash ${load.document.ms.hash} · normalise ${load.document.ms.normalise} · encode ${load.document.ms.encode}`} · <b>decode {load.document.ms.decode} ms</b>
-                  {" "}· {load.document.objects} objects, {load.document.symbols} symbols, {load.document.colours} colours · {load.document.hash.slice(0, 12)}…
+                  {" "}· {load.document.native ? "native" : `hash ${load.document.ms.hash} · normalise ${load.document.ms.normalise} · match ${load.document.ms.match} · encode ${load.document.ms.encode}`} · <b>decode {load.document.ms.decode} ms</b>
+                  {" "}· {load.document.objects} objects, {load.document.symbols} symbols ({load.document.canonicalSymbols} canonical), {load.document.colours} colours · {load.document.hash.slice(0, 12)}…
                   {Object.keys(load.document.warnings).length > 0 && <> · {JSON.stringify(load.document.warnings)}</>}
                 </span>
               )}

@@ -8,7 +8,8 @@ colour stack, and the tests that keep the library honest. The IR itself
 (`render/symbol.ts`) and its drawing semantics are specified in
 `docs/map-rendering.md` §4; the OCAD import that produces IR for *source*
 symbols is in `docs/map-import.md` §3.3. Matching imported symbols to
-library entries (03 §6.5) is not in this chapter yet (§8).
+library entries (03 §6.5–6.6) and aligning the colour stack (03 §6.3) are
+§8–§9; their code lives in `packages/shared/src/import/`.
 
 Everything lives in `packages/shared/src/symbol-library/` and is exported
 as `symbolLibrary` from `@oxygen/shared`.
@@ -160,8 +161,9 @@ per-symbol decisions.
   (the schema has `name.sv`, the first edition leaves it out rather than
   shipping a partial translation).
 - **Aliases** (older numbering, ISOM 2000 / ISSprOM 2007 codes) are in
-  the schema but not yet populated — the matcher (§8) is their consumer
-  and the first edition ships them empty rather than partially.
+  the schema but not yet populated; the matcher (§8) finds renumbered
+  symbols through the family and description stages instead, and the
+  first edition ships aliases empty rather than partially.
 
 ### 3.1 Counts against the 03 estimate
 
@@ -260,23 +262,188 @@ plus the purple-role and materialisation checks:
     symbols carry id/code/name.
 
 The golden contact sheet (03 §6.4 (d), "optional" for this step) and the
-OOM dimension spot check (e) are not implemented; see §8.
+OOM dimension spot check (e) are not implemented; see §10.
 
 ## 7. Deviations from 03 §6.4, recorded
 
 | 03 said | Done | Why |
 |---|---|---|
 | Entries as authored JSON files | TypeScript literals via `authoring.ts` helpers | Compile-time colour-kind and field checks; the IR nests too deeply for readable JSON. The Zod schema still validates the result, so a JSON loader can be added without touching entries. |
-| `fingerprint` overrides per entry | Field not present yet | Belongs to the matcher (03 §6.5); added with it. |
+| `fingerprint` overrides per entry | Not needed | Fingerprints are derived from the resolved IR (§8.1) and the matcher never needed a hand override on the corpus; add the field if one does. |
 | `name.sv` alongside `name.en` | Optional, omitted | Ship a complete translation or none. |
 | Appendix B palette as a "versioned table" | Two editions, ids stable, document picks edition | Same intent; the id stability rule is what keeps entries edition-free. |
 | 180–200 / 170–190 entries | 152 / 141 | Counted against Rev 6; §3.1. |
 | `defaultMapAppearance` in `course-maps/schema.ts` retired in favour of the library | Not yet | The course layer (slice C) is the consumer that switches; the constants stay until then. |
 
-## 8. Pending in this chapter
+## 8. Matching source symbols to the library (03 §6.5–6.6)
 
-- 03 §6.5 matching (fingerprints, staged matcher, review) and §6.6
-  print-scale factors for the course overlay.
+Import stage 6 (`docs/map-import.md` §1). Code:
+`packages/shared/src/import/{fingerprint,matcher,match-document}.ts`,
+exported as `mapImport`. Everything is a pure function of the document
+input and the library; the result is a `SymbolMatch` on every source
+symbol (`header.symbols[i].match`, schema in `map-document/header.ts`)
+and a `MatchingSummary` in the import report.
+
+```ts
+const { input, matching, colourStack, warnings } =
+  mapImport.matchDocument(sourceInput, { library?, edition?, factor?, decisions? });
+```
+
+Library choice: `ISSprOM2019-2` for `mapScale ≤ 5000`, else `ISOM2017-2`
+(`chooseLibrary`; the option overrides). Palette edition:
+`detectPaletteEdition` on the colour table — whichever edition's values
+the source's brown / green / black-screen colours sit nearer; ties and no
+evidence → `iof2024`.
+
+### 8.1 Fingerprints
+
+`fingerprintOf(render, classOf)` reduces a `RenderSymbol` to the features
+03 §6.5 compares, with colours replaced by their *class* (hue + percent
+from `colour-class.ts`, §9.1) so a source brown and the palette brown
+compare equal whatever their CMYK:
+
+| IR type | Features |
+|---|---|
+| line | main stroke class + width, dashed (dash / gap lengths), borders (count, class, width, shift), double-line fill class + width, background halo, glyph presence and its stroke/disc/ring/fill counts, structural shape (`stroked`, `background`) |
+| area | fill class, hatch (class, width, spacing, angle), pattern (class, cell, element kind + size), border |
+| point | glyph parts by kind with class, width / diameter, extent box, rotational symmetry, `orientation` |
+| text | class, font size, bold / italic, line spacing |
+
+`compareFingerprints(src, canon, factor)` scales the canonical side by the
+document factor (§8.3) and multiplies per-feature scores: 1 inside the
+tolerance (`TOLERANCE`: 20 µm widths, 100 µm lengths, 5°, 10 % text /
+box), falling linearly to 0 at twice it. Structural disagreements are
+**hard fails** (score 0 with a reason): IR type, colour class of the main
+stroke / fill, dashed vs solid, bordered vs not, stroked vs glyph-only.
+Element counts are soft: `COUNT_PENALTY` (0.6) per missing or extra
+element, so a single 6 mm ring is not a two-ring finish. Orientation is
+ignored for rotationally symmetric glyphs (a boulder disc has no north).
+`fingerprintHash` gives the stable `irHash` that club decisions key on.
+
+### 8.2 Stages
+
+`matchSymbol(source, ctx)` runs the 03 §6.5 ladder and stops at the first
+stage that decides. Thresholds (`MATCH_THRESHOLDS`, reported in the
+summary so tuning is visible): auto 0.85, suggest 0.6, strict 0.95.
+
+| # | method | Candidates | Outcome |
+|---|---|---|---|
+| 1 | `explicit` | a `SymbolDecision` for (code, name?, irHash?) | `auto` + `reviewed` for an entry id; `unmatched` + `reviewed` for `canonicalId: null` (keep the source drawing). A decision naming an entry the library lacks falls through and warns `DECISION_UNKNOWN_ENTRY`. |
+| 2 | `code+geometry` | entries with the source's exact spec code (`505.1` → `505.1`) | `auto` at ≥ 0.85 |
+| 3 | `family+geometry` | same base number (`505.3` → every `505*`), else the hundred group | `auto` ≥ 0.85, `suggested` ≥ 0.6 |
+| — | `variant` | family exists, source IR type differs from every family entry, name carries a template-variant hint (`VARIANT_NAME`: minimi, enskild, kontur, outline, single dot, …) | `unmatched`, drawn from source, counted separately — a minimum-size building point or a cliff outline line is not a mistake and not a review item |
+| 4 | `geometry` | every entry of the IR type | `suggested` only, at ≥ 0.95 (never auto: a 0.14 mm brown line is a contour or a form line only by its code) |
+| 5 | `description` | same type, not ruled out by a hard fail, ≥ 2 shared name tokens (Swedish → English lexicon `SV_EN`), or 1 token when the code matches or the geometry is partly compatible | `suggested` at 0.3 + 0.1 × tokens, capped 0.5 |
+| 6 | `none` | — | `unmatched`, warns `SYMBOL_UNMATCHED` |
+
+Every match carries `reasons[]` (the feature notes of the deciding
+comparison, e.g. `glyph height 6000 vs 1200 µm (0.00)`), `confidence`,
+`libraryVersion` (`<library>@<SYMBOL_LIBRARY_VERSION>`) and, for stages
+2–4, `alternatives[]` (runner-ups for the review UI). Exact-code *lines*
+that fit only at another `FACTOR_SNAP` factor are reported as
+`scaleAnomalies` (`SYMBOL_SCALE_ANOMALY`) — an earth bank drawn at 1:10000
+size in a 1:15000 table.
+
+What is drawn: `auto` and reviewed matches resolve the library entry
+against the aligned stack (§9) and are scaled by the document factor;
+`suggested`, `unmatched` and `variant` keep their source IR
+(`map-document/render-bridge.ts` `isAppliedMatch`, `canonical:false`
+turns this off). Reviewing a suggestion is the pending review API
+(`docs/map-import.md` §7); the data contract is already in the header.
+
+### 8.3 Document factor (03 §6.6)
+
+`detectDocumentFactor` — the enlargement the mapper drew at, relative to
+the library's reference scale (ISOM 1:15000, ISSprOM 1:4000):
+
+1. **lines** — for every solid source line whose exact code (else its
+   family heading) is a solid line of the same hue, dashedness and
+   borderedness, `source width ÷ canonical width`; median per family, then
+   median over families, snapped to `FACTOR_SNAP` (0.5 … 2) within 3 %.
+2. **codes** — no usable line family: try the scale's factor against ×1
+   on every exact-code symbol of any type and keep the one more of them
+   fit at ≥ 0.85 (a map "enlarged" to 1:7500 whose symbols still carry
+   1:15000 dimensions).
+3. **scale** — nothing with a spec code: `referenceScale / mapScale`.
+4. **override** — `opts.factor`.
+
+The result is `header.documentFactor` and `matching.factor
+{factor, scaleFactor, symbolScale, method, samples, rawMedian}`.
+`symbolScale = factor / scaleFactor` is 1 for a map drawn at the spec's
+enlargement for its scale.
+
+### 8.4 Corpus results
+
+Measured on the local OCAD corpus (club maps, not committed — the script
+and results live under `.local/research/oxygen-measurements/`), by objects
+drawn: 77–84 % of forest-map objects and 83 % of sprint objects match
+`auto`; adding `variant` (drawn correctly from source, nothing to review)
+gives 84–93 %. No false-positive `auto` was found in review of every auto
+match. The traps the stages were tuned on: a reused number (`527
+Byggnad`) is `suggested` 521 by geometry, not auto; a `513.101 … utan
+punkter` variant is `suggested`, not auto 513.1; a 6.0 mm control ring
+numbered 702 is `suggested` 703 by description. The remaining non-auto
+share is dominated by OCAD template conventions the library has no entry
+for (minimum-size points, outline lines, single pattern dots); adding
+those as library variants is the lever if the auto rate needs to rise.
+
+## 9. Colour stack alignment (03 §6.3)
+
+Import stage 7. Code: `packages/shared/src/import/{colour-class,colour-align}.ts`.
+The source order is the mapper's knock-out order and wins for everything
+they drew; alignment only *identifies*, *inserts* and *flags*.
+
+### 9.1 Colour classes
+
+`classifyCmyk` maps a CMYK quadruple onto an IOF hue (`black`, `white`,
+`brown`, `blue`, `green`, `darkgreen`, `yellow`, `olive`, `purple`,
+`orange`, `red`, `registration`) and a percent, with the hue rules written against Appendix B of both editions
+(e.g. green needs `y ≥ 0.75 c`; red needs `k < 0.15` so a dark brown is
+not red). `classifyColour` also reads the source *name* (Swedish and
+English hue words and percents: "Brun 50% - Vägfyllning") and reports
+`nameMismatch` when name and CMYK disagree. `paletteEntryFor` picks the
+palette entry a classified colour stands for: name tokens first
+(`väg`/road → `brown50-road`, `byggnad` → `black50-building`), then the
+nearest percent, then the palette's default for the class; some entries
+(`FULL_ONLY`) are never chosen for a screened colour.
+
+### 9.2 Steps
+
+`identifySourceColours` then `alignColourStack`:
+
+1. **Classify** every source colour; unclassified ones that symbols use
+   are listed in `colourStack.unclassified` and warn `COLOUR_UNCLASSIFIED`
+   (a metro line colour on a sprint map stays as it is, drawn from source).
+2. **Identify**: one source colour per palette id — the most used by
+   objects, ties to the lowest. Full purples take their role from the
+   name, else from position: above every black 100 % → `purple-upper`,
+   else `purple-lower`.
+3. **Alias**: a palette id that applied matches need but the source lacks,
+   when the source has a colour of the same class → that colour stands for
+   both (`black-road-outline` on a source with one black;
+   `colourStack.aliased`). Purples are never aliased.
+4. **Insert** the rest in palette order, each directly above its nearest
+   lower palette neighbour already in the stack (else below the nearest
+   upper one); `purple-upper` always on top, `purple-lower` directly below
+   the first source colour the palette puts above it. Inserted entries have
+   `id: "<edition>:<paletteId>"`, the palette CMYK and no `sourceNumber`
+   (`colourStack.inserted`).
+5. **Flag** palette ids whose relative order disagrees with the palette
+   (longest increasing subsequence of palette ranks; everything outside it
+   is a `COLOUR_ORDER_CONFLICT` with the pair it contradicts). The order
+   is not changed.
+
+Output: `header.colours` with `paletteIds[]` and `purpleRole` on every
+entry that stands for a palette colour, and the source symbols' IR
+remapped to the new indices (`remapRenderColours`). The render bridge
+resolves canonical entries through `paletteIndexOfStack(header.colours)`.
+
+## 10. Pending in this chapter
+
+- Review API and UI for `suggested` matches (06 §5); the `decisions`
+  input exists on `matchDocument` and nothing persists decisions yet.
+- Library variants for the OCAD template conventions (§8.4) if the auto
+  rate needs to rise.
 - Contact sheet: a golden render per entry at 10× via the reference
   raster backend for visual review in PRs.
 - `ISMTBOM2022` / `ISSkiOM2019` libraries (palette rows exist).

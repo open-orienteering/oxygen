@@ -173,7 +173,8 @@ describe("symbol library — dimension table, ISOM 2017-2 Rev 6 (c)", () => {
     expect(L("415").main).toMatchObject({ widthUm: 100 });
     expect(spacedOf(L("416"))).toMatchObject({ distanceUm: 450, minCount: 5 });
     expect(L("416").glyphs![0].glyph.parts[0]).toMatchObject({ diameterUm: 220 });
-    expect(P("418").glyph.parts).toMatchObject([{ diameterUm: 1000 }, { diameterUm: 600 }]);
+    // Green dot ø 0.6 with the 0.2 white dot inside (Rev 6 "aid to the colour vision impaired"), not a white mask.
+    expect(P("418").glyph.parts).toMatchObject([{ kind: "disc", diameterUm: 600 }, { kind: "disc", diameterUm: 200 }]);
   });
 
   it("man-made", () => {

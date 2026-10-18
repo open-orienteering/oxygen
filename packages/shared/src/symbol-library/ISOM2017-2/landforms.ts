@@ -62,7 +62,7 @@ export const landforms: LibraryEntryInput[] = [
     point(stroke(BP, 180, [310, 203, ...arcCoords(0, 32, 310, 139, 0, -180, 10), -310, 203]), "object"),
     { notes: "U shape 0.8 mm (outside measure) wide, 0.18 mm line, opening uphill." },
   ),
-  entry("112", "Pit", "P", point(fillPart(BP, [154, 302, 350, 302, 0, -489, -350, 302, -154, 302, 0, -50]), "object"), {
+  entry("112", "Pit", "P", point(fillPart(BP, [154, 302, 350, 302, 0, -489, -350, 302, -154, 302, 0, -50]), "north"), {
     notes: "V shape 0.7 mm wide, arms 0.18 mm, apex downhill.",
   }),
   entry("113", "Broken ground", "A", area113(600)),

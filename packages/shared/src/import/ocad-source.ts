@@ -24,7 +24,7 @@ import type { DocumentColour, DocumentSymbolInput, DocumentWarning, Georeferenci
 
 /** OCAD coordinates are 1/100 mm. */
 export const OCAD_UNITS_PER_MM = 100;
-export const OCAD_IMPORTER_VERSION = "ocad-3";
+export const OCAD_IMPORTER_VERSION = "ocad-4";
 
 export interface OcadCoordinateLike {
   0: number;

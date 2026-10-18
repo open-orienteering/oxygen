@@ -12,7 +12,7 @@ import { resolve } from "path";
 import { randomBytes } from "crypto";
 import { brotliDecompressSync, gunzipSync } from "node:zlib";
 import Fastify, { type FastifyInstance } from "fastify";
-import { SYSTEM_GROUP_IDS, mapDocument } from "@oxygen/shared";
+import { SYSTEM_GROUP_IDS, mapDocument, symbolLibrary } from "@oxygen/shared";
 import { createTestEvent, disconnect, type TestEventContext } from "../helpers/test-db.js";
 import { makeCaller } from "../helpers/caller.js";
 import { grantSystemGroup } from "../../permissions.js";
@@ -96,8 +96,8 @@ describe("storeImportedDocument", () => {
     expect(doc.sourceHash).toBe(fileHash);
     expect(doc.sizeBytes).toBe(size);
     expect(doc.formatVersion).toBe(1);
-    expect(doc.importerVersion).toBe("ocad-3");
-    expect(doc.libraryVersion).toBe("none");
+    expect(doc.importerVersion).toBe("ocad-4");
+    expect(doc.libraryVersion).toBe(`ISOM2017-2@${symbolLibrary.SYMBOL_LIBRARY_VERSION}`); // 1:7500 fixture → ISOM
     const header = doc.header as Record<string, unknown>;
     expect(header).toHaveProperty("mapScale");
     expect(header).toHaveProperty("bounds");

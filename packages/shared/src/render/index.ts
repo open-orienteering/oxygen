@@ -18,6 +18,7 @@ export { pilotScene } from "./__fixtures__/pilot-scene.js";
 export { goldenScene, goldenSceneNames, goldenFrame, GOLDEN_PX_PER_MM, GOLDEN_MARGIN_UM } from "./__fixtures__/golden.js";
 export type { GoldenSceneName, GoldenScene, GoldenFrame } from "./__fixtures__/golden.js";
 export * from "./symbol.js";
+export * from "./transform.js";
 export * from "./measure.js";
 export * from "./dash.js";
 export * from "./geometry.js";

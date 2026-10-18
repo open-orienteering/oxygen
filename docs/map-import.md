@@ -14,8 +14,8 @@ implemented and marks what is still pending.
  3 parse        reader → source model                                     api/shared done (OCAD, via ocad2geojson fork)
  4 normalise    source model → objects, symbols, colours, georef, warnings shared     done (OCAD, §3; symbol IR §3.3)
  5 analyse      bounds, north, fonts, feature usage                       shared     bounds only (encoder)
- 6 match        03 §6.5 staged matcher → SymbolMatch[]                    shared     pending
- 7 align        colour stack alignment (03 §6.3)                          shared     pending
+ 6 match        03 §6.5 staged matcher → SymbolMatch[]                    shared     done (docs/map-symbols.md §8)
+ 7 align        colour stack alignment (03 §6.3)                          shared     done (docs/map-symbols.md §9)
  8 encode       02 codec → bytes; sha256 → documentHash                   shared     done
  9 store        map_sources + map_documents rows, event pin, report      api        done, as an import job in a worker thread (docs/map-storage.md §3, §6)
 10 derive       thumbnail, metadata columns                               api        pending
@@ -39,9 +39,18 @@ const { input, counts, warnings } = mapImport.ocadToDocumentInput(ocadFile, {
   importer?: string,                                   // default OCAD_IMPORTER_VERSION
   renderFor?: (symbol) => RenderSymbol | null,         // replaces the §3.3 conversion when given
 });
-const bytes = mapDocument.encodeMapDocument(input);    // stage 8
+const matched = mapImport.matchDocument(input, {       // stages 6–7
+  library?, edition?, factor?, decisions?,             // overrides; see docs/map-symbols.md §8
+});
+// matched.input (header.symbols[i].match, header.colours aligned, header.library,
+// header.documentFactor), matched.matching, matched.colourStack, matched.warnings
+const bytes = mapDocument.encodeMapDocument(matched.input); // stage 8
 const hash = await mapDocument.mapDocumentHash(bytes);
 ```
+
+`matchDocument` throws if a symbol's IR references a colour index outside
+the colour table (the normaliser never produces one; a `renderFor` hook
+must state its renders against the source table).
 
 `ocadFile` is structurally typed (`OcadFileLike`) against what the
 `ocad2geojson` reader returns — header, sparse `colors`, `symbols`,
@@ -52,11 +61,13 @@ package does not depend on the reader.
 
 ```ts
 import { importOcadToDocument } from "./import/ocad.js";
-const r = await importOcadToDocument(buffer, "map.ocd", { renderFor, onStage });
+const r = await importOcadToDocument(buffer, "map.ocd", { renderFor, onStage, match });
 // r.bytes, r.documentHash, r.fileHash, r.counts, r.warnings,
-// r.timings { read, normalise, encode } (ms)
-// onStage?: (stage: "parse" | "normalise" | "encode") => void — called as each
-// stage begins; the import job (docs/map-storage.md §6) writes it to the row.
+// r.matching, r.colourStack, r.libraryVersion ("ISOM2017-2@2026.10.1"),
+// r.timings { read, normalise, match, encode } (ms)
+// onStage?: (stage: "parse" | "normalise" | "match" | "encode") => void — called as
+// each stage begins; the import job (docs/map-storage.md §6) writes it to the row.
+// match?: MatchDocumentOptions — forwarded to matchDocument.
 ```
 
 In the API this runs inside a worker thread
@@ -228,14 +239,28 @@ Templates (string 8, `TEMPLATES_DROPPED`), layout objects (string 24,
 import result). Everything else in the file (view, zoom, bookmarks,
 symbol icons, course-setting data) is dropped silently per 02 §1.
 
+### 3.7 Stage 6–7 warnings
+
+Added by `matchDocument` to `header.warnings` and the import report, one
+entry per code with a count:
+
+| Code | Meaning |
+|---|---|
+| `SYMBOL_UNMATCHED` | source symbols with a render but no canonical match (state `unmatched`, method `none`); drawn from their own definition. Template `variant`s and render-less symbols are not counted. |
+| `SYMBOL_SCALE_ANOMALY` | an exact-code line fits its entry only at a different enlargement than the document's factor (`matching.scaleAnomalies`) |
+| `DECISION_UNKNOWN_ENTRY` | a `SymbolDecision` names a library entry id that does not exist |
+| `COLOUR_ORDER_CONFLICT` | the source stacks two palette colours in the opposite order to the palette (`colourStack.conflicts`); the source order is kept |
+| `COLOUR_UNCLASSIFIED` | a colour used by symbols is not an IOF colour (`colourStack.unclassified`); its symbols stay as drawn |
+
 ## 4. Header provenance
 
-`format.importer` is `"ocad-3"` today (`OCAD_IMPORTER_VERSION`; `ocad-1`
+`format.importer` is `"ocad-4"` today (`OCAD_IMPORTER_VERSION`; `ocad-1`
 had `render: null` for every source symbol, `ocad-2` carried the upload
-name in the header). Bump it
-whenever stages 3–8 would produce different bytes for the same file —
-reader fix, normaliser rule, codec change, matcher thresholds, library
-edition. `source` carries the reader's file version, `fileHash` and size
+name in the header, `ocad-3` had no matcher). Bump it whenever stages 3–8
+would produce different bytes for the same file — reader fix, normaliser
+rule, codec change, matcher thresholds. Library changes are carried
+separately by `header.library {id, version}` (`SYMBOL_LIBRARY_VERSION`)
+and `map_documents.library_version`; the store dedups on both. `source` carries the reader's file version, `fileHash` and size
 — not the upload name, so the same bytes give the same document whatever
 the file was called (06 §4.2). The name is kept on `map_sources.file_name`
 and in the import report (`mapImport.importReportSchema`,
@@ -258,7 +283,8 @@ index), floating-point sums (keep source integers), `Date`/random ids.
 | Unit (shared) | `packages/shared/src/import/__tests__/ocad-symbols.test.ts` | every row of the §3.3 tables: line styles, dashes (507 end gap), framing, double lines, main / secondary / corner / start / end symbols, point elements, area fill / hatch / pattern / border, text mapping, fonts, warning codes |
 | Unit (shared) | `packages/shared/src/render/__tests__/{dash,placement,symbolise}.test.ts` | OCAD end-gap semantics, `dashGroupCentres` / `sectionCentres`, `backgroundWidthUm`, continuous halo |
 | Unit (shared) | `packages/shared/src/map-document/__tests__/codec.test.ts`, `projection-bridge.test.ts` | encode/decode round trip, Hilbert order, validation errors, truncation, JSON projection, render bridge |
-| Unit (api) | `packages/api/src/__tests__/import-ocad.test.ts` | reader → document on `e2e/test.ocd`, determinism, bboxes, all fixture symbols converted, symbolise without proxies |
+| Unit (shared) | `packages/shared/src/import/__tests__/{colour-class,fingerprint,matcher,colour-align,match-document}.test.ts` | stages 6–7: CMYK / name classification, fingerprints and tolerances, every matcher stage and the traps (reused numbers, template variants, old numbering), factor detection (lines / codes / scale / override), alignment steps and conflicts, whole-document run with codec round trip and canonical drawing through the bridge |
+| Unit (api) | `packages/api/src/__tests__/import-ocad.test.ts` | reader → document on `e2e/test.ocd`, determinism, bboxes, all fixture symbols converted, symbolise without proxies, fixture matches (3 auto, old-numbered ring suggested, factor by `codes`), stack with inserted lower purple, hook renders against the source table |
 | E2E | `e2e/map-gl-doc.spec.ts` | document path = reader path in the browser, native `.oxvm` round trip, `mode=source` draws the fixture from its own definitions with no proxies |
 | Unit + integration + E2E (api, web) | see `docs/map-storage.md` §9 | stages 1 and 9: chunked upload route, import jobs, store, dedup, pins, report row, delivery route |
 
@@ -268,9 +294,9 @@ script and is recorded in `docs/map-document-format.md` §9.
 
 ## 7. Pending in this chapter
 
-Matcher and colour alignment (stages 6–7), S2 confirmation of the
-*provisional* §3.3 rows against OCAD output,
+S2 confirmation of the *provisional* §3.3 rows against OCAD output,
 OMAP reader and the shared `normalise()` fixtures (06 §3.3), review API
 and previews (06 §5), the `decisions` input to a job (06 §5.3 — the column
-exists, nothing reads it yet). Each lands with its own section here and
-its own tests.
+exists and `matchDocument` accepts decisions, nothing reads the column
+yet), stage 5 beyond bounds, stage 10. Each lands with its own section
+here and its own tests.

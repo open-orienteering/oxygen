@@ -21,7 +21,7 @@ export const rock: LibraryEntryInput[] = [
   entry("202", "Passable rock face, with tags", "L", line({ main: solid(K, 300), glyphs: [cliffTags(300)] }), {
     variant: "b", description: "With 0.18 × 0.75 mm tags every 0.75 mm (CC) showing the direction of fall.", minimum: { lengthUm: 1100 },
   }),
-  entry("203", "Rocky pit or cave", "P", point(fillPart(K, [-546, 409, -274, 409, 0, -217, 274, 409, 546, 409, 0, -841]), "object"), {
+  entry("203", "Rocky pit or cave", "P", point(fillPart(K, [-546, 409, -274, 409, 0, -217, 274, 409, 546, 409, 0, -841]), "north"), {
     footprintM: 4.4, notes: "Black V 1.1 × 1.25 mm (outside measure), arms 0.25 mm; north-oriented unless pointing into a cave.",
   }),
   entry("204", "Boulder", "P", point(disc(K, 600)), { footprintM: 2.4 }),

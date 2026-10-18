@@ -12,7 +12,7 @@ import { importOcadToDocument, type OcadImportResult } from "../import/ocad.js";
 
 type Db = PrismaClient | Prisma.TransactionClient;
 
-/** No canonical symbol library is matched yet (03 §6.4 lands with the matcher). */
+/** Documents imported before the matcher landed (slice A step 6) carry this library version. */
 export const LIBRARY_VERSION_NONE = "none";
 
 export interface StoreDocumentInput {
@@ -44,6 +44,8 @@ export function buildImportReport(result: OcadImportResult, header: mapDocument.
     source: { kind: header.source.kind, version: header.source.version, fileName, bytes: header.source.bytes, fileHash: header.source.hash },
     counts: result.counts,
     warnings: result.warnings,
+    matching: result.matching,
+    colourStack: result.colourStack,
     timings: result.timings,
   });
 }
@@ -93,7 +95,7 @@ export async function importAndStoreOcad(
   const report = buildImportReport(result, header, fileName);
   const stored = await storeImportedDocument(db, {
     source: { bytes: file, fileHash: result.fileHash, kind: "ocad", fileName, uploadedBy: opts.uploadedBy },
-    document: { bytes: result.bytes, hash: result.documentHash },
+    document: { bytes: result.bytes, hash: result.documentHash, libraryVersion: result.libraryVersion },
     report,
   });
   return { ...stored, report, result };

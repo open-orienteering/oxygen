@@ -12,9 +12,20 @@ import { type LibraryEntry, type SymbolLibrary, parseSymbolLibrary, resolveEntry
 export * from "./palette.js";
 export * from "./schema.js";
 
+/**
+ * Version of the library *data*. Bumped whenever an entry's render,
+ * code or variant changes; part of a document's identity (06 §4.2) and
+ * stored on `map_documents.library_version`.
+ */
+export const SYMBOL_LIBRARY_VERSION = "2026.10.1";
+
 /** Raw authored inputs, before validation (tests and tooling). */
 export const symbolLibraryInputs = { "ISOM2017-2": isom2017_2, "ISSprOM2019-2": issprom2019_2 } as const;
 export type SymbolLibraryId = keyof typeof symbolLibraryInputs;
+
+export function isSymbolLibraryId(id: string): id is SymbolLibraryId {
+  return Object.prototype.hasOwnProperty.call(symbolLibraryInputs, id);
+}
 
 let cache: Map<SymbolLibraryId, SymbolLibrary> | undefined;
 

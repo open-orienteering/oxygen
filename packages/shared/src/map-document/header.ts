@@ -45,16 +45,23 @@ export type DocumentBounds = z.output<typeof boundsSchema>;
 export const documentColourSchema = colourEntrySchema.extend({
   /** Source colour number; absent for palette entries inserted by alignment (03 §6.3). */
   sourceNumber: z.number().int().optional(),
+  /** IOF palette ids this stack entry stands for (03 §6.3 step 2–3); canonical renders resolve through them. */
+  paletteIds: z.array(z.string()).optional(),
 });
 export type DocumentColour = z.output<typeof documentColourSchema>;
 
 export const symbolMatchSchema = z.object({
   canonicalId: z.string().nullable(),
-  method: z.enum(["explicit", "code+geometry", "family+geometry", "geometry", "description", "none"]),
+  /** `variant`: numbered into a known family but of another kind (minimum-size point, outline line) — kept as source, nothing to suggest. */
+  method: z.enum(["explicit", "code+geometry", "family+geometry", "geometry", "description", "variant", "none"]),
+  /** `auto` is drawn canonically; `suggested` waits for review; `unmatched` draws from source. */
+  state: z.enum(["auto", "suggested", "unmatched"]),
   confidence: z.number().min(0).max(1),
   reasons: z.array(z.string()).default([]),
   reviewed: z.boolean().default(false),
   libraryVersion: z.string(),
+  /** Runner-up candidates for the review UI, best first. */
+  alternatives: z.array(z.object({ canonicalId: z.string(), confidence: z.number().min(0).max(1) })).optional(),
 });
 export type SymbolMatch = z.output<typeof symbolMatchSchema>;
 

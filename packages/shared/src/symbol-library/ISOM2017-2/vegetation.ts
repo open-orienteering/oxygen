@@ -91,8 +91,8 @@ export const vegetation: LibraryEntryInput[] = [
   entry("417", "Prominent large tree", "P", point([disc(W, 1100), ring(GP, 900, 180)]), {
     footprintM: 13.5, notes: "Green ring 0.9 mm outside measure, 0.18 mm wide, on a white mask ø 1.1 mm.",
   }),
-  entry("418", "Prominent bush or tree", "P", point([disc(W, 1000), disc(GP, 600)]), {
-    footprintM: 9, notes: "Green dot ø 0.6 mm on a white mask 0.2 mm wider all round.",
+  entry("418", "Prominent bush or tree", "P", point([disc(GP, 600), disc(W, 200)]), {
+    footprintM: 9, notes: "Green dot ø 0.6 mm with a white dot ø 0.2 mm inside (colour-vision aid).",
   }),
   entry("419", "Prominent vegetation feature", "P", point([...cross(W, 360, 390), ...cross(GP, 180, 390)]), {
     footprintM: 13.5, notes: "Green × 0.18 mm, 0.9 mm outside measure, on a white mask 0.36 mm wide.",

@@ -27,10 +27,11 @@ interface DocWindow {
         bytes: number;
         headerBytes: number;
         sections: { attrs: number; bboxes: number; geometry: number };
-        ms: { decode: number; encode: number; normalise: number; hash: number };
+        ms: { decode: number; encode: number; match: number; normalise: number; hash: number };
         hash: string;
         objects: number;
         symbols: number;
+        canonicalSymbols: number;
         colours: number;
         native: boolean;
       };
@@ -147,8 +148,8 @@ test.describe("WebGL2 map backend — whole document", () => {
     await expect(page.getByTestId("map-gl-doc-document")).toContainText("native");
   });
 
-  test("source mode draws the fixture with its own converted symbol definitions, no proxies", async ({ page }, testInfo) => {
-    // Default mode: the OCAD → IR conversion (docs/map-import.md §3.3) renders every fixture symbol natively.
+  test("source mode draws the fixture through the matcher: canonical where matched, its own definitions otherwise, no proxies", async ({ page }, testInfo) => {
+    // Default mode: the OCAD → IR conversion (docs/map-import.md §3.3) plus stages 6–7 (docs/map-symbols.md §8–9) in the browser.
     await page.goto("/dev/map-gl-doc");
     await page.getByTestId("map-gl-doc-file").setInputFiles("e2e/test.ocd");
     await expect(page.getByTestId("map-gl-doc-canvas")).toHaveAttribute("data-ready", "true", { timeout: 30_000 });
@@ -165,6 +166,13 @@ test.describe("WebGL2 map backend — whole document", () => {
     expect(load!.passes).toBeGreaterThan(0);
     expect(load!.document?.warnings ?? {}).not.toHaveProperty("SYMBOL_COLOUR_UNKNOWN");
     expect(load!.document?.warnings ?? {}).not.toHaveProperty("SYMBOL_EMPTY");
+    // Stages 6–7 ran: some fixture symbols are drawn from the ISOM library, the single
+    // purple was split into lower + upper, and the fixture's non-standard colour order is flagged.
+    expect(load!.document!.canonicalSymbols).toBeGreaterThan(0);
+    expect(load!.document!.canonicalSymbols).toBeLessThan(load!.document!.symbols);
+    expect(load!.document!.warnings).toHaveProperty("COLOUR_ORDER_CONFLICT");
+    expect(load!.document!.warnings).not.toHaveProperty("SYMBOL_UNMATCHED");
+    await expect(page.getByTestId("map-gl-doc-document")).toContainText("canonical");
     // Something was drawn: the canvas is not uniformly the paper colour.
     const dataUrl = await page.getByTestId("map-gl-doc-canvas").evaluate((c) => (c as HTMLCanvasElement).toDataURL("image/png"));
     const png = PNG.sync.read(Buffer.from(dataUrl.split(",")[1], "base64"));

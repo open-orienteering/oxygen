@@ -27,8 +27,8 @@ export const rock: LibraryEntryInput[] = [
     variant: "b", description: "Passable cliff with tags showing the direction of fall.", minimum: { lengthUm: 600 },
   }),
 
-  entry("203.1", "Rocky pit or cave", "P", point(fillPart(K, [154, 302, 350, 302, 0, -489, -350, 302, -154, 302, 0, -50]), "object"), {
-    notes: "V shape 0.7 mm (outside measure) wide, arms 0.16 mm; north-oriented unless it is a cave with a distinct entrance, then pointing into the cave.",
+  entry("203.1", "Rocky pit or cave", "P", point(fillPart(K, [154, 302, 350, 302, 0, -489, -350, 302, -154, 302, 0, -50]), "north"), {
+    notes: "V shape 0.7 mm (outside measure) wide, arms 0.16 mm; orientated to north (OCAD template sets mark it non-rotatable; a cave with a distinct entrance should point into the cave).",
   }),
   entry("203.2", "Dangerous pit", "P", point([disc(C.whiteGB, 900), ring(K, 900, 350)]), {
     footprintM: 13.5, notes: "Rev 6 addition: black ring 0.9 mm outside measure, 0.35 mm wide, white inside.",

@@ -11,7 +11,11 @@
 import { proxySymbols } from "../render/ocad-objects.js";
 import type { RenderSymbol } from "../render/symbol.js";
 import type { RenderObject } from "../render/symbolise.js";
-import { OBJECT_TYPE } from "./header.js";
+import { scaleRenderSymbol } from "../render/transform.js";
+import { getLibraryEntry } from "../symbol-library/index.js";
+import { resolveEntry } from "../symbol-library/schema.js";
+import { paletteIndexOfStack } from "../import/colour-align.js";
+import { type DocumentSymbol, OBJECT_TYPE } from "./header.js";
 import type { MapDocument } from "./codec.js";
 
 export interface DocumentRenderOptions {
@@ -20,13 +24,48 @@ export interface DocumentRenderOptions {
   proxyColours?: { line?: number; area?: number; point?: number; text?: number };
   /** Draw objects of hidden symbols too. Default false. */
   includeHidden?: boolean;
+  /**
+   * Prefer the canonical library entry for symbols whose match is applied
+   * (`state: "auto"` or reviewed) — 02 layer 2. Default true; `false`
+   * draws every symbol from its source definition (the review UI's
+   * "source" preview).
+   */
+  canonical?: boolean;
 }
 
 export interface DocumentRenderInput {
   objects: RenderObject[];
   /** One entry per document symbol (null-render symbols get the proxy for their kind), plus the proxies appended. */
   symbols: RenderSymbol[];
-  stats: { total: number; rendered: number; proxied: number; hidden: number; dropped: number; coordinates: number };
+  stats: {
+    total: number; rendered: number; proxied: number; hidden: number; dropped: number; coordinates: number;
+    /** Symbols drawn from a canonical entry rather than their source definition. */
+    canonicalSymbols: number;
+    /** Applied matches whose entry or colours could not be resolved (library changed); drawn from source. */
+    canonicalMissing: number;
+  };
+}
+
+/** Whether a match is drawn canonically: automatic, or confirmed by review. */
+export function isAppliedMatch(match: DocumentSymbol["match"]): match is NonNullable<DocumentSymbol["match"]> & { canonicalId: string } {
+  return !!match && match.canonicalId !== null && (match.state === "auto" || match.reviewed);
+}
+
+/**
+ * The canonical `RenderSymbol` for a matched document symbol: the library
+ * entry resolved through the aligned colour stack and scaled by the
+ * document factor (03 §6.6). `undefined` when the match is not applied or
+ * cannot be resolved against the current library.
+ */
+export function canonicalRender(doc: Pick<MapDocument, "header">, sym: DocumentSymbol, index = paletteIndexOfStack(doc.header.colours)): RenderSymbol | undefined {
+  if (!isAppliedMatch(sym.match)) return undefined;
+  const entry = getLibraryEntry(sym.match.canonicalId);
+  if (!entry) return undefined;
+  try {
+    return scaleRenderSymbol(resolveEntry(entry, index), doc.header.documentFactor);
+  } catch {
+    return undefined;
+  }
 }
 
 const kindOfType = (type: number): RenderSymbol["type"] | undefined =>
@@ -38,20 +77,30 @@ const kindOfType = (type: number): RenderSymbol["type"] | undefined =>
 
 export function documentRenderInput(doc: MapDocument, opts: DocumentRenderOptions = {}): DocumentRenderInput {
   const unmatched = opts.unmatched ?? "proxy";
+  const canonical = opts.canonical ?? true;
   const unitUm = 1000 / doc.header.unitsPerMm;
   const symbols: RenderSymbol[] = [];
   const proxyIdx: Partial<Record<RenderSymbol["type"], number>> = {};
   const proxies = proxySymbols(opts.proxyColours);
+  const stats = { total: doc.header.objects.count, rendered: 0, proxied: 0, hidden: 0, dropped: 0, coordinates: 0, canonicalSymbols: 0, canonicalMissing: 0 };
   // Symbol i of the document maps to symbols[i]; placeholders keep indices aligned.
   const placeholder = proxies[0];
-  for (const s of doc.header.symbols) symbols.push(s.render ?? placeholder);
+  const index = canonical ? paletteIndexOfStack(doc.header.colours) : undefined;
+  for (const s of doc.header.symbols) {
+    let render = s.render;
+    if (index && isAppliedMatch(s.match)) {
+      const c = canonicalRender(doc, s, index);
+      if (c) { render = c; stats.canonicalSymbols++; }
+      else stats.canonicalMissing++;
+    }
+    symbols.push(render ?? placeholder);
+  }
   for (const p of proxies) {
     proxyIdx[p.type] = symbols.length;
     symbols.push(p);
   }
 
   const objects: RenderObject[] = [];
-  const stats = { total: doc.header.objects.count, rendered: 0, proxied: 0, hidden: 0, dropped: 0, coordinates: 0 };
   for (let i = 0; i < doc.header.objects.count; i++) {
     const symIdx = doc.attrs.symbolIdx[i];
     const sym = doc.header.symbols[symIdx];
@@ -67,7 +116,8 @@ export function documentRenderInput(doc: MapDocument, opts: DocumentRenderOption
     const kind = kindOfType(type);
     let renderIdx: number | undefined;
     let viaProxy = false;
-    if (sym.render && (!kind || sym.render.type === kind)) {
+    const render = symbols[symIdx];
+    if ((sym.render || render !== placeholder) && (!kind || render.type === kind)) {
       renderIdx = symIdx;
     } else if (unmatched === "proxy" && kind && proxyIdx[kind] !== undefined) {
       renderIdx = proxyIdx[kind];

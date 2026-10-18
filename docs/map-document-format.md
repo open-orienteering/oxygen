@@ -46,8 +46,8 @@ complete. Field order below is the schema's.
 | `source.bytes` | int | Source file size |
 | `unitsPerMm` | int | Native paper unit: **100** for OCAD (1/100 mm), **1000** for OMAP (1/1000 mm) |
 | `mapScale` | number | Scale denominator, e.g. `15000` |
-| `documentFactor` | number | 03 §6.6 symbol scale factor; `1` until the matcher sets it |
-| `library` | `{ id, version } \| null` | Canonical library the matches refer to; `null` before matching |
+| `documentFactor` | number | 03 §6.6 symbol scale factor set by the matcher (`docs/map-symbols.md` §8.3); canonical renders are scaled by it |
+| `library` | `{ id, version } \| null` | Canonical library the matches refer to (`{ id: "ISOM2017-2", version: SYMBOL_LIBRARY_VERSION }`); `null` only in documents that never went through stage 6 |
 | `georeferencing` | §2.3 | |
 | `bounds` | `{ minX, minY, maxX, maxY }` | Union of object bounding boxes, native units (computed by the encoder) |
 | `printWindow` | `{ scale?, left, bottom, right, top } \| null` | OCAD PrintPar, paper mm, y-up |
@@ -63,14 +63,18 @@ complete. Field order below is the schema's.
 
 ```ts
 { id: "src:12", name: "Brun", cmyk: [0, 0.56, 1, 0.18], sourceNumber: 12,
-  spot?: { name?, knockout? }, overprint?: true, purpleRole?: "lower" | "upper" }
+  spot?: { name?, knockout? }, overprint?: true, purpleRole?: "lower" | "upper",
+  paletteIds?: ["brown100-line"] }
 ```
 
 The stack is the document's draw order: **index 0 is drawn first**.
 Source colours are imported in the source's render order (for OCAD,
 `renderOrder` 0 is the top of the table and therefore the last index);
-`sourceNumber` is the source colour number. Palette entries inserted by
-colour alignment (03 §6.3, later in slice B) have no `sourceNumber`.
+`sourceNumber` is the source colour number. `paletteIds` lists the IOF
+palette entries this stack entry stands for (03 §6.3 steps 2–3,
+`docs/map-symbols.md` §9); canonical library entries resolve their colours
+through it. Palette entries inserted by colour alignment have
+`id: "<edition>:<paletteId>"`, the palette CMYK and no `sourceNumber`.
 `cmyk` is 0–1. RGB is never stored; the screen conversion is
 `render.cmykToHex`.
 
@@ -80,7 +84,7 @@ colour alignment (03 §6.3, later in slice B) have no `sourceNumber`.
 { code: "505.1", name: "Stig", kind: "line", origin: "source", hidden: false,
   sourceIndex: 17, sourceFont?: "Arial Narrow",
   render: RenderSymbol | null,
-  match?: { canonicalId, method, confidence, reasons, reviewed, libraryVersion } }
+  match?: { canonicalId, method, state, confidence, reasons, reviewed, libraryVersion, alternatives? } }
 ```
 
 - One entry per **source symbol**, in source table order (`sourceIndex`).
@@ -99,7 +103,12 @@ colour alignment (03 §6.3, later in slice B) have no `sourceNumber`.
   `render.RenderSymbol`). `null` means the normaliser could not express
   the source definition; the render bridge then draws a proxy (§8) or
   drops the object, and the import report says which.
-- `match` is the 03 matcher's result; absent until the matcher runs.
+- `match` is the 03 matcher's result for `origin: "source"` symbols
+  (`docs/map-symbols.md` §8.2): `state` is `auto` (drawn from the
+  library), `suggested` (waits for review, drawn from source) or
+  `unmatched`; `method` names the stage that decided. Absent on
+  `graphic` / `missing` entries and on documents that never went through
+  stage 6.
 
 ### 2.3 Georeferencing
 
@@ -252,12 +261,17 @@ the corpus and in unit tests). Used for fixtures, diffs and the
 `mapDocument.documentRenderInput(doc, { unmatched, proxyColours, includeHidden })`
 produces the symboliser's input: coordinates in µm, `RenderObject`s with
 `angleDeg = angle / 10`, text from `strings`, `closed` for areas and
-rectangles. Symbol resolution per object: the symbol's `render` when it
-exists and its kind agrees with the object type; otherwise a proxy per
-kind (`unmatched: "proxy"`, the S1 envelope) or nothing
-(`unmatched: "drop"`). Hidden symbols' objects are skipped unless
-`includeHidden`. Statistics: `total, rendered, proxied, hidden, dropped,
-coordinates`.
+rectangles. Symbol resolution per object: for a symbol whose `match` is
+applied (`state: "auto"`, or `reviewed` with a `canonicalId`) the library
+entry resolved through the stack's `paletteIds` and scaled by
+`documentFactor` (`canonical: false` turns this off and draws every
+symbol from source); otherwise the symbol's `render` when it exists and
+its kind agrees with the object type; otherwise a proxy per kind
+(`unmatched: "proxy"`, the S1 envelope) or nothing (`unmatched: "drop"`).
+Hidden symbols' objects are skipped unless `includeHidden`. Statistics:
+`total, rendered, proxied, hidden, dropped, coordinates, canonicalSymbols,
+canonicalMissing` (the last counts applied matches whose entry or colours
+could not be resolved — always 0 for a document the importer produced).
 
 ## 9. Measured on the corpus
 

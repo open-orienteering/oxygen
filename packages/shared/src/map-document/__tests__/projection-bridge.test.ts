@@ -70,7 +70,7 @@ describe("documentRenderInput", () => {
     // symbols: 5 document entries (placeholders for null) + 4 proxies
     expect(r.symbols).toHaveLength(9);
     expect(r.symbols[0].code).toBe("505");
-    expect(r.stats).toEqual({ total: 6, rendered: 1, proxied: 3, hidden: 1, dropped: 1, coordinates: 1 + 2 + 3 + 1 });
+    expect(r.stats).toEqual({ total: 6, rendered: 1, proxied: 3, hidden: 1, dropped: 1, coordinates: 1 + 2 + 3 + 1, canonicalSymbols: 0, canonicalMissing: 0 });
 
     const bySym = (code: string) => r.objects.filter((o) => r.symbols[o.symbolIdx].code === code);
     const path = bySym("505")[0];

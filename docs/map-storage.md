@@ -78,8 +78,19 @@ storeImportedDocument(db, { source: { bytes, fileHash, kind, fileName, uploadedB
   (`mapImport.importReportSchema`): importer, source `{kind, version,
   fileName, bytes, fileHash}`, `counts` (objects, coordinates, symbols,
   symbolsRendered / symbolsUnrendered, colours, texts, graphicObjects,
-  missingSymbolObjects), code-keyed `warnings[]` with counts, `timings`.
-- `library_version` is `"none"` until the matcher (import stage 6) lands.
+  missingSymbolObjects), code-keyed `warnings[]` with counts, `timings`,
+  and since stages 6–7 landed `matching` (library, edition, thresholds,
+  factor, symbol / object counts per state, `byMethod`, `scaleAnomalies`)
+  and `colourStack` (source count, inserted, aliased, conflicts,
+  unclassified) — `docs/map-symbols.md` §8–§9.
+- `library_version` is `"<library>@<SYMBOL_LIBRARY_VERSION>"`
+  (`ISOM2017-2@2026.10.1`), the library the matcher chose for the
+  document. Rows imported before the matcher carry `"none"`
+  (`LIBRARY_VERSION_NONE`) and `importer ocad-3`; they are no longer
+  dedup targets, so the next upload of the same bytes produces a new
+  document row under the current importer and library version while the
+  old row waits for GC (§8). Re-matching already-stored documents in bulk
+  is a pending backfill (§8).
 - `touchDocument(db, hash)` bumps `last_referenced_at`; called whenever a
   reference is created. GC grace is measured from it.
 
@@ -260,7 +271,7 @@ instance loses nothing. `packages/api/src/map-store/jobs.ts`.
 ```
 startImportJob(db, {sourceHash, eventId? | clubMapId?, holdMs?})
   │
-  ├─ a map_documents row exists for (sourceHash, importer ocad-3, library none)
+  ├─ a map_documents row exists for (sourceHash, importer ocad-4, library *@<current SYMBOL_LIBRARY_VERSION>)
   │     → insert state=done with that document_hash, applyJobResult, return   (06 §8 dedup, no worker)
   │
   └─ insert state=queued → kickImportJobs → hold ≤ holdMs for the result → return the row
@@ -268,7 +279,7 @@ startImportJob(db, {sourceHash, eventId? | clubMapId?, holdMs?})
 kickImportJobs: one loop per instance
   claim (atomic updateMany: queued, or running with heartbeat older than 60 s)
   → running, claimed_by = INSTANCE_ID, stage parse
-  → worker thread: parse → normalise → encode        (stage + progress written at each boundary,
+  → worker thread: parse → normalise → match → encode (stage + progress written at each boundary,
   → store: storeImportedDocument (§3)                 heartbeat every 10 s while it runs)
   → applyJobResult: pins (§6.4)
   → done | failed(error)
@@ -281,7 +292,7 @@ kickImportJobs: one loop per instance
 | `done` | `document_hash` set, pins applied |
 | `failed` | `error` set (≤ 2000 chars); `UNSUPPORTED_FORMAT: …` for a non-OCAD source, the importer's message otherwise |
 
-`stage` ∈ `parse 0.1 → normalise 0.4 → encode 0.7 → store 0.9 → done 1`;
+`stage` ∈ `parse 0.1 → normalise 0.4 → match 0.55 → encode 0.7 → store 0.9 → done 1`;
 `progress` is that fixed ladder, not a byte count. Every progress and
 terminal write is guarded by `claimed_by = INSTANCE_ID`, so an instance
 whose job was re-claimed after a stall cannot overwrite the new owner's
@@ -409,7 +420,9 @@ slice); club map CRUD that reads from `club_maps` / `club_map_versions`
 instead of mirroring into them; "own running import job" as a fourth
 authorisation clause on the document route (§4.2); daily GC with a 30-day
 grace from `last_referenced_at` (07 §5); venue checkout snapshot; backups
-by hash. Each lands with its own section here and its own tests.
+by hash; a re-import pass for documents stored under an older importer or
+library version (`ocad-3` / `none` rows). Each lands with its own section
+here and its own tests.
 
 ## 9. Tests
 
@@ -417,7 +430,7 @@ by hash. Each lands with its own section here and its own tests.
 |---|---|---|
 | Unit (api) | `packages/api/src/__tests__/map-document-route.test.ts` | `parseRangeHeader` (forms, clamping, suffix, multi → ignored, unsatisfiable), `negotiateEncoding` (q-values, wildcard, refusal), `authoriseDocumentAccess` matrix over stub queries, `documentHeaderSummary` |
 | Integration (api) | `packages/api/src/__tests__/integration/map-documents.test.ts` | store + dedup under another name, source/hash mismatch refused, `RESTRICT` on a pinned document, blob reads whole/range, `applyEventMap` pins + `mapMetadata`, route 400/401/403/404/200 with headers, `?event=` + kiosk key, brotli/gzip round trip, 304, 206/416/multi-range, club-version visibility, auth off |
-| Unit (api) | `packages/api/src/__tests__/map-import-jobs.test.ts` | `isClaimable` matrix, `stageProgress` monotonic, worker import produces the same hashes as the inline importer with stages `parse → normalise → encode`, worker rejects garbage, upload validators (`validateUploadInit`, `expectedChunkSize`, `sniffMapKind`, `missingChunks`, `assembleChunks`) |
+| Unit (api) | `packages/api/src/__tests__/map-import-jobs.test.ts` | `isClaimable` matrix, `stageProgress` monotonic, worker import produces the same hashes and `libraryVersion` as the inline importer with stages `parse → normalise → match → encode`, worker rejects garbage, upload validators (`validateUploadInit`, `expectedChunkSize`, `sniffMapKind`, `missingChunks`, `assembleChunks`) |
 | Integration (api) | `packages/api/src/__tests__/integration/map-import-jobs.test.ts` | `applyEventMap` job done + pins + report, dedup under another name, garbage / OMAP failures, `holdMs: 0` queued then finished by the engine, stale reclaim vs live job, `mapImport.status` auth (stranger 403, course setter ok) + `latestForEvent`, housekeeping sweep, club upload → series + version 1, `useClubMap` pin, rename / colour-stack mirroring, `addFromSource`, `remove` deletes the series, upload routes 401/403/404/400/413/201, out-of-order and repeated chunks, 415, 409 missing, finalise dedup + idempotency, 409 after finalise, `applyUploadedMap` under the upload's name, `applyJobResult` idempotent |
 | Unit (api) | `packages/api/src/__tests__/map-backfill-cli.test.ts` | CLI argument parsing, per-map lines and summary |
 | Integration (api) | `packages/api/src/__tests__/integration/map-backfill.test.ts` | plan counts and ordering, dry run writes nothing, legacy club row → series (settings copied) + version 1 (label / uploader / time from the row), event rows → pins with dedup and club-version pin, unreadable rows reported and left unpinned, second run revisits only what is missing, `--event` scope and soft-deleted events skipped, `backfillStatus` / `backfillStart` admin-only, background run and `CONFLICT` |

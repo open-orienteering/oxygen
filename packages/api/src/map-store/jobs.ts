@@ -14,10 +14,10 @@ import { randomUUID } from "node:crypto";
 import { extname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Worker } from "node:worker_threads";
-import { mapImport } from "@oxygen/shared";
+import { mapImport, symbolLibrary } from "@oxygen/shared";
 import type { Prisma, PrismaClient } from "../generated/prisma/client.js";
 import type { ImportStage } from "../import/ocad.js";
-import { LIBRARY_VERSION_NONE, storeImportedDocument, touchDocument } from "./documents.js";
+import { storeImportedDocument, touchDocument } from "./documents.js";
 import type { ImportWorkerData, ImportWorkerMessage } from "./import-worker.js";
 
 type Db = PrismaClient | Prisma.TransactionClient;
@@ -70,6 +70,7 @@ export function stageProgress(stage: JobStage): number {
   switch (stage) {
     case "parse": return 0.1;
     case "normalise": return 0.4;
+    case "match": return 0.55;
     case "encode": return 0.7;
     case "store": return 0.9;
     case "done": return 1;
@@ -86,6 +87,7 @@ export interface WorkerResult {
   bytes: Uint8Array;
   documentHash: string;
   fileHash: string;
+  libraryVersion: string;
   report: mapImport.ImportReport;
 }
 
@@ -126,7 +128,7 @@ export function runImportInWorker(
     );
     worker.on("message", (m: ImportWorkerMessage) => {
       if (m.type === "stage") opts.onStage?.(m.stage);
-      else if (m.type === "done") finish(() => resolve({ bytes: m.bytes, documentHash: m.documentHash, fileHash: m.fileHash, report: m.report }));
+      else if (m.type === "done") finish(() => resolve({ bytes: m.bytes, documentHash: m.documentHash, fileHash: m.fileHash, libraryVersion: m.libraryVersion, report: m.report }));
       else finish(() => reject(new Error(m.message)));
     });
     worker.on("error", (err) => finish(() => reject(err)));
@@ -232,7 +234,7 @@ async function execute(db: Db, job: ImportJobRow): Promise<void> {
     await progress(db, job.id, "store");
     const stored = await storeImportedDocument(db, {
       source: { bytes: source.bytes, fileHash: job.sourceHash, kind: "ocad", fileName: source.fileName, uploadedBy: source.uploadedBy },
-      document: { bytes: result.bytes, hash: result.documentHash },
+      document: { bytes: result.bytes, hash: result.documentHash, libraryVersion: result.libraryVersion },
       report: result.report,
     });
     await applyJobResult(db, { ...job, documentHash: stored.documentHash });
@@ -298,7 +300,8 @@ export interface StartImportJobInput {
 export async function startImportJob(db: Db, input: StartImportJobInput): Promise<ImportJobRow> {
   const target = { eventId: input.eventId ?? null, clubMapId: input.clubMapId ?? null };
   const existing = await db.mapDocument.findFirst({
-    where: { sourceHash: input.sourceHash, importerVersion: mapImport.OCAD_IMPORTER_VERSION, libraryVersion: LIBRARY_VERSION_NONE },
+    // Same importer and same library release (the library id itself follows the map scale).
+    where: { sourceHash: input.sourceHash, importerVersion: mapImport.OCAD_IMPORTER_VERSION, libraryVersion: { endsWith: `@${symbolLibrary.SYMBOL_LIBRARY_VERSION}` } },
     orderBy: { createdAt: "desc" },
     select: { hash: true },
   });
