@@ -55,13 +55,15 @@ export function expectedChunkSize(n: number, bytes: number, chunkBytes: number):
  */
 export function sniffMapKind(head: Uint8Array): MapSourceKind | null {
   if (head.length >= 2 && head[0] === 0xad && head[1] === 0x0c) return "ocad";
-  const text = Buffer.from(head.subarray(0, Math.min(head.length, 1024))).toString("latin1");
+  // Optional UTF-8 BOM, then the XML prolog; the root must be a Mapper <map>.
+  const start = head.length >= 3 && head[0] === 0xef && head[1] === 0xbb && head[2] === 0xbf ? 3 : 0;
+  const text = Buffer.from(head.subarray(start, Math.min(head.length, start + 1024))).toString("latin1");
   if (/^\s*<\?xml/.test(text) && /<map\b/.test(text) && /openorienteering/i.test(text)) return "omap";
   return null;
 }
 
-/** Kinds the importer can process today; others are refused at upload (415). */
-export const IMPORTABLE_KINDS: ReadonlySet<MapSourceKind> = new Set<MapSourceKind>(["ocad"]);
+/** Kinds the importer can process; others are refused at upload (415). */
+export const IMPORTABLE_KINDS: ReadonlySet<MapSourceKind> = new Set<MapSourceKind>(["ocad", "omap"]);
 
 /** Which chunk indices of `count` are absent from `present`. */
 export function missingChunks(count: number, present: Iterable<number>): number[] {

@@ -10,12 +10,13 @@
 
 import { parentPort, workerData } from "node:worker_threads";
 import { mapDocument } from "@oxygen/shared";
-import { importOcadToDocument, type ImportStage } from "../import/ocad.js";
+import { importMapToDocument, type ImportStage, type MapSourceKind } from "../import/ocad.js";
 import { buildImportReport } from "./documents.js";
 
 export interface ImportWorkerData {
   bytes: Uint8Array;
   fileName: string;
+  kind: MapSourceKind;
 }
 
 export type ImportWorkerMessage =
@@ -25,11 +26,11 @@ export type ImportWorkerMessage =
 
 const port = parentPort;
 if (port) {
-  const { bytes, fileName } = workerData as ImportWorkerData;
+  const { bytes, fileName, kind } = workerData as ImportWorkerData;
   const post = (m: ImportWorkerMessage) => port.postMessage(m);
   (async () => {
     const file = Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength);
-    const result = await importOcadToDocument(file, fileName, { onStage: (stage) => post({ type: "stage", stage }) });
+    const result = await importMapToDocument(file, fileName, kind ?? "ocad", { onStage: (stage) => post({ type: "stage", stage }) });
     const { header } = mapDocument.readMapDocumentHeader(result.bytes);
     const report = buildImportReport(result, header, fileName);
     post({ type: "done", bytes: result.bytes, documentHash: result.documentHash, fileHash: result.fileHash, libraryVersion: result.libraryVersion, report });

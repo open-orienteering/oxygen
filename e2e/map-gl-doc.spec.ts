@@ -5,7 +5,7 @@
  * normalise → encode → decode (docs/map-document-format.md) → render
  * bridge → `symbolise` → `prepareStream` → `buildBatches` → upload →
  * first frame — and publishes a `LoadReport` and a `BenchReport` on
- * `window.__mapGlDoc`. This spec feeds it the synthetic `e2e/test.ocd`
+ * `window.__mapGlDoc`. This spec feeds it the synthetic `e2e/test.ocd` (and `e2e/test.xmap`)
  * and checks that every stage runs, that batching really merges passes,
  * that the document path and the S1 reader path agree, that a native
  * `.oxvm` loads without the OCAD reader, and that the pixels are not
@@ -174,6 +174,37 @@ test.describe("WebGL2 map backend — whole document", () => {
     expect(load!.document!.warnings).not.toHaveProperty("SYMBOL_UNMATCHED");
     await expect(page.getByTestId("map-gl-doc-document")).toContainText("canonical");
     // Something was drawn: the canvas is not uniformly the paper colour.
+    const dataUrl = await page.getByTestId("map-gl-doc-canvas").evaluate((c) => (c as HTMLCanvasElement).toDataURL("image/png"));
+    const png = PNG.sync.read(Buffer.from(dataUrl.split(",")[1], "base64"));
+    const seen = new Set<number>();
+    for (let i = 0; i < png.data.length; i += 4 * 97) seen.add((png.data[i] << 16) | (png.data[i + 1] << 8) | png.data[i + 2]);
+    expect(seen.size).toBeGreaterThan(1);
+  });
+
+  test("loads the synthetic Mapper fixture e2e/test.xmap client-side without the OCAD reader", async ({ page }, testInfo) => {
+    // The OMAP path (docs/map-import.md §3.4): readOmap → omapToDocumentInput → stages 6–8 unchanged.
+    await page.goto("/dev/map-gl-doc");
+    await page.getByTestId("map-gl-doc-file").setInputFiles("e2e/test.xmap");
+    await expect(page.getByTestId("map-gl-doc-canvas")).toHaveAttribute("data-ready", "true", { timeout: 30_000 });
+    await expect(page.getByTestId("map-gl-doc-error")).toHaveCount(0);
+    // The fixture's one dangling-symbol object is drawn as a proxy; its two hidden-symbol objects are not drawn.
+    await expect(page.getByTestId("map-gl-doc-stats")).toContainText("proxied 1, dropped 2");
+    const load = await page.evaluate(() => (window as unknown as DocWindow).__mapGlDoc?.load);
+    expect(load).toBeDefined();
+    testInfo.annotations.push({ type: "map-gl-doc-omap", description: JSON.stringify({ objects: load!.objects, warnings: load!.document?.warnings }) });
+    expect(load!.mode).toBe("source");
+    expect(load!.via).toBe("document");
+    expect(load!.document!.native).toBe(false);
+    expect(load!.objects.matched).toBe(21);
+    expect(load!.objects.proxied).toBe(1);
+    expect(load!.objects.dropped).toBe(2);
+    expect(load!.passes).toBeGreaterThan(0);
+    expect(load!.document!.canonicalSymbols).toBeGreaterThan(0);
+    // OMAP-specific normalisation warnings surfaced through the same document header.
+    expect(load!.document!.warnings).toHaveProperty("TEMPLATES_DROPPED");
+    expect(load!.document!.warnings).toHaveProperty("PARTS_MERGED");
+    expect(load!.document!.warnings).toHaveProperty("MISSING_SYMBOL");
+    expect(load!.document?.warnings ?? {}).not.toHaveProperty("SYMBOL_COLOUR_UNKNOWN");
     const dataUrl = await page.getByTestId("map-gl-doc-canvas").evaluate((c) => (c as HTMLCanvasElement).toDataURL("image/png"));
     const png = PNG.sync.read(Buffer.from(dataUrl.split(",")[1], "base64"));
     const seen = new Set<number>();

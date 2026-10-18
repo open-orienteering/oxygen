@@ -1,5 +1,5 @@
 /**
- * Import report (docs/map-import.md §5): what stages 3–8 did to a file,
+ * Import report (docs/map-import.md §5, docs/map-storage.md §3): what stages 3–8 did to a file,
  * stored next to the document and asserted on by tests. Warning codes are
  * stable identifiers, never prose. The slice-A shape carries what the
  * OCAD stages produce; the matcher, colour alignment and analysis stages

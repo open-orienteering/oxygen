@@ -349,7 +349,7 @@ against the aligned stack (§9) and are scaled by the document factor;
 `suggested`, `unmatched` and `variant` keep their source IR
 (`map-document/render-bridge.ts` `isAppliedMatch`, `canonical:false`
 turns this off). Reviewing a suggestion is the pending review API
-(`docs/map-import.md` §7); the data contract is already in the header.
+(`docs/map-import.md` §8); the data contract is already in the header.
 
 ### 8.3 Document factor (03 §6.6)
 

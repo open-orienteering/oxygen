@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { createHash } from "node:crypto";
-import { importOcadToDocument } from "../import/ocad.js";
+import { importOcadToDocument, importOmapToDocument } from "../import/ocad.js";
 import { isClaimable, isTerminal, runImportInWorker, stageProgress, STALE_MS } from "../map-store/jobs.js";
 import {
   assembleChunks,
@@ -57,8 +57,22 @@ describe("import worker", () => {
     expect(stages).toEqual(["parse", "normalise", "match", "encode"]);
   }, 60_000);
 
-  it("rejects with the reader's error for bytes that are not OCAD", async () => {
+  it("imports a Mapper file when told the kind, with the same hashes as the inline path", async () => {
+    const xmap = readFileSync(fileURLToPath(new URL("../../../../e2e/test.xmap", import.meta.url)));
+    const stages: string[] = [];
+    const [worker, inline] = await Promise.all([
+      runImportInWorker(xmap, "test.xmap", { kind: "omap", onStage: (s) => stages.push(s), timeoutMs: 60_000 }),
+      importOmapToDocument(xmap, "test.xmap"),
+    ]);
+    expect(worker.documentHash).toBe(inline.documentHash);
+    expect(worker.report.source.kind).toBe("omap");
+    expect(worker.report.importer).toBe("omap-1");
+    expect(stages).toEqual(["parse", "normalise", "match", "encode"]);
+  }, 60_000);
+
+  it("rejects with the reader's error for bytes that are not OCAD / not Mapper XML", async () => {
     await expect(runImportInWorker(Buffer.from("definitely not a map"), "junk.ocd", { timeoutMs: 60_000 })).rejects.toThrow();
+    await expect(runImportInWorker(Buffer.from("<svg/>"), "junk.xmap", { kind: "omap", timeoutMs: 60_000 })).rejects.toThrow(/expected <map>/);
   }, 60_000);
 });
 

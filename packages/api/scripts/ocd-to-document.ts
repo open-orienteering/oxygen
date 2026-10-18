@@ -1,7 +1,8 @@
 /**
- * Converts an OCAD file to a map document (docs/map-document-format.md):
+ * Converts an OCAD or Mapper (`.omap` / `.xmap`) file to a map document
+ * (docs/map-document-format.md). The kind is sniffed from the bytes.
  *
- *   pnpm --filter @oxygen/api document:from-ocd <in.ocd> [out.oxvm] [--json]
+ *   pnpm --filter @oxygen/api document:from-ocd <in.ocd|in.omap> [out.oxvm] [--json]
  *
  * Writes `out.oxvm` (default: the input name with `.oxvm`) and, with
  * `--json`, the debug projection next to it as `.vmap.json`. Prints the
@@ -11,18 +12,24 @@
 
 import { readFile, writeFile } from "node:fs/promises";
 import { mapDocument } from "@oxygen/shared";
-import { importOcadToDocument } from "../src/import/ocad.js";
+import { importMapToDocument } from "../src/import/ocad.js";
+import { sniffMapKind } from "../src/map-store/uploads.js";
 
 const args = process.argv.slice(2);
 const json = args.includes("--json");
 const [input, output] = args.filter((a) => !a.startsWith("--"));
 if (!input) {
-  console.error("usage: ocd-to-document <in.ocd> [out.oxvm] [--json]");
+  console.error("usage: ocd-to-document <in.ocd|in.omap|in.xmap> [out.oxvm] [--json]");
   process.exit(2);
 }
-const out = output ?? input.replace(/\.ocd$/i, "") + ".oxvm";
+const out = output ?? input.replace(/\.(ocd|omap|xmap)$/i, "") + ".oxvm";
 const file = await readFile(input);
-const result = await importOcadToDocument(file, input.split("/").pop() ?? input);
+const kind = sniffMapKind(file.subarray(0, 1024));
+if (!kind) {
+  console.error(`${input}: not an OCAD or Mapper file`);
+  process.exit(2);
+}
+const result = await importMapToDocument(file, input.split("/").pop() ?? input, kind);
 await writeFile(out, result.bytes);
 if (json) {
   const projection = mapDocument.toJsonProjection(mapDocument.decodeMapDocument(result.bytes));

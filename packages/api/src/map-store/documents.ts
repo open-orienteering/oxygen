@@ -8,7 +8,7 @@
 
 import { mapDocument, mapImport } from "@oxygen/shared";
 import type { PrismaClient, Prisma } from "../generated/prisma/client.js";
-import { importOcadToDocument, type OcadImportResult } from "../import/ocad.js";
+import { importMapToDocument, type MapImportResult, type MapSourceKind } from "../import/ocad.js";
 
 type Db = PrismaClient | Prisma.TransactionClient;
 
@@ -38,7 +38,7 @@ export function documentHeaderSummary(header: mapDocument.MapDocumentHeader): Re
   return { ...rest, symbolCount: symbols.length, stringCount: strings.length };
 }
 
-export function buildImportReport(result: OcadImportResult, header: mapDocument.MapDocumentHeader, fileName: string): mapImport.ImportReport {
+export function buildImportReport(result: MapImportResult, header: mapDocument.MapDocumentHeader, fileName: string): mapImport.ImportReport {
   return mapImport.importReportSchema.parse({
     importer: header.format.importer,
     source: { kind: header.source.kind, version: header.source.version, fileName, bytes: header.source.bytes, fileHash: header.source.hash },
@@ -83,22 +83,28 @@ export async function storeImportedDocument(db: Db, input: StoreDocumentInput): 
   return { sourceHash: input.source.fileHash, documentHash: input.document.hash, deduplicated: inserted.count === 0 };
 }
 
-/** Import an OCAD file and store source + document. The whole stage-3-to-9 path for one upload. */
-export async function importAndStoreOcad(
+/** Import a map file of a known kind and store source + document. The whole stage-3-to-9 path for one upload. */
+export async function importAndStoreMap(
   db: Db,
   file: Buffer,
   fileName: string,
+  kind: MapSourceKind,
   opts: { uploadedBy?: string | null } = {},
-): Promise<StoreDocumentResult & { report: mapImport.ImportReport; result: OcadImportResult }> {
-  const result = await importOcadToDocument(file, fileName);
+): Promise<StoreDocumentResult & { report: mapImport.ImportReport; result: MapImportResult }> {
+  const result = await importMapToDocument(file, fileName, kind);
   const { header } = mapDocument.readMapDocumentHeader(result.bytes);
   const report = buildImportReport(result, header, fileName);
   const stored = await storeImportedDocument(db, {
-    source: { bytes: file, fileHash: result.fileHash, kind: "ocad", fileName, uploadedBy: opts.uploadedBy },
+    source: { bytes: file, fileHash: result.fileHash, kind, fileName, uploadedBy: opts.uploadedBy },
     document: { bytes: result.bytes, hash: result.documentHash, libraryVersion: result.libraryVersion },
     report,
   });
   return { ...stored, report, result };
+}
+
+/** OCAD-only convenience kept for existing callers. */
+export function importAndStoreOcad(db: Db, file: Buffer, fileName: string, opts: { uploadedBy?: string | null } = {}) {
+  return importAndStoreMap(db, file, fileName, "ocad", opts);
 }
 
 /** Mark a document as referenced (GC input). */

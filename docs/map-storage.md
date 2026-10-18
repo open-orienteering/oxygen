@@ -60,8 +60,9 @@ Prisma models: `MapSource`, `MapDocument`, `MapPreview`, `ClubMap`,
 `packages/api/src/map-store/documents.ts`:
 
 ```ts
-importAndStoreOcad(db, fileBytes, fileName, { uploadedBy? })
-  → { sourceHash, documentHash, deduplicated, result }   // result = importOcadToDocument()
+importAndStoreMap(db, fileBytes, fileName, kind /* "ocad" | "omap" */, { uploadedBy? })
+  → { sourceHash, documentHash, deduplicated, result }   // result = importMapToDocument()
+importAndStoreOcad(db, fileBytes, fileName, opts)         // = importAndStoreMap(…, "ocad", opts)
 
 storeImportedDocument(db, { source: { bytes, fileHash, kind, fileName, uploadedBy? },
                             document: { bytes, hash, libraryVersion? }, report })
@@ -243,8 +244,10 @@ finalised are deleted after 24 h by housekeeping (§6.6).
 The route only produces a source; importing it is the caller's next
 step — `course.applyUploadedMap {fileHash, fileName?}` for an event,
 `clubMap.addFromSource {fileHash, fileName?, name?}` for the library.
-Both reject a `fileHash` whose source kind is not `ocad` (the only
-importable kind today). `fileName` overrides the name recorded on the
+Both reject a `fileHash` whose source kind is not `ocad`: a Mapper
+source imports to a document through the job (§6) but cannot be made an
+event's or a club's map until the legacy tile consumers are replaced
+(`docs/map-import.md` §2.2). `fileName` overrides the name recorded on the
 upload — the source row keeps whatever the first uploader called it, so
 the event's `map_files.file_name` and the version label come from the
 request, not the shared row.
@@ -271,7 +274,7 @@ instance loses nothing. `packages/api/src/map-store/jobs.ts`.
 ```
 startImportJob(db, {sourceHash, eventId? | clubMapId?, holdMs?})
   │
-  ├─ a map_documents row exists for (sourceHash, importer ocad-4, library *@<current SYMBOL_LIBRARY_VERSION>)
+  ├─ a map_documents row exists for (sourceHash, importer ∈ {ocad-4, omap-1}, library *@<current SYMBOL_LIBRARY_VERSION>)
   │     → insert state=done with that document_hash, applyJobResult, return   (06 §8 dedup, no worker)
   │
   └─ insert state=queued → kickImportJobs → hold ≤ holdMs for the result → return the row
@@ -290,13 +293,13 @@ kickImportJobs: one loop per instance
 | `queued` | inserted, not yet claimed |
 | `running` | claimed by `claimed_by`; alive while `heartbeat_at` is < 60 s old |
 | `done` | `document_hash` set, pins applied |
-| `failed` | `error` set (≤ 2000 chars); `UNSUPPORTED_FORMAT: …` for a non-OCAD source, the importer's message otherwise |
+| `failed` | `error` set (≤ 2000 chars); `UNSUPPORTED_FORMAT: …` for a source whose `kind` is neither `ocad` nor `omap` (unreachable from the upload routes, which sniff), the importer's message otherwise |
 
 `stage` ∈ `parse 0.1 → normalise 0.4 → match 0.55 → encode 0.7 → store 0.9 → done 1`;
 `progress` is that fixed ladder, not a byte count. Every progress and
 terminal write is guarded by `claimed_by = INSTANCE_ID`, so an instance
 whose job was re-claimed after a stall cannot overwrite the new owner's
-state. Re-runs are deterministic (`docs/map-import.md` §5): a re-claimed
+state. Re-runs are deterministic (`docs/map-import.md` §6): a re-claimed
 job produces the same document hash.
 
 ### 6.2 Engine
@@ -317,8 +320,9 @@ import and fails the job.
 
 ### 6.3 Worker
 
-`import-worker.ts` runs `importOcadToDocument` (with `onStage` posting
-`parse` / `normalise` / `encode`) and `buildImportReport`, and posts the
+`import-worker.ts` runs `importMapToDocument` for the source's `kind`
+(with `onStage` posting `parse` / `normalise` / `match` / `encode`) and
+`buildImportReport`, and posts the
 document bytes, hashes and report back. It is launched with
 `new Worker(bootstrap, { eval: true })`: when the API runs from TypeScript
 (`tsx watch`, vitest, the E2E stack) the bootstrap registers
@@ -449,7 +453,7 @@ here and its own tests.
 | `packages/api/src/map-store/uploads.ts` | pure upload rules: limits, chunk sizes, kind sniffing, assembly |
 | `packages/api/src/map-store/upload-routes.ts` | `POST /api/map-uploads`, `PUT …/chunks/:n`, `POST …/finalise` |
 | `packages/api/src/map-store/jobs.ts` | job rows, claim / heartbeat / stale reclaim, worker launcher, `applyJobResult`, housekeeping, engine tick |
-| `packages/api/src/map-store/import-worker.ts` | worker-thread body: `importOcadToDocument` + report |
+| `packages/api/src/map-store/import-worker.ts` | worker-thread body: `importMapToDocument` by kind + report |
 | `packages/api/src/map-store/backfill.ts` | plan, per-row backfill, run loop, in-process run for the Maintenance tab |
 | `packages/api/src/cli/map-backfill.ts` (+ `-args.ts`) | `pnpm map:backfill` |
 | `packages/api/src/routers/mapImport.ts` | `mapImport.status`, `latestForEvent`, `backfillStatus`, `backfillStart` |

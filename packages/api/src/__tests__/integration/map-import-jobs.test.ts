@@ -147,7 +147,7 @@ describe("import jobs from applyEventMap", () => {
     expect(file).toEqual({ fileName: "renamed.ocd", documentHash });
   }, 30_000);
 
-  it("fails cleanly on unreadable bytes and on a kind the importer cannot process yet", async () => {
+  it("fails cleanly on unreadable bytes of either kind", async () => {
     const bad = await startImportJob(ctx.db, { sourceHash: await garbageSource("ocad"), eventId: ctx.eventId });
     expect(bad.state).toBe("failed");
     expect(bad.error).toBeTruthy();
@@ -155,10 +155,29 @@ describe("import jobs from applyEventMap", () => {
 
     const omap = await startImportJob(ctx.db, { sourceHash: await garbageSource("omap"), eventId: ctx.eventId });
     expect(omap.state).toBe("failed");
-    expect(omap.error).toMatch(/UNSUPPORTED_FORMAT/);
+    // Random bytes fail inside the XML reader (which error depends on the bytes), not with UNSUPPORTED_FORMAT.
+    expect(omap.error).toBeTruthy();
+    expect(omap.error).not.toMatch(/UNSUPPORTED_FORMAT/);
+    expect(omap.documentHash).toBeNull();
     // The event's pin is untouched by a failed job.
     const file = await ctx.db.mapFile.findFirstOrThrow({ where: { eventId: ctx.eventId }, select: { documentHash: true } });
     expect(file.documentHash).toBe(documentHash);
+  }, 60_000);
+
+  it("imports a Mapper source through the same job path and dedups it against its own importer version", async () => {
+    const xmap = readFileSync(resolve(__dirname, "../../../../../e2e/test.xmap"));
+    const xmapHash = sha256(xmap);
+    await ctx.db.mapSource.create({ data: { fileHash: xmapHash, kind: "omap", bytes: xmap, sizeBytes: xmap.byteLength, fileName: "test.xmap" } });
+    createdSourceHashes.add(xmapHash);
+    const job = await startImportJob(ctx.db, { sourceHash: xmapHash, clubMapId: null, eventId: null });
+    expect(job.state).toBe("done");
+    expect(job.documentHash).toBeTruthy();
+    const doc = await ctx.db.mapDocument.findUniqueOrThrow({ where: { hash: job.documentHash! }, select: { importerVersion: true, header: true } });
+    expect(doc.importerVersion).toBe("omap-1");
+    expect((doc.header as { source: { kind: string } }).source.kind).toBe("omap");
+    // A second job for the same source skips the worker and reuses the document.
+    const again = await startImportJob(ctx.db, { sourceHash: xmapHash, clubMapId: null, eventId: null });
+    expect(again).toMatchObject({ state: "done", documentHash: job.documentHash });
   }, 60_000);
 
   it("returns a still-queued row when the hold is zero, and the engine finishes it", async () => {

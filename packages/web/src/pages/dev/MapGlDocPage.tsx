@@ -2,7 +2,7 @@
  * Dev-only measurement page for the WebGL2 map backend on real documents
  * (`/dev/map-gl-doc`, spike S1 step 4; docs/map-rendering.md §5.2).
  *
- * Loads an `.ocd` or `.oxvm` (file picker, or `?url=` — in dev Vite serves any file
+ * Loads an `.ocd`, `.omap` / `.xmap` or `.oxvm` (file picker, or `?url=` — in dev Vite serves any file
  * under the repo as `/@fs/<abs path>`), runs it through
  * `readOcad → ocadToDocumentInput → matchDocument (source mode) → encode → decode → documentRenderInput
  * → symbolise → prepareStream → buildBatches → GPU` (`via=document`,
@@ -217,16 +217,25 @@ export function MapGlDocPage() {
           if (isDocument) {
             encoded = new Uint8Array(bytes);
           } else {
-            const ocadMod = await import("ocad2geojson");
-            const readOcad = (ocadMod as Record<string, unknown>).readOcad as (buf: Buffer, opts?: Record<string, unknown>) => Promise<mapImport.OcadFileLike>;
-            const ocad = await readOcad(Buffer.from(bytes), { quietWarnings: true });
+            // Mapper files are XML and need no reader dependency; OCAD goes through ocad2geojson.
+            const isOmap = mapImport.looksLikeOmap(new TextDecoder().decode(new Uint8Array(bytes, 0, Math.min(bytes.byteLength, 1024))));
+            let normalise: (fileHash: string) => mapDocument.MapDocumentInput;
+            if (isOmap) {
+              const omap = mapImport.readOmap(new TextDecoder().decode(bytes));
+              normalise = (fileHash) => mapImport.omapToDocumentInput(omap, { fileName: name, fileHash, fileBytes: bytes.byteLength }).input;
+            } else {
+              const ocadMod = await import("ocad2geojson");
+              const readOcad = (ocadMod as Record<string, unknown>).readOcad as (buf: Buffer, opts?: Record<string, unknown>) => Promise<mapImport.OcadFileLike>;
+              const ocad = await readOcad(Buffer.from(bytes), { quietWarnings: true });
+              normalise = (fileHash) => mapImport.ocadToDocumentInput(ocad, {
+                fileName: name, fileHash, fileBytes: bytes.byteLength,
+                renderFor: mode === "source" ? undefined : (sym) => pilotByCode.get(String(Math.floor(sym.symNum / 1000))) ?? null,
+              }).input;
+            }
             const tRead = performance.now();
             const fileHash = await mapDocument.mapDocumentHash(new Uint8Array(bytes));
             const tHash = performance.now();
-            const { input } = mapImport.ocadToDocumentInput(ocad, {
-              fileName: name, fileHash, fileBytes: bytes.byteLength,
-              renderFor: mode === "source" ? undefined : (sym) => pilotByCode.get(String(Math.floor(sym.symNum / 1000))) ?? null,
-            });
+            const input = normalise(fileHash);
             const tNorm = performance.now();
             // Stages 6–7 only for source renders: the pilot renders carry their own palette.
             const document = mode === "source" ? mapImport.matchDocument(input).input : input;
@@ -495,7 +504,7 @@ export function MapGlDocPage() {
   return (
     <div className="h-screen flex flex-col bg-slate-100 font-mono text-xs text-slate-800">
       <div className="p-2 flex flex-wrap items-center gap-3 border-b border-slate-300 bg-white">
-        <input type="file" accept=".ocd,.oxvm" onChange={onFile} data-testid="map-gl-doc-file" />
+        <input type="file" accept=".ocd,.omap,.xmap,.oxvm" onChange={onFile} data-testid="map-gl-doc-file" />
         <span>mode: <b>{mode}</b></span>
         {(["source", "pilot", "envelope"] as Mode[]).filter((m) => m !== mode).map((m) => (
           <a key={m} className="underline" href={`/dev/map-gl-doc?mode=${m}${url ? `&url=${encodeURIComponent(url)}` : ""}`}>

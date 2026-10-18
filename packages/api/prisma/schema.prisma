@@ -1216,7 +1216,7 @@ model MapDocument {
   /// Document header without the symbol table and strings: quick-access
   /// metadata (scale, bounds, georeferencing, counts).
   header           Json
-  /// Import report (docs/map-import.md §5).
+  /// Import report (docs/map-import.md §5, docs/map-storage.md §3).
   report           Json
   createdAt        DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
   /// Bumped when a reference is created; GC input.
