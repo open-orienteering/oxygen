@@ -554,9 +554,9 @@ runStorageGc(db, { now?, graceDays?, dryRun?, shouldStop? })
    The conditions are re-checked by the delete itself, so a reference or
    a touch committed after the candidate query makes that row a no-op
    (Postgres re-evaluates the row's own columns after waiting on a
-   concurrent writer). A foreign-key violation (`23503`, a `RESTRICT`
-   reference created in the same instant) is caught and counted as
-   `skipped`; the run carries on. `map_previews` go with the row.
+   concurrent writer). A foreign-key refusal (`23001` for `RESTRICT`,
+   `23503` for `NO ACTION` — a reference created in the same instant) is
+   caught and counted as `skipped`; the run carries on. `map_previews` go with the row.
 3. **Sources** — the same over `map_sources`, after the documents so a
    source freed by pass 2 goes in the same run.
 4. **Uploads and jobs** — `sweepImportHousekeeping` (§6.6).

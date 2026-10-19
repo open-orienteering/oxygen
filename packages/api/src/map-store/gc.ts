@@ -63,14 +63,20 @@ export function isGcDue(last: { startedAt: Date | null; finishedAt: Date | null 
   return now.getTime() - finishedAt.getTime() >= GC_INTERVAL_MS;
 }
 
-/** Postgres `23503` (foreign-key violation), however the driver or Prisma wraps it. */
-export function isForeignKeyViolation(err: unknown): boolean {
-  for (let e: unknown = err, depth = 0; e && typeof e === "object" && depth < 4; e = (e as { cause?: unknown }).cause, depth++) {
-    const o = e as { code?: unknown; meta?: { code?: unknown }; message?: unknown };
-    if (o.code === "23503" || o.code === "P2003" || o.meta?.code === "23503") return true;
-    if (typeof o.message === "string" && /violates foreign key constraint/i.test(o.message)) return true;
-  }
-  return false;
+const FK_SQLSTATES = new Set(["23001", "23503"]);
+
+/**
+ * A delete refused by a foreign key: Postgres `23001` (`ON DELETE
+ * RESTRICT`) or `23503` (`NO ACTION`), however Prisma and the driver
+ * adapter wrap it (P2010 → `meta.driverAdapterError.cause.code`).
+ */
+export function isForeignKeyViolation(err: unknown, depth = 0): boolean {
+  if (!err || typeof err !== "object" || depth > 4) return false;
+  const o = err as { code?: unknown; originalCode?: unknown; meta?: { code?: unknown; driverAdapterError?: unknown }; cause?: unknown; message?: unknown };
+  if (o.code === "P2003") return true;
+  for (const c of [o.code, o.originalCode, o.meta?.code]) if (typeof c === "string" && FK_SQLSTATES.has(c)) return true;
+  if (typeof o.message === "string" && /violates (RESTRICT setting of )?foreign key constraint/i.test(o.message)) return true;
+  return isForeignKeyViolation(o.meta?.driverAdapterError, depth + 1) || isForeignKeyViolation(o.cause, depth + 1);
 }
 
 // ---- one run ----------------------------------------------------------------
@@ -81,8 +87,8 @@ export interface StorageGcOptions {
   graceDays?: number;
   /** List the candidates; touch and delete nothing. */
   dryRun?: boolean;
-  /** Checked between rows; true ends the run early. */
-  shouldStop?: () => boolean;
+  /** Checked before every delete; true ends the run early. */
+  shouldStop?: () => boolean | Promise<boolean>;
 }
 
 export interface StorageGcResult {
@@ -149,7 +155,7 @@ export async function runStorageGc(db: PrismaClient, opts: StorageGcOptions = {}
     result.documents = docCandidates.map((r) => r.hash);
   } else {
     for (const { hash } of docCandidates) {
-      if (shouldStop()) return finishStopped(result);
+      if (await shouldStop()) return finishStopped(result);
       try {
         const deleted = await db.$queryRawUnsafe<{ hash: string; source_hash: string; size_bytes: number; last_referenced_at: Date }[]>(
           `DELETE FROM oxygen.map_documents d WHERE d.hash = $1 AND d.last_referenced_at < $2 AND ${DOCUMENT_UNREFERENCED}
@@ -182,7 +188,7 @@ export async function runStorageGc(db: PrismaClient, opts: StorageGcOptions = {}
     result.sources = srcCandidates.map((r) => r.file_hash);
   } else {
     for (const { file_hash: hash } of srcCandidates) {
-      if (shouldStop()) return finishStopped(result);
+      if (await shouldStop()) return finishStopped(result);
       try {
         const deleted = await db.$queryRawUnsafe<{ file_hash: string; kind: string; size_bytes: number; file_name: string }[]>(
           `DELETE FROM oxygen.map_sources s WHERE s.file_hash = $1 AND s.created_at < $2 AND ${SOURCE_UNREFERENCED("")}
@@ -206,7 +212,7 @@ export async function runStorageGc(db: PrismaClient, opts: StorageGcOptions = {}
 
   // 4. Expired uploads and job rows (§6.6).
   if (!dryRun) {
-    if (shouldStop()) return finishStopped(result);
+    if (await shouldStop()) return finishStopped(result);
     const swept = await sweepImportHousekeeping(db, now);
     result.uploads = swept.uploads;
     result.jobs = swept.jobs;

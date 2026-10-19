@@ -45,7 +45,10 @@ describe("isGcDue", () => {
 });
 
 describe("isForeignKeyViolation", () => {
-  it("recognises Postgres 23503 however Prisma wraps it", () => {
+  it("recognises Postgres 23001 (RESTRICT) and 23503 however Prisma wraps them", () => {
+    // Prisma 7 + adapter-pg, as observed for a RESTRICT violation on a raw DELETE.
+    expect(isForeignKeyViolation({ code: "P2010", meta: { driverAdapterError: { cause: { originalCode: "23001", code: "23001", kind: "postgres" } } } })).toBe(true);
+    expect(isForeignKeyViolation({ code: "P2010", meta: { driverAdapterError: { cause: { code: "40001" } } } })).toBe(false);
     expect(isForeignKeyViolation({ code: "P2003" })).toBe(true);
     expect(isForeignKeyViolation({ code: "P2010", meta: { code: "23503" } })).toBe(true);
     expect(isForeignKeyViolation({ code: "23503" })).toBe(true);

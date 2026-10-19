@@ -10,8 +10,10 @@ import { API_BASE } from "./helpers/api-base";
  * event map additionally stores an immutable document the event pins,
  * `course.mapMetadata` exposes its hash, and `/api/map-documents/:hash`
  * serves it — gated by the event, cached as immutable, range-capable —
- * so the GL dev page can load it straight from the API. The second test
- * drives the chunked upload route and the import job status end to end.
+ * so the GL dev page can load it straight from the API; the original file
+ * streams back from `/api/map-sources/:hash` to an event manager. The
+ * second test drives the chunked upload route and the import job status
+ * end to end.
  */
 
 const EVENT = "itest";
@@ -67,6 +69,19 @@ test.describe("Map documents", () => {
     expect((await range.body()).toString()).toBe("OXVM");
     const noEvent = await request.get(`${API_BASE}/api/map-documents/${hash}`, { headers: { "x-event-id": "meos_20251222_001121_2BC" } });
     expect(noEvent.status()).toBe(403);
+
+    // The original upload streams back to an event manager as an uncached attachment (docs/map-storage.md §4.4).
+    const file = readFileSync("e2e/test.ocd");
+    const sourceHash = createHash("sha256").update(file).digest("hex");
+    const source = await request.get(`${API_BASE}/api/map-sources/${sourceHash}`, { headers: HEADERS });
+    expect(source.status()).toBe(200);
+    expect(source.headers()["content-type"]).toBe("application/octet-stream");
+    expect(source.headers()["cache-control"]).toBe("private, no-store");
+    expect(source.headers()["content-disposition"]).toContain('filename="test.ocd"');
+    expect((await source.body()).equals(file)).toBe(true);
+    // Anonymous (no proxy identity) never gets it.
+    const anonymous = await request.get(`${API_BASE}/api/map-sources/${sourceHash}`, { headers: { ...HEADERS, "x-forwarded-email": "" } });
+    expect(anonymous.status()).toBe(401);
 
     // The GL dev page loads the document from the route (no OCAD reader involved).
     await page.goto(`/dev/map-gl-doc?url=${encodeURIComponent(`/api/map-documents/${hash}?event=${EVENT}`)}`);
