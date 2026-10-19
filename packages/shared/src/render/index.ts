@@ -28,3 +28,4 @@ export * from "./pattern.js";
 export * from "./text.js";
 export * from "./truetype.js";
 export * from "./symbolise.js";
+export * from "./swatch.js";
