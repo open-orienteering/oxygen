@@ -177,22 +177,39 @@ export async function identity(req: FastifyRequest): Promise<RequestIdentity> {
   };
 }
 
+/** Lower-cased `:hash` when it is 64 hex digits, else `null`. */
+export function parseDocumentHash(raw: string): string | null {
+  const hash = raw.toLowerCase();
+  return HASH.test(hash) ? hash : null;
+}
+
+/**
+ * §4.2 for one request: the predicate behind the 60 s positive cache.
+ * Sends 401/403 and returns false when the caller may not see `hash`.
+ * Shared by the document route and the preview routes (§4.4).
+ */
+export async function requireDocumentAccess(req: FastifyRequest, reply: FastifyReply, hash: string): Promise<boolean> {
+  const who = await identity(req);
+  const input: DocumentAccessInput = { hash, ...who };
+  const key = cacheKey(input);
+  const cachedUntil = accessCache.get(key);
+  if (cachedUntil !== undefined && cachedUntil > Date.now()) return true;
+  const access = await authoriseDocumentAccess(input, prismaQueries);
+  if (!access.ok) {
+    void reply.code(access.status).send({ error: access.status === 401 ? "Not authenticated" : "Forbidden" });
+    return false;
+  }
+  accessCache.set(key, Date.now() + ACCESS_TTL_MS);
+  return true;
+}
+
 // ---- route ------------------------------------------------------------------
 
 export function registerMapDocumentRoutes(server: FastifyInstance): void {
   server.get<{ Params: { hash: string } }>("/api/map-documents/:hash", async (req, reply) => {
-    const hash = req.params.hash.toLowerCase();
-    if (!HASH.test(hash)) return reply.code(400).send({ error: "Invalid document hash" });
-
-    const who = await identity(req);
-    const input: DocumentAccessInput = { hash, ...who };
-    const key = cacheKey(input);
-    const cachedUntil = accessCache.get(key);
-    if (!(cachedUntil !== undefined && cachedUntil > Date.now())) {
-      const access = await authoriseDocumentAccess(input, prismaQueries);
-      if (!access.ok) return reply.code(access.status).send({ error: access.status === 401 ? "Not authenticated" : "Forbidden" });
-      accessCache.set(key, Date.now() + ACCESS_TTL_MS);
-    }
+    const hash = parseDocumentHash(req.params.hash);
+    if (!hash) return reply.code(400).send({ error: "Invalid document hash" });
+    if (!(await requireDocumentAccess(req, reply, hash))) return reply;
 
     const size = await getBlobSize(prisma(), "map_documents", hash);
     if (size === null) return reply.code(404).send({ error: "Unknown document" });
@@ -233,7 +250,8 @@ function sendWhole(reply: FastifyReply, bytes: Buffer, enc: Encoding): FastifyRe
   return reply.header("Content-Length", String(bytes.byteLength)).send(bytes);
 }
 
-function matchesEtag(ifNoneMatch: string | string[] | undefined, etag: string): boolean {
+/** `If-None-Match` against one ETag: weak or strong, a list, or `*`. */
+export function matchesEtag(ifNoneMatch: string | string[] | undefined, etag: string): boolean {
   const raw = Array.isArray(ifNoneMatch) ? ifNoneMatch.join(",") : ifNoneMatch;
   if (!raw) return false;
   return raw.split(",").some((t) => {
