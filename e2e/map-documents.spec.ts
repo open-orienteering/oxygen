@@ -68,6 +68,24 @@ test.describe("Map documents", () => {
     const noEvent = await request.get(`${API_BASE}/api/map-documents/${hash}`, { headers: { "x-event-id": "meos_20251222_001121_2BC" } });
     expect(noEvent.status()).toBe(403);
 
+    // Previews (docs/map-storage.md §4.4): import stage 10 wrote the
+    // thumbnail, symbol swatches render on first request; both are gated
+    // like the document. The library swatch is addressed by the library
+    // and version the document header names.
+    for (const path of ["thumbnail.png", "symbols/0.png"]) {
+      const res = await request.get(`${API_BASE}/api/map-documents/${hash}/${path}`, { headers: HEADERS });
+      expect(res.status(), path).toBe(200);
+      expect(res.headers()["content-type"]).toBe("image/png");
+      expect(res.headers()["cache-control"]).toBe("private, max-age=31536000, immutable");
+      expect((await res.body()).subarray(1, 4).toString()).toBe("PNG");
+      const denied = await request.get(`${API_BASE}/api/map-documents/${hash}/${path}`, { headers: { "x-event-id": "meos_20251222_001121_2BC" } });
+      expect(denied.status(), path).toBe(403);
+    }
+    const header = JSON.parse(body.subarray(12, 12 + body.readUInt32LE(8)).toString()) as { library: { id: string; version: string } };
+    const lib = await request.get(`${API_BASE}/api/library/${header.library.id}/${header.library.version}/418.png`);
+    expect(lib.status()).toBe(200);
+    expect(lib.headers()["cache-control"]).toBe("public, max-age=31536000, immutable");
+
     // The GL dev page loads the document from the route (no OCAD reader involved).
     await page.goto(`/dev/map-gl-doc?url=${encodeURIComponent(`/api/map-documents/${hash}?event=${EVENT}`)}`);
     await expect(page.getByTestId("map-gl-doc-canvas")).toHaveAttribute("data-ready", "true", { timeout: 30_000 });

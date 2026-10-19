@@ -230,10 +230,20 @@ defaults (canonical layer on, hidden symbols off, proxies for symbols
 without a render) → `symbolise` with the bundled fonts → reference raster
 on white paper. The area is the print window when the header has one,
 otherwise `header.bounds`; the density puts the longer side at 512 px.
-Documents with more than `THUMBNAIL_MAX_OBJECTS` objects are not
-thumbnailed: stage 10 logs and writes nothing, and the route answers 404
-— symbolising a club-size map into one SVG for resvg takes seconds and
-hundreds of MB on the API process, which a cache entry is not worth.
+Documents with more than `THUMBNAIL_MAX_OBJECTS` = 60 000 objects are
+not thumbnailed: stage 10 logs and writes nothing, and the route answers
+404. The check reads the object count from the stored header summary
+(§3), so an over-cap document costs no blob read. Thumbnails render one
+at a time per instance; concurrent requests for the same row share one
+render. Measured on the local corpus (render + encode, one process):
+
+| Map | Objects | Time | Peak RSS added |
+|---|---|---|---|
+| crop-b | 3 073 | 0.27 s | 18 MB |
+| crop-a | 4 983 | 0.34 s | — |
+| sprint (print window) | 10 680 | 0.43 s | 98 MB |
+| club-2026 | 45 884 | 2.8 s | 166 MB |
+| club-full | 101 729 | 4.7 s | 360 MB — over the cap |
 
 **Symbol swatch.** `header.symbols[idx].render` drawn by the shared
 swatch scene (`docs/map-rendering.md` §5.1.1) in the document's own
@@ -500,8 +510,7 @@ viewer (slice B) and the service-worker CacheFirst layer (07 §7,
 
 ## 8. Pending in this chapter
 
-`GET /api/map-sources/:hash` streamed; previews route and rows (review
-slice); club map CRUD that reads from `club_maps` / `club_map_versions`
+`GET /api/map-sources/:hash` streamed; club map CRUD that reads from `club_maps` / `club_map_versions`
 instead of mirroring into them; "own running import job" as a fourth
 authorisation clause on the document route (§4.2); daily GC with a 30-day
 grace from `last_referenced_at` (07 §5); venue checkout snapshot; backups
@@ -520,8 +529,11 @@ here and its own tests.
 | Unit (api) | `packages/api/src/__tests__/map-backfill-cli.test.ts` | CLI argument parsing, per-map lines and summary |
 | Integration (api) | `packages/api/src/__tests__/integration/map-backfill.test.ts` | plan counts and ordering, dry run writes nothing, legacy club row → series (settings copied) + version 1 (label / uploader / time from the row), event rows → pins with dedup and club-version pin, unreadable rows reported and left unpinned, second run revisits only what is missing, `--event` scope and soft-deleted events skipped, `backfillStatus` / `backfillStart` admin-only, background run and `CONFLICT` |
 | Unit (web) | `packages/web/src/__tests__/map-upload.test.ts` | threshold, init → chunks → finalise call order and progress, per-chunk retry on 5xx, no retry on 4xx, `x-event-id` only for event uploads |
+| Unit (api) | `packages/api/src/__tests__/map-previews.test.ts` | preview request parsing (`:idx`, `.png`, library code, hash), ETags and `If-None-Match`, library preview of an entry and a variant, 404 for unknown code / other version, per-instance cache hit |
+| Unit (api) | `packages/api/src/render/__tests__/previews.test.ts` | swatch pixel probes (418 at 3×, 505 dash on the dash point and gaps, 403 fill, 704 text ink, neutral swatch), library entry PNG size, thumbnail long edge 512 px, object cap |
+| Integration (api) | `packages/api/src/__tests__/integration/map-previews.test.ts` | stage 10 thumbnail row after `applyEventMap`, dedup short-cut re-derives, failed derive non-fatal, over-cap decided from the header summary; thumbnail and symbol routes 400/401/403/404/200/304, kiosk key and `?event=`, render on miss, row written once, every fixture symbol 200 and one past the end 404, `render: null` 404, previews never bump `last_referenced_at`; library route 400/401/200/304/404 incl. variant and other version; auth off |
 | E2E | `e2e/map-backfill.spec.ts` | legacy club row inserted directly → Maintenance card shows it pending → Import now → "Imported n, failed 0" → series + version exist → no longer pending |
-| E2E | `e2e/map-documents.spec.ts` | UI upload on `itest` → `documentHash` → route 200/304/206/403 → dev page `?url=` loads it natively → `latestForEvent` done with report; chunked route (chunks out of order) → `applyUploadedMap` → `mapMetadata`; `clubMap.upload` → `mapImport.status` done |
+| E2E | `e2e/map-documents.spec.ts` | UI upload on `itest` → `documentHash` → route 200/304/206/403 → thumbnail and symbol swatch 200 / 403 outside the event, library swatch by the header's library and version → dev page `?url=` loads it natively → `latestForEvent` done with report; chunked route (chunks out of order) → `applyUploadedMap` → `mapMetadata`; `clubMap.upload` → `mapImport.status` done |
 
 ## 10. Where things live
 
@@ -530,7 +542,10 @@ here and its own tests.
 | `packages/api/prisma/migrations/20261016190000_map_documents_storage/` | tables above |
 | `packages/api/src/map-store/blob-store.ts` | `BlobStore` seam |
 | `packages/api/src/map-store/documents.ts` | store stage, report builder, `touchDocument` |
-| `packages/api/src/map-store/routes.ts` | document route, range/encoding helpers, auth predicate |
+| `packages/api/src/map-store/routes.ts` | document route, range/encoding helpers, auth predicate, `requireDocumentAccess` |
+| `packages/api/src/map-store/previews.ts` | `map_previews` rows (read, render on miss, stage 10 derive), library preview cache |
+| `packages/api/src/map-store/preview-routes.ts` | thumbnail, symbol and library preview routes |
+| `packages/api/src/render/previews.ts` | swatch and thumbnail renderers (reference raster) |
 | `packages/api/src/map-store/uploads.ts` | pure upload rules: limits, chunk sizes, kind sniffing, assembly |
 | `packages/api/src/map-store/upload-routes.ts` | `POST /api/map-uploads`, `PUT …/chunks/:n`, `POST …/finalise` |
 | `packages/api/src/map-store/jobs.ts` | job rows, claim / heartbeat / stale reclaim, worker launcher, `applyJobResult`, housekeeping, engine tick |

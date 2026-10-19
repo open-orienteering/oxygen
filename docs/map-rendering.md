@@ -447,6 +447,21 @@ is not bundled draws nothing (the `NO_FONT` warning).
 
 The thumbnail is not a swatch: it is the whole document, `docs/map-storage.md` §4.4.
 
+**resvg abort.** `@resvg/resvg-js` 2.6.2 aborts the whole process (a
+Rust panic in `geom.rs`, not a JavaScript error) on some clipped groups
+lying wholly outside the canvas — first seen on the sprint corpus map's
+print window. The serialiser therefore leaves out every hatch and every
+clipped glyph pass whose clip bounds do not meet explicit `bounds`; such
+a group draws nothing, so pixels are unchanged. Swatches cannot hit it
+(their frame contains the stream); thumbnails of a print window can.
+
+Tests: `packages/shared/src/render/__tests__/swatch.test.ts` (sample
+geometry per kind, flags, 3× point, whole-pixel frame, determinism,
+every entry of both shipped libraries symbolises without warnings);
+`reference-svg.test.ts` (off-frame clip groups left out, partly
+overlapping kept); pixel probes in
+`packages/api/src/render/__tests__/previews.test.ts`.
+
 ### 5.2 WebGL2 (web)
 
 `packages/web/src/map-gl/`, three files with hard lines between them:

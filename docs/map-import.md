@@ -491,6 +491,7 @@ index), floating-point sums (keep source integers), `Date`/random ids.
 | Unit + integration (api) | `map-import-jobs.test.ts` (both) | worker runs a Mapper file by kind with the same hashes as inline; a Mapper source goes through the job to a `done` row with `importer_version omap-1` and is deduplicated on the second job; garbage of either kind fails cleanly |
 | E2E | `e2e/map-gl-doc.spec.ts` | document path = reader path in the browser, native `.oxvm` round trip, `mode=source` draws the fixture from its own definitions with no proxies; `e2e/test.xmap` loads client-side with no OCAD reader, draws, and surfaces the OMAP warning codes |
 | Unit + integration + E2E (api, web) | see `docs/map-storage.md` §9 | stages 1 and 9: chunked upload route, import jobs, store, dedup, pins, report row, delivery route |
+| Unit + integration + E2E (api) | see `docs/map-storage.md` §9 (previews rows) | stage 10: thumbnail row written by the job and by the dedup short-cut, non-fatal failure, object cap |
 
 The S0 corpus check (09 §7: whole corpus, every OMAP construct): the
 OCAD half runs via the measurement script and is recorded in
@@ -506,7 +507,7 @@ directory, not in the repo.
 
 S2 confirmation of the *provisional* §3.3 rows against OCAD output,
 event / club map *apply* for Mapper sources (needs slice C, §2.2), review API
-and previews (06 §5), the `decisions` input to a job (06 §5.3 — the column
+(06 §5.1, §5.3; previews landed, `docs/map-storage.md` §4.4), the `decisions` input to a job (06 §5.3 — the column
 exists and `matchDocument` accepts decisions, nothing reads the column
-yet), stage 5 beyond bounds, stage 10. Each lands with its own section
+yet), stage 5 beyond bounds. Each lands with its own section
 here and its own tests.
