@@ -181,7 +181,7 @@ type ReviewDecision = { symbolIdx; accept: canonicalId } | { symbolIdx; unmatch:
 mapImport.exportCrt { documentHash, includeMatches?: boolean }      query, review's predicate (READ_ACCESS)
   → { documentHash, fileName, library, crt, rules, kept, auto }
 mapImport.importCrt { documentHash, crt: string ≤ 1 MiB, dryRun?: boolean }   mutation, decide's (EDIT_ACCESS)
-  → { decisions: ReviewDecision[], unchanged[], skipped[], warnings[], applied, job | null }
+  → { decisions: ({symbolIdx, accept} | {symbolIdx, unmatch: true})[], unchanged[], skipped[], warnings[], applied, job | null }
 ```
 
 - `exportCrt` reads the club rows of the document's library for the

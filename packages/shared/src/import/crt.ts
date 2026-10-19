@@ -46,6 +46,10 @@ export interface CrtFile {
 /** A source that is not a symbol number: a Mapper object query (`natural = wood`, `"x"`, `(…)`). */
 const QUERY = /[\s="()]/;
 
+/** Skip messages carry the offending text, bounded so a large bad file does not echo itself back. */
+const MESSAGE_CHARS = 120;
+const clip = (s: string) => (s.length > MESSAGE_CHARS ? `${s.slice(0, MESSAGE_CHARS)}…` : s);
+
 export function parseCrt(text: string): CrtFile {
   const file: CrtFile = { header: {}, statements: [], problems: [] };
   let fingerprint: string | undefined;
@@ -64,12 +68,13 @@ export function parseCrt(text: string): CrtFile {
           const m = /^(library|source|document)=(\S+)$/.exec(kv);
           if (m && file.header[m[1] as keyof CrtFile["header"]] === undefined) file.header[m[1] as keyof CrtFile["header"]] = m[2];
         }
-      } else if (word === "fp" && rest[0] && parseDecisionFingerprint(rest[0])) {
-        fingerprint = rest[0];
+      } else if (word === "fp") {
+        // A malformed `# fp` unbinds rather than leaving an earlier one in force.
+        fingerprint = rest[0] && parseDecisionFingerprint(rest[0]) ? rest[0] : undefined;
       } else if (word === "keep") {
         if (rest.length === 1 && rest[0]) statement({ kind: "keep", line, source: rest[0] });
         else {
-          file.problems.push({ line, code: "CRT_LINE_INVALID", message: s });
+          file.problems.push({ line, code: "CRT_LINE_INVALID", message: clip(s) });
           fingerprint = undefined;
         }
       }
@@ -77,8 +82,8 @@ export function parseCrt(text: string): CrtFile {
     }
     const m = /^(\S+)\s*(.*)$/.exec(s)!;
     const [target, source] = [m[1], m[2].trim()];
-    if (!source) file.problems.push({ line, code: "CRT_LINE_INVALID", message: s });
-    else if (QUERY.test(source)) file.problems.push({ line, code: "CRT_QUERY_UNSUPPORTED", message: source });
+    if (!source) file.problems.push({ line, code: "CRT_LINE_INVALID", message: clip(s) });
+    else if (QUERY.test(source)) file.problems.push({ line, code: "CRT_QUERY_UNSUPPORTED", message: clip(source) });
     else return statement({ kind: "rule", line, target, source });
     fingerprint = undefined;
   });
@@ -202,21 +207,23 @@ export function resolveCrt(file: CrtFile, header: CrtDocumentLike): CrtResolutio
   for (const st of file.statements) {
     const code = normaliseCode(st.source);
     let symbols: number[] | undefined;
+    // Reported only when the line then applies by code; a skipped line carries its own code alone.
+    let mismatch: CrtSkip | undefined;
     if (st.fingerprint) {
       const fp = parseDecisionFingerprint(st.fingerprint)!;
       const hit = fp.code === code ? fps.flatMap((f, i) => (f === st.fingerprint ? [i] : [])) : [];
       if (hit.length) symbols = hit;
-      else notes.push({ line: st.line, code: "CRT_FINGERPRINT_MISMATCH", message: st.fingerprint });
+      else mismatch = { line: st.line, code: "CRT_FINGERPRINT_MISMATCH", message: st.fingerprint };
     }
     if (!symbols) {
       const all = byCode.get(code) ?? [];
       if (!all.length) {
-        skipped.push({ line: st.line, code: "CRT_SOURCE_UNKNOWN", message: st.source });
+        skipped.push({ line: st.line, code: "CRT_SOURCE_UNKNOWN", message: clip(st.source) });
         continue;
       }
       symbols = all.filter((i) => fps[i]);
       if (!symbols.length) {
-        skipped.push({ line: st.line, code: "CRT_SOURCE_NOT_REVIEWABLE", message: st.source });
+        skipped.push({ line: st.line, code: "CRT_SOURCE_NOT_REVIEWABLE", message: clip(st.source) });
         continue;
       }
     }
@@ -224,10 +231,11 @@ export function resolveCrt(file: CrtFile, header: CrtDocumentLike): CrtResolutio
     if (st.kind === "rule") {
       canonicalId = st.target.includes(":") ? st.target : `${libraryId}:${st.target}`;
       if (!canonicalId.startsWith(`${libraryId}:`) || !getLibraryEntry(canonicalId)) {
-        skipped.push({ line: st.line, code: "CRT_TARGET_UNKNOWN", message: st.target });
+        skipped.push({ line: st.line, code: "CRT_TARGET_UNKNOWN", message: clip(st.target) });
         continue;
       }
     }
+    if (mismatch) notes.push(mismatch);
     for (const symbolIdx of symbols) {
       const decision: CrtDecision | null =
         canonicalId === null ? { symbolIdx, unmatch: true } : automatic(header.symbols[symbolIdx].match) === canonicalId ? null : { symbolIdx, accept: canonicalId };

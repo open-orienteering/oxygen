@@ -61,6 +61,10 @@ describe("parseCrt", () => {
     expect(parseCrt("﻿703 702.0\r\n704 705\r\n").statements.map((s) => s.line)).toEqual([1, 2]);
   });
 
+  it("bounds the offending text in a skip message", () => {
+    expect(parseCrt(`406 a = ${"x".repeat(500)}`).problems[0].message).toHaveLength(121);
+  });
+
   it("reports object queries and lines without a source", () => {
     const f = parseCrt("406    natural = wood\n408 SYMBOL\n703\n# keep\n");
     expect(f.statements).toEqual([{ kind: "rule", line: 2, target: "408", source: "SYMBOL" }]);
@@ -80,6 +84,7 @@ describe("parseCrt", () => {
       "# fp ocad:403:c694d305 decision 403.0 Rough open land",
       "# keep 403.0",
       "601.b     601.0",
+      `# fp ${"ocad:204:0a1b2c3d"}`,
       "# fp not-a-fingerprint",
       "521 521.0",
     ].join("\n"));
@@ -88,7 +93,7 @@ describe("parseCrt", () => {
       { kind: "rule", line: 4, target: "703", source: "702.0", fingerprint: "ocad:702:d5d4a092" },
       { kind: "keep", line: 6, source: "403.0", fingerprint: "ocad:403:c694d305" },
       { kind: "rule", line: 7, target: "601.b", source: "601.0" },
-      { kind: "rule", line: 9, target: "521", source: "521.0" },
+      { kind: "rule", line: 10, target: "521", source: "521.0" },
     ]);
     expect(f.problems).toEqual([]);
   });
@@ -194,6 +199,11 @@ describe("resolveCrt", () => {
     expect(r.decisions).toEqual([{ symbolIdx: 3, accept: "ISOM2017-2:521" }]);
     expect(codes(r)).toEqual({ CRT_FINGERPRINT_MISMATCH: 1 });
     expect(r.warnings[0].message).toBe("line 2: ocad:527:00000000");
+  });
+
+  it("reports a fingerprint mismatch only on a line that then applies", () => {
+    const r = resolveCrt(parseCrt("# fp ocad:888:00000000\n101 888.0\n"), stored());
+    expect(codes(r)).toEqual({ CRT_SOURCE_UNKNOWN: 1 });
   });
 
   it("ignores a fingerprint of another code (the rule's source was edited)", () => {

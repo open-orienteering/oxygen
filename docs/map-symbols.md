@@ -542,7 +542,9 @@ writes the code too.
 document): every Mapper CRT, with or without Oxygen's comments. A BOM is
 stripped; CRLF and tabs are accepted. The `# oxygen-crt` header is
 informative; `# fp` binds to the next rule or keep (plain comments in
-between do not unbind it); `# keep` without a source is a bad line.
+between do not unbind it, a malformed `# fp` does); `# keep` without a
+source is a bad line. Skip messages quote at most 120 characters of the
+offending text.
 
 - **Library**: decisions are recorded under the *document's* library
   (`header.library.id`, else `chooseLibrary(mapScale)`) at the current
@@ -583,7 +585,7 @@ between do not unbind it); `# keep` without a source is a bad line.
 | `CRT_SOURCE_UNKNOWN` | no source symbol of the document has that code |
 | `CRT_SOURCE_NOT_REVIEWABLE` | the symbols of that code have no render, hence no fingerprint |
 | `CRT_TARGET_UNKNOWN` | the target is not an entry of the document's library |
-| `CRT_FINGERPRINT_MISMATCH` | the `# fp` names no symbol here; applied by code (also counted as applied) |
+| `CRT_FINGERPRINT_MISMATCH` | the `# fp` names no symbol here; applied by code (also counted as applied). A line skipped for another reason reports that code alone |
 | `CRT_LIBRARY_MISMATCH` | the header names another library id; once per file |
 
 A CRT is additive: there is no `reset` line (a decision is removed with
