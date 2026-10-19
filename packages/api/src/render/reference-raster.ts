@@ -4,8 +4,9 @@
  * (docs/map-rendering.md §6.2); the WebGL2 and PDF backends are compared
  * against it, never against each other.
  *
- * Deliberately simple: no caching, no semaphore, test and tooling use
- * only. Production rendering never goes through here.
+ * Deliberately simple: no caching, no semaphore. Its one production use
+ * is previews (`previews.ts`, docs/map-storage.md §4.5): rendered once,
+ * stored as cache. Maps for use are never drawn through here.
  */
 
 import { render } from "@oxygen/shared";
@@ -75,6 +76,16 @@ function boxDown(src: Uint8Array, sw: number, sh: number, w: number, h: number, 
     }
   }
   return out;
+}
+
+/** RGBA → PNG (sharp, loaded lazily so test-only callers that never encode skip it). */
+export async function encodePng(img: { width: number; height: number; pixels: Uint8Array }): Promise<Buffer> {
+  const sharp = (await import("sharp")).default;
+  return sharp(Buffer.from(img.pixels.buffer, img.pixels.byteOffset, img.pixels.byteLength), {
+    raw: { width: img.width, height: img.height, channels: 4 },
+  })
+    .png()
+    .toBuffer();
 }
 
 /** RGBA at a paper coordinate (µm, y-up). Returns undefined outside the image. */

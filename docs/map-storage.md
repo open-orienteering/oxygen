@@ -41,7 +41,7 @@ on `map_files` and `club_map_versions` for the GC and the source route). All in 
 |---|---|---|---|
 | `map_sources` | `file_hash CHAR(64)` | `kind` (`ocad`/`omap`), `bytes BYTEA`, `size_bytes`, `file_name`, `uploaded_by → users SET NULL`, `created_at` | the uploaded file; `bytes` is `STORAGE EXTERNAL` |
 | `map_documents` | `hash CHAR(64)` | `bytes BYTEA`, `size_bytes`, `format_version`, `importer_version`, `library_version`, `source_hash → map_sources RESTRICT`, `header JSONB`, `report JSONB`, `created_at`, `last_referenced_at` | the encoded document; `header` is the summary (§3), `report` the import report |
-| `map_previews` | `(document_hash, kind, key)` | `png BYTEA`, `created_at` | `document_hash → map_documents CASCADE`; filled by the review slice (pending) |
+| `map_previews` | `(document_hash, kind, key)` | `png BYTEA`, `created_at` | `document_hash → map_documents CASCADE`; thumbnails and symbol swatches, pure cache (§4.5) |
 | `club_maps` | `id UUID` | `name`, `colour_profile`, `colour_overrides JSONB`, `north_lines_below`, `rotation_correction`, `created_by`, timestamps | a club's map as a series (06 §8) |
 | `club_map_versions` | `id UUID` | `club_map_id → club_maps CASCADE`, `seq`, `label`, `source_hash RESTRICT`, `document_hash RESTRICT`, `uploaded_by`, `uploaded_at`; `UNIQUE(club_map_id, seq)` | one edition; `uploadedAt` ordering, `seq` for display |
 | `map_files` (+) | — | `source_hash RESTRICT`, `document_hash RESTRICT`, `club_map_version_id → club_map_versions SET NULL` | the event's pins; nullable so the raster path keeps working when the import fails |
@@ -268,6 +268,97 @@ The event clause is `canDownloadEventMap`, the club clause
 are not cached (downloads are rare and the answer must follow a revoked
 role at once). With auth off the filename is `map_sources.file_name`.
 
+### 4.5 Previews
+
+06 §5.2, 07 §6.1. PNGs derived from a document or from the bundled
+library by the reference raster (`docs/map-rendering.md` §5.1); the
+review UI (slice B) reads them. `packages/api/src/map-store/previews.ts`
+(rows, library cache) and `preview-routes.ts` (routes).
+
+```
+GET /api/map-documents/:hash/thumbnail.png                 the whole map, long edge 512 px
+GET /api/map-documents/:hash/symbols/:idx.png              swatch of header.symbols[idx].render
+GET /api/library/:libraryId/:version/:code.png             swatch of a canonical entry
+```
+
+**Rows.** Document previews are `map_previews` rows keyed
+`(document_hash, kind, key)`: `('thumbnail', '')` and
+`('symbol', '<idx>')`. A row is written once with `createMany …
+skipDuplicates` and never updated, like the blobs (§1); it cascades with
+its document and is pure cache — deleting rows only costs a re-render.
+Who writes them:
+
+| Row | Written by |
+|---|---|
+| thumbnail | import stage 10 (`derive`, §6.1) after the document is stored, including the dedup short-cut of `startImportJob`; otherwise on the first request that finds no row (documents stored before stage 10 existed, a skipped or failed derive) |
+| symbol | the first request for that index |
+
+Reading a preview is not a reference: it never bumps
+`last_referenced_at` (§3).
+
+**Thumbnail.** The document through `documentRenderInput` with its
+defaults (canonical layer on, hidden symbols off, proxies for symbols
+without a render) → `symbolise` with the bundled fonts → reference raster
+on white paper. The area is the print window when the header has one,
+otherwise `header.bounds`; the density puts the longer side at 512 px.
+Documents with more than `THUMBNAIL_MAX_OBJECTS` = 60 000 objects are
+not thumbnailed: stage 10 logs and writes nothing, and the route answers
+404. The check reads the object count from the stored header summary
+(§3), so an over-cap document costs no blob read. Thumbnails render one
+at a time per instance; concurrent requests for the same row share one
+render. Measured on the local corpus (render + encode, one process):
+
+| Map | Objects | Time | Peak RSS added |
+|---|---|---|---|
+| crop-b | 3 073 | 0.27 s | 18 MB |
+| crop-a | 4 983 | 0.34 s | — |
+| sprint (print window) | 10 680 | 0.43 s | 98 MB |
+| club-2026 | 45 884 | 2.8 s | 166 MB |
+| club-full | 101 729 | 4.7 s | 360 MB — over the cap |
+
+**Symbol swatch.** `header.symbols[idx].render` drawn by the shared
+swatch scene (`docs/map-rendering.md` §5.1.1) in the document's own
+colour stack, at its native paper size — what the map prints, not
+normalised to the library's reference scale. A symbol with
+`render: null` has no swatch (404); `graphic` and `hidden` symbols
+render like any other.
+
+**Library swatch.** The entry resolved in the library's own palette
+edition (`materialiseLibrary(id)`, `iof2024` today) through the same
+swatch scene, at reference scale. `:code` is the entry code with an
+optional variant letter — `418`, `302.b` — i.e. the entry id without the
+library prefix. Rendered from the bundled library and cached in memory
+per instance (bounded, least recently used out), never stored (07 §4.1):
+it is a function of the library version alone. The version is part of
+the path so `public, immutable` survives a `SYMBOL_LIBRARY_VERSION`
+bump; a request for another version than the current one is 404.
+
+**Contract.** Same order as §4.1: validate, authorise, then existence,
+so a hash cannot be probed.
+
+| Condition | Status |
+|---|---|
+| `:hash` not 64 hex; `:idx` not a non-negative safe integer; `:libraryId` not a shipped library; `:code` not `\d{3}(\.\d{1,2})?(\.[a-z])?` | 400 `{error}` |
+| document routes: §4.2 predicate fails | 401 anonymous / 403 signed in |
+| library route: auth on and no signed-in user | 401 |
+| no such document; `idx` ≥ symbol count or `render: null`; thumbnail over the object cap; `:version` ≠ current; no such entry | 404 `{error}` |
+| `If-None-Match` matches the `ETag` | 304 |
+| otherwise | 200 PNG |
+
+| Route | Headers on 2xx / 304 |
+|---|---|
+| document previews | `Content-Type: image/png`, `Cache-Control: private, max-age=31536000, immutable`, `ETag: "<hash>/thumbnail"` or `"<hash>/symbols/<idx>"` |
+| library preview | `Content-Type: image/png`, `Cache-Control: public, max-age=31536000, immutable`, `ETag: "<libraryId>@<version>/<code>"` |
+
+No `Range`, no `Content-Encoding` (PNG is already deflated), no `Vary`.
+
+Authorisation of the document previews is exactly §4.2 — the same
+predicate, the same 60 s positive cache, shared with the document route
+through `requireDocumentAccess(req, reply, hash)` in `routes.ts`, all
+four clauses included — the uploader of a running import sees its
+previews as it sees its document. The library route needs any
+signed-in user, or `AUTH_MODE=off` (07 §6.1): the library is public data.
+
 ## 5. Chunked upload: `/api/map-uploads`
 
 07 §7. Browsers upload map files in slices so a 100 MB OCAD file survives
@@ -346,7 +437,7 @@ instance loses nothing. `packages/api/src/map-store/jobs.ts`.
 startImportJob(db, {sourceHash, eventId? | clubMapId?, startedBy?, holdMs?})
   │
   ├─ a map_documents row exists for (sourceHash, importer ∈ {ocad-4, omap-1}, library *@<current SYMBOL_LIBRARY_VERSION>)
-  │     → touchDocument, insert state=done with that document_hash, applyJobResult, return   (06 §8 dedup, no worker)
+  │     → touchDocument, insert state=done with that document_hash, applyJobResult, derive, return   (06 §8 dedup, no worker)
   │
   └─ insert state=queued → kickImportJobs → hold ≤ holdMs for the result → return the row
 
@@ -356,6 +447,7 @@ kickImportJobs: one loop per instance
   → worker thread: parse → normalise → match → encode (stage + progress written at each boundary,
   → store: storeImportedDocument (§3)                 heartbeat every 10 s while it runs)
   → applyJobResult: pins (§6.4)
+  → derive: thumbnail row (§4.5); a failure is logged, never fails the job
   → done | failed(error)
 ```
 
@@ -378,7 +470,7 @@ A dedup hit, and a worker run whose document row already existed
 before pinning it, so a GC run racing the pin sees a fresh
 `last_referenced_at` and skips the row (§8.2).
 
-`stage` ∈ `parse 0.1 → normalise 0.4 → match 0.55 → encode 0.7 → store 0.9 → done 1`;
+`stage` ∈ `parse 0.1 → normalise 0.4 → match 0.55 → encode 0.7 → store 0.9 → derive 0.95 → done 1`;
 `progress` is that fixed ladder, not a byte count. Every progress and
 terminal write is guarded by `claimed_by = INSTANCE_ID`, so an instance
 whose job was re-claimed after a stall cannot overwrite the new owner's
@@ -621,7 +713,7 @@ mentions is pending (§9).
 
 ## 9. Pending in this chapter
 
-Previews route and rows (review slice); club map CRUD that reads from
+Club map CRUD that reads from
 `club_maps` / `club_map_versions` instead of mirroring into them; venue
 checkout snapshot; backups by hash; a re-import pass for documents
 stored under an older importer or library version (`ocad-3` / `none`
@@ -644,8 +736,11 @@ its own tests.
 | Unit (api) | `packages/api/src/__tests__/map-backfill-cli.test.ts` | CLI argument parsing, per-map lines and summary |
 | Integration (api) | `packages/api/src/__tests__/integration/map-backfill.test.ts` | plan counts and ordering, dry run writes nothing, legacy club row → series (settings copied) + version 1 (label / uploader / time from the row), event rows → pins with dedup and club-version pin, unreadable rows reported and left unpinned, second run revisits only what is missing, `--event` scope and soft-deleted events skipped, `backfillStatus` / `backfillStart` admin-only, background run and `CONFLICT` |
 | Unit (web) | `packages/web/src/__tests__/map-upload.test.ts` | threshold, init → chunks → finalise call order and progress, per-chunk retry on 5xx, no retry on 4xx, `x-event-id` only for event uploads |
+| Unit (api) | `packages/api/src/__tests__/map-previews.test.ts` | preview request parsing (`:idx`, `.png`, library code, hash), ETags and `If-None-Match`, library preview of an entry and a variant, 404 for unknown code / other version, per-instance cache hit |
+| Unit (api) | `packages/api/src/render/__tests__/previews.test.ts` | swatch pixel probes (418 at 3×, 505 dash on the dash point and gaps, 403 fill, 704 text ink, neutral swatch), library entry PNG size, thumbnail long edge 512 px, object cap |
+| Integration (api) | `packages/api/src/__tests__/integration/map-previews.test.ts` | stage 10 thumbnail row after `applyEventMap`, dedup short-cut re-derives, failed derive non-fatal, over-cap decided from the header summary; thumbnail and symbol routes 400/401/403/404/200/304, kiosk key and `?event=`, render on miss, row written once, every fixture symbol 200 and one past the end 404, `render: null` 404, previews never bump `last_referenced_at`; library route 400/401/200/304/404 incl. variant and other version; auth off |
 | E2E | `e2e/map-backfill.spec.ts` | legacy club row inserted directly → Maintenance card shows it pending → Import now → "Imported n, failed 0" → series + version exist → no longer pending |
-| E2E | `e2e/map-documents.spec.ts` | UI upload on `itest` → `documentHash` → route 200/304/206, own import job admits the uploader through a non-pinning event, anonymous 401 → source route streams `test.ocd` back (200, `no-store`, attachment), anonymous 401 → dev page `?url=` loads it natively → `latestForEvent` done with report; chunked route (chunks out of order) → `applyUploadedMap` → `mapMetadata`; `clubMap.upload` → `mapImport.status` done |
+| E2E | `e2e/map-documents.spec.ts` | UI upload on `itest` → `documentHash` → route 200/304/206, own import job admits the uploader through a non-pinning event, anonymous 401 → thumbnail and symbol swatch 200 / 401 anonymous, library swatch by the header's library and version → source route streams `test.ocd` back (200, `no-store`, attachment), anonymous 401 → dev page `?url=` loads it natively → `latestForEvent` done with report; chunked route (chunks out of order) → `applyUploadedMap` → `mapMetadata`; `clubMap.upload` → `mapImport.status` done |
 
 ## 11. Where things live
 
@@ -655,7 +750,10 @@ its own tests.
 | `packages/api/prisma/migrations/20261016190000_map_documents_storage/` | tables above |
 | `packages/api/src/map-store/blob-store.ts` | `BlobStore` seam |
 | `packages/api/src/map-store/documents.ts` | store stage, report builder, `touchDocument` |
-| `packages/api/src/map-store/routes.ts` | document route, range/encoding helpers, auth predicate |
+| `packages/api/src/map-store/routes.ts` | document route, range/encoding helpers, auth predicate, `requireDocumentAccess` |
+| `packages/api/src/map-store/previews.ts` | `map_previews` rows (read, render on miss, stage 10 derive), library preview cache |
+| `packages/api/src/map-store/preview-routes.ts` | thumbnail, symbol and library preview routes |
+| `packages/api/src/render/previews.ts` | swatch and thumbnail renderers (reference raster) |
 | `packages/api/src/map-store/source-routes.ts` | source route: download predicate, slice planner, `streamBlob` |
 | `packages/api/src/map-store/gc.ts` | `runStorageGc`, daily schedule (`maybeStartStorageGc` / `stopStorageGc`), grace and due rules |
 | `packages/api/src/routers/mapStorage.ts` | `mapStorage.gcRun` |

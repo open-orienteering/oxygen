@@ -18,13 +18,14 @@ import { mapImport, symbolLibrary } from "@oxygen/shared";
 import type { Prisma, PrismaClient } from "../generated/prisma/client.js";
 import { IMPORTER_VERSIONS, type ImportStage, type MapSourceKind } from "../import/ocad.js";
 import { storeImportedDocument, touchDocument } from "./documents.js";
+import { deriveDocumentPreviews } from "./previews.js";
 import type { ImportWorkerData, ImportWorkerMessage } from "./import-worker.js";
 
 type Db = PrismaClient | Prisma.TransactionClient;
 
 export const JOB_STATES = ["queued", "running", "done", "failed"] as const;
 export type JobState = (typeof JOB_STATES)[number];
-export type JobStage = ImportStage | "store" | "done";
+export type JobStage = ImportStage | "store" | "derive" | "done";
 
 /** Heartbeat written while running; a job silent for `STALE_MS` may be re-claimed. */
 export const HEARTBEAT_MS = 10_000;
@@ -73,6 +74,7 @@ export function stageProgress(stage: JobStage): number {
     case "match": return 0.55;
     case "encode": return 0.7;
     case "store": return 0.9;
+    case "derive": return 0.95;
     case "done": return 1;
   }
 }
@@ -240,6 +242,9 @@ async function execute(db: Db, job: ImportJobRow): Promise<void> {
     // An existing row may be old and unreferenced: touch it before pinning so a racing GC skips it (§8.2).
     if (stored.deduplicated) await touchDocument(db, stored.documentHash);
     await applyJobResult(db, { ...job, documentHash: stored.documentHash });
+    // Stage 10: previews are cache, so a failure is logged inside and never fails the job.
+    await progress(db, job.id, "derive");
+    await deriveDocumentPreviews(db, stored.documentHash);
     await db.mapImportJob.updateMany({
       where: { id: job.id, claimedBy: INSTANCE_ID },
       data: { state: "done", stage: "done", progress: 1, documentHash: stored.documentHash, heartbeatAt: new Date() },
@@ -318,6 +323,7 @@ export async function startImportJob(db: Db, input: StartImportJobInput): Promis
       select: JOB_SELECT,
     }));
     await applyJobResult(db, row);
+    await deriveDocumentPreviews(db, existing.hash);
     return row;
   }
 

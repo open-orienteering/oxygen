@@ -31,7 +31,8 @@ describe("import job state rules", () => {
   });
 
   it("orders stage progress monotonically and ends at 1", () => {
-    const p = (["parse", "normalise", "match", "encode", "store", "done"] as const).map(stageProgress);
+    const p = (["parse", "normalise", "match", "encode", "store", "derive", "done"] as const).map(stageProgress);
+    expect(new Set(p).size).toBe(p.length);
     expect(p).toEqual([...p].sort((a, b) => a - b));
     expect(p[0]).toBeGreaterThan(0);
     expect(p.at(-1)).toBe(1);

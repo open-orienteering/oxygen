@@ -163,6 +163,11 @@ export function passStreamToSvg(stream: PassStream, opts: ReferenceSvgOptions): 
   const fonts = new Map<number, FontRef>();
   for (const f of s.fontTable) fonts.set(f.fontId, f);
 
+  // A clipped group whose clip lies wholly outside the frame draws
+  // nothing; it is left out because resvg (2.6.2) aborts the process on
+  // some of them (docs/map-rendering.md §5.1). Pixels are unchanged.
+  const clippedAway = (c: Bounds) => c.maxX < b.minX || c.minX > b.maxX || c.maxY < b.minY || c.minY > b.maxY;
+
   const defs: string[] = [];
   const body: string[] = [];
   let idCounter = 0;
@@ -204,6 +209,7 @@ export function passStreamToSvg(stream: PassStream, opts: ReferenceSvgOptions): 
           );
         }
         if (p.clip) {
+          if (clippedAway(pathBounds(p.clip))) break;
           const cid = nextId("clip");
           defs.push(`<clipPath id="${cid}"><path d="${pathToSvgD(p.clip, true)}" fill-rule="evenodd"/></clipPath>`);
           body.push(`<g ${tag} clip-path="url(#${cid})">${uses.join("")}</g>`);
@@ -213,6 +219,7 @@ export function passStreamToSvg(stream: PassStream, opts: ReferenceSvgOptions): 
         break;
       }
       case "hatch": {
+        if (clippedAway(pathBounds(p.path))) break;
         const cid = nextId("clip");
         defs.push(`<clipPath id="${cid}"><path d="${pathToSvgD(p.path, true)}" fill-rule="evenodd"/></clipPath>`);
         const lines = hatchLines(pathBounds(p.path), { spacingUm: p.spacingUm, offsetUm: p.offsetUm, angleDeg: p.angleDeg });
