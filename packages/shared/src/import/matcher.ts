@@ -33,6 +33,8 @@ export interface SymbolDecision {
   name?: string;
   irHash?: string;
   canonicalId: string | null;
+  /** The library the decision was made against; `matchDocument` drops decisions of another library (docs/map-symbols.md §8.5). */
+  libraryId?: string;
 }
 
 export interface CanonicalCandidate {
