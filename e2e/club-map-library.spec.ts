@@ -32,6 +32,15 @@ test.describe("club map library", () => {
     });
     const preview = page.getByTestId("club-map-preview").first();
     await expect(preview).toBeVisible({ timeout: 20000 });
+    // The card is the club_maps series; its thumbnail is the imported
+    // map document's (docs/map-storage.md §6.5).
+    await expect(preview).toHaveAttribute(
+      "src",
+      /^\/api\/map-documents\/[0-9a-f]{64}\/thumbnail\.png$/,
+    );
+    await expect(
+      page.locator('[data-testid^="library-map-card-"]').first(),
+    ).toHaveAttribute("data-testid", /^library-map-card-[0-9a-f-]{36}$/);
     await expect
       .poll(() => preview.evaluate((img: HTMLImageElement) => img.naturalWidth), {
         timeout: 20000,
@@ -88,6 +97,55 @@ test.describe("club map library", () => {
     await expect(page.getByTestId("map-panel").first().getByTestId("map-viewer")).toBeVisible({
       timeout: 15000,
     });
+  });
+
+  test("a map whose import failed is listed with its state but cannot be downloaded or adopted", async ({
+    page,
+  }) => {
+    const stamp = Date.now();
+    const fileName = `broken-${stamp}.ocd`;
+    await page.goto("/settings");
+    await expect(page.getByTestId("library-tab-maps")).toBeVisible({
+      timeout: 15000,
+    });
+    await page.getByTestId("library-map-upload").setInputFiles({
+      name: fileName,
+      mimeType: "application/octet-stream",
+      buffer: Buffer.from("not an OCAD file"),
+    });
+    const card = page
+      .locator('[data-testid^="library-map-card-"]')
+      .filter({ hasText: fileName });
+    await expect(card).toBeVisible({ timeout: 20000 });
+    await expect(card.getByTestId("library-map-import-state")).toHaveAttribute(
+      "data-state",
+      "failed",
+    );
+    await expect(card.getByTestId("library-map-download")).toHaveCount(0);
+    const seriesId = (await card.getAttribute("data-testid"))!.replace(
+      "library-map-card-",
+      "",
+    );
+
+    await page.goto("/");
+    await page.getByRole("button", { name: /New Event/ }).click();
+    await page.getByPlaceholder(/Klubbmästerskap/).fill(`E2E Broken ${stamp}`);
+    await page.getByRole("button", { name: "Create" }).click();
+    await expect(page.getByRole("link", { name: "Dashboard" })).toBeVisible({
+      timeout: 15000,
+    });
+    const mapPanel = page.getByTestId("map-panel").first();
+    await mapPanel.getByTestId("use-club-map").click();
+    const pick = page.getByTestId(`club-map-pick-${seriesId}`);
+    await expect(pick).toBeVisible();
+    await expect(pick).toBeDisabled();
+    await expect(pick).toContainText(/Import failed/);
+
+    // Clean up so later specs list only importable maps.
+    await page.goto("/settings");
+    await card.getByTestId("library-map-delete").click();
+    await page.getByTestId("library-delete-confirm-btn").click();
+    await expect(card).toHaveCount(0, { timeout: 10000 });
   });
 
   test("Settings → Maps flags stale magnetic-north lines and offers no correction input", async ({

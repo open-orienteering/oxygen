@@ -163,11 +163,11 @@ test.describe("Map documents", () => {
     // that dedups against the document already stored.
     const club = await request.post(`${API_BASE}/trpc/clubMap.upload`, { data: { name: "E2E chunked club map", fileName: "club.ocd", fileDataBase64: file.toString("base64") } });
     expect(club.ok()).toBe(true);
-    const created = (await club.json())?.result?.data as { id: number; clubMapId: string; importJob: { id: string; state: string } };
+    const created = (await club.json())?.result?.data as { id: string; importJob: { id: string; state: string } };
     expect(created.importJob.state).toBe("done");
     const status = await request.get(`${API_BASE}/trpc/mapImport.status?input=${encodeURIComponent(JSON.stringify({ jobId: created.importJob.id }))}`);
     expect(status.ok()).toBe(true);
-    expect((await status.json())?.result?.data).toMatchObject({ state: "done", documentHash: result.documentHash, clubMapId: created.clubMapId });
+    expect((await status.json())?.result?.data).toMatchObject({ state: "done", documentHash: result.documentHash, clubMapId: created.id });
     const removed = await request.post(`${API_BASE}/trpc/clubMap.remove`, { data: { id: created.id } });
     expect(removed.ok()).toBe(true);
   });

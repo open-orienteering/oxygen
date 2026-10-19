@@ -17,6 +17,7 @@ import {
 } from "./map-icons";
 import { ToolbarButton } from "./ToolbarButton";
 import { NorthLinesBadge } from "./NorthLinesBadge";
+import { ClubMapImportState } from "./ClubMapImportState";
 import { formatStalenessDeg, isMeridianStale } from "../lib/north-lines";
 
 /**
@@ -413,10 +414,13 @@ function MapPanelImpl({
         <ul className="divide-y divide-slate-100 max-h-80 overflow-auto">
           {(clubMaps.data ?? []).map((m) => (
             <li key={m.id}>
+              {/* A series without a version cannot be adopted (06 §6). */}
               <button
                 type="button"
                 data-testid={`club-map-pick-${m.id}`}
-                className="w-full text-left py-2 px-1 hover:bg-slate-50 cursor-pointer"
+                className="w-full text-left py-2 px-1 hover:bg-slate-50 cursor-pointer disabled:cursor-not-allowed disabled:opacity-60 disabled:hover:bg-transparent"
+                disabled={m.version == null}
+                title={m.version == null ? tl("notImportedYet") : undefined}
                 onClick={() => useClubMap.mutate({ clubMapId: m.id })}
               >
                 <div className="font-medium text-sm text-slate-900">{m.name}</div>
@@ -424,11 +428,18 @@ function MapPanelImpl({
                   {m.scale
                     ? `1:${Math.round(m.scale).toString().replace(/\B(?=(\d{3})+(?!\d))/g, " ")}`
                     : tl("noScale")}
-                  {" · "}
-                  {m.sizeBytes < 1024 * 1024
-                    ? `${(m.sizeBytes / 1024).toFixed(1)} KB`
-                    : `${(m.sizeBytes / (1024 * 1024)).toFixed(1)} MB`}
+                  {m.sizeBytes != null && (
+                    <>
+                      {" · "}
+                      {m.sizeBytes < 1024 * 1024
+                        ? `${(m.sizeBytes / 1024).toFixed(1)} KB`
+                        : `${(m.sizeBytes / (1024 * 1024)).toFixed(1)} MB`}
+                    </>
+                  )}
                 </div>
+                {m.version == null && (
+                  <ClubMapImportState job={m.importJob} className="text-xs" />
+                )}
               </button>
             </li>
           ))}
