@@ -100,7 +100,7 @@ async function createClubMap(
     data: [{ fileHash, kind: "ocad", bytes: Uint8Array.from(buffer), sizeBytes: buffer.length, fileName, uploadedBy: userId }],
     skipDuplicates: true,
   });
-  const job: ImportJobRow | null = await startImportJob(prisma(), { sourceHash: fileHash, clubMapId: series.id })
+  const job: ImportJobRow | null = await startImportJob(prisma(), { sourceHash: fileHash, clubMapId: series.id, startedBy: userId })
     .catch((err: unknown) => {
       console.error(`[map-import] club map ${series.id}: could not start the import of ${fileName}:`, err);
       return null;

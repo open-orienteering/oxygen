@@ -482,7 +482,7 @@ index), floating-point sums (keep source integers), `Date`/random ids.
 | Unit (api) | `packages/api/src/__tests__/import-omap.test.ts` | reader → document on `e2e/test.xmap`: determinism across `importOmapToDocument` / `importMapToDocument`, provenance (`omap-1`, version 9, UTM 33N), bboxes, all 21 fixture symbols rendered, symbolise with the dangling symbol as the only drop, factor ×1, import report, kind sniff with BOM, the two kinds kept apart |
 | Unit + integration (api) | `map-import-jobs.test.ts` (both) | worker runs a Mapper file by kind with the same hashes as inline; a Mapper source goes through the job to a `done` row with `importer_version omap-1` and is deduplicated on the second job; garbage of either kind fails cleanly |
 | E2E | `e2e/map-gl-doc.spec.ts` | document path = reader path in the browser, native `.oxvm` round trip, `mode=source` draws the fixture from its own definitions with no proxies; `e2e/test.xmap` loads client-side with no OCAD reader, draws, and surfaces the OMAP warning codes |
-| Unit + integration + E2E (api, web) | see `docs/map-storage.md` §9 | stages 1 and 9: chunked upload route, import jobs, store, dedup, pins, report row, delivery route |
+| Unit + integration + E2E (api, web) | see `docs/map-storage.md` §10 | stages 1 and 9: chunked upload route, import jobs, store, dedup, pins, report row, delivery route |
 
 The S0 corpus check (09 §7: whole corpus, every OMAP construct): the
 OCAD half runs via the measurement script and is recorded in

@@ -10,7 +10,8 @@
  * The hash is not enumerable but it is not authorisation either: the
  * request must come with a principal that may see a reference to the
  * document — an event capability or kiosk key via `x-event-id` /
- * `?event=`, or a signed-in user for a club-library version.
+ * `?event=`, a signed-in user for a club-library version, or the user
+ * who started the import job that produced it.
  */
 
 import { brotliCompressSync, constants as zlib, gzipSync } from "node:zlib";
@@ -104,12 +105,14 @@ export interface DocumentAccessQueries {
   eventPinsDocument: (eventNameId: string, hash: string) => Promise<{ eventId: bigint; eventDate: Date; kioskKey: string | null } | null>;
   userHasCapability: (eventId: bigint, eventDate: Date, user: AuthUser, cap: Capability) => Promise<boolean>;
   clubVersionHasDocument: (hash: string) => Promise<boolean>;
+  /** A non-failed `map_import_jobs` row with this `document_hash` was started by the user. */
+  userStartedJobForDocument: (user: AuthUser, hash: string) => Promise<boolean>;
 }
 
 export type DocumentAccess = { ok: true } | { ok: false; status: 401 | 403 };
 
 /**
- * The predicate (docs/map-storage.md §4.2), pure over the three queries
+ * The predicate (docs/map-storage.md §4.2), pure over the four queries
  * so it can be unit-tested; the route binds them to Prisma.
  */
 export async function authoriseDocumentAccess(input: DocumentAccessInput, q: DocumentAccessQueries): Promise<DocumentAccess> {
@@ -122,6 +125,7 @@ export async function authoriseDocumentAccess(input: DocumentAccessInput, q: Doc
     }
   }
   if (input.user && (await q.clubVersionHasDocument(input.hash))) return { ok: true };
+  if (input.user && (await q.userStartedJobForDocument(input.user, input.hash))) return { ok: true };
   return { ok: false, status: input.user ? 403 : 401 };
 }
 
@@ -139,6 +143,13 @@ const prismaQueries: DocumentAccessQueries = {
   async clubVersionHasDocument(hash) {
     const v = await prisma().clubMapVersion.findFirst({ where: { documentHash: hash }, select: { id: true } });
     return v !== null;
+  },
+  async userStartedJobForDocument(user, hash) {
+    const job = await prisma().mapImportJob.findFirst({
+      where: { documentHash: hash, startedBy: user.id, state: { not: "failed" } },
+      select: { id: true },
+    });
+    return job !== null;
   },
 };
 

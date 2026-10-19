@@ -237,6 +237,8 @@ async function execute(db: Db, job: ImportJobRow): Promise<void> {
       document: { bytes: result.bytes, hash: result.documentHash, libraryVersion: result.libraryVersion },
       report: result.report,
     });
+    // An existing row may be old and unreferenced: touch it before pinning so a racing GC skips it (§8.2).
+    if (stored.deduplicated) await touchDocument(db, stored.documentHash);
     await applyJobResult(db, { ...job, documentHash: stored.documentHash });
     await db.mapImportJob.updateMany({
       where: { id: job.id, claimedBy: INSTANCE_ID },
@@ -288,6 +290,8 @@ export interface StartImportJobInput {
   sourceHash: string;
   eventId?: bigint | null;
   clubMapId?: string | null;
+  /** The signed-in user whose request starts the job (docs/map-storage.md §4.2); omitted for the backfill. */
+  startedBy?: string | null;
   /** Wait this long for the job to finish before returning (0 = return at once). */
   holdMs?: number;
 }
@@ -298,7 +302,7 @@ export interface StartImportJobInput {
  * recorded as done against the existing document and the pins applied.
  */
 export async function startImportJob(db: Db, input: StartImportJobInput): Promise<ImportJobRow> {
-  const target = { eventId: input.eventId ?? null, clubMapId: input.clubMapId ?? null };
+  const target = { eventId: input.eventId ?? null, clubMapId: input.clubMapId ?? null, startedBy: input.startedBy ?? null };
   const existing = await db.mapDocument.findFirst({
     // Same importer (a source hash has one kind, so the current version of either importer) and same library release
     // (the library id itself follows the map scale).
@@ -307,6 +311,8 @@ export async function startImportJob(db: Db, input: StartImportJobInput): Promis
     select: { hash: true },
   });
   if (existing) {
+    // Touch before the job row references it, so a GC run racing this insert skips the document (§8.2).
+    await touchDocument(db, existing.hash);
     const row = asRow(await db.mapImportJob.create({
       data: { ...target, sourceHash: input.sourceHash, state: "done", stage: "done", progress: 1, documentHash: existing.hash, claimedBy: INSTANCE_ID, heartbeatAt: new Date() },
       select: JOB_SELECT,
@@ -354,9 +360,13 @@ export async function latestImportJobForEvent(db: Db, eventId: bigint): Promise<
   return row ? asRow(row) : null;
 }
 
-/** Housekeeping (07 §4.4): abandoned uploads after 24 h, job rows after 7 days. */
+/**
+ * Housekeeping (07 §4.4): uploads after 24 h — abandoned, or finalised
+ * (the client holds the hash; a finalised row is not a GC reference,
+ * docs/map-storage.md §8.1) — and finished job rows after 7 days.
+ */
 export async function sweepImportHousekeeping(db: Db, now: Date = new Date()): Promise<{ uploads: number; jobs: number }> {
-  const uploads = await db.mapUpload.deleteMany({ where: { finalisedHash: null, createdAt: { lt: new Date(now.getTime() - UPLOAD_TTL_MS) } } });
+  const uploads = await db.mapUpload.deleteMany({ where: { createdAt: { lt: new Date(now.getTime() - UPLOAD_TTL_MS) } } });
   const jobs = await db.mapImportJob.deleteMany({ where: { state: { in: ["done", "failed"] }, updatedAt: { lt: new Date(now.getTime() - JOB_TTL_MS) } } });
   return { uploads: uploads.count, jobs: jobs.count };
 }

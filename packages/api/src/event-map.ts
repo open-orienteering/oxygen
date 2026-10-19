@@ -316,6 +316,8 @@ export async function applyEventMap(
     fileHash?: string;
     /** Recorded on the content-addressed source row (docs/map-storage.md). */
     uploadedBy?: string | null;
+    /** The signed-in user making the request; recorded on the import job (docs/map-storage.md §4.2, §6.1). */
+    startedBy?: string | null;
     /** How long to wait for the import job before returning (default 30 s; 0 = don't wait). */
     importHoldMs?: number;
   } = {},
@@ -389,7 +391,7 @@ export async function applyEventMap(
   });
   // Runs on the instance's import worker while the raster work below
   // proceeds; awaited (up to the hold) before returning.
-  const importJob = startImportJob(prisma(), { sourceHash: fileHash, eventId, holdMs: opts.importHoldMs })
+  const importJob = startImportJob(prisma(), { sourceHash: fileHash, eventId, startedBy: opts.startedBy ?? null, holdMs: opts.importHoldMs })
     .catch((err: unknown) => {
       console.error(`[map-import] event ${eventId}: could not start the import of ${fileName}:`, err);
       return null;
