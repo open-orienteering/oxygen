@@ -399,7 +399,7 @@ the directory is the upstream text. The server loads them through
 
 ## 5. Backends
 
-### 5.1 Reference raster (api, tests only)
+### 5.1 Reference raster (api: tests and previews)
 
 `packages/api/src/render/reference-raster.ts`:
 pass stream → SVG (`render/reference-svg.ts`, shared) → RGBA via
@@ -412,7 +412,40 @@ caller-supplied glyph outlines or, without them, em boxes (debug only,
 never an oracle).
 
 This is the **oracle** of the golden-image tier. It is slow and simple on
-purpose and is never used for production rendering.
+purpose and is never used to draw a map for use. Its one production job
+is previews (04 §4.1, 06 §5.2): document thumbnails and symbol swatches,
+rendered once and stored as cache (`docs/map-storage.md` §4.4). PNG
+encoding is `encodePng` (sharp) in `render/reference-raster.ts`; the
+preview renderers are `render/previews.ts`.
+
+#### 5.1.1 Symbol swatches
+
+One `RenderSymbol` drawn in isolation, so a reviewer compares a source
+symbol with its canonical candidate like with like. The scene is built
+by `swatchScene(symbol)` in `packages/shared/src/render/swatch.ts` —
+pure, shared, the same function for a document's source symbol and a
+library entry — and drawn by the reference raster. Nothing about the
+symbol is special-cased: the scene is ordinary `RenderObject`s through
+`symbolise`.
+
+| Kind | Sample object (paper µm, y-up) | Minimum frame |
+|---|---|---|
+| point | one point at (0, 0), angle 0; the symbol is `scaleRenderSymbol(symbol, 3)` — every length ×3, so minimum-size rules scale with it | 12 × 12 mm centred on the point |
+| line | open polyline (0, 0) → (12 000, 0) → (27 588, 9 000): 12 mm, a **corner** (`COORD_FLAG.corner`) at the second vertex, then 18 mm at 30° with a **dash point** (`COORD_FLAG.dash`) inserted 10 mm after the corner at (20 660, 5 000) — 30 mm in total | sample bounds |
+| area | closed square (0, 0)–(15 000, 15 000), angle 0 (pattern and hatch angles as authored) | the square |
+| text | one point at (0, 0) carrying the text `Abc 123`, angle 0, at the symbol's own size | — |
+
+Frame: the union of the kind's minimum frame and the stream's bounds,
+plus a 1 mm margin, grown symmetrically to a whole number of pixels as
+`goldenFrame` does (§6.2). Density 10 px/mm (`GOLDEN_PX_PER_MM`), no
+supersampling, background `#f0f0f0` — a light neutral grey rather than
+paper white, so white ink, halos and knock-outs stay visible. Colours
+are the caller's colour stack through `cmykToHex`: the document's own
+stack for a source symbol, the library's palette edition for a library
+entry. Fonts are the bundled faces (§4.10); a text symbol whose family
+is not bundled draws nothing (the `NO_FONT` warning).
+
+The thumbnail is not a swatch: it is the whole document, `docs/map-storage.md` §4.4.
 
 ### 5.2 WebGL2 (web)
 
@@ -784,7 +817,9 @@ library's own fixtures (04 §8 table, one per rule) are added in slice B.
 | `packages/shared/src/render/symbolise.ts` | the stage |
 | `packages/shared/src/render/__fixtures__/` | contract fixtures (`streams/`), pilot symbols, `pilot-scene.ts`, `golden.ts` (scene list, frame) |
 | `packages/shared/fonts/` | bundled Liberation faces |
-| `packages/api/src/render/reference-raster.ts` | resvg rasterisation, `sampleAt`, `diffImages` |
+| `packages/api/src/render/reference-raster.ts` | resvg rasterisation, `sampleAt`, `diffImages`, `encodePng` |
+| `packages/shared/src/render/swatch.ts` | symbol swatch scene (§5.1.1) |
+| `packages/api/src/render/previews.ts` | swatch and thumbnail PNGs (`docs/map-storage.md` §4.4) |
 | `packages/api/src/render/fonts.ts` | bundled-font loader for the server backends |
 | `packages/api/src/render/golden.ts`, `scripts/render-golden.ts` | golden PNG generation (`pnpm --filter @oxygen/api golden:render`) |
 | `packages/shared/src/render/ocad-objects.ts` | `ocad2geojson` objects → `RenderObject`s (pilot / envelope modes, proxy symbols) |

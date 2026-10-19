@@ -18,7 +18,7 @@ implemented and marks what is still pending.
  7 align        colour stack alignment (03 §6.3)                          shared     done (docs/map-symbols.md §9)
  8 encode       02 codec → bytes; sha256 → documentHash                   shared     done
  9 store        map_sources + map_documents rows, event pin, report      api        done, as an import job in a worker thread (docs/map-storage.md §3, §6)
-10 derive       thumbnail, metadata columns                               api        pending
+10 derive       thumbnail (map_previews)                                  api        done, inside the job after the pins (docs/map-storage.md §4.4, §6.1)
 ```
 
 Stages 3–8 are pure functions over bytes with no Node APIs
@@ -28,6 +28,14 @@ runs them client-side today). The only Node-side piece is the reader
 loader in `packages/api/src/import/ocad.ts`; the OMAP reader itself is
 shared code (no XML library — `packages/shared/src/import/xml.ts`), so
 a Mapper file needs no Node-side dependency at all.
+
+Stage 10 writes the thumbnail only. 06 §4.1's "metadata columns from
+the header" are the stage-9 `map_documents.header` summary
+(`docs/map-storage.md` §3): scale, bounds, georeferencing, colours and
+counts are already there. The `map_files` quick-access columns (`scale`,
+`bounds`, `north_offset`, `calibration`) stay with the raster path until
+the normaliser has north and projection (stage 5, pending). A failed
+derive is logged and the job still ends `done`: previews are cache.
 
 ## 2. Entry points
 

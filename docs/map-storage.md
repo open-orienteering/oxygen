@@ -38,7 +38,7 @@ Migrations `20261016190000_map_documents_storage` and
 |---|---|---|---|
 | `map_sources` | `file_hash CHAR(64)` | `kind` (`ocad`/`omap`), `bytes BYTEA`, `size_bytes`, `file_name`, `uploaded_by → users SET NULL`, `created_at` | the uploaded file; `bytes` is `STORAGE EXTERNAL` |
 | `map_documents` | `hash CHAR(64)` | `bytes BYTEA`, `size_bytes`, `format_version`, `importer_version`, `library_version`, `source_hash → map_sources RESTRICT`, `header JSONB`, `report JSONB`, `created_at`, `last_referenced_at` | the encoded document; `header` is the summary (§3), `report` the import report |
-| `map_previews` | `(document_hash, kind, key)` | `png BYTEA`, `created_at` | `document_hash → map_documents CASCADE`; filled by the review slice (pending) |
+| `map_previews` | `(document_hash, kind, key)` | `png BYTEA`, `created_at` | `document_hash → map_documents CASCADE`; thumbnails and symbol swatches, pure cache (§4.4) |
 | `club_maps` | `id UUID` | `name`, `colour_profile`, `colour_overrides JSONB`, `north_lines_below`, `rotation_correction`, `created_by`, timestamps | a club's map as a series (06 §8) |
 | `club_map_versions` | `id UUID` | `club_map_id → club_maps CASCADE`, `seq`, `label`, `source_hash RESTRICT`, `document_hash RESTRICT`, `uploaded_by`, `uploaded_at`; `UNIQUE(club_map_id, seq)` | one edition; `uploadedAt` ordering, `seq` for display |
 | `map_files` (+) | — | `source_hash RESTRICT`, `document_hash RESTRICT`, `club_map_version_id → club_map_versions SET NULL` | the event's pins; nullable so the raster path keeps working when the import fails |
@@ -197,6 +197,86 @@ deleteBlob(db, table, hash)                                    // raw DELETE; fa
 Everything above the seam talks in hashes and `Buffer`s; a future object
 store implements the same three calls.
 
+### 4.4 Previews
+
+06 §5.2, 07 §6.1. PNGs derived from a document or from the bundled
+library by the reference raster (`docs/map-rendering.md` §5.1); the
+review UI (slice B) reads them. `packages/api/src/map-store/previews.ts`
+(rows, library cache) and `preview-routes.ts` (routes).
+
+```
+GET /api/map-documents/:hash/thumbnail.png                 the whole map, long edge 512 px
+GET /api/map-documents/:hash/symbols/:idx.png              swatch of header.symbols[idx].render
+GET /api/library/:libraryId/:version/:code.png             swatch of a canonical entry
+```
+
+**Rows.** Document previews are `map_previews` rows keyed
+`(document_hash, kind, key)`: `('thumbnail', '')` and
+`('symbol', '<idx>')`. A row is written once with `createMany …
+skipDuplicates` and never updated, like the blobs (§1); it cascades with
+its document and is pure cache — deleting rows only costs a re-render.
+Who writes them:
+
+| Row | Written by |
+|---|---|
+| thumbnail | import stage 10 (`derive`, §6.1) after the document is stored, including the dedup short-cut of `startImportJob`; otherwise on the first request that finds no row (documents stored before stage 10 existed, a skipped or failed derive) |
+| symbol | the first request for that index |
+
+Reading a preview is not a reference: it never bumps
+`last_referenced_at` (§3).
+
+**Thumbnail.** The document through `documentRenderInput` with its
+defaults (canonical layer on, hidden symbols off, proxies for symbols
+without a render) → `symbolise` with the bundled fonts → reference raster
+on white paper. The area is the print window when the header has one,
+otherwise `header.bounds`; the density puts the longer side at 512 px.
+Documents with more than `THUMBNAIL_MAX_OBJECTS` objects are not
+thumbnailed: stage 10 logs and writes nothing, and the route answers 404
+— symbolising a club-size map into one SVG for resvg takes seconds and
+hundreds of MB on the API process, which a cache entry is not worth.
+
+**Symbol swatch.** `header.symbols[idx].render` drawn by the shared
+swatch scene (`docs/map-rendering.md` §5.1.1) in the document's own
+colour stack, at its native paper size — what the map prints, not
+normalised to the library's reference scale. A symbol with
+`render: null` has no swatch (404); `graphic` and `hidden` symbols
+render like any other.
+
+**Library swatch.** The entry resolved in the library's own palette
+edition (`materialiseLibrary(id)`, `iof2024` today) through the same
+swatch scene, at reference scale. `:code` is the entry code with an
+optional variant letter — `418`, `302.b` — i.e. the entry id without the
+library prefix. Rendered from the bundled library and cached in memory
+per instance (bounded, least recently used out), never stored (07 §4.1):
+it is a function of the library version alone. The version is part of
+the path so `public, immutable` survives a `SYMBOL_LIBRARY_VERSION`
+bump; a request for another version than the current one is 404.
+
+**Contract.** Same order as §4.1: validate, authorise, then existence,
+so a hash cannot be probed.
+
+| Condition | Status |
+|---|---|
+| `:hash` not 64 hex; `:idx` not a non-negative integer; `:libraryId` not a shipped library; `:code` not `\d{3}(\.\d{1,2})?(\.[a-z])?` | 400 `{error}` |
+| document routes: §4.2 predicate fails | 401 anonymous / 403 signed in |
+| library route: auth on and no signed-in user | 401 |
+| no such document; `idx` ≥ symbol count or `render: null`; thumbnail over the object cap; `:version` ≠ current; no such entry | 404 `{error}` |
+| `If-None-Match` matches the `ETag` | 304 |
+| otherwise | 200 PNG |
+
+| Route | Headers on 2xx / 304 |
+|---|---|
+| document previews | `Content-Type: image/png`, `Cache-Control: private, max-age=31536000, immutable`, `ETag: "<hash>/thumbnail"` or `"<hash>/symbols/<idx>"` |
+| library preview | `Content-Type: image/png`, `Cache-Control: public, max-age=31536000, immutable`, `ETag: "<libraryId>@<version>/<code>"` |
+
+No `Range`, no `Content-Encoding` (PNG is already deflated), no `Vary`.
+
+Authorisation of the document previews is exactly §4.2 — the same
+predicate, the same 60 s positive cache, shared with the document route
+through `requireDocumentAccess(req, reply, hash)` in `routes.ts`; a
+clause added there applies to previews too. The library route needs any
+signed-in user, or `AUTH_MODE=off` (07 §6.1): the library is public data.
+
 ## 5. Chunked upload: `/api/map-uploads`
 
 07 §7. Browsers upload map files in slices so a 100 MB OCAD file survives
@@ -275,7 +355,7 @@ instance loses nothing. `packages/api/src/map-store/jobs.ts`.
 startImportJob(db, {sourceHash, eventId? | clubMapId?, holdMs?})
   │
   ├─ a map_documents row exists for (sourceHash, importer ∈ {ocad-4, omap-1}, library *@<current SYMBOL_LIBRARY_VERSION>)
-  │     → insert state=done with that document_hash, applyJobResult, return   (06 §8 dedup, no worker)
+  │     → insert state=done with that document_hash, applyJobResult, derive, return   (06 §8 dedup, no worker)
   │
   └─ insert state=queued → kickImportJobs → hold ≤ holdMs for the result → return the row
 
@@ -285,6 +365,7 @@ kickImportJobs: one loop per instance
   → worker thread: parse → normalise → match → encode (stage + progress written at each boundary,
   → store: storeImportedDocument (§3)                 heartbeat every 10 s while it runs)
   → applyJobResult: pins (§6.4)
+  → derive: thumbnail row (§4.4); a failure is logged, never fails the job
   → done | failed(error)
 ```
 
@@ -295,7 +376,7 @@ kickImportJobs: one loop per instance
 | `done` | `document_hash` set, pins applied |
 | `failed` | `error` set (≤ 2000 chars); `UNSUPPORTED_FORMAT: …` for a source whose `kind` is neither `ocad` nor `omap` (unreachable from the upload routes, which sniff), the importer's message otherwise |
 
-`stage` ∈ `parse 0.1 → normalise 0.4 → match 0.55 → encode 0.7 → store 0.9 → done 1`;
+`stage` ∈ `parse 0.1 → normalise 0.4 → match 0.55 → encode 0.7 → store 0.9 → derive 0.95 → done 1`;
 `progress` is that fixed ladder, not a byte count. Every progress and
 terminal write is guarded by `claimed_by = INSTANCE_ID`, so an instance
 whose job was re-claimed after a stall cannot overwrite the new owner's
