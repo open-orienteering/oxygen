@@ -151,7 +151,7 @@ type ReviewDecision = { symbolIdx; accept: canonicalId } | { symbolIdx; unmatch:
   `NOT_FOUND` for an unknown document, an event without a map or an
   unknown club map. Finalising the matcher's own output is a no-op
   (06 §5.1); `previous` lists the hashes that were pinned before.
-- Authorisation (`docs/map-storage.md` §4.2): `review` is the document route's predicate exactly.
+- Authorisation (`docs/map-storage.md` §4.2): `review` is the document route's predicate exactly (not behind `authedProcedure`: a kiosk key with no user reads, as on the route).
   `decide` and `finalise` use it in edit mode (`EDIT_ACCESS`): the event
   clause needs `courses.edit` and never takes the kiosk key; the club and
   own-job clauses read as for reading. Club map targets need a signed-in

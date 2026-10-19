@@ -37,9 +37,9 @@ export interface ReviewPayload {
 }
 
 /** Whether a stored document is what its source imports to now (also the re-match pass's test, §6.9). */
-export async function isDocumentCurrent(db: Db, doc: { hash: string; importerVersion: string; libraryVersion: string; report: Prisma.JsonValue }, kind: string): Promise<boolean> {
+export async function isDocumentCurrent(db: Db, doc: { hash: string; importerVersion: string; libraryVersion: string; report: Prisma.JsonValue }, kind: string, header?: mapDocument.MapDocumentHeader): Promise<boolean> {
   if (staleReason(doc, true)) return false;
-  return storedDocumentFollowsDecisions(db, doc, await loadClubDecisions(db, kind));
+  return storedDocumentFollowsDecisions(db, doc, await loadClubDecisions(db, kind), header);
 }
 
 /** The review payload, or `null` when there is no such document. */
@@ -58,7 +58,7 @@ export async function buildReview(db: Db, hash: string): Promise<ReviewPayload |
   const rows = mapImport.reviewRows(header, counts, { edition });
   return {
     documentHash: hash,
-    current: await isDocumentCurrent(db, doc, doc.source.kind),
+    current: await isDocumentCurrent(db, doc, doc.source.kind, header),
     library: header.library ?? null,
     symbols: rows.map((r) => ({
       ...r,

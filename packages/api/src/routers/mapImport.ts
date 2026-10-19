@@ -8,7 +8,7 @@
 
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
-import { router, authedProcedure, adminProcedure, coursesViewProcedure } from "../trpc.js";
+import { router, publicProcedure, authedProcedure, adminProcedure, coursesViewProcedure } from "../trpc.js";
 import { prisma } from "../db.js";
 import { resolveEventCapabilities } from "../permissions.js";
 import { getImportJob, isClaimable, kickImportJobs, latestImportJobForEvent, type ImportJobRow } from "../map-store/jobs.js";
@@ -122,9 +122,11 @@ export const mapImportRouter = router({
    * The review payload for a stored document (06 §5.1): one row per source
    * symbol with its stored match, the matcher's top-3 candidates with
    * reasons and swatch URLs, colour class and flags; the colour stack; the
-   * import report. Readable by whoever may fetch the document (§4.2).
+   * import report. Readable by whoever may fetch the document (§4.2) —
+   * the predicate itself, so a kiosk key without a user is admitted as on
+   * the route; anonymous callers without one get UNAUTHORIZED from it.
    */
-  review: authedProcedure
+  review: publicProcedure
     .input(z.object({ documentHash: documentHashSchema }))
     .query(async ({ ctx, input }) => {
       await requireDocument(ctx, input.documentHash, READ_ACCESS);

@@ -15,7 +15,7 @@ import { extname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Worker } from "node:worker_threads";
 import { mapImport, symbolLibrary } from "@oxygen/shared";
-import { loadClubDecisions, storedDocumentFollowsDecisions, symbolDecisionsSchema } from "./decisions.js";
+import { loadClubDecisions, parseDecisionSnapshot, storedDocumentFollowsDecisions } from "./decisions.js";
 import type { Prisma, PrismaClient } from "../generated/prisma/client.js";
 import { IMPORTER_VERSIONS, type ImportStage, type MapSourceKind } from "../import/ocad.js";
 import { storeImportedDocument, touchDocument } from "./documents.js";
@@ -149,9 +149,7 @@ const JOB_SELECT = {
 } as const;
 
 function asRow(r: { state: string; decisions: Prisma.JsonValue } & Omit<ImportJobRow, "state" | "decisions">): ImportJobRow {
-  // The column is ours; a malformed value (hand-edited row) imports without decisions rather than failing the job.
-  const decisions = symbolDecisionsSchema.safeParse(r.decisions);
-  return { ...r, state: r.state as JobState, decisions: decisions.success ? decisions.data : [] };
+  return { ...r, state: r.state as JobState, decisions: parseDecisionSnapshot(r.decisions) };
 }
 
 /** Jobs finishing on this instance resolve these so `start` can hold without polling. */

@@ -125,6 +125,10 @@ describe("mapImport.review", () => {
     const kiosk = await ctx.db.event.update({ where: { id: ctx.eventId }, data: { kioskKey: `k-${suffix}` }, select: { kioskKey: true } });
     const asKiosk = makeCaller(ctx.event, { user: stranger, authEnabled: true, authMode: "proxy", kioskKey: kiosk.kioskKey });
     await expect(asKiosk.mapImport.review({ documentHash: docA })).resolves.toMatchObject({ documentHash: docA });
+    // A kiosk presents the key with no user at all, as on the document route.
+    const anonKiosk = makeCaller(ctx.event, { user: null, authEnabled: true, authMode: "proxy", kioskKey: kiosk.kioskKey });
+    await expect(anonKiosk.mapImport.review({ documentHash: docA })).resolves.toMatchObject({ documentHash: docA });
+    await expect(makeCaller(ctx.event, { user: null, authEnabled: true, authMode: "proxy", kioskKey: "wrong" }).mapImport.review({ documentHash: docA })).rejects.toMatchObject({ code: "UNAUTHORIZED" });
     await expect(makeCaller(null).mapImport.review({ documentHash: "f".repeat(64) })).rejects.toMatchObject({ code: "NOT_FOUND" });
     await expect(makeCaller(null).mapImport.review({ documentHash: "nothex" })).rejects.toMatchObject({ code: "BAD_REQUEST" });
   });
@@ -233,6 +237,8 @@ describe("mapImport.finalise", () => {
     const otherSource = await ctx.db.mapDocument.findFirstOrThrow({ where: { sourceHash: hashB }, select: { hash: true } });
     await expect(makeCaller(null).mapImport.finalise({ documentHash: otherSource.hash, target: { kind: "club", clubMapId } })).rejects.toMatchObject({ code: "PRECONDITION_FAILED" });
     await expect(makeCaller(null).mapImport.finalise({ documentHash: docC, target: { kind: "club", clubMapId: "01990e00-0000-7000-8000-00000000dead" } })).rejects.toMatchObject({ code: "NOT_FOUND" });
+    // Club targets need a signed-in user.
+    await expect(caller(null, false).mapImport.finalise({ documentHash: docC, target: { kind: "club", clubMapId } })).rejects.toMatchObject({ code: "UNAUTHORIZED" });
   }, 90_000);
 
   it("reset deletes the decision and returns the source to the matcher's own document", async () => {

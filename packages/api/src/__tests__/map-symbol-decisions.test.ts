@@ -9,7 +9,7 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { mapDocument, mapImport, symbolLibrary } from "@oxygen/shared";
 import { importOcadToDocument } from "../import/ocad.js";
-import { DecisionInputError, planDecisionWrites, reviewDecisionSchema, symbolDecisionsSchema } from "../map-store/decisions.js";
+import { DecisionInputError, parseDecisionSnapshot, planDecisionWrites, reviewDecisionSchema, symbolDecisionsSchema } from "../map-store/decisions.js";
 import { runImportInWorker } from "../map-store/jobs.js";
 
 const fixture = readFileSync(fileURLToPath(new URL("../../../../e2e/test.ocd", import.meta.url)));
@@ -47,6 +47,15 @@ describe("planDecisionWrites", async () => {
     expect(reviewDecisionSchema.safeParse({ symbolIdx: 1, unmatch: false }).success).toBe(false);
     expect(reviewDecisionSchema.safeParse({ symbolIdx: 1, accept: "x", reset: true }).success).toBe(false);
     expect(reviewDecisionSchema.safeParse({ symbolIdx: -1, reset: true }).success).toBe(false);
+  });
+});
+
+describe("parseDecisionSnapshot", () => {
+  it("reads the job column back, and a malformed value as no decisions", () => {
+    const ok = [{ code: "702", irHash: "0a1b2c3d", canonicalId: "ISOM2017-2:703", libraryId: "ISOM2017-2" }, { code: "527", canonicalId: null }];
+    expect(parseDecisionSnapshot(ok)).toEqual(ok);
+    expect(parseDecisionSnapshot([])).toEqual([]);
+    for (const bad of [null, {}, "x", [{ code: 1, canonicalId: null }], [{ code: "702" }]]) expect(parseDecisionSnapshot(bad)).toEqual([]);
   });
 });
 

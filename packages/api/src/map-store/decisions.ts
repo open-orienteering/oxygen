@@ -22,6 +22,12 @@ export const symbolDecisionSchema = z.object({
 });
 export const symbolDecisionsSchema = z.array(symbolDecisionSchema);
 
+/** The job column read back; a malformed value (a hand-edited row) imports without decisions rather than failing the job. */
+export function parseDecisionSnapshot(json: unknown): mapImport.SymbolDecision[] {
+  const parsed = symbolDecisionsSchema.safeParse(json);
+  return parsed.success ? parsed.data : [];
+}
+
 /** One review decision as `mapImport.decide` takes it (06 §5.1). */
 export const reviewDecisionSchema = z.union([
   z.object({ symbolIdx: z.number().int().min(0), accept: z.string().min(1) }).strict(),
@@ -107,9 +113,9 @@ export async function writeDecisions(db: PrismaClient, writes: readonly Decision
  * `documentFollowsDecisions`). A report with no `explicit` matches and
  * no decisions to apply needs no header read.
  */
-export async function storedDocumentFollowsDecisions(db: Db, doc: { hash: string; report: Prisma.JsonValue }, decisions: readonly mapImport.SymbolDecision[]): Promise<boolean> {
+export async function storedDocumentFollowsDecisions(db: Db, doc: { hash: string; report: Prisma.JsonValue }, decisions: readonly mapImport.SymbolDecision[], known?: mapDocument.MapDocumentHeader): Promise<boolean> {
   const explicit = (doc.report as { matching?: { byMethod?: Record<string, number> } } | null)?.matching?.byMethod?.explicit ?? 0;
   if (decisions.length === 0 && explicit === 0) return true;
-  const header = await readDocumentHeader(db, doc.hash);
+  const header = known ?? (await readDocumentHeader(db, doc.hash));
   return header !== null && mapImport.documentFollowsDecisions(header, decisions);
 }
