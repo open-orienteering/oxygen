@@ -160,6 +160,23 @@ function objectBounds(coords: ArrayLike<number>): DocumentBounds {
   return { minX, minY, maxX, maxY };
 }
 
+/** Union of the objects' coordinate boxes — what the encoder writes as `header.bounds`; all zero for no objects. */
+export function inputBounds(objects: ArrayLike<Pick<MapObjectInput, "coords">>): DocumentBounds {
+  let out: DocumentBounds | undefined;
+  for (let i = 0; i < objects.length; i++) {
+    if (objects[i].coords.length < 2) continue;
+    const b = objectBounds(objects[i].coords);
+    if (!out) out = b;
+    else {
+      if (b.minX < out.minX) out.minX = b.minX;
+      if (b.minY < out.minY) out.minY = b.minY;
+      if (b.maxX > out.maxX) out.maxX = b.maxX;
+      if (b.maxY > out.maxY) out.maxY = b.maxY;
+    }
+  }
+  return out ?? { minX: 0, minY: 0, maxX: 0, maxY: 0 };
+}
+
 export function encodeMapDocument(input: MapDocumentInput): Uint8Array {
   const { objects } = input;
   const symbolCount = input.header.symbols.length;

@@ -17,12 +17,20 @@
 import type { Georeferencing } from "../map-document/header.js";
 import { epsgName, proj } from "./epsg.js";
 
+/** The header's georeferencing fields the maths reads (defaults applied when absent: rotation 0, scale factor 1). */
+export interface FrameGeoreferencing {
+  crs: Georeferencing["crs"];
+  paperOrigin: Georeferencing["paperOrigin"];
+  gridRotationDeg?: number;
+  gridScaleFactor?: number;
+}
+
 export interface PaperFrame {
   /** Native paper units per mm: OCAD 100, OMAP 1000. */
   unitsPerMm: number;
   /** Scale denominator. */
   mapScale: number;
-  georeferencing: Pick<Georeferencing, "crs" | "paperOrigin" | "gridRotationDeg" | "gridScaleFactor">;
+  georeferencing: FrameGeoreferencing;
   /** Operator rotation correction (`map_files.rotation_correction`), degrees clockwise, added to the grid rotation. */
   correctionDeg?: number;
 }

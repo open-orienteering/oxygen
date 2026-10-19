@@ -43,11 +43,12 @@ export function clusterMeridians<K>(groups: Iterable<[K, number[]]>): MeridianCl
   let best: MeridianClusterOf<K> | null = null;
   for (const [key, angles] of groups) {
     if (angles.length < MERIDIAN_MIN_COUNT) continue;
-    const mean = angles.reduce((s, a) => s + a, 0) / angles.length;
-    const variance = angles.reduce((s, a) => s + (a - mean) * (a - mean), 0) / angles.length;
+    // Sums over the sorted list, so the result does not depend on object order (encoded documents are Hilbert-ordered).
+    const sorted = [...angles].sort((a, b) => a - b);
+    const mean = sorted.reduce((s, a) => s + a, 0) / sorted.length;
+    const variance = sorted.reduce((s, a) => s + (a - mean) * (a - mean), 0) / sorted.length;
     const stddevDeg = Math.sqrt(variance);
     if (stddevDeg > MERIDIAN_MAX_STDDEV_DEG) continue;
-    const sorted = [...angles].sort((a, b) => a - b);
     const cluster = { key, count: angles.length, medianTiltDeg: sorted[Math.floor(sorted.length / 2)], stddevDeg };
     if (!best || cluster.count > best.count) best = cluster;
   }

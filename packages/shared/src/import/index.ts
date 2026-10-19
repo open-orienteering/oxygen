@@ -5,6 +5,7 @@ export * from "./xml.js";
 export * from "./omap-reader.js";
 export * from "./omap-symbols.js";
 export * from "./omap-source.js";
+export * from "./analyse.js";
 export * from "./report.js";
 export * from "./colour-class.js";
 export * from "./colour-align.js";
