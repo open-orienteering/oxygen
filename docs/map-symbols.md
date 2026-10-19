@@ -348,8 +348,9 @@ What is drawn: `auto` and reviewed matches resolve the library entry
 against the aligned stack (§9) and are scaled by the document factor;
 `suggested`, `unmatched` and `variant` keep their source IR
 (`map-document/render-bridge.ts` `isAppliedMatch`, `canonical:false`
-turns this off). Reviewing a suggestion is the pending review API
-(`docs/map-import.md` §8); the data contract is already in the header.
+turns this off). Reviewing a suggestion is `mapImport.review` /
+`decide` / `finalise` (`docs/map-import.md` §2.2); decisions persist as
+club rows (§8.5) and come back through row 1.
 
 ### 8.3 Document factor (03 §6.6)
 
@@ -386,6 +387,91 @@ numbered 702 is `suggested` 703 by description. The remaining non-auto
 share is dominated by OCAD template conventions the library has no entry
 for (minimum-size points, outline lines, single pattern dots); adding
 those as library variants is the lever if the auto rate needs to rise.
+
+### 8.5 Club decisions (06 §5.3)
+
+A reviewed outcome outlives the document it was made on: next year's
+edition of the same club map has the same symbols. Decisions are rows of
+`club_symbol_decisions` (`docs/map-storage.md` §2), written only by
+`mapImport.decide` (`docs/map-import.md` §2.2) and read by stage 6 as the
+`explicit` stage (§8.2 row 1). The matcher never writes them.
+
+**Fingerprint.** `"<source kind>:<code>:<irHash>"` — `ocad:527:1a2b3c4d`
+— with the normalised spec code and `irHash = fingerprintHash(fingerprintOf(render, classOf))`
+(§8.1). The IR type is part of the fingerprint the hash covers; the
+symbol *name* is not, so a rename keeps its decision and the same code
+drawn the same way is the same symbol. The string stays readable so a
+CRT export can carry it in a comment (A7). `documentSymbolFingerprints(header)`
+computes it from a stored document: colour classes are per colour
+(`classifyColour`), so the aligned stack of the header gives the same
+classes as the source stack the matcher saw, and the remapped render the
+same hash (unit-tested equal). `null` for non-source symbols and for
+symbols without a render.
+
+**Library versions.** A row's `library_version` is the full
+`<library>@<SYMBOL_LIBRARY_VERSION>` the decision was made against
+(`ISOM2017-2@2026.10.1`), as 07 §4.3 records it. A decision is a
+statement about a library *entry*, which survives a library release, so
+stage 6 reads every row of the chosen library id whatever its release
+(`library_version` starting with `<library>@`), and per fingerprint the
+newest `decided_at` wins (ties: the later release string). A re-match
+after a library bump therefore keeps reviewed rows and re-proposes the
+rest (03 §6.5). An entry the new release dropped falls through with
+`DECISION_UNKNOWN_ENTRY` (§8.2). `decide` writes the row under the
+current release; `reset` deletes the fingerprint's rows for that library
+id under every release. Rows of the other library (an ISSprOM decision on
+an ISOM map) are ignored: `SymbolDecision.libraryId`, filtered by
+`matchDocument` after `chooseLibrary`.
+
+**Scope.** The instance belongs to one club (`docs/club-library.md`), so
+the table has no event or series column: a decision made while reviewing
+an event map applies to the club map of the same symbols and vice versa.
+Rows of another source kind never apply (`omap:` rows to an OCAD file).
+
+**Does a stored document follow the decisions?**
+`documentFollowsDecisions(header, decisions)` — for every source symbol
+with a fingerprint, the decision that would apply (an entry the library
+has, or `null`) equals what the header records (`method: "explicit"` with
+that `canonicalId`, or no explicit match when no decision applies). The
+dedup short-cut and the re-match pass (`docs/map-storage.md` §6.1, §6.9)
+use it, so a document is reused only if re-importing it now would give
+the same bytes.
+
+**Review rows (06 §5.1).** `reviewRows(header, objectsPerSymbol, {edition})`
+gives one row per *source* symbol (graphic and missing-symbol entries are
+not review items):
+
+```ts
+interface ReviewRow {
+  symbolIdx: number; code: string; name: string;
+  type: "point" | "line" | "area" | "text" | "rectangle" | "unknown";  // the source kind
+  objects: number;                       // from the attrs section (objectsPerSymbol)
+  match: SymbolMatch | null;             // what the document draws; null before the matcher
+  candidates: { canonicalId; confidence; reasons[] }[];   // ≤ 3, best first
+  colourClass: string;                   // formatClass of the main stroke / fill / glyph colour
+  flags: ("hidden" | "unused" | "club-symbol" | "text")[];
+  fingerprint: string | null;            // the decision key; null without a render
+}
+```
+
+`candidates` is the matcher's *own* proposal for the symbol, recomputed
+without decisions from the stored render against the stored factor and
+edition (`report.matching.edition`, else `detectPaletteEdition`): the
+proposal's entry with its reasons, then its `alternatives` re-scored by
+`compareFingerprints` for their reasons. A reviewed row therefore shows
+the decision as `match` and what `reset` would return to as
+`candidates[0]`. Reasons are not stored in the header for alternatives,
+so they are recomputed here. `club-symbol` means no library entry shares
+the code's base number (a metro line `900`, a club's own `8xx`);
+`unused` is zero objects; `text` the source kind. A pre-matcher header
+(no `library`) has rows with `match: null` and no candidates.
+
+Tests: `packages/shared/src/import/__tests__/decisions.test.ts`
+(fingerprint equality between source and stored stack, name
+independence, newest-wins and tie rules, library and kind filtering,
+`documentFollowsDecisions` matrix incl. a dangling entry, review rows on
+the stage 6–7 fixture with flags and candidates, attrs-only object
+counts); the API side in `docs/map-storage.md` §10.
 
 ## 9. Colour stack alignment (03 §6.3)
 
@@ -440,9 +526,9 @@ resolves canonical entries through `paletteIndexOfStack(header.colours)`.
 
 ## 10. Pending in this chapter
 
-- Review API and UI for `suggested` matches (06 §5); the `decisions`
-  input exists on `matchDocument` and nothing persists decisions yet.
-  The swatches the review shows are served (`docs/map-storage.md` §4.5).
+- Review UI for `suggested` matches (slice B); the API is §8.5 and
+  `docs/map-import.md` §2.2. CRT export / import of the decisions (06 §5.1,
+  slice A7).
 - Library variants for the OCAD template conventions (§8.4) if the auto
   rate needs to rise.
 - Contact sheet: a golden render per entry at 10× via the reference
