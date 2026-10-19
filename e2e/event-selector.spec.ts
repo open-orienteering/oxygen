@@ -226,8 +226,13 @@ test.describe("Event selector", () => {
     // The old text badge is gone.
     await expect(page.getByText("O2", { exact: true })).toHaveCount(0);
 
-    // Desktop Chromium needs no permission prompt, so the live wrapper is
-    // rendered and listening; with no sensor the needle rests at north.
+    // Chromium 156+ exposes DeviceOrientationEvent.requestPermission like
+    // iOS, so the logo starts as a tap target. With the sensor permissions
+    // granted the tap resolves "granted" and the live wrapper takes over;
+    // older Chromium skips the button. With no sensor the needle rests at north.
+    await page.context().grantPermissions(["accelerometer", "gyroscope", "magnetometer"]);
+    const enable = page.getByTestId("oxygen-logo-enable-compass");
+    if (await enable.isVisible()) await enable.click();
     const live = page.getByTestId("oxygen-logo-live");
     await expect(live).toBeVisible();
     const needle = page.getByTestId("oxygen-logo-needle");
