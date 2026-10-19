@@ -112,7 +112,7 @@ applies the pins:
 |---|---|---|---|
 | `course.uploadMap` (base64, ≤ 8 MiB) → `applyEventMap` | `applyEventMap` | `eventId` | `map_files.document_hash` on every row of the event with that `source_hash` |
 | chunked upload → `course.applyUploadedMap` → `applyEventMap` | finalise route (§5) | `eventId` | same |
-| `course.useClubMap` → `applyEventMap` | `applyEventMap` (bytes from the library row) | `eventId` | same; the router then pins `club_map_version_id` to the series version with that `source_hash` |
+| `course.useClubMap` → `applyEventMap` | `applyEventMap` (bytes from the latest version's `map_sources` row, §6.5) | `eventId` | same; the router then pins `club_map_version_id` to that version |
 | `clubMap.upload` (base64) / `clubMap.addFromSource` (chunked) | router / finalise route | `clubMapId` | a new `club_map_versions` row (§6.4) |
 
 `applyEventMap` creates the `map_files` row with `source_hash` set and
@@ -520,16 +520,83 @@ Idempotent; also run for dedup hits:
   uploader's values.
 - `touchDocument(hash)`.
 
-### 6.5 Club library dual-write
+### 6.5 Club library on the series
 
-Until the library UI reads from the new tables, every `club_map_files`
-row created now also gets a `club_maps` series (`club_map_files.club_map_id`
-links them), the job writes version 1, and the legacy mutations mirror:
-`rename` → `club_maps.name`, `setColorStack` → `colour_overrides`,
-`setRotation` → `rotation_correction`, `remove` → deletes the series (its
-versions cascade; the document stays for GC). `course.useClubMap` pins
-`map_files.club_map_version_id` to the version matching the row's
-`file_hash` when one exists.
+The club library (`clubMap.*`, `course.useClubMap`, Settings → Maps and
+the event map panel's **From club library** picker) reads and writes the
+`club_maps` series and its `club_map_versions`. The library id the
+client sees is `club_maps.id` (a UUID); the numeric `club_map_files.id`
+is no longer part of any procedure's input or output.
+
+**Prerequisite.** A `club_map_files` row with `club_map_id IS NULL` (not
+yet backfilled) is not listed. The backfill (§6.7) creates its series, so
+an instance must have run it — `pnpm map:backfill` or Settings →
+Maintenance → **Map documents** — before this release reaches its users;
+for the club's production database that is the slice A gate (09 §4 A).
+`clubMap.list` never starts an import: a read does not create series.
+
+```
+clubMap.list → [{
+  id,                      club_maps.id
+  name, colorProfile, colorOverrides, northLinesBelow, rotationCorrection,   the series
+  createdBy, createdAt,    club_maps.created_by / created_at
+  version: {id, seq, label, sourceHash, documentHash, uploadedAt, uploadedBy} | null,   latest seq
+  versionCount,
+  importJob: {id, state, error} | null,   newest job of the series, only while version is null
+  fileName,                version label, else map_sources.file_name of the version (or the job's source)
+  sizeBytes,               map_sources.size_bytes of the same source
+  scale,                   map_documents.header.mapScale, else the legacy row's scale
+  uploadedAt, uploadedBy, uploader {email, displayName},   the version's, else the series creator's
+  previewUrl,              /api/map-documents/<documentHash>/thumbnail.png (§4.5),
+                           else /api/club-map-preview/<legacy id>, else null
+  bounds, northOffset, northDetection, meridianStalenessDeg,   the linked legacy row (below)
+}]                         ordered by club_maps.created_at desc
+```
+
+`documentHash` is read on every call; nothing caches it or assumes a
+version's document never changes.
+
+| Procedure | Series side | Write-through to `club_map_files` |
+|---|---|---|
+| `upload` / `addFromSource` | `club_maps` row, `map_sources`, `startImportJob {clubMapId}` → version 1 (§6.4); returns `{id: club_maps.id, name, fileName, sizeBytes, rotationCorrection, meridianStalenessDeg, importJob}` | one row with `club_map_id`, the bytes, preview, metadata, `file_hash`, `render_key` |
+| `rename {id, name}` | `club_maps.name` | `name` on every linked row |
+| `setColorStack {id, profile?, northLinesBelow?, overrides?}` | `colour_profile`, `north_lines_below`, `colour_overrides` | `color_profile`, `north_lines_below`, `color_overrides`; `render_key` recomputed, old and new tile keys invalidated, orphan tiles collected |
+| `setRotation {id, degrees}` | `rotation_correction` | `applyClubMapRotationCorrection` per linked row (bounds, north offset, render key) |
+| `remove {id}` | deletes the series: versions cascade, `map_files.club_map_version_id` of events that pinned one is set `NULL`, jobs cascade | linked rows deleted **first** |
+| `download {id}` | the latest version's `map_sources` bytes, named by the version label (else `map_sources.file_name`) | — |
+| `course.useClubMap {clubMapId}` | settings from the series, bytes from the latest version's source; then `map_files.club_map_version_id` = that version on the event's rows with its `source_hash` | — |
+
+- **Write-through.** `club_map_files` stays because the raster path still
+  reads it until slice F drops it after a verified backfill (09 §4 F):
+  the tile cache and its orphan collection (`map-render-cache.ts`), the
+  PNG preview route (`/api/club-map-preview/:id`), PPEN course import's
+  CRS lookup (`course-import-align.ts`) and the backfill itself. Every
+  mutation keeps the linked rows identical to the series. The CRUD reads
+  a linked row only for what the document does not carry yet — WGS84
+  `bounds`, `northOffset`, `northDetection` (and its lazy backfill, see
+  `club-library.md`), the PNG preview, the pre-document `scale` — which
+  move to the document with stage 5 (`map-import.md` §3.5).
+- **Delete order.** `club_map_files.club_map_id` is `ON DELETE SET NULL`;
+  deleting the series first would leave an unlinked row the backfill
+  re-imports as a new series.
+- **Blobs.** `remove` deletes no `map_sources` or `map_documents` row and
+  calls no `deleteBlob`. Event copies keep their own `source_hash` /
+  `document_hash` (copy-on-use); a document nothing references any more
+  is collected by the GC after the grace (§8).
+- **Authorisation.** `remove` is allowed for `club_maps.created_by` or an
+  instance admin; `download` for the version's `uploaded_by` or an admin
+  — the club clause of the source route (§4.4); `AUTH_MODE=off` skips
+  both. Upload, rename and the colour stack carry no owner check, as
+  before (`club-library.md`).
+- **No version yet.** A series whose import failed, or is still running
+  past the hold, is listed with `version: null` and its `importJob`.
+  `download` and `useClubMap` answer `PRECONDITION_FAILED`: an event pins
+  a version (06 §6), and a failed club import must not become an event
+  map. The picker shows the entry disabled with its import state. The
+  backfill (§6.7) retries a series without a version.
+- `NOT_FOUND` for an unknown id; `BAD_REQUEST` (Zod) for a malformed one.
+- One version per series in slice A: there is no "new edition" upload
+  yet, so `version` is version 1 and `versionCount` is 1 (06 §6).
 
 ### 6.6 Status API and housekeeping
 
@@ -713,8 +780,7 @@ mentions is pending (§9).
 
 ## 9. Pending in this chapter
 
-Club map CRUD that reads from
-`club_maps` / `club_map_versions` instead of mirroring into them; venue
+Venue
 checkout snapshot; backups by hash; a re-import pass for documents
 stored under an older importer or library version (`ocad-3` / `none`
 rows); a Settings → Maintenance card for the GC (§8.4: status of the

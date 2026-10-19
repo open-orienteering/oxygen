@@ -14,8 +14,15 @@ and [features.md](features.md#eventor-api-keys).
 ## Maps
 
 Operators upload OCAD (`.ocd`) base maps once on **Settings → Maps**.
-Each row stores the file plus metadata parsed at upload (scale, WGS84 bounds,
-north offset, north-line diagnostics) and a rendered PNG thumbnail. The
+Each entry is a `club_maps` series (identified by its UUID) whose first
+`club_map_versions` row is written when the upload's import job finishes
+([map-storage.md §6.5](map-storage.md)): the version names the original
+file (`map_sources`) and the imported map document, and the card's
+thumbnail is that document's (`/api/map-documents/<hash>/thumbnail.png`).
+Metadata the document does not carry yet (WGS84 bounds, north offset,
+north-line diagnostics) and the PNG thumbnail of entries without a
+document come from the legacy `club_map_files` row that every library
+mutation keeps in step with the series until slice F retires it. The
 file's ScalePar georeference is taken as authoritative — there is no
 correction input. Instead the card shows a **north lines** badge: the
 angle between the map's drawn magnetic-north lines (ISOM 601) and today's
@@ -24,12 +31,17 @@ drifts ≈ 0.1–0.2°/yr in Sweden, so an older map's lines go stale; at ≥ 1�
 the badge turns amber as a hint to redraw them before printing. On-screen
 orientation follows the drawn north lines regardless (`northOffset` fold,
 see [bugfix-auto-north-correction-gps-offset.md](bugfix-auto-north-correction-gps-offset.md)).
-Existing rows render and persist their thumbnail on first view. Parse or render
-failure is non-fatal: the file is kept, scale/bounds stay empty, and the
-unavailable thumbnail is hidden.
+Parse or import failure is non-fatal: the entry is kept and listed with
+its import state ("Import failed" / "Importing…"), scale and bounds stay
+empty, the unavailable thumbnail is hidden, and the entry can be neither
+downloaded nor copied into an event until a version exists (the backfill
+retries it). Entries whose `club_map_files` row predates the series appear
+only once the map-document backfill has run (`pnpm map:backfill` or
+Settings → Maintenance → **Map documents**); a release containing this
+change requires that run first.
 
-Rows uploaded before north-line diagnostics existed are backfilled the same
-lazy way: the first `clubMap.list` read parses the blob, runs the north
+Rows uploaded before north-line diagnostics existed are backfilled lazily:
+the first `clubMap.list` read parses the linked legacy row's blob, runs the north
 analysis, and persists it (an unparseable file persists an all-null result
 so it is not re-parsed on every read). Event map rows get the identical
 backfill on the first `course.mapMetadata` read. "No magnetic north lines
@@ -37,8 +49,12 @@ found" therefore always means the analysis actually ran and found none —
 never "not analysed yet".
 
 The list is global for the instance (one owning club). Anyone who can sign in
-can upload and rename. Download and delete are allowed for the uploader or an
-instance admin (`AUTH_MODE=off` skips that check).
+can upload and rename. Delete is allowed for the entry's creator
+(`club_maps.created_by`) or an instance admin, download for the version's
+uploader or an instance admin (`AUTH_MODE=off` skips both checks). Delete
+removes the series and its versions only; the stored file and document stay
+until the storage GC collects whatever no event still uses
+([map-storage.md §8](map-storage.md)).
 
 ### OCAD source files
 
@@ -52,16 +68,20 @@ own file. That flag gates:
   uploaded itself; a club-library copy requires an instance admin.
 - `/api/backup/event` — same rule, because the dump includes
   `map_files.file_data`.
-- `clubMap.download` — uploader or instance admin, matching delete.
+- `clubMap.download` — the version's uploader or an instance admin, the
+  same rule as the club clause of `GET /api/map-sources/:hash`.
 
 ### Copy-on-use
 
-On an event map panel, **From club library** copies the chosen file into that
+On an event map panel, **From club library** copies the chosen entry's latest
+version (its original file and the series' colour and rotation settings) into that
 event's `map_files` row and runs the same pipeline as a direct upload
 (`applyEventMap`): replace the previous map, drop `map_tiles` /
 `rendered_maps`, fire map-upload listeners, rebuild `geometrySource: "editor"`
-course overlays. The event keeps an independent copy; later library rename or
-delete does not change events that already copied the map.
+course overlays; then it pins `map_files.club_map_version_id` to that version. The event keeps an independent copy; later library rename or
+delete does not change events that already copied the map (delete only clears
+the event's `club_map_version_id`). Entries without a version are shown
+disabled in the picker with their import state.
 
 ### Route
 
