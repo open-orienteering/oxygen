@@ -103,7 +103,7 @@ async function main() {
   registerMapTileRoutes(server);
   registerClubMapPreviewRoute(server);
   registerMapDocumentRoutes(server);
-registerMapSourceRoutes(server);
+  registerMapSourceRoutes(server);
   registerMapUploadRoutes(server);
   startImportJobEngine(prisma());
   registerCourseMapRoutes(server);

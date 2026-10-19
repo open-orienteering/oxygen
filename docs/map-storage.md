@@ -32,8 +32,10 @@ upload bytes ──sha256──▶ map_sources(file_hash)      the file as uploa
 ## 2. Tables
 
 Migrations `20261016190000_map_documents_storage`,
-`20261016210000_map_uploads_and_import_jobs` and
-`20261019120000_map_import_jobs_started_by`. All in schema `oxygen`.
+`20261016210000_map_uploads_and_import_jobs`,
+`20261019120000_map_import_jobs_started_by` and
+`20261019130000_map_storage_source_hash_indexes` (`source_hash` indexes
+on `map_files` and `club_map_versions` for the GC and the source route). All in schema `oxygen`.
 
 | Table | Key | Columns | Notes |
 |---|---|---|---|
@@ -242,7 +244,8 @@ Streaming (07 §6.4): sources reach 36 MB today and the upload limit is
 128 MiB, above Cloud Run's 32 MiB ceiling for a non-streamed response.
 The body is a `Readable` that pulls `getBlob(…, range)` slices of 4 MiB
 (`SOURCE_SLICE_BYTES`) one at a time, so the API holds one slice, never
-the file. `size_bytes` is read first (`getBlobSize`) to plan the slices;
+the file. `size_bytes` and `file_name` are read first (one `map_sources` select)
+to plan the slices;
 a slice that comes back missing (the row vanished mid-stream) aborts the
 response.
 
@@ -599,7 +602,9 @@ live in the database, so the schedule survives restarts and leadership
 moves; a local timer would never fire on instances recycled more often
 than daily. The settings are read at most every 15 minutes per
 instance. Losing the lease asks a running GC to stop after its current
-row (`stopAll`). Two runs overlapping after a handover are harmless —
+row (`stopAll`); a stopped run stores its `last_result` (with
+`stopped: true`) and clears `started_at` instead of writing
+`finished_at`, so the next leader finds it due at once. Two runs overlapping after a handover are harmless —
 every delete re-checks its conditions.
 
 The per-instance engine tick (§6.2) keeps running the housekeeping sweep
@@ -655,6 +660,7 @@ its own tests.
 | `packages/api/src/map-store/gc.ts` | `runStorageGc`, daily schedule (`maybeStartStorageGc` / `stopStorageGc`), grace and due rules |
 | `packages/api/src/routers/mapStorage.ts` | `mapStorage.gcRun` |
 | `packages/api/prisma/migrations/20261019120000_map_import_jobs_started_by/` | `map_import_jobs.started_by`, `document_hash` index |
+| `packages/api/prisma/migrations/20261019130000_map_storage_source_hash_indexes/` | `source_hash` indexes on `map_files`, `club_map_versions` |
 | `packages/api/src/map-store/uploads.ts` | pure upload rules: limits, chunk sizes, kind sniffing, assembly |
 | `packages/api/src/map-store/upload-routes.ts` | `POST /api/map-uploads`, `PUT …/chunks/:n`, `POST …/finalise` |
 | `packages/api/src/map-store/jobs.ts` | job rows, claim / heartbeat / stale reclaim, worker launcher, `applyJobResult`, housekeeping, engine tick |

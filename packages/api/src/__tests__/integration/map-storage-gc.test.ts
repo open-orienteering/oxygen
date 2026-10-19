@@ -23,6 +23,7 @@ import {
   isForeignKeyViolation,
   maybeStartStorageGc,
   runStorageGc,
+  stopStorageGc,
 } from "../../map-store/gc.js";
 import { getSetting, setSetting } from "../../db.js";
 import type { AuthUser } from "../../auth.js";
@@ -234,15 +235,14 @@ describe("runStorageGc", () => {
   });
 
   it("stops between rows when asked, leaving every row either deleted or untouched", async () => {
-    // Older than anything else here, so these two are the first candidates.
+    // Older than anything else here, so these two come first; the stop condition does not rely on it.
     const a = await orphanPair(400);
     const b = await orphanPair(400);
-    let calls = 0;
-    const result = await runStorageGc(ctx.db, { shouldStop: () => ++calls > 1 });
+    const result = await runStorageGc(ctx.db, { shouldStop: async () => !((await docExists(a.doc)) && (await docExists(b.doc))) });
     expect(result.stopped).toBe(true);
-    expect(result.documents.length).toBe(1);
-    expect(result.sources).toEqual([]);
     expect([await docExists(a.doc), await docExists(b.doc)].filter(Boolean)).toHaveLength(1);
+    expect(result.sources).not.toContain(a.src);
+    expect(result.sources).not.toContain(b.src);
     // The next run finishes the job.
     const next = await runStorageGc(ctx.db);
     expect(await docExists(a.doc)).toBe(false);
@@ -301,6 +301,20 @@ describe("daily schedule (maybeStartStorageGc)", () => {
     _resetStorageGcSchedule();
     expect(await maybeStartStorageGc(new Date(Date.now() + 25 * 3_600_000))).toBe(true);
     await currentStorageGc();
+  });
+
+  it("a run stopped by losing the lease stores its result and clears started_at, so the next leader is due at once", async () => {
+    await orphanPair();
+    expect(await maybeStartStorageGc()).toBe(true);
+    stopStorageGc(); // what stopAll does on losing the lease; checked before the first delete
+    const result = await currentStorageGc();
+    expect(result?.stopped).toBe(true);
+    expect(await getSetting(GC_SETTINGS.startedAt)).toBeNull();
+    expect(await getSetting(GC_SETTINGS.finishedAt)).toBeNull();
+    expect(JSON.parse((await getSetting(GC_SETTINGS.lastResult))!)).toMatchObject({ stopped: true });
+    _resetStorageGcSchedule();
+    expect(await maybeStartStorageGc()).toBe(true);
+    expect((await currentStorageGc())?.stopped).toBe(false);
   });
 
   it("does not start while another instance's run started under an hour ago", async () => {

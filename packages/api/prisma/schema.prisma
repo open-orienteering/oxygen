@@ -1187,6 +1187,7 @@ model MapFile {
   @@index([eventId])
   @@index([renderKey])
   @@index([documentHash])
+  @@index([sourceHash])
   @@map("map_files")
   @@schema("oxygen")
 }
@@ -1304,6 +1305,7 @@ model ClubMapVersion {
 
   @@unique([clubMapId, seq])
   @@index([documentHash])
+  @@index([sourceHash])
   @@map("club_map_versions")
   @@schema("oxygen")
 }
