@@ -302,6 +302,27 @@ export function readMapDocumentHeader(bytes: Uint8Array): { header: MapDocumentH
   return { header, bodyOffset: align4(PREAMBLE_BYTES + headerLength) };
 }
 
+/**
+ * Where the attrs section of a document lies, from its header and the
+ * header's byte length (preamble bytes 8–11), so a reader can count
+ * objects per symbol with one range read instead of the whole body.
+ */
+export function attrsSectionRange(header: Pick<MapDocumentHeader, "objects">, headerByteLength: number): { offset: number; length: number } {
+  return { offset: align4(PREAMBLE_BYTES + headerByteLength) + header.objects.sections.attrs.offset, length: header.objects.sections.attrs.length };
+}
+
+/** Objects per symbol index from the attrs section (`symbolIdx` is its first field). */
+export function objectsPerSymbol(attrs: Uint8Array, symbolCount: number): number[] {
+  if (attrs.byteLength % ATTR_BYTES !== 0) throw new MapDocumentFormatError("attrs section is not a whole number of records");
+  const counts = new Array<number>(symbolCount).fill(0);
+  const dv = new DataView(attrs.buffer, attrs.byteOffset, attrs.byteLength);
+  for (let base = 0; base < attrs.byteLength; base += ATTR_BYTES) {
+    const idx = dv.getUint16(base, true);
+    if (idx < symbolCount) counts[idx]++;
+  }
+  return counts;
+}
+
 export function decodeMapDocument(bytes: Uint8Array): MapDocument {
   const { header, bodyOffset } = readMapDocumentHeader(bytes);
   const { count, sections } = header.objects;

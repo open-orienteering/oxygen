@@ -33,9 +33,10 @@ upload bytes ──sha256──▶ map_sources(file_hash)      the file as uploa
 
 Migrations `20261016190000_map_documents_storage`,
 `20261016210000_map_uploads_and_import_jobs`,
-`20261019120000_map_import_jobs_started_by` and
+`20261019120000_map_import_jobs_started_by`,
 `20261019130000_map_storage_source_hash_indexes` (`source_hash` indexes
-on `map_files` and `club_map_versions` for the GC and the source route). All in schema `oxygen`.
+on `map_files` and `club_map_versions` for the GC and the source route) and
+`20261019150000_club_symbol_decisions`. All in schema `oxygen`.
 
 | Table | Key | Columns | Notes |
 |---|---|---|---|
@@ -48,14 +49,15 @@ on `map_files` and `club_map_versions` for the GC and the source route). All in 
 | `club_map_files` (+) | — | `club_map_id → club_maps SET NULL` | links the legacy library row to its series while both exist (§6.5) |
 | `map_uploads` | `id UUID` | `event_id → events CASCADE` (nullable), `file_name`, `kind`, `declared_bytes`, `chunk_bytes`, `uploaded_by SET NULL`, `created_at`, `finalised_hash → map_sources SET NULL` | one chunked upload in flight (§5); `kind` is set from the first chunk |
 | `map_upload_chunks` | `(upload_id, n)` | `bytes BYTEA` | `upload_id → map_uploads CASCADE`; `STORAGE EXTERNAL`; deleted at finalise |
-| `map_import_jobs` | `id UUID` | `event_id CASCADE` / `club_map_id CASCADE` (the target, either nullable), `source_hash → map_sources CASCADE`, `decisions JSONB`, `state`, `stage`, `progress REAL`, `claimed_by`, `heartbeat_at`, `document_hash → map_documents SET NULL`, `error`, `started_by → users SET NULL`, timestamps | one import run (§6); indexed on `(state, heartbeat_at)` for the claim query and on each target; `started_by` is the user whose request started it (null for the backfill), read by §4.2 |
+| `club_symbol_decisions` | `(fingerprint, library_version)` | `canonical_id` (NULL = keep as source), `decided_by → users SET NULL`, `decided_at` | a reviewed symbol outcome reused across documents (`docs/map-symbols.md` §8.5); written only by `mapImport.decide` (§6.8), read when a job is inserted (§6.1); no event or series column — the instance is one club's |
+| `map_import_jobs` | `id UUID` | `event_id CASCADE` / `club_map_id CASCADE` (the target, either nullable), `source_hash → map_sources CASCADE`, `decisions JSONB` (the decision snapshot, §6.1), `state`, `stage`, `progress REAL`, `claimed_by`, `heartbeat_at`, `document_hash → map_documents SET NULL`, `error`, `started_by → users SET NULL`, timestamps | one import run (§6); indexed on `(state, heartbeat_at)` for the claim query and on each target; `started_by` is the user whose request started it (null for the backfill), read by §4.2 |
 
 `STORAGE EXTERNAL` on the two blob columns keeps TOAST from compressing
 the bytes (compact binary that gains little) so `substring(bytes FROM … FOR …)`
 reads only the chunks a range request needs instead of inflating the row.
 
 Prisma models: `MapSource`, `MapDocument`, `MapPreview`, `ClubMap`,
-`ClubMapVersion`, `MapUpload`, `MapUploadChunk`, `MapImportJob`;
+`ClubMapVersion`, `MapUpload`, `MapUploadChunk`, `MapImportJob`, `ClubSymbolDecision`;
 `MapFile.sourceHash / documentHash / clubMapVersionId`; `ClubMapFile.clubMapId`.
 
 ## 3. Store stage (import stage 9)
@@ -93,8 +95,8 @@ storeImportedDocument(db, { source: { bytes, fileHash, kind, fileName, uploadedB
   (`LIBRARY_VERSION_NONE`) and `importer ocad-3`; they are no longer
   dedup targets, so the next upload of the same bytes produces a new
   document row under the current importer and library version while the
-  old row waits for GC (§8). Re-matching already-stored documents in bulk
-  is a pending backfill (§9).
+  old row waits for GC (§8). The re-match pass (§6.9) moves the pins of
+  such rows to fresh documents in bulk.
 - `touchDocument(db, hash)` bumps `last_referenced_at`; called whenever a
   reference is created (`applyJobResult`), on a dedup hit before the job
   row is inserted (§6.1), and by every GC run for every document still
@@ -196,9 +198,17 @@ produced before anything pins it (the review round, `docs/map-import.md`
 §2.2). Jobs had no owner, so `map_import_jobs.started_by` records the
 requesting user (§6.1). Today `document_hash` is written only together
 with `state = done`, so in practice the clause means "a done job I
-started", for as long as the job row lives (7 days, §6.6); it is written
-as `state <> 'failed'` so A6's review state is covered without another
-change. A failed job never carries a document.
+started", for as long as the job row lives (7 days, §6.6). The review
+round needs nothing more: `mapImport.decide` produces its document in an
+ordinary job without a target (§6.8), so the decider sees the reviewed
+document and its swatches through this clause until `finalise` pins it.
+A failed job never carries a document.
+
+The tRPC review procedures use the same predicate (`checkDocumentAccess`,
+uncached), with the identity taken from the tRPC context. `decide` and
+`finalise` use it in **edit mode** (`EDIT_ACCESS`): the event clause asks
+for `courses.edit` instead of `courses.view` and the kiosk key is never
+accepted; the club and own-job clauses are unchanged.
 
 
 ### 4.3 Blob access
@@ -436,7 +446,10 @@ instance loses nothing. `packages/api/src/map-store/jobs.ts`.
 ```
 startImportJob(db, {sourceHash, eventId? | clubMapId?, startedBy?, holdMs?})
   │
+  ├─ decisions = club_symbol_decisions for the source's kind (docs/map-symbols.md §8.5)   → the row's `decisions`
+  │
   ├─ a map_documents row exists for (sourceHash, importer ∈ {ocad-4, omap-1}, library *@<current SYMBOL_LIBRARY_VERSION>)
+  │   that follows `decisions` (newest first)
   │     → touchDocument, insert state=done with that document_hash, applyJobResult, derive, return   (06 §8 dedup, no worker)
   │
   └─ insert state=queued → kickImportJobs → hold ≤ holdMs for the result → return the row
@@ -457,6 +470,20 @@ kickImportJobs: one loop per instance
 | `running` | claimed by `claimed_by`; alive while `heartbeat_at` is < 60 s old |
 | `done` | `document_hash` set, pins applied |
 | `failed` | `error` set (≤ 2000 chars); `UNSUPPORTED_FORMAT: …` for a source whose `kind` is neither `ocad` nor `omap` (unreachable from the upload routes, which sniff), the importer's message otherwise |
+
+**Decision snapshot.** The club symbol decisions are an input to the
+document bytes, so they are read once, when the row is inserted, and
+stored in `decisions` (`SymbolDecision[]` as stage 6 takes it, sorted;
+camelCase like `header` / `report`). The worker imports with exactly that
+list, so a re-claimed job produces the same document even if somebody
+decided in between; a decision made after the insert applies to the next
+job. A malformed value imports without decisions rather than failing.
+The dedup short-cut uses the same list: a stored document is reused only
+if `documentFollowsDecisions` holds for it — re-importing it now would
+apply exactly the decisions it records — so a decision or a `reset`
+makes the next import produce (or find) the right document. A report
+without `explicit` matches and an empty decision list needs no header
+read; otherwise the check reads the header (two range reads, §4.5).
 
 `startedBy` is the signed-in user whose request started the job:
 `applyEventMap` takes it as its own option (`course.uploadMap`,
@@ -518,7 +545,20 @@ Idempotent; also run for dedup hits:
   overwrite label and uploader with the request's name and user when the
   job finished within the hold, since the source row keeps the first
   uploader's values.
+- `clubMapId` set and that version exists → its `document_hash` follows
+  the job's document (an in-place update; `seq`, label and uploader stay).
+  An edition is the uploaded *file*; its document is that file's latest
+  import — a reviewed one (`finalise`, §6.8) or a re-matched one (§6.9).
+  Events that used the edition keep the document they pinned
+  (`map_files.document_hash`, 06 §6 copy-on-use); moving them to the new
+  document stays an explicit "update to latest". Readers of a version
+  must not cache its `document_hash` as if it were immutable; the hash
+  itself is.
+- Neither set (a `decide` job, §6.8) → nothing is pinned.
 - `touchDocument(hash)`.
+
+`finalise` (§6.8) calls the same function with the reviewed document as
+`documentHash`, so a review pins exactly as an import does.
 
 ### 6.5 Club library dual-write
 
@@ -584,6 +624,77 @@ Two front ends, same `runBackfill`:
 The CLI is its own job instance: if an API next to it claims the jobs
 it inserts, `awaitImportJob` notices through the DB poll rather than the
 in-process waiter, so a run finishes either way.
+
+### 6.8 Review, decide, finalise
+
+06 §5.1 sketched the review round in front of the pin: import → review →
+decide → finalise links. Here the import job still pins the matcher's
+output at once (§6.4) — an event map is usable the moment it is uploaded,
+and accepting the defaults is a no-op (06 §5.1) — and the review round
+runs *after* it, on any stored document:
+
+```
+mapImport.review   { documentHash }               rows + stack + report        (docs/map-import.md §2.2)
+mapImport.decide   { documentHash, decisions }    club_symbol_decisions writes (packages/api/src/map-store/decisions.ts)
+                                                  → startImportJob { sourceHash, startedBy } — no target
+                                                  → the reviewed document, stored, unpinned
+mapImport.finalise { documentHash, target }       applyJobResult with that document: event rows of the source,
+                                                  or the club map's version of the source (§6.4, in place)
+```
+
+- A decide job is an ordinary row (§6.1) with `event_id` and
+  `club_map_id` null: it holds the document for the decider (§4.2 own-job
+  clause) and against the GC (§8.1) for as long as the row lives (7 days,
+  §6.6); after that an unfinalised reviewed document is collectable after
+  the grace.
+- There is no `review` job state (07 §4.4 listed one): a
+  reviewed-but-unfinalised document is a `done` job without a target.
+- There is no source-model cache (`map_source_documents`, 07 §4.1
+  "optional"): `decide` re-runs stages 3–8 in the worker — the same time
+  as the first import (seconds for an event map, longer for a club-wide
+  one; the job is polled like an upload).
+- Decisions apply club-wide from the moment `decide` writes them: any
+  later import of any file with those symbols (an upload, `useClubMap`,
+  the re-match pass) uses them. Existing pins move only through
+  `finalise` or the re-match pass (§6.9).
+
+### 6.9 Re-match pass
+
+`packages/api/src/map-store/rematch.ts`, front end
+`pnpm map:rematch [--event <nameId>] [--limit n] [--dry-run]`
+(`src/cli/map-rematch.ts`; in the image
+`node packages/api/dist/cli/map-rematch.js`; the backfill's flags). The
+backfill (§6.7) gives rows without a document one; this pass revisits
+pins whose document is **stale** — not what importing its source gives
+now — and runs an ordinary import job (§6.1) for each with the pin's
+target, so `applyJobResult` moves the pin to the fresh document:
+
+| Stale because (`staleReason`) | `club_map_versions` | `map_files` (events not soft-deleted) |
+|---|---|---|
+| `importer` — not a current importer (`ocad-3` rows) | re-matched | re-matched |
+| `library` — not the current library release (`none` rows, an older release) | re-matched | re-matched |
+| `decisions` — does not follow the current club decisions | re-matched | **kept** |
+
+A club edition's document is its file's latest import (§6.4), so all
+three move it. An event keeps the document it pinned when only the
+decisions changed (06 §6 copy-on-use): moving it is `finalise` or a new
+upload. Importer and library staleness is a format migration, like the
+backfill, and moves event pins too (03 §6.5: a re-match keeps reviewed
+rows and re-proposes the rest — the job applies the club decisions,
+across releases, `docs/map-symbols.md` §8.5).
+
+Each document is judged once per run whatever pins it; event pins are
+one item per (event, source). Items run one at a time, club editions
+first; a failure is reported and the pin left as it was, never an abort.
+Everything is keyed by content hash, so a second run finds nothing left
+(the integration test checks it). `--event` restricts the pass to that
+event's pins and skips club editions; `--dry-run` lists the items with
+their reason and writes nothing. Exit 1 if any item failed, 2 on bad
+arguments.
+
+Once slice C's course layers reference `(document_hash, object_index)`
+(08), moving an event pin must carry them; the pass does not yet know
+about them because nothing references them yet.
 
 
 ## 7. Offline and backups
@@ -835,15 +946,14 @@ mentions is pending (§9).
 ## 9. Pending in this chapter
 
 Club map CRUD that reads from
-`club_maps` / `club_map_versions` instead of mirroring into them; a re-import pass for documents
-stored under an older importer or library version (`ocad-3` / `none`
-rows); a Settings → Maintenance card for the GC (§8.4: status of the
-last run, dry run, run now); refreshing a checked-out box's `map_files`
-row and document when the map is re-imported on the cloud during the
-lease (07 §9.2, §7.2); the documents-only dump variant for non-admin
-event managers (07 §10, §15 — not restorable while a document needs its
-source row, §7.3). Each lands with its own section here and its own
-tests.
+`club_maps` / `club_map_versions` instead of mirroring into them; a
+Maintenance card for the re-match pass (§6.9 is CLI-only); a Settings →
+Maintenance card for the GC (§8.4: status of the last run, dry run, run
+now); refreshing a checked-out box's `map_files` row and document when
+the map is re-imported on the cloud during the lease (07 §9.2, §7.2);
+the documents-only dump variant for non-admin event managers (07 §10,
+§15 — not restorable while a document needs its source row, §7.3). Each
+lands with its own section here and its own tests.
 
 ## 10. Tests
 
@@ -858,6 +968,11 @@ tests.
 | Unit (api) | `packages/api/src/__tests__/map-import-jobs.test.ts` | `isClaimable` matrix, `stageProgress` monotonic, worker import produces the same hashes and `libraryVersion` as the inline importer with stages `parse → normalise → match → encode`, worker rejects garbage, upload validators (`validateUploadInit`, `expectedChunkSize`, `sniffMapKind`, `missingChunks`, `assembleChunks`) |
 | Integration (api) | `packages/api/src/__tests__/integration/map-import-jobs.test.ts` | `applyEventMap` job done + pins + report, dedup under another name, garbage / OMAP failures, `holdMs: 0` queued then finished by the engine, stale reclaim vs live job, `mapImport.status` auth (stranger 403, course setter ok) + `latestForEvent`, `started_by` recorded by `applyEventMap` / `applyUploadedMap` / `clubMap.upload` and null for a dedup without a user, dedup hit touches the document, housekeeping sweep (finalised uploads included), club upload → series + version 1, `useClubMap` pin, rename / colour-stack mirroring, `addFromSource`, `remove` deletes the series, upload routes 401/403/404/400/413/201, out-of-order and repeated chunks, 415, 409 missing, finalise dedup + idempotency, 409 after finalise, `applyUploadedMap` under the upload's name, `applyJobResult` idempotent |
 | Unit (api) | `packages/api/src/__tests__/map-backfill-cli.test.ts` | CLI argument parsing, per-map lines and summary |
+| Unit (api) | `packages/api/src/__tests__/map-symbol-decisions.test.ts` | `parseDecisionSnapshot` (malformed column → no decisions), `planDecisionWrites` (accept / unmatch under the current release, reset per library, last decision wins, unknown index / non-source / foreign-library / unknown entry rejected), decide input schema, the worker applying a decision snapshot with the same bytes as inline and a different hash than without |
+| Unit (api) | `packages/api/src/__tests__/map-document-route.test.ts` (edit mode) | `EDIT_ACCESS`: `courses.view` not enough, `courses.edit` admits, kiosk key never, club and own-job clauses unchanged |
+| Integration (api) | `packages/api/src/__tests__/integration/map-review.test.ts` | `review` rows on the fixture (702 suggested 703 with candidates, swatch URLs, colour class, counts, stack, report), predicate (stranger 403, anonymous 401, kiosk key with and without a user, wrong key 401, 404, bad hash); `decide` writes the row, snapshots it on the job, makes a new unpinned document drawn canonically, own-job review, old document no longer `current`, determinism, validation 400, stranger / kiosk 403; the decision applied to a second file of the same symbols; dedup to the decided document; `finalise` on the event (pins, `mapMetadata`, idempotent, other source 412, no capability 403, no event 400) and on a club version (in place, seq / label kept, event pin unchanged, 412, unknown club map 404); club target anonymous 401; `reset` back to the matcher's document |
+| Unit (api) | `packages/api/src/__tests__/map-rematch-cli.test.ts` | `staleReason` matrix, CLI flags, plan / item / summary lines |
+| Integration (api) | `packages/api/src/__tests__/integration/map-rematch.test.ts` | an `ocad-3` / `none` row pinned by an event and a club version is planned (both, `--event` scope), dry run writes nothing, a run moves both pins to the current document, second run empty; a decision change re-matches the club edition only |
 | Integration (api) | `packages/api/src/__tests__/integration/map-backfill.test.ts` | plan counts and ordering, dry run writes nothing, legacy club row → series (settings copied) + version 1 (label / uploader / time from the row), event rows → pins with dedup and club-version pin, unreadable rows reported and left unpinned, second run revisits only what is missing, `--event` scope and soft-deleted events skipped, `backfillStatus` / `backfillStart` admin-only, background run and `CONFLICT` |
 | Unit (web) | `packages/web/src/__tests__/map-upload.test.ts` | threshold, init → chunks → finalise call order and progress, per-chunk retry on 5xx, no retry on 4xx, `x-event-id` only for event uploads |
 | Unit (api) | `packages/api/src/__tests__/map-previews.test.ts` | preview request parsing (`:idx`, `.png`, library code, hash), ETags and `If-None-Match`, library preview of an entry and a variant, 404 for unknown code / other version, per-instance cache hit |
@@ -895,7 +1010,13 @@ tests.
 | `packages/api/src/map-store/import-worker.ts` | worker-thread body: `importMapToDocument` by kind + report |
 | `packages/api/src/map-store/backfill.ts` | plan, per-row backfill, run loop, in-process run for the Maintenance tab |
 | `packages/api/src/cli/map-backfill.ts` (+ `-args.ts`) | `pnpm map:backfill` |
-| `packages/api/src/routers/mapImport.ts` | `mapImport.status`, `latestForEvent`, `backfillStatus`, `backfillStart` |
+| `packages/api/prisma/migrations/20261019150000_club_symbol_decisions/` | `club_symbol_decisions` |
+| `packages/api/src/map-store/decisions.ts` | decision rows: load, plan and write `decide`'s changes, job snapshot schema, "does a stored document follow the decisions" |
+| `packages/api/src/map-store/review.ts` | review payload, `decideOnDocument`, `finaliseDocument`, `isDocumentCurrent` |
+| `packages/api/src/map-store/rematch.ts` | re-match plan and run (§6.9) |
+| `packages/api/src/cli/map-rematch.ts` (+ `-args.ts`) | `pnpm map:rematch` |
+| `packages/shared/src/import/decisions.ts` | fingerprints, rows → decisions, review rows (`docs/map-symbols.md` §8.5) |
+| `packages/api/src/routers/mapImport.ts` | `mapImport.status`, `latestForEvent`, `review`, `decide`, `finalise`, `backfillStatus`, `backfillStart` |
 | `packages/web/src/components/MaintenancePanel.tsx` | Map documents card |
 | `packages/api/src/event-map.ts` | `applyEventMap` writes the source row and starts the event job |
 | `packages/api/src/routers/course.ts` / `clubMap.ts` | `applyUploadedMap`, `useClubMap` version pin; `createClubMap`, `addFromSource`, series mirroring |

@@ -112,16 +112,28 @@ export interface DocumentAccessQueries {
 export type DocumentAccess = { ok: true } | { ok: false; status: 401 | 403 };
 
 /**
+ * Which event clause applies: the route and `mapImport.review` read with
+ * `courses.view` and admit the kiosk key; `decide` / `finalise` change
+ * what an event draws, so they need `courses.edit` and no kiosk.
+ */
+export interface DocumentAccessMode {
+  cap: Capability;
+  kiosk: boolean;
+}
+export const READ_ACCESS: DocumentAccessMode = { cap: VIEW_CAP, kiosk: true };
+export const EDIT_ACCESS: DocumentAccessMode = { cap: "courses.edit", kiosk: false };
+
+/**
  * The predicate (docs/map-storage.md §4.2), pure over the four queries
  * so it can be unit-tested; the route binds them to Prisma.
  */
-export async function authoriseDocumentAccess(input: DocumentAccessInput, q: DocumentAccessQueries): Promise<DocumentAccess> {
+export async function authoriseDocumentAccess(input: DocumentAccessInput, q: DocumentAccessQueries, mode: DocumentAccessMode = READ_ACCESS): Promise<DocumentAccess> {
   if (!input.authEnabled) return { ok: true };
   if (input.eventNameId) {
     const pin = await q.eventPinsDocument(input.eventNameId, input.hash);
     if (pin) {
-      if (kioskKeyMatches(input.kioskKey, pin.kioskKey)) return { ok: true };
-      if (input.user && (await q.userHasCapability(pin.eventId, pin.eventDate, input.user, VIEW_CAP))) return { ok: true };
+      if (mode.kiosk && kioskKeyMatches(input.kioskKey, pin.kioskKey)) return { ok: true };
+      if (input.user && (await q.userHasCapability(pin.eventId, pin.eventDate, input.user, mode.cap))) return { ok: true };
     }
   }
   if (input.user && (await q.clubVersionHasDocument(input.hash))) return { ok: true };
@@ -152,6 +164,11 @@ const prismaQueries: DocumentAccessQueries = {
     return job !== null;
   },
 };
+
+/** §4.2 bound to Prisma, uncached — for the tRPC review procedures (docs/map-import.md §2.2). */
+export function checkDocumentAccess(input: DocumentAccessInput, mode: DocumentAccessMode = READ_ACCESS): Promise<DocumentAccess> {
+  return authoriseDocumentAccess(input, prismaQueries, mode);
+}
 
 /** Positive decisions are cached per (hash, principal, event) for a minute. */
 const ACCESS_TTL_MS = 60_000;

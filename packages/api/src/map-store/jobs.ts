@@ -15,6 +15,7 @@ import { extname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Worker } from "node:worker_threads";
 import { mapImport, symbolLibrary } from "@oxygen/shared";
+import { loadClubDecisions, parseDecisionSnapshot, storedDocumentFollowsDecisions } from "./decisions.js";
 import type { Prisma, PrismaClient } from "../generated/prisma/client.js";
 import { IMPORTER_VERSIONS, type ImportStage, type MapSourceKind } from "../import/ocad.js";
 import { storeImportedDocument, touchDocument } from "./documents.js";
@@ -53,6 +54,8 @@ export interface ImportJobRow {
   clubMapId: string | null;
   claimedBy: string | null;
   heartbeatAt: Date | null;
+  /** The club decisions stage 6 applies, snapshotted at insert (docs/map-storage.md §6.1). */
+  decisions: mapImport.SymbolDecision[];
   createdAt: Date;
   updatedAt: Date;
 }
@@ -111,9 +114,9 @@ function workerBootstrap(): string {
 export function runImportInWorker(
   bytes: Uint8Array,
   fileName: string,
-  opts: { kind?: MapSourceKind; onStage?: (stage: ImportStage) => void; timeoutMs?: number } = {},
+  opts: { kind?: MapSourceKind; decisions?: mapImport.SymbolDecision[]; onStage?: (stage: ImportStage) => void; timeoutMs?: number } = {},
 ): Promise<WorkerResult> {
-  const workerData: ImportWorkerData = { bytes, fileName, kind: opts.kind ?? "ocad" };
+  const workerData: ImportWorkerData = { bytes, fileName, kind: opts.kind ?? "ocad", decisions: opts.decisions ?? [] };
   return new Promise<WorkerResult>((resolve, reject) => {
     const worker = new Worker(workerBootstrap(), { eval: true, workerData });
     let settled = false;
@@ -142,11 +145,11 @@ export function runImportInWorker(
 
 const JOB_SELECT = {
   id: true, state: true, stage: true, progress: true, sourceHash: true, documentHash: true, error: true,
-  eventId: true, clubMapId: true, claimedBy: true, heartbeatAt: true, createdAt: true, updatedAt: true,
+  eventId: true, clubMapId: true, claimedBy: true, heartbeatAt: true, decisions: true, createdAt: true, updatedAt: true,
 } as const;
 
-function asRow(r: { state: string } & Omit<ImportJobRow, "state">): ImportJobRow {
-  return { ...r, state: r.state as JobState };
+function asRow(r: { state: string; decisions: Prisma.JsonValue } & Omit<ImportJobRow, "state" | "decisions">): ImportJobRow {
+  return { ...r, state: r.state as JobState, decisions: parseDecisionSnapshot(r.decisions) };
 }
 
 /** Jobs finishing on this instance resolve these so `start` can hold without polling. */
@@ -232,7 +235,7 @@ async function execute(db: Db, job: ImportJobRow): Promise<void> {
     if (!source) throw new Error(`source ${job.sourceHash} not found`);
     if (source.kind !== "ocad" && source.kind !== "omap") throw new Error(`UNSUPPORTED_FORMAT: ${source.kind} import is not available`);
 
-    const result = await runImportInWorker(source.bytes, source.fileName, { kind: source.kind, onStage: (stage) => void progress(db, job.id, stage) });
+    const result = await runImportInWorker(source.bytes, source.fileName, { kind: source.kind, decisions: job.decisions, onStage: (stage) => void progress(db, job.id, stage) });
     await progress(db, job.id, "store");
     const stored = await storeImportedDocument(db, {
       source: { bytes: source.bytes, fileHash: job.sourceHash, kind: source.kind, fileName: source.fileName, uploadedBy: source.uploadedBy },
@@ -263,8 +266,10 @@ async function execute(db: Db, job: ImportJobRow): Promise<void> {
 
 /**
  * Pin the finished document where the job's target points: the event's
- * `map_files` row(s) carrying this source, or a new `club_map_versions`
- * row in the club map's series. Idempotent.
+ * `map_files` row(s) carrying this source, or the club map's version for
+ * this source — a new `club_map_versions` row, or the existing one's
+ * `document_hash` moved to the new document. Idempotent. A job without a
+ * target (a review round) pins nothing; `finalise` pins it later.
  */
 export async function applyJobResult(db: Db, job: Pick<ImportJobRow, "eventId" | "clubMapId" | "sourceHash" | "documentHash">): Promise<void> {
   if (!job.documentHash) return;
@@ -272,8 +277,11 @@ export async function applyJobResult(db: Db, job: Pick<ImportJobRow, "eventId" |
     await db.mapFile.updateMany({ where: { eventId: job.eventId, sourceHash: job.sourceHash }, data: { documentHash: job.documentHash } });
   }
   if (job.clubMapId !== null) {
-    const existing = await db.clubMapVersion.findFirst({ where: { clubMapId: job.clubMapId, sourceHash: job.sourceHash }, select: { id: true } });
-    if (!existing) {
+    const existing = await db.clubMapVersion.findFirst({ where: { clubMapId: job.clubMapId, sourceHash: job.sourceHash }, select: { id: true, documentHash: true } });
+    if (existing) {
+      // The edition is the file; its document is the file's latest import (a review, a re-match) — §6.4.
+      if (existing.documentHash !== job.documentHash) await db.clubMapVersion.update({ where: { id: existing.id }, data: { documentHash: job.documentHash } });
+    } else {
       const source = await db.mapSource.findUnique({ where: { fileHash: job.sourceHash }, select: { fileName: true, uploadedBy: true } });
       const last = await db.clubMapVersion.aggregate({ where: { clubMapId: job.clubMapId }, _max: { seq: true } });
       await db.clubMapVersion.create({
@@ -302,24 +310,40 @@ export interface StartImportJobInput {
 }
 
 /**
- * Insert the job and run it. A source already imported by the current
- * importer version skips the worker entirely (06 §8 dedup): the job is
- * recorded as done against the existing document and the pins applied.
+ * A stored document of the source that importing it now would reproduce:
+ * current importer (a source hash has one kind, so the current version of
+ * either importer), current library release (the library id follows the
+ * map scale) and the same decisions applied (docs/map-symbols.md §8.5).
+ */
+export async function currentDocumentFor(db: Db, sourceHash: string, decisions: readonly mapImport.SymbolDecision[]): Promise<{ hash: string } | null> {
+  const candidates = await db.mapDocument.findMany({
+    where: { sourceHash, importerVersion: { in: [...IMPORTER_VERSIONS] }, libraryVersion: { endsWith: `@${symbolLibrary.SYMBOL_LIBRARY_VERSION}` } },
+    orderBy: { createdAt: "desc" },
+    select: { hash: true, report: true },
+  });
+  for (const c of candidates) if (await storedDocumentFollowsDecisions(db, c, decisions)) return { hash: c.hash };
+  return null;
+}
+
+/**
+ * Insert the job and run it. The club decisions for the source's kind are
+ * snapshotted into the row, so a re-claim imports with the same input. A
+ * source whose current document already exists skips the worker entirely
+ * (06 §8 dedup): the job is recorded as done against the existing
+ * document and the pins applied.
  */
 export async function startImportJob(db: Db, input: StartImportJobInput): Promise<ImportJobRow> {
   const target = { eventId: input.eventId ?? null, clubMapId: input.clubMapId ?? null, startedBy: input.startedBy ?? null };
-  const existing = await db.mapDocument.findFirst({
-    // Same importer (a source hash has one kind, so the current version of either importer) and same library release
-    // (the library id itself follows the map scale).
-    where: { sourceHash: input.sourceHash, importerVersion: { in: [...IMPORTER_VERSIONS] }, libraryVersion: { endsWith: `@${symbolLibrary.SYMBOL_LIBRARY_VERSION}` } },
-    orderBy: { createdAt: "desc" },
-    select: { hash: true },
-  });
+  const source = await db.mapSource.findUnique({ where: { fileHash: input.sourceHash }, select: { kind: true } });
+  const decisions = source ? await loadClubDecisions(db, source.kind) : [];
+  // Plain JSON for the column; optional fields that are absent stay absent.
+  const snapshot = decisions.map((d) => ({ ...d })) as Prisma.InputJsonArray;
+  const existing = await currentDocumentFor(db, input.sourceHash, decisions);
   if (existing) {
     // Touch before the job row references it, so a GC run racing this insert skips the document (§8.2).
     await touchDocument(db, existing.hash);
     const row = asRow(await db.mapImportJob.create({
-      data: { ...target, sourceHash: input.sourceHash, state: "done", stage: "done", progress: 1, documentHash: existing.hash, claimedBy: INSTANCE_ID, heartbeatAt: new Date() },
+      data: { ...target, sourceHash: input.sourceHash, decisions: snapshot, state: "done", stage: "done", progress: 1, documentHash: existing.hash, claimedBy: INSTANCE_ID, heartbeatAt: new Date() },
       select: JOB_SELECT,
     }));
     await applyJobResult(db, row);
@@ -327,7 +351,7 @@ export async function startImportJob(db: Db, input: StartImportJobInput): Promis
     return row;
   }
 
-  const row = asRow(await db.mapImportJob.create({ data: { ...target, sourceHash: input.sourceHash, state: "queued" }, select: JOB_SELECT }));
+  const row = asRow(await db.mapImportJob.create({ data: { ...target, sourceHash: input.sourceHash, decisions: snapshot, state: "queued" }, select: JOB_SELECT }));
   const holdMs = input.holdMs ?? DEFAULT_HOLD_MS;
   const finished = waitFor(row.id, holdMs);
   void kickImportJobs(db);

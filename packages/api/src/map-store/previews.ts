@@ -121,12 +121,26 @@ export function getOrRenderSymbolPreview(db: Db, hash: string, idx: number): Pro
 }
 
 /** The header alone, through two range reads instead of the whole document. */
-async function readDocumentHeader(db: Db, hash: string): Promise<mapDocument.MapDocumentHeader | null> {
+export async function readDocumentHeader(db: Db, hash: string): Promise<mapDocument.MapDocumentHeader | null> {
+  return (await readDocumentHead(db, hash))?.header ?? null;
+}
+
+/** The header and its byte length (preamble bytes 8–11). */
+export async function readDocumentHead(db: Db, hash: string): Promise<{ header: mapDocument.MapDocumentHeader; headerLength: number } | null> {
   const preamble = await getBlob(db, "map_documents", hash, { start: 0, end: 11 });
   if (!preamble || preamble.byteLength < 12) return null;
   const headerLength = preamble.readUInt32LE(8);
   const head = await getBlob(db, "map_documents", hash, { start: 0, end: 12 + headerLength - 1 });
-  return head ? mapDocument.readMapDocumentHeader(head).header : null;
+  return head ? { header: mapDocument.readMapDocumentHeader(head).header, headerLength } : null;
+}
+
+/** Objects per header symbol, from one range read of the attrs section. */
+export async function readObjectsPerSymbol(db: Db, hash: string, head: { header: mapDocument.MapDocumentHeader; headerLength: number }): Promise<number[]> {
+  const { offset, length } = mapDocument.attrsSectionRange(head.header, head.headerLength);
+  if (length === 0) return new Array<number>(head.header.symbols.length).fill(0);
+  const attrs = await getBlob(db, "map_documents", hash, { start: offset, end: offset + length - 1 });
+  if (!attrs || attrs.byteLength !== length) throw new Error(`map document ${hash}: attrs section unreadable`);
+  return mapDocument.objectsPerSymbol(attrs, head.header.symbols.length);
 }
 
 /**
