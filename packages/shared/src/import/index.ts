@@ -11,3 +11,4 @@ export * from "./colour-align.js";
 export * from "./fingerprint.js";
 export * from "./matcher.js";
 export * from "./match-document.js";
+export * from "./decisions.js";

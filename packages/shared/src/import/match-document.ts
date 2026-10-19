@@ -82,7 +82,9 @@ export function matchDocument(input: MapDocumentInput, opts: MatchDocumentOption
   const canon = canonicalCandidates(library, edition);
   const sources = symbols.map((s, i) => ({ code: s.code, name: s.name, render: renders[i] }));
   const factor = detectDocumentFactor(sources.filter((_, i) => (symbols[i].origin ?? "source") === "source"), canon, classOf, header.mapScale, library.referenceScale, opts.factor);
-  const ctx = matchContext(libraryId, edition, factor.factor, classOf, opts.decisions);
+  // Decisions name entries of one library; those of the other one do not apply here (docs/map-symbols.md §8.5).
+  const decisions = opts.decisions?.filter((d) => d.libraryId === undefined || d.libraryId === libraryId);
+  const ctx = matchContext(libraryId, edition, factor.factor, classOf, decisions);
 
   const summary: MatchingSummary = {
     library: { id: library.id, version: SYMBOL_LIBRARY_VERSION },
