@@ -4,7 +4,9 @@ Oxygen ships with a one-click backup of the currently selected event, exposed on
 
 ## What gets backed up
 
-A single event — every event-scoped row in the `oxygen` schema (`events`, `controls`, `courses`, `course_controls`, `classes`, `class_course_pools`, `runners`, `teams`, `cards`, `card_readouts`, `punches`, `control_units`, `event_log`, `map_files`, `rendered_maps`, `map_tiles`, `tracks`, `routes`, `event_seqs`), filtered to the active event's id.
+A single event — its rows in these tables of the `oxygen` schema, in this order: `events`, `controls`, `courses`, `course_controls`, `classes`, `class_course_pools`, `runners`, `teams`, `cards`, `card_readouts`, `punches`, `control_units`, `event_log`, `map_sources`, `map_documents`, `map_files`, `rendered_maps`, `tracks`, `routes`, `event_seqs`.
+
+Most are filtered to the event's id. `map_sources` and `map_documents` are not event-scoped: they hold the content-addressed map blobs, shared by every event and club map that pins the same bytes ([map-storage.md](map-storage.md) §1). The dump carries the rows this event's `map_files` pin, by hash — the source file and the imported document — ahead of `map_files`, so the sections restore in foreign-key order ([map-storage.md](map-storage.md) §7.3). `bytea` columns appear as Postgres `\x` hex in the CSV.
 
 The dump is text — `psql \copy ... TO STDOUT WITH (FORMAT csv, HEADER true)` per table, with `\echo --- <table> ---` separator lines that make the file both human-readable and machine-parseable. Each table's section starts with the CSV header row and contains only that event's rows.
 
@@ -12,7 +14,8 @@ What is **not** in the backup:
 
 - Other events on the same server
 - Global / shared rows: `runner_directory`, `club_directory`, `eventor_event_meta`, `oxygen_settings`
-- Map tile files outside the database (there are none — tiles live in `map_tiles`)
+- `map_tiles` and `map_previews`: render caches, keyed by content rather than by event, regenerated on demand
+- `map_templates`, `course_maps`, `graphics`, the journal and lease tables (a pre-existing gap, not covered by this dump)
 
 If you need a system-wide snapshot, run `pg_dump --schema=oxygen oxygen > full.sql` from the host instead.
 
@@ -66,22 +69,29 @@ psql "$DATABASE_URL" -c "INSERT INTO oxygen.events (name_id, name, date, zero_ti
 # 3. Capture the new event id.
 NEW_ID=$(psql "$DATABASE_URL" -tAc "SELECT id FROM oxygen.events WHERE name_id = 'Vinterserien'")
 
-# 4. Rewrite the dump's event_id references from the original id to NEW_ID,
-#    then re-import each table's CSV section with \copy ... FROM STDIN.
-#    There is no committed restore helper yet — split the file by the
-#    `--- <table> ---` separator lines, then for each section run:
-psql "$DATABASE_URL" -c "\copy oxygen.<table> FROM '<section>.csv' WITH (FORMAT csv, HEADER true)"
+# 4. Split the file by the `--- <table> ---` separator lines into one
+#    <table>.csv per section (header row included).
+
+# 5. The map sections: blobs by hash, then the event's map_files rows
+#    with event_id rewritten to NEW_ID. Run from the directory with the
+#    CSV files.
+psql "$DATABASE_URL" -v event_id=$NEW_ID -f <repo>/packages/api/scripts/restore-map-blobs.sql
+
+# 6. Every other section: rewrite the dump's event_id references from the
+#    original id to NEW_ID, then re-import it (there is no committed
+#    helper for these yet):
+psql "$DATABASE_URL" -c "\copy oxygen.<table> FROM '<table>.csv' WITH (FORMAT csv, HEADER true)"
+
+# 7. Only for a dump taken before the vector map pipeline existed
+#    (no map_sources / map_documents sections, empty source_hash):
+pnpm map:backfill --event <name_id>      # or Settings → Maintenance → Map documents
 ```
 
 After the import, refresh the Oxygen UI and the event reappears in the picker with all data intact.
 
-The dump carries `map_files.file_data` but not the content-addressed `map_sources` / `map_documents` rows the vector map pipeline reads (they are global, not event-scoped). After restoring a dump taken before the pipeline existed (`source_hash` / `document_hash` empty), run the backfill for that event so its map gets a document again:
+**The map sections restore idempotently on hash.** `restore-map-blobs.sql` loads `map_sources.csv` and `map_documents.csv` through temporary tables and inserts them `ON CONFLICT DO NOTHING`: a blob the database already holds (another event or a club map pins the same file) keeps its row, nothing is ever overwritten, and running the script twice changes nothing. It refuses the whole load if any row's bytes do not hash to its `file_hash` / `hash`. `uploaded_by` and `club_map_version_id` are kept only when that user or club map version exists in the target database, else NULL. `created_at` / `last_referenced_at` restart at the restore, so the storage GC's 30-day grace ([map-storage.md](map-storage.md) §8) counts from then. Without `-v event_id=…` it loads only the blobs. Load a post-pipeline `map_files` section with step 5 rather than step 6: a plain `\copy` would fail on its foreign keys (the blobs must exist first; `club_map_version_id` may point at a club map version the target lacks) and, in the same database, on its `id`.
 
-```bash
-pnpm map:backfill --event <name_id>      # or Settings → Maintenance → Map documents
-```
-
-See [map-storage.md](map-storage.md) §6.7. Dumps taken after the pipeline carry the hashes, and `\copy` into `map_files` needs the referenced `map_sources` / `map_documents` rows to exist first (the FKs are `RESTRICT`); including the blobs in the per-event dump is pending (research 07 §10).
+**Pre-vector dumps.** A dump taken before the pipeline has no `map_sources` / `map_documents` sections, and its `map_files` rows carry no hashes, so no blob is needed: skip step 5 and load its `map_files` section with step 6. Then step 7 — `pnpm map:backfill --event <name_id>` — gives the restored map its source and document rows and pins them ([map-storage.md](map-storage.md) §6.7, research 09 §5).
 
 ### Why an id rewrite is needed
 
@@ -100,4 +110,5 @@ The PostgreSQL password (when set) is passed to `psql` via the `PGPASSWORD` envi
 - API: `packages/api/src/backup.ts` — Fastify route handler, header construction, `psql \copy` spawning.
 - Web: the `DatabaseBackup` component in `packages/web/src/pages/EventPage.tsx`.
 - Docker: the `api` stage of `Dockerfile` installs `postgresql-client` so `psql` is on `PATH` in production.
-- Tests: `packages/api/src/__tests__/integration/backup.test.ts` + `e2e/backup.spec.ts`.
+- Map restore: `packages/api/scripts/restore-map-blobs.sql`.
+- Tests: `packages/api/src/__tests__/backup.test.ts` (script order and filters, section splitting), `packages/api/src/__tests__/integration/backup.test.ts` (dump → lose the event and its blobs → restore into another event; byte-exact, idempotent, tampered bytes refused), `e2e/backup.spec.ts` (UI download, map sections by hash).

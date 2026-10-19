@@ -363,7 +363,7 @@ Deleting an event from the start page is a soft delete: it disappears from the l
 
 ### Event backup
 
-The Event page exposes a one-click **Download backup** button that streams a per-event PostgreSQL dump (CSV `\copy` of every event-scoped table) to your browser. The scope is exactly one event: its courses, classes, runners, cards, punches, readouts, map and tiles, and tracks — not other events, and not the shared runner and club directories. The dump is prefixed with a header that includes a ready-to-run (commented) `INSERT INTO oxygen.events` statement, so a restore can re-create the event row on a fresh database without manual SQL. See [backup-restore.md](backup-restore.md) for the full restore workflow.
+The Event page exposes a one-click **Download backup** button that streams a per-event PostgreSQL dump (CSV `\copy` of every event-scoped table) to your browser. The scope is exactly one event: its courses, classes, runners, cards, punches, readouts, map, and tracks — not other events, and not the shared runner and club directories. The event map travels as the content-addressed source file and imported document it pins, by hash, and restores idempotently into a database that already holds them (`packages/api/scripts/restore-map-blobs.sql`). The dump is prefixed with a header that includes a ready-to-run (commented) `INSERT INTO oxygen.events` statement, so a restore can re-create the event row on a fresh database without manual SQL. See [backup-restore.md](backup-restore.md) for the full restore workflow.
 
 ### Web Serial card reader
 
