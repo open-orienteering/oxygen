@@ -18,7 +18,10 @@ Integration tests, E2E (`pnpm test:e2e*`, `playwright test`) and the Docker rebu
 - Never run `pnpm dev` from a worktree — ports 3002/5173 belong to the user's checkout.
 - Never touch the dev database on :5432 from a worktree.
 - A fresh worktree needs `pnpm install --frozen-lockfile` and `pnpm db:generate` before anything else.
-- **AGENTS.md §6 step 5 (Docker rebuild) is split for worktrees.** `docker compose … up --build` must not run from a worktree: the host-db compose file points at the dev database on :5432 and the ports 8080/3001 are held by the user's stack. In a worktree, prove the images instead: `scripts/with-verify-lock.sh docker build --network host --target api .` and the same with `--target web`, and say in the PR that the stack bring-up is left to the main checkout. The coordinator runs the real `up --build` from the main checkout after the PR merges; that is also what applies new migrations to the dev DB.
+- **AGENTS.md §6 step 5 (Docker rebuild) is split for worktrees.** `docker compose … up --build` must not run from a worktree: the host-db compose file points at the dev database on :5432 and the ports 8080/3001 are held by the user's stack. In a worktree, prove the images instead: `scripts/with-verify-lock.sh docker build --network host --target api .` and the same with `--target web`, and say in the PR that the stack bring-up is left to the main checkout. After the PR merges, the coordinator does the bring-up from the main checkout: `pnpm db:migrate` first (the image only runs node; `compose up` applies nothing), then the stack. With Compose v5.6 on this machine `docker compose … up --build` fails (`additional privileges requested: pass "--allow=network.host"`, from the compose file's build-time `network: host`, and there is no compose flag for it), so build the images under their compose names and start without a build:
+  ```bash
+  scripts/with-verify-lock.sh bash -c 'docker build --network host --target api -t oxygen-api . && docker build --network host --target web -t oxygen-web . && docker compose -f docker-compose.host-db.yml up -d --no-build'
+  ```
 
 ## Vector map pipeline (branch `vector-map-pipeline`)
 
