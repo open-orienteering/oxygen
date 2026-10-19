@@ -67,8 +67,12 @@ test.describe("Map documents", () => {
     expect(range.status()).toBe(206);
     expect(range.headers()["content-range"]).toBe(`bytes 0-3/${body.byteLength}`);
     expect((await range.body()).toString()).toBe("OXVM");
-    const noEvent = await request.get(`${API_BASE}/api/map-documents/${hash}`, { headers: { "x-event-id": "meos_20251222_001121_2BC" } });
-    expect(noEvent.status()).toBe(403);
+    // Through an event that does not pin it, the uploader still reads it: their import job produced it
+    // (docs/map-storage.md §4.2, own job). Without any reference the gate holds.
+    const ownJob = await request.get(`${API_BASE}/api/map-documents/${hash}`, { headers: { "x-event-id": "meos_20251222_001121_2BC" } });
+    expect(ownJob.status()).toBe(200);
+    const noReference = await request.get(`${API_BASE}/api/map-documents/${hash}`, { headers: { "x-event-id": "meos_20251222_001121_2BC", "x-forwarded-email": "" } });
+    expect(noReference.status()).toBe(401);
 
     // The original upload streams back to an event manager as an uncached attachment (docs/map-storage.md §4.4).
     const file = readFileSync("e2e/test.ocd");
