@@ -22,9 +22,14 @@ research directory is the frozen record of why.
    yet provide.
 4. Check `AGENTS.md` §4 for the test matrix the change type requires and
    §7 for schema conventions if a migration is involved.
-5. Separate what the spec decides from what it leaves open. Anything the
-   implementer would have to guess is a question for the user, not a
-   decision for you.
+5. Separate what the spec decides from what it leaves open. Of what it
+   leaves open, raise as a question only what changes a schema, an
+   interface, an acceptance rule or a recorded decision, or where spec,
+   research and code genuinely conflict. Everything smaller (naming, file
+   placement, error codes, fixtures, one of two equivalent mechanisms) you
+   decide in the plan: choose what the spec and surrounding code imply and
+   list it under "Decided in this plan" so the implementer records it.
+   Never ask for confirmation of something the spec already states.
 
 ## Output
 
@@ -39,8 +44,11 @@ matrix requires, named by file.
 **Steps** — ordered, each small enough to commit on its own; for each:
 files touched, the test written first, the spec section updated.
 
-**Questions for the user** — only genuine gaps or conflicts between spec,
-research and code. For each: the conflict, the options, your
+**Decided in this plan** — the minor open points you settled, one line
+each with the reason, for the decision-log row.
+
+**Questions for the user** — only what meets the bar in step 5. Aim for
+few; three is many. For each: the conflict, the options, your
 recommendation. If there are none, say so.
 
 **Deviations to record** — anything the plan does differently from the

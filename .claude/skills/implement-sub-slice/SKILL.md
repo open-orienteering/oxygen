@@ -22,10 +22,17 @@ never `main`.
 ## 1. Plan
 
 - Run the `slice-planner` agent with the row id. Read its plan.
-- If it returns questions, **stop and ask the user**. Do not guess at
-  what the spec leaves open. When the user answers, write the answer into
-  the spec section it belongs to before writing code, so later sessions
-  inherit it.
+- If it returns questions, **stop and ask the user** — all of them in one
+  message, each with your recommendation. When the user answers, write
+  the answer into the spec section it belongs to before writing code, so
+  later sessions inherit it.
+- Ask only what changes a schema, an interface, an acceptance rule or a
+  recorded decision, or where spec and code genuinely conflict. Smaller
+  choices (naming, file placement, an error code, a test fixture, which
+  of two equivalent mechanisms) you decide yourself: pick what the spec
+  and the surrounding code imply, say so in the plan, and record it in
+  the decision-log row. Never ask for confirmation of something the spec
+  already states.
 - Keep the plan's acceptance criteria; they are what the reviewer checks.
 
 ## 2. Implement, test first (AGENTS.md §4)
