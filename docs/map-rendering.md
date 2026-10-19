@@ -414,7 +414,7 @@ never an oracle).
 This is the **oracle** of the golden-image tier. It is slow and simple on
 purpose and is never used to draw a map for use. Its one production job
 is previews (04 §4.1, 06 §5.2): document thumbnails and symbol swatches,
-rendered once and stored as cache (`docs/map-storage.md` §4.4). PNG
+rendered once and stored as cache (`docs/map-storage.md` §4.5). PNG
 encoding is `encodePng` (sharp) in `render/reference-raster.ts`; the
 preview renderers are `render/previews.ts`.
 
@@ -445,7 +445,7 @@ stack for a source symbol, the library's palette edition for a library
 entry. Fonts are the bundled faces (§4.10); a text symbol whose family
 is not bundled draws nothing (the `NO_FONT` warning).
 
-The thumbnail is not a swatch: it is the whole document, `docs/map-storage.md` §4.4.
+The thumbnail is not a swatch: it is the whole document, `docs/map-storage.md` §4.5.
 
 **resvg abort.** `@resvg/resvg-js` 2.6.2 aborts the whole process (a
 Rust panic in `geom.rs`, not a JavaScript error) on some clipped groups
@@ -834,7 +834,7 @@ library's own fixtures (04 §8 table, one per rule) are added in slice B.
 | `packages/shared/fonts/` | bundled Liberation faces |
 | `packages/api/src/render/reference-raster.ts` | resvg rasterisation, `sampleAt`, `diffImages`, `encodePng` |
 | `packages/shared/src/render/swatch.ts` | symbol swatch scene (§5.1.1) |
-| `packages/api/src/render/previews.ts` | swatch and thumbnail PNGs (`docs/map-storage.md` §4.4) |
+| `packages/api/src/render/previews.ts` | swatch and thumbnail PNGs (`docs/map-storage.md` §4.5) |
 | `packages/api/src/render/fonts.ts` | bundled-font loader for the server backends |
 | `packages/api/src/render/golden.ts`, `scripts/render-golden.ts` | golden PNG generation (`pnpm --filter @oxygen/api golden:render`) |
 | `packages/shared/src/render/ocad-objects.ts` | `ocad2geojson` objects → `RenderObject`s (pilot / envelope modes, proxy symbols) |

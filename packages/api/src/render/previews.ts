@@ -1,5 +1,5 @@
 /**
- * Preview PNGs (docs/map-storage.md §4.4): symbol swatches
+ * Preview PNGs (docs/map-storage.md §4.5): symbol swatches
  * (docs/map-rendering.md §5.1.1) and document thumbnails, drawn by the
  * reference raster. Pure over their inputs — the rows and routes that
  * store and serve them are in `map-store/previews.ts`.
@@ -13,7 +13,7 @@ export const THUMBNAIL_LONG_EDGE_PX = 512;
 /**
  * Above this many objects a document gets no thumbnail: symbolising it
  * into one SVG for resvg costs seconds and hundreds of MB on the API
- * process. Set from the corpus measurement in docs/map-storage.md §4.4.
+ * process. Set from the corpus measurement in docs/map-storage.md §4.5.
  */
 export const THUMBNAIL_MAX_OBJECTS = 60_000;
 const THUMBNAIL_PAPER = "#ffffff";

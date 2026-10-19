@@ -18,7 +18,7 @@ implemented and marks what is still pending.
  7 align        colour stack alignment (03 §6.3)                          shared     done (docs/map-symbols.md §9)
  8 encode       02 codec → bytes; sha256 → documentHash                   shared     done
  9 store        map_sources + map_documents rows, event pin, report      api        done, as an import job in a worker thread (docs/map-storage.md §3, §6)
-10 derive       thumbnail (map_previews)                                  api        done, inside the job after the pins (docs/map-storage.md §4.4, §6.1)
+10 derive       thumbnail (map_previews)                                  api        done, inside the job after the pins (docs/map-storage.md §4.5, §6.1)
 ```
 
 Stages 3–8 are pure functions over bytes with no Node APIs
@@ -490,8 +490,8 @@ index), floating-point sums (keep source integers), `Date`/random ids.
 | Unit (api) | `packages/api/src/__tests__/import-omap.test.ts` | reader → document on `e2e/test.xmap`: determinism across `importOmapToDocument` / `importMapToDocument`, provenance (`omap-1`, version 9, UTM 33N), bboxes, all 21 fixture symbols rendered, symbolise with the dangling symbol as the only drop, factor ×1, import report, kind sniff with BOM, the two kinds kept apart |
 | Unit + integration (api) | `map-import-jobs.test.ts` (both) | worker runs a Mapper file by kind with the same hashes as inline; a Mapper source goes through the job to a `done` row with `importer_version omap-1` and is deduplicated on the second job; garbage of either kind fails cleanly |
 | E2E | `e2e/map-gl-doc.spec.ts` | document path = reader path in the browser, native `.oxvm` round trip, `mode=source` draws the fixture from its own definitions with no proxies; `e2e/test.xmap` loads client-side with no OCAD reader, draws, and surfaces the OMAP warning codes |
-| Unit + integration + E2E (api, web) | see `docs/map-storage.md` §9 | stages 1 and 9: chunked upload route, import jobs, store, dedup, pins, report row, delivery route |
-| Unit + integration + E2E (api) | see `docs/map-storage.md` §9 (previews rows) | stage 10: thumbnail row written by the job and by the dedup short-cut, non-fatal failure, object cap |
+| Unit + integration + E2E (api, web) | see `docs/map-storage.md` §10 | stages 1 and 9: chunked upload route, import jobs, store, dedup, pins, report row, delivery route |
+| Unit + integration + E2E (api) | see `docs/map-storage.md` §10 (previews rows) | stage 10: thumbnail row written by the job and by the dedup short-cut, non-fatal failure, object cap |
 
 The S0 corpus check (09 §7: whole corpus, every OMAP construct): the
 OCAD half runs via the measurement script and is recorded in
@@ -507,7 +507,7 @@ directory, not in the repo.
 
 S2 confirmation of the *provisional* §3.3 rows against OCAD output,
 event / club map *apply* for Mapper sources (needs slice C, §2.2), review API
-(06 §5.1, §5.3; previews landed, `docs/map-storage.md` §4.4), the `decisions` input to a job (06 §5.3 — the column
+(06 §5.1, §5.3; previews landed, `docs/map-storage.md` §4.5), the `decisions` input to a job (06 §5.3 — the column
 exists and `matchDocument` accepts decisions, nothing reads the column
 yet), stage 5 beyond bounds. Each lands with its own section
 here and its own tests.

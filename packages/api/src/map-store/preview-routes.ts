@@ -1,5 +1,5 @@
 /**
- * Preview routes (docs/map-storage.md §4.4):
+ * Preview routes (docs/map-storage.md §4.5):
  *
  *   GET /api/map-documents/:hash/thumbnail.png
  *   GET /api/map-documents/:hash/symbols/:idx.png

@@ -1,5 +1,5 @@
 /**
- * Preview renderers (docs/map-storage.md §4.4, docs/map-rendering.md
+ * Preview renderers (docs/map-storage.md §4.5, docs/map-rendering.md
  * §5.1.1): swatches and thumbnails through the reference raster, probed
  * at hand-computed paper coordinates like the pilot-raster tests.
  */

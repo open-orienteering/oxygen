@@ -18,6 +18,7 @@ Integration tests, E2E (`pnpm test:e2e*`, `playwright test`) and the Docker rebu
 - Never run `pnpm dev` from a worktree — ports 3002/5173 belong to the user's checkout.
 - Never touch the dev database on :5432 from a worktree.
 - A fresh worktree needs `pnpm install --frozen-lockfile` and `pnpm db:generate` before anything else.
+- **AGENTS.md §6 step 5 (Docker rebuild) is split for worktrees.** `docker compose … up --build` must not run from a worktree: the host-db compose file points at the dev database on :5432 and the ports 8080/3001 are held by the user's stack. In a worktree, prove the images instead: `scripts/with-verify-lock.sh docker build --network host --target api .` and the same with `--target web`, and say in the PR that the stack bring-up is left to the main checkout. The coordinator runs the real `up --build` from the main checkout after the PR merges; that is also what applies new migrations to the dev DB.
 
 ## Vector map pipeline (branch `vector-map-pipeline`)
 

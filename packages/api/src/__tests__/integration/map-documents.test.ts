@@ -246,6 +246,22 @@ describe("GET /api/map-documents/:hash", () => {
     expect((await ctx.db.mapFile.findFirstOrThrow({ where: { eventId: ctx.eventId } })).documentHash).toBe(documentHash);
   });
 
+  it("the user who started a non-failed import job that produced the document may read it without an event", async () => {
+    const job = await ctx.db.mapImportJob.create({ data: { eventId: ctx.eventId, sourceHash: fileHash, state: "done", documentHash, startedBy: stranger.id } });
+    try {
+      resetDocumentAccessCache();
+      expect((await get(url(), { "x-forwarded-email": stranger.email })).statusCode).toBe(200);
+      expect((await get(url(), { "x-forwarded-email": member.email })).statusCode).toBe(403); // not their job, no event given
+      expect((await get(url())).statusCode).toBe(401);
+      await ctx.db.mapImportJob.update({ where: { id: job.id }, data: { state: "failed" } });
+      resetDocumentAccessCache();
+      expect((await get(url(), { "x-forwarded-email": stranger.email })).statusCode).toBe(403);
+    } finally {
+      await ctx.db.mapImportJob.delete({ where: { id: job.id } });
+      resetDocumentAccessCache();
+    }
+  });
+
   it("with auth off everything that exists is served", async () => {
     process.env.AUTH_MODE = "off";
     resetDocumentAccessCache();

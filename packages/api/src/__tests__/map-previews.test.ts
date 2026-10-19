@@ -1,6 +1,6 @@
 /**
  * Pure parts of the preview routes and the library preview cache
- * (docs/map-storage.md §4.4). Rows and the routes themselves are in the
+ * (docs/map-storage.md §4.5). Rows and the routes themselves are in the
  * integration suite.
  */
 import { afterEach, describe, expect, it } from "vitest";

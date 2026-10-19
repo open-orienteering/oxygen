@@ -44,6 +44,7 @@ describe("authoriseDocumentAccess", () => {
     eventPinsDocument: async (ev, h) => (ev === "itest" && h === hash ? pin : null),
     userHasCapability: async () => false,
     clubVersionHasDocument: async () => false,
+    userStartedJobForDocument: async () => false,
     ...over,
   });
   const base = { hash, authEnabled: true, user: null, kioskKey: null, eventNameId: null };
@@ -66,6 +67,12 @@ describe("authoriseDocumentAccess", () => {
     const club = queries({ clubVersionHasDocument: async (h) => h === hash });
     expect(await authoriseDocumentAccess({ ...base, user }, club)).toEqual({ ok: true });
     expect(await authoriseDocumentAccess(base, club)).toEqual({ ok: false, status: 401 });
+  });
+  it("accepts the user who started an import job that produced the document, with no event", async () => {
+    const own = queries({ userStartedJobForDocument: async (u, h) => u.id === "u1" && h === hash });
+    expect(await authoriseDocumentAccess({ ...base, user }, own)).toEqual({ ok: true });
+    expect(await authoriseDocumentAccess({ ...base, user: { ...user, id: "u2" } }, own)).toEqual({ ok: false, status: 403 });
+    expect(await authoriseDocumentAccess(base, own)).toEqual({ ok: false, status: 401 });
   });
 });
 

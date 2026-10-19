@@ -136,6 +136,8 @@ export function isReservedEventSlug(slug: string): boolean {
  *
  *   - `eventor_api_key`, `eventor_api_key_test`
  *   - `runnerdb_last_sync`, `runnerdb_runner_count`, `runnerdb_club_count`
+ *   - `map_storage_gc.*` — the storage GC's schedule and grace override
+ *     (docs/map-storage.md §8.3)
  *
  * Per-event settings (eventor env, liveresults config) live as columns on
  * the `events` row.

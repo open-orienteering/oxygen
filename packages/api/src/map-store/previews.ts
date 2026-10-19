@@ -1,5 +1,5 @@
 /**
- * Preview rows and the library preview cache (docs/map-storage.md §4.4).
+ * Preview rows and the library preview cache (docs/map-storage.md §4.5).
  *
  * Document previews are `map_previews` rows, content-addressed by
  * `(document_hash, kind, key)`, written once with `createMany …

@@ -442,7 +442,7 @@ resolves canonical entries through `paletteIndexOfStack(header.colours)`.
 
 - Review API and UI for `suggested` matches (06 §5); the `decisions`
   input exists on `matchDocument` and nothing persists decisions yet.
-  The swatches the review shows are served (`docs/map-storage.md` §4.4).
+  The swatches the review shows are served (`docs/map-storage.md` §4.5).
 - Library variants for the OCAD template conventions (§8.4) if the auto
   rate needs to rise.
 - Contact sheet: a golden render per entry at 10× via the reference

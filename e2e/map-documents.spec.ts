@@ -10,8 +10,10 @@ import { API_BASE } from "./helpers/api-base";
  * event map additionally stores an immutable document the event pins,
  * `course.mapMetadata` exposes its hash, and `/api/map-documents/:hash`
  * serves it — gated by the event, cached as immutable, range-capable —
- * so the GL dev page can load it straight from the API. The second test
- * drives the chunked upload route and the import job status end to end.
+ * so the GL dev page can load it straight from the API; the original file
+ * streams back from `/api/map-sources/:hash` to an event manager. The
+ * second test drives the chunked upload route and the import job status
+ * end to end.
  */
 
 const EVENT = "itest";
@@ -65,21 +67,41 @@ test.describe("Map documents", () => {
     expect(range.status()).toBe(206);
     expect(range.headers()["content-range"]).toBe(`bytes 0-3/${body.byteLength}`);
     expect((await range.body()).toString()).toBe("OXVM");
-    const noEvent = await request.get(`${API_BASE}/api/map-documents/${hash}`, { headers: { "x-event-id": "meos_20251222_001121_2BC" } });
-    expect(noEvent.status()).toBe(403);
+    // Through an event that does not pin it, the uploader still reads it: their import job produced it
+    // (docs/map-storage.md §4.2, own job). Without any reference the gate holds.
+    const ownJob = await request.get(`${API_BASE}/api/map-documents/${hash}`, { headers: { "x-event-id": "meos_20251222_001121_2BC" } });
+    expect(ownJob.status()).toBe(200);
+    const noReference = await request.get(`${API_BASE}/api/map-documents/${hash}`, { headers: { "x-event-id": "meos_20251222_001121_2BC", "x-forwarded-email": "" } });
+    expect(noReference.status()).toBe(401);
 
-    // Previews (docs/map-storage.md §4.4): import stage 10 wrote the
+    // The original upload streams back to an event manager as an uncached attachment (docs/map-storage.md §4.4).
+    const file = readFileSync("e2e/test.ocd");
+    const sourceHash = createHash("sha256").update(file).digest("hex");
+    const source = await request.get(`${API_BASE}/api/map-sources/${sourceHash}`, { headers: HEADERS });
+    expect(source.status()).toBe(200);
+    expect(source.headers()["content-type"]).toBe("application/octet-stream");
+    expect(source.headers()["cache-control"]).toBe("private, no-store");
+    expect(source.headers()["content-disposition"]).toContain('filename="test.ocd"');
+    expect((await source.body()).equals(file)).toBe(true);
+    // Anonymous (no proxy identity) never gets it.
+    const anonymous = await request.get(`${API_BASE}/api/map-sources/${sourceHash}`, { headers: { ...HEADERS, "x-forwarded-email": "" } });
+    expect(anonymous.status()).toBe(401);
+
+    // Previews (docs/map-storage.md §4.5): import stage 10 wrote the
     // thumbnail, symbol swatches render on first request; both are gated
-    // like the document. The library swatch is addressed by the library
-    // and version the document header names.
+    // like the document — the uploader's own job admits them through a
+    // non-pinning event, anonymous is refused. The library swatch is
+    // addressed by the library and version the document header names.
     for (const path of ["thumbnail.png", "symbols/0.png"]) {
       const res = await request.get(`${API_BASE}/api/map-documents/${hash}/${path}`, { headers: HEADERS });
       expect(res.status(), path).toBe(200);
       expect(res.headers()["content-type"]).toBe("image/png");
       expect(res.headers()["cache-control"]).toBe("private, max-age=31536000, immutable");
       expect((await res.body()).subarray(1, 4).toString()).toBe("PNG");
-      const denied = await request.get(`${API_BASE}/api/map-documents/${hash}/${path}`, { headers: { "x-event-id": "meos_20251222_001121_2BC" } });
-      expect(denied.status(), path).toBe(403);
+      const ownJob = await request.get(`${API_BASE}/api/map-documents/${hash}/${path}`, { headers: { "x-event-id": "meos_20251222_001121_2BC" } });
+      expect(ownJob.status(), path).toBe(200);
+      const anonymous = await request.get(`${API_BASE}/api/map-documents/${hash}/${path}`, { headers: { "x-event-id": "meos_20251222_001121_2BC", "x-forwarded-email": "" } });
+      expect(anonymous.status(), path).toBe(401);
     }
     const header = JSON.parse(body.subarray(12, 12 + body.readUInt32LE(8)).toString()) as { library: { id: string; version: string } };
     const lib = await request.get(`${API_BASE}/api/library/${header.library.id}/${header.library.version}/418.png`);

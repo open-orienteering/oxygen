@@ -22,10 +22,17 @@ never `main`.
 ## 1. Plan
 
 - Run the `slice-planner` agent with the row id. Read its plan.
-- If it returns questions, **stop and ask the user**. Do not guess at
-  what the spec leaves open. When the user answers, write the answer into
-  the spec section it belongs to before writing code, so later sessions
-  inherit it.
+- If it returns questions, **stop and ask the user** — all of them in one
+  message, each with your recommendation. When the user answers, write
+  the answer into the spec section it belongs to before writing code, so
+  later sessions inherit it.
+- Ask only what changes a schema, an interface, an acceptance rule or a
+  recorded decision, or where spec and code genuinely conflict. Smaller
+  choices (naming, file placement, an error code, a test fixture, which
+  of two equivalent mechanisms) you decide yourself: pick what the spec
+  and the surrounding code imply, say so in the plan, and record it in
+  the decision-log row. Never ask for confirmation of something the spec
+  already states.
 - Keep the plan's acceptance criteria; they are what the reviewer checks.
 
 ## 2. Implement, test first (AGENTS.md §4)
@@ -48,14 +55,18 @@ through the wrapper, or a hook blocks it:
 scripts/with-verify-lock.sh pnpm test:integration
 scripts/with-verify-lock.sh pnpm test:e2e e2e/<affected>.spec.ts
 scripts/with-verify-lock.sh pnpm test:e2e
-scripts/with-verify-lock.sh docker compose -f docker-compose.host-db.yml up --build -d
+scripts/with-verify-lock.sh docker build --network host --target api .
+scripts/with-verify-lock.sh docker build --network host --target web .
 ```
 
 Run in this order: `pnpm build`, `pnpm test`, `pnpm lint`, integration
 tests (always, for pipeline work), affected E2E specs during iteration,
-the full E2E suite once before the PR, the Docker rebuild last. Then
+the full E2E suite once before the PR, the two image builds last. Then
 `pnpm outdated -r --long` for the drift report. Never run `pnpm dev` from
-a worktree; its ports are shared with the user's checkout.
+a worktree; its ports are shared with the user's checkout. Never run
+`docker compose … up` from a worktree (see `.claude/CLAUDE.md`, "Shared
+verification resources"): the stack bring-up happens in the main
+checkout after merge, and the PR says so.
 
 ## 4. Record
 

@@ -5,7 +5,7 @@
  * against it, never against each other.
  *
  * Deliberately simple: no caching, no semaphore. Its one production use
- * is previews (`previews.ts`, docs/map-storage.md §4.4): rendered once,
+ * is previews (`previews.ts`, docs/map-storage.md §4.5): rendered once,
  * stored as cache. Maps for use are never drawn through here.
  */
 

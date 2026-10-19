@@ -22,6 +22,7 @@ import { registerMapTileRoutes } from "./map-tiles.js";
 import { registerClubMapPreviewRoute } from "./club-map-preview.js";
 import { registerMapDocumentRoutes } from "./map-store/routes.js";
 import { registerMapPreviewRoutes } from "./map-store/preview-routes.js";
+import { registerMapSourceRoutes } from "./map-store/source-routes.js";
 import { registerMapUploadRoutes } from "./map-store/upload-routes.js";
 import { startImportJobEngine } from "./map-store/jobs.js";
 import { registerCourseMapRoutes } from "./course-maps/routes.js";
@@ -104,6 +105,7 @@ async function main() {
   registerClubMapPreviewRoute(server);
   registerMapDocumentRoutes(server);
   registerMapPreviewRoutes(server);
+  registerMapSourceRoutes(server);
   registerMapUploadRoutes(server);
   startImportJobEngine(prisma());
   registerCourseMapRoutes(server);

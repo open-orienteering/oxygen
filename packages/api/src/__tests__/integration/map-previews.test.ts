@@ -1,5 +1,5 @@
 /**
- * Previews (docs/map-storage.md §4.4): stage 10 writes the thumbnail row,
+ * Previews (docs/map-storage.md §4.5): stage 10 writes the thumbnail row,
  * rows are rendered on a miss and never rewritten, and the three routes
  * follow the document route's order — 400, then 401/403, then 404 — with
  * immutable caching and 304s.
