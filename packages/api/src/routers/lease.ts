@@ -3,8 +3,8 @@
  *
  * Two audiences:
  *   - **Node-to-node** (peerProcedure, shared-secret): `acquire`, `release`,
- *     `exportSnapshot` — the cloud-side surface a venue's checkout/checkin
- *     drives.
+ *     `exportSnapshot`, `exportSettings`, `exportBlob` — the cloud-side
+ *     surface a venue's checkout/checkin drives.
  *   - **Operator** (public/eventProcedure): `status` for the shell badge,
  *     `checkout`/`checkin` on the venue box, `forceTakeover` on the node
  *     that needs control back after a venue box died.
@@ -32,6 +32,11 @@ import {
   makeLeasePeer,
 } from "../sync/lease.js";
 import { shipEventOnce, makePeerTransport } from "../sync/shipper.js";
+import {
+  exportBlobInput,
+  exportBlobSlice,
+  fetchSnapshotBlobs,
+} from "../sync/snapshotMaps.js";
 import {
   nodeId,
   nodeRole,
@@ -107,6 +112,14 @@ export const leaseRouter = router({
     return row as unknown as Record<string, unknown>;
   }),
 
+  /**
+   * One slice (≤ 4 MiB, base64) of a map blob the event's `map_files` pin
+   * — the bytes of the snapshot's `maps` part (docs/map-storage.md §7.2).
+   */
+  exportBlob: peerProcedure
+    .input(exportBlobInput)
+    .query(async ({ ctx, input }) => exportBlobSlice(ctx.db, ctx.event.id, input)),
+
   // ─── Operator surface ─────────────────────────────────────
 
   /**
@@ -132,7 +145,13 @@ export const leaseRouter = router({
       await peer.acquire(input.nameId, nodeId());
       try {
         const snapshot = await peer.exportSnapshot(input.nameId);
-        const event = await importEventSnapshot(db, snapshot);
+        // Map blobs before the transaction: network reads, verified by hash.
+        const blobs = snapshot.maps
+          ? await fetchSnapshotBlobs(db, snapshot.maps, (table, hash, start, length) =>
+              peer.exportBlob(input.nameId, { table, hash, start, length }),
+            )
+          : undefined;
+        const event = await importEventSnapshot(db, snapshot, blobs);
         // Journal-from-there: pulls start at the exporter's journal head;
         // history before it is baked into the snapshot. Push starts empty.
         await db.journalSyncState.upsert({
@@ -159,6 +178,14 @@ export const leaseRouter = router({
           imported: Object.fromEntries(
             Object.entries(snapshot.tables).map(([t, rows]) => [t, rows.length]),
           ),
+          maps: {
+            files: snapshot.maps?.files.length ?? 0,
+            sources: snapshot.maps?.sources.length ?? 0,
+            documents: snapshot.maps?.documents.length ?? 0,
+            fetchedBytes: blobs?.fetchedBytes ?? 0,
+            skipped: snapshot.maps?.skipped ?? 0,
+            decisions: snapshot.maps?.decisions?.length ?? 0,
+          },
         };
       } catch (err) {
         // Roll the peer lease back so a failed import doesn't leave the

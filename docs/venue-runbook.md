@@ -61,6 +61,13 @@ background: [`offline-architecture.md`](offline-architecture.md).
    *against the venue box* (see transport below) and press **Check out to
    this node**. This acquires the lease on the cloud, imports the event
    snapshot, and makes the box the single writer for race-critical data.
+   The snapshot includes the event map (the uploaded file and its
+   imported document), so the box holds it locally. A map uploaded before the vector
+   map pipeline existed has no document yet: run the backfill
+   (Settings → Maintenance → Map documents, or
+   `pnpm map:backfill --event <name_id>`) on the cloud before checking
+   out, or the box gets no map. A map re-uploaded on the cloud during the
+   lease does not reach the box.
 2. The shell shows the green **Venue mode** badge. From this moment the
    cloud rejects race-critical writes for this event with "checked out to
    `<node>`".
