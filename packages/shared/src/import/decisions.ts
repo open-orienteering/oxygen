@@ -6,7 +6,7 @@
 
 import type { DocumentColour, DocumentSymbol, SymbolMatch } from "../map-document/header.js";
 import { parseRenderSymbol, type RenderSymbol } from "../render/symbol.js";
-import { getSymbolLibrary, isSymbolLibraryId } from "../symbol-library/index.js";
+import { getSymbolLibrary, isSymbolLibraryId, type SymbolLibraryId } from "../symbol-library/index.js";
 import type { PaletteEdition } from "../symbol-library/palette.js";
 import { classifyColour, detectPaletteEdition, formatClass } from "./colour-class.js";
 import { type ClassOfColour, compareFingerprints, type Fingerprint, fingerprintOf } from "./fingerprint.js";
@@ -50,6 +50,12 @@ const isSource = (s: { origin?: DocumentSymbol["origin"] }) => (s.origin ?? "sou
 export function documentSymbolFingerprints(header: HeaderLike): (string | null)[] {
   const classOf = documentClassOf(header.colours);
   return header.symbols.map((s) => (isSource(s) && s.render ? decisionFingerprint(header.source.kind, s.code, symbolIrHash(parseRenderSymbol(s.render), classOf)) : null));
+}
+
+/** The library a document's decisions are made against: its own, the scale's for a pre-matcher document. */
+export function documentLibraryId(header: { library?: { id: string } | null; mapScale: number }): SymbolLibraryId {
+  const stored = header.library?.id;
+  return stored && isSymbolLibraryId(stored) ? stored : chooseLibrary(header.mapScale);
 }
 
 // ---- rows → matcher decisions -------------------------------------------------
@@ -173,8 +179,7 @@ const MAX_CANDIDATES = 3;
  * (`report.matching.edition`), detected from the stack when absent.
  */
 export function reviewRows(header: ReviewHeaderLike, objectsPerSymbol: readonly number[], opts: { edition?: PaletteEdition } = {}): ReviewRow[] {
-  const stored = header.library?.id;
-  const libraryId = stored && isSymbolLibraryId(stored) ? stored : chooseLibrary(header.mapScale);
+  const libraryId = documentLibraryId(header);
   const edition = opts.edition ?? detectPaletteEdition(header.colours);
   const classOf = documentClassOf(header.colours);
   const ctx = matchContext(libraryId, edition, header.documentFactor ?? 1, classOf);
