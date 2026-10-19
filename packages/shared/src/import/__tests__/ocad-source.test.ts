@@ -64,10 +64,56 @@ describe("ocadGeoreferencing", () => {
       paperOrigin: { x: 687000, y: 6574000 },
       gridRotationDeg: 4.98,
       gridScaleFactor: 1,
-      declinationDeg: 6.5,
       realWorldEnabled: true,
       sourceGridId: 13002,
     });
+    // ScalePar `d` is the real-world grid distance in metres, not a declination (docs/map-import.md §3.5).
+    expect(g.georeferencing).not.toHaveProperty("declinationDeg");
+    expect(g.unresolvedCrs).toBeUndefined();
+  });
+
+  const scalePar = (extra: { code: string; value: string }[]) => {
+    const s = source();
+    s.parameterStrings["1039"] = [{ _pairs: [{ code: "m", value: "10000" }, { code: "r", value: "1" }, { code: "x", value: "600000" }, { code: "y", value: "6600000" }, { code: "a", value: "0" }, ...extra] }];
+    s.getCrs = () => ({ code: 0, catalog: undefined, name: undefined, gridId: Number(extra.find((p) => p.code === "i")?.value ?? 0) });
+    return s;
+  };
+
+  it("falls back to the OCAD 2018 `e` EPSG code when the grid id does not resolve", () => {
+    const g = ocadGeoreferencing(scalePar([{ code: "i", value: "99999" }, { code: "e", value: "3006" }]));
+    expect(g.georeferencing.crs).toEqual({ authority: "EPSG", code: 3006, name: "EPSG:3006" });
+    expect(g.georeferencing.paperOrigin).toEqual({ x: 600000, y: 6600000 });
+    expect(g.unresolvedCrs).toBeUndefined();
+  });
+
+  it("keeps crs and paperOrigin null together: a resolved grid without x/y is unresolved", () => {
+    const s = source();
+    s.parameterStrings["1039"] = [{ _pairs: [{ code: "m", value: "10000" }, { code: "r", value: "1" }, { code: "i", value: "13002" }] }];
+    const g = ocadGeoreferencing(s);
+    expect(g.georeferencing.crs).toBeNull();
+    expect(g.georeferencing.paperOrigin).toBeNull();
+    expect(g.unresolvedCrs).toBe("EPSG:3006 without ScalePar x/y");
+  });
+
+  it("prefers the grid table over `e`", () => {
+    const s = scalePar([{ code: "i", value: "13002" }, { code: "e", value: "3010" }]);
+    s.getCrs = () => ({ code: 3006, catalog: "EPSG", name: "SWEREF99 TM", gridId: 13002 });
+    expect(ocadGeoreferencing(s).georeferencing.crs).toEqual({ authority: "EPSG", code: 3006, name: "SWEREF99 TM" });
+  });
+
+  it("names an unresolvable real-world grid in unresolvedCrs; a map without a grid is simply not georeferenced", () => {
+    const g = ocadGeoreferencing(scalePar([{ code: "i", value: "1000" }]));
+    expect(g.georeferencing.crs).toBeNull();
+    expect(g.georeferencing.paperOrigin).toBeNull();
+    expect(g.unresolvedCrs).toBe("grid 1000");
+    expect(ocadGeoreferencing(scalePar([{ code: "i", value: "0" }])).unresolvedCrs).toBeUndefined();
+    // An `e` that is no positive integer does not resolve either.
+    for (const e of ["0", "abc"]) {
+      const bad = ocadGeoreferencing(scalePar([{ code: "i", value: "0" }, { code: "e", value: e }]));
+      expect(bad.georeferencing.crs).toBeNull();
+      expect(bad.unresolvedCrs).toBe(`EPSG ${e}`);
+    }
+    expect(ocadGeoreferencing(scalePar([])).unresolvedCrs).toBeUndefined();
   });
 
   it("is null-safe without georeferencing", () => {
@@ -151,12 +197,27 @@ describe("ocadToDocumentInput", () => {
 
   it("fills the header: provenance, units, scale, print window, export rectangles", () => {
     const h = input.header;
-    expect(h.format).toEqual({ version: 1, importer: "ocad-4" });
+    expect(h.format).toEqual({ version: 1, importer: "ocad-5" });
     expect(h.source).toEqual({ kind: "ocad", version: "2018.8.3", hash: "ff".repeat(32), bytes: 4242 });
     expect(h.unitsPerMm).toBe(OCAD_UNITS_PER_MM);
     expect(h.mapScale).toBe(15000);
     expect(h.printWindow).toEqual({ scale: 15000, left: -197.6, bottom: 49.5, right: -97.9, top: 91.9 });
     expect(h.exportRectangles).toEqual([{ name: "Tävling", left: 0, bottom: 0, right: 100, top: 200 }]);
+  });
+
+  it("warns CRS_UNRESOLVED for a real-world grid it cannot map", () => {
+    const s = source();
+    s.getCrs = () => ({ code: 0, gridId: 13002 });
+    expect(ocadToDocumentInput(s, opts).warnings.find((w) => w.code === "CRS_UNRESOLVED")).toEqual({ code: "CRS_UNRESOLVED", count: 1, message: "coordinate reference system not mapped to EPSG: grid 13002" });
+    expect(result.warnings.some((w) => w.code === "CRS_UNRESOLVED")).toBe(false);
+  });
+
+  it("runs stage 5 and returns the analysis with the input", () => {
+    expect(result.analysis.bounds).toEqual({ minX: 0, minY: 0, maxX: 1000, maxY: 5000 });
+    expect(result.analysis.georeference).toMatchObject({ crs: "EPSG:3006", method: "epsg", projectable: true, gridRotationDeg: 4.98 });
+    // One 601 line is not a meridian cluster.
+    expect(result.analysis.north.meridian).toBeNull();
+    expect(result.analysis.north.paperNorthBearingDeg!).toBeCloseTo(4.98 + 2.82, 1);
   });
 
   it("encodes, decodes and renders end to end", () => {

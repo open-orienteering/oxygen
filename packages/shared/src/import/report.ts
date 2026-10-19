@@ -14,6 +14,8 @@ export const importWarningSchema = z.object({
   count: z.number().int().min(1),
 });
 
+const latLngSchema = z.object({ lat: z.number(), lng: z.number() });
+
 export const importReportSchema = z.object({
   importer: z.string(),
   source: z.object({
@@ -63,6 +65,38 @@ export const importReportSchema = z.object({
       aliased: z.array(z.object({ paletteId: z.string(), viaPaletteId: z.string(), sourceNumber: z.number().int().optional() })),
       conflicts: z.array(z.object({ colour: z.string(), reason: z.string() })),
       unclassified: z.array(z.object({ sourceNumber: z.number().int().optional(), name: z.string() })),
+    })
+    .optional(),
+  /** Stage 5 (docs/map-import.md §3.8): the header's georeference projected to WGS 84. Absent before `ocad-5` / `omap-2`. */
+  georeference: z
+    .object({
+      crs: z.string().nullable(),
+      method: z.enum(["epsg", "none"]),
+      projectable: z.boolean(),
+      gridRotationDeg: z.number(),
+      gridConvergenceDeg: z.number().nullable(),
+      originWgs84: latLngSchema.nullable(),
+      wgs84Bounds: z.object({ north: z.number(), south: z.number(), east: z.number(), west: z.number() }).nullable(),
+    })
+    .optional(),
+  /**
+   * Stage 5 north lines plus the WMM view at `asOf` (06 §4.4: the legacy
+   * `NorthDetection`, with the meridian keyed by symbol index and code).
+   * Not part of the document identity: `declinationDeg`,
+   * `meridianStalenessDeg` and `asOf` depend on the import date.
+   */
+  north: z
+    .object({
+      meridian: z.object({ symbolIdx: z.number().int(), code: z.string(), count: z.number().int(), medianTiltDeg: z.number(), stddevDeg: z.number() }).nullable(),
+      paperNorthBearingDeg: z.number().nullable(),
+      displayNorthOffsetDeg: z.number().nullable(),
+      declaredGrivationDeg: z.number(),
+      trueNorthFromGridDeg: z.number().nullable(),
+      centerLat: z.number().nullable(),
+      centerLng: z.number().nullable(),
+      declinationDeg: z.number().nullable(),
+      meridianStalenessDeg: z.number().nullable(),
+      asOf: z.string(),
     })
     .optional(),
   /** Milliseconds per stage. */

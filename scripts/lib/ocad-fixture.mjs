@@ -193,8 +193,14 @@ const DEFAULT_COLORS = [
   { recType: 9, text: "Blue\tn3\tc100.0\tm0.0\ty0.0\tk0.0" },
 ];
 
-export function georeferenceString({ scale, easting, northing }) {
-  return `\tm${scale}\tg50.000000\tr1\td500\ti1000\tx${easting}\ty${northing}\ta0.00000000`;
+/**
+ * ScalePar (1039). `gridId` is OCAD's grid-and-zone id: 13002 = SWEREF99 TM
+ * (EPSG:3006) in the reader's table. The showcase map keeps the historic
+ * 1000, which is not a real id (the legacy pipeline infers EPSG:3006 from
+ * the coordinates), so the committed showcase.sql stays byte-identical.
+ */
+export function georeferenceString({ scale, easting, northing, gridId = 1000 }) {
+  return `\tm${scale}\tg50.000000\tr1\td500\ti${gridId}\tx${easting}\ty${northing}\ta0.00000000`;
 }
 
 /**
@@ -347,7 +353,7 @@ export function buildE2eTestOcad() {
   const strings = [...DEFAULT_COLORS];
   strings.push({
     recType: 1039,
-    text: georeferenceString({ scale: SCALE, easting: EASTING, northing: NORTHING }),
+    text: georeferenceString({ gridId: 13002, scale: SCALE, easting: EASTING, northing: NORTHING }),
   });
   for (const [name, controls] of Object.entries(COURSES)) {
     strings.push({

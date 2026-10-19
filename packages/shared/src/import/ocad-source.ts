@@ -19,12 +19,13 @@ import { ocadFlags } from "../render/ocad-objects.js";
 import { parseRenderSymbol, type RenderSymbol } from "../render/symbol.js";
 import { type OcadSymbolDefLike, ocadSymbolToRender } from "./ocad-symbols.js";
 import type { MapDocumentInput, MapObjectInput } from "../map-document/codec.js";
+import { analyseDocumentInput, type DocumentAnalysis } from "./analyse.js";
 import { OBJECT_TYPE } from "../map-document/header.js";
 import type { DocumentColour, DocumentSymbolInput, DocumentWarning, Georeferencing, MapDocumentHeaderInput } from "../map-document/header.js";
 
 /** OCAD coordinates are 1/100 mm. */
 export const OCAD_UNITS_PER_MM = 100;
-export const OCAD_IMPORTER_VERSION = "ocad-4";
+export const OCAD_IMPORTER_VERSION = "ocad-5";
 
 export interface OcadCoordinateLike {
   0: number;
@@ -108,6 +109,8 @@ export interface OcadSourceResult {
     symbolsRendered: number; symbolsUnrendered: number;
   };
   warnings: DocumentWarning[];
+  /** Stage 5 over `input` (docs/map-import.md §3.8); not part of the document. */
+  analysis: DocumentAnalysis;
 }
 
 /** OCAD symbol type → document kind. */
@@ -166,7 +169,14 @@ export function ocadColourStack(colors: OcadFileLike["colors"]): DocumentColour[
   });
 }
 
-export function ocadGeoreferencing(ocad: OcadFileLike): { georeferencing: Georeferencing; mapScale: number } {
+/**
+ * ScalePar (1039) → document georeferencing (docs/map-import.md §3.5).
+ * The CRS comes from the reader's grid table (`i`), else from the OCAD
+ * 2018 EPSG code `e`. A real-world grid (`r = 1`, `i ≠ 0` or `e`) that
+ * neither resolves is named in `unresolvedCrs`. `d` is the real-world
+ * grid distance in metres and is not carried.
+ */
+export function ocadGeoreferencing(ocad: OcadFileLike): { georeferencing: Georeferencing; mapScale: number; unresolvedCrs?: string } {
   const sp = pairs(ocad.parameterStrings["1039"]?.[0]);
   const mapScale = num(sp.get("m")) ?? 15000;
   let crs: Georeferencing["crs"] = null;
@@ -176,7 +186,14 @@ export function ocadGeoreferencing(ocad: OcadFileLike): { georeferencing: Georef
   } catch {
     crs = null;
   }
+  const gid = num(sp.get("i"));
+  const epsg = num(sp.get("e"));
+  if (!crs && epsg !== undefined && Number.isInteger(epsg) && epsg > 0) crs = { authority: "EPSG", code: epsg, name: `EPSG:${epsg}` };
+  const r = sp.get("r");
   const x = num(sp.get("x")), y = num(sp.get("y"));
+  // `crs` and `paperOrigin` are null together (docs/map-document-format.md §2.3).
+  const missingOrigin = crs !== null && (x === undefined || y === undefined) ? `${crs.authority}:${crs.code} without ScalePar x/y` : undefined;
+  if (missingOrigin) crs = null;
   const georeferencing: Georeferencing = {
     crs,
     paperOrigin: crs && x !== undefined && y !== undefined ? { x, y } : null,
@@ -187,13 +204,12 @@ export function ocadGeoreferencing(ocad: OcadFileLike): { georeferencing: Georef
       return b === undefined || b === 0 ? 1 : 1 + b / 100;
     })(),
   };
-  const d = num(sp.get("d"));
-  if (d !== undefined) georeferencing.declinationDeg = d;
-  const r = sp.get("r");
   if (r !== undefined) georeferencing.realWorldEnabled = r === "1";
-  const gid = num(sp.get("i"));
   if (gid !== undefined) georeferencing.sourceGridId = gid;
-  return { georeferencing, mapScale };
+  const unresolvedCrs = missingOrigin ?? (!crs && r === "1" && ((gid !== undefined && gid !== 0) || sp.get("e") !== undefined)
+    ? [gid ? `grid ${gid}` : "", sp.get("e") !== undefined ? `EPSG ${sp.get("e")}` : ""].filter(Boolean).join(", ")
+    : undefined);
+  return unresolvedCrs ? { georeferencing, mapScale, unresolvedCrs } : { georeferencing, mapScale };
 }
 
 export function ocadToDocumentInput(ocad: OcadFileLike, opts: OcadSourceOptions): OcadSourceResult {
@@ -322,7 +338,8 @@ export function ocadToDocumentInput(ocad: OcadFileLike, opts: OcadSourceOptions)
   const readerWarnings = ocad.warnings?.length ?? 0;
   if (readerWarnings) warn("READER_WARNING", "see the reader's warning list", readerWarnings);
 
-  const { georeferencing, mapScale } = ocadGeoreferencing(ocad);
+  const { georeferencing, mapScale, unresolvedCrs } = ocadGeoreferencing(ocad);
+  if (unresolvedCrs) warn("CRS_UNRESOLVED", `coordinate reference system not mapped to EPSG: ${unresolvedCrs}`);
   const pp = pairs(ocad.parameterStrings["1026"]?.[0]);
   const L = num(pp.get("L")), B = num(pp.get("B")), R = num(pp.get("R")), T = num(pp.get("T"));
   const printWindow = L !== undefined && B !== undefined && R !== undefined && T !== undefined
@@ -347,5 +364,6 @@ export function ocadToDocumentInput(ocad: OcadFileLike, opts: OcadSourceOptions)
     symbols,
     warnings: [...warnings.values()],
   };
-  return { input: { header, objects }, counts, warnings: [...warnings.values()] };
+  const input: MapDocumentInput = { header, objects };
+  return { input, counts, warnings: [...warnings.values()], analysis: analyseDocumentInput(input) };
 }

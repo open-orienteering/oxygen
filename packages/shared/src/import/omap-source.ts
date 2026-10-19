@@ -12,6 +12,7 @@
  */
 
 import type { MapDocumentInput, MapObjectInput } from "../map-document/codec.js";
+import { analyseDocumentInput, type DocumentAnalysis } from "./analyse.js";
 import { OBJECT_TYPE } from "../map-document/header.js";
 import type { DocumentColour, DocumentSymbolInput, DocumentWarning, Georeferencing, MapDocumentHeaderInput } from "../map-document/header.js";
 import type { TextSymbol } from "../render/symbol.js";
@@ -20,7 +21,7 @@ import { dashPointRule, omapFlags, omapGoverningLine, omapSymbolKind, omapSymbol
 
 /** Mapper coordinates are 0.001 mm. */
 export const OMAP_UNITS_PER_MM = 1000;
-export const OMAP_IMPORTER_VERSION = "omap-1";
+export const OMAP_IMPORTER_VERSION = "omap-2";
 
 export interface OmapSourceOptions {
   /** Upload name; goes into the import report, not into the document. */
@@ -38,7 +39,12 @@ export interface OmapSourceResult {
     symbolsRendered: number; symbolsUnrendered: number;
   };
   warnings: DocumentWarning[];
+  /** Stage 5 over `input` (docs/map-import.md §3.8); not part of the document. */
+  analysis: DocumentAnalysis;
 }
+
+/** 1e-6 m: far below Mapper's own precision, and no unrounded sin/cos result reaches the document bytes (docs/map-import.md §6). */
+const roundMicrometre = (v: number): number => Math.round(v * 1e6) / 1e6;
 
 const radToDeciDeg = (rad: number): number => Math.round((rad * 1800) / Math.PI);
 
@@ -134,7 +140,10 @@ export function omapGeoreferencing(g: OmapGeoreferencing): { georeferencing: Geo
     const dx = -g.refPoint.x * s;
     const dy = g.refPoint.y * s;
     const a = (g.grivation * Math.PI) / 180;
-    paperOrigin = { x: pref.x + dx * Math.cos(a) + dy * Math.sin(a), y: pref.y - dx * Math.sin(a) + dy * Math.cos(a) };
+    paperOrigin = {
+      x: roundMicrometre(pref.x + dx * Math.cos(a) + dy * Math.sin(a)),
+      y: roundMicrometre(pref.y - dx * Math.sin(a) + dy * Math.cos(a)),
+    };
   }
   const georeferencing: Georeferencing = {
     crs,
@@ -333,5 +342,6 @@ export function omapToDocumentInput(file: OmapFile, opts: OmapSourceOptions): Om
     symbols,
     warnings: [...warnings.values()],
   };
-  return { input: { header, objects }, counts, warnings: [...warnings.values()] };
+  const input: MapDocumentInput = { header, objects };
+  return { input, counts, warnings: [...warnings.values()], analysis: analyseDocumentInput(input) };
 }

@@ -20,6 +20,7 @@ import type { Prisma, PrismaClient } from "../generated/prisma/client.js";
 import { IMPORTER_VERSIONS, type ImportStage, type MapSourceKind } from "../import/ocad.js";
 import { storeImportedDocument, touchDocument } from "./documents.js";
 import { deriveDocumentPreviews } from "./previews.js";
+import { writeDocumentMapFileColumns } from "./map-file-metadata.js";
 import type { ImportWorkerData, ImportWorkerMessage } from "./import-worker.js";
 
 type Db = PrismaClient | Prisma.TransactionClient;
@@ -266,7 +267,8 @@ async function execute(db: Db, job: ImportJobRow): Promise<void> {
 
 /**
  * Pin the finished document where the job's target points: the event's
- * `map_files` row(s) carrying this source, or the club map's version for
+ * `map_files` row(s) carrying this source — with their quick-access
+ * columns recomputed from the document — or the club map's version for
  * this source — a new `club_map_versions` row, or the existing one's
  * `document_hash` moved to the new document. Idempotent. A job without a
  * target (a review round) pins nothing; `finalise` pins it later.
@@ -275,6 +277,8 @@ export async function applyJobResult(db: Db, job: Pick<ImportJobRow, "eventId" |
   if (!job.documentHash) return;
   if (job.eventId !== null) {
     await db.mapFile.updateMany({ where: { eventId: job.eventId, sourceHash: job.sourceHash }, data: { documentHash: job.documentHash } });
+    // Quick-access columns from the pinned document (docs/map-storage.md §6.4).
+    await writeDocumentMapFileColumns(db, job.eventId, job.sourceHash, job.documentHash);
   }
   if (job.clubMapId !== null) {
     const existing = await db.clubMapVersion.findFirst({ where: { clubMapId: job.clubMapId, sourceHash: job.sourceHash }, select: { id: true, documentHash: true } });

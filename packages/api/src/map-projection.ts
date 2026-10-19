@@ -6,45 +6,16 @@
  *
  * The conversion chain:
  *   OCAD internal (1/100 mm on paper)
- *     → CRS.toProjectedCoord() → national grid (meters)
+ *     → rotate by −grivation, scale, offset → national grid (meters)
  *     → proj4 (EPSG:XXXX → EPSG:4326) → WGS84 [lng, lat]
  */
 
-import proj4 from "proj4";
+import { mapGeo } from "@oxygen/shared";
 
-// ─── proj4 projection definitions ────────────────────────────
-// proj4 only knows EPSG:4326 and EPSG:3857 by default.
-// We register Nordic + common projections that OCAD maps use.
-
-// Sweden
-proj4.defs("EPSG:3006", "+proj=utm +zone=33 +ellps=GRS80 +towgs84=0,0,0,0,0,0,0 +units=m +no_defs");
-proj4.defs("EPSG:3007", "+proj=tmerc +lat_0=0 +lon_0=12 +k=1 +x_0=150000 +y_0=0 +ellps=GRS80 +towgs84=0,0,0,0,0,0,0 +units=m +no_defs");
-proj4.defs("EPSG:3008", "+proj=tmerc +lat_0=0 +lon_0=13.5 +k=1 +x_0=150000 +y_0=0 +ellps=GRS80 +towgs84=0,0,0,0,0,0,0 +units=m +no_defs");
-proj4.defs("EPSG:3009", "+proj=tmerc +lat_0=0 +lon_0=15 +k=1 +x_0=150000 +y_0=0 +ellps=GRS80 +towgs84=0,0,0,0,0,0,0 +units=m +no_defs");
-proj4.defs("EPSG:3010", "+proj=tmerc +lat_0=0 +lon_0=16.5 +k=1 +x_0=150000 +y_0=0 +ellps=GRS80 +towgs84=0,0,0,0,0,0,0 +units=m +no_defs");
-proj4.defs("EPSG:3011", "+proj=tmerc +lat_0=0 +lon_0=18 +k=1 +x_0=150000 +y_0=0 +ellps=GRS80 +towgs84=0,0,0,0,0,0,0 +units=m +no_defs");
-proj4.defs("EPSG:3012", "+proj=tmerc +lat_0=0 +lon_0=14.25 +k=1 +x_0=150000 +y_0=0 +ellps=GRS80 +towgs84=0,0,0,0,0,0,0 +units=m +no_defs");
-proj4.defs("EPSG:3013", "+proj=tmerc +lat_0=0 +lon_0=15.75 +k=1 +x_0=150000 +y_0=0 +ellps=GRS80 +towgs84=0,0,0,0,0,0,0 +units=m +no_defs");
-proj4.defs("EPSG:3014", "+proj=tmerc +lat_0=0 +lon_0=17.25 +k=1 +x_0=150000 +y_0=0 +ellps=GRS80 +towgs84=0,0,0,0,0,0,0 +units=m +no_defs");
-proj4.defs("EPSG:3015", "+proj=tmerc +lat_0=0 +lon_0=18.75 +k=1 +x_0=150000 +y_0=0 +ellps=GRS80 +towgs84=0,0,0,0,0,0,0 +units=m +no_defs");
-proj4.defs("EPSG:3016", "+proj=tmerc +lat_0=0 +lon_0=20.25 +k=1 +x_0=150000 +y_0=0 +ellps=GRS80 +towgs84=0,0,0,0,0,0,0 +units=m +no_defs");
-proj4.defs("EPSG:3017", "+proj=tmerc +lat_0=0 +lon_0=21.75 +k=1 +x_0=150000 +y_0=0 +ellps=GRS80 +towgs84=0,0,0,0,0,0,0 +units=m +no_defs");
-proj4.defs("EPSG:3018", "+proj=tmerc +lat_0=0 +lon_0=23.25 +k=1 +x_0=150000 +y_0=0 +ellps=GRS80 +towgs84=0,0,0,0,0,0,0 +units=m +no_defs");
-
-// Finland
-proj4.defs("EPSG:3067", "+proj=utm +zone=35 +ellps=GRS80 +towgs84=0,0,0,0,0,0,0 +units=m +no_defs");
-
-// Norway (NGO zones + UTM)
-proj4.defs("EPSG:25832", "+proj=utm +zone=32 +ellps=GRS80 +towgs84=0,0,0,0,0,0,0 +units=m +no_defs");
-proj4.defs("EPSG:25833", "+proj=utm +zone=33 +ellps=GRS80 +towgs84=0,0,0,0,0,0,0 +units=m +no_defs");
-proj4.defs("EPSG:25834", "+proj=utm +zone=34 +ellps=GRS80 +towgs84=0,0,0,0,0,0,0 +units=m +no_defs");
-proj4.defs("EPSG:25835", "+proj=utm +zone=35 +ellps=GRS80 +towgs84=0,0,0,0,0,0,0 +units=m +no_defs");
-
-// WGS84 UTM zones (commonly used in Nordic countries)
-for (let zone = 32; zone <= 36; zone++) {
-  const code = 32600 + zone;
-  proj4.defs(`EPSG:${code}`, `+proj=utm +zone=${zone} +datum=WGS84 +units=m +no_defs`);
-}
+// The projection maths and the proj4 EPSG definitions live in
+// `@oxygen/shared` `mapGeo` (docs/map-import.md §3.8), shared with the
+// import's stage 5. This module adapts the OCAD reader's `getCrs()` to it
+// and keeps the legacy-only coordinate-range EPSG inference.
 
 // ─── Types ───────────────────────────────────────────────────
 
@@ -94,12 +65,29 @@ export function withGrivationCorrection(
   };
 }
 
-export interface WGS84Bounds {
-  north: number;
-  south: number;
-  east: number;
-  west: number;
+export type WGS84Bounds = mapGeo.Wgs84Bounds;
+
+/**
+ * The shared paper frame for a reader CRS, or null when no EPSG code is
+ * usable (`getEpsgString`). OCAD units, grid scale factor 1 — the reader
+ * ignores ScalePar `b`, and so does every legacy consumer.
+ */
+export function frameFromOcadCrs(crs: OcadCrs): mapGeo.PaperFrame | null {
+  const epsg = getEpsgString(crs);
+  if (!epsg) return null;
+  return {
+    unitsPerMm: 100,
+    mapScale: crs.scale,
+    georeferencing: {
+      crs: { authority: "EPSG", code: Number(epsg.slice("EPSG:".length)), name: "" },
+      paperOrigin: { x: crs.easting, y: crs.northing },
+      gridRotationDeg: (crs.grivation * 180) / Math.PI,
+      gridScaleFactor: 1,
+    },
+  };
 }
+
+const boundsOf = ([minX, minY, maxX, maxY]: number[]): mapGeo.PaperBounds => ({ minX, minY, maxX, maxY });
 
 // ─── Conversion functions ────────────────────────────────────
 
@@ -112,12 +100,8 @@ export function ocadToWgs84(
   yHundredthsMm: number,
   crs: OcadCrs,
 ): { lat: number; lng: number } | null {
-  const epsg = getEpsgString(crs);
-  if (!epsg) return null;
-
-  const projected = crs.toProjectedCoord([xHundredthsMm, yHundredthsMm]);
-  const [lng, lat] = proj4(epsg, "EPSG:4326", projected);
-  return { lat, lng };
+  const frame = frameFromOcadCrs(crs);
+  return frame ? mapGeo.paperToWgs84(frame, xHundredthsMm, yHundredthsMm) : null;
 }
 
 /**
@@ -142,28 +126,8 @@ export function ocadBoundsToWgs84(
   bounds: number[],
   crs: OcadCrs,
 ): WGS84Bounds | null {
-  const epsg = getEpsgString(crs);
-  if (!epsg) return null;
-
-  const [minX, minY, maxX, maxY] = bounds;
-  const corners = [
-    [minX, minY],
-    [maxX, minY],
-    [minX, maxY],
-    [maxX, maxY],
-  ];
-
-  const wgs84Points = corners.map((c) => {
-    const projected = crs.toProjectedCoord(c);
-    return proj4(epsg, "EPSG:4326", projected);
-  });
-
-  return {
-    north: Math.max(...wgs84Points.map((p) => p[1])),
-    south: Math.min(...wgs84Points.map((p) => p[1])),
-    east: Math.max(...wgs84Points.map((p) => p[0])),
-    west: Math.min(...wgs84Points.map((p) => p[0])),
-  };
+  const frame = frameFromOcadCrs(crs);
+  return frame ? mapGeo.wgs84Bounds(frame, boundsOf(bounds)) : null;
 }
 
 // ─── Tile math ──────────────────────────────────────────────
@@ -189,29 +153,8 @@ export function wgs84ToOcad(
   lng: number,
   crs: OcadCrs,
 ): { x: number; y: number } | null {
-  const epsg = getEpsgString(crs);
-  if (!epsg) return null;
-
-  // WGS84 → projected (national grid meters)
-  const [projX, projY] = proj4("EPSG:4326", epsg, [lng, lat]);
-
-  // Reverse the affine transform in toProjectedCoord:
-  //   Forward: rotated = rotate(ocad, -grivation)
-  //            projected = rotated * (scale / 100000) + [easting, northing]
-  //   Inverse: rotated = (projected - [easting, northing]) / (scale / 100000)
-  //            ocad = rotate(rotated, +grivation)
-  const hundredsMmToMeter = 1 / (100 * 1000);
-  const scaleFactor = crs.scale * hundredsMmToMeter;
-  const rx = (projX - crs.easting) / scaleFactor;
-  const ry = (projY - crs.northing) / scaleFactor;
-
-  // Un-rotate by +grivation (inverse of forward's -grivation)
-  const cosG = Math.cos(crs.grivation);
-  const sinG = Math.sin(crs.grivation);
-  const ocadX = rx * cosG - ry * sinG;
-  const ocadY = rx * sinG + ry * cosG;
-
-  return { x: ocadX, y: ocadY };
+  const frame = frameFromOcadCrs(crs);
+  return frame ? mapGeo.wgs84ToPaper(frame, lat, lng) : null;
 }
 
 /**
@@ -223,21 +166,8 @@ export function computeMapNorthOffset(
   bounds: number[],
   crs: OcadCrs,
 ): number | null {
-  const [minX, minY, maxX, maxY] = bounds;
-  const midX = (minX + maxX) / 2;
-  // Two points on the same OCAD vertical line (same X), separated in Y
-  const p1 = ocadToWgs84(midX, minY + (maxY - minY) * 0.25, crs);
-  const p2 = ocadToWgs84(midX, minY + (maxY - minY) * 0.75, crs);
-  if (!p1 || !p2) return null;
-
-  // Compute bearing from p1 to p2
-  const dLng = (p2.lng - p1.lng) * Math.PI / 180;
-  const lat1r = p1.lat * Math.PI / 180;
-  const lat2r = p2.lat * Math.PI / 180;
-  const y = Math.sin(dLng) * Math.cos(lat2r);
-  const x = Math.cos(lat1r) * Math.sin(lat2r) -
-    Math.sin(lat1r) * Math.cos(lat2r) * Math.cos(dLng);
-  return Math.atan2(y, x) * 180 / Math.PI;
+  const frame = frameFromOcadCrs(crs);
+  return frame ? mapGeo.paperNorthBearingDeg(frame, boundsOf(bounds)) : null;
 }
 
 /**
@@ -288,17 +218,11 @@ export function getEpsgString(crs: OcadCrs): string | null {
     }
   }
 
-  const epsg = `EPSG:${code}`;
-
-  // Check if proj4 knows this projection
-  try {
-    proj4(epsg);
-  } catch {
+  const epsg = mapGeo.epsgName(code);
+  if (!epsg) {
     console.warn(
-      `[map-projection] proj4 does not have a definition for ${epsg}. Add it to map-projection.ts.`,
+      `[map-projection] proj4 does not have a definition for EPSG:${code}. Add it to packages/shared/src/geo/epsg.ts.`,
     );
-    return null;
   }
-
   return epsg;
 }

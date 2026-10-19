@@ -7,7 +7,7 @@ import { readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import { encodeMapDocument, decodeMapDocument } from "../../map-document/codec.js";
+import { encodeMapDocument, decodeMapDocument, inputBounds } from "../../map-document/codec.js";
 import { OBJECT_TYPE } from "../../map-document/header.js";
 import { COORD_FLAG } from "../../render/pass-stream.js";
 import type { AreaSymbol, LineSymbol, TextSymbol } from "../../render/symbol.js";
@@ -39,9 +39,16 @@ describe("omapToDocumentInput (fixture)", () => {
 
   it("georeferencing: UTM → EPSG, paper origin from the shifted reference point, grivation, scale factor", () => {
     expect(header.georeferencing.crs).toEqual({ authority: "EPSG", code: 32633, name: "WGS 84 / UTM zone 33N" });
-    expect(header.georeferencing.paperOrigin!.x).toBeCloseTo(499518.116, 2);
-    expect(header.georeferencing.paperOrigin!.y).toBeCloseTo(6600421.26, 2);
+    // Rounded to 1e-6 m so no unrounded sin/cos result reaches the document bytes (docs/map-import.md §4.4, §6).
+    expect(header.georeferencing.paperOrigin).toEqual({ x: 499518.116475, y: 6600421.260411 });
     expect(header.georeferencing).toMatchObject({ gridRotationDeg: 2.5, gridScaleFactor: 0.9996, declinationDeg: 5.5, realWorldEnabled: true });
+  });
+
+  it("stage 5: the analysis projects the fixture and finds no meridian cluster", () => {
+    expect(result.analysis.georeference).toMatchObject({ crs: "EPSG:32633", method: "epsg", projectable: true, gridRotationDeg: 2.5 });
+    expect(result.analysis.georeference.gridConvergenceDeg!).toBeCloseTo(0, 0);
+    expect(result.analysis.north.meridian).toBeNull();
+    expect(result.analysis.bounds).toEqual(inputBounds(objects));
   });
 
   it("print area: Mapper's y-down rectangle becomes a y-up window", () => {

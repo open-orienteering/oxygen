@@ -36,6 +36,8 @@ export interface MapImportResult {
   /** Stage 6–7 summaries (docs/map-symbols.md §9). */
   matching: mapImport.MatchingSummary;
   colourStack: mapImport.ColourStackSummary;
+  /** Stage 5 (docs/map-import.md §3.8): georeference and north lines; not part of the document. */
+  analysis: mapImport.DocumentAnalysis;
   /** `<library id>@<library version>` — part of the document's identity for dedup. */
   libraryVersion: string;
   timings: { read: number; normalise: number; match: number; encode: number };
@@ -107,7 +109,7 @@ export async function importMapToDocument(
 ): Promise<MapImportResult> {
   const { onStage, match: matchOpts } = opts;
   const fileHash = sha256Hex(file);
-  const { source: { input: sourceInput, counts, warnings }, read, normalise } = await readAndNormalise(file, fileName, kind, fileHash, opts);
+  const { source: { input: sourceInput, counts, warnings, analysis }, read, normalise } = await readAndNormalise(file, fileName, kind, fileHash, opts);
   onStage?.("match");
   let t = performance.now();
   const matched = mapImport.matchDocument(sourceInput, matchOpts);
@@ -125,6 +127,7 @@ export async function importMapToDocument(
     warnings: [...warnings, ...matched.warnings.map((w) => ({ code: w.code, count: w.count, message: w.message }))],
     matching: matched.matching,
     colourStack: matched.colourStack,
+    analysis,
     libraryVersion: documentLibraryVersion(matched.matching.library.id),
     timings: { read, normalise, match, encode },
   };

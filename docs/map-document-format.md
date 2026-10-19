@@ -117,14 +117,30 @@ through it. Palette entries inserted by colour alignment have
   paperOrigin: { x: 687000, y: 6574000 } | null,   // projected coordinates of paper (0, 0)
   gridRotationDeg: 4.98,     // grivation: grid north → paper +y, clockwise positive
   gridScaleFactor: 1,
-  declinationDeg?: 6.5, realWorldEnabled?: true, sourceGridId?: 13002 }
+  declinationDeg?: 5.5,      // OMAP only
+  realWorldEnabled?: true, sourceGridId?: 13002 }
 ```
 
 `crs` and `paperOrigin` are `null` together when the map is not
-georeferenced. `declinationDeg`, `realWorldEnabled` and `sourceGridId`
-are passed through from the source as written (OCAD ScalePar `d`, `r`,
-`i`) and are not interpreted by the importer. The operator's `rotation_correction` and the detected
-north lines are *not* here (02 §5).
+georeferenced. A source that declares a real-world grid the importer
+cannot map to EPSG also gets `null`, with `CRS_UNRESOLVED` (§2.6).
+`realWorldEnabled` and `sourceGridId` are passed through from the
+source as written (OCAD ScalePar `r`, `i`) and are not interpreted.
+`declinationDeg` is Mapper's `<georeferencing declination>` when
+non-zero; OCAD declares no declination (ScalePar `d` is the real-world
+grid distance in metres, not an angle, so it is not carried —
+`docs/map-import.md` §3.5).
+
+Every value here is **source-declared** — read, parsed or (OMAP
+`paperOrigin`) computed with one affine step and rounded to 1e-6 m —
+never derived by projection: the bytes must hash the same on every
+machine (`docs/map-import.md` §6). What the georeference *implies* — the
+WGS 84 position and extent, the meridian convergence, the drawn north
+lines and their tilt, the display north offset — is stage 5's output and
+lives in the import report (`georeference`, `north`) and in the
+`map_files` quick-access columns, computed by `@oxygen/shared` `mapGeo`
+from these fields (`docs/map-import.md` §3.8). The operator's
+`rotation_correction` and the detected north lines are *not* here (02 §5).
 
 ### 2.4 Objects: fixed-width `attrs` record, 24 bytes
 
@@ -164,6 +180,7 @@ them.
 | `EMPTY_GEOMETRY_DROPPED` | Objects with no coordinates were dropped |
 | `UNKNOWN_OBJECT_TYPE` | Object type outside 1–7, dropped |
 | `READER_WARNING` | The source reader reported warnings (count); the texts are in the import report |
+| `CRS_UNRESOLVED` | The source declares a real-world grid that maps to no EPSG code (OCAD grid id not in the reader's table and no `e`; Mapper CRS spec not parsed); `crs` and `paperOrigin` are null, the message names the grid |
 
 ## 3. File layout
 
@@ -314,6 +331,7 @@ typed arrays, warm.
 | `packages/shared/src/map-document/projection.ts` | `toJsonProjection`, `fromJsonProjection`, `projectBytes` |
 | `packages/shared/src/map-document/render-bridge.ts` | `documentRenderInput` |
 | `packages/shared/src/map-document/__tests__/` | codec, projection and bridge tests |
+| `packages/shared/src/geo/` | `mapGeo`: proj4 EPSG definitions, paper ↔ projected ↔ WGS 84 over §2.3, convergence, paper-north bearing, WGS 84 extent and calibration corners, meridian clustering (`docs/map-import.md` §3.8) |
 | `packages/api/src/import/ocad.ts` | `importOcadToDocument` (reader + normaliser + encode + hash) |
 | `packages/api/scripts/ocd-to-document.ts` | `pnpm --filter @oxygen/api document:from-ocd <in.ocd> [out.oxvm] [--json]` |
 | `packages/web/src/pages/dev/MapGlDocPage.tsx` | `/dev/map-gl-doc?via=document` — browser-side encode/decode report; accepts `.oxvm` |

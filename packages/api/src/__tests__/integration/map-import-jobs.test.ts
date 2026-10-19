@@ -16,7 +16,9 @@ import { SYSTEM_GROUP_IDS } from "@oxygen/shared";
 import { createTestEvent, disconnect, type TestEventContext } from "../helpers/test-db.js";
 import { makeCaller } from "../helpers/caller.js";
 import { grantSystemGroup } from "../../permissions.js";
-import { applyEventMap } from "../../event-map.js";
+import { applyEventMap, parseOcadMapMetadata } from "../../event-map.js";
+import { documentFrameSchema, mapFileMetadataFor } from "../../map-store/map-file-metadata.js";
+import { Prisma } from "../../generated/prisma/client.js";
 import {
   applyJobResult,
   getImportJob,
@@ -128,7 +130,7 @@ describe("import jobs from applyEventMap", () => {
     const source = await ctx.db.mapSource.findUniqueOrThrow({ where: { fileHash: fixtureHash }, select: { kind: true, fileName: true, uploadedBy: true } });
     expect(source).toEqual({ kind: "ocad", fileName: "test.ocd", uploadedBy: setter.id });
     const doc = await ctx.db.mapDocument.findUniqueOrThrow({ where: { hash: documentHash }, select: { report: true, lastReferencedAt: true } });
-    expect(doc.report).toMatchObject({ importer: "ocad-4", source: { fileName: "test.ocd", fileHash: fixtureHash }, counts: { objects: expect.any(Number) }, matching: { library: { id: "ISOM2017-2" } }, colourStack: { source: expect.any(Number) } });
+    expect(doc.report).toMatchObject({ importer: "ocad-5", source: { fileName: "test.ocd", fileHash: fixtureHash }, counts: { objects: expect.any(Number) }, matching: { library: { id: "ISOM2017-2" } }, colourStack: { source: expect.any(Number) } });
   }, 60_000);
 
   it("re-uploading bytes already imported by this importer records a done job without running the worker", async () => {
@@ -151,6 +153,51 @@ describe("import jobs from applyEventMap", () => {
     const file = await ctx.db.mapFile.findFirstOrThrow({ where: { eventId: ctx.eventId }, select: { fileName: true, documentHash: true } });
     expect(file).toEqual({ fileName: "renamed.ocd", documentHash });
   }, 30_000);
+
+  it("pins the quick-access columns from the document, equal to the raster path's (docs/map-storage.md §6.4)", async () => {
+    const doc = await ctx.db.mapDocument.findUniqueOrThrow({ where: { hash: documentHash }, select: { header: true, report: true } });
+    const report = doc.report as { georeference?: { crs: string }; north?: { meridian: { medianTiltDeg: number } | null } };
+    expect(report.georeference).toMatchObject({ crs: "EPSG:3006", projectable: true });
+    expect(report.north?.meridian).toMatchObject({ code: "601.0", count: 12 });
+    const expected = await parseOcadMapMetadata(fixture, 0);
+    expect(expected.calibration).toHaveLength(4);
+    const cols = { scale: true, bounds: true, northOffset: true, calibration: true } as const;
+    const file = await ctx.db.mapFile.findFirstOrThrow({ where: { eventId: ctx.eventId }, select: { id: true, ...cols } });
+    expect({ scale: file.scale, bounds: file.bounds, northOffset: file.northOffset, calibration: file.calibration }).toEqual(expected);
+    expect(mapFileMetadataFor(documentFrameSchema.parse(doc.header), report.north!.meridian!.medianTiltDeg, 0)).toEqual(expected);
+
+    // A row carrying an operator correction gets the corrected columns on (re-)pin; the pin is idempotent.
+    await ctx.db.mapFile.update({ where: { id: file.id }, data: { rotationCorrection: 11, scale: null, bounds: Prisma.DbNull, northOffset: null, calibration: Prisma.DbNull } });
+    const pin = { eventId: ctx.eventId, clubMapId: null, sourceHash: fixtureHash, documentHash };
+    await applyJobResult(ctx.db, pin);
+    await applyJobResult(ctx.db, pin);
+    const corrected = await ctx.db.mapFile.findUniqueOrThrow({ where: { id: file.id }, select: cols });
+    expect(corrected).toEqual(await parseOcadMapMetadata(fixture, 11));
+    expect(corrected.northOffset! - file.northOffset!).toBeCloseTo(11, 1);
+    await ctx.db.mapFile.update({ where: { id: file.id }, data: { rotationCorrection: 0, ...expected as object } });
+  }, 60_000);
+
+  it("leaves the columns alone when the document has no projectable CRS", async () => {
+    const other = await createTestEvent("map_jobs_nocrs");
+    try {
+      // Grid 99999 is in no table: the document says crs null + CRS_UNRESOLVED, the raster path still infers SWEREF99 TM.
+      const raw = readFileSync(FIXTURE);
+      const at = raw.indexOf(Buffer.from("\ti13002"));
+      expect(at).toBeGreaterThan(0);
+      const bytes = Buffer.concat([raw.subarray(0, at), Buffer.from("\ti99999"), raw.subarray(at + 7), Buffer.from(`nocrs-${suffix}`)]);
+      createdSourceHashes.add(sha256(bytes));
+      const applied = await applyEventMap(ctx.db, other.eventId, "nocrs.ocd", bytes, {});
+      expect(applied.importJob?.state).toBe("done");
+      const doc = await ctx.db.mapDocument.findUniqueOrThrow({ where: { hash: applied.documentHash! }, select: { header: true, report: true } });
+      expect((doc.header as { georeferencing: { crs: unknown } }).georeferencing.crs).toBeNull();
+      expect((doc.report as { warnings: { code: string }[] }).warnings.map((w) => w.code)).toContain("CRS_UNRESOLVED");
+      const file = await ctx.db.mapFile.findFirstOrThrow({ where: { eventId: other.eventId }, select: { scale: true, bounds: true, northOffset: true, calibration: true } });
+      expect(file.calibration).not.toBeNull();
+      expect(file).toEqual(await parseOcadMapMetadata(bytes, 0));
+    } finally {
+      await other.cleanup();
+    }
+  }, 60_000);
 
   it("fails cleanly on unreadable bytes of either kind", async () => {
     const bad = await startImportJob(ctx.db, { sourceHash: await garbageSource("ocad"), eventId: ctx.eventId });
@@ -178,7 +225,7 @@ describe("import jobs from applyEventMap", () => {
     expect(job.state).toBe("done");
     expect(job.documentHash).toBeTruthy();
     const doc = await ctx.db.mapDocument.findUniqueOrThrow({ where: { hash: job.documentHash! }, select: { importerVersion: true, header: true } });
-    expect(doc.importerVersion).toBe("omap-1");
+    expect(doc.importerVersion).toBe("omap-2");
     expect((doc.header as { source: { kind: string } }).source.kind).toBe("omap");
     // A second job for the same source skips the worker and reuses the document.
     const again = await startImportJob(ctx.db, { sourceHash: xmapHash, clubMapId: null, eventId: null });
