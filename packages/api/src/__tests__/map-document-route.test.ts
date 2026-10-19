@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { authoriseDocumentAccess, negotiateEncoding, parseRangeHeader, type DocumentAccessQueries } from "../map-store/routes.js";
+import { authoriseDocumentAccess, EDIT_ACCESS, negotiateEncoding, parseRangeHeader, type DocumentAccessQueries } from "../map-store/routes.js";
 import { documentHeaderSummary } from "../map-store/documents.js";
 import type { AuthUser } from "../auth.js";
 import type { mapDocument } from "@oxygen/shared";
@@ -73,6 +73,16 @@ describe("authoriseDocumentAccess", () => {
     expect(await authoriseDocumentAccess({ ...base, user }, own)).toEqual({ ok: true });
     expect(await authoriseDocumentAccess({ ...base, user: { ...user, id: "u2" } }, own)).toEqual({ ok: false, status: 403 });
     expect(await authoriseDocumentAccess(base, own)).toEqual({ ok: false, status: 401 });
+  });
+  it("in edit mode (decide / finalise) needs courses.edit on the event and never takes the kiosk key", async () => {
+    const caps = queries({ userHasCapability: async (_id, _d, _u, cap) => cap === "courses.view" });
+    expect(await authoriseDocumentAccess({ ...base, user, eventNameId: "itest" }, caps, EDIT_ACCESS)).toEqual({ ok: false, status: 403 });
+    const edit = queries({ userHasCapability: async (_id, _d, _u, cap) => cap === "courses.edit" });
+    expect(await authoriseDocumentAccess({ ...base, user, eventNameId: "itest" }, edit, EDIT_ACCESS)).toEqual({ ok: true });
+    expect(await authoriseDocumentAccess({ ...base, eventNameId: "itest", kioskKey: "secret" }, queries(), EDIT_ACCESS)).toEqual({ ok: false, status: 401 });
+    // The club and own-job clauses read the same in both modes.
+    expect(await authoriseDocumentAccess({ ...base, user }, queries({ clubVersionHasDocument: async () => true }), EDIT_ACCESS)).toEqual({ ok: true });
+    expect(await authoriseDocumentAccess({ ...base, user }, queries({ userStartedJobForDocument: async () => true }), EDIT_ACCESS)).toEqual({ ok: true });
   });
 });
 

@@ -1,7 +1,9 @@
 /**
  * Import job status (docs/map-storage.md §6.3; research 07 §8). The poll
  * is the engine: asking for a job that is queued, or running with a
- * stale heartbeat, makes this instance pick it up.
+ * stale heartbeat, makes this instance pick it up. The review round —
+ * `review` / `decide` / `finalise` (docs/map-import.md §2.2, research
+ * 06 §5.1) — lives here too.
  */
 
 import { z } from "zod";
@@ -11,9 +13,31 @@ import { prisma } from "../db.js";
 import { resolveEventCapabilities } from "../permissions.js";
 import { getImportJob, isClaimable, kickImportJobs, latestImportJobForEvent, type ImportJobRow } from "../map-store/jobs.js";
 import { backfillStatus, planBackfill, startBackfill, type BackfillRun } from "../map-store/backfill.js";
+import { DecisionInputError, reviewDecisionSchema } from "../map-store/decisions.js";
+import { buildReview, decideOnDocument, finaliseDocument } from "../map-store/review.js";
+import { checkDocumentAccess, EDIT_ACCESS, READ_ACCESS, type DocumentAccessMode } from "../map-store/routes.js";
+import type { Context } from "../trpc.js";
 import type { PrismaClient } from "../generated/prisma/client.js";
 
 const jobIdSchema = z.string().uuid();
+const documentHashSchema = z.string().regex(/^[0-9a-f]{64}$/, "a 64-digit lower-case hex document hash");
+
+/** The document route's predicate (docs/map-storage.md §4.2) for a tRPC caller; the event is `x-event-id`. */
+async function requireDocument(ctx: Context, hash: string, mode: DocumentAccessMode): Promise<void> {
+  const access = await checkDocumentAccess({ hash, authEnabled: ctx.authEnabled, user: ctx.user, kioskKey: mode.kiosk ? ctx.kioskKey : null, eventNameId: ctx.event?.nameId ?? null }, mode);
+  if (!access.ok) throw new TRPCError({ code: access.status === 401 ? "UNAUTHORIZED" : "FORBIDDEN", message: "No access to this map document" });
+}
+
+async function requireEventCapability(ctx: Context, cap: "courses.edit"): Promise<bigint> {
+  if (!ctx.event) throw new TRPCError({ code: "BAD_REQUEST", message: "No event selected (missing or unresolved x-event-id header)" });
+  if (ctx.authEnabled) {
+    const db = prisma();
+    const date = ctx.event.date ?? (await db.event.findUnique({ where: { id: ctx.event.id }, select: { date: true } }))?.date ?? new Date(0);
+    const caps = await resolveEventCapabilities({ db, eventId: ctx.event.id, eventDate: date, user: ctx.user, authEnabled: true });
+    if (!caps.has(cap)) throw new TRPCError({ code: "FORBIDDEN", message: `Missing capability ${cap}` });
+  }
+  return ctx.event.id;
+}
 
 async function present(db: PrismaClient, row: ImportJobRow) {
   const report = row.documentHash
@@ -93,6 +117,67 @@ export const mapImportRouter = router({
     kickIfClaimable(ctx.db, row);
     return present(ctx.db, row);
   }),
+
+  /**
+   * The review payload for a stored document (06 §5.1): one row per source
+   * symbol with its stored match, the matcher's top-3 candidates with
+   * reasons and swatch URLs, colour class and flags; the colour stack; the
+   * import report. Readable by whoever may fetch the document (§4.2).
+   */
+  review: authedProcedure
+    .input(z.object({ documentHash: documentHashSchema }))
+    .query(async ({ ctx, input }) => {
+      await requireDocument(ctx, input.documentHash, READ_ACCESS);
+      const review = await buildReview(prisma(), input.documentHash);
+      if (!review) throw new TRPCError({ code: "NOT_FOUND", message: "Map document not found" });
+      return review;
+    }),
+
+  /**
+   * Record review decisions as club symbol decisions and import the
+   * document's source again under them (06 §5.1, §5.3). The new document
+   * is pinned nowhere until `finalise`; the job is returned as `status`
+   * would, so a large map is polled like an upload.
+   */
+  decide: authedProcedure
+    .input(z.object({ documentHash: documentHashSchema, decisions: z.array(reviewDecisionSchema).min(1).max(5_000) }))
+    .mutation(async ({ ctx, input }) => {
+      await requireDocument(ctx, input.documentHash, EDIT_ACCESS);
+      const db = prisma();
+      let result;
+      try {
+        result = await decideOnDocument(db, { hash: input.documentHash, decisions: input.decisions, userId: ctx.user?.id ?? null });
+      } catch (err: unknown) {
+        if (err instanceof DecisionInputError) throw new TRPCError({ code: "BAD_REQUEST", message: err.message });
+        throw err;
+      }
+      if (!result.ok) throw new TRPCError({ code: "NOT_FOUND", message: "Map document not found" });
+      return { applied: result.applied, job: await present(db, result.job) };
+    }),
+
+  /**
+   * Pin a reviewed document where its source is the target's map: the
+   * current event's `map_files` rows (`courses.edit`), or a club map's
+   * version of that source (any signed-in user, as the club library).
+   */
+  finalise: authedProcedure
+    .input(z.object({
+      documentHash: documentHashSchema,
+      target: z.discriminatedUnion("kind", [z.object({ kind: z.literal("event") }), z.object({ kind: z.literal("club"), clubMapId: z.string().uuid() })]),
+    }))
+    .mutation(async ({ ctx, input }) => {
+      const target = input.target.kind === "event"
+        ? { kind: "event" as const, eventId: await requireEventCapability(ctx, "courses.edit") }
+        : { kind: "club" as const, clubMapId: input.target.clubMapId };
+      await requireDocument(ctx, input.documentHash, EDIT_ACCESS);
+      const result = await finaliseDocument(prisma(), input.documentHash, target);
+      if (!result.ok) {
+        if (result.reason === "not-found") throw new TRPCError({ code: "NOT_FOUND", message: "Map document not found" });
+        if (result.reason === "no-target") throw new TRPCError({ code: "NOT_FOUND", message: target.kind === "event" ? "The event has no map" : "Club map not found" });
+        throw new TRPCError({ code: "PRECONDITION_FAILED", message: "The target's map is not this document's source file" });
+      }
+      return { documentHash: input.documentHash, pinned: result.pinned, previous: result.previous };
+    }),
 
   /**
    * Backfill of pre-pipeline rows (docs/map-storage.md §6.7). `plan` is
