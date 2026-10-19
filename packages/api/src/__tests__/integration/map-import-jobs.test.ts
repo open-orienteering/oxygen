@@ -113,13 +113,13 @@ afterAll(async () => {
 
 describe("import jobs from applyEventMap", () => {
   it("runs the import as a job that finishes inside the hold, pins the document and persists the report", async () => {
-    const applied = await applyEventMap(ctx.db, ctx.eventId, "test.ocd", fixture, { uploadedBy: setter.id });
+    const applied = await applyEventMap(ctx.db, ctx.eventId, "test.ocd", fixture, { uploadedBy: setter.id, startedBy: setter.id });
     expect(applied.importJob?.state).toBe("done");
     expect(applied.documentHash).toMatch(/^[0-9a-f]{64}$/);
     documentHash = applied.documentHash!;
 
     const job = await ctx.db.mapImportJob.findUniqueOrThrow({ where: { id: applied.importJob!.id } });
-    expect(job).toMatchObject({ state: "done", stage: "done", progress: 1, sourceHash: fixtureHash, documentHash, eventId: ctx.eventId, clubMapId: null, claimedBy: INSTANCE_ID, error: null });
+    expect(job).toMatchObject({ state: "done", stage: "done", progress: 1, sourceHash: fixtureHash, documentHash, eventId: ctx.eventId, clubMapId: null, claimedBy: INSTANCE_ID, error: null, startedBy: setter.id });
     expect(job.heartbeatAt).not.toBeNull();
 
     const file = await ctx.db.mapFile.findFirstOrThrow({ where: { eventId: ctx.eventId }, select: { sourceHash: true, documentHash: true } });
@@ -133,13 +133,17 @@ describe("import jobs from applyEventMap", () => {
   it("re-uploading bytes already imported by this importer records a done job without running the worker", async () => {
     const before = await ctx.db.mapImportJob.count();
     const t = Date.now();
+    await ctx.db.mapDocument.update({ where: { hash: documentHash }, data: { lastReferencedAt: new Date(Date.now() - 40 * 86_400_000) } });
     const applied = await applyEventMap(ctx.db, ctx.eventId, "renamed.ocd", fixture, { uploadedBy: admin.id });
     expect(applied.importJob?.state).toBe("done");
     expect(applied.documentHash).toBe(documentHash);
     expect(Date.now() - t).toBeLessThan(10_000);
     expect(await ctx.db.mapImportJob.count()).toBe(before + 1);
     const job = await ctx.db.mapImportJob.findUniqueOrThrow({ where: { id: applied.importJob!.id } });
-    expect(job).toMatchObject({ state: "done", stage: "done", progress: 1, documentHash });
+    expect(job).toMatchObject({ state: "done", stage: "done", progress: 1, documentHash, startedBy: null });
+    // The dedup hit touched the document before pinning it (docs/map-storage.md §6.1, §8.2).
+    const touched = await ctx.db.mapDocument.findUniqueOrThrow({ where: { hash: documentHash }, select: { lastReferencedAt: true } });
+    expect(Date.now() - touched.lastReferencedAt.getTime()).toBeLessThan(60_000);
     // The first upload's name stays on the source row; the pin follows the new map_files row.
     const source = await ctx.db.mapSource.findUniqueOrThrow({ where: { fileHash: fixtureHash }, select: { fileName: true } });
     expect(source.fileName).toBe("test.ocd");
@@ -222,8 +226,10 @@ describe("import jobs from applyEventMap", () => {
     expect(latest?.id).toBe(queued.id);
   }, 60_000);
 
-  it("housekeeping drops abandoned uploads after 24 h and finished jobs after 7 days, nothing younger", async () => {
+  it("housekeeping drops uploads (abandoned or finalised) after 24 h and finished jobs after 7 days, nothing younger", async () => {
     const old = await ctx.db.mapUpload.create({ data: { eventId: ctx.eventId, fileName: "a.ocd", declaredBytes: 10, chunkBytes: 10, createdAt: new Date(Date.now() - 25 * 3_600_000) } });
+    const oldFinalised = await ctx.db.mapUpload.create({ data: { eventId: ctx.eventId, fileName: "f.ocd", declaredBytes: 10, chunkBytes: 10, finalisedHash: fixtureHash, createdAt: new Date(Date.now() - 25 * 3_600_000) } });
+    const freshFinalised = await ctx.db.mapUpload.create({ data: { eventId: ctx.eventId, fileName: "g.ocd", declaredBytes: 10, chunkBytes: 10, finalisedHash: fixtureHash } });
     const fresh = await ctx.db.mapUpload.create({ data: { eventId: ctx.eventId, fileName: "b.ocd", declaredBytes: 10, chunkBytes: 10 } });
     const oldJob = await ctx.db.mapImportJob.create({ data: { eventId: ctx.eventId, sourceHash: fixtureHash, state: "done", documentHash } });
     await ctx.db.$executeRaw`UPDATE oxygen.map_import_jobs SET updated_at = now() - interval '8 days' WHERE id = ${oldJob.id}::uuid`;
@@ -232,6 +238,10 @@ describe("import jobs from applyEventMap", () => {
     expect(swept.jobs).toBeGreaterThanOrEqual(1);
     expect(await ctx.db.mapUpload.findUnique({ where: { id: old.id } })).toBeNull();
     expect(await ctx.db.mapUpload.findUnique({ where: { id: fresh.id } })).not.toBeNull();
+    expect(await ctx.db.mapUpload.findUnique({ where: { id: oldFinalised.id } })).toBeNull();
+    expect(await ctx.db.mapUpload.findUnique({ where: { id: freshFinalised.id } })).not.toBeNull();
+    // The source the finalised rows named is untouched (SET NULL side, and the sweep deletes uploads only).
+    expect(await ctx.db.mapSource.count({ where: { fileHash: fixtureHash } })).toBe(1);
     expect(await ctx.db.mapImportJob.findUnique({ where: { id: oldJob.id } })).toBeNull();
   });
 });
@@ -246,6 +256,7 @@ describe("club maps are dual-written as series", () => {
     legacyId = created.id;
     clubMapId = created.clubMapId;
     expect(created.importJob?.state).toBe("done");
+    expect((await ctx.db.mapImportJob.findUniqueOrThrow({ where: { id: created.importJob!.id } })).startedBy).toBe(admin.id);
 
     const series = await ctx.db.clubMap.findUniqueOrThrow({ where: { id: clubMapId }, include: { versions: true, legacyRows: { select: { id: true } } } });
     expect(series).toMatchObject({ name: `Club ${suffix}`, colourProfile: "auto", createdBy: admin.id });
@@ -367,6 +378,7 @@ describe("chunked upload routes", () => {
     const caller = makeCaller(ctx.event, { user: setter, authEnabled: true, authMode: "proxy" });
     const good = await caller.course.applyUploadedMap({ fileHash: fixtureHash, fileName: "chunked.ocd" });
     expect(good).toMatchObject({ success: true, fileName: "chunked.ocd", documentHash });
+    expect((await ctx.db.mapImportJob.findUniqueOrThrow({ where: { id: good.importJob!.id } })).startedBy).toBe(setter.id);
     const file = await ctx.db.mapFile.findFirstOrThrow({ where: { eventId: ctx.eventId }, select: { fileName: true, sourceHash: true, documentHash: true } });
     expect(file).toEqual({ fileName: "chunked.ocd", sourceHash: fixtureHash, documentHash });
     const byDefault = await caller.course.applyUploadedMap({ fileHash: fixtureHash });

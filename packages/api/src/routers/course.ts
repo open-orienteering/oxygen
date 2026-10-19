@@ -1475,7 +1475,7 @@ export const courseRouter = router({
         ctx.event.id,
         input.fileName,
         buffer,
-        { uploadedBy: ctx.user?.id ?? null },
+        { uploadedBy: ctx.user?.id ?? null, startedBy: ctx.user?.id ?? null },
       );
       return { success: true as const, ...result };
     }),
@@ -1506,7 +1506,7 @@ export const courseRouter = router({
         ctx.event.id,
         input.fileName?.trim() || source.fileName,
         Buffer.from(source.bytes),
-        { uploadedBy: ctx.user?.id ?? null, fileHash: input.fileHash },
+        { uploadedBy: ctx.user?.id ?? null, startedBy: ctx.user?.id ?? null, fileHash: input.fileHash },
       );
       return { success: true as const, ...result };
     }),
@@ -1576,6 +1576,7 @@ export const courseRouter = router({
         {
           fromClubLibrary: true,
           uploadedBy: row.uploadedBy ?? ctx.user?.id ?? null,
+          startedBy: ctx.user?.id ?? null,
           rotationCorrection: row.rotationCorrection,
           colorProfile: row.colorProfile as
             | "auto"

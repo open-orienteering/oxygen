@@ -269,6 +269,7 @@ model User {
   mapUploads           MapUpload[]
   clubMapsCreated      ClubMap[]
   clubMapVersions      ClubMapVersion[]
+  mapImportJobs        MapImportJob[]
 
   @@map("users")
   @@schema("oxygen")
@@ -1362,18 +1363,22 @@ model MapImportJob {
   heartbeatAt  DateTime? @map("heartbeat_at") @db.Timestamptz(6)
   documentHash String?   @map("document_hash")
   error        String?
+  /// User whose request started the job (docs/map-storage.md §4.2); null for the backfill.
+  startedBy    String?   @map("started_by") @db.Uuid
   createdAt    DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt    DateTime  @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
 
-  event    Event?       @relation(fields: [eventId], references: [id], onDelete: Cascade)
-  clubMap  ClubMap?     @relation(fields: [clubMapId], references: [id], onDelete: Cascade)
-  source   MapSource    @relation(fields: [sourceHash], references: [fileHash], onDelete: Cascade)
-  document MapDocument? @relation(fields: [documentHash], references: [hash], onDelete: SetNull)
+  event     Event?       @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  clubMap   ClubMap?     @relation(fields: [clubMapId], references: [id], onDelete: Cascade)
+  source    MapSource    @relation(fields: [sourceHash], references: [fileHash], onDelete: Cascade)
+  document  MapDocument? @relation(fields: [documentHash], references: [hash], onDelete: SetNull)
+  starter   User?        @relation(fields: [startedBy], references: [id], onDelete: SetNull)
 
   @@index([state, heartbeatAt], map: "map_import_jobs_state_heartbeat_idx")
   @@index([eventId, createdAt])
   @@index([clubMapId, createdAt])
   @@index([sourceHash])
+  @@index([documentHash])
   @@map("map_import_jobs")
   @@schema("oxygen")
 }
