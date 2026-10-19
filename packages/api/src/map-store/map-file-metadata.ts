@@ -52,7 +52,11 @@ export async function writeDocumentMapFileColumns(db: Db, eventId: bigint, sourc
   if (!doc) return 0;
   const frame = documentFrameSchema.safeParse(doc.header);
   const report = mapImport.importReportSchema.safeParse(doc.report);
-  if (!frame.success || !report.success || !report.data.north) return 0;
+  if (!frame.success || !report.success) {
+    console.warn(`[map-file-metadata] document ${documentHash}: stored ${frame.success ? "report" : "header"} does not parse; quick-access columns not written:`, (frame.success ? report.error : frame.error)?.message);
+    return 0;
+  }
+  if (!report.data.north) return 0;
   const tilt = report.data.north.meridian?.medianTiltDeg ?? null;
   const rows = await db.mapFile.findMany({ where: { eventId, sourceHash }, select: { id: true, rotationCorrection: true } });
   let written = 0;
@@ -63,9 +67,10 @@ export async function writeDocumentMapFileColumns(db: Db, eventId: bigint, sourc
       where: { id: row.id },
       data: {
         scale: m.scale,
-        bounds: (m.bounds ?? undefined) as Prisma.InputJsonValue | undefined,
+        // Spread into plain object types, which Prisma's JSON input accepts without a cast.
+        bounds: m.bounds ? { ...m.bounds } : undefined,
         northOffset: m.northOffset,
-        calibration: (m.calibration ?? undefined) as unknown as Prisma.InputJsonValue | undefined,
+        calibration: m.calibration?.map((c) => ({ ...c })),
       },
     });
     written++;

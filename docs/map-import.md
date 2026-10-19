@@ -290,8 +290,11 @@ stale border references, one too-narrow framing line.
   `declinationDeg`.
 - A real-world grid that does not resolve (`r = 1` with `i ≠ 0` or an
   `e` that is no positive integer) gives `crs: null`, `paperOrigin: null`
-  and `CRS_UNRESOLVED` naming the grid (`grid 1000`), as on the OMAP
-  path (§4.4). The legacy raster path's coordinate-range inference is
+  and `CRS_UNRESOLVED` naming the grid (`grid 1000`, `EPSG abc`), as on
+  the OMAP path (§4.4). A CRS that resolves while ScalePar `x` / `y` are
+  missing is dropped the same way (`EPSG:3006 without ScalePar x/y`), so
+  `crs` and `paperOrigin` stay null together
+  (`docs/map-document-format.md` §2.3). The legacy raster path's coordinate-range inference is
   not applied here (§2.2).
 - `printWindow` from PrintPar (1026); `exportRectangles` from string 26.
 

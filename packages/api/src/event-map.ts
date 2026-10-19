@@ -65,7 +65,8 @@ export type ResolvedMapNorth = {
   meridianStalenessDeg: number | null;
 };
 
-type OcadParsed = OcadNorthSource & {
+/** The fork's `readOcad` result as both the north analysis and the shared normaliser see it. */
+type OcadParsed = OcadNorthSource & mapImport.OcadFileLike & {
   getBounds(): number[];
 };
 
@@ -91,7 +92,7 @@ function metadataFromOcad(
   // job's pin uses (map-store/map-file-metadata.ts), so this write and the
   // pin agree. Symbol conversion is skipped: only objects, symbol codes
   // and georeferencing matter here.
-  const { input, analysis } = mapImport.ocadToDocumentInput(ocad as unknown as mapImport.OcadFileLike, {
+  const { input, analysis } = mapImport.ocadToDocumentInput(ocad, {
     fileName: "",
     fileHash: "",
     fileBytes: 0,

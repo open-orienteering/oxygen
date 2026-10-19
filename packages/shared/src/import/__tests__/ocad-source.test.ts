@@ -86,6 +86,15 @@ describe("ocadGeoreferencing", () => {
     expect(g.unresolvedCrs).toBeUndefined();
   });
 
+  it("keeps crs and paperOrigin null together: a resolved grid without x/y is unresolved", () => {
+    const s = source();
+    s.parameterStrings["1039"] = [{ _pairs: [{ code: "m", value: "10000" }, { code: "r", value: "1" }, { code: "i", value: "13002" }] }];
+    const g = ocadGeoreferencing(s);
+    expect(g.georeferencing.crs).toBeNull();
+    expect(g.georeferencing.paperOrigin).toBeNull();
+    expect(g.unresolvedCrs).toBe("EPSG:3006 without ScalePar x/y");
+  });
+
   it("prefers the grid table over `e`", () => {
     const s = scalePar([{ code: "i", value: "13002" }, { code: "e", value: "3010" }]);
     s.getCrs = () => ({ code: 3006, catalog: "EPSG", name: "SWEREF99 TM", gridId: 13002 });
@@ -98,6 +107,12 @@ describe("ocadGeoreferencing", () => {
     expect(g.georeferencing.paperOrigin).toBeNull();
     expect(g.unresolvedCrs).toBe("grid 1000");
     expect(ocadGeoreferencing(scalePar([{ code: "i", value: "0" }])).unresolvedCrs).toBeUndefined();
+    // An `e` that is no positive integer does not resolve either.
+    for (const e of ["0", "abc"]) {
+      const bad = ocadGeoreferencing(scalePar([{ code: "i", value: "0" }, { code: "e", value: e }]));
+      expect(bad.georeferencing.crs).toBeNull();
+      expect(bad.unresolvedCrs).toBe(`EPSG ${e}`);
+    }
     expect(ocadGeoreferencing(scalePar([])).unresolvedCrs).toBeUndefined();
   });
 

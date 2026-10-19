@@ -191,6 +191,9 @@ export function ocadGeoreferencing(ocad: OcadFileLike): { georeferencing: Georef
   if (!crs && epsg !== undefined && Number.isInteger(epsg) && epsg > 0) crs = { authority: "EPSG", code: epsg, name: `EPSG:${epsg}` };
   const r = sp.get("r");
   const x = num(sp.get("x")), y = num(sp.get("y"));
+  // `crs` and `paperOrigin` are null together (docs/map-document-format.md §2.3).
+  const missingOrigin = crs !== null && (x === undefined || y === undefined) ? `${crs.authority}:${crs.code} without ScalePar x/y` : undefined;
+  if (missingOrigin) crs = null;
   const georeferencing: Georeferencing = {
     crs,
     paperOrigin: crs && x !== undefined && y !== undefined ? { x, y } : null,
@@ -203,9 +206,9 @@ export function ocadGeoreferencing(ocad: OcadFileLike): { georeferencing: Georef
   };
   if (r !== undefined) georeferencing.realWorldEnabled = r === "1";
   if (gid !== undefined) georeferencing.sourceGridId = gid;
-  const unresolvedCrs = !crs && r === "1" && ((gid !== undefined && gid !== 0) || epsg !== undefined)
-    ? [gid ? `grid ${gid}` : "", epsg !== undefined ? `EPSG ${sp.get("e")}` : ""].filter(Boolean).join(", ")
-    : undefined;
+  const unresolvedCrs = missingOrigin ?? (!crs && r === "1" && ((gid !== undefined && gid !== 0) || sp.get("e") !== undefined)
+    ? [gid ? `grid ${gid}` : "", sp.get("e") !== undefined ? `EPSG ${sp.get("e")}` : ""].filter(Boolean).join(", ")
+    : undefined);
   return unresolvedCrs ? { georeferencing, mapScale, unresolvedCrs } : { georeferencing, mapScale };
 }
 
