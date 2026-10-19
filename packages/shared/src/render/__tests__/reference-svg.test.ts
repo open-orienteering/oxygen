@@ -3,6 +3,8 @@ import { fixtureColours, renderFixtures } from "../__fixtures__/streams/index.js
 import { COORD_FLAG, makePath } from "../pass-stream.js";
 import { passStreamBounds, passStreamToSvg, pathToSvgD } from "../reference-svg.js";
 import { passStreamFromJson } from "../stream-json.js";
+import { symbolise } from "../symbolise.js";
+import { PILOT, pilotSymbols } from "../__fixtures__/pilot-symbols.js";
 
 const colour = (i: number) => fixtureColours[i] ?? "#ff00ff";
 
@@ -93,6 +95,24 @@ describe("passStreamToSvg", () => {
     });
     expect(svg).toContain('transform="matrix(3 0 0 3 1000 5000)"');
     expect(svg).not.toContain('<rect x="1000"');
+  });
+
+  it("leaves out clipped groups whose clip lies wholly outside explicit bounds (resvg abort guard)", () => {
+    const hatch = passStreamFromJson(renderFixtures["hatch-area"]);
+    const far = passStreamToSvg(hatch, { colour, bounds: { minX: 100000, minY: 100000, maxX: 120000, maxY: 120000 } });
+    expect(far).not.toContain("clipPath");
+    expect(far).not.toContain('data-kind="hatch"');
+    const partly = passStreamToSvg(hatch, { colour, bounds: { minX: 10000, minY: 10000, maxX: 120000, maxY: 120000 } });
+    expect(partly).toContain('data-kind="hatch"');
+
+    const { stream } = symbolise({
+      objects: [{ symbolIdx: PILOT.sandyGround213, path: makePath([0, 0, 10000, 0, 10000, 10000, 0, 10000], undefined, true) }],
+      symbols: pilotSymbols,
+      fonts: [],
+    });
+    const clippedGlyphs = (svg: string) => (svg.match(/data-kind="glyph"[^>]*clip-path/g) ?? []).length;
+    expect(clippedGlyphs(passStreamToSvg(stream, { colour }))).toBeGreaterThan(0);
+    expect(clippedGlyphs(passStreamToSvg(stream, { colour, bounds: { minX: 50000, minY: 0, maxX: 60000, maxY: 10000 } }))).toBe(0);
   });
 
   it("honours explicit bounds and background", () => {

@@ -7,7 +7,7 @@
 
 import { render } from "@oxygen/shared";
 import { loadBundledFont, glyphOutlineFrom } from "./fonts.js";
-import { rasterisePassStream } from "./reference-raster.js";
+import { encodePng, rasterisePassStream } from "./reference-raster.js";
 
 /**
  * Goldens are rendered at this multiple of the golden density and box-
@@ -37,13 +37,4 @@ export async function renderGoldenPng(name: render.GoldenSceneName): Promise<Buf
     supersample: GOLDEN_SUPERSAMPLE,
   });
   return encodePng(img);
-}
-
-export async function encodePng(img: { width: number; height: number; pixels: Uint8Array }): Promise<Buffer> {
-  const sharp = (await import("sharp")).default;
-  return sharp(Buffer.from(img.pixels.buffer, img.pixels.byteOffset, img.pixels.byteLength), {
-    raw: { width: img.width, height: img.height, channels: 4 },
-  })
-    .png()
-    .toBuffer();
 }
