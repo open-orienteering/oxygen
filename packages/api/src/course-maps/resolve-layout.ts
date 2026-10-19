@@ -61,6 +61,8 @@ export interface LayoutCourseSource {
   name: string;
   lengthM: number;
   climbM: number;
+  /** Visit-order mode — free-order drops legs and uses code labels. */
+  orderMode?: "ordered" | "free_order";
   /** GeoJSON FeatureCollection from the course importer. */
   geometry?: unknown;
   classes?: Array<{ name: string }>;
@@ -149,6 +151,11 @@ export interface ResolvedMapLayout {
   window: MapWindow;
   controls: CourseOverlayControl[];
   legs: CourseOverlayLeg[];
+  /**
+   * How control numbers are labelled on the overprint. Free-order and
+   * all-controls maps use punch codes; ordered course maps use 1,2,3…
+   */
+  labelMode: "sequence" | "code";
   /**
    * Description block rows. Course maps carry the full IOF sheet (start,
    * controls, specials, finish); all-controls maps list control rows only.
@@ -375,6 +382,7 @@ export function resolveMapLayout(
       courseName: input.course.name,
       lengthM: input.course.lengthM,
       climbM: input.course.climbM,
+      orderMode: input.course.orderMode ?? "ordered",
       controls: controlRows.map((control, index) => {
         const source = rawControls[regularControls.indexOf(control)];
         return {
@@ -402,12 +410,19 @@ export function resolveMapLayout(
     }));
   }
 
+  const freeOrder = input.course?.orderMode === "free_order";
   const legs =
     input.kind === "course"
-      ? courseGeometryLegs(input.course?.geometry)
+      ? courseGeometryLegs(input.course?.geometry).filter(
+          (leg) =>
+            // Free-order: keep marked/forbidden/restricted overlays, drop
+            // connecting course legs (including any leftover OCD legs).
+            !freeOrder || (leg.kind ?? "leg") !== "leg",
+        )
       : [];
   if (
     input.kind === "course" &&
+    !freeOrder &&
     !legs.some((leg) => (leg.kind ?? "leg") === "leg")
   ) {
     for (let index = 0; index < controls.length - 1; index += 1) {
@@ -420,6 +435,9 @@ export function resolveMapLayout(
       });
     }
   }
+
+  const labelMode: "sequence" | "code" =
+    input.kind === "all_controls" || freeOrder ? "code" : "sequence";
 
   const center =
     input.windowCenter ??
@@ -463,6 +481,7 @@ export function resolveMapLayout(
     window,
     controls,
     legs,
+    labelMode,
     descriptionRows,
     descriptionHeader,
     overprintScale: (input.mapScale ?? printScale) / printScale,

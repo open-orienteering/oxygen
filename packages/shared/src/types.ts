@@ -423,6 +423,11 @@ export interface ClubDetail {
 import type { ExpectedPosition } from "./readout.js";
 export type { ExpectedPosition } from "./readout.js";
 
+/** How a course's controls must be visited. */
+export type CourseOrderMode = "ordered" | "free_order";
+
+export const COURSE_ORDER_MODES = ["ordered", "free_order"] as const;
+
 export interface CourseInfo {
   id: number;
   name: string;
@@ -431,6 +436,11 @@ export interface CourseInfo {
   controls: string;
   controlCount: number;
   numberOfMaps?: number;
+  /**
+   * Visit-order mode. Offline matching uses this so a free-order course
+   * evaluates identically on the client and the server.
+   */
+  orderMode: CourseOrderMode;
   /**
    * Status-aware per-position descriptors for the course, resolved from
    * each referenced oControl's Numbers + Status. Used for offline punch
@@ -881,6 +891,8 @@ export interface CourseSummary {
   length: number; // in meters
   climb: number;
   numberOfMaps: number;
+  /** Visit-order mode: sequential vs any-order (no legs / sequence numbers). */
+  orderMode: CourseOrderMode;
   firstAsStart: boolean;
   lastAsFinish: boolean;
   /**

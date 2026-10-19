@@ -65,6 +65,8 @@ export interface ParsedCourseControl {
   controlId: string;
   type: "Start" | "Control" | "Finish";
   legLength: number;    // meters
+  /** IOF `randomOrder="true"` — free-order block member. */
+  randomOrder?: boolean;
 }
 
 export interface ParsedCourse {
@@ -72,6 +74,12 @@ export interface ParsedCourse {
   length: number;       // meters
   climb: number;
   controls: ParsedCourseControl[];
+  /**
+   * Visit-order mode. Set to `free_order` when every Control-type
+   * CourseControl carries `randomOrder="true"` (Purple Pen / Condes
+   * whole-course pattern). Partial runs stay `ordered`.
+   */
+  orderMode?: "ordered" | "free_order";
 }
 
 export interface ClassAssignment {
@@ -198,14 +206,31 @@ export function parseIOFCourseData(xmlContent: string): ParsedCourseData {
     const rawCCs = rc.CourseControl ?? [];
     const courseControls: ParsedCourseControl[] = [];
     for (const cc of Array.isArray(rawCCs) ? rawCCs : [rawCCs]) {
+      // IOF / Purple Pen emit randomOrder="true"; also accept bare/empty
+      // boolean forms from older exporters.
+      const rawRo = cc["@_randomOrder"];
+      const randomOrder =
+        rawRo === true ||
+        rawRo === "" ||
+        safeStr(rawRo).toLowerCase() === "true";
       courseControls.push({
         controlId: safeStr(cc.Control),
         type: safeStr(cc["@_type"]) as ParsedCourseControl["type"] || "Control",
         legLength: safeFloat(cc.LegLength),
+        ...(randomOrder ? { randomOrder: true } : {}),
       });
     }
 
-    courses.push({ name, length, climb, controls: courseControls });
+    // Whole-course free order: every Control-type row has randomOrder.
+    // Partial runs (some true, some false) stay ordered — documented
+    // limitation until per-block support lands.
+    const regular = courseControls.filter((c) => c.type === "Control");
+    const orderMode: "ordered" | "free_order" =
+      regular.length > 0 && regular.every((c) => c.randomOrder)
+        ? "free_order"
+        : "ordered";
+
+    courses.push({ name, length, climb, controls: courseControls, orderMode });
   }
 
   // Parse class-course assignments

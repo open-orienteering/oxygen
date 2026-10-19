@@ -45,6 +45,27 @@ describe("course.create", () => {
     expect(item?.controlCount).toBe(0);
   });
 
+  it("creates a free-order course and surfaces orderMode on list/detail", async () => {
+    const c = await caller.course.create({
+      name: "Free Order",
+      orderMode: "free_order",
+      controlIds: [controlSeqs[0], controlSeqs[1]],
+    });
+    const list = await caller.course.list();
+    const item = list.find((cc) => cc.id === c.id);
+    expect(item?.orderMode).toBe("free_order");
+    const detail = await caller.course.getById({ id: c.id });
+    expect(detail.orderMode).toBe("free_order");
+
+    const cloned = await caller.course.clone({
+      id: c.id,
+      name: "Free Order Clone",
+    });
+    expect(
+      (await caller.course.list()).find((row) => row.id === cloned.id)?.orderMode,
+    ).toBe("free_order");
+  });
+
   it("creates a course with an ordered control list", async () => {
     const c = await caller.course.create({
       name: "With Controls",
@@ -54,6 +75,7 @@ describe("course.create", () => {
     const list = await caller.course.list();
     const item = list.find((cc) => cc.id === c.id);
     expect(item?.controlCount).toBe(controlSeqs.length);
+    expect(item?.orderMode).toBe("ordered");
     // Regression: `course.list` must include the ordered `;`-joined
     // control-codes string. The web `MapPanel` fallback leg renderer
     // (used for non-highlighted courses) relies on this to draw leg
@@ -176,6 +198,39 @@ describe("course.bulkUpdate", () => {
       expect(item?.lastAsFinish).toBe(true);
       expect(item?.numberOfMaps).toBe(50);
     }
+  });
+
+  it("bulk-sets orderMode", async () => {
+    const a = await caller.course.create({ name: "Bulk Free A" });
+    const b = await caller.course.create({ name: "Bulk Free B" });
+    await caller.course.bulkUpdate({
+      ids: [a.id, b.id],
+      orderMode: "free_order",
+    });
+    const list = await caller.course.list();
+    for (const id of [a.id, b.id]) {
+      expect(list.find((c) => c.id === id)?.orderMode).toBe("free_order");
+    }
+  });
+});
+
+describe("course.update — orderMode", () => {
+  it("toggles between ordered and free_order", async () => {
+    const c = await caller.course.create({
+      name: "Toggle Mode",
+      controlIds: controlSeqs,
+    });
+    expect((await caller.course.getById({ id: c.id })).orderMode).toBe(
+      "ordered",
+    );
+    await caller.course.update({ id: c.id, orderMode: "free_order" });
+    expect((await caller.course.getById({ id: c.id })).orderMode).toBe(
+      "free_order",
+    );
+    await caller.course.update({ id: c.id, orderMode: "ordered" });
+    expect((await caller.course.getById({ id: c.id })).orderMode).toBe(
+      "ordered",
+    );
   });
 });
 

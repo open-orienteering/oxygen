@@ -6,7 +6,17 @@
  * passed in as parameters.
  */
 
-import { RunnerStatus, TransferFlags, hasTransferFlag } from "./types.js";
+import {
+  RunnerStatus,
+  TransferFlags,
+  hasTransferFlag,
+  type CourseOrderMode,
+} from "./types.js";
+
+export interface MatchPunchesOptions {
+  /** Defaults to `"ordered"` (sequential greedy scan). */
+  orderMode?: CourseOrderMode;
+}
 
 // ─── Constants ──────────────────────────────────────────────
 
@@ -246,16 +256,51 @@ export function normalizeExpectedCodes(
   }));
 }
 
+function positionModeOf(pos: ExpectedPosition): PositionMode {
+  return pos.noTimingLeg ? "noTiming" : pos.skipMatching ? "skipped" : "required";
+}
+
 /**
- * Match punches sequentially to a course's expected control sequence.
+ * Running-time adjustment from positions with `noTimingLeg`. The deducted
+ * leg is from the previous timed reference (the prior ok match, or
+ * `startTime` if none) to this position's punch time. Walking matches in
+ * chronological order is enough — `prevReferenceTime` advances on every
+ * ok match regardless of mode. Missing / skipped-without-punch contribute
+ * nothing.
+ */
+function computeRunningTimeAdjustment(
+  matches: ControlMatch[],
+  startTime: number,
+): number {
+  let runningTimeAdjustment = 0;
+  let prevReferenceTime = startTime;
+  for (const m of matches) {
+    if (m.status === "ok") {
+      if (m.positionMode === "noTiming") {
+        runningTimeAdjustment += m.punchTime - prevReferenceTime;
+      }
+      prevReferenceTime = m.punchTime;
+    }
+  }
+  return runningTimeAdjustment;
+}
+
+/**
+ * Match punches to a course's expected control positions.
  *
- * `expected` is a per-position descriptor list. Required positions
- * behave like MeOS `oCourse::distance` (oCourse.cpp:472-501). Skipped
- * positions consume a matching punch when present but never raise
- * `missingCount`. Positions with `noTimingLeg=true` contribute their
- * incoming leg duration to `runningTimeAdjustment` so callers can
- * subtract it from `finishTime - startTime` to obtain the corrected
- * running time.
+ * `ordered` (default): sequential greedy scan — each position consumes
+ * the earliest unused punch whose code is acceptable, advancing the
+ * search cursor. Required positions behave like MeOS `oCourse::distance`
+ * (oCourse.cpp:472-501).
+ *
+ * `free_order`: set membership — each punch claims the first unclaimed
+ * position whose codes include it. Order of punches does not matter;
+ * missing required positions still raise `missingCount` (→ MP).
+ *
+ * Skipped positions (`skipMatching`) consume a matching punch when
+ * present but never raise `missingCount`. Positions with
+ * `noTimingLeg=true` contribute their incoming leg duration to
+ * `runningTimeAdjustment`.
  *
  * Backward compatibility: legacy callers may pass `number[]` (single
  * required code per position) or `number[][]` (multi-code per position);
@@ -265,8 +310,10 @@ export function matchPunchesToCourse(
   punches: ParsedPunch[],
   expected: number[] | number[][] | ExpectedPosition[],
   fallbackStartTime = 0,
+  options?: MatchPunchesOptions,
 ): MatchResult {
   const positions = normalizeExpectedCodes(expected);
+  const orderMode: CourseOrderMode = options?.orderMode ?? "ordered";
 
   const startPunch = punches.find((p) => p.type === PUNCH_START);
   const finishPunch = punches.find((p) => p.type === PUNCH_FINISH);
@@ -277,6 +324,16 @@ export function matchPunchesToCourse(
   const cardStartTime = startPunch?.time ?? 0;
   const startTime = fallbackStartTime > 0 ? fallbackStartTime : cardStartTime;
   const finishTime = finishPunch?.time ?? 0;
+
+  if (orderMode === "free_order") {
+    return matchFreeOrder(
+      controlPunches,
+      positions,
+      startTime,
+      cardStartTime,
+      finishTime,
+    );
+  }
 
   const matches: ControlMatch[] = [];
   const usedPunchIndices = new Set<number>();
@@ -290,11 +347,7 @@ export function matchPunchesToCourse(
     // Display fallback for missing/extra rows: prefer the first acceptable
     // code, mirroring MeOS's "Numbers[0]" convention for the displayed code.
     const displayCode = pos.codes[0] ?? 0;
-    const positionMode: PositionMode = pos.noTimingLeg
-      ? "noTiming"
-      : pos.skipMatching
-      ? "skipped"
-      : "required";
+    const positionMode = positionModeOf(pos);
     let found = false;
 
     for (let pi = punchSearchStart; pi < controlPunches.length; pi++) {
@@ -342,21 +395,85 @@ export function matchPunchesToCourse(
     }
   }
 
-  // Compute the running-time adjustment from positions with `noTimingLeg`.
-  // The deducted leg is from the previous timed reference (the prior ok
-  // match, or `startTime` if none) to this position's punch time. Walking
-  // matches in order is enough — `prevReferenceTime` advances on every ok
-  // match regardless of mode. Missing or skipped-without-punch positions
-  // contribute nothing.
-  let runningTimeAdjustment = 0;
-  let prevReferenceTime = startTime;
-  for (const m of matches) {
-    if (m.status === "ok") {
-      if (m.positionMode === "noTiming") {
-        runningTimeAdjustment += m.punchTime - prevReferenceTime;
+  const extraPunches = controlPunches.filter(
+    (_, idx) => !usedPunchIndices.has(idx),
+  );
+
+  return {
+    matches,
+    extraPunches,
+    startTime,
+    cardStartTime,
+    finishTime,
+    missingCount,
+    runningTimeAdjustment: computeRunningTimeAdjustment(matches, startTime),
+  };
+}
+
+/**
+ * Free-order matcher: walk punches in card order; each punch claims the
+ * first unclaimed expected position whose codes include it. Ok matches
+ * are emitted in punch (chronological) order so split/cum times stay
+ * meaningful; unclaimed required positions become `missing`.
+ */
+function matchFreeOrder(
+  controlPunches: ParsedPunch[],
+  positions: ExpectedPosition[],
+  startTime: number,
+  cardStartTime: number,
+  finishTime: number,
+): MatchResult {
+  const claimed = new Set<number>();
+  const usedPunchIndices = new Set<number>();
+  const matches: ControlMatch[] = [];
+  let prevTime = startTime;
+
+  for (let pi = 0; pi < controlPunches.length; pi++) {
+    const p = controlPunches[pi];
+    let claimedCi = -1;
+    for (let ci = 0; ci < positions.length; ci++) {
+      if (claimed.has(ci)) continue;
+      if (positions[ci].codes.includes(p.type)) {
+        claimedCi = ci;
+        break;
       }
-      prevReferenceTime = m.punchTime;
     }
+    if (claimedCi < 0) continue;
+
+    const pos = positions[claimedCi];
+    claimed.add(claimedCi);
+    usedPunchIndices.add(pi);
+    matches.push({
+      controlIndex: claimedCi,
+      controlCode: p.type,
+      expectedCodes: [...pos.codes],
+      positionMode: positionModeOf(pos),
+      punchTime: p.time,
+      splitTime: p.time - prevTime,
+      cumTime: p.time - startTime,
+      status: "ok",
+      source: p.source,
+      freePunchId: p.freePunchId,
+    });
+    prevTime = p.time;
+  }
+
+  let missingCount = 0;
+  for (let ci = 0; ci < positions.length; ci++) {
+    if (claimed.has(ci)) continue;
+    const pos = positions[ci];
+    matches.push({
+      controlIndex: ci,
+      controlCode: pos.codes[0] ?? 0,
+      expectedCodes: [...pos.codes],
+      positionMode: positionModeOf(pos),
+      punchTime: 0,
+      splitTime: 0,
+      cumTime: 0,
+      status: "missing",
+      source: "",
+    });
+    if (!pos.skipMatching) missingCount++;
   }
 
   const extraPunches = controlPunches.filter(
@@ -370,7 +487,7 @@ export function matchPunchesToCourse(
     cardStartTime,
     finishTime,
     missingCount,
-    runningTimeAdjustment,
+    runningTimeAdjustment: computeRunningTimeAdjustment(matches, startTime),
   };
 }
 

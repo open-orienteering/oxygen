@@ -482,6 +482,112 @@ describe("matchPunchesToCourse", () => {
   });
 });
 
+// ─── free-order matching ─────────────────────────────────────
+
+describe("matchPunchesToCourse free_order", () => {
+  const START = 36000;
+  const opts = { orderMode: "free_order" as const };
+
+  it("accepts controls in any order", () => {
+    const punches = [
+      { type: 1, time: START, source: "card" as const },
+      { type: 33, time: START + 100, source: "card" as const },
+      { type: 31, time: START + 200, source: "card" as const },
+      { type: 32, time: START + 300, source: "card" as const },
+      { type: 2, time: START + 400, source: "card" as const },
+    ];
+    const result = matchPunchesToCourse(punches, [31, 32, 33], 0, opts);
+    expect(result.missingCount).toBe(0);
+    expect(result.matches.filter((m) => m.status === "ok")).toHaveLength(3);
+    // Ok matches appear in punch (chronological) order.
+    expect(result.matches.map((m) => m.controlCode).slice(0, 3)).toEqual([
+      33, 31, 32,
+    ]);
+    expect(result.finishTime).toBe(START + 400);
+  });
+
+  it("flags MP when a required control is missing", () => {
+    const punches = [
+      { type: 31, time: START + 100, source: "card" as const },
+      { type: 33, time: START + 200, source: "card" as const },
+      { type: 2, time: START + 300, source: "card" as const },
+    ];
+    const result = matchPunchesToCourse(punches, [31, 32, 33], START, opts);
+    expect(result.missingCount).toBe(1);
+    expect(result.matches.find((m) => m.status === "missing")?.controlCode).toBe(
+      32,
+    );
+  });
+
+  it("treats a duplicate punch as extra once the position is claimed", () => {
+    const punches = [
+      { type: 31, time: START + 100, source: "card" as const },
+      { type: 32, time: START + 200, source: "card" as const },
+      { type: 31, time: START + 250, source: "card" as const },
+      { type: 2, time: START + 300, source: "card" as const },
+    ];
+    const result = matchPunchesToCourse(punches, [31, 32], START, opts);
+    expect(result.missingCount).toBe(0);
+    expect(result.extraPunches).toHaveLength(1);
+    expect(result.extraPunches[0].type).toBe(31);
+  });
+
+  it("does not raise missingCount for skipMatching positions", () => {
+    const punches = [
+      { type: 31, time: START + 100, source: "card" as const },
+      { type: 33, time: START + 200, source: "card" as const },
+      { type: 2, time: START + 300, source: "card" as const },
+    ];
+    const result = matchPunchesToCourse(
+      punches,
+      [
+        { codes: [31], skipMatching: false, noTimingLeg: false },
+        { codes: [32], skipMatching: true, noTimingLeg: false },
+        { codes: [33], skipMatching: false, noTimingLeg: false },
+      ],
+      START,
+      opts,
+    );
+    expect(result.missingCount).toBe(0);
+    expect(result.matches.filter((m) => m.status === "missing")).toHaveLength(1);
+  });
+
+  it("applies noTimingLeg adjustment in free order", () => {
+    // Callers always pre-sort by time (see performReadout / lists).
+    const punches = [
+      { type: 31, time: START + 100, source: "card" as const },
+      { type: 32, time: START + 600, source: "card" as const },
+      { type: 2, time: START + 700, source: "card" as const },
+    ];
+    const result = matchPunchesToCourse(
+      punches,
+      [
+        { codes: [31], skipMatching: false, noTimingLeg: false },
+        { codes: [32], skipMatching: false, noTimingLeg: true },
+      ],
+      START,
+      opts,
+    );
+    expect(result.missingCount).toBe(0);
+    // 31 at +100, then 32 (noTiming) at +600 → deducted leg = 500.
+    expect(result.runningTimeAdjustment).toBe(500);
+  });
+
+  it("ordered mode is unchanged when options omit orderMode", () => {
+    const punches = [
+      { type: 33, time: START + 100, source: "card" as const },
+      { type: 31, time: START + 200, source: "card" as const },
+      { type: 32, time: START + 300, source: "card" as const },
+      { type: 2, time: START + 400, source: "card" as const },
+    ];
+    const ordered = matchPunchesToCourse(punches, [31, 32, 33], START);
+    // Sequential: 31 is found after 33 was skipped as extra; 33 never
+    // matches a later position → missing 33, extra 33.
+    expect(ordered.missingCount).toBe(1);
+    expect(ordered.extraPunches.map((p) => p.type)).toContain(33);
+  });
+});
+
 // ─── computeReadId ────────────────────────────────────────────
 
 describe("computeReadId", () => {

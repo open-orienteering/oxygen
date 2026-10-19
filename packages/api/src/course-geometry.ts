@@ -40,13 +40,15 @@ function isPositioned(c: GeometrySeqControl): boolean {
 }
 
 /**
- * Build the straight-leg GeoJSON FeatureCollection for an ordered course
- * sequence. Unpositioned controls are omitted; legs connect the remaining
- * consecutive controls so a single unplaced control does not break the
- * route line.
+ * Build the straight-leg GeoJSON FeatureCollection for a course sequence.
+ * Unpositioned controls are omitted; for `ordered` courses (default) legs
+ * connect the remaining consecutive controls so a single unplaced control
+ * does not break the route line. Free-order courses emit control points
+ * only — no connecting legs.
  */
 export function buildEditorGeometry(
   seq: GeometrySeqControl[],
+  orderMode: "ordered" | "free_order" = "ordered",
 ): GeoJSONFeatureCollection {
   const positioned = seq.filter(isPositioned);
   const features: GeoJSONFeature[] = [];
@@ -63,20 +65,22 @@ export function buildEditorGeometry(
     });
   }
 
-  for (let i = 0; i < positioned.length - 1; i++) {
-    const a = positioned[i];
-    const b = positioned[i + 1];
-    features.push({
-      type: "Feature",
-      geometry: {
-        type: "LineString",
-        coordinates: [
-          [a.xMm, a.yMm],
-          [b.xMm, b.yMm],
-        ],
-      },
-      properties: { symbolType: "leg", from: a.code, to: b.code },
-    });
+  if (orderMode !== "free_order") {
+    for (let i = 0; i < positioned.length - 1; i++) {
+      const a = positioned[i];
+      const b = positioned[i + 1];
+      features.push({
+        type: "Feature",
+        geometry: {
+          type: "LineString",
+          coordinates: [
+            [a.xMm, a.yMm],
+            [b.xMm, b.yMm],
+          ],
+        },
+        properties: { symbolType: "leg", from: a.code, to: b.code },
+      });
+    }
   }
 
   return { type: "FeatureCollection", features };
@@ -166,6 +170,7 @@ export async function rebuildCourseGeometry(
         lastAsFinish: true,
         startName: true,
         finishControlId: true,
+        orderMode: true,
       },
     });
     if (!course || course.removed) continue;
@@ -223,11 +228,10 @@ export async function rebuildCourseGeometry(
       }
     }
 
-    const geometry = buildEditorGeometry(seq);
+    const geometry = buildEditorGeometry(seq, course.orderMode);
     if (mapObjects && mapObjects.length > 0) {
       decorateOverprintCuts(geometry, mapObjects);
     }
-    const distances = legDistancesMm(seq);
 
     const data: Record<string, unknown> = {
       geometry:
@@ -236,12 +240,19 @@ export async function rebuildCourseGeometry(
           : PrismaNs.DbNull,
       geometrySource: geometry.features.length > 0 ? "editor" : "",
     };
-    if (mapScale && distances.length > 0) {
-      // Same format the importers write: per-leg terrain meters, ';'-joined
-      // with a trailing separator.
-      data.legs =
-        distances.map((d) => Math.round((d * mapScale) / 1000)).join(";") + ";";
-      if (updateLength) data.lengthM = courseLengthM(distances, mapScale);
+    // Free-order courses have no meaningful legs — leave lengthM / legs
+    // alone (the organiser sets length manually). Ordered courses keep
+    // the auto-derived legs string + optional length refresh.
+    if (course.orderMode !== "free_order" && mapScale) {
+      const distances = legDistancesMm(seq);
+      if (distances.length > 0) {
+        // Same format the importers write: per-leg terrain meters, ';'-joined
+        // with a trailing separator.
+        data.legs =
+          distances.map((d) => Math.round((d * mapScale) / 1000)).join(";") +
+          ";";
+        if (updateLength) data.lengthM = courseLengthM(distances, mapScale);
+      }
     }
 
     await db.course.update({ where: { id: courseUuid }, data });

@@ -124,7 +124,7 @@ export async function gatherEventCourseExport(
     orderBy: { seq: "asc" },
     select: {
       id: true, name: true, lengthM: true, climbM: true, legs: true,
-      geometrySource: true,
+      geometrySource: true, orderMode: true,
       firstAsStart: true, lastAsFinish: true, startName: true,
       finishControlId: true,
       courseControls: {
@@ -218,6 +218,7 @@ export async function gatherEventCourseExport(
       name: course.name,
       lengthM,
       climbM: course.climbM,
+      orderMode: course.orderMode,
       controls: seq,
     });
   }

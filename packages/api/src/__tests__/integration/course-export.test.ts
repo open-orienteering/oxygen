@@ -135,6 +135,36 @@ describe("buildEventCourseDataXml", () => {
     ]);
   });
 
+  it("emits randomOrder on free-order courses and round-trips orderMode", async () => {
+    const created = await caller.course.create({
+      name: "Export Free",
+      controlIds: [31, 32],
+      orderMode: "free_order",
+    });
+    const xml = await buildEventCourseDataXml(ctx.db, {
+      id: ctx.eventId,
+      name: ctx.event.name,
+    });
+    expect(xml).toMatch(
+      /CourseControl[^>]*type="Control"[^>]*\brandomOrder="true"/,
+    );
+    // Free-order Control rows omit LegLength.
+    expect(xml).not.toMatch(
+      /<Name>Export Free<\/Name>[\s\S]*?type="Control"[^>]*>[\s\S]*?<LegLength/,
+    );
+
+    const parsed = parseIOFCourseData(xml);
+    const free = parsed.courses.find((c) => c.name === "Export Free");
+    expect(free?.orderMode).toBe("free_order");
+    expect(
+      free?.controls
+        .filter((c) => c.type === "Control")
+        .every((c) => c.randomOrder),
+    ).toBe(true);
+
+    await caller.course.delete({ id: created.id });
+  });
+
   it("builds a safe attachment filename", () => {
     expect(buildCourseExportFilename("itest")).toBe("itest-courses.xml");
     expect(buildCourseExportFilename("a b/c")).toBe("a_b_c-courses.xml");

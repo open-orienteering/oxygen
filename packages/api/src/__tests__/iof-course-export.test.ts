@@ -183,4 +183,62 @@ describe("buildCourseDataXml", () => {
       ["42", "Finish"],
     ]);
   });
+
+  it("emits randomOrder on free-order Control rows and round-trips", () => {
+    const xml = buildCourseDataXml({
+      eventName: "Free",
+      mapScale: 10000,
+      controls: [
+        { id: "S1", type: "Start", xMm: 10, yMm: 10 },
+        { id: "31", type: "Control", xMm: 20, yMm: 20 },
+        { id: "32", type: "Control", xMm: 30, yMm: 30 },
+        { id: "F1", type: "Finish", xMm: 40, yMm: 40 },
+      ],
+      courses: [
+        {
+          name: "Score",
+          lengthM: 0,
+          climbM: 0,
+          orderMode: "free_order",
+          controls: [
+            { controlId: "S1", type: "Start" },
+            { controlId: "31", type: "Control", legLengthM: 500 },
+            { controlId: "32", type: "Control", legLengthM: 500 },
+            { controlId: "F1", type: "Finish", legLengthM: 500 },
+          ],
+        },
+      ],
+      classAssignments: [],
+    });
+    expect(xml).toMatch(/CourseControl[^>]*\brandomOrder="true"/);
+    // Legs omitted for free-order Control rows.
+    expect(xml).not.toMatch(
+      /CourseControl[^>]*type="Control"[^>]*>[\s\S]*?<LegLength/,
+    );
+
+    const parsed = parseIOFCourseData(xml);
+    expect(parsed.courses[0].orderMode).toBe("free_order");
+    expect(
+      parsed.courses[0].controls
+        .filter((c) => c.type === "Control")
+        .every((c) => c.randomOrder),
+    ).toBe(true);
+  });
+
+  it("keeps ordered mode when only some controls have randomOrder", () => {
+    const parsed = parseIOFCourseData(`<?xml version="1.0" encoding="UTF-8"?>
+<CourseData xmlns="http://www.orienteering.org/datastandard/3.0" iofVersion="3.0">
+  <RaceCourseData>
+    <Map><Scale>10000</Scale></Map>
+    <Control type="Control"><Id>31</Id><MapPosition x="1" y="1" unit="mm"/></Control>
+    <Control type="Control"><Id>32</Id><MapPosition x="2" y="2" unit="mm"/></Control>
+    <Course>
+      <Name>Partial</Name>
+      <CourseControl type="Control" randomOrder="true"><Control>31</Control></CourseControl>
+      <CourseControl type="Control"><Control>32</Control></CourseControl>
+    </Course>
+  </RaceCourseData>
+</CourseData>`);
+    expect(parsed.courses[0].orderMode).toBe("ordered");
+  });
 });

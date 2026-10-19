@@ -47,6 +47,8 @@ export interface ComposeMapPageOptions {
   title: string;
   textValues: MapTextValues;
   allControls?: boolean;
+  /** Override control-number labelling (free-order → `"code"`). */
+  labelMode?: "sequence" | "code";
   /** ISOM overprint enlargement (mapScale / printScale); default 1. */
   overprintScale?: number;
   resolveGraphic?: (
@@ -158,6 +160,7 @@ export function composeMapPageSvg(options: ComposeMapPageOptions): string {
     controls: options.controls,
     legs: options.legs,
     allControls: options.allControls,
+    labelMode: options.labelMode,
     overprintScale,
   });
   const descriptions = document.description.visible

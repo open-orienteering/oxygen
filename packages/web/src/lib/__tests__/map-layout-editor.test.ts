@@ -4,6 +4,7 @@ import {
   createImageObjectAt,
   createObjectAt,
   displayedPreviewPlacement,
+  editorHandleScale,
   editorPreviewDpi,
   fillModePatch,
   initialEditorViewport,
@@ -258,6 +259,18 @@ describe("map layout editor geometry", () => {
         20,
       ).zoom,
     ).toBe(8);
+  });
+
+  it("keeps editor handles page-sized up to 150% and screen-sized beyond", () => {
+    // Below the knee the handles scale with the paper like everything else …
+    expect(editorHandleScale(1)).toBe(1);
+    expect(editorHandleScale(1.5)).toBe(1);
+    // … above it they shrink in page mm so they stay the same size on screen.
+    expect(editorHandleScale(3)).toBeCloseTo(0.5);
+    expect(editorHandleScale(8)).toBeCloseTo(0.1875);
+    // Garbage zoom never blows the handles up.
+    expect(editorHandleScale(0)).toBe(1);
+    expect(editorHandleScale(Number.NaN)).toBe(1);
   });
 
   it("parses clearable number drafts on commit", () => {

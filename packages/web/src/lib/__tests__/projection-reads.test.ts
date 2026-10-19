@@ -22,7 +22,7 @@ const runner = (p: Partial<ProjRunner> & { id: string; cardNo: number | null }):
 const cls = (id: number, p: Partial<ClassInfo> = {}): ClassInfo =>
   ({ id, name: `C${id}`, courseId: id, sortIndex: 0, sex: "", lowAge: 0, highAge: 0, ...p }) as ClassInfo;
 const course = (id: number, p: Partial<CourseInfo> = {}): CourseInfo =>
-  ({ id, name: `Crs${id}`, length: 0, controls: "", controlCount: 0, expectedPositions: [], ...p }) as CourseInfo;
+  ({ id, name: `Crs${id}`, length: 0, controls: "", controlCount: 0, orderMode: "ordered", expectedPositions: [], ...p }) as CourseInfo;
 
 describe("selectLookupByCard", () => {
   it("returns found:false for an unknown card", () => {

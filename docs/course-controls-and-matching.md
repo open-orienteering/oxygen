@@ -311,8 +311,17 @@ behaves for that status. The component lives at
 `packages/web/src/components/ControlStatusHelp.tsx` and follows the
 same pattern as `DrawHelpVisuals.tsx` on the Start-Draw screen.
 
+## Free-order courses
+
+When `courses.order_mode = free_order`, the matcher switches from the
+sequential scan above to set membership: every required position must
+still be punched, but order does not matter. See
+[free-order-courses.md](free-order-courses.md) for the full model,
+rendering rules, and IOF `randomOrder` interop.
+
 ## Out of scope
 
-- **Rogaining** (`StatusRogaining` / `StatusRogainingRequired`) and
-  CommonControl matching — separate, larger feature touching scoring
-  rules.
+- **Rogaining / score-O** (points, time limit, penalty) and
+  CommonControl matching — separate, larger feature. The
+  `course_order_mode` enum is designed to grow a `score` value; see
+  [free-order-courses.md](free-order-courses.md).

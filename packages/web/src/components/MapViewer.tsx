@@ -111,12 +111,15 @@ export interface CourseOverlay {
   /** Course length / climb for the description-sheet header row 3. */
   lengthM?: number;
   climbM?: number;
+  /** Visit-order mode — free-order courses draw no legs and use code labels. */
+  orderMode?: import("@oxygen/shared").CourseOrderMode;
   /** Special / finish instructions for the description sheet. */
   descriptionInstructions?: import("@oxygen/shared").CourseDescriptionInstructions | null;
   /**
    * Per-control number offsets (map mm from the control centre), keyed
    * by overlay control id. Used when this course is the single
-   * highlighted course (sequence numbering).
+   * highlighted course — ordered (sequence numbers) and free-order
+   * (punch codes) alike.
    */
   labelOffsets?: Record<string, { dx: number; dy: number }>;
 }
@@ -1763,6 +1766,9 @@ export function MapViewer({
     const highlightedCourses = courses.filter(
       (c) => c.highlight || c.name === highlightCourseName,
     );
+    const freeOrderCourseNames = new Set(
+      courses.filter((c) => c.orderMode === "free_order").map((c) => c.name),
+    );
     // With more than one course on screen it's hard to tell which lines
     // belong to what — label each leg with the classes that run it.
     const legLabelMode = highlightedCourses.length > 1;
@@ -1788,6 +1794,19 @@ export function MapViewer({
         if (!geom) continue;
 
         if (props.symbolType === "leg" && geom.type === "LineString") {
+          const legCourse: string | undefined =
+            props.courseName ?? highlightCourseName ?? undefined;
+          // Free-order courses never draw connecting legs (even when
+          // imported OCD geometry still carries them).
+          if (legCourse && freeOrderCourseNames.has(legCourse)) continue;
+          if (
+            !legCourse &&
+            highlightedCourses.length === 1 &&
+            highlightedCourses[0].orderMode === "free_order"
+          ) {
+            continue;
+          }
+
           const coords = geom.coordinates as [number, number][];
           if (coords.length < 2) continue;
 
@@ -1800,8 +1819,6 @@ export function MapViewer({
 
           // Insert-on-leg hit line spanning the full (unclipped) leg.
           {
-            const legCourse: string | undefined =
-              props.courseName ?? highlightCourseName ?? undefined;
             if (legCourse) {
               const idx = geomLegIndex.get(legCourse) ?? 0;
               geomLegIndex.set(legCourse, idx + 1);
@@ -1954,6 +1971,7 @@ export function MapViewer({
     }
 
     for (const course of coursesToDraw) {
+      if (course.orderMode === "free_order") continue;
       const obstacles: Pt[] = [];
       for (const cid of course.controls) {
         const p = ctrlPixels.get(cid);
@@ -1987,18 +2005,21 @@ export function MapViewer({
 
     const sortedControls = [...controls].sort((a, b) => a.id.localeCompare(b.id, undefined, { numeric: true }));
 
-    // In description mode with a SINGLE course, map control IDs to sequence
-    // numbers (1, 2, 3, …) — a proper course card. With multiple courses
-    // selected there is no meaningful shared sequence, so every control
-    // keeps its code and the description sheet lists all of them by code.
-    // The course editor gets the same numbering while a course is being
-    // edited, so the on-map labels match the sidebar sequence rows.
+    // In description mode with a SINGLE ordered course, map control IDs
+    // to sequence numbers (1, 2, 3, …) — a proper course card. Free-order
+    // courses, multi-course selections, and the all-controls view keep
+    // punch codes as labels. Manual label offsets still apply whenever
+    // a single course is highlighted (including free-order).
+    const singleCourse =
+      (showDescriptions || !!editor) && highlightedCourses.length === 1
+        ? highlightedCourses[0]
+        : null;
     const sequenceNumbering =
-      (showDescriptions || !!editor) && highlightedCourses.length === 1;
+      !!singleCourse && singleCourse.orderMode !== "free_order";
     const sequenceMap = new Map<string, number>();
-    if (sequenceNumbering) {
+    if (sequenceNumbering && singleCourse) {
       let seq = 0;
-      for (const cid of highlightedCourses[0].controls) {
+      for (const cid of singleCourse.controls) {
         const ctrl = controls.find(c => c.id === cid);
         if (ctrl && ctrl.type === "Control") {
           seq++;
@@ -2007,11 +2028,17 @@ export function MapViewer({
       }
     }
 
-    const storedOffsets = sequenceNumbering
-      ? highlightedCourses[0]?.labelOffsets
-      : undefined;
+    // Draggable number hit-targets: every regular control on the single
+    // highlighted course, in both ordered and free-order mode. Offsets
+    // live on course_controls, so there is nothing to drag without a
+    // course selected (the all-controls view has no per-control slot).
+    const singleCourseControlIds = singleCourse
+      ? new Set(singleCourse.controls)
+      : null;
+
+    const storedOffsets = singleCourse?.labelOffsets;
     const offsetFor = (id: string): { dx: number; dy: number } | undefined => {
-      if (!sequenceNumbering) return undefined;
+      if (!singleCourse) return undefined;
       if (editorLabelDragPos?.id === id) {
         const ctrl = controls.find((k) => k.id === id);
         if (!ctrl) return undefined;
@@ -2230,7 +2257,7 @@ export function MapViewer({
               {label}
             </text>
           );
-          if (editor && sequenceMap.has(c.id)) {
+          if (editor && singleCourseControlIds?.has(c.id)) {
             labelHits.push({
               id: c.id,
               px: placedLabel.x,
@@ -3069,7 +3096,7 @@ function renderDescriptionSheet(
   cw: number,
   ch: number,
   /** The highlighted courses. 1 → sequence card; >1 → code-sorted union. */
-  activeCourses?: Array<Pick<CourseOverlay, "name" | "controls" | "classNames" | "lengthM" | "climbM" | "descriptionInstructions">>,
+  activeCourses?: Array<Pick<CourseOverlay, "name" | "controls" | "classNames" | "lengthM" | "climbM" | "orderMode" | "descriptionInstructions">>,
   /** All control overlays — used to resolve id → code/type when geometry is sparse. */
   controlOverlays?: ControlOverlay[],
   /**
@@ -3149,7 +3176,8 @@ function renderDescriptionSheet(
   };
   const rows: Row[] = [];
   const single = activeCourses?.length === 1 ? activeCourses[0] : null;
-  const withSequence = single !== null;
+  // Free-order sheets keep the A-column empty (codes only).
+  const withSequence = single !== null && single.orderMode !== "free_order";
   let title = "";
   let headerRows = 1;
   let sheetHeader: {
@@ -3208,6 +3236,7 @@ function renderDescriptionSheet(
       courseName: single.name,
       lengthM: single.lengthM ?? 0,
       climbM: single.climbM ?? 0,
+      orderMode: single.orderMode ?? "ordered",
       startDescription: startOverlay?.description ?? null,
       controls: controlRows.map((c) => ({
         id: c.id,

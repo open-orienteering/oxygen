@@ -704,6 +704,7 @@ export function MapsPage() {
               : editingMap.course?.name ?? editingMap.name
           }
           allControls={editingMap.kind === "all_controls"}
+          labelMode={editingMap.labelMode}
           mapObjects={editingMap.objects}
           templateObjects={editingMap.resolved.document.objects.slice(
             0,

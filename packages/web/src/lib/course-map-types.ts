@@ -49,6 +49,8 @@ export interface CourseMapView {
   objects: CourseMapObject[];
   controls: CourseOverlayControl[];
   legs: CourseOverlayLeg[];
+  /** How control numbers are labelled on the overprint. */
+  labelMode?: "sequence" | "code";
   descriptionRows: DescriptionRow[];
   /** IOF 3-row header for course maps; null/undefined → single title row. */
   descriptionHeader?: DescriptionSheetHeader | null;

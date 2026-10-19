@@ -78,6 +78,40 @@ test.describe("Courses Page", () => {
     await expect(page.getByText("3 courses")).toBeVisible({ timeout: 5000 });
   });
 
+  test("should create a free-order course with badge and persisted mode", async ({
+    page,
+  }) => {
+    // Seed itest controls are unplaced (0,0), so IOF export drops
+    // CourseControl rows (and thus randomOrder). XML randomOrder is covered
+    // by unit + integration tests against placed controls.
+    await selectCompetition(page);
+    await clickTab(page, "Courses");
+    await expect(page.getByText("3 courses")).toBeVisible({ timeout: 10000 });
+
+    await page.getByRole("button", { name: "New Course" }).click();
+    await page.getByPlaceholder("e.g. Bana 4").fill("E2E Free Order");
+    await page.getByTestId("create-order-mode").selectOption("free_order");
+    await page.getByPlaceholder("e.g. 67;39;78;53;44;50;").fill("34;50;");
+    await page.getByRole("button", { name: "Create" }).click();
+
+    const freeRow = page.getByRole("row").filter({ hasText: "E2E Free Order" });
+    await expect(freeRow).toBeVisible({ timeout: 5000 });
+    await expect(freeRow.getByTestId("course-free-order-badge")).toBeVisible();
+
+    await freeRow.getByRole("cell", { name: "E2E Free Order" }).click();
+    await expect(page.getByTestId("course-order-mode")).toHaveValue(
+      "free_order",
+      { timeout: 5000 },
+    );
+
+    page.on("dialog", (dialog) => dialog.accept());
+    await freeRow.getByTitle("Remove course").click();
+    await expect(page.getByRole("cell", { name: "E2E Free Order" })).toHaveCount(
+      0,
+      { timeout: 5000 },
+    );
+  });
+
   test("should bulk-update maps across many selected courses", async ({ page }) => {
     await selectCompetition(page);
     await clickTab(page, "Courses");
