@@ -21,8 +21,8 @@ upload bytes ──sha256──▶ map_sources(file_hash)      the file as uploa
   same bytes uploaded twice, under any name, are one source row and one
   document row (06 §4.2).
 - Every reference to a blob is a foreign key with `ON DELETE RESTRICT`.
-  Only the garbage collector (pending, §8) deletes blobs, and only rows
-  nothing points at any more.
+  Only the garbage collector (§8) deletes blobs, and only rows nothing
+  points at any more.
 - The upload name is **not** part of the document: it lives on
   `map_sources.file_name` and in the import report. The document header's
   `source` block is `{kind, version, hash, bytes}` only, so the document
@@ -31,8 +31,9 @@ upload bytes ──sha256──▶ map_sources(file_hash)      the file as uploa
 
 ## 2. Tables
 
-Migrations `20261016190000_map_documents_storage` and
-`20261016210000_map_uploads_and_import_jobs`. All in schema `oxygen`.
+Migrations `20261016190000_map_documents_storage`,
+`20261016210000_map_uploads_and_import_jobs` and
+`20261019120000_map_import_jobs_started_by`. All in schema `oxygen`.
 
 | Table | Key | Columns | Notes |
 |---|---|---|---|
@@ -45,7 +46,7 @@ Migrations `20261016190000_map_documents_storage` and
 | `club_map_files` (+) | — | `club_map_id → club_maps SET NULL` | links the legacy library row to its series while both exist (§6.5) |
 | `map_uploads` | `id UUID` | `event_id → events CASCADE` (nullable), `file_name`, `kind`, `declared_bytes`, `chunk_bytes`, `uploaded_by SET NULL`, `created_at`, `finalised_hash → map_sources SET NULL` | one chunked upload in flight (§5); `kind` is set from the first chunk |
 | `map_upload_chunks` | `(upload_id, n)` | `bytes BYTEA` | `upload_id → map_uploads CASCADE`; `STORAGE EXTERNAL`; deleted at finalise |
-| `map_import_jobs` | `id UUID` | `event_id CASCADE` / `club_map_id CASCADE` (the target, either nullable), `source_hash → map_sources CASCADE`, `decisions JSONB`, `state`, `stage`, `progress REAL`, `claimed_by`, `heartbeat_at`, `document_hash → map_documents SET NULL`, `error`, timestamps | one import run (§6); indexed on `(state, heartbeat_at)` for the claim query and on each target |
+| `map_import_jobs` | `id UUID` | `event_id CASCADE` / `club_map_id CASCADE` (the target, either nullable), `source_hash → map_sources CASCADE`, `decisions JSONB`, `state`, `stage`, `progress REAL`, `claimed_by`, `heartbeat_at`, `document_hash → map_documents SET NULL`, `error`, `started_by → users SET NULL`, timestamps | one import run (§6); indexed on `(state, heartbeat_at)` for the claim query and on each target; `started_by` is the user whose request started it (null for the backfill), read by §4.2 |
 
 `STORAGE EXTERNAL` on the two blob columns keeps TOAST from compressing
 the bytes (compact binary that gains little) so `substring(bytes FROM … FOR …)`
@@ -91,9 +92,11 @@ storeImportedDocument(db, { source: { bytes, fileHash, kind, fileName, uploadedB
   dedup targets, so the next upload of the same bytes produces a new
   document row under the current importer and library version while the
   old row waits for GC (§8). Re-matching already-stored documents in bulk
-  is a pending backfill (§8).
+  is a pending backfill (§9).
 - `touchDocument(db, hash)` bumps `last_referenced_at`; called whenever a
-  reference is created. GC grace is measured from it.
+  reference is created (`applyJobResult`), on a dedup hit before the job
+  row is inserted (§6.1), and by every GC run for every document still
+  referenced (§8.2). GC grace is measured from it.
 
 ### 3.1 Producers
 
@@ -170,6 +173,9 @@ event given ∧ event pins hash (map_files.document_hash)
     ∧ kiosk key matches the event's kiosk_key          → allow
     ∧ user has courses.view on that event              → allow
 user signed in ∧ some club_map_versions row has hash   → allow
+user signed in ∧ some map_import_jobs row has
+    document_hash = hash ∧ started_by = user
+    ∧ state <> 'failed'                                → allow
 otherwise                                              → 401 if anonymous, 403 if signed in
 ```
 
@@ -180,8 +186,18 @@ event is not enough: the member group has no `courses.view`.
 
 Positive decisions are cached in-process for 60 s per
 `(hash, user, kiosk key, event)`; negative ones are not. The cache is
-`resetDocumentAccessCache()` for tests. Pending: "own running import
-job" as a fourth clause (07 §4).
+`resetDocumentAccessCache()` for tests.
+
+The fourth clause is 07 §6.2's "a running import job the caller
+started": it lets the user who uploaded a map see the document an import
+produced before anything pins it (the review round, `docs/map-import.md`
+§2.2). Jobs had no owner, so `map_import_jobs.started_by` records the
+requesting user (§6.1). Today `document_hash` is written only together
+with `state = done`, so in practice the clause means "a done job I
+started", for as long as the job row lives (7 days, §6.6); it is written
+as `state <> 'failed'` so A6's review state is covered without another
+change. A failed job never carries a document.
+
 
 ### 4.3 Blob access
 
@@ -196,6 +212,58 @@ deleteBlob(db, table, hash)                                    // raw DELETE; fa
 
 Everything above the seam talks in hashes and `Buffer`s; a future object
 store implements the same three calls.
+
+### 4.4 Source download: `GET /api/map-sources/:hash`
+
+`packages/api/src/map-store/source-routes.ts`, registered in `index.ts`
+next to the document route. The original file as uploaded, for the
+people who may take it out of Oxygen (07 §6.1). Unlike a document it is
+the club's property, not a rendered view, so it follows today's
+download rules (`course.downloadMap`, `clubMap.download`,
+`docs/authentication.md`) rather than the document predicate, and it is
+not cached.
+
+| Condition | Status | Body / headers |
+|---|---|---|
+| `:hash` not 64 lowercase hex (upper-case is folded) | 400 | `{error}` |
+| not authorised, anonymous | 401 | `{error}` |
+| not authorised, signed in | 403 | `{error}` |
+| authorised, no such source | 404 | `{error}` |
+| otherwise | 200 | the bytes, streamed |
+
+```
+Content-Type: application/octet-stream
+Content-Disposition: attachment; filename="<ascii name>"; filename*=UTF-8''<percent-encoded name>
+Cache-Control: private, no-store
+(no Content-Length — Transfer-Encoding: chunked; no ETag, no Range)
+```
+
+Streaming (07 §6.4): sources reach 36 MB today and the upload limit is
+128 MiB, above Cloud Run's 32 MiB ceiling for a non-streamed response.
+The body is a `Readable` that pulls `getBlob(…, range)` slices of 4 MiB
+(`SOURCE_SLICE_BYTES`) one at a time, so the API holds one slice, never
+the file. `size_bytes` is read first (`getBlobSize`) to plan the slices;
+a slice that comes back missing (the row vanished mid-stream) aborts the
+response.
+
+Authorisation, checked before existence as for documents. Input is the
+same `identity()` as §4.2 (user, kiosk key, event); the kiosk key never
+counts:
+
+```
+authEnabled == false                                              → allow
+event given ∧ user has event.manage on it
+    ∧ a map_files row of that event has source_hash = hash
+    ∧ (that row's from_club_library = false ∨ user is admin)      → allow, filename = map_files.file_name
+user signed in ∧ a club_map_versions row has source_hash = hash
+    ∧ (user is admin ∨ that row's uploaded_by = user)             → allow, filename = map_sources.file_name
+otherwise                                                         → 401 if anonymous, 403 if signed in
+```
+
+The event clause is `canDownloadEventMap`, the club clause
+`canDownloadClubLibraryMap`, keyed by hash instead of by row. Decisions
+are not cached (downloads are rare and the answer must follow a revoked
+role at once). With auth off the filename is `map_sources.file_name`.
 
 ## 5. Chunked upload: `/api/map-uploads`
 
@@ -272,10 +340,10 @@ instance loses nothing. `packages/api/src/map-store/jobs.ts`.
 ### 6.1 Lifecycle
 
 ```
-startImportJob(db, {sourceHash, eventId? | clubMapId?, holdMs?})
+startImportJob(db, {sourceHash, eventId? | clubMapId?, startedBy?, holdMs?})
   │
   ├─ a map_documents row exists for (sourceHash, importer ∈ {ocad-4, omap-1}, library *@<current SYMBOL_LIBRARY_VERSION>)
-  │     → insert state=done with that document_hash, applyJobResult, return   (06 §8 dedup, no worker)
+  │     → touchDocument, insert state=done with that document_hash, applyJobResult, return   (06 §8 dedup, no worker)
   │
   └─ insert state=queued → kickImportJobs → hold ≤ holdMs for the result → return the row
 
@@ -294,6 +362,18 @@ kickImportJobs: one loop per instance
 | `running` | claimed by `claimed_by`; alive while `heartbeat_at` is < 60 s old |
 | `done` | `document_hash` set, pins applied |
 | `failed` | `error` set (≤ 2000 chars); `UNSUPPORTED_FORMAT: …` for a source whose `kind` is neither `ocad` nor `omap` (unreachable from the upload routes, which sniff), the importer's message otherwise |
+
+`startedBy` is the signed-in user whose request started the job:
+`applyEventMap` takes it as its own option (`course.uploadMap`,
+`applyUploadedMap` and `useClubMap` pass `ctx.user` — for `useClubMap`
+that is not the library row's uploader), `clubMap.upload` /
+`addFromSource` pass `ctx.user`, the backfill passes nothing. It feeds
+the fourth clause of §4.2 and nothing else.
+
+A dedup hit, and a worker run whose document row already existed
+(`storeImportedDocument` reports `deduplicated`), touch the document
+before pinning it, so a GC run racing the pin sees a fresh
+`last_referenced_at` and skips the row (§8.2).
 
 `stage` ∈ `parse 0.1 → normalise 0.4 → match 0.55 → encode 0.7 → store 0.9 → done 1`;
 `progress` is that fixed ladder, not a byte count. Every progress and
@@ -366,8 +446,10 @@ mapImport.latestForEvent          coursesView; newest job for the current event 
 
 `report` is the stored document's import report (§3), present once the
 job is done. Housekeeping (`sweepImportHousekeeping`, 07 §4.4): uploads
-without `finalised_hash` older than 24 h, and `done` / `failed` job rows
-not updated for 7 days, are deleted on each engine tick.
+older than 24 h — abandoned or finalised; a finalised row has no use once
+the client holds the hash, and it is not a GC reference (§8.1) — and
+`done` / `failed` job rows not updated for 7 days, are deleted on each
+engine tick and as the GC's last pass (§8.2).
 
 ### 6.7 Backfill of pre-pipeline rows
 
@@ -417,18 +499,132 @@ viewer (slice B) and the service-worker CacheFirst layer (07 §7,
 `storage.persist()`) are pending; both key on the hash and may rely on
 `immutable` and the `ETag`.
 
-## 8. Pending in this chapter
+## 8. Garbage collection
 
-`GET /api/map-sources/:hash` streamed; previews route and rows (review
-slice); club map CRUD that reads from `club_maps` / `club_map_versions`
-instead of mirroring into them; "own running import job" as a fourth
-authorisation clause on the document route (§4.2); daily GC with a 30-day
-grace from `last_referenced_at` (07 §5); venue checkout snapshot; backups
-by hash; a re-import pass for documents stored under an older importer or
-library version (`ocad-3` / `none` rows). Each lands with its own section
-here and its own tests.
+07 §5. Blobs are never updated and never cascaded away; the collector is
+the only code that deletes them (`deleteBlob` semantics, §4.3), and it
+deletes only what no row points at. `packages/api/src/map-store/gc.ts`.
 
-## 9. Tests
+### 8.1 What is collectable
+
+| Table | Collectable when | References checked (`NOT EXISTS`) | Age rule |
+|---|---|---|---|
+| `map_documents` | no reference and old enough | `map_files.document_hash`, `club_map_versions.document_hash`, `map_import_jobs.document_hash` | `last_referenced_at < now − grace` |
+| `map_sources` | no reference and old enough | `map_documents.source_hash`, `club_map_versions.source_hash`, `map_files.source_hash`, `map_import_jobs.source_hash` | `created_at < now − grace` |
+
+- `map_files` and `club_map_versions` reference with `RESTRICT`, so a
+  `DELETE` of a blob they still point at fails — the belt. The job
+  references are not `RESTRICT` (`document_hash` is `SET NULL`,
+  `source_hash` `CASCADE`), so for them the `NOT EXISTS` is the only
+  guard: without it the GC would strip a review job of its document, or
+  delete a queued job with its source.
+- `map_uploads.finalised_hash` is **not** a reference (`SET NULL`;
+  finalised rows are swept after 24 h, §6.6). A source between finalise
+  and `applyUploadedMap` is covered by the age rule: it is collectable
+  only if its bytes were first stored more than `grace` ago and nothing
+  has pointed at them since. If such a re-upload races the daily run,
+  `applyUploadedMap` answers `NOT_FOUND` ("upload it again") and the
+  re-upload stores the row afresh.
+- Sources have no `last_referenced_at`; a source loses its last
+  reference only when its last document is collected (whose age rule is
+  stricter, since `created_at ≤ last_referenced_at`) or when an event /
+  club map pointing at it is deleted.
+- `map_previews` cascade with their document. They are not truncated by
+  age (07 §5 allows it; nothing needs the space yet).
+
+### 8.2 A run
+
+```
+runStorageGc(db, { now?, graceDays?, dryRun?, shouldStop? })
+  → { graceDays, dryRun, stopped, touched, documents: hash[], sources: hash[], skipped, uploads, jobs }
+```
+
+1. **Touch** — `UPDATE map_documents SET last_referenced_at = now()` for
+   every document a `map_files`, `club_map_versions` or
+   `map_import_jobs` row still references. `touchDocument` is only called
+   when a reference is created, so without this a document referenced
+   for two years and dereferenced yesterday (event purged, club map
+   removed) would be collected on the next run. With it, the grace runs
+   from the last daily pass that saw a reference — the dereference, give
+   or take a day — which is what "re-attachable for 30 days" (07 §5)
+   needs.
+2. **Documents** — select the candidates (§8.1), oldest first; then one
+   autocommit statement per row:
+   `DELETE … WHERE hash = $1 AND last_referenced_at < $cutoff AND NOT EXISTS (…) RETURNING …`.
+   The conditions are re-checked by the delete itself, so a reference or
+   a touch committed after the candidate query makes that row a no-op
+   (Postgres re-evaluates the row's own columns after waiting on a
+   concurrent writer). A foreign-key violation (`23503`, a `RESTRICT`
+   reference created in the same instant) is caught and counted as
+   `skipped`; the run carries on. `map_previews` go with the row.
+3. **Sources** — the same over `map_sources`, after the documents so a
+   source freed by pass 2 goes in the same run.
+4. **Uploads and jobs** — `sweepImportHousekeeping` (§6.6).
+
+07 §5 sketched one `DELETE … WHERE NOT EXISTS` per pass. One statement
+per row is used instead: an interrupted run (deploy, lost lease) leaves
+every row either deleted or untouched and the next run picks up the
+rest, and one row that loses a race is skipped instead of failing the
+whole pass. `shouldStop()` is checked between rows.
+
+Audit: one server log line per deletion,
+`[map-gc] deleted document <hash> (source <hash>, <n> B, last referenced <iso>)`
+/ `[map-gc] deleted source <hash> (<kind>, <n> B, "<file_name>")`, and a
+summary line per run. There is no `event_log` table (07 §5 named one);
+the scheduled run also stores its summary (counts, not hashes) in
+`settings`. Recovery from a wrong deletion is the per-event dump.
+
+`dryRun` skips the touch and every delete and returns the candidates
+the run would delete; the source candidates are computed as if the
+document candidates were already gone.
+
+### 8.3 Schedule
+
+A leader-lease singleton (`docs/background-jobs-lease.md`): the
+supervisor's `reconcile()` on the lease holder calls
+`maybeStartStorageGc()`, which starts a run in the background (the
+reconcile loop is not held up) when it is due:
+
+| `settings` key | |
+|---|---|
+| `map_storage_gc.started_at` | ISO time written when a run starts |
+| `map_storage_gc.finished_at` | ISO time written when it finishes |
+| `map_storage_gc.last_result` | the summary JSON (counts) |
+| `map_storage_gc.grace_days` | optional override of the 30-day default (07 §15); a positive integer, at least 1; anything else is ignored with a warning |
+
+Due (`isGcDue`) when there is no `finished_at` or it is ≥ 24 h old, and
+no `started_at` is younger than 1 h and newer than `finished_at` (a run
+in progress, or one that crashed less than an hour ago). The timestamps
+live in the database, so the schedule survives restarts and leadership
+moves; a local timer would never fire on instances recycled more often
+than daily. The settings are read at most every 15 minutes per
+instance. Losing the lease asks a running GC to stop after its current
+row (`stopAll`). Two runs overlapping after a handover are harmless —
+every delete re-checks its conditions.
+
+The per-instance engine tick (§6.2) keeps running the housekeeping sweep
+every 60 s; the GC's pass 4 is the same idempotent sweep.
+
+### 8.4 Running it by hand
+
+```
+mapStorage.gcRun { dryRun? }    admin → the §8.2 summary (hashes included)
+```
+
+A manual run does not move the schedule. The Maintenance card 07 §5
+mentions is pending (§9).
+
+## 9. Pending in this chapter
+
+Previews route and rows (review slice); club map CRUD that reads from
+`club_maps` / `club_map_versions` instead of mirroring into them; venue
+checkout snapshot; backups by hash; a re-import pass for documents
+stored under an older importer or library version (`ocad-3` / `none`
+rows); a Settings → Maintenance card for the GC (§8.4: status of the
+last run, dry run, run now). Each lands with its own section here and
+its own tests.
+
+## 10. Tests
 
 | Level | File | Covers |
 |---|---|---|
@@ -442,7 +638,8 @@ here and its own tests.
 | E2E | `e2e/map-backfill.spec.ts` | legacy club row inserted directly → Maintenance card shows it pending → Import now → "Imported n, failed 0" → series + version exist → no longer pending |
 | E2E | `e2e/map-documents.spec.ts` | UI upload on `itest` → `documentHash` → route 200/304/206/403 → dev page `?url=` loads it natively → `latestForEvent` done with report; chunked route (chunks out of order) → `applyUploadedMap` → `mapMetadata`; `clubMap.upload` → `mapImport.status` done |
 
-## 10. Where things live
+## 11. Where things live
+
 
 | Path | Contents |
 |---|---|
