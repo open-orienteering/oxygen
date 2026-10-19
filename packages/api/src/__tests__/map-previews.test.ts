@@ -26,7 +26,8 @@ describe("preview request parsing", () => {
   it("symbol index: non-negative integers only", () => {
     expect(parseSymbolIdx("0")).toBe(0);
     expect(parseSymbolIdx("17")).toBe(17);
-    for (const bad of ["", "-1", "01", "1.5", "1e3", "abc", " 1", "9999999"]) expect(parseSymbolIdx(bad), bad).toBeNull();
+    expect(parseSymbolIdx("9999999")).toBe(9999999); // out of range is a 404, not a 400
+    for (const bad of ["", "-1", "01", "1.5", "1e3", "abc", " 1", "99999999999999999999"]) expect(parseSymbolIdx(bad), bad).toBeNull();
   });
 
   it(".png suffix is required", () => {

@@ -21,10 +21,11 @@ export type PreviewKind = "thumbnail" | "symbol";
 
 // ---- request parsing ----------------------------------------------------------
 
-/** `:idx` of `symbols/:idx.png`: a non-negative integer without sign or leading zeros. */
+/** `:idx` of `symbols/:idx.png`: a non-negative safe integer without sign or leading zeros. */
 export function parseSymbolIdx(raw: string): number | null {
-  if (!/^(0|[1-9]\d{0,5})$/.test(raw)) return null;
-  return Number(raw);
+  if (!/^(0|[1-9]\d*)$/.test(raw)) return null;
+  const n = Number(raw);
+  return Number.isSafeInteger(n) ? n : null;
 }
 
 /** `:code` of the library route: the entry id without the library prefix (`418`, `302.b`). */

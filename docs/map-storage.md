@@ -267,7 +267,7 @@ so a hash cannot be probed.
 
 | Condition | Status |
 |---|---|
-| `:hash` not 64 hex; `:idx` not a non-negative integer; `:libraryId` not a shipped library; `:code` not `\d{3}(\.\d{1,2})?(\.[a-z])?` | 400 `{error}` |
+| `:hash` not 64 hex; `:idx` not a non-negative safe integer; `:libraryId` not a shipped library; `:code` not `\d{3}(\.\d{1,2})?(\.[a-z])?` | 400 `{error}` |
 | document routes: §4.2 predicate fails | 401 anonymous / 403 signed in |
 | library route: auth on and no signed-in user | 401 |
 | no such document; `idx` ≥ symbol count or `render: null`; thumbnail over the object cap; `:version` ≠ current; no such entry | 404 `{error}` |
