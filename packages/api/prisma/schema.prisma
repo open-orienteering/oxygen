@@ -270,6 +270,7 @@ model User {
   clubMapsCreated      ClubMap[]
   clubMapVersions      ClubMapVersion[]
   mapImportJobs        MapImportJob[]
+  symbolDecisions      ClubSymbolDecision[]
 
   @@map("users")
   @@schema("oxygen")
@@ -1354,9 +1355,9 @@ model MapImportJob {
   eventId      BigInt?   @map("event_id")
   clubMapId    String?   @map("club_map_id") @db.Uuid
   sourceHash   String    @map("source_hash")
-  /// Review-round input (06 §5.1); empty until the review UI ships.
+  /// Snapshot of the club symbol decisions stage 6 applies (`SymbolDecision[]`, docs/map-storage.md §6.1), taken at insert.
   decisions    Json      @default("[]")
-  /// queued | running | done | failed (review: later).
+  /// queued | running | done | failed.
   state        String
   /// Import stage name while running.
   stage        String?
@@ -1382,6 +1383,22 @@ model MapImportJob {
   @@index([sourceHash])
   @@index([documentHash])
   @@map("map_import_jobs")
+  @@schema("oxygen")
+}
+
+/// A reviewed symbol outcome reused across documents (docs/map-symbols.md §8.5; 06 §5.3, 07 §4.3).
+/// Written only by `mapImport.decide`. `canonicalId` null = explicitly kept as source.
+model ClubSymbolDecision {
+  fingerprint    String
+  libraryVersion String   @map("library_version")
+  canonicalId    String?  @map("canonical_id")
+  decidedBy      String?  @map("decided_by") @db.Uuid
+  decidedAt      DateTime @default(now()) @map("decided_at") @db.Timestamptz(6)
+
+  decider User? @relation(fields: [decidedBy], references: [id], onDelete: SetNull)
+
+  @@id([fingerprint, libraryVersion])
+  @@map("club_symbol_decisions")
   @@schema("oxygen")
 }
 
