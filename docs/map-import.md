@@ -14,7 +14,7 @@ implemented and marks what is still pending.
  3 parse        reader → source model                                     api/shared done (OCAD via the ocad2geojson fork; OMAP via the shared XML reader, §4)
  4 normalise    source model → objects, symbols, colours, georef, warnings shared     done (OCAD §3; OMAP §4; symbol IR §3.3 / §4.3)
  5 analyse      bounds, north, fonts, feature usage                       shared     bounds only (encoder)
- 6 match        03 §6.5 staged matcher → SymbolMatch[]                    shared     done (docs/map-symbols.md §8)
+ 6 match        03 §6.5 staged matcher → SymbolMatch[]                    shared     done (docs/map-symbols.md §8); club decisions as stage 1 (§8.5)
  7 align        colour stack alignment (03 §6.3)                          shared     done (docs/map-symbols.md §9)
  8 encode       02 codec → bytes; sha256 → documentHash                   shared     done
  9 store        map_sources + map_documents rows, event pin, report      api        done, as an import job in a worker thread (docs/map-storage.md §3, §6)
@@ -101,6 +101,61 @@ job, never on the request thread. The job passes `map_sources.kind`
 through (`runImportInWorker(bytes, fileName, { kind })`), so an uploaded
 `.omap` / `.xmap` follows exactly the same route as an `.ocd` from
 chunked upload to pinned document. `renderFor` applies to OCAD only.
+
+`runImportInWorker(bytes, fileName, { kind, decisions })` also carries
+the job's decision snapshot (`map_import_jobs.decisions`,
+`docs/map-storage.md` §6.1) into `match.decisions`, so stage 6 applies the
+club symbol decisions (`docs/map-symbols.md` §8.5) exactly as the job
+row recorded them when it was inserted.
+
+**Review round** (06 §5.1, §5.3; `docs/map-storage.md` §6.8):
+
+```
+mapImport.review   { documentHash }                          query, map-storage §4.2 predicate (courses.view, kiosk key)
+  → { documentHash, current, library, symbols: ReviewRow[], stack: { colours, alignment }, report }
+mapImport.decide   { documentHash, decisions: ReviewDecision[] }   mutation, the same predicate in edit mode
+  → { applied, job }                                         job as mapImport.status returns it
+mapImport.finalise { documentHash, target: {kind:"event"} | {kind:"club", clubMapId} }   mutation
+  → { documentHash, pinned, previous[] }
+
+type ReviewDecision = { symbolIdx; accept: canonicalId } | { symbolIdx; unmatch: true } | { symbolIdx; reset: true }
+```
+
+- `ReviewRow` is `docs/map-symbols.md` §8.5 plus `previewUrl`
+  (`/api/map-documents/:hash/symbols/:idx.png`, null without a render) and
+  a `previewUrl` per candidate (`/api/library/:libraryId/:version/:code.png`,
+  the current release — A5's versioned path, `docs/map-storage.md` §4.5).
+  The URLs are relative and carry no event: a client reviewing an event's
+  document appends `?event=<nameId>` as for the document route.
+  `current` is true when importing the source now would give this very
+  document (current importer, current library release, current
+  decisions); `stack.colours` is the header's colour stack and
+  `stack.alignment` the report's `colourStack` summary.
+- `decide` validates every decision against the document (index exists,
+  a source symbol with a render, an accepted id is an entry of the
+  document's library — `BAD_REQUEST` otherwise), writes the club rows
+  (`accept` / `unmatch` upsert under the current release, `reset` deletes
+  the fingerprint's rows of that library) and starts an import job for
+  the document's source **without a target**. The job snapshots the new
+  decisions, so its document is the reviewed one; it is stored, visible
+  to the decider through the own-job clause (`docs/map-storage.md` §4.2) with its swatches, and
+  pinned nowhere. Same file + same decisions ⇒ same document (the dedup
+  short-cut finds it). `reset` of everything returns the matcher's own
+  document.
+- `finalise` pins a document where its source is the target's map:
+  `target.kind: "event"` = the request's event (`x-event-id`,
+  `courses.edit`; `BAD_REQUEST` without an event), every `map_files` row
+  carrying the document's source; `"club"` = that club map's version of
+  the source, whose `document_hash` moves (`docs/map-storage.md` §6.4).
+  `PRECONDITION_FAILED` when the target's map is another file;
+  `NOT_FOUND` for an unknown document, an event without a map or an
+  unknown club map. Finalising the matcher's own output is a no-op
+  (06 §5.1); `previous` lists the hashes that were pinned before.
+- Authorisation (`docs/map-storage.md` §4.2): `review` is the document route's predicate exactly.
+  `decide` and `finalise` use it in edit mode (`EDIT_ACCESS`): the event
+  clause needs `courses.edit` and never takes the kiosk key; the club and
+  own-job clauses read as for reading. Club map targets need a signed-in
+  user, as the club library's own mutations.
 
 The *apply* mutations that still feed the legacy raster tile pipeline
 (`course.applyEventMap`-style event map upload, club map upload) remain
@@ -490,6 +545,8 @@ index), floating-point sums (keep source integers), `Date`/random ids.
 | Unit (api) | `packages/api/src/__tests__/import-omap.test.ts` | reader → document on `e2e/test.xmap`: determinism across `importOmapToDocument` / `importMapToDocument`, provenance (`omap-1`, version 9, UTM 33N), bboxes, all 21 fixture symbols rendered, symbolise with the dangling symbol as the only drop, factor ×1, import report, kind sniff with BOM, the two kinds kept apart |
 | Unit + integration (api) | `map-import-jobs.test.ts` (both) | worker runs a Mapper file by kind with the same hashes as inline; a Mapper source goes through the job to a `done` row with `importer_version omap-1` and is deduplicated on the second job; garbage of either kind fails cleanly |
 | E2E | `e2e/map-gl-doc.spec.ts` | document path = reader path in the browser, native `.oxvm` round trip, `mode=source` draws the fixture from its own definitions with no proxies; `e2e/test.xmap` loads client-side with no OCAD reader, draws, and surfaces the OMAP warning codes |
+| Unit (shared) | `packages/shared/src/import/__tests__/decisions.test.ts` | club decisions and review rows (`docs/map-symbols.md` §8.5), stage 6 with decisions: other library ignored, older release applied |
+| Unit + integration (api) | `map-symbol-decisions.test.ts`, `integration/map-review.test.ts` (see `docs/map-storage.md` §10) | the review round: decision writes and validation, worker applying a snapshot, `review` / `decide` / `finalise` |
 | Unit + integration + E2E (api, web) | see `docs/map-storage.md` §10 | stages 1 and 9: chunked upload route, import jobs, store, dedup, pins, report row, delivery route |
 | Unit + integration + E2E (api) | see `docs/map-storage.md` §10 (previews rows) | stage 10: thumbnail row written by the job and by the dedup short-cut, non-fatal failure, object cap |
 
@@ -506,8 +563,6 @@ directory, not in the repo.
 ## 8. Pending in this chapter
 
 S2 confirmation of the *provisional* §3.3 rows against OCAD output,
-event / club map *apply* for Mapper sources (needs slice C, §2.2), review API
-(06 §5.1, §5.3; previews landed, `docs/map-storage.md` §4.5), the `decisions` input to a job (06 §5.3 — the column
-exists and `matchDocument` accepts decisions, nothing reads the column
-yet), stage 5 beyond bounds. Each lands with its own section
+event / club map *apply* for Mapper sources (needs slice C, §2.2), CRT
+export / import (06 §5.1, A7), stage 5 beyond bounds. Each lands with its own section
 here and its own tests.
