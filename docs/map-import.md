@@ -13,7 +13,7 @@ implemented and marks what is still pending.
  2 detect       0x0CAD → OCAD; "<?xml" + Mapper namespace → OMAP          api        done on the chunked route (first chunk sniff, 415 otherwise); base64 path assumes OCAD
  3 parse        reader → source model                                     api/shared done (OCAD via the ocad2geojson fork; OMAP via the shared XML reader, §4)
  4 normalise    source model → objects, symbols, colours, georef, warnings shared     done (OCAD §3; OMAP §4; symbol IR §3.3 / §4.3)
- 5 analyse      bounds, north, fonts, feature usage                       shared     bounds only (encoder)
+ 5 analyse      bounds, north, fonts, feature usage                       shared     bounds, georeference, north (§3.8); fonts and feature usage pending
  6 match        03 §6.5 staged matcher → SymbolMatch[]                    shared     done (docs/map-symbols.md §8)
  7 align        colour stack alignment (03 §6.3)                          shared     done (docs/map-symbols.md §9)
  8 encode       02 codec → bytes; sha256 → documentHash                   shared     done
@@ -33,9 +33,10 @@ Stage 10 writes the thumbnail only. 06 §4.1's "metadata columns from
 the header" are the stage-9 `map_documents.header` summary
 (`docs/map-storage.md` §3): scale, bounds, georeferencing, colours and
 counts are already there. The `map_files` quick-access columns (`scale`,
-`bounds`, `north_offset`, `calibration`) stay with the raster path until
-the normaliser has north and projection (stage 5, pending). A failed
-derive is logged and the job still ends `done`: previews are cache.
+`bounds`, `north_offset`, `calibration`) are written by the pin from the
+document's header and its stage-5 report (§3.8, `docs/map-storage.md`
+§6.4). A failed derive is logged and the job still ends `done`: previews
+are cache.
 
 ## 2. Entry points
 
@@ -44,11 +45,12 @@ derive is logged and the job still ends `done`: previews are cache.
 ```ts
 import { mapImport, mapDocument } from "@oxygen/shared";
 
-const { input, counts, warnings } = mapImport.ocadToDocumentInput(ocadFile, {
+const { input, counts, warnings, analysis } = mapImport.ocadToDocumentInput(ocadFile, {
   fileName, fileHash, fileBytes,
   importer?: string,                                   // default OCAD_IMPORTER_VERSION
   renderFor?: (symbol) => RenderSymbol | null,         // replaces the §3.3 conversion when given
 });
+// analysis: stage 5 over `input` (§3.8) — bounds, georeference, north; not part of the document
 const matched = mapImport.matchDocument(input, {       // stages 6–7
   library?, edition?, factor?, decisions?,             // overrides; see docs/map-symbols.md §8
 });
@@ -71,7 +73,7 @@ The Mapper path has the same shape with its own reader in front:
 
 ```ts
 const file = mapImport.readOmap(text);                 // stage 3: OmapFile (§4.1)
-const { input, counts, warnings } = mapImport.omapToDocumentInput(file, {
+const { input, counts, warnings, analysis } = mapImport.omapToDocumentInput(file, {
   fileName, fileHash, fileBytes, importer?,            // default OMAP_IMPORTER_VERSION
 });
 // then matchDocument / encodeMapDocument exactly as above
@@ -88,7 +90,7 @@ import { importMapToDocument, importOcadToDocument, importOmapToDocument } from 
 const r = await importMapToDocument(buffer, "map.omap", kind /* "ocad" | "omap" */, { renderFor, onStage, match });
 // importOcadToDocument / importOmapToDocument are the fixed-kind wrappers.
 // r.kind, r.bytes, r.documentHash, r.fileHash, r.counts, r.warnings,
-// r.matching, r.colourStack, r.libraryVersion ("ISOM2017-2@2026.10.1"),
+// r.matching, r.colourStack, r.analysis (stage 5, §3.8), r.libraryVersion ("ISOM2017-2@2026.10.1"),
 // r.timings { read, normalise, match, encode } (ms)
 // onStage?: (stage: "parse" | "normalise" | "match" | "encode") => void — called as
 // each stage begins; the import job (docs/map-storage.md §6) writes it to the row.
@@ -101,6 +103,21 @@ job, never on the request thread. The job passes `map_sources.kind`
 through (`runImportInWorker(bytes, fileName, { kind })`), so an uploaded
 `.omap` / `.xmap` follows exactly the same route as an `.ocd` from
 chunked upload to pinned document. `renderFor` applies to OCAD only.
+
+The legacy modules `packages/api/src/map-projection.ts` and
+`map-north.ts` are adapters over the same shared code: `ocadToWgs84`,
+`wgs84ToOcad`, `ocadBoundsToWgs84`, `computeMapNorthOffset`,
+`computeTrueNorthFromGrid` and `probeMeridianLines` build a `mapGeo`
+frame from the reader's `getCrs()` (grid scale factor 1, as the reader
+has it) and call `mapGeo`; what stays API-side is the coordinate-range
+EPSG inference for files without a usable grid id (`getEpsgString`,
+raster path only — a heuristic with no place in a deterministic
+normaliser) and the WMM declination (`computeDeclination`, date
+dependent). The raster upload computes the `map_files` columns through
+the same function as the pin (`map-store/map-file-metadata.ts`
+`mapFileMetadataFor`, over `ocadToDocumentInput` with symbol conversion
+skipped), so both writers produce identical values; the inference is
+its only fallback.
 
 The *apply* mutations that still feed the legacy raster tile pipeline
 (`course.applyEventMap`-style event map upload, club map upload) remain
@@ -260,10 +277,22 @@ stale border references, one too-narrow framing line.
 ### 3.5 Scale, georeferencing, print
 
 - `mapScale` from ScalePar (1039) `m`, default 15 000.
-- `georeferencing`: `crs` from `getCrs()` when the grid id resolves,
-  `paperOrigin` from `x`/`y`, `gridRotationDeg` from `a`,
-  `gridScaleFactor = 1 + b/100`, `declinationDeg` / `realWorldEnabled` /
-  `sourceGridId` passed through.
+- `georeferencing`: `crs` from `getCrs()` when the grid id `i` resolves
+  in the reader's table, else from the OCAD 2018 EPSG code `e` when
+  present (`{ authority: "EPSG", code, name: "EPSG:<code>" }`).
+  `paperOrigin` from `x`/`y` when a CRS resolved, `gridRotationDeg` from
+  `a`, `gridScaleFactor = 1 + b/100`, `realWorldEnabled` (`r`) and
+  `sourceGridId` (`i`) passed through.
+- ScalePar `d` is the real-world grid distance in metres (`g` × scale:
+  `d1000` on 1:15 000 maps, `d120` on a 1:4 000 sprint) and is **not**
+  carried; OCAD declares no declination. 02 §5 read it as a declination
+  (decision log 2026-10-19, A11); `ocad-4` documents carry that wrong
+  `declinationDeg`.
+- A real-world grid that does not resolve (`r = 1` with `i ≠ 0` or an
+  `e` that is no positive integer) gives `crs: null`, `paperOrigin: null`
+  and `CRS_UNRESOLVED` naming the grid (`grid 1000`), as on the OMAP
+  path (§4.4). The legacy raster path's coordinate-range inference is
+  not applied here (§2.2).
 - `printWindow` from PrintPar (1026); `exportRectangles` from string 26.
 
 ### 3.6 Dropped with a warning
@@ -285,6 +314,71 @@ entry per code with a count:
 | `DECISION_UNKNOWN_ENTRY` | a `SymbolDecision` names a library entry id that does not exist |
 | `COLOUR_ORDER_CONFLICT` | the source stacks two palette colours in the opposite order to the palette (`colourStack.conflicts`); the source order is kept |
 | `COLOUR_UNCLASSIFIED` | a colour used by symbols is not an IOF colour (`colourStack.unclassified`); its symbols stay as drawn |
+
+### 3.8 Stage 5: georeference and north (both sources)
+
+`mapImport.analyseDocumentInput(input)` runs at the end of both
+normalisers and returns `analysis` with the input;
+`mapImport.analyseMapDocument(doc)` gives the same result from a decoded
+document. Pure and isomorphic (`packages/shared/src/import/analyse.ts`
+over `mapGeo`, `packages/shared/src/geo/`). Its results are
+transcendental (proj4, sin/cos/atan2) and derived, so they are never
+written into the document (§6, `docs/map-document-format.md` §2.3); they
+go into the import report and the `map_files` columns.
+
+**Projection** (`mapGeo`): paper (native units, y-up) → projected:
+rotate by −(`gridRotationDeg` + correction), scale by
+`gridScaleFactor · mapScale / (unitsPerMm · 1000)` m per unit, add
+`paperOrigin`; projected ↔ WGS 84 by proj4 with the EPSG definitions in
+`geo/epsg.ts` (SWEREF99 TM and the 12 local zones 3006–3018, 3067,
+ETRS89 / UTM 25832–25835, WGS 84 / UTM 32632–32636). A CRS outside that
+list resolves (`method: "epsg"`) but is not `projectable`, and every
+WGS 84 field is null. The correction is the operator's
+`rotation_correction`; stage 5 runs with 0.
+
+**Meridian lines**: objects of `origin: "source"` symbols coded `601`
+or `601.x`, grouped by symbol index; each line's tilt is the folded
+angle from paper +Y of its first → last coordinate; lines shorter than
+5 mm (`5 · unitsPerMm`) are dropped. A group counts with ≥ 10 lines and
+a tilt standard deviation ≤ 0.7°; the largest group wins (ties: lowest
+symbol index); `medianTiltDeg` is the upper median. Sums run over the
+sorted tilts, so object order (Hilbert, in a stored document) does not
+change the result. Same thresholds as the legacy `probeMeridianLines`.
+
+**Fields** (`DocumentAnalysis`; the report's `georeference` and `north`
+carry them under these names, which the S0 corpus check reads):
+
+| Field | Meaning |
+|---|---|
+| `bounds` | union of object coordinate boxes, native units (= `header.bounds`) |
+| `georeference.crs` | `"EPSG:<code>"` from `header.georeferencing.crs`, or null |
+| `georeference.method` | `"epsg"` when a CRS resolved, else `"none"` (06 §4.4's `proj4-match` is not used: §4.4) |
+| `georeference.projectable` | proj4 has a definition for the CRS |
+| `georeference.gridRotationDeg` | declared grivation |
+| `georeference.gridConvergenceDeg` | true north measured from grid north at the paper origin, atan2(Δe, Δn) of a 0.001° step north |
+| `georeference.originWgs84` | `{lat, lng}` of the paper origin |
+| `georeference.wgs84Bounds` | `{north, south, east, west}` around the projected corners of `bounds` |
+| `north.meridian` | `{symbolIdx, code, count, medianTiltDeg, stddevDeg}` or null |
+| `north.paperNorthBearingDeg` | initial bearing from true north of paper +Y, between the points at 25 % and 75 % of the height on the vertical centre line of `bounds` |
+| `north.displayNorthOffsetDeg` | `paperNorthBearingDeg + medianTiltDeg` (0 without meridians): `map_files.north_offset` before any correction |
+
+The API's report adds the legacy `NorthDetection` fields to `north`
+(`packages/api/src/map-north.ts` `detectDocumentNorth`):
+`declaredGrivationDeg`, `trueNorthFromGridDeg` (= convergence),
+`centerLat` / `centerLng` (= `originWgs84`), the WMM `declinationDeg`
+and `meridianStalenessDeg` at `asOf` (the worker's clock). Those three
+depend on the import date, which is why the report is not part of the
+document identity.
+
+**Quick-access columns** (`mapFileMetadataFor`): `scale = mapScale`;
+`bounds` = `wgs84Bounds`, `calibration` = the four corners of `bounds`
+(min/min, max/min, min/max, max/max) as `{mapX, mapY}` paper mm with
+`{lat, lng}`, and `northOffset` = paper-north bearing + meridian tilt —
+all with the row's `rotation_correction`. Not projectable → no write.
+The extent is the geometry's (`header.bounds`); the raster path used to
+take the reader's object-index rectangles, which include symbol extents
+(±0.4 mm on the fixture) — the shared function moved both writers to
+the geometry.
 
 ## 4. OMAP normalisation rules
 
@@ -416,7 +510,10 @@ differ from OCAD or that 06 left open:
   the grid table only knows OCAD ids. `paperOrigin` is the projected
   position of paper (0, 0): `P_ref + Rot(−grivation) · s · flipY(−ref_point)`,
   `s = grid_scale_factor · scale / 1000` (mm → m), reproducing Mapper's
-  `Georeferencing::toProjectedCoords`. `gridRotationDeg = grivation`,
+  `Georeferencing::toProjectedCoords`, each coordinate rounded to
+  1e-6 m (1 µm on the ground; Mapper writes its reference points to the
+  millimetre) so no unrounded sin/cos result reaches the document bytes
+  (§6; `omap-2`). `gridRotationDeg = grivation`,
   `declinationDeg` when non-zero, `realWorldEnabled` when a CRS resolved.
   `mapScale` from `<scale>`, default 15 000 with `MAP_SCALE_MISSING`.
 - **Print**: `<print_area left top width height>` (mm, y-down) →
@@ -442,17 +539,22 @@ differ from OCAD or that 06 left open:
 
 `COLOUR_OPACITY_IGNORED`, `HELPER_SYMBOLS_HIDDEN`, `TEXT_BOX_DROPPED`,
 `TEXT_ALIGNMENT_PER_OBJECT`, `TEXT_VERTICAL_ALIGNMENT_DROPPED`,
-`OBJECT_TAGS_DROPPED`, `PARTS_MERGED`, `CRS_UNRESOLVED`,
-`MAP_SCALE_MISSING`, `EMPTY_TEXT_DROPPED`, plus the reader's own
+`OBJECT_TAGS_DROPPED`, `PARTS_MERGED`, `CRS_UNRESOLVED` (shared with
+OCAD since `ocad-5`, §3.5), `MAP_SCALE_MISSING`, `EMPTY_TEXT_DROPPED`, plus the reader's own
 (`READER_WARNING` texts for unknown elements, misnumbered symbols,
 non-contiguous priorities). The rest are shared with §3.6–3.7.
 
 ## 5. Header provenance
 
-`format.importer` is `"ocad-4"` for OCAD sources (`OCAD_IMPORTER_VERSION`;
+`format.importer` is `"ocad-5"` for OCAD sources (`OCAD_IMPORTER_VERSION`;
 `ocad-1` had `render: null` for every source symbol, `ocad-2` carried the
-upload name in the header, `ocad-3` had no matcher) and `"omap-1"` for
-Mapper sources (`OMAP_IMPORTER_VERSION`). Bump the relevant one whenever
+upload name in the header, `ocad-3` had no matcher, `ocad-4` stored
+ScalePar `d` as `declinationDeg`, ignored `e` and had no
+`CRS_UNRESOLVED`) and `"omap-2"` for Mapper sources
+(`OMAP_IMPORTER_VERSION`; `omap-1` stored `paperOrigin` unrounded).
+Documents of either earlier version have no `georeference` / `north` in
+their report; the dedup only reuses current-version documents, so the
+next import of their source produces both. Bump the relevant one whenever
 stages 3–8 would produce different bytes for the same file — reader fix,
 normaliser rule, codec change, matcher thresholds; a codec or matcher
 change bumps both. Library changes are carried
@@ -471,7 +573,13 @@ across processes and machines. Unit tests `import-ocad.test.ts` /
 `import-omap.test.ts` encode `e2e/test.ocd` / `e2e/test.xmap` twice; the corpus script asserts `sameAsPrevious` across
 runs. Sources of non-determinism to avoid when extending the normaliser:
 iteration over `Map`/`Set` built from sparse arrays (use the array
-index), floating-point sums (keep source integers), `Date`/random ids.
+index), floating-point sums (keep source integers), `Date`/random ids,
+and transcendental functions (`Math.sin`/`cos`/`atan2`, proj4): their
+last-bit results are not guaranteed identical across engines and
+platforms, so the header holds only source-declared values and the one
+computed value (OMAP `paperOrigin`) is rounded to 1e-6 m; everything
+projected lives in the report (§3.8). The S0 corpus check asserts the
+document hash is identical on two machines.
 
 ## 7. Tests
 
@@ -481,14 +589,17 @@ index), floating-point sums (keep source integers), `Date`/random ids.
 | Unit (shared) | `packages/shared/src/import/__tests__/omap-reader.test.ts` | barrier wrapper, both coordinate forms and every flag, symbols of all five types incl. inline sub-symbols, colours with spot components, georeferencing, parts, templates, print, tags, misnumbered symbols |
 | Unit (shared) | `packages/shared/src/import/__tests__/omap-symbols.test.ts` | every §4.3 rule: point glyphs incl. nested points and offset discs, line caps / shortening / pointed taper, borders, dash layouts and mid / dash / start / end placements, width-0 carriers, area hatch and pattern, text framing and fonts, the combined-symbol merge table (509, 508.x, 502.2, 511.2, second dashed, area combinations) |
 | Unit (shared) | `packages/shared/src/import/__tests__/omap-source.test.ts` | the fixture through `omapToDocumentInput`: colour stack order and opacity, y flip and `-0`, every §4.2 flag rule, hole shift, dash-point rule per symbol, text alignment lifting, missing symbols, parts merge, templates, print window, georeferencing (UTM / EPSG / Gauss-Krüger / PROJ.4 / Local / unresolved), codec round trip, every §4.5 warning code |
-| Unit (shared) | `packages/shared/src/import/__tests__/ocad-source.test.ts` | colour stack order, symbol table, hidden flag, duplicates, graphic objects, missing symbols, flag mapping, georeferencing, print window, warning codes |
+| Unit (shared) | `packages/shared/src/import/__tests__/ocad-source.test.ts` | colour stack order, symbol table, hidden flag, duplicates, graphic objects, missing symbols, flag mapping, georeferencing (no `declinationDeg` from `d`, `e` fallback, grid table first, `CRS_UNRESOLVED`), print window, warning codes, `analysis` returned |
+| Unit (shared) | `packages/shared/src/geo/__tests__/projection.test.ts`, `north.test.ts` | §3.8 maths: EPSG lookup, paper ↔ projected (rotation + correction, grid scale factor, round trip), Mapper's reference point on the `e2e/test.xmap` frame, paper ↔ WGS 84, convergence at Nackareservatet (−2.82°) and on a central meridian, paper-north bearing, extent and calibration corners, `mapFileMetadata`; angle folding and the cluster thresholds |
+| Unit (shared) | `packages/shared/src/import/__tests__/analyse.test.ts` | `601` / `601.x` codes, grouping per symbol, 5 mm floor scaled by `unitsPerMm`, graphic symbols excluded, georeference fields, un-georeferenced and non-projectable CRSs, same result over the decoded document |
 | Unit (shared) | `packages/shared/src/import/__tests__/ocad-symbols.test.ts` | every row of the §3.3 tables: line styles, dashes (507 end gap), framing, double lines, main / secondary / corner / start / end symbols, point elements, area fill / hatch / pattern / border, text mapping, fonts, warning codes |
 | Unit (shared) | `packages/shared/src/render/__tests__/{dash,placement,symbolise}.test.ts` | OCAD end-gap semantics, `dashGroupCentres` / `sectionCentres`, `backgroundWidthUm`, continuous halo |
 | Unit (shared) | `packages/shared/src/map-document/__tests__/codec.test.ts`, `projection-bridge.test.ts` | encode/decode round trip, Hilbert order, validation errors, truncation, JSON projection, render bridge |
 | Unit (shared) | `packages/shared/src/import/__tests__/{colour-class,fingerprint,matcher,colour-align,match-document}.test.ts` | stages 6–7: CMYK / name classification, fingerprints and tolerances, every matcher stage and the traps (reused numbers, template variants, old numbering), factor detection (lines / codes / scale / override), alignment steps and conflicts, whole-document run with codec round trip and canonical drawing through the bridge |
-| Unit (api) | `packages/api/src/__tests__/import-ocad.test.ts` | reader → document on `e2e/test.ocd`, determinism, bboxes, all fixture symbols converted, symbolise without proxies, fixture matches (3 auto, old-numbered ring suggested, factor by `codes`), stack with inserted lower purple, hook renders against the source table |
-| Unit (api) | `packages/api/src/__tests__/import-omap.test.ts` | reader → document on `e2e/test.xmap`: determinism across `importOmapToDocument` / `importMapToDocument`, provenance (`omap-1`, version 9, UTM 33N), bboxes, all 21 fixture symbols rendered, symbolise with the dangling symbol as the only drop, factor ×1, import report, kind sniff with BOM, the two kinds kept apart |
-| Unit + integration (api) | `map-import-jobs.test.ts` (both) | worker runs a Mapper file by kind with the same hashes as inline; a Mapper source goes through the job to a `done` row with `importer_version omap-1` and is deduplicated on the second job; garbage of either kind fails cleanly |
+| Unit (api) | `packages/api/src/__tests__/import-ocad.test.ts` | reader → document on `e2e/test.ocd`, determinism, bboxes, all fixture symbols converted, symbolise without proxies, fixture matches (3 auto, old-numbered ring suggested, factor by `codes`), stack with inserted lower purple, hook renders against the source table; stage 5: grid 13002 → EPSG:3006 with no `declinationDeg`, the same 12-line meridian cluster as the legacy probe, report `georeference` / `north` with WMM fields at `asOf` agreeing with `detectMapNorth`, raster-path and pin columns identical (correction 0 and 11) |
+| Unit (api) | `packages/api/src/__tests__/import-omap.test.ts` | reader → document on `e2e/test.xmap`: determinism across `importOmapToDocument` / `importMapToDocument`, provenance (`omap-2`, version 9, UTM 33N), bboxes, all 21 fixture symbols rendered, symbolise with the dangling symbol as the only drop, factor ×1, import report, kind sniff with BOM, the two kinds kept apart |
+| Unit + integration (api) | `map-import-jobs.test.ts` (both) | worker runs a Mapper file by kind with the same hashes as inline; a Mapper source goes through the job to a `done` row with `importer_version omap-2` and is deduplicated on the second job; garbage of either kind fails cleanly; the pin writes the quick-access columns equal to the raster path's, recomputes them with a row's `rotation_correction` idempotently, and leaves them alone for a document without a CRS |
+| Unit (api, unchanged) | `map-north.test.ts`, `map-projection-correction.test.ts`, `map-coordinate-transfer.test.ts`, `course-import-align.test.ts` | the legacy modules as adapters over `mapGeo` keep their behaviour |
 | E2E | `e2e/map-gl-doc.spec.ts` | document path = reader path in the browser, native `.oxvm` round trip, `mode=source` draws the fixture from its own definitions with no proxies; `e2e/test.xmap` loads client-side with no OCAD reader, draws, and surfaces the OMAP warning codes |
 | Unit + integration + E2E (api, web) | see `docs/map-storage.md` §10 | stages 1 and 9: chunked upload route, import jobs, store, dedup, pins, report row, delivery route |
 | Unit + integration + E2E (api) | see `docs/map-storage.md` §10 (previews rows) | stage 10: thumbnail row written by the job and by the dedup short-cut, non-fatal failure, object cap |
@@ -509,5 +620,7 @@ S2 confirmation of the *provisional* §3.3 rows against OCAD output,
 event / club map *apply* for Mapper sources (needs slice C, §2.2), review API
 (06 §5.1, §5.3; previews landed, `docs/map-storage.md` §4.5), the `decisions` input to a job (06 §5.3 — the column
 exists and `matchDocument` accepts decisions, nothing reads the column
-yet), stage 5 beyond bounds. Each lands with its own section
-here and its own tests.
+yet), stage 5 fonts used (fallback decisions) and feature usage (03 §6.8
+table) — 06 §4.4's `fonts` / `features` report sections; the `proj4-match`
+CRS method for PROJ.4 specs neither parse nor the grid table knows. Each
+lands with its own section here and its own tests.

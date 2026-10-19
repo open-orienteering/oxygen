@@ -86,7 +86,10 @@ storeImportedDocument(db, { source: { bytes, fileHash, kind, fileName, uploadedB
   and since stages 6–7 landed `matching` (library, edition, thresholds,
   factor, symbol / object counts per state, `byMethod`, `scaleAnomalies`)
   and `colourStack` (source count, inserted, aliased, conflicts,
-  unclassified) — `docs/map-symbols.md` §8–§9.
+  unclassified) — `docs/map-symbols.md` §8–§9; since stage 5 (`ocad-5` /
+  `omap-2`) `georeference` and `north` (field list in
+  `docs/map-import.md` §3.8; `north` is the legacy `NorthDetection` with
+  the WMM fields at the import date, `asOf`).
 - `library_version` is `"<library>@<SYMBOL_LIBRARY_VERSION>"`
   (`ISOM2017-2@2026.10.1`), the library the matcher chose for the
   document. Rows imported before the matcher carry `"none"`
@@ -436,7 +439,7 @@ instance loses nothing. `packages/api/src/map-store/jobs.ts`.
 ```
 startImportJob(db, {sourceHash, eventId? | clubMapId?, startedBy?, holdMs?})
   │
-  ├─ a map_documents row exists for (sourceHash, importer ∈ {ocad-4, omap-1}, library *@<current SYMBOL_LIBRARY_VERSION>)
+  ├─ a map_documents row exists for (sourceHash, importer ∈ {ocad-5, omap-2}, library *@<current SYMBOL_LIBRARY_VERSION>)
   │     → touchDocument, insert state=done with that document_hash, applyJobResult, derive, return   (06 §8 dedup, no worker)
   │
   └─ insert state=queued → kickImportJobs → hold ≤ holdMs for the result → return the row
@@ -511,7 +514,19 @@ settles.
 Idempotent; also run for dedup hits:
 
 - `eventId` set → `map_files.document_hash = hash` on every row of that
-  event with `source_hash = job.source_hash`.
+  event with `source_hash = job.source_hash`, and the quick-access
+  columns `scale`, `bounds`, `north_offset`, `calibration` on each of
+  those rows recomputed from `map_documents.header` (unitsPerMm,
+  mapScale, georeferencing, bounds) and `report.north.meridian`, with
+  the row's own `rotation_correction` (`writeDocumentMapFileColumns`,
+  `map-store/map-file-metadata.ts`; rules in `docs/map-import.md` §3.8).
+  Skipped — the columns keep the raster path's values — when the
+  document has no projectable CRS or its report has no `north` (a
+  pre-`ocad-5` / `omap-2` document). Until slice C retires the raster
+  path, `applyEventMap`, `applyMapRotationCorrection` and the lazy
+  `course.mapMetadata` backfill write the same columns through the same
+  function, so the two writers agree (decision log 2026-10-19, A11);
+  `north_detection` and `club_map_files` are not written by the pin.
 - `clubMapId` set and no `club_map_versions` row for `(clubMapId,
   source_hash)` → insert one with `seq = max + 1`, label and uploader
   copied from the source row. `clubMap.upload` / `addFromSource` then
@@ -732,7 +747,7 @@ its own tests.
 | Integration (api) | `packages/api/src/__tests__/integration/map-sources.test.ts` | route 400 / 401 / 403 / 404 / 200; event manager streams the upload under the event's file name, chunked, no `Content-Length`, `no-store`; `?event=`; anonymous with kiosk key 401, course setter / stranger / manager of another event 403; club-library copy admin-only; club uploader / admin under the source's name; auth off; a 33 MiB source byte-exact; `streamBlob` slice sizes and a source that changed mid-stream |
 | Integration (api) | `packages/api/src/__tests__/integration/map-documents.test.ts` | store + dedup under another name, source/hash mismatch refused, `RESTRICT` on a pinned document, blob reads whole/range, `applyEventMap` pins + `mapMetadata`, route 400/401/403/404/200 with headers, `?event=` + kiosk key, brotli/gzip round trip, 304, 206/416/multi-range, club-version visibility, own import job (done → 200, other user 403, failed → 403), auth off |
 | Unit (api) | `packages/api/src/__tests__/map-import-jobs.test.ts` | `isClaimable` matrix, `stageProgress` monotonic, worker import produces the same hashes and `libraryVersion` as the inline importer with stages `parse → normalise → match → encode`, worker rejects garbage, upload validators (`validateUploadInit`, `expectedChunkSize`, `sniffMapKind`, `missingChunks`, `assembleChunks`) |
-| Integration (api) | `packages/api/src/__tests__/integration/map-import-jobs.test.ts` | `applyEventMap` job done + pins + report, dedup under another name, garbage / OMAP failures, `holdMs: 0` queued then finished by the engine, stale reclaim vs live job, `mapImport.status` auth (stranger 403, course setter ok) + `latestForEvent`, `started_by` recorded by `applyEventMap` / `applyUploadedMap` / `clubMap.upload` and null for a dedup without a user, dedup hit touches the document, housekeeping sweep (finalised uploads included), club upload → series + version 1, `useClubMap` pin, rename / colour-stack mirroring, `addFromSource`, `remove` deletes the series, upload routes 401/403/404/400/413/201, out-of-order and repeated chunks, 415, 409 missing, finalise dedup + idempotency, 409 after finalise, `applyUploadedMap` under the upload's name, `applyJobResult` idempotent |
+| Integration (api) | `packages/api/src/__tests__/integration/map-import-jobs.test.ts` | `applyEventMap` job done + pins + report, dedup under another name, garbage / OMAP failures, `holdMs: 0` queued then finished by the engine, stale reclaim vs live job, `mapImport.status` auth (stranger 403, course setter ok) + `latestForEvent`, `started_by` recorded by `applyEventMap` / `applyUploadedMap` / `clubMap.upload` and null for a dedup without a user, dedup hit touches the document, housekeeping sweep (finalised uploads included), club upload → series + version 1, `useClubMap` pin, rename / colour-stack mirroring, `addFromSource`, `remove` deletes the series, upload routes 401/403/404/400/413/201, out-of-order and repeated chunks, 415, 409 missing, finalise dedup + idempotency, 409 after finalise, `applyUploadedMap` under the upload's name, `applyJobResult` idempotent; pin writes the quick-access columns equal to `parseOcadMapMetadata`, recomputes them with a row's `rotation_correction` (11°) idempotently, report carries `georeference` / `north`, a no-CRS document (`CRS_UNRESOLVED`) leaves the raster path's columns alone |
 | Unit (api) | `packages/api/src/__tests__/map-backfill-cli.test.ts` | CLI argument parsing, per-map lines and summary |
 | Integration (api) | `packages/api/src/__tests__/integration/map-backfill.test.ts` | plan counts and ordering, dry run writes nothing, legacy club row → series (settings copied) + version 1 (label / uploader / time from the row), event rows → pins with dedup and club-version pin, unreadable rows reported and left unpinned, second run revisits only what is missing, `--event` scope and soft-deleted events skipped, `backfillStatus` / `backfillStart` admin-only, background run and `CONFLICT` |
 | Unit (web) | `packages/web/src/__tests__/map-upload.test.ts` | threshold, init → chunks → finalise call order and progress, per-chunk retry on 5xx, no retry on 4xx, `x-event-id` only for event uploads |
@@ -762,6 +777,7 @@ its own tests.
 | `packages/api/src/map-store/uploads.ts` | pure upload rules: limits, chunk sizes, kind sniffing, assembly |
 | `packages/api/src/map-store/upload-routes.ts` | `POST /api/map-uploads`, `PUT …/chunks/:n`, `POST …/finalise` |
 | `packages/api/src/map-store/jobs.ts` | job rows, claim / heartbeat / stale reclaim, worker launcher, `applyJobResult`, housekeeping, engine tick |
+| `packages/api/src/map-store/map-file-metadata.ts` | `mapFileMetadataFor` (quick-access columns from a document frame + meridian tilt + correction; shared with the raster path), `writeDocumentMapFileColumns` (pin-time write) |
 | `packages/api/src/background/supervisor.ts` | lease-holder reconcile; starts / stops the GC |
 | `packages/api/src/map-store/import-worker.ts` | worker-thread body: `importMapToDocument` by kind + report |
 | `packages/api/src/map-store/backfill.ts` | plan, per-row backfill, run loop, in-process run for the Maintenance tab |
