@@ -174,6 +174,34 @@ type ReviewDecision = { symbolIdx; accept: canonicalId } | { symbolIdx; unmatch:
   own-job clauses read as for reading. Club map targets need a signed-in
   user, as the club library's own mutations.
 
+**CRT export / import** (06 §5.1, §5.3; format and resolution rules in
+`docs/map-symbols.md` §8.6):
+
+```
+mapImport.exportCrt { documentHash, includeMatches?: boolean }      query, review's predicate (READ_ACCESS)
+  → { documentHash, fileName, library, crt, rules, kept, auto }
+mapImport.importCrt { documentHash, crt: string ≤ 1 MiB, dryRun?: boolean }   mutation, decide's (EDIT_ACCESS)
+  → { decisions: ReviewDecision[], unchanged[], skipped[], warnings[], applied, job | null }
+```
+
+- `exportCrt` reads the club rows of the document's library for the
+  document's fingerprints (`includeMatches` adds its automatic matches).
+  `fileName` follows Mapper's `SOURCE-TARGET.crt` convention:
+  `<source file name without extension>-<library id>.crt`. `rules` /
+  `kept` / `auto` count the rule lines, `# keep` lines and the rule lines
+  marked `auto`. Same document + same rows ⇒ the same bytes.
+- `importCrt` resolves the CRT against the document and passes the
+  applicable `accept` / `unmatch` decisions to `decide`'s
+  `decideOnDocument`: rows under the current release, one import job
+  without a target, `{ applied, job }` exactly as `decide`. `unchanged` /
+  `skipped` list `{ line, symbolIdx }` / `{ line, code, message }`;
+  `warnings` are the counted codes. Nothing applicable, or `dryRun: true`,
+  writes nothing and returns `applied: 0, job: null` with the resolved
+  `decisions`. More than 5 000 applicable decisions (`decide`'s cap) is
+  `BAD_REQUEST`; so is a CRT over 1 MiB.
+- Authorisation is `review`'s for the export (a kiosk key reads; the
+  rows are what `review` already shows) and `decide`'s for the import.
+
 The *apply* mutations that still feed the legacy raster tile pipeline
 (`course.applyEventMap`-style event map upload, club map upload) remain
 OCAD-only: they need `ocad2geojson` for the tiles. A Mapper file can be
