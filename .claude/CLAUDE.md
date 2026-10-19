@@ -8,8 +8,25 @@ These are automatic behaviors that Claude Code should perform without being aske
 
 - **After any code change**: Run `pnpm test` immediately.
 - **After tests pass**: Run `pnpm build` to verify zero TypeScript errors.
-- **After completing a feature or fix**: Rebuild Docker automatically: `docker compose -f docker-compose.host-db.yml up --build -d`
-- **Before pushing code**: Run the full E2E suite: `pnpm test:e2e`. Fix failures before pushing.
+- **After completing a feature or fix**: Rebuild Docker automatically: `scripts/with-verify-lock.sh docker compose -f docker-compose.host-db.yml up --build -d`
+- **Before pushing code**: Run the full E2E suite: `scripts/with-verify-lock.sh pnpm test:e2e`. Fix failures before pushing.
+
+## Shared verification resources
+
+Integration tests, E2E (`pnpm test:e2e*`, `playwright test`) and the Docker rebuild use fixed ports (4100–4303, 8080, 3001) and shared databases (`oxygen_test`, `oxygen_e2e*` on :5433). Several sessions run at once in separate worktrees, so these steps are serialised through `scripts/with-verify-lock.sh <command>`; a PreToolUse hook blocks bare invocations. The wrapper waits for the lock, so a blocked session simply queues.
+
+- Never run `pnpm dev` from a worktree — ports 3002/5173 belong to the user's checkout.
+- Never touch the dev database on :5432 from a worktree.
+- A fresh worktree needs `pnpm install --frozen-lockfile` and `pnpm db:generate` before anything else.
+
+## Vector map pipeline (branch `vector-map-pipeline`)
+
+The map/course/print redesign runs on the long-lived branch `vector-map-pipeline`. Sub-slices are worktrees cut from it and PRs back into it; spike branches may be cut from it and merge back the same way. `main` is not a target until the user says so.
+
+- **Specs are normative**: `docs/map-*.md` (and later `course-*.md`) state what is implemented and, in each chapter's "Pending in this chapter" section, what is not. The research directory `docs/research/vector-map-pipeline/` is the frozen record of why; its README carries the decision log.
+- **Work queue**: `docs/research/vector-map-pipeline/SLICES.md`. One session per row; rows with overlapping areas are never in progress together. Use `/implement-sub-slice <id>`.
+- **When code and spec disagree, or the spec is silent**: stop and ask the user. Record the answer in the spec section first, then implement. Every deviation from a research decision gets a decision-log row. Never deviate silently.
+- **Done** means: spec section written, "Pending" trimmed, tests per AGENTS.md §4, decision-log row, `SLICES.md` row updated, PR open against `vector-map-pipeline`, `spec-reviewer` run.
 
 ## Documentation Requirement
 

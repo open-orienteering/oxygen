@@ -1,0 +1,29 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(pnpm install*)",
+      "Bash(pnpm db:generate*)",
+      "Bash(pnpm build*)",
+      "Bash(pnpm lint*)",
+      "Bash(pnpm test*)",
+      "Bash(pnpm outdated*)",
+      "Bash(scripts/with-verify-lock.sh *)",
+      "Bash(git merge-base *)"
+    ]
+  },
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"$CLAUDE_PROJECT_DIR\"/scripts/hooks/verify-lock-guard.sh",
+            "timeout": 5,
+            "statusMessage": "Checking for shared verification resources"
+          }
+        ]
+      }
+    ]
+  }
+}
