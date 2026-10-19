@@ -14,10 +14,8 @@ import { UsersAdminPanel } from "../components/UsersAdminPanel";
 import { MaintenancePanel } from "../components/MaintenancePanel";
 import { EventorKeysPanel } from "../components/EventorKeysPanel";
 import { NorthLinesBadge } from "../components/NorthLinesBadge";
-import {
-  ClubMapImportState,
-  isClubMapImportPending,
-} from "../components/ClubMapImportState";
+import { ClubMapImportState } from "../components/ClubMapImportState";
+import { isClubMapImportPending } from "../lib/club-map-import";
 
 const CLUB_TABS = ["maps", "controls", "classes", "groups"] as const;
 const ADMIN_TABS = ["users", "eventor", "maintenance"] as const;

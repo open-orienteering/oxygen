@@ -594,6 +594,13 @@ version's document never changes.
   a version (06 §6), and a failed club import must not become an event
   map. The picker shows the entry disabled with its import state. The
   backfill (§6.7) retries a series without a version.
+- `upload` / `addFromSource` create the series, its legacy row and the
+  source row in one transaction, so every series has a legacy row the
+  backfill can retry from; the job starts after the commit.
+- `remove` while the series' import is still running cascades the job
+  row away; the worker's `applyJobResult` then fails on the
+  `club_map_versions` foreign key and logs the job as failed. Nothing is
+  left behind; the document, if stored, waits for the GC.
 - `NOT_FOUND` for an unknown id; `BAD_REQUEST` (Zod) for a malformed one.
 - One version per series in slice A: there is no "new edition" upload
   yet, so `version` is version 1 and `versionCount` is 1 (06 §6).

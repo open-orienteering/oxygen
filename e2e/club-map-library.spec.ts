@@ -139,7 +139,10 @@ test.describe("club map library", () => {
     const pick = page.getByTestId(`club-map-pick-${seriesId}`);
     await expect(pick).toBeVisible();
     await expect(pick).toBeDisabled();
-    await expect(pick).toContainText(/Import failed/);
+    await expect(pick.getByTestId("library-map-import-state")).toHaveAttribute(
+      "data-state",
+      "failed",
+    );
 
     // Clean up so later specs list only importable maps.
     await page.goto("/settings");

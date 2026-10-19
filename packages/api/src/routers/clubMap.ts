@@ -96,45 +96,55 @@ async function createClubMap(
     colorProfile,
     northLinesBelow,
   });
-  const series = await prisma().clubMap.create({
-    data: {
-      name: displayName,
-      colourProfile: colorProfile,
-      northLinesBelow,
-      rotationCorrection: resolved.rotationCorrection,
-      createdBy: userId,
+  // One transaction: a series without its legacy row and source would be
+  // listed with no file and is invisible to the backfill (§6.7), which
+  // retries only series that have a legacy row.
+  const series = await prisma().$transaction(
+    async (tx) => {
+      const created = await tx.clubMap.create({
+        data: {
+          name: displayName,
+          colourProfile: colorProfile,
+          northLinesBelow,
+          rotationCorrection: resolved.rotationCorrection,
+          createdBy: userId,
+        },
+        select: { id: true, name: true, rotationCorrection: true },
+      });
+      await tx.clubMapFile.create({
+        data: {
+          name: displayName,
+          fileName,
+          fileData: Uint8Array.from(buffer),
+          previewPng: previewPng ? Uint8Array.from(previewPng) : undefined,
+          sizeBytes: buffer.length,
+          scale: resolved.metadata.scale,
+          bounds: (resolved.metadata.bounds ?? undefined) as
+            | Prisma.InputJsonValue
+            | undefined,
+          northOffset: resolved.metadata.northOffset,
+          rotationCorrection: resolved.rotationCorrection,
+          northDetection: resolved.northDetection
+            ? (resolved.northDetection as unknown as Prisma.InputJsonValue)
+            : undefined,
+          colorProfile,
+          northLinesBelow,
+          fileHash,
+          renderKey,
+          uploadedBy: userId,
+          clubMapId: created.id,
+        },
+        select: { id: true },
+      });
+      await tx.mapSource.createMany({
+        data: [{ fileHash, kind: "ocad", bytes: Uint8Array.from(buffer), sizeBytes: buffer.length, fileName, uploadedBy: userId }],
+        skipDuplicates: true,
+      });
+      return created;
     },
-    select: { id: true, name: true, rotationCorrection: true },
-  });
-  await prisma().clubMapFile.create({
-    data: {
-      name: displayName,
-      fileName,
-      fileData: Uint8Array.from(buffer),
-      previewPng: previewPng ? Uint8Array.from(previewPng) : undefined,
-      sizeBytes: buffer.length,
-      scale: resolved.metadata.scale,
-      bounds: (resolved.metadata.bounds ?? undefined) as
-        | Prisma.InputJsonValue
-        | undefined,
-      northOffset: resolved.metadata.northOffset,
-      rotationCorrection: resolved.rotationCorrection,
-      northDetection: resolved.northDetection
-        ? (resolved.northDetection as unknown as Prisma.InputJsonValue)
-        : undefined,
-      colorProfile,
-      northLinesBelow,
-      fileHash,
-      renderKey,
-      uploadedBy: userId,
-      clubMapId: series.id,
-    },
-    select: { id: true },
-  });
-  await prisma().mapSource.createMany({
-    data: [{ fileHash, kind: "ocad", bytes: Uint8Array.from(buffer), sizeBytes: buffer.length, fileName, uploadedBy: userId }],
-    skipDuplicates: true,
-  });
+    // Two copies of a map up to the 128 MiB upload limit go over the wire.
+    { timeout: 120_000 },
+  );
   const job: ImportJobRow | null = await startImportJob(prisma(), { sourceHash: fileHash, clubMapId: series.id, startedBy: userId })
     .catch((err: unknown) => {
       console.error(`[map-import] club map ${series.id}: could not start the import of ${fileName}:`, err);
