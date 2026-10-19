@@ -33,6 +33,7 @@ let documentHash: string;
 let documentBytes: Buffer;
 let dump: string;
 let uploaderId: string;
+let originalFile: Record<string, unknown>;
 
 /** Run the restore script as documented: from the directory holding the `<table>.csv` sections. */
 function psqlRestore(cwd: string, eventId?: bigint): void {
@@ -67,6 +68,7 @@ beforeAll(async () => {
   documentHash = applied.documentHash!;
   const row = await source.db.mapFile.findFirstOrThrow({ where: { eventId: source.eventId } });
   sourceHash = row.sourceHash!;
+  originalFile = row as unknown as Record<string, unknown>;
   documentBytes = Buffer.from((await source.db.mapDocument.findUniqueOrThrow({ where: { hash: documentHash } })).bytes);
 
   server = Fastify({ logger: false });
@@ -156,6 +158,13 @@ describe("restore-map-blobs.sql", () => {
     expect(files[0].documentHash).toBe(documentHash);
     expect(sha256(files[0].fileData)).toBe(sourceHash);
     expect(files[0].clubMapVersionId).toBeNull();
+    // Every column survives except the local identity: catches a map_files
+    // column added later but missing from the script's INSERT list.
+    const strip = (r: Record<string, unknown>) => {
+      const { id: _id, eventId: _eventId, clubMapVersionId: _v, ...rest } = r;
+      return rest;
+    };
+    expect(strip(files[0] as unknown as Record<string, unknown>)).toEqual(strip(originalFile));
   });
 
   it("is a no-op the second time", async () => {

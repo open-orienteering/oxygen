@@ -412,6 +412,19 @@ describe("checkout → write → checkin lifecycle", () => {
     expect(Buffer.from(files[0].fileData).equals(mapFixture)).toBe(true);
   });
 
+  it("lease.exportBlob serves the copy through the router, behind the shared secret", async () => {
+    const local = await ctx.db.event.findUniqueOrThrow({ where: { nameId: CHECKOUT_NAME }, select: { id: true, nameId: true, zeroTime: true } });
+    const input = { table: "map_documents" as const, hash: documentHash, start: 0, length: 4096 };
+    await expect(makeCaller(local).lease.exportBlob(input)).rejects.toMatchObject({ code: "UNAUTHORIZED" });
+    await expect(makeCaller(local, { syncSecret: "wrong" }).lease.exportBlob(input)).rejects.toMatchObject({ code: "UNAUTHORIZED" });
+    const peer = makeCaller(local, { syncSecret: "test-sync-secret" });
+    const slice = await peer.lease.exportBlob(input);
+    const docB = await dbB.mapDocument.findUniqueOrThrow({ where: { hash: documentHash } });
+    expect(slice.sizeBytes).toBe(docB.sizeBytes);
+    expect(Buffer.from(slice.base64, "base64").equals(Buffer.from(docB.bytes).subarray(0, 4096))).toBe(true);
+    await expect(peer.lease.exportBlob({ ...input, length: 4 * 1024 * 1024 + 1 })).rejects.toMatchObject({ code: "BAD_REQUEST" });
+  });
+
   it("serves the document route on the venue with the kiosk key", async () => {
     const server: FastifyInstance = Fastify({ logger: false });
     registerMapDocumentRoutes(server);

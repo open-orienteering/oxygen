@@ -58,6 +58,9 @@ If the underlying `psql` exits with a non-zero status (credentials wrong, server
 A restore is more involved than the MeOS-era flat-file dump because Oxygen now uses a single database with foreign keys and a `BIGSERIAL` event id. The recommended path:
 
 ```bash
+# DATABASE_URL here is a libpq URL: drop Prisma's `?schema=oxygen`
+# parameter, which psql rejects.
+
 # 1. Ensure the target database is on the current schema.
 pnpm db:push
 

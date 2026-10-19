@@ -217,7 +217,11 @@ export async function fetchSnapshotBlobs(db: Db, maps: SnapshotMaps, fetchSlice:
     ...maps.documents.map((d) => ({ table: "map_documents" as const, hash: d.hash, sizeBytes: d.sizeBytes, into: out.documents })),
   ];
   for (const w of wanted) {
-    if ((await getBlobSize(db, w.table, w.hash)) !== null) continue; // append-only: never re-fetched, never rewritten
+    // Append-only: never re-fetched, never rewritten. If the venue's GC
+    // collects such an unreferenced blob before the import transaction,
+    // the import fails ("missing on this node" / FK), the checkout rolls
+    // back and a retry fetches it.
+    if ((await getBlobSize(db, w.table, w.hash)) !== null) continue;
     w.into.set(w.hash, await fetchBlob(w.table, w.hash, w.sizeBytes, fetchSlice));
     out.fetchedBytes += w.sizeBytes;
   }
