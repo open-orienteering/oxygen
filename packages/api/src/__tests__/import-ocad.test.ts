@@ -3,6 +3,10 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { mapDocument, render, symbolLibrary } from "@oxygen/shared";
 import { importOcadToDocument, sha256Hex } from "../import/ocad.js";
+import { buildImportReport } from "../map-store/documents.js";
+import { mapFileMetadataFor } from "../map-store/map-file-metadata.js";
+import { parseOcadMapMetadata } from "../event-map.js";
+import { computeDeclination, computeMeridianStalenessDeg, detectMapNorth, probeMeridianLines, type OcadNorthSource } from "../map-north.js";
 
 const fixture = readFileSync(fileURLToPath(new URL("../../../../e2e/test.ocd", import.meta.url)));
 
@@ -108,3 +112,68 @@ describe("importOcadToDocument", () => {
     ).rejects.toThrow(/colour index \d+ outside/);
   });
 });
+
+describe("stage 5 on the OCAD fixture (docs/map-import.md §3.5, §3.8)", () => {
+  it("resolves grid 13002 to SWEREF99 TM and carries only source-declared values in the header", async () => {
+    const r = await importOcadToDocument(fixture, "test.ocd");
+    const g = mapDocument.decodeMapDocument(r.bytes).header.georeferencing;
+    expect(g.crs).toEqual({ authority: "EPSG", code: 3006, name: "SWEREF99 TM" });
+    expect(g.paperOrigin).toEqual({ x: 500000, y: 6500000 });
+    expect(g).not.toHaveProperty("declinationDeg");
+    expect(g.sourceGridId).toBe(13002);
+    expect(r.warnings.some((w) => w.code === "CRS_UNRESOLVED")).toBe(false);
+  });
+
+  it("finds the same meridian cluster as the legacy probe over the reader's objects", async () => {
+    const r = await importOcadToDocument(fixture, "test.ocd");
+    const legacy = probeMeridianLines((await readFixture()).objects ?? [])!;
+    expect(r.analysis.north.meridian).toMatchObject({ code: "601.0", count: legacy.count, medianTiltDeg: legacy.medianTiltDeg });
+    expect(r.analysis.north.meridian!.count).toBe(12);
+    expect(r.analysis.georeference).toMatchObject({ crs: "EPSG:3006", method: "epsg", projectable: true, gridRotationDeg: 0 });
+  });
+
+  it("reports georeference and north, with the WMM fields evaluated at the report date", async () => {
+    const r = await importOcadToDocument(fixture, "test.ocd");
+    const asOf = new Date("2026-10-19T00:00:00Z");
+    const report = buildImportReport(r, mapDocument.readMapDocumentHeader(r.bytes).header, "test.ocd", asOf);
+    expect(report.georeference).toEqual(r.analysis.georeference);
+    const n = report.north!;
+    expect(n.asOf).toBe(asOf.toISOString());
+    expect(n.meridian).toEqual(r.analysis.north.meridian);
+    const decl = computeDeclination(n.centerLat!, n.centerLng!, asOf)!;
+    expect(n.declinationDeg).toBe(decl);
+    expect(n.meridianStalenessDeg).toBe(computeMeridianStalenessDeg({
+      declinationDeg: decl, trueNorthFromGridDeg: n.trueNorthFromGridDeg!, declaredGrivationDeg: 0, meridianTiltDeg: n.meridian!.medianTiltDeg,
+    }));
+    // Legacy north detection over the reader agrees on the time-independent part.
+    const legacy = detectMapNorth(await readFixture(), asOf);
+    expect(n.trueNorthFromGridDeg).toBeCloseTo(legacy.trueNorthFromGridDeg!, 9);
+    expect(n.centerLat).toBeCloseTo(legacy.centerLat!, 9);
+    expect(n.meridianStalenessDeg).toBe(legacy.meridianStalenessDeg);
+  });
+
+  it("gives the raster path and the pin the same quick-access columns", async () => {
+    const r = await importOcadToDocument(fixture, "test.ocd");
+    const { header } = mapDocument.readMapDocumentHeader(r.bytes);
+    for (const correction of [0, 11]) {
+      const pinned = mapFileMetadataFor(header, r.analysis.north.meridian?.medianTiltDeg, correction);
+      expect(pinned).not.toBeNull();
+      expect(await parseOcadMapMetadata(fixture, correction)).toEqual(pinned);
+      expect(pinned!.scale).toBe(7500);
+      expect(pinned!.calibration).toHaveLength(4);
+    }
+    // The correction turns the display north by the same amount.
+    const a = mapFileMetadataFor(header, 0, 0)!, b = mapFileMetadataFor(header, 0, 11)!;
+    expect(b.northOffset! - a.northOffset!).toBeCloseTo(11, 1);
+  });
+
+  it("leaves the columns to the caller when the document has no projectable CRS", () => {
+    const frame = { unitsPerMm: 100, mapScale: 7500, georeferencing: { crs: null, paperOrigin: null }, bounds: { minX: 0, minY: 0, maxX: 1, maxY: 1 } };
+    expect(mapFileMetadataFor(frame, null, 0)).toBeNull();
+  });
+});
+
+async function readFixture() {
+  const m = (await import("ocad2geojson")) as unknown as { readOcad: (b: Buffer, o: object) => Promise<OcadNorthSource> };
+  return m.readOcad(fixture, { quietWarnings: true });
+}

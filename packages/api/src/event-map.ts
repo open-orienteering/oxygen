@@ -13,22 +13,17 @@ import {
 } from "./course-geometry.js";
 import { emitCourseUpserted } from "./referenceJournal.js";
 import {
-  ocadBoundsToWgs84,
-  ocadToWgs84,
+  frameFromOcadCrs,
   mapMmToWgs84,
-  computeMapNorthOffset,
-  withGrivationCorrection,
-  type OcadCrs,
   type WGS84Bounds,
 } from "./map-projection.js";
 import {
   detectMapNorth,
-  displayNorthOffsetDeg,
   meridianStalenessFromDetection,
-  probeMeridianLines,
   type NorthDetection,
   type OcadNorthSource,
 } from "./map-north.js";
+import { mapFileMetadataFor } from "./map-store/map-file-metadata.js";
 import { loadEventCrs } from "./event-crs.js";
 import { computeRenderKey, hashMapFileData } from "./map-render-key.js";
 import {
@@ -37,7 +32,7 @@ import {
   refreshClubMapRenderKey,
 } from "./map-render-cache.js";
 import type { ColorProfile, ColorStackOverrides } from "@oxygen/shared";
-import { colorProfileSchema, colorStackOverridesSchema } from "@oxygen/shared";
+import { colorProfileSchema, colorStackOverridesSchema, mapImport } from "@oxygen/shared";
 import { startImportJob, type ImportJobRow } from "./map-store/jobs.js";
 
 type Db = PrismaClient | Prisma.TransactionClient;
@@ -92,29 +87,39 @@ function metadataFromOcad(
   ocad: OcadParsed,
   rotationCorrectionDeg: number,
 ): ClubMapMetadata {
-  const crs = withGrivationCorrection(ocad.getCrs(), rotationCorrectionDeg);
-  const ocadBounds = ocad.getBounds();
-
+  // The same normalised input and the same column function the import
+  // job's pin uses (map-store/map-file-metadata.ts), so this write and the
+  // pin agree. Symbol conversion is skipped: only objects, symbol codes
+  // and georeferencing matter here.
+  const { input, analysis } = mapImport.ocadToDocumentInput(ocad as unknown as mapImport.OcadFileLike, {
+    fileName: "",
+    fileHash: "",
+    fileBytes: 0,
+    renderFor: () => null,
+  });
+  const frame = {
+    unitsPerMm: input.header.unitsPerMm,
+    mapScale: input.header.mapScale,
+    georeferencing: input.header.georeferencing,
+    bounds: analysis.bounds,
+  };
   // `northOffset` is the bearing from true north to the direction the
   // viewer puts at the top of the screen (MapViewer rotates by
-  // -northOffset). Base value: paper +Y. When the file contains a
-  // meridian-line cluster (ISOM 601.x, often tilted inside the drawing —
-  // Nackareservatet: 3.3°), fold that tilt in so screen-up follows the
-  // meridians and they render vertical. Without the fold the viewer shows
-  // paper-up and the meridians lean by their in-paper tilt no matter what
-  // rotationCorrection is set to — correction rotates the georeference
-  // and northOffset by the same amount, which cancels on screen.
-  const northOffset = displayNorthOffsetDeg(
-    computeMapNorthOffset(ocadBounds, crs),
-    probeMeridianLines(ocad.objects ?? []),
-  );
-
-  return {
-    scale: crs.scale ?? null,
-    bounds: ocadBoundsToWgs84(ocadBounds, crs),
-    northOffset,
-    calibration: computeCalibration(ocadBounds, crs),
-  };
+  // -northOffset): paper +Y plus the in-paper tilt of a meridian-line
+  // cluster (ISOM 601.x, Nackareservatet: 3.3°), so screen-up follows the
+  // meridians. Without the fold the meridians lean by their tilt no matter
+  // what rotationCorrection is — correction rotates the georeference and
+  // northOffset by the same amount, which cancels on screen.
+  const tilt = analysis.north.meridian?.medianTiltDeg ?? null;
+  const metadata = mapFileMetadataFor(frame, tilt, rotationCorrectionDeg);
+  if (metadata) return metadata;
+  // Raster path only: no CRS in the document, but the legacy
+  // coordinate-range inference recognises the grid (`getEpsgString`).
+  const legacy = frameFromOcadCrs(ocad.getCrs());
+  const inferred = legacy
+    ? mapFileMetadataFor({ ...frame, georeferencing: legacy.georeferencing }, tilt, rotationCorrectionDeg)
+    : null;
+  return inferred ?? { scale: frame.mapScale, bounds: null, northOffset: null, calibration: null };
 }
 
 /**
@@ -231,31 +236,6 @@ export async function detectNorthFromBuffer(
     console.warn("[detectNorthFromBuffer] north detection failed:", err);
     return empty;
   }
-}
-
-/**
- * Map-mm ↔ WGS84 anchors at the four corners of the map extent.
- * `ocadBounds` is in OCAD internal units (hundredths of mm); the client
- * coordinate space is paper mm, hence the /100.
- */
-function computeCalibration(
-  ocadBounds: number[],
-  crs: OcadCrs,
-): MapCalibrationPoint[] | null {
-  const [minX, minY, maxX, maxY] = ocadBounds;
-  const corners: [number, number][] = [
-    [minX, minY],
-    [maxX, minY],
-    [minX, maxY],
-    [maxX, maxY],
-  ];
-  const points: MapCalibrationPoint[] = [];
-  for (const [x, y] of corners) {
-    const wgs = ocadToWgs84(x, y, crs);
-    if (!wgs) return null;
-    points.push({ mapX: x / 100, mapY: y / 100, lat: wgs.lat, lng: wgs.lng });
-  }
-  return points;
 }
 
 function detectionJson(

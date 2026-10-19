@@ -30,13 +30,15 @@
  * `docs/bugfix-map-north-correction.md`.
  *
  * Club files often reuse 601.x for track symbols, so we cluster by exact
- * symbol id and require many near-parallel long lines.
+ * symbol id and require many near-parallel long lines. The clustering and
+ * the grid convergence are `@oxygen/shared` `mapGeo`, the same code the
+ * import's stage 5 runs over map documents (docs/map-import.md §3.8);
+ * this module adapts the OCAD reader's objects and adds the WMM.
  */
 
-import proj4 from "proj4";
 import geomagnetism from "geomagnetism";
-// Importing map-projection also registers the Nordic EPSG defs proj4 needs.
-import { getEpsgString, type OcadCrs } from "./map-projection.js";
+import { mapGeo, type mapImport } from "@oxygen/shared";
+import { frameFromOcadCrs, type OcadCrs } from "./map-projection.js";
 
 /**
  * |staleness| at or above this is surfaced as a warning. WMM declination
@@ -46,10 +48,16 @@ import { getEpsgString, type OcadCrs } from "./map-projection.js";
 export const MERIDIAN_STALE_WARN_DEG = 1.0;
 
 /** Minimum parallel lines in a 601.x cluster to count as meridians. */
-export const MERIDIAN_MIN_COUNT = 10;
+export const MERIDIAN_MIN_COUNT = mapGeo.MERIDIAN_MIN_COUNT;
 
 /** Max angle std-dev (degrees) for a near-parallel meridian cluster. */
-export const MERIDIAN_MAX_STDDEV_DEG = 0.7;
+export const MERIDIAN_MAX_STDDEV_DEG = mapGeo.MERIDIAN_MAX_STDDEV_DEG;
+
+/**
+ * Fold an oriented line angle into [-90, 90] so opposite directions of the
+ * same undirected meridian coincide.
+ */
+export const foldLineAngleDeg = mapGeo.foldLineAngleDeg;
 
 export type MeridianProbe = {
   symbolId: number;
@@ -108,23 +116,12 @@ export function computeTrueNorthFromGrid(
   easting = crs.easting,
   northing = crs.northing,
 ): { angleDeg: number; lat: number; lng: number } | null {
-  const epsg = getEpsgString(crs);
-  if (!epsg) return null;
-  try {
-    const [lng, lat] = proj4(epsg, "EPSG:4326", [easting, northing]) as [
-      number,
-      number,
-    ];
-    if (!Number.isFinite(lat) || !Number.isFinite(lng)) return null;
-    const [e2, n2] = proj4("EPSG:4326", epsg, [lng, lat + 0.001]) as [
-      number,
-      number,
-    ];
-    const angleDeg = (Math.atan2(e2 - easting, n2 - northing) * 180) / Math.PI;
-    return { angleDeg, lat, lng };
-  } catch {
-    return null;
-  }
+  const frame = frameFromOcadCrs(crs);
+  if (!frame) return null;
+  return mapGeo.gridConvergence({
+    ...frame,
+    georeferencing: { ...frame.georeferencing, paperOrigin: { x: easting, y: northing } },
+  });
 }
 
 /**
@@ -149,17 +146,6 @@ export function computeDeclination(
 }
 
 /**
- * Fold an oriented line angle into [-90, 90] so opposite directions of the
- * same undirected meridian coincide.
- */
-export function foldLineAngleDeg(angleDeg: number): number {
-  let a = angleDeg;
-  while (a > 90) a -= 180;
-  while (a < -90) a += 180;
-  return a;
-}
-
-/**
  * Find the best magnetic-north-line cluster among exact 601xxx symbols.
  * Returns null when no cluster meets the count / parallelism thresholds.
  */
@@ -177,36 +163,16 @@ export function probeMeridianLines(
     const p0 = c[0];
     const p1 = c[c.length - 1];
     if (!p0 || !p1 || p0.length < 2 || p1.length < 2) continue;
-    const dx = p1[0] - p0[0];
-    const dy = p1[1] - p0[1];
-    const len = Math.hypot(dx, dy);
-    // Drop tiny fragments (noise / decoration ticks).
-    if (len < 500) continue; // 5 mm on paper (OCAD units = 0.01 mm)
-    const ang = foldLineAngleDeg((Math.atan2(dx, dy) * 180) / Math.PI);
+    // Drop tiny fragments (noise / decoration ticks); OCAD units are 0.01 mm.
+    if (Math.hypot(p1[0] - p0[0], p1[1] - p0[1]) < mapGeo.MERIDIAN_MIN_LENGTH_MM * 100) continue;
     const list = bySym.get(sym) ?? [];
-    list.push(ang);
+    list.push(mapGeo.lineTiltDeg(p0[0], p0[1], p1[0], p1[1]));
     bySym.set(sym, list);
   }
-
-  let best: MeridianProbe | null = null;
-  for (const [symbolId, angles] of bySym) {
-    if (angles.length < MERIDIAN_MIN_COUNT) continue;
-    const mean = angles.reduce((s, a) => s + a, 0) / angles.length;
-    const variance =
-      angles.reduce((s, a) => s + (a - mean) * (a - mean), 0) / angles.length;
-    const stddevDeg = Math.sqrt(variance);
-    if (stddevDeg > MERIDIAN_MAX_STDDEV_DEG) continue;
-    const sorted = [...angles].sort((a, b) => a - b);
-    const medianTiltDeg = sorted[Math.floor(sorted.length / 2)]!;
-    const probe: MeridianProbe = {
-      symbolId,
-      count: angles.length,
-      medianTiltDeg,
-      stddevDeg,
-    };
-    if (!best || probe.count > best.count) best = probe;
-  }
-  return best;
+  const best = mapGeo.clusterMeridians(bySym);
+  return best
+    ? { symbolId: best.key, count: best.count, medianTiltDeg: best.medianTiltDeg, stddevDeg: best.stddevDeg }
+    : null;
 }
 
 /**
@@ -355,6 +321,44 @@ export function detectMapNorth(
     meridianStalenessDeg,
     centerLat: grid?.lat ?? null,
     centerLng: grid?.lng ?? null,
+    asOf: asOf.toISOString(),
+  };
+}
+/** The import report's `north` section (docs/map-import.md §3.8, docs/map-storage.md §3). */
+export type DocumentNorthDetection = NonNullable<mapImport.ImportReport["north"]>;
+
+/**
+ * Stage-5 analysis + today's WMM → the report's `north`: the
+ * time-independent part comes from the shared analysis of the document,
+ * the declination and the meridian staleness are evaluated at `asOf`
+ * exactly as `detectMapNorth` does for the legacy row.
+ */
+export function detectDocumentNorth(
+  analysis: mapImport.DocumentAnalysis,
+  asOf: Date = new Date(),
+): DocumentNorthDetection {
+  const { georeference, north } = analysis;
+  const origin = georeference.originWgs84;
+  const declinationDeg = origin ? computeDeclination(origin.lat, origin.lng, asOf) : null;
+  const meridianStalenessDeg =
+    north.meridian && georeference.gridConvergenceDeg != null && declinationDeg != null
+      ? computeMeridianStalenessDeg({
+          declinationDeg,
+          trueNorthFromGridDeg: georeference.gridConvergenceDeg,
+          declaredGrivationDeg: georeference.gridRotationDeg,
+          meridianTiltDeg: north.meridian.medianTiltDeg,
+        })
+      : null;
+  return {
+    meridian: north.meridian,
+    paperNorthBearingDeg: north.paperNorthBearingDeg,
+    displayNorthOffsetDeg: north.displayNorthOffsetDeg,
+    declaredGrivationDeg: georeference.gridRotationDeg,
+    trueNorthFromGridDeg: georeference.gridConvergenceDeg,
+    centerLat: origin?.lat ?? null,
+    centerLng: origin?.lng ?? null,
+    declinationDeg,
+    meridianStalenessDeg,
     asOf: asOf.toISOString(),
   };
 }

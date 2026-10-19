@@ -9,6 +9,7 @@
 import { mapDocument, mapImport } from "@oxygen/shared";
 import type { PrismaClient, Prisma } from "../generated/prisma/client.js";
 import { importMapToDocument, type MapImportResult, type MapSourceKind } from "../import/ocad.js";
+import { detectDocumentNorth } from "../map-north.js";
 
 type Db = PrismaClient | Prisma.TransactionClient;
 
@@ -38,7 +39,8 @@ export function documentHeaderSummary(header: mapDocument.MapDocumentHeader): Re
   return { ...rest, symbolCount: symbols.length, stringCount: strings.length };
 }
 
-export function buildImportReport(result: MapImportResult, header: mapDocument.MapDocumentHeader, fileName: string): mapImport.ImportReport {
+/** `asOf` dates the report's WMM fields (`north.declinationDeg`, `meridianStalenessDeg`); default now. */
+export function buildImportReport(result: MapImportResult, header: mapDocument.MapDocumentHeader, fileName: string, asOf: Date = new Date()): mapImport.ImportReport {
   return mapImport.importReportSchema.parse({
     importer: header.format.importer,
     source: { kind: header.source.kind, version: header.source.version, fileName, bytes: header.source.bytes, fileHash: header.source.hash },
@@ -46,6 +48,8 @@ export function buildImportReport(result: MapImportResult, header: mapDocument.M
     warnings: result.warnings,
     matching: result.matching,
     colourStack: result.colourStack,
+    georeference: result.analysis.georeference,
+    north: detectDocumentNorth(result.analysis, asOf),
     timings: result.timings,
   });
 }
