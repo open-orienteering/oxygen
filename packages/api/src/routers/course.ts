@@ -50,6 +50,7 @@ import {
   synchronizePositionedControlCoordinates,
   type MapCalibrationPoint,
 } from "../event-map.js";
+import { latestVersionOrRefuse } from "../club-map-library.js";
 import { cutRotationDeg } from "../map-north.js";
 import {
   ensureEventMapRenderKey,
@@ -1542,70 +1543,63 @@ export const courseRouter = router({
     }),
 
   /**
-   * Copy a club-library OCAD file into this event. The event keeps its
-   * own blob; later library edits do not affect it.
+   * Copy a club-library map into this event: the latest version of the
+   * `club_maps` series (its original file from `map_sources`) with the
+   * series' settings, then pin that version (docs/map-storage.md §6.5).
+   * The event keeps its own blob; later library edits do not affect it.
    */
   useClubMap: coursesEditProcedure
-    .input(z.object({ clubMapId: z.number().int().positive() }))
+    .input(z.object({ clubMapId: z.string().uuid() }))
     .mutation(async ({ ctx, input }) => {
-      const row = await ctx.db.clubMapFile.findUnique({
-        where: { id: BigInt(input.clubMapId) },
+      const series = await ctx.db.clubMap.findUnique({
+        where: { id: input.clubMapId },
         select: {
-          fileName: true,
-          fileData: true,
+          name: true,
           rotationCorrection: true,
-          colorProfile: true,
-          colorOverrides: true,
+          colourProfile: true,
+          colourOverrides: true,
           northLinesBelow: true,
-          fileHash: true,
-          uploadedBy: true,
-          clubMapId: true,
+          versions: {
+            orderBy: { seq: "desc" },
+            take: 1,
+            select: { id: true, label: true, sourceHash: true, uploadedBy: true },
+          },
         },
       });
-      if (!row) {
+      if (!series) {
         throw new TRPCError({
           code: "NOT_FOUND",
           message: `Club map ${input.clubMapId} not found`,
         });
       }
+      const version = latestVersionOrRefuse(series.name, series.versions[0]);
+      const source = await ctx.db.mapSource.findUniqueOrThrow({
+        where: { fileHash: version.sourceHash },
+        select: { fileName: true, bytes: true },
+      });
       const result = await applyEventMap(
         ctx.db,
         ctx.event.id,
-        row.fileName,
-        Buffer.from(row.fileData),
+        version.label || source.fileName,
+        Buffer.from(source.bytes),
         {
           fromClubLibrary: true,
-          uploadedBy: row.uploadedBy ?? ctx.user?.id ?? null,
+          uploadedBy: version.uploadedBy ?? ctx.user?.id ?? null,
           startedBy: ctx.user?.id ?? null,
-          rotationCorrection: row.rotationCorrection,
-          colorProfile: row.colorProfile as
-            | "auto"
-            | "isom"
-            | "issprom"
-            | "isskiom"
-            | "ismtbom",
-          colorOverrides: (row.colorOverrides ?? {}) as {
+          rotationCorrection: series.rotationCorrection,
+          colorProfile: colorProfileSchema.catch("auto").parse(series.colourProfile),
+          colorOverrides: (series.colourOverrides ?? {}) as {
             above?: number[];
             below?: number[];
           },
-          northLinesBelow: row.northLinesBelow,
-          fileHash: row.fileHash ?? undefined,
+          northLinesBelow: series.northLinesBelow,
+          fileHash: version.sourceHash,
         },
       );
-      // Pin the club version the copy came from when the series already
-      // has one for these bytes; otherwise the backfill links it later.
-      if (row.clubMapId && row.fileHash) {
-        const version = await ctx.db.clubMapVersion.findFirst({
-          where: { clubMapId: row.clubMapId, sourceHash: row.fileHash },
-          select: { id: true },
-        });
-        if (version) {
-          await ctx.db.mapFile.updateMany({
-            where: { eventId: ctx.event.id, sourceHash: row.fileHash },
-            data: { clubMapVersionId: version.id },
-          });
-        }
-      }
+      await ctx.db.mapFile.updateMany({
+        where: { eventId: ctx.event.id, sourceHash: version.sourceHash },
+        data: { clubMapVersionId: version.id },
+      });
       return { success: true as const, ...result };
     }),
 

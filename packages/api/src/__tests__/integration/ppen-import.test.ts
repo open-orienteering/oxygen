@@ -125,7 +125,7 @@ describe("course.previewImport — Purple Pen coordinate alignment", () => {
   /** Own event for the position-less import, so nothing is revived. */
   let skipCtx: TestEventContext;
   let skipCaller: ReturnType<typeof makeCaller>;
-  const clubMapIds: bigint[] = [];
+  const clubMapIds: string[] = [];
 
   /** A one-course file placed at `x`/`y`, set on `mapName`. */
   const ppenOn = (mapName: string, x: number, y: number, code = 71) => `<?xml version="1.0" encoding="utf-8"?>
@@ -166,8 +166,9 @@ describe("course.previewImport — Purple Pen coordinate alignment", () => {
   afterAll(async () => {
     if (clubMapIds.length) {
       await mapCtx.db.clubMapFile.deleteMany({
-        where: { id: { in: clubMapIds } },
+        where: { clubMapId: { in: clubMapIds } },
       });
+      await mapCtx.db.clubMap.deleteMany({ where: { id: { in: clubMapIds } } });
     }
     await mapCtx?.cleanup();
     await skipCtx?.cleanup();
@@ -205,7 +206,7 @@ describe("course.previewImport — Purple Pen coordinate alignment", () => {
       name: `Alignment source ${suffix}`,
       fileDataBase64: readFileSync(MAP_FIXTURE).toString("base64"),
     });
-    clubMapIds.push(BigInt(uploaded.id));
+    clubMapIds.push(uploaded.id);
 
     const preview = await mapCaller.course.previewImport({
       xmlContent: ppenOn(libraryName, -900, -400),
