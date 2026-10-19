@@ -124,7 +124,10 @@ function parseDatabaseUrl(): PgConnectionParams {
  * Tables in the per-event dump, in FK-safe restore order. The blob tables
  * are not event-scoped (content-addressed, shared by every pin); the dump
  * carries the rows this event's `map_files` pin, ahead of `map_files`
- * (docs/map-storage.md §7.3). `map_previews` are a cache and stay out.
+ * (docs/map-storage.md §7.3). `club_symbol_decisions` is club-level state
+ * a restored event's re-match reads; it travels whole (no event column,
+ * and its fingerprints are not derivable in SQL). `map_previews` are a
+ * cache and stay out.
  */
 export const BACKUP_TABLES = [
   "events",
@@ -142,6 +145,7 @@ export const BACKUP_TABLES = [
   "event_log",
   "map_sources",
   "map_documents",
+  "club_symbol_decisions",
   "map_files",
   "rendered_maps",
   "tracks",
@@ -174,6 +178,8 @@ function backupSelect(t: BackupTable, eventId: bigint): string {
         `SELECT f.document_hash FROM oxygen.map_files f WHERE f.event_id = ${eventId} AND f.document_hash IS NOT NULL) ` +
         `ORDER BY s.hash`
       );
+    case "club_symbol_decisions":
+      return `SELECT * FROM oxygen.club_symbol_decisions ORDER BY fingerprint, library_version`;
     default:
       return `SELECT * FROM oxygen.${t} WHERE event_id = ${eventId}`;
   }

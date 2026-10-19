@@ -722,6 +722,7 @@ predicate evaluated against its own event copy.
 | `files` | every `map_files` row of the event with `source_hash IS NOT NULL` | all but `id`, `event_id`, `file_data` |
 | `sources` | the distinct `map_sources` rows those rows pin, plus the `source_hash` of every pinned document | `file_hash`, `kind`, `size_bytes`, `file_name` |
 | `documents` | the distinct `map_documents` rows pinned by `document_hash` | `hash`, `size_bytes`, `format_version`, `importer_version`, `library_version`, `source_hash`, `header`, `report` |
+| `decisions` | the whole `club_symbol_decisions` table (`docs/map-symbols.md` §8.5) | `fingerprint`, `library_version`, `canonical_id`, `decided_at` |
 
 The part carries no bytes. The venue fetches each blob it does not
 already hold through a ranged peer procedure:
@@ -756,6 +757,14 @@ venue copy:
 - `created_at` / `last_referenced_at` take the venue's defaults: the GC
   (§8) on the box ages its own copies, and the pins keep them while the
   event exists there.
+- `club_symbol_decisions` rows merge by primary key: the newer
+  `decided_at` wins (the order stage 6 reads them in, `map-symbols.md`
+  §8.5), `decided_by` is NULL, and nothing is deleted, so a `reset` on
+  the cloud does not reach a box that already held the row. The table
+  has no event column and its fingerprints need the full document
+  header, so it travels whole; it is club-level state, small, and lets a
+  box re-match like the cloud would. The box does not write decisions
+  (`mapImport.decide` is cloud-owned and forwarded during a lease).
 
 A blob that is missing on the peer, or whose hash or size does not match,
 fails the checkout; the existing rollback releases the peer lease, and
@@ -769,7 +778,7 @@ them as `skipped`); `map_previews` (a cache; §4.5 renders on a miss);
 templates and print (cloud-owned during a lease, 07 §9.2).
 
 `lease.checkout` returns, next to `imported`,
-`maps: { files, sources, documents, fetchedBytes, skipped }`.
+`maps: { files, sources, documents, fetchedBytes, skipped, decisions }`.
 
 Both directions interoperate with a node that predates the part: an old
 exporter sends no `maps` (the box gets no map, as before); an old
@@ -793,13 +802,14 @@ the venue never writes them.
 
 ### 7.3 Per-event dump
 
-07 §10. `GET /api/backup/event` (`docs/backup-restore.md`) emits two more
-`\copy` sections, in FK order before `map_files`:
+07 §10. `GET /api/backup/event` (`docs/backup-restore.md`) emits three
+more `\copy` sections, before `map_files` (the blobs in FK order):
 
 | Section | Rows |
 |---|---|
 | `map_sources` | `file_hash` in the event's `map_files.source_hash` ∪ the `source_hash` of the documents they pin |
 | `map_documents` | `hash` in the event's `map_files.document_hash` |
+| `club_symbol_decisions` | all (club-level; a restored event's re-match, §6.9, reads them) |
 
 All columns, `bytes` as Postgres `\x` hex in the CSV. `map_previews`
 are omitted (cache).
@@ -809,7 +819,9 @@ loads both sections through temp tables with
 `INSERT … ON CONFLICT DO NOTHING` on the primary key, so a database that
 already holds a blob keeps its row (content-addressed rows are never
 updated), and running it twice changes nothing. `uploaded_by` is kept
-only when that user exists in the target database, else NULL. With an
+only when that user exists in the target database, else NULL. Decisions
+merge as on the venue (§7.2: newer `decided_at` wins, nothing deleted;
+`decided_by` kept only when that user exists). With an
 event id it then loads the `map_files` section with `event_id` rewritten
 and `club_map_version_id` kept only when that version exists. The rest
 of the dump restores as before (`docs/backup-restore.md`).
@@ -981,9 +993,9 @@ lands with its own section here and its own tests.
 | E2E | `e2e/map-backfill.spec.ts` | legacy club row inserted directly → Maintenance card shows it pending → Import now → "Imported n, failed 0" → series + version exist → no longer pending |
 | E2E | `e2e/map-documents.spec.ts` | UI upload on `itest` → `documentHash` → route 200/304/206, own import job admits the uploader through a non-pinning event, anonymous 401 → thumbnail and symbol swatch 200 / 401 anonymous, library swatch by the header's library and version → source route streams `test.ocd` back (200, `no-store`, attachment), anonymous 401 → dev page `?url=` loads it natively → `latestForEvent` done with report; chunked route (chunks out of order) → `applyUploadedMap` → `mapMetadata`; `clubMap.upload` → `mapImport.status` done |
 | Unit (api) | `packages/api/src/__tests__/snapshot-maps.test.ts` | `pinnedHashes` (dedup, each document's own source), `partitionMapFiles` (pre-pipeline rows skipped, local identity dropped), `exportBlobInput` bounds (table, hash, start, 4 MiB), `verifyBlob` size and hash, `fetchBlob` slice order, peer hash / size mismatch, short slice |
-| Unit (api) | `packages/api/src/__tests__/backup.test.ts` | dump table order (blobs before `map_files`, no previews / tiles), one `\copy` per table, blob filters by the event's pins, `splitBackupSections` |
-| Integration (api) | `packages/api/src/__tests__/integration/lease.test.ts` | checkout carries file + source + document (bytes, header, pin, `file_data`, view overrides, venue-local NULLs, pre-pipeline row skipped, counts); document route on the venue 401 anonymous / 200 with the kiosk key; tampered bytes fail the checkout, release the peer lease and store nothing; exporter without `maps`; `exportBlob` refuses other events' blobs and a start past the end; re-checkout fetches nothing and keeps the blob rows |
-| Integration (api) | `packages/api/src/__tests__/integration/backup.test.ts` | dump completes with exactly the event's source and document as `\x` hex before `map_files`, no previews; event and blobs deleted → `restore-map-blobs.sql` restores byte-exact into another event (`uploaded_by` of a missing user NULL, grace restarted), second run a no-op, tampered bytes refused with nothing written, blobs alone without an event id |
+| Unit (api) | `packages/api/src/__tests__/backup.test.ts` | dump table order (blobs before `map_files`, decisions present, no previews / tiles), one `\copy` per table, blob filters by the event's pins, decisions unfiltered, `splitBackupSections` |
+| Integration (api) | `packages/api/src/__tests__/integration/lease.test.ts` | checkout carries file + source + document (bytes, header, pin, `file_data`, view overrides, venue-local NULLs, pre-pipeline row skipped, counts); document route on the venue 401 anonymous / 200 with the kiosk key; tampered bytes fail the checkout, release the peer lease and store nothing; exporter without `maps`; `exportBlob` refuses other events' blobs and a start past the end; re-checkout fetches nothing and keeps the blob rows; `lease.exportBlob` through the router (no / wrong secret 401, 4 MiB bound); club decisions merged (newer cloud row wins over a stale venue copy, venue-only row kept, `decided_by` NULL) |
+| Integration (api) | `packages/api/src/__tests__/integration/backup.test.ts` | dump completes with exactly the event's source and document as `\x` hex before `map_files`, no previews; event and blobs deleted → `restore-map-blobs.sql` restores byte-exact into another event (`uploaded_by` of a missing user NULL, grace restarted), second run a no-op, tampered bytes refused with nothing written, blobs alone without an event id; every `map_files` column restored; decisions in the dump, restore brings back a lost row and keeps the newer of two |
 | E2E | `e2e/backup.spec.ts` | UI upload on `itest` → Download backup → `map_sources` / `map_documents` sections hold the source and document hashes before `map_files`, no previews |
 
 ## 11. Where things live

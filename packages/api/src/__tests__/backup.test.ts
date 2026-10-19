@@ -13,6 +13,7 @@ describe("BACKUP_TABLES", () => {
     expect(i("map_sources")).toBeGreaterThan(-1);
     expect(i("map_sources")).toBeLessThan(i("map_documents"));
     expect(i("map_documents")).toBeLessThan(i("map_files"));
+    expect(i("club_symbol_decisions")).toBeGreaterThan(-1);
     expect(BACKUP_TABLES[0]).toBe("events");
   });
 
@@ -40,6 +41,10 @@ describe("buildBackupScript", () => {
   it("filters map_documents to the event's document pins", () => {
     const line = script.split("\n").find((l) => l.includes("FROM oxygen.map_documents s"))!;
     expect(line).toContain("f.document_hash FROM oxygen.map_files f WHERE f.event_id = 42");
+  });
+
+  it("carries the club's symbol decisions whole (instance-global)", () => {
+    expect(script).toContain("SELECT * FROM oxygen.club_symbol_decisions ORDER BY fingerprint, library_version");
   });
 
   it("keeps the event-scoped filters", () => {

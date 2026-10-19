@@ -53,6 +53,14 @@ export interface SnapshotMapDocument {
   report: unknown;
 }
 
+export interface SnapshotDecision {
+  fingerprint: string;
+  libraryVersion: string;
+  canonicalId: string | null;
+  /** ISO time over HTTP, a Date in process. */
+  decidedAt: string | Date;
+}
+
 export interface SnapshotMaps {
   /** `map_files` rows without `id`, `eventId` and `fileData`. */
   files: Record<string, unknown>[];
@@ -60,6 +68,8 @@ export interface SnapshotMaps {
   documents: SnapshotMapDocument[];
   /** `map_files` rows left behind because they have no `source_hash` yet. */
   skipped: number;
+  /** The whole `club_symbol_decisions` table (club-level, map-symbols.md §8.5). */
+  decisions?: SnapshotDecision[];
 }
 
 // ---- pure helpers -----------------------------------------------------------
@@ -166,7 +176,11 @@ export async function exportSnapshotMaps(db: Db, eventId: bigint): Promise<Snaps
     select: { fileHash: true, kind: true, sizeBytes: true, fileName: true },
     orderBy: { fileHash: "asc" },
   });
-  return { files, sources, documents, skipped };
+  const decisions = await db.clubSymbolDecision.findMany({
+    select: { fingerprint: true, libraryVersion: true, canonicalId: true, decidedAt: true },
+    orderBy: [{ fingerprint: "asc" }, { libraryVersion: "asc" }],
+  });
+  return { files, sources, documents, skipped, decisions };
 }
 
 /** Whether the event's `map_files` reference the blob — the `lease.exportBlob` gate. */
@@ -239,7 +253,7 @@ export async function importSnapshotMaps(
   eventId: bigint,
   maps: SnapshotMaps,
   blobs: SnapshotBlobs,
-): Promise<{ files: number; sources: number; documents: number }> {
+): Promise<{ files: number; sources: number; documents: number; decisions: number }> {
   const newSources = maps.sources.filter((s) => blobs.sources.has(s.fileHash));
   if (newSources.length > 0) {
     await tx.mapSource.createMany({
@@ -282,5 +296,21 @@ export async function importSnapshotMaps(
     for (const k of NULLABLE_JSON_FILE_FIELDS) if (row[k] === null) row[k] = Prisma.DbNull;
     await tx.mapFile.create({ data: row as never });
   }
-  return { files: maps.files.length, sources: maps.sources.length, documents: maps.documents.length };
+  for (const d of maps.decisions ?? []) await mergeDecision(tx, d);
+  return { files: maps.files.length, sources: maps.sources.length, documents: maps.documents.length, decisions: maps.decisions?.length ?? 0 };
+}
+
+/**
+ * Merge one club decision by primary key: the newer `decided_at` wins (the
+ * order stage 6 reads them in), nothing is deleted. `decided_by` is NULL —
+ * the venue has no copy of the users.
+ */
+async function mergeDecision(tx: Prisma.TransactionClient, d: SnapshotDecision): Promise<void> {
+  const decidedAt = new Date(d.decidedAt);
+  await tx.$executeRaw`
+    INSERT INTO oxygen.club_symbol_decisions AS c (fingerprint, library_version, canonical_id, decided_by, decided_at)
+    VALUES (${d.fingerprint}, ${d.libraryVersion}, ${d.canonicalId}, NULL, ${decidedAt})
+    ON CONFLICT (fingerprint, library_version) DO UPDATE
+      SET canonical_id = EXCLUDED.canonical_id, decided_by = NULL, decided_at = EXCLUDED.decided_at
+      WHERE c.decided_at < EXCLUDED.decided_at`;
 }

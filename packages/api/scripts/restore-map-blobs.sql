@@ -6,7 +6,8 @@
 --   cd <dir with the dump split into <table>.csv files>
 --   psql "$DATABASE_URL" [-v event_id=<new id>] -f <repo>/packages/api/scripts/restore-map-blobs.sql
 --
--- Reads map_sources.csv and map_documents.csv from the current directory,
+-- Reads map_sources.csv, map_documents.csv and club_symbol_decisions.csv
+-- from the current directory,
 -- and with event_id also map_files.csv. Each file is one section of the
 -- dump (the lines after `--- <table> ---`, header row included); a
 -- header-only section is fine. (\copy takes its file name literally, so
@@ -49,6 +50,20 @@ SELECT r.hash, r.bytes, r.size_bytes, r.format_version, r.importer_version, r.li
        r.source_hash, r.header, r.report, now(), now()
 FROM restore_map_documents r
 ON CONFLICT (hash) DO NOTHING;
+
+-- Club symbol decisions (map-symbols.md §8.5): merged by primary key, the
+-- newer decided_at wins (the rule stage 6 reads them by), nothing deleted.
+-- decided_by is kept only when that user exists here.
+CREATE TEMP TABLE restore_club_symbol_decisions (LIKE oxygen.club_symbol_decisions) ON COMMIT DROP;
+\copy restore_club_symbol_decisions FROM 'club_symbol_decisions.csv' WITH (FORMAT csv, HEADER true)
+
+INSERT INTO oxygen.club_symbol_decisions AS d (fingerprint, library_version, canonical_id, decided_by, decided_at)
+SELECT r.fingerprint, r.library_version, r.canonical_id,
+       (SELECT u.id FROM oxygen.users u WHERE u.id = r.decided_by), r.decided_at
+FROM restore_club_symbol_decisions r
+ON CONFLICT (fingerprint, library_version) DO UPDATE
+  SET canonical_id = EXCLUDED.canonical_id, decided_by = EXCLUDED.decided_by, decided_at = EXCLUDED.decided_at
+  WHERE d.decided_at < EXCLUDED.decided_at;
 
 \if :{?event_id}
 CREATE TEMP TABLE restore_map_files (LIKE oxygen.map_files) ON COMMIT DROP;

@@ -4,7 +4,8 @@
  * and `map_documents` rows by hash ahead of `map_files`; the restore
  * script loads them into a database that lost them, re-points a new
  * event's `map_files`, refuses bytes that do not match their hash, and is
- * a no-op the second time.
+ * a no-op the second time. `club_symbol_decisions` travels whole and
+ * merges by key, the newer `decided_at` winning.
  */
 
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
@@ -34,6 +35,11 @@ let documentBytes: Buffer;
 let dump: string;
 let uploaderId: string;
 let originalFile: Record<string, unknown>;
+// Fingerprints no real symbol has: decisions are instance-global and keyed
+// by symbol geometry, so a real one would change other suites' imports.
+const FP = (k: string) => `ocad:999.9:bk${suffix}${k}`;
+const LIB = "ISOM2017-2@2026.10.1";
+const T0 = new Date("2026-05-01T10:00:00Z");
 
 /** Run the restore script as documented: from the directory holding the `<table>.csv` sections. */
 function psqlRestore(cwd: string, eventId?: bigint): void {
@@ -50,7 +56,7 @@ function writeSections(name: string, text: string, edit: (t: string, csv: string
   const out = join(dir, name);
   mkdirSync(out);
   const sections = splitBackupSections(text);
-  for (const t of ["map_sources", "map_documents", "map_files"]) writeFileSync(join(out, `${t}.csv`), edit(t, sections.get(t)!));
+  for (const t of ["map_sources", "map_documents", "club_symbol_decisions", "map_files"]) writeFileSync(join(out, `${t}.csv`), edit(t, sections.get(t)!));
   return out;
 }
 
@@ -69,6 +75,9 @@ beforeAll(async () => {
   const row = await source.db.mapFile.findFirstOrThrow({ where: { eventId: source.eventId } });
   sourceHash = row.sourceHash!;
   originalFile = row as unknown as Record<string, unknown>;
+  await source.db.clubSymbolDecision.createMany({
+    data: ["lost", "newer", "older"].map((k) => ({ fingerprint: FP(k), libraryVersion: LIB, canonicalId: `dump-${k}`, decidedBy: uploader.id, decidedAt: T0 })),
+  });
   documentBytes = Buffer.from((await source.db.mapDocument.findUniqueOrThrow({ where: { hash: documentHash } })).bytes);
 
   server = Fastify({ logger: false });
@@ -85,6 +94,7 @@ afterAll(async () => {
   await target?.cleanup();
   await target.db.mapDocument.deleteMany({ where: { sourceHash } });
   await target.db.mapSource.deleteMany({ where: { fileHash: sourceHash } });
+  await target.db.clubSymbolDecision.deleteMany({ where: { fingerprint: { contains: `bk${suffix}` } } });
   await target.db.user.deleteMany({ where: { email: { endsWith: `@backup-${suffix}.example` } } });
   if (dir) rmSync(dir, { recursive: true, force: true });
   await disconnect();
@@ -110,6 +120,11 @@ describe("per-event dump", () => {
     expect(documents[1]).toContain(`\\x${documentBytes.subarray(0, 16).toString("hex")}`);
   });
 
+  it("carries the club's symbol decisions", () => {
+    const rows = splitBackupSections(dump).get("club_symbol_decisions")!;
+    for (const k of ["lost", "newer", "older"]) expect(rows).toContain(`${FP(k)},${LIB},dump-${k},`);
+  });
+
   it("omits previews", () => {
     expect(splitBackupSections(dump).has("map_previews")).toBe(false);
   });
@@ -126,6 +141,16 @@ describe("restore-map-blobs.sql", () => {
     await source.db.mapDocument.deleteMany({ where: { hash: documentHash } });
     await source.db.mapSource.deleteMany({ where: { fileHash: sourceHash } });
     await source.db.user.delete({ where: { id: uploaderId } });
+    // Decisions: one lost, one decided again since the dump, one older here than in the dump.
+    await source.db.clubSymbolDecision.delete({ where: { fingerprint_libraryVersion: { fingerprint: FP("lost"), libraryVersion: LIB } } });
+    await source.db.clubSymbolDecision.update({
+      where: { fingerprint_libraryVersion: { fingerprint: FP("newer"), libraryVersion: LIB } },
+      data: { canonicalId: "live-newer", decidedAt: new Date("2026-09-01T10:00:00Z") },
+    });
+    await source.db.clubSymbolDecision.update({
+      where: { fingerprint_libraryVersion: { fingerprint: FP("older"), libraryVersion: LIB } },
+      data: { canonicalId: "live-older", decidedAt: new Date("2026-01-01T10:00:00Z") },
+    });
   }, 30_000);
 
   it("refuses bytes that do not match their hash and writes nothing", async () => {
@@ -165,6 +190,14 @@ describe("restore-map-blobs.sql", () => {
       return rest;
     };
     expect(strip(files[0] as unknown as Record<string, unknown>)).toEqual(strip(originalFile));
+  });
+
+  it("merges the decisions: a lost row returns, the newer decided_at wins", async () => {
+    const rows = await target.db.clubSymbolDecision.findMany({ where: { fingerprint: { contains: `bk${suffix}` } }, orderBy: { fingerprint: "asc" } });
+    const byKey = Object.fromEntries(rows.map((r) => [r.fingerprint, r]));
+    expect(byKey[FP("lost")]).toMatchObject({ canonicalId: "dump-lost", decidedBy: null, decidedAt: T0 });
+    expect(byKey[FP("newer")]).toMatchObject({ canonicalId: "live-newer" });
+    expect(byKey[FP("older")]).toMatchObject({ canonicalId: "dump-older", decidedAt: T0 });
   });
 
   it("is a no-op the second time", async () => {

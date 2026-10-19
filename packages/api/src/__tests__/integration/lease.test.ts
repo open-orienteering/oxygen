@@ -66,6 +66,8 @@ const sha256 = (b: Uint8Array) => createHash("sha256").update(b).digest("hex");
 let mapFixture: Buffer; // per-run trailer: content-addressed rows are global
 let sourceHash: string;
 let documentHash: string;
+const DFP = (k: string) => `ocad:999.9:lease${mapSuffix}${k}`;
+const DLIB = "ISOM2017-2@2026.10.1";
 
 const PEER_URL = "http://peer.test";
 
@@ -197,6 +199,20 @@ beforeAll(async () => {
     },
   });
   await dbB.event.update({ where: { id: eventB.id }, data: { kioskKey: KIOSK_KEY } });
+  // Club decisions on the cloud (fingerprints no real symbol has), and on
+  // the venue one stale copy of the same key plus a row the cloud lacks.
+  await dbB.clubSymbolDecision.createMany({
+    data: [
+      { fingerprint: DFP("a"), libraryVersion: DLIB, canonicalId: "cloud-a", decidedAt: new Date("2026-06-01T00:00:00Z") },
+      { fingerprint: DFP("b"), libraryVersion: DLIB, canonicalId: null, decidedAt: new Date("2026-06-01T00:00:00Z") },
+    ],
+  });
+  await ctx.db.clubSymbolDecision.createMany({
+    data: [
+      { fingerprint: DFP("a"), libraryVersion: DLIB, canonicalId: "venue-stale", decidedAt: new Date("2026-01-01T00:00:00Z") },
+      { fingerprint: DFP("venue"), libraryVersion: DLIB, canonicalId: "venue-only", decidedAt: new Date("2026-01-01T00:00:00Z") },
+    ],
+  });
 
   _setLeasePeerFactory(() => leasePeerToB());
   _setPeerTransportFactory(() => transportToB());
@@ -211,6 +227,7 @@ afterAll(async () => {
   await dbB.event.delete({ where: { id: eventB.id } }).catch(() => {});
   // Blobs outlive their pins (append-only); remove this run's on both nodes.
   for (const db of [ctx.db, dbB] as const) {
+    await db.clubSymbolDecision.deleteMany({ where: { fingerprint: { contains: `lease${mapSuffix}` } } });
     await db.mapDocument.deleteMany({ where: { sourceHash } });
     await db.mapSource.deleteMany({ where: { fileHash: sourceHash } });
   }
@@ -316,7 +333,7 @@ describe("checkout maps: failure and interop", () => {
     }));
     try {
       const res = await caller.lease.checkout({ nameId: CHECKOUT_NAME });
-      expect(res.maps).toEqual({ files: 0, sources: 0, documents: 0, fetchedBytes: 0, skipped: 0 });
+      expect(res.maps).toEqual({ files: 0, sources: 0, documents: 0, fetchedBytes: 0, skipped: 0, decisions: 0 });
       const local = await ctx.db.event.findUniqueOrThrow({ where: { nameId: CHECKOUT_NAME }, select: { id: true } });
       expect(await ctx.db.mapFile.count({ where: { eventId: local.id } })).toBe(0);
     } finally {
@@ -355,6 +372,7 @@ describe("checkout → write → checkin lifecycle", () => {
       documents: 1,
       fetchedBytes: mapFixture.length + (await dbB.mapDocument.findUniqueOrThrow({ where: { hash: documentHash } })).sizeBytes,
       skipped: 1,
+      decisions: await dbB.clubSymbolDecision.count(),
     });
 
     // Local copy: same UUIDs, same seqs, seq counters carried over.
@@ -410,6 +428,14 @@ describe("checkout → write → checkin lifecycle", () => {
     expect(files).toHaveLength(1); // the pre-pipeline row stayed behind
     expect(files[0]).toMatchObject({ fileName: "lease.ocd", sourceHash, documentHash, fileHash: sourceHash, scale: 10000, rotationCorrection: 1.5, clubMapVersionId: null });
     expect(Buffer.from(files[0].fileData).equals(mapFixture)).toBe(true);
+  });
+
+  it("merges the club's symbol decisions: newer decided_at wins, nothing deleted", async () => {
+    const rows = await ctx.db.clubSymbolDecision.findMany({ where: { fingerprint: { contains: `lease${mapSuffix}` } } });
+    const byKey = Object.fromEntries(rows.map((r) => [r.fingerprint, r]));
+    expect(byKey[DFP("a")]).toMatchObject({ canonicalId: "cloud-a", decidedBy: null, decidedAt: new Date("2026-06-01T00:00:00Z") });
+    expect(byKey[DFP("b")]).toMatchObject({ canonicalId: null });
+    expect(byKey[DFP("venue")]).toMatchObject({ canonicalId: "venue-only" });
   });
 
   it("lease.exportBlob serves the copy through the router, behind the shared secret", async () => {
