@@ -19,7 +19,7 @@ none of that.
 | Courses | `A`–`E` with 18 / 15 / 11 / 10 / 8 controls (same shape as the original) |
 | Controls | Codes `61`–`88`, start `S1`, finish `M1`, deterministic jittered-grid layout |
 | Class records | None (strType 3 absent) — the class-name-fallback tests depend on this |
-| Georeference | String 1039: grid id 1000 (SWEREF99 TM / EPSG:3006), easting 500000, northing 6500000, scale 1:7500 — round, non-identifying values (~15°E, 58.6°N, generic inland Sweden) |
+| Georeference | String 1039: grid id 13002 (SWEREF99 TM / EPSG:3006 in the reader's grid table, so the map document resolves its CRS; until 2026-10-19 it was 1000, which is no OCAD id and only worked through the legacy coordinate-range inference), easting 500000, northing 6500000, scale 1:7500 — round, non-identifying values (~15°E, 58.6°N, generic inland Sweden) |
 | Terrain | One yellow area (403) and three black paths (505), purely so map tiles render something visible |
 | North lines | Twelve ISOM 601 magnetic-north lines (blue, 12 mm apart, exactly along paper +Y with ScalePar `a=0`). The real declination at the georeference is ≈ 6.5° E, so north detection reports the lines as ≈ 6.5° stale — the club-map-library E2E asserts the warning badge. Zero tilt keeps the display orientation of every other consumer unchanged |
 | Autodetect features | A boulder (ISOM 204) at 68 / 42 mm and a building (ISOM 521) spanning 48–58 / 39–46 mm, both in the corner the yellow blob doesn't reach, so a description-autodetect search around either returns exactly that feature |
