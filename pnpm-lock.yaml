@@ -177,6 +177,9 @@ importers:
 
   packages/shared:
     dependencies:
+      proj4:
+        specifier: ^2.21.0
+        version: 2.21.0
       zod:
         specifier: ^4.4.3
         version: 4.4.3
