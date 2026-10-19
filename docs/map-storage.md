@@ -518,6 +518,15 @@ Idempotent; also run for dedup hits:
   overwrite label and uploader with the request's name and user when the
   job finished within the hold, since the source row keeps the first
   uploader's values.
+- `clubMapId` set and that version exists → its `document_hash` follows
+  the job's document (an in-place update; `seq`, label and uploader stay).
+  An edition is the uploaded *file*; its document is that file's latest
+  import — a reviewed one (`finalise`, §6.8) or a re-matched one (§6.9).
+  Events that used the edition keep the document they pinned
+  (`map_files.document_hash`, 06 §6 copy-on-use); moving them to the new
+  document stays an explicit "update to latest". Readers of a version
+  must not cache its `document_hash` as if it were immutable; the hash
+  itself is.
 - `touchDocument(hash)`.
 
 ### 6.5 Club library dual-write

@@ -387,6 +387,55 @@ share is dominated by OCAD template conventions the library has no entry
 for (minimum-size points, outline lines, single pattern dots); adding
 those as library variants is the lever if the auto rate needs to rise.
 
+### 8.5 Club decisions (06 §5.3)
+
+A reviewed outcome outlives the document it was made on: next year's
+edition of the same club map has the same symbols. Decisions are rows of
+`club_symbol_decisions` (`docs/map-storage.md` §2), written only by
+`mapImport.decide` (`docs/map-import.md` §2.2) and read by stage 6 as the
+`explicit` stage (§8.2 row 1). The matcher never writes them.
+
+**Fingerprint.** `"<source kind>:<code>:<irHash>"` — `ocad:527:1a2b3c4d`
+— with the normalised spec code and `irHash = fingerprintHash(fingerprintOf(render, classOf))`
+(§8.1). The IR type is part of the fingerprint the hash covers; the
+symbol *name* is not, so a rename keeps its decision and the same code
+drawn the same way is the same symbol. The string stays readable so a
+CRT export can carry it in a comment (A7). `documentSymbolFingerprints(header)`
+computes it from a stored document: colour classes are per colour
+(`classifyColour`), so the aligned stack of the header gives the same
+classes as the source stack the matcher saw, and the remapped render the
+same hash (unit-tested equal). `null` for non-source symbols and for
+symbols without a render.
+
+**Library versions.** A row's `library_version` is the full
+`<library>@<SYMBOL_LIBRARY_VERSION>` the decision was made against
+(`ISOM2017-2@2026.10.1`), as 07 §4.3 records it. A decision is a
+statement about a library *entry*, which survives a library release, so
+stage 6 reads every row of the chosen library id whatever its release
+(`library_version` starting with `<library>@`), and per fingerprint the
+newest `decided_at` wins (ties: the later release string). A re-match
+after a library bump therefore keeps reviewed rows and re-proposes the
+rest (03 §6.5). An entry the new release dropped falls through with
+`DECISION_UNKNOWN_ENTRY` (§8.2). `decide` writes the row under the
+current release; `reset` deletes the fingerprint's rows for that library
+id under every release. Rows of the other library (an ISSprOM decision on
+an ISOM map) are ignored: `SymbolDecision.libraryId`, filtered by
+`matchDocument` after `chooseLibrary`.
+
+**Scope.** The instance belongs to one club (`docs/club-library.md`), so
+the table has no event or series column: a decision made while reviewing
+an event map applies to the club map of the same symbols and vice versa.
+Rows of another source kind never apply (`omap:` rows to an OCAD file).
+
+**Does a stored document follow the decisions?**
+`documentFollowsDecisions(header, decisions)` — for every source symbol
+with a fingerprint, the decision that would apply (an entry the library
+has, or `null`) equals what the header records (`method: "explicit"` with
+that `canonicalId`, or no explicit match when no decision applies). The
+dedup short-cut and the re-match pass (`docs/map-storage.md` §6.1, §6.9)
+use it, so a document is reused only if re-importing it now would give
+the same bytes.
+
 ## 9. Colour stack alignment (03 §6.3)
 
 Import stage 7. Code: `packages/shared/src/import/{colour-class,colour-align}.ts`.
