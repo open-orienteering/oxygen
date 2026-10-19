@@ -555,6 +555,8 @@ between do not unbind it); `# keep` without a source is a bad line.
   symbol of this document; else — or when it names none
   (`CRT_FINGERPRINT_MISMATCH`, the symbol was redrawn since export) — every
   source symbol whose `normaliseCode` equals the rule's (`702` ≡ `702.0`).
+  A `# fp` whose code is not the rule's source is not used either (the
+  line was edited) and warns the same way.
   Two symbols with one code both take a code-only rule, each under its own
   fingerprint. Of two lines for one symbol the later wins (Mapper's rule
   and `decide`'s).

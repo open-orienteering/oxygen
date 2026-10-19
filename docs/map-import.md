@@ -689,6 +689,8 @@ document hash is identical on two machines.
 | E2E | `e2e/map-gl-doc.spec.ts` | document path = reader path in the browser, native `.oxvm` round trip, `mode=source` draws the fixture from its own definitions with no proxies; `e2e/test.xmap` loads client-side with no OCAD reader, draws, and surfaces the OMAP warning codes |
 | Unit (shared) | `packages/shared/src/import/__tests__/decisions.test.ts` | club decisions and review rows (`docs/map-symbols.md` §8.5), stage 6 with decisions: other library ignored, older release applied |
 | Unit + integration (api) | `map-symbol-decisions.test.ts`, `integration/map-review.test.ts` (see `docs/map-storage.md` §10) | the review round: decision writes and validation, worker applying a snapshot, `review` / `decide` / `finalise` |
+| Unit (shared) | `packages/shared/src/import/__tests__/crt.test.ts` | the CRT codec (`docs/map-symbols.md` §8.6): Mapper's grammar, Oxygen's comments, resolution and its warning codes, unchanged auto matches, round trip |
+| Unit + integration (api) | `map-crt.test.ts`, `integration/map-crt.test.ts` (see `docs/map-storage.md` §10) | `exportCrt` / `importCrt`: file name, plan on the fixture, decide's cap, the procedures end to end |
 | Unit + integration + E2E (api, web) | see `docs/map-storage.md` §10 | stages 1 and 9: chunked upload route, import jobs, store, dedup, pins, report row, delivery route |
 | Unit + integration + E2E (api) | see `docs/map-storage.md` §10 (previews rows) | stage 10: thumbnail row written by the job and by the dedup short-cut, non-fatal failure, object cap |
 
@@ -705,8 +707,7 @@ directory, not in the repo.
 ## 8. Pending in this chapter
 
 S2 confirmation of the *provisional* §3.3 rows against OCAD output,
-event / club map *apply* for Mapper sources (needs slice C, §2.2), CRT
-export / import (06 §5.1, A7), stage 5 fonts used (fallback decisions)
+event / club map *apply* for Mapper sources (needs slice C, §2.2), stage 5 fonts used (fallback decisions)
 and feature usage (03 §6.8 table) — 06 §4.4's `fonts` / `features`
 report sections; the `proj4-match` CRS method for PROJ.4 specs neither
 parse nor the grid table knows. Each lands with its own section here and
