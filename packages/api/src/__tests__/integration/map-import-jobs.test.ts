@@ -29,6 +29,7 @@ import {
 import { registerMapUploadRoutes } from "../../map-store/upload-routes.js";
 import { resetDocumentAccessCache } from "../../map-store/routes.js";
 import { MAX_UPLOAD_BYTES } from "../../map-store/uploads.js";
+import { planBackfill } from "../../map-store/backfill.js";
 import type { AuthUser } from "../../auth.js";
 
 const FIXTURE = resolve(__dirname, "../../../../../e2e/test.ocd");
@@ -246,61 +247,84 @@ describe("import jobs from applyEventMap", () => {
   });
 });
 
-describe("club maps are dual-written as series", () => {
-  let legacyId: number;
+describe("club library on the series (§6.5)", () => {
   let clubMapId: string;
 
   it("clubMap.upload creates the series, the source and a done job that adds version 1", async () => {
     const caller = makeCaller(null, { user: admin, authEnabled: true, authMode: "proxy" });
     const created = await caller.clubMap.upload({ name: `Club ${suffix}`, fileName: "club.ocd", fileDataBase64: fixture.toString("base64") });
-    legacyId = created.id;
-    clubMapId = created.clubMapId;
+    clubMapId = created.id;
+    expect(created).not.toHaveProperty("clubMapId");
     expect(created.importJob?.state).toBe("done");
     expect((await ctx.db.mapImportJob.findUniqueOrThrow({ where: { id: created.importJob!.id } })).startedBy).toBe(admin.id);
 
-    const series = await ctx.db.clubMap.findUniqueOrThrow({ where: { id: clubMapId }, include: { versions: true, legacyRows: { select: { id: true } } } });
+    const series = await ctx.db.clubMap.findUniqueOrThrow({ where: { id: clubMapId }, include: { versions: true, legacyRows: { select: { fileHash: true, name: true } } } });
     expect(series).toMatchObject({ name: `Club ${suffix}`, colourProfile: "auto", createdBy: admin.id });
-    expect(series.legacyRows.map((r) => Number(r.id))).toEqual([legacyId]);
+    // The legacy row is written through for the raster consumers.
+    expect(series.legacyRows).toEqual([{ fileHash: fixtureHash, name: `Club ${suffix}` }]);
     expect(series.versions).toHaveLength(1);
     // Label and uploader follow the library upload when the job finished
     // inside the hold (it did: the fixture imports in milliseconds).
     expect(series.versions[0]).toMatchObject({ seq: 1, sourceHash: fixtureHash, documentHash, label: "club.ocd", uploadedBy: admin.id });
+
+    const listed = (await caller.clubMap.list()).find((m) => m.id === clubMapId);
+    expect(listed).toMatchObject({
+      version: { seq: 1, sourceHash: fixtureHash, documentHash, label: "club.ocd", uploadedBy: admin.id },
+      versionCount: 1,
+      importJob: null,
+      previewUrl: `/api/map-documents/${documentHash}/thumbnail.png`,
+    });
   }, 60_000);
 
   it("course.useClubMap pins the club version on the event's map row and reuses the document", async () => {
     const caller = makeCaller(ctx.event, { user: setter, authEnabled: true, authMode: "proxy" });
-    const result = await caller.course.useClubMap({ clubMapId: legacyId });
+    const result = await caller.course.useClubMap({ clubMapId });
     expect(result.documentHash).toBe(documentHash);
     const version = await ctx.db.clubMapVersion.findFirstOrThrow({ where: { clubMapId }, select: { id: true } });
     const file = await ctx.db.mapFile.findFirstOrThrow({ where: { eventId: ctx.eventId }, select: { clubMapVersionId: true, documentHash: true, fromClubLibrary: true } });
     expect(file).toEqual({ clubMapVersionId: version.id, documentHash, fromClubLibrary: true });
   }, 60_000);
 
-  it("rename and colour changes mirror onto the series", async () => {
+  it("rename, colour and rotation land on the series and are written through to the legacy row", async () => {
     const caller = makeCaller(null, { user: admin, authEnabled: true, authMode: "proxy" });
-    await caller.clubMap.rename({ id: legacyId, name: `Club ${suffix} renamed` });
-    await caller.clubMap.setColorStack({ id: legacyId, profile: "issprom", northLinesBelow: false });
+    const before = await ctx.db.clubMapFile.findFirstOrThrow({ where: { clubMapId }, select: { renderKey: true } });
+    await caller.clubMap.rename({ id: clubMapId, name: `Club ${suffix} renamed` });
+    await caller.clubMap.setColorStack({ id: clubMapId, profile: "issprom", northLinesBelow: false, overrides: { above: [2] } });
+    await caller.clubMap.setRotation({ id: clubMapId, degrees: 2.5 });
     const series = await ctx.db.clubMap.findUniqueOrThrow({ where: { id: clubMapId } });
-    expect(series).toMatchObject({ name: `Club ${suffix} renamed`, colourProfile: "issprom", northLinesBelow: false });
-  });
+    expect(series).toMatchObject({ name: `Club ${suffix} renamed`, colourProfile: "issprom", northLinesBelow: false, colourOverrides: { above: [2] }, rotationCorrection: 2.5 });
+    const legacy = await ctx.db.clubMapFile.findFirstOrThrow({ where: { clubMapId } });
+    expect(legacy).toMatchObject({ name: `Club ${suffix} renamed`, colorProfile: "issprom", northLinesBelow: false, colorOverrides: { above: [2] }, rotationCorrection: 2.5 });
+    expect(legacy.renderKey).not.toBe(before.renderKey);
+    await expect(caller.clubMap.rename({ id: "00000000-0000-7000-8000-000000000000", name: "x" })).rejects.toMatchObject({ code: "NOT_FOUND" });
+    await expect(caller.clubMap.setColorStack({ id: "00000000-0000-7000-8000-000000000000", profile: "isom" })).rejects.toMatchObject({ code: "NOT_FOUND" });
+  }, 30_000);
 
   it("addFromSource builds a library entry from a finalised source and dedups the import", async () => {
     const caller = makeCaller(null, { user: admin, authEnabled: true, authMode: "proxy" });
     const created = await caller.clubMap.addFromSource({ fileHash: fixtureHash, name: `Club ${suffix} from source` });
     expect(created.importJob?.state).toBe("done");
-    const versions = await ctx.db.clubMapVersion.findMany({ where: { clubMapId: created.clubMapId } });
+    const versions = await ctx.db.clubMapVersion.findMany({ where: { clubMapId: created.id } });
     expect(versions).toHaveLength(1);
     expect(versions[0]).toMatchObject({ seq: 1, documentHash });
+    expect(await ctx.db.clubMapFile.count({ where: { clubMapId: created.id } })).toBe(1);
     await expect(caller.clubMap.addFromSource({ fileHash: "0".repeat(64) })).rejects.toMatchObject({ code: "NOT_FOUND" });
   }, 30_000);
 
-  it("removing the legacy row removes its series; event pins null out and the document survives", async () => {
+  it("remove deletes the legacy row and the series; event pins null out, blobs stay for the GC", async () => {
     const caller = makeCaller(null, { user: admin, authEnabled: true, authMode: "proxy" });
-    await caller.clubMap.remove({ id: legacyId });
+    const pendingBefore = (await planBackfill(ctx.db)).clubRows.length;
+    await caller.clubMap.remove({ id: clubMapId });
     expect(await ctx.db.clubMap.findUnique({ where: { id: clubMapId } })).toBeNull();
-    const file = await ctx.db.mapFile.findFirstOrThrow({ where: { eventId: ctx.eventId }, select: { clubMapVersionId: true, documentHash: true } });
-    expect(file).toEqual({ clubMapVersionId: null, documentHash });
+    expect(await ctx.db.clubMapVersion.count({ where: { clubMapId } })).toBe(0);
+    // No unlinked legacy row is left for the backfill to resurrect.
+    expect(await ctx.db.clubMapFile.count({ where: { name: `Club ${suffix} renamed` } })).toBe(0);
+    expect((await planBackfill(ctx.db)).clubRows.length).toBe(pendingBefore);
+    const file = await ctx.db.mapFile.findFirstOrThrow({ where: { eventId: ctx.eventId }, select: { clubMapVersionId: true, documentHash: true, sourceHash: true } });
+    expect(file).toEqual({ clubMapVersionId: null, documentHash, sourceHash: fixtureHash });
     expect(await ctx.db.mapDocument.findUnique({ where: { hash: documentHash }, select: { hash: true } })).not.toBeNull();
+    expect(await ctx.db.mapSource.findUnique({ where: { fileHash: fixtureHash }, select: { fileHash: true } })).not.toBeNull();
+    await expect(caller.clubMap.remove({ id: clubMapId })).rejects.toMatchObject({ code: "NOT_FOUND" });
   });
 });
 
