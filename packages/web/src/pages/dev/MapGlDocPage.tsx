@@ -239,7 +239,7 @@ export function MapGlDocPage() {
       const stats = engine.render({
         colour: colourRef.current,
         ...(kindsRef.current ? { kinds: kindsRef.current } : {}),
-        // lod=0: no screen-only skips (glyph < 2 px, hatch tint), widen-only floor as S1 — for attributing their effect.
+        // lod=0: no screen-only skips (glyph < 2 px, hatch tint) — for attributing their effect.
         ...(lodRef.current ? {} : { minGlyphPx: 0, hatchTintPx: 0 }),
       });
       stats.cpuMs = performance.now() - t0;
