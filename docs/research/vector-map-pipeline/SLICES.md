@@ -70,17 +70,33 @@ to rise), `defaultMapAppearance` retirement (slice C).
 
 ## Slice B — GL viewer (09 §4)
 
-Started ahead of A's completion because S1 needed the shared stage.
-Not yet split into sub-slices; do that when A5–A11 are in review.
+Split 2026-10-20 from 09 §4 B, S1 §6 (build order the numbers support:
+indexed strips → visible-set indices → worker → zoom-gated buckets →
+MSDF text), 04 §6–8, 06 §5 and 09 §3. The spike drew the whole document
+every frame with 13 pilot symbols; B turns that into the viewer behind
+the per-event switch. Four rows can start at once (B1, B2, B6, B7 —
+disjoint areas); B3/B4 follow B2, B5 follows B4.
 
-| Step | Status | Spec |
-|------|--------|------|
-| S1 render spike (shared stage, WebGL2 backend, corpus measurements) | done 2026-10-15 | `S1-render-spike.md`, `map-rendering.md` §1–6 |
-| Canonical library `ISOM2017-2` + `ISSprOM2019-2` | done 2026-10-16 | `map-symbols.md` §1–7 |
-| Real-phone frame GPU measurement (S1 residual) | manual, first task of B | 04 §9 |
-| `VectorMapLayer` in `MapViewer`, paper-space viewport, `geoToPaper` | not split | `map-rendering.md` §5.2 |
-| Import review UI (needs A5/A6 and the renderer) | not split | 06 §5 |
-| Per-event switch `events.map_pipeline`, instance flags | not split | 09 §3 |
+### Done
+
+| Step | Decision-log row | Spec |
+|------|------------------|------|
+| S1 render spike (shared stage, WebGL2 backend, corpus measurements) | 2026-10-15 "S1 spike" | `S1-render-spike.md`, `map-rendering.md` §1–6 |
+| Canonical library `ISOM2017-2` + `ISSprOM2019-2` | 2026-10-16 "Slice B, canonical library" | `map-symbols.md` §1–7 |
+
+### Remaining
+
+| Id | Sub-slice | Spec home | Research | Depends on | Area (files a session may touch) | Status |
+|----|-----------|-----------|----------|------------|----------------------------------|--------|
+| B0 | Real-phone baseline (S1 residual): Pixel-class device, throttled 4G, `/dev/map-gl-doc?mode=envelope` on Sprint envelope and Club-2026 pilot; record first frame, frame GPU, resident GPU in `map-rendering.md` §5.2 | `map-rendering.md` §5.2 | 04 §9, S1 §6 | — | dev page only; numbers into the spec | manual (user; a baseline for B2, not a blocker) |
+| B1 | Full-library symbolisation: the shared stage must symbolise every IR primitive the library (`ISOM2017-2`, `ISSprOM2019-2`) and the importers produce, not only the 13 pilot symbols — remaining placement/dash/pattern/text rules, the provisional §4.2–4.3 rows resolved where S2 is not needed; the 04 §8 fixture rows 1–9, colour order and precision as pass-stream assertions (`__fixtures__/streams/`) plus goldens (reference raster ↔ WebGL2; PDF tier waits for C); whole-library symbolisation of both editions warning-free; documents through `map-document/render-bridge.ts` (the `ocad-objects.ts` spike path stays dev-only) | `map-rendering.md` §3–4, §6 | 04 §4, §8; 03 §6.9 | — | `packages/shared/src/render/{symbolise,dash,placement,pattern,text,glyph-table}.ts`, `__fixtures__/`, `packages/shared/src/map-document/render-bridge.ts`, `e2e/map-gl-golden.spec.ts`, `e2e/__golden__/map-gl/` | ready |
+| B2 | GPU arena and buckets: strokes as indexed strips (S1 §4.1), per-object range table and visible-set index buffers per (colour, kind) (04 §6.8, §7 — required for the phone budget), glyph meshes of one colour merged into one buffer (draw calls < 300 on Sprint), 50 mm buckets + large-object bucket, zoom-gated preparation and LRU eviction under the 30 / 150 MB budgets (04 §6.11), symbolise + prepare in a worker, GPU timer and bench kept on `/dev/map-gl-doc`; measured against 04 §9 on the corpus with the dev page | `map-rendering.md` §5.2 (rewrite "Preparation", "Batching", add "Arena and buckets", "Worker") | 04 §6.2, §6.8, §6.11, §6.12, §7; S1 §4, §6 | — (pilot stream suffices; re-measure after B1 merges) | `packages/web/src/map-gl/{prepare,batch,renderer}.ts` + new `arena.ts`, `buckets.ts`, `worker.ts`; `packages/web/src/pages/dev/MapGlDocPage.tsx`; `e2e/map-gl-doc.spec.ts` | ready |
+| B3 | MSDF text: atlas generation (Liberation Sans + Narrow; ASCII + Latin-1 Supplement + Latin Extended-A at 32 px; Cyrillic as a second page generated only when a document's header lists such characters — S1 §5), text passes drawn from the atlas instead of instanced outlines, halos as the stroked variant, screen-only LOD skips (04 §6.11) | `map-rendering.md` §4.9–4.10, §5.2 | 04 §4.4, §6.7; S1 §5 | B2 (text goes through the arena) | `packages/web/src/map-gl/text-atlas.ts` + renderer text path, an atlas build script under `packages/web/scripts/` or `scripts/`, `packages/shared/fonts/` | blocked: B2 |
+| B4 | Viewer integration: `VectorMapLayer` as the alternative to `TileLayer` inside `MapViewer`; viewport model in paper space with `northOffset` as a viewport rotation; GPS, tracks, replay through `geoToPaper` (A11's `mapGeo`); the overlay (controls, legs, GPS, tracks, replay, selection) stays React SVG on top; documents fetched from `/api/map-documents/:hash` with CacheFirst + `storage.persist()` (`map-storage.md` §7 pending); every call site in 09 §1 (CompetitionShell/MapSlot/MapPane, KioskPage, CardReadout + CardMapPreview, RunnerMapPreview, CompetitionDashboard, TracksPage + ReplayMapLayer, CourseEditorPage) unchanged from the user's point of view | `map-rendering.md` new §5.4 "Viewer", `map-storage.md` §7 | 04 §7; 01 §9; 07 §9 | B2 (arena API); goldens from B1 before the gate | `packages/web/src/components/MapViewer.tsx` (host only), new `VectorMapLayer.tsx`, `map-pane-shared.ts`, `packages/web/src/lib/` viewport + document cache, service-worker config; `TileLayer.tsx` untouched | blocked: B2 |
+| B5 | Per-event switch and instance flags: `events.map_pipeline = legacy \| vector` (migration, default from `map.pipeline.default`), `map.pipeline.allowLegacy`, Event page toggle **Use new map engine** with one-line explanation and *Report a problem* link while `allowLegacy`; reads only — routes the web app calls and the editor mounted; tile pre-cache job skips `vector` events; a Playwright project per value for an explicit list of specs in `playwright.config.ts` (09 §10) | new `docs/map-pipeline-switch.md` (09 §3 as rules), `AGENTS.md` §7 pointer | 09 §3, §4 B, §10 | B4 (something to switch to) — the column, settings and toggle may be pulled forward if B4 runs long | Prisma migration, event router + settings (`db.ts` `getSetting`), event settings page, `packages/api/src/map-tiles.ts` pre-cache gate, `playwright.config.ts`, `e2e/` | blocked: B4 |
+| B6 | Import review UI (06 §5): a review screen for a document — `ReviewRow` list sorted by usage with unused symbols collapsed, source swatch beside the top-3 candidate swatches (A5 preview routes), accept / unmatch / reset, finalise, CRT export/import (A7), job progress; reached from the club library card (expected for club maps) and the event map panel (optional for event maps); i18n en + sv; E2E against `e2e/test.ocd` | `map-symbols.md` §8 (UI subsection), `club-library.md`, `docs/features.md` | 06 §5 | — (API from A5–A7 is merged; no GL needed, previews are reference-raster PNGs) | new `packages/web/src/pages/MapReviewPage.tsx` (or Settings → Maps panel), `MapPanel.tsx` entry point, `packages/web/src/i18n/locales/{en,sv}/`, new `e2e/map-review.spec.ts` | ready |
+| B7 | Library polish: contact sheet (golden render per entry at 10× via the reference raster, committed for visual review in PRs), Swedish names, aliases — the `map-symbols.md` §10 items that do not wait for C | `map-symbols.md` §3, §6, §10 | 03 §6.4 | — | `packages/shared/src/symbol-library/`, `packages/api/src/render/golden.ts`, `e2e/__golden__/` | ready (low priority) |
+| B-gate | 04 phone budgets met on Sprint and Crop-B on the B0 device; visual parity on the corpus against tiles for the sanctioned differences only (03 §6.9 rule; a `.local` parity script); `webserial.spec.ts` post-readout map and `mobile-layout.spec.ts` green under `vector`; one real event run with `vector` on the organiser's instance before `map.pipeline.default` flips | 09 §4 B | — | B1–B6 | user + club | manual |
 
 ## Decision gates
 
