@@ -187,7 +187,7 @@ export const VARIANT_NAME = /minimi|minimum|\bmin\b|enskild|single|individual|ko
 
 // ---- description tokens -----------------------------------------------------
 
-const STOPWORDS = new Set(["och", "med", "utan", "för", "av", "i", "på", "the", "and", "with", "without", "of", "for", "in", "or", "a", "an", "to", "stor", "liten", "large", "small", "minimum", "min", "yta", "linje", "punkt", "area", "line", "point", "symbol"]);
+const STOPWORDS = new Set(["och", "eller", "med", "utan", "för", "av", "i", "på", "som", "en", "ett", "till", "vid", "ska", "inte", "icke", "ej", "the", "and", "with", "without", "of", "for", "in", "or", "a", "an", "to", "stor", "liten", "large", "small", "minimum", "min", "yta", "linje", "punkt", "area", "line", "point", "symbol"]);
 
 /** Swedish map vocabulary → the library's English words. */
 const SV_EN: Record<string, string> = {
@@ -207,10 +207,16 @@ const SV_EN: Record<string, string> = {
 
 const entryNames = (e: LibraryEntry): string => (e.name.sv ? `${e.name.en} / ${e.name.sv}` : e.name.en);
 
+/** A word after one of these is negated ("utan belagd yta", "no edge line") and is not a shared feature. */
+const NEGATORS = new Set(["utan", "icke", "ej", "inte", "without", "non", "not", "no"]);
+
 export function descriptionTokens(name: string): Set<string> {
   const out = new Set<string>();
+  let negated = false;
   for (const raw of name.toLowerCase().split(/[^\p{L}]+/u)) {
     if (!raw) continue;
+    if (NEGATORS.has(raw)) { negated = true; continue; }
+    if (negated) { negated = false; continue; }
     const t = SV_EN[raw] ?? raw;
     for (const w of t.split(/[\s-]+/)) if (w && !STOPWORDS.has(w) && !/^\d+$/.test(w)) out.add(w);
   }

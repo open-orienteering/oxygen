@@ -117,6 +117,15 @@ describe("matchSymbol — stages", () => {
     expect(r.reasons[0]).toBe('name "Kontroller" ~ Control point / Kontroller');
   });
 
+  it("5: Swedish function words and negated words are not shared features", () => {
+    // SOFT headings are full of "eller"; "utan belagd yta" is the opposite of paved.
+    expect(descriptionTokens("Undergång eller tunnel")).toEqual(new Set(["underpass", "tunnel"]));
+    expect(descriptionTokens("Stig eller spår utan belagd yta")).toEqual(new Set(["footpath", "spår"]));
+    expect(descriptionTokens("Icke belagd gångväg")).toEqual(new Set(["footpath"]));
+    expect(descriptionTokens("Unpaved footpath, not paved")).toEqual(new Set(["unpaved", "footpath"]));
+    expect(descriptionTokens("Opasserbar brant (utan taggar)")).toEqual(new Set(["opasserbar", "cliff"]));
+  });
+
   it("5: Swedish entry names go through the same lexicon, so en and sv tokens agree", () => {
     const tokens = canonicalCandidates(lib, "iof2024").find((c) => c.entry.id === "ISOM2017-2:516")!.tokens;
     expect(tokens).toEqual(new Set(["fence"])); // "Fence" ∪ "Stängsel" → fence
