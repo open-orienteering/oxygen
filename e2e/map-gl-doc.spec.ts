@@ -37,7 +37,6 @@ interface DocWindow {
     documentBytes?: Uint8Array;
     load?: {
       mode: "source" | "pilot" | "envelope";
-      path: "arena" | "s1";
       via: "document" | "reader";
       document?: {
         bytes: number;
@@ -57,6 +56,7 @@ interface DocWindow {
       arena?: {
         worker: boolean;
         detailCells: number;
+        largeObjects: number;
         grid: { cols: number; rows: number };
         engine: { drawnCells: number; residentDetail: number; pending: number; overBudget: boolean };
       };
@@ -102,15 +102,21 @@ test.describe("WebGL2 map backend — whole document", () => {
         expect(load.objects.proxied).toBeGreaterThan(0);
       }
       expect(load.passes).toBeGreaterThan(0);
-      expect(load.path).toBe("arena");
       expect(load.arena?.worker).toBe(true);
-      // Buckets: the fixture spans several 50 mm cells, and at the fit view every cell's detail is resident.
-      expect(load.arena!.grid.cols * load.arena!.grid.rows).toBeGreaterThan(1);
-      expect(load.arena!.detailCells).toBeGreaterThan(0);
+      if (mode === "envelope") {
+        // Buckets: the fixture's objects span several 50 mm cells; at the fit view every cell's detail is
+        // resident, and the complete frame adds it to the first (base layers + large bucket).
+        expect(load.arena!.grid.cols * load.arena!.grid.rows).toBeGreaterThan(1);
+        expect(load.arena!.detailCells).toBeGreaterThan(0);
+        expect(load.completeFrame.drawCalls).toBeGreaterThan(load.firstFrame.drawCalls);
+      } else {
+        // The pilot family matches only the fixture's long lines: all in the large-object bucket
+        // (bounds > 2 × 2 cells), resident from the load, so the first frame is already complete.
+        expect(load.arena!.largeObjects).toBeGreaterThan(0);
+        expect(load.completeFrame.drawCalls).toBe(load.firstFrame.drawCalls);
+      }
       expect(load.arena!.engine.pending).toBe(0);
       expect(load.arena!.engine.overBudget).toBe(false);
-      // The first frame is the always-resident layers; the complete frame adds the detail.
-      expect(load.completeFrame.drawCalls).toBeGreaterThan(load.firstFrame.drawCalls);
       // The visible set is the point: one draw per (colour, kind), well below one per pass, ≤ 300 (04 §9).
       expect(load.completeFrame.drawCalls).toBeLessThan(load.passes);
       expect(load.completeFrame.drawCalls).toBeLessThanOrEqual(300);
