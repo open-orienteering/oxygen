@@ -23,7 +23,7 @@
  */
 
 import { render } from "@oxygen/shared";
-import { extrudeStrip, triangulateEvenOdd, type StripGeometry } from "./prepare.js";
+import { extrudeStrip, StripGeometry, triangulateEvenOdd } from "./prepare.js";
 
 /** Texels per row of the atlas texture (two per vertex). */
 export const ATLAS_WIDTH = 2048;
@@ -67,7 +67,7 @@ export class MeshAtlasBuilder {
     const tri: number[] = [];
     for (const f of mesh.fills) pushFill(render.flattenRings(f, tol), tri);
     for (const s of mesh.strokes) {
-      const strip: StripGeometry = { verts: [], indices: [] };
+      const strip = new StripGeometry();
       const cap = s.cap === "pointed" ? "butt" : s.cap;
       for (const pts of render.flattenRings(s.path, tol)) extrudeStrip(pts, s.path.closed, cap, s.join, s.widthUm / 2, strip);
       pushStrip(strip, s.widthUm / 2, tri);
@@ -91,7 +91,7 @@ export class MeshAtlasBuilder {
     if (haloHw === undefined) {
       pushFill(rings, tri);
     } else {
-      const strip: StripGeometry = { verts: [], indices: [] };
+      const strip = new StripGeometry();
       for (const r of rings) extrudeStrip(r, true, "round", "round", haloHw, strip);
       pushStrip(strip, haloHw, tri);
     }

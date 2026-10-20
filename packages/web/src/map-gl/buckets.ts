@@ -24,7 +24,7 @@
  */
 
 import { render } from "@oxygen/shared";
-import { MITRE_LIMIT, strokeStrip, triangulateEvenOdd } from "./prepare.js";
+import { MITRE_LIMIT, strokeStrip, triangulateEvenOdd, type StripSink } from "./prepare.js";
 import { INSTANCE_FLOATS, type AtlasMesh } from "./mesh-atlas.js";
 
 // ---- constants (04 §6.11; the spec's table) ---------------------------------
@@ -300,6 +300,81 @@ export interface PrepareContext {
 
 const BASE_KINDS = new Set<render.PassKind>(["fill", "hatch"]);
 
+/** Growable float32 / uint32 arrays: preparation appends without `number[]` boxing or a copy at the end. */
+class GrowF32 {
+  a = new Float32Array(1024);
+  n = 0;
+  reserve(k: number): void {
+    if (this.n + k <= this.a.length) return;
+    const b = new Float32Array(Math.max(this.a.length * 2, this.n + k));
+    b.set(this.a.subarray(0, this.n));
+    this.a = b;
+  }
+  view(): Float32Array {
+    return this.a.slice(0, this.n);
+  }
+}
+
+class GrowU32 {
+  a = new Uint32Array(1024);
+  n = 0;
+  reserve(k: number): void {
+    if (this.n + k <= this.a.length) return;
+    const b = new Uint32Array(Math.max(this.a.length * 2, this.n + k));
+    b.set(this.a.subarray(0, this.n));
+    this.a = b;
+  }
+  view(): Uint32Array {
+    return this.a.slice(0, this.n);
+  }
+}
+
+/** Writes strip vertices straight into the stroke arena layout (`STROKE_VERTEX_BYTES`), origin-relative. */
+class StrokeWriter implements StripSink {
+  private buf = new ArrayBuffer(STROKE_VERTEX_BYTES * 1024);
+  private f32 = new Float32Array(this.buf);
+  private i16 = new Int16Array(this.buf);
+  private u16 = new Uint16Array(this.buf);
+  n = 0;
+  readonly indices = new GrowU32();
+  /** Half width of the pass being written, ½ µm. */
+  hw2 = 0;
+  private readonly ox: number;
+  private readonly oy: number;
+  constructor(ox: number, oy: number) {
+    this.ox = ox;
+    this.oy = oy;
+  }
+  vertex(x: number, y: number, ox: number, oy: number): number {
+    if ((this.n + 1) * STROKE_VERTEX_BYTES > this.buf.byteLength) {
+      const b = new ArrayBuffer(this.buf.byteLength * 2);
+      new Uint8Array(b).set(new Uint8Array(this.buf));
+      this.buf = b;
+      this.f32 = new Float32Array(b);
+      this.i16 = new Int16Array(b);
+      this.u16 = new Uint16Array(b);
+    }
+    const i = this.n;
+    this.f32[4 * i] = x - this.ox;
+    this.f32[4 * i + 1] = y - this.oy;
+    this.i16[8 * i + 4] = Math.round((ox / MITRE_LIMIT) * 32767);
+    this.i16[8 * i + 5] = Math.round((oy / MITRE_LIMIT) * 32767);
+    this.u16[8 * i + 6] = this.hw2;
+    this.u16[8 * i + 7] = 0;
+    return this.n++;
+  }
+  triangle(a: number, b: number, c: number): void {
+    const ix = this.indices;
+    ix.reserve(3);
+    ix.a[ix.n++] = a;
+    ix.a[ix.n++] = b;
+    ix.a[ix.n++] = c;
+  }
+  vertices(): ArrayBuffer {
+    return this.buf.slice(0, this.n * STROKE_VERTEX_BYTES);
+  }
+}
+
 class RangeBuilder {
   colour: number[] = [];
   group: number[] = [];
@@ -334,9 +409,9 @@ export function prepareBucketPart(stream: render.PassStream, bucket: number, pas
   const t0 = performance.now();
   const tol = ctx.toleranceUm;
   const ox = ctx.originX, oy = ctx.originY;
-  const fillPos: number[] = [], fillIdx: number[] = [], fillR = new RangeBuilder();
-  const hatchVert: number[] = [], hatchIdx: number[] = [], hatchR = new RangeBuilder();
-  const strokeVert: number[] = [], strokeIdx: number[] = [], strokeR = new RangeBuilder();
+  const fillPos = new GrowF32(), fillIdx = new GrowU32(), fillR = new RangeBuilder();
+  const hatchVert = new GrowF32(), hatchIdx = new GrowU32(), hatchR = new RangeBuilder();
+  const stroke = new StrokeWriter(ox, oy), strokeR = new RangeBuilder();
   const inst = { glyph: new Map<string, { colour: number; cls: number; data: number[]; objects: { object: number; count: number }[] }>(), text: new Map<string, { colour: number; cls: number; data: number[]; objects: { object: number; count: number }[] }>() };
   const clips: ClipItem[] = [];
 
@@ -357,10 +432,12 @@ export function prepareBucketPart(stream: render.PassStream, bucket: number, pas
     switch (pass.kind) {
       case "fill": {
         const { positions, indices } = triangulateEvenOdd(render.flattenRings(pass.path, tol));
-        const base = fillPos.length / 2;
-        for (let i = 0; i < positions.length; i += 2) fillPos.push(positions[i] - ox, positions[i + 1] - oy);
-        const start = fillIdx.length;
-        for (const i of indices) fillIdx.push(i + base);
+        const base = fillPos.n / 2;
+        fillPos.reserve(positions.length);
+        for (let i = 0; i < positions.length; i += 2) { fillPos.a[fillPos.n++] = positions[i] - ox; fillPos.a[fillPos.n++] = positions[i + 1] - oy; }
+        const start = fillIdx.n;
+        fillIdx.reserve(indices.length);
+        for (let i = 0; i < indices.length; i++) fillIdx.a[fillIdx.n++] = indices[i] + base;
         fillR.add(pass.colour, 0, object, start, indices.length);
         break;
       }
@@ -370,21 +447,25 @@ export function prepareBucketPart(stream: render.PassStream, bucket: number, pas
         const nx = -Math.sin(a), ny = Math.cos(a);
         // Positions are origin-relative, so the stripe offset moves by the origin's projection (in f64).
         const off = pass.offsetUm - (ox * nx + oy * ny);
-        const base = hatchVert.length / 7;
-        for (let i = 0; i < positions.length; i += 2) hatchVert.push(positions[i] - ox, positions[i + 1] - oy, nx, ny, pass.spacingUm, off, pass.widthUm / 2);
-        const start = hatchIdx.length;
-        for (const i of indices) hatchIdx.push(i + base);
+        const base = hatchVert.n / 7;
+        hatchVert.reserve((positions.length / 2) * 7);
+        for (let i = 0; i < positions.length; i += 2) {
+          const h = hatchVert.a;
+          let k = hatchVert.n;
+          h[k++] = positions[i] - ox; h[k++] = positions[i + 1] - oy; h[k++] = nx; h[k++] = ny; h[k++] = pass.spacingUm; h[k++] = off; h[k++] = pass.widthUm / 2;
+          hatchVert.n = k;
+        }
+        const start = hatchIdx.n;
+        hatchIdx.reserve(indices.length);
+        for (let i = 0; i < indices.length; i++) hatchIdx.a[hatchIdx.n++] = indices[i] + base;
         hatchR.add(pass.colour, 0, object, start, indices.length);
         break;
       }
       case "stroke": {
-        const strip = strokeStrip(pass, tol);
-        const base = strokeVert.length / 5;
-        const hw = pass.widthUm / 2;
-        for (let i = 0; i < strip.verts.length; i += 4) strokeVert.push(strip.verts[i] - ox, strip.verts[i + 1] - oy, strip.verts[i + 2], strip.verts[i + 3], hw);
-        const start = strokeIdx.length;
-        for (const i of strip.indices) strokeIdx.push(i + base);
-        strokeR.add(pass.colour, 0, object, start, strip.indices.length);
+        stroke.hw2 = Math.min(65535, Math.round(pass.widthUm));
+        const start = stroke.indices.n;
+        strokeStrip(pass, tol, stroke);
+        strokeR.add(pass.colour, 0, object, start, stroke.indices.n - start);
         break;
       }
       case "glyph": {
@@ -435,14 +516,14 @@ export function prepareBucketPart(stream: render.PassStream, bucket: number, pas
   }
 
   const part: PreparedPart = { bucket, layer, clips, gpuBytes: 0, ms: 0 };
-  if (fillIdx.length) {
-    part.fill = { verts: Float32Array.from(fillPos).buffer, vertexCount: fillPos.length / 2, indices: Uint32Array.from(fillIdx), ranges: fillR.build() };
+  if (fillIdx.n) {
+    part.fill = { verts: fillPos.view().buffer as ArrayBuffer, vertexCount: fillPos.n / 2, indices: fillIdx.view(), ranges: fillR.build() };
   }
-  if (hatchIdx.length) {
-    part.hatch = { verts: Float32Array.from(hatchVert).buffer, vertexCount: hatchVert.length / 7, indices: Uint32Array.from(hatchIdx), ranges: hatchR.build() };
+  if (hatchIdx.n) {
+    part.hatch = { verts: hatchVert.view().buffer as ArrayBuffer, vertexCount: hatchVert.n / 7, indices: hatchIdx.view(), ranges: hatchR.build() };
   }
-  if (strokeIdx.length) {
-    part.stroke = { verts: packStrokeVertices(strokeVert), vertexCount: strokeVert.length / 5, indices: Uint32Array.from(strokeIdx), ranges: strokeR.build() };
+  if (stroke.indices.n) {
+    part.stroke = { verts: stroke.vertices(), vertexCount: stroke.n, indices: stroke.indices.view(), ranges: strokeR.build() };
   }
   for (const kind of ["glyph", "text"] as const) {
     const groups = [...inst[kind].values()].sort((a, b) => a.colour - b.colour || a.cls - b.cls);
@@ -469,24 +550,6 @@ export function prepareBucketPart(stream: render.PassStream, bucket: number, pas
     clips.reduce((n, c) => n + c.positions.byteLength + c.indices.byteLength + c.instances.byteLength, 0);
   part.ms = performance.now() - t0;
   return part;
-}
-
-/** f32 x, y; i16 offset normalised by MITRE_LIMIT; u16 half width in ½ µm; u16 pad. */
-export function packStrokeVertices(v: number[]): ArrayBuffer {
-  const n = v.length / 5;
-  const buf = new ArrayBuffer(n * STROKE_VERTEX_BYTES);
-  const f = new Float32Array(buf);
-  const s = new Int16Array(buf);
-  const u = new Uint16Array(buf);
-  for (let i = 0; i < n; i++) {
-    f[4 * i] = v[5 * i];
-    f[4 * i + 1] = v[5 * i + 1];
-    s[8 * i + 4] = Math.round((v[5 * i + 2] / MITRE_LIMIT) * 32767);
-    s[8 * i + 5] = Math.round((v[5 * i + 3] / MITRE_LIMIT) * 32767);
-    u[8 * i + 6] = Math.min(65535, Math.round(v[5 * i + 4] * 2));
-    u[8 * i + 7] = 0;
-  }
-  return buf;
 }
 
 /** All typed-array buffers of a part, for `postMessage` transfer. */

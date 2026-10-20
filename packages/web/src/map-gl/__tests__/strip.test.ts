@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { render } from "@oxygen/shared";
-import { extrudePolyline, extrudeStrip, JOIN_SHARE_TOLERANCE, strokeGeometry, strokeStrip, triangulateEvenOdd, type StripGeometry } from "../prepare";
+import { extrudePolyline, extrudeStrip, JOIN_SHARE_TOLERANCE, StripGeometry, strokeGeometry, strokeStrip, triangulateEvenOdd } from "../prepare";
 
 const { makePath, PassStreamBuilder } = render;
 
@@ -75,7 +75,7 @@ describe("extrudeStrip (indexed strokes, S1 §4.1)", () => {
           const hw = 60;
           const old: number[] = [];
           extrudePolyline(zigzag, closed, cap, join, old);
-          const strip: StripGeometry = { verts: [], indices: [] };
+          const strip = new StripGeometry();
           extrudeStrip(zigzag, closed, cap, join, hw, strip);
           for (const i of strip.indices) expect(i).toBeLessThan(strip.verts.length / 4);
           expect(strip.indices.length % 3).toBe(0);
@@ -87,7 +87,7 @@ describe("extrudeStrip (indexed strokes, S1 §4.1)", () => {
 
   it("a straight polyline is two vertices per point and two triangles per segment", () => {
     const pts = [0, 0, 100, 0, 200, 0, 300, 0, 400, 0];
-    const g: StripGeometry = { verts: [], indices: [] };
+    const g = new StripGeometry();
     extrudeStrip(pts, false, "butt", "round", 50, g);
     expect(g.verts.length / 4).toBe(2 * 5);
     expect(g.indices.length).toBe(6 * 4);
@@ -101,20 +101,20 @@ describe("extrudeStrip (indexed strokes, S1 §4.1)", () => {
     // 32-gon arc: 5.6° turns → round join within 1 % of the half width.
     const arc: number[] = [];
     for (let k = 0; k <= 16; k++) arc.push(10_000 * Math.cos((k * Math.PI) / 32), 10_000 * Math.sin((k * Math.PI) / 32));
-    const g: StripGeometry = { verts: [], indices: [] };
+    const g = new StripGeometry();
     extrudeStrip(arc, false, "butt", "round", 70, g);
     expect(g.verts.length / 4).toBe(2 * 17);
-    const corner: StripGeometry = { verts: [], indices: [] };
+    const corner = new StripGeometry();
     extrudeStrip([0, 0, 1000, 0, 1000, 1000], false, "butt", "round", 70, corner);
     expect(corner.verts.length / 4).toBeGreaterThan(2 * 3);
   });
 
   it("keeps mitre offsets inside the 4× limit and falls back to a bevel past it", () => {
     const sharp = [0, 0, 1000, 0, 0, 50]; // ~177° turn
-    const g: StripGeometry = { verts: [], indices: [] };
+    const g = new StripGeometry();
     extrudeStrip(sharp, false, "butt", "miter", 30, g);
     for (let i = 0; i < g.verts.length; i += 4) expect(Math.hypot(g.verts[i + 2], g.verts[i + 3])).toBeLessThanOrEqual(4 + 1e-9);
-    const right: StripGeometry = { verts: [], indices: [] };
+    const right = new StripGeometry();
     extrudeStrip([0, 0, 1000, 0, 1000, 1000], false, "butt", "miter", 30, right);
     let maxOff = 0;
     for (let i = 0; i < right.verts.length; i += 4) maxOff = Math.max(maxOff, Math.hypot(right.verts[i + 2], right.verts[i + 3]));
@@ -123,7 +123,7 @@ describe("extrudeStrip (indexed strokes, S1 §4.1)", () => {
 
   it("does not share a pair when the inner mitre would run past a short segment", () => {
     // A 90° mitre at a 10 µm segment with a 100 µm half width.
-    const g: StripGeometry = { verts: [], indices: [] };
+    const g = new StripGeometry();
     const pts = [0, 0, 1000, 0, 1000, 10, 2000, 10];
     extrudeStrip(pts, false, "butt", "miter", 100, g);
     expect(g.verts.length / 4).toBeGreaterThan(8);
@@ -133,10 +133,10 @@ describe("extrudeStrip (indexed strokes, S1 §4.1)", () => {
   });
 
   it("a single point with a round cap is a dot; without one it is nothing", () => {
-    const dot: StripGeometry = { verts: [], indices: [] };
+    const dot = new StripGeometry();
     extrudeStrip([5, 5], false, "round", "round", 10, dot);
     expect(dot.indices.length).toBeGreaterThan(0);
-    const none: StripGeometry = { verts: [], indices: [] };
+    const none = new StripGeometry();
     extrudeStrip([5, 5, 5, 5], false, "butt", "round", 10, none);
     expect(none.indices.length).toBe(0);
   });
@@ -149,7 +149,7 @@ describe("extrudeStrip (indexed strokes, S1 §4.1)", () => {
     }, 0, 0);
     const pass = b.build().passes[0];
     if (pass.kind !== "stroke") throw new Error("expected stroke");
-    const strip = strokeStrip(pass, 10);
+    const strip = strokeStrip(pass, 10) as StripGeometry;
     const old = strokeGeometry(pass, 10);
     expectSameCoverage(listTriangles(Array.from(old.verts), 100), stripTriangles(strip, 100), 100, 3);
     // Two dashes: two ribbons with two round caps each, nothing between them.
@@ -161,7 +161,7 @@ describe("extrudeStrip (indexed strokes, S1 §4.1)", () => {
   it("stores ~3× fewer bytes than the S1 triangle list on a contour-like line", () => {
     const line: number[] = [];
     for (let k = 0; k < 200; k++) line.push(k * 100, Math.round(400 * Math.sin(k / 15)));
-    const strip: StripGeometry = { verts: [], indices: [] };
+    const strip = new StripGeometry();
     extrudeStrip(line, false, "round", "round", 70, strip);
     const old: number[] = [];
     extrudePolyline(line, false, "round", "round", old);

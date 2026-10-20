@@ -208,9 +208,25 @@ export function strokePolylines(pass: render.StrokePass, tol: number): { pts: nu
   if (!pass.slices) {
     return render.flattenRings(pass.path, tol).map((pts) => ({ pts, closed: pass.path.closed }));
   }
+  // `render.sliceSegments` walks the path once per slice; a dashed line has many, so the segments
+  // are built once here and each slice is cut from them with the same `segmentSub` (§3.2).
+  const segs = render.pathSegments(pass.path);
   return pass.slices
-    .map((sl) => ({ pts: render.flattenSegments(render.sliceSegments(pass.path, sl), tol), closed: false }))
+    .map((sl) => ({ pts: render.flattenSegments(sliceOf(segs, sl), tol), closed: false }))
     .filter((p) => p.pts.length >= 4);
+}
+
+/** `render.sliceSegments` over already-built segments. */
+function sliceOf(segs: render.Segment[], slice: render.Slice): render.Segment[] {
+  if (slice.seg0 > slice.seg1 || (slice.seg0 === slice.seg1 && slice.t0 >= slice.t1)) return [];
+  const out: render.Segment[] = [];
+  for (let i = slice.seg0; i <= slice.seg1 && i < segs.length; i++) {
+    const t0 = i === slice.seg0 ? slice.t0 : 0;
+    const t1 = i === slice.seg1 ? slice.t1 : 1;
+    if (t1 <= t0) continue;
+    out.push(t0 === 0 && t1 === 1 ? segs[i] : render.segmentSub(segs[i], t0, t1));
+  }
+  return out;
 }
 
 export function strokeGeometry(pass: render.StrokePass, tol: number): StrokeGeometry {
@@ -405,18 +421,46 @@ function textItems(
 
 // ---- indexed strips (arena path) ------------------------------------------
 
+/** Where `extrudeStrip` writes: vertices (centre-line point + offset direction) and triangles. */
+export interface StripSink {
+  /** Adds a vertex and returns its index. */
+  vertex(x: number, y: number, ox: number, oy: number): number;
+  triangle(a: number, b: number, c: number): void;
+}
+
 /**
- * Indexed stroke geometry: per vertex `x, y, ox, oy` (centre-line point and
- * offset direction, the shader multiplies by the half width) plus a
- * triangle index list. A polyline point whose join is (to within
- * `JOIN_SHARE_TOLERANCE` of the half width) a mitre shares one vertex pair
- * between its two segments — two vertices per point, the strip of S1 §4.1.
- * Real corners get separate pairs and a join wedge; caps are extra
- * vertices at the ends.
+ * Indexed stroke geometry in plain arrays: per vertex `x, y, ox, oy`
+ * (centre-line point and offset direction, the shader multiplies by the
+ * half width) plus a triangle index list. A polyline point whose join is
+ * (to within `JOIN_SHARE_TOLERANCE` of the half width) a mitre shares one
+ * vertex pair between its two segments — two vertices per point, the
+ * strip of S1 §4.1. Real corners get separate pairs and a join wedge;
+ * caps are extra vertices at the ends. The arena path writes through its
+ * own `StripSink` straight into packed buffers.
  */
-export interface StripGeometry {
-  verts: number[];
-  indices: number[];
+export class StripGeometry implements StripSink {
+  verts: number[] = [];
+  indices: number[] = [];
+  vertex(x: number, y: number, ox: number, oy: number): number {
+    this.verts.push(x, y, ox, oy);
+    return this.verts.length / 4 - 1;
+  }
+  triangle(a: number, b: number, c: number): void {
+    this.indices.push(a, b, c);
+  }
+}
+
+/** Scratch arrays reused across `extrudeStrip` calls (dashes make many small calls). */
+const scratch = { p: new Float64Array(256), tx: new Float64Array(128), ty: new Float64Array(128), len: new Float64Array(128), pairs: new Int32Array(512) };
+function ensureScratch(points: number): void {
+  if (scratch.p.length < 2 * points) {
+    const n = 2 * points * 2;
+    scratch.p = new Float64Array(n);
+    scratch.tx = new Float64Array(n / 2);
+    scratch.ty = new Float64Array(n / 2);
+    scratch.len = new Float64Array(n / 2);
+    scratch.pairs = new Int32Array(2 * n);
+  }
 }
 
 /**
@@ -433,34 +477,31 @@ export const JOIN_SHARE_TOLERANCE = 0.01;
  * geometry itself is width-independent.
  */
 export function extrudeStrip(
-  pts: number[],
+  pts: ArrayLike<number>,
   closed: boolean,
   cap: render.StrokeCap,
   join: render.StrokeJoin,
   halfWidth: number,
-  out: StripGeometry,
+  out: StripSink,
 ): void {
-  const p: number[] = [];
+  ensureScratch(pts.length / 2 + 1);
+  const p = scratch.p;
+  let np = 0;
   for (let i = 0; i < pts.length; i += 2) {
-    if (p.length && p[p.length - 2] === pts[i] && p[p.length - 1] === pts[i + 1]) continue;
-    p.push(pts[i], pts[i + 1]);
+    if (np && p[np - 2] === pts[i] && p[np - 1] === pts[i + 1]) continue;
+    p[np++] = pts[i];
+    p[np++] = pts[i + 1];
   }
-  if (closed && p.length >= 4 && p[0] === p[p.length - 2] && p[1] === p[p.length - 1]) p.length -= 2;
-  const n = p.length / 2;
-  const v = out.verts;
-  const ix = out.indices;
-  const vert = (x: number, y: number, ox: number, oy: number): number => {
-    v.push(x, y, ox, oy);
-    return v.length / 4 - 1;
-  };
+  if (closed && np >= 4 && p[0] === p[np - 2] && p[1] === p[np - 1]) np -= 2;
+  const n = np / 2;
   const fan = (x: number, y: number, a0: number, sweep: number, from: number | undefined, to: number | undefined) => {
     const steps = Math.max(1, Math.ceil((Math.abs(sweep) / Math.PI) * ROUND_STEPS_PER_PI));
-    const c = vert(x, y, 0, 0);
-    let prev = from ?? vert(x, y, Math.cos(a0), Math.sin(a0));
+    const c = out.vertex(x, y, 0, 0);
+    let prev = from ?? out.vertex(x, y, Math.cos(a0), Math.sin(a0));
     for (let k = 1; k <= steps; k++) {
       const b = a0 + (sweep * k) / steps;
-      const cur = k === steps && to !== undefined ? to : vert(x, y, Math.cos(b), Math.sin(b));
-      ix.push(c, prev, cur);
+      const cur = k === steps && to !== undefined ? to : out.vertex(x, y, Math.cos(b), Math.sin(b));
+      out.triangle(c, prev, cur);
       prev = cur;
     }
   };
@@ -470,17 +511,18 @@ export function extrudeStrip(
   }
   if (closed && n < 3) closed = false;
   const segCount = closed ? n : n - 1;
-  const px = (i: number) => p[2 * ((i + n) % n)];
-  const py = (i: number) => p[2 * ((i + n) % n) + 1];
-  const tx = new Float64Array(segCount), ty = new Float64Array(segCount), len = new Float64Array(segCount);
+  const px = (i: number) => p[2 * (i < n ? i : i - n)];
+  const py = (i: number) => p[2 * (i < n ? i : i - n) + 1];
+  const { tx, ty, len } = scratch;
   for (let i = 0; i < segCount; i++) {
     const dx = px(i + 1) - px(i), dy = py(i + 1) - py(i);
     const l = Math.hypot(dx, dy) || 1;
     tx[i] = dx / l; ty[i] = dy / l; len[i] = l;
   }
   // Vertex pair (left, right) a segment uses at its start and at its end.
-  const startL = new Int32Array(segCount), startR = new Int32Array(segCount);
-  const endL = new Int32Array(segCount), endR = new Int32Array(segCount);
+  const pairs = scratch.pairs;
+  const startL = pairs.subarray(0, segCount), startR = pairs.subarray(segCount, 2 * segCount);
+  const endL = pairs.subarray(2 * segCount, 3 * segCount), endR = pairs.subarray(3 * segCount, 4 * segCount);
   const firstJoin = closed ? 0 : 1;
   const lastJoin = closed ? n - 1 : n - 2;
   for (let i = firstJoin; i <= lastJoin; i++) {
@@ -504,12 +546,12 @@ export function extrudeStrip(
     if (share && reach > Math.min(len[s0], len[s1])) share = false;
     if (share) {
       const ux = ml > 1e-12 ? (mx / ml) * mitre : n0x, uy = ml > 1e-12 ? (my / ml) * mitre : n0y;
-      const l = vert(x, y, ux, uy), r = vert(x, y, -ux, -uy);
+      const l = out.vertex(x, y, ux, uy), r = out.vertex(x, y, -ux, -uy);
       endL[s0] = l; endR[s0] = r; startL[s1] = l; startR[s1] = r;
       continue;
     }
-    const aL = vert(x, y, n0x, n0y), aR = vert(x, y, -n0x, -n0y);
-    const bL = vert(x, y, n1x, n1y), bR = vert(x, y, -n1x, -n1y);
+    const aL = out.vertex(x, y, n0x, n0y), aR = out.vertex(x, y, -n0x, -n0y);
+    const bL = out.vertex(x, y, n1x, n1y), bR = out.vertex(x, y, -n1x, -n1y);
     endL[s0] = aL; endR[s0] = aR; startL[s1] = bL; startR[s1] = bR;
     // Outer side is opposite to the turn: right for a left turn.
     const leftTurn = cross > 0;
@@ -522,12 +564,13 @@ export function extrudeStrip(
       while (d < -Math.PI) d += 2 * Math.PI;
       fan(x, y, a0, d, o0, o1);
     } else {
-      const c = vert(x, y, 0, 0);
+      const c = out.vertex(x, y, 0, 0);
       if (join === "miter" && mitre <= MITRE_LIMIT) {
-        const m = vert(x, y, (s * mx / ml) * mitre, (s * my / ml) * mitre);
-        ix.push(c, o0, m, c, m, o1);
+        const m = out.vertex(x, y, (s * mx / ml) * mitre, (s * my / ml) * mitre);
+        out.triangle(c, o0, m);
+        out.triangle(c, m, o1);
       } else {
-        ix.push(c, o0, o1);
+        out.triangle(c, o0, o1);
       }
     }
   }
@@ -535,10 +578,10 @@ export function extrudeStrip(
     // End pairs, square caps pushed out by one half width along the tangent.
     const sq = cap === "square" ? 1 : 0;
     const t0x = tx[0], t0y = ty[0], t1x = tx[segCount - 1], t1y = ty[segCount - 1];
-    startL[0] = vert(px(0), py(0), -t0y - sq * t0x, t0x - sq * t0y);
-    startR[0] = vert(px(0), py(0), t0y - sq * t0x, -t0x - sq * t0y);
-    endL[segCount - 1] = vert(px(n - 1), py(n - 1), -t1y + sq * t1x, t1x + sq * t1y);
-    endR[segCount - 1] = vert(px(n - 1), py(n - 1), t1y + sq * t1x, -t1x + sq * t1y);
+    startL[0] = out.vertex(px(0), py(0), -t0y - sq * t0x, t0x - sq * t0y);
+    startR[0] = out.vertex(px(0), py(0), t0y - sq * t0x, -t0x - sq * t0y);
+    endL[segCount - 1] = out.vertex(px(n - 1), py(n - 1), -t1y + sq * t1x, t1x + sq * t1y);
+    endR[segCount - 1] = out.vertex(px(n - 1), py(n - 1), t1y + sq * t1x, -t1x + sq * t1y);
     if (cap === "round") {
       // Half circles from the left normal through −t (start) and from the right normal through +t (end).
       fan(px(0), py(0), Math.atan2(t0x, -t0y), Math.PI, startL[0], startR[0]);
@@ -546,13 +589,13 @@ export function extrudeStrip(
     }
   }
   for (let i = 0; i < segCount; i++) {
-    ix.push(startL[i], endL[i], startR[i], startR[i], endL[i], endR[i]);
+    out.triangle(startL[i], endL[i], startR[i]);
+    out.triangle(startR[i], endL[i], endR[i]);
   }
 }
 
 /** A stroke pass as one indexed strip set (every ring, or every slice, with the pass's cap). */
-export function strokeStrip(pass: render.StrokePass, tol: number): StripGeometry {
-  const out: StripGeometry = { verts: [], indices: [] };
+export function strokeStrip(pass: render.StrokePass, tol: number, out: StripSink = new StripGeometry()): StripSink {
   const cap = pass.cap === "pointed" ? "butt" : pass.cap;
   for (const { pts, closed } of strokePolylines(pass, tol)) extrudeStrip(pts, closed, cap, pass.join, pass.widthUm / 2, out);
   return out;
