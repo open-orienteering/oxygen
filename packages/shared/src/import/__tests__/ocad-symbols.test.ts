@@ -312,7 +312,7 @@ describe("ocadSymbolToRender — rectangle", () => {
   });
 
   it("warns that corner radius and grid are dropped (Club-full 850.1: radius 2.29 mm)", () => {
-    const r = ocadSymbolToRender(rect({ radius: 229, gridFlags: 3, cellWidth: 1000, cellHeight: 800 }), ctx);
+    const r = ocadSymbolToRender(rect({ radius: 229, gridFlags: 3 }), ctx);
     expect(r.render).toMatchObject({ type: "line", main: { colour: 1, widthUm: 160 } });
     expect(r.warnings.map((w) => w.message)).toEqual(["850.1: rectangle corner radius 2.29 mm", "850.1: rectangle grid"]);
     expect(codes(r.warnings)).toEqual(["SYMBOL_FEATURE_DROPPED", "SYMBOL_FEATURE_DROPPED"]);

@@ -37,6 +37,12 @@ export const importReportSchema = z.object({
     missingSymbolObjects: z.number().int().min(0),
   }),
   warnings: z.array(importWarningSchema),
+  /**
+   * OCAD only (docs/map-import.md §3.6): the reader's own warning texts behind
+   * `READER_WARNING`, in reader order, at most 50. Absent when there are none
+   * and in reports from before `ocad-7`.
+   */
+  readerWarnings: z.array(z.string()).optional(),
   /** Stage 6 (03 §6.5); absent for documents imported before the matcher. */
   matching: z
     .object({

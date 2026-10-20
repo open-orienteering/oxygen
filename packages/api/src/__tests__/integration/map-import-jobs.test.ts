@@ -130,7 +130,7 @@ describe("import jobs from applyEventMap", () => {
     const source = await ctx.db.mapSource.findUniqueOrThrow({ where: { fileHash: fixtureHash }, select: { kind: true, fileName: true, uploadedBy: true } });
     expect(source).toEqual({ kind: "ocad", fileName: "test.ocd", uploadedBy: setter.id });
     const doc = await ctx.db.mapDocument.findUniqueOrThrow({ where: { hash: documentHash }, select: { report: true, lastReferencedAt: true } });
-    expect(doc.report).toMatchObject({ importer: "ocad-6", source: { fileName: "test.ocd", fileHash: fixtureHash }, counts: { objects: expect.any(Number) }, matching: { library: { id: "ISOM2017-2" } }, colourStack: { source: expect.any(Number) } });
+    expect(doc.report).toMatchObject({ importer: "ocad-7", source: { fileName: "test.ocd", fileHash: fixtureHash }, counts: { objects: expect.any(Number) }, matching: { library: { id: "ISOM2017-2" } }, colourStack: { source: expect.any(Number) } });
   }, 60_000);
 
   it("re-uploading bytes already imported by this importer records a done job without running the worker", async () => {

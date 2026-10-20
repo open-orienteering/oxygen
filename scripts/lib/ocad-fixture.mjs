@@ -429,6 +429,12 @@ export function buildSymbolTypesOcad() {
 
 // ─── E2E course-setting fixture ──────────────────────────────────────────────
 
+/** The fixture's text and rectangle symbols: a spot-height value framed in white, and a plain frame. */
+export const E2E_TEXT_SYMBOLS = {
+  spotHeight: { symNum: 603000, description: "Spot height, value", fontColor: 1, fontSize: 43, frMode: 2, frColor: 4, frWidth: 10 },
+  frame: { symNum: 850001, description: "Frame", lineColor: 1, lineWidth: 25 },
+};
+
 export const E2E_OCAD = {
   scale: 7500,
   easting: 500000,
@@ -480,7 +486,7 @@ export function buildE2eTestOcad() {
     }
   }
 
-  const strings = [...DEFAULT_COLORS];
+  const strings = [...DEFAULT_COLORS, WHITE];
   strings.push({
     recType: 1039,
     text: georeferenceString({ gridId: 13002, scale: SCALE, easting: EASTING, northing: NORTHING }),
@@ -543,6 +549,8 @@ export function buildE2eTestOcad() {
       colorIdx: 1,
       description: "Building",
     }),
+    textSymbol(E2E_TEXT_SYMBOLS.spotHeight),
+    rectangleSymbol(E2E_TEXT_SYMBOLS.frame),
   ];
 
   const BOULDER = [6800, 4200];
@@ -591,6 +599,20 @@ export function buildE2eTestOcad() {
 
   objects.push({ sym: 204000, otp: 1, coords: [BOULDER] });
   objects.push({ sym: 521000, otp: 3, coords: BUILDING });
+
+  // Below the yellow area and the bottom control row: a framed text and a
+  // rectangle object (docs/map-import.md §3.3).
+  objects.push({ sym: E2E_TEXT_SYMBOLS.spotHeight.symNum, otp: 4, coords: [[6200, -4900]], text: "112", unicode: 0 });
+  objects.push({
+    sym: E2E_TEXT_SYMBOLS.frame.symNum,
+    otp: 7,
+    coords: [
+      [-7300, -4950],
+      [-6100, -4950],
+      [-6100, -4650],
+      [-7300, -4650],
+    ],
+  });
 
   {
     const c79 = controlPos.get("79");

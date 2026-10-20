@@ -50,6 +50,14 @@ describe("importOcadToDocument", () => {
     expect(byCode.get("505.0")).toMatchObject({ type: "line", main: { widthUm: 250 } });
     expect(byCode.get("702.0")).toMatchObject({ type: "point", glyph: { parts: [{ kind: "ring", diameterUm: 6000, widthUm: 350 }] } });
     expect(byCode.get("403.0")).toMatchObject({ type: "area" });
+    // OCAD line framing → text halo in the framing colour, frWidth (0.1 mm) as the half-width (docs/map-import.md §3.3).
+    const white = doc.header.colours.findIndex((c) => c.name === "White");
+    expect(byCode.get("603.0")).toMatchObject({ type: "text", fontSizeUm: 1517, halo: { colour: white, widthUm: 100 } });
+    // A rectangle symbol is its outline.
+    expect(byCode.get("850.1")).toMatchObject({ type: "line", main: { widthUm: 250, cap: "flat", join: "miter" } });
+    expect(source.find((s) => s.code === "850.1")!.kind).toBe("rectangle");
+    expect(warnings.map((w) => w.code)).not.toContain("SYMBOL_FEATURE_DROPPED");
+    expect(warnings.map((w) => w.code)).not.toContain("MISSING_SYMBOL");
     const input = mapDocument.documentRenderInput(doc, { unmatched: "drop" });
     expect(input.stats.rendered).toBeGreaterThan(0);
     expect(input.stats.proxied).toBe(0);
@@ -78,7 +86,10 @@ describe("importOcadToDocument", () => {
     expect(byCode.get("702.0")!.match).toMatchObject({ canonicalId: "ISOM2017-2:703", state: "suggested", method: "description" });
     expect(byCode.get("505.0")!.match).toMatchObject({ state: "suggested", method: "geometry" });
     expect(byCode.get("403.0")!.match).toMatchObject({ canonicalId: "ISOM2017-2:401", state: "suggested", method: "geometry" });
-    expect(result.matching.symbols).toMatchObject({ auto: 3, unmatched: 0 });
+    // The framed spot height is 603's text variant (the fingerprint ignores the halo); the frame only gets a geometry suggestion.
+    expect(byCode.get("603.0")!.match).toMatchObject({ canonicalId: "ISOM2017-2:603.b", state: "auto", method: "code+geometry" });
+    expect(byCode.get("850.1")!.match).toMatchObject({ state: "suggested", method: "geometry" });
+    expect(result.matching.symbols).toMatchObject({ auto: 4, unmatched: 0 });
     // The source has a single purple: it becomes lower purple and upper purple is inserted; palette ids are recorded.
     const purples = doc.header.colours.filter((c) => c.purpleRole);
     expect(purples.map((c) => c.purpleRole).sort()).toEqual(["lower", "upper"]);
@@ -130,6 +141,15 @@ describe("stage 5 on the OCAD fixture (docs/map-import.md §3.5, §3.8)", () => 
     expect(r.analysis.north.meridian).toMatchObject({ code: "601.0", count: legacy.count, medianTiltDeg: legacy.medianTiltDeg });
     expect(r.analysis.north.meridian!.count).toBe(12);
     expect(r.analysis.georeference).toMatchObject({ crs: "EPSG:3006", method: "epsg", projectable: true, gridRotationDeg: 0 });
+  });
+
+  it("keeps the reader's warning texts in the import report only when there are any (docs/map-import.md §3.6)", async () => {
+    const r = await importOcadToDocument(fixture, "test.ocd");
+    const header = mapDocument.readMapDocumentHeader(r.bytes).header;
+    expect(r.readerWarnings).toEqual([]);
+    expect(buildImportReport(r, header, "test.ocd")).not.toHaveProperty("readerWarnings");
+    const report = buildImportReport({ ...r, readerWarnings: ["Unexpected end of object index"] }, header, "test.ocd");
+    expect(report.readerWarnings).toEqual(["Unexpected end of object index"]);
   });
 
   it("reports georeference and north, with the WMM fields evaluated at the report date", async () => {

@@ -31,6 +31,8 @@ export interface MapImportResult {
   fileHash: string;
   counts: mapImport.OcadSourceResult["counts"];
   warnings: mapImport.OcadSourceResult["warnings"];
+  /** OCAD only: the reader's warning texts behind `READER_WARNING` (docs/map-import.md §3.6); empty for OMAP sources. */
+  readerWarnings: string[];
   /** Which reader produced the document. */
   kind: MapSourceKind;
   /** Stage 6–7 summaries (docs/map-symbols.md §9). */
@@ -77,7 +79,7 @@ async function readAndNormalise(
   kind: MapSourceKind,
   fileHash: string,
   opts: ImportOptions & Pick<mapImport.OcadSourceOptions, "renderFor">,
-): Promise<{ source: mapImport.OcadSourceResult; read: number; normalise: number }> {
+): Promise<{ source: mapImport.OcadSourceResult | mapImport.OmapSourceResult; read: number; normalise: number }> {
   const base = { fileName, fileHash, fileBytes: file.byteLength, importer: opts.importer };
   if (kind === "omap") {
     opts.onStage?.("parse");
@@ -109,7 +111,8 @@ export async function importMapToDocument(
 ): Promise<MapImportResult> {
   const { onStage, match: matchOpts } = opts;
   const fileHash = sha256Hex(file);
-  const { source: { input: sourceInput, counts, warnings, analysis }, read, normalise } = await readAndNormalise(file, fileName, kind, fileHash, opts);
+  const { source, read, normalise } = await readAndNormalise(file, fileName, kind, fileHash, opts);
+  const { input: sourceInput, counts, warnings, analysis } = source;
   onStage?.("match");
   let t = performance.now();
   const matched = mapImport.matchDocument(sourceInput, matchOpts);
@@ -125,6 +128,7 @@ export async function importMapToDocument(
     kind,
     counts,
     warnings: [...warnings, ...matched.warnings.map((w) => ({ code: w.code, count: w.count, message: w.message }))],
+    readerWarnings: "readerWarnings" in source ? source.readerWarnings : [],
     matching: matched.matching,
     colourStack: matched.colourStack,
     analysis,
