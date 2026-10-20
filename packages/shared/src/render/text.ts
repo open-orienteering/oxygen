@@ -17,6 +17,8 @@ export interface ShapedText {
   sizeUm: number;
   /** Advance width of each line, µm. */
   lineWidths: number[];
+  /** Rotation per glyph, degrees; absent when the text is upright. */
+  angles?: number[];
 }
 
 /** Em size for a symbol: digit height wins over the nominal em when given. */
@@ -40,6 +42,14 @@ export function shapeText(text: string, sym: TextSymbol, font: FontMetrics, opts
   const wordSpace = (sym.wordSpacing ?? 0) * sizeUm;
   const lineAdvance = sizeUm * sym.lineSpacing;
   const lines = text.split(/\r?\n/);
+  // Vertical anchor: how far the first baseline sits below the anchor.
+  const ascent = font.ascender * k, descent = Math.abs(font.descender) * k;
+  const lastBaseline = (lines.length - 1) * lineAdvance;
+  const drop =
+    sym.verticalAlign === "top" ? ascent
+      : sym.verticalAlign === "bottom" ? -(lastBaseline + descent)
+        : sym.verticalAlign === "middle" ? (ascent - lastBaseline - descent) / 2
+          : 0;
   const glyphs: number[] = [];
   const positions: number[] = [];
   const lineWidths: number[] = [];
@@ -64,12 +74,13 @@ export function shapeText(text: string, sym: TextSymbol, font: FontMetrics, opts
     lineWidths.push(width);
     const shift = sym.align === "centre" ? -width / 2 : sym.align === "right" ? -width : 0;
     // Paragraph spacing belongs to the box layout (formatted text), not to plain line breaks.
-    const baseline = -li * lineAdvance;
+    const baseline = -li * lineAdvance - drop;
     for (let i = 0; i < ids.length; i++) {
       if (cps[i] === 0x20 && ids[i] === font.glyphId(0x20)) continue; // spaces advance, never draw
       glyphs.push(ids[i]);
       place(xs[i] + shift, baseline);
     }
   });
-  return { glyphs, positions, sizeUm, lineWidths };
+  const angle = opts.angleDeg ?? 0;
+  return { glyphs, positions, sizeUm, lineWidths, ...(angle !== 0 && glyphs.length ? { angles: glyphs.map(() => angle) } : {}) };
 }

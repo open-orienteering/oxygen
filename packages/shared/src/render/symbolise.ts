@@ -66,7 +66,7 @@ class Stage {
   constructor(input: SymboliseInput) {
     this.input = input;
     input.fonts.forEach((f, i) => {
-      this.builder.fontTable.push({ fontId: i, family: f.family, bold: false, italic: false } satisfies FontRef);
+      this.builder.fontTable.push({ fontId: i, family: f.family, bold: !!f.bold, italic: !!f.italic } satisfies FontRef);
     });
   }
 
@@ -156,16 +156,19 @@ class Stage {
       mainIntervals = this.strokeIntervals(m, sym.main);
       if (gaps.length) mainIntervals = subtractIntervals(mainIntervals ?? [[0, m.totalLength]], gaps);
       const slices = mainIntervals ? toSlices(m, mainIntervals) : undefined;
-      if (sym.main.halo) {
+      const taper = strokeTaper(sym.main);
+      const haloWidth = sym.main.halo ? sym.main.widthUm + 2 * sym.main.halo.widthUm : 0;
+      if (sym.main.halo && haloWidth > 0) {
         const haloSlices = sym.main.halo.continuous ? (gaps.length ? toSlices(m, subtractIntervals([[0, m.totalLength]], gaps)) : undefined) : slices;
         this.push({
           kind: "stroke",
           colour: sym.main.halo.colour,
           path,
           ...(haloSlices ? { slices: haloSlices } : {}),
-          widthUm: sym.main.widthUm + 2 * sym.main.halo.widthUm,
+          widthUm: haloWidth,
           cap: mapCap(sym.main.cap),
           join: mapJoin(sym.main.join),
+          ...(taper ? { taper } : {}),
         });
       }
       if (sym.main.widthUm > 0) {
@@ -177,6 +180,7 @@ class Stage {
           widthUm: sym.main.widthUm,
           cap: mapCap(sym.main.cap),
           join: mapJoin(sym.main.join),
+          ...(taper ? { taper } : {}),
         });
       }
     }
@@ -293,7 +297,7 @@ class Stage {
       this.warn("TEXT_WITHOUT_TEXT", `object ${this.objectIdx} has a text symbol but no text`);
       return;
     }
-    const fontId = this.input.fonts.findIndex((f) => f.family === sym.fontFamily);
+    const fontId = resolveFont(this.input.fonts, sym);
     if (fontId < 0) {
       this.warn("NO_FONT", `no font for family ${sym.fontFamily}`);
       return;
@@ -303,11 +307,39 @@ class Stage {
     if (shaped.glyphs.length === 0) return;
     const glyphs = Uint16Array.from(shaped.glyphs);
     const positions = Float32Array.from(shaped.positions);
-    if (sym.halo) {
-      this.push({ kind: "text", colour: sym.halo.colour, fontId, sizeUm: shaped.sizeUm, glyphs, positions, haloWidthUm: sym.halo.widthUm });
+    const angles = shaped.angles ? { angles: Float32Array.from(shaped.angles) } : {};
+    if (sym.shadow) {
+      // The offset is in the text's own frame, so it turns with the text.
+      const r = toRad(obj.angleDeg ?? 0);
+      const dx = sym.shadow.offsetXUm * Math.cos(r) - sym.shadow.offsetYUm * Math.sin(r);
+      const dy = sym.shadow.offsetXUm * Math.sin(r) + sym.shadow.offsetYUm * Math.cos(r);
+      const shifted = Float32Array.from(shaped.positions, (v, i) => v + (i % 2 === 0 ? dx : dy));
+      this.push({ kind: "text", colour: sym.shadow.colour, fontId, sizeUm: shaped.sizeUm, glyphs, positions: shifted, ...angles });
     }
-    this.push({ kind: "text", colour: sym.colour, fontId, sizeUm: shaped.sizeUm, glyphs, positions });
+    if (sym.halo) {
+      this.push({ kind: "text", colour: sym.halo.colour, fontId, sizeUm: shaped.sizeUm, glyphs, positions, ...angles, haloWidthUm: sym.halo.widthUm });
+    }
+    this.push({ kind: "text", colour: sym.colour, fontId, sizeUm: shaped.sizeUm, glyphs, positions, ...angles });
   }
+}
+
+/** The pass's taper: only on a pointed stroke whose IR gives taper lengths (map-rendering §3.2). */
+function strokeTaper(spec: StrokeSpec): { startUm?: number; endUm?: number } | undefined {
+  if (spec.cap !== "pointed" || !spec.taper) return undefined;
+  const { startUm, endUm } = spec.taper;
+  if (!startUm && !endUm) return undefined;
+  return { ...(startUm ? { startUm } : {}), ...(endUm ? { endUm } : {}) };
+}
+
+/**
+ * The font for a text symbol: the first loaded face of its family whose
+ * bold / italic match (`weight ≥ 600` is bold), else the family's first
+ * face. −1 when the family is not loaded at all.
+ */
+function resolveFont(fonts: FontMetrics[], sym: TextSymbol): number {
+  const bold = sym.weight >= 600;
+  const exact = fonts.findIndex((f) => f.family === sym.fontFamily && !!f.bold === bold && !!f.italic === sym.italic);
+  return exact >= 0 ? exact : fonts.findIndex((f) => f.family === sym.fontFamily);
 }
 
 function toSlices(m: PathMeasure, intervals: Interval[]): Slice[] {

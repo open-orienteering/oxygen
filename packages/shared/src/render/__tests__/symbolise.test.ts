@@ -162,6 +162,36 @@ describe("symbolise — lines", () => {
     expect(strokes.map((s) => [s.colour, s.widthUm])).toEqual([[5, 750], [8, 350]]);
   });
 
+  it("pointed caps: the taper lengths go onto the pass; without them the stroke is butt", () => {
+    const lineOf = (main: object) => parseRenderSymbol({ type: "line", id: "t", code: "107", name: "t", main });
+    const path = makePath([0, 0, 10000, 0]);
+    const tapered = symbolise({ objects: [{ symbolIdx: 0, path }], symbols: [lineOf({ colour: 2, widthUm: 250, cap: "pointed", taper: { startUm: 750, endUm: 750 } })], fonts: [] }).stream;
+    const [p] = only(tapered, "stroke");
+    expect(p).toMatchObject({ cap: "pointed", taper: { startUm: 750, endUm: 750 }, widthUm: 250 });
+    // Full length, no slices: a taper is not a shortening.
+    expect(p.slices).toBeUndefined();
+    const bare = only(symbolise({ objects: [{ symbolIdx: 0, path }], symbols: [lineOf({ colour: 2, widthUm: 250, cap: "pointed" })], fonts: [] }).stream, "stroke")[0];
+    expect(bare.taper).toBeUndefined();
+    // A taper on a round-capped line means nothing.
+    const round = only(symbolise({ objects: [{ symbolIdx: 0, path }], symbols: [lineOf({ colour: 2, widthUm: 250, cap: "round", taper: { startUm: 750 } })], fonts: [] }).stream, "stroke")[0];
+    expect(round.taper).toBeUndefined();
+  });
+
+  it("a framing line narrower than its main line: a thin continuous halo under the dashes", () => {
+    const sym = parseRenderSymbol({
+      type: "line", id: "t", code: "503.1", name: "t",
+      main: { colour: 8, widthUm: 350, dash: { layout: "ocad", dashUm: 2000, gapUm: 500 }, halo: { colour: 5, widthUm: -100, continuous: true } },
+    });
+    const { stream } = symbolise({ objects: [{ symbolIdx: 0, path: makePath([0, 0, 20000, 0]) }], symbols: [sym], fonts: [] });
+    const [halo, main] = only(stream, "stroke");
+    expect([halo.colour, halo.widthUm, halo.slices]).toEqual([5, 150, undefined]);
+    expect([main.colour, main.widthUm, main.slices?.length]).toEqual([8, 350, 8]);
+    // Not continuous, or eating the whole line: refused by the schema / no pass.
+    expect(() => parseRenderSymbol({ type: "line", id: "t", code: "t", name: "t", main: { colour: 8, widthUm: 350, halo: { colour: 5, widthUm: -100 } } })).toThrow();
+    const gone = parseRenderSymbol({ type: "line", id: "t", code: "t", name: "t", main: { colour: 8, widthUm: 350, halo: { colour: 5, widthUm: -200, continuous: true } } });
+    expect(only(symbolise({ objects: [{ symbolIdx: 0, path: makePath([0, 0, 20000, 0]) }], symbols: [gone], fonts: [] }).stream, "stroke")).toHaveLength(1);
+  });
+
   it("516 power line: solid line, crossbars at the fitted spacing, rotated to the tangent", () => {
     const { stream } = run([{ symbolIdx: PILOT.powerLine516, path: makePath([0, 0, 0, 21000]) }]);
     const [line] = only(stream, "stroke");
@@ -260,6 +290,50 @@ describe("symbolise — text", () => {
     const b = symbolise({ objects: [{ symbolIdx: PILOT.controlNumber704, path: makePath([0, 0]), text: "1" }], symbols: pilotSymbols, fonts: [] });
     expect(b.warnings.map((w) => w.code)).toEqual(["NO_FONT"]);
     expect(b.stream.passes).toHaveLength(0);
+  });
+});
+
+describe("symbolise — text shadow, faces, rotation", () => {
+  const textSym = (o: object = {}) =>
+    parseRenderSymbol({ type: "text", id: "t", code: "t", name: "t", fontFamily: "liberation-sans", fontSizeUm: 4000, colour: 8, ...o });
+
+  it("a shadow is its own pass in its colour, every origin offset — turned with the text", () => {
+    const sym = textSym({ shadow: { colour: 2, offsetXUm: 200, offsetYUm: -300 } });
+    const { stream } = symbolise({ objects: [{ symbolIdx: 0, path: makePath([1000, 2000]), text: "AB" }], symbols: [sym], fonts: fonts() });
+    const [shadow, text] = only(stream, "text");
+    expect([shadow.colour, text.colour]).toEqual([2, 8]);
+    expect(shadow.haloWidthUm).toBeUndefined();
+    for (let i = 0; i < text.glyphs.length; i++) {
+      expect(shadow.positions[2 * i] - text.positions[2 * i]).toBeCloseTo(200, 2);
+      expect(shadow.positions[2 * i + 1] - text.positions[2 * i + 1]).toBeCloseTo(-300, 2);
+    }
+    const turned = only(symbolise({ objects: [{ symbolIdx: 0, path: makePath([0, 0]), text: "A", angleDeg: 90 }], symbols: [sym], fonts: fonts() }).stream, "text");
+    // (200, −300) turned 90° counter-clockwise is (300, 200).
+    expect(turned[0].positions[0] - turned[1].positions[0]).toBeCloseTo(300, 2);
+    expect(turned[0].positions[1] - turned[1].positions[1]).toBeCloseTo(200, 2);
+    expect(Array.from(turned[0].angles!)).toEqual([90]);
+    expect(Array.from(turned[1].angles!)).toEqual([90]);
+  });
+
+  it("rotated text carries one angle per glyph on every pass, halo included", () => {
+    const sym = textSym({ halo: { colour: 1, widthUm: 250 } });
+    const { stream } = symbolise({ objects: [{ symbolIdx: 0, path: makePath([0, 0]), text: "Ab c", angleDeg: 30 }], symbols: [sym], fonts: fonts() });
+    for (const p of only(stream, "text")) expect(Array.from(p.angles!)).toEqual([30, 30, 30]);
+  });
+
+  it("a bold symbol with only the regular face loaded draws in that face, without a warning", () => {
+    const { stream, warnings } = symbolise({ objects: [{ symbolIdx: 0, path: makePath([0, 0]), text: "A" }], symbols: [textSym({ weight: 700 })], fonts: fonts() });
+    expect(warnings).toEqual([]);
+    expect(only(stream, "text")[0].fontId).toBe(0);
+    expect(stream.fontTable[0]).toEqual({ fontId: 0, family: "liberation-sans", bold: false, italic: false });
+  });
+
+  it("picks the face whose bold / italic match when several of the family are loaded", () => {
+    const { sans } = liberation();
+    const boldFace = { ...sans, family: sans.family, bold: true, glyphId: sans.glyphId.bind(sans), advance: sans.advance.bind(sans), kerning: sans.kerning.bind(sans) };
+    const { stream } = symbolise({ objects: [{ symbolIdx: 0, path: makePath([0, 0]), text: "A" }], symbols: [textSym({ weight: 700 })], fonts: [sans, boldFace] });
+    expect(only(stream, "text")[0].fontId).toBe(1);
+    expect(stream.fontTable[1].bold).toBe(true);
   });
 });
 

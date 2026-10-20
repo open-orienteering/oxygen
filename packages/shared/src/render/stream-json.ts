@@ -72,6 +72,7 @@ const passJson = z.discriminatedUnion("kind", [
     sizeUm: z.number().positive(),
     glyphs: z.array(z.number().int()),
     positions: z.array(z.number()),
+    angles: z.array(z.number()).optional(),
     haloWidthUm: z.number().positive().optional(),
   }),
 ]);
@@ -173,6 +174,7 @@ export function passStreamFromJson(input: unknown): PassStream {
         if (p.positions.length !== p.glyphs.length * 2) {
           throw new Error("text positions must be x,y per glyph");
         }
+        if (p.angles && p.angles.length !== p.glyphs.length) throw new Error("text angles must be one per glyph");
         return {
           kind: "text",
           colour: p.colour,
@@ -180,6 +182,7 @@ export function passStreamFromJson(input: unknown): PassStream {
           sizeUm: p.sizeUm,
           glyphs: Uint16Array.from(p.glyphs),
           positions: Float32Array.from(p.positions),
+          ...(p.angles ? { angles: Float32Array.from(p.angles) } : {}),
           ...(p.haloWidthUm ? { haloWidthUm: p.haloWidthUm } : {}),
         };
     }
@@ -261,6 +264,7 @@ export function passStreamToJson(stream: PassStream): PassStreamJson {
             sizeUm: q(p.sizeUm),
             glyphs: Array.from(p.glyphs),
             positions: Array.from(p.positions, (v) => q(v)),
+            ...(p.angles ? { angles: Array.from(p.angles, (v) => q(v)) } : {}),
             ...(p.haloWidthUm ? { haloWidthUm: q(p.haloWidthUm) } : {}),
           };
       }
@@ -391,6 +395,12 @@ export function diffPassStreams(a: PassStream, b: PassStream, opts: DiffOptions 
           if (p.glyphs[k] !== t.glyphs[k]) { where(`glyph ${k}: ${p.glyphs[k]} vs ${t.glyphs[k]}`); break; }
           if (!near(p.positions[2 * k], t.positions[2 * k]) || !near(p.positions[2 * k + 1], t.positions[2 * k + 1])) {
             where(`glyph ${k} position`); break;
+          }
+        }
+        if (!!p.angles !== !!t.angles) where("angles present on one side only");
+        else if (p.angles && t.angles) {
+          for (let k = 0; k < p.angles.length; k++) {
+            if (!near(p.angles[k], t.angles[k], 1e-4)) { where(`glyph ${k} angle`); break; }
           }
         }
         if ((p.haloWidthUm ?? 0) !== (t.haloWidthUm ?? 0)) where("haloWidthUm");
