@@ -29,6 +29,18 @@ const scenes = [
   "colour-order",
   "text-with-halo",
   "pilot-scene",
+  // Library fixtures, research 04 §8 rows 1–9 + colour order + precision (B1).
+  "lib-dash-ocad",
+  "lib-dash-omap",
+  "lib-line-glyphs",
+  "lib-pattern",
+  "lib-hatch",
+  "lib-borders",
+  "lib-holes",
+  "lib-text",
+  "lib-halos",
+  "lib-colour-order",
+  "lib-precision",
 ] as const;
 
 function diffPng(actual: PNG, golden: PNG): { differing: number; total: number; diff: PNG } {
