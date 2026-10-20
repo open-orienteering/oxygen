@@ -344,8 +344,10 @@ OCAD 2018 file-format description and Mapper's `LineTextSymbolV11` only
 (no real file seen): *provisional*.
 
 **Rectangle symbols** (`type 7`) → `{ type: "line", main: { colour:
-lineColor, widthUm: lineWidth × 10, cap: "flat", join: "miter" } }`, the
-outline Mapper's OCD import also makes of them. Rectangle objects keep
+lineColor, widthUm: lineWidth × 10, cap: "flat", join: "miter" } }`: an
+outline line, as Mapper's OCD import makes of them. Mapper strokes it
+round / round and rounds the corners by the radius; Oxygen joins miter so
+the corners stay as sharp as the verbatim coordinates. Rectangle objects keep
 their corners verbatim (§3.4) and the render bridge draws type-7 paths
 closed. `lineWidth` 0 ⇒ `SYMBOL_EMPTY`, an unknown `lineColor` ⇒
 `SYMBOL_COLOUR_UNKNOWN`, both `render: null`. A corner radius
