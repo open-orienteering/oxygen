@@ -318,19 +318,57 @@ skipped; a glyph with no parts left is dropped.
 | `paraSpace` (1/100 mm) | `paragraphSpacingUm` | |
 | `charSpace` (%) | `charSpacing = charSpace / 100` | |
 | `wordSpace` (%) | `wordSpacing = (wordSpace − 100)/100 × 0.278` | Only when ≠ 100; 0.278 em approximates the space glyph. *Provisional.* |
-| `frMode` ≠ 0, `lbOn`, `pointSymOn` | — | Warned and dropped: the reader does not expose the framing colour / width, and line-below / attached point symbols are not in the IR. |
+| `frMode` 2 (line framing), `frColor`, `frWidth` | `halo { colour, widthUm: frWidth × 10 }` | `frWidth` is how far the framing reaches beyond the glyph outline — the halo's half-width, as Mapper reads and writes it (`framing_line_half_width`, §4.3), so an OCAD file and its Mapper conversion give the same halo. `frWidth` 0 ⇒ no halo and no warning (nothing is drawn). An `frColor` the colour table lacks ⇒ `SYMBOL_COLOUR_UNKNOWN`, no halo. `frStyle` (the framing stroke's join) is not carried: a halo is stroked round / round on every backend (`docs/map-rendering.md` §4.9). |
+| `frMode` 1 (shadow, `frColor`, `frOfX`, `frOfY`), `frMode` 3 (rectangle) | — | `SYMBOL_FEATURE_DROPPED` (`text shadow framing (colour, offset x/y mm)`, `text rectangle framing`): the IR has no shadow or box (A13). |
+| `lbOn`, `pointSymOn` | — | Warned and dropped: line-below and attached point symbols are not in the IR. |
 
-Rectangle symbols (`type 7`), line-text symbols (`type 6`) and unknown
-types warn `SYMBOL_TYPE_UNSUPPORTED`. The reader (`ocad2geojson`) does not
-parse them: it leaves them out of the symbol table and says so in its
-warning list (`Ignoring rectangle symbol 850001.`, `Unknown symbol type
-9`), and since `ocad-6` the normaliser turns exactly those warnings into
-`SYMBOL_TYPE_UNSUPPORTED` (`850.1: rectangle symbol dropped by the
-reader`) instead of counting them under `READER_WARNING`. Objects that use
-such a symbol get the `MISSING_SYMBOL` stub of §3.4. `ocadSymbolToRender`
-itself converts a line-text definition like a text symbol (the table
-above) and returns `null` with `SYMBOL_TYPE_UNSUPPORTED` for a rectangle
-or unknown type — reachable only with a reader that parses them (A12).
+Reader struct offsets (from the start of the text attributes, i.e. after
+the base symbol, whose OCAD 11+ description is 128 bytes — the reader
+reads 64 and skips the rest before the body): `frMode` 194, `frStyle`
+195, `pointSymOn` 196, `pointSymNumber` 197 (int32), `frColor` 228,
+`frWidth` 230, `frOfX` 236, `frOfY` 238 — the same in OCAD 10, 11, 12 and
+2018 (Mapper's `FramingAttributesV8`). Confirmed on the corpus and on the
+fork's `fences.ocd` (902.1: line framing, colour 12, width 10).
+
+**Line-text symbols** (`type 6`) convert with the same table — they carry
+font, colour, size, weight, italic, spacing, alignment and framing, no
+line or paragraph spacing, line-below or attached point symbol, and no
+rectangle framing (`frMode` 3 is not defined for them) — and always warn
+`SYMBOL_FEATURE_DROPPED` (`line text drawn as block text`). Nothing is
+lost in the document: the object keeps type 6, its path and its text
+(§3.4). But the IR and the symbolisation cannot yet lay text along a
+path, so the text is drawn from the path's first vertex; laying it along
+the path is A13's. The warning keeps the S0 gate honest for a map that
+uses line text (none in the corpus). The line-text struct is from the
+OCAD 2018 file-format description and Mapper's `LineTextSymbolV11` only
+(no real file seen): *provisional*.
+
+**Rectangle symbols** (`type 7`) → `{ type: "line", main: { colour:
+lineColor, widthUm: lineWidth × 10, cap: "flat", join: "miter" } }`, the
+outline Mapper's OCD import also makes of them. Rectangle objects keep
+their corners verbatim (§3.4) and the render bridge draws type-7 paths
+closed. `lineWidth` 0 ⇒ `SYMBOL_EMPTY`, an unknown `lineColor` ⇒
+`SYMBOL_COLOUR_UNKNOWN`, both `render: null`. A corner radius
+(`radius` > 0) warns `SYMBOL_FEATURE_DROPPED` (`rectangle corner radius
+r mm`) and the corners are drawn sharp; a grid (`gridFlags & 1`, with
+cell size, numbering and unnumbered-cell text) warns
+`SYMBOL_FEATURE_DROPPED` (`rectangle grid`) and is not drawn. Rounding the
+corners at import, as Mapper does, would rewrite source coordinates;
+corner radius and grid are IR fields for A13 (user decision 2026-10-20,
+A12). Struct (after the base symbol): `lineColor`
++0, `lineWidth` +2, `radius` +4, `gridFlags` +6, `cellWidth` +8,
+`cellHeight` +10, two reserved words, `unnumCells` +16, `unnumText` +18
+(string[3]).
+
+Since the `v2.2.2-oxygen.1` fork release the reader parses both types for
+OCAD 10–2018. Unknown types still warn `SYMBOL_TYPE_UNSUPPORTED`: the
+reader leaves them out of the symbol table and says so in its warning
+list (`Unknown symbol type 9`); the normaliser turns exactly those
+warnings — and the reader's older `Ignoring rectangle / line text symbol
+N.` texts, should an unparsed version ever produce them — into
+`SYMBOL_TYPE_UNSUPPORTED` instead of counting them under
+`READER_WARNING`. Objects that use such a symbol get the `MISSING_SYMBOL`
+stub of §3.4.
 
 **Warnings** (aggregated into the document header like every other
 stage-4 warning):
@@ -339,8 +377,8 @@ stage-4 warning):
 |---|---|
 | `SYMBOL_COLOUR_UNKNOWN` | A colour number the colour table lacks; that part of the symbol is skipped. |
 | `SYMBOL_EMPTY` | Nothing drawable was left ⇒ `render: null`. |
-| `SYMBOL_TYPE_UNSUPPORTED` | Rectangle or unknown symbol type; since `ocad-6` also a rectangle, line-text or unknown symbol the reader dropped (from its warning list). |
-| `SYMBOL_FEATURE_DROPPED` | Decrease, double-line background colour / unknown mode, framing narrower than the main line, text framing / line-below / attached point symbol / vertical alignment, non-line border reference, zero-size hatch or pattern. |
+| `SYMBOL_TYPE_UNSUPPORTED` | Unknown symbol type, also when the reader dropped it (from its warning list). |
+| `SYMBOL_FEATURE_DROPPED` | Decrease, double-line background colour / unknown mode, framing narrower than the main line, text shadow or rectangle framing / line-below / attached point symbol / vertical alignment, line text drawn as block text, rectangle corner radius / grid, non-line border reference, zero-size hatch or pattern. |
 | `FONT_SUBSTITUTED` | Font name not metric-compatible with the shipped family. |
 | `IRREGULAR_PATTERN_REGULARISED` | Irregular area pattern drawn as a regular grid. |
 
