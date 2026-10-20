@@ -464,22 +464,32 @@ overlapping kept); pixel probes in
 
 ### 5.2 WebGL2 (web)
 
-`packages/web/src/map-gl/`, three files with hard lines between them:
+`packages/web/src/map-gl/`, with hard lines between the files:
 
 ```
-prepare.ts   pass stream ──► PreparedStream        pure TS, typed arrays, no GL
-batch.ts     PreparedStream ──► Batch[]            pure TS, merges per (colour run, kind)
-renderer.ts  Batch[] + View ──► pixels             WebGL2, six small programs
+worker.ts      document bytes ──► stream ──► atlas, buckets,      pure TS, runs in a Web Worker
+               resident layers; detail parts on request           (worker-entry.ts binds it)
+prepare.ts     geometry builders: flattening, indexed strips,     pure TS, typed arrays, no GL
+               even-odd earcut; the per-pass fan path (goldens)
+mesh-atlas.ts  glyph parts + text glyphs ──► one float texture   pure TS
+buckets.ts     cells, large bucket, per-part preparation +        pure TS
+               range table, visible set, clip groups, LRU, gate
+arena.ts       vertex arenas: free list, grow by copy             GL buffers
+engine.ts      main thread: worker transport, residency,          no GL calls of its own
+               visible-set rebuilds
+renderer.ts    arena programs + visible-set draw loop;            WebGL2
+               the per-pass path (`setStream` / `render`)
 ```
 
-Status: S1 steps 3–4 spike — whole document drawn every frame, no
-arena, no worker, no buckets / visible set, no MSDF text, no
-depth-buffer fill path. Everything below is what the spike **proved**;
-the arena / worker / tiling layer of 04 sits on top of it unchanged.
-`renderer.ts` keeps the step-3 one-draw-per-pass path (`setStream` /
-`render`) for the golden page; the document path is `setBatches` /
-`renderBatches`. The spike's verdict and its amendments to 04 are in
-`docs/research/vector-map-pipeline/S1-render-spike.md`.
+Status: B2 — strips, arenas, buckets, visible set, mesh atlas, worker,
+screen-only LOD. Not yet: MSDF text (B3; text is drawn from outline
+meshes in the atlas until then), the viewer (B4), `WEBGL_multi_draw`
+(§8). The per-pass path (`setStream` / `render`: one draw per pass,
+stencil fills) is kept unchanged as the backend's golden path
+(`MapGlFixturePage`, §6.2) and as the reference the arena path is
+compared with (`compare=1`, below). The S1 batch path (`batch.ts`,
+`setBatches` / `renderBatches`) is gone; its measurements are the
+"S1" columns of the tables below.
 
 #### Preparation (CPU)
 
@@ -487,80 +497,191 @@ Backend decisions only — nothing here moves a dash or a glyph:
 
 | Pass | Becomes | How |
 |---|---|---|
-| fill | `fan` + `cover` | rings flattened (default 10 µm); one triangle per ring edge from a fan origin just outside the bounds; a two-triangle bounding quad |
-| stroke | `verts` (x, y, ox, oy) | each slice (or ring) flattened from its Bézier sub-range, then extruded *directionally*: the vertex carries the centre-line point and a unit (or mitre) offset; the shader multiplies by the half width |
-| glyph | instanced fill fan + strokes | the `GlyphMesh` in glyph-local units, flattened at ¼ tolerance; instances are the pass's `x, y, cos, sin, scale` buffer as-is |
-| hatch | `fan` + `cover` + stripe params | the area like a fill; stripes are evaluated in the fragment shader |
-| text | one instanced item per distinct glyph id | outline in font units, instance scale `sizeUm / unitsPerEm`; a halo pass is the same outlines **stroked** (round/round) with `haloWidthUm / k` |
+| fill | fill-arena vertices + triangle indices | rings flattened (10 µm); **even-odd earcut**: rings grouped by containment depth (`triangulateEvenOdd`) — a ring inside an even number of others is an outer boundary, one inside an odd number a hole of its innermost container, so a "hole" ring outside every other ring is filled and separate contours are separate polygons, exactly §3.1's rule. Rings that cross are earcut's failure mode and drawn as earcut decides (the reference raster is the oracle) |
+| stroke | stroke-arena vertices + indices | each slice (or ring) flattened from its Bézier sub-range, then an **indexed strip** (`extrudeStrip`): per vertex the centre-line point and an offset direction; the shader multiplies by the half width |
+| glyph | an instance per placement into the mesh atlas | the `GlyphMesh` in glyph-local µm at ¼ tolerance, fills triangulated even-odd, strokes as strips expanded to triangles; instance `x, y, cos, sin, scale` as in the stream plus the mesh's atlas `base, count, radius` |
+| glyph with `clip` | instances + the clip area triangulated even-odd | drawn through the stencil (Drawing, below) |
+| hatch | hatch-arena vertices + indices | the area triangulated like a fill; each vertex carries the stripe normal, spacing, offset and half width so hatches of one colour are one draw |
+| text | an instance per glyph into the mesh atlas | outline in font units, filled even-odd; a halo pass is the outline stroked round/round at `haloWidthUm / k`; instance scale `k = sizeUm / unitsPerEm`; meshes keyed by (font, glyph, tolerance, halo width) |
 
-Extrusion emits one quad per segment, a join wedge per interior vertex
-(mitre with the 4× limit → bevel, or round at 8 steps per π) and the
-caps (flat; square = quads extended by one half width; round = half
-circle). Because the width is applied in the shader, the same buffer
-serves every zoom and the minimum on-screen width is a uniform.
+**Indexed strips (S1 §4.1).** A polyline point shares **one vertex pair**
+between its two segments — offset ± the mitre vector — when that is
+within `JOIN_SHARE_TOLERANCE` (1 % of the half width; 0.7 µm on a
+0.14 mm contour, 10 µm on a 2 mm line) of the exact join: always for a
+mitre join inside the 4× limit, for a round join while `sec(θ/2) − 1 ≤ 1 %`
+(turns up to ~16°), for a bevel while `sec(θ/2) − cos(θ/2) ≤ 1 %`, and
+only while the inner mitre point stays on both neighbouring segments
+(`hw · tan(θ/2) ≤` either segment's length). Flattened curves are almost
+all such points, so a stroke is ~2 vertices per point. At a real corner
+the segments get their own pairs and a join wedge: mitre (4× limit, then
+bevel), bevel, or round at 8 steps per π. Caps: butt, square (end pairs
+pushed out by a half width), round (half-circle fan); `pointed` is drawn
+butt until the taper is consumed (§8). Coverage equals S1's
+triangle-list extrusion everywhere except within the 1 % band at shared
+joins (unit test). The flattening tolerance stays 10 µm at every zoom.
+
+**Coordinates.** Arena positions are float32 **relative to the document
+origin** — the centre of the bucket grid — and the view centre is passed
+relative to it, computed in float64 on the CPU. On Club-full (± 585 mm
+from the origin) the float32 step is 0.06 µm: ≈ 0.03 px at 20× paper on
+a 2.625-DPR phone. ⟨DECISION: pending the user's answer, b2-questions.md⟩
+This replaces 04 §6.10's int16 bucket-relative positions: a visible-set
+draw spans many buckets, so there is no per-bucket draw to carry a
+bucket matrix, and the large-object bucket spans the whole map, which
+int16 at 10 µm (± 327 mm) cannot hold.
+
+Vertex layouts (`buckets.ts`):
+
+| Arena | Bytes | Layout |
+|---|---:|---|
+| fill | 8 | f32 x, y |
+| stroke | 16 | f32 x, y · i16 ox, oy normalised by the mitre limit · u16 half width in ½ µm (≤ 32.7 mm) · u16 pad |
+| hatch | 28 | f32 x, y, nx, ny, spacing, offset (origin-relative), half width |
+| atlas | 32 per mesh vertex | two RGBA32F texels: (x, y, ox, oy), (half width, 0, 0, 0); fill vertices have zero offset and width |
+| instance | 32 | f32 x, y, cos, sin, scale, atlas base, count, radius |
+
+The stroke vertex is 16 B rather than 04 §6.2's 8 B: widths mix inside
+one visible-set draw, so the half width is a per-vertex µm value rather
+than a uniform × factor, and the position is float32 (above). Against
+S1's 20 B × 6 vertices per segment the strip stores ~2 × 16 B per point
+(measured below).
+
+#### Arena and buckets
+
+Constants (`buckets.ts`; 04 §6.11):
+
+| Constant | Value | Rule |
+|---|---|---|
+| `CELL_UM` | 50 000 µm | paper cell, aligned to multiples of 50 mm from the paper origin, every scale |
+| `LARGE_CELLS` | 2 | an object whose bounds exceed 2 cells in x or y goes to the large-object bucket |
+| `DRAW_MARGIN_CELLS` | 1 | cells meeting the viewport (bounding box of the rotated canvas) + 1 are drawn — an object reaches at most one cell beyond the cell of its centre |
+| `PREFETCH_MARGIN_CELLS` | 2 | cells meeting the viewport + 2 have their detail requested, nearest first |
+| zoom gate | 0.14 mm line < 0.15 device px | `140 µm × pxPerUm < 0.15`: ordinary cells' detail is neither drawn nor prepared — 0.28× paper at 1× DPR, 0.14× at 2× |
+| budget | 30 MB event map, 150 MB club map | `EVENT_BUDGET_BYTES`, `CLUB_BUDGET_BYTES`; the caller picks (B4 from the document's provenance); default 150 MB |
+| hairline floor | 1 device px | strokes thinner are drawn 1 px wide with alpha × true width (Drawing) |
+| glyph skip | 2 device px | instances whose mesh diameter × scale is smaller are not drawn |
+| hatch tint | 1.5 device px | stripes closer than this become a tint of coverage `width / spacing` |
+| `ARRIVAL_REBUILD_MS` | 150 ms | arriving detail rebuilds the visible set at most this often while more drawn detail is pending |
+| arena growth | 1.25× | by `copyBufferSubData` into a new buffer; offsets never move |
+
+**Assignment.** Every object goes, whole, to the cell holding the centre
+of its symbolised bounds (`passBounds`: path bounds + half width × the
+mitre limit for strokes, mesh radius × scale for glyphs, the em box and
+halo for text), or to the large-object bucket. All of an object's passes
+share its bucket, in stream order. An object is never duplicated into
+the cells it overlaps; the draw margin is what makes that correct.
+
+**Layers.** A cell is prepared as two parts: `base` — its fills and
+hatches, prepared for every cell when the document loads and always
+resident (the "fill set" of 04 §6.11) — and `detail` — strokes, glyphs,
+text, clipped patterns — prepared on demand above the zoom gate and
+evicted LRU. The large bucket is one `all` part, prepared at load and
+always resident. Below the gate a frame draws the base parts of the
+cells in view and the large bucket.
+
+**Range table (04 §7).** A part keeps, per kind, its geometry and a
+table of entries `(colour, group, object, start, count)`: colour-major
+(the stream's order), one entry per run of an object's indices — or
+instances, where `group` is the atlas size class. Entries of one colour
+are contiguous, so a colour of a part is one span.
+
+**Visible set (04 §6.8 point 2).** `buildVisibleSet(parts, hidden)`
+concatenates the drawn parts' spans per (colour, kind) into one index
+buffer per indexed kind (rebased onto each part's arena offset) and one
+instance buffer per instanced kind, grouped by (colour, size class).
+Draws per frame = colours in view × kinds present + size classes + 3 per
+clip group — independent of how many buckets are in view. It is rebuilt
+when the drawn cell set or the gate state changes, when detail of a
+drawn cell arrives (coalesced, `ARRIVAL_REBUILD_MS`), and when the
+hidden set changes; never while zooming within the same cells. Hidden
+objects (`engine.setHidden`, stream `objectIdx`) are skipped entry by
+entry.
+
+**Clip groups.** Pattern-clipped glyph passes of one colour are merged
+into groups whose footprints (clip area ∪ instance extents) do not meet,
+greedily in stream order: no instance of one member can fall inside
+another member's area, so one stencil mark, one instanced draw and one
+clear serve the group with the same pixels as one per pass. Before
+grouping, Sprint envelope drew 161 per frame, 155 of them clip
+stencil passes; after, 17.
+
+**Residency and the budget.** The engine counts the always-resident
+bytes (base parts, large bucket, atlas, the visible-set buffers) plus
+the resident detail parts against the budget. After every arrival and
+view change it evicts the least recently drawn detail parts until the
+total fits, never one in the drawn set; if the drawn set alone does not
+fit, the engine reports over budget (`EngineStats.overBudget`) rather
+than drop drawn cells. Arena capacity is reported next to live bytes
+(the slack is at most the growth factor).
+
+#### Worker
+
+`worker.ts` is the pure message handler (unit-tested without a Worker;
+`inlineTransport()` runs it on the main thread for `worker=0`);
+`worker-entry.ts` binds it to the worker scope. Protocol:
+
+| Message | Payload | Reply |
+|---|---|---|
+| `load` | document bytes + `DocumentRenderOptions` (or, dev only, render objects + symbols), font files, optional first view (a view, or "fit into w × h"), gate flag | `loaded`: summary (bounds, origin, grid, detail cells, the first view resolved, stage times, bytes), mesh atlas, every cell's base part, the large part — then, without a further request, the first view's detail parts unless it is below the gate |
+| `prepare` | bucket ids, most urgent first | replaces the queue; one `part` per id |
+| — | | `error` on a failed load |
+
+Every typed array goes back as a transferable. The worker decodes,
+bridges (`documentRenderInput`), symbolises, builds the atlas, assigns
+buckets and prepares; it prepares queued parts in slices of about 8 ms
+(`PREPARE_SLICE_MS`) scheduled through a `MessageChannel` (not
+`setTimeout`, whose nesting clamp adds 4 ms per part), so a newer
+`prepare` overtakes a stale queue between slices. Fonts arrive as
+`ArrayBuffer`s and are parsed in the worker. Reading OCAD / OMAP and
+normalising to a document stays outside it (the import pipeline's job;
+the dev page does it on the main thread). The caller creates the worker
+when the view mounts, before a document is known: under Vite dev its
+module graph takes ~150 ms to load (Sprint envelope `load` 314 → 147 ms
+once the dev page pre-warmed it).
 
 #### Drawing (GPU)
 
-Items are drawn in stream order; the stream is already colour-major so no
-sorting happens here. Projection subtracts `u_centre` and scales by
-px/µm per axis; the stream is y-up and so is clip space, so there is no
-flip anywhere.
+Arena path (`renderDocument`): for each colour in stack order, fill →
+hatch → stroke → glyph size classes and that colour's clip groups →
+text; one `drawElements` per indexed kind, one `drawArraysInstanced` per
+size class. The stream is colour-major, so no sorting happens here.
+Projection subtracts `u_centre` (origin-relative), rotates by
+`View.rotationDeg` and scales by px/µm per axis; y-up throughout.
 
-* **Even-odd fills** — the stencil trick, never a triangulation: the fan
-  is drawn colour-masked with `stencilOp(INVERT)`, then the cover quad is
-  drawn where `stencil == 1` with `stencilOp(ZERO)`, which paints the
-  fill and clears the stencil in one pass. Holes come for free and the
-  result is exactly §3.1's rule.
-* **Strokes** — plain triangles; `halfWidth = max(widthUm/2, minPx/2/pxPerUm)`.
-* **Instanced glyphs and text** — `drawArraysInstanced` over the glyph's
-  fan with a per-instance `(x, y, cos, sin)` + `scale` attribute, then
-  the cover quad instanced the same way. Overlapping instances of the
-  same pass XOR each other (known caveat, no map symbol in the pilot set
-  triggers it; a per-instance stencil clear would fix it at the cost of
-  a draw per instance).
-* **Pattern clip** — two stencil bits: bit 0 holds the clip area (fan,
-  INVERT, mask 0x01), bit 1 the instances' parity; the instanced cover
-  tests `EQUAL 0x03` and clears bit 1, a final cover clears bit 0.
-* **Hatch** — the area goes through the stencil like a fill; the cover
-  quad runs a stripe shader (`d = dot(p, n) − offset`, distance to the
-  nearest multiple of `spacing`) with a one-pixel coverage ramp and
-  alpha blending. The fragment never `discard`s so the stencil clear
-  always runs.
-* **Anti-aliasing** — the context's MSAA (4× in practice). Optional
-  `supersample: 2`: draw into a 2× multisampled renderbuffer, resolve
-  into a texture, draw that onto the canvas with linear filtering (a
-  2×2 box at exactly 2×; a scaled `blitFramebuffer` into the canvas is
-  illegal because the default framebuffer is itself multisampled). The
-  golden page uses it; the production default is 1.
+* **Fills** — earcut triangles, opaque. No stencil.
+* **Strokes** — `halfWidth × offset` in the vertex shader. **Hairline
+  floor** (04 §6.2, §8 row 10): when the stroke is under `minStrokePx`
+  (1 device px) on screen it is drawn that wide with alpha × (true width
+  / floor), so zoomed-out contours fade to a tint instead of aliasing.
+  Triangles that overlap at join wedges blend twice under the floor; the
+  area is sub-pixel at the zooms where the floor applies.
+* **Instanced glyphs and text** — vertex pulling: the instance carries
+  its mesh's atlas `base` and `count`; the draw pulls `2^class` vertices
+  per instance (a whole number of triangles) and vertices past `count`
+  are moved outside clip space. Mesh strokes get the same floor. An
+  instance whose mesh diameter × scale is under `minGlyphPx` (2 px) is
+  collapsed the same way. Fills inside meshes are triangles, so
+  overlapping instances of one pass no longer XOR (the per-pass path's
+  caveat).
+* **Pattern clip** — per clip group: the areas into stencil bit 0
+  (`REPLACE`, colour masked), the group's instances where the bit is
+  set (`EQUAL`), the areas again with `ZERO`.
+* **Hatch** — the area's triangles with a stripe shader (`d = dot(p, n)
+  − offset`, distance to the nearest multiple of `spacing`, one-pixel
+  ramp); under `hatchTintPx` (1.5 px) spacing on screen, a tint of alpha
+  `width / spacing`.
+* **Anti-aliasing** — the context's MSAA (4× in practice).
 
-Resources: `MapGlRenderer.setStream(prepared)` uploads, `render(view,
-opts)` draws, `dispose()` frees. Measured on the pilot scene in headless
-Chromium (SwiftShader): 36 items, prepare 3.8 ms, upload ~10 ms, draw
-< 1 ms.
+Per-pass path (`setStream` / `render`, goldens): unchanged from S1 —
+even-odd fills by the stencil trick (fan with `INVERT`, cover where
+`stencil == 1`), strokes with a widen-only 0.75 px minimum, instanced
+glyphs and text over stencil fans (overlapping instances of one pass
+XOR), pattern clip with two stencil bits, hatch through the stencil,
+optional `supersample: 2` into an offscreen MSAA buffer resolved and
+box-filtered onto the canvas.
 
-#### Batching (`batch.ts`)
-
-One draw per pass does not scale: a real document has 2 000–113 000
-passes (table below). The stream is colour-major and every pass inside
-one colour is opaque and of that colour, so items of the same kind
-within a **colour run** can be merged without changing the picture.
-`buildBatches(prepared)` emits, per colour run and in the stream's kind
-order:
-
-| Batch | Merge | Notes |
-|---|---|---|
-| `fill` | all fills of the run → one position buffer + one `Uint32` index buffer | rings triangulated with **earcut** (holes as earcut hole indices). The stencil parity trick of the per-pass path cannot merge *overlapping* fills of one colour (they would XOR), so merged fills are triangulated. earcut's known failure modes (self-intersecting rings) are tolerated in the spike; the reference raster is the oracle |
-| `hatch` | none, one per pass | each has its own stencil area and stripe parameters |
-| `stroke` | all strokes of the run → one buffer | the half width moves from a uniform into a fifth vertex component (`x, y, ox, oy, hw`, program `strokeW`) so widths can mix |
-| `instanced` | per (fill mesh, stroke meshes) object identity → instance arrays concatenated | glyph instances and text glyphs; pattern-clipped items stay alone because they own the stencil |
-
-Draws per frame on the corpus: 14–75 (event maps) and 114–345 (club
-maps) for 451–113 000 passes — inside 04 §9's ≤ 300 for everything but
-Club-full envelope, which is the deliberately pessimistic upper bound.
-`renderer.setBatches` uploads once; `renderBatches(view)` returns
-`FrameStats { drawCalls, cpuMs, gpuMs? }`, the GPU time from
-`EXT_disjoint_timer_query_webgl2` where available (resolved a frame
-late).
+`FrameStats { drawCalls, cpuMs, gpuMs? }`: GPU time from
+`EXT_disjoint_timer_query_webgl2`, resolved a frame or two late.
 
 #### Loading an OCAD document (`ocad-objects.ts`, shared)
 
@@ -583,84 +704,90 @@ closed line. Two modes:
   object is in the stream. Geometry and pass counts are a realistic
   upper bound for a full symbol library; the picture is not.
 
-#### Whole-document measurements (S1 step 4)
+#### Measurements (B2)
 
-Measured through `/dev/map-gl-doc` with
-`.local/research/oxygen-measurements/gl/measure-gl.mjs` (Playwright,
-headed Chromium on the dev laptop's Alder Lake-P iGPU, GPU timer
-available). Objects = matched + proxied. Load times are the browser's,
-cold per page load, with `ocad2geojson` doing the decode (`read`) —
-that stage is replaced by the 02 document reader and is shown
-separately. All numbers in ms.
+Measured 2026-10-20 / 21 through `/dev/map-gl-doc` with
+`scripts/measure-gl.mjs` (headed Chromium on the dev laptop's Alder
+Lake-P iGPU, GPU timer available) against a Vite server started from
+the worktree; the corpus is read by absolute path through the file
+input. Mode `pilot` / `envelope`, path `via=document` as in S1. "S1" is
+the S1 batch path (`batch.ts`, removed by B2) re-measured in the same
+session — its numbers match the S1 report within run-to-run noise. B2
+values are the median of three runs on the laptop (single runs vary
+by up to ±25 % in the load times). Columns:
 
-Desktop, 1280×800 @ 1×, 240-frame bench zooming 1→4→1 with pan:
+- **Draws**: the most of any frame of both bench scenarios.
+- **GPU MB**: resident GPU bytes after the first view is complete
+  (arena capacity + atlas + visible-set buffers; S1: its buffers), and
+  the most resident bytes the budget counted during the bench.
+- **after read**: ms from the document bytes being ready to the first
+  frame (S1: its only frame; B2: base layers + large bucket) and to the
+  complete first view (B2). `read` (OCAD decode and normalise on the
+  page) is left out as in S1: in the product the client fetches a
+  document, not an OCAD file.
+- **Frame GPU** avg / p95, ms, in the `fit` scenario (zoom 1→4→1) and the
+  `paper1x` scenario (dense viewport at 1× paper, 04 §6.12).
+- **Frame CPU** p95, ms (setView + visible-set rebuild + draw calls).
+- **Bucket prepare** p95 / max, ms, per detail part in the worker.
 
-| Map | Mode | Objects | Passes | Batches | Draws | GPU MB | read | symbolise | prepare | batch+upload | **total** | GPU avg / p95 | CPU avg |
-|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
-| Sprint | pilot | 1 275 | 2 241 | 115 | 325 | 5.0 | 120 | 14 | 25 | 7 | **168** | 3.7 / 3.9 | 1.0 |
-| Sprint | envelope | 10 680 | 11 644 | 117 | 328 | 19.4 | 207 | 28 | 66 | 43 | **349** | 6.9 / 7.8 | 1.0 |
-| Crop-B | pilot | 342 | 451 | 9 | 14 | 6.0 | 73 | 8 | 28 | 4 | **113** | 1.6 / 2.0 | 0.4 |
-| Crop-B | envelope | 3 073 | 3 182 | 40 | 75 | 16.5 | 136 | 21 | 60 | 15 | **235** | 3.9 / 4.3 | 0.5 |
-| Crop-A | pilot | 639 | 844 | 11 | 22 | 8.3 | 86 | 13 | 33 | 7 | **140** | 2.0 / 2.4 | 0.4 |
-| Crop-A | envelope | 4 983 | 5 188 | 24 | 47 | 19.8 | 151 | 24 | 64 | 16 | **258** | 4.9 / 5.6 | 0.4 |
-| Club-2026 | pilot | 7 980 | 12 097 | 39 | 114 | 70 | 477 | 103 | 190 | 58 | **837** | 9.5 / 11.1 | 0.6 |
-| Club-2026 | envelope | 45 884 | 50 001 | 100 | 235 | 154 | 924 | 275 | 407 | 158 | **1 784** | 10.8 / 12.3 | 1.0 |
-| Club-full | pilot | 17 550 | 28 756 | 61 | 192 | 157 | 1 108 | 225 | 432 | 135 | **1 915** | 10.2 / 19.4 | 0.8 |
-| Club-full | envelope | 101 727 | 112 933 | 138 | 345 | 338 | 2 034 | 654 | 994 | 468 | **4 197** | 21.5 / 23.2 | 1.2 |
+Desktop, 1280 × 800 @ 1×:
 
-Phone proxy — same machine, 412×915 @ 2.625× (Pixel-7 metrics, 2.6 M
-canvas pixels) with CDP `Emulation.setCPUThrottlingRate(4)`:
-
-| Map | Mode | read | symbolise | prepare | batch+upload | **total** | **total − read** | GPU avg / p95 |
+| Map | Mode | Draws S1 → B2 | GPU MB S1 → B2 (bench max) | after read, ms: S1 → B2 first / complete | Frame GPU fit S1 → B2 | Frame GPU 1× S1 → B2 | Frame CPU p95 B2 fit / 1× | Bucket prepare p95 / max |
 |---|---|---:|---:|---:|---:|---:|---:|---:|
-| Sprint | pilot | 368 | 35 | 118 | 24 | **555** | 187 | 4.0 / 4.2 |
-| Sprint | envelope | 683 | 101 | 266 | 164 | **1 235** | 552 | 7.1 / 8.5 |
-| Crop-B | pilot | 232 | 32 | 100 | 17 | **386** | 154 | 1.8 / 2.2 |
-| Crop-B | envelope | 484 | 64 | 233 | 58 | **847** | 363 | 4.4 / 5.1 |
-| Crop-A | pilot | 275 | 77 | 123 | 24 | **510** | 235 | 2.1 / 2.4 |
-| Crop-A | envelope | 524 | 88 | 251 | 62 | **936** | 412 | 5.1 / 5.6 |
-| Club-2026 | pilot | 1 554 | 550 | 743 | 204 | **3 079** | 1 525 | 6.7 / 9.8 |
-| Club-2026 | envelope | 3 084 | 881 | 1 493 | 585 | **6 111** | 3 027 | 12.0 / 13.1 |
-| Club-full | pilot | 3 484 | 1 105 | 1 797 | 433 | **6 876** | 3 393 | 10.0 / 11.0 |
-| Club-full | envelope | 6 886 | 2 236 | 3 600 | 1 373 | **14 265** | 7 380 | 20.9 / 21.5 |
+| Sprint | pilot | 325 → **15** | 5.0 → **2.5** (1.9) | 68 → 86 / **92** | 3.7 / 4.0 → 2.3 / 3.0 | 3.8 / 4.1 → 2.5 / 2.6 | 1.6 / 0.8 | 0.9 / 1.4 |
+| Sprint | envelope | 328 → **17** | 19.4 → **8.0** (7.5) | 200 → 141 / **188** | 7.1 / 8.1 → 5.7 / 8.3 | 8.2 / 8.6 → 7.5 / 9.4 | 6.5 / 0.8 | 3.0 / 3.8 |
+| Crop-B | pilot | 15 → **12** | 6.0 → **3.1** (2.2) | 80 → 53 / **69** | 1.4 / 1.7 → 1.0 / 1.2 | 1.4 / 1.5 → 1.1 / 1.1 | 0.6 / 0.5 | 5.4 / 5.4 |
+| Crop-B | envelope | 76 → **21** | 16.5 → **6.2** (5.3) | 393 → 67 / **105** | 3.5 / 3.9 → 2.6 / 4.0 | 3.1 / 3.5 → 3.1 / 3.3 | 0.7 / 0.5 | 12.2 / 12.2 |
+| Crop-A | pilot | 22 → **11** | 8.2 → **4.0** (3.1) | 231 → 46 / **78** | 1.8 / 2.0 → 1.2 / 1.5 | 1.9 / 2.1 → 1.4 / 1.5 | 0.6 / 0.6 | 8.7 / 8.7 |
+| Crop-A | envelope | 47 → **18** | 19.8 → **7.3** (6.4) | 149 → 85 / **161** | 4.7 / 5.3 → 3.3 / 4.2 | 4.7 / 5.0 → 4.2 / 4.3 | 0.7 / 0.6 | 14.1 / 14.1 |
+| Club-2026 | pilot | 100 → **12** | 70.0 → **26.9** (25.6) | 420 → 164 / **370** | 9.6 / 10.8 → 4.6 / 7.2 | 9.5 / 12.1 → 4.0 / 5.4 | 11.4 / 6.3 | 5.2 / 10.5 |
+| Club-2026 | envelope | 207 → **21** | 153.4 → **51.7** (50.8) | 871 → 361 / **760** | 10.3 / 11.2 → 5.8 / 8.0 | 11.0 / 11.9 → 6.2 / 8.6 | 16.1 / 0.5 | 9.7 / 12.8 |
+| Club-full | pilot | 191 → **15** | 156.5 → **59.4** (57.2) | 850 → 330 / **838** | 9.6 / 10.4 → 4.8 / 7.9 | 10.8 / 11.5 → 2.9 / 3.9 | 25.1 / 0.6 | 5.1 / 8.8 |
+| Club-full | envelope | 330 → **24** | 336.0 → **118.6** (112.1) | 2 136 → 757 / **1 858** | 21.9 / 22.7 → 8.9 / 12.7 | 23.7 / 26.4 → 4.8 / 7.3 | 46.5 / 0.7 | 12.0 / 15.7 |
 
-Every run held 60 fps (frame p95 ≈ 17 ms, vsync) on the laptop; render
-CPU per frame is 0.4–1.6 ms in every configuration.
+Phone proxy — 412 × 915 @ 2.625× (Pixel-7 metrics) with CDP
+`Emulation.setCPUThrottlingRate(4)`. CDP throttles the page's main
+thread only, not a Web Worker, so the B2 rows run the worker's handler
+inline (`worker=0`): every stage is throttled, and frames and
+preparation share one thread — an upper bound for a phone, where the
+worker runs on another core. GPU columns remain the laptop iGPU:
 
-Against the budgets (04 §9, 09 §7):
+| Map | Mode | Draws S1 → B2 | GPU MB S1 → B2 (bench max) | after read, ms: S1 → B2 first / complete | Frame GPU fit S1 → B2 | Frame GPU 1× S1 → B2 | Frame CPU p95 B2 fit / 1× | Bucket prepare p95 / max |
+|---|---|---:|---:|---:|---:|---:|---:|---:|
+| Sprint | pilot | 325 → **15** | 5.0 → **2.5** (1.9) | 252 → 223 / **393** | 4.6 / 8.2 → 2.7 / 3.4 | 4.6 / 7.4 → 2.5 / 2.8 | 3.2 / 2.9 | 3.5 / 5.2 |
+| Sprint | envelope | 328 → **17** | 19.4 → **8.0** (7.5) | 788 → 526 / **1 057** | 7.2 / 8.8 → 4.8 / 7.6 | 8.3 / 8.8 → 4.2 / 5.2 | 10.0 / 8.1 | 10.8 / 12.4 |
+| Crop-B | pilot | 15 → **12** | 6.0 → **3.1** (2.2) | 230 → 131 / **268** | 1.7 / 2.0 → 1.4 / 1.9 | 1.7 / 1.9 → 1.4 / 1.7 | 2.5 / 5.0 | 17.5 / 17.5 |
+| Crop-B | envelope | 76 → **21** | 16.5 → **6.2** (5.3) | 480 → 454 / **933** | 4.3 / 4.9 → 3.4 / 4.9 | 4.3 / 4.8 → 3.6 / 4.4 | 2.7 / 1.0 | 60.9 / 60.9 |
+| Crop-A | pilot | 22 → **11** | 8.2 → **4.0** (3.1) | 333 → 187 / **408** | 2.2 / 2.5 → 1.6 / 2.0 | 2.1 / 2.2 → 1.6 / 1.9 | 1.1 / 0.9 | 32.5 / 32.5 |
+| Crop-A | envelope | 47 → **18** | 19.8 → **7.3** (6.4) | 558 → 306 / **770** | 5.1 / 5.5 → 4.3 / 5.2 | 5.1 / 5.4 → 4.0 / 4.9 | 1.0 / 0.9 | 50.2 / 50.2 |
+| Club-2026 | pilot | 100 → **12** | 70.0 → **26.9** (25.6) | 1 540 → 631 / **2 543** | 8.0 / 9.4 → 4.0 / 6.5 | 9.9 / 10.6 → 1.9 / 2.6 | 22.3 / 1.0 | 23.7 / 30.4 |
+| Club-2026 | envelope | 207 → **21** | 153.4 → **51.7** (50.8) | 3 180 → 1 300 / **4 848** | 10.7 / 11.4 → 5.7 / 10.3 | 11.2 / 11.7 → 3.7 / 6.5 | 44.2 / 1.3 | 42.6 / 69.6 |
+| Club-full | pilot | 191 → **15** | 156.5 → **59.4** (57.2) | 5 985 → 1 318 / **5 998** | 12.3 / 15.4 → 5.3 / 7.0 | 11.7 / 12.8 → 2.0 / 2.5 | 63.3 / 1.2 | 20.7 / 40.0 |
+| Club-full | envelope | 330 → **24** | 336.0 → **21.9** (92.4) | 7 236 → 3 080 / **3 094** | 21.5 / 22.3 → 8.8 / 12.6 | 21.2 / 21.8 → 3.1 / 4.8 | 95.8 / 12.8 | 0.0 / 0.0 |
 
-| Budget | Event maps | Club maps | Verdict |
+Per build step (S1 §6's order):
+
+| Step | What it moved | Before → after |
+|---|---|---|
+| 1 Indexed strips | stroke bytes per vertex/segment; resident GPU for a whole club map | contour line: ≥ 3× fewer bytes (unit test); Club-full envelope fully resident 336 → 119 MB (arenas 73 MB, visible set 51 MB) |
+| 2 Visible set per (colour, kind) | frame GPU on the phone viewport at 1× paper | Club-full envelope 21.2 → 3.1 ms, Club-2026 envelope 11.2 → 3.7 ms, Sprint envelope 8.3 → 4.2 ms |
+| 3 Mesh atlas + clip groups | draws per frame | Sprint 325 / 328 → 15 / 17 (161 before clip groups); every map ≤ 24 |
+| 4 Buckets, gate, LRU | the gated first frame on the phone (Club-full envelope, fit = 0.03× paper) | no gate → gate: first frame 3.8 → 3.1 s, complete 7.3 → 3.1 s, resident 118.6 → 21.9 MB; a 0.05 MB budget evicts and keeps drawing (E2E) |
+| 5 Worker | main-thread long tasks during a load (laptop, envelope) | inline → worker: Sprint 235 → 71 ms, Club-2026 603 → 170 ms, Club-full 1 255 → 446 ms; what stays is the dev page's OCAD read (Club-full 383 ms) — none of it is the renderer's |
+| 6 Hairline floor + LOD skips | frame GPU at fit (laptop) | within run-to-run noise (`lod=0` vs on, avg: Sprint envelope 5.96 vs 5.7 ms, Club-full envelope 8.5 vs 8.9 ms); the iGPU is not limited by these fragments here. The floor changes the picture (fade, not alias), not the cost |
+
+Against the budgets (04 §9):
+
+| Budget | Event maps (Sprint, Crop-A/B) | Club maps | Verdict |
 |---|---|---|---|
-| symbolise whole document ≤ 100 / 800 ms | 8–28 ms (35–101 throttled) | 225–654 ms (1 105–2 236 throttled) | event ✓; club ✓ unthrottled, pilot ✓ / envelope ✗ at 4× — the 04 worker hides it |
-| draw calls ≤ 300 | 14–328 | 114–345 | ✓ except Sprint (325 — 115 glyph meshes in one colour run; merging meshes into one atlas buffer fixes it) and Club-full envelope |
-| frame CPU ≤ 4 ms | 0.4–1.0 ms | 0.6–1.6 ms | ✓ with margin, even throttled |
-| frame GPU ≤ 8 ms on a mid-range phone | 1.6–3.9 pilot, 3.9–7.8 envelope on the iGPU | 10–23 on the iGPU | **not shown**: the whole-document draw is vertex-bound (time did not move between 1 M and 2.6 M canvas pixels) and a phone GPU is 2–4× slower than this iGPU, so the envelope would land at 8–30 ms. 04's visible set per bucket is what brings the vertex count down to the view; it is required, not optional |
-| first frame ≤ 500 ms (event) / ≤ 2.5 s (club) | pilot 113–168 desktop, 386–555 throttled; envelope 235–349 / 847–1 235 | 0.8–4.2 s desktop, 3.1–14.3 s throttled | event ✓ once `read` is subtracted (154–552 ms throttled); club ✗ for the whole document — as 04 expected, Club maps need zoom gating and the worker. `prepare` is the dominant remaining stage |
-| resident GPU ≤ 30 / 150 MB | 5–20 MB | 70–338 MB | event ✓; club ✗ for the whole document; see the stroke note below |
-
-Findings carried into the 04 implementation:
-
-1. **Stroke geometry is the memory.** 95 % of the bytes are extruded
-   strokes: a non-indexed triangle list at 16 B per vertex is 48 B per
-   triangle, and Club-full pilot has 2.7 M of them. An indexed strip (two
-   vertices per polyline point) cuts this by ~3×; zoom-gated flattening
-   tolerance (10 µm everywhere today) cuts it again. Both belong to the
-   arena.
-2. **The pilot family covers 11–18 % of the objects**, so pilot-mode
-   numbers understate the load by 3–7×; the envelope overstates it
-   slightly (proxy strokes are 140 µm solid, with no dashes). The truth
-   for a full library is between the two columns, nearer the envelope.
-3. **Batching works and is cheap** (3–280 ms CPU, once), and the per-frame
-   CPU side is a non-issue at 1–2 ms with ≤ 345 draws.
-4. **Not done in the spike**: the depth-buffer fill path (04 §6.8 point
-   3), cell size and large-object threshold tuning (04 §6.11) — both need the
-   bucket layer that does not exist yet, and the frame-GPU result above
-   says the bucket layer is the next thing to build. Not measured on a
-   physical phone; the 4× CPU throttle is Chromium's proxy and the GPU
-   column is the laptop's. To measure on a device: `pnpm --filter
-   @oxygen/web dev -- --host 0.0.0.0`, open
-   `http://<laptop>:5173/dev/map-gl-doc?mode=envelope` on the phone, pick
-   the `.ocd` with the file input, press *bench*.
+| draw calls ≤ 300 | 11–21 | 12–24 | ✓ everywhere (S1: up to 330) |
+| resident GPU ≤ 30 / 150 MB | 2.5–8.0 MB | 27–119 MB laptop fit (fully resident), 22 MB gated on the phone | ✓ (S1: Club-full 157 / 336 MB ✗) |
+| frame CPU ≤ 4 ms, dense viewport at 1× | ≤ 0.8 ms laptop, ≤ 8 ms phone proxy (Sprint envelope, frames sharing the thread with inline preparation; ≤ 5 elsewhere) | ≤ 0.7 ms laptop, ≤ 1.3 ms phone proxy (Club-full envelope 12.8 with inline preparation) | ✓ laptop; ✓ phone with the worker off-thread (the proxy's outliers are the inline preparation). Not met at overview zooms of club maps above the gate: `fit` p95 11–47 ms laptop — visible-set rebuilds of a whole club map (§8) |
+| frame GPU ≤ 8 ms, dense viewport at 1× | 1.1–7.5 avg laptop, 1.4–4.2 phone viewport | 2.9–6.2 laptop, 1.9–3.7 phone viewport (iGPU) | ✓ on the iGPU; the phone GPU is B0 / B-gate |
+| first frame ≤ 500 ms event | complete first view 69–188 ms laptop; phone proxy 268–408 pilot, 770–1 057 envelope | — | ✓ laptop; phone proxy ✓ pilot, ✗ envelope (S1 480–788 there): the inline proxy serialises frames and preparation; the envelope is the deliberately pessimistic upper bound |
+| first frame ≤ 2.5 s club | — | laptop: first 164–757 ms, complete 370–1 858 ms; phone proxy: first 631–3 080 ms, gated Club-full envelope 3.1 s | ✓ laptop; phone proxy ✓ except Club-full envelope (3.1 s; S1 7.2 s) — symbolise 1.28 s (shared stage) and the base layer's earcut of every fill 0.93 s dominate |
+| symbolise whole document in worker ≤ 100 / 800 ms | 14–45 ms laptop | 69–324 ms laptop; 1.28 s Club-full envelope throttled | ✓ laptop; ✗ throttled Club-full envelope (shared stage, B1's area) |
+| prepare one bucket ≤ 5 / 10 ms | Sprint p95 0.9–3.0 ms laptop ✓; Crop-A/B (club density) p95 5–14 ms | p95 5–12 ms, max 16 ms laptop; 21–43 ms phone proxy | ✓ Sprint; club-density cells at the limit on the laptop (p95 ≤ 10 ms for pilot, 12–14 for envelope), ✗ on the throttled proxy (§8) |
 
 #### Dev pages
 
@@ -670,25 +797,50 @@ canvas sized by `render.goldenFrame` (§6.2) with
 `preserveDrawingBuffer`, sets `data-ready` when done and shows the
 timings. Fonts are fetched from `packages/shared/fonts/` via Vite `?url`.
 
-`/dev/map-gl-doc?mode=source|pilot|envelope[&via=document|reader][&url=…][&bench=1]`
-(`pages/dev/MapGlDocPage.tsx`) runs the whole pipeline on an OCAD or
-`.oxvm` file chosen with the file input (or fetched from `url`, e.g. a
-Vite `/@fs/` path), shows the `LoadReport` (stage timings, pass kinds,
-batch statistics, GPU bytes, draws) and runs a 240-frame zoom/pan bench
-with CPU and GPU percentiles. `via=document` (default) goes through the
-map document — read → normalise → encode → decode → render bridge
-(`docs/map-document-format.md`) and reports the document's size,
-sections, hash and codec timings; `via=reader` is the S1 path straight
-from the reader (`ocadObjectsToRender`). A `.oxvm` file is decoded
-natively without the OCAD reader. `mode=source` (default) draws the
-file's own symbol definitions as converted by the importer
+`/dev/map-gl-doc?mode=source|pilot|envelope[&via=document|reader][&worker=0][&gate=0][&budget=<MB>][&lod=0][&kinds=…][&compare=1][&url=…][&bench=1]`
+(`pages/dev/MapGlDocPage.tsx`) runs the whole pipeline on an OCAD,
+Mapper or `.oxvm` file chosen with the file input (or fetched from
+`url`, e.g. a Vite `/@fs/` path) and shows the `LoadReport`: main-thread
+read time, the worker's stage times, `load` (posted → resident layers
+uploaded), `firstFrame` (base layers + large bucket drawn), `complete`
+(the first view's detail drawn), cells, resident bytes per layer, GPU
+bytes (arena capacity, atlas, visible set), bucket preparation
+percentiles, draws, and main-thread long tasks. `via=document` (default)
+goes through the map document — read → normalise → encode on the page,
+decode → render bridge in the worker (`docs/map-document-format.md`) —
+and reports the document's size, sections, hash and codec timings;
+`via=reader` posts the S1 converter's render objects
+(`ocadObjectsToRender`) to the worker instead. A `.oxvm` file skips the
+reader. `mode=source` (default) draws the file's own symbol definitions
 (`docs/map-import.md` §3.3) in the document's colour stack, proxies for
 whatever stayed `null`; `pilot` / `envelope` swap in the S1 pilot family
-by symbol code (`source` is document-only). Pan by drag, zoom by wheel
-or pinch. Both reports and the encoded document bytes are published on
-`window.__mapGlDoc` for Playwright; the E2E spec `e2e/map-gl-doc.spec.ts`
-runs it on the synthetic `e2e/test.ocd` in all three modes and both
-paths and feeds the encoded document back in as a native file.
+by symbol code. "Bench" runs two 240-frame scenarios: `fit` (zoom 1→4→1
+with a pan across a third of the map) and `paper1x` (1× paper at the
+device pixel ratio — 96 CSS px per inch — centred on the densest cell,
+panning one cell either way), each with CPU / GPU percentiles, the most
+draws and resident bytes of any frame, visible-set rebuilds, evictions
+and frames drawn with drawn detail still pending. Switches, for
+measurement only: `worker=0` runs the worker's handler on the main
+thread, `gate=0` prepares detail at every zoom, `budget=` sets the
+residency budget (MB, default 150), `lod=0` turns off the glyph skip and
+hatch tint, `kinds=fill,stroke,…` draws only those kinds; `compare=1`
+also draws the same stream through the per-pass golden path into a
+second canvas at a zoom where every stroke is ≥ 1.5 px and publishes
+the fraction of pixels differing by more than 16 levels (§6.2's channel tolerance). Pan by drag,
+zoom by wheel or pinch. Reports and the encoded document bytes are
+published on `window.__mapGlDoc` for Playwright.
+
+#### Tests
+
+| Test | Covers |
+|---|---|
+| `map-gl/__tests__/strip.test.ts` | strip coverage = S1 extrusion away from edges for every cap × join × open/closed; 2 vertices per point on straight lines and flattened arcs; mitre limit; short-segment fallback; dots; dash slices with caps; ≥ 3× fewer bytes on a contour; even-odd earcut (hole order and winding, outside "hole", nested island) |
+| `map-gl/__tests__/buckets.test.ts` | assignment (centre, straddling, large by either dimension incl. stroke width), passes of an object together in stream order, `passBounds`; visible cells (margin, clamp, nearest first, rotation); zoom gate at 04's reference zooms; range table colour-major, contiguous, complete, layers, origin-relative positions and hatch offset, stroke packing; visible set (one draw per colour across buckets, rebasing, union of parts, hidden objects, instances by size class); clip groups (merge, separation, hidden); mesh atlas packing; LRU eviction |
+| `map-gl/__tests__/arena.test.ts` | free list: first fit, exact accounting, coalescing, growth |
+| `map-gl/__tests__/worker-protocol.test.ts` | `loaded` contents and transfer list; `prepare` queue replacement and slicing; first-view queue and the gate; base + detail + large covers every kind; load errors |
+| `map-gl/__tests__/prepare.test.ts` | per-pass path (fans, S1 extrusion), unchanged |
+| `e2e/map-gl-doc.spec.ts` | the arena path through the real worker on `e2e/test.ocd` (pilot, envelope): buckets, complete frame, ≤ 300 draws on every bench frame of both scenarios; worker = inline; a 0.05 MB budget evicts, reports over budget and still draws; **arena = per-pass golden path within 0.5 % pixels** (envelope and source); document vs reader path, native `.oxvm`, source mode, `.xmap`, decode error |
+| `e2e/map-gl-golden.spec.ts` | unchanged: the per-pass path against the reference raster |
 
 ### 5.3 PDF (api)
 
@@ -840,15 +992,48 @@ library's own fixtures (04 §8 table, one per rule) are added in slice B.
 | `packages/api/src/render/fonts.ts` | bundled-font loader for the server backends |
 | `packages/api/src/render/golden.ts`, `scripts/render-golden.ts` | golden PNG generation (`pnpm --filter @oxygen/api golden:render`) |
 | `packages/shared/src/render/ocad-objects.ts` | `ocad2geojson` objects → `RenderObject`s (pilot / envelope modes, proxy symbols) |
-| `packages/web/src/map-gl/prepare.ts` | WebGL2 backend, CPU stage (fans, extrusion, instancing) |
-| `packages/web/src/map-gl/batch.ts` | WebGL2 backend, batching per colour run (earcut fills, mixed-width strokes, merged instances) |
-| `packages/web/src/map-gl/renderer.ts` | WebGL2 backend, GPU stage (programs, stencil, supersampling, GPU timer) |
+| `packages/web/src/map-gl/prepare.ts` | WebGL2 backend, geometry builders: flattening, indexed strips, even-odd earcut; the per-pass fan path |
+| `packages/web/src/map-gl/mesh-atlas.ts` | glyph and text meshes in one float texture (vertex pulling) |
+| `packages/web/src/map-gl/buckets.ts` | cells, large bucket, per-part preparation and range table, visible set, clip groups, zoom gate, LRU |
+| `packages/web/src/map-gl/arena.ts` | vertex arenas: free list, growth by copy |
+| `packages/web/src/map-gl/worker.ts`, `worker-entry.ts` | the worker's message handler and its binding |
+| `packages/web/src/map-gl/engine.ts` | main-thread controller: worker transport, residency, visible-set rebuilds |
+| `packages/web/src/map-gl/renderer.ts` | WebGL2 backend, GPU stage (arena programs and draw loop; per-pass path, stencil, supersampling; GPU timer) |
 | `packages/web/src/pages/dev/MapGlFixturePage.tsx` | dev-only golden page `/dev/map-gl` |
 | `packages/web/src/pages/dev/MapGlDocPage.tsx` | dev-only whole-document page `/dev/map-gl-doc` (load report, bench) |
 | `e2e/__golden__/map-gl/`, `e2e/map-gl-golden.spec.ts` | committed goldens and the browser comparison |
-| `e2e/map-gl-doc.spec.ts` | whole-document pipeline on `e2e/test.ocd` |
+| `e2e/map-gl-doc.spec.ts` | whole-document pipeline on `e2e/test.ocd`: arena path, worker, eviction, arena = per-pass path |
+| `scripts/measure-gl.mjs` | corpus measurements through `/dev/map-gl-doc` (§5.2 Measurements) |
 
 The shared module is exported as a namespace: `import { render } from
 "@oxygen/shared"` → `render.PassStream`, `render.passStreamFromJson`, …
 (namespaced to keep `Bounds`, `Segment` etc. from colliding with
 `course-maps`).
+
+## 8. Pending in this chapter
+
+- **§5.2 rebuild-free visible set.** A visible-set rebuild is linear in
+  the indices in view: tens of ms for a whole club map above the zoom
+  gate (frame CPU p95 16–47 ms in the laptop `fit` bench on Club-2026 /
+  Club-full, against ≤ 4 ms; the dense 1× paper viewport is ≤ 1.5 ms).
+  `WEBGL_multi_draw` over a resident index arena (04 §6.8 point 2) drops
+  the rebuild where the extension exists; the copy path stays the
+  fallback.
+- **§5.2 bucket preparation on dense cells.** p95 over the 04 §9 budget
+  on club-density cells (measurements); the shared flattening and earcut
+  dominate what is left.
+- **§5.2 consume B1's stream additions**: `TextPass.angles` (instance
+  cos/sin, already in the instance layout) and `StrokePass.taper` (a
+  per-vertex half-width factor); until then rotated text and pointed caps
+  draw as the per-pass path does.
+- **§5.2 object identity across the bridge.** The range table keys on
+  the stream's `objectIdx` — an index into the bridge's filtered object
+  list; hiding a *document* object needs the bridge to expose that
+  mapping (B4).
+- **§5.2 real-phone numbers** (B0 / B-gate): the GPU columns are the
+  laptop iGPU, the phone column a CPU-throttle proxy.
+- **§5.2 zoom-banded flattening tolerance** (S1 §4.1): not built; strips
+  and the gate meet the memory budgets without it.
+- **§5.2 earcut deviation check** (04 §6.1): polygons earcut gets wrong
+  are not detected or redrawn by stencil-then-cover yet.
+- **§5.3 PDF** — slice C.

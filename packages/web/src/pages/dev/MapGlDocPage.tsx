@@ -473,7 +473,7 @@ export function MapGlDocPage() {
           let differing = 0;
           for (let i = 0; i < a.length; i += 4) {
             const d = Math.max(Math.abs(a[i] - bpx[i]), Math.abs(a[i + 1] - bpx[i + 1]), Math.abs(a[i + 2] - bpx[i + 2]));
-            if (d > 64) differing++;
+            if (d > 16) differing++;
           }
           other.dispose();
           const cmp: CompareReport = { pxPerUm: view.pxPerUm, total: w * h, differing, fraction: differing / (w * h) };
