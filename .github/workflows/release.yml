@@ -17,6 +17,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
+      # setup-node@v5 looks for pnpm (package-manager-cache); ci.yml installs it
+      # the same way. The first tag (v0.2.0) failed here before this line.
+      - uses: pnpm/action-setup@v6
       - uses: actions/setup-node@v5
         with:
           node-version: 20
