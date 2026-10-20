@@ -91,7 +91,9 @@ storeImportedDocument(db, { source: { bytes, fileHash, kind, fileName, uploadedB
   unclassified) — `docs/map-symbols.md` §8–§9; since stage 5 (`ocad-5` /
   `omap-2`) `georeference` and `north` (field list in
   `docs/map-import.md` §3.8; `north` is the legacy `NorthDetection` with
-  the WMM fields at the import date, `asOf`).
+  the WMM fields at the import date, `asOf`); since `ocad-7`
+  `readerWarnings` (the OCAD reader's own warning texts, at most 50,
+  only when there are any — `docs/map-import.md` §3.6).
 - `library_version` is `"<library>@<SYMBOL_LIBRARY_VERSION>"`
   (`ISOM2017-2@2026.10.1`), the library the matcher chose for the
   document. Rows imported before the matcher carry `"none"`
@@ -451,7 +453,7 @@ startImportJob(db, {sourceHash, eventId? | clubMapId?, startedBy?, holdMs?})
   │
   ├─ decisions = club_symbol_decisions for the source's kind (docs/map-symbols.md §8.5)   → the row's `decisions`
   │
-  ├─ a map_documents row exists for (sourceHash, importer ∈ {ocad-6, omap-2}, library *@<current SYMBOL_LIBRARY_VERSION>)
+  ├─ a map_documents row exists for (sourceHash, importer ∈ {ocad-7, omap-2}, library *@<current SYMBOL_LIBRARY_VERSION>)
   │   that follows `decisions` (newest first)
   │     → touchDocument, insert state=done with that document_hash, applyJobResult, derive, return   (06 §8 dedup, no worker)
   │
@@ -763,7 +765,7 @@ target, so `applyJobResult` moves the pin to the fresh document:
 
 | Stale because (`staleReason`) | `club_map_versions` | `map_files` (events not soft-deleted) |
 |---|---|---|
-| `importer` — not a current importer (`ocad-3` rows) | re-matched | re-matched |
+| `importer` — not a current importer (`ocad-3` … `ocad-6`, `omap-1` rows) | re-matched | re-matched |
 | `library` — not the current library release (`none` rows, an older release) | re-matched | re-matched |
 | `decisions` — does not follow the current club decisions | re-matched | **kept** |
 
