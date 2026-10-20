@@ -243,7 +243,8 @@ export function passStreamToJson(stream: PassStream): PassStreamJson {
             colour: p.colour,
             glyphId: p.glyphId,
             partIdx: p.partIdx,
-            instances: Array.from(p.instances, (v) => q(v)),
+            // x, y are µm (3 decimals); cos, sin and scale are unitless and keep 6.
+            instances: Array.from(p.instances, (v, k) => q(v, k % 5 < 2 ? 3 : 6)),
             ...(p.clip ? { clip: pathToJson(p.clip) } : {}),
           };
         case "hatch":

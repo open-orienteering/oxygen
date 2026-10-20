@@ -1,0 +1,13 @@
+{
+"objectIdx": [0,1,3,2,4],
+"symbolIdx": [0,0,0,1,2],
+"passes": [
+{"kind":"stroke","colour":26,"path":{"coords":[0,0,10000,0,10000,5000,10000,10000],"flags":[0,4,8,0]},"slices":[{"seg0":0,"t0":0,"seg1":0,"t1":0.18},{"seg0":0,"t0":0.205,"seg1":0,"t1":0.385},{"seg0":0,"t0":0.41,"seg1":0,"t1":0.59},{"seg0":0,"t0":0.615,"seg1":0,"t1":0.795},{"seg0":0,"t0":0.82,"seg1":1,"t1":0.36},{"seg0":1,"t0":0.41,"seg1":1,"t1":0.77},{"seg0":1,"t0":0.82,"seg1":2,"t1":0.18},{"seg0":2,"t0":0.23,"seg1":2,"t1":0.59},{"seg0":2,"t0":0.64,"seg1":2,"t1":1}],"widthUm":250,"cap":"butt","join":"miter"},
+{"kind":"stroke","colour":26,"path":{"coords":[14000,0,18500,0,18500,4500,14000,4500],"closed":true},"slices":[{"seg0":0,"t0":0,"seg1":0,"t1":0.222222},{"seg0":0,"t0":0.277778,"seg1":0,"t1":0.722222},{"seg0":0,"t0":0.777778,"seg1":1,"t1":0.222222},{"seg0":1,"t0":0.277778,"seg1":1,"t1":0.722222},{"seg0":1,"t0":0.777778,"seg1":2,"t1":0.222222},{"seg0":2,"t0":0.277778,"seg1":2,"t1":0.722222},{"seg0":2,"t0":0.777778,"seg1":3,"t1":0.222222},{"seg0":3,"t0":0.277778,"seg1":3,"t1":0.722222},{"seg0":3,"t0":0.777778,"seg1":3,"t1":1}],"widthUm":250,"cap":"butt","join":"miter"},
+{"kind":"stroke","colour":26,"path":{"coords":[5000,-6000,8000,-6000]},"slices":[{"seg0":0,"t0":0,"seg1":0,"t1":1}],"widthUm":250,"cap":"butt","join":"miter"},
+{"kind":"stroke","colour":26,"path":{"coords":[0,-3000,11400,-3000]},"slices":[{"seg0":0,"t0":0,"seg1":0,"t1":0.197368},{"seg0":0,"t0":0.267544,"seg1":0,"t1":0.355263},{"seg0":0,"t0":0.377193,"seg1":0,"t1":0.464912},{"seg0":0,"t0":0.535088,"seg1":0,"t1":0.622807},{"seg0":0,"t0":0.644737,"seg1":0,"t1":0.732456},{"seg0":0,"t0":0.802632,"seg1":0,"t1":1}],"widthUm":180,"cap":"butt","join":"miter"},
+{"kind":"stroke","colour":26,"path":{"coords":[0,-6000,3000,-6000]},"slices":[{"seg0":0,"t0":0,"seg1":0,"t1":0.277778},{"seg0":0,"t0":0.361111,"seg1":0,"t1":0.638889},{"seg0":0,"t0":0.722222,"seg1":0,"t1":1}],"widthUm":250,"cap":"butt","join":"miter"}
+],
+"glyphTable": [],
+"fontTable": [{"fontId":0,"family":"liberation-sans","bold":false,"italic":false},{"fontId":1,"family":"liberation-sans-narrow","bold":false,"italic":false}]
+}

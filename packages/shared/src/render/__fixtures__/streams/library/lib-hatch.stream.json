@@ -1,0 +1,13 @@
+{
+"objectIdx": [2,0,1,3,3],
+"symbolIdx": [1,0,0,2,2],
+"passes": [
+{"kind":"hatch","colour":8,"path":{"coords":[14000,0,22000,0,22000,8000,14000,8000],"closed":true},"widthUm":120,"spacingUm":840,"offsetUm":0,"angleDeg":90},
+{"kind":"hatch","colour":28,"path":{"coords":[0,0,8000,0,8000,8000,0,8000],"closed":true},"widthUm":250,"spacingUm":1200,"offsetUm":0,"angleDeg":45},
+{"kind":"hatch","colour":28,"path":{"coords":[8000,0,12000,0,12000,8000,8000,8000],"closed":true},"widthUm":250,"spacingUm":1200,"offsetUm":0,"angleDeg":45},
+{"kind":"hatch","colour":28,"path":{"coords":[24000,0,32000,0,32000,8000,24000,8000],"closed":true},"widthUm":250,"spacingUm":1200,"offsetUm":0,"angleDeg":45},
+{"kind":"hatch","colour":28,"path":{"coords":[24000,0,32000,0,32000,8000,24000,8000],"closed":true},"widthUm":250,"spacingUm":1200,"offsetUm":0,"angleDeg":135}
+],
+"glyphTable": [],
+"fontTable": [{"fontId":0,"family":"liberation-sans","bold":false,"italic":false},{"fontId":1,"family":"liberation-sans-narrow","bold":false,"italic":false}]
+}

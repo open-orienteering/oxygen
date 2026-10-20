@@ -1,0 +1,24 @@
+{
+"objectIdx": [9,8,7,6,5,5,5,4,3,7,6,1,2,0],
+"symbolIdx": [0,1,2,9,4,4,4,3,6,2,9,7,5,8],
+"passes": [
+{"kind":"fill","colour":1,"path":{"coords":[6000,-1000,18000,-1000,18000,9000,6000,9000],"closed":true}},
+{"kind":"fill","colour":5,"path":{"coords":[0,0,12000,0,12000,9000,0,9000],"closed":true}},
+{"kind":"fill","colour":16,"path":{"coords":[5000,4000,9000,4000,9000,8000,5000,8000],"closed":true}},
+{"kind":"fill","colour":18,"path":{"coords":[13000,4000,17000,4000,17000,8000,13000,8000],"closed":true}},
+{"kind":"stroke","colour":19,"path":{"coords":[1775,0,1775,9000]},"slices":[{"seg0":0,"t0":0,"seg1":0,"t1":0.229167},{"seg0":0,"t0":0.256944,"seg1":0,"t1":0.486111},{"seg0":0,"t0":0.513889,"seg1":0,"t1":0.743056},{"seg0":0,"t0":0.770833,"seg1":0,"t1":1}],"widthUm":120,"cap":"butt","join":"miter"},
+{"kind":"stroke","colour":19,"path":{"coords":[2225,0,2225,9000]},"slices":[{"seg0":0,"t0":0,"seg1":0,"t1":0.229167},{"seg0":0,"t0":0.256944,"seg1":0,"t1":0.486111},{"seg0":0,"t0":0.513889,"seg1":0,"t1":0.743056},{"seg0":0,"t0":0.770833,"seg1":0,"t1":1}],"widthUm":120,"cap":"butt","join":"miter"},
+{"kind":"stroke","colour":20,"path":{"coords":[2000,0,2000,9000]},"widthUm":350,"cap":"butt","join":"miter"},
+{"kind":"stroke","colour":23,"path":{"coords":[0,5000,18000,1000]},"widthUm":210,"cap":"round","join":"round"},
+{"kind":"glyph","colour":26,"glyphId":0,"partIdx":0,"instances":[3000,3000,1,0,1]},
+{"kind":"stroke","colour":28,"path":{"coords":[5000,4000,9000,4000,9000,8000,5000,8000],"closed":true},"widthUm":180,"cap":"butt","join":"bevel"},
+{"kind":"stroke","colour":28,"path":{"coords":[13000,4000,17000,4000,17000,8000,13000,8000],"closed":true},"widthUm":140,"cap":"butt","join":"miter"},
+{"kind":"hatch","colour":32,"path":{"coords":[9000,0,15000,0,15000,6000,9000,6000],"closed":true},"widthUm":400,"spacingUm":1200,"offsetUm":0,"angleDeg":45},
+{"kind":"stroke","colour":32,"path":{"coords":[0,3000,18000,3000]},"slices":[{"seg0":0,"t0":0,"seg1":0,"t1":0.119048},{"seg0":0,"t0":0.146825,"seg1":0,"t1":0.265873},{"seg0":0,"t0":0.293651,"seg1":0,"t1":0.412698},{"seg0":0,"t0":0.440476,"seg1":0,"t1":0.559524},{"seg0":0,"t0":0.587302,"seg1":0,"t1":0.706349},{"seg0":0,"t0":0.734127,"seg1":0,"t1":0.853175},{"seg0":0,"t0":0.880952,"seg1":0,"t1":1}],"widthUm":350,"cap":"butt","join":"miter"},
+{"kind":"text","colour":32,"fontId":0,"sizeUm":5728.671,"glyphs":[26],"positions":[9000,1000]}
+],
+"glyphTable": [
+{"glyphId":0,"partIdx":0,"fills":[],"strokes":[{"path":{"coords":[0,4041,-3500,-2021,3500,-2021],"closed":true},"widthUm":350,"cap":"butt","join":"miter"}]}
+],
+"fontTable": [{"fontId":0,"family":"liberation-sans","bold":false,"italic":false},{"fontId":1,"family":"liberation-sans-narrow","bold":false,"italic":false}]
+}
