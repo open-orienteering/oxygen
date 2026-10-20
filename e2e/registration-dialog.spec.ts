@@ -18,6 +18,8 @@
 
 import { test, expect, type Page, type BrowserContext } from "@playwright/test";
 import { getMockWebSerialScript } from "./helpers/mock-webserial";
+import { waitForTrpc } from "./helpers/trpc";
+import { openKioskTab } from "./helpers/kiosk";
 import { API_BASE } from "./helpers/api-base";
 import { reseed } from "./helpers/reseed";
 
@@ -74,9 +76,7 @@ async function setupAdminAndKiosk(context: BrowserContext) {
   await selectCompetition(adminPage);
   const nameId = getNameId(adminPage);
 
-  const kioskPage = await context.newPage();
-  await kioskPage.goto(`/${nameId}/kiosk`);
-  await expect(kioskPage.getByText("Insert your SI card")).toBeVisible({ timeout: 20000 });
+  const kioskPage = await openKioskTab(context, nameId);
 
   await adminPage.getByTestId("connect-reader").click();
   await expect(adminPage.getByTestId("reader-status")).toBeVisible({ timeout: 10000 });
@@ -86,9 +86,7 @@ async function setupAdminAndKiosk(context: BrowserContext) {
 
 /** Insert an unregistered SI8 card and wait for resolution */
 async function insertUnregisteredCard(page: Page, cardNo: number, punches: Array<{ controlCode: number; time: number }> = [], options?: { ownerData?: Record<string, string> }) {
-  const resolutionPromise = page.waitForResponse(
-    (resp) => resp.url().includes("/trpc/cardReadout.readout") && resp.status() === 200,
-  );
+  const resolutionPromise = waitForTrpc(page, "cardReadout.readout");
   await page.evaluate(
     ({ cardNo, punches, options }) => {
       window.__siMock.insertCard(cardNo, punches, options);
@@ -230,9 +228,7 @@ test.describe("Registration Dialog", () => {
       await setupAdmin(page);
 
       // Insert SIAC card with owner data
-      const resolutionPromise = page.waitForResponse(
-        (resp) => resp.url().includes("/trpc/cardReadout.readout") && resp.status() === 200,
-      );
+      const resolutionPromise = waitForTrpc(page, "cardReadout.readout");
       await page.evaluate(() =>
         window.__siMock.insertCard(8900001, [], {
           ownerData: {
@@ -298,9 +294,7 @@ test.describe("Registration Dialog", () => {
       await setupAdmin(page);
 
       // Use card 501438 which exists in seed data
-      const resolutionPromise = page.waitForResponse(
-        (resp) => resp.url().includes("/trpc/cardReadout.readout") && resp.status() === 200,
-      );
+      const resolutionPromise = waitForTrpc(page, "cardReadout.readout");
       await page.evaluate(() => window.__siMock.insertCard(2000501438, []));
       // This card doesn't exist — we need to use one from seed. Let's use manual entry instead.
       await resolutionPromise;
@@ -450,9 +444,7 @@ test.describe("Registration Dialog", () => {
 
       await page.evaluate(() => window.__siMock.removeCard());
 
-      const resolutionPromise = page.waitForResponse(
-        (resp) => resp.url().includes("/trpc/cardReadout.readout") && resp.status() === 200,
-      );
+      const resolutionPromise = waitForTrpc(page, "cardReadout.readout");
       await page.evaluate(() =>
         window.__siMock.insertCard(8900036, [], {
           ownerData: { firstName: "Nils", lastName: "Berg" },
@@ -524,9 +516,7 @@ test.describe("Registration Dialog", () => {
       createdRunnerIds.push(runner.id);
 
       // Insert clean card for registered runner → pre-start
-      const resolutionPromise = adminPage.waitForResponse(
-        (resp) => resp.url().includes("/trpc/cardReadout.readout") && resp.status() === 200,
-      );
+      const resolutionPromise = waitForTrpc(adminPage, "cardReadout.readout");
       await adminPage.evaluate(
         ({ cardNo }) => { window.__siMock.insertCard(cardNo, []); },
         { cardNo },
@@ -553,12 +543,8 @@ test.describe("Registration Dialog", () => {
       createdRunnerIds.push(runner.id);
 
       // Insert card with course punches → readout
-      const readoutPromise = adminPage.waitForResponse(
-        (resp) => resp.url().includes("/trpc/cardReadout.readout") && resp.status() === 200,
-      );
-      const applyPromise = adminPage.waitForResponse(
-        (resp) => resp.url().includes("/trpc/cardReadout.applyResult") && resp.status() === 200,
-      );
+      const readoutPromise = waitForTrpc(adminPage, "cardReadout.readout");
+      const applyPromise = waitForTrpc(adminPage, "cardReadout.applyResult");
       await adminPage.evaluate(
         ({ cardNo, controls }) => {
           const punches = controls.map((code: number, i: number) => ({

@@ -117,6 +117,14 @@ deliberately avoid the dev servers (3002/5173) and the Docker stack
 - **Port already in use** — a previous run crashed without cleanup; kill
   leftover `tsx`/`vite` processes bound to 41xx/42xx ports.
 - **Machine too loaded** — `E2E_SHARDS=2 pnpm test:e2e`.
+- **Traces for a full sharded run** — `pnpm test:e2e --trace=retain-on-failure`.
+  Write option values with `=`: any argument not starting with `-` counts
+  as a file filter, so `--trace retain-on-failure` silently runs one
+  unsharded process instead.
+- **A test flakes only in full runs** — see
+  `docs/bugfix-e2e-kiosk-and-editor-flakes.md` for the patterns found so
+  far (batched tRPC URLs, cold second tabs, post-write refetches on a
+  loaded database) and how they were diagnosed.
 - **Timeouts only in CI** — each shard is a whole stack (API + Vite +
   eventor stub + Chromium) and wants about two cores. Four shards on a
   4 vCPU runner ran every shard at half speed (6-10 min instead of 3-5)

@@ -14,6 +14,8 @@
 
 import { test, expect, type Page, type BrowserContext } from "@playwright/test";
 import { getMockWebSerialScript } from "./helpers/mock-webserial";
+import { waitForTrpc } from "./helpers/trpc";
+import { KIOSK_TAB_READY_TIMEOUT, openKioskTab } from "./helpers/kiosk";
 import { API_BASE } from "./helpers/api-base";
 
 declare global {
@@ -93,11 +95,7 @@ async function setupAdminAndKiosk(context: BrowserContext) {
   const nameId = getNameId(adminPage);
 
   // Open kiosk page in same context (shares BroadcastChannel)
-  const kioskPage = await context.newPage();
-  await kioskPage.goto(`/${nameId}/kiosk`);
-  await expect(kioskPage.getByText("Insert your SI card")).toBeVisible({
-    timeout: 10000,
-  });
+  const kioskPage = await openKioskTab(context, nameId);
 
   // Connect the mock SI reader on admin page
   await adminPage.getByTestId("connect-reader").click();
@@ -143,12 +141,8 @@ test.describe("Kiosk Readout Station Flow", () => {
     const beforeStatus = beforeBody?.result?.data?.status ?? beforeBody?.result?.data?.json?.status;
     expect(beforeStatus).toBe(0);
 
-    const readoutPromise = adminPage.waitForResponse(
-      (resp) => resp.url().includes("/trpc/cardReadout.readout") && resp.status() === 200,
-    );
-    const applyPromise = adminPage.waitForResponse(
-      (resp) => resp.url().includes("/trpc/cardReadout.applyResult") && resp.status() === 200,
-    );
+    const readoutPromise = waitForTrpc(adminPage, "cardReadout.readout");
+    const applyPromise = waitForTrpc(adminPage, "cardReadout.applyResult");
 
     await adminPage.evaluate(
       ({ cardNo, controls }) => {
@@ -167,8 +161,8 @@ test.describe("Kiosk Readout Station Flow", () => {
     await expect(kioskPage.getByText("Completed")).toBeVisible();
     await expect(kioskPage.getByText("Öppen 2")).toBeVisible();
 
-    const applyResponse = await applyPromise;
-    expect(applyResponse.status()).toBe(200);
+    // Resolves only once applyResult has answered successfully.
+    await applyPromise;
 
     const afterResp = await request.get(`${API_BASE}/trpc/runner.getById?input=${encodeURIComponent(JSON.stringify({ id: runner.id }))}`, { headers: COMP_HEADERS });
     const afterBody = await afterResp.json();
@@ -185,12 +179,8 @@ test.describe("Kiosk Readout Station Flow", () => {
     const runner = await createRunner(request, "Test MpRunner", cardNo, classId, startTimeDs);
     createdRunnerIds.push(runner.id);
 
-    const readoutPromise = adminPage.waitForResponse(
-      (resp) => resp.url().includes("/trpc/cardReadout.readout") && resp.status() === 200,
-    );
-    const applyPromise = adminPage.waitForResponse(
-      (resp) => resp.url().includes("/trpc/cardReadout.applyResult") && resp.status() === 200,
-    );
+    const readoutPromise = waitForTrpc(adminPage, "cardReadout.readout");
+    const applyPromise = waitForTrpc(adminPage, "cardReadout.applyResult");
 
     // Insert card with only first 2 of 5 course controls → MP
     await adminPage.evaluate(
@@ -211,9 +201,8 @@ test.describe("Kiosk Readout Station Flow", () => {
     await expect(kioskPage.getByText("Test MpRunner")).toBeVisible({ timeout: 10000 });
     await expect(kioskPage.getByText("Missing Punch")).toBeVisible();
 
-    // Verify applyResult was called
-    const applyResponse = await applyPromise;
-    expect(applyResponse.status()).toBe(200);
+    // Resolves only once applyResult has answered successfully.
+    await applyPromise;
   });
 
   test("re-reading same card after registration shows pre-start (not register)", async ({ context, request }) => {
@@ -222,9 +211,7 @@ test.describe("Kiosk Readout Station Flow", () => {
     const cardNo = 2800004;
 
     // First read — card is unregistered, no punches (clean card)
-    const firstReadoutPromise = adminPage.waitForResponse(
-      (resp) => resp.url().includes("/trpc/cardReadout.readout") && resp.status() === 200,
-    );
+    const firstReadoutPromise = waitForTrpc(adminPage, "cardReadout.readout");
     await adminPage.evaluate(
       ({ cardNo }) => { window.__siMock.insertCard(cardNo, []); },
       { cardNo },
@@ -244,9 +231,7 @@ test.describe("Kiosk Readout Station Flow", () => {
     createdRunnerIds.push(runner.id);
 
     // Re-read the SAME card — should now resolve as pre-start
-    const secondReadoutPromise = adminPage.waitForResponse(
-      (resp) => resp.url().includes("/trpc/cardReadout.readout") && resp.status() === 200,
-    );
+    const secondReadoutPromise = waitForTrpc(adminPage, "cardReadout.readout");
     await adminPage.evaluate(
       ({ cardNo }) => { window.__siMock.insertCard(cardNo, []); },
       { cardNo },
@@ -264,9 +249,7 @@ test.describe("Kiosk Readout Station Flow", () => {
     const cardNo = 2800005;
 
     // First read — card has punches but runner not registered
-    const firstReadoutPromise = adminPage.waitForResponse(
-      (resp) => resp.url().includes("/trpc/cardReadout.readout") && resp.status() === 200,
-    );
+    const firstReadoutPromise = waitForTrpc(adminPage, "cardReadout.readout");
     await adminPage.evaluate(
       ({ cardNo, controls }) => {
         const punches = controls.map((code: number, i: number) => ({
@@ -279,9 +262,12 @@ test.describe("Kiosk Readout Station Flow", () => {
     );
     await firstReadoutPromise;
 
-    // Remove card and wait for reader to return to idle
+    // The readout response arriving is not the end of the first read: the
+    // admin still resolves the action and broadcasts it. Wait for the
+    // kiosk to show that outcome so the second read cannot overlap it.
+    await expect(kioskPage.getByText("Registration in progress")).toBeVisible({ timeout: 10000 });
+
     await adminPage.evaluate(() => { window.__siMock.removeCard(); });
-    await expect(adminPage.getByTestId("reader-status")).toBeVisible();
 
     // Register runner and assign start time
     const classId = await getClassId(request, "Öppen 2");
@@ -289,12 +275,8 @@ test.describe("Kiosk Readout Station Flow", () => {
     createdRunnerIds.push(runner.id);
 
     // Re-read same card with same punches — should now be readout (not register)
-    const secondReadoutPromise = adminPage.waitForResponse(
-      (resp) => resp.url().includes("/trpc/cardReadout.readout") && resp.status() === 200,
-    );
-    const applyPromise = adminPage.waitForResponse(
-      (resp) => resp.url().includes("/trpc/cardReadout.applyResult") && resp.status() === 200,
-    );
+    const secondReadoutPromise = waitForTrpc(adminPage, "cardReadout.readout");
+    const applyPromise = waitForTrpc(adminPage, "cardReadout.applyResult");
     await adminPage.evaluate(
       ({ cardNo, controls }) => {
         const punches = controls.map((code: number, i: number) => ({
@@ -311,9 +293,8 @@ test.describe("Kiosk Readout Station Flow", () => {
     await expect(kioskPage.getByText("Test RereadPunchRunner")).toBeVisible({ timeout: 10000 });
     await expect(kioskPage.getByText("Completed")).toBeVisible();
 
-    // applyResult should have been called
-    const applyResponse = await applyPromise;
-    expect(applyResponse.status()).toBe(200);
+    // Resolves only once applyResult has answered successfully.
+    await applyPromise;
   });
 });
 
@@ -377,7 +358,9 @@ test.describe("Standalone mode: re-read after idle", () => {
     );
 
     await kioskPage.goto(`/${nameId}/kiosk`);
-    await expect(kioskPage.getByText("Insert your SI card")).toBeVisible({ timeout: 10000 });
+    await expect(kioskPage.getByText("Insert your SI card")).toBeVisible({
+      timeout: KIOSK_TAB_READY_TIMEOUT,
+    });
 
     // Connect the mock SI reader on the kiosk page itself
     await kioskPage.getByTestId("connect-reader").click();
@@ -419,9 +402,7 @@ test.describe("Standalone mode: re-read after idle", () => {
     }));
 
     // ── First read ─────────────────────────────────────────
-    const firstReadoutPromise = kioskPage.waitForResponse(
-      (resp) => resp.url().includes("/trpc/cardReadout.readout") && resp.status() === 200,
-    );
+    const firstReadoutPromise = waitForTrpc(kioskPage, "cardReadout.readout");
     await kioskPage.evaluate(
       ({ cardNo, punches }) => { window.__siMock.insertCard(cardNo, punches); },
       { cardNo, punches },
@@ -436,9 +417,7 @@ test.describe("Standalone mode: re-read after idle", () => {
     await expect(kioskPage.getByText("Insert your SI card")).toBeVisible({ timeout: 10000 });
 
     // ── Second read of the SAME card ───────────────────────
-    const secondReadoutPromise = kioskPage.waitForResponse(
-      (resp) => resp.url().includes("/trpc/cardReadout.readout") && resp.status() === 200,
-    );
+    const secondReadoutPromise = waitForTrpc(kioskPage, "cardReadout.readout");
     await kioskPage.evaluate(
       ({ cardNo, punches }) => { window.__siMock.insertCard(cardNo, punches); },
       { cardNo, punches },
@@ -470,9 +449,7 @@ test.describe("Standalone mode: re-read after idle", () => {
     // but we CAN verify the final screen is correct (readout, not idle or stuck).
     // This test primarily guards against regressions where the unresolved entry
     // permanently blocks the resolved update.
-    const readoutPromise = kioskPage.waitForResponse(
-      (resp) => resp.url().includes("/trpc/cardReadout.readout") && resp.status() === 200,
-    );
+    const readoutPromise = waitForTrpc(kioskPage, "cardReadout.readout");
     await kioskPage.evaluate(
       ({ cardNo, controls }) => {
         const punches = controls.map((code: number, i: number) => ({
