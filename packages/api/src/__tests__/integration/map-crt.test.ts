@@ -87,8 +87,9 @@ describe("mapImport.exportCrt", () => {
     expect(ruleLines(out.crt)).toEqual([]);
 
     const full = await caller(setter).mapImport.exportCrt({ documentHash: docA, includeMatches: true });
-    expect(full).toMatchObject({ rules: 3, auto: 3 });
-    expect(ruleLines(full.crt)).toEqual(["706       706.0", "601.b     601.0", "521       521.0"]);
+    expect(full).toMatchObject({ rules: 4, auto: 4 });
+    // 603.0 is the fixture's white-framed spot height (A12), auto-matched to 603's text variant.
+    expect(ruleLines(full.crt)).toEqual(["706       706.0", "601.b     601.0", "521       521.0", "603.b     603.0"]);
   });
 
   it("carries a decision with its fingerprint, from any document of the same symbols", async () => {
@@ -153,7 +154,7 @@ describe("mapImport.importCrt", () => {
     const full = (await caller(setter).mapImport.exportCrt({ documentHash: docA, includeMatches: true })).crt;
     const round = await caller(setter).mapImport.importCrt({ documentHash: docA, crt: full.replace("# keep 702.0\n", "") });
     expect(round).toMatchObject({ decisions: [], applied: 0, job: null, skipped: [] });
-    expect(round.unchanged).toHaveLength(3);
+    expect(round.unchanged).toHaveLength(4);
     expect(await ctx.db.clubSymbolDecision.findMany({ where: { fingerprint: { in: fps.filter((f): f is string => f !== null) } }, orderBy: { fingerprint: "asc" } })).toEqual(before);
   }, 30_000);
 
