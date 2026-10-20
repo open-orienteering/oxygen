@@ -635,8 +635,11 @@ export class BucketLru {
   private tick = 0;
   /** Bytes of the always-resident layers (base, large bucket, atlas). */
   fixedBytes = 0;
+  budgetBytes: number;
 
-  constructor(public budgetBytes: number) {}
+  constructor(budgetBytes: number) {
+    this.budgetBytes = budgetBytes;
+  }
 
   get evictableBytes(): number {
     let n = 0;
