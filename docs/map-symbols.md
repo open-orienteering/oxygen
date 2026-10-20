@@ -157,13 +157,36 @@ per-symbol decisions.
   lower-role entry never draws in `purple-upper` and vice versa (tested).
   Minima that drive the course editor (707 ≥ 4.5 mm, 709 ≥ 3 mm wide and
   9 mm², 714 ≥ 0.5 mm wide and 0.25 mm²) are on the entries.
-- **Names** are the spec's English headings; Swedish names are deferred
-  (the schema has `name.sv`, the first edition leaves it out rather than
-  shipping a partial translation).
-- **Aliases** (older numbering, ISOM 2000 / ISSprOM 2007 codes) are in
-  the schema but not yet populated; the matcher (§8) finds renumbered
-  symbols through the family and description stages instead, and the
-  first edition ships aliases empty rather than partially.
+- **Names** are the spec's English headings. `name.sv` is the heading of
+  the Swedish Orienteering Federation's (SOFT) translation, **verbatim**
+  (user decision 2026-10-20): *ISOM 2017-2 Internationella Kartnormen,
+  svensk översättning, revision 6* (1 March 2024) and *ISSprOM 2019-2
+  Internationella Sprintnormen, svensk översättning, revision 5* (1 October
+  2022; no Swedish Rev 6 exists). Both are © Svenska Orienteringsförbundet,
+  CC BY-ND 4.0; the licence allows verbatim reproduction in part with
+  attribution, so headings are never reworded, and the attribution is the
+  `SV_SOURCE` constant in each library's `common.ts` plus this paragraph.
+  An ISSprOM heading takes the rev 5 Swedish name only where rev 5 has the
+  same symbol under the same code; a heading the translation lacks has no
+  `sv` and is listed in §3.2 — absence is the mark, nothing is invented.
+  A **variant** entry's `sv` is the heading's Swedish name followed by
+  `", "` and a qualifier translated by Oxygen from the variant's English
+  name (`302.b` "Grund vattenyta, streckad kontur"): everything after the
+  heading's own text is Oxygen's wording, never SOFT's.
+- **Aliases** are the symbol's code in an older spec, `{ library:
+  "ISOM2000", code }`, on heading entries only (old specs numbered
+  headings). The pairs are transcribed as facts from OpenOrienteering
+  Mapper's `ISOM2000-ISOM_2017-2.crt` (© Kai Pastor, GPL-3; user decision
+  2026-10-20) and each is checked against the two specs' heading names;
+  pairs whose old symbol is a different thing, and many-to-one merges
+  where the 2017 heading is not the old symbol's plain successor, are left
+  out. One old code may alias several entries; an entry never repeats an
+  alias. `ISSOM2007` (the 2007 sprint spec, which was ISSOM, not ISSprOM)
+  is an accepted alias library but has no source table yet, so the
+  `ISSprOM2019-2` entries carry none. Aliases are data for the review UI
+  and future renumbering (ISOM 2030); the matcher does not read them
+  (§8.2) because no map in the corpus uses ISOM 2000 numbering to tune or
+  check that against.
 
 ### 3.1 Counts against the 03 estimate
 
@@ -333,7 +356,7 @@ summary so tuning is visible): auto 0.85, suggest 0.6, strict 0.95.
 | 3 | `family+geometry` | same base number (`505.3` → every `505*`), else the hundred group | `auto` ≥ 0.85, `suggested` ≥ 0.6 |
 | — | `variant` | family exists, source IR type differs from every family entry, name carries a template-variant hint (`VARIANT_NAME`: minimi, enskild, kontur, outline, single dot, …) | `unmatched`, drawn from source, counted separately — a minimum-size building point or a cliff outline line is not a mistake and not a review item |
 | 4 | `geometry` | every entry of the IR type | `suggested` only, at ≥ 0.95 (never auto: a 0.14 mm brown line is a contour or a form line only by its code) |
-| 5 | `description` | same type, not ruled out by a hard fail, ≥ 2 shared name tokens (Swedish → English lexicon `SV_EN`), or 1 token when the code matches or the geometry is partly compatible | `suggested` at 0.3 + 0.1 × tokens, capped 0.5 |
+| 5 | `description` | same type, not ruled out by a hard fail, ≥ 2 shared name tokens, or 1 token when the code matches or the geometry is partly compatible. Source tokens go through the Swedish → English lexicon `SV_EN`; an entry's tokens are the union of its `name.en` and `name.sv` tokens (the latter through the same lexicon), so a Swedish source word the lexicon lacks still meets the SOFT heading | `suggested` at 0.3 + 0.1 × tokens, capped 0.5 |
 | 6 | `none` | — | `unmatched`, warns `SYMBOL_UNMATCHED` |
 
 Every match carries `reasons[]` (the feature notes of the deciding
