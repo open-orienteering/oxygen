@@ -4,7 +4,9 @@
  */
 
 import type { RenderSymbol } from "../render/symbol.js";
+import { ALIAS_SOURCE as ISOM_ALIAS_SOURCE, SV_SOURCE as ISOM_SV_SOURCE } from "./ISOM2017-2/common.js";
 import { isom2017_2 } from "./ISOM2017-2/index.js";
+import { SV_SOURCE as ISSPROM_SV_SOURCE } from "./ISSprOM2019-2/common.js";
 import { issprom2019_2 } from "./ISSprOM2019-2/index.js";
 import { type PaletteEdition, paletteIndex, paletteStack } from "./palette.js";
 import { type LibraryEntry, type SymbolLibrary, parseSymbolLibrary, resolveEntry } from "./schema.js";
@@ -22,6 +24,12 @@ export const SYMBOL_LIBRARY_VERSION = "2026.10.1";
 /** Raw authored inputs, before validation (tests and tooling). */
 export const symbolLibraryInputs = { "ISOM2017-2": isom2017_2, "ISSprOM2019-2": issprom2019_2 } as const;
 export type SymbolLibraryId = keyof typeof symbolLibraryInputs;
+
+/** Where each library's Swedish names and aliases come from (docs/map-symbols.md §3); `null` = none yet. */
+export const symbolLibraryNameSources: Record<SymbolLibraryId, { sv: string; aliases: string | null }> = {
+  "ISOM2017-2": { sv: ISOM_SV_SOURCE, aliases: ISOM_ALIAS_SOURCE },
+  "ISSprOM2019-2": { sv: ISSPROM_SV_SOURCE, aliases: null },
+};
 
 export function isSymbolLibraryId(id: string): id is SymbolLibraryId {
   return Object.prototype.hasOwnProperty.call(symbolLibraryInputs, id);

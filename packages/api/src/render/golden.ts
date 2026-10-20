@@ -87,6 +87,8 @@ export function librarySheetMarkdown(id: symbolLibrary.SymbolLibraryId): string 
     "",
     `${library.entries.length} entries, ${library.revision}, library version ${symbolLibrary.SYMBOL_LIBRARY_VERSION}. Swatches at ${render.SWATCH.pxPerMm} px/mm; points drawn ×${render.SWATCH.pointScale}.`,
     "",
+    `Svenska: ${symbolLibrary.symbolLibraryNameSources[id].sv}. Aliases: ${symbolLibrary.symbolLibraryNameSources[id].aliases ?? "none yet"}.`,
+    "",
     "| Swatch | Entry | Type | English | Svenska | Aliases |",
     "|---|---|---|---|---|---|",
   ];
