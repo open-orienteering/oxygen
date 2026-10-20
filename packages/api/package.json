@@ -46,7 +46,7 @@
     "google-auth-library": "^11.3.1",
     "jsdom": "~30.0.1",
     "mysql2": "^3.24.6",
-    "ocad2geojson": "github:open-orienteering/ocad2geojson#v2.2.2-oxygen.0",
+    "ocad2geojson": "github:open-orienteering/ocad2geojson#v2.2.2-oxygen.1",
     "pdf-lib": "^1.17.1",
     "pg": "^8.23.1",
     "pino-pretty": "^13.2.0",
