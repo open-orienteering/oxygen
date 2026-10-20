@@ -599,6 +599,122 @@ precedence and mismatch, later-wins, unchanged, the header, `# keep`,
 `resolveCrt(parseCrt(formatCrt(…)))`); the API side in
 `docs/map-storage.md` §10.
 
+### 8.7 Review UI (06 §5.1)
+
+The screen a club or a course setter reviews a stored document on, built
+on the review round of `docs/map-import.md` §2.2 (`review`, `decide`,
+`status`, `finalise`, `exportCrt` / `importCrt`) and the A5 swatch routes
+(`docs/map-storage.md` §4.5). Code: `packages/web/src/pages/MapReviewPage.tsx`,
+pure helpers in `packages/web/src/lib/map-review.ts`, strings in the
+`mapReview` namespace (en + sv).
+
+**Routes.** One component, two mounts, keyed by the document hash so a
+reviewed document that is not pinned anywhere yet survives a reload (it is
+readable through the own-job clause only, §4.2 of map-storage):
+
+| Route | Target | Edit controls |
+|---|---|---|
+| `/settings/map-review/:documentHash?clubMap=<series uuid>` | the club map series | signed in (or auth off), as the club library's other mutations |
+| `/:nameId/map-review/:documentHash` (inside the event shell, `courses.view`) | the event's map | `courses.edit` |
+
+`settings` is a reserved slug, so the club route sends no event header;
+the event route sends `x-competition-id` and appends `?event=<nameId>` to
+every *document* swatch URL (`map-import.md` §2.2); library swatches are
+used as given. Without edit rights the page is read-only (rows,
+candidates, reasons, CRT download).
+
+**Entry points.** Review is *expected* for club maps and *optional* for
+event maps (06 §5.1):
+
+- Settings → Maps card: **Review symbols** whenever the series has a
+  version, plus an amber **N symbols to review** chip while the version's
+  document has `suggested` matches. The count is `clubMap.list[].review`
+  `{suggested, reviewed}`, read from the document's import report
+  (`report.matching.symbols`) — the one field B6 adds to the API.
+- The course editor's map info row (`MapPanel` with `showMapInfo`):
+  **Review symbols** when `course.mapMetadata().documentHash` is set.
+  Never on the kiosk or the dashboard map, which mount `MapPanel` without
+  that row.
+
+**Header.** Map name, library `id · release`, and where the document
+stands: *in use* (it is the club version's / the event's pinned
+document), *not used yet* with **Use this version** (`finalise`), and
+*not up to date* when `review.current` is false (the current library,
+importer or club decisions would import the source differently). Summary
+chips count rows by outcome.
+
+**Rows.** One per `ReviewRow`, ordered by `objects` (most used first,
+then code, numeric-aware); rows flagged `unused` sit in one collapsed
+group below, opened with a count toggle. A filter shows only rows still
+`suggested` (plus rows with a pending decision). Each row: the file's own
+swatch (`previewUrl`, reference raster), code, name, kind, object count,
+colour class, flags (`hidden`, `club-symbol`, `text`), the outcome, and
+what the document draws now (library entry name, from the shared library
+in the bundle, Swedish when the entry has it). Outcomes as the reviewer
+reads `match`:
+
+| Outcome | `match` |
+|---|---|
+| To review | `state: "suggested"` |
+| Accepted | `method: "explicit"`, `canonicalId` set (a club decision) |
+| Kept as drawn | `method: "explicit"`, `canonicalId: null` (a club decision) |
+| Automatic | `state: "auto"` |
+| Map variant | `method: "variant"` (kept as source by design) |
+| Not matched | any other `unmatched` |
+| Not matched yet | `match: null` (pre-matcher document) |
+
+Beside the swatch, the ≤ 3 `candidates`, best first, each with its
+library swatch, entry name, confidence, its `reasons` under **Why?**, and
+a mark on the one the document draws now.
+
+**Decisions.** Per row: **Use this** on a candidate (`accept`), **Other
+library symbol…** (`accept` of any entry of the document's library — the
+API takes any entry; a row with no close candidate needs it), **Keep as
+drawn** (`unmatch`) and, on a row with a club decision, **Back to
+suggestion** (`reset`). Decisions are collected locally, one per row (a
+later choice replaces an earlier one; a choice that restates the row's
+existing decision clears it), shown on the row with **Undo**, and sent
+together from a bottom bar (**Apply N decisions** / **Discard**) as one
+`decide`, in `symbolIdx` order. The bar says that decisions are
+club-wide (§8.5 "Scope"). Accepting the candidate a `suggested` row
+already draws is a decision: it makes the row reviewed.
+
+**Job.** `decide` returns the job as `status` would. Done within the hold
+→ the page moves to `job.documentHash` (same route, same query);
+`queued` / `running` → a progress strip (stage and percent of the
+`map-storage.md` §6.1 ladder) while `mapImport.status` is polled every
+second; `failed` → the error. Edit controls are disabled while a job
+runs. Nothing is pinned until **Use this version**.
+
+**Finalise.** `finalise` with `{kind: "club", clubMapId}` or
+`{kind: "event"}`; afterwards the page re-reads `clubMap.list` /
+`course.mapMetadata`, so the card thumbnail and *in use* follow the new
+`document_hash` (`map-storage.md` §6.4: an in-place update of the club
+version; events that copied the map keep their own pin). Finalising the
+document already in use is not offered.
+
+**CRT.** **Download CRT** fetches `exportCrt` (optionally
+`includeMatches`) and saves `crt` under the API's `fileName`
+(`<stem>-<library>.crt`). **Upload CRT…** (edit rights; ≤ 1 MiB, checked
+in the browser before sending) always runs `importCrt {dryRun: true}`
+first and shows what would be recorded (row code → entry, or kept as
+drawn), how many lines restate the current automatic match, every skipped
+line with its `CRT_*` code and detail, and the warnings; **Record
+decisions** sends the same text without `dryRun` and follows the job as
+`decide`'s. A file with nothing applicable offers no confirm.
+
+Tests: `packages/web/src/lib/__tests__/map-review.test.ts` (outcomes,
+row order and the unused group, the pending batch — later wins,
+restatements dropped, reset only on decided rows, symbol order — swatch
+URL scoping, job progress); `packages/api/src/__tests__/club-map-library.test.ts`
+and the `club-maps` integration suite (the card's review counts);
+`e2e/map-review.spec.ts` (club map: card count, route, usage order,
+swatches load, keep 850.1 as drawn, apply, finalise moves the card
+thumbnail, CRT download carries `# keep 850.1`, CRT upload previews and
+records `703 702.0`, resetting both rows returns the matcher's own
+document hash; event map: entry from the course editor, swatches scoped
+with `?event=`, nothing to finalise on the matcher's output).
+
 ## 9. Colour stack alignment (03 §6.3)
 
 Import stage 7. Code: `packages/shared/src/import/{colour-class,colour-align}.ts`.
@@ -652,8 +768,6 @@ resolves canonical entries through `paletteIndexOfStack(header.colours)`.
 
 ## 10. Pending in this chapter
 
-- Review UI for `suggested` matches and the CRT download / upload
-  (slice B); the API is §8.5, §8.6 and `docs/map-import.md` §2.2.
 - Mapper object queries as CRT sources (§8.6 `CRT_QUERY_UNSUPPORTED`)
   and a variant table to Mapper's sub-numbers, if a club needs either.
 - Library variants for the OCAD template conventions (§8.4) if the auto

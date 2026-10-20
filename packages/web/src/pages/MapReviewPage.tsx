@@ -527,7 +527,7 @@ function ReviewRowCard({
                     key={c.canonicalId}
                     data-candidate={c.canonicalId}
                     data-current={current ? "true" : "false"}
-                    className={`w-40 rounded-lg border p-2 text-xs ${chosen ? "border-blue-500 bg-blue-50" : current ? "border-emerald-400" : "border-slate-200"}`}
+                    className={`w-48 rounded-lg border p-2 text-xs ${chosen ? "border-blue-500 bg-blue-50" : current ? "border-emerald-400" : "border-slate-200"}`}
                   >
                     <div className="flex gap-2">
                       <Swatch src={c.previewUrl} testId="review-candidate-swatch" alt={c.canonicalId} />
