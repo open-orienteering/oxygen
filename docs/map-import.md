@@ -90,7 +90,7 @@ import { importMapToDocument, importOcadToDocument, importOmapToDocument } from 
 const r = await importMapToDocument(buffer, "map.omap", kind /* "ocad" | "omap" */, { renderFor, onStage, match });
 // importOcadToDocument / importOmapToDocument are the fixed-kind wrappers.
 // r.kind, r.bytes, r.documentHash, r.fileHash, r.counts, r.warnings,
-// r.matching, r.colourStack, r.analysis (stage 5, §3.8), r.libraryVersion ("ISOM2017-2@2026.10.1"),
+// r.matching, r.colourStack, r.analysis (stage 5, §3.8), r.libraryVersion ("ISOM2017-2@2026.10.2"),
 // r.timings { read, normalise, match, encode } (ms)
 // onStage?: (stage: "parse" | "normalise" | "match" | "encode") => void — called as
 // each stage begins; the import job (docs/map-storage.md §6) writes it to the row.
@@ -693,7 +693,7 @@ non-contiguous priorities). The rest are shared with §3.6–3.7.
 
 ## 5. Header provenance
 
-`format.importer` is `"ocad-7"` for OCAD sources (`OCAD_IMPORTER_VERSION`;
+`format.importer` is `"ocad-8"` for OCAD sources (`OCAD_IMPORTER_VERSION`;
 `ocad-1` had `render: null` for every source symbol, `ocad-2` carried the
 upload name in the header, `ocad-3` had no matcher, `ocad-4` stored
 ScalePar `d` as `declinationDeg`, ignored `e` and had no
@@ -702,8 +702,10 @@ line-text symbols as `READER_WARNING` and warned `SYMBOL_FEATURE_DROPPED`
 for double-line mode 65535 although §3.3 calls it off, `ocad-6` read
 neither text framing nor rectangle / line-text symbols — no halo from
 OCAD line framing, rectangle objects as `MISSING_SYMBOL` stubs — and kept
-no reader warning texts) and `"omap-2"` for Mapper sources
-(`OMAP_IMPORTER_VERSION`; `omap-1` stored `paperOrigin` unrounded).
+no reader warning texts, `ocad-7` matched descriptions on the entries'
+English names only — `docs/map-symbols.md` §8.2 row 5, B7) and `"omap-3"`
+for Mapper sources (`OMAP_IMPORTER_VERSION`; `omap-1` stored `paperOrigin`
+unrounded, `omap-2` is `ocad-7`'s matcher).
 Documents of either earlier version have no `georeference` / `north` in
 their report; the dedup only reuses current-version documents, so the
 next import of their source produces both. Bump the relevant one whenever
@@ -749,8 +751,8 @@ document hash is identical on two machines.
 | Unit (shared) | `packages/shared/src/map-document/__tests__/codec.test.ts`, `projection-bridge.test.ts` | encode/decode round trip, Hilbert order, validation errors, truncation, JSON projection, render bridge |
 | Unit (shared) | `packages/shared/src/import/__tests__/{colour-class,fingerprint,matcher,colour-align,match-document}.test.ts` | stages 6–7: CMYK / name classification, fingerprints and tolerances, every matcher stage and the traps (reused numbers, template variants, old numbering), factor detection (lines / codes / scale / override), alignment steps and conflicts, whole-document run with codec round trip and canonical drawing through the bridge |
 | Unit (api) | `packages/api/src/__tests__/import-ocad.test.ts` | reader → document on `e2e/test.ocd`, determinism, bboxes, all fixture symbols converted (the framed 603 text with its white halo, the 850.1 rectangle as an outline), symbolise without proxies, fixture matches (4 auto incl. 603.b, old-numbered ring and the rectangle suggested, factor by `codes`), `readerWarnings` in the report only when non-empty, stack with inserted lower purple, hook renders against the source table; stage 5: grid 13002 → EPSG:3006 with no `declinationDeg`, the same 12-line meridian cluster as the legacy probe, report `georeference` / `north` with WMM fields at `asOf` agreeing with `detectMapNorth`, raster-path and pin columns identical (correction 0 and 11) |
-| Unit (api) | `packages/api/src/__tests__/import-omap.test.ts` | reader → document on `e2e/test.xmap`: determinism across `importOmapToDocument` / `importMapToDocument`, provenance (`omap-2`, version 9, UTM 33N), bboxes, all 21 fixture symbols rendered, symbolise with the dangling symbol as the only drop, factor ×1, import report, kind sniff with BOM, the two kinds kept apart |
-| Unit + integration (api) | `map-import-jobs.test.ts` (both) | worker runs a Mapper file by kind with the same hashes as inline; a Mapper source goes through the job to a `done` row with `importer_version omap-2` and is deduplicated on the second job; garbage of either kind fails cleanly; the pin writes the quick-access columns equal to the raster path's, recomputes them with a row's `rotation_correction` idempotently, and leaves them alone for a document without a CRS |
+| Unit (api) | `packages/api/src/__tests__/import-omap.test.ts` | reader → document on `e2e/test.xmap`: determinism across `importOmapToDocument` / `importMapToDocument`, provenance (`omap-3`, version 9, UTM 33N), bboxes, all 21 fixture symbols rendered, symbolise with the dangling symbol as the only drop, factor ×1, import report, kind sniff with BOM, the two kinds kept apart |
+| Unit + integration (api) | `map-import-jobs.test.ts` (both) | worker runs a Mapper file by kind with the same hashes as inline; a Mapper source goes through the job to a `done` row with `importer_version omap-3` and is deduplicated on the second job; garbage of either kind fails cleanly; the pin writes the quick-access columns equal to the raster path's, recomputes them with a row's `rotation_correction` idempotently, and leaves them alone for a document without a CRS |
 | Unit (api, unchanged) | `map-north.test.ts`, `map-projection-correction.test.ts`, `map-coordinate-transfer.test.ts`, `course-import-align.test.ts` | the legacy modules as adapters over `mapGeo` keep their behaviour |
 | E2E | `e2e/map-gl-doc.spec.ts` | document path = reader path in the browser, native `.oxvm` round trip, `mode=source` draws the fixture from its own definitions with no proxies; `e2e/test.xmap` loads client-side with no OCAD reader, draws, and surfaces the OMAP warning codes |
 | Unit (shared) | `packages/shared/src/import/__tests__/decisions.test.ts` | club decisions and review rows (`docs/map-symbols.md` §8.5), stage 6 with decisions: other library ignored, older release applied |
@@ -793,7 +795,7 @@ maps nor the JSON files are committed (AGENTS.md §12); keep them under
 
 **Against production.** The same comparison works against what Cloud
 Run produced from the same files, once the instance runs the same
-importer and library versions (`ocad-7` / `omap-2`,
+importer and library versions (`ocad-8` / `omap-3`,
 `*@<SYMBOL_LIBRARY_VERSION>`) and only for documents imported without
 club decisions (stage 6 applies them, so a reviewed map has a different,
 equally correct hash). Either list the stored documents:
