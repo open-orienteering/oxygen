@@ -69,9 +69,18 @@ export interface EngineStats {
   evictions: number;
   rebuilds: number;
   lastRebuildMs: number;
+  /** Of that, building the arrays on the CPU (the rest is the upload). */
+  lastBuildMs: number;
   /** Worker preparation time per detail part, ms, in arrival order. */
   prepareMs: number[];
 }
+
+/**
+ * While detail parts stream in, the visible set is rebuilt at most this
+ * often for arrivals alone (a change of the drawn set rebuilds at once):
+ * a rebuild is linear in the indices in view, tens of ms for a whole club map.
+ */
+export const ARRIVAL_REBUILD_MS = 150;
 
 const BASE = (id: number) => `b${id}`;
 const DETAIL = (id: number) => `d${id}`;
@@ -94,11 +103,14 @@ export class MapGlEngine {
   private drawnKey = "";
   private gated = false;
   private dirty = true;
+  /** Dirty only because detail arrived (may wait for ARRIVAL_REBUILD_MS). */
+  private arrivalOnly = false;
+  private lastRebuildAt = -Infinity;
   private hidden: ReadonlySet<number> = new Set();
   private view: ViewRect | undefined;
   private loadWaiter: { resolve: (s: LoadSummary) => void; reject: (e: Error) => void } | undefined;
   private completeWaiters: (() => void)[] = [];
-  private st = { evictions: 0, rebuilds: 0, lastRebuildMs: 0, prepareMs: [] as number[], overBudget: false };
+  private st = { evictions: 0, rebuilds: 0, lastRebuildMs: 0, lastBuildMs: 0, prepareMs: [] as number[], overBudget: false };
   /** Called when something arrived that changes the picture (a detail part for a drawn cell). */
   onChange: (() => void) | undefined;
 
@@ -157,7 +169,10 @@ export class MapGlEngine {
     this.detail.set(id, this.renderer.uploadPart(DETAIL(id), part));
     this.lru.add(id, part.gpuBytes);
     const drawn = !this.gated && this.drawn.includes(id);
-    if (drawn) this.dirty = true;
+    if (drawn && !this.dirty) {
+      this.dirty = true;
+      this.arrivalOnly = true;
+    }
     this.evict();
     if (drawn) this.onChange?.();
     this.checkComplete();
@@ -186,10 +201,12 @@ export class MapGlEngine {
       this.pending.clear();
       this.transport.post({ type: "prepare", ids: [] }, []);
     }
-    const key = `${this.gated ? "g" : ""}${this.drawn.filter((id) => this.base.has(id) || this.detail.has(id)).sort((a, b) => a - b).join(",")}|${this.gated ? "" : this.drawn.filter((id) => this.detail.has(id)).length}`;
+    // Arrivals and evictions mark the set dirty themselves; this key is the view's part.
+    const key = `${this.gated ? "g" : ""}${[...this.drawn].sort((a, b) => a - b).join(",")}`;
     if (key !== this.drawnKey) {
       this.drawnKey = key;
       this.dirty = true;
+      this.arrivalOnly = false;
     }
     this.evict();
     this.checkComplete();
@@ -199,6 +216,7 @@ export class MapGlEngine {
   setHidden(objects: ReadonlySet<number>): void {
     this.hidden = objects;
     this.dirty = true;
+    this.arrivalOnly = false;
   }
 
   private evict(): void {
@@ -240,7 +258,10 @@ export class MapGlEngine {
     const view = this.view;
     if (!view || !this.summary) return { drawCalls: 0, cpuMs: 0 };
     const t0 = performance.now();
-    if (this.dirty) {
+    // Arrivals are coalesced while more drawn detail is pending; the last one always rebuilds.
+    const hold = this.dirty && this.arrivalOnly && !this.isComplete() && t0 - this.lastRebuildAt < ARRIVAL_REBUILD_MS;
+    if (hold) setTimeout(() => this.onChange?.(), ARRIVAL_REBUILD_MS - (t0 - this.lastRebuildAt));
+    if (this.dirty && !hold) {
       const parts: ResidentPart[] = [];
       for (const id of [...this.drawn].sort((a, b) => a - b)) {
         const b = this.base.get(id);
@@ -251,9 +272,13 @@ export class MapGlEngine {
         }
       }
       if (this.large) parts.push(this.large);
-      this.renderer.setVisibleSet(buildVisibleSet(parts, this.hidden));
+      const vs = buildVisibleSet(parts, this.hidden);
+      this.st.lastBuildMs = performance.now() - t0;
+      this.renderer.setVisibleSet(vs);
       this.lru.fixedBytes = this.fixedBytes + this.renderer.documentBytes.visibleSet;
       this.dirty = false;
+      this.arrivalOnly = false;
+      this.lastRebuildAt = performance.now();
       this.st.rebuilds++;
       this.st.lastRebuildMs = performance.now() - t0;
     }
@@ -274,6 +299,7 @@ export class MapGlEngine {
       evictions: this.st.evictions,
       rebuilds: this.st.rebuilds,
       lastRebuildMs: this.st.lastRebuildMs,
+      lastBuildMs: this.st.lastBuildMs,
       prepareMs: this.st.prepareMs.slice(),
     };
   }

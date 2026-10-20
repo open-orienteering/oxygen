@@ -68,7 +68,7 @@ for (const map of maps) {
     }
   }
 }
-if (args.includes("--detail")) for (const r of results) console.log(r.map, r.mode, r.path, JSON.stringify({ ms: r.load?.ms, worker: r.load?.arena?.ms, prep: r.load?.arena?.prepareMs, gpu: r.load?.arena?.gpu, cells: r.load?.arena?.detailCells, grid: r.load?.arena?.grid, first: r.load?.firstFrame, complete: r.load?.completeFrame }));
+if (args.includes("--detail")) for (const r of results) console.log(r.map, r.mode, r.path, JSON.stringify({ ms: r.load?.ms, worker: r.load?.arena?.ms, prep: r.load?.arena?.prepareMs, gpu: r.load?.arena?.gpu, engine: { ...r.load?.arena?.engine, prepareMs: undefined }, main: r.load?.mainThread, canvas: r.load?.canvasPx, cells: r.load?.arena?.detailCells, grid: r.load?.arena?.grid, first: r.load?.firstFrame, complete: r.load?.completeFrame }));
 if (out) {
   writeFileSync(out, JSON.stringify(results, null, 1));
   console.log("wrote", out);

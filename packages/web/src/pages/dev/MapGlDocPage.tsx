@@ -20,7 +20,7 @@
  *
  * Query: `mode=source|pilot|envelope` (default source), `via=document|reader`, `path=arena|s1`,
  * `worker=0` (worker handler inline on this thread), `gate=0` (no zoom gate), `budget=<MB>` (default
- * 150), `kinds=fill,stroke,…` (draw only these kinds; profiling), `url=`, `bench=1`, `compare=1` (also draw the stream through the per-pass golden path into a
+ * 150), `kinds=fill,stroke,…` (draw only these kinds; profiling), `lod=0` (no glyph skip / hatch tint), `url=`, `bench=1`, `compare=1` (also draw the stream through the per-pass golden path into a
  * second canvas and publish the pixel difference). Not routed in production builds.
  */
 
@@ -106,6 +106,8 @@ interface LoadReport {
   canvasPx: { w: number; h: number };
   gpuTimer: boolean;
   warnings: Record<string, number>;
+  /** Main-thread long tasks (> 50 ms) from start to the complete frame, including reading the file. */
+  mainThread?: { longTasks: number; longestMs: number; totalMs: number };
 }
 
 interface Summary { avg: number; p50: number; p95: number; max: number }
@@ -202,6 +204,7 @@ export function MapGlDocPage() {
   const autoBench = params.get("bench") === "1";
   const compare = params.get("compare") === "1";
   const kindsParam = params.get("kinds");
+  const lod = params.get("lod") !== "0";
 
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const compareRef = useRef<HTMLCanvasElement>(null);
@@ -215,6 +218,7 @@ export function MapGlDocPage() {
     kindsParam ? new Set(kindsParam.split(",") as ("fill" | "hatch" | "stroke" | "glyph" | "clip" | "text")[]) : undefined,
   );
   const transportRef = useRef<Transport | null>(null);
+  const lodRef = useRef(lod);
   const dirtyRef = useRef(false);
   const [status, setStatus] = useState<"idle" | "loading" | "ready" | "error">("idle");
   const [message, setMessage] = useState("");
@@ -232,7 +236,12 @@ export function MapGlDocPage() {
     if (engine) {
       const t0 = performance.now();
       engine.setView(view);
-      const stats = engine.render({ colour: colourRef.current, ...(kindsRef.current ? { kinds: kindsRef.current } : {}) });
+      const stats = engine.render({
+        colour: colourRef.current,
+        ...(kindsRef.current ? { kinds: kindsRef.current } : {}),
+        // lod=0: no screen-only skips (glyph < 2 px, hatch tint), widen-only floor as S1 — for attributing their effect.
+        ...(lodRef.current ? {} : { minGlyphPx: 0, hatchTintPx: 0 }),
+      });
       stats.cpuMs = performance.now() - t0;
       return stats;
     }
@@ -284,6 +293,13 @@ export function MapGlDocPage() {
         engineRef.current = null;
         const fontBytes = await loadFontBytes();
 
+        // Main-thread long tasks during the load: what the worker keeps off this thread.
+        const longTasks: number[] = [];
+        let observer: PerformanceObserver | undefined;
+        try {
+          observer = new PerformanceObserver((list) => { for (const e of list.getEntries()) longTasks.push(e.duration); });
+          observer.observe({ type: "longtask", buffered: false });
+        } catch { /* longtask timing unsupported */ }
         const tStart = performance.now();
         let documentReport: DocumentReport | undefined;
         let encodedDocument: Uint8Array | undefined;
@@ -474,6 +490,8 @@ export function MapGlDocPage() {
             dpr: window.devicePixelRatio || 1, canvasPx: { w, h }, gpuTimer: renderer.hasGpuTimer, warnings: warn,
           };
         }
+        observer?.disconnect();
+        report.mainThread = { longTasks: longTasks.length, longestMs: r(Math.max(0, ...longTasks)), totalMs: r(longTasks.reduce((a, b) => a + b, 0)) };
         setLoad(report);
         setFrame(report.completeFrame);
         window.__mapGlDoc = { load: report, documentBytes: encodedDocument };

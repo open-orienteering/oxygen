@@ -81,6 +81,9 @@ export class RangeAllocator {
   }
 }
 
+/** Capacity growth factor: the slack counts as resident GPU memory, so it stays small. */
+export const GROWTH = 1.25;
+
 /** A GL vertex buffer of fixed-stride vertices, sub-allocated in vertices. */
 export class GpuArena {
   buffer: WebGLBuffer;
@@ -115,7 +118,7 @@ export class GpuArena {
     const n = bytes / this.stride;
     let at = this.alloc.alloc(n);
     if (at < 0) {
-      this.growTo(Math.max(this.alloc.capacity * 2, this.alloc.capacity + n));
+      this.growTo(Math.ceil(Math.max(this.alloc.capacity * GROWTH, this.alloc.capacity + n)));
       at = this.alloc.alloc(n);
     }
     const gl = this.gl;
