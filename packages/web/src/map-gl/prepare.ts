@@ -200,8 +200,8 @@ export function fanFromRings(rings: number[][]): FanGeometry {
 
 // ---- strokes -------------------------------------------------------------
 
-const ROUND_STEPS_PER_PI = 8;
-const MITRE_LIMIT = 4;
+export const ROUND_STEPS_PER_PI = 8;
+export const MITRE_LIMIT = 4;
 
 /** Polylines (x,y pairs) a stroke pass draws: the whole path per ring, or one per slice. */
 export function strokePolylines(pass: render.StrokePass, tol: number): { pts: number[]; closed: boolean }[] {
