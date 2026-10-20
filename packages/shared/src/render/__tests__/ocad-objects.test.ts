@@ -88,4 +88,20 @@ describe("ocadObjectsToRender", () => {
     expect(r.objects).toEqual([]);
     expect(r.stats.dropped).toBe(1);
   });
+
+  it("draws line text as text and rectangles as closed lines, as the document bridge does", () => {
+    const r = ocadObjectsToRender(
+      [
+        { sym: 903000, otp: 6, text: "Along", coordinates: [pt(0, 0), pt(100, 50), pt(200, 0)] },
+        { sym: 850001, otp: 7, coordinates: [pt(0, 0), pt(100, 0), pt(100, 50), pt(0, 50)] },
+      ],
+      pilotSymbols,
+      { mode: "envelope" },
+    );
+    expect(r.stats).toMatchObject({ total: 2, proxied: 2, dropped: 0, coordinates: 7 });
+    expect(r.symbols[r.objects[0].symbolIdx].id).toBe("proxy:text");
+    expect(r.objects[0].text).toBe("Along");
+    expect(r.symbols[r.objects[1].symbolIdx].id).toBe("proxy:line");
+    expect(r.objects[1].path.closed).toBe(true);
+  });
 });

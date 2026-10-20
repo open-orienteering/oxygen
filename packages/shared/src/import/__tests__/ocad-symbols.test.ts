@@ -233,26 +233,103 @@ describe("ocadSymbolToRender — text", () => {
   });
 
   it("approximates word spacing, substitutes fonts, and warns about what it drops", () => {
-    const r = ocadSymbolToRender(text({ fontName: "Verdana", wordSpace: 150, alignment: 8 | 1, frMode: 2, lbOn: true, pointSymOn: true }), ctx);
+    const r = ocadSymbolToRender(text({ fontName: "Verdana", wordSpace: 150, alignment: 8 | 1, lbOn: true, pointSymOn: true }), ctx);
     expect(r.render).toMatchObject({ type: "text", fontFamily: "liberation-sans", align: "centre" });
     expect(r.render && r.render.type === "text" ? r.render.wordSpacing : 0).toBeCloseTo(0.139, 3);
-    expect(codes(r.warnings)).toEqual(["FONT_SUBSTITUTED", "SYMBOL_FEATURE_DROPPED", "SYMBOL_FEATURE_DROPPED", "SYMBOL_FEATURE_DROPPED", "SYMBOL_FEATURE_DROPPED"]);
+    expect(codes(r.warnings)).toEqual(["FONT_SUBSTITUTED", "SYMBOL_FEATURE_DROPPED", "SYMBOL_FEATURE_DROPPED", "SYMBOL_FEATURE_DROPPED"]);
     expect(r.warnings.map((w) => w.message)).toEqual([
       expect.stringContaining("Verdana"),
       expect.stringContaining("vertical text alignment top"),
-      expect.stringContaining("framing mode 2"),
       expect.stringContaining("line below"),
       expect.stringContaining("point symbol"),
     ]);
   });
 
-  it("treats line text (type 6) as text and is null for unknown colours and types", () => {
-    expect(ocadSymbolToRender(text({ type: 6 }), ctx).render).toMatchObject({ type: "text" });
-    const bad = ocadSymbolToRender(text({ fontColor: 77 }), ctx);
+  it("turns line framing (frMode 2) into a halo: frWidth is the half-width", () => {
+    // Club-full 821: framing colour 432, frWidth 10 (0.1 mm beyond the glyph outline).
+    const r = ocadSymbolToRender(text({ frMode: 2, frColor: 3, frWidth: 10, frStyle: 4, frOfX: 20, frOfY: 10 }), ctx);
+    expect(r.warnings).toEqual([]);
+    expect(r.render).toMatchObject({ type: "text", colour: 2, halo: { colour: 0, widthUm: 100 } });
+  });
+
+  it("draws no halo for a zero-width line framing, and warns on an unknown framing colour", () => {
+    const zero = ocadSymbolToRender(text({ frMode: 2, frColor: 3, frWidth: 0 }), ctx);
+    expect(zero.warnings).toEqual([]);
+    expect(zero.render && zero.render.type === "text" ? zero.render.halo : "x").toBeUndefined();
+    const unknown = ocadSymbolToRender(text({ frMode: 2, frColor: 77, frWidth: 10 }), ctx);
+    expect(codes(unknown.warnings)).toEqual(["SYMBOL_COLOUR_UNKNOWN"]);
+    expect(unknown.warnings[0].message).toContain("text framing");
+    expect(unknown.render).toMatchObject({ type: "text", colour: 2 });
+    expect(unknown.render && unknown.render.type === "text" ? unknown.render.halo : "x").toBeUndefined();
+  });
+
+  it("warns and drops shadow (frMode 1) and rectangle (frMode 3) framing", () => {
+    // Club-2026 815.2: shadow in colour 9 offset 0.2 mm right.
+    const shadow = ocadSymbolToRender(text({ frMode: 1, frColor: 3, frOfX: 20, frOfY: -10 }), ctx);
+    expect(codes(shadow.warnings)).toEqual(["SYMBOL_FEATURE_DROPPED"]);
+    expect(shadow.warnings[0].message).toBe("821.0: text shadow framing (colour 3, offset 0.2 / -0.1 mm)");
+    expect(shadow.render && shadow.render.type === "text" ? shadow.render.halo : "x").toBeUndefined();
+    const box = ocadSymbolToRender(text({ frMode: 3, frColor: 3 }), ctx);
+    expect(box.warnings.map((w) => w.message)).toEqual(["821.0: text rectangle framing"]);
+    const odd = ocadSymbolToRender(text({ frMode: 5 }), ctx);
+    expect(odd.warnings.map((w) => w.message)).toEqual(["821.0: text framing mode 5"]);
+  });
+});
+
+describe("ocadSymbolToRender — text colours", () => {
+  it("is null for an unknown text colour", () => {
+    const bad = ocadSymbolToRender({ symNum: 821000, number: "821.0", type: 4, fontName: "Arial", fontColor: 77, fontSize: 120 }, ctx);
     expect(bad.render).toBeNull();
     expect(codes(bad.warnings)).toEqual(["SYMBOL_COLOUR_UNKNOWN"]);
-    const rect = ocadSymbolToRender({ symNum: 850001, number: "850.1", type: 7 }, ctx);
-    expect(rect.render).toBeNull();
-    expect(codes(rect.warnings)).toEqual(["SYMBOL_TYPE_UNSUPPORTED"]);
+  });
+});
+
+describe("ocadSymbolToRender — line text", () => {
+  const lineText = (over: Partial<OcadSymbolDefLike>): OcadSymbolDefLike => ({
+    symNum: 903000, number: "903.0", type: 6, description: "Line text", fontName: "Arial", fontColor: 0, fontSize: 100, weight: 400,
+    charSpace: 10, wordSpace: 100, alignment: 1, ...over,
+  });
+
+  it("converts like a text symbol, with its framing, and warns that it is drawn as block text", () => {
+    const r = ocadSymbolToRender(lineText({ frMode: 2, frColor: 3, frWidth: 12 }), ctx);
+    expect(r.render).toMatchObject({
+      type: "text", code: "903.0", fontFamily: "liberation-sans", fontSizeUm: 3528, colour: 2, align: "centre", charSpacing: 0.1,
+      lineSpacing: 1, paragraphSpacingUm: 0, halo: { colour: 0, widthUm: 120 },
+    });
+    expect(r.warnings).toEqual([{ code: "SYMBOL_FEATURE_DROPPED", message: "903.0: line text drawn as block text" }]);
+  });
+});
+
+describe("ocadSymbolToRender — rectangle", () => {
+  const rect = (over: Partial<OcadSymbolDefLike>): OcadSymbolDefLike => ({
+    symNum: 850001, number: "850.1", type: 7, description: "Rektangel", lineColor: 1, lineWidth: 16, radius: 0, gridFlags: 0, ...over,
+  });
+
+  it("is an outline line: colour, width ×10, flat cap, miter join", () => {
+    const r = ocadSymbolToRender(rect({}), ctx);
+    expect(r.warnings).toEqual([]);
+    expect(r.render).toMatchObject({ type: "line", id: "src:850001", code: "850.1", name: "Rektangel", main: { colour: 1, widthUm: 160, cap: "flat", join: "miter" } });
+  });
+
+  it("warns that corner radius and grid are dropped (Club-full 850.1: radius 2.29 mm)", () => {
+    const r = ocadSymbolToRender(rect({ radius: 229, gridFlags: 3 }), ctx);
+    expect(r.render).toMatchObject({ type: "line", main: { colour: 1, widthUm: 160 } });
+    expect(r.warnings.map((w) => w.message)).toEqual(["850.1: rectangle corner radius 2.29 mm", "850.1: rectangle grid"]);
+    expect(codes(r.warnings)).toEqual(["SYMBOL_FEATURE_DROPPED", "SYMBOL_FEATURE_DROPPED"]);
+  });
+
+  it("is null when it draws nothing or its colour is unknown", () => {
+    const empty = ocadSymbolToRender(rect({ lineWidth: 0 }), ctx);
+    expect(empty.render).toBeNull();
+    expect(codes(empty.warnings)).toEqual(["SYMBOL_EMPTY"]);
+    const bad = ocadSymbolToRender(rect({ lineColor: 77 }), ctx);
+    expect(bad.render).toBeNull();
+    expect(codes(bad.warnings)).toEqual(["SYMBOL_COLOUR_UNKNOWN"]);
+  });
+
+  it("is null with SYMBOL_TYPE_UNSUPPORTED for unknown types", () => {
+    const unknown = ocadSymbolToRender({ symNum: 9000, number: "9.0", type: 9 }, ctx);
+    expect(unknown.render).toBeNull();
+    expect(codes(unknown.warnings)).toEqual(["SYMBOL_TYPE_UNSUPPORTED"]);
   });
 });

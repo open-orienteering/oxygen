@@ -27,6 +27,9 @@ import type { OcadCoordinateLike, OcadSymbolLike } from "./ocad-source.js";
 const UM = 10; // 1/100 mm → µm
 const PT_UM = 352.7778; // 1 pt in µm
 
+/** 1/100 mm as a millimetre string for warning messages. */
+const mm = (v: number | undefined) => String((v ?? 0) / 100);
+
 export interface OcadSymbolElementLike {
   /** 1 line, 2 area, 3 circle, 4 dot. */
   type: number;
@@ -54,7 +57,7 @@ export interface OcadDoubleLineLike {
   dblBackgroundColor?: number;
 }
 
-/** Every field the four OCAD symbol types can carry, all optional; `type` selects. */
+/** Every field the OCAD symbol types can carry, all optional; `type` selects. */
 export interface OcadSymbolDefLike extends OcadSymbolLike {
   /** Bit 1: rotatable (point: object angle allowed; area: pattern / hatch follow the object angle). */
   flags?: number;
@@ -115,8 +118,17 @@ export interface OcadSymbolDefLike extends OcadSymbolLike {
   lineSpace?: number;
   paraSpace?: number;
   lbOn?: boolean;
-  frMode?: number;
   pointSymOn?: boolean;
+  // text and line text framing: 0 off, 1 shadow, 2 line, 3 rectangle (text only)
+  frMode?: number;
+  /** Shadow offsets, 1/100 mm. */
+  frOfX?: number;
+  frOfY?: number;
+  // rectangle (also `lineColor`, `lineWidth`)
+  /** Corner radius, 1/100 mm. */
+  radius?: number;
+  /** Bit 0: grid on. */
+  gridFlags?: number;
 }
 
 export interface SymbolConversionContext {
@@ -479,10 +491,46 @@ class Converter {
     // OCAD word spacing is a percentage of the normal space; approximate the normal space as 0.278 em.
     if (ws !== 100) out.wordSpacing = ((ws - 100) / 100) * 0.278;
     if (v !== 0) this.warn("SYMBOL_FEATURE_DROPPED", `${s.number}: vertical text alignment ${v === 4 ? "middle" : v === 8 ? "top" : v}`);
-    if ((s.frMode ?? 0) !== 0) this.warn("SYMBOL_FEATURE_DROPPED", `${s.number}: text framing mode ${s.frMode}`);
+    switch (s.frMode ?? 0) {
+      case 0: break;
+      case 1:
+        this.warn("SYMBOL_FEATURE_DROPPED", `${s.number}: text shadow framing (colour ${s.frColor ?? 0}, offset ${mm(s.frOfX)} / ${mm(s.frOfY)} mm)`);
+        break;
+      case 2: {
+        // frWidth is how far the framing reaches beyond the glyph outline: the halo's half-width (Mapper's framing_line_half_width).
+        const widthUm = (s.frWidth ?? 0) * UM;
+        if (widthUm <= 0) break;
+        const haloColour = this.colour(s.frColor, "text framing");
+        if (haloColour !== undefined) out.halo = { colour: haloColour, widthUm };
+        break;
+      }
+      case 3:
+        this.warn("SYMBOL_FEATURE_DROPPED", `${s.number}: text rectangle framing`);
+        break;
+      default:
+        this.warn("SYMBOL_FEATURE_DROPPED", `${s.number}: text framing mode ${s.frMode}`);
+    }
+    if (s.type === 6) this.warn("SYMBOL_FEATURE_DROPPED", `${s.number}: line text drawn as block text`);
     if (s.lbOn) this.warn("SYMBOL_FEATURE_DROPPED", `${s.number}: line below text`);
     if (s.pointSymOn) this.warn("SYMBOL_FEATURE_DROPPED", `${s.number}: point symbol attached to text`);
     return out;
+  }
+
+  // ---- rectangle -----------------------------------------------------------
+
+  /** The rectangle's outline (Mapper's OCD import does the same); corners stay sharp. */
+  rectangle(): RenderSymbolInput | null {
+    const s = this.sym;
+    const widthUm = (s.lineWidth ?? 0) * UM;
+    if (widthUm <= 0) {
+      this.warn("SYMBOL_EMPTY", `${s.number}: rectangle symbol has no line width`);
+      return null;
+    }
+    const colour = this.colour(s.lineColor, "rectangle line");
+    if (colour === undefined) return null;
+    if ((s.radius ?? 0) > 0) this.warn("SYMBOL_FEATURE_DROPPED", `${s.number}: rectangle corner radius ${mm(s.radius)} mm`);
+    if (((s.gridFlags ?? 0) & 1) === 1) this.warn("SYMBOL_FEATURE_DROPPED", `${s.number}: rectangle grid`);
+    return { type: "line", ...this.common(), main: { colour, widthUm, cap: "flat", join: "miter" } };
   }
 
   common(): { id: string; code: string; name: string } {
@@ -496,6 +544,7 @@ class Converter {
       case 2: input = this.line(); break;
       case 3: input = this.area(); break;
       case 4: case 6: input = this.text(); break;
+      case 7: input = this.rectangle(); break;
       default:
         this.warn("SYMBOL_TYPE_UNSUPPORTED", `${this.sym.number}: symbol type ${this.sym.type}`);
         input = null;

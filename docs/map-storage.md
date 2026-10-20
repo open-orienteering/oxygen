@@ -91,7 +91,9 @@ storeImportedDocument(db, { source: { bytes, fileHash, kind, fileName, uploadedB
   unclassified) — `docs/map-symbols.md` §8–§9; since stage 5 (`ocad-5` /
   `omap-2`) `georeference` and `north` (field list in
   `docs/map-import.md` §3.8; `north` is the legacy `NorthDetection` with
-  the WMM fields at the import date, `asOf`).
+  the WMM fields at the import date, `asOf`); since `ocad-7`
+  `readerWarnings` (the OCAD reader's own warning texts, at most 50,
+  only when there are any — `docs/map-import.md` §3.6).
 - `library_version` is `"<library>@<SYMBOL_LIBRARY_VERSION>"`
   (`ISOM2017-2@2026.10.1`), the library the matcher chose for the
   document. Rows imported before the matcher carry `"none"`
@@ -451,7 +453,7 @@ startImportJob(db, {sourceHash, eventId? | clubMapId?, startedBy?, holdMs?})
   │
   ├─ decisions = club_symbol_decisions for the source's kind (docs/map-symbols.md §8.5)   → the row's `decisions`
   │
-  ├─ a map_documents row exists for (sourceHash, importer ∈ {ocad-6, omap-2}, library *@<current SYMBOL_LIBRARY_VERSION>)
+  ├─ a map_documents row exists for (sourceHash, importer ∈ {ocad-7, omap-2}, library *@<current SYMBOL_LIBRARY_VERSION>)
   │   that follows `decisions` (newest first)
   │     → touchDocument, insert state=done with that document_hash, applyJobResult, derive, return   (06 §8 dedup, no worker)
   │
@@ -763,7 +765,7 @@ target, so `applyJobResult` moves the pin to the fresh document:
 
 | Stale because (`staleReason`) | `club_map_versions` | `map_files` (events not soft-deleted) |
 |---|---|---|
-| `importer` — not a current importer (`ocad-3` rows) | re-matched | re-matched |
+| `importer` — not a current importer (`ocad-3` … `ocad-6`, `omap-1` rows) | re-matched | re-matched |
 | `library` — not the current library release (`none` rows, an older release) | re-matched | re-matched |
 | `decisions` — does not follow the current club decisions | re-matched | **kept** |
 
@@ -1074,7 +1076,7 @@ lands with its own section here and its own tests.
 | Unit (api) | `packages/api/src/__tests__/map-document-route.test.ts` (edit mode) | `EDIT_ACCESS`: `courses.view` not enough, `courses.edit` admits, kiosk key never, club and own-job clauses unchanged |
 | Integration (api) | `packages/api/src/__tests__/integration/map-review.test.ts` | `review` rows on the fixture (702 suggested 703 with candidates, swatch URLs, colour class, counts, stack, report), predicate (stranger 403, anonymous 401, kiosk key with and without a user, wrong key 401, 404, bad hash); `decide` writes the row, snapshots it on the job, makes a new unpinned document drawn canonically, own-job review, old document no longer `current`, determinism, validation 400, stranger / kiosk 403; the decision applied to a second file of the same symbols; dedup to the decided document; `finalise` on the event (pins, `mapMetadata`, idempotent, other source 412, no capability 403, no event 400) and on a club version (in place, seq / label kept, event pin unchanged, 412, unknown club map 404); club target anonymous 401; `reset` back to the matcher's document |
 | Unit (api) | `packages/api/src/__tests__/map-crt.test.ts` | `crtFileName` (Mapper's `SOURCE-TARGET.crt`), the 1 MiB limit, `planCrtImport` on the `e2e/test.ocd` header (a decision, an unchanged variant line, a reported target; the full table round trip records nothing), decide's 5 000 cap |
-| Integration (api) | `packages/api/src/__tests__/integration/map-crt.test.ts` | `exportCrt` header only before any decision, the three auto matches on `includeMatches`, a decision with its `# fp` from both documents of the source, predicate (stranger 403, anonymous 401, kiosk key reads, 404, bad hash); `importCrt` of the export after a `reset` writes the same row and yields the same document as `decide` (unpinned), `# keep` recorded and exported, dry run writes nothing, unappliable lines reported with no row and no job, the full-table round trip records nothing; stranger / anonymous / kiosk refused, 404, over 1 MiB 400 |
+| Integration (api) | `packages/api/src/__tests__/integration/map-crt.test.ts` | `exportCrt` header only before any decision, the four auto matches on `includeMatches` (three until A12 added the framed 603 text to the fixture), a decision with its `# fp` from both documents of the source, predicate (stranger 403, anonymous 401, kiosk key reads, 404, bad hash); `importCrt` of the export after a `reset` writes the same row and yields the same document as `decide` (unpinned), `# keep` recorded and exported, dry run writes nothing, unappliable lines reported with no row and no job, the full-table round trip records nothing; stranger / anonymous / kiosk refused, 404, over 1 MiB 400 |
 | Unit (api) | `packages/api/src/__tests__/map-rematch-cli.test.ts` | `staleReason` matrix, CLI flags, plan / item / summary lines |
 | Integration (api) | `packages/api/src/__tests__/integration/map-rematch.test.ts` | an `ocad-3` / `none` row pinned by an event and a club version is planned (both, `--event` scope), dry run writes nothing, a run moves both pins to the current document, second run empty; a decision change re-matches the club edition only |
 | Integration (api) | `packages/api/src/__tests__/integration/map-backfill.test.ts` | plan counts and ordering, dry run writes nothing, legacy club row → series (settings copied) + version 1 (label / uploader / time from the row), event rows → pins with dedup and club-version pin, unreadable rows reported and left unpinned, second run revisits only what is missing, `--event` scope and soft-deleted events skipped, `backfillStatus` / `backfillStart` admin-only, background run and `CONFLICT` |

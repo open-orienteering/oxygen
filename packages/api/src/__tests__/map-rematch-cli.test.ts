@@ -13,10 +13,12 @@ describe("staleReason (docs/map-storage.md §6.9)", () => {
     expect(staleReason({ importerVersion: "omap-1", libraryVersion: CURRENT }, true)).toBe("importer");
     // ocad-5 reported reader-dropped symbol types as READER_WARNING and warned on double-line mode 65535.
     expect(staleReason({ importerVersion: "ocad-5", libraryVersion: CURRENT }, true)).toBe("importer");
-    expect(staleReason({ importerVersion: "ocad-6", libraryVersion: "none" }, true)).toBe("library");
-    expect(staleReason({ importerVersion: "ocad-6", libraryVersion: "ISOM2017-2@2020.01.0" }, true)).toBe("library");
+    // ocad-6 had no text halo from OCAD line framing and no rectangle / line-text symbols (A12).
+    expect(staleReason({ importerVersion: "ocad-6", libraryVersion: CURRENT }, true)).toBe("importer");
+    expect(staleReason({ importerVersion: "ocad-7", libraryVersion: "none" }, true)).toBe("library");
+    expect(staleReason({ importerVersion: "ocad-7", libraryVersion: "ISOM2017-2@2020.01.0" }, true)).toBe("library");
     expect(staleReason({ importerVersion: "omap-2", libraryVersion: CURRENT }, false)).toBe("decisions");
-    expect(staleReason({ importerVersion: "ocad-6", libraryVersion: CURRENT }, true)).toBeNull();
+    expect(staleReason({ importerVersion: "ocad-7", libraryVersion: CURRENT }, true)).toBeNull();
   });
 });
 

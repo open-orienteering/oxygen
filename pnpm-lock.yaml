@@ -124,8 +124,8 @@ importers:
         specifier: ^3.24.6
         version: 3.24.6(@types/node@26.6.5)
       ocad2geojson:
-        specifier: github:open-orienteering/ocad2geojson#v2.2.2-oxygen.0
-        version: https://codeload.github.com/open-orienteering/ocad2geojson/tar.gz/9bc3b1245756c99815f3376e8233b21f29da74ee
+        specifier: github:open-orienteering/ocad2geojson#v2.2.2-oxygen.1
+        version: https://codeload.github.com/open-orienteering/ocad2geojson/tar.gz/37ab89efffbd2468e12888c6178038e05ba4c3fd
       pdf-lib:
         specifier: ^1.17.1
         version: 1.17.1
@@ -246,8 +246,8 @@ importers:
         specifier: ^6.3.0
         version: 6.3.0
       ocad2geojson:
-        specifier: github:open-orienteering/ocad2geojson#v2.2.2-oxygen.0
-        version: https://codeload.github.com/open-orienteering/ocad2geojson/tar.gz/9bc3b1245756c99815f3376e8233b21f29da74ee
+        specifier: github:open-orienteering/ocad2geojson#v2.2.2-oxygen.1
+        version: https://codeload.github.com/open-orienteering/ocad2geojson/tar.gz/37ab89efffbd2468e12888c6178038e05ba4c3fd
       qrcode:
         specifier: ^1.5.4
         version: 1.5.4
@@ -3861,9 +3861,9 @@ packages:
     resolution: {integrity: sha512-XrsrhT5sybtKI6wakr2SPOlGZWWYbUXZ7a0jT8/QOeAPau+1X/bSegNe5YR75oJmEZQbKningirmGOEJCIk61Q==}
     engines: {node: '>=12.20.0'}
 
-  ocad2geojson@https://codeload.github.com/open-orienteering/ocad2geojson/tar.gz/9bc3b1245756c99815f3376e8233b21f29da74ee:
-    resolution: {tarball: https://codeload.github.com/open-orienteering/ocad2geojson/tar.gz/9bc3b1245756c99815f3376e8233b21f29da74ee}
-    version: 2.2.2-oxygen.0
+  ocad2geojson@https://codeload.github.com/open-orienteering/ocad2geojson/tar.gz/37ab89efffbd2468e12888c6178038e05ba4c3fd:
+    resolution: {tarball: https://codeload.github.com/open-orienteering/ocad2geojson/tar.gz/37ab89efffbd2468e12888c6178038e05ba4c3fd}
+    version: 2.2.2-oxygen.1
     hasBin: true
 
   ohash@2.0.12:
@@ -8542,7 +8542,7 @@ snapshots:
 
   obug@2.2.1: {}
 
-  ocad2geojson@https://codeload.github.com/open-orienteering/ocad2geojson/tar.gz/9bc3b1245756c99815f3376e8233b21f29da74ee:
+  ocad2geojson@https://codeload.github.com/open-orienteering/ocad2geojson/tar.gz/37ab89efffbd2468e12888c6178038e05ba4c3fd:
     dependencies:
       '@turf/line-offset': 7.4.0
       '@turf/meta': 7.4.0

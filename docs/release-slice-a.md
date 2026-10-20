@@ -33,8 +33,8 @@ secret's `?schema=oxygen` parameter — strip it and keep `host=/cloudsql/…`.
 
 | Gate | Where | Done when |
 |------|-------|-----------|
-| S0 corpus check, local half | `scripts/measure-import.mjs` over `.local/corpus` and the OOM samples (the script lands with the S0 PR) | zero `UNSUPPORTED_*` warnings, `sameAsPrevious` on two runs, hash JSON saved — on the commit that will be released |
-| Dev-database backfill | `pnpm map:backfill` on :5432 | zero failures (done 2026-10-16: 9/9) |
+| S0 corpus check, local half | `scripts/measure-import.mjs` over `.local/corpus` and the OOM samples (the script lands with the S0 PR) | zero `UNSUPPORTED_*` warnings, `sameAsPrevious` on two runs, hash JSON saved — on the commit that will be released (importer `ocad-7` / `omap-2` since A12; a hash JSON from an `ocad-6` run does not compare) |
+| Dev-database backfill | `pnpm map:backfill` on :5432 | zero failures (done 2026-10-16: 9/9). Those rows predate `ocad-7` and are stale by importer: the next upload of the same file re-imports it, and `pnpm map:rematch` re-imports them and moves their pins (`docs/map-storage.md` §6.9) — run it before relying on the dev documents |
 | 07 integration matrix, 02 determinism test | CI on the `main` PR | green |
 | Compose v5 build fix | task card | optional; the image builds in CI regardless |
 

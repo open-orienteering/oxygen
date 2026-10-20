@@ -1,7 +1,10 @@
 # Bug fix: OCAD import warnings the S0 corpus check could not trust
 
 Found by the S0 corpus check (`scripts/measure-import.mjs`, `docs/map-import.md` §7)
-on 2026-10-20. Fixed in `format.importer` `ocad-6`.
+on 2026-10-20. Fixed in `format.importer` `ocad-6`. The underlying reader gap
+(rectangle and line-text symbols not parsed, text framing skipped) is closed
+by A12 (`ocad-7`, fork `v2.2.2-oxygen.1`, `docs/map-import.md` §3.3); the
+`SYMBOL_TYPE_UNSUPPORTED` mapping below stays for unknown types.
 
 ## What happened
 

@@ -141,14 +141,96 @@ export function areaSymbol({ symNum, extent, colorIdx, description }) {
   return buf;
 }
 
-function objectRecord({ sym, otp, coords, text = "" }) {
+function asciiPascal(buf, o, str, byteLength) {
+  buf.writeUInt8(str.length, o);
+  buf.write(str, o + 1, byteLength - 1, "latin1");
+  return o + byteLength;
+}
+
+/** Text framing attributes (46 bytes from FrMode), shared by text and line-text symbols. */
+function writeFraming(buf, o, { frMode = 0, frStyle = 0, frColor = 0, frWidth = 0, frOfX = 0, frOfY = 0 }) {
+  o = buf.writeUInt8(frMode, o);
+  o = buf.writeUInt8(frStyle, o);
+  o = buf.writeUInt8(0, o); // pointSymOn
+  o = buf.writeInt32LE(0, o); // pointSymNumber
+  o += 19; // reserved
+  o += 8; // frLeft / frBottom / frRight / frTop (rectangle framing)
+  o = buf.writeInt16LE(frColor, o);
+  o = buf.writeInt16LE(frWidth, o);
+  o += 4; // reserved
+  o = buf.writeInt16LE(frOfX, o);
+  o = buf.writeInt16LE(frOfY, o);
+  return o;
+}
+
+/** Font name + basic text attributes (46 bytes), shared by text and line-text symbols. */
+function writeTextBasics(buf, o, { fontName = "Arial", fontColor, fontSize, weight = 400, italic = false, charSpace = 0, wordSpace = 100, alignment = 0 }) {
+  o = asciiPascal(buf, o, fontName, 32);
+  o = buf.writeInt16LE(fontColor, o);
+  o = buf.writeInt16LE(fontSize, o); // 1/10 pt
+  o = buf.writeInt16LE(weight, o);
+  o = buf.writeUInt8(italic ? 1 : 0, o);
+  o = buf.writeUInt8(0, o); // res1
+  o = buf.writeInt16LE(charSpace, o);
+  o = buf.writeInt16LE(wordSpace, o);
+  o = buf.writeInt16LE(alignment, o);
+  return o;
+}
+
+/** Text symbol (type 4): 240-byte body; framing at body offset 194, frColor at 228. */
+export function textSymbol({ symNum, extent = 0, description, lineSpace = 100, ...attrs }) {
+  const size = BASE_SYMBOL_SIZE + 240;
+  const buf = Buffer.alloc(size);
+  let o = symbolHeader(buf, { size, symNum, otp: 4, extent, colorIdx: attrs.fontColor, description });
+  o = writeTextBasics(buf, o, attrs);
+  o = buf.writeInt16LE(lineSpace, o);
+  o += 2 + 2 + 2 + 2; // paraSpace, indentFirst, indentOther, nTabs
+  o += 32 * 4; // tabs
+  o += 2 + 2 + 2 + 2; // lbOn, lbColor, lbWidth, lbDist
+  o += 2; // reserved
+  writeFraming(buf, o, attrs);
+  return buf;
+}
+
+/** Line-text symbol (type 6): font, basic attributes and framing (92-byte body). */
+export function lineTextSymbol({ symNum, extent = 0, description, ...attrs }) {
+  const size = BASE_SYMBOL_SIZE + 92;
+  const buf = Buffer.alloc(size);
+  let o = symbolHeader(buf, { size, symNum, otp: 6, extent, colorIdx: attrs.fontColor, description });
+  o = writeTextBasics(buf, o, attrs);
+  writeFraming(buf, o, attrs);
+  return buf;
+}
+
+/** Rectangle symbol (type 7): outline, corner radius and grid (68-byte body). */
+export function rectangleSymbol({ symNum, extent = 0, description, lineColor, lineWidth, radius = 0, gridFlags = 0, cellWidth = 0, cellHeight = 0, unnumCells = 0, unnumText = "" }) {
+  const size = BASE_SYMBOL_SIZE + 68;
+  const buf = Buffer.alloc(size);
+  let o = symbolHeader(buf, { size, symNum, otp: 7, extent, colorIdx: lineColor, description });
+  o = buf.writeInt16LE(lineColor, o);
+  o = buf.writeInt16LE(lineWidth, o);
+  o = buf.writeInt16LE(radius, o);
+  o = buf.writeUInt16LE(gridFlags, o);
+  o = buf.writeInt16LE(cellWidth, o);
+  o = buf.writeInt16LE(cellHeight, o);
+  o += 4; // reserved
+  o = buf.writeInt16LE(unnumCells, o);
+  asciiPascal(buf, o, unnumText, 4);
+  return buf;
+}
+
+/**
+ * `unicode` is the record's flag byte as the reader interprets it: 0 means
+ * 16-bit text (what OCAD 2018 writes for text objects), 1 means 8-bit text.
+ */
+function objectRecord({ sym, otp, coords, text = "", unicode = 1 }) {
   const textSlots = text ? Math.ceil((text.length + 1) / 4) : 0;
   const size = 56 + coords.length * 8 + textSlots * 8;
   const buf = Buffer.alloc(size);
   let o = 0;
   o = buf.writeInt32LE(sym, o);
   o = buf.writeUInt8(otp, o);
-  o = buf.writeUInt8(1, o); // unicode
+  o = buf.writeUInt8(unicode, o);
   o = buf.writeInt16LE(0, o); // ang
   o = buf.writeInt32LE(0, o); // col
   o = buf.writeInt16LE(0, o); // lineWidth
@@ -297,7 +379,61 @@ export function terrainSymbols() {
   ];
 }
 
+// ─── Symbol-type fixture (reader tests) ──────────────────────────────────────
+
+const WHITE = { recType: 9, text: "White\tn4\tc0.0\tm0.0\ty0.0\tk0.0" };
+
+/**
+ * The text, line-text and rectangle symbol variants the importer maps
+ * (docs/map-import.md §3.3), one object each. Written for the reader's own
+ * tests (the fork's `test/data/symbol-types.ocd`) and Oxygen's normaliser
+ * tests; the values are the ones those tests read back.
+ */
+export const SYMBOL_TYPES_OCAD = {
+  framedText: { symNum: 902001, description: "Framed text", fontColor: 1, fontSize: 43, weight: 700, alignment: 1, frMode: 2, frStyle: 0, frColor: 4, frWidth: 15 },
+  shadowText: { symNum: 902002, description: "Shadow text", fontColor: 1, fontSize: 80, italic: true, alignment: 2 | 8, frMode: 1, frColor: 3, frOfX: 10, frOfY: -20 },
+  lineText: { symNum: 903000, description: "Line text", fontColor: 0, fontSize: 100, charSpace: 10, alignment: 1, frMode: 2, frColor: 4, frWidth: 12 },
+  rectangle: { symNum: 850001, description: "Rectangle", lineColor: 0, lineWidth: 16, radius: 229 },
+  gridRectangle: { symNum: 850002, description: "Grid rectangle", lineColor: 1, lineWidth: 25, gridFlags: 3, cellWidth: 1000, cellHeight: 800, unnumCells: 2, unnumText: "X" },
+};
+
+export function buildSymbolTypesOcad() {
+  const t = SYMBOL_TYPES_OCAD;
+  const strings = [
+    ...DEFAULT_COLORS,
+    WHITE,
+    { recType: 1039, text: georeferenceString({ gridId: 13002, scale: 4000, easting: 500000, northing: 6500000 }) },
+  ];
+  const symbols = [
+    textSymbol(t.framedText),
+    textSymbol(t.shadowText),
+    lineTextSymbol(t.lineText),
+    rectangleSymbol(t.rectangle),
+    rectangleSymbol(t.gridRectangle),
+  ];
+  const box = (x0, y0, x1, y1) => [
+    [x0, y0],
+    [x1, y0],
+    [x1, y1],
+    [x0, y1],
+  ];
+  const objects = [
+    { sym: t.framedText.symNum, otp: 4, coords: [[0, 0]], text: "Framed", unicode: 0 },
+    { sym: t.shadowText.symNum, otp: 4, coords: [[0, -1000]], text: "Shadow", unicode: 0 },
+    { sym: t.lineText.symNum, otp: 6, coords: [[-2000, 1000], [0, 1500], [2000, 1000]], text: "Along the path", unicode: 0 },
+    { sym: t.rectangle.symNum, otp: 7, coords: box(-3000, -3000, 3000, 2500) },
+    { sym: t.gridRectangle.symNum, otp: 7, coords: box(-1500, -2500, 1500, -1500) },
+  ];
+  return assembleOcad({ fileType: 0, strings, symbols, objects });
+}
+
 // ─── E2E course-setting fixture ──────────────────────────────────────────────
+
+/** The fixture's text and rectangle symbols: a spot-height value framed in white, and a plain frame. */
+export const E2E_TEXT_SYMBOLS = {
+  spotHeight: { symNum: 603000, description: "Spot height, value", fontColor: 1, fontSize: 43, frMode: 2, frColor: 4, frWidth: 10 },
+  frame: { symNum: 850001, description: "Frame", lineColor: 1, lineWidth: 25 },
+};
 
 export const E2E_OCAD = {
   scale: 7500,
@@ -350,7 +486,7 @@ export function buildE2eTestOcad() {
     }
   }
 
-  const strings = [...DEFAULT_COLORS];
+  const strings = [...DEFAULT_COLORS, WHITE];
   strings.push({
     recType: 1039,
     text: georeferenceString({ gridId: 13002, scale: SCALE, easting: EASTING, northing: NORTHING }),
@@ -413,6 +549,8 @@ export function buildE2eTestOcad() {
       colorIdx: 1,
       description: "Building",
     }),
+    textSymbol(E2E_TEXT_SYMBOLS.spotHeight),
+    rectangleSymbol(E2E_TEXT_SYMBOLS.frame),
   ];
 
   const BOULDER = [6800, 4200];
@@ -461,6 +599,20 @@ export function buildE2eTestOcad() {
 
   objects.push({ sym: 204000, otp: 1, coords: [BOULDER] });
   objects.push({ sym: 521000, otp: 3, coords: BUILDING });
+
+  // Below the yellow area and the bottom control row: a framed text and a
+  // rectangle object (docs/map-import.md §3.3).
+  objects.push({ sym: E2E_TEXT_SYMBOLS.spotHeight.symNum, otp: 4, coords: [[6200, -4900]], text: "112", unicode: 0 });
+  objects.push({
+    sym: E2E_TEXT_SYMBOLS.frame.symNum,
+    otp: 7,
+    coords: [
+      [-7300, -4950],
+      [-6100, -4950],
+      [-6100, -4650],
+      [-7300, -4650],
+    ],
+  });
 
   {
     const c79 = controlPos.get("79");

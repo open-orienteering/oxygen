@@ -42,7 +42,8 @@ import { register } from "tsx/esm/api";
  * (templates, layout objects, tags, parts, helper symbols), source data
  * errors (missing or duplicate symbols, unknown colours, empty geometry or
  * symbols, missing scale or CRS), font substitution, matching and colour
- * stack outcomes and `READER_WARNING` (its texts are not in the report) are
+ * stack outcomes and `READER_WARNING` (reader noise; its OCAD texts are in
+ * the report's `readerWarnings` since `ocad-7`) are
  * shown in the histogram but do not fail the run. Sources:
  * docs/map-import.md §3.3–3.7 and §4.5, docs/map-document-format.md §2.6.
  */
