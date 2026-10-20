@@ -54,6 +54,8 @@ fi
 echo "── Backfill job ${JOB} with ${IMAGE_REF}"
 echo "   command: ${CLI}"
 # Club-full peaks at ~360 MB RSS for the thumbnail alone; one map at a time.
+# The club's Cloud SQL tier allows 25 connections: the service holds up to
+# 8 per instance (two instances), so this job gets a pool of 2.
 gcloud run jobs deploy "$JOB" \
   --project="$PROJECT_ID" \
   --region="$REGION" \
@@ -61,6 +63,7 @@ gcloud run jobs deploy "$JOB" \
   --service-account="oxygen-run@${PROJECT_ID}.iam.gserviceaccount.com" \
   --set-cloudsql-instances="$SQL_CONNECTION" \
   --set-secrets="DATABASE_URL=oxygen-database-url:latest" \
+  --set-env-vars="DATABASE_POOL_MAX=2,NODE_OPTIONS=--max-old-space-size=1536" \
   --memory=2Gi \
   --cpu=2 \
   --max-retries=0 \

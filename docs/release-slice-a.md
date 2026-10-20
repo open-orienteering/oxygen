@@ -11,6 +11,24 @@ Everything that talks to GCP needs `gcloud auth login` on the operator's
 machine and `scripts/gcp/env.sh` (gitignored; `env.sh.example` shows the
 shape). Nothing in this runbook changes the service's idle/event mode.
 
+## Production as inspected on 2026-10-20
+
+| | |
+|---|---|
+| Service | `oxygen`, `europe-north1`, image `ghcr.io/open-orienteering/oxygen:edge` pinned to the 2026-10-12 digest (revision `oxygen-00045-hbc`) — behind `main` by the free-order and dependency PRs |
+| Resources | 4 GiB / 2 vCPU, timeout 300 s, max 2 instances, idle mode (min 0, CPU throttled) |
+| Cloud SQL | `oxygen-pg`, Postgres 18, `db-f1-micro`, 10 GB SSD, zonal, daily backups; **`max_connections = 25`** |
+| Database | 600 MB: 17 events, `map_files` 19 rows / 151 MB, `club_map_files` 4 rows / 51 MB, `map_tiles` 357 MB |
+| Backfill footprint | ≤ 202 MB of `map_sources` (less after dedup of event copies) + documents at roughly a tenth of that; nothing to resize |
+| Connections | service 8 per instance × 2 + migrate/backfill job; `backfill.sh` pins the job's pool to 2 |
+| Jobs | `oxygen-migrate` exists; `backfill.sh` creates `oxygen-map-backfill` |
+
+The Cloud SQL Auth Proxy is not installed on the operator machine; the
+SQL checks below need it (`docs/deploy-gcp-cloud-run.md`, "Syncing a
+local database") or go through a one-off Cloud Run job with the
+`oxygen-database-url` secret, as `backfill.sh` does. `psql` rejects the
+secret's `?schema=oxygen` parameter — strip it and keep `host=/cloudsql/…`.
+
 ## 0. Preconditions
 
 | Gate | Where | Done when |
@@ -91,11 +109,14 @@ a document.
 The backfill is the second machine. For each entry of the local hash
 JSON (`file_hash → documentHash`, on the released commit):
 
-```bash
-# as an instance admin, through IAP
-curl -sS -o /dev/null -w '%{http_code}\n' \
-  -H "Authorization: Bearer $(gcloud auth print-identity-token)" \
-  "https://<service url>/api/map-documents/<documentHash>"
+The service sits behind IAP, which a plain `gcloud auth print-identity-token`
+does not satisfy for a user account, so do the check from a browser tab
+that is already signed in as an instance admin (DevTools console):
+
+```js
+for (const h of ["<documentHash>", "…"]) {
+  console.log(h.slice(0, 12), (await fetch(`/api/map-documents/${h}`, { method: "HEAD" })).status);
+}
 ```
 
 `200` — Cloud Run produced byte-identical bytes from the same file;
