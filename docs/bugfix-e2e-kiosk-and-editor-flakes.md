@@ -7,7 +7,7 @@ passed when their spec was re-run alone:
 
 | Test | Failure |
 |------|---------|
-| `kiosk-readout.spec.ts` "re-reading card with punches after registration shows readout" (shard 2) | `page.waitForResponse` for `cardReadout.applyResult` hit the 30 s timeout |
+| `kiosk-readout.spec.ts` "re-reading card with punches after registration shows readout" (shard 2) | "Test timeout of 30000ms exceeded" with `page.waitForResponse` for `cardReadout.applyResult` still pending |
 | `rental-cards.spec.ts` "should show rental card banner on kiosk readout" (shard 3) | kiosk tab did not show "Insert your SI card" within 10 s |
 | `course-editor.spec.ts` "inline-edit a control code from the course panel" (shard 1) | `editor-seq-row` count stayed 0 for 15 s after "Add to course" |
 
@@ -33,7 +33,11 @@ page.waitForResponse((r) => r.url().includes("/trpc/cardReadout.readout") && r.s
 
 which matches only when the procedure is *first* in the batch. A loaded
 run reproduced it in "MP readout shows missing punch" (the same helper
-and pattern as the reported test). The trace shows the admin's readout
+and pattern as the reported test), with the same error shape as the
+original failure: "Test timeout of 30000ms exceeded. Error:
+page.waitForResponse: Test timeout of 30000ms exceeded." — the test
+budget ran out while a URL-matched wait was still pending, not a slow
+call. The trace shows the admin's readout
 leaving as
 
 ```
