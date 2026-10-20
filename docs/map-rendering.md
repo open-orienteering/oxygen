@@ -569,7 +569,9 @@ To feed real maps in before the 02 document format exists,
 `ocad2geojson`'s object list into `RenderObject`s: OCAD 1/100 mm → µm,
 coordinate flags mapped to §2.1's (`bezierFirst/Second`, `corner`,
 `hole`, `noLeft/noRight`, `gap`, `dash`), symbol matched on
-`floor(sym / 1000)` with a kind check. Two modes:
+`floor(sym / 1000)` with a kind check. Object types map as in the
+document bridge: 4–6 (including line text) are text, 7 (rectangle) is a
+closed line. Two modes:
 
 - `pilot` — objects whose symbol is not in the supplied set are
   **dropped**. This is the pilot family's true coverage: 11–18 % of the

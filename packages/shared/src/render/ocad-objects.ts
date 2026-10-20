@@ -137,8 +137,9 @@ export function ocadObjectsToRender(
     const o = input[i];
     const code = ocadSymbolCode(o.sym);
     const otp = o.otp;
+    // Same object-type mapping as the document bridge: line text is text, a rectangle a closed line.
     const kind: RenderSymbol["type"] | undefined =
-      otp === 1 ? "point" : otp === 2 ? "line" : otp === 3 ? "area" : otp === 4 || otp === 5 ? "text" : undefined;
+      otp === 1 ? "point" : otp === 2 || otp === 7 ? "line" : otp === 3 ? "area" : otp >= 4 && otp <= 6 ? "text" : undefined;
     let symbolIdx = byCode.get(code);
     const sym = symbolIdx === undefined ? undefined : allSymbols[symbolIdx];
     // A code match is only usable when the symbol and object kinds agree
@@ -155,7 +156,7 @@ export function ocadObjectsToRender(
         continue;
       }
     }
-    const path = pathOf(o, kind === "area");
+    const path = pathOf(o, kind === "area" || otp === 7);
     if (!path || (kind === "text" && !o.text)) {
       dropped++;
       continue;
