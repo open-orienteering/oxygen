@@ -85,7 +85,8 @@ export function ClubMapReviewPage() {
   const utils = trpc.useUtils();
   const maps = trpc.clubMap.list.useQuery();
   const row = clubMapId ? maps.data?.find((m) => m.id === clubMapId) : undefined;
-  const pinnedHash = !clubMapId ? null : maps.data ? (row?.version?.documentHash ?? null) : undefined;
+  // Without `?clubMap=` the target is unknown: no in-use status, no finalise.
+  const pinnedHash = !clubMapId ? undefined : maps.data ? (row?.version?.documentHash ?? null) : undefined;
   return (
     <ReviewFrame>
       <MapReview
@@ -97,7 +98,7 @@ export function ClubMapReviewPage() {
         // Club library mutations: any signed-in user (club-library.md).
         canEdit={!authEnabled || user !== null}
         backTo="/settings"
-        pathFor={(hash) => `/settings/map-review/${hash}${clubMapId ? `?clubMap=${clubMapId}` : ""}`}
+        pathFor={(hash) => `/settings/map-review/${hash}${clubMapId ? `?clubMap=${encodeURIComponent(clubMapId)}` : ""}`}
         onFinalised={() => void utils.clubMap.list.invalidate()}
       />
     </ReviewFrame>
@@ -342,7 +343,7 @@ function MapReview({ documentHash, target, pinnedHash, mapName, canEdit, backTo,
         </div>
       )}
 
-      <CrtPanel documentHash={documentHash} canEdit={canEdit && !busy} onJob={followJob} onError={setError} rows={data.symbols} />
+      <CrtPanel documentHash={documentHash} canEdit={canEdit} busy={busy} onJob={followJob} onError={setError} rows={data.symbols} />
 
       <div className="flex items-center justify-between mt-6 mb-2">
         <h2 className="font-semibold text-slate-900">{t("usedSymbols")}</h2>
@@ -360,7 +361,7 @@ function MapReview({ documentHash, target, pinnedHash, mapName, canEdit, backTo,
 
       <ul data-testid="review-rows" className="space-y-2">
         {usedRows.map((row) => (
-          <ReviewRowCard key={row.symbolIdx} row={row} nameId={nameId} libraryId={library?.id ?? null} pending={pending.get(row.symbolIdx)} canEdit={canEdit && !busy} onDecide={decideOn} />
+          <ReviewRowCard key={row.symbolIdx} row={row} nameId={nameId} libraryId={library?.id ?? null} pending={pending.get(row.symbolIdx)} canEdit={canEdit} busy={busy} onDecide={decideOn} />
         ))}
         {usedRows.length === 0 && <li className="text-sm text-slate-500 py-4 text-center">{t("noRows")}</li>}
       </ul>
@@ -380,7 +381,7 @@ function MapReview({ documentHash, target, pinnedHash, mapName, canEdit, backTo,
           {showUnused && (
             <ul data-testid="review-unused-rows" className="space-y-2 mt-2">
               {unusedRows.map((row) => (
-                <ReviewRowCard key={row.symbolIdx} row={row} nameId={nameId} libraryId={library?.id ?? null} pending={pending.get(row.symbolIdx)} canEdit={canEdit && !busy} onDecide={decideOn} />
+                <ReviewRowCard key={row.symbolIdx} row={row} nameId={nameId} libraryId={library?.id ?? null} pending={pending.get(row.symbolIdx)} canEdit={canEdit} busy={busy} onDecide={decideOn} />
               ))}
             </ul>
           )}
@@ -451,6 +452,7 @@ function ReviewRowCard({
   libraryId,
   pending,
   canEdit,
+  busy,
   onDecide,
 }: {
   row: ReviewRowData;
@@ -458,6 +460,8 @@ function ReviewRowCard({
   libraryId: string | null;
   pending: PendingDecision | undefined;
   canEdit: boolean;
+  /** A decide / CRT job runs: the controls stay, disabled (§8.7 "Job"). */
+  busy: boolean;
   onDecide: (row: ReviewRowData, decision: PendingDecision | null) => void;
 }) {
   const { t } = useTranslation("mapReview");
@@ -551,7 +555,8 @@ function ReviewRowCard({
                       <button
                         type="button"
                         data-testid="review-accept"
-                        className="mt-1 w-full px-2 py-0.5 border border-slate-200 rounded cursor-pointer hover:bg-slate-50"
+                        disabled={busy}
+                        className="mt-1 w-full px-2 py-0.5 border border-slate-200 rounded cursor-pointer hover:bg-slate-50 disabled:opacity-50 disabled:cursor-default"
                         onClick={() => onDecide(row, { accept: c.canonicalId })}
                       >
                         {t("accept")}
@@ -568,7 +573,8 @@ function ReviewRowCard({
               <button
                 type="button"
                 data-testid="review-keep"
-                className="px-2 py-1 border border-slate-200 rounded cursor-pointer hover:bg-slate-50"
+                disabled={busy}
+                className="px-2 py-1 border border-slate-200 rounded cursor-pointer hover:bg-slate-50 disabled:opacity-50 disabled:cursor-default"
                 onClick={() => onDecide(row, { unmatch: true })}
               >
                 {t("keep")}
@@ -577,7 +583,8 @@ function ReviewRowCard({
                 <button
                   type="button"
                   data-testid="review-reset"
-                  className="px-2 py-1 border border-slate-200 rounded cursor-pointer hover:bg-slate-50"
+                  disabled={busy}
+                  className="px-2 py-1 border border-slate-200 rounded cursor-pointer hover:bg-slate-50 disabled:opacity-50 disabled:cursor-default"
                   onClick={() => onDecide(row, { reset: true })}
                 >
                   {t("reset")}
@@ -607,6 +614,7 @@ function ReviewRowCard({
                   <button
                     type="button"
                     data-testid="review-other-open"
+                    disabled={busy}
                     className="px-2 py-1 text-blue-700 cursor-pointer hover:underline"
                     onClick={() => setPickingOther(true)}
                   >
@@ -625,7 +633,7 @@ function ReviewRowCard({
                     ? t("pendingKeep")
                     : t("pendingReset")}
               </span>
-              <button type="button" data-testid="review-undo" className="underline cursor-pointer" onClick={() => onDecide(row, null)}>
+              <button type="button" data-testid="review-undo" disabled={busy} className="underline cursor-pointer disabled:opacity-50" onClick={() => onDecide(row, null)}>
                 {t("undo")}
               </button>
             </div>
@@ -639,12 +647,14 @@ function ReviewRowCard({
 function CrtPanel({
   documentHash,
   canEdit,
+  busy,
   rows,
   onJob,
   onError,
 }: {
   documentHash: string;
   canEdit: boolean;
+  busy: boolean;
   rows: ReviewRowData[];
   onJob: (job: Job) => void;
   onError: (message: string | null) => void;
@@ -669,7 +679,8 @@ function CrtPanel({
       a.href = href;
       a.download = out.fileName;
       a.click();
-      URL.revokeObjectURL(href);
+      // Revoking in the same tick cancels the download in some browsers.
+      setTimeout(() => URL.revokeObjectURL(href), 0);
       setExported({ rules: out.rules, kept: out.kept, auto: out.auto });
     } catch (err) {
       onError(err instanceof Error ? err.message : String(err));
@@ -722,7 +733,7 @@ function CrtPanel({
             <button
               type="button"
               data-testid="review-crt-import"
-              disabled={importCrt.isPending}
+              disabled={importCrt.isPending || busy}
               className="px-3 py-1 text-xs border border-slate-200 rounded-lg cursor-pointer hover:bg-slate-50 disabled:opacity-50"
               onClick={() => fileRef.current?.click()}
             >

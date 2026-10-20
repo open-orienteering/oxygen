@@ -621,7 +621,9 @@ readable through the own-job clause only, §4.2 of map-storage):
 the event route sends `x-competition-id` and appends `?event=<nameId>` to
 every *document* swatch URL (`map-import.md` §2.2); library swatches are
 used as given. Without edit rights the page is read-only (rows,
-candidates, reasons, CRT download).
+candidates, reasons, CRT download). A club URL without `?clubMap=` has
+no target: it shows the review but neither *in use* nor **Use this
+version**.
 
 **Entry points.** Review is *expected* for club maps and *optional* for
 event maps (06 §5.1):
@@ -683,7 +685,7 @@ already draws is a decision: it makes the row reviewed.
 → the page moves to `job.documentHash` (same route, same query);
 `queued` / `running` → a progress strip (stage and percent of the
 `map-storage.md` §6.1 ladder) while `mapImport.status` is polled every
-second; `failed` → the error. Edit controls are disabled while a job
+second; `failed` → the error. Edit controls stay but are disabled while a job
 runs. Nothing is pinned until **Use this version**.
 
 **Finalise.** `finalise` with `{kind: "club", clubMapId}` or
