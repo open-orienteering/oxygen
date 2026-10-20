@@ -7,7 +7,7 @@
  * go back as transferables.
  *
  * This module is the pure message handler, so it is unit-tested without
- * a Worker and can run inline on the main thread (`worker-client.ts`);
+ * a Worker and can run inline on the main thread (`engine.ts` `inlineTransport`);
  * `worker-entry.ts` binds it to `self`.
  *
  * Protocol (docs/map-rendering.md §5.2 "Worker"):

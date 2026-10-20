@@ -518,7 +518,8 @@ bevel), bevel, or round at 8 steps per π. Caps: butt, square (end pairs
 pushed out by a half width), round (half-circle fan); `pointed` is drawn
 butt until the taper is consumed (§8). Coverage equals S1's
 triangle-list extrusion everywhere except within the 1 % band at shared
-joins (unit test). The flattening tolerance stays 10 µm at every zoom.
+joins (the unit test compares coverage outside a band of 3 % of the half
+width: the 1 % plus the sampling step). The flattening tolerance stays 10 µm at every zoom.
 
 **Coordinates.** Arena positions are float32 **relative to the document
 origin** — the centre of the bucket grid — and the view centre is passed
@@ -606,13 +607,17 @@ grouping, Sprint envelope drew 161 per frame, 155 of them clip
 stencil passes; after, 17.
 
 **Residency and the budget.** The engine counts the always-resident
-bytes (base parts, large bucket, atlas, the visible-set buffers) plus
-the resident detail parts against the budget. After every arrival and
+bytes (base parts, large bucket, atlas, the visible-set buffers — which
+hold every index, instance and clip-group array on the GPU) plus the
+resident detail parts' arena vertices against the budget. After every arrival and
 view change it evicts the least recently drawn detail parts until the
 total fits, never one in the drawn set; if the drawn set alone does not
 fit, the engine reports over budget (`EngineStats.overBudget`) rather
-than drop drawn cells. Arena capacity is reported next to live bytes
-(the slack is at most the growth factor).
+than drop drawn cells. A view's want list is sent once: the same view
+does not re-request what the budget evicted (a new view sends a new
+list), and a part that arrives twice keeps its first upload. Arena
+capacity is reported next to live bytes (the slack is at most the
+growth factor).
 
 #### Worker
 
@@ -670,7 +675,11 @@ Projection subtracts `u_centre` (origin-relative), rotates by
   − offset`, distance to the nearest multiple of `spacing`, one-pixel
   ramp); under `hatchTintPx` (1.5 px) spacing on screen, a tint of alpha
   `width / spacing`.
-* **Anti-aliasing** — the context's MSAA (4× in practice).
+* **Anti-aliasing** — the context's MSAA (4× in practice; the dev page
+  reports `SAMPLES`). The analytic 1-px edge feather on strokes and glyph
+  strokes (04 §6.2, §6.9) is not built yet (§8): MSAA alone keeps the
+  arena path pixel-comparable with the per-pass golden path (`compare=1`,
+  ≤ 0.5 % at §6.2's tolerance), which a feather would not be.
 
 Per-pass path (`setStream` / `render`, goldens): unchanged from S1 —
 even-odd fills by the stencil trick (fan with `INVERT`, cover where
@@ -782,7 +791,7 @@ Against the budgets (04 §9):
 |---|---|---|---|
 | draw calls ≤ 300 | 11–21 | 12–24 | ✓ everywhere (S1: up to 330) |
 | resident GPU ≤ 30 / 150 MB | 2.5–8.0 MB | 27–119 MB laptop fit (fully resident), 22 MB gated on the phone | ✓ (S1: Club-full 157 / 336 MB ✗) |
-| frame CPU ≤ 4 ms, dense viewport at 1× | ≤ 0.8 ms laptop, ≤ 8 ms phone proxy (Sprint envelope, frames sharing the thread with inline preparation; ≤ 5 elsewhere) | ≤ 0.7 ms laptop, ≤ 1.3 ms phone proxy (Club-full envelope 12.8 with inline preparation) | ✓ laptop; ✓ phone with the worker off-thread (the proxy's outliers are the inline preparation). Not met at overview zooms of club maps above the gate: `fit` p95 11–47 ms laptop — visible-set rebuilds of a whole club map (§8) |
+| frame CPU ≤ 4 ms, dense viewport at 1× | ≤ 0.8 ms laptop, ≤ 8 ms phone proxy (Sprint envelope, frames sharing the thread with inline preparation; ≤ 5 elsewhere) | ≤ 0.7 ms laptop except Club-2026 pilot (p95 6.3 ms: visible-set rebuilds as the pan crosses cells), ≤ 1.3 ms phone proxy (Club-full envelope 12.8 with inline preparation) | ✓ laptop except that one row; ✓ phone with the worker off-thread (the proxy's outliers are the inline preparation). Not met at overview zooms of club maps above the gate: `fit` p95 11–47 ms laptop — visible-set rebuilds of a whole club map (§8) |
 | frame GPU ≤ 8 ms, dense viewport at 1× | 1.1–7.5 avg laptop, 1.4–4.2 phone viewport | 2.9–6.2 laptop, 1.9–3.7 phone viewport (iGPU) | ✓ on the iGPU; the phone GPU is B0 / B-gate |
 | first frame ≤ 500 ms event | complete first view 69–188 ms laptop; phone proxy 268–408 pilot, 770–1 057 envelope | — | ✓ laptop; phone proxy ✓ pilot, ✗ envelope (S1 480–788 there): the inline proxy serialises frames and preparation; the envelope is the deliberately pessimistic upper bound |
 | first frame ≤ 2.5 s club | — | laptop: first 164–757 ms, complete 370–1 858 ms; phone proxy: first 631–3 080 ms, gated Club-full envelope 3.1 s | ✓ laptop; phone proxy ✓ except Club-full envelope (3.1 s; S1 7.2 s) — symbolise 1.28 s (shared stage) and the base layer's earcut of every fill 0.93 s dominate |
@@ -838,6 +847,7 @@ published on `window.__mapGlDoc` for Playwright.
 | `map-gl/__tests__/buckets.test.ts` | assignment (centre, straddling, large by either dimension incl. stroke width), passes of an object together in stream order, `passBounds`; visible cells (margin, clamp, nearest first, rotation); zoom gate at 04's reference zooms; range table colour-major, contiguous, complete, layers, origin-relative positions and hatch offset, stroke packing; visible set (one draw per colour across buckets, rebasing, union of parts, hidden objects, instances by size class); clip groups (merge, separation, hidden); mesh atlas packing; LRU eviction |
 | `map-gl/__tests__/arena.test.ts` | free list: first fit, exact accounting, coalescing, growth |
 | `map-gl/__tests__/worker-protocol.test.ts` | `loaded` contents and transfer list; `prepare` queue replacement and slicing; first-view queue and the gate; base + detail + large covers every kind; load errors |
+| `map-gl/__tests__/engine.test.ts` | residency through the real worker handler and a fake renderer: drawn + prefetch requested and uploaded; drawn parts never evicted, over budget reported; the same view never re-requests what was evicted; rebuild on drawn-set change but not on zoom within the cells; below the gate only base + large, queue cancelled; hidden objects |
 | `map-gl/__tests__/prepare.test.ts` | per-pass path (fans, S1 extrusion), unchanged |
 | `e2e/map-gl-doc.spec.ts` | the arena path through the real worker on `e2e/test.ocd` (pilot, envelope): buckets, complete frame, ≤ 300 draws on every bench frame of both scenarios; worker = inline; a 0.05 MB budget evicts, reports over budget and still draws; **arena = per-pass golden path within 0.5 % pixels** (envelope and source); document vs reader path, native `.oxvm`, source mode, `.xmap`, decode error |
 | `e2e/map-gl-golden.spec.ts` | unchanged: the per-pass path against the reference raster |
@@ -1032,6 +1042,11 @@ The shared module is exported as a namespace: `import { render } from
   mapping (B4).
 - **§5.2 real-phone numbers** (B0 / B-gate): the GPU columns are the
   laptop iGPU, the phone column a CPU-throttle proxy.
+- **§5.2 analytic stroke anti-aliasing** (04 §6.2, §6.9): the 1-px
+  feather on strokes and glyph strokes on top of MSAA. Not built in B2 —
+  the arena = per-pass pixel comparison relies on both paths using MSAA
+  alone; B4 / the B-gate's parity check against tiles is where it is
+  judged.
 - **§5.2 zoom-banded flattening tolerance** (S1 §4.1): not built; strips
   and the gate meet the memory budgets without it.
 - **§5.2 earcut deviation check** (04 §6.1): polygons earcut gets wrong

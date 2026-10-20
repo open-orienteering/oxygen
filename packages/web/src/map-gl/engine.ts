@@ -106,6 +106,7 @@ export class MapGlEngine {
   /** Dirty only because detail arrived (may wait for ARRIVAL_REBUILD_MS). */
   private arrivalOnly = false;
   private lastRebuildAt = -Infinity;
+  private holdTimer: ReturnType<typeof setTimeout> | undefined;
   private hidden: ReadonlySet<number> = new Set();
   private view: ViewRect | undefined;
   private loadWaiter: { resolve: (s: LoadSummary) => void; reject: (e: Error) => void } | undefined;
@@ -122,7 +123,6 @@ export class MapGlEngine {
     transport.onMessage = (m) => this.receive(m);
   }
 
-  /** Loads a document in the worker; resolves when the always-resident layers are uploaded. */
   /**
    * Loads a document in the worker; resolves when the always-resident layers are uploaded. Pass the
    * view you will show first (`firstView`) and draw `summary.view`: its detail is then already on
@@ -149,7 +149,7 @@ export class MapGlEngine {
       this.renderer.setDocument(s.originX, s.originY, m.atlas);
       this.base.clear();
       this.detail.clear();
-      // What the worker queued for the first view is pending; the same want list is not re-sent.
+      // What the worker queued for the first view is pending; the same view does not re-send it.
       this.pending = new Set(s.queued);
       this.lastRequest = s.queued.join(",");
       this.lru = new BucketLru(this.opts.budgetBytes);
@@ -171,6 +171,9 @@ export class MapGlEngine {
   private acceptPart(part: PreparedPart): void {
     const id = part.bucket;
     this.pending.delete(id);
+    // A part requested twice (a re-sent want list overtaking one in flight) is already resident:
+    // keep the uploaded one, so the visible set never points at a released range.
+    if (this.detail.has(id)) return;
     this.st.prepareMs.push(part.ms);
     this.detail.set(id, this.renderer.uploadPart(DETAIL(id), part));
     this.lru.add(id, part.gpuBytes);
@@ -192,10 +195,13 @@ export class MapGlEngine {
     this.gated = this.opts.gate && !aboveZoomGate(view.pxPerUm);
     this.drawn = visibleCells(view, s.grid, DRAW_MARGIN_CELLS);
     if (!this.gated) {
-      const want = visibleCells(view, s.grid, this.opts.prefetchMarginCells).filter((id) => this.detailCells.has(id) && !this.detail.has(id));
-      const key = want.join(",");
+      // The request is keyed by the view's wanted cells, resident or not: the same view never re-sends,
+      // even after the budget evicted part of what it asked for.
+      const wanted = visibleCells(view, s.grid, this.opts.prefetchMarginCells).filter((id) => this.detailCells.has(id));
+      const key = wanted.join(",");
       if (key !== this.lastRequest) {
         this.lastRequest = key;
+        const want = wanted.filter((id) => !this.detail.has(id));
         for (const id of want) this.pending.add(id);
         // The worker replaces its queue; what was pending but is no longer wanted will not arrive.
         for (const id of [...this.pending]) if (!want.includes(id)) this.pending.delete(id);
@@ -234,7 +240,8 @@ export class MapGlEngine {
       this.lru.remove(id);
       this.st.evictions++;
     }
-    if (this.lastRequest && evict.length) this.lastRequest = ""; // an evicted prefetch cell may be wanted again
+    // `lastRequest` is kept: re-sending the same want list after evicting part of it would re-prepare
+    // the ring the budget just refused, without end. A view change sends a fresh list.
     this.st.overBudget = over;
   }
 
@@ -266,7 +273,12 @@ export class MapGlEngine {
     const t0 = performance.now();
     // Arrivals are coalesced while more drawn detail is pending; the last one always rebuilds.
     const hold = this.dirty && this.arrivalOnly && !this.isComplete() && t0 - this.lastRebuildAt < ARRIVAL_REBUILD_MS;
-    if (hold) setTimeout(() => this.onChange?.(), ARRIVAL_REBUILD_MS - (t0 - this.lastRebuildAt));
+    if (hold && !this.holdTimer) {
+      this.holdTimer = setTimeout(() => {
+        this.holdTimer = undefined;
+        this.onChange?.();
+      }, ARRIVAL_REBUILD_MS - (t0 - this.lastRebuildAt));
+    }
     if (this.dirty && !hold) {
       const parts: ResidentPart[] = [];
       for (const id of [...this.drawn].sort((a, b) => a - b)) {
@@ -311,6 +323,7 @@ export class MapGlEngine {
   }
 
   dispose(): void {
+    if (this.holdTimer) clearTimeout(this.holdTimer);
     this.transport.terminate();
   }
 }

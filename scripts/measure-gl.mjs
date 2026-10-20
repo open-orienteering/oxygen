@@ -5,9 +5,11 @@
 // never copied into the repo.
 //
 //   node scripts/measure-gl.mjs --base=http://127.0.0.1:5291 --corpus=/abs/dir [--maps=sprint,crop-b]
-//     [--modes=pilot,envelope] [--paths=arena,s1] [--query=worker=0&gate=0] [--throttle=4]
+//     [--modes=pilot,envelope] [--query=worker=0&gate=0] [--throttle=4]
 //     [--viewport=412x915] [--dpr=2.625] [--headless] [--out=results.json]
 //
+// The S1 columns of docs/map-rendering.md §5.2 were measured with this script before B2 removed the S1
+// batch path (it took `path=s1` then); it now measures the arena path only.
 // The Vite server must be one started from this checkout on a free port (never the user's :5173):
 //   WEB_PORT=5291 API_PROXY_PORT=9 pnpm --filter @oxygen/web exec vite
 import { chromium } from "@playwright/test";
@@ -24,7 +26,6 @@ const corpus = opt("corpus");
 if (!corpus) throw new Error("--corpus=<dir with the .ocd files> is required");
 const maps = opt("maps", "sprint,crop-b,crop-a,club-2026,club-full").split(",");
 const modes = opt("modes", "pilot,envelope").split(",");
-const paths = opt("paths", "arena").split(",");
 const extra = opt("query", "");
 const throttle = Number(opt("throttle", "1"));
 const headless = args.includes("--headless");
@@ -37,12 +38,13 @@ const ctx = await browser.newContext({ viewport: { width: vw, height: vh }, devi
 const results = [];
 const mb = (n) => (n / 1048576).toFixed(1);
 for (const map of maps) {
-  for (const path of paths) {
+  {
+    const path = "arena";
     for (const mode of modes) {
       const page = await ctx.newPage();
       const cdp = await ctx.newCDPSession(page);
       if (throttle > 1) await cdp.send("Emulation.setCPUThrottlingRate", { rate: throttle });
-      await page.goto(`${base}/dev/map-gl-doc?mode=${mode}&path=${path}&bench=1${extra ? `&${extra}` : ""}`);
+      await page.goto(`${base}/dev/map-gl-doc?mode=${mode}&bench=1${extra ? `&${extra}` : ""}`);
       await page.getByTestId("map-gl-doc-file").setInputFiles(resolve(corpus, `${map}.ocd`));
       await page.waitForFunction(() => window.__mapGlDoc && (window.__mapGlDoc.bench || window.__mapGlDoc.error), null, { timeout: 600_000 });
       const r = await page.evaluate(() => { const d = window.__mapGlDoc; return { load: d.load, bench: d.bench, error: d.error }; });

@@ -101,6 +101,8 @@ interface LoadReport {
   dpr: number;
   canvasPx: { w: number; h: number };
   gpuTimer: boolean;
+  /** MSAA samples of the canvas. */
+  samples: number;
   warnings: Record<string, number>;
   /** Main-thread long tasks (> 50 ms) from start to the complete frame, including reading the file. */
   mainThread?: { longTasks: number; longestMs: number; totalMs: number };
@@ -432,7 +434,7 @@ export function MapGlDocPage() {
             },
             gpuBytes: gpu.total,
             firstFrame: first, completeFrame: complete,
-            dpr: window.devicePixelRatio || 1, canvasPx: { w, h }, gpuTimer: renderer.hasGpuTimer, warnings: summary.warnings,
+            dpr: window.devicePixelRatio || 1, canvasPx: { w, h }, gpuTimer: renderer.hasGpuTimer, samples: renderer.samples, warnings: summary.warnings,
           };
           setEngineStats(es);
         }
@@ -718,7 +720,7 @@ export function MapGlDocPage() {
               GPU <b>{mb(load.gpuBytes)}</b>
               {load.arena && <> (arenas {mb(load.arena.gpu.arenas)}, visible set {mb(load.arena.gpu.visibleSet)})</>}
               <br />
-              canvas {load.canvasPx.w}×{load.canvasPx.h} @ {load.dpr}× · GPU timer {load.gpuTimer ? "yes" : "no"}
+              canvas {load.canvasPx.w}×{load.canvasPx.h} @ {load.dpr}× · MSAA {load.samples}× · GPU timer {load.gpuTimer ? "yes" : "no"}
               {Object.keys(load.warnings).length > 0 && <> · warnings {JSON.stringify(load.warnings)}</>}
               <br />
               via <b>{load.via}</b>

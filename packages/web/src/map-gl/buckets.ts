@@ -279,7 +279,11 @@ export interface PreparedPart {
   glyph?: InstancePart;
   text?: InstancePart;
   clips: ClipItem[];
-  /** Bytes this part occupies on the GPU once uploaded (vertices, instances and clip geometry; visible-set buffers are counted by the renderer). */
+  /**
+   * Arena bytes this part occupies on the GPU once uploaded (its fill, hatch and stroke vertices).
+   * Instances, indices and clip geometry reach the GPU only through the visible-set buffers, which
+   * the renderer counts.
+   */
   gpuBytes: number;
   /** Preparation time, ms. */
   ms: number;
@@ -546,8 +550,7 @@ export function prepareBucketPart(stream: render.PassStream, bucket: number, pas
   part.gpuBytes =
     (part.fill?.vertexCount ?? 0) * FILL_VERTEX_BYTES +
     (part.hatch?.vertexCount ?? 0) * HATCH_VERTEX_BYTES +
-    (part.stroke?.vertexCount ?? 0) * STROKE_VERTEX_BYTES +
-    clips.reduce((n, c) => n + c.positions.byteLength + c.indices.byteLength + c.instances.byteLength, 0);
+    (part.stroke?.vertexCount ?? 0) * STROKE_VERTEX_BYTES;
   part.ms = performance.now() - t0;
   return part;
 }
@@ -799,7 +802,7 @@ export class BucketLru {
     this.entries.delete(id);
   }
 
-  /** Marks parts as used now (the drawn set, nearest first gets the newest stamp last). */
+  /** Marks parts as used now (the drawn set; equal stamps break ties by id). */
   touch(ids: Iterable<number>): void {
     const t = ++this.tick;
     for (const id of ids) {

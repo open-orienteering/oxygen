@@ -354,6 +354,11 @@ export class MapGlRenderer {
     return !!this.timer;
   }
 
+  /** MSAA samples of the default framebuffer (04 §6.9: shown in the debug overlay). */
+  get samples(): number {
+    return this.gl.getParameter(this.gl.SAMPLES) as number;
+  }
+
   private link(vs: string, fs: string, attribs: string[], uniforms: string[]): Program {
     const gl = this.gl;
     const compile = (type: number, src: string) => {
