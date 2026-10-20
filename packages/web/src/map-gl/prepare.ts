@@ -21,6 +21,7 @@
  *   uniform.
  */
 
+import earcut from "earcut";
 import { render } from "@oxygen/shared";
 
 type RenderPath = render.RenderPath;
@@ -400,4 +401,253 @@ function textItems(
     }
   }
   return items;
+}
+
+// ---- indexed strips (arena path) ------------------------------------------
+
+/**
+ * Indexed stroke geometry: per vertex `x, y, ox, oy` (centre-line point and
+ * offset direction, the shader multiplies by the half width) plus a
+ * triangle index list. A polyline point whose join is (to within
+ * `JOIN_SHARE_TOLERANCE` of the half width) a mitre shares one vertex pair
+ * between its two segments — two vertices per point, the strip of S1 §4.1.
+ * Real corners get separate pairs and a join wedge; caps are extra
+ * vertices at the ends.
+ */
+export interface StripGeometry {
+  verts: number[];
+  indices: number[];
+}
+
+/**
+ * How far the shared-pair mitre may stray from the exact join, as a
+ * fraction of the half width: 1 % — 0.7 µm on a 0.14 mm contour, 10 µm
+ * (OCAD's own resolution) on a 2 mm line.
+ */
+export const JOIN_SHARE_TOLERANCE = 0.01;
+
+/**
+ * Appends one polyline to `out` as an indexed strip. `halfWidth` (same
+ * units as `pts`) only decides where a vertex pair may be shared (the
+ * inner mitre must not run past either neighbouring segment); the
+ * geometry itself is width-independent.
+ */
+export function extrudeStrip(
+  pts: number[],
+  closed: boolean,
+  cap: render.StrokeCap,
+  join: render.StrokeJoin,
+  halfWidth: number,
+  out: StripGeometry,
+): void {
+  const p: number[] = [];
+  for (let i = 0; i < pts.length; i += 2) {
+    if (p.length && p[p.length - 2] === pts[i] && p[p.length - 1] === pts[i + 1]) continue;
+    p.push(pts[i], pts[i + 1]);
+  }
+  if (closed && p.length >= 4 && p[0] === p[p.length - 2] && p[1] === p[p.length - 1]) p.length -= 2;
+  const n = p.length / 2;
+  const v = out.verts;
+  const ix = out.indices;
+  const vert = (x: number, y: number, ox: number, oy: number): number => {
+    v.push(x, y, ox, oy);
+    return v.length / 4 - 1;
+  };
+  const fan = (x: number, y: number, a0: number, sweep: number, from: number | undefined, to: number | undefined) => {
+    const steps = Math.max(1, Math.ceil((Math.abs(sweep) / Math.PI) * ROUND_STEPS_PER_PI));
+    const c = vert(x, y, 0, 0);
+    let prev = from ?? vert(x, y, Math.cos(a0), Math.sin(a0));
+    for (let k = 1; k <= steps; k++) {
+      const b = a0 + (sweep * k) / steps;
+      const cur = k === steps && to !== undefined ? to : vert(x, y, Math.cos(b), Math.sin(b));
+      ix.push(c, prev, cur);
+      prev = cur;
+    }
+  };
+  if (n < 2) {
+    if (n === 1 && cap === "round") fan(p[0], p[1], 0, 2 * Math.PI, undefined, undefined);
+    return;
+  }
+  if (closed && n < 3) closed = false;
+  const segCount = closed ? n : n - 1;
+  const px = (i: number) => p[2 * ((i + n) % n)];
+  const py = (i: number) => p[2 * ((i + n) % n) + 1];
+  const tx = new Float64Array(segCount), ty = new Float64Array(segCount), len = new Float64Array(segCount);
+  for (let i = 0; i < segCount; i++) {
+    const dx = px(i + 1) - px(i), dy = py(i + 1) - py(i);
+    const l = Math.hypot(dx, dy) || 1;
+    tx[i] = dx / l; ty[i] = dy / l; len[i] = l;
+  }
+  // Vertex pair (left, right) a segment uses at its start and at its end.
+  const startL = new Int32Array(segCount), startR = new Int32Array(segCount);
+  const endL = new Int32Array(segCount), endR = new Int32Array(segCount);
+  const firstJoin = closed ? 0 : 1;
+  const lastJoin = closed ? n - 1 : n - 2;
+  for (let i = firstJoin; i <= lastJoin; i++) {
+    const s0 = (i - 1 + segCount) % segCount, s1 = i % segCount;
+    const x = px(i), y = py(i);
+    const cross = tx[s0] * ty[s1] - ty[s0] * tx[s1];
+    const dot = tx[s0] * tx[s1] + ty[s0] * ty[s1];
+    // Left normals of the two segments and their (unnormalised) mitre.
+    const n0x = -ty[s0], n0y = tx[s0], n1x = -ty[s1], n1y = tx[s1];
+    const mx = n0x + n1x, my = n0y + n1y;
+    const ml = Math.hypot(mx, my);
+    const cosHalf = ml / 2; // cos of half the turn angle
+    const mitre = cosHalf > 1e-9 ? 1 / cosHalf : Infinity;
+    let share: boolean;
+    if (Math.abs(cross) < 1e-12 && dot > 0) share = true;
+    else if (join === "miter") share = mitre <= MITRE_LIMIT;
+    else if (join === "round") share = mitre - 1 <= JOIN_SHARE_TOLERANCE;
+    else share = mitre - cosHalf <= JOIN_SHARE_TOLERANCE;
+    // The inner mitre point must stay on both neighbouring segments.
+    const reach = halfWidth * Math.sqrt(Math.max(0, mitre * mitre - 1));
+    if (share && reach > Math.min(len[s0], len[s1])) share = false;
+    if (share) {
+      const ux = ml > 1e-12 ? (mx / ml) * mitre : n0x, uy = ml > 1e-12 ? (my / ml) * mitre : n0y;
+      const l = vert(x, y, ux, uy), r = vert(x, y, -ux, -uy);
+      endL[s0] = l; endR[s0] = r; startL[s1] = l; startR[s1] = r;
+      continue;
+    }
+    const aL = vert(x, y, n0x, n0y), aR = vert(x, y, -n0x, -n0y);
+    const bL = vert(x, y, n1x, n1y), bR = vert(x, y, -n1x, -n1y);
+    endL[s0] = aL; endR[s0] = aR; startL[s1] = bL; startR[s1] = bR;
+    // Outer side is opposite to the turn: right for a left turn.
+    const leftTurn = cross > 0;
+    const o0 = leftTurn ? aR : aL, o1 = leftTurn ? bR : bL;
+    const s = leftTurn ? -1 : 1;
+    if (join === "round") {
+      const a0 = Math.atan2(n0y * s, n0x * s);
+      let d = Math.atan2(n1y * s, n1x * s) - a0;
+      while (d > Math.PI) d -= 2 * Math.PI;
+      while (d < -Math.PI) d += 2 * Math.PI;
+      fan(x, y, a0, d, o0, o1);
+    } else {
+      const c = vert(x, y, 0, 0);
+      if (join === "miter" && mitre <= MITRE_LIMIT) {
+        const m = vert(x, y, (s * mx / ml) * mitre, (s * my / ml) * mitre);
+        ix.push(c, o0, m, c, m, o1);
+      } else {
+        ix.push(c, o0, o1);
+      }
+    }
+  }
+  if (!closed) {
+    // End pairs, square caps pushed out by one half width along the tangent.
+    const sq = cap === "square" ? 1 : 0;
+    const t0x = tx[0], t0y = ty[0], t1x = tx[segCount - 1], t1y = ty[segCount - 1];
+    startL[0] = vert(px(0), py(0), -t0y - sq * t0x, t0x - sq * t0y);
+    startR[0] = vert(px(0), py(0), t0y - sq * t0x, -t0x - sq * t0y);
+    endL[segCount - 1] = vert(px(n - 1), py(n - 1), -t1y + sq * t1x, t1x + sq * t1y);
+    endR[segCount - 1] = vert(px(n - 1), py(n - 1), t1y + sq * t1x, -t1x + sq * t1y);
+    if (cap === "round") {
+      // Half circles from the left normal through −t (start) and from the right normal through +t (end).
+      fan(px(0), py(0), Math.atan2(t0x, -t0y), Math.PI, startL[0], startR[0]);
+      fan(px(n - 1), py(n - 1), Math.atan2(-t1x, t1y), Math.PI, endR[segCount - 1], endL[segCount - 1]);
+    }
+  }
+  for (let i = 0; i < segCount; i++) {
+    ix.push(startL[i], endL[i], startR[i], startR[i], endL[i], endR[i]);
+  }
+}
+
+/** A stroke pass as one indexed strip set (every ring, or every slice, with the pass's cap). */
+export function strokeStrip(pass: render.StrokePass, tol: number): StripGeometry {
+  const out: StripGeometry = { verts: [], indices: [] };
+  const cap = pass.cap === "pointed" ? "butt" : pass.cap;
+  for (const { pts, closed } of strokePolylines(pass, tol)) extrudeStrip(pts, closed, cap, pass.join, pass.widthUm / 2, out);
+  return out;
+}
+
+// ---- even-odd triangulation (arena path) ----------------------------------
+
+/**
+ * Triangulates flattened rings under the even-odd rule (§3.1) with
+ * earcut: rings are grouped by containment depth — a ring inside an even
+ * number of others is an outer boundary, one inside an odd number is a
+ * hole of its innermost container. So a "hole" ring that lies outside
+ * every other ring is filled, and a font outline's separate contours
+ * (the dot of an i) are separate polygons, as the stencil parity path
+ * would draw them. Rings that cross each other are earcut's failure mode
+ * and drawn as earcut decides (the reference raster is the oracle).
+ *
+ * Returns positions (x, y) and indices into them.
+ */
+export function triangulateEvenOdd(rings: number[][]): { positions: number[]; indices: number[] } {
+  const rs = rings.filter((r) => r.length >= 6);
+  const positions: number[] = [];
+  const indices: number[] = [];
+  if (!rs.length) return { positions, indices };
+  if (rs.length === 1) {
+    const tri = earcut(rs[0], undefined, 2);
+    for (const v of rs[0]) positions.push(v);
+    for (const t of tri) indices.push(t);
+    return { positions, indices };
+  }
+  const bb = rs.map(ringBounds);
+  // parent[i]: innermost ring containing ring i; depth[i]: how many contain it.
+  const depth = new Int32Array(rs.length);
+  const parent = new Int32Array(rs.length).fill(-1);
+  for (let i = 0; i < rs.length; i++) {
+    // Probe a point of ring i that is a vertex, nudged along nothing: vertex-on-edge cases
+    // between distinct rings are degenerate input and resolved arbitrarily.
+    const x = rs[i][0], y = rs[i][1];
+    let bestArea = Infinity;
+    for (let j = 0; j < rs.length; j++) {
+      if (j === i) continue;
+      const b = bb[j];
+      if (x < b[0] || x > b[2] || y < b[1] || y > b[3]) continue;
+      if (!pointInRing(rs[j], x, y)) continue;
+      depth[i]++;
+      const area = (b[2] - b[0]) * (b[3] - b[1]);
+      if (area < bestArea) { bestArea = area; parent[i] = j; }
+    }
+  }
+  const holesOf = new Map<number, number[]>();
+  for (let i = 0; i < rs.length; i++) {
+    if (depth[i] % 2 === 1 && parent[i] >= 0) {
+      // Attach to the innermost even-depth container.
+      let p = parent[i];
+      while (p >= 0 && depth[p] % 2 === 1) p = parent[p];
+      if (p < 0) continue;
+      const arr = holesOf.get(p) ?? [];
+      arr.push(i);
+      holesOf.set(p, arr);
+    }
+  }
+  for (let i = 0; i < rs.length; i++) {
+    if (depth[i] % 2 === 1) continue;
+    const flat: number[] = [...rs[i]];
+    const holes: number[] = [];
+    for (const h of holesOf.get(i) ?? []) {
+      holes.push(flat.length / 2);
+      for (const v of rs[h]) flat.push(v);
+    }
+    const base = positions.length / 2;
+    const tri = earcut(flat, holes.length ? holes : undefined, 2);
+    for (const v of flat) positions.push(v);
+    for (const t of tri) indices.push(t + base);
+  }
+  return { positions, indices };
+}
+
+function ringBounds(r: number[]): [number, number, number, number] {
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  for (let i = 0; i < r.length; i += 2) {
+    if (r[i] < minX) minX = r[i];
+    if (r[i] > maxX) maxX = r[i];
+    if (r[i + 1] < minY) minY = r[i + 1];
+    if (r[i + 1] > maxY) maxY = r[i + 1];
+  }
+  return [minX, minY, maxX, maxY];
+}
+
+/** Crossing-number point-in-ring test. */
+export function pointInRing(r: number[], x: number, y: number): boolean {
+  let inside = false;
+  const n = r.length / 2;
+  for (let i = 0, j = n - 1; i < n; j = i++) {
+    const xi = r[2 * i], yi = r[2 * i + 1], xj = r[2 * j], yj = r[2 * j + 1];
+    if (yi > y !== yj > y && x < ((xj - xi) * (y - yi)) / (yj - yi) + xi) inside = !inside;
+  }
+  return inside;
 }
