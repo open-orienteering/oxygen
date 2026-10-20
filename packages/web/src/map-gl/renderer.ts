@@ -1,19 +1,19 @@
 /**
- * WebGL2 backend, GPU side. Takes a `PreparedStream` and a view, draws it
- * in stream order (which is colour-stack order). Five small programs:
+ * WebGL2 backend, GPU side (docs/map-rendering.md §5.2). Two paths over one
+ * context:
  *
- *   fan / fanInst      stencil-invert triangles (even-odd fills)
- *   cover              paints where the stencil is set: solid or stripes
- *   stroke / strokeInst  shader-extruded strokes with a minimum pixel width
+ *   arena path (B2)   `setDocument` / `uploadPart` / `setVisibleSet` / `renderDocument`:
+ *                     vertex arenas per kind, visible-set index and instance buffers
+ *                     per (colour, kind), mesh-atlas instancing, stencil clip groups,
+ *                     hairline floor and screen-only LOD; one draw per (colour, kind)
+ *   per-pass path     `setStream` / `render`: one draw per prepared pass, stencil
+ *                     even-odd fills, optional 2× supersampling — the golden path
+ *                     (§6.2) and the reference the arena path is compared with
  *
- * Spike S1 step 3: one VBO per prepared item, no arena, no buckets, no
- * LOD beyond the minimum stroke width. Enough to measure and to prove
- * parity with the reference raster; the production backend grows from
- * here (docs/map-rendering.md §5.2).
+ * The renderer is dumb: `engine.ts` decides what is resident and visible.
  */
 
 import { MITRE_LIMIT, type FanGeometry, type Prepared, type PreparedStream, type StrokeGeometry } from "./prepare.js";
-import type { Batch } from "./batch.js";
 import { GpuArena } from "./arena.js";
 import { ATLAS_WIDTH, INSTANCE_FLOATS, type MeshAtlas } from "./mesh-atlas.js";
 import {
@@ -117,19 +117,6 @@ void main() {
   vec2 p = (a_pos + a_off * hw) * a_scale;
   vec2 r = vec2(p.x * a_inst.z - p.y * a_inst.w, p.x * a_inst.w + p.y * a_inst.z);
   gl_Position = project(a_inst.xy + r);
-}
-`;
-
-/** Batched strokes: half width per vertex so one draw mixes widths. */
-const VS_STROKE_W = VS_COMMON + `
-in vec2 a_pos;
-in vec2 a_off;
-in float a_hw;               // µm
-uniform float u_minHalfPx;
-uniform float u_pxPerUm;
-void main() {
-  float hw = max(a_hw, u_minHalfPx / u_pxPerUm);
-  gl_Position = project(a_pos + a_off * hw);
 }
 `;
 
@@ -275,19 +262,9 @@ interface TimerExt {
   GPU_DISJOINT_EXT: number;
 }
 
-interface UploadedBatch {
-  batch: Batch;
-  pos?: WebGLBuffer;
-  idx?: WebGLBuffer;
-  count: number;
-  /** For instanced batches, the shared geometry buffers. */
-  inst?: Uploaded["buffers"];
-  bytes: number;
-}
-
 export interface FrameStats {
   drawCalls: number;
-  /** JS time inside `renderBatches`, ms. */
+  /** JS time of the frame, ms. */
   cpuMs: number;
   gpuMs?: number;
 }
@@ -348,8 +325,7 @@ function classVertices(cls: number): number {
 
 export class MapGlRenderer {
   readonly gl: WebGL2RenderingContext;
-  private readonly programs: Record<"fan" | "fanInst" | "cover" | "stroke" | "strokeW" | "strokeInst" | "blit", Program>;
-  private batchesUploaded: UploadedBatch[] = [];
+  private readonly programs: Record<"fan" | "fanInst" | "cover" | "stroke" | "strokeInst" | "blit", Program>;
   private readonly timer: { ext: TimerExt; pending: { q: WebGLQuery; frame: number }[] } | undefined;
   private frameCounter = 0;
   /** Last resolved GPU frame time, ms (needs EXT_disjoint_timer_query_webgl2). */
@@ -368,7 +344,6 @@ export class MapGlRenderer {
       cover: this.link(VS_COVER, FS_COVER, ["a_pos"], ["u_centre", "u_scale", "u_colour", "u_mode", "u_normal", "u_spacing", "u_offset", "u_halfWidth", "u_pxPerUm"]),
       stroke: this.link(VS_STROKE, FS_SOLID, ["a_pos", "a_off"], ["u_centre", "u_scale", "u_colour", "u_halfWidth", "u_minHalfPx", "u_pxPerUm"]),
       strokeInst: this.link(VS_STROKE_INST, FS_SOLID, ["a_pos", "a_off", "a_inst", "a_scale"], ["u_centre", "u_scale", "u_colour", "u_halfWidth", "u_minHalfPx", "u_pxPerUm"]),
-      strokeW: this.link(VS_STROKE_W, FS_SOLID, ["a_pos", "a_off", "a_hw"], ["u_centre", "u_scale", "u_colour", "u_minHalfPx", "u_pxPerUm"]),
       blit: this.link(VS_BLIT, FS_BLIT, ["a_pos"], ["u_tex"]),
     };
     const ext = this.gl.getExtension("EXT_disjoint_timer_query_webgl2") as TimerExt | null;
@@ -445,7 +420,6 @@ export class MapGlRenderer {
     this.disposeDocument();
     this.deleteOffscreen();
     this.deleteBuffers();
-    this.deleteBatches();
     if (this.quad) this.gl.deleteBuffer(this.quad);
     this.quad = undefined;
   }
@@ -596,207 +570,6 @@ export class MapGlRenderer {
     gl.disable(gl.STENCIL_TEST);
   }
 
-  // ---- batches ------------------------------------------------------------
-
-  /** Bytes resident in GL buffers for the current batches (geometry only, no framebuffers). */
-  get gpuBytes(): number {
-    return this.batchesUploaded.reduce((n, b) => n + b.bytes, 0);
-  }
-
-  setBatches(batches: Batch[]): void {
-    this.deleteBatches();
-    const meshCache = new Map<object, { buf: WebGLBuffer; bytes: number }>();
-    const shared = (data: Float32Array, key: object): { buf: WebGLBuffer; bytes: number } => {
-      let e = meshCache.get(key);
-      if (!e) {
-        e = { buf: this.buffer(data), bytes: data.byteLength };
-        meshCache.set(key, e);
-      }
-      return { buf: e.buf, bytes: 0 };
-    };
-    for (const batch of batches) {
-      switch (batch.kind) {
-        case "fill": {
-          const gl = this.gl;
-          const pos = this.buffer(batch.positions);
-          const idx = gl.createBuffer()!;
-          gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, idx);
-          gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, batch.indices, gl.STATIC_DRAW);
-          this.batchesUploaded.push({ batch, pos, idx, count: batch.indices.length, bytes: batch.positions.byteLength + batch.indices.byteLength });
-          break;
-        }
-        case "stroke":
-          this.batchesUploaded.push({ batch, pos: this.buffer(batch.verts), count: batch.verts.length / 5, bytes: batch.verts.byteLength });
-          break;
-        case "hatch": {
-          const g = batch.item.geometry;
-          this.batchesUploaded.push({
-            batch,
-            inst: { fan: this.buffer(g.fan), fanCount: g.fan.length / 2, cover: this.buffer(g.cover), strokes: [], instCount: 0, clipFanCount: 0 },
-            count: 0,
-            bytes: g.fan.byteLength + g.cover.byteLength,
-          });
-          break;
-        }
-        case "instanced": {
-          const bytes = batch.instances.byteLength;
-          const fan = batch.fill && batch.fill.fan.length ? shared(batch.fill.fan, batch.fill) : undefined;
-          const cover = batch.fill && batch.fill.fan.length ? shared(batch.fill.cover, batch.fill.cover) : undefined;
-          const strokes = batch.strokes.filter((s) => s.verts.length).map((s) => ({ ...shared(s.verts, s), count: s.verts.length / 4, halfWidth: s.halfWidth }));
-          const clip = batch.clip && batch.clip.fan.length ? { fan: shared(batch.clip.fan, batch.clip), cover: shared(batch.clip.cover, batch.clip.cover) } : undefined;
-          this.batchesUploaded.push({
-            batch,
-            inst: {
-              fan: fan?.buf, fanCount: batch.fill ? batch.fill.fan.length / 2 : 0, cover: cover?.buf,
-              strokes, inst: this.buffer(batch.instances), instCount: batch.instances.length / 5,
-              clipFan: clip?.fan.buf, clipFanCount: batch.clip ? batch.clip.fan.length / 2 : 0, clipCover: clip?.cover.buf,
-            },
-            count: 0,
-            bytes,
-          });
-          break;
-        }
-      }
-    }
-    // Shared mesh buffers are counted once, on the first batch.
-    let meshBytes = 0;
-    for (const e of meshCache.values()) meshBytes += e.bytes;
-    if (this.batchesUploaded.length) this.batchesUploaded[0].bytes += meshBytes;
-    this.meshBuffers = [...meshCache.values()].map((e) => e.buf);
-  }
-
-  private meshBuffers: WebGLBuffer[] = [];
-
-  private deleteBatches(): void {
-    const gl = this.gl;
-    for (const u of this.batchesUploaded) {
-      if (u.pos) gl.deleteBuffer(u.pos);
-      if (u.idx) gl.deleteBuffer(u.idx);
-      if (u.inst?.inst) gl.deleteBuffer(u.inst.inst);
-      if (u.batch.kind === "hatch" && u.inst) {
-        if (u.inst.fan) gl.deleteBuffer(u.inst.fan);
-        if (u.inst.cover) gl.deleteBuffer(u.inst.cover);
-      }
-    }
-    for (const b of this.meshBuffers) gl.deleteBuffer(b);
-    this.meshBuffers = [];
-    this.batchesUploaded = [];
-  }
-
-  /** Draws the batches set with `setBatches`. Returns per-frame statistics. */
-  renderBatches(view: View, opts: RenderOptions): FrameStats {
-    const gl = this.gl;
-    const t0 = performance.now();
-    this.resolveTimers();
-    const q = this.timer ? gl.createQuery() : null;
-    if (q && this.timer) gl.beginQuery(this.timer.ext.TIME_ELAPSED_EXT, q);
-
-    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
-    gl.viewport(0, 0, view.widthPx, view.heightPx);
-    const bg = opts.background ?? [1, 1, 1];
-    gl.clearColor(bg[0], bg[1], bg[2], 1);
-    gl.clearStencil(0);
-    gl.clear(gl.COLOR_BUFFER_BIT | gl.STENCIL_BUFFER_BIT);
-    gl.disable(gl.DEPTH_TEST);
-    gl.disable(gl.CULL_FACE);
-    gl.enable(gl.BLEND);
-    gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
-    gl.enable(gl.STENCIL_TEST);
-    gl.stencilMask(0xff);
-    gl.stencilFunc(gl.ALWAYS, 0, 0xff);
-    gl.stencilOp(gl.KEEP, gl.KEEP, gl.KEEP);
-
-    const scale: [number, number] = [(2 * view.pxPerUm) / view.widthPx, (2 * view.pxPerUm) / view.heightPx];
-    const minHalfPx = (opts.minStrokePx ?? 0.75) / 2;
-    let draws = 0;
-    const common = (p: Program) => {
-      gl.useProgram(p.prog);
-      gl.uniform2f(p.uniforms.u_centre, view.centreX, view.centreY);
-      gl.uniform2f(p.uniforms.u_scale, scale[0], scale[1]);
-      if (p.uniforms.u_pxPerUm) gl.uniform1f(p.uniforms.u_pxPerUm, view.pxPerUm);
-      if (p.uniforms.u_minHalfPx) gl.uniform1f(p.uniforms.u_minHalfPx, minHalfPx);
-    };
-
-    for (const u of this.batchesUploaded) {
-      const b = u.batch;
-      const rgb = opts.colour(b.colour);
-      switch (b.kind) {
-        case "fill": {
-          const p = this.programs.fan;
-          common(p);
-          gl.uniform3f(p.uniforms.u_colour, rgb[0], rgb[1], rgb[2]);
-          gl.stencilFunc(gl.ALWAYS, 0, 0xff);
-          gl.stencilOp(gl.KEEP, gl.KEEP, gl.KEEP);
-          gl.bindBuffer(gl.ARRAY_BUFFER, u.pos!);
-          gl.enableVertexAttribArray(p.attribs.a_pos);
-          gl.vertexAttribPointer(p.attribs.a_pos, 2, gl.FLOAT, false, 0, 0);
-          gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, u.idx!);
-          gl.drawElements(gl.TRIANGLES, u.count, gl.UNSIGNED_INT, 0);
-          draws++;
-          break;
-        }
-        case "stroke": {
-          const p = this.programs.strokeW;
-          common(p);
-          gl.uniform3f(p.uniforms.u_colour, rgb[0], rgb[1], rgb[2]);
-          gl.stencilFunc(gl.ALWAYS, 0, 0xff);
-          gl.stencilOp(gl.KEEP, gl.KEEP, gl.KEEP);
-          gl.bindBuffer(gl.ARRAY_BUFFER, u.pos!);
-          gl.enableVertexAttribArray(p.attribs.a_pos);
-          gl.vertexAttribPointer(p.attribs.a_pos, 2, gl.FLOAT, false, 20, 0);
-          gl.enableVertexAttribArray(p.attribs.a_off);
-          gl.vertexAttribPointer(p.attribs.a_off, 2, gl.FLOAT, false, 20, 8);
-          gl.enableVertexAttribArray(p.attribs.a_hw);
-          gl.vertexAttribPointer(p.attribs.a_hw, 1, gl.FLOAT, false, 20, 16);
-          gl.drawArrays(gl.TRIANGLES, 0, u.count);
-          gl.disableVertexAttribArray(p.attribs.a_hw);
-          draws++;
-          break;
-        }
-        case "hatch": {
-          const bb = u.inst!;
-          if (!bb.fan) break;
-          this.stencilMark(bb.fan, bb.fanCount, common);
-          this.coverStripes(bb.cover!, rgb, b.item, view, common);
-          draws += 2;
-          break;
-        }
-        case "instanced": {
-          const bb = u.inst!;
-          if (!bb.inst || bb.instCount === 0) break;
-          const clipped = !!bb.clipFan;
-          if (clipped) {
-            this.stencilMark(bb.clipFan!, bb.clipFanCount, common, CLIP_BIT);
-            draws++;
-          }
-          if (bb.fan) {
-            this.stencilMarkInst(bb, common);
-            this.coverSolidInst(bb, rgb, clipped, common);
-            draws += 2;
-          }
-          for (const s of bb.strokes) {
-            this.drawStrokeInst(bb, s, rgb, clipped, common);
-            draws++;
-          }
-          if (clipped) {
-            this.stencilClear(bb.clipCover!, common);
-            draws++;
-          }
-          break;
-        }
-      }
-    }
-    gl.disable(gl.STENCIL_TEST);
-    if (q && this.timer) {
-      gl.endQuery(this.timer.ext.TIME_ELAPSED_EXT);
-      this.timer.pending.push({ q, frame: this.frameCounter });
-    }
-    this.frameCounter++;
-    const stats: FrameStats = { drawCalls: draws, cpuMs: performance.now() - t0 };
-    if (this.lastGpuMs !== undefined) stats.gpuMs = this.lastGpuMs;
-    return stats;
-  }
-
   /** Reads back finished GPU timer queries (results lag a frame or two). */
   private resolveTimers(): void {
     if (!this.timer) return;
@@ -868,7 +641,6 @@ export class MapGlRenderer {
   uploadPart(key: string, part: PreparedPart): ResidentPart {
     const a = this.requireArena();
     this.releasePart(key);
-    const gl = this.gl;
     const base = {
       fill: part.fill ? a.arenas.fill.put(part.fill.verts) : 0,
       hatch: part.hatch ? a.arenas.hatch.put(part.hatch.verts) : 0,

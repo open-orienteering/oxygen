@@ -4,12 +4,10 @@
  *
  * Loads an `.ocd`, `.omap` / `.xmap` or `.oxvm` (file picker, or `?url=` — in dev Vite serves any file
  * under the repo as `/@fs/<abs path>`). On the main thread: `readOcad` / `readOmap → …ToDocumentInput →
- * matchDocument (source mode) → encode`; an `.oxvm` skips that. Then the arena path (default,
- * `path=arena`, B2): the document bytes go to the worker (`map-gl/worker.ts`: decode → bridge →
- * symbolise → mesh atlas → bucket assignment → always-resident layers), the engine
- * (`map-gl/engine.ts`) uploads them, requests the visible cells' detail and draws the visible set.
- * `path=s1` keeps the S1 step-4 path (main thread: symbolise → prepareStream → buildBatches → whole
- * document every frame) as the measured baseline. `via=reader` uses the S1 converter
+ * matchDocument (source mode) → encode`; an `.oxvm` skips that. Then the arena path (B2): the
+ * document bytes go to the worker (`map-gl/worker.ts`: decode → bridge → symbolise → mesh atlas →
+ * bucket assignment → always-resident layers → the first view's detail), the engine
+ * (`map-gl/engine.ts`) uploads them and draws the visible set. `via=reader` uses the S1 converter
  * (`ocadObjectsToRender`) instead of the document.
  *
  * Reports every stage's time, bucket and residency figures, GPU bytes and the per-frame cost. "Bench"
@@ -18,18 +16,18 @@
  * draw-call and residency figures; `?bench=1` runs it after loading. Results are published as
  * `window.__mapGlDoc` for Playwright.
  *
- * Query: `mode=source|pilot|envelope` (default source), `via=document|reader`, `path=arena|s1`,
+ * Query: `mode=source|pilot|envelope` (default source), `via=document|reader`,
  * `worker=0` (worker handler inline on this thread), `gate=0` (no zoom gate), `budget=<MB>` (default
- * 150), `kinds=fill,stroke,…` (draw only these kinds; profiling), `lod=0` (no glyph skip / hatch tint), `url=`, `bench=1`, `compare=1` (also draw the stream through the per-pass golden path into a
- * second canvas and publish the pixel difference). Not routed in production builds.
+ * 150), `kinds=fill,stroke,…` (draw only these kinds; profiling), `lod=0` (no glyph skip / hatch
+ * tint), `url=`, `bench=1`, `compare=1` (also draw the stream through the per-pass golden path into
+ * a second canvas and publish the pixel difference). Not routed in production builds.
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { Buffer } from "buffer";
 import { mapDocument, mapImport, render } from "@oxygen/shared";
-import { prepareStream, type PreparedStream } from "../../map-gl/prepare";
-import { buildBatches, type Batch, type BatchStats } from "../../map-gl/batch";
+import { prepareStream } from "../../map-gl/prepare";
 import { MapGlRenderer, hexToRgb, type FrameStats, type View } from "../../map-gl/renderer";
 import { MapGlEngine, inlineTransport, workerTransport, type EngineStats, type Transport } from "../../map-gl/engine";
 import type { LoadSummary } from "../../map-gl/worker";
@@ -38,7 +36,6 @@ import liberationSansUrl from "../../../../shared/fonts/LiberationSans-Regular.t
 import liberationSansNarrowUrl from "../../../../shared/fonts/LiberationSansNarrow-Regular.ttf?url";
 
 type Mode = render.OcadConvertMode | "source";
-type Path = "arena" | "s1";
 
 /** The 02 document path: what the codec did in the browser. */
 interface DocumentReport {
@@ -81,24 +78,22 @@ interface LoadReport {
   file: string;
   bytes: number;
   mode: Mode;
-  path: Path;
   /** `document`: reader → normalise → encode → (worker) decode → bridge; `reader`: the S1 step-4 converter. */
   via: "document" | "reader";
   document?: DocumentReport;
   objects: render.OcadConvertResult["stats"];
   /**
    * Main-thread view, ms. `read` = file → document bytes (or render objects); `load` = posted to
-   * the worker → always-resident layers uploaded (arena) or symbolise + prepare + batch + upload (s1);
-   * `firstFrame` = first draw (base layers + large bucket on the arena path); `complete` = the drawn
-   * cells' detail arrived and drawn (arena; equal to firstFrame on s1); `total` = start → complete.
+   * the worker → always-resident layers uploaded; `firstFrame` = first draw (base layers + large
+   * bucket); `complete` = the first view's detail arrived and drawn; `total` = start → complete.
+   * `convert` / `symbolise` / `prepare` are the worker's stage times (decode + bridge; symbolise;
+   * atlas + assign + base + large).
    */
-  ms: { read: number; convert: number; symbolise: number; prepare: number; batch: number; upload: number; load: number; firstFrame: number; complete: number; total: number };
+  ms: { read: number; convert: number; symbolise: number; prepare: number; load: number; firstFrame: number; complete: number; total: number };
   passes: number;
   passKinds: Record<string, number>;
   colours: number;
-  /** S1 path only. */
-  batch?: BatchStats;
-  arena?: ArenaReport;
+  arena: ArenaReport;
   /** Resident GPU bytes after the complete frame. */
   gpuBytes: number;
   firstFrame: FrameStats;
@@ -123,7 +118,7 @@ interface ScenarioReport {
   /** Draw calls of the last frame and the most of any frame. */
   drawCalls: number;
   maxDrawCalls: number;
-  /** Arena path: the most resident bytes seen, visible-set rebuilds, frames drawn with detail missing, evictions. */
+  /** The most resident bytes seen, visible-set rebuilds, frames drawn with detail missing, evictions. */
   maxResidentBytes?: number;
   rebuilds?: number;
   incompleteFrames?: number;
@@ -132,7 +127,7 @@ interface ScenarioReport {
 }
 
 interface BenchReport extends ScenarioReport {
-  /** The dense 1× paper viewport (arena path; the S1 path runs it too). */
+  /** The dense 1× paper viewport. */
   paper1x?: ScenarioReport;
 }
 
@@ -198,7 +193,6 @@ export function MapGlDocPage() {
   const mode: Mode = modeParam === "envelope" || modeParam === "pilot" ? modeParam : "source";
   const url = params.get("url");
   const via: LoadReport["via"] = params.get("via") === "reader" && mode !== "source" ? "reader" : "document";
-  const path: Path = params.get("path") === "s1" ? "s1" : "arena";
   const useWorker = params.get("worker") !== "0";
   const gate = params.get("gate") !== "0";
   const budgetMB = Number(params.get("budget") ?? 150) || 150;
@@ -234,7 +228,8 @@ export function MapGlDocPage() {
     const view = viewRef.current;
     if (!renderer || !view) return null;
     const engine = engineRef.current;
-    if (engine) {
+    if (!engine) return null;
+    {
       const t0 = performance.now();
       engine.setView(view);
       const stats = engine.render({
@@ -246,7 +241,6 @@ export function MapGlDocPage() {
       stats.cpuMs = performance.now() - t0;
       return stats;
     }
-    return renderer.renderBatches(view, { colour: colourRef.current });
   }, []);
 
   const requestDraw = useCallback(() => {
@@ -378,8 +372,7 @@ export function MapGlDocPage() {
         const paper1x = (window.devicePixelRatio || 1) * (96 / 25.4) / 1000;
 
         let report: LoadReport;
-        let stream: render.PassStream | undefined;
-        if (path === "arena") {
+        {
           // The worker is started when the page mounts (B4: when the viewer mounts), not on load.
           const transport = transportRef.current ?? (useWorker ? workerTransport() : inlineTransport());
           transportRef.current = null;
@@ -425,10 +418,10 @@ export function MapGlDocPage() {
           }
           const prep = [...es.prepareMs].sort((x, y) => x - y);
           report = {
-            file: name, bytes: bytes.byteLength, mode, path, via: documentReport ? "document" : "reader", document: documentReport, objects,
+            file: name, bytes: bytes.byteLength, mode, via: documentReport ? "document" : "reader", document: documentReport, objects,
             ms: {
               read: r(t1 - tStart), convert: r(summary.ms.decode + summary.ms.bridge), symbolise: summary.ms.symbolise,
-              prepare: r(summary.ms.atlas + summary.ms.assign + summary.ms.base + summary.ms.large), batch: 0, upload: 0,
+              prepare: r(summary.ms.atlas + summary.ms.assign + summary.ms.base + summary.ms.large),
               load: r(tLoaded - tPost), firstFrame: r(tFirst - tLoaded), complete: r(tComplete - tFirst), total: r(tComplete - tStart),
             },
             passes: summary.passes, passKinds: summary.passKinds, colours: summary.colours,
@@ -442,53 +435,6 @@ export function MapGlDocPage() {
             dpr: window.devicePixelRatio || 1, canvasPx: { w, h }, gpuTimer: renderer.hasGpuTimer, warnings: summary.warnings,
           };
           setEngineStats(es);
-        } else {
-          // S1 step 4: everything on the main thread, the whole document every frame.
-          const fonts = await loadFonts();
-          let objectsIn = readerInput;
-          let tConv = t1;
-          if (encodedDocument) {
-            const tDec = performance.now();
-            const doc = mapDocument.decodeMapDocument(encodedDocument);
-            if (documentReport) documentReport.ms.decode = r(performance.now() - tDec);
-            const bridge = mapDocument.documentRenderInput(doc, bridgeOptions);
-            if (documentReport) documentReport.canonicalSymbols = bridge.stats.canonicalSymbols;
-            const bs = bridge.stats;
-            objectsIn = { objects: bridge.objects, symbols: bridge.symbols, stats: { total: bs.total, matched: bs.rendered, proxied: bs.proxied, dropped: bs.dropped + bs.hidden, coordinates: bs.coordinates, unmatched: [] } };
-            tConv = performance.now();
-          }
-          const t2 = performance.now();
-          const sym = render.symbolise({ objects: objectsIn!.objects, symbols: objectsIn!.symbols, fonts });
-          stream = sym.stream;
-          const t3 = performance.now();
-          const prepared: PreparedStream = prepareStream(sym.stream, { fonts });
-          const t4 = performance.now();
-          const { batches, stats: batchStats } = buildBatches(prepared);
-          const t5 = performance.now();
-          renderer.setBatches(batches as Batch[]);
-          renderer.gl.finish();
-          const t6 = performance.now();
-          const fit = fitFor(prepared.bounds);
-          fitRef.current = { ...fit };
-          viewRef.current = { ...fit };
-          denseRef.current = { ...fit, pxPerUm: paper1x };
-          const first = draw()!;
-          renderer.gl.finish();
-          const t7 = performance.now();
-          const passKinds: Record<string, number> = {};
-          for (const p of sym.stream.passes) passKinds[p.kind] = (passKinds[p.kind] ?? 0) + 1;
-          const warn: Record<string, number> = {};
-          for (const wn of sym.warnings) warn[wn.code] = (warn[wn.code] ?? 0) + 1;
-          report = {
-            file: name, bytes: bytes.byteLength, mode, path, via: documentReport ? "document" : "reader", document: documentReport, objects: objectsIn!.stats,
-            ms: {
-              read: r(t1 - tStart), convert: r(tConv - t1), symbolise: r(t3 - t2), prepare: r(t4 - t3), batch: r(t5 - t4), upload: r(t6 - t5),
-              load: r(t6 - t1), firstFrame: r(t7 - t6), complete: 0, total: r(t7 - tStart),
-            },
-            passes: sym.stream.passes.length, passKinds, colours: new Set(sym.stream.passes.map((p) => p.colour)).size,
-            batch: batchStats, gpuBytes: renderer.gpuBytes, firstFrame: first, completeFrame: first,
-            dpr: window.devicePixelRatio || 1, canvasPx: { w, h }, gpuTimer: renderer.hasGpuTimer, warnings: warn,
-          };
         }
         observer?.disconnect();
         report.mainThread = { longTasks: longTasks.length, longestMs: r(Math.max(0, ...longTasks)), totalMs: r(longTasks.reduce((a, b) => a + b, 0)) };
@@ -496,7 +442,7 @@ export function MapGlDocPage() {
         setFrame(report.completeFrame);
         window.__mapGlDoc = { load: report, documentBytes: encodedDocument };
 
-        if (compare && path === "arena") {
+        if (compare) {
           // The same stream through the per-pass golden path (§5.2 Drawing; checked against the reference raster by the golden spec).
           const fonts = await loadFonts();
           let objs = readerInput;
@@ -504,7 +450,7 @@ export function MapGlDocPage() {
             const bridge = mapDocument.documentRenderInput(mapDocument.decodeMapDocument(encodedDocument), bridgeOptions);
             objs = { objects: bridge.objects, symbols: bridge.symbols, stats: readerInput?.stats ?? report.objects };
           }
-          const s = stream ?? render.symbolise({ objects: objs!.objects, symbols: objs!.symbols, fonts }).stream;
+          const s = render.symbolise({ objects: objs!.objects, symbols: objs!.symbols, fonts }).stream;
           const fit = fitRef.current!;
           // Zoomed so a 0.14 mm line is ≥ 1.5 px: the two paths' hairline floors (§5.2) do not differ there.
           const view: View = { ...fit, pxPerUm: Math.max(fit.pxPerUm, 1.5 / 140) };
@@ -544,7 +490,7 @@ export function MapGlDocPage() {
         setStatus("error");
       }
     },
-    [draw, mode, via, path, useWorker, gate, budgetMB, compare, sizeCanvas, requestDraw],
+    [draw, mode, via, useWorker, gate, budgetMB, compare, sizeCanvas, requestDraw],
   );
 
   const runScenario = useCallback(
@@ -702,14 +648,14 @@ export function MapGlDocPage() {
   }, [requestDraw, sizeCanvas]);
 
   useEffect(() => {
-    if (path === "arena") transportRef.current ??= useWorker ? workerTransport() : inlineTransport();
+    transportRef.current ??= useWorker ? workerTransport() : inlineTransport();
     return () => {
       engineRef.current?.dispose();
       engineRef.current = null;
       transportRef.current?.terminate();
       transportRef.current = null;
     };
-  }, [path, useWorker]);
+  }, [useWorker]);
   useEffect(() => () => rendererRef.current?.dispose(), []);
 
   const onFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -728,7 +674,7 @@ export function MapGlDocPage() {
     <div className="h-screen flex flex-col bg-slate-100 font-mono text-xs text-slate-800">
       <div className="p-2 flex flex-wrap items-center gap-3 border-b border-slate-300 bg-white">
         <input type="file" accept=".ocd,.omap,.xmap,.oxvm" onChange={onFile} data-testid="map-gl-doc-file" />
-        <span>mode: <b>{mode}</b> · path: <b>{path}</b>{path === "arena" && <> · worker {useWorker ? "on" : "off"} · gate {gate ? "on" : "off"} · budget {budgetMB} MB</>}</span>
+        <span>mode: <b>{mode}</b> · worker {useWorker ? "on" : "off"} · gate {gate ? "on" : "off"} · budget {budgetMB} MB</span>
         {(["source", "pilot", "envelope"] as Mode[]).filter((m) => m !== mode).map((m) => (
           <a key={m} className="underline" href={query(m)}>
             switch to {m}
@@ -757,9 +703,8 @@ export function MapGlDocPage() {
             <div>
               <b>{load.file}</b> {mb(load.bytes)} · objects {load.objects.total} (matched {load.objects.matched}, proxied {load.objects.proxied}, dropped {load.objects.dropped}) · coords {load.objects.coordinates}
               <br />
-              read {load.ms.read} · convert {load.ms.convert} · symbolise {load.ms.symbolise} · prepare {load.ms.prepare}
-              {load.path === "s1" ? <> · batch {load.ms.batch} · upload {load.ms.upload}</> : <> · load {load.ms.load}</>} · first frame {load.ms.firstFrame}
-              {load.path === "arena" && <> · complete {load.ms.complete}</>} · <b>total {load.ms.total} ms</b>
+              read {load.ms.read} · convert {load.ms.convert} · symbolise {load.ms.symbolise} · prepare {load.ms.prepare} · load {load.ms.load} · first frame {load.ms.firstFrame}
+              {" "}· complete {load.ms.complete} · <b>total {load.ms.total} ms</b>
               {load.arena && (
                 <span data-testid="map-gl-doc-arena">
                   <br />
@@ -770,7 +715,6 @@ export function MapGlDocPage() {
             <div>
               passes {load.passes} ({Object.entries(load.passKinds).map(([k, v]) => `${k} ${v}`).join(", ")}) · colours {load.colours}
               <br />
-              {load.batch && <>batches <b>{load.batch.batches}</b> · fill tris {load.batch.fillTriangles} · stroke tris {load.batch.strokeTriangles} · instances {load.batch.instances} · </>}
               GPU <b>{mb(load.gpuBytes)}</b>
               {load.arena && <> (arenas {mb(load.arena.gpu.arenas)}, visible set {mb(load.arena.gpu.visibleSet)})</>}
               <br />
