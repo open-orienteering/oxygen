@@ -11,10 +11,12 @@ describe("staleReason (docs/map-storage.md §6.9)", () => {
     // ocad-4 / omap-1 predate stage 5 (docs/map-import.md §5).
     expect(staleReason({ importerVersion: "ocad-4", libraryVersion: CURRENT }, true)).toBe("importer");
     expect(staleReason({ importerVersion: "omap-1", libraryVersion: CURRENT }, true)).toBe("importer");
-    expect(staleReason({ importerVersion: "ocad-5", libraryVersion: "none" }, true)).toBe("library");
-    expect(staleReason({ importerVersion: "ocad-5", libraryVersion: "ISOM2017-2@2020.01.0" }, true)).toBe("library");
+    // ocad-5 reported reader-dropped symbol types as READER_WARNING and warned on double-line mode 65535.
+    expect(staleReason({ importerVersion: "ocad-5", libraryVersion: CURRENT }, true)).toBe("importer");
+    expect(staleReason({ importerVersion: "ocad-6", libraryVersion: "none" }, true)).toBe("library");
+    expect(staleReason({ importerVersion: "ocad-6", libraryVersion: "ISOM2017-2@2020.01.0" }, true)).toBe("library");
     expect(staleReason({ importerVersion: "omap-2", libraryVersion: CURRENT }, false)).toBe("decisions");
-    expect(staleReason({ importerVersion: "ocad-5", libraryVersion: CURRENT }, true)).toBeNull();
+    expect(staleReason({ importerVersion: "ocad-6", libraryVersion: CURRENT }, true)).toBeNull();
   });
 });
 

@@ -330,7 +330,7 @@ class Converter {
       }
       if ((flags & 2) !== 0) this.warn("SYMBOL_FEATURE_DROPPED", `${s.number}: double line background colour`);
       if (borders.left || borders.right || borders.backgroundColour !== undefined) body.borders = borders;
-    } else if (mode !== 0) {
+    } else if (mode !== 0 && mode !== 0xffff) {
       this.warn("SYMBOL_FEATURE_DROPPED", `${s.number}: double line mode ${mode}`);
     }
 

@@ -320,8 +320,17 @@ skipped; a glyph with no parts left is dropped.
 | `wordSpace` (%) | `wordSpacing = (wordSpace − 100)/100 × 0.278` | Only when ≠ 100; 0.278 em approximates the space glyph. *Provisional.* |
 | `frMode` ≠ 0, `lbOn`, `pointSymOn` | — | Warned and dropped: the reader does not expose the framing colour / width, and line-below / attached point symbols are not in the IR. |
 
-Rectangle symbols (`type 7`) and unknown types are `null` with
-`SYMBOL_TYPE_UNSUPPORTED`.
+Rectangle symbols (`type 7`), line-text symbols (`type 6`) and unknown
+types warn `SYMBOL_TYPE_UNSUPPORTED`. The reader (`ocad2geojson`) does not
+parse them: it leaves them out of the symbol table and says so in its
+warning list (`Ignoring rectangle symbol 850001.`, `Unknown symbol type
+9`), and since `ocad-6` the normaliser turns exactly those warnings into
+`SYMBOL_TYPE_UNSUPPORTED` (`850.1: rectangle symbol dropped by the
+reader`) instead of counting them under `READER_WARNING`. Objects that use
+such a symbol get the `MISSING_SYMBOL` stub of §3.4. `ocadSymbolToRender`
+itself converts a line-text definition like a text symbol (the table
+above) and returns `null` with `SYMBOL_TYPE_UNSUPPORTED` for a rectangle
+or unknown type — reachable only with a reader that parses them (A12).
 
 **Warnings** (aggregated into the document header like every other
 stage-4 warning):
@@ -330,12 +339,14 @@ stage-4 warning):
 |---|---|
 | `SYMBOL_COLOUR_UNKNOWN` | A colour number the colour table lacks; that part of the symbol is skipped. |
 | `SYMBOL_EMPTY` | Nothing drawable was left ⇒ `render: null`. |
-| `SYMBOL_TYPE_UNSUPPORTED` | Rectangle or unknown symbol type. |
+| `SYMBOL_TYPE_UNSUPPORTED` | Rectangle or unknown symbol type; since `ocad-6` also a rectangle, line-text or unknown symbol the reader dropped (from its warning list). |
 | `SYMBOL_FEATURE_DROPPED` | Decrease, double-line background colour / unknown mode, framing narrower than the main line, text framing / line-below / attached point symbol / vertical alignment, non-line border reference, zero-size hatch or pattern. |
 | `FONT_SUBSTITUTED` | Font name not metric-compatible with the shipped family. |
 | `IRREGULAR_PATTERN_REGULARISED` | Irregular area pattern drawn as a regular grid. |
 
 **Corpus** (2026-10-16, script under the local measurements directory;
+superseded for warnings by the 2026-10-20 S0 run in the research decision
+log, which counts every symbol rather than the first message per code;
 numbers only, no map content): 1 154 source definitions, 1 153
 converted (one text symbol references a colour missing from its table);
 objects drawn natively 45 628 / 100 845 / 4 927 / 3 021 / 10 680, proxied
@@ -384,8 +395,9 @@ stale border references, one too-narrow framing line.
 ### 3.6 Dropped with a warning
 
 Templates (string 8, `TEMPLATES_DROPPED`), layout objects (string 24,
-`LAYOUT_OBJECTS_DROPPED`), reader warnings (`READER_WARNING`, texts in the
-import result). Everything else in the file (view, zoom, bookmarks,
+`LAYOUT_OBJECTS_DROPPED`), reader warnings (`READER_WARNING`, a count; the
+texts are the reader's own `warnings` list and are not stored — except
+the dropped-symbol-type ones, which are `SYMBOL_TYPE_UNSUPPORTED`, §3.3). Everything else in the file (view, zoom, bookmarks,
 symbol icons, course-setting data) is dropped silently per 02 §1.
 
 ### 3.7 Stage 6–7 warnings
@@ -632,11 +644,13 @@ non-contiguous priorities). The rest are shared with §3.6–3.7.
 
 ## 5. Header provenance
 
-`format.importer` is `"ocad-5"` for OCAD sources (`OCAD_IMPORTER_VERSION`;
+`format.importer` is `"ocad-6"` for OCAD sources (`OCAD_IMPORTER_VERSION`;
 `ocad-1` had `render: null` for every source symbol, `ocad-2` carried the
 upload name in the header, `ocad-3` had no matcher, `ocad-4` stored
 ScalePar `d` as `declinationDeg`, ignored `e` and had no
-`CRS_UNRESOLVED`) and `"omap-2"` for Mapper sources
+`CRS_UNRESOLVED`, `ocad-5` counted the reader's dropped rectangle /
+line-text symbols as `READER_WARNING` and warned `SYMBOL_FEATURE_DROPPED`
+for double-line mode 65535 although §3.3 calls it off) and `"omap-2"` for Mapper sources
 (`OMAP_IMPORTER_VERSION`; `omap-1` stored `paperOrigin` unrounded).
 Documents of either earlier version have no `georeference` / `north` in
 their report; the dedup only reuses current-version documents, so the
@@ -656,8 +670,8 @@ and in the import report (`mapImport.importReportSchema`,
 
 Required and tested: same bytes in → same document bytes and hash out,
 across processes and machines. Unit tests `import-ocad.test.ts` /
-`import-omap.test.ts` encode `e2e/test.ocd` / `e2e/test.xmap` twice; the corpus script asserts `sameAsPrevious` across
-runs. Sources of non-determinism to avoid when extending the normaliser:
+`import-omap.test.ts` encode `e2e/test.ocd` / `e2e/test.xmap` twice; the corpus script
+(`scripts/measure-import.mjs`, §7) asserts `sameAsPrevious` across runs. Sources of non-determinism to avoid when extending the normaliser:
 iteration over `Map`/`Set` built from sparse arrays (use the array
 index), floating-point sums (keep source integers), `Date`/random ids,
 and transcendental functions (`Math.sin`/`cos`/`atan2`, proj4): their
@@ -693,20 +707,69 @@ document hash is identical on two machines.
 | Unit + integration (api) | `map-crt.test.ts`, `integration/map-crt.test.ts` (see `docs/map-storage.md` §10) | `exportCrt` / `importCrt`: file name, plan on the fixture, decide's cap, the procedures end to end |
 | Unit + integration + E2E (api, web) | see `docs/map-storage.md` §10 | stages 1 and 9: chunked upload route, import jobs, store, dedup, pins, report row, delivery route |
 | Unit + integration + E2E (api) | see `docs/map-storage.md` §10 (previews rows) | stage 10: thumbnail row written by the job and by the dedup short-cut, non-fatal failure, object cap |
+| Script (scripts) | `scripts/__tests__/measure-import.test.mjs` (`pnpm test:scripts`) | `scripts/measure-import.mjs` over the two fixtures: hashes written and found again in a second process, a changed hash fails as a determinism failure, the Mapper fixture's three unsupported-primitive codes fail the run, usage errors exit 2 |
 
-The S0 corpus check (09 §7: whole corpus, every OMAP construct): the
-OCAD half runs via the measurement script and is recorded in
-`docs/map-document-format.md` §9; the OMAP half has run against the
-three OOM symbol sets (ISOM 2017-2, ISSprOM 2019-2, ISOM 2017-2 1:10000 —
-185 rendered symbols in the ISOM set, 106 auto / 46 suggested / 38
-unmatched / 25 variant, factor ×1 by `lines`, the only conversion
-warnings being 502.2's extra border pair and 602's empty point symbol)
-and the corpus `.omap` files; results stay in the local measurements
-directory, not in the repo.
+**S0 corpus check** (09 §7: the whole corpus and every OMAP construct in
+the sample set, deterministically). `scripts/measure-import.mjs` runs
+every `.ocd` / `.omap` / `.xmap` in the given directories through the
+import worker's path (`importMapToDocument` with no decisions, then
+`buildImportReport`) and prints per map the document hash,
+`format.importer`, library version, counts, the warning-code histogram,
+symbol and object matching outcomes and the report's `georeference` /
+`north` fields (§3.8). It exits non-zero on an import error, on any
+*unsupported-primitive* warning — `SYMBOL_TYPE_UNSUPPORTED`,
+`SYMBOL_FEATURE_DROPPED`, `UNKNOWN_OBJECT_TYPE`,
+`IRREGULAR_PATTERN_REGULARISED`, `TEXT_VERTICAL_ALIGNMENT_DROPPED`,
+`TEXT_BOX_DROPPED`, `TEXT_ALIGNMENT_PER_OBJECT`, `COLOUR_OPACITY_IGNORED`: a source construct the
+document drops or approximates; by-design drops, source data errors,
+font substitution and matching outcomes are only reported — and, with
+`--previous`, on any document hash that differs from that run's.
+
+```bash
+node scripts/measure-import.mjs .local/corpus <omap-dir> --out .local/s0/run.json --hashes .local/s0/hashes.json
+node scripts/measure-import.mjs .local/corpus <omap-dir> --previous .local/s0/hashes.json
+```
+
+`--hashes` writes only `{name, documentHash, importer, libraryVersion}`
+keyed by the source file's SHA-256 (`map_sources.file_hash`) — no
+georeference — so it can be carried to a second machine and passed as
+`--previous` there (maps match by file hash, then by name). Neither the
+maps nor the JSON files are committed (AGENTS.md §12); keep them under
+`.local/`, since `--out` carries each map's WGS 84 origin and extent.
+
+**Against production.** The same comparison works against what Cloud
+Run produced from the same files, once the instance runs the same
+importer and library versions (`ocad-6` / `omap-2`,
+`*@<SYMBOL_LIBRARY_VERSION>`) and only for documents imported without
+club decisions (stage 6 applies them, so a reviewed map has a different,
+equally correct hash). Either list the stored documents:
+
+```sql
+select s.file_hash, s.file_name, d.hash, d.importer_version, d.library_version
+from oxygen.map_documents d
+join oxygen.map_sources s on s.file_hash = d.source_hash
+order by s.file_hash, d.created_at;
+```
+
+and compare `(file_hash, hash)` with the `--hashes` file; or, signed in
+as an admin, `GET https://<instance>/api/map-documents/<documentHash>`
+for each local document hash — `?event=<eventId>` for a map only an
+event pins (club-library versions pass without it, `docs/map-storage.md`
+§4.2). A 200 means production holds byte-identical output for that file;
+a 403 does not distinguish "no such document" from "not visible to you",
+so only the 200 is evidence. The 2026-10-20 run over
+the five OCAD corpus maps and the three OOM sample `.omap` files is in
+the research decision log ("S0 corpus check"): deterministic, zero
+import errors, 48 unsupported-primitive warnings.
 
 ## 8. Pending in this chapter
 
-S2 confirmation of the *provisional* §3.3 rows against OCAD output,
+S0's unsupported primitives (text framing, vertical text alignment and
+text boxes, rectangle symbols, a framing line narrower than its main
+line, Mapper's extra border pair) and a warning code that separates a
+stale area-border reference from an unsupported feature — rows A12–A14
+in `research/vector-map-pipeline/SLICES.md`; the S0 hash comparison on a
+second machine. S2 confirmation of the *provisional* §3.3 rows against OCAD output,
 event / club map *apply* for Mapper sources (needs slice C, §2.2), stage 5 fonts used (fallback decisions)
 and feature usage (03 §6.8 table) — 06 §4.4's `fonts` / `features`
 report sections; the `proj4-match` CRS method for PROJ.4 specs neither

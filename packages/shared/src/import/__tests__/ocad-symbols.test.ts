@@ -86,7 +86,9 @@ describe("ocadSymbolToRender — line", () => {
     expect(left).toMatchObject({ type: "line", borders: { left: { dash: { dashUm: 1990 } } } });
     const off = ocadSymbolToRender(line({ doubleLine: { ...dbl, dblMode: 65535 } }), ctx);
     expect(off.render && off.render.type === "line" ? off.render.borders : "x").toBeUndefined();
-    expect(codes(off.warnings)).toEqual(["SYMBOL_FEATURE_DROPPED"]);
+    expect(off.warnings).toEqual([]);
+    const odd = ocadSymbolToRender(line({ doubleLine: { ...dbl, dblMode: 4 } }), ctx);
+    expect(codes(odd.warnings)).toEqual(["SYMBOL_FEATURE_DROPPED"]);
   });
 
   const dot = [{ type: 4, color: 0, diameter: 30, coords: [c(0, 0)] }];

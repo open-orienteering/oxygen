@@ -25,7 +25,11 @@ import type { DocumentColour, DocumentSymbolInput, DocumentWarning, Georeferenci
 
 /** OCAD coordinates are 1/100 mm. */
 export const OCAD_UNITS_PER_MM = 100;
-export const OCAD_IMPORTER_VERSION = "ocad-5";
+export const OCAD_IMPORTER_VERSION = "ocad-6";
+
+/** `ocad2geojson`'s warnings for symbol types it does not parse: type 6 line text and type 7 rectangle by number, anything else by type. */
+const READER_DROPPED_SYMBOL = /^Ignoring (rectangle|line text) symbol (\d+)\.$/;
+const READER_UNKNOWN_SYMBOL_TYPE = /^Unknown symbol type (-?\d+)$/;
 
 export interface OcadCoordinateLike {
   0: number;
@@ -335,7 +339,19 @@ export function ocadToDocumentInput(ocad: OcadFileLike, opts: OcadSourceOptions)
   if (templates) warn("TEMPLATES_DROPPED", `${templates} template(s) referenced by the map are not imported`, templates);
   const layout = ocad.parameterStrings["24"]?.length ?? 0;
   if (layout) warn("LAYOUT_OBJECTS_DROPPED", `${layout} layout object(s) not imported`, layout);
-  const readerWarnings = ocad.warnings?.length ?? 0;
+  // The reader drops rectangle and line-text symbol definitions with a warning
+  // of its own; those are unsupported symbol types (§3.3), not reader noise.
+  let readerWarnings = 0;
+  for (const w of Array.from(ocad.warnings ?? [])) {
+    const text = w instanceof Error ? w.message : String(w);
+    const dropped = READER_DROPPED_SYMBOL.exec(text);
+    const unknown = READER_UNKNOWN_SYMBOL_TYPE.exec(text);
+    if (dropped) {
+      const n = Number(dropped[2]);
+      warn("SYMBOL_TYPE_UNSUPPORTED", `${Math.floor(n / 1000)}.${n % 1000}: ${dropped[1]} symbol dropped by the reader`);
+    } else if (unknown) warn("SYMBOL_TYPE_UNSUPPORTED", `symbol type ${unknown[1]} dropped by the reader`);
+    else readerWarnings++;
+  }
   if (readerWarnings) warn("READER_WARNING", "see the reader's warning list", readerWarnings);
 
   const { georeferencing, mapScale, unresolvedCrs } = ocadGeoreferencing(ocad);
