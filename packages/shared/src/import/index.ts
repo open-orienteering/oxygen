@@ -13,3 +13,4 @@ export * from "./fingerprint.js";
 export * from "./matcher.js";
 export * from "./match-document.js";
 export * from "./decisions.js";
+export * from "./crt.js";

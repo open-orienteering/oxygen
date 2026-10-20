@@ -730,6 +730,8 @@ mapImport.decide   { documentHash, decisions }    club_symbol_decisions writes (
                                                   → the reviewed document, stored, unpinned
 mapImport.finalise { documentHash, target }       applyJobResult with that document: event rows of the source,
                                                   or the club map's version of the source (§6.4, in place)
+mapImport.exportCrt / importCrt                   the decisions as a Mapper CRT and back; the import resolves
+                                                  to decide's list and runs decideOnDocument (map-symbols §8.6)
 ```
 
 - A decide job is an ordinary row (§6.1) with `event_id` and
@@ -1071,6 +1073,8 @@ lands with its own section here and its own tests.
 | Unit (api) | `packages/api/src/__tests__/map-symbol-decisions.test.ts` | `parseDecisionSnapshot` (malformed column → no decisions), `planDecisionWrites` (accept / unmatch under the current release, reset per library, last decision wins, unknown index / non-source / foreign-library / unknown entry rejected), decide input schema, the worker applying a decision snapshot with the same bytes as inline and a different hash than without |
 | Unit (api) | `packages/api/src/__tests__/map-document-route.test.ts` (edit mode) | `EDIT_ACCESS`: `courses.view` not enough, `courses.edit` admits, kiosk key never, club and own-job clauses unchanged |
 | Integration (api) | `packages/api/src/__tests__/integration/map-review.test.ts` | `review` rows on the fixture (702 suggested 703 with candidates, swatch URLs, colour class, counts, stack, report), predicate (stranger 403, anonymous 401, kiosk key with and without a user, wrong key 401, 404, bad hash); `decide` writes the row, snapshots it on the job, makes a new unpinned document drawn canonically, own-job review, old document no longer `current`, determinism, validation 400, stranger / kiosk 403; the decision applied to a second file of the same symbols; dedup to the decided document; `finalise` on the event (pins, `mapMetadata`, idempotent, other source 412, no capability 403, no event 400) and on a club version (in place, seq / label kept, event pin unchanged, 412, unknown club map 404); club target anonymous 401; `reset` back to the matcher's document |
+| Unit (api) | `packages/api/src/__tests__/map-crt.test.ts` | `crtFileName` (Mapper's `SOURCE-TARGET.crt`), the 1 MiB limit, `planCrtImport` on the `e2e/test.ocd` header (a decision, an unchanged variant line, a reported target; the full table round trip records nothing), decide's 5 000 cap |
+| Integration (api) | `packages/api/src/__tests__/integration/map-crt.test.ts` | `exportCrt` header only before any decision, the three auto matches on `includeMatches`, a decision with its `# fp` from both documents of the source, predicate (stranger 403, anonymous 401, kiosk key reads, 404, bad hash); `importCrt` of the export after a `reset` writes the same row and yields the same document as `decide` (unpinned), `# keep` recorded and exported, dry run writes nothing, unappliable lines reported with no row and no job, the full-table round trip records nothing; stranger / anonymous / kiosk refused, 404, over 1 MiB 400 |
 | Unit (api) | `packages/api/src/__tests__/map-rematch-cli.test.ts` | `staleReason` matrix, CLI flags, plan / item / summary lines |
 | Integration (api) | `packages/api/src/__tests__/integration/map-rematch.test.ts` | an `ocad-3` / `none` row pinned by an event and a club version is planned (both, `--event` scope), dry run writes nothing, a run moves both pins to the current document, second run empty; a decision change re-matches the club edition only |
 | Integration (api) | `packages/api/src/__tests__/integration/map-backfill.test.ts` | plan counts and ordering, dry run writes nothing, legacy club row → series (settings copied) + version 1 (label / uploader / time from the row), event rows → pins with dedup and club-version pin, unreadable rows reported and left unpinned, second run revisits only what is missing, `--event` scope and soft-deleted events skipped, `backfillStatus` / `backfillStart` admin-only, background run and `CONFLICT` |
@@ -1119,9 +1123,11 @@ lands with its own section here and its own tests.
 | `packages/api/prisma/migrations/20261019150000_club_symbol_decisions/` | `club_symbol_decisions` |
 | `packages/api/src/map-store/decisions.ts` | decision rows: load, plan and write `decide`'s changes, job snapshot schema, "does a stored document follow the decisions" |
 | `packages/api/src/map-store/review.ts` | review payload, `decideOnDocument`, `finaliseDocument`, `isDocumentCurrent` |
+| `packages/api/src/map-store/crt.ts` | CRT export (rows → `mapImport.formatCrt`, file name) and import (`planCrtImport` → `decideOnDocument`) |
 | `packages/api/src/map-store/rematch.ts` | re-match plan and run (§6.9) |
 | `packages/api/src/cli/map-rematch.ts` (+ `-args.ts`) | `pnpm map:rematch` |
 | `packages/shared/src/import/decisions.ts` | fingerprints, rows → decisions, review rows (`docs/map-symbols.md` §8.5) |
+| `packages/shared/src/import/crt.ts` | the CRT codec: `parseCrt`, `formatCrt`, `resolveCrt` (`docs/map-symbols.md` §8.6) |
 | `packages/api/src/routers/mapImport.ts` | `mapImport.status`, `latestForEvent`, `review`, `decide`, `finalise`, `backfillStatus`, `backfillStart` |
 | `packages/web/src/components/MaintenancePanel.tsx` | Map documents card |
 | `packages/api/src/event-map.ts` | `applyEventMap` writes the source row and starts the event job |

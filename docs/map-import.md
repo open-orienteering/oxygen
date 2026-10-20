@@ -174,6 +174,34 @@ type ReviewDecision = { symbolIdx; accept: canonicalId } | { symbolIdx; unmatch:
   own-job clauses read as for reading. Club map targets need a signed-in
   user, as the club library's own mutations.
 
+**CRT export / import** (06 §5.1, §5.3; format and resolution rules in
+`docs/map-symbols.md` §8.6):
+
+```
+mapImport.exportCrt { documentHash, includeMatches?: boolean }      query, review's predicate (READ_ACCESS)
+  → { documentHash, fileName, library, crt, rules, kept, auto }
+mapImport.importCrt { documentHash, crt: string ≤ 1 MiB, dryRun?: boolean }   mutation, decide's (EDIT_ACCESS)
+  → { decisions: ({symbolIdx, accept} | {symbolIdx, unmatch: true})[], unchanged[], skipped[], warnings[], applied, job | null }
+```
+
+- `exportCrt` reads the club rows of the document's library for the
+  document's fingerprints (`includeMatches` adds its automatic matches).
+  `fileName` follows Mapper's `SOURCE-TARGET.crt` convention:
+  `<source file name without extension>-<library id>.crt`. `rules` /
+  `kept` / `auto` count the rule lines, `# keep` lines and the rule lines
+  marked `auto`. Same document + same rows ⇒ the same bytes.
+- `importCrt` resolves the CRT against the document and passes the
+  applicable `accept` / `unmatch` decisions to `decide`'s
+  `decideOnDocument`: rows under the current release, one import job
+  without a target, `{ applied, job }` exactly as `decide`. `unchanged` /
+  `skipped` list `{ line, symbolIdx }` / `{ line, code, message }`;
+  `warnings` are the counted codes. Nothing applicable, or `dryRun: true`,
+  writes nothing and returns `applied: 0, job: null` with the resolved
+  `decisions`. More than 5 000 applicable decisions (`decide`'s cap) is
+  `BAD_REQUEST`; so is a CRT over 1 MiB.
+- Authorisation is `review`'s for the export (a kiosk key reads; the
+  rows are what `review` already shows) and `decide`'s for the import.
+
 The *apply* mutations that still feed the legacy raster tile pipeline
 (`course.applyEventMap`-style event map upload, club map upload) remain
 OCAD-only: they need `ocad2geojson` for the tiles. A Mapper file can be
@@ -661,6 +689,8 @@ document hash is identical on two machines.
 | E2E | `e2e/map-gl-doc.spec.ts` | document path = reader path in the browser, native `.oxvm` round trip, `mode=source` draws the fixture from its own definitions with no proxies; `e2e/test.xmap` loads client-side with no OCAD reader, draws, and surfaces the OMAP warning codes |
 | Unit (shared) | `packages/shared/src/import/__tests__/decisions.test.ts` | club decisions and review rows (`docs/map-symbols.md` §8.5), stage 6 with decisions: other library ignored, older release applied |
 | Unit + integration (api) | `map-symbol-decisions.test.ts`, `integration/map-review.test.ts` (see `docs/map-storage.md` §10) | the review round: decision writes and validation, worker applying a snapshot, `review` / `decide` / `finalise` |
+| Unit (shared) | `packages/shared/src/import/__tests__/crt.test.ts` | the CRT codec (`docs/map-symbols.md` §8.6): Mapper's grammar, Oxygen's comments, resolution and its warning codes, unchanged auto matches, round trip |
+| Unit + integration (api) | `map-crt.test.ts`, `integration/map-crt.test.ts` (see `docs/map-storage.md` §10) | `exportCrt` / `importCrt`: file name, plan on the fixture, decide's cap, the procedures end to end |
 | Unit + integration + E2E (api, web) | see `docs/map-storage.md` §10 | stages 1 and 9: chunked upload route, import jobs, store, dedup, pins, report row, delivery route |
 | Unit + integration + E2E (api) | see `docs/map-storage.md` §10 (previews rows) | stage 10: thumbnail row written by the job and by the dedup short-cut, non-fatal failure, object cap |
 
@@ -677,8 +707,7 @@ directory, not in the repo.
 ## 8. Pending in this chapter
 
 S2 confirmation of the *provisional* §3.3 rows against OCAD output,
-event / club map *apply* for Mapper sources (needs slice C, §2.2), CRT
-export / import (06 §5.1, A7), stage 5 fonts used (fallback decisions)
+event / club map *apply* for Mapper sources (needs slice C, §2.2), stage 5 fonts used (fallback decisions)
 and feature usage (03 §6.8 table) — 06 §4.4's `fonts` / `features`
 report sections; the `proj4-match` CRS method for PROJ.4 specs neither
 parse nor the grid table knows. Each lands with its own section here and

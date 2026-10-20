@@ -473,6 +473,132 @@ independence, newest-wins and tie rules, library and kind filtering,
 the stage 6–7 fixture with flags and candidates, attrs-only object
 counts); the API side in `docs/map-storage.md` §10.
 
+### 8.6 CRT export / import (06 §5.1, §5.3; 03 §3.2)
+
+Club decisions travel to OpenOrienteering Mapper and back as a
+cross-reference table. Code: `packages/shared/src/import/crt.ts`
+(`parseCrt`, `formatCrt`, `resolveCrt`, exported as `mapImport`); the
+procedures are `mapImport.exportCrt` / `importCrt`
+(`docs/map-import.md` §2.2).
+
+**Mapper's syntax**, as its reader has it (`SymbolRuleSet::loadCrt` in
+`src/core/objects/symbol_rule_set.cpp`, `doc/manual/pages/crt_files.md`):
+one rule per line, the first whitespace-delimited token the **target**
+symbol number (the replacement set's), the rest of the line, trimmed, the
+**source** — a symbol number compared as an exact string with
+`getNumberAsString()`, or an object query. A line whose first token
+starts with `#` is a comment; there are no trailing comments (a `#` after
+the target is part of the source). Empty lines are ignored. A target the
+replacement set lacks leaves the rule unassigned, not an error; of two
+rules for one source the later wins; a source no rule names keeps its
+symbol. Mapper writes the target padded to ten columns (`writeCrt`), and
+numbers an OCAD symbol `101000` as `101.0` — which is how our OCAD reader
+writes the code too.
+
+**What Oxygen writes** (`formatCrt`), LF line ends, UTF-8, symbols in
+`symbolIdx` order:
+
+```
+# oxygen-crt library=ISOM2017-2@2026.10.1 source=ocad document=<64 hex>
+# OpenOrienteering Mapper cross-reference table: <target> <source> per rule. …
+# fp ocad:702:d5d4a092 decision 702.0 Control point
+703       702.0
+# fp ocad:403:c694d305 decision 403.0 Rough open land
+# keep 403.0
+# fp ocad:601:f360c772 auto 601.0 Magnetic north line
+601.b     601.0
+```
+
+- **Target column** = the canonical entry id without the `<library>:`
+  prefix (`703`, `105.1`, `601.b`); the library is the header line's.
+  Heading entries are Mapper symbol numbers of its ISOM 2017-2 /
+  ISSprOM 2019 sets; **variants are not** (Mapper numbers them
+  differently: our `104.b` "Earth bank, top line" is its `104.2`), so
+  Mapper leaves a variant rule unassigned. That is a documented limit,
+  chosen by the user 2026-10-19 over emitting the heading code (lossy: it
+  would come back as the heading's drawing) or a hand-typed variant table
+  (03 §10's licence question). Oxygen round-trips variants exactly.
+- **Source column** = `header.symbols[i].code` verbatim (`702.0` OCAD,
+  `509.0.1` OMAP) — what Mapper shows for the same file.
+- **`# fp <fingerprint> <decision|auto> <code> <name>`** precedes every
+  entry: the §8.5 fingerprint, then whether the line is a club decision or
+  an automatic match, then code and name for the reader. Its own line,
+  because a trailing comment would be read as part of the source.
+- **`# keep <source>`** is a `canonical_id NULL` decision (keep the source
+  drawing). Mapper has no rule for "no replacement", so it is a comment
+  directive Mapper ignores — which is what Mapper does to a source no
+  rule names.
+- **Contents** (user decision 2026-10-19): by default the club's
+  **decisions** only — every source symbol with a fingerprint and a
+  decision of the document's library, read as stage 6 reads them (every
+  release of `<library>@`, newest `decided_at` wins; `decisionsFromRows`).
+  A decision naming an entry the library has dropped is still written; the
+  import reports it. `includeMatches: true` also writes the document's
+  **automatic** matches (`state: "auto"`, method not `explicit`) as rules
+  marked `auto`, so Mapper gets the whole table. `suggested`, `unmatched`
+  and `variant` symbols without a decision are never written.
+
+**What Oxygen reads** (`parseCrt`, then `resolveCrt` against the
+document): every Mapper CRT, with or without Oxygen's comments. A BOM is
+stripped; CRLF and tabs are accepted. The `# oxygen-crt` header is
+informative; `# fp` binds to the next rule or keep (plain comments in
+between do not unbind it, a malformed `# fp` does); `# keep` without a
+source is a bad line. Skip messages quote at most 120 characters of the
+offending text.
+
+- **Library**: decisions are recorded under the *document's* library
+  (`header.library.id`, else `chooseLibrary(mapScale)`) at the current
+  release, exactly as `decide` (§8.5). A header naming another library id
+  warns `CRT_LIBRARY_MISMATCH` and the rules are still tried; a release
+  difference is not a mismatch (a decision is about an entry).
+- **Target**: the bare form (`703`, `601.b`) or a full id
+  (`ISOM2017-2:703`); it must be an entry of the document's library.
+- **Source → symbols**: the `# fp` fingerprint when it names a source
+  symbol of this document; else — or when it names none
+  (`CRT_FINGERPRINT_MISMATCH`, the symbol was redrawn since export) — every
+  source symbol whose `normaliseCode` equals the rule's (`702` ≡ `702.0`).
+  A `# fp` whose code is not the rule's source is not used either (the
+  line was edited) and warns the same way.
+  Two symbols with one code both take a code-only rule, each under its own
+  fingerprint. Of two lines for one symbol the later wins (Mapper's rule
+  and `decide`'s).
+- **Unchanged** (user decision 2026-10-19): a rule whose target is what
+  the document already draws *automatically* for that symbol (`state:
+  "auto"`, method not `explicit`, same `canonicalId`) is counted in
+  `unchanged` and **not** recorded. A whole table carried to Mapper and
+  back therefore records only the lines that were edited, and the
+  untouched auto matches stay the matcher's, re-proposed after a library
+  or matcher change (03 §6.5). A rule restating an `explicit` match is
+  recorded again (a fresh `decided_at`); a `# keep` is always recorded
+  (it turns a suggestion into a reviewed decision).
+- **Partial, never silent**: what applies is recorded through
+  `decideOnDocument` — the same path as `decide`, the only writer of
+  `club_symbol_decisions` — as one decision list, so one import job; every
+  line that does not apply is in `skipped[]` (line, code, detail) and
+  counted in `warnings` (the import report's `{code, message, count}`
+  shape):
+
+| Code | Line |
+|---|---|
+| `CRT_LINE_INVALID` | a rule with no source, a `# keep` with none |
+| `CRT_QUERY_UNSUPPORTED` | a Mapper object query as source (whitespace, `=`, quotes, parentheses) |
+| `CRT_SOURCE_UNKNOWN` | no source symbol of the document has that code |
+| `CRT_SOURCE_NOT_REVIEWABLE` | the symbols of that code have no render, hence no fingerprint |
+| `CRT_TARGET_UNKNOWN` | the target is not an entry of the document's library |
+| `CRT_FINGERPRINT_MISMATCH` | the `# fp` names no symbol here; applied by code (also counted as applied). A line skipped for another reason reports that code alone |
+| `CRT_LIBRARY_MISMATCH` | the header names another library id; once per file |
+
+A CRT is additive: there is no `reset` line (a decision is removed with
+`decide`'s `reset`). Nothing applicable → no row written and no job.
+
+Tests: `packages/shared/src/import/__tests__/crt.test.ts` (Mapper's
+grammar incl. its shipped `ISOM2000-ISOM 2017-2.crt` lines, every
+warning code, `702` ≡ `702.0`, duplicate-code fan-out, fingerprint
+precedence and mismatch, later-wins, unchanged, the header, `# keep`,
+`includeMatches`, byte-stable output and the round trip
+`resolveCrt(parseCrt(formatCrt(…)))`); the API side in
+`docs/map-storage.md` §10.
+
 ## 9. Colour stack alignment (03 §6.3)
 
 Import stage 7. Code: `packages/shared/src/import/{colour-class,colour-align}.ts`.
@@ -526,9 +652,10 @@ resolves canonical entries through `paletteIndexOfStack(header.colours)`.
 
 ## 10. Pending in this chapter
 
-- Review UI for `suggested` matches (slice B); the API is §8.5 and
-  `docs/map-import.md` §2.2. CRT export / import of the decisions (06 §5.1,
-  slice A7).
+- Review UI for `suggested` matches and the CRT download / upload
+  (slice B); the API is §8.5, §8.6 and `docs/map-import.md` §2.2.
+- Mapper object queries as CRT sources (§8.6 `CRT_QUERY_UNSUPPORTED`)
+  and a variant table to Mapper's sub-numbers, if a club needs either.
 - Library variants for the OCAD template conventions (§8.4) if the auto
   rate needs to rise.
 - Contact sheet: a golden render per entry at 10× via the reference

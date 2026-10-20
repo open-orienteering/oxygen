@@ -2,8 +2,8 @@
  * Import job status (docs/map-storage.md §6.3; research 07 §8). The poll
  * is the engine: asking for a job that is queued, or running with a
  * stale heartbeat, makes this instance pick it up. The review round —
- * `review` / `decide` / `finalise` (docs/map-import.md §2.2, research
- * 06 §5.1) — lives here too.
+ * `review` / `decide` / `finalise` and the CRT export / import of the
+ * decisions (docs/map-import.md §2.2, research 06 §5.1) — lives here too.
  */
 
 import { z } from "zod";
@@ -13,7 +13,8 @@ import { prisma } from "../db.js";
 import { resolveEventCapabilities } from "../permissions.js";
 import { getImportJob, isClaimable, kickImportJobs, latestImportJobForEvent, type ImportJobRow } from "../map-store/jobs.js";
 import { backfillStatus, planBackfill, startBackfill, type BackfillRun } from "../map-store/backfill.js";
-import { DecisionInputError, reviewDecisionSchema } from "../map-store/decisions.js";
+import { DecisionInputError, MAX_REVIEW_DECISIONS, reviewDecisionSchema } from "../map-store/decisions.js";
+import { exportDocumentCrt, importDocumentCrt, MAX_CRT_BYTES } from "../map-store/crt.js";
 import { buildReview, decideOnDocument, finaliseDocument } from "../map-store/review.js";
 import { checkDocumentAccess, EDIT_ACCESS, READ_ACCESS, type DocumentAccessMode } from "../map-store/routes.js";
 import type { Context } from "../trpc.js";
@@ -142,7 +143,7 @@ export const mapImportRouter = router({
    * would, so a large map is polled like an upload.
    */
   decide: authedProcedure
-    .input(z.object({ documentHash: documentHashSchema, decisions: z.array(reviewDecisionSchema).min(1).max(5_000) }))
+    .input(z.object({ documentHash: documentHashSchema, decisions: z.array(reviewDecisionSchema).min(1).max(MAX_REVIEW_DECISIONS) }))
     .mutation(async ({ ctx, input }) => {
       await requireDocument(ctx, input.documentHash, EDIT_ACCESS);
       const db = prisma();
@@ -155,6 +156,53 @@ export const mapImportRouter = router({
       }
       if (!result.ok) throw new TRPCError({ code: "NOT_FOUND", message: "Map document not found" });
       return { applied: result.applied, job: await present(db, result.job) };
+    }),
+
+  /**
+   * The document's club decisions as an OpenOrienteering Mapper CRT
+   * (docs/map-symbols.md §8.6); `includeMatches` adds its automatic
+   * matches. Readable as `review` is: the rows are what review shows.
+   */
+  exportCrt: publicProcedure
+    .input(z.object({ documentHash: documentHashSchema, includeMatches: z.boolean().optional() }))
+    .query(async ({ ctx, input }) => {
+      await requireDocument(ctx, input.documentHash, READ_ACCESS);
+      const out = await exportDocumentCrt(prisma(), input.documentHash, { includeMatches: input.includeMatches });
+      if (!out) throw new TRPCError({ code: "NOT_FOUND", message: "Map document not found" });
+      return out;
+    }),
+
+  /**
+   * Record a CRT's rules as club symbol decisions through `decide`'s path
+   * (docs/map-symbols.md §8.6): what applies is decided and re-imported in
+   * one job without a target; every other line is reported. Nothing
+   * applicable, or `dryRun`, writes nothing and returns `job: null`.
+   */
+  importCrt: authedProcedure
+    .input(z.object({
+      documentHash: documentHashSchema,
+      crt: z.string().refine((s) => Buffer.byteLength(s, "utf8") <= MAX_CRT_BYTES, "a CRT of at most 1 MiB"),
+      dryRun: z.boolean().optional(),
+    }))
+    .mutation(async ({ ctx, input }) => {
+      await requireDocument(ctx, input.documentHash, EDIT_ACCESS);
+      const db = prisma();
+      let result;
+      try {
+        result = await importDocumentCrt(db, { hash: input.documentHash, crt: input.crt, userId: ctx.user?.id ?? null, dryRun: input.dryRun });
+      } catch (err: unknown) {
+        if (err instanceof DecisionInputError) throw new TRPCError({ code: "BAD_REQUEST", message: err.message });
+        throw err;
+      }
+      if (!result.ok) throw new TRPCError({ code: "NOT_FOUND", message: "Map document not found" });
+      return {
+        decisions: result.decisions,
+        unchanged: result.unchanged,
+        skipped: result.skipped,
+        warnings: result.warnings,
+        applied: result.applied,
+        job: result.job ? await present(db, result.job) : null,
+      };
     }),
 
   /**

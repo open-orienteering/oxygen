@@ -28,6 +28,9 @@ export function parseDecisionSnapshot(json: unknown): mapImport.SymbolDecision[]
   return parsed.success ? parsed.data : [];
 }
 
+/** The most decisions one `decide` (or CRT import) records. */
+export const MAX_REVIEW_DECISIONS = 5_000;
+
 /** One review decision as `mapImport.decide` takes it (06 §5.1). */
 export const reviewDecisionSchema = z.union([
   z.object({ symbolIdx: z.number().int().min(0), accept: z.string().min(1) }).strict(),
@@ -62,8 +65,7 @@ export type DecisionWrite =
  * A later decision on the same fingerprint in one list wins.
  */
 export function planDecisionWrites(header: Pick<mapDocument.MapDocumentHeader, "source" | "colours" | "symbols" | "mapScale" | "library">, decisions: readonly ReviewDecision[]): DecisionWrite[] {
-  const stored = header.library?.id;
-  const libraryId = stored && symbolLibrary.isSymbolLibraryId(stored) ? stored : mapImport.chooseLibrary(header.mapScale);
+  const libraryId = mapImport.documentLibraryId(header);
   const libraryVersion = `${libraryId}@${symbolLibrary.SYMBOL_LIBRARY_VERSION}`;
   const fingerprints = mapImport.documentSymbolFingerprints(header);
   const writes = new Map<string, DecisionWrite>();
