@@ -1,5 +1,6 @@
 import { test, expect, type Page } from "@playwright/test";
 import { reseed } from "./helpers/reseed";
+import { waitForTrpc } from "./helpers/trpc";
 
 // This spec mutates seed data (imports courses, uploads a map, creates and
 // deletes controls), so it starts from a clean seed per the e2e hygiene
@@ -339,7 +340,9 @@ test.describe("Course editor", () => {
         `Control ${code}`,
         { timeout: 10000 },
       );
+      const appendSaved = waitForTrpc(page, "course.update");
       await page.getByTestId("editor-action-append").click();
+      await appendSaved;
     };
 
     await appendViaMenu(codeA);
@@ -1083,7 +1086,9 @@ test.describe("Course editor", () => {
         `Control ${code}`,
         { timeout: 10000 },
       );
+      const appendSaved = waitForTrpc(page, "course.update");
       await page.getByTestId("editor-action-append").click();
+      await appendSaved;
     };
 
     const controlRows = page.locator('[data-testid="editor-seq-row"][data-kind="control"]');
@@ -1190,7 +1195,9 @@ test.describe("Course editor", () => {
       `Control ${code}`,
       { timeout: 10000 },
     );
+    const appendSaved = waitForTrpc(page, "course.update");
     await page.getByTestId("editor-action-append").click();
+    await appendSaved;
     await expect(
       page.locator('[data-testid="editor-seq-row"][data-kind="control"]'),
     ).toHaveCount(1, { timeout: 15000 });
@@ -1313,7 +1320,11 @@ test.describe("Course editor", () => {
         `Control ${code}`,
         { timeout: 10000 },
       );
+      // Anchor on the write itself: the row only appears after course.update
+      // and a course.list refetch, both slow on a loaded shared database.
+      const appendSaved = waitForTrpc(page, "course.update");
       await page.getByTestId("editor-action-append").click();
+      await appendSaved;
     };
     await append(codeA);
     const rows = page.locator('[data-testid="editor-seq-row"][data-kind="control"]');
@@ -1383,7 +1394,9 @@ test.describe("Course editor", () => {
         `Control ${code}`,
         { timeout: 10000 },
       );
+      const appendSaved = waitForTrpc(page, "course.update");
       await page.getByTestId("editor-action-append").click();
+      await appendSaved;
       await expect(controlRows).toHaveCount(i + 1, { timeout: 15000 });
     }
 
