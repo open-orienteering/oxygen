@@ -107,7 +107,12 @@ field, not an assumption, so no backend can pick its own default.
   on paper; the GL backend may clamp to a minimum *on screen* (that is a
   pixel decision), the PDF backend must not.
 - `cap` is `butt | round | square | pointed`; `pointed` is drawn as butt
-  plus the `taper` (linear width reduction over `startUm` / `endUm`).
+  plus the `taper`: the width falls linearly from `widthUm` to 0 over
+  `startUm` from the path's start and over `endUm` towards its end,
+  measured along the whole path (not per slice). The stage sets `taper`
+  only from the IR's `StrokeSpec.taper` on a `pointed` stroke (user
+  decision 2026-10-20: an explicit field, not `shortenStartUm/EndUm`
+  reread); a `pointed` stroke without it is drawn butt, full length.
 - `slices` is the dash layout. `undefined` means the whole path is one
   stroke. Each `Slice` is `{ seg0, t0, seg1, t1 }` in (segment index,
   curve parameter) space over `pathSegments(path)`. A slice on a Bézier is
@@ -151,9 +156,13 @@ sample the same formula.
 
 ### 3.5 Text
 
-`{ kind: "text", colour, fontId, sizeUm, glyphs, positions, haloWidthUm? }`
+`{ kind: "text", colour, fontId, sizeUm, glyphs, positions, angles?, haloWidthUm? }`
 
-Shaped text: one glyph id and one baseline origin per glyph, em size in µm
+Shaped text: one glyph id, one baseline origin and (when `angles` is
+present) one rotation in degrees, counter-clockwise, per glyph; absent
+`angles` means every glyph is upright (user decision 2026-10-20: per
+glyph rather than per pass, so line text along a path needs no new
+field). A glyph's outline is rotated about its own origin. Em size in µm
 (already derived from digit height where the symbol says so). A halo is a
 **separate pass** in the halo colour with `haloWidthUm` set, sorted into
 its own colour position like any other pass — it is not a backend effect.
@@ -272,7 +281,10 @@ between them are **all scaled by one factor** `f = L / nominal`.
   shortening (OCAD framing is one solid line under a dashed main line —
   509 railway); gap points still interrupt it. It sorts to its own
   colour's position (03 §6.9 item 9) — nothing fuses it with the main
-  pass.
+  pass. With `continuous`, `halo.widthUm` may be **negative** — an OCAD
+  framing line narrower than its main line (user decision 2026-10-20):
+  the thin solid line lies under the dashed main line and shows only in
+  its gaps. A total width ≤ 0 emits no halo pass.
 - **Borders** (`borders.left` / `right`, 502/509-style double lines) are
   stroke passes on an **offset polyline**: the main path flattened at
   5 µm and offset by `±shiftUm` (left = +normal in y-up) with mitred
@@ -852,3 +864,24 @@ The shared module is exported as a namespace: `import { render } from
 "@oxygen/shared"` → `render.PassStream`, `render.passStreamFromJson`, …
 (namespaced to keep `Bounds`, `Segment` etc. from colliding with
 `course-maps`).
+
+## 8. Pending in this chapter
+
+- **Text layout in boxes and along paths** — OCAD formatted text
+  (`otp 5`) and Mapper text boxes (wrapping inside an object-level box,
+  `paragraphSpacingUm`, `justify`), and line text laid along its path
+  (per-glyph `angles` from §3.5 plus a path layout in `text.ts`). Row B8
+  (user decision 2026-10-20); until then box text is block text from the
+  anchor and line text is block text from the path's first vertex.
+- **Backends drawing `taper` and `angles`** — the stage emits both; the
+  WebGL2 backend (B2) and the PDF backend (slice C) do not draw them yet
+  (a taper is drawn butt, rotated glyphs upright). The goldens leave both
+  out until they do; the reference raster draws `angles`.
+- **S2 confirmation** of §4.2 step 3 (what stretches, the `round`
+  threshold) and of `endGapUm`, against OCAD exports.
+- **Serif and mono faces** — `liberation-serif` / `liberation-mono` are
+  in the IR and the importers map Times / Courier to them, but no face is
+  shipped (§4.10), so such text draws nothing with `NO_FONT`.
+- **Rectangle grids** (OCAD rectangle symbol cell lines and numbering) —
+  a by-design drop (user decision 2026-10-20); not pending, listed so the
+  reader does not look for it.
