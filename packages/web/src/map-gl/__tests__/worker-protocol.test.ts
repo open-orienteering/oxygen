@@ -28,7 +28,7 @@ function objects(): render.RenderObject[] {
 function harness() {
   const sent: { msg: WorkerReply; transfer: ArrayBuffer[] }[] = [];
   const tasks: (() => void)[] = [];
-  const w = createMapGlWorker((msg, transfer) => sent.push({ msg, transfer }), (fn) => tasks.push(fn));
+  const w = createMapGlWorker((msg, transfer) => sent.push({ msg, transfer }), (fn) => tasks.push(fn), 0);
   const runTask = () => tasks.shift()?.();
   return { w, sent, tasks, runTask };
 }
@@ -68,7 +68,7 @@ describe("worker protocol (docs/map-rendering.md §5.2 Worker)", () => {
     expect(m.summary.originX).toBeLessThanOrEqual((g.minCol + g.cols) * g.cellUm);
   });
 
-  it("prepare replies one detail part per wanted cell, one per task, and a newer request replaces the queue", () => {
+  it("prepare replies one detail part per wanted cell, one per task with a zero slice, and a newer request replaces the queue", () => {
     const { w, sent, tasks, runTask } = harness();
     w.handle(load());
     const cells = (sent[0].msg as LoadedReply).summary.detailCells;
@@ -102,7 +102,7 @@ describe("worker protocol (docs/map-rendering.md §5.2 Worker)", () => {
     expect(vs.fill.draws.length).toBeGreaterThan(0);
     expect(vs.hatch.draws.length).toBeGreaterThan(0);
     expect(vs.stroke.draws.length).toBeGreaterThan(0);
-    expect(vs.glyph.draws.length + vs.clips.length).toBeGreaterThan(0);
+    expect(vs.glyph.draws.length + vs.clips.groups.length).toBeGreaterThan(0);
     // One draw per (colour, kind): no colour appears twice in a kind's draw list.
     for (const k of [vs.fill, vs.hatch, vs.stroke]) expect(new Set(k.draws.map((d) => d.colour)).size).toBe(k.draws.length);
   });

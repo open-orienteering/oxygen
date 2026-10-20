@@ -16,7 +16,7 @@ import {
   type PreparedPart, type ResidentPart, type ViewRect,
 } from "./buckets.js";
 import type { DocumentRenderOptions, FrameStats, MapGlRenderer } from "./renderer.js";
-import { createMapGlWorker, type LoadRequest, type LoadSummary, type WorkerReply, type WorkerRequest } from "./worker.js";
+import { createMapGlWorker, messageChannelScheduler, type LoadRequest, type LoadSummary, type WorkerReply, type WorkerRequest } from "./worker.js";
 
 /** Message transport to the worker: a real Web Worker, or the same handler inline. */
 export interface Transport {
@@ -40,8 +40,9 @@ export function workerTransport(): Transport {
 /** The worker's handler on this thread (tests, `?worker=0`). Messages are delivered as tasks, as across a worker. */
 export function inlineTransport(): Transport {
   const t: Transport = { post: () => undefined, onMessage: undefined, terminate: () => undefined };
-  const handler = createMapGlWorker((msg) => setTimeout(() => t.onMessage?.(msg), 0));
-  t.post = (msg) => setTimeout(() => handler.handle(msg), 0);
+  const schedule = messageChannelScheduler();
+  const handler = createMapGlWorker((msg) => schedule(() => t.onMessage?.(msg)), schedule);
+  t.post = (msg) => schedule(() => handler.handle(msg));
   return t;
 }
 

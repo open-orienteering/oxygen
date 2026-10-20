@@ -248,11 +248,13 @@ export interface InstancePart {
   ranges: RangeTable;
 }
 
-/** A pattern-clipped glyph pass: its own stencil area, so its own draws. */
+/** A pattern-clipped glyph pass: its instances are drawn only inside its area (stencil). */
 export interface ClipItem {
   colour: number;
   object: number;
   cls: number;
+  /** Footprint: area bounds ∪ instance extents (minX, minY, maxX, maxY), origin-relative. */
+  bounds: number[];
   /** Clip area triangles, x, y relative to the origin. */
   positions: Float32Array;
   indices: Uint32Array;
@@ -390,7 +392,17 @@ export function prepareBucketPart(stream: render.PassStream, bucket: number, pas
           const { positions, indices } = triangulateEvenOdd(render.flattenRings(pass.clip, tol));
           const pos = new Float32Array(positions.length);
           for (let i = 0; i < positions.length; i += 2) { pos[i] = positions[i] - ox; pos[i + 1] = positions[i + 1] - oy; }
-          clips.push({ colour: pass.colour, object, cls: m.cls, positions: pos, indices: Uint32Array.from(indices), instances: Float32Array.from(data) });
+          const bounds = [Infinity, Infinity, -Infinity, -Infinity];
+          const grow = (x0: number, y0: number, x1: number, y1: number) => {
+            bounds[0] = Math.min(bounds[0], x0); bounds[1] = Math.min(bounds[1], y0);
+            bounds[2] = Math.max(bounds[2], x1); bounds[3] = Math.max(bounds[3], y1);
+          };
+          for (let i = 0; i < pos.length; i += 2) grow(pos[i], pos[i + 1], pos[i], pos[i + 1]);
+          for (let i = 0; i < data.length; i += INSTANCE_FLOATS) {
+            const rr = m.radius * data[i + 4];
+            grow(data[i] - rr, data[i + 1] - rr, data[i] + rr, data[i + 1] + rr);
+          }
+          clips.push({ colour: pass.colour, object, cls: m.cls, bounds, positions: pos, indices: Uint32Array.from(indices), instances: Float32Array.from(data) });
         } else {
           addInstances("glyph", pass.colour, m.cls, object, data);
         }
@@ -510,14 +522,33 @@ export interface InstanceDraw {
   count: number;
 }
 
+export interface ClipGroup {
+  colour: number;
+  /** Largest size class of the members' meshes. */
+  cls: number;
+  /** Clip-area triangles: first index and index count in `clips.indices`. */
+  offset: number;
+  count: number;
+  /** Instances: first and count in `clips.instances`. */
+  first: number;
+  instances: number;
+  members: number;
+}
+
 export interface VisibleSet {
   fill: { indices: Uint32Array; draws: IndexDraw[] };
   hatch: { indices: Uint32Array; draws: IndexDraw[] };
   stroke: { indices: Uint32Array; draws: IndexDraw[] };
   glyph: { instances: Float32Array; draws: InstanceDraw[] };
   text: { instances: Float32Array; draws: InstanceDraw[] };
-  /** Pattern-clipped glyph passes in view, colour order. */
-  clips: { item: ClipItem; part: ResidentPart }[];
+  /**
+   * Pattern-clipped glyph passes in view, merged per colour into groups
+   * whose footprints do not overlap, so no instance can fall inside
+   * another member's area and one stencil mark / draw / clear serves the
+   * group. Arrays are concatenated across groups; group indices are
+   * global into `positions`.
+   */
+  clips: { positions: Float32Array; indices: Uint32Array; instances: Float32Array; groups: ClipGroup[] };
   /** Colours with anything to draw, ascending. */
   colours: number[];
 }
@@ -609,18 +640,53 @@ export function buildVisibleSet(parts: ResidentPart[], hidden?: ReadonlySet<numb
     }
     return { instances: o === total ? instances : instances.slice(0, o * INSTANCE_FLOATS), draws };
   };
-  const clips: VisibleSet["clips"] = [];
-  for (const p of parts) for (const item of p.part.clips) if (!hide?.has(item.object)) clips.push({ item, part: p });
-  clips.sort((a, b) => a.item.colour - b.item.colour);
   const vs: VisibleSet = {
     fill: indexed("fill"), hatch: indexed("hatch"), stroke: indexed("stroke"),
-    glyph: instanced("glyph"), text: instanced("text"), clips, colours: [],
+    glyph: instanced("glyph"), text: instanced("text"), clips: groupClips(parts, hide), colours: [],
   };
   const cs = new Set<number>();
   for (const k of [vs.fill, vs.hatch, vs.stroke, vs.glyph, vs.text]) for (const d of k.draws) cs.add(d.colour);
-  for (const c of clips) cs.add(c.item.colour);
+  for (const g of vs.clips.groups) cs.add(g.colour);
   vs.colours = [...cs].sort((a, b) => a - b);
   return vs;
+}
+
+/** Greedy grouping of clip items per colour: an item joins the first group none of whose footprints it meets. */
+function groupClips(parts: ResidentPart[], hide: ReadonlySet<number> | undefined): VisibleSet["clips"] {
+  const items: ClipItem[] = [];
+  for (const p of parts) for (const item of p.part.clips) if (!hide?.has(item.object)) items.push(item);
+  items.sort((a, b) => a.colour - b.colour);
+  const meets = (a: number[], b: number[]) => a[0] <= b[2] && b[0] <= a[2] && a[1] <= b[3] && b[1] <= a[3];
+  const grouped: { colour: number; members: ClipItem[] }[] = [];
+  let colourStart = 0;
+  for (const item of items) {
+    if (grouped.length && grouped[grouped.length - 1].colour !== item.colour) colourStart = grouped.length;
+    let g = grouped.slice(colourStart).find((x) => x.colour === item.colour && x.members.every((m) => !meets(m.bounds, item.bounds)));
+    if (!g) grouped.push((g = { colour: item.colour, members: [] }));
+    g.members.push(item);
+  }
+  let nPos = 0, nIdx = 0, nInst = 0;
+  for (const it of items) { nPos += it.positions.length; nIdx += it.indices.length; nInst += it.instances.length; }
+  const positions = new Float32Array(nPos), indices = new Uint32Array(nIdx), instances = new Float32Array(nInst);
+  const groups: ClipGroup[] = [];
+  let po = 0, io = 0, so = 0;
+  for (const g of grouped) {
+    const group: ClipGroup = { colour: g.colour, cls: 0, offset: io, count: 0, first: so / INSTANCE_FLOATS, instances: 0, members: g.members.length };
+    for (const m of g.members) {
+      const base = po / 2;
+      positions.set(m.positions, po);
+      po += m.positions.length;
+      for (let i = 0; i < m.indices.length; i++) indices[io + i] = m.indices[i] + base;
+      io += m.indices.length;
+      instances.set(m.instances, so);
+      so += m.instances.length;
+      group.cls = Math.max(group.cls, m.cls);
+    }
+    group.count = io - group.offset;
+    group.instances = so / INSTANCE_FLOATS - group.first;
+    groups.push(group);
+  }
+  return { positions, indices, instances, groups };
 }
 
 // ---- residency -----------------------------------------------------------------

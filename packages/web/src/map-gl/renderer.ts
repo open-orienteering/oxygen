@@ -18,7 +18,7 @@ import { GpuArena } from "./arena.js";
 import { ATLAS_WIDTH, INSTANCE_FLOATS, type MeshAtlas } from "./mesh-atlas.js";
 import {
   FILL_VERTEX_BYTES, HATCH_VERTEX_BYTES, STROKE_VERTEX_BYTES,
-  type ClipItem, type PreparedPart, type ResidentPart, type VisibleSet,
+  type ClipGroup, type PreparedPart, type ResidentPart, type VisibleSet,
 } from "./buckets.js";
 
 export interface View {
@@ -44,6 +44,8 @@ export interface DocumentRenderOptions {
   minGlyphPx?: number;
   /** Hatch stripes closer than this on screen become a tint of coverage width / spacing. Default 1.5 px. */
   hatchTintPx?: number;
+  /** Profiling (dev page `kinds=`): draw only these kinds. */
+  kinds?: ReadonlySet<"fill" | "hatch" | "stroke" | "glyph" | "clip" | "text">;
 }
 
 export interface RenderOptions {
@@ -331,9 +333,8 @@ interface ArenaState {
   arenas: { fill: GpuArena; hatch: GpuArena; stroke: GpuArena };
   atlas: { tex: WebGLTexture; bytes: number };
   parts: Map<string, ResidentPart>;
-  clipBuffers: Map<ClipItem, { pos: WebGLBuffer; idx: WebGLBuffer; inst: WebGLBuffer }>;
   vs: VisibleSet | undefined;
-  vsBuffers: { fill: WebGLBuffer; hatch: WebGLBuffer; stroke: WebGLBuffer; glyph: WebGLBuffer; text: WebGLBuffer };
+  vsBuffers: { fill: WebGLBuffer; hatch: WebGLBuffer; stroke: WebGLBuffer; glyph: WebGLBuffer; text: WebGLBuffer; clipPos: WebGLBuffer; clipIdx: WebGLBuffer; clipInst: WebGLBuffer };
   vsBytes: number;
   vaos: { fill: WebGLVertexArrayObject; hatch: WebGLVertexArrayObject; stroke: WebGLVertexArrayObject; inst: WebGLVertexArrayObject; clip: WebGLVertexArrayObject };
   vaoGeneration: number;
@@ -838,9 +839,11 @@ export class MapGlRenderer {
       arenas: { fill: new GpuArena(gl, FILL_VERTEX_BYTES), hatch: new GpuArena(gl, HATCH_VERTEX_BYTES, 1 << 12), stroke: new GpuArena(gl, STROKE_VERTEX_BYTES) },
       atlas: { tex, bytes: atlas.data.byteLength },
       parts: new Map(),
-      clipBuffers: new Map(),
       vs: undefined,
-      vsBuffers: { fill: gl.createBuffer()!, hatch: gl.createBuffer()!, stroke: gl.createBuffer()!, glyph: gl.createBuffer()!, text: gl.createBuffer()! },
+      vsBuffers: {
+        fill: gl.createBuffer()!, hatch: gl.createBuffer()!, stroke: gl.createBuffer()!, glyph: gl.createBuffer()!, text: gl.createBuffer()!,
+        clipPos: gl.createBuffer()!, clipIdx: gl.createBuffer()!, clipInst: gl.createBuffer()!,
+      },
       vsBytes: 0,
       vaos: { fill: gl.createVertexArray()!, hatch: gl.createVertexArray()!, stroke: gl.createVertexArray()!, inst: gl.createVertexArray()!, clip: gl.createVertexArray()! },
       vaoGeneration: -1,
@@ -871,20 +874,6 @@ export class MapGlRenderer {
       hatch: part.hatch ? a.arenas.hatch.put(part.hatch.verts) : 0,
       stroke: part.stroke ? a.arenas.stroke.put(part.stroke.verts) : 0,
     };
-    for (const c of part.clips) {
-      const pos = gl.createBuffer()!;
-      gl.bindBuffer(gl.ARRAY_BUFFER, pos);
-      gl.bufferData(gl.ARRAY_BUFFER, c.positions, gl.STATIC_DRAW);
-      // Index buffers are typed on first bind (WebGL2 §5.1): bind as ELEMENT_ARRAY_BUFFER outside any VAO.
-      gl.bindVertexArray(null);
-      const idx = gl.createBuffer()!;
-      gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, idx);
-      gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, c.indices, gl.STATIC_DRAW);
-      const inst = gl.createBuffer()!;
-      gl.bindBuffer(gl.ARRAY_BUFFER, inst);
-      gl.bufferData(gl.ARRAY_BUFFER, c.instances, gl.STATIC_DRAW);
-      a.clipBuffers.set(c, { pos, idx, inst });
-    }
     const resident: ResidentPart = { part, base };
     a.parts.set(key, resident);
     return resident;
@@ -899,14 +888,6 @@ export class MapGlRenderer {
     if (p.fill) a.arenas.fill.release(r.base.fill, p.fill.vertexCount);
     if (p.hatch) a.arenas.hatch.release(r.base.hatch, p.hatch.vertexCount);
     if (p.stroke) a.arenas.stroke.release(r.base.stroke, p.stroke.vertexCount);
-    for (const c of p.clips) {
-      const b = a.clipBuffers.get(c);
-      if (!b) continue;
-      this.gl.deleteBuffer(b.pos);
-      this.gl.deleteBuffer(b.idx);
-      this.gl.deleteBuffer(b.inst);
-      a.clipBuffers.delete(c);
-    }
     a.parts.delete(key);
   }
 
@@ -930,21 +911,22 @@ export class MapGlRenderer {
       put(gl.ELEMENT_ARRAY_BUFFER, a.vsBuffers.hatch, vs.hatch.indices) +
       put(gl.ELEMENT_ARRAY_BUFFER, a.vsBuffers.stroke, vs.stroke.indices) +
       put(gl.ARRAY_BUFFER, a.vsBuffers.glyph, vs.glyph.instances) +
-      put(gl.ARRAY_BUFFER, a.vsBuffers.text, vs.text.instances);
+      put(gl.ARRAY_BUFFER, a.vsBuffers.text, vs.text.instances) +
+      put(gl.ELEMENT_ARRAY_BUFFER, a.vsBuffers.clipIdx, vs.clips.indices) +
+      put(gl.ARRAY_BUFFER, a.vsBuffers.clipPos, vs.clips.positions) +
+      put(gl.ARRAY_BUFFER, a.vsBuffers.clipInst, vs.clips.instances);
     a.vs = vs;
     a.vaoGeneration = -1;
   }
 
-  /** GPU bytes of the document path: arena capacity (and live), atlas, visible-set and clip buffers. */
-  get documentBytes(): { arenas: number; arenasUsed: number; atlas: number; visibleSet: number; clips: number; total: number } {
+  /** GPU bytes of the document path: arena capacity (and live), atlas, visible-set buffers (incl. clip groups). */
+  get documentBytes(): { arenas: number; arenasUsed: number; atlas: number; visibleSet: number; total: number } {
     const a = this.arena;
-    if (!a) return { arenas: 0, arenasUsed: 0, atlas: 0, visibleSet: 0, clips: 0, total: 0 };
+    if (!a) return { arenas: 0, arenasUsed: 0, atlas: 0, visibleSet: 0, total: 0 };
     const ar = a.arenas;
     const arenas = ar.fill.capacityBytes + ar.hatch.capacityBytes + ar.stroke.capacityBytes;
     const arenasUsed = ar.fill.usedBytes + ar.hatch.usedBytes + ar.stroke.usedBytes;
-    let clips = 0;
-    for (const c of a.clipBuffers.keys()) clips += c.positions.byteLength + c.indices.byteLength + c.instances.byteLength;
-    return { arenas, arenasUsed, atlas: a.atlas.bytes, visibleSet: a.vsBytes, clips, total: arenas + a.atlas.bytes + a.vsBytes + clips };
+    return { arenas, arenasUsed, atlas: a.atlas.bytes, visibleSet: a.vsBytes, total: arenas + a.atlas.bytes + a.vsBytes };
   }
 
   private requireArena(): ArenaState {
@@ -993,7 +975,10 @@ export class MapGlRenderer {
     gl.vertexAttribDivisor(i.a_i1, 1);
 
     gl.bindVertexArray(a.vaos.clip);
+    gl.bindBuffer(gl.ARRAY_BUFFER, a.vsBuffers.clipPos);
     gl.enableVertexAttribArray(P.fill.attribs.a_pos);
+    gl.vertexAttribPointer(P.fill.attribs.a_pos, 2, gl.FLOAT, false, 8, 0);
+    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, a.vsBuffers.clipIdx);
     gl.bindVertexArray(null);
     a.vaoGeneration = gen;
   }
@@ -1076,16 +1061,20 @@ export class MapGlRenderer {
           draws++;
         }
       };
+      const on = (k: "fill" | "hatch" | "stroke" | "glyph" | "clip" | "text") => !opts.kinds || opts.kinds.has(k);
       for (const colour of vs.colours) {
         const rgb = opts.colour(colour);
-        indexed("fill", colour, rgb);
-        indexed("hatch", colour, rgb);
-        indexed("stroke", colour, rgb);
-        instanced("glyph", colour, rgb);
-        while (cur.clip < vs.clips.length && vs.clips[cur.clip].item.colour === colour) {
-          draws += this.drawClip(a, vs.clips[cur.clip++].item, rgb);
+        if (on("fill")) indexed("fill", colour, rgb);
+        if (on("hatch")) indexed("hatch", colour, rgb);
+        if (on("stroke")) indexed("stroke", colour, rgb);
+        if (on("glyph")) instanced("glyph", colour, rgb);
+        const groups = vs.clips.groups;
+        while (cur.clip < groups.length && groups[cur.clip].colour < colour) cur.clip++;
+        while (cur.clip < groups.length && groups[cur.clip].colour === colour) {
+          const g = groups[cur.clip++];
+          if (on("clip")) draws += this.drawClip(a, g, rgb);
         }
-        instanced("text", colour, rgb);
+        if (on("text")) instanced("text", colour, rgb);
       }
       gl.bindVertexArray(null);
       gl.disable(gl.STENCIL_TEST);
@@ -1106,23 +1095,19 @@ export class MapGlRenderer {
     gl.vertexAttribPointer(p.attribs.a_i1, 4, gl.FLOAT, false, INSTANCE_FLOATS * 4, offset + 16);
   }
 
-  /** A pattern-clipped glyph pass: clip area into stencil bit 0, instances where it is set, area cleared. Three draws. */
-  private drawClip(a: ArenaState, item: ClipItem, rgb: [number, number, number]): number {
+  /** A clip group: its areas into stencil bit 0, its instances where the bit is set, the areas cleared. Three draws. */
+  private drawClip(a: ArenaState, g: ClipGroup, rgb: [number, number, number]): number {
     const gl = this.gl;
-    const b = a.clipBuffers.get(item);
-    if (!b || !item.indices.length) return 0;
+    if (!g.count) return 0;
     const P = a.programs;
     const area = (op: number) => {
       gl.useProgram(P.fill.prog);
       gl.bindVertexArray(a.vaos.clip);
-      gl.bindBuffer(gl.ARRAY_BUFFER, b.pos);
-      gl.vertexAttribPointer(P.fill.attribs.a_pos, 2, gl.FLOAT, false, 0, 0);
-      gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, b.idx);
       gl.colorMask(false, false, false, false);
       gl.stencilMask(CLIP_BIT);
       gl.stencilFunc(gl.ALWAYS, CLIP_BIT, 0xff);
       gl.stencilOp(op, op, op);
-      gl.drawElements(gl.TRIANGLES, item.indices.length, gl.UNSIGNED_INT, 0);
+      gl.drawElements(gl.TRIANGLES, g.count, gl.UNSIGNED_INT, g.offset * 4);
       gl.colorMask(true, true, true, true);
     };
     gl.enable(gl.STENCIL_TEST);
@@ -1130,11 +1115,11 @@ export class MapGlRenderer {
     gl.useProgram(P.inst.prog);
     gl.uniform3f(P.inst.uniforms.u_colour, rgb[0], rgb[1], rgb[2]);
     gl.bindVertexArray(a.vaos.inst);
-    gl.bindBuffer(gl.ARRAY_BUFFER, b.inst);
-    this.instancePointers(P.inst, 0);
+    gl.bindBuffer(gl.ARRAY_BUFFER, a.vsBuffers.clipInst);
+    this.instancePointers(P.inst, g.first * INSTANCE_FLOATS * 4);
     gl.stencilFunc(gl.EQUAL, CLIP_BIT, CLIP_BIT);
     gl.stencilOp(gl.KEEP, gl.KEEP, gl.KEEP);
-    gl.drawArraysInstanced(gl.TRIANGLES, 0, classVertices(item.cls), item.instances.length / INSTANCE_FLOATS);
+    gl.drawArraysInstanced(gl.TRIANGLES, 0, classVertices(g.cls), g.instances);
     area(gl.ZERO);
     gl.disable(gl.STENCIL_TEST);
     return 3;

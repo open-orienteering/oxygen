@@ -261,6 +261,43 @@ describe("visible set (04 §6.8 point 2)", () => {
   });
 });
 
+describe("clip groups (pattern clip mode, 04 §6.5)", () => {
+  function clipPart(areas: [number, number][]) {
+    const b = new PassStreamBuilder();
+    b.glyphTable.push({ glyphId: 9, partIdx: 0, fills: [square(-50, -50, 100)], strokes: [] });
+    areas.forEach(([x, y], i) => {
+      b.push({ kind: "glyph", colour: 6, glyphId: 9, partIdx: 0, instances: Float32Array.from([x + 500, y + 500, 1, 0, 1]), clip: square(x, y, 1000) }, i, 0);
+    });
+    const s = b.build();
+    return prepareBucketPart(s, 0, s.passes.map((_, i) => i), "all", context(s));
+  }
+
+  it("merges clip passes whose footprints do not meet into one group (one mark / draw / clear)", () => {
+    const part = clipPart([[0, 0], [5000, 0], [10_000, 0]]);
+    const vs = buildVisibleSet([{ part, base: { fill: 0, hatch: 0, stroke: 0 } }]);
+    expect(vs.clips.groups).toHaveLength(1);
+    const g = vs.clips.groups[0];
+    expect(g.members).toBe(3);
+    expect(g.instances).toBe(3);
+    expect(g.count).toBe(3 * 6);
+    // Indices are global into the concatenated positions.
+    expect(Math.max(...vs.clips.indices)).toBe(vs.clips.positions.length / 2 - 1);
+  });
+
+  it("keeps passes whose footprints meet in separate groups, so no instance falls in a neighbour's area", () => {
+    const part = clipPart([[0, 0], [1000, 0], [5000, 0]]); // the first two areas touch
+    const vs = buildVisibleSet([{ part, base: { fill: 0, hatch: 0, stroke: 0 } }]);
+    expect(vs.clips.groups.map((g) => g.members)).toEqual([2, 1]);
+  });
+
+  it("drops hidden objects' clip passes", () => {
+    const part = clipPart([[0, 0], [5000, 0]]);
+    const vs = buildVisibleSet([{ part, base: { fill: 0, hatch: 0, stroke: 0 } }], new Set([0, 1]));
+    expect(vs.clips.groups).toHaveLength(0);
+    expect(vs.colours).toEqual([]);
+  });
+});
+
 describe("mesh atlas", () => {
   it("packs meshes back to back, size classes are powers of two, radius includes stroke half width", () => {
     const atlas = new MeshAtlasBuilder();

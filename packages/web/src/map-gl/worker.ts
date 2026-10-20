@@ -54,6 +54,8 @@ export interface LoadSummary {
   largeId: number;
   /** Cell ids that have a detail layer (strokes, glyphs, text, clips). */
   detailCells: number[];
+  /** The cell with the most passes (the bench's dense viewport), −1 if none. */
+  densestCell: number;
   passes: number;
   passKinds: Record<string, number>;
   colours: number;
@@ -93,8 +95,22 @@ interface State {
   ctx: PrepareContext;
 }
 
-/** The worker's message handler. `schedule` runs one queued bucket per task so a newer request can overtake. */
-export function createMapGlWorker(post: Post, schedule: (fn: () => void) => void = (fn) => setTimeout(fn, 0)) {
+/** Queued detail parts are prepared in slices of about this long, then the worker yields so a newer request can overtake. */
+export const PREPARE_SLICE_MS = 8;
+
+/** A task scheduler without `setTimeout`'s 4 ms nesting clamp. */
+export function messageChannelScheduler(): (fn: () => void) => void {
+  const ch = new MessageChannel();
+  const q: (() => void)[] = [];
+  ch.port1.onmessage = () => q.shift()?.();
+  return (fn) => {
+    q.push(fn);
+    ch.port2.postMessage(0);
+  };
+}
+
+/** The worker's message handler. `schedule` runs one slice of queued buckets per task so a newer request can overtake. */
+export function createMapGlWorker(post: Post, schedule: (fn: () => void) => void = messageChannelScheduler(), sliceMs = PREPARE_SLICE_MS) {
   let state: State | undefined;
   let queue: number[] = [];
   let pumping = false;
@@ -102,13 +118,16 @@ export function createMapGlWorker(post: Post, schedule: (fn: () => void) => void
   const pump = () => {
     pumping = false;
     if (!state) return;
-    const id = queue.shift();
-    if (id === undefined) return;
-    const passes = state.assignment.bucketPasses.get(id);
-    if (passes && id !== state.assignment.largeId) {
-      const part = prepareBucketPart(state.stream, id, passes, "detail", state.ctx);
-      post({ type: "part", part }, partTransferables(part));
-    }
+    const t0 = performance.now();
+    do {
+      const id = queue.shift();
+      if (id === undefined) break;
+      const passes = state.assignment.bucketPasses.get(id);
+      if (passes && id !== state.assignment.largeId) {
+        const part = prepareBucketPart(state.stream, id, passes, "detail", state.ctx);
+        post({ type: "part", part }, partTransferables(part));
+      }
+    } while (queue.length && performance.now() - t0 < sliceMs);
     if (queue.length) {
       pumping = true;
       schedule(pump);
@@ -210,6 +229,10 @@ function load(msg: LoadRequest): { reply: LoadedReply; transfer: ArrayBuffer[]; 
     if (passes.some((pi) => !isBase(stream.passes[pi].kind))) detailCells.push(id);
   }
   const tBase = performance.now();
+  let densestCell = -1, densest = 0;
+  for (const [id, passes] of assignment.bucketPasses) {
+    if (id !== largeId && passes.length > densest) { densest = passes.length; densestCell = id; }
+  }
   const largePasses = assignment.bucketPasses.get(largeId);
   const large = largePasses ? prepareBucketPart(stream, largeId, largePasses, "all", ctx) : undefined;
   const tLarge = performance.now();
@@ -226,7 +249,7 @@ function load(msg: LoadRequest): { reply: LoadedReply; transfer: ArrayBuffer[]; 
   const r = (x: number) => Math.round(x * 100) / 100;
   const summary: LoadSummary = {
     bounds: render.passStreamBounds(stream),
-    originX, originY, grid, largeId, detailCells,
+    originX, originY, grid, largeId, detailCells, densestCell,
     passes: stream.passes.length,
     passKinds,
     colours: new Set(stream.passes.map((p) => p.colour)).size,
