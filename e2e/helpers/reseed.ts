@@ -45,6 +45,10 @@ export async function reseed(): Promise<void> {
     // §6.5); a leftover series keeps its versions' documents club-visible,
     // which changes the document route's answer for later specs.
     await client.query("DELETE FROM club_maps");
+    // Club symbol decisions are instance-wide and keyed by symbol geometry
+    // (docs/map-symbols.md §8.5 "Scope"): one left behind changes how every
+    // later import of `e2e/test.ocd` is matched.
+    await client.query("DELETE FROM club_symbol_decisions");
     await client.query("DELETE FROM club_map_templates");
     await client.query("DELETE FROM club_control_series");
     await client.query("DELETE FROM club_class_presets");
