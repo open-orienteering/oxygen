@@ -184,19 +184,33 @@ is what filter regions and per-symbol hiding rely on.
 
 `passStreamToJson` / `passStreamFromJson` (`render/stream-json.ts`) are a
 lossless, Zod-validated view of a stream for fixtures and snapshots. Float
-fields are quantised to 3 decimals (µm) in the projection; typed arrays are
-canonical in memory. All-zero flag arrays are omitted. Parsing sorts.
+fields are quantised to 3 decimals (µm) in the projection — except a glyph
+instance's `cos`, `sin` and `scale`, which are unitless and keep 6 (3 put
+a 45° instance 1e-4 off, outside `diffPassStreams`' tolerance, B1);
+typed arrays are canonical in memory. All-zero flag arrays are omitted.
+`angles` (§3.5) is projected when present. Parsing sorts.
 
 ## 4. Symbolisation rules
 
-Status: pilot rules (S1 step 2), proven by
-`packages/shared/src/render/__tests__/{measure,dash,placement,pattern,text,symbolise}.test.ts`
-and in image form by `packages/api/src/render/__tests__/pilot-raster.test.ts`.
-Rules marked **provisional** reproduce the documented behaviour of OCAD /
-Mapper from their field semantics; the exact constants are confirmed
-against exports of the corpus maps in the S0/slice A corpus run and
-amended here if they differ. The *structure* of each rule (what is
-computed where, what the stream carries) is not provisional.
+Status: slice B rules (B1, 2026-10-20) — every field of the IR that the
+shipped libraries and the OCAD / OMAP importers produce has a rule here.
+Proven by
+`packages/shared/src/render/__tests__/{measure,dash,placement,pattern,text,symbolise,library-fixtures}.test.ts`
+and in image form by `packages/api/src/render/__tests__/pilot-raster.test.ts`
+and the golden tier (§6.2). Rules marked **provisional** reproduce the
+documented behaviour of OCAD / Mapper from their field semantics and wait
+for S2's pixel comparison against OCAD output (§8); the *structure* of
+each rule (what is computed where, what the stream carries) is not
+provisional.
+
+IR fields the stage reads and nothing else: `minimum` (a course-setting
+and print concern, not drawn) and `paragraphSpacingUm` / `justify` (box
+text, §8).
+
+New IR fields are **optional without defaults**: a parsed symbol must
+stay byte-identical when they are absent, because map document hashes
+(`docs/map-document-format.md`) and review-decision fingerprints
+(`docs/map-symbols.md` §8) are computed over the parsed IR.
 
 The stage's entry point is `symbolise({ objects, symbols, fonts })` in
 `render/symbolise.ts`. An object is `{ symbolIdx, path, angleDeg?, text? }`;
@@ -318,6 +332,21 @@ comparison checks them along with §4.2.
 - A line symbol's `main` stroke becomes one `StrokePass` on the object's
   own path (Béziers intact), with `slices` from §4.2/4.3 when dashed,
   shortened or gapped, otherwise no slices. `cap: flat` maps to `butt`.
+- **Pointed caps**: with `cap: "pointed"` and `main.taper { startUm?,
+  endUm? }` the pass carries `cap: "pointed"` and that `taper` (§3.2); the
+  halo pass carries the same taper. The line is not shortened. Without a
+  taper, or with another cap, the pass has no `taper`.
+- **Corner radius** (`cornerRadiusUm`, OCAD rectangle symbols): before
+  anything else the path's polyline corners are rounded
+  (`roundCorners` in `render/geometry.ts`): each anchor between two
+  straight segments becomes a circular arc of that radius written as one
+  cubic (handles `4/3·tan(θ/4)·r` for a turn of θ), tangent to both
+  edges. The tangent length is capped at half of each adjacent edge (the
+  radius shrinks to fit); anchors next to Bézier control points, the
+  ends of an open path, collinear points and reversals stay sharp; the
+  arc's first point keeps the corner's flags. The object's coordinates
+  in the document are untouched — the rounding is a drawing rule (user
+  decision 2026-10-20, A12).
 - A `main.halo` (OCAD line framing, the club sets' 502 band) is a
   **separate** stroke pass in the halo colour, width
   `main.widthUm + 2·halo.widthUm`, same slices, same caps. With
@@ -346,6 +375,12 @@ comparison checks them along with §4.2.
   missing, else on the centre offset). OCAD's double-line fill is
   `dblWidth` wide, between the edges, so the importer sets
   `backgroundWidthUm` explicitly; a band without edges is allowed.
+- `borders.extraPairs` (Mapper combined symbols with a second pair of
+  borders, 502.2) are drawn exactly like `left` / `right`, each with its
+  own shift, width and dash (phase from the main line), after the first
+  pair; they take no part in the background band. A separate list rather
+  than arrays on `left` / `right` keeps every existing reader of the IR
+  (the matcher's fingerprints) unchanged.
 
 ### 4.5 Glyphs on lines
 
@@ -420,7 +455,12 @@ glyph; the instance transform is the point at that length with
 ### 4.9 Text
 
 - Font resolution: the first font in `fonts` whose `family` matches the
-  symbol (weight/italic ignored in the pilot). Fonts are read by the
+  symbol **and** whose face matches (`weight ≥ 600` is bold, `italic`),
+  else the family's first font — silently, the face-level analogue of the
+  importer's `FONT_SUBSTITUTED` (only Regular faces ship, §4.10). A face
+  is read from `head.macStyle` (bit 0 bold, bit 1 italic) and recorded in
+  the stream's `FontRef`. A family with no font loaded draws nothing
+  (`NO_FONT`). Fonts are read by the
   shared TrueType reader (`render/truetype.ts`: `head`, `hhea`, `hmtx`,
   `maxp`, `cmap` 4/12, `kern` 0, `loca`/`glyf` incl. composites), so
   shaping and outlines come from the same numbers on every side.
@@ -433,14 +473,28 @@ glyph; the instance transform is the point at that length with
   (+ `wordSpacing·em` after a space), `k = em / unitsPerEm`. Spaces
   advance but are not emitted. Lines split on `\n`, baseline-to-baseline
   `lineSpacing · em` downward. Alignment shifts each line by `0`,
-  `−width/2`, `−width` for left / centre / right (justify = left in the
-  pilot). The whole block rotates about the anchor by the object angle.
-  Paragraph spacing and line breaking inside boxes belong to formatted
-  text, which is not in the pilot.
+  `−width/2`, `−width` for left / centre / right (justify = left until
+  box text, §8). Paragraph spacing and line breaking inside boxes belong
+  to box text (§8).
+- **Vertical anchor** (`verticalAlign`, absent = `baseline`): the anchor
+  is on the first line's baseline; `top` puts it at the first line's
+  ascent (the first baseline drops by `ascender·k`), `bottom` at the last
+  line's descent (the block rises by `(lines − 1)·lineSpacing·em +
+  |descender|·k`), `middle` midway between those two. Ascender and
+  descender are the font's `hhea` values (Liberation Sans 1854 / −434 at
+  2048 units per em) — *provisional (S2)* as OCAD's and Mapper's reading
+  of "top" and "bottom".
+- **Rotation**: the whole block rotates about the anchor by the object
+  angle — every glyph origin is rotated, and every glyph is turned by the
+  same angle (`TextPass.angles`, §3.5; absent when the angle is 0).
 - A `halo` is a separate `TextPass` in the halo colour with
   `haloWidthUm`, identical glyphs and positions. Sorted by colour it
   lands at the halo colour's stack position — the ISSprOM 704 white
   outline is "upper white", one below upper purple.
+- A `shadow { colour, offsetXUm, offsetYUm }` is a separate `TextPass`
+  in the shadow colour with every glyph origin moved by the offset —
+  paper µm, y-up, turned with the text — drawn as a plain fill (no
+  `haloWidthUm`). It sorts at its colour's position like a halo.
 
 ### 4.10 Fonts shipped
 
@@ -618,7 +672,13 @@ Club-full envelope, which is the deliberately pessimistic upper bound.
 `EXT_disjoint_timer_query_webgl2` where available (resolved a frame
 late).
 
-#### Loading an OCAD document (`ocad-objects.ts`, shared)
+#### Loading an OCAD document (`ocad-objects.ts`, shared, dev-only)
+
+Documents reach the stage through the render bridge
+(`map-document/render-bridge.ts`, `docs/map-document-format.md` §8); its
+per-kind proxies live in `render/proxy-symbols.ts`. What follows is the
+S1 reader path, kept for `/dev/map-gl-doc?via=reader` and the S1
+measurements; nothing outside the dev page uses `ocadObjectsToRender`.
 
 To feed real maps in before the 02 document format exists,
 `render.ocadObjectsToRender(objects, symbols, { mode })` turns
@@ -768,6 +828,14 @@ Default tolerance is 1 µm: the stage is expected to be *deterministic*,
 not merely equivalent. A test that needs a larger tolerance is a sign the
 rule it tests is under-specified.
 
+**Stream snapshots.** The library fixtures (§6.3) commit the whole stream
+of each scene as `__fixtures__/streams/library/<scene>.stream.json` (the
+JSON projection, one pass per line so a review diff names the pass that
+moved) and compare it with `diffPassStreams` at the default tolerance. A
+snapshot is rewritten only on purpose:
+`UPDATE_STREAMS=1 pnpm --filter @oxygen/shared exec vitest run src/render/__tests__/library-fixtures.test.ts`,
+and the diff is reviewed with the PR like a golden.
+
 ### 6.2 Golden images
 
 Three-way. The reference raster (§5.1) renders the fixture at 10 px/mm
@@ -779,9 +847,10 @@ channel differs by more than 16/255; the fixture passes when the fraction
 of differing pixels is ≤ 0.5 % (04 §9 budget). Backends are compared
 with the oracle, never with each other.
 
-**Golden scenes** are the six contract fixtures (§6.3) plus the
+**Golden scenes** are the six contract fixtures (§6.3), the
 `pilot-scene` (`__fixtures__/pilot-scene.ts`: one object per pilot
-symbol, hand-placed). `render.goldenScene(name, fonts)` resolves a name
+symbol, hand-placed) and the eleven library fixtures (`lib-*`, §6.3,
+coloured from the library's palette through `cmykToHex`). `render.goldenScene(name, fonts)` resolves a name
 to `{ stream, colour }` identically on every side, and
 `render.goldenFrame(stream)` fixes the image frame: bounds + 1 mm
 margin, grown symmetrically to a **whole number of pixels** (a 57.5 px
@@ -815,7 +884,9 @@ backend drawing the right thing. Zooming the same SVG 4× (exactly 4× the
 pixel size, same centring) and averaging 4×4 blocks pushes the oracle's
 own error below the tolerance so the comparison measures the backend.
 The GL side renders the goldens with `supersample: 2` (16 effective
-samples). Measured ratios, headless Chromium / SwiftShader:
+samples). Measured ratios, headless Chromium / SwiftShader (B1 run,
+2026-10-21; the first seven were 0.000 / 0.206 / 0.038 / 0.009 / 0.000 /
+0.441 / 0.293 % in S1):
 
 | Scene | Differing pixels |
 |---|---|
@@ -824,8 +895,19 @@ samples). Measured ratios, headless Chromium / SwiftShader:
 | `glyph-instances` | 10 / 26 076 (0.038 %) |
 | `hatch-area` | 6 / 67 200 (0.009 %) |
 | `colour-order` | 0 / 48 400 (0.000 %) |
-| `text-with-halo` | 23 / 5 220 (0.441 %) |
-| `pilot-scene` | 1 130 / 385 640 (0.293 %) |
+| `text-with-halo` | 20 / 5 220 (0.383 %) |
+| `pilot-scene` | 1 151 / 385 640 (0.298 %) |
+| `lib-dash-ocad` | 4 / 36 900 (0.011 %) |
+| `lib-dash-omap` | 0 / 17 500 (0.000 %) |
+| `lib-line-glyphs` | 26 / 15 930 (0.163 %) |
+| `lib-pattern` | 202 / 55 000 (0.367 %) |
+| `lib-hatch` | 0 / 34 000 (0.000 %) |
+| `lib-borders` | 0 / 25 760 (0.000 %) |
+| `lib-holes` | 0 / 30 800 (0.000 %) |
+| `lib-text` | 82 / 23 560 (0.348 %) |
+| `lib-halos` | 15 / 21 160 (0.071 %) |
+| `lib-colour-order` | 79 / 26 199 (0.302 %) |
+| `lib-precision` | 178 / 64 566 (0.276 %) |
 
 What remains is coverage quantisation: every residual differs by 17–26
 levels and the GL values are multiples of 16. **The ratio therefore
@@ -838,6 +920,18 @@ certify production anti-aliasing (4× MSAA at 1× cannot meet a 16-level
 tolerance on edge pixels and is not asked to). And a 3× supersample is
 *worse* than 2× with the linear resolve (4 of 9 texels sampled) — a
 higher factor needs a real box-filter pass.
+
+**Designing a golden scene.** Two layouts turn that quantisation into a
+failure without any geometry being wrong, and the library scenes avoid
+both (B1; first measured at 0.66 % and 0.505 %): a thin **axis-aligned**
+edge at a fractional pixel offset puts every pixel of a column at the
+same partial coverage, so the whole column sits 17–24 levels off (the
+vertical 505 track of `lib-colour-order` — now diagonal); and a pattern
+whose cell is a whole number of pixels puts every instance at the same
+sub-pixel phase, so one glyph's residual is copied to all of them (208's
+12 px cells, 213's 1.6 px dots — now on small areas). The stream
+assertions (§6.1) carry the rule; the golden only has to show the backend
+draws the same geometry.
 
 The oracle itself is checked by **pixel probes**: hand-computed paper
 coordinates where a given colour must appear (`sampleAt(img, xUm, yUm)`),
@@ -869,8 +963,34 @@ The symbolisation rules of §4 are proven by the **pilot symbol family**
 (OCAD and OMAP), 502, 503 with framing, 516, 529, 418, 403, 407, 213,
 709, 714, 704. Its stream-level assertions are in
 `__tests__/symbolise.test.ts`; its pixel probes through the oracle in
-`packages/api/src/render/__tests__/pilot-raster.test.ts`. The canonical
-library's own fixtures (04 §8 table, one per rule) are added in slice B.
+`packages/api/src/render/__tests__/pilot-raster.test.ts`.
+
+The **library fixtures** (B1) are the 04 §8 table drawn with the
+canonical library: `__fixtures__/library/index.ts` (`render.libraryScene`,
+`librarySceneNames`), each scene a set of objects plus the library
+entries it uses, resolved through the library's palette. Where the
+library has no entry for a rule, the scene uses a **hand variant** — the
+named entry with the stated fields replaced. Hand-computed assertions per
+row are in `__tests__/library-fixtures.test.ts`; the whole stream of each
+scene is a snapshot (§6.1) and a golden (§6.2).
+
+| Scene | 04 §8 row | Objects (library entries; *variant*) | Asserted |
+|---|---|---|---|
+| `lib-dash-ocad` | 1 | ISOM 505 with a corner and a dash point; 505 closed (18 mm loop); 507; 505 short, solid and *`minGaps: 2`* | slice boundaries as arc lengths: 1.8 mm dashes, corner dash one slice round the corner, a 1.8 mm dash centred on the dash point; loop seam dash on the start point; 507's secondary cut; forced gaps |
+| `lib-dash-omap` | 2 | ISOM 505 *as `layout: "omap"`*: single, *`halfOuterDashes`*, *groups of 2*, *`showAtLeastOne: false`* on a 0.8 mm line, with a dash point | interval lists at `f = 1`; the dash point centres one dash |
+| `lib-line-glyphs` | 3 | ISOM 516, 201, *529 at corners with `ignoreEnds` and `scaleAtCorners`*, 510, 416 on a closed loop | instance positions, angles (bisector 45°), mitre scale √2, end glyphs without `ignoreEnds`, `minCountClosed` |
+| `lib-pattern` | 4 | ISOM 402 on two adjacent squares, *402 turning with the object* at 30°, 208 (shifted rows), *213 at 0° in the four clip modes* | one origin-anchored lattice; rotated lattice; half-cell row shift; completelyInside ⊂ centreInside ⊂ partiallyInside = clip, `clip` path only in clip mode |
+| `lib-hatch` | 5 | ISOM 709 on two adjacent areas, 407, *709 crossed (second hatch at 135°)* | pass parameters and order; every `hatchLines` endpoint on `x·nx + y·ny = offset + k·spacing` |
+| `lib-borders` | 6 | ISSprOM 509.1, 505 round a corner, *505 with a 0.2 mm right edge at 0.3 mm* | border offsets; both dashed borders keep the main line's phase at their own lengths; asymmetric edges |
+| `lib-holes` | 7 | ISOM 401: two holes, one reversed; a self-touching ring | one even-odd fill each, rings passed through untouched (earcut deviation is the GL backend's, image tier) |
+| `lib-text` | 8 | ISOM 704 "31"; 603.b *left / centre / right*; a two-line 603.b | em from the digit height (Liberation "0" = 1430 units → 5.73 mm), advances with kerning ("AV"), alignment shifts, line spacing |
+| `lib-halos` | 9 | ISSprOM 704.b over 521; *508 with a continuous white band* over 406 | the white outline between the building's black and upper purple; the band its own pass over the green |
+| `lib-colour-order` | + | ten ISSprOM colours, lower and upper purple among them, pushed in reverse | colour-major order; lower purple under black, upper purple last |
+| `lib-precision` | + | `lib-dash-ocad` and `lib-line-glyphs` moved to (1 200 000, 1 200 000) µm | every pass the near pass translated, to 1 µm |
+
+Not in the table: 04 §8 row 10 (minimum sizes) is a screen-backend rule
+(the stream is the same at every zoom), and the filter-region and
+georeference rows belong to slice B's viewer (B4) and A11's `mapGeo`.
 
 ## 7. Where things live
 
@@ -888,14 +1008,15 @@ library's own fixtures (04 §8 table, one per rule) are added in slice B.
 | `packages/shared/src/render/glyph-table.ts` | IR glyph → `GlyphMesh`, registry |
 | `packages/shared/src/render/truetype.ts`, `text.ts` | font reader, shaping |
 | `packages/shared/src/render/symbolise.ts` | the stage |
-| `packages/shared/src/render/__fixtures__/` | contract fixtures (`streams/`), pilot symbols, `pilot-scene.ts`, `golden.ts` (scene list, frame) |
+| `packages/shared/src/render/__fixtures__/` | contract fixtures (`streams/`), library fixtures (`library/`, snapshots in `streams/library/`), pilot symbols, `pilot-scene.ts`, `golden.ts` (scene list, frame) |
+| `packages/shared/src/render/proxy-symbols.ts` | per-kind proxy symbols for the render bridge |
 | `packages/shared/fonts/` | bundled Liberation faces |
 | `packages/api/src/render/reference-raster.ts` | resvg rasterisation, `sampleAt`, `diffImages`, `encodePng` |
 | `packages/shared/src/render/swatch.ts` | symbol swatch scene (§5.1.1) |
 | `packages/api/src/render/previews.ts` | swatch and thumbnail PNGs (`docs/map-storage.md` §4.5) |
 | `packages/api/src/render/fonts.ts` | bundled-font loader for the server backends |
 | `packages/api/src/render/golden.ts`, `scripts/render-golden.ts` | golden PNG generation (`pnpm --filter @oxygen/api golden:render`) |
-| `packages/shared/src/render/ocad-objects.ts` | `ocad2geojson` objects → `RenderObject`s (pilot / envelope modes, proxy symbols) |
+| `packages/shared/src/render/ocad-objects.ts` | dev-only: `ocad2geojson` objects → `RenderObject`s (pilot / envelope modes); `ocadFlags` for the importers |
 | `packages/web/src/map-gl/prepare.ts` | WebGL2 backend, CPU stage (fans, extrusion, instancing) |
 | `packages/web/src/map-gl/batch.ts` | WebGL2 backend, batching per colour run (earcut fills, mixed-width strokes, merged instances) |
 | `packages/web/src/map-gl/renderer.ts` | WebGL2 backend, GPU stage (programs, stencil, supersampling, GPU timer) |
@@ -922,7 +1043,13 @@ The shared module is exported as a namespace: `import { render } from
   (a taper is drawn butt, rotated glyphs upright). The goldens leave both
   out until they do; the reference raster draws `angles`.
 - **S2 confirmation** of §4.2 step 3 (what stretches, the `round`
-  threshold) and of `endGapUm`, against OCAD exports.
+  threshold), of `endGapUm` and of the vertical anchor's metrics (§4.9),
+  against OCAD exports.
+- **Library entry 107** (erosion gully, both editions) states "ends taper
+  over 0.75 mm" in its notes but carries no `taper` yet: any change to an
+  entry's render bumps `SYMBOL_LIBRARY_VERSION` and with it every
+  document's identity, so it is left to the library's owner (B7) with the
+  next library release.
 - **Serif and mono faces** — `liberation-serif` / `liberation-mono` are
   in the IR and the importers map Times / Courier to them, but no face is
   shipped (§4.10), so such text draws nothing with `NO_FONT`.

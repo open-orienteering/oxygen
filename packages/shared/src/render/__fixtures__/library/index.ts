@@ -137,7 +137,9 @@ function patterns(): LibraryScene {
   type ClipMode = NonNullable<AreaSymbol["patterns"]>[number]["clip"];
   const clip = (mode: ClipMode) => (x: AreaSymbol): AreaSymbol => ({ ...x, patterns: [{ ...x.patterns![0], angleDeg: 0, clip: mode }] });
   const modes = (["centreInside", "completelyInside", "partiallyInside", "clip"] as const).map((m) => s.add("213", clip(m)));
-  const tri = (dx: number): RenderPath => ring([dx + 200, -20100, dx + 7100, -20300, dx + 3450, -13150]);
+  // Golden-scene note (map-rendering §6.2): glyph-dense areas are kept small — every instance at the
+  // same sub-pixel phase repeats the same anti-aliasing residual.
+  const tri = (dx: number): RenderPath => ring([dx + 200, -17100, dx + 4300, -17300, dx + 2250, -13150]);
   return {
     name: "lib-pattern", library: s.library, colours: s.colours, symbols: s.list,
     objects: [
@@ -147,9 +149,9 @@ function patterns(): LibraryScene {
       // Object angle 30° on a pattern that turns with the object.
       { symbolIdx: treesTurnable, path: square(0, -10000, 8000), angleDeg: 30 },
       // Shifted rows.
-      { symbolIdx: boulders, path: square(10000, -10000, 8000) },
-      // The same triangle in the four clip modes, 9 mm (20 cells) apart so each sees the same grid.
-      ...modes.map((symbolIdx, k) => ({ symbolIdx, path: tri(9000 * k) })),
+      { symbolIdx: boulders, path: square(10000, -6800, 4800) },
+      // The same triangle in the four clip modes, 4.5 mm (10 cells) apart so each sees the same grid.
+      ...modes.map((symbolIdx, k) => ({ symbolIdx, path: tri(4500 * k) })),
     ],
   };
 }
@@ -261,7 +263,8 @@ function colourOrder(): LibraryScene {
       { symbolIdx: ids.route, path: line([0, 3000, 18000, 3000]) },
       { symbolIdx: ids.start, path: at(3000, 3000) },
       { symbolIdx: ids.contour, path: line([0, 5000, 18000, 1000]) },
-      { symbolIdx: ids.track, path: line([2000, 0, 2000, 9000]) },
+      // Diagonal on purpose: a thin axis-aligned edge at a fractional pixel offset fails a whole column (§6.2).
+      { symbolIdx: ids.track, path: line([1000, 0, 4000, 9000]) },
       { symbolIdx: ids.building, path: square(13000, 4000, 4000, 4000) },
       { symbolIdx: ids.water, path: square(5000, 4000, 4000, 4000) },
       { symbolIdx: ids.slow, path: square(0, 0, 12000, 9000) },

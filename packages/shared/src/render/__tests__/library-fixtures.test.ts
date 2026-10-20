@@ -198,7 +198,7 @@ describe("row 4 — pattern origin and clip modes (ISOM 402, 208, 213)", () => {
     }
   });
   it("213 in the four clip modes: completelyInside ⊂ centreInside ⊂ partiallyInside = clip, clip carries the area", () => {
-    const local = (o: number) => new Set(pts(4 + o).map(([x, y]) => `${x - 9000 * o},${y}`));
+    const local = (o: number) => new Set(pts(4 + o).map(([x, y]) => `${x - 4500 * o},${y}`));
     const [centre, complete, partial, clip] = [0, 1, 2, 3].map(local);
     expect(complete.size).toBeLessThan(centre.size);
     expect(centre.size).toBeLessThan(partial.size);
