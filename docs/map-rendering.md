@@ -215,8 +215,18 @@ passes — the stage never throws on data.
 - A **section** is the run between consecutive split points. Corner (4)
   and dash (8) points both split; a closed path without split points is
   one *closed-loop* section; a closed path with split points is cut at
-  them and the wrap-around piece through the start point is a section of
-  its own (the start point is not an implicit split).
+  them only, and the piece from the last split point through the start
+  point to the first one is **one** section (the start point is not an
+  implicit split; it is one when it carries a flag itself). Lengths on
+  that section run past the path's end and are folded back to its start
+  (`wrapIntervals`, `wrapLength` in `render/measure.ts`). A point with
+  both flags is a dash point. Each section knows whether its start and
+  end are dash points (`Section.dashStart` / `dashEnd`).
+- **Drawn intervals** of all sections are sorted and touching intervals
+  merged: the two end dashes meeting at a corner are one drawn dash and
+  become one slice round the corner, joined with the stroke's join, and
+  the two halves of a dash on a dash point are one slice. Nothing merges
+  across the start point of a closed path (a slice never wraps, §3.2).
 - `shortenStartUm` / `shortenEndUm` shrink the first / last section of an
   open path before layout.
 - **Gap points** (128): from one gap point to the next, the main stroke is
@@ -224,36 +234,55 @@ passes — the stage never throws on data.
   their phase across the gap. An unpaired gap point at the last point
   runs to the end of the line.
 
-### 4.2 Dash layout — `layout: "ocad"` (provisional)
+### 4.2 Dash layout — `layout: "ocad"`
 
-Per section, with dash `D`, gap `G`, end dash `E` (= `D` unless
-`endDashUm` is given), gap count `n`:
+Per section, with dash `D`, gap `G`, gap count `n`, and an end dash at
+each end of the section: `Es` at its start, `Ee` at its end. At a line
+end or a corner the end dash is `E` (= `D` unless `endDashUm` is given);
+at a **dash point** it is `D/2`, so that the halves on the two sides form
+one ordinary dash centred on the point (§2.1: "a dash is centred here").
 
-1. `n = round((L − 2E + D) / (D + G))`, then `n = max(n, minGaps)`. On a
-   closed loop `E = D/2` and `n ≥ 1`, so the two half end dashes meet at
-   the start point and form one ordinary dash.
-2. If `n = 0` the section is one solid dash.
-3. Otherwise **gaps keep their nominal length** and all dashes are scaled
-   by one ratio `r = (L − n·G) / (2E + (n − 1)·D)` so the section starts
+1. `n = round((L − Es − Ee + D) / (D + G))`, then `n = max(n, minGaps)`.
+   On a closed loop both ends are `D/2` and `n ≥ 1`, so the two half end
+   dashes meet at the start point and form one ordinary dash.
+2. If `n = 0` the section is one solid dash (cut by the end gap like an
+   end dash, or left whole when it touches a dash point).
+3. *Provisional (S2).* Otherwise **gaps keep their nominal length** and all dashes are scaled
+   by one ratio `r = (L − n·G) / (Es + Ee + (n − 1)·D)` so the section starts
    and ends with a full end dash. The last dash is snapped to the section
    end. If even the gaps do not fit (`L − n·G ≤ 0`), `n` is reduced until
    they do.
 4. `secondaryGapUm` splits every **interior** dash into `dashesInGroup`
    (default 2) equal parts separated by the secondary gap; `endGapUm` is
-   the secondary gap applied to the two **end** dashes (OCAD's "end gap"
-   — 507 footpath: `secGap 25, endGap 25`; 0 / absent leaves the end
-   dashes whole). On a closed loop every dash is interior.
+   the secondary gap applied to the **end** dashes at line ends and
+   corners (OCAD's "end gap" — 507 footpath: `secGap 25, endGap 25`; 0 /
+   absent leaves the end dashes whole; *provisional (S2)* as an OCAD
+   reading). A dash on a dash point or on a closed loop's seam is
+   interior and is split **whole** — the cut lies symmetrically about the
+   point — before each side keeps its half.
 5. A secondary or end gap forces the virtual grid: a pattern with
    `gapUm 0` and `secondaryGapUm > 0` (517 ruined fence) lays out
    touching dashes and cuts each one, so the line reads as a solid line
    with a short gap every `D`.
 
-What stretches is the provisional part: the implementation keeps gaps
-fixed (visibly uniform gaps, varying dashes, which is what OCAD maps
-show); if the corpus run shows OCAD scaling gaps too, step 3 changes and
-nothing else does.
+What stretches (step 3) and the end-gap reading are the provisional
+part: the implementation keeps gaps fixed (visibly uniform gaps, varying
+dashes, which is what OCAD maps show); if S2's comparison with OCAD
+output shows OCAD scaling gaps too, step 3 changes and nothing else does.
+Steps 1, 2, 4 and 5 and the dash-point rule are the stage's rule (B1,
+2026-10-20): the closed-loop halves are the only seam-free choice, and
+the secondary-gap and virtual-grid rules reproduce the ISOM 2017-2
+drawings of 507 and 517 that the library is authored from.
 
-### 4.3 Dash layout — `layout: "omap"` (provisional)
+**Grid.** Internally a section's layout is a *dash grid*
+(`dashGrid` in `render/dash.ts`): the dashes in section-relative
+lengths, with a dash on a dash point or a loop seam listed whole, so it
+reaches past the section's end. Drawing clips the grid to the section
+(a closed loop wraps it); placement (§4.5) takes centres from the grid,
+and a dash or gap centred on a dash point belongs to the section that
+**starts** there, so it is placed once.
+
+### 4.3 Dash layout — `layout: "omap"`
 
 Mapper's adjustment: a group is `k` dashes (`dashesInGroup`) of `D`
 with `secondaryGapUm` between them; `n` groups and the breaks `B`
@@ -268,6 +297,21 @@ between them are **all scaled by one factor** `f = L / nominal`.
 - Closed loop: `n = max(1, round(L / (group + B)))` groups around the
   loop with the first group centred on the start point (its negative
   half wraps to the end).
+- **Dash points**: a section end at a dash point begins / ends with half
+  a dash — one dash of the pattern centred on the point — when
+  `dashesInGroup` is 1 (Mapper halves single dashes only; a group starts
+  whole at a dash point). Generally, with `hs`, `he` ∈ {0, 1} the half
+  ends (from a dash point, or from `halfOuterDashes` at the other ends),
+  the pattern is `half?, B, [group, B]×n, half?` with
+  `n = round((L − (hs + he)·D/2 − (hs + he − 1)·B) / (group + B))`,
+  `n ≥ 0` when both ends are halves and `n ≥ 1` otherwise, and the two
+  bullets above are its `hs = he = 0` and `hs = he = 1` cases.
+
+These rules follow Mapper's documented dashed-line behaviour and its
+symbol fields (`dashes_in_group`, `in_group_break_length`,
+`half_outer_dashes`, `show_at_least_one_symbol`, dash points); they are
+the stage's rule for `layout: "omap"`, not provisional. S2's pixel
+comparison checks them along with §4.2.
 
 ### 4.4 Strokes, halos, borders
 
@@ -314,7 +358,7 @@ glyph; the instance transform is the point at that length with
 |---|---|
 | `start` / `end` | the path's ends, tangent angle |
 | `corners` / `dashPoints` | every point with flag 4 / 8 strictly inside the path, at the **bisector** of the incoming and outgoing tangents; the ends of an open path too unless `ignoreEnds`; on a closed path the start point only when it carries the flag. `scaleAtCorners` scales by `1 / cos(turn/2)` (mitre length), clamped at 4× |
-| `dashCentres` / `gapCentres` | centres of the dashes / gaps of the main stroke's dash layout per section. The layout is run in *virtual* mode so a solid line (`gapUm 0`) with spaced symbols — OCAD's 516 power line — still gets positions: with zero gaps the dashes touch and the glyphs sit at the joints |
+| `dashCentres` / `gapCentres` | centres of the dashes / gaps of the main stroke's dash layout per section. The layout is run in *virtual* mode so a solid line (`gapUm 0`) with spaced symbols — OCAD's 516 power line — still gets positions: with zero gaps the dashes touch and the glyphs sit at the joints. Centres come from the section's dash grid (§4.2): a dash on a dash point, or on a closed loop's seam, gets **one** glyph, at the point |
 | `dashGroupCentres` | centre of each dash **before** its secondary split, i.e. in the secondary gap (OCAD's main symbol on a line with `secGap` — 517 ruined fence); only dashes that are actually cut get a glyph (end dashes only with `endGapUm`); without any secondary gap it equals `dashCentres` |
 | `sectionCentres` | once per corner-delimited section, at its midpoint (OCAD's secondary symbol) |
 | `spaced` | Mapper semantics per **corner** section (dash points do not restart spacing): `first = firstUm ?? distance/2`, `last` likewise, `inner = L − first − last`; `n = round(inner / distance) + 1` (0 if `inner < 0`), `n = max(n, minCount)` (`minCountClosed` on closed paths); spots at `first + i·inner/(n − 1)`, a single spot centred. On a closed loop: `n = max(minCount, round(L / distance))` spots every `L/n` from the start point. `perSpot` glyphs are spread `spotSpacingUm` apart symmetrically around the spot |

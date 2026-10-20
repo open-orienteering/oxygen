@@ -205,30 +205,96 @@ export class PathMeasure {
 
 export interface Section {
   startLen: number;
+  /**
+   * End of the section. On a closed path cut at split points, the section
+   * through the start point wraps: its `endLen` exceeds the path length
+   * (`endLen − totalLength` along from the start), see `wrapIntervals`.
+   */
   endLen: number;
   /** True when both ends of this section are the same point of a closed path with no split points. */
   closedLoop: boolean;
+  /** The section starts at a dash point (flag 8): a dash is centred there, so the section begins with half of it. */
+  dashStart: boolean;
+  /** The section ends at a dash point. */
+  dashEnd: boolean;
 }
 
 /**
  * Splits a path into layout sections at corner (4) and dash (8) points —
  * both reset dash and glyph layout (03 §6.9 item 1). A closed path without
- * split points is one `closedLoop` section; a closed path with split
- * points is cut at them, and the final section wraps through the start
- * point as its own section (the start point is not an implicit split).
+ * split points is one `closedLoop` section. A closed path with split
+ * points is cut at them only: the piece from the last split point through
+ * the start point to the first one is a single section that wraps (the
+ * start point is not an implicit split unless it carries a flag itself).
+ * A point carrying both flags counts as a dash point.
  */
 export function pathSections(m: PathMeasure, mask: number = COORD_FLAG.corner | COORD_FLAG.dash): Section[] {
   const L = m.totalLength;
-  const cuts = m.flaggedLengths(mask).filter((l) => l > 0 && l < L);
-  if (cuts.length === 0) return [{ startLen: 0, endLen: L, closedLoop: m.path.closed }];
-  const out: Section[] = [];
-  let prev = 0;
-  for (const c of cuts) {
-    if (c > prev) out.push({ startLen: prev, endLen: c, closedLoop: false });
-    prev = c;
+  const f = m.path.flags;
+  const isDash = (i: number) => (mask & COORD_FLAG.dash) !== 0 && (f[m.segmentStartPoint[i]] & COORD_FLAG.dash) !== 0;
+  const cuts: { len: number; dash: boolean }[] = [];
+  for (let i = 1; i < m.segments.length; i++) {
+    const l = m.cumulative[i];
+    if (f[m.segmentStartPoint[i]] & mask && l > 0 && l < L) cuts.push({ len: l, dash: isDash(i) });
   }
-  if (L > prev) out.push({ startLen: prev, endLen: L, closedLoop: false });
+  const closed = m.path.closed;
+  const startCut = closed && m.segments.length > 0 && (f[0] & mask) !== 0;
+  if (cuts.length === 0 && !startCut) {
+    return [{ startLen: 0, endLen: L, closedLoop: closed, dashStart: false, dashEnd: false }];
+  }
+  const out: Section[] = [];
+  const startDash = startCut && isDash(0);
+  if (closed && !startCut) {
+    // Cut only at the split points; the last piece wraps through the start.
+    for (let k = 0; k + 1 < cuts.length; k++) {
+      const a = cuts[k], b = cuts[k + 1];
+      if (b.len > a.len) out.push({ startLen: a.len, endLen: b.len, closedLoop: false, dashStart: a.dash, dashEnd: b.dash });
+    }
+    const last = cuts[cuts.length - 1], first = cuts[0];
+    out.push({ startLen: last.len, endLen: first.len + L, closedLoop: false, dashStart: last.dash, dashEnd: first.dash });
+    out.sort((x, y) => x.startLen - y.startLen);
+    return out;
+  }
+  let prev = 0;
+  let prevDash = startDash;
+  for (const c of cuts) {
+    if (c.len > prev) out.push({ startLen: prev, endLen: c.len, closedLoop: false, dashStart: prevDash, dashEnd: c.dash });
+    prev = c.len;
+    prevDash = c.dash;
+  }
+  if (L > prev) out.push({ startLen: prev, endLen: L, closedLoop: false, dashStart: prevDash, dashEnd: startDash });
   return out;
+}
+
+/**
+ * Brings intervals laid out on wrapping sections back into `[0, L]` — a
+ * piece beyond `L` continues from the start of the path — sorted, with
+ * touching intervals merged: the two halves of a dash on a dash point,
+ * or the end dashes meeting at a corner, are one drawn dash (one slice,
+ * so the backend joins it at the corner instead of capping it twice).
+ * Nothing is merged across the start point of a closed path: a slice
+ * never wraps (§3.2).
+ */
+export function wrapIntervals(intervals: [number, number][], L: number): [number, number][] {
+  const out: [number, number][] = [];
+  for (const [a, b] of intervals) {
+    if (b <= L) out.push([a, b]);
+    else if (a >= L) out.push([a - L, b - L]);
+    else out.push([a, L], [0, b - L]);
+  }
+  out.sort((x, y) => x[0] - y[0] || x[1] - y[1]);
+  const merged: [number, number][] = [];
+  for (const iv of out) {
+    const last = merged[merged.length - 1];
+    if (last && iv[0] <= last[1] + 1e-6) last[1] = Math.max(last[1], iv[1]);
+    else merged.push([iv[0], iv[1]]);
+  }
+  return merged;
+}
+
+/** A length on a wrapping section, brought back into `[0, L]`. */
+export function wrapLength(len: number, L: number): number {
+  return len > L ? len - L : len;
 }
 
 /** Removes the `[from, to]` length intervals (gap points, flag 128) from a list of intervals. */

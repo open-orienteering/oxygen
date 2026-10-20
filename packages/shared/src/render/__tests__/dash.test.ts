@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { gapsOf, layoutDashesOcad, layoutDashesOmap } from "../dash.js";
+import { dashGrid, gapsOf, gridCentre, gridGaps, layoutDashesOcad, layoutDashesOmap } from "../dash.js";
 import type { DashPattern } from "../symbol.js";
 
 const near = (xs: number[][], tol = 1e-6) => xs.map(([a, b]) => [Math.round(a / tol) * tol, Math.round(b / tol) * tol]);
@@ -122,8 +122,62 @@ describe("layoutDashesOmap — whole pattern scaled", () => {
     const d = layoutDashesOmap(10000, p, { closedLoop: true });
     // n = round(10000 / 2500) = 4; f = 1; first group centred on 0 → [9000, 10000] + [0, 1000].
     expect(d).toHaveLength(5);
-    expect(d[0]).toEqual([9000, 10000]);
-    expect(d[1]).toEqual([0, 1000]);
-    expect(d[2]).toEqual([1500, 3500]);
+    expect(d[0]).toEqual([0, 1000]);
+    expect(d[1]).toEqual([1500, 3500]);
+    expect(d[4]).toEqual([9000, 10000]);
+  });
+
+  it("a dash point centres a single dash: half of it on each side", () => {
+    // halfStart: hs = 1; n = round((10000 − 1000) / 2500) = 4; nominal 1000 + 4×2000 + 4×500 = 11000.
+    const f = 10000 / 11000;
+    const g = dashGrid(10000, p, { halfStart: true });
+    expect(g.dashes[0].a).toBeCloseTo(-1000 * f, 6);
+    expect(g.dashes[0].b).toBeCloseTo(1000 * f, 6);
+    expect(g.dashes).toHaveLength(5);
+    const d = layoutDashesOmap(10000, p, { halfStart: true });
+    expect(d[0][0]).toBe(0);
+    expect(d[0][1]).toBeCloseTo(1000 * f, 6);
+    expect(d[1][0]).toBeCloseTo(1500 * f, 6);
+    expect(d[4][1]).toBe(10000);
+    // Groups are not halved at dash points (Mapper halves single dashes only).
+    const grouped = dashGrid(10000, { ...p, dashesInGroup: 2, secondaryGapUm: 250 }, { halfStart: true });
+    expect(grouped.dashes[0].a).toBe(0);
+  });
+});
+
+describe("dash points (flag 8) — a dash is centred on the point", () => {
+  const p505: DashPattern = { layout: "ocad", dashUm: 2000, gapUm: 500 };
+
+  it("OCAD: the section ends with half a dash at a dash point and a full end dash elsewhere", () => {
+    // Es = 2000 (line start), Ee = 1000 (dash point): n = round((10000 − 3000 + 2000) / 2500) = 4,
+    // r = (10000 − 4×500) / (2000 + 1000 + 3×2000) = 8/9.
+    const r = 8 / 9;
+    const g = dashGrid(10000, p505, { halfEnd: true });
+    expect(g.dashes).toHaveLength(5);
+    const last = g.dashes[4];
+    expect((last.a + last.b) / 2).toBeCloseTo(10000, 6);
+    expect(last.b - last.a).toBeCloseTo(2000 * r, 6);
+    expect(near(layoutDashesOcad(10000, p505, { halfEnd: true }), 1e-3)).toEqual(
+      near([[0, 2000 * r], [2000 * r + 500, 4000 * r + 500], [4000 * r + 1000, 6000 * r + 1000], [6000 * r + 1500, 8000 * r + 1500], [10000 - 1000 * r, 10000]], 1e-3),
+    );
+    // The next section starts with the other half: Es = 1000, Ee = 2000, n = 2, r = 1.
+    expect(layoutDashesOcad(6000, p505, { halfStart: true })).toEqual([[0, 1000], [1500, 3500], [4000, 6000]]);
+  });
+
+  it("OCAD: the secondary gap of a dash on a dash point lies symmetrically about the point", () => {
+    const d = layoutDashesOcad(6000, { ...p505, secondaryGapUm: 200 }, { halfStart: true });
+    // Whole dash [−1000, 1000] cut in two 900 µm parts → this side keeps [100, 1000]; end dash stays whole.
+    expect(d).toEqual([[100, 1000], [1500, 2400], [2600, 3500], [4000, 6000]]);
+  });
+
+  it("grid centres: a dash on a dash point is owned by the section that starts there", () => {
+    const end = dashGrid(10000, p505, { halfEnd: true });
+    expect(gridCentre(end, (end.dashes[4].a + end.dashes[4].b) / 2)).toBeUndefined();
+    const start = dashGrid(6000, p505, { halfStart: true });
+    expect(gridCentre(start, (start.dashes[0].a + start.dashes[0].b) / 2)).toBe(0);
+    // A closed loop folds its seam dash onto the start point.
+    const loop = dashGrid(10000, p505, { closedLoop: true });
+    expect(gridCentre(loop, (loop.dashes[0].a + loop.dashes[0].b) / 2)).toBe(0);
+    expect(gridGaps(loop)).toHaveLength(4);
   });
 });

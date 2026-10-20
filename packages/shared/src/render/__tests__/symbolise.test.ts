@@ -40,11 +40,46 @@ describe("symbolise — lines", () => {
   it("505 with a corner point mid-way: each section is fitted on its own", () => {
     const { stream } = run([{ symbolIdx: PILOT.footpath505, path: makePath([0, 0, 10000, 0, 10000, 10000], [0, F.corner, 0]) }]);
     const [p] = only(stream, "stroke");
-    // 10 mm sections: n = round((10000 − 4000 + 2000) / 2500) = 3 gaps → 4 dashes each.
-    expect(p.slices).toHaveLength(8);
-    expect(p.slices![3].seg1).toBe(0);
-    expect(p.slices![3].t1).toBe(1);
-    expect(p.slices![4]).toMatchObject({ seg0: 1, t0: 0 });
+    // 10 mm sections: n = round((10000 − 4000 + 2000) / 2500) = 3 gaps → 4 dashes each. The two
+    // end dashes meeting at the corner are one drawn dash: one slice round the corner, 7 in all.
+    expect(p.slices).toHaveLength(7);
+    expect(p.slices![3]).toMatchObject({ seg0: 0, seg1: 1 });
+    // r = (10000 − 1500) / 8000; the corner dash runs from 10000 − 2000r on the first leg to 2000r on the second.
+    const r = 8500 / 8000;
+    expect(p.slices![3].t0).toBeCloseTo((10000 - 2000 * r) / 10000, 9);
+    expect(p.slices![3].t1).toBeCloseTo((2000 * r) / 10000, 9);
+  });
+
+  it("505 with a dash point mid-way: one dash of the pattern is centred on the point", () => {
+    const { stream } = run([{ symbolIdx: PILOT.footpath505, path: makePath([0, 0, 10000, 0, 16000, 0], [0, F.dash, 0]) }]);
+    const [p] = only(stream, "stroke");
+    // First section: Es 2000, Ee 1000 → n = 4, r = 8/9; second: Es 1000, Ee 2000 → n = 2, r = 1.
+    // The dash on the point spans [10000 − 1000·8/9, 10000 + 1000] as one slice.
+    const lens = p.slices!.map((sl) => [sl.seg0 === 0 ? sl.t0 * 10000 : 10000 + sl.t0 * 6000, sl.seg1 === 0 ? sl.t1 * 10000 : 10000 + sl.t1 * 6000]);
+    expect(lens).toHaveLength(7);
+    expect(lens[4][0]).toBeCloseTo(10000 - 8000 / 9, 3);
+    expect(lens[4][1]).toBeCloseTo(11000, 3);
+    expect(lens[5]).toEqual([11500, 13500]);
+  });
+
+  it("a closed path cut at one corner is one section running through the start point", () => {
+    // 10 × 10 mm square, corner at (10000, 10000): one 40 mm section from the corner round to it.
+    const sq = makePath([0, 0, 10000, 0, 10000, 10000, 0, 10000], [0, 0, F.corner, 0], true);
+    const { stream } = run([{ symbolIdx: PILOT.footpath505, path: sq }]);
+    const [p] = only(stream, "stroke");
+    // n = round((40000 − 4000 + 2000) / 2500) = 15 gaps, 16 dashes, r = 32500 / 32000. The first and
+    // last dash meet at the corner (one slice round it) → 15 slices. The start point is 20000 into the
+    // section, inside the gap after dash 8 ([17718.75, 19750] + 500), so no dash is cut there and
+    // a gap is centred near it — not a dash restart, as it would be if the start point split the path.
+    expect(p.slices).toHaveLength(15);
+    const r = 32500 / 32000;
+    const cornerDash = p.slices!.find((sl) => sl.seg0 === 1 && sl.seg1 === 2)!;
+    expect(cornerDash.t0).toBeCloseTo(1 - (2000 * r) / 10000, 9);
+    expect(cornerDash.t1).toBeCloseTo((2000 * r) / 10000, 9);
+    const first = p.slices![0];
+    // First drawn piece after the start point: dash 9 starts at 20000 + 8·(2000r + 500) − 20000 = 250 µm along segment 0.
+    expect(first.seg0).toBe(0);
+    expect(first.t0 * 10000).toBeCloseTo(8 * (2000 * r + 500) - 20000, 6);
   });
 
   it("505 on a Bézier: slices are (segment, t) on the curve, not on a flattened copy", () => {

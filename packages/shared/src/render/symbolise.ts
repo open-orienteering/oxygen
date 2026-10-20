@@ -19,7 +19,7 @@ import {
 import { type Interval, layoutDashes } from "./dash.js";
 import { flattenRings, offsetPolyline } from "./geometry.js";
 import { GlyphRegistry, type RegisteredGlyph, mapCap, mapJoin } from "./glyph-table.js";
-import { PathMeasure, gapIntervals, pathSections, subtractIntervals } from "./measure.js";
+import { PathMeasure, gapIntervals, pathSections, subtractIntervals, wrapIntervals } from "./measure.js";
 import { patternInstances } from "./pattern.js";
 import { placeGlyphs } from "./placement.js";
 import type { AreaSymbol, BorderSpec, LineSymbolBody, PointSymbol, RenderSymbol, StrokeSpec, TextSymbol } from "./symbol.js";
@@ -226,9 +226,10 @@ class Stage {
         out.push([a, b]);
         return;
       }
-      for (const [d0, d1] of layoutDashes(b - a, spec.dash, { closedLoop: sec.closedLoop })) out.push([a + d0, a + d1]);
+      const opts = { closedLoop: sec.closedLoop, halfStart: sec.dashStart, halfEnd: sec.dashEnd };
+      for (const [d0, d1] of layoutDashes(b - a, spec.dash, opts)) out.push([a + d0, a + d1]);
     });
-    return out;
+    return wrapIntervals(out, m.totalLength);
   }
 
   private border(m: PathMeasure, flat: number[], spec: BorderSpec, side: 1 | -1, noFlag: number, main: StrokeSpec | undefined): void {
@@ -241,12 +242,12 @@ class Stage {
     // so both borders and a dashed main line share phase (03 §6.9 item 6).
     let intervals: Interval[] | undefined;
     if (spec.dash) {
-      intervals = [];
+      const onMain: Interval[] = [];
       for (const sec of pathSections(m)) {
-        for (const [a, b] of layoutDashes(sec.endLen - sec.startLen, spec.dash, { closedLoop: sec.closedLoop })) {
-          intervals.push([(sec.startLen + a) * ratio, (sec.startLen + b) * ratio]);
-        }
+        const opts = { closedLoop: sec.closedLoop, halfStart: sec.dashStart, halfEnd: sec.dashEnd };
+        for (const [a, b] of layoutDashes(sec.endLen - sec.startLen, spec.dash, opts)) onMain.push([sec.startLen + a, sec.startLen + b]);
       }
+      intervals = wrapIntervals(onMain, m.totalLength).map(([a, b]): Interval => [a * ratio, b * ratio]);
     }
     // `noLeft` / `noRight` points suppress the border up to the next point.
     const holes: Interval[] = [];
