@@ -108,6 +108,15 @@ describe("club map library", () => {
     });
     expect(row!.versionCount).toBe(1);
     expect(row!.importJob).toBeNull();
+    // The card's "to review" count is the document report's (map-symbols.md §8.7);
+    // read from the report, since club decisions of parallel suites move it.
+    const doc = await ctx.db.mapDocument.findUniqueOrThrow({
+      where: { hash: series.versions[0].documentHash },
+      select: { report: true },
+    });
+    const symbols = (doc.report as { matching: { symbols: { suggested: number; reviewed: number } } }).matching.symbols;
+    expect(row!.review).toEqual({ suggested: symbols.suggested, reviewed: symbols.reviewed });
+    expect(row!.review!.suggested + row!.review!.reviewed).toBeGreaterThan(0);
     expect(row!.previewUrl).toBe(
       `/api/map-documents/${series.versions[0].documentHash}/thumbnail.png`,
     );
