@@ -211,6 +211,7 @@ accept the key.
 | `/api/export/course-data` | `courses.view` |
 | `/api/map-tile/*` | `courses.view` or valid kiosk key (`?k=` or header) |
 | `/api/club-map-preview/*` | any invited user |
+| `/api/map-sources/:hash` | `event.manage` on an event whose map is that source (`?event=` / `x-event-id`), **instance admin** if it was copied from the club library; or the uploader of a club map version with that source, or an instance admin. Never the kiosk key. See [map-storage.md](map-storage.md) §4.4 |
 | `/health`, `/api/version`, `/api/club-logo/*` | open |
 
 `course.downloadMap` requires `event.manage`, and instance admin when

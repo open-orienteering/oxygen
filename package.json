@@ -19,6 +19,8 @@
     "db:migrate": "pnpm --filter @oxygen/api db:migrate",
     "db:migrate:dev": "pnpm --filter @oxygen/api db:migrate:dev",
     "migrate:mysql-to-pg": "pnpm --filter @oxygen/api migrate:mysql-to-pg",
+    "map:backfill": "pnpm --filter @oxygen/api map:backfill",
+    "map:rematch": "pnpm --filter @oxygen/api map:rematch",
     "docs:screenshots": "tsx docs/screenshots/capture.ts",
     "showcase:load": "bash scripts/load-showcase.sh",
     "audit:prod": "node scripts/audit-prod.mjs --audit-level=high",
@@ -32,7 +34,9 @@
   "devDependencies": {
     "@playwright/test": "^1.64.1",
     "@prisma/adapter-pg": "^7.10.1",
+    "@types/pngjs": "^6.0.5",
     "@types/semver": "^7.8.0",
+    "pngjs": "^7.0.0",
     "semver": "^7.8.5",
     "tsx": "^4.23.15",
     "yaml": "^2.9.1"

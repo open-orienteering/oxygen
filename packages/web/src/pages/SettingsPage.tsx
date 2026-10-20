@@ -5,6 +5,7 @@ import { trpc } from "../lib/trpc";
 import { LanguageSelector } from "../components/LanguageSelector";
 import { UserChip } from "../components/UserChip";
 import { fileToBase64 } from "../lib/file-to-base64";
+import { shouldUseChunkedUpload, uploadMapFileChunked } from "../lib/map-upload";
 import { useCurrentUser } from "../context/CurrentUserContext";
 import { LibraryControlsTab } from "./LibraryControlsTab";
 import { LibraryGroupsTab } from "./LibraryGroupsTab";
@@ -13,6 +14,8 @@ import { UsersAdminPanel } from "../components/UsersAdminPanel";
 import { MaintenancePanel } from "../components/MaintenancePanel";
 import { EventorKeysPanel } from "../components/EventorKeysPanel";
 import { NorthLinesBadge } from "../components/NorthLinesBadge";
+import { ClubMapImportState } from "../components/ClubMapImportState";
+import { isClubMapImportPending } from "../lib/club-map-import";
 
 const CLUB_TABS = ["maps", "controls", "classes", "groups"] as const;
 const ADMIN_TABS = ["users", "eventor", "maintenance"] as const;
@@ -42,7 +45,8 @@ function formatScale(scale: number | null): string {
   return `1:${rounded.toString().replace(/\B(?=(\d{3})+(?!\d))/g, " ")}`;
 }
 
-function formatBytes(n: number): string {
+function formatBytes(n: number | null): string {
+  if (n == null) return "";
   if (n < 1024) return `${n} B`;
   if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
   return `${(n / (1024 * 1024)).toFixed(1)} MB`;
@@ -52,8 +56,19 @@ export function SettingsPage() {
   const { t, i18n } = useTranslation("library");
   const { user, authEnabled } = useCurrentUser();
   const utils = trpc.useUtils();
-  const maps = trpc.clubMap.list.useQuery();
+  const maps = trpc.clubMap.list.useQuery(undefined, {
+    // An import that outlived the upload's hold finishes in the background.
+    refetchInterval: (query) =>
+      query.state.data?.some(
+        (row) => row.version == null && isClubMapImportPending(row.importJob),
+      )
+        ? 2000
+        : false,
+  });
   const upload = trpc.clubMap.upload.useMutation({
+    onSuccess: () => void utils.clubMap.list.invalidate(),
+  });
+  const addFromSource = trpc.clubMap.addFromSource.useMutation({
     onSuccess: () => void utils.clubMap.list.invalidate(),
   });
   const rename = trpc.clubMap.rename.useMutation({
@@ -70,10 +85,10 @@ export function SettingsPage() {
   });
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [dragOver, setDragOver] = useState(false);
-  const [editingId, setEditingId] = useState<number | null>(null);
+  const [editingId, setEditingId] = useState<string | null>(null);
   const [editName, setEditName] = useState("");
   const [pendingDelete, setPendingDelete] = useState<{
-    id: number;
+    id: string;
     name: string;
   } | null>(null);
   const [uploadError, setUploadError] = useState<string | null>(null);
@@ -100,19 +115,25 @@ export function SettingsPage() {
       if (!file.name.toLowerCase().endsWith(".ocd")) return;
       setUploadError(null);
       try {
-        const fileDataBase64 = await fileToBase64(file);
-        await upload.mutateAsync({ fileName: file.name, fileDataBase64 });
+        if (shouldUseChunkedUpload(file.size)) {
+          const { fileHash } = await uploadMapFileChunked(file);
+          await addFromSource.mutateAsync({ fileHash, fileName: file.name });
+        } else {
+          const fileDataBase64 = await fileToBase64(file);
+          await upload.mutateAsync({ fileName: file.name, fileDataBase64 });
+        }
       } catch (err) {
         setUploadError(err instanceof Error ? err.message : String(err));
       }
     },
-    [upload],
+    [upload, addFromSource],
   );
 
-  const canManageSource = (uploadedBy: string | null) => {
+  /** Series-level (`createdBy`) and version-level (`uploadedBy`) owner checks, §6.5. */
+  const canManageSource = (ownerId: string | null | undefined) => {
     if (!authEnabled) return true;
     if (!user) return false;
-    return user.isAdmin || uploadedBy === user.id;
+    return user.isAdmin || ownerId === user.id;
   };
 
   return (
@@ -233,15 +254,19 @@ export function SettingsPage() {
                   data-testid={`library-map-card-${row.id}`}
                   className="bg-white rounded-xl border border-slate-200 p-4 flex gap-4"
                 >
-                  <img
-                    src={`/api/club-map-preview/${row.id}`}
-                    data-testid="club-map-preview"
-                    alt=""
-                    className="h-20 w-28 flex-none rounded border border-slate-200 object-contain bg-white"
-                    onError={(event) => {
-                      event.currentTarget.hidden = true;
-                    }}
-                  />
+                  {row.previewUrl ? (
+                    <img
+                      src={row.previewUrl}
+                      data-testid="club-map-preview"
+                      alt=""
+                      className="h-20 w-28 flex-none rounded border border-slate-200 object-contain bg-white"
+                      onError={(event) => {
+                        event.currentTarget.hidden = true;
+                      }}
+                    />
+                  ) : (
+                    <div className="h-20 w-28 flex-none" />
+                  )}
                   <div className="min-w-0 flex-1">
                     {editingId === row.id ? (
                       <form
@@ -287,12 +312,16 @@ export function SettingsPage() {
                       </button>
                     )}
                     <div className="mt-1 text-xs text-slate-500 flex flex-wrap gap-x-3 gap-y-1">
-                      <span>
-                        {t("fileName")}: {row.fileName}
-                      </span>
-                      <span>
-                        {t("size")}: {formatBytes(row.sizeBytes)}
-                      </span>
+                      {row.fileName && (
+                        <span>
+                          {t("fileName")}: {row.fileName}
+                        </span>
+                      )}
+                      {row.sizeBytes != null && (
+                        <span>
+                          {t("size")}: {formatBytes(row.sizeBytes)}
+                        </span>
+                      )}
                       <span>
                         {t("scale")}: {formatScale(row.scale) || t("noScale")}
                       </span>
@@ -309,6 +338,12 @@ export function SettingsPage() {
                         {new Date(row.uploadedAt).toLocaleString(i18n.language)}
                       </span>
                     </div>
+                    {row.version == null && (
+                      <ClubMapImportState
+                        job={row.importJob}
+                        className="mt-1 text-xs"
+                      />
+                    )}
                     <div className="mt-2 flex flex-wrap items-center gap-2">
                       <NorthLinesBadge
                         stalenessDeg={row.meridianStalenessDeg}
@@ -327,7 +362,7 @@ export function SettingsPage() {
                           value={row.colorProfile}
                           disabled={
                             setColorStack.isPending ||
-                            !canManageSource(row.uploadedBy)
+                            !canManageSource(row.createdBy)
                           }
                           onChange={(e) => {
                             const profile = e.target.value as
@@ -354,7 +389,7 @@ export function SettingsPage() {
                           checked={row.northLinesBelow}
                           disabled={
                             setColorStack.isPending ||
-                            !canManageSource(row.uploadedBy)
+                            !canManageSource(row.createdBy)
                           }
                           onChange={(e) => {
                             setColorStack.mutate({
@@ -367,7 +402,7 @@ export function SettingsPage() {
                       </label>
                     </div>
                     <div className="mt-3 flex gap-2">
-                      {canManageSource(row.uploadedBy) && (
+                      {row.version && canManageSource(row.version.uploadedBy) && (
                         <button
                           type="button"
                           data-testid="library-map-download"
@@ -391,7 +426,7 @@ export function SettingsPage() {
                           {t("download")}
                         </button>
                       )}
-                      {canManageSource(row.uploadedBy) && (
+                      {canManageSource(row.createdBy) && (
                         <button
                           type="button"
                           data-testid="library-map-delete"

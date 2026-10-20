@@ -344,6 +344,10 @@ test.describe("Courses Page", () => {
     ).toBeVisible();
 
     await page.getByRole("button", { name: "Done" }).click();
-    await expect(page.getByText("10 courses")).toBeVisible({ timeout: 5000 });
+    // The count needs a course.list refetch after the import. With the map
+    // just uploaded, a loaded run answers queries in 3–5 s, and the
+    // counter poll (useExternalChanges, every 5 s) can cancel and restart
+    // that refetch once — 5 s was not enough (bugfix-e2e-kiosk-and-editor-flakes.md).
+    await expect(page.getByText("10 courses")).toBeVisible({ timeout: 15000 });
   });
 });

@@ -120,55 +120,115 @@ function parseDatabaseUrl(): PgConnectionParams {
   };
 }
 
+/**
+ * Tables in the per-event dump, in FK-safe restore order. The blob tables
+ * are not event-scoped (content-addressed, shared by every pin); the dump
+ * carries the rows this event's `map_files` pin, ahead of `map_files`
+ * (docs/map-storage.md §7.3). `club_symbol_decisions` is club-level state
+ * a restored event's re-match reads; it travels whole (no event column,
+ * and its fingerprints are not derivable in SQL). `map_previews` are a
+ * cache and stay out.
+ */
+export const BACKUP_TABLES = [
+  "events",
+  "controls",
+  "courses",
+  "course_controls",
+  "classes",
+  "class_course_pools",
+  "runners",
+  "teams",
+  "cards",
+  "card_readouts",
+  "punches",
+  "control_units",
+  "event_log",
+  "map_sources",
+  "map_documents",
+  "club_symbol_decisions",
+  "map_files",
+  "rendered_maps",
+  "tracks",
+  "routes",
+  "event_seqs",
+] as const;
+
+export type BackupTable = (typeof BACKUP_TABLES)[number];
+
+function backupSelect(t: BackupTable, eventId: bigint): string {
+  switch (t) {
+    case "events":
+      return `SELECT * FROM oxygen.events WHERE id = ${eventId}`;
+    case "course_controls":
+      return `SELECT cc.* FROM oxygen.course_controls cc JOIN oxygen.courses c ON c.id = cc.course_id WHERE c.event_id = ${eventId}`;
+    case "class_course_pools":
+      return `SELECT ccp.* FROM oxygen.class_course_pools ccp JOIN oxygen.classes cl ON cl.id = ccp.class_id WHERE cl.event_id = ${eventId}`;
+    case "map_sources":
+      // The pins' sources, and the source of every pinned document, so the
+      // section is FK-complete even if a pin and its document disagree.
+      return (
+        `SELECT s.* FROM oxygen.map_sources s WHERE s.file_hash IN (` +
+        `SELECT f.source_hash FROM oxygen.map_files f WHERE f.event_id = ${eventId} AND f.source_hash IS NOT NULL ` +
+        `UNION SELECT d.source_hash FROM oxygen.map_documents d JOIN oxygen.map_files f ON f.document_hash = d.hash WHERE f.event_id = ${eventId}) ` +
+        `ORDER BY s.file_hash`
+      );
+    case "map_documents":
+      return (
+        `SELECT s.* FROM oxygen.map_documents s WHERE s.hash IN (` +
+        `SELECT f.document_hash FROM oxygen.map_files f WHERE f.event_id = ${eventId} AND f.document_hash IS NOT NULL) ` +
+        `ORDER BY s.hash`
+      );
+    case "club_symbol_decisions":
+      return `SELECT * FROM oxygen.club_symbol_decisions ORDER BY fingerprint, library_version`;
+    default:
+      return `SELECT * FROM oxygen.${t} WHERE event_id = ${eventId}`;
+  }
+}
+
+/**
+ * The psql script behind the dump: per table an `\echo --- <table> ---`
+ * separator and a `\copy (SELECT …) TO STDOUT` in CSV with a header row.
+ * pg_dump cannot filter rows, so the dump is psql COPYs.
+ */
+export function buildBackupScript(eventId: bigint): string {
+  if (eventId < 0n) throw new Error(`invalid event id ${eventId}`);
+  return BACKUP_TABLES.map(
+    (t) => `\\echo --- ${t} ---\n\\copy (${backupSelect(t, eventId)}) TO STDOUT WITH (FORMAT csv, HEADER true);`,
+  ).join("\n");
+}
+
+/**
+ * Split a dump back into its sections: table → CSV text (header row
+ * first, trailing blank lines dropped). The header comment is skipped;
+ * a `-- BACKUP FAILED` trailer ends the last section.
+ */
+export function splitBackupSections(dump: string): Map<string, string> {
+  const out = new Map<string, string>();
+  let table: string | null = null;
+  let lines: string[] = [];
+  const flush = () => {
+    if (table === null) return;
+    while (lines.length > 0 && lines[lines.length - 1] === "") lines.pop();
+    out.set(table, lines.map((l) => `${l}\n`).join(""));
+  };
+  for (const line of dump.split("\n")) {
+    const sep = /^--- (\S+) ---$/.exec(line);
+    if (sep) {
+      flush();
+      table = sep[1];
+      lines = [];
+      continue;
+    }
+    if (line.startsWith("-- BACKUP FAILED")) break;
+    if (table !== null) lines.push(line);
+  }
+  flush();
+  return out;
+}
+
 export function spawnPgDump(eventId: bigint): PgDumpProcess {
   const params = parseDatabaseUrl();
-  // The per-event filter is done via --table=oxygen.events plus dependent
-  // tables, then a post-process WHERE on each table. Simpler: emit each
-  // entity table filtered by event_id via psql COPY. pg_dump itself can't
-  // filter rows, so we wrap with psql.
-  //
-  // Tables that have an event_id column (single SELECT each).
-  const tables = [
-    "events",
-    "controls",
-    "courses",
-    "course_controls",
-    "classes",
-    "class_course_pools",
-    "runners",
-    "teams",
-    "cards",
-    "card_readouts",
-    "punches",
-    "control_units",
-    "event_log",
-    "map_files",
-    "rendered_maps",
-    "tracks",
-    "routes",
-    "event_seqs",
-  ];
-
-  // Build a single psql script that COPYs each table filtered by event_id
-  // (or by foreign-key membership for tables without it).
-  const copyStatements = tables
-    .map((t) => {
-      if (t === "events") {
-        return `\\copy (SELECT * FROM oxygen.events WHERE id = ${eventId}) TO STDOUT WITH (FORMAT csv, HEADER true);`;
-      }
-      if (t === "event_seqs") {
-        return `\\copy (SELECT * FROM oxygen.event_seqs WHERE event_id = ${eventId}) TO STDOUT WITH (FORMAT csv, HEADER true);`;
-      }
-      if (t === "course_controls") {
-        return `\\copy (SELECT cc.* FROM oxygen.course_controls cc JOIN oxygen.courses c ON c.id = cc.course_id WHERE c.event_id = ${eventId}) TO STDOUT WITH (FORMAT csv, HEADER true);`;
-      }
-      if (t === "class_course_pools") {
-        return `\\copy (SELECT ccp.* FROM oxygen.class_course_pools ccp JOIN oxygen.classes cl ON cl.id = ccp.class_id WHERE cl.event_id = ${eventId}) TO STDOUT WITH (FORMAT csv, HEADER true);`;
-      }
-      return `\\copy (SELECT * FROM oxygen.${t} WHERE event_id = ${eventId}) TO STDOUT WITH (FORMAT csv, HEADER true);`;
-    })
-    .map((stmt, i) => `\\echo --- ${tables[i]} ---\n${stmt}`)
-    .join("\n");
+  const copyStatements = buildBackupScript(eventId);
 
   const args: string[] = [
     "-h",

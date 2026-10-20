@@ -73,6 +73,86 @@ export function MaintenancePanel() {
           <p className="mt-3 text-sm text-red-600">{purge.error.message}</p>
         )}
       </div>
+
+      <MapBackfillCard />
+    </div>
+  );
+}
+
+/**
+ * Import of pre-pipeline maps into the document store
+ * (docs/map-storage.md §6.7). Polls while a run is in progress.
+ */
+function MapBackfillCard() {
+  const { t } = useTranslation("event");
+  const utils = trpc.useUtils();
+  const status = trpc.mapImport.backfillStatus.useQuery(undefined, {
+    refetchInterval: (q) => (q.state.data?.run?.state === "running" ? 1000 : false),
+  });
+  const start = trpc.mapImport.backfillStart.useMutation({
+    onSuccess: (data) => utils.mapImport.backfillStatus.setData(undefined, data),
+  });
+  const plan = status.data?.plan;
+  const run = status.data?.run;
+  const running = run?.state === "running";
+  const pending = (plan?.clubRows ?? 0) + (plan?.eventRows ?? 0);
+
+  return (
+    <div
+      data-testid="map-backfill-card"
+      className="bg-white rounded-2xl shadow-sm border border-slate-200 p-5 mt-4"
+    >
+      <h2 className="text-sm font-semibold text-slate-800">{t("mapBackfillTitle")}</h2>
+      <p className="text-xs text-slate-500 mt-1 mb-4">{t("mapBackfillHelp")}</p>
+
+      {plan && (
+        <p data-testid="map-backfill-pending" className="text-sm text-slate-600 mb-3">
+          {pending === 0
+            ? t("mapBackfillNothing")
+            : t("mapBackfillPending", { clubs: plan.clubRows, events: plan.eventRows })}
+        </p>
+      )}
+
+      <button
+        type="button"
+        data-testid="map-backfill-run"
+        onClick={() => start.mutate(undefined)}
+        disabled={running || start.isPending || pending === 0}
+        className="px-3 py-1.5 text-sm border border-slate-200 rounded-lg hover:bg-slate-50 disabled:opacity-50 cursor-pointer"
+      >
+        {running
+          ? t("mapBackfillRunning", { processed: run.processed, total: run.total })
+          : t("mapBackfillRun")}
+      </button>
+
+      {running && run.current && (
+        <p className="mt-2 text-xs text-slate-500">{t("mapBackfillCurrent", { name: run.current.name })}</p>
+      )}
+      {run && run.state !== "running" && (
+        <p
+          data-testid="map-backfill-result"
+          className={`mt-3 text-sm ${run.failed > 0 || run.state === "failed" ? "text-red-600" : "text-emerald-600"}`}
+        >
+          {run.state === "failed"
+            ? t("mapBackfillAborted", { error: run.error ?? "" })
+            : t("mapBackfillDone", { done: run.done, failed: run.failed, total: run.total })}
+        </p>
+      )}
+      {run && run.failures.length > 0 && (
+        <div className="mt-2">
+          <p className="text-xs font-semibold text-slate-600">{t("mapBackfillFailures")}</p>
+          <ul className="text-xs text-slate-600 list-disc ml-4">
+            {run.failures.map((f) => (
+              <li key={`${f.kind}-${f.id}`}>
+                {f.name}: {f.error}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+      {(status.isError || start.isError) && (
+        <p className="mt-3 text-sm text-red-600">{status.error?.message ?? start.error?.message}</p>
+      )}
     </div>
   );
 }

@@ -25,7 +25,27 @@ const FIXTURE = resolve(__dirname, "../../../../../e2e/test.ocd");
 const suffix = randomBytes(4).toString("hex");
 
 let ctx: TestEventContext;
-let uploadedIds: bigint[] = [];
+/** `club_maps` ids created here; their linked legacy rows go with them. */
+let seriesIds: string[] = [];
+/** Unlinked `club_map_files` rows inserted directly. */
+let legacyOnlyIds: bigint[] = [];
+
+/**
+ * A pre-pipeline row that the backfill has already linked to a series
+ * (no version yet): the shape the list reads raster metadata from.
+ */
+async function linkedLegacyRow(data: { name: string; fileName: string; fileData: Buffer }) {
+  const series = await ctx.db.clubMap.create({ data: { name: data.name }, select: { id: true } });
+  seriesIds.push(series.id);
+  const row = await ctx.db.clubMapFile.create({
+    data: { ...data, sizeBytes: data.fileData.length, clubMapId: series.id },
+  });
+  return { seriesId: series.id, legacyId: row.id };
+}
+
+async function legacyRowOf(seriesId: string) {
+  return ctx.db.clubMapFile.findFirstOrThrow({ where: { clubMapId: seriesId } });
+}
 
 function asUser(row: {
   id: string;
@@ -42,9 +62,10 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
-  if (uploadedIds.length > 0) {
-    await ctx.db.clubMapFile.deleteMany({ where: { id: { in: uploadedIds } } });
-  }
+  await ctx.db.clubMapFile.deleteMany({
+    where: { OR: [{ id: { in: legacyOnlyIds } }, { clubMapId: { in: seriesIds } }] },
+  });
+  await ctx.db.clubMap.deleteMany({ where: { id: { in: seriesIds } } });
   await ctx.db.user.deleteMany({
     where: { email: { endsWith: "@club-map-test.example" } },
   });
@@ -60,7 +81,7 @@ describe("club map library", () => {
       name: `Club map ${suffix}`,
       fileDataBase64: buf.toString("base64"),
     });
-    uploadedIds.push(BigInt(uploaded.id));
+    seriesIds.push(uploaded.id);
     expect(uploaded.sizeBytes).toBe(buf.length);
 
     const list = await caller.clubMap.list();
@@ -72,11 +93,26 @@ describe("club map library", () => {
     expect(row!.scale).toBeGreaterThan(0);
     expect(row!.bounds).toBeTruthy();
     expect(row!.bounds!.north).toBeGreaterThan(row!.bounds!.south);
-    const stored = await ctx.db.clubMapFile.findUnique({
-      where: { id: BigInt(uploaded.id) },
-      select: { previewPng: true },
+    // Keyed by the series; the version names the source and the document.
+    expect(uploaded.id).toMatch(/^[0-9a-f-]{36}$/);
+    const series = await ctx.db.clubMap.findUniqueOrThrow({
+      where: { id: uploaded.id },
+      include: { versions: true },
     });
-    expect(stored?.previewPng).not.toBeNull();
+    expect(row!.version).toMatchObject({
+      id: series.versions[0].id,
+      seq: 1,
+      label: "test.ocd",
+      sourceHash: series.versions[0].sourceHash,
+      documentHash: series.versions[0].documentHash,
+    });
+    expect(row!.versionCount).toBe(1);
+    expect(row!.importJob).toBeNull();
+    expect(row!.previewUrl).toBe(
+      `/api/map-documents/${series.versions[0].documentHash}/thumbnail.png`,
+    );
+    const stored = await legacyRowOf(uploaded.id);
+    expect(stored.previewPng).not.toBeNull();
 
     // The fixture's north lines are drawn at grid north while the real
     // declination at 15°E/58.6°N is ≈ 6.5° E: the detection must report
@@ -96,6 +132,7 @@ describe("club map library", () => {
     });
     const renamed = (await caller.clubMap.list()).find((m) => m.id === uploaded.id);
     expect(renamed?.name).toBe(`Renamed ${suffix}`);
+    expect((await legacyRowOf(uploaded.id)).name).toBe(`Renamed ${suffix}`);
 
     const dl = await caller.clubMap.download({ id: uploaded.id });
     expect(dl.fileName).toBe("test.ocd");
@@ -104,26 +141,23 @@ describe("club map library", () => {
 
   it("backfills north detection for a legacy club map row on list", async () => {
     const buf = readFileSync(FIXTURE);
-    // Simulate a row from before the north_detection column: blob only.
-    const legacy = await ctx.db.clubMapFile.create({
-      data: {
-        name: `Legacy north ${suffix}`,
-        fileName: "legacy-north.ocd",
-        fileData: buf,
-        sizeBytes: buf.length,
-      },
+    // Simulate a row from before the north_detection column: blob only,
+    // already linked to its series by the backfill.
+    const legacy = await linkedLegacyRow({
+      name: `Legacy north ${suffix}`,
+      fileName: "legacy-north.ocd",
+      fileData: buf,
     });
-    uploadedIds.push(legacy.id);
 
     const listed = (await makeCaller().clubMap.list()).find(
-      (m) => m.id === Number(legacy.id),
+      (m) => m.id === legacy.seriesId,
     );
     // The fixture has 601 lines ≈ 6.5° stale — the backfilled analysis
     // must surface that on the very first list read.
     expect(listed?.meridianStalenessDeg).toBeGreaterThan(5);
 
     const persisted = await ctx.db.clubMapFile.findUniqueOrThrow({
-      where: { id: legacy.id },
+      where: { id: legacy.legacyId },
       select: { northDetection: true },
     });
     expect(persisted.northDetection).toMatchObject({
@@ -132,23 +166,19 @@ describe("club map library", () => {
   });
 
   it("persists an all-null detection for an unparseable legacy row (no re-parse loop)", async () => {
-    const legacy = await ctx.db.clubMapFile.create({
-      data: {
-        name: `Legacy garbage ${suffix}`,
-        fileName: "legacy-garbage.ocd",
-        fileData: Buffer.from("not an OCAD file"),
-        sizeBytes: 16,
-      },
+    const legacy = await linkedLegacyRow({
+      name: `Legacy garbage ${suffix}`,
+      fileName: "legacy-garbage.ocd",
+      fileData: Buffer.from("not an OCAD file"),
     });
-    uploadedIds.push(legacy.id);
 
     const listed = (await makeCaller().clubMap.list()).find(
-      (m) => m.id === Number(legacy.id),
+      (m) => m.id === legacy.seriesId,
     );
     // Analysed, nothing found — reported as "no north lines".
     expect(listed?.meridianStalenessDeg).toBeNull();
     const persisted = await ctx.db.clubMapFile.findUniqueOrThrow({
-      where: { id: legacy.id },
+      where: { id: legacy.legacyId },
       select: { northDetection: true },
     });
     // Not NULL: the marker prevents re-parsing on every future list call.
@@ -166,7 +196,7 @@ describe("club map library", () => {
         previewPng: null,
       },
     });
-    uploadedIds.push(row.id);
+    legacyOnlyIds.push(row.id);
 
     const png = await getOrCreateClubMapPreview(row.id);
     expect(png?.subarray(0, 4)).toEqual(Buffer.from([0x89, 0x50, 0x4e, 0x47]));
@@ -186,14 +216,57 @@ describe("club map library", () => {
       fileName: "unparseable.ocd",
       fileDataBase64: garbage.toString("base64"),
     });
-    uploadedIds.push(BigInt(uploaded.id));
+    seriesIds.push(uploaded.id);
 
-    const stored = await ctx.db.clubMapFile.findUnique({
-      where: { id: BigInt(uploaded.id) },
-      select: { fileData: true, previewPng: true },
+    const stored = await legacyRowOf(uploaded.id);
+    expect(Buffer.from(stored.fileData)).toEqual(garbage);
+    expect(stored.previewPng).toBeNull();
+
+    // Listed as a series without a version, with its failed import.
+    const listed = (await makeCaller().clubMap.list()).find((m) => m.id === uploaded.id);
+    expect(listed).toMatchObject({
+      version: null,
+      versionCount: 0,
+      importJob: { state: "failed" },
+      fileName: "unparseable.ocd",
+      sizeBytes: garbage.length,
+      previewUrl: `/api/club-map-preview/${stored.id}`,
     });
-    expect(Buffer.from(stored!.fileData)).toEqual(garbage);
-    expect(stored!.previewPng).toBeNull();
+    // Nothing to download or adopt until a version exists (06 §6).
+    await expect(makeCaller().clubMap.download({ id: uploaded.id })).rejects.toMatchObject({
+      code: "PRECONDITION_FAILED",
+    });
+    await expect(
+      makeCaller(ctx.event).course.useClubMap({ clubMapId: uploaded.id }),
+    ).rejects.toMatchObject({ code: "PRECONDITION_FAILED" });
+  });
+
+  it("does not list a legacy row the backfill has not linked to a series", async () => {
+    const row = await ctx.db.clubMapFile.create({
+      data: {
+        name: `Unlinked ${suffix}`,
+        fileName: "unlinked.ocd",
+        fileData: Buffer.from("bytes"),
+        sizeBytes: 5,
+      },
+    });
+    legacyOnlyIds.push(row.id);
+    const list = await makeCaller().clubMap.list();
+    expect(list.find((m) => m.name === `Unlinked ${suffix}`)).toBeUndefined();
+    // A read never starts imports or creates series.
+    expect(
+      await ctx.db.clubMapFile.findUniqueOrThrow({ where: { id: row.id }, select: { clubMapId: true } }),
+    ).toEqual({ clubMapId: null });
+  });
+
+  it("rejects unknown and malformed library ids", async () => {
+    const unknown = "00000000-0000-7000-8000-000000000000";
+    await expect(makeCaller().clubMap.download({ id: unknown })).rejects.toMatchObject({ code: "NOT_FOUND" });
+    await expect(makeCaller().clubMap.remove({ id: unknown })).rejects.toMatchObject({ code: "NOT_FOUND" });
+    await expect(makeCaller(ctx.event).course.useClubMap({ clubMapId: unknown })).rejects.toMatchObject({ code: "NOT_FOUND" });
+    await expect(
+      makeCaller().clubMap.rename({ id: "42" as unknown as string, name: "x" }),
+    ).rejects.toMatchObject({ code: "BAD_REQUEST" });
   });
 
   it("requires an invited user for preview REST access when auth is on", async () => {
@@ -202,7 +275,8 @@ describe("club map library", () => {
       fileName: "guarded-preview.ocd",
       fileDataBase64: buf.toString("base64"),
     });
-    uploadedIds.push(BigInt(uploaded.id));
+    seriesIds.push(uploaded.id);
+    const legacyId = (await legacyRowOf(uploaded.id)).id;
     const invitedEmail = `preview-${suffix}@club-map-test.example`;
     await ctx.db.user.create({
       data: {
@@ -220,13 +294,13 @@ describe("club map library", () => {
     try {
       const anonymous = await server.inject({
         method: "GET",
-        url: `/api/club-map-preview/${uploaded.id}`,
+        url: `/api/club-map-preview/${legacyId}`,
       });
       expect(anonymous.statusCode).toBe(401);
 
       const invited = await server.inject({
         method: "GET",
-        url: `/api/club-map-preview/${uploaded.id}`,
+        url: `/api/club-map-preview/${legacyId}`,
         headers: { "x-forwarded-email": invitedEmail },
       });
       expect(invited.statusCode).toBe(200);
@@ -270,7 +344,7 @@ describe("club map library", () => {
       fileName: "owned.ocd",
       fileDataBase64: buf.toString("base64"),
     });
-    uploadedIds.push(BigInt(created.id));
+    seriesIds.push(created.id);
 
     const asStranger = makeCaller(null, {
       user: stranger,
@@ -280,6 +354,13 @@ describe("club map library", () => {
     await expect(asStranger.clubMap.remove({ id: created.id })).rejects.toMatchObject({
       code: "FORBIDDEN",
     });
+    expect(await ctx.db.clubMap.count({ where: { id: created.id } })).toBe(1);
+    expect(await ctx.db.clubMapFile.count({ where: { clubMapId: created.id } })).toBe(1);
+
+    // The series' creator may delete it; the linked legacy row goes too.
+    await asUploader.clubMap.remove({ id: created.id });
+    expect(await ctx.db.clubMap.count({ where: { id: created.id } })).toBe(0);
+    expect(await ctx.db.clubMapFile.count({ where: { fileName: "owned.ocd", clubMapId: null } })).toBe(0);
   });
 
   it("copies a library map onto an event and rebuilds editor geometry", async () => {
@@ -289,15 +370,15 @@ describe("club map library", () => {
       fileName: "event-copy.ocd",
       fileDataBase64: buf.toString("base64"),
     });
-    uploadedIds.push(BigInt(uploaded.id));
+    seriesIds.push(uploaded.id);
 
     // Manual library correction must flow into the event MapFile.
     await caller.clubMap.setRotation({ id: uploaded.id, degrees: 4.5 });
-    const clubRow = await ctx.db.clubMapFile.findUnique({
-      where: { id: BigInt(uploaded.id) },
-      select: { rotationCorrection: true, northOffset: true },
-    });
-    expect(clubRow!.rotationCorrection).toBe(4.5);
+    const clubRow = await legacyRowOf(uploaded.id);
+    expect(clubRow.rotationCorrection).toBe(4.5);
+    expect(
+      (await ctx.db.clubMap.findUniqueOrThrow({ where: { id: uploaded.id } })).rotationCorrection,
+    ).toBe(4.5);
 
     await caller.control.create({ codes: "201", xpos: 10, ypos: 20 });
     await caller.control.create({ codes: "202", xpos: 40, ypos: 20 });
@@ -401,7 +482,7 @@ describe("club map library", () => {
 
   it("setRotation rejects unknown club map ids", async () => {
     await expect(
-      makeCaller().clubMap.setRotation({ id: 999_999_999, degrees: 1 }),
+      makeCaller().clubMap.setRotation({ id: "00000000-0000-7000-8000-000000000000", degrees: 1 }),
     ).rejects.toMatchObject({ code: "NOT_FOUND" });
   });
 
@@ -468,7 +549,7 @@ describe("club map library", () => {
       fileName: "secret.ocd",
       fileDataBase64: buf.toString("base64"),
     });
-    uploadedIds.push(BigInt(created.id));
+    seriesIds.push(created.id);
 
     const asStranger = makeCaller(null, {
       user: stranger,
@@ -535,7 +616,7 @@ describe("club map library", () => {
       fileName: "library.ocd",
       fileDataBase64: buf.toString("base64"),
     });
-    uploadedIds.push(BigInt(library.id));
+    seriesIds.push(library.id);
     await asManager.course.useClubMap({ clubMapId: library.id });
     await expect(asManager.course.downloadMap()).rejects.toMatchObject({
       code: "FORBIDDEN",
@@ -580,7 +661,7 @@ describe("club map library", () => {
       fileName: "backup-lib.ocd",
       fileDataBase64: buf.toString("base64"),
     });
-    uploadedIds.push(BigInt(library.id));
+    seriesIds.push(library.id);
     await makeCaller(ctx.event, {
       user: manager,
       authEnabled: true,

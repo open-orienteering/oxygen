@@ -47,6 +47,10 @@ async function cleanStaleEvents(): Promise<void> {
       `DELETE FROM events WHERE name_id IN (${seedPlaceholders}) OR name_id LIKE 'E2E_%' OR name_id LIKE 'Delete_%' OR name_id LIKE 'oxygen_test_%'`,
       args,
     );
+    // Club-library rows outlive events; a previous run's series would keep
+    // its documents visible to every signed-in user (docs/map-storage.md §4.2).
+    await client.query("DELETE FROM club_map_files");
+    await client.query("DELETE FROM club_maps");
     // Reset relevant global-scope rows so a re-run gives the same Eventor /
     // online-input state (these tests sometimes write to global settings).
     await client.query(

@@ -8,6 +8,8 @@ import { controlRouter } from "./control.js";
 import { courseRouter } from "./course.js";
 import { classRouter } from "./classRouter.js";
 import { clubRouter } from "./clubRouter.js";
+import { mapImportRouter } from "./mapImport.js";
+import { mapStorageRouter } from "./mapStorage.js";
 import { eventorRouter } from "./eventor.js";
 import { drawRouter } from "./drawRouter.js";
 import { testLabRouter } from "./testLab.js";
@@ -56,6 +58,8 @@ export const appRouter = router({
   users: usersRouter,
   permission: permissionRouter,
   clubMap: clubMapRouter,
+  mapImport: mapImportRouter,
+  mapStorage: mapStorageRouter,
   controlSeries: controlSeriesRouter,
   classPreset: classPresetRouter,
   mapTemplate: mapTemplateRouter,

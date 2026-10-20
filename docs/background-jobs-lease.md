@@ -2,7 +2,7 @@
 
 Most of the Oxygen API scales horizontally without any coordination: every
 request reads and writes Postgres, and two instances serving different
-requests never need to agree on anything. Three pieces of background work
+requests never need to agree on anything. Four pieces of background work
 are the exception, because they are *not* driven by a request and they
 have side effects outside the database:
 
@@ -11,6 +11,7 @@ have side effects outside the database:
 | LiveResults push | `liveresults.ts` | Both push the same results to the same remote competition, on top of each other, on independent timers. |
 | Online-input (ROC) polling | `online-input/puller.ts` | ROC de-dupes purely by a `lastId` watermark, so both consume the same punch range and insert duplicate `punches` rows. |
 | Journal shipping | `sync/shipper.ts` | The same journal entries ship twice. Inert unless `SYNC_PEER_URL` is set, i.e. on a venue box. |
+| Map storage GC | `map-store/gc.ts` | Nothing breaks — every delete re-checks its conditions — but the daily pass is meant to run once, not once per instance. See [map-storage.md](map-storage.md) §8. |
 
 Before this existed, every instance ran all three on boot, which is why
 Cloud Run was pinned to `--max-instances=1`.
@@ -93,6 +94,15 @@ Two consequences worth knowing:
   and `lastPush` / `pushCount` / `lastError` from `settings`, written by
   the holder after each cycle. The online-input puller already worked
   this way.
+
+The storage GC is not a timer: the holder's reconcile calls
+`maybeStartStorageGc()`, which reads `map_storage_gc.started_at` /
+`finished_at` from `settings` (at most every 15 minutes) and starts a
+run in the background when the last one finished a day ago. Because the
+schedule lives in the database, it survives restarts and leadership
+changes, and two leaders under different `LEADER_LEASE_SCOPE`s on one
+database (dev and Docker) still run it once a day between them. Losing
+the lease asks a running GC to stop after its current row.
 
 ## Defence in depth on the ROC watermark
 

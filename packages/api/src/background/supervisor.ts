@@ -10,6 +10,10 @@
  * configuration — start what should run, stop what shouldn't, and drop
  * everything the moment the lease is lost.
  *
+ * The storage garbage collector (docs/map-storage.md §8) runs here too:
+ * deletion is safe to repeat, but one daily pass across the deployment
+ * is the point, and its schedule lives in `settings`, not in a timer.
+ *
  * The journal shipper is included for completeness. It is inert unless
  * `SYNC_PEER_URL` is set, which today means a venue box running a single
  * instance, but shipping the same journal entries from two processes is
@@ -29,6 +33,7 @@ import {
   stopAllPullers,
 } from "../online-input/puller.js";
 import { startShipper, stopShipper } from "../sync/shipper.js";
+import { maybeStartStorageGc, stopStorageGc } from "../map-store/gc.js";
 
 /** How often the leader re-reads the configuration, in ms. */
 const DEFAULT_RECONCILE_MS = 5_000;
@@ -46,11 +51,14 @@ export const defaultJobs: BackgroundJobs = {
     await reconcileEnabledPullers();
     // Idempotent: returns early when a timer is already armed.
     startShipper();
+    // Starts the daily run in the background when it is due; never throws.
+    await maybeStartStorageGc();
   },
   stopAll() {
     liveResultsPusherManager.stopAll();
     stopAllPullers();
     stopShipper();
+    stopStorageGc();
   },
 };
 

@@ -6,6 +6,9 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   buildE2eTestOcad,
+  buildSymbolTypesOcad,
+  SYMBOL_TYPES_OCAD,
+  E2E_TEXT_SYMBOLS,
   buildShowcaseOcad,
   SHOWCASE_OCAD,
   assertShowcaseOcadClean,
@@ -93,5 +96,36 @@ describe("showcase SQL map substitution", () => {
       assert.equal(re.test(map.data.toString("latin1")), false, `OCAD matched ${re}`);
     }
     assert.doesNotMatch(sql.slice(sql.indexOf("INSERT INTO map_files")), /Vinter Flaten|kartutsitt|Delade enheter/);
+  });
+
+  it("writes text, line-text and rectangle symbols the reader reads back (docs/map-import.md §3.3)", async () => {
+    const { readOcad } = require("ocad2geojson");
+    const file = await readOcad(buildSymbolTypesOcad(), { quietWarnings: true });
+    assert.deepEqual(file.warnings, []);
+    const bySym = new Map(file.symbols.map((s) => [s.symNum, s]));
+    for (const def of Object.values(SYMBOL_TYPES_OCAD)) {
+      const { symNum, description, ...fields } = def;
+      const s = bySym.get(symNum);
+      assert.ok(s, `symbol ${symNum}`);
+      assert.equal(s.description, description);
+      for (const [k, v] of Object.entries(fields)) assert.equal(s[k], v, `${symNum}.${k}`);
+    }
+    assert.deepEqual(
+      file.objects.map((o) => [o.objType, o.text]),
+      [[4, "Framed"], [4, "Shadow"], [6, "Along the path"], [7, ""], [7, ""]],
+    );
+  });
+
+  it("puts a framed text and a rectangle into e2e/test.ocd", async () => {
+    const { readOcad } = require("ocad2geojson");
+    const file = await readOcad(buildE2eTestOcad(), { quietWarnings: true });
+    assert.deepEqual(file.warnings, []);
+    const text = file.symbols.find((s) => s.symNum === E2E_TEXT_SYMBOLS.spotHeight.symNum);
+    assert.equal(text.type, 4);
+    assert.deepEqual([text.frMode, text.frColor, text.frWidth], [2, 4, 10]);
+    const frame = file.symbols.find((s) => s.symNum === E2E_TEXT_SYMBOLS.frame.symNum);
+    assert.equal(frame.type, 7);
+    assert.equal(file.objects.filter((o) => o.objType === 7).length, 1);
+    assert.equal(file.objects.find((o) => o.sym === E2E_TEXT_SYMBOLS.spotHeight.symNum).text, "112");
   });
 });

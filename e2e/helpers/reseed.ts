@@ -41,6 +41,10 @@ export async function reseed(): Promise<void> {
       args,
     );
     await client.query("DELETE FROM club_map_files");
+    // The club library is dual-written to `club_maps` (docs/map-storage.md
+    // §6.5); a leftover series keeps its versions' documents club-visible,
+    // which changes the document route's answer for later specs.
+    await client.query("DELETE FROM club_maps");
     await client.query("DELETE FROM club_map_templates");
     await client.query("DELETE FROM club_control_series");
     await client.query("DELETE FROM club_class_presets");

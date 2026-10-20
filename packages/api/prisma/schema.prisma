@@ -191,6 +191,8 @@ model Event {
   journalSyncStates  JournalSyncState[]
   leases             EventLease[]
   mapFiles           MapFile[]
+  mapUploads         MapUpload[]
+  mapImportJobs      MapImportJob[]
   renderedMaps       RenderedMap[]
   mapTemplates       MapTemplate[]
   courseMaps         CourseMap[]
@@ -263,6 +265,12 @@ model User {
   clubMapFiles         ClubMapFile[]
   clubMapTemplates     ClubMapTemplate[]
   clubGroupMemberships ClubUserGroupMember[]
+  mapSources           MapSource[]
+  mapUploads           MapUpload[]
+  clubMapsCreated      ClubMap[]
+  clubMapVersions      ClubMapVersion[]
+  mapImportJobs        MapImportJob[]
+  symbolDecisions      ClubSymbolDecision[]
 
   @@map("users")
   @@schema("oxygen")
@@ -1035,10 +1043,14 @@ model ClubMapFile {
   uploadedBy         String?  @map("uploaded_by") @db.Uuid
   uploadedAt         DateTime @default(now()) @map("uploaded_at") @db.Timestamptz(6)
   updatedAt          DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+  /// The club_maps series this legacy row is dual-written to (docs/map-storage.md §6.5).
+  clubMapId          String?  @map("club_map_id") @db.Uuid
 
-  uploader User? @relation(fields: [uploadedBy], references: [id], onDelete: SetNull)
+  uploader User?    @relation(fields: [uploadedBy], references: [id], onDelete: SetNull)
+  clubMap  ClubMap? @relation(fields: [clubMapId], references: [id], onDelete: SetNull)
 
   @@index([renderKey])
+  @@index([clubMapId])
   @@map("club_map_files")
   @@schema("oxygen")
 }
@@ -1160,12 +1172,233 @@ model MapFile {
   fileHash           String?  @map("file_hash")
   /// Content-keyed tile/print cache id; lazily filled on first read.
   renderKey          String?  @map("render_key")
+  /// Content-addressed pins (docs/map-storage.md). Null on rows written
+  /// before the document pipeline; the backfill fills them.
+  sourceHash         String?  @map("source_hash")
+  documentHash       String?  @map("document_hash")
+  /// Set when the event adopted a club-library version; SET NULL when
+  /// that version is deleted, leaving the event on its pinned document.
+  clubMapVersionId   String?  @map("club_map_version_id") @db.Uuid
 
-  event Event @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  event          Event           @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  source         MapSource?      @relation(fields: [sourceHash], references: [fileHash], onDelete: Restrict)
+  document       MapDocument?    @relation(fields: [documentHash], references: [hash], onDelete: Restrict)
+  clubMapVersion ClubMapVersion? @relation(fields: [clubMapVersionId], references: [id], onDelete: SetNull)
 
   @@index([eventId])
   @@index([renderKey])
+  @@index([documentHash])
+  @@index([sourceHash])
   @@map("map_files")
+  @@schema("oxygen")
+}
+
+/// Original uploaded map file, keyed by SHA-256 of its bytes. Immutable;
+/// shared by every event / club version that imported the same bytes.
+/// `bytes` is STORAGE EXTERNAL (set in the migration) for sliced reads.
+model MapSource {
+  fileHash   String   @id @map("file_hash")
+  /// 'ocad' | 'omap'
+  kind       String
+  bytes      Bytes
+  sizeBytes  Int      @map("size_bytes")
+  /// First upload's name, informational.
+  fileName   String   @map("file_name")
+  uploadedBy String?  @map("uploaded_by") @db.Uuid
+  createdAt  DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  uploader  User?            @relation(fields: [uploadedBy], references: [id], onDelete: SetNull)
+  documents MapDocument[]
+  mapFiles  MapFile[]
+  versions  ClubMapVersion[]
+  uploads   MapUpload[]
+  jobs      MapImportJob[]
+
+  @@map("map_sources")
+  @@schema("oxygen")
+}
+
+/// Imported map document (docs/map-document-format.md), keyed by SHA-256
+/// of its bytes. Immutable: a re-import writes a new row and repoints.
+model MapDocument {
+  hash             String   @id
+  bytes            Bytes
+  sizeBytes        Int      @map("size_bytes")
+  formatVersion    Int      @map("format_version")
+  importerVersion  String   @map("importer_version")
+  libraryVersion   String   @map("library_version")
+  sourceHash       String   @map("source_hash")
+  /// Document header without the symbol table and strings: quick-access
+  /// metadata (scale, bounds, georeferencing, counts).
+  header           Json
+  /// Import report (docs/map-import.md §5, docs/map-storage.md §3).
+  report           Json
+  createdAt        DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  /// Bumped when a reference is created; GC input.
+  lastReferencedAt DateTime @default(now()) @map("last_referenced_at") @db.Timestamptz(6)
+
+  source   MapSource        @relation(fields: [sourceHash], references: [fileHash], onDelete: Restrict)
+  previews MapPreview[]
+  mapFiles MapFile[]
+  versions ClubMapVersion[]
+  jobs     MapImportJob[]
+
+  @@index([sourceHash])
+  @@map("map_documents")
+  @@schema("oxygen")
+}
+
+/// Derived rasters for a document (thumbnail, symbol previews). Pure cache.
+model MapPreview {
+  documentHash String   @map("document_hash")
+  /// 'thumbnail' | 'symbol'
+  kind         String
+  /// Symbol index for 'symbol', '' otherwise.
+  key          String   @default("")
+  png          Bytes
+  createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  document MapDocument @relation(fields: [documentHash], references: [hash], onDelete: Cascade)
+
+  @@id([documentHash, kind, key])
+  @@map("map_previews")
+  @@schema("oxygen")
+}
+
+/// Club map series: settings about the map, not the file. Versions pin
+/// the actual source + document.
+model ClubMap {
+  id                 String   @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  name               String
+  colourProfile      String   @default("auto") @map("colour_profile")
+  colourOverrides    Json     @default("{}") @map("colour_overrides")
+  northLinesBelow    Boolean  @default(true) @map("north_lines_below")
+  rotationCorrection Float    @default(0) @map("rotation_correction")
+  createdBy          String?  @map("created_by") @db.Uuid
+  createdAt          DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt          DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  creator    User?            @relation(fields: [createdBy], references: [id], onDelete: SetNull)
+  versions   ClubMapVersion[]
+  legacyRows ClubMapFile[]
+  importJobs MapImportJob[]
+
+  @@map("club_maps")
+  @@schema("oxygen")
+}
+
+model ClubMapVersion {
+  id           String   @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  clubMapId    String   @map("club_map_id") @db.Uuid
+  /// 1, 2, 3 … within the series.
+  seq          Int
+  label        String   @default("")
+  sourceHash   String   @map("source_hash")
+  documentHash String   @map("document_hash")
+  uploadedBy   String?  @map("uploaded_by") @db.Uuid
+  uploadedAt   DateTime @default(now()) @map("uploaded_at") @db.Timestamptz(6)
+
+  clubMap  ClubMap     @relation(fields: [clubMapId], references: [id], onDelete: Cascade)
+  source   MapSource   @relation(fields: [sourceHash], references: [fileHash], onDelete: Restrict)
+  document MapDocument @relation(fields: [documentHash], references: [hash], onDelete: Restrict)
+  uploader User?       @relation(fields: [uploadedBy], references: [id], onDelete: SetNull)
+  mapFiles MapFile[]
+
+  @@unique([clubMapId, seq])
+  @@index([documentHash])
+  @@index([sourceHash])
+  @@map("club_map_versions")
+  @@schema("oxygen")
+}
+
+/// Chunked upload staging (docs/map-storage.md §5). Deleted once finalised
+/// into map_sources, or by the GC after 24 h.
+model MapUpload {
+  id            String    @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  /// NULL for club-library uploads.
+  eventId       BigInt?   @map("event_id")
+  fileName      String    @map("file_name")
+  /// Sniffed from the first chunk: "ocad" | "omap".
+  kind          String?
+  declaredBytes Int       @map("declared_bytes")
+  chunkBytes    Int       @map("chunk_bytes")
+  uploadedBy    String?   @map("uploaded_by") @db.Uuid
+  createdAt     DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  finalisedHash String?   @map("finalised_hash")
+
+  event     Event?           @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  uploader  User?            @relation(fields: [uploadedBy], references: [id], onDelete: SetNull)
+  finalised MapSource?       @relation(fields: [finalisedHash], references: [fileHash], onDelete: SetNull)
+  chunks    MapUploadChunk[]
+
+  @@index([createdAt])
+  @@map("map_uploads")
+  @@schema("oxygen")
+}
+
+model MapUploadChunk {
+  uploadId String @map("upload_id") @db.Uuid
+  n        Int
+  bytes    Bytes
+
+  upload MapUpload @relation(fields: [uploadId], references: [id], onDelete: Cascade)
+
+  @@id([uploadId, n])
+  @@map("map_upload_chunks")
+  @@schema("oxygen")
+}
+
+/// One import of one source (docs/map-storage.md §6). State lives here so
+/// any instance can report it and a stale one can be re-claimed.
+model MapImportJob {
+  id           String    @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  eventId      BigInt?   @map("event_id")
+  clubMapId    String?   @map("club_map_id") @db.Uuid
+  sourceHash   String    @map("source_hash")
+  /// Snapshot of the club symbol decisions stage 6 applies (`SymbolDecision[]`, docs/map-storage.md §6.1), taken at insert.
+  decisions    Json      @default("[]")
+  /// queued | running | done | failed.
+  state        String
+  /// Import stage name while running.
+  stage        String?
+  progress     Float     @default(0) @db.Real
+  claimedBy    String?   @map("claimed_by")
+  heartbeatAt  DateTime? @map("heartbeat_at") @db.Timestamptz(6)
+  documentHash String?   @map("document_hash")
+  error        String?
+  /// User whose request started the job (docs/map-storage.md §4.2); null for the backfill.
+  startedBy    String?   @map("started_by") @db.Uuid
+  createdAt    DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt    DateTime  @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  event     Event?       @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  clubMap   ClubMap?     @relation(fields: [clubMapId], references: [id], onDelete: Cascade)
+  source    MapSource    @relation(fields: [sourceHash], references: [fileHash], onDelete: Cascade)
+  document  MapDocument? @relation(fields: [documentHash], references: [hash], onDelete: SetNull)
+  starter   User?        @relation(fields: [startedBy], references: [id], onDelete: SetNull)
+
+  @@index([state, heartbeatAt], map: "map_import_jobs_state_heartbeat_idx")
+  @@index([eventId, createdAt])
+  @@index([clubMapId, createdAt])
+  @@index([sourceHash])
+  @@index([documentHash])
+  @@map("map_import_jobs")
+  @@schema("oxygen")
+}
+
+/// A reviewed symbol outcome reused across documents (docs/map-symbols.md §8.5; 06 §5.3, 07 §4.3).
+/// Written only by `mapImport.decide`. `canonicalId` null = explicitly kept as source.
+model ClubSymbolDecision {
+  fingerprint    String
+  libraryVersion String   @map("library_version")
+  canonicalId    String?  @map("canonical_id")
+  decidedBy      String?  @map("decided_by") @db.Uuid
+  decidedAt      DateTime @default(now()) @map("decided_at") @db.Timestamptz(6)
+
+  decider User? @relation(fields: [decidedBy], references: [id], onDelete: SetNull)
+
+  @@id([fingerprint, libraryVersion])
+  @@map("club_symbol_decisions")
   @@schema("oxygen")
 }
 

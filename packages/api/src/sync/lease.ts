@@ -23,6 +23,14 @@ import type { AppRouter } from "../routers/index.js";
 import type { EventRef, PrismaClient } from "../db.js";
 import { nodeId, SYNC_SECRET_HEADER } from "./nodeIdentity.js";
 import { makeSyncHeaders } from "./googleIdToken.js";
+import {
+  exportSnapshotMaps,
+  importSnapshotMaps,
+  type ExportBlobInput,
+  type ExportBlobResult,
+  type SnapshotBlobs,
+  type SnapshotMaps,
+} from "./snapshotMaps.js";
 
 // ─── Active lease + write guard ─────────────────────────────
 
@@ -117,9 +125,10 @@ export async function releaseLease(
 /**
  * The event-scoped tables carried by a checkout snapshot, in FK-safe insert
  * order. Rows travel verbatim (UUID PKs and `seq` values preserved); only
- * `eventId` is rewritten to the importing node's local event id. Map/tile
- * blobs and readout-backup staging rows stay behind — they are server-local
- * caches, re-creatable, and not part of the results closure.
+ * `eventId` is rewritten to the importing node's local event id. Tile
+ * caches and readout-backup staging rows stay behind — they are
+ * server-local, re-creatable, and not part of the results closure. The
+ * event's map rows travel separately as `maps` (docs/map-storage.md §7.2).
  */
 const SNAPSHOT_TABLES = [
   "control",
@@ -151,6 +160,12 @@ export interface EventSnapshot {
   seqs: Array<{ tableName: string; nextSeq: number }>;
   /** The exporter's journal head — the importer's initial pull watermark. */
   journalCursor: { hlc: string; id: string };
+  /**
+   * Pinned map rows without bytes (docs/map-storage.md §7.2); the blobs
+   * follow through `lease.exportBlob`. Absent from an exporter that
+   * predates it.
+   */
+  maps?: SnapshotMaps;
 }
 
 export async function exportEventSnapshot(
@@ -196,6 +211,7 @@ export async function exportEventSnapshot(
     journalCursor: head
       ? { hlc: head.hlc.toString(), id: head.id }
       : { hlc: "0", id: "" },
+    maps: await exportSnapshotMaps(db, event.id),
   };
 }
 
@@ -204,10 +220,14 @@ export async function exportEventSnapshot(
  * event (identified by `nameId`; the cascade wipes children, seqs, journal
  * and sync state — correct on re-checkout, the previous lease's journal was
  * shipped before checkin). Returns the local EventRef.
+ *
+ * `blobs` are the map blobs `fetchSnapshotBlobs` fetched for
+ * `snapshot.maps`; without them the map part is not imported.
  */
 export async function importEventSnapshot(
   db: PrismaClient,
   snapshot: EventSnapshot,
+  blobs?: SnapshotBlobs,
 ): Promise<EventRef> {
   const { id: _dropId, ...eventData } = snapshot.event;
   const nameId = String(eventData.nameId);
@@ -236,6 +256,11 @@ export async function importEventSnapshot(
         }).createMany({
           data: rows.map((r) => ({ ...r, eventId: created.id })),
         });
+      }
+
+      // Content-addressed blobs (append-only) and the event's map pins.
+      if (snapshot.maps && blobs) {
+        await importSnapshotMaps(tx, created.id, snapshot.maps, blobs);
       }
 
       // Seq counters travel with the lease — the holder is the only
@@ -302,6 +327,8 @@ export interface LeasePeer {
   exportSnapshot(nameId: string): Promise<EventSnapshot>;
   /** The peer's full event row — the settings-refresh source. */
   exportSettings(nameId: string): Promise<Record<string, unknown>>;
+  /** One slice of a map blob the event pins (docs/map-storage.md §7.2). */
+  exportBlob(nameId: string, input: ExportBlobInput): Promise<ExportBlobResult>;
 }
 
 export function httpLeasePeer(baseUrl: string, secret: string): LeasePeer {
@@ -341,6 +368,9 @@ export function httpLeasePeer(baseUrl: string, secret: string): LeasePeer {
         string,
         unknown
       >;
+    },
+    async exportBlob(nameId, input) {
+      return clientFor(nameId).lease.exportBlob.query(input);
     },
   };
 }

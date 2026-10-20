@@ -214,7 +214,12 @@ acquired_at, released_at, forced)`.
   The initial transfer is a snapshot import of the event (rows copied
   over, `seq` values preserved — explicit `seq` on insert is supported by
   the `allocate_event_seq()` trigger) plus journal-from-there. From this
-  point the cloud rejects race-critical writes for the event.
+  point the cloud rejects race-critical writes for the event. The
+  snapshot also carries the event's pinned map — its `map_files` row and
+  the source and document blobs by hash, fetched in slices through
+  `lease.exportBlob` and checked against their SHA-256 — so the box
+  serves `/api/map-documents/:hash` to its kiosk and stations
+  ([map-storage.md](map-storage.md) §7.2).
 - **`checkin`** — a barrier: all venue journal entries shipped and acked,
   then the lease is released and the cloud resumes writing. Nothing else
   to reconcile (see [ownership](#ownership-follows-the-journal)).

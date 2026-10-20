@@ -54,9 +54,15 @@ importers:
       '@prisma/adapter-pg':
         specifier: ^7.10.1
         version: 7.10.1
+      '@types/pngjs':
+        specifier: ^6.0.5
+        version: 6.0.5
       '@types/semver':
         specifier: ^7.8.0
         version: 7.8.0
+      pngjs:
+        specifier: ^7.0.0
+        version: 7.0.0
       semver:
         specifier: ^7.8.5
         version: 7.8.5
@@ -118,8 +124,8 @@ importers:
         specifier: ^3.24.6
         version: 3.24.6(@types/node@26.6.5)
       ocad2geojson:
-        specifier: github:open-orienteering/ocad2geojson#v2.2.2-oxygen.0
-        version: https://codeload.github.com/open-orienteering/ocad2geojson/tar.gz/9bc3b1245756c99815f3376e8233b21f29da74ee
+        specifier: github:open-orienteering/ocad2geojson#v2.2.2-oxygen.1
+        version: https://codeload.github.com/open-orienteering/ocad2geojson/tar.gz/37ab89efffbd2468e12888c6178038e05ba4c3fd
       pdf-lib:
         specifier: ^1.17.1
         version: 1.17.1
@@ -129,9 +135,6 @@ importers:
       pino-pretty:
         specifier: ^13.2.0
         version: 13.2.0
-      proj4:
-        specifier: ^2.22.0
-        version: 2.22.0
       sharp:
         specifier: ^0.35.5
         version: 0.35.5(@types/node@26.6.5)
@@ -169,6 +172,9 @@ importers:
 
   packages/shared:
     dependencies:
+      proj4:
+        specifier: ^2.22.0
+        version: 2.22.0
       zod:
         specifier: ^4.6.7
         version: 4.6.7
@@ -230,6 +236,9 @@ importers:
       dexie-react-hooks:
         specifier: ^4.4.0
         version: 4.4.0(dexie@4.4.6)(react@19.3.1)
+      earcut:
+        specifier: ^3.2.4
+        version: 3.2.4
       i18next:
         specifier: ^26.5.3
         version: 26.5.3(typescript@6.0.3)
@@ -237,8 +246,8 @@ importers:
         specifier: ^6.3.0
         version: 6.3.0
       ocad2geojson:
-        specifier: github:open-orienteering/ocad2geojson#v2.2.2-oxygen.0
-        version: https://codeload.github.com/open-orienteering/ocad2geojson/tar.gz/9bc3b1245756c99815f3376e8233b21f29da74ee
+        specifier: github:open-orienteering/ocad2geojson#v2.2.2-oxygen.1
+        version: https://codeload.github.com/open-orienteering/ocad2geojson/tar.gz/37ab89efffbd2468e12888c6178038e05ba4c3fd
       qrcode:
         specifier: ^1.5.4
         version: 1.5.4
@@ -2207,6 +2216,9 @@ packages:
   '@types/pg@8.23.1':
     resolution: {integrity: sha512-fKVHpikPdg4GKks3JuLEhvwSyvwzF23hnabPy6DD8ljVbC7+6J5dQzdv4arV6jqq57djnMgs1HKBxX4P8aBI3A==}
 
+  '@types/pngjs@6.0.5':
+    resolution: {integrity: sha512-0k5eKfrA83JOZPppLtS2C7OUtyNAl2wKNxfyYl9Q5g9lPkgBl/9hNyAu6HuEH2J4XmIv2znEpkDd0SaZVxW6iQ==}
+
   '@types/qrcode@1.5.6':
     resolution: {integrity: sha512-te7NQcV2BOvdj2b1hCAHzAoMNuj65kNBMz0KBaxM6c3VGBOhU0dURQKOtH8CFNI/dsKkwlv32p26qYQTWoB5bw==}
 
@@ -2823,6 +2835,9 @@ packages:
 
   duplexer@0.1.2:
     resolution: {integrity: sha512-jtD6YG370ZCIi/9GTaJKQxWTZD045+4R4hTk/x1UyoqadyJ9x9CgSi1RlVDQF8U2sxLLSnFkCaMihqljHIWgMg==}
+
+  earcut@3.2.4:
+    resolution: {integrity: sha512-FHc6yNpnTORB0tM5kmZ03iD2mDuNakDE2lvf4Hw1XkfxtEHIGVi01B/GqUSwx+NcC1WGjidAfpTXzeALtPtfpg==}
 
   ecdsa-sig-formatter@1.0.11:
     resolution: {integrity: sha512-nagl3RYrbNv6kQkeJIpt6NJZy8twLB/2vtz6yN9Z4vRKHN4/QZJIEbqohALSgwKdnksuY3k5Addp5lg8sVoVcQ==}
@@ -3846,9 +3861,9 @@ packages:
     resolution: {integrity: sha512-XrsrhT5sybtKI6wakr2SPOlGZWWYbUXZ7a0jT8/QOeAPau+1X/bSegNe5YR75oJmEZQbKningirmGOEJCIk61Q==}
     engines: {node: '>=12.20.0'}
 
-  ocad2geojson@https://codeload.github.com/open-orienteering/ocad2geojson/tar.gz/9bc3b1245756c99815f3376e8233b21f29da74ee:
-    resolution: {tarball: https://codeload.github.com/open-orienteering/ocad2geojson/tar.gz/9bc3b1245756c99815f3376e8233b21f29da74ee}
-    version: 2.2.2-oxygen.0
+  ocad2geojson@https://codeload.github.com/open-orienteering/ocad2geojson/tar.gz/37ab89efffbd2468e12888c6178038e05ba4c3fd:
+    resolution: {tarball: https://codeload.github.com/open-orienteering/ocad2geojson/tar.gz/37ab89efffbd2468e12888c6178038e05ba4c3fd}
+    version: 2.2.2-oxygen.1
     hasBin: true
 
   ohash@2.0.12:
@@ -4004,6 +4019,10 @@ packages:
   pngjs@5.0.0:
     resolution: {integrity: sha512-40QW5YalBNfQo5yRYmiw7Yz6TKKVr3h6970B2YE+3fQpsWcrbj1PzJgxeJ19DRQjhMbKPIuMY8rFaXc8moolVw==}
     engines: {node: '>=10.13.0'}
+
+  pngjs@7.0.0:
+    resolution: {integrity: sha512-LKWqWJRhstyYo9pGvgor/ivk2w94eSjE3RGVuzLGlr3NmD8bf7RcYGze1mNdEHRP6TRP6rMuDHk5t44hnTRyow==}
+    engines: {node: '>=14.19.0'}
 
   possible-typed-array-names@1.1.0:
     resolution: {integrity: sha512-/+5VFTchJDoVj3bhoqi6UeymcD00DAwb1nJwamzPvHEszJ4FpF6SNNbUbOS8yI56qHzdV8eK0qEfOSiodkTdxg==}
@@ -6751,6 +6770,10 @@ snapshots:
       pg-protocol: 1.16.1
       pg-types: 2.2.0
 
+  '@types/pngjs@6.0.5':
+    dependencies:
+      '@types/node': 26.6.5
+
   '@types/qrcode@1.5.6':
     dependencies:
       '@types/node': 26.6.5
@@ -7419,6 +7442,8 @@ snapshots:
       gopd: 1.2.0
 
   duplexer@0.1.2: {}
+
+  earcut@3.2.4: {}
 
   ecdsa-sig-formatter@1.0.11:
     dependencies:
@@ -8517,7 +8542,7 @@ snapshots:
 
   obug@2.2.1: {}
 
-  ocad2geojson@https://codeload.github.com/open-orienteering/ocad2geojson/tar.gz/9bc3b1245756c99815f3376e8233b21f29da74ee:
+  ocad2geojson@https://codeload.github.com/open-orienteering/ocad2geojson/tar.gz/37ab89efffbd2468e12888c6178038e05ba4c3fd:
     dependencies:
       '@turf/line-offset': 7.4.0
       '@turf/meta': 7.4.0
@@ -8706,6 +8731,8 @@ snapshots:
       playwright-core: 1.64.1
 
   pngjs@5.0.0: {}
+
+  pngjs@7.0.0: {}
 
   possible-typed-array-names@1.1.0: {}
 

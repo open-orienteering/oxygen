@@ -3,6 +3,7 @@ import { useTranslation } from "react-i18next";
 import { useParams } from "react-router-dom";
 import { trpc } from "../lib/trpc";
 import { fileToBase64 } from "../lib/file-to-base64";
+import { shouldUseChunkedUpload, uploadMapFileChunked } from "../lib/map-upload";
 import { useCurrentUser } from "../context/CurrentUserContext";
 import { MapViewer, type ControlOverlay, type CourseOverlay, type MapViewerEditorProps } from "./MapViewer";
 import { useIsWideViewport } from "./map-pane-shared";
@@ -16,6 +17,7 @@ import {
 } from "./map-icons";
 import { ToolbarButton } from "./ToolbarButton";
 import { NorthLinesBadge } from "./NorthLinesBadge";
+import { ClubMapImportState } from "./ClubMapImportState";
 import { formatStalenessDeg, isMeridianStale } from "../lib/north-lines";
 
 /**
@@ -318,6 +320,19 @@ function MapPanelImpl({
       setUploadError(`Map upload failed: ${err.message}`);
     },
   });
+  // Second half of the chunked path (docs/map-storage.md §5): the bytes are
+  // already in map_sources; this makes them the event map.
+  const applyUploaded = trpc.course.applyUploadedMap.useMutation({
+    onSuccess: (result) => {
+      setUploadError(null);
+      setUploadNotice(noticeForStaleness(result.meridianStalenessDeg));
+      mapInfo.refetch();
+      mapMetadata.refetch();
+    },
+    onError: (err) => {
+      setUploadError(`Map upload failed: ${err.message}`);
+    },
+  });
   const useClubMap = trpc.course.useClubMap.useMutation({
     onSuccess: (result) => {
       setShowLibraryPicker(false);
@@ -352,6 +367,17 @@ function MapPanelImpl({
     }
     setUploadError(null);
     setUploadNotice(null);
+    if (shouldUseChunkedUpload(file.size)) {
+      // Large files go up in 8 MiB chunks (Cloud Run's request ceiling,
+      // resumable per chunk) and are applied by hash afterwards.
+      void uploadMapFileChunked(file, { eventNameId: nameId ?? null })
+        .then(({ fileHash }) => applyUploaded.mutate({ fileHash, fileName: file.name }))
+        .catch((err: unknown) => {
+          const message = err instanceof Error ? err.message : String(err);
+          setUploadError(`Map upload failed: ${message}`);
+        });
+      return;
+    }
     void fileToBase64(file)
       .then((fileDataBase64) => {
         uploadMutation.mutate({ fileName: file.name, fileDataBase64 });
@@ -360,7 +386,7 @@ function MapPanelImpl({
         const message = err instanceof Error ? err.message : String(err);
         setUploadError(`Map upload failed: could not read ${file.name} (${message})`);
       });
-  }, [uploadMutation]);
+  }, [uploadMutation, applyUploaded, nameId]);
 
   const handleDrop = useCallback((e: React.DragEvent) => {
     e.preventDefault();
@@ -388,10 +414,13 @@ function MapPanelImpl({
         <ul className="divide-y divide-slate-100 max-h-80 overflow-auto">
           {(clubMaps.data ?? []).map((m) => (
             <li key={m.id}>
+              {/* A series without a version cannot be adopted (06 §6). */}
               <button
                 type="button"
                 data-testid={`club-map-pick-${m.id}`}
-                className="w-full text-left py-2 px-1 hover:bg-slate-50 cursor-pointer"
+                className="w-full text-left py-2 px-1 hover:bg-slate-50 cursor-pointer disabled:cursor-not-allowed disabled:opacity-60 disabled:hover:bg-transparent"
+                disabled={m.version == null}
+                title={m.version == null ? tl("notImportedYet") : undefined}
                 onClick={() => useClubMap.mutate({ clubMapId: m.id })}
               >
                 <div className="font-medium text-sm text-slate-900">{m.name}</div>
@@ -399,11 +428,18 @@ function MapPanelImpl({
                   {m.scale
                     ? `1:${Math.round(m.scale).toString().replace(/\B(?=(\d{3})+(?!\d))/g, " ")}`
                     : tl("noScale")}
-                  {" · "}
-                  {m.sizeBytes < 1024 * 1024
-                    ? `${(m.sizeBytes / 1024).toFixed(1)} KB`
-                    : `${(m.sizeBytes / (1024 * 1024)).toFixed(1)} MB`}
+                  {m.sizeBytes != null && (
+                    <>
+                      {" · "}
+                      {m.sizeBytes < 1024 * 1024
+                        ? `${(m.sizeBytes / 1024).toFixed(1)} KB`
+                        : `${(m.sizeBytes / (1024 * 1024)).toFixed(1)} MB`}
+                    </>
+                  )}
                 </div>
+                {m.version == null && (
+                  <ClubMapImportState job={m.importJob} className="text-xs" />
+                )}
               </button>
             </li>
           ))}

@@ -1,5 +1,6 @@
 import { test, expect } from "@playwright/test";
 import { getMockWebSerialScript } from "./helpers/mock-webserial";
+import { waitForTrpc } from "./helpers/trpc";
 
 // Declare the global mock interface for TypeScript
 declare global {
@@ -78,9 +79,7 @@ test.describe("WebSerial SI Reader", () => {
     await page.getByTestId("connect-reader").click();
     await expect(page.getByTestId("reader-status")).toBeVisible({ timeout: 5000 });
 
-    const resolutionPromise = page.waitForResponse(
-      (resp) => resp.url().includes("/trpc/cardReadout.readout") && resp.status() === 200,
-    );
+    const resolutionPromise = waitForTrpc(page, "cardReadout.readout");
 
     await page.evaluate(() =>
       window.__siMock.insertCard(501438, [
@@ -157,9 +156,7 @@ test.describe("WebSerial SI Reader", () => {
     });
 
     // Wait for the runner resolution API call to complete after inserting the card
-    const resolutionPromise = page.waitForResponse(
-      (resp) => resp.url().includes("/trpc/cardReadout.readout") && resp.status() === 200,
-    );
+    const resolutionPromise = waitForTrpc(page, "cardReadout.readout");
 
     // Insert card 500671 (Eva Rådberg — Status=0, no FinishTime, truly pre-start)
     // with NO punches and NO finish
@@ -198,9 +195,7 @@ test.describe("WebSerial SI Reader", () => {
     // The DeviceManager first stores the readout, then calls cardReadout.readout
     // to determine the action (register/readout/pre-start). Without waiting, the
     // notification may still show the default action.
-    const resolutionPromise = page.waitForResponse(
-      (resp) => resp.url().includes("/trpc/cardReadout.readout") && resp.status() === 200,
-    );
+    const resolutionPromise = waitForTrpc(page, "cardReadout.readout");
 
     // Insert a SIAC card (8xxx range = SI10 layout) with owner data
     await page.evaluate(() =>
@@ -255,9 +250,7 @@ test.describe("WebSerial SI Reader", () => {
     });
 
     // Wait for the runner resolution API call to complete after inserting the card
-    const resolutionPromise = page.waitForResponse(
-      (resp) => resp.url().includes("/trpc/cardReadout.readout") && resp.status() === 200,
-    );
+    const resolutionPromise = waitForTrpc(page, "cardReadout.readout");
 
     // Insert a card that doesn't exist in the DB
     await page.evaluate(() =>

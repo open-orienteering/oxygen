@@ -50,6 +50,7 @@ import {
   synchronizePositionedControlCoordinates,
   type MapCalibrationPoint,
 } from "../event-map.js";
+import { latestVersionOrRefuse } from "../club-map-library.js";
 import { cutRotationDeg } from "../map-north.js";
 import {
   ensureEventMapRenderKey,
@@ -1045,6 +1046,7 @@ export const courseRouter = router({
         calibration: true,
         rotationCorrection: true,
         northDetection: true,
+        documentHash: true,
       },
     });
     if (!row) return null;
@@ -1181,6 +1183,8 @@ export const courseRouter = router({
       rotationCorrection,
       meridianStalenessDeg: currentMeridianStaleness(northDetection),
       uploadedAt: row.uploadedAt.getTime(),
+      /** Content hash of the pinned map document (`/api/map-documents/:hash`); null before the backfill. */
+      documentHash: row.documentHash,
       cutRotationDeg: cutRotationDeg(
         northOffset,
         (northDetection as { meridian?: { medianTiltDeg?: number } } | null)
@@ -1472,6 +1476,38 @@ export const courseRouter = router({
         ctx.event.id,
         input.fileName,
         buffer,
+        { uploadedBy: ctx.user?.id ?? null, startedBy: ctx.user?.id ?? null },
+      );
+      return { success: true as const, ...result };
+    }),
+
+  /**
+   * Second half of the chunked upload (docs/map-storage.md §5): the file
+   * already sits in `map_sources` under `fileHash`; make it the event map.
+   */
+  applyUploadedMap: coursesEditProcedure
+    .input(z.object({
+      fileHash: z.string().regex(/^[0-9a-f]{64}$/),
+      /** The name the user uploaded under; the source row keeps the first-ever name for these bytes. */
+      fileName: z.string().min(1).max(512).optional(),
+    }))
+    .mutation(async ({ ctx, input }) => {
+      const source = await ctx.db.mapSource.findUnique({
+        where: { fileHash: input.fileHash },
+        select: { kind: true, fileName: true, bytes: true },
+      });
+      if (!source) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "Uploaded file not found; upload it again" });
+      }
+      if (source.kind !== "ocad") {
+        throw new TRPCError({ code: "BAD_REQUEST", message: `${source.kind} files cannot be used as an event map yet` });
+      }
+      const result = await applyEventMap(
+        ctx.db,
+        ctx.event.id,
+        input.fileName?.trim() || source.fileName,
+        Buffer.from(source.bytes),
+        { uploadedBy: ctx.user?.id ?? null, startedBy: ctx.user?.id ?? null, fileHash: input.fileHash },
       );
       return { success: true as const, ...result };
     }),
@@ -1507,52 +1543,63 @@ export const courseRouter = router({
     }),
 
   /**
-   * Copy a club-library OCAD file into this event. The event keeps its
-   * own blob; later library edits do not affect it.
+   * Copy a club-library map into this event: the latest version of the
+   * `club_maps` series (its original file from `map_sources`) with the
+   * series' settings, then pin that version (docs/map-storage.md §6.5).
+   * The event keeps its own blob; later library edits do not affect it.
    */
   useClubMap: coursesEditProcedure
-    .input(z.object({ clubMapId: z.number().int().positive() }))
+    .input(z.object({ clubMapId: z.string().uuid() }))
     .mutation(async ({ ctx, input }) => {
-      const row = await ctx.db.clubMapFile.findUnique({
-        where: { id: BigInt(input.clubMapId) },
+      const series = await ctx.db.clubMap.findUnique({
+        where: { id: input.clubMapId },
         select: {
-          fileName: true,
-          fileData: true,
+          name: true,
           rotationCorrection: true,
-          colorProfile: true,
-          colorOverrides: true,
+          colourProfile: true,
+          colourOverrides: true,
           northLinesBelow: true,
-          fileHash: true,
+          versions: {
+            orderBy: { seq: "desc" },
+            take: 1,
+            select: { id: true, label: true, sourceHash: true, uploadedBy: true },
+          },
         },
       });
-      if (!row) {
+      if (!series) {
         throw new TRPCError({
           code: "NOT_FOUND",
           message: `Club map ${input.clubMapId} not found`,
         });
       }
+      const version = latestVersionOrRefuse(series.name, series.versions[0]);
+      const source = await ctx.db.mapSource.findUniqueOrThrow({
+        where: { fileHash: version.sourceHash },
+        select: { fileName: true, bytes: true },
+      });
       const result = await applyEventMap(
         ctx.db,
         ctx.event.id,
-        row.fileName,
-        Buffer.from(row.fileData),
+        version.label || source.fileName,
+        Buffer.from(source.bytes),
         {
           fromClubLibrary: true,
-          rotationCorrection: row.rotationCorrection,
-          colorProfile: row.colorProfile as
-            | "auto"
-            | "isom"
-            | "issprom"
-            | "isskiom"
-            | "ismtbom",
-          colorOverrides: (row.colorOverrides ?? {}) as {
+          uploadedBy: version.uploadedBy ?? ctx.user?.id ?? null,
+          startedBy: ctx.user?.id ?? null,
+          rotationCorrection: series.rotationCorrection,
+          colorProfile: colorProfileSchema.catch("auto").parse(series.colourProfile),
+          colorOverrides: (series.colourOverrides ?? {}) as {
             above?: number[];
             below?: number[];
           },
-          northLinesBelow: row.northLinesBelow,
-          fileHash: row.fileHash ?? undefined,
+          northLinesBelow: series.northLinesBelow,
+          fileHash: version.sourceHash,
         },
       );
+      await ctx.db.mapFile.updateMany({
+        where: { eventId: ctx.event.id, sourceHash: version.sourceHash },
+        data: { clubMapVersionId: version.id },
+      });
       return { success: true as const, ...result };
     }),
 

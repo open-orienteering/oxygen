@@ -11,6 +11,8 @@
 
 import { test, expect, type Page } from "@playwright/test";
 import { getMockWebSerialScript } from "./helpers/mock-webserial";
+import { waitForTrpc } from "./helpers/trpc";
+import { openKioskTab } from "./helpers/kiosk";
 import { API_BASE } from "./helpers/api-base";
 
 declare global {
@@ -115,11 +117,11 @@ test.describe("Rental Cards — Competition Settings", () => {
     await expect(page.getByTestId("rental-card-fee-input")).toBeVisible({ timeout: 10000 });
 
     await page.getByTestId("rental-card-fee-input").fill("50");
+    // Armed before the blur that fires the mutation: a fast response
+    // would otherwise land before the listener exists.
+    const saved = waitForTrpc(page, "competition.setCardFee");
     await page.getByTestId("rental-card-fee-input").blur();
-
-    await page.waitForResponse(
-      (resp) => resp.url().includes("/trpc/competition.setCardFee") && resp.status() === 200,
-    );
+    await saved;
     const resp = await request.get(`${API_BASE}/trpc/competition.getCardFee`, { headers: COMP_HEADERS });
     const body = await resp.json();
     const fee = body?.result?.data?.cardFee ?? body?.result?.data?.json?.cardFee;
@@ -271,18 +273,14 @@ test.describe("Rental Cards — Kiosk Readout Banner", () => {
     const nameId = getNameId(page);
 
     // Open kiosk in a second tab
-    const kioskPage = await context.newPage();
-    await kioskPage.goto(`/${nameId}/kiosk`);
-    await expect(kioskPage.getByText("Insert your SI card")).toBeVisible({ timeout: 10000 });
+    const kioskPage = await openKioskTab(context, nameId);
 
     // Connect SI reader in admin
     await page.getByTestId("connect-reader").click();
     await expect(page.getByTestId("reader-status")).toBeVisible({ timeout: 5000 });
 
     // Insert the rental card with course controls so it resolves as a readout (not pre-start)
-    const readoutPromise = page.waitForResponse(
-      (resp) => resp.url().includes("/trpc/cardReadout.readout") && resp.status() === 200,
-    );
+    const readoutPromise = waitForTrpc(page, "cardReadout.readout");
     await page.evaluate(
       ({ cardNo, controls }) => {
         const punches = controls.map((code: number, i: number) => ({

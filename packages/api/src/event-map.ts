@@ -6,29 +6,24 @@
  */
 
 import type { PrismaClient, Prisma } from "./generated/prisma/client.js";
-import { fireMapUpload } from "./db.js";
+import { fireMapUpload, prisma } from "./db.js";
 import {
   OVERPRINT_CUTS_VERSION,
   rebuildCourseGeometry,
 } from "./course-geometry.js";
 import { emitCourseUpserted } from "./referenceJournal.js";
 import {
-  ocadBoundsToWgs84,
-  ocadToWgs84,
+  frameFromOcadCrs,
   mapMmToWgs84,
-  computeMapNorthOffset,
-  withGrivationCorrection,
-  type OcadCrs,
   type WGS84Bounds,
 } from "./map-projection.js";
 import {
   detectMapNorth,
-  displayNorthOffsetDeg,
   meridianStalenessFromDetection,
-  probeMeridianLines,
   type NorthDetection,
   type OcadNorthSource,
 } from "./map-north.js";
+import { mapFileMetadataFor } from "./map-store/map-file-metadata.js";
 import { loadEventCrs } from "./event-crs.js";
 import { computeRenderKey, hashMapFileData } from "./map-render-key.js";
 import {
@@ -37,7 +32,8 @@ import {
   refreshClubMapRenderKey,
 } from "./map-render-cache.js";
 import type { ColorProfile, ColorStackOverrides } from "@oxygen/shared";
-import { colorProfileSchema, colorStackOverridesSchema } from "@oxygen/shared";
+import { colorProfileSchema, colorStackOverridesSchema, mapImport } from "@oxygen/shared";
+import { startImportJob, type ImportJobRow } from "./map-store/jobs.js";
 
 type Db = PrismaClient | Prisma.TransactionClient;
 
@@ -69,7 +65,8 @@ export type ResolvedMapNorth = {
   meridianStalenessDeg: number | null;
 };
 
-type OcadParsed = OcadNorthSource & {
+/** The fork's `readOcad` result as both the north analysis and the shared normaliser see it. */
+type OcadParsed = OcadNorthSource & mapImport.OcadFileLike & {
   getBounds(): number[];
 };
 
@@ -91,29 +88,39 @@ function metadataFromOcad(
   ocad: OcadParsed,
   rotationCorrectionDeg: number,
 ): ClubMapMetadata {
-  const crs = withGrivationCorrection(ocad.getCrs(), rotationCorrectionDeg);
-  const ocadBounds = ocad.getBounds();
-
+  // The same normalised input and the same column function the import
+  // job's pin uses (map-store/map-file-metadata.ts), so this write and the
+  // pin agree. Symbol conversion is skipped: only objects, symbol codes
+  // and georeferencing matter here.
+  const { input, analysis } = mapImport.ocadToDocumentInput(ocad, {
+    fileName: "",
+    fileHash: "",
+    fileBytes: 0,
+    renderFor: () => null,
+  });
+  const frame = {
+    unitsPerMm: input.header.unitsPerMm,
+    mapScale: input.header.mapScale,
+    georeferencing: input.header.georeferencing,
+    bounds: analysis.bounds,
+  };
   // `northOffset` is the bearing from true north to the direction the
   // viewer puts at the top of the screen (MapViewer rotates by
-  // -northOffset). Base value: paper +Y. When the file contains a
-  // meridian-line cluster (ISOM 601.x, often tilted inside the drawing —
-  // Nackareservatet: 3.3°), fold that tilt in so screen-up follows the
-  // meridians and they render vertical. Without the fold the viewer shows
-  // paper-up and the meridians lean by their in-paper tilt no matter what
-  // rotationCorrection is set to — correction rotates the georeference
-  // and northOffset by the same amount, which cancels on screen.
-  const northOffset = displayNorthOffsetDeg(
-    computeMapNorthOffset(ocadBounds, crs),
-    probeMeridianLines(ocad.objects ?? []),
-  );
-
-  return {
-    scale: crs.scale ?? null,
-    bounds: ocadBoundsToWgs84(ocadBounds, crs),
-    northOffset,
-    calibration: computeCalibration(ocadBounds, crs),
-  };
+  // -northOffset): paper +Y plus the in-paper tilt of a meridian-line
+  // cluster (ISOM 601.x, Nackareservatet: 3.3°), so screen-up follows the
+  // meridians. Without the fold the meridians lean by their tilt no matter
+  // what rotationCorrection is — correction rotates the georeference and
+  // northOffset by the same amount, which cancels on screen.
+  const tilt = analysis.north.meridian?.medianTiltDeg ?? null;
+  const metadata = mapFileMetadataFor(frame, tilt, rotationCorrectionDeg);
+  if (metadata) return metadata;
+  // Raster path only: no CRS in the document, but the legacy
+  // coordinate-range inference recognises the grid (`getEpsgString`).
+  const legacy = frameFromOcadCrs(ocad.getCrs());
+  const inferred = legacy
+    ? mapFileMetadataFor({ ...frame, georeferencing: legacy.georeferencing }, tilt, rotationCorrectionDeg)
+    : null;
+  return inferred ?? { scale: frame.mapScale, bounds: null, northOffset: null, calibration: null };
 }
 
 /**
@@ -232,31 +239,6 @@ export async function detectNorthFromBuffer(
   }
 }
 
-/**
- * Map-mm ↔ WGS84 anchors at the four corners of the map extent.
- * `ocadBounds` is in OCAD internal units (hundredths of mm); the client
- * coordinate space is paper mm, hence the /100.
- */
-function computeCalibration(
-  ocadBounds: number[],
-  crs: OcadCrs,
-): MapCalibrationPoint[] | null {
-  const [minX, minY, maxX, maxY] = ocadBounds;
-  const corners: [number, number][] = [
-    [minX, minY],
-    [maxX, minY],
-    [minX, maxY],
-    [maxX, maxY],
-  ];
-  const points: MapCalibrationPoint[] = [];
-  for (const [x, y] of corners) {
-    const wgs = ocadToWgs84(x, y, crs);
-    if (!wgs) return null;
-    points.push({ mapX: x / 100, mapY: y / 100, lat: wgs.lat, lng: wgs.lng });
-  }
-  return points;
-}
-
 function detectionJson(
   detection: NorthDetection | null,
 ): Prisma.InputJsonValue | undefined {
@@ -313,6 +295,12 @@ export async function applyEventMap(
     northLinesBelow?: boolean;
     /** When copying from club library, reuse its content hash. */
     fileHash?: string;
+    /** Recorded on the content-addressed source row (docs/map-storage.md). */
+    uploadedBy?: string | null;
+    /** The signed-in user making the request; recorded on the import job (docs/map-storage.md §4.2, §6.1). */
+    startedBy?: string | null;
+    /** How long to wait for the import job before returning (default 30 s; 0 = don't wait). */
+    importHoldMs?: number;
   } = {},
 ): Promise<{
   fileName: string;
@@ -320,6 +308,10 @@ export async function applyEventMap(
   rotationCorrection: number;
   meridianStalenessDeg: number | null;
   renderKey: string;
+  /** Pinned map document; null while the import job is still running or if it failed. */
+  documentHash: string | null;
+  /** The import job recording this upload (docs/map-storage.md §6); null only if it could not be created. */
+  importJob: { id: string; state: ImportJobRow["state"]; error: string | null } | null;
 }> {
   const resolved = await resolveMapNorth(buffer, {
     forcedCorrection: opts.rotationCorrection,
@@ -342,12 +334,24 @@ export async function applyEventMap(
     northLinesBelow,
   });
 
+  // Stage 9 of the document pipeline (docs/map-storage.md §3): the upload
+  // is also a content-addressed source row the event pins; the import job
+  // started below produces the document and writes `document_hash` onto
+  // this map_files row when it finishes. The tile path does not depend on
+  // either, so a failed import leaves the pin null and is retried by the
+  // backfill.
+  await db.mapSource.createMany({
+    data: [{ fileHash, kind: "ocad", bytes: Uint8Array.from(buffer), sizeBytes: buffer.byteLength, fileName, uploadedBy: opts.uploadedBy ?? null }],
+    skipDuplicates: true,
+  });
+
   await db.mapFile.deleteMany({ where: { eventId } });
   await db.mapFile.create({
     data: {
       eventId,
       fileName,
       fileData: Uint8Array.from(buffer),
+      sourceHash: fileHash,
       scale: resolved.metadata.scale,
       bounds: resolved.metadata.bounds
         ? (resolved.metadata.bounds as unknown as Prisma.InputJsonValue)
@@ -366,6 +370,14 @@ export async function applyEventMap(
       renderKey,
     },
   });
+  // Runs on the instance's import worker while the raster work below
+  // proceeds; awaited (up to the hold) before returning.
+  const importJob = startImportJob(prisma(), { sourceHash: fileHash, eventId, startedBy: opts.startedBy ?? null, holdMs: opts.importHoldMs })
+    .catch((err: unknown) => {
+      console.error(`[map-import] event ${eventId}: could not start the import of ${fileName}:`, err);
+      return null;
+    });
+
   await db.renderedMap.deleteMany({ where: { eventId } });
   await gcOrphanTiles(db);
   fireMapUpload(eventId);
@@ -387,12 +399,15 @@ export async function applyEventMap(
     data: { overprintCutsVersion: OVERPRINT_CUTS_VERSION },
   });
 
+  const job = await importJob;
   return {
     fileName,
     size: buffer.length,
     rotationCorrection: resolved.rotationCorrection,
     meridianStalenessDeg: resolved.meridianStalenessDeg,
     renderKey,
+    documentHash: job?.state === "done" ? job.documentHash : null,
+    importJob: job ? { id: job.id, state: job.state, error: job.error } : null,
   };
 }
 
