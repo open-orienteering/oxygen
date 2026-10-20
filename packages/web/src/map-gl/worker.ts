@@ -18,7 +18,10 @@
 
 import { mapDocument, render } from "@oxygen/shared";
 import { MeshAtlasBuilder, type MeshAtlas } from "./mesh-atlas.js";
-import { assignBuckets, partTransferables, prepareBucketPart, type Assignment, type Grid, type PrepareContext, type PreparedPart } from "./buckets.js";
+import {
+  aboveZoomGate, assignBuckets, fitView, partTransferables, prepareBucketPart, PREFETCH_MARGIN_CELLS, visibleCells,
+  type Assignment, type Grid, type PrepareContext, type PreparedPart, type ViewRect,
+} from "./buckets.js";
 
 /** Flattening tolerance, paper µm (OCAD's own resolution). */
 export const TOLERANCE_UM = 10;
@@ -28,10 +31,21 @@ export type LoadSource =
   /** Dev-only S1 reader path: objects already converted on the main thread. */
   | { kind: "objects"; objects: render.RenderObject[]; symbols: render.RenderSymbol[] };
 
+/** The view the caller will show first: given, or "fit the document into this canvas". */
+export type FirstView = { kind: "view"; view: ViewRect } | { kind: "fit"; widthPx: number; heightPx: number; fill?: number };
+
 export interface LoadRequest {
   type: "load";
   source: LoadSource;
   fonts: { family: render.FontFamily; bytes: ArrayBuffer }[];
+  /**
+   * With a first view the worker queues that view's detail (prefetch margin, nearest first) right
+   * after the always-resident layers — no round trip — unless the view is below the zoom gate.
+   */
+  firstView?: FirstView;
+  /** Apply the zoom gate to the first view (default true). */
+  gate?: boolean;
+  prefetchMarginCells?: number;
   toleranceUm?: number;
   cellUm?: number;
   largeCells?: number;
@@ -63,6 +77,9 @@ export interface LoadSummary {
   /** Bridge statistics (document source only). */
   bridge?: mapDocument.DocumentRenderInput["stats"];
   warnings: Record<string, number>;
+  /** The first view resolved (fit computed here when asked for) and the detail cells queued for it. */
+  view?: ViewRect;
+  queued: number[];
   ms: { decode: number; bridge: number; symbolise: number; atlas: number; assign: number; base: number; large: number };
   bytes: { base: number; large: number; atlas: number };
 }
@@ -141,7 +158,12 @@ export function createMapGlWorker(post: Post, schedule: (fn: () => void) => void
         try {
           const { reply, transfer, next } = load(msg);
           state = next;
+          queue = reply.summary.queued.slice();
           post(reply, transfer);
+          if (queue.length && !pumping) {
+            pumping = true;
+            schedule(pump);
+          }
         } catch (e) {
           state = undefined;
           post({ type: "error", message: e instanceof Error ? e.message : String(e) }, []);
@@ -247,8 +269,17 @@ function load(msg: LoadRequest): { reply: LoadedReply; transfer: ArrayBuffer[]; 
     if (b === largeId) largeObjects++;
   }
   const r = (x: number) => Math.round(x * 100) / 100;
+  const bounds = render.passStreamBounds(stream);
+  const fv = msg.firstView;
+  const view = fv ? (fv.kind === "view" ? fv.view : fitView(bounds, fv.widthPx, fv.heightPx, fv.fill)) : undefined;
+  const detail = new Set(detailCells);
+  const queued = view && (msg.gate === false || aboveZoomGate(view.pxPerUm))
+    ? visibleCells(view, grid, msg.prefetchMarginCells ?? PREFETCH_MARGIN_CELLS).filter((id) => detail.has(id))
+    : [];
   const summary: LoadSummary = {
-    bounds: render.passStreamBounds(stream),
+    bounds,
+    ...(view ? { view } : {}),
+    queued,
     originX, originY, grid, largeId, detailCells, densestCell,
     passes: stream.passes.length,
     passKinds,

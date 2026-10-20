@@ -195,6 +195,13 @@ export interface ViewRect {
   rotationDeg?: number;
 }
 
+/** The view that shows `bounds` whole in a canvas, filling `fill` of the tighter dimension. */
+export function fitView(bounds: render.Bounds | undefined, widthPx: number, heightPx: number, fill = 0.95): ViewRect {
+  const b = bounds ?? { minX: 0, minY: 0, maxX: 1000, maxY: 1000 };
+  const pxPerUm = Math.min(widthPx / Math.max(1, b.maxX - b.minX), heightPx / Math.max(1, b.maxY - b.minY)) * fill;
+  return { centreX: (b.minX + b.maxX) / 2, centreY: (b.minY + b.maxY) / 2, pxPerUm, widthPx, heightPx };
+}
+
 /** Paper bounds the viewport covers (the bounding box of the rotated canvas). */
 export function viewBounds(view: ViewRect): render.Bounds {
   let hx = view.widthPx / 2 / view.pxPerUm, hy = view.heightPx / 2 / view.pxPerUm;

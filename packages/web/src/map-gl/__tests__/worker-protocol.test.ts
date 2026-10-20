@@ -107,6 +107,22 @@ describe("worker protocol (docs/map-rendering.md §5.2 Worker)", () => {
     for (const k of [vs.fill, vs.hatch, vs.stroke]) expect(new Set(k.draws.map((d) => d.colour)).size).toBe(k.draws.length);
   });
 
+  it("a first view queues its detail without a round trip; below the zoom gate it queues nothing", () => {
+    const { w, sent, tasks, runTask } = harness();
+    w.handle({ ...load(), firstView: { kind: "fit", widthPx: 2000, heightPx: 2000 } });
+    const m = sent[0].msg as LoadedReply;
+    expect(m.summary.view).toBeDefined();
+    expect(m.summary.queued.length).toBeGreaterThan(0);
+    expect(m.summary.queued.every((id) => m.summary.detailCells.includes(id))).toBe(true);
+    while (tasks.length) runTask();
+    expect(sent.slice(1).map((s) => (s.msg as Extract<WorkerReply, { type: "part" }>).part.bucket)).toEqual(m.summary.queued);
+
+    const gated = harness();
+    gated.w.handle({ ...load(), firstView: { kind: "fit", widthPx: 20, heightPx: 20 } }); // ~1e-4 px/µm
+    expect((gated.sent[0].msg as LoadedReply).summary.queued).toEqual([]);
+    expect(gated.tasks).toHaveLength(0);
+  });
+
   it("reports a load failure as an error reply", () => {
     const { w, sent } = harness();
     w.handle({ type: "load", source: { kind: "document", bytes: new ArrayBuffer(8), options: {} }, fonts: [] });

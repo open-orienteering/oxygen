@@ -123,12 +123,17 @@ export class MapGlEngine {
   }
 
   /** Loads a document in the worker; resolves when the always-resident layers are uploaded. */
-  load(req: Omit<LoadRequest, "type">): Promise<LoadSummary> {
+  /**
+   * Loads a document in the worker; resolves when the always-resident layers are uploaded. Pass the
+   * view you will show first (`firstView`) and draw `summary.view`: its detail is then already on
+   * its way.
+   */
+  load(req: Omit<LoadRequest, "type" | "gate" | "prefetchMarginCells">): Promise<LoadSummary> {
     const transfer: Transferable[] = req.fonts.map((f) => f.bytes);
     if (req.source.kind === "document") transfer.push(req.source.bytes);
     return new Promise((resolve, reject) => {
       this.loadWaiter = { resolve, reject };
-      this.transport.post({ type: "load", ...req }, transfer);
+      this.transport.post({ type: "load", ...req, gate: this.opts.gate, prefetchMarginCells: this.opts.prefetchMarginCells }, transfer);
     });
   }
 
@@ -144,8 +149,9 @@ export class MapGlEngine {
       this.renderer.setDocument(s.originX, s.originY, m.atlas);
       this.base.clear();
       this.detail.clear();
-      this.pending.clear();
-      this.lastRequest = "";
+      // What the worker queued for the first view is pending; the same want list is not re-sent.
+      this.pending = new Set(s.queued);
+      this.lastRequest = s.queued.join(",");
       this.lru = new BucketLru(this.opts.budgetBytes);
       for (const p of m.base) this.base.set(p.bucket, this.renderer.uploadPart(BASE(p.bucket), p));
       this.large = m.large ? this.renderer.uploadPart(LARGE, m.large) : undefined;

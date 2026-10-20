@@ -33,6 +33,7 @@ import { buildBatches, type Batch, type BatchStats } from "../../map-gl/batch";
 import { MapGlRenderer, hexToRgb, type FrameStats, type View } from "../../map-gl/renderer";
 import { MapGlEngine, inlineTransport, workerTransport, type EngineStats, type Transport } from "../../map-gl/engine";
 import type { LoadSummary } from "../../map-gl/worker";
+import { fitView } from "../../map-gl/buckets";
 import liberationSansUrl from "../../../../shared/fonts/LiberationSans-Regular.ttf?url";
 import liberationSansNarrowUrl from "../../../../shared/fonts/LiberationSansNarrow-Regular.ttf?url";
 
@@ -373,11 +374,7 @@ export function MapGlDocPage() {
         };
         const t1 = performance.now();
         colourRef.current = (i) => hexToRgb(colourHex(i));
-        const fitFor = (b: render.Bounds | undefined): View => {
-          const bb = b ?? { minX: 0, minY: 0, maxX: 1000, maxY: 1000 };
-          const pxPerUm = Math.min(w / (bb.maxX - bb.minX), h / (bb.maxY - bb.minY)) * 0.95;
-          return { centreX: (bb.minX + bb.maxX) / 2, centreY: (bb.minY + bb.maxY) / 2, pxPerUm, widthPx: w, heightPx: h };
-        };
+        const fitFor = (b: render.Bounds | undefined): View => fitView(b, w, h, 0.95);
         const paper1x = (window.devicePixelRatio || 1) * (96 / 25.4) / 1000;
 
         let report: LoadReport;
@@ -393,10 +390,13 @@ export function MapGlDocPage() {
             ? { kind: "document" as const, bytes: encodedDocument.slice().buffer as ArrayBuffer, options: bridgeOptions }
             : { kind: "objects" as const, objects: readerInput!.objects, symbols: readerInput!.symbols };
           const tPost = performance.now();
-          const summary = await engine.load({ source, fonts: fontBytes.map((f) => ({ family: f.family, bytes: f.bytes.slice(0) })) });
+          const summary = await engine.load({
+            source, fonts: fontBytes.map((f) => ({ family: f.family, bytes: f.bytes.slice(0) })),
+            firstView: { kind: "fit", widthPx: w, heightPx: h, fill: 0.95 },
+          });
           renderer.gl.finish();
           const tLoaded = performance.now();
-          const fit = fitFor(summary.bounds);
+          const fit: View = { ...(summary.view ?? fitFor(summary.bounds)) };
           fitRef.current = { ...fit };
           viewRef.current = { ...fit };
           const g = summary.grid;
