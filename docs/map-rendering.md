@@ -2,7 +2,8 @@
 
 Status: **draft** — chapter of the vector map pipeline specification,
 started by spike S1 (steps 1–3: harness, pilot symbolisation stage,
-WebGL2 backend with golden images). Sections marked *not yet specified*
+WebGL2 backend with golden images); the symbolisation stage covers the
+whole library since B1. Sections marked *not yet specified*
 are filled in as slice B / C land. The research record this
 chapter derives from is `docs/research/vector-map-pipeline/04-render-core.md`;
 when the two disagree, this document wins.
@@ -166,8 +167,9 @@ field). A glyph's outline is rotated about its own origin. Em size in µm
 (already derived from digit height where the symbol says so). A halo is a
 **separate pass** in the halo colour with `haloWidthUm` set, sorted into
 its own colour position like any other pass — it is not a backend effect.
-Fonts are the four Liberation families (`FontRef.family`); shaping rules
-are *not yet specified* (S1 step 2).
+Fonts are the four Liberation families (`FontRef.family`, with the
+face's `bold` / `italic`); shaping is the stage's (§4.9). A text shadow
+is likewise its own pass (§4.9).
 
 ### 3.6 Canonical order
 

@@ -39,8 +39,10 @@ const at = (x: number, y: number): RenderPath => makePath([x, y]);
 /** Builds one scene's symbol list from library entries and variants. */
 class Symbols {
   readonly list: RenderSymbol[] = [];
+  readonly library: SymbolLibraryId;
   private readonly lib: ReturnType<typeof materialiseLibrary>;
-  constructor(readonly library: SymbolLibraryId) {
+  constructor(library: SymbolLibraryId) {
+    this.library = library;
     this.lib = materialiseLibrary(library);
   }
   get colours(): ColourStack {
