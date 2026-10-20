@@ -17,7 +17,7 @@ import {
   makePath,
 } from "./pass-stream.js";
 import { type Interval, layoutDashes } from "./dash.js";
-import { flattenRings, offsetPolyline } from "./geometry.js";
+import { flattenRings, offsetPolyline, roundCorners } from "./geometry.js";
 import { GlyphRegistry, type RegisteredGlyph, mapCap, mapJoin } from "./glyph-table.js";
 import { PathMeasure, gapIntervals, pathSections, subtractIntervals, wrapIntervals } from "./measure.js";
 import { patternInstances } from "./pattern.js";
@@ -145,8 +145,9 @@ class Stage {
 
   // ---- line --------------------------------------------------------------
 
-  private line(path: RenderPath, sym: LineSymbolBody): void {
-    if (path.coords.length < 4) return;
+  private line(objectPath: RenderPath, sym: LineSymbolBody): void {
+    if (objectPath.coords.length < 4) return;
+    const path = sym.cornerRadiusUm ? roundCorners(objectPath, sym.cornerRadiusUm) : objectPath;
     const m = new PathMeasure(path);
     if (m.totalLength <= 0) return;
     const gaps = gapIntervals(m);
@@ -194,8 +195,10 @@ class Stage {
         const bgPath = centre === 0 ? path : polyPath(offsetPolyline(flat, centre, path.closed), path.closed);
         this.push({ kind: "stroke", colour: backgroundColour, path: bgPath, widthUm: width, cap: "butt", join: "miter" });
       }
-      if (left) this.border(m, flat, left, +1, COORD_FLAG.noLeft, sym.main);
-      if (right) this.border(m, flat, right, -1, COORD_FLAG.noRight, sym.main);
+      for (const pair of [{ left, right }, ...(sym.borders.extraPairs ?? [])]) {
+        if (pair.left) this.border(m, flat, pair.left, +1, COORD_FLAG.noLeft, sym.main);
+        if (pair.right) this.border(m, flat, pair.right, -1, COORD_FLAG.noRight, sym.main);
+      }
     }
 
     for (const g of sym.glyphs ?? []) {

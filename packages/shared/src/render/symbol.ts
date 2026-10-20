@@ -119,6 +119,11 @@ export const borderSpecSchema = z.object({
 
 export const lineSymbolBodySchema = z.object({
   main: strokeSpecSchema.optional(),
+  /**
+   * Rounds the path's polyline corners with this radius before anything
+   * is laid out (OCAD rectangle symbols; map-rendering §4.4).
+   */
+  cornerRadiusUm: um.positive().optional(),
   borders: z
     .object({
       left: borderSpecSchema.optional(),
@@ -127,6 +132,12 @@ export const lineSymbolBodySchema = z.object({
       backgroundColour: colourRef.optional(),
       /** Width of that band; default `left.shiftUm + right.shiftUm` (edge to edge). OCAD's double-line fill is `dblWidth`. */
       backgroundWidthUm: um.positive().optional(),
+      /**
+       * Further border pairs drawn like `left` / `right`, after them
+       * (Mapper combined symbols with a second pair of borders, 502.2).
+       * They take no part in the background band.
+       */
+      extraPairs: z.array(z.object({ left: borderSpecSchema.optional(), right: borderSpecSchema.optional() })).optional(),
     })
     .optional(),
   glyphs: z

@@ -293,6 +293,66 @@ describe("symbolise — text", () => {
   });
 });
 
+describe("symbolise — extra border pairs, corner radius", () => {
+  it("a second border pair is drawn like the first, with its own shift and phase from the main line", () => {
+    const sym = parseRenderSymbol({
+      type: "line", id: "t", code: "502.2", name: "t",
+      main: { colour: 5, widthUm: 300 },
+      borders: {
+        left: { colour: 8, widthUm: 140, shiftUm: 500 },
+        right: { colour: 8, widthUm: 140, shiftUm: 500 },
+        backgroundColour: 4,
+        extraPairs: [{ left: { colour: 2, widthUm: 100, shiftUm: 900, dash: { layout: "ocad", dashUm: 2000, gapUm: 500 } }, right: { colour: 2, widthUm: 100, shiftUm: 900 } }],
+      },
+    });
+    const { stream } = symbolise({ objects: [{ symbolIdx: 0, path: makePath([0, 0, 20000, 0]) }], symbols: [sym], fonts: [] });
+    const strokes = only(stream, "stroke");
+    // Colour-major: extra pair (2), band (4), main (5), first pair (8).
+    expect(strokes.map((p) => [p.colour, p.widthUm])).toEqual([[2, 100], [2, 100], [4, 1000], [5, 300], [8, 140], [8, 140]]);
+    const ys = strokes.map((p) => p.path.coords[1]);
+    expect(ys).toEqual([900, -900, 0, 0, 500, -500]);
+    // The dashed extra border is laid out on the main line: 8 dashes as on a 20 mm 505.
+    expect(strokes[0].slices).toHaveLength(8);
+    expect(strokes[1].slices).toBeUndefined();
+  });
+
+  it("cornerRadiusUm rounds a rectangle's corners with one cubic each, before any layout", () => {
+    const sym = parseRenderSymbol({ type: "line", id: "t", code: "850.1", name: "t", cornerRadiusUm: 2290, main: { colour: 8, widthUm: 180 } });
+    // 10 × 6 mm frame, closed (type-7 objects are drawn closed).
+    const rect = makePath([0, 0, 10000, 0, 10000, 6000, 0, 6000], undefined, true);
+    const [p] = only(symbolise({ objects: [{ symbolIdx: 0, path: rect }], symbols: [sym], fonts: [] }).stream, "stroke");
+    expect(p.path.closed).toBe(true);
+    expect(p.path.flags.length).toBe(16);
+    expect(Array.from(p.path.flags)).toEqual([0, 1, 2, 0, 0, 1, 2, 0, 0, 1, 2, 0, 0, 1, 2, 0]);
+    // First corner (0, 0): arc from (0, 2290) to (2290, 0); handles 4/3·tan(22.5°)·r = 1265 µm.
+    const h = Math.round(2290 * (4 / 3) * Math.tan(Math.PI / 8));
+    expect(Array.from(p.path.coords.slice(0, 8))).toEqual([0, 2290, 0, 2290 - h, 2290 - h, 0, 2290, 0]);
+    // The arc's midpoint is r(1 − 1/√2) inside the corner on the diagonal.
+    const c = p.path.coords;
+    const bez = (o: number) => (c[o] + 3 * c[o + 2] + 3 * c[o + 4] + c[o + 6]) / 8;
+    expect(bez(0)).toBeCloseTo(2290 * (1 - Math.SQRT1_2), 0);
+    expect(bez(1)).toBeCloseTo(2290 * (1 - Math.SQRT1_2), 0);
+  });
+
+  it("a radius larger than half an edge shrinks to fit; Bézier anchors and open ends stay", () => {
+    const sym = parseRenderSymbol({ type: "line", id: "t", code: "t", name: "t", cornerRadiusUm: 5000, main: { colour: 8, widthUm: 180 } });
+    const open = makePath([0, 0, 2000, 0, 2000, 8000]);
+    const [p] = only(symbolise({ objects: [{ symbolIdx: 0, path: open }], symbols: [sym], fonts: [] }).stream, "stroke");
+    // Corner at (2000, 0): t = min(5000·tan 45°, 1000, 4000) = 1000.
+    expect(Array.from(p.path.coords)).toEqual([0, 0, 1000, 0, 1000 + Math.round(1000 * (4 / 3) * Math.tan(Math.PI / 8)), 0, 2000, 1000 - Math.round(1000 * (4 / 3) * Math.tan(Math.PI / 8)), 2000, 1000, 2000, 8000]);
+    const curve = makePath([0, 0, 1000, 1000, 2000, 1000, 3000, 0, 4000, 2000], [0, 1, 2, 0, 0]);
+    const [c] = only(symbolise({ objects: [{ symbolIdx: 0, path: curve }], symbols: [sym], fonts: [] }).stream, "stroke");
+    expect(Array.from(c.path.coords)).toEqual(Array.from(curve.coords));
+  });
+
+  it("parsed symbols stay identical when the B1 fields are absent (hashes and fingerprints)", () => {
+    const text = parseRenderSymbol({ type: "text", id: "t", code: "t", name: "t", fontFamily: "liberation-sans", fontSizeUm: 4000, colour: 8 });
+    const line = parseRenderSymbol({ type: "line", id: "t", code: "t", name: "t", main: { colour: 8, widthUm: 180 }, borders: { left: { colour: 8, widthUm: 100, shiftUm: 300 } } });
+    const keys = JSON.stringify([text, line]);
+    for (const k of ["verticalAlign", "shadow", "taper", "cornerRadiusUm", "extraPairs"]) expect(keys).not.toContain(k);
+  });
+});
+
 describe("symbolise — text shadow, faces, rotation", () => {
   const textSym = (o: object = {}) =>
     parseRenderSymbol({ type: "text", id: "t", code: "t", name: "t", fontFamily: "liberation-sans", fontSizeUm: 4000, colour: 8, ...o });
