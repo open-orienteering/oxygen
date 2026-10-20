@@ -164,6 +164,13 @@ describe("dash points (flag 8) — a dash is centred on the point", () => {
     expect(layoutDashesOcad(6000, p505, { halfStart: true })).toEqual([[0, 1000], [1500, 3500], [4000, 6000]]);
   });
 
+  it("OCAD: a section shorter than one dash next to a dash point is one interior (uncut) dash", () => {
+    const g = dashGrid(1500, { ...p505, secondaryGapUm: 200, endGapUm: 200 }, { halfStart: true });
+    expect(g.dashes).toEqual([{ a: 0, b: 1500, end: false }]);
+    // Without a dash point the same section is an end dash, cut by the end gap.
+    expect(dashGrid(1500, { ...p505, secondaryGapUm: 200, endGapUm: 200 }).dashes.every((d) => d.end)).toBe(true);
+  });
+
   it("OCAD: the secondary gap of a dash on a dash point lies symmetrically about the point", () => {
     const d = layoutDashesOcad(6000, { ...p505, secondaryGapUm: 200 }, { halfStart: true });
     // Whole dash [−1000, 1000] cut in two 900 µm parts → this side keeps [100, 1000]; end dash stays whole.

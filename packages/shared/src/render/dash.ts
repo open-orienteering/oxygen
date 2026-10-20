@@ -86,8 +86,8 @@ function ocadGrid(length: number, p: DashPattern, opts: DashLayoutOptions): Dash
   // One dash for the whole section: cut by the end gap like an end dash,
   // unless it touches a dash point (then it is part of that dash and stays whole).
   if (n === 0) {
-    const whole: GridDash[] = [{ a: 0, b: L, end: true }];
-    return { length: L, dashes: halfS || halfE ? whole : splitSecondary(whole, p), closedLoop: closed, solid: false };
+    if (halfS || halfE) return { length: L, dashes: [{ a: 0, b: L, end: false }], closedLoop: closed, solid: false };
+    return { length: L, dashes: splitSecondary([{ a: 0, b: L, end: true }], p), closedLoop: closed, solid: false };
   }
 
   // Gaps stay nominal; the dashes share what is left in proportion.

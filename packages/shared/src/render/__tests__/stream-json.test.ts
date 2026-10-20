@@ -25,6 +25,15 @@ describe("passStreamFromJson / passStreamToJson", () => {
     expect(() => passStreamFromJson(bad)).toThrow(/one per glyph/);
   });
 
+  it("the diff compares a stroke's taper", () => {
+    const j = renderFixtures["dashed-bezier-stroke"];
+    const tapered = { ...j, passes: j.passes.map((p) => (p.kind === "stroke" ? { ...p, cap: "pointed" as const, taper: { startUm: 750 } } : p)) };
+    const pointed = { ...j, passes: j.passes.map((p) => (p.kind === "stroke" ? { ...p, cap: "pointed" as const } : p)) };
+    const a = passStreamFromJson(tapered);
+    expect(diffPassStreams(a, passStreamFromJson(passStreamToJson(a)))).toEqual([]);
+    expect(diffPassStreams(a, passStreamFromJson(pointed)).map((d) => d.what)).toContain("taper");
+  });
+
   it("produces typed arrays and canonical order", () => {
     const s = passStreamFromJson(renderFixtures["colour-order"]);
     expect(s.objectIdx).toBeInstanceOf(Uint32Array);

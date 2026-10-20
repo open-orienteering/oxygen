@@ -353,6 +353,7 @@ export function diffPassStreams(a: PassStream, b: PassStream, opts: DiffOptions 
         if (!near(p.widthUm, s.widthUm)) where(`widthUm ${p.widthUm} vs ${s.widthUm}`);
         if (p.cap !== s.cap) where(`cap ${p.cap} vs ${s.cap}`);
         if (p.join !== s.join) where(`join ${p.join} vs ${s.join}`);
+        if (!near(p.taper?.startUm ?? 0, s.taper?.startUm ?? 0) || !near(p.taper?.endUm ?? 0, s.taper?.endUm ?? 0)) where("taper");
         const sd = sameSlices(p.slices, s.slices);
         if (sd) where(sd);
         break;

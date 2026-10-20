@@ -190,7 +190,8 @@ fields are quantised to 3 decimals (µm) in the projection — except a glyph
 instance's `cos`, `sin` and `scale`, which are unitless and keep 6 (3 put
 a 45° instance 1e-4 off, outside `diffPassStreams`' tolerance, B1);
 typed arrays are canonical in memory. All-zero flag arrays are omitted.
-`angles` (§3.5) is projected when present. Parsing sorts.
+`angles` (§3.5) and `taper` (§3.2) are projected when present and
+compared by `diffPassStreams`. Parsing sorts.
 
 ## 4. Symbolisation rules
 
@@ -262,7 +263,8 @@ one ordinary dash centred on the point (§2.1: "a dash is centred here").
    On a closed loop both ends are `D/2` and `n ≥ 1`, so the two half end
    dashes meet at the start point and form one ordinary dash.
 2. If `n = 0` the section is one solid dash (cut by the end gap like an
-   end dash, or left whole when it touches a dash point).
+   end dash, or, when it touches a dash point, an interior dash left
+   whole).
 3. *Provisional (S2).* Otherwise **gaps keep their nominal length** and all dashes are scaled
    by one ratio `r = (L − n·G) / (Es + Ee + (n − 1)·D)` so the section starts
    and ends with a full end dash. The last dash is snapped to the section
