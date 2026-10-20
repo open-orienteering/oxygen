@@ -179,7 +179,7 @@ them.
 | `DUPLICATE_SYMBOL_NUMBER` | The same number is defined twice; objects use the first |
 | `EMPTY_GEOMETRY_DROPPED` | Objects with no coordinates were dropped |
 | `UNKNOWN_OBJECT_TYPE` | Object type outside 1–7, dropped |
-| `READER_WARNING` | The source reader reported warnings (count); the texts are in the import report |
+| `READER_WARNING` | The source reader reported warnings (count only; the texts are not stored — `docs/map-import.md` §3.6). Since `ocad-6` the reader's dropped symbol types are `SYMBOL_TYPE_UNSUPPORTED` instead |
 | `CRS_UNRESOLVED` | The source declares a real-world grid that maps to no EPSG code (OCAD grid id not in the reader's table and no `e`; Mapper CRS spec not parsed); `crs` and `paperOrigin` are null, the message names the grid |
 
 ## 3. File layout

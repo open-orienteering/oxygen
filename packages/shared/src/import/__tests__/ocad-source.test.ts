@@ -39,7 +39,7 @@ function source(): OcadFileLike {
       "1039": [{ _pairs: [{ code: "m", value: "15000.000000" }, { code: "g", value: "50" }, { code: "r", value: "1" }, { code: "d", value: "6.5" }, { code: "i", value: "13002" }, { code: "x", value: "687000" }, { code: "y", value: "6574000" }, { code: "a", value: "4.98" }, { code: "b", value: "0.00" }] }],
       "26": [{ _first: "Tävling", _pairs: [{ code: "L", value: "0" }, { code: "B", value: "0" }, { code: "R", value: "100" }, { code: "T", value: "200" }] }],
     },
-    warnings: ["Ignoring rectangle symbol 850001."],
+    warnings: ["Ignoring rectangle symbol 850001.", "Ignoring line text symbol 999000.", new Error("Unknown symbol type 9"), "Unexpected end of object index"],
     getCrs: () => ({ code: 3006, catalog: "EPSG", name: "SWEREF99 TM", gridId: 13002 }),
   };
 }
@@ -190,14 +190,22 @@ describe("ocadToDocumentInput", () => {
   it("records what was dropped as stable warning codes", () => {
     const codes = Object.fromEntries(result.warnings.map((w) => [w.code, w.count]));
     expect(codes).toEqual({
-      SYMBOL_COLOUR_UNKNOWN: 1, SYMBOL_EMPTY: 1, DUPLICATE_SYMBOL_NUMBER: 1, EMPTY_GEOMETRY_DROPPED: 1, MISSING_SYMBOL: 1, TEMPLATES_DROPPED: 2, READER_WARNING: 1,
+      SYMBOL_COLOUR_UNKNOWN: 1, SYMBOL_EMPTY: 1, DUPLICATE_SYMBOL_NUMBER: 1, EMPTY_GEOMETRY_DROPPED: 1, MISSING_SYMBOL: 1, TEMPLATES_DROPPED: 2,
+      SYMBOL_TYPE_UNSUPPORTED: 3, READER_WARNING: 1,
     });
+    expect(input.header.warnings).toEqual(result.warnings);
+  });
+
+  it("reports the symbol types the reader drops as SYMBOL_TYPE_UNSUPPORTED, not reader warnings", () => {
+    const unsupported = result.warnings.find((w) => w.code === "SYMBOL_TYPE_UNSUPPORTED");
+    expect(unsupported).toEqual({ code: "SYMBOL_TYPE_UNSUPPORTED", count: 3, message: "850.1: rectangle symbol dropped by the reader" });
+    expect(result.warnings.find((w) => w.code === "READER_WARNING")?.count).toBe(1);
     expect(input.header.warnings).toEqual(result.warnings);
   });
 
   it("fills the header: provenance, units, scale, print window, export rectangles", () => {
     const h = input.header;
-    expect(h.format).toEqual({ version: 1, importer: "ocad-5" });
+    expect(h.format).toEqual({ version: 1, importer: "ocad-6" });
     expect(h.source).toEqual({ kind: "ocad", version: "2018.8.3", hash: "ff".repeat(32), bytes: 4242 });
     expect(h.unitsPerMm).toBe(OCAD_UNITS_PER_MM);
     expect(h.mapScale).toBe(15000);
