@@ -93,7 +93,7 @@ An entry (`libraryEntrySchema`) — the 03 §6.4 shape with `render` in
   orientation: "north" | "object" | null, // point symbols only
   minimum?: { lengthUm?, widthUm?, areaUm2? },   // graphical minima from the spec
   footprintM?: number,             // informational, at the reference scale
-  aliases: { library: "ISOM2000" | "ISSOM2007"; code: string }[],  // older-spec codes, headings only (§3)
+  aliases: { library: string; code: string }[],  // older-spec codes, headings only; library ∈ ALIAS_LIBRARIES (§3, checked in §5)
   render: LibraryRender,           // RenderSymbol minus id/code/name, colours as palette ids
   notes?: string,                  // deviations and tool-dependent choices
   source: string                   // citation, e.g. "ISOM 2017-2 Rev 6 (…), §3.8"
@@ -237,8 +237,9 @@ done, because the rule is one source per library.
 ISOM 2017-2 headings without an ISOM 2000 alias (17): the symbols with
 no ISOM 2000 predecessor in Mapper's table (`105.2`, `114`, `203.2`,
 `206`, `209`, `211`, `212`, `215`, `513.2`, `522`, `532`, `702`, `715`);
-`302`, whose only rule is ISOM 2000 302 *pond*, which the IOF document
-says was absorbed rather than continued; `313`, whose Mapper rule (ISOM
+`302`, which has no rule (Mapper maps ISOM 2000 302 *pond* to 301, and
+the IOF document says the pond was absorbed into 302 rather than
+continued, so neither heading takes it); `313`, whose Mapper rule (ISOM
 2000 314) the IOF document contradicts — 314 became the 311 square; and
 `113` / `603`, whose rules map only Mapper sub-symbols (117.1 / 117.2
 single dots, 603.0 / 603.1 dot and text).
@@ -487,7 +488,8 @@ those as library variants is the lever if the auto rate needs to rise.
 
 **Swedish entry names in stage 5 (B7, `ocad-8` / `omap-3`, library
 `2026.10.2`).** Re-measured on all five corpus maps against the same code
-with `name.sv` left out (`b7-description-sv.txt` beside the script):
+with `name.sv` left out (`b7-description-sv.txt` in the same
+`.local/research/oxygen-measurements/` directory):
 `auto` objects and symbols are unchanged on every map, as they must be —
 stage 5 only ever suggests. Description suggestions rise from 22 / 22 /
 19 / 19 / 20 symbols to 25 / 25 / 28 / 28 / 27 (Club-full, Club-2026,
@@ -502,7 +504,8 @@ suggestions kept as review items: `503.12 Gc-väg i radhusområden` → 711
 kraftledning (fyrkantiga stolpar)` → 511 instead of `511.b` (a name tie
 broken by id; 0 objects). Two traps the Swedish headings exposed are
 handled by the tokeniser: Swedish function words (`eller`, `som`, `en`,
-`till`, …) are stopwords, and the word after a negator (`utan`, `icke`,
+`till`, …) are stopwords — `en` is also *juniper* in club symbol names,
+accepted because stage 5 only suggests and the corpus has no such case — and the word after a negator (`utan`, `icke`,
 `ej`, `inte`, `without`, `non`, `not`, `no`) is dropped, so `Stig eller
 spår utan belagd yta` does not share *paved* with `Belagd gångbana`.
 

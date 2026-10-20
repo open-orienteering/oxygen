@@ -187,6 +187,7 @@ export const VARIANT_NAME = /minimi|minimum|\bmin\b|enskild|single|individual|ko
 
 // ---- description tokens -----------------------------------------------------
 
+// "en" is also juniper in Swedish club names; dropped as the article because stage 5 only suggests (docs/map-symbols.md §8.4).
 const STOPWORDS = new Set(["och", "eller", "med", "utan", "för", "av", "i", "på", "som", "en", "ett", "till", "vid", "ska", "inte", "icke", "ej", "the", "and", "with", "without", "of", "for", "in", "or", "a", "an", "to", "stor", "liten", "large", "small", "minimum", "min", "yta", "linje", "punkt", "area", "line", "point", "symbol"]);
 
 /** Swedish map vocabulary → the library's English words. */
