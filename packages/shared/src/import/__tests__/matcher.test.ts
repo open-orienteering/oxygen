@@ -107,6 +107,21 @@ describe("matchSymbol — stages", () => {
     expect(r.reasons[0]).toMatch(/Control point/);
   });
 
+  it("5: description meets the entry's Swedish name where the SV_EN lexicon has no word", () => {
+    const control = canonical("ISOM2017-2:703") as PointSymbol;
+    const ring6: PointSymbol = { ...control, glyph: { ...control.glyph, parts: [{ ...control.glyph.parts[0], diameterUm: 6000 }] } };
+    // "Kontroller" (the SOFT heading of 703) is not in SV_EN; only name.sv connects it.
+    expect(descriptionTokens("Kontroller")).toEqual(new Set(["kontroller"]));
+    const r = matchSymbol(src("702.0", "Kontroller", ring6), ctx()).match;
+    expect(r).toMatchObject({ canonicalId: "ISOM2017-2:703", method: "description", state: "suggested" });
+    expect(r.reasons[0]).toBe('name "Kontroller" ~ Control point / Kontroller');
+  });
+
+  it("5: Swedish entry names go through the same lexicon, so en and sv tokens agree", () => {
+    const tokens = canonicalCandidates(lib, "iof2024").find((c) => c.entry.id === "ISOM2017-2:516")!.tokens;
+    expect(tokens).toEqual(new Set(["fence"])); // "Fence" ∪ "Stängsel" → fence
+  });
+
   it("5: description never suggests a candidate the colour class rules out", () => {
     // A brown 50 % paved footpath line: the only name match (501.1 edge) is a black line.
     const paved = parseRenderSymbol({ type: "line", id: "x", code: "501.14", name: "Belagd gångbana", main: { colour: idx.get("brown50-paved")!, widthUm: 500 } }) as LineSymbol;

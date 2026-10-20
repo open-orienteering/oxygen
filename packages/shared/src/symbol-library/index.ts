@@ -16,10 +16,12 @@ export * from "./schema.js";
 
 /**
  * Version of the library *data*. Bumped whenever an entry's render,
- * code or variant changes; part of a document's identity (06 §4.2) and
- * stored on `map_documents.library_version`.
+ * code or variant changes, or a name or alias the matcher reads
+ * (docs/map-symbols.md §8.2); part of a document's identity (06 §4.2)
+ * and stored on `map_documents.library_version`. 2026.10.2: Swedish
+ * names and ISOM 2000 aliases (B7).
  */
-export const SYMBOL_LIBRARY_VERSION = "2026.10.1";
+export const SYMBOL_LIBRARY_VERSION = "2026.10.2";
 
 /** Raw authored inputs, before validation (tests and tooling). */
 export const symbolLibraryInputs = { "ISOM2017-2": isom2017_2, "ISSprOM2019-2": issprom2019_2 } as const;
