@@ -94,15 +94,16 @@ export function placeGlyphs(m: PathMeasure, placement: GlyphPlacement, opts: Pla
     case "dashPoints": {
       const mask = placement.at === "corners" ? COORD_FLAG.corner : COORD_FLAG.dash;
       const lens = m.flaggedLengths(mask).filter((l) => l > 0 && l < L);
-      if (!placement.ignoreEnds && !closed) {
-        at(0);
-      }
+      // An open path's ends only when flagged (OCAD corner symbol, Mapper dash symbol), never with ignoreEnds.
+      const f = m.path.flags;
+      const ends = !closed && !placement.ignoreEnds && f.length > 0;
+      if (ends && f[0] & mask) at(0);
       for (const l of lens) {
         const c = cornerAngle(m, l);
         const scale = opts.scaleAtCorners ? 1 / Math.max(0.25, Math.cos((c.turnDeg * Math.PI) / 360)) : 1;
         at(l, c.angleDeg, scale);
       }
-      if (!placement.ignoreEnds && !closed) at(L);
+      if (ends && f[f.length - 1] & mask) at(L);
       if (closed && (m.path.flags[0] & mask)) at(0, cornerAngle(m, 0).angleDeg);
       break;
     }

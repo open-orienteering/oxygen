@@ -283,7 +283,7 @@ the S2 visual comparison (03 §8) is where they get confirmed.
 | `dblFlags & 1`, `dblFillColor` | `borders.backgroundColour`, `backgroundWidthUm: dblWidth` | Band drawn in the fill colour, even without edges. `dblFlags & 2` (background colour) warns. |
 | `primSymElements`, `nPrimSym`, `primSymDist` | `glyphs[] { glyph, placement }` | Main symbol only when `nPrimSym > 0` (518.3 "Utan tagg" has elements but `nPrimSym 0`). Solid line ⇒ `spaced { distanceUm: mainLength, firstUm = lastUm = endLength, perSpot: nPrimSym, spotSpacingUm: primSymDist, minCount: minSym + 1 (when minSym ≥ 0) }`; dashed ⇒ `dashCentres`; dashed with `secGap`/`endGap` ⇒ `dashGroupCentres` (the glyph sits in the secondary gap, 517 ruined fence). |
 | `secSymElements` | `sectionCentres` | Once per corner-delimited section. *Provisional.* |
-| `useSymbolFlags` 1 / 2 / 4 + `startSymElements` / `endSymElements` / `cornerSymElements` | `start` / `end` / `corners` | Corner glyphs include the line ends. |
+| `useSymbolFlags` bit 1 + `endSymElements`, bit 2 + `startSymElements`, bit 4 + `cornerSymElements` | `end` / `start` / `corners` | Bit 1 is the **end** symbol and bit 2 the start symbol (user decision 2026-10-21, B9: club-full's 518.1 sets 5 with only an end symbol defined, and Coursecraft decodes it so; `ocad-8` read them the other way round). Neither Mapper nor the legacy SVG reads the flags — both draw any start / end elements present. The corner symbol lands on corner-flagged vertices only, ends included when flagged (map-rendering §4.5; `ocad-8`'s rule put one on every end — 44 phantom poles on club-2026's 510). |
 | `decrease.decMode ≠ 0` | — | Warned, drawn full size. Not in the corpus. |
 
 **Point symbols** (`type 1`) → `{ type: "point", glyph, orientation }`:
@@ -292,8 +292,11 @@ the S2 visual comparison (03 §8) is where they get confirmed.
 **Symbol elements** (point glyphs, area patterns, line decorations) →
 `GlyphPart`: type 1 line ⇒ `stroke` (`lineWidth`, cap/join from `flags`,
 coordinates ×10 with the OCAD coordinate flags), 2 area ⇒ `fill`
-(closed), 3 circle ⇒ `ring` (`diameter`, `lineWidth`, centre from the
-first coordinate), 4 dot ⇒ `disc`. Elements whose colour is unknown are
+(closed), 3 circle ⇒ `ring` (`lineWidth`, centre from the first
+coordinate; the IR's outer diameter is `diameter + lineWidth` from OCAD 9
+on, where `diameter` runs along the line's centre, and `diameter` itself
+in OCAD 8 and older — Mapper's OCD import reads it the same way; B9 found
+`ocad-8` one line width small against the legacy tiles), 4 dot ⇒ `disc`. Elements whose colour is unknown are
 skipped; a glyph with no parts left is dropped.
 
 **Area symbols** (`type 3`) → `{ type: "area", fill?, hatches?, patterns?, border? }`
@@ -695,7 +698,7 @@ non-contiguous priorities). The rest are shared with §3.6–3.7.
 
 ## 5. Header provenance
 
-`format.importer` is `"ocad-8"` for OCAD sources (`OCAD_IMPORTER_VERSION`;
+`format.importer` is `"ocad-9"` for OCAD sources (`OCAD_IMPORTER_VERSION`;
 `ocad-1` had `render: null` for every source symbol, `ocad-2` carried the
 upload name in the header, `ocad-3` had no matcher, `ocad-4` stored
 ScalePar `d` as `declinationDeg`, ignored `e` and had no
@@ -705,7 +708,9 @@ for double-line mode 65535 although §3.3 calls it off, `ocad-6` read
 neither text framing nor rectangle / line-text symbols — no halo from
 OCAD line framing, rectangle objects as `MISSING_SYMBOL` stubs — and kept
 no reader warning texts, `ocad-7` matched descriptions on the entries'
-English names only — `docs/map-symbols.md` §8.2 row 5, B7) and `"omap-3"`
+English names only — `docs/map-symbols.md` §8.2 row 5, B7 —, `ocad-8` read
+`useSymbolFlags` 1 / 2 as start / end and OCAD 9+ circle diameters as
+outer diameters — §3.3, B9) and `"omap-3"`
 for Mapper sources (`OMAP_IMPORTER_VERSION`; `omap-1` stored `paperOrigin`
 unrounded, `omap-2` is `ocad-7`'s matcher).
 Documents of either earlier version have no `georeference` / `north` in
@@ -745,10 +750,10 @@ document hash is identical on two machines.
 | Unit (shared) | `packages/shared/src/import/__tests__/omap-reader.test.ts` | barrier wrapper, both coordinate forms and every flag, symbols of all five types incl. inline sub-symbols, colours with spot components, georeferencing, parts, templates, print, tags, misnumbered symbols |
 | Unit (shared) | `packages/shared/src/import/__tests__/omap-symbols.test.ts` | every §4.3 rule: point glyphs incl. nested points and offset discs, line caps / shortening / pointed taper, borders, dash layouts and mid / dash / start / end placements, width-0 carriers, area hatch and pattern, text framing and fonts, the combined-symbol merge table (509, 508.x, 502.2, 511.2, second dashed, area combinations) |
 | Unit (shared) | `packages/shared/src/import/__tests__/omap-source.test.ts` | the fixture through `omapToDocumentInput`: colour stack order and opacity, y flip and `-0`, every §4.2 flag rule, hole shift, dash-point rule per symbol, text alignment lifting, missing symbols, parts merge, templates, print window, georeferencing (UTM / EPSG / Gauss-Krüger / PROJ.4 / Local / unresolved), codec round trip, every §4.5 warning code |
-| Unit (shared) | `packages/shared/src/import/__tests__/ocad-source.test.ts` | colour stack order, symbol table, hidden flag, duplicates, graphic objects, missing symbols, rectangle objects resolved to a parsed rectangle symbol, flag mapping, georeferencing (no `declinationDeg` from `d`, `e` fallback, grid table first, `CRS_UNRESOLVED`), print window, warning codes, reader-dropped types vs `READER_WARNING`, `readerWarnings` texts (order, cap of 50), `analysis` returned |
+| Unit (shared) | `packages/shared/src/import/__tests__/ocad-source.test.ts` | colour stack order, the file version reaching the circle-diameter rule, symbol table, hidden flag, duplicates, graphic objects, missing symbols, rectangle objects resolved to a parsed rectangle symbol, flag mapping, georeferencing (no `declinationDeg` from `d`, `e` fallback, grid table first, `CRS_UNRESOLVED`), print window, warning codes, reader-dropped types vs `READER_WARNING`, `readerWarnings` texts (order, cap of 50), `analysis` returned |
 | Unit (shared) | `packages/shared/src/geo/__tests__/projection.test.ts`, `north.test.ts` | §3.8 maths: EPSG lookup, paper ↔ projected (rotation + correction, grid scale factor, round trip), Mapper's reference point on the `e2e/test.xmap` frame, paper ↔ WGS 84, convergence at Nackareservatet (−2.82°) and on a central meridian, paper-north bearing, extent and calibration corners, `mapFileMetadata`; angle folding and the cluster thresholds |
 | Unit (shared) | `packages/shared/src/import/__tests__/analyse.test.ts` | `601` / `601.x` codes, grouping per symbol, 5 mm floor scaled by `unitsPerMm`, graphic symbols excluded, georeference fields, un-georeferenced and non-projectable CRSs, same result over the decoded document |
-| Unit (shared) | `packages/shared/src/import/__tests__/ocad-symbols.test.ts` | every row of the §3.3 tables: line styles, dashes (507 end gap), framing, double lines, main / secondary / corner / start / end symbols, point elements, area fill / hatch / pattern / border, text mapping, fonts, text line framing → halo (`frWidth` as half-width, width 0, unknown colour), shadow / rectangle / unknown framing warned, line text with its warning, rectangle → outline line (radius, grid, width 0, unknown colour), warning codes |
+| Unit (shared) | `packages/shared/src/import/__tests__/ocad-symbols.test.ts` | every row of the §3.3 tables: line styles, dashes (507 end gap), framing, double lines, main / secondary / corner / start / end symbols (`useSymbolFlags` 1 = end, 2 = start), point elements (circle diameter by OCAD version), area fill / hatch / pattern / border, text mapping, fonts, text line framing → halo (`frWidth` as half-width, width 0, unknown colour), shadow / rectangle / unknown framing warned, line text with its warning, rectangle → outline line (radius, grid, width 0, unknown colour), warning codes |
 | Unit (shared) | `packages/shared/src/render/__tests__/{dash,placement,symbolise}.test.ts` | OCAD end-gap semantics, `dashGroupCentres` / `sectionCentres`, `backgroundWidthUm`, continuous halo |
 | Unit (shared) | `packages/shared/src/map-document/__tests__/codec.test.ts`, `projection-bridge.test.ts` | encode/decode round trip, Hilbert order, validation errors, truncation, JSON projection, render bridge |
 | Unit (shared) | `packages/shared/src/import/__tests__/{colour-class,fingerprint,matcher,colour-align,match-document}.test.ts` | stages 6–7: CMYK / name classification, fingerprints and tolerances, every matcher stage and the traps (reused numbers, template variants, old numbering), factor detection (lines / codes / scale / override), alignment steps and conflicts, whole-document run with codec round trip and canonical drawing through the bridge |
@@ -797,7 +802,7 @@ maps nor the JSON files are committed (AGENTS.md §12); keep them under
 
 **Against production.** The same comparison works against what Cloud
 Run produced from the same files, once the instance runs the same
-importer and library versions (`ocad-8` / `omap-3`,
+importer and library versions (`ocad-9` / `omap-3`,
 `*@<SYMBOL_LIBRARY_VERSION>`) and only for documents imported without
 club decisions (stage 6 applies them, so a reviewed map has a different,
 equally correct hash). Either list the stored documents:

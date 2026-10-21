@@ -114,8 +114,9 @@ export function pointSymbol({ symNum, extent, colorIdx, description, elements })
   return buf;
 }
 
-export function lineSymbol({ symNum, extent, colorIdx, description, lineWidth }) {
-  const size = BASE_SYMBOL_SIZE + 76;
+/** A solid line; `cornerElements` + `useSymbolFlags` 4 add OCAD's corner symbol (the 510 power line's pole). */
+export function lineSymbol({ symNum, extent, colorIdx, description, lineWidth, cornerElements = [], useSymbolFlags = 0 }) {
+  const size = BASE_SYMBOL_SIZE + 76 + elementBytes(cornerElements);
   const buf = Buffer.alloc(size);
   let o = symbolHeader(buf, { size, symNum, otp: 2, extent, colorIdx, description });
   o = buf.writeInt16LE(colorIdx, o); // lineColor
@@ -124,8 +125,12 @@ export function lineSymbol({ symNum, extent, colorIdx, description, lineWidth })
   o += 26; // DoubleLine11
   o += 6; // Decrease11
   o += 6; // frColor, frWidth, frStyle
-  o += 10; // prim/sec/corner/start/end DSize = 0
-  o += 2; // useSymbolFlags, reserved
+  o += 4; // prim/sec DSize = 0
+  o = buf.writeUInt16LE(elementDataSize(cornerElements), o); // cornerDSize
+  o += 4; // start/end DSize = 0
+  o = buf.writeUInt8(useSymbolFlags, o);
+  o += 1; // reserved
+  writeElements(buf, o, cornerElements);
   return buf;
 }
 
@@ -246,9 +251,10 @@ function objectRecord({ sym, otp, coords, text = "", unicode = 1 }) {
   o = buf.writeUInt16LE(0, o); // nDatabaseString
   o = buf.writeUInt8(0, o); // objectStringType
   o = buf.writeUInt8(0, o); // res1
-  for (const [x, y] of coords) {
-    o = buf.writeInt32LE(td(x), o);
-    o = buf.writeInt32LE(td(y), o);
+  // [x, y, xFlags, yFlags]: the flags sit in each value's low byte (yFlags 1 = corner point).
+  for (const [x, y, xFlags = 0, yFlags = 0] of coords) {
+    o = buf.writeInt32LE(td(x) | xFlags, o);
+    o = buf.writeInt32LE(td(y) | yFlags, o);
   }
   if (textSlots > 0) utf16le(text, textSlots * 8).copy(buf, o);
   return buf;
@@ -427,6 +433,33 @@ export function buildSymbolTypesOcad() {
   return assembleOcad({ fileType: 0, strings, symbols, objects });
 }
 
+// ─── Parity fixture (docs/map-rendering.md §6.4) ─────────────────────────────
+
+/**
+ * A 510-style power line for the parity tool's tests: a 0.14 mm line whose
+ * pole is OCAD's corner symbol, on an open path with two corner points
+ * inside and plain end vertices; plus a solid 505 path beside it.
+ */
+export const PARITY_OCAD = {
+  power: { symNum: 510000, description: "Power line", lineWidth: 14, pole: [[0, -37], [0, 37]] },
+  path: { symNum: 505000, description: "Path", lineWidth: 25 },
+};
+
+export function buildParityOcad() {
+  const t = PARITY_OCAD;
+  const strings = [...DEFAULT_COLORS, WHITE, { recType: 1039, text: georeferenceString({ scale: 10000, easting: 500000, northing: 6500000 }) }];
+  const symbols = [
+    lineSymbol({ symNum: t.power.symNum, extent: 37, colorIdx: 1, description: t.power.description, lineWidth: t.power.lineWidth, useSymbolFlags: 4,
+      cornerElements: [{ type: 1, color: 1, lineWidth: t.power.lineWidth, coords: t.power.pole }] }),
+    lineSymbol({ symNum: t.path.symNum, extent: 13, colorIdx: 1, description: t.path.description, lineWidth: t.path.lineWidth }),
+  ];
+  const objects = [
+    { sym: t.power.symNum, otp: 2, coords: [[-2000, 0], [-700, 0, 0, 1], [600, 0, 0, 1], [2000, 0]] },
+    { sym: t.path.symNum, otp: 2, coords: [[-2000, -1000], [2000, -1000]] },
+  ];
+  return assembleOcad({ fileType: 0, strings, symbols, objects });
+}
+
 // ─── E2E course-setting fixture ──────────────────────────────────────────────
 
 /** The fixture's text and rectangle symbols: a spot-height value framed in white, and a plain frame. */
@@ -530,9 +563,10 @@ export function buildE2eTestOcad() {
       extent: 400,
       colorIdx: 0,
       description: "Finish",
+      // ISOM 2017-2 706: ø 4.0 and 6.0 mm centre to centre — OCAD 9+ circle diameters are centre-line (B9).
       elements: [
-        { type: 3, color: 0, lineWidth: 35, diameter: 500, coords: [[0, 0]] },
-        { type: 3, color: 0, lineWidth: 35, diameter: 700, coords: [[0, 0]] },
+        { type: 3, color: 0, lineWidth: 35, diameter: 400, coords: [[0, 0]] },
+        { type: 3, color: 0, lineWidth: 35, diameter: 600, coords: [[0, 0]] },
       ],
     }),
     ...terrainSymbols(),

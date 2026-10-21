@@ -25,7 +25,7 @@ import type { DocumentColour, DocumentSymbolInput, DocumentWarning, Georeferenci
 
 /** OCAD coordinates are 1/100 mm. */
 export const OCAD_UNITS_PER_MM = 100;
-export const OCAD_IMPORTER_VERSION = "ocad-8";
+export const OCAD_IMPORTER_VERSION = "ocad-9";
 /** Reader warning texts kept for the import report (docs/map-import.md §3.6). */
 export const READER_WARNING_TEXTS_MAX = 50;
 
@@ -243,7 +243,7 @@ export function ocadToDocumentInput(ocad: OcadFileLike, opts: OcadSourceOptions)
     const s = ocad.symbols[i];
     if (!defBySymNum.has(s.symNum)) defBySymNum.set(s.symNum, s);
   }
-  const conversionCtx = { colourIndex: (n: number) => stackIdxByNumber.get(n), symbolByNumber: (n: number) => defBySymNum.get(n) };
+  const conversionCtx = { colourIndex: (n: number) => stackIdxByNumber.get(n), symbolByNumber: (n: number) => defBySymNum.get(n), ocadVersion: ocad.header.version };
   let symbolsRendered = 0, symbolsUnrendered = 0;
   for (let i = 0; i < ocad.symbols.length; i++) {
     const s = ocad.symbols[i];

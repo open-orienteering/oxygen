@@ -118,6 +118,8 @@ function lineGlyphs(): LibraryScene {
   const corners = s.add<LineSymbol>("529", (x) => ({ ...x, glyphs: [{ ...x.glyphs![0], placement: { at: "corners", ignoreEnds: true }, scaleAtCorners: true }] }));
   const power = s.add("510");
   const boundary = s.add("416");
+  // 510 as the OCAD importer writes it (B9): the pole is OCAD's corner symbol, on corner-flagged vertices only.
+  const powerCorners = s.add<LineSymbol>("510", (x) => ({ ...x, glyphs: [{ ...x.glyphs![0], placement: { at: "corners" } }] }));
   return {
     name: "lib-line-glyphs", library: s.library, colours: s.colours, symbols: s.list,
     objects: [
@@ -127,6 +129,8 @@ function lineGlyphs(): LibraryScene {
       { symbolIdx: power, path: line([0, -5000, 2000, -5000, 4000, -5000], [0, F.dash, 0]) },
       // Closed 12 mm loop: max(minCountClosed 5, round(12000 / 450)) = 27 dots.
       { symbolIdx: boundary, path: square(12000, -6000, 3000) },
+      // A plain start, a corner inside and a corner-flagged end: poles at 2 and 4 mm only.
+      { symbolIdx: powerCorners, path: line([0, -8000, 2000, -8000, 4000, -8000], [0, F.corner, F.corner]) },
     ],
   };
 }

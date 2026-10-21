@@ -396,7 +396,7 @@ glyph; the instance transform is the point at that length with
 | `placement.at` | Rule |
 |---|---|
 | `start` / `end` | the path's ends, tangent angle |
-| `corners` / `dashPoints` | every point with flag 4 / 8 strictly inside the path, at the **bisector** of the incoming and outgoing tangents; the ends of an open path too unless `ignoreEnds`; on a closed path the start point only when it carries the flag. `scaleAtCorners` scales by `1 / cos(turn/2)` (mitre length), clamped at 4× |
+| `corners` / `dashPoints` | every point with flag 4 / 8, at the **bisector** of the incoming and outgoing tangents; an open path's ends only when they carry the flag (at the tangent angle), and never with `ignoreEnds` (user decision 2026-10-21, B9: OCAD's corner symbol and Mapper's dash symbol are drawn at flagged vertices only — Mapper's `line_symbol.cpp` draws flagged ends unless `suppress_dash_symbol_at_ends`; the earlier "ends unless `ignoreEnds`" put a pole on every end of club-2026's 510); on a closed path the start point only when it carries the flag. `scaleAtCorners` scales by `1 / cos(turn/2)` (mitre length), clamped at 4× |
 | `dashCentres` / `gapCentres` | centres of the dashes / gaps of the main stroke's dash layout per section. The layout is run in *virtual* mode so a solid line (`gapUm 0`) with spaced symbols — OCAD's 516 power line — still gets positions: with zero gaps the dashes touch and the glyphs sit at the joints. Centres come from the section's dash grid (§4.2): a dash on a dash point, or on a closed loop's seam, gets **one** glyph, at the point |
 | `dashGroupCentres` | centre of each dash **before** its secondary split, i.e. in the secondary gap (OCAD's main symbol on a line with `secGap` — 517 ruined fence); only dashes that are actually cut get a glyph (end dashes only with `endGapUm`); without any secondary gap it equals `dashCentres` |
 | `sectionCentres` | once per corner-delimited section, at its midpoint (OCAD's secondary symbol) |
@@ -1122,6 +1122,10 @@ samples). Measured ratios, headless Chromium / SwiftShader (B1 run,
 | `lib-colour-order` | 79 / 26 199 (0.302 %) |
 | `lib-precision` | 178 / 64 566 (0.276 %) |
 
+B9 (2026-10-21) changed `lib-line-glyphs` and `lib-precision` (one more
+510 object, no glyphs on unflagged ends — §4.5); both pass the budget in
+B9's run, their ratios are not re-measured here.
+
 What remains is coverage quantisation: every residual differs by 17–26
 levels and the GL values are multiples of 16. **The ratio therefore
 depends on the edge density of the scene**, not only on the backend —
@@ -1191,7 +1195,7 @@ scene is a snapshot (§6.1) and a golden (§6.2).
 |---|---|---|---|
 | `lib-dash-ocad` | 1 | ISOM 505 with a corner and a dash point; 505 closed (18 mm loop); 507; 505 short, solid and *`minGaps: 2`* | slice boundaries as arc lengths: 1.8 mm dashes, corner dash one slice round the corner, a 1.8 mm dash centred on the dash point; loop seam dash on the start point; 507's secondary cut; forced gaps |
 | `lib-dash-omap` | 2 | ISOM 505 *as `layout: "omap"`*: single, *`halfOuterDashes`*, *groups of 2*, *`showAtLeastOne: false`* on a 0.8 mm line, with a dash point | interval lists at `f = 1`; the dash point centres one dash |
-| `lib-line-glyphs` | 3 | ISOM 516, 201, *529 at corners with `ignoreEnds` and `scaleAtCorners`*, 510, 416 on a closed loop | instance positions, angles (bisector 45°), mitre scale √2, end glyphs without `ignoreEnds`, `minCountClosed` |
+| `lib-line-glyphs` | 3 | ISOM 516, 201, *529 at corners with `ignoreEnds` and `scaleAtCorners`*, 510 (dash point inside, plain ends), 416 on a closed loop, *510 at corners* (the OCAD import's shape, B9) with a plain start and a corner-flagged end | instance positions, angles (bisector 45°), mitre scale √2, no glyph on an unflagged end, one on a flagged end, `minCountClosed` |
 | `lib-pattern` | 4 | ISOM 402 on two adjacent squares, *402 turning with the object* at 30°, 208 (shifted rows), *213 at 0° in the four clip modes* | one origin-anchored lattice; rotated lattice; half-cell row shift; completelyInside ⊂ centreInside ⊂ partiallyInside = clip, `clip` path only in clip mode |
 | `lib-hatch` | 5 | ISOM 709 on two adjacent areas, 407, *709 crossed (second hatch at 135°)* | pass parameters and order; every `hatchLines` endpoint on `x·nx + y·ny = offset + k·spacing` |
 | `lib-borders` | 6 | ISSprOM 509.1, 505 round a corner, *505 with a 0.2 mm right edge at 0.3 mm* | border offsets; both dashed borders keep the main line's phase at their own lengths; asymmetric edges |
@@ -1204,6 +1208,131 @@ scene is a snapshot (§6.1) and a golden (§6.2).
 Not in the table: 04 §8 row 10 (minimum sizes) is a screen-backend rule
 (the stream is the same at every zoom), and the filter-region and
 georeference rows belong to slice B's viewer (B4) and A11's `mapGeo`.
+
+### 6.4 Corpus parity
+
+The B-gate's parity check (09 §4 B: "visual parity on the corpus against
+tiles for the sanctioned differences only") and the instrument for
+triaging a user's "this looks wrong" on a real map (B9).
+
+**Method.** `runParity` (`packages/api/src/render/parity.ts`) takes an
+OCAD file and a paper window (mm, y-up, snapped outwards to whole mm) and
+renders, for every symbol with objects within 10 mm of the window, two
+images on the same pixel grid at a whole px/mm (default 10, the golden
+density):
+
+- *legacy* — the tiles' raster: `readOcad` → `ocadToSvg({ objects })`
+  with only that symbol's objects → the window's `viewBox`
+  (`map-window.ts`) → resvg on white, exactly as `map-tiles.ts` draws a
+  window (no IOF colour stack);
+- *new* — the document path: `importMapToDocument` →
+  `documentRenderInput` (canonical rendering on, or off with `--source`)
+  → `symbolise` with only that symbol's objects → reference raster
+  (§5.1), coloured with the **legacy RGB** of each stack entry's source
+  colour so the diff measures geometry, not the CMYK conversion. The
+  conversion is reported once, apart (colours whose shared `cmykToHex`
+  differs from `ocad2geojson`'s by more than 16).
+
+Every other symbol is absent on both sides, so a difference belongs to
+the row. Hidden, proxy-drawn (`render: null`), missing and graphic
+symbols are listed, not compared.
+
+**Measures and verdict.** Per row: *differing* (the §6.2 channel
+tolerance 16), *ink* (pixels inked on either side) and *unexplained* —
+pixels inked (some channel more than 48 below white, about a fifth of
+full coverage) on one side with no ink within one pixel on the other.
+Anti-aliasing shades and sub-pixel placement never count: at 10 px/mm a
+0.1 mm line is one pixel, and a 0.05 mm offset flips every pixel of it
+at the channel tolerance. The verdict is `close` when unexplained ≤ 10 %
+of ink, `diverges` otherwise, `empty` without ink. Rows are ranked by
+unexplained ÷ ink, then differing ÷ ink.
+
+**Sanctioned differences.** Places where the new pipeline is right and
+the legacy is not (03 §4.1 lists the legacy's gaps; §4 here pins the
+replacement). A row carries the codes its IR and its objects' flags
+trigger; the tool cannot prove a divergence *is* the sanctioned one, so
+the images are always read.
+
+| Code | Difference |
+|---|---|
+| `dash-fitting` | OCAD dashes fitted per section (§4.2); legacy: one uniform `stroke-dasharray` |
+| `dash-points` | dash points centre a dash and split sections; legacy ignores them |
+| `secondary-symbols` | OCAD secondary symbols once per section; legacy draws none |
+| `corner-angle` | corner glyphs on the bisector (§4.5); legacy: the incoming segment |
+| `glyph-spacing` | spaced line symbols by the §4.5 rule per corner section; legacy rounds its own way |
+| `curve-glyphs` | symbols along curved lines placed and turned on the curve; legacy walks the Bézier control polygon — more spots, off the line, polygon angles |
+| `border-flags` | double-line `noLeft` / `noRight` vertices interrupt a border (§4.4); legacy ignores them |
+| `gap-flags` | vertex gap flags interrupt the line; legacy ignores them |
+| `pointed-caps` | pointed ends taper; legacy: flat |
+| `pattern-origin` | hatches and structure patterns anchored at the paper origin (03 §6.9 item 4), patterns with their clip mode; legacy: the SVG viewport's origin, always clipped |
+| `text-fonts` | text as Liberation outlines (§4.9–4.10); legacy: SVG `<text>` in system fonts |
+| `rectangle-symbols` | OCAD rectangle symbols drawn; legacy draws none |
+| `line-end-symbols` | OCAD start / end symbols only where `useSymbolFlags` enables them (`map-import.md` §3.3); legacy draws any present |
+| `corner-ends` | corner / dash-point glyphs on flagged line ends (§4.5); legacy never draws one on an end |
+| `main-symbol-count` | an OCAD main symbol only with `nPrimSym > 0` (`map-import.md` §3.3, 518.3 "Utan tagg"); legacy draws it as if 1 |
+
+**Invocation.**
+
+```
+node scripts/measure-parity.mjs <map.ocd> [--window=x0,y0,x1,y1] [--px-per-mm=10] [--source] [--codes=a,b] [--out=<dir>]
+```
+
+writes `<code>.old.png`, `<code>.new.png`, `<code>.diff.png` (red: ink
+only in the legacy; blue: only in the new; magenta: both, different
+colour) per compared symbol and `summary.md`, by default into
+`.local/parity/<map>/` (corpus output is never committed, AGENTS.md
+§12). Exit 0 when every diverging row carries a sanctioned code, 1
+otherwise. `--source` takes the library out of the comparison
+(renderer and importer against the legacy); the default shows the map
+as users see it, so canonical rows also measure library entries against
+the mapper's own definitions.
+
+Tests: `packages/api/src/render/__tests__/parity.test.ts` (pixel grid,
+isolation, agreement on `e2e/test.ocd`, the frame as a sanctioned
+divergence, ranking, shape measure, tags; a 510 power line from
+`buildParityOcad` with its poles at the corner points only) and
+`scripts/__tests__/measure-parity.test.mjs` (CLI, `pnpm test:scripts`).
+
+**Corpus results (B9, 2026-10-21, `ocad-9`, 10 px/mm, whole maps plus
+the club-2026 review windows).** Compared symbols and the ones that
+diverge (unexplained > 10 %):
+
+| Map | Compared | Diverging, `--source` | Diverging, canonical | Unsanctioned |
+|---|---|---|---|---|
+| Sprint | 86 | 7 | 9 | canonical 101.1 / 103.1 slope lines |
+| Crop-B | 94 | 4 | 10 | canonical 101.1 / 103.1; 522 canopy tone |
+| Club-2026 | 186 | 23 | 26 | canonical 101.2 / 103.3 slope lines |
+
+Drawn from source definitions, every divergence on all three maps is
+sanctioned (exit 0): pattern and hatch phase, text fonts, OCAD dash
+fitting, glyphs along curves, and 518.3's tags. What the run found and
+what became of it:
+
+- **Fixed in the importer (`ocad-9`).** OCAD 9+ circle diameters are
+  centre-line (every ring was one line width small: the 702 / 706
+  circles); `useSymbolFlags` bit 1 is the end symbol, bit 2 the start
+  symbol (`map-import.md` §3.3).
+- **Fixed in the stage.** Corner and dash-point glyphs sit on flagged
+  vertices only, ends included when flagged (§4.5): club-2026's 510.0
+  had a pole on each of its 44 object ends; 7 of those ends are corner
+  points and keep theirs. The 510 window at 20 px/mm is now `close`.
+- **To B10 (library).** 101.b / 103.b slope ticks point the wrong way
+  (52–66 % on every map); 510 / 511 / 512 poles are placed
+  `atDashPoints`, which no importer produces.
+- **Spec-faithful, kept.** Cliffs: every 201.x / 202.x variant matches
+  the legacy at 40 px/mm from source (0 % unexplained); canonically
+  matched 202.2 / 201.5 get ISOM's flat ends (the "small houses"),
+  as Mapper's ISOM set does. `ocadLineStyle` equals the legacy's
+  `stroke-linejoin` / `linecap` table. 522 canopy: the library's 20 %
+  black is darker than the source's grey — a tone, not a shape.
+- **Not reproduced: missing line sections on GL.** No bucket defect:
+  club-2026's grid has 62 non-empty cells of 70, all resident at the
+  review view; an object at most 2 × 2 cells wide reaches at most one
+  cell from its centre cell, which the 1-cell draw margin covers; the
+  arena path equals the per-pass path to 0.1 % (`compare=1`,
+  10.7 px/mm). The 511.2 line through Brotorp breaks where the source
+  has gaps between objects (5.1 and 4.5 mm, at the road crossing) and
+  the reference raster matches the legacy there (0.3 %).
 
 ## 7. Where things live
 
@@ -1229,6 +1358,7 @@ georeference rows belong to slice B's viewer (B4) and A11's `mapGeo`.
 | `packages/api/src/render/previews.ts` | swatch and thumbnail PNGs (`docs/map-storage.md` §4.5) |
 | `packages/api/src/render/fonts.ts` | bundled-font loader for the server backends |
 | `packages/api/src/render/golden.ts`, `scripts/render-golden.ts` | golden PNG generation (`pnpm --filter @oxygen/api golden:render`) |
+| `packages/api/src/render/parity.ts`, `scripts/measure-parity.mjs` | corpus parity against the legacy tiles (§6.4) |
 | `packages/shared/src/render/ocad-objects.ts` | dev-only: `ocad2geojson` objects → `RenderObject`s (pilot / envelope modes); `ocadFlags` for the importers |
 | `packages/web/src/map-gl/prepare.ts` | WebGL2 backend, geometry builders: flattening, indexed strips, even-odd earcut; the per-pass fan path |
 | `packages/web/src/map-gl/mesh-atlas.ts` | glyph and text meshes in one float texture (vertex pulling) |
@@ -1250,6 +1380,12 @@ The shared module is exported as a namespace: `import { render } from
 `course-maps`).
 
 ## 8. Pending in this chapter
+
+- **§6.4 Mapper sources.** The parity tool compares OCAD files only (the
+  legacy tiles read nothing else); the corpus has no Mapper map.
+- **§6.4 GL in the comparison.** The tool's new side is the reference
+  raster; the WebGL2 backend is held to it by §6.2 and `compare=1`, not
+  by a corpus run.
 
 - **§5.2 rebuild-free visible set.** A visible-set rebuild is linear in
   the indices in view: tens of ms for a whole club map above the zoom

@@ -136,6 +136,8 @@ export interface SymbolConversionContext {
   colourIndex: (ocadColour: number) => number | undefined;
   /** Symbol table lookup by `symNum` (for area border symbols). */
   symbolByNumber: (symNum: number) => OcadSymbolDefLike | undefined;
+  /** File format version (`header.version`); circle elements changed meaning at 9. Default: 9 and later. */
+  ocadVersion?: number;
 }
 
 export interface SymbolConversionWarning {
@@ -236,7 +238,11 @@ class Converter {
         }
         case 3: {
           const c = e.coords[0];
-          parts.push({ kind: "ring", colour, diameterUm: (e.diameter ?? 0) * UM, widthUm: (e.lineWidth ?? 0) * UM, cx: (c?.[0] ?? 0) * UM, cy: (c?.[1] ?? 0) * UM });
+          // The IR ring's diameter is the outer one (map-rendering §4.6). OCAD 9+ measures `diameter` on the
+          // line's centre, OCAD 8 and older on its outer edge (Mapper's OCD import reads it the same way).
+          const w = e.lineWidth ?? 0;
+          const outer = (this.ctx.ocadVersion ?? 9) <= 8 ? (e.diameter ?? 0) : (e.diameter ?? 0) + w;
+          parts.push({ kind: "ring", colour, diameterUm: outer * UM, widthUm: w * UM, cx: (c?.[0] ?? 0) * UM, cy: (c?.[1] ?? 0) * UM });
           break;
         }
         case 4: {
@@ -376,9 +382,11 @@ class Converter {
     }
     if ((s.secSymElements?.length ?? 0) > 0) add(s.secSymElements, { at: "sectionCentres" }, "secondary symbol");
     const use = s.useSymbolFlags ?? 0;
+    // Bit 1 is the end symbol, bit 2 the start symbol, bit 4 the corner symbol (docs/map-import.md §3.3). The corner
+    // symbol lands on corner-flagged vertices only, ends included when flagged (map-rendering §4.5).
     if ((use & 4) !== 0) add(s.cornerSymElements, { at: "corners" }, "corner symbol");
-    if ((use & 1) !== 0) add(s.startSymElements, { at: "start" }, "start symbol");
-    if ((use & 2) !== 0) add(s.endSymElements, { at: "end" }, "end symbol");
+    if ((use & 2) !== 0) add(s.startSymElements, { at: "start" }, "start symbol");
+    if ((use & 1) !== 0) add(s.endSymElements, { at: "end" }, "end symbol");
     if (glyphs.length) body.glyphs = glyphs;
 
     if (!body.main && !body.borders && !body.glyphs) return null;

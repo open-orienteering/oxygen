@@ -115,6 +115,16 @@ describe("ocadSymbolToRender — line", () => {
       useSymbolFlags: 1 | 2 | 4, startSymElements: dot, endSymElements: dot, cornerSymElements: dot, secSymElements: dot,
     }), ctx).render;
     expect(ends && ends.type === "line" ? ends.glyphs!.map((g) => g.placement.at) : []).toEqual(["sectionCentres", "corners", "start", "end"]);
+    // Corner glyphs on corner-flagged vertices only, ends included when flagged (map-rendering §4.5, B9).
+    expect(ends && ends.type === "line" ? ends.glyphs![1].placement : undefined).toEqual({ at: "corners" });
+    // Bit 1 is the end symbol, bit 2 the start symbol (club-full 518.1: flags 5 with only an end symbol, B9).
+    const disc = (d: number) => [{ type: 4, color: 0, diameter: d, coords: [c(0, 0)] }];
+    const at = (useSymbolFlags: number) => {
+      const r = ocadSymbolToRender(line({ useSymbolFlags, startSymElements: disc(10), endSymElements: disc(20) }), ctx).render;
+      return r && r.type === "line" ? r.glyphs!.map((g) => [g.placement.at, g.glyph.parts[0].diameterUm]) : [];
+    };
+    expect(at(1)).toEqual([["end", 200]]);
+    expect(at(2)).toEqual([["start", 100]]);
     const noFlags = ocadSymbolToRender(line({ useSymbolFlags: 0, startSymElements: dot, endSymElements: dot, cornerSymElements: dot }), ctx).render;
     expect(noFlags && noFlags.type === "line" ? noFlags.glyphs : "x").toBeUndefined();
   });
@@ -147,12 +157,25 @@ describe("ocadSymbolToRender — point", () => {
     expect(render).toMatchObject({ type: "point", orientation: "object", glyph: { rotatable: true } });
     const parts = render && render.type === "point" ? render.glyph.parts : [];
     expect(parts.map((p) => p.kind)).toEqual(["ring", "ring", "stroke", "fill", "disc"]);
-    expect(parts[0]).toMatchObject({ colour: 3, diameterUm: 7000, widthUm: 350, cx: 0, cy: 0 });
+    // OCAD 9+ measures a circle element's diameter on the line's centre; the IR ring's is the outer diameter (B9).
+    expect(parts[0]).toMatchObject({ colour: 3, diameterUm: 7350, widthUm: 350, cx: 0, cy: 0 });
     expect(parts[2]).toMatchObject({ colour: 2, widthUm: 200, cap: "round", join: "round" });
     expect(Array.from(parts[2].geometry!.coords)).toEqual([-100, 0, 100, 0, 200, 50, 300, 0]);
     expect(Array.from(parts[2].geometry!.flags!)).toEqual([0, 1, 2, 0]);
     expect(parts[3].geometry!.closed).toBe(true);
     expect(parts[4]).toMatchObject({ diameterUm: 100, cx: 50, cy: 50 });
+  });
+
+  it("reads a circle's diameter as the outer one in OCAD 8 and older, on the centre line from OCAD 9", () => {
+    const ring = { symNum: 703000, number: "703.0", type: 1, elements: [{ type: 3, color: 0, diameter: 600, lineWidth: 35, coords: [c(0, 0)] }] };
+    const diameter = (ocadVersion?: number) => {
+      const r = ocadSymbolToRender(ring, { ...ctx, ...(ocadVersion !== undefined ? { ocadVersion } : {}) }).render;
+      return r && r.type === "point" ? r.glyph.parts[0].diameterUm : undefined;
+    };
+    expect(diameter(8)).toBe(6000);
+    expect(diameter(9)).toBe(6350);
+    expect(diameter(12)).toBe(6350);
+    expect(diameter()).toBe(6350);
   });
 
   it("faces north when not rotatable, and is null when no element has a known colour", () => {
