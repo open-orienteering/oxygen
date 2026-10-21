@@ -11,6 +11,7 @@ import { encodeMapDocument, decodeMapDocument, inputBounds } from "../../map-doc
 import { OBJECT_TYPE } from "../../map-document/header.js";
 import { COORD_FLAG } from "../../render/pass-stream.js";
 import type { AreaSymbol, LineSymbol, TextSymbol } from "../../render/symbol.js";
+import { WARNING_DETAILS_MAX } from "../report.js";
 import { readOmap, type OmapGeoreferencing } from "../omap-reader.js";
 import { OMAP_IMPORTER_VERSION, OMAP_UNITS_PER_MM, omapGeoreferencing, omapResolveCrs, omapToDocumentInput } from "../omap-source.js";
 
@@ -115,6 +116,19 @@ describe("omapToDocumentInput (fixture)", () => {
       "COLOUR_OPACITY_IGNORED", "FONT_SUBSTITUTED", "HELPER_SYMBOLS_HIDDEN", "MISSING_SYMBOL", "OBJECT_TAGS_DROPPED", "PARTS_MERGED",
       "TEMPLATES_DROPPED", "TEXT_ALIGNMENT_PER_OBJECT", "TEXT_BOX_DROPPED", "TEXT_VERTICAL_ALIGNMENT_DROPPED",
     ]);
+  });
+
+  it("returns one detail per message-carrying emission, report-only, with the stub's symbol index", () => {
+    const stub = result.warningDetails.find((d) => d.code === "MISSING_SYMBOL")!;
+    expect(stub.message).toBe(warning("MISSING_SYMBOL")!.message);
+    expect(header.symbols[stub.symbolIdx!].origin).toBe("missing");
+    // The first detail of every code carries the header's message; the document does not depend on the list.
+    for (const w of result.warnings) {
+      if (w.message) expect(result.warningDetails.find((d) => d.code === w.code)?.message).toBe(w.message);
+    }
+    expect(result.input).not.toHaveProperty("warningDetails");
+    expect(result.warningDetails.length).toBeLessThanOrEqual(WARNING_DETAILS_MAX);
+    expect(header.format.importer).toBe("omap-4");
   });
 
   it("combined symbols render as merged IR (halo ride, railway band)", () => {

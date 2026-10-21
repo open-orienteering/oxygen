@@ -14,6 +14,7 @@
 import type { MapDocumentInput, MapObjectInput } from "../map-document/codec.js";
 import { analyseDocumentInput, type DocumentAnalysis } from "./analyse.js";
 import { OBJECT_TYPE } from "../map-document/header.js";
+import { WARNING_DETAILS_MAX, type ImportWarningDetail } from "./report.js";
 import type { DocumentColour, DocumentSymbolInput, DocumentWarning, Georeferencing, MapDocumentHeaderInput } from "../map-document/header.js";
 import type { TextSymbol } from "../render/symbol.js";
 import { OMAP_OBJECT_TYPE, type OmapFile, type OmapGeoreferencing, type OmapSymbol } from "./omap-reader.js";
@@ -21,7 +22,7 @@ import { dashPointRule, omapFlags, omapGoverningLine, omapSymbolKind, omapSymbol
 
 /** Mapper coordinates are 0.001 mm. */
 export const OMAP_UNITS_PER_MM = 1000;
-export const OMAP_IMPORTER_VERSION = "omap-3";
+export const OMAP_IMPORTER_VERSION = "omap-4";
 
 export interface OmapSourceOptions {
   /** Upload name; goes into the import report, not into the document. */
@@ -39,6 +40,8 @@ export interface OmapSourceResult {
     symbolsRendered: number; symbolsUnrendered: number;
   };
   warnings: DocumentWarning[];
+  /** One entry per warning emission that carries a message (docs/map-import.md §3.6), at most `WARNING_DETAILS_MAX`; for the import report, not the document. */
+  warningDetails: ImportWarningDetail[];
   /** Stage 5 over `input` (docs/map-import.md §3.8); not part of the document. */
   analysis: DocumentAnalysis;
 }
@@ -169,10 +172,14 @@ const H_ALIGN: Record<number, TextSymbol["align"] | undefined> = { 0: "left", 1:
 
 export function omapToDocumentInput(file: OmapFile, opts: OmapSourceOptions): OmapSourceResult {
   const warnings = new Map<string, DocumentWarning>();
-  const warn = (code: string, message?: string, count = 1) => {
+  const warningDetails: ImportWarningDetail[] = [];
+  const warn = (code: string, message?: string, count = 1, symbolIdx?: number) => {
     const w = warnings.get(code);
     if (w) w.count += count;
     else warnings.set(code, { code, count, message });
+    if (message !== undefined && warningDetails.length < WARNING_DETAILS_MAX) {
+      warningDetails.push(symbolIdx === undefined ? { code, message } : { code, message, symbolIdx });
+    }
   };
 
   const { colours, stackIdxByPriority, opacityIgnored } = omapColourStack(file);
@@ -188,7 +195,7 @@ export function omapToDocumentInput(file: OmapFile, opts: OmapSourceOptions): Om
   let symbolsRendered = 0, symbolsUnrendered = 0, helpersHidden = 0;
   file.symbols.forEach((s, i) => {
     const conv = omapSymbolToRender(s, conversionCtx);
-    for (const w of conv.warnings) warn(w.code, w.message);
+    for (const w of conv.warnings) warn(w.code, w.message, 1, i);
     if (conv.render) symbolsRendered++;
     else symbolsUnrendered++;
     const kind = omapSymbolKind(s, symbolById);
@@ -242,7 +249,7 @@ export function omapToDocumentInput(file: OmapFile, opts: OmapSourceOptions): Om
           missingIdx.set(key, m);
           symbols.push({ code: src?.code ?? `#${o.symbol}`, name: src?.name ?? "", kind: kindOfObjectType(o.type), origin: "missing", hidden: false, render: null });
           dashRules.push("corner");
-          warn("MISSING_SYMBOL", src ? `objects use symbol ${src.code}, which has no usable definition` : `objects reference symbol ${o.symbol}, which is not in the symbol table`);
+          warn("MISSING_SYMBOL", src ? `objects use symbol ${src.code}, which has no usable definition` : `objects reference symbol ${o.symbol}, which is not in the symbol table`, 1, m);
         }
         symbolIdx = m;
         kind = kindOfObjectType(o.type);
@@ -343,5 +350,5 @@ export function omapToDocumentInput(file: OmapFile, opts: OmapSourceOptions): Om
     warnings: [...warnings.values()],
   };
   const input: MapDocumentInput = { header, objects };
-  return { input, counts, warnings: [...warnings.values()], analysis: analyseDocumentInput(input) };
+  return { input, counts, warnings: [...warnings.values()], warningDetails, analysis: analyseDocumentInput(input) };
 }

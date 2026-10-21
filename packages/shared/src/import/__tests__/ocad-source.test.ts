@@ -1,4 +1,5 @@
 import { describe, it, expect } from "vitest";
+import { WARNING_DETAILS_MAX } from "../report.js";
 import { OCAD_UNITS_PER_MM, ocadColourStack, ocadGeoreferencing, ocadToDocumentInput, type OcadFileLike } from "../ocad-source.js";
 import { decodeMapDocument, encodeMapDocument, documentRenderInput } from "../../map-document/index.js";
 import { COORD_FLAG } from "../../render/pass-stream.js";
@@ -134,6 +135,7 @@ describe("ocadGeoreferencing", () => {
 describe("ocadToDocumentInput", () => {
   const result = ocadToDocumentInput(source(), opts);
   const { input } = result;
+  const r0 = result;
 
   it("keeps every object with verbatim coordinates and OCAD flag bits", () => {
     expect(result.counts).toEqual({
@@ -238,9 +240,62 @@ describe("ocadToDocumentInput", () => {
     expect(ocadToDocumentInput({ ...source(), warnings: [] }, opts).readerWarnings).toEqual([]);
   });
 
+  describe("warning detail (docs/map-import.md §3.6)", () => {
+    // Club-full shape: two radius rectangles (one aggregated header warning) and an area whose border points at itself.
+    const withStale = () => {
+      const s = source();
+      s.symbols.push(
+        { symNum: 301002, number: "301.2", type: 3, status: 0, description: "Stale", fillOn: true, fillColor: 0, borderOn: true, borderSym: 301002 },
+        { symNum: 851001, number: "851.1", type: 7, status: 0, description: "Rektangel 2", lineColor: 0, lineWidth: 16, radius: 100, gridFlags: 0 },
+      );
+      return s;
+    };
+
+    it("lists one entry per emission with the symbol index, while the header keeps the first message per code", () => {
+      const r = ocadToDocumentInput(withStale(), opts);
+      const dropped = r.warnings.find((w) => w.code === "SYMBOL_FEATURE_DROPPED");
+      expect(dropped).toEqual({ code: "SYMBOL_FEATURE_DROPPED", count: 2, message: "850.1: rectangle corner radius 2.29 mm" });
+      const details = r.warningDetails.filter((d) => d.code === "SYMBOL_FEATURE_DROPPED");
+      expect(details).toEqual([
+        { code: "SYMBOL_FEATURE_DROPPED", message: "850.1: rectangle corner radius 2.29 mm", symbolIdx: 5 },
+        { code: "SYMBOL_FEATURE_DROPPED", message: "851.1: rectangle corner radius 1 mm", symbolIdx: 7 },
+      ]);
+      expect(r.warningDetails.filter((d) => d.code === "SYMBOL_REFERENCE_INVALID")).toEqual([
+        { code: "SYMBOL_REFERENCE_INVALID", message: "301.2: border symbol 301002 is the symbol itself", symbolIdx: 6 },
+      ]);
+      expect(r.warnings.find((w) => w.code === "SYMBOL_REFERENCE_INVALID")).toEqual({ code: "SYMBOL_REFERENCE_INVALID", count: 1, message: "301.2: border symbol 301002 is the symbol itself" });
+      expect(r.input.header.warnings).toEqual(r.warnings);
+    });
+
+    it("gives the missing-symbol stub's index, and the first detail of each code carries the header's message", () => {
+      const r = ocadToDocumentInput(source(), opts);
+      const stub = r.warningDetails.find((d) => d.code === "MISSING_SYMBOL");
+      expect(stub).toMatchObject({ message: "objects reference symbol 777.0, which is not in the symbol table" });
+      expect(r.input.header.symbols[stub!.symbolIdx!].origin).toBe("missing");
+      for (const w of r.warnings) {
+        if (w.message) expect(r.warningDetails.find((d) => d.code === w.code)?.message).toBe(w.message);
+      }
+    });
+
+    it("stays out of the document input and header", () => {
+      expect(r0.input).not.toHaveProperty("warningDetails");
+      expect(JSON.stringify(r0.input.header)).not.toContain("symbolIdx");
+    });
+
+    it("keeps at most WARNING_DETAILS_MAX entries but counts every emission", () => {
+      const s = source();
+      for (let i = 0; i < WARNING_DETAILS_MAX + 1; i++) {
+        s.symbols.push({ symNum: 900000 + i, number: `900.${i}`, type: 3, status: 0, description: "Stale", fillOn: true, fillColor: 0, borderOn: true, borderSym: 900000 + i });
+      }
+      const r = ocadToDocumentInput(s, opts);
+      expect(r.warningDetails).toHaveLength(WARNING_DETAILS_MAX);
+      expect(r.warnings.find((w) => w.code === "SYMBOL_REFERENCE_INVALID")?.count).toBe(WARNING_DETAILS_MAX + 1);
+    });
+  });
+
   it("fills the header: provenance, units, scale, print window, export rectangles", () => {
     const h = input.header;
-    expect(h.format).toEqual({ version: 1, importer: "ocad-9" });
+    expect(h.format).toEqual({ version: 1, importer: "ocad-10" });
     expect(h.source).toEqual({ kind: "ocad", version: "2018.8.3", hash: "ff".repeat(32), bytes: 4242 });
     expect(h.unitsPerMm).toBe(OCAD_UNITS_PER_MM);
     expect(h.mapScale).toBe(15000);
