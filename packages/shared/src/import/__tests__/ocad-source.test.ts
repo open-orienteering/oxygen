@@ -278,6 +278,12 @@ describe("ocadToDocumentInput", () => {
       }
     });
 
+    it("locates a duplicate symbol number at the duplicate's index", () => {
+      const dup = result.warningDetails.find((d) => d.code === "DUPLICATE_SYMBOL_NUMBER");
+      expect(dup).toMatchObject({ message: "symbol 101.0 defined more than once; first definition used", symbolIdx: 4 });
+      expect(input.header.symbols[4].name).toBe("Duplicate");
+    });
+
     it("stays out of the document input and header", () => {
       expect(r0.input).not.toHaveProperty("warningDetails");
       expect(JSON.stringify(r0.input.header)).not.toContain("symbolIdx");

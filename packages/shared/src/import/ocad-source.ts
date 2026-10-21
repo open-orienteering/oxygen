@@ -275,7 +275,7 @@ export function ocadToDocumentInput(ocad: OcadFileLike, opts: OcadSourceOptions)
     };
     if (s.fontName) entry.sourceFont = s.fontName;
     if (!symbolIdxBySymNum.has(s.symNum)) symbolIdxBySymNum.set(s.symNum, symbols.length);
-    else warn("DUPLICATE_SYMBOL_NUMBER", `symbol ${s.number} defined more than once; first definition used`);
+    else warn("DUPLICATE_SYMBOL_NUMBER", `symbol ${s.number} defined more than once; first definition used`, 1, i);
     symbols.push(entry);
   }
 

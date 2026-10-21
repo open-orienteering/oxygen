@@ -466,9 +466,10 @@ import report carries it as `warningDetails: {code, message, symbolIdx?}[]`
 message, in emission order, at most 500 (`WARNING_DETAILS_MAX`; every
 emission is still counted in `warnings`), present only when there are any.
 `symbolIdx` is the index in the document's symbol list — the symbol
-conversion's, or the stub's for `MISSING_SYMBOL` — and survives stage 6 (the
-matcher edits symbols in place). The first detail of each code carries the
-header's message. Warnings that are counts over many objects
+conversion's, the duplicate's for `DUPLICATE_SYMBOL_NUMBER`, or the stub's for
+`MISSING_SYMBOL` — and survives stage 6 (the matcher edits symbols in place).
+Unless the cap was reached before the code was first emitted, the first detail
+of each code carries the header's message. Warnings that are counts over many objects
 (`EMPTY_GEOMETRY_DROPPED`, no message) and the stage 6–7 warnings (§3.7, one
 message per code already) have no entries. The list is not part of the
 document: it never reaches the header or the bytes (§6), so a change to it
