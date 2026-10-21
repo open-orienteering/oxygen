@@ -76,14 +76,13 @@ async function main() {
   const { encodePng } = await import(join(api, "render", "reference-raster.ts"));
 
   const t0 = performance.now();
-  const report = await runParity(readFileSync(opts.file), name, {
-    window: opts.window, pxPerMm: opts.pxPerMm, canonical: opts.canonical, codes: opts.codes, keepImages: true,
-  });
   mkdirSync(out, { recursive: true });
-  for (const row of report.rows) {
-    if (!row.images) continue;
-    for (const k of ["old", "new", "diff"]) writeFileSync(join(out, `${rowFileStem(row)}.${k}.png`), await encodePng(row.images[k]));
-  }
+  const report = await runParity(readFileSync(opts.file), name, {
+    window: opts.window, pxPerMm: opts.pxPerMm, canonical: opts.canonical, codes: opts.codes,
+    onImages: async (row, images) => {
+      for (const k of ["old", "new", "diff"]) writeFileSync(join(out, `${rowFileStem(row)}.${k}.png`), await encodePng(images[k]));
+    },
+  });
   writeFileSync(join(out, "summary.md"), parityMarkdown(report));
 
   const compared = report.rows.filter((r) => r.diff);

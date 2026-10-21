@@ -44,8 +44,10 @@ export interface ParityOptions {
    * with the library out of the comparison.
    */
   canonical?: boolean;
-  /** Keep the RGBA images on the rows (the CLI writes them); default false. */
+  /** Keep the RGBA images on the rows; default false. */
   keepImages?: boolean;
+  /** Called with each compared row's images as soon as they exist (the CLI writes them; a whole map's do not fit in memory). */
+  onImages?: (row: ParityRow, images: ParityImages) => Promise<void> | void;
 }
 
 /**
@@ -269,7 +271,11 @@ export async function runParity(file: Buffer, fileName: string, opts: ParityOpti
     const unexplained = unexplainedPixels(oldImg, newImg);
     row.diff = { ...d, ink, inkRatio: ink === 0 ? 0 : d.differing / ink, unexplained, unexplainedRatio: ink === 0 ? 0 : unexplained / ink };
     row.verdict = ink === 0 ? "empty" : row.diff.unexplainedRatio <= CLOSE_INK_RATIO ? "close" : "diverges";
-    if (opts.keepImages) row.images = { old: oldImg, new: newImg, diff: diffPicture(oldImg, newImg, tolerance) };
+    if (opts.keepImages || opts.onImages) {
+      const images = { old: oldImg, new: newImg, diff: diffPicture(oldImg, newImg, tolerance) };
+      if (opts.keepImages) row.images = images;
+      await opts.onImages?.(row, images);
+    }
     rows.push(row);
   }
   // Legacy symbols the document has no symbol for (should not happen; reported, not drawn).
