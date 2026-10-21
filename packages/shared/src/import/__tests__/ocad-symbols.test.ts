@@ -115,8 +115,16 @@ describe("ocadSymbolToRender — line", () => {
       useSymbolFlags: 1 | 2 | 4, startSymElements: dot, endSymElements: dot, cornerSymElements: dot, secSymElements: dot,
     }), ctx).render;
     expect(ends && ends.type === "line" ? ends.glyphs!.map((g) => g.placement.at) : []).toEqual(["sectionCentres", "corners", "start", "end"]);
-    // OCAD draws the corner symbol at corner points only; the ends have their own start / end symbols.
-    expect(ends && ends.type === "line" ? ends.glyphs![1].placement : undefined).toEqual({ at: "corners", ignoreEnds: true });
+    // Corner glyphs on corner-flagged vertices only, ends included when flagged (map-rendering §4.5, B9).
+    expect(ends && ends.type === "line" ? ends.glyphs![1].placement : undefined).toEqual({ at: "corners" });
+    // Bit 1 is the end symbol, bit 2 the start symbol (club-full 518.1: flags 5 with only an end symbol, B9).
+    const disc = (d: number) => [{ type: 4, color: 0, diameter: d, coords: [c(0, 0)] }];
+    const at = (useSymbolFlags: number) => {
+      const r = ocadSymbolToRender(line({ useSymbolFlags, startSymElements: disc(10), endSymElements: disc(20) }), ctx).render;
+      return r && r.type === "line" ? r.glyphs!.map((g) => [g.placement.at, g.glyph.parts[0].diameterUm]) : [];
+    };
+    expect(at(1)).toEqual([["end", 200]]);
+    expect(at(2)).toEqual([["start", 100]]);
     const noFlags = ocadSymbolToRender(line({ useSymbolFlags: 0, startSymElements: dot, endSymElements: dot, cornerSymElements: dot }), ctx).render;
     expect(noFlags && noFlags.type === "line" ? noFlags.glyphs : "x").toBeUndefined();
   });

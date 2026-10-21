@@ -382,10 +382,11 @@ class Converter {
     }
     if ((s.secSymElements?.length ?? 0) > 0) add(s.secSymElements, { at: "sectionCentres" }, "secondary symbol");
     const use = s.useSymbolFlags ?? 0;
-    // OCAD draws the corner symbol at corner points only: the ends carry their own start / end symbols.
-    if ((use & 4) !== 0) add(s.cornerSymElements, { at: "corners", ignoreEnds: true }, "corner symbol");
-    if ((use & 1) !== 0) add(s.startSymElements, { at: "start" }, "start symbol");
-    if ((use & 2) !== 0) add(s.endSymElements, { at: "end" }, "end symbol");
+    // Bit 1 is the end symbol, bit 2 the start symbol, bit 4 the corner symbol (docs/map-import.md §3.3). The corner
+    // symbol lands on corner-flagged vertices only, ends included when flagged (map-rendering §4.5).
+    if ((use & 4) !== 0) add(s.cornerSymElements, { at: "corners" }, "corner symbol");
+    if ((use & 2) !== 0) add(s.startSymElements, { at: "start" }, "start symbol");
+    if ((use & 1) !== 0) add(s.endSymElements, { at: "end" }, "end symbol");
     if (glyphs.length) body.glyphs = glyphs;
 
     if (!body.main && !body.borders && !body.glyphs) return null;

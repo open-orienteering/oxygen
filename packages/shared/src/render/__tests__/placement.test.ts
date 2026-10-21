@@ -62,8 +62,17 @@ describe("placeGlyphs — start, end, corners, dash points", () => {
     const s = placeGlyphs(bent, { at: "corners", ignoreEnds: true }, { rotatable: true, scaleAtCorners: true });
     expect(s[0].scale).toBeCloseTo(Math.SQRT2);
   });
-  it("includes the ends unless ignoreEnds", () => {
-    expect(lens(placeGlyphs(bent, { at: "corners" }, { rotatable: false }))).toEqual([0, 1000, 2000]);
+  it("puts a glyph on an end only when the end is flagged, and never with ignoreEnds (§4.5, B9)", () => {
+    expect(lens(placeGlyphs(bent, { at: "corners" }, { rotatable: false }))).toEqual([1000]);
+    const flaggedEnds = new PathMeasure(makePath([0, 0, 1000, 0, 1000, 1000], [F.corner, F.corner, F.corner]));
+    const p = placeGlyphs(flaggedEnds, { at: "corners" }, { rotatable: true });
+    expect(lens(p)).toEqual([0, 1000, 2000]);
+    // Ends at the tangent angle, the corner at the bisector.
+    expect(p.map((x) => Math.round(x.angleDeg))).toEqual([0, 45, 90]);
+    expect(lens(placeGlyphs(flaggedEnds, { at: "corners", ignoreEnds: true }, { rotatable: false }))).toEqual([1000]);
+    const dashEnd = new PathMeasure(makePath([0, 0, 1000, 0, 2000, 0], [0, F.dash, F.dash]));
+    expect(lens(placeGlyphs(dashEnd, { at: "dashPoints" }, { rotatable: false }))).toEqual([1000, 2000]);
+    expect(lens(placeGlyphs(dashEnd, { at: "corners" }, { rotatable: false }))).toEqual([]);
   });
   it("dash points are a separate flag", () => {
     const m = new PathMeasure(makePath([0, 0, 1000, 0, 2000, 0, 3000, 0], [0, F.corner, F.dash, 0]));
