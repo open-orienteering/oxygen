@@ -1263,6 +1263,8 @@ the images are always read.
 | `pattern-origin` | hatches and structure patterns anchored at the paper origin (03 §6.9 item 4), patterns with their clip mode; legacy: the SVG viewport's origin, always clipped |
 | `text-fonts` | text as Liberation outlines (§4.9–4.10); legacy: SVG `<text>` in system fonts |
 | `rectangle-symbols` | OCAD rectangle symbols drawn; legacy draws none |
+| `line-end-symbols` | OCAD start / end symbols only where `useSymbolFlags` enables them (`map-import.md` §3.3); legacy draws any present |
+| `corner-ends` | corner / dash-point glyphs on flagged line ends (§4.5); legacy never draws one on an end |
 
 **Invocation.**
 

@@ -119,6 +119,10 @@ describe("parity helpers", () => {
     const sym = render.parseRenderSymbol({ type: "line", id: "x", code: "x", name: "x", main: { colour: 0, widthUm: 100 }, glyphs: [{ glyph, placement: { at: "spaced", distanceUm: 500 } }] });
     const curved: render.RenderObject = { symbolIdx: 0, path: { coords: new Int32Array([0, 0, 1, 1, 2, 2, 3, 3]), flags: new Uint8Array([0, F.bezierFirst, F.bezierSecond, 0]), closed: false } };
     expect(sanctionedFor(sym, [curved])).toEqual(["curve-glyphs", "glyph-spacing"]);
+    const pole = render.parseRenderSymbol({ type: "line", id: "p", code: "p", name: "p", main: { colour: 0, widthUm: 140 }, glyphs: [{ glyph, placement: { at: "corners" } }] });
+    const flaggedEnd: render.RenderObject = { symbolIdx: 0, path: { coords: new Int32Array([0, 0, 1000, 0, 2000, 0]), flags: new Uint8Array([0, F.corner, F.corner]), closed: false } };
+    expect(sanctionedFor(pole, [flaggedEnd])).toEqual(["corner-angle", "corner-ends"]);
+    expect(sanctionedFor(pole, [{ ...flaggedEnd, path: { ...flaggedEnd.path, flags: new Uint8Array([0, F.corner, 0]) } }])).toEqual(["corner-angle"]);
     const text = render.parseRenderSymbol({ type: "text", id: "t", code: "t", name: "t", fontFamily: "liberation-sans", fontSizeUm: 1000, colour: 0 });
     expect(sanctionedFor(text, [])).toEqual(["text-fonts"]);
   });

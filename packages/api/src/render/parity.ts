@@ -80,6 +80,8 @@ export const SANCTIONED = {
   "pattern-origin": "hatches and structure patterns anchored at the paper origin, patterns with the symbol's clip mode (legacy: SVG viewport origin, always clipped)",
   "text-fonts": "text set in the bundled Liberation fonts as outlines (legacy: SVG <text> in system fonts)",
   "rectangle-symbols": "OCAD rectangle symbols (type 7) are drawn (legacy draws none)",
+  "line-end-symbols": "OCAD start / end symbols only where useSymbolFlags enables them (map-import §3.3; legacy draws any present)",
+  "corner-ends": "corner / dash-point glyphs on flagged line ends (§4.5; legacy never draws them on an end)",
   "glyph-spacing": "spaced line symbols laid out per corner section by the §4.5 rule (legacy rounds its own way per section)",
   "curve-glyphs": "symbols along curved lines placed and turned on the curve (legacy walks the Bézier control polygon: more spots, off the line, polygon angles)",
 } as const;
@@ -142,7 +144,10 @@ interface LegacyColour {
 }
 interface LegacyFile {
   objects: LegacyObject[];
-  symbols: { symNum: number; number?: string; description?: string; status?: number }[];
+  symbols: {
+    symNum: number; number?: string; description?: string; status?: number;
+    useSymbolFlags?: number; startSymElements?: unknown[]; endSymElements?: unknown[];
+  }[];
   colors: (LegacyColour | undefined)[];
   getBounds(): number[];
 }
@@ -256,8 +261,12 @@ export async function runParity(file: Buffer, fileName: string, opts: ParityOpti
       continue;
     }
     const sym = input.symbols[si];
-    row.sanctioned = sanctionedFor(sym, newObjects);
-    if (s.kind === "rectangle") row.sanctioned = [...row.sanctioned, "rectangle-symbols" as const].sort();
+    const tags = new Set<SanctionedCode>(sanctionedFor(sym, newObjects));
+    if (s.kind === "rectangle") tags.add("rectangle-symbols");
+    const ls = symNum !== undefined ? legacy.symbols[s.sourceIndex!] : undefined;
+    const use = ls?.useSymbolFlags ?? 0;
+    if (ls && (((ls.startSymElements?.length ?? 0) > 0 && !(use & 2)) || ((ls.endSymElements?.length ?? 0) > 0 && !(use & 1)))) tags.add("line-end-symbols");
+    row.sanctioned = [...tags].sort();
 
     const oldImg = await legacyWindow(ocadToSvg, legacy, dom.window.document, oldObjects, rect, ocadBounds, size);
     const { stream } = render.symbolise({ objects: newObjects, symbols: input.symbols, fonts });
@@ -328,6 +337,8 @@ export function sanctionedFor(sym: render.RenderSymbol, objects: readonly render
     if (b.main?.cap === "pointed") out.add("pointed-caps");
     if (b.glyphs?.some((g) => g.placement.at === "spaced")) out.add("glyph-spacing");
     if (b.glyphs?.length && flags & F.bezierFirst) out.add("curve-glyphs");
+    const endMask = (b.glyphs ?? []).reduce((m, g) => m | (g.placement.at === "corners" ? F.corner : g.placement.at === "dashPoints" ? F.dash : 0), 0);
+    if (endMask && objects.some((o) => !o.path.closed && o.path.flags && (o.path.flags[0] & endMask || o.path.flags[o.path.flags.length - 1] & endMask))) out.add("corner-ends");
   };
   if (sym.type === "line") line(sym);
   else if (sym.type === "area") {
