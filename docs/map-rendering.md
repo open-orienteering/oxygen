@@ -1265,6 +1265,7 @@ the images are always read.
 | `rectangle-symbols` | OCAD rectangle symbols drawn; legacy draws none |
 | `line-end-symbols` | OCAD start / end symbols only where `useSymbolFlags` enables them (`map-import.md` §3.3); legacy draws any present |
 | `corner-ends` | corner / dash-point glyphs on flagged line ends (§4.5); legacy never draws one on an end |
+| `main-symbol-count` | an OCAD main symbol only with `nPrimSym > 0` (`map-import.md` §3.3, 518.3 "Utan tagg"); legacy draws it as if 1 |
 
 **Invocation.**
 
@@ -1288,7 +1289,46 @@ divergence, ranking, shape measure, tags; a 510 power line from
 `buildParityOcad` with its poles at the corner points only) and
 `scripts/__tests__/measure-parity.test.mjs` (CLI, `pnpm test:scripts`).
 
-**Corpus results (B9, 2026-10-21, `ocad-9`).** RESULTS_PLACEHOLDER
+**Corpus results (B9, 2026-10-21, `ocad-9`, 10 px/mm, whole maps plus
+the club-2026 review windows).** Compared symbols and the ones that
+diverge (unexplained > 10 %):
+
+| Map | Compared | Diverging, `--source` | Diverging, canonical | Unsanctioned |
+|---|---|---|---|---|
+| Sprint | 86 | 7 | 9 | canonical 101.1 / 103.1 slope lines |
+| Crop-B | 94 | 4 | 10 | canonical 101.1 / 103.1; 522 canopy tone |
+| Club-2026 | 186 | 23 | 26 | canonical 101.2 / 103.3 slope lines |
+
+Drawn from source definitions, every divergence on all three maps is
+sanctioned (exit 0): pattern and hatch phase, text fonts, OCAD dash
+fitting, glyphs along curves, and 518.3's tags. What the run found and
+what became of it:
+
+- **Fixed in the importer (`ocad-9`).** OCAD 9+ circle diameters are
+  centre-line (every ring was one line width small: the 702 / 706
+  circles); `useSymbolFlags` bit 1 is the end symbol, bit 2 the start
+  symbol (`map-import.md` §3.3).
+- **Fixed in the stage.** Corner and dash-point glyphs sit on flagged
+  vertices only, ends included when flagged (§4.5): club-2026's 510.0
+  had a pole on each of its 44 object ends; 7 of those ends are corner
+  points and keep theirs. The 510 window at 20 px/mm is now `close`.
+- **To B10 (library).** 101.b / 103.b slope ticks point the wrong way
+  (52–66 % on every map); 510 / 511 / 512 poles are placed
+  `atDashPoints`, which no importer produces.
+- **Spec-faithful, kept.** Cliffs: every 201.x / 202.x variant matches
+  the legacy at 40 px/mm from source (0 % unexplained); canonically
+  matched 202.2 / 201.5 get ISOM's flat ends (the "small houses"),
+  as Mapper's ISOM set does. `ocadLineStyle` equals the legacy's
+  `stroke-linejoin` / `linecap` table. 522 canopy: the library's 20 %
+  black is darker than the source's grey — a tone, not a shape.
+- **Not reproduced: missing line sections on GL.** No bucket defect:
+  club-2026's grid has 62 non-empty cells of 70, all resident at the
+  review view; an object at most 2 × 2 cells wide reaches at most one
+  cell from its centre cell, which the 1-cell draw margin covers; the
+  arena path equals the per-pass path to 0.1 % (`compare=1`,
+  10.7 px/mm). The 511.2 line through Brotorp breaks where the source
+  has gaps between objects (5.1 and 4.5 mm, at the road crossing) and
+  the reference raster matches the legacy there (0.3 %).
 
 ## 7. Where things live
 
@@ -1336,6 +1376,12 @@ The shared module is exported as a namespace: `import { render } from
 `course-maps`).
 
 ## 8. Pending in this chapter
+
+- **§6.4 Mapper sources.** The parity tool compares OCAD files only (the
+  legacy tiles read nothing else); the corpus has no Mapper map.
+- **§6.4 GL in the comparison.** The tool's new side is the reference
+  raster; the WebGL2 backend is held to it by §6.2 and `compare=1`, not
+  by a corpus run.
 
 - **§5.2 rebuild-free visible set.** A visible-set rebuild is linear in
   the indices in view: tens of ms for a whole club map above the zoom

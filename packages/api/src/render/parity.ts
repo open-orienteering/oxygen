@@ -82,6 +82,7 @@ export const SANCTIONED = {
   "rectangle-symbols": "OCAD rectangle symbols (type 7) are drawn (legacy draws none)",
   "line-end-symbols": "OCAD start / end symbols only where useSymbolFlags enables them (map-import §3.3; legacy draws any present)",
   "corner-ends": "corner / dash-point glyphs on flagged line ends (§4.5; legacy never draws them on an end)",
+  "main-symbol-count": "OCAD main symbol only when nPrimSym > 0 (map-import §3.3, 518.3 'Utan tagg'; legacy draws it as if 1)",
   "glyph-spacing": "spaced line symbols laid out per corner section by the §4.5 rule (legacy rounds its own way per section)",
   "curve-glyphs": "symbols along curved lines placed and turned on the curve (legacy walks the Bézier control polygon: more spots, off the line, polygon angles)",
 } as const;
@@ -147,6 +148,7 @@ interface LegacyFile {
   symbols: {
     symNum: number; number?: string; description?: string; status?: number;
     useSymbolFlags?: number; startSymElements?: unknown[]; endSymElements?: unknown[];
+    type?: number; primSymElements?: unknown[]; mainLength?: number; nPrimSym?: number;
   }[];
   colors: (LegacyColour | undefined)[];
   getBounds(): number[];
@@ -266,6 +268,7 @@ export async function runParity(file: Buffer, fileName: string, opts: ParityOpti
     const ls = symNum !== undefined ? legacy.symbols[s.sourceIndex!] : undefined;
     const use = ls?.useSymbolFlags ?? 0;
     if (ls && (((ls.startSymElements?.length ?? 0) > 0 && !(use & 2)) || ((ls.endSymElements?.length ?? 0) > 0 && !(use & 1)))) tags.add("line-end-symbols");
+    if (ls?.type === 2 && (ls.primSymElements?.length ?? 0) > 0 && (ls.mainLength ?? 0) > 0 && !ls.nPrimSym) tags.add("main-symbol-count");
     row.sanctioned = [...tags].sort();
 
     const oldImg = await legacyWindow(ocadToSvg, legacy, dom.window.document, oldObjects, rect, ocadBounds, size);
