@@ -40,7 +40,8 @@ export interface ClubMapRowInput {
     uploadedBy: string | null;
     uploader: Person | null;
     source: { fileName: string; sizeBytes: number };
-    document: { header: unknown };
+    /** `report` is the import report (`matching.symbols` counts); optional for callers that do not load it. */
+    document: { header: unknown; report?: unknown };
   } | null;
   versionCount: number;
   /** Newest import job of the series. */
@@ -68,6 +69,17 @@ function headerScale(header: unknown): number | null {
   return null;
 }
 
+/**
+ * Symbols of a version's document still awaiting review and those with a
+ * club decision, from the import report's matching summary (06 §5.1:
+ * review is expected for club maps). Null before the matcher ran.
+ */
+function reviewCounts(report: unknown): { suggested: number; reviewed: number } | null {
+  const symbols = (report as { matching?: { symbols?: { suggested?: unknown; reviewed?: unknown } } } | null)?.matching?.symbols;
+  if (typeof symbols?.suggested !== "number" || typeof symbols.reviewed !== "number") return null;
+  return { suggested: symbols.suggested, reviewed: symbols.reviewed };
+}
+
 export function projectClubMapRow({ series, version, versionCount, job, legacy }: ClubMapRowInput) {
   const file = version?.source ?? job?.source ?? null;
   return {
@@ -91,6 +103,7 @@ export function projectClubMapRow({ series, version, versionCount, job, legacy }
         }
       : null,
     versionCount,
+    review: version ? reviewCounts(version.document.report) : null,
     importJob: !version && job ? { id: job.id, state: job.state, error: job.error } : null,
     fileName: version?.label || file?.fileName || null,
     sizeBytes: file?.sizeBytes ?? null,

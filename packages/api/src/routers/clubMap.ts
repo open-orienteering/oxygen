@@ -41,7 +41,7 @@ const SERIES_INCLUDE = {
     include: {
       uploader: PERSON,
       source: { select: { fileName: true, sizeBytes: true } },
-      document: { select: { header: true } },
+      document: { select: { header: true, report: true } },
     },
   },
   importJobs: {

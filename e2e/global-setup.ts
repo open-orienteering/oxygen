@@ -51,6 +51,9 @@ async function cleanStaleEvents(): Promise<void> {
     // its documents visible to every signed-in user (docs/map-storage.md §4.2).
     await client.query("DELETE FROM club_map_files");
     await client.query("DELETE FROM club_maps");
+    // Instance-wide, keyed by symbol geometry (docs/map-symbols.md §8.5):
+    // a previous run's decision would change every import of e2e/test.ocd.
+    await client.query("DELETE FROM club_symbol_decisions");
     // Reset relevant global-scope rows so a re-run gives the same Eventor /
     // online-input state (these tests sometimes write to global settings).
     await client.query(

@@ -1,10 +1,12 @@
 /** ISSprOM 2019-2 Rev 6 — the canonical library, reference scale 1:4 000. */
 
+import { withNamesAndAliases } from "../authoring.js";
 import type { LibraryEntryInput } from "../schema.js";
 import { LIBRARY_ID } from "./common.js";
 import { course } from "./course.js";
 import { landforms } from "./landforms.js";
 import { manmade } from "./manmade.js";
+import { ALIASES, SV } from "./names.js";
 import { rock } from "./rock.js";
 import { technical } from "./technical.js";
 import { vegetation } from "./vegetation.js";
@@ -16,5 +18,5 @@ export const issprom2019_2 = {
   revision: "Rev 6 (1 February 2024)",
   referenceScale: 4_000,
   palette: "iof2024" as const,
-  entries: [...landforms, ...rock, ...water, ...vegetation, ...manmade, ...technical, ...course] satisfies LibraryEntryInput[],
+  entries: withNamesAndAliases([...landforms, ...rock, ...water, ...vegetation, ...manmade, ...technical, ...course] satisfies LibraryEntryInput[], SV, ALIASES),
 };

@@ -7,6 +7,12 @@ export const CITATION = "ISOM 2017-2 Rev 6 (IOF Map Commission, 2024), §3.8";
 
 export const entry = authorFor(LIBRARY_ID, CITATION);
 
+/** Source of every heading's `name.sv` (docs/map-symbols.md §3); headings are reproduced verbatim under its licence. */
+export const SV_SOURCE = "ISOM 2017-2 Internationella Kartnormen, svensk översättning, revision 6 (Svenska Orienteringsförbundet, 1 mars 2024), CC BY-ND 4.0";
+
+/** Source of the `aliases` (docs/map-symbols.md §3). */
+export const ALIAS_SOURCE = "ISOM 2000 → ISOM 2017 pairs from OpenOrienteering Mapper's ISOM2000-ISOM_2017-2.crt (© Kai Pastor, GPL-3), checked against IOF \"ISOM 2017 – What has changed from ISOM 2000?\" (ČSOS translation)";
+
 /** Palette ids used by ISOM symbols (docs/map-symbols.md §3). */
 export const C = {
   black: "black100",

@@ -6,7 +6,7 @@
  *   2 code+geometry   same spec code, fingerprint ≥ T_auto
  *   3 family+geometry same base number (else hundred group); ≥ T_auto auto, ≥ T_suggest suggested
  *   4 geometry        every entry of the IR type; ≥ T_strict → suggested, never auto
- *   5 description     name tokens (sv → en lexicon) when geometry is inconclusive → suggested
+ *   5 description     name tokens (sv → en lexicon; entry name.en ∪ name.sv) when geometry is inconclusive → suggested
  *   6 none
  *
  * The document factor (03 §6.6) is detected first from the exact-code line
@@ -44,6 +44,8 @@ export interface CanonicalCandidate {
   base: string;
   hundred: string;
   fp: Fingerprint;
+  /** Description-stage tokens: `name.en` ∪ `name.sv`, both through `SV_EN` (docs/map-symbols.md §8.2 row 5). */
+  tokens: Set<string>;
 }
 
 /** `"101.0"` → `"101"`, `"505.1"` → `"505.1"`, anything else unchanged. */
@@ -74,7 +76,9 @@ export function canonicalCandidates(library: SymbolLibrary, edition: PaletteEdit
     const classOf: ClassOfColour = (i) => paletteClass(stack[i].id.replace(/^[^:]+:/, ""), edition);
     list = library.entries.map((entry) => {
       const render = resolveEntry(entry, index);
-      return { entry, code: entry.code, base: baseCode(entry.code), hundred: hundredOf(entry.code), fp: fingerprintOf(render, classOf) };
+      const tokens = descriptionTokens(entry.name.en);
+      if (entry.name.sv) for (const t of descriptionTokens(entry.name.sv)) tokens.add(t);
+      return { entry, code: entry.code, base: baseCode(entry.code), hundred: hundredOf(entry.code), fp: fingerprintOf(render, classOf), tokens };
     });
     canonicalCache.set(key, list);
   }
@@ -183,7 +187,8 @@ export const VARIANT_NAME = /minimi|minimum|\bmin\b|enskild|single|individual|ko
 
 // ---- description tokens -----------------------------------------------------
 
-const STOPWORDS = new Set(["och", "med", "utan", "för", "av", "i", "på", "the", "and", "with", "without", "of", "for", "in", "or", "a", "an", "to", "stor", "liten", "large", "small", "minimum", "min", "yta", "linje", "punkt", "area", "line", "point", "symbol"]);
+// "en" is also juniper in Swedish club names; dropped as the article because stage 5 only suggests (docs/map-symbols.md §8.4).
+const STOPWORDS = new Set(["och", "eller", "med", "utan", "för", "av", "i", "på", "som", "en", "ett", "till", "vid", "ska", "inte", "icke", "ej", "the", "and", "with", "without", "of", "for", "in", "or", "a", "an", "to", "stor", "liten", "large", "small", "minimum", "min", "yta", "linje", "punkt", "area", "line", "point", "symbol"]);
 
 /** Swedish map vocabulary → the library's English words. */
 const SV_EN: Record<string, string> = {
@@ -201,10 +206,18 @@ const SV_EN: Record<string, string> = {
   grotta: "cave", spång: "footbridge", stenbrott: "quarry", gruvhål: "pit", häll: "bare rock", sandområde: "sand", beträdas: "entered", gångbana: "footpath", gångväg: "footpath",
 };
 
+const entryNames = (e: LibraryEntry): string => (e.name.sv ? `${e.name.en} / ${e.name.sv}` : e.name.en);
+
+/** A word after one of these is negated ("utan belagd yta", "no edge line") and is not a shared feature. */
+const NEGATORS = new Set(["utan", "icke", "ej", "inte", "without", "non", "not", "no"]);
+
 export function descriptionTokens(name: string): Set<string> {
   const out = new Set<string>();
+  let negated = false;
   for (const raw of name.toLowerCase().split(/[^\p{L}]+/u)) {
     if (!raw) continue;
+    if (NEGATORS.has(raw)) { negated = true; continue; }
+    if (negated) { negated = false; continue; }
     const t = SV_EN[raw] ?? raw;
     for (const w of t.split(/[\s-]+/)) if (w && !STOPWORDS.has(w) && !/^\d+$/.test(w)) out.add(w);
   }
@@ -323,7 +336,7 @@ function matchGeometric(sym: SourceSymbolLike, code: string, fp: Fingerprint, ct
 
   // 4 geometry only — same hundred group first, then description overlap, then id, as tie-breaks
   const srcTokens = descriptionTokens(sym.name);
-  const overlap = (c: CanonicalCandidate) => [...descriptionTokens(c.entry.name.en)].filter((t) => srcTokens.has(t)).length;
+  const overlap = (c: CanonicalCandidate) => [...c.tokens].filter((t) => srcTokens.has(t)).length;
   const geoScored = scoreAll(fp, sameType, factor).sort((a, b) =>
     b.cmp.score - a.cmp.score
     || Number(b.cand.hundred === hundredOf(code)) - Number(a.cand.hundred === hundredOf(code))
@@ -365,7 +378,7 @@ function matchGeometric(sym: SourceSymbolLike, code: string, fp: Fingerprint, ct
   if (described[0]) {
     const confidence = Math.min(0.5, 0.3 + 0.1 * described[0].n);
     const out: MatchOutcome = {
-      match: { canonicalId: described[0].c.entry.id, method: "description", state: "suggested", confidence, reasons: reasonsFor([`name "${sym.name}" ~ ${described[0].c.entry.name.en}`]), reviewed: false, libraryVersion: version },
+      match: { canonicalId: described[0].c.entry.id, method: "description", state: "suggested", confidence, reasons: reasonsFor([`name "${sym.name}" ~ ${entryNames(described[0].c.entry)}`]), reviewed: false, libraryVersion: version },
     };
     if (scaleAnomaly) out.scaleAnomaly = scaleAnomaly;
     return out;
