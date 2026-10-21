@@ -97,6 +97,17 @@ describe("passStreamToSvg", () => {
     expect(svg).not.toContain('<rect x="1000"');
   });
 
+  it("rotates each glyph outline by its angle about its own origin", () => {
+    const j = renderFixtures["text-with-halo"];
+    const rotated = { ...j, passes: j.passes.map((p) => (p.kind === "text" ? { ...p, angles: p.glyphs.map(() => 90) } : p)) };
+    const svg = passStreamToSvg(passStreamFromJson(rotated), {
+      colour,
+      glyphOutline: () => ({ path: makePath([0, 0, 500, 0, 500, 700, 0, 700], undefined, true), unitsPerEm: 1000 }),
+    });
+    // k = 3: matrix(k·cos, k·sin, −k·sin, k·cos, x, y) at 90°.
+    expect(svg).toContain('transform="matrix(0 3 -3 0 1000 5000)"');
+  });
+
   it("leaves out clipped groups whose clip lies wholly outside explicit bounds (resvg abort guard)", () => {
     const hatch = passStreamFromJson(renderFixtures["hatch-area"]);
     const far = passStreamToSvg(hatch, { colour, bounds: { minX: 100000, minY: 100000, maxX: 120000, maxY: 120000 } });

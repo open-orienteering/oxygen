@@ -99,9 +99,30 @@ describe("shapeText", () => {
     expect(r.positions[3]).toBe(-7500);
   });
 
-  it("rotates about the anchor", () => {
+  it("rotates about the anchor, and every glyph by the same angle", () => {
     const r = shapeText("AB", sym(), sans, { x: 0, y: 0, angleDeg: 90 });
     expect(r.positions[2]).toBeCloseTo(0, 3);
     expect(r.positions[3]).toBeGreaterThan(0);
+    expect(r.angles).toEqual([90, 90]);
+    expect(shapeText("AB", sym(), sans, { x: 0, y: 0 }).angles).toBeUndefined();
+  });
+
+  it("vertical anchor: baseline, top, bottom, middle from the font's ascender and descender", () => {
+    // em 5000 µm, k = 5000 / 2048; Liberation Sans hhea ascender 1854, descender −434.
+    const k = 5000 / 2048;
+    const asc = 1854 * k, desc = 434 * k;
+    expect(sans.ascender).toBe(1854);
+    expect(sans.descender).toBe(-434);
+    const y0 = (v: "baseline" | "top" | "middle" | "bottom", text = "A\nB") => shapeText(text, sym({ verticalAlign: v, lineSpacing: 1.2 }), sans, { x: 0, y: 0 }).positions[1];
+    expect(y0("baseline")).toBe(0);
+    expect(y0("top")).toBeCloseTo(-asc, 3);
+    // Two lines: the last baseline is 6000 below the first.
+    expect(y0("bottom")).toBeCloseTo(6000 + desc, 3);
+    expect(y0("middle")).toBeCloseTo(-(asc - 6000 - desc) / 2, 3);
+    expect(y0("middle", "A")).toBeCloseTo(-(asc - desc) / 2, 3);
+  });
+
+  it("reads the face from head.macStyle", () => {
+    expect([sans.bold, sans.italic, liberation().narrow.bold]).toEqual([false, false, false]);
   });
 });

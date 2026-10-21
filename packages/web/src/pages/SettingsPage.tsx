@@ -54,6 +54,7 @@ function formatBytes(n: number | null): string {
 
 export function SettingsPage() {
   const { t, i18n } = useTranslation("library");
+  const { t: tr } = useTranslation("mapReview");
   const { user, authEnabled } = useCurrentUser();
   const utils = trpc.useUtils();
   const maps = trpc.clubMap.list.useQuery(undefined, {
@@ -401,7 +402,26 @@ export function SettingsPage() {
                         {t("northLinesBelow")}
                       </label>
                     </div>
-                    <div className="mt-3 flex gap-2">
+                    <div className="mt-3 flex flex-wrap items-center gap-2">
+                      {row.version && (
+                        // Review is expected for club maps (06 §5.1, map-symbols.md §8.7).
+                        <Link
+                          to={`/settings/map-review/${row.version.documentHash}?clubMap=${row.id}`}
+                          data-testid="library-map-review"
+                          className="px-3 py-1 text-xs border border-slate-200 rounded-lg hover:bg-slate-50 text-slate-800"
+                        >
+                          {tr("openReview")}
+                        </Link>
+                      )}
+                      {row.version && row.review && row.review.suggested > 0 && (
+                        <span
+                          data-testid="library-map-review-count"
+                          data-count={row.review.suggested}
+                          className="px-2 py-0.5 rounded-full text-xs font-medium bg-amber-100 text-amber-800"
+                        >
+                          {tr("toReview", { count: row.review.suggested })}
+                        </span>
+                      )}
                       {row.version && canManageSource(row.version.uploadedBy) && (
                         <button
                           type="button"

@@ -1,6 +1,7 @@
 /**
  * The golden-image scene list (docs/map-rendering.md §6.2): the six
- * contract fixtures plus the pilot scene, each resolved to a pass stream
+ * contract fixtures, the pilot scene and the library fixtures (04 §8
+ * rows 1–9, colour order, precision), each resolved to a pass stream
  * and a colour lookup the same way on every side — the reference raster
  * that writes the goldens and the browser page the WebGL2 backend draws
  * into. Density and margin are fixed here so canvas and raster agree on
@@ -9,18 +10,21 @@
 
 import type { FontMetrics } from "../truetype.js";
 import type { PassStream } from "../pass-stream.js";
+import { cmykToHex } from "../symbol.js";
 import { passStreamBounds } from "../reference-svg.js";
 import { passStreamFromJson } from "../stream-json.js";
 import { symbolise } from "../symbolise.js";
 import { fixtureColours, renderFixtures, type RenderFixtureName } from "./streams/index.js";
 import { pilotColours, pilotSymbols } from "./pilot-symbols.js";
 import { pilotScene } from "./pilot-scene.js";
+import { type LibrarySceneName, isLibrarySceneName, libraryScene, librarySceneNames } from "./library/index.js";
 
-export type GoldenSceneName = RenderFixtureName | "pilot-scene";
+export type GoldenSceneName = RenderFixtureName | "pilot-scene" | LibrarySceneName;
 
 export const goldenSceneNames: GoldenSceneName[] = [
   ...(Object.keys(renderFixtures) as RenderFixtureName[]),
   "pilot-scene",
+  ...librarySceneNames,
 ];
 
 export const GOLDEN_PX_PER_MM = 10;
@@ -33,6 +37,12 @@ export interface GoldenScene {
 }
 
 export function goldenScene(name: GoldenSceneName, fonts: FontMetrics[]): GoldenScene {
+  if (isLibrarySceneName(name)) {
+    const scene = libraryScene(name);
+    const { stream } = symbolise({ objects: scene.objects, symbols: scene.symbols, fonts });
+    const hex = scene.colours.map((c) => cmykToHex(c.cmyk));
+    return { name, stream, colour: (i) => hex[i] ?? "#ff00ff" };
+  }
   if (name === "pilot-scene") {
     const { stream } = symbolise({ objects: pilotScene, symbols: pilotSymbols, fonts });
     return { name, stream, colour: (i) => pilotColours[i]?.hex ?? "#ff00ff" };

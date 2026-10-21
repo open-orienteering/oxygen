@@ -1,0 +1,10 @@
+{
+"objectIdx": [0,1],
+"symbolIdx": [0,0],
+"passes": [
+{"kind":"fill","colour":2,"path":{"coords":[0,0,12000,0,12000,12000,0,12000,2000,2000,5000,2000,5000,5000,2000,5000,7000,7000,7000,10000,10000,10000,10000,7000],"flags":[0,0,0,0,16,0,0,0,16,0,0,0],"closed":true}},
+{"kind":"fill","colour":2,"path":{"coords":[14000,0,20000,0,17000,3000,20000,6000,14000,6000,17000,3000],"closed":true}}
+],
+"glyphTable": [],
+"fontTable": [{"fontId":0,"family":"liberation-sans","bold":false,"italic":false},{"fontId":1,"family":"liberation-sans-narrow","bold":false,"italic":false}]
+}

@@ -81,6 +81,10 @@ export const symbolLibrarySchema = z.object({
 
 export type SymbolLibrary = z.output<typeof symbolLibrarySchema>;
 
+/** Older specs an entry's `aliases` may name (docs/map-symbols.md §3). The 2007 sprint spec was ISSOM. */
+export const ALIAS_LIBRARIES = ["ISOM2000", "ISSOM2007"] as const;
+const ALIAS_LIBRARY_SET: ReadonlySet<string> = new Set(ALIAS_LIBRARIES);
+
 /** Every palette id referenced by an entry's render tree. */
 export function colourRefs(render: unknown, out = new Set<string>()): Set<string> {
   walk(render, (key, value) => {
@@ -158,6 +162,8 @@ export function validateLibrary(library: SymbolLibrary): LibraryProblem[] {
   const problems: LibraryProblem[] = [];
   const index = paletteIndex(library.palette, library.spec);
   const seen = new Set<string>();
+  const headingSv = new Map<string, string | undefined>();
+  for (const e of library.entries) if (e.variant === null) headingSv.set(e.code, e.name.sv);
   for (const e of library.entries) {
     const expectedId = `${library.id}:${e.code}${e.variant ? `.${e.variant}` : ""}`;
     if (e.id !== expectedId) problems.push({ entryId: e.id, message: `id should be ${expectedId}` });
@@ -171,6 +177,21 @@ export function validateLibrary(library: SymbolLibrary): LibraryProblem[] {
     if (!is7xx && e.purpleRole) problems.push({ entryId: e.id, message: "purpleRole is only for 7xx" });
     if (e.render.type === "point" && !e.orientation) problems.push({ entryId: e.id, message: "point symbols need an orientation" });
     if (e.render.type !== "point" && e.orientation) problems.push({ entryId: e.id, message: "orientation is only for point symbols" });
+    const aliasKeys = new Set<string>();
+    for (const a of e.aliases) {
+      if (!ALIAS_LIBRARY_SET.has(a.library)) problems.push({ entryId: e.id, message: `alias library "${a.library}" is not one of ${ALIAS_LIBRARIES.join(", ")}` });
+      const key = `${a.library} ${a.code}`;
+      if (aliasKeys.has(key)) problems.push({ entryId: e.id, message: `duplicate alias ${key}` });
+      aliasKeys.add(key);
+    }
+    if (e.variant !== null && e.aliases.length > 0) problems.push({ entryId: e.id, message: "aliases are for heading entries only" });
+    if (e.variant !== null && e.name.sv !== undefined) {
+      const sv = headingSv.get(e.code);
+      if (sv === undefined) problems.push({ entryId: e.id, message: "variant has a Swedish name but its heading has none" });
+      else if (!e.name.sv.startsWith(`${sv}, `) || e.name.sv.length <= sv.length + 2) {
+        problems.push({ entryId: e.id, message: `variant name should start with "${sv}, "` });
+      }
+    }
     try {
       resolveEntry(e, index);
     } catch (err) {

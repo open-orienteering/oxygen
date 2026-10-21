@@ -7,6 +7,9 @@ export const CITATION = "ISSprOM 2019-2 Rev 6 (IOF Map Commission, 2024), §4.8"
 
 export const entry = authorFor(LIBRARY_ID, CITATION);
 
+/** Source of every heading's `name.sv` (docs/map-symbols.md §3); headings are reproduced verbatim under its licence. */
+export const SV_SOURCE = "ISSprOM 2019-2 Internationella Sprintnormen, svensk översättning, revision 5 (Svenska Orienteringsförbundet, 1 oktober 2022), CC BY-ND 4.0";
+
 /** Palette ids used by ISSprOM symbols (docs/map-symbols.md §3). */
 export const C = {
   black: "black100",

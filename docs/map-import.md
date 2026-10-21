@@ -90,7 +90,7 @@ import { importMapToDocument, importOcadToDocument, importOmapToDocument } from 
 const r = await importMapToDocument(buffer, "map.omap", kind /* "ocad" | "omap" */, { renderFor, onStage, match });
 // importOcadToDocument / importOmapToDocument are the fixed-kind wrappers.
 // r.kind, r.bytes, r.documentHash, r.fileHash, r.counts, r.warnings,
-// r.matching, r.colourStack, r.analysis (stage 5, §3.8), r.libraryVersion ("ISOM2017-2@2026.10.1"),
+// r.matching, r.colourStack, r.analysis (stage 5, §3.8), r.libraryVersion ("ISOM2017-2@2026.10.2"),
 // r.timings { read, normalise, match, encode } (ms)
 // onStage?: (stage: "parse" | "normalise" | "match" | "encode") => void — called as
 // each stage begins; the import job (docs/map-storage.md §6) writes it to the row.
@@ -272,7 +272,7 @@ the S2 visual comparison (03 §8) is where they get confirmed.
 |---|---|---|
 | `lineColor`, `lineWidth` | `main.colour`, `main.widthUm` | Width 0 ⇒ no main stroke, but `main` is still emitted (width 0) when a framing line or a dash pattern needs it. |
 | `lineStyle` | `main.cap`, `main.join` | `& ~2`: 0 bevel / flat, 1 round / round, 4 miter / flat; bit 2 ⇒ `cap: "pointed"`. Same coding for element `flags`. |
-| `distFromStart`, `distToEnd` | `shortenStartUm`, `shortenEndUm` | |
+| `distFromStart`, `distToEnd` | `shortenStartUm`, `shortenEndUm` | With `cap: "pointed"` these are the taper lengths and belong in `main.taper { startUm, endUm }` instead (user decision 2026-10-20, `docs/map-rendering.md` §3.2); the importer still shortens until A13 wires it. |
 | `mainLength`, `mainGap`, `endLength` | `dash { layout: "ocad", dashUm, gapUm, endDashUm? }` | Only when `mainLength > 0` and any of `mainGap`, `secGap`, `endGap` > 0. `endDashUm` only when it differs from `mainLength`. |
 | `secGap` | `dash.secondaryGapUm` | Secondary gap splitting each interior dash (`dashesInGroup` default 2). |
 | `endGap` | `dash.endGapUm` | *Provisional.* The secondary gap applied to the **end** dashes, not a line-end shortening: 507 footpath has `mainLength 225, endLength 225, mainGap 80, secGap 25, endGap 25`. |
@@ -354,10 +354,12 @@ closed. `lineWidth` 0 ⇒ `SYMBOL_EMPTY`, an unknown `lineColor` ⇒
 (`radius` > 0) warns `SYMBOL_FEATURE_DROPPED` (`rectangle corner radius
 r mm`) and the corners are drawn sharp; a grid (`gridFlags & 1`, with
 cell size, numbering and unnumbered-cell text) warns
-`SYMBOL_FEATURE_DROPPED` (`rectangle grid`) and is not drawn. Rounding the
+`SYMBOL_FEATURE_DROPPED` (`rectangle grid`) and is not drawn — a
+by-design drop (user decision 2026-10-20, B1). Rounding the
 corners at import, as Mapper does, would rewrite source coordinates;
-corner radius and grid are IR fields for A13 (user decision 2026-10-20,
-A12). Struct (after the base symbol): `lineColor`
+the corner radius is the IR field `cornerRadiusUm`, rounded by the
+symbolisation stage (`docs/map-rendering.md` §4.4), and A13 wires the
+importer to it (user decision 2026-10-20, A12). Struct (after the base symbol): `lineColor`
 +0, `lineWidth` +2, `radius` +4, `gridFlags` +6, `cellWidth` +8,
 `cellHeight` +10, two reserved words, `unnumCells` +16, `unnumText` +18
 (string[3]).
@@ -693,7 +695,7 @@ non-contiguous priorities). The rest are shared with §3.6–3.7.
 
 ## 5. Header provenance
 
-`format.importer` is `"ocad-7"` for OCAD sources (`OCAD_IMPORTER_VERSION`;
+`format.importer` is `"ocad-8"` for OCAD sources (`OCAD_IMPORTER_VERSION`;
 `ocad-1` had `render: null` for every source symbol, `ocad-2` carried the
 upload name in the header, `ocad-3` had no matcher, `ocad-4` stored
 ScalePar `d` as `declinationDeg`, ignored `e` and had no
@@ -702,8 +704,10 @@ line-text symbols as `READER_WARNING` and warned `SYMBOL_FEATURE_DROPPED`
 for double-line mode 65535 although §3.3 calls it off, `ocad-6` read
 neither text framing nor rectangle / line-text symbols — no halo from
 OCAD line framing, rectangle objects as `MISSING_SYMBOL` stubs — and kept
-no reader warning texts) and `"omap-2"` for Mapper sources
-(`OMAP_IMPORTER_VERSION`; `omap-1` stored `paperOrigin` unrounded).
+no reader warning texts, `ocad-7` matched descriptions on the entries'
+English names only — `docs/map-symbols.md` §8.2 row 5, B7) and `"omap-3"`
+for Mapper sources (`OMAP_IMPORTER_VERSION`; `omap-1` stored `paperOrigin`
+unrounded, `omap-2` is `ocad-7`'s matcher).
 Documents of either earlier version have no `georeference` / `north` in
 their report; the dedup only reuses current-version documents, so the
 next import of their source produces both. Bump the relevant one whenever
@@ -749,8 +753,8 @@ document hash is identical on two machines.
 | Unit (shared) | `packages/shared/src/map-document/__tests__/codec.test.ts`, `projection-bridge.test.ts` | encode/decode round trip, Hilbert order, validation errors, truncation, JSON projection, render bridge |
 | Unit (shared) | `packages/shared/src/import/__tests__/{colour-class,fingerprint,matcher,colour-align,match-document}.test.ts` | stages 6–7: CMYK / name classification, fingerprints and tolerances, every matcher stage and the traps (reused numbers, template variants, old numbering), factor detection (lines / codes / scale / override), alignment steps and conflicts, whole-document run with codec round trip and canonical drawing through the bridge |
 | Unit (api) | `packages/api/src/__tests__/import-ocad.test.ts` | reader → document on `e2e/test.ocd`, determinism, bboxes, all fixture symbols converted (the framed 603 text with its white halo, the 850.1 rectangle as an outline), symbolise without proxies, fixture matches (4 auto incl. 603.b, old-numbered ring and the rectangle suggested, factor by `codes`), `readerWarnings` in the report only when non-empty, stack with inserted lower purple, hook renders against the source table; stage 5: grid 13002 → EPSG:3006 with no `declinationDeg`, the same 12-line meridian cluster as the legacy probe, report `georeference` / `north` with WMM fields at `asOf` agreeing with `detectMapNorth`, raster-path and pin columns identical (correction 0 and 11) |
-| Unit (api) | `packages/api/src/__tests__/import-omap.test.ts` | reader → document on `e2e/test.xmap`: determinism across `importOmapToDocument` / `importMapToDocument`, provenance (`omap-2`, version 9, UTM 33N), bboxes, all 21 fixture symbols rendered, symbolise with the dangling symbol as the only drop, factor ×1, import report, kind sniff with BOM, the two kinds kept apart |
-| Unit + integration (api) | `map-import-jobs.test.ts` (both) | worker runs a Mapper file by kind with the same hashes as inline; a Mapper source goes through the job to a `done` row with `importer_version omap-2` and is deduplicated on the second job; garbage of either kind fails cleanly; the pin writes the quick-access columns equal to the raster path's, recomputes them with a row's `rotation_correction` idempotently, and leaves them alone for a document without a CRS |
+| Unit (api) | `packages/api/src/__tests__/import-omap.test.ts` | reader → document on `e2e/test.xmap`: determinism across `importOmapToDocument` / `importMapToDocument`, provenance (`omap-3`, version 9, UTM 33N), bboxes, all 21 fixture symbols rendered, symbolise with the dangling symbol as the only drop, factor ×1, import report, kind sniff with BOM, the two kinds kept apart |
+| Unit + integration (api) | `map-import-jobs.test.ts` (both) | worker runs a Mapper file by kind with the same hashes as inline; a Mapper source goes through the job to a `done` row with `importer_version omap-3` and is deduplicated on the second job; garbage of either kind fails cleanly; the pin writes the quick-access columns equal to the raster path's, recomputes them with a row's `rotation_correction` idempotently, and leaves them alone for a document without a CRS |
 | Unit (api, unchanged) | `map-north.test.ts`, `map-projection-correction.test.ts`, `map-coordinate-transfer.test.ts`, `course-import-align.test.ts` | the legacy modules as adapters over `mapGeo` keep their behaviour |
 | E2E | `e2e/map-gl-doc.spec.ts` | document path = reader path in the browser, native `.oxvm` round trip, `mode=source` draws the fixture from its own definitions with no proxies; `e2e/test.xmap` loads client-side with no OCAD reader, draws, and surfaces the OMAP warning codes |
 | Unit (shared) | `packages/shared/src/import/__tests__/decisions.test.ts` | club decisions and review rows (`docs/map-symbols.md` §8.5), stage 6 with decisions: other library ignored, older release applied |
@@ -793,7 +797,7 @@ maps nor the JSON files are committed (AGENTS.md §12); keep them under
 
 **Against production.** The same comparison works against what Cloud
 Run produced from the same files, once the instance runs the same
-importer and library versions (`ocad-7` / `omap-2`,
+importer and library versions (`ocad-8` / `omap-3`,
 `*@<SYMBOL_LIBRARY_VERSION>`) and only for documents imported without
 club decisions (stage 6 applies them, so a reviewed map has a different,
 equally correct hash). Either list the stored documents:
@@ -820,12 +824,14 @@ unparsed symbol type.
 
 ## 8. Pending in this chapter
 
-S0's remaining unsupported primitives (text shadow and rectangle framing,
-vertical text alignment and text boxes, line text laid along its path,
-rectangle corner radius and grid, a framing line narrower than its main
-line, Mapper's extra border pair) and a warning code that separates a
-stale area-border reference from an unsupported feature — rows A13 and
-A14 in `research/vector-map-pipeline/SLICES.md`; the S0 hash comparison on a
+S0's remaining unsupported primitives: importer wiring of the IR fields
+B1 added (text shadow, vertical text alignment, pointed-line taper,
+rectangle corner radius, a framing line narrower than its main line,
+Mapper's extra border pair — row A13), text rectangle framing, text boxes
+and line text laid along its path (row B8; user decision 2026-10-20 —
+the rectangle *grid* is a by-design drop, not pending), and a warning
+code that separates a stale area-border reference from an unsupported
+feature (row A14) — all in `research/vector-map-pipeline/SLICES.md`; the S0 hash comparison on a
 second machine (re-run on `ocad-7`). The line-text struct (§3.3) is
 *provisional* until a real OCAD file with line text is seen. S2 confirmation of the *provisional* §3.3 rows against OCAD output,
 event / club map *apply* for Mapper sources (needs slice C, §2.2), stage 5 fonts used (fallback decisions)

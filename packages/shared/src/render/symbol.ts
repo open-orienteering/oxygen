@@ -90,11 +90,23 @@ export const strokeSpecSchema = z.object({
   shortenStartUm: um.optional(),
   shortenEndUm: um.optional(),
   /**
+   * Pointed line ends (`cap: "pointed"`): the width falls linearly to 0
+   * over `startUm` from the line's start and `endUm` towards its end
+   * (OCAD `distFromStart` / `distToEnd` on a pointed line, Mapper
+   * `pointed_cap_length`). Ignored for other caps.
+   */
+  taper: z.object({ startUm: um.positive().optional(), endUm: um.positive().optional() }).optional(),
+  /**
    * Stroke drawn under the main line, `widthUm` wider on each side. Follows
    * the main line's dashes unless `continuous` (OCAD's framing line, which
    * is solid under a dashed main line — 509 railway).
    */
-  halo: z.object({ colour: colourRef, widthUm: um.positive(), continuous: z.boolean().optional() }).optional(),
+  halo: z
+    .object({ colour: colourRef, widthUm: um, continuous: z.boolean().optional() })
+    .refine((h) => h.widthUm > 0 || (h.continuous === true && h.widthUm !== 0), {
+      message: "halo.widthUm must be positive, or negative with continuous (a framing line narrower than the main line)",
+    })
+    .optional(),
 });
 
 export const borderSpecSchema = z.object({
@@ -107,6 +119,11 @@ export const borderSpecSchema = z.object({
 
 export const lineSymbolBodySchema = z.object({
   main: strokeSpecSchema.optional(),
+  /**
+   * Rounds the path's polyline corners with this radius before anything
+   * is laid out (OCAD rectangle symbols; map-rendering §4.4).
+   */
+  cornerRadiusUm: um.positive().optional(),
   borders: z
     .object({
       left: borderSpecSchema.optional(),
@@ -115,6 +132,12 @@ export const lineSymbolBodySchema = z.object({
       backgroundColour: colourRef.optional(),
       /** Width of that band; default `left.shiftUm + right.shiftUm` (edge to edge). OCAD's double-line fill is `dblWidth`. */
       backgroundWidthUm: um.positive().optional(),
+      /**
+       * Further border pairs drawn like `left` / `right`, after them
+       * (Mapper combined symbols with a second pair of borders, 502.2).
+       * They take no part in the background band.
+       */
+      extraPairs: z.array(z.object({ left: borderSpecSchema.optional(), right: borderSpecSchema.optional() })).optional(),
     })
     .optional(),
   glyphs: z
@@ -188,6 +211,15 @@ export const textSymbolSchema = z.object({
   italic: z.boolean().default(false),
   colour: colourRef,
   align: z.enum(["left", "centre", "right", "justify"]).default("left"),
+  /**
+   * Where the object's anchor sits vertically: on the first line's
+   * baseline (default), at the first line's ascent (`top`), at the last
+   * line's descent (`bottom`), or midway between the two (`middle`).
+   * No default on purpose: a parsed symbol must stay byte-identical when
+   * the field is absent (document hashes and decision fingerprints are
+   * over the parsed IR, map-rendering §4.9).
+   */
+  verticalAlign: z.enum(["baseline", "top", "middle", "bottom"]).optional(),
   /** Baseline-to-baseline distance as a multiple of em. */
   lineSpacing: z.number().positive().default(1.2),
   paragraphSpacingUm: um.default(0),
@@ -195,6 +227,12 @@ export const textSymbolSchema = z.object({
   charSpacing: z.number().default(0),
   wordSpacing: z.number().optional(),
   halo: z.object({ colour: colourRef, widthUm: um.positive() }).optional(),
+  /**
+   * A copy of the text in `colour`, offset by (`offsetXUm`, `offsetYUm`)
+   * — paper µm, y-up, rotated with the text — and drawn as its own pass
+   * (OCAD shadow framing, Mapper framing mode "shadow").
+   */
+  shadow: z.object({ colour: colourRef, offsetXUm: um, offsetYUm: um }).optional(),
 });
 
 export const renderSymbolSchema = z.discriminatedUnion("type", [

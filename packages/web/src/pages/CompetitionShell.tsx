@@ -61,6 +61,7 @@ const CardReadout = lazy(() => import("./CardReadout").then(m => ({ default: m.C
 const ControlsPage = lazy(() => import("./ControlsPage").then(m => ({ default: m.ControlsPage })));
 const CoursesPage = lazy(() => import("./CoursesPage").then(m => ({ default: m.CoursesPage })));
 const MapsPage = lazy(() => import("./MapsPage").then(m => ({ default: m.MapsPage })));
+const EventMapReviewPage = lazy(() => import("./MapReviewPage").then(m => ({ default: m.EventMapReviewPage })));
 const MapTemplatesPage = lazy(() => import("./MapTemplatesPage").then(m => ({ default: m.MapTemplatesPage })));
 const CourseEditorPage = lazy(() => import("./CourseEditorPage").then(m => ({ default: m.CourseEditorPage })));
 const ClassesPage = lazy(() => import("./ClassesPage").then(m => ({ default: m.ClassesPage })));
@@ -619,6 +620,7 @@ function CompetitionShellInner() {
             <Route path="maps" element={<Guarded cap="courses.view"><MapsPage /></Guarded>} />
             <Route path="map-templates" element={<Guarded cap="courses.view"><MapTemplatesPage /></Guarded>} />
             <Route path="course-editor" element={<Guarded cap="courses.view"><CourseEditorPage /></Guarded>} />
+            <Route path="map-review/:documentHash" element={<Guarded cap="courses.view"><EventMapReviewPage /></Guarded>} />
             <Route path="controls" element={<Guarded cap="courses.view"><ControlsPage /></Guarded>} />
             <Route path="clubs" element={<Guarded cap="event.view"><ClubsPage /></Guarded>} />
             <Route path="cards" element={<Guarded cap="race.operate"><CardsPage /></Guarded>} />

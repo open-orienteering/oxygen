@@ -21,9 +21,9 @@ symbol-library/
 ├── authoring.ts          typed helpers used by the entry files
 ├── index.ts              registry: list/get/entriesForCode/materialiseLibrary
 ├── ISOM2017-2/           common.ts + landforms, rock, water, vegetation,
-│                         manmade, technical, course, index
+│                         manmade, technical, course, names, index
 ├── ISSprOM2019-2/        same layout
-└── __tests__/            palette.test.ts, library.test.ts
+└── __tests__/            palette.test.ts, library.test.ts, names.test.ts
 ```
 
 ## 1. Colour palette
@@ -86,14 +86,14 @@ An entry (`libraryEntrySchema`) — the 03 §6.4 shape with `render` in
   id: "ISOM2017-2:302.b",          // <library>:<code>[.<variant>]
   code: "302",                     // /^\d{3}(\.\d{1,2})?$/ — the spec heading
   variant: "b" | null,             // null = the heading's own drawing
-  name: { en: string; sv?: string },
+  name: { en: string; sv?: string },   // sv: SOFT heading verbatim (§3)
   description?: string,            // when the variant applies
   specType: "P" | "L" | "A" | "T",
   purpleRole: "lower" | "upper" | null,   // required for 7xx, null otherwise
   orientation: "north" | "object" | null, // point symbols only
   minimum?: { lengthUm?, widthUm?, areaUm2? },   // graphical minima from the spec
   footprintM?: number,             // informational, at the reference scale
-  aliases: { library: string; code: string }[],  // numbering in older specs
+  aliases: { library: string; code: string }[],  // older-spec codes, headings only; library ∈ ALIAS_LIBRARIES (§3, checked in §5)
   render: LibraryRender,           // RenderSymbol minus id/code/name, colours as palette ids
   notes?: string,                  // deviations and tool-dependent choices
   source: string                   // citation, e.g. "ISOM 2017-2 Rev 6 (…), §3.8"
@@ -157,13 +157,53 @@ per-symbol decisions.
   lower-role entry never draws in `purple-upper` and vice versa (tested).
   Minima that drive the course editor (707 ≥ 4.5 mm, 709 ≥ 3 mm wide and
   9 mm², 714 ≥ 0.5 mm wide and 0.25 mm²) are on the entries.
-- **Names** are the spec's English headings; Swedish names are deferred
-  (the schema has `name.sv`, the first edition leaves it out rather than
-  shipping a partial translation).
-- **Aliases** (older numbering, ISOM 2000 / ISSprOM 2007 codes) are in
-  the schema but not yet populated; the matcher (§8) finds renumbered
-  symbols through the family and description stages instead, and the
-  first edition ships aliases empty rather than partially.
+- **Names** are the spec's English headings. `name.sv` is the heading of
+  the Swedish Orienteering Federation's (SOFT) translation, **verbatim**
+  (user decision 2026-10-20): *ISOM 2017-2 Internationella Kartnormen,
+  svensk översättning, revision 6* (1 March 2024) and *ISSprOM 2019-2
+  Internationella Sprintnormen, svensk översättning, revision 5* (1 October
+  2022; no Swedish Rev 6 exists). Both are © Svenska Orienteringsförbundet,
+  CC BY-ND 4.0; the licence allows verbatim reproduction in part with
+  attribution, so headings are never reworded, and the attribution is the
+  `SV_SOURCE` constant in each library's `common.ts` (exported as
+  `symbolLibraryNameSources`, printed on the contact sheet) plus this
+  paragraph. An ISSprOM heading takes the rev 5 Swedish name only where
+  rev 5 has the same symbol under the same code — the one exception is
+  `105.1`, rev 5's `105 Liten jordvall`, the same symbol before Rev 6
+  renumbered it; a heading the translation lacks has no `sv` and is listed
+  in §3.2 — absence is the mark, nothing is invented. The names live in a
+  per-library table (`<library>/names.ts`, keyed by the entry id after the
+  library prefix) that `withNamesAndAliases` (`authoring.ts`) attaches to
+  the entries, so names and drawings are edited independently; the helper
+  throws on a key no entry owns.
+  A **variant** entry's `sv` is the heading's Swedish name followed by
+  `", "` and a qualifier translated by Oxygen from the variant's English
+  name (`302.b` "Grund vattenyta, streckad kontur"): everything after the
+  heading's own text is Oxygen's wording, never SOFT's.
+- **Aliases** are the symbol's code in an older spec, `{ library:
+  "ISOM2000", code }`, on heading entries only (old specs numbered
+  headings). The pairs are transcribed as facts from OpenOrienteering
+  Mapper's `ISOM2000-ISOM_2017-2.crt` (© Kai Pastor, GPL-3; user decision
+  2026-10-20), read through Mapper's own ISOM 2017-2 code → name table
+  (its `101.1`, `208.1`, … are Mapper sub-symbols, not spec codes), and
+  checked against the IOF's *ISOM 2017 – What has changed from ISOM 2000?*
+  (in ČSOS's Czech translation, which names the old and new numbers). A
+  pair is kept when the 2017-2 heading is the old symbol's **plain
+  successor**: rules whose old side is a Mapper sub-symbol, whose new side
+  is a Mapper sub-symbol other than the heading's own drawing (slope line,
+  contour value, cliff top line, …), and every old symbol the IOF document
+  says was removed, absorbed into another heading or replaced by a
+  different one (ISOM 2000 104, 105, 202, 302, 304, 314, 411, 501, 502,
+  510–514, 527, 531, 532, 710) carry no alias. ISOM 2017's `105` and `513`
+  are `105.1` and `513.1` in 2017-2. An old code aliases at most one
+  heading; a heading may carry several (`203.1` ← 204 rocky pit and 205
+  cave, which the IOF document merged). The table is `ISOM2000` in
+  `ISOM2017-2/names.ts`, attached like the names. `ISSOM2007` (the 2007 sprint spec, which was ISSOM, not ISSprOM)
+  is an accepted alias library but has no source table yet, so the
+  `ISSprOM2019-2` entries carry none. Aliases are data for the review UI
+  and future renumbering (ISOM 2030); the matcher does not read them
+  (§8.2) because no map in the corpus uses ISOM 2000 numbering to tune or
+  check that against.
 
 ### 3.1 Counts against the 03 estimate
 
@@ -172,11 +212,37 @@ per-symbol decisions.
 | `ISOM2017-2` | 113 | 152 | 180–200 |
 | `ISSprOM2019-2` | 105 | 141 | 170–190 |
 
+Names and aliases (B7):
+
+| Library | Entries with `name.sv` | Headings without | Aliases |
+|---|---|---|---|
+| `ISOM2017-2` | 152 / 152 | — | 97 `ISOM2000` codes on 96 headings |
+| `ISSprOM2019-2` | 138 / 141 | `105.2`, `533`, `715` | none (no ISSOM 2007 table) |
+
 The estimate assumed more drawings per heading than the Rev 6 documents
 actually show once the spec's own prose is followed (many "variants" are
 object-level choices — dash points, corner flags, object angle — that the
 IR handles without a separate entry). Coverage of every heading is
 asserted, not estimated.
+
+### 3.2 Unsourced names and omitted aliases
+
+Swedish names absent because SOFT's ISSprOM translation (revision 5)
+predates the Rev 6 symbol: `ISSprOM2019-2:105.2` *Retaining earth wall
+seen only from one side*, `533` *Area with obstacles*, `715` *Continuing
+point after map exchange*. They get `sv` when SOFT publishes a Rev 6
+translation; borrowing the ISOM heading for 715 was considered and not
+done, because the rule is one source per library.
+
+ISOM 2017-2 headings without an ISOM 2000 alias (17): the symbols with
+no ISOM 2000 predecessor in Mapper's table (`105.2`, `114`, `203.2`,
+`206`, `209`, `211`, `212`, `215`, `513.2`, `522`, `532`, `702`, `715`);
+`302`, which has no rule (Mapper maps ISOM 2000 302 *pond* to 301, and
+the IOF document says the pond was absorbed into 302 rather than
+continued, so neither heading takes it); `313`, whose Mapper rule (ISOM
+2000 314) the IOF document contradicts — 314 became the 311 square; and
+`113` / `603`, whose rules map only Mapper sub-symbols (117.1 / 117.2
+single dots, 603.0 / 603.1 dot and text).
 
 ## 4. Resolving an entry
 
@@ -226,6 +292,10 @@ cached.
 | same id twice | `duplicate id` |
 | palette id not ticked for the library's spec | `palette id "x" is not in <palette> for <spec>` |
 | 7xx without `purpleRole` / non-7xx with one | `course symbols need a purpleRole` / `purpleRole is only for 7xx` |
+| alias library outside `ALIAS_LIBRARIES` (`ISOM2000`, `ISSOM2007`) | `alias library "x" is not one of ISOM2000, ISSOM2007` |
+| the same alias twice on one entry | `duplicate alias ISOM2000 303` |
+| an alias on a variant entry | `aliases are for heading entries only` |
+| a variant's `sv` not `<heading sv>, <qualifier>` / heading without `sv` | `variant name should start with "<heading sv>, "` / `variant has a Swedish name but its heading has none` |
 | point without `orientation` / non-point with one | `point symbols need an orientation` / `orientation is only for point symbols` |
 | `render` does not resolve to a valid `RenderSymbol` | the resolver's / Zod's message |
 
@@ -261,8 +331,34 @@ plus the purple-role and materialisation checks:
     edition yields identical symbols with only CMYK changed; resolved
     symbols carry id/code/name.
 
-The golden contact sheet (03 §6.4 (d), "optional" for this step) and the
-OOM dimension spot check (e) are not implemented; see §10.
+- **names.test.ts** — every heading has `name.sv` except the §3.2 list;
+  hand-typed spot tables of SOFT headings (23) and of ISOM 2000 pairs the
+  IOF change document states (18), typed from the sources, not from
+  `names.ts`; every variant name is `<heading sv>, <qualifier>`; aliases
+  only `ISOM2000`, only on headings, no old code on two headings, none for
+  the IOF document's removed / absorbed symbols; each new `validateLibrary`
+  message on a broken copy; `withNamesAndAliases` rejects an unowned key
+  and an alias on a variant.
+- **(d) contact sheet** — `e2e/__golden__/library/<libraryId>/<entry>.png`,
+  one per entry (`302.b.png` for `ISOM2017-2:302.b`), is the entry's
+  swatch exactly as the library preview route serves it
+  (`docs/map-storage.md` §4.5; the swatch scene of
+  `docs/map-rendering.md` §5.1.1 at 10 px/mm, points ×3, against the
+  library's own palette stack, no supersampling), and
+  `e2e/__golden__/library/<libraryId>.md` is a generated index (swatch,
+  entry, type, English, Swedish, aliases, plus the name sources). Both are
+  written only by `pnpm --filter @oxygen/api golden:render` (which also
+  removes PNGs no entry owns) and reviewed as image diffs in the PR.
+  `packages/api/src/render/__tests__/library-golden.test.ts` fails on a
+  missing or extra PNG, on any committed PNG whose pixels differ from a
+  fresh render (channel tolerance 1, the `golden-files.test.ts` rule —
+  pixels, not bytes, so a libvips upgrade does not churn the files), and
+  on a stale index; a determinism check renders one entry of each IR type
+  twice and requires identical bytes. A change to an entry *or* to the
+  symbolisation stage therefore fails here until the sheet is regenerated
+  — whichever branch merges second regenerates it.
+
+The OOM dimension spot check (e) is not implemented; see §10.
 
 ## 7. Deviations from 03 §6.4, recorded
 
@@ -270,7 +366,9 @@ OOM dimension spot check (e) are not implemented; see §10.
 |---|---|---|
 | Entries as authored JSON files | TypeScript literals via `authoring.ts` helpers | Compile-time colour-kind and field checks; the IR nests too deeply for readable JSON. The Zod schema still validates the result, so a JSON loader can be added without touching entries. |
 | `fingerprint` overrides per entry | Not needed | Fingerprints are derived from the resolved IR (§8.1) and the matcher never needed a hand override on the corpus; add the field if one does. |
-| `name.sv` alongside `name.en` | Optional, omitted | Ship a complete translation or none. |
+| `name.sv` alongside `name.en` | SOFT headings verbatim, variants as heading + Oxygen qualifier, 3 ISSprOM headings without (§3, §3.2) | The licence (CC BY-ND 4.0) allows verbatim headings only; no Swedish ISSprOM Rev 6 exists. Supersedes the first edition's "complete translation or none". |
+| "a golden render per entry at 10× into a contact sheet" | One PNG per entry plus a generated Markdown index, 10 px/mm, the served swatch (§6 (d)) | Per-file images show in a PR exactly which entries changed (293 files, 0.5 MB); equality with the review UI's swatch matters more than the 4× oracle the GL goldens need, and no backend is compared against these. |
+| `aliases` as given | `ISOM2000` only, plain successors only (§3) | Mapper's CRT is the only table; the IOF change document rules out the merges. No ISSOM 2007 table exists on disk. |
 | Appendix B palette as a "versioned table" | Two editions, ids stable, document picks edition | Same intent; the id stability rule is what keeps entries edition-free. |
 | 180–200 / 170–190 entries | 152 / 141 | Counted against Rev 6; §3.1. |
 | `defaultMapAppearance` in `course-maps/schema.ts` retired in favour of the library | Not yet | The course layer (slice C) is the consumer that switches; the constants stay until then. |
@@ -333,7 +431,7 @@ summary so tuning is visible): auto 0.85, suggest 0.6, strict 0.95.
 | 3 | `family+geometry` | same base number (`505.3` → every `505*`), else the hundred group | `auto` ≥ 0.85, `suggested` ≥ 0.6 |
 | — | `variant` | family exists, source IR type differs from every family entry, name carries a template-variant hint (`VARIANT_NAME`: minimi, enskild, kontur, outline, single dot, …) | `unmatched`, drawn from source, counted separately — a minimum-size building point or a cliff outline line is not a mistake and not a review item |
 | 4 | `geometry` | every entry of the IR type | `suggested` only, at ≥ 0.95 (never auto: a 0.14 mm brown line is a contour or a form line only by its code) |
-| 5 | `description` | same type, not ruled out by a hard fail, ≥ 2 shared name tokens (Swedish → English lexicon `SV_EN`), or 1 token when the code matches or the geometry is partly compatible | `suggested` at 0.3 + 0.1 × tokens, capped 0.5 |
+| 5 | `description` | same type, not ruled out by a hard fail, ≥ 2 shared name tokens, or 1 token when the code matches or the geometry is partly compatible. Source tokens go through the Swedish → English lexicon `SV_EN`; an entry's tokens are the union of its `name.en` and `name.sv` tokens (the latter through the same lexicon), so a Swedish source word the lexicon lacks still meets the SOFT heading | `suggested` at 0.3 + 0.1 × tokens, capped 0.5 |
 | 6 | `none` | — | `unmatched`, warns `SYMBOL_UNMATCHED` |
 
 Every match carries `reasons[]` (the feature notes of the deciding
@@ -387,6 +485,29 @@ numbered 702 is `suggested` 703 by description. The remaining non-auto
 share is dominated by OCAD template conventions the library has no entry
 for (minimum-size points, outline lines, single pattern dots); adding
 those as library variants is the lever if the auto rate needs to rise.
+
+**Swedish entry names in stage 5 (B7, `ocad-8` / `omap-3`, library
+`2026.10.2`).** Re-measured on all five corpus maps against the same code
+with `name.sv` left out (`b7-description-sv.txt` in the same
+`.local/research/oxygen-measurements/` directory):
+`auto` objects and symbols are unchanged on every map, as they must be —
+stage 5 only ever suggests. Description suggestions rise from 22 / 22 /
+19 / 19 / 20 symbols to 25 / 25 / 28 / 28 / 27 (Club-full, Club-2026,
+Crop-A, Crop-B, Sprint), and 3–9 symbols per map move from `none` to a
+suggestion; suggested objects +0.0 to +0.6 percentage points. Every new
+suggestion was reviewed: all name the right heading or a better variant
+(`203.7 Passerbar brant` → 202, `502.1 Bred väg >7m` → 502, `711.1
+Förbjuden väg` → 711 instead of 503, `709.1 / 709.3` → `709.c` / `709.b`,
+`104.5 Mycket hög skärning` → `104.b`) except two weak one-word
+suggestions kept as review items: `503.12 Gc-väg i radhusområden` → 711
+*Förbjuden väg* (the shared word is *väg*) and Sprint `511.1 Större
+kraftledning (fyrkantiga stolpar)` → 511 instead of `511.b` (a name tie
+broken by id; 0 objects). Two traps the Swedish headings exposed are
+handled by the tokeniser: Swedish function words (`eller`, `som`, `en`,
+`till`, …) are stopwords — `en` is also *juniper* in club symbol names,
+accepted because stage 5 only suggests and the corpus has no such case — and the word after a negator (`utan`, `icke`,
+`ej`, `inte`, `without`, `non`, `not`, `no`) is dropped, so `Stig eller
+spår utan belagd yta` does not share *paved* with `Belagd gångbana`.
 
 ### 8.5 Club decisions (06 §5.3)
 
@@ -599,6 +720,124 @@ precedence and mismatch, later-wins, unchanged, the header, `# keep`,
 `resolveCrt(parseCrt(formatCrt(…)))`); the API side in
 `docs/map-storage.md` §10.
 
+### 8.7 Review UI (06 §5.1)
+
+The screen a club or a course setter reviews a stored document on, built
+on the review round of `docs/map-import.md` §2.2 (`review`, `decide`,
+`status`, `finalise`, `exportCrt` / `importCrt`) and the A5 swatch routes
+(`docs/map-storage.md` §4.5). Code: `packages/web/src/pages/MapReviewPage.tsx`,
+pure helpers in `packages/web/src/lib/map-review.ts`, strings in the
+`mapReview` namespace (en + sv).
+
+**Routes.** One component, two mounts, keyed by the document hash so a
+reviewed document that is not pinned anywhere yet survives a reload (it is
+readable through the own-job clause only, §4.2 of map-storage):
+
+| Route | Target | Edit controls |
+|---|---|---|
+| `/settings/map-review/:documentHash?clubMap=<series uuid>` | the club map series | signed in (or auth off), as the club library's other mutations |
+| `/:nameId/map-review/:documentHash` (inside the event shell, `courses.view`) | the event's map | `courses.edit` |
+
+`settings` is a reserved slug, so the club route sends no event header;
+the event route sends `x-competition-id` and appends `?event=<nameId>` to
+every *document* swatch URL (`map-import.md` §2.2); library swatches are
+used as given. Without edit rights the page is read-only (rows,
+candidates, reasons, CRT download). A club URL without `?clubMap=` has
+no target: it shows the review but neither *in use* nor **Use this
+version**.
+
+**Entry points.** Review is *expected* for club maps and *optional* for
+event maps (06 §5.1):
+
+- Settings → Maps card: **Review symbols** whenever the series has a
+  version, plus an amber **N symbols to review** chip while the version's
+  document has `suggested` matches. The count is `clubMap.list[].review`
+  `{suggested, reviewed}`, read from the document's import report
+  (`report.matching.symbols`) — the one field B6 adds to the API.
+- The course editor's map info row (`MapPanel` with `showMapInfo`):
+  **Review symbols** when `course.mapMetadata().documentHash` is set.
+  Never on the kiosk or the dashboard map, which mount `MapPanel` without
+  that row.
+
+**Header.** Map name, library `id · release`, and where the document
+stands: *in use* (it is the club version's / the event's pinned
+document), *not used yet* with **Use this version** (`finalise`), and
+*not up to date* when `review.current` is false (the current library,
+importer or club decisions would import the source differently). Summary
+chips count rows by outcome.
+
+**Rows.** One per `ReviewRow`, ordered by `objects` (most used first,
+then code, numeric-aware); rows flagged `unused` sit in one collapsed
+group below, opened with a count toggle. A filter shows only rows still
+`suggested` (plus rows with a pending decision). Each row: the file's own
+swatch (`previewUrl`, reference raster), code, name, kind, object count,
+colour class, flags (`hidden`, `club-symbol`, `text`), the outcome, and
+what the document draws now (library entry name, from the shared library
+in the bundle, Swedish when the entry has it). Outcomes as the reviewer
+reads `match`:
+
+| Outcome | `match` |
+|---|---|
+| To review | `state: "suggested"` |
+| Accepted | `method: "explicit"`, `canonicalId` set (a club decision) |
+| Kept as drawn | `method: "explicit"`, `canonicalId: null` (a club decision) |
+| Automatic | `state: "auto"` |
+| Map variant | `method: "variant"` (kept as source by design) |
+| Not matched | any other `unmatched` |
+| Not matched yet | `match: null` (pre-matcher document) |
+
+Beside the swatch, the ≤ 3 `candidates`, best first, each with its
+library swatch, entry name, confidence, its `reasons` under **Why?**, and
+a mark on the one the document draws now.
+
+**Decisions.** Per row: **Use this** on a candidate (`accept`), **Other
+library symbol…** (`accept` of any entry of the document's library — the
+API takes any entry; a row with no close candidate needs it), **Keep as
+drawn** (`unmatch`) and, on a row with a club decision, **Back to
+suggestion** (`reset`). Decisions are collected locally, one per row (a
+later choice replaces an earlier one; a choice that restates the row's
+existing decision clears it), shown on the row with **Undo**, and sent
+together from a bottom bar (**Apply N decisions** / **Discard**) as one
+`decide`, in `symbolIdx` order. The bar says that decisions are
+club-wide (§8.5 "Scope"). Accepting the candidate a `suggested` row
+already draws is a decision: it makes the row reviewed.
+
+**Job.** `decide` returns the job as `status` would. Done within the hold
+→ the page moves to `job.documentHash` (same route, same query);
+`queued` / `running` → a progress strip (stage and percent of the
+`map-storage.md` §6.1 ladder) while `mapImport.status` is polled every
+second; `failed` → the error. Edit controls stay but are disabled while a job
+runs. Nothing is pinned until **Use this version**.
+
+**Finalise.** `finalise` with `{kind: "club", clubMapId}` or
+`{kind: "event"}`; afterwards the page re-reads `clubMap.list` /
+`course.mapMetadata`, so the card thumbnail and *in use* follow the new
+`document_hash` (`map-storage.md` §6.4: an in-place update of the club
+version; events that copied the map keep their own pin). Finalising the
+document already in use is not offered.
+
+**CRT.** **Download CRT** fetches `exportCrt` (optionally
+`includeMatches`) and saves `crt` under the API's `fileName`
+(`<stem>-<library>.crt`). **Upload CRT…** (edit rights; ≤ 1 MiB, checked
+in the browser before sending) always runs `importCrt {dryRun: true}`
+first and shows what would be recorded (row code → entry, or kept as
+drawn), how many lines restate the current automatic match, every skipped
+line with its `CRT_*` code and detail, and the warnings; **Record
+decisions** sends the same text without `dryRun` and follows the job as
+`decide`'s. A file with nothing applicable offers no confirm.
+
+Tests: `packages/web/src/lib/__tests__/map-review.test.ts` (outcomes,
+row order and the unused group, the pending batch — later wins,
+restatements dropped, reset only on decided rows, symbol order — swatch
+URL scoping, job progress); `packages/api/src/__tests__/club-map-library.test.ts`
+and the `club-maps` integration suite (the card's review counts);
+`e2e/map-review.spec.ts` (club map: card count, route, usage order,
+swatches load, keep 850.1 as drawn, apply, finalise moves the card
+thumbnail, CRT download carries `# keep 850.1`, CRT upload previews and
+records `703 702.0`, resetting both rows returns the matcher's own
+document hash; event map: entry from the course editor, swatches scoped
+with `?event=`, nothing to finalise on the matcher's output).
+
 ## 9. Colour stack alignment (03 §6.3)
 
 Import stage 7. Code: `packages/shared/src/import/{colour-class,colour-align}.ts`.
@@ -652,15 +891,15 @@ resolves canonical entries through `paletteIndexOfStack(header.colours)`.
 
 ## 10. Pending in this chapter
 
-- Review UI for `suggested` matches and the CRT download / upload
-  (slice B); the API is §8.5, §8.6 and `docs/map-import.md` §2.2.
 - Mapper object queries as CRT sources (§8.6 `CRT_QUERY_UNSUPPORTED`)
   and a variant table to Mapper's sub-numbers, if a club needs either.
 - Library variants for the OCAD template conventions (§8.4) if the auto
   rate needs to rise.
-- Contact sheet: a golden render per entry at 10× via the reference
-  raster backend for visual review in PRs.
 - `ISMTBOM2022` / `ISSkiOM2019` libraries (palette rows exist).
-- Swedish names, once a full set is available.
+- Swedish names for `ISSprOM2019-2:105.2`, `533`, `715` when SOFT
+  publishes a Rev 6 translation of ISSprOM (§3.2).
+- `ISSOM2007` aliases for `ISSprOM2019-2` once an ISSOM 2007 → ISSprOM
+  table is available (§3); the matcher reading aliases (a stage-3
+  candidate set) once a corpus map uses ISOM 2000 numbering to tune it on.
 - The OOM dimension spot check if 03 §10's licence question is settled in
   favour.
