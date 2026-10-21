@@ -1122,6 +1122,10 @@ samples). Measured ratios, headless Chromium / SwiftShader (B1 run,
 | `lib-colour-order` | 79 / 26 199 (0.302 %) |
 | `lib-precision` | 178 / 64 566 (0.276 %) |
 
+B9 (2026-10-21) changed `lib-line-glyphs` and `lib-precision` (one more
+510 object, no glyphs on unflagged ends — §4.5); both pass the budget in
+B9's run, their ratios are not re-measured here.
+
 What remains is coverage quantisation: every residual differs by 17–26
 levels and the GL values are multiples of 16. **The ratio therefore
 depends on the edge density of the scene**, not only on the backend —

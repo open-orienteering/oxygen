@@ -172,6 +172,18 @@ describe("ocadToDocumentInput", () => {
     expect(input.objects[0].symbolIdx).toBe(0);
   });
 
+  it("reads circle diameters by the file's version: outer up to OCAD 8, centre-line from OCAD 9 (B9)", () => {
+    const ring = (version: number) => {
+      const src = { ...source(), header: { version } };
+      src.symbols = [{ symNum: 703000, number: "703.0", type: 1, status: 0, description: "Kontroll", elements: [{ type: 3, color: 7, diameter: 500, lineWidth: 35, coords: [c(0, 0)] }] }];
+      src.objects = [{ sym: 703000, otp: 1, coordinates: [c(0, 0)] }];
+      const r = ocadToDocumentInput(src, opts).input.header.symbols[0].render;
+      return r && r.type === "point" ? r.glyph.parts[0].diameterUm : undefined;
+    };
+    expect(ring(8)).toBe(5000);
+    expect(ring(2018)).toBe(5350);
+  });
+
   it("synthesises one symbol per graphic (type, colour, width) with a render definition", () => {
     const syms = input.header.symbols;
     const graphic = syms.filter((s) => s.origin === "graphic");
