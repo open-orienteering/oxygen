@@ -67,7 +67,7 @@ describe("importOmapToDocument", () => {
     const { header } = mapDocument.readMapDocumentHeader(result.bytes);
     const report = buildImportReport(result, header, "test.xmap");
     expect(report.source).toMatchObject({ kind: "omap", version: "9", fileName: "test.xmap" });
-    expect(report.importer).toBe("omap-2");
+    expect(report.importer).toBe("omap-3");
     expect(report.warnings.map((w) => w.code)).toContain("TEMPLATES_DROPPED");
     // Stage 5 (docs/map-import.md §3.8): UTM 33N projects; the fixture draws no meridian cluster.
     expect(report.georeference).toMatchObject({ crs: "EPSG:32633", method: "epsg", projectable: true, gridRotationDeg: 2.5 });
@@ -76,11 +76,11 @@ describe("importOmapToDocument", () => {
   });
 
   it("keeps the two source kinds apart: different importer versions, OCAD path unchanged", async () => {
-    expect(importerVersionFor("ocad")).toBe("ocad-7");
-    expect(importerVersionFor("omap")).toBe("omap-2");
+    expect(importerVersionFor("ocad")).toBe("ocad-8");
+    expect(importerVersionFor("omap")).toBe("omap-3");
     const ocd = await importOcadToDocument(ocdFixture, "test.ocd");
     expect(ocd.kind).toBe("ocad");
-    expect(mapDocument.readMapDocumentHeader(ocd.bytes).header.format.importer).toBe("ocad-7");
+    expect(mapDocument.readMapDocumentHeader(ocd.bytes).header.format.importer).toBe("ocad-8");
     await expect(importMapToDocument(ocdFixture, "test.ocd", "omap")).rejects.toThrow();
   });
 

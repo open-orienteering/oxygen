@@ -95,7 +95,7 @@ storeImportedDocument(db, { source: { bytes, fileHash, kind, fileName, uploadedB
   `readerWarnings` (the OCAD reader's own warning texts, at most 50,
   only when there are any — `docs/map-import.md` §3.6).
 - `library_version` is `"<library>@<SYMBOL_LIBRARY_VERSION>"`
-  (`ISOM2017-2@2026.10.1`), the library the matcher chose for the
+  (`ISOM2017-2@2026.10.2`), the library the matcher chose for the
   document. Rows imported before the matcher carry `"none"`
   (`LIBRARY_VERSION_NONE`) and `importer ocad-3`; they are no longer
   dedup targets, so the next upload of the same bytes produces a new
@@ -453,7 +453,7 @@ startImportJob(db, {sourceHash, eventId? | clubMapId?, startedBy?, holdMs?})
   │
   ├─ decisions = club_symbol_decisions for the source's kind (docs/map-symbols.md §8.5)   → the row's `decisions`
   │
-  ├─ a map_documents row exists for (sourceHash, importer ∈ {ocad-7, omap-2}, library *@<current SYMBOL_LIBRARY_VERSION>)
+  ├─ a map_documents row exists for (sourceHash, importer ∈ {ocad-8, omap-3}, library *@<current SYMBOL_LIBRARY_VERSION>)
   │   that follows `decisions` (newest first)
   │     → touchDocument, insert state=done with that document_hash, applyJobResult, derive, return   (06 §8 dedup, no worker)
   │

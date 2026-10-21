@@ -15,10 +15,13 @@ describe("staleReason (docs/map-storage.md §6.9)", () => {
     expect(staleReason({ importerVersion: "ocad-5", libraryVersion: CURRENT }, true)).toBe("importer");
     // ocad-6 had no text halo from OCAD line framing and no rectangle / line-text symbols (A12).
     expect(staleReason({ importerVersion: "ocad-6", libraryVersion: CURRENT }, true)).toBe("importer");
-    expect(staleReason({ importerVersion: "ocad-7", libraryVersion: "none" }, true)).toBe("library");
-    expect(staleReason({ importerVersion: "ocad-7", libraryVersion: "ISOM2017-2@2020.01.0" }, true)).toBe("library");
-    expect(staleReason({ importerVersion: "omap-2", libraryVersion: CURRENT }, false)).toBe("decisions");
-    expect(staleReason({ importerVersion: "ocad-7", libraryVersion: CURRENT }, true)).toBeNull();
+    // ocad-7 / omap-2 matched without the entries' Swedish names (B7).
+    expect(staleReason({ importerVersion: "ocad-7", libraryVersion: CURRENT }, true)).toBe("importer");
+    expect(staleReason({ importerVersion: "omap-2", libraryVersion: CURRENT }, true)).toBe("importer");
+    expect(staleReason({ importerVersion: "ocad-8", libraryVersion: "none" }, true)).toBe("library");
+    expect(staleReason({ importerVersion: "ocad-8", libraryVersion: "ISOM2017-2@2026.10.1" }, true)).toBe("library");
+    expect(staleReason({ importerVersion: "omap-3", libraryVersion: CURRENT }, false)).toBe("decisions");
+    expect(staleReason({ importerVersion: "ocad-8", libraryVersion: CURRENT }, true)).toBeNull();
   });
 });
 
