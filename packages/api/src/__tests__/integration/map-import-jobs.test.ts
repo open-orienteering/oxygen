@@ -224,8 +224,12 @@ describe("import jobs from applyEventMap", () => {
     const job = await startImportJob(ctx.db, { sourceHash: xmapHash, clubMapId: null, eventId: null });
     expect(job.state).toBe("done");
     expect(job.documentHash).toBeTruthy();
-    const doc = await ctx.db.mapDocument.findUniqueOrThrow({ where: { hash: job.documentHash! }, select: { importerVersion: true, header: true } });
+    const doc = await ctx.db.mapDocument.findUniqueOrThrow({ where: { hash: job.documentHash! }, select: { importerVersion: true, header: true, report: true } });
     expect(doc.importerVersion).toBe("omap-4");
+    // The stored report carries the per-emission warning detail (docs/map-import.md §3.6).
+    expect((doc.report as { warningDetails?: { code: string; symbolIdx?: number }[] }).warningDetails).toEqual(
+      expect.arrayContaining([expect.objectContaining({ code: "MISSING_SYMBOL", symbolIdx: expect.any(Number) })]),
+    );
     expect((doc.header as { source: { kind: string } }).source.kind).toBe("omap");
     // A second job for the same source skips the worker and reuses the document.
     const again = await startImportJob(ctx.db, { sourceHash: xmapHash, clubMapId: null, eventId: null });
