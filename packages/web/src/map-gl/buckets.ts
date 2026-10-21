@@ -511,7 +511,8 @@ export function prepareBucketPart(stream: render.PassStream, bucket: number, pas
           const m = ctx.meshes[mi];
           let arr = byCls.get(m.cls);
           if (!arr) byCls.set(m.cls, (arr = []));
-          arr.push(pass.positions[2 * g] - ox, pass.positions[2 * g + 1] - oy, 1, 0, t.scale, m.base, m.count, m.radius);
+          const a = pass.angles ? (pass.angles[g] * Math.PI) / 180 : 0; // §3.5 `angles`, degrees CCW
+          arr.push(pass.positions[2 * g] - ox, pass.positions[2 * g + 1] - oy, Math.cos(a), Math.sin(a), t.scale, m.base, m.count, m.radius);
         }
         for (const [cls, data] of byCls) addInstances("text", pass.colour, cls, object, data);
         break;

@@ -616,7 +616,7 @@ Backend decisions only — nothing here moves a dash or a glyph:
 | glyph | an instance per placement into the mesh atlas | the `GlyphMesh` in glyph-local µm at ¼ tolerance, fills triangulated even-odd, strokes as strips expanded to triangles; instance `x, y, cos, sin, scale` as in the stream plus the mesh's atlas `base, count, radius` |
 | glyph with `clip` | instances + the clip area triangulated even-odd | drawn through the stencil (Drawing, below) |
 | hatch | hatch-arena vertices + indices | the area triangulated like a fill; each vertex carries the stripe normal, spacing, offset and half width so hatches of one colour are one draw |
-| text | an instance per glyph into the mesh atlas | outline in font units, filled even-odd; a halo pass is the outline stroked round/round at `haloWidthUm / k`; instance scale `k = sizeUm / unitsPerEm`; meshes keyed by (font, glyph, tolerance, halo width) |
+| text | an instance per glyph into the mesh atlas | outline in font units, filled even-odd; a halo pass is the outline stroked round/round at `haloWidthUm / k`; instance scale `k = sizeUm / unitsPerEm`, instance `cos, sin` from the glyph's `angles` entry (§3.5; upright without); meshes keyed by (font, glyph, tolerance, halo width) |
 
 **Indexed strips (S1 §4.1).** A polyline point shares **one vertex pair**
 between its two segments — offset ± the mitre vector — when that is
@@ -1257,13 +1257,13 @@ The shared module is exported as a namespace: `import { render } from
   (per-glyph `angles` from §3.5 plus a path layout in `text.ts`). Row B8
   (user decision 2026-10-20); until then box text is block text from the
   anchor and line text is block text from the path's first vertex.
-- **Backends drawing `taper` and `angles`** — the stage emits both; the
-  WebGL2 backend (B2) and the PDF backend (slice C) do not draw them yet
-  (a taper is drawn butt, rotated glyphs upright). The goldens leave both
-  out until they do; the reference raster draws `angles`. On the arena
-  path both are small: a text instance already carries `cos, sin` (fill
-  them from `angles`), and a stroke vertex its own half width (scale it
-  along the taper length).
+- **Backends drawing `taper` and `angles`** — the stage emits both. The
+  WebGL2 backend draws `angles` on both its paths (B2: a text instance's
+  `cos, sin`); it does not draw `taper` yet (drawn butt) — on the arena
+  path a stroke vertex carries its own half width, so a taper is that
+  width scaled along the taper length. The PDF backend (slice C) draws
+  neither yet. The goldens leave both out until every backend does; the
+  reference raster draws `angles`.
 - **S2 confirmation** of §4.2 step 3 (what stretches, the `round`
   threshold), of `endGapUm` and of the vertical anchor's metrics (§4.9),
   against OCAD exports.

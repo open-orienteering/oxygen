@@ -383,7 +383,9 @@ function textItems(
   for (let i = 0; i < pass.glyphs.length; i++) {
     const g = pass.glyphs[i];
     const arr = byGlyph.get(g) ?? [];
-    arr.push(pass.positions[2 * i], pass.positions[2 * i + 1], 1, 0, k);
+    // Per-glyph rotation about the glyph's origin (§3.5 `angles`, degrees CCW).
+    const a = pass.angles ? (pass.angles[i] * Math.PI) / 180 : 0;
+    arr.push(pass.positions[2 * i], pass.positions[2 * i + 1], Math.cos(a), Math.sin(a), k);
     byGlyph.set(g, arr);
   }
   const items: PreparedInstanced[] = [];

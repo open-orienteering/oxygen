@@ -261,6 +261,22 @@ describe("visible set (04 §6.8 point 2)", () => {
   });
 });
 
+describe("text instances", () => {
+  it("carry each glyph's rotation from TextPass.angles (§3.5)", () => {
+    const b = new PassStreamBuilder();
+    b.push({ kind: "text", colour: 0, fontId: 0, sizeUm: 2048, glyphs: Uint16Array.from([5, 5]), positions: Float32Array.from([0, 0, 3000, 0]), angles: Float32Array.from([0, 90]) }, 0, 0);
+    const s = b.build();
+    const ctx = context(s);
+    ctx.meshes.push({ base: 0, count: 3, cls: 2, radius: 100 });
+    ctx.textMesh.set(0, { meshes: Int32Array.from([ctx.meshes.length - 1, ctx.meshes.length - 1]), scale: 1 });
+    const part = prepareBucketPart(s, 0, [0], "all", ctx);
+    const inst = part.text!.instances;
+    expect([inst[2], inst[3]]).toEqual([1, 0]);
+    expect(inst[INSTANCE_FLOATS + 2]).toBeCloseTo(0, 9);
+    expect(inst[INSTANCE_FLOATS + 3]).toBeCloseTo(1, 9);
+  });
+});
+
 describe("clip groups (pattern clip mode, 04 §6.5)", () => {
   function clipPart(areas: [number, number][]) {
     const b = new PassStreamBuilder();
