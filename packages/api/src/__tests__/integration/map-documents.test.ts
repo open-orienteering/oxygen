@@ -96,7 +96,7 @@ describe("storeImportedDocument", () => {
     expect(doc.sourceHash).toBe(fileHash);
     expect(doc.sizeBytes).toBe(size);
     expect(doc.formatVersion).toBe(1);
-    expect(doc.importerVersion).toBe("ocad-8");
+    expect(doc.importerVersion).toBe("ocad-9");
     expect(doc.libraryVersion).toBe(`ISOM2017-2@${symbolLibrary.SYMBOL_LIBRARY_VERSION}`); // 1:7500 fixture → ISOM
     const header = doc.header as Record<string, unknown>;
     expect(header).toHaveProperty("mapScale");

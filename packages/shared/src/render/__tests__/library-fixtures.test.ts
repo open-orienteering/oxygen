@@ -138,7 +138,7 @@ describe("row 2 — OMAP dash fitting (ISOM 505 as layout omap)", () => {
   });
 });
 
-describe("row 3 — glyph placement (ISOM 516, 201, 529 at corners, 510, 416)", () => {
+describe("row 3 — glyph placement (ISOM 516, 201, 529 at corners, 510, 416, 510 at corners)", () => {
   const { stream } = run("lib-line-glyphs");
 
   it("516 fence: spaced 2 mm from 1 mm, rotated to the tangent", () => {
@@ -163,6 +163,9 @@ describe("row 3 — glyph placement (ISOM 516, 201, 529 at corners, 510, 416)", 
     expect(g.instances.length / 5).toBe(27);
     expect(rows(g)[0].slice(0, 2)).toEqual([12000, -6000]);
     expect(rows(g)[1][0]).toBe(Math.round(12000 + 12000 / 27));
+  });
+  it("510 as imported from OCAD (corners, ends ignored): one pole, on the corner point only", () => {
+    expect(rows(of(stream, "glyph", 5)[0])).toEqual([[2000, -8000, 1, 0, 1]]);
   });
 });
 

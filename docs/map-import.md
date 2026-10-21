@@ -283,7 +283,7 @@ the S2 visual comparison (03 §8) is where they get confirmed.
 | `dblFlags & 1`, `dblFillColor` | `borders.backgroundColour`, `backgroundWidthUm: dblWidth` | Band drawn in the fill colour, even without edges. `dblFlags & 2` (background colour) warns. |
 | `primSymElements`, `nPrimSym`, `primSymDist` | `glyphs[] { glyph, placement }` | Main symbol only when `nPrimSym > 0` (518.3 "Utan tagg" has elements but `nPrimSym 0`). Solid line ⇒ `spaced { distanceUm: mainLength, firstUm = lastUm = endLength, perSpot: nPrimSym, spotSpacingUm: primSymDist, minCount: minSym + 1 (when minSym ≥ 0) }`; dashed ⇒ `dashCentres`; dashed with `secGap`/`endGap` ⇒ `dashGroupCentres` (the glyph sits in the secondary gap, 517 ruined fence). |
 | `secSymElements` | `sectionCentres` | Once per corner-delimited section. *Provisional.* |
-| `useSymbolFlags` 1 / 2 / 4 + `startSymElements` / `endSymElements` / `cornerSymElements` | `start` / `end` / `corners` | Corner glyphs include the line ends. |
+| `useSymbolFlags` 1 / 2 / 4 + `startSymElements` / `endSymElements` / `cornerSymElements` | `start` / `end` / `corners` with `ignoreEnds` | OCAD draws the corner symbol at corner points only; the ends carry the start / end symbols (B9: `ocad-8` put a corner glyph on both ends of every open line — 44 phantom poles on club-2026's 510). |
 | `decrease.decMode ≠ 0` | — | Warned, drawn full size. Not in the corpus. |
 
 **Point symbols** (`type 1`) → `{ type: "point", glyph, orientation }`:
@@ -695,7 +695,7 @@ non-contiguous priorities). The rest are shared with §3.6–3.7.
 
 ## 5. Header provenance
 
-`format.importer` is `"ocad-8"` for OCAD sources (`OCAD_IMPORTER_VERSION`;
+`format.importer` is `"ocad-9"` for OCAD sources (`OCAD_IMPORTER_VERSION`;
 `ocad-1` had `render: null` for every source symbol, `ocad-2` carried the
 upload name in the header, `ocad-3` had no matcher, `ocad-4` stored
 ScalePar `d` as `declinationDeg`, ignored `e` and had no
@@ -705,7 +705,8 @@ for double-line mode 65535 although §3.3 calls it off, `ocad-6` read
 neither text framing nor rectangle / line-text symbols — no halo from
 OCAD line framing, rectangle objects as `MISSING_SYMBOL` stubs — and kept
 no reader warning texts, `ocad-7` matched descriptions on the entries'
-English names only — `docs/map-symbols.md` §8.2 row 5, B7) and `"omap-3"`
+English names only — `docs/map-symbols.md` §8.2 row 5, B7 —, `ocad-8` drew
+OCAD corner symbols on the ends of open lines as well — §3.3, B9) and `"omap-3"`
 for Mapper sources (`OMAP_IMPORTER_VERSION`; `omap-1` stored `paperOrigin`
 unrounded, `omap-2` is `ocad-7`'s matcher).
 Documents of either earlier version have no `georeference` / `north` in

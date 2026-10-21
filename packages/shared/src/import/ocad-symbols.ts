@@ -376,7 +376,8 @@ class Converter {
     }
     if ((s.secSymElements?.length ?? 0) > 0) add(s.secSymElements, { at: "sectionCentres" }, "secondary symbol");
     const use = s.useSymbolFlags ?? 0;
-    if ((use & 4) !== 0) add(s.cornerSymElements, { at: "corners" }, "corner symbol");
+    // OCAD draws the corner symbol at corner points only: the ends carry their own start / end symbols.
+    if ((use & 4) !== 0) add(s.cornerSymElements, { at: "corners", ignoreEnds: true }, "corner symbol");
     if ((use & 1) !== 0) add(s.startSymElements, { at: "start" }, "start symbol");
     if ((use & 2) !== 0) add(s.endSymElements, { at: "end" }, "end symbol");
     if (glyphs.length) body.glyphs = glyphs;

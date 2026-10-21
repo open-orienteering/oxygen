@@ -18,10 +18,12 @@ describe("staleReason (docs/map-storage.md §6.9)", () => {
     // ocad-7 / omap-2 matched without the entries' Swedish names (B7).
     expect(staleReason({ importerVersion: "ocad-7", libraryVersion: CURRENT }, true)).toBe("importer");
     expect(staleReason({ importerVersion: "omap-2", libraryVersion: CURRENT }, true)).toBe("importer");
-    expect(staleReason({ importerVersion: "ocad-8", libraryVersion: "none" }, true)).toBe("library");
-    expect(staleReason({ importerVersion: "ocad-8", libraryVersion: "ISOM2017-2@2026.10.1" }, true)).toBe("library");
+    // ocad-8 drew OCAD corner symbols on the ends of open lines (B9).
+    expect(staleReason({ importerVersion: "ocad-8", libraryVersion: CURRENT }, true)).toBe("importer");
+    expect(staleReason({ importerVersion: "ocad-9", libraryVersion: "none" }, true)).toBe("library");
+    expect(staleReason({ importerVersion: "ocad-9", libraryVersion: "ISOM2017-2@2026.10.1" }, true)).toBe("library");
     expect(staleReason({ importerVersion: "omap-3", libraryVersion: CURRENT }, false)).toBe("decisions");
-    expect(staleReason({ importerVersion: "ocad-8", libraryVersion: CURRENT }, true)).toBeNull();
+    expect(staleReason({ importerVersion: "ocad-9", libraryVersion: CURRENT }, true)).toBeNull();
   });
 });
 

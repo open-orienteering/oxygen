@@ -115,6 +115,8 @@ describe("ocadSymbolToRender — line", () => {
       useSymbolFlags: 1 | 2 | 4, startSymElements: dot, endSymElements: dot, cornerSymElements: dot, secSymElements: dot,
     }), ctx).render;
     expect(ends && ends.type === "line" ? ends.glyphs!.map((g) => g.placement.at) : []).toEqual(["sectionCentres", "corners", "start", "end"]);
+    // OCAD draws the corner symbol at corner points only; the ends have their own start / end symbols.
+    expect(ends && ends.type === "line" ? ends.glyphs![1].placement : undefined).toEqual({ at: "corners", ignoreEnds: true });
     const noFlags = ocadSymbolToRender(line({ useSymbolFlags: 0, startSymElements: dot, endSymElements: dot, cornerSymElements: dot }), ctx).render;
     expect(noFlags && noFlags.type === "line" ? noFlags.glyphs : "x").toBeUndefined();
   });
