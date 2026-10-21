@@ -43,3 +43,6 @@ test_log.txt
 
 # direnv
 .envrc
+
+# Local corpus, measurement scripts and run outputs (real club maps — never committed, AGENTS.md §12)
+.local/
