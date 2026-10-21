@@ -243,7 +243,7 @@ export function ocadToDocumentInput(ocad: OcadFileLike, opts: OcadSourceOptions)
     const s = ocad.symbols[i];
     if (!defBySymNum.has(s.symNum)) defBySymNum.set(s.symNum, s);
   }
-  const conversionCtx = { colourIndex: (n: number) => stackIdxByNumber.get(n), symbolByNumber: (n: number) => defBySymNum.get(n) };
+  const conversionCtx = { colourIndex: (n: number) => stackIdxByNumber.get(n), symbolByNumber: (n: number) => defBySymNum.get(n), ocadVersion: ocad.header.version };
   let symbolsRendered = 0, symbolsUnrendered = 0;
   for (let i = 0; i < ocad.symbols.length; i++) {
     const s = ocad.symbols[i];

@@ -136,6 +136,8 @@ export interface SymbolConversionContext {
   colourIndex: (ocadColour: number) => number | undefined;
   /** Symbol table lookup by `symNum` (for area border symbols). */
   symbolByNumber: (symNum: number) => OcadSymbolDefLike | undefined;
+  /** File format version (`header.version`); circle elements changed meaning at 9. Default: 9 and later. */
+  ocadVersion?: number;
 }
 
 export interface SymbolConversionWarning {
@@ -236,7 +238,11 @@ class Converter {
         }
         case 3: {
           const c = e.coords[0];
-          parts.push({ kind: "ring", colour, diameterUm: (e.diameter ?? 0) * UM, widthUm: (e.lineWidth ?? 0) * UM, cx: (c?.[0] ?? 0) * UM, cy: (c?.[1] ?? 0) * UM });
+          // The IR ring's diameter is the outer one (map-rendering §4.6). OCAD 9+ measures `diameter` on the
+          // line's centre, OCAD 8 and older on its outer edge (Mapper's OCD import reads it the same way).
+          const w = e.lineWidth ?? 0;
+          const outer = (this.ctx.ocadVersion ?? 9) <= 8 ? (e.diameter ?? 0) : (e.diameter ?? 0) + w;
+          parts.push({ kind: "ring", colour, diameterUm: outer * UM, widthUm: w * UM, cx: (c?.[0] ?? 0) * UM, cy: (c?.[1] ?? 0) * UM });
           break;
         }
         case 4: {

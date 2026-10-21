@@ -292,8 +292,11 @@ the S2 visual comparison (03 §8) is where they get confirmed.
 **Symbol elements** (point glyphs, area patterns, line decorations) →
 `GlyphPart`: type 1 line ⇒ `stroke` (`lineWidth`, cap/join from `flags`,
 coordinates ×10 with the OCAD coordinate flags), 2 area ⇒ `fill`
-(closed), 3 circle ⇒ `ring` (`diameter`, `lineWidth`, centre from the
-first coordinate), 4 dot ⇒ `disc`. Elements whose colour is unknown are
+(closed), 3 circle ⇒ `ring` (`lineWidth`, centre from the first
+coordinate; the IR's outer diameter is `diameter + lineWidth` from OCAD 9
+on, where `diameter` runs along the line's centre, and `diameter` itself
+in OCAD 8 and older — Mapper's OCD import reads it the same way; B9 found
+`ocad-8` one line width small against the legacy tiles), 4 dot ⇒ `disc`. Elements whose colour is unknown are
 skipped; a glyph with no parts left is dropped.
 
 **Area symbols** (`type 3`) → `{ type: "area", fill?, hatches?, patterns?, border? }`
@@ -706,7 +709,8 @@ neither text framing nor rectangle / line-text symbols — no halo from
 OCAD line framing, rectangle objects as `MISSING_SYMBOL` stubs — and kept
 no reader warning texts, `ocad-7` matched descriptions on the entries'
 English names only — `docs/map-symbols.md` §8.2 row 5, B7 —, `ocad-8` drew
-OCAD corner symbols on the ends of open lines as well — §3.3, B9) and `"omap-3"`
+OCAD corner symbols on the ends of open lines as well and read OCAD 9+
+circle diameters as outer diameters — §3.3, B9) and `"omap-3"`
 for Mapper sources (`OMAP_IMPORTER_VERSION`; `omap-1` stored `paperOrigin`
 unrounded, `omap-2` is `ocad-7`'s matcher).
 Documents of either earlier version have no `georeference` / `north` in

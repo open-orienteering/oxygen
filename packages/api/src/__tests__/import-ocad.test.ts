@@ -48,7 +48,8 @@ describe("importOcadToDocument", () => {
     expect(warnings.map((w) => w.code)).not.toContain("SYMBOL_COLOUR_UNKNOWN");
     const byCode = new Map(source.map((s) => [s.code, s.render!]));
     expect(byCode.get("505.0")).toMatchObject({ type: "line", main: { widthUm: 250 } });
-    expect(byCode.get("702.0")).toMatchObject({ type: "point", glyph: { parts: [{ kind: "ring", diameterUm: 6000, widthUm: 350 }] } });
+    // ø 6.0 mm on the line's centre (OCAD 9+) is the IR's 6.35 mm outer diameter (B9).
+    expect(byCode.get("702.0")).toMatchObject({ type: "point", glyph: { parts: [{ kind: "ring", diameterUm: 6350, widthUm: 350 }] } });
     expect(byCode.get("403.0")).toMatchObject({ type: "area" });
     // OCAD line framing → text halo in the framing colour, frWidth (0.1 mm) as the half-width (docs/map-import.md §3.3).
     const white = doc.header.colours.findIndex((c) => c.name === "White");

@@ -530,9 +530,10 @@ export function buildE2eTestOcad() {
       extent: 400,
       colorIdx: 0,
       description: "Finish",
+      // ISOM 2017-2 706: ø 4.0 and 6.0 mm centre to centre — OCAD 9+ circle diameters are centre-line (B9).
       elements: [
-        { type: 3, color: 0, lineWidth: 35, diameter: 500, coords: [[0, 0]] },
-        { type: 3, color: 0, lineWidth: 35, diameter: 700, coords: [[0, 0]] },
+        { type: 3, color: 0, lineWidth: 35, diameter: 400, coords: [[0, 0]] },
+        { type: 3, color: 0, lineWidth: 35, diameter: 600, coords: [[0, 0]] },
       ],
     }),
     ...terrainSymbols(),
