@@ -17,9 +17,9 @@ import {
   makePath,
 } from "./pass-stream.js";
 import { type Interval, layoutDashes } from "./dash.js";
-import { flattenRings, offsetPolyline } from "./geometry.js";
+import { flattenRings, offsetPolyline, roundCorners } from "./geometry.js";
 import { GlyphRegistry, type RegisteredGlyph, mapCap, mapJoin } from "./glyph-table.js";
-import { PathMeasure, gapIntervals, pathSections, subtractIntervals } from "./measure.js";
+import { PathMeasure, gapIntervals, pathSections, subtractIntervals, wrapIntervals } from "./measure.js";
 import { patternInstances } from "./pattern.js";
 import { placeGlyphs } from "./placement.js";
 import type { AreaSymbol, BorderSpec, LineSymbolBody, PointSymbol, RenderSymbol, StrokeSpec, TextSymbol } from "./symbol.js";
@@ -66,7 +66,7 @@ class Stage {
   constructor(input: SymboliseInput) {
     this.input = input;
     input.fonts.forEach((f, i) => {
-      this.builder.fontTable.push({ fontId: i, family: f.family, bold: false, italic: false } satisfies FontRef);
+      this.builder.fontTable.push({ fontId: i, family: f.family, bold: !!f.bold, italic: !!f.italic } satisfies FontRef);
     });
   }
 
@@ -145,8 +145,9 @@ class Stage {
 
   // ---- line --------------------------------------------------------------
 
-  private line(path: RenderPath, sym: LineSymbolBody): void {
-    if (path.coords.length < 4) return;
+  private line(objectPath: RenderPath, sym: LineSymbolBody): void {
+    if (objectPath.coords.length < 4) return;
+    const path = sym.cornerRadiusUm ? roundCorners(objectPath, sym.cornerRadiusUm) : objectPath;
     const m = new PathMeasure(path);
     if (m.totalLength <= 0) return;
     const gaps = gapIntervals(m);
@@ -156,16 +157,19 @@ class Stage {
       mainIntervals = this.strokeIntervals(m, sym.main);
       if (gaps.length) mainIntervals = subtractIntervals(mainIntervals ?? [[0, m.totalLength]], gaps);
       const slices = mainIntervals ? toSlices(m, mainIntervals) : undefined;
-      if (sym.main.halo) {
+      const taper = strokeTaper(sym.main);
+      const haloWidth = sym.main.halo ? sym.main.widthUm + 2 * sym.main.halo.widthUm : 0;
+      if (sym.main.halo && haloWidth > 0) {
         const haloSlices = sym.main.halo.continuous ? (gaps.length ? toSlices(m, subtractIntervals([[0, m.totalLength]], gaps)) : undefined) : slices;
         this.push({
           kind: "stroke",
           colour: sym.main.halo.colour,
           path,
           ...(haloSlices ? { slices: haloSlices } : {}),
-          widthUm: sym.main.widthUm + 2 * sym.main.halo.widthUm,
+          widthUm: haloWidth,
           cap: mapCap(sym.main.cap),
           join: mapJoin(sym.main.join),
+          ...(taper ? { taper } : {}),
         });
       }
       if (sym.main.widthUm > 0) {
@@ -177,6 +181,7 @@ class Stage {
           widthUm: sym.main.widthUm,
           cap: mapCap(sym.main.cap),
           join: mapJoin(sym.main.join),
+          ...(taper ? { taper } : {}),
         });
       }
     }
@@ -190,8 +195,10 @@ class Stage {
         const bgPath = centre === 0 ? path : polyPath(offsetPolyline(flat, centre, path.closed), path.closed);
         this.push({ kind: "stroke", colour: backgroundColour, path: bgPath, widthUm: width, cap: "butt", join: "miter" });
       }
-      if (left) this.border(m, flat, left, +1, COORD_FLAG.noLeft, sym.main);
-      if (right) this.border(m, flat, right, -1, COORD_FLAG.noRight, sym.main);
+      for (const pair of [{ left, right }, ...(sym.borders.extraPairs ?? [])]) {
+        if (pair.left) this.border(m, flat, pair.left, +1, COORD_FLAG.noLeft, sym.main);
+        if (pair.right) this.border(m, flat, pair.right, -1, COORD_FLAG.noRight, sym.main);
+      }
     }
 
     for (const g of sym.glyphs ?? []) {
@@ -226,9 +233,10 @@ class Stage {
         out.push([a, b]);
         return;
       }
-      for (const [d0, d1] of layoutDashes(b - a, spec.dash, { closedLoop: sec.closedLoop })) out.push([a + d0, a + d1]);
+      const opts = { closedLoop: sec.closedLoop, halfStart: sec.dashStart, halfEnd: sec.dashEnd };
+      for (const [d0, d1] of layoutDashes(b - a, spec.dash, opts)) out.push([a + d0, a + d1]);
     });
-    return out;
+    return wrapIntervals(out, m.totalLength);
   }
 
   private border(m: PathMeasure, flat: number[], spec: BorderSpec, side: 1 | -1, noFlag: number, main: StrokeSpec | undefined): void {
@@ -241,12 +249,12 @@ class Stage {
     // so both borders and a dashed main line share phase (03 §6.9 item 6).
     let intervals: Interval[] | undefined;
     if (spec.dash) {
-      intervals = [];
+      const onMain: Interval[] = [];
       for (const sec of pathSections(m)) {
-        for (const [a, b] of layoutDashes(sec.endLen - sec.startLen, spec.dash, { closedLoop: sec.closedLoop })) {
-          intervals.push([(sec.startLen + a) * ratio, (sec.startLen + b) * ratio]);
-        }
+        const opts = { closedLoop: sec.closedLoop, halfStart: sec.dashStart, halfEnd: sec.dashEnd };
+        for (const [a, b] of layoutDashes(sec.endLen - sec.startLen, spec.dash, opts)) onMain.push([sec.startLen + a, sec.startLen + b]);
       }
+      intervals = wrapIntervals(onMain, m.totalLength).map(([a, b]): Interval => [a * ratio, b * ratio]);
     }
     // `noLeft` / `noRight` points suppress the border up to the next point.
     const holes: Interval[] = [];
@@ -292,7 +300,7 @@ class Stage {
       this.warn("TEXT_WITHOUT_TEXT", `object ${this.objectIdx} has a text symbol but no text`);
       return;
     }
-    const fontId = this.input.fonts.findIndex((f) => f.family === sym.fontFamily);
+    const fontId = resolveFont(this.input.fonts, sym);
     if (fontId < 0) {
       this.warn("NO_FONT", `no font for family ${sym.fontFamily}`);
       return;
@@ -302,11 +310,39 @@ class Stage {
     if (shaped.glyphs.length === 0) return;
     const glyphs = Uint16Array.from(shaped.glyphs);
     const positions = Float32Array.from(shaped.positions);
-    if (sym.halo) {
-      this.push({ kind: "text", colour: sym.halo.colour, fontId, sizeUm: shaped.sizeUm, glyphs, positions, haloWidthUm: sym.halo.widthUm });
+    const angles = shaped.angles ? { angles: Float32Array.from(shaped.angles) } : {};
+    if (sym.shadow) {
+      // The offset is in the text's own frame, so it turns with the text.
+      const r = toRad(obj.angleDeg ?? 0);
+      const dx = sym.shadow.offsetXUm * Math.cos(r) - sym.shadow.offsetYUm * Math.sin(r);
+      const dy = sym.shadow.offsetXUm * Math.sin(r) + sym.shadow.offsetYUm * Math.cos(r);
+      const shifted = Float32Array.from(shaped.positions, (v, i) => v + (i % 2 === 0 ? dx : dy));
+      this.push({ kind: "text", colour: sym.shadow.colour, fontId, sizeUm: shaped.sizeUm, glyphs, positions: shifted, ...angles });
     }
-    this.push({ kind: "text", colour: sym.colour, fontId, sizeUm: shaped.sizeUm, glyphs, positions });
+    if (sym.halo) {
+      this.push({ kind: "text", colour: sym.halo.colour, fontId, sizeUm: shaped.sizeUm, glyphs, positions, ...angles, haloWidthUm: sym.halo.widthUm });
+    }
+    this.push({ kind: "text", colour: sym.colour, fontId, sizeUm: shaped.sizeUm, glyphs, positions, ...angles });
   }
+}
+
+/** The pass's taper: only on a pointed stroke whose IR gives taper lengths (map-rendering §3.2). */
+function strokeTaper(spec: StrokeSpec): { startUm?: number; endUm?: number } | undefined {
+  if (spec.cap !== "pointed" || !spec.taper) return undefined;
+  const { startUm, endUm } = spec.taper;
+  if (!startUm && !endUm) return undefined;
+  return { ...(startUm ? { startUm } : {}), ...(endUm ? { endUm } : {}) };
+}
+
+/**
+ * The font for a text symbol: the first loaded face of its family whose
+ * bold / italic match (`weight ≥ 600` is bold), else the family's first
+ * face. −1 when the family is not loaded at all.
+ */
+function resolveFont(fonts: FontMetrics[], sym: TextSymbol): number {
+  const bold = sym.weight >= 600;
+  const exact = fonts.findIndex((f) => f.family === sym.fontFamily && !!f.bold === bold && !!f.italic === sym.italic);
+  return exact >= 0 ? exact : fonts.findIndex((f) => f.family === sym.fontFamily);
 }
 
 function toSlices(m: PathMeasure, intervals: Interval[]): Slice[] {

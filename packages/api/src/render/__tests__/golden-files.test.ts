@@ -29,6 +29,17 @@ describe("golden PNGs", () => {
       "colour-order",
       "text-with-halo",
       "pilot-scene",
+      "lib-dash-ocad",
+      "lib-dash-omap",
+      "lib-line-glyphs",
+      "lib-pattern",
+      "lib-hatch",
+      "lib-borders",
+      "lib-holes",
+      "lib-text",
+      "lib-halos",
+      "lib-colour-order",
+      "lib-precision",
     ]);
   });
 

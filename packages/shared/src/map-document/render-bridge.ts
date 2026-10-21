@@ -8,7 +8,7 @@
  * object is drawn; the S1 "envelope") or nothing (the object is dropped).
  */
 
-import { proxySymbols } from "../render/ocad-objects.js";
+import { proxySymbols } from "../render/proxy-symbols.js";
 import type { RenderSymbol } from "../render/symbol.js";
 import type { RenderObject } from "../render/symbolise.js";
 import { scaleRenderSymbol } from "../render/transform.js";

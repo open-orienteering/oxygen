@@ -234,6 +234,8 @@ export function passStreamToSvg(stream: PassStream, opts: ReferenceSvgOptions): 
         const parts: string[] = [];
         for (let i = 0; i < p.glyphs.length; i++) {
           const x = p.positions[2 * i], y = p.positions[2 * i + 1];
+          const a = p.angles ? (p.angles[i] * Math.PI) / 180 : 0;
+          const cos = Math.cos(a), sin = Math.sin(a);
           const outline = font && opts.glyphOutline ? opts.glyphOutline(font, p.glyphs[i]) : undefined;
           if (outline) {
             const k = p.sizeUm / outline.unitsPerEm;
@@ -241,15 +243,16 @@ export function passStreamToSvg(stream: PassStream, opts: ReferenceSvgOptions): 
               ? strokeAttrs((2 * p.haloWidthUm) / k, "round", "round", colour)
               : `fill="${colour}" fill-rule="evenodd"`;
             parts.push(
-              `<path d="${pathToSvgD(outline.path, true)}" transform="matrix(${n(k)} 0 0 ${n(k)} ${n(x)} ${n(y)})" ${paint}/>`,
+              `<path d="${pathToSvgD(outline.path, true)}" transform="matrix(${n(k * cos)} ${n(k * sin)} ${n(-k * sin)} ${n(k * cos)} ${n(x)} ${n(y)})" ${paint}/>`,
             );
           } else {
             // Debug fallback: an em box per glyph. Never used as an oracle.
             const w = 0.55 * p.sizeUm, asc = 0.72 * p.sizeUm, desc = 0.2 * p.sizeUm;
+            const rot = a ? ` transform="rotate(${n((a * 180) / Math.PI)} ${n(x)} ${n(y)})"` : "";
             parts.push(
               p.haloWidthUm
-                ? `<rect x="${n(x)}" y="${n(y - desc)}" width="${n(w)}" height="${n(asc + desc)}" ${strokeAttrs(2 * p.haloWidthUm, "round", "round", colour)}/>`
-                : `<rect x="${n(x)}" y="${n(y - desc)}" width="${n(w)}" height="${n(asc + desc)}" fill="${colour}"/>`,
+                ? `<rect x="${n(x)}" y="${n(y - desc)}" width="${n(w)}" height="${n(asc + desc)}"${rot} ${strokeAttrs(2 * p.haloWidthUm, "round", "round", colour)}/>`
+                : `<rect x="${n(x)}" y="${n(y - desc)}" width="${n(w)}" height="${n(asc + desc)}"${rot} fill="${colour}"/>`,
             );
           }
         }

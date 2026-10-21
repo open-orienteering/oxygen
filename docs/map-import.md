@@ -272,7 +272,7 @@ the S2 visual comparison (03 §8) is where they get confirmed.
 |---|---|---|
 | `lineColor`, `lineWidth` | `main.colour`, `main.widthUm` | Width 0 ⇒ no main stroke, but `main` is still emitted (width 0) when a framing line or a dash pattern needs it. |
 | `lineStyle` | `main.cap`, `main.join` | `& ~2`: 0 bevel / flat, 1 round / round, 4 miter / flat; bit 2 ⇒ `cap: "pointed"`. Same coding for element `flags`. |
-| `distFromStart`, `distToEnd` | `shortenStartUm`, `shortenEndUm` | |
+| `distFromStart`, `distToEnd` | `shortenStartUm`, `shortenEndUm` | With `cap: "pointed"` these are the taper lengths and belong in `main.taper { startUm, endUm }` instead (user decision 2026-10-20, `docs/map-rendering.md` §3.2); the importer still shortens until A13 wires it. |
 | `mainLength`, `mainGap`, `endLength` | `dash { layout: "ocad", dashUm, gapUm, endDashUm? }` | Only when `mainLength > 0` and any of `mainGap`, `secGap`, `endGap` > 0. `endDashUm` only when it differs from `mainLength`. |
 | `secGap` | `dash.secondaryGapUm` | Secondary gap splitting each interior dash (`dashesInGroup` default 2). |
 | `endGap` | `dash.endGapUm` | *Provisional.* The secondary gap applied to the **end** dashes, not a line-end shortening: 507 footpath has `mainLength 225, endLength 225, mainGap 80, secGap 25, endGap 25`. |
@@ -354,10 +354,12 @@ closed. `lineWidth` 0 ⇒ `SYMBOL_EMPTY`, an unknown `lineColor` ⇒
 (`radius` > 0) warns `SYMBOL_FEATURE_DROPPED` (`rectangle corner radius
 r mm`) and the corners are drawn sharp; a grid (`gridFlags & 1`, with
 cell size, numbering and unnumbered-cell text) warns
-`SYMBOL_FEATURE_DROPPED` (`rectangle grid`) and is not drawn. Rounding the
+`SYMBOL_FEATURE_DROPPED` (`rectangle grid`) and is not drawn — a
+by-design drop (user decision 2026-10-20, B1). Rounding the
 corners at import, as Mapper does, would rewrite source coordinates;
-corner radius and grid are IR fields for A13 (user decision 2026-10-20,
-A12). Struct (after the base symbol): `lineColor`
+the corner radius is the IR field `cornerRadiusUm`, rounded by the
+symbolisation stage (`docs/map-rendering.md` §4.4), and A13 wires the
+importer to it (user decision 2026-10-20, A12). Struct (after the base symbol): `lineColor`
 +0, `lineWidth` +2, `radius` +4, `gridFlags` +6, `cellWidth` +8,
 `cellHeight` +10, two reserved words, `unnumCells` +16, `unnumText` +18
 (string[3]).
@@ -822,12 +824,14 @@ unparsed symbol type.
 
 ## 8. Pending in this chapter
 
-S0's remaining unsupported primitives (text shadow and rectangle framing,
-vertical text alignment and text boxes, line text laid along its path,
-rectangle corner radius and grid, a framing line narrower than its main
-line, Mapper's extra border pair) and a warning code that separates a
-stale area-border reference from an unsupported feature — rows A13 and
-A14 in `research/vector-map-pipeline/SLICES.md`; the S0 hash comparison on a
+S0's remaining unsupported primitives: importer wiring of the IR fields
+B1 added (text shadow, vertical text alignment, pointed-line taper,
+rectangle corner radius, a framing line narrower than its main line,
+Mapper's extra border pair — row A13), text rectangle framing, text boxes
+and line text laid along its path (row B8; user decision 2026-10-20 —
+the rectangle *grid* is a by-design drop, not pending), and a warning
+code that separates a stale area-border reference from an unsupported
+feature (row A14) — all in `research/vector-map-pipeline/SLICES.md`; the S0 hash comparison on a
 second machine (re-run on `ocad-7`). The line-text struct (§3.3) is
 *provisional* until a real OCAD file with line text is seen. S2 confirmation of the *provisional* §3.3 rows against OCAD output,
 event / club map *apply* for Mapper sources (needs slice C, §2.2), stage 5 fonts used (fallback decisions)

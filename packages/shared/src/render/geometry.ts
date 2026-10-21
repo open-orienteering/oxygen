@@ -9,7 +9,7 @@
  * Objects' own paths stay as Béziers in the stream.
  */
 
-import type { RenderPath } from "./pass-stream.js";
+import { COORD_FLAG, type RenderPath, makePath } from "./pass-stream.js";
 import { type Segment, pathRings, ringSegments, segmentPoint } from "./path.js";
 
 /** Flattened ring: x,y pairs, not repeating the first point at the end. */
@@ -164,4 +164,64 @@ export function offsetPolyline(pts: number[], d: number, closed = false): number
     }
   }
   return out;
+}
+
+/**
+ * Rounds the polyline corners of a path with circular arcs of radius
+ * `radiusUm`, one cubic Bézier per corner (OCAD rectangle symbols'
+ * corner radius, map-rendering §4.4). A corner is an anchor between two
+ * straight segments; points next to Bézier control points, the ends of
+ * an open path, collinear points and full reversals are left alone. Where
+ * the radius does not fit, it shrinks so that the arc takes at most half
+ * of each adjacent edge. Rings (hole flag 16) are rounded separately;
+ * a closed ring's duplicated closing point is dropped. The arc's first
+ * point keeps the corner's flags (minus Bézier bits).
+ */
+export function roundCorners(path: RenderPath, radiusUm: number): RenderPath {
+  if (!(radiusUm > 0)) return path;
+  const n = path.flags.length;
+  const starts: number[] = [];
+  for (let i = 0; i < n; i++) if (i === 0 || path.flags[i] & COORD_FLAG.hole) starts.push(i);
+  const coords: number[] = [];
+  const flags: number[] = [];
+  const BEZ = COORD_FLAG.bezierFirst | COORD_FLAG.bezierSecond;
+  const KAPPA_ARC = (theta: number) => (4 / 3) * Math.tan(theta / 4);
+  starts.forEach((s, ri) => {
+    let e = ri + 1 < starts.length ? starts[ri + 1] : n;
+    const X = (i: number) => path.coords[2 * i], Y = (i: number) => path.coords[2 * i + 1];
+    // A closed ring may repeat its first point at the end.
+    if (path.closed && e - s > 2 && X(e - 1) === X(s) && Y(e - 1) === Y(s)) e--;
+    const m = e - s;
+    const at = (k: number) => s + ((k % m) + m) % m;
+    for (let k = 0; k < m; k++) {
+      const i = s + k;
+      const f = path.flags[i];
+      const endOfOpen = !path.closed && (k === 0 || k === m - 1);
+      const p = at(k - 1), q = at(k + 1);
+      const plain = (f & BEZ) === 0 && (path.flags[p] & BEZ) === 0 && (path.flags[q] & BEZ) === 0 && m >= 3;
+      if (endOfOpen || !plain) {
+        coords.push(X(i), Y(i));
+        flags.push(f);
+        continue;
+      }
+      const ax = X(i) - X(p), ay = Y(i) - Y(p), bx = X(q) - X(i), by = Y(q) - Y(i);
+      const la = Math.hypot(ax, ay), lb = Math.hypot(bx, by);
+      const turn = la > 0 && lb > 0 ? Math.acos(Math.max(-1, Math.min(1, (ax * bx + ay * by) / (la * lb)))) : 0;
+      if (turn < 1e-6 || turn > Math.PI - 1e-3) {
+        coords.push(X(i), Y(i));
+        flags.push(f);
+        continue;
+      }
+      // Tangent length t = r·tan(turn/2), at most half of each edge.
+      const t = Math.min(radiusUm * Math.tan(turn / 2), la / 2, lb / 2);
+      const r = t / Math.tan(turn / 2);
+      const h = r * KAPPA_ARC(turn);
+      const ux = ax / la, uy = ay / la, vx = bx / lb, vy = by / lb;
+      const p1x = X(i) - t * ux, p1y = Y(i) - t * uy;
+      const p2x = X(i) + t * vx, p2y = Y(i) + t * vy;
+      coords.push(p1x, p1y, p1x + h * ux, p1y + h * uy, p2x - h * vx, p2y - h * vy, p2x, p2y);
+      flags.push(f & ~BEZ, COORD_FLAG.bezierFirst, COORD_FLAG.bezierSecond, 0);
+    }
+  });
+  return makePath(coords.map(Math.round), flags, path.closed);
 }

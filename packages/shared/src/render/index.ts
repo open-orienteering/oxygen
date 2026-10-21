@@ -14,6 +14,7 @@ export * from "./reference-svg.js";
 export { renderFixtures, fixtureColours, type RenderFixtureName } from "./__fixtures__/streams/index.js";
 export { pilotSymbols, pilotColours, PILOT } from "./__fixtures__/pilot-symbols.js";
 export * from "./ocad-objects.js";
+export type { ProxyColours } from "./proxy-symbols.js";
 export { pilotScene } from "./__fixtures__/pilot-scene.js";
 export { goldenScene, goldenSceneNames, goldenFrame, GOLDEN_PX_PER_MM, GOLDEN_MARGIN_UM } from "./__fixtures__/golden.js";
 export type { GoldenSceneName, GoldenScene, GoldenFrame } from "./__fixtures__/golden.js";

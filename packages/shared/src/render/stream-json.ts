@@ -72,6 +72,7 @@ const passJson = z.discriminatedUnion("kind", [
     sizeUm: z.number().positive(),
     glyphs: z.array(z.number().int()),
     positions: z.array(z.number()),
+    angles: z.array(z.number()).optional(),
     haloWidthUm: z.number().positive().optional(),
   }),
 ]);
@@ -173,6 +174,7 @@ export function passStreamFromJson(input: unknown): PassStream {
         if (p.positions.length !== p.glyphs.length * 2) {
           throw new Error("text positions must be x,y per glyph");
         }
+        if (p.angles && p.angles.length !== p.glyphs.length) throw new Error("text angles must be one per glyph");
         return {
           kind: "text",
           colour: p.colour,
@@ -180,6 +182,7 @@ export function passStreamFromJson(input: unknown): PassStream {
           sizeUm: p.sizeUm,
           glyphs: Uint16Array.from(p.glyphs),
           positions: Float32Array.from(p.positions),
+          ...(p.angles ? { angles: Float32Array.from(p.angles) } : {}),
           ...(p.haloWidthUm ? { haloWidthUm: p.haloWidthUm } : {}),
         };
     }
@@ -240,7 +243,8 @@ export function passStreamToJson(stream: PassStream): PassStreamJson {
             colour: p.colour,
             glyphId: p.glyphId,
             partIdx: p.partIdx,
-            instances: Array.from(p.instances, (v) => q(v)),
+            // x, y are µm (3 decimals); cos, sin and scale are unitless and keep 6.
+            instances: Array.from(p.instances, (v, k) => q(v, k % 5 < 2 ? 3 : 6)),
             ...(p.clip ? { clip: pathToJson(p.clip) } : {}),
           };
         case "hatch":
@@ -261,6 +265,7 @@ export function passStreamToJson(stream: PassStream): PassStreamJson {
             sizeUm: q(p.sizeUm),
             glyphs: Array.from(p.glyphs),
             positions: Array.from(p.positions, (v) => q(v)),
+            ...(p.angles ? { angles: Array.from(p.angles, (v) => q(v)) } : {}),
             ...(p.haloWidthUm ? { haloWidthUm: q(p.haloWidthUm) } : {}),
           };
       }
@@ -348,6 +353,7 @@ export function diffPassStreams(a: PassStream, b: PassStream, opts: DiffOptions 
         if (!near(p.widthUm, s.widthUm)) where(`widthUm ${p.widthUm} vs ${s.widthUm}`);
         if (p.cap !== s.cap) where(`cap ${p.cap} vs ${s.cap}`);
         if (p.join !== s.join) where(`join ${p.join} vs ${s.join}`);
+        if (!near(p.taper?.startUm ?? 0, s.taper?.startUm ?? 0) || !near(p.taper?.endUm ?? 0, s.taper?.endUm ?? 0)) where("taper");
         const sd = sameSlices(p.slices, s.slices);
         if (sd) where(sd);
         break;
@@ -391,6 +397,12 @@ export function diffPassStreams(a: PassStream, b: PassStream, opts: DiffOptions 
           if (p.glyphs[k] !== t.glyphs[k]) { where(`glyph ${k}: ${p.glyphs[k]} vs ${t.glyphs[k]}`); break; }
           if (!near(p.positions[2 * k], t.positions[2 * k]) || !near(p.positions[2 * k + 1], t.positions[2 * k + 1])) {
             where(`glyph ${k} position`); break;
+          }
+        }
+        if (!!p.angles !== !!t.angles) where("angles present on one side only");
+        else if (p.angles && t.angles) {
+          for (let k = 0; k < p.angles.length; k++) {
+            if (!near(p.angles[k], t.angles[k], 1e-4)) { where(`glyph ${k} angle`); break; }
           }
         }
         if ((p.haloWidthUm ?? 0) !== (t.haloWidthUm ?? 0)) where("haloWidthUm");
