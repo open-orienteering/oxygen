@@ -140,10 +140,14 @@ export interface SymbolConversionContext {
   ocadVersion?: number;
 }
 
+/** OCAD symbol `type` → "a point" … for messages about a reference to a symbol of the wrong kind. */
+const OCAD_SYMBOL_TYPE_NAME: Record<number, string> = { 1: "a point", 2: "a line", 3: "an area", 4: "a text", 6: "a line text", 7: "a rectangle" };
+
 export interface SymbolConversionWarning {
   code:
     | "SYMBOL_COLOUR_UNKNOWN"
     | "SYMBOL_FEATURE_DROPPED"
+    | "SYMBOL_REFERENCE_INVALID"
     | "SYMBOL_TYPE_UNSUPPORTED"
     | "SYMBOL_EMPTY"
     | "FONT_SUBSTITUTED"
@@ -451,8 +455,14 @@ class Converter {
       }
     }
     if (s.borderOn && (s.borderSym ?? 0) > 0) {
-      const b = this.ctx.symbolByNumber(s.borderSym!);
-      if (b && b.type === 2) {
+      const b = s.borderSym === s.symNum ? undefined : this.ctx.symbolByNumber(s.borderSym!);
+      if (s.borderSym === s.symNum) {
+        this.warn("SYMBOL_REFERENCE_INVALID", `${s.number}: border symbol ${s.borderSym} is the symbol itself`);
+      } else if (!b) {
+        this.warn("SYMBOL_REFERENCE_INVALID", `${s.number}: border symbol ${s.borderSym} is not in the symbol table`);
+      } else if (b.type !== 2) {
+        this.warn("SYMBOL_REFERENCE_INVALID", `${s.number}: border symbol ${s.borderSym} is ${OCAD_SYMBOL_TYPE_NAME[b.type] ?? `a type ${b.type}`} symbol, not a line symbol`);
+      } else {
         const conv = new Converter(b, this.ctx);
         const body = conv.lineBody();
         this.warnings.push(...conv.warnings);
@@ -460,8 +470,6 @@ class Converter {
           out.border = body;
           drawn = true;
         }
-      } else {
-        this.warn("SYMBOL_FEATURE_DROPPED", `${s.number}: border symbol ${s.borderSym} is not a line symbol in the table`);
       }
     }
     if (!drawn) {
