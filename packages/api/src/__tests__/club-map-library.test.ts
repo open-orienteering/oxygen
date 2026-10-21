@@ -153,6 +153,21 @@ describe("projectClubMapRow", () => {
     );
     expect(row.importJob).toBeNull();
   });
+
+  it("counts the version document's matches awaiting review from its import report (docs/map-symbols.md §8.7)", () => {
+    const base = input();
+    const matching = { symbols: { auto: 4, suggested: 6, unmatched: 0, variant: 0, reviewed: 1 } };
+    const row = projectClubMapRow(input({ version: { ...base.version!, document: { header: {}, report: { matching } } } }));
+    expect(row.review).toEqual({ suggested: 6, reviewed: 1 });
+  });
+
+  it("has no review counts without a matched document", () => {
+    expect(projectClubMapRow(input()).review).toBeNull();
+    expect(projectClubMapRow(input({ version: null })).review).toBeNull();
+    const base = input();
+    const odd = projectClubMapRow(input({ version: { ...base.version!, document: { header: {}, report: { matching: { symbols: { suggested: "6" } } } } } }));
+    expect(odd.review).toBeNull();
+  });
 });
 
 describe("ownership", () => {

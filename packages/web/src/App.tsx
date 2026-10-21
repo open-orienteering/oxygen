@@ -16,6 +16,7 @@ const KioskPage = lazy(() => import("./pages/KioskPage").then(m => ({ default: m
 const StartScreenPage = lazy(() => import("./pages/StartScreenPage").then(m => ({ default: m.StartScreenPage })));
 const AccessDeniedPage = lazy(() => import("./pages/AccessDeniedPage").then(m => ({ default: m.AccessDeniedPage })));
 const SettingsPage = lazy(() => import("./pages/SettingsPage").then(m => ({ default: m.SettingsPage })));
+const ClubMapReviewPage = lazy(() => import("./pages/MapReviewPage").then(m => ({ default: m.ClubMapReviewPage })));
 // Dev-only: WebGL2 map backend fixture page for the golden-image tests (docs/map-rendering.md §6.2).
 const MapGlFixturePage = import.meta.env.DEV
   ? lazy(() => import("./pages/dev/MapGlFixturePage").then(m => ({ default: m.MapGlFixturePage })))
@@ -72,6 +73,8 @@ export default function App() {
           <Routes>
             <Route path="/" element={<CompetitionSelector />} />
             <Route path="/settings" element={<SettingsPage />} />
+            {/* Import review of a club map's document (docs/map-symbols.md §8.7). */}
+            <Route path="/settings/map-review/:documentHash" element={<ClubMapReviewPage />} />
             {/* Former standalone pages, now settings tabs. */}
             <Route
               path="/library"

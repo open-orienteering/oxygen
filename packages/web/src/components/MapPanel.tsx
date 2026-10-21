@@ -1,6 +1,6 @@
 import { memo, useId, useState, useRef, useMemo, useEffect, useCallback } from "react";
 import { useTranslation } from "react-i18next";
-import { useParams } from "react-router-dom";
+import { Link, useParams } from "react-router-dom";
 import { trpc } from "../lib/trpc";
 import { fileToBase64 } from "../lib/file-to-base64";
 import { shouldUseChunkedUpload, uploadMapFileChunked } from "../lib/map-upload";
@@ -140,6 +140,7 @@ function MapPanelImpl({
   const { nameId } = useParams<{ nameId: string }>();
   const { t } = useTranslation("dashboard");
   const { t: tl } = useTranslation("library");
+  const { t: tr } = useTranslation("mapReview");
   const { user, authEnabled } = useCurrentUser();
   // Stable for the lifetime of this MapPanel instance. Exposed as
   // `data-instance-id` on every render-path root so the E2E suite can
@@ -906,6 +907,17 @@ function MapPanelImpl({
                 compact
                 hideCurrent
               />
+              {nameId && mapMetadata.data?.documentHash && (
+                // Optional for event maps (06 §5.1, map-symbols.md §8.7);
+                // this row is the course editor's only, never the kiosk's.
+                <Link
+                  to={`/${nameId}/map-review/${mapMetadata.data.documentHash}`}
+                  data-testid="map-review-link"
+                  className="text-xs text-blue-600 hover:text-blue-800"
+                >
+                  {tr("openReview")}
+                </Link>
+              )}
               {mapMetadata.data && (
                 <>
                   <label className="flex items-center gap-1 text-xs text-slate-500">
