@@ -851,15 +851,21 @@ closed line. Two modes:
 
 #### Measurements (B2)
 
-Measured 2026-10-20 / 21 through `/dev/map-gl-doc` with
-`scripts/measure-gl.mjs` (headed Chromium on the dev laptop's Alder
-Lake-P iGPU, GPU timer available) against a Vite server started from
-the worktree; the corpus is read by absolute path through the file
-input. Mode `pilot` / `envelope`, path `via=document` as in S1. "S1" is
-the S1 batch path (`batch.ts`, removed by B2) re-measured in the same
-session — its numbers match the S1 report within run-to-run noise. B2
-values are the median of three runs on the laptop (single runs vary
-by up to ±25 % in the load times). Columns:
+Measured through `/dev/map-gl-doc` with `scripts/measure-gl.mjs`
+(headed Chromium on the dev laptop's Alder Lake-P iGPU, GPU timer
+available) against a Vite server started from the worktree; the corpus
+is read by absolute path through the file input. Mode `pilot` /
+`envelope`, path `via=document` as in S1. "S1" is the S1 batch path
+(`batch.ts`, removed by B2) re-measured on 2026-10-20 — its numbers
+match the S1 report within run-to-run noise. B2 values are from
+2026-10-21 after syncing onto B1's full-library stage (median of three
+runs on the laptop; single runs vary by up to ±25 % in the load times).
+B1 left the pass counts of these two modes unchanged (they draw the
+pilot family and proxies; its dash-layout changes move slices) — next
+to the pre-B1 B2 runs the laptop numbers are within noise, except the
+club maps' complete first view (Club-full envelope 1.86 → 1.48 s); on
+the phone proxy the complete first views dropped 12–56 % (single runs;
+symbolise got 10–35 % faster on the throttled thread). Columns:
 
 - **Draws**: the most of any frame of both bench scenarios.
 - **GPU MB**: resident GPU bytes after the first view is complete
@@ -879,16 +885,16 @@ Desktop, 1280 × 800 @ 1×:
 
 | Map | Mode | Draws S1 → B2 | GPU MB S1 → B2 (bench max) | after read, ms: S1 → B2 first / complete | Frame GPU fit S1 → B2 | Frame GPU 1× S1 → B2 | Frame CPU p95 B2 fit / 1× | Bucket prepare p95 / max |
 |---|---|---:|---:|---:|---:|---:|---:|---:|
-| Sprint | pilot | 325 → **15** | 5.0 → **2.5** (1.9) | 68 → 86 / **92** | 3.7 / 4.0 → 2.3 / 3.0 | 3.8 / 4.1 → 2.5 / 2.6 | 1.6 / 0.8 | 0.9 / 1.4 |
-| Sprint | envelope | 328 → **17** | 19.4 → **8.0** (7.5) | 200 → 141 / **188** | 7.1 / 8.1 → 5.7 / 8.3 | 8.2 / 8.6 → 7.5 / 9.4 | 6.5 / 0.8 | 3.0 / 3.8 |
-| Crop-B | pilot | 15 → **12** | 6.0 → **3.1** (2.2) | 80 → 53 / **69** | 1.4 / 1.7 → 1.0 / 1.2 | 1.4 / 1.5 → 1.1 / 1.1 | 0.6 / 0.5 | 5.4 / 5.4 |
-| Crop-B | envelope | 76 → **21** | 16.5 → **6.2** (5.3) | 393 → 67 / **105** | 3.5 / 3.9 → 2.6 / 4.0 | 3.1 / 3.5 → 3.1 / 3.3 | 0.7 / 0.5 | 12.2 / 12.2 |
-| Crop-A | pilot | 22 → **11** | 8.2 → **4.0** (3.1) | 231 → 46 / **78** | 1.8 / 2.0 → 1.2 / 1.5 | 1.9 / 2.1 → 1.4 / 1.5 | 0.6 / 0.6 | 8.7 / 8.7 |
-| Crop-A | envelope | 47 → **18** | 19.8 → **7.3** (6.4) | 149 → 85 / **161** | 4.7 / 5.3 → 3.3 / 4.2 | 4.7 / 5.0 → 4.2 / 4.3 | 0.7 / 0.6 | 14.1 / 14.1 |
-| Club-2026 | pilot | 100 → **12** | 70.0 → **26.9** (25.6) | 420 → 164 / **370** | 9.6 / 10.8 → 4.6 / 7.2 | 9.5 / 12.1 → 4.0 / 5.4 | 11.4 / 6.3 | 5.2 / 10.5 |
-| Club-2026 | envelope | 207 → **21** | 153.4 → **51.7** (50.8) | 871 → 361 / **760** | 10.3 / 11.2 → 5.8 / 8.0 | 11.0 / 11.9 → 6.2 / 8.6 | 16.1 / 0.5 | 9.7 / 12.8 |
-| Club-full | pilot | 191 → **15** | 156.5 → **59.4** (57.2) | 850 → 330 / **838** | 9.6 / 10.4 → 4.8 / 7.9 | 10.8 / 11.5 → 2.9 / 3.9 | 25.1 / 0.6 | 5.1 / 8.8 |
-| Club-full | envelope | 330 → **24** | 336.0 → **118.6** (112.1) | 2 136 → 757 / **1 858** | 21.9 / 22.7 → 8.9 / 12.7 | 23.7 / 26.4 → 4.8 / 7.3 | 46.5 / 0.7 | 12.0 / 15.7 |
+| Sprint | pilot | 325 → **15** | 5.0 → **2.5** (1.8) | 68 → 80 / **85** | 3.7 / 4.0 → 2.3 / 3.0 | 3.8 / 4.1 → 2.5 / 2.7 | 2.4 / 0.8 | 0.8 / 0.9 |
+| Sprint | envelope | 328 → **17** | 19.4 → **8.0** (7.5) | 200 → 142 / **181** | 7.1 / 8.1 → 5.6 / 7.3 | 8.2 / 8.6 → 7.2 / 9.4 | 7.0 / 0.8 | 3.1 / 3.6 |
+| Crop-B | pilot | 15 → **12** | 6.0 → **3.1** (2.2) | 80 → 52 / **69** | 1.4 / 1.7 → 1.1 / 1.7 | 1.4 / 1.5 → 1.1 / 1.2 | 0.5 / 0.5 | 5.6 / 5.6 |
+| Crop-B | envelope | 76 → **21** | 16.5 → **6.2** (5.3) | 393 → 76 / **113** | 3.5 / 3.9 → 2.7 / 4.1 | 3.1 / 3.5 → 3.1 / 3.2 | 0.7 / 0.6 | 14.1 / 14.1 |
+| Crop-A | pilot | 22 → **11** | 8.2 → **4.0** (3.1) | 231 → 58 / **82** | 1.8 / 2.0 → 1.3 / 1.6 | 1.9 / 2.1 → 1.5 / 1.5 | 0.6 / 0.5 | 7.5 / 7.5 |
+| Crop-A | envelope | 47 → **18** | 19.8 → **7.3** (6.4) | 149 → 84 / **146** | 4.7 / 5.3 → 3.4 / 4.2 | 4.7 / 5.0 → 4.2 / 4.3 | 0.6 / 0.5 | 14.9 / 14.9 |
+| Club-2026 | pilot | 100 → **12** | 70.0 → **26.9** (25.6) | 420 → 157 / **320** | 9.6 / 10.8 → 4.8 / 7.8 | 9.5 / 12.1 → 4.4 / 6.0 | 10.6 / 7.5 | 5.5 / 9.9 |
+| Club-2026 | envelope | 207 → **21** | 153.4 → **51.7** (50.8) | 871 → 358 / **653** | 10.3 / 11.2 → 5.9 / 8.4 | 11.0 / 11.9 → 6.4 / 8.3 | 18.1 / 0.8 | 11.8 / 13.8 |
+| Club-full | pilot | 191 → **15** | 156.5 → **59.4** (57.2) | 850 → 308 / **668** | 9.6 / 10.4 → 5.0 / 8.2 | 10.8 / 11.5 → 3.2 / 4.3 | 22.6 / 0.6 | 5.0 / 7.8 |
+| Club-full | envelope | 330 → **24** | 336.0 → **118.6** (112.1) | 2 136 → 728 / **1 481** | 21.9 / 22.7 → 8.8 / 13.1 | 23.7 / 26.4 → 5.0 / 7.7 | 46.9 / 0.6 | 11.0 / 16.7 |
 
 Phone proxy — 412 × 915 @ 2.625× (Pixel-7 metrics) with CDP
 `Emulation.setCPUThrottlingRate(4)`. CDP throttles the page's main
@@ -899,18 +905,42 @@ worker runs on another core. GPU columns remain the laptop iGPU:
 
 | Map | Mode | Draws S1 → B2 | GPU MB S1 → B2 (bench max) | after read, ms: S1 → B2 first / complete | Frame GPU fit S1 → B2 | Frame GPU 1× S1 → B2 | Frame CPU p95 B2 fit / 1× | Bucket prepare p95 / max |
 |---|---|---:|---:|---:|---:|---:|---:|---:|
-| Sprint | pilot | 325 → **15** | 5.0 → **2.5** (1.9) | 252 → 223 / **393** | 4.6 / 8.2 → 2.7 / 3.4 | 4.6 / 7.4 → 2.5 / 2.8 | 3.2 / 2.9 | 3.5 / 5.2 |
-| Sprint | envelope | 328 → **17** | 19.4 → **8.0** (7.5) | 788 → 526 / **1 057** | 7.2 / 8.8 → 4.8 / 7.6 | 8.3 / 8.8 → 4.2 / 5.2 | 10.0 / 8.1 | 10.8 / 12.4 |
-| Crop-B | pilot | 15 → **12** | 6.0 → **3.1** (2.2) | 230 → 131 / **268** | 1.7 / 2.0 → 1.4 / 1.9 | 1.7 / 1.9 → 1.4 / 1.7 | 2.5 / 5.0 | 17.5 / 17.5 |
-| Crop-B | envelope | 76 → **21** | 16.5 → **6.2** (5.3) | 480 → 454 / **933** | 4.3 / 4.9 → 3.4 / 4.9 | 4.3 / 4.8 → 3.6 / 4.4 | 2.7 / 1.0 | 60.9 / 60.9 |
-| Crop-A | pilot | 22 → **11** | 8.2 → **4.0** (3.1) | 333 → 187 / **408** | 2.2 / 2.5 → 1.6 / 2.0 | 2.1 / 2.2 → 1.6 / 1.9 | 1.1 / 0.9 | 32.5 / 32.5 |
-| Crop-A | envelope | 47 → **18** | 19.8 → **7.3** (6.4) | 558 → 306 / **770** | 5.1 / 5.5 → 4.3 / 5.2 | 5.1 / 5.4 → 4.0 / 4.9 | 1.0 / 0.9 | 50.2 / 50.2 |
-| Club-2026 | pilot | 100 → **12** | 70.0 → **26.9** (25.6) | 1 540 → 631 / **2 543** | 8.0 / 9.4 → 4.0 / 6.5 | 9.9 / 10.6 → 1.9 / 2.6 | 22.3 / 1.0 | 23.7 / 30.4 |
-| Club-2026 | envelope | 207 → **21** | 153.4 → **51.7** (50.8) | 3 180 → 1 300 / **4 848** | 10.7 / 11.4 → 5.7 / 10.3 | 11.2 / 11.7 → 3.7 / 6.5 | 44.2 / 1.3 | 42.6 / 69.6 |
-| Club-full | pilot | 191 → **15** | 156.5 → **59.4** (57.2) | 5 985 → 1 318 / **5 998** | 12.3 / 15.4 → 5.3 / 7.0 | 11.7 / 12.8 → 2.0 / 2.5 | 63.3 / 1.2 | 20.7 / 40.0 |
-| Club-full | envelope | 330 → **24** | 336.0 → **21.9** (92.4) | 7 236 → 3 080 / **3 094** | 21.5 / 22.3 → 8.8 / 12.6 | 21.2 / 21.8 → 3.1 / 4.8 | 95.8 / 12.8 | 0.0 / 0.0 |
+| Sprint | pilot | 325 → **15** | 5.0 → **2.5** (1.8) | 252 → 219 / **330** | 4.6 / 8.2 → 2.7 / 3.2 | 4.6 / 7.4 → 2.5 / 2.8 | 3.0 / 2.4 | 4.9 / 6.7 |
+| Sprint | envelope | 328 → **17** | 19.4 → **8.0** (7.5) | 788 → 460 / **729** | 7.2 / 8.8 → 4.4 / 8.7 | 8.3 / 8.8 → 4.5 / 5.4 | 9.2 / 7.5 | 8.9 / 9.7 |
+| Crop-B | pilot | 15 → **12** | 6.0 → **3.1** (2.2) | 230 → 113 / **212** | 1.7 / 2.0 → 1.4 / 1.9 | 1.7 / 1.9 → 1.5 / 1.7 | 0.9 / 0.9 | 16.0 / 16.0 |
+| Crop-B | envelope | 76 → **21** | 16.5 → **6.2** (5.3) | 480 → 230 / **407** | 4.3 / 4.9 → 3.5 / 4.9 | 4.3 / 4.8 → 3.6 / 4.5 | 1.0 / 1.0 | 40.8 / 40.8 |
+| Crop-A | pilot | 22 → **11** | 8.2 → **4.0** (3.1) | 333 → 174 / **322** | 2.2 / 2.5 → 1.6 / 2.0 | 2.1 / 2.2 → 1.6 / 2.0 | 0.9 / 0.9 | 34.6 / 34.6 |
+| Crop-A | envelope | 47 → **18** | 19.8 → **7.3** (6.4) | 558 → 275 / **549** | 5.1 / 5.5 → 4.3 / 5.2 | 5.1 / 5.4 → 4.0 / 5.0 | 1.0 / 0.8 | 40.7 / 40.7 |
+| Club-2026 | pilot | 100 → **12** | 70.0 → **26.9** (25.6) | 1 540 → 542 / **1 572** | 8.0 / 9.4 → 3.7 / 6.2 | 9.9 / 10.6 → 1.7 / 2.6 | 16.2 / 1.2 | 21.1 / 22.3 |
+| Club-2026 | envelope | 207 → **21** | 153.4 → **51.7** (50.8) | 3 180 → 1 268 / **3 226** | 10.7 / 11.4 → 5.9 / 10.5 | 11.2 / 11.7 → 3.5 / 6.7 | 40.6 / 1.4 | 39.4 / 42.9 |
+| Club-full | pilot | 191 → **15** | 156.5 → **59.4** (57.2) | 5 985 → 1 084 / **3 588** | 12.3 / 15.4 → 5.2 / 7.2 | 11.7 / 12.8 → 2.1 / 3.2 | 53.3 / 1.3 | 19.2 / 24.2 |
+| Club-full | envelope | 330 → **24** | 336.0 → **21.9** (91.8) | 7 236 → 2 717 / **2 730** | 21.5 / 22.3 → 7.5 / 10.5 | 21.2 / 21.8 → 2.9 / 4.9 | 74.7 / 11.0 | 0.0 / 0.0 |
 
-Per build step (S1 §6's order):
+**Source mode** (2026-10-21, after B1): each map's own symbols through
+the matcher and the canonical library (`mode=source`), symbolised by
+B1's full-library stage — the case S1 could only bracket between pilot
+and envelope. One run each, laptop; phone proxy as above (inline):
+
+| Map | Passes | Draws | GPU MB (bench max) | after read: first / complete | Frame GPU fit / 1× | Frame CPU p95 fit / 1× | Bucket prepare p95 | Phone proxy: first / complete | Phone proxy: frame GPU 1× · CPU p95 1× |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| Sprint | 14 416 | 54 | 9.4 (8.7) | 183 / **220** | 7.0 / 7.4 | 8.8 / 0.8 | 3.1 | 577 / **966** | 5.7 · 9.5 |
+| Crop-B | 3 308 | 62 | 6.7 (5.8) | 88 / **125** | 2.6 / 3.0 | 0.7 / 0.6 | 15.1 | 279 / **464** | 3.8 · 1.0 |
+| Crop-A | 5 355 | 63 | 7.8 (7.0) | 102 / **155** | 3.1 / 4.0 | 0.7 / 0.7 | 16.6 | 310 / **539** | 4.2 · 1.0 |
+| Club-2026 | 52 169 | 111 | 61.3 (54.6) | 440 / **834** | 6.2 / 6.8 | 22.6 / 1.1 | 11.4 | 1 493 / **3 765** | 4.2 · 1.7 |
+| Club-full | 115 972 | 167 | 126.3 (122.5) | 853 / **1 715** | 11.4 / 8.9 | 54.5 / 16.6 | 12.9 | 3 112 / **9 710** | 6.1 · 32.2 |
+
+Every draw count stays under 300 (more colours and kinds than the pilot
+family: up to 167 on Club-full at fit), resident memory inside the
+budgets with everything resident (Club-full 126 MB), event maps complete
+in 125–220 ms on the laptop and club maps in 0.83–1.7 s. Over budget:
+Club-full's frame GPU at 1× paper on the iGPU (8.9 ms) and its 1× frame
+CPU p95 (16.6 ms laptop: visible-set rebuilds of a dense viewport as the
+pan crosses cells — the §8 rebuild item), and on the phone proxy the
+event maps' complete first view (464–966 ms) and Club-full's first frame
+(3.1 s: at the phone's fit view it sits just above the zoom gate, so its
+whole detail is wanted).
+
+Per build step (S1 §6's order; runs before the B1 sync):
 
 | Step | What it moved | Before → after |
 |---|---|---|
@@ -927,12 +957,12 @@ Against the budgets (04 §9):
 |---|---|---|---|
 | draw calls ≤ 300 | 11–21 | 12–24 | ✓ everywhere (S1: up to 330) |
 | resident GPU ≤ 30 / 150 MB | 2.5–8.0 MB | 27–119 MB laptop fit (fully resident), 22 MB gated on the phone | ✓ (S1: Club-full 157 / 336 MB ✗) |
-| frame CPU ≤ 4 ms, dense viewport at 1× | ≤ 0.8 ms laptop, ≤ 8 ms phone proxy (Sprint envelope, frames sharing the thread with inline preparation; ≤ 5 elsewhere) | ≤ 0.7 ms laptop except Club-2026 pilot (p95 6.3 ms: visible-set rebuilds as the pan crosses cells), ≤ 1.3 ms phone proxy (Club-full envelope 12.8 with inline preparation) | ✓ laptop except that one row; ✓ phone with the worker off-thread (the proxy's outliers are the inline preparation). Not met at overview zooms of club maps above the gate: `fit` p95 11–47 ms laptop — visible-set rebuilds of a whole club map (§8) |
-| frame GPU ≤ 8 ms, dense viewport at 1× | 1.1–7.5 avg laptop, 1.4–4.2 phone viewport | 2.9–6.2 laptop, 1.9–3.7 phone viewport (iGPU) | ✓ on the iGPU; the phone GPU is B0 / B-gate |
-| first frame ≤ 500 ms event | complete first view 69–188 ms laptop; phone proxy 268–408 pilot, 770–1 057 envelope | — | ✓ laptop; phone proxy ✓ pilot, ✗ envelope (S1 480–788 there): the inline proxy serialises frames and preparation; the envelope is the deliberately pessimistic upper bound |
-| first frame ≤ 2.5 s club | — | laptop: first 164–757 ms, complete 370–1 858 ms; phone proxy: first 631–3 080 ms, gated Club-full envelope 3.1 s | ✓ laptop; phone proxy ✓ except Club-full envelope (3.1 s; S1 7.2 s) — symbolise 1.28 s (shared stage) and the base layer's earcut of every fill 0.93 s dominate |
-| symbolise whole document in worker ≤ 100 / 800 ms | 14–45 ms laptop | 69–324 ms laptop; 1.28 s Club-full envelope throttled | ✓ laptop; ✗ throttled Club-full envelope (shared stage, B1's area) |
-| prepare one bucket ≤ 5 / 10 ms | Sprint p95 0.9–3.0 ms laptop ✓; Crop-A/B (club density) p95 5–14 ms | p95 5–12 ms, max 16 ms laptop; 21–43 ms phone proxy | ✓ Sprint; club-density cells at the limit on the laptop (p95 ≤ 10 ms for pilot, 12–14 for envelope), ✗ on the throttled proxy (§8) |
+| frame CPU ≤ 4 ms, dense viewport at 1× | ≤ 0.8 ms laptop, ≤ 7.5 ms phone proxy (Sprint envelope, frames sharing the thread with inline preparation; ≤ 2.4 elsewhere) | ≤ 0.8 ms laptop except Club-2026 pilot (p95 7.5 ms: visible-set rebuilds as the pan crosses cells), ≤ 1.4 ms phone proxy (Club-full envelope 11.0 with inline preparation) | ✓ laptop except that one row; ✓ phone with the worker off-thread (the proxy's outliers are the inline preparation). Not met at overview zooms of club maps above the gate: `fit` p95 11–47 ms laptop — visible-set rebuilds of a whole club map (§8) |
+| frame GPU ≤ 8 ms, dense viewport at 1× | 1.1–7.2 avg laptop, 1.5–4.5 phone viewport | 3.2–6.4 laptop, 1.7–3.5 phone viewport (iGPU) | ✓ on the iGPU; the phone GPU is B0 / B-gate |
+| first frame ≤ 500 ms event | complete first view 69–181 ms laptop; phone proxy 212–330 pilot, 407–729 envelope | — | ✓ laptop; phone proxy ✓ pilot, envelope ✓ Crop-B, ✗ Sprint and Crop-A (S1 558–788 there): the inline proxy serialises frames and preparation; the envelope is the deliberately pessimistic upper bound |
+| first frame ≤ 2.5 s club | — | laptop: first 157–728 ms, complete 320–1 481 ms; phone proxy: first 542–2 717 ms, gated Club-full envelope 2.7 s | ✓ laptop; phone proxy ✓ except Club-full envelope (2.7 s; S1 7.2 s) — symbolise 1.16 s (shared stage) and the base layer's earcut of every fill dominate |
+| symbolise whole document in worker ≤ 100 / 800 ms | 15–36 ms laptop | 69–289 ms laptop; 1.16 s Club-full envelope throttled | ✓ laptop; ✗ throttled Club-full envelope (shared stage) |
+| prepare one bucket ≤ 5 / 10 ms | Sprint p95 0.8–3.1 ms laptop ✓; Crop-A/B (club density) p95 6–15 ms | p95 5–12 ms, max 17 ms laptop; 19–43 ms phone proxy | ✓ Sprint; club-density cells at the limit on the laptop (p95 ≤ 10 ms for pilot, 12–15 for envelope), ✗ on the throttled proxy (§8) |
 
 #### Dev pages
 
@@ -1223,8 +1253,10 @@ The shared module is exported as a namespace: `import { render } from
 
 - **§5.2 rebuild-free visible set.** A visible-set rebuild is linear in
   the indices in view: tens of ms for a whole club map above the zoom
-  gate (frame CPU p95 16–47 ms in the laptop `fit` bench on Club-2026 /
-  Club-full, against ≤ 4 ms; the dense 1× paper viewport is ≤ 1.5 ms).
+  gate (frame CPU p95 11–55 ms in the laptop `fit` bench on Club-2026 /
+  Club-full, against ≤ 4 ms), and 16.6 ms p95 for Club-full in source
+  mode even in the dense 1× paper viewport as the pan crosses cells
+  (pilot / envelope: ≤ 1.5 ms).
   `WEBGL_multi_draw` over a resident index arena (04 §6.8 point 2) drops
   the rebuild where the extension exists; the copy path stays the
   fallback.
