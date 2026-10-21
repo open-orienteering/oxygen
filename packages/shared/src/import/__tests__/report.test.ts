@@ -4,7 +4,7 @@
  */
 
 import { readFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { importReportSchema, importWarningDetailSchema, isUnsupportedPrimitive, WARNING_CLASS } from "../report.js";
@@ -16,7 +16,7 @@ const SOURCES = ["ocad-source", "omap-source", "omap-reader", "omap-symbols", "o
 function emittedCodes(): Set<string> {
   const found = new Set<string>();
   for (const name of SOURCES) {
-    const text = readFileSync(join(here, "..", `${name}.ts`), "utf8");
+    const text = readFileSync(resolve(here, "..", `${name}.ts`), "utf8");
     for (const m of text.matchAll(/(?:warn|add)\(\s*"([A-Z][A-Z0-9_]+)"|code: "([A-Z][A-Z0-9_]+)"|\|\s*"([A-Z][A-Z0-9_]+)"/g)) {
       found.add(m[1] ?? m[2] ?? m[3]);
     }

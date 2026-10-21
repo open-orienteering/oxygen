@@ -67,8 +67,13 @@ describe("importOmapToDocument", () => {
     const { header } = mapDocument.readMapDocumentHeader(result.bytes);
     const report = buildImportReport(result, header, "test.xmap");
     expect(report.source).toMatchObject({ kind: "omap", version: "9", fileName: "test.xmap" });
-    expect(report.importer).toBe("omap-3");
+    expect(report.importer).toBe("omap-4");
     expect(report.warnings.map((w) => w.code)).toContain("TEMPLATES_DROPPED");
+    // Per-emission detail (docs/map-import.md §3.6): the missing-symbol stub and the dropped templates are listed with their messages.
+    expect(report.warningDetails).toEqual(expect.arrayContaining([
+      expect.objectContaining({ code: "MISSING_SYMBOL", symbolIdx: expect.any(Number) }),
+      expect.objectContaining({ code: "TEMPLATES_DROPPED", message: expect.stringContaining("ortho.png") }),
+    ]));
     // Stage 5 (docs/map-import.md §3.8): UTM 33N projects; the fixture draws no meridian cluster.
     expect(report.georeference).toMatchObject({ crs: "EPSG:32633", method: "epsg", projectable: true, gridRotationDeg: 2.5 });
     expect(report.north).toMatchObject({ meridian: null, declaredGrivationDeg: 2.5, meridianStalenessDeg: null });
@@ -76,11 +81,11 @@ describe("importOmapToDocument", () => {
   });
 
   it("keeps the two source kinds apart: different importer versions, OCAD path unchanged", async () => {
-    expect(importerVersionFor("ocad")).toBe("ocad-9");
-    expect(importerVersionFor("omap")).toBe("omap-3");
+    expect(importerVersionFor("ocad")).toBe("ocad-10");
+    expect(importerVersionFor("omap")).toBe("omap-4");
     const ocd = await importOcadToDocument(ocdFixture, "test.ocd");
     expect(ocd.kind).toBe("ocad");
-    expect(mapDocument.readMapDocumentHeader(ocd.bytes).header.format.importer).toBe("ocad-9");
+    expect(mapDocument.readMapDocumentHeader(ocd.bytes).header.format.importer).toBe("ocad-10");
     await expect(importMapToDocument(ocdFixture, "test.ocd", "omap")).rejects.toThrow();
   });
 

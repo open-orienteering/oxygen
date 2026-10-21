@@ -1,4 +1,5 @@
 import { describe, it, expect } from "vitest";
+import type { OcadSymbolDefLike } from "../ocad-symbols.js";
 import { WARNING_DETAILS_MAX } from "../report.js";
 import { OCAD_UNITS_PER_MM, ocadColourStack, ocadGeoreferencing, ocadToDocumentInput, type OcadFileLike } from "../ocad-source.js";
 import { decodeMapDocument, encodeMapDocument, documentRenderInput } from "../../map-document/index.js";
@@ -244,10 +245,10 @@ describe("ocadToDocumentInput", () => {
     // Club-full shape: two radius rectangles (one aggregated header warning) and an area whose border points at itself.
     const withStale = () => {
       const s = source();
-      s.symbols.push(
+      s.symbols = [...Array.from(s.symbols),
         { symNum: 301002, number: "301.2", type: 3, status: 0, description: "Stale", fillOn: true, fillColor: 0, borderOn: true, borderSym: 301002 },
         { symNum: 851001, number: "851.1", type: 7, status: 0, description: "Rektangel 2", lineColor: 0, lineWidth: 16, radius: 100, gridFlags: 0 },
-      );
+      ];
       return s;
     };
 
@@ -284,9 +285,9 @@ describe("ocadToDocumentInput", () => {
 
     it("keeps at most WARNING_DETAILS_MAX entries but counts every emission", () => {
       const s = source();
-      for (let i = 0; i < WARNING_DETAILS_MAX + 1; i++) {
-        s.symbols.push({ symNum: 900000 + i, number: `900.${i}`, type: 3, status: 0, description: "Stale", fillOn: true, fillColor: 0, borderOn: true, borderSym: 900000 + i });
-      }
+      s.symbols = [...Array.from(s.symbols), ...Array.from({ length: WARNING_DETAILS_MAX + 1 }, (_, i): OcadSymbolDefLike => (
+        { symNum: 900000 + i, number: `900.${i}`, type: 3, status: 0, description: "Stale", fillOn: true, fillColor: 0, borderOn: true, borderSym: 900000 + i }
+      ))];
       const r = ocadToDocumentInput(s, opts);
       expect(r.warningDetails).toHaveLength(WARNING_DETAILS_MAX);
       expect(r.warnings.find((w) => w.code === "SYMBOL_REFERENCE_INVALID")?.count).toBe(WARNING_DETAILS_MAX + 1);
