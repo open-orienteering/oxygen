@@ -66,7 +66,7 @@ interface DocWindow {
       gpuBytes: number;
     };
     bench?: Scenario & { paper1x?: Scenario };
-    compare?: { fraction: number; differing: number; total: number };
+    compare?: { fraction: number; differing: number; total: number; target: "canvas" | "fbo" };
     error?: string;
   };
 }
@@ -173,13 +173,15 @@ test.describe("WebGL2 map backend — whole document", () => {
 
   test("the arena path draws what the per-pass golden path draws", async ({ page }, testInfo) => {
     // The per-pass path is the one the golden spec checks against the reference raster (§6.2).
-    for (const mode of ["envelope", "source"]) {
-      await page.goto(`/dev/map-gl-doc?mode=${mode}&compare=1`);
+    // The canvas target, and an offscreen framebuffer passed as the render target (§5.2 Drawing).
+    for (const [mode, target] of [["envelope", "canvas"], ["source", "canvas"], ["envelope", "fbo"]]) {
+      await page.goto(`/dev/map-gl-doc?mode=${mode}&compare=1&target=${target}`);
       await page.getByTestId("map-gl-doc-file").setInputFiles("e2e/test.ocd");
       await page.waitForFunction(() => (window as unknown as DocWindow).__mapGlDoc?.compare || (window as unknown as DocWindow).__mapGlDoc?.error, null, { timeout: 60_000 });
       const cmp = await page.evaluate(() => (window as unknown as DocWindow).__mapGlDoc?.compare);
-      testInfo.annotations.push({ type: `map-gl-doc-compare-${mode}`, description: JSON.stringify(cmp) });
+      testInfo.annotations.push({ type: `map-gl-doc-compare-${mode}-${target}`, description: JSON.stringify(cmp) });
       expect(cmp).toBeDefined();
+      expect(cmp!.target).toBe(target);
       // 04 §9: ≤ 0.5 % of pixels differing beyond the AA tolerance.
       expect(cmp!.fraction).toBeLessThanOrEqual(0.005);
     }

@@ -16,6 +16,7 @@
 import { MITRE_LIMIT, type FanGeometry, type Prepared, type PreparedStream, type StrokeGeometry } from "./prepare.js";
 import { GpuArena } from "./arena.js";
 import { ATLAS_WIDTH, INSTANCE_FLOATS, type MeshAtlas } from "./mesh-atlas.js";
+import { viewMatrix, type RenderTarget } from "./view.js";
 import {
   FILL_VERTEX_BYTES, HATCH_VERTEX_BYTES, STROKE_VERTEX_BYTES,
   type ClipGroup, type PreparedPart, type ResidentPart, type VisibleSet,
@@ -44,6 +45,12 @@ export interface DocumentRenderOptions {
   minGlyphPx?: number;
   /** Hatch stripes closer than this on screen become a tint of coverage width / spacing. Default 1.5 px. */
   hatchTintPx?: number;
+  /**
+   * Model → clip matrix (column-major) overriding the orthographic map view, e.g. a perspective
+   * camera; positions are relative to the document origin. Cell selection and the screen-only rules
+   * still use the `View` (its `pxPerUm`).
+   */
+  viewMatrix?: Float32Array;
   /** Profiling (dev page `kinds=`): draw only these kinds. */
   kinds?: ReadonlySet<"fill" | "hatch" | "stroke" | "glyph" | "clip" | "text">;
 }
@@ -150,19 +157,13 @@ void main() {
 
 // ---- arena path (B2): shaders -----------------------------------------------
 
-/** Positions are relative to the document origin; the view centre arrives relative to it too (computed in f64). */
+/** Positions are relative to the document origin; `u_view` is the model → clip matrix (view.ts, built in f64). */
 const VS_ARENA = `#version 300 es
 precision highp float;
-uniform vec2 u_centre;
-uniform vec2 u_scale;
-uniform vec2 u_rot;          // cos, sin of the display rotation
-uniform float u_pxPerUm;
+uniform mat4 u_view;
+uniform float u_pxPerUm;     // screen density for the screen-only rules (floor, skips, tint)
 uniform float u_minPx;       // hairline floor, device px
-vec4 projectA(vec2 p) {
-  vec2 d = p - u_centre;
-  d = vec2(u_rot.x * d.x - u_rot.y * d.y, u_rot.y * d.x + u_rot.x * d.y);
-  return vec4(d * u_scale, 0.0, 1.0);
-}
+vec4 projectA(vec2 p) { return u_view * vec4(p, 0.0, 1.0); }
 `;
 
 const VS_A_FILL = VS_ARENA + `
@@ -630,7 +631,7 @@ export class MapGlRenderer {
   }
 
   private arenaPrograms(): ArenaState["programs"] {
-    const common = ["u_centre", "u_scale", "u_rot", "u_pxPerUm", "u_minPx", "u_colour"];
+    const common = ["u_view", "u_pxPerUm", "u_minPx", "u_colour"];
     this.arenaProgramCache ??= {
       fill: this.link(VS_A_FILL, FS_SOLID, ["a_pos"], common),
       hatch: this.link(VS_A_HATCH, FS_A_HATCH, ["a_pos", "a_n", "a_h"], [...common, "u_tintPx"]),
@@ -760,8 +761,12 @@ export class MapGlRenderer {
     a.vaoGeneration = gen;
   }
 
-  /** Draws the visible set: per colour in stack order, fill → hatch → stroke → glyph (+ clips) → text. */
-  renderDocument(view: View, opts: DocumentRenderOptions): FrameStats {
+  /**
+   * Draws the visible set: per colour in stack order, fill → hatch → stroke → glyph (+ clips) → text.
+   * `target` is where: a framebuffer and its size (default the canvas at the view's size). A
+   * framebuffer target needs a stencil attachment for pattern clips.
+   */
+  renderDocument(view: View, opts: DocumentRenderOptions, target?: RenderTarget): FrameStats {
     const gl = this.gl;
     const a = this.requireArena();
     const t0 = performance.now();
@@ -769,8 +774,9 @@ export class MapGlRenderer {
     const q = this.timer ? gl.createQuery() : null;
     if (q && this.timer) gl.beginQuery(this.timer.ext.TIME_ELAPSED_EXT, q);
 
-    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
-    gl.viewport(0, 0, view.widthPx, view.heightPx);
+    const t = target ?? { framebuffer: null, width: view.widthPx, height: view.heightPx };
+    gl.bindFramebuffer(gl.FRAMEBUFFER, t.framebuffer);
+    gl.viewport(0, 0, t.width, t.height);
     const bg = opts.background ?? [1, 1, 1];
     gl.clearColor(bg[0], bg[1], bg[2], 1);
     gl.clearStencil(0);
@@ -787,15 +793,11 @@ export class MapGlRenderer {
     if (vs) {
       this.bindArenaVaos(a);
       const P = a.programs;
-      const rot = ((view.rotationDeg ?? 0) * Math.PI) / 180;
-      const cx = view.centreX - a.originX, cy = view.centreY - a.originY;
-      const sx = (2 * view.pxPerUm) / view.widthPx, sy = (2 * view.pxPerUm) / view.heightPx;
+      const m = opts.viewMatrix ?? viewMatrix(view, a.originX, a.originY);
       const minPx = opts.minStrokePx ?? 1;
       for (const p of [P.fill, P.hatch, P.stroke, P.inst]) {
         gl.useProgram(p.prog);
-        gl.uniform2f(p.uniforms.u_centre, cx, cy);
-        gl.uniform2f(p.uniforms.u_scale, sx, sy);
-        gl.uniform2f(p.uniforms.u_rot, Math.cos(rot), Math.sin(rot));
+        gl.uniformMatrix4fv(p.uniforms.u_view, false, m);
         gl.uniform1f(p.uniforms.u_pxPerUm, view.pxPerUm);
         gl.uniform1f(p.uniforms.u_minPx, minPx);
       }

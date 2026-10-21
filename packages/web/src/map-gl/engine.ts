@@ -16,6 +16,7 @@ import {
   type PreparedPart, type ResidentPart, type ViewRect,
 } from "./buckets.js";
 import type { DocumentRenderOptions, FrameStats, MapGlRenderer } from "./renderer.js";
+import type { RenderTarget } from "./view.js";
 import { createMapGlWorker, messageChannelScheduler, type LoadRequest, type LoadSummary, type WorkerReply, type WorkerRequest } from "./worker.js";
 
 /** Message transport to the worker: a real Web Worker, or the same handler inline. */
@@ -266,8 +267,8 @@ export class MapGlEngine {
     for (const w of ws) w();
   }
 
-  /** Draws the current view; rebuilds the visible set first if the drawn set changed. */
-  render(opts: DocumentRenderOptions): FrameStats {
+  /** Draws the current view into `target` (default the canvas); rebuilds the visible set first if the drawn set changed. */
+  render(opts: DocumentRenderOptions, target?: RenderTarget): FrameStats {
     const view = this.view;
     if (!view || !this.summary) return { drawCalls: 0, cpuMs: 0 };
     const t0 = performance.now();
@@ -300,7 +301,7 @@ export class MapGlEngine {
       this.st.rebuilds++;
       this.st.lastRebuildMs = performance.now() - t0;
     }
-    const stats = this.renderer.renderDocument(view, opts);
+    const stats = this.renderer.renderDocument(view, opts, target);
     stats.cpuMs = performance.now() - t0;
     return stats;
   }

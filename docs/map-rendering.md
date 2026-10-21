@@ -521,15 +521,17 @@ triangle-list extrusion everywhere except within the 1 % band at shared
 joins (the unit test compares coverage outside a band of 3 % of the half
 width: the 1 % plus the sampling step). The flattening tolerance stays 10 µm at every zoom.
 
-**Coordinates.** Arena positions are float32 **relative to the document
-origin** — the centre of the bucket grid — and the view centre is passed
-relative to it, computed in float64 on the CPU. On Club-full (± 585 mm
+**Coordinates** (decided with the user, 2026-10-21). Arena positions
+are float32 **relative to the document origin** — the centre of the
+bucket grid — with one origin for every bucket; the view matrix (Drawing)
+is built relative to it in float64 on the CPU. On Club-full (± 585 mm
 from the origin) the float32 step is 0.06 µm: ≈ 0.03 px at 20× paper on
-a 2.625-DPR phone. ⟨DECISION: pending the user's answer, b2-questions.md⟩
-This replaces 04 §6.10's int16 bucket-relative positions: a visible-set
-draw spans many buckets, so there is no per-bucket draw to carry a
-bucket matrix, and the large-object bucket spans the whole map, which
-int16 at 10 µm (± 327 mm) cannot hold.
+a 2.625-DPR phone (unit test, in float32 arithmetic). This replaces
+04 §6.10's int16 bucket-relative positions: a visible-set draw spans
+many buckets, so there is no per-bucket draw to carry a bucket matrix,
+and the large-object bucket spans the whole map, which int16 at 10 µm
+(± 327 mm) cannot hold. The precision fixture of 04 §8 ("+ Precision")
+is the trigger to revisit.
 
 Vertex layouts (`buckets.ts`):
 
@@ -646,12 +648,26 @@ once the dev page pre-warmed it).
 
 #### Drawing (GPU)
 
-Arena path (`renderDocument`): for each colour in stack order, fill →
-hatch → stroke → glyph size classes and that colour's clip groups →
-text; one `drawElements` per indexed kind, one `drawArraysInstanced` per
-size class. The stream is colour-major, so no sorting happens here.
-Projection subtracts `u_centre` (origin-relative), rotates by
-`View.rotationDeg` and scales by px/µm per axis; y-up throughout.
+Arena path (`renderDocument(view, opts, target?)`): for each colour in
+stack order, fill → hatch → stroke → glyph size classes and that
+colour's clip groups → text; one `drawElements` per indexed kind, one
+`drawArraysInstanced` per size class. The stream is colour-major, so no
+sorting happens here.
+
+* **Projection** — one `mat4` uniform `u_view`, model (origin-relative
+  paper µm) → clip, column-major, built per frame by `viewMatrix(view,
+  origin)` (`view.ts`) in float64: `S · R(rotationDeg) · (p − (centre −
+  origin))`, y-up throughout. `DocumentRenderOptions.viewMatrix`
+  replaces it with any other camera — a perspective one for terrain
+  draping (research topic 10) — without touching the shaders. The
+  screen-only rules (floor, glyph skip, hatch tint) read the view's
+  `pxPerUm`, and cell selection reads the `View`'s rectangle; under a
+  perspective camera both need the camera's footprint (§8).
+* **Render target** — a `RenderTarget { framebuffer, width, height }`;
+  default the canvas at the view's size. A framebuffer target needs a
+  stencil attachment (pattern clips). `compare=1&target=fbo` on the dev
+  page draws into an offscreen 4× MSAA framebuffer and the E2E compares
+  it with the per-pass path like the canvas.
 
 * **Fills** — earcut triangles, opaque. No stencil.
 * **Strokes** — `halfWidth × offset` in the vertex shader. **Hairline
@@ -848,8 +864,9 @@ published on `window.__mapGlDoc` for Playwright.
 | `map-gl/__tests__/arena.test.ts` | free list: first fit, exact accounting, coalescing, growth |
 | `map-gl/__tests__/worker-protocol.test.ts` | `loaded` contents and transfer list; `prepare` queue replacement and slicing; first-view queue and the gate; base + detail + large covers every kind; load errors |
 | `map-gl/__tests__/engine.test.ts` | residency through the real worker handler and a fake renderer: drawn + prefetch requested and uploaded; drawn parts never evicted, over budget reported; the same view never re-requests what was evicted; rebuild on drawn-set change but not on zoom within the cells; below the gate only base + large, queue cancelled; hidden objects |
+| `map-gl/__tests__/view.test.ts` | view matrix: centre → clip origin, canvas edges → ±1, y-up, rotation; sub-pixel precision far from the origin in float32 arithmetic |
 | `map-gl/__tests__/prepare.test.ts` | per-pass path (fans, S1 extrusion), unchanged |
-| `e2e/map-gl-doc.spec.ts` | the arena path through the real worker on `e2e/test.ocd` (pilot, envelope): buckets, complete frame, ≤ 300 draws on every bench frame of both scenarios; worker = inline; a 0.05 MB budget evicts, reports over budget and still draws; **arena = per-pass golden path within 0.5 % pixels** (envelope and source); document vs reader path, native `.oxvm`, source mode, `.xmap`, decode error |
+| `e2e/map-gl-doc.spec.ts` | the arena path through the real worker on `e2e/test.ocd` (pilot, envelope): buckets, complete frame, ≤ 300 draws on every bench frame of both scenarios; worker = inline; a 0.05 MB budget evicts, reports over budget and still draws; **arena = per-pass golden path within 0.5 % pixels** (envelope and source on the canvas, envelope into an offscreen framebuffer target); document vs reader path, native `.oxvm`, source mode, `.xmap`, decode error |
 | `e2e/map-gl-golden.spec.ts` | unchanged: the per-pass path against the reference raster |
 
 ### 5.3 PDF (api)
@@ -1008,6 +1025,7 @@ library's own fixtures (04 §8 table, one per rule) are added in slice B.
 | `packages/web/src/map-gl/arena.ts` | vertex arenas: free list, growth by copy |
 | `packages/web/src/map-gl/worker.ts`, `worker-entry.ts` | the worker's message handler and its binding |
 | `packages/web/src/map-gl/engine.ts` | main-thread controller: worker transport, residency, visible-set rebuilds |
+| `packages/web/src/map-gl/view.ts` | the arena path's model → clip matrix, `RenderTarget` |
 | `packages/web/src/map-gl/renderer.ts` | WebGL2 backend, GPU stage (arena programs and draw loop; per-pass path, stencil, supersampling; GPU timer) |
 | `packages/web/src/pages/dev/MapGlFixturePage.tsx` | dev-only golden page `/dev/map-gl` |
 | `packages/web/src/pages/dev/MapGlDocPage.tsx` | dev-only whole-document page `/dev/map-gl-doc` (load report, bench) |
@@ -1047,6 +1065,11 @@ The shared module is exported as a namespace: `import { render } from
   the arena = per-pass pixel comparison relies on both paths using MSAA
   alone; B4 / the B-gate's parity check against tiles is where it is
   judged.
+- **§5.2 perspective cameras** (terrain draping, research topic 10):
+  the projection is already one matrix and the target any framebuffer;
+  still needed are cell selection from the camera's footprint instead of
+  the `View` rectangle, and a per-vertex screen density for the
+  screen-only rules instead of the one `pxPerUm`.
 - **§5.2 zoom-banded flattening tolerance** (S1 §4.1): not built; strips
   and the gate meet the memory budgets without it.
 - **§5.2 earcut deviation check** (04 §6.1): polygons earcut gets wrong

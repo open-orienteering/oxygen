@@ -20,7 +20,8 @@
  * `worker=0` (worker handler inline on this thread), `gate=0` (no zoom gate), `budget=<MB>` (default
  * 150), `kinds=fill,stroke,…` (draw only these kinds; profiling), `lod=0` (no glyph skip / hatch
  * tint), `url=`, `bench=1`, `compare=1` (also draw the stream through the per-pass golden path into
- * a second canvas and publish the pixel difference). Not routed in production builds.
+ * a second canvas and publish the pixel difference; with `target=fbo` the arena path draws into an
+ * offscreen framebuffer). Not routed in production builds.
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -134,6 +135,8 @@ interface BenchReport extends ScenarioReport {
 }
 
 interface CompareReport {
+  /** Where the arena path drew: the canvas, or an offscreen framebuffer (`target=fbo`). */
+  target: "canvas" | "fbo";
   pxPerUm: number;
   total: number;
   differing: number;
@@ -189,6 +192,51 @@ function summarise(xs: number[]): Summary {
 const r = (x: number) => Math.round(x * 100) / 100;
 const nextFrame = () => new Promise<void>((res) => requestAnimationFrame(() => res()));
 
+/**
+ * An offscreen render target as the canvas has it: 4× MSAA colour + depth/stencil (pattern clips need
+ * the stencil), resolved into a single-sampled framebuffer for readback.
+ */
+function offscreenTarget(gl: WebGL2RenderingContext, w: number, h: number) {
+  const samples = Math.min(4, gl.getParameter(gl.MAX_SAMPLES) as number);
+  const rb = (format: number, ms: boolean) => {
+    const r = gl.createRenderbuffer()!;
+    gl.bindRenderbuffer(gl.RENDERBUFFER, r);
+    if (ms) gl.renderbufferStorageMultisample(gl.RENDERBUFFER, samples, format, w, h);
+    else gl.renderbufferStorage(gl.RENDERBUFFER, format, w, h);
+    return r;
+  };
+  const colour = rb(gl.RGBA8, true), depth = rb(gl.DEPTH24_STENCIL8, true), resolved = rb(gl.RGBA8, false);
+  const msaa = gl.createFramebuffer()!;
+  gl.bindFramebuffer(gl.FRAMEBUFFER, msaa);
+  gl.framebufferRenderbuffer(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.RENDERBUFFER, colour);
+  gl.framebufferRenderbuffer(gl.FRAMEBUFFER, gl.DEPTH_STENCIL_ATTACHMENT, gl.RENDERBUFFER, depth);
+  const single = gl.createFramebuffer()!;
+  gl.bindFramebuffer(gl.FRAMEBUFFER, single);
+  gl.framebufferRenderbuffer(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.RENDERBUFFER, resolved);
+  gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+  return {
+    target: { framebuffer: msaa, width: w, height: h },
+    resolve: () => {
+      gl.bindFramebuffer(gl.READ_FRAMEBUFFER, msaa);
+      gl.bindFramebuffer(gl.DRAW_FRAMEBUFFER, single);
+      gl.blitFramebuffer(0, 0, w, h, 0, 0, w, h, gl.COLOR_BUFFER_BIT, gl.NEAREST);
+      gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    },
+    read: () => {
+      const px = new Uint8Array(w * h * 4);
+      gl.bindFramebuffer(gl.FRAMEBUFFER, single);
+      gl.readPixels(0, 0, w, h, gl.RGBA, gl.UNSIGNED_BYTE, px);
+      gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+      return px;
+    },
+    dispose: () => {
+      gl.deleteFramebuffer(msaa);
+      gl.deleteFramebuffer(single);
+      for (const r of [colour, depth, resolved]) gl.deleteRenderbuffer(r);
+    },
+  };
+}
+
 export function MapGlDocPage() {
   const [params] = useSearchParams();
   const modeParam = params.get("mode");
@@ -200,6 +248,7 @@ export function MapGlDocPage() {
   const budgetMB = Number(params.get("budget") ?? 150) || 150;
   const autoBench = params.get("bench") === "1";
   const compare = params.get("compare") === "1";
+  const compareTarget = params.get("target") === "fbo" ? "fbo" : "canvas";
   const kindsParam = params.get("kinds");
   const lod = params.get("lod") !== "0";
 
@@ -457,7 +506,17 @@ export function MapGlDocPage() {
           // Zoomed so a 0.14 mm line is ≥ 1.5 px: the two paths' hairline floors (§5.2) do not differ there.
           const view: View = { ...fit, pxPerUm: Math.max(fit.pxPerUm, 1.5 / 140) };
           viewRef.current = { ...view };
-          draw();
+          // `target=fbo`: draw the arena path into an offscreen multisampled framebuffer (RenderTarget)
+          // and read it back after a resolve, instead of the canvas.
+          const offscreen = compareTarget === "fbo" ? offscreenTarget(renderer.gl, w, h) : undefined;
+          if (offscreen) {
+            const engine = engineRef.current!;
+            engine.setView(view);
+            engine.render({ colour: colourRef.current }, offscreen.target);
+            offscreen.resolve();
+          } else {
+            draw();
+          }
           renderer.gl.finish();
           const c2 = compareRef.current!;
           c2.width = w;
@@ -471,14 +530,15 @@ export function MapGlDocPage() {
             gl.readPixels(0, 0, w, h, gl.RGBA, gl.UNSIGNED_BYTE, px);
             return px;
           };
-          const a = read(renderer.gl), bpx = read(other.gl);
+          const a = offscreen ? offscreen.read() : read(renderer.gl), bpx = read(other.gl);
+          offscreen?.dispose();
           let differing = 0;
           for (let i = 0; i < a.length; i += 4) {
             const d = Math.max(Math.abs(a[i] - bpx[i]), Math.abs(a[i + 1] - bpx[i + 1]), Math.abs(a[i + 2] - bpx[i + 2]));
             if (d > 16) differing++;
           }
           other.dispose();
-          const cmp: CompareReport = { pxPerUm: view.pxPerUm, total: w * h, differing, fraction: differing / (w * h) };
+          const cmp: CompareReport = { pxPerUm: view.pxPerUm, total: w * h, differing, fraction: differing / (w * h), target: offscreen ? "fbo" : "canvas" };
           window.__mapGlDoc = { ...window.__mapGlDoc, compare: cmp };
           viewRef.current = { ...fit };
           requestDraw();
@@ -492,7 +552,7 @@ export function MapGlDocPage() {
         setStatus("error");
       }
     },
-    [draw, mode, via, useWorker, gate, budgetMB, compare, sizeCanvas, requestDraw],
+    [draw, mode, via, useWorker, gate, budgetMB, compare, compareTarget, sizeCanvas, requestDraw],
   );
 
   const runScenario = useCallback(
