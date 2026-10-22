@@ -1,4 +1,6 @@
 import { test, expect } from "./helpers/map-pipeline";
+import { reseed } from "./helpers/reseed";
+import { uploadEventMap } from "./helpers/map-upload";
 import { getMockWebSerialScript } from "./helpers/mock-webserial";
 import { waitForTrpc } from "./helpers/trpc";
 
@@ -321,5 +323,49 @@ test.describe("WebSerial SI Reader", () => {
     const panel = page.getByTestId("recent-cards-panel");
     await expect(panel).toContainText("2501002");
     await expect(panel).toContainText("2501001");
+  });
+});
+
+// The post-readout map under both map pipelines (09 §4 B gate,
+// docs/map-pipeline-switch.md §5): the readout's map follows the event's
+// switch. Last in the file: it gives the seed event a map, and `reseed()`
+// takes it away again for the specs after this one.
+test.describe("post-readout map", () => {
+  test.afterAll(reseed);
+
+  test("the card readout map follows the event's map pipeline", async ({ page, mapPipeline }) => {
+    test.setTimeout(120_000);
+    await selectCompetition(page);
+    const viewer = page.getByTestId("map-viewer").first();
+    const upload = page.getByTestId("map-panel").first().getByRole("button", { name: "Upload map" });
+    await expect(viewer.or(upload)).toBeVisible({ timeout: 60_000 });
+    if (!(await viewer.isVisible())) await uploadEventMap(page);
+    await expect(viewer).toBeVisible({ timeout: 60_000 });
+
+    await page.getByTestId("connect-reader").click();
+    await expect(page.getByTestId("reader-status")).toBeVisible({ timeout: 5000 });
+    const resolved = waitForTrpc(page, "cardReadout.readout");
+    await page.evaluate(() =>
+      window.__siMock.insertCard(501438, [
+        { controlCode: 31, time: 36360 },
+        { controlCode: 32, time: 36420 },
+        { controlCode: 33, time: 36480 },
+      ]),
+    );
+    await resolved;
+    await page.getByTestId("card-notification-view").click();
+    await expect(page).toHaveURL(/card-readout.*card=501438/);
+
+    const readoutMap = page.getByTestId("map-viewer").last();
+    await expect(readoutMap).toBeVisible({ timeout: 60_000 });
+    await expect(readoutMap).toHaveAttribute("data-map-pipeline", mapPipeline);
+    if (mapPipeline === "vector") {
+      await expect(readoutMap.getByTestId("map-vector-layer")).toHaveAttribute("data-ready", "true", {
+        timeout: 30_000,
+      });
+      await expect(readoutMap.locator("img[data-tile-url]")).toHaveCount(0);
+    } else {
+      await expect(readoutMap.getByTestId("map-tiles-composite")).toHaveCount(1);
+    }
   });
 });

@@ -58,5 +58,6 @@
   "mapEngineToggle": "Använd ny kartmotor",
   "mapEngineHelp": "Ritar alla kartor i tävlingen från kartdokumentet i stället för bildrutor.",
   "mapEngineReport": "Något fel på kartan? Kontakta den som driver instansen.",
-  "mapEngineFallback": "Den här webbläsaren kan inte rita den nya kartmotorn; visar den klassiska kartan."
+  "mapEngineFallback": "Den här webbläsaren kan inte rita den nya kartmotorn; visar den klassiska kartan.",
+  "mapEngineSwitchFailed": "Kunde inte byta kartmotor."
 }

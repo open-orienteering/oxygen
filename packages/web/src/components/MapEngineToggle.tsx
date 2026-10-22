@@ -42,6 +42,11 @@ export function MapEngineToggle({ pipeline, allowLegacy }: { pipeline: MapPipeli
       </label>
       <span>{t("mapEngineHelp")}</span>
       {allowLegacy && <span data-testid="map-engine-report">{t("mapEngineReport")}</span>}
+      {setPipeline.isError && (
+        <span data-testid="map-engine-error" className="text-red-600">
+          {t("mapEngineSwitchFailed")} {setPipeline.error.message}
+        </span>
+      )}
     </div>
   );
 }

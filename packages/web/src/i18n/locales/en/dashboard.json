@@ -58,5 +58,6 @@
   "mapEngineToggle": "Use new map engine",
   "mapEngineHelp": "Draws every map of this event from the map document instead of image tiles.",
   "mapEngineReport": "Something wrong with the map? Tell your instance maintainer.",
-  "mapEngineFallback": "This browser cannot draw the new map engine; showing the classic map."
+  "mapEngineFallback": "This browser cannot draw the new map engine; showing the classic map.",
+  "mapEngineSwitchFailed": "Could not switch the map engine."
 }

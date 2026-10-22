@@ -20,6 +20,7 @@ test.describe("map viewer gestures (touch)", () => {
 
   test("measure: pan does not leave phantom cursor; taps place points; undo works", async ({
     page,
+    mapPipeline,
   }) => {
     test.setTimeout(120_000);
     await page.goto("/");
@@ -30,6 +31,8 @@ test.describe("map viewer gestures (touch)", () => {
     await uploadEventMap(page);
     const viewer = page.getByTestId("map-viewer").first();
     await expect(viewer).toBeVisible({ timeout: 60000 });
+    // Dual-run spec (docs/map-pipeline-switch.md §5): the project's pipeline is the one drawn.
+    await expect(viewer).toHaveAttribute("data-map-pipeline", mapPipeline);
 
     await viewer.getByTitle("Measure distance").tap();
     await expect(viewer.getByTitle("Measure distance")).toHaveClass(
@@ -117,6 +120,7 @@ test.describe("map viewer gestures (desktop)", () => {
 
   test("measure undo click removes a point without placing another", async ({
     page,
+    mapPipeline,
   }) => {
     test.setTimeout(120_000);
     await page.goto("/");
@@ -127,6 +131,8 @@ test.describe("map viewer gestures (desktop)", () => {
     await uploadEventMap(page);
     const viewer = page.getByTestId("map-viewer").first();
     await expect(viewer).toBeVisible({ timeout: 60000 });
+    // Dual-run spec (docs/map-pipeline-switch.md §5): the project's pipeline is the one drawn.
+    await expect(viewer).toHaveAttribute("data-map-pipeline", mapPipeline);
 
     await viewer.getByTitle("Measure distance").click();
     const box = await viewer.boundingBox();

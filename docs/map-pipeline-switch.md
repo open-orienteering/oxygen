@@ -163,9 +163,10 @@ decision 2026-10-22).
   in-app report channel (user decision 2026-10-22).
 - The change is optimistic: the query cache takes the new value at once
   (every map panel of the event follows), the server's answer replaces
-  it, a refusal puts the old value back.
+  it, a refusal puts the old value back and shows "Could not switch the
+  map engine." with the server's message (`data-testid="map-engine-error"`).
 - i18n: `dashboard.mapEngineToggle`, `mapEngineHelp`, `mapEngineReport`,
-  `mapEngineFallback` (en, sv).
+  `mapEngineFallback`, `mapEngineSwitchFailed` (en, sv).
 
 ## 5. E2E under both values
 
@@ -200,11 +201,12 @@ value (09 §3, §10). `playwright.config.ts`:
 |------|--------|
 | `packages/api/src/__tests__/map-pipeline.test.ts` | setting keys; default and `allowLegacy` parsing; both read through one reader; `canSwitchTo`; TTL override |
 | `packages/api/src/__tests__/integration/map-pipeline.test.ts` | a row written without the field is `legacy`; new events take the default, existing ones keep theirs; `setMapPipeline` both ways; `PRECONDITION_FAILED` for `legacy` without `allowLegacy`, `vector` still allowed; Zod rejects other values |
+| `packages/api/src/__tests__/integration/lease.test.ts` "refreshes cloud-owned settings…" | a flip on the cloud reaches the leased venue copy (the column is not in `EXCLUDED_FIELDS`) |
 | `packages/api/src/__tests__/integration/map-tiles.test.ts` "skips the pre-cache for a vector event" | the poll answers `{0,0,false}` and renders nothing; a requested tile is served; no background crawl to other zooms |
 | `packages/web/src/lib/__tests__/map-pipeline.test.ts` | `resolveMapPipeline`: vector needs a document, unknown = legacy, WebGL2 fallback only while `allowLegacy` |
 | `e2e/map-pipeline-switch.spec.ts` | toggle text and report line; on → vector layer, another page of the event draws vector with no tile request; off → tiles; without `allowLegacy` no toggle on a vector event and no report line on a legacy one; no WebGL2 → tiles + notice while allowed, the layer's message when not; a lost context → tiles + notice |
 | `e2e/map-vector-layer.spec.ts` | the vector layer in the viewer, the event switched through the column; a legacy event stays on tiles |
-| `e2e/webserial.spec.ts`, `mobile-layout.spec.ts`, `map-viewer-gestures.spec.ts` | the same flows under `map-legacy` and `map-vector` |
+| `e2e/webserial.spec.ts`, `mobile-layout.spec.ts`, `map-viewer-gestures.spec.ts` | the same flows under `map-legacy` and `map-vector`; each asserts `data-map-pipeline` equals the project's value; `webserial` "post-readout map" uploads the map, reads a card and checks the readout map (vector layer ready and no tile image under `vector`, tiles under `legacy`) |
 
 ## 7. Pending in this chapter
 
