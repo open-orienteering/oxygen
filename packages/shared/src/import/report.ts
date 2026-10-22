@@ -55,6 +55,7 @@ export const WARNING_CLASS: Readonly<Record<string, WarningClass>> = {
   OBJECT_TAGS_DROPPED: "by-design",
   PARTS_MERGED: "by-design",
   HELPER_SYMBOLS_HIDDEN: "by-design",
+  RECTANGLE_GRID_DROPPED: "by-design",
   SYMBOL_REFERENCE_INVALID: "source-error",
   MISSING_SYMBOL: "source-error",
   DUPLICATE_SYMBOL_NUMBER: "source-error",

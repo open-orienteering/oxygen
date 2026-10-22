@@ -129,6 +129,9 @@ export interface OcadSymbolDefLike extends OcadSymbolLike {
   radius?: number;
   /** Bit 0: grid on. */
   gridFlags?: number;
+  /** Grid cell size, 1/100 mm. */
+  cellWidth?: number;
+  cellHeight?: number;
 }
 
 export interface SymbolConversionContext {
@@ -150,6 +153,7 @@ export interface SymbolConversionWarning {
     | "SYMBOL_REFERENCE_INVALID"
     | "SYMBOL_TYPE_UNSUPPORTED"
     | "SYMBOL_EMPTY"
+    | "RECTANGLE_GRID_DROPPED"
     | "FONT_SUBSTITUTED"
     | "IRREGULAR_PATTERN_REGULARISED";
   message: string;
@@ -303,15 +307,22 @@ class Converter {
     if (lineColour !== undefined || frWidthUm > 0 || dash) {
       const main: StrokeSpec = { colour: lineColour ?? 0, widthUm: lineColour !== undefined ? widthUm : 0, cap, join };
       if (dash) main.dash = dash;
-      if ((s.distFromStart ?? 0) > 0) main.shortenStartUm = s.distFromStart! * UM;
-      if ((s.distToEnd ?? 0) > 0) main.shortenEndUm = s.distToEnd! * UM;
-      // OCAD framing: a line of `frWidth` (total) drawn under the main line in its own colour.
+      // On a pointed line OCAD draws distFromStart / distToEnd as the length of the point, not a shortening.
+      const start = (s.distFromStart ?? 0) * UM, end = (s.distToEnd ?? 0) * UM;
+      if (cap === "pointed") {
+        if (start > 0 || end > 0) main.taper = { ...(start > 0 ? { startUm: start } : {}), ...(end > 0 ? { endUm: end } : {}) };
+      } else {
+        if (start > 0) main.shortenStartUm = start;
+        if (end > 0) main.shortenEndUm = end;
+      }
+      // OCAD framing: a line of `frWidth` (total) drawn under the main line in its own colour. Narrower than the
+      // main line, the per-side width is negative (map-rendering §4.4).
       if (frWidthUm > 0) {
         const frColour = this.colour(s.frColor, "framing line");
         if (frColour !== undefined) {
           const per = (frWidthUm - main.widthUm) / 2;
-          if (per > 0) main.halo = { colour: frColour, widthUm: per, continuous: true };
-          else this.warn("SYMBOL_FEATURE_DROPPED", `${s.number}: framing line narrower than the main line`);
+          if (per !== 0) main.halo = { colour: frColour, widthUm: per, continuous: true };
+          else this.warn("SYMBOL_FEATURE_DROPPED", `${s.number}: framing line as wide as the main line`);
           if (main.widthUm === 0) Object.assign(main, ocadLineStyle(s.frStyle));
         }
       }
@@ -506,12 +517,20 @@ class Converter {
     const ws = s.wordSpace ?? 100;
     // OCAD word spacing is a percentage of the normal space; approximate the normal space as 0.278 em.
     if (ws !== 100) out.wordSpacing = ((ws - 100) / 100) * 0.278;
-    if (v !== 0) this.warn("SYMBOL_FEATURE_DROPPED", `${s.number}: vertical text alignment ${v === 4 ? "middle" : v === 8 ? "top" : v}`);
+    // Baseline (0) leaves the field out: the IR has no default for it, so the parsed symbol stays as it was.
+    if (v === 4) out.verticalAlign = "middle";
+    else if (v === 8) out.verticalAlign = "top";
+    else if (v !== 0) this.warn("SYMBOL_FEATURE_DROPPED", `${s.number}: vertical text alignment ${v}`);
     switch (s.frMode ?? 0) {
       case 0: break;
-      case 1:
-        this.warn("SYMBOL_FEATURE_DROPPED", `${s.number}: text shadow framing (colour ${s.frColor ?? 0}, offset ${mm(s.frOfX)} / ${mm(s.frOfY)} mm)`);
+      case 1: {
+        // Offsets in OCAD's paper coordinates (y up), as the IR's. No offset draws nothing, as a zero-width halo.
+        const offsetXUm = (s.frOfX ?? 0) * UM, offsetYUm = (s.frOfY ?? 0) * UM;
+        if (offsetXUm === 0 && offsetYUm === 0) break;
+        const shadowColour = this.colour(s.frColor, "text shadow");
+        if (shadowColour !== undefined) out.shadow = { colour: shadowColour, offsetXUm, offsetYUm };
         break;
+      }
       case 2: {
         // frWidth is how far the framing reaches beyond the glyph outline: the halo's half-width (Mapper's framing_line_half_width).
         const widthUm = (s.frWidth ?? 0) * UM;
@@ -534,7 +553,10 @@ class Converter {
 
   // ---- rectangle -----------------------------------------------------------
 
-  /** The rectangle's outline (Mapper's OCD import does the same); corners stay sharp. */
+  /**
+   * The rectangle's outline (Mapper's OCD import does the same). The corner radius rounds the drawn path; the
+   * object's corners stay verbatim (docs/map-import.md §3.3). The grid is not drawn, by design.
+   */
   rectangle(): RenderSymbolInput | null {
     const s = this.sym;
     const widthUm = (s.lineWidth ?? 0) * UM;
@@ -544,9 +566,12 @@ class Converter {
     }
     const colour = this.colour(s.lineColor, "rectangle line");
     if (colour === undefined) return null;
-    if ((s.radius ?? 0) > 0) this.warn("SYMBOL_FEATURE_DROPPED", `${s.number}: rectangle corner radius ${mm(s.radius)} mm`);
-    if (((s.gridFlags ?? 0) & 1) === 1) this.warn("SYMBOL_FEATURE_DROPPED", `${s.number}: rectangle grid`);
-    return { type: "line", ...this.common(), main: { colour, widthUm, cap: "flat", join: "miter" } };
+    if (((s.gridFlags ?? 0) & 1) === 1) {
+      this.warn("RECTANGLE_GRID_DROPPED", `${s.number}: rectangle grid (cells ${mm(s.cellWidth)} × ${mm(s.cellHeight)} mm) not drawn`);
+    }
+    const out: RenderSymbolInput & { type: "line" } = { type: "line", ...this.common(), main: { colour, widthUm, cap: "flat", join: "miter" } };
+    if ((s.radius ?? 0) > 0) out.cornerRadiusUm = s.radius! * UM;
+    return out;
   }
 
   common(): { id: string; code: string; name: string } {

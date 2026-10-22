@@ -206,18 +206,21 @@ describe("ocadToDocumentInput", () => {
     expect(input.objects[9].symbolIdx).toBe(input.header.symbols.indexOf(missing[0]));
   });
 
-  it("resolves rectangle objects to the parsed rectangle symbol, drawn as an outline line", () => {
+  it("resolves rectangle objects to the parsed rectangle symbol, drawn as an outline line with its corner radius", () => {
     const rect = input.header.symbols[5];
-    expect(rect).toMatchObject({ code: "850.1", kind: "rectangle", origin: "source", render: { type: "line", main: { colour: 1, widthUm: 160, cap: "flat", join: "miter" } } });
+    expect(rect).toMatchObject({
+      code: "850.1", kind: "rectangle", origin: "source",
+      render: { type: "line", cornerRadiusUm: 2290, main: { colour: 1, widthUm: 160, cap: "flat", join: "miter" } },
+    });
     expect(input.objects[7].symbolIdx).toBe(5);
     expect(input.objects[8].symbolIdx).toBe(5);
-    expect(result.warnings.find((w) => w.code === "SYMBOL_FEATURE_DROPPED")).toEqual({ code: "SYMBOL_FEATURE_DROPPED", count: 1, message: "850.1: rectangle corner radius 2.29 mm" });
+    expect(result.warnings.find((w) => w.code === "SYMBOL_FEATURE_DROPPED")).toBeUndefined();
   });
 
   it("records what was dropped as stable warning codes", () => {
     const codes = Object.fromEntries(result.warnings.map((w) => [w.code, w.count]));
     expect(codes).toEqual({
-      SYMBOL_COLOUR_UNKNOWN: 1, SYMBOL_EMPTY: 1, SYMBOL_FEATURE_DROPPED: 1, DUPLICATE_SYMBOL_NUMBER: 1, EMPTY_GEOMETRY_DROPPED: 1, MISSING_SYMBOL: 1, TEMPLATES_DROPPED: 2,
+      SYMBOL_COLOUR_UNKNOWN: 1, SYMBOL_EMPTY: 1, DUPLICATE_SYMBOL_NUMBER: 1, EMPTY_GEOMETRY_DROPPED: 1, MISSING_SYMBOL: 1, TEMPLATES_DROPPED: 2,
       SYMBOL_TYPE_UNSUPPORTED: 2, READER_WARNING: 2,
     });
     expect(input.header.warnings).toEqual(result.warnings);
@@ -242,12 +245,13 @@ describe("ocadToDocumentInput", () => {
   });
 
   describe("warning detail (docs/map-import.md §3.6)", () => {
-    // Club-full shape: two radius rectangles (one aggregated header warning) and an area whose border points at itself.
+    // Club-full shape: an area whose border points at itself, and two dropped constructs (one aggregated header warning).
     const withStale = () => {
       const s = source();
       s.symbols = [...Array.from(s.symbols),
         { symNum: 301002, number: "301.2", type: 3, status: 0, description: "Stale", fillOn: true, fillColor: 0, borderOn: true, borderSym: 301002 },
-        { symNum: 851001, number: "851.1", type: 7, status: 0, description: "Rektangel 2", lineColor: 0, lineWidth: 16, radius: 100, gridFlags: 0 },
+        { symNum: 822000, number: "822.0", type: 4, status: 0, description: "Text 2", fontName: "Arial", fontColor: 7, fontSize: 80, lbOn: true },
+        { symNum: 823000, number: "823.0", type: 4, status: 0, description: "Text 3", fontName: "Arial", fontColor: 7, fontSize: 80, frMode: 3, frColor: 0 },
       ];
       return s;
     };
@@ -255,11 +259,11 @@ describe("ocadToDocumentInput", () => {
     it("lists one entry per emission with the symbol index, while the header keeps the first message per code", () => {
       const r = ocadToDocumentInput(withStale(), opts);
       const dropped = r.warnings.find((w) => w.code === "SYMBOL_FEATURE_DROPPED");
-      expect(dropped).toEqual({ code: "SYMBOL_FEATURE_DROPPED", count: 2, message: "850.1: rectangle corner radius 2.29 mm" });
+      expect(dropped).toEqual({ code: "SYMBOL_FEATURE_DROPPED", count: 2, message: "822.0: line below text" });
       const details = r.warningDetails.filter((d) => d.code === "SYMBOL_FEATURE_DROPPED");
       expect(details).toEqual([
-        { code: "SYMBOL_FEATURE_DROPPED", message: "850.1: rectangle corner radius 2.29 mm", symbolIdx: 5 },
-        { code: "SYMBOL_FEATURE_DROPPED", message: "851.1: rectangle corner radius 1 mm", symbolIdx: 7 },
+        { code: "SYMBOL_FEATURE_DROPPED", message: "822.0: line below text", symbolIdx: 7 },
+        { code: "SYMBOL_FEATURE_DROPPED", message: "823.0: text rectangle framing", symbolIdx: 8 },
       ]);
       expect(r.warningDetails.filter((d) => d.code === "SYMBOL_REFERENCE_INVALID")).toEqual([
         { code: "SYMBOL_REFERENCE_INVALID", message: "301.2: border symbol 301002 is the symbol itself", symbolIdx: 6 },
