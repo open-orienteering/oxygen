@@ -1123,8 +1123,10 @@ samples). Measured ratios, headless Chromium / SwiftShader (B1 run,
 | `lib-precision` | 178 / 64 566 (0.276 %) |
 
 B9 (2026-10-21) changed `lib-line-glyphs` and `lib-precision` (one more
-510 object, no glyphs on unflagged ends — §4.5); both pass the budget in
-B9's run, their ratios are not re-measured here.
+510 object, no glyphs on unflagged ends — §4.5); B10 (2026-10-22, library
+2026.10.3) changed them again (510 bars ±0.37 mm) and `lib-borders` (the
+509.1 railway's new construction). All three pass the budget in those
+runs; their ratios are not re-measured here.
 
 What remains is coverage quantisation: every residual differs by 17–26
 levels and the GL values are multiples of 16. **The ratio therefore
@@ -1195,10 +1197,10 @@ scene is a snapshot (§6.1) and a golden (§6.2).
 |---|---|---|---|
 | `lib-dash-ocad` | 1 | ISOM 505 with a corner and a dash point; 505 closed (18 mm loop); 507; 505 short, solid and *`minGaps: 2`* | slice boundaries as arc lengths: 1.8 mm dashes, corner dash one slice round the corner, a 1.8 mm dash centred on the dash point; loop seam dash on the start point; 507's secondary cut; forced gaps |
 | `lib-dash-omap` | 2 | ISOM 505 *as `layout: "omap"`*: single, *`halfOuterDashes`*, *groups of 2*, *`showAtLeastOne: false`* on a 0.8 mm line, with a dash point | interval lists at `f = 1`; the dash point centres one dash |
-| `lib-line-glyphs` | 3 | ISOM 516, 201, *529 at corners with `ignoreEnds` and `scaleAtCorners`*, 510 (dash point inside, plain ends), 416 on a closed loop, *510 at corners* (the OCAD import's shape, B9) with a plain start and a corner-flagged end | instance positions, angles (bisector 45°), mitre scale √2, no glyph on an unflagged end, one on a flagged end, `minCountClosed` |
+| `lib-line-glyphs` | 3 | ISOM 516, 201, *529 at corners with `ignoreEnds` and `scaleAtCorners`*, *510 at dash points* (dash point inside, plain ends; a hand variant since B10), 416 on a closed loop, 510 (corners — the library's placement since B10 and the OCAD import's shape, B9) with a plain start and a corner-flagged end | instance positions, angles (bisector 45°), mitre scale √2, no glyph on an unflagged end, one on a flagged end, `minCountClosed` |
 | `lib-pattern` | 4 | ISOM 402 on two adjacent squares, *402 turning with the object* at 30°, 208 (shifted rows), *213 at 0° in the four clip modes* | one origin-anchored lattice; rotated lattice; half-cell row shift; completelyInside ⊂ centreInside ⊂ partiallyInside = clip, `clip` path only in clip mode |
 | `lib-hatch` | 5 | ISOM 709 on two adjacent areas, 407, *709 crossed (second hatch at 135°)* | pass parameters and order; every `hatchLines` endpoint on `x·nx + y·ny = offset + k·spacing` |
-| `lib-borders` | 6 | ISSprOM 509.1, 505 round a corner, *505 with a 0.2 mm right edge at 0.3 mm* | border offsets; both dashed borders keep the main line's phase at their own lengths; asymmetric edges |
+| `lib-borders` | 6 | ISSprOM 509.1, 505 round a corner, *505 with a 0.2 mm right edge at 0.3 mm* | 509.1 (B10): an unsliced black 0.45 band under white 1.0 / 1.5 dashes shortened 1.5 mm at both ends (black ends, 1.5 mm black between dashes); both dashed borders keep the main line's phase at their own lengths; asymmetric edges |
 | `lib-holes` | 7 | ISOM 401: two holes, one reversed; a self-touching ring | one even-odd fill each, rings passed through untouched (earcut deviation is the GL backend's, image tier) |
 | `lib-text` | 8 | ISOM 704 "31"; 603.b *left / centre / right*; a two-line 603.b | em from the digit height (Liberation "0" = 1430 units → 5.73 mm), advances with kerning ("AV"), alignment shifts, line spacing |
 | `lib-halos` | 9 | ISSprOM 704.b over 521; *508 with a continuous white band* over 406 | the white outline between the building's black and upper purple; the band its own pass over the green |
@@ -1299,9 +1301,9 @@ diverge (unexplained > 10 %):
 
 | Map | Compared | Diverging, `--source` | Diverging, canonical | Unsanctioned |
 |---|---|---|---|---|
-| Sprint | 86 | 7 | 9 | canonical 101.1 / 103.1 slope lines |
-| Crop-B | 94 | 4 | 10 | canonical 101.1 / 103.1; 522 canopy tone |
-| Club-2026 | 186 | 23 | 26 | canonical 101.2 / 103.3 slope lines |
+| Sprint | 86 | 7 | 9 | canonical 101.1 / 103.1 slope lines (fixed in B10) |
+| Crop-B | 94 | 4 | 10 | canonical 101.1 / 103.1 (fixed in B10); 522 canopy tone |
+| Club-2026 | 186 | 23 | 26 | canonical 101.2 / 103.3 slope lines (fixed in B10) |
 
 Drawn from source definitions, every divergence on all three maps is
 sanctioned (exit 0): pattern and hatch phase, text fonts, OCAD dash
@@ -1316,9 +1318,18 @@ what became of it:
   vertices only, ends included when flagged (§4.5): club-2026's 510.0
   had a pole on each of its 44 object ends; 7 of those ends are corner
   points and keep theirs. The 510 window at 20 px/mm is now `close`.
-- **To B10 (library).** 101.b / 103.b slope ticks point the wrong way
-  (52–66 % on every map); 510 / 511 / 512 poles are placed
-  `atDashPoints`, which no importer produces.
+- **Fixed in the library (B10, 2026.10.3).** 101.b / 103.b slope ticks
+  pointed to −y (uphill on imported maps); 510 / 511 / 511.b poles were
+  placed `atDashPoints`, which no importer produces. Canonical,
+  unexplained ÷ ink before → after: club-2026 101.2 54.85 → 0.00 %,
+  103.3 51.65 → 0.00 %; Sprint 101.1 65.67 → 0.00 %, 103.1 62.31 →
+  0.00 %; Crop-B 101.1 52.41 → 0.00 %, 103.1 52.91 → 0.00 %. 510.0 on
+  club-2026 and Crop-B now matches the library (was drawn from source,
+  `suggested`) at the same 4.49 % / 0.85 %; Sprint's 509.100 railway
+  now matches ISSprOM 509.1 at 0.00 % (differing 38.67 %: OCAD dash
+  phase and the black ends); ISOM 111 on club-2026 now matches at
+  0.00 %. Auto matches per map: club-2026 85 → 87, Sprint 101 → 105,
+  Crop-B 100 → 102, club-full 98 → 100, Crop-A 101 → 103.
 - **Spec-faithful, kept.** Cliffs: every 201.x / 202.x variant matches
   the legacy at 40 px/mm from source (0 % unexplained); canonically
   matched 202.2 / 201.5 get ISOM's flat ends (the "small houses"),
@@ -1435,11 +1446,6 @@ The shared module is exported as a namespace: `import { render } from
 - **S2 confirmation** of §4.2 step 3 (what stretches, the `round`
   threshold), of `endGapUm` and of the vertical anchor's metrics (§4.9),
   against OCAD exports.
-- **Library entry 107** (erosion gully, both editions) states "ends taper
-  over 0.75 mm" in its notes but carries no `taper` yet: any change to an
-  entry's render bumps `SYMBOL_LIBRARY_VERSION` and with it every
-  document's identity, so it is left to the library's owner (B7) with the
-  next library release.
 - **Serif and mono faces** — `liberation-serif` / `liberation-mono` are
   in the IR and the importers map Times / Courier to them, but no face is
   shipped (§4.10), so such text draws nothing with `NO_FONT`.
