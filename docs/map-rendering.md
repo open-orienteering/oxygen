@@ -511,6 +511,39 @@ compatible with Oxygen's AGPL and with embedding in PDFs. `LICENSE` in
 the directory is the upstream text. The server loads them through
 `packages/api/src/render/fonts.ts`.
 
+`packages/shared/fonts/msdf/` holds the WebGL2 backend's **text atlas**
+(§5.2 "Text atlas"), generated from these two files and committed:
+
+| Page | Code points | Image | Glyphs (Sans + Narrow) |
+|---|---|---|---:|
+| `text-atlas.latin.{png,json}` | ASCII U+0020–007E, Latin-1 Supplement U+00A0–00FF, Latin Extended-A U+0100–017F, general punctuation U+2010–2027, € U+20AC | 724 × 724 | 334 + 334 |
+| `text-atlas.cyrillic.{png,json}` | Cyrillic U+0400–04FF (what the faces have: U+0400–045F, 0472–0473, 0490–0491) | 416 × 416 | 100 + 100 |
+
+Both faces share each page. MTSDF (RGB multi-channel signed distance,
+A true signed distance), 32 px per em, distance range 8 px (0.25 em),
+keyed by **glyph id** (what a `TextPass` carries); a glyph on the Latin
+page is not repeated on the Cyrillic page; empty glyphs (space) have no
+entry. The JSON records per face the TTF's SHA-256 and `unitsPerEm`,
+and per glyph its plane bounds (em, y-up, relative to the glyph origin,
+including half the range) and atlas bounds (px, top-left origin).
+
+Regenerate after changing a font file or a page's ranges:
+
+```bash
+pnpm text-atlas:generate
+```
+
+`packages/web/scripts/generate-text-atlas.ts` computes each page's
+glyph ids with the shared TrueType reader, runs `msdf-atlas-gen` v1.4
+(Chlumsky, built from the pinned tag by
+`packages/web/scripts/text-atlas/Dockerfile` in a throwaway image —
+no native toolchain on the host, the same pages on every machine) with
+`-type mtsdf -size 32 -pxrange 8 -yorigin top -seed 0 -threads 1`, and
+turns its JSON into the committed table (`map-gl/text-atlas-build.ts`).
+Output is byte-identical across runs. `map-gl/__tests__/text-atlas.test.ts`
+fails when the committed pages no longer match the fonts (hash) or the
+ranges (a glyph the font has that no page holds).
+
 ## 5. Backends
 
 ### 5.1 Reference raster (api: tests and previews)
@@ -585,7 +618,9 @@ worker.ts      document bytes ──► stream ──► atlas, buckets,      pu
                resident layers; detail parts on request           (worker-entry.ts binds it)
 prepare.ts     geometry builders: flattening, indexed strips,     pure TS, typed arrays, no GL
                even-odd earcut; the per-pass fan path (goldens)
-mesh-atlas.ts  glyph parts + text glyphs ──► one float texture   pure TS
+mesh-atlas.ts  glyph parts ──► one float texture                pure TS
+text-atlas.ts  committed MSDF pages ──► glyph lookup (worker),    pure TS
+               glyph table (renderer), page selection
 buckets.ts     cells, large bucket, per-part preparation +        pure TS
                range table, visible set, clip groups, LRU, gate
 arena.ts       vertex arenas: free list, grow by copy             GL buffers
@@ -596,9 +631,8 @@ renderer.ts    arena programs + visible-set draw loop;            WebGL2
 ```
 
 Status: B2 — strips, arenas, buckets, visible set, mesh atlas, worker,
-screen-only LOD; B4 — the viewer drives it (§5.4). Not yet: MSDF text
-(B3; text is drawn from outline meshes in the atlas until then),
-`WEBGL_multi_draw` (§8). The per-pass path (`setStream` / `render`: one draw per pass,
+screen-only LOD; B3 — MSDF text from the committed text atlas; B4 — the
+viewer drives it (§5.4). Not yet: `WEBGL_multi_draw` (§8). The per-pass path (`setStream` / `render`: one draw per pass,
 stencil fills) is kept unchanged as the backend's golden path
 (`MapGlFixturePage`, §6.2) and as the reference the arena path is
 compared with (`compare=1`, below). The S1 batch path (`batch.ts`,
@@ -616,7 +650,7 @@ Backend decisions only — nothing here moves a dash or a glyph:
 | glyph | an instance per placement into the mesh atlas | the `GlyphMesh` in glyph-local µm at ¼ tolerance, fills triangulated even-odd, strokes as strips expanded to triangles; instance `x, y, cos, sin, scale` as in the stream plus the mesh's atlas `base, count, radius` |
 | glyph with `clip` | instances + the clip area triangulated even-odd | drawn through the stencil (Drawing, below) |
 | hatch | hatch-arena vertices + indices | the area triangulated like a fill; each vertex carries the stripe normal, spacing, offset and half width so hatches of one colour are one draw |
-| text | an instance per glyph into the mesh atlas | outline in font units, filled even-odd; a halo pass is the outline stroked round/round at `haloWidthUm / k`; instance scale `k = sizeUm / unitsPerEm`, instance `cos, sin` from the glyph's `angles` entry (§3.5; upright without); meshes keyed by (font, glyph, tolerance, halo width) |
+| text | a quad instance per glyph from the text atlas | the glyph's (family, glyph id) looked up in the loaded pages (Text atlas, below); instance `x, y` the glyph origin, `cos, sin` from the glyph's `angles` entry (§3.5; upright without), the em size, the glyph-table entry and the halo half width in em (0 on a fill pass); grouped by (colour, page). A glyph no loaded page holds is not drawn (`TEXT_GLYPH_NOT_IN_ATLAS`) |
 
 **Indexed strips (S1 §4.1).** A polyline point shares **one vertex pair**
 between its two segments — offset ± the mitre vector — when that is
@@ -655,7 +689,9 @@ Vertex layouts (`buckets.ts`):
 | stroke | 16 | f32 x, y · i16 ox, oy normalised by the mitre limit · u16 half width in ½ µm (≤ 32.7 mm) · u16 pad |
 | hatch | 28 | f32 x, y, nx, ny, spacing, offset (origin-relative), half width |
 | atlas | 32 per mesh vertex | two RGBA32F texels: (x, y, ox, oy), (half width, 0, 0, 0); fill vertices have zero offset and width |
-| instance | 32 | f32 x, y, cos, sin, scale, atlas base, count, radius |
+| instance | 32 | glyph: f32 x, y, cos, sin, scale, atlas base, count, radius · text: f32 x, y, cos, sin, em size (µm), glyph-table entry, halo (em), 0 |
+| glyph table | 64 per text glyph | four RGBA32F texels: plane l, b, r, t (em) · uv u0, v0, u1, v1 · page, range (em), 0, 0 · 0 |
+| text page | 4 per atlas pixel | RGBA8, `LINEAR`, no mipmaps: Latin 2.0 MB, Cyrillic 0.7 MB |
 
 The stroke vertex is 16 B rather than 04 §6.2's 8 B: widths mix inside
 one visible-set draw, so the half width is a per-vertex µm value rather
@@ -677,6 +713,7 @@ Constants (`buckets.ts`; 04 §6.11):
 | budget | 30 MB event map, 150 MB club map | `EVENT_BUDGET_BYTES`, `CLUB_BUDGET_BYTES`; the caller picks (B4 from the document's provenance); default 150 MB |
 | hairline floor | 1 device px | strokes thinner are drawn 1 px wide with alpha × true width (Drawing) |
 | glyph skip | 2 device px | instances whose mesh diameter × scale is smaller are not drawn |
+| text skip | 4 device px | text whose em (`sizeUm × pxPerUm`) is smaller is not drawn (04 §6.11); `minTextPx` |
 | hatch tint | 1.5 device px | stripes closer than this become a tint of coverage `width / spacing` |
 | `ARRIVAL_REBUILD_MS` | 150 ms | arriving detail rebuilds the visible set at most this often while more drawn detail is pending |
 | arena growth | 1.25× | by `copyBufferSubData` into a new buffer; offsets never move |
@@ -699,15 +736,16 @@ cells in view and the large bucket.
 **Range table (04 §7).** A part keeps, per kind, its geometry and a
 table of entries `(colour, group, object, start, count)`: colour-major
 (the stream's order), one entry per run of an object's indices — or
-instances, where `group` is the atlas size class. Entries of one colour
+instances, where `group` is the atlas size class (glyphs) or the text
+atlas page (text). Entries of one colour
 are contiguous, so a colour of a part is one span.
 
 **Visible set (04 §6.8 point 2).** `buildVisibleSet(parts, hidden)`
 concatenates the drawn parts' spans per (colour, kind) into one index
 buffer per indexed kind (rebased onto each part's arena offset) and one
-instance buffer per instanced kind, grouped by (colour, size class).
-Draws per frame = colours in view × kinds present + size classes + 3 per
-clip group — independent of how many buckets are in view. It is rebuilt
+instance buffer per instanced kind, grouped by (colour, size class) —
+for text (colour, page). Draws per frame = colours in view × kinds
+present + size classes + text pages + 3 per clip group — independent of how many buckets are in view. It is rebuilt
 when the drawn cell set or the gate state changes, when detail of a
 drawn cell arrives (coalesced, `ARRIVAL_REBUILD_MS`), and when the
 hidden set changes; never while zooming within the same cells. Hidden
@@ -723,7 +761,8 @@ grouping, Sprint envelope drew 161 per frame, 155 of them clip
 stencil passes; after, 17.
 
 **Residency and the budget.** The engine counts the always-resident
-bytes (base parts, large bucket, atlas, the visible-set buffers — which
+bytes (base parts, large bucket, mesh atlas, text atlas pages and glyph
+table, the visible-set buffers — which
 hold every index, instance and clip-group array on the GPU) plus the
 resident detail parts' arena vertices against the budget. After every arrival and
 view change it evicts the least recently drawn detail parts until the
@@ -743,7 +782,7 @@ growth factor).
 
 | Message | Payload | Reply |
 |---|---|---|
-| `load` | document bytes + `DocumentRenderOptions` (or, dev only, render objects + symbols), font files, optional first view (a view, or "fit into w × h"), gate flag | `loaded`: summary (bounds, origin, grid, detail cells, the first view resolved, stage times, bytes), mesh atlas, every cell's base part, the large part — then, without a further request, the first view's detail parts unless it is below the gate |
+| `load` | document bytes + `DocumentRenderOptions` (or, dev only, render objects + symbols, or a symbolised stream), font files, the text atlas pages (JSON, in the renderer's page order), optional first view (a view, or "fit into w × h"), gate flag | `loaded`: summary (bounds, origin, grid, detail cells, the first view resolved, stage times, bytes, text: pages, glyphs resolved, glyphs missing), mesh atlas, every cell's base part, the large part — then, without a further request, the first view's detail parts unless it is below the gate |
 | `prepare` | bucket ids, most urgent first | replaces the queue; one `part` per id |
 | — | | `error` on a failed load |
 
@@ -790,7 +829,7 @@ sorting happens here.
   / floor), so zoomed-out contours fade to a tint instead of aliasing.
   Triangles that overlap at join wedges blend twice under the floor; the
   area is sub-pixel at the zooms where the floor applies.
-* **Instanced glyphs and text** — vertex pulling: the instance carries
+* **Instanced glyphs** — vertex pulling: the instance carries
   its mesh's atlas `base` and `count`; the draw pulls `2^class` vertices
   per instance (a whole number of triangles) and vertices past `count`
   are moved outside clip space. Mesh strokes get the same floor. An
@@ -798,6 +837,18 @@ sorting happens here.
   collapsed the same way. Fills inside meshes are triangles, so
   overlapping instances of one pass no longer XOR (the per-pass path's
   caveat).
+* **MSDF text** — six vertices per instance, one `drawArraysInstanced`
+  per (colour, page) with that page's texture bound; the vertex shader
+  makes the quad from the glyph table's plane bounds × em size, rotated
+  by the instance's `cos, sin`. Fragment, with `t` the page texel, `r`
+  the range in em and `s = sizeUm · pxPerUm` screen px per em:
+  a fill pass covers `clamp((median(t.rgb) − ½) · r · s + ½, 0, 1)`; a
+  halo pass `clamp((halo − |(t.a − ½) · r|) · s + ½, 0, 1)` — the band
+  within `halo` of the outline on the true distance, i.e. the outline
+  stroked round/round at twice the halo width, exactly what the
+  reference raster draws (§5.1: `stroke-width = 2 · haloWidthUm`). The
+  ramp is one screen pixel (analytic AA on top of MSAA, 04 §6.9). Text
+  whose em is under `minTextPx` (4 px) collapses in the vertex shader.
 * **Pattern clip** — per clip group: the areas into stencil bit 0
   (`REPLACE`, colour masked), the group's instances where the bit is
   set (`EQUAL`), the areas again with `ZERO`.
@@ -966,11 +1017,15 @@ Against the budgets (04 §9):
 
 #### Dev pages
 
-`/dev/map-gl?fixture=<golden scene>` (`pages/dev/MapGlFixturePage.tsx`,
+`/dev/map-gl?fixture=<golden scene>[&path=arena]` (`pages/dev/MapGlFixturePage.tsx`,
 routed only when `import.meta.env.DEV`) draws one golden scene into a
 canvas sized by `render.goldenFrame` (§6.2) with
 `preserveDrawingBuffer`, sets `data-ready` when done and shows the
 timings. Fonts are fetched from `packages/shared/fonts/` via Vite `?url`.
+By default it draws through the per-pass path (supersampled 2×);
+`path=arena` loads the scene's stream into an engine over the inline
+worker handler (gate off, Latin text page) and draws through the arena
+path at the context's MSAA — the §6.2 MSDF text tier.
 
 `/dev/map-gl-doc?mode=source|pilot|envelope[&via=document|reader][&worker=0][&gate=0][&budget=<MB>][&lod=0][&kinds=…][&compare=1][&url=…][&bench=1]`
 (`pages/dev/MapGlDocPage.tsx`) runs the whole pipeline on an OCAD,
@@ -997,8 +1052,8 @@ draws and resident bytes of any frame, visible-set rebuilds, evictions
 and frames drawn with drawn detail still pending. Switches, for
 measurement only: `worker=0` runs the worker's handler on the main
 thread, `gate=0` prepares detail at every zoom, `budget=` sets the
-residency budget (MB, default 150), `lod=0` turns off the glyph skip and
-hatch tint, `kinds=fill,stroke,…` draws only those kinds; `compare=1`
+residency budget (MB, default 150), `lod=0` turns off the glyph skip,
+the text skip and the hatch tint, `kinds=fill,stroke,…` draws only those kinds; `compare=1`
 also draws the same stream through the per-pass golden path into a
 second canvas at a zoom where every stroke is ≥ 1.5 px and publishes
 the fraction of pixels differing by more than 16 levels (§6.2's channel tolerance). Pan by drag,

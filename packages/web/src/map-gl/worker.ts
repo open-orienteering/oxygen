@@ -31,7 +31,9 @@ export const TOLERANCE_UM = 10;
 export type LoadSource =
   | { kind: "document"; bytes: ArrayBuffer; options: mapDocument.DocumentRenderOptions }
   /** Dev-only S1 reader path: objects already converted on the main thread. */
-  | { kind: "objects"; objects: render.RenderObject[]; symbols: render.RenderSymbol[] };
+  | { kind: "objects"; objects: render.RenderObject[]; symbols: render.RenderSymbol[] }
+  /** Dev-only: an already symbolised stream (the golden scenes through the arena path, `MapGlFixturePage`). */
+  | { kind: "stream"; stream: render.PassStream };
 
 /** The view the caller will show first: given, or "fit the document into this canvas". */
 export type FirstView = { kind: "view"; view: ViewRect } | { kind: "fit"; widthPx: number; heightPx: number; fill?: number };
@@ -201,7 +203,7 @@ function load(msg: LoadRequest): { reply: LoadedReply; transfer: ArrayBuffer[]; 
   const tol = msg.toleranceUm ?? TOLERANCE_UM;
   const fonts = msg.fonts.map((f) => render.parseTrueType(f.bytes, f.family));
   const t0 = performance.now();
-  let objects: render.RenderObject[], symbols: render.RenderSymbol[];
+  let objects: render.RenderObject[] = [], symbols: render.RenderSymbol[] = [];
   let bridge: mapDocument.DocumentRenderInput["stats"] | undefined;
   let tDecode = t0;
   if (msg.source.kind === "document") {
@@ -211,12 +213,12 @@ function load(msg: LoadRequest): { reply: LoadedReply; transfer: ArrayBuffer[]; 
     objects = input.objects;
     symbols = input.symbols;
     bridge = input.stats;
-  } else {
+  } else if (msg.source.kind === "objects") {
     objects = msg.source.objects;
     symbols = msg.source.symbols;
   }
   const tBridge = performance.now();
-  const { stream, warnings } = render.symbolise({ objects, symbols, fonts });
+  const { stream, warnings } = msg.source.kind === "stream" ? { stream: msg.source.stream, warnings: [] } : render.symbolise({ objects, symbols, fonts });
   const tSym = performance.now();
 
   // Mesh atlas: every glyph part. Text: every glyph resolved against the text atlas pages.
@@ -285,7 +287,7 @@ function load(msg: LoadRequest): { reply: LoadedReply; transfer: ArrayBuffer[]; 
     passes: stream.passes.length,
     passKinds,
     colours: new Set(stream.passes.map((p) => p.colour)).size,
-    objects: { total: objects.length, drawn, large: largeObjects },
+    objects: { total: msg.source.kind === "stream" ? assignment.objectBucket.length : objects.length, drawn, large: largeObjects },
     ...(bridge ? { bridge } : {}),
     warnings: warn,
     text: textStats,

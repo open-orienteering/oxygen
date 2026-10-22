@@ -178,6 +178,18 @@ describe("worker protocol (docs/map-rendering.md §5.2 Worker)", () => {
       expect(halos.every((h) => h <= 0.125)).toBe(true);
     });
 
+    it("a symbolised stream (dev fixture page) loads like objects, without symbolising again", () => {
+      const fonts = [render.parseTrueType(fontBytes("LiberationSans-Regular.ttf"), "liberation-sans")];
+      const { stream } = render.symbolise({ objects: objects(), symbols: render.pilotSymbols, fonts });
+      const { w, sent } = harness();
+      w.handle({ ...load(), source: { kind: "stream", stream }, textAtlas: [atlasPage("latin")] });
+      const m = sent[0].msg as LoadedReply;
+      expect(m.type).toBe("loaded");
+      expect(m.summary.passes).toBe(stream.passes.length);
+      expect(m.summary.objects.total).toBe(objects().length);
+      expect(m.summary.text.glyphs).toBeGreaterThan(0);
+    });
+
     it("Cyrillic: not held by the Latin page (counted), drawn from page 1 when it is loaded", () => {
       const objs = [{ symbolIdx: render.PILOT.controlNumber704, path: render.makePath([26_000, 36_000]), text: "ЖA" }];
       const latinOnly = run({ textAtlas: [atlasPage("latin")] }, objs);

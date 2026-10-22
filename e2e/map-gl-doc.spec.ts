@@ -64,6 +64,8 @@ interface DocWindow {
       firstFrame: { drawCalls: number };
       completeFrame: { drawCalls: number };
       gpuBytes: number;
+      text: { pages: string[]; glyphs: number; missing: number };
+      warnings: Record<string, number>;
     };
     bench?: Scenario & { paper1x?: Scenario };
     compare?: { fraction: number; differing: number; total: number; target: "canvas" | "fbo" };
@@ -174,12 +176,13 @@ test.describe("WebGL2 map backend — whole document", () => {
   test("the arena path draws what the per-pass golden path draws", async ({ page }, testInfo) => {
     // The per-pass path is the one the golden spec checks against the reference raster (§6.2).
     // The canvas target, and an offscreen framebuffer passed as the render target (§5.2 Drawing).
-    for (const [mode, target] of [["envelope", "canvas"], ["source", "canvas"], ["envelope", "fbo"]]) {
+    // test.xmap carries text (MSDF on the arena path, outlines on the per-pass path; §5.2 "Text atlas").
+    for (const [mode, target, file] of [["envelope", "canvas", "test.ocd"], ["source", "canvas", "test.ocd"], ["envelope", "fbo", "test.ocd"], ["source", "canvas", "test.xmap"]]) {
       await page.goto(`/dev/map-gl-doc?mode=${mode}&compare=1&target=${target}`);
-      await page.getByTestId("map-gl-doc-file").setInputFiles("e2e/test.ocd");
+      await page.getByTestId("map-gl-doc-file").setInputFiles(`e2e/${file}`);
       await page.waitForFunction(() => (window as unknown as DocWindow).__mapGlDoc?.compare || (window as unknown as DocWindow).__mapGlDoc?.error, null, { timeout: 60_000 });
       const cmp = await page.evaluate(() => (window as unknown as DocWindow).__mapGlDoc?.compare);
-      testInfo.annotations.push({ type: `map-gl-doc-compare-${mode}-${target}`, description: JSON.stringify(cmp) });
+      testInfo.annotations.push({ type: `map-gl-doc-compare-${file}-${mode}-${target}`, description: JSON.stringify(cmp) });
       expect(cmp).toBeDefined();
       expect(cmp!.target).toBe(target);
       // 04 §9: ≤ 0.5 % of pixels differing beyond the AA tolerance.
@@ -289,6 +292,11 @@ test.describe("WebGL2 map backend — whole document", () => {
     expect(load!.document!.warnings).toHaveProperty("PARTS_MERGED");
     expect(load!.document!.warnings).toHaveProperty("MISSING_SYMBOL");
     expect(load!.document?.warnings ?? {}).not.toHaveProperty("SYMBOL_COLOUR_UNKNOWN");
+    // Its text is drawn from the Latin atlas page only (no Cyrillic in its strings), every glyph found.
+    expect(load!.text.pages).toEqual(["latin"]);
+    expect(load!.text.glyphs).toBeGreaterThan(0);
+    expect(load!.text.missing).toBe(0);
+    expect(load!.warnings).not.toHaveProperty("TEXT_ATLAS_MISSING");
     await notBlank(page);
   });
 
