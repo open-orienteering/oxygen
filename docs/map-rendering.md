@@ -1069,7 +1069,9 @@ to the target: wheel = same point, pinch = the fingers' midpoint),
 `panBy`, `centreOnGeo` (GPS follow), `centreShiftPx` (the measure tap's
 drift test), `fitMm` / `fitGeo`, `pxPerMapMm` (the overlay's symbol
 scale), `metresPerPx` (scale bar, GPS accuracy ring) and
-`mercatorEquivalentZoom`. The paper view starts from `fitMm(boundsMm(header),
+`mercatorEquivalentZoom`; in the paper view distances (scale bar,
+measure, GPS accuracy ring, `data-zoom`) use the frame's `header.mapScale`,
+the scale its transform uses. The paper view starts from `fitMm(boundsMm(header),
 container, 5 % padding)` — the legacy fit's padding; fits to controls take
 the controls' own paper mm plus the 2.5 mm ring, focus on one control the
 legacy one-sixth extent around it.
@@ -1186,7 +1188,7 @@ changes for B4.
 
 | Test | Covers |
 |---|---|
-| `lib/__tests__/map-viewport.test.ts` | mercator ops = the pre-B4 formulas (projection, wheel anchor, clamp, pan, affine mm, symbol scale); paper: centre, y flip, mm round trip, WGS 84 through `mapGeo` (1e-6 mm), no CRS, wheel and pinch anchors, clamp, pan, GPS centre, fit, scale, Mercator-equivalent zoom; rotation per model; a +3° tilted meridian vertical on the overlay and through `viewMatrix`; overlay = GL canvas < 0.5 px on 200 random views (rotation, DPR) |
+| `lib/__tests__/map-viewport.test.ts` | mercator ops = the pre-B4 formulas (projection, wheel anchor, clamp, pan, affine mm, symbol scale); paper: centre, y flip, mm round trip, WGS 84 through `mapGeo` (1e-6 mm), no CRS, wheel and pinch anchors, clamp, pan, GPS centre, fit, scale, Mercator-equivalent zoom; rotation per model; a +3° tilted meridian vertical on the overlay and through `viewMatrix`; overlay = GL canvas < 0.5 px on 200 random views (rotation, DPR); a WGS 84 point lands where the tiles' calibration affine puts it, < 0.1 mm on a 400 × 300 mm 1:10 000 frame (the residual is the affine's linearisation) |
 | `lib/__tests__/map-pipeline-flag.test.ts` | flag default, values, setter, throwing storage; `resolveMapPipeline` without a document |
 | `lib/__tests__/map-document-cache.test.ts` | route regex (documents, not previews); URL without query, `x-event-id` / `x-kiosk-key` headers; one request shared, same bytes; bounded memory; 401/403/404/5xx → kinds, failures not cached; offline; unreadable bytes; `storage.persist()` once, absent API |
 | `lib/__tests__/vector-map.test.ts` | paper frame with correction, bounds in mm, stack colours, proxy colours, budgets |

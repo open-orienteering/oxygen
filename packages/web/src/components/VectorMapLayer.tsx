@@ -9,7 +9,7 @@
  * live as long as the layer; `view` changes only redraw (one per frame).
  */
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { ViewRect } from "../map-gl/buckets";
 import { MapGlEngine, workerTransport } from "../map-gl/engine";
@@ -42,8 +42,9 @@ export function VectorMapLayer({ doc, view, width, height, budget, zIndex = 1 }:
   const [status, setStatus] = useState<VectorLayerStatus>("loading");
   const [attempt, setAttempt] = useState(0);
 
-  const colourRef = useRef(documentColours(doc.header.colours));
-  colourRef.current = documentColours(doc.header.colours);
+  const colours = useMemo(() => documentColours(doc.header.colours), [doc.header.colours]);
+  const colourRef = useRef(colours);
+  colourRef.current = colours;
 
   /** Draws the current view on the next animation frame (coalesced). */
   const requestDraw = useCallback(() => {

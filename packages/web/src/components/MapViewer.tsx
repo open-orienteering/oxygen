@@ -355,7 +355,7 @@ interface EditorLabelHit {
 
 export function MapViewer({
   mapBounds,
-  mapScale,
+  mapScale: mapScaleProp,
   northOffset,
   cutRotationDeg,
   mapVersion,
@@ -402,6 +402,8 @@ export function MapViewer({
     () => (mapDoc ? paperFrameOf(mapDoc.header, rotationCorrection) : null),
     [mapDoc, rotationCorrection],
   );
+  // The paper view's distances follow the frame its transform uses, not the legacy column.
+  const mapScale = paperMode && paperFrame ? paperFrame.mapScale : mapScaleProp;
 
   const containerRef = useRef<HTMLDivElement>(null);
   const [viewport, setViewport] = useState<MapViewport | null>(null);
@@ -2598,7 +2600,7 @@ export function MapViewer({
       <div ref={containerRef} className={`flex items-center justify-center bg-slate-50 rounded-lg border border-slate-200 ${className}`} style={style}>
         <div className="text-center">
           <div className="w-8 h-8 border-3 border-blue-200 border-t-blue-600 rounded-full animate-spin mx-auto mb-3" />
-          <p className="text-sm text-slate-500">Loading map...</p>
+          <p className="text-sm text-slate-500">{t("loadingMap")}</p>
           {tileProgress && tileProgress.rendering && tileProgress.total > 0 && (
             <>
               <div className="w-32 h-1.5 bg-slate-200 rounded-full mt-2 mx-auto">

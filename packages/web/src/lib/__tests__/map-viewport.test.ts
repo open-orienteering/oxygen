@@ -263,3 +263,24 @@ describe("overlay and GL canvas agree", () => {
     }
   });
 });
+
+describe("paper view agrees with the tile viewer's transform", () => {
+  // The residual is the affine's own error (lat/lng is not linear in paper over 4 km: 0.054 mm here),
+  // not the paper view's: 0.1 mm is 1 m on the ground, under half a pixel at a 4 px/mm fit.
+  it("puts a WGS 84 point where the legacy calibration affine puts it, to < 0.1 mm", async () => {
+    const { mapGeo } = await import("@oxygen/shared");
+    // A 1:10 000 map of 400 × 300 mm (4 × 3 km), native units; the legacy viewer's affine comes from its calibration corners.
+    const bounds = { minX: -20000, minY: -15000, maxX: 20000, maxY: 15000 };
+    const corners = mapGeo.calibrationCorners(FRAME, bounds)!;
+    const affine = buildAffineTransform(corners)!;
+    let worst = 0;
+    for (const [fx, fy] of [[0.5, 0.5], [0.1, 0.9], [0.9, 0.1], [0.25, 0.75], [0.8, 0.6]]) {
+      const mmX = (bounds.minX + fx * (bounds.maxX - bounds.minX)) / 100;
+      const mmY = (bounds.minY + fy * (bounds.maxY - bounds.minY)) / 100;
+      const g = affine.toLatLng(mmX, mmY);
+      const viaMapGeo = geoToMm(FRAME, g.lat, g.lng)!;
+      worst = Math.max(worst, Math.hypot(viaMapGeo.x - mmX, viaMapGeo.y - mmY));
+    }
+    expect(worst).toBeLessThan(0.1);
+  });
+});

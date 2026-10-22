@@ -42,7 +42,6 @@
   "zoomIn": "Zoom in",
   "zoomOut": "Zoom out",
   "fitMap": "Fit map",
-  "mapLoading": "Loading map...",
   "mapDocumentOffline": "This map is not cached on this device and the network is unavailable.",
   "mapDocumentUnauthorised": "You do not have access to this map.",
   "mapDocumentMissing": "The map document was not found.",

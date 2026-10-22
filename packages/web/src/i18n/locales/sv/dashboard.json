@@ -42,7 +42,6 @@
   "zoomIn": "Zooma in",
   "zoomOut": "Zooma ut",
   "fitMap": "Anpassa karta",
-  "mapLoading": "Laddar karta...",
   "mapDocumentOffline": "Kartan finns inte sparad på den här enheten och nätverket är inte tillgängligt.",
   "mapDocumentUnauthorised": "Du har inte åtkomst till den här kartan.",
   "mapDocumentMissing": "Kartdokumentet hittades inte.",

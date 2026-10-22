@@ -810,7 +810,10 @@ the service worker's cache key, and a club map pinned by several events is
 cached once. The whole document (200) is read; no `Range` and no
 `If-None-Match` from the client (the browser's own cache and the service
 worker handle revalidation of an `immutable` response). §4.2 decides
-access exactly as for any other caller.
+access exactly as for any other caller — on the request that fills the
+cache: a device keeps a document it has cached after its access is
+revoked, until the entry expires or is evicted (inherent in 07 §9.1's
+CacheFirst).
 
 **In memory.** One request per hash per session: concurrent callers share
 it and get the same `ArrayBuffer`; the last four documents are kept
