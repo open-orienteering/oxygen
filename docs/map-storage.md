@@ -832,14 +832,17 @@ document) `failed`.
 | Route | Match | Strategy | Cache | Expiration |
 |---|---|---|---|---|
 | Documents | same origin, `^/api/map-documents/[0-9a-f]{64}$` | CacheFirst | `map-documents` | 20 entries, 365 days, purge on quota error; 200 only |
-| Viewer fonts | same origin, `/assets/*.ttf` | CacheFirst | `map-fonts` | 8 entries, 365 days; 200 only |
+| Viewer fonts and text atlas | same origin, `/assets/*.ttf` and `/assets/text-atlas.*` | CacheFirst | `map-fonts` | 16 entries, 365 days; 200 only |
 
 The document route matches documents only, not `/thumbnail.png` or
 `/symbols/…`: the review page's per-symbol swatches would evict the
 documents from a 20-entry cache (07 §9.1 had previews share the route).
 Previews keep the browser's HTTP cache and their `ETag`. The fonts (two
-Liberation faces, 247 kB) are cached on first use rather than precached,
-so a device that never opens a vector map does not download them. The
+Liberation faces, 247 kB) and the MSDF text atlas pages
+(`docs/map-rendering.md` §4.10: Latin 675 kB, Cyrillic 222 kB, PNG +
+JSON; the Cyrillic page only for documents whose strings need it) are
+cached on first use rather than precached, so a device that never opens
+a vector map does not download them. The
 regex is `MAP_DOCUMENT_PATH_RE`; Workbox stringifies the route function,
 so `vite.config.ts` repeats it as a literal.
 

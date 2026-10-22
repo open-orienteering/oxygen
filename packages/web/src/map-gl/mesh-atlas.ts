@@ -1,6 +1,7 @@
 /**
- * WebGL2 backend, mesh atlas: every glyph part and every text glyph a
- * document draws, as one triangle list in one float texture.
+ * WebGL2 backend, mesh atlas: every glyph part a document draws, as one
+ * triangle list in one float texture. (Text is drawn from the MSDF text
+ * atlas, `text-atlas.ts`.)
  *
  * WebGL2 instancing draws one vertex range for all instances of a draw,
  * so one draw per distinct mesh was S1's draw-call problem (Sprint: 115
@@ -12,7 +13,7 @@
  * nothing. So glyphs of one colour cost one draw per size class in view
  * (docs/map-rendering.md §5.2 "Arena and buckets").
  *
- * Mesh geometry is glyph-local (glyph µm, or font units for text), as a
+ * Mesh geometry is glyph-local (glyph µm), as a
  * plain triangle list: fills triangulated even-odd (no stencil parity —
  * overlapping instances of one pass no longer XOR), strokes as indexed
  * strips expanded to triangles. Per vertex two RGBA32F texels:
@@ -72,30 +73,6 @@ export class MeshAtlasBuilder {
       for (const pts of render.flattenRings(s.path, tol)) extrudeStrip(pts, s.path.closed, cap, s.join, s.widthUm / 2, strip);
       pushStrip(strip, s.widthUm / 2, tri);
     }
-    return this.add(key, tri);
-  }
-
-  /**
-   * Mesh index for a text glyph in font units: the filled outline, or —
-   * for a halo pass — the outline stroked round/round at `haloHw` font
-   * units. Undefined for empty glyphs.
-   */
-  text(font: render.FontMetrics, fontId: number, glyph: number, tolFontUnits: number, haloHw?: number): number | undefined {
-    const key = `t/${fontId}/${glyph}/${tolFontUnits}/${haloHw === undefined ? "f" : haloHw.toFixed(2)}`;
-    const hit = this.byKey.get(key);
-    if (hit !== undefined) return hit;
-    const outline = font.outline?.(glyph);
-    if (!outline) return undefined;
-    const rings = render.flattenRings(outline, tolFontUnits);
-    const tri: number[] = [];
-    if (haloHw === undefined) {
-      pushFill(rings, tri);
-    } else {
-      const strip = new StripGeometry();
-      for (const r of rings) extrudeStrip(r, true, "round", "round", haloHw, strip);
-      pushStrip(strip, haloHw, tri);
-    }
-    if (!tri.length) return undefined;
     return this.add(key, tri);
   }
 

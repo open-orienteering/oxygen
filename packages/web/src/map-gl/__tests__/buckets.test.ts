@@ -17,7 +17,7 @@ function context(stream: render.PassStream, origin = { x: 0, y: 0 }): PrepareCon
   const atlas = new MeshAtlasBuilder();
   const glyphMesh = new Map<string, number>();
   for (const m of stream.glyphTable) glyphMesh.set(`${m.glyphId}/${m.partIdx}`, atlas.glyph(m, 2));
-  return { toleranceUm: 10, originX: origin.x, originY: origin.y, meshes: atlas.build().meshes, glyphMesh, textMesh: new Map() };
+  return { toleranceUm: 10, originX: origin.x, originY: origin.y, meshes: atlas.build().meshes, glyphMesh, textGlyph: new Map() };
 }
 
 describe("bucket assignment (04 §6.11)", () => {
@@ -261,19 +261,60 @@ describe("visible set (04 §6.8 point 2)", () => {
   });
 });
 
-describe("text instances", () => {
-  it("carry each glyph's rotation from TextPass.angles (§3.5)", () => {
+describe("text instances (MSDF quads, §5.2 \"Text atlas\")", () => {
+  const textPass = (colour: number, glyphs: number[], extra: Partial<render.TextPass> = {}): render.TextPass => ({
+    kind: "text", colour, fontId: 0, sizeUm: 4000, glyphs: Uint16Array.from(glyphs),
+    positions: Float32Array.from(glyphs.flatMap((_, i) => [10_000 + 2000 * i, 20_000])), ...extra,
+  });
+
+  it("one instance per atlas glyph: origin-relative position, cos/sin, em size, entry, halo em; missing glyphs skipped", () => {
     const b = new PassStreamBuilder();
-    b.push({ kind: "text", colour: 0, fontId: 0, sizeUm: 2048, glyphs: Uint16Array.from([5, 5]), positions: Float32Array.from([0, 0, 3000, 0]), angles: Float32Array.from([0, 90]) }, 0, 0);
+    b.push(textPass(3, [5, 6, 7]), 0, 0);
+    const s = b.build();
+    const ctx = context(s, { x: 1000, y: 2000 });
+    ctx.textGlyph.set(0, { entries: Int32Array.from([12, -1, 40]), pages: Uint8Array.from([0, 0, 0]), haloEm: 0 });
+    const part = prepareBucketPart(s, 0, [0], "all", ctx);
+    const inst = Array.from(part.text!.instances);
+    expect(inst).toEqual([9000, 18_000, 1, 0, 4000, 12, 0, 0, 13_000, 18_000, 1, 0, 4000, 40, 0, 0]);
+    expect(part.text!.ranges.group[0]).toBe(0);
+  });
+
+  it("carry each glyph's rotation from TextPass.angles (§3.5) and the halo of a halo pass", () => {
+    const b = new PassStreamBuilder();
+    b.push(textPass(0, [5, 5], { angles: Float32Array.from([0, 90]), haloWidthUm: 100 }), 0, 0);
     const s = b.build();
     const ctx = context(s);
-    ctx.meshes.push({ base: 0, count: 3, cls: 2, radius: 100 });
-    ctx.textMesh.set(0, { meshes: Int32Array.from([ctx.meshes.length - 1, ctx.meshes.length - 1]), scale: 1 });
-    const part = prepareBucketPart(s, 0, [0], "all", ctx);
-    const inst = part.text!.instances;
+    ctx.textGlyph.set(0, { entries: Int32Array.from([1, 1]), pages: Uint8Array.from([0, 0]), haloEm: 0.025 });
+    const inst = prepareBucketPart(s, 0, [0], "all", ctx).text!.instances;
     expect([inst[2], inst[3]]).toEqual([1, 0]);
     expect(inst[INSTANCE_FLOATS + 2]).toBeCloseTo(0, 9);
     expect(inst[INSTANCE_FLOATS + 3]).toBeCloseTo(1, 9);
+    expect(inst[6]).toBeCloseTo(0.025, 7);
+  });
+
+  it("group by (colour, page): one draw per colour per page across buckets; hidden objects skipped", () => {
+    const b = new PassStreamBuilder();
+    b.push(textPass(2, [1, 2]), 0, 0);
+    b.push(textPass(2, [3]), 1, 0);
+    b.push(textPass(5, [4]), 2, 0);
+    const s = b.build();
+    const ctx = context(s);
+    ctx.textGlyph.set(0, { entries: Int32Array.from([0, 1]), pages: Uint8Array.from([0, 1]), haloEm: 0 });
+    ctx.textGlyph.set(1, { entries: Int32Array.from([2]), pages: Uint8Array.from([0]), haloEm: 0 });
+    ctx.textGlyph.set(2, { entries: Int32Array.from([3]), pages: Uint8Array.from([0]), haloEm: 0 });
+    const p0 = prepareBucketPart(s, 0, [0, 1], "all", ctx), p1 = prepareBucketPart(s, 1, [2], "all", ctx);
+    const base = { fill: 0, hatch: 0, stroke: 0 };
+    const vs = buildVisibleSet([{ part: p0, base }, { part: p1, base }]);
+    expect(vs.text.draws.map((d) => [d.colour, d.cls, d.count])).toEqual([[2, 0, 2], [2, 1, 1], [5, 0, 1]]);
+    const hidden = buildVisibleSet([{ part: p0, base }, { part: p1, base }], new Set([1]));
+    expect(hidden.text.draws.map((d) => [d.colour, d.cls, d.count])).toEqual([[2, 0, 1], [2, 1, 1], [5, 0, 1]]);
+  });
+
+  it("a text pass the worker did not resolve (no atlas) draws nothing", () => {
+    const b = new PassStreamBuilder();
+    b.push(textPass(0, [1]), 0, 0);
+    const s = b.build();
+    expect(prepareBucketPart(s, 0, [0], "all", context(s)).text).toBeUndefined();
   });
 });
 

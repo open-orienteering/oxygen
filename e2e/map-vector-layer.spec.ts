@@ -73,9 +73,12 @@ test.describe("vector map layer", () => {
     await setMapPipeline("vector");
     const tileRequests: string[] = [];
     const documentRequests: Request[] = [];
+    const atlasRequests: string[] = [];
     page.on("request", (req) => {
       const path = new URL(req.url()).pathname;
       if (path.startsWith("/api/map-tile")) tileRequests.push(path);
+      // Fetches only: under Vite dev the `?url` imports of both pages load as tiny script modules.
+      if (path.includes("text-atlas.") && req.resourceType() === "fetch") atlasRequests.push(path);
       if (/^\/api\/map-documents\/[0-9a-f]{64}$/.test(path)) documentRequests.push(req);
     });
 
@@ -97,6 +100,11 @@ test.describe("vector map layer", () => {
     await expect(viewer.getByTestId("map-tiles-composite")).toHaveCount(0);
     await expect(viewer.getByTestId("map-tiles-ink")).toHaveCount(0);
     expect(tileRequests).toEqual([]);
+
+    // MSDF text (map-rendering.md §5.2 "Text atlas"): the Latin page, not the Cyrillic one the
+    // fixture's strings do not need.
+    expect(atlasRequests.some((p) => p.includes("text-atlas.latin"))).toBe(true);
+    expect(atlasRequests.filter((p) => p.includes("text-atlas.cyrillic"))).toEqual([]);
 
     // The canvas fills the viewer's content box, unrotated, and has drawn map ink.
     const inner = await viewer.evaluate((el) => ({ w: el.clientWidth, h: el.clientHeight }));
