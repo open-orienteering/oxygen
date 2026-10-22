@@ -24,7 +24,7 @@
   "uploading": "Uploading...",
   "loadingMap": "Loading map...",
   "showAllControls": "Show all controls",
-"allControls": "All controls",
+  "allControls": "All controls",
   "hideOtherControls": "Hide other controls",
   "descriptions": "Descriptions",
   "hideDescriptions": "Hide descriptions",
@@ -54,5 +54,10 @@
   "compassLocked": "Rotation locked (north up) — tap to unlock",
   "compassUnlocked": "Rotation unlocked — tap to lock north up",
   "enterFullscreen": "Fullscreen",
-  "exitFullscreen": "Exit fullscreen"
+  "exitFullscreen": "Exit fullscreen",
+  "mapEngineToggle": "Use new map engine",
+  "mapEngineHelp": "Draws every map of this event from the map document instead of image tiles.",
+  "mapEngineReport": "Something wrong with the map? Tell your instance maintainer.",
+  "mapEngineFallback": "This browser cannot draw the new map engine; showing the classic map.",
+  "mapEngineSwitchFailed": "Could not switch the map engine."
 }

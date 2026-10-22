@@ -77,6 +77,15 @@ enum CourseOrderMode {
   @@schema("oxygen")
 }
 
+/// Which map pipeline an event *reads* through (docs/map-pipeline-switch.md).
+enum MapPipeline {
+  legacy
+  vector
+
+  @@map("map_pipeline")
+  @@schema("oxygen")
+}
+
 // ─── Registry & global tables ──────────────────────────────
 
 /// An orienteering event — competition, training session, club evening, etc.
@@ -174,6 +183,10 @@ model Event {
   autoOverprintCuts Boolean @default(true) @map("auto_overprint_cuts")
   /// Algorithm version last applied to every editor-authored course.
   overprintCutsVersion Int @default(2) @map("overprint_cuts_version")
+  /// Map pipeline the event reads through (docs/map-pipeline-switch.md §2).
+  /// New events take the `map.pipeline.default` setting; rows that predate
+  /// the column are `legacy`.
+  mapPipeline MapPipeline @default(legacy) @map("map_pipeline")
   createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt DateTime @default(now()) @map("updated_at") @db.Timestamptz(6)
 

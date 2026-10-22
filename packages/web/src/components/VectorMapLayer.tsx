@@ -30,9 +30,14 @@ interface Props {
   height: number;
   budget: MapBudget;
   zIndex?: number;
+  /**
+   * The browser cannot draw this layer: no WebGL2 context, or the context
+   * was lost. The host decides the fallback (docs/map-pipeline-switch.md §3).
+   */
+  onUnavailable?: () => void;
 }
 
-export function VectorMapLayer({ doc, view, width, height, budget, zIndex = 1 }: Props) {
+export function VectorMapLayer({ doc, view, width, height, budget, zIndex = 1, onUnavailable }: Props) {
   const { t } = useTranslation("dashboard");
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const engineRef = useRef<MapGlEngine | null>(null);
@@ -42,6 +47,8 @@ export function VectorMapLayer({ doc, view, width, height, budget, zIndex = 1 }:
   const frameRef = useRef<number | null>(null);
   const [status, setStatus] = useState<VectorLayerStatus>("loading");
   const [attempt, setAttempt] = useState(0);
+  const unavailableRef = useRef(onUnavailable);
+  unavailableRef.current = onUnavailable;
 
   const colours = useMemo(() => documentColours(doc.header.colours), [doc.header.colours]);
   const colourRef = useRef(colours);
@@ -70,8 +77,15 @@ export function VectorMapLayer({ doc, view, width, height, budget, zIndex = 1 }:
       renderer = new MapGlRenderer(canvas);
     } catch {
       setStatus("webgl");
+      unavailableRef.current?.();
       return;
     }
+    // A lost context is not restored here; the host falls back or shows the message.
+    const onContextLost = () => {
+      setStatus("webgl");
+      unavailableRef.current?.();
+    };
+    canvas.addEventListener("webglcontextlost", onContextLost);
     // The worker starts with the layer, before the fonts and the document reach it.
     const engine = new MapGlEngine(renderer, workerTransport(), { budgetBytes: budgetBytes(budget) });
     engineRef.current = engine;
@@ -117,6 +131,7 @@ export function VectorMapLayer({ doc, view, width, height, budget, zIndex = 1 }:
     });
     return () => {
       cancelled = true;
+      canvas.removeEventListener("webglcontextlost", onContextLost);
       if (frameRef.current !== null) cancelAnimationFrame(frameRef.current);
       frameRef.current = null;
       engineRef.current = null;

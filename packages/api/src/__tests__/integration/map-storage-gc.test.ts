@@ -284,8 +284,11 @@ describe("daily schedule (maybeStartStorageGc)", () => {
   it("runs when it never ran, records start, finish and a count summary, then is not due for a day", async () => {
     const { doc } = await orphanPair();
     expect(await maybeStartStorageGc()).toBe(true);
+    // Take the run before any other await: on a small database it can finish
+    // during one settings round trip, and `currentStorageGc()` is then null.
+    const run = currentStorageGc();
     expect(await getSetting(GC_SETTINGS.startedAt)).not.toBeNull();
-    const result = await currentStorageGc();
+    const result = await run;
     expect(result?.documents).toContain(doc);
     expect(await getSetting(GC_SETTINGS.finishedAt)).not.toBeNull();
     const summary = JSON.parse((await getSetting(GC_SETTINGS.lastResult))!) as Record<string, unknown>;

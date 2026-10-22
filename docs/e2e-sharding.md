@@ -63,6 +63,14 @@ proxy target — both passed by the Playwright webServer config.
 Specs never hardcode the API origin; they import `API_BASE` from
 `e2e/helpers/api-base.ts`, which derives it from `E2E_API_PORT`.
 
+### Map pipeline projects
+
+Besides `chromium`, `playwright.config.ts` has projects `map-legacy` and
+`map-vector` that run the files in `MAP_PIPELINE_SPECS` once per value of
+the per-event map pipeline switch (`docs/map-pipeline-switch.md` §5).
+A shard that gets one of those files runs it twice; the weight table does
+not count that yet.
+
 ### File partitioning
 
 The runner assigns spec files to shards with an LPT (longest processing
