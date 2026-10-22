@@ -1294,13 +1294,14 @@ isolation, agreement on `e2e/test.ocd`, the frame as a sanctioned
 divergence, ranking, shape measure, tags; a 510 power line from
 `buildParityOcad` with its poles at the corner points only) and
 `scripts/__tests__/measure-parity.test.mjs` (CLI, `pnpm test:scripts`).
-The CLI test needs Liberation Sans installed as a *system* font: the
-legacy side renders `<text>` through the system font stack while the
-canonical side draws the bundled outlines, so a machine without
-`fonts-liberation` sees the 603 spot height diverge (24 % on a bare
-GitHub runner) and the test fails. The Docker image installs the
-package; `.github/workflows/ci.yml` installs it before the helper
-script tests.
+**Fonts on the legacy side.** The tiles leave the mapper's font names
+("Arial") to the system font stack, which in the Docker image resolves
+to Liberation 1.07 — the outlines `@oxygen/shared` bundles (§4.10). The
+tool pins that outcome rather than inheriting the machine's fonts: it
+maps each `font-family` through `ocadFontFamily` and hands resvg only
+the bundled files (`loadSystemFonts: false`). Before this, a GitHub
+runner (Liberation 2.x, different glyph shapes) reported the 603 spot
+height as a 24 % divergence that no local machine with 1.07 saw.
 
 **Corpus results (B9, 2026-10-21, `ocad-9`, 10 px/mm, whole maps plus
 the club-2026 review windows).** Compared symbols and the ones that

@@ -18,6 +18,12 @@ const FILES: Record<render.FontFamily, string | undefined> = {
 const fontsDir = fileURLToPath(new URL("../../../shared/fonts/", import.meta.url));
 const cache = new Map<render.FontFamily, Promise<render.TrueTypeFont>>();
 
+/** The bundled families as resvg sees them: file path and the `name` table's family. */
+export const BUNDLED_FONT_FILES: Record<"liberation-sans" | "liberation-sans-narrow", { path: string; family: string }> = {
+  "liberation-sans": { path: fontsDir + "LiberationSans-Regular.ttf", family: "Liberation Sans" },
+  "liberation-sans-narrow": { path: fontsDir + "LiberationSansNarrow-Regular.ttf", family: "Liberation Sans Narrow" },
+};
+
 export function loadBundledFont(family: render.FontFamily): Promise<render.TrueTypeFont> {
   let p = cache.get(family);
   if (!p) {
