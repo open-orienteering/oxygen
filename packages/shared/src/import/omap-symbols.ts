@@ -200,9 +200,12 @@ class Converter {
       const main: StrokeSpec = { colour: lineColour ?? 0, widthUm: lineColour !== undefined ? b.lineWidth : 0, cap, join };
       if (dash) main.dash = dash;
       if (cap === "pointed") {
-        // Mapper tapers both ends over pointed_cap_length; the offsets do not
-        // shorten a pointed line (its files write the three equal).
-        if (b.pointedCapLength > 0) main.taper = { startUm: b.pointedCapLength, endUm: b.pointedCapLength };
+        // On a pointed cap Mapper's start/end offsets are the taper lengths,
+        // not a shortening. Older files carry only pointed_cap_length (Mapper
+        // still writes it, equal to the offsets): both ends then.
+        const legacy = b.startOffset <= 0 && b.endOffset <= 0 ? b.pointedCapLength : 0;
+        const start = legacy > 0 ? legacy : b.startOffset, end = legacy > 0 ? legacy : b.endOffset;
+        if (start > 0 || end > 0) main.taper = { ...(start > 0 ? { startUm: start } : {}), ...(end > 0 ? { endUm: end } : {}) };
       } else {
         if (b.startOffset > 0) main.shortenStartUm = b.startOffset;
         if (b.endOffset > 0) main.shortenEndUm = b.endOffset;

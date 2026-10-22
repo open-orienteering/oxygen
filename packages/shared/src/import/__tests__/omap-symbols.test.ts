@@ -107,15 +107,16 @@ describe("omapSymbolToRender", () => {
     expect(l.glyphs![0].glyph.parts[0].geometry!.coords).toEqual([0, 0, 0, 400]);
   });
 
-  it("line: pointed caps taper over pointed_cap_length at both ends and keep the full length; invisible lines are empty", () => {
-    // Mapper writes pointed_cap_length equal to the offsets (OOM sets, its OCD import); the offsets are not a shortening here.
-    const l = convert(sym(`<symbol type="2" id="1" code="106" name="Earth wall"><line_symbol color="0" line_width="250" cap_style="3" pointed_cap_length="600" start_offset="600" end_offset="600"/></symbol>`)).render as LineSymbol;
-    expect(l.main).toMatchObject({ cap: "pointed", widthUm: 250, taper: { startUm: 600, endUm: 600 } });
+  it("line: pointed caps taper over start_offset / end_offset and keep the full length; invisible lines are empty", () => {
+    // Mapper's LineSymbol: on a pointed cap the offsets are the cap lengths. It also writes pointed_cap_length (OOM ISOM 106: 747 ×3).
+    const line106 = (attrs: string) => convert(sym(`<symbol type="2" id="1" code="106" name="Earth wall"><line_symbol color="0" line_width="250" cap_style="3" ${attrs}/></symbol>`)).render as LineSymbol;
+    const l = line106(`pointed_cap_length="747" start_offset="747" end_offset="747"`);
+    expect(l.main).toMatchObject({ cap: "pointed", widthUm: 250, taper: { startUm: 747, endUm: 747 } });
     expect([l.main!.shortenStartUm, l.main!.shortenEndUm]).toEqual([undefined, undefined]);
-    const noCap = convert(sym(`<symbol type="2" id="1" code="106" name="Earth wall"><line_symbol color="0" line_width="250" cap_style="3" start_offset="500" end_offset="500"/></symbol>`)).render as LineSymbol;
-    expect(noCap.main).toMatchObject({ cap: "pointed" });
-    expect(noCap.main!.taper).toBeUndefined();
-    expect(noCap.main!.shortenStartUm).toBeUndefined();
+    expect(line106(`start_offset="500" end_offset="0"`).main!.taper).toEqual({ startUm: 500 });
+    // A file with only pointed_cap_length (offsets 0): both ends.
+    expect(line106(`pointed_cap_length="600"`).main!.taper).toEqual({ startUm: 600, endUm: 600 });
+    expect(line106(``).main!.taper).toBeUndefined();
     const r = convert(sym(`<symbol type="2" id="1" code="x" name="n"><line_symbol color="-1" line_width="0"/></symbol>`));
     expect(r.render).toBeNull();
     expect(r.warnings.map((w) => w.code)).toEqual(["SYMBOL_EMPTY"]);
