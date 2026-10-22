@@ -832,7 +832,8 @@ and one page serves every document.
   em). Only the Regular faces ship, so the family is the key (§4.9 font
   resolution). Without pages no text is drawn and each text pass counts
   `TEXT_ATLAS_MISSING`; a glyph no loaded page holds counts
-  `TEXT_GLYPH_NOT_IN_ATLAS` (unless it has no outline); a halo wider than
+  `TEXT_GLYPH_NOT_IN_ATLAS` (unless it has no outline or is `.notdef`,
+glyph 0 — §8 tabs); a halo wider than
   half the range (0.125 em) is clamped and counts `TEXT_HALO_CLAMPED`.
   The counts join the stage's warnings in `LoadSummary.warnings`;
   `LoadSummary.text` has the pages, glyphs resolved and glyphs missing.
@@ -1798,9 +1799,10 @@ The shared module is exported as a namespace: `import { render } from
   for a spec that needs it).
 - **§5.2 glyphs outside the text atlas pages** draw nothing on the arena
   path and count `TEXT_GLYPH_NOT_IN_ATLAS`, with no outline fallback
-  (user decision 2026-10-22): Greek, symbols outside the Latin ranges, any text
-  in a `liberation-serif` / `liberation-mono` family (no file ships,
-  §4.10), Cyrillic when its page failed to load. None occurs in the
+  (user decision 2026-10-22): Greek, symbols outside the Latin ranges,
+  Cyrillic when its page failed to load. (Text in a `liberation-serif` /
+  `liberation-mono` family never reaches the atlas: no file ships,
+  §4.10, so the stage emits no pass and warns `NO_FONT`, §4.9.) None occurs in the
   corpus. Adding a page is a range in `TEXT_ATLAS_PAGE_RANGES` and a
   `pnpm text-atlas:generate`.
 - **§4.9 tabs shape to `.notdef`.** The shaper looks up every code
