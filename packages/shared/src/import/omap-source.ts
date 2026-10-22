@@ -172,7 +172,7 @@ const H_ALIGN: Record<number, TextSymbol["align"] | undefined> = { 0: "left", 1:
 const V_ALIGN: Record<number, NonNullable<TextSymbol["verticalAlign"]> | undefined> = { 0: "baseline", 1: "top", 2: "middle", 3: "bottom" };
 
 /** Alignment onto a text render; baseline leaves `verticalAlign` out (the IR has no default for it on purpose). */
-function setTextAlignment(render: TextSymbol, align: TextSymbol["align"], verticalAlign: NonNullable<TextSymbol["verticalAlign"]>): void {
+function setTextAlignment(render: Pick<Partial<TextSymbol>, "align" | "verticalAlign">, align: TextSymbol["align"], verticalAlign: NonNullable<TextSymbol["verticalAlign"]>): void {
   render.align = align;
   if (verticalAlign === "baseline") delete render.verticalAlign;
   else render.verticalAlign = verticalAlign;
