@@ -28,8 +28,10 @@ port was the default (or set to a port with something on it), the run
 attached to whatever Vite answered there.
 
 What the run did *not* do — and this narrows the exposure — is attach
-silently in the common case. The API entry has always been
-`reuseExistingServer: false`, so a run on the default ports with the
+silently in the common case. The API entry has been
+`reuseExistingServer: false` since 2026-05-22 (`35439ff`; it was `true` in
+the initial commit), before the ports were parameterised and before the
+worktree workflow, so a run on the default ports with the
 user's API up on 3002 stopped with `http://localhost:3002 is already
 used`, and `pnpm test:e2e e2e/foo.spec.ts` never used 5173 at all: the
 sharded runner's selective path sets `E2E_API_PORT=4100`,
@@ -81,13 +83,16 @@ side: the API under test was always the run's own, on its own database.
   `pnpm dev` was up on 5173, *with the API port overridden* away from
   3002 (or the user's API stopped) — it tested the main checkout's web
   code. That is what B10 hit, and what its note warns about; B10's notes
-  say its reported results (22 affected specs, full run 274/275) came
-  after the `E2E_WEB_PORT=5188` workaround. Also, any run on a web port where an orphaned Vite from a
-  crashed earlier run was still listening (4200 / 420`n`) — it tested
-  whichever checkout started that orphan.
-* **Not affected:** every full sharded run (`pnpm test:e2e` without a file
-  filter; Vite on 4200+n, started fresh), and therefore every merge
-  verification, which were sharded. A plain
+  record the `E2E_WEB_PORT=5188` workaround before the status line with
+  its results (22 affected specs, full run 274/275), so those presumably
+  post-date it; the notes do not state the ordering. Also, any run — sharded or not — on a
+  web port where an orphaned Vite from a crashed earlier run was still
+  listening (4200 / 420`n`): it tested whichever checkout started that
+  orphan.
+* **Not affected:** full sharded runs (`pnpm test:e2e` without a file
+  filter) and the merge verifications, which were sharded, are not exposed
+  to the dev server on 5173 — their Vite runs on 4200+n; they are exposed
+  only to an orphan on their own shard's web port, as above. A plain
   `pnpm test:e2e e2e/foo.spec.ts` with nothing stale on 4200. Server-side
   and database assertions in any run.
 * **Could not be reconstructed:** which individual worktree runs set
