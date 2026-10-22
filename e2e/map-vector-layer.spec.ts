@@ -74,7 +74,8 @@ test.describe("vector map layer", () => {
     page.on("request", (req) => {
       const path = new URL(req.url()).pathname;
       if (path.startsWith("/api/map-tile")) tileRequests.push(path);
-      if (path.includes("text-atlas.")) atlasRequests.push(path);
+      // Fetches only: under Vite dev the `?url` imports of both pages load as tiny script modules.
+      if (path.includes("text-atlas.") && req.resourceType() === "fetch") atlasRequests.push(path);
       if (/^\/api\/map-documents\/[0-9a-f]{64}$/.test(path)) documentRequests.push(req);
     });
 

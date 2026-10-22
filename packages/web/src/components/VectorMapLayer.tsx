@@ -86,7 +86,10 @@ export function VectorMapLayer({ doc, view, width, height, budget, zIndex = 1 }:
         loadMapFonts(),
         loadTextAtlas(textAtlasPagesFor(doc.header.strings)).catch((err: unknown) => {
           console.warn("[vector-map] text atlas failed:", err);
-          return loadTextAtlas(["latin"]).catch(() => []);
+          return loadTextAtlas(["latin"]).catch((err2: unknown) => {
+            console.warn("[vector-map] text atlas (Latin page) failed, drawing without text:", err2);
+            return [];
+          });
         }),
       ]);
       if (cancelled) return;
