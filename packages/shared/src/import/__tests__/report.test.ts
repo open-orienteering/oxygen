@@ -35,18 +35,20 @@ describe("WARNING_CLASS", () => {
     expect(Object.keys(WARNING_CLASS).filter((c) => !emitted.has(c))).toEqual([]);
   });
 
-  it("keeps the unsupported-primitive set to the eight codes of the S0 gate", () => {
+  it("keeps the unsupported-primitive set to the six codes of the S0 gate", () => {
     const unsupported = Object.entries(WARNING_CLASS).filter(([, k]) => k === "unsupported").map(([c]) => c).sort();
     expect(unsupported).toEqual([
       "COLOUR_OPACITY_IGNORED",
       "IRREGULAR_PATTERN_REGULARISED",
       "SYMBOL_FEATURE_DROPPED",
       "SYMBOL_TYPE_UNSUPPORTED",
-      "TEXT_ALIGNMENT_PER_OBJECT",
       "TEXT_BOX_DROPPED",
-      "TEXT_VERTICAL_ALIGNMENT_DROPPED",
       "UNKNOWN_OBJECT_TYPE",
     ]);
+  });
+
+  it("classes the rectangle grid as a by-design drop", () => {
+    expect(WARNING_CLASS.RECTANGLE_GRID_DROPPED).toBe("by-design");
   });
 
   it("treats a stale symbol reference as a source data error, not an unsupported primitive", () => {

@@ -273,12 +273,12 @@ the S2 visual comparison (03 §8) is where they get confirmed.
 |---|---|---|
 | `lineColor`, `lineWidth` | `main.colour`, `main.widthUm` | Width 0 ⇒ no main stroke, but `main` is still emitted (width 0) when a framing line or a dash pattern needs it. |
 | `lineStyle` | `main.cap`, `main.join` | `& ~2`: 0 bevel / flat, 1 round / round, 4 miter / flat; bit 2 ⇒ `cap: "pointed"`. Same coding for element `flags`. |
-| `distFromStart`, `distToEnd` | `shortenStartUm`, `shortenEndUm` | With `cap: "pointed"` these are the taper lengths and belong in `main.taper { startUm, endUm }` instead (user decision 2026-10-20, `docs/map-rendering.md` §3.2); the importer still shortens until A13 wires it. |
+| `distFromStart`, `distToEnd` | `shortenStartUm`, `shortenEndUm`; with `cap: "pointed"` `main.taper { startUm, endUm }` | On a line without pointed ends they shorten the stroke. With `cap: "pointed"` they are the lengths of the points and become `main.taper` instead (user decision 2026-10-20, `docs/map-rendering.md` §3.2): the line is not shortened, and each end gets a `taper` key only when its length is > 0 (no `taper` at all when both are 0). Since `ocad-11` (A13); earlier importers shortened pointed lines too. Corpus: 107.0 erosion gully tapers 0.75 mm at both ends. |
 | `mainLength`, `mainGap`, `endLength` | `dash { layout: "ocad", dashUm, gapUm, endDashUm? }` | Only when `mainLength > 0` and any of `mainGap`, `secGap`, `endGap` > 0. `endDashUm` only when it differs from `mainLength`. |
 | `secGap` | `dash.secondaryGapUm` | Secondary gap splitting each interior dash (`dashesInGroup` default 2). |
 | `endGap` | `dash.endGapUm` | *Provisional.* The secondary gap applied to the **end** dashes, not a line-end shortening: 507 footpath has `mainLength 225, endLength 225, mainGap 80, secGap 25, endGap 25`. |
 | `minSym` | `dash.minGaps` | Only when `> 0`. |
-| `frColor`, `frWidth`, `frStyle` | `main.halo { colour, widthUm: (frWidth − lineWidth)/2, continuous: true }` | The framing line is a solid stroke of total width `frWidth` under the main line; it stays solid under a dashed main line (509 railway). When the main width is 0 the halo takes `frStyle`'s cap/join. `frWidth ≤ lineWidth` ⇒ dropped with a warning (`503.1` in the corpus, unused). |
+| `frColor`, `frWidth`, `frStyle` | `main.halo { colour, widthUm: (frWidth − lineWidth)/2, continuous: true }` | The framing line is a solid stroke of total width `frWidth` under the main line; it stays solid under a dashed main line (509 railway). When the main width is 0 the halo takes `frStyle`'s cap/join. `frWidth < lineWidth` ⇒ the same halo with a **negative** `widthUm` (a framing line narrower than the main line, user decision 2026-10-20, `docs/map-rendering.md` §4.4; Crop-A / Crop-B 503.1: 0.65 under 0.67 mm, unused), since `ocad-11` (A13). `frWidth = lineWidth` ⇒ dropped with `SYMBOL_FEATURE_DROPPED` (`framing line as wide as the main line`): the IR rejects a zero-width halo. Not in the corpus. |
 | `doubleLine.dblMode` 1–3 | `borders` | Mode 1 both edges solid, 2 left edge dashed, 3 both dashed (`dblLength` / `dblGap`); 0 and 65535 off; anything else warns. *Provisional.* |
 | `dblLeftColor/Width`, `dblRightColor/Width`, `dblWidth` | `borders.left / right { colour, widthUm, shiftUm: dblWidth/2 + width/2 }` | Edges straddle the `dblWidth` band. |
 | `dblFlags & 1`, `dblFillColor` | `borders.backgroundColour`, `backgroundWidthUm: dblWidth` | Band drawn in the fill colour, even without edges. `dblFlags & 2` (background colour) warns. |
@@ -317,13 +317,15 @@ skipped; a glyph with no parts left is dropped.
 | `fontName` | `fontFamily` | Arial / Helvetica / Liberation Sans / Arimo ⇒ `liberation-sans`; Arial Narrow ⇒ `liberation-sans-narrow`; Times (New Roman) / Tinos ⇒ `liberation-serif`; Courier (New) / Cousine ⇒ `liberation-mono`. Anything else is substituted by keyword (narrow / mono / serif / default sans) with `FONT_SUBSTITUTED`. |
 | `fontSize` (1/10 pt) | `fontSizeUm = round(fontSize/10 × 352.78)` | |
 | `fontColor`, `weight`, `italic` | `colour`, `weight`, `italic` | |
-| `alignment & 3` | `align` | 0 left, 1 centre, 2 right, 3 justify. `alignment & 0xfc` (vertical: 4 middle, 8 top) is warned and ignored — the IR anchors at the baseline. |
+| `alignment & 3` | `align` | 0 left, 1 centre, 2 right, 3 justify. |
+| `alignment & 0xfc` | `verticalAlign` | 4 ⇒ `"middle"`, 8 ⇒ `"top"`, 0 (baseline) ⇒ the field is left out — the IR has no default for it on purpose, so a baseline symbol parses as before. Any other value ⇒ `SYMBOL_FEATURE_DROPPED` (`vertical text alignment N`), anchored at the baseline. Since `ocad-11` (A13). The anchor metrics are *provisional* until S2 (`docs/map-rendering.md` §4.9). Corpus: Club-full 802.6 / 802.7 top, Crop-A / Crop-B 901.0 middle and 902.0 top. |
 | `lineSpace` (%) | `lineSpacing = lineSpace / 100` | |
 | `paraSpace` (1/100 mm) | `paragraphSpacingUm` | |
 | `charSpace` (%) | `charSpacing = charSpace / 100` | |
 | `wordSpace` (%) | `wordSpacing = (wordSpace − 100)/100 × 0.278` | Only when ≠ 100; 0.278 em approximates the space glyph. *Provisional.* |
 | `frMode` 2 (line framing), `frColor`, `frWidth` | `halo { colour, widthUm: frWidth × 10 }` | `frWidth` is how far the framing reaches beyond the glyph outline — the halo's half-width, as Mapper reads and writes it (`framing_line_half_width`, §4.3), so an OCAD file and its Mapper conversion give the same halo. `frWidth` 0 ⇒ no halo and no warning (nothing is drawn). An `frColor` the colour table lacks ⇒ `SYMBOL_COLOUR_UNKNOWN`, no halo. `frStyle` (the framing stroke's join) is not carried: a halo is stroked round / round on every backend (`docs/map-rendering.md` §4.9). |
-| `frMode` 1 (shadow, `frColor`, `frOfX`, `frOfY`), `frMode` 3 (rectangle) | — | `SYMBOL_FEATURE_DROPPED` (`text shadow framing (colour, offset x/y mm)`, `text rectangle framing`): the IR has no shadow or box (A13). |
+| `frMode` 1 (shadow), `frColor`, `frOfX`, `frOfY` | `shadow { colour, offsetXUm: frOfX × 10, offsetYUm: frOfY × 10 }` | Offsets in OCAD's paper coordinates, y up, as the IR's (*provisional* until S2: no corpus shadow is offset vertically against a known rendering). Both offsets 0 ⇒ no shadow and no warning (it would sit under the text, as a zero-width halo draws nothing). An `frColor` the colour table lacks ⇒ `SYMBOL_COLOUR_UNKNOWN`, no shadow. `frWidth` is not used by a shadow. Since `ocad-11` (A13). Corpus: Club-2026 815.2 (colour 9, 0.2 mm right), Club-full 825.1 (0.1 / 0.1 mm). |
+| `frMode` 3 (rectangle) | — | `SYMBOL_FEATURE_DROPPED` (`text rectangle framing`): the IR has no box (B8). |
 | `lbOn`, `pointSymOn` | — | Warned and dropped: line-below and attached point symbols are not in the IR. |
 
 Reader struct offsets (from the start of the text attributes, i.e. after
@@ -342,28 +344,30 @@ rectangle framing (`frMode` 3 is not defined for them) — and always warn
 lost in the document: the object keeps type 6, its path and its text
 (§3.4). But the IR and the symbolisation cannot yet lay text along a
 path, so the text is drawn from the path's first vertex; laying it along
-the path is A13's. The warning keeps the S0 gate honest for a map that
+the path is B8's. The warning keeps the S0 gate honest for a map that
 uses line text (none in the corpus). The line-text struct is from the
 OCAD 2018 file-format description and Mapper's `LineTextSymbolV11` only
 (no real file seen): *provisional*.
 
-**Rectangle symbols** (`type 7`) → `{ type: "line", main: { colour:
-lineColor, widthUm: lineWidth × 10, cap: "flat", join: "miter" } }`: an
-outline line, as Mapper's OCD import makes of them. Mapper strokes it
-round / round and rounds the corners by the radius; Oxygen joins miter so
-the corners stay as sharp as the verbatim coordinates. Rectangle objects keep
-their corners verbatim (§3.4) and the render bridge draws type-7 paths
-closed. `lineWidth` 0 ⇒ `SYMBOL_EMPTY`, an unknown `lineColor` ⇒
-`SYMBOL_COLOUR_UNKNOWN`, both `render: null`. A corner radius
-(`radius` > 0) warns `SYMBOL_FEATURE_DROPPED` (`rectangle corner radius
-r mm`) and the corners are drawn sharp; a grid (`gridFlags & 1`, with
-cell size, numbering and unnumbered-cell text) warns
-`SYMBOL_FEATURE_DROPPED` (`rectangle grid`) and is not drawn — a
-by-design drop (user decision 2026-10-20, B1). Rounding the
-corners at import, as Mapper does, would rewrite source coordinates;
-the corner radius is the IR field `cornerRadiusUm`, rounded by the
-symbolisation stage (`docs/map-rendering.md` §4.4), and A13 wires the
-importer to it (user decision 2026-10-20, A12). Struct (after the base symbol): `lineColor`
+**Rectangle symbols** (`type 7`) → `{ type: "line", cornerRadiusUm?,
+main: { colour: lineColor, widthUm: lineWidth × 10, cap: "flat", join:
+"miter" } }`: an outline line, as Mapper's OCD import makes of them.
+Mapper strokes it round / round and rounds the corners by the radius;
+Oxygen joins miter so unrounded corners stay as sharp as the verbatim
+coordinates. Rectangle objects keep their corners verbatim (§3.4) and the
+render bridge draws type-7 paths closed. `lineWidth` 0 ⇒ `SYMBOL_EMPTY`,
+an unknown `lineColor` ⇒ `SYMBOL_COLOUR_UNKNOWN`, both `render: null`. A
+corner radius (`radius` > 0) ⇒ `cornerRadiusUm = radius × 10`, rounded by
+the symbolisation stage (`docs/map-rendering.md` §4.4), not at import —
+rounding at import, as Mapper does, would rewrite source coordinates
+(user decision 2026-10-20, A12); since `ocad-11` (A13), earlier importers
+warned `SYMBOL_FEATURE_DROPPED` and drew the corners sharp. Corpus:
+Club-full 850.1, 2.29 mm. A grid (`gridFlags & 1`, with cell size,
+numbering and unnumbered-cell text) is not drawn — a by-design drop (user
+decision 2026-10-20, B1) — and reported as `RECTANGLE_GRID_DROPPED`
+(`rectangle grid (cells w × h mm) not drawn`, class `by-design`, §7);
+`ocad-10` and earlier reported it as `SYMBOL_FEATURE_DROPPED`. Not in the
+corpus. Struct (after the base symbol): `lineColor`
 +0, `lineWidth` +2, `radius` +4, `gridFlags` +6, `cellWidth` +8,
 `cellHeight` +10, two reserved words, `unnumCells` +16, `unnumText` +18
 (string[3]).
@@ -386,7 +390,8 @@ stage-4 warning):
 | `SYMBOL_COLOUR_UNKNOWN` | A colour number the colour table lacks; that part of the symbol is skipped. |
 | `SYMBOL_EMPTY` | Nothing drawable was left ⇒ `render: null`. |
 | `SYMBOL_TYPE_UNSUPPORTED` | Unknown symbol type, also when the reader dropped it (from its warning list). |
-| `SYMBOL_FEATURE_DROPPED` | Decrease, double-line background colour / unknown mode, framing narrower than the main line, text shadow or rectangle framing / line-below / attached point symbol / vertical alignment, line text drawn as block text, rectangle corner radius / grid, zero-size hatch or pattern — constructs the render IR cannot express. |
+| `SYMBOL_FEATURE_DROPPED` | Decrease, double-line background colour / unknown mode, a framing line exactly as wide as the main line, text rectangle framing / unknown framing mode / line-below / attached point symbol / a vertical alignment other than 0, 4, 8, line text drawn as block text, zero-size hatch or pattern — constructs the render IR cannot express. |
+| `RECTANGLE_GRID_DROPPED` | A rectangle symbol's grid, not drawn by design (class `by-design`, §7). Since `ocad-11`. |
 | `SYMBOL_REFERENCE_INVALID` | A symbol-to-symbol reference that does not resolve to a usable definition: an area's border symbol that is the area itself, is missing from the table or is not a line symbol (§3.3 area table); on the OMAP path a combined-symbol part that references itself or a missing symbol (§4.3). A source data error, not an unsupported feature (§7 classification); the message names the symbol and the case. Since `ocad-10` / `omap-4`; earlier importers reported these as `SYMBOL_FEATURE_DROPPED`. |
 | `FONT_SUBSTITUTED` | Font name not metric-compatible with the shipped family. |
 | `IRREGULAR_PATTERN_REGULARISED` | Irregular area pattern drawn as a regular grid. |
@@ -406,6 +411,9 @@ alignment, one corner radius, a narrow framing line and the stale border
 references. Since `ocad-10` (A14) the stale border references are
 `SYMBOL_REFERENCE_INVALID` — six on Club-full, five self-references and 307.1
 pointing at the area 301.2 — and no longer count among the unsupported features.
+Since `ocad-11` (A13) the shadows, vertical alignments, the corner radius and
+the narrow framing line are imported into their IR fields, and the five corpus
+maps import with no unsupported-primitive warning (§7).
 
 ### 3.4 Objects
 
@@ -627,10 +635,13 @@ differ from OCAD or that 06 left open:
   attached to lines follow it too (Mapper semantics; OCAD's rotate-to-
   line default is not assumed).
 - **Lines**: `start_offset` / `end_offset` shorten the stroke unless the
-  cap is `pointed`, in which case Mapper tapers over that length — the
-  IR has no taper so the stroke is drawn butt and full length (no warning
-  yet: an earlier draft named a `SYMBOL_FEATURE_APPROXIMATED` that no code
-  emits; the taper is row A13's). Border centre = `line_width/2 + shift`
+  cap is `pointed`, in which case they are Mapper's cap lengths (its
+  `LineSymbol` has no other) and become `main.taper { startUm:
+  start_offset, endUm: end_offset }` — each key only when > 0 — on a
+  stroke of full length. A file whose pointed line carries only
+  `pointed_cap_length` (offsets 0; Mapper still writes it, equal to the
+  offsets: OOM ISOM 106, 747 µm ×3) tapers both ends over it. Since
+  `omap-5` (A13); earlier importers drew pointed caps untapered. Border centre = `line_width/2 + shift`
   (Mapper measures `shift` from the main line's edge; the IR from its
   centre); dashed borders carry their own dash. Dash pattern → `layout:
   "omap"` with `dashes_in_group`, `in_group_break_length`,
@@ -644,9 +655,13 @@ differ from OCAD or that 06 left open:
 - **Areas**: fill colour, `pattern` elements → hatches (`type 1`) and
   point patterns (`type 2`, with `rotatable`, `no_clipping & 3`); the
   pattern angle is CCW like object rotation.
-- **Text**: `bold` → weight 700, framing mode 1 → halo of
-  `line_half_width`, framing mode 2 (box), `underline` and `line_below`
-  are warned and dropped; font family through the same `ocadFontFamily`
+- **Text**: `bold` → weight 700, framing mode 1 (line) → halo of
+  `line_half_width`, framing mode 2 (shadow — Mapper's `ShadowFraming`;
+  it has no box framing) → `shadow { colour, offsetXUm:
+  shadow_x_offset, offsetYUm: −shadow_y_offset }` (Mapper's offsets are
+  y-down, the IR's y-up; both 0 ⇒ nothing, no warning; since `omap-5`,
+  A13), any other mode, `underline` and `line_below` are warned and
+  dropped (`SYMBOL_FEATURE_DROPPED`); font family through the same `ocadFontFamily`
   substitution table as §3.3 (`FONT_SUBSTITUTED`).
 - **Combined symbols** are flattened into *one* IR symbol
   (`mergeLines`), parts by reference or inline, cycles and depth
@@ -658,7 +673,12 @@ differ from OCAD or that 06 left open:
   wider than the result's main with no halo yet → a continuous halo of
   `(w − w_result)/2` (508.x rides, 502.2 wide road); a part that is
   narrower when the result has borders without background → the
-  background band; anything else warns `SYMBOL_FEATURE_DROPPED`. A part
+  background band; anything else warns `SYMBOL_FEATURE_DROPPED`. A
+  part's borders when the result already has borders (502.2: the wide
+  road's edges outside the narrow line's) → one more entry of
+  `borders.extraPairs` (`{ left?, right? }`, each side's `shiftUm` from
+  that part's own width, `docs/map-rendering.md` §4.4), no warning, since
+  `omap-5` (A13); the background band is unaffected. A part
   that references the combined symbol itself or a symbol id outside the
   table is a stale reference: `SYMBOL_REFERENCE_INVALID`, the part is skipped. A
   part's own glyphs are appended (511.2); a second dashed main, a
@@ -702,13 +722,29 @@ differ from OCAD or that 06 left open:
 - **Object tags**: 06 wanted them kept as attributes; the document has
   no per-object attribute slot yet (02 §10 reserves room), so they are
   counted by `OBJECT_TAGS_DROPPED` until it does.
-- **Text objects**: Mapper stores horizontal and vertical alignment per
-  *object*; the IR stores alignment per *symbol*. When every object of
-  a symbol agrees, the alignment is lifted onto the symbol; otherwise
-  `TEXT_ALIGNMENT_PER_OBJECT` counts the symbol and the first object's
-  alignment wins. Vertical alignments other than baseline are counted
-  by `TEXT_VERTICAL_ALIGNMENT_DROPPED`. Empty texts are dropped
-  (`EMPTY_TEXT_DROPPED`).
+- **Text objects**: Mapper stores horizontal (`h_align` 0 left, 1
+  centre, 2 right) and vertical alignment (`v_align` 0 baseline, 1 top,
+  2 middle, 3 bottom) per *object*; the IR stores both per *symbol*
+  (`align`, `verticalAlign`). Per text symbol, the first (h, v) pair its
+  objects use, in object order, is lifted onto the symbol itself
+  (`verticalAlign` left out for baseline). Every further pair gets an
+  **alignment variant**: an ordinary `origin: "source"` header entry
+  appended after the symbol table and the missing-symbol stubs, in order
+  of first use, with the parent's `code`, `name`, `kind`, `hidden`,
+  `sourceIndex` and `sourceFont`, the parent's render with the pair's
+  `align` / `verticalAlign`, and IR id `src:<id>/<align>/<verticalAlign>`
+  (`src:20/right/middle`); the objects with that pair point at it (user
+  decision 2026-10-22, A13 — no header schema change). The matcher,
+  club decisions and the CRT treat a variant as a source symbol; its
+  decision fingerprint is the parent's (the text fingerprint carries no
+  alignment, `docs/map-symbols.md` §8.1), so one decision covers both,
+  and the review shows one row per variant actually used. A value
+  outside those ranges (not written by Mapper) reads as left / baseline.
+  A symbol without a text render gets no variants. Since `omap-5`;
+  `omap-4` lifted only a uniform horizontal alignment
+  (`TEXT_ALIGNMENT_PER_OBJECT` otherwise) and dropped vertical ones
+  (`TEXT_VERTICAL_ALIGNMENT_DROPPED`) — both codes are retired. Empty
+  texts are dropped (`EMPTY_TEXT_DROPPED`).
 - Objects referencing a symbol id outside the table get a stub
   (`origin: "missing"`, code `#<id>`, `MISSING_SYMBOL`); unknown object
   types and empty geometry are dropped with the §3.4 codes.
@@ -716,7 +752,6 @@ differ from OCAD or that 06 left open:
 ### 4.5 Warning codes added by the OMAP path
 
 `COLOUR_OPACITY_IGNORED`, `HELPER_SYMBOLS_HIDDEN`, `TEXT_BOX_DROPPED`,
-`TEXT_ALIGNMENT_PER_OBJECT`, `TEXT_VERTICAL_ALIGNMENT_DROPPED`,
 `OBJECT_TAGS_DROPPED`, `PARTS_MERGED`, `CRS_UNRESOLVED` (shared with
 OCAD since `ocad-5`, §3.5), `MAP_SCALE_MISSING`, `EMPTY_TEXT_DROPPED`,
 `SYMBOL_REFERENCE_INVALID` (combined parts, §4.3; shared with OCAD since
@@ -726,7 +761,7 @@ non-contiguous priorities). The rest are shared with §3.6–3.7.
 
 ## 5. Header provenance
 
-`format.importer` is `"ocad-10"` for OCAD sources (`OCAD_IMPORTER_VERSION`;
+`format.importer` is `"ocad-11"` for OCAD sources (`OCAD_IMPORTER_VERSION`;
 `ocad-1` had `render: null` for every source symbol, `ocad-2` carried the
 upload name in the header, `ocad-3` had no matcher, `ocad-4` stored
 ScalePar `d` as `declinationDeg`, ignored `e` and had no
@@ -740,11 +775,15 @@ English names only — `docs/map-symbols.md` §8.2 row 5, B7 —, `ocad-8` read
 `useSymbolFlags` 1 / 2 as start / end and OCAD 9+ circle diameters as
 outer diameters — §3.3, B9, `ocad-9` reported a stale area-border
 reference as `SYMBOL_FEATURE_DROPPED` and kept no per-symbol warning detail
-— §3.3, §3.6, A14) and `"omap-4"`
+— §3.3, §3.6, A14, `ocad-10` dropped text shadows, vertical text alignment,
+rectangle corner radii and framing lines narrower than the main line,
+shortened pointed lines instead of tapering them and reported a rectangle
+grid as `SYMBOL_FEATURE_DROPPED` — §3.3, A13) and `"omap-5"`
 for Mapper sources (`OMAP_IMPORTER_VERSION`; `omap-1` stored `paperOrigin`
 unrounded, `omap-2` is `ocad-7`'s matcher, `omap-3` reported stale
 combined-part references as `SYMBOL_FEATURE_DROPPED` and kept no
-per-symbol detail). A header `warnings` change alone bumps the
+per-symbol detail, `omap-4` drew pointed caps untapered and dropped shadow
+framing and a combined symbol's second border pair — §4.3, A13). A header `warnings` change alone bumps the
 version — `ocad-6` did — while the report-only `warningDetails` would not.
 Documents of either earlier version have no `georeference` / `north` in
 their report; the dedup only reuses current-version documents, so the
@@ -779,21 +818,21 @@ document hash is identical on two machines.
 
 | Level | File | Covers |
 |---|---|---|
-| Unit (shared) | `packages/shared/src/import/__tests__/report.test.ts` | `WARNING_CLASS` classifies every code the importers, matcher and CRT parser emit and names none that nothing emits (source scan), the `unsupported` set is exactly the eight codes of §7, `SYMBOL_REFERENCE_INVALID` is a `source-error`; `importReportSchema` accepts / rejects `warningDetails` |
+| Unit (shared) | `packages/shared/src/import/__tests__/report.test.ts` | `WARNING_CLASS` classifies every code the importers, matcher and CRT parser emit and names none that nothing emits (source scan), the `unsupported` set is exactly the six codes of §7, `SYMBOL_REFERENCE_INVALID` is a `source-error`; `importReportSchema` accepts / rejects `warningDetails` |
 | Unit (shared) | `packages/shared/src/import/__tests__/xml.test.ts` | the SAX tokenizer: prolog / comments / CDATA / DOCTYPE, entities, attribute quoting, mismatched and unclosed tags, second root, the pruning tree builder |
 | Unit (shared) | `packages/shared/src/import/__tests__/omap-reader.test.ts` | barrier wrapper, both coordinate forms and every flag, symbols of all five types incl. inline sub-symbols, colours with spot components, georeferencing, parts, templates, print, tags, misnumbered symbols |
-| Unit (shared) | `packages/shared/src/import/__tests__/omap-symbols.test.ts` | every §4.3 rule: point glyphs incl. nested points and offset discs, line caps / shortening / pointed taper, borders, dash layouts and mid / dash / start / end placements, width-0 carriers, area hatch and pattern, text framing and fonts, the combined-symbol merge table (509, 508.x, 502.2, 511.2, second dashed, area combinations), self and missing combined parts → `SYMBOL_REFERENCE_INVALID` |
-| Unit (shared) | `packages/shared/src/import/__tests__/omap-source.test.ts` | the fixture through `omapToDocumentInput`: colour stack order and opacity, y flip and `-0`, every §4.2 flag rule, hole shift, dash-point rule per symbol, text alignment lifting, missing symbols, `warningDetails` with the stub index, parts merge, templates, print window, georeferencing (UTM / EPSG / Gauss-Krüger / PROJ.4 / Local / unresolved), codec round trip, every §4.5 warning code |
+| Unit (shared) | `packages/shared/src/import/__tests__/omap-symbols.test.ts` | every §4.3 rule: point glyphs incl. nested points and offset discs, line caps / shortening / pointed taper (offsets, one end, `pointed_cap_length` only), borders, dash layouts and mid / dash / start / end placements, width-0 carriers, area hatch and pattern, text framing (line → halo, shadow → y-flipped shadow, zero offset) and fonts, the combined-symbol merge table (509, 508.x, 502.2 with its second border pair in `extraPairs`, 511.2, second dashed, area combinations), self and missing combined parts → `SYMBOL_REFERENCE_INVALID` |
+| Unit (shared) | `packages/shared/src/import/__tests__/omap-source.test.ts` | the fixture through `omapToDocumentInput`: colour stack order and opacity, y flip and `-0`, every §4.2 flag rule, hole shift, dash-point rule per symbol, text alignment lifting and alignment variants (§4.4), missing symbols, `warningDetails` with the stub index, parts merge, templates, print window, georeferencing (UTM / EPSG / Gauss-Krüger / PROJ.4 / Local / unresolved), codec round trip, every §4.5 warning code |
 | Unit (shared) | `packages/shared/src/import/__tests__/ocad-source.test.ts` | colour stack order, the file version reaching the circle-diameter rule, symbol table, hidden flag, duplicates, graphic objects, missing symbols, rectangle objects resolved to a parsed rectangle symbol, flag mapping, georeferencing (no `declinationDeg` from `d`, `e` fallback, grid table first, `CRS_UNRESOLVED`), print window, warning codes, reader-dropped types vs `READER_WARNING`, `readerWarnings` texts (order, cap of 50), `warningDetails` (one entry per emission with the symbol index, stub index for `MISSING_SYMBOL`, first detail = header message, not in the document, cap of 500 with every emission counted), `analysis` returned |
 | Unit (shared) | `packages/shared/src/geo/__tests__/projection.test.ts`, `north.test.ts` | §3.8 maths: EPSG lookup, paper ↔ projected (rotation + correction, grid scale factor, round trip), Mapper's reference point on the `e2e/test.xmap` frame, paper ↔ WGS 84, convergence at Nackareservatet (−2.82°) and on a central meridian, paper-north bearing, extent and calibration corners, `mapFileMetadata`; angle folding and the cluster thresholds |
 | Unit (shared) | `packages/shared/src/import/__tests__/analyse.test.ts` | `601` / `601.x` codes, grouping per symbol, 5 mm floor scaled by `unitsPerMm`, graphic symbols excluded, georeference fields, un-georeferenced and non-projectable CRSs, same result over the decoded document |
-| Unit (shared) | `packages/shared/src/import/__tests__/ocad-symbols.test.ts` | every row of the §3.3 tables: line styles, dashes (507 end gap), framing, double lines, main / secondary / corner / start / end symbols (`useSymbolFlags` 1 = end, 2 = start), point elements (circle diameter by OCAD version), area fill / hatch / pattern / border, text mapping, fonts, text line framing → halo (`frWidth` as half-width, width 0, unknown colour), shadow / rectangle / unknown framing warned, line text with its warning, a border reference that is missing / not a line / the area itself → `SYMBOL_REFERENCE_INVALID` with the fill kept, rectangle → outline line (radius, grid, width 0, unknown colour), warning codes |
+| Unit (shared) | `packages/shared/src/import/__tests__/ocad-symbols.test.ts` | every row of the §3.3 tables: line styles, dashes (507 end gap), shortening without pointed ends and the taper with them (one end, none), framing (also narrower than the main line → negative halo, equal width warned), double lines, main / secondary / corner / start / end symbols (`useSymbolFlags` 1 = end, 2 = start), point elements (circle diameter by OCAD version), area fill / hatch / pattern / border, text mapping, vertical anchor (4 middle, 8 top, 0 absent, other values warned), fonts, text line framing → halo (`frWidth` as half-width, width 0, unknown colour), shadow framing → shadow (offsets, zero offset, unknown colour), rectangle / unknown framing warned, line text with its warning, a border reference that is missing / not a line / the area itself → `SYMBOL_REFERENCE_INVALID` with the fill kept, rectangle → outline line (`cornerRadiusUm`, grid → `RECTANGLE_GRID_DROPPED`, width 0, unknown colour), warning codes |
 | Unit (shared) | `packages/shared/src/render/__tests__/{dash,placement,symbolise}.test.ts` | OCAD end-gap semantics, `dashGroupCentres` / `sectionCentres`, `backgroundWidthUm`, continuous halo |
 | Unit (shared) | `packages/shared/src/map-document/__tests__/codec.test.ts`, `projection-bridge.test.ts` | encode/decode round trip, Hilbert order, validation errors, truncation, JSON projection, render bridge |
 | Unit (shared) | `packages/shared/src/import/__tests__/{colour-class,fingerprint,matcher,colour-align,match-document}.test.ts` | stages 6–7: CMYK / name classification, fingerprints and tolerances, every matcher stage and the traps (reused numbers, template variants, old numbering), factor detection (lines / codes / scale / override), alignment steps and conflicts, whole-document run with codec round trip and canonical drawing through the bridge |
 | Unit (api) | `packages/api/src/__tests__/import-ocad.test.ts` | reader → document on `e2e/test.ocd`, determinism, bboxes, all fixture symbols converted (the framed 603 text with its white halo, the 850.1 rectangle as an outline), symbolise without proxies, fixture matches (4 auto incl. 603.b, old-numbered ring and the rectangle suggested, factor by `codes`), `readerWarnings` and `warningDetails` in the report only when non-empty, stack with inserted lower purple, hook renders against the source table; stage 5: grid 13002 → EPSG:3006 with no `declinationDeg`, the same 12-line meridian cluster as the legacy probe, report `georeference` / `north` with WMM fields at `asOf` agreeing with `detectMapNorth`, raster-path and pin columns identical (correction 0 and 11) |
-| Unit (api) | `packages/api/src/__tests__/import-omap.test.ts` | reader → document on `e2e/test.xmap`: determinism across `importOmapToDocument` / `importMapToDocument`, provenance (`omap-4`, version 9, UTM 33N), `warningDetails` in the report (the `MISSING_SYMBOL` stub with its index, the dropped templates), bboxes, all 21 fixture symbols rendered, symbolise with the dangling symbol as the only drop, factor ×1, import report, kind sniff with BOM, the two kinds kept apart |
-| Unit + integration (api) | `map-import-jobs.test.ts` (both) | worker runs a Mapper file by kind with the same hashes as inline; a Mapper source goes through the job to a `done` row with `importer_version omap-4` and a stored report carrying `warningDetails`, and is deduplicated on the second job; garbage of either kind fails cleanly; the pin writes the quick-access columns equal to the raster path's, recomputes them with a row's `rotation_correction` idempotently, and leaves them alone for a document without a CRS |
+| Unit (api) | `packages/api/src/__tests__/import-omap.test.ts` | reader → document on `e2e/test.xmap`: determinism across `importOmapToDocument` / `importMapToDocument`, provenance (`omap-5`, version 9, UTM 33N), `warningDetails` in the report (the `MISSING_SYMBOL` stub with its index, the dropped templates), bboxes, all 21 fixture symbols and the 702 alignment variant rendered, symbolise with the dangling symbol as the only drop, factor ×1, import report, kind sniff with BOM, the two kinds kept apart |
+| Unit + integration (api) | `map-import-jobs.test.ts` (both) | worker runs a Mapper file by kind with the same hashes as inline; a Mapper source goes through the job to a `done` row with `importer_version omap-5` and a stored report carrying `warningDetails`, and is deduplicated on the second job; garbage of either kind fails cleanly; the pin writes the quick-access columns equal to the raster path's, recomputes them with a row's `rotation_correction` idempotently, and leaves them alone for a document without a CRS |
 | Unit (api, unchanged) | `map-north.test.ts`, `map-projection-correction.test.ts`, `map-coordinate-transfer.test.ts`, `course-import-align.test.ts` | the legacy modules as adapters over `mapGeo` keep their behaviour |
 | E2E | `e2e/map-gl-doc.spec.ts` | document path = reader path in the browser, native `.oxvm` round trip, `mode=source` draws the fixture from its own definitions with no proxies; `e2e/test.xmap` loads client-side with no OCAD reader, draws, and surfaces the OMAP warning codes |
 | Unit (shared) | `packages/shared/src/import/__tests__/decisions.test.ts` | club decisions and review rows (`docs/map-symbols.md` §8.5), stage 6 with decisions: other library ignored, older release applied |
@@ -825,8 +864,8 @@ run; the unsupported ones are listed the same way (`!` lines).
 
 | Class | Codes | Meaning |
 |---|---|---|
-| `unsupported` | `SYMBOL_TYPE_UNSUPPORTED`, `SYMBOL_FEATURE_DROPPED`, `UNKNOWN_OBJECT_TYPE`, `IRREGULAR_PATTERN_REGULARISED`, `TEXT_VERTICAL_ALIGNMENT_DROPPED`, `TEXT_BOX_DROPPED`, `TEXT_ALIGNMENT_PER_OBJECT`, `COLOUR_OPACITY_IGNORED` | a source construct the document cannot represent (the gate) |
-| `by-design` | `TEMPLATES_DROPPED`, `LAYOUT_OBJECTS_DROPPED`, `OBJECT_TAGS_DROPPED`, `PARTS_MERGED`, `HELPER_SYMBOLS_HIDDEN` | dropped on purpose |
+| `unsupported` | `SYMBOL_TYPE_UNSUPPORTED`, `SYMBOL_FEATURE_DROPPED`, `UNKNOWN_OBJECT_TYPE`, `IRREGULAR_PATTERN_REGULARISED`, `TEXT_BOX_DROPPED`, `COLOUR_OPACITY_IGNORED` | a source construct the document cannot represent (the gate). `TEXT_VERTICAL_ALIGNMENT_DROPPED` and `TEXT_ALIGNMENT_PER_OBJECT` were here until `omap-5` (A13), which imports both alignments (§4.4) |
+| `by-design` | `TEMPLATES_DROPPED`, `LAYOUT_OBJECTS_DROPPED`, `OBJECT_TAGS_DROPPED`, `PARTS_MERGED`, `HELPER_SYMBOLS_HIDDEN`, `RECTANGLE_GRID_DROPPED` | dropped on purpose |
 | `source-error` | `SYMBOL_REFERENCE_INVALID`, `MISSING_SYMBOL`, `DUPLICATE_SYMBOL_NUMBER`, `SYMBOL_COLOUR_UNKNOWN`, `SYMBOL_EMPTY`, `EMPTY_GEOMETRY_DROPPED`, `EMPTY_TEXT_DROPPED`, `MAP_SCALE_MISSING`, `CRS_UNRESOLVED` | the file is inconsistent; nothing is missing from the document that the file defines |
 | `substitution` | `FONT_SUBSTITUTED` | a font was replaced |
 | `outcome` | `SYMBOL_UNMATCHED`, `SYMBOL_SCALE_ANOMALY`, `DECISION_UNKNOWN_ENTRY`, `COLOUR_ORDER_CONFLICT`, `COLOUR_UNCLASSIFIED`, the `CRT_*` codes | a matching, colour-stack, decision or CRT result |
@@ -849,7 +888,7 @@ maps nor the JSON files are committed (AGENTS.md §12); keep them under
 
 **Against production.** The same comparison works against what Cloud
 Run produced from the same files, once the instance runs the same
-importer and library versions (`ocad-10` / `omap-4`,
+importer and library versions (`ocad-11` / `omap-5`,
 `*@<SYMBOL_LIBRARY_VERSION>`) and only for documents imported without
 club decisions (stage 6 applies them, so a reviewed map has a different,
 equally correct hash). Either list the stored documents:
@@ -874,17 +913,37 @@ import errors, 48 unsupported-primitive warnings. The `ocad-7` re-run
 (decision log, "A12") has 36, none of them a text line framing or an
 unparsed symbol type. The `ocad-10` / `omap-4` run (A14) has 30: the six
 stale area-border references moved to `SYMBOL_REFERENCE_INVALID`
-(Club-full 10 → 4 unsupported); the 30 left are rows A13 and B8.
+(Club-full 10 → 4 unsupported); the 30 left were all row A13's. The
+`ocad-11` / `omap-5` run (A13, 2026-10-22) has **0** — the S0 zero-warning
+criterion is met on the corpus: shadows (Club-2026 815.2, Club-full 825.1),
+vertical anchors (Club-full 802.6 / 802.7, Crop-A / Crop-B 901.0 / 902.0, OOM
+Course_Design's 18 middle-anchored texts, lifted onto their four symbols
+without variants), Club-full 850.1's corner radius, Crop-A / Crop-B 503.1's
+narrow framing and OOM ISOM 502.2's second border pair are imported; 0 import
+errors, 8/8 hashes reproduced by a second run; symbol and object match
+outcomes identical to the `ocad-10` / `omap-4` run on every map. B8's text
+boxes and rectangle framing do not occur in the corpus (the fixture
+`e2e/test.xmap` keeps one text box and one translucent colour, so the gate
+still fails on it by design).
 
 ## 8. Pending in this chapter
 
-S0's remaining unsupported primitives: importer wiring of the IR fields
-B1 added (text shadow, vertical text alignment, pointed-line taper,
-rectangle corner radius, a framing line narrower than its main line,
-Mapper's extra border pair — row A13), text rectangle framing, text boxes
+S0's remaining unsupported primitives: text rectangle framing, text boxes
 and line text laid along its path (row B8; user decision 2026-10-20 —
-the rectangle *grid* is a by-design drop, not pending) — all in `research/vector-map-pipeline/SLICES.md`; the S0 hash comparison on a
-second machine (re-run on `ocad-7`). The line-text struct (§3.3) is
+the rectangle *grid* is a by-design drop, not pending; the IR fields B1
+added are wired since `ocad-11` / `omap-5`, A13) — in
+`research/vector-map-pipeline/SLICES.md`. Also B8's: a text symbol drawn
+canonically (an `auto` match) takes the library entry's whole render
+(`docs/map-document-format.md` §8), so the source's `align`,
+`verticalAlign` and `shadow` — and with them the anchor the importer read
+from OCAD `alignment` or Mapper's per-object alignment — are not applied;
+the rule for which text fields stay with the source symbol is B8's (user
+decision 2026-10-22, A13). No corpus symbol is drawn canonically today:
+of the text symbols with a non-default anchor or a shadow, only OOM
+Course_Design's 703 (middle) has a match at all — a `suggested` 704,
+drawn from source until a club accepts it in review, which would then
+lose its anchor. The S0 hash comparison on a second machine (re-run on
+`ocad-7`). The line-text struct (§3.3) is
 *provisional* until a real OCAD file with line text is seen. S2 confirmation of the *provisional* §3.3 rows against OCAD output,
 event / club map *apply* for Mapper sources (needs slice C, §2.2), stage 5 fonts used (fallback decisions)
 and feature usage (03 §6.8 table) — 06 §4.4's `fonts` / `features`

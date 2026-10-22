@@ -72,7 +72,7 @@ describe("measure-import.mjs", () => {
     assert.match(r.stdout, /^ {4}1 text box\(es\) imported as single-anchor texts$/m);
     const map = JSON.parse(readFileSync(out, "utf8")).maps["test.xmap"];
     assert.equal(map.importer.startsWith("omap-"), true);
-    assert.deepEqual(map.unsupported.map((w) => w.code).sort(), ["COLOUR_OPACITY_IGNORED", "TEXT_ALIGNMENT_PER_OBJECT", "TEXT_BOX_DROPPED", "TEXT_VERTICAL_ALIGNMENT_DROPPED"]);
+    assert.deepEqual(map.unsupported.map((w) => w.code).sort(), ["COLOUR_OPACITY_IGNORED", "TEXT_BOX_DROPPED"]);
     assert.equal(map.georeference.crs, "EPSG:32633");
   });
 

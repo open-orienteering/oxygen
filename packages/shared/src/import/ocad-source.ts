@@ -26,7 +26,7 @@ import type { DocumentColour, DocumentSymbolInput, DocumentWarning, Georeferenci
 
 /** OCAD coordinates are 1/100 mm. */
 export const OCAD_UNITS_PER_MM = 100;
-export const OCAD_IMPORTER_VERSION = "ocad-10";
+export const OCAD_IMPORTER_VERSION = "ocad-11";
 /** Reader warning texts kept for the import report (docs/map-import.md §3.6). */
 export const READER_WARNING_TEXTS_MAX = 50;
 

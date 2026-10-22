@@ -457,7 +457,7 @@ startImportJob(db, {sourceHash, eventId? | clubMapId?, startedBy?, holdMs?})
   │
   ├─ decisions = club_symbol_decisions for the source's kind (docs/map-symbols.md §8.5)   → the row's `decisions`
   │
-  ├─ a map_documents row exists for (sourceHash, importer ∈ {ocad-10, omap-4}, library *@<current SYMBOL_LIBRARY_VERSION>)
+  ├─ a map_documents row exists for (sourceHash, importer ∈ {ocad-11, omap-5}, library *@<current SYMBOL_LIBRARY_VERSION>)
   │   that follows `decisions` (newest first)
   │     → touchDocument, insert state=done with that document_hash, applyJobResult, derive, return   (06 §8 dedup, no worker)
   │
