@@ -306,7 +306,9 @@ function load(msg: LoadRequest): { reply: LoadedReply; transfer: ArrayBuffer[]; 
 /**
  * Every text pass's glyphs as text-atlas entries (§5.2 "Text atlas"):
  * looked up by (font family, glyph id); a glyph the pages do not hold is
- * −1 and counted unless it has no outline (nothing to draw anyway).
+ * −1 and counted unless it has no outline (nothing to draw anyway) or is
+ * `.notdef` (glyph 0: what the shaper emits for an unmapped code point
+ * such as a tab — not drawn here, §8).
  */
 function resolveText(
   stream: render.PassStream,
@@ -338,7 +340,7 @@ function resolveText(
         entries[g] = hit.entry;
         pageOf[g] = hit.page;
         stats.glyphs++;
-      } else if (font?.outline?.(p.glyphs[g])) {
+      } else if (p.glyphs[g] !== 0 && font?.outline?.(p.glyphs[g])) {
         stats.missing++;
         count("TEXT_GLYPH_NOT_IN_ATLAS");
       }

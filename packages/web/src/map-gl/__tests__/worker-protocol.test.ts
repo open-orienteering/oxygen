@@ -190,6 +190,16 @@ describe("worker protocol (docs/map-rendering.md §5.2 Worker)", () => {
       expect(m.summary.text.glyphs).toBeGreaterThan(0);
     });
 
+    it(".notdef (an unmapped code point such as a tab) is not drawn and not counted as missing", () => {
+      const objs = [{ symbolIdx: render.PILOT.controlNumber704, path: render.makePath([26_000, 36_000]), text: "A\tB" }];
+      const { summary, text } = run({ textAtlas: [atlasPage("latin")] }, objs);
+      expect(summary.warnings.TEXT_GLYPH_NOT_IN_ATLAS).toBeUndefined();
+      expect(summary.text.missing).toBe(0);
+      const entries = text.flatMap((t) => { const e: number[] = []; for (let i = 5; i < t.instances.length; i += INSTANCE_FLOATS) e.push(t.instances[i]); return e; });
+      expect(entries.length).toBe(summary.text.glyphs);
+      expect(summary.text.glyphs).toBe(2 * summary.passKinds.text);
+    });
+
     it("Cyrillic: not held by the Latin page (counted), drawn from page 1 when it is loaded", () => {
       const objs = [{ symbolIdx: render.PILOT.controlNumber704, path: render.makePath([26_000, 36_000]), text: "ЖA" }];
       const latinOnly = run({ textAtlas: [atlasPage("latin")] }, objs);

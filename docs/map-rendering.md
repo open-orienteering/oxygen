@@ -799,6 +799,51 @@ when the view mounts, before a document is known: under Vite dev its
 module graph takes ~150 ms to load (Sprint envelope `load` 314 → 147 ms
 once the dev page pre-warmed it).
 
+#### Text atlas (B3)
+
+Text on the arena path is drawn from the committed MTSDF pages of §4.10
+(04 §6.7: MSDF for the screen, outlines in PDF; both place glyphs from
+the same shaping result, so only rasterisation differs). The atlas is a
+**session asset**, not a document asset: a document never carries it,
+and one page serves every document.
+
+- **Which pages.** `textAtlasPagesFor(header.strings)`: the Latin page
+  always; the Cyrillic page only when a string of the document has a
+  code point in U+0400–04FF (S1 §5's "only when the header lists such
+  characters" — `strings` is that list; the header is read before the
+  worker starts). Pages are generated at build time and *fetched* on
+  demand; nothing generates glyphs in the browser.
+- **Loading.** `loadTextAtlas(pages)` (`lib/map-fonts.ts`): JSON and PNG
+  per page via Vite `?url`, once per session per page (a failed page is
+  retried on the next call), the PNG decoded with `createImageBitmap(…,
+  { premultiplyAlpha: "none", colorSpaceConversion: "none" })` — the
+  field is data — and uploaded without premultiplication or colour-space
+  conversion. The viewer falls back to the Latin page alone, then to no
+  text, when a page fails: the map still draws.
+- **Two consumers, one order.** `engine.load({ …, textAtlas })` gives the
+  decoded images to the renderer (`setTextAtlas`: one RGBA8 texture per
+  page + the glyph table, session-scoped — it survives `setDocument` and
+  is not re-uploaded for the same pages) and the page JSONs to the
+  worker, in the same order: a text instance's draw group is its page's
+  index there.
+- **Worker.** `buildTextGlyphs(pages)` turns the JSON into a
+  (family, glyph id) → (entry, page) lookup; every text pass is resolved
+  once at load (`TextPassGlyphs`: entry and page per glyph, the halo in
+  em). Only the Regular faces ship, so the family is the key (§4.9 font
+  resolution). Without pages no text is drawn and each text pass counts
+  `TEXT_ATLAS_MISSING`; a glyph no loaded page holds counts
+  `TEXT_GLYPH_NOT_IN_ATLAS` (unless it has no outline); a halo wider than
+  half the range (0.125 em) is clamped and counts `TEXT_HALO_CLAMPED`.
+  The counts join the stage's warnings in `LoadSummary.warnings`;
+  `LoadSummary.text` has the pages, glyphs resolved and glyphs missing.
+- **Halos.** The halo pass is its own pass at its colour's stack
+  position (§3.5, §4.9), drawn from the same quads with the halo band on
+  the alpha channel (Drawing). Library text halos are 0.14–0.155 mm on a
+  ≥ 4 mm em — about 0.03 em, far inside the 0.125 em the field holds.
+- **Bounds.** `passBounds` keeps the em-box + halo rule for text; a
+  glyph quad reaches at most half the range (0.125 em) past its outline,
+  inside the one-cell draw margin.
+
 #### Drawing (GPU)
 
 Arena path (`renderDocument(view, opts, target?)`): for each colour in
@@ -991,6 +1036,34 @@ event maps' complete first view (464–966 ms) and Club-full's first frame
 (3.1 s: at the phone's fit view it sits just above the zoom gate, so its
 whole detail is wanted).
 
+#### Measurements (B3)
+
+Source mode, laptop, one run each (2026-10-22, after B4, B9 and B10;
+same script, settings and columns as the source-mode table above —
+single runs vary by up to ±25 % in the load times). Text is now MSDF
+quads (the Latin page; no corpus map needs Cyrillic):
+
+| Map | Passes | Text glyphs | Draws B2 → B3 | GPU MB (bench max) | after read: first / complete | Frame GPU fit / 1× | Frame CPU p95 fit / 1× | Bucket prepare p95 |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| Sprint | 14 416 | 0 | 54 → **53** | 11.5 (10.7) | 219 / **229** | 6.9 / 8.5 | 7.8 / 0.8 | 3.1 |
+| Crop-B | 3 306 | 81 | 62 → **52** | 8.6 (7.6) | 118 / **153** | 2.6 / 3.2 | 0.6 / 0.6 | 13.6 |
+| Crop-A | 5 354 | 24 | 63 → **54** | 9.7 (9.0) | 110 / **152** | 3.0 / 4.1 | 0.7 / 0.7 | 12.1 |
+| Club-2026 | 51 466 | 906 | 111 → **91** | 62.7 (56.1) | 451 / **883** | 6.3 / 6.8 | 15.8 / 1.0 | 18.2 |
+| Club-full | 114 139 | 3 096 | 167 → **115** | 125.8 (122.1) | 860 / **1 690** | 10.1 / 8.3 | 51.5 / 18.3 | 11.9 |
+
+- **Draws** fall on every map with text: one draw per (colour, page)
+  instead of one per (colour, size class) — on Club-full 52 fewer at fit.
+- **GPU**: the Latin page (2.0 MB) and the glyph table are always
+  resident, so every map is ~2 MB above B2 (the mesh atlas now holds
+  glyph parts only: 0.12–0.28 MB). All maps stay inside 30 / 150 MB.
+- Frame GPU, frame CPU and load times are within B2's run-to-run noise;
+  the over-budget items of the table above (Club-full 1× frame CPU,
+  `fit` frame CPU on club maps) are unchanged — they are visible-set
+  rebuilds (§8), not text.
+- `TEXT_GLYPH_NOT_IN_ATLAS` is 0 on every map once `.notdef` is
+  excluded: Club-2026 has 1 and Club-full 12 tab characters, which the
+  stage shapes to `.notdef` (§8).
+
 Per build step (S1 §6's order; runs before the B1 sync):
 
 | Step | What it moved | Before → after |
@@ -1071,8 +1144,15 @@ published on `window.__mapGlDoc` for Playwright.
 | `map-gl/__tests__/engine.test.ts` | residency through the real worker handler and a fake renderer: drawn + prefetch requested and uploaded; drawn parts never evicted, over budget reported; the same view never re-requests what was evicted; rebuild on drawn-set change but not on zoom within the cells; below the gate only base + large, queue cancelled; hidden objects |
 | `map-gl/__tests__/view.test.ts` | view matrix: centre → clip origin, canvas edges → ±1, y-up, rotation; sub-pixel precision far from the origin in float32 arithmetic |
 | `map-gl/__tests__/prepare.test.ts` | per-pass path (fans, S1 extrusion), unchanged |
-| `e2e/map-gl-doc.spec.ts` | the arena path through the real worker on `e2e/test.ocd` (pilot, envelope): buckets, complete frame, ≤ 300 draws on every bench frame of both scenarios; worker = inline; a 0.05 MB budget evicts, reports over budget and still draws; **arena = per-pass golden path within 0.5 % pixels** (envelope and source on the canvas, envelope into an offscreen framebuffer target); document vs reader path, native `.oxvm`, source mode, `.xmap`, decode error |
-| `e2e/map-gl-golden.spec.ts` | unchanged: the per-pass path against the reference raster |
+| `map-gl/__tests__/text-atlas.test.ts` | the committed pages are current (TTF hashes, 32 px / 8 px range, PNG size = recorded size, every glyph of the ranges on a page, none on two pages, Nordic / Baltic / Cyrillic letters found); plane bounds around the origin, atlas bounds inside the image, same scale both ways, 'H' plane bounds = outline bounds ± half the range; generator JSON → page (ids, y-up, empty glyphs dropped, refuses MSDF-only / bottom origin / code-point keys); glyph table layout and entry order; page selection; halo clamp |
+| `map-gl/__tests__/buckets.test.ts` (text) | one quad instance per atlas glyph (origin-relative position, cos / sin from `angles`, em size, entry, halo), missing glyphs skipped, one draw per (colour, page), hidden objects skipped, unresolved pass draws nothing |
+| `map-gl/__tests__/worker-protocol.test.ts` (text) | no pages → `TEXT_ATLAS_MISSING`, no text; Latin page → every glyph resolved, halos carried; Cyrillic not on the Latin page (counted) and drawn from page 1 when loaded; the dev `stream` source |
+| `map-gl/__tests__/engine.test.ts` (text) | images to the renderer and the same pages to the worker; text bytes resident; no pages clears the renderer's atlas |
+| `lib/__tests__/map-fonts.test.ts` | `loadTextAtlas`: only the pages asked for, in order, decoded as data; once per session; a failed page retried |
+| `e2e/map-gl-doc.spec.ts` | the arena path through the real worker on `e2e/test.ocd` (pilot, envelope): buckets, complete frame, ≤ 300 draws on every bench frame of both scenarios; worker = inline; a 0.05 MB budget evicts, reports over budget and still draws; **arena = per-pass golden path within 0.5 % pixels** (envelope and source on the canvas, envelope into an offscreen framebuffer target, source on `test.xmap`); document vs reader path, native `.oxvm`, source mode, `.xmap`, decode error |
+| `e2e/map-gl-golden.spec.ts` | the per-pass path against the reference raster; the **MSDF text tier**: `text-with-halo`, `lib-text`, `lib-halos` through the arena path (§6.2) |
+| `e2e/map-gl-doc.spec.ts` (text) | arena = per-pass compare also on `e2e/test.xmap` (text, MSDF vs outlines) within 0.5 %; its text resolves on the Latin page with nothing missing |
+| `e2e/map-vector-layer.spec.ts` (text) | the viewer requests the Latin page and not the Cyrillic one |
 
 ### 5.4 Viewer
 
@@ -1174,7 +1254,9 @@ matrix agree to < 0.5 CSS px at every point, rotation and DPR included
 Lifecycle: on mount the layer creates the `MapGlRenderer` and the engine
 over `workerTransport()` with the budget, then loads the fonts
 (`lib/map-fonts.ts`, the two Liberation faces of §4.10, fetched once per
-session) and calls `engine.load` with the document bytes (a copy: the
+session) and the text atlas pages the document's strings need (§5.2
+"Text atlas"; Latin alone, then none, if a page fails) and calls
+`engine.load` with the document bytes (a copy: the
 original stays with the cache), `{ unmatched: "proxy", proxyColours }`
 (the stack's darkest colour for lines, points and text, its lightest
 non-white for areas) and the current view as `firstView`. Every view
@@ -1370,6 +1452,27 @@ certify production anti-aliasing (4× MSAA at 1× cannot meet a 16-level
 tolerance on edge pixels and is not asked to). And a 3× supersample is
 *worse* than 2× with the linear resolve (4 of 9 texels sampled) — a
 higher factor needs a real box-filter pass.
+
+**MSDF text tier** (B3; user decision pending — see the decision log).
+The per-pass golden path draws text from exact outlines; the arena path
+draws it from the 32 px MSDF atlas, at the context's MSAA only. At the
+golden density (`text-with-halo`: a 57 px em, 1.8× the atlas) MSDF
+cannot be held to 0.5 % on scenes that are all glyph edges, so the text
+scenes are drawn a second time through the arena path
+(`/dev/map-gl?fixture=<scene>&path=arena`) against the **same goldens**
+at **≤ 1 %** differing pixels (`TEXT_TIER_MAX_RATIO`). Measured at
+introduction (headless Chromium, 2026-10-22), arena vs per-pass:
+
+| Scene | Arena (MSDF) | Per-pass (outlines) |
+|---|---|---|
+| `text-with-halo` | 19 / 5 220 (0.364 %) | 20 / 5 220 (0.383 %) |
+| `lib-text` | 162 / 23 560 (0.688 %) | 82 / 23 560 (0.348 %) |
+| `lib-halos` | 50 / 21 160 (0.236 %) | 15 / 21 160 (0.071 %) |
+
+`lib-text`'s residual is the smallest text (≈ 15–20 px em, under the
+atlas's 32 px), spread along edges with no systematic offset. The whole
+document compare (`compare=1`) holds MSDF to the per-pass path at the
+ordinary 0.5 % on `e2e/test.xmap`: 0.217 %.
 
 **Designing a golden scene.** Two layouts turn that quantisation into a
 failure without any geometry being wrong, and the library scenes avoid
@@ -1613,7 +1716,10 @@ what became of it:
 | `packages/api/src/render/parity.ts`, `scripts/measure-parity.mjs` | corpus parity against the legacy tiles (§6.4) |
 | `packages/shared/src/render/ocad-objects.ts` | dev-only: `ocad2geojson` objects → `RenderObject`s (pilot / envelope modes); `ocadFlags` for the importers |
 | `packages/web/src/map-gl/prepare.ts` | WebGL2 backend, geometry builders: flattening, indexed strips, even-odd earcut; the per-pass fan path |
-| `packages/web/src/map-gl/mesh-atlas.ts` | glyph and text meshes in one float texture (vertex pulling) |
+| `packages/web/src/map-gl/mesh-atlas.ts` | glyph meshes in one float texture (vertex pulling) |
+| `packages/web/src/map-gl/text-atlas.ts` | the MSDF text atlas: page ranges and selection, glyph lookup, glyph table, halo clamp (§5.2 "Text atlas") |
+| `packages/web/src/map-gl/text-atlas-build.ts`, `packages/web/scripts/generate-text-atlas.ts`, `packages/web/scripts/text-atlas/Dockerfile` | atlas generation (`pnpm text-atlas:generate`, §4.10) |
+| `packages/shared/fonts/msdf/` | the committed text atlas pages |
 | `packages/web/src/map-gl/buckets.ts` | cells, large bucket, per-part preparation and range table, visible set, clip groups, zoom gate, LRU |
 | `packages/web/src/map-gl/arena.ts` | vertex arenas: free list, growth by copy |
 | `packages/web/src/map-gl/worker.ts`, `worker-entry.ts` | the worker's message handler and its binding |
@@ -1629,7 +1735,7 @@ what became of it:
 | `packages/web/src/components/MapViewer.tsx` | the host: layer choice, viewport state, gestures, SVG overlay |
 | `packages/web/src/lib/map-viewport.ts` | the viewport model, mercator and paper (§5.4 "Viewport"), `glView` |
 | `packages/web/src/lib/vector-map.ts` | paper frame, bounds, colours, proxy colours, budget from a document header |
-| `packages/web/src/lib/map-document-cache.ts`, `map-fonts.ts` | document and font loading for the viewer (`docs/map-storage.md` §7.1) |
+| `packages/web/src/lib/map-document-cache.ts`, `map-fonts.ts` | document, font and text atlas loading for the viewer (`docs/map-storage.md` §7.1) |
 | `packages/web/src/lib/feature-flags.ts` | the map pipeline flag until B5 (§5.4 "Selecting the layer") |
 | `e2e/map-vector-layer.spec.ts` | the vector layer in the viewer |
 
@@ -1687,6 +1793,23 @@ The shared module is exported as a namespace: `import { render } from
 - **§5.4 `data-ready`** marks the first view's detail only; later views
   stream in without an attribute (the engine's `whenComplete()` is there
   for a spec that needs it).
+- **§5.2 glyphs outside the text atlas pages** draw nothing on the arena
+  path and count `TEXT_GLYPH_NOT_IN_ATLAS` (user decision pending, see
+  the decision log): Greek, symbols outside the Latin ranges, any text
+  in a `liberation-serif` / `liberation-mono` family (no file ships,
+  §4.10), Cyrillic when its page failed to load. None occurs in the
+  corpus. Adding a page is a range in `TEXT_ATLAS_PAGE_RANGES` and a
+  `pnpm text-atlas:generate`.
+- **§4.9 tabs shape to `.notdef`.** The shaper looks up every code
+  point but `\n`; a tab (U+0009, Club-2026: 1, Club-full: 12) maps to
+  glyph 0, which the reference raster and the per-pass path draw as the
+  `.notdef` box and the arena path does not draw (§5.2 "Text atlas").
+  Tab stops are text layout (row B8); until then the two paths differ
+  there.
+- **§5.2 MSDF at small sizes.** No mipmaps: text between the 4 px skip
+  and ~16 px em samples the 32 px field bilinearly (the `lib-text`
+  residual of §6.2). The B-gate visual review on the phone judges it;
+  a 16 px page or mipmapped field is the remedy if needed.
 - **§5.2 real-phone numbers** (B0 / B-gate): the GPU columns are the
   laptop iGPU, the phone column a CPU-throttle proxy.
 - **§5.2 analytic stroke anti-aliasing** (04 §6.2, §6.9): the 1-px
