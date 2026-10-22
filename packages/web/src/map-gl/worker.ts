@@ -1,7 +1,8 @@
 /**
  * WebGL2 backend, worker side (04 §4.5, §10 point 6): everything but the
  * GL calls. A map document's bytes go in; the worker decodes, bridges,
- * symbolises, builds the mesh atlas, assigns buckets and prepares the
+ * symbolises, builds the mesh atlas, resolves text against the text
+ * atlas, assigns buckets and prepares the
  * always-resident layers (every cell's fills and hatches, the large
  * bucket) at once, then prepares cells' detail on request. Typed arrays
  * go back as transferables.
@@ -11,16 +12,17 @@
  * `worker-entry.ts` binds it to `self`.
  *
  * Protocol (docs/map-rendering.md §5.2 "Worker"):
- *   → load     { source: document bytes | objects + symbols, fonts }   ← loaded { summary, atlas, grid, base parts, large part }
+ *   → load     { source: document bytes | objects + symbols, fonts, text atlas pages }   ← loaded { summary, atlas, grid, base parts, large part }
  *   → prepare  { ids }   replaces the queue; ← part { part } per id, nearest first
  *   ← error    { message } (load failures; the queue stops)
  */
 
 import { mapDocument, render } from "@oxygen/shared";
 import { MeshAtlasBuilder, type MeshAtlas } from "./mesh-atlas.js";
+import { buildTextGlyphs, haloEm, textGlyphKey, type TextAtlasPage } from "./text-atlas.js";
 import {
   aboveZoomGate, assignBuckets, fitView, partTransferables, prepareBucketPart, PREFETCH_MARGIN_CELLS, visibleCells,
-  type Assignment, type Grid, type PrepareContext, type PreparedPart, type ViewRect,
+  type Assignment, type Grid, type PrepareContext, type PreparedPart, type TextPassGlyphs, type ViewRect,
 } from "./buckets.js";
 
 /** Flattening tolerance, paper µm (OCAD's own resolution). */
@@ -29,7 +31,9 @@ export const TOLERANCE_UM = 10;
 export type LoadSource =
   | { kind: "document"; bytes: ArrayBuffer; options: mapDocument.DocumentRenderOptions }
   /** Dev-only S1 reader path: objects already converted on the main thread. */
-  | { kind: "objects"; objects: render.RenderObject[]; symbols: render.RenderSymbol[] };
+  | { kind: "objects"; objects: render.RenderObject[]; symbols: render.RenderSymbol[] }
+  /** Dev-only: an already symbolised stream (the golden scenes through the arena path, `MapGlFixturePage`). */
+  | { kind: "stream"; stream: render.PassStream };
 
 /** The view the caller will show first: given, or "fit the document into this canvas". */
 export type FirstView = { kind: "view"; view: ViewRect } | { kind: "fit"; widthPx: number; heightPx: number; fill?: number };
@@ -38,6 +42,11 @@ export interface LoadRequest {
   type: "load";
   source: LoadSource;
   fonts: { family: render.FontFamily; bytes: ArrayBuffer }[];
+  /**
+   * The text atlas pages the renderer holds, in its page order (§5.2 "Text atlas"). Without them
+   * text is not drawn (`TEXT_ATLAS_MISSING`).
+   */
+  textAtlas?: TextAtlasPage[];
   /**
    * With a first view the worker queues that view's detail (prefetch margin, nearest first) right
    * after the always-resident layers — no round trip — unless the view is below the zoom gate.
@@ -76,7 +85,14 @@ export interface LoadSummary {
   objects: { total: number; drawn: number; large: number };
   /** Bridge statistics (document source only). */
   bridge?: mapDocument.DocumentRenderInput["stats"];
+  /**
+   * Backend warnings are counted here too: `TEXT_ATLAS_MISSING` (text passes, no pages loaded),
+   * `TEXT_GLYPH_NOT_IN_ATLAS` (glyphs the pages do not hold), `TEXT_HALO_CLAMPED` (halo passes
+   * wider than the field).
+   */
   warnings: Record<string, number>;
+  /** Text atlas pages used and glyphs resolved against them. */
+  text: { pages: string[]; glyphs: number; missing: number };
   /** The first view resolved (fit computed here when asked for) and the detail cells queued for it. */
   view?: ViewRect;
   queued: number[];
@@ -187,7 +203,7 @@ function load(msg: LoadRequest): { reply: LoadedReply; transfer: ArrayBuffer[]; 
   const tol = msg.toleranceUm ?? TOLERANCE_UM;
   const fonts = msg.fonts.map((f) => render.parseTrueType(f.bytes, f.family));
   const t0 = performance.now();
-  let objects: render.RenderObject[], symbols: render.RenderSymbol[];
+  let objects: render.RenderObject[] = [], symbols: render.RenderSymbol[] = [];
   let bridge: mapDocument.DocumentRenderInput["stats"] | undefined;
   let tDecode = t0;
   if (msg.source.kind === "document") {
@@ -197,36 +213,22 @@ function load(msg: LoadRequest): { reply: LoadedReply; transfer: ArrayBuffer[]; 
     objects = input.objects;
     symbols = input.symbols;
     bridge = input.stats;
-  } else {
+  } else if (msg.source.kind === "objects") {
     objects = msg.source.objects;
     symbols = msg.source.symbols;
   }
   const tBridge = performance.now();
-  const { stream, warnings } = render.symbolise({ objects, symbols, fonts });
+  const { stream, warnings } = msg.source.kind === "stream" ? { stream: msg.source.stream, warnings: [] } : render.symbolise({ objects, symbols, fonts });
   const tSym = performance.now();
 
-  // Atlas: every glyph part, every text glyph (font units, tolerance by size), halos stroked.
+  // Mesh atlas: every glyph part. Text: every glyph resolved against the text atlas pages.
   const atlas = new MeshAtlasBuilder();
   const glyphMesh = new Map<string, number>();
   const glyphTol = Math.max(0.5, tol / 4);
   for (const m of stream.glyphTable) glyphMesh.set(`${m.glyphId}/${m.partIdx}`, atlas.glyph(m, glyphTol));
-  const fontById = new Map<number, render.FontMetrics>();
-  for (const ref of stream.fontTable) {
-    const f = fonts.find((x) => x.family === ref.family);
-    if (f) fontById.set(ref.fontId, f);
-  }
-  const textMesh = new Map<number, { meshes: Int32Array; scale: number }>();
-  stream.passes.forEach((p, i) => {
-    if (p.kind !== "text") return;
-    const font = fontById.get(p.fontId);
-    if (!font?.outline) return;
-    const k = p.sizeUm / font.unitsPerEm;
-    const ft = Math.max(1, Math.round(tol / k / 2));
-    const halo = p.haloWidthUm ? p.haloWidthUm / k : undefined;
-    const meshes = new Int32Array(p.glyphs.length);
-    for (let g = 0; g < p.glyphs.length; g++) meshes[g] = atlas.text(font, p.fontId, p.glyphs[g], ft, halo) ?? -1;
-    textMesh.set(i, { meshes, scale: k });
-  });
+  const textWarn: Record<string, number> = {};
+  const textStats = { pages: (msg.textAtlas ?? []).map((p) => p.page), glyphs: 0, missing: 0 };
+  const textGlyph = resolveText(stream, fonts, msg.textAtlas, textWarn, textStats);
   const built = atlas.build();
   const tAtlas = performance.now();
 
@@ -240,7 +242,7 @@ function load(msg: LoadRequest): { reply: LoadedReply; transfer: ArrayBuffer[]; 
 
   const originX = (grid.minCol + grid.cols / 2) * grid.cellUm;
   const originY = (grid.minRow + grid.rows / 2) * grid.cellUm;
-  const ctx: PrepareContext = { toleranceUm: tol, originX, originY, meshes: built.meshes, glyphMesh, textMesh };
+  const ctx: PrepareContext = { toleranceUm: tol, originX, originY, meshes: built.meshes, glyphMesh, textGlyph };
 
   const base: PreparedPart[] = [];
   const detailCells: number[] = [];
@@ -263,6 +265,7 @@ function load(msg: LoadRequest): { reply: LoadedReply; transfer: ArrayBuffer[]; 
   for (const p of stream.passes) passKinds[p.kind] = (passKinds[p.kind] ?? 0) + 1;
   const warn: Record<string, number> = {};
   for (const w of warnings) warn[w.code] = (warn[w.code] ?? 0) + 1;
+  for (const [code, n] of Object.entries(textWarn)) warn[code] = (warn[code] ?? 0) + n;
   let drawn = 0, largeObjects = 0;
   for (const b of assignment.objectBucket) {
     if (b >= 0) drawn++;
@@ -284,9 +287,10 @@ function load(msg: LoadRequest): { reply: LoadedReply; transfer: ArrayBuffer[]; 
     passes: stream.passes.length,
     passKinds,
     colours: new Set(stream.passes.map((p) => p.colour)).size,
-    objects: { total: objects.length, drawn, large: largeObjects },
+    objects: { total: msg.source.kind === "stream" ? assignment.objectBucket.length : objects.length, drawn, large: largeObjects },
     ...(bridge ? { bridge } : {}),
     warnings: warn,
+    text: textStats,
     ms: {
       decode: r(tDecode - t0), bridge: r(tBridge - tDecode), symbolise: r(tSym - tBridge), atlas: r(tAtlas - tSym),
       assign: r(tAssign - tAtlas), base: r(tBase - tAssign), large: r(tLarge - tBase),
@@ -297,4 +301,57 @@ function load(msg: LoadRequest): { reply: LoadedReply; transfer: ArrayBuffer[]; 
   for (const p of base) transfer.push(...partTransferables(p));
   if (large) transfer.push(...partTransferables(large));
   return { reply: { type: "loaded", summary, atlas: built, base, large }, transfer, next: { stream, assignment, ctx } };
+}
+
+/**
+ * Every text pass's glyphs as text-atlas entries (§5.2 "Text atlas"):
+ * looked up by (font family, glyph id); a glyph the pages do not hold is
+ * −1 and counted unless it has no outline (nothing to draw anyway) or is
+ * `.notdef` (glyph 0: what the shaper emits for an unmapped code point
+ * such as a tab — not drawn here, §8).
+ */
+function resolveText(
+  stream: render.PassStream,
+  fonts: render.FontMetrics[],
+  pages: TextAtlasPage[] | undefined,
+  warn: Record<string, number>,
+  stats: { glyphs: number; missing: number },
+): Map<number, TextPassGlyphs> {
+  const out = new Map<number, TextPassGlyphs>();
+  const count = (code: string, n = 1) => { warn[code] = (warn[code] ?? 0) + n; };
+  const texts = stream.passes.flatMap((p, i) => (p.kind === "text" ? [i] : []));
+  if (!texts.length) return out;
+  if (!pages?.length) {
+    count("TEXT_ATLAS_MISSING", texts.length);
+    return out;
+  }
+  const { lookup } = buildTextGlyphs(pages);
+  const rangeEm = pages[0].distanceRangePx / pages[0].emPx;
+  const familyById = new Map(stream.fontTable.map((r) => [r.fontId, r.family]));
+  for (const i of texts) {
+    const p = stream.passes[i] as render.TextPass;
+    const family = familyById.get(p.fontId);
+    const font = fonts.find((f) => f.family === family);
+    const entries = new Int32Array(p.glyphs.length).fill(-1);
+    const pageOf = new Uint8Array(p.glyphs.length);
+    for (let g = 0; g < p.glyphs.length; g++) {
+      const hit = family === undefined ? undefined : lookup.get(textGlyphKey(family, p.glyphs[g]));
+      if (hit) {
+        entries[g] = hit.entry;
+        pageOf[g] = hit.page;
+        stats.glyphs++;
+      } else if (p.glyphs[g] !== 0 && font?.outline?.(p.glyphs[g])) {
+        stats.missing++;
+        count("TEXT_GLYPH_NOT_IN_ATLAS");
+      }
+    }
+    let halo = 0;
+    if (p.haloWidthUm) {
+      const h = haloEm(p.haloWidthUm, p.sizeUm, rangeEm);
+      halo = h.em;
+      if (h.clamped) count("TEXT_HALO_CLAMPED");
+    }
+    out.set(i, { entries, pages: pageOf, haloEm: halo });
+  }
+  return out;
 }

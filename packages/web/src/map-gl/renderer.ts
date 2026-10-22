@@ -5,7 +5,8 @@
  *   arena path (B2)   `setDocument` / `uploadPart` / `setVisibleSet` / `renderDocument`:
  *                     vertex arenas per kind, visible-set index and instance buffers
  *                     per (colour, kind), mesh-atlas instancing, stencil clip groups,
- *                     hairline floor and screen-only LOD; one draw per (colour, kind)
+ *                     MSDF text quads (B3, `setTextAtlas`), hairline floor and
+ *                     screen-only LOD; one draw per (colour, kind)
  *   per-pass path     `setStream` / `render`: one draw per prepared pass, stencil
  *                     even-odd fills, optional 2× supersampling — the golden path
  *                     (§6.2) and the reference the arena path is compared with
@@ -17,6 +18,7 @@ import { MITRE_LIMIT, type FanGeometry, type Prepared, type PreparedStream, type
 import { GpuArena } from "./arena.js";
 import { ATLAS_WIDTH, INSTANCE_FLOATS, type MeshAtlas } from "./mesh-atlas.js";
 import { viewMatrix, type RenderTarget } from "./view.js";
+import { buildTextGlyphs, GLYPH_TABLE_TEXELS, GLYPH_TABLE_WIDTH, type TextAtlasPage } from "./text-atlas.js";
 import {
   FILL_VERTEX_BYTES, HATCH_VERTEX_BYTES, STROKE_VERTEX_BYTES,
   type ClipGroup, type PreparedPart, type ResidentPart, type VisibleSet,
@@ -45,6 +47,8 @@ export interface DocumentRenderOptions {
   minGlyphPx?: number;
   /** Hatch stripes closer than this on screen become a tint of coverage width / spacing. Default 1.5 px. */
   hatchTintPx?: number;
+  /** Text whose em is smaller than this on screen is skipped (04 §6.11). Default 4 px. */
+  minTextPx?: number;
   /**
    * Model → clip matrix (column-major) overriding the orthographic map view, e.g. a perspective
    * camera; positions are relative to the document origin. Cell selection and the screen-only rules
@@ -250,6 +254,68 @@ void main() {
 }
 `;
 
+/**
+ * MSDF text (B3): one quad per glyph instance, corners from gl_VertexID; plane bounds (em) and
+ * atlas uv from the glyph table (`text-atlas.ts` `buildTextGlyphs`). Text whose em is under
+ * u_minTextPx on screen collapses.
+ */
+const VS_A_TEXT = VS_ARENA + `
+uniform highp sampler2D u_glyphs;
+uniform float u_minTextPx;
+in vec4 a_i0;                // x, y, cos, sin
+in vec4 a_i1;                // em size µm, glyph-table entry, halo half width (em), 0
+out vec2 v_uv;
+flat out float v_pxPerEm;
+flat out float v_range;
+flat out float v_halo;
+void main() {
+  float size = a_i1.x;
+  v_pxPerEm = size * u_pxPerUm;
+  if (v_pxPerEm < u_minTextPx) { gl_Position = vec4(2.0, 2.0, 2.0, 1.0); return; }
+  int e = int(a_i1.y) * ${GLYPH_TABLE_TEXELS};
+  vec4 plane = texelFetch(u_glyphs, ivec2(e % ${GLYPH_TABLE_WIDTH}, e / ${GLYPH_TABLE_WIDTH}), 0);
+  vec4 uv = texelFetch(u_glyphs, ivec2((e + 1) % ${GLYPH_TABLE_WIDTH}, (e + 1) / ${GLYPH_TABLE_WIDTH}), 0);
+  v_range = texelFetch(u_glyphs, ivec2((e + 2) % ${GLYPH_TABLE_WIDTH}, (e + 2) / ${GLYPH_TABLE_WIDTH}), 0).y;
+  v_halo = a_i1.z;
+  int vid = gl_VertexID;     // two triangles: (0,0) (1,0) (0,1) · (0,1) (1,0) (1,1)
+  vec2 c = vec2(vid == 1 || vid == 4 || vid == 5 ? 1.0 : 0.0, vid == 2 || vid == 3 || vid == 5 ? 1.0 : 0.0);
+  vec2 p = mix(plane.xy, plane.zw, c) * size;
+  v_uv = vec2(mix(uv.x, uv.z, c.x), mix(uv.w, uv.y, c.y)); // atlas v grows downward: bottom = v1
+  vec2 r = vec2(p.x * a_i0.z - p.y * a_i0.w, p.x * a_i0.w + p.y * a_i0.z);
+  gl_Position = projectA(a_i0.xy + r);
+}
+`;
+
+/**
+ * MTSDF decode: a fill pass covers where median(r, g, b) > ½ (sharp corners); a halo pass the band
+ * |true distance| < halo (alpha channel) — the outline stroked round/round at twice the halo width,
+ * as the reference raster draws it. Distances are em × v_range (channel value − ½); the edge ramp
+ * is one screen pixel.
+ */
+const FS_A_TEXT = `#version 300 es
+precision highp float;
+uniform vec3 u_colour;
+uniform sampler2D u_page;
+in vec2 v_uv;
+flat in float v_pxPerEm;
+flat in float v_range;
+flat in float v_halo;
+out vec4 o;
+void main() {
+  vec4 t = texture(u_page, v_uv);
+  float a;
+  if (v_halo > 0.0) {
+    float d = (t.a - 0.5) * v_range;
+    a = clamp((v_halo - abs(d)) * v_pxPerEm + 0.5, 0.0, 1.0);
+  } else {
+    float m = max(min(t.r, t.g), min(max(t.r, t.g), t.b));
+    a = clamp((m - 0.5) * v_range * v_pxPerEm + 0.5, 0.0, 1.0);
+  }
+  if (a <= 0.0) discard;
+  o = vec4(u_colour, a);
+}
+`;
+
 const FS_ALPHA = `#version 300 es
 precision highp float;
 uniform vec3 u_colour;
@@ -314,9 +380,24 @@ interface ArenaState {
   vs: VisibleSet | undefined;
   vsBuffers: { fill: WebGLBuffer; hatch: WebGLBuffer; stroke: WebGLBuffer; glyph: WebGLBuffer; text: WebGLBuffer; clipPos: WebGLBuffer; clipIdx: WebGLBuffer; clipInst: WebGLBuffer };
   vsBytes: number;
-  vaos: { fill: WebGLVertexArrayObject; hatch: WebGLVertexArrayObject; stroke: WebGLVertexArrayObject; inst: WebGLVertexArrayObject; clip: WebGLVertexArrayObject };
+  vaos: { fill: WebGLVertexArrayObject; hatch: WebGLVertexArrayObject; stroke: WebGLVertexArrayObject; inst: WebGLVertexArrayObject; text: WebGLVertexArrayObject; clip: WebGLVertexArrayObject };
   vaoGeneration: number;
-  programs: { fill: Program; hatch: Program; stroke: Program; inst: Program };
+  programs: { fill: Program; hatch: Program; stroke: Program; inst: Program; text: Program };
+}
+
+/** A text atlas page and its decoded image (RGBA, not premultiplied), as `setTextAtlas` takes it. */
+export interface TextAtlasImage {
+  page: TextAtlasPage;
+  image: TexImageSource;
+}
+
+/** The text atlas on the GPU: one texture per page, the glyph table. Session-scoped: survives `setDocument`. */
+interface TextAtlasState {
+  /** Page identities in order (what `setTextAtlas` compares to skip a re-upload). */
+  pages: TextAtlasPage[];
+  textures: WebGLTexture[];
+  table: WebGLTexture;
+  bytes: number;
 }
 
 /** Vertices one instanced draw pulls for a size class (a whole number of triangles). */
@@ -424,6 +505,7 @@ export class MapGlRenderer {
   /** Frees every GL resource; the renderer is unusable afterwards. */
   dispose(): void {
     this.disposeDocument();
+    this.disposeTextAtlas();
     this.deleteOffscreen();
     this.deleteBuffers();
     if (this.quad) this.gl.deleteBuffer(this.quad);
@@ -598,8 +680,8 @@ export class MapGlRenderer {
 
   /**
    * Starts a document on the arena path: positions arriving in parts are
-   * relative to (`originX`, `originY`); `atlas` holds every glyph and text
-   * mesh. Drops any previous document.
+   * relative to (`originX`, `originY`); `atlas` holds every glyph mesh
+   * (text comes from `setTextAtlas`). Drops any previous document.
    */
   setDocument(originX: number, originY: number, atlas: MeshAtlas): void {
     this.disposeDocument();
@@ -624,7 +706,7 @@ export class MapGlRenderer {
         clipPos: gl.createBuffer()!, clipIdx: gl.createBuffer()!, clipInst: gl.createBuffer()!,
       },
       vsBytes: 0,
-      vaos: { fill: gl.createVertexArray()!, hatch: gl.createVertexArray()!, stroke: gl.createVertexArray()!, inst: gl.createVertexArray()!, clip: gl.createVertexArray()! },
+      vaos: { fill: gl.createVertexArray()!, hatch: gl.createVertexArray()!, stroke: gl.createVertexArray()!, inst: gl.createVertexArray()!, text: gl.createVertexArray()!, clip: gl.createVertexArray()! },
       vaoGeneration: -1,
       programs: p,
     };
@@ -637,11 +719,65 @@ export class MapGlRenderer {
       hatch: this.link(VS_A_HATCH, FS_A_HATCH, ["a_pos", "a_n", "a_h"], [...common, "u_tintPx"]),
       stroke: this.link(VS_A_STROKE, FS_ALPHA, ["a_pos", "a_off", "a_hw"], common),
       inst: this.link(VS_A_INST, FS_ALPHA, ["a_i0", "a_i1"], [...common, "u_atlas", "u_minGlyphPx"]),
+      text: this.link(VS_A_TEXT, FS_A_TEXT, ["a_i0", "a_i1"], [...common, "u_glyphs", "u_page", "u_minTextPx"]),
     };
     return this.arenaProgramCache;
   }
 
   private arenaProgramCache?: ArenaState["programs"];
+
+  private text?: TextAtlasState;
+
+  /**
+   * Uploads the text atlas pages (§5.2 "Text atlas") in the order the worker resolves text against:
+   * a text instance's draw group is its index here. A no-op when the same pages are already loaded.
+   */
+  setTextAtlas(pages: TextAtlasImage[]): void {
+    const cur = this.text;
+    if (cur && cur.pages.length === pages.length && cur.pages.every((p, i) => p === pages[i].page)) return;
+    this.disposeTextAtlas();
+    if (!pages.length) return;
+    const gl = this.gl;
+    const params = (filter: number) => {
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, filter);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, filter);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    };
+    // The distance field is data, not colour: no premultiplication, no colour-space conversion.
+    gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, false);
+    gl.pixelStorei(gl.UNPACK_COLORSPACE_CONVERSION_WEBGL, gl.NONE);
+    gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
+    let bytes = 0;
+    const textures = pages.map(({ page, image }) => {
+      const tex = gl.createTexture()!;
+      gl.bindTexture(gl.TEXTURE_2D, tex);
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, gl.RGBA, gl.UNSIGNED_BYTE, image);
+      params(gl.LINEAR);
+      bytes += page.width * page.height * 4;
+      return tex;
+    });
+    const { table: data } = buildTextGlyphs(pages.map((p) => p.page));
+    const table = gl.createTexture()!;
+    gl.bindTexture(gl.TEXTURE_2D, table);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA32F, GLYPH_TABLE_WIDTH, data.length / 4 / GLYPH_TABLE_WIDTH, 0, gl.RGBA, gl.FLOAT, data);
+    params(gl.NEAREST);
+    gl.pixelStorei(gl.UNPACK_COLORSPACE_CONVERSION_WEBGL, gl.BROWSER_DEFAULT_WEBGL);
+    this.text = { pages: pages.map((p) => p.page), textures, table, bytes: bytes + data.byteLength };
+  }
+
+  /** GPU bytes of the text atlas (pages + glyph table); 0 before `setTextAtlas`. */
+  get textAtlasBytes(): number {
+    return this.text?.bytes ?? 0;
+  }
+
+  private disposeTextAtlas(): void {
+    const t = this.text;
+    if (!t) return;
+    for (const tex of t.textures) this.gl.deleteTexture(tex);
+    this.gl.deleteTexture(t.table);
+    this.text = undefined;
+  }
 
   /** Uploads a prepared part into the arenas; returns where its vertices went (for `buildVisibleSet`). */
   uploadPart(key: string, part: PreparedPart): ResidentPart {
@@ -697,14 +833,15 @@ export class MapGlRenderer {
     a.vaoGeneration = -1;
   }
 
-  /** GPU bytes of the document path: arena capacity (and live), atlas, visible-set buffers (incl. clip groups). */
-  get documentBytes(): { arenas: number; arenasUsed: number; atlas: number; visibleSet: number; total: number } {
+  /** GPU bytes of the document path: arena capacity (and live), mesh atlas, text atlas, visible-set buffers (incl. clip groups). */
+  get documentBytes(): { arenas: number; arenasUsed: number; atlas: number; text: number; visibleSet: number; total: number } {
     const a = this.arena;
-    if (!a) return { arenas: 0, arenasUsed: 0, atlas: 0, visibleSet: 0, total: 0 };
+    const text = this.textAtlasBytes;
+    if (!a) return { arenas: 0, arenasUsed: 0, atlas: 0, text, visibleSet: 0, total: text };
     const ar = a.arenas;
     const arenas = ar.fill.capacityBytes + ar.hatch.capacityBytes + ar.stroke.capacityBytes;
     const arenasUsed = ar.fill.usedBytes + ar.hatch.usedBytes + ar.stroke.usedBytes;
-    return { arenas, arenasUsed, atlas: a.atlas.bytes, visibleSet: a.vsBytes, total: arenas + a.atlas.bytes + a.vsBytes };
+    return { arenas, arenasUsed, atlas: a.atlas.bytes, text, visibleSet: a.vsBytes, total: arenas + a.atlas.bytes + text + a.vsBytes };
   }
 
   private requireArena(): ArenaState {
@@ -752,6 +889,13 @@ export class MapGlRenderer {
     gl.enableVertexAttribArray(i.a_i1);
     gl.vertexAttribDivisor(i.a_i1, 1);
 
+    gl.bindVertexArray(a.vaos.text);
+    const tx = P.text.attribs;
+    gl.enableVertexAttribArray(tx.a_i0);
+    gl.vertexAttribDivisor(tx.a_i0, 1);
+    gl.enableVertexAttribArray(tx.a_i1);
+    gl.vertexAttribDivisor(tx.a_i1, 1);
+
     gl.bindVertexArray(a.vaos.clip);
     gl.bindBuffer(gl.ARRAY_BUFFER, a.vsBuffers.clipPos);
     gl.enableVertexAttribArray(P.fill.attribs.a_pos);
@@ -762,7 +906,8 @@ export class MapGlRenderer {
   }
 
   /**
-   * Draws the visible set: per colour in stack order, fill → hatch → stroke → glyph (+ clips) → text.
+   * Draws the visible set: per colour in stack order, fill → hatch → stroke → glyph (+ clips) → text
+   * (MSDF quads from the text atlas; none without `setTextAtlas`).
    * `target` is where: a framebuffer and its size (default the canvas at the view's size). A
    * framebuffer target needs a stencil attachment for pattern clips.
    */
@@ -795,7 +940,7 @@ export class MapGlRenderer {
       const P = a.programs;
       const m = opts.viewMatrix ?? viewMatrix(view, a.originX, a.originY);
       const minPx = opts.minStrokePx ?? 1;
-      for (const p of [P.fill, P.hatch, P.stroke, P.inst]) {
+      for (const p of [P.fill, P.hatch, P.stroke, P.inst, P.text]) {
         gl.useProgram(p.prog);
         gl.uniformMatrix4fv(p.uniforms.u_view, false, m);
         gl.uniform1f(p.uniforms.u_pxPerUm, view.pxPerUm);
@@ -808,6 +953,16 @@ export class MapGlRenderer {
       gl.activeTexture(gl.TEXTURE0);
       gl.bindTexture(gl.TEXTURE_2D, a.atlas.tex);
       gl.uniform1i(P.inst.uniforms.u_atlas, 0);
+      const text = this.text;
+      if (text) {
+        gl.useProgram(P.text.prog);
+        gl.uniform1f(P.text.uniforms.u_minTextPx, opts.minTextPx ?? 4);
+        gl.activeTexture(gl.TEXTURE1);
+        gl.bindTexture(gl.TEXTURE_2D, text.table);
+        gl.uniform1i(P.text.uniforms.u_glyphs, 1);
+        gl.uniform1i(P.text.uniforms.u_page, 2);
+        gl.activeTexture(gl.TEXTURE0);
+      }
 
       const cur = { fill: 0, hatch: 0, stroke: 0, glyph: 0, text: 0, clip: 0 };
       const indexed = (kind: "fill" | "hatch" | "stroke", colour: number, rgb: [number, number, number]) => {
@@ -822,7 +977,31 @@ export class MapGlRenderer {
         gl.drawElements(gl.TRIANGLES, d.count, gl.UNSIGNED_INT, d.offset * 4);
         draws++;
       };
-      const instanced = (kind: "glyph" | "text", colour: number, rgb: [number, number, number]) => {
+      /** Text: one quad (6 vertices) per instance, one draw per atlas page in this colour. */
+      const textDraws = (colour: number, rgb: [number, number, number]) => {
+        const list = vs.text.draws;
+        while (cur.text < list.length && list[cur.text].colour < colour) cur.text++;
+        let bound = false;
+        while (cur.text < list.length && list[cur.text].colour === colour) {
+          const d = list[cur.text++];
+          const page = text?.textures[d.cls];
+          if (!page) continue;
+          if (!bound) {
+            gl.useProgram(P.text.prog);
+            gl.uniform3f(P.text.uniforms.u_colour, rgb[0], rgb[1], rgb[2]);
+            gl.bindVertexArray(a.vaos.text);
+            gl.bindBuffer(gl.ARRAY_BUFFER, a.vsBuffers.text);
+            bound = true;
+          }
+          gl.activeTexture(gl.TEXTURE2);
+          gl.bindTexture(gl.TEXTURE_2D, page);
+          gl.activeTexture(gl.TEXTURE0);
+          this.instancePointers(P.text, d.first * INSTANCE_FLOATS * 4);
+          gl.drawArraysInstanced(gl.TRIANGLES, 0, 6, d.count);
+          draws++;
+        }
+      };
+      const instanced = (kind: "glyph", colour: number, rgb: [number, number, number]) => {
         const list = vs[kind].draws;
         while (cur[kind] < list.length && list[cur[kind]].colour < colour) cur[kind]++;
         let bound = false;
@@ -853,7 +1032,7 @@ export class MapGlRenderer {
           const g = groups[cur.clip++];
           if (on("clip")) draws += this.drawClip(a, g, rgb);
         }
-        if (on("text")) instanced("text", colour, rgb);
+        if (on("text")) textDraws(colour, rgb);
       }
       gl.bindVertexArray(null);
       gl.disable(gl.STENCIL_TEST);
