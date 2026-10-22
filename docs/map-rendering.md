@@ -503,7 +503,11 @@ glyph; the instance transform is the point at that length with
   greedily: a line ends before the word (a run between spaces / tabs)
   whose last glyph's ink would cross the width; a word wider than the
   box breaks per glyph (at least one glyph per line); spaces at a wrap
-  are dropped. Lines are `lineSpacing · em` apart and paragraphs a
+  are dropped, a tab is not (a tab that is the wrap point starts the
+  next line and moves its first word to the stop, as Purple Pen does); a
+  break before a line's first glyph does not count, so a line that
+  starts with a space or tab and whose first word does not fit breaks
+  per glyph. Lines are `lineSpacing · em` apart and paragraphs a
   further `paragraphSpacingUm`. Alignment is inside the width (`0`,
   `(W − w)/2`, `W − w`); `justify` widens every space of a line so the
   line fills the width, except on a paragraph's last line (which is
@@ -520,12 +524,14 @@ glyph; the instance transform is the point at that length with
   the point at its pen distance along the path and the glyph turns to
   the chord from there to the point one cell further (clamped to the
   path end) — Purple Pen's reading of OCAD. Text longer than the path is
-  truncated as OCAD does: cells are taken until their sum reaches the
-  path length (`left` and `justify` keep the cell that crosses it);
-  `right` drops that cell, `centre` keeps it but centres without it.
-  Start offset `0` / `(L − w)/2` / `L − w` for left / centre / right;
-  `justify` spreads `L − w` evenly over the gaps between cells (the last
-  cell without its `charSpacing`). `verticalAlign` moves the baseline
+  truncated as OCAD does: cells are taken until their sum comes within
+  10 µm of the path length (no sliver of a cell at the end); `left`
+  keeps the cell that crosses it, `right` drops that cell, `centre` keeps
+  it but centres without it. `justify` takes every cell and spreads
+  `L − w` evenly over the gaps between cells (the last cell without its
+  `charSpacing`) — negative when the text is longer than the path, so the
+  cells close up rather than being cut. Start offset `0` / `(L − w)/2` /
+  `L − w` for left / centre / right. `verticalAlign` moves the baseline
   across the path, turned with each glyph: `baseline` (absent) on it,
   `top` one digit height below, `middle` half that, `bottom` the
   descender above. Arc length is Euclidean — *provisional (S2)*:

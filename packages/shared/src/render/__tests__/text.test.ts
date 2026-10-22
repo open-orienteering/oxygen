@@ -184,6 +184,17 @@ describe("shapeText — box text", () => {
     expect(shapeText("00", sym(), sans, { x: 0, y: 0, box: { widthUm: 10, heightUm: 9000 } }).lineWidths).toHaveLength(2);
   });
 
+  it("a tab at the wrap point starts the next line (its word at the stop); a break before a line's first glyph does not count", () => {
+    const tabbed = sym({ tabStops: [{ xUm: 1000 }] });
+    // Line 1 "00"; the tab would reach the default stop (8 spaces), past the 3.5 mm box, so it wraps and leads line 2.
+    const r = shapeText("00\t00", tabbed, sans, { x: 0, y: 0, box: { widthUm: 3500, heightUm: 9000 } });
+    expect(r.lineWidths.map(Math.round)).toEqual([2 * zero, 1000 + 2 * zero]);
+    expect(r.positions[4]).toBeCloseTo(1000, 6);
+    // A leading space is no break: "0000" splits per glyph after it.
+    const lead = shapeText(" 0000", sym(), sans, { x: 0, y: 0, box: { widthUm: 2500, heightUm: 9000 } });
+    expect(lead.lineWidths.map(Math.round)).toEqual([space + zero, 2 * zero, zero]);
+  });
+
   it("an explicit break is a paragraph: paragraphSpacingUm is added between paragraphs only", () => {
     const r = shapeText("00 00\n0", sym({ paragraphSpacingUm: 500 }), sans, { x: 0, y: 0, box: { widthUm: 2500, heightUm: 9000 } });
     expect(lineYs(r)).toEqual([-1854, -1854 - em, -1854 - 2 * em - 500]);
@@ -276,6 +287,16 @@ describe("shapeTextAlongPath — line text", () => {
     expect(centre.positions[0]).toBeCloseTo(250, 3);
     const fits = along("00", [0, 0, 10000, 0], { align: "centre" });
     expect(fits.positions[0]).toBeCloseTo((10000 - 2 * zero) / 2, 3);
+  });
+
+  it("justify never truncates: text longer than the path closes up to fit it", () => {
+    const L = 2 * zero + 500;
+    const r = along("0000", [0, 0, L, 0], { align: "justify" });
+    expect(r.glyphs).toHaveLength(4);
+    expect(r.positions[0]).toBe(0);
+    expect(r.positions[6] + zero).toBeCloseTo(L, 3);
+    // Left stops once the cells reach the path, keeping the crossing cell; a cell that would start within 10 µm of the end is not taken.
+    expect(along("000", [0, 0, 2 * zero + 5, 0]).glyphs).toHaveLength(2);
   });
 
   it("justify spreads the glyphs over the whole path", () => {

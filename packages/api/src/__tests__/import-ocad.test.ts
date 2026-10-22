@@ -91,7 +91,10 @@ describe("importOcadToDocument", () => {
     if (boxText.kind !== "text") throw new Error("no text pass");
     const lines = new Set(Array.from(boxText.positions).filter((_, i) => i % 2 === 1).map((v) => Math.round(v)));
     expect(lines.size).toBeGreaterThan(2);
-    for (let i = 0; i < boxText.glyphs.length; i++) expect(boxText.positions[2 * i]).toBeGreaterThanOrEqual(-10000);
+    for (let i = 0; i < boxText.glyphs.length; i++) {
+      expect(boxText.positions[2 * i]).toBeGreaterThanOrEqual(-10000);
+      expect(boxText.positions[2 * i]).toBeLessThan(10000);
+    }
     expect(box.filter((p) => p.kind === "fill" && p.colour === white)).toHaveLength(1);
     // Line text: every glyph has an angle; the path rises then falls.
     const along = passesOf(lineObj).filter((p) => p.kind === "text");
