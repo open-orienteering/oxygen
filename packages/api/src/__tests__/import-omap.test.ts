@@ -62,17 +62,16 @@ describe("importOmapToDocument", () => {
     expect(result.matching.library.id).toBe("ISOM2017-2");
     // Mapper widths are µm already, so the line-width factor detection sees ×1.
     expect(result.matching.factor.factor).toBe(1);
-    expect(result.matching.symbols.auto).toBeGreaterThanOrEqual(4);
-    // Mapper builds 509 as black dashes over a white band; the library (B10) is white dashes over a black band, as OCAD
-    // builds it, so Mapper's railway hard-fails on main colour and stays unmatched, drawn from its own definition
-    // (docs/map-symbols.md §7).
+    expect(result.matching.symbols.auto).toBeGreaterThanOrEqual(5);
+    // Mapper builds 509 as black dashes over a white band; the fingerprint reads it as the library's white dashes over
+    // a black band (docs/map-symbols.md §8.1, A15), so it matches.
     const { header: h } = mapDocument.readMapDocumentHeader(result.bytes);
-    expect(h.symbols.find((s) => s.code === "509")?.match).toMatchObject({ state: "unmatched", reasons: expect.arrayContaining(["main colour black ≠ white"]) });
+    expect(h.symbols.find((s) => s.code === "509")?.match).toMatchObject({ state: "auto", canonicalId: "ISOM2017-2:509" });
     expect(result.timings.read).toBeGreaterThanOrEqual(0);
     const { header } = mapDocument.readMapDocumentHeader(result.bytes);
     const report = buildImportReport(result, header, "test.xmap");
     expect(report.source).toMatchObject({ kind: "omap", version: "9", fileName: "test.xmap" });
-    expect(report.importer).toBe("omap-4");
+    expect(report.importer).toBe("omap-5");
     expect(report.warnings.map((w) => w.code)).toContain("TEMPLATES_DROPPED");
     // Per-emission detail (docs/map-import.md §3.6): the missing-symbol stub and the dropped templates are listed with their messages.
     expect(report.warningDetails).toEqual(expect.arrayContaining([
@@ -86,11 +85,11 @@ describe("importOmapToDocument", () => {
   });
 
   it("keeps the two source kinds apart: different importer versions, OCAD path unchanged", async () => {
-    expect(importerVersionFor("ocad")).toBe("ocad-10");
-    expect(importerVersionFor("omap")).toBe("omap-4");
+    expect(importerVersionFor("ocad")).toBe("ocad-11");
+    expect(importerVersionFor("omap")).toBe("omap-5");
     const ocd = await importOcadToDocument(ocdFixture, "test.ocd");
     expect(ocd.kind).toBe("ocad");
-    expect(mapDocument.readMapDocumentHeader(ocd.bytes).header.format.importer).toBe("ocad-10");
+    expect(mapDocument.readMapDocumentHeader(ocd.bytes).header.format.importer).toBe("ocad-11");
     await expect(importMapToDocument(ocdFixture, "test.ocd", "omap")).rejects.toThrow();
   });
 

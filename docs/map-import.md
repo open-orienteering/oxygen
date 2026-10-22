@@ -387,7 +387,7 @@ stage-4 warning):
 | `SYMBOL_EMPTY` | Nothing drawable was left ⇒ `render: null`. |
 | `SYMBOL_TYPE_UNSUPPORTED` | Unknown symbol type, also when the reader dropped it (from its warning list). |
 | `SYMBOL_FEATURE_DROPPED` | Decrease, double-line background colour / unknown mode, framing narrower than the main line, text shadow or rectangle framing / line-below / attached point symbol / vertical alignment, line text drawn as block text, rectangle corner radius / grid, zero-size hatch or pattern — constructs the render IR cannot express. |
-| `SYMBOL_REFERENCE_INVALID` | A symbol-to-symbol reference that does not resolve to a usable definition: an area's border symbol that is the area itself, is missing from the table or is not a line symbol (§3.3 area table); on the OMAP path a combined-symbol part that references itself or a missing symbol (§4.3). A source data error, not an unsupported feature (§7 classification); the message names the symbol and the case. Since `ocad-10` / `omap-4`; earlier importers reported these as `SYMBOL_FEATURE_DROPPED`. |
+| `SYMBOL_REFERENCE_INVALID` | A symbol-to-symbol reference that does not resolve to a usable definition: an area's border symbol that is the area itself, is missing from the table or is not a line symbol (§3.3 area table); on the OMAP path a combined-symbol part that references itself or a missing symbol (§4.3). A source data error, not an unsupported feature (§7 classification); the message names the symbol and the case. Since `ocad-11` / `omap-5`; earlier importers reported these as `SYMBOL_FEATURE_DROPPED`. |
 | `FONT_SUBSTITUTED` | Font name not metric-compatible with the shipped family. |
 | `IRREGULAR_PATTERN_REGULARISED` | Irregular area pattern drawn as a regular grid. |
 
@@ -459,7 +459,7 @@ not depend on them (`ocadToDocumentInput` returns them beside the input).
 
 **Per-emission detail.** The header keeps one `{code, count, message}` per
 code, the message being the first one emitted, so Club-full's four
-`SYMBOL_FEATURE_DROPPED` show as one message. Since `ocad-10` / `omap-4`
+`SYMBOL_FEATURE_DROPPED` show as one message. Since `ocad-11` / `omap-5`
 both normalisers also return `warningDetails` beside the input, and the
 import report carries it as `warningDetails: {code, message, symbolIdx?}[]`
 (`importWarningDetailSchema`): one entry per warning emission that has a
@@ -726,7 +726,7 @@ non-contiguous priorities). The rest are shared with §3.6–3.7.
 
 ## 5. Header provenance
 
-`format.importer` is `"ocad-10"` for OCAD sources (`OCAD_IMPORTER_VERSION`;
+`format.importer` is `"ocad-11"` for OCAD sources (`OCAD_IMPORTER_VERSION`;
 `ocad-1` had `render: null` for every source symbol, `ocad-2` carried the
 upload name in the header, `ocad-3` had no matcher, `ocad-4` stored
 ScalePar `d` as `declinationDeg`, ignored `e` and had no
@@ -740,11 +740,13 @@ English names only — `docs/map-symbols.md` §8.2 row 5, B7 —, `ocad-8` read
 `useSymbolFlags` 1 / 2 as start / end and OCAD 9+ circle diameters as
 outer diameters — §3.3, B9, `ocad-9` reported a stale area-border
 reference as `SYMBOL_FEATURE_DROPPED` and kept no per-symbol warning detail
-— §3.3, §3.6, A14) and `"omap-4"`
+— §3.3, §3.6, A14, `ocad-11` fingerprints Mapper's inverted railway as
+509's construction — `docs/map-symbols.md` §8.1, A15) and `"omap-5"`
 for Mapper sources (`OMAP_IMPORTER_VERSION`; `omap-1` stored `paperOrigin`
 unrounded, `omap-2` is `ocad-7`'s matcher, `omap-3` reported stale
 combined-part references as `SYMBOL_FEATURE_DROPPED` and kept no
-per-symbol detail). A header `warnings` change alone bumps the
+per-symbol detail, `omap-4` is `ocad-10`'s, `omap-5` is `ocad-11`'s
+matcher). A header `warnings` change alone bumps the
 version — `ocad-6` did — while the report-only `warningDetails` would not.
 Documents of either earlier version have no `georeference` / `north` in
 their report; the dedup only reuses current-version documents, so the
@@ -849,7 +851,7 @@ maps nor the JSON files are committed (AGENTS.md §12); keep them under
 
 **Against production.** The same comparison works against what Cloud
 Run produced from the same files, once the instance runs the same
-importer and library versions (`ocad-10` / `omap-4`,
+importer and library versions (`ocad-11` / `omap-5`,
 `*@<SYMBOL_LIBRARY_VERSION>`) and only for documents imported without
 club decisions (stage 6 applies them, so a reviewed map has a different,
 equally correct hash). Either list the stored documents:
@@ -872,7 +874,7 @@ the five OCAD corpus maps and the three OOM sample `.omap` files is in
 the research decision log ("S0 corpus check"): deterministic, zero
 import errors, 48 unsupported-primitive warnings. The `ocad-7` re-run
 (decision log, "A12") has 36, none of them a text line framing or an
-unparsed symbol type. The `ocad-10` / `omap-4` run (A14) has 30: the six
+unparsed symbol type. The `ocad-11` / `omap-5` run (A14) has 30: the six
 stale area-border references moved to `SYMBOL_REFERENCE_INVALID`
 (Club-full 10 → 4 unsupported); the 30 left are rows A13 and B8.
 
