@@ -781,7 +781,10 @@ Constants (`buckets.ts`; 04 §6.11):
 **Assignment.** Every object goes, whole, to the cell holding the centre
 of its symbolised bounds (`passBounds`: path bounds + half width × the
 mitre limit for strokes, mesh radius × scale for glyphs, the em box and
-halo for text), or to the large-object bucket. All of an object's passes
+halo for text — for turned text, a pass with `angles`, a square of
+√2 em + halo round each origin, since a glyph turned up to 180° along a
+path reaches its em box's far corner in any direction, B8), or to the
+large-object bucket. All of an object's passes
 share its bucket, in stream order. An object is never duplicated into
 the cells it overlaps; the draw margin is what makes that correct.
 
