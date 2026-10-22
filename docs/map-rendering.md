@@ -1182,7 +1182,7 @@ changes for B4.
 | `RunnerMapPreview` (results, start list, runners) | `MapSlot` → `MapPanel` |
 | `CompetitionDashboard` | `MapSlot` → `MapPanel` |
 | `TracksPage` (GPS routes) | `MapSlot` → `MapPanel`; tracks through `mapGeo` |
-| `TracksPage` replay (`ReplayViewer` → `ReplayMapLayer`) | **not `MapViewer`**: its own 2D canvas over tiles; stays on tiles in B4 (user decision 2026-10-22) — row B11 |
+| Replay (`ReplayViewer` → `ReplayMapLayer`) | **mounted nowhere**: no producer feeds `ReplayData` since the Livelox source was removed; B11 closed as moot (user decision 2026-10-22) — see §8 |
 | `CourseEditorPage` | `MapPanel` with `editor` |
 
 #### Tests
@@ -1609,12 +1609,11 @@ The shared module is exported as a namespace: `import { render } from
   list; hiding a *document* object needs the bridge to expose that
   mapping. The viewer (B4) hides nothing; the first consumer is the
   editor's hide / replace (slice D).
-- **§5.4 replay on the vector layer** (row B11, before B5; user decision
-  2026-10-22). `ReplayMapLayer` draws tiles on its own 2D canvas with
-  its own map-pixel viewport and projects five layers through
-  `latLngToMapPx`; it is not a `MapViewer` mount and stays on tiles until
-  B11 moves it onto the paper view and `mapGeo`. B5 does not switch an
-  event to `vector` while its replay still draws tiles.
+- **§5.4 replay has no producer.** `ReplayViewer` / `ReplayMapLayer`
+  (own 2D canvas over tiles, `latLngToMapPx`) are mounted nowhere and
+  nothing produces `ReplayData`; B11 closed as moot (user decision
+  2026-10-22). A GPS replay feature gets its own row, with a producer and
+  this section's paper view and `mapGeo`.
 - **§5.4 lower purple under the line art.** The vector layer is one
   canvas under the SVG overlay, so the overlay's purple covers black,
   brown and blue line art that the tiles' ink half draws above it
