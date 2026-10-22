@@ -1329,7 +1329,9 @@ what became of it:
   now matches ISSprOM 509.1 at 0.00 % (differing 38.67 %: OCAD dash
   phase and the black ends); ISOM 111 on club-2026 now matches at
   0.00 %. Auto matches per map: club-2026 85 → 87, Sprint 101 → 105,
-  Crop-B 100 → 102, club-full 98 → 100, Crop-A 101 → 103.
+  Crop-B 100 → 102, club-full 98 → 100, Crop-A 101 → 103. Whole maps
+  after B10, canonical: club-2026 24 diverging, Sprint 7, Crop-B 8, all
+  sanctioned except Crop-B's 522 canopy tone.
 - **Spec-faithful, kept.** Cliffs: every 201.x / 202.x variant matches
   the legacy at 40 px/mm from source (0 % unexplained); canonically
   matched 202.2 / 201.5 get ISOM's flat ends (the "small houses"),
