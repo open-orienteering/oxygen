@@ -26,7 +26,8 @@ const CHANNEL_TOLERANCE = 16;
 const MAX_DIFF_RATIO = 0.005;
 /**
  * MSDF text tier budget (map-rendering.md §6.2): pixels beyond the channel tolerance, arena path vs
- * golden. Measured at introduction (B3): text-with-halo 0.364 %, lib-text 0.688 %, lib-halos 0.236 %.
+ * golden. Measured at introduction (B3): text-with-halo 0.364 %, lib-text 0.688 %, lib-halos 0.236 %;
+ * lib-text-layout (B8) 0.286 %.
  */
 const TEXT_TIER_MAX_RATIO = 0.01;
 const TEXT_TIER_SCENES = ["text-with-halo", "lib-text", "lib-halos", "lib-text-layout"] as const;

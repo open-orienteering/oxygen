@@ -1537,8 +1537,12 @@ introduction (headless Chromium, 2026-10-22), arena vs per-pass:
 | `text-with-halo` | 19 / 5 220 (0.364 %) | 20 / 5 220 (0.383 %) |
 | `lib-text` | 162 / 23 560 (0.688 %) | 82 / 23 560 (0.348 %) |
 | `lib-halos` | 50 / 21 160 (0.236 %) | 15 / 21 160 (0.071 %) |
+| `lib-text-layout` (B8) | 433 / 151 506 (0.286 %) | 553 / 151 506 (0.365 %) |
 
-`lib-text`'s residual is the smallest text (≈ 15–20 px em, under the
+`lib-text-layout` (B8) is drawn at 1.5× (a 3.75 mm em): at 2.5 mm the
+scene, nearly all glyph edges, measured 0.537 % on the per-pass path —
+edge quantisation spread over every glyph, the density effect above —
+so it is scaled, not thinned. `lib-text`'s residual is the smallest text (≈ 15–20 px em, under the
 atlas's 32 px), spread along edges with no systematic offset. The whole
 document compare (`compare=1`) holds MSDF to the per-pass path at the
 ordinary 0.5 % on `e2e/test.xmap`: 0.217 %.
@@ -1606,7 +1610,7 @@ scene is a snapshot (§6.1) and a golden (§6.2).
 | `lib-borders` | 6 | ISSprOM 509.1, 505 round a corner, *505 with a 0.2 mm right edge at 0.3 mm* | 509.1 (B10): an unsliced black 0.45 band under white 1.0 / 1.5 dashes shortened 1.5 mm at both ends (black ends, 1.5 mm black between dashes); both dashed borders keep the main line's phase at their own lengths; asymmetric edges |
 | `lib-holes` | 7 | ISOM 401: two holes, one reversed; a self-touching ring | one even-odd fill each, rings passed through untouched (earcut deviation is the GL backend's, image tier) |
 | `lib-text` | 8 | ISOM 704 "31"; 603.b *left / centre / right*; a two-line 603.b | em from the digit height (Liberation "0" = 1430 units → 5.73 mm), advances with kerning ("AV"), alignment shifts, line spacing |
-| `lib-text-layout` | 8 (cont., B8) | ISOM 603.b *at 2.5 mm em*: *justify + 0.6 mm paragraph spacing* in a 12 × 12 mm box; *centre + middle* in a 12 × 6 mm box; *a white (`white-over-green-brown`) rectangle frame* over 406; *a 5 mm tab stop*; *centred* along a Bézier arc | box: first ascent on the top edge, three wrapped lines inside the width, 1.2 em apart, 0.6 mm more before the second paragraph, justified lines reach the width and a paragraph's last line does not; middle box centred in its height; frame = widest line × (digit height … baseline) grown by the margins, sorted above the green; the word after the tab at the stop; line-text origins on the arc, angles decreasing along it |
+| `lib-text-layout` | 8 (cont., B8) | the scene at 1.5× (`TEXT_LAYOUT_SCALE`, §6.2); ISOM 603.b *at 3.75 mm em*: *justify + 0.6 mm paragraph spacing* in a 12 × 12 mm box; *centre + middle* in a 12 × 6 mm box; *a white (`white-over-green-brown`) rectangle frame* on text turned 8° over 406; *a 5 mm tab stop*; *centred* along a Bézier arc | box: first ascent on the top edge, three wrapped lines inside the width, 1.2 em apart, 0.6 mm more before the second paragraph, justified lines reach the width and a paragraph's last line does not; middle box centred in its height; frame = widest line × (digit height … baseline) grown by the margins and turned with the text, sorted above the green; the word after the tab at the stop; line-text origins on the arc, angles decreasing along it |
 | `lib-halos` | 9 | ISSprOM 704.b over 521; *508 with a continuous white band* over 406 | the white outline between the building's black and upper purple; the band its own pass over the green |
 | `lib-colour-order` | + | ten ISSprOM colours, lower and upper purple among them, pushed in reverse | colour-major order; lower purple under black, upper purple last |
 | `lib-precision` | + | `lib-dash-ocad` and `lib-line-glyphs` moved to (1 200 000, 1 200 000) µm | every pass the near pass translated, to 1 µm |

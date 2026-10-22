@@ -244,33 +244,40 @@ const colourIdx = (colours: ColourStack, id: string): number => {
   return i;
 };
 
-/** Text layout (B8): box text, rectangle frame, tab stop, line text — on 603.b at 2.5 mm em. */
+/**
+ * Scale of the text-layout scene: 1.5 × a 2.5 mm em. All glyph edges, the scene's per-pass residual is
+ * edge quantisation (§6.2), so it is drawn larger rather than denser; every length below scales with it.
+ */
+export const TEXT_LAYOUT_SCALE = 1.5;
+
+/** Text layout (B8): box text, rectangle frame, tab stop, line text — on 603.b at 3.75 mm em. */
 function textLayout(): LibraryScene {
+  const u = (v: number) => v * TEXT_LAYOUT_SCALE;
   const s = new Symbols("ISOM2017-2");
   const forest = s.add("406");
-  const t = (fields: Partial<TextSymbol>) => (x: TextSymbol): TextSymbol => ({ ...x, fontSizeUm: 2500, ...fields });
-  const justified = s.add("603.b", t({ align: "justify", paragraphSpacingUm: 600 }));
+  const t = (fields: Partial<TextSymbol>) => (x: TextSymbol): TextSymbol => ({ ...x, fontSizeUm: u(2500), ...fields });
+  const justified = s.add("603.b", t({ align: "justify", paragraphSpacingUm: u(600) }));
   const centred = s.add("603.b", t({ align: "centre", verticalAlign: "middle" }));
-  const framed = s.add("603.b", t({ frame: { colour: colourIdx(s.colours, "white-over-green-brown"), leftUm: 300, bottomUm: 400, rightUm: 300, topUm: 300 } }));
-  const tabbed = s.add("603.b", t({ tabStops: [{ xUm: 5000 }] }));
+  const framed = s.add("603.b", t({ frame: { colour: colourIdx(s.colours, "white-over-green-brown"), leftUm: u(300), bottomUm: u(400), rightUm: u(300), topUm: u(300) } }));
+  const tabbed = s.add("603.b", t({ tabStops: [{ xUm: u(5000) }] }));
   const along = s.add("603.b", t({ align: "centre" }));
-  const box = (x: number, y: number, w: number, h: number): RenderPath => makePath([x, y, x + w, y, x + w, y + h, x, y + h]);
+  const box = (x: number, y: number, w: number, h: number): RenderPath => makePath([x, y, x + w, y, x + w, y + h, x, y + h].map(u));
   return {
     name: "lib-text-layout", library: s.library, colours: s.colours, symbols: s.list,
     objects: [
-      // Box 12 × 12 mm: wraps at the width (three lines), justified but for each paragraph's last line, paragraph spacing 0.6 mm.
+      // Box 12 × 12 (× scale): wraps at the width (three lines), justified but for each paragraph's last line, paragraph spacing.
       { symbolIdx: justified, path: box(0, 0, 12000, 12000), text: "Gles skog med block och stenar\nKärr", textLayout: "box" },
-      // Box 12 × 6 mm: centred, the block in the middle of the box height.
+      // Box 12 × 6: centred, the block in the middle of the box height.
       { symbolIdx: centred, path: box(0, -8000, 12000, 6000), text: "Mitt\ni rutan", textLayout: "box" },
-      // Rectangle frame in white over green: the block grown by the margins.
-      { symbolIdx: forest, path: square(14000, 0, 12000, 8000) },
-      { symbolIdx: framed, path: at(16000, 3000), text: "Kärr 12" },
-      // Tab to the 5 mm stop.
-      { symbolIdx: tabbed, path: at(14000, -3000), text: "7\tSten" },
+      // Rectangle frame in white over green: the block grown by the margins, turned with the text (diagonal edges on purpose, §6.2).
+      { symbolIdx: forest, path: square(u(14000), 0, u(12000), u(8000)) },
+      { symbolIdx: framed, path: at(u(16000), u(2500)), text: "Kärr 12", angleDeg: 8 },
+      // Tab to the 5 (× scale) mm stop.
+      { symbolIdx: tabbed, path: at(u(14000), u(-3000)), text: "7\tSten" },
       // Line text centred on a Bézier arc.
       {
         symbolIdx: along,
-        path: makePath([14000, -9000, 17000, -5000, 23000, -5000, 26000, -9000], [0, F.bezierFirst, F.bezierSecond, 0]),
+        path: makePath([14000, -9000, 17000, -5000, 23000, -5000, 26000, -9000].map(u), [0, F.bezierFirst, F.bezierSecond, 0]),
         text: "Längs stigen",
         textLayout: "path",
       },
