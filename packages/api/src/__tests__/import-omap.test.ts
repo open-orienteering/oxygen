@@ -62,7 +62,12 @@ describe("importOmapToDocument", () => {
     expect(result.matching.library.id).toBe("ISOM2017-2");
     // Mapper widths are µm already, so the line-width factor detection sees ×1.
     expect(result.matching.factor.factor).toBe(1);
-    expect(result.matching.symbols.auto).toBeGreaterThanOrEqual(5);
+    expect(result.matching.symbols.auto).toBeGreaterThanOrEqual(4);
+    // Mapper builds 509 as black dashes over a white band; the library (B10) is white dashes over a black band, as OCAD
+    // builds it, so Mapper's railway hard-fails on main colour and stays unmatched, drawn from its own definition
+    // (docs/map-symbols.md §7).
+    const { header: h } = mapDocument.readMapDocumentHeader(result.bytes);
+    expect(h.symbols.find((s) => s.code === "509")?.match).toMatchObject({ state: "unmatched", reasons: expect.arrayContaining(["main colour black ≠ white"]) });
     expect(result.timings.read).toBeGreaterThanOrEqual(0);
     const { header } = mapDocument.readMapDocumentHeader(result.bytes);
     const report = buildImportReport(result, header, "test.xmap");

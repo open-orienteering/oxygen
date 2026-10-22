@@ -19,9 +19,12 @@ export * from "./schema.js";
  * code or variant changes, or a name or alias the matcher reads
  * (docs/map-symbols.md §8.2); part of a document's identity (06 §4.2)
  * and stored on `map_documents.library_version`. 2026.10.2: Swedish
- * names and ISOM 2000 aliases (B7).
+ * names and ISOM 2000 aliases (B7). 2026.10.3: drawing defects (B10) —
+ * 509 / 509.1 railway white dashes over a black band with black ends,
+ * 101.b / 103.b slope ticks to +y, 107 taper, 510 / 511 / 511.b pylons at
+ * corners (510 bars ±0.37 mm), ISOM 111 orientated to north.
  */
-export const SYMBOL_LIBRARY_VERSION = "2026.10.2";
+export const SYMBOL_LIBRARY_VERSION = "2026.10.3";
 
 /** Raw authored inputs, before validation (tests and tooling). */
 export const symbolLibraryInputs = { "ISOM2017-2": isom2017_2, "ISSprOM2019-2": issprom2019_2 } as const;
