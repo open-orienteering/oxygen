@@ -931,7 +931,8 @@ importer ignores it.
 the event's map pipeline: it is pinned on upload for `legacy` events too
 (09 §3: the switch gates reads, never imports). A box checked out before
 an event is flipped to `vector` therefore already holds what the new
-viewer reads. The per-event switch (`events.map_pipeline`, slice B) does
+viewer reads. The per-event switch (`events.map_pipeline`,
+`docs/map-pipeline-switch.md`) does
 not feed results, so under the boundary rule it is cloud-owned and is
 not in `EXCLUDED_FIELDS` of the settings refresh
 (`packages/api/src/sync/settingsRefresh.ts`): a flip on the cloud reaches

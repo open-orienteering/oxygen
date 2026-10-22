@@ -478,6 +478,59 @@ describe("map-tile endpoint", () => {
     }
   }, 90_000);
 
+  it("skips the pre-cache for a vector event (docs/map-pipeline-switch.md §3)", async () => {
+    // A `vector` event reads map documents, so nothing should fill its
+    // tile cache in the background: neither the progress poll's chunk nor
+    // the loop a tile request would kick off. A tile asked for directly is
+    // still served on demand (rollback keeps working).
+    const other = await createTestEvent("map_tiles_vector");
+    const saved = {
+      precache: process.env.MAP_TILE_PRECACHE,
+      delay: process.env.MAP_PRECACHE_BLOCK_DELAY_MS,
+    };
+    process.env.MAP_TILE_PRECACHE = "on";
+    process.env.MAP_PRECACHE_BLOCK_DELAY_MS = "0";
+    try {
+      const caller = makeCaller(other.event);
+      await caller.course.uploadMap({
+        fileName: "test.ocd",
+        fileDataBase64: readFileSync(FIXTURE).toString("base64"),
+      });
+      // A render key of its own, so no other test's tiles are counted.
+      await caller.course.setMapColorStack({ overrides: { above: [515151] } });
+      await caller.event.setMapPipeline({ pipeline: "vector" });
+      const renderKey = (await ensureEventMapRenderKey(other.db, other.eventId))!.renderKey;
+
+      const progress = await server.inject({
+        method: "GET",
+        url: "/api/map-tile-progress",
+        headers: { "x-competition-id": other.nameId },
+      });
+      expect(progress.statusCode).toBe(200);
+      expect(progress.json()).toEqual({ total: 0, done: 0, rendering: false });
+      expect(await other.db.mapTile.count({ where: { renderKey } })).toBe(0);
+
+      const { x, y } = centerTile(mapBounds, PRECACHE_MIN_ZOOM);
+      const tile = await server.inject({
+        method: "GET",
+        url: `/api/map-tile/${other.nameId}/${PRECACHE_MIN_ZOOM}/${x}/${y}`,
+      });
+      expect(tile.statusCode).toBe(200);
+      await new Promise((r) => setTimeout(r, 1500));
+      // Only the requested block's zoom was rendered — no background crawl.
+      const zooms = await other.db.mapTile.groupBy({
+        by: ["z"],
+        where: { renderKey },
+      });
+      expect(zooms.map((r) => r.z)).toEqual([PRECACHE_MIN_ZOOM]);
+    } finally {
+      process.env.MAP_TILE_PRECACHE = saved.precache;
+      if (saved.delay === undefined) delete process.env.MAP_PRECACHE_BLOCK_DELAY_MS;
+      else process.env.MAP_PRECACHE_BLOCK_DELAY_MS = saved.delay;
+      await other.cleanup();
+    }
+  }, 90_000);
+
   it("notices a map replaced by another instance", async () => {
     // `onMapUpload` only fires in the process that handled the upload,
     // so on every other instance the parsed SVG is stale from the moment

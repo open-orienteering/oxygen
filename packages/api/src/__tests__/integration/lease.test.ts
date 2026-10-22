@@ -483,7 +483,8 @@ describe("checkout → write → checkin lifecycle", () => {
     // zero time (closure — the venue owns it during the lease).
     await dbB.event.update({
       where: { id: eventB.id },
-      data: { finishReceiptMessage: "Grattis!", zeroTime: 999999 },
+      // The map pipeline switch is cloud-owned too (docs/map-pipeline-switch.md §2).
+      data: { finishReceiptMessage: "Grattis!", zeroTime: 999999, mapPipeline: "vector" },
     });
 
     const refreshed = await refreshCloudOwnedSettings(
@@ -495,17 +496,19 @@ describe("checkout → write → checkin lifecycle", () => {
 
     const after = await ctx.db.event.findUniqueOrThrow({
       where: { id: localEvent.id },
-      select: { finishReceiptMessage: true, zeroTime: true },
+      select: { finishReceiptMessage: true, zeroTime: true, mapPipeline: true },
     });
     expect(after.finishReceiptMessage).toBe("Grattis!");
+    expect(after.mapPipeline).toBe("vector");
     // The closure field did NOT follow.
     expect(after.zeroTime).toBe(localEvent.zeroTime);
 
     // Restore B's zero time so later assertions stay valid.
     await dbB.event.update({
       where: { id: eventB.id },
-      data: { zeroTime: eventB.zeroTime },
+      data: { zeroTime: eventB.zeroTime, mapPipeline: "legacy" },
     });
+    await ctx.db.event.update({ where: { id: localEvent.id }, data: { mapPipeline: "legacy" } });
   });
 
   it("does not refresh on a node that is not the holder", async () => {

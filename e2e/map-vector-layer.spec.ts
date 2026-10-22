@@ -1,12 +1,12 @@
 /**
  * The vector base layer inside `MapViewer` (docs/map-rendering.md §5.4).
  *
- * Until B5 adds `events.map_pipeline`, the layer is opted into per
- * browser with `localStorage["oxygen-map-pipeline"] = "vector"`. Under it
- * the event's pinned document is fetched once from
+ * The layer is chosen by the event's switch, `events.map_pipeline`
+ * (docs/map-pipeline-switch.md), set here straight in the database. Under
+ * `vector` the event's pinned document is fetched once from
  * `/api/map-documents/:hash` and drawn by the WebGL2 arena path on an
  * unrotated canvas; no tile is requested; gestures move a paper-space
- * view; a GPS fix reaches the overlay through `mapGeo`. Without the flag
+ * view; a GPS fix reaches the overlay through `mapGeo`. Under `legacy`
  * the viewer is today's tile viewer.
  *
  * Headless Chromium draws WebGL2 with SwiftShader, so only presence and
@@ -17,8 +17,7 @@ import { test, expect, type Locator, type Page, type Request } from "@playwright
 import { PNG } from "pngjs";
 import { reseed } from "./helpers/reseed";
 import { uploadEventMap } from "./helpers/map-upload";
-
-const FLAG = "oxygen-map-pipeline";
+import { setMapPipeline } from "./helpers/map-pipeline";
 
 async function openEvent(page: Page): Promise<void> {
   await page.goto("/");
@@ -65,9 +64,13 @@ test.describe("vector map layer", () => {
     await reseed();
   });
 
+  test.afterAll(async () => {
+    await setMapPipeline("legacy");
+  });
+
   test("draws the pinned document and requests no tiles", async ({ page }) => {
     test.setTimeout(120_000);
-    await page.addInitScript((key) => localStorage.setItem(key, "vector"), FLAG);
+    await setMapPipeline("vector");
     const tileRequests: string[] = [];
     const documentRequests: Request[] = [];
     page.on("request", (req) => {
@@ -116,7 +119,7 @@ test.describe("vector map layer", () => {
 
   test("wheel zoom keeps the paper point under the cursor", async ({ page }) => {
     test.setTimeout(120_000);
-    await page.addInitScript((key) => localStorage.setItem(key, "vector"), FLAG);
+    await setMapPipeline("vector");
     await openEvent(page);
     const viewer = await viewerWithMap(page);
     await expect(viewer.getByTestId("map-vector-layer")).toHaveAttribute("data-ready", "true", { timeout: 60_000 });
@@ -139,7 +142,7 @@ test.describe("vector map layer", () => {
 
   test("a GPS fix lands where mapGeo puts it", async ({ page }) => {
     test.setTimeout(120_000);
-    await page.addInitScript((key) => localStorage.setItem(key, "vector"), FLAG);
+    await setMapPipeline("vector");
     await openEvent(page);
     const viewer = await viewerWithMap(page);
     await expect(viewer.getByTestId("map-vector-layer")).toHaveAttribute("data-ready", "true", { timeout: 60_000 });
@@ -163,8 +166,9 @@ test.describe("vector map layer", () => {
     expect(Math.abs(dot.y + dot.height / 2 - (vb.y + vb.height / 2))).toBeLessThan(1.5);
   });
 
-  test("without the flag the viewer stays on tiles", async ({ page }) => {
+  test("a legacy event stays on tiles", async ({ page }) => {
     test.setTimeout(120_000);
+    await setMapPipeline("legacy");
     await openEvent(page);
     const viewer = await viewerWithMap(page);
     await expect(viewer).toHaveAttribute("data-map-pipeline", "legacy");

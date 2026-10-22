@@ -51,7 +51,7 @@ import {
   viewportRotationDeg,
   zoomAt,
 } from "../lib/map-viewport";
-import { resolveMapPipeline, useMapPipelineFlag } from "../lib/feature-flags";
+import { resolveMapPipeline, type MapPipeline } from "../lib/map-pipeline";
 import { useMapDocument } from "../lib/map-document-cache";
 import { boundsMm, paperFrameOf, type MapBudget } from "../lib/vector-map";
 import { rotatedBoundingBox } from "../lib/map-rotation";
@@ -319,10 +319,17 @@ interface Props {
   editor?: MapViewerEditorProps;
   /**
    * Content hash of the map's pinned document (`/api/map-documents/:hash`).
-   * With one, the map pipeline flag may select the vector base layer
+   * With one, a `vector` event draws the vector base layer
    * (docs/map-rendering.md §5.4); without one the map stays on tiles.
    */
   documentHash?: string | null;
+  /**
+   * The pipeline to draw with (docs/map-pipeline-switch.md §3): the event's
+   * switch after the host's fallback rule; default `legacy`.
+   */
+  mapPipeline?: MapPipeline;
+  /** The vector layer cannot draw in this browser (no WebGL2, lost context). */
+  onVectorUnavailable?: () => void;
   /** GPU budget of the vector layer: a club map's 150 MB or an event map's 30 MB. */
   mapBudget?: MapBudget;
   /** Operator rotation correction (`map_files.rotation_correction`), degrees, for the paper frame. */
@@ -381,6 +388,8 @@ export function MapViewer({
   gpsRoutes,
   editor,
   documentHash,
+  mapPipeline = "legacy",
+  onVectorUnavailable,
   mapBudget = "event",
   rotationCorrection,
 }: Props) {
@@ -392,9 +401,9 @@ export function MapViewer({
   const tileUrlBase = nameId ? `/api/map-tile/${nameId}` : "/api/map-tile";
 
   // Base layer: tiles over a Web Mercator view, or the map document over a
-  // paper-space view (docs/map-rendering.md §5.4). Until B5 the choice is
-  // a per-browser flag; a map without a pinned document stays on tiles.
-  const pipeline = resolveMapPipeline(useMapPipelineFlag(), documentHash);
+  // paper-space view (docs/map-rendering.md §5.4), chosen by the event's
+  // switch; a map without a pinned document stays on tiles.
+  const pipeline = resolveMapPipeline(mapPipeline, documentHash);
   const paperMode = pipeline === "vector";
   const { state: docState, retry: retryDocument } = useMapDocument(paperMode ? documentHash : null, nameId ?? null);
   const mapDoc = docState.status === "ready" ? docState.doc : null;
@@ -2852,6 +2861,7 @@ export function MapViewer({
           height={containerSize.h}
           budget={mapBudget}
           zIndex={0}
+          onUnavailable={onVectorUnavailable}
         />
       )}
       {/* Rotated map layer (tiles + overlay) — corrects map north offset */}

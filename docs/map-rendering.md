@@ -1029,23 +1029,22 @@ course geometry, GPS position and tracks, measure, selection) stays React
 SVG on top of the base layer in slice B (09 §4 B); it becomes document
 objects drawn by the renderer in slice C. `TileLayer.tsx` is unchanged.
 
-#### Selecting the layer (until B5)
+#### Selecting the layer
 
 ```
-pipeline = flag == "vector" ∧ documentHash ≠ null ? "vector" : "legacy"
-flag     = localStorage["oxygen-map-pipeline"] == "vector" ? "vector" : "legacy"
+pipeline = event == "vector" ∧ documentHash ≠ null ∧ (webgl2 ∨ ¬allowLegacy) ? "vector" : "legacy"
 ```
 
-`documentHash` is `course.mapMetadata.documentHash` (the event's pinned
-document, `docs/map-storage.md` §6.4), passed by `MapPanel`. The flag is
-per browser, defaults to `legacy`, and is read through
-`useMapPipelineFlag()` (`lib/feature-flags.ts`, re-renders on a
-cross-tab `storage` event). A map without a pinned document (before the
-backfill, §6.7 of `map-storage.md`) stays on tiles whatever the flag. B5
-replaces the flag with `events.map_pipeline` and deletes the key; the
-`resolveMapPipeline(flag, documentHash)` rule keeps its shape with the
-column in place of the flag. The viewer exposes the result as
-`data-map-pipeline` on `map-viewer`.
+The event's switch `events.map_pipeline` and the instance flag
+`map.pipeline.allowLegacy` decide it (`docs/map-pipeline-switch.md` §3,
+row B5): `MapPanel` reads `event.mapPipeline`, resolves the rule with
+`resolveMapPipeline` (`lib/map-pipeline.ts`) and passes the result as
+`MapViewer`'s `mapPipeline` prop (default `legacy`), remounting the
+viewer when it changes. `documentHash` is `course.mapMetadata.documentHash`
+(the event's pinned document, `docs/map-storage.md` §6.4); a map without
+one (before the backfill, §6.7 of `map-storage.md`) stays on tiles. The
+viewer exposes the result as `data-map-pipeline` on `map-viewer`. B4's
+per-browser `localStorage["oxygen-map-pipeline"]` flag is gone.
 
 #### Viewport
 
@@ -1133,8 +1132,10 @@ The canvas carries `data-testid="map-vector-layer"`,
 `data-document-hash`, `data-status` (`loading` → `drawn` → `complete`;
 `error`, `webgl`) and `data-ready="true"` once the first view's detail is
 resident (`engine.whenComplete()`). A failed load shows a message with
-*Try again*; a browser without WebGL2 shows "cannot draw the map" (the
-fallback policy is B5's, below).
+*Try again*; a browser without WebGL2 shows "cannot draw the map", and
+the layer reports it (and a `webglcontextlost`) through `onUnavailable`
+so the host can fall back to tiles while `allowLegacy`
+(`docs/map-pipeline-switch.md` §3.3).
 
 **Budget** by the document's provenance (§5.2 "Arena and buckets"):
 `course.mapMetadata.clubMapVersionId` (additive, the event's
@@ -1189,11 +1190,11 @@ changes for B4.
 | Test | Covers |
 |---|---|
 | `lib/__tests__/map-viewport.test.ts` | mercator ops = the pre-B4 formulas (projection, wheel anchor, clamp, pan, affine mm, symbol scale); paper: centre, y flip, mm round trip, WGS 84 through `mapGeo` (1e-6 mm), no CRS, wheel and pinch anchors, clamp, pan, GPS centre, fit, scale, Mercator-equivalent zoom; rotation per model; a +3° tilted meridian vertical on the overlay and through `viewMatrix`; overlay = GL canvas < 0.5 px on 200 random views (rotation, DPR); a WGS 84 point lands where the tiles' calibration affine puts it, < 0.1 mm on a 400 × 300 mm 1:10 000 frame (the residual is the affine's linearisation) |
-| `lib/__tests__/map-pipeline-flag.test.ts` | flag default, values, setter, throwing storage; `resolveMapPipeline` without a document |
+| `lib/__tests__/map-pipeline.test.ts` | `resolveMapPipeline`: a document is required, the WebGL2 fallback (`docs/map-pipeline-switch.md` §6) |
 | `lib/__tests__/map-document-cache.test.ts` | route regex (documents, not previews); URL without query, `x-event-id` / `x-kiosk-key` headers; one request shared, same bytes; bounded memory; 401/403/404/5xx → kinds, failures not cached; offline; unreadable bytes; `storage.persist()` once, absent API |
 | `lib/__tests__/vector-map.test.ts` | paper frame with correction, bounds in mm, stack colours, proxy colours, budgets |
-| `e2e/map-vector-layer.spec.ts` | flag on: the pinned document by hash (no query, `x-event-id`), canvas ready and drawn, container-sized, no tile layer and no `/api/map-tile*` request, `data-*` attributes; wheel zoom keeps the paper point under the cursor (< 0.5 px); a GPS fix → follow centres it and the marker is at the viewer's centre; flag off: tiles |
-| `e2e/map-viewer-gestures.spec.ts`, `mobile-layout.spec.ts`, `course-editor.spec.ts`, `map-control-circles.spec.ts`, `map-multicourse.spec.ts`, `wide-screen-map-pane.spec.ts`, `webserial.spec.ts`, `kiosk*.spec.ts` | unchanged, under the default `legacy`: the mercator model reproduces the pre-B4 viewer |
+| `e2e/map-vector-layer.spec.ts` | event `vector`: the pinned document by hash (no query, `x-event-id`), canvas ready and drawn, container-sized, no tile layer and no `/api/map-tile*` request, `data-*` attributes; wheel zoom keeps the paper point under the cursor (< 0.5 px); a GPS fix → follow centres it and the marker is at the viewer's centre; event `legacy`: tiles |
+| `e2e/map-viewer-gestures.spec.ts`, `mobile-layout.spec.ts`, `course-editor.spec.ts`, `map-control-circles.spec.ts`, `map-multicourse.spec.ts`, `wide-screen-map-pane.spec.ts`, `webserial.spec.ts`, `kiosk*.spec.ts` | under the default `legacy` the mercator model reproduces the pre-B4 viewer; `webserial`, `mobile-layout`, `map-viewer-gestures` also run under `vector` (`docs/map-pipeline-switch.md` §5) |
 
 ### 5.3 PDF (api)
 
@@ -1575,7 +1576,7 @@ what became of it:
 | `packages/web/src/lib/map-viewport.ts` | the viewport model, mercator and paper (§5.4 "Viewport"), `glView` |
 | `packages/web/src/lib/vector-map.ts` | paper frame, bounds, colours, proxy colours, budget from a document header |
 | `packages/web/src/lib/map-document-cache.ts`, `map-fonts.ts` | document and font loading for the viewer (`docs/map-storage.md` §7.1) |
-| `packages/web/src/lib/feature-flags.ts` | the map pipeline flag until B5 (§5.4 "Selecting the layer") |
+| `packages/web/src/lib/map-pipeline.ts` | the layer rule and the WebGL2 probe (§5.4 "Selecting the layer", `docs/map-pipeline-switch.md` §3) |
 | `e2e/map-vector-layer.spec.ts` | the vector layer in the viewer |
 
 The shared module is exported as a namespace: `import { render } from
@@ -1624,10 +1625,9 @@ The shared module is exported as a namespace: `import { render } from
   matched symbols, the library's) is drawn.
 - **§5.4 editor loupe.** `MapLoupe` magnifies tiles and is not shown in
   the paper view; the editor moves onto the document in slice D.
-- **§5.4 no WebGL2, lost context.** Without WebGL2 the layer shows a
-  message instead of falling back to tiles, and a lost context
-  (`webglcontextlost`) is not restored; the fallback policy belongs to
-  the per-event switch (B5, `map.pipeline.allowLegacy`).
+- **§5.4 lost context.** A lost context (`webglcontextlost`) is not
+  restored: the host falls back to tiles while `allowLegacy`, or the
+  layer shows its message (`docs/map-pipeline-switch.md` §3.3).
 - **§5.4 `data-ready`** marks the first view's detail only; later views
   stream in without an attribute (the engine's `whenComplete()` is there
   for a spec that needs it).
