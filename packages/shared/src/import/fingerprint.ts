@@ -126,10 +126,11 @@ function rotationSymmetric(glyph: Glyph): boolean {
 function invertedBand(body: LineSymbolBody, classOf: ClassOfColour): Omit<LineFingerprint, "type"> | null {
   const { main, borders: b } = body;
   const rail = b?.left ?? b?.right;
+  const rails = [b?.left, b?.right].filter((r) => r !== undefined);
   if (!main?.dash || main.widthUm <= 0 || !rail || b?.backgroundColour === undefined) return null;
   const band = classOf(b.backgroundColour);
   const ink = classOf(main.colour);
-  if (band?.hue !== "white" || !ink || ink.hue === "white" || !sameClass(ink, classOf(rail.colour))) return null;
+  if (band?.hue !== "white" || !ink || ink.hue === "white" || !rails.every((r) => sameClass(ink, classOf(r.colour)))) return null;
   const glyphs = body.glyphs ?? [];
   if (glyphs.length) return null;
   const inner = 2 * rail.shiftUm - rail.widthUm;

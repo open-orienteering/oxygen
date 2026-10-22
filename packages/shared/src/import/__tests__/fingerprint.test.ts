@@ -78,6 +78,9 @@ describe("colour-order equivalence (map-symbols §8.1, A15)", () => {
   it("applies only to a white band: a coloured band, or rails of another colour, still hard-fail", () => {
     expect(compareFingerprints(fingerprintOf(mapper({ band: GREEN }), classOf), fp("ISOM2017-2:509")).hardFail).toBeDefined();
     expect(compareFingerprints(fingerprintOf(mapper({ rails: GREEN }), classOf), fp("ISOM2017-2:509")).hardFail).toBeDefined();
+    const mixed = mapper();
+    mixed.borders!.right = { ...mixed.borders!.right!, colour: GREEN };
+    expect(compareFingerprints(fingerprintOf(mixed, classOf), fp("ISOM2017-2:509")).hardFail).toBeDefined();
   });
 
   it("does not turn a solid black line over white into a railway", () => {
