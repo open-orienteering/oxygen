@@ -236,6 +236,12 @@ Set `MAP_TILE_PRECACHE=off` to render purely on demand — worth doing
 where background CPU is not free, such as a scale-to-zero container that
 only gets CPU while a request is in flight.
 
+An event switched to the vector pipeline (`events.map_pipeline =
+'vector'`, `docs/map-pipeline-switch.md` §3.2) is never pre-cached: the
+background loop skips it and its progress poll answers
+`{ total: 0, done: 0, rendering: false }` without rendering a chunk. Its
+tiles are still served, rendered on demand, to whoever asks.
+
 `/api/map-tile-progress` reports both numbers from the database:
 
 - **total** — `expectedTileCount()` over the WGS84 bounds stored on

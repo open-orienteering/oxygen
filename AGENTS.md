@@ -173,6 +173,10 @@ shaped the original layout was retired in May 2026
 - Every event-scoped table has `event_id BIGINT REFERENCES oxygen.events(id) ON DELETE CASCADE`.
   This is what gives integration tests their isolation: each suite owns
   one `Event` row and cleanup is automatic.
+- Feature switches that choose between two implementations per event
+  (`events.map_pipeline`) and the instance flags that govern them
+  (`map.pipeline.*` in `oxygen.settings`) follow
+  `docs/map-pipeline-switch.md`: an ENUM column, additive, gating reads only.
 - JSONB columns are used for structured metadata (routes, courses
   geometry, owner data, ROC raw payloads). Keep top-level keys
   snake_case to match the rest of the schema.
