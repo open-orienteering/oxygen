@@ -126,6 +126,25 @@ describe("omapToDocumentInput (fixture)", () => {
     expect(header.symbols.filter((s) => s.code === "701")).toHaveLength(1);
   });
 
+  it("texts: a baseline variant leaves verticalAlign out; a symbol without a text render gets no variants", () => {
+    const f = readOmap(readFileSync(FIXTURE, "utf8"));
+    const texts = f.parts.flatMap((p) => p.objects).filter((o) => o.type === 4);
+    // 702: first object right / top, the next ones left / baseline.
+    const t702 = texts.filter((o) => o.symbol === 20);
+    t702[0].hAlign = 2; t702[0].vAlign = 1;
+    for (const o of t702.slice(1)) { o.hAlign = 0; o.vAlign = 0; }
+    // Two texts with different alignments on the 101 contour line symbol (no text render).
+    texts[0].symbol = 0; texts[0].hAlign = 0;
+    texts[1].symbol = 0; texts[1].hAlign = 2;
+    const r = omapToDocumentInput(f, { fileName: "test.xmap", fileHash: "ab".repeat(32), fileBytes: 16960 });
+    const syms = r.input.header.symbols;
+    expect(syms[20].render).toMatchObject({ align: "right", verticalAlign: "top" });
+    const variant = syms.find((s) => s.render?.id === "src:20/left/baseline")!;
+    expect(variant).toMatchObject({ code: "702", origin: "source", sourceIndex: 20 });
+    expect("verticalAlign" in variant.render!).toBe(false);
+    expect(syms.filter((s) => s.render?.id.startsWith("src:0/"))).toEqual([]);
+  });
+
   it("drops tags and templates with counts, and reports font substitution", () => {
     expect(warning("OBJECT_TAGS_DROPPED")).toMatchObject({ count: 1 });
     expect(warning("TEMPLATES_DROPPED")).toMatchObject({ count: 1, message: expect.stringContaining("ortho.png") });
