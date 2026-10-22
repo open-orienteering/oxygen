@@ -43,7 +43,9 @@ describe("importOmapToDocument", () => {
     const { bytes, warnings } = await importOmapToDocument(fixture, "test.xmap");
     const doc = mapDocument.decodeMapDocument(bytes);
     const source = doc.header.symbols.filter((s) => s.origin === "source");
-    expect(source.length).toBe(21);
+    // 21 source symbols plus the 702 alignment variant (docs/map-import.md §4.4).
+    expect(source.length).toBe(22);
+    expect(source.filter((s) => s.code === "702").map((s) => s.render?.id)).toEqual(["src:20", "src:20/right/middle"]);
     expect(source.filter((s) => s.render === null)).toEqual([]);
     expect(doc.header.symbols.filter((s) => s.origin === "missing").map((s) => s.code)).toEqual(["#77"]);
     expect(warnings.map((w) => w.code)).not.toContain("SYMBOL_COLOUR_UNKNOWN");

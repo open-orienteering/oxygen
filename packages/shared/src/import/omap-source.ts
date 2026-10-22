@@ -169,6 +169,14 @@ function kindOfObjectType(type: number): DocumentSymbolInput["kind"] {
 }
 
 const H_ALIGN: Record<number, TextSymbol["align"] | undefined> = { 0: "left", 1: "centre", 2: "right" };
+const V_ALIGN: Record<number, NonNullable<TextSymbol["verticalAlign"]> | undefined> = { 0: "baseline", 1: "top", 2: "middle", 3: "bottom" };
+
+/** Alignment onto a text render; baseline leaves `verticalAlign` out (the IR has no default for it on purpose). */
+function setTextAlignment(render: TextSymbol, align: TextSymbol["align"], verticalAlign: NonNullable<TextSymbol["verticalAlign"]>): void {
+  render.align = align;
+  if (verticalAlign === "baseline") delete render.verticalAlign;
+  else render.verticalAlign = verticalAlign;
+}
 
 export function omapToDocumentInput(file: OmapFile, opts: OmapSourceOptions): OmapSourceResult {
   const warnings = new Map<string, DocumentWarning>();
@@ -219,9 +227,9 @@ export function omapToDocumentInput(file: OmapFile, opts: OmapSourceOptions): Om
   const missingIdx = new Map<string, number>();
   const objects: MapObjectInput[] = [];
   const counts = { objects: 0, coordinates: 0, symbols: 0, colours: colours.length, texts: 0, graphicObjects: 0, missingSymbolObjects: 0, symbolsRendered, symbolsUnrendered };
-  // Horizontal alignments seen per text symbol, to lift a uniform per-object alignment onto the symbol.
-  const alignsBySymbol = new Map<number, Set<number>>();
-  let tagsDropped = 0, boxesDropped = 0, verticalDropped = 0;
+  // Text objects of source symbols with their (horizontal, vertical) alignment, in object order (§4.4).
+  const textAligns: { obj: MapObjectInput; align: TextSymbol["align"]; verticalAlign: NonNullable<TextSymbol["verticalAlign"]> }[] = [];
+  let tagsDropped = 0, boxesDropped = 0;
 
   let sourceIndex = 0;
   for (const part of file.parts) {
@@ -270,12 +278,6 @@ export function omapToDocumentInput(file: OmapFile, opts: OmapSourceOptions): Om
           coordsIn = o.coords.slice(0, 1);
           if (o.rotation) angleDeciDeg = radToDeciDeg(o.rotation);
           if (o.boxSize) boxesDropped++;
-          if ((o.vAlign ?? 0) !== 0) verticalDropped++;
-          if (o.symbol >= 0) {
-            let set = alignsBySymbol.get(symbolIdx);
-            if (!set) alignsBySymbol.set(symbolIdx, (set = new Set()));
-            set.add(o.hAlign ?? 0);
-          }
           break;
         default:
           type = kind === "area" ? OBJECT_TYPE.area : OBJECT_TYPE.line;
@@ -300,28 +302,45 @@ export function omapToDocumentInput(file: OmapFile, opts: OmapSourceOptions): Om
         }
         obj.text = o.text;
         counts.texts++;
+        if (symbolIdx === o.symbol) {
+          textAligns.push({ obj, align: H_ALIGN[o.hAlign ?? 0] ?? "left", verticalAlign: V_ALIGN[o.vAlign ?? 0] ?? "baseline" });
+        }
       }
       objects.push(obj);
       counts.coordinates += n;
     }
   }
+
+  // Per-object text alignment (§4.4): a text symbol takes the first (h, v) pair its objects use; each further pair
+  // gets an appended variant entry, and the objects with that pair point at it.
+  const variantIdx = new Map<string, number>();
+  const firstPair = new Map<number, string>();
+  for (const { obj, align, verticalAlign } of textAligns) {
+    const parentIdx = obj.symbolIdx;
+    const parent = symbols[parentIdx];
+    if (!parent.render || parent.render.type !== "text") continue;
+    const pair = `${align}/${verticalAlign}`;
+    const first = firstPair.get(parentIdx);
+    if (first === undefined) {
+      firstPair.set(parentIdx, pair);
+      setTextAlignment(parent.render, align, verticalAlign);
+      continue;
+    }
+    if (pair === first) continue;
+    const key = `${parentIdx}/${pair}`;
+    let idx = variantIdx.get(key);
+    if (idx === undefined) {
+      idx = symbols.length;
+      variantIdx.set(key, idx);
+      const render = { ...structuredClone(parent.render), id: `${parent.render.id}/${pair}` };
+      setTextAlignment(render, align, verticalAlign);
+      symbols.push({ ...parent, render });
+      counts.symbolsRendered++;
+    }
+    obj.symbolIdx = idx;
+  }
   counts.objects = objects.length;
   counts.symbols = symbols.length;
-
-  // Per-object text alignment: uniform → onto the symbol; mixed → warning, symbol stays left.
-  let mixedAlign = 0;
-  for (const [symbolIdx, set] of alignsBySymbol) {
-    const render = symbols[symbolIdx].render;
-    if (!render || render.type !== "text") continue;
-    if (set.size === 1) {
-      const a = H_ALIGN[[...set][0]];
-      if (a) render.align = a;
-    } else {
-      mixedAlign++;
-    }
-  }
-  if (mixedAlign) warn("TEXT_ALIGNMENT_PER_OBJECT", `${mixedAlign} text symbol(s) are used with several horizontal alignments; drawn with the symbol's alignment`, mixedAlign);
-  if (verticalDropped) warn("TEXT_VERTICAL_ALIGNMENT_DROPPED", `${verticalDropped} text object(s) with a vertical alignment other than baseline`, verticalDropped);
   if (boxesDropped) warn("TEXT_BOX_DROPPED", `${boxesDropped} text box(es) imported as single-anchor texts`, boxesDropped);
   if (tagsDropped) warn("OBJECT_TAGS_DROPPED", `${tagsDropped} object(s) carried tags, which the document does not store`, tagsDropped);
   if (file.parts.length > 1) warn("PARTS_MERGED", `${file.parts.length} map parts merged: ${file.parts.map((p) => p.name).join(", ")}`, file.parts.length - 1);

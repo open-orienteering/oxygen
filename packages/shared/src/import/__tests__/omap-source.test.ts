@@ -57,7 +57,7 @@ describe("omapToDocumentInput (fixture)", () => {
   });
 
   it("symbols: list order kept, kinds from the parts, hidden + helper hidden, missing synthesised, fonts recorded", () => {
-    expect(header.symbols).toHaveLength(22);
+    expect(header.symbols).toHaveLength(23);
     expect(header.symbols[6]).toMatchObject({ code: "301", kind: "area", origin: "source", hidden: false, sourceIndex: 6 });
     expect((header.symbols[6].render as AreaSymbol).border!.main!.widthUm).toBe(180);
     expect(header.symbols[11].kind).toBe("line");
@@ -70,7 +70,7 @@ describe("omapToDocumentInput (fixture)", () => {
     expect(header.symbols[21]).toMatchObject({ code: "#77", origin: "missing", kind: "point", render: null });
     expect(warning("MISSING_SYMBOL")).toMatchObject({ count: 1 });
     expect(warning("HELPER_SYMBOLS_HIDDEN")).toMatchObject({ count: 1 });
-    expect(result.counts).toMatchObject({ objects: 24, symbols: 22, colours: 7, texts: 5, missingSymbolObjects: 1, symbolsRendered: 21, symbolsUnrendered: 0 });
+    expect(result.counts).toMatchObject({ objects: 24, symbols: 23, colours: 7, texts: 5, missingSymbolObjects: 1, symbolsRendered: 22, symbolsUnrendered: 0 });
   });
 
   it("objects: y negated, parts concatenated in order, area / line type from the symbol kind", () => {
@@ -101,14 +101,29 @@ describe("omapToDocumentInput (fixture)", () => {
     expect(bySource(15).angleDeciDeg).toBeUndefined();
   });
 
-  it("texts: anchor only, entities decoded, uniform alignment lifted onto the symbol, mixed / vertical / box warned", () => {
+  it("texts: anchor only, entities decoded, first alignment pair lifted onto the symbol, box warned", () => {
     expect(bySource(18)).toMatchObject({ type: OBJECT_TYPE.text, text: "Fixture <map>", angleDeciDeg: 57 });
     expect(bySource(21).coords.length).toBe(2);
     expect((header.symbols[15].render as TextSymbol).align).toBe("centre");
-    expect((header.symbols[20].render as TextSymbol).align).toBe("left");
-    expect(warning("TEXT_ALIGNMENT_PER_OBJECT")).toMatchObject({ count: 1 });
-    expect(warning("TEXT_VERTICAL_ALIGNMENT_DROPPED")).toMatchObject({ count: 1 });
+    const t702 = header.symbols[20].render as TextSymbol;
+    expect(t702.align).toBe("left");
+    expect("verticalAlign" in t702).toBe(false);
+    expect(warning("TEXT_ALIGNMENT_PER_OBJECT")).toBeUndefined();
+    expect(warning("TEXT_VERTICAL_ALIGNMENT_DROPPED")).toBeUndefined();
     expect(warning("TEXT_BOX_DROPPED")).toMatchObject({ count: 1 });
+  });
+
+  it("texts: a further alignment pair gets an appended variant of the symbol (§4.4)", () => {
+    // 702's objects: left / baseline, right / middle, left / baseline (the box).
+    const byText = (t: string) => objects.find((o) => o.text === t)!;
+    const variant = header.symbols[22];
+    expect(variant).toMatchObject({ code: "702", name: header.symbols[20].name, kind: "text", origin: "source", hidden: false, sourceIndex: 20, sourceFont: "Sans Serif" });
+    expect(variant.render).toEqual({ ...header.symbols[20].render, id: "src:20/right/middle", align: "right", verticalAlign: "middle" });
+    expect(byText("right").symbolIdx).toBe(22);
+    expect(byText("left").symbolIdx).toBe(20);
+    expect(byText("boxed text").symbolIdx).toBe(20);
+    // Uniform symbols get none: 701 is centre / baseline throughout.
+    expect(header.symbols.filter((s) => s.code === "701")).toHaveLength(1);
   });
 
   it("drops tags and templates with counts, and reports font substitution", () => {
@@ -117,7 +132,7 @@ describe("omapToDocumentInput (fixture)", () => {
     expect(warning("FONT_SUBSTITUTED")).toMatchObject({ count: 1 });
     expect(result.warnings.map((w) => w.code).sort()).toEqual([
       "COLOUR_OPACITY_IGNORED", "FONT_SUBSTITUTED", "HELPER_SYMBOLS_HIDDEN", "MISSING_SYMBOL", "OBJECT_TAGS_DROPPED", "PARTS_MERGED",
-      "TEMPLATES_DROPPED", "TEXT_ALIGNMENT_PER_OBJECT", "TEXT_BOX_DROPPED", "TEXT_VERTICAL_ALIGNMENT_DROPPED",
+      "TEMPLATES_DROPPED", "TEXT_BOX_DROPPED",
     ]);
   });
 
@@ -146,7 +161,7 @@ describe("omapToDocumentInput (fixture)", () => {
     const doc = decodeMapDocument(bytes);
     expect(doc.header.source.kind).toBe("omap");
     expect(doc.header.unitsPerMm).toBe(1000);
-    expect(doc.header.symbols.length).toBe(22);
+    expect(doc.header.symbols.length).toBe(23);
     expect(doc.coordStart[doc.coordStart.length - 1]).toBe(result.counts.coordinates);
   });
 });
