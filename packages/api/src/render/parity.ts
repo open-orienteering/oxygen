@@ -1,8 +1,9 @@
 /**
  * Corpus parity (docs/map-rendering.md §6.4): one paper window of an OCAD
  * map rendered through both pipelines, one symbol at a time — the legacy
- * `ocad2geojson` SVG rasterised by resvg exactly as the tiles do
- * (`map-tiles.ts`, `map-window.ts`), and the document path (importer →
+ * `ocad2geojson` SVG rasterised by resvg as the tiles do
+ * (`map-tiles.ts`, `map-window.ts`; fonts pinned to the bundled files,
+ * see `legacyFonts`), and the document path (importer →
  * bridge → `symbolise` → reference raster). Every other symbol is hidden
  * on both sides, so a difference belongs to the symbol's row.
  *
@@ -13,10 +14,10 @@
  * nothing in the app imports it.
  */
 
-import { mapDocument, render } from "@oxygen/shared";
+import { mapDocument, mapImport, render } from "@oxygen/shared";
 import { importMapToDocument } from "../import/ocad.js";
 import { parseViewBox, windowPixelSize, windowViewBox, withViewBox, type OcadRect } from "../map-window.js";
-import { glyphOutlineFrom, loadBundledFont } from "./fonts.js";
+import { BUNDLED_FONT_FILES, glyphOutlineFrom, loadBundledFont } from "./fonts.js";
 import { diffImages, rasterisePassStream, type ImageDiff } from "./reference-raster.js";
 
 /** Paper window, mm, y-up (the document's paper frame; OCAD coordinates / 100). */
@@ -366,8 +367,33 @@ async function legacyWindow(
   const viewBox = root ? windowViewBox(root, ocadBounds, rect) : null;
   if (!viewBox) throw new Error("legacy SVG viewBox does not span the OCAD bounds");
   const { renderAsync } = await import("@resvg/resvg-js");
-  const r = await renderAsync(withViewBox(svg, viewBox), { fitTo: { mode: "width", value: size.width }, background: "white" });
+  const r = await renderAsync(withViewBox(legacyFonts(svg), viewBox), {
+    fitTo: { mode: "width", value: size.width },
+    background: "white",
+    font: {
+      loadSystemFonts: false,
+      fontFiles: [BUNDLED_FONT_FILES["liberation-sans"].path, BUNDLED_FONT_FILES["liberation-sans-narrow"].path],
+      defaultFontFamily: BUNDLED_FONT_FILES["liberation-sans"].family,
+    },
+  });
   return { width: r.width, height: r.height, pixels: new Uint8Array(r.pixels.buffer, r.pixels.byteOffset, r.pixels.byteLength) };
+}
+
+/**
+ * The legacy SVG names the mapper's fonts ("Arial"); the tiles leave the
+ * substitution to the system font stack, which in the Docker image is
+ * Liberation 1.07 — the same outlines `@oxygen/shared` bundles. The tool
+ * pins that outcome instead of inheriting whatever the machine has (a
+ * GitHub runner ships Liberation 2.x, whose glyphs differ): the family is
+ * mapped through the importer's own substitution and resvg is given only
+ * the bundled files.
+ */
+function legacyFonts(svg: string): string {
+  return svg.replace(/font-family="([^"]*)"/g, (_, name: string) => {
+    const { family } = mapImport.ocadFontFamily(name);
+    const bundled = family === "liberation-sans-narrow" ? BUNDLED_FONT_FILES["liberation-sans-narrow"] : BUNDLED_FONT_FILES["liberation-sans"];
+    return `font-family="${bundled.family}"`;
+  });
 }
 
 function blank(size: { width: number; height: number }): RgbaImage {
