@@ -1453,14 +1453,17 @@ tolerance on edge pixels and is not asked to). And a 3× supersample is
 *worse* than 2× with the linear resolve (4 of 9 texels sampled) — a
 higher factor needs a real box-filter pass.
 
-**MSDF text tier** (B3; user decision pending — see the decision log).
+**MSDF text tier** (B3; user decision 2026-10-22: a text tier at a
+provisional ≤ 2 %, tightened to the observed ratio + margin once
+measured, plus `compare=1` on `e2e/test.xmap`).
 The per-pass golden path draws text from exact outlines; the arena path
 draws it from the 32 px MSDF atlas, at the context's MSAA only. At the
 golden density (`text-with-halo`: a 57 px em, 1.8× the atlas) MSDF
 cannot be held to 0.5 % on scenes that are all glyph edges, so the text
 scenes are drawn a second time through the arena path
 (`/dev/map-gl?fixture=<scene>&path=arena`) against the **same goldens**
-at **≤ 1 %** differing pixels (`TEXT_TIER_MAX_RATIO`). Measured at
+at **≤ 1 %** differing pixels (`TEXT_TIER_MAX_RATIO`; the provisional
+2 % tightened to the largest measured 0.69 % + margin). Measured at
 introduction (headless Chromium, 2026-10-22), arena vs per-pass:
 
 | Scene | Arena (MSDF) | Per-pass (outlines) |
@@ -1794,8 +1797,8 @@ The shared module is exported as a namespace: `import { render } from
   stream in without an attribute (the engine's `whenComplete()` is there
   for a spec that needs it).
 - **§5.2 glyphs outside the text atlas pages** draw nothing on the arena
-  path and count `TEXT_GLYPH_NOT_IN_ATLAS` (user decision pending, see
-  the decision log): Greek, symbols outside the Latin ranges, any text
+  path and count `TEXT_GLYPH_NOT_IN_ATLAS`, with no outline fallback
+  (user decision 2026-10-22): Greek, symbols outside the Latin ranges, any text
   in a `liberation-serif` / `liberation-mono` family (no file ships,
   §4.10), Cyrillic when its page failed to load. None occurs in the
   corpus. Adding a page is a range in `TEXT_ATLAS_PAGE_RANGES` and a
