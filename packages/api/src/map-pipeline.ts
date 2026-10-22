@@ -10,6 +10,7 @@
  *
  * The flags are read through a 30 s memo (§1): flipping them takes effect
  * on every instance within half a minute, without a restart.
+ * `MAP_PIPELINE_FLAGS_TTL_MS` overrides the 30 s (`0` = every read; E2E).
  */
 
 import { getSetting } from "./db.js";
@@ -54,7 +55,14 @@ export function canSwitchTo(target: MapPipeline, flags: MapPipelineFlags): boole
   return target === "vector" || flags.allowLegacy;
 }
 
-const cached = ttlMemo(30_000, () => readMapPipelineFlags());
+/** The memo's lifetime: 30 s, or `MAP_PIPELINE_FLAGS_TTL_MS` when it is a non-negative number. */
+export function flagsTtlMs(env: NodeJS.ProcessEnv = process.env): number {
+  const raw = env.MAP_PIPELINE_FLAGS_TTL_MS;
+  const ms = raw === undefined || raw.trim() === "" ? NaN : Number(raw);
+  return Number.isFinite(ms) && ms >= 0 ? ms : 30_000;
+}
+
+const cached = ttlMemo(flagsTtlMs(), () => readMapPipelineFlags());
 
 /** The instance flags, cached 30 s per process. */
 export function getMapPipelineFlags(): Promise<MapPipelineFlags> {

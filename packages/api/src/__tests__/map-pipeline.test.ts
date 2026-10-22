@@ -5,6 +5,7 @@ import {
   parseDefaultPipeline,
   readMapPipelineFlags,
   canSwitchTo,
+  flagsTtlMs,
 } from "../map-pipeline.js";
 
 describe("map pipeline instance flags (docs/map-pipeline-switch.md §1)", () => {
@@ -48,5 +49,13 @@ describe("map pipeline instance flags (docs/map-pipeline-switch.md §1)", () => 
     expect(canSwitchTo("vector", { defaultPipeline: "legacy", allowLegacy: false })).toBe(true);
     expect(canSwitchTo("legacy", { defaultPipeline: "vector", allowLegacy: true })).toBe(true);
     expect(canSwitchTo("legacy", { defaultPipeline: "vector", allowLegacy: false })).toBe(false);
+  });
+
+  it("caches 30 s unless MAP_PIPELINE_FLAGS_TTL_MS says otherwise", () => {
+    expect(flagsTtlMs({})).toBe(30_000);
+    expect(flagsTtlMs({ MAP_PIPELINE_FLAGS_TTL_MS: "0" })).toBe(0);
+    expect(flagsTtlMs({ MAP_PIPELINE_FLAGS_TTL_MS: "5000" })).toBe(5000);
+    expect(flagsTtlMs({ MAP_PIPELINE_FLAGS_TTL_MS: "-1" })).toBe(30_000);
+    expect(flagsTtlMs({ MAP_PIPELINE_FLAGS_TTL_MS: "soon" })).toBe(30_000);
   });
 });

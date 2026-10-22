@@ -1,5 +1,19 @@
 import { defineConfig, devices } from "@playwright/test";
 import { E2E_API_PORT, E2E_EVENTOR_PORT, E2E_WEB_PORT } from "./e2e/helpers/ports";
+import type { MapPipeline } from "./e2e/helpers/map-pipeline";
+
+/**
+ * Specs run once per map pipeline while both exist
+ * (docs/map-pipeline-switch.md §5, 09 §3 / §10): projects `map-legacy`
+ * and `map-vector` set every event's `map_pipeline` before each test.
+ * They import `test` from `e2e/helpers/map-pipeline.ts`. Every other
+ * spec runs once, in `chromium`, on whatever the spec sets itself.
+ */
+export const MAP_PIPELINE_SPECS = [
+  "**/webserial.spec.ts",
+  "**/mobile-layout.spec.ts",
+  "**/map-viewer-gestures.spec.ts",
+];
 
 /**
  * The stack is parameterized so the sharded runner
@@ -20,7 +34,7 @@ const SHARD = process.env.E2E_SHARD;
 
 const DATABASE_URL = `postgresql://oxygen:oxygen@localhost:5433/${DB_NAME}?schema=oxygen`;
 
-export default defineConfig({
+export default defineConfig<{ mapPipeline: MapPipeline }>({
   testDir: "./e2e",
   globalSetup: "./e2e/global-setup.ts",
   globalTeardown: "./e2e/global-teardown.ts",
@@ -50,7 +64,18 @@ export default defineConfig({
   projects: [
     {
       name: "chromium",
+      testIgnore: MAP_PIPELINE_SPECS,
       use: { ...devices["Desktop Chrome"] },
+    },
+    {
+      name: "map-legacy",
+      testMatch: MAP_PIPELINE_SPECS,
+      use: { ...devices["Desktop Chrome"], mapPipeline: "legacy" },
+    },
+    {
+      name: "map-vector",
+      testMatch: MAP_PIPELINE_SPECS,
+      use: { ...devices["Desktop Chrome"], mapPipeline: "vector" },
     },
   ],
 
@@ -82,6 +107,9 @@ export default defineConfig({
         OXYGEN_ADMIN_EMAILS: "e2e-admin@oxygen.test",
         OXYGEN_BUILD_ID: "e81729be4f7fd564c47bb2098137403ef6dcb922",
         OXYGEN_DEPLOY_REF: "e2e",
+        // Read the map pipeline flags on every request: the dual-run
+        // projects flip `map.pipeline.default` between tests.
+        MAP_PIPELINE_FLAGS_TTL_MS: "0",
         RSVG_CONVERT_COMMAND: `${process.cwd()}/e2e/helpers/fake-rsvg-convert.mjs`,
       },
     },

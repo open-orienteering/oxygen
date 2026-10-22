@@ -9,8 +9,9 @@
  * `map-vector`), and the auto fixture applies the project's value before
  * every test — after the spec's `beforeAll(reseed)`, so freshly seeded
  * events get it too — and puts everything back to `legacy` after it, so
- * nothing leaks into the next spec. The API caches the default for 30 s;
- * events a test creates itself should set the switch explicitly.
+ * nothing leaks into the next spec. The E2E API runs with
+ * `MAP_PIPELINE_FLAGS_TTL_MS=0`, so an event a test creates through the UI
+ * takes the project's value too.
  */
 import { test as base } from "@playwright/test";
 import { Client } from "pg";

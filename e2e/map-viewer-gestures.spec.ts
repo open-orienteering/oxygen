@@ -2,7 +2,8 @@
  * Map viewer gesture / measure / rotation regressions from the
  * map-viewer-fixes bundle (ruler touch, undo HUD, two-finger rotate).
  */
-import { test, expect, type Locator, type Page } from "@playwright/test";
+import { test, expect } from "./helpers/map-pipeline";
+import type { Locator, Page } from "@playwright/test";
 import { reseed } from "./helpers/reseed";
 import { uploadEventMap } from "./helpers/map-upload";
 

@@ -1,4 +1,4 @@
-import { test, expect } from "@playwright/test";
+import { test, expect } from "./helpers/map-pipeline";
 import { getMockWebSerialScript } from "./helpers/mock-webserial";
 import { waitForTrpc } from "./helpers/trpc";
 
