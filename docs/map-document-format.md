@@ -87,8 +87,12 @@ through it. Palette entries inserted by colour alignment have
   match?: { canonicalId, method, state, confidence, reasons, reviewed, libraryVersion, alternatives? } }
 ```
 
-- One entry per **source symbol**, in source table order (`sourceIndex`).
-  `code` is the number as written. `kind` is the source type: `point`,
+- One entry per **source symbol**, in source table order (`sourceIndex`),
+  plus, for Mapper sources, one appended `origin: "source"` entry per
+  further (horizontal, vertical) alignment pair a text symbol's objects
+  use — an *alignment variant* sharing the parent's `code`, `name` and
+  `sourceIndex`, with its own IR id (`docs/map-import.md` §4.4, since
+  `omap-5`). `code` is the number as written. `kind` is the source type: `point`,
   `line`, `area`, `text`, `rectangle`, `unknown`. `hidden` is the
   source's default visibility (OCAD status bit 1); consumers may
   override it.

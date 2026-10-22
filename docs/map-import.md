@@ -722,13 +722,29 @@ differ from OCAD or that 06 left open:
 - **Object tags**: 06 wanted them kept as attributes; the document has
   no per-object attribute slot yet (02 §10 reserves room), so they are
   counted by `OBJECT_TAGS_DROPPED` until it does.
-- **Text objects**: Mapper stores horizontal and vertical alignment per
-  *object*; the IR stores alignment per *symbol*. When every object of
-  a symbol agrees, the alignment is lifted onto the symbol; otherwise
-  `TEXT_ALIGNMENT_PER_OBJECT` counts the symbol and the first object's
-  alignment wins. Vertical alignments other than baseline are counted
-  by `TEXT_VERTICAL_ALIGNMENT_DROPPED`. Empty texts are dropped
-  (`EMPTY_TEXT_DROPPED`).
+- **Text objects**: Mapper stores horizontal (`h_align` 0 left, 1
+  centre, 2 right) and vertical alignment (`v_align` 0 baseline, 1 top,
+  2 middle, 3 bottom) per *object*; the IR stores both per *symbol*
+  (`align`, `verticalAlign`). Per text symbol, the first (h, v) pair its
+  objects use, in object order, is lifted onto the symbol itself
+  (`verticalAlign` left out for baseline). Every further pair gets an
+  **alignment variant**: an ordinary `origin: "source"` header entry
+  appended after the symbol table and the missing-symbol stubs, in order
+  of first use, with the parent's `code`, `name`, `kind`, `hidden`,
+  `sourceIndex` and `sourceFont`, the parent's render with the pair's
+  `align` / `verticalAlign`, and IR id `src:<id>/<align>/<verticalAlign>`
+  (`src:20/right/middle`); the objects with that pair point at it (user
+  decision 2026-10-22, A13 — no header schema change). The matcher,
+  club decisions and the CRT treat a variant as a source symbol; its
+  decision fingerprint is the parent's (the text fingerprint carries no
+  alignment, `docs/map-symbols.md` §8.1), so one decision covers both,
+  and the review shows one row per variant actually used. A value
+  outside those ranges (not written by Mapper) reads as left / baseline.
+  A symbol without a text render gets no variants. Since `omap-5`;
+  `omap-4` lifted only a uniform horizontal alignment
+  (`TEXT_ALIGNMENT_PER_OBJECT` otherwise) and dropped vertical ones
+  (`TEXT_VERTICAL_ALIGNMENT_DROPPED`) — both codes are retired. Empty
+  texts are dropped (`EMPTY_TEXT_DROPPED`).
 - Objects referencing a symbol id outside the table get a stub
   (`origin: "missing"`, code `#<id>`, `MISSING_SYMBOL`); unknown object
   types and empty geometry are dropped with the §3.4 codes.
@@ -736,7 +752,6 @@ differ from OCAD or that 06 left open:
 ### 4.5 Warning codes added by the OMAP path
 
 `COLOUR_OPACITY_IGNORED`, `HELPER_SYMBOLS_HIDDEN`, `TEXT_BOX_DROPPED`,
-`TEXT_ALIGNMENT_PER_OBJECT`, `TEXT_VERTICAL_ALIGNMENT_DROPPED`,
 `OBJECT_TAGS_DROPPED`, `PARTS_MERGED`, `CRS_UNRESOLVED` (shared with
 OCAD since `ocad-5`, §3.5), `MAP_SCALE_MISSING`, `EMPTY_TEXT_DROPPED`,
 `SYMBOL_REFERENCE_INVALID` (combined parts, §4.3; shared with OCAD since
@@ -803,11 +818,11 @@ document hash is identical on two machines.
 
 | Level | File | Covers |
 |---|---|---|
-| Unit (shared) | `packages/shared/src/import/__tests__/report.test.ts` | `WARNING_CLASS` classifies every code the importers, matcher and CRT parser emit and names none that nothing emits (source scan), the `unsupported` set is exactly the eight codes of §7, `SYMBOL_REFERENCE_INVALID` is a `source-error`; `importReportSchema` accepts / rejects `warningDetails` |
+| Unit (shared) | `packages/shared/src/import/__tests__/report.test.ts` | `WARNING_CLASS` classifies every code the importers, matcher and CRT parser emit and names none that nothing emits (source scan), the `unsupported` set is exactly the six codes of §7, `SYMBOL_REFERENCE_INVALID` is a `source-error`; `importReportSchema` accepts / rejects `warningDetails` |
 | Unit (shared) | `packages/shared/src/import/__tests__/xml.test.ts` | the SAX tokenizer: prolog / comments / CDATA / DOCTYPE, entities, attribute quoting, mismatched and unclosed tags, second root, the pruning tree builder |
 | Unit (shared) | `packages/shared/src/import/__tests__/omap-reader.test.ts` | barrier wrapper, both coordinate forms and every flag, symbols of all five types incl. inline sub-symbols, colours with spot components, georeferencing, parts, templates, print, tags, misnumbered symbols |
 | Unit (shared) | `packages/shared/src/import/__tests__/omap-symbols.test.ts` | every §4.3 rule: point glyphs incl. nested points and offset discs, line caps / shortening / pointed taper (offsets, one end, `pointed_cap_length` only), borders, dash layouts and mid / dash / start / end placements, width-0 carriers, area hatch and pattern, text framing (line → halo, shadow → y-flipped shadow, zero offset) and fonts, the combined-symbol merge table (509, 508.x, 502.2 with its second border pair in `extraPairs`, 511.2, second dashed, area combinations), self and missing combined parts → `SYMBOL_REFERENCE_INVALID` |
-| Unit (shared) | `packages/shared/src/import/__tests__/omap-source.test.ts` | the fixture through `omapToDocumentInput`: colour stack order and opacity, y flip and `-0`, every §4.2 flag rule, hole shift, dash-point rule per symbol, text alignment lifting, missing symbols, `warningDetails` with the stub index, parts merge, templates, print window, georeferencing (UTM / EPSG / Gauss-Krüger / PROJ.4 / Local / unresolved), codec round trip, every §4.5 warning code |
+| Unit (shared) | `packages/shared/src/import/__tests__/omap-source.test.ts` | the fixture through `omapToDocumentInput`: colour stack order and opacity, y flip and `-0`, every §4.2 flag rule, hole shift, dash-point rule per symbol, text alignment lifting and alignment variants (§4.4), missing symbols, `warningDetails` with the stub index, parts merge, templates, print window, georeferencing (UTM / EPSG / Gauss-Krüger / PROJ.4 / Local / unresolved), codec round trip, every §4.5 warning code |
 | Unit (shared) | `packages/shared/src/import/__tests__/ocad-source.test.ts` | colour stack order, the file version reaching the circle-diameter rule, symbol table, hidden flag, duplicates, graphic objects, missing symbols, rectangle objects resolved to a parsed rectangle symbol, flag mapping, georeferencing (no `declinationDeg` from `d`, `e` fallback, grid table first, `CRS_UNRESOLVED`), print window, warning codes, reader-dropped types vs `READER_WARNING`, `readerWarnings` texts (order, cap of 50), `warningDetails` (one entry per emission with the symbol index, stub index for `MISSING_SYMBOL`, first detail = header message, not in the document, cap of 500 with every emission counted), `analysis` returned |
 | Unit (shared) | `packages/shared/src/geo/__tests__/projection.test.ts`, `north.test.ts` | §3.8 maths: EPSG lookup, paper ↔ projected (rotation + correction, grid scale factor, round trip), Mapper's reference point on the `e2e/test.xmap` frame, paper ↔ WGS 84, convergence at Nackareservatet (−2.82°) and on a central meridian, paper-north bearing, extent and calibration corners, `mapFileMetadata`; angle folding and the cluster thresholds |
 | Unit (shared) | `packages/shared/src/import/__tests__/analyse.test.ts` | `601` / `601.x` codes, grouping per symbol, 5 mm floor scaled by `unitsPerMm`, graphic symbols excluded, georeference fields, un-georeferenced and non-projectable CRSs, same result over the decoded document |
@@ -849,7 +864,7 @@ run; the unsupported ones are listed the same way (`!` lines).
 
 | Class | Codes | Meaning |
 |---|---|---|
-| `unsupported` | `SYMBOL_TYPE_UNSUPPORTED`, `SYMBOL_FEATURE_DROPPED`, `UNKNOWN_OBJECT_TYPE`, `IRREGULAR_PATTERN_REGULARISED`, `TEXT_VERTICAL_ALIGNMENT_DROPPED`, `TEXT_BOX_DROPPED`, `TEXT_ALIGNMENT_PER_OBJECT`, `COLOUR_OPACITY_IGNORED` | a source construct the document cannot represent (the gate) |
+| `unsupported` | `SYMBOL_TYPE_UNSUPPORTED`, `SYMBOL_FEATURE_DROPPED`, `UNKNOWN_OBJECT_TYPE`, `IRREGULAR_PATTERN_REGULARISED`, `TEXT_BOX_DROPPED`, `COLOUR_OPACITY_IGNORED` | a source construct the document cannot represent (the gate). `TEXT_VERTICAL_ALIGNMENT_DROPPED` and `TEXT_ALIGNMENT_PER_OBJECT` were here until `omap-5` (A13), which imports both alignments (§4.4) |
 | `by-design` | `TEMPLATES_DROPPED`, `LAYOUT_OBJECTS_DROPPED`, `OBJECT_TAGS_DROPPED`, `PARTS_MERGED`, `HELPER_SYMBOLS_HIDDEN`, `RECTANGLE_GRID_DROPPED` | dropped on purpose |
 | `source-error` | `SYMBOL_REFERENCE_INVALID`, `MISSING_SYMBOL`, `DUPLICATE_SYMBOL_NUMBER`, `SYMBOL_COLOUR_UNKNOWN`, `SYMBOL_EMPTY`, `EMPTY_GEOMETRY_DROPPED`, `EMPTY_TEXT_DROPPED`, `MAP_SCALE_MISSING`, `CRS_UNRESOLVED` | the file is inconsistent; nothing is missing from the document that the file defines |
 | `substitution` | `FONT_SUBSTITUTED` | a font was replaced |
@@ -902,13 +917,20 @@ stale area-border references moved to `SYMBOL_REFERENCE_INVALID`
 
 ## 8. Pending in this chapter
 
-S0's remaining unsupported primitives: importer wiring of the IR fields
-B1 added (text shadow, vertical text alignment, pointed-line taper,
-rectangle corner radius, a framing line narrower than its main line,
-Mapper's extra border pair — row A13), text rectangle framing, text boxes
+S0's remaining unsupported primitives: text rectangle framing, text boxes
 and line text laid along its path (row B8; user decision 2026-10-20 —
-the rectangle *grid* is a by-design drop, not pending) — all in `research/vector-map-pipeline/SLICES.md`; the S0 hash comparison on a
-second machine (re-run on `ocad-7`). The line-text struct (§3.3) is
+the rectangle *grid* is a by-design drop, not pending; the IR fields B1
+added are wired since `ocad-11` / `omap-5`, A13) — in
+`research/vector-map-pipeline/SLICES.md`. Also B8's: a text symbol drawn
+canonically (an `auto` match) takes the library entry's whole render
+(`docs/map-document-format.md` §8), so the source's `align`,
+`verticalAlign` and `shadow` — and with them the anchor the importer read
+from OCAD `alignment` or Mapper's per-object alignment — are not applied;
+the rule for which text fields stay with the source symbol is B8's (user
+decision 2026-10-22, A13). No corpus symbol is affected today: every text
+symbol with a non-default anchor or a shadow is unmatched or a variant of
+an unmatched one. The S0 hash comparison on a second machine (re-run on
+`ocad-7`). The line-text struct (§3.3) is
 *provisional* until a real OCAD file with line text is seen. S2 confirmation of the *provisional* §3.3 rows against OCAD output,
 event / club map *apply* for Mapper sources (needs slice C, §2.2), stage 5 fonts used (fallback decisions)
 and feature usage (03 §6.8 table) — 06 §4.4's `fonts` / `features`
