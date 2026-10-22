@@ -933,21 +933,7 @@ still fails on it by design).
 
 ## 8. Pending in this chapter
 
-S0's remaining unsupported primitives: text rectangle framing, text boxes
-and line text laid along its path (row B8; user decision 2026-10-20 —
-the rectangle *grid* is a by-design drop, not pending; the IR fields B1
-added are wired since `ocad-11` / `omap-5`, A13) — in
-`research/vector-map-pipeline/SLICES.md`. Also B8's: a text symbol drawn
-canonically (an `auto` match) takes the library entry's whole render
-(`docs/map-document-format.md` §8), so the source's `align`,
-`verticalAlign` and `shadow` — and with them the anchor the importer read
-from OCAD `alignment` or Mapper's per-object alignment — are not applied;
-the rule for which text fields stay with the source symbol is B8's (user
-decision 2026-10-22, A13). No corpus symbol is drawn canonically today:
-of the text symbols with a non-default anchor or a shadow, only OOM
-Course_Design's 703 (middle) has a match at all — a `suggested` 704,
-drawn from source until a club accepts it in review, which would then
-lose its anchor. The S0 hash comparison on a second machine (re-run on
+The S0 hash comparison on a second machine (re-run on
 `ocad-7`). The line-text struct (§3.3) is
 *provisional* until a real OCAD file with line text is seen. S2 confirmation of the *provisional* §3.3 rows against OCAD output,
 event / club map *apply* for Mapper sources (needs slice C, §2.2), stage 5 fonts used (fallback decisions)

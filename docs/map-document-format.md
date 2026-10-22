@@ -237,7 +237,11 @@ a zero-copy `Int32Array` view when the input buffer itself is aligned.
 - **Curves** stay cubic Béziers; **holes** are one coordinate run with a
   flag-16 ring start, as the source encodes them. Text objects keep their
   source coordinates verbatim (OCAD unformatted text: anchor plus the four
-  box corners).
+  box corners; formatted text, type 5: the box's four corners bottom-left,
+  bottom-right, top-right, top-left; line text, type 6: its path). A
+  Mapper box text is stored as type 5 with corners computed from its
+  centre and size, turned by its rotation and rounded to native units
+  (`map-import.md` §4.2, §6).
 
 ## 5. Geometry section
 
@@ -289,7 +293,9 @@ the corpus and in unit tests). Used for fixtures, diffs and the
 `mapDocument.documentRenderInput(doc, { unmatched, proxyColours, includeHidden })`
 produces the symboliser's input: coordinates in µm, `RenderObject`s with
 `angleDeg = angle / 10`, text from `strings`, `closed` for areas and
-rectangles. Symbol resolution per object: for a symbol whose `match` is
+rectangles, and `textLayout` from the object type — `box` for formatted
+text (type 5), `path` for line text (type 6), absent otherwise
+(`map-rendering.md` §4.9). Symbol resolution per object: for a symbol whose `match` is
 applied (`state: "auto"`, or `reviewed` with a `canonicalId`) the library
 entry resolved through the stack's `paletteIds` and scaled by
 `documentFactor` (`canonical: false` turns this off and draws every
