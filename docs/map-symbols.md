@@ -370,8 +370,11 @@ plus the purple-role and materialisation checks:
   dashes over a black band) and OCAD's power line (corner symbol) score
   `auto` against 509 / 510; `render/__tests__/library-fixtures.test.ts`
   rows 3 and 6 (`map-rendering.md` §6.1) hold the pylon and railway
-  passes; `api/src/__tests__/import-omap.test.ts` states that Mapper's
-  railway stays unmatched (§7).
+  passes; its "colour-order equivalence" block pins §8.1's inversion
+  rule (Mapper's black dashes over white score `auto` against 509; a
+  coloured band, other-class rails and a solid stroke still hard-fail);
+  `api/src/__tests__/import-omap.test.ts` states that Mapper's railway
+  is `auto` against `ISOM2017-2:509` (A15).
 
 - **names.test.ts** — every heading has `name.sv` except the §3.2 list;
   hand-typed spot tables of SOFT headings (23) and of ISOM 2000 pairs the
@@ -413,7 +416,7 @@ The OOM dimension spot check (e) is not implemented; see §10.
 | `aliases` as given | `ISOM2000` only, plain successors only (§3) | Mapper's CRT is the only table; the IOF change document rules out the merges. No ISSOM 2007 table exists on disk. |
 | Appendix B palette as a "versioned table" | Two editions, ids stable, document picks edition | Same intent; the id stability rule is what keeps entries edition-free. |
 | 180–200 / 170–190 entries | 152 / 141 | Counted against Rev 6; §3.1. |
-| Railway "black, white" drawn as stated: black dashes, white between, rails | 509 / 509.1 are white 0.25 dashes 1.0 / 1.5 over a black 0.45 band, the white shortened 1.5 mm at each end (§3; B10) | Appendix B sorts white-for-railway above black, so the first edition's black dashes under a white band drew all white inside. The OCAD construction is the only one the palette allows; the black ends follow the spec ("two black dashes"), not OCAD's sets (white end dash). Consequence: OCAD railways built to the spec's widths now match (Sprint's 509.100, white 0.26 in black 0.45: `auto`); club-2026's / club-full's 509.1 (white 0.21 in black 0.35 — the set reads "0.35" as the outer width) stays unmatched, now on width instead of colour; Crop-A / Crop-B's grey 509.0 stays unmatched; Mapper's railway (black dashes over white, Mapper's own colour order) now hard-fails on main colour and is unmatched (`e2e/test.xmap`: was `auto`), drawn from its own definition — a matcher normalisation of the two constructions would recover it (§10). |
+| Railway "black, white" drawn as stated: black dashes, white between, rails | 509 / 509.1 are white 0.25 dashes 1.0 / 1.5 over a black 0.45 band, the white shortened 1.5 mm at each end (§3; B10) | Appendix B sorts white-for-railway above black, so the first edition's black dashes under a white band drew all white inside. The OCAD construction is the only one the palette allows; the black ends follow the spec ("two black dashes"), not OCAD's sets (white end dash). Consequence: OCAD railways built to the spec's widths now match (Sprint's 509.100, white 0.26 in black 0.45: `auto`); club-2026's / club-full's 509.1 (white 0.21 in black 0.35 — the set reads "0.35" as the outer width) stays unmatched, now on width instead of colour; Crop-A / Crop-B's grey 509.0 stays unmatched; Mapper's railway (black dashes over white, Mapper's own colour order) hard-failed on main colour for the 2026.10.3 release alone (`e2e/test.xmap`: `auto` 5 → 4 symbols); the fingerprint now reads both constructions as one (§8.1, A15) and it is `auto` again. |
 | Glyph placement per 03 Appendix C (Mapper dash symbol → `dashPoints`) | 510 / 511 / 511.b pylons at `corners` (B10) | Both importers deliver pylons as corner flags (`map-import.md` §3.3, §4.2); no importer produces dash-point positions for them, so canonically drawn power lines had no poles and the fingerprint missed on placement. |
 | Directional point glyphs: no convention stated (03 §6.2) | Angle 0 = north, slope ticks to +y (§3; B10) | OCAD and Mapper both draw the 101.b / 103.b tick to +y; the first edition used the line-tag convention (−y) and every auto-matched slope line pointed uphill (52–66 % shape difference, `map-rendering.md` §6.4). |
 | 510 "0.3 (OM)" bars | ±0.37 mm, 0.3 beyond each edge of the 0.14 line (B10) | The reading ISOM 511 already used; Mapper's ISOM set and both corpus OCAD sets draw ±0.37 (−0.38 … +0.33). Was ±0.3. ISSprOM 511 (unchanged) measures its 0.3 from the line centre (±1.12 at ±0.82), as OCAD's ISSprOM set does — Sprint's 511 matches it at 1.00; the spec drawing does not settle which. |
@@ -464,6 +467,22 @@ Element counts are soft: `COUNT_PENALTY` (0.6) per missing or extra
 element, so a single 6 mm ring is not a two-ring finish. Orientation is
 ignored for rotationally symmetric glyphs (a boulder disc has no north).
 `fingerprintHash` gives the stable `irHash` that club decisions key on.
+
+**Colour-order equivalence (A15, `ocad-12` / `omap-6`).** One construction
+is normalised, because 03 §6.5 compares colour classes and the same
+picture can be painted in two orders: *ink dashes over a white band
+between ink rails* (Mapper's railway: main stroke black 0.35 dashed 1.5 /
+1.0, borders black, `backgroundColour` white) is fingerprinted as *white
+dashes over an ink band* (the library's 509 / 509.1, OCAD's double-line
+fill): main colour = the white band, main width = the band between the
+rails (`2 × shift − rail width`), dash and gap swapped, no borders,
+`background` set. It applies only when the main stroke is dashed and
+inked, the borders share its colour class, `backgroundColour` is white
+and the symbol has no glyphs (`invertedBand`). The white band counts as
+structure only here; there is no general colour reordering, so a coloured
+band, rails of another class or a solid stroke over white still
+hard-fail on main colour / dashed (user decision 2026-10-22). Mapper's
+511-coded power line is unchanged: it gains only a `suggested` 510.
 
 ### 8.2 Stages
 
@@ -954,6 +973,5 @@ resolves canonical entries through `paletteIndexOfStack(header.colours)`.
   candidate set) once a corpus map uses ISOM 2000 numbering to tune it on.
 - The OOM dimension spot check if 03 §10's licence question is settled in
   favour.
-- A fingerprint normalisation that treats Mapper's railway (black dashes
-  over a white band with black borders) as 509 / 509.1's white dashes
-  over a black band, so Mapper railways match again (§7, B10).
+- Mapper's 511-coded power line (suggested 510 only) is not normalised
+  (A15 scoped to the railway); revisit if a Mapper corpus map shows it.

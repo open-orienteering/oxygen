@@ -114,6 +114,34 @@ function rotationSymmetric(glyph: Glyph): boolean {
   return glyph.parts.every((p) => (p.kind === "disc" || p.kind === "ring") && !(p.cx ?? 0) && !(p.cy ?? 0));
 }
 
+/**
+ * Mapper's railway paints dashes of the ink over a white band between
+ * same-ink rails; the library (and OCAD) paint white dashes over an ink
+ * band. The picture is the same with the dash and gap lengths swapped, so
+ * the first form is fingerprinted as the second (map-symbols §8.1, A15).
+ * Only a dashed main stroke whose borders share its colour class and whose
+ * `backgroundColour` is white qualifies; any other colour-order difference
+ * stays a hard fail.
+ */
+function invertedBand(body: LineSymbolBody, classOf: ClassOfColour): Omit<LineFingerprint, "type"> | null {
+  const { main, borders: b } = body;
+  const rail = b?.left ?? b?.right;
+  const rails = [b?.left, b?.right].filter((r) => r !== undefined);
+  if (!main?.dash || main.widthUm <= 0 || !rail || b?.backgroundColour === undefined) return null;
+  const band = classOf(b.backgroundColour);
+  const ink = classOf(main.colour);
+  if (band?.hue !== "white" || !ink || ink.hue === "white" || !rails.every((r) => sameClass(ink, classOf(r.colour)))) return null;
+  const glyphs = body.glyphs ?? [];
+  if (glyphs.length) return null;
+  const inner = 2 * rail.shiftUm - rail.widthUm;
+  if (inner <= 0) return null;
+  return {
+    mainWidth: inner, mainClass: band, dashed: true, dashUm: main.dash.gapUm, gapUm: main.dash.dashUm,
+    halo: !!main.halo, borders: false, borderWidth: null, borderShift: null, borderClass: null, background: true,
+    glyphCount: 0, glyphPlacement: null, glyphSpacing: null, glyphBox: null,
+  };
+}
+
 function lineBody(body: LineSymbolBody, classOf: ClassOfColour): Omit<LineFingerprint, "type"> {
   const main = body.main;
   const b = body.borders;
@@ -134,6 +162,8 @@ function lineBody(body: LineSymbolBody, classOf: ClassOfColour): Omit<LineFinger
       box = { w: Math.max(box.w, gb.w), h: Math.max(box.h, gb.h) };
     }
   }
+  const inverted = invertedBand(body, classOf);
+  if (inverted) return inverted;
   return {
     mainWidth: stroked ? main.widthUm : bgWidth !== null && bgWidth > 0 ? bgWidth : null,
     mainClass: stroked ? classOf(main.colour) : bgFill ? classOf(b.backgroundColour!) : first ? dominantClass(first.glyph, classOf) : border ? classOf(border.colour) : null,

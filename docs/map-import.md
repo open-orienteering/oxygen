@@ -761,7 +761,7 @@ non-contiguous priorities). The rest are shared with §3.6–3.7.
 
 ## 5. Header provenance
 
-`format.importer` is `"ocad-11"` for OCAD sources (`OCAD_IMPORTER_VERSION`;
+`format.importer` is `"ocad-12"` for OCAD sources (`OCAD_IMPORTER_VERSION`;
 `ocad-1` had `render: null` for every source symbol, `ocad-2` carried the
 upload name in the header, `ocad-3` had no matcher, `ocad-4` stored
 ScalePar `d` as `declinationDeg`, ignored `e` and had no
@@ -778,12 +778,12 @@ reference as `SYMBOL_FEATURE_DROPPED` and kept no per-symbol warning detail
 — §3.3, §3.6, A14, `ocad-10` dropped text shadows, vertical text alignment,
 rectangle corner radii and framing lines narrower than the main line,
 shortened pointed lines instead of tapering them and reported a rectangle
-grid as `SYMBOL_FEATURE_DROPPED` — §3.3, A13) and `"omap-5"`
+grid as `SYMBOL_FEATURE_DROPPED`, `ocad-11` is the A13 importer that reads them — §3.3, A13; `ocad-11` also fingerprinted Mapper's inverted railway as unmatched, `ocad-12` reads it as 509's construction — `docs/map-symbols.md` §8.1, A15) and `"omap-6"`
 for Mapper sources (`OMAP_IMPORTER_VERSION`; `omap-1` stored `paperOrigin`
 unrounded, `omap-2` is `ocad-7`'s matcher, `omap-3` reported stale
 combined-part references as `SYMBOL_FEATURE_DROPPED` and kept no
 per-symbol detail, `omap-4` drew pointed caps untapered and dropped shadow
-framing and a combined symbol's second border pair — §4.3, A13). A header `warnings` change alone bumps the
+framing and a combined symbol's second border pair — §4.3, A13, `omap-5` is the A13 importer, `omap-6` is `ocad-12`'s matcher, A15). A header `warnings` change alone bumps the
 version — `ocad-6` did — while the report-only `warningDetails` would not.
 Documents of either earlier version have no `georeference` / `north` in
 their report; the dedup only reuses current-version documents, so the
@@ -831,8 +831,8 @@ document hash is identical on two machines.
 | Unit (shared) | `packages/shared/src/map-document/__tests__/codec.test.ts`, `projection-bridge.test.ts` | encode/decode round trip, Hilbert order, validation errors, truncation, JSON projection, render bridge |
 | Unit (shared) | `packages/shared/src/import/__tests__/{colour-class,fingerprint,matcher,colour-align,match-document}.test.ts` | stages 6–7: CMYK / name classification, fingerprints and tolerances, every matcher stage and the traps (reused numbers, template variants, old numbering), factor detection (lines / codes / scale / override), alignment steps and conflicts, whole-document run with codec round trip and canonical drawing through the bridge |
 | Unit (api) | `packages/api/src/__tests__/import-ocad.test.ts` | reader → document on `e2e/test.ocd`, determinism, bboxes, all fixture symbols converted (the framed 603 text with its white halo, the 850.1 rectangle as an outline), symbolise without proxies, fixture matches (4 auto incl. 603.b, old-numbered ring and the rectangle suggested, factor by `codes`), `readerWarnings` and `warningDetails` in the report only when non-empty, stack with inserted lower purple, hook renders against the source table; stage 5: grid 13002 → EPSG:3006 with no `declinationDeg`, the same 12-line meridian cluster as the legacy probe, report `georeference` / `north` with WMM fields at `asOf` agreeing with `detectMapNorth`, raster-path and pin columns identical (correction 0 and 11) |
-| Unit (api) | `packages/api/src/__tests__/import-omap.test.ts` | reader → document on `e2e/test.xmap`: determinism across `importOmapToDocument` / `importMapToDocument`, provenance (`omap-5`, version 9, UTM 33N), `warningDetails` in the report (the `MISSING_SYMBOL` stub with its index, the dropped templates), bboxes, all 21 fixture symbols and the 702 alignment variant rendered, symbolise with the dangling symbol as the only drop, factor ×1, import report, kind sniff with BOM, the two kinds kept apart |
-| Unit + integration (api) | `map-import-jobs.test.ts` (both) | worker runs a Mapper file by kind with the same hashes as inline; a Mapper source goes through the job to a `done` row with `importer_version omap-5` and a stored report carrying `warningDetails`, and is deduplicated on the second job; garbage of either kind fails cleanly; the pin writes the quick-access columns equal to the raster path's, recomputes them with a row's `rotation_correction` idempotently, and leaves them alone for a document without a CRS |
+| Unit (api) | `packages/api/src/__tests__/import-omap.test.ts` | reader → document on `e2e/test.xmap`: determinism across `importOmapToDocument` / `importMapToDocument`, provenance (`omap-6`, version 9, UTM 33N), `warningDetails` in the report (the `MISSING_SYMBOL` stub with its index, the dropped templates), bboxes, all 21 fixture symbols and the 702 alignment variant rendered, symbolise with the dangling symbol as the only drop, factor ×1, import report, kind sniff with BOM, the two kinds kept apart |
+| Unit + integration (api) | `map-import-jobs.test.ts` (both) | worker runs a Mapper file by kind with the same hashes as inline; a Mapper source goes through the job to a `done` row with `importer_version omap-6` and a stored report carrying `warningDetails`, and is deduplicated on the second job; garbage of either kind fails cleanly; the pin writes the quick-access columns equal to the raster path's, recomputes them with a row's `rotation_correction` idempotently, and leaves them alone for a document without a CRS |
 | Unit (api, unchanged) | `map-north.test.ts`, `map-projection-correction.test.ts`, `map-coordinate-transfer.test.ts`, `course-import-align.test.ts` | the legacy modules as adapters over `mapGeo` keep their behaviour |
 | E2E | `e2e/map-gl-doc.spec.ts` | document path = reader path in the browser, native `.oxvm` round trip, `mode=source` draws the fixture from its own definitions with no proxies; `e2e/test.xmap` loads client-side with no OCAD reader, draws, and surfaces the OMAP warning codes |
 | Unit (shared) | `packages/shared/src/import/__tests__/decisions.test.ts` | club decisions and review rows (`docs/map-symbols.md` §8.5), stage 6 with decisions: other library ignored, older release applied |
@@ -888,7 +888,7 @@ maps nor the JSON files are committed (AGENTS.md §12); keep them under
 
 **Against production.** The same comparison works against what Cloud
 Run produced from the same files, once the instance runs the same
-importer and library versions (`ocad-11` / `omap-5`,
+importer and library versions (`ocad-12` / `omap-6`,
 `*@<SYMBOL_LIBRARY_VERSION>`) and only for documents imported without
 club decisions (stage 6 applies them, so a reviewed map has a different,
 equally correct hash). Either list the stored documents:
