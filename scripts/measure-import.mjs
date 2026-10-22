@@ -24,7 +24,8 @@
  * JSON files this writes.
  *
  * Exit status: 0 when every map imported, none produced an
- * unsupported-primitive warning (`UNSUPPORTED_PRIMITIVE_CODES`) and, with
+ * unsupported-primitive warning (class `unsupported` in `WARNING_CLASS`,
+ * packages/shared/src/import/report.ts; docs/map-import.md §7) and, with
  * --previous, every document hash equals the previous run's; 1 otherwise;
  * 2 on usage errors.
  */
@@ -33,30 +34,6 @@ import { readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
 import { basename, join, resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { register } from "tsx/esm/api";
-
-/**
- * Warning codes that mean a drawing construct of the source was dropped or
- * approximated because the document cannot represent it — the
- * "unsupported primitive" of 09 §7's exit criterion (no code is literally
- * named `UNSUPPORTED_*`). Codes for things the pipeline drops by design
- * (templates, layout objects, tags, parts, helper symbols), source data
- * errors (missing or duplicate symbols, unknown colours, empty geometry or
- * symbols, missing scale or CRS), font substitution, matching and colour
- * stack outcomes and `READER_WARNING` (reader noise; its OCAD texts are in
- * the report's `readerWarnings` since `ocad-7`) are
- * shown in the histogram but do not fail the run. Sources:
- * docs/map-import.md §3.3–3.7 and §4.5, docs/map-document-format.md §2.6.
- */
-const UNSUPPORTED_PRIMITIVE_CODES = new Set([
-  "SYMBOL_TYPE_UNSUPPORTED",
-  "SYMBOL_FEATURE_DROPPED",
-  "UNKNOWN_OBJECT_TYPE",
-  "IRREGULAR_PATTERN_REGULARISED",
-  "TEXT_VERTICAL_ALIGNMENT_DROPPED",
-  "TEXT_BOX_DROPPED",
-  "TEXT_ALIGNMENT_PER_OBJECT",
-  "COLOUR_OPACITY_IGNORED",
-]);
 
 const MAP_EXT = /\.(ocd|omap|xmap)$/i;
 
@@ -110,6 +87,17 @@ const sum = (o) => Object.values(o).reduce((a, b) => a + b, 0);
 const deg = (v, digits = 3) => (v == null ? "—" : `${v.toFixed(digits)}°`);
 const mb = (bytes) => `${(bytes / 1048576).toFixed(2)} MB`;
 
+/**
+ * The warnings of one class (`classes` is `WARNING_CLASS`) with the report's per-emission detail (code, message, symbol index) behind
+ * each code. `unsupported` fails the run; `source-error` is listed per symbol and does not.
+ */
+function classified(report, classes, wanted) {
+  const details = report.warningDetails ?? [];
+  return report.warnings
+    .filter((w) => classes[w.code] === wanted)
+    .map((w) => ({ ...w, details: details.filter((d) => d.code === w.code).map(({ message, symbolIdx }) => (symbolIdx === undefined ? { message } : { message, symbolIdx })) }));
+}
+
 function histogram(warnings) {
   const h = {};
   for (const w of warnings) h[w.code] = (h[w.code] ?? 0) + w.count;
@@ -141,6 +129,14 @@ function compare(map, prev) {
   return { sameAsPrevious: false, reason: changed.length ? changed.join(", ") : "same inputs, different bytes (determinism failure)" };
 }
 
+/** One line per code, then one indented line per emission the report details (`symbol N  message`). */
+function printWarnings(marker, warnings) {
+  for (const w of warnings) {
+    console.log(`  ${marker} ${w.code} ×${w.count}: ${w.message ?? ""}`);
+    for (const d of w.details) console.log(d.symbolIdx === undefined ? `    ${d.message}` : `    symbol ${d.symbolIdx}  ${d.message}`);
+  }
+}
+
 function printMap(m) {
   console.log(`\n=== ${m.name}  (${m.kind}, ${mb(m.bytes)})`);
   if (m.error) {
@@ -160,7 +156,8 @@ function printMap(m) {
   console.log(`             ${m.matching.library} ${m.matching.edition}, factor ×${m.matching.factor} by ${m.matching.factorMethod}`);
   const hist = Object.entries(m.warnings);
   console.log(`  warnings   ${hist.length ? hist.map(([k, v]) => `${k} ${v}`).join(", ") : "none"}`);
-  for (const w of m.unsupported) console.log(`  ! ${w.code} ×${w.count}: ${w.message ?? ""}`);
+  printWarnings("!", m.unsupported);
+  printWarnings("~", m.sourceErrors);
   const g = m.georeference;
   if (g) {
     const o = g.originWgs84 ? `${g.originWgs84.lat.toFixed(5)}, ${g.originWgs84.lng.toFixed(5)}` : "—";
@@ -191,7 +188,7 @@ async function main() {
   const { importMapToDocument } = await import(join(api, "import", "ocad.ts"));
   const { buildImportReport } = await import(join(api, "map-store", "documents.ts"));
   const { sniffMapKind } = await import(join(api, "map-store", "uploads.ts"));
-  const { mapDocument } = await import(join(api, "..", "..", "shared", "src", "index.ts"));
+  const { mapDocument, mapImport } = await import(join(api, "..", "..", "shared", "src", "index.ts"));
 
   const results = [];
   for (const [name, path] of maps) {
@@ -215,7 +212,8 @@ async function main() {
           sourceVersion: header.source.version,
           counts: report.counts,
           warnings: histogram(report.warnings),
-          unsupported: report.warnings.filter((w) => UNSUPPORTED_PRIMITIVE_CODES.has(w.code)),
+          unsupported: classified(report, mapImport.WARNING_CLASS, "unsupported"),
+          sourceErrors: classified(report, mapImport.WARNING_CLASS, "source-error"),
           matching: {
             library: `${report.matching.library.id}@${report.matching.library.version}`,
             edition: report.matching.edition,

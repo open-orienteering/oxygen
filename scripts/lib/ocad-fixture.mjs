@@ -134,15 +134,15 @@ export function lineSymbol({ symNum, extent, colorIdx, description, lineWidth, c
   return buf;
 }
 
-export function areaSymbol({ symNum, extent, colorIdx, description }) {
+export function areaSymbol({ symNum, extent, colorIdx, description, borderSym = 0, borderOn = false }) {
   const size = BASE_SYMBOL_SIZE + 36;
   const buf = Buffer.alloc(size);
   let o = symbolHeader(buf, { size, symNum, otp: 3, extent, colorIdx, description });
-  o = buf.writeInt32LE(0, o); // borderSym
+  o = buf.writeInt32LE(borderSym, o); // borderSym
   o = buf.writeInt16LE(colorIdx, o); // fillColor
   o += 12; // hatchMode/Color/LineWidth/Dist/Angle1/Angle2
   o = buf.writeUInt8(1, o); // fillOn
-  o = buf.writeUInt8(0, o); // borderOn
+  o = buf.writeUInt8(borderOn ? 1 : 0, o); // borderOn
   return buf;
 }
 
@@ -429,6 +429,37 @@ export function buildSymbolTypesOcad() {
     { sym: t.lineText.symNum, otp: 6, coords: [[-2000, 1000], [0, 1500], [2000, 1000]], text: "Along the path", unicode: 0 },
     { sym: t.rectangle.symNum, otp: 7, coords: box(-3000, -3000, 3000, 2500) },
     { sym: t.gridRectangle.symNum, otp: 7, coords: box(-1500, -2500, 1500, -1500) },
+  ];
+  return assembleOcad({ fileType: 0, strings, symbols, objects });
+}
+
+// ─── Stale-reference fixture (A14, docs/map-import.md §3.3) ──────────────────
+
+/**
+ * An area symbol whose border points at itself — the Club-full shape of a
+ * stale area-border reference (a source data error, `SYMBOL_REFERENCE_INVALID`)
+ * — and one whose border points at a symbol the table lacks, each with one object.
+ */
+export const STALE_BORDER_OCAD = {
+  self: { symNum: 301002, description: "Stale border (itself)" },
+  missing: { symNum: 301003, description: "Stale border (missing)", borderSym: 524000 },
+};
+
+export function buildStaleBorderOcad() {
+  const t = STALE_BORDER_OCAD;
+  const strings = [
+    ...DEFAULT_COLORS,
+    WHITE,
+    { recType: 1039, text: georeferenceString({ gridId: 13002, scale: 4000, easting: 500000, northing: 6500000 }) },
+  ];
+  const symbols = [
+    areaSymbol({ symNum: t.self.symNum, extent: 0, colorIdx: 2, description: t.self.description, borderOn: true, borderSym: t.self.symNum }),
+    areaSymbol({ symNum: t.missing.symNum, extent: 0, colorIdx: 2, description: t.missing.description, borderOn: true, borderSym: t.missing.borderSym }),
+  ];
+  const box = (x0, y0, x1, y1) => [[x0, y0], [x1, y0], [x1, y1], [x0, y1]];
+  const objects = [
+    { sym: t.self.symNum, otp: 3, coords: box(-1000, -1000, 1000, 1000) },
+    { sym: t.missing.symNum, otp: 3, coords: box(2000, -1000, 4000, 1000) },
   ];
   return assembleOcad({ fileType: 0, strings, symbols, objects });
 }

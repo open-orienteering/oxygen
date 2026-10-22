@@ -45,12 +45,13 @@ are cache.
 ```ts
 import { mapImport, mapDocument } from "@oxygen/shared";
 
-const { input, counts, warnings, analysis } = mapImport.ocadToDocumentInput(ocadFile, {
+const { input, counts, warnings, warningDetails, analysis } = mapImport.ocadToDocumentInput(ocadFile, {
   fileName, fileHash, fileBytes,
   importer?: string,                                   // default OCAD_IMPORTER_VERSION
   renderFor?: (symbol) => RenderSymbol | null,         // replaces the §3.3 conversion when given
 });
 // analysis: stage 5 over `input` (§3.8) — bounds, georeference, north; not part of the document
+// warningDetails: one entry per warning emission, for the import report (§3.6); not part of the document
 const matched = mapImport.matchDocument(input, {       // stages 6–7
   library?, edition?, factor?, decisions?,             // overrides; see docs/map-symbols.md §8
 });
@@ -73,7 +74,7 @@ The Mapper path has the same shape with its own reader in front:
 
 ```ts
 const file = mapImport.readOmap(text);                 // stage 3: OmapFile (§4.1)
-const { input, counts, warnings, analysis } = mapImport.omapToDocumentInput(file, {
+const { input, counts, warnings, warningDetails, analysis } = mapImport.omapToDocumentInput(file, {
   fileName, fileHash, fileBytes, importer?,            // default OMAP_IMPORTER_VERSION
 });
 // then matchDocument / encodeMapDocument exactly as above
@@ -89,7 +90,7 @@ it with the OCAD magic check and a BOM skip.
 import { importMapToDocument, importOcadToDocument, importOmapToDocument } from "./import/ocad.js";
 const r = await importMapToDocument(buffer, "map.omap", kind /* "ocad" | "omap" */, { renderFor, onStage, match });
 // importOcadToDocument / importOmapToDocument are the fixed-kind wrappers.
-// r.kind, r.bytes, r.documentHash, r.fileHash, r.counts, r.warnings,
+// r.kind, r.bytes, r.documentHash, r.fileHash, r.counts, r.warnings, r.warningDetails,
 // r.matching, r.colourStack, r.analysis (stage 5, §3.8), r.libraryVersion ("ISOM2017-2@2026.10.2"),
 // r.timings { read, normalise, match, encode } (ms)
 // onStage?: (stage: "parse" | "normalise" | "match" | "encode") => void — called as
@@ -307,7 +308,7 @@ skipped; a glyph with no parts left is dropped.
 | `hatchMode` 1 / 2, `hatchColor`, `hatchLineWidth`, `hatchDist`, `hatchAngle1/2` | `hatches[]` | `spacingUm = hatchDist × 10` is the **pitch** (line to line). Mode 2 adds a second hatch at `hatchAngle2`. |
 | `structMode` 1 / 2, `structWidth/Height/Angle`, `elements` | `patterns[]` | Mode 2 ⇒ `shiftedRows`. `clip` from `structDraw`: 0 `clip`, 1 `completelyInside`, 2 `centreInside`, 3 `partiallyInside`. `structIrregularVarX/Y > 0` ⇒ regular grid + `IRREGULAR_PATTERN_REGULARISED`. |
 | `flags & 1` | `hatches[].rotate`, `patterns[].rotate` | `"manual"` when set, else `"never"`. |
-| `borderOn`, `borderSym` | `border` | The referenced line symbol's body, converted with the same rules (its warnings propagate). A reference that is not a line symbol in the table warns (stale references exist in the corpus: ISSprOM 301.2 → 301002). |
+| `borderOn`, `borderSym` | `border` | The referenced line symbol's body, converted with the same rules (its warnings propagate). A reference that is the area itself, is missing from the table or is not a line symbol is a stale reference — a source data error: no border is drawn, the fill / hatch / pattern stay, and `SYMBOL_REFERENCE_INVALID` names the case (`border symbol 301002 is the symbol itself` / `… is not in the symbol table` / `… is an area symbol, not a line symbol`). The importer does not guess the intended line symbol. Stale references exist in the corpus (Club-full 301.2, 520.3, 522.1, 709.4, 709.6 point at themselves; 307.1 points at the area 301.2). |
 
 **Text symbols** (`type 4`, `type 6` line text) → `{ type: "text", … }`
 
@@ -385,7 +386,8 @@ stage-4 warning):
 | `SYMBOL_COLOUR_UNKNOWN` | A colour number the colour table lacks; that part of the symbol is skipped. |
 | `SYMBOL_EMPTY` | Nothing drawable was left ⇒ `render: null`. |
 | `SYMBOL_TYPE_UNSUPPORTED` | Unknown symbol type, also when the reader dropped it (from its warning list). |
-| `SYMBOL_FEATURE_DROPPED` | Decrease, double-line background colour / unknown mode, framing narrower than the main line, text shadow or rectangle framing / line-below / attached point symbol / vertical alignment, line text drawn as block text, rectangle corner radius / grid, non-line border reference, zero-size hatch or pattern. |
+| `SYMBOL_FEATURE_DROPPED` | Decrease, double-line background colour / unknown mode, framing narrower than the main line, text shadow or rectangle framing / line-below / attached point symbol / vertical alignment, line text drawn as block text, rectangle corner radius / grid, zero-size hatch or pattern — constructs the render IR cannot express. |
+| `SYMBOL_REFERENCE_INVALID` | A symbol-to-symbol reference that does not resolve to a usable definition: an area's border symbol that is the area itself, is missing from the table or is not a line symbol (§3.3 area table); on the OMAP path a combined-symbol part that references itself or a missing symbol (§4.3). A source data error, not an unsupported feature (§7 classification); the message names the symbol and the case. Since `ocad-10` / `omap-4`; earlier importers reported these as `SYMBOL_FEATURE_DROPPED`. |
 | `FONT_SUBSTITUTED` | Font name not metric-compatible with the shipped family. |
 | `IRREGULAR_PATTERN_REGULARISED` | Irregular area pattern drawn as a regular grid. |
 
@@ -401,7 +403,9 @@ stale border references, one too-narrow framing line. Since `ocad-7` (A12,
 decision log 2026-10-20) the corpus's line-framed texts carry a halo, its
 rectangle symbols convert, and what is left is shadow framing, vertical
 alignment, one corner radius, a narrow framing line and the stale border
-references.
+references. Since `ocad-10` (A14) the stale border references are
+`SYMBOL_REFERENCE_INVALID` — six on Club-full, five self-references and 307.1
+pointing at the area 301.2 — and no longer count among the unsupported features.
 
 ### 3.4 Objects
 
@@ -451,7 +455,26 @@ list minus those, in reader order, at most 50
 (`READER_WARNING_TEXTS_MAX`) — are in the import report as
 `readerWarnings`, present only when there are any; the document bytes do
 not depend on them (`ocadToDocumentInput` returns them beside the input).
-`ocad-6` stored the count only. Everything else in the file (view, zoom, bookmarks,
+`ocad-6` stored the count only.
+
+**Per-emission detail.** The header keeps one `{code, count, message}` per
+code, the message being the first one emitted, so Club-full's four
+`SYMBOL_FEATURE_DROPPED` show as one message. Since `ocad-10` / `omap-4`
+both normalisers also return `warningDetails` beside the input, and the
+import report carries it as `warningDetails: {code, message, symbolIdx?}[]`
+(`importWarningDetailSchema`): one entry per warning emission that has a
+message, in emission order, at most 500 (`WARNING_DETAILS_MAX`; every
+emission is still counted in `warnings`), present only when there are any.
+`symbolIdx` is the index in the document's symbol list — the symbol
+conversion's, the duplicate's for `DUPLICATE_SYMBOL_NUMBER`, or the stub's for
+`MISSING_SYMBOL` — and survives stage 6 (the matcher edits symbols in place).
+Unless the cap was reached before the code was first emitted, the first detail
+of each code carries the header's message. Warnings that are counts over many objects
+(`EMPTY_GEOMETRY_DROPPED`, no message) and the stage 6–7 warnings (§3.7, one
+message per code already) have no entries. The list is not part of the
+document: it never reaches the header or the bytes (§6), so a change to it
+alone does not bump the importer version. Reports from before `ocad-10` /
+`omap-4` have none. Everything else in the file (view, zoom, bookmarks,
 symbol icons, course-setting data) is dropped silently per 02 §1.
 
 ### 3.7 Stage 6–7 warnings
@@ -605,8 +628,9 @@ differ from OCAD or that 06 left open:
   line default is not assumed).
 - **Lines**: `start_offset` / `end_offset` shorten the stroke unless the
   cap is `pointed`, in which case Mapper tapers over that length — the
-  IR has no taper so the stroke is drawn butt and full length (noted as
-  `SYMBOL_FEATURE_APPROXIMATED`). Border centre = `line_width/2 + shift`
+  IR has no taper so the stroke is drawn butt and full length (no warning
+  yet: an earlier draft named a `SYMBOL_FEATURE_APPROXIMATED` that no code
+  emits; the taper is row A13's). Border centre = `line_width/2 + shift`
   (Mapper measures `shift` from the main line's edge; the IR from its
   centre); dashed borders carry their own dash. Dash pattern → `layout:
   "omap"` with `dashes_in_group`, `in_group_break_length`,
@@ -634,7 +658,9 @@ differ from OCAD or that 06 left open:
   wider than the result's main with no halo yet → a continuous halo of
   `(w − w_result)/2` (508.x rides, 502.2 wide road); a part that is
   narrower when the result has borders without background → the
-  background band; anything else warns `SYMBOL_FEATURE_DROPPED`. A
+  background band; anything else warns `SYMBOL_FEATURE_DROPPED`. A part
+  that references the combined symbol itself or a symbol id outside the
+  table is a stale reference: `SYMBOL_REFERENCE_INVALID`, the part is skipped. A
   part's own glyphs are appended (511.2); a second dashed main, a
   second fill colour, point or text parts are warned and dropped. Area
   parts merge fills / hatches / patterns; a line part inside an area
@@ -692,13 +718,15 @@ differ from OCAD or that 06 left open:
 `COLOUR_OPACITY_IGNORED`, `HELPER_SYMBOLS_HIDDEN`, `TEXT_BOX_DROPPED`,
 `TEXT_ALIGNMENT_PER_OBJECT`, `TEXT_VERTICAL_ALIGNMENT_DROPPED`,
 `OBJECT_TAGS_DROPPED`, `PARTS_MERGED`, `CRS_UNRESOLVED` (shared with
-OCAD since `ocad-5`, §3.5), `MAP_SCALE_MISSING`, `EMPTY_TEXT_DROPPED`, plus the reader's own
+OCAD since `ocad-5`, §3.5), `MAP_SCALE_MISSING`, `EMPTY_TEXT_DROPPED`,
+`SYMBOL_REFERENCE_INVALID` (combined parts, §4.3; shared with OCAD since
+`ocad-10`, §3.3), plus the reader's own
 (`READER_WARNING` texts for unknown elements, misnumbered symbols,
 non-contiguous priorities). The rest are shared with §3.6–3.7.
 
 ## 5. Header provenance
 
-`format.importer` is `"ocad-9"` for OCAD sources (`OCAD_IMPORTER_VERSION`;
+`format.importer` is `"ocad-10"` for OCAD sources (`OCAD_IMPORTER_VERSION`;
 `ocad-1` had `render: null` for every source symbol, `ocad-2` carried the
 upload name in the header, `ocad-3` had no matcher, `ocad-4` stored
 ScalePar `d` as `declinationDeg`, ignored `e` and had no
@@ -710,9 +738,14 @@ OCAD line framing, rectangle objects as `MISSING_SYMBOL` stubs — and kept
 no reader warning texts, `ocad-7` matched descriptions on the entries'
 English names only — `docs/map-symbols.md` §8.2 row 5, B7 —, `ocad-8` read
 `useSymbolFlags` 1 / 2 as start / end and OCAD 9+ circle diameters as
-outer diameters — §3.3, B9) and `"omap-3"`
+outer diameters — §3.3, B9, `ocad-9` reported a stale area-border
+reference as `SYMBOL_FEATURE_DROPPED` and kept no per-symbol warning detail
+— §3.3, §3.6, A14) and `"omap-4"`
 for Mapper sources (`OMAP_IMPORTER_VERSION`; `omap-1` stored `paperOrigin`
-unrounded, `omap-2` is `ocad-7`'s matcher).
+unrounded, `omap-2` is `ocad-7`'s matcher, `omap-3` reported stale
+combined-part references as `SYMBOL_FEATURE_DROPPED` and kept no
+per-symbol detail). A header `warnings` change alone bumps the
+version — `ocad-6` did — while the report-only `warningDetails` would not.
 Documents of either earlier version have no `georeference` / `north` in
 their report; the dedup only reuses current-version documents, so the
 next import of their source produces both. Bump the relevant one whenever
@@ -746,20 +779,21 @@ document hash is identical on two machines.
 
 | Level | File | Covers |
 |---|---|---|
+| Unit (shared) | `packages/shared/src/import/__tests__/report.test.ts` | `WARNING_CLASS` classifies every code the importers, matcher and CRT parser emit and names none that nothing emits (source scan), the `unsupported` set is exactly the eight codes of §7, `SYMBOL_REFERENCE_INVALID` is a `source-error`; `importReportSchema` accepts / rejects `warningDetails` |
 | Unit (shared) | `packages/shared/src/import/__tests__/xml.test.ts` | the SAX tokenizer: prolog / comments / CDATA / DOCTYPE, entities, attribute quoting, mismatched and unclosed tags, second root, the pruning tree builder |
 | Unit (shared) | `packages/shared/src/import/__tests__/omap-reader.test.ts` | barrier wrapper, both coordinate forms and every flag, symbols of all five types incl. inline sub-symbols, colours with spot components, georeferencing, parts, templates, print, tags, misnumbered symbols |
-| Unit (shared) | `packages/shared/src/import/__tests__/omap-symbols.test.ts` | every §4.3 rule: point glyphs incl. nested points and offset discs, line caps / shortening / pointed taper, borders, dash layouts and mid / dash / start / end placements, width-0 carriers, area hatch and pattern, text framing and fonts, the combined-symbol merge table (509, 508.x, 502.2, 511.2, second dashed, area combinations) |
-| Unit (shared) | `packages/shared/src/import/__tests__/omap-source.test.ts` | the fixture through `omapToDocumentInput`: colour stack order and opacity, y flip and `-0`, every §4.2 flag rule, hole shift, dash-point rule per symbol, text alignment lifting, missing symbols, parts merge, templates, print window, georeferencing (UTM / EPSG / Gauss-Krüger / PROJ.4 / Local / unresolved), codec round trip, every §4.5 warning code |
-| Unit (shared) | `packages/shared/src/import/__tests__/ocad-source.test.ts` | colour stack order, the file version reaching the circle-diameter rule, symbol table, hidden flag, duplicates, graphic objects, missing symbols, rectangle objects resolved to a parsed rectangle symbol, flag mapping, georeferencing (no `declinationDeg` from `d`, `e` fallback, grid table first, `CRS_UNRESOLVED`), print window, warning codes, reader-dropped types vs `READER_WARNING`, `readerWarnings` texts (order, cap of 50), `analysis` returned |
+| Unit (shared) | `packages/shared/src/import/__tests__/omap-symbols.test.ts` | every §4.3 rule: point glyphs incl. nested points and offset discs, line caps / shortening / pointed taper, borders, dash layouts and mid / dash / start / end placements, width-0 carriers, area hatch and pattern, text framing and fonts, the combined-symbol merge table (509, 508.x, 502.2, 511.2, second dashed, area combinations), self and missing combined parts → `SYMBOL_REFERENCE_INVALID` |
+| Unit (shared) | `packages/shared/src/import/__tests__/omap-source.test.ts` | the fixture through `omapToDocumentInput`: colour stack order and opacity, y flip and `-0`, every §4.2 flag rule, hole shift, dash-point rule per symbol, text alignment lifting, missing symbols, `warningDetails` with the stub index, parts merge, templates, print window, georeferencing (UTM / EPSG / Gauss-Krüger / PROJ.4 / Local / unresolved), codec round trip, every §4.5 warning code |
+| Unit (shared) | `packages/shared/src/import/__tests__/ocad-source.test.ts` | colour stack order, the file version reaching the circle-diameter rule, symbol table, hidden flag, duplicates, graphic objects, missing symbols, rectangle objects resolved to a parsed rectangle symbol, flag mapping, georeferencing (no `declinationDeg` from `d`, `e` fallback, grid table first, `CRS_UNRESOLVED`), print window, warning codes, reader-dropped types vs `READER_WARNING`, `readerWarnings` texts (order, cap of 50), `warningDetails` (one entry per emission with the symbol index, stub index for `MISSING_SYMBOL`, first detail = header message, not in the document, cap of 500 with every emission counted), `analysis` returned |
 | Unit (shared) | `packages/shared/src/geo/__tests__/projection.test.ts`, `north.test.ts` | §3.8 maths: EPSG lookup, paper ↔ projected (rotation + correction, grid scale factor, round trip), Mapper's reference point on the `e2e/test.xmap` frame, paper ↔ WGS 84, convergence at Nackareservatet (−2.82°) and on a central meridian, paper-north bearing, extent and calibration corners, `mapFileMetadata`; angle folding and the cluster thresholds |
 | Unit (shared) | `packages/shared/src/import/__tests__/analyse.test.ts` | `601` / `601.x` codes, grouping per symbol, 5 mm floor scaled by `unitsPerMm`, graphic symbols excluded, georeference fields, un-georeferenced and non-projectable CRSs, same result over the decoded document |
-| Unit (shared) | `packages/shared/src/import/__tests__/ocad-symbols.test.ts` | every row of the §3.3 tables: line styles, dashes (507 end gap), framing, double lines, main / secondary / corner / start / end symbols (`useSymbolFlags` 1 = end, 2 = start), point elements (circle diameter by OCAD version), area fill / hatch / pattern / border, text mapping, fonts, text line framing → halo (`frWidth` as half-width, width 0, unknown colour), shadow / rectangle / unknown framing warned, line text with its warning, rectangle → outline line (radius, grid, width 0, unknown colour), warning codes |
+| Unit (shared) | `packages/shared/src/import/__tests__/ocad-symbols.test.ts` | every row of the §3.3 tables: line styles, dashes (507 end gap), framing, double lines, main / secondary / corner / start / end symbols (`useSymbolFlags` 1 = end, 2 = start), point elements (circle diameter by OCAD version), area fill / hatch / pattern / border, text mapping, fonts, text line framing → halo (`frWidth` as half-width, width 0, unknown colour), shadow / rectangle / unknown framing warned, line text with its warning, a border reference that is missing / not a line / the area itself → `SYMBOL_REFERENCE_INVALID` with the fill kept, rectangle → outline line (radius, grid, width 0, unknown colour), warning codes |
 | Unit (shared) | `packages/shared/src/render/__tests__/{dash,placement,symbolise}.test.ts` | OCAD end-gap semantics, `dashGroupCentres` / `sectionCentres`, `backgroundWidthUm`, continuous halo |
 | Unit (shared) | `packages/shared/src/map-document/__tests__/codec.test.ts`, `projection-bridge.test.ts` | encode/decode round trip, Hilbert order, validation errors, truncation, JSON projection, render bridge |
 | Unit (shared) | `packages/shared/src/import/__tests__/{colour-class,fingerprint,matcher,colour-align,match-document}.test.ts` | stages 6–7: CMYK / name classification, fingerprints and tolerances, every matcher stage and the traps (reused numbers, template variants, old numbering), factor detection (lines / codes / scale / override), alignment steps and conflicts, whole-document run with codec round trip and canonical drawing through the bridge |
-| Unit (api) | `packages/api/src/__tests__/import-ocad.test.ts` | reader → document on `e2e/test.ocd`, determinism, bboxes, all fixture symbols converted (the framed 603 text with its white halo, the 850.1 rectangle as an outline), symbolise without proxies, fixture matches (4 auto incl. 603.b, old-numbered ring and the rectangle suggested, factor by `codes`), `readerWarnings` in the report only when non-empty, stack with inserted lower purple, hook renders against the source table; stage 5: grid 13002 → EPSG:3006 with no `declinationDeg`, the same 12-line meridian cluster as the legacy probe, report `georeference` / `north` with WMM fields at `asOf` agreeing with `detectMapNorth`, raster-path and pin columns identical (correction 0 and 11) |
-| Unit (api) | `packages/api/src/__tests__/import-omap.test.ts` | reader → document on `e2e/test.xmap`: determinism across `importOmapToDocument` / `importMapToDocument`, provenance (`omap-3`, version 9, UTM 33N), bboxes, all 21 fixture symbols rendered, symbolise with the dangling symbol as the only drop, factor ×1, import report, kind sniff with BOM, the two kinds kept apart |
-| Unit + integration (api) | `map-import-jobs.test.ts` (both) | worker runs a Mapper file by kind with the same hashes as inline; a Mapper source goes through the job to a `done` row with `importer_version omap-3` and is deduplicated on the second job; garbage of either kind fails cleanly; the pin writes the quick-access columns equal to the raster path's, recomputes them with a row's `rotation_correction` idempotently, and leaves them alone for a document without a CRS |
+| Unit (api) | `packages/api/src/__tests__/import-ocad.test.ts` | reader → document on `e2e/test.ocd`, determinism, bboxes, all fixture symbols converted (the framed 603 text with its white halo, the 850.1 rectangle as an outline), symbolise without proxies, fixture matches (4 auto incl. 603.b, old-numbered ring and the rectangle suggested, factor by `codes`), `readerWarnings` and `warningDetails` in the report only when non-empty, stack with inserted lower purple, hook renders against the source table; stage 5: grid 13002 → EPSG:3006 with no `declinationDeg`, the same 12-line meridian cluster as the legacy probe, report `georeference` / `north` with WMM fields at `asOf` agreeing with `detectMapNorth`, raster-path and pin columns identical (correction 0 and 11) |
+| Unit (api) | `packages/api/src/__tests__/import-omap.test.ts` | reader → document on `e2e/test.xmap`: determinism across `importOmapToDocument` / `importMapToDocument`, provenance (`omap-4`, version 9, UTM 33N), `warningDetails` in the report (the `MISSING_SYMBOL` stub with its index, the dropped templates), bboxes, all 21 fixture symbols rendered, symbolise with the dangling symbol as the only drop, factor ×1, import report, kind sniff with BOM, the two kinds kept apart |
+| Unit + integration (api) | `map-import-jobs.test.ts` (both) | worker runs a Mapper file by kind with the same hashes as inline; a Mapper source goes through the job to a `done` row with `importer_version omap-4` and a stored report carrying `warningDetails`, and is deduplicated on the second job; garbage of either kind fails cleanly; the pin writes the quick-access columns equal to the raster path's, recomputes them with a row's `rotation_correction` idempotently, and leaves them alone for a document without a CRS |
 | Unit (api, unchanged) | `map-north.test.ts`, `map-projection-correction.test.ts`, `map-coordinate-transfer.test.ts`, `course-import-align.test.ts` | the legacy modules as adapters over `mapGeo` keep their behaviour |
 | E2E | `e2e/map-gl-doc.spec.ts` | document path = reader path in the browser, native `.oxvm` round trip, `mode=source` draws the fixture from its own definitions with no proxies; `e2e/test.xmap` loads client-side with no OCAD reader, draws, and surfaces the OMAP warning codes |
 | Unit (shared) | `packages/shared/src/import/__tests__/decisions.test.ts` | club decisions and review rows (`docs/map-symbols.md` §8.5), stage 6 with decisions: other library ignored, older release applied |
@@ -768,9 +802,9 @@ document hash is identical on two machines.
 | Unit + integration (api) | `map-crt.test.ts`, `integration/map-crt.test.ts` (see `docs/map-storage.md` §10) | `exportCrt` / `importCrt`: file name, plan on the fixture, decide's cap, the procedures end to end |
 | Unit + integration + E2E (api, web) | see `docs/map-storage.md` §10 | stages 1 and 9: chunked upload route, import jobs, store, dedup, pins, report row, delivery route |
 | Unit + integration + E2E (api) | see `docs/map-storage.md` §10 (previews rows) | stage 10: thumbnail row written by the job and by the dedup short-cut, non-fatal failure, object cap |
-| Script (scripts) | `scripts/__tests__/ocad-fixture.test.mjs` (`pnpm test:scripts`) | the OCAD fixture writer: `e2e/test.ocd` byte-identical on regeneration, its framed text and rectangle read back by the reader; the symbol-types file (`buildSymbolTypesOcad`, also the fork's `test/data/symbol-types.ocd`) read back field by field — text framing, line text, rectangles with radius and grid |
+| Script (scripts) | `scripts/__tests__/ocad-fixture.test.mjs` (`pnpm test:scripts`) | the OCAD fixture writer: `e2e/test.ocd` byte-identical on regeneration, its framed text and rectangle read back by the reader; the symbol-types file (`buildSymbolTypesOcad`, also the fork's `test/data/symbol-types.ocd`) read back field by field — text framing, line text, rectangles with radius and grid; the stale-border file (`buildStaleBorderOcad`: an area whose border is itself, one whose border is missing) read back |
 | Reader (fork) | `open-orienteering/ocad2geojson` `test/reader.test.js`, `test/svg.test.js` (`npm test`) | text framing on the real `fences.ocd` (902.1: mode 2, colour 12, width 10) and every new field on `symbol-types.ocd`; `ocadToSvg` reads but does not draw line-text and rectangle objects |
-| Script (scripts) | `scripts/__tests__/measure-import.test.mjs` (`pnpm test:scripts`) | `scripts/measure-import.mjs` over the two fixtures: hashes written and found again in a second process, a changed hash fails as a determinism failure, the Mapper fixture's three unsupported-primitive codes fail the run, usage errors exit 2 |
+| Script (scripts) | `scripts/__tests__/measure-import.test.mjs` (`pnpm test:scripts`) | `scripts/measure-import.mjs` over the two fixtures: hashes written and found again in a second process, a changed hash fails as a determinism failure, the Mapper fixture's four unsupported-primitive codes fail the run and print their per-emission detail, a stale area-border reference is reported per symbol (`~`) without failing the run, usage errors exit 2 |
 
 **S0 corpus check** (09 §7: the whole corpus and every OMAP construct in
 the sample set, deterministically). `scripts/measure-import.mjs` runs
@@ -780,13 +814,26 @@ import worker's path (`importMapToDocument` with no decisions, then
 `format.importer`, library version, counts, the warning-code histogram,
 symbol and object matching outcomes and the report's `georeference` /
 `north` fields (§3.8). It exits non-zero on an import error, on any
-*unsupported-primitive* warning — `SYMBOL_TYPE_UNSUPPORTED`,
-`SYMBOL_FEATURE_DROPPED`, `UNKNOWN_OBJECT_TYPE`,
-`IRREGULAR_PATTERN_REGULARISED`, `TEXT_VERTICAL_ALIGNMENT_DROPPED`,
-`TEXT_BOX_DROPPED`, `TEXT_ALIGNMENT_PER_OBJECT`, `COLOUR_OPACITY_IGNORED`: a source construct the
-document drops or approximates; by-design drops, source data errors,
-font substitution and matching outcomes are only reported — and, with
-`--previous`, on any document hash that differs from that run's.
+*unsupported-primitive* warning — a source construct the document drops or
+approximates — and, with `--previous`, on any document hash that differs
+from that run's. Which codes those are is the classification below
+(`mapImport.WARNING_CLASS` in `packages/shared/src/import/report.ts`; the
+script reads it, so the table, the gate and `report.test.ts` cannot drift).
+Source data errors are reported, listed per symbol from the report's
+`warningDetails` (`~` lines, with the symbol index), and do not fail the
+run; the unsupported ones are listed the same way (`!` lines).
+
+| Class | Codes | Meaning |
+|---|---|---|
+| `unsupported` | `SYMBOL_TYPE_UNSUPPORTED`, `SYMBOL_FEATURE_DROPPED`, `UNKNOWN_OBJECT_TYPE`, `IRREGULAR_PATTERN_REGULARISED`, `TEXT_VERTICAL_ALIGNMENT_DROPPED`, `TEXT_BOX_DROPPED`, `TEXT_ALIGNMENT_PER_OBJECT`, `COLOUR_OPACITY_IGNORED` | a source construct the document cannot represent (the gate) |
+| `by-design` | `TEMPLATES_DROPPED`, `LAYOUT_OBJECTS_DROPPED`, `OBJECT_TAGS_DROPPED`, `PARTS_MERGED`, `HELPER_SYMBOLS_HIDDEN` | dropped on purpose |
+| `source-error` | `SYMBOL_REFERENCE_INVALID`, `MISSING_SYMBOL`, `DUPLICATE_SYMBOL_NUMBER`, `SYMBOL_COLOUR_UNKNOWN`, `SYMBOL_EMPTY`, `EMPTY_GEOMETRY_DROPPED`, `EMPTY_TEXT_DROPPED`, `MAP_SCALE_MISSING`, `CRS_UNRESOLVED` | the file is inconsistent; nothing is missing from the document that the file defines |
+| `substitution` | `FONT_SUBSTITUTED` | a font was replaced |
+| `outcome` | `SYMBOL_UNMATCHED`, `SYMBOL_SCALE_ANOMALY`, `DECISION_UNKNOWN_ENTRY`, `COLOUR_ORDER_CONFLICT`, `COLOUR_UNCLASSIFIED`, the `CRT_*` codes | a matching, colour-stack, decision or CRT result |
+| `reader` | `READER_WARNING` | reader noise (texts in `readerWarnings`) |
+
+A new warning code gets a row in this table and an entry in `WARNING_CLASS`
+in the same change; `report.test.ts` fails otherwise.
 
 ```bash
 node scripts/measure-import.mjs .local/corpus <omap-dir> --out .local/s0/run.json --hashes .local/s0/hashes.json
@@ -802,7 +849,7 @@ maps nor the JSON files are committed (AGENTS.md §12); keep them under
 
 **Against production.** The same comparison works against what Cloud
 Run produced from the same files, once the instance runs the same
-importer and library versions (`ocad-9` / `omap-3`,
+importer and library versions (`ocad-10` / `omap-4`,
 `*@<SYMBOL_LIBRARY_VERSION>`) and only for documents imported without
 club decisions (stage 6 applies them, so a reviewed map has a different,
 equally correct hash). Either list the stored documents:
@@ -825,7 +872,9 @@ the five OCAD corpus maps and the three OOM sample `.omap` files is in
 the research decision log ("S0 corpus check"): deterministic, zero
 import errors, 48 unsupported-primitive warnings. The `ocad-7` re-run
 (decision log, "A12") has 36, none of them a text line framing or an
-unparsed symbol type.
+unparsed symbol type. The `ocad-10` / `omap-4` run (A14) has 30: the six
+stale area-border references moved to `SYMBOL_REFERENCE_INVALID`
+(Club-full 10 → 4 unsupported); the 30 left are rows A13 and B8.
 
 ## 8. Pending in this chapter
 
@@ -834,9 +883,7 @@ B1 added (text shadow, vertical text alignment, pointed-line taper,
 rectangle corner radius, a framing line narrower than its main line,
 Mapper's extra border pair — row A13), text rectangle framing, text boxes
 and line text laid along its path (row B8; user decision 2026-10-20 —
-the rectangle *grid* is a by-design drop, not pending), and a warning
-code that separates a stale area-border reference from an unsupported
-feature (row A14) — all in `research/vector-map-pipeline/SLICES.md`; the S0 hash comparison on a
+the rectangle *grid* is a by-design drop, not pending) — all in `research/vector-map-pipeline/SLICES.md`; the S0 hash comparison on a
 second machine (re-run on `ocad-7`). The line-text struct (§3.3) is
 *provisional* until a real OCAD file with line text is seen. S2 confirmation of the *provisional* §3.3 rows against OCAD output,
 event / club map *apply* for Mapper sources (needs slice C, §2.2), stage 5 fonts used (fallback decisions)

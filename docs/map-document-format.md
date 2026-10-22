@@ -169,7 +169,12 @@ geometry.
 ### 2.6 Warning codes
 
 Stable identifiers (06 §4.4); the UI translates them, tests assert on
-them.
+them. The header keeps one `{code, count, message}` per code, the message
+being the first emitted; the per-symbol messages behind a code are in the
+import report's `warningDetails`, not in the document (`docs/map-import.md`
+§3.6). What each code means for the import — unsupported construct, by-design
+drop, source data error, … — is the classification in `docs/map-import.md` §7
+(`WARNING_CLASS`); it is a property of the code, not stored per entry.
 
 | Code | Meaning |
 |---|---|
@@ -179,6 +184,7 @@ them.
 | `DUPLICATE_SYMBOL_NUMBER` | The same number is defined twice; objects use the first |
 | `EMPTY_GEOMETRY_DROPPED` | Objects with no coordinates were dropped |
 | `UNKNOWN_OBJECT_TYPE` | Object type outside 1–7, dropped |
+| `SYMBOL_REFERENCE_INVALID` | A symbol refers to another symbol that does not resolve to a usable definition — an OCAD area's border symbol that is the area itself, missing or not a line; a Mapper combined part that references itself or a missing symbol. A source data error: the reference is skipped, the rest of the symbol is kept. The message names the symbol and the case (`docs/map-import.md` §3.3). Since `ocad-10` / `omap-4`; earlier documents carry these as `SYMBOL_FEATURE_DROPPED` |
 | `READER_WARNING` | The source reader reported warnings (count; since `ocad-7` the OCAD texts are in the import report as `readerWarnings`, at most 50 — `docs/map-import.md` §3.6). Since `ocad-6` the reader's dropped symbol types are `SYMBOL_TYPE_UNSUPPORTED` instead |
 | `CRS_UNRESOLVED` | The source declares a real-world grid that maps to no EPSG code (OCAD grid id not in the reader's table and no `e`; Mapper CRS spec not parsed); `crs` and `paperOrigin` are null, the message names the grid |
 

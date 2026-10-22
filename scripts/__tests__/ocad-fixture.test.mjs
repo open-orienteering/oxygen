@@ -7,6 +7,8 @@ import { fileURLToPath } from "node:url";
 import {
   buildE2eTestOcad,
   buildSymbolTypesOcad,
+  buildStaleBorderOcad,
+  STALE_BORDER_OCAD,
   SYMBOL_TYPES_OCAD,
   E2E_TEXT_SYMBOLS,
   buildShowcaseOcad,
@@ -30,6 +32,18 @@ describe("OCAD fixtures", () => {
     const generated = buildE2eTestOcad();
     assert.equal(generated.length, committed.length);
     assert.ok(committed.equals(generated), "generated e2e/test.ocd must match the committed file");
+  });
+
+  it("builds the stale-border fixture: the reader sees a border symbol that is the area itself, and one that is missing", async () => {
+    const { readOcad } = require("ocad2geojson");
+    const file = await readOcad(buildStaleBorderOcad(), { quietWarnings: true });
+    const bySym = new Map(file.symbols.map((s) => [s.symNum, s]));
+    const self = bySym.get(STALE_BORDER_OCAD.self.symNum);
+    assert.equal(self.borderOn, true);
+    assert.equal(self.borderSym, STALE_BORDER_OCAD.self.symNum);
+    const missing = bySym.get(STALE_BORDER_OCAD.missing.symNum);
+    assert.equal(missing.borderSym, STALE_BORDER_OCAD.missing.borderSym);
+    assert.equal(bySym.has(STALE_BORDER_OCAD.missing.borderSym), false);
   });
 
   it("builds a small synthetic showcase map with the demo CRS", async () => {

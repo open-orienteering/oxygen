@@ -33,6 +33,8 @@ export interface MapImportResult {
   warnings: mapImport.OcadSourceResult["warnings"];
   /** OCAD only: the reader's warning texts behind `READER_WARNING` (docs/map-import.md §3.6); empty for OMAP sources. */
   readerWarnings: string[];
+  /** Per-emission warning detail from the normaliser (docs/map-import.md §3.6); for the import report, not the document. */
+  warningDetails: mapImport.ImportWarningDetail[];
   /** Which reader produced the document. */
   kind: MapSourceKind;
   /** Stage 6–7 summaries (docs/map-symbols.md §9). */
@@ -129,6 +131,7 @@ export async function importMapToDocument(
     counts,
     warnings: [...warnings, ...matched.warnings.map((w) => ({ code: w.code, count: w.count, message: w.message }))],
     readerWarnings: "readerWarnings" in source ? source.readerWarnings : [],
+    warningDetails: source.warningDetails,
     matching: matched.matching,
     colourStack: matched.colourStack,
     analysis,

@@ -153,6 +153,18 @@ describe("stage 5 on the OCAD fixture (docs/map-import.md §3.5, §3.8)", () => 
     expect(report.readerWarnings).toEqual(["Unexpected end of object index"]);
   });
 
+  it("keeps the per-emission warning detail in the import report only, and only when there is any (docs/map-import.md §3.6)", async () => {
+    const r = await importOcadToDocument(fixture, "test.ocd");
+    const header = mapDocument.readMapDocumentHeader(r.bytes).header;
+    expect(r.warningDetails).toEqual([]);
+    expect(buildImportReport(r, header, "test.ocd")).not.toHaveProperty("warningDetails");
+    const detail = { code: "SYMBOL_REFERENCE_INVALID", message: "301.2: border symbol 301002 is the symbol itself", symbolIdx: 3 };
+    const report = buildImportReport({ ...r, warningDetails: [detail] }, header, "test.ocd");
+    expect(report.warningDetails).toEqual([detail]);
+    // The header, and so the document identity, never carries it.
+    expect(JSON.stringify(header)).not.toContain("symbolIdx");
+  });
+
   it("reports georeference and north, with the WMM fields evaluated at the report date", async () => {
     const r = await importOcadToDocument(fixture, "test.ocd");
     const asOf = new Date("2026-10-19T00:00:00Z");

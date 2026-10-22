@@ -396,12 +396,12 @@ class Converter {
       let part: OmapSymbol | undefined;
       if ("ref" in p) {
         if (this.stack.has(p.ref)) {
-          this.warn("SYMBOL_FEATURE_DROPPED", `${this.label}: combined symbol references itself`);
+          this.warn("SYMBOL_REFERENCE_INVALID", `${this.label}: combined symbol references itself`);
           continue;
         }
         part = this.ctx.symbolById(p.ref);
         if (!part) {
-          this.warn("SYMBOL_FEATURE_DROPPED", `${this.label}: combined part references missing symbol ${p.ref}`);
+          this.warn("SYMBOL_REFERENCE_INVALID", `${this.label}: combined part references missing symbol ${p.ref}`);
           continue;
         }
         this.stack.add(p.ref);

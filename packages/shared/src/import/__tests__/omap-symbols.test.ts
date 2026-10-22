@@ -218,6 +218,7 @@ describe("omapSymbolToRender", () => {
         "bad: combined part references missing symbol 99",
         "bad: combined symbol draws nothing",
       ]);
+      expect(r.warnings.map((w) => w.code)).toEqual(["SYMBOL_REFERENCE_INVALID", "SYMBOL_REFERENCE_INVALID", "SYMBOL_EMPTY"]);
     });
 
     it("kind and governing line follow the parts", () => {

@@ -222,11 +222,40 @@ describe("ocadSymbolToRender — area", () => {
     table.set(999000, { symNum: 999000, number: "999.0", type: 1 });
     const bordered = ocadSymbolToRender(area({ fillOn: true, fillColor: 7, borderOn: true, borderSym: 524000 }), ctx);
     expect(bordered.render).toMatchObject({ type: "area", fill: 3, border: { main: { colour: 2, widthUm: 180, cap: "round" } } });
+    expect(bordered.warnings).toEqual([]);
+  });
+
+  // A stale border reference is a source data error (SYMBOL_REFERENCE_INVALID), not an unsupported feature:
+  // the fill stays, no border is drawn, and the message names the case.
+  it("reports a border reference to a non-line symbol as SYMBOL_REFERENCE_INVALID, fill kept", () => {
+    table.set(999000, { symNum: 999000, number: "999.0", type: 1 });
     const notLine = ocadSymbolToRender(area({ fillOn: true, fillColor: 7, borderOn: true, borderSym: 999000 }), ctx);
-    expect(codes(notLine.warnings)).toEqual(["SYMBOL_FEATURE_DROPPED"]);
+    expect(notLine.warnings).toEqual([{ code: "SYMBOL_REFERENCE_INVALID", message: "403.0: border symbol 999000 is a point symbol, not a line symbol" }]);
+    expect(notLine.render).toMatchObject({ type: "area", fill: 3 });
+    expect((notLine.render as { border?: unknown }).border).toBeUndefined();
+  });
+
+  it("reports a border reference to a symbol missing from the table", () => {
     const missing = ocadSymbolToRender(area({ fillOn: true, fillColor: 7, borderOn: true, borderSym: 123 }), ctx);
-    expect(codes(missing.warnings)).toEqual(["SYMBOL_FEATURE_DROPPED"]);
+    expect(missing.warnings).toEqual([{ code: "SYMBOL_REFERENCE_INVALID", message: "403.0: border symbol 123 is not in the symbol table" }]);
     expect(missing.render).toMatchObject({ type: "area", fill: 3 });
+  });
+
+  it("reports an area whose border points at itself, whether or not the table holds it", () => {
+    const self = area({ fillOn: true, fillColor: 7, borderOn: true, borderSym: 403000 });
+    const expected = [{ code: "SYMBOL_REFERENCE_INVALID", message: "403.0: border symbol 403000 is the symbol itself" }];
+    expect(ocadSymbolToRender(self, ctx).warnings).toEqual(expected);
+    table.set(403000, self);
+    const inTable = ocadSymbolToRender(self, ctx);
+    table.delete(403000);
+    expect(inTable.warnings).toEqual(expected);
+    expect(inTable.render).toMatchObject({ type: "area", fill: 3 });
+  });
+
+  it("keeps SYMBOL_EMPTY when a stale border was the only thing the area drew", () => {
+    const r = ocadSymbolToRender(area({ fillOn: false, borderOn: true, borderSym: 403000 }), ctx);
+    expect(r.render).toBeNull();
+    expect(codes(r.warnings)).toEqual(["SYMBOL_REFERENCE_INVALID", "SYMBOL_EMPTY"]);
   });
 
   it("is null when fill is off and nothing else is drawn", () => {
