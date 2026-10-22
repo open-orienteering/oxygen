@@ -1047,6 +1047,7 @@ export const courseRouter = router({
         rotationCorrection: true,
         northDetection: true,
         documentHash: true,
+        clubMapVersionId: true,
       },
     });
     if (!row) return null;
@@ -1185,6 +1186,8 @@ export const courseRouter = router({
       uploadedAt: row.uploadedAt.getTime(),
       /** Content hash of the pinned map document (`/api/map-documents/:hash`); null before the backfill. */
       documentHash: row.documentHash,
+      /** The pinned club map version, null for an event's own upload; the viewer's GPU budget follows it (docs/map-rendering.md §5.4). */
+      clubMapVersionId: row.clubMapVersionId,
       cutRotationDeg: cutRotationDeg(
         northOffset,
         (northDetection as { meridian?: { medianTiltDeg?: number } } | null)

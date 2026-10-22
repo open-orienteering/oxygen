@@ -334,6 +334,9 @@ describe("club library on the series (§6.5)", () => {
     const version = await ctx.db.clubMapVersion.findFirstOrThrow({ where: { clubMapId }, select: { id: true } });
     const file = await ctx.db.mapFile.findFirstOrThrow({ where: { eventId: ctx.eventId }, select: { clubMapVersionId: true, documentHash: true, fromClubLibrary: true } });
     expect(file).toEqual({ clubMapVersionId: version.id, documentHash, fromClubLibrary: true });
+    // The viewer picks the club budget from this (docs/map-rendering.md §5.4 "Budget").
+    const meta = await caller.course.mapMetadata();
+    expect(meta?.clubMapVersionId).toBe(version.id);
   }, 60_000);
 
   it("rename, colour and rotation land on the series and are written through to the legacy row", async () => {

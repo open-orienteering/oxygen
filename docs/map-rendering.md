@@ -596,9 +596,9 @@ renderer.ts    arena programs + visible-set draw loop;            WebGL2
 ```
 
 Status: B2 — strips, arenas, buckets, visible set, mesh atlas, worker,
-screen-only LOD. Not yet: MSDF text (B3; text is drawn from outline
-meshes in the atlas until then), the viewer (B4), `WEBGL_multi_draw`
-(§8). The per-pass path (`setStream` / `render`: one draw per pass,
+screen-only LOD; B4 — the viewer drives it (§5.4). Not yet: MSDF text
+(B3; text is drawn from outline meshes in the atlas until then),
+`WEBGL_multi_draw` (§8). The per-pass path (`setStream` / `render`: one draw per pass,
 stencil fills) is kept unchanged as the backend's golden path
 (`MapGlFixturePage`, §6.2) and as the reference the arena path is
 compared with (`compare=1`, below). The S1 batch path (`batch.ts`,
@@ -1019,6 +1019,182 @@ published on `window.__mapGlDoc` for Playwright.
 | `e2e/map-gl-doc.spec.ts` | the arena path through the real worker on `e2e/test.ocd` (pilot, envelope): buckets, complete frame, ≤ 300 draws on every bench frame of both scenarios; worker = inline; a 0.05 MB budget evicts, reports over budget and still draws; **arena = per-pass golden path within 0.5 % pixels** (envelope and source on the canvas, envelope into an offscreen framebuffer target); document vs reader path, native `.oxvm`, source mode, `.xmap`, decode error |
 | `e2e/map-gl-golden.spec.ts` | unchanged: the per-pass path against the reference raster |
 
+### 5.4 Viewer
+
+`MapViewer` hosts one base layer — the PNG tiles (`TileLayer`, legacy) or
+the map document drawn by §5.2's arena path (`VectorMapLayer`) — and keeps
+everything else it had: gestures, measure, compass and rotation lock, GPS,
+the course overlay, the editor's hit targets. The overlay (controls, legs,
+course geometry, GPS position and tracks, measure, selection) stays React
+SVG on top of the base layer in slice B (09 §4 B); it becomes document
+objects drawn by the renderer in slice C. `TileLayer.tsx` is unchanged.
+
+#### Selecting the layer (until B5)
+
+```
+pipeline = flag == "vector" ∧ documentHash ≠ null ? "vector" : "legacy"
+flag     = localStorage["oxygen-map-pipeline"] == "vector" ? "vector" : "legacy"
+```
+
+`documentHash` is `course.mapMetadata.documentHash` (the event's pinned
+document, `docs/map-storage.md` §6.4), passed by `MapPanel`. The flag is
+per browser, defaults to `legacy`, and is read through
+`useMapPipelineFlag()` (`lib/feature-flags.ts`, re-renders on a
+cross-tab `storage` event). A map without a pinned document (before the
+backfill, §6.7 of `map-storage.md`) stays on tiles whatever the flag. B5
+replaces the flag with `events.map_pipeline` and deletes the key; the
+`resolveMapPipeline(flag, documentHash)` rule keeps its shape with the
+column in place of the flag. The viewer exposes the result as
+`data-map-pipeline` on `map-viewer`.
+
+#### Viewport
+
+`lib/map-viewport.ts` holds one viewport model with two
+implementations, so `MapViewer`'s gestures, fits and overlay code call the
+same operations for either layer:
+
+| | `mercator` (tiles) | `paper` (vector) |
+|---|---|---|
+| State | `centerLat`, `centerLng`, fractional slippy-map `zoom` | `centreX`, `centreY` in paper µm (y-up), `pxPerUm` (CSS px per µm) |
+| Map mm ↔ inner px | through the calibration affine and Web Mercator (as before B4) | `x = w/2 + (1000·mmX − centreX)·pxPerUm`, `y = h/2 − (1000·mmY − centreY)·pxPerUm` |
+| WGS 84 ↔ inner px | Web Mercator | `mapGeo.wgs84ToPaper` / `paperToWgs84` on the document's paper frame, then the row above |
+| Zoom limits | 1 … 22 | 0.05 … 100 CSS px per paper mm |
+| Fit | WGS 84 bounds (`mapBounds`) | `header.bounds` in paper mm (`boundsMm`) |
+
+"Inner px" is `MapViewer`'s rotated inner frame (size
+`rotatedBoundingBox(container, rotation)`, centred on the container). The
+operations are `geoToInner`, `innerToGeo`, `mmToInner`, `innerToMm`,
+`zoomAt(vp, ctx, anchor, Δlog2, target)` (the point under the anchor moves
+to the target: wheel = same point, pinch = the fingers' midpoint),
+`panBy`, `centreOnGeo` (GPS follow), `centreShiftPx` (the measure tap's
+drift test), `fitMm` / `fitGeo`, `pxPerMapMm` (the overlay's symbol
+scale), `metresPerPx` (scale bar, GPS accuracy ring) and
+`mercatorEquivalentZoom`; in the paper view distances (scale bar,
+measure, GPS accuracy ring, `data-zoom`) use the frame's `header.mapScale`,
+the scale its transform uses. The paper view starts from `fitMm(boundsMm(header),
+container, 5 % padding)` — the legacy fit's padding; fits to controls take
+the controls' own paper mm plus the 2.5 mm ring, focus on one control the
+legacy one-sixth extent around it.
+
+**One transform (10 §6 point 3).** In the paper view, map mm are paper mm
+(× 1000 = µm), and every WGS 84 input — the GPS position and its
+accuracy ring, `gpsRoutes`, controls known only by lat/lng, GPS follow,
+the `data-center-*` attributes — goes through `mapGeo` and nothing else.
+The calibration affine is not used: it stays the tiles' transform.
+`gpsRoutes` are converted to paper mm once per route set (`useMemo`), so
+a pan or zoom scales them without calling proj4. The paper frame is
+`paperFrameOf(header, rotationCorrection)`: `unitsPerMm`, `mapScale`,
+`georeferencing` from the header, `correctionDeg` from
+`map_files.rotation_correction` (`mapMetadata.rotationCorrection`). A
+document without a usable CRS still draws; the geo inputs are then
+omitted (no GPS marker, no tracks, no `data-center-*`).
+
+**Rotation.** The inner frame's clockwise CSS angle is
+
+```
+mercator:  −northOffset + userBearing
+paper:     −(northOffset − cutRotationDeg) + userBearing     (0 tilt when either is null)
+```
+
+`northOffset` is the display bearing (paper +Y from true north plus the
+drawn meridians' tilt, `mapGeo.mapFileMetadata`) and `cutRotationDeg` its
+paper-north part, so their difference is the meridian tilt from paper +Y.
+Over tiles the base is true-north-up and `−northOffset` turns the map's
+display-up to screen-up; the paper view is already paper-north-up, so
+only the tilt is undone. Both put the drawn meridians vertical — the same
+picture. The user's two-finger bearing adds on top, as before.
+
+#### Layer
+
+`VectorMapLayer` (`components/VectorMapLayer.tsx`) draws into a canvas the
+size of the container's content box, **not rotated**: the rotation is in
+the GL view. `glView(paperView, containerW, containerH, dpr, rotDeg)` is
+the §5.2 `ViewRect` — the same centre, `pxPerUm · dpr`, the container at
+device pixels, `rotationDeg = −rotDeg` (the view matrix is
+counter-clockwise). Canvas and inner frame share their centre, so the
+overlay's `mmToInner` composed with the CSS rotation and the canvas's view
+matrix agree to < 0.5 CSS px at every point, rotation and DPR included
+(unit test). Nothing is resampled at any angle.
+
+Lifecycle: on mount the layer creates the `MapGlRenderer` and the engine
+over `workerTransport()` with the budget, then loads the fonts
+(`lib/map-fonts.ts`, the two Liberation faces of §4.10, fetched once per
+session) and calls `engine.load` with the document bytes (a copy: the
+original stays with the cache), `{ unmatched: "proxy", proxyColours }`
+(the stack's darkest colour for lines, points and text, its lightest
+non-white for areas) and the current view as `firstView`. Every view
+change and every `engine.onChange` asks for one redraw on the next
+animation frame (`setView` then `render`; a canvas resize happens in the
+same frame). Colours are the document's stack, `render.cmykToHex` of
+each `header.colours[i].cmyk`. Unmount disposes the engine (terminating
+the worker) and the renderer.
+
+The canvas carries `data-testid="map-vector-layer"`,
+`data-document-hash`, `data-status` (`loading` → `drawn` → `complete`;
+`error`, `webgl`) and `data-ready="true"` once the first view's detail is
+resident (`engine.whenComplete()`). A failed load shows a message with
+*Try again*; a browser without WebGL2 shows "cannot draw the map" (the
+fallback policy is B5's, below).
+
+**Budget** by the document's provenance (§5.2 "Arena and buckets"):
+`course.mapMetadata.clubMapVersionId` (additive, the event's
+`map_files.club_map_version_id`, null for an event's own upload; user
+decision 2026-10-22) set → `mapBudget="club"`, 150 MB
+(`CLUB_BUDGET_BYTES`); null → `"event"`, 30 MB (`EVENT_BUDGET_BYTES`).
+`MapPanel` maps the one to the other; `MapViewer` defaults to `"event"`.
+
+#### Host
+
+In the paper view `MapViewer`:
+
+- fetches the document through `useMapDocument(hash, nameId)` (delivery:
+  `docs/map-storage.md` §7.1) and shows *Loading map…* until the header
+  is there, or the error with *Try again* (offline and not cached,
+  no access, not found, unreadable);
+- does not need `mapBounds` (a map without a CRS has none);
+- mounts no `TileLayer`, polls no `/api/map-tile-progress`, and shows no
+  editor loupe (`MapLoupe` magnifies tiles; the editor moves to the
+  document in slice D);
+- has no ink split: the tiles draw the map in two halves so lower purple
+  sits under black, brown and blue line art; the vector layer is one
+  canvas under the overlay, so the overlay's purple is drawn above the
+  whole map (09 §4 B; the stacking returns with the course layer as
+  objects in slice C);
+- exposes `data-centre-x`, `data-centre-y` (µm), `data-px-per-um` and
+  `data-rotation` on `map-viewer`, and keeps `data-center-lat` /
+  `data-center-lng` (the view centre through `paperToWgs84`) and
+  `data-zoom` (the Web Mercator zoom with the same ground resolution at
+  the centre) with their legacy meaning, so specs written against tiles
+  read the same numbers.
+
+#### Call sites
+
+Every 09 §1 call site reaches the base layer through `MapPanel` →
+`MapViewer`; the only direct `<MapViewer>` mount is `MapPanel`. None
+changes for B4.
+
+| Call site | Path |
+|---|---|
+| `CompetitionShell` persistent pane | `MapPane` → shell-owned `MapPanel` |
+| `KioskPage` | `MapPanel` (kiosk key from `?k=` → `x-kiosk-key`) |
+| `CardReadout` + `CardMapPreview` | `MapSlot` → `MapPanel` |
+| `RunnerMapPreview` (results, start list, runners) | `MapSlot` → `MapPanel` |
+| `CompetitionDashboard` | `MapSlot` → `MapPanel` |
+| `TracksPage` (GPS routes) | `MapSlot` → `MapPanel`; tracks through `mapGeo` |
+| `TracksPage` replay (`ReplayViewer` → `ReplayMapLayer`) | **not `MapViewer`**: its own 2D canvas over tiles; stays on tiles in B4 (user decision 2026-10-22) — row B11 |
+| `CourseEditorPage` | `MapPanel` with `editor` |
+
+#### Tests
+
+| Test | Covers |
+|---|---|
+| `lib/__tests__/map-viewport.test.ts` | mercator ops = the pre-B4 formulas (projection, wheel anchor, clamp, pan, affine mm, symbol scale); paper: centre, y flip, mm round trip, WGS 84 through `mapGeo` (1e-6 mm), no CRS, wheel and pinch anchors, clamp, pan, GPS centre, fit, scale, Mercator-equivalent zoom; rotation per model; a +3° tilted meridian vertical on the overlay and through `viewMatrix`; overlay = GL canvas < 0.5 px on 200 random views (rotation, DPR); a WGS 84 point lands where the tiles' calibration affine puts it, < 0.1 mm on a 400 × 300 mm 1:10 000 frame (the residual is the affine's linearisation) |
+| `lib/__tests__/map-pipeline-flag.test.ts` | flag default, values, setter, throwing storage; `resolveMapPipeline` without a document |
+| `lib/__tests__/map-document-cache.test.ts` | route regex (documents, not previews); URL without query, `x-event-id` / `x-kiosk-key` headers; one request shared, same bytes; bounded memory; 401/403/404/5xx → kinds, failures not cached; offline; unreadable bytes; `storage.persist()` once, absent API |
+| `lib/__tests__/vector-map.test.ts` | paper frame with correction, bounds in mm, stack colours, proxy colours, budgets |
+| `e2e/map-vector-layer.spec.ts` | flag on: the pinned document by hash (no query, `x-event-id`), canvas ready and drawn, container-sized, no tile layer and no `/api/map-tile*` request, `data-*` attributes; wheel zoom keeps the paper point under the cursor (< 0.5 px); a GPS fix → follow centres it and the marker is at the viewer's centre; flag off: tiles |
+| `e2e/map-viewer-gestures.spec.ts`, `mobile-layout.spec.ts`, `course-editor.spec.ts`, `map-control-circles.spec.ts`, `map-multicourse.spec.ts`, `wide-screen-map-pane.spec.ts`, `webserial.spec.ts`, `kiosk*.spec.ts` | unchanged, under the default `legacy`: the mercator model reproduces the pre-B4 viewer |
+
 ### 5.3 PDF (api)
 
 *Not yet specified.* Slice C (`docs/course-print.md` owns the page model;
@@ -1209,7 +1385,7 @@ scene is a snapshot (§6.1) and a golden (§6.2).
 
 Not in the table: 04 §8 row 10 (minimum sizes) is a screen-backend rule
 (the stream is the same at every zoom), and the filter-region and
-georeference rows belong to slice B's viewer (B4) and A11's `mapGeo`.
+georeference rows belong to the viewer (§5.4) and A11's `mapGeo`.
 
 ### 6.4 Corpus parity
 
@@ -1386,6 +1562,13 @@ what became of it:
 | `e2e/__golden__/map-gl/`, `e2e/map-gl-golden.spec.ts` | committed goldens and the browser comparison |
 | `e2e/map-gl-doc.spec.ts` | whole-document pipeline on `e2e/test.ocd`: arena path, worker, eviction, arena = per-pass path |
 | `scripts/measure-gl.mjs` | corpus measurements through `/dev/map-gl-doc` (§5.2 Measurements) |
+| `packages/web/src/components/VectorMapLayer.tsx` | the vector base layer in `MapViewer` (§5.4): canvas, engine and worker lifecycle, status |
+| `packages/web/src/components/MapViewer.tsx` | the host: layer choice, viewport state, gestures, SVG overlay |
+| `packages/web/src/lib/map-viewport.ts` | the viewport model, mercator and paper (§5.4 "Viewport"), `glView` |
+| `packages/web/src/lib/vector-map.ts` | paper frame, bounds, colours, proxy colours, budget from a document header |
+| `packages/web/src/lib/map-document-cache.ts`, `map-fonts.ts` | document and font loading for the viewer (`docs/map-storage.md` §7.1) |
+| `packages/web/src/lib/feature-flags.ts` | the map pipeline flag until B5 (§5.4 "Selecting the layer") |
+| `e2e/map-vector-layer.spec.ts` | the vector layer in the viewer |
 
 The shared module is exported as a namespace: `import { render } from
 "@oxygen/shared"` → `render.PassStream`, `render.passStreamFromJson`, …
@@ -1415,13 +1598,38 @@ The shared module is exported as a namespace: `import { render } from
 - **§5.2 object identity across the bridge.** The range table keys on
   the stream's `objectIdx` — an index into the bridge's filtered object
   list; hiding a *document* object needs the bridge to expose that
-  mapping (B4).
+  mapping. The viewer (B4) hides nothing; the first consumer is the
+  editor's hide / replace (slice D).
+- **§5.4 replay on the vector layer** (row B11, before B5; user decision
+  2026-10-22). `ReplayMapLayer` draws tiles on its own 2D canvas with
+  its own map-pixel viewport and projects five layers through
+  `latLngToMapPx`; it is not a `MapViewer` mount and stays on tiles until
+  B11 moves it onto the paper view and `mapGeo`. B5 does not switch an
+  event to `vector` while its replay still draws tiles.
+- **§5.4 lower purple under the line art.** The vector layer is one
+  canvas under the SVG overlay, so the overlay's purple covers black,
+  brown and blue line art that the tiles' ink half draws above it
+  (09 §4 B sanctions this for slice B). Returns when the course layer is
+  document objects drawn in colour order (slice C).
+- **§5.4 legacy colour settings.** `mapMetadata.colorOverrides` and
+  `northLinesBelow` (the tiles' per-map colour-stack fixes) are not
+  applied to the document's stack; the document's own order (and, for
+  matched symbols, the library's) is drawn.
+- **§5.4 editor loupe.** `MapLoupe` magnifies tiles and is not shown in
+  the paper view; the editor moves onto the document in slice D.
+- **§5.4 no WebGL2, lost context.** Without WebGL2 the layer shows a
+  message instead of falling back to tiles, and a lost context
+  (`webglcontextlost`) is not restored; the fallback policy belongs to
+  the per-event switch (B5, `map.pipeline.allowLegacy`).
+- **§5.4 `data-ready`** marks the first view's detail only; later views
+  stream in without an attribute (the engine's `whenComplete()` is there
+  for a spec that needs it).
 - **§5.2 real-phone numbers** (B0 / B-gate): the GPU columns are the
   laptop iGPU, the phone column a CPU-throttle proxy.
 - **§5.2 analytic stroke anti-aliasing** (04 §6.2, §6.9): the 1-px
   feather on strokes and glyph strokes on top of MSAA. Not built in B2 —
   the arena = per-pass pixel comparison relies on both paths using MSAA
-  alone; B4 / the B-gate's parity check against tiles is where it is
+  alone; the B-gate's parity check against tiles (§6.4) is where it is
   judged.
 - **§5.2 perspective cameras** (terrain draping, research topic 10):
   the projection is already one matrix and the target any framebuffer;
