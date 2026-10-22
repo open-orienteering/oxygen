@@ -42,6 +42,26 @@ export async function setMapPipeline(pipeline: MapPipeline, nameId?: string): Pr
   }
 }
 
+/** Write `map.pipeline.allowLegacy`; `null` removes it (= allowed). */
+export async function setAllowLegacy(allow: boolean | null): Promise<void> {
+  const client = new Client({ connectionString: E2E_DATABASE_URL });
+  await client.connect();
+  try {
+    await client.query("SET search_path TO oxygen, public");
+    if (allow === null) {
+      await client.query("DELETE FROM settings WHERE key = 'map.pipeline.allowLegacy'");
+      return;
+    }
+    await client.query(
+      `INSERT INTO settings (key, value) VALUES ('map.pipeline.allowLegacy', $1)
+       ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`,
+      [String(allow)],
+    );
+  } finally {
+    await client.end();
+  }
+}
+
 export const test = base.extend<{ mapPipeline: MapPipeline; applyMapPipeline: void }>({
   mapPipeline: ["legacy", { option: true }],
   applyMapPipeline: [

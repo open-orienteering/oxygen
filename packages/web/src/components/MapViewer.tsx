@@ -323,8 +323,13 @@ interface Props {
    * (docs/map-rendering.md §5.4); without one the map stays on tiles.
    */
   documentHash?: string | null;
-  /** The event's map pipeline (`events.map_pipeline`, docs/map-pipeline-switch.md); default `legacy`. */
+  /**
+   * The pipeline to draw with (docs/map-pipeline-switch.md §3): the event's
+   * switch after the host's fallback rule; default `legacy`.
+   */
   mapPipeline?: MapPipeline;
+  /** The vector layer cannot draw in this browser (no WebGL2, lost context). */
+  onVectorUnavailable?: () => void;
   /** GPU budget of the vector layer: a club map's 150 MB or an event map's 30 MB. */
   mapBudget?: MapBudget;
   /** Operator rotation correction (`map_files.rotation_correction`), degrees, for the paper frame. */
@@ -384,6 +389,7 @@ export function MapViewer({
   editor,
   documentHash,
   mapPipeline = "legacy",
+  onVectorUnavailable,
   mapBudget = "event",
   rotationCorrection,
 }: Props) {
@@ -2855,6 +2861,7 @@ export function MapViewer({
           height={containerSize.h}
           budget={mapBudget}
           zIndex={0}
+          onUnavailable={onVectorUnavailable}
         />
       )}
       {/* Rotated map layer (tiles + overlay) — corrects map north offset */}

@@ -24,7 +24,7 @@
   "uploading": "Laddar upp...",
   "loadingMap": "Laddar karta...",
   "showAllControls": "Visa alla kontroller",
-"allControls": "Alla kontroller",
+  "allControls": "Alla kontroller",
   "hideOtherControls": "Dölj andra kontroller",
   "descriptions": "Beskrivningar",
   "hideDescriptions": "Dölj beskrivningar",
@@ -54,5 +54,9 @@
   "compassLocked": "Rotation låst (norr uppåt) — tryck för att låsa upp",
   "compassUnlocked": "Rotation upplåst — tryck för att låsa norr uppåt",
   "enterFullscreen": "Helskärm",
-  "exitFullscreen": "Lämna helskärm"
+  "exitFullscreen": "Lämna helskärm",
+  "mapEngineToggle": "Använd ny kartmotor",
+  "mapEngineHelp": "Ritar alla kartor i tävlingen från kartdokumentet i stället för bildrutor.",
+  "mapEngineReport": "Något fel på kartan? Kontakta den som driver instansen.",
+  "mapEngineFallback": "Den här webbläsaren kan inte rita den nya kartmotorn; visar den klassiska kartan."
 }

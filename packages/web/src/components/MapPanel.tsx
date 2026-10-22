@@ -18,6 +18,8 @@ import {
 import { ToolbarButton } from "./ToolbarButton";
 import { NorthLinesBadge } from "./NorthLinesBadge";
 import { ClubMapImportState } from "./ClubMapImportState";
+import { MapEngineToggle } from "./MapEngineToggle";
+import { hasWebGL2, resolveMapPipeline } from "../lib/map-pipeline";
 import { formatStalenessDeg, isMeridianStale } from "../lib/north-lines";
 
 /**
@@ -195,6 +197,17 @@ function MapPanelImpl({
     staleTime: 30_000,
     enabled: !!mapMetadata.data?.documentHash,
   });
+  // The vector layer reported it cannot draw here (lost context); with no
+  // WebGL2 at all the probe says so before anything mounts.
+  const [vectorUnavailable, setVectorUnavailable] = useState(false);
+  const allowLegacy = mapPipeline.data?.allowLegacy ?? true;
+  const drawPipeline = resolveMapPipeline(mapPipeline.data?.pipeline, mapMetadata.data?.documentHash, {
+    webgl2: !vectorUnavailable && hasWebGL2(),
+    allowLegacy,
+  });
+  const vectorFellBack =
+    mapPipeline.data?.pipeline === "vector" && !!mapMetadata.data?.documentHash && drawPipeline === "legacy";
+  const onVectorUnavailable = useCallback(() => setVectorUnavailable(true), []);
   const controlCoords = trpc.course.controlCoordinates.useQuery(undefined, {
     staleTime: Number.POSITIVE_INFINITY,
   });
@@ -862,7 +875,7 @@ function MapPanelImpl({
         style={{ flex: isFullscreen || fillContainer ? "1 1 0" : undefined }}
       >
         <MapViewer
-          key={`${nameId ?? "current"}:${mapMetadata.data?.uploadedAt ?? "loading"}:${JSON.stringify(mapMetadata.data?.bounds ?? null)}`}
+          key={`${nameId ?? "current"}:${mapMetadata.data?.uploadedAt ?? "loading"}:${JSON.stringify(mapMetadata.data?.bounds ?? null)}:${drawPipeline}`}
           mapBounds={mapMetadata.data?.bounds}
           mapScale={mapMetadata.data?.scale}
           northOffset={mapMetadata.data?.northOffset}
@@ -870,7 +883,8 @@ function MapPanelImpl({
           mapVersion={mapMetadata.data?.renderKey ?? mapMetadata.data?.uploadedAt}
           calibration={mapMetadata.data?.calibration}
           documentHash={mapMetadata.data?.documentHash}
-          mapPipeline={mapPipeline.data?.pipeline}
+          mapPipeline={drawPipeline}
+          onVectorUnavailable={onVectorUnavailable}
           mapBudget={mapMetadata.data?.clubMapVersionId ? "club" : "event"}
           rotationCorrection={mapMetadata.data?.rotationCorrection}
           controls={controlOverlays}
@@ -909,6 +923,12 @@ function MapPanelImpl({
         )}
       </div>
 
+      {vectorFellBack && (
+        <div data-testid="map-engine-fallback" className="mt-1 px-0.5 text-xs text-amber-700">
+          {t("mapEngineFallback")}
+        </div>
+      )}
+
       {/* Map info — below the map (course editor only) */}
       {showMapInfo && !hideToolbar && (
         <div className="mt-1.5 px-0.5 space-y-1.5">
@@ -932,6 +952,12 @@ function MapPanelImpl({
                 >
                   {tr("openReview")}
                 </Link>
+              )}
+              {mapMetadata.data?.documentHash && mapPipeline.data && (
+                <MapEngineToggle
+                  pipeline={mapPipeline.data.pipeline}
+                  allowLegacy={mapPipeline.data.allowLegacy}
+                />
               )}
               {mapMetadata.data && (
                 <>
