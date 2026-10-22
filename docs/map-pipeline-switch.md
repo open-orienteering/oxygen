@@ -140,9 +140,11 @@ slice B, so the rule is recorded and nothing is routed:
 - **Editor**: the course editor (`CourseEditorPage` over `MapPanel` with
   `editor`) mounts for both values until slice D adds the new editor;
   under `vector` it edits over the vector base layer.
-- **Replay** (`ReplayMapLayer`, TracksPage): row B11 moves it onto the
-  paper view; until it merges, the replay draws tiles whatever the
-  switch, and no event is switched to `vector` on a production instance.
+- **Replay** (`ReplayViewer` / `ReplayMapLayer`): mounted nowhere, so
+  there is nothing to route (B11 closed as moot, user decision
+  2026-10-22; `docs/map-rendering.md` §8). `TracksPage`'s GPS routes go
+  through `MapPanel` and follow the switch like every other map. A future
+  replay feature reads the same rule.
 
 ## 4. The toggle
 
@@ -210,8 +212,6 @@ value (09 §3, §10). `playwright.config.ts`:
 
 ## 7. Pending in this chapter
 
-- **Replay** follows the switch once B11 merges (§3.4); B5's branch
-  rebases onto it and wires the replay's base to the same rule.
 - **Print path and editor** gates (§3.4): slices C and D.
 - **Admin UI for the instance flags**: none until slice E needs one.
 - **Dual-run list** grows with the slices that touch maps: candidates
