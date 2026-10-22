@@ -87,8 +87,12 @@ through it. Palette entries inserted by colour alignment have
   match?: { canonicalId, method, state, confidence, reasons, reviewed, libraryVersion, alternatives? } }
 ```
 
-- One entry per **source symbol**, in source table order (`sourceIndex`).
-  `code` is the number as written. `kind` is the source type: `point`,
+- One entry per **source symbol**, in source table order (`sourceIndex`),
+  plus, for Mapper sources, one appended `origin: "source"` entry per
+  further (horizontal, vertical) alignment pair a text symbol's objects
+  use — an *alignment variant* sharing the parent's `code`, `name` and
+  `sourceIndex`, with its own IR id (`docs/map-import.md` §4.4, since
+  `omap-5`). `code` is the number as written. `kind` is the source type: `point`,
   `line`, `area`, `text`, `rectangle`, `unknown`. `hidden` is the
   source's default visibility (OCAD status bit 1); consumers may
   override it.
@@ -185,6 +189,7 @@ drop, source data error, … — is the classification in `docs/map-import.md` �
 | `EMPTY_GEOMETRY_DROPPED` | Objects with no coordinates were dropped |
 | `UNKNOWN_OBJECT_TYPE` | Object type outside 1–7, dropped |
 | `SYMBOL_REFERENCE_INVALID` | A symbol refers to another symbol that does not resolve to a usable definition — an OCAD area's border symbol that is the area itself, missing or not a line; a Mapper combined part that references itself or a missing symbol. A source data error: the reference is skipped, the rest of the symbol is kept. The message names the symbol and the case (`docs/map-import.md` §3.3). Since `ocad-10` / `omap-4`; earlier documents carry these as `SYMBOL_FEATURE_DROPPED` |
+| `RECTANGLE_GRID_DROPPED` | An OCAD rectangle symbol's grid (cells, numbering) is not drawn — a by-design drop; the outline and its corner radius are (`docs/map-import.md` §3.3). Since `ocad-11`; earlier documents carry it as `SYMBOL_FEATURE_DROPPED` |
 | `READER_WARNING` | The source reader reported warnings (count; since `ocad-7` the OCAD texts are in the import report as `readerWarnings`, at most 50 — `docs/map-import.md` §3.6). Since `ocad-6` the reader's dropped symbol types are `SYMBOL_TYPE_UNSUPPORTED` instead |
 | `CRS_UNRESOLVED` | The source declares a real-world grid that maps to no EPSG code (OCAD grid id not in the reader's table and no `e`; Mapper CRS spec not parsed); `crs` and `paperOrigin` are null, the message names the grid |
 
