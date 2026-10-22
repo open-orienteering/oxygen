@@ -858,6 +858,8 @@ function MapPanelImpl({
           cutRotationDeg={mapMetadata.data?.cutRotationDeg}
           mapVersion={mapMetadata.data?.renderKey ?? mapMetadata.data?.uploadedAt}
           calibration={mapMetadata.data?.calibration}
+          documentHash={mapMetadata.data?.documentHash}
+          rotationCorrection={mapMetadata.data?.rotationCorrection}
           controls={controlOverlays}
           courses={courseOverlays}
           courseGeometry={courseGeometry}
