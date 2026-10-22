@@ -1122,7 +1122,8 @@ quads (the Latin page; no corpus map needs Cyrillic):
   rebuilds (§8), not text.
 - `TEXT_GLYPH_NOT_IN_ATLAS` is 0 on every map once `.notdef` is
   excluded: Club-2026 has 1 and Club-full 12 tab characters, which the
-  stage shapes to `.notdef` (§8).
+  stage shaped to `.notdef` at the time (since B8 a tab advances to its
+  stop and emits no glyph, §4.9).
 
 Per build step (S1 §6's order; runs before the B1 sync):
 
