@@ -1,7 +1,7 @@
 /** ISSprOM 2019-2 Rev 6 — 5xx Man-made features (black, brown). Dimensions µm at 1:4 000. */
 
 import {
-  arcCoords, area, atDashCentres, atDashPoints, atEnd, atStart, border, cross, dashOcad, dashed, disc, doubleLine, fillPart, glyph, hatch, line,
+  arcCoords, area, atCorners, atDashCentres, atEnd, atStart, border, cross, dashOcad, dashed, disc, doubleLine, fillPart, glyph, hatch, line,
   pattern, placed, plus, point, ring, solid, spaced, square, stroke,
 } from "../authoring.js";
 import type { LibraryEntryInput } from "../schema.js";
@@ -60,19 +60,19 @@ export const manmade: LibraryEntryInput[] = [
   entry("508", "Narrow ride", "L", line({ main: dashed(K, 210, 4500, 750) }), { minimum: { lengthUm: 9750 }, footprintM: 39, notes: DASH_NOTE }),
   entry(
     "509.1", "Railway", "L",
-    line({ main: dashed(K, 350, 1500, 1000), borders: { left: border(K, 100, 175), right: border(K, 100, 175), backgroundColour: C.whiteRail, backgroundWidthUm: 350 } }),
-    { minimum: { lengthUm: 4000 }, footprintM: 16, notes: `Black dashes 1.5 / 1.0 mm, 0.35 mm, over a white band between 0.1 mm rails 0.35 mm (CC) apart. ${DASH_NOTE}` },
+    line({ main: dashed(C.whiteRail, 250, 1000, 1500, { shortenStartUm: 1500, shortenEndUm: 1500 }), borders: { backgroundColour: K, backgroundWidthUm: 450 } }),
+    { minimum: { lengthUm: 4000 }, footprintM: 16, notes: `White dashes 1.0 / 1.5 mm, 0.25 mm wide, over a black 0.45 mm band: the band's outer 0.1 mm either side are the rails (0.35 mm CC), the black between white dashes the 1.5 mm black dashes (OCAD's double-line fill; white-for-railway sorts above black, so the white is the dashed element). The white is shortened 1.5 mm at each open end so the line ends on a black dash (spec: minimum two black dashes); OCAD's sets end on a white dash. At a dash point or corner inside the line a white dash may meet the vertex where the spec drawing would show black (B10). ${DASH_NOTE}` },
   ),
   entry("509.2", "Tramway", "L", line({ borders: doubleLine(border(K, 80, 150)) }), { notes: "Two 0.08 mm black lines 0.3 mm (CC) apart (Rev 6: 0.08 mm, black 100 %)." }),
-  entry("510", "Power line, cableway or ski lift", "L", line({ main: solid(K, 140), glyphs: [placed(glyph(stroke(K, 140, [0, -300, 0, 300])), atDashPoints)] }), {
-    minimum: { lengthUm: 3750 }, footprintM: 15, notes: "Bars 0.14 mm, 0.3 mm either side, at the pylons (dash points).",
+  entry("510", "Power line, cableway or ski lift", "L", line({ main: solid(K, 140), glyphs: [placed(glyph(stroke(K, 140, [0, -370, 0, 370])), atCorners())] }), {
+    minimum: { lengthUm: 3750 }, footprintM: 15, notes: "Bars 0.14 mm reaching 0.3 mm beyond each edge of the line, at the pylons: corner points, on an end only when it is flagged (B10).",
   }),
-  entry("511", "Major power line", "L", line({ borders: doubleLine(border(K, 140, 820)), glyphs: [placed(glyph(stroke(K, 200, [0, -1120, 0, 1120])), atDashPoints)] }), {
+  entry("511", "Major power line", "L", line({ borders: doubleLine(border(K, 140, 820)), glyphs: [placed(glyph(stroke(K, 200, [0, -1120, 0, 1120])), atCorners())] }), {
     notes: "Two 0.14 mm lines 1.5 mm apart inside; bars 0.2 mm reaching 0.3 mm beyond each line at the pylons.",
   }),
   entry(
     "511", "Major power line, with pylons", "L",
-    line({ borders: doubleLine(border(K, 140, 820)), glyphs: [placed(glyph([stroke(K, 200, [0, -1120, 0, 1120]), stroke(K, 200, [-300, -300, 300, -300, 300, 300, -300, 300], { closed: true })]), atDashPoints)] }),
+    line({ borders: doubleLine(border(K, 140, 820)), glyphs: [placed(glyph([stroke(K, 200, [0, -1120, 0, 1120]), stroke(K, 200, [-300, -300, 300, -300, 300, 300, -300, 300], { closed: true })]), atCorners())] }),
     { variant: "b", description: "Pylons as 0.8 × 0.8 mm (outside measure) squares." },
   ),
   entry(

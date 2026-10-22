@@ -138,7 +138,7 @@ describe("row 2 — OMAP dash fitting (ISOM 505 as layout omap)", () => {
   });
 });
 
-describe("row 3 — glyph placement (ISOM 516, 201, 529 at corners, 510, 416, 510 at corners)", () => {
+describe("row 3 — glyph placement (ISOM 516, 201, 529 at corners, 510 at dash points, 416, 510)", () => {
   const { stream } = run("lib-line-glyphs");
 
   it("516 fence: spaced 2 mm from 1 mm, rotated to the tangent", () => {
@@ -155,7 +155,7 @@ describe("row 3 — glyph placement (ISOM 516, 201, 529 at corners, 510, 416, 51
     expect(glyphs).toHaveLength(2); // one pass per glyph part
     expect(rows(glyphs[0])).toEqual([[9000, -6000, Math.round(Math.SQRT1_2 * 1e4) / 1e4, Math.round(Math.SQRT1_2 * 1e4) / 1e4, Math.round(Math.SQRT2 * 1e4) / 1e4]]);
   });
-  it("510 power line: a glyph on the dash point only — unflagged ends get none (§4.5, B9)", () => {
+  it("510 hand variant at dash points: a glyph on the dash point only — unflagged ends get none (§4.5, B9)", () => {
     expect(rows(of(stream, "glyph", 3)[0])).toEqual([[2000, -5000, 1, 0, 1]]);
   });
   it("416 on a closed path: max(minCountClosed, round(L / distance)) dots from the start point", () => {
@@ -164,7 +164,7 @@ describe("row 3 — glyph placement (ISOM 516, 201, 529 at corners, 510, 416, 51
     expect(rows(g)[0].slice(0, 2)).toEqual([12000, -6000]);
     expect(rows(g)[1][0]).toBe(Math.round(12000 + 12000 / 27));
   });
-  it("510 as imported from OCAD (corners): poles on the corner point and the flagged end, none on the plain start", () => {
+  it("510 as the library draws it and OCAD imports it (corners, B10): poles on the corner point and the flagged end, none on the plain start", () => {
     expect(rows(of(stream, "glyph", 5)[0])).toEqual([[2000, -8000, 1, 0, 1], [4000, -8000, 1, 0, 1]]);
   });
 });
@@ -245,9 +245,12 @@ describe("row 6 — borders (ISSprOM 509.1, 505, 505 asymmetric)", () => {
   const { stream } = run("lib-borders");
   const strokes = (o: number) => of(stream, "stroke", o);
 
-  it("509.1: band under the borders, dashed main line between, borders at ±shift", () => {
+  it("509.1 (B10): white dashes over an unsliced black band, black 1.5 mm at both ends", () => {
     const s = strokes(0);
-    expect(s.map((p) => [p.colour, p.widthUm, p.path.coords[1]])).toEqual([[28, 350, 0], [28, 100, 175], [28, 100, -175], [29, 350, 0]]);
+    expect(s.map((p) => [p.colour, p.widthUm, p.path.coords[1], p.slices === undefined])).toEqual([[28, 450, 0, true], [29, 250, 0, false]]);
+    // 12 mm − 2 × 1.5 mm shortening = 9 mm of OCAD-fitted 1.0 / 1.5 dashes: 4 dashes stretched to 1.125, gaps kept at 1.5 —
+    // every black stretch, ends included, is the spec's 1.5 mm black dash.
+    expect(near3(sliceLens(s[1].path, s[1].slices))).toEqual([[1500, 2625], [4125, 5250], [6750, 7875], [9375, 10500]]);
   });
   it("505 round a corner: both dashed borders share the main line's phase, scaled to their own length", () => {
     const [left, right] = strokes(1).filter((p) => p.widthUm === 120);

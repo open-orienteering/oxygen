@@ -110,6 +110,29 @@ describe("compareFingerprints", () => {
 });
 
 describe("fingerprintHash", () => {
+  it("scores OCAD's railway and power line constructions as auto against the B10 entries", () => {
+    // Sprint's 509.100: white 0.26 dashes 1.01 / 1.5 over a black 0.45 band (OCAD double-line fill).
+    const railway = parseRenderSymbol({
+      type: "line", id: "x", code: "509.100", name: "Railway",
+      main: { colour: idx.get("white-railway")!, widthUm: 260, dash: { layout: "ocad", dashUm: 1010, gapUm: 1500 } },
+      borders: { backgroundColour: idx.get("black100")!, backgroundWidthUm: 450 },
+    }) as LineSymbol;
+    const canonRailway = fp("ISOM2017-2:509");
+    expect(canonRailway).toMatchObject({ mainClass: { hue: "white" }, dashed: true, background: true, borders: false });
+    const r = compareFingerprints(fingerprintOf(railway, classOf), canonRailway);
+    expect(r.hardFail).toBeUndefined();
+    expect(r.score).toBeGreaterThanOrEqual(MATCH_THRESHOLDS.auto);
+    // Club-2026's 510.0: OCAD corner symbol (bar ±0.37) on a 0.14 line → corners, as the library now places pylons.
+    const power = parseRenderSymbol({
+      type: "line", id: "x", code: "510.0", name: "Power line",
+      main: { colour: idx.get("black100")!, widthUm: 140 },
+      glyphs: [{ glyph: { parts: [{ kind: "stroke", colour: idx.get("black100")!, widthUm: 140, geometry: { coords: [0, -370, 0, 370] } }], rotatable: true }, placement: { at: "corners" } }],
+    }) as LineSymbol;
+    const p = compareFingerprints(fingerprintOf(power, classOf), fp("ISOM2017-2:510"));
+    expect(p.reasons.filter((x) => x.startsWith("glyph placement") || x.startsWith("glyph box"))).toEqual([]);
+    expect(p.score).toBeGreaterThanOrEqual(MATCH_THRESHOLDS.auto);
+  });
+
   it("is stable for equal fingerprints and differs for different ones", () => {
     expect(fingerprintHash(fp("ISOM2017-2:101"))).toBe(fingerprintHash(fp("ISOM2017-2:101")));
     expect(fingerprintHash(fp("ISOM2017-2:101"))).not.toBe(fingerprintHash(fp("ISOM2017-2:102")));

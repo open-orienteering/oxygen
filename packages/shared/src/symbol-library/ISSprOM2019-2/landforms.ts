@@ -6,7 +6,8 @@ import { C, DASH_NOTE, entry } from "./common.js";
 
 const B = C.brown;
 
-const slopeLine = (widthUm: number, omUm: number) => point(tick(B, widthUm, 0, -(omUm - widthUm / 2)), "object");
+/** Slope line: angle 0 is north and the tick points to +y, downhill from the contour (OCAD, Mapper; B10). */
+const slopeLine = (widthUm: number, omUm: number) => point(tick(B, widthUm, 0, omUm - widthUm / 2), "object");
 
 /** Earth bank tags: 0.21 mm, 0.75 mm beyond the top line's edge, 0.75 mm (CC) apart. */
 const bankTags = (mainUm: number) => placed(glyph(tick(B, 210, 0, -(750 + mainUm / 2))), spaced(750, { firstUm: 100, lastUm: 100, minCount: 2 }));
@@ -36,8 +37,8 @@ export const landforms: LibraryEntryInput[] = [
   entry("105.2", "Retaining earth wall seen only from one side", "L", line({ main: solid(B, 270), glyphs: [placed(glyph(halfDisc(B, 700)), spaced(1900, { minCount: 1 }))] }), {
     minimum: { lengthUm: 1400 }, footprintM: 5.6, notes: "Rev 6 addition: half dots ø 0.7 mm every 1.9 mm (CC) on the lower side.",
   }),
-  entry("107", "Erosion gully", "L", line({ main: solid(B, 370, { cap: "pointed", join: "round" }) }), {
-    minimum: { lengthUm: 2000 }, footprintM: 8, notes: "0.37 mm, ends tapering over 0.75 mm.",
+  entry("107", "Erosion gully", "L", line({ main: solid(B, 370, { cap: "pointed", join: "round", taper: { startUm: 750, endUm: 750 } }) }), {
+    minimum: { lengthUm: 2000 }, footprintM: 8, notes: "0.37 mm, ends tapering over 0.75 mm (`main.taper`, B10).",
   }),
   entry("108", "Small erosion gully", "L", line({ glyphs: [placed(glyph(disc(B, 370), false), spaced(600, { firstUm: 0, lastUm: 0, minCount: 2 }))] }), {
     minimum: { lengthUm: 1000 }, footprintM: 4, notes: "Dots ø 0.37 mm every 0.6 mm (CC); two dots minimum.",

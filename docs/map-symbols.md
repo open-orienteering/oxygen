@@ -139,6 +139,15 @@ per-symbol decisions.
 - **Units** are paper micrometres at the library's reference scale;
   glyph coordinates are y-up and x along the line direction, so tags and
   half-dots that the spec draws on the right-hand side are at **−y**.
+  A **point** symbol's angle 0 is north (`orientation: "object"` turns it
+  with the object's angle), so a directional point glyph that the spec
+  draws pointing down at angle 0 points to **+y**: the 101.b / 103.b
+  slope lines run from the contour to +y, as OCAD's sets (element
+  0,0 → 0,40) and Mapper's ISOM set (0,0 → 0,−470, y-down) draw them,
+  which puts them downhill on imported maps (B10; the first edition drew
+  them to −y by analogy with line tags). A point symbol the spec says
+  "is orientated to north" is `orientation: "north"` (ISOM and ISSprOM
+  111 small depression, 112 pit, 115 landform feature).
   `ring` takes the *outer* diameter; `ringCC` the centre-to-centre
   diameter plus line width, which is how the course symbols are stated
   (703 ø 5.0 CC + 0.35 → outer 5 350).
@@ -147,7 +156,29 @@ per-symbol decisions.
   irregular spec patterns ("random" boulder fields, 208/209 triangles,
   210–212 stony ground) are regular — optionally shifted — grids as
   03 §6.2 decided, pattern grids rotate with the object angle unless the
-  spec says north-fixed.
+  spec says north-fixed. Line constructions follow the OCAD sets where
+  the spec draws only the result: the **509 / 509.1 railway** is white
+  dashes 1.0 / 1.5 mm, 0.25 mm wide, over a black 0.45 mm band (OCAD's
+  double-line fill; IOF's white-for-railway sorts *above* black, so a
+  black dashed main under a white band cannot draw it), and its ends are
+  black by shortening the white main 1.5 mm at each open end — the spec's
+  "two black dashes" wins over OCAD's sets, which end on a white dash.
+  Pylons on **510 / 511 / 511.b** are `corners` (§4.5 rule in
+  `map-rendering.md`: flagged vertices, ends only when flagged): OCAD
+  corner symbols and Mapper dash symbols both arrive as corner flags
+  (`map-import.md` §3.3, §4.2), and no importer produces dash-point
+  positions for them. The 510 bar reaches 0.3 mm beyond the line's edge
+  on each side (±0.37 mm), the reading 511 already used for "0.3 (OM)".
+  Pointed ends that the spec dimensions taper over `main.taper` (107
+  erosion gully, 0.75 mm at each end).
+- **Colour order is Appendix B's, even where it hides a band.** ISOM
+  508.b's yellow 100 % band sorts under the 406–410 greens, so the ride's
+  yellow band shows in white forest and over 403 / 404 but not inside
+  green. OCAD's ISOM 2017-2 set ("Narrow Ride" yellow below the greens)
+  and the legacy tiles draw it the same; only Mapper's set adds a yellow
+  above green. User decision 2026-10-22 (B10): kept and documented, no
+  Oxygen-only palette row; ids are stable, so one can be added in a
+  later release if a club needs it.
 - **Colours are palette ids, never CMYK.** `validateLibrary` rejects an
   id outside the spec's own tick marks, so an ISOM entry cannot use
   `brown100` (an ISSprOM-only row) by accident.
