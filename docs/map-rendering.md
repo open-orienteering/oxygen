@@ -1134,8 +1134,12 @@ resident (`engine.whenComplete()`). A failed load shows a message with
 *Try again*; a browser without WebGL2 shows "cannot draw the map" (the
 fallback policy is B5's, below).
 
-**Budget.** 30 MB (`EVENT_BUDGET_BYTES`) unless the caller passes
-`mapBudget="club"` (150 MB). See "Pending" for picking it by provenance.
+**Budget** by the document's provenance (§5.2 "Arena and buckets"):
+`course.mapMetadata.clubMapVersionId` (additive, the event's
+`map_files.club_map_version_id`, null for an event's own upload; user
+decision 2026-10-22) set → `mapBudget="club"`, 150 MB
+(`CLUB_BUDGET_BYTES`); null → `"event"`, 30 MB (`EVENT_BUDGET_BYTES`).
+`MapPanel` maps the one to the other; `MapViewer` defaults to `"event"`.
 
 #### Host
 
@@ -1175,7 +1179,7 @@ changes for B4.
 | `RunnerMapPreview` (results, start list, runners) | `MapSlot` → `MapPanel` |
 | `CompetitionDashboard` | `MapSlot` → `MapPanel` |
 | `TracksPage` (GPS routes) | `MapSlot` → `MapPanel`; tracks through `mapGeo` |
-| `TracksPage` replay (`ReplayViewer` → `ReplayMapLayer`) | **not `MapViewer`**: its own 2D canvas over tiles — Pending |
+| `TracksPage` replay (`ReplayViewer` → `ReplayMapLayer`) | **not `MapViewer`**: its own 2D canvas over tiles; stays on tiles in B4 (user decision 2026-10-22) — row B11 |
 | `CourseEditorPage` | `MapPanel` with `editor` |
 
 #### Tests
@@ -1594,6 +1598,12 @@ The shared module is exported as a namespace: `import { render } from
   list; hiding a *document* object needs the bridge to expose that
   mapping. The viewer (B4) hides nothing; the first consumer is the
   editor's hide / replace (slice D).
+- **§5.4 replay on the vector layer** (row B11, before B5; user decision
+  2026-10-22). `ReplayMapLayer` draws tiles on its own 2D canvas with
+  its own map-pixel viewport and projects five layers through
+  `latLngToMapPx`; it is not a `MapViewer` mount and stays on tiles until
+  B11 moves it onto the paper view and `mapGeo`. B5 does not switch an
+  event to `vector` while its replay still draws tiles.
 - **§5.4 lower purple under the line art.** The vector layer is one
   canvas under the SVG overlay, so the overlay's purple covers black,
   brown and blue line art that the tiles' ink half draws above it

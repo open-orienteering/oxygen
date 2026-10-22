@@ -154,6 +154,8 @@ describe("storeImportedDocument", () => {
   it("course.mapMetadata exposes the pinned document hash", async () => {
     const meta = await makeCaller(ctx.event).course.mapMetadata();
     expect(meta?.documentHash).toBe(documentHash);
+    // An event's own upload is not a club version: the viewer takes the event budget.
+    expect(meta?.clubMapVersionId).toBeNull();
   });
 });
 

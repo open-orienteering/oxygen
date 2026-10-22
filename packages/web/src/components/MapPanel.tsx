@@ -859,6 +859,7 @@ function MapPanelImpl({
           mapVersion={mapMetadata.data?.renderKey ?? mapMetadata.data?.uploadedAt}
           calibration={mapMetadata.data?.calibration}
           documentHash={mapMetadata.data?.documentHash}
+          mapBudget={mapMetadata.data?.clubMapVersionId ? "club" : "event"}
           rotationCorrection={mapMetadata.data?.rotationCorrection}
           controls={controlOverlays}
           courses={courseOverlays}
