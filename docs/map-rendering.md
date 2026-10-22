@@ -206,9 +206,8 @@ for S2's pixel comparison against OCAD output (§8); the *structure* of
 each rule (what is computed where, what the stream carries) is not
 provisional.
 
-IR fields the stage reads and nothing else: `minimum` (a course-setting
-and print concern, not drawn) and `paragraphSpacingUm` / `justify` (box
-text, §8).
+IR fields the stage does not read: `minimum` (a course-setting and
+print concern, not drawn).
 
 New IR fields are **optional without defaults**: a parsed symbol must
 stay byte-identical when they are absent, because map document hashes
@@ -216,7 +215,7 @@ stay byte-identical when they are absent, because map document hashes
 (`docs/map-symbols.md` §8) are computed over the parsed IR.
 
 The stage's entry point is `symbolise({ objects, symbols, fonts })` in
-`render/symbolise.ts`. An object is `{ symbolIdx, path, angleDeg?, text? }`;
+`render/symbolise.ts`. An object is `{ symbolIdx, path, angleDeg?, text?, textLayout? }`;
 a symbol is a `RenderSymbol` (`render/symbol.ts`, Zod-validated; the IR of
 03 §6.2 with defaults applied). Unknown symbols, empty geometry, text
 without text and text without a font produce a warning per object and no
@@ -477,9 +476,68 @@ glyph; the instance transform is the point at that length with
   (+ `wordSpacing·em` after a space), `k = em / unitsPerEm`. Spaces
   advance but are not emitted. Lines split on `\n`, baseline-to-baseline
   `lineSpacing · em` downward. Alignment shifts each line by `0`,
-  `−width/2`, `−width` for left / centre / right (justify = left until
-  box text, §8). Paragraph spacing and line breaking inside boxes belong
-  to box text (§8).
+  `−width/2`, `−width` for left / centre / right (justify = left for
+  block text). Paragraph spacing and line breaking belong to box text
+  (below).
+- **Tabs** (U+0009): the pen jumps to the first of the symbol's
+  `tabStops` (µm from the line start, before alignment) strictly beyond
+  it, else to the next multiple of 8 space advances — *provisional
+  (S2)* as OCAD's and Mapper's default interval. A tab draws nothing and
+  is not kerned against its neighbours; a line ending in a tab is as
+  wide as the pen after it.
+- **Three layouts**, chosen per object by `RenderObject.textLayout`,
+  which the render bridge sets from the object type
+  (`map-document-format.md` §8): absent = **block text** from the first
+  point (OCAD type 4, Mapper single-anchor text); `box` = **box text**
+  (OCAD formatted text, type 5; Mapper box text, stored as type 5,
+  `map-import.md` §4.2); `path` = **line text** (OCAD type 6). A box
+  whose path has fewer than four points (or a zero width), and a path
+  with fewer than two, fall back to block text from the first point,
+  without a warning.
+- **Box text**: the first four points are the corners bottom-left,
+  bottom-right, top-right, top-left; the box is `|c1 − c0|` wide and
+  `|c3 − c0|` high, its origin is the top-left corner `c3`, and it turns
+  with the object angle (OCAD stores rotated corners, so the corners give
+  only size and origin). Each `\n` starts a paragraph; a paragraph wraps
+  greedily: a line ends before the word (a run between spaces / tabs)
+  whose last glyph's ink would cross the width; a word wider than the
+  box breaks per glyph (at least one glyph per line); spaces at a wrap
+  are dropped. Lines are `lineSpacing · em` apart and paragraphs a
+  further `paragraphSpacingUm`. Alignment is inside the width (`0`,
+  `(W − w)/2`, `W − w`); `justify` widens every space of a line so the
+  line fills the width, except on a paragraph's last line (which is
+  left). Vertically the anchor is the box's top edge: absent, `baseline`
+  and `top` put the first line's ascent on it; `middle` centres the
+  block (first ascent to last descent) in the box height; `bottom` puts
+  the last descent on the bottom edge — *provisional (S2)*: Mapper and
+  Purple Pen read an OCAD box as starting one internal leading
+  (`ascent + |descent| − em`, 0.12 em for Liberation Sans) lower (§8).
+  Text that overflows the box is drawn, not clipped.
+- **Line text**: one line along the path; `\n` and tabs read as
+  spaces. Glyph cells are `advance·k + charSpacing·em` (+ `wordSpacing`
+  for a space) plus the kerning to the next glyph. Each glyph's origin is
+  the point at its pen distance along the path and the glyph turns to
+  the chord from there to the point one cell further (clamped to the
+  path end) — Purple Pen's reading of OCAD. Text longer than the path is
+  truncated as OCAD does: cells are taken until their sum reaches the
+  path length (`left` and `justify` keep the cell that crosses it);
+  `right` drops that cell, `centre` keeps it but centres without it.
+  Start offset `0` / `(L − w)/2` / `L − w` for left / centre / right;
+  `justify` spreads `L − w` evenly over the gaps between cells (the last
+  cell without its `charSpacing`). `verticalAlign` moves the baseline
+  across the path, turned with each glyph: `baseline` (absent) on it,
+  `top` one digit height below, `middle` half that, `bottom` the
+  descender above. Arc length is Euclidean — *provisional (S2)*:
+  Purple Pen measures OCAD line text with `max + min/2` of the
+  coordinate deltas (§8). The object angle is not used.
+- **Rectangle frame** (`frame`, OCAD framing mode 3): one `fill` pass in
+  `frame.colour`, a rectangle in the text's own frame grown by
+  `leftUm` / `bottomUm` / `rightUm` / `topUm` and turned with the text.
+  Its extent is the widest line's span (block text) or the box width
+  (box text) horizontally, and from the first line's digit height above
+  its baseline down to the last baseline vertically (Purple Pen's
+  reading of OCAD, which frames from the cap height to the baseline).
+  Line text has no frame. It sorts at its colour's position like a halo.
 - **Vertical anchor** (`verticalAlign`, absent = `baseline`): the anchor
   is on the first line's baseline; `top` puts it at the first line's
   ascent (the first baseline drops by `ascender·k`), `bottom` at the last
@@ -497,8 +555,9 @@ glyph; the instance transform is the point at that length with
   outline is "upper white", one below upper purple.
 - A `shadow { colour, offsetXUm, offsetYUm }` is a separate `TextPass`
   in the shadow colour with every glyph origin moved by the offset —
-  paper µm, y-up, turned with the text — drawn as a plain fill (no
-  `haloWidthUm`). It sorts at its colour's position like a halo.
+  paper µm, y-up, turned by that glyph's own angle (so it follows line
+  text round its path) — drawn as a plain fill (no `haloWidthUm`). It
+  sorts at its colour's position like a halo.
 
 ### 4.10 Fonts shipped
 
@@ -1804,12 +1863,6 @@ The shared module is exported as a namespace: `import { render } from
   §4.10, so the stage emits no pass and warns `NO_FONT`, §4.9.) None occurs in the
   corpus. Adding a page is a range in `TEXT_ATLAS_PAGE_RANGES` and a
   `pnpm text-atlas:generate`.
-- **§4.9 tabs shape to `.notdef`.** The shaper looks up every code
-  point but `\n`; a tab (U+0009, Club-2026: 1, Club-full: 12) maps to
-  glyph 0, which the reference raster and the per-pass path draw as the
-  `.notdef` box and the arena path does not draw (§5.2 "Text atlas").
-  Tab stops are text layout (row B8); until then the two paths differ
-  there.
 - **§5.2 MSDF at small sizes.** No mipmaps: text between the 4 px skip
   and ~16 px em samples the 32 px field bilinearly (the `lib-text`
   residual of §6.2). The B-gate visual review on the phone judges it;
@@ -1830,12 +1883,6 @@ The shared module is exported as a namespace: `import { render } from
   and the gate meet the memory budgets without it.
 - **§5.2 earcut deviation check** (04 §6.1): polygons earcut gets wrong
   are not detected or redrawn by stencil-then-cover yet.
-- **Text layout in boxes and along paths** — OCAD formatted text
-  (`otp 5`) and Mapper text boxes (wrapping inside an object-level box,
-  `paragraphSpacingUm`, `justify`), and line text laid along its path
-  (per-glyph `angles` from §3.5 plus a path layout in `text.ts`). Row B8
-  (user decision 2026-10-20); until then box text is block text from the
-  anchor and line text is block text from the path's first vertex.
 - **Backends drawing `taper` and `angles`** — the stage emits both. The
   WebGL2 backend draws `angles` on both its paths (B2: a text instance's
   `cos, sin`); it does not draw `taper` yet (drawn butt) — on the arena
@@ -1845,7 +1892,13 @@ The shared module is exported as a namespace: `import { render } from
   reference raster draws `angles`.
 - **S2 confirmation** of §4.2 step 3 (what stretches, the `round`
   threshold), of `endGapUm` and of the vertical anchor's metrics (§4.9),
-  against OCAD exports.
+  against OCAD exports; for text layout (§4.9, B8) also the default tab
+  interval, OCAD's box top (Mapper and Purple Pen lower the first line
+  by one internal leading for OCAD formatted text), line text's arc
+  length (Purple Pen's `max + min/2` metric), line-text vertical
+  alignment, and the frame's vertical extent. No corpus map has line
+  text or a rectangle frame (Club-2026 / Club-full have 9 / 13 formatted
+  texts and 1 / 2 texts with a tab).
 - **Serif and mono faces** — `liberation-serif` / `liberation-mono` are
   in the IR and the importers map Times / Courier to them, but no face is
   shipped (§4.10), so such text draws nothing with `NO_FONT`.
