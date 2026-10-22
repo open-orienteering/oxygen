@@ -189,6 +189,12 @@ function MapPanelImpl({
     staleTime: Number.POSITIVE_INFINITY,
     enabled: !!mapInfo.data,
   });
+  // The event's map pipeline switch (docs/map-pipeline-switch.md §3).
+  // Only consulted once there is a document to draw.
+  const mapPipeline = trpc.event.mapPipeline.useQuery(undefined, {
+    staleTime: 30_000,
+    enabled: !!mapMetadata.data?.documentHash,
+  });
   const controlCoords = trpc.course.controlCoordinates.useQuery(undefined, {
     staleTime: Number.POSITIVE_INFINITY,
   });
@@ -616,7 +622,12 @@ function MapPanelImpl({
   }, [onControlClick]);
 
   const hasMap = !!mapInfo.data;
-  const isLoadingMap = mapInfo.isLoading || (mapInfo.data && mapMetadata.isLoading);
+  // With a document, wait for the event's switch too: mounting the tile
+  // viewer first would request tiles a `vector` event never needs.
+  const isLoadingMap =
+    mapInfo.isLoading ||
+    (mapInfo.data && mapMetadata.isLoading) ||
+    (!!mapMetadata.data?.documentHash && mapPipeline.isLoading);
   const canFilter = filterMode === "course" || filterMode === "single-control";
 
   // Fullscreen hooks — MUST be before any early returns to respect hook ordering rules
@@ -859,6 +870,7 @@ function MapPanelImpl({
           mapVersion={mapMetadata.data?.renderKey ?? mapMetadata.data?.uploadedAt}
           calibration={mapMetadata.data?.calibration}
           documentHash={mapMetadata.data?.documentHash}
+          mapPipeline={mapPipeline.data?.pipeline}
           mapBudget={mapMetadata.data?.clubMapVersionId ? "club" : "event"}
           rotationCorrection={mapMetadata.data?.rotationCorrection}
           controls={controlOverlays}
