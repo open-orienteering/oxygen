@@ -67,12 +67,12 @@ describe("measure-import.mjs", () => {
     const out = path.join(dir, "run.json");
     const r = run(xmap, "--out", out);
     assert.equal(r.status, 1);
-    assert.match(r.stdout, /! TEXT_BOX_DROPPED ×1/);
+    assert.match(r.stdout, /! COLOUR_OPACITY_IGNORED ×1/);
     // The per-emission detail from the report is printed under each unsupported warning.
-    assert.match(r.stdout, /^ {4}1 text box\(es\) imported as single-anchor texts$/m);
+    assert.match(r.stdout, /^ {4}1 colour\(s\) with opacity < 1 are drawn opaque$/m);
     const map = JSON.parse(readFileSync(out, "utf8")).maps["test.xmap"];
     assert.equal(map.importer.startsWith("omap-"), true);
-    assert.deepEqual(map.unsupported.map((w) => w.code).sort(), ["COLOUR_OPACITY_IGNORED", "TEXT_BOX_DROPPED"]);
+    assert.deepEqual(map.unsupported.map((w) => w.code).sort(), ["COLOUR_OPACITY_IGNORED"]);
     assert.equal(map.georeference.crs, "EPSG:32633");
   });
 

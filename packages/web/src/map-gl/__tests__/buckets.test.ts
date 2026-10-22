@@ -68,6 +68,12 @@ describe("bucket assignment (04 §6.11)", () => {
     const text: render.TextPass = { kind: "text", colour: 0, fontId: 0, sizeUm: 4000, glyphs: Uint16Array.from([1]), positions: Float32Array.from([0, 0]), haloWidthUm: 300 };
     expect(passBounds(text, noMesh)).toEqual({ minX: -300, minY: -1300, maxX: 4300, maxY: 4300 });
   });
+
+  it("turned text (angles present) is bounded by √2 em plus the halo round each origin", () => {
+    const text: render.TextPass = { kind: "text", colour: 0, fontId: 0, sizeUm: 4000, glyphs: Uint16Array.from([1]), positions: Float32Array.from([0, 0]), angles: Float32Array.from([180]), haloWidthUm: 300 };
+    const r = Math.SQRT2 * 4000 + 300;
+    expect(passBounds(text, noMesh)).toEqual({ minX: -r, minY: -r, maxX: r, maxY: r });
+  });
 });
 
 describe("visible cells", () => {

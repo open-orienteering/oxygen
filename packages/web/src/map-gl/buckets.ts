@@ -109,10 +109,12 @@ export function passBounds(pass: render.Pass, meshRadius: (glyphId: number, part
     }
     case "text": {
       const h = pass.haloWidthUm ?? 0;
+      // A turned glyph (rotated block text, line text) reaches its em box's far corner in any direction: √2 em.
+      const r = pass.angles ? Math.SQRT2 * pass.sizeUm + h : 0;
       let b: render.Bounds | undefined;
       for (let i = 0; i < pass.positions.length; i += 2) {
         const x = pass.positions[i], y = pass.positions[i + 1];
-        b = union(b, x - h, y - 0.25 * pass.sizeUm - h, x + pass.sizeUm + h, y + pass.sizeUm + h);
+        b = pass.angles ? union(b, x - r, y - r, x + r, y + r) : union(b, x - h, y - 0.25 * pass.sizeUm - h, x + pass.sizeUm + h, y + pass.sizeUm + h);
       }
       return b;
     }

@@ -23,7 +23,7 @@ import { PathMeasure, gapIntervals, pathSections, subtractIntervals, wrapInterva
 import { patternInstances } from "./pattern.js";
 import { placeGlyphs } from "./placement.js";
 import type { AreaSymbol, BorderSpec, LineSymbolBody, PointSymbol, RenderSymbol, StrokeSpec, TextSymbol } from "./symbol.js";
-import { shapeText } from "./text.js";
+import { type ShapedText, shapeText, shapeTextAlongPath } from "./text.js";
 import type { FontMetrics } from "./truetype.js";
 
 export interface RenderObject {
@@ -33,6 +33,14 @@ export interface RenderObject {
   /** OCAD `ang`: point rotation, area pattern angle, text angle. Degrees. */
   angleDeg?: number;
   text?: string;
+  /**
+   * How a text object is laid out (map-rendering §4.9): absent = block
+   * text from the first point; `box` = wrapped inside the box whose
+   * corners are the first four points (bottom-left, bottom-right,
+   * top-right, top-left); `path` = one line along the path. Set by the
+   * render bridge from the object type.
+   */
+  textLayout?: "box" | "path";
 }
 
 export interface SymboliseInput {
@@ -295,6 +303,28 @@ class Stage {
 
   // ---- text --------------------------------------------------------------
 
+  /** Shape by the object's layout; a box or path the geometry cannot carry falls back to block text from the first point. */
+  private shape(obj: RenderObject, sym: TextSymbol, font: FontMetrics): ShapedText {
+    const text = obj.text!;
+    if (obj.textLayout === "path" && obj.path.coords.length >= 4) {
+      return shapeTextAlongPath(text, sym, font, new PathMeasure(obj.path));
+    }
+    const box = obj.textLayout === "box" ? boxOf(obj.path) : undefined;
+    if (box) return shapeText(text, sym, font, { x: box.x, y: box.y, angleDeg: obj.angleDeg, box });
+    return shapeText(text, sym, font, { x: obj.path.coords[0], y: obj.path.coords[1], angleDeg: obj.angleDeg });
+  }
+
+  /** Rectangle framing: the block extent grown by the margins, turned with the text, as a fill. */
+  private textFrame(obj: RenderObject, frame: NonNullable<TextSymbol["frame"]>, [x0, y0, x1, y1]: [number, number, number, number]): void {
+    const box = obj.textLayout === "box" ? boxOf(obj.path) : undefined;
+    const ax = box ? box.x : obj.path.coords[0], ay = box ? box.y : obj.path.coords[1];
+    const r = toRad(obj.angleDeg ?? 0), cos = Math.cos(r), sin = Math.sin(r);
+    const l = x0 - frame.leftUm, b = y0 - frame.bottomUm, rt = x1 + frame.rightUm, t = y1 + frame.topUm;
+    const pts: number[] = [];
+    for (const [lx, ly] of [[l, b], [rt, b], [rt, t], [l, t]]) pts.push(ax + lx * cos - ly * sin, ay + lx * sin + ly * cos);
+    this.push({ kind: "fill", colour: frame.colour, path: polyPath(pts, true), rule: "evenodd" });
+  }
+
   private text(obj: RenderObject, sym: TextSymbol): void {
     if (obj.text === undefined || obj.text.length === 0) {
       this.warn("TEXT_WITHOUT_TEXT", `object ${this.objectIdx} has a text symbol but no text`);
@@ -306,17 +336,21 @@ class Stage {
       return;
     }
     const font = this.input.fonts[fontId];
-    const shaped = shapeText(obj.text, sym, font, { x: obj.path.coords[0], y: obj.path.coords[1], angleDeg: obj.angleDeg });
+    const shaped = this.shape(obj, sym, font);
     if (shaped.glyphs.length === 0) return;
     const glyphs = Uint16Array.from(shaped.glyphs);
     const positions = Float32Array.from(shaped.positions);
     const angles = shaped.angles ? { angles: Float32Array.from(shaped.angles) } : {};
+    if (sym.frame && shaped.extent) this.textFrame(obj, sym.frame, shaped.extent);
     if (sym.shadow) {
-      // The offset is in the text's own frame, so it turns with the text.
-      const r = toRad(obj.angleDeg ?? 0);
-      const dx = sym.shadow.offsetXUm * Math.cos(r) - sym.shadow.offsetYUm * Math.sin(r);
-      const dy = sym.shadow.offsetXUm * Math.sin(r) + sym.shadow.offsetYUm * Math.cos(r);
-      const shifted = Float32Array.from(shaped.positions, (v, i) => v + (i % 2 === 0 ? dx : dy));
+      // The offset is in the text's own frame, so it turns with each glyph.
+      const { offsetXUm: ox, offsetYUm: oy } = sym.shadow;
+      const shifted = new Float32Array(shaped.positions.length);
+      for (let g = 0; g < shaped.glyphs.length; g++) {
+        const r = toRad(shaped.angles?.[g] ?? 0);
+        shifted[g * 2] = shaped.positions[g * 2] + ox * Math.cos(r) - oy * Math.sin(r);
+        shifted[g * 2 + 1] = shaped.positions[g * 2 + 1] + ox * Math.sin(r) + oy * Math.cos(r);
+      }
       this.push({ kind: "text", colour: sym.shadow.colour, fontId, sizeUm: shaped.sizeUm, glyphs, positions: shifted, ...angles });
     }
     if (sym.halo) {
@@ -324,6 +358,16 @@ class Stage {
     }
     this.push({ kind: "text", colour: sym.colour, fontId, sizeUm: shaped.sizeUm, glyphs, positions, ...angles });
   }
+}
+
+/** The four corners of a text object's box, or undefined when the path has fewer than four points. */
+function boxOf(path: RenderPath): { x: number; y: number; widthUm: number; heightUm: number } | undefined {
+  const c = path.coords;
+  if (c.length < 8) return undefined;
+  const widthUm = Math.hypot(c[2] - c[0], c[3] - c[1]);
+  const heightUm = Math.hypot(c[6] - c[0], c[7] - c[1]);
+  if (!(widthUm > 0)) return undefined;
+  return { x: c[6], y: c[7], widthUm, heightUm };
 }
 
 /** The pass's taper: only on a pointed stroke whose IR gives taper lengths (map-rendering §3.2). */

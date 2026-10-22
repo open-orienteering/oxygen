@@ -2,7 +2,9 @@ import { describe, expect, it } from "vitest";
 import { COORD_FLAG } from "../pass-stream.js";
 import { pathRings } from "../path.js";
 import { textSymbolSchema } from "../symbol.js";
-import { emSizeUm, shapeText } from "../text.js";
+import { PathMeasure } from "../measure.js";
+import { makePath } from "../pass-stream.js";
+import { emSizeUm, shapeText, shapeTextAlongPath } from "../text.js";
 import { liberation } from "./fonts.js";
 
 const cp = (s: string) => s.codePointAt(0)!;
@@ -124,5 +126,200 @@ describe("shapeText", () => {
 
   it("reads the face from head.macStyle", () => {
     expect([sans.bold, sans.italic, liberation().narrow.bold]).toEqual([false, false, false]);
+  });
+});
+
+describe("shapeText — tabs", () => {
+  const { sans } = liberation();
+  const k = 5000 / 2048;
+  const sym = (over: Record<string, unknown> = {}) =>
+    textSymbolSchema.parse({ type: "text", id: "t", code: "t", name: "t", fontFamily: "liberation-sans", fontSizeUm: 5000, colour: 6, ...over });
+
+  it("a tab advances to the next custom stop from the line start and draws nothing", () => {
+    const r = shapeText("1\t2", sym({ tabStops: [{ xUm: 7500 }, { xUm: 20000 }] }), sans, { x: 100, y: 0 });
+    expect(r.glyphs).toEqual([sans.glyphId(cp("1")), sans.glyphId(cp("2"))]);
+    expect(r.positions[2]).toBeCloseTo(100 + 7500, 6);
+    const two = shapeText("1\t2\t3", sym({ tabStops: [{ xUm: 7500 }, { xUm: 20000 }] }), sans, { x: 0, y: 0 });
+    expect(two.positions[4]).toBeCloseTo(20000, 6);
+  });
+
+  it("past the last stop (or with none) the next multiple of 8 space advances", () => {
+    const step = 8 * 569 * k;
+    const r = shapeText("1\t2", sym(), sans, { x: 0, y: 0 });
+    expect(r.positions[2]).toBeCloseTo(step, 6);
+    const past = shapeText("1\t2", sym({ tabStops: [{ xUm: 100 }] }), sans, { x: 0, y: 0 });
+    expect(past.positions[2]).toBeCloseTo(step, 6);
+    expect(r.lineWidths[0]).toBeCloseTo(step + 1139 * k, 6);
+    // A stop exactly at the pen is not "beyond" it.
+    const at = shapeText("\t\t2", sym({ tabStops: [{ xUm: 3000 }] }), sans, { x: 0, y: 0 });
+    expect(at.positions[0]).toBeCloseTo(step, 6);
+  });
+
+  it("text without tabs shapes exactly as before (kerning across neighbours, no tab glyph)", () => {
+    const a = shapeText("AV", sym(), sans, { x: 0, y: 0 });
+    expect(a.positions[2]).toBeCloseTo((1366 + sans.kerning(sans.glyphId(cp("A")), sans.glyphId(cp("V")))) * k, 6);
+  });
+});
+
+describe("shapeText — box text", () => {
+  const { sans } = liberation();
+  const em = 2048; // k = 1: advances in font units are µm
+  const sym = (over: Record<string, unknown> = {}) =>
+    textSymbolSchema.parse({ type: "text", id: "t", code: "t", name: "t", fontFamily: "liberation-sans", fontSizeUm: em, colour: 6, lineSpacing: 1, ...over });
+  const zero = 1139, space = 569;
+  const lineYs = (r: { positions: number[] }) => [...new Set(r.positions.filter((_, i) => i % 2 === 1).map((v) => Math.round(v)))];
+
+  it("wraps at spaces when the next word's ink would cross the box width", () => {
+    // "00 00 00": each word 2278 wide; two words + space = 5125.
+    const r = shapeText("00 00 00", sym(), sans, { x: 0, y: 0, box: { widthUm: 5200, heightUm: 9000 } });
+    expect(r.lineWidths.map(Math.round)).toEqual([2 * zero * 2 + space, 2 * zero]);
+    expect(lineYs(r)).toEqual([-1854, -1854 - em]);
+    expect(r.glyphs).toHaveLength(6);
+  });
+
+  it("a word wider than the box breaks per glyph", () => {
+    const r = shapeText("0000", sym(), sans, { x: 0, y: 0, box: { widthUm: 2500, heightUm: 9000 } });
+    expect(r.lineWidths.map(Math.round)).toEqual([2 * zero, 2 * zero]);
+    // A box narrower than one glyph still makes progress.
+    expect(shapeText("00", sym(), sans, { x: 0, y: 0, box: { widthUm: 10, heightUm: 9000 } }).lineWidths).toHaveLength(2);
+  });
+
+  it("a tab at the wrap point starts the next line (its word at the stop); a break before a line's first glyph does not count", () => {
+    const tabbed = sym({ tabStops: [{ xUm: 1000 }] });
+    // Line 1 "00"; the tab would reach the default stop (8 spaces), past the 3.5 mm box, so it wraps and leads line 2.
+    const r = shapeText("00\t00", tabbed, sans, { x: 0, y: 0, box: { widthUm: 3500, heightUm: 9000 } });
+    expect(r.lineWidths.map(Math.round)).toEqual([2 * zero, 1000 + 2 * zero]);
+    expect(r.positions[4]).toBeCloseTo(1000, 6);
+    // A leading space is no break: "0000" splits per glyph after it.
+    const lead = shapeText(" 0000", sym(), sans, { x: 0, y: 0, box: { widthUm: 2500, heightUm: 9000 } });
+    expect(lead.lineWidths.map(Math.round)).toEqual([space + zero, 2 * zero, zero]);
+  });
+
+  it("an explicit break is a paragraph: paragraphSpacingUm is added between paragraphs only", () => {
+    const r = shapeText("00 00\n0", sym({ paragraphSpacingUm: 500 }), sans, { x: 0, y: 0, box: { widthUm: 2500, heightUm: 9000 } });
+    expect(lineYs(r)).toEqual([-1854, -1854 - em, -1854 - 2 * em - 500]);
+    // Anchor text ignores paragraph spacing, as before.
+    const a = shapeText("0\n0", sym({ paragraphSpacingUm: 500 }), sans, { x: 0, y: 0 });
+    expect(lineYs(a)).toEqual([0, -em]);
+  });
+
+  it("aligns inside the box width; justify stretches spaces on every line but a paragraph's last", () => {
+    const box = { widthUm: 6000, heightUm: 9000 };
+    expect(shapeText("0", sym({ align: "right" }), sans, { x: 0, y: 0, box }).positions[0]).toBeCloseTo(6000 - zero, 6);
+    expect(shapeText("0", sym({ align: "centre" }), sans, { x: 0, y: 0, box }).positions[0]).toBeCloseTo((6000 - zero) / 2, 6);
+    const j = shapeText("0 0 0 00 0", sym({ align: "justify" }), sans, { x: 0, y: 0, box });
+    // Line 1 "0 0 0" is stretched to the box; the last line "00 0" is left.
+    expect(j.lineWidths[0]).toBeCloseTo(6000, 6);
+    expect(j.positions[4] + zero).toBeCloseTo(6000, 6);
+    expect(j.lineWidths[1]).toBeCloseTo(3 * zero + space, 6);
+    // Anchor text: justify = left.
+    expect(shapeText("0 0", sym({ align: "justify" }), sans, { x: 0, y: 0 }).positions[2]).toBeCloseTo(zero + space, 6);
+  });
+
+  it("vertical placement in the box: top (and baseline) hangs from the top edge, middle centres, bottom sits on the bottom", () => {
+    const box = { widthUm: 9000, heightUm: 10000 };
+    const asc = 1854, desc = 434;
+    const y = (v?: string) => shapeText("0\n0", sym(v ? { verticalAlign: v } : {}), sans, { x: 0, y: 0, box }).positions[1];
+    expect(y()).toBe(-asc);
+    expect(y("baseline")).toBe(-asc);
+    expect(y("top")).toBe(-asc);
+    const block = asc + em + desc;
+    expect(y("bottom")).toBeCloseTo(-(10000 - block + asc), 6);
+    expect(y("middle")).toBeCloseTo(-((10000 - block) / 2 + asc), 6);
+  });
+
+  it("turns with the object angle about the box's top-left corner", () => {
+    const r = shapeText("0", sym(), sans, { x: 1000, y: 2000, angleDeg: 90, box: { widthUm: 9000, heightUm: 9000 } });
+    expect(r.positions[0]).toBeCloseTo(1000 + 1854, 3);
+    expect(r.positions[1]).toBeCloseTo(2000, 3);
+    expect(r.angles).toEqual([90]);
+  });
+
+  it("extent: the box width (box text) or the widest line, digit height of the first line down to the last baseline", () => {
+    const b = shapeText("0\n0", sym(), sans, { x: 0, y: 0, box: { widthUm: 9000, heightUm: 9000 } });
+    expect(b.extent![0]).toBe(0);
+    expect(b.extent![2]).toBe(9000);
+    expect(b.extent![3]).toBeCloseTo(-1854 + sans.digitHeight, 6);
+    expect(b.extent![1]).toBeCloseTo(-1854 - em, 6);
+    const a = shapeText("00\n0", sym({ align: "centre" }), sans, { x: 0, y: 0 });
+    expect(a.extent![0]).toBeCloseTo(-zero, 6);
+    expect(a.extent![2]).toBeCloseTo(zero, 6);
+    expect(a.extent![3]).toBeCloseTo(sans.digitHeight, 6);
+    expect(a.extent![1]).toBe(-em);
+  });
+});
+
+describe("shapeTextAlongPath — line text", () => {
+  const { sans } = liberation();
+  const sym = (over: Record<string, unknown> = {}) =>
+    textSymbolSchema.parse({ type: "text", id: "t", code: "t", name: "t", fontFamily: "liberation-sans", fontSizeUm: 2048, colour: 6, ...over });
+  const zero = 1139;
+  const along = (text: string, coords: number[], over: Record<string, unknown> = {}) =>
+    shapeTextAlongPath(text, sym(over), sans, new PathMeasure(makePath(coords)));
+
+  it("on a straight path: origins at the pen positions, every angle the path's", () => {
+    const r = along("000", [0, 0, 10000, 0]);
+    expect(r.positions.map(Math.round)).toEqual([0, 0, zero, 0, 2 * zero, 0]);
+    expect(r.angles).toEqual([0, 0, 0]);
+    const up = along("00", [0, 0, 0, 10000]);
+    expect(up.angles!.map(Math.round)).toEqual([90, 90]);
+    expect(up.positions.map(Math.round)).toEqual([0, 0, 0, zero]);
+  });
+
+  it("around a corner each glyph turns to the chord from its origin to one advance on", () => {
+    const r = along("0000", [0, 0, 1500, 0, 1500, 10000]);
+    expect(r.angles![0]).toBe(0);
+    // Glyph 1 starts at 1139 (on the first leg) and ends 1139 further, round the corner: (1500, 778).
+    expect(r.angles![1]).toBeCloseTo((Math.atan2(2 * zero - 1500, 1500 - zero) * 180) / Math.PI, 3);
+    expect(r.angles![2]).toBeCloseTo(90, 6);
+    expect(r.positions[4]).toBeCloseTo(1500, 3);
+    expect(r.positions[5]).toBeCloseTo(2 * zero - 1500, 3);
+  });
+
+  it("left keeps the glyph that crosses the end; right drops it; centre centres without it", () => {
+    const L = 2 * zero + 500;
+    expect(along("0000", [0, 0, L, 0]).glyphs).toHaveLength(3);
+    const right = along("0000", [0, 0, L, 0], { align: "right" });
+    expect(right.glyphs).toHaveLength(2);
+    expect(right.positions[0]).toBeCloseTo(500, 3);
+    const centre = along("0000", [0, 0, L, 0], { align: "centre" });
+    expect(centre.glyphs).toHaveLength(3);
+    expect(centre.positions[0]).toBeCloseTo(250, 3);
+    const fits = along("00", [0, 0, 10000, 0], { align: "centre" });
+    expect(fits.positions[0]).toBeCloseTo((10000 - 2 * zero) / 2, 3);
+  });
+
+  it("justify never truncates: text longer than the path closes up to fit it", () => {
+    const L = 2 * zero + 500;
+    const r = along("0000", [0, 0, L, 0], { align: "justify" });
+    expect(r.glyphs).toHaveLength(4);
+    expect(r.positions[0]).toBe(0);
+    expect(r.positions[6] + zero).toBeCloseTo(L, 3);
+    // Left stops once the cells reach the path, keeping the crossing cell; a cell that would start within 10 µm of the end is not taken.
+    expect(along("000", [0, 0, 2 * zero + 5, 0]).glyphs).toHaveLength(2);
+  });
+
+  it("justify spreads the glyphs over the whole path", () => {
+    const r = along("000", [0, 0, 10000, 0], { align: "justify" });
+    expect(r.positions[4] + zero).toBeCloseTo(10000, 3);
+    expect(r.positions[2]).toBeCloseTo((10000 - zero) / 2, 3);
+  });
+
+  it("vertical alignment moves the baseline across the path, turned with the glyph", () => {
+    const y = (v: string) => along("0", [0, 0, 10000, 0], { verticalAlign: v }).positions[1];
+    expect(y("baseline")).toBe(0);
+    expect(y("top")).toBeCloseTo(-sans.digitHeight, 3);
+    expect(y("middle")).toBeCloseTo(-sans.digitHeight / 2, 3);
+    expect(y("bottom")).toBeCloseTo(434, 3);
+    const up = along("0", [0, 0, 0, 10000], { verticalAlign: "top" });
+    expect(up.positions[0]).toBeCloseTo(sans.digitHeight, 3);
+  });
+
+  it("line breaks and tabs read as spaces; spaces advance and draw nothing; no extent", () => {
+    const r = along("0\n0", [0, 0, 10000, 0]);
+    expect(r.glyphs).toHaveLength(2);
+    expect(r.positions[2]).toBeCloseTo(zero + 569, 3);
+    expect(r.extent).toBeUndefined();
+    expect(along("0", [0, 0, 0, 0]).glyphs).toEqual([]);
   });
 });

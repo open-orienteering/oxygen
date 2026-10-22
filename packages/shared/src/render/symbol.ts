@@ -233,6 +233,17 @@ export const textSymbolSchema = z.object({
    * (OCAD shadow framing, Mapper framing mode "shadow").
    */
   shadow: z.object({ colour: colourRef, offsetXUm: um, offsetYUm: um }).optional(),
+  /**
+   * A filled rectangle behind the text (OCAD rectangle framing): the
+   * text block's extent grown by the four margins, drawn as a fill pass
+   * in `colour` (map-rendering §4.9).
+   */
+  frame: z.object({ colour: colourRef, leftUm: um, bottomUm: um, rightUm: um, topUm: um }).optional(),
+  /**
+   * Tab stops from the line start, ascending. Objects rather than bare
+   * numbers so the structural transforms scale them like every `…Um`.
+   */
+  tabStops: z.array(z.object({ xUm: um.positive() })).optional(),
 });
 
 export const renderSymbolSchema = z.discriminatedUnion("type", [

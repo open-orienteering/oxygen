@@ -383,6 +383,10 @@ class Converter {
         this.warn("SYMBOL_FEATURE_DROPPED", `${this.label}: text framing mode ${b.framing.mode}`);
       }
     }
+    // Custom tab stops, native units (µm) from the line start; non-positive and non-ascending ones are not stops.
+    const stops: { xUm: number }[] = [];
+    for (const xUm of b.tabs) if (xUm > 0 && (stops.length === 0 || xUm > stops[stops.length - 1].xUm)) stops.push({ xUm });
+    if (stops.length) out.tabStops = stops;
     if (b.underline) this.warn("SYMBOL_FEATURE_DROPPED", `${this.label}: underline`);
     if (b.lineBelow && b.lineBelow.colour >= 0 && b.lineBelow.width > 0) this.warn("SYMBOL_FEATURE_DROPPED", `${this.label}: line below text`);
     return out;

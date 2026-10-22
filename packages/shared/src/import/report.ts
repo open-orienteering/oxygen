@@ -46,7 +46,6 @@ export const WARNING_CLASS: Readonly<Record<string, WarningClass>> = {
   SYMBOL_FEATURE_DROPPED: "unsupported",
   UNKNOWN_OBJECT_TYPE: "unsupported",
   IRREGULAR_PATTERN_REGULARISED: "unsupported",
-  TEXT_BOX_DROPPED: "unsupported",
   COLOUR_OPACITY_IGNORED: "unsupported",
   TEMPLATES_DROPPED: "by-design",
   LAYOUT_OBJECTS_DROPPED: "by-design",

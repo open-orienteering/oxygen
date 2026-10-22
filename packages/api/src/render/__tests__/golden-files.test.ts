@@ -38,6 +38,7 @@ describe("golden PNGs", () => {
       "lib-holes",
       "lib-text",
       "lib-halos",
+      "lib-text-layout",
       "lib-colour-order",
       "lib-precision",
     ]);

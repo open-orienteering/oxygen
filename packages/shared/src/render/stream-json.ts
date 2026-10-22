@@ -265,7 +265,7 @@ export function passStreamToJson(stream: PassStream): PassStreamJson {
             sizeUm: q(p.sizeUm),
             glyphs: Array.from(p.glyphs),
             positions: Array.from(p.positions, (v) => q(v)),
-            ...(p.angles ? { angles: Array.from(p.angles, (v) => q(v)) } : {}),
+            ...(p.angles ? { angles: Array.from(p.angles, (v) => q(v, 6)) } : {}),
             ...(p.haloWidthUm ? { haloWidthUm: q(p.haloWidthUm) } : {}),
           };
       }

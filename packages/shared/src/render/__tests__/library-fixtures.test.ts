@@ -12,7 +12,7 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import { PRECISION_OFFSET_UM, type LibrarySceneName, libraryScene, librarySceneNames } from "../__fixtures__/library/index.js";
+import { PRECISION_OFFSET_UM, TEXT_LAYOUT_SCALE, type LibrarySceneName, libraryScene, librarySceneNames } from "../__fixtures__/library/index.js";
 import { PathMeasure } from "../measure.js";
 import { type GlyphPass, type Pass, type PassStream, type RenderPath, type Slice, type StrokePass, type TextPass } from "../pass-stream.js";
 import { hatchLines, pathBounds } from "../path.js";
@@ -318,6 +318,80 @@ describe("row 8 — text metrics (ISOM 704, 603.b)", () => {
     const [t] = texts(4);
     const second = t.positions.findIndex((v, i) => i % 2 === 1 && v !== t.positions[1]);
     expect(t.positions[1] - t.positions[second]).toBeCloseTo(1.2 * t.sizeUm, 3);
+  });
+});
+
+describe("row 8 (cont.) — text layout (B8: box, frame, tab, line text on 603.b)", () => {
+  const { scene, stream } = run("lib-text-layout");
+  const { sans } = liberation();
+  const S = TEXT_LAYOUT_SCALE;
+  const em = 2500 * S, k = em / 2048;
+  const [box, centred, , framed, tabbed, along] = [0, 1, 2, 3, 4, 5].map((o) => of(stream, "text", o)[0]);
+  const ys = (t: TextPass) => [...new Set(Array.from(t.positions).filter((_, i) => i % 2 === 1).map((v) => Math.round(v * 1000) / 1000))];
+  const rightEdge = (t: TextPass, i: number) => t.positions[2 * i] + sans.advance(t.glyphs[i]) * k;
+
+  it("box: hangs from the top edge, wraps inside 12 mm into three lines, lines 1.2 em apart, paragraph spacing before the second paragraph", () => {
+    const lines = ys(box);
+    expect(lines[0]).toBeCloseTo(12000 * S - 1854 * k, 2);
+    expect(lines).toHaveLength(4);
+    for (let i = 1; i < lines.length - 1; i++) expect(lines[i - 1] - lines[i]).toBeCloseTo(1.2 * em, 2);
+    expect(lines[lines.length - 2] - lines[lines.length - 1]).toBeCloseTo(1.2 * em + 600 * S, 2);
+    for (let i = 0; i < box.glyphs.length; i++) expect(rightEdge(box, i)).toBeLessThanOrEqual(12000 * S + 1e-3);
+  });
+
+  it("box: justify fills the width on wrapped lines, not on a paragraph's last line", () => {
+    const lineOf = (y: number) => Array.from({ length: box.glyphs.length }, (_, i) => i).filter((i) => Math.abs(box.positions[2 * i + 1] - y) < 1e-3);
+    const lines = ys(box);
+    const first = lineOf(lines[0]);
+    expect(rightEdge(box, first[first.length - 1])).toBeCloseTo(12000 * S, 1);
+    const lastOfParagraph = lineOf(lines[lines.length - 2]);
+    // "och stenar" is 11.67 mm (× scale) wide and stays so.
+    expect(rightEdge(box, lastOfParagraph[lastOfParagraph.length - 1])).toBeCloseTo(11674 * S, -1);
+  });
+
+  it("centred box: each line centred in the width, the block in the middle of the height", () => {
+    const lines = ys(centred);
+    expect(lines).toHaveLength(2);
+    const asc = 1854 * k, desc = 434 * k;
+    const block = asc + 1.2 * em + desc;
+    expect(lines[0]).toBeCloseTo(-2000 * S - (6000 * S - block) / 2 - asc, 2);
+  });
+
+  it("frame: one white fill over the green, the block (widest line, digit height to baseline) grown by the margins, turned 8° with the text", () => {
+    const fills = of(stream, "fill");
+    const frame = fills.find((f) => scene.colours[f.colour].id.endsWith(":white-over-green-brown"))!;
+    expect(stream.passes.indexOf(frame)).toBeGreaterThan(stream.passes.indexOf(fills.find((f) => f !== frame)!));
+    expect(Array.from(framed.angles!).every((a) => a === 8)).toBe(true);
+    // Width of the line in the text's own frame: the last glyph's advance end, un-turned.
+    const c = Math.cos((8 * Math.PI) / 180), sn = Math.sin((8 * Math.PI) / 180);
+    const last = framed.glyphs.length - 1;
+    const [ax, ay] = [16000 * S, 2500 * S];
+    const w = (framed.positions[2 * last] - ax) * c + (framed.positions[2 * last + 1] - ay) * sn + sans.advance(framed.glyphs[last]) * k;
+    const turn = (lx: number, ly: number) => [Math.round(ax + lx * c - ly * sn), Math.round(ay + lx * sn + ly * c)];
+    const [l, b, r, t] = [300 * S, 400 * S, 300 * S, 300 * S];
+    const top = 1430 * k + t;
+    const expected = [...turn(-l, -b), ...turn(w + r, -b), ...turn(w + r, top), ...turn(-l, top)];
+    Array.from(frame.path.coords).forEach((v, i) => expect(Math.abs(v - expected[i])).toBeLessThanOrEqual(1));
+  });
+
+  it("tab: the word after the tab starts at the 5 mm (× scale) stop", () => {
+    expect(tabbed.glyphs).toHaveLength(5);
+    expect(tabbed.positions[2]).toBeCloseTo((14000 + 5000) * S, 3);
+  });
+
+  it("line text: glyph origins on the arc, centred, each turned to its chord", () => {
+    const m = new PathMeasure(scene.objects[5].path);
+    const a = Array.from(along.angles!);
+    expect(a).toHaveLength(along.glyphs.length);
+    expect(a[0]).toBeGreaterThan(30);
+    expect(a[a.length - 1]).toBeLessThan(-30);
+    for (let i = 1; i < a.length; i++) expect(a[i]).toBeLessThan(a[i - 1]);
+    // Every origin is a point of the arc: its nearest sample is within 1 µm.
+    const samples = Array.from({ length: 2001 }, (_, i) => m.pointAt((i / 2000) * m.totalLength));
+    for (let g = 0; g < along.glyphs.length; g++) {
+      const d = Math.min(...samples.map((p) => Math.hypot(p.x - along.positions[2 * g], p.y - along.positions[2 * g + 1])));
+      expect(d).toBeLessThan(m.totalLength / 2000);
+    }
   });
 });
 

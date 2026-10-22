@@ -397,6 +397,65 @@ describe("symbolise — text shadow, faces, rotation", () => {
   });
 });
 
+describe("symbolise — text layout (box, path, frame)", () => {
+  const textSym = (o: object = {}) =>
+    parseRenderSymbol({ type: "text", id: "t", code: "t", name: "t", fontFamily: "liberation-sans", fontSizeUm: 2048, colour: 8, lineSpacing: 1, ...o });
+  const run1 = (obj: Partial<RenderObject>, sym = textSym()) =>
+    symbolise({ objects: [{ symbolIdx: 0, path: makePath([0, 0]), text: "00 00", ...obj }], symbols: [sym], fonts: fonts() });
+  // Box corners bottom-left, bottom-right, top-right, top-left: 3000 × 9000 µm, top-left at (1000, 10000).
+  const boxPath = makePath([1000, 1000, 4000, 1000, 4000, 10000, 1000, 10000]);
+
+  it("box: wraps inside the corners' width and hangs from the top-left corner", () => {
+    const [t] = only(run1({ path: boxPath, textLayout: "box" }).stream, "text");
+    expect(t.positions[0]).toBe(1000);
+    expect(t.positions[1]).toBe(10000 - 1854);
+    expect(t.positions[5]).toBe(10000 - 1854 - 2048); // second word on the second line
+  });
+
+  it("box with fewer than four points, or path with one point, falls back to block text from the first point", () => {
+    const box3 = only(run1({ path: makePath([500, 600, 900, 600, 900, 900]), textLayout: "box" }).stream, "text")[0];
+    expect([box3.positions[0], box3.positions[1]]).toEqual([500, 600]);
+    expect(box3.positions[3]).toBe(600); // one line
+    const path1 = only(run1({ path: makePath([500, 600]), textLayout: "path" }).stream, "text")[0];
+    expect([path1.positions[0], path1.positions[1]]).toEqual([500, 600]);
+    expect(path1.angles).toBeUndefined();
+  });
+
+  it("path: glyphs follow the path; halo and shadow share the angles, the shadow offset turned per glyph", () => {
+    const sym = textSym({ halo: { colour: 1, widthUm: 100 }, shadow: { colour: 2, offsetXUm: 100, offsetYUm: 0 } });
+    const { stream } = run1({ path: makePath([0, 0, 1500, 0, 1500, 10000]), textLayout: "path", text: "0000" }, sym);
+    const [halo, shadow, text] = [1, 2, 8].map((c) => only(stream, "text").find((p) => p.colour === c)!);
+    expect(Array.from(text.angles!).map(Math.round)).toEqual([0, 65, 90, 90]);
+    expect(Array.from(halo.angles!)).toEqual(Array.from(text.angles!));
+    expect(Array.from(shadow.angles!)).toEqual(Array.from(text.angles!));
+    // Glyph 0 at 0°: shadow +x; glyph 2 at 90°: shadow +y.
+    expect(shadow.positions[0] - text.positions[0]).toBeCloseTo(100, 2);
+    expect(shadow.positions[5] - text.positions[5]).toBeCloseTo(100, 2);
+    expect(shadow.positions[4] - text.positions[4]).toBeCloseTo(0, 2);
+  });
+
+  it("frame: one fill in its colour over the block extent plus the margins", () => {
+    const frame = { colour: 3, leftUm: 100, bottomUm: 200, rightUm: 300, topUm: 400 };
+    const { stream } = run1({ path: makePath([1000, 2000]), text: "0" }, textSym({ frame }));
+    const fills = only(stream, "fill");
+    expect(fills).toHaveLength(1);
+    expect(fills[0].colour).toBe(3);
+    const { sans } = liberation();
+    const top = Math.round(2000 + sans.digitHeight + 400);
+    expect(Array.from(fills[0].path.coords)).toEqual([900, 1800, 1000 + 1139 + 300, 1800, 1000 + 1139 + 300, top, 900, top]);
+  });
+
+  it("frame on box text spans the box width; it turns with the object; line text has none", () => {
+    const frame = { colour: 3, leftUm: 0, bottomUm: 0, rightUm: 0, topUm: 0 };
+    const box = only(run1({ path: boxPath, textLayout: "box", text: "0" }, textSym({ frame })).stream, "fill")[0];
+    expect([box.path.coords[0], box.path.coords[2]]).toEqual([1000, 4000]);
+    const turned = only(run1({ path: makePath([0, 0]), text: "0", angleDeg: 90 }, textSym({ frame })).stream, "fill")[0];
+    // (1139, 0) turned 90° is (0, 1139).
+    expect([turned.path.coords[2], turned.path.coords[3]]).toEqual([0, 1139]);
+    expect(only(run1({ path: makePath([0, 0, 9000, 0]), textLayout: "path", text: "0" }, textSym({ frame })).stream, "fill")).toEqual([]);
+  });
+});
+
 describe("symbolise — stream invariants", () => {
   it("unknown symbols and empty geometry produce warnings, never passes", () => {
     const { stream, warnings } = run([

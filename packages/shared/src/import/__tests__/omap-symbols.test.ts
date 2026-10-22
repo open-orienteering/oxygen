@@ -152,6 +152,14 @@ describe("omapSymbolToRender", () => {
     expect((still.render as TextSymbol).shadow).toBeUndefined();
   });
 
+  it("text: custom tab stops in native units; non-positive and non-ascending ones dropped; none leaves the field out", () => {
+    const tabs = (xml: string) => convert(sym(`<symbol type="8" id="3" code="702" name="T"><text_symbol><font family="Arial" size="3000"/><text color="0"/>${xml}</text_symbol></symbol>`));
+    const r = tabs(`<tabs count="4"><tab>7500</tab><tab>0</tab><tab>5000</tab><tab>12000</tab></tabs>`);
+    expect(r.warnings).toEqual([]);
+    expect((r.render as TextSymbol).tabStops).toEqual([{ xUm: 7500 }, { xUm: 12000 }]);
+    expect("tabStops" in (tabs("").render as TextSymbol)).toBe(false);
+  });
+
   it("reports unknown colours once per use and drops the feature", () => {
     const r = convert(sym(`<symbol type="2" id="1" code="x" name="n"><line_symbol color="42" line_width="100"/></symbol>`));
     expect(r.render).toBeNull();

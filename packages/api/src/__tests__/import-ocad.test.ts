@@ -6,6 +6,9 @@ import { importOcadToDocument, sha256Hex } from "../import/ocad.js";
 import { buildImportReport } from "../map-store/documents.js";
 import { mapFileMetadataFor } from "../map-store/map-file-metadata.js";
 import { parseOcadMapMetadata } from "../event-map.js";
+import { goldenFonts } from "../render/golden.js";
+// @ts-expect-error — plain .mjs fixture writer without types
+import { buildSymbolTypesOcad } from "../../../../scripts/lib/ocad-fixture.mjs";
 import { computeDeclination, computeMeridianStalenessDeg, detectMapNorth, probeMeridianLines, type OcadNorthSource } from "../map-north.js";
 
 const fixture = readFileSync(fileURLToPath(new URL("../../../../e2e/test.ocd", import.meta.url)));
@@ -65,6 +68,41 @@ describe("importOcadToDocument", () => {
     expect(input.stats.dropped).toBe(0);
     const { stream } = render.symbolise({ objects: input.objects, symbols: input.symbols, fonts: [] });
     expect(stream.passes.length).toBeGreaterThan(0);
+  });
+
+  it("lays out formatted text in its box, frames it, and lays line text along its path (reader → document → stage, B8)", async () => {
+    const { bytes, warnings } = await importOcadToDocument(buildSymbolTypesOcad(), "symbol-types.ocd");
+    expect(warnings.map((w) => w.code)).not.toContain("SYMBOL_FEATURE_DROPPED");
+    const doc = mapDocument.decodeMapDocument(bytes);
+    const boxSym = doc.header.symbols.find((s) => s.code === "902.3")!;
+    const white = doc.header.colours.findIndex((c) => c.name === "White");
+    expect(boxSym.render).toMatchObject({ type: "text", align: "justify", paragraphSpacingUm: 500, tabStops: [{ xUm: 7500 }], frame: { colour: white, leftUm: 200, bottomUm: 300, rightUm: 200, topUm: 100 } });
+    const input = mapDocument.documentRenderInput(doc, { unmatched: "drop", canonical: false });
+    const objOf = (text: string) => input.objects.findIndex((o) => o.text === text);
+    const boxObj = objOf("Wrapped inside its box\n7\tTab"), lineObj = objOf("Along the path");
+    expect(input.objects[boxObj].textLayout).toBe("box");
+    expect(input.objects[lineObj].textLayout).toBe("path");
+    const { stream, warnings: stageWarnings } = render.symbolise({ ...input, fonts: await goldenFonts() });
+    expect(stageWarnings).toEqual([]);
+    const passesOf = (o: number) => stream.passes.filter((_, i) => stream.objectIdx[i] === o);
+    // Box text: more than the two source lines (it wraps), every glyph inside the 20 mm-wide box, a frame fill behind it.
+    const box = passesOf(boxObj);
+    const boxText = box.find((p) => p.kind === "text" && p.colour !== white)!;
+    if (boxText.kind !== "text") throw new Error("no text pass");
+    const lines = new Set(Array.from(boxText.positions).filter((_, i) => i % 2 === 1).map((v) => Math.round(v)));
+    expect(lines.size).toBeGreaterThan(2);
+    for (let i = 0; i < boxText.glyphs.length; i++) {
+      expect(boxText.positions[2 * i]).toBeGreaterThanOrEqual(-10000);
+      expect(boxText.positions[2 * i]).toBeLessThan(10000);
+    }
+    expect(box.filter((p) => p.kind === "fill" && p.colour === white)).toHaveLength(1);
+    // Line text: every glyph has an angle; the path rises then falls.
+    const along = passesOf(lineObj).filter((p) => p.kind === "text");
+    for (const p of along) if (p.kind === "text") expect(p.angles).toHaveLength(p.glyphs.length);
+    const main = along[along.length - 1];
+    if (main.kind !== "text") throw new Error("no text pass");
+    expect(main.angles![0]).toBeGreaterThan(0);
+    expect(main.angles![main.glyphs.length - 1]).toBeLessThan(0);
   });
 
   it("matches the fixture's symbols against ISOM 2017-2 and aligns its colour stack (stages 6–7)", async () => {

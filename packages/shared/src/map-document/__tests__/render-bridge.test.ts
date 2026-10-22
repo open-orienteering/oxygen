@@ -6,6 +6,8 @@ import { documentRenderInput } from "../render-bridge.js";
 import { COORD_FLAG } from "../../render/pass-stream.js";
 import { symbolise } from "../../render/symbolise.js";
 import { liberation } from "../../render/__tests__/fonts.js";
+import type { TextSymbol } from "../../render/symbol.js";
+import { SYMBOL_LIBRARY_VERSION } from "../../symbol-library/index.js";
 
 /** A document whose symbols use every IR field B1 added (docs/map-rendering.md §3–4). */
 const header: MapDocumentInput["header"] = {
@@ -79,5 +81,59 @@ describe("documentRenderInput → symbolise (every B1 field through a document)"
   it("does not depend on the dev-only S1 reader path", () => {
     const src = readFileSync(fileURLToPath(new URL("../render-bridge.ts", import.meta.url)), "utf8");
     expect(src).not.toContain("ocad-objects");
+  });
+});
+
+describe("documentRenderInput — text layout (map-rendering §4.9, map-document-format §8)", () => {
+  const textHeader = (match?: Record<string, unknown>): MapDocumentInput["header"] => ({
+    ...header,
+    library: { id: "ISOM2017-2", version: SYMBOL_LIBRARY_VERSION },
+    documentFactor: 1,
+    colours: [
+      { id: "src:0", name: "Black", cmyk: [0, 0, 0, 1], sourceNumber: 0, paletteIds: ["black100"] },
+      { id: "src:1", name: "White", cmyk: [0, 0, 0, 0], sourceNumber: 1, paletteIds: ["white"] },
+      { id: "src:2", name: "Purple", cmyk: [0.35, 0.85, 0, 0], sourceNumber: 2, paletteIds: ["purple-lower"] },
+    ],
+    symbols: [{
+      code: "704.0", name: "Control number", kind: "text",
+      render: {
+        type: "text", id: "s:704", code: "704", name: "Control number", fontFamily: "liberation-sans-narrow", fontSizeUm: 3000, weight: 700, colour: 0,
+        align: "right", verticalAlign: "middle", lineSpacing: 1.5, paragraphSpacingUm: 300, charSpacing: 0.1, tabStops: [{ xUm: 4000 }],
+        shadow: { colour: 1, offsetXUm: 100, offsetYUm: -100 }, frame: { colour: 1, leftUm: 100, bottomUm: 100, rightUm: 100, topUm: 100 },
+      },
+      ...(match ? { match: { canonicalId: "ISOM2017-2:704", method: "code+geometry", state: "auto", confidence: 1, libraryVersion: SYMBOL_LIBRARY_VERSION, ...match } } : {}),
+    }],
+  });
+  const textDoc = (match?: Record<string, unknown>) =>
+    decodeMapDocument(encodeMapDocument({
+      header: textHeader(match),
+      objects: [
+        obj({ sourceIndex: 0, type: OBJECT_TYPE.text, text: "1", coords: [0, 0], flags: [0] }),
+        obj({ sourceIndex: 1, type: OBJECT_TYPE.formattedText, text: "2", coords: [0, 0, 3000, 0, 3000, 1000, 0, 1000], flags: [0, 0, 0, 0] }),
+        obj({ sourceIndex: 2, type: OBJECT_TYPE.lineText, text: "3", coords: [0, 0, 3000, 0], flags: [0, 0] }),
+      ],
+    }));
+
+  it("sets textLayout from the object type: formatted text is box text, line text runs along its path", () => {
+    const { objects } = documentRenderInput(textDoc());
+    const byText = Object.fromEntries(objects.map((o) => [o.text, o.textLayout]));
+    expect(byText).toEqual({ "1": undefined, "2": "box", "3": "path" });
+  });
+
+  it("a canonically drawn text symbol keeps the source's layout and takes the entry's appearance; shadow and frame stay behind", () => {
+    const { symbols, stats } = documentRenderInput(textDoc({}));
+    expect(stats.canonicalSymbols).toBe(1);
+    const t = symbols[0] as TextSymbol;
+    expect(t.id).toBe("ISOM2017-2:704");
+    // Entry appearance.
+    expect(t).toMatchObject({ fontFamily: "liberation-sans", digitHeightUm: 4000, weight: 400, colour: 2 });
+    // Source layout.
+    expect(t).toMatchObject({ align: "right", verticalAlign: "middle", lineSpacing: 1.5, paragraphSpacingUm: 300, charSpacing: 0.1, tabStops: [{ xUm: 4000 }] });
+    expect(t.wordSpacing).toBeUndefined();
+    expect(t.shadow).toBeUndefined();
+    expect(t.frame).toBeUndefined();
+    // A suggested (not applied) match draws the source as it is.
+    const src = documentRenderInput(textDoc({ state: "suggested" })).symbols[0] as TextSymbol;
+    expect(src).toMatchObject({ fontFamily: "liberation-sans-narrow", shadow: { colour: 1 }, frame: { colour: 1 } });
   });
 });

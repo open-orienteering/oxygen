@@ -161,7 +161,12 @@ export function ocadObjectsToRender(
     else matched++;
     const obj: RenderObject = { symbolIdx, path };
     if (o.ang) obj.angleDeg = o.ang / 10;
-    if (kind === "text" && o.text) obj.text = o.text;
+    if (kind === "text" && o.text) {
+      obj.text = o.text;
+      // Same layout rule as the document bridge (map-rendering §4.9).
+      if (otp === 5) obj.textLayout = "box";
+      else if (otp === 6) obj.textLayout = "path";
+    }
     objects.push(obj);
   }
 
