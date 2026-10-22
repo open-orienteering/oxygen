@@ -36,6 +36,13 @@ jobs:
       - run: pnpm build
       - run: pnpm lint
       - run: pnpm test
+      # `measure-parity.test.mjs` rasterises `e2e/test.ocd` with the legacy
+      # SVG renderer, whose text goes through system fonts. The Docker image
+      # installs `fonts-liberation`; the runner must too, or the 603 spot
+      # height falls back to another face and counts as a divergence
+      # (`docs/map-rendering.md` §6.4).
+      - name: Install Liberation fonts
+        run: sudo apt-get install -y --no-install-recommends fonts-liberation
       - name: Helper script tests
         run: pnpm test:scripts
 
