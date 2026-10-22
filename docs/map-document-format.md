@@ -301,6 +301,19 @@ Hidden symbols' objects are skipped unless `includeHidden`. Statistics:
 canonicalMissing` (the last counts applied matches whose entry or colours
 could not be resolved — always 0 for a document the importer produced).
 
+**Canonically drawn text keeps the source's layout** (user decision
+2026-10-22, B8). When both the canonical entry and the symbol's own
+`render` are text, the canonical copy takes from the source symbol its
+layout fields — `align`, `lineSpacing`, `paragraphSpacingUm`,
+`charSpacing`, and, when the source has them, `verticalAlign`,
+`wordSpacing` and `tabStops` — and keeps the entry's appearance:
+`fontFamily`, `fontSizeUm` / `digitHeightUm`, `weight`, `italic`,
+`colour`, `halo`. The source's `shadow` and `frame` are **not** carried:
+a match means the library's look (a matched line symbol likewise loses
+its source framing), and the text fingerprint (`map-symbols.md` §8.1)
+never reads any layout field, so none of them is evidence for or against
+the match. A field absent on the source is left as the entry has it.
+
 ## 9. Measured on the corpus
 
 `.local/research/oxygen-measurements/document/measure-document.mjs` (Node 20, laptop)

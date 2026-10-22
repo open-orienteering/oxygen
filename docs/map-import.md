@@ -811,7 +811,12 @@ and transcendental functions (`Math.sin`/`cos`/`atan2`, proj4): their
 last-bit results are not guaranteed identical across engines and
 platforms, so the header holds only source-declared values and the one
 computed value (OMAP `paperOrigin`) is rounded to 1e-6 m; everything
-projected lives in the report (§3.8). The S0 corpus check asserts the
+projected lives in the report (§3.8). The one computed *coordinate*: a
+**rotated Mapper box text**'s four corners (§4.2), which need `sin` /
+`cos` of the object rotation, are rounded to integer native units
+(0.001 mm) — a cross-engine last-bit difference flips such a rounding
+with probability ~1e-12 per coordinate (user decision 2026-10-22, B8).
+Unrotated boxes are computed in integers. The S0 corpus check asserts the
 document hash is identical on two machines.
 
 ## 7. Tests
