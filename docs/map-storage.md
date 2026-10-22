@@ -99,7 +99,7 @@ storeImportedDocument(db, { source: { bytes, fileHash, kind, fileName, uploadedB
   behind the header's one-message-per-code `warnings`, `docs/map-import.md`
   §3.6).
 - `library_version` is `"<library>@<SYMBOL_LIBRARY_VERSION>"`
-  (`ISOM2017-2@2026.10.2`), the library the matcher chose for the
+  (`ISOM2017-2@2026.10.3`), the library the matcher chose for the
   document. Rows imported before the matcher carry `"none"`
   (`LIBRARY_VERSION_NONE`) and `importer ocad-3`; they are no longer
   dedup targets, so the next upload of the same bytes produces a new

@@ -1,6 +1,6 @@
 {
-"objectIdx": [1,1,2,2,1,2,0,0,0,0],
-"symbolIdx": [1,1,2,2,1,2,0,0,0,0],
+"objectIdx": [1,1,2,2,1,2,0,0],
+"symbolIdx": [1,1,2,2,1,2,0,0],
 "passes": [
 {"kind":"stroke","colour":19,"path":{"coords":[0,-2775,6225,-2775,6225,-9000]},"slices":[{"seg0":0,"t0":0,"seg1":0,"t1":0.305556},{"seg0":0,"t0":0.347222,"seg1":0,"t1":0.652778},{"seg0":0,"t0":0.694444,"seg1":1,"t1":0.305556},{"seg0":1,"t0":0.347222,"seg1":1,"t1":0.652778},{"seg0":1,"t0":0.694444,"seg1":1,"t1":1}],"widthUm":120,"cap":"butt","join":"miter"},
 {"kind":"stroke","colour":19,"path":{"coords":[0,-3225,5775,-3225,5775,-9000]},"slices":[{"seg0":0,"t0":0,"seg1":0,"t1":0.305556},{"seg0":0,"t0":0.347222,"seg1":0,"t1":0.652778},{"seg0":0,"t0":0.694444,"seg1":1,"t1":0.305556},{"seg0":1,"t0":0.347222,"seg1":1,"t1":0.652778},{"seg0":1,"t0":0.694444,"seg1":1,"t1":1}],"widthUm":120,"cap":"butt","join":"miter"},
@@ -8,10 +8,8 @@
 {"kind":"stroke","colour":19,"path":{"coords":[9000,-3300,21000,-3300]},"slices":[{"seg0":0,"t0":0,"seg1":0,"t1":0.183333},{"seg0":0,"t0":0.204167,"seg1":0,"t1":0.3875},{"seg0":0,"t0":0.408333,"seg1":0,"t1":0.591667},{"seg0":0,"t0":0.6125,"seg1":0,"t1":0.795833},{"seg0":0,"t0":0.816667,"seg1":0,"t1":1}],"widthUm":200,"cap":"butt","join":"miter"},
 {"kind":"stroke","colour":20,"path":{"coords":[0,-3000,6000,-3000,6000,-9000],"flags":[0,4,0]},"widthUm":350,"cap":"butt","join":"miter"},
 {"kind":"stroke","colour":20,"path":{"coords":[9000,-3037,21000,-3037]},"widthUm":350,"cap":"butt","join":"miter"},
-{"kind":"stroke","colour":28,"path":{"coords":[0,0,12000,0]},"slices":[{"seg0":0,"t0":0,"seg1":0,"t1":0.133333},{"seg0":0,"t0":0.216667,"seg1":0,"t1":0.35},{"seg0":0,"t0":0.433333,"seg1":0,"t1":0.566667},{"seg0":0,"t0":0.65,"seg1":0,"t1":0.783333},{"seg0":0,"t0":0.866667,"seg1":0,"t1":1}],"widthUm":350,"cap":"butt","join":"miter"},
-{"kind":"stroke","colour":28,"path":{"coords":[0,175,12000,175]},"widthUm":100,"cap":"butt","join":"miter"},
-{"kind":"stroke","colour":28,"path":{"coords":[0,-175,12000,-175]},"widthUm":100,"cap":"butt","join":"miter"},
-{"kind":"stroke","colour":29,"path":{"coords":[0,0,12000,0]},"widthUm":350,"cap":"butt","join":"miter"}
+{"kind":"stroke","colour":28,"path":{"coords":[0,0,12000,0]},"widthUm":450,"cap":"butt","join":"miter"},
+{"kind":"stroke","colour":29,"path":{"coords":[0,0,12000,0]},"slices":[{"seg0":0,"t0":0.125,"seg1":0,"t1":0.21875},{"seg0":0,"t0":0.34375,"seg1":0,"t1":0.4375},{"seg0":0,"t0":0.5625,"seg1":0,"t1":0.65625},{"seg0":0,"t0":0.78125,"seg1":0,"t1":0.875}],"widthUm":250,"cap":"butt","join":"miter"}
 ],
 "glyphTable": [],
 "fontTable": [{"fontId":0,"family":"liberation-sans","bold":false,"italic":false},{"fontId":1,"family":"liberation-sans-narrow","bold":false,"italic":false}]

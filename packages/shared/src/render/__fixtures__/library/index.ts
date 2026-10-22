@@ -116,10 +116,11 @@ function lineGlyphs(): LibraryScene {
   const fence = s.add("516");
   const cliff = s.add("201");
   const corners = s.add<LineSymbol>("529", (x) => ({ ...x, glyphs: [{ ...x.glyphs![0], placement: { at: "corners", ignoreEnds: true }, scaleAtCorners: true }] }));
-  const power = s.add("510");
+  // 510 with its pole on dash points: a hand variant since B10 moved the library's pylons to corners — keeps §4.5's dash-point rule under test.
+  const power = s.add<LineSymbol>("510", (x) => ({ ...x, glyphs: [{ ...x.glyphs![0], placement: { at: "dashPoints" } }] }));
   const boundary = s.add("416");
-  // 510 as the OCAD importer writes it (B9): the pole is OCAD's corner symbol, on corner-flagged vertices only.
-  const powerCorners = s.add<LineSymbol>("510", (x) => ({ ...x, glyphs: [{ ...x.glyphs![0], placement: { at: "corners" } }] }));
+  // 510 as the library draws it (B10) and as the OCAD importer writes it (B9): poles on corner-flagged vertices only.
+  const powerCorners = s.add("510");
   return {
     name: "lib-line-glyphs", library: s.library, colours: s.colours, symbols: s.list,
     objects: [

@@ -91,7 +91,7 @@ import { importMapToDocument, importOcadToDocument, importOmapToDocument } from 
 const r = await importMapToDocument(buffer, "map.omap", kind /* "ocad" | "omap" */, { renderFor, onStage, match });
 // importOcadToDocument / importOmapToDocument are the fixed-kind wrappers.
 // r.kind, r.bytes, r.documentHash, r.fileHash, r.counts, r.warnings, r.warningDetails,
-// r.matching, r.colourStack, r.analysis (stage 5, §3.8), r.libraryVersion ("ISOM2017-2@2026.10.2"),
+// r.matching, r.colourStack, r.analysis (stage 5, §3.8), r.libraryVersion ("ISOM2017-2@2026.10.3"),
 // r.timings { read, normalise, match, encode } (ms)
 // onStage?: (stage: "parse" | "normalise" | "match" | "encode") => void — called as
 // each stage begins; the import job (docs/map-storage.md §6) writes it to the row.

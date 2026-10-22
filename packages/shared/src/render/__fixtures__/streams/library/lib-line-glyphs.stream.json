@@ -20,9 +20,9 @@
 {"glyphId":1,"partIdx":0,"fills":[],"strokes":[{"path":{"coords":[0,0,0,-575]},"widthUm":120,"cap":"butt","join":"miter"}]},
 {"glyphId":2,"partIdx":0,"fills":[],"strokes":[{"path":{"coords":[0,0,-330,-330]},"widthUm":140,"cap":"butt","join":"miter"}]},
 {"glyphId":2,"partIdx":1,"fills":[],"strokes":[{"path":{"coords":[0,0,-330,330]},"widthUm":140,"cap":"butt","join":"miter"}]},
-{"glyphId":3,"partIdx":0,"fills":[],"strokes":[{"path":{"coords":[0,-300,0,300]},"widthUm":140,"cap":"butt","join":"miter"}]},
+{"glyphId":3,"partIdx":0,"fills":[],"strokes":[{"path":{"coords":[0,-370,0,370]},"widthUm":140,"cap":"butt","join":"miter"}]},
 {"glyphId":4,"partIdx":0,"fills":[{"coords":[110,0,110,61,61,110,0,110,-61,110,-110,61,-110,0,-110,-61,-61,-110,0,-110,61,-110,110,-61,110,0],"flags":[0,1,2,0,1,2,0,1,2,0,1,2,0],"closed":true}],"strokes":[]},
-{"glyphId":5,"partIdx":0,"fills":[],"strokes":[{"path":{"coords":[0,-300,0,300]},"widthUm":140,"cap":"butt","join":"miter"}]}
+{"glyphId":5,"partIdx":0,"fills":[],"strokes":[{"path":{"coords":[0,-370,0,370]},"widthUm":140,"cap":"butt","join":"miter"}]}
 ],
 "fontTable": [{"fontId":0,"family":"liberation-sans","bold":false,"italic":false},{"fontId":1,"family":"liberation-sans-narrow","bold":false,"italic":false}]
 }
