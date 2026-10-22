@@ -15,7 +15,7 @@ import {
   aboveZoomGate, BucketLru, buildVisibleSet, CLUB_BUDGET_BYTES, DRAW_MARGIN_CELLS, PREFETCH_MARGIN_CELLS, visibleCells,
   type PreparedPart, type ResidentPart, type ViewRect,
 } from "./buckets.js";
-import type { DocumentRenderOptions, FrameStats, MapGlRenderer } from "./renderer.js";
+import type { DocumentRenderOptions, FrameStats, MapGlRenderer, TextAtlasImage } from "./renderer.js";
 import type { RenderTarget } from "./view.js";
 import { createMapGlWorker, messageChannelScheduler, type LoadRequest, type LoadSummary, type WorkerReply, type WorkerRequest } from "./worker.js";
 
@@ -47,6 +47,12 @@ export function inlineTransport(): Transport {
   return t;
 }
 
+/** What `MapGlEngine.load` takes: the worker's load request, with the text atlas pages decoded for the renderer. */
+export type EngineLoadRequest = Omit<LoadRequest, "type" | "gate" | "prefetchMarginCells" | "textAtlas"> & {
+  /** Text atlas pages (`lib/map-fonts.ts` `loadTextAtlas`); without them no text is drawn. */
+  textAtlas?: TextAtlasImage[];
+};
+
 export interface EngineOptions {
   /** Resident GPU budget, bytes. Default 150 MB (club); B4 passes 30 MB for event maps. */
   budgetBytes?: number;
@@ -64,7 +70,7 @@ export interface EngineStats {
   pending: number;
   gated: boolean;
   residentDetail: number;
-  /** Bytes the budget counts: base + large + atlas + resident detail + visible-set buffers. */
+  /** Bytes the budget counts: base + large + mesh atlas + text atlas + resident detail + visible-set buffers. */
   residentBytes: number;
   overBudget: boolean;
   evictions: number;
@@ -129,12 +135,17 @@ export class MapGlEngine {
    * view you will show first (`firstView`) and draw `summary.view`: its detail is then already on
    * its way.
    */
-  load(req: Omit<LoadRequest, "type" | "gate" | "prefetchMarginCells">): Promise<LoadSummary> {
+  load(req: EngineLoadRequest): Promise<LoadSummary> {
     const transfer: Transferable[] = req.fonts.map((f) => f.bytes);
     if (req.source.kind === "document") transfer.push(req.source.bytes);
+    // The renderer holds the page images, the worker resolves glyphs against the same pages in the same order.
+    const { textAtlas, ...rest } = req;
+    this.renderer.setTextAtlas(textAtlas ?? []);
+    const msg: LoadRequest = { type: "load", ...rest, gate: this.opts.gate, prefetchMarginCells: this.opts.prefetchMarginCells };
+    if (textAtlas?.length) msg.textAtlas = textAtlas.map((t) => t.page);
     return new Promise((resolve, reject) => {
       this.loadWaiter = { resolve, reject };
-      this.transport.post({ type: "load", ...req, gate: this.opts.gate, prefetchMarginCells: this.opts.prefetchMarginCells }, transfer);
+      this.transport.post(msg, transfer);
     });
   }
 
@@ -157,7 +168,7 @@ export class MapGlEngine {
       for (const p of m.base) this.base.set(p.bucket, this.renderer.uploadPart(BASE(p.bucket), p));
       this.large = m.large ? this.renderer.uploadPart(LARGE, m.large) : undefined;
       this.detailCells = new Set(s.detailCells);
-      this.fixedBytes = s.bytes.base + s.bytes.large + s.bytes.atlas;
+      this.fixedBytes = s.bytes.base + s.bytes.large + s.bytes.atlas + this.renderer.textAtlasBytes;
       this.lru.fixedBytes = this.fixedBytes;
       this.dirty = true;
       this.drawnKey = "";

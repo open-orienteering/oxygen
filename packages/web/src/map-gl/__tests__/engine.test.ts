@@ -5,7 +5,8 @@ import { render } from "@oxygen/shared";
 import { MapGlEngine, type Transport } from "../engine";
 import { createMapGlWorker, type WorkerReply, type WorkerRequest } from "../worker";
 import { CELL_UM, type PreparedPart, type ResidentPart, type VisibleSet, type ViewRect } from "../buckets";
-import type { MapGlRenderer } from "../renderer";
+import type { MapGlRenderer, TextAtlasImage } from "../renderer";
+import { parseTextAtlasPage } from "../text-atlas";
 
 const fontsDir = resolve(import.meta.dirname, "../../../../shared/fonts");
 const fontBytes = () => {
@@ -33,8 +34,15 @@ class FakeRenderer {
   parts = new Map<string, PreparedPart>();
   released: string[] = [];
   visibleSets: VisibleSet[] = [];
+  textAtlas: TextAtlasImage[][] = [];
   private next = 0;
   setDocument(): void {}
+  setTextAtlas(pages: TextAtlasImage[]): void {
+    this.textAtlas.push(pages);
+  }
+  get textAtlasBytes() {
+    return this.textAtlas.at(-1)?.reduce((n, p) => n + p.page.width * p.page.height * 4, 0) ?? 0;
+  }
   uploadPart(key: string, part: PreparedPart): ResidentPart {
     this.parts.set(key, part);
     const base = { fill: this.next, hatch: this.next, stroke: this.next };
@@ -52,7 +60,7 @@ class FakeRenderer {
     return { drawCalls: 1, cpuMs: 0 };
   }
   get documentBytes() {
-    return { arenas: 0, arenasUsed: 0, atlas: 0, visibleSet: 0, total: 0 };
+    return { arenas: 0, arenasUsed: 0, atlas: 0, text: 0, visibleSet: 0, total: 0 };
   }
 }
 
@@ -76,11 +84,13 @@ function manualTransport() {
   return t;
 }
 
-async function loaded(budgetBytes: number) {
+const latin = parseTextAtlasPage(JSON.parse(readFileSync(resolve(fontsDir, "msdf/text-atlas.latin.json"), "utf8")));
+
+async function loaded(budgetBytes: number, textAtlas?: TextAtlasImage[]) {
   const renderer = new FakeRenderer();
   const transport = manualTransport();
   const engine = new MapGlEngine(renderer as unknown as MapGlRenderer, transport, { budgetBytes });
-  const p = engine.load({ source: { kind: "objects", objects: objects(), symbols: render.pilotSymbols }, fonts: [{ family: "liberation-sans", bytes: fontBytes() }] });
+  const p = engine.load({ source: { kind: "objects", objects: objects(), symbols: render.pilotSymbols }, fonts: [{ family: "liberation-sans", bytes: fontBytes() }], textAtlas });
   transport.flush();
   const summary = await p;
   return { renderer, transport, engine, summary };
@@ -171,5 +181,26 @@ describe("MapGlEngine residency (docs/map-rendering.md §5.2)", () => {
     const after = renderer.visibleSets.at(-1)!;
     expect(after.fill.indices.length).toBeLessThan(before);
     expect(after.fill.indices.length).toBe(0);
+  });
+
+  it("hands the text atlas images to the renderer and the same pages to the worker; their bytes are resident", async () => {
+    const image = {} as TexImageSource;
+    const { engine, transport, renderer, summary } = await loaded(1 << 30, [{ page: latin, image }]);
+    expect(renderer.textAtlas.at(-1)).toEqual([{ page: latin, image }]);
+    const load = transport.posted[0] as Extract<WorkerRequest, { type: "load" }>;
+    expect(load.textAtlas).toEqual([latin]);
+    expect(summary.text.pages).toEqual(["latin"]);
+    expect(engine.stats().residentBytes).toBeGreaterThanOrEqual(latin.width * latin.height * 4);
+    engine.setView(cellView(2, 2));
+    transport.flush();
+    engine.render({ colour: () => [0, 0, 0] });
+    expect(renderer.visibleSets.at(-1)!.text.draws.length).toBeGreaterThan(0);
+  });
+
+  it("without pages: the renderer's atlas is cleared and the worker gets none", async () => {
+    const { transport, renderer, summary } = await loaded(1 << 30);
+    expect(renderer.textAtlas.at(-1)).toEqual([]);
+    expect((transport.posted[0] as Extract<WorkerRequest, { type: "load" }>).textAtlas).toBeUndefined();
+    expect(summary.warnings.TEXT_ATLAS_MISSING).toBeGreaterThan(0);
   });
 });

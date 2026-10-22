@@ -121,15 +121,17 @@ export default defineConfig({
             },
           },
           {
-            // The vector viewer's fonts (Liberation Sans + Narrow, hashed
-            // asset URLs): cached on first use rather than precached, so
-            // devices that never open a vector map do not download them.
+            // The vector viewer's fonts (Liberation Sans + Narrow) and MSDF
+            // text atlas pages (hashed asset URLs): cached on first use
+            // rather than precached, so devices that never open a vector
+            // map do not download them.
             urlPattern: (ctx: { sameOrigin: boolean; url: URL }) =>
-              ctx.sameOrigin && ctx.url.pathname.startsWith("/assets/") && ctx.url.pathname.endsWith(".ttf"),
+              ctx.sameOrigin && ctx.url.pathname.startsWith("/assets/") &&
+              (ctx.url.pathname.endsWith(".ttf") || ctx.url.pathname.startsWith("/assets/text-atlas.")),
             handler: "CacheFirst",
             options: {
               cacheName: "map-fonts",
-              expiration: { maxEntries: 8, maxAgeSeconds: 365 * 24 * 60 * 60 },
+              expiration: { maxEntries: 16, maxAgeSeconds: 365 * 24 * 60 * 60 },
               cacheableResponse: { statuses: [200] },
             },
           },

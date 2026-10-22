@@ -15,7 +15,8 @@ import type { ViewRect } from "../map-gl/buckets";
 import { MapGlEngine, workerTransport } from "../map-gl/engine";
 import { MapGlRenderer } from "../map-gl/renderer";
 import type { LoadedMapDocument } from "../lib/map-document-cache";
-import { loadMapFonts } from "../lib/map-fonts";
+import { loadMapFonts, loadTextAtlas } from "../lib/map-fonts";
+import { textAtlasPagesFor } from "../map-gl/text-atlas";
 import { budgetBytes, documentColours, documentProxyColours, type MapBudget } from "../lib/vector-map";
 
 export type VectorLayerStatus = "loading" | "drawn" | "complete" | "error" | "webgl";
@@ -79,7 +80,15 @@ export function VectorMapLayer({ doc, view, width, height, budget, zIndex = 1 }:
     let cancelled = false;
     setStatus("loading");
     (async () => {
-      const fonts = await loadMapFonts();
+      // Text atlas pages the document's strings need (Cyrillic only on demand). A page that fails
+      // costs its text, not the map: fall back to the Latin page, then to no text.
+      const [fonts, textAtlas] = await Promise.all([
+        loadMapFonts(),
+        loadTextAtlas(textAtlasPagesFor(doc.header.strings)).catch((err: unknown) => {
+          console.warn("[vector-map] text atlas failed:", err);
+          return loadTextAtlas(["latin"]).catch(() => []);
+        }),
+      ]);
       if (cancelled) return;
       const first = viewRef.current;
       await engine.load({
@@ -89,6 +98,7 @@ export function VectorMapLayer({ doc, view, width, height, budget, zIndex = 1 }:
           options: { unmatched: "proxy", proxyColours: documentProxyColours(doc.header.colours) },
         },
         fonts: fonts.map((f) => ({ family: f.family, bytes: f.bytes.slice(0) })),
+        textAtlas,
         firstView: first ? { kind: "view", view: first } : undefined,
       });
       if (cancelled) return;

@@ -18,8 +18,8 @@
  *
  * Query: `mode=source|pilot|envelope` (default source), `via=document|reader`,
  * `worker=0` (worker handler inline on this thread), `gate=0` (no zoom gate), `budget=<MB>` (default
- * 150), `kinds=fill,stroke,…` (draw only these kinds; profiling), `lod=0` (no glyph skip / hatch
- * tint), `url=`, `bench=1`, `compare=1` (also draw the stream through the per-pass golden path into
+ * 150), `kinds=fill,stroke,…` (draw only these kinds; profiling), `lod=0` (no glyph skip / text skip /
+ * hatch tint), `url=`, `bench=1`, `compare=1` (also draw the stream through the per-pass golden path into
  * a second canvas and publish the pixel difference; with `target=fbo` the arena path draws into an
  * offscreen framebuffer). Not routed in production builds.
  */
@@ -33,6 +33,8 @@ import { MapGlRenderer, hexToRgb, type FrameStats, type View } from "../../map-g
 import { MapGlEngine, inlineTransport, workerTransport, type EngineStats, type Transport } from "../../map-gl/engine";
 import type { LoadSummary } from "../../map-gl/worker";
 import { fitView } from "../../map-gl/buckets";
+import { textAtlasPagesFor } from "../../map-gl/text-atlas";
+import { loadTextAtlas } from "../../lib/map-fonts";
 import liberationSansUrl from "../../../../shared/fonts/LiberationSans-Regular.ttf?url";
 import liberationSansNarrowUrl from "../../../../shared/fonts/LiberationSansNarrow-Regular.ttf?url";
 
@@ -105,6 +107,8 @@ interface LoadReport {
   /** MSAA samples of the canvas. */
   samples: number;
   warnings: Record<string, number>;
+  /** Text atlas pages loaded (from the document's strings) and glyphs resolved against them. */
+  text: LoadSummary["text"];
   /** Main-thread long tasks (> 50 ms) from start to the complete frame, including reading the file. */
   mainThread?: { longTasks: number; longestMs: number; totalMs: number };
 }
@@ -286,8 +290,8 @@ export function MapGlDocPage() {
       const stats = engine.render({
         colour: colourRef.current,
         ...(kindsRef.current ? { kinds: kindsRef.current } : {}),
-        // lod=0: no screen-only skips (glyph < 2 px, hatch tint) — for attributing their effect.
-        ...(lodRef.current ? {} : { minGlyphPx: 0, hatchTintPx: 0 }),
+        // lod=0: no screen-only skips (glyph < 2 px, text < 4 px, hatch tint) — for attributing their effect.
+        ...(lodRef.current ? {} : { minGlyphPx: 0, minTextPx: 0, hatchTintPx: 0 }),
       });
       stats.cpuMs = performance.now() - t0;
       return stats;
@@ -433,9 +437,11 @@ export function MapGlDocPage() {
           const source = encodedDocument
             ? { kind: "document" as const, bytes: encodedDocument.slice().buffer as ArrayBuffer, options: bridgeOptions }
             : { kind: "objects" as const, objects: readerInput!.objects, symbols: readerInput!.symbols };
+          const strings = header ? header.strings : readerInput!.objects.flatMap((o) => (o.text ? [o.text] : []));
+          const textAtlas = await loadTextAtlas(textAtlasPagesFor(strings));
           const tPost = performance.now();
           const summary = await engine.load({
-            source, fonts: fontBytes.map((f) => ({ family: f.family, bytes: f.bytes.slice(0) })),
+            source, fonts: fontBytes.map((f) => ({ family: f.family, bytes: f.bytes.slice(0) })), textAtlas,
             firstView: { kind: "fit", widthPx: w, heightPx: h, fill: 0.95 },
           });
           renderer.gl.finish();
@@ -484,6 +490,7 @@ export function MapGlDocPage() {
             gpuBytes: gpu.total,
             firstFrame: first, completeFrame: complete,
             dpr: window.devicePixelRatio || 1, canvasPx: { w, h }, gpuTimer: renderer.hasGpuTimer, samples: renderer.samples, warnings: summary.warnings,
+            text: summary.text,
           };
           setEngineStats(es);
         }
@@ -778,7 +785,8 @@ export function MapGlDocPage() {
               passes {load.passes} ({Object.entries(load.passKinds).map(([k, v]) => `${k} ${v}`).join(", ")}) · colours {load.colours}
               <br />
               GPU <b>{mb(load.gpuBytes)}</b>
-              {load.arena && <> (arenas {mb(load.arena.gpu.arenas)}, visible set {mb(load.arena.gpu.visibleSet)})</>}
+              {load.arena && <> (arenas {mb(load.arena.gpu.arenas)}, text atlas {mb(load.arena.gpu.text)}, visible set {mb(load.arena.gpu.visibleSet)})</>}
+              {" "}· text atlas {load.text.pages.join(" + ") || "none"}: {load.text.glyphs} glyphs{load.text.missing > 0 && <>, <b>{load.text.missing} not in the atlas</b></>}
               <br />
               canvas {load.canvasPx.w}×{load.canvasPx.h} @ {load.dpr}× · MSAA {load.samples}× · GPU timer {load.gpuTimer ? "yes" : "no"}
               {Object.keys(load.warnings).length > 0 && <> · warnings {JSON.stringify(load.warnings)}</>}
