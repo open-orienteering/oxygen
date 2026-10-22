@@ -251,7 +251,7 @@ describe("ocadToDocumentInput", () => {
       s.symbols = [...Array.from(s.symbols),
         { symNum: 301002, number: "301.2", type: 3, status: 0, description: "Stale", fillOn: true, fillColor: 0, borderOn: true, borderSym: 301002 },
         { symNum: 822000, number: "822.0", type: 4, status: 0, description: "Text 2", fontName: "Arial", fontColor: 7, fontSize: 80, lbOn: true },
-        { symNum: 823000, number: "823.0", type: 4, status: 0, description: "Text 3", fontName: "Arial", fontColor: 7, fontSize: 80, frMode: 3, frColor: 0 },
+        { symNum: 823000, number: "823.0", type: 4, status: 0, description: "Text 3", fontName: "Arial", fontColor: 7, fontSize: 80, indentFirst: 50 },
       ];
       return s;
     };
@@ -263,7 +263,7 @@ describe("ocadToDocumentInput", () => {
       const details = r.warningDetails.filter((d) => d.code === "SYMBOL_FEATURE_DROPPED");
       expect(details).toEqual([
         { code: "SYMBOL_FEATURE_DROPPED", message: "822.0: line below text", symbolIdx: 7 },
-        { code: "SYMBOL_FEATURE_DROPPED", message: "823.0: text rectangle framing", symbolIdx: 8 },
+        { code: "SYMBOL_FEATURE_DROPPED", message: "823.0: paragraph indent", symbolIdx: 8 },
       ]);
       expect(r.warningDetails.filter((d) => d.code === "SYMBOL_REFERENCE_INVALID")).toEqual([
         { code: "SYMBOL_REFERENCE_INVALID", message: "301.2: border symbol 301002 is the symbol itself", symbolIdx: 6 },
@@ -306,7 +306,7 @@ describe("ocadToDocumentInput", () => {
 
   it("fills the header: provenance, units, scale, print window, export rectangles", () => {
     const h = input.header;
-    expect(h.format).toEqual({ version: 1, importer: "ocad-12" });
+    expect(h.format).toEqual({ version: 1, importer: "ocad-13" });
     expect(h.source).toEqual({ kind: "ocad", version: "2018.8.3", hash: "ff".repeat(32), bytes: 4242 });
     expect(h.unitsPerMm).toBe(OCAD_UNITS_PER_MM);
     expect(h.mapScale).toBe(15000);

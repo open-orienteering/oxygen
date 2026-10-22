@@ -101,16 +101,41 @@ describe("omapToDocumentInput (fixture)", () => {
     expect(bySource(15).angleDeciDeg).toBeUndefined();
   });
 
-  it("texts: anchor only, entities decoded, first alignment pair lifted onto the symbol, box warned", () => {
+  it("texts: anchor only, entities decoded, first alignment pair lifted onto the symbol", () => {
     expect(bySource(18)).toMatchObject({ type: OBJECT_TYPE.text, text: "Fixture <map>", angleDeciDeg: 57 });
-    expect(bySource(21).coords.length).toBe(2);
+    expect(bySource(20).coords.length).toBe(2);
     expect((header.symbols[15].render as TextSymbol).align).toBe("centre");
     const t702 = header.symbols[20].render as TextSymbol;
     expect(t702.align).toBe("left");
     expect("verticalAlign" in t702).toBe(false);
     expect(warning("TEXT_ALIGNMENT_PER_OBJECT")).toBeUndefined();
     expect(warning("TEXT_VERTICAL_ALIGNMENT_DROPPED")).toBeUndefined();
-    expect(warning("TEXT_BOX_DROPPED")).toMatchObject({ count: 1 });
+    expect(warning("TEXT_BOX_DROPPED")).toBeUndefined();
+  });
+
+  it("a box text is formatted text with its four corners from the centre and size, y flipped (§4.2)", () => {
+    // Mapper: centre (70000, 70000) y-down, box 20 × 6 mm.
+    const box = objects.find((o) => o.text === "boxed text")!;
+    expect(box.type).toBe(OBJECT_TYPE.formattedText);
+    expect(Array.from(box.coords)).toEqual([60000, -73000, 80000, -73000, 80000, -67000, 60000, -67000]);
+    expect(Array.from(box.flags)).toEqual([0, 0, 0, 0]);
+    expect(box.angleDeciDeg).toBeUndefined();
+  });
+
+  it("an odd-sized box keeps its size exactly; a rotated box is turned about the centre and rounded to native units", () => {
+    const f = readOmap(readFileSync(FIXTURE, "utf8"));
+    const o = f.parts.flatMap((p) => p.objects).find((x) => x.text === "boxed text")!;
+    o.boxSize = { width: 20001, height: 6001 };
+    const odd = omapToDocumentInput(f, { fileName: "test.xmap", fileHash: "ab".repeat(32), fileBytes: 16960 }).input.objects.find((x) => x.text === "boxed text")!;
+    expect(Array.from(odd.coords)).toEqual([60000, -73000, 80001, -73000, 80001, -66999, 60000, -66999]);
+    o.boxSize = { width: 20000, height: 6000 };
+    o.rotation = Math.PI / 6;
+    const r = omapToDocumentInput(f, { fileName: "test.xmap", fileHash: "ab".repeat(32), fileBytes: 16960 }).input.objects.find((x) => x.text === "boxed text")!;
+    expect(r.angleDeciDeg).toBe(300);
+    const c = Math.cos(Math.PI / 6), sn = Math.sin(Math.PI / 6);
+    const corner = (lx: number, ly: number) => [Math.round(70000 + lx * c - ly * sn), Math.round(-70000 + lx * sn + ly * c)];
+    expect(Array.from(r.coords)).toEqual([...corner(-10000, -3000), ...corner(10000, -3000), ...corner(10000, 3000), ...corner(-10000, 3000)]);
+    expect(Array.from(r.coords).every(Number.isInteger)).toBe(true);
   });
 
   it("texts: a further alignment pair gets an appended variant of the symbol (§4.4)", () => {
@@ -151,7 +176,7 @@ describe("omapToDocumentInput (fixture)", () => {
     expect(warning("FONT_SUBSTITUTED")).toMatchObject({ count: 1 });
     expect(result.warnings.map((w) => w.code).sort()).toEqual([
       "COLOUR_OPACITY_IGNORED", "FONT_SUBSTITUTED", "HELPER_SYMBOLS_HIDDEN", "MISSING_SYMBOL", "OBJECT_TAGS_DROPPED", "PARTS_MERGED",
-      "TEMPLATES_DROPPED", "TEXT_BOX_DROPPED",
+      "TEMPLATES_DROPPED",
     ]);
   });
 
@@ -165,7 +190,7 @@ describe("omapToDocumentInput (fixture)", () => {
     }
     expect(result.input).not.toHaveProperty("warningDetails");
     expect(result.warningDetails.length).toBeLessThanOrEqual(WARNING_DETAILS_MAX);
-    expect(header.format.importer).toBe("omap-6");
+    expect(header.format.importer).toBe("omap-7");
   });
 
   it("combined symbols render as merged IR (halo ride, railway band)", () => {

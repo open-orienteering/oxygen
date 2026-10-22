@@ -17,12 +17,12 @@ import { OBJECT_TYPE } from "../map-document/header.js";
 import { WARNING_DETAILS_MAX, type ImportWarningDetail } from "./report.js";
 import type { DocumentColour, DocumentSymbolInput, DocumentWarning, Georeferencing, MapDocumentHeaderInput } from "../map-document/header.js";
 import type { TextSymbol } from "../render/symbol.js";
-import { OMAP_OBJECT_TYPE, type OmapFile, type OmapGeoreferencing, type OmapSymbol } from "./omap-reader.js";
+import { OMAP_OBJECT_TYPE, type OmapCoord, type OmapFile, type OmapGeoreferencing, type OmapSymbol } from "./omap-reader.js";
 import { dashPointRule, omapFlags, omapGoverningLine, omapSymbolKind, omapSymbolToRender, type DashPointRule } from "./omap-symbols.js";
 
 /** Mapper coordinates are 0.001 mm. */
 export const OMAP_UNITS_PER_MM = 1000;
-export const OMAP_IMPORTER_VERSION = "omap-6";
+export const OMAP_IMPORTER_VERSION = "omap-7";
 
 export interface OmapSourceOptions {
   /** Upload name; goes into the import report, not into the document. */
@@ -50,6 +50,30 @@ export interface OmapSourceResult {
 const roundMicrometre = (v: number): number => Math.round(v * 1e6) / 1e6;
 
 const radToDeciDeg = (rad: number): number => Math.round((rad * 1800) / Math.PI);
+
+/**
+ * A Mapper box text's corners — bottom-left, bottom-right, top-right,
+ * top-left on paper — from its centre anchor, size and rotation, in the
+ * reader's y-down coordinates like every other `OmapCoord`. Unrotated
+ * boxes stay in integers (the width and height exact); a rotated box
+ * needs `cos` / `sin` and is rounded to native units (§6).
+ */
+function boxCorners(c: OmapCoord, size: { width: number; height: number }, rotation: number): OmapCoord[] {
+  const cx = c.x, cy = -c.y; // y-up
+  const w = size.width, h = size.height;
+  let up: [number, number][];
+  if (!rotation) {
+    const x0 = cx - Math.floor(w / 2), y0 = cy - Math.floor(h / 2);
+    up = [[x0, y0], [x0 + w, y0], [x0 + w, y0 + h], [x0, y0 + h]];
+  } else {
+    const cos = Math.cos(rotation), sin = Math.sin(rotation);
+    up = [[-1, -1], [1, -1], [1, 1], [-1, 1]].map(([sx, sy]) => {
+      const lx = (sx * w) / 2, ly = (sy * h) / 2;
+      return [Math.round(cx + lx * cos - ly * sin), Math.round(cy + lx * sin + ly * cos)];
+    });
+  }
+  return up.map(([x, y]) => ({ x, y: y === 0 ? 0 : -y, flags: 0 }));
+}
 
 /** Colour list (index = priority, 0 on top) → colour stack (index = draw order, 0 first). */
 export function omapColourStack(file: OmapFile): { colours: DocumentColour[]; stackIdxByPriority: Map<number, number>; opacityIgnored: number } {
@@ -229,7 +253,7 @@ export function omapToDocumentInput(file: OmapFile, opts: OmapSourceOptions): Om
   const counts = { objects: 0, coordinates: 0, symbols: 0, colours: colours.length, texts: 0, graphicObjects: 0, missingSymbolObjects: 0, symbolsRendered, symbolsUnrendered };
   // Text objects of source symbols with their (horizontal, vertical) alignment, in object order (§4.4).
   const textAligns: { obj: MapObjectInput; align: TextSymbol["align"]; verticalAlign: NonNullable<TextSymbol["verticalAlign"]> }[] = [];
-  let tagsDropped = 0, boxesDropped = 0;
+  let tagsDropped = 0;
 
   let sourceIndex = 0;
   for (const part of file.parts) {
@@ -274,10 +298,10 @@ export function omapToDocumentInput(file: OmapFile, opts: OmapSourceOptions): Om
           if (o.rotation) angleDeciDeg = radToDeciDeg(o.rotation);
           break;
         case OMAP_OBJECT_TYPE.text:
-          type = OBJECT_TYPE.text;
-          coordsIn = o.coords.slice(0, 1);
+          // A box text is formatted text: its four corners from the centre anchor and the size (§4.2).
+          type = o.boxSize ? OBJECT_TYPE.formattedText : OBJECT_TYPE.text;
+          coordsIn = o.boxSize ? boxCorners(o.coords[0], o.boxSize, o.rotation) : o.coords.slice(0, 1);
           if (o.rotation) angleDeciDeg = radToDeciDeg(o.rotation);
-          if (o.boxSize) boxesDropped++;
           break;
         default:
           type = kind === "area" ? OBJECT_TYPE.area : OBJECT_TYPE.line;
@@ -295,7 +319,7 @@ export function omapToDocumentInput(file: OmapFile, opts: OmapSourceOptions): Om
       const flags = Uint8Array.from(omapFlags(coordsIn, dashRules[symbolIdx] ?? "corner"));
       const obj: MapObjectInput = { symbolIdx, type, sourceIndex: idx, coords, flags };
       if (angleDeciDeg) obj.angleDeciDeg = angleDeciDeg;
-      if (type === OBJECT_TYPE.text) {
+      if (type === OBJECT_TYPE.text || type === OBJECT_TYPE.formattedText) {
         if (!o.text) {
           warn("EMPTY_TEXT_DROPPED");
           continue;
@@ -341,7 +365,6 @@ export function omapToDocumentInput(file: OmapFile, opts: OmapSourceOptions): Om
   }
   counts.objects = objects.length;
   counts.symbols = symbols.length;
-  if (boxesDropped) warn("TEXT_BOX_DROPPED", `${boxesDropped} text box(es) imported as single-anchor texts`, boxesDropped);
   if (tagsDropped) warn("OBJECT_TAGS_DROPPED", `${tagsDropped} object(s) carried tags, which the document does not store`, tagsDropped);
   if (file.parts.length > 1) warn("PARTS_MERGED", `${file.parts.length} map parts merged: ${file.parts.map((p) => p.name).join(", ")}`, file.parts.length - 1);
   if (file.templates.length) warn("TEMPLATES_DROPPED", `${file.templates.length} template(s) referenced by the map are not imported: ${file.templates.map((t) => t.name).join(", ")}`, file.templates.length);

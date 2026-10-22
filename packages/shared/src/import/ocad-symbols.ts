@@ -117,6 +117,12 @@ export interface OcadSymbolDefLike extends OcadSymbolLike {
   alignment?: number;
   lineSpace?: number;
   paraSpace?: number;
+  /** Paragraph indents, 1/100 mm. */
+  indentFirst?: number;
+  indentOther?: number;
+  /** Tab stops: the first `nTabs` of `tabs`, 1/100 mm from the line start. */
+  nTabs?: number;
+  tabs?: number[];
   lbOn?: boolean;
   pointSymOn?: boolean;
   // text and line text framing: 0 off, 1 shadow, 2 line, 3 rectangle (text only)
@@ -124,6 +130,11 @@ export interface OcadSymbolDefLike extends OcadSymbolLike {
   /** Shadow offsets, 1/100 mm. */
   frOfX?: number;
   frOfY?: number;
+  /** Rectangle framing margins, 1/100 mm. */
+  frLeft?: number;
+  frBottom?: number;
+  frRight?: number;
+  frTop?: number;
   // rectangle (also `lineColor`, `lineWidth`)
   /** Corner radius, 1/100 mm. */
   radius?: number;
@@ -539,13 +550,29 @@ class Converter {
         if (haloColour !== undefined) out.halo = { colour: haloColour, widthUm };
         break;
       }
-      case 3:
-        this.warn("SYMBOL_FEATURE_DROPPED", `${s.number}: text rectangle framing`);
+      case 3: {
+        // Rectangle framing: a filled rectangle behind the text, the block grown by four margins (map-rendering §4.9).
+        if (s.type === 6) {
+          this.warn("SYMBOL_FEATURE_DROPPED", `${s.number}: rectangle framing on line text`);
+          break;
+        }
+        const frameColour = this.colour(s.frColor, "text rectangle framing");
+        if (frameColour !== undefined) {
+          out.frame = { colour: frameColour, leftUm: (s.frLeft ?? 0) * UM, bottomUm: (s.frBottom ?? 0) * UM, rightUm: (s.frRight ?? 0) * UM, topUm: (s.frTop ?? 0) * UM };
+        }
         break;
+      }
       default:
         this.warn("SYMBOL_FEATURE_DROPPED", `${s.number}: text framing mode ${s.frMode}`);
     }
-    if (s.type === 6) this.warn("SYMBOL_FEATURE_DROPPED", `${s.number}: line text drawn as block text`);
+    // Tab stops: the first nTabs entries; non-positive and non-ascending stops are not stops.
+    const stops: { xUm: number }[] = [];
+    for (const t of (s.tabs ?? []).slice(0, Math.max(0, s.nTabs ?? 0))) {
+      const xUm = t * UM;
+      if (xUm > 0 && (stops.length === 0 || xUm > stops[stops.length - 1].xUm)) stops.push({ xUm });
+    }
+    if (stops.length) out.tabStops = stops;
+    if ((s.indentFirst ?? 0) !== 0 || (s.indentOther ?? 0) !== 0) this.warn("SYMBOL_FEATURE_DROPPED", `${s.number}: paragraph indent`);
     if (s.lbOn) this.warn("SYMBOL_FEATURE_DROPPED", `${s.number}: line below text`);
     if (s.pointSymOn) this.warn("SYMBOL_FEATURE_DROPPED", `${s.number}: point symbol attached to text`);
     return out;

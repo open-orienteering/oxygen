@@ -369,11 +369,34 @@ describe("ocadSymbolToRender — text", () => {
     expect(unknown.render && unknown.render.type === "text" ? unknown.render.shadow : "x").toBeUndefined();
   });
 
-  it("warns and drops rectangle (frMode 3) framing and unknown framing modes", () => {
-    const box = ocadSymbolToRender(text({ frMode: 3, frColor: 3 }), ctx);
-    expect(box.warnings.map((w) => w.message)).toEqual(["821.0: text rectangle framing"]);
+  it("turns rectangle framing (frMode 3) into a frame: four margins ×10 in the framing colour", () => {
+    const box = ocadSymbolToRender(text({ frMode: 3, frColor: 3, frLeft: 20, frBottom: 10, frRight: 30, frTop: 40 }), ctx);
+    expect(box.warnings).toEqual([]);
+    expect(box.render).toMatchObject({ type: "text", frame: { colour: 0, leftUm: 200, bottomUm: 100, rightUm: 300, topUm: 400 } });
+    const unknown = ocadSymbolToRender(text({ frMode: 3, frColor: 77, frLeft: 20 }), ctx);
+    expect(unknown.warnings).toEqual([{ code: "SYMBOL_COLOUR_UNKNOWN", message: "821.0: text rectangle framing uses colour 77, which is not in the colour table" }]);
+    expect(unknown.render && unknown.render.type === "text" ? unknown.render.frame : "x").toBeUndefined();
+  });
+
+  it("warns and drops unknown framing modes", () => {
     const odd = ocadSymbolToRender(text({ frMode: 5 }), ctx);
     expect(odd.warnings.map((w) => w.message)).toEqual(["821.0: text framing mode 5"]);
+  });
+
+  it("maps the first nTabs tab stops (1/100 mm → µm), dropping non-positive and non-ascending ones", () => {
+    // Club-2026 815.2: one stop at 7.5 mm.
+    const r = ocadSymbolToRender(text({ nTabs: 1, tabs: [750, 1500, ...new Array(30).fill(0)] }), ctx);
+    expect(r.warnings).toEqual([]);
+    expect(r.render).toMatchObject({ type: "text", tabStops: [{ xUm: 7500 }] });
+    const odd = ocadSymbolToRender(text({ nTabs: 4, tabs: [0, 750, 500, 900] }), ctx).render;
+    expect(odd && odd.type === "text" ? odd.tabStops : "x").toEqual([{ xUm: 7500 }, { xUm: 9000 }]);
+    const none = ocadSymbolToRender(text({ nTabs: 0, tabs: [750] }), ctx).render;
+    expect(none && none.type === "text" ? "tabStops" in none : "x").toBe(false);
+  });
+
+  it("warns that paragraph indents are dropped", () => {
+    const r = ocadSymbolToRender(text({ indentFirst: 100, indentOther: 0 }), ctx);
+    expect(r.warnings).toEqual([{ code: "SYMBOL_FEATURE_DROPPED", message: "821.0: paragraph indent" }]);
   });
 });
 
@@ -391,13 +414,19 @@ describe("ocadSymbolToRender — line text", () => {
     charSpace: 10, wordSpace: 100, alignment: 1, ...over,
   });
 
-  it("converts like a text symbol, with its framing, and warns that it is drawn as block text", () => {
+  it("converts like a text symbol, with its framing, without a warning (the stage lays it along its path)", () => {
     const r = ocadSymbolToRender(lineText({ frMode: 2, frColor: 3, frWidth: 12 }), ctx);
     expect(r.render).toMatchObject({
       type: "text", code: "903.0", fontFamily: "liberation-sans", fontSizeUm: 3528, colour: 2, align: "centre", charSpacing: 0.1,
       lineSpacing: 1, paragraphSpacingUm: 0, halo: { colour: 0, widthUm: 120 },
     });
-    expect(r.warnings).toEqual([{ code: "SYMBOL_FEATURE_DROPPED", message: "903.0: line text drawn as block text" }]);
+    expect(r.warnings).toEqual([]);
+  });
+
+  it("warns that rectangle framing on line text is dropped (OCAD defines it for text only)", () => {
+    const r = ocadSymbolToRender(lineText({ frMode: 3, frColor: 3 }), ctx);
+    expect(r.warnings).toEqual([{ code: "SYMBOL_FEATURE_DROPPED", message: "903.0: rectangle framing on line text" }]);
+    expect(r.render && r.render.type === "text" ? r.render.frame : "x").toBeUndefined();
   });
 });
 

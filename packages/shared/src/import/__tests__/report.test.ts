@@ -35,14 +35,13 @@ describe("WARNING_CLASS", () => {
     expect(Object.keys(WARNING_CLASS).filter((c) => !emitted.has(c))).toEqual([]);
   });
 
-  it("keeps the unsupported-primitive set to the six codes of the S0 gate", () => {
+  it("keeps the unsupported-primitive set to the five codes of the S0 gate", () => {
     const unsupported = Object.entries(WARNING_CLASS).filter(([, k]) => k === "unsupported").map(([c]) => c).sort();
     expect(unsupported).toEqual([
       "COLOUR_OPACITY_IGNORED",
       "IRREGULAR_PATTERN_REGULARISED",
       "SYMBOL_FEATURE_DROPPED",
       "SYMBOL_TYPE_UNSUPPORTED",
-      "TEXT_BOX_DROPPED",
       "UNKNOWN_OBJECT_TYPE",
     ]);
   });
