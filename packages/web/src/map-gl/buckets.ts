@@ -27,6 +27,7 @@ import { render } from "@oxygen/shared";
 import { MITRE_LIMIT, strokeStrip, triangulateEvenOdd, type StripSink } from "./prepare.js";
 import { INSTANCE_FLOATS, type AtlasMesh } from "./mesh-atlas.js";
 
+
 // ---- constants (04 §6.11; the spec's table) ---------------------------------
 
 /** Paper cell size, µm. */
@@ -251,7 +252,7 @@ export interface IndexedPart {
 export interface InstancePart {
   /** INSTANCE_FLOATS per instance; x, y relative to the document origin. */
   instances: Float32Array;
-  /** `group` is the size class; start / count in instances. */
+  /** `group` is the size class (glyph) or the text-atlas page (text); start / count in instances. */
   ranges: RangeTable;
 }
 
@@ -289,6 +290,16 @@ export interface PreparedPart {
   ms: number;
 }
 
+/** A text pass resolved against the text atlas (docs/map-rendering.md §5.2 "Text atlas"). */
+export interface TextPassGlyphs {
+  /** Per glyph: glyph-table entry, −1 when the loaded pages do not hold it. */
+  entries: Int32Array;
+  /** Per glyph: index of the page holding it. */
+  pages: Uint8Array;
+  /** Halo half width in em, clamped to the field (0 on a fill pass). */
+  haloEm: number;
+}
+
 export interface PrepareContext {
   /** Flattening tolerance, µm. */
   toleranceUm: number;
@@ -298,8 +309,8 @@ export interface PrepareContext {
   meshes: AtlasMesh[];
   /** `${glyphId}/${partIdx}` → atlas mesh index. */
   glyphMesh: Map<string, number>;
-  /** Text pass index → per-glyph atlas mesh (−1: empty glyph) and the instance scale (µm per font unit). */
-  textMesh: Map<number, { meshes: Int32Array; scale: number }>;
+  /** Text pass index → per-glyph text-atlas entry (−1: not in the loaded pages) and page, and the halo half width in em (0: fill). */
+  textGlyph: Map<number, TextPassGlyphs>;
 }
 
 const BASE_KINDS = new Set<render.PassKind>(["fill", "hatch"]);
@@ -501,20 +512,20 @@ export function prepareBucketPart(stream: render.PassStream, bucket: number, pas
         break;
       }
       case "text": {
-        const t = ctx.textMesh.get(pi);
+        const t = ctx.textGlyph.get(pi);
         if (!t) break;
-        // One group per size class: a pass's glyphs may fall in several.
-        const byCls = new Map<number, number[]>();
+        // One quad instance per glyph: x, y, cos, sin, em size, atlas entry, halo (em), 0;
+        // grouped by atlas page (one texture per draw).
+        const byPage = new Map<number, number[]>();
         for (let g = 0; g < pass.glyphs.length; g++) {
-          const mi = t.meshes[g];
-          if (mi < 0) continue;
-          const m = ctx.meshes[mi];
-          let arr = byCls.get(m.cls);
-          if (!arr) byCls.set(m.cls, (arr = []));
+          const entry = t.entries[g];
+          if (entry < 0) continue;
+          let arr = byPage.get(t.pages[g]);
+          if (!arr) byPage.set(t.pages[g], (arr = []));
           const a = pass.angles ? (pass.angles[g] * Math.PI) / 180 : 0; // §3.5 `angles`, degrees CCW
-          arr.push(pass.positions[2 * g] - ox, pass.positions[2 * g + 1] - oy, Math.cos(a), Math.sin(a), t.scale, m.base, m.count, m.radius);
+          arr.push(pass.positions[2 * g] - ox, pass.positions[2 * g + 1] - oy, Math.cos(a), Math.sin(a), pass.sizeUm, entry, t.haloEm, 0);
         }
-        for (const [cls, data] of byCls) addInstances("text", pass.colour, cls, object, data);
+        for (const [page, data] of byPage) addInstances("text", pass.colour, page, object, data);
         break;
       }
     }
@@ -591,6 +602,7 @@ export interface IndexDraw {
 
 export interface InstanceDraw {
   colour: number;
+  /** Size class (glyph) or text-atlas page (text). */
   cls: number;
   first: number;
   count: number;

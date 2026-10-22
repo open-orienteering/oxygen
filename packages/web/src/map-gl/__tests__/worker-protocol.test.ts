@@ -2,8 +2,10 @@ import { describe, it, expect } from "vitest";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { render } from "@oxygen/shared";
-import { createMapGlWorker, type LoadedReply, type WorkerReply } from "../worker";
-import { buildVisibleSet, type ResidentPart } from "../buckets";
+import { createMapGlWorker, type LoadedReply, type LoadRequest, type WorkerReply } from "../worker";
+import { buildVisibleSet, type PreparedPart, type ResidentPart } from "../buckets";
+import { INSTANCE_FLOATS } from "../mesh-atlas";
+import { parseTextAtlasPage, type TextAtlasPage } from "../text-atlas";
 
 const fontsDir = resolve(import.meta.dirname, "../../../../shared/fonts");
 const fontBytes = (file: string) => {
@@ -24,6 +26,9 @@ function objects(): render.RenderObject[] {
   out.push({ symbolIdx: render.PILOT.contour101, path: render.makePath([0, -5000, 300_000, -5000]) });
   return out;
 }
+
+const atlasPage = (page: string): TextAtlasPage =>
+  parseTextAtlasPage(JSON.parse(readFileSync(resolve(fontsDir, `msdf/text-atlas.${page}.json`), "utf8")));
 
 function harness() {
   const sent: { msg: WorkerReply; transfer: ArrayBuffer[] }[] = [];
@@ -129,5 +134,59 @@ describe("worker protocol (docs/map-rendering.md §5.2 Worker)", () => {
     expect(sent[0].msg.type).toBe("error");
     w.handle({ type: "prepare", ids: [0] });
     expect(sent.filter((s) => s.msg.type === "part")).toHaveLength(0);
+  });
+
+  describe("text against the text atlas (§5.2 \"Text atlas\")", () => {
+    /** Loads, prepares every detail cell and returns the reply and all parts with text. */
+    function run(extra: Partial<LoadRequest> = {}, objs = objects()) {
+      const { w, sent, tasks, runTask } = harness();
+      w.handle({ ...load(), source: { kind: "objects", objects: objs, symbols: render.pilotSymbols }, ...extra });
+      const loaded = sent[0].msg as LoadedReply;
+      w.handle({ type: "prepare", ids: loaded.summary.detailCells });
+      while (tasks.length) runTask();
+      const parts: PreparedPart[] = [...loaded.base, ...(loaded.large ? [loaded.large] : [])];
+      for (const r of sent) if (r.msg.type === "part") parts.push(r.msg.part);
+      return { summary: loaded.summary, text: parts.flatMap((p) => (p.text ? [p.text] : [])) };
+    }
+    const textPasses = (objs: render.RenderObject[]) => objs.filter((o) => o.text).length;
+
+    it("without pages: no text drawn, TEXT_ATLAS_MISSING per text pass", () => {
+      const { summary, text } = run();
+      expect(text).toHaveLength(0);
+      expect(summary.warnings.TEXT_ATLAS_MISSING).toBe(summary.passKinds.text);
+      expect(summary.passKinds.text).toBeGreaterThanOrEqual(textPasses(objects()));
+      expect(summary.text).toEqual({ pages: [], glyphs: 0, missing: 0 });
+    });
+
+    it("with the Latin page: one instance per glyph, entries into the page, halo passes carry their halo", () => {
+      const { summary, text } = run({ textAtlas: [atlasPage("latin")] });
+      expect(summary.warnings.TEXT_ATLAS_MISSING).toBeUndefined();
+      expect(summary.text.pages).toEqual(["latin"]);
+      expect(summary.text.missing).toBe(0);
+      const instances = text.reduce((n, t) => n + t.instances.length / INSTANCE_FLOATS, 0);
+      expect(instances).toBe(summary.text.glyphs);
+      expect(instances).toBeGreaterThan(0);
+      for (const t of text) {
+        expect([...t.ranges.group].every((g) => g === 0)).toBe(true);
+        for (let i = 0; i < t.instances.length; i += INSTANCE_FLOATS) {
+          expect(Number.isInteger(t.instances[i + 5])).toBe(true);
+          expect(t.instances[i + 4]).toBeGreaterThan(0);
+        }
+      }
+      const halos = text.flatMap((t) => { const h: number[] = []; for (let i = 6; i < t.instances.length; i += INSTANCE_FLOATS) h.push(t.instances[i]); return h; });
+      expect(halos.some((h) => h > 0)).toBe(true);
+      expect(halos.every((h) => h <= 0.125)).toBe(true);
+    });
+
+    it("Cyrillic: not held by the Latin page (counted), drawn from page 1 when it is loaded", () => {
+      const objs = [{ symbolIdx: render.PILOT.controlNumber704, path: render.makePath([26_000, 36_000]), text: "ЖA" }];
+      const latinOnly = run({ textAtlas: [atlasPage("latin")] }, objs);
+      expect(latinOnly.summary.warnings.TEXT_GLYPH_NOT_IN_ATLAS).toBe(latinOnly.summary.passKinds.text);
+      const both = run({ textAtlas: [atlasPage("latin"), atlasPage("cyrillic")] }, objs);
+      expect(both.summary.warnings.TEXT_GLYPH_NOT_IN_ATLAS).toBeUndefined();
+      expect(both.summary.text.pages).toEqual(["latin", "cyrillic"]);
+      const groups = new Set(both.text.flatMap((t) => [...t.ranges.group]));
+      expect(groups).toEqual(new Set([0, 1]));
+    });
   });
 });
