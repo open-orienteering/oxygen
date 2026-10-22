@@ -107,10 +107,15 @@ describe("omapSymbolToRender", () => {
     expect(l.glyphs![0].glyph.parts[0].geometry!.coords).toEqual([0, 0, 0, 400]);
   });
 
-  it("line: pointed caps keep the full length (taper is the offset); invisible lines are empty", () => {
-    const l = convert(sym(`<symbol type="2" id="1" code="106" name="Earth wall"><line_symbol color="0" line_width="250" cap_style="3" start_offset="500" end_offset="500"/></symbol>`)).render as LineSymbol;
-    expect(l.main).toMatchObject({ cap: "pointed", widthUm: 250 });
-    expect(l.main!.shortenStartUm).toBeUndefined();
+  it("line: pointed caps taper over pointed_cap_length at both ends and keep the full length; invisible lines are empty", () => {
+    // Mapper writes pointed_cap_length equal to the offsets (OOM sets, its OCD import); the offsets are not a shortening here.
+    const l = convert(sym(`<symbol type="2" id="1" code="106" name="Earth wall"><line_symbol color="0" line_width="250" cap_style="3" pointed_cap_length="600" start_offset="600" end_offset="600"/></symbol>`)).render as LineSymbol;
+    expect(l.main).toMatchObject({ cap: "pointed", widthUm: 250, taper: { startUm: 600, endUm: 600 } });
+    expect([l.main!.shortenStartUm, l.main!.shortenEndUm]).toEqual([undefined, undefined]);
+    const noCap = convert(sym(`<symbol type="2" id="1" code="106" name="Earth wall"><line_symbol color="0" line_width="250" cap_style="3" start_offset="500" end_offset="500"/></symbol>`)).render as LineSymbol;
+    expect(noCap.main).toMatchObject({ cap: "pointed" });
+    expect(noCap.main!.taper).toBeUndefined();
+    expect(noCap.main!.shortenStartUm).toBeUndefined();
     const r = convert(sym(`<symbol type="2" id="1" code="x" name="n"><line_symbol color="-1" line_width="0"/></symbol>`));
     expect(r.render).toBeNull();
     expect(r.warnings.map((w) => w.code)).toEqual(["SYMBOL_EMPTY"]);
@@ -131,14 +136,19 @@ describe("omapSymbolToRender", () => {
     expect(a.patterns![0].glyph.parts[0]).toEqual({ kind: "disc", colour: 9, diameterUm: 400 });
   });
 
-  it("text: em size, bold weight, framing line → halo, shadow framing dropped, font substitution noted", () => {
+  it("text: em size, bold weight, framing line → halo, shadow framing → shadow (y flipped), font substitution noted", () => {
     const { render, warnings } = convert(sym(TEXT));
     expect(warnings).toEqual([]);
     const t = render as TextSymbol;
     expect(t).toMatchObject({ type: "text", fontFamily: "liberation-sans", fontSizeUm: 4000, weight: 700, italic: false, colour: 9, align: "left", lineSpacing: 1.1, paragraphSpacingUm: 500, charSpacing: 0.05, halo: { colour: 7, widthUm: 100 } });
     const r = convert(sym(`<symbol type="8" id="3" code="702" name="T"><text_symbol><font family="Sans Serif" size="3000" underline="true"/><text color="0" line_spacing="1"/><framing color="1" mode="2" shadow_x_offset="100" shadow_y_offset="100"/></text_symbol></symbol>`));
-    expect(r.warnings.map((w) => w.code).sort()).toEqual(["FONT_SUBSTITUTED", "SYMBOL_FEATURE_DROPPED", "SYMBOL_FEATURE_DROPPED"]);
+    expect(r.warnings.map((w) => w.message)).toEqual(['702: font "Sans Serif" drawn with liberation-sans', "702: underline"]);
     expect((r.render as TextSymbol).halo).toBeUndefined();
+    // Mapper's offsets are y-down; the IR's are y-up (the user's Nackareservatet .omap: 100 / -100 = right and down).
+    expect((r.render as TextSymbol).shadow).toEqual({ colour: 8, offsetXUm: 100, offsetYUm: -100 });
+    const still = convert(sym(`<symbol type="8" id="3" code="702" name="T"><text_symbol><font family="Arial" size="3000"/><text color="0"/><framing color="1" mode="2" shadow_x_offset="0" shadow_y_offset="0"/></text_symbol></symbol>`));
+    expect(still.warnings).toEqual([]);
+    expect((still.render as TextSymbol).shadow).toBeUndefined();
   });
 
   it("reports unknown colours once per use and drops the feature", () => {
@@ -185,12 +195,15 @@ describe("omapSymbolToRender", () => {
       expect(l.borders).toEqual({ left: { colour: 9, widthUm: 100, shiftUm: 175 }, right: { colour: 9, widthUm: 100, shiftUm: 175 }, backgroundColour: 6, backgroundWidthUm: 350 });
     });
 
-    it("two bordered solid lines → narrowest is main, wider becomes the halo, its borders are dropped with a warning (502.2)", () => {
+    it("two bordered solid lines → narrowest is main, wider becomes the halo, its borders a second pair (502.2)", () => {
       const r = convert(table[6], table);
+      expect(r.warnings).toEqual([]);
       const l = r.render as LineSymbol;
       expect(l.main).toMatchObject({ colour: 7, widthUm: 140, halo: { colour: 7, widthUm: 320, continuous: true } });
-      expect(l.borders).toEqual({ left: { colour: 9, widthUm: 320, shiftUm: 230 }, right: { colour: 9, widthUm: 320, shiftUm: 230 } });
-      expect(r.warnings).toEqual([{ code: "SYMBOL_FEATURE_DROPPED", message: "502.2: extra border pair in combined symbol" }]);
+      expect(l.borders).toEqual({
+        left: { colour: 9, widthUm: 320, shiftUm: 230 }, right: { colour: 9, widthUm: 320, shiftUm: 230 },
+        extraPairs: [{ left: { colour: 6, widthUm: 140, shiftUm: 460 }, right: { colour: 6, widthUm: 140, shiftUm: 460 } }],
+      });
     });
 
     it("glyph-only parts append their glyphs (511.2 power line)", () => {

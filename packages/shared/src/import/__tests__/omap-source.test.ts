@@ -61,6 +61,9 @@ describe("omapToDocumentInput (fixture)", () => {
     expect(header.symbols[6]).toMatchObject({ code: "301", kind: "area", origin: "source", hidden: false, sourceIndex: 6 });
     expect((header.symbols[6].render as AreaSymbol).border!.main!.widthUm).toBe(180);
     expect(header.symbols[11].kind).toBe("line");
+    // 106 earth bank: pointed cap tapered over pointed_cap_length, not shortened (§4.3).
+    expect((header.symbols[2].render as LineSymbol).main).toMatchObject({ cap: "pointed", taper: { startUm: 600, endUm: 600 } });
+    expect((header.symbols[2].render as LineSymbol).main!.shortenStartUm).toBeUndefined();
     expect(header.symbols[16]).toMatchObject({ code: "999", hidden: true });
     expect(header.symbols[17]).toMatchObject({ code: "998", hidden: true });
     expect(header.symbols[15].sourceFont).toBe("Arial");

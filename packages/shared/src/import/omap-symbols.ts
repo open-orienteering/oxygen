@@ -200,8 +200,9 @@ class Converter {
       const main: StrokeSpec = { colour: lineColour ?? 0, widthUm: lineColour !== undefined ? b.lineWidth : 0, cap, join };
       if (dash) main.dash = dash;
       if (cap === "pointed") {
-        // Mapper draws the start/end offsets as the taper itself; the IR has
-        // no taper length, so the pointed cap keeps the full line length.
+        // Mapper tapers both ends over pointed_cap_length; the offsets do not
+        // shorten a pointed line (its files write the three equal).
+        if (b.pointedCapLength > 0) main.taper = { startUm: b.pointedCapLength, endUm: b.pointedCapLength };
       } else {
         if (b.startOffset > 0) main.shortenStartUm = b.startOffset;
         if (b.endOffset > 0) main.shortenEndUm = b.endOffset;
@@ -371,7 +372,11 @@ class Converter {
       if (b.framing.mode === 1 && b.framing.lineHalfWidth > 0) {
         const c = this.colour(b.framing.colour, "text framing");
         if (c !== undefined) out.halo = { colour: c, widthUm: b.framing.lineHalfWidth };
-      } else if (b.framing.mode !== 0) {
+      } else if (b.framing.mode === 2 && (b.framing.shadowXOffset !== 0 || b.framing.shadowYOffset !== 0)) {
+        // Mapper's shadow offsets are y-down, the IR's y-up. No offset draws nothing, as a zero-width halo.
+        const c = this.colour(b.framing.colour, "text shadow");
+        if (c !== undefined) out.shadow = { colour: c, offsetXUm: b.framing.shadowXOffset, offsetYUm: -b.framing.shadowYOffset };
+      } else if (b.framing.mode !== 0 && b.framing.mode !== 1 && b.framing.mode !== 2) {
         this.warn("SYMBOL_FEATURE_DROPPED", `${this.label}: text framing mode ${b.framing.mode}`);
       }
     }
@@ -447,7 +452,10 @@ class Converter {
       }
       if (part.borders && !bordersConsumed) {
         if (!result.borders) result.borders = structuredClone(part.borders);
-        else this.warn("SYMBOL_FEATURE_DROPPED", `${this.label}: extra border pair in combined symbol`);
+        else {
+          const { left, right } = structuredClone(part.borders);
+          if (left || right) (result.borders.extraPairs ??= []).push({ ...(left ? { left } : {}), ...(right ? { right } : {}) });
+        }
       }
       if (part.glyphs?.length) (result.glyphs ??= []).push(...structuredClone(part.glyphs));
     }

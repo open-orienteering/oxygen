@@ -65,7 +65,7 @@ const symbols = [
   // 1
   `<symbol type="2" id="1" code="102" name="Index contour">${line(`color="${C.brown}" line_width="250" join_style="2" cap_style="1"`)}</symbol>`,
   // 2 pointed caps with offsets
-  `<symbol type="2" id="2" code="106" name="Earth wall">${line(`color="${C.brown}" line_width="250" cap_style="3" start_offset="600" end_offset="600"`)}</symbol>`,
+  `<symbol type="2" id="2" code="106" name="Earth wall">${line(`color="${C.brown}" line_width="250" cap_style="3" pointed_cap_length="600" start_offset="600" end_offset="600"`)}</symbol>`,
   // 3 point, not rotatable, disc + ring
   `<symbol type="1" id="3" code="204" name="Boulder"><point_symbol rotatable="false" inner_radius="200" inner_color="${C.black}" outer_width="0" outer_color="-1" elements="0"/></symbol>`,
   // 4 area fill
