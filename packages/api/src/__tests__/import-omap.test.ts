@@ -43,7 +43,9 @@ describe("importOmapToDocument", () => {
     const { bytes, warnings } = await importOmapToDocument(fixture, "test.xmap");
     const doc = mapDocument.decodeMapDocument(bytes);
     const source = doc.header.symbols.filter((s) => s.origin === "source");
-    expect(source.length).toBe(21);
+    // 21 source symbols plus the 702 alignment variant (docs/map-import.md §4.4).
+    expect(source.length).toBe(22);
+    expect(source.filter((s) => s.code === "702").map((s) => s.render?.id)).toEqual(["src:20", "src:20/right/middle"]);
     expect(source.filter((s) => s.render === null)).toEqual([]);
     expect(doc.header.symbols.filter((s) => s.origin === "missing").map((s) => s.code)).toEqual(["#77"]);
     expect(warnings.map((w) => w.code)).not.toContain("SYMBOL_COLOUR_UNKNOWN");
@@ -71,7 +73,7 @@ describe("importOmapToDocument", () => {
     const { header } = mapDocument.readMapDocumentHeader(result.bytes);
     const report = buildImportReport(result, header, "test.xmap");
     expect(report.source).toMatchObject({ kind: "omap", version: "9", fileName: "test.xmap" });
-    expect(report.importer).toBe("omap-5");
+    expect(report.importer).toBe("omap-6");
     expect(report.warnings.map((w) => w.code)).toContain("TEMPLATES_DROPPED");
     // Per-emission detail (docs/map-import.md §3.6): the missing-symbol stub and the dropped templates are listed with their messages.
     expect(report.warningDetails).toEqual(expect.arrayContaining([
@@ -85,11 +87,11 @@ describe("importOmapToDocument", () => {
   });
 
   it("keeps the two source kinds apart: different importer versions, OCAD path unchanged", async () => {
-    expect(importerVersionFor("ocad")).toBe("ocad-11");
-    expect(importerVersionFor("omap")).toBe("omap-5");
+    expect(importerVersionFor("ocad")).toBe("ocad-12");
+    expect(importerVersionFor("omap")).toBe("omap-6");
     const ocd = await importOcadToDocument(ocdFixture, "test.ocd");
     expect(ocd.kind).toBe("ocad");
-    expect(mapDocument.readMapDocumentHeader(ocd.bytes).header.format.importer).toBe("ocad-11");
+    expect(mapDocument.readMapDocumentHeader(ocd.bytes).header.format.importer).toBe("ocad-12");
     await expect(importMapToDocument(ocdFixture, "test.ocd", "omap")).rejects.toThrow();
   });
 

@@ -455,7 +455,7 @@ compare equal whatever their CMYK:
 | line | main stroke class + width, dashed (dash / gap lengths), borders (count, class, width, shift), double-line fill class + width, background halo, glyph presence and its stroke/disc/ring/fill counts, structural shape (`stroked`, `background`) |
 | area | fill class, hatch (class, width, spacing, angle), pattern (class, cell, element kind + size), border |
 | point | glyph parts by kind with class, width / diameter, extent box, rotational symmetry, `orientation` |
-| text | class, font size, bold / italic, line spacing |
+| text | class, font size (from the digit height when given), bold / italic — no line spacing and no alignment, so a Mapper alignment variant shares its parent's fingerprint (`docs/map-import.md` §4.4) |
 
 `compareFingerprints(src, canon, factor)` scales the canonical side by the
 document factor (§8.3) and multiplies per-feature scores: 1 inside the
@@ -468,7 +468,7 @@ element, so a single 6 mm ring is not a two-ring finish. Orientation is
 ignored for rotationally symmetric glyphs (a boulder disc has no north).
 `fingerprintHash` gives the stable `irHash` that club decisions key on.
 
-**Colour-order equivalence (A15, `ocad-11` / `omap-5`).** One construction
+**Colour-order equivalence (A15, `ocad-12` / `omap-6`).** One construction
 is normalised, because 03 §6.5 compares colour classes and the same
 picture can be painted in two orders: *ink dashes over a white band
 between ink rails* (Mapper's railway: main stroke black 0.35 dashed 1.5 /

@@ -21,6 +21,8 @@
  *                                    # playwright process, no sharding
  *   E2E_SHARDS=2 pnpm test:e2e       # fewer shards (lower peak load)
  *   pnpm test:e2e:serial             # escape hatch: plain playwright test
+ *                                    # (same 4100/4200/4300 default stack as a
+ *                                    # selective run, never the dev servers)
  *
  * Artifacts land in test-results/shard-<i> and playwright-report/shard-<i>.
  */
@@ -106,10 +108,12 @@ function runPlaywright(extraArgs, env, onLine) {
 }
 
 if (hasFileFilter) {
-  // Selective run: a single plain Playwright process, but on its own ports
-  // (API_PORT_BASE + 0 / WEB_PORT_BASE + 0) and DB so it never collides
-  // with a running `pnpm dev` stack on 3002/5173. Explicit E2E_* env vars
-  // still win.
+  // Selective run: a single plain Playwright process, on the unsuffixed
+  // bases (API_PORT_BASE + 0 / WEB_PORT_BASE + 0, the same values as the
+  // defaults in e2e/helpers/ports.ts) and DB, so it never touches a running
+  // `pnpm dev` stack on 3002/5173. The config never reuses an existing
+  // server, so the run always tests the checkout it is started from; a
+  // busy port is an error. Explicit E2E_* env vars still win.
   const child = runPlaywright(args, {
     E2E_API_PORT: process.env.E2E_API_PORT ?? String(API_PORT_BASE),
     E2E_WEB_PORT: process.env.E2E_WEB_PORT ?? String(WEB_PORT_BASE),

@@ -67,7 +67,7 @@ describe("import worker", () => {
     ]);
     expect(worker.documentHash).toBe(inline.documentHash);
     expect(worker.report.source.kind).toBe("omap");
-    expect(worker.report.importer).toBe("omap-5");
+    expect(worker.report.importer).toBe("omap-6");
     expect(stages).toEqual(["parse", "normalise", "match", "encode"]);
   }, 60_000);
 

@@ -15,6 +15,7 @@ These are automatic behaviors that Claude Code should perform without being aske
 
 Integration tests, E2E (`pnpm test:e2e*`, `playwright test`) and the Docker rebuild use fixed ports (4100–4303, 8080, 3001) and shared databases (`oxygen_test`, `oxygen_e2e*` on :5433). Several sessions run at once in separate worktrees, so these steps are serialised through `scripts/with-verify-lock.sh <command>`; a PreToolUse hook blocks bare invocations. The wrapper waits for the lock, so a blocked session simply queues.
 
+- Selective E2E runs (`scripts/with-verify-lock.sh pnpm test:e2e e2e/foo.spec.ts`) are safe from worktrees: they run on their own stack (API :4100, web :4200, eventor :4300, db `oxygen_e2e`), start every server themselves and never attach to one that is already running (`reuseExistingServer: false`), so they test the code of the worktree they are run from even while the user's `pnpm dev` is up on 3002/5173. No `E2E_WEB_PORT=…` workaround is needed — and pointing it at 5173 now fails with "already used" instead of testing main. See `docs/bugfix-e2e-reuses-dev-server.md`.
 - Never run `pnpm dev` from a worktree — ports 3002/5173 belong to the user's checkout.
 - Never touch the dev database on :5432 from a worktree.
 - A fresh worktree needs `pnpm install --frozen-lockfile` and `pnpm db:generate` before anything else.
