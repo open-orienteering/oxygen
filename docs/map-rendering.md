@@ -191,7 +191,8 @@ instance's `cos`, `sin` and `scale`, which are unitless and keep 6 (3 put
 a 45° instance 1e-4 off, outside `diffPassStreams`' tolerance, B1);
 typed arrays are canonical in memory. All-zero flag arrays are omitted.
 `angles` (§3.5) and `taper` (§3.2) are projected when present and
-compared by `diffPassStreams`. Parsing sorts.
+compared by `diffPassStreams`; `angles` keep 6 decimals (degrees; 3 put
+a line-text glyph's angle outside the 1e-4° comparison, B8). Parsing sorts.
 
 ## 4. Symbolisation rules
 
@@ -1602,6 +1603,7 @@ scene is a snapshot (§6.1) and a golden (§6.2).
 | `lib-borders` | 6 | ISSprOM 509.1, 505 round a corner, *505 with a 0.2 mm right edge at 0.3 mm* | 509.1 (B10): an unsliced black 0.45 band under white 1.0 / 1.5 dashes shortened 1.5 mm at both ends (black ends, 1.5 mm black between dashes); both dashed borders keep the main line's phase at their own lengths; asymmetric edges |
 | `lib-holes` | 7 | ISOM 401: two holes, one reversed; a self-touching ring | one even-odd fill each, rings passed through untouched (earcut deviation is the GL backend's, image tier) |
 | `lib-text` | 8 | ISOM 704 "31"; 603.b *left / centre / right*; a two-line 603.b | em from the digit height (Liberation "0" = 1430 units → 5.73 mm), advances with kerning ("AV"), alignment shifts, line spacing |
+| `lib-text-layout` | 8 (cont., B8) | ISOM 603.b *at 2.5 mm em*: *justify + 0.6 mm paragraph spacing* in a 12 × 12 mm box; *centre + middle* in a 12 × 6 mm box; *a white (`white-over-green-brown`) rectangle frame* over 406; *a 5 mm tab stop*; *centred* along a Bézier arc | box: first ascent on the top edge, three wrapped lines inside the width, 1.2 em apart, 0.6 mm more before the second paragraph, justified lines reach the width and a paragraph's last line does not; middle box centred in its height; frame = widest line × (digit height … baseline) grown by the margins, sorted above the green; the word after the tab at the stop; line-text origins on the arc, angles decreasing along it |
 | `lib-halos` | 9 | ISSprOM 704.b over 521; *508 with a continuous white band* over 406 | the white outline between the building's black and upper purple; the band its own pass over the green |
 | `lib-colour-order` | + | ten ISSprOM colours, lower and upper purple among them, pushed in reverse | colour-major order; lower purple under black, upper purple last |
 | `lib-precision` | + | `lib-dash-ocad` and `lib-line-glyphs` moved to (1 200 000, 1 200 000) µm | every pass the near pass translated, to 1 µm |
@@ -1889,8 +1891,9 @@ The shared module is exported as a namespace: `import { render } from
   `cos, sin`); it does not draw `taper` yet (drawn butt) — on the arena
   path a stroke vertex carries its own half width, so a taper is that
   width scaled along the taper length. The PDF backend (slice C) draws
-  neither yet. The goldens leave both out until every backend does; the
-  reference raster draws `angles`.
+  neither yet. The goldens leave `taper` out until every backend draws
+  it; `angles` are in `lib-text-layout` since B8 (the reference raster
+  and both GL paths draw them; the PDF tier waits for slice C anyway).
 - **S2 confirmation** of §4.2 step 3 (what stretches, the `round`
   threshold), of `endGapUm` and of the vertical anchor's metrics (§4.9),
   against OCAD exports; for text layout (§4.9, B8) also the default tab

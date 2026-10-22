@@ -237,6 +237,47 @@ function text(): LibraryScene {
   };
 }
 
+/** Index of a palette colour in a materialised library stack (stack ids are `<palette>:<colour>`). */
+const colourIdx = (colours: ColourStack, id: string): number => {
+  const i = colours.findIndex((c) => c.id.endsWith(`:${id}`));
+  if (i < 0) throw new Error(`no colour ${id}`);
+  return i;
+};
+
+/** Text layout (B8): box text, rectangle frame, tab stop, line text — on 603.b at 2.5 mm em. */
+function textLayout(): LibraryScene {
+  const s = new Symbols("ISOM2017-2");
+  const forest = s.add("406");
+  const t = (fields: Partial<TextSymbol>) => (x: TextSymbol): TextSymbol => ({ ...x, fontSizeUm: 2500, ...fields });
+  const justified = s.add("603.b", t({ align: "justify", paragraphSpacingUm: 600 }));
+  const centred = s.add("603.b", t({ align: "centre", verticalAlign: "middle" }));
+  const framed = s.add("603.b", t({ frame: { colour: colourIdx(s.colours, "white-over-green-brown"), leftUm: 300, bottomUm: 400, rightUm: 300, topUm: 300 } }));
+  const tabbed = s.add("603.b", t({ tabStops: [{ xUm: 5000 }] }));
+  const along = s.add("603.b", t({ align: "centre" }));
+  const box = (x: number, y: number, w: number, h: number): RenderPath => makePath([x, y, x + w, y, x + w, y + h, x, y + h]);
+  return {
+    name: "lib-text-layout", library: s.library, colours: s.colours, symbols: s.list,
+    objects: [
+      // Box 12 × 12 mm: wraps at the width (three lines), justified but for each paragraph's last line, paragraph spacing 0.6 mm.
+      { symbolIdx: justified, path: box(0, 0, 12000, 12000), text: "Gles skog med block och stenar\nKärr", textLayout: "box" },
+      // Box 12 × 6 mm: centred, the block in the middle of the box height.
+      { symbolIdx: centred, path: box(0, -8000, 12000, 6000), text: "Mitt\ni rutan", textLayout: "box" },
+      // Rectangle frame in white over green: the block grown by the margins.
+      { symbolIdx: forest, path: square(14000, 0, 12000, 8000) },
+      { symbolIdx: framed, path: at(16000, 3000), text: "Kärr 12" },
+      // Tab to the 5 mm stop.
+      { symbolIdx: tabbed, path: at(14000, -3000), text: "7\tSten" },
+      // Line text centred on a Bézier arc.
+      {
+        symbolIdx: along,
+        path: makePath([14000, -9000, 17000, -5000, 23000, -5000, 26000, -9000], [0, F.bezierFirst, F.bezierSecond, 0]),
+        text: "Längs stigen",
+        textLayout: "path",
+      },
+    ],
+  };
+}
+
 function halos(): LibraryScene {
   const s = new Symbols("ISSprOM2019-2");
   const building = s.add("521");
@@ -309,6 +350,7 @@ export const librarySceneNames = [
   "lib-holes",
   "lib-text",
   "lib-halos",
+  "lib-text-layout",
   "lib-colour-order",
   "lib-precision",
 ] as const;
@@ -324,6 +366,7 @@ const builders: Record<LibrarySceneName, () => LibraryScene> = {
   "lib-holes": holes,
   "lib-text": text,
   "lib-halos": halos,
+  "lib-text-layout": textLayout,
   "lib-colour-order": colourOrder,
   "lib-precision": precision,
 };
