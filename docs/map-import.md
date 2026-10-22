@@ -888,7 +888,7 @@ maps nor the JSON files are committed (AGENTS.md §12); keep them under
 
 **Against production.** The same comparison works against what Cloud
 Run produced from the same files, once the instance runs the same
-importer and library versions (`ocad-10` / `omap-4`,
+importer and library versions (`ocad-11` / `omap-5`,
 `*@<SYMBOL_LIBRARY_VERSION>`) and only for documents imported without
 club decisions (stage 6 applies them, so a reviewed map has a different,
 equally correct hash). Either list the stored documents:
@@ -913,7 +913,18 @@ import errors, 48 unsupported-primitive warnings. The `ocad-7` re-run
 (decision log, "A12") has 36, none of them a text line framing or an
 unparsed symbol type. The `ocad-10` / `omap-4` run (A14) has 30: the six
 stale area-border references moved to `SYMBOL_REFERENCE_INVALID`
-(Club-full 10 → 4 unsupported); the 30 left are rows A13 and B8.
+(Club-full 10 → 4 unsupported); the 30 left were all row A13's. The
+`ocad-11` / `omap-5` run (A13, 2026-10-22) has **0** — the S0 zero-warning
+criterion is met on the corpus: shadows (Club-2026 815.2, Club-full 825.1),
+vertical anchors (Club-full 802.6 / 802.7, Crop-A / Crop-B 901.0 / 902.0, OOM
+Course_Design's 18 middle-anchored texts, lifted onto their four symbols
+without variants), Club-full 850.1's corner radius, Crop-A / Crop-B 503.1's
+narrow framing and OOM ISOM 502.2's second border pair are imported; 0 import
+errors, 8/8 hashes reproduced by a second run; symbol and object match
+outcomes identical to the `ocad-10` / `omap-4` run on every map. B8's text
+boxes and rectangle framing do not occur in the corpus (the fixture
+`e2e/test.xmap` keeps one text box and one translucent colour, so the gate
+still fails on it by design).
 
 ## 8. Pending in this chapter
 
