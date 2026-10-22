@@ -416,7 +416,7 @@ The OOM dimension spot check (e) is not implemented; see §10.
 | Railway "black, white" drawn as stated: black dashes, white between, rails | 509 / 509.1 are white 0.25 dashes 1.0 / 1.5 over a black 0.45 band, the white shortened 1.5 mm at each end (§3; B10) | Appendix B sorts white-for-railway above black, so the first edition's black dashes under a white band drew all white inside. The OCAD construction is the only one the palette allows; the black ends follow the spec ("two black dashes"), not OCAD's sets (white end dash). Consequence: OCAD railways built to the spec's widths now match (Sprint's 509.100, white 0.26 in black 0.45: `auto`); club-2026's / club-full's 509.1 (white 0.21 in black 0.35 — the set reads "0.35" as the outer width) stays unmatched, now on width instead of colour; Crop-A / Crop-B's grey 509.0 stays unmatched; Mapper's railway (black dashes over white, Mapper's own colour order) now hard-fails on main colour and is unmatched (`e2e/test.xmap`: was `auto`), drawn from its own definition — a matcher normalisation of the two constructions would recover it (§10). |
 | Glyph placement per 03 Appendix C (Mapper dash symbol → `dashPoints`) | 510 / 511 / 511.b pylons at `corners` (B10) | Both importers deliver pylons as corner flags (`map-import.md` §3.3, §4.2); no importer produces dash-point positions for them, so canonically drawn power lines had no poles and the fingerprint missed on placement. |
 | Directional point glyphs: no convention stated (03 §6.2) | Angle 0 = north, slope ticks to +y (§3; B10) | OCAD and Mapper both draw the 101.b / 103.b tick to +y; the first edition used the line-tag convention (−y) and every auto-matched slope line pointed uphill (52–66 % shape difference, `map-rendering.md` §6.4). |
-| 510 "0.3 (OM)" bars | ±0.37 mm, 0.3 beyond each edge of the 0.14 line (B10) | The reading 511 already used; Mapper's ISOM set and both corpus OCAD sets draw ±0.37 (−0.38 … +0.33). Was ±0.3. |
+| 510 "0.3 (OM)" bars | ±0.37 mm, 0.3 beyond each edge of the 0.14 line (B10) | The reading ISOM 511 already used; Mapper's ISOM set and both corpus OCAD sets draw ±0.37 (−0.38 … +0.33). Was ±0.3. ISSprOM 511 (unchanged) measures its 0.3 from the line centre (±1.12 at ±0.82), as OCAD's ISSprOM set does — Sprint's 511 matches it at 1.00; the spec drawing does not settle which. |
 | 508.b yellow band as drawn (visible in forest) | Appendix B order: hidden under 406–410 green (§3; user decision 2026-10-22) | No yellow row above green exists in Appendix B; OCAD's set and the legacy tiles agree. |
 | `defaultMapAppearance` in `course-maps/schema.ts` retired in favour of the library | Not yet | The course layer (slice C) is the consumer that switches; the constants stay until then. |
 
@@ -532,6 +532,10 @@ numbered 702 is `suggested` 703 by description. The remaining non-auto
 share is dominated by OCAD template conventions the library has no entry
 for (minimum-size points, outline lines, single pattern dots); adding
 those as library variants is the lever if the auto rate needs to rise.
+These shares predate library `2026.10.3` (B10), which moved 2–4 more
+symbols per map to `auto` (ISOM 111, 510, ISSprOM 509.1, 510,
+511; counts in `map-rendering.md` §6.4 and the decision log); not
+re-measured by objects.
 
 **Swedish entry names in stage 5 (B7, `ocad-8` / `omap-3`, library
 `2026.10.2`).** Re-measured on all five corpus maps against the same code

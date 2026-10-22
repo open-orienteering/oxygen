@@ -68,7 +68,7 @@ export const manmade: LibraryEntryInput[] = [
     minimum: { lengthUm: 3750 }, footprintM: 15, notes: "Bars 0.14 mm reaching 0.3 mm beyond each edge of the line, at the pylons: corner points, on an end only when it is flagged (B10).",
   }),
   entry("511", "Major power line", "L", line({ borders: doubleLine(border(K, 140, 820)), glyphs: [placed(glyph(stroke(K, 200, [0, -1120, 0, 1120])), atCorners())] }), {
-    notes: "Two 0.14 mm lines 1.5 mm apart inside; bars 0.2 mm reaching 0.3 mm beyond each line at the pylons.",
+    notes: "Two 0.14 mm lines 1.5 mm apart inside; bars 0.2 mm reaching 0.3 mm beyond each line's centre at the pylons (corner points), as OCAD's ISSprOM set draws them; ISOM 511 measures the 0.3 from the line's edge.",
   }),
   entry(
     "511", "Major power line, with pylons", "L",
