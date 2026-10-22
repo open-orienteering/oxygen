@@ -153,13 +153,17 @@ function asciiPascal(buf, o, str, byteLength) {
 }
 
 /** Text framing attributes (46 bytes from FrMode), shared by text and line-text symbols. */
-function writeFraming(buf, o, { frMode = 0, frStyle = 0, frColor = 0, frWidth = 0, frOfX = 0, frOfY = 0 }) {
+function writeFraming(buf, o, { frMode = 0, frStyle = 0, frColor = 0, frWidth = 0, frOfX = 0, frOfY = 0, frLeft = 0, frBottom = 0, frRight = 0, frTop = 0 }) {
   o = buf.writeUInt8(frMode, o);
   o = buf.writeUInt8(frStyle, o);
   o = buf.writeUInt8(0, o); // pointSymOn
   o = buf.writeInt32LE(0, o); // pointSymNumber
   o += 19; // reserved
-  o += 8; // frLeft / frBottom / frRight / frTop (rectangle framing)
+  // Rectangle framing margins (frMode 3), 1/100 mm.
+  o = buf.writeInt16LE(frLeft, o);
+  o = buf.writeInt16LE(frBottom, o);
+  o = buf.writeInt16LE(frRight, o);
+  o = buf.writeInt16LE(frTop, o);
   o = buf.writeInt16LE(frColor, o);
   o = buf.writeInt16LE(frWidth, o);
   o += 4; // reserved
@@ -183,14 +187,17 @@ function writeTextBasics(buf, o, { fontName = "Arial", fontColor, fontSize, weig
 }
 
 /** Text symbol (type 4): 240-byte body; framing at body offset 194, frColor at 228. */
-export function textSymbol({ symNum, extent = 0, description, lineSpace = 100, ...attrs }) {
+export function textSymbol({ symNum, extent = 0, description, lineSpace = 100, paraSpace = 0, indentFirst = 0, indentOther = 0, nTabs = 0, tabs = [], ...attrs }) {
   const size = BASE_SYMBOL_SIZE + 240;
   const buf = Buffer.alloc(size);
   let o = symbolHeader(buf, { size, symNum, otp: 4, extent, colorIdx: attrs.fontColor, description });
   o = writeTextBasics(buf, o, attrs);
   o = buf.writeInt16LE(lineSpace, o);
-  o += 2 + 2 + 2 + 2; // paraSpace, indentFirst, indentOther, nTabs
-  o += 32 * 4; // tabs
+  o = buf.writeInt16LE(paraSpace, o);
+  o = buf.writeInt16LE(indentFirst, o);
+  o = buf.writeInt16LE(indentOther, o);
+  o = buf.writeInt16LE(nTabs, o);
+  for (let i = 0; i < 32; i++) o = buf.writeUInt32LE(tabs[i] ?? 0, o); // tab stops, 1/100 mm
   o += 2 + 2 + 2 + 2; // lbOn, lbColor, lbWidth, lbDist
   o += 2; // reserved
   writeFraming(buf, o, attrs);
@@ -398,6 +405,7 @@ const WHITE = { recType: 9, text: "White\tn4\tc0.0\tm0.0\ty0.0\tk0.0" };
 export const SYMBOL_TYPES_OCAD = {
   framedText: { symNum: 902001, description: "Framed text", fontColor: 1, fontSize: 43, weight: 700, alignment: 1, frMode: 2, frStyle: 0, frColor: 4, frWidth: 15 },
   shadowText: { symNum: 902002, description: "Shadow text", fontColor: 1, fontSize: 80, italic: true, alignment: 2 | 8, frMode: 1, frColor: 3, frOfX: 10, frOfY: -20 },
+  boxText: { symNum: 902003, description: "Box text", fontColor: 1, fontSize: 80, alignment: 3, paraSpace: 50, nTabs: 1, tabs: [750], frMode: 3, frColor: 4, frLeft: 20, frBottom: 30, frRight: 20, frTop: 10 },
   lineText: { symNum: 903000, description: "Line text", fontColor: 0, fontSize: 100, charSpace: 10, alignment: 1, frMode: 2, frColor: 4, frWidth: 12 },
   rectangle: { symNum: 850001, description: "Rectangle", lineColor: 0, lineWidth: 16, radius: 229 },
   gridRectangle: { symNum: 850002, description: "Grid rectangle", lineColor: 1, lineWidth: 25, gridFlags: 3, cellWidth: 1000, cellHeight: 800, unnumCells: 2, unnumText: "X" },
@@ -413,6 +421,7 @@ export function buildSymbolTypesOcad() {
   const symbols = [
     textSymbol(t.framedText),
     textSymbol(t.shadowText),
+    textSymbol(t.boxText),
     lineTextSymbol(t.lineText),
     rectangleSymbol(t.rectangle),
     rectangleSymbol(t.gridRectangle),
@@ -426,6 +435,8 @@ export function buildSymbolTypesOcad() {
   const objects = [
     { sym: t.framedText.symNum, otp: 4, coords: [[0, 0]], text: "Framed", unicode: 0 },
     { sym: t.shadowText.symNum, otp: 4, coords: [[0, -1000]], text: "Shadow", unicode: 0 },
+    // Formatted text: the box's corners bottom-left, bottom-right, top-right, top-left.
+    { sym: t.boxText.symNum, otp: 5, coords: box(-1000, 2000, 1000, 3500), text: "Wrapped inside its box\r\n7\tTab", unicode: 0 },
     { sym: t.lineText.symNum, otp: 6, coords: [[-2000, 1000], [0, 1500], [2000, 1000]], text: "Along the path", unicode: 0 },
     { sym: t.rectangle.symNum, otp: 7, coords: box(-3000, -3000, 3000, 2500) },
     { sym: t.gridRectangle.symNum, otp: 7, coords: box(-1500, -2500, 1500, -1500) },

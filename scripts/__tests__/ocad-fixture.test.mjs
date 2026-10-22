@@ -122,11 +122,14 @@ describe("showcase SQL map substitution", () => {
       const s = bySym.get(symNum);
       assert.ok(s, `symbol ${symNum}`);
       assert.equal(s.description, description);
-      for (const [k, v] of Object.entries(fields)) assert.equal(s[k], v, `${symNum}.${k}`);
+      for (const [k, v] of Object.entries(fields)) {
+        if (Array.isArray(v)) assert.deepEqual(s[k].slice(0, v.length), v, `${symNum}.${k}`);
+        else assert.equal(s[k], v, `${symNum}.${k}`);
+      }
     }
     assert.deepEqual(
       file.objects.map((o) => [o.objType, o.text]),
-      [[4, "Framed"], [4, "Shadow"], [6, "Along the path"], [7, ""], [7, ""]],
+      [[4, "Framed"], [4, "Shadow"], [5, "Wrapped inside its box\n7\tTab"], [6, "Along the path"], [7, ""], [7, ""]],
     );
   });
 
