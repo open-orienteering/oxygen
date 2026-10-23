@@ -6,9 +6,16 @@
  * one buffer.
  *
  * `RangeAllocator` is the pure free list (first fit, coalescing frees,
- * growable); `GpuArena` wraps a GL buffer around it and grows by copying
- * into a larger buffer (`copyBufferSubData`), so a part's offset never
- * changes while it is resident.
+ * growable); `GpuArena` wraps a GL buffer around it and grows into a
+ * larger buffer by re-uploading every live range from the data `put`
+ * received, so a part's offset never changes while it is resident.
+ * Growth does **not** `copyBufferSubData` the old buffer: ANGLE on
+ * Adreno (Galaxy S25, Chrome 155) copies stale zeros from a buffer that
+ * has in-flight draws, silently and without a GL error — whole detail
+ * parts came back empty (`docs/bugfix-adreno-arena-grow.md`). The caller
+ * keeps the uploaded views alive anyway (`ResidentPart.part`), so the
+ * registry costs no memory, and the re-upload measured no slower than
+ * the copy on that device.
  */
 
 export class RangeAllocator {
@@ -92,6 +99,8 @@ export class GpuArena {
   generation = 0;
   readonly stride: number;
   private readonly gl: WebGL2RenderingContext;
+  /** Live ranges by first vertex: what a grow re-uploads. */
+  private readonly live = new Map<number, ArrayBufferView>();
 
   constructor(gl: WebGL2RenderingContext, stride: number, initialVertices = 1 << 16) {
     this.gl = gl;
@@ -112,10 +121,14 @@ export class GpuArena {
     return this.alloc.used * this.stride;
   }
 
-  /** Uploads `data` (whole vertices) and returns its first vertex. */
+  /**
+   * Uploads `data` (whole vertices) and returns its first vertex. The view
+   * is kept until `release`: a grow re-uploads it, so the caller must not
+   * mutate or detach it while the range is live.
+   */
   put(data: ArrayBuffer | ArrayBufferView): number {
-    const bytes = data.byteLength;
-    const n = bytes / this.stride;
+    const view = data instanceof ArrayBuffer ? new Uint8Array(data) : data;
+    const n = view.byteLength / this.stride;
     let at = this.alloc.alloc(n);
     if (at < 0) {
       this.growTo(Math.ceil(Math.max(this.alloc.capacity * GROWTH, this.alloc.capacity + n)));
@@ -123,12 +136,19 @@ export class GpuArena {
     }
     const gl = this.gl;
     gl.bindBuffer(gl.COPY_WRITE_BUFFER, this.buffer);
-    gl.bufferSubData(gl.COPY_WRITE_BUFFER, at * this.stride, data as ArrayBufferView);
+    gl.bufferSubData(gl.COPY_WRITE_BUFFER, at * this.stride, view);
+    if (n > 0) this.live.set(at, view);
     return at;
   }
 
   release(first: number, vertices: number): void {
     this.alloc.release(first, vertices);
+    if (vertices > 0) this.live.delete(first);
+  }
+
+  /** Live ranges as `[firstVertex, vertices]`, for tests. */
+  liveRanges(): [number, number][] {
+    return [...this.live].map(([at, v]) => [at, v.byteLength / this.stride]);
   }
 
   private growTo(vertices: number): void {
@@ -136,8 +156,7 @@ export class GpuArena {
     const next = gl.createBuffer()!;
     gl.bindBuffer(gl.COPY_WRITE_BUFFER, next);
     gl.bufferData(gl.COPY_WRITE_BUFFER, vertices * this.stride, gl.STATIC_DRAW);
-    gl.bindBuffer(gl.COPY_READ_BUFFER, this.buffer);
-    gl.copyBufferSubData(gl.COPY_READ_BUFFER, gl.COPY_WRITE_BUFFER, 0, 0, this.alloc.capacity * this.stride);
+    for (const [at, view] of this.live) gl.bufferSubData(gl.COPY_WRITE_BUFFER, at * this.stride, view);
     gl.deleteBuffer(this.buffer);
     this.buffer = next;
     this.alloc.grow(vertices);

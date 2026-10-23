@@ -689,7 +689,7 @@ text-atlas.ts  committed MSDF pages ──► glyph lookup (worker),    pure TS
                glyph table (renderer), page selection
 buckets.ts     cells, large bucket, per-part preparation +        pure TS
                range table, visible set, clip groups, LRU, gate
-arena.ts       vertex arenas: free list, grow by copy             GL buffers
+arena.ts       vertex arenas: free list, grow by re-upload        GL buffers
 engine.ts      main thread: worker transport, residency,          no GL calls of its own
                visible-set rebuilds
 renderer.ts    arena programs + visible-set draw loop;            WebGL2
@@ -782,7 +782,7 @@ Constants (`buckets.ts`; 04 §6.11):
 | text skip | 4 device px | text whose em (`sizeUm × pxPerUm`) is smaller is not drawn (04 §6.11); `minTextPx` |
 | hatch tint | 1.5 device px | stripes closer than this become a tint of coverage `width / spacing` |
 | `ARRIVAL_REBUILD_MS` | 150 ms | arriving detail rebuilds the visible set at most this often while more drawn detail is pending |
-| arena growth | 1.25× | by `copyBufferSubData` into a new buffer; offsets never move |
+| arena growth | 1.25× | into a new buffer by re-uploading every live range from the views `put` received; offsets never move. Not `copyBufferSubData`: ANGLE on Adreno copies zeros from a buffer with in-flight draws (`docs/bugfix-adreno-arena-grow.md`) |
 
 **Assignment.** Every object goes, whole, to the cell holding the centre
 of its symbolised bounds (`passBounds`: path bounds + half width × the
