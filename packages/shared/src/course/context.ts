@@ -9,7 +9,7 @@ import type { CourseDocumentContext } from "./types.js";
  * document gets the library by scale (03 §6.5) and the factor
  * reference scale / map scale.
  */
-export function courseDocumentContext(header: Pick<MapDocumentHeader, "colours" | "library" | "documentFactor" | "mapScale">): CourseDocumentContext {
+export function courseDocumentContext(header: Pick<MapDocumentHeader, "library" | "documentFactor" | "mapScale"> & { colours: CourseDocumentContext["colours"] }): CourseDocumentContext {
   if (header.library && isSymbolLibraryId(header.library.id)) {
     return { colours: header.colours, libraryId: header.library.id, documentFactor: header.documentFactor };
   }
