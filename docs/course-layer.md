@@ -90,6 +90,15 @@ per-object hide and hit-testing (04 §7). Map-anchored images are not in
 the stream: `layer.images` carries them with their paper rectangle for
 the page backends.
 
+For consumers: when `remap` is set, every document colour at or above
+upper purple moves up one index, so anything keyed on the document's
+own stack — the viewer's static buckets (C4) — must be built on
+`layer.colours` (or re-keyed) whenever a course is shown, until upper
+white is inserted at import (Pending). `courseLayer` throws
+`CourseStackError` for an unaligned stack; call sites (C4, C5) catch it
+and fall back (legacy overlay, legacy GeoJSON) rather than fail the
+view or the write.
+
 **Scale.** The layer is in paper µm at the document's scale (map frame,
 y-up), like the map. Printing at another scale is the page transform's
 job (`T_map`, 05 §5.1), which enlarges map and course together — so an
@@ -141,7 +150,7 @@ The course-setting rules are symbolisation of the layer (04 §7), in
 | leader | 705 at 0.7 × width in the number's colour | line |
 | leg | 705 | line |
 | marked route / restricted line / forbidden route | 707 / 708 / 711 (ISSprOM has no 711: ISOM's, same factor) | line |
-| out-of-bounds area | 709, or 709.b (solid boundary) when the object has a stroke | — |
+| out-of-bounds area | 709; with a stroke 709.b (solid boundary), or 709.c (dashed) when the stroke is dashed | — |
 | white-out | area symbol `course:whiteout`, fill = upper white | — |
 
 A ring's multiplier scales its centre-line diameter, the width scaling
@@ -236,7 +245,7 @@ Map-anchored `CourseMapObject`s are the 08 §4.5 kinds they already are:
 |---|---|
 | rectangle / path, `fillMode: "whiteout"` | `course:whiteout` area at upper white |
 | `"whiteoutInverted"` (toner saver) | the same area: `viewOptions.window` ring with the shape as an even-odd hole; without a window, not drawn and warned (`WINDOW_MISSING`) |
-| `"outOfBounds"` | 709 (709.b when the object has a stroke; the stored stroke colour is ignored, as legacy print does) |
+| `"outOfBounds"` | 709; with a stroke 709.b, or 709.c for `dash: "dashed"`. The boundary is the library's (0.2 mm × factor, upper purple): the stored stroke colour *and width* are not read — legacy print kept the stored width in purple, a difference for C3's list |
 | `"solid"` | an area in the fill's own colour row |
 | any stroke (except out-of-bounds) | a line in the stroke's colour row, page-mm width ÷ `overprintScale`; `dash: "dashed"` → OCAD dashes max(2, 5 w) / max(1, 2.5 w) mm ÷ `overprintScale` |
 | line | as a stroke |

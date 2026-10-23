@@ -123,8 +123,9 @@ export function layoutObjects(
     if (fillMode === "whiteout") out.objects.push({ symbolIdx: set.idx.whiteout, path: shapePath, ref });
     else if (fillMode === "solid" && o.fill) out.objects.push({ symbolIdx: symbol({ type: "area", fill: colourOf(o.fill) }), path: shapePath, ref });
     else if (fillMode === "outOfBounds") {
-      out.objects.push({ symbolIdx: hasStroke ? set.idx.oobAreaBorder : set.idx.oobArea, path: shapePath, ref });
-      continue; // the 709 entry draws the boundary; the stored stroke colour is ignored, as in legacy print
+      const idx = !hasStroke ? set.idx.oobArea : o.dash === "dashed" ? set.idx.oobAreaDashed : set.idx.oobAreaBorder;
+      out.objects.push({ symbolIdx: idx, path: shapePath, ref });
+      continue; // the library entry draws the boundary: stored colour and width are not read
     } else if (fillMode === "whiteoutInverted") {
       if (!view.window || view.window.length < 3) {
         out.warnings.push({ code: "WINDOW_MISSING", ref, message: `white-out outside ${o.id} needs viewOptions.window; not drawn` });

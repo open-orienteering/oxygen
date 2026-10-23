@@ -93,6 +93,8 @@ describe("layout objects (§3.6)", () => {
     expect(sym("r-whiteout")).toMatchObject({ type: "area", fill: layer.colours.findIndex((c) => c.paletteIds?.includes("white-upper")) });
     expect(sym("r-outOfBounds").id).toBe("ISOM2017-2:709.b");
     expect(byRef("r-outOfBounds")).toHaveLength(1);
+    const dashed = courseLayer(layerInput({ objects: [rect("outOfBounds", { stroke: "#a626ff", strokeWidthMm: 0.4, dash: "dashed" })] }));
+    expect(dashed.symbols[dashed.objects.find((o) => o.ref.kind === "object")!.symbolIdx].id).toBe("ISOM2017-2:709.c");
     const top = layer.colours.slice(-2).map((c) => c.id);
     expect(top).toEqual(["course-object:#ff0000", "course-object:#0000ff"]);
     expect(byRef("t")[0].text).toBe("Lång");

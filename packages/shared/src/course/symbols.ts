@@ -5,7 +5,7 @@
  * then by the appearance multipliers.
  */
 
-import { CONTROL_NUMBER_CAP_HEIGHT_RATIO } from "../course-maps/course-overlay-svg.js";
+import { CONTROL_NUMBER_CAP_HEIGHT_RATIO } from "../course-maps/control-label-placement.js";
 import type { Glyph, GlyphPart, LineSymbol, PointSymbol, RenderSymbol, TextSymbol } from "../render/symbol.js";
 import { parseRenderSymbol } from "../render/symbol.js";
 import { scaleRenderSymbol } from "../render/transform.js";
@@ -26,7 +26,10 @@ export interface CourseSymbolIdx {
   restrictedLine: number;
   forbiddenRoute: number;
   oobArea: number;
+  /** 709.b: solid boundary. */
   oobAreaBorder: number;
+  /** 709.c: dashed boundary. */
+  oobAreaDashed: number;
   whiteout: number;
 }
 
@@ -55,11 +58,13 @@ const BORROW: Partial<Record<string, string>> = {
 const EM_PER_DIGIT = 1 / CONTROL_NUMBER_CAP_HEIGHT_RATIO;
 const KNOCKOUT_OUTLINE_UM = 150;
 
-function resolveCode(libraryId: SymbolLibraryId, code: string, index: ReadonlyMap<string, number>, factor: number): RenderSymbol {
+function resolveCode<T extends RenderSymbol["type"]>(libraryId: SymbolLibraryId, code: string, type: T, index: ReadonlyMap<string, number>, factor: number): Extract<RenderSymbol, { type: T }> {
   const id = `${libraryId}:${code}`;
   const entry = getLibraryEntry(id) ?? getLibraryEntry(BORROW[id] ?? "");
   if (!entry) throw new Error(`symbol library ${libraryId} has no entry ${code}`);
-  return scaleRenderSymbol(resolveEntry(entry, index), factor);
+  const sym = scaleRenderSymbol(resolveEntry(entry, index), factor);
+  if (sym.type !== type) throw new Error(`${entry.id} is a ${sym.type} symbol; the course layer draws it as a ${type}`);
+  return sym as Extract<RenderSymbol, { type: T }>;
 }
 
 /** Glyph geometry × `geom`, stroke widths × `width`; a ring keeps its centre-line diameter × `geom`. */
@@ -95,12 +100,12 @@ function ringOf(sym: PointSymbol): GlyphPart {
 /** The resolved course symbols for one document, stack and appearance. */
 export function courseSymbols(doc: Pick<CourseDocumentContext, "libraryId" | "documentFactor">, index: ReadonlyMap<string, number>, appearance: CourseAppearance): CourseSymbolSet {
   const c = appearance.circle ?? 1, l = appearance.line ?? 1, n = appearance.number ?? 1;
-  const get = (code: string) => resolveCode(doc.libraryId, code, index, doc.documentFactor);
+  const get = <T extends RenderSymbol["type"]>(code: string, type: T) => resolveCode(doc.libraryId, code, type, index, doc.documentFactor);
   const point = (code: string): PointSymbol => {
-    const s = get(code) as PointSymbol;
+    const s = get(code, "point");
     return { ...s, glyph: scaleGlyph(s.glyph, c, l) };
   };
-  const line = (code: string): LineSymbol => scaleLineWidths(get(code) as LineSymbol, l);
+  const line = (code: string): LineSymbol => scaleLineWidths(get(code, "line"), l);
 
   const start = point("701");
   const control = point("703");
@@ -111,7 +116,7 @@ export function courseSymbols(doc: Pick<CourseDocumentContext, "libraryId" | "do
     main: { colour: ring.colour, widthUm: ring.widthUm!, cap: "flat", join: "round" },
   }) as LineSymbol;
 
-  let number = get("704") as TextSymbol;
+  let number: TextSymbol = get("704", "text");
   if (appearance.numberStyle === "knockout") {
     const upper = index.get("purple-upper")!, white = index.get("white-upper");
     if (white === undefined) throw new Error("knockout numbers need the upper white row (courseColourStack)");
@@ -122,15 +127,16 @@ export function courseSymbols(doc: Pick<CourseDocumentContext, "libraryId" | "do
 
   const leg = line("705");
   const leader = { ...leg, id: `${leg.id}/leader`, main: { ...leg.main!, colour: number.colour, widthUm: leg.main!.widthUm * 0.7 } } satisfies LineSymbol;
-  const oobArea = get("709");
-  const oobAreaBorder = get("709.b");
+  const oobArea = get("709", "area");
+  const oobAreaBorder = get("709.b", "area");
+  const oobAreaDashed = get("709.c", "area");
   const whiteout = parseRenderSymbol({ type: "area", id: "course:whiteout", code: "whiteout", name: "White-out", fill: index.get("white-upper") });
 
-  const symbols: RenderSymbol[] = [start, circle, finish, number, leader, leg, line("707"), line("708"), line("711"), oobArea, oobAreaBorder, whiteout];
+  const symbols: RenderSymbol[] = [start, circle, finish, number, leader, leg, line("707"), line("708"), line("711"), oobArea, oobAreaBorder, oobAreaDashed, whiteout];
   const startPart = start.glyph.parts[0];
   return {
     symbols,
-    idx: { start: 0, circle: 1, finish: 2, number: 3, leader: 4, leg: 5, markedRoute: 6, restrictedLine: 7, forbiddenRoute: 8, oobArea: 9, oobAreaBorder: 10, whiteout: 11 },
+    idx: { start: 0, circle: 1, finish: 2, number: 3, leader: 4, leg: 5, markedRoute: 6, restrictedLine: 7, forbiddenRoute: 8, oobArea: 9, oobAreaBorder: 10, oobAreaDashed: 11, whiteout: 12 },
     circleRadiusUm: (ring.diameterUm! - ring.widthUm!) / 2,
     finishRadiusUm: ((ringOf(finish).diameterUm ?? 0) - (ringOf(finish).widthUm ?? 0)) / 2,
     startRadiusUm: startPart.geometry ? Math.hypot(startPart.geometry.coords[0], startPart.geometry.coords[1]) : 0,

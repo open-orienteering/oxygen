@@ -185,7 +185,7 @@ export interface CourseLayerImage {
 }
 
 export interface CourseLayerWarning {
-  code: "WINDOW_MISSING" | "FONT_SUBSTITUTED";
+  code: "WINDOW_MISSING";
   ref: CourseRef;
   message: string;
 }
