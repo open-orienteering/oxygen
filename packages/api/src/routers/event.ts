@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
-import { router, publicProcedure, authedProcedure, adminProcedure, viewProcedure, manageProcedure, kioskOrViewProcedure } from "../trpc.js";
+import { router, publicProcedure, authedProcedure, adminProcedure, viewProcedure, manageProcedure, kioskOrViewProcedure, coursesEditProcedure } from "../trpc.js";
 import { prisma, sanitizeNameId, getZeroTime, isReservedEventSlug } from "../db.js";
 import { kioskKeyMatches } from "../trpc.js";
 import {
@@ -33,6 +33,13 @@ import type {
 import { clearSheetsCache, testGoogleSheetPush } from "../sheetsBackup.js";
 import { runnerStatusToValue, valueToRunnerStatus } from "../statusConvert.js";
 import { ttlMemo } from "../ttl-memo.js";
+import {
+  MAP_PIPELINES,
+  canSwitchTo,
+  getMapPipelineFlags,
+  newEventMapPipeline,
+  type MapPipeline,
+} from "../map-pipeline.js";
 
 /**
  * `pg_database_size()` stats every file under the database directory,
@@ -268,6 +275,7 @@ export const eventRouter = router({
           date: new Date(input.date),
           kind: input.kind,
           kindCustom: input.kindCustom,
+          mapPipeline: await newEventMapPipeline(),
         },
       });
       if (ctx.user) {
@@ -292,6 +300,42 @@ export const eventRouter = router({
         },
       });
       return toEventInfo(event);
+    }),
+
+  /**
+   * The event's map pipeline and whether `legacy` may still be chosen
+   * (docs/map-pipeline-switch.md §2). Kiosk-readable: the kiosk map
+   * follows the event switch.
+   */
+  mapPipeline: kioskOrViewProcedure.query(async ({ ctx }) => {
+    const [row, flags] = await Promise.all([
+      ctx.db.event.findUniqueOrThrow({ where: { id: ctx.event.id }, select: { mapPipeline: true } }),
+      getMapPipelineFlags(),
+    ]);
+    return { pipeline: row.mapPipeline as MapPipeline, allowLegacy: flags.allowLegacy };
+  }),
+
+  /**
+   * Flip the event's map pipeline (the map panel's **Use new map engine**).
+   * Gates reads only; nothing is imported, written or deleted. A switch to
+   * `legacy` is refused once `map.pipeline.allowLegacy` is false.
+   */
+  setMapPipeline: coursesEditProcedure
+    .input(z.object({ pipeline: z.enum(MAP_PIPELINES) }))
+    .mutation(async ({ ctx, input }) => {
+      const flags = await getMapPipelineFlags();
+      if (!canSwitchTo(input.pipeline, flags)) {
+        throw new TRPCError({
+          code: "PRECONDITION_FAILED",
+          message: "The legacy map pipeline is no longer available on this instance.",
+        });
+      }
+      const row = await ctx.db.event.update({
+        where: { id: ctx.event.id },
+        data: { mapPipeline: input.pipeline },
+        select: { mapPipeline: true },
+      });
+      return { pipeline: row.mapPipeline as MapPipeline, allowLegacy: flags.allowLegacy };
     }),
 
   /** Soft-delete an event. */

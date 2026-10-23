@@ -93,9 +93,13 @@ storeImportedDocument(db, { source: { bytes, fileHash, kind, fileName, uploadedB
   `docs/map-import.md` §3.8; `north` is the legacy `NorthDetection` with
   the WMM fields at the import date, `asOf`); since `ocad-7`
   `readerWarnings` (the OCAD reader's own warning texts, at most 50,
-  only when there are any — `docs/map-import.md` §3.6).
+  only when there are any — `docs/map-import.md` §3.6); since `ocad-10` /
+  `omap-4` `warningDetails` (one `{code, message, symbolIdx?}` per warning
+  emission, at most 500, only when there are any — the per-symbol detail
+  behind the header's one-message-per-code `warnings`, `docs/map-import.md`
+  §3.6).
 - `library_version` is `"<library>@<SYMBOL_LIBRARY_VERSION>"`
-  (`ISOM2017-2@2026.10.1`), the library the matcher chose for the
+  (`ISOM2017-2@2026.10.3`), the library the matcher chose for the
   document. Rows imported before the matcher carry `"none"`
   (`LIBRARY_VERSION_NONE`) and `importer ocad-3`; they are no longer
   dedup targets, so the next upload of the same bytes produces a new
@@ -287,7 +291,7 @@ role at once). With auth off the filename is `map_sources.file_name`.
 
 06 §5.2, 07 §6.1. PNGs derived from a document or from the bundled
 library by the reference raster (`docs/map-rendering.md` §5.1); the
-review UI (slice B) reads them. `packages/api/src/map-store/previews.ts`
+review UI (`docs/map-symbols.md` §8.7) reads them. `packages/api/src/map-store/previews.ts`
 (rows, library cache) and `preview-routes.ts` (routes).
 
 ```
@@ -453,7 +457,7 @@ startImportJob(db, {sourceHash, eventId? | clubMapId?, startedBy?, holdMs?})
   │
   ├─ decisions = club_symbol_decisions for the source's kind (docs/map-symbols.md §8.5)   → the row's `decisions`
   │
-  ├─ a map_documents row exists for (sourceHash, importer ∈ {ocad-7, omap-2}, library *@<current SYMBOL_LIBRARY_VERSION>)
+  ├─ a map_documents row exists for (sourceHash, importer ∈ {ocad-12, omap-6}, library *@<current SYMBOL_LIBRARY_VERSION>)
   │   that follows `decisions` (newest first)
   │     → touchDocument, insert state=done with that document_hash, applyJobResult, derive, return   (06 §8 dedup, no worker)
   │
@@ -795,11 +799,59 @@ about them because nothing references them yet.
 
 ### 7.1 Devices
 
-The GL dev page loads a stored document straight from the route:
-`/dev/map-gl-doc?url=/api/map-documents/<hash>?event=<nameId>`. The
-viewer (slice B) and the service-worker CacheFirst layer (07 §7,
-`storage.persist()`) are pending; both key on the hash and may rely on
-`immutable` and the `ETag`.
+The viewer (`docs/map-rendering.md` §5.4) reads a document through
+`lib/map-document-cache.ts`; the GL dev page still loads one straight from
+the route (`/dev/map-gl-doc?url=/api/map-documents/<hash>?event=<nameId>`).
+
+**Request.** `GET /api/map-documents/<hash>` with the event as
+`x-event-id: <nameId>` and the page's kiosk key (`?k=`) as
+`x-kiosk-key` — headers, never the query, so the URL is the hash alone:
+the service worker's cache key, and a club map pinned by several events is
+cached once. The whole document (200) is read; no `Range` and no
+`If-None-Match` from the client (the browser's own cache and the service
+worker handle revalidation of an `immutable` response). §4.2 decides
+access exactly as for any other caller — on the request that fills the
+cache: a device keeps a document it has cached after its access is
+revoked, until the entry expires or is evicted (inherent in 07 §9.1's
+CacheFirst).
+
+**In memory.** One request per hash per session: concurrent callers share
+it and get the same `ArrayBuffer`; the last four documents are kept
+(`MEMORY_ENTRIES`), older ones are dropped and re-read from Cache Storage.
+The header is decoded once (`readMapDocumentHeader`); the body is decoded
+in the viewer's worker. A failed request is not remembered, so *Try
+again* asks again. Failures are classified for the viewer's message:
+401 / 403 `unauthorised`, 404 `missing`, a network error or non-200 while
+`navigator.onLine === false` `offline` ("not cached on this device and
+the network is unavailable" — 07 §9.1's eviction detection; there is no
+app-wide offline banner to reuse), anything else (or bytes that are not a
+document) `failed`.
+
+**Service worker** (`vite.config.ts`, Workbox `generateSW`):
+
+| Route | Match | Strategy | Cache | Expiration |
+|---|---|---|---|---|
+| Documents | same origin, `^/api/map-documents/[0-9a-f]{64}$` | CacheFirst | `map-documents` | 20 entries, 365 days, purge on quota error; 200 only |
+| Viewer fonts and text atlas | same origin, `/assets/*.ttf` and `/assets/text-atlas.*` | CacheFirst | `map-fonts` | 16 entries, 365 days; 200 only |
+
+The document route matches documents only, not `/thumbnail.png` or
+`/symbols/…`: the review page's per-symbol swatches would evict the
+documents from a 20-entry cache (07 §9.1 had previews share the route).
+Previews keep the browser's HTTP cache and their `ETag`. The fonts (two
+Liberation faces, 247 kB) and the MSDF text atlas pages
+(`docs/map-rendering.md` §4.10: Latin 675 kB, Cyrillic 222 kB, PNG +
+JSON; the Cyrillic page only for documents whose strings need it) are
+cached on first use rather than precached, so a device that never opens
+a vector map does not download them. The
+regex is `MAP_DOCUMENT_PATH_RE`; Workbox stringifies the route function,
+so `vite.config.ts` repeats it as a literal.
+
+**Pinning.** After the first document loads, the app calls
+`navigator.storage.persist()` once per session (absent API or a refusal
+is ignored), so Cache Storage survives storage pressure (07 §9.1).
+
+**No IndexedDB copy** (07 §9.1): Cache Storage holds the bytes, the
+worker holds the decoded arrays for the session.
 
 ### 7.2 Venue checkout snapshot
 
@@ -882,7 +934,8 @@ importer ignores it.
 the event's map pipeline: it is pinned on upload for `legacy` events too
 (09 §3: the switch gates reads, never imports). A box checked out before
 an event is flipped to `vector` therefore already holds what the new
-viewer reads. The per-event switch (`events.map_pipeline`, slice B) does
+viewer reads. The per-event switch (`events.map_pipeline`,
+`docs/map-pipeline-switch.md`) does
 not feed results, so under the boundary rule it is cloud-owned and is
 not in `EXCLUDED_FIELDS` of the settings refresh
 (`packages/api/src/sync/settingsRefresh.ts`): a flip on the cloud reaches
@@ -1053,7 +1106,12 @@ mentions is pending (§9).
 
 A Maintenance card for the re-match pass (§6.9 is CLI-only); a Settings →
 Maintenance card for the GC (§8.4: status of the last run, dry run, run
-now); refreshing a checked-out box's `map_files` row and document when
+now); a prefetch of the event's document when an event opens (07 §9.1
+"Prefetch"; today the document is fetched when a map is first shown) and
+an "offline ready" indicator with `navigator.storage.persisted()`; the
+service-worker routes are not exercised by E2E (the suite runs the Vite
+dev server, which registers no service worker) — they were checked in the
+built `sw.js`; refreshing a checked-out box's `map_files` row and document when
 the map is re-imported on the cloud during the lease (07 §9.2, §7.2);
 the documents-only dump variant for non-admin event managers (07 §10,
 §15 — not restorable while a document needs its source row, §7.3). Each
@@ -1070,7 +1128,7 @@ lands with its own section here and its own tests.
 | Integration (api) | `packages/api/src/__tests__/integration/map-sources.test.ts` | route 400 / 401 / 403 / 404 / 200; event manager streams the upload under the event's file name, chunked, no `Content-Length`, `no-store`; `?event=`; anonymous with kiosk key 401, course setter / stranger / manager of another event 403; club-library copy admin-only; club uploader / admin under the source's name; auth off; a 33 MiB source byte-exact; `streamBlob` slice sizes and a source that changed mid-stream |
 | Integration (api) | `packages/api/src/__tests__/integration/map-documents.test.ts` | store + dedup under another name, source/hash mismatch refused, `RESTRICT` on a pinned document, blob reads whole/range, `applyEventMap` pins + `mapMetadata`, route 400/401/403/404/200 with headers, `?event=` + kiosk key, brotli/gzip round trip, 304, 206/416/multi-range, club-version visibility, own import job (done → 200, other user 403, failed → 403), auth off |
 | Unit (api) | `packages/api/src/__tests__/map-import-jobs.test.ts` | `isClaimable` matrix, `stageProgress` monotonic, worker import produces the same hashes and `libraryVersion` as the inline importer with stages `parse → normalise → match → encode`, worker rejects garbage, upload validators (`validateUploadInit`, `expectedChunkSize`, `sniffMapKind`, `missingChunks`, `assembleChunks`) |
-| Integration (api) | `packages/api/src/__tests__/integration/map-import-jobs.test.ts` | `applyEventMap` job done + pins + report, dedup under another name, garbage / OMAP failures, `holdMs: 0` queued then finished by the engine, stale reclaim vs live job, `mapImport.status` auth (stranger 403, course setter ok) + `latestForEvent`, `started_by` recorded by `applyEventMap` / `applyUploadedMap` / `clubMap.upload` and null for a dedup without a user, dedup hit touches the document, housekeeping sweep (finalised uploads included), club upload → series + version 1 + written-through legacy row, `useClubMap` pin by UUID, rename / colour / rotation on the series and written through (render key changes), unknown id `NOT_FOUND`, `addFromSource` (one legacy row), `remove` deletes legacy row then series — pins `NULL`, document and source kept, backfill plan unchanged, second remove `NOT_FOUND`, upload routes 401/403/404/400/413/201, out-of-order and repeated chunks, 415, 409 missing, finalise dedup + idempotency, 409 after finalise, `applyUploadedMap` under the upload's name, `applyJobResult` idempotent; pin writes the quick-access columns equal to `parseOcadMapMetadata`, recomputes them with a row's `rotation_correction` (11°) idempotently, report carries `georeference` / `north`, a no-CRS document (`CRS_UNRESOLVED`) leaves the raster path's columns alone |
+| Integration (api) | `packages/api/src/__tests__/integration/map-import-jobs.test.ts` | `applyEventMap` job done + pins + report, dedup under another name, garbage / OMAP failures, `holdMs: 0` queued then finished by the engine, stale reclaim vs live job, `mapImport.status` auth (stranger 403, course setter ok) + `latestForEvent`, `started_by` recorded by `applyEventMap` / `applyUploadedMap` / `clubMap.upload` and null for a dedup without a user, dedup hit touches the document, housekeeping sweep (finalised uploads included), club upload → series + version 1 + written-through legacy row, `useClubMap` pin by UUID, rename / colour / rotation on the series and written through (render key changes), unknown id `NOT_FOUND`, `addFromSource` (one legacy row), `remove` deletes legacy row then series — pins `NULL`, document and source kept, backfill plan unchanged, second remove `NOT_FOUND`, upload routes 401/403/404/400/413/201, out-of-order and repeated chunks, 415, 409 missing, finalise dedup + idempotency, 409 after finalise, `applyUploadedMap` under the upload's name, `applyJobResult` idempotent; pin writes the quick-access columns equal to `parseOcadMapMetadata`, recomputes them with a row's `rotation_correction` (11°) idempotently, report carries `georeference` / `north`, the Mapper job's stored report carries `warningDetails` (the `MISSING_SYMBOL` stub with its symbol index), a no-CRS document (`CRS_UNRESOLVED`) leaves the raster path's columns alone |
 | Unit (api) | `packages/api/src/__tests__/map-backfill-cli.test.ts` | CLI argument parsing, per-map lines and summary |
 | Unit (api) | `packages/api/src/__tests__/map-symbol-decisions.test.ts` | `parseDecisionSnapshot` (malformed column → no decisions), `planDecisionWrites` (accept / unmatch under the current release, reset per library, last decision wins, unknown index / non-source / foreign-library / unknown entry rejected), decide input schema, the worker applying a decision snapshot with the same bytes as inline and a different hash than without |
 | Unit (api) | `packages/api/src/__tests__/map-document-route.test.ts` (edit mode) | `EDIT_ACCESS`: `courses.view` not enough, `courses.edit` admits, kiosk key never, club and own-job clauses unchanged |
@@ -1080,8 +1138,10 @@ lands with its own section here and its own tests.
 | Unit (api) | `packages/api/src/__tests__/map-rematch-cli.test.ts` | `staleReason` matrix, CLI flags, plan / item / summary lines |
 | Integration (api) | `packages/api/src/__tests__/integration/map-rematch.test.ts` | an `ocad-3` / `none` row pinned by an event and a club version is planned (both, `--event` scope), dry run writes nothing, a run moves both pins to the current document, second run empty; a decision change re-matches the club edition only |
 | Integration (api) | `packages/api/src/__tests__/integration/map-backfill.test.ts` | plan counts and ordering, dry run writes nothing, legacy club row → series (settings copied) + version 1 (label / uploader / time from the row), event rows → pins with dedup and club-version pin, unreadable rows reported and left unpinned, second run revisits only what is missing, `--event` scope and soft-deleted events skipped, `backfillStatus` / `backfillStart` admin-only, background run and `CONFLICT` |
-| Unit (api) | `packages/api/src/__tests__/club-map-library.test.ts` | `projectClubMapRow` (series settings, version label → source name fallback, header scale → legacy scale, legacy raster metadata, version-less row with its job and the job's source, nulls, job dropped once a version exists), `canRemoveClubMap` / `canDownloadClubMapVersion` matrices, `latestVersionOrRefuse` → `PRECONDITION_FAILED` |
-| Integration (api) | `packages/api/src/__tests__/integration/club-maps.test.ts` | upload keyed by the series UUID, list carries version / hashes / thumbnail URL / source facts, rename written through, download by version source; linked legacy row's north detection backfilled on list (and all-null for garbage); unparseable upload listed with a failed job and the legacy preview, `download` / `useClubMap` `PRECONDITION_FAILED`; unlinked legacy row not listed and not touched; unknown id `NOT_FOUND`, malformed `BAD_REQUEST`; remove stranger `FORBIDDEN`, creator ok with its legacy row; `setRotation` on series and legacy row → event copy; download stranger `FORBIDDEN`; club-library copy and backup gates |
+| Unit (api) | `packages/api/src/__tests__/club-map-library.test.ts` | `projectClubMapRow` (series settings, version label → source name fallback, header scale → legacy scale, legacy raster metadata, version-less row with its job and the job's source, nulls, job dropped once a version exists), `canRemoveClubMap` / `canDownloadClubMapVersion` matrices, `latestVersionOrRefuse` → `PRECONDITION_FAILED`; `review` counts from the import report's `matching.symbols`, null without a matched document |
+| Integration (api) | `packages/api/src/__tests__/integration/club-maps.test.ts` | upload keyed by the series UUID, list carries version / hashes / thumbnail URL / source facts, rename written through, download by version source; linked legacy row's north detection backfilled on list (and all-null for garbage); unparseable upload listed with a failed job and the legacy preview, `download` / `useClubMap` `PRECONDITION_FAILED`; unlinked legacy row not listed and not touched; unknown id `NOT_FOUND`, malformed `BAD_REQUEST`; remove stranger `FORBIDDEN`, creator ok with its legacy row; `setRotation` on series and legacy row → event copy; download stranger `FORBIDDEN`; club-library copy and backup gates; the listed `review` equals the version document's report counts |
+| Unit (web) | `packages/web/src/lib/__tests__/map-document-cache.test.ts` | §7.1: route regex (documents, not previews), URL without query and the two headers, one request per hash and the same bytes, bounded memory, 401/403/404/5xx/offline/unreadable → kinds and not cached, `storage.persist()` once and absent |
+| E2E | `e2e/map-vector-layer.spec.ts` | §7.1 through the viewer: the pinned document by hash, no query, `x-event-id` |
 | Unit (web) | `packages/web/src/__tests__/map-upload.test.ts` | threshold, init → chunks → finalise call order and progress, per-chunk retry on 5xx, no retry on 4xx, `x-event-id` only for event uploads |
 | Unit (api) | `packages/api/src/__tests__/map-previews.test.ts` | preview request parsing (`:idx`, `.png`, library code, hash), ETags and `If-None-Match`, library preview of an entry and a variant, 404 for unknown code / other version, per-instance cache hit |
 | Unit (api) | `packages/api/src/render/__tests__/previews.test.ts` | swatch pixel probes (418 at 3×, 505 dash on the dash point and gaps, 403 fill, 704 text ink, neutral swatch), library entry PNG size, thumbnail long edge 512 px, object cap |
@@ -1089,6 +1149,7 @@ lands with its own section here and its own tests.
 | E2E | `e2e/map-backfill.spec.ts` | legacy club row inserted directly → Maintenance card shows it pending → Import now → "Imported n, failed 0" → series + version exist → no longer pending |
 | E2E | `e2e/club-map-library.spec.ts` | UI upload → card keyed by the series UUID with the document thumbnail → rename → **From club library** renders the event map → delete leaves the event's map; an unparseable upload is listed as "Import failed", without download, and disabled in the event picker; north-lines badge |
 | E2E | `e2e/map-documents.spec.ts` | UI upload on `itest` → `documentHash` → route 200/304/206, own import job admits the uploader through a non-pinning event, anonymous 401 → thumbnail and symbol swatch 200 / 401 anonymous, library swatch by the header's library and version → source route streams `test.ocd` back (200, `no-store`, attachment), anonymous 401 → dev page `?url=` loads it natively → `latestForEvent` done with report; chunked route (chunks out of order) → `applyUploadedMap` → `mapMetadata`; `clubMap.upload` → `mapImport.status` done |
+| E2E | `e2e/map-review.spec.ts` | the review round from the UI (`docs/map-symbols.md` §8.7): club card "to review" count from `clubMap.list[].review` → route keyed by the document hash → usage order, source and library swatches load → keep 850.1 as drawn → `decide` job → new document not in use → `finalise` moves the card thumbnail and count → CRT download carries `# keep 850.1` → CRT upload dry-run preview, then recorded → reset both rows → the matcher's own document hash again, finalised back; event map from the course editor, document swatches with `?event=`, nothing to finalise. `reseed()` wipes `club_symbol_decisions` on both sides |
 | Unit (api) | `packages/api/src/__tests__/snapshot-maps.test.ts` | `pinnedHashes` (dedup, each document's own source), `partitionMapFiles` (pre-pipeline rows skipped, local identity dropped), `exportBlobInput` bounds (table, hash, start, 4 MiB), `verifyBlob` size and hash, `fetchBlob` slice order, peer hash / size mismatch, short slice |
 | Unit (api) | `packages/api/src/__tests__/backup.test.ts` | dump table order (blobs before `map_files`, decisions present, no previews / tiles), one `\copy` per table, blob filters by the event's pins, decisions unfiltered, `splitBackupSections` |
 | Integration (api) | `packages/api/src/__tests__/integration/lease.test.ts` | checkout carries file + source + document (bytes, header, pin, `file_data`, view overrides, venue-local NULLs, pre-pipeline row skipped, counts); document route on the venue 401 anonymous / 200 with the kiosk key; tampered bytes fail the checkout, release the peer lease and store nothing; exporter without `maps`; `exportBlob` refuses other events' blobs and a start past the end; re-checkout fetches nothing and keeps the blob rows; `lease.exportBlob` through the router (no / wrong secret 401, 4 MiB bound); club decisions merged (newer cloud row wins over a stale venue copy, venue-only row kept, `decided_by` NULL) |
@@ -1135,6 +1196,8 @@ lands with its own section here and its own tests.
 | `packages/api/src/event-map.ts` | `applyEventMap` writes the source row and starts the event job |
 | `packages/api/src/routers/course.ts` / `clubMap.ts` | `applyUploadedMap`, `useClubMap` version pin; `createClubMap`, `addFromSource`, series mirroring |
 | `packages/web/src/lib/map-upload.ts` | client chunked uploader |
+| `packages/web/src/lib/map-document-cache.ts` | the viewer's document loader, `MAP_DOCUMENT_PATH_RE`, `requestPersistentStorage`, `useMapDocument` (§7.1) |
+| `packages/web/vite.config.ts` | service-worker routes `map-documents`, `map-fonts` (§7.1) |
 | `packages/api/src/sync/snapshotMaps.ts` | checkout snapshot map part: export, `exportBlobSlice`, `fetchSnapshotBlobs`, `importSnapshotMaps` |
 | `packages/api/src/sync/lease.ts` / `routers/lease.ts` | `EventSnapshot.maps`, `LeasePeer.exportBlob`, `lease.exportBlob`, checkout `maps` counts |
 | `packages/api/src/backup.ts` | `BACKUP_TABLES`, `buildBackupScript`, `splitBackupSections` |

@@ -52,9 +52,24 @@ describe("ocadSymbolToRender — line", () => {
     expect(r2 && r2.type === "line" ? r2.main!.dash!.minGaps : "x").toBeUndefined();
   });
 
-  it("maps distFromStart / distToEnd to stroke shortening", () => {
+  it("maps distFromStart / distToEnd to stroke shortening on a line without pointed ends", () => {
     const { render } = ocadSymbolToRender(line({ distFromStart: 30, distToEnd: 40 }), ctx);
     expect(render).toMatchObject({ type: "line", main: { shortenStartUm: 300, shortenEndUm: 400 } });
+    expect(render && render.type === "line" ? render.main!.taper : "x").toBeUndefined();
+  });
+
+  it("maps distFromStart / distToEnd on a pointed line to the taper and does not shorten (107 erosion gully)", () => {
+    const { render, warnings } = ocadSymbolToRender(line({ lineStyle: 2, distFromStart: 75, distToEnd: 75 }), ctx);
+    expect(warnings).toEqual([]);
+    expect(render).toMatchObject({ type: "line", main: { cap: "pointed", taper: { startUm: 750, endUm: 750 } } });
+    const main = render && render.type === "line" ? render.main! : undefined;
+    expect([main?.shortenStartUm, main?.shortenEndUm]).toEqual([undefined, undefined]);
+    // One end only: the other end keeps the full width.
+    const one = ocadSymbolToRender(line({ lineStyle: 6, distToEnd: 40 }), ctx).render;
+    expect(one && one.type === "line" ? one.main!.taper : "x").toEqual({ endUm: 400 });
+    // Pointed without lengths: no taper field at all (the parsed IR stays byte-identical).
+    const none = ocadSymbolToRender(line({ lineStyle: 2 }), ctx).render;
+    expect(none && none.type === "line" ? none.main!.taper : "x").toBeUndefined();
   });
 
   it("turns the framing line into a halo, also when the main line has no width (502 road)", () => {
@@ -63,6 +78,18 @@ describe("ocadSymbolToRender — line", () => {
     const only = ocadSymbolToRender(line({ lineWidth: 0, lineColor: 99, frColor: 0, frWidth: 60, frStyle: 1 }), ctx);
     expect(only.warnings).toEqual([]); // zero-width main line never looks up its colour
     expect(only.render).toMatchObject({ type: "line", main: { widthUm: 0, cap: "round", join: "round", halo: { colour: 2, widthUm: 300 } } });
+  });
+
+  it("maps a framing line narrower than the main line to a negative continuous halo (503.1)", () => {
+    // Crop-A / Crop-B 503.1: frWidth 65 under a 67 main line.
+    const { render, warnings } = ocadSymbolToRender(line({ lineColor: 3, lineWidth: 67, mainLength: 200, mainGap: 50, frColor: 0, frWidth: 65 }), ctx);
+    expect(warnings).toEqual([]);
+    expect(render).toMatchObject({ type: "line", main: { colour: 0, widthUm: 670, halo: { colour: 2, widthUm: -10, continuous: true } } });
+    // Exactly the main width: a halo of width 0 is not expressible.
+    const equal = ocadSymbolToRender(line({ lineColor: 3, lineWidth: 67, frColor: 0, frWidth: 67 }), ctx);
+    expect(equal.render && equal.render.type === "line" ? equal.render.main!.halo : "x").toBeUndefined();
+    expect(codes(equal.warnings)).toEqual(["SYMBOL_FEATURE_DROPPED"]);
+    expect(equal.warnings[0].message).toBe("505.0: framing line as wide as the main line");
   });
 
   it("maps double lines to borders and the fill to a background band (dblWidth)", () => {
@@ -115,6 +142,16 @@ describe("ocadSymbolToRender — line", () => {
       useSymbolFlags: 1 | 2 | 4, startSymElements: dot, endSymElements: dot, cornerSymElements: dot, secSymElements: dot,
     }), ctx).render;
     expect(ends && ends.type === "line" ? ends.glyphs!.map((g) => g.placement.at) : []).toEqual(["sectionCentres", "corners", "start", "end"]);
+    // Corner glyphs on corner-flagged vertices only, ends included when flagged (map-rendering §4.5, B9).
+    expect(ends && ends.type === "line" ? ends.glyphs![1].placement : undefined).toEqual({ at: "corners" });
+    // Bit 1 is the end symbol, bit 2 the start symbol (club-full 518.1: flags 5 with only an end symbol, B9).
+    const disc = (d: number) => [{ type: 4, color: 0, diameter: d, coords: [c(0, 0)] }];
+    const at = (useSymbolFlags: number) => {
+      const r = ocadSymbolToRender(line({ useSymbolFlags, startSymElements: disc(10), endSymElements: disc(20) }), ctx).render;
+      return r && r.type === "line" ? r.glyphs!.map((g) => [g.placement.at, g.glyph.parts[0].diameterUm]) : [];
+    };
+    expect(at(1)).toEqual([["end", 200]]);
+    expect(at(2)).toEqual([["start", 100]]);
     const noFlags = ocadSymbolToRender(line({ useSymbolFlags: 0, startSymElements: dot, endSymElements: dot, cornerSymElements: dot }), ctx).render;
     expect(noFlags && noFlags.type === "line" ? noFlags.glyphs : "x").toBeUndefined();
   });
@@ -147,12 +184,25 @@ describe("ocadSymbolToRender — point", () => {
     expect(render).toMatchObject({ type: "point", orientation: "object", glyph: { rotatable: true } });
     const parts = render && render.type === "point" ? render.glyph.parts : [];
     expect(parts.map((p) => p.kind)).toEqual(["ring", "ring", "stroke", "fill", "disc"]);
-    expect(parts[0]).toMatchObject({ colour: 3, diameterUm: 7000, widthUm: 350, cx: 0, cy: 0 });
+    // OCAD 9+ measures a circle element's diameter on the line's centre; the IR ring's is the outer diameter (B9).
+    expect(parts[0]).toMatchObject({ colour: 3, diameterUm: 7350, widthUm: 350, cx: 0, cy: 0 });
     expect(parts[2]).toMatchObject({ colour: 2, widthUm: 200, cap: "round", join: "round" });
     expect(Array.from(parts[2].geometry!.coords)).toEqual([-100, 0, 100, 0, 200, 50, 300, 0]);
     expect(Array.from(parts[2].geometry!.flags!)).toEqual([0, 1, 2, 0]);
     expect(parts[3].geometry!.closed).toBe(true);
     expect(parts[4]).toMatchObject({ diameterUm: 100, cx: 50, cy: 50 });
+  });
+
+  it("reads a circle's diameter as the outer one in OCAD 8 and older, on the centre line from OCAD 9", () => {
+    const ring = { symNum: 703000, number: "703.0", type: 1, elements: [{ type: 3, color: 0, diameter: 600, lineWidth: 35, coords: [c(0, 0)] }] };
+    const diameter = (ocadVersion?: number) => {
+      const r = ocadSymbolToRender(ring, { ...ctx, ...(ocadVersion !== undefined ? { ocadVersion } : {}) }).render;
+      return r && r.type === "point" ? r.glyph.parts[0].diameterUm : undefined;
+    };
+    expect(diameter(8)).toBe(6000);
+    expect(diameter(9)).toBe(6350);
+    expect(diameter(12)).toBe(6350);
+    expect(diameter()).toBe(6350);
   });
 
   it("faces north when not rotatable, and is null when no element has a known colour", () => {
@@ -199,11 +249,40 @@ describe("ocadSymbolToRender — area", () => {
     table.set(999000, { symNum: 999000, number: "999.0", type: 1 });
     const bordered = ocadSymbolToRender(area({ fillOn: true, fillColor: 7, borderOn: true, borderSym: 524000 }), ctx);
     expect(bordered.render).toMatchObject({ type: "area", fill: 3, border: { main: { colour: 2, widthUm: 180, cap: "round" } } });
+    expect(bordered.warnings).toEqual([]);
+  });
+
+  // A stale border reference is a source data error (SYMBOL_REFERENCE_INVALID), not an unsupported feature:
+  // the fill stays, no border is drawn, and the message names the case.
+  it("reports a border reference to a non-line symbol as SYMBOL_REFERENCE_INVALID, fill kept", () => {
+    table.set(999000, { symNum: 999000, number: "999.0", type: 1 });
     const notLine = ocadSymbolToRender(area({ fillOn: true, fillColor: 7, borderOn: true, borderSym: 999000 }), ctx);
-    expect(codes(notLine.warnings)).toEqual(["SYMBOL_FEATURE_DROPPED"]);
+    expect(notLine.warnings).toEqual([{ code: "SYMBOL_REFERENCE_INVALID", message: "403.0: border symbol 999000 is a point symbol, not a line symbol" }]);
+    expect(notLine.render).toMatchObject({ type: "area", fill: 3 });
+    expect((notLine.render as { border?: unknown }).border).toBeUndefined();
+  });
+
+  it("reports a border reference to a symbol missing from the table", () => {
     const missing = ocadSymbolToRender(area({ fillOn: true, fillColor: 7, borderOn: true, borderSym: 123 }), ctx);
-    expect(codes(missing.warnings)).toEqual(["SYMBOL_FEATURE_DROPPED"]);
+    expect(missing.warnings).toEqual([{ code: "SYMBOL_REFERENCE_INVALID", message: "403.0: border symbol 123 is not in the symbol table" }]);
     expect(missing.render).toMatchObject({ type: "area", fill: 3 });
+  });
+
+  it("reports an area whose border points at itself, whether or not the table holds it", () => {
+    const self = area({ fillOn: true, fillColor: 7, borderOn: true, borderSym: 403000 });
+    const expected = [{ code: "SYMBOL_REFERENCE_INVALID", message: "403.0: border symbol 403000 is the symbol itself" }];
+    expect(ocadSymbolToRender(self, ctx).warnings).toEqual(expected);
+    table.set(403000, self);
+    const inTable = ocadSymbolToRender(self, ctx);
+    table.delete(403000);
+    expect(inTable.warnings).toEqual(expected);
+    expect(inTable.render).toMatchObject({ type: "area", fill: 3 });
+  });
+
+  it("keeps SYMBOL_EMPTY when a stale border was the only thing the area drew", () => {
+    const r = ocadSymbolToRender(area({ fillOn: false, borderOn: true, borderSym: 403000 }), ctx);
+    expect(r.render).toBeNull();
+    expect(codes(r.warnings)).toEqual(["SYMBOL_REFERENCE_INVALID", "SYMBOL_EMPTY"]);
   });
 
   it("is null when fill is off and nothing else is drawn", () => {
@@ -232,14 +311,26 @@ describe("ocadSymbolToRender — text", () => {
     expect(ocadSymbolToRender(text({ alignment: 0 }), ctx).render).toMatchObject({ align: "left" });
   });
 
+  it("maps the vertical anchor (alignment & 0xfc): 4 middle, 8 top, 0 leaves the field out", () => {
+    // Club-full 802.6 / 802.7 top, Crop-A 901.0 middle and 902.0 top.
+    const top = ocadSymbolToRender(text({ alignment: 8 | 1 }), ctx);
+    expect(top.warnings).toEqual([]);
+    expect(top.render).toMatchObject({ type: "text", align: "centre", verticalAlign: "top" });
+    expect(ocadSymbolToRender(text({ alignment: 4 | 2 }), ctx).render).toMatchObject({ align: "right", verticalAlign: "middle" });
+    const base = ocadSymbolToRender(text({ alignment: 1 }), ctx).render;
+    expect(base && base.type === "text" ? "verticalAlign" in base : "x").toBe(false);
+    const odd = ocadSymbolToRender(text({ alignment: 12 }), ctx);
+    expect(odd.render && odd.render.type === "text" ? odd.render.verticalAlign : "x").toBeUndefined();
+    expect(odd.warnings).toEqual([{ code: "SYMBOL_FEATURE_DROPPED", message: "821.0: vertical text alignment 12" }]);
+  });
+
   it("approximates word spacing, substitutes fonts, and warns about what it drops", () => {
-    const r = ocadSymbolToRender(text({ fontName: "Verdana", wordSpace: 150, alignment: 8 | 1, lbOn: true, pointSymOn: true }), ctx);
+    const r = ocadSymbolToRender(text({ fontName: "Verdana", wordSpace: 150, alignment: 1, lbOn: true, pointSymOn: true }), ctx);
     expect(r.render).toMatchObject({ type: "text", fontFamily: "liberation-sans", align: "centre" });
     expect(r.render && r.render.type === "text" ? r.render.wordSpacing : 0).toBeCloseTo(0.139, 3);
-    expect(codes(r.warnings)).toEqual(["FONT_SUBSTITUTED", "SYMBOL_FEATURE_DROPPED", "SYMBOL_FEATURE_DROPPED", "SYMBOL_FEATURE_DROPPED"]);
+    expect(codes(r.warnings)).toEqual(["FONT_SUBSTITUTED", "SYMBOL_FEATURE_DROPPED", "SYMBOL_FEATURE_DROPPED"]);
     expect(r.warnings.map((w) => w.message)).toEqual([
       expect.stringContaining("Verdana"),
-      expect.stringContaining("vertical text alignment top"),
       expect.stringContaining("line below"),
       expect.stringContaining("point symbol"),
     ]);
@@ -263,16 +354,49 @@ describe("ocadSymbolToRender — text", () => {
     expect(unknown.render && unknown.render.type === "text" ? unknown.render.halo : "x").toBeUndefined();
   });
 
-  it("warns and drops shadow (frMode 1) and rectangle (frMode 3) framing", () => {
+  it("turns shadow framing (frMode 1) into a shadow: offsets ×10, y-up as OCAD's", () => {
     // Club-2026 815.2: shadow in colour 9 offset 0.2 mm right.
-    const shadow = ocadSymbolToRender(text({ frMode: 1, frColor: 3, frOfX: 20, frOfY: -10 }), ctx);
-    expect(codes(shadow.warnings)).toEqual(["SYMBOL_FEATURE_DROPPED"]);
-    expect(shadow.warnings[0].message).toBe("821.0: text shadow framing (colour 3, offset 0.2 / -0.1 mm)");
+    const shadow = ocadSymbolToRender(text({ frMode: 1, frColor: 3, frOfX: 20, frOfY: -10, frWidth: 5 }), ctx);
+    expect(shadow.warnings).toEqual([]);
+    expect(shadow.render).toMatchObject({ type: "text", colour: 2, shadow: { colour: 0, offsetXUm: 200, offsetYUm: -100 } });
     expect(shadow.render && shadow.render.type === "text" ? shadow.render.halo : "x").toBeUndefined();
-    const box = ocadSymbolToRender(text({ frMode: 3, frColor: 3 }), ctx);
-    expect(box.warnings.map((w) => w.message)).toEqual(["821.0: text rectangle framing"]);
+    // No offset: the shadow would sit under the text — nothing drawn, nothing warned (as a zero-width halo).
+    const still = ocadSymbolToRender(text({ frMode: 1, frColor: 3, frOfX: 0, frOfY: 0 }), ctx);
+    expect(still.warnings).toEqual([]);
+    expect(still.render && still.render.type === "text" ? still.render.shadow : "x").toBeUndefined();
+    const unknown = ocadSymbolToRender(text({ frMode: 1, frColor: 77, frOfX: 10, frOfY: 10 }), ctx);
+    expect(unknown.warnings).toEqual([{ code: "SYMBOL_COLOUR_UNKNOWN", message: "821.0: text shadow uses colour 77, which is not in the colour table" }]);
+    expect(unknown.render && unknown.render.type === "text" ? unknown.render.shadow : "x").toBeUndefined();
+  });
+
+  it("turns rectangle framing (frMode 3) into a frame: four margins ×10 in the framing colour", () => {
+    const box = ocadSymbolToRender(text({ frMode: 3, frColor: 3, frLeft: 20, frBottom: 10, frRight: 30, frTop: 40 }), ctx);
+    expect(box.warnings).toEqual([]);
+    expect(box.render).toMatchObject({ type: "text", frame: { colour: 0, leftUm: 200, bottomUm: 100, rightUm: 300, topUm: 400 } });
+    const unknown = ocadSymbolToRender(text({ frMode: 3, frColor: 77, frLeft: 20 }), ctx);
+    expect(unknown.warnings).toEqual([{ code: "SYMBOL_COLOUR_UNKNOWN", message: "821.0: text rectangle framing uses colour 77, which is not in the colour table" }]);
+    expect(unknown.render && unknown.render.type === "text" ? unknown.render.frame : "x").toBeUndefined();
+  });
+
+  it("warns and drops unknown framing modes", () => {
     const odd = ocadSymbolToRender(text({ frMode: 5 }), ctx);
     expect(odd.warnings.map((w) => w.message)).toEqual(["821.0: text framing mode 5"]);
+  });
+
+  it("maps the first nTabs tab stops (1/100 mm → µm), dropping non-positive and non-ascending ones", () => {
+    // Club-2026 815.2: one stop at 7.5 mm.
+    const r = ocadSymbolToRender(text({ nTabs: 1, tabs: [750, 1500, ...new Array(30).fill(0)] }), ctx);
+    expect(r.warnings).toEqual([]);
+    expect(r.render).toMatchObject({ type: "text", tabStops: [{ xUm: 7500 }] });
+    const odd = ocadSymbolToRender(text({ nTabs: 4, tabs: [0, 750, 500, 900] }), ctx).render;
+    expect(odd && odd.type === "text" ? odd.tabStops : "x").toEqual([{ xUm: 7500 }, { xUm: 9000 }]);
+    const none = ocadSymbolToRender(text({ nTabs: 0, tabs: [750] }), ctx).render;
+    expect(none && none.type === "text" ? "tabStops" in none : "x").toBe(false);
+  });
+
+  it("warns that paragraph indents are dropped", () => {
+    const r = ocadSymbolToRender(text({ indentFirst: 100, indentOther: 0 }), ctx);
+    expect(r.warnings).toEqual([{ code: "SYMBOL_FEATURE_DROPPED", message: "821.0: paragraph indent" }]);
   });
 });
 
@@ -290,13 +414,19 @@ describe("ocadSymbolToRender — line text", () => {
     charSpace: 10, wordSpace: 100, alignment: 1, ...over,
   });
 
-  it("converts like a text symbol, with its framing, and warns that it is drawn as block text", () => {
+  it("converts like a text symbol, with its framing, without a warning (the stage lays it along its path)", () => {
     const r = ocadSymbolToRender(lineText({ frMode: 2, frColor: 3, frWidth: 12 }), ctx);
     expect(r.render).toMatchObject({
       type: "text", code: "903.0", fontFamily: "liberation-sans", fontSizeUm: 3528, colour: 2, align: "centre", charSpacing: 0.1,
       lineSpacing: 1, paragraphSpacingUm: 0, halo: { colour: 0, widthUm: 120 },
     });
-    expect(r.warnings).toEqual([{ code: "SYMBOL_FEATURE_DROPPED", message: "903.0: line text drawn as block text" }]);
+    expect(r.warnings).toEqual([]);
+  });
+
+  it("warns that rectangle framing on line text is dropped (OCAD defines it for text only)", () => {
+    const r = ocadSymbolToRender(lineText({ frMode: 3, frColor: 3 }), ctx);
+    expect(r.warnings).toEqual([{ code: "SYMBOL_FEATURE_DROPPED", message: "903.0: rectangle framing on line text" }]);
+    expect(r.render && r.render.type === "text" ? r.render.frame : "x").toBeUndefined();
   });
 });
 
@@ -311,11 +441,18 @@ describe("ocadSymbolToRender — rectangle", () => {
     expect(r.render).toMatchObject({ type: "line", id: "src:850001", code: "850.1", name: "Rektangel", main: { colour: 1, widthUm: 160, cap: "flat", join: "miter" } });
   });
 
-  it("warns that corner radius and grid are dropped (Club-full 850.1: radius 2.29 mm)", () => {
-    const r = ocadSymbolToRender(rect({ radius: 229, gridFlags: 3 }), ctx);
+  it("maps the corner radius to cornerRadiusUm (Club-full 850.1: radius 2.29 mm)", () => {
+    const r = ocadSymbolToRender(rect({ radius: 229 }), ctx);
+    expect(r.warnings).toEqual([]);
+    expect(r.render).toMatchObject({ type: "line", cornerRadiusUm: 2290, main: { colour: 1, widthUm: 160 } });
+    const sharp = ocadSymbolToRender(rect({}), ctx).render;
+    expect(sharp && sharp.type === "line" ? "cornerRadiusUm" in sharp : "x").toBe(false);
+  });
+
+  it("drops the grid by design, with its own code", () => {
+    const r = ocadSymbolToRender(rect({ gridFlags: 3, cellWidth: 500, cellHeight: 400 }), ctx);
     expect(r.render).toMatchObject({ type: "line", main: { colour: 1, widthUm: 160 } });
-    expect(r.warnings.map((w) => w.message)).toEqual(["850.1: rectangle corner radius 2.29 mm", "850.1: rectangle grid"]);
-    expect(codes(r.warnings)).toEqual(["SYMBOL_FEATURE_DROPPED", "SYMBOL_FEATURE_DROPPED"]);
+    expect(r.warnings).toEqual([{ code: "RECTANGLE_GRID_DROPPED", message: "850.1: rectangle grid (cells 5 × 4 mm) not drawn" }]);
   });
 
   it("is null when it draws nothing or its colour is unknown", () => {

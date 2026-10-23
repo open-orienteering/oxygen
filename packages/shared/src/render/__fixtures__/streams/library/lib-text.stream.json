@@ -1,0 +1,13 @@
+{
+"objectIdx": [0,1,4,2,3],
+"symbolIdx": [0,1,1,2,3],
+"passes": [
+{"kind":"text","colour":19,"fontId":0,"sizeUm":5728.671,"glyphs":[22,20],"positions":[0,0,3186.014,0]},
+{"kind":"text","colour":26,"fontId":0,"sizeUm":1500,"glyphs":[36,57,20,21],"positions":[4000,-3000,4889.16,-3000,6306.396,-3000,7140.625,-3000]},
+{"kind":"text","colour":26,"fontId":0,"sizeUm":1500,"glyphs":[49,82,85,85,68,46,164,85,85],"positions":[9000,-3000,10083.252,-3000,10917.48,-3000,11416.992,-3000,11916.504,-3000,9000,-4800,10000.488,-4800,10834.717,-4800,11334.229,-4800]},
+{"kind":"text","colour":26,"fontId":0,"sizeUm":1500,"glyphs":[36,57,20,21],"positions":[2012.573,-5000,2901.733,-5000,4318.97,-5000,5153.198,-5000]},
+{"kind":"text","colour":26,"fontId":0,"sizeUm":1500,"glyphs":[36,57,20,21],"positions":[25.146,-7000,914.307,-7000,2331.543,-7000,3165.771,-7000]}
+],
+"glyphTable": [],
+"fontTable": [{"fontId":0,"family":"liberation-sans","bold":false,"italic":false},{"fontId":1,"family":"liberation-sans-narrow","bold":false,"italic":false}]
+}

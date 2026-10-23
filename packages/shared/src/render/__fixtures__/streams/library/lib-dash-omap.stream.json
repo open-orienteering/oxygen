@@ -1,0 +1,14 @@
+{
+"objectIdx": [0,4,5,1,2,3],
+"symbolIdx": [0,0,0,1,2,3],
+"passes": [
+{"kind":"stroke","colour":26,"path":{"coords":[0,0,13250,0]},"slices":[{"seg0":0,"t0":0,"seg1":0,"t1":0.150943},{"seg0":0,"t0":0.169811,"seg1":0,"t1":0.320755},{"seg0":0,"t0":0.339623,"seg1":0,"t1":0.490566},{"seg0":0,"t0":0.509434,"seg1":0,"t1":0.660377},{"seg0":0,"t0":0.679245,"seg1":0,"t1":0.830189},{"seg0":0,"t0":0.849057,"seg1":0,"t1":1}],"widthUm":250,"cap":"butt","join":"miter"},
+{"kind":"stroke","colour":26,"path":{"coords":[2000,-6000,2800,-6000]},"slices":[{"seg0":0,"t0":0,"seg1":0,"t1":1}],"widthUm":250,"cap":"butt","join":"miter"},
+{"kind":"stroke","colour":26,"path":{"coords":[0,-8000,7750,-8000,15500,-8000],"flags":[0,8,0]},"slices":[{"seg0":0,"t0":0,"seg1":0,"t1":0.258065},{"seg0":0,"t0":0.290323,"seg1":0,"t1":0.548387},{"seg0":0,"t0":0.580645,"seg1":0,"t1":0.83871},{"seg0":0,"t0":0.870968,"seg1":1,"t1":0.129032},{"seg0":1,"t0":0.16129,"seg1":1,"t1":0.419355},{"seg0":1,"t0":0.451613,"seg1":1,"t1":0.709677},{"seg0":1,"t0":0.741935,"seg1":1,"t1":1}],"widthUm":250,"cap":"butt","join":"miter"},
+{"kind":"stroke","colour":26,"path":{"coords":[0,-2000,13500,-2000]},"slices":[{"seg0":0,"t0":0,"seg1":0,"t1":0.074074},{"seg0":0,"t0":0.092593,"seg1":0,"t1":0.240741},{"seg0":0,"t0":0.259259,"seg1":0,"t1":0.407407},{"seg0":0,"t0":0.425926,"seg1":0,"t1":0.574074},{"seg0":0,"t0":0.592593,"seg1":0,"t1":0.740741},{"seg0":0,"t0":0.759259,"seg1":0,"t1":0.907407},{"seg0":0,"t0":0.925926,"seg1":0,"t1":1}],"widthUm":250,"cap":"butt","join":"miter"},
+{"kind":"stroke","colour":26,"path":{"coords":[0,-4000,13250,-4000]},"slices":[{"seg0":0,"t0":0,"seg1":0,"t1":0.150943},{"seg0":0,"t0":0.169811,"seg1":0,"t1":0.320755},{"seg0":0,"t0":0.339623,"seg1":0,"t1":0.490566},{"seg0":0,"t0":0.509434,"seg1":0,"t1":0.660377},{"seg0":0,"t0":0.679245,"seg1":0,"t1":0.830189},{"seg0":0,"t0":0.849057,"seg1":0,"t1":1}],"widthUm":250,"cap":"butt","join":"miter"},
+{"kind":"stroke","colour":26,"path":{"coords":[0,-6000,800,-6000]},"slices":[{"seg0":0,"t0":0,"seg1":0,"t1":1}],"widthUm":250,"cap":"butt","join":"miter"}
+],
+"glyphTable": [],
+"fontTable": [{"fontId":0,"family":"liberation-sans","bold":false,"italic":false},{"fontId":1,"family":"liberation-sans-narrow","bold":false,"italic":false}]
+}

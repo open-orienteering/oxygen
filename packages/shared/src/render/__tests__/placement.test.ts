@@ -62,8 +62,17 @@ describe("placeGlyphs — start, end, corners, dash points", () => {
     const s = placeGlyphs(bent, { at: "corners", ignoreEnds: true }, { rotatable: true, scaleAtCorners: true });
     expect(s[0].scale).toBeCloseTo(Math.SQRT2);
   });
-  it("includes the ends unless ignoreEnds", () => {
-    expect(lens(placeGlyphs(bent, { at: "corners" }, { rotatable: false }))).toEqual([0, 1000, 2000]);
+  it("puts a glyph on an end only when the end is flagged, and never with ignoreEnds (§4.5, B9)", () => {
+    expect(lens(placeGlyphs(bent, { at: "corners" }, { rotatable: false }))).toEqual([1000]);
+    const flaggedEnds = new PathMeasure(makePath([0, 0, 1000, 0, 1000, 1000], [F.corner, F.corner, F.corner]));
+    const p = placeGlyphs(flaggedEnds, { at: "corners" }, { rotatable: true });
+    expect(lens(p)).toEqual([0, 1000, 2000]);
+    // Ends at the tangent angle, the corner at the bisector.
+    expect(p.map((x) => Math.round(x.angleDeg))).toEqual([0, 45, 90]);
+    expect(lens(placeGlyphs(flaggedEnds, { at: "corners", ignoreEnds: true }, { rotatable: false }))).toEqual([1000]);
+    const dashEnd = new PathMeasure(makePath([0, 0, 1000, 0, 2000, 0], [0, F.dash, F.dash]));
+    expect(lens(placeGlyphs(dashEnd, { at: "dashPoints" }, { rotatable: false }))).toEqual([1000, 2000]);
+    expect(lens(placeGlyphs(dashEnd, { at: "corners" }, { rotatable: false }))).toEqual([]);
   });
   it("dash points are a separate flag", () => {
     const m = new PathMeasure(makePath([0, 0, 1000, 0, 2000, 0, 3000, 0], [0, F.corner, F.dash, 0]));
@@ -111,3 +120,23 @@ describe("placeGlyphs — dash engine placements", () => {
     expect(lens(placeGlyphs(m, { at: "sectionCentres" }, { rotatable: false }))).toEqual([5000, 15000]);
   });
 });
+
+describe("placeGlyphs — dash points centre a dash", () => {
+  const dash = { layout: "ocad" as const, dashUm: 2000, gapUm: 500 };
+  it("dashCentres puts exactly one glyph on a dash point", () => {
+    const m = new PathMeasure(makePath([0, 0, 10000, 0, 16000, 0], [0, F.dash, 0]));
+    const p = lens(placeGlyphs(m, { at: "dashCentres" }, { rotatable: false, dash }));
+    // Second section (Es 1000, Ee 2000, n 2, r 1): the point itself, then 12500 and 15000.
+    expect(p.filter((l) => Math.abs(l - 10000) < 1)).toHaveLength(1);
+    expect(p.slice(-3).map(Math.round)).toEqual([10000, 12500, 15000]);
+    expect(p).toHaveLength(4 + 3);
+  });
+  it("on a closed loop the seam dash is centred on the start point, once", () => {
+    const sq = new PathMeasure(makePath([0, 0, 2500, 0, 2500, 2500, 0, 2500], undefined, true));
+    const p = lens(placeGlyphs(sq, { at: "dashCentres" }, { rotatable: false, dash }));
+    // L = 10000, n = 4 gaps → 4 dashes, centres every 2500 from the start point.
+    expect(p.map(Math.round)).toEqual([0, 2500, 5000, 7500]);
+    expect(lens(placeGlyphs(sq, { at: "gapCentres" }, { rotatable: false, dash })).map(Math.round)).toEqual([1250, 3750, 6250, 8750]);
+  });
+});
+

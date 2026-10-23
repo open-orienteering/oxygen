@@ -48,6 +48,22 @@ backfill on the first `course.mapMetadata` read. "No magnetic north lines
 found" therefore always means the analysis actually ran and found none —
 never "not analysed yet".
 
+**Review symbols** on a card opens the import review of the version's
+document (`/settings/map-review/<document hash>?clubMap=<series>`,
+[map-symbols.md §8.7](map-symbols.md)); review is expected for club maps,
+so the card also shows an amber **N symbols to review** chip while the
+document still has suggested matches (`clubMap.list[].review`, from the
+import report). There a reviewer accepts a suggestion, picks another
+library symbol, or keeps the file's own symbol; **Apply** records the
+decisions as club symbol decisions and imports the file again, and **Use
+this version** moves the version's document in place, so the card's
+thumbnail follows. Decisions are club-wide: every map of the instance
+with the same symbol (number and drawing) follows them on its next
+import, event maps included ([map-symbols.md §8.5](map-symbols.md)).
+Events that already copied the map keep their own pinned document. The
+same page downloads and uploads the decisions as an OpenOrienteering
+Mapper CRT.
+
 The list is global for the instance (one owning club). Anyone who can sign in
 can upload and rename. Delete is allowed for the entry's creator
 (`club_maps.created_by`) or an instance admin, download for the version's

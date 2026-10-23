@@ -195,7 +195,6 @@ export function pattern(
 export interface EntryOpts {
   variant?: string;
   description?: string;
-  sv?: string;
   purpleRole?: "lower" | "upper";
   minimum?: NonNullable<LibraryEntryInput["minimum"]>;
   footprintM?: number;
@@ -216,7 +215,7 @@ export function authorFor(libraryId: string, citation: string): Author {
       id: `${libraryId}:${code}${opts.variant ? `.${opts.variant}` : ""}`,
       code,
       variant: opts.variant ?? null,
-      name: opts.sv ? { en, sv: opts.sv } : { en },
+      name: { en },
       specType,
       purpleRole: opts.purpleRole ?? null,
       orientation: render.type === "point" ? render.orientation ?? "north" : null,
@@ -230,4 +229,35 @@ export function authorFor(libraryId: string, citation: string): Author {
     if (opts.notes) entry.notes = opts.notes;
     return entry;
   };
+}
+
+/**
+ * Attach Swedish names and older-spec aliases from a library's tables
+ * (`names.ts`, docs/map-symbols.md §3), keyed by the entry id after the
+ * library prefix (`"302.b"`). The tables live apart from the entry files
+ * so names and drawings change independently. Throws on a key no entry
+ * owns, on an alias for a variant, and on a name set twice.
+ */
+export function withNamesAndAliases<E extends LibraryEntryInput>(
+  entries: readonly E[],
+  sv: Readonly<Record<string, string>>,
+  aliases: Readonly<Record<string, LibraryEntryInput["aliases"]>>,
+): E[] {
+  const suffix = (e: LibraryEntryInput) => e.id.slice(e.id.indexOf(":") + 1);
+  const owned = new Set(entries.map(suffix));
+  for (const key of [...Object.keys(sv), ...Object.keys(aliases)]) {
+    if (!owned.has(key)) throw new Error(`names table: no entry ${key}`);
+  }
+  return entries.map((e) => {
+    const key = suffix(e);
+    const name = sv[key];
+    const alias = aliases[key];
+    if (alias && e.variant) throw new Error(`names table: alias on variant ${key}; aliases are for heading entries only`);
+    if (name !== undefined && e.name.sv !== undefined) throw new Error(`names table: ${key} already has a Swedish name`);
+    return {
+      ...e,
+      name: name === undefined ? e.name : { ...e.name, sv: name },
+      aliases: alias ? [...e.aliases, ...alias] : e.aliases,
+    };
+  });
 }

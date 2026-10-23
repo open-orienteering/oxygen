@@ -4,7 +4,9 @@
  */
 
 import type { RenderSymbol } from "../render/symbol.js";
+import { ALIAS_SOURCE as ISOM_ALIAS_SOURCE, SV_SOURCE as ISOM_SV_SOURCE } from "./ISOM2017-2/common.js";
 import { isom2017_2 } from "./ISOM2017-2/index.js";
+import { SV_SOURCE as ISSPROM_SV_SOURCE } from "./ISSprOM2019-2/common.js";
 import { issprom2019_2 } from "./ISSprOM2019-2/index.js";
 import { type PaletteEdition, paletteIndex, paletteStack } from "./palette.js";
 import { type LibraryEntry, type SymbolLibrary, parseSymbolLibrary, resolveEntry } from "./schema.js";
@@ -14,14 +16,25 @@ export * from "./schema.js";
 
 /**
  * Version of the library *data*. Bumped whenever an entry's render,
- * code or variant changes; part of a document's identity (06 §4.2) and
- * stored on `map_documents.library_version`.
+ * code or variant changes, or a name or alias the matcher reads
+ * (docs/map-symbols.md §8.2); part of a document's identity (06 §4.2)
+ * and stored on `map_documents.library_version`. 2026.10.2: Swedish
+ * names and ISOM 2000 aliases (B7). 2026.10.3: drawing defects (B10) —
+ * 509 / 509.1 railway white dashes over a black band with black ends,
+ * 101.b / 103.b slope ticks to +y, 107 taper, 510 / 511 / 511.b pylons at
+ * corners (510 bars ±0.37 mm), ISOM 111 orientated to north.
  */
-export const SYMBOL_LIBRARY_VERSION = "2026.10.1";
+export const SYMBOL_LIBRARY_VERSION = "2026.10.3";
 
 /** Raw authored inputs, before validation (tests and tooling). */
 export const symbolLibraryInputs = { "ISOM2017-2": isom2017_2, "ISSprOM2019-2": issprom2019_2 } as const;
 export type SymbolLibraryId = keyof typeof symbolLibraryInputs;
+
+/** Where each library's Swedish names and aliases come from (docs/map-symbols.md §3); `null` = none yet. */
+export const symbolLibraryNameSources: Record<SymbolLibraryId, { sv: string; aliases: string | null }> = {
+  "ISOM2017-2": { sv: ISOM_SV_SOURCE, aliases: ISOM_ALIAS_SOURCE },
+  "ISSprOM2019-2": { sv: ISSPROM_SV_SOURCE, aliases: null },
+};
 
 export function isSymbolLibraryId(id: string): id is SymbolLibraryId {
   return Object.prototype.hasOwnProperty.call(symbolLibraryInputs, id);

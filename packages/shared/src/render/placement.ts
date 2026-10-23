@@ -6,8 +6,8 @@
  */
 
 import { COORD_FLAG } from "./pass-stream.js";
-import { type Interval, gapsOf, layoutDashes } from "./dash.js";
-import { type PathMeasure, type Section, pathSections } from "./measure.js";
+import { type DashGrid, dashGrid, gridCentre, gridGaps } from "./dash.js";
+import { type PathMeasure, type Section, pathSections, wrapLength } from "./measure.js";
 import type { DashPattern, GlyphPlacement } from "./symbol.js";
 
 export interface Placement {
@@ -63,6 +63,11 @@ function spacedInSection(
   return Array.from({ length: n }, (_, i) => start + i * step);
 }
 
+/** The virtual dash grid of a section (laid out even on a solid line, so zero gaps still place glyphs). */
+function sectionGrid(sec: Section, dash: DashPattern): DashGrid {
+  return dashGrid(sec.endLen - sec.startLen, dash, { closedLoop: sec.closedLoop, virtual: true, halfStart: sec.dashStart, halfEnd: sec.dashEnd });
+}
+
 export interface PlaceOptions {
   /** Dash pattern of the main stroke, for `dashCentres` / `gapCentres`. */
   dash?: DashPattern;
@@ -89,15 +94,16 @@ export function placeGlyphs(m: PathMeasure, placement: GlyphPlacement, opts: Pla
     case "dashPoints": {
       const mask = placement.at === "corners" ? COORD_FLAG.corner : COORD_FLAG.dash;
       const lens = m.flaggedLengths(mask).filter((l) => l > 0 && l < L);
-      if (!placement.ignoreEnds && !closed) {
-        at(0);
-      }
+      // An open path's ends only when flagged (OCAD corner symbol, Mapper dash symbol), never with ignoreEnds.
+      const f = m.path.flags;
+      const ends = !closed && !placement.ignoreEnds && f.length > 0;
+      if (ends && f[0] & mask) at(0);
       for (const l of lens) {
         const c = cornerAngle(m, l);
         const scale = opts.scaleAtCorners ? 1 / Math.max(0.25, Math.cos((c.turnDeg * Math.PI) / 360)) : 1;
         at(l, c.angleDeg, scale);
       }
-      if (!placement.ignoreEnds && !closed) at(L);
+      if (ends && f[f.length - 1] & mask) at(L);
       if (closed && (m.path.flags[0] & mask)) at(0, cornerAngle(m, 0).angleDeg);
       break;
     }
@@ -105,9 +111,12 @@ export function placeGlyphs(m: PathMeasure, placement: GlyphPlacement, opts: Pla
     case "gapCentres": {
       if (!opts.dash) break;
       for (const sec of pathSections(m)) {
-        const dashes = layoutDashes(sec.endLen - sec.startLen, opts.dash, { closedLoop: sec.closedLoop, virtual: true });
-        const spans: Interval[] = placement.at === "dashCentres" ? dashes : gapsOf(dashes);
-        for (const [a, b] of spans) at(sec.startLen + (a + b) / 2);
+        const g = sectionGrid(sec, opts.dash);
+        const spans = placement.at === "dashCentres" ? g.dashes.map((d): [number, number] => [d.a, d.b]) : gridGaps(g);
+        for (const [a, b] of spans) {
+          const c = gridCentre(g, (a + b) / 2);
+          if (c !== undefined) at(wrapLength(sec.startLen + c, L));
+        }
       }
       break;
     }
@@ -120,17 +129,17 @@ export function placeGlyphs(m: PathMeasure, placement: GlyphPlacement, opts: Pla
       const cutsInterior = (opts.dash.secondaryGapUm ?? 0) > 0;
       const cutsEnds = (opts.dash.endGapUm ?? 0) > 0;
       for (const sec of pathSections(m)) {
-        const dashes = layoutDashes(sec.endLen - sec.startLen, whole, { closedLoop: sec.closedLoop, virtual: true });
-        dashes.forEach(([a, b], i) => {
-          const isEnd = !sec.closedLoop && (i === 0 || i === dashes.length - 1);
-          const cut = isEnd ? cutsEnds : cutsInterior;
-          if (cut || (!cutsInterior && !cutsEnds)) at(sec.startLen + (a + b) / 2);
-        });
+        const g = sectionGrid(sec, whole);
+        for (const d of g.dashes) {
+          const cut = d.end ? cutsEnds : cutsInterior;
+          const c = gridCentre(g, (d.a + d.b) / 2);
+          if (c !== undefined && (cut || (!cutsInterior && !cutsEnds))) at(wrapLength(sec.startLen + c, L));
+        }
       }
       break;
     }
     case "sectionCentres": {
-      for (const sec of pathSections(m)) at((sec.startLen + sec.endLen) / 2);
+      for (const sec of pathSections(m)) at(wrapLength((sec.startLen + sec.endLen) / 2, L));
       break;
     }
     case "spaced": {
@@ -141,7 +150,7 @@ export function placeGlyphs(m: PathMeasure, placement: GlyphPlacement, opts: Pla
           const first = spot - ((per - 1) * spacing) / 2;
           for (let i = 0; i < per; i++) {
             const l = first + i * spacing;
-            if (l >= sec.startLen - 1e-6 && l <= sec.endLen + 1e-6) at(Math.max(0, Math.min(L, l)));
+            if (l >= sec.startLen - 1e-6 && l <= sec.endLen + 1e-6) at(Math.max(0, Math.min(L, wrapLength(l, L))));
           }
         }
       }

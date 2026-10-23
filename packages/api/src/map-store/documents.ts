@@ -47,6 +47,7 @@ export function buildImportReport(result: MapImportResult, header: mapDocument.M
     counts: result.counts,
     warnings: result.warnings,
     ...(result.readerWarnings.length ? { readerWarnings: result.readerWarnings } : {}),
+    ...(result.warningDetails.length ? { warningDetails: result.warningDetails } : {}),
     matching: result.matching,
     colourStack: result.colourStack,
     georeference: result.analysis.georeference,

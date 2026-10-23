@@ -1,7 +1,8 @@
 /**
  * Mobile layout and touch gesture regressions.
  */
-import { test, expect, type Locator, type Page } from "@playwright/test";
+import { test, expect, type MapPipeline } from "./helpers/map-pipeline";
+import type { Locator, Page } from "@playwright/test";
 import { reseed } from "./helpers/reseed";
 import { uploadEventMap } from "./helpers/map-upload";
 
@@ -334,7 +335,7 @@ test.describe.serial("mobile layout", () => {
     await expect(page.getByTestId("map-layout-editor")).toHaveCount(0);
   });
 
-  test("switching events resets viewport and tile state", async ({ page }) => {
+  test("switching events resets viewport and tile state", async ({ page, mapPipeline }) => {
     test.setTimeout(120_000);
     const uniqueName = `E2E Mobile Map Switch ${Date.now()}`;
 
@@ -350,7 +351,7 @@ test.describe.serial("mobile layout", () => {
     await uploadEventMap(page);
     const secondViewer = page.getByTestId("map-viewer").first();
     await expect(secondViewer).toBeVisible({ timeout: 60_000 });
-    await expectCurrentEventTile(secondViewer, secondNameId);
+    await expectCurrentEventBase(secondViewer, secondNameId, mapPipeline);
     const initialZoom = Number(await secondViewer.getAttribute("data-zoom"));
     await secondViewer.getByTitle("Zoom in").click();
     await secondViewer.getByTitle("Zoom in").click();
@@ -363,7 +364,7 @@ test.describe.serial("mobile layout", () => {
     await page.getByText("My example tävling").click();
     const firstViewer = page.getByTestId("map-viewer").first();
     await expect(firstViewer).toBeVisible({ timeout: 60_000 });
-    await expectCurrentEventTile(firstViewer, "itest");
+    await expectCurrentEventBase(firstViewer, "itest", mapPipeline);
     await expect
       .poll(async () => Number(await firstViewer.getAttribute("data-zoom")))
       .not.toBe(changedZoom);
@@ -372,7 +373,7 @@ test.describe.serial("mobile layout", () => {
     await page.getByText(uniqueName).click();
     const returnedViewer = page.getByTestId("map-viewer").first();
     await expect(returnedViewer).toBeVisible({ timeout: 60_000 });
-    await expectCurrentEventTile(returnedViewer, secondNameId);
+    await expectCurrentEventBase(returnedViewer, secondNameId, mapPipeline);
     await expect
       .poll(async () => Number(await returnedViewer.getAttribute("data-zoom")))
       .toBe(initialZoom);
@@ -530,6 +531,19 @@ test.describe.serial("mobile layout", () => {
     await expect(viewer.getByTestId("my-location-marker")).toBeVisible();
   });
 });
+
+/**
+ * The event's base map is drawn: its own tiles under `legacy`, the vector
+ * layer's first view under `vector` (docs/map-pipeline-switch.md §5).
+ */
+async function expectCurrentEventBase(viewer: Locator, nameId: string, pipeline: MapPipeline) {
+  await expect(viewer).toHaveAttribute("data-map-pipeline", pipeline);
+  if (pipeline === "legacy") return expectCurrentEventTile(viewer, nameId);
+  await expect(viewer.getByTestId("map-vector-layer")).toHaveAttribute("data-ready", "true", {
+    timeout: 30_000,
+  });
+  await expect(viewer.locator("img[data-tile-url]")).toHaveCount(0);
+}
 
 async function expectCurrentEventTile(viewer: Locator, nameId: string) {
   // Tiles are fetched into blob: URLs, so the API URL lives on a data

@@ -96,7 +96,7 @@ describe("storeImportedDocument", () => {
     expect(doc.sourceHash).toBe(fileHash);
     expect(doc.sizeBytes).toBe(size);
     expect(doc.formatVersion).toBe(1);
-    expect(doc.importerVersion).toBe("ocad-7");
+    expect(doc.importerVersion).toBe("ocad-13");
     expect(doc.libraryVersion).toBe(`ISOM2017-2@${symbolLibrary.SYMBOL_LIBRARY_VERSION}`); // 1:7500 fixture → ISOM
     const header = doc.header as Record<string, unknown>;
     expect(header).toHaveProperty("mapScale");
@@ -154,6 +154,8 @@ describe("storeImportedDocument", () => {
   it("course.mapMetadata exposes the pinned document hash", async () => {
     const meta = await makeCaller(ctx.event).course.mapMetadata();
     expect(meta?.documentHash).toBe(documentHash);
+    // An event's own upload is not a club version: the viewer takes the event budget.
+    expect(meta?.clubMapVersionId).toBeNull();
   });
 });
 

@@ -43,7 +43,9 @@ describe("importOmapToDocument", () => {
     const { bytes, warnings } = await importOmapToDocument(fixture, "test.xmap");
     const doc = mapDocument.decodeMapDocument(bytes);
     const source = doc.header.symbols.filter((s) => s.origin === "source");
-    expect(source.length).toBe(21);
+    // 21 source symbols plus the 702 alignment variant (docs/map-import.md §4.4).
+    expect(source.length).toBe(22);
+    expect(source.filter((s) => s.code === "702").map((s) => s.render?.id)).toEqual(["src:20", "src:20/right/middle"]);
     expect(source.filter((s) => s.render === null)).toEqual([]);
     expect(doc.header.symbols.filter((s) => s.origin === "missing").map((s) => s.code)).toEqual(["#77"]);
     expect(warnings.map((w) => w.code)).not.toContain("SYMBOL_COLOUR_UNKNOWN");
@@ -63,12 +65,21 @@ describe("importOmapToDocument", () => {
     // Mapper widths are µm already, so the line-width factor detection sees ×1.
     expect(result.matching.factor.factor).toBe(1);
     expect(result.matching.symbols.auto).toBeGreaterThanOrEqual(5);
+    // Mapper builds 509 as black dashes over a white band; the fingerprint reads it as the library's white dashes over
+    // a black band (docs/map-symbols.md §8.1, A15), so it matches.
+    const { header: h } = mapDocument.readMapDocumentHeader(result.bytes);
+    expect(h.symbols.find((s) => s.code === "509")?.match).toMatchObject({ state: "auto", canonicalId: "ISOM2017-2:509" });
     expect(result.timings.read).toBeGreaterThanOrEqual(0);
     const { header } = mapDocument.readMapDocumentHeader(result.bytes);
     const report = buildImportReport(result, header, "test.xmap");
     expect(report.source).toMatchObject({ kind: "omap", version: "9", fileName: "test.xmap" });
-    expect(report.importer).toBe("omap-2");
+    expect(report.importer).toBe("omap-7");
     expect(report.warnings.map((w) => w.code)).toContain("TEMPLATES_DROPPED");
+    // Per-emission detail (docs/map-import.md §3.6): the missing-symbol stub and the dropped templates are listed with their messages.
+    expect(report.warningDetails).toEqual(expect.arrayContaining([
+      expect.objectContaining({ code: "MISSING_SYMBOL", symbolIdx: expect.any(Number) }),
+      expect.objectContaining({ code: "TEMPLATES_DROPPED", message: expect.stringContaining("ortho.png") }),
+    ]));
     // Stage 5 (docs/map-import.md §3.8): UTM 33N projects; the fixture draws no meridian cluster.
     expect(report.georeference).toMatchObject({ crs: "EPSG:32633", method: "epsg", projectable: true, gridRotationDeg: 2.5 });
     expect(report.north).toMatchObject({ meridian: null, declaredGrivationDeg: 2.5, meridianStalenessDeg: null });
@@ -76,11 +87,11 @@ describe("importOmapToDocument", () => {
   });
 
   it("keeps the two source kinds apart: different importer versions, OCAD path unchanged", async () => {
-    expect(importerVersionFor("ocad")).toBe("ocad-7");
-    expect(importerVersionFor("omap")).toBe("omap-2");
+    expect(importerVersionFor("ocad")).toBe("ocad-13");
+    expect(importerVersionFor("omap")).toBe("omap-7");
     const ocd = await importOcadToDocument(ocdFixture, "test.ocd");
     expect(ocd.kind).toBe("ocad");
-    expect(mapDocument.readMapDocumentHeader(ocd.bytes).header.format.importer).toBe("ocad-7");
+    expect(mapDocument.readMapDocumentHeader(ocd.bytes).header.format.importer).toBe("ocad-13");
     await expect(importMapToDocument(ocdFixture, "test.ocd", "omap")).rejects.toThrow();
   });
 

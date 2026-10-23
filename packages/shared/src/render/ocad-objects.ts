@@ -1,5 +1,9 @@
 /**
- * OCAD objects → `RenderObject`s, spike S1 step 4.
+ * OCAD objects → `RenderObject`s, spike S1 step 4. **Dev-only**: the
+ * `/dev/map-gl-doc?via=reader` path and the S1 measurements. Documents
+ * reach the stage through `map-document/render-bridge.ts`; nothing in
+ * production imports `ocadObjectsToRender`. (`ocadFlags` is the shared
+ * OCAD flag mapping the importers use.)
  *
  * Until the 02 document and the 03 matcher exist, real maps enter the
  * pipeline through the fork's `readOcad` and this converter. It takes
@@ -24,7 +28,8 @@
  */
 
 import { COORD_FLAG, type RenderPath } from "./pass-stream.js";
-import { parseRenderSymbol, type RenderSymbol } from "./symbol.js";
+import { type ProxyColours, proxySymbols } from "./proxy-symbols.js";
+import type { RenderSymbol } from "./symbol.js";
 import type { RenderObject } from "./symbolise.js";
 
 /** The subset of the reader's `TObject` this converter reads. */
@@ -45,7 +50,7 @@ export type OcadConvertMode = "pilot" | "envelope";
 export interface OcadConvertOptions {
   mode?: OcadConvertMode;
   /** Colour indices the envelope proxies draw with (defaults: 0). */
-  proxyColours?: { line?: number; area?: number; point?: number; text?: number };
+  proxyColours?: ProxyColours;
 }
 
 export interface OcadConvertResult {
@@ -63,6 +68,8 @@ export interface OcadConvertResult {
     unmatched: { code: string; count: number }[];
   };
 }
+
+export { proxySymbols } from "./proxy-symbols.js";
 
 const OCAD_UNIT_UM = 10;
 
@@ -96,18 +103,6 @@ function pathOf(o: OcadObjectLike, closed: boolean): RenderPath | undefined {
     flags[i] = ocadFlags(c.xFlags ?? 0, c.yFlags ?? 0);
   }
   return { coords, flags, closed };
-}
-
-export function proxySymbols(colours: OcadConvertOptions["proxyColours"] = {}): RenderSymbol[] {
-  return [
-    { type: "line", id: "proxy:line", code: "proxy-line", name: "Proxy line", main: { colour: colours.line ?? 0, widthUm: 140 } },
-    { type: "area", id: "proxy:area", code: "proxy-area", name: "Proxy area", fill: colours.area ?? 0 },
-    {
-      type: "point", id: "proxy:point", code: "proxy-point", name: "Proxy point", orientation: "north",
-      glyph: { rotatable: false, parts: [{ kind: "disc", colour: colours.point ?? 0, diameterUm: 500 }] },
-    },
-    { type: "text", id: "proxy:text", code: "proxy-text", name: "Proxy text", fontFamily: "liberation-sans", fontSizeUm: 3000, colour: colours.text ?? 0 },
-  ].map(parseRenderSymbol);
 }
 
 export function ocadObjectsToRender(
@@ -166,7 +161,12 @@ export function ocadObjectsToRender(
     else matched++;
     const obj: RenderObject = { symbolIdx, path };
     if (o.ang) obj.angleDeg = o.ang / 10;
-    if (kind === "text" && o.text) obj.text = o.text;
+    if (kind === "text" && o.text) {
+      obj.text = o.text;
+      // Same layout rule as the document bridge (map-rendering §4.9).
+      if (otp === 5) obj.textLayout = "box";
+      else if (otp === 6) obj.textLayout = "path";
+    }
     objects.push(obj);
   }
 

@@ -2,7 +2,8 @@
 
 Status: **draft** — chapter of the vector map pipeline specification,
 started by spike S1 (steps 1–3: harness, pilot symbolisation stage,
-WebGL2 backend with golden images). Sections marked *not yet specified*
+WebGL2 backend with golden images); the symbolisation stage covers the
+whole library since B1. Sections marked *not yet specified*
 are filled in as slice B / C land. The research record this
 chapter derives from is `docs/research/vector-map-pipeline/04-render-core.md`;
 when the two disagree, this document wins.
@@ -107,7 +108,12 @@ field, not an assumption, so no backend can pick its own default.
   on paper; the GL backend may clamp to a minimum *on screen* (that is a
   pixel decision), the PDF backend must not.
 - `cap` is `butt | round | square | pointed`; `pointed` is drawn as butt
-  plus the `taper` (linear width reduction over `startUm` / `endUm`).
+  plus the `taper`: the width falls linearly from `widthUm` to 0 over
+  `startUm` from the path's start and over `endUm` towards its end,
+  measured along the whole path (not per slice). The stage sets `taper`
+  only from the IR's `StrokeSpec.taper` on a `pointed` stroke (user
+  decision 2026-10-20: an explicit field, not `shortenStartUm/EndUm`
+  reread); a `pointed` stroke without it is drawn butt, full length.
 - `slices` is the dash layout. `undefined` means the whole path is one
   stroke. Each `Slice` is `{ seg0, t0, seg1, t1 }` in (segment index,
   curve parameter) space over `pathSegments(path)`. A slice on a Bézier is
@@ -151,14 +157,19 @@ sample the same formula.
 
 ### 3.5 Text
 
-`{ kind: "text", colour, fontId, sizeUm, glyphs, positions, haloWidthUm? }`
+`{ kind: "text", colour, fontId, sizeUm, glyphs, positions, angles?, haloWidthUm? }`
 
-Shaped text: one glyph id and one baseline origin per glyph, em size in µm
+Shaped text: one glyph id, one baseline origin and (when `angles` is
+present) one rotation in degrees, counter-clockwise, per glyph; absent
+`angles` means every glyph is upright (user decision 2026-10-20: per
+glyph rather than per pass, so line text along a path needs no new
+field). A glyph's outline is rotated about its own origin. Em size in µm
 (already derived from digit height where the symbol says so). A halo is a
 **separate pass** in the halo colour with `haloWidthUm` set, sorted into
 its own colour position like any other pass — it is not a backend effect.
-Fonts are the four Liberation families (`FontRef.family`); shaping rules
-are *not yet specified* (S1 step 2).
+Fonts are the four Liberation families (`FontRef.family`, with the
+face's `bold` / `italic`); shaping is the stage's (§4.9). A text shadow
+is likewise its own pass (§4.9).
 
 ### 3.6 Canonical order
 
@@ -175,22 +186,37 @@ is what filter regions and per-symbol hiding rely on.
 
 `passStreamToJson` / `passStreamFromJson` (`render/stream-json.ts`) are a
 lossless, Zod-validated view of a stream for fixtures and snapshots. Float
-fields are quantised to 3 decimals (µm) in the projection; typed arrays are
-canonical in memory. All-zero flag arrays are omitted. Parsing sorts.
+fields are quantised to 3 decimals (µm) in the projection — except a glyph
+instance's `cos`, `sin` and `scale`, which are unitless and keep 6 (3 put
+a 45° instance 1e-4 off, outside `diffPassStreams`' tolerance, B1);
+typed arrays are canonical in memory. All-zero flag arrays are omitted.
+`angles` (§3.5) and `taper` (§3.2) are projected when present and
+compared by `diffPassStreams`; `angles` keep 6 decimals (degrees; 3 put
+a line-text glyph's angle outside the 1e-4° comparison, B8). Parsing sorts.
 
 ## 4. Symbolisation rules
 
-Status: pilot rules (S1 step 2), proven by
-`packages/shared/src/render/__tests__/{measure,dash,placement,pattern,text,symbolise}.test.ts`
-and in image form by `packages/api/src/render/__tests__/pilot-raster.test.ts`.
-Rules marked **provisional** reproduce the documented behaviour of OCAD /
-Mapper from their field semantics; the exact constants are confirmed
-against exports of the corpus maps in the S0/slice A corpus run and
-amended here if they differ. The *structure* of each rule (what is
-computed where, what the stream carries) is not provisional.
+Status: slice B rules (B1, 2026-10-20) — every field of the IR that the
+shipped libraries and the OCAD / OMAP importers produce has a rule here.
+Proven by
+`packages/shared/src/render/__tests__/{measure,dash,placement,pattern,text,symbolise,library-fixtures}.test.ts`
+and in image form by `packages/api/src/render/__tests__/pilot-raster.test.ts`
+and the golden tier (§6.2). Rules marked **provisional** reproduce the
+documented behaviour of OCAD / Mapper from their field semantics and wait
+for S2's pixel comparison against OCAD output (§8); the *structure* of
+each rule (what is computed where, what the stream carries) is not
+provisional.
+
+IR fields the stage does not read: `minimum` (a course-setting and
+print concern, not drawn).
+
+New IR fields are **optional without defaults**: a parsed symbol must
+stay byte-identical when they are absent, because map document hashes
+(`docs/map-document-format.md`) and review-decision fingerprints
+(`docs/map-symbols.md` §8) are computed over the parsed IR.
 
 The stage's entry point is `symbolise({ objects, symbols, fonts })` in
-`render/symbolise.ts`. An object is `{ symbolIdx, path, angleDeg?, text? }`;
+`render/symbolise.ts`. An object is `{ symbolIdx, path, angleDeg?, text?, textLayout? }`;
 a symbol is a `RenderSymbol` (`render/symbol.ts`, Zod-validated; the IR of
 03 §6.2 with defaults applied). Unknown symbols, empty geometry, text
 without text and text without a font produce a warning per object and no
@@ -206,8 +232,18 @@ passes — the stage never throws on data.
 - A **section** is the run between consecutive split points. Corner (4)
   and dash (8) points both split; a closed path without split points is
   one *closed-loop* section; a closed path with split points is cut at
-  them and the wrap-around piece through the start point is a section of
-  its own (the start point is not an implicit split).
+  them only, and the piece from the last split point through the start
+  point to the first one is **one** section (the start point is not an
+  implicit split; it is one when it carries a flag itself). Lengths on
+  that section run past the path's end and are folded back to its start
+  (`wrapIntervals`, `wrapLength` in `render/measure.ts`). A point with
+  both flags is a dash point. Each section knows whether its start and
+  end are dash points (`Section.dashStart` / `dashEnd`).
+- **Drawn intervals** of all sections are sorted and touching intervals
+  merged: the two end dashes meeting at a corner are one drawn dash and
+  become one slice round the corner, joined with the stroke's join, and
+  the two halves of a dash on a dash point are one slice. Nothing merges
+  across the start point of a closed path (a slice never wraps, §3.2).
 - `shortenStartUm` / `shortenEndUm` shrink the first / last section of an
   open path before layout.
 - **Gap points** (128): from one gap point to the next, the main stroke is
@@ -215,36 +251,56 @@ passes — the stage never throws on data.
   their phase across the gap. An unpaired gap point at the last point
   runs to the end of the line.
 
-### 4.2 Dash layout — `layout: "ocad"` (provisional)
+### 4.2 Dash layout — `layout: "ocad"`
 
-Per section, with dash `D`, gap `G`, end dash `E` (= `D` unless
-`endDashUm` is given), gap count `n`:
+Per section, with dash `D`, gap `G`, gap count `n`, and an end dash at
+each end of the section: `Es` at its start, `Ee` at its end. At a line
+end or a corner the end dash is `E` (= `D` unless `endDashUm` is given);
+at a **dash point** it is `D/2`, so that the halves on the two sides form
+one ordinary dash centred on the point (§2.1: "a dash is centred here").
 
-1. `n = round((L − 2E + D) / (D + G))`, then `n = max(n, minGaps)`. On a
-   closed loop `E = D/2` and `n ≥ 1`, so the two half end dashes meet at
-   the start point and form one ordinary dash.
-2. If `n = 0` the section is one solid dash.
-3. Otherwise **gaps keep their nominal length** and all dashes are scaled
-   by one ratio `r = (L − n·G) / (2E + (n − 1)·D)` so the section starts
+1. `n = round((L − Es − Ee + D) / (D + G))`, then `n = max(n, minGaps)`.
+   On a closed loop both ends are `D/2` and `n ≥ 1`, so the two half end
+   dashes meet at the start point and form one ordinary dash.
+2. If `n = 0` the section is one solid dash (cut by the end gap like an
+   end dash, or, when it touches a dash point, an interior dash left
+   whole).
+3. *Provisional (S2).* Otherwise **gaps keep their nominal length** and all dashes are scaled
+   by one ratio `r = (L − n·G) / (Es + Ee + (n − 1)·D)` so the section starts
    and ends with a full end dash. The last dash is snapped to the section
    end. If even the gaps do not fit (`L − n·G ≤ 0`), `n` is reduced until
    they do.
 4. `secondaryGapUm` splits every **interior** dash into `dashesInGroup`
    (default 2) equal parts separated by the secondary gap; `endGapUm` is
-   the secondary gap applied to the two **end** dashes (OCAD's "end gap"
-   — 507 footpath: `secGap 25, endGap 25`; 0 / absent leaves the end
-   dashes whole). On a closed loop every dash is interior.
+   the secondary gap applied to the **end** dashes at line ends and
+   corners (OCAD's "end gap" — 507 footpath: `secGap 25, endGap 25`; 0 /
+   absent leaves the end dashes whole; *provisional (S2)* as an OCAD
+   reading). A dash on a dash point or on a closed loop's seam is
+   interior and is split **whole** — the cut lies symmetrically about the
+   point — before each side keeps its half.
 5. A secondary or end gap forces the virtual grid: a pattern with
    `gapUm 0` and `secondaryGapUm > 0` (517 ruined fence) lays out
    touching dashes and cuts each one, so the line reads as a solid line
    with a short gap every `D`.
 
-What stretches is the provisional part: the implementation keeps gaps
-fixed (visibly uniform gaps, varying dashes, which is what OCAD maps
-show); if the corpus run shows OCAD scaling gaps too, step 3 changes and
-nothing else does.
+What stretches (step 3) and the end-gap reading are the provisional
+part: the implementation keeps gaps fixed (visibly uniform gaps, varying
+dashes, which is what OCAD maps show); if S2's comparison with OCAD
+output shows OCAD scaling gaps too, step 3 changes and nothing else does.
+Steps 1, 2, 4 and 5 and the dash-point rule are the stage's rule (B1,
+2026-10-20): the closed-loop halves are the only seam-free choice, and
+the secondary-gap and virtual-grid rules reproduce the ISOM 2017-2
+drawings of 507 and 517 that the library is authored from.
 
-### 4.3 Dash layout — `layout: "omap"` (provisional)
+**Grid.** Internally a section's layout is a *dash grid*
+(`dashGrid` in `render/dash.ts`): the dashes in section-relative
+lengths, with a dash on a dash point or a loop seam listed whole, so it
+reaches past the section's end. Drawing clips the grid to the section
+(a closed loop wraps it); placement (§4.5) takes centres from the grid,
+and a dash or gap centred on a dash point belongs to the section that
+**starts** there, so it is placed once.
+
+### 4.3 Dash layout — `layout: "omap"`
 
 Mapper's adjustment: a group is `k` dashes (`dashesInGroup`) of `D`
 with `secondaryGapUm` between them; `n` groups and the breaks `B`
@@ -259,12 +315,42 @@ between them are **all scaled by one factor** `f = L / nominal`.
 - Closed loop: `n = max(1, round(L / (group + B)))` groups around the
   loop with the first group centred on the start point (its negative
   half wraps to the end).
+- **Dash points**: a section end at a dash point begins / ends with half
+  a dash — one dash of the pattern centred on the point — when
+  `dashesInGroup` is 1 (Mapper halves single dashes only; a group starts
+  whole at a dash point). Generally, with `hs`, `he` ∈ {0, 1} the half
+  ends (from a dash point, or from `halfOuterDashes` at the other ends),
+  the pattern is `half?, B, [group, B]×n, half?` with
+  `n = round((L − (hs + he)·D/2 − (hs + he − 1)·B) / (group + B))`,
+  `n ≥ 0` when both ends are halves and `n ≥ 1` otherwise, and the two
+  bullets above are its `hs = he = 0` and `hs = he = 1` cases.
+
+These rules follow Mapper's documented dashed-line behaviour and its
+symbol fields (`dashes_in_group`, `in_group_break_length`,
+`half_outer_dashes`, `show_at_least_one_symbol`, dash points); they are
+the stage's rule for `layout: "omap"`, not provisional. S2's pixel
+comparison checks them along with §4.2.
 
 ### 4.4 Strokes, halos, borders
 
 - A line symbol's `main` stroke becomes one `StrokePass` on the object's
   own path (Béziers intact), with `slices` from §4.2/4.3 when dashed,
   shortened or gapped, otherwise no slices. `cap: flat` maps to `butt`.
+- **Pointed caps**: with `cap: "pointed"` and `main.taper { startUm?,
+  endUm? }` the pass carries `cap: "pointed"` and that `taper` (§3.2); the
+  halo pass carries the same taper. The line is not shortened. Without a
+  taper, or with another cap, the pass has no `taper`.
+- **Corner radius** (`cornerRadiusUm`, OCAD rectangle symbols): before
+  anything else the path's polyline corners are rounded
+  (`roundCorners` in `render/geometry.ts`): each anchor between two
+  straight segments becomes a circular arc of that radius written as one
+  cubic (handles `4/3·tan(θ/4)·r` for a turn of θ), tangent to both
+  edges. The tangent length is capped at half of each adjacent edge (the
+  radius shrinks to fit); anchors next to Bézier control points, the
+  ends of an open path, collinear points and reversals stay sharp; the
+  arc's first point keeps the corner's flags. The object's coordinates
+  in the document are untouched — the rounding is a drawing rule (user
+  decision 2026-10-20, A12).
 - A `main.halo` (OCAD line framing, the club sets' 502 band) is a
   **separate** stroke pass in the halo colour, width
   `main.widthUm + 2·halo.widthUm`, same slices, same caps. With
@@ -272,7 +358,10 @@ between them are **all scaled by one factor** `f = L / nominal`.
   shortening (OCAD framing is one solid line under a dashed main line —
   509 railway); gap points still interrupt it. It sorts to its own
   colour's position (03 §6.9 item 9) — nothing fuses it with the main
-  pass.
+  pass. With `continuous`, `halo.widthUm` may be **negative** — an OCAD
+  framing line narrower than its main line (user decision 2026-10-20):
+  the thin solid line lies under the dashed main line and shows only in
+  its gaps. A total width ≤ 0 emits no halo pass.
 - **Borders** (`borders.left` / `right`, 502/509-style double lines) are
   stroke passes on an **offset polyline**: the main path flattened at
   5 µm and offset by `±shiftUm` (left = +normal in y-up) with mitred
@@ -290,6 +379,12 @@ between them are **all scaled by one factor** `f = L / nominal`.
   missing, else on the centre offset). OCAD's double-line fill is
   `dblWidth` wide, between the edges, so the importer sets
   `backgroundWidthUm` explicitly; a band without edges is allowed.
+- `borders.extraPairs` (Mapper combined symbols with a second pair of
+  borders, 502.2) are drawn exactly like `left` / `right`, each with its
+  own shift, width and dash (phase from the main line), after the first
+  pair; they take no part in the background band. A separate list rather
+  than arrays on `left` / `right` keeps every existing reader of the IR
+  (the matcher's fingerprints) unchanged.
 
 ### 4.5 Glyphs on lines
 
@@ -301,8 +396,8 @@ glyph; the instance transform is the point at that length with
 | `placement.at` | Rule |
 |---|---|
 | `start` / `end` | the path's ends, tangent angle |
-| `corners` / `dashPoints` | every point with flag 4 / 8 strictly inside the path, at the **bisector** of the incoming and outgoing tangents; the ends of an open path too unless `ignoreEnds`; on a closed path the start point only when it carries the flag. `scaleAtCorners` scales by `1 / cos(turn/2)` (mitre length), clamped at 4× |
-| `dashCentres` / `gapCentres` | centres of the dashes / gaps of the main stroke's dash layout per section. The layout is run in *virtual* mode so a solid line (`gapUm 0`) with spaced symbols — OCAD's 516 power line — still gets positions: with zero gaps the dashes touch and the glyphs sit at the joints |
+| `corners` / `dashPoints` | every point with flag 4 / 8, at the **bisector** of the incoming and outgoing tangents; an open path's ends only when they carry the flag (at the tangent angle), and never with `ignoreEnds` (user decision 2026-10-21, B9: OCAD's corner symbol and Mapper's dash symbol are drawn at flagged vertices only — Mapper's `line_symbol.cpp` draws flagged ends unless `suppress_dash_symbol_at_ends`; the earlier "ends unless `ignoreEnds`" put a pole on every end of club-2026's 510); on a closed path the start point only when it carries the flag. `scaleAtCorners` scales by `1 / cos(turn/2)` (mitre length), clamped at 4× |
+| `dashCentres` / `gapCentres` | centres of the dashes / gaps of the main stroke's dash layout per section. The layout is run in *virtual* mode so a solid line (`gapUm 0`) with spaced symbols — OCAD's 516 power line — still gets positions: with zero gaps the dashes touch and the glyphs sit at the joints. Centres come from the section's dash grid (§4.2): a dash on a dash point, or on a closed loop's seam, gets **one** glyph, at the point |
 | `dashGroupCentres` | centre of each dash **before** its secondary split, i.e. in the secondary gap (OCAD's main symbol on a line with `secGap` — 517 ruined fence); only dashes that are actually cut get a glyph (end dashes only with `endGapUm`); without any secondary gap it equals `dashCentres` |
 | `sectionCentres` | once per corner-delimited section, at its midpoint (OCAD's secondary symbol) |
 | `spaced` | Mapper semantics per **corner** section (dash points do not restart spacing): `first = firstUm ?? distance/2`, `last` likewise, `inner = L − first − last`; `n = round(inner / distance) + 1` (0 if `inner < 0`), `n = max(n, minCount)` (`minCountClosed` on closed paths); spots at `first + i·inner/(n − 1)`, a single spot centred. On a closed loop: `n = max(minCount, round(L / distance))` spots every `L/n` from the start point. `perSpot` glyphs are spread `spotSpacingUm` apart symmetrically around the spot |
@@ -364,7 +459,12 @@ glyph; the instance transform is the point at that length with
 ### 4.9 Text
 
 - Font resolution: the first font in `fonts` whose `family` matches the
-  symbol (weight/italic ignored in the pilot). Fonts are read by the
+  symbol **and** whose face matches (`weight ≥ 600` is bold, `italic`),
+  else the family's first font — silently, the face-level analogue of the
+  importer's `FONT_SUBSTITUTED` (only Regular faces ship, §4.10). A face
+  is read from `head.macStyle` (bit 0 bold, bit 1 italic) and recorded in
+  the stream's `FontRef`. A family with no font loaded draws nothing
+  (`NO_FONT`). Fonts are read by the
   shared TrueType reader (`render/truetype.ts`: `head`, `hhea`, `hmtx`,
   `maxp`, `cmap` 4/12, `kern` 0, `loca`/`glyf` incl. composites), so
   shaping and outlines come from the same numbers on every side.
@@ -377,14 +477,94 @@ glyph; the instance transform is the point at that length with
   (+ `wordSpacing·em` after a space), `k = em / unitsPerEm`. Spaces
   advance but are not emitted. Lines split on `\n`, baseline-to-baseline
   `lineSpacing · em` downward. Alignment shifts each line by `0`,
-  `−width/2`, `−width` for left / centre / right (justify = left in the
-  pilot). The whole block rotates about the anchor by the object angle.
-  Paragraph spacing and line breaking inside boxes belong to formatted
-  text, which is not in the pilot.
+  `−width/2`, `−width` for left / centre / right (justify = left for
+  block text). Paragraph spacing and line breaking belong to box text
+  (below).
+- **Tabs** (U+0009): the pen jumps to the first of the symbol's
+  `tabStops` (µm from the line start, before alignment) strictly beyond
+  it, else to the next multiple of 8 space advances — *provisional
+  (S2)* as OCAD's and Mapper's default interval. A tab draws nothing and
+  is not kerned against its neighbours; a line ending in a tab is as
+  wide as the pen after it.
+- **Three layouts**, chosen per object by `RenderObject.textLayout`,
+  which the render bridge sets from the object type
+  (`map-document-format.md` §8): absent = **block text** from the first
+  point (OCAD type 4, Mapper single-anchor text); `box` = **box text**
+  (OCAD formatted text, type 5; Mapper box text, stored as type 5,
+  `map-import.md` §4.2); `path` = **line text** (OCAD type 6). A box
+  whose path has fewer than four points (or a zero width), and a path
+  with fewer than two, fall back to block text from the first point,
+  without a warning.
+- **Box text**: the first four points are the corners bottom-left,
+  bottom-right, top-right, top-left; the box is `|c1 − c0|` wide and
+  `|c3 − c0|` high, its origin is the top-left corner `c3`, and it turns
+  with the object angle (OCAD stores rotated corners, so the corners give
+  only size and origin). Each `\n` starts a paragraph; a paragraph wraps
+  greedily: a line ends before the word (a run between spaces / tabs)
+  whose last glyph's ink would cross the width; a word wider than the
+  box breaks per glyph (at least one glyph per line); spaces at a wrap
+  are dropped, a tab is not (a tab that is the wrap point starts the
+  next line and moves its first word to the stop, as Purple Pen does); a
+  break before a line's first glyph does not count, so a line that
+  starts with a space or tab and whose first word does not fit breaks
+  per glyph. Lines are `lineSpacing · em` apart and paragraphs a
+  further `paragraphSpacingUm`. Alignment is inside the width (`0`,
+  `(W − w)/2`, `W − w`); `justify` widens every space of a line so the
+  line fills the width, except on a paragraph's last line (which is
+  left). Vertically the anchor is the box's top edge: absent, `baseline`
+  and `top` put the first line's ascent on it; `middle` centres the
+  block (first ascent to last descent) in the box height; `bottom` puts
+  the last descent on the bottom edge — *provisional (S2)*: Mapper and
+  Purple Pen read an OCAD box as starting one internal leading
+  (`ascent + |descent| − em`, 0.12 em for Liberation Sans) lower (§8).
+  Text that overflows the box is drawn, not clipped.
+- **Line text**: one line along the path; `\n` and tabs read as
+  spaces. Glyph cells are `advance·k + charSpacing·em` (+ `wordSpacing`
+  for a space) plus the kerning to the next glyph. Each glyph's origin is
+  the point at its pen distance along the path and the glyph turns to
+  the chord from there to the point one cell further (clamped to the
+  path end) — Purple Pen's reading of OCAD. Text longer than the path is
+  truncated as OCAD does: cells are taken until their sum comes within
+  10 µm of the path length (no sliver of a cell at the end); `left`
+  keeps the cell that crosses it, `right` drops that cell, `centre` keeps
+  it but centres without it. `justify` takes every cell and spreads
+  `L − w` evenly over the gaps between cells (the last cell without its
+  `charSpacing`) — negative when the text is longer than the path, so the
+  cells close up rather than being cut. Start offset `0` / `(L − w)/2` /
+  `L − w` for left / centre / right. `verticalAlign` moves the baseline
+  across the path, turned with each glyph: `baseline` (absent) on it,
+  `top` one digit height below, `middle` half that, `bottom` the
+  descender above. Arc length is Euclidean — *provisional (S2)*:
+  Purple Pen measures OCAD line text with `max + min/2` of the
+  coordinate deltas (§8). The object angle is not used.
+- **Rectangle frame** (`frame`, OCAD framing mode 3): one `fill` pass in
+  `frame.colour`, a rectangle in the text's own frame grown by
+  `leftUm` / `bottomUm` / `rightUm` / `topUm` and turned with the text.
+  Its extent is the widest line's span (block text) or the box width
+  (box text) horizontally, and from the first line's digit height above
+  its baseline down to the last baseline vertically (Purple Pen's
+  reading of OCAD, which frames from the cap height to the baseline).
+  Line text has no frame. It sorts at its colour's position like a halo.
+- **Vertical anchor** (`verticalAlign`, absent = `baseline`): the anchor
+  is on the first line's baseline; `top` puts it at the first line's
+  ascent (the first baseline drops by `ascender·k`), `bottom` at the last
+  line's descent (the block rises by `(lines − 1)·lineSpacing·em +
+  |descender|·k`), `middle` midway between those two. Ascender and
+  descender are the font's `hhea` values (Liberation Sans 1854 / −434 at
+  2048 units per em) — *provisional (S2)* as OCAD's and Mapper's reading
+  of "top" and "bottom".
+- **Rotation**: the whole block rotates about the anchor by the object
+  angle — every glyph origin is rotated, and every glyph is turned by the
+  same angle (`TextPass.angles`, §3.5; absent when the angle is 0).
 - A `halo` is a separate `TextPass` in the halo colour with
   `haloWidthUm`, identical glyphs and positions. Sorted by colour it
   lands at the halo colour's stack position — the ISSprOM 704 white
   outline is "upper white", one below upper purple.
+- A `shadow { colour, offsetXUm, offsetYUm }` is a separate `TextPass`
+  in the shadow colour with every glyph origin moved by the offset —
+  paper µm, y-up, turned by that glyph's own angle (so it follows line
+  text round its path) — drawn as a plain fill (no `haloWidthUm`). It
+  sorts at its colour's position like a halo.
 
 ### 4.10 Fonts shipped
 
@@ -396,6 +576,39 @@ exception, not the SIL OFL of Liberation 2.x as 04 §4.4 assumed; both are
 compatible with Oxygen's AGPL and with embedding in PDFs. `LICENSE` in
 the directory is the upstream text. The server loads them through
 `packages/api/src/render/fonts.ts`.
+
+`packages/shared/fonts/msdf/` holds the WebGL2 backend's **text atlas**
+(§5.2 "Text atlas"), generated from these two files and committed:
+
+| Page | Code points | Image | Glyphs (Sans + Narrow) |
+|---|---|---|---:|
+| `text-atlas.latin.{png,json}` | ASCII U+0020–007E, Latin-1 Supplement U+00A0–00FF, Latin Extended-A U+0100–017F, general punctuation U+2010–2027, € U+20AC | 724 × 724 | 334 + 334 |
+| `text-atlas.cyrillic.{png,json}` | Cyrillic U+0400–04FF (what the faces have: U+0400–045F, 0472–0473, 0490–0491) | 416 × 416 | 100 + 100 |
+
+Both faces share each page. MTSDF (RGB multi-channel signed distance,
+A true signed distance), 32 px per em, distance range 8 px (0.25 em),
+keyed by **glyph id** (what a `TextPass` carries); a glyph on the Latin
+page is not repeated on the Cyrillic page; empty glyphs (space) have no
+entry. The JSON records per face the TTF's SHA-256 and `unitsPerEm`,
+and per glyph its plane bounds (em, y-up, relative to the glyph origin,
+including half the range) and atlas bounds (px, top-left origin).
+
+Regenerate after changing a font file or a page's ranges:
+
+```bash
+pnpm text-atlas:generate
+```
+
+`packages/web/scripts/generate-text-atlas.ts` computes each page's
+glyph ids with the shared TrueType reader, runs `msdf-atlas-gen` v1.4
+(Chlumsky, built from the pinned tag by
+`packages/web/scripts/text-atlas/Dockerfile` in a throwaway image —
+no native toolchain on the host, the same pages on every machine) with
+`-type mtsdf -size 32 -pxrange 8 -yorigin top -seed 0 -threads 1`, and
+turns its JSON into the committed table (`map-gl/text-atlas-build.ts`).
+Output is byte-identical across runs. `map-gl/__tests__/text-atlas.test.ts`
+fails when the committed pages no longer match the fonts (hash) or the
+ranges (a glyph the font has that no page holds).
 
 ## 5. Backends
 
@@ -464,22 +677,33 @@ overlapping kept); pixel probes in
 
 ### 5.2 WebGL2 (web)
 
-`packages/web/src/map-gl/`, three files with hard lines between them:
+`packages/web/src/map-gl/`, with hard lines between the files:
 
 ```
-prepare.ts   pass stream ──► PreparedStream        pure TS, typed arrays, no GL
-batch.ts     PreparedStream ──► Batch[]            pure TS, merges per (colour run, kind)
-renderer.ts  Batch[] + View ──► pixels             WebGL2, six small programs
+worker.ts      document bytes ──► stream ──► atlas, buckets,      pure TS, runs in a Web Worker
+               resident layers; detail parts on request           (worker-entry.ts binds it)
+prepare.ts     geometry builders: flattening, indexed strips,     pure TS, typed arrays, no GL
+               even-odd earcut; the per-pass fan path (goldens)
+mesh-atlas.ts  glyph parts ──► one float texture                pure TS
+text-atlas.ts  committed MSDF pages ──► glyph lookup (worker),    pure TS
+               glyph table (renderer), page selection
+buckets.ts     cells, large bucket, per-part preparation +        pure TS
+               range table, visible set, clip groups, LRU, gate
+arena.ts       vertex arenas: free list, grow by copy             GL buffers
+engine.ts      main thread: worker transport, residency,          no GL calls of its own
+               visible-set rebuilds
+renderer.ts    arena programs + visible-set draw loop;            WebGL2
+               the per-pass path (`setStream` / `render`)
 ```
 
-Status: S1 steps 3–4 spike — whole document drawn every frame, no
-arena, no worker, no buckets / visible set, no MSDF text, no
-depth-buffer fill path. Everything below is what the spike **proved**;
-the arena / worker / tiling layer of 04 sits on top of it unchanged.
-`renderer.ts` keeps the step-3 one-draw-per-pass path (`setStream` /
-`render`) for the golden page; the document path is `setBatches` /
-`renderBatches`. The spike's verdict and its amendments to 04 are in
-`docs/research/vector-map-pipeline/S1-render-spike.md`.
+Status: B2 — strips, arenas, buckets, visible set, mesh atlas, worker,
+screen-only LOD; B3 — MSDF text from the committed text atlas; B4 — the
+viewer drives it (§5.4). Not yet: `WEBGL_multi_draw` (§8). The per-pass path (`setStream` / `render`: one draw per pass,
+stencil fills) is kept unchanged as the backend's golden path
+(`MapGlFixturePage`, §6.2) and as the reference the arena path is
+compared with (`compare=1`, below). The S1 batch path (`batch.ts`,
+`setBatches` / `renderBatches`) is gone; its measurements are the
+"S1" columns of the tables below.
 
 #### Preparation (CPU)
 
@@ -487,82 +711,290 @@ Backend decisions only — nothing here moves a dash or a glyph:
 
 | Pass | Becomes | How |
 |---|---|---|
-| fill | `fan` + `cover` | rings flattened (default 10 µm); one triangle per ring edge from a fan origin just outside the bounds; a two-triangle bounding quad |
-| stroke | `verts` (x, y, ox, oy) | each slice (or ring) flattened from its Bézier sub-range, then extruded *directionally*: the vertex carries the centre-line point and a unit (or mitre) offset; the shader multiplies by the half width |
-| glyph | instanced fill fan + strokes | the `GlyphMesh` in glyph-local units, flattened at ¼ tolerance; instances are the pass's `x, y, cos, sin, scale` buffer as-is |
-| hatch | `fan` + `cover` + stripe params | the area like a fill; stripes are evaluated in the fragment shader |
-| text | one instanced item per distinct glyph id | outline in font units, instance scale `sizeUm / unitsPerEm`; a halo pass is the same outlines **stroked** (round/round) with `haloWidthUm / k` |
+| fill | fill-arena vertices + triangle indices | rings flattened (10 µm); **even-odd earcut**: rings grouped by containment depth (`triangulateEvenOdd`) — a ring inside an even number of others is an outer boundary, one inside an odd number a hole of its innermost container, so a "hole" ring outside every other ring is filled and separate contours are separate polygons, exactly §3.1's rule. Rings that cross are earcut's failure mode and drawn as earcut decides (the reference raster is the oracle) |
+| stroke | stroke-arena vertices + indices | each slice (or ring) flattened from its Bézier sub-range, then an **indexed strip** (`extrudeStrip`): per vertex the centre-line point and an offset direction; the shader multiplies by the half width |
+| glyph | an instance per placement into the mesh atlas | the `GlyphMesh` in glyph-local µm at ¼ tolerance, fills triangulated even-odd, strokes as strips expanded to triangles; instance `x, y, cos, sin, scale` as in the stream plus the mesh's atlas `base, count, radius` |
+| glyph with `clip` | instances + the clip area triangulated even-odd | drawn through the stencil (Drawing, below) |
+| hatch | hatch-arena vertices + indices | the area triangulated like a fill; each vertex carries the stripe normal, spacing, offset and half width so hatches of one colour are one draw |
+| text | a quad instance per glyph from the text atlas | the glyph's (family, glyph id) looked up in the loaded pages (Text atlas, below); instance `x, y` the glyph origin, `cos, sin` from the glyph's `angles` entry (§3.5; upright without), the em size, the glyph-table entry and the halo half width in em (0 on a fill pass); grouped by (colour, page). A glyph no loaded page holds is not drawn (`TEXT_GLYPH_NOT_IN_ATLAS`) |
 
-Extrusion emits one quad per segment, a join wedge per interior vertex
-(mitre with the 4× limit → bevel, or round at 8 steps per π) and the
-caps (flat; square = quads extended by one half width; round = half
-circle). Because the width is applied in the shader, the same buffer
-serves every zoom and the minimum on-screen width is a uniform.
+**Indexed strips (S1 §4.1).** A polyline point shares **one vertex pair**
+between its two segments — offset ± the mitre vector — when that is
+within `JOIN_SHARE_TOLERANCE` (1 % of the half width; 0.7 µm on a
+0.14 mm contour, 10 µm on a 2 mm line) of the exact join: always for a
+mitre join inside the 4× limit, for a round join while `sec(θ/2) − 1 ≤ 1 %`
+(turns up to ~16°), for a bevel while `sec(θ/2) − cos(θ/2) ≤ 1 %`, and
+only while the inner mitre point stays on both neighbouring segments
+(`hw · tan(θ/2) ≤` either segment's length). Flattened curves are almost
+all such points, so a stroke is ~2 vertices per point. At a real corner
+the segments get their own pairs and a join wedge: mitre (4× limit, then
+bevel), bevel, or round at 8 steps per π. Caps: butt, square (end pairs
+pushed out by a half width), round (half-circle fan); `pointed` is drawn
+butt until the taper is consumed (§8). Coverage equals S1's
+triangle-list extrusion everywhere except within the 1 % band at shared
+joins (the unit test compares coverage outside a band of 3 % of the half
+width: the 1 % plus the sampling step). The flattening tolerance stays 10 µm at every zoom.
+
+**Coordinates** (decided with the user, 2026-10-21). Arena positions
+are float32 **relative to the document origin** — the centre of the
+bucket grid — with one origin for every bucket; the view matrix (Drawing)
+is built relative to it in float64 on the CPU. On Club-full (± 585 mm
+from the origin) the float32 step is 0.06 µm: ≈ 0.03 px at 20× paper on
+a 2.625-DPR phone (unit test, in float32 arithmetic). This replaces
+04 §6.10's int16 bucket-relative positions: a visible-set draw spans
+many buckets, so there is no per-bucket draw to carry a bucket matrix,
+and the large-object bucket spans the whole map, which int16 at 10 µm
+(± 327 mm) cannot hold. The precision fixture of 04 §8 ("+ Precision")
+is the trigger to revisit.
+
+Vertex layouts (`buckets.ts`):
+
+| Arena | Bytes | Layout |
+|---|---:|---|
+| fill | 8 | f32 x, y |
+| stroke | 16 | f32 x, y · i16 ox, oy normalised by the mitre limit · u16 half width in ½ µm (≤ 32.7 mm) · u16 pad |
+| hatch | 28 | f32 x, y, nx, ny, spacing, offset (origin-relative), half width |
+| atlas | 32 per mesh vertex | two RGBA32F texels: (x, y, ox, oy), (half width, 0, 0, 0); fill vertices have zero offset and width |
+| instance | 32 | glyph: f32 x, y, cos, sin, scale, atlas base, count, radius · text: f32 x, y, cos, sin, em size (µm), glyph-table entry, halo (em), 0 |
+| glyph table | 64 per text glyph | four RGBA32F texels: plane l, b, r, t (em) · uv u0, v0, u1, v1 · page, range (em), 0, 0 · 0 |
+| text page | 4 per atlas pixel | RGBA8, `LINEAR`, no mipmaps: Latin 2.0 MB, Cyrillic 0.7 MB |
+
+The stroke vertex is 16 B rather than 04 §6.2's 8 B: widths mix inside
+one visible-set draw, so the half width is a per-vertex µm value rather
+than a uniform × factor, and the position is float32 (above). Against
+S1's 20 B × 6 vertices per segment the strip stores ~2 × 16 B per point
+(measured below).
+
+#### Arena and buckets
+
+Constants (`buckets.ts`; 04 §6.11):
+
+| Constant | Value | Rule |
+|---|---|---|
+| `CELL_UM` | 50 000 µm | paper cell, aligned to multiples of 50 mm from the paper origin, every scale |
+| `LARGE_CELLS` | 2 | an object whose bounds exceed 2 cells in x or y goes to the large-object bucket |
+| `DRAW_MARGIN_CELLS` | 1 | cells meeting the viewport (bounding box of the rotated canvas) + 1 are drawn — an object reaches at most one cell beyond the cell of its centre |
+| `PREFETCH_MARGIN_CELLS` | 2 | cells meeting the viewport + 2 have their detail requested, nearest first |
+| zoom gate | 0.14 mm line < 0.15 device px | `140 µm × pxPerUm < 0.15`: ordinary cells' detail is neither drawn nor prepared — 0.28× paper at 1× DPR, 0.14× at 2× |
+| budget | 30 MB event map, 150 MB club map | `EVENT_BUDGET_BYTES`, `CLUB_BUDGET_BYTES`; the caller picks (B4 from the document's provenance); default 150 MB |
+| hairline floor | 1 device px | strokes thinner are drawn 1 px wide with alpha × true width (Drawing) |
+| glyph skip | 2 device px | instances whose mesh diameter × scale is smaller are not drawn |
+| text skip | 4 device px | text whose em (`sizeUm × pxPerUm`) is smaller is not drawn (04 §6.11); `minTextPx` |
+| hatch tint | 1.5 device px | stripes closer than this become a tint of coverage `width / spacing` |
+| `ARRIVAL_REBUILD_MS` | 150 ms | arriving detail rebuilds the visible set at most this often while more drawn detail is pending |
+| arena growth | 1.25× | by `copyBufferSubData` into a new buffer; offsets never move |
+
+**Assignment.** Every object goes, whole, to the cell holding the centre
+of its symbolised bounds (`passBounds`: path bounds + half width × the
+mitre limit for strokes, mesh radius × scale for glyphs, the em box and
+halo for text — for turned text, a pass with `angles`, a square of
+√2 em + halo round each origin, since a glyph turned up to 180° along a
+path reaches its em box's far corner in any direction, B8), or to the
+large-object bucket. All of an object's passes
+share its bucket, in stream order. An object is never duplicated into
+the cells it overlaps; the draw margin is what makes that correct.
+
+**Layers.** A cell is prepared as two parts: `base` — its fills and
+hatches, prepared for every cell when the document loads and always
+resident (the "fill set" of 04 §6.11) — and `detail` — strokes, glyphs,
+text, clipped patterns — prepared on demand above the zoom gate and
+evicted LRU. The large bucket is one `all` part, prepared at load and
+always resident. Below the gate a frame draws the base parts of the
+cells in view and the large bucket.
+
+**Range table (04 §7).** A part keeps, per kind, its geometry and a
+table of entries `(colour, group, object, start, count)`: colour-major
+(the stream's order), one entry per run of an object's indices — or
+instances, where `group` is the atlas size class (glyphs) or the text
+atlas page (text). Entries of one colour
+are contiguous, so a colour of a part is one span.
+
+**Visible set (04 §6.8 point 2).** `buildVisibleSet(parts, hidden)`
+concatenates the drawn parts' spans per (colour, kind) into one index
+buffer per indexed kind (rebased onto each part's arena offset) and one
+instance buffer per instanced kind, grouped by (colour, size class) —
+for text (colour, page). Draws per frame = colours in view × kinds
+present + size classes + text pages + 3 per clip group — independent of how many buckets are in view. It is rebuilt
+when the drawn cell set or the gate state changes, when detail of a
+drawn cell arrives (coalesced, `ARRIVAL_REBUILD_MS`), and when the
+hidden set changes; never while zooming within the same cells. Hidden
+objects (`engine.setHidden`, stream `objectIdx`) are skipped entry by
+entry.
+
+**Clip groups.** Pattern-clipped glyph passes of one colour are merged
+into groups whose footprints (clip area ∪ instance extents) do not meet,
+greedily in stream order: no instance of one member can fall inside
+another member's area, so one stencil mark, one instanced draw and one
+clear serve the group with the same pixels as one per pass. Before
+grouping, Sprint envelope drew 161 per frame, 155 of them clip
+stencil passes; after, 17.
+
+**Residency and the budget.** The engine counts the always-resident
+bytes (base parts, large bucket, mesh atlas, text atlas pages and glyph
+table, the visible-set buffers — which
+hold every index, instance and clip-group array on the GPU) plus the
+resident detail parts' arena vertices against the budget. After every arrival and
+view change it evicts the least recently drawn detail parts until the
+total fits, never one in the drawn set; if the drawn set alone does not
+fit, the engine reports over budget (`EngineStats.overBudget`) rather
+than drop drawn cells. A view's want list is sent once: the same view
+does not re-request what the budget evicted (a new view sends a new
+list), and a part that arrives twice keeps its first upload. Arena
+capacity is reported next to live bytes (the slack is at most the
+growth factor).
+
+#### Worker
+
+`worker.ts` is the pure message handler (unit-tested without a Worker;
+`inlineTransport()` runs it on the main thread for `worker=0`);
+`worker-entry.ts` binds it to the worker scope. Protocol:
+
+| Message | Payload | Reply |
+|---|---|---|
+| `load` | document bytes + `DocumentRenderOptions` (or, dev only, render objects + symbols, or a symbolised stream), font files, the text atlas pages (JSON, in the renderer's page order), optional first view (a view, or "fit into w × h"), gate flag | `loaded`: summary (bounds, origin, grid, detail cells, the first view resolved, stage times, bytes, text: pages, glyphs resolved, glyphs missing), mesh atlas, every cell's base part, the large part — then, without a further request, the first view's detail parts unless it is below the gate |
+| `prepare` | bucket ids, most urgent first | replaces the queue; one `part` per id |
+| — | | `error` on a failed load |
+
+Every typed array goes back as a transferable. The worker decodes,
+bridges (`documentRenderInput`), symbolises, builds the atlas, assigns
+buckets and prepares; it prepares queued parts in slices of about 8 ms
+(`PREPARE_SLICE_MS`) scheduled through a `MessageChannel` (not
+`setTimeout`, whose nesting clamp adds 4 ms per part), so a newer
+`prepare` overtakes a stale queue between slices. Fonts arrive as
+`ArrayBuffer`s and are parsed in the worker. Reading OCAD / OMAP and
+normalising to a document stays outside it (the import pipeline's job;
+the dev page does it on the main thread). The caller creates the worker
+when the view mounts, before a document is known: under Vite dev its
+module graph takes ~150 ms to load (Sprint envelope `load` 314 → 147 ms
+once the dev page pre-warmed it).
+
+#### Text atlas (B3)
+
+Text on the arena path is drawn from the committed MTSDF pages of §4.10
+(04 §6.7: MSDF for the screen, outlines in PDF; both place glyphs from
+the same shaping result, so only rasterisation differs). The atlas is a
+**session asset**, not a document asset: a document never carries it,
+and one page serves every document.
+
+- **Which pages.** `textAtlasPagesFor(header.strings)`: the Latin page
+  always; the Cyrillic page only when a string of the document has a
+  code point in U+0400–04FF (S1 §5's "only when the header lists such
+  characters" — `strings` is that list; the header is read before the
+  worker starts). Pages are generated at build time and *fetched* on
+  demand; nothing generates glyphs in the browser.
+- **Loading.** `loadTextAtlas(pages)` (`lib/map-fonts.ts`): JSON and PNG
+  per page via Vite `?url`, once per session per page (a failed page is
+  retried on the next call), the PNG decoded with `createImageBitmap(…,
+  { premultiplyAlpha: "none", colorSpaceConversion: "none" })` — the
+  field is data — and uploaded without premultiplication or colour-space
+  conversion. The viewer falls back to the Latin page alone, then to no
+  text, when a page fails: the map still draws.
+- **Two consumers, one order.** `engine.load({ …, textAtlas })` gives the
+  decoded images to the renderer (`setTextAtlas`: one RGBA8 texture per
+  page + the glyph table, session-scoped — it survives `setDocument` and
+  is not re-uploaded for the same pages) and the page JSONs to the
+  worker, in the same order: a text instance's draw group is its page's
+  index there.
+- **Worker.** `buildTextGlyphs(pages)` turns the JSON into a
+  (family, glyph id) → (entry, page) lookup; every text pass is resolved
+  once at load (`TextPassGlyphs`: entry and page per glyph, the halo in
+  em). Only the Regular faces ship, so the family is the key (§4.9 font
+  resolution). Without pages no text is drawn and each text pass counts
+  `TEXT_ATLAS_MISSING`; a glyph no loaded page holds counts
+  `TEXT_GLYPH_NOT_IN_ATLAS` (unless it has no outline or is `.notdef`,
+glyph 0 — §8 tabs); a halo wider than
+  half the range (0.125 em) is clamped and counts `TEXT_HALO_CLAMPED`.
+  The counts join the stage's warnings in `LoadSummary.warnings`;
+  `LoadSummary.text` has the pages, glyphs resolved and glyphs missing.
+- **Halos.** The halo pass is its own pass at its colour's stack
+  position (§3.5, §4.9), drawn from the same quads with the halo band on
+  the alpha channel (Drawing). Library text halos are 0.14–0.155 mm on a
+  ≥ 4 mm em — about 0.03 em, far inside the 0.125 em the field holds.
+- **Bounds.** `passBounds` keeps the em-box + halo rule for text; a
+  glyph quad reaches at most half the range (0.125 em) past its outline,
+  inside the one-cell draw margin.
 
 #### Drawing (GPU)
 
-Items are drawn in stream order; the stream is already colour-major so no
-sorting happens here. Projection subtracts `u_centre` and scales by
-px/µm per axis; the stream is y-up and so is clip space, so there is no
-flip anywhere.
+Arena path (`renderDocument(view, opts, target?)`): for each colour in
+stack order, fill → hatch → stroke → glyph size classes and that
+colour's clip groups → text; one `drawElements` per indexed kind, one
+`drawArraysInstanced` per size class. The stream is colour-major, so no
+sorting happens here.
 
-* **Even-odd fills** — the stencil trick, never a triangulation: the fan
-  is drawn colour-masked with `stencilOp(INVERT)`, then the cover quad is
-  drawn where `stencil == 1` with `stencilOp(ZERO)`, which paints the
-  fill and clears the stencil in one pass. Holes come for free and the
-  result is exactly §3.1's rule.
-* **Strokes** — plain triangles; `halfWidth = max(widthUm/2, minPx/2/pxPerUm)`.
-* **Instanced glyphs and text** — `drawArraysInstanced` over the glyph's
-  fan with a per-instance `(x, y, cos, sin)` + `scale` attribute, then
-  the cover quad instanced the same way. Overlapping instances of the
-  same pass XOR each other (known caveat, no map symbol in the pilot set
-  triggers it; a per-instance stencil clear would fix it at the cost of
-  a draw per instance).
-* **Pattern clip** — two stencil bits: bit 0 holds the clip area (fan,
-  INVERT, mask 0x01), bit 1 the instances' parity; the instanced cover
-  tests `EQUAL 0x03` and clears bit 1, a final cover clears bit 0.
-* **Hatch** — the area goes through the stencil like a fill; the cover
-  quad runs a stripe shader (`d = dot(p, n) − offset`, distance to the
-  nearest multiple of `spacing`) with a one-pixel coverage ramp and
-  alpha blending. The fragment never `discard`s so the stencil clear
-  always runs.
-* **Anti-aliasing** — the context's MSAA (4× in practice). Optional
-  `supersample: 2`: draw into a 2× multisampled renderbuffer, resolve
-  into a texture, draw that onto the canvas with linear filtering (a
-  2×2 box at exactly 2×; a scaled `blitFramebuffer` into the canvas is
-  illegal because the default framebuffer is itself multisampled). The
-  golden page uses it; the production default is 1.
+* **Projection** — one `mat4` uniform `u_view`, model (origin-relative
+  paper µm) → clip, column-major, built per frame by `viewMatrix(view,
+  origin)` (`view.ts`) in float64: `S · R(rotationDeg) · (p − (centre −
+  origin))`, y-up throughout. `DocumentRenderOptions.viewMatrix`
+  replaces it with any other camera — a perspective one for terrain
+  draping (research topic 10) — without touching the shaders. The
+  screen-only rules (floor, glyph skip, hatch tint) read the view's
+  `pxPerUm`, and cell selection reads the `View`'s rectangle; under a
+  perspective camera both need the camera's footprint (§8).
+* **Render target** — a `RenderTarget { framebuffer, width, height }`;
+  default the canvas at the view's size. A framebuffer target needs a
+  stencil attachment (pattern clips). `compare=1&target=fbo` on the dev
+  page draws into an offscreen 4× MSAA framebuffer and the E2E compares
+  it with the per-pass path like the canvas.
 
-Resources: `MapGlRenderer.setStream(prepared)` uploads, `render(view,
-opts)` draws, `dispose()` frees. Measured on the pilot scene in headless
-Chromium (SwiftShader): 36 items, prepare 3.8 ms, upload ~10 ms, draw
-< 1 ms.
+* **Fills** — earcut triangles, opaque. No stencil.
+* **Strokes** — `halfWidth × offset` in the vertex shader. **Hairline
+  floor** (04 §6.2, §8 row 10): when the stroke is under `minStrokePx`
+  (1 device px) on screen it is drawn that wide with alpha × (true width
+  / floor), so zoomed-out contours fade to a tint instead of aliasing.
+  Triangles that overlap at join wedges blend twice under the floor; the
+  area is sub-pixel at the zooms where the floor applies.
+* **Instanced glyphs** — vertex pulling: the instance carries
+  its mesh's atlas `base` and `count`; the draw pulls `2^class` vertices
+  per instance (a whole number of triangles) and vertices past `count`
+  are moved outside clip space. Mesh strokes get the same floor. An
+  instance whose mesh diameter × scale is under `minGlyphPx` (2 px) is
+  collapsed the same way. Fills inside meshes are triangles, so
+  overlapping instances of one pass no longer XOR (the per-pass path's
+  caveat).
+* **MSDF text** — six vertices per instance, one `drawArraysInstanced`
+  per (colour, page) with that page's texture bound; the vertex shader
+  makes the quad from the glyph table's plane bounds × em size, rotated
+  by the instance's `cos, sin`. Fragment, with `t` the page texel, `r`
+  the range in em and `s = sizeUm · pxPerUm` screen px per em:
+  a fill pass covers `clamp((median(t.rgb) − ½) · r · s + ½, 0, 1)`; a
+  halo pass `clamp((halo − |(t.a − ½) · r|) · s + ½, 0, 1)` — the band
+  within `halo` of the outline on the true distance, i.e. the outline
+  stroked round/round at twice the halo width, exactly what the
+  reference raster draws (§5.1: `stroke-width = 2 · haloWidthUm`). The
+  ramp is one screen pixel (analytic AA on top of MSAA, 04 §6.9). Text
+  whose em is under `minTextPx` (4 px) collapses in the vertex shader.
+* **Pattern clip** — per clip group: the areas into stencil bit 0
+  (`REPLACE`, colour masked), the group's instances where the bit is
+  set (`EQUAL`), the areas again with `ZERO`.
+* **Hatch** — the area's triangles with a stripe shader (`d = dot(p, n)
+  − offset`, distance to the nearest multiple of `spacing`, one-pixel
+  ramp); under `hatchTintPx` (1.5 px) spacing on screen, a tint of alpha
+  `width / spacing`.
+* **Anti-aliasing** — the context's MSAA (4× in practice; the dev page
+  reports `SAMPLES`). The analytic 1-px edge feather on strokes and glyph
+  strokes (04 §6.2, §6.9) is not built yet (§8): MSAA alone keeps the
+  arena path pixel-comparable with the per-pass golden path (`compare=1`,
+  ≤ 0.5 % at §6.2's tolerance), which a feather would not be.
 
-#### Batching (`batch.ts`)
+Per-pass path (`setStream` / `render`, goldens): unchanged from S1 —
+even-odd fills by the stencil trick (fan with `INVERT`, cover where
+`stencil == 1`), strokes with a widen-only 0.75 px minimum, instanced
+glyphs and text over stencil fans (overlapping instances of one pass
+XOR), pattern clip with two stencil bits, hatch through the stencil,
+optional `supersample: 2` into an offscreen MSAA buffer resolved and
+box-filtered onto the canvas.
 
-One draw per pass does not scale: a real document has 2 000–113 000
-passes (table below). The stream is colour-major and every pass inside
-one colour is opaque and of that colour, so items of the same kind
-within a **colour run** can be merged without changing the picture.
-`buildBatches(prepared)` emits, per colour run and in the stream's kind
-order:
+`FrameStats { drawCalls, cpuMs, gpuMs? }`: GPU time from
+`EXT_disjoint_timer_query_webgl2`, resolved a frame or two late.
 
-| Batch | Merge | Notes |
-|---|---|---|
-| `fill` | all fills of the run → one position buffer + one `Uint32` index buffer | rings triangulated with **earcut** (holes as earcut hole indices). The stencil parity trick of the per-pass path cannot merge *overlapping* fills of one colour (they would XOR), so merged fills are triangulated. earcut's known failure modes (self-intersecting rings) are tolerated in the spike; the reference raster is the oracle |
-| `hatch` | none, one per pass | each has its own stencil area and stripe parameters |
-| `stroke` | all strokes of the run → one buffer | the half width moves from a uniform into a fifth vertex component (`x, y, ox, oy, hw`, program `strokeW`) so widths can mix |
-| `instanced` | per (fill mesh, stroke meshes) object identity → instance arrays concatenated | glyph instances and text glyphs; pattern-clipped items stay alone because they own the stencil |
+#### Loading an OCAD document (`ocad-objects.ts`, shared, dev-only)
 
-Draws per frame on the corpus: 14–75 (event maps) and 114–345 (club
-maps) for 451–113 000 passes — inside 04 §9's ≤ 300 for everything but
-Club-full envelope, which is the deliberately pessimistic upper bound.
-`renderer.setBatches` uploads once; `renderBatches(view)` returns
-`FrameStats { drawCalls, cpuMs, gpuMs? }`, the GPU time from
-`EXT_disjoint_timer_query_webgl2` where available (resolved a frame
-late).
-
-#### Loading an OCAD document (`ocad-objects.ts`, shared)
+Documents reach the stage through the render bridge
+(`map-document/render-bridge.ts`, `docs/map-document-format.md` §8); its
+per-kind proxies live in `render/proxy-symbols.ts`. What follows is the
+S1 reader path, kept for `/dev/map-gl-doc?via=reader` and the S1
+measurements; nothing outside the dev page uses `ocadObjectsToRender`.
 
 To feed real maps in before the 02 document format exists,
 `render.ocadObjectsToRender(objects, symbols, { mode })` turns
@@ -583,112 +1015,394 @@ closed line. Two modes:
   object is in the stream. Geometry and pass counts are a realistic
   upper bound for a full symbol library; the picture is not.
 
-#### Whole-document measurements (S1 step 4)
+#### Measurements (B2)
 
-Measured through `/dev/map-gl-doc` with
-`.local/research/oxygen-measurements/gl/measure-gl.mjs` (Playwright,
-headed Chromium on the dev laptop's Alder Lake-P iGPU, GPU timer
-available). Objects = matched + proxied. Load times are the browser's,
-cold per page load, with `ocad2geojson` doing the decode (`read`) —
-that stage is replaced by the 02 document reader and is shown
-separately. All numbers in ms.
+Measured through `/dev/map-gl-doc` with `scripts/measure-gl.mjs`
+(headed Chromium on the dev laptop's Alder Lake-P iGPU, GPU timer
+available) against a Vite server started from the worktree; the corpus
+is read by absolute path through the file input. Mode `pilot` /
+`envelope`, path `via=document` as in S1. "S1" is the S1 batch path
+(`batch.ts`, removed by B2) re-measured on 2026-10-20 — its numbers
+match the S1 report within run-to-run noise. B2 values are from
+2026-10-21 after syncing onto B1's full-library stage (median of three
+runs on the laptop; single runs vary by up to ±25 % in the load times).
+B1 left the pass counts of these two modes unchanged (they draw the
+pilot family and proxies; its dash-layout changes move slices) — next
+to the pre-B1 B2 runs the laptop numbers are within noise, except the
+club maps' complete first view (Club-full envelope 1.86 → 1.48 s); on
+the phone proxy the complete first views dropped 12–56 % (single runs;
+symbolise got 10–35 % faster on the throttled thread). Columns:
 
-Desktop, 1280×800 @ 1×, 240-frame bench zooming 1→4→1 with pan:
+- **Draws**: the most of any frame of both bench scenarios.
+- **GPU MB**: resident GPU bytes after the first view is complete
+  (arena capacity + atlas + visible-set buffers; S1: its buffers), and
+  the most resident bytes the budget counted during the bench.
+- **after read**: ms from the document bytes being ready to the first
+  frame (S1: its only frame; B2: base layers + large bucket) and to the
+  complete first view (B2). `read` (OCAD decode and normalise on the
+  page) is left out as in S1: in the product the client fetches a
+  document, not an OCAD file.
+- **Frame GPU** avg / p95, ms, in the `fit` scenario (zoom 1→4→1) and the
+  `paper1x` scenario (dense viewport at 1× paper, 04 §6.12).
+- **Frame CPU** p95, ms (setView + visible-set rebuild + draw calls).
+- **Bucket prepare** p95 / max, ms, per detail part in the worker.
 
-| Map | Mode | Objects | Passes | Batches | Draws | GPU MB | read | symbolise | prepare | batch+upload | **total** | GPU avg / p95 | CPU avg |
-|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
-| Sprint | pilot | 1 275 | 2 241 | 115 | 325 | 5.0 | 120 | 14 | 25 | 7 | **168** | 3.7 / 3.9 | 1.0 |
-| Sprint | envelope | 10 680 | 11 644 | 117 | 328 | 19.4 | 207 | 28 | 66 | 43 | **349** | 6.9 / 7.8 | 1.0 |
-| Crop-B | pilot | 342 | 451 | 9 | 14 | 6.0 | 73 | 8 | 28 | 4 | **113** | 1.6 / 2.0 | 0.4 |
-| Crop-B | envelope | 3 073 | 3 182 | 40 | 75 | 16.5 | 136 | 21 | 60 | 15 | **235** | 3.9 / 4.3 | 0.5 |
-| Crop-A | pilot | 639 | 844 | 11 | 22 | 8.3 | 86 | 13 | 33 | 7 | **140** | 2.0 / 2.4 | 0.4 |
-| Crop-A | envelope | 4 983 | 5 188 | 24 | 47 | 19.8 | 151 | 24 | 64 | 16 | **258** | 4.9 / 5.6 | 0.4 |
-| Club-2026 | pilot | 7 980 | 12 097 | 39 | 114 | 70 | 477 | 103 | 190 | 58 | **837** | 9.5 / 11.1 | 0.6 |
-| Club-2026 | envelope | 45 884 | 50 001 | 100 | 235 | 154 | 924 | 275 | 407 | 158 | **1 784** | 10.8 / 12.3 | 1.0 |
-| Club-full | pilot | 17 550 | 28 756 | 61 | 192 | 157 | 1 108 | 225 | 432 | 135 | **1 915** | 10.2 / 19.4 | 0.8 |
-| Club-full | envelope | 101 727 | 112 933 | 138 | 345 | 338 | 2 034 | 654 | 994 | 468 | **4 197** | 21.5 / 23.2 | 1.2 |
+Desktop, 1280 × 800 @ 1×:
 
-Phone proxy — same machine, 412×915 @ 2.625× (Pixel-7 metrics, 2.6 M
-canvas pixels) with CDP `Emulation.setCPUThrottlingRate(4)`:
-
-| Map | Mode | read | symbolise | prepare | batch+upload | **total** | **total − read** | GPU avg / p95 |
+| Map | Mode | Draws S1 → B2 | GPU MB S1 → B2 (bench max) | after read, ms: S1 → B2 first / complete | Frame GPU fit S1 → B2 | Frame GPU 1× S1 → B2 | Frame CPU p95 B2 fit / 1× | Bucket prepare p95 / max |
 |---|---|---:|---:|---:|---:|---:|---:|---:|
-| Sprint | pilot | 368 | 35 | 118 | 24 | **555** | 187 | 4.0 / 4.2 |
-| Sprint | envelope | 683 | 101 | 266 | 164 | **1 235** | 552 | 7.1 / 8.5 |
-| Crop-B | pilot | 232 | 32 | 100 | 17 | **386** | 154 | 1.8 / 2.2 |
-| Crop-B | envelope | 484 | 64 | 233 | 58 | **847** | 363 | 4.4 / 5.1 |
-| Crop-A | pilot | 275 | 77 | 123 | 24 | **510** | 235 | 2.1 / 2.4 |
-| Crop-A | envelope | 524 | 88 | 251 | 62 | **936** | 412 | 5.1 / 5.6 |
-| Club-2026 | pilot | 1 554 | 550 | 743 | 204 | **3 079** | 1 525 | 6.7 / 9.8 |
-| Club-2026 | envelope | 3 084 | 881 | 1 493 | 585 | **6 111** | 3 027 | 12.0 / 13.1 |
-| Club-full | pilot | 3 484 | 1 105 | 1 797 | 433 | **6 876** | 3 393 | 10.0 / 11.0 |
-| Club-full | envelope | 6 886 | 2 236 | 3 600 | 1 373 | **14 265** | 7 380 | 20.9 / 21.5 |
+| Sprint | pilot | 325 → **15** | 5.0 → **2.5** (1.8) | 68 → 80 / **85** | 3.7 / 4.0 → 2.3 / 3.0 | 3.8 / 4.1 → 2.5 / 2.7 | 2.4 / 0.8 | 0.8 / 0.9 |
+| Sprint | envelope | 328 → **17** | 19.4 → **8.0** (7.5) | 200 → 142 / **181** | 7.1 / 8.1 → 5.6 / 7.3 | 8.2 / 8.6 → 7.2 / 9.4 | 7.0 / 0.8 | 3.1 / 3.6 |
+| Crop-B | pilot | 15 → **12** | 6.0 → **3.1** (2.2) | 80 → 52 / **69** | 1.4 / 1.7 → 1.1 / 1.7 | 1.4 / 1.5 → 1.1 / 1.2 | 0.5 / 0.5 | 5.6 / 5.6 |
+| Crop-B | envelope | 76 → **21** | 16.5 → **6.2** (5.3) | 393 → 76 / **113** | 3.5 / 3.9 → 2.7 / 4.1 | 3.1 / 3.5 → 3.1 / 3.2 | 0.7 / 0.6 | 14.1 / 14.1 |
+| Crop-A | pilot | 22 → **11** | 8.2 → **4.0** (3.1) | 231 → 58 / **82** | 1.8 / 2.0 → 1.3 / 1.6 | 1.9 / 2.1 → 1.5 / 1.5 | 0.6 / 0.5 | 7.5 / 7.5 |
+| Crop-A | envelope | 47 → **18** | 19.8 → **7.3** (6.4) | 149 → 84 / **146** | 4.7 / 5.3 → 3.4 / 4.2 | 4.7 / 5.0 → 4.2 / 4.3 | 0.6 / 0.5 | 14.9 / 14.9 |
+| Club-2026 | pilot | 100 → **12** | 70.0 → **26.9** (25.6) | 420 → 157 / **320** | 9.6 / 10.8 → 4.8 / 7.8 | 9.5 / 12.1 → 4.4 / 6.0 | 10.6 / 7.5 | 5.5 / 9.9 |
+| Club-2026 | envelope | 207 → **21** | 153.4 → **51.7** (50.8) | 871 → 358 / **653** | 10.3 / 11.2 → 5.9 / 8.4 | 11.0 / 11.9 → 6.4 / 8.3 | 18.1 / 0.8 | 11.8 / 13.8 |
+| Club-full | pilot | 191 → **15** | 156.5 → **59.4** (57.2) | 850 → 308 / **668** | 9.6 / 10.4 → 5.0 / 8.2 | 10.8 / 11.5 → 3.2 / 4.3 | 22.6 / 0.6 | 5.0 / 7.8 |
+| Club-full | envelope | 330 → **24** | 336.0 → **118.6** (112.1) | 2 136 → 728 / **1 481** | 21.9 / 22.7 → 8.8 / 13.1 | 23.7 / 26.4 → 5.0 / 7.7 | 46.9 / 0.6 | 11.0 / 16.7 |
 
-Every run held 60 fps (frame p95 ≈ 17 ms, vsync) on the laptop; render
-CPU per frame is 0.4–1.6 ms in every configuration.
+Phone proxy — 412 × 915 @ 2.625× (Pixel-7 metrics) with CDP
+`Emulation.setCPUThrottlingRate(4)`. CDP throttles the page's main
+thread only, not a Web Worker, so the B2 rows run the worker's handler
+inline (`worker=0`): every stage is throttled, and frames and
+preparation share one thread — an upper bound for a phone, where the
+worker runs on another core. GPU columns remain the laptop iGPU:
 
-Against the budgets (04 §9, 09 §7):
+| Map | Mode | Draws S1 → B2 | GPU MB S1 → B2 (bench max) | after read, ms: S1 → B2 first / complete | Frame GPU fit S1 → B2 | Frame GPU 1× S1 → B2 | Frame CPU p95 B2 fit / 1× | Bucket prepare p95 / max |
+|---|---|---:|---:|---:|---:|---:|---:|---:|
+| Sprint | pilot | 325 → **15** | 5.0 → **2.5** (1.8) | 252 → 219 / **330** | 4.6 / 8.2 → 2.7 / 3.2 | 4.6 / 7.4 → 2.5 / 2.8 | 3.0 / 2.4 | 4.9 / 6.7 |
+| Sprint | envelope | 328 → **17** | 19.4 → **8.0** (7.5) | 788 → 460 / **729** | 7.2 / 8.8 → 4.4 / 8.7 | 8.3 / 8.8 → 4.5 / 5.4 | 9.2 / 7.5 | 8.9 / 9.7 |
+| Crop-B | pilot | 15 → **12** | 6.0 → **3.1** (2.2) | 230 → 113 / **212** | 1.7 / 2.0 → 1.4 / 1.9 | 1.7 / 1.9 → 1.5 / 1.7 | 0.9 / 0.9 | 16.0 / 16.0 |
+| Crop-B | envelope | 76 → **21** | 16.5 → **6.2** (5.3) | 480 → 230 / **407** | 4.3 / 4.9 → 3.5 / 4.9 | 4.3 / 4.8 → 3.6 / 4.5 | 1.0 / 1.0 | 40.8 / 40.8 |
+| Crop-A | pilot | 22 → **11** | 8.2 → **4.0** (3.1) | 333 → 174 / **322** | 2.2 / 2.5 → 1.6 / 2.0 | 2.1 / 2.2 → 1.6 / 2.0 | 0.9 / 0.9 | 34.6 / 34.6 |
+| Crop-A | envelope | 47 → **18** | 19.8 → **7.3** (6.4) | 558 → 275 / **549** | 5.1 / 5.5 → 4.3 / 5.2 | 5.1 / 5.4 → 4.0 / 5.0 | 1.0 / 0.8 | 40.7 / 40.7 |
+| Club-2026 | pilot | 100 → **12** | 70.0 → **26.9** (25.6) | 1 540 → 542 / **1 572** | 8.0 / 9.4 → 3.7 / 6.2 | 9.9 / 10.6 → 1.7 / 2.6 | 16.2 / 1.2 | 21.1 / 22.3 |
+| Club-2026 | envelope | 207 → **21** | 153.4 → **51.7** (50.8) | 3 180 → 1 268 / **3 226** | 10.7 / 11.4 → 5.9 / 10.5 | 11.2 / 11.7 → 3.5 / 6.7 | 40.6 / 1.4 | 39.4 / 42.9 |
+| Club-full | pilot | 191 → **15** | 156.5 → **59.4** (57.2) | 5 985 → 1 084 / **3 588** | 12.3 / 15.4 → 5.2 / 7.2 | 11.7 / 12.8 → 2.1 / 3.2 | 53.3 / 1.3 | 19.2 / 24.2 |
+| Club-full | envelope | 330 → **24** | 336.0 → **21.9** (91.8) | 7 236 → 2 717 / **2 730** | 21.5 / 22.3 → 7.5 / 10.5 | 21.2 / 21.8 → 2.9 / 4.9 | 74.7 / 11.0 | 0.0 / 0.0 |
 
-| Budget | Event maps | Club maps | Verdict |
+**Source mode** (2026-10-21, after B1): each map's own symbols through
+the matcher and the canonical library (`mode=source`), symbolised by
+B1's full-library stage — the case S1 could only bracket between pilot
+and envelope. One run each, laptop; phone proxy as above (inline):
+
+| Map | Passes | Draws | GPU MB (bench max) | after read: first / complete | Frame GPU fit / 1× | Frame CPU p95 fit / 1× | Bucket prepare p95 | Phone proxy: first / complete | Phone proxy: frame GPU 1× · CPU p95 1× |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| Sprint | 14 416 | 54 | 9.4 (8.7) | 183 / **220** | 7.0 / 7.4 | 8.8 / 0.8 | 3.1 | 577 / **966** | 5.7 · 9.5 |
+| Crop-B | 3 308 | 62 | 6.7 (5.8) | 88 / **125** | 2.6 / 3.0 | 0.7 / 0.6 | 15.1 | 279 / **464** | 3.8 · 1.0 |
+| Crop-A | 5 355 | 63 | 7.8 (7.0) | 102 / **155** | 3.1 / 4.0 | 0.7 / 0.7 | 16.6 | 310 / **539** | 4.2 · 1.0 |
+| Club-2026 | 52 169 | 111 | 61.3 (54.6) | 440 / **834** | 6.2 / 6.8 | 22.6 / 1.1 | 11.4 | 1 493 / **3 765** | 4.2 · 1.7 |
+| Club-full | 115 972 | 167 | 126.3 (122.5) | 853 / **1 715** | 11.4 / 8.9 | 54.5 / 16.6 | 12.9 | 3 112 / **9 710** | 6.1 · 32.2 |
+
+Every draw count stays under 300 (more colours and kinds than the pilot
+family: up to 167 on Club-full at fit), resident memory inside the
+budgets with everything resident (Club-full 126 MB), event maps complete
+in 125–220 ms on the laptop and club maps in 0.83–1.7 s. Over budget:
+Club-full's frame GPU at 1× paper on the iGPU (8.9 ms) and its 1× frame
+CPU p95 (16.6 ms laptop: visible-set rebuilds of a dense viewport as the
+pan crosses cells — the §8 rebuild item), and on the phone proxy the
+event maps' complete first view (464–966 ms) and Club-full's first frame
+(3.1 s: at the phone's fit view it sits just above the zoom gate, so its
+whole detail is wanted).
+
+#### Measurements (B3)
+
+Source mode, laptop, one run each (2026-10-22, after B4, B9 and B10;
+same script, settings and columns as the source-mode table above —
+single runs vary by up to ±25 % in the load times). Text is now MSDF
+quads (the Latin page; no corpus map needs Cyrillic):
+
+| Map | Passes | Text glyphs | Draws B2 → B3 | GPU MB (bench max) | after read: first / complete | Frame GPU fit / 1× | Frame CPU p95 fit / 1× | Bucket prepare p95 |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| Sprint | 14 416 | 0 | 54 → **53** | 11.5 (10.7) | 219 / **229** | 6.9 / 8.5 | 7.8 / 0.8 | 3.1 |
+| Crop-B | 3 306 | 81 | 62 → **52** | 8.6 (7.6) | 118 / **153** | 2.6 / 3.2 | 0.6 / 0.6 | 13.6 |
+| Crop-A | 5 354 | 24 | 63 → **54** | 9.7 (9.0) | 110 / **152** | 3.0 / 4.1 | 0.7 / 0.7 | 12.1 |
+| Club-2026 | 51 466 | 906 | 111 → **91** | 62.7 (56.1) | 451 / **883** | 6.3 / 6.8 | 15.8 / 1.0 | 18.2 |
+| Club-full | 114 139 | 3 096 | 167 → **115** | 125.8 (122.1) | 860 / **1 690** | 10.1 / 8.3 | 51.5 / 18.3 | 11.9 |
+
+- **Draws** fall on every map with text: one draw per (colour, page)
+  instead of one per (colour, size class) — on Club-full 52 fewer at fit.
+- **GPU**: the Latin page (2.0 MB) and the glyph table are always
+  resident, so every map is ~2 MB above B2 (the mesh atlas now holds
+  glyph parts only: 0.12–0.28 MB). All maps stay inside 30 / 150 MB.
+- Frame GPU, frame CPU and load times are within B2's run-to-run noise;
+  the over-budget items of the table above (Club-full 1× frame CPU,
+  `fit` frame CPU on club maps) are unchanged — they are visible-set
+  rebuilds (§8), not text.
+- `TEXT_GLYPH_NOT_IN_ATLAS` is 0 on every map once `.notdef` is
+  excluded: Club-2026 has 1 and Club-full 12 tab characters, which the
+  stage shaped to `.notdef` at the time (since B8 a tab advances to its
+  stop and emits no glyph, §4.9).
+
+Per build step (S1 §6's order; runs before the B1 sync):
+
+| Step | What it moved | Before → after |
+|---|---|---|
+| 1 Indexed strips | stroke bytes per vertex/segment; resident GPU for a whole club map | contour line: ≥ 3× fewer bytes (unit test); Club-full envelope fully resident 336 → 119 MB (arenas 73 MB, visible set 51 MB) |
+| 2 Visible set per (colour, kind) | frame GPU on the phone viewport at 1× paper | Club-full envelope 21.2 → 3.1 ms, Club-2026 envelope 11.2 → 3.7 ms, Sprint envelope 8.3 → 4.2 ms |
+| 3 Mesh atlas + clip groups | draws per frame | Sprint 325 / 328 → 15 / 17 (161 before clip groups); every map ≤ 24 |
+| 4 Buckets, gate, LRU | the gated first frame on the phone (Club-full envelope, fit = 0.03× paper) | no gate → gate: first frame 3.8 → 3.1 s, complete 7.3 → 3.1 s, resident 118.6 → 21.9 MB; a 0.05 MB budget evicts and keeps drawing (E2E) |
+| 5 Worker | main-thread long tasks during a load (laptop, envelope) | inline → worker: Sprint 235 → 71 ms, Club-2026 603 → 170 ms, Club-full 1 255 → 446 ms; what stays is the dev page's OCAD read (Club-full 383 ms) — none of it is the renderer's |
+| 6 Hairline floor + LOD skips | frame GPU at fit (laptop) | within run-to-run noise (`lod=0` vs on, avg: Sprint envelope 5.96 vs 5.7 ms, Club-full envelope 8.5 vs 8.9 ms); the iGPU is not limited by these fragments here. The floor changes the picture (fade, not alias), not the cost |
+
+Against the budgets (04 §9):
+
+| Budget | Event maps (Sprint, Crop-A/B) | Club maps | Verdict |
 |---|---|---|---|
-| symbolise whole document ≤ 100 / 800 ms | 8–28 ms (35–101 throttled) | 225–654 ms (1 105–2 236 throttled) | event ✓; club ✓ unthrottled, pilot ✓ / envelope ✗ at 4× — the 04 worker hides it |
-| draw calls ≤ 300 | 14–328 | 114–345 | ✓ except Sprint (325 — 115 glyph meshes in one colour run; merging meshes into one atlas buffer fixes it) and Club-full envelope |
-| frame CPU ≤ 4 ms | 0.4–1.0 ms | 0.6–1.6 ms | ✓ with margin, even throttled |
-| frame GPU ≤ 8 ms on a mid-range phone | 1.6–3.9 pilot, 3.9–7.8 envelope on the iGPU | 10–23 on the iGPU | **not shown**: the whole-document draw is vertex-bound (time did not move between 1 M and 2.6 M canvas pixels) and a phone GPU is 2–4× slower than this iGPU, so the envelope would land at 8–30 ms. 04's visible set per bucket is what brings the vertex count down to the view; it is required, not optional |
-| first frame ≤ 500 ms (event) / ≤ 2.5 s (club) | pilot 113–168 desktop, 386–555 throttled; envelope 235–349 / 847–1 235 | 0.8–4.2 s desktop, 3.1–14.3 s throttled | event ✓ once `read` is subtracted (154–552 ms throttled); club ✗ for the whole document — as 04 expected, Club maps need zoom gating and the worker. `prepare` is the dominant remaining stage |
-| resident GPU ≤ 30 / 150 MB | 5–20 MB | 70–338 MB | event ✓; club ✗ for the whole document; see the stroke note below |
-
-Findings carried into the 04 implementation:
-
-1. **Stroke geometry is the memory.** 95 % of the bytes are extruded
-   strokes: a non-indexed triangle list at 16 B per vertex is 48 B per
-   triangle, and Club-full pilot has 2.7 M of them. An indexed strip (two
-   vertices per polyline point) cuts this by ~3×; zoom-gated flattening
-   tolerance (10 µm everywhere today) cuts it again. Both belong to the
-   arena.
-2. **The pilot family covers 11–18 % of the objects**, so pilot-mode
-   numbers understate the load by 3–7×; the envelope overstates it
-   slightly (proxy strokes are 140 µm solid, with no dashes). The truth
-   for a full library is between the two columns, nearer the envelope.
-3. **Batching works and is cheap** (3–280 ms CPU, once), and the per-frame
-   CPU side is a non-issue at 1–2 ms with ≤ 345 draws.
-4. **Not done in the spike**: the depth-buffer fill path (04 §6.8 point
-   3), cell size and large-object threshold tuning (04 §6.11) — both need the
-   bucket layer that does not exist yet, and the frame-GPU result above
-   says the bucket layer is the next thing to build. Not measured on a
-   physical phone; the 4× CPU throttle is Chromium's proxy and the GPU
-   column is the laptop's. To measure on a device: `pnpm --filter
-   @oxygen/web dev -- --host 0.0.0.0`, open
-   `http://<laptop>:5173/dev/map-gl-doc?mode=envelope` on the phone, pick
-   the `.ocd` with the file input, press *bench*.
+| draw calls ≤ 300 | 11–21 | 12–24 | ✓ everywhere (S1: up to 330) |
+| resident GPU ≤ 30 / 150 MB | 2.5–8.0 MB | 27–119 MB laptop fit (fully resident), 22 MB gated on the phone | ✓ (S1: Club-full 157 / 336 MB ✗) |
+| frame CPU ≤ 4 ms, dense viewport at 1× | ≤ 0.8 ms laptop, ≤ 7.5 ms phone proxy (Sprint envelope, frames sharing the thread with inline preparation; ≤ 2.4 elsewhere) | ≤ 0.8 ms laptop except Club-2026 pilot (p95 7.5 ms: visible-set rebuilds as the pan crosses cells), ≤ 1.4 ms phone proxy (Club-full envelope 11.0 with inline preparation) | ✓ laptop except that one row; ✓ phone with the worker off-thread (the proxy's outliers are the inline preparation). Not met at overview zooms of club maps above the gate: `fit` p95 11–47 ms laptop — visible-set rebuilds of a whole club map (§8) |
+| frame GPU ≤ 8 ms, dense viewport at 1× | 1.1–7.2 avg laptop, 1.5–4.5 phone viewport | 3.2–6.4 laptop, 1.7–3.5 phone viewport (iGPU) | ✓ on the iGPU; the phone GPU is B0 / B-gate |
+| first frame ≤ 500 ms event | complete first view 69–181 ms laptop; phone proxy 212–330 pilot, 407–729 envelope | — | ✓ laptop; phone proxy ✓ pilot, envelope ✓ Crop-B, ✗ Sprint and Crop-A (S1 558–788 there): the inline proxy serialises frames and preparation; the envelope is the deliberately pessimistic upper bound |
+| first frame ≤ 2.5 s club | — | laptop: first 157–728 ms, complete 320–1 481 ms; phone proxy: first 542–2 717 ms, gated Club-full envelope 2.7 s | ✓ laptop; phone proxy ✓ except Club-full envelope (2.7 s; S1 7.2 s) — symbolise 1.16 s (shared stage) and the base layer's earcut of every fill dominate |
+| symbolise whole document in worker ≤ 100 / 800 ms | 15–36 ms laptop | 69–289 ms laptop; 1.16 s Club-full envelope throttled | ✓ laptop; ✗ throttled Club-full envelope (shared stage) |
+| prepare one bucket ≤ 5 / 10 ms | Sprint p95 0.8–3.1 ms laptop ✓; Crop-A/B (club density) p95 6–15 ms | p95 5–12 ms, max 17 ms laptop; 19–43 ms phone proxy | ✓ Sprint; club-density cells at the limit on the laptop (p95 ≤ 10 ms for pilot, 12–15 for envelope), ✗ on the throttled proxy (§8) |
 
 #### Dev pages
 
-`/dev/map-gl?fixture=<golden scene>` (`pages/dev/MapGlFixturePage.tsx`,
+`/dev/map-gl?fixture=<golden scene>[&path=arena]` (`pages/dev/MapGlFixturePage.tsx`,
 routed only when `import.meta.env.DEV`) draws one golden scene into a
 canvas sized by `render.goldenFrame` (§6.2) with
 `preserveDrawingBuffer`, sets `data-ready` when done and shows the
 timings. Fonts are fetched from `packages/shared/fonts/` via Vite `?url`.
+By default it draws through the per-pass path (supersampled 2×);
+`path=arena` loads the scene's stream into an engine over the inline
+worker handler (gate off, Latin text page) and draws through the arena
+path at the context's MSAA — the §6.2 MSDF text tier.
 
-`/dev/map-gl-doc?mode=source|pilot|envelope[&via=document|reader][&url=…][&bench=1]`
-(`pages/dev/MapGlDocPage.tsx`) runs the whole pipeline on an OCAD or
-`.oxvm` file chosen with the file input (or fetched from `url`, e.g. a
-Vite `/@fs/` path), shows the `LoadReport` (stage timings, pass kinds,
-batch statistics, GPU bytes, draws) and runs a 240-frame zoom/pan bench
-with CPU and GPU percentiles. `via=document` (default) goes through the
-map document — read → normalise → encode → decode → render bridge
-(`docs/map-document-format.md`) and reports the document's size,
-sections, hash and codec timings; `via=reader` is the S1 path straight
-from the reader (`ocadObjectsToRender`). A `.oxvm` file is decoded
-natively without the OCAD reader. `mode=source` (default) draws the
-file's own symbol definitions as converted by the importer
+`/dev/map-gl-doc?mode=source|pilot|envelope[&via=document|reader][&worker=0][&gate=0][&budget=<MB>][&lod=0][&kinds=…][&compare=1][&url=…][&bench=1]`
+(`pages/dev/MapGlDocPage.tsx`) runs the whole pipeline on an OCAD,
+Mapper or `.oxvm` file chosen with the file input (or fetched from
+`url`, e.g. a Vite `/@fs/` path) and shows the `LoadReport`: main-thread
+read time, the worker's stage times, `load` (posted → resident layers
+uploaded), `firstFrame` (base layers + large bucket drawn), `complete`
+(the first view's detail drawn), cells, resident bytes per layer, GPU
+bytes (arena capacity, atlas, visible set), bucket preparation
+percentiles, draws, and main-thread long tasks. `via=document` (default)
+goes through the map document — read → normalise → encode on the page,
+decode → render bridge in the worker (`docs/map-document-format.md`) —
+and reports the document's size, sections, hash and codec timings;
+`via=reader` posts the S1 converter's render objects
+(`ocadObjectsToRender`) to the worker instead. A `.oxvm` file skips the
+reader. `mode=source` (default) draws the file's own symbol definitions
 (`docs/map-import.md` §3.3) in the document's colour stack, proxies for
 whatever stayed `null`; `pilot` / `envelope` swap in the S1 pilot family
-by symbol code (`source` is document-only). Pan by drag, zoom by wheel
-or pinch. Both reports and the encoded document bytes are published on
-`window.__mapGlDoc` for Playwright; the E2E spec `e2e/map-gl-doc.spec.ts`
-runs it on the synthetic `e2e/test.ocd` in all three modes and both
-paths and feeds the encoded document back in as a native file.
+by symbol code. "Bench" runs two 240-frame scenarios: `fit` (zoom 1→4→1
+with a pan across a third of the map) and `paper1x` (1× paper at the
+device pixel ratio — 96 CSS px per inch — centred on the densest cell,
+panning one cell either way), each with CPU / GPU percentiles, the most
+draws and resident bytes of any frame, visible-set rebuilds, evictions
+and frames drawn with drawn detail still pending. Switches, for
+measurement only: `worker=0` runs the worker's handler on the main
+thread, `gate=0` prepares detail at every zoom, `budget=` sets the
+residency budget (MB, default 150), `lod=0` turns off the glyph skip,
+the text skip and the hatch tint, `kinds=fill,stroke,…` draws only those kinds; `compare=1`
+also draws the same stream through the per-pass golden path into a
+second canvas at a zoom where every stroke is ≥ 1.5 px and publishes
+the fraction of pixels differing by more than 16 levels (§6.2's channel tolerance). Pan by drag,
+zoom by wheel or pinch. Reports and the encoded document bytes are
+published on `window.__mapGlDoc` for Playwright.
+
+#### Tests
+
+| Test | Covers |
+|---|---|
+| `map-gl/__tests__/strip.test.ts` | strip coverage = S1 extrusion away from edges for every cap × join × open/closed; 2 vertices per point on straight lines and flattened arcs; mitre limit; short-segment fallback; dots; dash slices with caps; ≥ 3× fewer bytes on a contour; even-odd earcut (hole order and winding, outside "hole", nested island) |
+| `map-gl/__tests__/buckets.test.ts` | assignment (centre, straddling, large by either dimension incl. stroke width), passes of an object together in stream order, `passBounds` (turned text: √2 em round each origin, B8); visible cells (margin, clamp, nearest first, rotation); zoom gate at 04's reference zooms; range table colour-major, contiguous, complete, layers, origin-relative positions and hatch offset, stroke packing; visible set (one draw per colour across buckets, rebasing, union of parts, hidden objects, instances by size class); clip groups (merge, separation, hidden); mesh atlas packing; LRU eviction |
+| `map-gl/__tests__/arena.test.ts` | free list: first fit, exact accounting, coalescing, growth |
+| `map-gl/__tests__/worker-protocol.test.ts` | `loaded` contents and transfer list; `prepare` queue replacement and slicing; first-view queue and the gate; base + detail + large covers every kind; load errors |
+| `map-gl/__tests__/engine.test.ts` | residency through the real worker handler and a fake renderer: drawn + prefetch requested and uploaded; drawn parts never evicted, over budget reported; the same view never re-requests what was evicted; rebuild on drawn-set change but not on zoom within the cells; below the gate only base + large, queue cancelled; hidden objects |
+| `map-gl/__tests__/view.test.ts` | view matrix: centre → clip origin, canvas edges → ±1, y-up, rotation; sub-pixel precision far from the origin in float32 arithmetic |
+| `map-gl/__tests__/prepare.test.ts` | per-pass path (fans, S1 extrusion), unchanged |
+| `map-gl/__tests__/text-atlas.test.ts` | the committed pages are current (TTF hashes, 32 px / 8 px range, PNG size = recorded size, every glyph of the ranges on a page, none on two pages, Nordic / Baltic / Cyrillic letters found); plane bounds around the origin, atlas bounds inside the image, same scale both ways, 'H' plane bounds = outline bounds ± half the range; generator JSON → page (ids, y-up, empty glyphs dropped, refuses MSDF-only / bottom origin / code-point keys); glyph table layout and entry order; page selection; halo clamp |
+| `map-gl/__tests__/buckets.test.ts` (text) | one quad instance per atlas glyph (origin-relative position, cos / sin from `angles`, em size, entry, halo), missing glyphs skipped, one draw per (colour, page), hidden objects skipped, unresolved pass draws nothing |
+| `map-gl/__tests__/worker-protocol.test.ts` (text) | no pages → `TEXT_ATLAS_MISSING`, no text; Latin page → every glyph resolved, halos carried; Cyrillic not on the Latin page (counted) and drawn from page 1 when loaded; the dev `stream` source |
+| `map-gl/__tests__/engine.test.ts` (text) | images to the renderer and the same pages to the worker; text bytes resident; no pages clears the renderer's atlas |
+| `lib/__tests__/map-fonts.test.ts` | `loadTextAtlas`: only the pages asked for, in order, decoded as data; once per session; a failed page retried |
+| `e2e/map-gl-doc.spec.ts` | the arena path through the real worker on `e2e/test.ocd` (pilot, envelope): buckets, complete frame, ≤ 300 draws on every bench frame of both scenarios; worker = inline; a 0.05 MB budget evicts, reports over budget and still draws; **arena = per-pass golden path within 0.5 % pixels** (envelope and source on the canvas, envelope into an offscreen framebuffer target, source on `test.xmap`); document vs reader path, native `.oxvm`, source mode, `.xmap`, decode error |
+| `e2e/map-gl-golden.spec.ts` | the per-pass path against the reference raster; the **MSDF text tier**: `text-with-halo`, `lib-text`, `lib-halos` through the arena path (§6.2) |
+| `e2e/map-gl-doc.spec.ts` (text) | arena = per-pass compare also on `e2e/test.xmap` (text, MSDF vs outlines) within 0.5 %; its text resolves on the Latin page with nothing missing |
+| `e2e/map-vector-layer.spec.ts` (text) | the viewer requests the Latin page and not the Cyrillic one |
+
+### 5.4 Viewer
+
+`MapViewer` hosts one base layer — the PNG tiles (`TileLayer`, legacy) or
+the map document drawn by §5.2's arena path (`VectorMapLayer`) — and keeps
+everything else it had: gestures, measure, compass and rotation lock, GPS,
+the course overlay, the editor's hit targets. The overlay (controls, legs,
+course geometry, GPS position and tracks, measure, selection) stays React
+SVG on top of the base layer in slice B (09 §4 B); it becomes document
+objects drawn by the renderer in slice C. `TileLayer.tsx` is unchanged.
+
+#### Selecting the layer
+
+```
+pipeline = event == "vector" ∧ documentHash ≠ null ∧ (webgl2 ∨ ¬allowLegacy) ? "vector" : "legacy"
+```
+
+The event's switch `events.map_pipeline` and the instance flag
+`map.pipeline.allowLegacy` decide it (`docs/map-pipeline-switch.md` §3,
+row B5): `MapPanel` reads `event.mapPipeline`, resolves the rule with
+`resolveMapPipeline` (`lib/map-pipeline.ts`) and passes the result as
+`MapViewer`'s `mapPipeline` prop (default `legacy`), remounting the
+viewer when it changes. `documentHash` is `course.mapMetadata.documentHash`
+(the event's pinned document, `docs/map-storage.md` §6.4); a map without
+one (before the backfill, §6.7 of `map-storage.md`) stays on tiles. The
+viewer exposes the result as `data-map-pipeline` on `map-viewer`. B4's
+per-browser `localStorage["oxygen-map-pipeline"]` flag is gone.
+
+#### Viewport
+
+`lib/map-viewport.ts` holds one viewport model with two
+implementations, so `MapViewer`'s gestures, fits and overlay code call the
+same operations for either layer:
+
+| | `mercator` (tiles) | `paper` (vector) |
+|---|---|---|
+| State | `centerLat`, `centerLng`, fractional slippy-map `zoom` | `centreX`, `centreY` in paper µm (y-up), `pxPerUm` (CSS px per µm) |
+| Map mm ↔ inner px | through the calibration affine and Web Mercator (as before B4) | `x = w/2 + (1000·mmX − centreX)·pxPerUm`, `y = h/2 − (1000·mmY − centreY)·pxPerUm` |
+| WGS 84 ↔ inner px | Web Mercator | `mapGeo.wgs84ToPaper` / `paperToWgs84` on the document's paper frame, then the row above |
+| Zoom limits | 1 … 22 | 0.05 … 100 CSS px per paper mm |
+| Fit | WGS 84 bounds (`mapBounds`) | `header.bounds` in paper mm (`boundsMm`) |
+
+"Inner px" is `MapViewer`'s rotated inner frame (size
+`rotatedBoundingBox(container, rotation)`, centred on the container). The
+operations are `geoToInner`, `innerToGeo`, `mmToInner`, `innerToMm`,
+`zoomAt(vp, ctx, anchor, Δlog2, target)` (the point under the anchor moves
+to the target: wheel = same point, pinch = the fingers' midpoint),
+`panBy`, `centreOnGeo` (GPS follow), `centreShiftPx` (the measure tap's
+drift test), `fitMm` / `fitGeo`, `pxPerMapMm` (the overlay's symbol
+scale), `metresPerPx` (scale bar, GPS accuracy ring) and
+`mercatorEquivalentZoom`; in the paper view distances (scale bar,
+measure, GPS accuracy ring, `data-zoom`) use the frame's `header.mapScale`,
+the scale its transform uses. The paper view starts from `fitMm(boundsMm(header),
+container, 5 % padding)` — the legacy fit's padding; fits to controls take
+the controls' own paper mm plus the 2.5 mm ring, focus on one control the
+legacy one-sixth extent around it.
+
+**One transform (10 §6 point 3).** In the paper view, map mm are paper mm
+(× 1000 = µm), and every WGS 84 input — the GPS position and its
+accuracy ring, `gpsRoutes`, controls known only by lat/lng, GPS follow,
+the `data-center-*` attributes — goes through `mapGeo` and nothing else.
+The calibration affine is not used: it stays the tiles' transform.
+`gpsRoutes` are converted to paper mm once per route set (`useMemo`), so
+a pan or zoom scales them without calling proj4. The paper frame is
+`paperFrameOf(header, rotationCorrection)`: `unitsPerMm`, `mapScale`,
+`georeferencing` from the header, `correctionDeg` from
+`map_files.rotation_correction` (`mapMetadata.rotationCorrection`). A
+document without a usable CRS still draws; the geo inputs are then
+omitted (no GPS marker, no tracks, no `data-center-*`).
+
+**Rotation.** The inner frame's clockwise CSS angle is
+
+```
+mercator:  −northOffset + userBearing
+paper:     −(northOffset − cutRotationDeg) + userBearing     (0 tilt when either is null)
+```
+
+`northOffset` is the display bearing (paper +Y from true north plus the
+drawn meridians' tilt, `mapGeo.mapFileMetadata`) and `cutRotationDeg` its
+paper-north part, so their difference is the meridian tilt from paper +Y.
+Over tiles the base is true-north-up and `−northOffset` turns the map's
+display-up to screen-up; the paper view is already paper-north-up, so
+only the tilt is undone. Both put the drawn meridians vertical — the same
+picture. The user's two-finger bearing adds on top, as before.
+
+#### Layer
+
+`VectorMapLayer` (`components/VectorMapLayer.tsx`) draws into a canvas the
+size of the container's content box, **not rotated**: the rotation is in
+the GL view. `glView(paperView, containerW, containerH, dpr, rotDeg)` is
+the §5.2 `ViewRect` — the same centre, `pxPerUm · dpr`, the container at
+device pixels, `rotationDeg = −rotDeg` (the view matrix is
+counter-clockwise). Canvas and inner frame share their centre, so the
+overlay's `mmToInner` composed with the CSS rotation and the canvas's view
+matrix agree to < 0.5 CSS px at every point, rotation and DPR included
+(unit test). Nothing is resampled at any angle.
+
+Lifecycle: on mount the layer creates the `MapGlRenderer` and the engine
+over `workerTransport()` with the budget, then loads the fonts
+(`lib/map-fonts.ts`, the two Liberation faces of §4.10, fetched once per
+session) and the text atlas pages the document's strings need (§5.2
+"Text atlas"; Latin alone, then none, if a page fails) and calls
+`engine.load` with the document bytes (a copy: the
+original stays with the cache), `{ unmatched: "proxy", proxyColours }`
+(the stack's darkest colour for lines, points and text, its lightest
+non-white for areas) and the current view as `firstView`. Every view
+change and every `engine.onChange` asks for one redraw on the next
+animation frame (`setView` then `render`; a canvas resize happens in the
+same frame). Colours are the document's stack, `render.cmykToHex` of
+each `header.colours[i].cmyk`. Unmount disposes the engine (terminating
+the worker) and the renderer.
+
+The canvas carries `data-testid="map-vector-layer"`,
+`data-document-hash`, `data-status` (`loading` → `drawn` → `complete`;
+`error`, `webgl`) and `data-ready="true"` once the first view's detail is
+resident (`engine.whenComplete()`). A failed load shows a message with
+*Try again*; a browser without WebGL2 shows "cannot draw the map", and
+the layer reports it (and a `webglcontextlost`) through `onUnavailable`
+so the host can fall back to tiles while `allowLegacy`
+(`docs/map-pipeline-switch.md` §3.3).
+
+**Budget** by the document's provenance (§5.2 "Arena and buckets"):
+`course.mapMetadata.clubMapVersionId` (additive, the event's
+`map_files.club_map_version_id`, null for an event's own upload; user
+decision 2026-10-22) set → `mapBudget="club"`, 150 MB
+(`CLUB_BUDGET_BYTES`); null → `"event"`, 30 MB (`EVENT_BUDGET_BYTES`).
+`MapPanel` maps the one to the other; `MapViewer` defaults to `"event"`.
+
+#### Host
+
+In the paper view `MapViewer`:
+
+- fetches the document through `useMapDocument(hash, nameId)` (delivery:
+  `docs/map-storage.md` §7.1) and shows *Loading map…* until the header
+  is there, or the error with *Try again* (offline and not cached,
+  no access, not found, unreadable);
+- does not need `mapBounds` (a map without a CRS has none);
+- mounts no `TileLayer`, polls no `/api/map-tile-progress`, and shows no
+  editor loupe (`MapLoupe` magnifies tiles; the editor moves to the
+  document in slice D);
+- has no ink split: the tiles draw the map in two halves so lower purple
+  sits under black, brown and blue line art; the vector layer is one
+  canvas under the overlay, so the overlay's purple is drawn above the
+  whole map (09 §4 B; the stacking returns with the course layer as
+  objects in slice C);
+- exposes `data-centre-x`, `data-centre-y` (µm), `data-px-per-um` and
+  `data-rotation` on `map-viewer`, and keeps `data-center-lat` /
+  `data-center-lng` (the view centre through `paperToWgs84`) and
+  `data-zoom` (the Web Mercator zoom with the same ground resolution at
+  the centre) with their legacy meaning, so specs written against tiles
+  read the same numbers.
+
+#### Call sites
+
+Every 09 §1 call site reaches the base layer through `MapPanel` →
+`MapViewer`; the only direct `<MapViewer>` mount is `MapPanel`. None
+changes for B4.
+
+| Call site | Path |
+|---|---|
+| `CompetitionShell` persistent pane | `MapPane` → shell-owned `MapPanel` |
+| `KioskPage` | `MapPanel` (kiosk key from `?k=` → `x-kiosk-key`) |
+| `CardReadout` + `CardMapPreview` | `MapSlot` → `MapPanel` |
+| `RunnerMapPreview` (results, start list, runners) | `MapSlot` → `MapPanel` |
+| `CompetitionDashboard` | `MapSlot` → `MapPanel` |
+| `TracksPage` (GPS routes) | `MapSlot` → `MapPanel`; tracks through `mapGeo` |
+| Replay (`ReplayViewer` → `ReplayMapLayer`) | **mounted nowhere**: no producer feeds `ReplayData` since the Livelox source was removed; B11 closed as moot (user decision 2026-10-22) — see §8 |
+| `CourseEditorPage` | `MapPanel` with `editor` |
+
+#### Tests
+
+| Test | Covers |
+|---|---|
+| `lib/__tests__/map-viewport.test.ts` | mercator ops = the pre-B4 formulas (projection, wheel anchor, clamp, pan, affine mm, symbol scale); paper: centre, y flip, mm round trip, WGS 84 through `mapGeo` (1e-6 mm), no CRS, wheel and pinch anchors, clamp, pan, GPS centre, fit, scale, Mercator-equivalent zoom; rotation per model; a +3° tilted meridian vertical on the overlay and through `viewMatrix`; overlay = GL canvas < 0.5 px on 200 random views (rotation, DPR); a WGS 84 point lands where the tiles' calibration affine puts it, < 0.1 mm on a 400 × 300 mm 1:10 000 frame (the residual is the affine's linearisation) |
+| `lib/__tests__/map-pipeline.test.ts` | `resolveMapPipeline`: a document is required, the WebGL2 fallback (`docs/map-pipeline-switch.md` §6) |
+| `lib/__tests__/map-document-cache.test.ts` | route regex (documents, not previews); URL without query, `x-event-id` / `x-kiosk-key` headers; one request shared, same bytes; bounded memory; 401/403/404/5xx → kinds, failures not cached; offline; unreadable bytes; `storage.persist()` once, absent API |
+| `lib/__tests__/vector-map.test.ts` | paper frame with correction, bounds in mm, stack colours, proxy colours, budgets |
+| `e2e/map-vector-layer.spec.ts` | event `vector`: the pinned document by hash (no query, `x-event-id`), canvas ready and drawn, container-sized, no tile layer and no `/api/map-tile*` request, `data-*` attributes; wheel zoom keeps the paper point under the cursor (< 0.5 px); a GPS fix → follow centres it and the marker is at the viewer's centre; event `legacy`: tiles |
+| `e2e/map-viewer-gestures.spec.ts`, `mobile-layout.spec.ts`, `course-editor.spec.ts`, `map-control-circles.spec.ts`, `map-multicourse.spec.ts`, `wide-screen-map-pane.spec.ts`, `webserial.spec.ts`, `kiosk*.spec.ts` | under the default `legacy` the mercator model reproduces the pre-B4 viewer; `webserial`, `mobile-layout`, `map-viewer-gestures` also run under `vector` (`docs/map-pipeline-switch.md` §5) |
 
 ### 5.3 PDF (api)
 
@@ -712,6 +1426,14 @@ Default tolerance is 1 µm: the stage is expected to be *deterministic*,
 not merely equivalent. A test that needs a larger tolerance is a sign the
 rule it tests is under-specified.
 
+**Stream snapshots.** The library fixtures (§6.3) commit the whole stream
+of each scene as `__fixtures__/streams/library/<scene>.stream.json` (the
+JSON projection, one pass per line so a review diff names the pass that
+moved) and compare it with `diffPassStreams` at the default tolerance. A
+snapshot is rewritten only on purpose:
+`UPDATE_STREAMS=1 pnpm --filter @oxygen/shared exec vitest run src/render/__tests__/library-fixtures.test.ts`,
+and the diff is reviewed with the PR like a golden.
+
 ### 6.2 Golden images
 
 Three-way. The reference raster (§5.1) renders the fixture at 10 px/mm
@@ -723,9 +1445,10 @@ channel differs by more than 16/255; the fixture passes when the fraction
 of differing pixels is ≤ 0.5 % (04 §9 budget). Backends are compared
 with the oracle, never with each other.
 
-**Golden scenes** are the six contract fixtures (§6.3) plus the
+**Golden scenes** are the six contract fixtures (§6.3), the
 `pilot-scene` (`__fixtures__/pilot-scene.ts`: one object per pilot
-symbol, hand-placed). `render.goldenScene(name, fonts)` resolves a name
+symbol, hand-placed) and the eleven library fixtures (`lib-*`, §6.3,
+coloured from the library's palette through `cmykToHex`). `render.goldenScene(name, fonts)` resolves a name
 to `{ stream, colour }` identically on every side, and
 `render.goldenFrame(stream)` fixes the image frame: bounds + 1 mm
 margin, grown symmetrically to a **whole number of pixels** (a 57.5 px
@@ -759,7 +1482,9 @@ backend drawing the right thing. Zooming the same SVG 4× (exactly 4× the
 pixel size, same centring) and averaging 4×4 blocks pushes the oracle's
 own error below the tolerance so the comparison measures the backend.
 The GL side renders the goldens with `supersample: 2` (16 effective
-samples). Measured ratios, headless Chromium / SwiftShader:
+samples). Measured ratios, headless Chromium / SwiftShader (B1 run,
+2026-10-21; the first seven were 0.000 / 0.206 / 0.038 / 0.009 / 0.000 /
+0.441 / 0.293 % in S1):
 
 | Scene | Differing pixels |
 |---|---|
@@ -768,8 +1493,25 @@ samples). Measured ratios, headless Chromium / SwiftShader:
 | `glyph-instances` | 10 / 26 076 (0.038 %) |
 | `hatch-area` | 6 / 67 200 (0.009 %) |
 | `colour-order` | 0 / 48 400 (0.000 %) |
-| `text-with-halo` | 23 / 5 220 (0.441 %) |
-| `pilot-scene` | 1 130 / 385 640 (0.293 %) |
+| `text-with-halo` | 20 / 5 220 (0.383 %) |
+| `pilot-scene` | 1 151 / 385 640 (0.298 %) |
+| `lib-dash-ocad` | 4 / 36 900 (0.011 %) |
+| `lib-dash-omap` | 0 / 17 500 (0.000 %) |
+| `lib-line-glyphs` | 26 / 15 930 (0.163 %) |
+| `lib-pattern` | 202 / 55 000 (0.367 %) |
+| `lib-hatch` | 0 / 34 000 (0.000 %) |
+| `lib-borders` | 0 / 25 760 (0.000 %) |
+| `lib-holes` | 0 / 30 800 (0.000 %) |
+| `lib-text` | 82 / 23 560 (0.348 %) |
+| `lib-halos` | 15 / 21 160 (0.071 %) |
+| `lib-colour-order` | 79 / 26 199 (0.302 %) |
+| `lib-precision` | 178 / 64 566 (0.276 %) |
+
+B9 (2026-10-21) changed `lib-line-glyphs` and `lib-precision` (one more
+510 object, no glyphs on unflagged ends — §4.5); B10 (2026-10-22, library
+2026.10.3) changed them again (510 bars ±0.37 mm) and `lib-borders` (the
+509.1 railway's new construction). All three pass the budget in those
+runs; their ratios are not re-measured here.
 
 What remains is coverage quantisation: every residual differs by 17–26
 levels and the GL values are multiples of 16. **The ratio therefore
@@ -782,6 +1524,46 @@ certify production anti-aliasing (4× MSAA at 1× cannot meet a 16-level
 tolerance on edge pixels and is not asked to). And a 3× supersample is
 *worse* than 2× with the linear resolve (4 of 9 texels sampled) — a
 higher factor needs a real box-filter pass.
+
+**MSDF text tier** (B3; user decision 2026-10-22: a text tier at a
+provisional ≤ 2 %, tightened to the observed ratio + margin once
+measured, plus `compare=1` on `e2e/test.xmap`).
+The per-pass golden path draws text from exact outlines; the arena path
+draws it from the 32 px MSDF atlas, at the context's MSAA only. At the
+golden density (`text-with-halo`: a 57 px em, 1.8× the atlas) MSDF
+cannot be held to 0.5 % on scenes that are all glyph edges, so the text
+scenes are drawn a second time through the arena path
+(`/dev/map-gl?fixture=<scene>&path=arena`) against the **same goldens**
+at **≤ 1 %** differing pixels (`TEXT_TIER_MAX_RATIO`; the provisional
+2 % tightened to the largest measured 0.69 % + margin). Measured at
+introduction (headless Chromium, 2026-10-22), arena vs per-pass:
+
+| Scene | Arena (MSDF) | Per-pass (outlines) |
+|---|---|---|
+| `text-with-halo` | 19 / 5 220 (0.364 %) | 20 / 5 220 (0.383 %) |
+| `lib-text` | 162 / 23 560 (0.688 %) | 82 / 23 560 (0.348 %) |
+| `lib-halos` | 50 / 21 160 (0.236 %) | 15 / 21 160 (0.071 %) |
+| `lib-text-layout` (B8) | 433 / 151 506 (0.286 %) | 553 / 151 506 (0.365 %) |
+
+`lib-text-layout` (B8) is drawn at 1.5× (a 3.75 mm em): at 2.5 mm the
+scene, nearly all glyph edges, measured 0.537 % on the per-pass path —
+edge quantisation spread over every glyph, the density effect above —
+so it is scaled, not thinned. `lib-text`'s residual is the smallest text (≈ 15–20 px em, under the
+atlas's 32 px), spread along edges with no systematic offset. The whole
+document compare (`compare=1`) holds MSDF to the per-pass path at the
+ordinary 0.5 % on `e2e/test.xmap`: 0.217 %.
+
+**Designing a golden scene.** Two layouts turn that quantisation into a
+failure without any geometry being wrong, and the library scenes avoid
+both (B1; first measured at 0.66 % and 0.505 %): a thin **axis-aligned**
+edge at a fractional pixel offset puts every pixel of a column at the
+same partial coverage, so the whole column sits 17–24 levels off (the
+vertical 505 track of `lib-colour-order` — now diagonal); and a pattern
+whose cell is a whole number of pixels puts every instance at the same
+sub-pixel phase, so one glyph's residual is copied to all of them (208's
+12 px cells, 213's 1.6 px dots — now on small areas). The stream
+assertions (§6.1) carry the rule; the golden only has to show the backend
+draws the same geometry.
 
 The oracle itself is checked by **pixel probes**: hand-computed paper
 coordinates where a given colour must appear (`sampleAt(img, xUm, yUm)`),
@@ -813,8 +1595,179 @@ The symbolisation rules of §4 are proven by the **pilot symbol family**
 (OCAD and OMAP), 502, 503 with framing, 516, 529, 418, 403, 407, 213,
 709, 714, 704. Its stream-level assertions are in
 `__tests__/symbolise.test.ts`; its pixel probes through the oracle in
-`packages/api/src/render/__tests__/pilot-raster.test.ts`. The canonical
-library's own fixtures (04 §8 table, one per rule) are added in slice B.
+`packages/api/src/render/__tests__/pilot-raster.test.ts`.
+
+The **library fixtures** (B1) are the 04 §8 table drawn with the
+canonical library: `__fixtures__/library/index.ts` (`render.libraryScene`,
+`librarySceneNames`), each scene a set of objects plus the library
+entries it uses, resolved through the library's palette. Where the
+library has no entry for a rule, the scene uses a **hand variant** — the
+named entry with the stated fields replaced. Hand-computed assertions per
+row are in `__tests__/library-fixtures.test.ts`; the whole stream of each
+scene is a snapshot (§6.1) and a golden (§6.2).
+
+| Scene | 04 §8 row | Objects (library entries; *variant*) | Asserted |
+|---|---|---|---|
+| `lib-dash-ocad` | 1 | ISOM 505 with a corner and a dash point; 505 closed (18 mm loop); 507; 505 short, solid and *`minGaps: 2`* | slice boundaries as arc lengths: 1.8 mm dashes, corner dash one slice round the corner, a 1.8 mm dash centred on the dash point; loop seam dash on the start point; 507's secondary cut; forced gaps |
+| `lib-dash-omap` | 2 | ISOM 505 *as `layout: "omap"`*: single, *`halfOuterDashes`*, *groups of 2*, *`showAtLeastOne: false`* on a 0.8 mm line, with a dash point | interval lists at `f = 1`; the dash point centres one dash |
+| `lib-line-glyphs` | 3 | ISOM 516, 201, *529 at corners with `ignoreEnds` and `scaleAtCorners`*, *510 at dash points* (dash point inside, plain ends; a hand variant since B10), 416 on a closed loop, 510 (corners — the library's placement since B10 and the OCAD import's shape, B9) with a plain start and a corner-flagged end | instance positions, angles (bisector 45°), mitre scale √2, no glyph on an unflagged end, one on a flagged end, `minCountClosed` |
+| `lib-pattern` | 4 | ISOM 402 on two adjacent squares, *402 turning with the object* at 30°, 208 (shifted rows), *213 at 0° in the four clip modes* | one origin-anchored lattice; rotated lattice; half-cell row shift; completelyInside ⊂ centreInside ⊂ partiallyInside = clip, `clip` path only in clip mode |
+| `lib-hatch` | 5 | ISOM 709 on two adjacent areas, 407, *709 crossed (second hatch at 135°)* | pass parameters and order; every `hatchLines` endpoint on `x·nx + y·ny = offset + k·spacing` |
+| `lib-borders` | 6 | ISSprOM 509.1, 505 round a corner, *505 with a 0.2 mm right edge at 0.3 mm* | 509.1 (B10): an unsliced black 0.45 band under white 1.0 / 1.5 dashes shortened 1.5 mm at both ends (black ends, 1.5 mm black between dashes); both dashed borders keep the main line's phase at their own lengths; asymmetric edges |
+| `lib-holes` | 7 | ISOM 401: two holes, one reversed; a self-touching ring | one even-odd fill each, rings passed through untouched (earcut deviation is the GL backend's, image tier) |
+| `lib-text` | 8 | ISOM 704 "31"; 603.b *left / centre / right*; a two-line 603.b | em from the digit height (Liberation "0" = 1430 units → 5.73 mm), advances with kerning ("AV"), alignment shifts, line spacing |
+| `lib-text-layout` | 8 (cont., B8) | the scene at 1.5× (`TEXT_LAYOUT_SCALE`, §6.2); ISOM 603.b *at 3.75 mm em*: *justify + 0.6 mm paragraph spacing* in a 12 × 12 mm box; *centre + middle* in a 12 × 6 mm box; *a white (`white-over-green-brown`) rectangle frame* on text turned 8° over 406; *a 5 mm tab stop*; *centred* along a Bézier arc | box: first ascent on the top edge, three wrapped lines inside the width, 1.2 em apart, 0.6 mm more before the second paragraph, justified lines reach the width and a paragraph's last line does not; middle box centred in its height; frame = widest line × (digit height … baseline) grown by the margins and turned with the text, sorted above the green; the word after the tab at the stop; line-text origins on the arc, angles decreasing along it |
+| `lib-halos` | 9 | ISSprOM 704.b over 521; *508 with a continuous white band* over 406 | the white outline between the building's black and upper purple; the band its own pass over the green |
+| `lib-colour-order` | + | ten ISSprOM colours, lower and upper purple among them, pushed in reverse | colour-major order; lower purple under black, upper purple last |
+| `lib-precision` | + | `lib-dash-ocad` and `lib-line-glyphs` moved to (1 200 000, 1 200 000) µm | every pass the near pass translated, to 1 µm |
+
+Not in the table: 04 §8 row 10 (minimum sizes) is a screen-backend rule
+(the stream is the same at every zoom), and the filter-region and
+georeference rows belong to the viewer (§5.4) and A11's `mapGeo`.
+
+### 6.4 Corpus parity
+
+The B-gate's parity check (09 §4 B: "visual parity on the corpus against
+tiles for the sanctioned differences only") and the instrument for
+triaging a user's "this looks wrong" on a real map (B9).
+
+**Method.** `runParity` (`packages/api/src/render/parity.ts`) takes an
+OCAD file and a paper window (mm, y-up, snapped outwards to whole mm) and
+renders, for every symbol with objects within 10 mm of the window, two
+images on the same pixel grid at a whole px/mm (default 10, the golden
+density):
+
+- *legacy* — the tiles' raster: `readOcad` → `ocadToSvg({ objects })`
+  with only that symbol's objects → the window's `viewBox`
+  (`map-window.ts`) → resvg on white, exactly as `map-tiles.ts` draws a
+  window (no IOF colour stack);
+- *new* — the document path: `importMapToDocument` →
+  `documentRenderInput` (canonical rendering on, or off with `--source`)
+  → `symbolise` with only that symbol's objects → reference raster
+  (§5.1), coloured with the **legacy RGB** of each stack entry's source
+  colour so the diff measures geometry, not the CMYK conversion. The
+  conversion is reported once, apart (colours whose shared `cmykToHex`
+  differs from `ocad2geojson`'s by more than 16).
+
+Every other symbol is absent on both sides, so a difference belongs to
+the row. Hidden, proxy-drawn (`render: null`), missing and graphic
+symbols are listed, not compared.
+
+**Measures and verdict.** Per row: *differing* (the §6.2 channel
+tolerance 16), *ink* (pixels inked on either side) and *unexplained* —
+pixels inked (some channel more than 48 below white, about a fifth of
+full coverage) on one side with no ink within one pixel on the other.
+Anti-aliasing shades and sub-pixel placement never count: at 10 px/mm a
+0.1 mm line is one pixel, and a 0.05 mm offset flips every pixel of it
+at the channel tolerance. The verdict is `close` when unexplained ≤ 10 %
+of ink, `diverges` otherwise, `empty` without ink. Rows are ranked by
+unexplained ÷ ink, then differing ÷ ink.
+
+**Sanctioned differences.** Places where the new pipeline is right and
+the legacy is not (03 §4.1 lists the legacy's gaps; §4 here pins the
+replacement). A row carries the codes its IR and its objects' flags
+trigger; the tool cannot prove a divergence *is* the sanctioned one, so
+the images are always read.
+
+| Code | Difference |
+|---|---|
+| `dash-fitting` | OCAD dashes fitted per section (§4.2); legacy: one uniform `stroke-dasharray` |
+| `dash-points` | dash points centre a dash and split sections; legacy ignores them |
+| `secondary-symbols` | OCAD secondary symbols once per section; legacy draws none |
+| `corner-angle` | corner glyphs on the bisector (§4.5); legacy: the incoming segment |
+| `glyph-spacing` | spaced line symbols by the §4.5 rule per corner section; legacy rounds its own way |
+| `curve-glyphs` | symbols along curved lines placed and turned on the curve; legacy walks the Bézier control polygon — more spots, off the line, polygon angles |
+| `border-flags` | double-line `noLeft` / `noRight` vertices interrupt a border (§4.4); legacy ignores them |
+| `gap-flags` | vertex gap flags interrupt the line; legacy ignores them |
+| `pointed-caps` | pointed ends taper; legacy: flat |
+| `pattern-origin` | hatches and structure patterns anchored at the paper origin (03 §6.9 item 4), patterns with their clip mode; legacy: the SVG viewport's origin, always clipped |
+| `text-fonts` | text as Liberation outlines (§4.9–4.10); legacy: SVG `<text>` in system fonts |
+| `rectangle-symbols` | OCAD rectangle symbols drawn; legacy draws none |
+| `line-end-symbols` | OCAD start / end symbols only where `useSymbolFlags` enables them (`map-import.md` §3.3); legacy draws any present |
+| `corner-ends` | corner / dash-point glyphs on flagged line ends (§4.5); legacy never draws one on an end |
+| `main-symbol-count` | an OCAD main symbol only with `nPrimSym > 0` (`map-import.md` §3.3, 518.3 "Utan tagg"); legacy draws it as if 1 |
+
+**Invocation.**
+
+```
+node scripts/measure-parity.mjs <map.ocd> [--window=x0,y0,x1,y1] [--px-per-mm=10] [--source] [--codes=a,b] [--out=<dir>]
+```
+
+writes `<code>.old.png`, `<code>.new.png`, `<code>.diff.png` (red: ink
+only in the legacy; blue: only in the new; magenta: both, different
+colour) per compared symbol and `summary.md`, by default into
+`.local/parity/<map>/` (corpus output is never committed, AGENTS.md
+§12). Exit 0 when every diverging row carries a sanctioned code, 1
+otherwise. `--source` takes the library out of the comparison
+(renderer and importer against the legacy); the default shows the map
+as users see it, so canonical rows also measure library entries against
+the mapper's own definitions.
+
+Tests: `packages/api/src/render/__tests__/parity.test.ts` (pixel grid,
+isolation, agreement on `e2e/test.ocd`, the frame as a sanctioned
+divergence, ranking, shape measure, tags; a 510 power line from
+`buildParityOcad` with its poles at the corner points only) and
+`scripts/__tests__/measure-parity.test.mjs` (CLI, `pnpm test:scripts`).
+**Fonts on the legacy side.** The tiles leave the mapper's font names
+("Arial") to the system font stack, which in the Docker image resolves
+to Liberation 1.07 — the outlines `@oxygen/shared` bundles (§4.10). The
+tool pins that outcome rather than inheriting the machine's fonts: it
+maps each `font-family` through `ocadFontFamily` and hands resvg only
+the bundled files (`loadSystemFonts: false`). Before this, a GitHub
+runner (Liberation 2.x, different glyph shapes) reported the 603 spot
+height as a 24 % divergence that no local machine with 1.07 saw.
+
+**Corpus results (B9, 2026-10-21, `ocad-9`, 10 px/mm, whole maps plus
+the club-2026 review windows).** Compared symbols and the ones that
+diverge (unexplained > 10 %):
+
+| Map | Compared | Diverging, `--source` | Diverging, canonical | Unsanctioned |
+|---|---|---|---|---|
+| Sprint | 86 | 7 | 9 | canonical 101.1 / 103.1 slope lines (fixed in B10) |
+| Crop-B | 94 | 4 | 10 | canonical 101.1 / 103.1 (fixed in B10); 522 canopy tone |
+| Club-2026 | 186 | 23 | 26 | canonical 101.2 / 103.3 slope lines (fixed in B10) |
+
+Drawn from source definitions, every divergence on all three maps is
+sanctioned (exit 0): pattern and hatch phase, text fonts, OCAD dash
+fitting, glyphs along curves, and 518.3's tags. What the run found and
+what became of it:
+
+- **Fixed in the importer (`ocad-9`).** OCAD 9+ circle diameters are
+  centre-line (every ring was one line width small: the 702 / 706
+  circles); `useSymbolFlags` bit 1 is the end symbol, bit 2 the start
+  symbol (`map-import.md` §3.3).
+- **Fixed in the stage.** Corner and dash-point glyphs sit on flagged
+  vertices only, ends included when flagged (§4.5): club-2026's 510.0
+  had a pole on each of its 44 object ends; 7 of those ends are corner
+  points and keep theirs. The 510 window at 20 px/mm is now `close`.
+- **Fixed in the library (B10, 2026.10.3).** 101.b / 103.b slope ticks
+  pointed to −y (uphill on imported maps); 510 / 511 / 511.b poles were
+  placed `atDashPoints`, which no importer produces. Canonical,
+  unexplained ÷ ink before → after: club-2026 101.2 54.85 → 0.00 %,
+  103.3 51.65 → 0.00 %; Sprint 101.1 65.67 → 0.00 %, 103.1 62.31 →
+  0.00 %; Crop-B 101.1 52.41 → 0.00 %, 103.1 52.91 → 0.00 %. 510.0 on
+  club-2026 and Crop-B now matches the library (was drawn from source,
+  `suggested`) at the same 4.49 % / 0.85 %; Sprint's 509.100 railway
+  now matches ISSprOM 509.1 at 0.00 % (differing 38.67 %: OCAD dash
+  phase and the black ends); ISOM 111 on club-2026 now matches at
+  0.00 %. Auto matches per map: club-2026 85 → 87, Sprint 101 → 105,
+  Crop-B 100 → 102, club-full 98 → 100, Crop-A 101 → 103. Whole maps
+  after B10, canonical: club-2026 24 diverging, Sprint 7, Crop-B 8, all
+  sanctioned except Crop-B's 522 canopy tone.
+- **Spec-faithful, kept.** Cliffs: every 201.x / 202.x variant matches
+  the legacy at 40 px/mm from source (0 % unexplained); canonically
+  matched 202.2 / 201.5 get ISOM's flat ends (the "small houses"),
+  as Mapper's ISOM set does. `ocadLineStyle` equals the legacy's
+  `stroke-linejoin` / `linecap` table. 522 canopy: the library's 20 %
+  black is darker than the source's grey — a tone, not a shape.
+- **Not reproduced: missing line sections on GL.** No bucket defect:
+  club-2026's grid has 62 non-empty cells of 70, all resident at the
+  review view; an object at most 2 × 2 cells wide reaches at most one
+  cell from its centre cell, which the 1-cell draw margin covers; the
+  arena path equals the per-pass path to 0.1 % (`compare=1`,
+  10.7 px/mm). The 511.2 line through Brotorp breaks where the source
+  has gaps between objects (5.1 and 4.5 mm, at the road crossing) and
+  the reference raster matches the legacy there (0.3 %).
 
 ## 7. Where things live
 
@@ -832,23 +1785,141 @@ library's own fixtures (04 §8 table, one per rule) are added in slice B.
 | `packages/shared/src/render/glyph-table.ts` | IR glyph → `GlyphMesh`, registry |
 | `packages/shared/src/render/truetype.ts`, `text.ts` | font reader, shaping |
 | `packages/shared/src/render/symbolise.ts` | the stage |
-| `packages/shared/src/render/__fixtures__/` | contract fixtures (`streams/`), pilot symbols, `pilot-scene.ts`, `golden.ts` (scene list, frame) |
+| `packages/shared/src/render/__fixtures__/` | contract fixtures (`streams/`), library fixtures (`library/`, snapshots in `streams/library/`), pilot symbols, `pilot-scene.ts`, `golden.ts` (scene list, frame) |
+| `packages/shared/src/render/proxy-symbols.ts` | per-kind proxy symbols for the render bridge |
 | `packages/shared/fonts/` | bundled Liberation faces |
 | `packages/api/src/render/reference-raster.ts` | resvg rasterisation, `sampleAt`, `diffImages`, `encodePng` |
 | `packages/shared/src/render/swatch.ts` | symbol swatch scene (§5.1.1) |
 | `packages/api/src/render/previews.ts` | swatch and thumbnail PNGs (`docs/map-storage.md` §4.5) |
 | `packages/api/src/render/fonts.ts` | bundled-font loader for the server backends |
 | `packages/api/src/render/golden.ts`, `scripts/render-golden.ts` | golden PNG generation (`pnpm --filter @oxygen/api golden:render`) |
-| `packages/shared/src/render/ocad-objects.ts` | `ocad2geojson` objects → `RenderObject`s (pilot / envelope modes, proxy symbols) |
-| `packages/web/src/map-gl/prepare.ts` | WebGL2 backend, CPU stage (fans, extrusion, instancing) |
-| `packages/web/src/map-gl/batch.ts` | WebGL2 backend, batching per colour run (earcut fills, mixed-width strokes, merged instances) |
-| `packages/web/src/map-gl/renderer.ts` | WebGL2 backend, GPU stage (programs, stencil, supersampling, GPU timer) |
+| `packages/api/src/render/parity.ts`, `scripts/measure-parity.mjs` | corpus parity against the legacy tiles (§6.4) |
+| `packages/shared/src/render/ocad-objects.ts` | dev-only: `ocad2geojson` objects → `RenderObject`s (pilot / envelope modes); `ocadFlags` for the importers |
+| `packages/web/src/map-gl/prepare.ts` | WebGL2 backend, geometry builders: flattening, indexed strips, even-odd earcut; the per-pass fan path |
+| `packages/web/src/map-gl/mesh-atlas.ts` | glyph meshes in one float texture (vertex pulling) |
+| `packages/web/src/map-gl/text-atlas.ts` | the MSDF text atlas: page ranges and selection, glyph lookup, glyph table, halo clamp (§5.2 "Text atlas") |
+| `packages/web/src/map-gl/text-atlas-build.ts`, `packages/web/scripts/generate-text-atlas.ts`, `packages/web/scripts/text-atlas/Dockerfile` | atlas generation (`pnpm text-atlas:generate`, §4.10) |
+| `packages/shared/fonts/msdf/` | the committed text atlas pages |
+| `packages/web/src/map-gl/buckets.ts` | cells, large bucket, per-part preparation and range table, visible set, clip groups, zoom gate, LRU |
+| `packages/web/src/map-gl/arena.ts` | vertex arenas: free list, growth by copy |
+| `packages/web/src/map-gl/worker.ts`, `worker-entry.ts` | the worker's message handler and its binding |
+| `packages/web/src/map-gl/engine.ts` | main-thread controller: worker transport, residency, visible-set rebuilds |
+| `packages/web/src/map-gl/view.ts` | the arena path's model → clip matrix, `RenderTarget` |
+| `packages/web/src/map-gl/renderer.ts` | WebGL2 backend, GPU stage (arena programs and draw loop; per-pass path, stencil, supersampling; GPU timer) |
 | `packages/web/src/pages/dev/MapGlFixturePage.tsx` | dev-only golden page `/dev/map-gl` |
 | `packages/web/src/pages/dev/MapGlDocPage.tsx` | dev-only whole-document page `/dev/map-gl-doc` (load report, bench) |
 | `e2e/__golden__/map-gl/`, `e2e/map-gl-golden.spec.ts` | committed goldens and the browser comparison |
-| `e2e/map-gl-doc.spec.ts` | whole-document pipeline on `e2e/test.ocd` |
+| `e2e/map-gl-doc.spec.ts` | whole-document pipeline on `e2e/test.ocd`: arena path, worker, eviction, arena = per-pass path |
+| `scripts/measure-gl.mjs` | corpus measurements through `/dev/map-gl-doc` (§5.2 Measurements) |
+| `packages/web/src/components/VectorMapLayer.tsx` | the vector base layer in `MapViewer` (§5.4): canvas, engine and worker lifecycle, status |
+| `packages/web/src/components/MapViewer.tsx` | the host: layer choice, viewport state, gestures, SVG overlay |
+| `packages/web/src/lib/map-viewport.ts` | the viewport model, mercator and paper (§5.4 "Viewport"), `glView` |
+| `packages/web/src/lib/vector-map.ts` | paper frame, bounds, colours, proxy colours, budget from a document header |
+| `packages/web/src/lib/map-document-cache.ts`, `map-fonts.ts` | document, font and text atlas loading for the viewer (`docs/map-storage.md` §7.1) |
+| `packages/web/src/lib/map-pipeline.ts` | the layer rule and the WebGL2 probe (§5.4 "Selecting the layer", `docs/map-pipeline-switch.md` §3) |
+| `e2e/map-vector-layer.spec.ts` | the vector layer in the viewer |
 
 The shared module is exported as a namespace: `import { render } from
 "@oxygen/shared"` → `render.PassStream`, `render.passStreamFromJson`, …
 (namespaced to keep `Bounds`, `Segment` etc. from colliding with
 `course-maps`).
+
+## 8. Pending in this chapter
+
+- **§6.4 Mapper sources.** The parity tool compares OCAD files only (the
+  legacy tiles read nothing else); the corpus has no Mapper map.
+- **§6.4 GL in the comparison.** The tool's new side is the reference
+  raster; the WebGL2 backend is held to it by §6.2 and `compare=1`, not
+  by a corpus run.
+
+- **§5.2 rebuild-free visible set.** A visible-set rebuild is linear in
+  the indices in view: tens of ms for a whole club map above the zoom
+  gate (frame CPU p95 11–55 ms in the laptop `fit` bench on Club-2026 /
+  Club-full, against ≤ 4 ms), and 16.6 ms p95 for Club-full in source
+  mode even in the dense 1× paper viewport as the pan crosses cells
+  (pilot / envelope: ≤ 1.5 ms).
+  `WEBGL_multi_draw` over a resident index arena (04 §6.8 point 2) drops
+  the rebuild where the extension exists; the copy path stays the
+  fallback.
+- **§5.2 bucket preparation on dense cells.** p95 over the 04 §9 budget
+  on club-density cells (measurements); the shared flattening and earcut
+  dominate what is left.
+- **§5.2 object identity across the bridge.** The range table keys on
+  the stream's `objectIdx` — an index into the bridge's filtered object
+  list; hiding a *document* object needs the bridge to expose that
+  mapping. The viewer (B4) hides nothing; the first consumer is the
+  editor's hide / replace (slice D).
+- **§5.4 replay has no producer.** `ReplayViewer` / `ReplayMapLayer`
+  (own 2D canvas over tiles, `latLngToMapPx`) are mounted nowhere and
+  nothing produces `ReplayData`; B11 closed as moot (user decision
+  2026-10-22). A GPS replay feature gets its own row, with a producer and
+  this section's paper view and `mapGeo`.
+- **§5.4 lower purple under the line art.** The vector layer is one
+  canvas under the SVG overlay, so the overlay's purple covers black,
+  brown and blue line art that the tiles' ink half draws above it
+  (09 §4 B sanctions this for slice B). Returns when the course layer is
+  document objects drawn in colour order (slice C).
+- **§5.4 legacy colour settings.** `mapMetadata.colorOverrides` and
+  `northLinesBelow` (the tiles' per-map colour-stack fixes) are not
+  applied to the document's stack; the document's own order (and, for
+  matched symbols, the library's) is drawn.
+- **§5.4 editor loupe.** `MapLoupe` magnifies tiles and is not shown in
+  the paper view; the editor moves onto the document in slice D.
+- **§5.4 lost context.** A lost context (`webglcontextlost`) is not
+  restored: the host falls back to tiles while `allowLegacy`, or the
+  layer shows its message (`docs/map-pipeline-switch.md` §3.3).
+- **§5.4 `data-ready`** marks the first view's detail only; later views
+  stream in without an attribute (the engine's `whenComplete()` is there
+  for a spec that needs it).
+- **§5.2 glyphs outside the text atlas pages** draw nothing on the arena
+  path and count `TEXT_GLYPH_NOT_IN_ATLAS`, with no outline fallback
+  (user decision 2026-10-22): Greek, symbols outside the Latin ranges,
+  Cyrillic when its page failed to load. (Text in a `liberation-serif` /
+  `liberation-mono` family never reaches the atlas: no file ships,
+  §4.10, so the stage emits no pass and warns `NO_FONT`, §4.9.) None occurs in the
+  corpus. Adding a page is a range in `TEXT_ATLAS_PAGE_RANGES` and a
+  `pnpm text-atlas:generate`.
+- **§5.2 MSDF at small sizes.** No mipmaps: text between the 4 px skip
+  and ~16 px em samples the 32 px field bilinearly (the `lib-text`
+  residual of §6.2). The B-gate visual review on the phone judges it;
+  a 16 px page or mipmapped field is the remedy if needed.
+- **§5.2 real-phone numbers** (B0 / B-gate): the GPU columns are the
+  laptop iGPU, the phone column a CPU-throttle proxy.
+- **§5.2 analytic stroke anti-aliasing** (04 §6.2, §6.9): the 1-px
+  feather on strokes and glyph strokes on top of MSAA. Not built in B2 —
+  the arena = per-pass pixel comparison relies on both paths using MSAA
+  alone; the B-gate's parity check against tiles (§6.4) is where it is
+  judged.
+- **§5.2 perspective cameras** (terrain draping, research topic 10):
+  the projection is already one matrix and the target any framebuffer;
+  still needed are cell selection from the camera's footprint instead of
+  the `View` rectangle, and a per-vertex screen density for the
+  screen-only rules instead of the one `pxPerUm`.
+- **§5.2 zoom-banded flattening tolerance** (S1 §4.1): not built; strips
+  and the gate meet the memory budgets without it.
+- **§5.2 earcut deviation check** (04 §6.1): polygons earcut gets wrong
+  are not detected or redrawn by stencil-then-cover yet.
+- **Backends drawing `taper` and `angles`** — the stage emits both. The
+  WebGL2 backend draws `angles` on both its paths (B2: a text instance's
+  `cos, sin`); it does not draw `taper` yet (drawn butt) — on the arena
+  path a stroke vertex carries its own half width, so a taper is that
+  width scaled along the taper length. The PDF backend (slice C) draws
+  neither yet. The goldens leave `taper` out until every backend draws
+  it; `angles` are in `lib-text-layout` since B8 (the reference raster
+  and both GL paths draw them; the PDF tier waits for slice C anyway).
+- **S2 confirmation** of §4.2 step 3 (what stretches, the `round`
+  threshold), of `endGapUm` and of the vertical anchor's metrics (§4.9),
+  against OCAD exports; for text layout (§4.9, B8) also the default tab
+  interval, OCAD's box top (Mapper and Purple Pen lower the first line
+  by one internal leading for OCAD formatted text), line text's arc
+  length (Purple Pen's `max + min/2` metric), line-text vertical
+  alignment, and the frame's vertical extent. No corpus map has line
+  text or a rectangle frame (Club-2026 / Club-full have 9 / 13 formatted
+  texts and 1 / 2 texts with a tab).
+- **Serif and mono faces** — `liberation-serif` / `liberation-mono` are
+  in the IR and the importers map Times / Courier to them, but no face is
+  shipped (§4.10), so such text draws nothing with `NO_FONT`.
+- **Rectangle grids** (OCAD rectangle symbol cell lines and numbering) —
+  a by-design drop (user decision 2026-10-20); not pending, listed so the
+  reader does not look for it.
+- **§5.3 PDF** — slice C.

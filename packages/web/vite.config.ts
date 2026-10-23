@@ -99,6 +99,43 @@ export default defineConfig({
             },
           },
           {
+            // Map documents (docs/map-storage.md §7.1, 07 §9.1) — content
+            // addressed and `immutable`, so CacheFirst: a map seen once
+            // opens offline. Documents only (the regex is
+            // `MAP_DOCUMENT_PATH_RE` in lib/map-document-cache.ts; Workbox
+            // stringifies this function, so it cannot import it): the
+            // review page's per-symbol swatches would evict them.
+            // The event and kiosk key travel as headers, so the URL is
+            // the hash alone and one club map is cached once.
+            urlPattern: (ctx: { sameOrigin: boolean; url: URL }) =>
+              ctx.sameOrigin && /^\/api\/map-documents\/[0-9a-f]{64}$/.test(ctx.url.pathname),
+            handler: "CacheFirst",
+            options: {
+              cacheName: "map-documents",
+              expiration: {
+                maxEntries: 20,
+                maxAgeSeconds: 365 * 24 * 60 * 60,
+                purgeOnQuotaError: true,
+              },
+              cacheableResponse: { statuses: [200] },
+            },
+          },
+          {
+            // The vector viewer's fonts (Liberation Sans + Narrow) and MSDF
+            // text atlas pages (hashed asset URLs): cached on first use
+            // rather than precached, so devices that never open a vector
+            // map do not download them.
+            urlPattern: (ctx: { sameOrigin: boolean; url: URL }) =>
+              ctx.sameOrigin && ctx.url.pathname.startsWith("/assets/") &&
+              (ctx.url.pathname.endsWith(".ttf") || ctx.url.pathname.startsWith("/assets/text-atlas.")),
+            handler: "CacheFirst",
+            options: {
+              cacheName: "map-fonts",
+              expiration: { maxEntries: 16, maxAgeSeconds: 365 * 24 * 60 * 60 },
+              cacheableResponse: { statuses: [200] },
+            },
+          },
+          {
             // API version endpoint
             urlPattern: /\/api\/version/,
             handler: "NetworkFirst",

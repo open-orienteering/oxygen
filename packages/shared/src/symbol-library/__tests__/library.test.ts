@@ -142,6 +142,16 @@ describe("symbol library — dimension table, ISOM 2017-2 Rev 6 (c)", () => {
     expect(spacedOf(L("104"))).toMatchObject({ distanceUm: 500 });
   });
 
+  it("landform glyphs and ends (B10)", () => {
+    // Slope lines point to +y at angle 0 (OCAD 0,0 → 0,40; Mapper 0,0 → 0,−470 y-down): 0.4 mm beyond the contour's edge.
+    expect(P("101.b")).toMatchObject({ orientation: "object", glyph: { parts: [{ widthUm: 140, geometry: { coords: [0, 0, 0, 470] } }] } });
+    expect(P("103.b")).toMatchObject({ orientation: "object", glyph: { parts: [{ widthUm: 100, geometry: { coords: [0, 0, 0, 450] } }] } });
+    // 107: pointed ends tapering over 0.75 mm.
+    expect(L("107").main).toMatchObject({ widthUm: 250, cap: "pointed", taper: { startUm: 750, endUm: 750 } });
+    // 111: "the symbol is orientated to north".
+    expect(P("111").orientation).toBe("north");
+  });
+
   it("rock", () => {
     expect(L("201").main).toMatchObject({ widthUm: 350 });
     expect(spacedOf(L("201"))).toMatchObject({ distanceUm: 500 });
@@ -186,8 +196,16 @@ describe("symbol library — dimension table, ISOM 2017-2 Rev 6 (c)", () => {
     expect(L("507").main!.dash).toMatchObject({ dashUm: 2250, gapUm: 800, secondaryGapUm: 250 });
     expect(L("508").main).toMatchObject({ widthUm: 140, dash: { dashUm: 2000, gapUm: 250 } });
     expect(L("508.b").main!.halo).toMatchObject({ colour: ISOM_IDX.get("yellow100"), widthUm: 155, continuous: true });
-    expect(L("509").main).toMatchObject({ widthUm: 350, dash: { dashUm: 1500, gapUm: 1000 } });
-    expect(L("509").borders).toMatchObject({ backgroundColour: ISOM_IDX.get("white-railway"), backgroundWidthUm: 350, left: { widthUm: 100 } });
+    // 509 (B10): white dashes 1.0 / 1.5 over a black 0.45 band (0.1 rails at 0.35 CC), black 1.5 at both ends.
+    expect(L("509").main).toMatchObject({
+      colour: ISOM_IDX.get("white-railway"), widthUm: 250, dash: { layout: "ocad", dashUm: 1000, gapUm: 1500 }, shortenStartUm: 1500, shortenEndUm: 1500,
+    });
+    expect(L("509").borders).toEqual({ backgroundColour: ISOM_IDX.get("black100"), backgroundWidthUm: 450 });
+    // 510 / 511 (B10): pylons on corner points (flagged vertices, ends only when flagged); 510 bars 0.3 beyond the line's edge.
+    expect(L("510").glyphs).toMatchObject([{ placement: { at: "corners" }, glyph: { parts: [{ widthUm: 140, geometry: { coords: [0, -370, 0, 370] } }] } }]);
+    expect(L("511").glyphs).toMatchObject([{ placement: { at: "corners" }, glyph: { parts: [{ widthUm: 200, geometry: { coords: [0, -570, 0, 570] } }] } }]);
+    expect(L("511.b").glyphs).toMatchObject([{ placement: { at: "corners" } }]);
+    for (const id of ["510", "511", "511.b"]) expect(L(id).glyphs![0].placement, id).toEqual({ at: "corners" });
     expect(L("513.1").main).toMatchObject({ widthUm: 140 });
     expect(spacedOf(L("513.1"))).toMatchObject({ distanceUm: 2000 });
     expect(L("513.1").glyphs![0].glyph.parts[0]).toMatchObject({ diameterUm: 400 });
@@ -231,6 +249,11 @@ describe("symbol library — dimension table, ISSprOM 2019-2 Rev 6 (c)", () => {
     expect(L("102").main).toMatchObject({ widthUm: 300 });
     expect(L("103").main).toMatchObject({ widthUm: 150, dash: { dashUm: 3000, gapUm: 300 } });
     expect(L("104").main).toMatchObject({ widthUm: 270 });
+    // B10: slope lines to +y (0.75 / 0.6 mm outside measure from the contour's centre), 107 tapers over 0.75 mm.
+    expect(P("101.b")).toMatchObject({ orientation: "object", glyph: { parts: [{ widthUm: 210, geometry: { coords: [0, 0, 0, 645] } }] } });
+    expect(P("103.b")).toMatchObject({ orientation: "object", glyph: { parts: [{ widthUm: 150, geometry: { coords: [0, 0, 0, 525] } }] } });
+    expect(L("107").main).toMatchObject({ widthUm: 370, cap: "pointed", taper: { startUm: 750, endUm: 750 } });
+    expect(P("111").orientation).toBe("north");
     expect(L("105.1").main).toMatchObject({ widthUm: 270 }); // Rev 6: 0.18 → 0.27
     expect(L("105.1").glyphs![0].glyph.parts[0]).toMatchObject({ diameterUm: 700 }); // Rev 6: 0.6 → 0.7
     expect(spacedOf(L("105.1"))).toMatchObject({ distanceUm: 3750 });
@@ -268,7 +291,13 @@ describe("symbol library — dimension table, ISSprOM 2019-2 Rev 6 (c)", () => {
     expect(L("506").main).toMatchObject({ widthUm: 270, dash: { dashUm: 1500, gapUm: 370 } });
     expect(L("507").main!.dash).toMatchObject({ dashUm: 3370, gapUm: 1500, secondaryGapUm: 370 });
     expect(L("508").main).toMatchObject({ widthUm: 210, dash: { dashUm: 4500, gapUm: 750 } });
-    expect(L("509.1").borders).toMatchObject({ backgroundColour: SPR_IDX.get("white-railway"), left: { widthUm: 100, shiftUm: 175 } });
+    expect(L("509.1").main).toMatchObject({
+      colour: SPR_IDX.get("white-railway"), widthUm: 250, dash: { layout: "ocad", dashUm: 1000, gapUm: 1500 }, shortenStartUm: 1500, shortenEndUm: 1500,
+    });
+    expect(L("509.1").borders).toEqual({ backgroundColour: SPR_IDX.get("black100"), backgroundWidthUm: 450 });
+    expect(L("510").glyphs).toMatchObject([{ placement: { at: "corners" }, glyph: { parts: [{ widthUm: 140, geometry: { coords: [0, -370, 0, 370] } }] } }]);
+    expect(L("511").glyphs).toMatchObject([{ placement: { at: "corners" }, glyph: { parts: [{ widthUm: 200, geometry: { coords: [0, -1120, 0, 1120] } }] } }]);
+    for (const id of ["510", "511", "511.b"]) expect(L(id).glyphs![0].placement, id).toEqual({ at: "corners" });
     expect(L("509.2").borders).toMatchObject({ left: { widthUm: 80, shiftUm: 150 }, right: { widthUm: 80, shiftUm: 150 } }); // Rev 6: 0.08, black 100 %
     expect(spacedOf(L("512.2"))).toMatchObject({ distanceUm: 500, minCount: 2 });
     expect(A("512.3").hatches![0]).toMatchObject({ widthUm: 600, angleDeg: 45, colour: SPR_IDX.get("white-two-level") });
@@ -367,6 +396,13 @@ describe("symbol library — materialisation and symbolisation (e)", () => {
     const brown = (m: typeof a) => m.colours.find((c) => c.id.endsWith(":brown100-line"))!.cmyk;
     expect(brown(a)).toEqual([0.25, 0.75, 1, 0]);
     expect(brown(b)).toEqual([0, 0.56, 1, 0.18]);
+  });
+
+  it.each(["ISOM2017-2", "ISSprOM2019-2"] as SymbolLibraryId[])("%s 107 erosion gully: the stroke pass carries the pointed cap and the 0.75 mm taper (B10)", (lib) => {
+    const s = sym(lib, "107");
+    const { stream, warnings } = symbolise({ objects: [{ symbolIdx: 0, path: makePath([0, 0, 5000, 0]) }], symbols: [s], fonts: fonts() });
+    expect(warnings).toEqual([]);
+    expect(stream.passes).toMatchObject([{ kind: "stroke", cap: "pointed", taper: { startUm: 750, endUm: 750 } }]);
   });
 
   it("resolved symbols carry the entry's id, code and English name", () => {

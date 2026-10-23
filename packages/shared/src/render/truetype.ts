@@ -17,6 +17,9 @@ export interface FontMetrics {
   descender: number;
   /** Height of the digit "0" above the baseline, font units. */
   digitHeight: number;
+  /** The face (`head.macStyle` bits 0 / 1); absent = regular. */
+  bold?: boolean;
+  italic?: boolean;
   glyphId(codepoint: number): number;
   advance(glyphId: number): number;
   kerning(left: number, right: number): number;
@@ -32,6 +35,8 @@ export class TrueTypeFont implements FontMetrics {
   readonly descender: number;
   readonly numGlyphs: number;
   readonly digitHeight: number;
+  readonly bold: boolean;
+  readonly italic: boolean;
   private readonly dv: DataView;
   private readonly tables = new Map<string, Table>();
   private readonly cmap = new Map<number, number>();
@@ -55,6 +60,9 @@ export class TrueTypeFont implements FontMetrics {
     }
     const head = this.need("head");
     this.unitsPerEm = this.dv.getUint16(head.offset + 18);
+    const macStyle = this.dv.getUint16(head.offset + 44);
+    this.bold = (macStyle & 1) !== 0;
+    this.italic = (macStyle & 2) !== 0;
     const indexToLocFormat = this.dv.getInt16(head.offset + 50);
     const hhea = this.need("hhea");
     this.ascender = this.dv.getInt16(hhea.offset + 4);

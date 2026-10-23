@@ -31,9 +31,9 @@ reference events — nothing to provision manually.
 | Command | What happens |
 |---------|--------------|
 | `pnpm test:e2e` | Full suite, sharded across `min(4, floor(cores/2))` stacks — 4 on a 16-core dev box (~3-5 min), 2 on a 4 vCPU GitHub runner |
-| `pnpm test:e2e e2e/kiosk.spec.ts` | Selective run — single plain Playwright process on its own isolated stack (ports 4100/4200, db `oxygen_e2e`), no sharding. Isolated ports mean it works while `pnpm dev` is running |
+| `pnpm test:e2e e2e/kiosk.spec.ts` | Selective run — single plain Playwright process on its own isolated stack (API :4100, web :4200, eventor stub :4300, db `oxygen_e2e`), no sharding. Works while `pnpm dev` is running, and from any worktree: it starts all three servers itself, so it always tests the checkout it is run from |
 | `E2E_SHARDS=2 pnpm test:e2e` | Fewer shards (lower peak CPU/RAM) |
-| `pnpm test:e2e:serial` | Escape hatch: plain `playwright test`, identical to the pre-sharding behavior |
+| `pnpm test:e2e:serial` | Escape hatch: plain `playwright test` — the same 4100/4200/4300 stack as a selective run |
 
 Any argument that doesn't start with `-` is treated as a file filter and
 triggers the unsharded selective path, so `-g "name"` filters also run
@@ -43,13 +43,15 @@ unsharded.
 
 ### Env-var plumbing
 
-`playwright.config.ts` reads five variables (all optional — defaults
-reproduce the historical single-stack behavior):
+`playwright.config.ts` reads five variables (all optional). The port
+defaults live in `e2e/helpers/ports.ts` — the sharded runner's 4100 / 4200
+/ 4300 bases without a shard suffix, so a run that sets nothing is a
+selective stack of its own:
 
 | Variable | Default | Used for |
 |----------|---------|----------|
-| `E2E_API_PORT` | `3002` | API webServer port + `PORT`/`DATABASE_URL` env |
-| `E2E_WEB_PORT` | `5173` | Vite webServer port + Playwright `baseURL` |
+| `E2E_API_PORT` | `4100` | API webServer port + `PORT`/`DATABASE_URL` env |
+| `E2E_WEB_PORT` | `4200` | Vite webServer port + Playwright `baseURL` |
 | `E2E_EVENTOR_PORT` | `4300` | Eventor stub port + the API's `EVENTOR_API_BASE_URL` |
 | `E2E_DB_NAME` | `oxygen_e2e` | Database on `:5433` (global-setup + reseed too) |
 | `E2E_SHARD` | unset | Artifact dirs: `test-results/shard-<n>`, `playwright-report/shard-<n>` |
@@ -60,6 +62,14 @@ proxy target — both passed by the Playwright webServer config.
 
 Specs never hardcode the API origin; they import `API_BASE` from
 `e2e/helpers/api-base.ts`, which derives it from `E2E_API_PORT`.
+
+### Map pipeline projects
+
+Besides `chromium`, `playwright.config.ts` has projects `map-legacy` and
+`map-vector` that run the files in `MAP_PIPELINE_SPECS` once per value of
+the per-event map pipeline switch (`docs/map-pipeline-switch.md` §5).
+A shard that gets one of those files runs it twice; the weight table does
+not count that yet.
 
 ### File partitioning
 
@@ -104,9 +114,25 @@ heartbeat it verifies is unchanged.
 
 ## Ports
 
-Shard ports (`4101-410N` API, `4201-420N` web, `4301-430N` Eventor stub)
-deliberately avoid the dev servers (3002/5173) and the Docker stack
-(3001/8080), so the full E2E suite can run while `pnpm dev` is up.
+| Stack | API | Web | Eventor stub | Database |
+|-------|-----|-----|--------------|----------|
+| Selective run / `test:e2e:serial` (no suffix) | 4100 | 4200 | 4300 | `oxygen_e2e` |
+| Shard `n` | 410`n` | 420`n` | 430`n` | `oxygen_e2e_<n>` |
+
+These ports deliberately avoid the dev servers (3002/5173) and the Docker
+stack (3001/8080), so any E2E run can go while `pnpm dev` is up.
+
+**A run never attaches to a server it did not start.** Every `webServer`
+entry in `playwright.config.ts` has `reuseExistingServer: false`. The rule
+exists because the main checkout's `pnpm dev` (5173/3002) is the user's
+and runs *that* checkout's code: a worktree run that attached to it would
+report on the wrong code and still look green. If something already
+listens on a stack port, Playwright stops with `http://localhost:<port> is
+already used` instead. That also covers an orphaned Vite from a crashed
+run, and `E2E_WEB_PORT=5173`. The details of how this was found are in
+[`bugfix-e2e-reuses-dev-server.md`](bugfix-e2e-reuses-dev-server.md);
+`scripts/__tests__/e2e-config.test.mjs` (`pnpm test:scripts`) pins the
+defaults and the no-reuse rule.
 
 ## Troubleshooting
 
@@ -114,8 +140,11 @@ deliberately avoid the dev servers (3002/5173) and the Docker stack
   `playwright-report/shard-<n>/index.html`; traces/screenshots are in
   `test-results/shard-<n>/`. Re-run just the failing files with
   `pnpm test:e2e e2e/<file>.spec.ts`.
-- **Port already in use** — a previous run crashed without cleanup; kill
-  leftover `tsx`/`vite` processes bound to 41xx/42xx ports.
+- **Port already in use** (`http://localhost:<port> is already used`) — a
+  previous run crashed without cleanup; kill leftover `tsx`/`vite`
+  processes bound to 41xx/42xx/43xx ports. Do not work around it by
+  pointing `E2E_WEB_PORT` at a running dev server: that is the case the
+  error is there to stop.
 - **Machine too loaded** — `E2E_SHARDS=2 pnpm test:e2e`.
 - **Traces for a full sharded run** — `pnpm test:e2e --trace=retain-on-failure`.
   Write option values with `=`: any argument not starting with `-` counts

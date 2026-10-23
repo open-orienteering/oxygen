@@ -200,8 +200,12 @@ class Converter {
       const main: StrokeSpec = { colour: lineColour ?? 0, widthUm: lineColour !== undefined ? b.lineWidth : 0, cap, join };
       if (dash) main.dash = dash;
       if (cap === "pointed") {
-        // Mapper draws the start/end offsets as the taper itself; the IR has
-        // no taper length, so the pointed cap keeps the full line length.
+        // On a pointed cap Mapper's start/end offsets are the taper lengths,
+        // not a shortening. Older files carry only pointed_cap_length (Mapper
+        // still writes it, equal to the offsets): both ends then.
+        const legacy = b.startOffset <= 0 && b.endOffset <= 0 ? b.pointedCapLength : 0;
+        const start = legacy > 0 ? legacy : b.startOffset, end = legacy > 0 ? legacy : b.endOffset;
+        if (start > 0 || end > 0) main.taper = { ...(start > 0 ? { startUm: start } : {}), ...(end > 0 ? { endUm: end } : {}) };
       } else {
         if (b.startOffset > 0) main.shortenStartUm = b.startOffset;
         if (b.endOffset > 0) main.shortenEndUm = b.endOffset;
@@ -371,10 +375,18 @@ class Converter {
       if (b.framing.mode === 1 && b.framing.lineHalfWidth > 0) {
         const c = this.colour(b.framing.colour, "text framing");
         if (c !== undefined) out.halo = { colour: c, widthUm: b.framing.lineHalfWidth };
-      } else if (b.framing.mode !== 0) {
+      } else if (b.framing.mode === 2 && (b.framing.shadowXOffset !== 0 || b.framing.shadowYOffset !== 0)) {
+        // Mapper's shadow offsets are y-down, the IR's y-up. No offset draws nothing, as a zero-width halo.
+        const c = this.colour(b.framing.colour, "text shadow");
+        if (c !== undefined) out.shadow = { colour: c, offsetXUm: b.framing.shadowXOffset, offsetYUm: -b.framing.shadowYOffset };
+      } else if (b.framing.mode !== 0 && b.framing.mode !== 1 && b.framing.mode !== 2) {
         this.warn("SYMBOL_FEATURE_DROPPED", `${this.label}: text framing mode ${b.framing.mode}`);
       }
     }
+    // Custom tab stops, native units (µm) from the line start; non-positive and non-ascending ones are not stops.
+    const stops: { xUm: number }[] = [];
+    for (const xUm of b.tabs) if (xUm > 0 && (stops.length === 0 || xUm > stops[stops.length - 1].xUm)) stops.push({ xUm });
+    if (stops.length) out.tabStops = stops;
     if (b.underline) this.warn("SYMBOL_FEATURE_DROPPED", `${this.label}: underline`);
     if (b.lineBelow && b.lineBelow.colour >= 0 && b.lineBelow.width > 0) this.warn("SYMBOL_FEATURE_DROPPED", `${this.label}: line below text`);
     return out;
@@ -396,12 +408,12 @@ class Converter {
       let part: OmapSymbol | undefined;
       if ("ref" in p) {
         if (this.stack.has(p.ref)) {
-          this.warn("SYMBOL_FEATURE_DROPPED", `${this.label}: combined symbol references itself`);
+          this.warn("SYMBOL_REFERENCE_INVALID", `${this.label}: combined symbol references itself`);
           continue;
         }
         part = this.ctx.symbolById(p.ref);
         if (!part) {
-          this.warn("SYMBOL_FEATURE_DROPPED", `${this.label}: combined part references missing symbol ${p.ref}`);
+          this.warn("SYMBOL_REFERENCE_INVALID", `${this.label}: combined part references missing symbol ${p.ref}`);
           continue;
         }
         this.stack.add(p.ref);
@@ -447,7 +459,10 @@ class Converter {
       }
       if (part.borders && !bordersConsumed) {
         if (!result.borders) result.borders = structuredClone(part.borders);
-        else this.warn("SYMBOL_FEATURE_DROPPED", `${this.label}: extra border pair in combined symbol`);
+        else {
+          const { left, right } = structuredClone(part.borders);
+          if (left || right) (result.borders.extraPairs ??= []).push({ ...(left ? { left } : {}), ...(right ? { right } : {}) });
+        }
       }
       if (part.glyphs?.length) (result.glyphs ??= []).push(...structuredClone(part.glyphs));
     }

@@ -114,8 +114,9 @@ export function pointSymbol({ symNum, extent, colorIdx, description, elements })
   return buf;
 }
 
-export function lineSymbol({ symNum, extent, colorIdx, description, lineWidth }) {
-  const size = BASE_SYMBOL_SIZE + 76;
+/** A solid line; `cornerElements` + `useSymbolFlags` 4 add OCAD's corner symbol (the 510 power line's pole). */
+export function lineSymbol({ symNum, extent, colorIdx, description, lineWidth, cornerElements = [], useSymbolFlags = 0 }) {
+  const size = BASE_SYMBOL_SIZE + 76 + elementBytes(cornerElements);
   const buf = Buffer.alloc(size);
   let o = symbolHeader(buf, { size, symNum, otp: 2, extent, colorIdx, description });
   o = buf.writeInt16LE(colorIdx, o); // lineColor
@@ -124,20 +125,24 @@ export function lineSymbol({ symNum, extent, colorIdx, description, lineWidth })
   o += 26; // DoubleLine11
   o += 6; // Decrease11
   o += 6; // frColor, frWidth, frStyle
-  o += 10; // prim/sec/corner/start/end DSize = 0
-  o += 2; // useSymbolFlags, reserved
+  o += 4; // prim/sec DSize = 0
+  o = buf.writeUInt16LE(elementDataSize(cornerElements), o); // cornerDSize
+  o += 4; // start/end DSize = 0
+  o = buf.writeUInt8(useSymbolFlags, o);
+  o += 1; // reserved
+  writeElements(buf, o, cornerElements);
   return buf;
 }
 
-export function areaSymbol({ symNum, extent, colorIdx, description }) {
+export function areaSymbol({ symNum, extent, colorIdx, description, borderSym = 0, borderOn = false }) {
   const size = BASE_SYMBOL_SIZE + 36;
   const buf = Buffer.alloc(size);
   let o = symbolHeader(buf, { size, symNum, otp: 3, extent, colorIdx, description });
-  o = buf.writeInt32LE(0, o); // borderSym
+  o = buf.writeInt32LE(borderSym, o); // borderSym
   o = buf.writeInt16LE(colorIdx, o); // fillColor
   o += 12; // hatchMode/Color/LineWidth/Dist/Angle1/Angle2
   o = buf.writeUInt8(1, o); // fillOn
-  o = buf.writeUInt8(0, o); // borderOn
+  o = buf.writeUInt8(borderOn ? 1 : 0, o); // borderOn
   return buf;
 }
 
@@ -148,13 +153,17 @@ function asciiPascal(buf, o, str, byteLength) {
 }
 
 /** Text framing attributes (46 bytes from FrMode), shared by text and line-text symbols. */
-function writeFraming(buf, o, { frMode = 0, frStyle = 0, frColor = 0, frWidth = 0, frOfX = 0, frOfY = 0 }) {
+function writeFraming(buf, o, { frMode = 0, frStyle = 0, frColor = 0, frWidth = 0, frOfX = 0, frOfY = 0, frLeft = 0, frBottom = 0, frRight = 0, frTop = 0 }) {
   o = buf.writeUInt8(frMode, o);
   o = buf.writeUInt8(frStyle, o);
   o = buf.writeUInt8(0, o); // pointSymOn
   o = buf.writeInt32LE(0, o); // pointSymNumber
   o += 19; // reserved
-  o += 8; // frLeft / frBottom / frRight / frTop (rectangle framing)
+  // Rectangle framing margins (frMode 3), 1/100 mm.
+  o = buf.writeInt16LE(frLeft, o);
+  o = buf.writeInt16LE(frBottom, o);
+  o = buf.writeInt16LE(frRight, o);
+  o = buf.writeInt16LE(frTop, o);
   o = buf.writeInt16LE(frColor, o);
   o = buf.writeInt16LE(frWidth, o);
   o += 4; // reserved
@@ -178,14 +187,17 @@ function writeTextBasics(buf, o, { fontName = "Arial", fontColor, fontSize, weig
 }
 
 /** Text symbol (type 4): 240-byte body; framing at body offset 194, frColor at 228. */
-export function textSymbol({ symNum, extent = 0, description, lineSpace = 100, ...attrs }) {
+export function textSymbol({ symNum, extent = 0, description, lineSpace = 100, paraSpace = 0, indentFirst = 0, indentOther = 0, nTabs = 0, tabs = [], ...attrs }) {
   const size = BASE_SYMBOL_SIZE + 240;
   const buf = Buffer.alloc(size);
   let o = symbolHeader(buf, { size, symNum, otp: 4, extent, colorIdx: attrs.fontColor, description });
   o = writeTextBasics(buf, o, attrs);
   o = buf.writeInt16LE(lineSpace, o);
-  o += 2 + 2 + 2 + 2; // paraSpace, indentFirst, indentOther, nTabs
-  o += 32 * 4; // tabs
+  o = buf.writeInt16LE(paraSpace, o);
+  o = buf.writeInt16LE(indentFirst, o);
+  o = buf.writeInt16LE(indentOther, o);
+  o = buf.writeInt16LE(nTabs, o);
+  for (let i = 0; i < 32; i++) o = buf.writeUInt32LE(tabs[i] ?? 0, o); // tab stops, 1/100 mm
   o += 2 + 2 + 2 + 2; // lbOn, lbColor, lbWidth, lbDist
   o += 2; // reserved
   writeFraming(buf, o, attrs);
@@ -246,9 +258,10 @@ function objectRecord({ sym, otp, coords, text = "", unicode = 1 }) {
   o = buf.writeUInt16LE(0, o); // nDatabaseString
   o = buf.writeUInt8(0, o); // objectStringType
   o = buf.writeUInt8(0, o); // res1
-  for (const [x, y] of coords) {
-    o = buf.writeInt32LE(td(x), o);
-    o = buf.writeInt32LE(td(y), o);
+  // [x, y, xFlags, yFlags]: the flags sit in each value's low byte (yFlags 1 = corner point).
+  for (const [x, y, xFlags = 0, yFlags = 0] of coords) {
+    o = buf.writeInt32LE(td(x) | xFlags, o);
+    o = buf.writeInt32LE(td(y) | yFlags, o);
   }
   if (textSlots > 0) utf16le(text, textSlots * 8).copy(buf, o);
   return buf;
@@ -392,6 +405,7 @@ const WHITE = { recType: 9, text: "White\tn4\tc0.0\tm0.0\ty0.0\tk0.0" };
 export const SYMBOL_TYPES_OCAD = {
   framedText: { symNum: 902001, description: "Framed text", fontColor: 1, fontSize: 43, weight: 700, alignment: 1, frMode: 2, frStyle: 0, frColor: 4, frWidth: 15 },
   shadowText: { symNum: 902002, description: "Shadow text", fontColor: 1, fontSize: 80, italic: true, alignment: 2 | 8, frMode: 1, frColor: 3, frOfX: 10, frOfY: -20 },
+  boxText: { symNum: 902003, description: "Box text", fontColor: 1, fontSize: 80, alignment: 3, paraSpace: 50, nTabs: 1, tabs: [750], frMode: 3, frColor: 4, frLeft: 20, frBottom: 30, frRight: 20, frTop: 10 },
   lineText: { symNum: 903000, description: "Line text", fontColor: 0, fontSize: 100, charSpace: 10, alignment: 1, frMode: 2, frColor: 4, frWidth: 12 },
   rectangle: { symNum: 850001, description: "Rectangle", lineColor: 0, lineWidth: 16, radius: 229 },
   gridRectangle: { symNum: 850002, description: "Grid rectangle", lineColor: 1, lineWidth: 25, gridFlags: 3, cellWidth: 1000, cellHeight: 800, unnumCells: 2, unnumText: "X" },
@@ -407,6 +421,7 @@ export function buildSymbolTypesOcad() {
   const symbols = [
     textSymbol(t.framedText),
     textSymbol(t.shadowText),
+    textSymbol(t.boxText),
     lineTextSymbol(t.lineText),
     rectangleSymbol(t.rectangle),
     rectangleSymbol(t.gridRectangle),
@@ -420,9 +435,69 @@ export function buildSymbolTypesOcad() {
   const objects = [
     { sym: t.framedText.symNum, otp: 4, coords: [[0, 0]], text: "Framed", unicode: 0 },
     { sym: t.shadowText.symNum, otp: 4, coords: [[0, -1000]], text: "Shadow", unicode: 0 },
+    // Formatted text: the box's corners bottom-left, bottom-right, top-right, top-left.
+    { sym: t.boxText.symNum, otp: 5, coords: box(-1000, 2000, 1000, 3500), text: "Wrapped inside its box\r\n7\tTab", unicode: 0 },
     { sym: t.lineText.symNum, otp: 6, coords: [[-2000, 1000], [0, 1500], [2000, 1000]], text: "Along the path", unicode: 0 },
     { sym: t.rectangle.symNum, otp: 7, coords: box(-3000, -3000, 3000, 2500) },
     { sym: t.gridRectangle.symNum, otp: 7, coords: box(-1500, -2500, 1500, -1500) },
+  ];
+  return assembleOcad({ fileType: 0, strings, symbols, objects });
+}
+
+// ─── Stale-reference fixture (A14, docs/map-import.md §3.3) ──────────────────
+
+/**
+ * An area symbol whose border points at itself — the Club-full shape of a
+ * stale area-border reference (a source data error, `SYMBOL_REFERENCE_INVALID`)
+ * — and one whose border points at a symbol the table lacks, each with one object.
+ */
+export const STALE_BORDER_OCAD = {
+  self: { symNum: 301002, description: "Stale border (itself)" },
+  missing: { symNum: 301003, description: "Stale border (missing)", borderSym: 524000 },
+};
+
+export function buildStaleBorderOcad() {
+  const t = STALE_BORDER_OCAD;
+  const strings = [
+    ...DEFAULT_COLORS,
+    WHITE,
+    { recType: 1039, text: georeferenceString({ gridId: 13002, scale: 4000, easting: 500000, northing: 6500000 }) },
+  ];
+  const symbols = [
+    areaSymbol({ symNum: t.self.symNum, extent: 0, colorIdx: 2, description: t.self.description, borderOn: true, borderSym: t.self.symNum }),
+    areaSymbol({ symNum: t.missing.symNum, extent: 0, colorIdx: 2, description: t.missing.description, borderOn: true, borderSym: t.missing.borderSym }),
+  ];
+  const box = (x0, y0, x1, y1) => [[x0, y0], [x1, y0], [x1, y1], [x0, y1]];
+  const objects = [
+    { sym: t.self.symNum, otp: 3, coords: box(-1000, -1000, 1000, 1000) },
+    { sym: t.missing.symNum, otp: 3, coords: box(2000, -1000, 4000, 1000) },
+  ];
+  return assembleOcad({ fileType: 0, strings, symbols, objects });
+}
+
+// ─── Parity fixture (docs/map-rendering.md §6.4) ─────────────────────────────
+
+/**
+ * A 510-style power line for the parity tool's tests: a 0.14 mm line whose
+ * pole is OCAD's corner symbol, on an open path with two corner points
+ * inside and plain end vertices; plus a solid 505 path beside it.
+ */
+export const PARITY_OCAD = {
+  power: { symNum: 510000, description: "Power line", lineWidth: 14, pole: [[0, -37], [0, 37]] },
+  path: { symNum: 505000, description: "Path", lineWidth: 25 },
+};
+
+export function buildParityOcad() {
+  const t = PARITY_OCAD;
+  const strings = [...DEFAULT_COLORS, WHITE, { recType: 1039, text: georeferenceString({ scale: 10000, easting: 500000, northing: 6500000 }) }];
+  const symbols = [
+    lineSymbol({ symNum: t.power.symNum, extent: 37, colorIdx: 1, description: t.power.description, lineWidth: t.power.lineWidth, useSymbolFlags: 4,
+      cornerElements: [{ type: 1, color: 1, lineWidth: t.power.lineWidth, coords: t.power.pole }] }),
+    lineSymbol({ symNum: t.path.symNum, extent: 13, colorIdx: 1, description: t.path.description, lineWidth: t.path.lineWidth }),
+  ];
+  const objects = [
+    { sym: t.power.symNum, otp: 2, coords: [[-2000, 0], [-700, 0, 0, 1], [600, 0, 0, 1], [2000, 0]] },
+    { sym: t.path.symNum, otp: 2, coords: [[-2000, -1000], [2000, -1000]] },
   ];
   return assembleOcad({ fileType: 0, strings, symbols, objects });
 }
@@ -530,9 +605,10 @@ export function buildE2eTestOcad() {
       extent: 400,
       colorIdx: 0,
       description: "Finish",
+      // ISOM 2017-2 706: ø 4.0 and 6.0 mm centre to centre — OCAD 9+ circle diameters are centre-line (B9).
       elements: [
-        { type: 3, color: 0, lineWidth: 35, diameter: 500, coords: [[0, 0]] },
-        { type: 3, color: 0, lineWidth: 35, diameter: 700, coords: [[0, 0]] },
+        { type: 3, color: 0, lineWidth: 35, diameter: 400, coords: [[0, 0]] },
+        { type: 3, color: 0, lineWidth: 35, diameter: 600, coords: [[0, 0]] },
       ],
     }),
     ...terrainSymbols(),

@@ -14,14 +14,15 @@
 import type { MapDocumentInput, MapObjectInput } from "../map-document/codec.js";
 import { analyseDocumentInput, type DocumentAnalysis } from "./analyse.js";
 import { OBJECT_TYPE } from "../map-document/header.js";
+import { WARNING_DETAILS_MAX, type ImportWarningDetail } from "./report.js";
 import type { DocumentColour, DocumentSymbolInput, DocumentWarning, Georeferencing, MapDocumentHeaderInput } from "../map-document/header.js";
 import type { TextSymbol } from "../render/symbol.js";
-import { OMAP_OBJECT_TYPE, type OmapFile, type OmapGeoreferencing, type OmapSymbol } from "./omap-reader.js";
+import { OMAP_OBJECT_TYPE, type OmapCoord, type OmapFile, type OmapGeoreferencing, type OmapSymbol } from "./omap-reader.js";
 import { dashPointRule, omapFlags, omapGoverningLine, omapSymbolKind, omapSymbolToRender, type DashPointRule } from "./omap-symbols.js";
 
 /** Mapper coordinates are 0.001 mm. */
 export const OMAP_UNITS_PER_MM = 1000;
-export const OMAP_IMPORTER_VERSION = "omap-2";
+export const OMAP_IMPORTER_VERSION = "omap-7";
 
 export interface OmapSourceOptions {
   /** Upload name; goes into the import report, not into the document. */
@@ -39,6 +40,8 @@ export interface OmapSourceResult {
     symbolsRendered: number; symbolsUnrendered: number;
   };
   warnings: DocumentWarning[];
+  /** One entry per warning emission that carries a message (docs/map-import.md §3.6), at most `WARNING_DETAILS_MAX`; for the import report, not the document. */
+  warningDetails: ImportWarningDetail[];
   /** Stage 5 over `input` (docs/map-import.md §3.8); not part of the document. */
   analysis: DocumentAnalysis;
 }
@@ -47,6 +50,30 @@ export interface OmapSourceResult {
 const roundMicrometre = (v: number): number => Math.round(v * 1e6) / 1e6;
 
 const radToDeciDeg = (rad: number): number => Math.round((rad * 1800) / Math.PI);
+
+/**
+ * A Mapper box text's corners — bottom-left, bottom-right, top-right,
+ * top-left on paper — from its centre anchor, size and rotation, in the
+ * reader's y-down coordinates like every other `OmapCoord`. Unrotated
+ * boxes stay in integers (the width and height exact); a rotated box
+ * needs `cos` / `sin` and is rounded to native units (§6).
+ */
+function boxCorners(c: OmapCoord, size: { width: number; height: number }, rotation: number): OmapCoord[] {
+  const cx = c.x, cy = -c.y; // y-up
+  const w = size.width, h = size.height;
+  let up: [number, number][];
+  if (!rotation) {
+    const x0 = cx - Math.floor(w / 2), y0 = cy - Math.floor(h / 2);
+    up = [[x0, y0], [x0 + w, y0], [x0 + w, y0 + h], [x0, y0 + h]];
+  } else {
+    const cos = Math.cos(rotation), sin = Math.sin(rotation);
+    up = [[-1, -1], [1, -1], [1, 1], [-1, 1]].map(([sx, sy]) => {
+      const lx = (sx * w) / 2, ly = (sy * h) / 2;
+      return [Math.round(cx + lx * cos - ly * sin), Math.round(cy + lx * sin + ly * cos)];
+    });
+  }
+  return up.map(([x, y]) => ({ x, y: y === 0 ? 0 : -y, flags: 0 }));
+}
 
 /** Colour list (index = priority, 0 on top) → colour stack (index = draw order, 0 first). */
 export function omapColourStack(file: OmapFile): { colours: DocumentColour[]; stackIdxByPriority: Map<number, number>; opacityIgnored: number } {
@@ -166,13 +193,25 @@ function kindOfObjectType(type: number): DocumentSymbolInput["kind"] {
 }
 
 const H_ALIGN: Record<number, TextSymbol["align"] | undefined> = { 0: "left", 1: "centre", 2: "right" };
+const V_ALIGN: Record<number, NonNullable<TextSymbol["verticalAlign"]> | undefined> = { 0: "baseline", 1: "top", 2: "middle", 3: "bottom" };
+
+/** Alignment onto a text render; baseline leaves `verticalAlign` out (the IR has no default for it on purpose). */
+function setTextAlignment(render: Pick<Partial<TextSymbol>, "align" | "verticalAlign">, align: TextSymbol["align"], verticalAlign: NonNullable<TextSymbol["verticalAlign"]>): void {
+  render.align = align;
+  if (verticalAlign === "baseline") delete render.verticalAlign;
+  else render.verticalAlign = verticalAlign;
+}
 
 export function omapToDocumentInput(file: OmapFile, opts: OmapSourceOptions): OmapSourceResult {
   const warnings = new Map<string, DocumentWarning>();
-  const warn = (code: string, message?: string, count = 1) => {
+  const warningDetails: ImportWarningDetail[] = [];
+  const warn = (code: string, message?: string, count = 1, symbolIdx?: number) => {
     const w = warnings.get(code);
     if (w) w.count += count;
     else warnings.set(code, { code, count, message });
+    if (message !== undefined && warningDetails.length < WARNING_DETAILS_MAX) {
+      warningDetails.push(symbolIdx === undefined ? { code, message } : { code, message, symbolIdx });
+    }
   };
 
   const { colours, stackIdxByPriority, opacityIgnored } = omapColourStack(file);
@@ -188,7 +227,7 @@ export function omapToDocumentInput(file: OmapFile, opts: OmapSourceOptions): Om
   let symbolsRendered = 0, symbolsUnrendered = 0, helpersHidden = 0;
   file.symbols.forEach((s, i) => {
     const conv = omapSymbolToRender(s, conversionCtx);
-    for (const w of conv.warnings) warn(w.code, w.message);
+    for (const w of conv.warnings) warn(w.code, w.message, 1, i);
     if (conv.render) symbolsRendered++;
     else symbolsUnrendered++;
     const kind = omapSymbolKind(s, symbolById);
@@ -212,9 +251,9 @@ export function omapToDocumentInput(file: OmapFile, opts: OmapSourceOptions): Om
   const missingIdx = new Map<string, number>();
   const objects: MapObjectInput[] = [];
   const counts = { objects: 0, coordinates: 0, symbols: 0, colours: colours.length, texts: 0, graphicObjects: 0, missingSymbolObjects: 0, symbolsRendered, symbolsUnrendered };
-  // Horizontal alignments seen per text symbol, to lift a uniform per-object alignment onto the symbol.
-  const alignsBySymbol = new Map<number, Set<number>>();
-  let tagsDropped = 0, boxesDropped = 0, verticalDropped = 0;
+  // Text objects of source symbols with their (horizontal, vertical) alignment, in object order (§4.4).
+  const textAligns: { obj: MapObjectInput; align: TextSymbol["align"]; verticalAlign: NonNullable<TextSymbol["verticalAlign"]> }[] = [];
+  let tagsDropped = 0;
 
   let sourceIndex = 0;
   for (const part of file.parts) {
@@ -242,7 +281,7 @@ export function omapToDocumentInput(file: OmapFile, opts: OmapSourceOptions): Om
           missingIdx.set(key, m);
           symbols.push({ code: src?.code ?? `#${o.symbol}`, name: src?.name ?? "", kind: kindOfObjectType(o.type), origin: "missing", hidden: false, render: null });
           dashRules.push("corner");
-          warn("MISSING_SYMBOL", src ? `objects use symbol ${src.code}, which has no usable definition` : `objects reference symbol ${o.symbol}, which is not in the symbol table`);
+          warn("MISSING_SYMBOL", src ? `objects use symbol ${src.code}, which has no usable definition` : `objects reference symbol ${o.symbol}, which is not in the symbol table`, 1, m);
         }
         symbolIdx = m;
         kind = kindOfObjectType(o.type);
@@ -259,16 +298,10 @@ export function omapToDocumentInput(file: OmapFile, opts: OmapSourceOptions): Om
           if (o.rotation) angleDeciDeg = radToDeciDeg(o.rotation);
           break;
         case OMAP_OBJECT_TYPE.text:
-          type = OBJECT_TYPE.text;
-          coordsIn = o.coords.slice(0, 1);
+          // A box text is formatted text: its four corners from the centre anchor and the size (§4.2).
+          type = o.boxSize ? OBJECT_TYPE.formattedText : OBJECT_TYPE.text;
+          coordsIn = o.boxSize ? boxCorners(o.coords[0], o.boxSize, o.rotation) : o.coords.slice(0, 1);
           if (o.rotation) angleDeciDeg = radToDeciDeg(o.rotation);
-          if (o.boxSize) boxesDropped++;
-          if ((o.vAlign ?? 0) !== 0) verticalDropped++;
-          if (o.symbol >= 0) {
-            let set = alignsBySymbol.get(symbolIdx);
-            if (!set) alignsBySymbol.set(symbolIdx, (set = new Set()));
-            set.add(o.hAlign ?? 0);
-          }
           break;
         default:
           type = kind === "area" ? OBJECT_TYPE.area : OBJECT_TYPE.line;
@@ -286,36 +319,52 @@ export function omapToDocumentInput(file: OmapFile, opts: OmapSourceOptions): Om
       const flags = Uint8Array.from(omapFlags(coordsIn, dashRules[symbolIdx] ?? "corner"));
       const obj: MapObjectInput = { symbolIdx, type, sourceIndex: idx, coords, flags };
       if (angleDeciDeg) obj.angleDeciDeg = angleDeciDeg;
-      if (type === OBJECT_TYPE.text) {
+      if (type === OBJECT_TYPE.text || type === OBJECT_TYPE.formattedText) {
         if (!o.text) {
           warn("EMPTY_TEXT_DROPPED");
           continue;
         }
         obj.text = o.text;
         counts.texts++;
+        if (symbolIdx === o.symbol) {
+          textAligns.push({ obj, align: H_ALIGN[o.hAlign ?? 0] ?? "left", verticalAlign: V_ALIGN[o.vAlign ?? 0] ?? "baseline" });
+        }
       }
       objects.push(obj);
       counts.coordinates += n;
     }
   }
+
+  // Per-object text alignment (§4.4): a text symbol takes the first (h, v) pair its objects use; each further pair
+  // gets an appended variant entry, and the objects with that pair point at it.
+  const variantIdx = new Map<string, number>();
+  const firstPair = new Map<number, string>();
+  for (const { obj, align, verticalAlign } of textAligns) {
+    const parentIdx = obj.symbolIdx;
+    const parent = symbols[parentIdx];
+    if (!parent.render || parent.render.type !== "text") continue;
+    const pair = `${align}/${verticalAlign}`;
+    const first = firstPair.get(parentIdx);
+    if (first === undefined) {
+      firstPair.set(parentIdx, pair);
+      setTextAlignment(parent.render, align, verticalAlign);
+      continue;
+    }
+    if (pair === first) continue;
+    const key = `${parentIdx}/${pair}`;
+    let idx = variantIdx.get(key);
+    if (idx === undefined) {
+      idx = symbols.length;
+      variantIdx.set(key, idx);
+      const render = { ...structuredClone(parent.render), id: `${parent.render.id}/${pair}` };
+      setTextAlignment(render, align, verticalAlign);
+      symbols.push({ ...parent, render });
+      counts.symbolsRendered++;
+    }
+    obj.symbolIdx = idx;
+  }
   counts.objects = objects.length;
   counts.symbols = symbols.length;
-
-  // Per-object text alignment: uniform → onto the symbol; mixed → warning, symbol stays left.
-  let mixedAlign = 0;
-  for (const [symbolIdx, set] of alignsBySymbol) {
-    const render = symbols[symbolIdx].render;
-    if (!render || render.type !== "text") continue;
-    if (set.size === 1) {
-      const a = H_ALIGN[[...set][0]];
-      if (a) render.align = a;
-    } else {
-      mixedAlign++;
-    }
-  }
-  if (mixedAlign) warn("TEXT_ALIGNMENT_PER_OBJECT", `${mixedAlign} text symbol(s) are used with several horizontal alignments; drawn with the symbol's alignment`, mixedAlign);
-  if (verticalDropped) warn("TEXT_VERTICAL_ALIGNMENT_DROPPED", `${verticalDropped} text object(s) with a vertical alignment other than baseline`, verticalDropped);
-  if (boxesDropped) warn("TEXT_BOX_DROPPED", `${boxesDropped} text box(es) imported as single-anchor texts`, boxesDropped);
   if (tagsDropped) warn("OBJECT_TAGS_DROPPED", `${tagsDropped} object(s) carried tags, which the document does not store`, tagsDropped);
   if (file.parts.length > 1) warn("PARTS_MERGED", `${file.parts.length} map parts merged: ${file.parts.map((p) => p.name).join(", ")}`, file.parts.length - 1);
   if (file.templates.length) warn("TEMPLATES_DROPPED", `${file.templates.length} template(s) referenced by the map are not imported: ${file.templates.map((t) => t.name).join(", ")}`, file.templates.length);
@@ -343,5 +392,5 @@ export function omapToDocumentInput(file: OmapFile, opts: OmapSourceOptions): Om
     warnings: [...warnings.values()],
   };
   const input: MapDocumentInput = { header, objects };
-  return { input, counts, warnings: [...warnings.values()], analysis: analyseDocumentInput(input) };
+  return { input, counts, warnings: [...warnings.values()], warningDetails, analysis: analyseDocumentInput(input) };
 }

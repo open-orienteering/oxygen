@@ -54,6 +54,41 @@ describe("fingerprintOf", () => {
   });
 });
 
+describe("colour-order equivalence (map-symbols §8.1, A15)", () => {
+  const WHITE = idx.get("white-railway")!, BLACK = idx.get("black100")!, GREEN = idx.get("green100-area")!;
+  // Mapper's railway: black 0.35 dashes 1.5 / 1.0 with black 0.1 rails at ±0.175 over a white 0.35 band.
+  const mapper = (over: { band?: number; rails?: number; main?: number } = {}) =>
+    parseRenderSymbol({
+      type: "line", id: "m", code: "509", name: "Railway",
+      main: { colour: over.main ?? BLACK, widthUm: 350, dash: { layout: "omap", dashUm: 1500, gapUm: 1000 } },
+      borders: { left: { colour: over.rails ?? BLACK, widthUm: 100, shiftUm: 175 }, right: { colour: over.rails ?? BLACK, widthUm: 100, shiftUm: 175 }, backgroundColour: over.band ?? WHITE, backgroundWidthUm: 350 },
+    }) as LineSymbol;
+
+  it("reads black dashes over a white band as white dashes over a black band", () => {
+    const f = fingerprintOf(mapper(), classOf);
+    expect(f.type === "line" && f).toMatchObject({ mainClass: { hue: "white" }, mainWidth: 250, dashUm: 1000, gapUm: 1500, borders: false });
+    expect(compareFingerprints(f, fp("ISOM2017-2:509")).score).toBeGreaterThanOrEqual(MATCH_THRESHOLDS.auto);
+  });
+
+  it("changes nothing for the library's own construction", () => {
+    const f = fp("ISOM2017-2:509");
+    expect(f.type === "line" && f).toMatchObject({ mainClass: { hue: "white" }, mainWidth: 250, dashUm: 1000, gapUm: 1500 });
+  });
+
+  it("applies only to a white band: a coloured band, or rails of another colour, still hard-fail", () => {
+    expect(compareFingerprints(fingerprintOf(mapper({ band: GREEN }), classOf), fp("ISOM2017-2:509")).hardFail).toBeDefined();
+    expect(compareFingerprints(fingerprintOf(mapper({ rails: GREEN }), classOf), fp("ISOM2017-2:509")).hardFail).toBeDefined();
+    const mixed = mapper();
+    mixed.borders!.right = { ...mixed.borders!.right!, colour: GREEN };
+    expect(compareFingerprints(fingerprintOf(mixed, classOf), fp("ISOM2017-2:509")).hardFail).toBeDefined();
+  });
+
+  it("does not turn a solid black line over white into a railway", () => {
+    const solid = parseRenderSymbol({ type: "line", id: "s", code: "509", name: "x", main: { colour: BLACK, widthUm: 350 }, borders: { left: { colour: BLACK, widthUm: 100, shiftUm: 175 }, right: { colour: BLACK, widthUm: 100, shiftUm: 175 }, backgroundColour: WHITE, backgroundWidthUm: 350 } }) as LineSymbol;
+    expect(compareFingerprints(fingerprintOf(solid, classOf), fp("ISOM2017-2:509")).hardFail).toBeDefined();
+  });
+});
+
 describe("compareFingerprints", () => {
   it("scores a symbol against itself at 1", () => {
     for (const e of lib.entries) {
@@ -110,6 +145,29 @@ describe("compareFingerprints", () => {
 });
 
 describe("fingerprintHash", () => {
+  it("scores OCAD's railway and power line constructions as auto against the B10 entries", () => {
+    // Sprint's 509.100: white 0.26 dashes 1.01 / 1.5 over a black 0.45 band (OCAD double-line fill).
+    const railway = parseRenderSymbol({
+      type: "line", id: "x", code: "509.100", name: "Railway",
+      main: { colour: idx.get("white-railway")!, widthUm: 260, dash: { layout: "ocad", dashUm: 1010, gapUm: 1500 } },
+      borders: { backgroundColour: idx.get("black100")!, backgroundWidthUm: 450 },
+    }) as LineSymbol;
+    const canonRailway = fp("ISOM2017-2:509");
+    expect(canonRailway).toMatchObject({ mainClass: { hue: "white" }, dashed: true, background: true, borders: false });
+    const r = compareFingerprints(fingerprintOf(railway, classOf), canonRailway);
+    expect(r.hardFail).toBeUndefined();
+    expect(r.score).toBeGreaterThanOrEqual(MATCH_THRESHOLDS.auto);
+    // Club-2026's 510.0: OCAD corner symbol (bar ±0.37) on a 0.14 line → corners, as the library now places pylons.
+    const power = parseRenderSymbol({
+      type: "line", id: "x", code: "510.0", name: "Power line",
+      main: { colour: idx.get("black100")!, widthUm: 140 },
+      glyphs: [{ glyph: { parts: [{ kind: "stroke", colour: idx.get("black100")!, widthUm: 140, geometry: { coords: [0, -370, 0, 370] } }], rotatable: true }, placement: { at: "corners" } }],
+    }) as LineSymbol;
+    const p = compareFingerprints(fingerprintOf(power, classOf), fp("ISOM2017-2:510"));
+    expect(p.reasons.filter((x) => x.startsWith("glyph placement") || x.startsWith("glyph box"))).toEqual([]);
+    expect(p.score).toBeGreaterThanOrEqual(MATCH_THRESHOLDS.auto);
+  });
+
   it("is stable for equal fingerprints and differs for different ones", () => {
     expect(fingerprintHash(fp("ISOM2017-2:101"))).toBe(fingerprintHash(fp("ISOM2017-2:101")));
     expect(fingerprintHash(fp("ISOM2017-2:101"))).not.toBe(fingerprintHash(fp("ISOM2017-2:102")));

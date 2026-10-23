@@ -87,8 +87,12 @@ through it. Palette entries inserted by colour alignment have
   match?: { canonicalId, method, state, confidence, reasons, reviewed, libraryVersion, alternatives? } }
 ```
 
-- One entry per **source symbol**, in source table order (`sourceIndex`).
-  `code` is the number as written. `kind` is the source type: `point`,
+- One entry per **source symbol**, in source table order (`sourceIndex`),
+  plus, for Mapper sources, one appended `origin: "source"` entry per
+  further (horizontal, vertical) alignment pair a text symbol's objects
+  use — an *alignment variant* sharing the parent's `code`, `name` and
+  `sourceIndex`, with its own IR id (`docs/map-import.md` §4.4, since
+  `omap-5`). `code` is the number as written. `kind` is the source type: `point`,
   `line`, `area`, `text`, `rectangle`, `unknown`. `hidden` is the
   source's default visibility (OCAD status bit 1); consumers may
   override it.
@@ -169,7 +173,12 @@ geometry.
 ### 2.6 Warning codes
 
 Stable identifiers (06 §4.4); the UI translates them, tests assert on
-them.
+them. The header keeps one `{code, count, message}` per code, the message
+being the first emitted; the per-symbol messages behind a code are in the
+import report's `warningDetails`, not in the document (`docs/map-import.md`
+§3.6). What each code means for the import — unsupported construct, by-design
+drop, source data error, … — is the classification in `docs/map-import.md` §7
+(`WARNING_CLASS`); it is a property of the code, not stored per entry.
 
 | Code | Meaning |
 |---|---|
@@ -179,6 +188,8 @@ them.
 | `DUPLICATE_SYMBOL_NUMBER` | The same number is defined twice; objects use the first |
 | `EMPTY_GEOMETRY_DROPPED` | Objects with no coordinates were dropped |
 | `UNKNOWN_OBJECT_TYPE` | Object type outside 1–7, dropped |
+| `SYMBOL_REFERENCE_INVALID` | A symbol refers to another symbol that does not resolve to a usable definition — an OCAD area's border symbol that is the area itself, missing or not a line; a Mapper combined part that references itself or a missing symbol. A source data error: the reference is skipped, the rest of the symbol is kept. The message names the symbol and the case (`docs/map-import.md` §3.3). Since `ocad-10` / `omap-4`; earlier documents carry these as `SYMBOL_FEATURE_DROPPED` |
+| `RECTANGLE_GRID_DROPPED` | An OCAD rectangle symbol's grid (cells, numbering) is not drawn — a by-design drop; the outline and its corner radius are (`docs/map-import.md` §3.3). Since `ocad-11`; earlier documents carry it as `SYMBOL_FEATURE_DROPPED` |
 | `READER_WARNING` | The source reader reported warnings (count; since `ocad-7` the OCAD texts are in the import report as `readerWarnings`, at most 50 — `docs/map-import.md` §3.6). Since `ocad-6` the reader's dropped symbol types are `SYMBOL_TYPE_UNSUPPORTED` instead |
 | `CRS_UNRESOLVED` | The source declares a real-world grid that maps to no EPSG code (OCAD grid id not in the reader's table and no `e`; Mapper CRS spec not parsed); `crs` and `paperOrigin` are null, the message names the grid |
 
@@ -226,7 +237,11 @@ a zero-copy `Int32Array` view when the input buffer itself is aligned.
 - **Curves** stay cubic Béziers; **holes** are one coordinate run with a
   flag-16 ring start, as the source encodes them. Text objects keep their
   source coordinates verbatim (OCAD unformatted text: anchor plus the four
-  box corners).
+  box corners; formatted text, type 5: the box's four corners bottom-left,
+  bottom-right, top-right, top-left; line text, type 6: its path). A
+  Mapper box text is stored as type 5 with corners computed from its
+  centre and size, turned by its rotation and rounded to native units
+  (`map-import.md` §4.2, §6).
 
 ## 5. Geometry section
 
@@ -278,7 +293,9 @@ the corpus and in unit tests). Used for fixtures, diffs and the
 `mapDocument.documentRenderInput(doc, { unmatched, proxyColours, includeHidden })`
 produces the symboliser's input: coordinates in µm, `RenderObject`s with
 `angleDeg = angle / 10`, text from `strings`, `closed` for areas and
-rectangles. Symbol resolution per object: for a symbol whose `match` is
+rectangles, and `textLayout` from the object type — `box` for formatted
+text (type 5), `path` for line text (type 6), absent otherwise
+(`map-rendering.md` §4.9). Symbol resolution per object: for a symbol whose `match` is
 applied (`state: "auto"`, or `reviewed` with a `canonicalId`) the library
 entry resolved through the stack's `paletteIds` and scaled by
 `documentFactor` (`canonical: false` turns this off and draws every
@@ -289,6 +306,19 @@ Hidden symbols' objects are skipped unless `includeHidden`. Statistics:
 `total, rendered, proxied, hidden, dropped, coordinates, canonicalSymbols,
 canonicalMissing` (the last counts applied matches whose entry or colours
 could not be resolved — always 0 for a document the importer produced).
+
+**Canonically drawn text keeps the source's layout** (user decision
+2026-10-22, B8). When both the canonical entry and the symbol's own
+`render` are text, the canonical copy takes from the source symbol its
+layout fields — `align`, `lineSpacing`, `paragraphSpacingUm`,
+`charSpacing`, and, when the source has them, `verticalAlign`,
+`wordSpacing` and `tabStops` — and keeps the entry's appearance:
+`fontFamily`, `fontSizeUm` / `digitHeightUm`, `weight`, `italic`,
+`colour`, `halo`. The source's `shadow` and `frame` are **not** carried:
+a match means the library's look (a matched line symbol likewise loses
+its source framing), and the text fingerprint (`map-symbols.md` §8.1)
+never reads any layout field, so none of them is evidence for or against
+the match. A field absent on the source is left as the entry has it.
 
 ## 9. Measured on the corpus
 

@@ -21,11 +21,12 @@ import { type OcadSymbolDefLike, ocadSymbolToRender } from "./ocad-symbols.js";
 import type { MapDocumentInput, MapObjectInput } from "../map-document/codec.js";
 import { analyseDocumentInput, type DocumentAnalysis } from "./analyse.js";
 import { OBJECT_TYPE } from "../map-document/header.js";
+import { WARNING_DETAILS_MAX, type ImportWarningDetail } from "./report.js";
 import type { DocumentColour, DocumentSymbolInput, DocumentWarning, Georeferencing, MapDocumentHeaderInput } from "../map-document/header.js";
 
 /** OCAD coordinates are 1/100 mm. */
 export const OCAD_UNITS_PER_MM = 100;
-export const OCAD_IMPORTER_VERSION = "ocad-7";
+export const OCAD_IMPORTER_VERSION = "ocad-13";
 /** Reader warning texts kept for the import report (docs/map-import.md §3.6). */
 export const READER_WARNING_TEXTS_MAX = 50;
 
@@ -118,6 +119,8 @@ export interface OcadSourceResult {
     symbolsRendered: number; symbolsUnrendered: number;
   };
   warnings: DocumentWarning[];
+  /** One entry per warning emission that carries a message (docs/map-import.md §3.6), at most `WARNING_DETAILS_MAX`; for the import report, not the document. */
+  warningDetails: ImportWarningDetail[];
   /** The reader's own warning texts behind `READER_WARNING`, in reader order, at most `READER_WARNING_TEXTS_MAX`; for the import report, not the document. */
   readerWarnings: string[];
   /** Stage 5 over `input` (docs/map-import.md §3.8); not part of the document. */
@@ -225,10 +228,14 @@ export function ocadGeoreferencing(ocad: OcadFileLike): { georeferencing: Georef
 
 export function ocadToDocumentInput(ocad: OcadFileLike, opts: OcadSourceOptions): OcadSourceResult {
   const warnings = new Map<string, DocumentWarning>();
-  const warn = (code: string, message?: string, count = 1) => {
+  const warningDetails: ImportWarningDetail[] = [];
+  const warn = (code: string, message?: string, count = 1, symbolIdx?: number) => {
     const w = warnings.get(code);
     if (w) w.count += count;
     else warnings.set(code, { code, count, message });
+    if (message !== undefined && warningDetails.length < WARNING_DETAILS_MAX) {
+      warningDetails.push(symbolIdx === undefined ? { code, message } : { code, message, symbolIdx });
+    }
   };
 
   const colours = ocadColourStack(ocad.colors);
@@ -243,7 +250,7 @@ export function ocadToDocumentInput(ocad: OcadFileLike, opts: OcadSourceOptions)
     const s = ocad.symbols[i];
     if (!defBySymNum.has(s.symNum)) defBySymNum.set(s.symNum, s);
   }
-  const conversionCtx = { colourIndex: (n: number) => stackIdxByNumber.get(n), symbolByNumber: (n: number) => defBySymNum.get(n) };
+  const conversionCtx = { colourIndex: (n: number) => stackIdxByNumber.get(n), symbolByNumber: (n: number) => defBySymNum.get(n), ocadVersion: ocad.header.version };
   let symbolsRendered = 0, symbolsUnrendered = 0;
   for (let i = 0; i < ocad.symbols.length; i++) {
     const s = ocad.symbols[i];
@@ -253,7 +260,7 @@ export function ocadToDocumentInput(ocad: OcadFileLike, opts: OcadSourceOptions)
     } else {
       const conv = ocadSymbolToRender(s, conversionCtx);
       render = conv.render;
-      for (const w of conv.warnings) warn(w.code, w.message);
+      for (const w of conv.warnings) warn(w.code, w.message, 1, i);
     }
     if (render) symbolsRendered++;
     else symbolsUnrendered++;
@@ -268,7 +275,7 @@ export function ocadToDocumentInput(ocad: OcadFileLike, opts: OcadSourceOptions)
     };
     if (s.fontName) entry.sourceFont = s.fontName;
     if (!symbolIdxBySymNum.has(s.symNum)) symbolIdxBySymNum.set(s.symNum, symbols.length);
-    else warn("DUPLICATE_SYMBOL_NUMBER", `symbol ${s.number} defined more than once; first definition used`);
+    else warn("DUPLICATE_SYMBOL_NUMBER", `symbol ${s.number} defined more than once; first definition used`, 1, i);
     symbols.push(entry);
   }
 
@@ -316,7 +323,7 @@ export function ocadToDocumentInput(ocad: OcadFileLike, opts: OcadSourceOptions)
           symbolIdx = symbols.length;
           missingIdx.set(o.sym, symbolIdx);
           symbols.push({ code: `${Math.floor(o.sym / 1000)}.${o.sym % 1000}`, name: "", kind: kindOfObjectType(o.otp), origin: "missing", hidden: false, render: null });
-          warn("MISSING_SYMBOL", `objects reference symbol ${Math.floor(o.sym / 1000)}.${o.sym % 1000}, which is not in the symbol table`);
+          warn("MISSING_SYMBOL", `objects reference symbol ${Math.floor(o.sym / 1000)}.${o.sym % 1000}, which is not in the symbol table`, 1, symbolIdx);
         }
         counts.missingSymbolObjects++;
       }
@@ -392,5 +399,5 @@ export function ocadToDocumentInput(ocad: OcadFileLike, opts: OcadSourceOptions)
     warnings: [...warnings.values()],
   };
   const input: MapDocumentInput = { header, objects };
-  return { input, counts, warnings: [...warnings.values()], readerWarnings, analysis: analyseDocumentInput(input) };
+  return { input, counts, warnings: [...warnings.values()], warningDetails, readerWarnings, analysis: analyseDocumentInput(input) };
 }

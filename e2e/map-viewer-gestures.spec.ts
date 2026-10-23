@@ -2,7 +2,8 @@
  * Map viewer gesture / measure / rotation regressions from the
  * map-viewer-fixes bundle (ruler touch, undo HUD, two-finger rotate).
  */
-import { test, expect, type Locator, type Page } from "@playwright/test";
+import { test, expect } from "./helpers/map-pipeline";
+import type { Locator, Page } from "@playwright/test";
 import { reseed } from "./helpers/reseed";
 import { uploadEventMap } from "./helpers/map-upload";
 
@@ -19,6 +20,7 @@ test.describe("map viewer gestures (touch)", () => {
 
   test("measure: pan does not leave phantom cursor; taps place points; undo works", async ({
     page,
+    mapPipeline,
   }) => {
     test.setTimeout(120_000);
     await page.goto("/");
@@ -29,6 +31,8 @@ test.describe("map viewer gestures (touch)", () => {
     await uploadEventMap(page);
     const viewer = page.getByTestId("map-viewer").first();
     await expect(viewer).toBeVisible({ timeout: 60000 });
+    // Dual-run spec (docs/map-pipeline-switch.md §5): the project's pipeline is the one drawn.
+    await expect(viewer).toHaveAttribute("data-map-pipeline", mapPipeline);
 
     await viewer.getByTitle("Measure distance").tap();
     await expect(viewer.getByTitle("Measure distance")).toHaveClass(
@@ -116,6 +120,7 @@ test.describe("map viewer gestures (desktop)", () => {
 
   test("measure undo click removes a point without placing another", async ({
     page,
+    mapPipeline,
   }) => {
     test.setTimeout(120_000);
     await page.goto("/");
@@ -126,6 +131,8 @@ test.describe("map viewer gestures (desktop)", () => {
     await uploadEventMap(page);
     const viewer = page.getByTestId("map-viewer").first();
     await expect(viewer).toBeVisible({ timeout: 60000 });
+    // Dual-run spec (docs/map-pipeline-switch.md §5): the project's pipeline is the one drawn.
+    await expect(viewer).toHaveAttribute("data-map-pipeline", mapPipeline);
 
     await viewer.getByTitle("Measure distance").click();
     const box = await viewer.boundingBox();

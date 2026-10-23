@@ -10,6 +10,8 @@
 #   ./backfill.sh --tag edge --dry-run      # pick the image explicitly
 #   ./backfill.sh --event <nameId>          # club rows + that event's rows only
 #   ./backfill.sh --limit 5                 # at most n maps this run
+#   ./backfill.sh --rematch [--dry-run]     # run map-rematch instead (stale pins after an
+#                                           # importer/library bump, docs/release-slice-b.md §4)
 #
 # Re-runnable by construction: a run only revisits rows still missing a
 # document. Exit 1 if any map failed (the gate for slice A is zero failures).
@@ -24,12 +26,17 @@ GHCR_IMAGE="${GHCR_IMAGE:-ghcr.io/open-orienteering/oxygen}"
 export GHCR_IMAGE
 
 TAG="${DEPLOY_TAG:-stable}"
+MODE=backfill
 CLI_ARGS=()
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --tag)
       TAG="$2"
       shift 2
+      ;;
+    --rematch)
+      MODE=rematch
+      shift
       ;;
     -h|--help)
       sed -n '2,17p' "$SELF" | sed 's/^# \{0,1\}//'
@@ -43,15 +50,15 @@ while [[ $# -gt 0 ]]; do
 done
 
 IMAGE_REF="$(node "$REPO_ROOT/scripts/ghcr-ref.mjs" resolve "$TAG")"
-JOB="${SERVICE}-map-backfill"
+JOB="${SERVICE}-map-${MODE}"
 
 # The CLI takes its flags as plain argv; pass them through unchanged.
-CLI="node packages/api/dist/cli/map-backfill.js"
+CLI="node packages/api/dist/cli/map-${MODE}.js"
 if [[ ${#CLI_ARGS[@]} -gt 0 ]]; then
   CLI="$CLI $(printf '%q ' "${CLI_ARGS[@]}")"
 fi
 
-echo "── Backfill job ${JOB} with ${IMAGE_REF}"
+echo "── ${MODE} job ${JOB} with ${IMAGE_REF}"
 echo "   command: ${CLI}"
 # Club-full peaks at ~360 MB RSS for the thumbnail alone; one map at a time.
 # The club's Cloud SQL tier allows 25 connections: the service holds up to
@@ -85,7 +92,7 @@ gcloud logging read \
   --format='value(textPayload)' --freshness=2h | sed '/^$/d' | tail -200
 
 if [[ $STATUS -ne 0 ]]; then
-  echo "!! Backfill finished with failures (exit ${STATUS}). Re-run after fixing; only rows still missing a document are revisited." >&2
+  echo "!! ${MODE} finished with failures (exit ${STATUS}). Re-run after fixing; only rows still missing a document are revisited." >&2
   exit "$STATUS"
 fi
 echo "Backfill finished with zero failures."

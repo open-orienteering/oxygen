@@ -8,8 +8,8 @@
  * object is drawn; the S1 "envelope") or nothing (the object is dropped).
  */
 
-import { proxySymbols } from "../render/ocad-objects.js";
-import type { RenderSymbol } from "../render/symbol.js";
+import { proxySymbols } from "../render/proxy-symbols.js";
+import type { RenderSymbol, TextSymbol } from "../render/symbol.js";
 import type { RenderObject } from "../render/symbolise.js";
 import { scaleRenderSymbol } from "../render/transform.js";
 import { getLibraryEntry } from "../symbol-library/index.js";
@@ -62,10 +62,21 @@ export function canonicalRender(doc: Pick<MapDocument, "header">, sym: DocumentS
   const entry = getLibraryEntry(sym.match.canonicalId);
   if (!entry) return undefined;
   try {
-    return scaleRenderSymbol(resolveEntry(entry, index), doc.header.documentFactor);
+    const canonical = scaleRenderSymbol(resolveEntry(entry, index), doc.header.documentFactor);
+    return canonical.type === "text" && sym.render?.type === "text" ? withSourceTextLayout(canonical, sym.render) : canonical;
   } catch {
     return undefined;
   }
+}
+
+/** Layout fields a canonically drawn text symbol keeps from its source (map-document-format §8). */
+const SOURCE_TEXT_LAYOUT = ["align", "verticalAlign", "lineSpacing", "paragraphSpacingUm", "charSpacing", "wordSpacing", "tabStops"] as const;
+
+/** The entry's appearance with the source's layout: where the object's anchor sits and how its lines are set is the mapper's choice, not the symbol's identity. */
+function withSourceTextLayout(canonical: TextSymbol, source: TextSymbol): TextSymbol {
+  const out: TextSymbol = { ...canonical };
+  for (const k of SOURCE_TEXT_LAYOUT) if (source[k] !== undefined) (out as Record<string, unknown>)[k] = source[k];
+  return out;
 }
 
 const kindOfType = (type: number): RenderSymbol["type"] | undefined =>
@@ -74,6 +85,10 @@ const kindOfType = (type: number): RenderSymbol["type"] | undefined =>
       : type === OBJECT_TYPE.area ? "area"
         : type === OBJECT_TYPE.text || type === OBJECT_TYPE.formattedText || type === OBJECT_TYPE.lineText ? "text"
           : undefined;
+
+/** Text layout by object type (map-rendering §4.9): formatted text is box text, line text runs along its path. */
+export const textLayoutOfType = (type: number): RenderObject["textLayout"] =>
+  type === OBJECT_TYPE.formattedText ? "box" : type === OBJECT_TYPE.lineText ? "path" : undefined;
 
 export function documentRenderInput(doc: MapDocument, opts: DocumentRenderOptions = {}): DocumentRenderInput {
   const unmatched = opts.unmatched ?? "proxy";
@@ -136,7 +151,11 @@ export function documentRenderInput(doc: MapDocument, opts: DocumentRenderOption
     const obj: RenderObject = { symbolIdx: renderIdx, path: { coords, flags, closed: kind === "area" || type === OBJECT_TYPE.rectangle } };
     const angle = doc.attrs.angle[i];
     if (angle) obj.angleDeg = angle / 10;
-    if (kind === "text" && text) obj.text = text;
+    if (kind === "text" && text) {
+      obj.text = text;
+      const layout = textLayoutOfType(type);
+      if (layout) obj.textLayout = layout;
+    }
     objects.push(obj);
     stats.coordinates += n;
     if (viaProxy) stats.proxied++;

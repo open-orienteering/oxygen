@@ -23,18 +23,37 @@ import {
   type DescriptionSheetRow,
 } from "@oxygen/shared";
 import { TileBlobCacheProvider, TileLayer } from "./TileLayer";
+import { MapLayerMessage, VectorMapLayer } from "./VectorMapLayer";
 import { MapLoupe } from "./MapLoupe";
 import { kioskKeyFromUrl } from "../lib/kiosk-key";
 import {
-  type TileViewport,
   type WGS84Bounds,
   type AffineTransform,
-  latlngToPixel,
-  pixelToLatlng,
-  fitBounds,
-  metersPerPixel,
   buildAffineTransform,
 } from "../lib/geo-utils";
+import {
+  type MapViewport,
+  type ViewportContext,
+  centreOnGeo,
+  centreShiftPx,
+  fitGeo,
+  fitMm,
+  geoToInner,
+  geoToMm,
+  glView,
+  innerToGeo,
+  innerToMm,
+  mercatorEquivalentZoom,
+  metresPerPx,
+  mmToInner,
+  panBy,
+  pxPerMapMm,
+  viewportRotationDeg,
+  zoomAt,
+} from "../lib/map-viewport";
+import { resolveMapPipeline, type MapPipeline } from "../lib/map-pipeline";
+import { useMapDocument } from "../lib/map-document-cache";
+import { boundsMm, paperFrameOf, type MapBudget } from "../lib/vector-map";
 import { rotatedBoundingBox } from "../lib/map-rotation";
 import {
   shouldSuppressSyntheticMouse,
@@ -298,6 +317,23 @@ interface Props {
   gpsRoutes?: Array<{ color: string; points: Array<{ lat: number; lng: number }> }>;
   /** Course-editor gesture hooks. Editing is enabled iff this is set. */
   editor?: MapViewerEditorProps;
+  /**
+   * Content hash of the map's pinned document (`/api/map-documents/:hash`).
+   * With one, a `vector` event draws the vector base layer
+   * (docs/map-rendering.md §5.4); without one the map stays on tiles.
+   */
+  documentHash?: string | null;
+  /**
+   * The pipeline to draw with (docs/map-pipeline-switch.md §3): the event's
+   * switch after the host's fallback rule; default `legacy`.
+   */
+  mapPipeline?: MapPipeline;
+  /** The vector layer cannot draw in this browser (no WebGL2, lost context). */
+  onVectorUnavailable?: () => void;
+  /** GPU budget of the vector layer: a club map's 150 MB or an event map's 30 MB. */
+  mapBudget?: MapBudget;
+  /** Operator rotation correction (`map_files.rotation_correction`), degrees, for the paper frame. */
+  rotationCorrection?: number | null;
 }
 
 // ─── Helpers ────────────────────────────────────────────────
@@ -326,7 +362,7 @@ interface EditorLabelHit {
 
 export function MapViewer({
   mapBounds,
-  mapScale,
+  mapScale: mapScaleProp,
   northOffset,
   cutRotationDeg,
   mapVersion,
@@ -351,6 +387,11 @@ export function MapViewer({
   hideControls = false,
   gpsRoutes,
   editor,
+  documentHash,
+  mapPipeline = "legacy",
+  onVectorUnavailable,
+  mapBudget = "event",
+  rotationCorrection,
 }: Props) {
   const { nameId } = useParams<{ nameId: string }>();
   const { t } = useTranslation("dashboard");
@@ -359,10 +400,26 @@ export function MapViewer({
   const [showTwoFingerHint, setShowTwoFingerHint] = useState(false);
   const tileUrlBase = nameId ? `/api/map-tile/${nameId}` : "/api/map-tile";
 
+  // Base layer: tiles over a Web Mercator view, or the map document over a
+  // paper-space view (docs/map-rendering.md §5.4), chosen by the event's
+  // switch; a map without a pinned document stays on tiles.
+  const pipeline = resolveMapPipeline(mapPipeline, documentHash);
+  const paperMode = pipeline === "vector";
+  const { state: docState, retry: retryDocument } = useMapDocument(paperMode ? documentHash : null, nameId ?? null);
+  const mapDoc = docState.status === "ready" ? docState.doc : null;
+  const paperFrame = useMemo(
+    () => (mapDoc ? paperFrameOf(mapDoc.header, rotationCorrection) : null),
+    [mapDoc, rotationCorrection],
+  );
+  // The paper view's distances follow the frame its transform uses, not the legacy column.
+  const mapScale = paperMode && paperFrame ? paperFrame.mapScale : mapScaleProp;
+
   const containerRef = useRef<HTMLDivElement>(null);
-  const [viewport, setViewport] = useState<TileViewport | null>(null);
-  const viewportRef = useRef<TileViewport | null>(null);
+  const [viewport, setViewport] = useState<MapViewport | null>(null);
+  const viewportRef = useRef<MapViewport | null>(null);
   viewportRef.current = viewport;
+  // Live viewport context for native listeners and callbacks (set below, once the frame size and affine are known).
+  const vctxRef = useRef<ViewportContext>({ w: 0, h: 0, affine: null, frame: null });
 
   const isPanningRef = useRef(false);
   const lastPosRef = useRef({ x: 0, y: 0 });
@@ -378,7 +435,7 @@ export function MapViewer({
   const [tileProgress, setTileProgress] = useState<{ total: number; done: number; rendering: boolean } | null>(null);
   const renderCompleteForRef = useRef<string | null>(null);
   useEffect(() => {
-    if (!mapBounds) return; // no map
+    if (!mapBounds || paperMode) return; // no map, or no tiles
     if (renderCompleteForRef.current === (nameId ?? "")) return;
 
     let cancelled = false;
@@ -409,7 +466,7 @@ export function MapViewer({
       cancelled = true;
       clearTimeout(timer);
     };
-  }, [mapBounds, nameId]);
+  }, [mapBounds, nameId, paperMode]);
 
   // ─── Measure tool state ──────────────────────────────────
   const [measuring, setMeasuring] = useState(false);
@@ -456,7 +513,7 @@ export function MapViewer({
     if (locateMode !== "following" || !geo.position) return;
     const { lat, lng } = geo.position;
     setViewport((prev) =>
-      prev ? { ...prev, centerLat: lat, centerLng: lng } : prev,
+      prev ? centreOnGeo(prev, vctxRef.current, lat, lng) : prev,
     );
   }, [locateMode, geo.position]);
 
@@ -488,7 +545,7 @@ export function MapViewer({
     if (geo.position) {
       setViewport((prev) =>
         prev
-          ? { ...prev, centerLat: geo.position!.lat, centerLng: geo.position!.lng }
+          ? centreOnGeo(prev, vctxRef.current, geo.position!.lat, geo.position!.lng)
           : prev,
       );
     }
@@ -502,14 +559,14 @@ export function MapViewer({
     x: number;
     y: number;
     dist: number;
-    viewport: TileViewport;
+    viewport: MapViewport;
   } | null>(null);
   const touchGestureFrameRef = useRef<number | null>(null);
   const pendingTouchGestureRef = useRef<{ x: number; y: number; dist: number } | null>(null);
   const touchStartPosRef = useRef<Pt | null>(null);
   const hadMultiTouchRef = useRef(false);
   const lastTouchEndAtRef = useRef<number | null>(null);
-  const touchStartViewportCenterRef = useRef<Pt | null>(null);
+  const touchStartViewportRef = useRef<MapViewport | null>(null);
   const pinchStartAngleRef = useRef<number | null>(null);
   const pinchStartBearingRef = useRef(0);
   const rotateActivatedRef = useRef(false);
@@ -623,9 +680,10 @@ export function MapViewer({
     return () => ro.disconnect();
   }, []);
 
-  // Map rotation: negate northOffset so map north (the meridian-line
-  // direction when the file has one) points up on screen
-  const rotDeg = (northOffset ? -northOffset : 0) + userBearing;
+  // Map rotation: the drawn meridians vertical on screen — over tiles
+  // (true north up) by −northOffset, over the paper view (paper north
+  // up) by the meridian tilt only (see viewportRotationDeg).
+  const rotDeg = viewportRotationDeg(paperMode ? "paper" : "mercator", northOffset, cutRotationDeg, userBearing);
   const rotRad = (rotDeg * Math.PI) / 180;
   // Effective render dimensions: minimum bounding box of a rectangle that
   // fully covers the outer container after rotation. See rotatedBoundingBox
@@ -650,21 +708,81 @@ export function MapViewer({
     return buildAffineTransform(pts);
   }, [controls, calibration]);
 
+  const vctx: ViewportContext = useMemo(
+    () => ({ w: renderW, h: renderH, affine, frame: paperFrame }),
+    [renderW, renderH, affine, paperFrame],
+  );
+  vctxRef.current = vctx;
+
+  // The vector layer's GL view: the paper view at device pixels, the
+  // container's size, the inner frame's rotation (docs/map-rendering.md §5.4).
+  const dpr = typeof window !== "undefined" ? window.devicePixelRatio || 1 : 1;
+  const glViewRect = useMemo(
+    () => viewport?.kind === "paper" && containerSize.w > 0 && containerSize.h > 0
+      ? glView(viewport, containerSize.w, containerSize.h, dpr, rotDeg)
+      : null,
+    [viewport, containerSize, dpr, rotDeg],
+  );
+
+  /** A control's position in paper mm: its own mm, else its lat/lng through the document's frame. */
+  const controlMm = useCallback(
+    (c: ControlOverlay): Pt | null => {
+      if (c.x !== 0 || c.y !== 0) return { x: c.x, y: c.y };
+      if (c.lat === 0 && c.lng === 0) return null;
+      return geoToMm(paperFrame, c.lat, c.lng);
+    },
+    [paperFrame],
+  );
+
+  /** Fits the whole map: the document's extent (paper) or the tile bounds (mercator). */
+  const fitWholeMap = useCallback(() => {
+    if (containerSize.w === 0 || containerSize.h === 0) return;
+    if (paperMode) {
+      if (mapDoc) setViewport(fitMm(boundsMm(mapDoc.header), containerSize.w, containerSize.h, 0.05));
+    } else if (mapBounds) {
+      setViewport(fitGeo(mapBounds, containerSize.w, containerSize.h, 0.05));
+    }
+  }, [paperMode, mapDoc, mapBounds, containerSize]);
+
   // ─── Viewport initialization from map bounds ────────────
 
   useEffect(() => {
+    // The flag flipped under a mounted viewer: start over in the other model.
+    if (viewport && viewport.kind !== (paperMode ? "paper" : "mercator")) {
+      setViewport(null);
+      return;
+    }
     if (viewport) return; // already initialized
-    if (!mapBounds || containerSize.w === 0 || containerSize.h === 0) return;
-    setViewport(fitBounds(mapBounds, containerSize.w, containerSize.h, 0.05));
+    if (containerSize.w === 0 || containerSize.h === 0) return;
+    if (paperMode) {
+      if (!mapDoc) return;
+      setViewport(fitMm(boundsMm(mapDoc.header), containerSize.w, containerSize.h, 0.05));
+    } else {
+      if (!mapBounds) return;
+      setViewport(fitGeo(mapBounds, containerSize.w, containerSize.h, 0.05));
+    }
     hasInitialFitRef.current = false;
     lastFocusKeyRef.current = "";
-  }, [mapBounds, containerSize, viewport]);
+  }, [mapBounds, containerSize, viewport, paperMode, mapDoc]);
 
   // ─── Helper: compute bounds from controls in lat/lng ─────
 
   const fitToControlBounds = useCallback(
     (ctrls: ControlOverlay[], padding: number) => {
       if (ctrls.length === 0 || containerSize.w === 0 || containerSize.h === 0) return;
+      if (paperMode) {
+        let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+        for (const c of ctrls) {
+          const mm = controlMm(c);
+          if (!mm) continue;
+          minX = Math.min(minX, mm.x); maxX = Math.max(maxX, mm.x);
+          minY = Math.min(minY, mm.y); maxY = Math.max(maxY, mm.y);
+        }
+        if (minX === Infinity) return;
+        // Ring radius 2.5 mm on paper, so control rings aren't clipped at the edge.
+        setViewport(fitMm({ minX: minX - 2.5, minY: minY - 2.5, maxX: maxX + 2.5, maxY: maxY + 2.5 }, containerSize.w, containerSize.h, padding));
+        return;
+      }
       let minLat = Infinity, maxLat = -Infinity, minLng = Infinity, maxLng = -Infinity;
       for (const c of ctrls) {
         if (c.lat === 0 && c.lng === 0) continue;
@@ -683,9 +801,9 @@ export function MapViewer({
         minLng -= lngMargin; maxLng += lngMargin;
       }
       const bounds: WGS84Bounds = { north: maxLat, south: minLat, east: maxLng, west: minLng };
-      setViewport(fitBounds(bounds, containerSize.w, containerSize.h, padding));
+      setViewport(fitGeo(bounds, containerSize.w, containerSize.h, padding));
     },
-    [containerSize, mapScale],
+    [containerSize, mapScale, paperMode, controlMm],
   );
 
   // Re-fit when container size changes (e.g. fullscreen toggle).
@@ -698,7 +816,7 @@ export function MapViewer({
     if (!hasInitialFitRef.current) return;
     const visibleControls = controls.filter((c) => c.visible !== false);
     if (visibleControls.length < 2) {
-      if (mapBounds) setViewport(fitBounds(mapBounds, containerSize.w, containerSize.h, 0.05));
+      fitWholeMap();
       return;
     }
     fitToControlBounds(visibleControls, hideControls ? 0.02 : 0.05);
@@ -729,7 +847,18 @@ export function MapViewer({
     const ch = containerSize.h || containerRef.current.clientHeight;
     if (cw === 0 || ch === 0) return;
 
-    if (focusControls.length === 1) {
+    if (focusControls.length === 1 && paperMode) {
+      const fcMm = controlMm(focusControls[0]);
+      if (!fcMm) return;
+      const all = controls.filter((c) => c.type === "Control").map(controlMm).filter((p): p is Pt => p !== null);
+      if (all.length >= 2) {
+        const xs = all.map((p) => p.x), ys = all.map((p) => p.y);
+        const ext = Math.max(Math.max(...xs) - Math.min(...xs), Math.max(...ys) - Math.min(...ys)) * 0.167;
+        setViewport(fitMm({ minX: fcMm.x - ext, minY: fcMm.y - ext, maxX: fcMm.x + ext, maxY: fcMm.y + ext }, cw, ch, 0.05));
+      } else {
+        setViewport((prev) => prev?.kind === "paper" ? { ...prev, centreX: fcMm.x * 1000, centreY: fcMm.y * 1000 } : prev);
+      }
+    } else if (focusControls.length === 1) {
       const fc = focusControls[0];
       const allCtrls = controls.filter((c) => c.type === "Control" && c.lat !== 0);
       if (allCtrls.length >= 2) {
@@ -743,14 +872,14 @@ export function MapViewer({
           north: fc.lat + ext, south: fc.lat - ext,
           east: fc.lng + ext, west: fc.lng - ext,
         };
-        setViewport(fitBounds(bounds, cw, ch, 0.05));
+        setViewport(fitGeo(bounds, cw, ch, 0.05));
       } else {
-        setViewport((prev) => prev ? { ...prev, centerLat: fc.lat, centerLng: fc.lng } : prev);
+        setViewport((prev) => prev ? centreOnGeo(prev, vctxRef.current, fc.lat, fc.lng) : prev);
       }
     } else {
       fitToControlBounds(focusControls, hideControls ? 0.02 : 0.05);
     }
-  }, [viewport, focusControlIds, controls, containerSize, hideControls, fitToControlBounds]);
+  }, [viewport, focusControlIds, controls, containerSize, hideControls, fitToControlBounds, paperMode, controlMm]);
 
   // ─── Coordinate helpers ───────────────────────────────────
 
@@ -773,35 +902,27 @@ export function MapViewer({
     [rotRad, containerSize, renderW, renderH],
   );
 
-  // Keep affine on a ref so touchend placement (native listeners) never
-  // samples a stale viewport/affine pair after a pan frame.
-  const affineRef = useRef(affine);
-  affineRef.current = affine;
-
-  /** Convert screen pixel to map mm via affine (always reads live refs). */
+  /** Convert screen pixel to map mm (always reads live refs, so touchend
+   *  placement in native listeners never samples a stale viewport/affine
+   *  pair after a pan frame). */
   const screenToMapMm = useCallback(
     (clientX: number, clientY: number): Pt | null => {
       const vp = viewportRef.current;
-      const af = affineRef.current;
-      if (!vp || !af || !containerRef.current) return null;
+      if (!vp || !containerRef.current) return null;
       const rect = containerRef.current.getBoundingClientRect();
       const { ix, iy } = screenToInner(clientX - rect.left, clientY - rect.top);
-      const { lat, lng } = pixelToLatlng(ix, iy, vp, renderW, renderH);
-      const mm = af.toMapMm(lat, lng);
-      return { x: mm.mapX, y: mm.mapY };
+      return innerToMm(vp, vctxRef.current, ix, iy);
     },
-    [renderW, renderH, screenToInner],
+    [screenToInner],
   );
 
   /** Convert map mm coords to screen pixel (in the rotated inner space). */
   const mapMmToScreen = useCallback(
     (mapX: number, mapY: number): Pt | null => {
-      if (!viewport || !affine || containerSize.w === 0) return null;
-      const { lat, lng } = affine.toLatLng(mapX, mapY);
-      const { px, py } = latlngToPixel(lat, lng, viewport, renderW, renderH);
-      return { x: px, y: py };
+      if (!viewport || containerSize.w === 0) return null;
+      return mmToInner(viewport, vctx, mapX, mapY);
     },
-    [viewport, affine, renderW, renderH, containerSize],
+    [viewport, vctx, containerSize],
   );
 
   /** Inverse of screenToInner: rotated inner coords → container coords.
@@ -824,10 +945,10 @@ export function MapViewer({
 
   // Symbol size in pixels based on zoom and map scale
   const symbolScale = useMemo(() => {
-    if (!viewport || !mapScale) return 1;
-    const mpp = metersPerPixel(viewport.centerLat, viewport.zoom);
-    // 1mm on map = mapScale/1000 meters on ground
-    return (mapScale / 1000) / mpp;
+    if (!viewport) return 1;
+    // CSS px per map mm: from the paper view directly, or (tiles) 1 mm on
+    // the map = mapScale/1000 metres on the ground.
+    return pxPerMapMm(viewport, mapScale) ?? 1;
   }, [viewport, mapScale]);
 
   // ─── Measure helpers ────────────────────────────────────
@@ -866,20 +987,11 @@ export function MapViewer({
       const rw = renderW || el.clientWidth;
       const rh = renderH || el.clientHeight;
 
-      const cursorGeo = pixelToLatlng(ix, iy, viewport, rw, rh);
       const zoomDelta = e.deltaY > 0 ? -0.15 : 0.15;
-      const newZoom = Math.max(1, Math.min(22, viewport.zoom + zoomDelta));
+      const vc = { ...vctxRef.current, w: rw, h: rh };
 
       breakLocateFollowRef.current();
-      setViewport((prev) => {
-        if (!prev) return prev;
-        const newVp = { ...prev, zoom: newZoom };
-        const afterCursor = latlngToPixel(cursorGeo.lat, cursorGeo.lng, newVp, rw, rh);
-        const dxPx = ix - afterCursor.px;
-        const dyPx = iy - afterCursor.py;
-        const newCenter = pixelToLatlng(rw / 2 - dxPx, rh / 2 - dyPx, newVp, rw, rh);
-        return { centerLat: newCenter.lat, centerLng: newCenter.lng, zoom: newZoom };
-      });
+      setViewport((prev) => (prev ? zoomAt(prev, vc, ix, iy, zoomDelta) : prev));
     };
     el.addEventListener("wheel", onWheel, { passive: false });
     return () => el.removeEventListener("wheel", onWheel);
@@ -991,12 +1103,9 @@ export function MapViewer({
         const rdy = dx * sin + dy * cos;
         dx = rdx; dy = rdy;
       }
-      const rw = renderW || 1;
-      const rh = renderH || 1;
-      const center = latlngToPixel(viewport.centerLat, viewport.centerLng, viewport, rw, rh);
-      const newCenter = pixelToLatlng(center.px - dx, center.py - dy, viewport, rw, rh);
+      const vc = { ...vctxRef.current, w: renderW || 1, h: renderH || 1 };
       breakLocateFollow();
-      setViewport((prev) => prev ? { ...prev, centerLat: newCenter.lat, centerLng: newCenter.lng } : prev);
+      setViewport((prev) => (prev ? panBy(prev, vc, dx, dy) : prev));
     }
     if (measuring) {
       const pt = screenToMapMm(e.clientX, e.clientY);
@@ -1083,14 +1192,11 @@ export function MapViewer({
         const rdy = dx * sin + dy * cos;
         dx = rdx; dy = rdy;
       }
-      const rw = renderW || 1;
-      const rh = renderH || 1;
+      const vc = { ...vctxRef.current, w: renderW || 1, h: renderH || 1 };
       breakLocateFollowRef.current();
       setViewport((prev) => {
         if (!prev) return prev;
-        const center = latlngToPixel(prev.centerLat, prev.centerLng, prev, rw, rh);
-        const newCenter = pixelToLatlng(center.px - dx, center.py - dy, prev, rw, rh);
-        const next = { ...prev, centerLat: newCenter.lat, centerLng: newCenter.lng };
+        const next = panBy(prev, vc, dx, dy);
         // Sync immediately so a tap on the same gesture frame sees the
         // post-pan viewport (React state alone would still be stale).
         viewportRef.current = next;
@@ -1160,14 +1266,7 @@ export function MapViewer({
       lastTouchRef.current = { x: t.clientX, y: t.clientY };
       touchStartPosRef.current = { x: t.clientX, y: t.clientY };
       touchOnEditorTargetRef.current = false;
-      if (viewportRef.current) {
-        touchStartViewportCenterRef.current = {
-          x: viewportRef.current.centerLng,
-          y: viewportRef.current.centerLat,
-        };
-      } else {
-        touchStartViewportCenterRef.current = null;
-      }
+      touchStartViewportRef.current = viewportRef.current;
       if (allowOneFingerMapPan && !measuring) isPanningRef.current = true;
       if (measuring || allowOneFingerMapPan) e.preventDefault();
     };
@@ -1264,43 +1363,15 @@ export function MapViewer({
             // combines midpoint translation (pan) and distance change (zoom).
             const from = toInner(base.x, base.y);
             const to = toInner(current.x, current.y);
-            const anchorGeo = pixelToLatlng(
+            const next = zoomAt(
+              base.viewport,
+              { ...vctxRef.current, w: rw, h: rh },
               from.x,
               from.y,
-              base.viewport,
-              rw,
-              rh,
+              Math.log2(current.dist / base.dist),
+              to.x,
+              to.y,
             );
-            const newZoom = Math.max(
-              1,
-              Math.min(
-                22,
-                base.viewport.zoom + Math.log2(current.dist / base.dist),
-              ),
-            );
-            const zoomed: TileViewport = {
-              ...base.viewport,
-              zoom: newZoom,
-            };
-            const anchorAfterZoom = latlngToPixel(
-              anchorGeo.lat,
-              anchorGeo.lng,
-              zoomed,
-              rw,
-              rh,
-            );
-            const center = pixelToLatlng(
-              rw / 2 - (to.x - anchorAfterZoom.px),
-              rh / 2 - (to.y - anchorAfterZoom.py),
-              zoomed,
-              rw,
-              rh,
-            );
-            const next = {
-              centerLat: center.lat,
-              centerLng: center.lng,
-              zoom: newZoom,
-            };
             breakLocateFollowRef.current();
             viewportRef.current = next;
             setViewport(next);
@@ -1380,20 +1451,18 @@ export function MapViewer({
             { x: t.clientX, y: t.clientY },
           );
           let viewportCenterDeltaPx = 0;
-          const startCenter = touchStartViewportCenterRef.current;
+          const startVp = touchStartViewportRef.current;
           const vp = viewportRef.current;
-          if (startCenter && vp) {
-            // Approximate geo-center drift in CSS pixels at current zoom.
-            const a = latlngToPixel(startCenter.y, startCenter.x, vp, renderW || 1, renderH || 1);
-            const b = latlngToPixel(vp.centerLat, vp.centerLng, vp, renderW || 1, renderH || 1);
-            viewportCenterDeltaPx = Math.hypot(a.px - b.px, a.py - b.py);
+          if (startVp && vp) {
+            // Centre drift in CSS pixels at the current zoom.
+            viewportCenterDeltaPx = centreShiftPx(startVp, vp, { ...vctxRef.current, w: renderW || 1, h: renderH || 1 });
           }
           if (isMeasureTap({ fingerMovementPx, viewportCenterDeltaPx })) {
             const pt = screenToMapMm(t.clientX, t.clientY);
             if (pt) setMeasurePoints((prev) => [...prev, pt]);
           }
         }
-        touchStartViewportCenterRef.current = null;
+        touchStartViewportRef.current = null;
         if (
           editor && !measuring && !hadMultiTouchRef.current &&
           !touchOnEditorTargetRef.current &&
@@ -1681,10 +1750,17 @@ export function MapViewer({
 
   // ─── Overlay rendering ─────────────────────────────────
 
+  // GPS tracks in paper mm for the paper view: proj4 once per point per
+  // route set, so pan and zoom only scale them.
+  const gpsRoutesMm = useMemo(() => {
+    if (!paperMode || !gpsRoutes || !paperFrame) return null;
+    return gpsRoutes.map((r) =>
+      r.points.map(({ lat, lng }) => geoToMm(paperFrame, lat, lng)).filter((p): p is Pt => p !== null),
+    );
+  }, [paperMode, gpsRoutes, paperFrame]);
+
   const overlayContent = useMemo(() => {
     if (!viewport || containerSize.w === 0 || containerSize.h === 0) return null;
-    const cw = renderW;
-    const ch = renderH;
 
     const radius = 2.5 * symbolScale;
     const stroke = Math.max(0.5, 0.35 * symbolScale);
@@ -1700,23 +1776,32 @@ export function MapViewer({
     const finishOuter = 3.0 * symbolScale;
     const legStroke = Math.max(0.5, 0.35 * symbolScale);
 
-    // Build pixel positions for all controls (fallback from lat/lng)
+    // Map mm → inner px: through the paper view, or (tiles) the affine.
+    const hasMm = viewport.kind === "paper" || affine !== null;
+    const mmPx = (mx: number, my: number) => {
+      const p = mmToInner(viewport, vctx, mx, my)!;
+      return { px: p.x, py: p.y };
+    };
+
+    // Build pixel positions for all controls: tiles from lat/lng, the
+    // paper view from the control's own mm (lat/lng only as a fallback).
     const ctrlPixels = new Map<string, Pt>();
     for (const c of controls) {
-      if (c.lat === 0 && c.lng === 0) continue;
-      const { px, py } = latlngToPixel(c.lat, c.lng, viewport, cw, ch);
-      ctrlPixels.set(c.id, { x: px, y: py });
+      const mm = viewport.kind === "paper" ? controlMm(c) : null;
+      const p = mm
+        ? mmToInner(viewport, vctx, mm.x, mm.y)
+        : c.lat === 0 && c.lng === 0 ? null : geoToInner(viewport, vctx, c.lat, c.lng);
+      if (p) ctrlPixels.set(c.id, p);
     }
 
     // Override with precise OCAD positions from courseGeometry when available
-    if (courseGeometry && affine) {
+    if (courseGeometry && hasMm) {
       for (const f of (courseGeometry.features || [])) {
         const p = f.properties;
         if (!p?.code || !f.geometry || f.geometry.type !== "Point") continue;
         if (p.symbolType !== "control" && p.symbolType !== "start" && p.symbolType !== "finish") continue;
         const [mx, my] = f.geometry.coordinates as [number, number];
-        const { lat, lng } = affine.toLatLng(mx, my);
-        const { px, py } = latlngToPixel(lat, lng, viewport, cw, ch);
+        const { px, py } = mmPx(mx, my);
         const ctrl = controls.find(c => c.code === p.code);
         if (ctrl) ctrlPixels.set(ctrl.id, { x: px, y: py });
       }
@@ -1785,7 +1870,7 @@ export function MapViewer({
       legHits.push({ key, d, course: courseName, index: legIndex });
     };
 
-    if (courseGeometry && affine) {
+    if (courseGeometry && hasMm) {
       const features = courseGeometry.features || [];
       for (let fi = 0; fi < features.length; fi++) {
         const feature = features[fi];
@@ -1812,8 +1897,7 @@ export function MapViewer({
 
           const screenPts: Pt[] = [];
           for (const [mx, my] of coords) {
-            const { lat, lng } = affine.toLatLng(mx, my);
-            const { px, py } = latlngToPixel(lat, lng, viewport, cw, ch);
+            const { px, py } = mmPx(mx, my);
             screenPts.push({ x: px, y: py });
           }
 
@@ -1880,10 +1964,7 @@ export function MapViewer({
           }
         } else if (props.symbolType === "marked_route" && geom.type === "LineString") {
           const coords = geom.coordinates as [number, number][];
-          const screenPts = coords.map(([mx, my]) => {
-            const { lat, lng } = affine.toLatLng(mx, my);
-            return latlngToPixel(lat, lng, viewport, cw, ch);
-          });
+          const screenPts = coords.map(([mx, my]) => mmPx(mx, my));
           for (let si = 0; si < screenPts.length - 1; si++) {
             drawnLineSegs.push({
               x1: screenPts[si].px, y1: screenPts[si].py,
@@ -1897,10 +1978,7 @@ export function MapViewer({
           );
         } else if ((props.symbolType === "forbidden_route" || props.symbolType === "restricted_line") && geom.type === "LineString") {
           const coords = geom.coordinates as [number, number][];
-          const screenPts = coords.map(([mx, my]) => {
-            const { lat, lng } = affine.toLatLng(mx, my);
-            return latlngToPixel(lat, lng, viewport, cw, ch);
-          });
+          const screenPts = coords.map(([mx, my]) => mmPx(mx, my));
           for (let si = 0; si < screenPts.length - 1; si++) {
             drawnLineSegs.push({
               x1: screenPts[si].px, y1: screenPts[si].py,
@@ -1927,9 +2005,13 @@ export function MapViewer({
       for (let ri = 0; ri < gpsRoutes.length; ri++) {
         const route = gpsRoutes[ri];
         if (route.points.length < 2) continue;
-        const screenPts = route.points.map(({ lat, lng }) =>
-          latlngToPixel(lat, lng, viewport, cw, ch),
-        );
+        // Tracks reach the paper view through mapGeo once per route (gpsRoutesMm), not per frame.
+        const screenPts = viewport.kind === "paper"
+          ? (gpsRoutesMm?.[ri] ?? []).map((p) => mmPx(p.x, p.y))
+          : route.points.map(({ lat, lng }) => {
+              const p = geoToInner(viewport, vctx, lat, lng)!;
+              return { px: p.x, py: p.y };
+            });
         const d = screenPts
           .map((p, i) => `${i === 0 ? "M" : "L"}${p.px.toFixed(1)},${p.py.toFixed(1)}`)
           .join(" ");
@@ -2066,7 +2148,7 @@ export function MapViewer({
     // and the PDF. Rotation is rigid, so sizes/distances are unchanged;
     // only the chosen centres are rotated back into overlay space.
     let frameRot = 0;
-    if (affine) {
+    if (hasMm) {
       const anchor = controls[0] ? { x: controls[0].x, y: controls[0].y } : { x: 0, y: 0 };
       const o = mapMmToScreen(anchor.x, anchor.y);
       const e = mapMmToScreen(anchor.x + 1, anchor.y);
@@ -2406,7 +2488,7 @@ export function MapViewer({
 
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [viewport, containerSize, renderW, renderH, controls, courses, courseGeometry, coursesWithGeometry, highlightControlId, highlightCourseName,
-      symbolScale, affine, measuring, measurePoints, measureCursor, showDescriptions, hideControls, onControlClick,
+      symbolScale, affine, vctx, controlMm, gpsRoutesMm, measuring, measurePoints, measureCursor, showDescriptions, hideControls, onControlClick,
       mapMmToScreen, rotDeg, gpsRoutes, editor, editorDragPos, pendingMoves, editorLabelDragPos, pendingLabelMoves]);
 
   // ─── Description sheet (outside rotation) ──────────────
@@ -2438,7 +2520,8 @@ export function MapViewer({
 
   const scaleBar = useMemo(() => {
     if (!viewport || !mapScale || containerSize.w === 0) return null;
-    const mpp = metersPerPixel(viewport.centerLat, viewport.zoom);
+    const mpp = metresPerPx(viewport, mapScale);
+    if (mpp == null) return null;
     const targetPx = 120;
     const targetM = targetPx * mpp;
 
@@ -2498,7 +2581,7 @@ export function MapViewer({
 
   // ─── Render ───────────────────────────────────────────
 
-  if (!mapBounds) {
+  if (!mapBounds && !paperMode) {
     return (
       <div className={`flex items-center justify-center bg-slate-50 rounded-lg border border-slate-200 ${className}`} style={style}>
         <div className="text-center p-4">
@@ -2509,11 +2592,24 @@ export function MapViewer({
   }
 
   if (!viewport) {
+    if (paperMode && docState.status === "error") {
+      const key = {
+        offline: "mapDocumentOffline",
+        unauthorised: "mapDocumentUnauthorised",
+        missing: "mapDocumentMissing",
+        failed: "mapDocumentFailed",
+      } as const;
+      return (
+        <div ref={containerRef} data-testid="map-viewer" data-map-pipeline={pipeline} className={`relative bg-slate-50 rounded-lg border border-slate-200 ${className}`} style={style}>
+          <MapLayerMessage message={t(key[docState.kind])} onRetry={retryDocument} retryLabel={t("mapRetry")} />
+        </div>
+      );
+    }
     return (
       <div ref={containerRef} className={`flex items-center justify-center bg-slate-50 rounded-lg border border-slate-200 ${className}`} style={style}>
         <div className="text-center">
           <div className="w-8 h-8 border-3 border-blue-200 border-t-blue-600 rounded-full animate-spin mx-auto mb-3" />
-          <p className="text-sm text-slate-500">Loading map...</p>
+          <p className="text-sm text-slate-500">{t("loadingMap")}</p>
           {tileProgress && tileProgress.rendering && tileProgress.total > 0 && (
             <>
               <div className="w-32 h-1.5 bg-slate-200 rounded-full mt-2 mx-auto">
@@ -2713,13 +2809,21 @@ export function MapViewer({
   const containerTouchAction =
     measuring || allowOneFingerMapPan ? "none" : "pan-y";
 
+  // The paper view's centre in WGS 84, for the data-* attributes only.
+  const centreGeo = viewport.kind === "paper" ? innerToGeo(viewport, vctx, renderW / 2, renderH / 2) : null;
+
   return (
     <div
       ref={containerRef}
       data-testid="map-viewer"
-      data-center-lat={viewport?.centerLat}
-      data-center-lng={viewport?.centerLng}
-      data-zoom={viewport?.zoom}
+      data-map-pipeline={pipeline}
+      data-center-lat={viewport.kind === "mercator" ? viewport.centerLat : centreGeo?.lat}
+      data-center-lng={viewport.kind === "mercator" ? viewport.centerLng : centreGeo?.lng}
+      data-zoom={mercatorEquivalentZoom(viewport, mapScale, centreGeo?.lat ?? null) ?? undefined}
+      data-centre-x={viewport.kind === "paper" ? viewport.centreX : undefined}
+      data-centre-y={viewport.kind === "paper" ? viewport.centreY : undefined}
+      data-px-per-um={viewport.kind === "paper" ? viewport.pxPerUm : undefined}
+      data-rotation={rotDeg}
       data-user-bearing={userBearing}
       data-measure-points={measurePoints.length}
       data-measure-cursor={measureCursor ? "1" : "0"}
@@ -2748,6 +2852,18 @@ export function MapViewer({
         </div>
       )}
       <TileBlobCacheProvider>
+      {/* Vector base map: container-sized and unrotated — the rotation is in its view matrix */}
+      {viewport.kind === "paper" && mapDoc && glViewRect && (
+        <VectorMapLayer
+          doc={mapDoc}
+          view={glViewRect}
+          width={containerSize.w}
+          height={containerSize.h}
+          budget={mapBudget}
+          zIndex={0}
+          onUnavailable={onVectorUnavailable}
+        />
+      )}
       {/* Rotated map layer (tiles + overlay) — corrects map north offset */}
       <div style={{
         position: "absolute",
@@ -2757,7 +2873,7 @@ export function MapViewer({
         ...(rotDeg !== 0 ? { width: renderW, height: renderH, left: (containerSize.w - renderW) / 2, top: (containerSize.h - renderH) / 2 } : {}),
       }}>
         {/* Base map tiles (composite half) */}
-        <TileLayer
+        {viewport.kind === "mercator" && <TileLayer
           viewport={viewport}
           containerWidth={renderW}
           containerHeight={renderH}
@@ -2766,7 +2882,7 @@ export function MapViewer({
           half="top"
           zIndex={1}
           data-testid="map-tiles-composite"
-        />
+        />}
 
         {/* Lower purple: legs, circles, start, finish */}
         <svg
@@ -2779,8 +2895,9 @@ export function MapViewer({
           </g>
         </svg>
 
-        {/* Ink half — black/brown/blue 100% lines and points above lower purple */}
-        <TileLayer
+        {/* Ink half — black/brown/blue 100% lines and points above lower purple.
+            The vector layer has no ink split: the overlay draws above the whole map (§5.4). */}
+        {viewport.kind === "mercator" && <TileLayer
           viewport={viewport}
           containerWidth={renderW}
           containerHeight={renderH}
@@ -2789,7 +2906,7 @@ export function MapViewer({
           half="bottom"
           zIndex={3}
           data-testid="map-tiles-ink"
-        />
+        />}
 
         {/* Upper purple + GPS + editor hits */}
         <svg
@@ -2800,14 +2917,10 @@ export function MapViewer({
           <g style={{ pointerEvents: "auto" }}>
             {overlayContent?.upperNodes}
             {locateMode !== "off" && geo.position && viewport && (() => {
-              const { px, py } = latlngToPixel(
-                geo.position.lat,
-                geo.position.lng,
-                viewport,
-                renderW,
-                renderH,
-              );
-              const mpp = metersPerPixel(geo.position.lat, viewport.zoom);
+              const p = geoToInner(viewport, vctx, geo.position.lat, geo.position.lng);
+              const mpp = metresPerPx(viewport, mapScale, geo.position.lat);
+              if (!p || mpp == null) return null;
+              const px = p.x, py = p.y;
               const radius = accuracyRadiusPx(geo.position.accuracy, mpp);
               return (
                 <g data-testid="my-location-marker" style={{ pointerEvents: "none" }}>
@@ -2889,7 +3002,7 @@ export function MapViewer({
           selection/phantom */}
       {editorMenu}
       {dragWarning}
-      {editor && editorDragPos && viewport && (() => {
+      {editor && editorDragPos && viewport.kind === "mercator" && (() => {
         const inner = mapMmToScreen(editorDragPos.x, editorDragPos.y);
         if (!inner) return null;
         const pos = innerToContainer(inner.x, inner.y);
@@ -2943,7 +3056,7 @@ export function MapViewer({
             type="button"
             onClick={() => {
               breakLocateFollow();
-              setViewport((prev) => prev ? { ...prev, zoom: Math.min(22, prev.zoom + 0.5) } : prev);
+              setViewport((prev) => prev ? zoomAt(prev, vctxRef.current, renderW / 2, renderH / 2, 0.5) : prev);
             }}
             className="w-8 h-8 bg-white rounded shadow hover:bg-slate-50 flex items-center justify-center text-slate-600"
             title={t("zoomIn")}
@@ -2955,7 +3068,7 @@ export function MapViewer({
             type="button"
             onClick={() => {
               breakLocateFollow();
-              setViewport((prev) => prev ? { ...prev, zoom: Math.max(1, prev.zoom - 0.5) } : prev);
+              setViewport((prev) => prev ? zoomAt(prev, vctxRef.current, renderW / 2, renderH / 2, -0.5) : prev);
             }}
             className="w-8 h-8 bg-white rounded shadow hover:bg-slate-50 flex items-center justify-center text-slate-600"
             title={t("zoomOut")}
@@ -2966,7 +3079,7 @@ export function MapViewer({
           <button
             type="button"
             onClick={() => {
-              if (mapBounds) setViewport(fitBounds(mapBounds, containerSize.w, containerSize.h, 0.05));
+              fitWholeMap();
             }}
             className="w-8 h-8 bg-white rounded shadow hover:bg-slate-50 flex items-center justify-center text-slate-600"
             title={t("fitMap")}

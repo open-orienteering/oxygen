@@ -1,4 +1,6 @@
 import { describe, it, expect } from "vitest";
+import type { OcadSymbolDefLike } from "../ocad-symbols.js";
+import { WARNING_DETAILS_MAX } from "../report.js";
 import { OCAD_UNITS_PER_MM, ocadColourStack, ocadGeoreferencing, ocadToDocumentInput, type OcadFileLike } from "../ocad-source.js";
 import { decodeMapDocument, encodeMapDocument, documentRenderInput } from "../../map-document/index.js";
 import { COORD_FLAG } from "../../render/pass-stream.js";
@@ -134,6 +136,7 @@ describe("ocadGeoreferencing", () => {
 describe("ocadToDocumentInput", () => {
   const result = ocadToDocumentInput(source(), opts);
   const { input } = result;
+  const r0 = result;
 
   it("keeps every object with verbatim coordinates and OCAD flag bits", () => {
     expect(result.counts).toEqual({
@@ -172,6 +175,18 @@ describe("ocadToDocumentInput", () => {
     expect(input.objects[0].symbolIdx).toBe(0);
   });
 
+  it("reads circle diameters by the file's version: outer up to OCAD 8, centre-line from OCAD 9 (B9)", () => {
+    const ring = (version: number) => {
+      const src = { ...source(), header: { version } };
+      src.symbols = [{ symNum: 703000, number: "703.0", type: 1, status: 0, description: "Kontroll", elements: [{ type: 3, color: 7, diameter: 500, lineWidth: 35, coords: [c(0, 0)] }] }];
+      src.objects = [{ sym: 703000, otp: 1, coordinates: [c(0, 0)] }];
+      const r = ocadToDocumentInput(src, opts).input.header.symbols[0].render;
+      return r && r.type === "point" ? r.glyph.parts[0].diameterUm : undefined;
+    };
+    expect(ring(8)).toBe(5000);
+    expect(ring(2018)).toBe(5350);
+  });
+
   it("synthesises one symbol per graphic (type, colour, width) with a render definition", () => {
     const syms = input.header.symbols;
     const graphic = syms.filter((s) => s.origin === "graphic");
@@ -191,18 +206,21 @@ describe("ocadToDocumentInput", () => {
     expect(input.objects[9].symbolIdx).toBe(input.header.symbols.indexOf(missing[0]));
   });
 
-  it("resolves rectangle objects to the parsed rectangle symbol, drawn as an outline line", () => {
+  it("resolves rectangle objects to the parsed rectangle symbol, drawn as an outline line with its corner radius", () => {
     const rect = input.header.symbols[5];
-    expect(rect).toMatchObject({ code: "850.1", kind: "rectangle", origin: "source", render: { type: "line", main: { colour: 1, widthUm: 160, cap: "flat", join: "miter" } } });
+    expect(rect).toMatchObject({
+      code: "850.1", kind: "rectangle", origin: "source",
+      render: { type: "line", cornerRadiusUm: 2290, main: { colour: 1, widthUm: 160, cap: "flat", join: "miter" } },
+    });
     expect(input.objects[7].symbolIdx).toBe(5);
     expect(input.objects[8].symbolIdx).toBe(5);
-    expect(result.warnings.find((w) => w.code === "SYMBOL_FEATURE_DROPPED")).toEqual({ code: "SYMBOL_FEATURE_DROPPED", count: 1, message: "850.1: rectangle corner radius 2.29 mm" });
+    expect(result.warnings.find((w) => w.code === "SYMBOL_FEATURE_DROPPED")).toBeUndefined();
   });
 
   it("records what was dropped as stable warning codes", () => {
     const codes = Object.fromEntries(result.warnings.map((w) => [w.code, w.count]));
     expect(codes).toEqual({
-      SYMBOL_COLOUR_UNKNOWN: 1, SYMBOL_EMPTY: 1, SYMBOL_FEATURE_DROPPED: 1, DUPLICATE_SYMBOL_NUMBER: 1, EMPTY_GEOMETRY_DROPPED: 1, MISSING_SYMBOL: 1, TEMPLATES_DROPPED: 2,
+      SYMBOL_COLOUR_UNKNOWN: 1, SYMBOL_EMPTY: 1, DUPLICATE_SYMBOL_NUMBER: 1, EMPTY_GEOMETRY_DROPPED: 1, MISSING_SYMBOL: 1, TEMPLATES_DROPPED: 2,
       SYMBOL_TYPE_UNSUPPORTED: 2, READER_WARNING: 2,
     });
     expect(input.header.warnings).toEqual(result.warnings);
@@ -226,9 +244,69 @@ describe("ocadToDocumentInput", () => {
     expect(ocadToDocumentInput({ ...source(), warnings: [] }, opts).readerWarnings).toEqual([]);
   });
 
+  describe("warning detail (docs/map-import.md §3.6)", () => {
+    // Club-full shape: an area whose border points at itself, and two dropped constructs (one aggregated header warning).
+    const withStale = () => {
+      const s = source();
+      s.symbols = [...Array.from(s.symbols),
+        { symNum: 301002, number: "301.2", type: 3, status: 0, description: "Stale", fillOn: true, fillColor: 0, borderOn: true, borderSym: 301002 },
+        { symNum: 822000, number: "822.0", type: 4, status: 0, description: "Text 2", fontName: "Arial", fontColor: 7, fontSize: 80, lbOn: true },
+        { symNum: 823000, number: "823.0", type: 4, status: 0, description: "Text 3", fontName: "Arial", fontColor: 7, fontSize: 80, indentFirst: 50 },
+      ];
+      return s;
+    };
+
+    it("lists one entry per emission with the symbol index, while the header keeps the first message per code", () => {
+      const r = ocadToDocumentInput(withStale(), opts);
+      const dropped = r.warnings.find((w) => w.code === "SYMBOL_FEATURE_DROPPED");
+      expect(dropped).toEqual({ code: "SYMBOL_FEATURE_DROPPED", count: 2, message: "822.0: line below text" });
+      const details = r.warningDetails.filter((d) => d.code === "SYMBOL_FEATURE_DROPPED");
+      expect(details).toEqual([
+        { code: "SYMBOL_FEATURE_DROPPED", message: "822.0: line below text", symbolIdx: 7 },
+        { code: "SYMBOL_FEATURE_DROPPED", message: "823.0: paragraph indent", symbolIdx: 8 },
+      ]);
+      expect(r.warningDetails.filter((d) => d.code === "SYMBOL_REFERENCE_INVALID")).toEqual([
+        { code: "SYMBOL_REFERENCE_INVALID", message: "301.2: border symbol 301002 is the symbol itself", symbolIdx: 6 },
+      ]);
+      expect(r.warnings.find((w) => w.code === "SYMBOL_REFERENCE_INVALID")).toEqual({ code: "SYMBOL_REFERENCE_INVALID", count: 1, message: "301.2: border symbol 301002 is the symbol itself" });
+      expect(r.input.header.warnings).toEqual(r.warnings);
+    });
+
+    it("gives the missing-symbol stub's index, and the first detail of each code carries the header's message", () => {
+      const r = ocadToDocumentInput(source(), opts);
+      const stub = r.warningDetails.find((d) => d.code === "MISSING_SYMBOL");
+      expect(stub).toMatchObject({ message: "objects reference symbol 777.0, which is not in the symbol table" });
+      expect(r.input.header.symbols[stub!.symbolIdx!].origin).toBe("missing");
+      for (const w of r.warnings) {
+        if (w.message) expect(r.warningDetails.find((d) => d.code === w.code)?.message).toBe(w.message);
+      }
+    });
+
+    it("locates a duplicate symbol number at the duplicate's index", () => {
+      const dup = result.warningDetails.find((d) => d.code === "DUPLICATE_SYMBOL_NUMBER");
+      expect(dup).toMatchObject({ message: "symbol 101.0 defined more than once; first definition used", symbolIdx: 4 });
+      expect(input.header.symbols[4].name).toBe("Duplicate");
+    });
+
+    it("stays out of the document input and header", () => {
+      expect(r0.input).not.toHaveProperty("warningDetails");
+      expect(JSON.stringify(r0.input.header)).not.toContain("symbolIdx");
+    });
+
+    it("keeps at most WARNING_DETAILS_MAX entries but counts every emission", () => {
+      const s = source();
+      s.symbols = [...Array.from(s.symbols), ...Array.from({ length: WARNING_DETAILS_MAX + 1 }, (_, i): OcadSymbolDefLike => (
+        { symNum: 900000 + i, number: `900.${i}`, type: 3, status: 0, description: "Stale", fillOn: true, fillColor: 0, borderOn: true, borderSym: 900000 + i }
+      ))];
+      const r = ocadToDocumentInput(s, opts);
+      expect(r.warningDetails).toHaveLength(WARNING_DETAILS_MAX);
+      expect(r.warnings.find((w) => w.code === "SYMBOL_REFERENCE_INVALID")?.count).toBe(WARNING_DETAILS_MAX + 1);
+    });
+  });
+
   it("fills the header: provenance, units, scale, print window, export rectangles", () => {
     const h = input.header;
-    expect(h.format).toEqual({ version: 1, importer: "ocad-7" });
+    expect(h.format).toEqual({ version: 1, importer: "ocad-13" });
     expect(h.source).toEqual({ kind: "ocad", version: "2018.8.3", hash: "ff".repeat(32), bytes: 4242 });
     expect(h.unitsPerMm).toBe(OCAD_UNITS_PER_MM);
     expect(h.mapScale).toBe(15000);

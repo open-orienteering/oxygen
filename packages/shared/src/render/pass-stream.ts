@@ -110,6 +110,11 @@ export interface TextPass {
   glyphs: Uint16Array;
   /** `x, y` per glyph (baseline origin), paper µm. */
   positions: Float32Array;
+  /**
+   * Rotation per glyph, degrees counter-clockwise, about the glyph's own
+   * origin. Absent = every glyph upright (map-rendering §3.5).
+   */
+  angles?: Float32Array;
   /** Set only on a halo pass, which is a separate pass in the halo colour. */
   haloWidthUm?: number;
 }

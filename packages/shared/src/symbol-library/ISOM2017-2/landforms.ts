@@ -10,7 +10,8 @@ const B = C.brownLine;
 const BP = C.brownPoint;
 
 /** Slope line: 0.4 mm beyond the contour's edge, on the downhill (right) side. */
-const slopeLine = (widthUm: number, lengthUm: number) => point(tick(B, widthUm, 0, -(lengthUm + widthUm / 2)), "object");
+/** Slope line: angle 0 is north and the tick points to +y, downhill from the contour (OCAD 0,0 → 0,40; Mapper 0,0 → 0,−470 y-down; B10). */
+const slopeLine = (widthUm: number, lengthUm: number) => point(tick(B, widthUm, 0, lengthUm + widthUm / 2), "object");
 
 export const landforms: LibraryEntryInput[] = [
   entry("101", "Contour", "L", line({ main: solid(B, 140, { cap: "round", join: "round" }) })),
@@ -48,8 +49,8 @@ export const landforms: LibraryEntryInput[] = [
   entry("106", "Ruined earth wall", "L", line({ main: dashed(B, 180, 2000, 350), glyphs: [placed(glyph(disc(B, 450), false), atGapCentres)] }), {
     notes: `Dots ø 0.45 in the gaps of a 2.0 / 0.35 dash. ${DASH_NOTE}`,
   }),
-  entry("107", "Erosion gully", "L", line({ main: solid(B, 250, { cap: "pointed", join: "round" }) }), {
-    minimum: { lengthUm: 1150 }, notes: "Ends taper over 0.75 mm (pointed caps); minimum length 1.15 mm outside measure.",
+  entry("107", "Erosion gully", "L", line({ main: solid(B, 250, { cap: "pointed", join: "round", taper: { startUm: 750, endUm: 750 } }) }), {
+    minimum: { lengthUm: 1150 }, notes: "Ends taper over 0.75 mm (pointed caps, `main.taper`, B10); minimum length 1.15 mm outside measure.",
   }),
   entry("108", "Small erosion gully", "L", line({ glyphs: [placed(glyph(disc(B, 250), false), spaced(450, { firstUm: 0, lastUm: 0, minCount: 2 }))] }), {
     minimum: { lengthUm: 1150 }, notes: "Dots ø 0.25 every 0.45 mm (CC); the main line has no stroke.",
@@ -59,8 +60,8 @@ export const landforms: LibraryEntryInput[] = [
   entry("110", "Small elongated knoll", "P", point(fillPart(BP, arcCoords(0, 0, 200, 400, 0, 360, 24)), "object"), { notes: "Ellipse 0.4 × 0.8 mm." }),
   entry(
     "111", "Small depression", "P",
-    point(stroke(BP, 180, [310, 203, ...arcCoords(0, 32, 310, 139, 0, -180, 10), -310, 203]), "object"),
-    { notes: "U shape 0.8 mm (outside measure) wide, 0.18 mm line, opening uphill." },
+    point(stroke(BP, 180, [310, 203, ...arcCoords(0, 32, 310, 139, 0, -180, 10), -310, 203]), "north"),
+    { notes: "U shape 0.8 mm (outside measure) wide, 0.18 mm line, opening to the top; orientated to north (spec; B10, was turned with the object)." },
   ),
   entry("112", "Pit", "P", point(fillPart(BP, [154, 302, 350, 302, 0, -489, -350, 302, -154, 302, 0, -50]), "north"), {
     notes: "V shape 0.7 mm wide, arms 0.18 mm, apex downhill.",
