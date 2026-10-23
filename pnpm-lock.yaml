@@ -173,7 +173,7 @@ importers:
   packages/shared:
     dependencies:
       '@cantoo/pdf-lib':
-        specifier: 2.11.1
+        specifier: ^2.11.1
         version: 2.11.1(html-entities@2.6.0)
       proj4:
         specifier: ^2.22.0
