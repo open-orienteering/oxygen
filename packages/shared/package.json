@@ -17,6 +17,7 @@
     "vitest": "^4.1.12"
   },
   "dependencies": {
+    "@cantoo/pdf-lib": "2.11.1",
     "proj4": "^2.22.0",
     "zod": "^4.6.7"
   }
