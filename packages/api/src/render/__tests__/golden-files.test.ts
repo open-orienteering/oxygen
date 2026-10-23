@@ -41,6 +41,11 @@ describe("golden PNGs", () => {
       "lib-text-layout",
       "lib-colour-order",
       "lib-precision",
+      "course-legs",
+      "course-cuts",
+      "course-objects",
+      "course-sprint",
+      "course-all-controls",
     ]);
   });
 

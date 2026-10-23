@@ -53,6 +53,12 @@ const scenes = [
   "lib-text-layout",
   "lib-colour-order",
   "lib-precision",
+  // Course layer (C0): courseLayer() merged with a library base map in one stream.
+  "course-legs",
+  "course-cuts",
+  "course-objects",
+  "course-sprint",
+  "course-all-controls",
 ] as const;
 
 function diffPng(actual: PNG, golden: PNG): { differing: number; total: number; diff: PNG } {
