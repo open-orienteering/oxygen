@@ -66,12 +66,17 @@ is all `legacy`.
 Production documents are at the v0.2.0 importer/library. Nothing reads
 them while every event is `legacy`, so this can wait, but it must happen
 before the first event is switched to `vector` (the viewer wants the
-current pins). Run `packages/api/dist/cli/map-rematch.js` as a one-off
-Cloud Run job with the released image and the `oxygen-database-url`
-secret, exactly as `backfill.sh` builds its job but with the rematch
-command (`backfill.sh` does not take a command override yet — add one or
-copy the job definition). Expect every pin to be re-matched, 0 failed,
-and identical hash results to a dev re-match of the same sources
+current pins):
+
+```bash
+cd scripts/gcp
+./backfill.sh --tag v0.3.0 --rematch --dry-run   # lists the stale pins
+./backfill.sh --tag v0.3.0 --rematch             # Cloud Run job oxygen-map-rematch
+```
+
+Same job wiring as the backfill (released image, `oxygen-database-url`
+secret, pool of 2), different CLI. Expect every pin re-matched, 0 failed,
+and the same document hashes a dev re-match of the same sources produces
 (S0's two-machine identity, now on the new importer).
 
 ## 5. S4: 36 MB chunked upload in idle mode
