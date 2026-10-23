@@ -78,21 +78,30 @@ export interface PreparedDocument {
   input: mapDocument.DocumentRenderInput;
 }
 
-const prepared = new Map<string, PreparedDocument>();
+const prepared = new Map<string, Promise<PreparedDocument>>();
 const PREPARED_MAX = 2;
 const warnedNoBoundary = new Set<string>();
 
-/** Decoded + bridged document, kept for the last two hashes: a window drag sends many requests at one document. */
-export async function prepareDocument(hash: string, bytes: () => Promise<Uint8Array> | Uint8Array): Promise<PreparedDocument> {
+/**
+ * Decoded + bridged document, kept for the last two hashes: a window drag
+ * sends many requests at one document, and the editor's first burst
+ * (full / ink × two resolutions) shares one decode through the in-flight promise.
+ */
+export function prepareDocument(hash: string, bytes: () => Promise<Uint8Array> | Uint8Array): Promise<PreparedDocument> {
   const hit = prepared.get(hash);
   if (hit) {
     prepared.delete(hash);
     prepared.set(hash, hit);
     return hit;
   }
-  const doc = mapDocument.decodeMapDocument(await bytes());
-  const entry: PreparedDocument = { colours: doc.header.colours, input: mapDocument.documentRenderInput(doc) };
+  const entry = (async (): Promise<PreparedDocument> => {
+    const doc = mapDocument.decodeMapDocument(await bytes());
+    return { colours: doc.header.colours, input: mapDocument.documentRenderInput(doc) };
+  })();
   prepared.set(hash, entry);
+  entry.catch(() => {
+    if (prepared.get(hash) === entry) prepared.delete(hash);
+  });
   while (prepared.size > PREPARED_MAX) prepared.delete(prepared.keys().next().value as string);
   return entry;
 }
