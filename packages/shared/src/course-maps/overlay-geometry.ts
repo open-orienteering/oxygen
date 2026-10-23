@@ -20,11 +20,15 @@ export interface AngularGap {
   end: number;
 }
 
-/** Clip a line segment around every circular obstacle. */
+/**
+ * Clip a line segment around every circular obstacle. An obstacle's own
+ * `clearance` overrides the shared one (start triangles and finish rings
+ * are wider than a control circle).
+ */
 export function clipLine(
   a: OverlayPoint,
   b: OverlayPoint,
-  obstacles: OverlayPoint[],
+  obstacles: Array<OverlayPoint & { clearance?: number }>,
   clearance: number,
 ): OverlaySegment[] {
   const dx = b.x - a.x;
@@ -42,8 +46,9 @@ export function clipLine(
     const px = a.x + along * ux - obstacle.x;
     const py = a.y + along * uy - obstacle.y;
     const perpendicular = Math.hypot(px, py);
-    if (perpendicular < clearance) {
-      const half = Math.sqrt(clearance * clearance - perpendicular * perpendicular);
+    const reach = obstacle.clearance ?? clearance;
+    if (perpendicular < reach) {
+      const half = Math.sqrt(reach * reach - perpendicular * perpendicular);
       blocks.push([along - half, along + half]);
     }
   }

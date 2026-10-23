@@ -15,3 +15,4 @@ export * as mapDocument from "./map-document/index.js";
 export * as mapImport from "./import/index.js";
 export * as mapGeo from "./geo/index.js";
 export * as symbolLibrary from "./symbol-library/index.js";
+export * as course from "./course/index.js";
