@@ -136,7 +136,9 @@ With `allowLegacy` false there is no fallback: the layer shows its
 slice B, so the rule is recorded and nothing is routed:
 
 - **Print path** (`maps.pdf`): stays on the legacy path for both values
-  until slice C.
+  until slice C. The layout-editor preview `window.png` is gated: a
+  `vector` event with a pinned document draws from it
+  (`course-print.md` §10); everything else is the legacy path.
 - **Editor**: the course editor (`CourseEditorPage` over `MapPanel` with
   `editor`) mounts for both values until slice D adds the new editor;
   under `vector` it edits over the vector base layer.
@@ -206,13 +208,14 @@ value (09 §3, §10). `playwright.config.ts`:
 | `packages/api/src/__tests__/integration/lease.test.ts` "refreshes cloud-owned settings…" | a flip on the cloud reaches the leased venue copy (the column is not in `EXCLUDED_FIELDS`) |
 | `packages/api/src/__tests__/integration/map-tiles.test.ts` "skips the pre-cache for a vector event" | the poll answers `{0,0,false}` and renders nothing; a requested tile is served; no background crawl to other zooms |
 | `packages/web/src/lib/__tests__/map-pipeline.test.ts` | `resolveMapPipeline`: vector needs a document, unknown = legacy, WebGL2 fallback only while `allowLegacy` |
+| `packages/api/src/__tests__/integration/course-maps.test.ts` "window.png under a pinned document" | the editor preview reads the document only for `vector` + pin; unpinned stays legacy |
 | `e2e/map-pipeline-switch.spec.ts` | toggle text and report line; on → vector layer, another page of the event draws vector with no tile request; off → tiles; without `allowLegacy` no toggle on a vector event and no report line on a legacy one; no WebGL2 → tiles + notice while allowed, the layer's message when not; a lost context → tiles + notice |
 | `e2e/map-vector-layer.spec.ts` | the vector layer in the viewer, the event switched through the column; a legacy event stays on tiles |
 | `e2e/webserial.spec.ts`, `mobile-layout.spec.ts`, `map-viewer-gestures.spec.ts` | the same flows under `map-legacy` and `map-vector`; each asserts `data-map-pipeline` equals the project's value; `webserial` "post-readout map" uploads the map, reads a card and checks the readout map (vector layer ready and no tile image under `vector`, tiles under `legacy`) |
 
 ## 7. Pending in this chapter
 
-- **Print path and editor** gates (§3.4): slices C and D.
+- **Print path** (`maps.pdf`) and **editor** gates (§3.4): slices C and D.
 - **Admin UI for the instance flags**: none until slice E needs one.
 - **Dual-run list** grows with the slices that touch maps: candidates
   `wide-screen-map-pane`, `kiosk-readout`, `map-control-circles`,

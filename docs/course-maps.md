@@ -166,7 +166,9 @@ GET /api/maps/:nameId/graphics/:id
 ```
 
 Both require `courses.view`. Preview requests are capped at 4096 pixels per
-axis. Combined PDF pages are ordered by course, map `sort_order`, then map
+axis. For a `vector` event with a pinned map document `window.png` is drawn
+from the document by the reference raster (`course-print.md` §10); other
+events use the OCAD → SVG path. Query, caps and caching are the same. Combined PDF pages are ordered by course, map `sort_order`, then map
 `seq`.
 
 ## Maps and Map templates pages
