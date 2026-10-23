@@ -219,7 +219,7 @@ value (09 §3, §10). `playwright.config.ts`:
 - **Admin UI for the instance flags**: none until slice E needs one.
 - **Dual-run list** grows with the slices that touch maps: candidates
   `wide-screen-map-pane`, `kiosk-readout`, `map-control-circles`,
-  `course-editor` (C/D). `scripts/e2e-sharded.mjs` weights do not yet
+  `course-editor` (C/D); `course-maps` (C3: the editor's `window.png` under `vector`, C6). `scripts/e2e-sharded.mjs` weights do not yet
   count the second run of a dual spec.
 - **Lost context recovery**: the panel falls back (or shows the message)
   and does not try the vector layer again until it remounts.

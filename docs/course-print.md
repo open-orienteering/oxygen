@@ -106,3 +106,10 @@ the reference raster (`map-rendering.md` §5.1).
 |---|---|
 | `packages/api/src/render/__tests__/window-raster.test.ts` | boundary choice and fallbacks; pass filter; object selection; full / ink probes; ink at a moved boundary; stack without lower purple; 90° rotation direction |
 | `packages/api/src/__tests__/integration/course-maps.test.ts` "window.png under a pinned document" | `getBaseMapInfo` branch equality and the unpinned fallback; full size / colour / cache; ink transparency and empty window; rotated entry; agreement with the legacy window of the same map |
+
+## Pending in this chapter
+
+- §1–9: C1, C2, C3 (§11: C7). §10 is retired by slice D (§10.6).
+- E2E: `e2e/course-maps.spec.ts` does not yet run under `vector`, so no
+  Playwright project requests `window.png` from a pinned event; C3's
+  dual-run of that spec (`map-pipeline-switch.md` §7) covers it.
