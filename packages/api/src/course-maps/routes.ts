@@ -18,6 +18,8 @@ import {
 import { composeMapPageSvg, renderBaseMapWindow } from "./map-page-svg.js";
 import { graphicToResolved } from "./graphics.js";
 import { getBaseMapInfo, loadBaseMapSvg } from "./map-source.js";
+import { getBlob } from "../map-store/blob-store.js";
+import { prepareDocument, renderDocumentWindow } from "../render/window-raster.js";
 import { layoutControlsFromCourseControls, resolveMapLayout } from "./resolve-layout.js";
 import { LruCache } from "./lru-cache.js";
 import { RsvgConverter, mergePdfPages } from "./svg-to-pdf.js";
@@ -392,6 +394,28 @@ export function registerCourseMapRoutes(
         printScale,
         rotation,
       );
+      if (mapInfo.document) {
+        // `vector` event with a pinned document: the reference raster
+        // (docs/course-print.md §10), under the same permit pool and cache.
+        const { hash } = mapInfo.document;
+        const prepared = await prepareDocument(hash, async () => {
+          const bytes = await getBlob(db, "map_documents", hash);
+          if (!bytes) throw new Error("Pinned map document is missing");
+          return bytes;
+        });
+        const body = await renderGate().run(
+          () => renderDocumentWindow(prepared, { window, widthPx, heightPx, layer, hash }),
+          { maxQueue: renderMaxQueue() },
+        );
+        const etag = `"${createHash("sha256").update(body).digest("base64url")}"`;
+        windowPngCache.set(cacheKey, { body, etag });
+        return reply
+          .header("Content-Type", "image/png")
+          .header("Cache-Control", "private, max-age=3600")
+          .header("ETag", etag)
+          .header("X-Cache", "miss")
+          .send(body);
+      }
       const { layers } = await loadBaseMapSvg(db, event.id, window);
       const source =
         layer === "ink"

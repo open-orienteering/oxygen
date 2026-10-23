@@ -73,7 +73,7 @@ export function objectsNear(objects: readonly render.RenderObject[], bbox: MapWi
   });
 }
 
-interface PreparedDocument {
+export interface PreparedDocument {
   colours: mapDocument.DocumentColour[];
   input: mapDocument.DocumentRenderInput;
 }
@@ -83,14 +83,14 @@ const PREPARED_MAX = 2;
 const warnedNoBoundary = new Set<string>();
 
 /** Decoded + bridged document, kept for the last two hashes: a window drag sends many requests at one document. */
-export function prepareDocument(hash: string, bytes: () => Uint8Array): PreparedDocument {
+export async function prepareDocument(hash: string, bytes: () => Promise<Uint8Array> | Uint8Array): Promise<PreparedDocument> {
   const hit = prepared.get(hash);
   if (hit) {
     prepared.delete(hash);
     prepared.set(hash, hit);
     return hit;
   }
-  const doc = mapDocument.decodeMapDocument(bytes());
+  const doc = mapDocument.decodeMapDocument(await bytes());
   const entry: PreparedDocument = { colours: doc.header.colours, input: mapDocument.documentRenderInput(doc) };
   prepared.set(hash, entry);
   while (prepared.size > PREPARED_MAX) prepared.delete(prepared.keys().next().value as string);

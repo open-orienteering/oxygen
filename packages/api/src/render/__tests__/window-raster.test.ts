@@ -16,12 +16,12 @@ import { filterPassStream, inkBoundary, objectsNear, prepareDocument, renderDocu
 const fixture = readFileSync(fileURLToPath(new URL("../../../../../e2e/test.ocd", import.meta.url)));
 
 let doc: mapDocument.MapDocument;
-let prepared: ReturnType<typeof prepareDocument>;
+let prepared: Awaited<ReturnType<typeof prepareDocument>>;
 
 beforeAll(async () => {
   const imported = await importOcadToDocument(fixture, "test.ocd");
   doc = mapDocument.decodeMapDocument(imported.bytes);
-  prepared = prepareDocument("unit", () => imported.bytes);
+  prepared = await prepareDocument("unit", () => imported.bytes);
 });
 
 async function decode(png: Buffer) {
