@@ -71,6 +71,8 @@ export class PdfWriter {
   private readonly formsByMesh = new WeakMap<GlyphMesh, { name: string; ref: PDFRef }>();
   private fontCount = 0;
   private saved = false;
+  /** Why a face falls back to outlines (unreadable file); for the caller to log. */
+  readonly warnings: string[] = [];
 
   private constructor(
     private readonly doc: PDFDocument,
@@ -82,8 +84,9 @@ export class PdfWriter {
       let embeddable = opts.text !== "outline";
       try {
         if (embeddable) subsetTrueType(data, [metrics.glyphId(0x30)]);
-      } catch {
+      } catch (err) {
         embeddable = false;
+        this.warnings.push(`PDF_FONT_OUTLINES: ${f.family} cannot be subset, text drawn as outlines (${err instanceof Error ? err.message : String(err)})`);
       }
       this.faces.push({ family: f.family, metrics, data, embeddable, glyphs: new Set() });
     }

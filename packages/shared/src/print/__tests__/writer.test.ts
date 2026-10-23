@@ -150,6 +150,19 @@ describe("PdfWriter", async () => {
     expect(d.getCreationDate()?.toISOString()).toBe("2026-10-23T12:00:00.000Z");
   });
 
+  it("falls back to outlines with a warning when a face cannot be subset", async () => {
+    const broken = faces[0].data.slice();
+    // Rename `loca`: the reader still parses (outlines are optional to it), the subsetter cannot work.
+    const dv = new DataView(broken.buffer);
+    for (let i = 0; i < dv.getUint16(4); i++) {
+      const o = 12 + i * 16;
+      if (String.fromCharCode(...broken.subarray(o, o + 4)) === "loca") broken[o] = "x".charCodeAt(0);
+    }
+    const w = await PdfWriter.create({ faces: [{ family: "liberation-sans", data: broken }], deterministic: true });
+    expect(w.warnings).toEqual([expect.stringMatching(/^PDF_FONT_OUTLINES: liberation-sans cannot be subset/)]);
+    expect(w.addPage({ widthPt: 100, heightPt: 100 }).resources.font({ fontId: 0, family: "liberation-sans", bold: false, italic: false }, [1])).toBeUndefined();
+  });
+
   it("draws text as outlines without fonts in outline mode (the 05 §5.6 fallback)", async () => {
     const d = await PDFDocument.load(await build({ text: "outline" }), { updateMetadata: false });
     const fonts = get(d.getPage(0).node.Resources()!, "Font");

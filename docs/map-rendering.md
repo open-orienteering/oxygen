@@ -1462,7 +1462,9 @@ rotation and scale, one form per part, form content and `BBox`; one
 hatch block; the `1 Tr` halo pass before the `0 Tr` fill; per-glyph `Tm`
 with angles; the outline fallback; per scene no `rg` in `cmyk` and no
 `k` in `rgb`; one colour operator per colour change with the stack's
-values; the layer `cm` for a 1:15 000 map at 1:10 000 and a rotation;
+values; the layer `cm` for a 1:15 000 map at 1:10 000 and a rotation,
+never in exponent notation (a 0.01° tilt is `0.000000495`, not `4.95e-7`);
+round caps and joins on the fallback halo;
 `W n` / `W* n`. `render/__tests__/stroke-outline.test.ts`: width inside
 and outside the tapers (a vertex at the taper length), counter-clockwise
 rings only, round / miter / bevel joins at a corner, a Bézier within the

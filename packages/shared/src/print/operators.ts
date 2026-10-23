@@ -56,10 +56,11 @@ export interface OperatorOptions {
   originUm?: [number, number];
 }
 
+/** A PDF number: fixed-point (never JS exponent notation, ISO 32000 §7.3.3), trailing zeros dropped. */
 const num = (v: number, decimals: number): string => {
-  const p = 10 ** decimals;
-  const r = Math.round(v * p) / p;
-  return Object.is(r, -0) || r === 0 ? "0" : String(r);
+  let t = v.toFixed(decimals);
+  if (t.includes(".")) t = t.replace(/0+$/, "").replace(/\.$/, "");
+  return t === "-0" ? "0" : t;
 };
 /** Integer µm. */
 const um = (v: number) => num(v, 0);
@@ -294,7 +295,7 @@ export function passStreamOperators(stream: PassStream, opts: OperatorOptions): 
             const [c, s, , , x, y] = tm(i);
             const body = pathOperators(o.path, [0, 0], true);
             if (halo) {
-              out.push(`q ${cmOperator([k * c, k * s, -k * s, k * c, x, y])} ${num((2 * p.haloWidthUm!) / k, 3)} w ${body} S Q`);
+              out.push(`q ${cmOperator([k * c, k * s, -k * s, k * c, x, y])} ${num((2 * p.haloWidthUm!) / k, 3)} w 1 J 1 j ${body} S Q`);
             } else {
               out.push(`q ${cmOperator([k * c, k * s, -k * s, k * c, x, y])} ${body} f* Q`);
             }

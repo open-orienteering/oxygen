@@ -202,7 +202,7 @@ describe("text", () => {
     expect(o).toContain(`q ${cmOperator([k, 0, 0, k, 1000, 5000])} `);
     expect(o).toMatch(/ f\* Q/);
     // halo: stroked outlines, width in font units
-    expect(o).toContain(` ${Math.round(((2 * 200) / k) * 1000) / 1000} w `);
+    expect(o).toContain(` ${Math.round(((2 * 200) / k) * 1000) / 1000} w 1 J 1 j `);
   });
 });
 
@@ -255,6 +255,14 @@ describe("map layer", () => {
   it("rotates the layer counter-clockwise", () => {
     const [a, b, c, d] = layerMatrix({ scaleRatio: 1, rotationDeg: 90, atPt: [0, 0] });
     expect([a, b, c, d].map((v) => Math.round(v / UM_TO_PT))).toEqual([0, 1, -1, 0]);
+  });
+
+  it("never writes exponent notation, even for a tiny rotation", () => {
+    const m = layerMatrix({ scaleRatio: 1, rotationDeg: 0.01, atPt: [0, 0] });
+    expect(m[1]).toBeLessThan(1e-6);
+    expect(cmOperator(m, 9)).toMatch(/^[-\d. ]+ cm$/);
+    expect(cmOperator(m, 9).split(" ")[1]).toBe("0.000000495");
+    expect(cmOperator([1e-12, -1e-12, 0, 1, 0, 0], 6)).toBe("0 0 0 1 0 0 cm");
   });
 
   it("clip regions: W n or W* n", () => {

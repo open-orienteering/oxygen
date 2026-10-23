@@ -126,8 +126,9 @@ Type0  /Encoding /Identity-H  /ToUnicode <CMap>  /DescendantFonts [
 - `ToUnicode`: one `bfchar` per used glyph that some code point maps to,
   the lowest such code point (BMP), so text is selectable and searchable.
 - **Fallback: outlines.** A face whose file the subsetter cannot read
-  (checked once when the writer loads the face) or `text: "outline"`
-  draws text as the glyph outlines the reference raster draws
+  (checked once when the writer loads the face; the reason is pushed to
+  `PdfWriter.warnings` as `PDF_FONT_OUTLINES: …` for the caller to log) or
+  `text: "outline"` draws text as the glyph outlines the reference raster draws
   (`map-rendering.md` §5.3). A family without a face draws nothing — the
   stage has already warned `NO_FONT` (§4.9) for families no file ships.
 
@@ -151,7 +152,7 @@ equal bytes:
 | `print/__tests__/operators.test.ts` | tier 1 (05 §7), see `map-rendering.md` §5.3 |
 | `print/__tests__/colour.test.ts` | stack CMYK in `cmyk`, naive sRGB in `rgb`; inverse naive round-trips through `cmykToHex`; black / white single-plate; grey on K; operator formatting |
 | `print/__tests__/fonts.test.ts` | subset keeps ids: kept glyph records and advances byte-equal, composite components kept, others empty, cut after the highest id, < ¼ of the file; checksums (`0xB1B0AFBA`), byte-identical across runs, dropped tables; `W` grouping; ToUnicode pairs; hex runs; subset tag; descriptor metrics |
-| `print/__tests__/writer.test.ts` | tier 2 (05 §7): PDF 1.7, page count, `MediaBox` / `TrimBox`, `Info` with fixed dates; per face Type0 → Identity-H → CIDFontType2 → `CIDToGIDMap /Identity` → `FontDescriptor` → `FontFile2` with `Length1` = program length, subset tag pattern, ToUnicode covers every drawn id; form XObjects (`Subtype /Form`, `BBox`) and clip blocks; byte-identical files with `deterministic` (cmyk and rgb); real dates and differing bytes without; outline mode embeds no font and draws no `BT` |
+| `print/__tests__/writer.test.ts` | tier 2 (05 §7): PDF 1.7, page count, `MediaBox` / `TrimBox`, `Info` with fixed dates; per face Type0 → Identity-H → CIDFontType2 → `CIDToGIDMap /Identity` → `FontDescriptor` → `FontFile2` with `Length1` = program length, subset tag pattern, ToUnicode covers every drawn id; form XObjects (`Subtype /Form`, `BBox`) and clip blocks; byte-identical files with `deterministic` (cmyk and rgb); real dates and differing bytes without; a face the subsetter cannot read → `PDF_FONT_OUTLINES` warning and no font; outline mode embeds no font and draws no `BT` |
 
 Not in vitest until C3: `qpdf --check` and the rasterised comparison
 (`pdftoppm`) against the reference raster.
