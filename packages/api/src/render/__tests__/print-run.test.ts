@@ -109,7 +109,7 @@ describe("pageSanctionedCodes", () => {
 
 describe("comparePrevious", () => {
   const mode = (sha256: string, bytes: number, renderMs: number, ratio: number) => ({
-    bytes, sha256, renderMs, pageMm: { width: 297, height: 210 }, qpdf: "ok" as const, parity: { differing: 0, total: 1, ratio }, warnings: 0, sanctioned: [],
+    bytes, sha256, renderMs, pageMm: { width: 297, height: 210 }, qpdf: "ok" as const, parity: { differing: 0, total: 1, ratio }, outline: { differing: 0, total: 1, ratio: ratio / 2 }, strong: { differing: 0, ratio: 0 }, shape: { unexplained: 0, ink: 1, ratio: 0 }, warnings: 0, sanctioned: [],
   });
   const report = (rgb: string, legacy: number | null, diverging: number): Pick<PrintRunReport, "modes" | "legacy" | "symbols"> => ({
     modes: { rgb: mode(rgb, 1000, 100, 0.001), cmyk: mode("c", 1200, 120, 0.002) },
@@ -128,6 +128,7 @@ describe("comparePrevious", () => {
     expect(p.bytesDelta).toEqual({ rgb: 100, cmyk: 0 });
     expect(p.renderMsDelta).toEqual({ rgb: -50, cmyk: 0 });
     expect(p.parityDelta.rgb).toBeCloseTo(-0.002);
+    expect(p.outlineDelta.rgb).toBeCloseTo(-0.001);
     expect(p.legacyUnexplainedDelta).toBeCloseTo(0.05);
     expect(p.divergingDelta).toBe(-2);
     expect(comparePrevious(report("a", null, 1), prev)!.legacyUnexplainedDelta).toBeNull();

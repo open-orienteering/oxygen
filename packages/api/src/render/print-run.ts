@@ -41,8 +41,13 @@ import { prepareDocument } from "./window-raster.js";
 
 const run = promisify(execFile);
 
-/** Backend parity budget: differing pixels ÷ page pixels (04 §9; course-print.md §9.2, pages with embedded fonts). */
+/**
+ * Backend parity budgets, differing pixels ÷ page pixels (04 §9; course-print.md §9.2's text tier):
+ * the page with text as glyph outlines (geometry) and with embedded fonts (the route's bytes,
+ * FreeType's glyph renderer). A corpus page carries map text, so it is held like a text scene.
+ */
 export const PRINT_PARITY_BUDGET = 0.005;
+export const PRINT_FONT_PARITY_BUDGET = 0.025;
 /** The template's page margin around the map frame, mm (the template default). */
 export const PRINT_MARGIN_MM = 3;
 /** Description cell size on the synthetic sheet, mm. */
@@ -100,8 +105,14 @@ export interface PrintModeResult {
   /** PDF page size, mm. */
   pageMm: { width: number; height: number };
   qpdf: ToolCheck;
-  /** The page raster against the oracle (this mode's colours), differing pixels at tolerance 16. */
+  /** The page (embedded fonts, the route's bytes) against the oracle in this mode's colours, differing pixels at tolerance 16. */
   parity: { differing: number; total: number; ratio: number };
+  /** The same page written with text as glyph outlines against the same oracle. */
+  outline: { differing: number; total: number; ratio: number };
+  /** Embedded-fonts page vs oracle at channel tolerance 32 (shading beyond edge anti-aliasing). */
+  strong: { differing: number; ratio: number };
+  /** Embedded-fonts page vs oracle: B9's shape measure (`unexplainedPixels`) ÷ ink. */
+  shape: { unexplained: number; ink: number; ratio: number };
   warnings: number;
   sanctioned: PrintSanctionedCode[];
 }
@@ -146,6 +157,7 @@ export interface PrintPrevious {
   bytesDelta: Record<ColourMode, number>;
   renderMsDelta: Record<ColourMode, number>;
   parityDelta: Record<ColourMode, number>;
+  outlineDelta: Record<ColourMode, number>;
   legacyUnexplainedDelta: number | null;
   divergingDelta: number | null;
 }
@@ -318,6 +330,7 @@ export function comparePrevious(current: Pick<PrintRunReport, "modes" | "legacy"
     bytesDelta: per((m) => current.modes[m].bytes - (previous.modes[m]?.bytes ?? 0)),
     renderMsDelta: per((m) => Math.round(current.modes[m].renderMs - (previous.modes[m]?.renderMs ?? 0))),
     parityDelta: per((m) => current.modes[m].parity.ratio - (previous.modes[m]?.parity.ratio ?? 0)),
+    outlineDelta: per((m) => current.modes[m].outline.ratio - (previous.modes[m]?.outline?.ratio ?? 0)),
     legacyUnexplainedDelta: lc !== null && lp !== null ? lc - lp : null,
     divergingDelta: dc !== null && dp !== null ? dc - dp : null,
   };
@@ -431,10 +444,18 @@ export async function runPrint(file: Buffer, fileName: string, opts: PrintRunOpt
     const colour = mode === "cmyk" ? await rasteriserCmykColours(page.colours.map((c) => c.cmyk)) : null;
     const oracle = await rasterisePage(page, { pxPerMm, supersample: PAGE_GOLDEN_SUPERSAMPLE, ...(colour ? { colour: (i: number) => colour[i] ?? "#ff00ff" } : {}) });
     const d = diffImages(oracle, raster, 16);
-    if (d.ratio > PRINT_PARITY_BUDGET) failures.push(`${mode}: backend parity ${(d.ratio * 100).toFixed(3)} % > ${PRINT_PARITY_BUDGET * 100} %`);
+    const d32 = diffImages(oracle, raster, 32);
+    const shapeInk = inkUnion(oracle, raster);
+    const shapeUnexplained = unexplainedPixels(oracle, raster);
+    if (d.ratio > PRINT_FONT_PARITY_BUDGET) failures.push(`${mode}: backend parity ${(d.ratio * 100).toFixed(3)} % > ${PRINT_FONT_PARITY_BUDGET * 100} % (embedded fonts)`);
     await opts.onImage?.(`page.${mode}.png`, raster);
     await opts.onImage?.(`oracle.${mode}.png`, oracle);
     await opts.onImage?.(`diff.oracle.${mode}.png`, diffPicture(oracle, raster));
+    const outlined = await renderCoursePages({ document: doc, sheets: [sheet], mode, deterministic: true, text: "outline" });
+    const outlineRaster = await rasterisePdf(outlined.bytes, W, H, PAGE_GOLDEN_SUPERSAMPLE);
+    const dOutline = diffImages(oracle, outlineRaster, 16);
+    if (dOutline.ratio > PRINT_PARITY_BUDGET) failures.push(`${mode}: backend parity ${(dOutline.ratio * 100).toFixed(3)} % > ${PRINT_PARITY_BUDGET * 100} % (text as outlines)`);
+    await opts.onImage?.(`diff.oracle.${mode}.outline.png`, diffPicture(oracle, outlineRaster));
     if (mode === "rgb") rgbRaster = raster;
     modes[mode] = {
       bytes: out.bytes.length,
@@ -443,6 +464,9 @@ export async function runPrint(file: Buffer, fileName: string, opts: PrintRunOpt
       pageMm,
       qpdf,
       parity: { differing: d.differing, total: d.total, ratio: d.ratio },
+      outline: { differing: dOutline.differing, total: dOutline.total, ratio: dOutline.ratio },
+      strong: { differing: d32.differing, ratio: d32.ratio },
+      shape: { unexplained: shapeUnexplained, ink: shapeInk, ratio: shapeInk ? shapeUnexplained / shapeInk : 0 },
       warnings: out.warnings.length,
       sanctioned: pageSanctionedCodes({ mode, description: !!sheet.description, rotated: rotationDeg !== 0 }),
     };
@@ -590,16 +614,16 @@ export function printMarkdown(r: PrintRunReport): string {
     "",
     `**${r.pass ? "PASS" : "FAIL"}**${r.failures.length ? ": " + r.failures.join("; ") : ""}`,
     "",
-    "| Mode | Bytes | renderCoursePages | Page mm | qpdf --check | Backend parity (differing / page) | Warnings | Sanctioned vs legacy |",
-    "|---|---|---|---|---|---|---|---|",
+    "| Mode | Bytes | renderCoursePages | Page mm | qpdf --check | Backend parity, embedded fonts (differing / page) | Text as outlines | > 32 levels | Unexplained / ink | Warnings | Sanctioned vs legacy |",
+    "|---|---|---|---|---|---|---|---|---|---|---|",
   ];
   for (const m of ["rgb", "cmyk"] as const) {
     const x = r.modes[m];
     lines.push(
-      `| ${m} | ${kb(x.bytes)} | ${x.renderMs} ms | ${x.pageMm.width} × ${x.pageMm.height} | ${x.qpdf} | ${pct(x.parity.ratio)} (${x.parity.differing} / ${x.parity.total}) | ${x.warnings} | ${x.sanctioned.join(", ")} |`,
+      `| ${m} | ${kb(x.bytes)} | ${x.renderMs} ms | ${x.pageMm.width} × ${x.pageMm.height} | ${x.qpdf} | ${pct(x.parity.ratio)} (${x.parity.differing} / ${x.parity.total}) | ${pct(x.outline.ratio)} | ${pct(x.strong.ratio)} | ${pct(x.shape.ratio, 4)} (${x.shape.unexplained}) | ${x.warnings} | ${x.sanctioned.join(", ")} |`,
     );
   }
-  lines.push("", "Images: `page.<mode>.png` (PDF raster), `oracle.<mode>.png` (page oracle), `diff.oracle.<mode>.png`.", "", "## Legacy page (rsvg-convert)", "");
+  lines.push("", `Budgets: ${PRINT_PARITY_BUDGET * 100} % with text as outlines, ${PRINT_FONT_PARITY_BUDGET * 100} % with embedded fonts. Images: \`page.<mode>.png\` (PDF raster), \`oracle.<mode>.png\` (page oracle), \`diff.oracle.<mode>.png\`, \`diff.oracle.<mode>.outline.png\`.`, "", "## Legacy page (rsvg-convert)", "");
   if ("skipped" in r.legacy) lines.push(`Skipped: ${r.legacy.skipped}.`);
   else {
     const l = r.legacy;
@@ -624,9 +648,9 @@ export function printMarkdown(r: PrintRunReport): string {
   if (r.previous) {
     const p = r.previous;
     const sgn = (v: number, f: (v: number) => string) => `${v >= 0 ? "+" : ""}${f(v)}`;
-    lines.push("", "## Against the previous run", "", "| Mode | Same bytes | Bytes | renderCoursePages | Backend parity |", "|---|---|---|---|---|");
+    lines.push("", "## Against the previous run", "", "| Mode | Same bytes | Bytes | renderCoursePages | Backend parity, fonts | Backend parity, outlines |", "|---|---|---|---|---|---|");
     for (const m of ["rgb", "cmyk"] as const) {
-      lines.push(`| ${m} | ${p.sameBytes[m] ? "yes" : "**no**"} | ${sgn(p.bytesDelta[m], String)} | ${sgn(p.renderMsDelta[m], (v) => `${v} ms`)} | ${sgn(p.parityDelta[m] * 100, (v) => `${v.toFixed(3)} pp`)} |`);
+      lines.push(`| ${m} | ${p.sameBytes[m] ? "yes" : "**no**"} | ${sgn(p.bytesDelta[m], String)} | ${sgn(p.renderMsDelta[m], (v) => `${v} ms`)} | ${sgn(p.parityDelta[m] * 100, (v) => `${v.toFixed(3)} pp`)} | ${sgn(p.outlineDelta[m] * 100, (v) => `${v.toFixed(3)} pp`)} |`);
     }
     lines.push(
       "",

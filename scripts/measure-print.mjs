@@ -3,7 +3,8 @@
  * regression net, 09 §8): prints one course page of an OCAD map on its
  * OCAD print window through the route's composer (`renderCoursePages`) in
  * `rgb` and `cmyk`, runs `qpdf --check`, rasterises with `pdftocairo` and
- * compares (a) with the page oracle — backend parity, ≤ 0.5 % — and
+ * compares (a) with the page oracle — backend parity, ≤ 0.5 % with text as
+ * glyph outlines and ≤ 2.5 % with embedded fonts (the §9.2 text tier) — and
  * (b) with the legacy rsvg page of the same sheet, classified by the
  * sanctioned differences (§8.4) and per symbol by B9's parity tool.
  * Records size and time per page and compares with the previous run.
@@ -38,7 +39,7 @@
  * imports it again.
  *
  * Exit status: 0 when the page composed, `qpdf` found no errors, both modes
- * are within the backend-parity budget, both pages have the sheet's size and
+ * are within the backend-parity budgets, both pages have the sheet's size and
  * every diverging symbol carries a sanctioned difference; 1 otherwise (a map
  * that does not compose or print included); 2 on usage errors.
  */
@@ -134,7 +135,7 @@ async function main() {
   );
   for (const m of ["rgb", "cmyk"]) {
     const x = report.modes[m];
-    console.log(`  ${m.padEnd(4)} ${kb(x.bytes).padStart(8)}  ${String(x.renderMs).padStart(6)} ms  qpdf ${x.qpdf}  parity ${pct(x.parity.ratio)}`);
+    console.log(`  ${m.padEnd(4)} ${kb(x.bytes).padStart(8)}  ${String(x.renderMs).padStart(6)} ms  qpdf ${x.qpdf}  parity ${pct(x.parity.ratio)} (fonts), ${pct(x.outline.ratio)} (outlines)`);
   }
   if ("skipped" in report.legacy) console.log(`  legacy skipped: ${report.legacy.skipped}`);
   else console.log(`  legacy unexplained ${pct(report.legacy.unexplainedRatio, 2)} of ink, differing ${pct(report.legacy.inkRatio, 2)}`);

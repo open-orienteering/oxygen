@@ -55,7 +55,8 @@ describe("measure-print.mjs", () => {
       assert.match(m.sha256, /^[0-9a-f]{64}$/);
       assert.ok(m.bytes > 1000, `${mode} bytes`);
       assert.deepEqual(m.pageMm, { width: 297, height: 210 });
-      assert.ok(m.parity.ratio <= 0.005, `${mode} parity ${m.parity.ratio}`);
+      assert.ok(m.outline.ratio <= 0.005, `${mode} parity, outlines ${m.outline.ratio}`);
+      assert.ok(m.parity.ratio <= 0.025, `${mode} parity, fonts ${m.parity.ratio}`);
       if (CI || m.qpdf !== "skipped") assert.equal(m.qpdf, "ok", mode);
       assert.ok(m.sanctioned.includes("course-symbol-sizes"));
       assert.equal(m.sanctioned.includes("cmyk-colour"), mode === "cmyk");
@@ -72,10 +73,10 @@ describe("measure-print.mjs", () => {
     const summary = readFileSync(path.join(out, "summary.md"), "utf8");
     assert.match(summary, /^# Corpus print — test\.ocd/);
     assert.match(summary, /\*\*PASS\*\*/);
-    assert.match(summary, /\| rgb \| \d+ kB \| \d+ ms \| 297 × 210 \| (ok|skipped) \| \d\.\d{3} % /);
+    assert.match(summary, /\| rgb \| \d+ kB \| \d+ ms \| 297 × 210 \| (ok|skipped) \| \d\.\d{3} % \(\d+ \/ \d+\) \| \d\.\d{3} % \| \d\.\d{3} % \| \d\.\d{4} % \(\d+\) \|/);
     assert.match(summary, /\| cmyk \| .*cmyk-colour/);
     assert.match(summary, /\| 850\.1 \| Frame \| rectangle \| .* \| rectangle-symbols \|/);
-    for (const f of ["page.rgb.pdf", "page.cmyk.pdf", "page.rgb.png", "page.cmyk.png", "oracle.rgb.png", "oracle.cmyk.png", "diff.oracle.rgb.png", "diff.oracle.cmyk.png", "symbol.850.1.diff.png"]) {
+    for (const f of ["page.rgb.pdf", "page.cmyk.pdf", "page.rgb.png", "page.cmyk.png", "oracle.rgb.png", "oracle.cmyk.png", "diff.oracle.rgb.png", "diff.oracle.cmyk.png", "diff.oracle.rgb.outline.png", "symbol.850.1.diff.png"]) {
       assert.ok(existsSync(path.join(out, f)), f);
     }
   });

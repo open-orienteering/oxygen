@@ -47,6 +47,8 @@ export interface CoursePagesOptions {
   mode?: ColourMode;
   deterministic?: boolean;
   info?: { title?: string; author?: string; subject?: string };
+  /** Text as embedded fonts (default, what the route prints) or as glyph outlines (the corpus run's geometry check, docs/course-print.md §11). */
+  text?: "font" | "outline";
   /** Rasteriser for SVG graphics (tests inject one); default resvg. */
   rasteriseSvg?: (svg: Uint8Array, widthPx: number, heightPx: number) => Promise<Uint8Array>;
 }
@@ -121,7 +123,7 @@ export async function renderCoursePages(opts: CoursePagesOptions): Promise<Cours
   const mode = opts.mode ?? "cmyk";
   const warnings: string[] = [];
   const fonts = await Promise.all([loadBundledFont("liberation-sans"), loadBundledFont("liberation-sans-narrow")]);
-  const writer = await PdfWriter.create({ faces: await fontFaces(), deterministic: opts.deterministic, info: opts.info });
+  const writer = await PdfWriter.create({ faces: await fontFaces(), deterministic: opts.deterministic, info: opts.info, text: opts.text });
   warnings.push(...writer.warnings);
   const geo = documentPaperFrame(opts.document, opts.rotationCorrectionDeg);
   const rasterise = opts.rasteriseSvg ?? rasteriseSvgGraphic;
