@@ -55,8 +55,9 @@ describe("measure-print.mjs", () => {
       assert.match(m.sha256, /^[0-9a-f]{64}$/);
       assert.ok(m.bytes > 1000, `${mode} bytes`);
       assert.deepEqual(m.pageMm, { width: 297, height: 210 });
-      assert.ok(m.outline.ratio <= 0.005, `${mode} parity, outlines ${m.outline.ratio}`);
-      assert.ok(m.parity.ratio <= 0.025, `${mode} parity, fonts ${m.parity.ratio}`);
+      assert.ok(m.strong.ratio <= 0.005, `${mode} beyond 32 levels ${m.strong.ratio}`);
+      assert.ok(m.shape.ratio <= 0.0001, `${mode} unexplained ${m.shape.ratio}`);
+      assert.ok(m.parity.ratio <= 0.005 && m.outline.ratio <= 0.005, `${mode} at 16 levels ${m.parity.ratio} / ${m.outline.ratio}`);
       if (CI || m.qpdf !== "skipped") assert.equal(m.qpdf, "ok", mode);
       assert.ok(m.sanctioned.includes("course-symbol-sizes"));
       assert.equal(m.sanctioned.includes("cmyk-colour"), mode === "cmyk");

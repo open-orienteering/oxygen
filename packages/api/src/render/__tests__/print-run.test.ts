@@ -6,7 +6,7 @@
  */
 
 import { describe, expect, it } from "vitest";
-import { type PrintRunReport, comparePrevious, pageSanctionedCodes, printSheetFor, syntheticCourse } from "../print-run.js";
+import { type PrintRunReport, comparePrevious, pageSanctionedCodes, parityFailures, printSheetFor, syntheticCourse } from "../print-run.js";
 import { resolveSheet } from "../../course-maps/resolve-sheet.js";
 
 const header = (printWindow: { scale?: number; left: number; bottom: number; right: number; top: number } | null, mapScale = 15000) => ({
@@ -104,6 +104,15 @@ describe("pageSanctionedCodes", () => {
     const cmyk = pageSanctionedCodes({ mode: "cmyk", description: true, rotated: true });
     expect(cmyk).toEqual(expect.arrayContaining(["cmyk-colour", "description-weight", "description-font", "rotated-overprint"]));
     expect(cmyk).toEqual([...cmyk].sort());
+  });
+});
+
+describe("parityFailures", () => {
+  it("gates shape at 0.01 % of ink and shading at 0.5 % beyond 32 levels (§11.3)", () => {
+    // Crop-A's measured page: 1.43 % beyond 16 levels is anti-aliasing, not a failure.
+    expect(parityFailures("rgb", { strongRatio: 0.00133, shapeRatio: 0 })).toEqual([]);
+    expect(parityFailures("rgb", { strongRatio: 0.006, shapeRatio: 0 })).toEqual([expect.stringMatching(/^rgb: 0\.600 % of the pixels beyond 32 levels/)]);
+    expect(parityFailures("cmyk", { strongRatio: 0, shapeRatio: 0.0002 })).toEqual([expect.stringMatching(/^cmyk: unexplained 0\.0200 % of ink/)]);
   });
 });
 

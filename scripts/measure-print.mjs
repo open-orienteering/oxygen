@@ -3,8 +3,9 @@
  * regression net, 09 §8): prints one course page of an OCAD map on its
  * OCAD print window through the route's composer (`renderCoursePages`) in
  * `rgb` and `cmyk`, runs `qpdf --check`, rasterises with `pdftocairo` and
- * compares (a) with the page oracle — backend parity, ≤ 0.5 % with text as
- * glyph outlines and ≤ 2.5 % with embedded fonts (the §9.2 text tier) — and
+ * compares (a) with the page oracle — backend parity: the same shapes (B9's
+ * unexplained pixels ≤ 0.01 % of ink) and ≤ 0.5 % of the pixels beyond 32
+ * levels, the 16-level ratio and a text-as-outlines run reported — and
  * (b) with the legacy rsvg page of the same sheet, classified by the
  * sanctioned differences (§8.4) and per symbol by B9's parity tool.
  * Records size and time per page and compares with the previous run.
@@ -135,7 +136,7 @@ async function main() {
   );
   for (const m of ["rgb", "cmyk"]) {
     const x = report.modes[m];
-    console.log(`  ${m.padEnd(4)} ${kb(x.bytes).padStart(8)}  ${String(x.renderMs).padStart(6)} ms  qpdf ${x.qpdf}  parity ${pct(x.parity.ratio)} (fonts), ${pct(x.outline.ratio)} (outlines)`);
+    console.log(`  ${m.padEnd(4)} ${kb(x.bytes).padStart(8)}  ${String(x.renderMs).padStart(6)} ms  qpdf ${x.qpdf}  parity ${pct(x.strong.ratio)} > 32 levels, ${pct(x.parity.ratio)} > 16 (outlines ${pct(x.outline.ratio)}), unexplained ${pct(x.shape.ratio, 4)} of ink`);
   }
   if ("skipped" in report.legacy) console.log(`  legacy skipped: ${report.legacy.skipped}`);
   else console.log(`  legacy unexplained ${pct(report.legacy.unexplainedRatio, 2)} of ink, differing ${pct(report.legacy.inkRatio, 2)}`);

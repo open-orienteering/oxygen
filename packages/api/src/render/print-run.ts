@@ -42,12 +42,16 @@ import { prepareDocument } from "./window-raster.js";
 const run = promisify(execFile);
 
 /**
- * Backend parity budgets, differing pixels ÷ page pixels (04 §9; course-print.md §9.2's text tier):
- * the page with text as glyph outlines (geometry) and with embedded fonts (the route's bytes,
- * FreeType's glyph renderer). A corpus page carries map text, so it is held like a text scene.
+ * The corpus gate on backend parity (docs/course-print.md §11.3; user decision 2026-10-24): the
+ * route's page (embedded fonts) against the page oracle — **geometry**: B9's unexplained pixels at
+ * most `PRINT_SHAPE_BUDGET` of the ink; **shading**: at most `PRINT_PARITY_BUDGET` of the pixels
+ * beyond `PRINT_SHADING_TOLERANCE` levels. Pixels beyond 16 levels (the golden tier's measure,
+ * §9.2) and the text-as-outlines run are reported, not gated: on a dense map Cairo's and resvg's
+ * edge anti-aliasing alone put 0.5–1.5 % of the pixels 17–32 levels apart.
  */
 export const PRINT_PARITY_BUDGET = 0.005;
-export const PRINT_FONT_PARITY_BUDGET = 0.025;
+export const PRINT_SHADING_TOLERANCE = 32;
+export const PRINT_SHAPE_BUDGET = 0.0001;
 /** The template's page margin around the map frame, mm (the template default). */
 export const PRINT_MARGIN_MM = 3;
 /** Description cell size on the synthetic sheet, mm. */
@@ -316,6 +320,14 @@ export function pageSanctionedCodes(p: { mode: ColourMode; description: boolean;
   return out.sort();
 }
 
+/** The corpus gate on one mode's backend parity (§11.3): an empty list when it holds. */
+export function parityFailures(mode: ColourMode, m: { strongRatio: number; shapeRatio: number }): string[] {
+  const out: string[] = [];
+  if (m.strongRatio > PRINT_PARITY_BUDGET) out.push(`${mode}: ${(m.strongRatio * 100).toFixed(3)} % of the pixels beyond ${PRINT_SHADING_TOLERANCE} levels > ${PRINT_PARITY_BUDGET * 100} %`);
+  if (m.shapeRatio > PRINT_SHAPE_BUDGET) out.push(`${mode}: unexplained ${(m.shapeRatio * 100).toFixed(4)} % of ink > ${PRINT_SHAPE_BUDGET * 100} %`);
+  return out;
+}
+
 /** The run against the previous one (null without a previous report). */
 export function comparePrevious(current: Pick<PrintRunReport, "modes" | "legacy" | "symbols">, previous: PrintRunReport | null | undefined): PrintPrevious | null {
   if (!previous?.modes) return null;
@@ -444,17 +456,16 @@ export async function runPrint(file: Buffer, fileName: string, opts: PrintRunOpt
     const colour = mode === "cmyk" ? await rasteriserCmykColours(page.colours.map((c) => c.cmyk)) : null;
     const oracle = await rasterisePage(page, { pxPerMm, supersample: PAGE_GOLDEN_SUPERSAMPLE, ...(colour ? { colour: (i: number) => colour[i] ?? "#ff00ff" } : {}) });
     const d = diffImages(oracle, raster, 16);
-    const d32 = diffImages(oracle, raster, 32);
+    const d32 = diffImages(oracle, raster, PRINT_SHADING_TOLERANCE);
     const shapeInk = inkUnion(oracle, raster);
     const shapeUnexplained = unexplainedPixels(oracle, raster);
-    if (d.ratio > PRINT_FONT_PARITY_BUDGET) failures.push(`${mode}: backend parity ${(d.ratio * 100).toFixed(3)} % > ${PRINT_FONT_PARITY_BUDGET * 100} % (embedded fonts)`);
+    failures.push(...parityFailures(mode, { strongRatio: d32.ratio, shapeRatio: shapeInk ? shapeUnexplained / shapeInk : 0 }));
     await opts.onImage?.(`page.${mode}.png`, raster);
     await opts.onImage?.(`oracle.${mode}.png`, oracle);
     await opts.onImage?.(`diff.oracle.${mode}.png`, diffPicture(oracle, raster));
     const outlined = await renderCoursePages({ document: doc, sheets: [sheet], mode, deterministic: true, text: "outline" });
     const outlineRaster = await rasterisePdf(outlined.bytes, W, H, PAGE_GOLDEN_SUPERSAMPLE);
     const dOutline = diffImages(oracle, outlineRaster, 16);
-    if (dOutline.ratio > PRINT_PARITY_BUDGET) failures.push(`${mode}: backend parity ${(dOutline.ratio * 100).toFixed(3)} % > ${PRINT_PARITY_BUDGET * 100} % (text as outlines)`);
     await opts.onImage?.(`diff.oracle.${mode}.outline.png`, diffPicture(oracle, outlineRaster));
     if (mode === "rgb") rgbRaster = raster;
     modes[mode] = {
@@ -623,7 +634,7 @@ export function printMarkdown(r: PrintRunReport): string {
       `| ${m} | ${kb(x.bytes)} | ${x.renderMs} ms | ${x.pageMm.width} × ${x.pageMm.height} | ${x.qpdf} | ${pct(x.parity.ratio)} (${x.parity.differing} / ${x.parity.total}) | ${pct(x.outline.ratio)} | ${pct(x.strong.ratio)} | ${pct(x.shape.ratio, 4)} (${x.shape.unexplained}) | ${x.warnings} | ${x.sanctioned.join(", ")} |`,
     );
   }
-  lines.push("", `Budgets: ${PRINT_PARITY_BUDGET * 100} % with text as outlines, ${PRINT_FONT_PARITY_BUDGET * 100} % with embedded fonts. Images: \`page.<mode>.png\` (PDF raster), \`oracle.<mode>.png\` (page oracle), \`diff.oracle.<mode>.png\`, \`diff.oracle.<mode>.outline.png\`.`, "", "## Legacy page (rsvg-convert)", "");
+  lines.push("", `Gate (§11.3): unexplained ≤ ${PRINT_SHAPE_BUDGET * 100} % of ink and ≤ ${PRINT_PARITY_BUDGET * 100} % of the pixels beyond ${PRINT_SHADING_TOLERANCE} levels; the 16-level and outline columns are reported. Images: \`page.<mode>.png\` (PDF raster), \`oracle.<mode>.png\` (page oracle), \`diff.oracle.<mode>.png\`, \`diff.oracle.<mode>.outline.png\`.`, "", "## Legacy page (rsvg-convert)", "");
   if ("skipped" in r.legacy) lines.push(`Skipped: ${r.legacy.skipped}.`);
   else {
     const l = r.legacy;
