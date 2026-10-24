@@ -373,7 +373,7 @@ plus the purple-role and materialisation checks:
     symbols carry id/code/name; 107 in both editions symbolises to a
     pointed stroke pass carrying its 0.75 mm taper (the contact sheet
     cannot show it: the reference raster draws `pointed` as butt).
-- **`import/__tests__/fingerprint.test.ts`** — OCAD's railway (white
+- **`import/__tests__/fingerprint.test.ts`** — C9: cap / join classes (bevel = miter, square = flat), round vs flat same width and colour = 0.903 and above `auto`, each field once, `null` without a main stroke, 201.b vs a flat 0.35 stroke; `matcher.test.ts` — a source round no-tag 201 takes 201.b at 1.0, a flat one scores ≤ 0.91 and never auto-matches the tagged 201. Also — OCAD's railway (white
   dashes over a black band) and OCAD's power line (corner symbol) score
   `auto` against 509 / 510; `render/__tests__/library-fixtures.test.ts`
   rows 3 and 6 (`map-rendering.md` §6.1) hold the pylon and railway
@@ -461,7 +461,7 @@ compare equal whatever their CMYK:
 
 | IR type | Features |
 |---|---|
-| line | main stroke class + width, dashed (dash / gap lengths), borders (count, class, width, shift), double-line fill class + width, background halo, glyph presence and its stroke/disc/ring/fill counts, structural shape (`stroked`, `background`) |
+| line | main stroke class + width, cap / join class of the main stroke, dashed (dash / gap lengths), borders (count, class, width, shift), double-line fill class + width, background halo, glyph presence and its stroke/disc/ring/fill counts, structural shape (`stroked`, `background`) |
 | area | fill class, hatch (class, width, spacing, angle), pattern (class, cell, element kind + size), border |
 | point | glyph parts by kind with class, width / diameter, extent box, rotational symmetry, `orientation` |
 | text | class, font size (from the digit height when given), bold / italic — no line spacing, no alignment, no tab stops and no frame or shadow, so a Mapper alignment variant shares its parent's fingerprint (`docs/map-import.md` §4.4) and none of the layout fields a canonically drawn text keeps from its source (`docs/map-document-format.md` §8) is evidence for or against a match |
@@ -492,6 +492,30 @@ structure only here; there is no general colour reordering, so a coloured
 band, rails of another class or a solid stroke over white still
 hard-fail on main colour / dashed (user decision 2026-10-22). Mapper's
 511-coded power line is unchanged: it gains only a `suggested` 510.
+
+**Line cap / join (C9, `ocad-14` / `omap-8`).** A stroked line's
+fingerprint carries the main stroke's `cap` and `join` as a *round-vs-sharp
+class*: cap `round` / `pointed` / `flat` (`square` = `flat`), join `round` /
+`sharp` (`bevel` = `miter`: OCAD's default `lineStyle 0` is flat/bevel and
+template sets state flat/miter for the same stroke, so neither is an
+explicit choice). Glyph-only and border-only lines carry `null` and are
+not compared (nor is A15's normalised railway band, `null`). **Decision (implementer's, recorded for coordinator confirmation): a soft tie-break, not a hard fail** — each of
+cap and join that differs multiplies the score by `CAP_JOIN_PENALTY`
+(0.95; both: 0.903). The class still lets a source's explicit round-vs-flat
+choice select the matching library variant (the round no-tag 201.b / 202
+against the flat tagged 201; source `lineStyle 1` scores 1.0 against the
+round entry and 0.903 against a flat one), but a hard fail would make a
+round-ended source with no round variant in the library fall from `auto`
+to `unmatched` when only the end shape differs — a drawing choice, not a
+different symbol — whereas 03 §6.5's hard fails are for *what* is drawn.
+The penalty is deliberately below the 0.95 stage-4 strictness: stage 4
+(geometry-only suggestions) divides it out (`Comparison.capJoin`), so cap
+and join never withhold a geometry suggestion, and they are not part of
+the document-factor measurement. Corpus effect: no `auto` became
+`suggested`; the 0.903 lines are the source's explicit
+flat/miter against a round library entry (201.14, 512, tagged 104).
+`irHash` changes for every stroked line, so club decisions keyed by
+`irHash` for lines are stale and re-match (§8.5).
 
 ### 8.2 Stages
 
@@ -957,7 +981,13 @@ nearest percent, then the palette's default for the class; some entries
    upper one); `purple-upper` always on top, `purple-lower` directly below
    the first source colour the palette puts above it. Inserted entries have
    `id: "<edition>:<paletteId>"`, the palette CMYK and no `sourceNumber`
-   (`colourStack.inserted`).
+   (`colourStack.inserted`). **Exception (C9, user decision 2026-10-24):**
+   an inserted `purple-upper` / `purple-lower` takes the CMYK of the map's
+   own purple of the other role when it has one (the course overprint is
+   one ink: Ny_karta_test's `src:2` "Upper Purple for Course Overprint"
+   10/90/10/0 gives the inserted lower purple 10/90/10/0, not 35/85/0/0);
+   the palette CMYK only when the map has no purple at all. Purples are
+   still never aliased.
 5. **Flag** palette ids whose relative order disagrees with the palette
    (longest increasing subsequence of palette ranks; everything outside it
    is a `COLOUR_ORDER_CONFLICT` with the pair it contradicts). The order

@@ -174,7 +174,7 @@ function exactCodeFits(symbols: readonly SourceSymbolLike[], canon: readonly Can
     const c = canon.find((x) => x.code === code && x.fp.type === s.render!.type);
     if (!c) continue;
     const cmp = compareFingerprints(fingerprintOf(s.render, classOf), c.fp, factor);
-    if (!cmp.hardFail && cmp.score >= MATCH_THRESHOLDS.auto) n++;
+    if (!cmp.hardFail && cmp.score / cmp.capJoin >= MATCH_THRESHOLDS.auto) n++;
   }
   return n;
 }
@@ -343,7 +343,8 @@ function matchGeometric(sym: SourceSymbolLike, code: string, fp: Fingerprint, ct
     || overlap(b.cand) - overlap(a.cand)
     || a.cand.entry.id.localeCompare(b.cand.entry.id));
   const geoBest = geoScored[0];
-  if (geoBest && geoBest.cmp.score >= MATCH_THRESHOLDS.strict) {
+  // Cap / join only choose between variants (map-symbols §8.1, C9); a geometry-only suggestion is not withheld for them.
+  if (geoBest && geoBest.cmp.score / geoBest.cmp.capJoin >= MATCH_THRESHOLDS.strict - 1e-9) {
     return { match: { canonicalId: geoBest.cand.entry.id, method: "geometry", state: "suggested", confidence: geoBest.cmp.score, reasons: describe(geoBest, factor), reviewed: false, libraryVersion: version, alternatives: alternatives(geoScored, geoBest.cand) } };
   }
 
