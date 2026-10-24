@@ -42,7 +42,7 @@ describe("course-layer load (docs/map-rendering.md §5.2 Dynamic bucket)", () =>
     const stack = m.summary.colourStack!;
     expect(stack).toHaveLength(doc.length + 1);
     const upper = indexOf(stack, "purple-upper");
-    expect(stack[upper - 1].paletteIds).toEqual(["white-upper"]);
+    expect(stack[upper - 1].id).toBe("iof2024:white-upper");
     expect(m.summary.courseLayer).toEqual({ supported: true, cutFeatures: 0 });
     // The black line keeps its index (below upper purple); the top-row line moved up one, same CMYK.
     const black = indexOf(doc, "black100");
