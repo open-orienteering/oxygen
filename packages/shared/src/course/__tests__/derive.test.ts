@@ -6,7 +6,7 @@ import { SITES, layerInput, linear, site } from "./helpers.js";
 import type { CourseLayerInput } from "../types.js";
 
 /** ISOM at 1:15 000: R 2.5, finish 3.0, start circumradius 3.46, em 4 / (1409/2048). */
-const M: CourseMetrics = { circleRadiusMm: 2.5, finishRadiusMm: 3, startRadiusMm: 6 / Math.sqrt(3), numberEmMm: 4 * (2048 / 1409), scale: 1 };
+const M: CourseMetrics = { circleRadiusMm: 2.5, finishRadiusMm: 3, startRadiusMm: 6 / Math.sqrt(3), numberEmMm: 4 * (2048 / 1409), lineWidthMm: 0.35 };
 const derive = (over: Partial<CourseLayerInput> = {}) => deriveCourse(layerInput(over), M);
 const dist = (a: { x: number; y: number }, b: { x: number; y: number }) => Math.hypot(a.x - b.x, a.y - b.y);
 

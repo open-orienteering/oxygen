@@ -100,6 +100,8 @@ export interface CourseViewOptions {
 export interface CutFeature {
   x: number;
   y: number;
+  /** Its symbol's radius on paper (library × document factor); default `DEFAULT_FEATURE_RADIUS_MM`. */
+  r?: number;
 }
 
 /** What the layer needs from the map document. */

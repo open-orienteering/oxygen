@@ -30,7 +30,7 @@ export function courseLayer(input: CourseLayerInput): CourseLayer {
     finishRadiusMm: set.finishRadiusUm / 1000,
     startRadiusMm: set.startRadiusUm / 1000,
     numberEmMm: set.numberEmUm / 1000,
-    scale: input.document.documentFactor,
+    lineWidthMm: set.lineWidthUm / 1000,
   });
   const { idx } = set;
   const objects: CourseRenderObject[] = [];
