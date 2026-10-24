@@ -29,6 +29,23 @@ input (§2), the geometry rules (§3) and the GeoJSON projection (§4).
   upper purple with a 0.15 mm upper-white outline (ISSprOM 704.b) on both
   libraries.
 
+Decided by the user 2026-10-24 for C5:
+
+- **Stored GeoJSON at legacy sizes.** The `courses.geometry` artifact
+  (§4) is computed at the legacy sizes (2.5 mm circle radius, 0.35 mm
+  lines) for both pipelines, because every consumer of it draws those
+  sizes until it is ported (C4 viewer, C2 / C3 print). The pinned
+  document is only the *feature source* of `vector` events. Spec sizes
+  reach the cuts when the consumers draw from the layer itself.
+- **Size-aware cuts.** Today's ±0.4 mm cut leaves ~0.03 mm of air
+  around a boulder once the line's round caps are drawn, overlaps a
+  boulder cluster, and overlaps every feature on a 1:10 000 map (symbols
+  × 1.5). A cut now clears the feature's **own symbol radius** (from
+  the library, × document factor) **+ half the drawn line width + 0.25 mm
+  of visible air**, and a feature is "on" the line by the same sum
+  (§3.4). One rule for the layer and the artifact; stored cuts migrate
+  through the `OVERPRINT_CUTS_VERSION` bump.
+
 ## 1. Derivation
 
 The course layer is **derived, never stored** (08 §4.1): a pure function
