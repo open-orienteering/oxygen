@@ -17,14 +17,14 @@ export const rock: LibraryEntryInput[] = [
   entry("201", "Impassable cliff", "L", line({ main: solid(K, 350), glyphs: [cliffTags(350)] }), {
     minimum: { lengthUm: 600 }, footprintM: 9, notes: "Top line 0.35 mm, tags 0.12 mm × 0.4 mm every 0.5 mm (CC); minimum 0.6 mm outside measure.",
   }),
-  entry("201", "Impassable cliff, top line", "L", line({ main: solid(K, 350) }), { variant: "b", description: "Top line without tags (tags drawn as separate objects)." }),
+  entry("201", "Impassable cliff, top line", "L", line({ main: solid(K, 350, { cap: "round", join: "round" }) }), { variant: "b", description: "Top line without tags (tags drawn as separate objects).", notes: "Round joins and ends as OCAD's ISOM 2017-2 set draws the no-tag baseline (lineStyle 1); user decision 2026-10-24, a deviation from the flat spec drawing. The tagged 201 stays miter / flat." }),
   entry("201", "Impassable cliff, tag line", "L", line({ main: solid(K, 120) }), { variant: "c", description: "A single tag drawn as its own line object." }),
 
-  entry("202", "Cliff", "L", line({ main: solid(K, 250) }), {
-    minimum: { lengthUm: 600 }, footprintM: 9, notes: "Passable cliff without tags; ends may be rounded in the source (OCAD round caps) — flat here per the spec drawing.",
+  entry("202", "Cliff", "L", line({ main: solid(K, 250, { cap: "round", join: "round" }) }), {
+    minimum: { lengthUm: 600 }, footprintM: 9, notes: "Passable cliff without tags; round joins and ends as OCAD's ISOM 2017-2 set draws it (lineStyle 1), user decision 2026-10-24 — a deviation from the flat spec drawing.",
   }),
-  entry("202", "Cliff, with tags", "L", line({ main: solid(K, 250), glyphs: [cliffTags(250)] }), {
-    variant: "b", description: "Passable cliff with tags showing the direction of fall.", minimum: { lengthUm: 600 },
+  entry("202", "Cliff, with tags", "L", line({ main: solid(K, 250, { cap: "round", join: "round" }), glyphs: [cliffTags(250)] }), {
+    variant: "b", description: "Passable cliff with tags showing the direction of fall.", notes: "Round joins and ends like 202 (OCAD set, user decision 2026-10-24).", minimum: { lengthUm: 600 },
   }),
 
   entry("203.1", "Rocky pit or cave", "P", point(fillPart(K, [154, 302, 350, 302, 0, -489, -350, 302, -154, 302, 0, -50]), "north"), {

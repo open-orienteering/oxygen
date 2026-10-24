@@ -22,7 +22,7 @@ const fonts = () => [liberation().sans];
 const colourId = (layer: ReturnType<typeof courseLayer>, i: number) => layer.colours[i].paletteIds?.[0] ?? layer.colours[i].id;
 
 describe("courseLayer + courseRenderInput → one symbolise call", () => {
-  it("draws warning-free, lower purple under black, numbers lower purple (ISOM spec)", () => {
+  it("draws warning-free, lower purple under black, numbers upper purple (ISOM, user decision 2026-10-24)", () => {
     const layer = courseLayer(layerInput());
     const input = courseRenderInput(isomDocument(), layer);
     const { stream, warnings } = symbolise({ ...input, fonts: fonts() });
@@ -35,7 +35,7 @@ describe("courseLayer + courseRenderInput → one symbolise call", () => {
     expect(lastLower).toBeLessThan(colours.indexOf("black100"));
     const text = stream.passes.filter((p) => p.kind === "text");
     expect(text).toHaveLength(3);
-    expect(text.every((p) => colourId(layer, p.colour) === "purple-lower")).toBe(true);
+    expect(text.every((p) => colourId(layer, p.colour) === "purple-upper")).toBe(true);
     for (const p of stream.passes) expect(p.colour).toBeLessThan(layer.colours.length);
     // Course objects follow the document's: pass objectIdx ≥ the offset for course symbols.
     stream.passes.forEach((p, k) => {

@@ -182,8 +182,11 @@ per-symbol decisions.
 - **Colours are palette ids, never CMYK.** `validateLibrary` rejects an
   id outside the spec's own tick marks, so an ISOM entry cannot use
   `brown100` (an ISSprOM-only row) by accident.
-- **Course symbols are ordinary entries** with `purpleRole` per 03 §2.4:
-  ISOM 704 lower / ISSprOM 704 upper, ISOM 710 lower / ISSprOM 710.1 lower
+- **Course symbols are ordinary entries** with `purpleRole` per 03 §2.4,
+  except ISOM 704 (below): ISOM 704 upper like ISSprOM 704 (library
+  `2026.10.4`, user decision 2026-10-24: legibility, and what Mapper and
+  Purple Pen draw — a deliberate deviation from ISOM 2017-2, which lists it
+  lower; 701, 703, 706 stay lower), ISOM 710 lower / ISSprOM 710.1 lower
   + 710.2 upper, 702 / 707 / 709 / 711 / 714 upper, the rest lower. A
   lower-role entry never draws in `purple-upper` and vice versa (tested).
   Minima that drive the course editor (707 ≥ 4.5 mm, 709 ≥ 3 mm wide and
@@ -425,6 +428,8 @@ The OOM dimension spot check (e) is not implemented; see §10.
 | Directional point glyphs: no convention stated (03 §6.2) | Angle 0 = north, slope ticks to +y (§3; B10) | OCAD and Mapper both draw the 101.b / 103.b tick to +y; the first edition used the line-tag convention (−y) and every auto-matched slope line pointed uphill (52–66 % shape difference, `map-rendering.md` §6.4). |
 | 510 "0.3 (OM)" bars | ±0.37 mm, 0.3 beyond each edge of the 0.14 line (B10) | The reading ISOM 511 already used; Mapper's ISOM set and both corpus OCAD sets draw ±0.37 (−0.38 … +0.33). Was ±0.3. ISSprOM 511 (unchanged) measures its 0.3 from the line centre (±1.12 at ±0.82), as OCAD's ISSprOM set does — Sprint's 511 matches it at 1.00; the spec drawing does not settle which. |
 | 508.b yellow band as drawn (visible in forest) | Appendix B order: hidden under 406–410 green (§3; user decision 2026-10-22) | No yellow row above green exists in Appendix B; OCAD's set and the legacy tiles agree. |
+| Cliff baselines flat / miter (the spec drawing) | ISOM 201.b, 202, 202.b and ISSprOM 202 (no-tag baselines) round joins and ends; tagged 201 stays miter / flat (library `2026.10.4`; user decision 2026-10-24) | OCAD's own ISOM 2017-2 / ISSprOM sets draw them round (`lineStyle 1`) and Swedish OCAD maps use the round baseline plus separate tag objects. Mapper's sets draw flat; cap/join as a fingerprint class is SLICES C9. |
+| ISOM 704 control numbers lower purple (03 §2.4) | Upper purple, as ISSprOM 704 (library `2026.10.4`; user decision 2026-10-24) | Legibility: numbers sit above the black and brown map ink instead of under it, as Mapper and Purple Pen draw them. Start, circles and finish stay lower per spec. |
 | `defaultMapAppearance` in `course-maps/schema.ts` retired in favour of the library | Retired for the vector path (C0): the course layer draws the 7xx entries × document factor × the template's appearance as multipliers (`docs/course-layer.md` §3.1); the constant stays as the legacy overlay's sizes and the multipliers' denominator (`appearanceFromTemplate`). The vector viewer reads the library's sizes from the course layer (C4, `map-rendering.md` §5.4 "Overlay"); `web/lib/course-map-types.ts` keeps it as a new template's stored appearance, which is multiplier 1 — the spec sizes — on the vector path | The legacy SVG overlay and stored templates still read it; deleted with them (§10). |
 
 ## 8. Matching source symbols to the library (03 §6.5–6.6)

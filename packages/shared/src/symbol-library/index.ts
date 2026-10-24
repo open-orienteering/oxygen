@@ -22,9 +22,10 @@ export * from "./schema.js";
  * names and ISOM 2000 aliases (B7). 2026.10.3: drawing defects (B10) —
  * 509 / 509.1 railway white dashes over a black band with black ends,
  * 101.b / 103.b slope ticks to +y, 107 taper, 510 / 511 / 511.b pylons at
- * corners (510 bars ±0.37 mm), ISOM 111 orientated to north.
+ * corners (510 bars ±0.37 mm), ISOM 111 orientated to north. 2026.10.4:
+ * ISOM 704 control numbers upper purple (user decision 2026-10-24).
  */
-export const SYMBOL_LIBRARY_VERSION = "2026.10.3";
+export const SYMBOL_LIBRARY_VERSION = "2026.10.4";
 
 /** Raw authored inputs, before validation (tests and tooling). */
 export const symbolLibraryInputs = { "ISOM2017-2": isom2017_2, "ISSprOM2019-2": issprom2019_2 } as const;
