@@ -5,13 +5,14 @@ operators, the colour stack on paper and the layout-editor preview.
 Normative for slice C of the vector map pipeline (research:
 `docs/research/vector-map-pipeline/` 05, 09 §4 C).
 
-> §1–3 (writer, colour modes, fonts and determinism) are C1's; §4–9
-> (page model, `resolveSheet`, layers, boxes and metadata, geospatial,
-> graphics, route, tests) are reserved for C2 / C3; §10 (layout-editor
-> preview) is C6's. How a *pass* becomes PDF content is
+> §1–3 (writer, colour modes, fonts and determinism) are C1's; §4–7
+> (page model, `resolveSheet`, layers, page objects and graphics, boxes,
+> metadata and geospatial) C2's; §8–9 (route, golden PDFs, CI) are
+> reserved for C3; §10 (layout-editor preview) is C6's. How a *pass* becomes PDF content is
 > `docs/map-rendering.md` §5.3; this chapter owns everything around it.
 
-Status: **draft** — §1–3 written by C1, §10 by C6 (2026-10-23).
+Status: **draft** — §1–3 written by C1, §10 by C6 (2026-10-23), §4–7 by
+C2 (2026-10-24).
 
 ## 1. The print module and its writer
 
@@ -21,8 +22,11 @@ randomness (non-deterministic `/ID`) comes from Web Crypto, so the same
 code runs in the API and, later, in a Web Worker (05 §5.11). It is *not*
 re-exported from the package root (`import { render } from
 "@oxygen/shared"` stays free of the PDF library, which keeps it out of the
-web bundle and out of the Dockerfile's `main` patch); the first consumer,
-the page composer (C2), wires the `@oxygen/shared/print` subpath.
+web bundle); it is the package's `@oxygen/shared/print` subpath
+(`exports` in `packages/shared/package.json`: `.`, `./print`, and
+`./src/*` for the declaration references tsc emits). The Dockerfile's
+build-stage patch rewrites all three entries to `dist/src/…` together
+with `main` — with `exports` present Node ignores `main`.
 
 | File | Contents |
 |---|---|
@@ -30,6 +34,11 @@ the page composer (C2), wires the `@oxygen/shared/print` subpath.
 | `print/colour.ts` | colour modes (§2) |
 | `print/fonts.ts` | font programs: subsetter, widths, descriptor values, subset tag, ToUnicode (§3) |
 | `print/writer.ts` | `PdfWriter` — the only file that imports the PDF library |
+| `print/page.ts` | the page model (§4): `PageInput`, `ComposedPage`, `T_map`, `flipPageObject`, `transformPassStream` |
+| `print/compose.ts` | `composePage`, `writePage` (§4, §6.3) |
+| `print/description.ts` | the description block and the IOF pictogram glyphs (§6.2) |
+| `print/geo.ts` | the `/Measure /GEO` viewport (§7.3) |
+| `print/__fixtures__/pages.ts` | the page scenes (§7.5) |
 | `print/index.ts` | the module's exports |
 
 **Writer.** `@cantoo/pdf-lib` (the maintained fork of `pdf-lib`, 05 §6
@@ -157,6 +166,283 @@ equal bytes:
 Not in vitest until C3: `qpdf --check` and the rasterised comparison
 (`pdftoppm`) against the reference raster.
 
+## 4. The page model
+
+One course-map page is a set of **layers** in page space (05 §5.1),
+built by `composePage(input, fonts)` (`print/compose.ts`) and written by
+`writePage(writer, page, { mode, images })`:
+
+```
+page (page µm, y-up, origin bottom-left — PDF's own orientation)
+├─ sheet        white rectangle over the MediaBox
+├─ map layer    one pass stream in paper µm under T_map, clipped to the frame
+│                 = document window objects ⊕ courseLayer() (C0), one symbolise call
+├─ page layer   page-anchored objects + the description block, page µm, unclipped
+└─ marks layer  null: offset marks belong to print profiles (§2)
+```
+
+The templates' page mm are y-down from the top-left (the editor's
+convention, unchanged); `frameRectUm` and `flipPageObject` turn them into
+y-up page µm once, on the way in. Nothing else in the composer knows the
+y-down convention.
+
+### 4.1 Input and output
+
+`PageInput` (`print/page.ts`): `paper` (mm), `frame` (template mm),
+`window` (`mapWindowForFrame`, rotation clockwise on the page), `map`
+(`objects` near the window, the document's `symbols`, its
+`CourseDocumentContext`, its `cutFeatures`), `course` (structure, sites,
+appearance, view options — the course layer's input without the
+document, `docs/course-layer.md` §2), `objects` (layout objects of both
+anchors), `textValues`, `description` (§6.2, or null), `label`, `geo`
+(§7.3, or null). `resolveSheet` (§5) builds everything but `map` and
+`geo`; `pdf-page.ts` adds them from the pinned document.
+
+`ComposedPage`: `frameUm`, one `colours` table both layers index,
+`mapLayer { stream, transform }`, `pageLayer { stream }`, `marksLayer:
+null`, `images` (§6.3), `geo`, `label`, `warnings` (course-layer and
+`symbolise` warnings, prefixed by layer).
+
+### 4.2 `T_map`
+
+`mapLayerTransform(frame, window, paperHeightMm)` is today's `mapToPage`
+(`geometry.ts`) in y-up page µm: paper µm relative to the **window
+centre** (`originUm`) → scale `frame.width / window.width` (=
+`baseMapScale / printScale`) → rotate by **−window rotation** (the
+window's clockwise page rotation is a negative, counter-clockwise angle on
+the y-up page; the window rotation is −meridian tilt, so the matrix turns
+by +tilt) → translate to the **frame centre** (`atUm`). Unit-tested
+against `mapToPage` at 0°, 20° and −15°. Symbol dimensions scale with
+the matrix (the ISOM rule that the overprint enlarges with the map);
+`documentFactor` stays the document's (03 §6.6).
+
+Base-map scale and meridian tilt come from `getBaseMapInfo` only (§10.1).
+
+### 4.3 The map layer
+
+1. `courseLayer({ …input.course, objects, viewOptions: { …, window,
+   textValues }, document: map.context, cutFeatures })`. `window` is the
+   frame mapped back through `T_map⁻¹`, grown by 1 mm
+   (`RING_BLEED_UM`), as the outer ring of a map-anchored white-out
+   outside: the clip trims it, and no anti-aliased seam of map ink is left
+   where a ring edge and the clip edge coincide.
+2. `courseRenderInput(map, layer)` → one `symbolise` call: lower purple
+   under the line art, map-anchored white-outs at upper white, upper
+   purple and the layout objects' colours on top — the stack's order, no
+   sandwich, nothing drawn twice.
+3. Emitted as `q <frame> re W n  q <T_map> cm 4 M <passes> Q  [q <T_map>
+   cm <map images> Q]  Q`; coordinates integer µm relative to the window
+   centre under a 9-decimal `cm` (05 §5.2, `map-rendering.md` §5.3).
+
+A document whose stack is not aligned (no lower / upper purple) throws
+`CourseStackError` out of `composePage`; whether `maps.pdf` then falls
+back to the legacy page is C3's call.
+
+### 4.4 The page layer
+
+Page-anchored objects are flipped to y-up page mm, re-anchored as `map`
+and drawn by the course layer's own object builder (`layoutObjects`, C0)
+with `overprintScale: 1` and the frame as the white-out-outside ring
+(legacy: the ring against the map frame), plus the description block
+(§6.2), in one `symbolise` call. Emitted as `q <µm → pt> cm 4 M <passes>
+[<page images>] Q` after the map layer.
+
+**Colour table.** The page layer shares the map layer's table: the
+course layer's completed stack (`layer.colours`, upper white included),
+then `#ffffff` and the block's ink when a block is drawn, then the hex
+colours of page objects in first-use order (`withObjectColours`). So a
+page white-out prints in the stack's upper white, a page 709 in its upper
+purple at the size the map draws it (`documentFactor × scaleRatio`), and
+the block and page objects follow the map. Page-layer order is
+therefore colour order: page white-outs, then the block's white sheet
+and ink, then other page-object colours (legacy: page white-outs, block,
+page foreground — the same order).
+
+### 4.5 Many pages
+
+`renderCoursePages` writes every sheet into **one** `PdfWriter`
+(05 §5.10): one font object per face subset at `save()` to the union of
+all pages' glyphs, one form XObject per distinct glyph part (7xx parts
+and IOF pictograms included), one image XObject per distinct PNG.
+
+## 5. `resolveSheet`
+
+`packages/api/src/course-maps/resolve-sheet.ts` — the 08 §4.6 boundary
+for slice C: `resolveSheet(input)` calls `resolveMapLayout` (unchanged,
+so the legacy SVG page and this one resolve the same layout; templates
+and `course_maps` rows unchanged, 09 §4 C) and returns `{ layout, sheet }`
+with `sheet` = `PageInput` minus `map` and `geo`.
+
+### 5.1 Fields
+
+| Page input | From |
+|---|---|
+| `paper` | `getPaperDimensions(paper, orientation, custom)` |
+| `frame`, `window` | `document.mapFrame`, `layout.window` (`mapScale` and `meridianTiltDeg` from `getBaseMapInfo`) |
+| `course.appearance` | `appearanceFromTemplate(document.appearance)` — multipliers of the library sizes (`docs/course-layer.md` §2) |
+| `course.viewOptions` | `allControls` = `kind === "all_controls"`, `labelMode`, `overprintScale` from the layout |
+| `objects`, `textValues` | `document.objects` (template + sheet), `layout.textValues` |
+| `description` | `document.description` position and cell size, `layout.descriptionRows` / `descriptionHeader`, title = course name, else map name; null when the template hides the block |
+| `label` | course name, else map name (page label and outline title, §7.2) |
+
+### 5.2 Course structure
+
+- **Sites**: `layout.controls` (start and finish from the course
+  geometry, controls from `course_controls`, all placed controls for
+  all-controls sheets), one per id.
+- **Course sheets**: a v1 structure with one item per layout control in
+  order, `role` = its type; `labelOffsets` = stored label position −
+  site; `extras` = the geometry's `marked_route`, `forbidden_route` and
+  `restricted_line` lines. Free order is carried as `orderMode`.
+- **All-controls sheets**: `structure: null`, every site drawn with
+  codes (`viewOptions.allControls`).
+- **Authored geometry** only when `courses.geometry_source = "ocd"`
+  (`docs/course-layer.md` §2): circle gaps from the geometry's `cuts`,
+  and — when the geometry has exactly one leg into each item after the
+  first — each leg's path with its gaps, or its pre-clipped polyline as
+  the drawn piece. Every other course (`editor`, `xml`, none) gets legs
+  and automatic cuts from the course layer, with cut features from the
+  pinned document (`cutFeaturesOfDocument`, §3.4 there).
+
+`pdf-page.ts` adds the map part: `sheetForMapRow(row, { event,
+allControls, mapInfo })` maps a `course_maps` row (with template and
+course, as `maps.pdf` loads it) to its sheet through `resolveSheet`;
+`loadPinnedPrintDocument(db, eventId)` returns the prepared document,
+`getBaseMapInfo` and the pinned `map_files` row's rotation correction,
+or null on the legacy path; `pageInputFor(doc, sheet, geo)` selects the
+document objects within 20 mm of the window's bounding box (C6's
+`objectsNear`, the legacy crop's padding).
+
+## 6. Page objects, the description block and graphics
+
+### 6.1 Page-anchored objects
+
+All `course-maps` schema kinds, as on the map (`docs/course-layer.md`
+§3.6) but in page mm: text with placeholders, lines and paths (dashes as
+legacy print draws them), rectangles, `solid` fills, `whiteout`,
+`whiteoutInverted` (ring against the frame), `outOfBounds` (709 / 709.b /
+709.c from the library), images (§6.3). Sizes are page mm and never
+divided by `overprintScale`. User colours print through the inverse
+naive conversion in `cmyk` and as the hex in `rgb` (§2).
+
+### 6.2 Description block
+
+`descriptionBlock(input, paperHeightMm, colourOf)` (`print/description.ts`)
+reproduces the legacy SVG block (`description-svg.ts`) formula for
+formula, as objects for the shared stage:
+
+- white sheet (area) with a 0.35 mm border; 8 cells wide; 3 header rows
+  (event, classes, course · length · climb with thick verticals after
+  columns 3 and 6) or 1 title row; rules 0.15 / 0.35 mm by
+  `DESCRIPTION_THICK_COLUMNS` and `hasThickRuleBelow`;
+- text in Liberation Sans, centred: header 0.42 / 0.40 × cell at
+  baselines 0.68 / 1.68 / 2.68 × cell, title 0.48, sequence and code
+  0.43 at 0.67, F dimension 0.34, wide-row length 0.9 × 0.43; header
+  text, title and lengths carry `weight: 700` (drawn regular while only
+  the regular faces ship — see Pending);
+- pictograms as **point symbols**: `iofSymbolGlyph(key)` converts the
+  `iof-symbols.ts` data (absolute `M` / `L` / `C` / `Z` paths and
+  circles) into a glyph at 100 µm per unit, y flipped — `fill="black"` →
+  fill or disc, a stroke width → stroke or ring with flat caps and the
+  element's join; converted once per key at first use (no generated
+  file: one source of truth) and scaled to 0.8 × cell per 200 units (the
+  legacy 10 % inset). Start in column A, C–H by `descriptionCells`, wide
+  special / finish symbols centred across the block. In the PDF each
+  pictogram is one form XObject per document (05 §5.6).
+
+### 6.3 Graphics
+
+Image objects become `PageImage`s in their layer's space (map-anchored:
+paper µm under `T_map`, so they turn with a rotated window; page-anchored:
+page µm). The composer takes PNG bytes per graphic id; `writePage`
+embeds each distinct PNG once (`/Subtype /Image`, `Im<n>` in first-use
+order) and draws it `q [<rect> re W n] <w 0 0 h x y> cm /Imn Do Q`,
+stretched to the rectangle like the legacy `preserveAspectRatio="none"`,
+the crop's part filling it under a clip. An image without bytes is
+skipped with `IMAGE_MISSING`.
+
+**SVG logos** are rasterised in the API at render time (05 §5.7 a), so
+`graphics` rows stay as uploaded: resvg at 600 dpi of the placed size
+(the crop's source size), at most 4096 px per side, text in the
+bundled faces only (no system fonts),
+stretched to the exact pixel box; cached per graphic and size within one
+export. The composer itself never sees SVG — `@oxygen/shared/print`
+stays isomorphic (§1; a test reads the module's imports). Images are
+DeviceRGB in both modes: CMYK conversion of images belongs to the
+offset profile (05 §5.7, §2).
+
+## 7. Boxes, metadata and geospatial
+
+### 7.1 Boxes and metadata
+
+`MediaBox` = `TrimBox` = the paper; no `CropBox`, no bleed (§1, §2).
+`Info` from the caller: C3 passes the title (`<event> · <map>` for one
+page, `<event> maps` for several, as `maps.pdf` names them today) and
+the organiser as author; `Creator` / `Producer` / dates per §1 and §3.2.
+
+### 7.2 Page labels and outlines
+
+`/PageLabels` gives every page its label as the prefix (`/P`, UTF-16) —
+the course name, else the map name — so viewers show "Blå" rather than
+"1". `/Outlines` is flat: one item per page with the same title,
+`/Dest [page /Fit]`, `/Prev` / `/Next`, `/Count` = pages. Both are written
+at `save()` (`PdfWriter.addPage({ label, outlineTitle })`).
+
+### 7.3 `/Measure /GEO`
+
+Every map frame of a georeferenced document gets a viewport (05 §5.9;
+ISO 32000-2 §12.9.3), on the page's `/VP`:
+
+```
+<< /Type /Viewport /BBox [frame in pt]
+   /Measure << /Type /Measure /Subtype /GEO /Bounds [0 0 0 1 1 1 1 0]
+     /GCS << /Type /GEOGCS /EPSG 4326 /WKT (GEOGCS["WGS 84",…]) >>
+     /GPTS [lat lng ×4] /LPTS [0 0 0 1 1 1 1 0] /PDU [/M /SQM /DEG] >> >>
+```
+
+`geoViewport(frameUm, T_map, paperFrame)` (`print/geo.ts`): the frame's
+corners (lower-left, upper-left, upper-right, lower-right — the `LPTS`
+order) through `T_map⁻¹` to paper µm, to native units
+(`× unitsPerMm / 1000`), through A11's `mapGeo.paperToWgs84` with the
+`PaperFrame` of the header's georeferencing and the pinned row's
+`rotation_correction`. Four points carry window rotation and grid
+convergence with no special case. No viewport when `epsgOf` is null
+(no projectable CRS). Lat / long are written with 8 decimals.
+
+### 7.4 Differences from the legacy page for C3's list
+
+Beyond §10.4 and the two differences of decision (3): spec-sized 7xx
+symbols, the 701 turned to the first control, 709 from the library and
+start / finish clearance (C0); the block's header in regular weight
+(Pending); Liberation Sans in the block (the legacy font stack lists
+DejaVu Sans first); map-anchored images, control numbers and map text
+turn with a rotated window (legacy drew the overprint upright in page
+space); imported `marked_route` / `restricted_line` / `forbidden_route`
+lines drawn by the library; images DeviceRGB in `cmyk`.
+
+### 7.5 Tests
+
+| Test | Covers |
+|---|---|
+| `print/__tests__/page.test.ts` | `T_map` against `mapToPage` (0°, ±rotation), inverse, frame in map space, `flipPageObject`, `transformPassStream` (slices kept, widths / taper / glyph instances / text scaled and turned, hatch lines on the transformed lines) |
+| `print/__tests__/description.test.ts` | every `IOF_SYMBOLS` key converts; 2.4 one fill, 1.10 one disc, 0.3 two strokes + disc, Bézier flags; block size and position, border, thick / thin rules, header sizes and weight, F text 0.34 × cell, pictograms centred at 0.8 × cell, one symbol per key |
+| `print/__tests__/compose.test.ts` | one colour-sorted map stream with lower purple < black < upper purple; block text / rules / pictograms on appended colours; no block → empty page layer; ring outer boundary = frame (+1 mm) through `T_map⁻¹`, page white-out at upper white; placeholders; rotated `T_map`; images in layer space; `CourseStackError` |
+| `print/__tests__/write-page.test.ts` | operator order (sheet, frame clip, `T_map` `cm`, page `cm`), no `rg` in `cmyk` / no `k` in `rgb`, rotated `cm`, two pages sharing font, glyph forms and image XObject, page labels and outlines, `/Measure /GEO` (SWEREF99 TM corners near 58.6° N 15° E, rotated corners), deterministic bytes, missing image warning |
+| `print/__tests__/isomorphic.test.ts` | no Node API, `Buffer`, sharp or resvg in the module |
+| `packages/api/src/__tests__/course-print-sheet.test.ts` | `resolveSheet`: paper / frame / window / tilt, structure and roles, unique sites, label offsets, extras, `editor` vs `ocd` authored geometry, description block / hidden, all-controls, free order |
+| `packages/api/src/__tests__/integration/course-print.test.ts` | the E2E fixture map pinned on a `vector` event: legacy event → no print document; two sheets → one PDF of two A4 pages, `TrimBox`, labels, outlines, Type0 / CIDFontType2 shared, frame clip and `T_map`, no `rg`, PNG and rasterised SVG logos shared (600 dpi), `/Measure /GEO` of the fixture's georeference, deterministic bytes |
+| `packages/api/src/render/__tests__/page-raster.test.ts` | the page oracle: white outside the frame and the ring, map inside, page box on top; rotated building where `T_map` puts it; block position on A4 |
+| `packages/api/src/render/__tests__/golden-files.test.ts` | `page-sprint-a4`, `page-ring`, `page-rotated` match the page oracle |
+
+The page goldens (`e2e/__golden__/map-gl/page-*.png`, 05 §7 tier 3) are
+the page oracle (`render/page-raster.ts`): the map layer moved through
+`T_map` into page µm (`transformPassStream`) and rasterised over the
+frame alone — the frame clip is the raster's extent — composited with the
+page layer on white paper, at 10 px/mm, supersampled 2× (an A4 sheet at
+the scene goldens' 4× would be a ~400 MB intermediate). The WebGL2
+golden spec does not draw pages (the viewer has no page view until slice
+D); C3 compares the `rgb` PDF rasterised by `pdftoppm` against them.
+
 ## 10. Layout-editor preview (interim)
 
 `GET /api/maps/:nameId/window.png` feeds `MapLayoutEditor` its map
@@ -257,17 +543,27 @@ the reference raster (`map-rendering.md` §5.1).
 
 ## Pending in this chapter
 
-- **§4–9** — page model, `resolveSheet`, map / page / marks layers,
-  `Info` per course, page labels and outlines, `/Measure /GEO`, images
-  and SVG logos (C2); the `maps.pdf` route switch, golden PDFs, `qpdf` in
-  CI (C3). The `@oxygen/shared/print` subpath export (and the
-  Dockerfile's `main` patch for it) lands with the first consumer (C2).
+- **§8–9** (C3) — the `maps.pdf` route switch (`loadPinnedPrintDocument`
+  → `sheetForMapRow` → `renderCoursePages`, legacy path otherwise; the
+  `CourseStackError` fallback), golden PDFs (`pdftoppm` of the `rgb`
+  pages against the page goldens and the scene goldens), `qpdf --check`
+  in CI, the sanctioned-differences list (§7.4 feeds it).
+- **Bold description-block text**: the block's header, title and
+  lengths carry `weight: 700` but print regular — only the regular faces
+  ship (`map-rendering.md` §4.10) and `symbolise` picks a font by family.
+  Awaiting the user's choice (C2 question, 2026-10-24): a sanctioned
+  difference now, or a Liberation Sans Bold face with weight-aware font
+  resolution.
 - **Print profiles** (05 §5.5): `cmyk-offset`, `/Separation`, overprint,
   PDF/X-4 and output intents, `colourOverrides`, `minLineWidthMm`, bleed
-  and crop marks, the test sheet — a later row (decision (2),
-  2026-10-23).
+  and crop marks (the marks layer), CMYK images, the test sheet — a later
+  row (decision (2), 2026-10-23).
 - **Filter regions by symbol** (05 §5.3, 04 §7): the stream has no region
   concept yet; `clipOperators` is the primitive the composer will use.
+- **Vector SVG logos** (05 §5.7 b): a safe SVG subset as form XObjects;
+  rasterised at 600 dpi until a club asks.
+- **Several frames per sheet** (map exchange on one sheet, 05 §5.9) and
+  per-variant pages (08): one frame per page in slice C.
 - **Serif and mono faces**: no file ships (`map-rendering.md` §4.10), so
   no PDF font either.
 - **Rasterised PDF comparison**: a manual `pdftoppm -r 254` of the
@@ -278,5 +574,6 @@ the reference raster (`map-rendering.md` §5.1).
   C3 picks the rasteriser options and tolerance.
 - §10 is retired by slice D (§10.6); §11 (corpus numbers) is C7's.
 - E2E: `e2e/course-maps.spec.ts` does not yet run under `vector`, so no
-  Playwright project requests `window.png` from a pinned event; C3's
-  dual-run of that spec (`map-pipeline-switch.md` §7) covers it.
+  Playwright project requests `window.png` or a vector PDF from a pinned
+  event; C3's dual-run of that spec (`map-pipeline-switch.md` §7) covers
+  it.

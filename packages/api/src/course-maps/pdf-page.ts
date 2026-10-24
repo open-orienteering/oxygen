@@ -61,7 +61,9 @@ export interface CoursePagesResult {
 export async function rasteriseSvgGraphic(svg: Uint8Array, widthPx: number, heightPx: number): Promise<Uint8Array> {
   const { Resvg } = await import("@resvg/resvg-js");
   const sharp = (await import("sharp")).default;
-  const r = new Resvg(Buffer.from(svg), { fitTo: { mode: "width", value: widthPx }, font: { loadSystemFonts: false } });
+  // Text in a logo uses the bundled faces only: the same output on every host.
+  const fontFiles = Object.values(BUNDLED_FONT_FILES).map((f) => f.path);
+  const r = new Resvg(Buffer.from(svg), { fitTo: { mode: "width", value: widthPx }, font: { loadSystemFonts: false, fontFiles, defaultFontFamily: "Liberation Sans" } });
   const png = r.render().asPng();
   const meta = await sharp(png).metadata();
   if (meta.width === widthPx && meta.height === heightPx) return new Uint8Array(png);
