@@ -404,7 +404,7 @@ what the writer would store now and compares.
 | Run | Events | Editor courses: cuts same / compared | Imported: legs / bent / authored-cut controls |
 |---|---|---|---|
 | Integration fixture (`overprint-cuts`, 2 events) | 2 | all same, 0 stale, document vs OCAD 0 differing | 1 / 1 / 1 (synthetic) |
-| Club database (coordinator, main checkout) | *pending* | *pending* | *pending* |
+| Club database (dev copy, 2026-10-24, before the v3 lazy rebuild) | 7 (6 `legacy`, 1 `vector`; 6 with a document) | 18 courses, 0 stale: circle cuts 44 same / 142 compared (40 changed, 52 added, 6 removed; opened 3602° → 4721°), leg gaps 70 same / 152 (24 changed, 42 added, 16 removed; 118 → 134 mm); document vs OCAD source differs on 16 of 18 | 261 legs / 257 pre-clipped / 0 bent (max 0.09 mm) / 125 controls with authored cuts (62 ∩ automatic, 63 authored only, 49 automatic only); description_box 70, marked_route 13 |
 
 The club run is the coordinator's after merge (the dev database is off
 limits from a worktree); its numbers go into this table. Before the
@@ -489,9 +489,6 @@ draws the SVG course overlay over the GL map instead (§1).
 
 ## Pending in this chapter
 
-- **Club comparison numbers** (§4.4): the coordinator runs
-  `geometry:compare` on the club database from the main checkout and
-  fills the table.
 - **Retiring the artifact**: `courses.geometry` is written until its
   last consumer draws from the layer (C4 viewer, C2 / C3 print, then
   kiosk / exports in E / F); spec-size cuts reach the screen and the page
