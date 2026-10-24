@@ -1,5 +1,7 @@
-import { test, expect, type Page } from "@playwright/test";
+import { test, expect } from "./helpers/map-pipeline";
+import type { Page } from "@playwright/test";
 import { reseed } from "./helpers/reseed";
+import { courseLabels, expectLabelShown } from "./helpers/course-labels";
 import { API_BASE as API } from "./helpers/api-base";
 
 // Mutates seed data (imports courses, uploads a map, reassigns classes) —
@@ -40,11 +42,14 @@ async function trpcQuery<T>(page: Page, path: string): Promise<T> {
  * Multi-course map display (feature): with several courses selected, each
  * leg carries the classes that run it, and the Descriptions toggle keeps
  * showing control CODES on the map (no per-course renumbering) while the
- * sheet lists the union of all selected courses' controls.
+ * sheet lists the union of all selected courses' controls. Runs under
+ * both map pipelines: under `vector` the control numbers are the GL
+ * course layer's (the viewer's mirror); pills and sheet stay SVG text.
  */
 test.describe("Multi-course map: class labels + combined descriptions", () => {
   test("legs are labeled with classes and descriptions keep control codes", async ({
     page,
+    mapPipeline,
   }) => {
     test.setTimeout(120_000);
     await selectCompetition(page);
@@ -69,8 +74,12 @@ test.describe("Multi-course map: class labels + combined descriptions", () => {
     await mapPanel.getByRole("button", { name: "Upload map" }).click();
     const mapChooser = await mapChooserPromise;
     await mapChooser.setFiles("e2e/test.ocd");
+    // Pills and the description sheet: SVG text under both pipelines.
     const overlayLabels = mapPanel.locator("svg text");
-    await expect(overlayLabels.first()).toBeVisible({ timeout: 30000 });
+    // Control numbers: SVG text (legacy) or the GL layer's mirror (vector).
+    const numberLabels = courseLabels(mapPanel, mapPipeline);
+    await expectLabelShown(numberLabels.first(), mapPipeline, 30000);
+    await expect(mapPanel.getByTestId("map-viewer").first()).toHaveAttribute("data-map-pipeline", mapPipeline);
 
     // ── Deterministic class assignments via the API: Öppen 1 → A,
     // Öppen 2 → B. (The import dialog's heuristics are not under test.)
@@ -122,7 +131,7 @@ test.describe("Multi-course map: class labels + combined descriptions", () => {
       // geometry loads, which resets zoom — clicks fired before that are
       // wasted. Control-code labels render at fit zoom, so this confirms
       // the map is loaded and fitted.
-      await expect(overlayLabels.first()).toBeVisible({ timeout: 30000 });
+      await expectLabelShown(numberLabels.first(), mapPipeline, 30000);
       // Keep clicking inside the wait window instead of exhausting a fixed
       // click budget up front — under parallel-shard load the SVG re-render
       // after a click can lag far behind the count() poll.
@@ -159,9 +168,7 @@ test.describe("Multi-course map: class labels + combined descriptions", () => {
     const codesB = courseB.controls.split(";").filter(Boolean);
     expect(codesA.length).toBeGreaterThan(2);
     for (const code of [codesA[0], codesB[0]]) {
-      await expect(
-        overlayLabels.filter({ hasText: new RegExp(`^${code}$`) }).first(),
-      ).toBeVisible({ timeout: 10000 });
+      await expectLabelShown(numberLabels.filter({ hasText: new RegExp(`^${code}$`) }).first(), mapPipeline);
     }
 
     // The sheet header names both courses, and the union covers codes
@@ -169,18 +176,19 @@ test.describe("Multi-course map: class labels + combined descriptions", () => {
     await expect(overlayLabels.filter({ hasText: "A · B" }).first()).toBeVisible();
     const bOnly = codesB.find((c) => !codesA.includes(c));
     if (bOnly) {
-      // Appears at least twice: once as a map label, once as a sheet row.
+      // Appears on the map (a number label) and in the sheet (SVG text). Under
+      // legacy both are SVG text, so the SVG count reaches two.
+      const code = new RegExp(`^${bOnly}$`);
+      await expectLabelShown(numberLabels.filter({ hasText: code }).first(), mapPipeline);
       await expect
-        .poll(async () => overlayLabels.filter({ hasText: new RegExp(`^${bOnly}$`) }).count())
-        .toBeGreaterThanOrEqual(2);
+        .poll(async () => overlayLabels.filter({ hasText: code }).count())
+        .toBeGreaterThanOrEqual(mapPipeline === "vector" ? 1 : 2);
     }
 
     // ── Single course keeps the classic sequence card: deselect B, and
     // sequence number 1 appears on the map (renumbering is single-course
     // behaviour only).
     await rowFor("B").getByRole("checkbox").uncheck();
-    await expect(
-      overlayLabels.filter({ hasText: /^1$/ }).first(),
-    ).toBeVisible({ timeout: 10000 });
+    await expectLabelShown(numberLabels.filter({ hasText: /^1$/ }).first(), mapPipeline);
   });
 });

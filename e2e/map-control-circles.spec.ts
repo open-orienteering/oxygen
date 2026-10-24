@@ -1,5 +1,6 @@
-import { test, expect } from "@playwright/test";
+import { test, expect } from "./helpers/map-pipeline";
 import { reseed } from "./helpers/reseed";
+import { courseLabels, expectLabelShown } from "./helpers/course-labels";
 
 // This spec mutates seed data (imports courses, uploads a map file), so it
 // starts from a clean seed per the e2e hygiene convention.
@@ -35,13 +36,14 @@ async function clickTab(page: import("@playwright/test").Page, name: string) {
  *
  * The imported test.ocd controls get their seq from allocate_event_seq()
  * (guaranteed ≠ code), which is exactly the state that triggered the bug.
- * We assert on the SVG code labels rather than <circle> elements because
+ * We assert on the code labels rather than <circle> elements because
  * a highlighted course with geometry legitimately renders controls as
  * broken-circle <path>s — but the code label is drawn for every visible
- * control in both states.
+ * control in both states. Runs under both map pipelines: under `vector`
+ * the labels are the GL course layer's, read from the viewer's mirror.
  */
 test.describe("Map control visibility with active selection", () => {
-  test("control code labels stay visible when a course is selected", async ({ page }) => {
+  test("control code labels stay visible when a course is selected", async ({ page, mapPipeline }) => {
     await selectCompetition(page);
     await clickTab(page, "Courses");
     await expect(page.getByText("3 courses")).toBeVisible({ timeout: 10000 });
@@ -83,8 +85,10 @@ test.describe("Map control visibility with active selection", () => {
 
     // Baseline (no selection): the overlay draws code labels for the
     // imported controls.
-    const overlayLabels = mapPanel.locator("svg text");
-    await expect(overlayLabels.first()).toBeVisible({ timeout: 30000 });
+    await expect(mapPanel.getByTestId("map-viewer")).toHaveAttribute("data-map-pipeline", mapPipeline, { timeout: 30000 });
+    await expect(mapPanel.getByTestId("map-viewer")).toHaveAttribute("data-course-layer", mapPipeline === "vector" ? "gl" : "svg");
+    const overlayLabels = courseLabels(mapPanel, mapPipeline);
+    await expectLabelShown(overlayLabels.first(), mapPipeline, 30000);
 
     // ── Select (expand) imported course "A" — this switches the map
     // into "course" filter mode with "show only relevant" on.
@@ -104,9 +108,7 @@ test.describe("Map control visibility with active selection", () => {
     // labels (and thus their circles) on the map. Before the fix the
     // selection filter hid every regular control.
     for (const code of codes.slice(0, 3)) {
-      await expect(
-        overlayLabels.filter({ hasText: new RegExp(`^${code}$`) }).first(),
-      ).toBeVisible({ timeout: 10000 });
+      await expectLabelShown(overlayLabels.filter({ hasText: new RegExp(`^${code}$`) }).first(), mapPipeline);
     }
 
     // Controls NOT on course A are filtered out ("show only relevant"),

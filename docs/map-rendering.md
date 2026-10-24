@@ -841,7 +841,8 @@ stencil passes; after, 17.
 bytes (base parts, large bucket, mesh atlas, text atlas pages and glyph
 table, the visible-set buffers — which
 hold every index, instance and clip-group array on the GPU) plus the
-resident detail parts' arena vertices against the budget. After every arrival and
+resident detail parts' arena vertices against the budget — and the dynamic
+bucket's vertices, which count as fixed (below). After every arrival and
 view change it evicts the least recently drawn detail parts until the
 total fits, never one in the drawn set; if the drawn set alone does not
 fit, the engine reports over budget (`EngineStats.overBudget`) rather
@@ -861,6 +862,7 @@ growth factor).
 |---|---|---|
 | `load` | document bytes + `DocumentRenderOptions` (or, dev only, render objects + symbols, or a symbolised stream), font files, the text atlas pages (JSON, in the renderer's page order), optional first view (a view, or "fit into w × h"), gate flag | `loaded`: summary (bounds, origin, grid, detail cells, the first view resolved, stage times, bytes, text: pages, glyphs resolved, glyphs missing), mesh atlas, every cell's base part, the large part — then, without a further request, the first view's detail parts unless it is below the gate |
 | `prepare` | bucket ids, most urgent first | replaces the queue; one `part` per id |
+| `course` | a generation number and the course layer's input without the document (`CourseLayerRequest`: structure, sites, objects, appearance, view options), or `null` | `course`: the generation, the dynamic bucket's part (or `null`), the stack to draw with, the derivation and symbol sizes, warnings, and the mesh atlas when it grew — "Dynamic bucket" below |
 | — | | `error` on a failed load |
 
 Every typed array goes back as a transferable. The worker decodes,
@@ -875,6 +877,76 @@ the dev page does it on the main thread). The caller creates the worker
 when the view mounts, before a document is known: under Vite dev its
 module graph takes ~150 ms to load (Sprint envelope `load` 314 → 147 ms
 once the dev page pre-warmed it).
+
+#### Dynamic bucket (C4)
+
+The course layer (`docs/course-layer.md`) is drawn by this backend as
+one more part — the **dynamic bucket** of 04 §7 — beside the static
+buckets, so map and course are one colour-ordered picture: lower purple
+under black, brown and blue line art, white-outs above the map's ink,
+upper purple on top. The viewer's use of it is §5.4 "Overlay".
+
+**Stack at load.** A load with `courseLayer: true` (the viewer's; the
+dev page and the bench leave it off) builds the static buckets on the
+**course-completed stack** `courseColourStack(header.colours)`
+(`course-layer.md` §1): when the document lacks upper white the row is
+inserted below upper purple and the bridged symbols are re-indexed
+(`remapRenderColours`) before `symbolise`, so every pass at or above
+upper purple carries the shifted index. The stack is a function of the
+document alone, so showing, changing or hiding a course never
+re-prepares a static part and the draw needs no index translation.
+`LoadSummary.colourStack` is the stack the parts index (the document's
+own without `courseLayer`) and `LoadSummary.courseLayer` says whether a
+course can be drawn: `{ supported: true, cutFeatures }`, or — a stack
+without both purples, `CourseStackError` — `{ supported: false, reason }`
+with the document drawn on its own stack, unchanged. The same load
+extracts the automatic-cut features once (`cutFeaturesOfDocument`,
+`course-layer.md` §3.4) and keeps the decoded context, the parsed fonts,
+the text pages and the mesh atlas builder for the course requests.
+
+**A course request.** `course { generation, input }` runs, in the worker,
+`courseLayer({ ...input, document, cutFeatures })`, `symbolise` on the
+layer's objects and symbols alone (its symbols already index the
+completed stack) and `prepareBucketPart(…, COURSE_BUCKET, every pass,
+"all")` — one part with every kind, bucket id `COURSE_BUCKET` (−2).
+Its range-table object ids continue after the document's stream objects
+(`courseRenderInput`'s `courseObjectOffset`), so `setHidden` can address
+document and course objects in one set. Glyph parts (701, 706) join the
+**same mesh atlas**, keyed by their geometry (the course stream's glyph
+ids are local to each run); growth is append-only, so the reply carries
+the whole atlas only when a mesh was added and every resident instance
+keeps its `base`. Numbers (704) are MSDF text resolved against the
+loaded pages like the document's (§"Text atlas"), `TEXT_*` warnings
+counted in the reply. The reply's `colours` is `layer.colours` — the
+completed stack plus a row per hex-coloured layout object on top
+(`course-layer.md` §3.6) — and it brings `derivation` (sites, labels,
+legs) and `metrics` (circle, start and finish radii, line width, digit
+height in paper mm) for the UI layer. `input: null` clears; a load
+without course support answers `part: null` and `COURSE_UNAVAILABLE`.
+The worker answers a request at once, between prepare slices.
+
+**Engine.** `MapGlEngine.setCourse(input | null)` posts the request with
+a new generation (one made before the load waits for it and is sent
+right after the load message); a reply whose generation is not the
+latest is dropped. The current reply's part is uploaded under key `C` —
+through `GpuArena.put` like any part, so a grow re-uploads it with the
+rest and nothing goes through `copyBufferSubData`
+(`docs/bugfix-adreno-arena-grow.md`) — and the previous one released;
+`setAtlas` replaces the mesh texture when the reply carries an atlas.
+The part is **always resident and always drawn**: appended to the
+visible set after the drawn cells and the large bucket at every zoom,
+gated or not, never evicted, its arena bytes counted as fixed. A reply
+rebuilds the visible set on the next `render` at once (not held by
+`ARRIVAL_REBUILD_MS`) and calls `onChange` for the redraw and `onCourse`
+with the derivation, sizes, stack and warnings. Within one colour the
+course draws after the map's own objects of that colour (it is the last
+part). `engine.colours` is the stack to draw with: the latest reply's,
+else the load's.
+
+**Cost.** A dragged control re-symbolises the whole layer (tens of
+objects): the 04 §7 budget of < 1 ms is the symbolisation's; the reply
+is one worker round trip, one part upload and one visible-set rebuild.
+Main-thread symbolisation for the drag is pending (§8).
 
 #### Text atlas (B3)
 
@@ -1232,6 +1304,8 @@ published on `window.__mapGlDoc` for Playwright.
 | `e2e/map-gl-golden.spec.ts` | the per-pass path against the reference raster; the **MSDF text tier**: `text-with-halo`, `lib-text`, `lib-halos` through the arena path (§6.2) |
 | `e2e/map-gl-doc.spec.ts` (text) | arena = per-pass compare also on `e2e/test.xmap` (text, MSDF vs outlines) within 0.5 %; its text resolves on the Latin page with nothing missing |
 | `e2e/map-vector-layer.spec.ts` (text) | the viewer requests the Latin page and not the Cyrillic one |
+| `map-gl/__tests__/worker-course.test.ts` | dynamic bucket: static parts on the completed stack (upper white below upper purple, rows above it +1 with their CMYK), the document's stack without `courseLayer`, an unaligned stack unsupported and unchanged; a course request → one `all` part at `COURSE_BUCKET` on the completed stack (lower-purple strokes, text instances, glyph meshes in the grown atlas, earlier meshes in place, object ids after the document's, everything transferable); no atlas when nothing was added; lower purple drawn under black in one visible set; `null` and unsupported replies; a white-out at upper white above black |
+| `map-gl/__tests__/engine.test.ts` (dynamic bucket) | `setCourse` uploads `C`, drawn below the zoom gate too, rebuilt at once, `onCourse` / `onChange`, `engine.colours` = the reply's; an overtaken reply dropped; `null` releases; a request before the load waits for it; course bytes fixed |
 
 ### 5.4 Viewer
 
