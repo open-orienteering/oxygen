@@ -1603,12 +1603,12 @@ left corner of the path's control-point bounds (dash slices lie inside
 that hull), so its numbers are short and never negative: PDF path
 operands are absolute, and a translation per object is the relative
 encoding the grammar allows. The anchor is an integer in `u`, so the
-rounding is the unanchored one's. Colour and line style are set before
+rounding is the unanchored one's; an anchor of `0 0` writes no `q … Q`. Colour and line style are set before
 the `q`, so the tracker is unaffected.
 
 | Pass | Operators |
 |---|---|
-| `fill` | fill colour; per ring `x y m`, `l` / `c` (Béziers kept, nothing flattened), `h`; then **`f*`** — even-odd, §3.1 (05's table said `f`, written before the rule was fixed). A ring whose last segment is a line back onto its start (as written) leaves that line to `h` — the same edge (C11). A closed *stroke* keeps it: its join at the start is the stream's |
+| `fill` | fill colour; per ring `x y m`, `l` / `c` (Béziers kept, nothing flattened), `h`; then **`f*`** — even-odd, §3.1 (05's table said `f`, written before the rule was fixed). A ring whose last segment is a line back onto its start (as written) leaves that line to `h` — the same edge (C11); likewise every clip ring (`W n` / `W* n`) and every glyph-form fill ring. A closed *stroke* keeps it: its join at the start is the stream's |
 | `stroke` | stroke colour; `w J j` (cap butt / round / square / pointed → `J` 0 / 1 / 2 / 0; join miter / round / bevel → `j` 0 / 1 / 2); rings (`h` when closed); `S`. The mitre limit is `4 M` once per layer (`STROKE_MITRE_LIMIT`: the reference raster's and the GL strips' 4×, not 05's "`M 2`-ish") |
 | `stroke` with `slices` | one subpath per slice from `sliceSegments` (de Casteljau, exact Béziers) and **one** `S` for the pass — each subpath gets its own caps; never PDF's `d` dash array (§3.2) |
 | `stroke`, `cap: "pointed"` with a `taper` | `strokeOutline(path, { widthUm, join, taper, slices })` (`render/geometry.ts`) as fill colour + rings + **`f`** (non-zero: the outline is a union of counter-clockwise quads and join wedges, flattened at 5 µm, integers in `u`, under its anchor). The reference raster fills the same outline (§5.1). Without a taper: a butt `S` |
@@ -1644,8 +1644,8 @@ values; the layer `cm` for a 1:15 000 map at 1:10 000 and a rotation,
 never in exponent notation (a 0.01° tilt is `0.000000495`, not `4.95e-7`);
 round caps and joins on the fallback halo;
 `W n` / `W* n`. C11 adds: the anchor (`q 1 0 0 1 ax ay cm … Q`) on a
-fill, a Bézier stroke, a dash pass and a pointed outline; a fill ring's
-closing line left to `h`, a closed stroke's kept; `layerUnitUm` per
+fill, a Bézier stroke, a dash pass and a pointed outline, none at `0 0`;
+a fill ring's closing line left to `h`, a closed stroke's kept; `layerUnitUm` per
 scale ratio (≤ 5 µm printed, a whole fraction of 10 µm); `w` / `Tf` /
 `Tm` in the unit; the map layer's `cm` folding the unit and the origin's
 move onto the 10 µm grid (a point lands where the caller's matrix puts
