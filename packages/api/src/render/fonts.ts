@@ -26,8 +26,8 @@ export const BUNDLED_FONT_FILES: Record<"liberation-sans" | "liberation-sans-nar
   "liberation-sans-narrow": { path: fontsDir + "LiberationSansNarrow-Regular.ttf", family: "Liberation Sans Narrow" },
 };
 
-/** Every bundled face's file, for the PDF writer's `faces` and resvg's `fontFiles`. */
-export const BUNDLED_FACE_FILES: readonly { family: render.FontFamily; bold: boolean; path: string }[] = FACES.map((f) => ({ family: f.family, bold: f.bold, path: fontsDir + f.file }));
+/** Every bundled face's file, for the PDF writer's `faces` (resvg is given the regular files only). */
+const BUNDLED_FACE_FILES: readonly { family: render.FontFamily; bold: boolean; path: string }[] = FACES.map((f) => ({ family: f.family, bold: f.bold, path: fontsDir + f.file }));
 
 function loadFace(face: BundledFace): Promise<render.TrueTypeFont> {
   let p = cache.get(face);

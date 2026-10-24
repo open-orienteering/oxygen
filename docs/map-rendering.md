@@ -773,7 +773,7 @@ Vertex layouts (`buckets.ts`):
 | atlas | 32 per mesh vertex | two RGBA32F texels: (x, y, ox, oy), (half width, 0, 0, 0); fill vertices have zero offset and width |
 | instance | 32 | glyph: f32 x, y, cos, sin, scale, atlas base, count, radius · text: f32 x, y, cos, sin, em size (µm), glyph-table entry, halo (em), 0 |
 | glyph table | 64 per text glyph | four RGBA32F texels: plane l, b, r, t (em) · uv u0, v0, u1, v1 · page, range (em), 0, 0 · 0 |
-| text page | 4 per atlas pixel | RGBA8, `LINEAR`, no mipmaps: Latin 2.0 MB, Cyrillic 0.7 MB |
+| text page | 4 per atlas pixel | RGBA8, `LINEAR`, no mipmaps: Latin 3.2 MB, Cyrillic 1.1 MB (three faces, C8) |
 
 The stroke vertex is 16 B rather than 04 §6.2's 8 B: widths mix inside
 one visible-set draw, so the half width is a per-vertex µm value rather

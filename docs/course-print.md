@@ -100,8 +100,8 @@ test sheet (05 §5.5) — a later row before the default flips.
 
 ### 3.1 Fonts
 
-The two bundled faces (Liberation Sans, Liberation Sans Narrow;
-`map-rendering.md` §4.10) are embedded per document as
+The bundled faces (Liberation Sans Regular and Bold, Liberation Sans
+Narrow; `map-rendering.md` §4.10) are embedded per document, each as its own font object, as
 
 ```
 Type0  /Encoding /Identity-H  /ToUnicode <CMap>  /DescendantFonts [
