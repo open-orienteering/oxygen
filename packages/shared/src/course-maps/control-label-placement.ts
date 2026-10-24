@@ -103,6 +103,14 @@ export interface PlacedControlLabel {
   leader?: { x1: number; y1: number; x2: number; y2: number };
 }
 
+/**
+ * Cap/digit height of Liberation Sans (metrically Arial-compatible) as a
+ * fraction of the em box: 1409/2048. ISOM 704 specifies the control
+ * number by digit height, the em box is what fonts are sized by, so
+ * `em = digitHeight / CONTROL_NUMBER_CAP_HEIGHT_RATIO`.
+ */
+export const CONTROL_NUMBER_CAP_HEIGHT_RATIO = 1409 / 2048;
+
 /** Keep in sync with the SVG renderer's font metrics. */
 const CHAR_WIDTH_RATIO = 0.65;
 const LINE_HEIGHT_RATIO = 1.2;

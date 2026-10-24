@@ -306,6 +306,10 @@ tests and the coming contact sheet: `{ library, edition, colours:
 paletteStack(...), symbols: entries.map(resolve) }`, i.e. a colour stack
 plus `RenderSymbol[]` that `symbolise` accepts as-is.
 
+The course layer resolves the 7xx entries the same way, against the
+document's aligned stack completed with upper white, and scales them by
+the document factor (`docs/course-layer.md` §1, §3.1).
+
 Registry functions: `listSymbolLibraries()`, `getSymbolLibrary(id)`,
 `getLibraryEntry("ISOM2017-2:302.b")`, `entriesForCode("ISOM2017-2",
 "302")` (heading first, then variants). Libraries are parsed once and
@@ -421,7 +425,7 @@ The OOM dimension spot check (e) is not implemented; see §10.
 | Directional point glyphs: no convention stated (03 §6.2) | Angle 0 = north, slope ticks to +y (§3; B10) | OCAD and Mapper both draw the 101.b / 103.b tick to +y; the first edition used the line-tag convention (−y) and every auto-matched slope line pointed uphill (52–66 % shape difference, `map-rendering.md` §6.4). |
 | 510 "0.3 (OM)" bars | ±0.37 mm, 0.3 beyond each edge of the 0.14 line (B10) | The reading ISOM 511 already used; Mapper's ISOM set and both corpus OCAD sets draw ±0.37 (−0.38 … +0.33). Was ±0.3. ISSprOM 511 (unchanged) measures its 0.3 from the line centre (±1.12 at ±0.82), as OCAD's ISSprOM set does — Sprint's 511 matches it at 1.00; the spec drawing does not settle which. |
 | 508.b yellow band as drawn (visible in forest) | Appendix B order: hidden under 406–410 green (§3; user decision 2026-10-22) | No yellow row above green exists in Appendix B; OCAD's set and the legacy tiles agree. |
-| `defaultMapAppearance` in `course-maps/schema.ts` retired in favour of the library | Not yet | The course layer (slice C) is the consumer that switches; the constants stay until then. |
+| `defaultMapAppearance` in `course-maps/schema.ts` retired in favour of the library | Retired for the vector path (C0): the course layer draws the 7xx entries × document factor × the template's appearance as multipliers (`docs/course-layer.md` §3.1); the constant stays as the legacy overlay's sizes and the multipliers' denominator (`appearanceFromTemplate`) | The legacy SVG overlay and stored templates still read it; deleted with them (§10). |
 
 ## 8. Matching source symbols to the library (03 §6.5–6.6)
 
@@ -973,5 +977,8 @@ resolves canonical entries through `paletteIndexOfStack(header.colours)`.
   candidate set) once a corpus map uses ISOM 2000 numbering to tune it on.
 - The OOM dimension spot check if 03 §10's licence question is settled in
   favour.
+- `defaultMapAppearance` deleted with the legacy course overlay (slice
+  E); until then it is the legacy sizes and the denominator of the
+  course layer's appearance multipliers (§7).
 - Mapper's 511-coded power line (suggested 510 only) is not normalised
   (A15 scoped to the railway); revisit if a Mapper corpus map shows it.

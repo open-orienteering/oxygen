@@ -20,11 +20,15 @@ export interface AngularGap {
   end: number;
 }
 
-/** Clip a line segment around every circular obstacle. */
+/**
+ * Clip a line segment around every circular obstacle. An obstacle's own
+ * `clearance` overrides the shared one (start triangles and finish rings
+ * are wider than a control circle).
+ */
 export function clipLine(
   a: OverlayPoint,
   b: OverlayPoint,
-  obstacles: OverlayPoint[],
+  obstacles: Array<OverlayPoint & { clearance?: number }>,
   clearance: number,
 ): OverlaySegment[] {
   const dx = b.x - a.x;
@@ -42,8 +46,9 @@ export function clipLine(
     const px = a.x + along * ux - obstacle.x;
     const py = a.y + along * uy - obstacle.y;
     const perpendicular = Math.hypot(px, py);
-    if (perpendicular < clearance) {
-      const half = Math.sqrt(clearance * clearance - perpendicular * perpendicular);
+    const reach = obstacle.clearance ?? clearance;
+    if (perpendicular < reach) {
+      const half = Math.sqrt(reach * reach - perpendicular * perpendicular);
       blocks.push([along - half, along + half]);
     }
   }
@@ -147,22 +152,20 @@ export function subtractLegGaps(
   });
 }
 
-/** Build the SVG path for a control circle with angular slit gaps. */
-export function drawBrokenCircle(
-  cx: number,
-  cy: number,
-  radius: number,
-  gaps: AngularGap[],
-): string {
+/**
+ * The arcs of a circle left after removing `gaps` (compass degrees, each
+ * gap sweeping clockwise from `start` to `end`): `[start, end]` pairs with
+ * 0 ≤ start < end ≤ 360, slivers under 0.5° dropped. No gap → one
+ * `[0, 360]` arc.
+ */
+export function circleArcs(gaps: AngularGap[]): Array<[number, number]> {
   const normalized = gaps
     .map((gap) => ({
       start: ((gap.start % 360) + 360) % 360,
       end: ((gap.end % 360) + 360) % 360,
     }))
     .filter((gap) => Math.abs(gap.start - gap.end) >= 0.5);
-  if (normalized.length === 0) {
-    return `M${cx + radius},${cy} A${radius},${radius} 0 1 1 ${cx - radius},${cy} A${radius},${radius} 0 1 1 ${cx + radius},${cy}`;
-  }
+  if (normalized.length === 0) return [[0, 360]];
 
   const gapAngles: Array<[number, number]> = [];
   for (const gap of normalized) {
@@ -184,9 +187,22 @@ export function drawBrokenCircle(
     cursor = end;
   }
   if (cursor < 360) arcs.push([cursor, 360]);
+  return arcs.filter(([start, end]) => end - start >= 0.5);
+}
+
+/** Build the SVG path for a control circle with angular slit gaps. */
+export function drawBrokenCircle(
+  cx: number,
+  cy: number,
+  radius: number,
+  gaps: AngularGap[],
+): string {
+  const arcs = circleArcs(gaps);
+  if (arcs.length === 1 && arcs[0][0] === 0 && arcs[0][1] === 360) {
+    return `M${cx + radius},${cy} A${radius},${radius} 0 1 1 ${cx - radius},${cy} A${radius},${radius} 0 1 1 ${cx + radius},${cy}`;
+  }
 
   return arcs
-    .filter(([start, end]) => end - start >= 0.5)
     .map(([start, end]) => {
       const startRad = ((90 - start) * Math.PI) / 180;
       const endRad = ((90 - end) * Math.PI) / 180;

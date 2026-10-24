@@ -1513,8 +1513,11 @@ with the oracle, never with each other.
 
 **Golden scenes** are the six contract fixtures (§6.3), the
 `pilot-scene` (`__fixtures__/pilot-scene.ts`: one object per pilot
-symbol, hand-placed) and the eleven library fixtures (`lib-*`, §6.3,
-coloured from the library's palette through `cmykToHex`). `render.goldenScene(name, fonts)` resolves a name
+symbol, hand-placed), the twelve library fixtures (`lib-*`, §6.3,
+coloured from the library's palette through `cmykToHex`) and the five
+course scenes (`course-*`, §6.3, C0: a library base map and
+`courseLayer()` merged into one stream, coloured from the completed
+stack). `render.goldenScene(name, fonts)` resolves a name
 to `{ stream, colour }` identically on every side, and
 `render.goldenFrame(stream)` fixes the image frame: bounds + 1 mm
 margin, grown symmetrically to a **whole number of pixels** (a 57.5 px
@@ -1687,6 +1690,25 @@ scene is a snapshot (§6.1) and a golden (§6.2).
 | `lib-colour-order` | + | ten ISSprOM colours, lower and upper purple among them, pushed in reverse | colour-major order; lower purple under black, upper purple last |
 | `lib-precision` | + | `lib-dash-ocad` and `lib-line-glyphs` moved to (1 200 000, 1 200 000) µm | every pass the near pass translated, to 1 µm |
 
+The **course scenes** (C0, `docs/course-layer.md`) draw a small base
+map from the canonical library on its palette stack and a course layer
+from `courseLayer()`, merged by `courseRenderInput()` into one stream —
+exactly what a backend does: `__fixtures__/course/index.ts`
+(`courseScene`, `courseSceneNames`), snapshots in `streams/course/`,
+assertions in `packages/shared/src/course/__tests__/scenes.test.ts`.
+WebGL2 per-pass path against the golden, measured at introduction
+(headless Chromium, 2026-10-24): `course-legs` 0.085 %, `course-cuts`
+0.239 %, `course-objects` 0.076 %, `course-sprint` 0.039 %,
+`course-all-controls` 0.056 %.
+
+| Scene | Objects | Asserted |
+|---|---|---|
+| `course-legs` | ISOM 401, 505, 101, 306, 516 under S → 31 → 32 → 33 → F | lower purple under black, brown and blue line art, above yellow; start turned to 31; sequence numbers |
+| `course-cuts` | ISOM 204 on a rim and on a leg, 109 on a rim, 201; an authored gap and authored leg pieces on 33; a manual number position | automatic cuts from the features, authored gap and pieces kept, number at its offset, cut circles as open arcs |
+| `course-objects` | ISOM 406, 505, 106; white-out rectangle, toner-saver ring, 709 rectangle, 709.b triangle, 707 / 708 / 711 extras, a map text in its own colour with `{course}` | white-outs at upper white above all ink and below upper purple; 709 / 707 / 711 upper, 708 lower; the text's row on top of the stack |
+| `course-sprint` | ISSprOM 401, two 521 buildings; `numberStyle: "knockout"` | 6 mm circles; upper-white halo under upper-purple numbers, above the buildings' black |
+| `course-all-controls` | ISOM 403, 304; all controls with a free-order course | every site drawn, codes, no legs, start north |
+
 Not in the table: 04 §8 row 10 (minimum sizes) is a screen-backend rule
 (the stream is the same at every zoom), and the filter-region and
 georeference rows belong to the viewer (§5.4) and A11's `mapGeo`.
@@ -1853,6 +1875,7 @@ what became of it:
 | `packages/shared/src/render/symbolise.ts` | the stage |
 | `packages/shared/src/render/__fixtures__/` | contract fixtures (`streams/`), library fixtures (`library/`, snapshots in `streams/library/`), pilot symbols, `pilot-scene.ts`, `golden.ts` (scene list, frame) |
 | `packages/shared/src/render/proxy-symbols.ts` | per-kind proxy symbols for the render bridge |
+| `packages/shared/src/render/__fixtures__/course/` | course scenes (C0; snapshots in `streams/course/`) — the layer itself is `packages/shared/src/course/`, `docs/course-layer.md` |
 | `packages/shared/fonts/` | bundled Liberation faces |
 | `packages/api/src/render/reference-raster.ts` | resvg rasterisation, `sampleAt`, `diffImages`, `encodePng` |
 | `packages/shared/src/render/swatch.ts` | symbol swatch scene (§5.1.1) |
