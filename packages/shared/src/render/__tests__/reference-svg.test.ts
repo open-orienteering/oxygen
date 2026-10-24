@@ -3,6 +3,7 @@ import { fixtureColours, renderFixtures } from "../__fixtures__/streams/index.js
 import { COORD_FLAG, makePath } from "../pass-stream.js";
 import { passStreamBounds, passStreamToSvg, pathToSvgD } from "../reference-svg.js";
 import { passStreamFromJson } from "../stream-json.js";
+import { strokeOutline } from "../geometry.js";
 import { symbolise } from "../symbolise.js";
 import { PILOT, pilotSymbols } from "../__fixtures__/pilot-symbols.js";
 
@@ -54,6 +55,29 @@ describe("passStreamToSvg", () => {
     const svg = passStreamToSvg(passStreamFromJson(renderFixtures["fill-with-holes"]), { colour });
     expect(svg).toContain('fill-rule="evenodd"');
     expect(svg).toContain("ZM4000 4000");
+  });
+
+  it("draws a tapered pointed stroke as the shared strokeOutline, filled non-zero", () => {
+    const stream = passStreamFromJson({
+      objectIdx: [0],
+      symbolIdx: [107],
+      passes: [
+        { kind: "stroke", colour: 5, path: { coords: [0, 0, 10000, 0] }, widthUm: 250, cap: "pointed", join: "round", taper: { startUm: 750, endUm: 750 } },
+      ],
+    });
+    const svg = passStreamToSvg(stream, { colour });
+    const outline = strokeOutline(makePath([0, 0, 10000, 0]), { widthUm: 250, join: "round", taper: { startUm: 750, endUm: 750 } });
+    expect(svg).toContain(`d="${pathToSvgD(outline, true)}" fill="#000000" fill-rule="nonzero"`);
+    expect(svg).not.toContain('stroke="#000000"');
+  });
+
+  it("draws a pointed stroke without taper as a butt stroke", () => {
+    const stream = passStreamFromJson({
+      objectIdx: [0],
+      symbolIdx: [107],
+      passes: [{ kind: "stroke", colour: 5, path: { coords: [0, 0, 10000, 0] }, widthUm: 250, cap: "pointed", join: "round" }],
+    });
+    expect(passStreamToSvg(stream, { colour })).toContain('stroke-linecap="butt"');
   });
 
   it("renders dash slices as separate subpaths of one stroke element", () => {

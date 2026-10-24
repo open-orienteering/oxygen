@@ -1,8 +1,9 @@
-import { randomUUID } from "node:crypto";
+import { randomBytes, randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import Fastify, { type FastifyInstance } from "fastify";
 import { PDFDocument } from "pdf-lib";
+import sharp from "sharp";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { defaultMapAppearance } from "@oxygen/shared";
 import { registerCourseMapRoutes } from "../../course-maps/routes.js";
@@ -12,6 +13,8 @@ import {
   type TestEventContext,
 } from "../helpers/test-db.js";
 import { makeCaller } from "../helpers/caller.js";
+import { applyEventMap } from "../../event-map.js";
+import { getBaseMapInfo, clearCourseMapSourceCache } from "../../course-maps/map-source.js";
 
 let ctx: TestEventContext;
 let caller: ReturnType<typeof makeCaller>;
@@ -628,6 +631,132 @@ describe("course map REST rendering", () => {
     });
     expect(invalid.statusCode).toBe(400);
     expect(invalid.json().error).toContain("rot");
+  });
+});
+
+describe("window.png under a pinned document", () => {
+  let vec: TestEventContext;
+  let documentHash: string;
+  const q = (nameId: string, extra = "") =>
+    `/api/maps/${nameId}/window.png?cx=-70&cy=10&wMm=60&hMm=40&printScale=7500&dpi=100${extra}`;
+  const decode = async (png: Buffer) => {
+    const { data, info } = await sharp(png).ensureAlpha().raw().toBuffer({ resolveWithObject: true });
+    return { width: info.width, height: info.height, data };
+  };
+
+  beforeAll(async () => {
+    vec = await createTestEvent("course_maps_vec");
+    // Per-run trailer: content-addressed rows are global (see map-documents.test.ts).
+    const bytes = Buffer.concat([readFileSync(fixture), Buffer.from(`window-${randomBytes(4).toString("hex")}`)]);
+    const applied = await applyEventMap(vec.db, vec.eventId, "test.ocd", bytes);
+    expect(applied.documentHash).toMatch(/^[0-9a-f]{64}$/);
+    documentHash = applied.documentHash!;
+    await vec.db.event.update({ where: { id: vec.eventId }, data: { mapPipeline: "vector" } });
+  }, 60_000);
+
+  afterAll(async () => {
+    await vec?.cleanup();
+  });
+
+  it("getBaseMapInfo: the document branch agrees with the legacy reader and carries the hash", async () => {
+    const legacy = await getBaseMapInfo(ctx.db, ctx.eventId);
+    const doc = await getBaseMapInfo(vec.db, vec.eventId);
+    expect(legacy.document).toBeNull();
+    expect(doc.scale).toBe(legacy.scale);
+    expect(doc.meridianTiltDeg).toBeCloseTo(legacy.meridianTiltDeg, 3);
+    expect(doc.document).toEqual({ hash: documentHash });
+    expect(doc.version).toBe(documentHash);
+  });
+
+  it("a vector event without a pinned document keeps the legacy path", async () => {
+    await vec.db.mapFile.updateMany({ where: { eventId: vec.eventId }, data: { documentHash: null } });
+    clearCourseMapSourceCache();
+    expect((await getBaseMapInfo(vec.db, vec.eventId)).document).toBeNull();
+    await vec.db.mapFile.updateMany({ where: { eventId: vec.eventId }, data: { documentHash } });
+    clearCourseMapSourceCache();
+  });
+
+  it("full layer: exact size, opaque, yellow area at the window centre; cached by document hash", async () => {
+    const res = await server.inject({ method: "GET", url: q(vec.nameId) });
+    expect(res.statusCode).toBe(200);
+    expect(res.headers["x-cache"]).toBe("miss");
+    const img = await decode(res.rawPayload);
+    expect([img.width, img.height]).toEqual([236, 157]);
+    // Window spans map x −100..−40: bare paper on the left, the yellow area from x ≈ −74 on.
+    const at = (x: number) => (Math.floor(img.height / 2) * img.width + x) * 4;
+    expect(Array.from(img.data.subarray(at(10), at(10) + 4))).toEqual([255, 255, 255, 255]);
+    const o = at(img.width - 10);
+    expect(img.data[o + 3]).toBe(255);
+    expect(img.data[o]).toBeGreaterThan(200); // yellow, not white
+    expect(img.data[o + 2]).toBeLessThan(120);
+    const hit = await server.inject({ method: "GET", url: q(vec.nameId) });
+    expect(hit.headers["x-cache"]).toBe("hit");
+    expect(hit.headers.etag).toBe(res.headers.etag);
+  });
+
+  it("ink layer: transparent paper, only colours above purple-lower, distinct from full", async () => {
+    const ink = await server.inject({ method: "GET", url: q(vec.nameId, "&layer=ink") });
+    const full = await server.inject({ method: "GET", url: q(vec.nameId) });
+    expect(ink.statusCode).toBe(200);
+    expect(ink.headers.etag).not.toBe(full.headers.etag);
+    const img = await decode(ink.rawPayload);
+    expect([img.width, img.height]).toEqual([236, 157]);
+    let clear = 0;
+    for (let i = 3; i < img.data.length; i += 4) if (img.data[i] === 0) clear++;
+    expect(clear).toBeGreaterThan(img.data.length / 4 / 4);
+    // A window beyond the map draws nothing: fully transparent, still full-size.
+    const empty = await server.inject({ method: "GET", url: `/api/maps/${vec.nameId}/window.png?cx=900&cy=900&wMm=30&hMm=30&printScale=7500&dpi=50&layer=ink` });
+    const e = await decode(empty.rawPayload);
+    expect([e.width, e.height]).toEqual([59, 59]);
+    expect(e.data.every((v, i) => i % 4 !== 3 || v === 0)).toBe(true);
+  });
+
+  it("rotated window: exact size and its own cache entry", async () => {
+    const straight = await server.inject({ method: "GET", url: q(vec.nameId) });
+    const rotated = await server.inject({ method: "GET", url: q(vec.nameId, "&rot=-15") });
+    expect(rotated.statusCode).toBe(200);
+    expect(rotated.headers["x-cache"]).toBe("miss");
+    expect(rotated.headers.etag).not.toBe(straight.headers.etag);
+    const img = await decode(rotated.rawPayload);
+    expect([img.width, img.height]).toEqual([236, 157]);
+    const again = await server.inject({ method: "GET", url: q(vec.nameId, "&rot=-15") });
+    expect(again.headers["x-cache"]).toBe("hit");
+  });
+
+  it("agrees with the legacy window of the same map up to the sanctioned differences", async () => {
+    // Sanctioned (decision 2026-10-23): library-drawn symbols, naive colour
+    // conversion, and the document's own colour order instead of the legacy
+    // IOF rewrite (the fixture draws yellow above blue, so the ink split
+    // differs). What must agree is the geometry: the paper/area edge in
+    // the full layer and the black linework in the ink layer.
+    const iou = (a: boolean[], b: boolean[]) => {
+      let both = 0, either = 0;
+      a.forEach((v, i) => {
+        if (v || b[i]) either++;
+        if (v && b[i]) both++;
+      });
+      return { both, either, ratio: either === 0 ? 1 : both / either };
+    };
+    const mask = (img: { data: Buffer }, f: (r: number, g: number, b: number, a: number) => boolean) => {
+      const out: boolean[] = [];
+      for (let i = 0; i < img.data.length; i += 4) out.push(f(img.data[i], img.data[i + 1], img.data[i + 2], img.data[i + 3]));
+      return out;
+    };
+    const get = async (id: string, layer: string) => decode((await server.inject({ method: "GET", url: q(id, `&layer=${layer}`) })).rawPayload);
+    const [lf, df, li, di] = [await get(ctx.nameId, "full"), await get(vec.nameId, "full"), await get(ctx.nameId, "ink"), await get(vec.nameId, "ink")];
+    for (const d of [df, li, di]) expect([d.width, d.height]).toEqual([lf.width, lf.height]);
+    const area = iou(mask(lf, (r, g, b) => !(r > 245 && g > 245 && b > 245)), mask(df, (r, g, b) => !(r > 245 && g > 245 && b > 245)));
+    expect(area.either).toBeGreaterThan(0);
+    expect(area.ratio).toBeGreaterThan(0.9);
+    const dark = (r: number, g: number, b: number, a: number) => a > 128 && r + g + b < 200;
+    const lines = iou(mask(li, dark), mask(di, dark));
+    expect(lines.either).toBeGreaterThan(0);
+    expect(lines.ratio).toBeGreaterThan(0.5);
+  });
+
+  it("legacy events are unchanged: no document, same route", async () => {
+    const res = await server.inject({ method: "GET", url: q(ctx.nameId) });
+    expect(res.statusCode).toBe(200);
   });
 });
 
