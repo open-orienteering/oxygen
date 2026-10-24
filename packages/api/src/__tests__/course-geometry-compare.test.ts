@@ -38,9 +38,12 @@ describe("compareEditorGeometry", () => {
     expect(r.legs.diffs[1].newWidth).toBeGreaterThan(1);
   });
 
-  it("flags a stale row instead of a cut change", () => {
+  it("flags a stale row and leaves the moved control and its legs out of the comparison", () => {
     const moved = editorCourseGeometry("c", seq.map((c) => (c.code === "32" ? { ...c, xMm: 41 } : c)), "ordered", features);
-    expect(compareEditorGeometry(moved, now).structure).toEqual(["32 moved"]);
+    const r = compareEditorGeometry(moved, now);
+    expect(r.structure).toEqual(["32 moved"]);
+    expect(r.circles).toEqual({ compared: 1, same: 1, diffs: [] });
+    expect(r.legs).toEqual({ compared: 1, same: 1, diffs: [] });
   });
 });
 

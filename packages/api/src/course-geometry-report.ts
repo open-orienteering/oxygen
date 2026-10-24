@@ -128,7 +128,11 @@ export function reportTotals(report: GeometryReport): ReportTotals {
   for (const c of report.events.flatMap((e) => e.courses)) {
     if (c.editor) {
       t.editorCourses++;
-      if (c.editor.structure.length > 0) t.staleCourses++;
+      // A stale row's cuts differ because its controls moved, not because of the rule: counted apart.
+      if (c.editor.structure.length > 0) {
+        t.staleCourses++;
+        continue;
+      }
       t.circles.compared += c.editor.circles.compared;
       t.circles.same += c.editor.circles.same;
       for (const d of c.editor.circles.diffs) {

@@ -6,7 +6,7 @@ import { courseLayerGeoJson } from "../geojson.js";
 import { layerInput, linear, site } from "./helpers.js";
 
 describe("courseLayerGeoJson", () => {
-  it("reproduces buildEditorGeometry + decorateOverprintCuts for an editor course", () => {
+  it("reproduces the editor's pre-C5 shape with cuts for an editor course", () => {
     const sites = [site("S", "start", 0, 5, "S1"), site("31", "control", 10, 0), site("32", "control", 40, 0), site("F", "finish", 40, 20, "F1")];
     const layer = courseLayer(layerInput({ sites, structure: linear(["S", "31", "32", "F"]), cutFeatures: [{ x: 12.5, y: 0 }, { x: 25, y: 0 }] }));
     const fc = courseLayerGeoJson(layer);

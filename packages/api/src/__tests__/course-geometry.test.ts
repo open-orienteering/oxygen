@@ -22,12 +22,12 @@ const seq = (
 ): GeometrySeqControl[] =>
   entries.map(([code, type, xMm, yMm]) => ({ id: `ctrl-${code}`, code, type, xMm, yMm }));
 
-const buildEditorGeometry = (s: GeometrySeqControl[], mode?: "ordered" | "free_order") =>
+const geometry = (s: GeometrySeqControl[], mode?: "ordered" | "free_order") =>
   editorCourseGeometry("c1", s, mode);
 
 describe("editorCourseGeometry", () => {
   it("writes today's FeatureCollection: points in order, then centre-to-centre legs", () => {
-    expect(buildEditorGeometry(seq([["S1", "Start", 0, 10], ["31", "Control", 30, 10], ["F1", "Finish", 30, 40]]))).toEqual({
+    expect(geometry(seq([["S1", "Start", 0, 10], ["31", "Control", 30, 10], ["F1", "Finish", 30, 40]]))).toEqual({
       type: "FeatureCollection",
       features: [
         { type: "Feature", geometry: { type: "Point", coordinates: [0, 10] }, properties: { symbolType: "start", code: "S1", id: "S1" } },
@@ -40,7 +40,7 @@ describe("editorCourseGeometry", () => {
   });
 
   it("repeats a control visited twice, with a leg each way", () => {
-    const fc = buildEditorGeometry(seq([["31", "Control", 10, 10], ["32", "Control", 40, 10], ["31", "Control", 10, 10]]));
+    const fc = geometry(seq([["31", "Control", 10, 10], ["32", "Control", 40, 10], ["31", "Control", 10, 10]]));
     expect(fc.features.map((f) => f.properties.code ?? `${f.properties.from}-${f.properties.to}`)).toEqual(["31", "32", "31", "31-32", "32-31"]);
   });
 
@@ -66,7 +66,7 @@ describe("editorCourseGeometry", () => {
   });
 
   it("builds point features and straight legs for an ordered sequence", () => {
-    const fc = buildEditorGeometry(
+    const fc = geometry(
       seq([
         ["S1", "Start", 0, 10],
         ["31", "Control", 30, 10],
@@ -96,7 +96,7 @@ describe("editorCourseGeometry", () => {
   });
 
   it("skips unpositioned (0,0) controls and connects across them", () => {
-    const fc = buildEditorGeometry(
+    const fc = geometry(
       seq([
         ["31", "Control", 10, 10],
         ["32", "Control", 0, 0], // never placed on the map
@@ -111,7 +111,7 @@ describe("editorCourseGeometry", () => {
   });
 
   it("returns an empty collection when nothing is positioned", () => {
-    const fc = buildEditorGeometry(
+    const fc = geometry(
       seq([
         ["31", "Control", 0, 0],
         ["32", "Control", 0, 0],
@@ -121,13 +121,13 @@ describe("editorCourseGeometry", () => {
   });
 
   it("a single positioned control yields one point and no legs", () => {
-    const fc = buildEditorGeometry(seq([["31", "Control", 5, 5]]));
+    const fc = geometry(seq([["31", "Control", 5, 5]]));
     expect(fc.features).toHaveLength(1);
     expect(fc.features[0].geometry.type).toBe("Point");
   });
 
   it("free_order emits control points but no leg lines", () => {
-    const fc = buildEditorGeometry(
+    const fc = geometry(
       seq([
         ["S1", "Start", 0, 10],
         ["31", "Control", 30, 10],

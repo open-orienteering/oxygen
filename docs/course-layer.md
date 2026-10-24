@@ -40,9 +40,9 @@ Decided by the user 2026-10-24 for C5:
 - **Size-aware cuts.** Today's ±0.4 mm cut leaves ~0.03 mm of air
   around a boulder once the line's round caps are drawn, overlaps a
   boulder cluster, and overlaps every feature on a 1:10 000 map (symbols
-  × 1.5). A cut now clears the feature's **own symbol radius** (from
-  the library, × document factor) **+ half the drawn line width + 0.25 mm
-  of visible air**, and a feature is "on" the line by the same sum
+  × 1.5). A cut now clears the feature's **own symbol radius** (as the
+  map draws it; §3.4) **+ half the drawn line width + 0.25 mm of visible
+  air**, and a feature is "on" the line by the same sum
   (§3.4). One rule for the layer and the artifact; stored cuts migrate
   through the `OVERPRINT_CUTS_VERSION` bump.
 
@@ -147,7 +147,7 @@ clockwise, the gap sweeping clockwise from `start` to `end`), fractions
 
 Free order is the structure's `orderMode` (a property of the course, not
 of the view). A site at the origin (0, 0) is unpositioned and skipped,
-legs connecting the remaining items (`buildEditorGeometry`'s rule).
+legs connecting the remaining items (the editor's rule, `editorCourseGeometry`).
 Variations, map exchanges, crossing points, map-issue points, per-course
 hidden numbers and the site-level manual `circle_gaps` of 08 §4.2 are not
 in v1 (Pending).
@@ -355,7 +355,7 @@ editor course, for as long as the artifact has consumers (09 §4 C; 08
 | Event | Source | Radii |
 |---|---|---|
 | `vector` with a pinned document (`pinnedDocumentHash`, the reads-only gate of `map-pipeline-switch.md` §3) | `cutFeaturesOfDocument` of the pinned document, memoised per hash | what the document draws (§3.4) |
-| otherwise (`legacy`, or no pin yet) | the OCAD parse of the latest upload (`loadEventMapObjects`' cache), point objects with `⌊sym / 1000⌋ ∈ CUT_CODES` (`cutFeaturesOfSlimObjects`) | the file's own symbol definition (`ocadCutSymbolRadiiMm`, the importer's `ocadSymbolToRender`); a symbol without one: the library entry of its code in the library its scale picks × reference scale / map scale |
+| otherwise (`legacy`, or no pin yet) | the OCAD parse of the latest upload (`loadEventMapObjects`' cache), point objects with `⌊sym / 1000⌋ ∈ CUT_CODES` (`cutFeaturesOfSlimObjects`) | the file's own symbol definition (`ocadCutSymbolRadiiMm`, the importer's `ocadSymbolToRender`); a symbol without one: the library entry of its code in the library its scale picks × reference scale / map scale (no scale: ISOM at factor 1) |
 | no map | — | no cuts |
 
 On the fixture both sources give the same features and radii, and the
@@ -386,7 +386,8 @@ what the writer would store now and compares.
 - **Editor courses** — stored vs written now, per control circle and per
   leg: same / changed / added / removed, with the opened width before and
   after (degrees, mm); rows whose points moved since they were stored
-  are reported as stale, not as cut changes. On a map with a document,
+  are reported as stale — their moved controls and legs are not
+  compared and the row is left out of the cut totals. On a map with a document,
   also the OCAD-parse vs document feature source (the "could differ by a
   rounding" check of the slice-C split).
 - **Imported courses** — the 09 §10 *legacy-geometry fidelity* input to
@@ -416,7 +417,7 @@ run measures the size-aware change itself.
 | unit | `cuts.test.ts` | clearance = symbol + half line + air at both arc ends and both gap ends, on / off the rim and the line by the same sum, wider for bigger symbols and lines, default radius, north wrap, whole circle; library radii (`cutSymbolRadiusMm`), OCAD symbol radii (`ocadCutSymbolRadiiMm`), `cutContextForScale`; `cutFeaturesOfDocument` (applied match, source code, suggested match, hidden symbol, line object, own render, factor fallback) |
 | unit | `derive.test.ts` | legs and clearances, circles in the way, unpositioned sites, automatic vs authored gaps, authored pieces and bends, free order, all-controls, start rotation, sequence / repeated / code numbers, y-down placement, manual offsets, multi-course |
 | unit | `layer.test.ts` | one `symbolise` call with a document: warning-free, lower purple under black, re-indexed document colours, object offsets; turned start, arcs, legs; knockout halo order; sprint sizes; layout objects (white-out, 709.b, rows on top, text values, page-mm sizes); toner-saver ring and its warning; images; `courseDocumentContext` |
-| unit | `geojson.test.ts` | editor course in `buildEditorGeometry` + cuts shape, free order, preclipped pieces and extras, course by id |
+| unit | `geojson.test.ts` | editor course in the pre-C5 editor shape with cuts, free order, preclipped pieces and extras, course by id |
 | pass-stream | `scenes.test.ts`, snapshots in `render/__fixtures__/streams/course/` | the five course scenes (`map-rendering.md` §6.3) warning-free and equal to their snapshots at 1 µm, plus each scene's rule |
 | unit | `packages/api/src/__tests__/course-geometry.test.ts` | `editorCourseGeometry` writes the exact FeatureCollection, repeated controls, cuts at the legacy sizes on controls only and gaps on legs, no keys without features, unpositioned controls, free order; `legDistancesMm`, `courseLengthM` |
 | unit | `packages/api/src/__tests__/overprint-cuts.test.ts` | the legacy adapter: which OCAD objects cut (knolls and rocks, not water / vegetation / lines / areas / 206), file radii first, sub-codes, scale fallback; the rule over them |

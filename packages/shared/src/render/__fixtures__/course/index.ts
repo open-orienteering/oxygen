@@ -102,7 +102,8 @@ function cuts(): CourseScene {
     ],
     labelOffsets: { "33": { dx: 0, dy: -7 } },
   });
-  const cutFeatures = [{ x: 12.5, y: 10 }, { x: 20, y: 15.2 }, { x: 30, y: 22.5 }];
+  // Radii of the drawn ISOM 204 (0.4 mm) and 109 (0.5 mm) — what `cutFeaturesOfDocument` would give.
+  const cutFeatures = [{ x: 12.5, y: 10, r: 0.2 }, { x: 20, y: 15.2, r: 0.2 }, { x: 30, y: 22.5, r: 0.25 }];
   return scene("course-cuts", base, { structure, sites, objects: [], appearance: {}, viewOptions: {}, cutFeatures });
 }
 

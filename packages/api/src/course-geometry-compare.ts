@@ -40,7 +40,7 @@ export interface GapDiff {
 }
 
 export interface EditorComparison {
-  /** Point / leg order or positions that differ (a stale row, not a cut change). */
+  /** Point / leg order or positions that differ: a stale row. Its moved controls and their legs are not compared, and `reportTotals` leaves stale rows out of the cut totals. */
   structure: string[];
   circles: { compared: number; same: number; diffs: GapDiff[] };
   legs: { compared: number; same: number; diffs: GapDiff[] };
@@ -101,7 +101,10 @@ export function compareEditorGeometry(stored: GeometryLike, regenerated: Geometr
     done.add(p.code);
     const q = newCuts.get(p.code);
     if (!q) continue;
-    if (Math.hypot(p.xy[0] - q.xy[0], p.xy[1] - q.xy[1]) > 1e-9) structure.push(`${p.code} moved`);
+    if (Math.hypot(p.xy[0] - q.xy[0], p.xy[1] - q.xy[1]) > 1e-9) {
+      structure.push(`${p.code} moved`);
+      continue;
+    }
     circles.compared++;
     const status = statusOf(p.cuts, q.cuts);
     if (status === "same") circles.same++;
@@ -115,6 +118,9 @@ export function compareEditorGeometry(stored: GeometryLike, regenerated: Geometr
       structure.push(`leg ${l.key} gone`);
       continue;
     }
+    // A leg of a moved control is part of the stale row, not compared.
+    const moved = m.coords.length !== l.coords.length || l.coords.some((c, i) => Math.hypot(c[0] - m.coords[i][0], c[1] - m.coords[i][1]) > 1e-9);
+    if (moved) continue;
     legs.compared++;
     const status = statusOf(l.gaps, m.gaps);
     if (status === "same") legs.same++;
