@@ -7,6 +7,8 @@ import { createMapGlWorker, type WorkerReply, type WorkerRequest } from "../work
 import { CELL_UM, type PreparedPart, type ResidentPart, type VisibleSet, type ViewRect } from "../buckets";
 import type { MapGlRenderer, TextAtlasImage } from "../renderer";
 import { parseTextAtlasPage } from "../text-atlas";
+import type { MeshAtlas } from "../mesh-atlas";
+import { documentBytes, indexOf, request } from "./course-fixture";
 
 const fontsDir = resolve(import.meta.dirname, "../../../../shared/fonts");
 const fontBytes = () => {
@@ -36,7 +38,13 @@ class FakeRenderer {
   visibleSets: VisibleSet[] = [];
   textAtlas: TextAtlasImage[][] = [];
   private next = 0;
-  setDocument(): void {}
+  atlases: MeshAtlas[] = [];
+  setDocument(): void {
+    this.parts.clear();
+  }
+  setAtlas(atlas: MeshAtlas): void {
+    this.atlases.push(atlas);
+  }
   setTextAtlas(pages: TextAtlasImage[]): void {
     this.textAtlas.push(pages);
   }
@@ -204,3 +212,75 @@ describe("MapGlEngine residency (docs/map-rendering.md §5.2)", () => {
     expect(summary.warnings.TEXT_ATLAS_MISSING).toBeGreaterThan(0);
   });
 });
+
+describe("MapGlEngine dynamic bucket (docs/map-rendering.md §5.2 Dynamic bucket)", () => {
+  async function courseEngine(budgetBytes = 1 << 30) {
+    const renderer = new FakeRenderer();
+    const transport = manualTransport();
+    const engine = new MapGlEngine(renderer as unknown as MapGlRenderer, transport, { budgetBytes });
+    const infos: unknown[] = [];
+    engine.onCourse = (i) => infos.push(i);
+    let changes = 0;
+    engine.onChange = () => changes++;
+    const p = engine.load({
+      source: { kind: "document", bytes: documentBytes(), options: { unmatched: "proxy" } },
+      fonts: [{ family: "liberation-sans", bytes: fontBytes() }],
+      textAtlas: [{ page: latin, image: {} as ImageBitmap }],
+      courseLayer: true,
+    });
+    transport.flush();
+    const summary = await p;
+    return { renderer, transport, engine, summary, infos, changes: () => changes };
+  }
+  const courseParts = (vs: VisibleSet, colour: number) => vs.stroke.draws.filter((d) => d.colour === colour);
+
+  it("uploads the course part, draws it in every visible set (also below the zoom gate) and rebuilds at once", async () => {
+    const { engine, transport, renderer, summary, infos, changes } = await courseEngine();
+    // Far below the gate: no detail, but the course is always resident.
+    engine.setView({ centreX: 30_000, centreY: 30_000, pxPerUm: 0.0001, widthPx: 500, heightPx: 500 });
+    engine.render({ colour: () => [0, 0, 0] });
+    const before = renderer.visibleSets.length;
+    engine.setCourse(request());
+    transport.flush();
+    expect(renderer.parts.has("C")).toBe(true);
+    expect(infos).toHaveLength(1);
+    expect(changes()).toBeGreaterThan(0);
+    engine.render({ colour: () => [0, 0, 0] });
+    expect(renderer.visibleSets.length).toBe(before + 1);
+    const lower = indexOf(summary.colourStack!, "purple-lower");
+    expect(courseParts(renderer.visibleSets.at(-1)!, lower).length).toBe(1);
+    expect(renderer.atlases).toHaveLength(1);
+    expect(engine.colours).toBe((infos[0] as { colours: unknown }).colours);
+  });
+
+  it("drops a reply a newer request overtook; null releases the part", async () => {
+    const { engine, transport, renderer, infos } = await courseEngine();
+    engine.setCourse(request());
+    engine.setCourse(request({ structure: null }));
+    transport.flush();
+    expect(infos).toHaveLength(1);
+    expect((infos[0] as { derivation: { courses: unknown[] } }).derivation.courses).toHaveLength(0);
+    engine.setCourse(null);
+    transport.flush();
+    expect(renderer.parts.has("C")).toBe(false);
+    expect(renderer.released).toContain("C");
+  });
+
+  it("a request before the load waits for it; the course counts as fixed bytes", async () => {
+    const renderer = new FakeRenderer();
+    const transport = manualTransport();
+    const engine = new MapGlEngine(renderer as unknown as MapGlRenderer, transport, {});
+    engine.setCourse(request());
+    expect(transport.posted).toHaveLength(0);
+    const p = engine.load({ source: { kind: "document", bytes: documentBytes(), options: { unmatched: "proxy" } }, fonts: [{ family: "liberation-sans", bytes: fontBytes() }], courseLayer: true });
+    expect(transport.posted.map((m) => m.type)).toEqual(["load", "course"]);
+    transport.flush();
+    await p;
+    expect(renderer.parts.has("C")).toBe(true);
+    const fixed = engine.stats().residentBytes;
+    engine.setCourse(null);
+    transport.flush();
+    expect(engine.stats().residentBytes).toBeLessThan(fixed);
+  });
+});
+

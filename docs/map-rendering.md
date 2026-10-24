@@ -841,7 +841,8 @@ stencil passes; after, 17.
 bytes (base parts, large bucket, mesh atlas, text atlas pages and glyph
 table, the visible-set buffers — which
 hold every index, instance and clip-group array on the GPU) plus the
-resident detail parts' arena vertices against the budget. After every arrival and
+resident detail parts' arena vertices against the budget — and the dynamic
+bucket's vertices, which count as fixed (below). After every arrival and
 view change it evicts the least recently drawn detail parts until the
 total fits, never one in the drawn set; if the drawn set alone does not
 fit, the engine reports over budget (`EngineStats.overBudget`) rather
@@ -861,6 +862,7 @@ growth factor).
 |---|---|---|
 | `load` | document bytes + `DocumentRenderOptions` (or, dev only, render objects + symbols, or a symbolised stream), font files, the text atlas pages (JSON, in the renderer's page order), optional first view (a view, or "fit into w × h"), gate flag | `loaded`: summary (bounds, origin, grid, detail cells, the first view resolved, stage times, bytes, text: pages, glyphs resolved, glyphs missing), mesh atlas, every cell's base part, the large part — then, without a further request, the first view's detail parts unless it is below the gate |
 | `prepare` | bucket ids, most urgent first | replaces the queue; one `part` per id |
+| `course` | a generation number and the course layer's input without the document (`CourseLayerRequest`: structure, sites, objects, appearance, view options), or `null` | `course`: the generation, the dynamic bucket's part (or `null`), the stack to draw with, the derivation and symbol sizes, warnings, and the mesh atlas when it grew — "Dynamic bucket" below |
 | — | | `error` on a failed load |
 
 Every typed array goes back as a transferable. The worker decodes,
@@ -875,6 +877,76 @@ the dev page does it on the main thread). The caller creates the worker
 when the view mounts, before a document is known: under Vite dev its
 module graph takes ~150 ms to load (Sprint envelope `load` 314 → 147 ms
 once the dev page pre-warmed it).
+
+#### Dynamic bucket (C4)
+
+The course layer (`docs/course-layer.md`) is drawn by this backend as
+one more part — the **dynamic bucket** of 04 §7 — beside the static
+buckets, so map and course are one colour-ordered picture: lower purple
+under black, brown and blue line art, white-outs above the map's ink,
+upper purple on top. The viewer's use of it is §5.4 "Overlay".
+
+**Stack at load.** A load with `courseLayer: true` (the viewer's; the
+dev page and the bench leave it off) builds the static buckets on the
+**course-completed stack** `courseColourStack(header.colours)`
+(`course-layer.md` §1): when the document lacks upper white the row is
+inserted below upper purple and the bridged symbols are re-indexed
+(`remapRenderColours`) before `symbolise`, so every pass at or above
+upper purple carries the shifted index. The stack is a function of the
+document alone, so showing, changing or hiding a course never
+re-prepares a static part and the draw needs no index translation.
+`LoadSummary.colourStack` is the stack the parts index (the document's
+own without `courseLayer`) and `LoadSummary.courseLayer` says whether a
+course can be drawn: `{ supported: true, cutFeatures }`, or — a stack
+without both purples, `CourseStackError` — `{ supported: false, reason }`
+with the document drawn on its own stack, unchanged. The same load
+extracts the automatic-cut features once (`cutFeaturesOfDocument`,
+`course-layer.md` §3.4) and keeps the decoded context, the parsed fonts,
+the text pages and the mesh atlas builder for the course requests.
+
+**A course request.** `course { generation, input }` runs, in the worker,
+`courseLayer({ ...input, document, cutFeatures })`, `symbolise` on the
+layer's objects and symbols alone (its symbols already index the
+completed stack) and `prepareBucketPart(…, COURSE_BUCKET, every pass,
+"all")` — one part with every kind, bucket id `COURSE_BUCKET` (−2).
+Its range-table object ids continue after the document's stream objects
+(`courseRenderInput`'s `courseObjectOffset`), so `setHidden` can address
+document and course objects in one set. Glyph parts (701, 706) join the
+**same mesh atlas**, keyed by their geometry (the course stream's glyph
+ids are local to each run); growth is append-only, so the reply carries
+the whole atlas only when a mesh was added and every resident instance
+keeps its `base`. Numbers (704) are MSDF text resolved against the
+loaded pages like the document's (§"Text atlas"), `TEXT_*` warnings
+counted in the reply. The reply's `colours` is `layer.colours` — the
+completed stack plus a row per hex-coloured layout object on top
+(`course-layer.md` §3.6) — and it brings `derivation` (sites, labels,
+legs) and `metrics` (circle, start and finish radii, line width, digit
+height in paper mm) for the UI layer. `input: null` clears; a load
+without course support answers `part: null` and `COURSE_UNAVAILABLE`.
+The worker answers a request at once, between prepare slices.
+
+**Engine.** `MapGlEngine.setCourse(input | null)` posts the request with
+a new generation (one made before the load waits for it and is sent
+right after the load message); a reply whose generation is not the
+latest is dropped. The current reply's part is uploaded under key `C` —
+through `GpuArena.put` like any part, so a grow re-uploads it with the
+rest and nothing goes through `copyBufferSubData`
+(`docs/bugfix-adreno-arena-grow.md`) — and the previous one released;
+`setAtlas` replaces the mesh texture when the reply carries an atlas.
+The part is **always resident and always drawn**: appended to the
+visible set after the drawn cells and the large bucket at every zoom,
+gated or not, never evicted, its arena bytes counted as fixed. A reply
+rebuilds the visible set on the next `render` at once (not held by
+`ARRIVAL_REBUILD_MS`) and calls `onChange` for the redraw and `onCourse`
+with the derivation, sizes, stack and warnings. Within one colour the
+course draws after the map's own objects of that colour (it is the last
+part). `engine.colours` is the stack to draw with: the latest reply's,
+else the load's.
+
+**Cost.** A dragged control re-symbolises the whole layer (tens of
+objects): the 04 §7 budget of < 1 ms is the symbolisation's; the reply
+is one worker round trip, one part upload and one visible-set rebuild.
+Main-thread symbolisation for the drag is pending (§8).
 
 #### Text atlas (B3)
 
@@ -1232,16 +1304,20 @@ published on `window.__mapGlDoc` for Playwright.
 | `e2e/map-gl-golden.spec.ts` | the per-pass path against the reference raster; the **MSDF text tier**: `text-with-halo`, `lib-text`, `lib-halos` through the arena path (§6.2) |
 | `e2e/map-gl-doc.spec.ts` (text) | arena = per-pass compare also on `e2e/test.xmap` (text, MSDF vs outlines) within 0.5 %; its text resolves on the Latin page with nothing missing |
 | `e2e/map-vector-layer.spec.ts` (text) | the viewer requests the Latin page and not the Cyrillic one |
+| `map-gl/__tests__/worker-course.test.ts` | dynamic bucket: static parts on the completed stack (upper white below upper purple, rows above it +1 with their CMYK), the document's stack without `courseLayer`, an unaligned stack unsupported and unchanged; a course request → one `all` part at `COURSE_BUCKET` on the completed stack (lower-purple strokes, text instances, glyph meshes in the grown atlas, earlier meshes in place, object ids after the document's, everything transferable); no atlas when nothing was added; lower purple drawn under black in one visible set; `null` and unsupported replies; a white-out at upper white above black |
+| `map-gl/__tests__/engine.test.ts` (dynamic bucket) | `setCourse` uploads `C`, drawn below the zoom gate too, rebuilt at once, `onCourse` / `onChange`, `engine.colours` = the reply's; an overtaken reply dropped; `null` releases; a request before the load waits for it; course bytes fixed |
 
 ### 5.4 Viewer
 
 `MapViewer` hosts one base layer — the PNG tiles (`TileLayer`, legacy) or
 the map document drawn by §5.2's arena path (`VectorMapLayer`) — and keeps
 everything else it had: gestures, measure, compass and rotation lock, GPS,
-the course overlay, the editor's hit targets. The overlay (controls, legs,
-course geometry, GPS position and tracks, measure, selection) stays React
-SVG on top of the base layer in slice B (09 §4 B); it becomes document
-objects drawn by the renderer in slice C. `TileLayer.tsx` is unchanged.
+the course overlay, the editor's hit targets. Under `legacy` the overlay
+(controls, legs, course geometry, GPS position and tracks, measure,
+selection) is React SVG on top of the tiles, unchanged. Under `vector`
+the course itself is drawn by the renderer in colour order with the map
+(C4, "Overlay" below) and the SVG keeps the UI layer. `TileLayer.tsx` is
+unchanged.
 
 #### Selecting the layer
 
@@ -1372,17 +1448,75 @@ In the paper view `MapViewer`:
 - mounts no `TileLayer`, polls no `/api/map-tile-progress`, and shows no
   editor loupe (`MapLoupe` magnifies tiles; the editor moves to the
   document in slice D);
-- has no ink split: the tiles draw the map in two halves so lower purple
-  sits under black, brown and blue line art; the vector layer is one
-  canvas under the overlay, so the overlay's purple is drawn above the
-  whole map (09 §4 B; the stacking returns with the course layer as
-  objects in slice C);
+- needs no ink split: the tiles draw the map in two halves so lower
+  purple sits under black, brown and blue line art; the vector layer
+  draws the course layer in the map's own colour order ("Overlay");
 - exposes `data-centre-x`, `data-centre-y` (µm), `data-px-per-um` and
   `data-rotation` on `map-viewer`, and keeps `data-center-lat` /
   `data-center-lng` (the view centre through `paperToWgs84`) and
   `data-zoom` (the Web Mercator zoom with the same ground resolution at
   the centre) with their legacy meaning, so specs written against tiles
   read the same numbers.
+
+#### Overlay (C4)
+
+Under `vector` the course is **part of the drawing**: `MapViewer` turns
+what it already has into the course layer's input and `VectorMapLayer`
+hands it to the engine's dynamic bucket (§5.2 "Dynamic bucket"), so the
+7xx symbols sort into the document's stack — lower purple (701, 703,
+705, 706, 708; ISOM 704) under black, brown and blue line art, white-outs
+at upper white above the map's ink, upper purple (707, 709, 711;
+ISSprOM 704) on top. What the layer draws and what it does not:
+
+| GL course layer (dynamic bucket) | SVG UI layer (React, screen widths) |
+|---|---|
+| start triangles (turned to the first control), circles with automatic and authored gaps, finish, legs clipped at circles and gapped at compact features, control numbers placed by the shared placer with manual offsets and leaders, imported courses' authored leg pieces and bends, circle gaps, 707 / 708 / 711 lines and 709 areas | editor hit targets (controls, legs, labels), selection ring, phantom, context-menu anchors, move warnings; status rings (readout punch state `ok` / `missing` / `extra`, highlighted control) around the GL symbol; completion rings, punch-count badges; the editor's faded off-course controls (left out of the layer, drawn faded); class leg pills (multi-course); GPS position and tracks; measure; the description sheet |
+
+**Input.** `courseLayerRequest()` (`lib/course-layer-request.ts`, pure;
+`course-layer.md` §5) from the viewer's props: sites are the visible,
+positioned controls at their own paper mm (the editor's dragged control
+and round-tripping moves applied, as the SVG drew them), the structure is
+the highlighted courses (one or an array; `null` when none), label offsets
+are the single course's (stored, pending or being dragged — only with the
+description sheet or the editor, as before), `labelMode` is `sequence`
+for one ordered course with the sheet or the editor and `code` otherwise,
+`allControls` when a drawn site is on no highlighted course, `objects:
+[]` (no layout objects reach the viewer) and `appearance: {}` — the
+library's sizes × the document factor (`course-layer.md` "Decisions":
+ISOM at 1:7 500 draws 5 mm-radius circles where the SVG drew 2.5 mm).
+`course.courseGeometries` is still read, but only for what an imported
+`ocd` course authored (`course-layer.md` §2): its `preclipped` legs as
+pieces, their course's control `cuts` as circle gaps, bent legs' paths
+and the 707 / 708 / 711 / 709 features. Automatic gaps and cuts of the
+stored GeoJSON are not read: the worker cuts from the document's own
+features (`cutFeaturesOfDocument`, extracted once per load). `MapPanel`
+passes what it passed before; every 09 §1 call site — kiosk,
+`CardReadout`, `CardMapPreview`, dashboard, `TracksPage`, the editor —
+follows through it.
+
+**UI layer geometry.** The engine's `onCourse` reply carries the layer's
+derivation (sites, number positions, legs) and the symbol sizes in paper
+mm; the UI layer sizes its hit targets and status rings by those sizes
+and puts the editor's leg hit-lines on the derived centre-to-centre legs
+and the label drag targets on the derived number positions (box 0.65 em
+per character, the layer's own estimate). A move or a label drag is a new
+request per pointer move — the layer re-derives and the reply redraws.
+
+**Fallback.** A document whose stack has no lower and upper purple
+(`LoadSummary.courseLayer.supported === false`, `CourseStackError`) keeps
+the SVG course overlay over the GL map — today's drawing, purple above
+the whole map. Before the load answers, the viewer assumes support.
+
+**Attributes.** `map-viewer` carries `data-course-layer="gl"` (vector
+with the layer) or `"svg"` (legacy, or the fallback). Under `gl` the
+viewer mirrors the layer as a hidden list: `course-layer` > one
+`course-site` per drawn site (`data-site-id`, `data-role`, `data-x/y` in
+paper mm) holding its `course-label` (`data-text`, `data-x/y`), and one
+`course-leg` per drawn leg piece (`data-course`, `data-leg`,
+`data-points` in paper mm) — what the canvas draws, for tests (`hidden`:
+not in the accessibility tree; an accessible map description is slice
+D's editor work). The SVG `control-label` / `control-circle-cut`
+elements exist only under `svg`.
 
 #### Call sites
 
@@ -1409,7 +1543,9 @@ changes for B4.
 | `lib/__tests__/map-pipeline.test.ts` | `resolveMapPipeline`: a document is required, the WebGL2 fallback (`docs/map-pipeline-switch.md` §6) |
 | `lib/__tests__/map-document-cache.test.ts` | route regex (documents, not previews); URL without query, `x-event-id` / `x-kiosk-key` headers; one request shared, same bytes; bounded memory; 401/403/404/5xx → kinds, failures not cached; offline; unreadable bytes; `storage.persist()` once, absent API |
 | `lib/__tests__/vector-map.test.ts` | paper frame with correction, bounds in mm, stack colours, proxy colours, budgets |
-| `e2e/map-vector-layer.spec.ts` | event `vector`: the pinned document by hash (no query, `x-event-id`), canvas ready and drawn, container-sized, no tile layer and no `/api/map-tile*` request, `data-*` attributes; wheel zoom keeps the paper point under the cursor (< 0.5 px); a GPS fix → follow centres it and the marker is at the viewer's centre; event `legacy`: tiles |
+| `e2e/map-vector-layer.spec.ts` | event `vector`: the pinned document by hash (no query, `x-event-id`), canvas ready and drawn, container-sized, no tile layer and no `/api/map-tile*` request, `data-*` attributes; wheel zoom keeps the paper point under the cursor (< 0.5 px); a GPS fix → follow centres it and the marker is at the viewer's centre; **lower purple under black**: a leg made across a black path on white paper (two controls through the API) is black at the crossing and lower purple 2 mm to either side, zoomed to ≥ 0.02 px/µm, with no SVG control label (fails with the course drawn on the top row); event `legacy`: tiles |
+| `lib/__tests__/course-layer-request.test.ts` | sites from visible positioned controls with kinds; highlighted courses as items (by flag or name, one or several, none → `null`); all-controls when a drawn site is on no course; sequence numbers only for one ordered course with the sheet or editor; single-course label offsets, pending ones winning; positions as given; faded controls left out; an imported course's preclipped legs → pieces, its cuts → circle gaps, extras; generated legs: bent path kept, automatic gaps and cuts not read, a leg count that does not match ignored |
+| `e2e/map-control-circles.spec.ts`, `e2e/map-multicourse.spec.ts` | under `map-legacy` and `map-vector`: code labels of the selected course (SVG text, or the GL layer's `course-label` mirror), sequence numbers for one course with descriptions, codes for several; pills and the sheet SVG text under both; `data-course-layer` |
 | `e2e/map-viewer-gestures.spec.ts`, `mobile-layout.spec.ts`, `course-editor.spec.ts`, `map-control-circles.spec.ts`, `map-multicourse.spec.ts`, `wide-screen-map-pane.spec.ts`, `webserial.spec.ts`, `kiosk*.spec.ts` | under the default `legacy` the mercator model reproduces the pre-B4 viewer; `webserial`, `mobile-layout`, `map-viewer-gestures` also run under `vector` (`docs/map-pipeline-switch.md` §5) |
 
 ### 5.3 PDF (shared/print)
@@ -1914,7 +2050,8 @@ what became of it:
 | `e2e/__golden__/map-gl/`, `e2e/map-gl-golden.spec.ts` | committed goldens and the browser comparison |
 | `e2e/map-gl-doc.spec.ts` | whole-document pipeline on `e2e/test.ocd`: arena path, worker, eviction, arena = per-pass path |
 | `scripts/measure-gl.mjs` | corpus measurements through `/dev/map-gl-doc` (§5.2 Measurements) |
-| `packages/web/src/components/VectorMapLayer.tsx` | the vector base layer in `MapViewer` (§5.4): canvas, engine and worker lifecycle, status |
+| `packages/web/src/components/VectorMapLayer.tsx` | the vector base layer in `MapViewer` (§5.4): canvas, engine and worker lifecycle, status; the course layer request and its replies |
+| `packages/web/src/lib/course-layer-request.ts` | the viewer's course-layer input (§5.4 "Overlay", `course-layer.md` §5) |
 | `packages/web/src/components/MapViewer.tsx` | the host: layer choice, viewport state, gestures, SVG overlay |
 | `packages/web/src/lib/map-viewport.ts` | the viewport model, mercator and paper (§5.4 "Viewport"), `glView` |
 | `packages/web/src/lib/vector-map.ts` | paper frame, bounds, colours, proxy colours, budget from a document header |
@@ -1957,11 +2094,28 @@ The shared module is exported as a namespace: `import { render } from
   nothing produces `ReplayData`; B11 closed as moot (user decision
   2026-10-22). A GPS replay feature gets its own row, with a producer and
   this section's paper view and `mapGeo`.
-- **§5.4 lower purple under the line art.** The vector layer is one
-  canvas under the SVG overlay, so the overlay's purple covers black,
-  brown and blue line art that the tiles' ink half draws above it
-  (09 §4 B sanctions this for slice B). Returns when the course layer is
-  document objects drawn in colour order (slice C).
+- **§5.2 dynamic bucket: hit-testing, hide and highlight.** The layer's
+  object ids are in the range table (`courseObjectOffset`), but the
+  editor still hit-tests its SVG targets and highlights with SVG rings;
+  04 §7's shared-stage hit test and highlight-through-the-dynamic-bucket
+  are slice D's, with the editor on the document.
+- **§5.2 dynamic bucket: main-thread symbolisation.** A drag re-derives
+  the layer in the worker (one round trip per pointer move). If D's
+  editor needs lower latency, the dragged object is symbolised on the
+  main thread and only it is replaced.
+- **§5.4 layout objects in the viewer.** `courseLayer()` draws
+  map-anchored layout objects (white-outs, 709 hatch, text, lines), but
+  no sheet reaches `MapPanel`, so the viewer passes `objects: []`;
+  showing a sheet's objects on the map is slice D's.
+- **§5.4 lower purple below an area colour.** The layer sorts by the
+  document's aligned stack, so where the source put an area colour above
+  a line colour (the `e2e/test.ocd` fixture: Yellow above Blue), stage-7
+  alignment places lower purple below that area and an opaque area hides
+  the course (the fixture's yellow covers most of its courses under
+  `vector`). The legacy tiles draw the course above every area. Whether
+  alignment should place lower purple above the source's area colours
+  when the source order disagrees with the IOF table is an import
+  question (`map-symbols.md` §9, next importer bump).
 - **§5.4 legacy colour settings.** `mapMetadata.colorOverrides` and
   `northLinesBelow` (the tiles' per-map colour-stack fixes) are not
   applied to the document's stack; the document's own order (and, for

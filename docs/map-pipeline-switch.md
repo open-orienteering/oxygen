@@ -179,7 +179,8 @@ value (09 §3, §10). `playwright.config.ts`:
 
 - `MAP_PIPELINE_SPECS` — `webserial.spec.ts` (post-readout map),
   `mobile-layout.spec.ts` (both named by the 09 §4 B gate),
-  `map-viewer-gestures.spec.ts`.
+  `map-viewer-gestures.spec.ts`, `map-control-circles.spec.ts` and
+  `map-multicourse.spec.ts` (the course overlay, C4).
 - Projects `map-legacy` and `map-vector` match exactly those files with
   `use: { mapPipeline }`; `chromium` ignores them and runs everything
   else once.
@@ -197,7 +198,11 @@ value (09 §3, §10). `playwright.config.ts`:
 - A dual-run spec that asserts on tiles branches on the `mapPipeline`
   fixture (`mobile-layout.spec.ts` "switching events resets viewport and
   tile state": tiles of the current event under `legacy`, the vector
-  layer's first view and no tile image under `vector`).
+  layer's first view and no tile image under `vector`). One that reads
+  the course overlay's control numbers takes them from
+  `e2e/helpers/course-labels.ts`: SVG text under `legacy`, the GL course
+  layer's `course-label` mirror under `vector` (`map-rendering.md` §5.4
+  "Overlay").
 
 ## 6. Tests
 
@@ -211,6 +216,7 @@ value (09 §3, §10). `playwright.config.ts`:
 | `packages/api/src/__tests__/integration/course-maps.test.ts` "window.png under a pinned document" | the editor preview reads the document only for `vector` + pin; unpinned stays legacy |
 | `e2e/map-pipeline-switch.spec.ts` | toggle text and report line; on → vector layer, another page of the event draws vector with no tile request; off → tiles; without `allowLegacy` no toggle on a vector event and no report line on a legacy one; no WebGL2 → tiles + notice while allowed, the layer's message when not; a lost context → tiles + notice |
 | `e2e/map-vector-layer.spec.ts` | the vector layer in the viewer, the event switched through the column; a legacy event stays on tiles |
+| `e2e/map-control-circles.spec.ts`, `map-multicourse.spec.ts` | under `map-legacy` and `map-vector`: the selected course's code labels, sequence numbers for one course, codes for several, class pills and the sheet; `data-map-pipeline` and `data-course-layer` |
 | `e2e/webserial.spec.ts`, `mobile-layout.spec.ts`, `map-viewer-gestures.spec.ts` | the same flows under `map-legacy` and `map-vector`; each asserts `data-map-pipeline` equals the project's value; `webserial` "post-readout map" uploads the map, reads a card and checks the readout map (vector layer ready and no tile image under `vector`, tiles under `legacy`) |
 
 ## 7. Pending in this chapter
@@ -218,8 +224,7 @@ value (09 §3, §10). `playwright.config.ts`:
 - **Print path** (`maps.pdf`) and **editor** gates (§3.4): slices C and D.
 - **Admin UI for the instance flags**: none until slice E needs one.
 - **Dual-run list** grows with the slices that touch maps: candidates
-  `wide-screen-map-pane`, `kiosk-readout`, `map-control-circles`,
-  `course-editor` (C/D); `course-maps` (C3: the editor's `window.png` under `vector`, C6). `scripts/e2e-sharded.mjs` weights do not yet
+  `wide-screen-map-pane`, `kiosk-readout`, `course-editor` (D); `course-maps` (C3: the editor's `window.png` under `vector`, C6). `scripts/e2e-sharded.mjs` weights do not yet
   count the second run of a dual spec.
 - **Lost context recovery**: the panel falls back (or shows the message)
   and does not try the vector layer again until it remounts.
