@@ -7,7 +7,7 @@
  *
  * Per document: one font object per bundled face (subset at `save()`
  * to the glyphs every page used), one form XObject per distinct glyph
- * part, shared by all pages (05 §5.10). `deterministic` = fixed dates and
+ * part and `/Matrix`, shared by all pages (05 §5.10). `deterministic` = fixed dates and
  * a fixed `/ID`, so equal input gives equal bytes (05 §5.8).
  */
 
@@ -18,7 +18,7 @@ import { UM_TO_PT } from "./operators.js";
 import type { FontFamily, FontRef, GlyphMesh } from "../render/pass-stream.js";
 import { type TrueTypeFont, parseTrueType } from "../render/truetype.js";
 import { cidWidths, fontDescriptorValues, subsetTag, subsetTrueType, toUnicodeCMap } from "./fonts.js";
-import { type OperatorResources, glyphFormBBox, glyphFormContent } from "./operators.js";
+import { type Matrix, type OperatorResources, glyphFormBBox, glyphFormContent } from "./operators.js";
 
 /** An embedded raster image: its resource name on the page and its pixel size. */
 export interface PdfImage {
@@ -82,7 +82,7 @@ const toArrayBuffer = (d: ArrayBuffer | Uint8Array): ArrayBuffer =>
 export class PdfWriter {
   private readonly faces: Face[] = [];
   private readonly forms = new Map<string, { name: string; ref: PDFRef }>();
-  private readonly formsByMesh = new WeakMap<GlyphMesh, { name: string; ref: PDFRef }>();
+  private readonly formsByMesh = new WeakMap<GlyphMesh, Map<string, { name: string; ref: PDFRef }>>();
   private readonly images = new Map<string, { ref: PDFRef; width: number; height: number; name: string; bytes: Uint8Array }[]>();
   private imageCount = 0;
   private readonly pages: { page: PDFPage; label?: string; outlineTitle?: string }[] = [];
@@ -187,20 +187,25 @@ export class PdfWriter {
     return face && path ? { path, unitsPerEm: face.metrics.unitsPerEm } : undefined;
   }
 
-  /** @internal */ glyphFor(page: PDFPage, mesh: GlyphMesh): string {
-    let form = this.formsByMesh.get(mesh);
+  /** @internal */ glyphFor(page: PDFPage, mesh: GlyphMesh, matrix?: Matrix): string {
+    const identity = !matrix || (matrix[0] === 1 && matrix[1] === 0 && matrix[2] === 0 && matrix[3] === 1 && matrix[4] === 0 && matrix[5] === 0);
+    const m = identity ? "" : matrix.join(" ");
+    let byMatrix = this.formsByMesh.get(mesh);
+    if (!byMatrix) this.formsByMesh.set(mesh, (byMatrix = new Map()));
+    let form = byMatrix.get(m);
     if (!form) {
       const content = glyphFormContent(mesh);
       const bbox = glyphFormBBox(mesh);
       // Equal parts share one XObject even when two streams number them differently.
-      const key = `${bbox.join(" ")}\n${content}`;
+      const key = `${m}\n${bbox.join(" ")}\n${content}`;
       form = this.forms.get(key);
       if (!form) {
-        const stream = this.doc.context.flateStream(content, { Type: "XObject", Subtype: "Form", BBox: bbox });
+        const dict = { Type: "XObject", Subtype: "Form", BBox: bbox, ...(identity ? {} : { Matrix: matrix }) };
+        const stream = this.doc.context.flateStream(content, dict);
         form = { name: `G${this.forms.size}`, ref: this.doc.context.register(stream) };
         this.forms.set(key, form);
       }
-      this.formsByMesh.set(mesh, form);
+      byMatrix.set(m, form);
     }
     page.node.setXObject(PDFName.of(form.name), form.ref);
     return form.name;
@@ -336,7 +341,7 @@ export class PdfWriterPage {
     this.resources = {
       font: (ref, glyphIds) => writer.fontFor(page, ref, glyphIds),
       glyphOutline: (ref, glyphId) => writer.outlineFor(ref, glyphId),
-      glyph: (mesh) => writer.glyphFor(page, mesh),
+      glyph: (mesh, matrix) => writer.glyphFor(page, mesh, matrix),
     };
   }
 
