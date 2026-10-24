@@ -80,6 +80,7 @@ test.describe("Multi-course map: class labels + combined descriptions", () => {
     const numberLabels = courseLabels(mapPanel, mapPipeline);
     await expectLabelShown(numberLabels.first(), mapPipeline, 30000);
     await expect(mapPanel.getByTestId("map-viewer").first()).toHaveAttribute("data-map-pipeline", mapPipeline);
+    await expect(mapPanel.getByTestId("map-viewer").first()).toHaveAttribute("data-course-layer", mapPipeline === "vector" ? "gl" : "svg");
 
     // ── Deterministic class assignments via the API: Öppen 1 → A,
     // Öppen 2 → B. (The import dialog's heuristics are not under test.)

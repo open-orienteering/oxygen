@@ -2304,8 +2304,8 @@ export function MapViewer({
       if (glCourse && !fade) {
         // The GL layer draws the symbol; a status (readout punch state,
         // highlight) is a ring of the UI layer around it.
+        const symbolR = c.type === "Start" ? startSize : c.type === "Finish" ? finishOuter : radius;
         if (baseColor !== purple) {
-          const symbolR = c.type === "Start" ? startSize : c.type === "Finish" ? finishOuter : radius;
           upperElements.push(
             <circle key={`status-${c.id}`} cx={pos.x} cy={pos.y} r={symbolR + stroke * 1.5}
               stroke={baseColor} strokeWidth={stroke * 1.5} fill="none"
@@ -2315,7 +2315,7 @@ export function MapViewer({
           );
         } else if (onControlClick) {
           upperElements.push(
-            <circle key={`click-${c.id}`} cx={pos.x} cy={pos.y} r={radius} fill="transparent" stroke="none"
+            <circle key={`click-${c.id}`} cx={pos.x} cy={pos.y} r={symbolR} fill="transparent" stroke="none"
               style={{ cursor: "pointer" }} onClick={() => onControlClick(c.id)} />
           );
         }
@@ -3130,7 +3130,7 @@ export function MapViewer({
           </g>
         </svg>
       </div>
-      {/* The GL course layer's numbers and legs as DOM (tests, assistive tech): what the canvas draws. */}
+      {/* The GL course layer's numbers and legs as DOM, for tests: what the canvas draws. */}
       {glCourse && courseInfo?.derivation && (
         <ul data-testid="course-layer" hidden>
           {courseInfo.derivation.sites.map((ds) => (

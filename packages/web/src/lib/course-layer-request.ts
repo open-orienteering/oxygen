@@ -44,7 +44,10 @@ export interface CourseRequestInput {
   courseGeometry?: { features?: GeoFeature[] } | null;
   /** Sequence numbers for a single ordered course (the description sheet or the editor is shown). */
   sequenceLabels: boolean;
-  /** The single course's number offset for a control (stored, pending or being dragged). */
+  /**
+   * The single course's number offset for a control (stored, pending or being dragged). Default: the
+   * stored offsets. Either way offsets apply only with `sequenceLabels` (the sheet or the editor).
+   */
   labelOffset?: (id: string) => { dx: number; dy: number } | undefined;
   /** Controls the GL layer leaves out (the editor's faded controls; the UI layer draws them). */
   exclude?: ReadonlySet<string>;
@@ -133,7 +136,7 @@ export function courseLayerRequest(input: CourseRequestInput): CourseLayerReques
   });
 
   const single = highlighted.length === 1 ? highlighted[0] : undefined;
-  if (single && structures[0]) {
+  if (single && structures[0] && input.sequenceLabels) {
     const offsets: Record<string, { dx: number; dy: number }> = {};
     for (const id of single.controls) {
       const off = input.labelOffset ? input.labelOffset(id) : single.labelOffsets?.[id];

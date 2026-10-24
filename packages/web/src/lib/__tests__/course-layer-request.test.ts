@@ -55,6 +55,9 @@ describe("courseLayerRequest (docs/course-layer.md §5)", () => {
       highlightCourseName: "A",
     }));
     expect(structures(r)[0].labelOffsets).toEqual({ 1: { dx: 1, dy: 2 } });
+    // Without the sheet or the editor, no manual offsets (the placer decides).
+    const plain = courseLayerRequest(base({ sequenceLabels: false, courses: [{ name: "A", controls: ["S", "1", "2", "F"], highlight: true, labelOffsets: { 1: { dx: 1, dy: 2 } } }] }));
+    expect(structures(plain)[0].labelOffsets).toBeUndefined();
     const pending = courseLayerRequest(base({
       courses: [{ name: "A", controls: ["S", "1", "2", "F"], highlight: true, labelOffsets: { 1: { dx: 1, dy: 2 } } }],
       labelOffset: (id) => (id === "2" ? { dx: -3, dy: 0 } : undefined),

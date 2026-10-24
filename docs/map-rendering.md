@@ -1513,8 +1513,9 @@ viewer mirrors the layer as a hidden list: `course-layer` > one
 `course-site` per drawn site (`data-site-id`, `data-role`, `data-x/y` in
 paper mm) holding its `course-label` (`data-text`, `data-x/y`), and one
 `course-leg` per drawn leg piece (`data-course`, `data-leg`,
-`data-points` in paper mm) — what the canvas draws, for tests and
-assistive technology. The SVG `control-label` / `control-circle-cut`
+`data-points` in paper mm) — what the canvas draws, for tests (`hidden`:
+not in the accessibility tree; an accessible map description is slice
+D's editor work). The SVG `control-label` / `control-circle-cut`
 elements exist only under `svg`.
 
 #### Call sites
