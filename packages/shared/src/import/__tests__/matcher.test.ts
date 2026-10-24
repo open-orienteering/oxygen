@@ -50,6 +50,22 @@ describe("codes", () => {
   });
 });
 
+describe("matchSymbol — cap / join selects the variant (C9)", () => {
+  const stroke = (cap: "flat" | "round", join: "miter" | "round") => {
+    const r = canonical("ISOM2017-2:201.b") as LineSymbol;
+    return parseRenderSymbol({ ...r, main: { ...r.main!, cap, join } }) as LineSymbol;
+  };
+
+  it("a source round no-tag 201 takes the round variant, a flat one the flat family entry", () => {
+    const round = matchSymbol(src("201.0", "Impassable cliff", stroke("round", "round")), ctx()).match;
+    expect(round).toMatchObject({ canonicalId: "ISOM2017-2:201.b", state: "auto", confidence: 1 });
+    const flat = matchSymbol(src("201.0", "Impassable cliff", stroke("flat", "miter")), ctx()).match;
+    expect(flat.state).not.toBe("unmatched");
+    expect(flat.canonicalId).not.toBe("ISOM2017-2:201");
+    expect(flat.confidence).toBeLessThan(0.91);
+  });
+});
+
 describe("matchSymbol — stages", () => {
   it("2: exact code + geometry → auto", () => {
     const r = matchSymbol(src("505.0", "Stig", canonical("ISOM2017-2:505")), ctx()).match;
