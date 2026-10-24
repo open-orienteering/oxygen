@@ -7,6 +7,7 @@ import { renderFixtures } from "../../render/__fixtures__/streams/index.js";
 import { libraryScene, librarySceneNames } from "../../render/__fixtures__/library/index.js";
 import { liberation } from "../../render/__tests__/fonts.js";
 import { strokeOutline } from "../../render/geometry.js";
+import { pathBounds } from "../../render/path.js";
 import { type FontRef, type GlyphMesh, type PassStream, makePath } from "../../render/pass-stream.js";
 import { passStreamFromJson } from "../../render/stream-json.js";
 import { symbolise } from "../../render/symbolise.js";
@@ -20,8 +21,13 @@ import {
   mapLayerOperators,
   passStreamOperators,
   pathOperators,
+  CHAIN_LENGTH,
+  GLYPH_FORM_REUSE,
+  PRINT_GRID_UM,
+  PRINT_QUANTUM_UM,
   UM_TO_PT,
   layerMatrix,
+  layerUnitUm,
 } from "../operators.js";
 
 /** The contract fixtures' stack (0 white … 7 lower purple) with distinct CMYK. */
@@ -70,23 +76,44 @@ describe("fill", () => {
     ]);
   });
 
-  it("writes coordinates relative to the origin, as integers", () => {
-    expect(ops("fill-with-holes", "cmyk", [10000, -5000])).toContain("-10000 5000 m 10000 5000 l");
+  it("writes coordinates relative to the origin, as integers, under the path's own corner anchor", () => {
+    // Corner (0, 0) − origin (10000, −5000) = (−10000, 5000): the anchor; the rings from it.
+    expect(ops("fill-with-holes", "cmyk", [10000, -5000])).toContain("q 1 0 0 1 -10000 5000 cm 0 0 m 20000 0 l");
+    expect(ops("fill-with-holes", "cmyk", [10000, -5000])).toMatch(/ f\* Q$/);
+  });
+
+  it("leaves a ring's closing line back onto its start to h", () => {
+    const stream = passStreamFromJson({
+      objectIdx: [0],
+      symbolIdx: [0],
+      passes: [{ kind: "fill", colour: 5, path: { coords: [0, 0, 1000, 0, 1000, 1000, 0, 0] } }],
+    });
+    expect(lines(passStreamOperators(stream, { colours: stack, mode: "cmyk", resources: resources().res })).at(-1)).toBe("0 0 m 1000 0 l 1000 1000 l h f*");
+  });
+
+  it("keeps a closed stroke's last line: the join at the start is the stream's", () => {
+    const stream = passStreamFromJson({
+      objectIdx: [0],
+      symbolIdx: [0],
+      passes: [{ kind: "stroke", colour: 5, path: { coords: [0, 0, 1000, 0, 1000, 1000, 0, 0], closed: true }, widthUm: 100, cap: "butt", join: "miter" }],
+    });
+    expect(lines(passStreamOperators(stream, { colours: stack, mode: "cmyk", resources: resources().res })).at(-1)).toBe("0 0 m 1000 0 l 1000 1000 l 0 0 l h S");
   });
 });
 
 describe("stroke", () => {
   it("keeps Béziers as c and sets w J j", () => {
     const o = lines(ops("dashed-bezier-stroke"));
-    expect(o.slice(0, 3)).toEqual(["0 0.56 1 0.18 K", "350 w 0 J 1 j", "0 0 m 6000 12000 14000 -12000 20000 0 c S"]);
+    // Anchored at the control hull's corner (0, −12000).
+    expect(o.slice(0, 3)).toEqual(["0 0.56 1 0.18 K", "350 w 0 J 1 j", "q 1 0 0 1 0 -12000 cm 0 12000 m 6000 24000 14000 0 20000 12000 c S Q"]);
   });
 
   it("draws dash slices as one subpath per slice and never uses d", () => {
     const o = ops("dashed-bezier-stroke");
     const dashed = lines(o).at(-1)!;
     expect(dashed.match(/ m /g)).toHaveLength(4);
-    expect(dashed.match(/ c/g)).toHaveLength(4);
-    expect(dashed.endsWith(" S")).toBe(true);
+    expect(dashed.match(/ c /g)).toHaveLength(4);
+    expect(dashed.endsWith(" S Q")).toBe(true);
     expect(o).not.toMatch(/\] \d+ d\b/);
     expect(lines(o)).toContain("500 w 0 j");
   });
@@ -100,7 +127,9 @@ describe("stroke", () => {
     });
     const o = lines(passStreamOperators(stream, { colours: stack, mode: "cmyk", resources: resources().res }));
     const outline = strokeOutline(path, { widthUm: 250, join: "round", taper: { startUm: 750, endUm: 750 } });
-    expect(o).toEqual(["0 0 0 1 k", `${pathOperators(outline, [0, 0], true)} f`]);
+    const b = pathBounds(outline);
+    const [ax, ay] = [Math.floor(b.minX), Math.floor(b.minY)];
+    expect(o).toEqual(["0 0 0 1 k", `q 1 0 0 1 ${ax} ${ay} cm ${pathOperators(outline, [ax, ay], true)} f Q`]);
   });
 
   it("draws pointed without taper as a butt stroke", () => {
@@ -114,7 +143,7 @@ describe("stroke", () => {
 });
 
 describe("glyph", () => {
-  it("draws each instance as q cm /Gn Do Q with the colours of the part set", () => {
+  it("draws an unrotated instance by translation, a rare turn by its full cm, with the colours of the part set", () => {
     const { res, glyphs } = resources();
     const o = lines(passStreamOperators(passStreamFromJson(renderFixtures["glyph-instances"]), { colours: stack, mode: "cmyk", resources: res }));
     expect(glyphs).toHaveLength(2);
@@ -143,7 +172,7 @@ describe("glyph", () => {
     const clipped = stream.passes.filter((p) => p.kind === "glyph" && p.clip);
     expect(clipped.length).toBeGreaterThan(0);
     const o = passStreamOperators(stream, { colours: scene.colours, mode: "cmyk", resources: resources().res });
-    const blocks = o.match(/\nq\n[^\n]* W\* n\n(?:q [^\n]* Do Q\n)+Q/g) ?? [];
+    const blocks = o.match(/\nq\n[^\n]* W\* n\n(?:(?:q |1 0 0 1 )[^\n]* Do(?: Q)?\n|Q\n)+Q/g) ?? [];
     expect(blocks).toHaveLength(clipped.length);
   });
 });
@@ -247,9 +276,47 @@ describe("map layer", () => {
       originUm: [10000, 10000],
       matrix,
     });
-    expect(lines(o).slice(0, 3)).toEqual(["q", "0.004251969 0 0 0.004251969 297.638 420.945 cm", "4 M"]);
-    expect(o).toContain("-10000 -10000 m 10000 -10000 l");
+    // Written in 10/3 µm units (5 µm printed): the cm carries 10/3 × 1.5 × µm → pt.
+    expect(lines(o).slice(0, 3)).toEqual(["q", "0.014173228 0 0 0.014173228 297.638 420.945 cm", "4 M"]);
+    expect(o).toContain("q 1 0 0 1 -3000 -3000 cm 0 0 m 6000 0 l 6000 6000 l 0 6000 l h 1200 1200 m");
     expect(lines(o).at(-1)).toBe("Q");
+  });
+
+  it("moves an origin off the 10 µm grid onto it and folds the move into the cm", () => {
+    const matrix = layerMatrix({ scaleRatio: 1, rotationDeg: 30, atPt: [100, 200] });
+    const o = mapLayerOperators(passStreamFromJson(renderFixtures["fill-with-holes"]), {
+      colours: stack,
+      mode: "cmyk",
+      resources: resources().res,
+      originUm: [10004, -4996],
+      matrix,
+    });
+    // Origin (10000, −5000), 5 µm units: the 10 µm coordinates stay whole units (corner −2000, 1000).
+    expect(o).toContain("q 1 0 0 1 -2000 1000 cm 0 0 m 4000 0 l 4000 4000 l 0 4000 l h 800 800 m");
+    // The written cm maps a unit point where the given matrix maps its µm point.
+    const cm = lines(o)[1].split(" ").slice(0, 6).map(Number);
+    const at = (m: number[], x: number, y: number) => [m[0] * x + m[2] * y + m[4], m[1] * x + m[3] * y + m[5]];
+    const want = at(matrix, 20000 - 10004, 20000 + 4996);
+    const got = at(cm, (20000 - 10000) / 5, (20000 + 5000) / 5);
+    // 9 decimals in the cm: within 1e-4 pt (35 nm).
+    expect(got[0]).toBeCloseTo(want[0], 4);
+    expect(got[1]).toBeCloseTo(want[1], 4);
+  });
+
+  it("keeps grid coordinates whole at 10/3 µm units with an origin off the grid", () => {
+    const o = mapLayerOperators(passStreamFromJson(renderFixtures["fill-with-holes"]), {
+      colours: stack,
+      mode: "cmyk",
+      resources: resources().res,
+      originUm: [10004, -4996],
+      matrix: layerMatrix({ scaleRatio: 1.5, atPt: [0, 0] }),
+    });
+    // Origin (10000, −5000): corner (−3000, 1500) units, the 20 mm ring 6000 units.
+    expect(o).toContain("q 1 0 0 1 -3000 1500 cm 0 0 m 6000 0 l 6000 6000 l 0 6000 l h 1200 1200 m");
+  });
+
+  it("writes no anchor for a path whose corner is the origin", () => {
+    expect(lines(ops("fill-with-holes")).at(-1)).toMatch(/^0 0 m 20000 0 l/);
   });
 
   it("rotates the layer counter-clockwise", () => {
@@ -271,3 +338,149 @@ describe("map layer", () => {
     expect(clipOperators(sq, "nonzero", [5, 5])).toBe("-5 -5 m 5 -5 l 5 5 l h W n");
   });
 });
+
+describe("layer unit (C11)", () => {
+  it("is the coarsest whole fraction of 10 µm that stays ≤ 5 µm on the paper", () => {
+    const unit = (scaleRatio: number) => layerUnitUm(layerMatrix({ scaleRatio, rotationDeg: 17, atPt: [0, 0] }));
+    expect(unit(0.5)).toBe(10);
+    expect(unit(1)).toBe(5);
+    expect(unit(1.5)).toBeCloseTo(10 / 3, 12);
+    expect(unit(2)).toBe(2.5);
+    expect(unit(3)).toBeCloseTo(10 / 6, 12);
+    for (const r of [0.4, 0.5, 0.6, 1, 1.25, 1.5, 2, 2.5, 3, 3.75]) {
+      expect(unit(r) * r).toBeLessThanOrEqual(PRINT_QUANTUM_UM + 1e-9);
+      expect(Math.abs(PRINT_GRID_UM / unit(r) - Math.round(PRINT_GRID_UM / unit(r)))).toBeLessThan(1e-9);
+    }
+    expect(layerUnitUm([UM_TO_PT, 0, 0, UM_TO_PT, 0, 0])).toBe(5);
+  });
+
+  it("writes line widths and text sizes in the unit, to 0.001", () => {
+    const fill = passStreamOperators(passStreamFromJson(renderFixtures["dashed-bezier-stroke"]), { colours: stack, mode: "cmyk", resources: resources().res, unitUm: 10 });
+    expect(lines(fill)).toContain("35 w 0 J 1 j");
+    const text = passStreamOperators(passStreamFromJson(renderFixtures["text-with-halo"]), { colours: stack, mode: "cmyk", resources: resources().res, unitUm: 10 / 3 });
+    expect(lines(text)).toContain("120 w 1 J 1 j");
+    expect(lines(text)).toContain("BT /F1 900 Tf 1 Tr");
+    expect(lines(text)).toContain("1 0 0 1 300 1500 Tm <0024> Tj");
+  });
+
+  const scenes = [
+    ...(Object.keys(renderFixtures) as (keyof typeof renderFixtures)[]).map((n) => ({ name: n, stream: passStreamFromJson(renderFixtures[n]), colours: stack })),
+    ...librarySceneNames.map((n) => {
+      const scene = libraryScene(n);
+      return { name: n, stream: symbolise({ objects: scene.objects, symbols: scene.symbols, fonts: [liberation().sans, liberation().narrow] }).stream, colours: scene.colours };
+    }),
+  ];
+
+  it.each(scenes.map((s) => [s.name, s] as const))("%s: in 10 µm units the same operators, every point within half a unit of the µm encoding", (_n, s) => {
+    const fine = decode(passStreamOperators(s.stream, { colours: s.colours, mode: "cmyk", resources: resources().res }));
+    const coarse = decode(passStreamOperators(s.stream, { colours: s.colours, mode: "cmyk", resources: resources().res, unitUm: 10 }));
+    expect(coarse.map((p) => p.op)).toEqual(fine.map((p) => p.op));
+    let worst = 0;
+    coarse.forEach((p, i) => p.at.forEach((v, j) => (worst = Math.max(worst, Math.abs(v * 10 - fine[i].at[j])))));
+    // ½ unit, plus ½ µm of the µm encoding's own rounding.
+    expect(worst).toBeLessThanOrEqual(5.5);
+  });
+
+  it("keeps the stream's 10 µm grid exactly: decoded × unit + origin = the source coordinates", () => {
+    const stream = passStreamFromJson(renderFixtures["fill-with-holes"]);
+    const o = decode(passStreamOperators(stream, { colours: stack, mode: "cmyk", resources: resources().res, unitUm: 5, originUm: [-10, 20] }));
+    const got = o.flatMap((p) => p.at).map((v, i) => v * 5 + (i % 2 === 0 ? -10 : 20));
+    expect(got.slice(0, 8)).toEqual([0, 0, 20000, 0, 20000, 20000, 0, 20000]);
+  });
+});
+
+describe("glyph instance forms (C11)", () => {
+  function recording() {
+    const forms: { mesh: GlyphMesh; matrix: number[] }[] = [];
+    const res: OperatorResources = {
+      font: () => "F1",
+      glyph: (mesh, matrix = [1, 0, 0, 1, 0, 0]) => {
+        let i = forms.findIndex((f) => f.mesh === mesh && f.matrix.join() === matrix.join());
+        if (i < 0) i = forms.push({ mesh, matrix: [...matrix] }) - 1;
+        return `G${i}`;
+      },
+    };
+    return { forms, res };
+  }
+  /** One glyph pass: `n` instances 600 µm apart along x, turned `deg`, plus `odd` instances each at its own angle. */
+  function pattern(n: number, deg: number, odd = 0): PassStream {
+    const a = (deg * Math.PI) / 180;
+    const instances: number[] = [];
+    for (let i = 0; i < n; i++) instances.push(1000 + 600 * i, 2000, Math.cos(a), Math.sin(a), 1);
+    for (let i = 0; i < odd; i++) instances.push(500 * i, 9000, Math.cos(i + 1), Math.sin(i + 1), 1);
+    return passStreamFromJson({
+      ...renderFixtures["glyph-instances"],
+      objectIdx: [0],
+      symbolIdx: [418],
+      passes: [{ kind: "glyph", colour: 2, glyphId: 1, partIdx: 0, instances }],
+    });
+  }
+
+  it("a turn shared by GLYPH_FORM_REUSE instances is the form's /Matrix; instances chain by relative translation", () => {
+    const { forms, res } = recording();
+    const o = lines(passStreamOperators(pattern(GLYPH_FORM_REUSE, 45), { colours: stack, mode: "cmyk", resources: res, unitUm: 10 }));
+    expect(forms).toHaveLength(1);
+    // cos 45° ÷ 10 µm (instances are single precision in the stream).
+    const r = Math.SQRT1_2 / 10;
+    expect(forms[0].matrix.slice(4)).toEqual([0, 0]);
+    forms[0].matrix.slice(0, 4).forEach((v, i) => expect(v).toBeCloseTo(i === 2 ? -r : r, 8));
+    expect(o[1]).toBe("q 1 0 0 1 100 200 cm /G0 Do");
+    expect(o.slice(2, GLYPH_FORM_REUSE + 1)).toEqual(Array(GLYPH_FORM_REUSE - 1).fill("1 0 0 1 60 0 cm /G0 Do"));
+    expect(o.at(-1)).toBe("Q");
+  });
+
+  it("re-anchors a chain every CHAIN_LENGTH instances", () => {
+    const { res } = recording();
+    const o = lines(passStreamOperators(pattern(CHAIN_LENGTH + 2, 0), { colours: stack, mode: "cmyk", resources: res }));
+    const opens = o.filter((l) => l.startsWith("q 1 0 0 1 "));
+    expect(opens).toEqual(["q 1 0 0 1 1000 2000 cm /G0 Do", `q 1 0 0 1 ${1000 + 600 * CHAIN_LENGTH} 2000 cm /G0 Do`]);
+    expect(o.filter((l) => l === "Q")).toHaveLength(2);
+  });
+
+  it("an unrotated instance is translation-only under a unit: the plain form carries 1 ÷ unit", () => {
+    const { forms, res } = recording();
+    const o = lines(passStreamOperators(pattern(1, 0), { colours: stack, mode: "cmyk", resources: res, unitUm: 10 }));
+    expect(forms.map((f) => f.matrix)).toEqual([[0.1, 0, 0, 0.1, 0, 0]]);
+    expect(o[1]).toBe("q 1 0 0 1 100 200 cm /G0 Do Q");
+  });
+
+  it("a turn used fewer times draws the plain form under its own full cm", () => {
+    const { forms, res } = recording();
+    const o = lines(passStreamOperators(pattern(0, 0, 3), { colours: stack, mode: "cmyk", resources: res, unitUm: 10 }));
+    expect(forms.map((f) => f.matrix)).toEqual([[0.1, 0, 0, 0.1, 0, 0]]);
+    expect(o.slice(1)).toEqual([
+      "q 0.540302 0.841471 -0.841471 0.540302 0 900 cm /G0 Do Q",
+      "q -0.416147 0.909297 -0.909297 -0.416147 50 900 cm /G0 Do Q",
+      "q -0.989992 0.14112 -0.14112 -0.989992 100 900 cm /G0 Do Q",
+    ]);
+  });
+});
+
+/**
+ * Path points, glyph placements and text positions of an operator string,
+ * in absolute written units: `q` / `Q` and the translation of every `cm`,
+ * and `Tm` resolved (the emitter turns or scales only innermost).
+ */
+function decode(ops: string): { op: string; at: number[] }[] {
+  const out: { op: string; at: number[] }[] = [];
+  let t = [0, 0];
+  const stack: number[][] = [];
+  let tl = [0, 0];
+  let args: number[] = [];
+  for (const tok of ops.split(/\s+/)) {
+    if (/^-?[\d.]+$/.test(tok)) {
+      args.push(Number(tok));
+      continue;
+    }
+    if (tok === "q") stack.push([...t]);
+    else if (tok === "Q") t = stack.pop()!;
+    else if (tok === "cm") t = [t[0] + args[4], t[1] + args[5]];
+    else if (tok === "m" || tok === "l" || tok === "c") out.push({ op: tok, at: args.map((v, i) => v + t[i % 2]) });
+    else if (tok === "Do") out.push({ op: "Do", at: [...t] });
+    else if (tok === "BT") tl = [0, 0];
+    else if (tok === "Tm") tl = [args[4], args[5]];
+    else if (tok === "Tj") out.push({ op: "Tj", at: [t[0] + tl[0], t[1] + tl[1]] });
+    if (!tok.startsWith("<") && !tok.startsWith("/")) args = [];
+  }
+  return out;
+}

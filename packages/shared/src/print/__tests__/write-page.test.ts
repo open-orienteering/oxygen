@@ -53,9 +53,14 @@ describe("writePage", () => {
     expect(sheet).toBe(0);
     expect(clip).toBeGreaterThan(sheet);
     const mapCm = ops.indexOf(" cm", clip);
-    // T_map: 4/3 × µm → pt, no rotation, frame centre (105, 148.5) mm.
-    expect(ops.slice(clip, mapCm + 3)).toContain("0.003779528 0 0 0.003779528 297.637795276 420.94488189 cm");
-    const pageCm = ops.lastIndexOf("0.002834646 0 0 0.002834646 0 0 cm");
+    // T_map: 4/3 × µm → pt in the layer unit (10/3 µm, 4.4 µm printed), no rotation, the frame
+    // centre (105, 148.5) mm less the origin's move onto the 10 µm grid (≤ 5 µm × 4/3).
+    const tMap = ops.slice(clip, mapCm + 3).split("\n").at(-1)!.split(" ");
+    expect(tMap.slice(0, 4)).toEqual(["0.012598425", "0", "0", "0.012598425"]);
+    expect(Math.abs(Number(tMap[4]) - 297.637795276)).toBeLessThan(5 * (4 / 3) * (72 / 25400));
+    expect(Math.abs(Number(tMap[5]) - 420.94488189)).toBeLessThan(5 * (4 / 3) * (72 / 25400));
+    // Page layer: page µm in 5 µm units → pt.
+    const pageCm = ops.lastIndexOf("0.014173228 0 0 0.014173228 0 0 cm");
     expect(pageCm).toBeGreaterThan(mapCm);
     // The frame clip is restored before the page layer starts.
     expect(ops.slice(mapCm, pageCm)).toMatch(/Q\nQ\nq\n$/);
@@ -74,8 +79,10 @@ describe("writePage", () => {
 
   it("rotated window: T_map carries −20° (counter-clockwise on the y-up page)", async () => {
     const ops = content(await PDFDocument.load(await build([pageScene("page-rotated")])), 0);
-    const a = (-20 * Math.PI) / 180, s = 72 / 25400;
-    expect(ops).toContain(`${(Math.cos(a) * s).toFixed(9)} ${(Math.sin(a) * s).toFixed(9)} ${(-Math.sin(a) * s).toFixed(9)}`);
+    // 1:1 → 5 µm units.
+    const a = (-20 * Math.PI) / 180, s = (5 * 72) / 25400;
+    const f = (v: number) => String(Number(v.toFixed(9)));
+    expect(ops).toContain(`${f(Math.cos(a) * s)} ${f(Math.sin(a) * s)} ${f(-Math.sin(a) * s)}`);
   });
 
   it("two pages share one font object, glyph forms and one image XObject", async () => {

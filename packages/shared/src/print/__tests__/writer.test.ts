@@ -19,6 +19,8 @@ import {
 } from "@cantoo/pdf-lib";
 import { describe, expect, it } from "vitest";
 import { libraryScene } from "../../render/__fixtures__/library/index.js";
+import { renderFixtures } from "../../render/__fixtures__/streams/index.js";
+import { passStreamFromJson } from "../../render/stream-json.js";
 import { parseTrueType } from "../../render/truetype.js";
 import { parseRenderSymbol } from "../../render/symbol.js";
 import { makePath } from "../../render/pass-stream.js";
@@ -156,8 +158,25 @@ describe("PdfWriter", async () => {
     expect(nameOf(form.dict, "Subtype")).toBe("Form");
     expect(resolve(doc, get(form.dict, "BBox"), PDFArray).size()).toBe(4);
     const content = pageContent(doc, 1);
-    expect(content).toMatch(/ \/G\d+ Do Q/);
+    expect(content).toMatch(/ \/G\d+ Do\b/);
     expect(content).toContain("W* n");
+  });
+
+  it("gives a glyph form the /Matrix it is drawn through, one form per part and matrix", async () => {
+    const w = await PdfWriter.create({ deterministic: true });
+    const page = w.addPage({ widthPt: 100, heightPt: 100 });
+    const mesh = passStreamFromJson(renderFixtures["glyph-instances"]).glyphTable[0];
+    const plain = page.resources.glyph(mesh);
+    const unit = page.resources.glyph(mesh, [0.1, 0, 0, 0.1, 0, 0]);
+    expect(page.resources.glyph(mesh, [0.1, 0, 0, 0.1, 0, 0])).toBe(unit);
+    expect(page.resources.glyph(mesh, [1, 0, 0, 1, 0, 0])).toBe(plain);
+    expect(unit).not.toBe(plain);
+    page.addContent(`q /${plain} Do Q q /${unit} Do Q`);
+    const d = await PDFDocument.load(await w.save(), { updateMetadata: false });
+    const xo = resolve(d, get(d.getPage(0).node.Resources()!, "XObject"), PDFDict);
+    const matrix = (name: string) => resolve(d, xo.get(PDFName.of(name)), PDFRawStream).dict.get(PDFName.of("Matrix"));
+    expect(matrix(plain)).toBeUndefined();
+    expect(resolve(d, matrix(unit), PDFArray).asArray().map(String)).toEqual(["0.1", "0", "0", "0.1", "0", "0"]);
   });
 
   it("is byte-identical across runs when deterministic", async () => {

@@ -1568,34 +1568,61 @@ stream order — the stream order *is* the painter's order (§3.6), so no
 reordering and no decision of the backend's own. `docs/course-print.md`
 owns everything around it: the writer, colour modes, fonts, the page.
 
-**Units** (05 §5.2). Coordinates are the stream's paper µm minus
-`originUm`, written as **integers** (Bézier controls of a dash slice,
-glyph and text origins and hatch line ends rounded; ≤ 0.5 µm). Widths
-and text sizes stay in µm too. `mapLayerOperators` wraps the fragment as
-`q <matrix> cm 4 M … Q`; `layerMatrix({ scaleRatio, rotationDeg, atPt })`
-is `scaleRatio · 72 / 25 400` with the rotation (counter-clockwise), the
-origin landing on `atPt` — so a 1:15 000 map printed at 1:10 000 gets its
-0.21 mm contours from the matrix, not the data. The layer `cm` is written
-with 9 decimals (6 would put the far edge of a 1 m window 0.25 mm off);
-instance matrices and `Tm` with 6 (the JSON projection's precision,
-§3.7). The page composer (C2) picks origin, angle and point.
+**Units** (05 §5.2; C11 2026-10-24). Coordinates are the stream's paper
+µm minus `originUm`, written as **integers in a layer unit `u`**
+(`unitUm`; `passStreamOperators` defaults to 1 µm). `mapLayerOperators`
+picks `u = layerUnitUm(matrix)` = 10 µm ÷ *n*, *n* the smallest whole
+number that keeps `u` at most **5 µm on the printed paper**
+(`PRINT_QUANTUM_UM`): 10 µm for a map reduced to half, 5 µm at 1:1,
+10/3 µm for a 1:15 000 map at 1:10 000, 10/6 µm at 1:5 000. Being a
+whole fraction of OCAD's 10 µm grid (`PRINT_GRID_UM`), and with the
+origin moved onto that grid, the source vertices of an OCAD map are
+written **exactly**; only computed points (dash-slice Béziers,
+`strokeOutline` rings, glyph and text origins, hatch ends) round, by at
+most ½ `u` per axis — ½√2 × 5 µm = 3.5 µm on paper, 0.035 px at the
+golden tier's 10 px/mm, ≤ 9 of its 16 levels on one edge. A 10 µm
+printed unit (7 µm worst case, ≈ 18 levels) was measured and moved
+`lib-borders` to 0.84 % and `lib-hatch` to 0.45 % (budget 0.5 %); at
+5 µm every golden ratio stays within 0.014 pp of the µm encoding
+(`course-print.md` §9.2). Widths (`w`) and text sizes (`Tf`) are written
+in `u` with up to 3 decimals. `mapLayerOperators` wraps the fragment as
+`q <matrix′> cm 4 M … Q`, where `matrix′` folds `u` and the origin's move
+onto the grid into the caller's matrix, so every point lands where the
+caller's matrix puts its µm; `layerMatrix({ scaleRatio, rotationDeg,
+atPt })` is `scaleRatio · 72 / 25 400` with the rotation
+(counter-clockwise), the origin landing on `atPt` — so a 1:15 000 map
+printed at 1:10 000 gets its 0.21 mm contours from the matrix, not the
+data. The layer `cm` is written with 9 decimals (6 would put the far
+edge of a 1 m window 0.25 mm off); instance matrices and `Tm` with 6
+(the JSON projection's precision, §3.7). The page composer (C2) picks
+origin, angle and point.
+
+**Anchors** (C11). Every `fill`, `stroke` and pointed outline is written
+under its own anchor — `q 1 0 0 1 ax ay cm <path> f* Q` — at the lower
+left corner of the path's control-point bounds (dash slices lie inside
+that hull), so its numbers are short and never negative: PDF path
+operands are absolute, and a translation per object is the relative
+encoding the grammar allows. The anchor is an integer in `u`, so the
+rounding is the unanchored one's; an anchor of `0 0` writes no `q … Q`. Colour and line style are set before
+the `q`, so the tracker is unaffected.
 
 | Pass | Operators |
 |---|---|
-| `fill` | fill colour; per ring `x y m`, `l` / `c` (Béziers kept, nothing flattened), `h`; then **`f*`** — even-odd, §3.1 (05's table said `f`, written before the rule was fixed) |
+| `fill` | fill colour; per ring `x y m`, `l` / `c` (Béziers kept, nothing flattened), `h`; then **`f*`** — even-odd, §3.1 (05's table said `f`, written before the rule was fixed). A ring whose last segment is a line back onto its start (as written) leaves that line to `h` — the same edge (C11); likewise every clip ring (`W n` / `W* n`) and every glyph-form fill ring. A closed *stroke* keeps it: its join at the start is the stream's |
 | `stroke` | stroke colour; `w J j` (cap butt / round / square / pointed → `J` 0 / 1 / 2 / 0; join miter / round / bevel → `j` 0 / 1 / 2); rings (`h` when closed); `S`. The mitre limit is `4 M` once per layer (`STROKE_MITRE_LIMIT`: the reference raster's and the GL strips' 4×, not 05's "`M 2`-ish") |
 | `stroke` with `slices` | one subpath per slice from `sliceSegments` (de Casteljau, exact Béziers) and **one** `S` for the pass — each subpath gets its own caps; never PDF's `d` dash array (§3.2) |
-| `stroke`, `cap: "pointed"` with a `taper` | `strokeOutline(path, { widthUm, join, taper, slices })` (`render/geometry.ts`) as fill colour + rings + **`f`** (non-zero: the outline is a union of counter-clockwise quads and join wedges, flattened at 5 µm, integer µm). The reference raster fills the same outline (§5.1). Without a taper: a butt `S` |
-| `glyph` | fill colour if the part has fills, stroke colour if it has strokes (a form inherits both); per instance `q c·k s·k −s·k c·k x y cm /Gn Do Q` (`cos`, `sin`, `scale` of the instance); `/Gn` is a **form XObject per glyph part**, shared by every colour that draws it: the mesh in glyph-local µm — fills `… h f*`, strokes `w J j … S`, no colour — with a `BBox` of the mesh bounds plus 4 × half the widest stroke |
+| `stroke`, `cap: "pointed"` with a `taper` | `strokeOutline(path, { widthUm, join, taper, slices })` (`render/geometry.ts`) as fill colour + rings + **`f`** (non-zero: the outline is a union of counter-clockwise quads and join wedges, flattened at 5 µm, integers in `u`, under its anchor). The reference raster fills the same outline (§5.1). Without a taper: a butt `S` |
+| `glyph` | fill colour if the part has fills, stroke colour if it has strokes (a form inherits both); instances by their **turn class** (`c·k`, `s·k` to 6 decimals; C11): the unturned class, and any class used by ≥ `GLYPH_FORM_REUSE` (16) instances of the pass, draws a form whose `/Matrix` is that turn and scale ÷ `u` — `q 1 0 0 1 x y cm /Gn Do`, then per next instance of the class `1 0 0 1 dx dy cm /Gn Do` (integer translation from the one before; `cm` concatenates, `Do` brackets the form's own drawing), re-anchored by `Q` + a new absolute `q` every `CHAIN_LENGTH` (32) instances or when the class changes, so a reader that concatenates in single precision drifts ≤ ~0.1 µm; any other instance `q c·k s·k −s·k c·k x y cm /Gn Do Q` on the form whose `/Matrix` is `1/u` alone. Instances stay in stream order. `/Gn` is a **form XObject per glyph part and `/Matrix`**, shared by every colour that draws it: the mesh in glyph-local µm — fills `… h f*`, strokes `w J j … S`, no colour — with a `BBox` of the mesh bounds plus 4 × half the widest stroke. Below 16 uses an own form costs more (object, dictionary, a second copy of the mesh) than the instances' `cm` operands save: on the corpus, 2 → +7 %, 4 → +0.3 %, 8–16 → −1.2 % against no per-class forms |
 | `glyph` with `clip` | `q <clip rings> W* n` (even-odd, like the oracle's clip path), the instances, `Q` |
 | `hatch` | stroke colour; `q <area rings> W* n`, `w 0 J 0 j`, the `hatchLines()` set (§3.4, the reference generator) as `m l` pairs, `S`, `Q` |
-| `text` | `BT /Fn sizeUm Tf` with `0 Tr` (fill: fill colour) or `1 Tr` (halo: stroke colour, `2 × haloWidthUm w 1 J 1 j`); per glyph `cos sin −sin cos x y Tm <gid> Tj` (`1 0 0 1 x y` without `angles`); `ET`. Glyph ids are the shaper's, written unchanged (Identity-H, `course-print.md` §3.1); one `Tm` per glyph because positions are absolute in the stream (no `TJ`). A halo pass sits at its own colour position because the stream is sorted (§3.5) |
+| `text` | `BT /Fn size Tf` (size in `u`) with `0 Tr` (fill: fill colour) or `1 Tr` (halo: stroke colour, `2 × haloWidthUm w 1 J 1 j`); per glyph `cos sin −sin cos x y Tm <gid> Tj` (`1 0 0 1 x y` without `angles`); `ET`. Glyph ids are the shaper's, written unchanged (Identity-H, `course-print.md` §3.1); one `Tm` per glyph because positions are absolute in the stream (no `TJ`). A halo pass sits at its own colour position because the stream is sorted (§3.5) |
 | `text`, outline fallback | per glyph `q k·cos k·sin −k·sin k·cos x y cm <outline rings> f* Q` with `k = sizeUm / unitsPerEm`; a halo strokes the outline at `2 · haloWidthUm / k` with round caps and joins — what the reference raster draws |
 
 **Graphics state.** A colour (`k` / `K` or `rg` / `RG`, `course-print.md`
 §2), `w`, `J`, `j` or `Tr` is written only when it changes; `q … Q`
-appears only around a clip and an instance, and the tracker restores its
-state at `Q`. Consecutive passes of one colour share one colour operator
+appears only around a clip, an anchor, an instance chain and an
+instance, and the tracker restores its state at a clip's `Q` (anchors and
+instances change nothing but the CTM). Consecutive passes of one colour share one colour operator
 (05 Appendix B's size arithmetic).
 
 **Clips.** `clipOperators(path, rule)` writes `<rings> W n` or `W* n` —
@@ -1616,7 +1643,20 @@ with angles; the outline fallback; per scene no `rg` in `cmyk` and no
 values; the layer `cm` for a 1:15 000 map at 1:10 000 and a rotation,
 never in exponent notation (a 0.01° tilt is `0.000000495`, not `4.95e-7`);
 round caps and joins on the fallback halo;
-`W n` / `W* n`. `render/__tests__/stroke-outline.test.ts`: width inside
+`W n` / `W* n`. C11 adds: the anchor (`q 1 0 0 1 ax ay cm … Q`) on a
+fill, a Bézier stroke, a dash pass and a pointed outline, none at `0 0`;
+a fill ring's closing line left to `h`, a closed stroke's kept; `layerUnitUm` per
+scale ratio (≤ 5 µm printed, a whole fraction of 10 µm); `w` / `Tf` /
+`Tm` in the unit; the map layer's `cm` folding the unit and the origin's
+move onto the 10 µm grid (a point lands where the caller's matrix puts
+it), grid coordinates written exactly; **every fixture and library
+scene round-trips** — decoded (anchors, chains and `Tm` resolved) at a
+10 µm unit, the same operator sequence as the µm encoding and every point
+within ½ unit of it; a turn class used `GLYPH_FORM_REUSE` times → one form
+with that `/Matrix` and a relative chain; re-anchoring every
+`CHAIN_LENGTH`; the unturned form carrying `1/u`; rarer turns under a full
+`cm`. `writer.test.ts`: a form's `/Matrix`, absent for the identity, one
+form per part and matrix. `render/__tests__/stroke-outline.test.ts`: width inside
 and outside the tapers (a vertex at the taper length), counter-clockwise
 rings only, round / miter / bevel joins at a corner, a Bézier within the
 flattening tolerance, the taper measured along the whole path across
