@@ -468,8 +468,8 @@ back to `legacy` and the same rows print through rsvg.
 | `legacy`, or `vector` without a pin | SVG → `rsvg-convert` → pdf-lib merge, as before slice C (`docs/course-maps.md` "Rendering pipeline") | `legacy` |
 | `vector` with a pin whose colour stack is not aligned (`course.CourseStackError`: no lower / upper purple) | the legacy path, with one `warn` log line per request naming the document hash | `legacy-fallback` |
 
-The decision is `loadPinnedPrintDocument(db, eventId)` (`pdf-page.ts`),
-which reads `getBaseMapInfo` (§10.1) — the same function, so the
+The decision is `pinnedPrintSource(db, eventId)` (`pdf-page.ts`;
+`loadPinnedPrintDocument` is its in-process wrapper), which reads `getBaseMapInfo` (§10.1) — the same function, so the
 preview and the print never disagree on the path. Every other error on
 the vector path is an error (400 with the message, as the legacy path
 answers), not a fallback: a broken composer must be seen, not hidden
@@ -582,7 +582,7 @@ E2E tests check page count and size; C7 compares the rasters).
 | Test | Covers |
 |---|---|
 | `packages/api/src/__tests__/integration/course-maps.test.ts` "maps.pdf route switch" | `vector` + pin → one composed PDF, pages at each template's paper (A4, A5), never the rsvg converter, `X-Print-Pipeline: vector`, `Info` title for one and several pages, file names; selection errors unchanged; `qpdf --check` clean; a `legacy` event, a `vector` event without a pin, and the same event flipped back all print legacy; an injected `CourseStackError` falls back (`legacy-fallback`); any other injected error is a 400 |
-| `packages/api/src/__tests__/integration/course-maps.test.ts` "a readout-path request is answered…" | 150 extra pages in one print while `race.recentActivity` is polled every 10 ms: every probe is answered within 500 ms and more than three were answered before the PDF finished; the PDF has all pages |
+| `packages/api/src/__tests__/integration/course-maps.test.ts` "a readout-path request is answered…" | 150 extra pages in one print while `race.recentActivity` is polled every 10 ms: every probe is answered within 500 ms and more than three were answered before the PDF finished; the PDF has all pages. A smoke test of the route wiring — the event-loop bound itself is `print-worker.test.ts`'s |
 | `packages/api/src/__tests__/integration/course-print.test.ts` | §7.5's row, plus `qpdf --check` of both colour modes; the worker's bytes equal the in-process bytes (`deterministic: true`) and `onPage` fires once per sheet |
 | `packages/api/src/__tests__/print-worker.test.ts` | the worker on `e2e/test.ocd`: bytes equal in-process; the blob read and sent once per worker; `page` order; an error keeps the worker usable; `CourseStackError` re-created (a document with palette ids stripped); a reset rejects the request in flight and the next call recovers; the main thread's event-loop delay stays under 25 ms (or half a page) during a 10-page A3 print; `PRINT_WORKERS` parsing |
 | `packages/api/src/__tests__/worker-bootstrap.test.ts` | the shared bootstrap: `.js` imported as is, `.ts` through tsx |

@@ -269,7 +269,9 @@ export function registerCourseMapRoutes(
   } = {},
 ): void {
   const renderVectorPages = options.renderCoursePages ?? renderCoursePagesInWorker;
-  // The print workers go with the server (docs/course-print.md §8.2).
+  // The print workers go with the server (docs/course-print.md §8.2). The
+  // pool is process-global: one server registers in production; a test's
+  // throw-away server resets it and the next print starts a fresh worker.
   server.addHook("onClose", async () => {
     await resetPrintWorkers();
   });

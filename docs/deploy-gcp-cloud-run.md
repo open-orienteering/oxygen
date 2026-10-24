@@ -294,6 +294,11 @@ that is roughly 600 MB for any map. The knobs are in
 (`MAP_TILE_BLOCK_TILES`, `MAP_TILE_SUPERSAMPLE`,
 `MAP_RENDER_CONCURRENCY`, `MAP_RENDER_MAX_QUEUE`, `MAP_SVG_CACHE_EVENTS`,
 `MAP_WINDOW_MAX_PIXELS`); none needs setting in normal operation.
+`maps.pdf` composes in a worker thread (`course-print.md` §8.2):
+`PRINT_WORKERS` (default `1`, max `4`) is how many prints compose at once;
+each worker holds a decoded map document and fonts (a Club-full print run
+peaked at 2.6 GB RSS), so on 2 vCPU / 4 GiB keep it at 1, or 2 for small
+maps. Workers use no database connection.
 The 4 GiB allocation is headroom for parsing a large club OCAD into an
 SVG DOM, which still spikes, not for the tiles themselves.
 - **Tile requests never wait longer than the queue bound.** Cloud Run
