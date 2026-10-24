@@ -22,8 +22,9 @@ describe("courseSymbols (course-layer.md §3.1)", () => {
     const circle = s.symbols[s.idx.circle] as LineSymbol;
     expect(circle.main).toMatchObject({ colour: index.get("purple-lower"), widthUm: 350, cap: "flat" });
     const number = s.symbols[s.idx.number] as TextSymbol;
-    expect(number).toMatchObject({ colour: index.get("purple-lower"), align: "centre", digitHeightUm: 4000 });
+    expect(number).toMatchObject({ colour: index.get("purple-upper"), align: "centre", digitHeightUm: 4000 });
     expect(number.halo).toBeUndefined();
+    expect((s.symbols[s.idx.leader] as LineSymbol).main!.colour).toBe(index.get("purple-upper"));
     expect((s.symbols[s.idx.markedRoute] as LineSymbol).main!.colour).toBe(index.get("purple-upper"));
     expect((s.symbols[s.idx.whiteout] as { fill?: number }).fill).toBe(index.get("white-upper"));
     expect((s.symbols[s.idx.start] as PointSymbol).orientation).toBe("object");

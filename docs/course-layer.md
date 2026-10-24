@@ -25,8 +25,7 @@ viewer (§5).
   default templates print spec sizes. Legacy's 5 mm / 0.35 mm / 4 mm on
   every map is the third sanctioned difference for `course-print.md`.
 - **Control numbers.** Default `numberStyle: "spec"` — the library entry
-  as it is (ISOM 704 lower purple without a halo, ISSprOM 704 upper
-  purple without an outline). `"knockout"` is the opt-in legacy look:
+  as it is (704 upper purple without a halo on both libraries — ISOM by user decision 2026-10-24, see `map-symbols.md` §3; the leader line follows the number, so it is upper purple on ISOM too). `"knockout"` is the opt-in legacy look:
   upper purple with a 0.15 mm upper-white outline (ISSprOM 704.b) on both
   libraries.
 
@@ -92,9 +91,9 @@ resolves a canonical entry — `getLibraryEntry("<library>:<code>")`,
 `scaleRenderSymbol(…, documentFactor)` (`map-symbols.md` §4, §8.3) —
 then the appearance multipliers apply (§3.1). Their purple role is the
 entry's (03 §2.4), so the stack decides layering: lower purple (701, 703,
-705, 706, 708; ISOM 704) sorts under black 100 % and the ISOM brown and
+705, 706, 708) sorts under black 100 % and the ISOM brown and
 blue line/point rows; white-outs sit at upper white, above all map ink
-and lower purple, below upper purple (707, 709, 711; ISSprOM 704) —
+and lower purple, below upper purple (704, 707, 709, 711) —
 the legacy print sandwich full → lower → ink → white-outs → upper,
 by construction. A white-out therefore hides lower-purple course lines
 under it, as legacy print does.

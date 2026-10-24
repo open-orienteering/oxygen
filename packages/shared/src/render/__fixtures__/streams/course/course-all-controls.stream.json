@@ -1,6 +1,6 @@
 {
-"objectIdx": [0,3,4,5,7,8,2,6,6,9,10,11,12,13,1],
-"symbolIdx": [0,3,3,3,3,3,2,4,4,5,5,5,5,5,1],
+"objectIdx": [0,3,4,5,7,8,2,6,6,1,9,10,11,12,13],
+"symbolIdx": [0,3,3,3,3,3,2,4,4,1,5,5,5,5,5],
 "passes": [
 {"kind":"fill","colour":0,"path":{"coords":[0,0,44000,0,44000,30000,0,30000],"closed":true}},
 {"kind":"stroke","colour":19,"path":{"coords":[18000,10500,19381,10500,20500,9381,20500,8000,20500,6619,19381,5500,18000,5500,16619,5500,15500,6619,15500,8000,15500,9381,16619,10500,18000,10500],"flags":[0,1,2,0,1,2,0,1,2,0,1,2,0],"closed":true},"widthUm":350,"cap":"butt","join":"round"},
@@ -11,12 +11,12 @@
 {"kind":"glyph","colour":19,"glyphId":0,"partIdx":0,"instances":[6000,6000,1,0,1]},
 {"kind":"glyph","colour":19,"glyphId":1,"partIdx":0,"instances":[6000,24000,1,0,1]},
 {"kind":"glyph","colour":19,"glyphId":1,"partIdx":1,"instances":[6000,24000,1,0,1]},
-{"kind":"text","colour":19,"fontId":0,"sizeUm":5728.671,"glyphs":[23,20],"positions":[16235.986,-1151,19422,-1151]},
-{"kind":"text","colour":19,"fontId":0,"sizeUm":5728.671,"glyphs":[24,26],"positions":[17033.986,26220,20220,26220]},
-{"kind":"text","colour":19,"fontId":0,"sizeUm":5728.671,"glyphs":[25,22],"positions":[41033.984,28220,44220,28220]},
-{"kind":"text","colour":19,"fontId":0,"sizeUm":5728.671,"glyphs":[23,21],"positions":[25009.986,5192,28196,5192]},
-{"kind":"text","colour":19,"fontId":0,"sizeUm":5728.671,"glyphs":[20,19,19],"positions":[33789.98,10274,36975.992,10274,40162.008,10274]},
-{"kind":"stroke","colour":22,"path":{"coords":[26000,4000,36000,4000,36000,12000,26000,12000],"closed":true},"widthUm":300,"cap":"butt","join":"miter"}
+{"kind":"stroke","colour":22,"path":{"coords":[26000,4000,36000,4000,36000,12000,26000,12000],"closed":true},"widthUm":300,"cap":"butt","join":"miter"},
+{"kind":"text","colour":29,"fontId":0,"sizeUm":5728.671,"glyphs":[23,20],"positions":[16235.986,-1151,19422,-1151]},
+{"kind":"text","colour":29,"fontId":0,"sizeUm":5728.671,"glyphs":[24,26],"positions":[17033.986,26220,20220,26220]},
+{"kind":"text","colour":29,"fontId":0,"sizeUm":5728.671,"glyphs":[25,22],"positions":[41033.984,28220,44220,28220]},
+{"kind":"text","colour":29,"fontId":0,"sizeUm":5728.671,"glyphs":[23,21],"positions":[25009.986,5192,28196,5192]},
+{"kind":"text","colour":29,"fontId":0,"sizeUm":5728.671,"glyphs":[20,19,19],"positions":[33789.98,10274,36975.992,10274,40162.008,10274]}
 ],
 "glyphTable": [
 {"glyphId":0,"partIdx":0,"fills":[],"strokes":[{"path":{"coords":[0,3464,-3000,-1732,3000,-1732],"closed":true},"widthUm":350,"cap":"butt","join":"miter"}]},

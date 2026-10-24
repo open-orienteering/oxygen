@@ -34,7 +34,7 @@ const ISSPROM_HEADINGS = `101 102 103 104 105.1 105.2 107 108 109 110 111 112 11
 701 702 703 704 705 706 707 708 709 710.1 710.2 714 715`.split(/\s+/);
 
 const PURPLE_ROLES: Record<SymbolLibraryId, Record<string, "lower" | "upper">> = {
-  "ISOM2017-2": { 701: "lower", 702: "upper", 703: "lower", 704: "lower", 705: "lower", 706: "lower", 707: "upper", 708: "lower", 709: "upper", 710: "lower", 711: "upper", 712: "lower", 713: "lower", 715: "lower" },
+  "ISOM2017-2": { 701: "lower", 702: "upper", 703: "lower", 704: "upper", 705: "lower", 706: "lower", 707: "upper", 708: "lower", 709: "upper", 710: "lower", 711: "upper", 712: "lower", 713: "lower", 715: "lower" },
   "ISSprOM2019-2": { 701: "lower", 702: "upper", 703: "lower", 704: "upper", 705: "lower", 706: "lower", 707: "upper", 708: "lower", 709: "upper", "710.1": "lower", "710.2": "upper", 714: "upper", 715: "lower" },
 };
 
@@ -227,7 +227,7 @@ describe("symbol library — dimension table, ISOM 2017-2 Rev 6 (c)", () => {
   it("course planning", () => {
     expect(P("703").glyph.parts[0]).toMatchObject({ kind: "ring", diameterUm: 5350, widthUm: 350 }); // ø 5.0 (CC) + 0.35
     expect(P("706").glyph.parts).toMatchObject([{ diameterUm: 4350 }, { diameterUm: 6350 }]);
-    expect(asText(sym("ISOM2017-2", "704"))).toMatchObject({ digitHeightUm: 4000, colour: ISOM_IDX.get("purple-lower") });
+    expect(asText(sym("ISOM2017-2", "704"))).toMatchObject({ digitHeightUm: 4000, colour: ISOM_IDX.get("purple-upper") });
     expect(L("705").main).toMatchObject({ widthUm: 350, colour: ISOM_IDX.get("purple-lower") });
     expect(L("707").main).toMatchObject({ widthUm: 350, dash: { dashUm: 2000, gapUm: 500 }, colour: ISOM_IDX.get("purple-upper") });
     expect(L("708").main).toMatchObject({ widthUm: 700 });

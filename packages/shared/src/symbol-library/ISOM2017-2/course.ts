@@ -1,7 +1,7 @@
 /**
  * ISOM 2017-2 Rev 6 — 7xx Course planning symbols (purple). Dimensions µm
  * at 1:15 000; the course layer applies the print-scale factor (03 §6.6).
- * Purple role per 03 §2.4.
+ * Purple role per 03 §2.4, except 704 (upper; decision log).
  */
 
 import { arcCoords, area, atEnd, atStart, border, cross, dashed, glyph, hatch, line, placed, plus, point, ringCC, solid, spaced, stroke } from "../authoring.js";
@@ -29,8 +29,8 @@ export const course: LibraryEntryInput[] = [
   entry("701", "Start", "P", point(triangleOutline(PL, 350, 6000), "object"), { purpleRole: "lower", notes: "Triangle side 6.0 mm, 0.35 mm line; apex towards the first control." }),
   entry("702", "Map issue point", "P", point(stroke(PU, 600, [-1250, 0, 1250, 0]), "object"), { purpleRole: "upper", notes: "Bar 2.5 × 0.6 mm across the marked route." }),
   entry("703", "Control point", "P", point(ringCC(PL, 5000, 350)), { purpleRole: "lower", footprintM: 75, notes: "Circle ø 5.0 mm (CC), 0.35 mm." }),
-  entry("704", "Control number", "T", { type: "text", fontFamily: "liberation-sans", fontSizeUm: 5600, digitHeightUm: 4000, colour: PL }, {
-    purpleRole: "lower", notes: "Arial 4.0 mm digit height, non-bold; set with Liberation Sans. Lower purple in ISOM (upper in ISSprOM).",
+  entry("704", "Control number", "T", { type: "text", fontFamily: "liberation-sans", fontSizeUm: 5600, digitHeightUm: 4000, colour: PU }, {
+    purpleRole: "upper", notes: "Arial 4.0 mm digit height, non-bold; set with Liberation Sans. Upper purple by user decision 2026-10-24 (legibility; matches Mapper and Purple Pen) — a deliberate deviation from ISOM 2017-2 / 03 §2.4, which has it lower; ISSprOM has it upper.",
   }),
   entry("705", "Course line", "L", line({ main: solid(PL, 350) }), { purpleRole: "lower" }),
   entry("706", "Finish", "P", point([ringCC(PL, 4000, 350), ringCC(PL, 6000, 350)]), { purpleRole: "lower", notes: "Concentric circles ø 4.0 and 6.0 mm (CC), 0.35 mm." }),
