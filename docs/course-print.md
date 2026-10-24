@@ -59,14 +59,17 @@ const bytes = await w.save();
   `FontRef.family` (matching `bold` / `italic` first, else the family).
 - `page.resources` is the `OperatorResources` the operators ask for
   names: `font(ref, glyphIds)` records the glyphs a page draws and returns
-  `F<n>`; `glyph(mesh)` returns `G<n>`; `glyphOutline` serves the
+  `F<n>`; `glyph(mesh, matrix?)` returns `G<n>` for the part drawn
+  through `matrix` (the form's `/Matrix`: glyph µm → the layer unit, a
+  turn class folded in, C11); `glyphOutline` serves the
   fallback (§3.1). Names are handed out in first-use order — never a
   random suffix.
 - **Per document, not per page** (05 §5.10): one font object per face,
   subset at `save()` to the union of every page's glyphs; one form
-  XObject per distinct glyph part, deduplicated by content and bounding
-  box, so equal parts from two separately symbolised streams share one
-  object even when the streams number them differently.
+  XObject per distinct glyph part and `/Matrix` (none for the identity),
+  deduplicated by matrix, content and bounding box, so equal parts from
+  two separately symbolised streams share one object even when the
+  streams number them differently.
 - Boxes: `MediaBox` = the page; `TrimBox` = `trimBox`, default the
   `MediaBox` (the paper, 05 §5.8). No bleed and no marks in slice C (they
   belong to `cmyk-offset`, §2).
@@ -231,8 +234,12 @@ Base-map scale and meridian tilt come from `getBaseMapInfo` only (§10.1).
    purple and the layout objects' colours on top — the stack's order, no
    sandwich, nothing drawn twice.
 3. Emitted as `q <frame> re W n  q <T_map> cm 4 M <passes> Q  [q <T_map>
-   cm <map images> Q]  Q`; coordinates integer µm relative to the window
-   centre under a 9-decimal `cm` (05 §5.2, `map-rendering.md` §5.3).
+   cm <map images> Q]  Q`; coordinates integers in the layer unit
+   (≤ 5 µm printed, a whole fraction of 10 µm; C11) relative to the
+   window centre moved onto the 10 µm grid, each path under its own
+   anchor, under a 9-decimal `cm` that folds both in (05 §5.2,
+   `map-rendering.md` §5.3). The page layer is written the same way at
+   1:1 (5 µm units of page µm).
 
 A document whose stack is not aligned (no lower / upper purple) throws
 `CourseStackError` out of `composePage`; `maps.pdf` then prints the
@@ -610,6 +617,14 @@ pixels beyond 16 levels; scenes not listed are 0.000 % in all columns):
 | `course-all-controls` | 0.478 | 0.000 | 0.398 |
 | `page-sprint-a4` | 0.073 | — | 0.062 |
 | `page-ring` | 0.057 | — | 0.045 |
+
+C11 (2026-10-24) re-measured `rgb` with the layer unit: every ratio
+within 0.014 pp of the µm encoding's (largest: `lib-text-layout`
+1.964 → 1.978, `course-all-controls` 0.487 → 0.495 against the 2.5 %
+text budget), outline runs ≤ 0.002 %; all 57 golden tests and
+`qpdf --check` pass. A 10 µm printed unit was rejected on this tier
+(`lib-borders` 0.84 %, `lib-hatch` 0.45 %, `hatch-area` 0.22 %:
+`map-rendering.md` §5.3 "Units").
 | `page-rotated` | 0.027 | — | 0.015 |
 
 Every outline run is 0.000 %: the residual of the embedded-font runs is
@@ -887,15 +902,25 @@ turned glyph instances' `cm` operands —, shapes against the oracle and
 the backend-parity ratios did not move, the legacy colour ratio fell by
 0.03 pp.
 
-| Page set | Map | Page (mm) | Map → print scale | Rotation | Objects | Bytes `rgb` / `cmyk` (kB) | compose / write `rgb` / `cmyk` (ms) | > 16 levels `rgb` / `cmyk` (%) | > 32 levels (%) | Unexplained (px) | qpdf | Legacy: unexplained / differing (% of ink) | Symbols compared / diverging | Gate |
+**The table is the run after C11** (2026-10-24: the layer unit, anchors,
+turn-class forms, `map-rendering.md` §5.3), all seven pages in both
+modes. "Before C11" is the same page at the encoding before it, on the
+same code otherwise (C8's bold face and C10's turned symbols included, so
+a few kB above C7's numbers). Against that run nothing but the bytes
+moved: the unexplained pixels are identical on every page, the 16- and
+32-level ratios within 0.01 pp, the diverging symbols the same, every
+`qpdf --check` clean; Club-2026's legacy colour ratio reads 41.51 %
+(40.60 % in C7's run).
+
+| Page set | Map | Page (mm) | Map → print scale | Rotation | Objects | Bytes `rgb` / `cmyk` (kB): before C11 → C11 | compose / write `rgb` / `cmyk` (ms) | > 16 levels `rgb` / `cmyk` (%) | > 32 levels (%) | Unexplained (px) | qpdf | Legacy: unexplained / differing (% of ink) | Symbols compared / diverging | Gate |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
-| OCAD window | Sprint | 106 × 49 | 1:4000 → 1:4000 | 0° | 2 389 | 218 / 218 | 64 / 160 / 102 | 0.240 / 0.150 | 0.039 / 0.022 | 0 / 0 | ok | 1.54 / 29.32 | 58 / 4 | pass |
-| OCAD window | Crop-A | 143 × 117 | 1:15000 → 1:15000 | 0° | 4 927 | 459 / 459 | 134 / 288 / 235 | 1.419 / 1.248 | 0.128 / 0.096 | 0 / 0 | ok | 0.18 / 22.23 | 96 / 6 | pass |
-| OCAD window | Crop-B | 43 × 52 | 1:15000 → 1:7500 | 0° | 1 005 | 141 / 141 | 40 / 160 / 98 | 0.537 / 0.388 | 0.072 / 0.022 | 0 / 0 | ok | 3.66 / 21.95 | 59 / 3 | pass |
-| OCAD window | Club-2026 | 426 × 303 | 1:15000 → 1:5000 | -3.296° | 7 664 | 950 / 950 | 127 / 552 / 465 | 0.450 / 0.348 | 0.039 / 0.027 | 3 / 3 | ok | 8.91 / 40.60 | 101 / 6 | pass |
-| OCAD window | Club-full | 426 × 303 | 1:15000 → 1:15000 | -3.3° | 31 163 | 3 626 / 3 626 | 256 / 1467 / 1284 | 0.827 / 0.645 | 0.134 / 0.113 | 11 / 10 | ok | 0.33 / 20.13 | 142 / 9 | pass |
-| Appendix B | Sprint A3 | 420 × 297 | 1:4000 → 1:4000 | 0° | 10 441 | 885 / 885 | 102 / 483 / 491 | 0.153 / 0.095 | 0.014 / 0.008 | 0 / 0 | ok | 1.03 / 21.26 | 86 / 7 | pass |
-| Appendix B | Club-full A4 1:10 000 | 297 × 210 | 1:15000 → 1:10000 | -3.3° | 13 768 | 1 627 / 1 627 | 159 / 798 / 631 | 0.653 / 0.498 | 0.095 / 0.078 | 5 / 5 | ok | 0.83 / 18.33 | 117 / 8 | pass |
+| OCAD window | Sprint | 106 × 49 | 1:4000 → 1:4000 | 0° | 2 389 | 218 → 178 / 178 (−19 %) | 37 / 129 / 81 | 0.276 / 0.152 | 0.038 / 0.022 | 0 / 0 | ok | 1.54 / 29.32 | 58 / 4 | pass |
+| OCAD window | Crop-A | 143 × 117 | 1:15000 → 1:15000 | 0° | 4 927 | 464 → 372 / 372 (−20 %) | 98 / 252 / 176 | 1.423 / 1.250 | 0.134 / 0.100 | 0 / 0 | ok | 0.18 / 22.19 | 96 / 6 | pass |
+| OCAD window | Crop-B | 43 × 52 | 1:15000 → 1:7500 | 0° | 1 005 | 141 → 124 / 123 (−12 %) | 34 / 118 / 90 | 0.549 / 0.399 | 0.072 / 0.023 | 0 / 0 | ok | 3.66 / 21.95 | 59 / 3 | pass |
+| OCAD window | Club-2026 | 426 × 303 | 1:15000 → 1:5000 | -3.296° | 7 664 | 956 → 810 / 810 (−15 %) | 115 / 428 / 383 | 0.455 / 0.354 | 0.041 / 0.029 | 3 / 3 | ok | 8.91 / 41.51 | 101 / 6 | pass |
+| OCAD window | Club-full | 426 × 303 | 1:15000 → 1:15000 | -3.3° | 31 163 | 3 632 → 2 716 / 2 716 (−25 %) | 284 / 1562 / 1390 | 0.835 / 0.650 | 0.135 / 0.114 | 11 / 10 | ok | 0.33 / 20.12 | 142 / 9 | pass |
+| Appendix B | Sprint A3 | 420 × 297 | 1:4000 → 1:4000 | 0° | 10 441 | 889 → 683 / 683 (−23 %) | 225 / 716 / 445 | 0.155 / 0.095 | 0.015 / 0.008 | 0 / 0 | ok | 1.03 / 21.25 | 86 / 7 | pass |
+| Appendix B | Club-full A4 1:10 000 | 297 × 210 | 1:15000 → 1:10000 | -3.3° | 13 768 | 1 634 → 1 353 / 1 353 (−17 %) | 166 / 766 / 542 | 0.660 / 0.502 | 0.098 / 0.079 | 5 / 5 | ok | 0.83 / 18.32 | 117 / 8 | pass |
 
 **Backend parity.** Every page draws the same shapes as the oracle —
 0–11 unexplained pixels on pages of 0.2–13 megapixels — and at most
@@ -930,13 +955,26 @@ symbols on the window, unexplained ÷ ink and their codes:
   regardless. The importer now turns such a symbol, as Mapper's OCD
   import does (`map-import.md` §3.3, `docs/bugfix-ocad-point-rotation.md`);
   both Club-full pages pass. It was the C-gate's only failure.
-- **Size against 05 Appendix B (row C11).** Sprint A3: 885 kB against
-  ≈ 0.5 MB. Club-full A4 at 1:10 000: 1.63 MB against ≈ 0.25 MB. Its
-  content stream is 4.8 MB raw, flated to 1.63 MB (×0.34, as Appendix B
-  assumed), but the window holds ~280 k path points (Appendix B: ~42 k
-  coords) at ~17 bytes each — absolute integer µm, where Appendix B priced
-  ~6 B "relative" (PDF operands are absolute) — plus 14 k glyph instances
-  with a full six-number `cm` each (~50 B). Fonts are 17 kB.
+- **Size against 05 Appendix B (rows C11, C13).** Before C11: Sprint A3
+  889 kB against ≈ 0.5 MB, Club-full A4 at 1:10 000 1.63 MB against
+  ≈ 0.25 MB. The content stream of Club-full A4 was 4.8 MB raw, flated
+  ×0.34 (as Appendix B assumed) — 84 % of it path points, 64 k Béziers
+  and 71 k lines, ~14 B raw and ~5.7 B flated per point; 14 k glyph
+  instances with a six-number `cm` each (0.73 MB raw); text 20 kB, forms
+  3.5 kB, fonts 24 kB. **The estimate's counts, not its bytes per point,
+  are off**: the window holds 284 k path points where Appendix B assumed
+  ~42 k coordinates (Sprint A3: 142 k against 92 k), and 14 k instances
+  against ~1.4 k. C11 cut the encoding (−12 to −25 %: Club-full A4
+  1.35 MB, Sprint A3 683 kB); the floor of any absolute encoding of 284 k
+  points is about 1 MB, so 0.25 MB is out of reach by encoding.
+  **44 % of Club-full A4's points lie more than 5 mm outside the printed
+  frame** — the window takes whole objects within 20 mm of it, and long
+  contours and large areas cross it. Omitting what cannot paint inside
+  the frame (row C13) is worth a further ≈ 33 %; it does not change the
+  stream's geometry inside the frame but changes what is written, so it
+  is its own row (decision 2026-10-24). 05 Appendix B's budgets are
+  re-based on these counts: about 0.9 MB for this page once C13 lands
+  (1.35 MB × 0.67), to be measured then.
 - **Time on the event loop (row C12).** A Club-full A3 page takes
   0.28–0.81 s to compose and 1.3–3.5 s to write per mode over three runs:
   within 05's "hundreds of ms" only for the smaller pages (Sprint
@@ -965,8 +1003,11 @@ symbols on the window, unexplained ÷ ink and their codes:
   between pages). C7 measured 0.28–0.81 s composing and 1.3–3.5 s writing
   a Club-full A3 page (§11.5) — long enough to delay a card readout, so a
   worker thread.
-- **PDF size** (row C11): Club-full A4 at 1:10 000 is 1.63 MB, 6.5× 05
-  Appendix B's estimate (§11.5).
+- **PDF size** (row C13): after C11's encoding Club-full A4 at 1:10 000
+  is 1.35 MB and Sprint A3 683 kB (§11.5); 05 Appendix B's 0.25 / 0.5 MB
+  assumed 6.7× / 1.5× fewer path points than the windows hold and is not
+  reachable by encoding. Frame culling (C13) is the next ≈ 33 %; the
+  object margin of the window (20 mm, `window-raster.ts`) is C12's area.
 - **Corpus gate** (§11.3): every page passes since C10. Crop-A's 7 µm
   hatch offset between PDF and oracle is unexplained (below every budget).
 - **Golden tier on CI's poppler**: the budgets were measured with poppler
