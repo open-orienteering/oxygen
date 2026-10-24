@@ -304,8 +304,9 @@ export function registerCourseMapRoutes(
         },
       });
       const graphics = await loadGraphics(db, event.id, rows);
+      // docs/course-print.md §7.1: one page is "<event> · <map>".
       const info = {
-        title: `${event.name} maps`,
+        title: rows.length === 1 ? `${event.name} · ${rows[0].name}` : `${event.name} maps`,
         author: event.organizerName || undefined,
       };
       let body: Buffer | null = null;

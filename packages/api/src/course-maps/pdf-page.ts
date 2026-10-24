@@ -128,6 +128,9 @@ export async function renderCoursePages(opts: CoursePagesOptions): Promise<Cours
   const pngCache = new Map<string, Uint8Array>();
 
   for (const sheet of opts.sheets) {
+    // One page at a time on the event loop: let other requests (card
+    // readouts) run between pages of a long export (course-print.md §8.2).
+    await new Promise<void>((resolve) => setImmediate(resolve));
     const page = composePage(pageInputFor(opts.document, sheet, geo), fonts);
     for (const w of page.warnings) warnings.push(`${sheet.label}: ${w.code}: ${w.message}`);
     const images = new Map<number, Uint8Array>();

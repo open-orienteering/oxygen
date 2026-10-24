@@ -99,6 +99,30 @@ Structured JSON is validated at every tRPC boundary with the Zod schemas in
 
 ## Rendering pipeline
 
+`maps.pdf` has two paths behind the map pipeline switch
+(`map-pipeline-switch.md` §3.4; `course-print.md` §8). Both read the same
+templates, course maps, courses, controls and graphics; the response
+header `X-Print-Pipeline` says which one drew the file.
+
+A `vector` event whose map pins a document (C3):
+
+```text
+map_documents (pinned) + course_maps / map_templates rows
+  -> sheetForMapRow → resolveSheet   (paper, frame, window, course structure, description rows)
+  -> composePage: window objects ⊕ courseLayer() in one pass stream under T_map,
+                  clipped to the frame; page objects and the description block
+  -> writePage → PdfWriter (@cantoo/pdf-lib): DeviceCMYK, embedded subset fonts,
+                  one document for every page
+```
+
+No SVG, no `rsvg-convert`, no raster of the map. See
+[`course-print.md`](course-print.md) for the page model, the colour modes
+and the differences from the legacy page that are intended
+(`course-print.md` §8.4). A document whose colour stack is not aligned
+falls back to the legacy path.
+
+Every other event (`legacy`, or `vector` before its map has a document):
+
 ```text
 map_files.file_data
   -> readOcad
@@ -136,11 +160,13 @@ without changing the visible pattern period; see
 The API production image therefore installs:
 
 ```bash
-apt-get install librsvg2-bin fonts-liberation
+apt-get install librsvg2-bin fonts-liberation qpdf poppler-utils
 ```
 
-Missing `rsvg-convert` produces a clear server error rather than silently
-falling back to lower-quality output.
+`librsvg2-bin` and `fonts-liberation` serve the legacy path until slice E
+removes it; `qpdf` and `poppler-utils` check and rasterise printed PDFs
+(`course-print.md` §9.4). Missing `rsvg-convert` produces a clear server
+error rather than silently falling back to lower-quality output.
 
 ## API
 
@@ -168,7 +194,12 @@ GET /api/maps/:nameId/graphics/:id
 Both require `courses.view`. Preview requests are capped at 4096 pixels per
 axis. For a `vector` event with a pinned map document `window.png` is drawn
 from the document by the reference raster (`course-print.md` §10); other
-events use the OCAD → SVG path. Query, caps and caching are the same. Combined PDF pages are ordered by course, map `sort_order`, then map
+events use the OCAD → SVG path. Query, caps and caching are the same.
+`maps.pdf` follows the same switch (`course-print.md` §8): composed from
+the document for a `vector` event with a pinned document, `rsvg-convert`
+otherwise; `X-Print-Pipeline: vector | legacy` names the path, and the
+vector path answers 503 with `Retry-After` when the render queue is full.
+Combined PDF pages are ordered by course, map `sort_order`, then map
 `seq`.
 
 ## Maps and Map templates pages

@@ -10,6 +10,8 @@ RUN apt-get update \
       postgresql-client \
       librsvg2-bin \
       fonts-liberation \
+      qpdf \
+      poppler-utils \
  && rm -rf /var/lib/apt/lists/*
 
 # ─── Stage 2: Install JavaScript dependencies ──────────────
@@ -77,8 +79,10 @@ ENV OXYGEN_DEPLOY_REF=$BUILD_REF
 WORKDIR /app
 
 # The base stage supplies pg_dump for event backups, rsvg-convert for
-# printable course maps, Liberation Sans for deterministic text metrics,
-# and the same OpenSSL environment Prisma saw during dependency installation.
+# printable course maps (legacy path), Liberation Sans for deterministic text
+# metrics, qpdf + poppler-utils for checking and rasterising printed PDFs
+# (S3, docs/course-print.md §9.4: +14.5 MB), and the same OpenSSL environment
+# Prisma saw during dependency installation.
 
 # Copy the monorepo structure with deps (includes generated Prisma client)
 COPY --from=deps /app/node_modules ./node_modules

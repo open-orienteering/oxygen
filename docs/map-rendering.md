@@ -1641,7 +1641,8 @@ and the diff is reviewed with the PR like a golden.
 Three-way. The reference raster (§5.1) renders the fixture at 10 px/mm
 (254 dpi). The WebGL2 backend renders the same stream in headless
 Chromium (Playwright) and the PDF backend's page is rasterised with
-`pdftoppm` at the same density. Each is compared with the oracle by
+poppler's `pdftocairo` at the same density (C3; `docs/course-print.md`
+§9.2). Each is compared with the oracle by
 `diffImages(a, b, channelTolerance = 16)`: a pixel differs when any
 channel differs by more than 16/255; the fixture passes when the fraction
 of differing pixels is ≤ 0.5 % (04 §9 budget). Backends are compared
@@ -1760,6 +1761,32 @@ so it is scaled, not thinned. `lib-text`'s residual is the smallest text (≈ 15
 atlas's 32 px), spread along edges with no systematic offset. The whole
 document compare (`compare=1`) holds MSDF to the per-pass path at the
 ordinary 0.5 % on `e2e/test.xmap`: 0.217 %.
+
+**PDF leg** (C3, `packages/api/src/render/__tests__/pdf-golden.test.ts`;
+the method and the full table are `docs/course-print.md` §9.2). Every
+golden scene is written as a one-page PDF covering its golden frame,
+every page scene through the composer, in `rgb` and `cmyk`; `pdftocairo`
+rasterises at the oracle's own supersample (4× scenes, 2× pages) and the
+result is box-filtered down. Budgets as above: **≤ 0.5 %** for every
+scene, and for a scene with text the same 0.5 % with text written as
+glyph outlines; the embedded-font run of a text scene is the PDF's text
+tier at **≤ 2.5 %** (the rasteriser draws embedded fonts through
+FreeType's glyph renderer, not the outlines the oracle fills — the PDF
+counterpart of the MSDF tier). `cmyk` pages are compared against the
+oracle drawn in the rasteriser's own CMYK → RGB conversion of each stack
+colour. `pdftoppm` (Splash) is not used: its stroke adjustment snaps
+fills and hairlines to the pixel grid (2–5 % on geometry-exact library
+scenes). Measured at introduction (`rgb`, poppler 22.02):
+
+| Scene | PDF, embedded fonts | PDF, text as outlines |
+|---|---|---|
+| contract fixtures, `pilot-scene`, `lib-*` without text, page scenes | ≤ 0.073 % | — |
+| `text-with-halo` | 0.000 % | 0.000 % |
+| `lib-text` | 1.210 % | 0.000 % |
+| `lib-halos` | 0.369 % | 0.000 % |
+| `lib-text-layout` | 1.964 % | 0.000 % |
+| `lib-colour-order` | 0.118 % | 0.000 % |
+| `course-*` | 0.013–0.478 % | 0.000 % |
 
 **Designing a golden scene.** Two layouts turn that quantisation into a
 failure without any geometry being wrong, and the library scenes avoid

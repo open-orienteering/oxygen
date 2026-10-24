@@ -825,6 +825,8 @@ describe("maps.pdf route switch", () => {
     expect(res.headers["content-disposition"]).toContain(`${vec.nameId}_Ro_d_A5.pdf`);
     const pdf = await PDFDocument.load(res.rawPayload);
     expect(pdf.getPageCount()).toBe(1);
+    const event = await vec.db.event.findUniqueOrThrow({ where: { id: vec.eventId } });
+    expect(pdf.getTitle()).toBe(`${event.name} · Röd A5`);
     const missing = await server.inject({ method: "GET", url: pdfUrl(vec.nameId, "?maps=99999") });
     expect(missing.statusCode).toBe(400);
   }, 60_000);

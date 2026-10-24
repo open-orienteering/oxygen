@@ -7,12 +7,12 @@ Normative for slice C of the vector map pipeline (research:
 
 > §1–3 (writer, colour modes, fonts and determinism) are C1's; §4–7
 > (page model, `resolveSheet`, layers, page objects and graphics, boxes,
-> metadata and geospatial) C2's; §8–9 (route, golden PDFs, CI) are
-> reserved for C3; §10 (layout-editor preview) is C6's. How a *pass* becomes PDF content is
+> metadata and geospatial) C2's; §8–9 (route, golden PDFs, CI) C3's;
+> §10 (layout-editor preview) is C6's. How a *pass* becomes PDF content is
 > `docs/map-rendering.md` §5.3; this chapter owns everything around it.
 
 Status: **draft** — §1–3 written by C1, §10 by C6 (2026-10-23), §4–7 by
-C2 (2026-10-24).
+C2, §8–9 by C3 (2026-10-24).
 
 ## 1. The print module and its writer
 
@@ -163,8 +163,8 @@ equal bytes:
 | `print/__tests__/fonts.test.ts` | subset keeps ids: kept glyph records and advances byte-equal, composite components kept, others empty, cut after the highest id, < ¼ of the file; checksums (`0xB1B0AFBA`), byte-identical across runs, dropped tables; `W` grouping; ToUnicode pairs; hex runs; subset tag; descriptor metrics |
 | `print/__tests__/writer.test.ts` | tier 2 (05 §7): PDF 1.7, page count, `MediaBox` / `TrimBox`, `Info` with fixed dates; per face Type0 → Identity-H → CIDFontType2 → `CIDToGIDMap /Identity` → `FontDescriptor` → `FontFile2` with `Length1` = program length, subset tag pattern, ToUnicode covers every drawn id; form XObjects (`Subtype /Form`, `BBox`) and clip blocks; byte-identical files with `deterministic` (cmyk and rgb); real dates and differing bytes without; a face the subsetter cannot read → `PDF_FONT_OUTLINES` warning and no font; outline mode embeds no font and draws no `BT` |
 
-Not in vitest until C3: `qpdf --check` and the rasterised comparison
-(`pdftoppm`) against the reference raster.
+`qpdf --check` and the rasterised comparison against the reference
+raster are §9.2–9.3 (C3).
 
 ## 4. The page model
 
@@ -446,7 +446,194 @@ frame alone — the frame clip is the raster's extent — composited with the
 page layer on white paper, at 10 px/mm, supersampled 2× (an A4 sheet at
 the scene goldens' 4× would be a ~400 MB intermediate). The WebGL2
 golden spec does not draw pages (the viewer has no page view until slice
-D); C3 compares the `rgb` PDF rasterised by `pdftoppm` against them.
+D); the PDF golden tier compares the `rgb` page rasterised by
+`pdftocairo` against them (§9.2).
+
+## 8. The `maps.pdf` route
+
+`GET /api/maps/:nameId/maps.pdf` (`docs/course-maps.md` API: query
+`maps` / `courses` / `allControls`, `courses.view`, 200-page cap, pages
+ordered by course, `sort_order`, `seq`) has two paths behind one
+handler (`packages/api/src/course-maps/routes.ts`). The switch gates the
+read only (`map-pipeline-switch.md` §3.4): both paths read the same
+`course_maps`, `map_templates`, course, control and graphics rows, and
+neither writes anything, so **rollback is the switch** — flip the event
+back to `legacy` and the same rows print through rsvg.
+
+### 8.1 Which path prints
+
+| Event | Path | `X-Print-Pipeline` |
+|---|---|---|
+| `map_pipeline = vector` and the latest `map_files` row pins a document | the composer, §8.2 | `vector` |
+| `legacy`, or `vector` without a pin | SVG → `rsvg-convert` → pdf-lib merge, as before slice C (`docs/course-maps.md` "Rendering pipeline") | `legacy` |
+| `vector` with a pin whose colour stack is not aligned (`course.CourseStackError`: no lower / upper purple) | the legacy path, with one `warn` log line per request naming the document hash | `legacy` |
+
+The decision is `loadPinnedPrintDocument(db, eventId)` (`pdf-page.ts`),
+which reads `getBaseMapInfo` (§10.1) — the same function, so the
+preview and the print never disagree on the path. Every other error on
+the vector path is an error (400 with the message, as the legacy path
+answers), not a fallback: a broken composer must be seen, not hidden
+behind rsvg.
+
+### 8.2 The vector path
+
+1. The rows `findMapRows` selects, each turned into a sheet by
+   `sheetForMapRow` (§5) with the event, its controls and the pinned
+   document's `getBaseMapInfo` scale and meridian tilt.
+2. Graphics referenced by any row's or template's image objects (event
+   or club scope), loaded once — the same query as the legacy resolver.
+3. `renderCoursePages({ document, rotationCorrectionDeg, sheets,
+   graphics, mode: "cmyk", info })`: one `PdfWriter`, one page per
+   sheet, fonts, glyph forms and images shared (§4.5). Not
+   `deterministic`: real dates (§3.2).
+4. Under a `renderGate()` permit like tiles and `window.png`; a full
+   queue answers **503** with `Retry-After` (the legacy path has no
+   gate and never answers 503). Composing runs on the API's event loop
+   and yields between pages (`setImmediate`), so other requests run
+   between the pages of a long export; each page is one synchronous
+   compose + write.
+5. Composer and writer warnings (`NO_FONT` for a page text in a family
+   with no face, `IMAGE_MISSING`, `SVG_RASTER`) go to the log at `warn`;
+   the PDF is still served.
+
+The route always writes `cmyk` (decision (2), 2026-10-23: print profiles
+are a later row). `rgb` exists for the golden tier and proofs; no query
+parameter reaches it.
+
+### 8.3 Response
+
+As before slice C: `Content-Type: application/pdf`,
+`Content-Disposition: attachment; filename="<event>_<map>.pdf"` for one
+page and `"<event>_maps.pdf"` for several, `Cache-Control: no-store`;
+404 for an unknown event or no maps, 400 for a bad selection. New:
+**`X-Print-Pipeline: vector | legacy`** names the path that drew the
+file (E2E and support read it). `Info /Title` per §7.1 (`<event> · <map>`
+for one page, `<event> maps` for several), `/Author` the organiser.
+
+### 8.4 Sanctioned differences from the legacy PDF
+
+The 03 §6.9 rule as `map-rendering.md` §6.4 applies it: a place where
+the vector page differs from the legacy page of the same sheet is either
+on this list or a bug. C7's corpus print run classifies by these codes;
+S2 judges the print shop's view of the first two.
+
+| Code | Difference | Decided |
+|---|---|---|
+| `cmyk-colour` | DeviceCMYK from the colour stack (§2) against the legacy page's RGB from rsvg: on screen and through a printer's own conversion the colours shift | user, 2026-10-23 (3) |
+| `colour-overrides` | the event map's `colorOverrides` are not applied (the column stays, unused) | user, 2026-10-23 (3) |
+| `north-lines-below` | `northLinesBelow` is not applied | user, 2026-10-23 (3) |
+| `description-weight` | the description block's header, title and wide-row lengths in regular weight (`weight: 700` kept; no bold face ships until row C8) | user, 2026-10-24 (C2 question) |
+| `description-font` | Liberation Sans in the block (the legacy font stack lists DejaVu Sans first) | C2, §7.4 |
+| `course-symbol-sizes` | 7xx symbols at the library's dimensions × the document factor, the template's appearance as multipliers (`course-layer.md` §2) | user, 2026-10-24 (C0 question) |
+| `start-turned` | the 701 start triangle turned to the first control | C0 |
+| `library-course-lines` | 709 out-of-bounds boundary and imported `marked_route` / `restricted_line` / `forbidden_route` lines drawn by the library | C0, C2 |
+| `start-finish-clearance` | legs cut at the start / finish symbols' own outlines | C0 |
+| `size-aware-cuts` | automatic circle and leg cuts from the pinned document with clearance = feature radius + line width / 2 + 0.25 mm | user, 2026-10-24 (C5 question) |
+| `rotated-overprint` | on a rotated window, map-anchored images, control numbers and map text turn with the map (legacy drew the overprint upright in page space) | C2, §7.4 |
+| `image-rgb` | images stay DeviceRGB in `cmyk` (CMYK images are the profiles row) | C2, §7.4 |
+| `library-symbols`, `stack-order` | the base map as the window preview draws it (§10.4): matched symbols drawn by the library, every `map-rendering.md` §6.4 code, and the document's own colour order — on `e2e/test.ocd` the stack puts yellow above lower purple, so legs lie under the yellow area | 2026-10-23 slice C split; C6 |
+
+Geometry is not on the list: paper size, frame, window, scale, rotation
+and control positions agree with the legacy page (the integration and
+E2E tests check page count and size; C7 compares the rasters).
+
+## 9. Tests and CI
+
+### 9.1 Tests
+
+| Test | Covers |
+|---|---|
+| `packages/api/src/__tests__/integration/course-maps.test.ts` "maps.pdf route switch" | `vector` + pin → one composed PDF, pages at each template's paper (A4, A5), never the rsvg converter, `X-Print-Pipeline: vector`, `Info` title for one and several pages, file names; selection errors unchanged; `qpdf --check` clean; a `legacy` event, a `vector` event without a pin, and the same event flipped back all print legacy; an injected `CourseStackError` falls back to legacy |
+| `packages/api/src/render/__tests__/pdf-golden.test.ts` | the PDF golden tier, §9.2, and `qpdf --check` on every file it writes |
+| `e2e/course-maps.spec.ts` (`map-legacy`, `map-vector`) | the export flows of the maps page: page count and A4 page size of the single-map, course and all-controls downloads (05 §7), `X-Print-Pipeline` equal to the project's value |
+
+### 9.2 The PDF golden tier
+
+05 §7 tier 3, the third backend of `map-rendering.md` §6.2: every golden
+scene (`render.goldenSceneNames`: the contract fixtures, the pilot scene,
+the library and course scenes) and every page scene (§7.5), written by
+the print backend and rasterised by poppler, against the reference
+raster. `packages/api/src/render/pdf-golden.ts`:
+
+- **Scene pages.** One page the size of the scene's golden frame
+  (`goldenFrame(stream).bounds`), the stream at 1:1 under
+  `layerMatrix({ scaleRatio: 1, atPt: −frame origin })`, the colours as a
+  stack from the scene's hex through `rgbToCmykNaive` (exact for the
+  library and course scenes, whose hex is `cmykToHex` of their stack).
+  **Page scenes** go through `composePage` → `writePage` exactly as the
+  route does.
+- **Rasteriser: `pdftocairo`** (poppler-utils), at the oracle's own
+  supersample (4× scenes, 2× pages) and box-filtered down, so both sides
+  of the comparison average the same sub-pixel grid. `pdftoppm` (Splash)
+  was measured first and rejected: it snaps fills and hairlines to the
+  pixel grid and puts 0.4–5 % of the pixels of geometry-exact scenes
+  beyond the tolerance even supersampled (`lib-hatch` 2.4 %,
+  `lib-borders` 2.1 %, `text-with-halo` 5.1 % at 4×); Cairo matches the
+  oracle to ≤ 0.13 % on every scene without embedded text.
+- **`rgb`** against the committed golden (`e2e/__golden__/map-gl/`) at
+  `diffImages(…, 16)` and **≤ 0.5 %** differing pixels. A scene with
+  text passes is written twice: with **text as glyph outlines**
+  (`text: "outline"`), held to 0.5 % — glyphs are placed by one `Tm`
+  each in both modes, so this run proves the text geometry — and with
+  **embedded fonts**, held to **≤ 2.5 %**: the rasteriser draws an
+  embedded font through FreeType's glyph renderer, not the outlines the
+  oracle fills, the same situation as the WebGL2 MSDF text tier
+  (`map-rendering.md` §6.2).
+- **`cmyk`** against the oracle drawn in the **rasteriser's own CMYK →
+  RGB conversion** of each stack colour (`rasteriserCmykColours`: one
+  swatch per colour, read back), same budgets. Poppler does not convert
+  CMYK naively (purple, brown and greens differ by up to ~100 levels per
+  channel), so a "naive conversion with a looser tolerance" (05 §7)
+  would need a tolerance that hides geometry; making the conversion
+  explicit keeps the 16-level tolerance.
+
+Measured at introduction (C3, 2026-10-24; poppler 22.02, percent of
+pixels beyond 16 levels; scenes not listed are 0.000 % in all columns):
+
+| Scene | `rgb` embedded fonts | `rgb` outlines | `cmyk` embedded fonts |
+|---|---|---|---|
+| `dashed-bezier-stroke` | 0.036 | — | 0.021 |
+| `pilot-scene` | 0.038 | 0.000 | 0.038 |
+| `lib-text` | 1.210 | 0.000 | 0.947 |
+| `lib-halos` | 0.369 | 0.000 | 0.369 |
+| `lib-text-layout` | 1.964 | 0.000 | 1.662 |
+| `lib-colour-order` | 0.118 | 0.000 | 0.038 |
+| `course-legs` | 0.125 | 0.000 | 0.085 |
+| `course-cuts` | 0.098 | 0.000 | 0.092 |
+| `course-objects` | 0.037 | 0.000 | 0.034 |
+| `course-sprint` | 0.013 | 0.000 | 0.013 |
+| `course-all-controls` | 0.478 | 0.000 | 0.398 |
+| `page-sprint-a4` | 0.073 | — | 0.062 |
+| `page-ring` | 0.057 | — | 0.045 |
+| `page-rotated` | 0.027 | — | 0.015 |
+
+Every outline run is 0.000 %: the residual of the embedded-font runs is
+the glyph renderer alone, largest on the small text of `lib-text` and
+`lib-text-layout`. The page scenes' outline runs are not written (their
+text is a few short strings, already under 0.5 % with fonts).
+
+### 9.3 `qpdf --check`
+
+Every file the golden tier writes (both modes) and the composed route
+output in the integration test must pass `qpdf --check` (exit 0, "No
+syntax or stream encoding errors"). The tests that need `qpdf` or
+`pdftocairo` skip when a tool is missing and **fail under CI**
+(`process.env.CI`): `.github/workflows/ci.yml` installs `qpdf` and
+`poppler-utils` in the unit and integration jobs.
+
+### 9.4 Tools in the production image (S3)
+
+09 §7 S3: the tools go into the production image if they add ≤ 30 MB,
+else they stay CI-only. Measured 2026-10-24 with
+`docker build --network host --target api` and `docker image inspect`:
+1 001 907 361 bytes without, 1 016 377 611 bytes with `qpdf` and
+`poppler-utils` in the base stage's `apt-get install` — **+14.5 MB**
+(qpdf 11.3.0, poppler 22.12.0; `libcairo2` is already there for
+librsvg). So they are **in-image** (`Dockerfile` base stage): a running
+instance can check and rasterise what it prints (C7's corpus run, a
+future preflight) without a second toolchain. `rsvg-convert` and
+`fonts-liberation` stay until slice E removes the legacy path (09 §9
+step 5).
 
 ## 10. Layout-editor preview (interim)
 
@@ -548,11 +735,14 @@ the reference raster (`map-rendering.md` §5.1).
 
 ## Pending in this chapter
 
-- **§8–9** (C3) — the `maps.pdf` route switch (`loadPinnedPrintDocument`
-  → `sheetForMapRow` → `renderCoursePages`, legacy path otherwise; the
-  `CourseStackError` fallback), golden PDFs (`pdftoppm` of the `rgb`
-  pages against the page goldens and the scene goldens), `qpdf --check`
-  in CI, the sanctioned-differences list (§7.4 feeds it).
+- **Composing off the event loop**: each page is composed and written
+  synchronously on the API's event loop (§8.2 step 4 yields only between
+  pages; 05 Appendix B: hundreds of ms per page). A worker thread if
+  C7's corpus run shows pages long enough to delay a card readout.
+- **Golden tier on CI's poppler**: the budgets were measured with poppler
+  22.02 (dev) and 22.12 (image); the CI runner's distribution may ship a
+  newer one. A drift beyond the budgets is a rasteriser change, re-measured
+  and recorded here, not a reason to loosen the 0.5 %.
 - **Bold description-block text** (SLICES row C8): the block's header,
   title and lengths carry `weight: 700` but print regular — only the
   regular faces ship (`map-rendering.md` §4.10) and `symbolise` picks a
@@ -575,14 +765,4 @@ the reference raster (`map-rendering.md` §5.1).
   per-variant pages (08): one frame per page in slice C.
 - **Serif and mono faces**: no file ships (`map-rendering.md` §4.10), so
   no PDF font either.
-- **Rasterised PDF comparison**: a manual `pdftoppm -r 254` of the
-  golden scenes in `rgb` against the committed goldens (C1, not
-  committed) matched the contract fixtures within 0.11 % and showed the
-  library scenes' remaining 1–6 % to be poppler's thin-line stroke
-  adjustment and anti-aliasing at dash and glyph edges, not geometry —
-  C3 picks the rasteriser options and tolerance.
 - §10 is retired by slice D (§10.6); §11 (corpus numbers) is C7's.
-- E2E: `e2e/course-maps.spec.ts` does not yet run under `vector`, so no
-  Playwright project requests `window.png` or a vector PDF from a pinned
-  event; C3's dual-run of that spec (`map-pipeline-switch.md` §7) covers
-  it.
