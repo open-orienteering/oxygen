@@ -2,17 +2,21 @@
  * The vector base map: a map document drawn by the WebGL2 arena path
  * (docs/map-rendering.md §5.2) on a canvas the size of the viewer's
  * container. The alternative to `TileLayer` inside `MapViewer`
- * (§5.4 "Layer"); the course overlay stays React SVG on top.
+ * (§5.4 "Layer"). With `course` set it also draws the course layer
+ * through the engine's dynamic bucket (§5.2 "Dynamic bucket", §5.4
+ * "Overlay"); the React SVG on top keeps the UI layer.
  *
  * The canvas is not rotated by CSS: the viewport rotation is part of the
  * GL view (`glView`), so nothing is resampled. The engine and its worker
  * live as long as the layer; `view` changes only redraw (one per frame).
  */
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { ViewRect } from "../map-gl/buckets";
-import { MapGlEngine, workerTransport } from "../map-gl/engine";
+import { MapGlEngine, workerTransport, type CourseInfo } from "../map-gl/engine";
+import type { CourseLayerRequest } from "../map-gl/worker";
+import type { render } from "@oxygen/shared";
 import { MapGlRenderer } from "../map-gl/renderer";
 import type { LoadedMapDocument } from "../lib/map-document-cache";
 import { loadMapFonts, loadTextAtlas } from "../lib/map-fonts";
@@ -35,9 +39,15 @@ interface Props {
    * was lost. The host decides the fallback (docs/map-pipeline-switch.md §3).
    */
   onUnavailable?: () => void;
+  /** The course layer to draw (§5.2 "Dynamic bucket"); `null` none. */
+  course?: CourseLayerRequest | null;
+  /** Each current course reply: the derivation and sizes the UI layer is drawn from. */
+  onCourse?: (info: CourseInfo) => void;
+  /** After the load: whether this document can draw a course layer (an unaligned stack cannot). */
+  onCourseSupport?: (supported: boolean) => void;
 }
 
-export function VectorMapLayer({ doc, view, width, height, budget, zIndex = 1, onUnavailable }: Props) {
+export function VectorMapLayer({ doc, view, width, height, budget, zIndex = 1, onUnavailable, course = null, onCourse, onCourseSupport }: Props) {
   const { t } = useTranslation("dashboard");
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const engineRef = useRef<MapGlEngine | null>(null);
@@ -50,9 +60,18 @@ export function VectorMapLayer({ doc, view, width, height, budget, zIndex = 1, o
   const unavailableRef = useRef(onUnavailable);
   unavailableRef.current = onUnavailable;
 
-  const colours = useMemo(() => documentColours(doc.header.colours), [doc.header.colours]);
-  const colourRef = useRef(colours);
-  colourRef.current = colours;
+  const courseRef = useRef(course);
+  courseRef.current = course;
+  const onCourseRef = useRef(onCourse);
+  onCourseRef.current = onCourse;
+  const onCourseSupportRef = useRef(onCourseSupport);
+  onCourseSupportRef.current = onCourseSupport;
+  // The stack the engine draws with (the course-completed one, §5.2 "Dynamic bucket"), as RGB per index.
+  const colourRef = useRef<{ stack: render.ColourStack; rgb: (i: number) => [number, number, number] } | null>(null);
+  const coloursOf = (stack: render.ColourStack) => {
+    if (colourRef.current?.stack !== stack) colourRef.current = { stack, rgb: documentColours(stack) };
+    return colourRef.current.rgb;
+  };
 
   /** Draws the current view on the next animation frame (coalesced). */
   const requestDraw = useCallback(() => {
@@ -65,7 +84,7 @@ export function VectorMapLayer({ doc, view, width, height, budget, zIndex = 1, o
       if (canvas.width !== v.widthPx) canvas.width = v.widthPx;
       if (canvas.height !== v.heightPx) canvas.height = v.heightPx;
       engine.setView(v);
-      engine.render({ colour: colourRef.current });
+      engine.render({ colour: coloursOf(engine.colours) });
     });
   }, []);
 
@@ -91,6 +110,9 @@ export function VectorMapLayer({ doc, view, width, height, budget, zIndex = 1, o
     engineRef.current = engine;
     loadedRef.current = false;
     engine.onChange = requestDraw;
+    engine.onCourse = (info) => onCourseRef.current?.(info);
+    // Sent right after the load reaches the worker.
+    engine.setCourse(courseRef.current);
     let cancelled = false;
     setStatus("loading");
     (async () => {
@@ -117,6 +139,10 @@ export function VectorMapLayer({ doc, view, width, height, budget, zIndex = 1, o
         fonts: fonts.map((f) => ({ family: f.family, bytes: f.bytes.slice(0) })),
         textAtlas,
         firstView: first ? { kind: "view", view: first } : undefined,
+        courseLayer: true,
+      }).then((summary) => {
+        if (!cancelled) onCourseSupportRef.current?.(summary.courseLayer?.supported === true);
+        return summary;
       });
       if (cancelled) return;
       loadedRef.current = true;
@@ -140,6 +166,11 @@ export function VectorMapLayer({ doc, view, width, height, budget, zIndex = 1, o
       renderer.dispose();
     };
   }, [doc, budget, attempt, requestDraw]);
+
+  // Every course change is one worker request; its reply asks for the redraw (`onChange`).
+  useEffect(() => {
+    engineRef.current?.setCourse(course);
+  }, [course]);
 
   // Every view change is one redraw; detail requests and evictions follow from `setView`.
   useEffect(() => {

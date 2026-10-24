@@ -83,6 +83,8 @@ import {
   pillHalfWidth,
 } from "../lib/course-leg-labels";
 import { useMediaQuery } from "../hooks/useMediaQuery";
+import { courseLayerRequest } from "../lib/course-layer-request";
+import type { CourseInfo } from "../map-gl/engine";
 
 /** Persisted compass state: "1"/absent = rotation locked (north up). */
 const ROTATION_LOCK_STORAGE_KEY = "oxygen.map.rotationLock";
@@ -356,6 +358,24 @@ interface EditorLabelHit {
   /** Control position in map mm — the offset is drop − this. */
   mmX: number; mmY: number;
   from: { dx: number; dy: number } | null;
+}
+
+/**
+ * A control's number offset on the single highlighted course: the one
+ * being dragged, else a move still round-tripping, else the stored one.
+ */
+function labelOffsetOf(
+  id: string,
+  controls: readonly ControlOverlay[],
+  stored: CourseOverlay["labelOffsets"],
+  drag: { id: string; x: number; y: number } | null,
+  pending: ReadonlyMap<string, { to: { dx: number; dy: number } }>,
+): { dx: number; dy: number } | undefined {
+  if (drag?.id === id) {
+    const ctrl = controls.find((k) => k.id === id);
+    return ctrl ? { dx: drag.x - ctrl.x, dy: drag.y - ctrl.y } : undefined;
+  }
+  return pending.get(id)?.to ?? stored?.[id];
 }
 
 // ─── Component ──────────────────────────────────────────────
@@ -733,6 +753,48 @@ export function MapViewer({
     },
     [paperFrame],
   );
+
+  // ─── Course layer (vector) ──────────────────────────────
+  // Under `vector` the course is drawn by the GL backend's dynamic bucket
+  // in colour order with the map (docs/map-rendering.md §5.4 "Overlay");
+  // the SVG keeps the UI layer. A document whose stack cannot take the
+  // layer (`onCourseSupport(false)`) keeps the SVG course overlay.
+  const [courseSupport, setCourseSupport] = useState<boolean | null>(null);
+  const [courseInfo, setCourseInfo] = useState<CourseInfo | null>(null);
+  const glCourse = paperMode && courseSupport !== false;
+  const courseRequest = useMemo(() => {
+    if (!glCourse) return null;
+    const positions = new Map<string, Pt>();
+    for (const c of controls) {
+      const mm = controlMm(c);
+      if (mm) positions.set(c.id, mm);
+    }
+    // The editor's local positions, as the SVG overlay draws them (pending moves while the data is stale).
+    if (editor) {
+      for (const [id, m] of pendingMoves) {
+        const c = controls.find((k) => k.id === id);
+        if (c && Math.abs(c.x - m.from.x) <= 1e-9 && Math.abs(c.y - m.from.y) <= 1e-9) positions.set(id, m.to);
+      }
+      if (editorDragPos) positions.set(editorDragPos.id, { x: editorDragPos.x, y: editorDragPos.y });
+    }
+    const sequenceLabels = showDescriptions || !!editor;
+    const highlighted = courses.filter((c) => c.highlight || c.name === highlightCourseName);
+    const single = sequenceLabels && highlighted.length === 1 ? highlighted[0] : null;
+    return courseLayerRequest({
+      controls,
+      positions,
+      courses,
+      highlightCourseName,
+      courseGeometry,
+      sequenceLabels,
+      // Manual offsets apply with the sheet or the editor only, as on the SVG overlay.
+      labelOffset: (id) => (single ? labelOffsetOf(id, controls, single.labelOffsets, editorLabelDragPos, pendingLabelMoves) : undefined),
+      exclude: editor?.fadeNonCourse
+        ? new Set(controls.filter((c) => c.type === "Control" && !editor.courseControlIds?.has(c.id)).map((c) => c.id))
+        : undefined,
+    });
+  }, [glCourse, controls, controlMm, editor, pendingMoves, editorDragPos, showDescriptions, courses, highlightCourseName,
+      courseGeometry, editorLabelDragPos, pendingLabelMoves]);
 
   /** Fits the whole map: the document's extent (paper) or the tile bounds (mercator). */
   const fitWholeMap = useCallback(() => {
@@ -1762,19 +1824,23 @@ export function MapViewer({
   const overlayContent = useMemo(() => {
     if (!viewport || containerSize.w === 0 || containerSize.h === 0) return null;
 
-    const radius = 2.5 * symbolScale;
-    const stroke = Math.max(0.5, 0.35 * symbolScale);
+    // Under the GL course layer the UI layer (hit targets, status and
+    // selection rings) takes the drawn symbols' sizes: the library's
+    // dimensions × the document factor (course-layer.md §3.1).
+    const glm = glCourse ? courseInfo?.metrics : null;
+    const radius = (glm?.circleRadiusMm ?? 2.5) * symbolScale;
+    const stroke = Math.max(0.5, (glm?.lineWidthMm ?? 0.35) * symbolScale);
     // Control numbers use the print appearance's digit height (ISOM 704,
     // 4 mm) so the editor, the layout preview and the PDF draw the same
     // glyph at the same spot. `labelSize` is the em (SVG font-size) that
     // yields that digit height — it is also what the placer sizes boxes
     // from, so auto-placement picks the same ring in all three.
-    const labelDigitHeight = defaultMapAppearance.numberHeightMm * symbolScale;
+    const labelDigitHeight = (glm?.digitHeightMm ?? defaultMapAppearance.numberHeightMm) * symbolScale;
     const labelSize = labelDigitHeight / CONTROL_NUMBER_CAP_HEIGHT_RATIO;
-    const startSize = 3.5 * symbolScale;
+    const startSize = (glm?.startRadiusMm ?? 3.5) * symbolScale;
     const finishInner = 2.0 * symbolScale;
-    const finishOuter = 3.0 * symbolScale;
-    const legStroke = Math.max(0.5, 0.35 * symbolScale);
+    const finishOuter = (glm?.finishRadiusMm ?? 3.0) * symbolScale;
+    const legStroke = Math.max(0.5, (glm?.lineWidthMm ?? 0.35) * symbolScale);
 
     // Map mm → inner px: through the paper view, or (tiles) the affine.
     const hasMm = viewport.kind === "paper" || affine !== null;
@@ -1795,7 +1861,8 @@ export function MapViewer({
     }
 
     // Override with precise OCAD positions from courseGeometry when available
-    if (courseGeometry && hasMm) {
+    // (the GL layer draws at the controls' own positions; its UI layer follows).
+    if (courseGeometry && hasMm && !glCourse) {
       for (const f of (courseGeometry.features || [])) {
         const p = f.properties;
         if (!p?.code || !f.geometry || f.geometry.type !== "Point") continue;
@@ -1870,7 +1937,7 @@ export function MapViewer({
       legHits.push({ key, d, course: courseName, index: legIndex });
     };
 
-    if (courseGeometry && hasMm) {
+    if (courseGeometry && hasMm && !glCourse) {
       const features = courseGeometry.features || [];
       for (let fi = 0; fi < features.length; fi++) {
         const feature = features[fi];
@@ -2044,7 +2111,9 @@ export function MapViewer({
     // is provided, fall back to the legacy behaviour of drawing just one
     // highlighted course.
     let coursesToDraw: typeof courses;
-    if (coursesWithGeometry) {
+    if (glCourse) {
+      coursesToDraw = [];
+    } else if (coursesWithGeometry) {
       coursesToDraw = highlightedCourses.filter((c) => !coursesWithGeometry.has(c.name));
     } else if (!courseGeometry) {
       coursesToDraw = highlightedCourses.slice(0, 1);
@@ -2080,6 +2149,27 @@ export function MapViewer({
               stroke={purple} strokeWidth={legStroke} />
           );
         }
+      }
+    }
+
+    // ─── GL course layer: leg hit lines from the derivation ─────
+    //
+    // The GL layer draws the legs; the editor's insert-on-leg targets run
+    // along the derived centre-to-centre lines. The index is the leg's in
+    // the course's own control list (a skipped unpositioned control keeps
+    // its slot, as on the SVG overlay).
+    if (glCourse && courseInfo?.derivation) {
+      for (const dc of courseInfo.derivation.courses) {
+        const overlay = courses.find((k) => k.name === dc.id);
+        let at = 0;
+        dc.legs.forEach((leg, i) => {
+          const j = overlay ? overlay.controls.indexOf(leg.to, at + 1) : -1;
+          if (j > 0) at = j;
+          const pts = leg.points.map((p) => mapMmToScreen(p.x, p.y)).filter((p): p is Pt => p !== null);
+          if (pts.length < 2) return;
+          const d = pts.map((p, k) => `${k === 0 ? "M" : "L"}${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(" ");
+          pushLegHit(`gl-leg-${dc.id}-${i}`, d, dc.id, j > 0 ? j - 1 : i);
+        });
       }
     }
 
@@ -2119,17 +2209,8 @@ export function MapViewer({
       : null;
 
     const storedOffsets = singleCourse?.labelOffsets;
-    const offsetFor = (id: string): { dx: number; dy: number } | undefined => {
-      if (!singleCourse) return undefined;
-      if (editorLabelDragPos?.id === id) {
-        const ctrl = controls.find((k) => k.id === id);
-        if (!ctrl) return undefined;
-        return { dx: editorLabelDragPos.x - ctrl.x, dy: editorLabelDragPos.y - ctrl.y };
-      }
-      const pending = pendingLabelMoves.get(id);
-      if (pending) return pending.to;
-      return storedOffsets?.[id];
-    };
+    const offsetFor = (id: string): { dx: number; dy: number } | undefined =>
+      singleCourse ? labelOffsetOf(id, controls, storedOffsets, editorLabelDragPos, pendingLabelMoves) : undefined;
 
     // Control-number placement (pure module, unit-tested). Inputs are
     // exactly what is on screen: every VISIBLE circle is an obstacle
@@ -2187,7 +2268,7 @@ export function MapViewer({
       return { x1: a.x, y1: a.y, x2: b.x, y2: b.y };
     });
     const placedControlLabels = new Map<string, PlacedControlLabel>();
-    if (!hideControls) {
+    if (!hideControls && !glCourse) {
       for (const [id, l] of placeControlLabels(placementCircles, frameSegs, { radius, labelSize })) {
         const centre = fromFrame(l);
         let leader: PlacedControlLabel["leader"];
@@ -2220,26 +2301,53 @@ export function MapViewer({
           ? 0.3
           : undefined;
 
+      if (glCourse && !fade) {
+        // The GL layer draws the symbol; a status (readout punch state,
+        // highlight) is a ring of the UI layer around it.
+        if (baseColor !== purple) {
+          const symbolR = c.type === "Start" ? startSize : c.type === "Finish" ? finishOuter : radius;
+          upperElements.push(
+            <circle key={`status-${c.id}`} cx={pos.x} cy={pos.y} r={symbolR + stroke * 1.5}
+              stroke={baseColor} strokeWidth={stroke * 1.5} fill="none"
+              data-testid="control-status-ring" data-control-id={c.id}
+              style={{ cursor: onControlClick ? "pointer" : undefined }}
+              onClick={onControlClick ? () => onControlClick(c.id) : undefined} />
+          );
+        } else if (onControlClick) {
+          upperElements.push(
+            <circle key={`click-${c.id}`} cx={pos.x} cy={pos.y} r={radius} fill="transparent" stroke="none"
+              style={{ cursor: "pointer" }} onClick={() => onControlClick(c.id)} />
+          );
+        }
+      }
+      // Under the GL layer only a faded control (left out of it) is drawn here.
+      const svgSymbol = !glCourse || !!fade;
       if (c.type === "Start") {
-        const s = startSize;
-        const triPath = `M${pos.x},${pos.y - s} L${pos.x - s * 0.866},${pos.y + s * 0.5} L${pos.x + s * 0.866},${pos.y + s * 0.5} Z`;
-        lowerElements.push(
-          <path key={`start-${c.id}`} d={triPath} stroke={baseColor} strokeWidth={stroke} fill="none"
-            style={{ cursor: onControlClick ? "pointer" : undefined }}
-            onClick={onControlClick ? () => onControlClick(c.id) : undefined} />
-        );
+        if (svgSymbol) {
+          const s = startSize;
+          const triPath = `M${pos.x},${pos.y - s} L${pos.x - s * 0.866},${pos.y + s * 0.5} L${pos.x + s * 0.866},${pos.y + s * 0.5} Z`;
+          lowerElements.push(
+            <path key={`start-${c.id}`} d={triPath} stroke={baseColor} strokeWidth={stroke} fill="none"
+              style={{ cursor: onControlClick ? "pointer" : undefined }}
+              onClick={onControlClick ? () => onControlClick(c.id) : undefined} />
+          );
+        }
       } else if (c.type === "Finish") {
-        lowerElements.push(
-          <g key={`finish-${c.id}`} style={{ cursor: onControlClick ? "pointer" : undefined }}
-            onClick={onControlClick ? () => onControlClick(c.id) : undefined}>
-            <circle cx={pos.x} cy={pos.y} r={finishOuter} stroke={baseColor} strokeWidth={stroke} fill="none" />
-            <circle cx={pos.x} cy={pos.y} r={finishInner} stroke={baseColor} strokeWidth={stroke} fill="none" />
-          </g>
-        );
+        if (svgSymbol) {
+          lowerElements.push(
+            <g key={`finish-${c.id}`} style={{ cursor: onControlClick ? "pointer" : undefined }}
+              onClick={onControlClick ? () => onControlClick(c.id) : undefined}>
+              <circle cx={pos.x} cy={pos.y} r={finishOuter} stroke={baseColor} strokeWidth={stroke} fill="none" />
+              <circle cx={pos.x} cy={pos.y} r={finishInner} stroke={baseColor} strokeWidth={stroke} fill="none" />
+            </g>
+          );
+        }
       } else {
-        const cuts = getCourseGeomCuts(c.code);
+        const cuts = svgSymbol ? getCourseGeomCuts(c.code) : null;
 
-        if (cuts && cuts.length > 0) {
+        if (!svgSymbol) {
+          // drawn by the GL layer
+        } else if (cuts && cuts.length > 0) {
           const rot = cutRotationDeg ?? 0;
           const adj = cuts.map(g => ({ start: g.start + rot, end: g.end + rot }));
           const arcs = drawBrokenCircle(pos.x, pos.y, radius, adj);
@@ -2377,6 +2485,27 @@ export function MapViewer({
       }
     }
 
+    // The GL layer's numbers: drag targets for the single course's labels.
+    if (glCourse && editor && courseInfo?.derivation && singleCourseControlIds) {
+      for (const ds of courseInfo.derivation.sites) {
+        if (!ds.label || !singleCourseControlIds.has(ds.id)) continue;
+        const ctrl = controls.find((k) => k.id === ds.id);
+        const p = mapMmToScreen(ds.label.x, ds.label.y);
+        if (!ctrl || !p) continue;
+        labelHits.push({
+          id: ds.id,
+          px: p.x,
+          py: p.y,
+          // The layer's own box estimate (0.65 em per character, course-layer.md §3.5).
+          w: Math.max(ds.label.text.length * 0.65 * labelSize, 16),
+          h: Math.max(labelSize, 16),
+          mmX: ctrl.x,
+          mmY: ctrl.y,
+          from: offsetFor(ds.id) ?? null,
+        });
+      }
+    }
+
     // ─── Multi-course leg labels ──────────────────────────
     //
     // One label per unique leg (control pair), centered between the two
@@ -2489,7 +2618,7 @@ export function MapViewer({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [viewport, containerSize, renderW, renderH, controls, courses, courseGeometry, coursesWithGeometry, highlightControlId, highlightCourseName,
       symbolScale, affine, vctx, controlMm, gpsRoutesMm, measuring, measurePoints, measureCursor, showDescriptions, hideControls, onControlClick,
-      mapMmToScreen, rotDeg, gpsRoutes, editor, editorDragPos, pendingMoves, editorLabelDragPos, pendingLabelMoves]);
+      mapMmToScreen, rotDeg, gpsRoutes, editor, editorDragPos, pendingMoves, editorLabelDragPos, pendingLabelMoves, glCourse, courseInfo]);
 
   // ─── Description sheet (outside rotation) ──────────────
 
@@ -2817,6 +2946,7 @@ export function MapViewer({
       ref={containerRef}
       data-testid="map-viewer"
       data-map-pipeline={pipeline}
+      data-course-layer={glCourse ? "gl" : "svg"}
       data-center-lat={viewport.kind === "mercator" ? viewport.centerLat : centreGeo?.lat}
       data-center-lng={viewport.kind === "mercator" ? viewport.centerLng : centreGeo?.lng}
       data-zoom={mercatorEquivalentZoom(viewport, mapScale, centreGeo?.lat ?? null) ?? undefined}
@@ -2862,6 +2992,9 @@ export function MapViewer({
           budget={mapBudget}
           zIndex={0}
           onUnavailable={onVectorUnavailable}
+          course={glCourse ? courseRequest : null}
+          onCourse={setCourseInfo}
+          onCourseSupport={setCourseSupport}
         />
       )}
       {/* Rotated map layer (tiles + overlay) — corrects map north offset */}
@@ -2997,6 +3130,24 @@ export function MapViewer({
           </g>
         </svg>
       </div>
+      {/* The GL course layer's numbers and legs as DOM (tests, assistive tech): what the canvas draws. */}
+      {glCourse && courseInfo?.derivation && (
+        <ul data-testid="course-layer" hidden>
+          {courseInfo.derivation.sites.map((ds) => (
+            <li key={`s-${ds.id}`} data-testid="course-site" data-site-id={ds.id} data-role={ds.role} data-x={ds.x} data-y={ds.y}>
+              {ds.label && (
+                <span data-testid="course-label" data-site-id={ds.id} data-text={ds.label.text} data-x={ds.label.x} data-y={ds.label.y}>
+                  {ds.label.text}
+                </span>
+              )}
+            </li>
+          ))}
+          {courseInfo.derivation.courses.flatMap((dc) => dc.legs.flatMap((leg, i) => leg.pieces.map((piece, k) => (
+            <li key={`l-${dc.id}-${i}-${k}`} data-testid="course-leg" data-course={dc.id} data-leg={i}
+              data-points={piece.map((q) => `${q.x},${q.y}`).join(" ")} />
+          ))))}
+        </ul>
+      )}
 
       {/* Editor contextual actions — unrotated HTML, anchored at the
           selection/phantom */}
