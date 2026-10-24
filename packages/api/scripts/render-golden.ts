@@ -1,7 +1,7 @@
 /**
  * Writes the golden PNGs from the reference raster: the WebGL2 backend's
  * screenshot goldens (`e2e/map-gl-golden.spec.ts`, docs/map-rendering.md
- * §6.2), the page scenes' oracle images (docs/course-print.md §9) and the
+ * §6.2), the page scenes' oracle images (docs/course-print.md §7.5) and the
  * symbol library's contact sheet (`e2e/__golden__/library/`,
  * docs/map-symbols.md §6 (d)). Run after changing a golden scene, a
  * fixture stream, a library entry or the symbolisation stage:
@@ -27,7 +27,7 @@ for (const name of render.goldenSceneNames) {
   await writeFile(`${dir}${name}.png`, png);
   console.log(`wrote ${name}.png (${png.byteLength} bytes)`);
 }
-// Page scenes (docs/course-print.md §9): the page oracle; the PDF tier compares against them in C3.
+// Page scenes (docs/course-print.md §7.5): the page oracle; the PDF tier compares against them in C3.
 for (const name of pageSceneNames) {
   const png = await renderPageGoldenPng(name);
   await writeFile(`${dir}${name}.png`, png);

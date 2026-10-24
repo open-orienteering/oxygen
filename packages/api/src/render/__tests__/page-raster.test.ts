@@ -1,5 +1,5 @@
 /**
- * The page oracle (docs/course-print.md §9): paper white outside the
+ * The page oracle (docs/course-print.md §7.5): paper white outside the
  * frame, map ink inside it, the page layer on top, a rotated window's
  * content where `T_map` puts it.
  */

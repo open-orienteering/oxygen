@@ -280,6 +280,7 @@ export class PdfWriter {
     if (this.pages.some((p) => p.label)) {
       const nums: unknown[] = [];
       this.pages.forEach((p, i) => nums.push(i, ctx.obj(p.label ? { P: PDFHexString.fromText(p.label) } : {})));
+      // `obj()`'s overloads take literals, not a mixed number / dict array built in a loop.
       catalog.set(PDFName.of("PageLabels"), ctx.obj({ Nums: ctx.obj(nums as never) }));
     }
     const titled = this.pages.filter((p) => p.outlineTitle);

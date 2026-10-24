@@ -1,5 +1,5 @@
 /**
- * Page oracle (docs/course-print.md §9; research 05 §7 tier 3): a
+ * Page oracle (docs/course-print.md §7.5; research 05 §7 tier 3): a
  * composed page drawn by the reference raster, the image the page
  * goldens hold and the PDF tier (C3, `pdftoppm`) is compared against.
  *

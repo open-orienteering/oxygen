@@ -66,6 +66,15 @@ describe("composePage", () => {
     expect(Array.from(pageFill!.kind === "fill" ? pageFill!.path.coords.slice(0, 2) : [])).toEqual([84000, 4000]);
   });
 
+  it("a page-anchored white-out outside rings the frame grown by 1 mm", () => {
+    const base = pageScene("page-ring");
+    const page = composePage({ ...base, objects: [{ id: "pr", anchor: "page", kind: "rectangle", x: 50, y: 30, width: 20, height: 20, fillMode: "whiteoutInverted" }] }, fonts());
+    const ring = page.pageLayer.stream.passes.find((p) => p.kind === "fill" && pathRings(p.path).length === 2);
+    if (ring?.kind !== "fill") throw new Error("no ring");
+    const f = page.frameUm, d = RING_BLEED_UM;
+    expect(Array.from(ring.path.coords.slice(0, 4))).toEqual([f.x - d, f.y - d, f.x + f.width + d, f.y - d]);
+  });
+
   it("page text expands placeholders", () => {
     const page = composePage(pageScene("page-ring"), fonts());
     const text = page.pageLayer.stream.passes.filter((p) => p.kind === "text");

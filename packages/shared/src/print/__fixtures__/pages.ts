@@ -1,5 +1,5 @@
 /**
- * Page scenes (docs/course-print.md §9 tests; research 05 §7 tier 3): an
+ * Page scenes (docs/course-print.md §7.5 tests; research 05 §7 tier 3): an
  * A4 sprint page with a description block, a white-out-outside ring
  * with page objects, and a rotated window — each a `PageInput` the
  * composer turns into layers. The reference raster draws them now (the

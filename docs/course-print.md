@@ -242,10 +242,15 @@ back to the legacy page is C3's call.
 
 Page-anchored objects are flipped to y-up page mm, re-anchored as `map`
 and drawn by the course layer's own object builder (`layoutObjects`, C0)
-with `overprintScale: 1` and the frame as the white-out-outside ring
-(legacy: the ring against the map frame), plus the description block
+with `overprintScale: 1` and the frame, grown by the same 1 mm
+(`RING_BLEED_UM`), as the white-out-outside ring (legacy: the ring against
+the map frame; the extra millimetre is white on the white sheet and keeps
+the ring's outer edge off the frame clip's edge, so no map ink seam shows
+there either), plus the description block
 (§6.2), in one `symbolise` call. Emitted as `q <µm → pt> cm 4 M <passes>
-[<page images>] Q` after the map layer.
+[<page images>] Q` after the map layer, **unclipped**: 05 §5.1 clips the
+page layer to the printable area, but legacy never clipped to
+`printMarginMm` (it only warns, `validate.ts`), and slice C keeps that.
 
 **Colour table.** The page layer shares the map layer's table: the
 course layer's completed stack (`layer.colours`, upper white included),
@@ -320,7 +325,7 @@ document objects within 20 mm of the window's bounding box (C6's
 All `course-maps` schema kinds, as on the map (`docs/course-layer.md`
 §3.6) but in page mm: text with placeholders, lines and paths (dashes as
 legacy print draws them), rectangles, `solid` fills, `whiteout`,
-`whiteoutInverted` (ring against the frame), `outOfBounds` (709 / 709.b /
+`whiteoutInverted` (ring against the frame + 1 mm, §4.4), `outOfBounds` (709 / 709.b /
 709.c from the library), images (§6.3). Sizes are page mm and never
 divided by `overprintScale`. User colours print through the inverse
 naive conversion in `cmyk` and as the hex in `rgb` (§2).
@@ -426,7 +431,7 @@ lines drawn by the library; images DeviceRGB in `cmyk`.
 |---|---|
 | `print/__tests__/page.test.ts` | `T_map` against `mapToPage` (0°, ±rotation), inverse, frame in map space, `flipPageObject`, `transformPassStream` (slices kept, widths / taper / glyph instances / text scaled and turned, hatch lines on the transformed lines) |
 | `print/__tests__/description.test.ts` | every `IOF_SYMBOLS` key converts; 2.4 one fill, 1.10 one disc, 0.3 two strokes + disc, Bézier flags; block size and position, border, thick / thin rules, header sizes and weight, F text 0.34 × cell, pictograms centred at 0.8 × cell, one symbol per key |
-| `print/__tests__/compose.test.ts` | one colour-sorted map stream with lower purple < black < upper purple; block text / rules / pictograms on appended colours; no block → empty page layer; ring outer boundary = frame (+1 mm) through `T_map⁻¹`, page white-out at upper white; placeholders; rotated `T_map`; images in layer space; `CourseStackError` |
+| `print/__tests__/compose.test.ts` | one colour-sorted map stream with lower purple < black < upper purple; block text / rules / pictograms on appended colours; no block → empty page layer; map ring outer boundary = frame (+1 mm) through `T_map⁻¹`, page ring = frame + 1 mm, page white-out at upper white; placeholders; rotated `T_map`; images in layer space; `CourseStackError` |
 | `print/__tests__/write-page.test.ts` | operator order (sheet, frame clip, `T_map` `cm`, page `cm`), no `rg` in `cmyk` / no `k` in `rgb`, rotated `cm`, two pages sharing font, glyph forms and image XObject, page labels and outlines, `/Measure /GEO` (SWEREF99 TM corners near 58.6° N 15° E, rotated corners), deterministic bytes, missing image warning |
 | `print/__tests__/isomorphic.test.ts` | no Node API, `Buffer`, sharp or resvg in the module |
 | `packages/api/src/__tests__/course-print-sheet.test.ts` | `resolveSheet`: paper / frame / window / tilt, structure and roles, unique sites, label offsets, extras, `editor` vs `ocd` authored geometry, description block / hidden, all-controls, free order |
@@ -560,6 +565,10 @@ the reference raster (`map-rendering.md` §5.1).
   row (decision (2), 2026-10-23).
 - **Filter regions by symbol** (05 §5.3, 04 §7): the stream has no region
   concept yet; `clipOperators` is the primitive the composer will use.
+- **One window shared by several pages** (05 §5.10): two sheets on the
+  same window (a course and its all-controls sheet, forked variants)
+  re-symbolise and re-emit the map content per page; a shared form
+  XObject of the window's base map comes with per-variant pages (08).
 - **Vector SVG logos** (05 §5.7 b): a safe SVG subset as form XObjects;
   rasterised at 600 dpi until a club asks.
 - **Several frames per sheet** (map exchange on one sheet, 05 §5.9) and
