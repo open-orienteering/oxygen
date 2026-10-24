@@ -625,9 +625,13 @@ caller-supplied glyph outlines or, without them, em boxes (debug only,
 never an oracle).
 
 This is the **oracle** of the golden-image tier. It is slow and simple on
-purpose and is never used to draw a map for use. Its one production job
-is previews (04 §4.1, 06 §5.2): document thumbnails and symbol swatches,
-rendered once and stored as cache (`docs/map-storage.md` §4.5). PNG
+purpose and is never used to draw a map for use. Its production jobs
+are previews (04 §4.1, 06 §5.2): document thumbnails and symbol swatches,
+rendered once and stored as cache (`docs/map-storage.md` §4.5), and — a
+second job, interim — the layout editor's `window.png` of a pinned
+document (`render/window-raster.ts`, `docs/course-print.md` §10): one
+request, one window, cached by document hash, drawn under the render
+gate with explicit `bounds` so the off-frame guard applies. PNG
 encoding is `encodePng` (sharp) in `render/reference-raster.ts`; the
 preview renderers are `render/previews.ts`.
 
