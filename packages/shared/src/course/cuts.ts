@@ -13,7 +13,9 @@
 import type { AngularGap, FractionGap } from "../course-maps/overlay-geometry.js";
 import { OBJECT_TYPE } from "../map-document/header.js";
 import type { MapDocument } from "../map-document/codec.js";
-import { isAppliedMatch } from "../map-document/render-bridge.js";
+import { canonicalRender, isAppliedMatch } from "../map-document/render-bridge.js";
+import { type OcadSymbolDefLike, ocadSymbolToRender } from "../import/ocad-symbols.js";
+import type { RenderSymbol } from "../render/symbol.js";
 import { getLibraryEntry, getSymbolLibrary, type SymbolLibraryId } from "../symbol-library/index.js";
 import type { LibraryEntry } from "../symbol-library/schema.js";
 import { courseDocumentContext } from "./context.js";
@@ -127,11 +129,11 @@ export function legGaps(a: Pick<CutFeature, "x" | "y">, b: Pick<CutFeature, "x" 
   return kept.map(([from, to]) => ({ from, to }));
 }
 
-/** Farthest ink of a library point entry from its origin, mm (0 for other kinds). */
-function entryRadiusMm(entry: LibraryEntry | undefined): number {
-  if (!entry || entry.render.type !== "point") return 0;
+/** Farthest ink of a point symbol (library or render IR) from its origin, mm; 0 for other kinds. */
+export function pointSymbolRadiusMm(render: LibraryEntry["render"] | RenderSymbol | null | undefined): number {
+  if (!render || render.type !== "point") return 0;
   let r = 0;
-  for (const p of entry.render.glyph.parts) {
+  for (const p of render.glyph.parts) {
     const off = Math.hypot(p.cx ?? 0, p.cy ?? 0);
     if (p.diameterUm !== undefined) r = Math.max(r, off + p.diameterUm / 2);
     const coords = p.geometry?.coords ?? [];
@@ -152,7 +154,7 @@ export function cutSymbolRadiusMm(libraryId: SymbolLibraryId, code: string): num
   const entries = getSymbolLibrary(libraryId).entries;
   const exact = entries.find((e) => e.code === code);
   const n = codeNumber(code);
-  return entryRadiusMm(exact ?? entries.find((e) => codeNumber(e.code) === n));
+  return pointSymbolRadiusMm((exact ?? entries.find((e) => codeNumber(e.code) === n))?.render);
 }
 
 /** Library and document factor of a map known only by its scale (legacy OCAD events; 03 §6.5). */
@@ -164,18 +166,19 @@ export function cutContextForScale(mapScale: number): { libraryId: SymbolLibrary
 /**
  * The cut features of a map document: point objects of visible symbols
  * whose applied match — or, unmatched, whose source code — is in
- * `CUT_CODES`, each with its symbol radius (the matched entry's, else the
- * code's in the document's library) × the document factor. Paper mm.
+ * `CUT_CODES`, each with the radius of the symbol the document draws (the
+ * canonical render, else its own; the library entry × document factor
+ * when it has neither). Paper mm.
  */
 export function cutFeaturesOfDocument(doc: MapDocument): CutFeature[] {
   const ctx = courseDocumentContext(doc.header);
   const radii = doc.header.symbols.map((s): number | null => {
     if (s.hidden) return null;
-    if (isAppliedMatch(s.match)) {
-      const code = s.match.canonicalId.slice(s.match.canonicalId.indexOf(":") + 1);
-      return CUT_CODES.has(codeNumber(code)) ? entryRadiusMm(getLibraryEntry(s.match.canonicalId)) * ctx.documentFactor : null;
-    }
-    return CUT_CODES.has(codeNumber(s.code)) ? cutSymbolRadiusMm(ctx.libraryId, s.code) * ctx.documentFactor : null;
+    const applied = isAppliedMatch(s.match);
+    const code = applied ? s.match!.canonicalId!.slice(s.match!.canonicalId!.indexOf(":") + 1) : s.code;
+    if (!CUT_CODES.has(codeNumber(code))) return null;
+    const drawn = applied ? canonicalRender(doc, s) : s.render;
+    return pointSymbolRadiusMm(drawn) || cutSymbolRadiusMm(ctx.libraryId, code) * ctx.documentFactor;
   });
   const perMm = doc.header.unitsPerMm;
   const out: CutFeature[] = [];
@@ -184,6 +187,24 @@ export function cutFeaturesOfDocument(doc: MapDocument): CutFeature[] {
     if (doc.attrs.type[i] !== OBJECT_TYPE.point || r === null) continue;
     const k = doc.coordStart[i] * 2;
     out.push({ x: doc.coords[k] / perMm, y: doc.coords[k + 1] / perMm, r });
+  }
+  return out;
+}
+
+/**
+ * Radii of an OCAD file's cut symbols as the file draws them, mm by
+ * `symNum` — the legacy feature source's sizes (`ocadSymbolToRender`, the
+ * importer's conversion).
+ */
+export function ocadCutSymbolRadiiMm(symbols: ArrayLike<OcadSymbolDefLike>, ocadVersion?: number): Map<number, number> {
+  const byNumber = new Map<number, OcadSymbolDefLike>();
+  for (let i = 0; i < symbols.length; i++) if (!byNumber.has(symbols[i].symNum)) byNumber.set(symbols[i].symNum, symbols[i]);
+  const ctx = { colourIndex: () => 0, symbolByNumber: (n: number) => byNumber.get(n), ocadVersion };
+  const out = new Map<number, number>();
+  for (const [symNum, sym] of byNumber) {
+    if (sym.type !== 1 || !CUT_CODES.has(Math.floor(symNum / 1000))) continue;
+    const r = pointSymbolRadiusMm(ocadSymbolToRender(sym, ctx).render);
+    if (r > 0) out.set(symNum, r);
   }
   return out;
 }

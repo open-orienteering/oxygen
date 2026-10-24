@@ -5,7 +5,8 @@
  */
 
 import { describe, expect, it } from "vitest";
-import { CUT_AIR_MM, CUT_CODES, DEFAULT_FEATURE_RADIUS_MM, circleCuts, cutContextForScale, cutFeaturesOfDocument, cutSymbolRadiusMm, legGaps } from "../cuts.js";
+import { CUT_AIR_MM, CUT_CODES, DEFAULT_FEATURE_RADIUS_MM, circleCuts, cutContextForScale, cutFeaturesOfDocument, cutSymbolRadiusMm, legGaps, ocadCutSymbolRadiiMm } from "../cuts.js";
+import type { OcadSymbolDefLike } from "../../import/ocad-symbols.js";
 import { OBJECT_TYPE, decodeMapDocument, encodeMapDocument, type MapDocumentInput } from "../../map-document/index.js";
 import { SYMBOL_LIBRARY_VERSION } from "../../symbol-library/index.js";
 
@@ -107,6 +108,13 @@ describe("legGaps", () => {
 });
 
 describe("symbol radii", () => {
+  it("measures an OCAD file's cut symbols as it draws them", () => {
+    const dot = (symNum: number, diameter: number, type = 1): OcadSymbolDefLike =>
+      ({ symNum, number: `${symNum / 1000}`, type, elements: [{ type: 4, color: 0, diameter, coords: [[0, 0]] }] }) as unknown as OcadSymbolDefLike;
+    const radii = ocadCutSymbolRadiiMm([dot(204000, 60), dot(205000, 90), dot(418000, 50), dot(109000, 40, 2)]);
+    expect([...radii.entries()]).toEqual([[204000, 0.3], [205000, 0.45]]);
+  });
+
   it("measures the library's cut symbols", () => {
     expect(cutSymbolRadiusMm("ISOM2017-2", "204")).toBeCloseTo(0.2, 9);
     expect(cutSymbolRadiusMm("ISOM2017-2", "205")).toBeCloseTo(0.3, 9);
@@ -173,7 +181,13 @@ describe("cutFeaturesOfDocument", () => {
     ]);
   });
 
-  it("scales the radii with the document factor", () => {
+  it("measures an unmatched symbol by the document's own render", () => {
+    const own = { ...header, symbols: [{ code: "204.0", name: "Boulder", kind: "point" as const, render: { type: "point" as const, id: "src:204.0", code: "204.0", name: "Boulder", glyph: { parts: [{ kind: "disc" as const, colour: 0, diameterUm: 520 }], rotatable: false }, orientation: "north" as const } }] };
+    const doc = decodeMapDocument(encodeMapDocument({ header: own, objects: [obj(0, OBJECT_TYPE.point, [0, 100])] }));
+    expect(cutFeaturesOfDocument(doc)).toEqual([f(0, 1, 0.26)]);
+  });
+
+  it("falls back to the library entry × the document factor", () => {
     const doc = decodeMapDocument(encodeMapDocument({ header: { ...header, mapScale: 10000 }, objects: [obj(0, OBJECT_TYPE.point, [1000, 2000])] }));
     expect(cutFeaturesOfDocument(doc)).toEqual([f(10, 20, 0.2 * 1.5)]);
   });

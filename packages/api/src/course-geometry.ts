@@ -8,25 +8,33 @@
  * `geometrySource: "editor"` with straight-line legs — the same shape the
  * IOF XML importer produces.
  *
+ * The GeoJSON is the course layer's projection (`course.courseLayer` →
+ * `course.courseLayerGeoJson`, docs/course-layer.md §4): the compatibility
+ * artifact for consumers not yet drawing from the layer, computed at the
+ * legacy sizes they draw (2.5 mm circles, 0.35 mm lines).
+ *
  * Coordinates are paper mm (the unit of `controls.xpos/ypos` and of all
  * course-geometry GeoJSON). Terrain meters = mm × mapScale / 1000.
  */
 
-import type {
-  GeoJSONFeature,
-  GeoJSONFeatureCollection,
-} from "./iof-course-parser.js";
+import { course, symbolLibrary } from "@oxygen/shared";
 import type { PrismaClient, Prisma } from "./generated/prisma/client.js";
 import { Prisma as PrismaNs } from "./generated/prisma/client.js";
 import { loadEventCrs } from "./event-crs.js";
-import { loadEventMapObjects } from "./event-map-objects.js";
-import { decorateOverprintCuts } from "./overprint-cuts.js";
-/** Increment when stored automatic cut/gap semantics change. */
-export const OVERPRINT_CUTS_VERSION = 2;
+import { loadEventCutFeatures } from "./event-map-objects.js";
 
+/**
+ * Increment when stored automatic cut/gap semantics change; events below
+ * it get their editor courses rebuilt on the next geometry read.
+ * 1: OCAD-parse cuts. 2: knolls and rocks only. 3: written by the course
+ * layer, size-aware cuts, features from the pinned document on `vector`.
+ */
+export const OVERPRINT_CUTS_VERSION = 3;
 
 /** One entry of a course's rendered sequence (start + controls + finish). */
 export interface GeometrySeqControl {
+  /** The control row's id (the course layer's site id). */
+  id: string;
   /** Display code for feature properties (first punch code, or name/seq fallback). */
   code: string;
   type: "Start" | "Control" | "Finish";
@@ -40,50 +48,48 @@ function isPositioned(c: GeometrySeqControl): boolean {
 }
 
 /**
- * Build the straight-leg GeoJSON FeatureCollection for a course sequence.
- * Unpositioned controls are omitted; for `ordered` courses (default) legs
- * connect the remaining consecutive controls so a single unplaced control
- * does not break the route line. Free-order courses emit control points
- * only — no connecting legs.
+ * The artifact's document context: the ISOM stack at factor 1, so the
+ * layer draws the legacy 2.5 mm circle and 0.35 mm line its consumers draw
+ * (user decision 2026-10-24, course-layer.md). The map's own scale enters
+ * only through the cut features' symbol radii.
  */
-export function buildEditorGeometry(
+let artifactContext: course.CourseDocumentContext | undefined;
+function legacySizeContext(): course.CourseDocumentContext {
+  artifactContext ??= {
+    colours: symbolLibrary.paletteStack("iof2024", "ISOM2017-2").map((c) => ({ ...c, paletteIds: [c.id.slice(c.id.indexOf(":") + 1)] })),
+    libraryId: "ISOM2017-2",
+    documentFactor: 1,
+  };
+  return artifactContext;
+}
+
+const KIND = { Start: "start", Control: "control", Finish: "finish" } as const;
+
+/**
+ * The stored GeoJSON of an editor course: the course layer over the
+ * sequence, projected (course-layer.md §4). Unpositioned controls are
+ * omitted; `ordered` courses get straight legs between the remaining
+ * consecutive controls, free-order courses points only. `cutFeatures`
+ * null = no automatic cuts.
+ */
+export function editorCourseGeometry(
+  courseId: string,
   seq: GeometrySeqControl[],
   orderMode: "ordered" | "free_order" = "ordered",
-): GeoJSONFeatureCollection {
-  const positioned = seq.filter(isPositioned);
-  const features: GeoJSONFeature[] = [];
-
-  for (const c of positioned) {
-    features.push({
-      type: "Feature",
-      geometry: { type: "Point", coordinates: [c.xMm, c.yMm] },
-      properties: {
-        symbolType: c.type.toLowerCase(),
-        code: c.code,
-        id: c.code,
-      },
-    });
-  }
-
-  if (orderMode !== "free_order") {
-    for (let i = 0; i < positioned.length - 1; i++) {
-      const a = positioned[i];
-      const b = positioned[i + 1];
-      features.push({
-        type: "Feature",
-        geometry: {
-          type: "LineString",
-          coordinates: [
-            [a.xMm, a.yMm],
-            [b.xMm, b.yMm],
-          ],
-        },
-        properties: { symbolType: "leg", from: a.code, to: b.code },
-      });
-    }
-  }
-
-  return { type: "FeatureCollection", features };
+  cutFeatures: readonly course.CutFeature[] | null = null,
+): course.CourseGeoJson {
+  const sites = new Map<string, course.CourseSite>();
+  for (const c of seq) sites.set(c.id, { id: c.id, code: c.code, kind: KIND[c.type], x: c.xMm, y: c.yMm });
+  const layer = course.courseLayer({
+    structure: { version: 1, id: courseId, orderMode, items: seq.map((c) => ({ siteId: c.id, role: KIND[c.type] })) },
+    sites: [...sites.values()],
+    objects: [],
+    appearance: {},
+    viewOptions: {},
+    document: legacySizeContext(),
+    ...(cutFeatures ? { cutFeatures } : {}),
+  });
+  return course.courseLayerGeoJson(layer, courseId);
 }
 
 /** Euclidean distances (paper mm) between consecutive positioned controls. */
@@ -139,17 +145,18 @@ export async function rebuildCourseGeometry(
   const crs = await loadEventCrs(db, eventId);
   const mapScale = crs?.scale ?? null;
 
-  // Base-map objects for automatic overprint cuts around compact knoll /
-  // rock point features. Cached per event, null when there is no map —
-  // and skipped when the event has auto overprint cuts turned off.
+  // Features for automatic overprint cuts around compact knoll / rock
+  // point features: the pinned document on `vector` events, else the OCAD
+  // parse. Null when there is no map — and skipped when the event has auto
+  // overprint cuts turned off.
   const eventRow = await db.event.findUnique({
     where: { id: eventId },
     select: { autoOverprintCuts: true },
   });
-  const mapObjects =
+  const cutFeatures =
     eventRow?.autoOverprintCuts === false
       ? null
-      : await loadEventMapObjects(db, eventId);
+      : ((await loadEventCutFeatures(db, eventId, mapScale))?.features ?? null);
 
   // Event-level start/finish controls, shared across all rebuilt courses.
   const startFinish = await db.control.findMany({
@@ -180,7 +187,7 @@ export async function rebuildCourseGeometry(
       orderBy: { position: "asc" },
       select: {
         control: {
-          select: { codes: true, name: true, seq: true, status: true, xpos: true, ypos: true },
+          select: { id: true, codes: true, name: true, seq: true, status: true, xpos: true, ypos: true },
         },
       },
     });
@@ -194,6 +201,7 @@ export async function rebuildCourseGeometry(
           : undefined) ?? starts[0];
       if (start) {
         seq.push({
+          id: start.id,
           code: displayCode(start),
           type: "Start",
           xMm: start.xpos,
@@ -205,6 +213,7 @@ export async function rebuildCourseGeometry(
     for (const cc of ccs) {
       const c = cc.control;
       seq.push({
+        id: c.id,
         code: displayCode(c),
         type:
           c.status === "start" ? "Start" : c.status === "finish" ? "Finish" : "Control",
@@ -220,6 +229,7 @@ export async function rebuildCourseGeometry(
           : undefined) ?? finishes[0];
       if (finish) {
         seq.push({
+          id: finish.id,
           code: displayCode(finish),
           type: "Finish",
           xMm: finish.xpos,
@@ -228,10 +238,7 @@ export async function rebuildCourseGeometry(
       }
     }
 
-    const geometry = buildEditorGeometry(seq, course.orderMode);
-    if (mapObjects && mapObjects.length > 0) {
-      decorateOverprintCuts(geometry, mapObjects);
-    }
+    const geometry = editorCourseGeometry(courseUuid, seq, course.orderMode, cutFeatures);
 
     const data: Record<string, unknown> = {
       geometry:
