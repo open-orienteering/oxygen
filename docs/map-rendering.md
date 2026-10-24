@@ -1924,7 +1924,10 @@ symbols are listed, not compared.
 **Measures and verdict.** Per row: *differing* (the §6.2 channel
 tolerance 16), *ink* (pixels inked on either side) and *unexplained* —
 pixels inked (some channel more than 48 below white, about a fifth of
-full coverage) on one side with no ink within one pixel on the other.
+full coverage) on one side with no ink within one pixel on the other,
+and differing beyond the channel tolerance there (C7: a tone on the
+threshold — Crop-A's 214.0 at 206 against 207 — otherwise counted as a
+whole missing shape).
 Anti-aliasing shades and sub-pixel placement never count: at 10 px/mm a
 0.1 mm line is one pixel, and a 0.05 mm offset flips every pixel of it
 at the channel tolerance. The verdict is `close` when unexplained ≤ 10 %
@@ -1954,6 +1957,11 @@ the images are always read.
 | `line-end-symbols` | OCAD start / end symbols only where `useSymbolFlags` enables them (`map-import.md` §3.3); legacy draws any present |
 | `corner-ends` | corner / dash-point glyphs on flagged line ends (§4.5); legacy never draws one on an end |
 | `main-symbol-count` | an OCAD main symbol only with `nPrimSym > 0` (`map-import.md` §3.3, 518.3 "Utan tagg"); legacy draws it as if 1 |
+
+The print counterpart — a whole course page through the PDF backend
+against the page oracle and the legacy rsvg page, with this tool
+attributing the base map's divergences per symbol — is
+`docs/course-print.md` §11.
 
 **Invocation.**
 

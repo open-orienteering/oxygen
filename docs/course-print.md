@@ -8,11 +8,11 @@ Normative for slice C of the vector map pipeline (research:
 > §1–3 (writer, colour modes, fonts and determinism) are C1's; §4–7
 > (page model, `resolveSheet`, layers, page objects and graphics, boxes,
 > metadata and geospatial) C2's; §8–9 (route, golden PDFs, CI) C3's;
-> §10 (layout-editor preview) is C6's. How a *pass* becomes PDF content is
+> §10 (layout-editor preview) is C6's; §11 (corpus numbers) C7's. How a *pass* becomes PDF content is
 > `docs/map-rendering.md` §5.3; this chapter owns everything around it.
 
 Status: **draft** — §1–3 written by C1, §10 by C6 (2026-10-23), §4–7 by
-C2, §8–9 by C3 (2026-10-24).
+C2, §8–9 by C3, §11 by C7 (2026-10-24).
 
 ## 1. The print module and its writer
 
@@ -745,6 +745,135 @@ the reference raster (`map-rendering.md` §5.1).
 | `packages/api/src/render/__tests__/window-raster.test.ts` | boundary choice and fallbacks; pass filter; object selection; full / ink probes; ink at a moved boundary; stack without lower purple; 90° rotation direction |
 | `packages/api/src/__tests__/integration/course-maps.test.ts` "window.png under a pinned document" | `getBaseMapInfo` branch equality and the unpinned fallback; full size / colour / cache; ink transparency and empty window; rotated entry; agreement with the legacy window of the same map |
 
+## 11. Corpus numbers
+
+The slice's regression net (09 §8; SLICES C7): every corpus map printed
+as one course page through the route's own function, checked, rasterised
+and compared with the two references the slice has — the page oracle
+(backend parity) and the legacy rsvg page (what changes for the user).
+The tool is committed; the corpus and everything it writes stay in
+`.local/` (AGENTS.md §12): the PDFs carry the map's `/Measure /GEO`.
+
+### 11.1 The page
+
+`packages/api/src/render/print-run.ts` (`runPrint`), no database:
+
+- **Import** with the API's importer (`importMapToDocument`), the
+  document prepared as the route prepares a pinned one
+  (`prepareDocument`); the meridian tilt from the import analysis, as
+  `getBaseMapInfo`'s document branch reads it (§10.1).
+- **Sheet** (`printSheetFor`): the OCAD print window (`header.printWindow`,
+  PrintPar 1026) at its print scale is the frame, on a custom sheet of
+  frame + 3 mm margins, **rounded up to whole mm** — a fractional page
+  puts the PDF raster and the oracle up to half a pixel apart at every
+  edge (sprint's 105.663 × 48.338 mm page measured 11.7 % before the
+  rounding). The window grows by less than 1 mm of paper. Without a print
+  window (`e2e/test.ocd`): A4 at the map scale, its orientation from the
+  object bounds, centred on them. `--paper`, `--print-scale`, `--centre`
+  override, through production's `mapWindowForFrame`.
+- **Course** (`syntheticCourse`): start, controls 31–34 and finish at
+  fixed fractions (≤ 0.3) of the window, deterministic, with IOF
+  descriptions; the description block top right when the frame is at
+  least 100 × 80 mm. The legacy page gets the matching GeoJSON (start and
+  finish points; both pages draw straight legs, the vector page cuts them
+  around document features). A course on every page puts the course
+  layer, size-aware cuts and the description block on real maps.
+- **Print**: `resolveSheet` → `renderCoursePages` (`deterministic`) in
+  `rgb` and `cmyk` — the route's bytes. Each mode is written a second time
+  with text as glyph outlines (`renderCoursePages({ text: "outline" })`)
+  for the comparison only.
+
+### 11.2 Checks and measures
+
+Per mode: `qpdf --check` (§9.3), the PDF page size against the sheet,
+bytes, SHA-256, `renderCoursePages` wall time; once: `composePage` time,
+document objects in the window (`objectsNear`).
+
+- **(a) Backend parity**: the PDF rasterised by `pdftocairo` at 10 px/mm,
+  2× supersampled (§9.2) against the page oracle (`rasterisePage`, same
+  density and supersample) — `rgb` in the naive colours, `cmyk` in the
+  rasteriser's own CMYK → RGB (`rasteriserCmykColours`), as the golden
+  tier does. Three measures: pixels beyond 16 levels (the golden tier's),
+  beyond 32 levels, and B9's **unexplained** pixels (`map-rendering.md`
+  §6.4: inked on one side, no ink within one pixel on the other, and
+  beyond the channel tolerance there) ÷ ink.
+- **(b) Legacy page**: the `rgb` page against the legacy page of the same
+  `resolveMapLayout` output — `renderBaseMapLayers` (the event-map
+  defaults: colour profile `auto`, no overrides, north lines below) →
+  `composeMapPageSvg` → `rsvg-convert` → the same rasteriser and grid.
+  The legacy page's text is pinned to the bundled Liberation files through
+  a generated `FONTCONFIG_FILE` (B9's pinning, for librsvg). Shape:
+  unexplained ÷ ink against the PDF raster; colour: pixels beyond 16
+  levels ÷ ink against the page oracle drawn in the **legacy RGB** of each
+  source colour (B9's recolouring — the PDF matches the oracle within
+  (a)), so OCAD's RGB against the stack's CMYK does not swamp it. Page
+  sizes must agree (geometry is not a sanctioned difference, §8.4).
+- **Per-symbol attribution**: `runParity` (`map-rendering.md` §6.4) on the
+  window's bounding box, canonical; the diverging symbols with their codes.
+  A composed page cannot be diffed per symbol; this is the base map's part
+  of (b).
+- **Sanctioned codes** per page (§8.4): `course-symbol-sizes`,
+  `start-turned`, `start-finish-clearance`, `size-aware-cuts`,
+  `library-symbols`, `stack-order`, `north-lines-below` (on by default for
+  an event map) always; `cmyk-colour` on the `cmyk` page;
+  `description-weight` / `description-font` with the block;
+  `rotated-overprint` on a rotated window. `colour-overrides`,
+  `library-course-lines` and `image-rgb` cannot occur (no overrides, no
+  imported lines, no images).
+- **Previous run**: `.local/print/<map>/summary.json` of the last run is
+  compared — equal SHA-256 per mode (equal input gives equal bytes, §3.2),
+  bytes, time and ratio deltas — and kept as `summary.previous.json`.
+
+### 11.3 The gate
+
+A map passes when the page composes, `qpdf` finds no errors, both pages
+have the sheet's size, every diverging symbol carries a sanctioned code,
+and in both modes **backend parity** holds: unexplained ≤ **0.01 % of
+ink** (the same shapes) and ≤ **0.5 %** of the pixels beyond **32
+levels** (user decision 2026-10-24). The 16-level ratio and the
+text-as-outlines run are reported, not gated. Why two tolerances: the
+golden tier's 0.5 % at 16 levels (§9.2) was calibrated on golden and page
+scenes with few edges (≤ 0.073 %); on a dense real map Cairo's and
+resvg's edge anti-aliasing alone put 17–32 levels between them on
+0.5–1.5 % of the pixels — Crop-A 1.43 %, Club-full 0.83 %, Club-full A4
+0.66 % — with **no** shape difference (0–11 unexplained pixels per page)
+and at most 0.134 % beyond 32 levels. It is not text: Crop-A written with
+glyph outlines is 1.28 %. The golden tier keeps C3's rule. Size and time
+are reported against 05 Appendix B, not gated; the legacy measures are
+reported for reading with the images.
+
+### 11.4 Invocation
+
+```
+node scripts/measure-print.mjs <map.ocd> [--paper=A4[:landscape]] [--print-scale=N]
+     [--centre=x,y] [--px-per-mm=10] [--no-legacy] [--no-symbols] [--out=<dir>]
+```
+
+writes `page.<mode>.pdf`, `page.<mode>.png`, `oracle.<mode>.png`,
+`diff.oracle.<mode>.png`, `diff.oracle.<mode>.outline.png`, `legacy.pdf`,
+`legacy.png`, `diff.legacy.png`, `symbol.<code>.{old,new,diff}.png` for
+the diverging symbols, `summary.md` and `summary.json` into
+`.local/print/<map>/`; exit 0 when the gate holds, 1 when it does not or
+the map does not print, 2 on usage errors. One map per invocation
+(Club-full is 36 MB and the per-symbol parity imports it again; its A3
+page peaks at 2.6 GB RSS). `pdftocairo` is required; `qpdf` and
+`rsvg-convert` are used when on the `PATH`, their part skipped otherwise
+— a machine without the packages can run them from an image through a
+wrapper (the script's header shows one).
+
+### 11.5 Results
+
+RESULTS_PLACEHOLDER
+
+### 11.6 Tests
+
+| Test | Covers |
+|---|---|
+| `packages/api/src/render/__tests__/print-run.test.ts` | the sheet from the print window (scale-up, whole-mm rounding, portrait), the bounds fallback, the overrides, the block's visibility; the synthetic course (determinism, inside the window, resolves to six sites and five legs); the page's sanctioned codes; the gate; the previous-run comparison |
+| `scripts/__tests__/measure-print.test.mjs` | `parseArgs`; one run on `e2e/test.ocd` — both modes, `qpdf` ok, page size, the gate's measures, legacy page and its images, the frame (850.1) as the one sanctioned divergence, `summary.md` shape and the files; a second run equal to the first (same bytes, `summary.previous.json`); an A5 override at 1:5 000; usage errors. `qpdf` / `rsvg-convert` parts skip locally without the tools and are required under CI (`librsvg2-bin` joins the PDF-tools step) |
+| `packages/api/src/render/__tests__/page-raster.test.ts` "composites the layers' premultiplied pixels" | the oracle fix the run forced (`docs/bugfix-page-oracle-premultiplied.md`) |
+| `packages/api/src/render/__tests__/parity.test.ts` "does not count a tone on the ink threshold" | the measure fix the run forced (Crop-A's 214.0) |
+
 ## Pending in this chapter
 
 - **Composing off the event loop**: each page is composed and written
@@ -778,4 +907,4 @@ the reference raster (`map-rendering.md` §5.1).
   per-variant pages (08): one frame per page in slice C.
 - **Serif and mono faces**: no file ships (`map-rendering.md` §4.10), so
   no PDF font either.
-- §10 is retired by slice D (§10.6); §11 (corpus numbers) is C7's.
+- §10 is retired by slice D (§10.6).
