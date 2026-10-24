@@ -339,7 +339,7 @@ formula, as objects for the shared stage:
   baselines 0.68 / 1.68 / 2.68 × cell, title 0.48, sequence and code
   0.43 at 0.67, F dimension 0.34, wide-row length 0.9 × 0.43; header
   text, title and lengths carry `weight: 700` (drawn regular while only
-  the regular faces ship — see Pending);
+  the regular faces ship — §7.4, SLICES row C8);
 - pictograms as **point symbols**: `iofSymbolGlyph(key)` converts the
   `iof-symbols.ts` data (absolute `M` / `L` / `C` / `Z` paths and
   circles) into a glyph at 100 µm per unit, y flipped — `fill="black"` →
@@ -413,8 +413,8 @@ convergence with no special case. No viewport when `epsgOf` is null
 
 Beyond §10.4 and the two differences of decision (3): spec-sized 7xx
 symbols, the 701 turned to the first control, 709 from the library and
-start / finish clearance (C0); the block's header in regular weight
-(Pending); Liberation Sans in the block (the legacy font stack lists
+start / finish clearance (C0); the block's header, title and lengths
+in regular weight (decided 2026-10-24, bold face in SLICES row C8); Liberation Sans in the block (the legacy font stack lists
 DejaVu Sans first); map-anchored images, control numbers and map text
 turn with a rotated window (legacy drew the overprint upright in page
 space); imported `marked_route` / `restricted_line` / `forbidden_route`
@@ -548,11 +548,11 @@ the reference raster (`map-rendering.md` §5.1).
   `CourseStackError` fallback), golden PDFs (`pdftoppm` of the `rgb`
   pages against the page goldens and the scene goldens), `qpdf --check`
   in CI, the sanctioned-differences list (§7.4 feeds it).
-- **Bold description-block text**: the block's header, title and
-  lengths carry `weight: 700` but print regular — only the regular faces
-  ship (`map-rendering.md` §4.10) and `symbolise` picks a font by family.
-  Awaiting the user's choice (C2 question, 2026-10-24): a sanctioned
-  difference now, or a Liberation Sans Bold face with weight-aware font
+- **Bold description-block text** (SLICES row C8): the block's header,
+  title and lengths carry `weight: 700` but print regular — only the
+  regular faces ship (`map-rendering.md` §4.10) and `symbolise` picks a
+  font by family. Decided 2026-10-24: regular weight now, a sanctioned
+  difference (§7.4); C8 ships Liberation Sans Bold with weight-aware font
   resolution.
 - **Print profiles** (05 §5.5): `cmyk-offset`, `/Separation`, overprint,
   PDF/X-4 and output intents, `colourOverrides`, `minLineWidthMm`, bleed
