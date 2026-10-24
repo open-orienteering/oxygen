@@ -5,7 +5,7 @@
  * render gate and the PNG cache are in `course-maps/routes.ts`.
  */
 
-import { mapDocument, render, windowBoundingBox, windowRotationDeg, type MapWindow } from "@oxygen/shared";
+import { course, mapDocument, render, windowBoundingBox, windowRotationDeg, type MapWindow } from "@oxygen/shared";
 import { glyphOutlineFrom, loadBundledFont } from "./fonts.js";
 import { encodePng, rasterisePassStream } from "./reference-raster.js";
 import { stackColour } from "./previews.js";
@@ -76,6 +76,10 @@ export function objectsNear(objects: readonly render.RenderObject[], bbox: MapWi
 export interface PreparedDocument {
   colours: mapDocument.DocumentColour[];
   input: mapDocument.DocumentRenderInput;
+  /** The header (course layer context and georeferencing for the page composer, C2). */
+  header: mapDocument.MapDocumentHeader;
+  /** Point features automatic overprint cuts go around (`cutFeaturesOfDocument`, docs/course-layer.md §3.4). */
+  cutFeatures: course.CutFeature[];
 }
 
 const prepared = new Map<string, Promise<PreparedDocument>>();
@@ -96,7 +100,7 @@ export function prepareDocument(hash: string, bytes: () => Promise<Uint8Array> |
   }
   const entry = (async (): Promise<PreparedDocument> => {
     const doc = mapDocument.decodeMapDocument(await bytes());
-    return { colours: doc.header.colours, input: mapDocument.documentRenderInput(doc) };
+    return { colours: doc.header.colours, input: mapDocument.documentRenderInput(doc), header: doc.header, cutFeatures: course.cutFeaturesOfDocument(doc) };
   })();
   prepared.set(hash, entry);
   entry.catch(() => {
