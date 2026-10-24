@@ -12,10 +12,20 @@
  */
 
 import { PDFDocument, PDFHexString, PDFName, type PDFPage, type PDFRef, PDFString } from "@cantoo/pdf-lib";
+import { WGS84_WKT } from "./geo.js";
+import type { GeoViewport } from "./page.js";
+import { UM_TO_PT } from "./operators.js";
 import type { FontFamily, FontRef, GlyphMesh } from "../render/pass-stream.js";
 import { type TrueTypeFont, parseTrueType } from "../render/truetype.js";
 import { cidWidths, fontDescriptorValues, subsetTag, subsetTrueType, toUnicodeCMap } from "./fonts.js";
 import { type OperatorResources, glyphFormBBox, glyphFormContent } from "./operators.js";
+
+/** An embedded raster image: its resource name on the page and its pixel size. */
+export interface PdfImage {
+  name: string;
+  width: number;
+  height: number;
+}
 
 /** A font file the writer may embed (`packages/shared/fonts/`). */
 export interface PdfFontFace {
@@ -39,6 +49,10 @@ export interface PdfPageInit {
   heightPt: number;
   /** `[llx lly urx ury]` in points; default the MediaBox (the paper, 05 §5.8). */
   trimBox?: [number, number, number, number];
+  /** Page label (`/PageLabels` prefix, the course or map name). */
+  label?: string;
+  /** Title of this page's item in the document outline; absent = no item. */
+  outlineTitle?: string;
 }
 
 /** The fixed timestamp of deterministic output. */
@@ -69,6 +83,9 @@ export class PdfWriter {
   private readonly faces: Face[] = [];
   private readonly forms = new Map<string, { name: string; ref: PDFRef }>();
   private readonly formsByMesh = new WeakMap<GlyphMesh, { name: string; ref: PDFRef }>();
+  private readonly images = new Map<string, { ref: PDFRef; width: number; height: number; name: string; bytes: Uint8Array }[]>();
+  private imageCount = 0;
+  private readonly pages: { page: PDFPage; label?: string; outlineTitle?: string }[] = [];
   private fontCount = 0;
   private saved = false;
   /** Why a face falls back to outlines (unreadable file); for the caller to log. */
@@ -110,7 +127,46 @@ export class PdfWriter {
     const page = this.doc.addPage([init.widthPt, init.heightPt]);
     const [x0, y0, x1, y1] = init.trimBox ?? [0, 0, init.widthPt, init.heightPt];
     page.node.set(PDFName.of("TrimBox"), this.doc.context.obj([x0, y0, x1, y1]));
+    this.pages.push({ page, label: init.label, outlineTitle: init.outlineTitle });
     return new PdfWriterPage(this, page);
+  }
+
+  /** @internal */ async imageFor(page: PDFPage, png: Uint8Array): Promise<PdfImage> {
+    // Equal bytes → one image XObject per document (05 §5.10).
+    let h = 0x811c9dc5;
+    for (let i = 0; i < png.length; i++) h = Math.imul(h ^ png[i], 0x01000193) >>> 0;
+    const key = `${h.toString(16)}/${png.length}`;
+    const bucket = this.images.get(key) ?? [];
+    let img = bucket.find((b) => b.bytes.length === png.length && b.bytes.every((v, i) => v === png[i]));
+    if (!img) {
+      const embedded = await this.doc.embedPng(png);
+      img = { ref: embedded.ref, width: embedded.width, height: embedded.height, name: `Im${this.imageCount++}`, bytes: png };
+      bucket.push(img);
+      this.images.set(key, bucket);
+    }
+    page.node.setXObject(PDFName.of(img.name), img.ref);
+    return { name: img.name, width: img.width, height: img.height };
+  }
+
+  /** @internal */ viewports(page: PDFPage, vps: readonly GeoViewport[]): void {
+    const ctx = this.doc.context;
+    const pt = (v: number) => Math.round(v * UM_TO_PT * 1000) / 1000;
+    const arr = vps.map((vp) =>
+      ctx.obj({
+        Type: "Viewport",
+        BBox: vp.bboxUm.map(pt),
+        Measure: {
+          Type: "Measure",
+          Subtype: "GEO",
+          Bounds: [0, 0, 0, 1, 1, 1, 1, 0],
+          GCS: { Type: "GEOGCS", EPSG: 4326, WKT: PDFString.of(WGS84_WKT) },
+          GPTS: vp.gpts.flatMap(([lat, lng]) => [Math.round(lat * 1e8) / 1e8, Math.round(lng * 1e8) / 1e8]),
+          LPTS: vp.lpts.flat(),
+          PDU: ["M", "SQM", "DEG"],
+        },
+      }),
+    );
+    page.node.set(PDFName.of("VP"), ctx.obj(arr));
   }
 
   /** @internal */ fontFor(page: PDFPage, ref: FontRef, glyphIds: ArrayLike<number>): string | undefined {
@@ -217,11 +273,42 @@ export class PdfWriter {
     return Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
   }
 
+  /** `/PageLabels` with each page's label as its prefix, and a flat `/Outlines` with one item per titled page. */
+  private writeNavigation(): void {
+    const ctx = this.doc.context;
+    const catalog = this.doc.catalog;
+    if (this.pages.some((p) => p.label)) {
+      const nums: unknown[] = [];
+      this.pages.forEach((p, i) => nums.push(i, ctx.obj(p.label ? { P: PDFHexString.fromText(p.label) } : {})));
+      // `obj()`'s overloads take literals, not a mixed number / dict array built in a loop.
+      catalog.set(PDFName.of("PageLabels"), ctx.obj({ Nums: ctx.obj(nums as never) }));
+    }
+    const titled = this.pages.filter((p) => p.outlineTitle);
+    if (titled.length === 0) return;
+    const root = ctx.nextRef();
+    const refs = titled.map(() => ctx.nextRef());
+    titled.forEach((p, i) => {
+      ctx.assign(
+        refs[i],
+        ctx.obj({
+          Title: PDFHexString.fromText(p.outlineTitle!),
+          Parent: root,
+          ...(i > 0 ? { Prev: refs[i - 1] } : {}),
+          ...(i < refs.length - 1 ? { Next: refs[i + 1] } : {}),
+          Dest: [p.page.ref, "Fit"],
+        }),
+      );
+    });
+    ctx.assign(root, ctx.obj({ Type: "Outlines", First: refs[0], Last: refs[refs.length - 1], Count: refs.length }));
+    catalog.set(PDFName.of("Outlines"), root);
+  }
+
   /** Finishes fonts, metadata and the file. The writer cannot be used afterwards. */
   async save(): Promise<Uint8Array> {
     if (this.saved) throw new Error("PdfWriter: save() called twice");
     this.saved = true;
     this.writeFonts();
+    this.writeNavigation();
     const { info } = this.opts;
     if (info?.title) this.doc.setTitle(info.title);
     if (info?.author) this.doc.setAuthor(info.author);
@@ -256,5 +343,15 @@ export class PdfWriterPage {
   /** Appends a content stream (operators from `operators.ts`, in page points). */
   addContent(ops: string): void {
     this.writer.content(this.page, ops);
+  }
+
+  /** Embeds a PNG (once per distinct bytes per document) and makes it a resource of this page. */
+  image(png: Uint8Array): Promise<PdfImage> {
+    return this.writer.imageFor(this.page, png);
+  }
+
+  /** `/VP`: one `/Measure /GEO` viewport per georeferenced map frame (05 §5.9). */
+  setGeoViewports(vps: readonly GeoViewport[]): void {
+    if (vps.length) this.writer.viewports(this.page, vps);
   }
 }

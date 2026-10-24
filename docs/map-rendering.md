@@ -1653,7 +1653,10 @@ symbol, hand-placed), the twelve library fixtures (`lib-*`, §6.3,
 coloured from the library's palette through `cmykToHex`) and the five
 course scenes (`course-*`, §6.3, C0: a library base map and
 `courseLayer()` merged into one stream, coloured from the completed
-stack). `render.goldenScene(name, fonts)` resolves a name
+stack). The three **page scenes** (`page-*`, C2,
+`docs/course-print.md` §7.5) are separate: a composed page drawn by the
+page oracle (`render/page-raster.ts`), compared by the PDF tier only (C3)
+— the WebGL2 spec does not draw pages. `render.goldenScene(name, fonts)` resolves a name
 to `{ stream, colour }` identically on every side, and
 `render.goldenFrame(stream)` fixes the image frame: bounds + 1 mm
 margin, grown symmetrically to a **whole number of pixels** (a 57.5 px
@@ -1844,6 +1847,15 @@ WebGL2 per-pass path against the golden, measured at introduction
 | `course-objects` | ISOM 406, 505, 106; white-out rectangle, toner-saver ring, 709 rectangle, 709.b triangle, 707 / 708 / 711 extras, a map text in its own colour with `{course}` | white-outs at upper white above all ink and below upper purple; 709 / 707 / 711 upper, 708 lower; the text's row on top of the stack |
 | `course-sprint` | ISSprOM 401, two 521 buildings; `numberStyle: "knockout"` | 6 mm circles; upper-white halo under upper-purple numbers, above the buildings' black |
 | `course-all-controls` | ISOM 403, 304; all controls with a free-order course | every site drawn, codes, no legs, start north |
+
+The **page scenes** (C2, `@oxygen/shared/print` `pageScene`,
+`print/__fixtures__/pages.ts`) are whole pages through `composePage`:
+
+| Scene | Page | Asserted |
+|---|---|---|
+| `page-sprint-a4` | A4 portrait, ISSprOM map 1:4 000 printed at 1:3 000, six-site course, IOF header block with pictograms, page title | map layer under `T_map` (×4/3) clipped to the frame; block geometry and pictograms; page text on top |
+| `page-ring` | 120 × 90 mm, ISOM 1:10 000; map-anchored white-out outside, page white-out box over the frame edge, page text and dashed line | white margin and ring, map inside the ring, page objects above the map |
+| `page-rotated` | 120 × 90 mm, ISOM, window rotated 20° clockwise; map text | map, course and text turned together, corners outside the frame white |
 
 Not in the table: 04 §8 row 10 (minimum sizes) is a screen-backend rule
 (the stream is the same at every zoom), and the filter-region and
