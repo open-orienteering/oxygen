@@ -102,7 +102,7 @@ describe("pageSanctionedCodes", () => {
     const rgb = pageSanctionedCodes({ mode: "rgb", description: false, rotated: false });
     expect(rgb).toEqual(["course-symbol-sizes", "library-symbols", "north-lines-below", "size-aware-cuts", "stack-order", "start-finish-clearance", "start-turned"]);
     const cmyk = pageSanctionedCodes({ mode: "cmyk", description: true, rotated: true });
-    expect(cmyk).toEqual(expect.arrayContaining(["cmyk-colour", "description-weight", "description-font", "rotated-overprint"]));
+    expect(cmyk).toEqual(expect.arrayContaining(["cmyk-colour", "description-font", "rotated-overprint"]));
     expect(cmyk).toEqual([...cmyk].sort());
   });
 });

@@ -20,6 +20,8 @@ import {
 import { describe, expect, it } from "vitest";
 import { libraryScene } from "../../render/__fixtures__/library/index.js";
 import { parseTrueType } from "../../render/truetype.js";
+import { parseRenderSymbol } from "../../render/symbol.js";
+import { makePath } from "../../render/pass-stream.js";
 import { symbolise } from "../../render/symbolise.js";
 import { type ColourMode } from "../colour.js";
 import { layerMatrix, mapLayerOperators } from "../operators.js";
@@ -31,7 +33,9 @@ const faces = [
   { family: "liberation-sans" as const, data: face("LiberationSans-Regular.ttf") },
   { family: "liberation-sans-narrow" as const, data: face("LiberationSansNarrow-Regular.ttf") },
 ];
+const boldData = face("LiberationSans-Bold.ttf");
 const sans = parseTrueType(faces[0].data.slice().buffer, "liberation-sans");
+const boldSans = parseTrueType(boldData.slice().buffer, "liberation-sans");
 const narrow = parseTrueType(faces[1].data.slice().buffer, "liberation-sans-narrow");
 
 const A4: [number, number] = [595.276, 841.89];
@@ -109,6 +113,25 @@ describe("PdfWriter", async () => {
       expect((get(file.dict, "Length1") as PDFNumber).asNumber()).toBe(program.length);
       expect(program.length).toBeLessThan(faces[0].data.length / 4);
     }
+  });
+
+  it("embeds a bold face as its own font object next to the regular one", async () => {
+    const mk = (id: string, weight: number) => parseRenderSymbol({ type: "text", id, code: id, name: id, fontFamily: "liberation-sans", fontSizeUm: 4000, weight, colour: 0 });
+    const { stream } = symbolise({
+      objects: [{ symbolIdx: 0, path: makePath([0, 0]), text: "Regular" }, { symbolIdx: 1, path: makePath([0, 5000]), text: "Bold" }],
+      symbols: [mk("r", 400), mk("b", 700)],
+      fonts: [sans, boldSans],
+    });
+    expect(stream.fontTable.map((f) => f.bold)).toEqual([false, true]);
+    const w = await PdfWriter.create({ faces: [...faces, { family: "liberation-sans", data: boldData }], deterministic: true });
+    const page = w.addPage({ widthPt: 200, heightPt: 200 });
+    page.addContent(mapLayerOperators(stream, { colours: libraryScene("lib-text").colours, mode: "cmyk", resources: page.resources, matrix: layerMatrix({ scaleRatio: 1, atPt: [10, 100] }) }));
+    const d = await PDFDocument.load(await w.save(), { updateMetadata: false });
+    const fonts = resolve(d, get(d.getPage(0).node.Resources()!, "Font"), PDFDict);
+    const names = fonts.keys().map((k) => nameOf(resolve(d, fonts.get(k), PDFDict), "BaseFont")).sort();
+    expect(names).toHaveLength(2);
+    expect(names.some((n) => /^[A-Z]{6}\+LiberationSans$/.test(n ?? ""))).toBe(true);
+    expect(names.some((n) => /^[A-Z]{6}\+LiberationSans-Bold$/.test(n ?? ""))).toBe(true);
   });
 
   it("subsets to the glyphs the content draws, by their own ids", () => {

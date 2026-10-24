@@ -6,7 +6,7 @@
  */
 
 import { mapDocument, render } from "@oxygen/shared";
-import { glyphOutlineFrom, loadBundledFont } from "./fonts.js";
+import { glyphOutlineFrom, loadBundledFonts } from "./fonts.js";
 import { type RasterImage, encodePng, rasterisePassStream } from "./reference-raster.js";
 
 export const THUMBNAIL_LONG_EDGE_PX = 512;
@@ -27,7 +27,7 @@ export function stackColour(stack: readonly render.ColourEntry[]): ColourLookup 
 }
 
 function bundledFonts(): Promise<render.TrueTypeFont[]> {
-  return Promise.all([loadBundledFont("liberation-sans"), loadBundledFont("liberation-sans-narrow")]);
+  return loadBundledFonts();
 }
 
 /** One symbol on the swatch scene, as RGBA. */

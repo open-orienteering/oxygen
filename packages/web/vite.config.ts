@@ -121,7 +121,7 @@ export default defineConfig({
             },
           },
           {
-            // The vector viewer's fonts (Liberation Sans + Narrow) and MSDF
+            // The vector viewer's fonts (Liberation Sans Regular / Bold + Narrow) and MSDF
             // text atlas pages (hashed asset URLs): cached on first use
             // rather than precached, so devices that never open a vector
             // map do not download them.

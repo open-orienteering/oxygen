@@ -100,7 +100,7 @@ export function prepareStream(stream: render.PassStream, opts: PrepareOptions = 
   for (const m of stream.glyphTable) meshes.set(`${m.glyphId}/${m.partIdx}`, m);
   const fonts = new Map<number, render.FontMetrics>();
   stream.fontTable.forEach((ref) => {
-    const f = opts.fonts?.find((x) => x.family === ref.family);
+    const f = opts.fonts?.find((x) => x.family === ref.family && !!x.bold === ref.bold && !!x.italic === ref.italic) ?? opts.fonts?.find((x) => x.family === ref.family);
     if (f) fonts.set(ref.fontId, f);
   });
   const meshGeomCache = new Map<string, { fill?: FanGeometry; strokes: StrokeGeometry[] }>();
@@ -395,7 +395,7 @@ function textItems(
   for (const [g, inst] of byGlyph) {
     if (pass.haloWidthUm) {
       const hw = pass.haloWidthUm / k;
-      const key = `${font.family}/${g}/${ft}/halo${hw.toFixed(2)}`;
+      const key = `${font.family}${font.bold ? "/bold" : ""}/${g}/${ft}/halo${hw.toFixed(2)}`;
       let geom = cache.get(key) as StrokeGeometry | undefined;
       if (!geom) {
         const outline = font.outline(g);
@@ -407,7 +407,7 @@ function textItems(
       }
       items.push({ kind: "instanced", colour: pass.colour, instances: Float32Array.from(inst), strokes: [geom] });
     } else {
-      const key = `${font.family}/${g}/${ft}/fill`;
+      const key = `${font.family}${font.bold ? "/bold" : ""}/${g}/${ft}/fill`;
       let geom = cache.get(key) as FanGeometry | undefined;
       if (!geom) {
         const outline = font.outline(g);
