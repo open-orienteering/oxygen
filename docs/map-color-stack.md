@@ -112,6 +112,9 @@ Order in the page SVG:
 6. descriptions, foreground layout objects
 
 `window.png?layer=full|ink` feeds the layout editor the same sandwich.
+For a `vector` event the ink split is by stack position of `purple-lower`
+in the document's colour stack, not by the classification above
+(`course-print.md` §10.3).
 
 ## Out of scope
 
