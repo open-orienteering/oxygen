@@ -16,7 +16,8 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { defaultMapAppearance } from "@oxygen/shared";
 import { applyEventMap } from "../../event-map.js";
 import { clearCourseMapSourceCache } from "../../course-maps/map-source.js";
-import { loadPinnedPrintDocument, renderCoursePages, sheetForMapRow, type PrintMapRow } from "../../course-maps/pdf-page.js";
+import { loadPinnedPrintDocument, pinnedPrintSource, renderCoursePages, sheetForMapRow, type PrintMapRow } from "../../course-maps/pdf-page.js";
+import { renderCoursePagesInWorker, resetPrintWorkers } from "../../course-maps/print-worker-host.js";
 import { hasTool, qpdfCheck } from "../../render/pdf-golden.js";
 import { createTestEvent, disconnect, type TestEventContext } from "../helpers/test-db.js";
 
@@ -93,14 +94,19 @@ afterAll(async () => {
   await disconnect();
 });
 
-async function build(mode: "cmyk" | "rgb" = "cmyk") {
+async function build(mode: "cmyk" | "rgb" = "cmyk", opts: { worker?: boolean; onPage?: (p: { index: number; label: string }) => void } = {}) {
   const pinned = await loadPinnedPrintDocument(vec.db, vec.eventId);
   if (!pinned) throw new Error("no pinned document");
   const event = await vec.db.event.findUniqueOrThrow({ where: { id: vec.eventId } });
   const allControls = await vec.db.control.findMany({ where: { eventId: vec.eventId, removed: false } });
   const sheets = rows.map((row) => sheetForMapRow(row, { event: { name: event.name, date: event.date }, allControls, mapInfo: pinned.info }));
   const graphics = new Map((await vec.db.graphic.findMany({ where: { eventId: vec.eventId } })).map((g) => [Number(g.id), { mime: g.mime, data: new Uint8Array(g.data) }]));
-  return renderCoursePages({ document: pinned.document, rotationCorrectionDeg: pinned.rotationCorrectionDeg, sheets, graphics, mode, deterministic: true, info: { title: `${event.name} maps` } });
+  const shared = { rotationCorrectionDeg: pinned.rotationCorrectionDeg, sheets, graphics, mode, deterministic: true, info: { title: `${event.name} maps` }, onPage: opts.onPage };
+  if (opts.worker) {
+    const source = await pinnedPrintSource(vec.db, vec.eventId);
+    return renderCoursePagesInWorker({ ...shared, document: { hash: source!.hash, bytes: source!.bytes } });
+  }
+  return renderCoursePages({ ...shared, document: pinned.document });
 }
 
 const lookup = <T>(doc: PDFDocument, o: unknown): T => (o instanceof PDFRef ? doc.context.lookup(o) : o) as T;
@@ -110,6 +116,21 @@ describe("course pages from the pinned document", () => {
     expect(await loadPinnedPrintDocument(legacy.db, legacy.eventId)).toBeNull();
     expect(await loadPinnedPrintDocument(vec.db, vec.eventId)).not.toBeNull();
   });
+
+  it("the print worker writes the same bytes as the in-process composer, and reports each page", async () => {
+    const pages: string[] = [];
+    try {
+      const local = await build();
+      const remote = await build("cmyk", { worker: true, onPage: (p) => pages.push(`${p.index}:${p.label}`) });
+      expect(Buffer.from(remote.bytes).equals(Buffer.from(local.bytes))).toBe(true);
+      expect(remote.warnings).toEqual(local.warnings);
+      expect(pages).toHaveLength(2);
+      expect(pages[0]).toMatch(/^0:/);
+      expect(pages[1]).toMatch(/^1:/);
+    } finally {
+      await resetPrintWorkers();
+    }
+  }, 120_000);
 
   it("one document, one A4 page per sheet, TrimBox = MediaBox, labels and outlines per sheet", async () => {
     const out = await build();

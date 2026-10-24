@@ -27,10 +27,10 @@ import { RsvgConverter, mergePdfPages } from "./svg-to-pdf.js";
 import {
   type PrintGraphic,
   type PrintMapRow,
-  loadPinnedPrintDocument,
-  renderCoursePages,
+  pinnedPrintSource,
   sheetForMapRow,
 } from "./pdf-page.js";
+import { printGate, renderCoursePagesInWorker, resetPrintWorkers } from "./print-worker-host.js";
 
 type Db = ReturnType<typeof prisma>;
 
@@ -265,10 +265,14 @@ export function registerCourseMapRoutes(
   options: {
     converter?: Pick<RsvgConverter, "convert">;
     /** The composer's page writer (tests inject a failing one). */
-    renderCoursePages?: typeof renderCoursePages;
+    renderCoursePages?: typeof renderCoursePagesInWorker;
   } = {},
 ): void {
-  const renderVectorPages = options.renderCoursePages ?? renderCoursePages;
+  const renderVectorPages = options.renderCoursePages ?? renderCoursePagesInWorker;
+  // The print workers go with the server (docs/course-print.md §8.2).
+  server.addHook("onClose", async () => {
+    await resetPrintWorkers();
+  });
   server.get<{
     Params: { nameId: string };
     Querystring: {
@@ -314,7 +318,7 @@ export function registerCourseMapRoutes(
       // The switch (docs/course-print.md §8): `vector` with a pinned
       // document prints through the composer; everything else, and a
       // document whose colour stack is not aligned, through rsvg.
-      const pinned = await loadPinnedPrintDocument(db, event.id);
+      const pinned = await pinnedPrintSource(db, event.id);
       if (pinned) {
         try {
           const sheets = rows.map((row) =>
@@ -324,19 +328,22 @@ export function registerCourseMapRoutes(
               mapInfo: pinned.info,
             }),
           );
-          // A permit like every render, but no queue cap: a 503 would
-          // arrive as a broken download (course-print.md §8.2).
-          const out = await renderGate().run(() =>
+          // A worker slot, then a permit like every render, but no queue
+          // cap: a 503 would arrive as a broken download (course-print.md
+          // §8.2). Composing runs in the print worker, off the event loop.
+          const out = await printGate(() => renderGate().run(() =>
             renderVectorPages({
-              document: pinned.document,
+              document: { hash: pinned.hash, bytes: pinned.bytes },
               rotationCorrectionDeg: pinned.rotationCorrectionDeg,
               sheets,
               graphics,
               mode: "cmyk",
               info,
+              onPage: (page) => {
+                for (const warning of page.warnings) req.log.warn({ nameId }, `maps.pdf: ${warning}`);
+              },
             }),
-          );
-          for (const warning of out.warnings) req.log.warn({ nameId }, `maps.pdf: ${warning}`);
+          ));
           body = Buffer.from(out.bytes);
           pipeline = "vector";
         } catch (error) {

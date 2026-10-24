@@ -50,6 +50,8 @@ export interface CoursePagesOptions {
   text?: "font" | "outline";
   /** Rasteriser for SVG graphics (tests inject one); default resvg. */
   rasteriseSvg?: (svg: Uint8Array, widthPx: number, heightPx: number) => Promise<Uint8Array>;
+  /** Called after each page is written (the print worker streams these back as progress). */
+  onPage?: (page: { index: number; label: string; warnings: string[] }) => void;
 }
 
 export interface CoursePagesResult {
@@ -126,12 +128,13 @@ export async function renderCoursePages(opts: CoursePagesOptions): Promise<Cours
   const rasterise = opts.rasteriseSvg ?? rasteriseSvgGraphic;
   const pngCache = new Map<string, Uint8Array>();
 
-  for (const sheet of opts.sheets) {
+  for (const [index, sheet] of opts.sheets.entries()) {
+    const pageWarnings: string[] = [];
     // One page at a time on the event loop: let other requests (card
     // readouts) run between pages of a long export (course-print.md §8.2).
     await new Promise<void>((resolve) => setImmediate(resolve));
     const page = composePage(pageInputFor(opts.document, sheet, geo), fonts);
-    for (const w of page.warnings) warnings.push(`${sheet.label}: ${w.code}: ${w.message}`);
+    for (const w of page.warnings) pageWarnings.push(`${sheet.label}: ${w.code}: ${w.message}`);
     const images = new Map<number, Uint8Array>();
     for (const img of page.images) {
       const g = opts.graphics?.get(img.graphicId);
@@ -148,7 +151,7 @@ export async function renderCoursePages(opts: CoursePagesOptions): Promise<Cours
             png = await rasterise(g.data, w, h);
             pngCache.set(key, png);
           } catch (err) {
-            warnings.push(`${sheet.label}: SVG_RASTER: graphic ${img.graphicId}: ${err instanceof Error ? err.message : String(err)}`);
+            pageWarnings.push(`${sheet.label}: SVG_RASTER: graphic ${img.graphicId}: ${err instanceof Error ? err.message : String(err)}`);
             continue;
           }
         }
@@ -156,7 +159,9 @@ export async function renderCoursePages(opts: CoursePagesOptions): Promise<Cours
       }
     }
     const written = await writePage(writer, page, { mode, images });
-    for (const w of written.warnings) warnings.push(`${sheet.label}: ${w}`);
+    for (const w of written.warnings) pageWarnings.push(`${sheet.label}: ${w}`);
+    warnings.push(...pageWarnings);
+    opts.onPage?.({ index, label: sheet.label, warnings: pageWarnings });
   }
   const bytes = await writer.save();
   return { bytes, pageCount: opts.sheets.length, warnings };
@@ -219,25 +224,48 @@ export function sheetForMapRow(
   return sheet;
 }
 
+/** The pinned document's identity, without decoding it. */
+export interface PinnedPrintSource {
+  info: BaseMapInfo;
+  hash: string;
+  rotationCorrectionDeg: number;
+  /** The `map_documents` blob (throws when it is missing). */
+  bytes: () => Promise<Uint8Array>;
+}
+
+/**
+ * The event's pinned document for printing, not yet decoded, or null on
+ * the legacy path (`getBaseMapInfo().document` null: `legacy`, or
+ * `vector` without a pin). The route hands this to the print worker, which
+ * decodes it on its own thread (docs/course-print.md §8.2).
+ */
+export async function pinnedPrintSource(db: Db, eventId: bigint): Promise<PinnedPrintSource | null> {
+  const info = await getBaseMapInfo(db, eventId);
+  if (!info.document) return null;
+  const { hash } = info.document;
+  const row = await db.mapFile.findFirst({ where: { eventId, documentHash: hash }, orderBy: { uploadedAt: "desc" }, select: { rotationCorrection: true } });
+  return {
+    info,
+    hash,
+    rotationCorrectionDeg: row?.rotationCorrection ?? 0,
+    bytes: async () => {
+      const bytes = await getBlob(db, "map_documents", hash);
+      if (!bytes) throw new Error("Pinned map document is missing");
+      return bytes;
+    },
+  };
+}
+
 export interface PinnedPrintDocument {
   info: BaseMapInfo;
   document: PreparedDocument;
   rotationCorrectionDeg: number;
 }
 
-/**
- * The event's pinned document for printing, or null on the legacy path
- * (`getBaseMapInfo().document` null: `legacy`, or `vector` without a pin).
- */
+/** `pinnedPrintSource` decoded in this thread (corpus run, in-process tests). */
 export async function loadPinnedPrintDocument(db: Db, eventId: bigint): Promise<PinnedPrintDocument | null> {
-  const info = await getBaseMapInfo(db, eventId);
-  if (!info.document) return null;
-  const { hash } = info.document;
-  const document = await prepareDocument(hash, async () => {
-    const bytes = await getBlob(db, "map_documents", hash);
-    if (!bytes) throw new Error("Pinned map document is missing");
-    return bytes;
-  });
-  const row = await db.mapFile.findFirst({ where: { eventId, documentHash: hash }, orderBy: { uploadedAt: "desc" }, select: { rotationCorrection: true } });
-  return { info, document, rotationCorrectionDeg: row?.rotationCorrection ?? 0 };
+  const source = await pinnedPrintSource(db, eventId);
+  if (!source) return null;
+  const document = await prepareDocument(source.hash, source.bytes);
+  return { info: source.info, document, rotationCorrectionDeg: source.rotationCorrectionDeg };
 }

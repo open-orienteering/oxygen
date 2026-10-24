@@ -197,7 +197,7 @@ axis. For a `vector` event with a pinned map document `window.png` is drawn
 from the document by the reference raster (`course-print.md` §10); other
 events use the OCAD → SVG path. Query, caps and caching are the same.
 `maps.pdf` follows the same switch (`course-print.md` §8): composed from
-the document for a `vector` event with a pinned document, `rsvg-convert`
+the document (in a worker thread, off the event loop) for a `vector` event with a pinned document, `rsvg-convert`
 otherwise; `X-Print-Pipeline: vector | legacy | legacy-fallback` names the
 path (`legacy-fallback`: a document whose colour stack is not aligned).
 Combined PDF pages are ordered by course, map `sort_order`, then map
