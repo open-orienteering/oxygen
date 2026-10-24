@@ -362,6 +362,9 @@ describe("point orientation from object angles (docs/map-import.md §3.3, C10)",
       { symNum: 418000, number: "418.0", type: 1, flags: 1, status: 0, description: "Rotatable", elements: bar(0) },
       { symNum: 109001, number: "109.1", type: 1, flags: 0, status: 0, description: "Small knoll", elements: [{ type: 4, flags: 0, color: 3, lineWidth: 0, diameter: 50, coords: [c(0, 0)] }] },
       { symNum: 504009, number: "504.9", type: 1, flags: 0, status: 0, description: "Barrier, unrotated", elements: bar(0) },
+      { symNum: 311001, number: "311.1", type: 1, flags: 0, status: 0, description: "Centred ring", elements: [{ type: 3, flags: 0, color: 3, lineWidth: 10, diameter: 50, coords: [c(0, 0)] }] },
+      { symNum: 109002, number: "109.2", type: 1, flags: 0, status: 0, description: "Off-centre dot", elements: [{ type: 4, flags: 0, color: 3, lineWidth: 0, diameter: 50, coords: [c(30, 0)] }] },
+      { symNum: 524002, number: "524.2", type: 1, flags: 0, status: 0, description: "Dot and stroke", elements: [{ type: 4, flags: 0, color: 3, lineWidth: 0, diameter: 50, coords: [c(0, 0)] }, ...bar(0)] },
     ];
     s.objects = [...Array.from(s.objects),
       { sym: 512003, otp: 1, ang: -281, coordinates: [c(0, 0)] },
@@ -370,6 +373,9 @@ describe("point orientation from object angles (docs/map-import.md §3.3, C10)",
       { sym: 418000, otp: 1, ang: 900, coordinates: [c(30, 0)] },
       { sym: 109001, otp: 1, ang: 450, coordinates: [c(40, 0)] },
       { sym: 504009, otp: 1, ang: 0, coordinates: [c(50, 0)] },
+      { sym: 311001, otp: 1, ang: 300, coordinates: [c(60, 0)] },
+      { sym: 109002, otp: 1, ang: 300, coordinates: [c(70, 0)] },
+      { sym: 524002, otp: 1, ang: 300, coordinates: [c(80, 0)] },
     ];
     return s;
   };
@@ -381,21 +387,23 @@ describe("point orientation from object angles (docs/map-import.md §3.3, C10)",
   };
 
   it("turns a north-oriented symbol rotatable when one of its objects carries an angle", () => {
-    for (const code of ["512.3", "519.0"]) {
+    // An off-centre dot and a dot beside a stroke look different turned: not symmetric.
+    for (const code of ["512.3", "519.0", "109.2", "524.2"]) {
       expect(render(code).orientation).toBe("object");
       expect(render(code).glyph.rotatable).toBe(true);
     }
   });
 
-  it("keeps the flag where it already applies, where no object is rotated, and on centred discs", () => {
+  it("keeps the flag where it already applies, where no object is rotated, and on centred discs and rings", () => {
     expect(render("418.0").orientation).toBe("object");
     expect(render("504.9").orientation).toBe("north");
     expect(render("504.9").glyph.rotatable).toBe(false);
     expect(render("109.1").orientation).toBe("north");
+    expect(render("311.1").orientation).toBe("north");
   });
 
   it("keeps every object's angle and draws the rotated objects turned", () => {
-    expect(r.input.objects.filter((o) => o.type === 1).map((o) => o.angleDeciDeg)).toEqual([-281, undefined, 1616, 900, 450, undefined]);
+    expect(r.input.objects.filter((o) => o.type === 1).map((o) => o.angleDeciDeg)).toEqual([-281, undefined, 1616, 900, 450, undefined, 300, 300, 300]);
     const doc = decodeMapDocument(encodeMapDocument(r.input));
     const { objects, symbols } = documentRenderInput(doc);
     const angles = objects.filter((o) => symbols[o.symbolIdx]?.code === "512.3").map((o) => o.angleDeg ?? 0);
