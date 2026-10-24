@@ -5,8 +5,10 @@
  */
 
 import { describe, expect, it } from "vitest";
+import { render } from "@oxygen/shared";
 import { mapPointToPage } from "@oxygen/shared/print";
-import { composePageScene, rasterisePage, type PageRaster } from "../page-raster.js";
+import { composePageScene, over, rasterisePage, type PageRaster } from "../page-raster.js";
+import { rasterisePassStream } from "../reference-raster.js";
 
 const PX = 10; // px/mm
 const at = (img: PageRaster, xMm: number, yDownMm: number) => {
@@ -50,5 +52,28 @@ describe("rasterisePage", () => {
     expect(at(img, 137 + 7 * 7.5, 14 + 7 * 0.2)).toEqual(white); // inside the event row, away from the text
     const rule = at(img, 137 + 7 * 4, 14 + 7);
     expect(rule[0]).toBeLessThan(80);
+  });
+
+  it("composites the layers' premultiplied pixels: a half-covered cyan edge over white keeps G and B at 255", async () => {
+    // resvg returns premultiplied RGBA: 50 % cyan is (0, 128, 128, 128).
+    const dst = new Uint8Array([255, 255, 255, 255]);
+    over(dst, 1, 1, { width: 1, height: 1, pixels: new Uint8Array([0, 128, 128, 128]) }, 0, 0);
+    expect(Array.from(dst)).toEqual([127, 255, 255, 255]);
+    // And what the map layer hands over: an edge pixel of a cyan rectangle on transparent.
+    const path = { coords: Int32Array.from([0, 0, 1500, 0, 1500, 1000, 0, 1000]), flags: new Uint8Array(4), closed: true };
+    const stream: render.PassStream = {
+      objectIdx: Uint32Array.of(0),
+      symbolIdx: Uint32Array.of(0),
+      passes: [{ kind: "fill", colour: 0, path, rule: "evenodd" }],
+      glyphTable: [],
+      fontTable: [],
+    };
+    const img = await rasterisePassStream(stream, { colour: () => "#00ffff", bounds: { minX: 0, minY: 0, maxX: 2000, maxY: 1000 }, pxPerMm: 1, background: "none", supersample: 2 });
+    const edge = img.pixels.subarray(4, 8);
+    expect(edge[3]).toBeGreaterThan(0);
+    expect(edge[3]).toBeLessThan(255);
+    const out = new Uint8Array(8).fill(255);
+    over(out, 2, 1, img, 0, 0);
+    expect([out[5], out[6]]).toEqual([255, 255]);
   });
 });
