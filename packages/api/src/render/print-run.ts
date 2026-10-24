@@ -208,9 +208,11 @@ export function printSheetFor(header: HeaderLike, opts: Pick<PrintRunOptions, "p
     const orientation = opts.paper?.orientation ?? (pw ? (pw.right - pw.left > pw.top - pw.bottom ? "landscape" : "portrait") : wide ? "landscape" : "portrait");
     paper = { paper: size, orientation, width: null, height: null, name: `${size} ${orientation}` };
   } else {
-    // The print window enlarged to the print scale is the frame.
+    // The print window enlarged to the print scale is the frame, the sheet rounded up to whole mm:
+    // a fractional page puts PDF raster and oracle up to half a pixel apart at every edge.
     const f = mapScale / printScale;
-    const w = round3((pw.right - pw.left) * f + 2 * PRINT_MARGIN_MM), h = round3((pw.top - pw.bottom) * f + 2 * PRINT_MARGIN_MM);
+    const mm = (v: number) => Math.ceil(v - 1e-6);
+    const w = mm((pw.right - pw.left) * f + 2 * PRINT_MARGIN_MM), h = mm((pw.top - pw.bottom) * f + 2 * PRINT_MARGIN_MM);
     paper = { paper: "custom", orientation: w > h ? "landscape" : "portrait", width: w, height: h, name: `custom ${w} × ${h}` };
   }
   if (opts.printScale) printScale = opts.printScale;

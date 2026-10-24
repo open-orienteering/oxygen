@@ -31,6 +31,12 @@ describe("printSheetFor", () => {
     expect(layout.window).toMatchObject({ minX: 10, minY: -20, width: 140, height: 99 });
   });
 
+  it("rounds a fractional sheet up to whole mm", () => {
+    const spec = printSheetFor(header({ scale: 4000, left: -50.1, bottom: 0, right: 49.6, top: 42.3 }, 4000));
+    expect(spec.template).toMatchObject({ paperWidthMm: 106, paperHeightMm: 49 });
+    expect(frameOf(spec)).toEqual({ x: 3, y: 3, width: 100, height: 43 });
+  });
+
   it("uses the map scale when the print window has none, portrait for a tall window", () => {
     const spec = printSheetFor(header({ left: 0, bottom: 0, right: 40, top: 60 }, 10000));
     expect(spec.printScale).toBe(10000);
