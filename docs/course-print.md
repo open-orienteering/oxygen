@@ -863,7 +863,74 @@ wrapper (the script's header shows one).
 
 ### 11.5 Results
 
-RESULTS_PLACEHOLDER
+Measured 2026-10-24 (dev machine, poppler 22.02 `pdftocairo`, `qpdf`
+11.3 and librsvg 2.54 from the images, one map at a time). The **OCAD
+window** rows are the C-gate's pages — what the mapper's own print
+settings print; the **Appendix B** rows are the pages 05 priced, by
+override (`sprint --paper=A3`, `club-full --paper=A4
+--print-scale=10000`; user decision 2026-10-24). Times are wall time for
+the one page (`composePage`, then `renderCoursePages` per mode, which
+composes again and writes); bytes are the deterministic PDFs; every page
+of the second complete run was byte-identical to the first in both modes.
+
+| Page set | Map | Page (mm) | Map → print scale | Rotation | Objects | Bytes `rgb` / `cmyk` (kB) | compose / write `rgb` / `cmyk` (ms) | > 16 levels `rgb` / `cmyk` (%) | > 32 levels (%) | Unexplained (px) | qpdf | Legacy: unexplained / differing (% of ink) | Symbols compared / diverging | Gate |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| OCAD window | Sprint | 106 × 49 | 1:4000 → 1:4000 | 0° | 2 389 | 218 / 218 | 36 / 131 / 82 | 0.240 / 0.150 | 0.039 / 0.022 | 0 / 0 | ok | 1.54 / 29.32 | 58 / 4 | pass |
+| OCAD window | Crop-A | 143 × 117 | 1:15000 → 1:15000 | 0° | 4 927 | 459 / 459 | 76 / 239 / 180 | 1.429 / 1.258 | 0.133 / 0.100 | 0 / 0 | ok | 0.18 / 22.63 | 96 / 6 | pass |
+| OCAD window | Crop-B | 43 × 52 | 1:15000 → 1:7500 | 0° | 1 005 | 141 / 141 | 34 / 114 / 106 | 0.494 / 0.348 | 0.031 / 0.022 | 0 / 0 | ok | 3.68 / 21.95 | 59 / 3 | pass |
+| OCAD window | Club-2026 | 426 × 303 | 1:15000 → 1:5000 | -3.296° | 7 664 | 950 / 950 | 117 / 503 / 406 | 0.450 / 0.347 | 0.038 / 0.026 | 3 / 3 | ok | 8.94 / 40.80 | 101 / 6 | pass |
+| OCAD window | Club-full | 426 × 303 | 1:15000 → 1:15000 | -3.3° | 31 163 | 3 624 / 3 624 | 281 / 1570 / 1271 | 0.831 / 0.648 | 0.134 / 0.113 | 11 / 10 | ok | 0.33 / 20.37 | 142 / 13 (4 unsanctioned) | FAIL |
+| Appendix B | Sprint A3 | 420 × 297 | 1:4000 → 1:4000 | 0° | 10 441 | 885 / 885 | 97 / 424 / 397 | 0.153 / 0.095 | 0.014 / 0.008 | 0 / 0 | ok | 1.03 / 21.26 | 86 / 7 | pass |
+| Appendix B | Club-full A4 1:10 000 | 297 × 210 | 1:15000 → 1:10000 | -3.3° | 13 768 | 1 627 / 1 626 | 161 / 761 / 590 | 0.656 / 0.501 | 0.095 / 0.078 | 5 / 5 | ok | 0.84 / 18.61 | 117 / 12 (4 unsanctioned) | FAIL |
+
+**Backend parity.** Every page draws the same shapes as the oracle —
+0–11 unexplained pixels on pages of 0.2–13 megapixels — and at most
+0.134 % of the pixels lie beyond 32 levels. Beyond 16 levels the dense
+1:15 000 pages exceed the golden tier's 0.5 % (§11.3); written with text
+as outlines Crop-A still measures 1.28 %. Crop-A's lake hatch is the
+largest single cluster: the same ink per period, the PDF's lines 0.07 px
+(7 µm) from the oracle's, below every budget; its source was not found
+(no global offset, no rotation, `hatchLines` identical on both sides).
+
+**Legacy page.** Differing ink is 18–41 % (colour against the legacy RGB:
+the library's and the stack's colours, purple, pattern phase), the shape
+difference 0.2–8.9 % of ink, highest on Club-2026, whose dot-pattern
+areas (210.1, 407.1) differ in phase (`pattern-origin`). Diverging
+symbols on the window, unexplained ÷ ink and their codes:
+
+- Sprint: 407.0 38.1 %, 404.0 27.6 %, 402.0 12.5 % (`pattern-origin`); 512.200 11.1 % (`dash-fitting`, `dash-points`).
+- Crop-A: 407.0 36.1 %, 113.0 33.2 %, 520.2 27.9 %, 404.0 13.0 %, 409.0 10.4 % (`pattern-origin`); 507.0 10.1 % (`dash-fitting`, `dash-points`).
+- Crop-B: 507.0 20.6 % (`dash-fitting`, `dash-points`); 409.0 20.3 %, 310.0 12.4 % (`pattern-origin`).
+- Club-2026: 210.1 60.0 %, 407.1 41.5 %, 404.3 11.0 % (`pattern-origin`); 815.2 52.6 % (`text-fonts`); 507.1 15.9 %, 508.2 13.4 % (`dash-fitting`).
+- Club-full: **504.7 46.6 %, 512.3 45.5 %, 519.0 20.2 %, 504.5 20.2 % (none)**; 407.1 42.7 %, 404.3 13.4 % (`pattern-origin`); 414.3 23.2 %, 507.1 12.4 % (`dash-fitting`); 811.5 19.5 %, 825.1 16.1 %, 825.0 10.9 % (`text-fonts`); 107.0 14.1 % (`pointed-caps`); 517.1 11.5 % (`curve-glyphs`, `dash-fitting`, `dash-points`).
+- Sprint A3: 407.0 37.1 %, 533.0 29.8 %, 404.0 27.7 %, 501.300 19.1 %, 402.0 12.9 % (`pattern-origin`); 507.0 24.7 % (`dash-fitting`, `dash-points`); 416.0 24.6 % (`curve-glyphs`, `glyph-spacing`).
+- Club-full A4: the same four unsanctioned point symbols; 407.1 52.5 %, 409.1 14.5 %, 404.3 13.9 % (`pattern-origin`); 414.3 22.0 %, 508.2 10.9 %, 507.1 10.3 % (`dash-fitting`); 107.0 14.1 % (`pointed-caps`); 517.1 12.7 % (`curve-glyphs`, `dash-fitting`, `dash-points`).
+
+**What the run found** (fixes are rows, not C7):
+
+- **Point-symbol rotation (row C9).** Club-full's 504.5 / 504.7 (barrier),
+  512.3 (footbridge) and 519.0 (tunnel) — drawn from their source
+  definitions, canonical rendering on or off — are drawn unrotated
+  (512.3 a quarter turn off) where the legacy turns each object to its
+  angle. The C-gate's only failure.
+- **Size against 05 Appendix B (row C10).** Sprint A3: 885 kB against
+  ≈ 0.5 MB. Club-full A4 at 1:10 000: 1.63 MB against ≈ 0.25 MB. Its
+  content stream is 4.8 MB raw, flated to 1.63 MB (×0.34, as Appendix B
+  assumed), but the window holds ~280 k path points (Appendix B: ~42 k
+  coords) at ~17 bytes each — absolute integer µm, where Appendix B priced
+  ~6 B "relative" (PDF operands are absolute) — plus 14 k glyph instances
+  with a full six-number `cm` each (~50 B). Fonts are 17 kB.
+- **Time on the event loop (row C11).** A Club-full A3 page takes
+  0.28 s to compose and 1.3–1.6 s to write per mode (2.4 s in the first
+  run): within 05's "hundreds of ms" only for the smaller pages (Sprint
+  0.13 s, Club-2026 0.5 s). The Pending item below now has its input.
+- **Two measurement defects, fixed in C7** (user decision 2026-10-24: they
+  would otherwise falsify these numbers): the page oracle composited
+  resvg's premultiplied pixels as straight alpha
+  (`docs/bugfix-page-oracle-premultiplied.md`; Crop-B 4.77 → 0.49 % at
+  16 levels; page goldens unchanged), and B9's unexplained measure counted
+  a tone on its ink threshold as a missing shape (Crop-A's 214.0 at 206
+  against 207: 68 % → 0).
 
 ### 11.6 Tests
 
@@ -876,10 +943,16 @@ RESULTS_PLACEHOLDER
 
 ## Pending in this chapter
 
-- **Composing off the event loop**: each page is composed and written
-  synchronously on the API's event loop (§8.2 step 4 yields only between
-  pages; 05 Appendix B: hundreds of ms per page). A worker thread if
-  C7's corpus run shows pages long enough to delay a card readout.
+- **Composing off the event loop** (row C11): each page is composed and
+  written synchronously on the API's event loop (§8.2 step 4 yields only
+  between pages). C7 measured up to 0.28 s composing and 1.3–2.4 s writing
+  a Club-full A3 page (§11.5) — long enough to delay a card readout, so a
+  worker thread.
+- **PDF size** (row C10): Club-full A4 at 1:10 000 is 1.63 MB, 6.5× 05
+  Appendix B's estimate (§11.5).
+- **Corpus gate** (§11.3): Club-full fails on four point symbols drawn
+  unrotated (row C9). Crop-A's 7 µm hatch offset between PDF and oracle is
+  unexplained (below every budget).
 - **Golden tier on CI's poppler**: the budgets were measured with poppler
   22.02 (dev machine); the CI runner's distribution ships a newer one.
   The embedded-font text tier (≤ 2.5 %, §9.2) is provisional: tightened
