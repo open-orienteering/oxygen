@@ -1927,7 +1927,9 @@ pixels inked (some channel more than 48 below white, about a fifth of
 full coverage) on one side with no ink within one pixel on the other,
 and differing beyond the channel tolerance there (C7: a tone on the
 threshold — Crop-A's 214.0 at 206 against 207 — otherwise counted as a
-whole missing shape).
+whole missing shape; `docs/bugfix-parity-ink-threshold.md`). The corpus
+tables below were measured before that rule; it only removes counts, so
+none of their verdicts would flip to `diverges`.
 Anti-aliasing shades and sub-pixel placement never count: at 10 px/mm a
 0.1 mm line is one pixel, and a 0.05 mm offset flips every pixel of it
 at the channel tolerance. The verdict is `close` when unexplained ≤ 10 %

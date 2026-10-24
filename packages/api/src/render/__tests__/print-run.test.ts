@@ -6,7 +6,7 @@
  */
 
 import { describe, expect, it } from "vitest";
-import { type PrintRunReport, comparePrevious, pageSanctionedCodes, parityFailures, printSheetFor, syntheticCourse } from "../print-run.js";
+import { type PrintRunReport, checkFailures, comparePrevious, pageSanctionedCodes, parityFailures, printSheetFor, syntheticCourse } from "../print-run.js";
 import { resolveSheet } from "../../course-maps/resolve-sheet.js";
 
 const header = (printWindow: { scale?: number; left: number; bottom: number; right: number; top: number } | null, mapScale = 15000) => ({
@@ -113,6 +113,31 @@ describe("parityFailures", () => {
     expect(parityFailures("rgb", { strongRatio: 0.00133, shapeRatio: 0 })).toEqual([]);
     expect(parityFailures("rgb", { strongRatio: 0.006, shapeRatio: 0 })).toEqual([expect.stringMatching(/^rgb: 0\.600 % of the pixels beyond 32 levels/)]);
     expect(parityFailures("cmyk", { strongRatio: 0, shapeRatio: 0.0002 })).toEqual([expect.stringMatching(/^cmyk: unexplained 0\.0200 % of ink/)]);
+  });
+});
+
+describe("checkFailures", () => {
+  const sheetMm = { widthMm: 426, heightMm: 303 };
+  const ok = { mode: "rgb" as const, qpdf: "ok" as const, pageMm: { width: 426, height: 303 } };
+
+  it("holds for a checked page of the sheet's size, a skipped qpdf included", () => {
+    expect(checkFailures({ sheetMm, modes: [ok, { ...ok, mode: "cmyk", qpdf: "skipped" }], legacyPageMm: { width: 426.004, height: 303 }, unsanctioned: 0 })).toEqual([]);
+  });
+
+  it("fails on qpdf errors, a page or legacy page off the sheet, and unsanctioned symbols", () => {
+    expect(
+      checkFailures({
+        sheetMm,
+        modes: [{ ...ok, qpdf: "failed: damaged" }, { ...ok, mode: "cmyk", pageMm: { width: 420, height: 297 } }],
+        legacyPageMm: { width: 297, height: 210 },
+        unsanctioned: 4,
+      }),
+    ).toEqual([
+      "rgb: qpdf failed: damaged",
+      "cmyk: page 420 × 297 mm, sheet 426 × 303 mm",
+      "legacy page 297 × 210 mm, sheet 426 × 303 mm",
+      "4 symbol(s) diverge without a sanctioned difference",
+    ]);
   });
 });
 

@@ -804,8 +804,8 @@ document objects in the window (`objectsNear`).
   The legacy page's text is pinned to the bundled Liberation files through
   a generated `FONTCONFIG_FILE` (B9's pinning, for librsvg). Shape:
   unexplained ÷ ink against the PDF raster; colour: pixels beyond 16
-  levels ÷ ink against the page oracle drawn in the **legacy RGB** of each
-  source colour (B9's recolouring — the PDF matches the oracle within
+  levels against the page oracle drawn in the **legacy RGB** of each
+  source colour, over the same ink (legacy ∪ PDF) (B9's recolouring — the PDF matches the oracle within
   (a)), so OCAD's RGB against the stack's CMYK does not swamp it. Page
   sizes must agree (geometry is not a sanctioned difference, §8.4).
 - **Per-symbol attribution**: `runParity` (`map-rendering.md` §6.4) on the
@@ -930,13 +930,13 @@ symbols on the window, unexplained ÷ ink and their codes:
   (`docs/bugfix-page-oracle-premultiplied.md`; Crop-B 4.77 → 0.49 % at
   16 levels; page goldens unchanged), and B9's unexplained measure counted
   a tone on its ink threshold as a missing shape (Crop-A's 214.0 at 206
-  against 207: 68 % → 0).
+  against 207: 68 % → 0; `docs/bugfix-parity-ink-threshold.md`).
 
 ### 11.6 Tests
 
 | Test | Covers |
 |---|---|
-| `packages/api/src/render/__tests__/print-run.test.ts` | the sheet from the print window (scale-up, whole-mm rounding, portrait), the bounds fallback, the overrides, the block's visibility; the synthetic course (determinism, inside the window, resolves to six sites and five legs); the page's sanctioned codes; the gate; the previous-run comparison |
+| `packages/api/src/render/__tests__/print-run.test.ts` | the sheet from the print window (scale-up, whole-mm rounding, portrait), the bounds fallback, the overrides, the block's visibility; the synthetic course (determinism, inside the window, resolves to six sites and five legs); the page's sanctioned codes; the gate — parity (`parityFailures`) and `qpdf`, page sizes, unsanctioned symbols (`checkFailures`); the previous-run comparison |
 | `scripts/__tests__/measure-print.test.mjs` | `parseArgs`; one run on `e2e/test.ocd` — both modes, `qpdf` ok, page size, the gate's measures, legacy page and its images, the frame (850.1) as the one sanctioned divergence, `summary.md` shape and the files; a second run equal to the first (same bytes, `summary.previous.json`); an A5 override at 1:5 000; usage errors. `qpdf` / `rsvg-convert` parts skip locally without the tools and are required under CI (`librsvg2-bin` joins the PDF-tools step) |
 | `packages/api/src/render/__tests__/page-raster.test.ts` "composites the layers' premultiplied pixels" | the oracle fix the run forced (`docs/bugfix-page-oracle-premultiplied.md`) |
 | `packages/api/src/render/__tests__/parity.test.ts` "does not count a tone on the ink threshold" | the measure fix the run forced (Crop-A's 214.0) |

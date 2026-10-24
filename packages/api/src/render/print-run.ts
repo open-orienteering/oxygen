@@ -130,9 +130,10 @@ export interface PrintLegacyResult {
   ink: number;
   unexplained: number;
   /**
-   * Differing ÷ ink against the page oracle drawn in the legacy RGB of each
-   * source colour (B9's recolouring; the PDF matches the oracle within the
-   * parity budget), so the OCAD-RGB-vs-CMYK shift does not swamp it.
+   * Pixels differing (16 levels) from the page oracle drawn in the legacy RGB
+   * of each source colour (B9's recolouring; the PDF matches the oracle within
+   * the parity budget), so the OCAD-RGB-vs-CMYK shift does not swamp it — ÷
+   * the ink of legacy ∪ PDF, the shape ratio's denominator.
    */
   inkRatio: number;
   /** Unexplained ÷ ink (shape only, B9's measure). */
@@ -328,6 +329,29 @@ export function parityFailures(mode: ColourMode, m: { strongRatio: number; shape
   return out;
 }
 
+/**
+ * The rest of the corpus gate (§11.3): `qpdf` errors, a PDF or legacy page
+ * not the sheet's size (geometry is never a sanctioned difference, §8.4),
+ * diverging symbols without a sanctioned code. Empty when it holds.
+ */
+export function checkFailures(c: {
+  sheetMm: { widthMm: number; heightMm: number };
+  modes: Array<{ mode: ColourMode; qpdf: ToolCheck; pageMm: { width: number; height: number } }>;
+  legacyPageMm: { width: number; height: number } | null;
+  unsanctioned: number;
+}): string[] {
+  const out: string[] = [];
+  const off = (p: { width: number; height: number }) => Math.abs(p.width - c.sheetMm.widthMm) > 0.01 || Math.abs(p.height - c.sheetMm.heightMm) > 0.01;
+  const sheet = `sheet ${c.sheetMm.widthMm} × ${c.sheetMm.heightMm} mm`;
+  for (const m of c.modes) {
+    if (m.qpdf.startsWith("failed")) out.push(`${m.mode}: qpdf ${m.qpdf}`);
+    if (off(m.pageMm)) out.push(`${m.mode}: page ${m.pageMm.width} × ${m.pageMm.height} mm, ${sheet}`);
+  }
+  if (c.legacyPageMm && off(c.legacyPageMm)) out.push(`legacy page ${c.legacyPageMm.width} × ${c.legacyPageMm.height} mm, ${sheet}`);
+  if (c.unsanctioned) out.push(`${c.unsanctioned} symbol(s) diverge without a sanctioned difference`);
+  return out;
+}
+
 /** The run against the previous one (null without a previous report). */
 export function comparePrevious(current: Pick<PrintRunReport, "modes" | "legacy" | "symbols">, previous: PrintRunReport | null | undefined): PrintPrevious | null {
   if (!previous?.modes) return null;
@@ -447,11 +471,7 @@ export async function runPrint(file: Buffer, fileName: string, opts: PrintRunOpt
         qpdf = `failed: ${err instanceof Error ? err.message.split("\n")[0] : String(err)}`;
       }
     }
-    if (qpdf.startsWith("failed")) failures.push(`${mode}: qpdf ${qpdf}`);
     const pageMm = await pdfPageMm(out.bytes);
-    if (Math.abs(pageMm.width - sheet.paper.widthMm) > 0.01 || Math.abs(pageMm.height - sheet.paper.heightMm) > 0.01) {
-      failures.push(`${mode}: page ${pageMm.width} × ${pageMm.height} mm, sheet ${sheet.paper.widthMm} × ${sheet.paper.heightMm} mm`);
-    }
     const raster = await rasterisePdf(out.bytes, W, H, PAGE_GOLDEN_SUPERSAMPLE);
     const colour = mode === "cmyk" ? await rasteriserCmykColours(page.colours.map((c) => c.cmyk)) : null;
     const oracle = await rasterisePage(page, { pxPerMm, supersample: PAGE_GOLDEN_SUPERSAMPLE, ...(colour ? { colour: (i: number) => colour[i] ?? "#ff00ff" } : {}) });
@@ -489,9 +509,6 @@ export async function runPrint(file: Buffer, fileName: string, opts: PrintRunOpt
   else if (!(await hasCommand(process.env.RSVG_CONVERT_COMMAND ?? "rsvg-convert"))) legacy = { skipped: "rsvg-convert not installed" };
   else {
     legacy = await legacyPage(file, layout, page, spec.mapScale, rgbRaster!, pxPerMm, opts);
-    if (Math.abs(legacy.pageMm.width - sheet.paper.widthMm) > 0.01 || Math.abs(legacy.pageMm.height - sheet.paper.heightMm) > 0.01) {
-      failures.push(`legacy page ${legacy.pageMm.width} × ${legacy.pageMm.height} mm, sheet ${sheet.paper.widthMm} × ${sheet.paper.heightMm} mm`);
-    }
   }
 
   // ---- per-symbol attribution: B9's tool on the window ----
@@ -510,10 +527,17 @@ export async function runPrint(file: Buffer, fileName: string, opts: PrintRunOpt
       .filter((r) => r.verdict === "diverges")
       .map((r) => ({ code: r.code, name: r.name, kind: r.kind, unexplainedRatio: r.diff!.unexplainedRatio, sanctioned: r.sanctioned }));
     const unsanctioned = diverging.filter((r) => r.sanctioned.length === 0).length;
-    if (unsanctioned) failures.push(`${unsanctioned} symbol(s) diverge without a sanctioned difference`);
     symbols = { window: report.window, compared: report.rows.filter((r) => r.diff).length, diverging, unsanctioned };
   }
 
+  failures.push(
+    ...checkFailures({
+      sheetMm: sheet.paper,
+      modes: (["rgb", "cmyk"] as const).map((m) => ({ mode: m, qpdf: modes[m].qpdf, pageMm: modes[m].pageMm })),
+      legacyPageMm: "pageMm" in legacy ? legacy.pageMm : null,
+      unsanctioned: "unsanctioned" in symbols ? symbols.unsanctioned : 0,
+    }),
+  );
   const partial = { modes, legacy, symbols };
   return {
     fileName,
@@ -587,6 +611,8 @@ async function legacyPage(
     });
     await opts.onImage?.("diff.legacy.png", diffPicture(raster, recoloured));
     const d = diffImages(raster, recoloured, 16);
+    // Both ratios over the ink of legacy ∪ PDF: the recoloured oracle draws the PDF's shapes (within (a)),
+    // so its ink is the PDF's up to the colours' own lightness.
     const ink = inkUnion(raster, vector);
     const unexplained = unexplainedPixels(raster, vector);
     return {
