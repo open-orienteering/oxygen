@@ -233,40 +233,52 @@ readable without fragmenting the purple. Oxygen computes the cuts
 automatically — there is no manual cut UX (yet).
   An event-level **Auto cuts** toolbar toggle
   (`course.getOverprintCuts` / `course.setOverprintCuts`,
-  `events.auto_overprint_cuts`, default on) skips
-  `decorateOverprintCuts` for editor geometry when off; imported
-  OCD/XML geometry keeps its file-authored cuts either way.
+  `events.auto_overprint_cuts`, default on) writes editor geometry
+  without automatic cuts when off; imported OCD/XML geometry keeps its
+  file-authored cuts either way.
 
 - **When**: at every geometry rebuild (`rebuildCourseGeometry` — course
   create/update, control move/delete) and after a map upload, which
   rebuilds all `geometrySource: "editor"` courses so cuts follow the new
-  map. Imported (`ocd`/`xml`) geometry keeps its file-authored cuts and
+  map (after the import hold, so a `vector` event cuts against its new
+  pin). Imported (`ocd`/`xml`) geometry keeps its file-authored cuts and
   is never touched. Toggling auto cuts rebuilds every editor course.
-- **Where**: `packages/api/src/overprint-cuts.ts`, pure and unit-tested.
-  It reuses the slimmed base-map object cache built for the description
-  autodetect (`event-map-objects.ts`) and stores the result *in* the
-  course GeoJSON: `properties.cuts` (`{start, end}` compass degrees, the
-  same convention the OCD importer writes) on control point features,
-  `properties.gaps` (`{from, to}` fractions of the leg) on leg features.
-  The cuts ride in the existing `geometry` JSONB.
-- **Which symbols**: `CUT_SYMBOLS` contains ISOM 109/110 and
-  203/204/205/207. The object must also be an OCAD point object. Knolls
-  are treated exactly like rocks for both circle slits and leg gaps.
-  Cliffs (201/202), gigantic boulder areas (206), trenches, black
-  man-made objects, pattern fills, water and vegetation never cut.
-- **Geometry rules**: cuts are deliberately *tight* — the overprint
-  stroke is 0.35 mm wide and a compact ISOM point symbol ~0.5 mm across,
-  so clearing much more than the feature itself just fragments the
-  circle without revealing more map. Point features cut the rim (or the
-  leg, centered on the projection) when they sit within **0.45 mm** of
-  it, opening **±0.4 mm** of ink — about 18° of rim, 0.8 mm of leg.
-  Overlapping cuts merge and slivers (< 4° / < 0.6 mm) drop. Legs keep
-  3 mm (1.2 × circle radius) at each end — the viewer clips that zone
-  around circles anyway.
+- **Where**: the rule is the course layer's (`circleCuts` / `legGaps` in
+  `@oxygen/shared` `course`, `docs/course-layer.md` §3.4); the stored
+  GeoJSON is the layer's projection (`course-layer.md` §4). The cuts are
+  stored *in* the course GeoJSON: `properties.cuts` (`{start, end}`
+  compass degrees, the same convention the OCD importer writes) on
+  control point features, `properties.gaps` (`{from, to}` fractions of
+  the leg) on leg features, in the existing `geometry` JSONB.
+- **Feature source** (`course-layer.md` §4.2): a `vector` event with a
+  pinned map document cuts against the document's objects; every other
+  event against the OCAD parse of its upload (`event-map-objects.ts`,
+  the cache built for the description autodetect; `overprint-cuts.ts`
+  turns it into the feature list).
+- **Which symbols**: `CUT_CODES` contains ISOM 109/110 and
+  203/204/205/207. The object must also be a point object. Knolls are
+  treated exactly like rocks for both circle slits and leg gaps. Cliffs
+  (201/202), gigantic boulder areas (206), trenches, black man-made
+  objects, pattern fills, water and vegetation never cut.
+- **Geometry rules** (size-aware since `OVERPRINT_CUTS_VERSION` 3, user
+  decision 2026-10-24): a cut clears the feature's **own symbol** (its
+  drawn radius — the map file's symbol definition, or what the document
+  draws), **half the overprint line** and **0.25 mm of visible air**, so
+  the line's round end stops 0.25 mm from the symbol on the printed map.
+  A feature is on the rim or the leg when it is within that same
+  clearance; the slit or gap opens exactly between the two points at
+  that distance. A boulder on a 5 mm circle opens ~29° (1.24 mm) of rim,
+  1.25 mm of leg. The earlier fixed ±0.4 mm (~18°, 0.8 mm) was too tight
+  on paper: after the 0.35 mm line's round caps it left ~0.03 mm round a
+  boulder, overlapped a boulder cluster, and overlapped every feature on
+  a 1:10 000 map drawn at ISOM 150 %. Overlapping cuts merge and slivers
+  (< 4° / < 0.6 mm) drop; a circle that would lose more than 300° stays
+  whole; legs keep 3 mm (1.2 × circle radius) at each end — the viewer
+  clips that zone around circles anyway — and never lose more than 70 %.
 - **Stored-geometry migration**: `events.overprint_cuts_version` marks
-  which algorithm decorated every editor course. Existing v1 events are
-  rebuilt lazily on their first geometry read and advanced to v2;
-  imported geometry is untouched.
+  which algorithm decorated every editor course. Events below the
+  current version (3) are rebuilt lazily on their first geometry read
+  and advanced; imported geometry is untouched.
 - **Screen rotation**: stored cut angles are paper-relative. The viewer
   adds `cutRotationDeg` (= `northOffset − meridianTiltDeg`) when drawing
   slits so they stay aligned with map features after the map is rotated

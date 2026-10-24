@@ -1,29 +1,58 @@
 /**
- * The automatic-cut rule over feature lists — the cases of
- * `packages/api/src/__tests__/overprint-cuts.test.ts`, with the same
- * numbers (course-layer.md §3.4), plus the document feature source.
+ * The automatic-cut rule over feature lists (course-layer.md §3.4): a cut
+ * clears the feature's symbol radius + half the line + `CUT_AIR_MM`, and a
+ * feature is on the line by the same sum; plus the document feature source.
  */
 
 import { describe, expect, it } from "vitest";
-import { CUT_CODES, circleCuts, cutFeaturesOfDocument, legGaps } from "../cuts.js";
+import { CUT_AIR_MM, CUT_CODES, DEFAULT_FEATURE_RADIUS_MM, circleCuts, cutContextForScale, cutFeaturesOfDocument, cutSymbolRadiusMm, legGaps, ocadCutSymbolRadiiMm } from "../cuts.js";
+import type { OcadSymbolDefLike } from "../../import/ocad-symbols.js";
 import { OBJECT_TYPE, decodeMapDocument, encodeMapDocument, type MapDocumentInput } from "../../map-document/index.js";
 import { SYMBOL_LIBRARY_VERSION } from "../../symbol-library/index.js";
 
 const R = 2.5;
-const f = (x: number, y: number) => ({ x, y });
+const W = 0.35;
+const f = (x: number, y: number, r?: number) => (r === undefined ? { x, y } : { x, y, r });
 const gapAt = (gaps: Array<{ start: number; end: number }>, deg: number) =>
   gaps.some((g) => (g.start <= g.end ? deg >= g.start && deg <= g.end : deg >= g.start || deg <= g.end));
+/** Rim point at a compass bearing. */
+const rim = (deg: number, r = R): [number, number] => [r * Math.sin((deg * Math.PI) / 180), r * Math.cos((deg * Math.PI) / 180)];
+const clearance = (r: number, w = W) => r + w / 2 + CUT_AIR_MM;
 
 describe("circleCuts", () => {
-  it("slits the rim over a feature sitting on it, tightly", () => {
-    const cuts = circleCuts([f(R, 0)], 0, 0, R);
+  it("opens the rim exactly to the clearance of a feature on it", () => {
+    const boulder = f(R, 0, 0.2);
+    const cuts = circleCuts([boulder], 0, 0, R, W);
     expect(cuts).toHaveLength(1);
     expect(gapAt(cuts, 90)).toBe(true);
     expect(gapAt(cuts, 270)).toBe(false);
-    const width = (cuts[0].end - cuts[0].start + 360) % 360;
-    expect(width).toBeGreaterThan(10);
-    expect(width).toBeLessThan(22);
-    expect((width / 360) * 2 * Math.PI * R).toBeLessThan(1);
+    // Both arc ends sit at symbol + half line + air from the boulder's centre.
+    for (const deg of [cuts[0].start, cuts[0].end]) {
+      const [x, y] = rim(deg);
+      expect(Math.hypot(x - boulder.x, y - boulder.y)).toBeCloseTo(clearance(0.2), 9);
+    }
+    // 0.625 mm clearance on a 2.5 mm rim: ~28.7°, 1.25 mm of chord (was ±0.4 mm, 0.8 mm).
+    expect((cuts[0].end - cuts[0].start + 360) % 360).toBeCloseTo((4 * Math.asin(clearance(0.2) / (2 * R)) * 180) / Math.PI, 9);
+  });
+
+  it("widens with the feature's symbol and the line, defaults the radius", () => {
+    const width = (g: Array<{ start: number; end: number }>) => (g[0].end - g[0].start + 360) % 360;
+    const boulder = width(circleCuts([f(R, 0, 0.2)], 0, 0));
+    const cluster = width(circleCuts([f(R, 0, 0.46)], 0, 0));
+    expect(cluster).toBeGreaterThan(boulder);
+    expect(width(circleCuts([f(R, 0, 0.2)], 0, 0, R, 0.525))).toBeGreaterThan(boulder);
+    expect(circleCuts([f(R, 0)], 0, 0)).toEqual(circleCuts([f(R, 0, DEFAULT_FEATURE_RADIUS_MM)], 0, 0));
+  });
+
+  it("is on the rim within the clearance, off it beyond", () => {
+    const c = clearance(0.2);
+    expect(circleCuts([f(R + c - 0.01, 0, 0.2)], 0, 0)).toHaveLength(1);
+    expect(circleCuts([f(R + c + 0.01, 0, 0.2)], 0, 0)).toEqual([]);
+    expect(circleCuts([f(R - c + 0.01, 0, 0.2)], 0, 0)).toHaveLength(1);
+    expect(circleCuts([f(R - c - 0.01, 0, 0.2)], 0, 0)).toEqual([]);
+    // A feature off the rim opens less than one on it.
+    const on = circleCuts([f(R, 0, 0.2)], 0, 0)[0], off = circleCuts([f(R + 0.4, 0, 0.2)], 0, 0)[0];
+    expect(off.end - off.start).toBeLessThan(on.end - on.start);
   });
 
   it("leaves the circle whole for a centred feature and wraps north", () => {
@@ -35,24 +64,33 @@ describe("circleCuts", () => {
     expect(gapAt(north, 5)).toBe(true);
   });
 
-  it("follows a larger circle and scales the cut with the document factor", () => {
-    expect(circleCuts([f(R, 0)], 0, 0, 3.75)).toEqual([]);
-    const big = circleCuts([f(3.75, 0)], 0, 0, 3.75, 1.5);
-    expect(big).toHaveLength(1);
-    // Same angular width as the reference: radius and cut both × 1.5.
-    expect(big[0].end - big[0].start).toBeCloseTo(circleCuts([f(R, 0)], 0, 0, R)[0].end - circleCuts([f(R, 0)], 0, 0, R)[0].start, 9);
+  it("follows a larger circle", () => {
+    expect(circleCuts([f(R, 0, 0.2)], 0, 0, 3.75)).toEqual([]);
+    expect(circleCuts([f(3.75, 0, 0.3)], 0, 0, 3.75, 0.525)).toHaveLength(1);
+  });
+
+  it("keeps a circle whole when cuts would leave almost nothing", () => {
+    const ring = Array.from({ length: 24 }, (_, i) => rim(i * 15)).map(([x, y]) => f(x, y, 0.4));
+    expect(circleCuts(ring, 0, 0)).toEqual([]);
   });
 });
 
 describe("legGaps", () => {
   const A = f(0, 0), B = f(40, 0);
 
-  it("gaps the leg around a feature on the line", () => {
-    const gaps = legGaps(A, B, [f(20, 0.3)], R);
+  it("opens the leg exactly to the clearance of a feature beside it", () => {
+    const boulder = f(20, 0.3, 0.2);
+    const gaps = legGaps(A, B, [boulder], R, W);
     expect(gaps).toHaveLength(1);
-    expect(gaps[0].from).toBeLessThan(0.5);
-    expect(gaps[0].to).toBeGreaterThan(0.5);
-    expect((gaps[0].to - gaps[0].from) * 40).toBeLessThan(1);
+    const c = clearance(0.2);
+    for (const t of [gaps[0].from, gaps[0].to]) expect(Math.hypot(t * 40 - 20, 0.3)).toBeCloseTo(c, 9);
+    expect((gaps[0].to - gaps[0].from) * 40).toBeCloseTo(2 * Math.sqrt(c * c - 0.09), 9);
+  });
+
+  it("is on the line within the clearance only", () => {
+    const c = clearance(0.2);
+    expect(legGaps(A, B, [f(20, c - 0.2, 0.2)], R)).toHaveLength(1);
+    expect(legGaps(A, B, [f(20, c + 0.01, 0.2)], R)).toEqual([]);
   });
 
   it("keeps the leg ends, merges overlaps, skips short legs", () => {
@@ -66,6 +104,34 @@ describe("legGaps", () => {
     const many = Array.from({ length: 40 }, (_, i) => f(4 + i * 0.8, 0));
     const gaps = legGaps(A, B, many, R);
     expect(gaps.reduce((s, g) => s + g.to - g.from, 0)).toBeLessThanOrEqual(0.7);
+  });
+});
+
+describe("symbol radii", () => {
+  it("measures an OCAD file's cut symbols as it draws them", () => {
+    const dot = (symNum: number, diameter: number, type = 1): OcadSymbolDefLike =>
+      ({ symNum, number: `${symNum / 1000}`, type, elements: [{ type: 4, color: 0, diameter, coords: [[0, 0]] }] }) as unknown as OcadSymbolDefLike;
+    const radii = ocadCutSymbolRadiiMm([dot(204000, 60), dot(205000, 90), dot(418000, 50), dot(109000, 40, 2)]);
+    expect([...radii.entries()]).toEqual([[204000, 0.3], [205000, 0.45]]);
+  });
+
+  it("measures the library's cut symbols", () => {
+    expect(cutSymbolRadiusMm("ISOM2017-2", "204")).toBeCloseTo(0.2, 9);
+    expect(cutSymbolRadiusMm("ISOM2017-2", "205")).toBeCloseTo(0.3, 9);
+    expect(cutSymbolRadiusMm("ISOM2017-2", "109")).toBeCloseTo(0.25, 9);
+    expect(cutSymbolRadiusMm("ISOM2017-2", "110")).toBeCloseTo(0.4, 3);
+    // Triangle of side 0.8 mm: circumradius 0.8 / √3 (rounded µm vertices).
+    expect(cutSymbolRadiusMm("ISOM2017-2", "207")).toBeCloseTo(0.8 / Math.sqrt(3), 2);
+    // ISOM 203 has no plain entry: the heading's drawing, 203.1 rocky pit (not 203.2 dangerous pit).
+    expect(cutSymbolRadiusMm("ISOM2017-2", "203")).toBe(cutSymbolRadiusMm("ISOM2017-2", "203.1"));
+    expect(cutSymbolRadiusMm("ISOM2017-2", "203.0")).toBeCloseTo(0.489, 3); // the V hangs 0.49 mm below its origin
+    expect(cutSymbolRadiusMm("ISSprOM2019-2", "204")).toBeCloseTo(0.3, 9);
+  });
+
+  it("chooses library and factor by scale", () => {
+    expect(cutContextForScale(15000)).toEqual({ libraryId: "ISOM2017-2", documentFactor: 1 });
+    expect(cutContextForScale(10000)).toEqual({ libraryId: "ISOM2017-2", documentFactor: 1.5 });
+    expect(cutContextForScale(4000)).toEqual({ libraryId: "ISSprOM2019-2", documentFactor: 1 });
   });
 });
 
@@ -108,7 +174,22 @@ describe("cutFeaturesOfDocument", () => {
     }));
     // The encoder may reorder objects; compare as a set.
     const byX = (a: { x: number }, b: { x: number }) => a.x - b.x;
-    expect(cutFeaturesOfDocument(doc).sort(byX)).toEqual([f(-5, 2.5), f(3, 3), f(10, 20)]);
+    expect(cutFeaturesOfDocument(doc).sort(byX)).toEqual([
+      f(-5, 2.5, cutSymbolRadiusMm("ISOM2017-2", "203")),
+      f(3, 3, 0.3),
+      f(10, 20, 0.2),
+    ]);
+  });
+
+  it("measures an unmatched symbol by the document's own render", () => {
+    const own = { ...header, symbols: [{ code: "204.0", name: "Boulder", kind: "point" as const, render: { type: "point" as const, id: "src:204.0", code: "204.0", name: "Boulder", glyph: { parts: [{ kind: "disc" as const, colour: 0, diameterUm: 520 }], rotatable: false }, orientation: "north" as const } }] };
+    const doc = decodeMapDocument(encodeMapDocument({ header: own, objects: [obj(0, OBJECT_TYPE.point, [0, 100])] }));
+    expect(cutFeaturesOfDocument(doc)).toEqual([f(0, 1, 0.26)]);
+  });
+
+  it("falls back to the library entry × the document factor", () => {
+    const doc = decodeMapDocument(encodeMapDocument({ header: { ...header, mapScale: 10000 }, objects: [obj(0, OBJECT_TYPE.point, [1000, 2000])] }));
+    expect(cutFeaturesOfDocument(doc)).toEqual([f(10, 20, 0.2 * 1.5)]);
   });
 
   it("is today's CUT_SYMBOLS set", () => {

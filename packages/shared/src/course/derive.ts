@@ -17,8 +17,8 @@ export interface CourseMetrics {
   startRadiusMm: number;
   /** 704 em, the label box estimate's unit. */
   numberEmMm: number;
-  /** Document factor: scales the automatic-cut reach and widths. */
-  scale: number;
+  /** Drawn 705 / 703 line width: automatic cuts clear its half (§3.4). */
+  lineWidthMm: number;
 }
 
 /** Legs stop this many circle radii beyond a site's own extent (legacy 1.2 × R at a control). */
@@ -90,7 +90,7 @@ export function deriveCourse(input: CourseLayerInput, m: CourseMetrics): CourseD
     role,
     x: site.x,
     y: site.y,
-    cuts: role !== "control" ? [] : gaps ? [...gaps] : features ? circleCuts(features, site.x, site.y, R, m.scale) : [],
+    cuts: role !== "control" ? [] : gaps ? [...gaps] : features ? circleCuts(features, site.x, site.y, R, m.lineWidthMm) : [],
   }));
   const derivedById = new Map(sites.map((s) => [s.id, s]));
 
@@ -107,7 +107,7 @@ export function deriveCourse(input: CourseLayerInput, m: CourseMetrics): CourseD
           legs.push({ from: a.id, to: b.id, points, gaps: leg.gaps ?? [], pieces: leg.pieces.map((p) => p.map((q) => ({ x: q.x, y: q.y }))), preclipped: true });
           continue;
         }
-        const gaps = leg?.gaps ?? (features && points.length === 2 ? legGaps(points[0], points[1], features, R, m.scale) : []);
+        const gaps = leg?.gaps ?? (features && points.length === 2 ? legGaps(points[0], points[1], features, R, m.lineWidthMm) : []);
         const pieces: MapPoint[][] = [];
         for (const piece of gaps.length ? subtractLegGaps(points, gaps) : [points]) {
           const segs: OverlaySegment[] = [];

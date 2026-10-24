@@ -314,7 +314,7 @@ const documentInfo = new LruCache<{ scale: number; meridianTiltDeg: number }>(8)
  * The pinned document of a `vector` event, or null (docs/course-print.md §10;
  * same predicate as the reads-only gate, docs/map-pipeline-switch.md §3).
  */
-async function pinnedDocumentHash(db: MapInfoReader, eventId: bigint): Promise<string | null> {
+export async function pinnedDocumentHash(db: MapInfoReader, eventId: bigint): Promise<string | null> {
   const event = await db.event.findUnique({ where: { id: eventId }, select: { mapPipeline: true } });
   if (event?.mapPipeline !== "vector") return null;
   const row = await db.mapFile.findFirst({

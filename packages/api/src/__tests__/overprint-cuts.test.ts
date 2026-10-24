@@ -1,17 +1,16 @@
 /**
- * Unit tests for the automatic overprint-cut computation
- * (`overprint-cuts.ts`): circle slits and leg gaps over small rock
- * features and knolls, plus merging and the geometry decorator.
+ * Unit tests for the legacy cut-feature source (`overprint-cuts.ts`):
+ * which parsed OCAD objects become cut features, their symbol radii, and
+ * the course layer's rule over them (circle slits and leg gaps; the rule's
+ * own cases are in `packages/shared/src/course/__tests__/cuts.test.ts`).
  */
 
 import { describe, it, expect } from "vitest";
+import { course } from "@oxygen/shared";
 import type { SlimMapObject } from "../event-map-objects.js";
-import {
-  circleCuts,
-  legGaps,
-  decorateOverprintCuts,
-  CIRCLE_RADIUS_MM,
-} from "../overprint-cuts.js";
+import { cutFeaturesOfSlimObjects } from "../overprint-cuts.js";
+
+const R = 2.5;
 
 /** Build a SlimMapObject from paper-mm coordinates. */
 function obj(
@@ -41,167 +40,70 @@ function gapAt(gaps: Array<{ start: number; end: number }>, deg: number): boolea
   );
 }
 
-describe("circleCuts", () => {
-  it("slits the rim over a boulder sitting on it", () => {
-    // Boulder 2.5 mm east of the centre = exactly on the rim.
-    const boulder = obj(204000, 1, [[CIRCLE_RADIUS_MM, 0]]);
-    const cuts = circleCuts([boulder], 0, 0);
+const features = (objects: SlimMapObject[], scale: number | null = 15000, fileRadii = new Map<number, number>()) =>
+  cutFeaturesOfSlimObjects(objects, fileRadii, scale);
+
+describe("cutFeaturesOfSlimObjects", () => {
+  it("keeps knoll and rock point objects, in mm, with their symbol radius", () => {
+    const out = features([
+      obj(204000, 1, [[12.5, -3]]), // boulder
+      obj(109000, 1, [[1, 2]]), // knoll
+      obj(207000, 1, [[0, 0]]), // boulder cluster
+    ]);
+    expect(out.map((f) => [f.x, f.y])).toEqual([[12.5, -3], [1, 2], [0, 0]]);
+    expect(out[0].r).toBeCloseTo(0.2, 9);
+    expect(out[1].r).toBeCloseTo(0.25, 9);
+    expect(out[2].r).toBeCloseTo(0.8 / Math.sqrt(3), 2);
+  });
+
+  it("drops non-cut symbols, line and area objects, and 206", () => {
+    expect(features([
+      obj(303000, 1, [[R, 0]]), // waterhole (blue)
+      obj(417000, 1, [[0, -R]]), // distinct tree (green)
+      obj(505000, 2, [[1, -10], [1, 10]]), // path
+      obj(201000, 2, [[-10, 1], [10, 1]]), // cliff
+      obj(521000, 3, [[-20, -20], [0, -20], [0, 20], [-20, 20]]), // building
+      obj(206000, 3, [[15, -3], [25, -3], [25, 3], [15, 3]]), // gigantic boulder
+      obj(204000, 2, [[0, 0], [1, 1]]), // a boulder code drawn as a line
+    ])).toEqual([]);
+  });
+
+  it("measures by the file's own symbol first", () => {
+    const radii = new Map([[204000, 0.33]]);
+    expect(features([obj(204000, 1, [[0, 0]]), obj(205000, 1, [[1, 1]])], 10000, radii).map((f) => f.r)).toEqual([0.33, 0.3 * 1.5]);
+  });
+
+  it("without the file's sizes: sub-codes by their own entry, scaled by the map", () => {
+    expect(features([obj(203001, 1, [[0, 0]])])[0].r).toBe(course.cutSymbolRadiusMm("ISOM2017-2", "203.1"));
+    expect(features([obj(204000, 1, [[0, 0]])], 10000)[0].r).toBeCloseTo(0.3, 9);
+    expect(features([obj(204000, 1, [[0, 0]])], 4000)[0].r).toBeCloseTo(0.3, 9); // ISSprOM boulder 0.6 mm
+    expect(features([obj(204000, 1, [[0, 0]])], null)[0].r).toBeCloseTo(0.2, 9);
+  });
+});
+
+describe("course layer rule over OCAD features", () => {
+  it("slits the rim over a boulder on it, clearing the symbol with air", () => {
+    const cuts = course.circleCuts(features([obj(204000, 1, [[R, 0]])]), 0, 0);
     expect(cuts).toHaveLength(1);
     expect(gapAt(cuts, 90)).toBe(true);
     expect(gapAt(cuts, 270)).toBe(false);
-    // Symmetric around east, and tight: just the symbol plus half the
-    // overprint stroke, ~0.8 mm of rim. A wider cut fragments the circle
-    // without revealing more map.
+    // 0.2 symbol + 0.175 half line + 0.25 air = 0.625 mm each side.
     const width = (cuts[0].end - cuts[0].start + 360) % 360;
-    expect(width).toBeGreaterThan(10);
-    expect(width).toBeLessThan(22);
-    expect((width / 360) * 2 * Math.PI * CIRCLE_RADIUS_MM).toBeLessThan(1);
+    expect(width).toBeCloseTo((4 * Math.asin(0.625 / (2 * R)) * 180) / Math.PI, 9);
   });
 
-  it("includes knolls but leaves the circle whole for a centred feature", () => {
-    // Knoll on the north rim → slit at 0°.
-    const knoll = obj(109000, 1, [[0, CIRCLE_RADIUS_MM]]);
-    expect(gapAt(circleCuts([knoll], 0, 0), 0)).toBe(true);
-    // A boulder at the centre is under the middle, not the rim: no slit.
-    const centred = obj(204000, 1, [[0, 0]]);
-    expect(circleCuts([centred], 0, 0)).toEqual([]);
+  it("wraps a slit across north and leaves a centred feature alone", () => {
+    const north = course.circleCuts(features([obj(204000, 1, [[-0.1, R]])]), 0, 0);
+    expect(gapAt(north, 359)).toBe(true);
+    expect(gapAt(north, 5)).toBe(true);
+    expect(course.circleCuts(features([obj(204000, 1, [[0, 0]])]), 0, 0)).toEqual([]);
   });
 
-  it("ignores non-black features", () => {
-    const waterhole = obj(303000, 1, [[CIRCLE_RADIUS_MM, 0]]); // blue
-    const tree = obj(417000, 1, [[0, -CIRCLE_RADIUS_MM]]); // green
-    expect(circleCuts([waterhole, tree], 0, 0)).toEqual([]);
-  });
-
-  it("does not slit long line objects", () => {
-    const path = obj(505000, 2, [[1, -10], [1, 10]]);
-    const cliff = obj(201000, 2, [[-10, 1], [10, 1]]);
-    expect(circleCuts([path, cliff], 0, 0)).toEqual([]);
-  });
-
-  it("does not slit area objects", () => {
-    const building = obj(521000, 3, [[-20, -20], [0, -20], [0, 20], [-20, 20]]);
-    expect(circleCuts([building], 0, 0)).toEqual([]);
-  });
-
-  it("handles a slit wrapping north", () => {
-    // Boulder just west of due north: slit spans across 0°.
-    const boulder = obj(204000, 1, [[-0.1, CIRCLE_RADIUS_MM]]);
-    const cuts = circleCuts([boulder], 0, 0);
-    expect(cuts).toHaveLength(1);
-    expect(gapAt(cuts, 359)).toBe(true);
-    expect(gapAt(cuts, 5)).toBe(true);
-  });
-});
-
-describe("legGaps", () => {
-  const A: [number, number] = [0, 0];
-  const B: [number, number] = [40, 0];
-
-  it("gaps the leg around a boulder on the line", () => {
-    const boulder = obj(204000, 1, [[20, 0.3]]);
-    const gaps = legGaps(A, B, [boulder]);
+  it("gaps a leg around a knoll and keeps the leg ends", () => {
+    const A = { x: 0, y: 0 }, B = { x: 40, y: 0 };
+    const gaps = course.legGaps(A, B, features([obj(109000, 1, [[20, 0]])]));
     expect(gaps).toHaveLength(1);
-    expect(gaps[0].from).toBeGreaterThan(0.4);
-    expect(gaps[0].to).toBeLessThan(0.6);
-    // 0.5 (the projection) sits inside the gap.
-    expect(gaps[0].from).toBeLessThan(0.5);
-    expect(gaps[0].to).toBeGreaterThan(0.5);
-    // Tight: just wide enough to free the boulder, ~0.8 mm of a 40 mm leg.
-    expect((gaps[0].to - gaps[0].from) * 40).toBeLessThan(1);
-  });
-
-  it("includes knolls in leg gaps", () => {
-    const knoll = obj(109000, 1, [[20, 0]]);
-    const gaps = legGaps(A, B, [knoll]);
-    expect(gaps).toHaveLength(1);
-    expect(gaps[0].from).toBeLessThan(0.5);
-    expect(gaps[0].to).toBeGreaterThan(0.5);
-  });
-
-  it("does not gap long line objects", () => {
-    const perpendicular = obj(505000, 2, [[10, -5], [10, 5]]);
-    const oblique = obj(505000, 2, [[25, -1], [35, 1]]);
-    expect(legGaps(A, B, [perpendicular, oblique])).toEqual([]);
-  });
-
-  it("does not gap area objects", () => {
-    const building = obj(521000, 3, [[15, -3], [25, -3], [25, 3], [15, 3]]);
-    const giantBoulder = obj(206000, 3, [[15, -3], [25, -3], [25, 3], [15, 3]]);
-    expect(legGaps(A, B, [building, giantBoulder])).toEqual([]);
-  });
-
-  it("preserves the leg ends near the circles", () => {
-    // Boulder right next to the start control: clipped to the end-keep
-    // zone, and what remains is below the minimum gap length.
-    const boulder = obj(204000, 1, [[1, 0]]);
-    expect(legGaps(A, B, [boulder])).toEqual([]);
-  });
-
-  it("merges overlapping gaps and never erases most of the leg", () => {
-    // 0.5 mm apart — closer than the two 0.8 mm gaps, so they fuse.
-    const b1 = obj(204000, 1, [[19.75, 0]]);
-    const b2 = obj(204000, 1, [[20.25, 0]]);
-    expect(legGaps(A, B, [b1, b2])).toHaveLength(1);
-    // Further apart they stay separate rather than erasing the stretch
-    // between them.
-    const far1 = obj(204000, 1, [[18, 0]]);
-    const far2 = obj(204000, 1, [[22, 0]]);
-    expect(legGaps(A, B, [far1, far2])).toHaveLength(2);
-
-  });
-
-  it("skips short legs entirely", () => {
-    const boulder = obj(204000, 1, [[3, 0]]);
-    expect(legGaps([0, 0], [6, 0], [boulder])).toEqual([]);
-  });
-});
-
-describe("decorateOverprintCuts", () => {
-  it("adds cuts to control circles and gaps to legs, leaving start/finish alone", () => {
-    const boulderOnRim = obj(204000, 1, [[10 + CIRCLE_RADIUS_MM, 0]]);
-    const knollOnLeg = obj(109000, 1, [[25, 0]]);
-    const geometry = {
-      features: [
-        {
-          geometry: { type: "Point", coordinates: [0, 0] },
-          properties: { symbolType: "start", code: "S1" },
-        },
-        {
-          geometry: { type: "Point", coordinates: [10, 0] },
-          properties: { symbolType: "control", code: "31" },
-        },
-        {
-          geometry: { type: "Point", coordinates: [40, 0] },
-          properties: { symbolType: "control", code: "32" },
-        },
-        {
-          geometry: { type: "LineString", coordinates: [[10, 0], [40, 0]] },
-          properties: { symbolType: "leg", from: "31", to: "32" },
-        },
-      ],
-    };
-    decorateOverprintCuts(geometry, [boulderOnRim, knollOnLeg]);
-
-    expect(geometry.features[0].properties).not.toHaveProperty("cuts");
-    expect(geometry.features[1].properties?.cuts).toHaveLength(1);
-    expect(geometry.features[2].properties).not.toHaveProperty("cuts");
-    const gaps = geometry.features[3].properties?.gaps;
-    expect(gaps).toHaveLength(1);
-    expect(gaps[0].from).toBeLessThan(0.5);
-    expect(gaps[0].to).toBeGreaterThan(0.5);
-  });
-
-  it("removes stale cuts when the feature no longer applies", () => {
-    const geometry = {
-      features: [
-        {
-          geometry: { type: "Point", coordinates: [10, 0] },
-          properties: { symbolType: "control", code: "31", cuts: [{ start: 80, end: 100 }] },
-        },
-      ],
-    };
-    decorateOverprintCuts(geometry, []);
-    expect(geometry.features[0].properties).not.toHaveProperty("cuts");
+    expect((gaps[0].to - gaps[0].from) * 40).toBeCloseTo(2 * (0.25 + 0.175 + 0.25), 9);
+    expect(course.legGaps(A, B, features([obj(204000, 1, [[1, 0]])]))).toEqual([]);
   });
 });
