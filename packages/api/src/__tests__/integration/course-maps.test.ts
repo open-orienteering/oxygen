@@ -5,7 +5,7 @@ import Fastify, { type FastifyInstance } from "fastify";
 import { PDFDocument } from "pdf-lib";
 import sharp from "sharp";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { defaultMapAppearance } from "@oxygen/shared";
+import { course, defaultMapAppearance } from "@oxygen/shared";
 import { registerCourseMapRoutes } from "../../course-maps/routes.js";
 import {
   createTestEvent,
@@ -15,6 +15,9 @@ import {
 import { makeCaller } from "../helpers/caller.js";
 import { applyEventMap } from "../../event-map.js";
 import { getBaseMapInfo, clearCourseMapSourceCache } from "../../course-maps/map-source.js";
+import { hasTool, qpdfCheck } from "../../render/pdf-golden.js";
+
+const hasQpdf = await hasTool("qpdf");
 
 let ctx: TestEventContext;
 let caller: ReturnType<typeof makeCaller>;
@@ -758,6 +761,142 @@ describe("window.png under a pinned document", () => {
     const res = await server.inject({ method: "GET", url: q(ctx.nameId) });
     expect(res.statusCode).toBe(200);
   });
+});
+
+describe("maps.pdf route switch", () => {
+  // docs/course-print.md §8: a `vector` event with a pinned document prints
+  // through the composer; `legacy`, or `vector` without a pin, through the
+  // legacy SVG → rsvg path. Both read the same template / sheet rows.
+  let vec: TestEventContext;
+  let documentHash: string;
+  let courseMapSeqs: number[];
+  const pdfUrl = (nameId: string, query = "") => `/api/maps/${nameId}/maps.pdf${query}`;
+
+  beforeAll(async () => {
+    vec = await createTestEvent("course_maps_pdf");
+    const bytes = Buffer.concat([readFileSync(fixture), Buffer.from(`pdf-${randomBytes(4).toString("hex")}`)]);
+    const applied = await applyEventMap(vec.db, vec.eventId, "test.ocd", bytes);
+    documentHash = applied.documentHash!;
+    await vec.db.event.update({ where: { id: vec.eventId }, data: { mapPipeline: "vector" } });
+    clearCourseMapSourceCache();
+    const db = vec.db;
+    const mk = (codes: string, xpos: number, ypos: number, extra: Record<string, unknown> = {}) =>
+      db.control.create({ data: { eventId: vec.eventId, codes, xpos, ypos, ...extra } });
+    const c31 = await mk("31", -80, 0, { description: { d: "2.004" } });
+    const c32 = await mk("32", -60, 15);
+    await mk("", -95, -10, { status: "start" });
+    const a4 = await db.mapTemplate.create({ data: { eventId: vec.eventId, name: "A4", printScale: 7500, settings } });
+    const a5 = await db.mapTemplate.create({ data: { eventId: vec.eventId, name: "A5", paper: "A5", printScale: 7500, settings: { ...settings, mapFrame: { x: 5, y: 5, width: 138, height: 200 }, description: { ...settings.description, visible: false } } } });
+    const course = await db.course.create({
+      data: { eventId: vec.eventId, name: "Röd", lengthM: 2100, climbM: 30, courseControls: { create: [{ position: 1, controlId: c31.id }, { position: 2, controlId: c32.id }] } },
+    });
+    const maps = [
+      await db.courseMap.create({ data: { eventId: vec.eventId, name: "Röd A4", kind: "course", courseId: course.id, templateId: a4.id, windowCenter: { x: -70, y: 5 } } }),
+      await db.courseMap.create({ data: { eventId: vec.eventId, name: "Röd A5", kind: "course", courseId: course.id, templateId: a5.id, windowCenter: { x: -70, y: 5 }, sortOrder: 1 } }),
+      await db.courseMap.create({ data: { eventId: vec.eventId, name: "Alla", kind: "all_controls", templateId: a4.id, windowCenter: { x: -70, y: 5 } } }),
+    ];
+    courseMapSeqs = maps.map((m) => m.seq);
+  }, 90_000);
+
+  afterAll(async () => {
+    await vec?.cleanup();
+  });
+
+  it("vector + pin: one composed PDF, one page per map at the template's paper size, never the rsvg converter", async () => {
+    const before = convertedSvgs.length;
+    const res = await server.inject({ method: "GET", url: pdfUrl(vec.nameId) });
+    expect(res.statusCode).toBe(200);
+    expect(res.headers["content-type"]).toContain("application/pdf");
+    expect(res.headers["x-print-pipeline"]).toBe("vector");
+    expect(res.headers["content-disposition"]).toContain("_maps.pdf");
+    expect(convertedSvgs).toHaveLength(before);
+    const pdf = await PDFDocument.load(res.rawPayload);
+    expect(pdf.getPageCount()).toBe(3);
+    const sizes = pdf.getPages().map((p) => [p.getWidth(), p.getHeight()].map((v) => Math.round((v * 25.4) / 72)));
+    expect(sizes).toEqual([[210, 297], [148, 210], [210, 297]]);
+    const event = await vec.db.event.findUniqueOrThrow({ where: { id: vec.eventId } });
+    expect(pdf.getTitle()).toBe(`${event.name} maps`);
+    expect(pdf.getCreator()).toBe("Oxygen");
+  }, 60_000);
+
+  it("vector + pin: a single map keeps the legacy file name; the selection query works as before", async () => {
+    const res = await server.inject({ method: "GET", url: pdfUrl(vec.nameId, `?maps=${courseMapSeqs[1]}`) });
+    expect(res.statusCode).toBe(200);
+    expect(res.headers["content-disposition"]).toContain(`${vec.nameId}_Ro_d_A5.pdf`);
+    const pdf = await PDFDocument.load(res.rawPayload);
+    expect(pdf.getPageCount()).toBe(1);
+    const missing = await server.inject({ method: "GET", url: pdfUrl(vec.nameId, "?maps=99999") });
+    expect(missing.statusCode).toBe(400);
+  }, 60_000);
+
+  it.skipIf(!hasQpdf && !process.env.CI)("vector + pin: qpdf --check is clean", async () => {
+    const res = await server.inject({ method: "GET", url: pdfUrl(vec.nameId) });
+    expect(await qpdfCheck(res.rawPayload)).toMatch(/No syntax or stream encoding errors/);
+  }, 60_000);
+
+  it("a legacy event prints through the rsvg converter", async () => {
+    const before = convertedSvgs.length;
+    const res = await server.inject({ method: "GET", url: pdfUrl(ctx.nameId, `?courses=${courseSeq}`) });
+    expect(res.statusCode).toBe(200);
+    expect(res.headers["x-print-pipeline"]).toBe("legacy");
+    expect(convertedSvgs.length).toBeGreaterThan(before);
+  });
+
+  it("a vector event without a pinned document prints through the legacy path", async () => {
+    await vec.db.mapFile.updateMany({ where: { eventId: vec.eventId }, data: { documentHash: null } });
+    clearCourseMapSourceCache();
+    try {
+      const before = convertedSvgs.length;
+      const res = await server.inject({ method: "GET", url: pdfUrl(vec.nameId) });
+      expect(res.statusCode).toBe(200);
+      expect(res.headers["x-print-pipeline"]).toBe("legacy");
+      expect(convertedSvgs).toHaveLength(before + 3);
+    } finally {
+      await vec.db.mapFile.updateMany({ where: { eventId: vec.eventId }, data: { documentHash } });
+      clearCourseMapSourceCache();
+    }
+  }, 60_000);
+
+  it("rollback is the switch: the same rows print legacy once the event is flipped back", async () => {
+    await vec.db.event.update({ where: { id: vec.eventId }, data: { mapPipeline: "legacy" } });
+    clearCourseMapSourceCache();
+    try {
+      const res = await server.inject({ method: "GET", url: pdfUrl(vec.nameId) });
+      expect(res.statusCode).toBe(200);
+      expect(res.headers["x-print-pipeline"]).toBe("legacy");
+      expect((await PDFDocument.load(res.rawPayload)).getPageCount()).toBe(3);
+    } finally {
+      await vec.db.event.update({ where: { id: vec.eventId }, data: { mapPipeline: "vector" } });
+      clearCourseMapSourceCache();
+    }
+  }, 60_000);
+
+  it("an unaligned colour stack falls back to the legacy path", async () => {
+    const converted: string[] = [];
+    const fallback = Fastify({ logger: false });
+    registerCourseMapRoutes(fallback, {
+      converter: {
+        async convert(svg: string) {
+          converted.push(svg);
+          const pdf = await PDFDocument.create();
+          pdf.addPage([595.28, 841.89]);
+          return Buffer.from(await pdf.save());
+        },
+      },
+      renderCoursePages: async () => {
+        throw new course.CourseStackError("document colour stack is not aligned");
+      },
+    });
+    await fallback.ready();
+    try {
+      const res = await fallback.inject({ method: "GET", url: pdfUrl(vec.nameId) });
+      expect(res.statusCode).toBe(200);
+      expect(res.headers["x-print-pipeline"]).toBe("legacy");
+      expect(converted).toHaveLength(3);
+    } finally {
+      await fallback.close();
+    }
+  }, 60_000);
 });
 
 describe("graphics library", () => {

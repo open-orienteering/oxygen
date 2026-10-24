@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import type { FastifyInstance } from "fastify";
 import {
+  course,
   courseMapObjectSchema,
   courseMapOverridesSchema,
   mapWindowForFrame,
@@ -23,6 +24,13 @@ import { prepareDocument, renderDocumentWindow } from "../render/window-raster.j
 import { layoutControlsFromCourseControls, resolveMapLayout } from "./resolve-layout.js";
 import { LruCache } from "./lru-cache.js";
 import { RsvgConverter, mergePdfPages } from "./svg-to-pdf.js";
+import {
+  type PrintGraphic,
+  type PrintMapRow,
+  loadPinnedPrintDocument,
+  renderCoursePages,
+  sheetForMapRow,
+} from "./pdf-page.js";
 
 type Db = ReturnType<typeof prisma>;
 
@@ -146,15 +154,14 @@ type AllControlRow = {
 };
 
 /**
- * Data-URI / inline-SVG resolver for every graphic referenced by the maps
- * being exported. Loaded once per request; unknown ids resolve to null and
- * the object is simply skipped.
+ * Every graphic referenced by the maps being exported (event or club
+ * scope), by id. Loaded once per request; unknown ids are simply absent.
  */
-async function buildGraphicResolver(
+async function loadGraphics(
   db: Db,
   eventId: bigint,
   rows: MapRow[],
-): Promise<(graphicId: number) => ResolvedMapGraphic | null> {
+): Promise<Map<number, PrintGraphic>> {
   const ids = new Set<bigint>();
   for (const row of rows) {
     for (const source of [row.objects, row.template?.objects]) {
@@ -165,7 +172,7 @@ async function buildGraphicResolver(
       }
     }
   }
-  if (ids.size === 0) return () => null;
+  if (ids.size === 0) return new Map();
   const graphics = await db.graphic.findMany({
     where: {
       id: { in: [...ids] },
@@ -173,12 +180,24 @@ async function buildGraphicResolver(
     },
     select: { id: true, mime: true, data: true },
   });
-  const resolved = new Map<number, ResolvedMapGraphic | null>();
-  for (const graphic of graphics) {
-    resolved.set(
+  return new Map(
+    graphics.map((graphic) => [
       Number(graphic.id),
-      graphicToResolved(graphic.mime, Buffer.from(graphic.data)),
-    );
+      { mime: graphic.mime, data: new Uint8Array(graphic.data) },
+    ]),
+  );
+}
+
+/**
+ * Data-URI / inline-SVG resolver for the legacy page; unknown ids resolve
+ * to null and the object is simply skipped.
+ */
+function graphicResolver(
+  graphics: Map<number, PrintGraphic>,
+): (graphicId: number) => ResolvedMapGraphic | null {
+  const resolved = new Map<number, ResolvedMapGraphic | null>();
+  for (const [id, graphic] of graphics) {
+    resolved.set(id, graphicToResolved(graphic.mime, Buffer.from(graphic.data)));
   }
   return (graphicId) => resolved.get(graphicId) ?? null;
 }
@@ -238,10 +257,18 @@ async function renderPage(
   });
 }
 
+/** Which path drew a `maps.pdf` response (`X-Print-Pipeline`, docs/course-print.md §8). */
+export type PrintPipeline = "vector" | "legacy";
+
 export function registerCourseMapRoutes(
   server: FastifyInstance,
-  options: { converter?: Pick<RsvgConverter, "convert"> } = {},
+  options: {
+    converter?: Pick<RsvgConverter, "convert">;
+    /** The composer's page writer (tests inject a failing one). */
+    renderCoursePages?: typeof renderCoursePages;
+  } = {},
 ): void {
+  const renderVectorPages = options.renderCoursePages ?? renderCoursePages;
   server.get<{
     Params: { nameId: string };
     Querystring: {
@@ -276,23 +303,59 @@ export function registerCourseMapRoutes(
           description: true,
         },
       });
-      const resolveGraphic = await buildGraphicResolver(db, event.id, rows);
-      const converter = options.converter ?? new RsvgConverter();
-      const pages: Buffer[] = [];
-      for (const row of rows) {
-        pages.push(
-          await converter.convert(
-            await renderPage(db, event, row, allControls, resolveGraphic),
-          ),
-        );
+      const graphics = await loadGraphics(db, event.id, rows);
+      const info = {
+        title: `${event.name} maps`,
+        author: event.organizerName || undefined,
+      };
+      let body: Buffer | null = null;
+      let pipeline: PrintPipeline = "legacy";
+      // The switch (docs/course-print.md §8): `vector` with a pinned
+      // document prints through the composer; everything else, and a
+      // document whose colour stack is not aligned, through rsvg.
+      const pinned = await loadPinnedPrintDocument(db, event.id);
+      if (pinned) {
+        try {
+          const sheets = rows.map((row) =>
+            sheetForMapRow(row as PrintMapRow, {
+              event: { name: event.name, date: event.date },
+              allControls,
+              mapInfo: pinned.info,
+            }),
+          );
+          const out = await renderGate().run(
+            () =>
+              renderVectorPages({
+                document: pinned.document,
+                rotationCorrectionDeg: pinned.rotationCorrectionDeg,
+                sheets,
+                graphics,
+                mode: "cmyk",
+                info,
+              }),
+            { maxQueue: renderMaxQueue() },
+          );
+          for (const warning of out.warnings) req.log.warn({ nameId }, `maps.pdf: ${warning}`);
+          body = Buffer.from(out.bytes);
+          pipeline = "vector";
+        } catch (error) {
+          if (!(error instanceof course.CourseStackError)) throw error;
+          req.log.warn({ nameId, hash: pinned.info.document?.hash }, `maps.pdf: ${error.message}; printing through the legacy path`);
+        }
       }
-      const body =
-        pages.length === 1
-          ? pages[0]
-          : await mergePdfPages(pages, {
-              title: `${event.name} maps`,
-              author: event.organizerName || undefined,
-            });
+      if (!body) {
+        const resolveGraphic = graphicResolver(graphics);
+        const converter = options.converter ?? new RsvgConverter();
+        const pages: Buffer[] = [];
+        for (const row of rows) {
+          pages.push(
+            await converter.convert(
+              await renderPage(db, event, row, allControls, resolveGraphic),
+            ),
+          );
+        }
+        body = pages.length === 1 ? pages[0] : await mergePdfPages(pages, info);
+      }
       const filename =
         rows.length === 1
           ? `${safeFilename(event.nameId)}_${safeFilename(rows[0].name)}.pdf`
@@ -301,8 +364,16 @@ export function registerCourseMapRoutes(
         .header("Content-Type", "application/pdf")
         .header("Content-Disposition", `attachment; filename="${filename}"`)
         .header("Cache-Control", "no-store")
+        .header("X-Print-Pipeline", pipeline)
         .send(body);
     } catch (error) {
+      if (error instanceof RenderBusyError) {
+        return reply
+          .code(503)
+          .header("Retry-After", String(RENDER_BUSY_RETRY_AFTER_S))
+          .header("Cache-Control", "no-store")
+          .send({ error: "Map renderer busy", waiting: error.waiting });
+      }
       req.log.error(error);
       return reply.code(400).send({
         error: error instanceof Error ? error.message : "Could not render maps",
