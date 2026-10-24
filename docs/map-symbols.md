@@ -981,7 +981,13 @@ nearest percent, then the palette's default for the class; some entries
    upper one); `purple-upper` always on top, `purple-lower` directly below
    the first source colour the palette puts above it. Inserted entries have
    `id: "<edition>:<paletteId>"`, the palette CMYK and no `sourceNumber`
-   (`colourStack.inserted`).
+   (`colourStack.inserted`). **Exception (C9, user decision 2026-10-24):**
+   an inserted `purple-upper` / `purple-lower` takes the CMYK of the map's
+   own purple of the other role when it has one (the course overprint is
+   one ink: Ny_karta_test's `src:2` "Upper Purple for Course Overprint"
+   10/90/10/0 gives the inserted lower purple 10/90/10/0, not 35/85/0/0);
+   the palette CMYK only when the map has no purple at all. Purples are
+   still never aliased.
 5. **Flag** palette ids whose relative order disagrees with the palette
    (longest increasing subsequence of palette ranks; everything outside it
    is a `COLOUR_ORDER_CONFLICT` with the pair it contradicts). The order
