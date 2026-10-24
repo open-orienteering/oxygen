@@ -880,7 +880,7 @@ overprint scale, moved most (beyond 32 levels 0.031 → 0.072 %, beyond 16
 levels 0.494 → 0.537 %); the legacy colour ratio fell by 0.2–0.4 pp on
 four pages. Times vary with the machine's load between runs (Club-full's
 write 1.3–3.5 s per mode over three runs). The two Club-full rows are
-re-runs on importer `ocad-14` (C10, 2026-10-24: north-oriented point
+re-runs on importer `ocad-15` (C10, 2026-10-24: north-oriented point
 symbols whose objects carry an angle drawn turned, `map-import.md` §3.3):
 against C7's run the four rotation symbols left the diverging list and
 both pages pass; bytes grew by 2.2 kB (window) and 0.5 kB (A4) — the
@@ -923,7 +923,7 @@ symbols on the window, unexplained ÷ ink and their codes:
 
 **What the run found** (fixes are rows, not C7):
 
-- **Point-symbol rotation — fixed in C10 (`ocad-14`).** Club-full's 504.5
+- **Point-symbol rotation — fixed in C10 (`ocad-15`).** Club-full's 504.5
   / 504.7 (barrier), 512.3 (footbridge) and 519.0 (tunnel) were drawn
   unrotated, canonical rendering on or off, where the legacy turns each
   object to its angle: the symbols are north-oriented (OCAD's rotatable

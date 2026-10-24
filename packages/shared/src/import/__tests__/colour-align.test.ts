@@ -99,6 +99,20 @@ describe("alignColourStack", () => {
     expect(at).toBeLessThan(r.index.get("blue100-pointline")!);
   });
 
+  it("an inserted purple copies the map's own purple of the other role; palette CMYK only when it has none (C9)", () => {
+    const onlyUpper = sprintStack.filter((x) => !/Undre violett/.test(x.name)).map((x) => (x.sourceNumber === 25 ? { ...x, cmyk: [0.1, 0.9, 0.1, 0] as [number, number, number, number] } : x));
+    const r = align(onlyUpper, []);
+    expect(r.inserted).toEqual(["purple-lower"]);
+    expect(r.colours[r.index.get("purple-lower")!]).toMatchObject({ id: "iof2024:purple-lower", cmyk: [0.1, 0.9, 0.1, 0] });
+    expect(r.colours[r.index.get("purple-lower")!].sourceNumber).toBeUndefined();
+    const onlyLower = sprintStack.filter((x) => !/Övre violett/.test(x.name)).map((x) => (x.sourceNumber === 23 ? { ...x, cmyk: [0.1, 0.9, 0.1, 0] as [number, number, number, number] } : x));
+    const r2 = align(onlyLower, []);
+    expect(r2.colours[r2.index.get("purple-upper")!].cmyk).toEqual([0.1, 0.9, 0.1, 0]);
+    const none = align(sprintStack.filter((x) => !/violett/i.test(x.name)), []);
+    expect(none.colours[none.index.get("purple-lower")!].cmyk).toEqual(none.colours[none.index.get("purple-upper")!].cmyk);
+    expect(none.colours[none.index.get("purple-upper")!].cmyk[0]).toBeCloseTo(0.35, 2);
+  });
+
   it("always provides both purples: inserted at the right places when the source has none", () => {
     const noPurple = sprintStack.filter((x) => !/violett/i.test(x.name));
     const r = align(noPurple, []);

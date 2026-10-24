@@ -22,7 +22,7 @@ import { dashPointRule, omapFlags, omapGoverningLine, omapSymbolKind, omapSymbol
 
 /** Mapper coordinates are 0.001 mm. */
 export const OMAP_UNITS_PER_MM = 1000;
-export const OMAP_IMPORTER_VERSION = "omap-7";
+export const OMAP_IMPORTER_VERSION = "omap-8";
 
 export interface OmapSourceOptions {
   /** Upload name; goes into the import report, not into the document. */

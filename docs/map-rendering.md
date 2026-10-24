@@ -414,7 +414,7 @@ glyph; the instance transform is the point at that length with
 - A point object's angle applies only when `orientation` is `object`
   and the glyph is `rotatable`; otherwise the glyph is north-up. The
   OCAD importer turns a north-oriented symbol whose objects carry an
-  angle into `object` (`map-import.md` §3.3, `ocad-14`, C10), so this
+  angle into `object` (`map-import.md` §3.3, `ocad-15`, C10), so this
   rule and OCAD's drawing agree.
 
 ### 4.7 Areas: fill, hatch, pattern, border
@@ -2038,7 +2038,7 @@ what became of it:
   Crop-B 100 → 102, club-full 98 → 100, Crop-A 101 → 103. Whole maps
   after B10, canonical: club-2026 24 diverging, Sprint 7, Crop-B 8, all
   sanctioned except Crop-B's 522 canopy tone.
-- **Fixed in the importer (`ocad-14`, C10, found by C7).** North-oriented
+- **Fixed in the importer (`ocad-15`, C10, found by C7).** North-oriented
   OCAD point symbols whose objects carry an angle are drawn turned, as
   OCAD and Mapper draw them (`map-import.md` §3.3): Club-full has 23 such
   symbols; its 504.5 / 504.7 barriers, 512.3 footbridge and 519.0 tunnel

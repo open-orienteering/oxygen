@@ -193,7 +193,10 @@ export function alignColourStack(input: AlignmentInput): AlignmentResult {
       out.push(entry);
     } else {
       const p = paletteById.get(slot.id)!;
-      const entry: DocumentColour = { id: `${edition}:${p.id}`, name: p.name, cmyk: [...p.cmyk] as [number, number, number, number], paletteIds: [p.id] };
+      // One course-overprint ink: an inserted purple copies the map's own purple of the other role (user decision 2026-10-24, C9).
+      const sibling = p.purpleRole ? placed.get(p.id === "purple-upper" ? "purple-lower" : "purple-upper") : undefined;
+      const cmyk = (sibling !== undefined ? colours[sibling].cmyk : p.cmyk);
+      const entry: DocumentColour = { id: `${edition}:${p.id}`, name: p.name, cmyk: [...cmyk] as [number, number, number, number], paletteIds: [p.id] };
       if (p.purpleRole) entry.purpleRole = p.purpleRole;
       index.set(p.id, newIdx);
       out.push(entry);

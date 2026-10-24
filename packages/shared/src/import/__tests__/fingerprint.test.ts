@@ -144,6 +144,48 @@ describe("compareFingerprints", () => {
   });
 });
 
+describe("line cap / join (map-symbols §8.1, C9)", () => {
+  const solid = (cap: "flat" | "round", join: "miter" | "round", extra: Partial<LineSymbol["main"] & object> = {}) =>
+    parseRenderSymbol({ type: "line", id: "x", code: "x", name: "x", main: { colour: idx.get("black100")!, widthUm: 250, cap, join, ...extra } }) as LineSymbol;
+  const f = (r: LineSymbol) => fingerprintOf(r, classOf);
+
+  it("carries the main stroke's cap and join", () => {
+    const round = f(solid("round", "round"));
+    expect(round.type === "line" && [round.cap, round.join]).toEqual(["round", "round"]);
+    const flat = f(solid("flat", "miter"));
+    expect(flat.type === "line" && [flat.cap, flat.join]).toEqual(["flat", "sharp"]);
+  });
+
+  it("is a soft tie-break: same width and colour, round vs flat, stays above auto but loses to the matching variant", () => {
+    const c = compareFingerprints(f(solid("round", "round")), f(solid("flat", "miter")));
+    expect(c.hardFail).toBeUndefined();
+    expect(c.score).toBe(0.903);
+    expect(c.score).toBeGreaterThanOrEqual(MATCH_THRESHOLDS.auto);
+    expect(c.reasons.join()).toMatch(/cap round vs flat/);
+    expect(compareFingerprints(f(solid("round", "round")), f(solid("round", "round"))).score).toBe(1);
+  });
+
+  it("reduces cap and join to round vs sharp: bevel = miter, square = flat", () => {
+    const bevel = parseRenderSymbol({ type: "line", id: "x", code: "x", name: "x", main: { colour: idx.get("black100")!, widthUm: 250, cap: "square", join: "bevel" } }) as LineSymbol;
+    expect(compareFingerprints(f(bevel), f(solid("flat", "miter"))).score).toBe(1);
+  });
+
+  it("counts cap and join once each (a round cap on a miter join is half as far)", () => {
+    expect(compareFingerprints(f(solid("round", "miter")), f(solid("flat", "miter"))).score).toBe(0.95);
+  });
+
+  it("is absent when there is no main stroke (glyph-only and border-only lines)", () => {
+    const trench = fp("ISOM2017-2:215");
+    expect(trench.type === "line" && [trench.cap, trench.join]).toEqual([null, null]);
+  });
+
+  it("tells the library's round no-tag 201.b from a flat 0.35 mm stroke", () => {
+    const flat = f(solid("flat", "miter", { widthUm: 350 }));
+    expect(compareFingerprints(flat, fp("ISOM2017-2:201.b")).score).toBe(0.903);
+    expect(compareFingerprints(f(solid("round", "round", { widthUm: 350 })), fp("ISOM2017-2:201.b")).score).toBe(1);
+  });
+});
+
 describe("fingerprintHash", () => {
   it("scores OCAD's railway and power line constructions as auto against the B10 entries", () => {
     // Sprint's 509.100: white 0.26 dashes 1.01 / 1.5 over a black 0.45 band (OCAD double-line fill).

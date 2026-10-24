@@ -34,14 +34,14 @@ a north-oriented point symbol with at least one point object at a
 non-zero angle becomes `orientation: "object"`, `glyph.rotatable: true`,
 unless its glyph is only discs and rings centred on the origin (which look
 the same at any angle). Objects at angle 0 draw as before. The stage is
-unchanged. Importer `ocad-13` → `ocad-14`; the OMAP importer is unchanged
+unchanged. Importer `ocad-14` → `ocad-15`; the OMAP importer is unchanged
 (Mapper writes a rotation only for rotatable symbols).
 
 Club-full, the 23 affected symbols: 6 diverged before (504.7 36.28 %,
 519.0 31.96 %, 512.3 26.65 %, 504.5 24.92 %, 519.3 21.31 %, 208.4
 15.04 %), none after, with canonical rendering on and off.
 
-Stored `ocad-13` documents are stale by importer version; the release's
+Stored `ocad-14` documents are stale by importer version; the release's
 `backfill.sh --rematch` re-imports them.
 
 ## Tests
