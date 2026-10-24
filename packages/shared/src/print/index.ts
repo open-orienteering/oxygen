@@ -4,11 +4,15 @@
  * no Node API, so the same code can run in a Web Worker later (05 §5.11).
  *
  * Not exported from the package root: the PDF library stays out of the
- * web bundle and the root barrel; import it from `src/print/index.ts`
- * (the page composer, slice C2, wires the subpath).
+ * web bundle and the root barrel; import it as `@oxygen/shared/print`
+ * (the package's `exports` subpath, docs/course-print.md §1).
  */
 
 export * from "./colour.js";
 export * from "./fonts.js";
 export * from "./operators.js";
 export * from "./writer.js";
+export * from "./page.js";
+export * from "./description.js";
+export * from "./geo.js";
+export * from "./compose.js";

@@ -47,11 +47,13 @@ RUN pnpm --filter @oxygen/shared build
 # Build the API
 RUN pnpm --filter @oxygen/api build
 
-# Patch shared package to use compiled output (node can't import .ts)
+# Patch shared package to use compiled output (node can't import .ts);
+# with `exports` present Node ignores `main`, so both entries are rewritten
 RUN node -e "\
   const fs=require('fs');\
   const p=JSON.parse(fs.readFileSync('packages/shared/package.json'));\
   p.main='./dist/src/index.js';\
+  p.exports={'.':'./dist/src/index.js','./print':'./dist/src/print/index.js'};\
   fs.writeFileSync('packages/shared/package.json',JSON.stringify(p,null,2))"
 
 # Build the web frontend (vite build only — skip tsc type-check for speed)
