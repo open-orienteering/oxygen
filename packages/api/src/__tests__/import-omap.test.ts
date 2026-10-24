@@ -87,11 +87,11 @@ describe("importOmapToDocument", () => {
   });
 
   it("keeps the two source kinds apart: different importer versions, OCAD path unchanged", async () => {
-    expect(importerVersionFor("ocad")).toBe("ocad-14");
+    expect(importerVersionFor("ocad")).toBe("ocad-15");
     expect(importerVersionFor("omap")).toBe("omap-8");
     const ocd = await importOcadToDocument(ocdFixture, "test.ocd");
     expect(ocd.kind).toBe("ocad");
-    expect(mapDocument.readMapDocumentHeader(ocd.bytes).header.format.importer).toBe("ocad-14");
+    expect(mapDocument.readMapDocumentHeader(ocd.bytes).header.format.importer).toBe("ocad-15");
     await expect(importMapToDocument(ocdFixture, "test.ocd", "omap")).rejects.toThrow();
   });
 
