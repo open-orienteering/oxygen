@@ -453,7 +453,7 @@ function inkMask(img: RgbaImage): Uint8Array {
   return m;
 }
 
-function inkUnion(a: RgbaImage, b: RgbaImage): number {
+export function inkUnion(a: RgbaImage, b: RgbaImage): number {
   let n = 0;
   for (let o = 0; o < a.pixels.length; o += 4) if (isInk(a.pixels, o) || isInk(b.pixels, o)) n++;
   return n;

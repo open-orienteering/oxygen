@@ -34,10 +34,11 @@ jobs:
       # (`packages/shared/dist`). Build first so a clean CI checkout matches
       # a local tree that has already been compiled.
       # qpdf + poppler-utils: `qpdf --check` and the PDF golden tier
-      # (docs/course-print.md §9). Tests that need them skip locally when the
-      # tools are missing but fail under CI.
+      # (docs/course-print.md §9); librsvg2-bin: the legacy page of the
+      # corpus print run's script test (§11). Tests that need them skip
+      # locally when the tools are missing but fail under CI.
       - name: Install PDF tools
-        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends qpdf poppler-utils
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends qpdf poppler-utils librsvg2-bin
       - run: pnpm build
       - run: pnpm lint
       - run: pnpm test
