@@ -7,12 +7,13 @@ started by sub-slice C0. The research record is
 
 This chapter is normative for `packages/shared/src/course/`
 (`import { course } from "@oxygen/shared"`). Its consumers are the
-viewer's dynamic bucket (C4, §5 when written), the page composer (C2,
+viewer's dynamic bucket (C4, §5), the page composer (C2,
 `course-print.md`) and the `courses.geometry` compatibility artifact
 (C5). The course *structure* beyond today's linear sequence, its storage
 and editing concurrency are slice D's (decision G1, recorded before D);
 this chapter covers what C needs: how the layer is derived (§1), its v1
-input (§2), the geometry rules (§3) and the GeoJSON projection (§4).
+input (§2), the geometry rules (§3), the GeoJSON projection (§4) and the
+viewer (§5).
 
 ## Decisions taken before the code (user, 2026-10-24)
 
@@ -92,9 +93,11 @@ the page backends.
 
 For consumers: when `remap` is set, every document colour at or above
 upper purple moves up one index, so anything keyed on the document's
-own stack — the viewer's static buckets (C4) — must be built on
-`layer.colours` (or re-keyed) whenever a course is shown, until upper
-white is inserted at import (Pending). `courseLayer` throws
+own stack must be built on `layer.colours` (or re-keyed) whenever a
+course is shown, until upper white is inserted at import (Pending). The
+viewer builds its static buckets on `courseColourStack(header.colours)`
+from the load, course shown or not (`map-rendering.md` §5.2 "Dynamic
+bucket"), so a course never re-prepares the map. `courseLayer` throws
 `CourseStackError` for an unaligned stack; call sites (C4, C5) catch it
 and fall back (legacy overlay, legacy GeoJSON) rather than fail the
 view or the write.
@@ -275,6 +278,37 @@ GeoJSON keeps its consumers (legacy viewer, kiosk, lengths, exports).
 Clipped leg pieces and numbers are not projected: consumers clip and
 place themselves today.
 
+## 5. Viewer
+
+Under `vector` the viewer draws the layer through the WebGL2 backend's
+dynamic bucket (`map-rendering.md` §5.2 "Dynamic bucket"; 04 §7): the
+worker runs `courseLayer` on the request plus the document context and
+the cut features it extracted at load, symbolises the layer alone and
+prepares one always-resident part drawn in colour order with the static
+buckets. The React SVG keeps the UI layer only (`map-rendering.md` §5.4
+"Overlay"); under `legacy` nothing changes.
+
+**Request** (`packages/web/src/lib/course-layer-request.ts`, pure):
+
+| Input | From the viewer |
+|---|---|
+| `sites` | every visible control (`visible !== false`) with a position — its own paper mm, the editor's dragged position or a move still round-tripping — `code` its display code, `kind` from its type; the editor's faded off-course controls are left out (the UI layer draws them faded) |
+| `structure` | the highlighted courses (`highlight` or `highlightCourseName`) in order, one `CourseStructure` each, `id` = the course name, `items` = its control ids (start and finish as `MapPanel` completes them), `orderMode` the course's; `null` when none is highlighted |
+| `labelOffsets` | the single highlighted course's, with a drag or a pending label move winning — only with the description sheet or the editor (the SVG overlay's rule) |
+| `leg`, `circleGaps`, `extras` | for a course whose stored GeoJSON has `preclipped` legs (an imported `ocd` course, §2): each leg feature becomes the next item's `leg.pieces` when the counts match, the course's control `cuts` become `circleGaps`; a bent generated leg keeps its `path`; 707 / 708 / 711 lines and `restricted_area` polygons become `extras`. Automatic `gaps` / `cuts` in the GeoJSON are not read |
+| `viewOptions` | `labelMode: "sequence"` for one ordered course with the sheet or the editor, else `"code"`; `allControls` when a drawn site is on no highlighted course |
+| `objects`, `appearance` | `[]` (no sheet reaches the viewer) and `{}` — the spec sizes × the document factor (decision "Sizes") |
+| `cutFeatures` | added by the worker: `cutFeaturesOfDocument(doc)` once per document load |
+
+**Reply.** The derivation (sites with number positions and leaders, legs
+with their drawn pieces) and the symbol sizes come back with the part; the
+UI layer draws its hit targets, status rings and leg pills from them and
+the viewer mirrors the drawn numbers and legs as a hidden DOM list
+(`map-rendering.md` §5.4 "Attributes").
+
+**Unaligned stack.** A document whose stack throws `CourseStackError`
+draws the SVG course overlay over the GL map instead (§1).
+
 ## Tests
 
 | Layer | Where | What |
@@ -287,6 +321,9 @@ place themselves today.
 | unit | `geojson.test.ts` | editor course in `buildEditorGeometry` + cuts shape, free order, preclipped pieces and extras, course by id |
 | pass-stream | `scenes.test.ts`, snapshots in `render/__fixtures__/streams/course/` | the five course scenes (`map-rendering.md` §6.3) warning-free and equal to their snapshots at 1 µm, plus each scene's rule |
 | golden | `e2e/__golden__/map-gl/course-*.png`, `packages/api/src/render/__tests__/golden-files.test.ts`, `e2e/map-gl-golden.spec.ts` | reference raster = committed golden; WebGL2 ≤ 0.5 % (`map-rendering.md` §6.2). The PDF tier joins in C3 |
+| unit (web) | `packages/web/src/lib/__tests__/course-layer-request.test.ts` | the §5 request rules |
+| unit (web) | `packages/web/src/map-gl/__tests__/worker-course.test.ts`, `engine.test.ts` | the dynamic bucket (`map-rendering.md` §5.2) |
+| E2E | `e2e/map-vector-layer.spec.ts`, `map-control-circles.spec.ts`, `map-multicourse.spec.ts` | lower purple under black at a crossing; labels under both pipelines (`map-rendering.md` §5.4) |
 
 ## Where things live
 
@@ -295,7 +332,7 @@ place themselves today.
 | `packages/shared/src/course/types.ts` | input / output types, `appearanceFromTemplate` |
 | `packages/shared/src/course/context.ts` | `courseDocumentContext(header)` |
 | `packages/shared/src/course/colour-stack.ts` | `courseColourStack`, object colour rows, `hexToCmyk` |
-| `packages/shared/src/course/symbols.ts` | the 7xx set: resolution, appearance, derived 703 / leader / white-out |
+| `packages/shared/src/course/symbols.ts` | the 7xx set: resolution, appearance, derived 703 / leader / white-out (`courseSymbols`, exported for the viewer's sizes, C4) |
 | `packages/shared/src/course/arcs.ts` | Bézier circles and arcs |
 | `packages/shared/src/course/cuts.ts` | `CUT_CODES`, `circleCuts`, `legGaps`, `cutFeaturesOfDocument` |
 | `packages/shared/src/course/derive.ts` | the geometry rules (§3.2–3.5) |
@@ -304,11 +341,14 @@ place themselves today.
 | `packages/shared/src/course/geojson.ts` | `courseLayerGeoJson` |
 | `packages/shared/src/course-maps/{overlay-geometry,control-label-placement}.ts` | `clipLine` (per-obstacle clearance), `subtractLegGaps`, `circleArcs`, `placeControlLabels` — shared with the legacy overlay |
 | `packages/shared/src/render/__fixtures__/course/` | the course scenes |
+| `packages/web/src/lib/course-layer-request.ts` | the viewer's request (§5) |
+| `packages/web/src/map-gl/worker.ts` (`courseReply`), `engine.ts` (`setCourse`) | the dynamic bucket that draws it |
 
 ## Pending in this chapter
 
-- **§5 Viewer** (C4): the layer through the GL backend's dynamic bucket,
-  the SVG keeping the UI layer only.
+- **Viewer layout objects and appearance**: the viewer passes no layout
+  objects and the spec appearance; a sheet's objects and template
+  appearance on the map are slice D's.
 - **Structure and concurrency** (G1, before slice D): `courses.structure`,
   variations, map exchanges, crossing and map-issue points, per-course
   hidden numbers, site-level manual `circle_gaps` (08 §4.2), corridors,

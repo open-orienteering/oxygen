@@ -81,6 +81,7 @@ describe("courseLayerRequest (docs/course-layer.md §5)", () => {
       leg([[58, 40], [30, 45], [12, 40]], { preclipped: true }),
       { geometry: { type: "Point", coordinates: [40, 10] }, properties: { symbolType: "control", code: "c1", courseName: "A", cuts: [{ start: 10, end: 40 }] } },
       { geometry: { type: "LineString", coordinates: [[0, 0], [5, 5]] }, properties: { symbolType: "marked_route", courseName: "A" } },
+      { geometry: { type: "Polygon", coordinates: [[[1, 1], [3, 1], [3, 3], [1, 1]]] }, properties: { symbolType: "restricted_area", courseName: "A" } },
       // Course B is not highlighted; an automatic-gap leg of a generated course is not read.
       leg([[10, 10], [30, 50]], { courseName: "B", gaps: [{ from: 0.4, to: 0.5 }] }),
     ];
@@ -89,7 +90,10 @@ describe("courseLayerRequest (docs/course-layer.md §5)", () => {
     expect(a.items[1].leg).toEqual({ pieces: [[{ x: 12, y: 10 }, { x: 37, y: 10 }]] });
     expect(a.items[3].leg?.pieces?.[0]).toHaveLength(3);
     expect(a.items[1].circleGaps).toEqual([{ start: 10, end: 40 }]);
-    expect(a.extras).toEqual([{ kind: "marked_route", points: [{ x: 0, y: 0 }, { x: 5, y: 5 }] }]);
+    expect(a.extras).toEqual([
+      { kind: "marked_route", points: [{ x: 0, y: 0 }, { x: 5, y: 5 }] },
+      { kind: "oob_area", points: [{ x: 1, y: 1 }, { x: 3, y: 1 }, { x: 3, y: 3 }, { x: 1, y: 1 }] },
+    ]);
   });
 
   it("generated legs: a bent leg keeps its path, gaps and cuts are not taken; a count mismatch is ignored", () => {

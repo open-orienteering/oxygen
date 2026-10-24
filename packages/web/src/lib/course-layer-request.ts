@@ -96,7 +96,8 @@ function authoredGeometry(name: string, items: course.CourseItem[], codeOf: (sit
     if (EXTRA_KINDS.has(kind)) {
       const pts = lineCoords(f);
       if (pts && pts.length >= 2) extras.push({ kind: kind as course.CourseExtra["kind"], points: pts });
-    } else if (kind === "oob_area" && f.geometry?.type === "Polygon" && Array.isArray(f.geometry.coordinates)) {
+    } else if (kind === "restricted_area" && f.geometry?.type === "Polygon" && Array.isArray(f.geometry.coordinates)) {
+      // 709 as the OCD importer and `courseLayerGeoJson` name it.
       const ring = (f.geometry.coordinates as [number, number][][])[0];
       if (ring && ring.length >= 3) extras.push({ kind: "oob_area", points: ring.map(([x, y]) => ({ x, y })) });
     }
