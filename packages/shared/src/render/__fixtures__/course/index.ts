@@ -38,7 +38,7 @@ const at = (x: number, y: number): RenderPath => makePath([mm(x), mm(y)]);
 const site = (id: string, kind: CourseSite["kind"], x: number, y: number, code = id): CourseSite => ({ id, code, kind, x, y });
 
 /** The base map: library entries on the library's own palette stack, aligned as a matched document's would be. */
-class BaseMap {
+export class BaseMap {
   readonly library: SymbolLibraryId;
   readonly symbols: RenderSymbol[] = [];
   readonly objects: RenderObject[] = [];
