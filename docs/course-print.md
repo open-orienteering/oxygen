@@ -836,7 +836,7 @@ golden tier's 0.5 % at 16 levels (§9.2) was calibrated on golden and page
 scenes with few edges (≤ 0.073 %); on a dense real map Cairo's and
 resvg's edge anti-aliasing alone put 17–32 levels between them on
 0.5–1.5 % of the pixels — Crop-A 1.43 %, Club-full 0.83 %, Club-full A4
-0.66 % — with **no** shape difference (0–11 unexplained pixels per page)
+0.66 % when decided (1.42 / 0.83 / 0.65 % on library 2026.10.4) — with **no** shape difference (0–11 unexplained pixels per page)
 and at most 0.134 % beyond 32 levels. It is not text: Crop-A written with
 glyph outlines is 1.28 %. The golden tier keeps C3's rule. Size and time
 are reported against 05 Appendix B, not gated; the legacy measures are
@@ -872,16 +872,24 @@ override (`sprint --paper=A3`, `club-full --paper=A4
 the one page (`composePage`, then `renderCoursePages` per mode, which
 composes again and writes); bytes are the deterministic PDFs; every page
 of the second complete run was byte-identical to the first in both modes.
+The table is the run on library 2026.10.4 (#76: ISOM 704 control numbers
+in upper purple, round cliff baselines). Against the run before it, every
+page's bytes changed by a few tens of bytes; shapes (unexplained pixels),
+the diverging symbols and the gate did not move; Crop-B's numbers, at 2×
+overprint scale, moved most (beyond 32 levels 0.031 → 0.072 %, beyond 16
+levels 0.494 → 0.537 %); the legacy colour ratio fell by 0.2–0.4 pp on
+four pages. Times vary with the machine's load between runs (Club-full's
+write 1.3–3.5 s per mode over three runs).
 
 | Page set | Map | Page (mm) | Map → print scale | Rotation | Objects | Bytes `rgb` / `cmyk` (kB) | compose / write `rgb` / `cmyk` (ms) | > 16 levels `rgb` / `cmyk` (%) | > 32 levels (%) | Unexplained (px) | qpdf | Legacy: unexplained / differing (% of ink) | Symbols compared / diverging | Gate |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
-| OCAD window | Sprint | 106 × 49 | 1:4000 → 1:4000 | 0° | 2 389 | 218 / 218 | 36 / 131 / 82 | 0.240 / 0.150 | 0.039 / 0.022 | 0 / 0 | ok | 1.54 / 29.32 | 58 / 4 | pass |
-| OCAD window | Crop-A | 143 × 117 | 1:15000 → 1:15000 | 0° | 4 927 | 459 / 459 | 76 / 239 / 180 | 1.429 / 1.258 | 0.133 / 0.100 | 0 / 0 | ok | 0.18 / 22.63 | 96 / 6 | pass |
-| OCAD window | Crop-B | 43 × 52 | 1:15000 → 1:7500 | 0° | 1 005 | 141 / 141 | 34 / 114 / 106 | 0.494 / 0.348 | 0.031 / 0.022 | 0 / 0 | ok | 3.68 / 21.95 | 59 / 3 | pass |
-| OCAD window | Club-2026 | 426 × 303 | 1:15000 → 1:5000 | -3.296° | 7 664 | 950 / 950 | 117 / 503 / 406 | 0.450 / 0.347 | 0.038 / 0.026 | 3 / 3 | ok | 8.94 / 40.80 | 101 / 6 | pass |
-| OCAD window | Club-full | 426 × 303 | 1:15000 → 1:15000 | -3.3° | 31 163 | 3 624 / 3 624 | 281 / 1570 / 1271 | 0.831 / 0.648 | 0.134 / 0.113 | 11 / 10 | ok | 0.33 / 20.37 | 142 / 13 (4 unsanctioned) | FAIL |
-| Appendix B | Sprint A3 | 420 × 297 | 1:4000 → 1:4000 | 0° | 10 441 | 885 / 885 | 97 / 424 / 397 | 0.153 / 0.095 | 0.014 / 0.008 | 0 / 0 | ok | 1.03 / 21.26 | 86 / 7 | pass |
-| Appendix B | Club-full A4 1:10 000 | 297 × 210 | 1:15000 → 1:10000 | -3.3° | 13 768 | 1 627 / 1 626 | 161 / 761 / 590 | 0.656 / 0.501 | 0.095 / 0.078 | 5 / 5 | ok | 0.84 / 18.61 | 117 / 12 (4 unsanctioned) | FAIL |
+| OCAD window | Sprint | 106 × 49 | 1:4000 → 1:4000 | 0° | 2 389 | 218 / 218 | 64 / 160 / 102 | 0.240 / 0.150 | 0.039 / 0.022 | 0 / 0 | ok | 1.54 / 29.32 | 58 / 4 | pass |
+| OCAD window | Crop-A | 143 × 117 | 1:15000 → 1:15000 | 0° | 4 927 | 459 / 459 | 134 / 288 / 235 | 1.419 / 1.248 | 0.128 / 0.096 | 0 / 0 | ok | 0.18 / 22.23 | 96 / 6 | pass |
+| OCAD window | Crop-B | 43 × 52 | 1:15000 → 1:7500 | 0° | 1 005 | 141 / 141 | 40 / 160 / 98 | 0.537 / 0.388 | 0.072 / 0.022 | 0 / 0 | ok | 3.66 / 21.95 | 59 / 3 | pass |
+| OCAD window | Club-2026 | 426 × 303 | 1:15000 → 1:5000 | -3.296° | 7 664 | 950 / 950 | 127 / 552 / 465 | 0.450 / 0.348 | 0.039 / 0.027 | 3 / 3 | ok | 8.91 / 40.60 | 101 / 6 | pass |
+| OCAD window | Club-full | 426 × 303 | 1:15000 → 1:15000 | -3.3° | 31 163 | 3 624 / 3 624 | 809 / 3505 / 3091 | 0.827 / 0.645 | 0.134 / 0.113 | 11 / 10 | ok | 0.33 / 20.16 | 142 / 13 (4 unsanctioned) | FAIL |
+| Appendix B | Sprint A3 | 420 × 297 | 1:4000 → 1:4000 | 0° | 10 441 | 885 / 885 | 102 / 483 / 491 | 0.153 / 0.095 | 0.014 / 0.008 | 0 / 0 | ok | 1.03 / 21.26 | 86 / 7 | pass |
+| Appendix B | Club-full A4 1:10 000 | 297 × 210 | 1:15000 → 1:10000 | -3.3° | 13 768 | 1 627 / 1 626 | 168 / 868 / 607 | 0.653 / 0.498 | 0.095 / 0.078 | 5 / 5 | ok | 0.84 / 18.36 | 117 / 12 (4 unsanctioned) | FAIL |
 
 **Backend parity.** Every page draws the same shapes as the oracle —
 0–11 unexplained pixels on pages of 0.2–13 megapixels — and at most
@@ -921,9 +929,9 @@ symbols on the window, unexplained ÷ ink and their codes:
   ~6 B "relative" (PDF operands are absolute) — plus 14 k glyph instances
   with a full six-number `cm` each (~50 B). Fonts are 17 kB.
 - **Time on the event loop (row C12).** A Club-full A3 page takes
-  0.28 s to compose and 1.3–1.6 s to write per mode (2.4 s in the first
-  run): within 05's "hundreds of ms" only for the smaller pages (Sprint
-  0.13 s, Club-2026 0.5 s). The Pending item below now has its input.
+  0.28–0.81 s to compose and 1.3–3.5 s to write per mode over three runs:
+  within 05's "hundreds of ms" only for the smaller pages (Sprint
+  0.1–0.2 s, Club-2026 0.4–0.6 s). The Pending item below now has its input.
 - **Two measurement defects, fixed in C7** (user decision 2026-10-24: they
   would otherwise falsify these numbers): the page oracle composited
   resvg's premultiplied pixels as straight alpha
@@ -945,7 +953,7 @@ symbols on the window, unexplained ÷ ink and their codes:
 
 - **Composing off the event loop** (row C12): each page is composed and
   written synchronously on the API's event loop (§8.2 step 4 yields only
-  between pages). C7 measured up to 0.28 s composing and 1.3–2.4 s writing
+  between pages). C7 measured 0.28–0.81 s composing and 1.3–3.5 s writing
   a Club-full A3 page (§11.5) — long enough to delay a card readout, so a
   worker thread.
 - **PDF size** (row C11): Club-full A4 at 1:10 000 is 1.63 MB, 6.5× 05
