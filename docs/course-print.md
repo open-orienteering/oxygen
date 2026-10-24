@@ -235,8 +235,8 @@ Base-map scale and meridian tilt come from `getBaseMapInfo` only (§10.1).
    centre under a 9-decimal `cm` (05 §5.2, `map-rendering.md` §5.3).
 
 A document whose stack is not aligned (no lower / upper purple) throws
-`CourseStackError` out of `composePage`; whether `maps.pdf` then falls
-back to the legacy page is C3's call.
+`CourseStackError` out of `composePage`; `maps.pdf` then prints the
+legacy page (§8.1).
 
 ### 4.4 The page layer
 
@@ -573,7 +573,7 @@ raster. `packages/api/src/render/pdf-golden.ts`:
   pixel grid and puts 0.4–5 % of the pixels of geometry-exact scenes
   beyond the tolerance even supersampled (`lib-hatch` 2.4 %,
   `lib-borders` 2.1 %, `text-with-halo` 5.1 % at 4×); Cairo matches the
-  oracle to ≤ 0.13 % on every scene without embedded text.
+  oracle to ≤ 0.036 % on every scene without embedded text.
 - **`rgb`** against the committed golden (`e2e/__golden__/map-gl/`) at
   `diffImages(…, 16)` and **≤ 0.5 %** differing pixels. A scene with
   text passes is written twice: with **text as glyph outlines**
@@ -616,7 +616,9 @@ pixels beyond 16 levels; scenes not listed are 0.000 % in all columns):
 Every outline run is 0.000 %: the residual of the embedded-font runs is
 the glyph renderer alone, largest on the small text of `lib-text` and
 `lib-text-layout`. The page scenes' outline runs are not written (their
-text is a few short strings, already under 0.5 % with fonts).
+text is a few short strings): the page scenes are held to **0.5 %
+with embedded fonts**, in both modes — the text tier applies to scenes
+only.
 
 ### 9.3 `qpdf --check`
 

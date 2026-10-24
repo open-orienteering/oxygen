@@ -121,14 +121,15 @@ describe.skipIf(!tools && !required)("PDF golden tier", () => {
     it("rgb: within budget of the page golden", async () => {
       const golden = await decode(await readFile(new URL(`${name}.png`, goldenDir)));
       const pdf = await pageScenePdf(name, "rgb");
-      await check(pdf, golden, PAGE_GOLDEN_SUPERSAMPLE, pdf.hasText ? FONT_TEXT_MAX_RATIO : MAX_DIFF_RATIO, `${name} rgb`);
+      // Pages carry a few short strings only: held to 0.5 % with embedded fonts (course-print.md §9.2).
+      await check(pdf, golden, PAGE_GOLDEN_SUPERSAMPLE, MAX_DIFF_RATIO, `${name} rgb`);
     }, 120_000);
 
     it("cmyk: within budget of the page oracle in the rasteriser's CMYK conversion", async () => {
       const page = await composePageScene(name);
       const pdf = await pageScenePdf(name, "cmyk", page);
       const oracle = await pageOracle(page, await cmykColour(pdf));
-      await check(pdf, oracle, PAGE_GOLDEN_SUPERSAMPLE, pdf.hasText ? FONT_TEXT_MAX_RATIO : MAX_DIFF_RATIO, `${name} cmyk`);
+      await check(pdf, oracle, PAGE_GOLDEN_SUPERSAMPLE, MAX_DIFF_RATIO, `${name} cmyk`);
     }, 120_000);
   });
 });

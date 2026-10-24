@@ -318,7 +318,7 @@ export function registerCourseMapRoutes(
       if (pinned) {
         try {
           const sheets = rows.map((row) =>
-            sheetForMapRow(row as PrintMapRow, {
+            sheetForMapRow(row, {
               event: { name: event.name, date: event.date },
               allControls,
               mapInfo: pinned.info,

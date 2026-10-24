@@ -13,7 +13,7 @@
  * oracle and box-filtered down: poppler's Splash rasteriser (`pdftoppm`)
  * snaps fills and hairlines to the pixel grid (stroke adjustment) and
  * puts 0.4–5 % of the pixels of geometry-exact streams beyond the
- * channel tolerance; Cairo agrees with the oracle to ≤ 0.13 % on every
+ * channel tolerance; Cairo agrees with the oracle to ≤ 0.036 % on every
  * non-text scene (measured C3, 2026-10-24).
  */
 
