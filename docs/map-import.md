@@ -302,9 +302,18 @@ every object and are `flags 1` in Club-2026; the other corpus maps have
 none. `ocad-13` and earlier drew them north-up: six of the 23 diverged
 15–36 % from the legacy in B9's parity tool, none does since
 (`docs/map-rendering.md` §6.4, `docs/bugfix-ocad-point-rotation.md`). Objects with `ang` 0 are unaffected
-by the change; the matcher (stage 6) sees the corrected orientation. The
-rule is OCAD-only: Mapper writes `rotation` only for rotatable symbols
-(§4.3).
+by the change; the matcher (stage 6) sees the corrected orientation, so a
+promoted symbol meets a north-oriented library entry with the
+fingerprint's `north-oriented` factor (0.8 in `fingerprint.ts`;
+`orientation` is a point feature, `docs/map-symbols.md` §8.1)
+and is `suggested` rather than `auto`. User decision 2026-10-24: accepted
+— such a symbol draws from its own definition, turned as OCAD shows it,
+until the review round accepts the entry (then north-up, as ISOM draws
+it). Club-full: 112.1 (10 of 167 objects turned), 203.2 (3 of 8), 311.1
+(6 of 30), 524.2 (1 of 20) and 531.1 (2 of 127) move from `auto` to
+`suggested` (auto 100 → 95, suggested 52 → 57; objects auto 78 147 →
+77 795); no other map changes its matches. The rule is OCAD-only: Mapper
+writes `rotation` only for rotatable symbols (§4.3).
 
 **Symbol elements** (point glyphs, area patterns, line decorations) →
 `GlyphPart`: type 1 line ⇒ `stroke` (`lineWidth`, cap/join from `flags`,
@@ -881,7 +890,7 @@ document hash is identical on two machines.
 | Unit + integration (api) | `map-crt.test.ts`, `integration/map-crt.test.ts` (see `docs/map-storage.md` §10) | `exportCrt` / `importCrt`: file name, plan on the fixture, decide's cap, the procedures end to end |
 | Unit + integration + E2E (api, web) | see `docs/map-storage.md` §10 | stages 1 and 9: chunked upload route, import jobs, store, dedup, pins, report row, delivery route |
 | Unit + integration + E2E (api) | see `docs/map-storage.md` §10 (previews rows) | stage 10: thumbnail row written by the job and by the dedup short-cut, non-fatal failure, object cap |
-| Script (scripts) | `scripts/__tests__/ocad-fixture.test.mjs` (`pnpm test:scripts`) | the OCAD fixture writer: `e2e/test.ocd` byte-identical on regeneration, its framed text and rectangle read back by the reader; the symbol-types file (`buildSymbolTypesOcad`, also the fork's `test/data/symbol-types.ocd`) read back field by field — text framing, line text, rectangles with radius and grid; the stale-border file (`buildStaleBorderOcad`: an area whose border is itself, one whose border is missing) read back |
+| Script (scripts) | `scripts/__tests__/ocad-fixture.test.mjs` (`pnpm test:scripts`) | the OCAD fixture writer: `e2e/test.ocd` byte-identical on regeneration, its framed text and rectangle read back by the reader; the symbol-types file (`buildSymbolTypesOcad`, also the fork's `test/data/symbol-types.ocd`) read back field by field — text framing, line text, rectangles with radius and grid; the stale-border file (`buildStaleBorderOcad`: an area whose border is itself, one whose border is missing) read back; the rotated-points file (`buildRotatedPointsOcad`, C10): each symbol's rotatable flag and each object's angle read back — the same file is drawn against the legacy in `packages/api/src/render/__tests__/parity.test.ts` (`docs/map-rendering.md` §6.4) |
 | Reader (fork) | `open-orienteering/ocad2geojson` `test/reader.test.js`, `test/svg.test.js` (`npm test`) | text framing on the real `fences.ocd` (902.1: mode 2, colour 12, width 10) and every new field on `symbol-types.ocd`; `ocadToSvg` reads but does not draw line-text and rectangle objects |
 | Script (scripts) | `scripts/__tests__/measure-import.test.mjs` (`pnpm test:scripts`) | `scripts/measure-import.mjs` over the two fixtures: hashes written and found again in a second process, a changed hash fails as a determinism failure, the Mapper fixture's four unsupported-primitive codes fail the run and print their per-emission detail, a stale area-border reference is reported per symbol (`~`) without failing the run, usage errors exit 2 |
 

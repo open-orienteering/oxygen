@@ -879,7 +879,14 @@ the diverging symbols and the gate did not move; Crop-B's numbers, at 2×
 overprint scale, moved most (beyond 32 levels 0.031 → 0.072 %, beyond 16
 levels 0.494 → 0.537 %); the legacy colour ratio fell by 0.2–0.4 pp on
 four pages. Times vary with the machine's load between runs (Club-full's
-write 1.3–3.5 s per mode over three runs).
+write 1.3–3.5 s per mode over three runs). The two Club-full rows are
+re-runs on importer `ocad-14` (C10, 2026-10-24: north-oriented point
+symbols whose objects carry an angle drawn turned, `map-import.md` §3.3):
+against C7's run the four rotation symbols left the diverging list and
+both pages pass; bytes grew by 2.2 kB (window) and 0.5 kB (A4) — the
+turned glyph instances' `cm` operands —, shapes against the oracle and
+the backend-parity ratios did not move, the legacy colour ratio fell by
+0.03 pp.
 
 | Page set | Map | Page (mm) | Map → print scale | Rotation | Objects | Bytes `rgb` / `cmyk` (kB) | compose / write `rgb` / `cmyk` (ms) | > 16 levels `rgb` / `cmyk` (%) | > 32 levels (%) | Unexplained (px) | qpdf | Legacy: unexplained / differing (% of ink) | Symbols compared / diverging | Gate |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
@@ -887,9 +894,9 @@ write 1.3–3.5 s per mode over three runs).
 | OCAD window | Crop-A | 143 × 117 | 1:15000 → 1:15000 | 0° | 4 927 | 459 / 459 | 134 / 288 / 235 | 1.419 / 1.248 | 0.128 / 0.096 | 0 / 0 | ok | 0.18 / 22.23 | 96 / 6 | pass |
 | OCAD window | Crop-B | 43 × 52 | 1:15000 → 1:7500 | 0° | 1 005 | 141 / 141 | 40 / 160 / 98 | 0.537 / 0.388 | 0.072 / 0.022 | 0 / 0 | ok | 3.66 / 21.95 | 59 / 3 | pass |
 | OCAD window | Club-2026 | 426 × 303 | 1:15000 → 1:5000 | -3.296° | 7 664 | 950 / 950 | 127 / 552 / 465 | 0.450 / 0.348 | 0.039 / 0.027 | 3 / 3 | ok | 8.91 / 40.60 | 101 / 6 | pass |
-| OCAD window | Club-full | 426 × 303 | 1:15000 → 1:15000 | -3.3° | 31 163 | 3 624 / 3 624 | 809 / 3505 / 3091 | 0.827 / 0.645 | 0.134 / 0.113 | 11 / 10 | ok | 0.33 / 20.16 | 142 / 13 (4 unsanctioned) | FAIL |
+| OCAD window | Club-full | 426 × 303 | 1:15000 → 1:15000 | -3.3° | 31 163 | 3 626 / 3 626 | 256 / 1467 / 1284 | 0.827 / 0.645 | 0.134 / 0.113 | 11 / 10 | ok | 0.33 / 20.13 | 142 / 9 | pass |
 | Appendix B | Sprint A3 | 420 × 297 | 1:4000 → 1:4000 | 0° | 10 441 | 885 / 885 | 102 / 483 / 491 | 0.153 / 0.095 | 0.014 / 0.008 | 0 / 0 | ok | 1.03 / 21.26 | 86 / 7 | pass |
-| Appendix B | Club-full A4 1:10 000 | 297 × 210 | 1:15000 → 1:10000 | -3.3° | 13 768 | 1 627 / 1 626 | 168 / 868 / 607 | 0.653 / 0.498 | 0.095 / 0.078 | 5 / 5 | ok | 0.84 / 18.36 | 117 / 12 (4 unsanctioned) | FAIL |
+| Appendix B | Club-full A4 1:10 000 | 297 × 210 | 1:15000 → 1:10000 | -3.3° | 13 768 | 1 627 / 1 627 | 159 / 798 / 631 | 0.653 / 0.498 | 0.095 / 0.078 | 5 / 5 | ok | 0.83 / 18.33 | 117 / 8 | pass |
 
 **Backend parity.** Every page draws the same shapes as the oracle —
 0–11 unexplained pixels on pages of 0.2–13 megapixels — and at most
@@ -910,17 +917,20 @@ symbols on the window, unexplained ÷ ink and their codes:
 - Crop-A: 407.0 36.1 %, 113.0 33.2 %, 520.2 27.9 %, 404.0 13.0 %, 409.0 10.4 % (`pattern-origin`); 507.0 10.1 % (`dash-fitting`, `dash-points`).
 - Crop-B: 507.0 20.6 % (`dash-fitting`, `dash-points`); 409.0 20.3 %, 310.0 12.4 % (`pattern-origin`).
 - Club-2026: 210.1 60.0 %, 407.1 41.5 %, 404.3 11.0 % (`pattern-origin`); 815.2 52.6 % (`text-fonts`); 507.1 15.9 %, 508.2 13.4 % (`dash-fitting`).
-- Club-full: **504.7 46.6 %, 512.3 45.5 %, 519.0 20.2 %, 504.5 20.2 % (none)**; 407.1 42.7 %, 404.3 13.4 % (`pattern-origin`); 414.3 23.2 %, 507.1 12.4 % (`dash-fitting`); 811.5 19.5 %, 825.1 16.1 %, 825.0 10.9 % (`text-fonts`); 107.0 14.1 % (`pointed-caps`); 517.1 11.5 % (`curve-glyphs`, `dash-fitting`, `dash-points`).
+- Club-full: 407.1 42.7 %, 404.3 13.4 % (`pattern-origin`); 414.3 23.2 %, 507.1 12.4 % (`dash-fitting`); 811.5 19.5 %, 825.1 16.1 %, 825.0 10.9 % (`text-fonts`); 107.0 14.1 % (`pointed-caps`); 517.1 11.5 % (`curve-glyphs`, `dash-fitting`, `dash-points`). C7's run also had 504.7 46.6 %, 512.3 45.5 %, 519.0 20.2 % and 504.5 20.2 % without a code — fixed in C10, below.
 - Sprint A3: 407.0 37.1 %, 533.0 29.8 %, 404.0 27.7 %, 501.300 19.1 %, 402.0 12.9 % (`pattern-origin`); 507.0 24.7 % (`dash-fitting`, `dash-points`); 416.0 24.6 % (`curve-glyphs`, `glyph-spacing`).
-- Club-full A4: the same four unsanctioned point symbols; 407.1 52.5 %, 409.1 14.5 %, 404.3 13.9 % (`pattern-origin`); 414.3 22.0 %, 508.2 10.9 %, 507.1 10.3 % (`dash-fitting`); 107.0 14.1 % (`pointed-caps`); 517.1 12.7 % (`curve-glyphs`, `dash-fitting`, `dash-points`).
+- Club-full A4: 407.1 52.5 %, 409.1 14.5 %, 404.3 13.9 % (`pattern-origin`); 414.3 22.0 %, 508.2 10.9 %, 507.1 10.3 % (`dash-fitting`); 107.0 14.1 % (`pointed-caps`); 517.1 12.7 % (`curve-glyphs`, `dash-fitting`, `dash-points`).
 
 **What the run found** (fixes are rows, not C7):
 
-- **Point-symbol rotation (row C10).** Club-full's 504.5 / 504.7 (barrier),
-  512.3 (footbridge) and 519.0 (tunnel) — drawn from their source
-  definitions, canonical rendering on or off — are drawn unrotated
-  (512.3 a quarter turn off) where the legacy turns each object to its
-  angle. The C-gate's only failure.
+- **Point-symbol rotation — fixed in C10 (`ocad-14`).** Club-full's 504.5
+  / 504.7 (barrier), 512.3 (footbridge) and 519.0 (tunnel) were drawn
+  unrotated, canonical rendering on or off, where the legacy turns each
+  object to its angle: the symbols are north-oriented (OCAD's rotatable
+  flag clear) while every object carries an angle, which OCAD draws
+  regardless. The importer now turns such a symbol, as Mapper's OCD
+  import does (`map-import.md` §3.3, `docs/bugfix-ocad-point-rotation.md`);
+  both Club-full pages pass. It was the C-gate's only failure.
 - **Size against 05 Appendix B (row C11).** Sprint A3: 885 kB against
   ≈ 0.5 MB. Club-full A4 at 1:10 000: 1.63 MB against ≈ 0.25 MB. Its
   content stream is 4.8 MB raw, flated to 1.63 MB (×0.34, as Appendix B
@@ -958,9 +968,8 @@ symbols on the window, unexplained ÷ ink and their codes:
   worker thread.
 - **PDF size** (row C11): Club-full A4 at 1:10 000 is 1.63 MB, 6.5× 05
   Appendix B's estimate (§11.5).
-- **Corpus gate** (§11.3): Club-full fails on four point symbols drawn
-  unrotated (row C10). Crop-A's 7 µm hatch offset between PDF and oracle is
-  unexplained (below every budget).
+- **Corpus gate** (§11.3): every page passes since C10. Crop-A's 7 µm
+  hatch offset between PDF and oracle is unexplained (below every budget).
 - **Golden tier on CI's poppler**: the budgets were measured with poppler
   22.02 (dev machine); the CI runner's distribution ships a newer one.
   The embedded-font text tier (≤ 2.5 %, §9.2) is provisional: tightened
