@@ -299,8 +299,9 @@ made rotatable on the first object with an angle). Since `ocad-14` (C10):
 Club-full has 23 north-oriented point symbols with rotated objects — its
 504.5 / 504.7 barriers, 512.3 footbridge and 519.0 tunnel are rotated on
 every object and are `flags 1` in Club-2026; the other corpus maps have
-none. `ocad-13` and earlier drew them north-up (25–36 % shape difference
-against the legacy, B9's parity tool). Objects with `ang` 0 are unaffected
+none. `ocad-13` and earlier drew them north-up: six of the 23 diverged
+15–36 % from the legacy in B9's parity tool, none does since
+(`docs/map-rendering.md` §6.4, `docs/bugfix-ocad-point-rotation.md`). Objects with `ang` 0 are unaffected
 by the change; the matcher (stage 6) sees the corrected orientation. The
 rule is OCAD-only: Mapper writes `rotation` only for rotatable symbols
 (§4.3).

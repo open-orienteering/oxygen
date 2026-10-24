@@ -2042,8 +2042,9 @@ what became of it:
   OCAD point symbols whose objects carry an angle are drawn turned, as
   OCAD and Mapper draw them (`map-import.md` §3.3): Club-full has 23 such
   symbols; its 504.5 / 504.7 barriers, 512.3 footbridge and 519.0 tunnel
-  — every object turned — diverged 24.92 / 36.28 / 26.65 / 31.96 %
-  (canonical) and are now `close` with canonical rendering on and off.
+  — every object turned — diverged 24.92 / 36.28 / 26.65 / 31.96 %, and
+  519.3 21.31 %, 208.4 15.04 %; all 23 are `close` since, with canonical
+  rendering on and off (`docs/bugfix-ocad-point-rotation.md`).
 - **Spec-faithful, kept.** Cliffs: every 201.x / 202.x variant matches
   the legacy at 40 px/mm from source (0 % unexplained); canonically
   matched 202.2 / 201.5 get ISOM's flat ends (the "small houses"),

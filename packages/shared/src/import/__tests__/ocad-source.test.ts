@@ -353,14 +353,14 @@ describe("ocadToDocumentInput", () => {
 
 describe("point orientation from object angles (docs/map-import.md §3.3, C10)", () => {
   // Club-full shapes: north-oriented (flags 0) symbols whose objects all carry an angle, as OCAD and Mapper draw them.
-  const bar = (color: number) => [{ type: 1, flags: 0, color, lineWidth: 25, diameter: 0, coords: [[0, -59], [0, 59]] }];
+  const bar = (color: number) => [{ type: 1, flags: 0, color, lineWidth: 25, diameter: 0, coords: [c(0, -59), c(0, 59)] }];
   const withPoints = () => {
     const s = source();
     s.symbols = [...Array.from(s.symbols),
       { symNum: 512003, number: "512.3", type: 1, flags: 0, status: 0, description: "Footbridge", elements: bar(0) },
       { symNum: 519000, number: "519.0", type: 1, flags: 0, status: 0, description: "Tunnel", elements: bar(0) },
       { symNum: 418000, number: "418.0", type: 1, flags: 1, status: 0, description: "Rotatable", elements: bar(0) },
-      { symNum: 109001, number: "109.1", type: 1, flags: 0, status: 0, description: "Small knoll", elements: [{ type: 4, flags: 0, color: 3, lineWidth: 0, diameter: 50, coords: [[0, 0]] }] },
+      { symNum: 109001, number: "109.1", type: 1, flags: 0, status: 0, description: "Small knoll", elements: [{ type: 4, flags: 0, color: 3, lineWidth: 0, diameter: 50, coords: [c(0, 0)] }] },
       { symNum: 504009, number: "504.9", type: 1, flags: 0, status: 0, description: "Barrier, unrotated", elements: bar(0) },
     ];
     s.objects = [...Array.from(s.objects),
