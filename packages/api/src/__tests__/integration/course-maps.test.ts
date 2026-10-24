@@ -873,6 +873,24 @@ describe("maps.pdf route switch", () => {
     }
   }, 60_000);
 
+  it("any other vector-path error is a 400, not a fallback", async () => {
+    const failing = Fastify({ logger: false });
+    registerCourseMapRoutes(failing, {
+      converter: { convert: async () => { throw new Error("rsvg must not run"); } },
+      renderCoursePages: async () => {
+        throw new Error("composer bug");
+      },
+    });
+    await failing.ready();
+    try {
+      const res = await failing.inject({ method: "GET", url: pdfUrl(vec.nameId) });
+      expect(res.statusCode).toBe(400);
+      expect(res.json().error).toBe("composer bug");
+    } finally {
+      await failing.close();
+    }
+  }, 60_000);
+
   it("an unaligned colour stack falls back to the legacy path", async () => {
     const converted: string[] = [];
     const fallback = Fastify({ logger: false });
@@ -893,7 +911,7 @@ describe("maps.pdf route switch", () => {
     try {
       const res = await fallback.inject({ method: "GET", url: pdfUrl(vec.nameId) });
       expect(res.statusCode).toBe(200);
-      expect(res.headers["x-print-pipeline"]).toBe("legacy");
+      expect(res.headers["x-print-pipeline"]).toBe("legacy-fallback");
       expect(converted).toHaveLength(3);
     } finally {
       await fallback.close();

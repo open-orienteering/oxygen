@@ -257,8 +257,8 @@ async function renderPage(
   });
 }
 
-/** Which path drew a `maps.pdf` response (`X-Print-Pipeline`, docs/course-print.md §8). */
-export type PrintPipeline = "vector" | "legacy";
+/** Which path drew a `maps.pdf` response (`X-Print-Pipeline`, docs/course-print.md §8.1). */
+export type PrintPipeline = "vector" | "legacy" | "legacy-fallback";
 
 export function registerCourseMapRoutes(
   server: FastifyInstance,
@@ -324,17 +324,17 @@ export function registerCourseMapRoutes(
               mapInfo: pinned.info,
             }),
           );
-          const out = await renderGate().run(
-            () =>
-              renderVectorPages({
-                document: pinned.document,
-                rotationCorrectionDeg: pinned.rotationCorrectionDeg,
-                sheets,
-                graphics,
-                mode: "cmyk",
-                info,
-              }),
-            { maxQueue: renderMaxQueue() },
+          // A permit like every render, but no queue cap: a 503 would
+          // arrive as a broken download (course-print.md §8.2).
+          const out = await renderGate().run(() =>
+            renderVectorPages({
+              document: pinned.document,
+              rotationCorrectionDeg: pinned.rotationCorrectionDeg,
+              sheets,
+              graphics,
+              mode: "cmyk",
+              info,
+            }),
           );
           for (const warning of out.warnings) req.log.warn({ nameId }, `maps.pdf: ${warning}`);
           body = Buffer.from(out.bytes);
@@ -342,6 +342,7 @@ export function registerCourseMapRoutes(
         } catch (error) {
           if (!(error instanceof course.CourseStackError)) throw error;
           req.log.warn({ nameId, hash: pinned.info.document?.hash }, `maps.pdf: ${error.message}; printing through the legacy path`);
+          pipeline = "legacy-fallback";
         }
       }
       if (!body) {
@@ -368,13 +369,6 @@ export function registerCourseMapRoutes(
         .header("X-Print-Pipeline", pipeline)
         .send(body);
     } catch (error) {
-      if (error instanceof RenderBusyError) {
-        return reply
-          .code(503)
-          .header("Retry-After", String(RENDER_BUSY_RETRY_AFTER_S))
-          .header("Cache-Control", "no-store")
-          .send({ error: "Map renderer busy", waiting: error.waiting });
-      }
       req.log.error(error);
       return reply.code(400).send({
         error: error instanceof Error ? error.message : "Could not render maps",

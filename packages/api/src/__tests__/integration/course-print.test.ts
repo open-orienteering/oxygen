@@ -3,8 +3,8 @@
  * (docs/course-print.md §4–7): the E2E fixture map (`e2e/test.ocd`)
  * imported and pinned on a `vector` event, a template, a course and an
  * all-controls sheet, rendered by `renderCoursePages` — the function the
- * `maps.pdf` route will call (C3). Structural assertions with pdf-lib;
- * `qpdf --check` and the rasterised comparison are C3's.
+ * `maps.pdf` route calls (C3). Structural assertions with pdf-lib and
+ * `qpdf --check` (docs/course-print.md §9.3).
  */
 
 import { randomBytes } from "node:crypto";
@@ -17,7 +17,10 @@ import { defaultMapAppearance } from "@oxygen/shared";
 import { applyEventMap } from "../../event-map.js";
 import { clearCourseMapSourceCache } from "../../course-maps/map-source.js";
 import { loadPinnedPrintDocument, renderCoursePages, sheetForMapRow, type PrintMapRow } from "../../course-maps/pdf-page.js";
+import { hasTool, qpdfCheck } from "../../render/pdf-golden.js";
 import { createTestEvent, disconnect, type TestEventContext } from "../helpers/test-db.js";
+
+const hasQpdf = await hasTool("qpdf");
 
 const fixture = resolve(__dirname, "../../../../../e2e/test.ocd");
 const SVG = Buffer.from('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 10"><rect width="20" height="10" fill="#c00"/></svg>');
@@ -176,6 +179,10 @@ describe("course pages from the pinned document", () => {
       expect(gpts[i + 1]).toBeLessThan(25);
     }
   }, 60_000);
+
+  it.skipIf(!hasQpdf && !process.env.CI)("qpdf --check: both colour modes are clean", async () => {
+    for (const mode of ["cmyk", "rgb"] as const) expect(await qpdfCheck((await build(mode)).bytes)).toMatch(/No syntax or stream encoding errors/);
+  }, 90_000);
 
   it("deterministic: equal sheets give equal bytes; rgb differs from cmyk", async () => {
     const a = await build(), b = await build(), rgb = await build("rgb");

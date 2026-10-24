@@ -466,7 +466,7 @@ back to `legacy` and the same rows print through rsvg.
 |---|---|---|
 | `map_pipeline = vector` and the latest `map_files` row pins a document | the composer, §8.2 | `vector` |
 | `legacy`, or `vector` without a pin | SVG → `rsvg-convert` → pdf-lib merge, as before slice C (`docs/course-maps.md` "Rendering pipeline") | `legacy` |
-| `vector` with a pin whose colour stack is not aligned (`course.CourseStackError`: no lower / upper purple) | the legacy path, with one `warn` log line per request naming the document hash | `legacy` |
+| `vector` with a pin whose colour stack is not aligned (`course.CourseStackError`: no lower / upper purple) | the legacy path, with one `warn` log line per request naming the document hash | `legacy-fallback` |
 
 The decision is `loadPinnedPrintDocument(db, eventId)` (`pdf-page.ts`),
 which reads `getBaseMapInfo` (§10.1) — the same function, so the
@@ -486,9 +486,11 @@ behind rsvg.
    graphics, mode: "cmyk", info })`: one `PdfWriter`, one page per
    sheet, fonts, glyph forms and images shared (§4.5). Not
    `deterministic`: real dates (§3.2).
-4. Under a `renderGate()` permit like tiles and `window.png`; a full
-   queue answers **503** with `Retry-After` (the legacy path has no
-   gate and never answers 503). Composing runs on the API's event loop
+4. Under a `renderGate()` permit like tiles and `window.png`, but
+   **without the queue cap**: the request waits for a permit and never
+   answers 503 — the export is a browser download, where a 503 body
+   would arrive as a broken file, and the layout editor's `window.png`
+   requests share the four-deep queue. Composing runs on the API's event loop
    and yields between pages (`setImmediate`), so other requests run
    between the pages of a long export; each page is one synchronous
    compose + write.
@@ -506,8 +508,9 @@ As before slice C: `Content-Type: application/pdf`,
 `Content-Disposition: attachment; filename="<event>_<map>.pdf"` for one
 page and `"<event>_maps.pdf"` for several, `Cache-Control: no-store`;
 404 for an unknown event or no maps, 400 for a bad selection. New:
-**`X-Print-Pipeline: vector | legacy`** names the path that drew the
-file (E2E and support read it). `Info /Title` per §7.1 (`<event> · <map>`
+**`X-Print-Pipeline: vector | legacy | legacy-fallback`** names the
+path that drew the file (E2E and support read it). Any error on the
+vector path other than `CourseStackError` is a 400 with its message. `Info /Title` per §7.1 (`<event> · <map>`
 for one page, `<event> maps` for several), `/Author` the organiser.
 
 ### 8.4 Sanctioned differences from the legacy PDF
@@ -543,8 +546,9 @@ E2E tests check page count and size; C7 compares the rasters).
 
 | Test | Covers |
 |---|---|
-| `packages/api/src/__tests__/integration/course-maps.test.ts` "maps.pdf route switch" | `vector` + pin → one composed PDF, pages at each template's paper (A4, A5), never the rsvg converter, `X-Print-Pipeline: vector`, `Info` title for one and several pages, file names; selection errors unchanged; `qpdf --check` clean; a `legacy` event, a `vector` event without a pin, and the same event flipped back all print legacy; an injected `CourseStackError` falls back to legacy |
-| `packages/api/src/render/__tests__/pdf-golden.test.ts` | the PDF golden tier, §9.2, and `qpdf --check` on every file it writes |
+| `packages/api/src/__tests__/integration/course-maps.test.ts` "maps.pdf route switch" | `vector` + pin → one composed PDF, pages at each template's paper (A4, A5), never the rsvg converter, `X-Print-Pipeline: vector`, `Info` title for one and several pages, file names; selection errors unchanged; `qpdf --check` clean; a `legacy` event, a `vector` event without a pin, and the same event flipped back all print legacy; an injected `CourseStackError` falls back (`legacy-fallback`); any other injected error is a 400 |
+| `packages/api/src/__tests__/integration/course-print.test.ts` | §7.5's row, plus `qpdf --check` of both colour modes |
+| `packages/api/src/render/__tests__/pdf-golden.test.ts` | the PDF golden tier, §9.2, and `qpdf --check` on every file it writes; `boxDown`; the swatch read-back |
 | `e2e/course-maps.spec.ts` (`map-legacy`, `map-vector`) | the export flows of the maps page: page count and A4 page size of the single-map, course and all-controls downloads (05 §7), `X-Print-Pipeline` equal to the project's value |
 
 ### 9.2 The PDF golden tier
@@ -583,7 +587,8 @@ raster. `packages/api/src/render/pdf-golden.ts`:
   RGB conversion** of each stack colour (`rasteriserCmykColours`: one
   swatch per colour, read back), same budgets. Poppler does not convert
   CMYK naively (purple, brown and greens differ by up to ~100 levels per
-  channel), so a "naive conversion with a looser tolerance" (05 §7)
+  channel; even 100 % K comes back as `#231f20`, not `#000000`), so a
+  "naive conversion with a looser tolerance" (05 §7)
   would need a tolerance that hides geometry; making the conversion
   explicit keeps the 16-level tolerance.
 

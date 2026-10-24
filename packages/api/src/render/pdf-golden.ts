@@ -36,8 +36,11 @@ import {
 } from "@oxygen/shared/print";
 import { BUNDLED_FONT_FILES } from "./fonts.js";
 import { GOLDEN_SUPERSAMPLE, goldenFonts } from "./golden.js";
-import { PAGE_GOLDEN_SUPERSAMPLE, composePageScene, rasterisePage } from "./page-raster.js";
-import { type RasterImage, rasterisePassStream } from "./reference-raster.js";
+import { PAGE_GOLDEN_SUPERSAMPLE, type PageRaster, composePageScene, rasterisePage } from "./page-raster.js";
+import { rasterisePassStream } from "./reference-raster.js";
+
+/** RGBA, top row first — what `diffImages` compares. */
+export type Pixels = PageRaster;
 
 const run = promisify(execFile);
 
@@ -136,7 +139,7 @@ export async function qpdfCheck(bytes: Uint8Array): Promise<string> {
  * `pdftocairo` at `supersample ×` that size, box-filtered down as the
  * oracle's own supersampling is.
  */
-export async function rasterisePdf(bytes: Uint8Array, width: number, height: number, supersample = 1): Promise<RasterImage> {
+export async function rasterisePdf(bytes: Uint8Array, width: number, height: number, supersample = 1): Promise<Pixels> {
   const k = Math.max(1, Math.round(supersample));
   const dir = await mkdtemp(join(tmpdir(), "oxygen-pdfraster-"));
   try {
@@ -158,7 +161,8 @@ export async function rasterisePdf(bytes: Uint8Array, width: number, height: num
   }
 }
 
-function boxDown(img: RasterImage, k: number): RasterImage {
+/** Average every `k × k` block (the oracle's supersample filter). */
+export function boxDown(img: Pixels, k: number): Pixels {
   const width = img.width / k, height = img.height / k;
   const pixels = new Uint8Array(width * height * 4);
   const n = k * k;
@@ -196,7 +200,7 @@ export async function rasteriserCmykColours(cmyks: Cmyk[]): Promise<string[]> {
 }
 
 /** The scene oracle drawn in other colours (the golden is the same call with the scene's own). */
-export async function goldenOracle(name: render.GoldenSceneName, colour: (i: number) => string): Promise<RasterImage> {
+export async function goldenOracle(name: render.GoldenSceneName, colour: (i: number) => string): Promise<Pixels> {
   const fonts = await goldenFonts();
   const scene = render.goldenScene(name, fonts);
   const { bounds } = render.goldenFrame(scene.stream);
@@ -205,6 +209,6 @@ export async function goldenOracle(name: render.GoldenSceneName, colour: (i: num
 }
 
 /** The page oracle drawn in other colours. */
-export async function pageOracle(page: ComposedPage, colour: (i: number) => string): Promise<RasterImage> {
+export async function pageOracle(page: ComposedPage, colour: (i: number) => string): Promise<Pixels> {
   return rasterisePage(page, { supersample: PAGE_GOLDEN_SUPERSAMPLE, colour });
 }

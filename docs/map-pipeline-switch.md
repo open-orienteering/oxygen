@@ -149,7 +149,8 @@ print = event == "vector" ∧ latest map_files row pins a document ? "vector" : 
 - A pinned document whose colour stack is not aligned
   (`course.CourseStackError`) prints through the legacy path with a
   logged warning (`course-print.md` §8.1).
-- `maps.pdf` names the path in `X-Print-Pipeline: vector | legacy`.
+- `maps.pdf` names the path in `X-Print-Pipeline: vector | legacy |
+  legacy-fallback`.
 - Both paths read the same template, course-map, course, control and
   graphics rows and write nothing: rollback is flipping the event back.
   There is no WebGL2 condition — the server draws — and `allowLegacy`
