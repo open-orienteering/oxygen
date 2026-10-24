@@ -24,8 +24,14 @@ export interface PageRaster {
   pixels: Uint8Array;
 }
 
-/** `src` over `dst` at pixel offset (`ox`, `oy`), straight alpha. */
-function over(dst: Uint8Array, dw: number, dh: number, src: { width: number; height: number; pixels: Uint8Array }, ox: number, oy: number): void {
+/**
+ * `src` over opaque `dst` at pixel offset (`ox`, `oy`). `src` is resvg's
+ * output: **premultiplied** RGBA, so a covered fraction `a` contributes its
+ * channels as they are (compositing them as straight alpha darkened every
+ * anti-aliased edge of a saturated colour — the C7 corpus run found it,
+ * docs/bugfix-page-oracle-premultiplied.md).
+ */
+export function over(dst: Uint8Array, dw: number, dh: number, src: { width: number; height: number; pixels: Uint8Array }, ox: number, oy: number): void {
   for (let y = 0; y < src.height; y++) {
     const ty = y + oy;
     if (ty < 0 || ty >= dh) continue;
@@ -35,7 +41,7 @@ function over(dst: Uint8Array, dw: number, dh: number, src: { width: number; hei
       const s = (y * src.width + x) * 4, d = (ty * dw + tx) * 4;
       const a = src.pixels[s + 3] / 255;
       if (a === 0) continue;
-      for (let c = 0; c < 3; c++) dst[d + c] = Math.round(src.pixels[s + c] * a + dst[d + c] * (1 - a));
+      for (let c = 0; c < 3; c++) dst[d + c] = Math.round(src.pixels[s + c] + dst[d + c] * (1 - a));
       dst[d + 3] = 255;
     }
   }
