@@ -9,8 +9,17 @@
  * Objects' own paths stay as Béziers in the stream.
  */
 
-import { COORD_FLAG, type RenderPath, makePath } from "./pass-stream.js";
-import { type Segment, pathRings, ringSegments, segmentPoint } from "./path.js";
+import { COORD_FLAG, type RenderPath, type Slice, type StrokeJoin, makePath } from "./pass-stream.js";
+import {
+  type Segment,
+  pathRings,
+  pathSegments,
+  ringSegments,
+  segmentLength,
+  segmentPoint,
+  segmentSub,
+  sliceSegments,
+} from "./path.js";
 
 /** Flattened ring: x,y pairs, not repeating the first point at the end. */
 export type FlatRing = number[];
@@ -224,4 +233,162 @@ export function roundCorners(path: RenderPath, radiusUm: number): RenderPath {
     }
   });
   return makePath(coords.map(Math.round), flags, path.closed);
+}
+
+export interface StrokeOutlineOptions {
+  widthUm: number;
+  join: StrokeJoin;
+  /** Linear width taper over the first / last `n` µm of the whole path (map-rendering §3.2). */
+  taper?: { startUm?: number; endUm?: number };
+  /** Dash slices; each is outlined on its own, the taper still measured along the whole path. */
+  slices?: Slice[];
+  toleranceUm?: number;
+}
+
+/** Mitre limit shared by every backend: mitre length ≤ 4 × width (SVG and PDF `4 M`). */
+export const STROKE_MITRE_LIMIT = 4;
+
+/**
+ * A stroke as fill geometry, for what PDF and SVG strokes cannot draw:
+ * `pointed` caps with a `taper` (map-rendering §3.2, research 05 §5.3).
+ * The width falls linearly to 0 over `taper.startUm` from the path's
+ * start and `taper.endUm` towards its end, measured along the whole path
+ * (also when only slices are drawn); the ends are butt.
+ *
+ * The result is a set of closed rings — one quad per flattened piece and
+ * one wedge per join — all counter-clockwise, to be filled with the
+ * **non-zero** rule (their union; even-odd would cut the overlaps out).
+ * Curves are flattened at the stage tolerance (5 µm); coordinates are
+ * integer µm. The PDF backend and the reference raster both fill this,
+ * so a taper looks the same in both.
+ */
+export function strokeOutline(path: RenderPath, opts: StrokeOutlineOptions): RenderPath {
+  const tol = opts.toleranceUm ?? 5;
+  const half = opts.widthUm / 2;
+  const segs = pathSegments(path);
+  const cum: number[] = [0];
+  for (const s of segs) cum.push(cum[cum.length - 1] + segmentLength(s));
+  const total = cum[segs.length];
+  const t0 = opts.taper?.startUm ?? 0;
+  const t1 = opts.taper?.endUm ?? 0;
+  const halfAt = (s: number): number => {
+    let f = 1;
+    if (t0 > 0) f = Math.min(f, s / t0);
+    if (t1 > 0) f = Math.min(f, (total - s) / t1);
+    return half * Math.max(0, Math.min(1, f));
+  };
+  const breaks = [t0, total - t1].filter((b) => b > 0 && b < total);
+
+  const rings: number[][] = [];
+  const addRing = (pts: number[]) => {
+    const r = pts.map(Math.round);
+    const a = ringArea(r);
+    if (Math.abs(a) < 1e-9) return;
+    if (a < 0) {
+      const rev: number[] = [];
+      for (let i = r.length - 2; i >= 0; i -= 2) rev.push(r[i], r[i + 1]);
+      rings.push(rev);
+    } else rings.push(r);
+  };
+
+  /** Outlines one run of segments starting at arc length `s0`; `closed` adds the closing join. */
+  const outlineRun = (run: Segment[], s0: number, closed: boolean) => {
+    const flat = flattenSegments(run, tol);
+    if (flat.length < 4) return;
+    // Points with their arc length, taper breakpoints inserted.
+    const xs: number[] = [flat[0]], ys: number[] = [flat[1]], ss: number[] = [s0];
+    for (let i = 2; i < flat.length; i += 2) {
+      const px = xs[xs.length - 1], py = ys[ys.length - 1], ps = ss[ss.length - 1];
+      const len = Math.hypot(flat[i] - px, flat[i + 1] - py);
+      if (len === 0) continue;
+      for (const b of breaks) {
+        if (b > ps && b < ps + len) {
+          const f = (b - ps) / len;
+          xs.push(px + (flat[i] - px) * f);
+          ys.push(py + (flat[i + 1] - py) * f);
+          ss.push(b);
+        }
+      }
+      xs.push(flat[i]);
+      ys.push(flat[i + 1]);
+      ss.push(ps + len);
+    }
+    const n = xs.length;
+    if (n < 2) return;
+    const dir = (i: number): [number, number] => {
+      const dx = xs[i + 1] - xs[i], dy = ys[i + 1] - ys[i];
+      const l = Math.hypot(dx, dy) || 1;
+      return [dx / l, dy / l];
+    };
+    for (let i = 0; i + 1 < n; i++) {
+      const [dx, dy] = dir(i);
+      const nx = -dy, ny = dx;
+      const h0 = halfAt(ss[i]), h1 = halfAt(ss[i + 1]);
+      if (h0 === 0 && h1 === 0) continue;
+      addRing([
+        xs[i] + nx * h0, ys[i] + ny * h0,
+        xs[i] - nx * h0, ys[i] - ny * h0,
+        xs[i + 1] - nx * h1, ys[i + 1] - ny * h1,
+        xs[i + 1] + nx * h1, ys[i + 1] + ny * h1,
+      ]);
+    }
+    const joinAt = (i: number, d0: [number, number], d1: [number, number]) => {
+      const h = halfAt(ss[i]);
+      if (h === 0) return;
+      const cross = d0[0] * d1[1] - d0[1] * d1[0];
+      const dot = d0[0] * d1[0] + d0[1] * d1[1];
+      const turn = Math.atan2(cross, dot);
+      if (Math.abs(turn) < 1e-6) return;
+      // Outer side: right of the path on a left turn, left on a right turn.
+      const side = cross > 0 ? -1 : 1;
+      const ax = xs[i] - d0[1] * h * side, ay = ys[i] + d0[0] * h * side;
+      const bx = xs[i] - d1[1] * h * side, by = ys[i] + d1[0] * h * side;
+      const pts = [xs[i], ys[i], ax, ay];
+      if (opts.join === "round") {
+        const a0 = Math.atan2(ay - ys[i], ax - xs[i]);
+        const steps = Math.max(1, Math.ceil(Math.abs(turn) / (2 * Math.acos(Math.max(-1, 1 - tol / h)))));
+        for (let k = 1; k < steps; k++) {
+          const a = a0 + (turn * k) / steps;
+          pts.push(xs[i] + Math.cos(a) * h, ys[i] + Math.sin(a) * h);
+        }
+      } else if (opts.join === "miter") {
+        const ratio = 1 / Math.cos(turn / 2);
+        if (ratio <= STROKE_MITRE_LIMIT) {
+          const mx = (ax + bx) / 2 - xs[i], my = (ay + by) / 2 - ys[i];
+          const ml = Math.hypot(mx, my) || 1;
+          pts.push(xs[i] + (mx / ml) * h * ratio, ys[i] + (my / ml) * h * ratio);
+        }
+      }
+      pts.push(bx, by);
+      addRing(pts);
+    };
+    for (let i = 1; i + 1 < n; i++) joinAt(i, dir(i - 1), dir(i));
+    if (closed && n > 2 && xs[0] === xs[n - 1] && ys[0] === ys[n - 1]) joinAt(0, dir(n - 2), dir(0));
+  };
+
+  if (opts.slices) {
+    for (const sl of opts.slices) {
+      const run = sliceSegments(path, sl);
+      if (run.length === 0 || sl.seg0 >= segs.length) continue;
+      const s0 = cum[sl.seg0] + (sl.t0 > 0 ? segmentLength(segmentSub(segs[sl.seg0], 0, sl.t0)) : 0);
+      outlineRun(run, s0, false);
+    }
+  } else {
+    let s0 = 0;
+    for (const ring of pathRings(path)) {
+      const run = ringSegments(path, ring);
+      outlineRun(run, s0, path.closed);
+      for (const s of run) s0 += segmentLength(s);
+    }
+  }
+
+  const coords: number[] = [];
+  const flags: number[] = [];
+  rings.forEach((r, k) => {
+    for (let i = 0; i < r.length; i += 2) {
+      coords.push(r[i], r[i + 1]);
+      flags.push(i === 0 && k > 0 ? COORD_FLAG.hole : 0);
+    }
+  });
+  return makePath(coords, flags, true);
 }

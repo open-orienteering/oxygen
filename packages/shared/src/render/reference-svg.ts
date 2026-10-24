@@ -30,6 +30,7 @@ import {
   sliceSegments,
   unionBounds,
 } from "./path.js";
+import { strokeOutline } from "./geometry.js";
 
 export interface GlyphOutline {
   /** Outline in font units, y-up, origin at the baseline. */
@@ -182,6 +183,12 @@ export function passStreamToSvg(stream: PassStream, opts: ReferenceSvgOptions): 
         body.push(`<path ${tag} d="${pathToSvgD(p.path, true)}" fill="${colour}" fill-rule="evenodd"/>`);
         break;
       case "stroke": {
+        if (p.cap === "pointed" && ((p.taper?.startUm ?? 0) > 0 || (p.taper?.endUm ?? 0) > 0)) {
+          // No SVG stroke tapers: the shared outline, as the PDF backend draws it.
+          const outline = strokeOutline(p.path, { widthUm: p.widthUm, join: p.join, taper: p.taper, slices: p.slices });
+          body.push(`<path ${tag} d="${pathToSvgD(outline, true)}" fill="${colour}" fill-rule="nonzero"/>`);
+          break;
+        }
         const attrs = strokeAttrs(p.widthUm, p.cap, p.join, colour);
         if (!p.slices) {
           body.push(`<path ${tag} d="${pathToSvgD(p.path)}" ${attrs}/>`);

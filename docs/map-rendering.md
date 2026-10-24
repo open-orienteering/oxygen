@@ -9,7 +9,8 @@ chapter derives from is `docs/research/vector-map-pipeline/04-render-core.md`;
 when the two disagree, this document wins.
 
 This chapter is normative for the code in `packages/shared/src/render/`,
-`packages/api/src/render/` and `packages/web/src/map-gl/`.
+`packages/shared/src/print/operators.ts` (§5.3), `packages/api/src/render/`
+and `packages/web/src/map-gl/`.
 
 ## 1. Shape of the pipeline
 
@@ -622,7 +623,9 @@ single `scale(1 −1)` group. Slices become subpaths of one `<path>`;
 glyph parts become one `<g id>` per (glyph, part, colour) and one `<use>`
 per instance; hatches are generated lines under a `<clipPath>`; text uses
 caller-supplied glyph outlines or, without them, em boxes (debug only,
-never an oracle).
+never an oracle). A `pointed` stroke with a `taper` is the shared
+`strokeOutline()` (`render/geometry.ts`) filled non-zero, as the PDF
+backend draws it (§5.3; SVG has no tapered stroke).
 
 This is the **oracle** of the golden-image tier. It is slow and simple on
 purpose and is never used to draw a map for use. Its production jobs
@@ -676,7 +679,8 @@ Tests: `packages/shared/src/render/__tests__/swatch.test.ts` (sample
 geometry per kind, flags, 3× point, whole-pixel frame, determinism,
 every entry of both shipped libraries symbolises without warnings);
 `reference-svg.test.ts` (off-frame clip groups left out, partly
-overlapping kept); pixel probes in
+overlapping kept; a tapered pointed stroke is the `strokeOutline` path
+filled non-zero, a pointed one without taper a butt stroke); pixel probes in
 `packages/api/src/render/__tests__/previews.test.ts`.
 
 ### 5.2 WebGL2 (web)
@@ -1408,10 +1412,68 @@ changes for B4.
 | `e2e/map-vector-layer.spec.ts` | event `vector`: the pinned document by hash (no query, `x-event-id`), canvas ready and drawn, container-sized, no tile layer and no `/api/map-tile*` request, `data-*` attributes; wheel zoom keeps the paper point under the cursor (< 0.5 px); a GPS fix → follow centres it and the marker is at the viewer's centre; event `legacy`: tiles |
 | `e2e/map-viewer-gestures.spec.ts`, `mobile-layout.spec.ts`, `course-editor.spec.ts`, `map-control-circles.spec.ts`, `map-multicourse.spec.ts`, `wide-screen-map-pane.spec.ts`, `webserial.spec.ts`, `kiosk*.spec.ts` | under the default `legacy` the mercator model reproduces the pre-B4 viewer; `webserial`, `mobile-layout`, `map-viewer-gestures` also run under `vector` (`docs/map-pipeline-switch.md` §5) |
 
-### 5.3 PDF (api)
+### 5.3 PDF (shared/print)
 
-*Not yet specified.* Slice C (`docs/course-print.md` owns the page model;
-this chapter owns how a pass is emitted as PDF content).
+`packages/shared/src/print/operators.ts` (C1, 2026-10-23):
+`passStreamOperators(stream, { colours, mode, resources, originUm })`
+turns a sorted stream into one content-stream fragment, pass by pass in
+stream order — the stream order *is* the painter's order (§3.6), so no
+reordering and no decision of the backend's own. `docs/course-print.md`
+owns everything around it: the writer, colour modes, fonts, the page.
+
+**Units** (05 §5.2). Coordinates are the stream's paper µm minus
+`originUm`, written as **integers** (Bézier controls of a dash slice,
+glyph and text origins and hatch line ends rounded; ≤ 0.5 µm). Widths
+and text sizes stay in µm too. `mapLayerOperators` wraps the fragment as
+`q <matrix> cm 4 M … Q`; `layerMatrix({ scaleRatio, rotationDeg, atPt })`
+is `scaleRatio · 72 / 25 400` with the rotation (counter-clockwise), the
+origin landing on `atPt` — so a 1:15 000 map printed at 1:10 000 gets its
+0.21 mm contours from the matrix, not the data. The layer `cm` is written
+with 9 decimals (6 would put the far edge of a 1 m window 0.25 mm off);
+instance matrices and `Tm` with 6 (the JSON projection's precision,
+§3.7). The page composer (C2) picks origin, angle and point.
+
+| Pass | Operators |
+|---|---|
+| `fill` | fill colour; per ring `x y m`, `l` / `c` (Béziers kept, nothing flattened), `h`; then **`f*`** — even-odd, §3.1 (05's table said `f`, written before the rule was fixed) |
+| `stroke` | stroke colour; `w J j` (cap butt / round / square / pointed → `J` 0 / 1 / 2 / 0; join miter / round / bevel → `j` 0 / 1 / 2); rings (`h` when closed); `S`. The mitre limit is `4 M` once per layer (`STROKE_MITRE_LIMIT`: the reference raster's and the GL strips' 4×, not 05's "`M 2`-ish") |
+| `stroke` with `slices` | one subpath per slice from `sliceSegments` (de Casteljau, exact Béziers) and **one** `S` for the pass — each subpath gets its own caps; never PDF's `d` dash array (§3.2) |
+| `stroke`, `cap: "pointed"` with a `taper` | `strokeOutline(path, { widthUm, join, taper, slices })` (`render/geometry.ts`) as fill colour + rings + **`f`** (non-zero: the outline is a union of counter-clockwise quads and join wedges, flattened at 5 µm, integer µm). The reference raster fills the same outline (§5.1). Without a taper: a butt `S` |
+| `glyph` | fill colour if the part has fills, stroke colour if it has strokes (a form inherits both); per instance `q c·k s·k −s·k c·k x y cm /Gn Do Q` (`cos`, `sin`, `scale` of the instance); `/Gn` is a **form XObject per glyph part**, shared by every colour that draws it: the mesh in glyph-local µm — fills `… h f*`, strokes `w J j … S`, no colour — with a `BBox` of the mesh bounds plus 4 × half the widest stroke |
+| `glyph` with `clip` | `q <clip rings> W* n` (even-odd, like the oracle's clip path), the instances, `Q` |
+| `hatch` | stroke colour; `q <area rings> W* n`, `w 0 J 0 j`, the `hatchLines()` set (§3.4, the reference generator) as `m l` pairs, `S`, `Q` |
+| `text` | `BT /Fn sizeUm Tf` with `0 Tr` (fill: fill colour) or `1 Tr` (halo: stroke colour, `2 × haloWidthUm w 1 J 1 j`); per glyph `cos sin −sin cos x y Tm <gid> Tj` (`1 0 0 1 x y` without `angles`); `ET`. Glyph ids are the shaper's, written unchanged (Identity-H, `course-print.md` §3.1); one `Tm` per glyph because positions are absolute in the stream (no `TJ`). A halo pass sits at its own colour position because the stream is sorted (§3.5) |
+| `text`, outline fallback | per glyph `q k·cos k·sin −k·sin k·cos x y cm <outline rings> f* Q` with `k = sizeUm / unitsPerEm`; a halo strokes the outline at `2 · haloWidthUm / k` with round caps and joins — what the reference raster draws |
+
+**Graphics state.** A colour (`k` / `K` or `rg` / `RG`, `course-print.md`
+§2), `w`, `J`, `j` or `Tr` is written only when it changes; `q … Q`
+appears only around a clip and an instance, and the tracker restores its
+state at `Q`. Consecutive passes of one colour share one colour operator
+(05 Appendix B's size arithmetic).
+
+**Clips.** `clipOperators(path, rule)` writes `<rings> W n` or `W* n` —
+the primitive for the composer's frame clip and for filter regions (05
+§5.3) once the stream carries them (`course-print.md` "Pending").
+
+Tests: `packages/shared/src/print/__tests__/operators.test.ts` (tier 1,
+05 §7) on the contract fixtures and the library scenes — a fill's exact
+operators (holes as closed subpaths, `f*`, the stack's CMYK); origin
+subtraction; `w J j` and `c` for a Bézier stroke; four slices → four
+subpaths and one `S`, no `d`; pointed + taper → the `strokeOutline`
+rings and `f`, pointed alone → butt; glyph instances as `cm … Do` with
+rotation and scale, one form per part, form content and `BBox`; one
+`q … W* n … Q` block per clip-mode pattern pass of `lib-pattern`; the
+hatch block; the `1 Tr` halo pass before the `0 Tr` fill; per-glyph `Tm`
+with angles; the outline fallback; per scene no `rg` in `cmyk` and no
+`k` in `rgb`; one colour operator per colour change with the stack's
+values; the layer `cm` for a 1:15 000 map at 1:10 000 and a rotation,
+never in exponent notation (a 0.01° tilt is `0.000000495`, not `4.95e-7`);
+round caps and joins on the fallback halo;
+`W n` / `W* n`. `render/__tests__/stroke-outline.test.ts`: width inside
+and outside the tapers (a vertex at the taper length), counter-clockwise
+rings only, round / miter / bevel joins at a corner, a Bézier within the
+flattening tolerance, the taper measured along the whole path across
+slices, deterministic integer output.
 
 ## 6. Determinism and fixtures
 
@@ -1785,7 +1847,7 @@ what became of it:
 | `packages/shared/src/render/measure.ts` | arc length, sections, gap intervals |
 | `packages/shared/src/render/dash.ts` | OCAD / OMAP dash layout |
 | `packages/shared/src/render/placement.ts` | glyphs along lines |
-| `packages/shared/src/render/pattern.ts`, `geometry.ts` | pattern grids, inclusion, offsetting |
+| `packages/shared/src/render/pattern.ts`, `geometry.ts` | pattern grids, inclusion, offsetting, `strokeOutline()` (tapers) |
 | `packages/shared/src/render/glyph-table.ts` | IR glyph → `GlyphMesh`, registry |
 | `packages/shared/src/render/truetype.ts`, `text.ts` | font reader, shaping |
 | `packages/shared/src/render/symbolise.ts` | the stage |
@@ -1794,6 +1856,8 @@ what became of it:
 | `packages/shared/fonts/` | bundled Liberation faces |
 | `packages/api/src/render/reference-raster.ts` | resvg rasterisation, `sampleAt`, `diffImages`, `encodePng` |
 | `packages/shared/src/render/swatch.ts` | symbol swatch scene (§5.1.1) |
+| `packages/shared/src/print/operators.ts` | PDF backend: pass → content-stream operators, layer matrix, clips (§5.3) |
+| `packages/shared/src/print/{colour,fonts,writer}.ts` | colour modes, font programs, `PdfWriter` (`docs/course-print.md` §1–3) |
 | `packages/api/src/render/previews.ts` | swatch and thumbnail PNGs (`docs/map-storage.md` §4.5) |
 | `packages/api/src/render/fonts.ts` | bundled-font loader for the server backends |
 | `packages/api/src/render/golden.ts`, `scripts/render-golden.ts` | golden PNG generation (`pnpm --filter @oxygen/api golden:render`) |
@@ -1903,14 +1967,14 @@ The shared module is exported as a namespace: `import { render } from
   and the gate meet the memory budgets without it.
 - **§5.2 earcut deviation check** (04 §6.1): polygons earcut gets wrong
   are not detected or redrawn by stencil-then-cover yet.
-- **Backends drawing `taper` and `angles`** — the stage emits both. The
-  WebGL2 backend draws `angles` on both its paths (B2: a text instance's
-  `cos, sin`); it does not draw `taper` yet (drawn butt) — on the arena
+- **The WebGL2 backend drawing `taper`** — the stage emits it; the
+  reference raster and the PDF backend fill the shared `strokeOutline()`
+  (C1, §5.1 / §5.3). The WebGL2 backend draws it butt — on the arena
   path a stroke vertex carries its own half width, so a taper is that
-  width scaled along the taper length. The PDF backend (slice C) draws
-  neither yet. The goldens leave `taper` out until every backend draws
-  it; `angles` are in `lib-text-layout` since B8 (the reference raster
-  and both GL paths draw them; the PDF tier waits for slice C anyway).
+  width scaled along the taper length. The golden *scenes* leave `taper`
+  out until the WebGL2 backend draws it (the library contact sheet's 107
+  swatches, reference-only, show it since C1). `angles` are drawn by
+  every backend (`lib-text-layout` since B8; PDF: a per-glyph `Tm`).
 - **S2 confirmation** of §4.2 step 3 (what stretches, the `round`
   threshold), of `endGapUm` and of the vertical anchor's metrics (§4.9),
   against OCAD exports; for text layout (§4.9, B8) also the default tab
@@ -1926,4 +1990,3 @@ The shared module is exported as a namespace: `import { render } from
 - **Rectangle grids** (OCAD rectangle symbol cell lines and numbering) —
   a by-design drop (user decision 2026-10-20); not pending, listed so the
   reader does not look for it.
-- **§5.3 PDF** — slice C.
