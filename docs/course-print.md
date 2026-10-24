@@ -579,7 +579,8 @@ raster. `packages/api/src/render/pdf-golden.ts`:
   text passes is written twice: with **text as glyph outlines**
   (`text: "outline"`), held to 0.5 % — glyphs are placed by one `Tm`
   each in both modes, so this run proves the text geometry — and with
-  **embedded fonts**, held to **≤ 2.5 %**: the rasteriser draws an
+  **embedded fonts**, held to a provisional **≤ 2.5 %** (user decision
+  2026-10-24; tightened once CI's poppler is measured): the rasteriser draws an
   embedded font through FreeType's glyph renderer, not the outlines the
   oracle fills, the same situation as the WebGL2 MSDF text tier
   (`map-rendering.md` §6.2).
@@ -634,11 +635,15 @@ else they stay CI-only. Measured 2026-10-24 with
 1 001 907 361 bytes without, 1 016 377 611 bytes with `qpdf` and
 `poppler-utils` in the base stage's `apt-get install` — **+14.5 MB**
 (qpdf 11.3.0, poppler 22.12.0; `libcairo2` is already there for
-librsvg). So they are **in-image** (`Dockerfile` base stage): a running
-instance can check and rasterise what it prints (C7's corpus run, a
-future preflight) without a second toolchain. `rsvg-convert` and
-`fonts-liberation` stay until slice E removes the legacy path (09 §9
-step 5).
+librsvg) — under the rule's threshold. They are nevertheless **CI-only**
+(user decision 2026-10-24, a deviation from 09 §7 recorded in the
+decision log): nothing in the image calls them — the golden tier and
+`qpdf --check` run in vitest on the CI runner, C7's corpus run is a local
+script, S2 is manual — and poppler is a parser with a steady CVE stream
+that would ship unused. They join the image when a feature that runs in
+it (an in-app preflight) calls them; the measurement above stays the
+reference for that. `rsvg-convert` and `fonts-liberation` stay in the
+image until slice E removes the legacy path (09 §9 step 5).
 
 ## 10. Layout-editor preview (interim)
 
@@ -745,8 +750,9 @@ the reference raster (`map-rendering.md` §5.1).
   pages; 05 Appendix B: hundreds of ms per page). A worker thread if
   C7's corpus run shows pages long enough to delay a card readout.
 - **Golden tier on CI's poppler**: the budgets were measured with poppler
-  22.02 (dev) and 22.12 (image); the CI runner's distribution may ship a
-  newer one. A drift beyond the budgets is a rasteriser change, re-measured
+  22.02 (dev machine); the CI runner's distribution ships a newer one.
+  The embedded-font text tier (≤ 2.5 %, §9.2) is provisional: tightened
+  to the observed ratio + margin once CI's numbers are in. A drift beyond the budgets is a rasteriser change, re-measured
   and recorded here, not a reason to loosen the 0.5 %.
 - **Bold description-block text** (SLICES row C8): the block's header,
   title and lengths carry `weight: 700` but print regular — only the

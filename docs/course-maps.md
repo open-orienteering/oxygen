@@ -160,11 +160,12 @@ without changing the visible pattern period; see
 The API production image therefore installs:
 
 ```bash
-apt-get install librsvg2-bin fonts-liberation qpdf poppler-utils
+apt-get install librsvg2-bin fonts-liberation
 ```
 
-`librsvg2-bin` and `fonts-liberation` serve the legacy path until slice E
-removes it; `qpdf` and `poppler-utils` check and rasterise printed PDFs
+Both serve the legacy path until slice E removes it; the vector path
+needs no system tool. `qpdf` and `poppler-utils` (which check and
+rasterise printed PDFs in the tests) are installed on the CI runner only
 (`course-print.md` §9.4). Missing `rsvg-convert` produces a clear server
 error rather than silently falling back to lower-quality output.
 

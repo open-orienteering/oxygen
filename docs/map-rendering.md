@@ -1770,7 +1770,9 @@ rasterises at the oracle's own supersample (4× scenes, 2× pages) and the
 result is box-filtered down. Budgets as above: **≤ 0.5 %** for every
 scene, and for a scene with text the same 0.5 % with text written as
 glyph outlines; the embedded-font run of a text scene is the PDF's text
-tier at **≤ 2.5 %** (the rasteriser draws embedded fonts through
+tier at a provisional **≤ 2.5 %** (user decision 2026-10-24: the
+measured 1.21 % / 1.96 % below are the values to tighten towards once
+CI's poppler is measured; the rasteriser draws embedded fonts through
 FreeType's glyph renderer, not the outlines the oracle fills — the PDF
 counterpart of the MSDF tier). `cmyk` pages are compared against the
 oracle drawn in the rasteriser's own CMYK → RGB conversion of each stack
