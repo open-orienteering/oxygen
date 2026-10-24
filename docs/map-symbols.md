@@ -499,7 +499,7 @@ class*: cap `round` / `pointed` / `flat` (`square` = `flat`), join `round` /
 `sharp` (`bevel` = `miter`: OCAD's default `lineStyle 0` is flat/bevel and
 template sets state flat/miter for the same stroke, so neither is an
 explicit choice). Glyph-only and border-only lines carry `null` and are
-not compared. **Decision: a soft tie-break, not a hard fail** — each of
+not compared (nor is A15's normalised railway band, `null`). **Decision (implementer's, recorded for coordinator confirmation): a soft tie-break, not a hard fail** — each of
 cap and join that differs multiplies the score by `CAP_JOIN_PENALTY`
 (0.95; both: 0.903). The class still lets a source's explicit round-vs-flat
 choice select the matching library variant (the round no-tag 201.b / 202

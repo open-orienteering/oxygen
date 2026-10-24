@@ -174,7 +174,7 @@ function exactCodeFits(symbols: readonly SourceSymbolLike[], canon: readonly Can
     const c = canon.find((x) => x.code === code && x.fp.type === s.render!.type);
     if (!c) continue;
     const cmp = compareFingerprints(fingerprintOf(s.render, classOf), c.fp, factor);
-    if (!cmp.hardFail && cmp.score >= MATCH_THRESHOLDS.auto) n++;
+    if (!cmp.hardFail && cmp.score / cmp.capJoin >= MATCH_THRESHOLDS.auto) n++;
   }
   return n;
 }
