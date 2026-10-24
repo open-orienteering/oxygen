@@ -686,14 +686,7 @@ export class MapGlRenderer {
   setDocument(originX: number, originY: number, atlas: MeshAtlas): void {
     this.disposeDocument();
     const gl = this.gl;
-    const tex = gl.createTexture()!;
-    gl.bindTexture(gl.TEXTURE_2D, tex);
-    const rows = atlas.data.length / 4 / ATLAS_WIDTH;
-    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA32F, ATLAS_WIDTH, rows, 0, gl.RGBA, gl.FLOAT, atlas.data);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    const tex = this.atlasTexture(atlas);
     const p = this.arenaPrograms();
     this.arena = {
       originX, originY,
@@ -710,6 +703,30 @@ export class MapGlRenderer {
       vaoGeneration: -1,
       programs: p,
     };
+  }
+
+  private atlasTexture(atlas: MeshAtlas): WebGLTexture {
+    const gl = this.gl;
+    const tex = gl.createTexture()!;
+    gl.bindTexture(gl.TEXTURE_2D, tex);
+    const rows = atlas.data.length / 4 / ATLAS_WIDTH;
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA32F, ATLAS_WIDTH, rows, 0, gl.RGBA, gl.FLOAT, atlas.data);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    return tex;
+  }
+
+  /**
+   * Replaces the mesh atlas of the current document with a grown one (the course layer's glyphs,
+   * §5.2 "Dynamic bucket"). Growth is append-only, so every resident instance's `base` / `count`
+   * stays valid.
+   */
+  setAtlas(atlas: MeshAtlas): void {
+    const a = this.requireArena();
+    this.gl.deleteTexture(a.atlas.tex);
+    a.atlas = { tex: this.atlasTexture(atlas), bytes: atlas.data.byteLength };
   }
 
   private arenaPrograms(): ArenaState["programs"] {
