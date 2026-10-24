@@ -1,27 +1,45 @@
 import { readFile } from "node:fs/promises";
-import { test, expect, type Locator, type Page } from "@playwright/test";
-import { Client } from "pg";
+import { createRequire } from "node:module";
+import { resolve } from "node:path";
+import { type Download, type Locator, type Page } from "@playwright/test";
+import { test, expect } from "./helpers/map-pipeline";
+import { API_BASE } from "./helpers/api-base";
 import { reseed } from "./helpers/reseed";
 
-const databaseUrl =
-  process.env.E2E_DATABASE_URL ??
-  `postgresql://oxygen:oxygen@localhost:5433/${process.env.E2E_DB_NAME ?? "oxygen_e2e"}?schema=oxygen`;
+// pdf-lib is the API's dependency; load it from there (as fake-rsvg-convert does).
+const { PDFDocument } = createRequire(resolve(process.cwd(), "packages/api/package.json"))("pdf-lib") as {
+  PDFDocument: { load(bytes: Uint8Array): Promise<{ getPageCount(): number; getPages(): { getSize(): { width: number; height: number } }[] }> };
+};
 
+/**
+ * The event map through `course.uploadMap`, as the map panel uploads it:
+ * the file is stored and its document pinned, so the `map-vector` project
+ * prints through the composer and `map-legacy` through rsvg
+ * (docs/course-print.md §8).
+ */
 async function seedBaseMap() {
   await reseed();
-  const client = new Client({ connectionString: databaseUrl });
-  await client.connect();
-  try {
-    const bytes = await readFile("e2e/test.ocd");
-    await client.query(
-      `INSERT INTO oxygen.map_files
-         (event_id, file_name, file_data, scale)
-       SELECT id, 'test.ocd', $1, 7500
-       FROM oxygen.events WHERE name_id = 'itest'`,
-      [bytes],
-    );
-  } finally {
-    await client.end();
+  const bytes = await readFile("e2e/test.ocd");
+  const res = await fetch(`${API_BASE}/trpc/course.uploadMap`, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      "x-competition-id": "itest",
+      "x-forwarded-email": "e2e-admin@oxygen.test",
+    },
+    body: JSON.stringify({ fileName: "test.ocd", fileDataBase64: bytes.toString("base64") }),
+  });
+  expect(res.ok, await res.text()).toBe(true);
+}
+
+/** A downloaded maps.pdf: its page count and every page A4 (05 §7). */
+async function expectA4Pages(download: Download, pages: number) {
+  const pdf = await PDFDocument.load(await readFile((await download.path())!));
+  expect(pdf.getPageCount()).toBe(pages);
+  for (const page of pdf.getPages()) {
+    const { width, height } = page.getSize();
+    const mm = [width, height].map((pt) => Math.round((pt * 25.4) / 72)).sort((a, b) => a - b);
+    expect(mm).toEqual([210, 297]);
   }
 }
 
@@ -63,6 +81,7 @@ test.beforeAll(seedBaseMap);
 
 test("creates templates, lays out several maps and exports PDFs", async ({
   page,
+  mapPipeline,
 }) => {
   test.setTimeout(120_000);
   page.setDefaultTimeout(10_000);
@@ -364,12 +383,14 @@ test("creates templates, lays out several maps and exports PDFs", async ({
     firstMap.getByTitle("Selected map").click(),
   ]);
   expect(singleDownload.suggestedFilename()).toMatch(/\.pdf$/);
+  await expectA4Pages(singleDownload, 1);
 
   const [courseDownload] = await Promise.all([
     page.waitForEvent("download"),
     courseRow.getByTitle("All maps for this course").click(),
   ]);
   expect(courseDownload.suggestedFilename()).toMatch(/_maps\.pdf$/);
+  await expectA4Pages(courseDownload, 2);
 
   await page.getByTestId("maps-export-menu").click();
   const [allControlsDownload] = await Promise.all([
@@ -377,6 +398,11 @@ test("creates templates, lays out several maps and exports PDFs", async ({
     page.getByRole("button", { name: "All controls", exact: true }).click(),
   ]);
   expect(allControlsDownload.suggestedFilename()).toMatch(/\.pdf$/);
+  await expectA4Pages(allControlsDownload, 1);
+  // The route drew it through the project's pipeline (the map is pinned).
+  const all = await page.request.get("/api/maps/itest/maps.pdf");
+  expect(all.ok()).toBe(true);
+  expect(all.headers()["x-print-pipeline"]).toBe(mapPipeline);
 
   // Tables use the standard horizontal-scroll wrapper for narrow screens.
   await expect(

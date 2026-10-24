@@ -15,6 +15,7 @@ export const MAP_PIPELINE_SPECS = [
   "**/map-viewer-gestures.spec.ts",
   "**/map-control-circles.spec.ts",
   "**/map-multicourse.spec.ts",
+  "**/course-maps.spec.ts",
 ];
 
 /**
