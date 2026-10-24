@@ -122,43 +122,28 @@ function displayCode(c: { codes: string; name: string; seq: number }): string {
   return first || c.name || String(c.seq);
 }
 
+/** A course's rendered sequence and order mode, as `rebuildCourseGeometry` builds it. */
+export interface CourseSequence {
+  seq: GeometrySeqControl[];
+  orderMode: "ordered" | "free_order";
+}
+
 /**
- * Regenerate geometry (+ legs string and, optionally, length) for the given
- * courses. Call inside the mutating transaction, BEFORE emitting the
- * course.upserted journal entries so the shipped payloads carry the new
- * geometry.
- *
- * Sequence construction mirrors the importers: `course_controls` holds only
- * regular controls; the start is the event's start control matched by
- * `startName` (unless `firstAsStart`), the finish is `finishControlId` or
- * the event's first finish control (unless `lastAsFinish`).
+ * The rendered sequence of each given (non-removed) course. Mirrors the
+ * importers: `course_controls` holds only regular controls; the start is
+ * the event's start control matched by `startName` (unless
+ * `firstAsStart`), the finish is `finishControlId` or the event's first
+ * finish control (unless `lastAsFinish`).
  */
-export async function rebuildCourseGeometry(
+export async function loadCourseSequences(
   db: Db,
   eventId: bigint,
   courseUuids: string[],
-  opts: { updateLength?: boolean } = {},
-): Promise<void> {
-  if (courseUuids.length === 0) return;
-  const updateLength = opts.updateLength ?? true;
+): Promise<Map<string, CourseSequence>> {
+  const out = new Map<string, CourseSequence>();
+  if (courseUuids.length === 0) return out;
 
-  const crs = await loadEventCrs(db, eventId);
-  const mapScale = crs?.scale ?? null;
-
-  // Features for automatic overprint cuts around compact knoll / rock
-  // point features: the pinned document on `vector` events, else the OCAD
-  // parse. Null when there is no map — and skipped when the event has auto
-  // overprint cuts turned off.
-  const eventRow = await db.event.findUnique({
-    where: { id: eventId },
-    select: { autoOverprintCuts: true },
-  });
-  const cutFeatures =
-    eventRow?.autoOverprintCuts === false
-      ? null
-      : ((await loadEventCutFeatures(db, eventId, mapScale))?.features ?? null);
-
-  // Event-level start/finish controls, shared across all rebuilt courses.
+  // Event-level start/finish controls, shared across all courses.
   const startFinish = await db.control.findMany({
     where: { eventId, removed: false, status: { in: ["start", "finish"] } },
     orderBy: { seq: "asc" },
@@ -238,7 +223,45 @@ export async function rebuildCourseGeometry(
       }
     }
 
-    const geometry = editorCourseGeometry(courseUuid, seq, course.orderMode, cutFeatures);
+    out.set(courseUuid, { seq, orderMode: course.orderMode });
+  }
+  return out;
+}
+
+/**
+ * Regenerate geometry (+ legs string and, optionally, length) for the given
+ * courses. Call inside the mutating transaction, BEFORE emitting the
+ * course.upserted journal entries so the shipped payloads carry the new
+ * geometry. Sequences per `loadCourseSequences`.
+ */
+export async function rebuildCourseGeometry(
+  db: Db,
+  eventId: bigint,
+  courseUuids: string[],
+  opts: { updateLength?: boolean } = {},
+): Promise<void> {
+  if (courseUuids.length === 0) return;
+  const updateLength = opts.updateLength ?? true;
+
+  const crs = await loadEventCrs(db, eventId);
+  const mapScale = crs?.scale ?? null;
+
+  // Features for automatic overprint cuts around compact knoll / rock
+  // point features: the pinned document on `vector` events, else the OCAD
+  // parse. Null when there is no map — and skipped when the event has auto
+  // overprint cuts turned off.
+  const eventRow = await db.event.findUnique({
+    where: { id: eventId },
+    select: { autoOverprintCuts: true },
+  });
+  const cutFeatures =
+    eventRow?.autoOverprintCuts === false
+      ? null
+      : ((await loadEventCutFeatures(db, eventId, mapScale))?.features ?? null);
+
+  const sequences = await loadCourseSequences(db, eventId, courseUuids);
+  for (const [courseUuid, { seq, orderMode }] of sequences) {
+    const geometry = editorCourseGeometry(courseUuid, seq, orderMode, cutFeatures);
 
     const data: Record<string, unknown> = {
       geometry:
@@ -250,7 +273,7 @@ export async function rebuildCourseGeometry(
     // Free-order courses have no meaningful legs — leave lengthM / legs
     // alone (the organiser sets length manually). Ordered courses keep
     // the auto-derived legs string + optional length refresh.
-    if (course.orderMode !== "free_order" && mapScale) {
+    if (orderMode !== "free_order" && mapScale) {
       const distances = legDistancesMm(seq);
       if (distances.length > 0) {
         // Same format the importers write: per-leg terrain meters, ';'-joined

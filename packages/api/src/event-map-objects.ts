@@ -269,21 +269,37 @@ export async function loadEventCutFeatures(
   mapScale: number | null,
 ): Promise<EventCutFeatures | null> {
   const hash = await pinnedDocumentHash(db, eventId);
-  if (hash) {
-    let features = documentFeatures.get(hash);
-    if (!features) {
-      const bytes = await getBlob(db, "map_documents", hash);
-      if (bytes) {
-        try {
-          features = course.cutFeaturesOfDocument(mapDocument.decodeMapDocument(bytes));
-          documentFeatures.set(hash, features);
-        } catch (err) {
-          console.warn(`[event-map-objects] document ${hash} unreadable, using the OCAD parse:`, err);
-        }
-      }
-    }
-    if (features) return { features, source: "document" };
+  const fromDocument = hash ? await loadDocumentCutFeatures(db, hash) : null;
+  if (fromDocument) return { features: fromDocument, source: "document" };
+  const fromOcad = await loadOcadCutFeatures(db, eventId, mapScale);
+  return fromOcad ? { features: fromOcad, source: "ocad" } : null;
+}
+
+/** Cut features of a stored map document; null when it is missing or unreadable. */
+export async function loadDocumentCutFeatures(
+  db: PrismaClient | Prisma.TransactionClient,
+  hash: string,
+): Promise<course.CutFeature[] | null> {
+  const cached = documentFeatures.get(hash);
+  if (cached) return cached;
+  const bytes = await getBlob(db, "map_documents", hash);
+  if (!bytes) return null;
+  try {
+    const features = course.cutFeaturesOfDocument(mapDocument.decodeMapDocument(bytes));
+    documentFeatures.set(hash, features);
+    return features;
+  } catch (err) {
+    console.warn(`[event-map-objects] document ${hash} unreadable, using the OCAD parse:`, err);
+    return null;
   }
+}
+
+/** Cut features of the event's latest uploaded OCAD file; null without a parseable map. */
+export async function loadOcadCutFeatures(
+  db: MapFileReader,
+  eventId: bigint,
+  mapScale: number | null,
+): Promise<course.CutFeature[] | null> {
   const parsed = await loadParsedMap(db, eventId);
-  return parsed ? { features: cutFeaturesOfSlimObjects(parsed.objects, parsed.cutRadii, mapScale), source: "ocad" } : null;
+  return parsed ? cutFeaturesOfSlimObjects(parsed.objects, parsed.cutRadii, mapScale) : null;
 }
