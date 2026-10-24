@@ -89,7 +89,7 @@ describe("course request → the dynamic bucket", () => {
     const stack = r.colours;
     expect(stack).toEqual(m.summary.colourStack);
     const lower = indexOf(stack, "purple-lower");
-    // 703 arcs and 705 legs: lower-purple strokes; 704 numbers (ISOM: lower purple) as text instances.
+    // 703 arcs and 705 legs: lower-purple strokes; 704 numbers (upper purple on both libraries) as text instances.
     expect([...part.stroke!.ranges.colour].every((c) => c === lower)).toBe(true);
     expect(part.text!.instances.length / INSTANCE_FLOATS).toBe(2);
     // 701 / 706 are glyphs whose meshes the reply's atlas holds.

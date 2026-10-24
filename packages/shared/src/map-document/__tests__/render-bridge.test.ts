@@ -93,6 +93,7 @@ describe("documentRenderInput — text layout (map-rendering §4.9, map-document
       { id: "src:0", name: "Black", cmyk: [0, 0, 0, 1], sourceNumber: 0, paletteIds: ["black100"] },
       { id: "src:1", name: "White", cmyk: [0, 0, 0, 0], sourceNumber: 1, paletteIds: ["white"] },
       { id: "src:2", name: "Purple", cmyk: [0.35, 0.85, 0, 0], sourceNumber: 2, paletteIds: ["purple-lower"] },
+      { id: "src:3", name: "Purple upper", cmyk: [0.35, 0.85, 0, 0], sourceNumber: 3, paletteIds: ["purple-upper"] },
     ],
     symbols: [{
       code: "704.0", name: "Control number", kind: "text",
@@ -126,7 +127,7 @@ describe("documentRenderInput — text layout (map-rendering §4.9, map-document
     const t = symbols[0] as TextSymbol;
     expect(t.id).toBe("ISOM2017-2:704");
     // Entry appearance.
-    expect(t).toMatchObject({ fontFamily: "liberation-sans", digitHeightUm: 4000, weight: 400, colour: 2 });
+    expect(t).toMatchObject({ fontFamily: "liberation-sans", digitHeightUm: 4000, weight: 400, colour: 3 });
     // Source layout.
     expect(t).toMatchObject({ align: "right", verticalAlign: "middle", lineSpacing: 1.5, paragraphSpacingUm: 300, charSpacing: 0.1, tabStops: [{ xUm: 4000 }] });
     expect(t.wordSpacing).toBeUndefined();

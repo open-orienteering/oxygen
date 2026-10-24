@@ -1464,9 +1464,9 @@ Under `vector` the course is **part of the drawing**: `MapViewer` turns
 what it already has into the course layer's input and `VectorMapLayer`
 hands it to the engine's dynamic bucket (§5.2 "Dynamic bucket"), so the
 7xx symbols sort into the document's stack — lower purple (701, 703,
-705, 706, 708; ISOM 704) under black, brown and blue line art, white-outs
-at upper white above the map's ink, upper purple (707, 709, 711;
-ISSprOM 704) on top. What the layer draws and what it does not:
+705, 706, 708) under black, brown and blue line art, white-outs
+at upper white above the map's ink, upper purple (704, 707, 709,
+711) on top. What the layer draws and what it does not:
 
 | GL course layer (dynamic bucket) | SVG UI layer (React, screen widths) |
 |---|---|
@@ -1874,7 +1874,7 @@ WebGL2 per-pass path against the golden, measured at introduction
 
 | Scene | Objects | Asserted |
 |---|---|---|
-| `course-legs` | ISOM 401, 505, 101, 306, 516 under S → 31 → 32 → 33 → F | lower purple under black, brown and blue line art, above yellow; start turned to 31; sequence numbers |
+| `course-legs` | ISOM 401, 505, 101, 306, 516 under S → 31 → 32 → 33 → F | lower purple under black, brown and blue line art, above yellow; start turned to 31; sequence numbers in upper purple above the ink |
 | `course-cuts` | ISOM 204 on a rim and on a leg, 109 on a rim, 201; an authored gap and authored leg pieces on 33; a manual number position | automatic cuts from the features, authored gap and pieces kept, number at its offset, cut circles as open arcs |
 | `course-objects` | ISOM 406, 505, 106; white-out rectangle, toner-saver ring, 709 rectangle, 709.b triangle, 707 / 708 / 711 extras, a map text in its own colour with `{course}` | white-outs at upper white above all ink and below upper purple; 709 / 707 / 711 upper, 708 lower; the text's row on top of the stack |
 | `course-sprint` | ISSprOM 401, two 521 buildings; `numberStyle: "knockout"` | 6 mm circles; upper-white halo under upper-purple numbers, above the buildings' black |

@@ -908,19 +908,19 @@ symbols on the window, unexplained ÷ ink and their codes:
 
 **What the run found** (fixes are rows, not C7):
 
-- **Point-symbol rotation (row C9).** Club-full's 504.5 / 504.7 (barrier),
+- **Point-symbol rotation (row C10).** Club-full's 504.5 / 504.7 (barrier),
   512.3 (footbridge) and 519.0 (tunnel) — drawn from their source
   definitions, canonical rendering on or off — are drawn unrotated
   (512.3 a quarter turn off) where the legacy turns each object to its
   angle. The C-gate's only failure.
-- **Size against 05 Appendix B (row C10).** Sprint A3: 885 kB against
+- **Size against 05 Appendix B (row C11).** Sprint A3: 885 kB against
   ≈ 0.5 MB. Club-full A4 at 1:10 000: 1.63 MB against ≈ 0.25 MB. Its
   content stream is 4.8 MB raw, flated to 1.63 MB (×0.34, as Appendix B
   assumed), but the window holds ~280 k path points (Appendix B: ~42 k
   coords) at ~17 bytes each — absolute integer µm, where Appendix B priced
   ~6 B "relative" (PDF operands are absolute) — plus 14 k glyph instances
   with a full six-number `cm` each (~50 B). Fonts are 17 kB.
-- **Time on the event loop (row C11).** A Club-full A3 page takes
+- **Time on the event loop (row C12).** A Club-full A3 page takes
   0.28 s to compose and 1.3–1.6 s to write per mode (2.4 s in the first
   run): within 05's "hundreds of ms" only for the smaller pages (Sprint
   0.13 s, Club-2026 0.5 s). The Pending item below now has its input.
@@ -943,15 +943,15 @@ symbols on the window, unexplained ÷ ink and their codes:
 
 ## Pending in this chapter
 
-- **Composing off the event loop** (row C11): each page is composed and
+- **Composing off the event loop** (row C12): each page is composed and
   written synchronously on the API's event loop (§8.2 step 4 yields only
   between pages). C7 measured up to 0.28 s composing and 1.3–2.4 s writing
   a Club-full A3 page (§11.5) — long enough to delay a card readout, so a
   worker thread.
-- **PDF size** (row C10): Club-full A4 at 1:10 000 is 1.63 MB, 6.5× 05
+- **PDF size** (row C11): Club-full A4 at 1:10 000 is 1.63 MB, 6.5× 05
   Appendix B's estimate (§11.5).
 - **Corpus gate** (§11.3): Club-full fails on four point symbols drawn
-  unrotated (row C9). Crop-A's 7 µm hatch offset between PDF and oracle is
+  unrotated (row C10). Crop-A's 7 µm hatch offset between PDF and oracle is
   unexplained (below every budget).
 - **Golden tier on CI's poppler**: the budgets were measured with poppler
   22.02 (dev machine); the CI runner's distribution ships a newer one.

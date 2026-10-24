@@ -15,8 +15,8 @@ export const rock: LibraryEntryInput[] = [
   }),
   entry("201", "Uncrossable cliff, top line", "L", line({ main: solid(K, 500) }), { variant: "b", description: "Top line without tags." }),
   entry("201", "Uncrossable cliff, tag line", "L", line({ main: solid(K, 180) }), { variant: "c", description: "A single tag as its own line object." }),
-  entry("202", "Passable rock face", "L", line({ main: solid(K, 300, { cap: "round" }) }), {
-    minimum: { lengthUm: 1100 }, footprintM: 4.4, notes: "0.3 mm line without tags; ends rounded as the spec requires for the tagless form.",
+  entry("202", "Passable rock face", "L", line({ main: solid(K, 300, { cap: "round", join: "round" }) }), {
+    minimum: { lengthUm: 1100 }, footprintM: 4.4, notes: "0.3 mm line without tags; round joins and ends as OCAD's ISSprOM set draws the tagless baseline (user decision 2026-10-24).",
   }),
   entry("202", "Passable rock face, with tags", "L", line({ main: solid(K, 300), glyphs: [cliffTags(300)] }), {
     variant: "b", description: "With 0.18 × 0.75 mm tags every 0.75 mm (CC) showing the direction of fall.", minimum: { lengthUm: 1100 },
