@@ -267,7 +267,7 @@ function glyphInstances(inst: ArrayLike<number>, mesh: GlyphMesh, unit: number, 
     const c = inst[i + 2] * inst[i + 4], s = inst[i + 3] * inst[i + 4];
     const k = key(i);
     if (k === "1 0" || uses.get(k)! >= GLYPH_FORM_REUSE) {
-      const name = form(k, c, s);
+      const name = k === "1 0" ? form(k, 1, 0) : form(k, c, s);
       if (chain && chain.name === name && chain.n < CHAIN_LENGTH) {
         out.push(`1 0 0 1 ${x - chain.x} ${y - chain.y} cm /${name} Do`);
         chain.x = x;

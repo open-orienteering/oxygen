@@ -303,6 +303,22 @@ describe("map layer", () => {
     expect(got[1]).toBeCloseTo(want[1], 4);
   });
 
+  it("keeps grid coordinates whole at 10/3 µm units with an origin off the grid", () => {
+    const o = mapLayerOperators(passStreamFromJson(renderFixtures["fill-with-holes"]), {
+      colours: stack,
+      mode: "cmyk",
+      resources: resources().res,
+      originUm: [10004, -4996],
+      matrix: layerMatrix({ scaleRatio: 1.5, atPt: [0, 0] }),
+    });
+    // Origin (10000, −5000): corner (−3000, 1500) units, the 20 mm ring 6000 units.
+    expect(o).toContain("q 1 0 0 1 -3000 1500 cm 0 0 m 6000 0 l 6000 6000 l 0 6000 l h 1200 1200 m");
+  });
+
+  it("writes no anchor for a path whose corner is the origin", () => {
+    expect(lines(ops("fill-with-holes")).at(-1)).toMatch(/^0 0 m 20000 0 l/);
+  });
+
   it("rotates the layer counter-clockwise", () => {
     const [a, b, c, d] = layerMatrix({ scaleRatio: 1, rotationDeg: 90, atPt: [0, 0] });
     expect([a, b, c, d].map((v) => Math.round(v / UM_TO_PT))).toEqual([0, 1, -1, 0]);
