@@ -92,8 +92,11 @@ zoom, fullscreen, close). The control-description block previews the real rows
 of the selected course. Validation messages name the offending object rather
 than an opaque id. Importing a club template drops map-anchored objects that
 belonged to another event's map. Export produces one map, a whole course, all
-controls, or the complete event as vector PDF. See
-[course-maps.md](course-maps.md).
+controls, or the complete event as vector PDF. An event on the new map engine
+prints straight from its map document: print-ready CMYK, the course drawn with
+the map's own symbols in IOF layer order, no conversion step; switching the
+event back to the classic engine prints the same maps the old way. See
+[course-maps.md](course-maps.md) and [course-print.md](course-print.md).
 
 The Courses page also keeps its format **Export** dropdown. It writes the whole course set — controls with paper-millimetre positions, course sequences with leg lengths, and (for IOF) class assignments — as either an IOF 3.0 CourseData file or a native Purple Pen `.ppen`. Open the IOF file in Condes, Purple Pen or OCAD, or import either format into another Oxygen event; the round-trip through Oxygen's own importer is lossless for the punchable course model. Export derives legs from the current coordinates and OCAD CRS scale; edited courses also get a freshly-derived total, while untouched imports retain deliberate OCAD/IOF extra distance. For Eventor-linked events, sync can repair an untouched imported total from Eventor's published class-course length but never overwrites a course edited in Oxygen. See [iof-coursedata-export.md](iof-coursedata-export.md), [ppen-import-export.md](ppen-import-export.md), [bugfix-ocad-course-scale-and-export-lengths.md](bugfix-ocad-course-scale-and-export-lengths.md), and [bugfix-eventor-course-lengths.md](bugfix-eventor-course-lengths.md).
 
