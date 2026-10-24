@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import { render } from "@oxygen/shared";
 import { CLOSE_INK_RATIO, rankRows, runParity, sanctionedFor, snapWindow, unexplainedPixels, type ParityReport, type ParityRow, type RgbaImage } from "../parity.js";
 // @ts-expect-error — plain ESM fixture writer without types (scripts/lib).
-import { buildParityOcad, PARITY_OCAD } from "../../../../../scripts/lib/ocad-fixture.mjs";
+import { buildParityOcad, buildRotatedPointsOcad, PARITY_OCAD, ROTATED_POINTS_OCAD } from "../../../../../scripts/lib/ocad-fixture.mjs";
 
 const testOcd = readFileSync(new URL("../../../../../e2e/test.ocd", import.meta.url));
 const byCode = (r: ParityReport) => new Map(r.rows.map((x) => [x.code, x]));
@@ -90,6 +90,38 @@ describe("corpus parity — OCAD power line (510 corner symbol, B9)", () => {
       expect(ink(img, 6, tip)).toBe(true);
       expect(ink(img, -19.9, tip)).toBe(false);
       expect(ink(img, 19.9, tip)).toBe(false);
+    }
+  }, 60_000);
+});
+
+describe("corpus parity — north-oriented point symbols with rotated objects (C10)", () => {
+  // Club-full's 504.7 / 512.3 / 519.0 are flags 0 with every object turned; OCAD, Mapper and the legacy draw them turned.
+  const window = { minX: -25, minY: -15, maxX: 25, maxY: 5 };
+  it("draws every kind turned to its object's angle, as the legacy does", async () => {
+    for (const canonical of [false, true]) {
+      const r = await runParity(buildRotatedPointsOcad(), "rotated.ocd", { canonical, keepImages: true, window });
+      const rows = byCode(r);
+      for (const code of ["504.7", "512.3", "519.0", "418.0", "109.1"]) {
+        expect(rows.get(code)?.verdict, `${code} canonical=${canonical}`).toBe("close");
+      }
+    }
+  }, 60_000);
+
+  it("lays the footbridge across at −84.7° and keeps the unrotated one upright", async () => {
+    const r = await runParity(buildRotatedPointsOcad(), "rotated.ocd", { canonical: false, keepImages: true, window });
+    const bridge = byCode(r).get("512.3")!;
+    const ink = (img: RgbaImage, xMm: number, yMm: number) => {
+      const px = Math.floor((xMm - r.window.minX) * r.pxPerMm), py = Math.floor((r.window.maxY - yMm) * r.pxPerMm);
+      return img.pixels[(py * img.width + px) * 4] < 128;
+    };
+    const [tx, ty] = ROTATED_POINTS_OCAD.footbridge.at.map((v: number) => v / 100);
+    const [nx, ny] = ROTATED_POINTS_OCAD.footbridgeNorth.map((v: number) => v / 100);
+    for (const img of [bridge.images!.old, bridge.images!.new]) {
+      // The 1.18 mm bar turned −84.7° runs along x at the turned object, along y at the unrotated one.
+      expect(ink(img, tx + 0.45, ty)).toBe(true);
+      expect(ink(img, tx, ty + 0.45)).toBe(false);
+      expect(ink(img, nx, ny + 0.45)).toBe(true);
+      expect(ink(img, nx + 0.45, ny)).toBe(false);
     }
   }, 60_000);
 });

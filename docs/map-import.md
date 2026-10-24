@@ -288,7 +288,22 @@ the S2 visual comparison (03 §8) is where they get confirmed.
 | `decrease.decMode ≠ 0` | — | Warned, drawn full size. Not in the corpus. |
 
 **Point symbols** (`type 1`) → `{ type: "point", glyph, orientation }`:
-`orientation = flags & 1 ? "object" : "north"`, `glyph.rotatable` likewise.
+`orientation = flags & 1 ? "object" : "north"`, `glyph.rotatable` likewise
+— with one exception decided by the objects: a north-oriented symbol that
+has at least one point object with a non-zero `ang` becomes `orientation:
+"object"`, `glyph.rotatable: true`, unless its glyph is only discs and
+rings centred on the origin (which look the same at any angle and stay
+`north`). OCAD draws such objects turned, and Mapper's OCD import does
+the same (`importObject`: a non-rotatable, non-symmetrical point symbol is
+made rotatable on the first object with an angle). Since `ocad-14` (C10):
+Club-full has 23 north-oriented point symbols with rotated objects — its
+504.5 / 504.7 barriers, 512.3 footbridge and 519.0 tunnel are rotated on
+every object and are `flags 1` in Club-2026; the other corpus maps have
+none. `ocad-13` and earlier drew them north-up (25–36 % shape difference
+against the legacy, B9's parity tool). Objects with `ang` 0 are unaffected
+by the change; the matcher (stage 6) sees the corrected orientation. The
+rule is OCAD-only: Mapper writes `rotation` only for rotatable symbols
+(§4.3).
 
 **Symbol elements** (point glyphs, area patterns, line decorations) →
 `GlyphPart`: type 1 line ⇒ `stroke` (`lineWidth`, cap/join from `flags`,
@@ -780,7 +795,7 @@ non-contiguous priorities). The rest are shared with §3.6–3.7.
 
 ## 5. Header provenance
 
-`format.importer` is `"ocad-13"` for OCAD sources (`OCAD_IMPORTER_VERSION`;
+`format.importer` is `"ocad-14"` for OCAD sources (`OCAD_IMPORTER_VERSION`;
 `ocad-1` had `render: null` for every source symbol, `ocad-2` carried the
 upload name in the header, `ocad-3` had no matcher, `ocad-4` stored
 ScalePar `d` as `declinationDeg`, ignored `e` and had no
@@ -797,7 +812,7 @@ reference as `SYMBOL_FEATURE_DROPPED` and kept no per-symbol warning detail
 — §3.3, §3.6, A14, `ocad-10` dropped text shadows, vertical text alignment,
 rectangle corner radii and framing lines narrower than the main line,
 shortened pointed lines instead of tapering them and reported a rectangle
-grid as `SYMBOL_FEATURE_DROPPED`, `ocad-11` is the A13 importer that reads them — §3.3, A13; `ocad-11` also fingerprinted Mapper's inverted railway as unmatched, `ocad-12` reads it as 509's construction — `docs/map-symbols.md` §8.1, A15; `ocad-12` had no tab stops or rectangle frame and warned line text, `ocad-13` is the B8 importer — §3.3) and `"omap-7"`
+grid as `SYMBOL_FEATURE_DROPPED`, `ocad-11` is the A13 importer that reads them — §3.3, A13; `ocad-11` also fingerprinted Mapper's inverted railway as unmatched, `ocad-12` reads it as 509's construction — `docs/map-symbols.md` §8.1, A15; `ocad-12` had no tab stops or rectangle frame and warned line text, `ocad-13` is the B8 importer — §3.3; `ocad-13` drew north-oriented point symbols north-up even where their objects carry an angle, `ocad-14` turns them — §3.3, C10) and `"omap-7"`
 for Mapper sources (`OMAP_IMPORTER_VERSION`; `omap-1` stored `paperOrigin`
 unrounded, `omap-2` is `ocad-7`'s matcher, `omap-3` reported stale
 combined-part references as `SYMBOL_FEATURE_DROPPED` and kept no
@@ -847,7 +862,7 @@ document hash is identical on two machines.
 | Unit (shared) | `packages/shared/src/import/__tests__/omap-reader.test.ts` | barrier wrapper, both coordinate forms and every flag, symbols of all five types incl. inline sub-symbols, colours with spot components, georeferencing, parts, templates, print, tags, misnumbered symbols |
 | Unit (shared) | `packages/shared/src/import/__tests__/omap-symbols.test.ts` | every §4.3 rule: point glyphs incl. nested points and offset discs, line caps / shortening / pointed taper (offsets, one end, `pointed_cap_length` only), borders, dash layouts and mid / dash / start / end placements, width-0 carriers, area hatch and pattern, text framing (line → halo, shadow → y-flipped shadow, zero offset), custom tab stops and fonts, the combined-symbol merge table (509, 508.x, 502.2 with its second border pair in `extraPairs`, 511.2, second dashed, area combinations), self and missing combined parts → `SYMBOL_REFERENCE_INVALID` |
 | Unit (shared) | `packages/shared/src/import/__tests__/omap-source.test.ts` | the fixture through `omapToDocumentInput`: colour stack order and opacity, y flip and `-0`, every §4.2 flag rule, hole shift, dash-point rule per symbol, text alignment lifting and alignment variants (§4.4), box text as formatted text with four corners (odd sizes exact, rotated boxes turned and rounded, §4.2), missing symbols, `warningDetails` with the stub index, parts merge, templates, print window, georeferencing (UTM / EPSG / Gauss-Krüger / PROJ.4 / Local / unresolved), codec round trip, every §4.5 warning code |
-| Unit (shared) | `packages/shared/src/import/__tests__/ocad-source.test.ts` | colour stack order, the file version reaching the circle-diameter rule, symbol table, hidden flag, duplicates, graphic objects, missing symbols, rectangle objects resolved to a parsed rectangle symbol, flag mapping, georeferencing (no `declinationDeg` from `d`, `e` fallback, grid table first, `CRS_UNRESOLVED`), print window, warning codes, reader-dropped types vs `READER_WARNING`, `readerWarnings` texts (order, cap of 50), `warningDetails` (one entry per emission with the symbol index, stub index for `MISSING_SYMBOL`, first detail = header message, not in the document, cap of 500 with every emission counted), `analysis` returned |
+| Unit (shared) | `packages/shared/src/import/__tests__/ocad-source.test.ts` | colour stack order, the file version reaching the circle-diameter rule, symbol table, hidden flag, duplicates, graphic objects, missing symbols, rectangle objects resolved to a parsed rectangle symbol, flag mapping, georeferencing (no `declinationDeg` from `d`, `e` fallback, grid table first, `CRS_UNRESOLVED`), print window, warning codes, reader-dropped types vs `READER_WARNING`, `readerWarnings` texts (order, cap of 50), `warningDetails` (one entry per emission with the symbol index, stub index for `MISSING_SYMBOL`, first detail = header message, not in the document, cap of 500 with every emission counted), `analysis` returned; point orientation from object angles (§3.3, C10): a north-oriented symbol with a rotated object turns `object`, a centred disc, an already rotatable symbol and one with no rotated object keep their flag, angles reach the render bridge |
 | Unit (shared) | `packages/shared/src/geo/__tests__/projection.test.ts`, `north.test.ts` | §3.8 maths: EPSG lookup, paper ↔ projected (rotation + correction, grid scale factor, round trip), Mapper's reference point on the `e2e/test.xmap` frame, paper ↔ WGS 84, convergence at Nackareservatet (−2.82°) and on a central meridian, paper-north bearing, extent and calibration corners, `mapFileMetadata`; angle folding and the cluster thresholds |
 | Unit (shared) | `packages/shared/src/import/__tests__/analyse.test.ts` | `601` / `601.x` codes, grouping per symbol, 5 mm floor scaled by `unitsPerMm`, graphic symbols excluded, georeference fields, un-georeferenced and non-projectable CRSs, same result over the decoded document |
 | Unit (shared) | `packages/shared/src/import/__tests__/ocad-symbols.test.ts` | every row of the §3.3 tables: line styles, dashes (507 end gap), shortening without pointed ends and the taper with them (one end, none), framing (also narrower than the main line → negative halo, equal width warned), double lines, main / secondary / corner / start / end symbols (`useSymbolFlags` 1 = end, 2 = start), point elements (circle diameter by OCAD version), area fill / hatch / pattern / border, text mapping, vertical anchor (4 middle, 8 top, 0 absent, other values warned), fonts, text line framing → halo (`frWidth` as half-width, width 0, unknown colour), shadow framing → shadow (offsets, zero offset, unknown colour), rectangle framing → frame (margins, unknown colour; on line text warned), unknown framing warned, tab stops (`nTabs`, zero and non-ascending stops), paragraph indent warned, line text without a warning, a border reference that is missing / not a line / the area itself → `SYMBOL_REFERENCE_INVALID` with the fill kept, rectangle → outline line (`cornerRadiusUm`, grid → `RECTANGLE_GRID_DROPPED`, width 0, unknown colour), warning codes |

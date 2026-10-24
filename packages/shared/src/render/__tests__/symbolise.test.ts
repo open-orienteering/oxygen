@@ -226,6 +226,19 @@ describe("symbolise — points, areas", () => {
     expect(stream.glyphTable[1].strokes[0]).toMatchObject({ widthUm: 140 }); // ring
   });
 
+  it("an object-oriented point turns each instance by the object angle (C10, 512.3 footbridge)", () => {
+    const bar = (orientation: "object" | "north") => parseRenderSymbol({
+      type: "point", id: `bar-${orientation}`, code: "512.3", name: "Footbridge", orientation,
+      glyph: { rotatable: orientation === "object", parts: [{ kind: "stroke", colour: 1, widthUm: 250, geometry: { coords: [0, -590, 0, 590] } }] },
+    });
+    const at = (orientation: "object" | "north") => Array.from(only(symbolise({
+      objects: [{ symbolIdx: 0, path: makePath([1000, 2000]), angleDeg: -84.7 }], symbols: [bar(orientation)], fonts: [],
+    }).stream, "glyph")[0].instances).map(r3);
+    const a = (-84.7 * Math.PI) / 180;
+    expect(at("object")).toEqual([1000, 2000, r3(Math.cos(a)), r3(Math.sin(a)), 1]);
+    expect(at("north")).toEqual([1000, 2000, 1, 0, 1]);
+  });
+
   it("403 rough open: a single even-odd fill", () => {
     const { stream } = run([{ symbolIdx: PILOT.roughOpen403, path: makePath([0, 0, 10000, 0, 10000, 10000, 0, 10000], undefined, true) }]);
     expect(stream.passes).toHaveLength(1);

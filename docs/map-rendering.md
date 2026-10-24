@@ -412,7 +412,10 @@ glyph; the instance transform is the point at that length with
 - A pass per part, in the part's colour, with one instance per
   placement; the same `Glyph` object registers once.
 - A point object's angle applies only when `orientation` is `object`
-  and the glyph is `rotatable`; otherwise the glyph is north-up.
+  and the glyph is `rotatable`; otherwise the glyph is north-up. The
+  OCAD importer turns a north-oriented symbol whose objects carry an
+  angle into `object` (`map-import.md` §3.3, `ocad-14`, C10), so this
+  rule and OCAD's drawing agree.
 
 ### 4.7 Areas: fill, hatch, pattern, border
 
@@ -1984,7 +1987,10 @@ the mapper's own definitions.
 Tests: `packages/api/src/render/__tests__/parity.test.ts` (pixel grid,
 isolation, agreement on `e2e/test.ocd`, the frame as a sanctioned
 divergence, ranking, shape measure, tags; a 510 power line from
-`buildParityOcad` with its poles at the corner points only) and
+`buildParityOcad` with its poles at the corner points only; Club-full's
+north-oriented barrier, footbridge and tunnel with rotated objects from
+`buildRotatedPointsOcad`, every kind `close` with canonical rendering on
+and off, the footbridge laid across on both images — C10) and
 `scripts/__tests__/measure-parity.test.mjs` (CLI, `pnpm test:scripts`).
 **Fonts on the legacy side.** The tiles leave the mapper's font names
 ("Arial") to the system font stack, which in the Docker image resolves
@@ -2032,6 +2038,12 @@ what became of it:
   Crop-B 100 → 102, club-full 98 → 100, Crop-A 101 → 103. Whole maps
   after B10, canonical: club-2026 24 diverging, Sprint 7, Crop-B 8, all
   sanctioned except Crop-B's 522 canopy tone.
+- **Fixed in the importer (`ocad-14`, C10, found by C7).** North-oriented
+  OCAD point symbols whose objects carry an angle are drawn turned, as
+  OCAD and Mapper draw them (`map-import.md` §3.3): Club-full has 23 such
+  symbols; its 504.5 / 504.7 barriers, 512.3 footbridge and 519.0 tunnel
+  — every object turned — diverged 24.92 / 36.28 / 26.65 / 31.96 %
+  (canonical) and are now `close` with canonical rendering on and off.
 - **Spec-faithful, kept.** Cliffs: every 201.x / 202.x variant matches
   the legacy at 40 px/mm from source (0 % unexplained); canonically
   matched 202.2 / 201.5 get ISOM's flat ends (the "small houses"),

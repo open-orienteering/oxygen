@@ -306,7 +306,7 @@ describe("ocadToDocumentInput", () => {
 
   it("fills the header: provenance, units, scale, print window, export rectangles", () => {
     const h = input.header;
-    expect(h.format).toEqual({ version: 1, importer: "ocad-13" });
+    expect(h.format).toEqual({ version: 1, importer: "ocad-14" });
     expect(h.source).toEqual({ kind: "ocad", version: "2018.8.3", hash: "ff".repeat(32), bytes: 4242 });
     expect(h.unitsPerMm).toBe(OCAD_UNITS_PER_MM);
     expect(h.mapScale).toBe(15000);
@@ -348,5 +348,57 @@ describe("ocadToDocumentInput", () => {
     });
     expect(r.input.header.symbols[0].render?.type).toBe("line");
     expect(r.input.header.symbols[1].render).toBeNull();
+  });
+});
+
+describe("point orientation from object angles (docs/map-import.md §3.3, C10)", () => {
+  // Club-full shapes: north-oriented (flags 0) symbols whose objects all carry an angle, as OCAD and Mapper draw them.
+  const bar = (color: number) => [{ type: 1, flags: 0, color, lineWidth: 25, diameter: 0, coords: [[0, -59], [0, 59]] }];
+  const withPoints = () => {
+    const s = source();
+    s.symbols = [...Array.from(s.symbols),
+      { symNum: 512003, number: "512.3", type: 1, flags: 0, status: 0, description: "Footbridge", elements: bar(0) },
+      { symNum: 519000, number: "519.0", type: 1, flags: 0, status: 0, description: "Tunnel", elements: bar(0) },
+      { symNum: 418000, number: "418.0", type: 1, flags: 1, status: 0, description: "Rotatable", elements: bar(0) },
+      { symNum: 109001, number: "109.1", type: 1, flags: 0, status: 0, description: "Small knoll", elements: [{ type: 4, flags: 0, color: 3, lineWidth: 0, diameter: 50, coords: [[0, 0]] }] },
+      { symNum: 504009, number: "504.9", type: 1, flags: 0, status: 0, description: "Barrier, unrotated", elements: bar(0) },
+    ];
+    s.objects = [...Array.from(s.objects),
+      { sym: 512003, otp: 1, ang: -281, coordinates: [c(0, 0)] },
+      { sym: 512003, otp: 1, ang: 0, coordinates: [c(10, 0)] },
+      { sym: 519000, otp: 1, ang: 1616, coordinates: [c(20, 0)] },
+      { sym: 418000, otp: 1, ang: 900, coordinates: [c(30, 0)] },
+      { sym: 109001, otp: 1, ang: 450, coordinates: [c(40, 0)] },
+      { sym: 504009, otp: 1, ang: 0, coordinates: [c(50, 0)] },
+    ];
+    return s;
+  };
+  const r = ocadToDocumentInput(withPoints(), opts);
+  const render = (code: string) => {
+    const sym = r.input.header.symbols.find((s) => s.code === code)?.render;
+    if (sym?.type !== "point") throw new Error(`${code} is not a point symbol`);
+    return sym;
+  };
+
+  it("turns a north-oriented symbol rotatable when one of its objects carries an angle", () => {
+    for (const code of ["512.3", "519.0"]) {
+      expect(render(code).orientation).toBe("object");
+      expect(render(code).glyph.rotatable).toBe(true);
+    }
+  });
+
+  it("keeps the flag where it already applies, where no object is rotated, and on centred discs", () => {
+    expect(render("418.0").orientation).toBe("object");
+    expect(render("504.9").orientation).toBe("north");
+    expect(render("504.9").glyph.rotatable).toBe(false);
+    expect(render("109.1").orientation).toBe("north");
+  });
+
+  it("keeps every object's angle and draws the rotated objects turned", () => {
+    expect(r.input.objects.filter((o) => o.type === 1).map((o) => o.angleDeciDeg)).toEqual([-281, undefined, 1616, 900, 450, undefined]);
+    const doc = decodeMapDocument(encodeMapDocument(r.input));
+    const { objects, symbols } = documentRenderInput(doc);
+    const angles = objects.filter((o) => symbols[o.symbolIdx]?.code === "512.3").map((o) => o.angleDeg ?? 0);
+    expect(angles).toEqual([-28.1, 0]);
   });
 });
