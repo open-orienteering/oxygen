@@ -468,8 +468,8 @@ back to `legacy` and the same rows print through rsvg.
 | `legacy`, or `vector` without a pin | SVG → `rsvg-convert` → pdf-lib merge, as before slice C (`docs/course-maps.md` "Rendering pipeline") | `legacy` |
 | `vector` with a pin whose colour stack is not aligned (`course.CourseStackError`: no lower / upper purple) | the legacy path, with one `warn` log line per request naming the document hash | `legacy-fallback` |
 
-The decision is `loadPinnedPrintDocument(db, eventId)` (`pdf-page.ts`),
-which reads `getBaseMapInfo` (§10.1) — the same function, so the
+The decision is `pinnedPrintSource(db, eventId)` (`pdf-page.ts`;
+`loadPinnedPrintDocument` is its in-process wrapper), which reads `getBaseMapInfo` (§10.1) — the same function, so the
 preview and the print never disagree on the path. Every other error on
 the vector path is an error (400 with the message, as the legacy path
 answers), not a fallback: a broken composer must be seen, not hidden
@@ -479,21 +479,57 @@ behind rsvg.
 
 1. The rows `findMapRows` selects, each turned into a sheet by
    `sheetForMapRow` (§5) with the event, its controls and the pinned
-   document's `getBaseMapInfo` scale and meridian tilt.
+   document's `getBaseMapInfo` scale and meridian tilt. The pinned
+   document is identified, not decoded, on the request thread:
+   `pinnedPrintSource` gives its hash, `rotationCorrectionDeg` and a
+   `bytes()` reader of the `map_documents` blob.
 2. Graphics referenced by any row's or template's image objects (event
    or club scope), loaded once — the same query as the legacy resolver.
-3. `renderCoursePages({ document, rotationCorrectionDeg, sheets,
-   graphics, mode: "cmyk", info })`: one `PdfWriter`, one page per
-   sheet, fonts, glyph forms and images shared (§4.5). Not
-   `deterministic`: real dates (§3.2).
-4. Under a `renderGate()` permit like tiles and `window.png`, but
-   **without the queue cap**: the request waits for a permit and never
-   answers 503 — the export is a browser download, where a 503 body
+3. `renderCoursePagesInWorker({ document: { hash, bytes }, rotationCorrectionDeg,
+   sheets, graphics, mode: "cmyk", info, onPage })`: the same
+   `renderCoursePages` (one `PdfWriter`, one page per sheet, fonts, glyph
+   forms and images shared, §4.5) running in a `worker_threads` worker
+   (`course-maps/print-worker.ts`, host `print-worker-host.ts`), so
+   decoding the document, composing and writing never occupy the API's
+   event loop and a card readout does not wait on a print. Not
+   `deterministic`: real dates (§3.2). The worker's output is
+   byte-identical to the in-process call's for the same inputs (tested
+   with `deterministic: true`); `renderCoursePages` itself stays in
+   process for the corpus run (§11) and the tests.
+   - **Messages.** Everything that crosses is structured-cloneable: the
+     sheets, the graphics as `[id, { mime, data }]`, the writer options.
+     Host → worker `print`; worker → host `page` after each page (index,
+     label, that page's warnings — the route logs them as they arrive),
+     then `done` with the PDF bytes **transferred**, or `error`. The
+     writer is pdf-lib's whole-document `save()` (xref and object streams
+     at the end), so bytes cannot stream per page: the response is one
+     buffer (§8.3), and "pages streamed back" is progress and warnings.
+   - **Prepared once per worker.** The worker keeps `prepareDocument`'s
+     cache (last two hashes). The host remembers which hashes the
+     worker instance holds and reads and sends the blob only on a miss;
+     a worker that reports it lacks the document (`NeedDocument`) gets it
+     on one retry. A replaced worker starts empty.
+   - **Pool.** Workers start on first use, are `unref`'d while idle and
+     replaced after an exit. `PRINT_WORKERS` (default `1`, at most `4`)
+     sets how many prints compose at once; each worker holds a decoded
+     document and the fonts (C7 measured 2.6 GB peak RSS for a whole Club-full print run), so it is
+     sized with the container's memory and CPU (2 vCPU / 4 GiB: one, or
+     two). A worker needs no database connection, so it does not count
+     against `DATABASE_POOL_MAX`. A request is timed out after 10 min
+     (`PRINT_WORKER_TIMEOUT_MS`, as the import worker): the worker is
+     terminated and the request fails; the next one starts a fresh worker.
+   - **Errors.** An error in the worker is an `Error` with its message
+     on the host (a 400, §8.1). `CourseStackError` crosses with a `code`
+     and is re-created on the host, so the `legacy-fallback` rule (§8.1)
+     is unchanged. A worker that dies fails the request in flight.
+   - **Shutdown.** The route's server `onClose` hook terminates the
+     workers (`resetPrintWorkers`).
+4. A worker slot (`printGate`), **then** a `renderGate()` permit like tiles
+   and `window.png`, but **without the queue cap**: the request waits and
+   never answers 503 — the export is a browser download, where a 503 body
    would arrive as a broken file, and the layout editor's `window.png`
-   requests share the four-deep queue. Composing runs on the API's event loop
-   and yields between pages (`setImmediate`), so other requests run
-   between the pages of a long export; each page is one synchronous
-   compose + write.
+   requests share the four-deep queue. The slot comes first so a print
+   waiting for a worker holds no render permit that tiles need.
 5. Composer and writer warnings (`NO_FONT` for a page text in a family
    with no face, `IMAGE_MISSING`, `SVG_RASTER`) go to the log at `warn`;
    the PDF is still served.
@@ -546,7 +582,10 @@ E2E tests check page count and size; C7 compares the rasters).
 | Test | Covers |
 |---|---|
 | `packages/api/src/__tests__/integration/course-maps.test.ts` "maps.pdf route switch" | `vector` + pin → one composed PDF, pages at each template's paper (A4, A5), never the rsvg converter, `X-Print-Pipeline: vector`, `Info` title for one and several pages, file names; selection errors unchanged; `qpdf --check` clean; a `legacy` event, a `vector` event without a pin, and the same event flipped back all print legacy; an injected `CourseStackError` falls back (`legacy-fallback`); any other injected error is a 400 |
-| `packages/api/src/__tests__/integration/course-print.test.ts` | §7.5's row, plus `qpdf --check` of both colour modes |
+| `packages/api/src/__tests__/integration/course-maps.test.ts` "a readout-path request is answered…" | 150 extra pages in one print while `race.recentActivity` is polled every 10 ms: every probe is answered within 500 ms and more than three were answered before the PDF finished; the PDF has all pages. A smoke test of the route wiring — the event-loop bound itself is `print-worker.test.ts`'s |
+| `packages/api/src/__tests__/integration/course-print.test.ts` | §7.5's row, plus `qpdf --check` of both colour modes; the worker's bytes equal the in-process bytes (`deterministic: true`) and `onPage` fires once per sheet |
+| `packages/api/src/__tests__/print-worker.test.ts` | the worker on `e2e/test.ocd`: bytes equal in-process; the blob read and sent once per worker; `page` order; an error keeps the worker usable; `CourseStackError` re-created (a document with palette ids stripped); a reset rejects the request in flight and the next call recovers; the main thread's event-loop delay stays under 25 ms (or half a page) during a 10-page A3 print; `PRINT_WORKERS` parsing |
+| `packages/api/src/__tests__/worker-bootstrap.test.ts` | the shared bootstrap: `.js` imported as is, `.ts` through tsx |
 | `packages/api/src/render/__tests__/pdf-golden.test.ts` | the PDF golden tier, §9.2, and `qpdf --check` on every file it writes; `boxDown`; the swatch read-back |
 | `e2e/course-maps.spec.ts` (`map-legacy`, `map-vector`) | the export flows of the maps page: page count and A4 page size of the single-map, course and all-controls downloads (05 §7), `X-Print-Pipeline` equal to the project's value |
 
@@ -937,10 +976,12 @@ symbols on the window, unexplained ÷ ink and their codes:
   coords) at ~17 bytes each — absolute integer µm, where Appendix B priced
   ~6 B "relative" (PDF operands are absolute) — plus 14 k glyph instances
   with a full six-number `cm` each (~50 B). Fonts are 17 kB.
-- **Time on the event loop (row C12).** A Club-full A3 page takes
+- **Time on the event loop (row C12, fixed).** A Club-full A3 page takes
   0.28–0.81 s to compose and 1.3–3.5 s to write per mode over three runs:
   within 05's "hundreds of ms" only for the smaller pages (Sprint
-  0.1–0.2 s, Club-2026 0.4–0.6 s). The Pending item below now has its input.
+  0.1–0.2 s, Club-2026 0.4–0.6 s). Closed by C12: composing and writing
+  moved to the print worker (§8.2); these numbers are the per-page cost
+  the worker now carries.
 - **Two measurement defects, fixed in C7** (user decision 2026-10-24: they
   would otherwise falsify these numbers): the page oracle composited
   resvg's premultiplied pixels as straight alpha
@@ -960,11 +1001,6 @@ symbols on the window, unexplained ÷ ink and their codes:
 
 ## Pending in this chapter
 
-- **Composing off the event loop** (row C12): each page is composed and
-  written synchronously on the API's event loop (§8.2 step 4 yields only
-  between pages). C7 measured 0.28–0.81 s composing and 1.3–3.5 s writing
-  a Club-full A3 page (§11.5) — long enough to delay a card readout, so a
-  worker thread.
 - **PDF size** (row C11): Club-full A4 at 1:10 000 is 1.63 MB, 6.5× 05
   Appendix B's estimate (§11.5).
 - **Corpus gate** (§11.3): every page passes since C10. Crop-A's 7 µm

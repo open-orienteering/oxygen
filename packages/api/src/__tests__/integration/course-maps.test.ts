@@ -836,6 +836,45 @@ describe("maps.pdf route switch", () => {
     expect(await qpdfCheck(res.rawPayload)).toMatch(/No syntax or stream encoding errors/);
   }, 60_000);
 
+  it("a readout-path request is answered while a large print composes (print worker, §8.2)", async () => {
+    // 150 more pages on top of the three: composing them takes a while, none of it on this event loop.
+    const a4 = await vec.db.mapTemplate.findFirstOrThrow({ where: { eventId: vec.eventId, name: "A4" } });
+    const course = await vec.db.course.findFirstOrThrow({ where: { eventId: vec.eventId } });
+    const extra = await Promise.all(
+      Array.from({ length: 150 }, (_, i) =>
+        vec.db.courseMap.create({ data: { eventId: vec.eventId, name: `Extra ${i}`, kind: "course", courseId: course.id, templateId: a4.id, windowCenter: { x: -70, y: 5 }, sortOrder: 10 + i } }),
+      ),
+    );
+    try {
+      const vecCaller = makeCaller(vec.event);
+      await vecCaller.race.recentActivity(); // warm the path
+      const started = performance.now();
+      let printDoneAt = 0;
+      const print = server.inject({ method: "GET", url: pdfUrl(vec.nameId) }).then((r) => {
+        printDoneAt = performance.now();
+        return r;
+      });
+      // Ask for a readout-path answer repeatedly while it composes.
+      const latencies: number[] = [];
+      while (!printDoneAt && latencies.length < 200) {
+        const t = performance.now();
+        await vecCaller.race.recentActivity();
+        latencies.push(performance.now() - t);
+        await new Promise((r) => setTimeout(r, 10));
+      }
+      const res = await print;
+      expect(res.statusCode).toBe(200);
+      expect(res.headers["x-print-pipeline"]).toBe("vector");
+      expect((await PDFDocument.load(res.rawPayload)).getPageCount()).toBe(153);
+      // The print outlasted the probes (otherwise this proves nothing) and every probe was prompt.
+      expect(latencies.length).toBeGreaterThanOrEqual(3);
+      expect(printDoneAt - started).toBeGreaterThan(latencies.length * 10);
+      expect(Math.max(...latencies)).toBeLessThan(500);
+    } finally {
+      await vec.db.courseMap.deleteMany({ where: { id: { in: extra.map((m) => m.id) } } });
+    }
+  }, 180_000);
+
   it("a legacy event prints through the rsvg converter", async () => {
     const before = convertedSvgs.length;
     const res = await server.inject({ method: "GET", url: pdfUrl(ctx.nameId, `?courses=${courseSeq}`) });

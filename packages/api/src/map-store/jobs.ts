@@ -11,9 +11,8 @@
 
 import { hostname } from "node:os";
 import { randomUUID } from "node:crypto";
-import { extname } from "node:path";
-import { fileURLToPath } from "node:url";
 import { Worker } from "node:worker_threads";
+import { workerBootstrap } from "../worker-bootstrap.js";
 import { mapImport, symbolLibrary } from "@oxygen/shared";
 import { loadClubDecisions, parseDecisionSnapshot, storedDocumentFollowsDecisions } from "./decisions.js";
 import type { Prisma, PrismaClient } from "../generated/prisma/client.js";
@@ -97,21 +96,6 @@ export interface WorkerResult {
   report: mapImport.ImportReport;
 }
 
-/**
- * The worker entry sits next to this module: `import-worker.ts` under
- * tsx (dev, E2E, vitest) and `import-worker.js` from `dist/` (Docker).
- * tsx's loader does not reach worker threads on Node 20, so a TypeScript
- * entry is started through an eval'd bootstrap that registers tsx inside
- * the worker before importing it; the compiled entry is imported as is.
- */
-function workerBootstrap(): string {
-  const ext = extname(fileURLToPath(import.meta.url));
-  const entry = new URL(`./import-worker${ext}`, import.meta.url).href;
-  if (ext !== ".ts") return `import(${JSON.stringify(entry)})`;
-  const tsxApi = import.meta.resolve("tsx/esm/api");
-  return `import(${JSON.stringify(tsxApi)}).then(({ register }) => { register(); return import(${JSON.stringify(entry)}); })`;
-}
-
 export function runImportInWorker(
   bytes: Uint8Array,
   fileName: string,
@@ -119,7 +103,7 @@ export function runImportInWorker(
 ): Promise<WorkerResult> {
   const workerData: ImportWorkerData = { bytes, fileName, kind: opts.kind ?? "ocad", decisions: opts.decisions ?? [] };
   return new Promise<WorkerResult>((resolve, reject) => {
-    const worker = new Worker(workerBootstrap(), { eval: true, workerData });
+    const worker = new Worker(workerBootstrap(new URL("./import-worker", import.meta.url), import.meta.url), { eval: true, workerData });
     let settled = false;
     const finish = (fn: () => void) => {
       if (settled) return;
