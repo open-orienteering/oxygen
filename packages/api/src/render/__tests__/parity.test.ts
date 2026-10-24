@@ -109,6 +109,13 @@ describe("parity helpers", () => {
     expect(unexplainedPixels(line, img(20, 20, (x, y) => x === 8 && y < 10))).toBe(9);
   });
 
+  it("does not count a tone on the ink threshold that differs by less than the channel tolerance (C7)", () => {
+    // Crop-A's 214.0: the same area at 206 and at 207 — deviation 49 is ink, 48 is not.
+    const tone = (v: number): RgbaImage => ({ width: 4, height: 4, pixels: new Uint8Array(64).map((_, i) => (i % 4 === 3 ? 255 : v)) });
+    expect(unexplainedPixels(tone(206), tone(207))).toBe(0);
+    expect(unexplainedPixels(tone(180), tone(255))).toBe(16);
+  });
+
   it("snaps the window outwards to whole mm", () => {
     expect(snapWindow({ minX: -1.2, minY: 0.5, maxX: 3.01, maxY: 4 })).toEqual({ minX: -2, minY: 0, maxX: 4, maxY: 4 });
   });
