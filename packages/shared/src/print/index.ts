@@ -16,3 +16,4 @@ export * from "./page.js";
 export * from "./description.js";
 export * from "./geo.js";
 export * from "./compose.js";
+export { pageScene, pageSceneNames, type PageSceneName } from "./__fixtures__/pages.js";
