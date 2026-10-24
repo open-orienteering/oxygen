@@ -479,15 +479,15 @@ function resolveText(
   }
   const { lookup } = buildTextGlyphs(pages);
   const rangeEm = pages[0].distanceRangePx / pages[0].emPx;
-  const familyById = new Map(stream.fontTable.map((r) => [r.fontId, r.family]));
+  const refById = new Map(stream.fontTable.map((r) => [r.fontId, r]));
   for (const i of texts) {
     const p = stream.passes[i] as render.TextPass;
-    const family = familyById.get(p.fontId);
-    const font = fonts.find((f) => f.family === family);
+    const ref = refById.get(p.fontId);
+    const font = ref && (fonts.find((f) => f.family === ref.family && !!f.bold === ref.bold && !!f.italic === ref.italic) ?? fonts.find((f) => f.family === ref.family));
     const entries = new Int32Array(p.glyphs.length).fill(-1);
     const pageOf = new Uint8Array(p.glyphs.length);
     for (let g = 0; g < p.glyphs.length; g++) {
-      const hit = family === undefined ? undefined : lookup.get(textGlyphKey(family, p.glyphs[g]));
+      const hit = ref === undefined ? undefined : lookup.get(textGlyphKey(ref.family, ref.bold, p.glyphs[g]));
       if (hit) {
         entries[g] = hit.entry;
         pageOf[g] = hit.page;

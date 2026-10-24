@@ -6,7 +6,7 @@
  */
 
 import { course, mapDocument, render, windowBoundingBox, windowRotationDeg, type MapWindow } from "@oxygen/shared";
-import { glyphOutlineFrom, loadBundledFont } from "./fonts.js";
+import { glyphOutlineFrom, loadBundledFonts } from "./fonts.js";
 import { encodePng, rasterisePassStream } from "./reference-raster.js";
 import { stackColour } from "./previews.js";
 
@@ -130,7 +130,7 @@ export async function renderDocumentWindow(doc: PreparedDocument, opts: Document
   const { window, widthPx, heightPx, layer } = opts;
   const rotation = windowRotationDeg(window);
   const bbox = windowBoundingBox(window);
-  const fonts = await Promise.all([loadBundledFont("liberation-sans"), loadBundledFont("liberation-sans-narrow")]);
+  const fonts = await loadBundledFonts();
   const objects = objectsNear(doc.input.objects, bbox, WINDOW_OBJECT_MARGIN_MM);
   const { stream: full } = render.symbolise({ objects, symbols: doc.input.symbols, fonts });
 

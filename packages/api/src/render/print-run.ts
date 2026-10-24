@@ -65,7 +65,6 @@ export const DESCRIPTION_CELL_MM = 5;
 export const PRINT_SANCTIONED = {
   "cmyk-colour": "DeviceCMYK from the colour stack against the legacy RGB",
   "north-lines-below": "`northLinesBelow` (on by default) not applied",
-  "description-weight": "description header, title and lengths in regular weight",
   "description-font": "Liberation Sans in the description block",
   "course-symbol-sizes": "7xx symbols at the library's dimensions × the document factor",
   "start-turned": "the start triangle turned to the first control",
@@ -316,7 +315,7 @@ export function syntheticCourse(centre: { x: number; y: number }, window: { widt
 export function pageSanctionedCodes(p: { mode: ColourMode; description: boolean; rotated: boolean }): PrintSanctionedCode[] {
   const out: PrintSanctionedCode[] = ["course-symbol-sizes", "start-turned", "start-finish-clearance", "size-aware-cuts", "library-symbols", "stack-order", "north-lines-below"];
   if (p.mode === "cmyk") out.push("cmyk-colour");
-  if (p.description) out.push("description-weight", "description-font");
+  if (p.description) out.push("description-font");
   if (p.rotated) out.push("rotated-overprint");
   return out.sort();
 }

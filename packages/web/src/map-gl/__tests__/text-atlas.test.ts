@@ -10,9 +10,10 @@ import {
 import { glyphsetFile, pageFromAtlasJson, pageGlyphIds, TEXT_ATLAS_EM_PX, TEXT_ATLAS_RANGE_PX, type RawAtlasJson } from "../text-atlas-build";
 
 const fontsDir = resolve(import.meta.dirname, "../../../../shared/fonts");
-const FACES: [render.FontFamily, string][] = [
-  ["liberation-sans", "LiberationSans-Regular.ttf"],
-  ["liberation-sans-narrow", "LiberationSansNarrow-Regular.ttf"],
+const FACES: [render.FontFamily, string, boolean][] = [
+  ["liberation-sans", "LiberationSans-Regular.ttf", false],
+  ["liberation-sans-narrow", "LiberationSansNarrow-Regular.ttf", false],
+  ["liberation-sans", "LiberationSans-Bold.ttf", true],
 ];
 const fontFile = (file: string) => readFileSync(resolve(fontsDir, file));
 const font = (family: render.FontFamily, file: string) => {
@@ -34,7 +35,7 @@ describe("committed text atlas pages (map-rendering.md §4.10)", () => {
       expect(p.emPx).toBe(TEXT_ATLAS_EM_PX);
       expect(p.distanceRangePx).toBe(TEXT_ATLAS_RANGE_PX);
       expect(pngSize(p.page)).toEqual({ width: p.width, height: p.height });
-      expect(p.faces.map((f) => f.family)).toEqual(FACES.map(([f]) => f));
+      expect(p.faces.map((f) => [f.family, !!f.bold])).toEqual(FACES.map(([f, , b]) => [f, b]));
       p.faces.forEach((f, i) => {
         expect(f.sha256, `${p.page}/${f.family}: regenerate with pnpm text-atlas:generate`).toBe(createHash("sha256").update(fontFile(FACES[i][1])).digest("hex"));
       });
@@ -42,7 +43,7 @@ describe("committed text atlas pages (map-rendering.md §4.10)", () => {
   });
 
   it("hold every non-empty glyph of the page ranges, each once across pages", () => {
-    FACES.forEach(([family, file], fi) => {
+    FACES.forEach(([family, file, bold], fi) => {
       const f = font(family, file);
       const seen = new Set<number>();
       for (const p of pages) {
@@ -60,9 +61,9 @@ describe("committed text atlas pages (map-rendering.md §4.10)", () => {
       }
       // Nordic and Baltic letters the corpus uses (S1 §5), and Cyrillic.
       const lookup = buildTextGlyphs(pages).lookup;
-      for (const ch of "ÄÅÖäåéöŠšŽžĄąĖėЖжЯя") expect(lookup.has(textGlyphKey(family, f.glyphId(ch.codePointAt(0)!))), ch).toBe(true);
-      expect(lookup.get(textGlyphKey(family, f.glyphId(0x416)))?.page).toBe(1);
-      expect(lookup.get(textGlyphKey(family, f.glyphId(0xc5)))?.page).toBe(0);
+      for (const ch of "ÄÅÖäåéöŠšŽžĄąĖėЖжЯя") expect(lookup.has(textGlyphKey(family, bold, f.glyphId(ch.codePointAt(0)!))), ch).toBe(true);
+      expect(lookup.get(textGlyphKey(family, bold, f.glyphId(0x416)))?.page).toBe(1);
+      expect(lookup.get(textGlyphKey(family, bold, f.glyphId(0xc5)))?.page).toBe(0);
     });
   });
 

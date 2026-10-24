@@ -11,14 +11,15 @@ function load(file: string, family: "liberation-sans" | "liberation-sans-narrow"
   return parseTrueType(copy, family);
 }
 
-let cache: { sans: TrueTypeFont; narrow: TrueTypeFont } | undefined;
+let cache: { sans: TrueTypeFont; narrow: TrueTypeFont; bold: TrueTypeFont } | undefined;
 
 /** The bundled Liberation faces, parsed once per test run. */
-export function liberation(): { sans: TrueTypeFont; narrow: TrueTypeFont } {
+export function liberation(): { sans: TrueTypeFont; narrow: TrueTypeFont; bold: TrueTypeFont } {
   if (!cache) {
     cache = {
       sans: load("LiberationSans-Regular.ttf", "liberation-sans"),
       narrow: load("LiberationSansNarrow-Regular.ttf", "liberation-sans-narrow"),
+      bold: load("LiberationSans-Bold.ttf", "liberation-sans"),
     };
   }
   return cache;

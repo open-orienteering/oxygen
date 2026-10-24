@@ -388,12 +388,19 @@ describe("symbolise — text shadow, faces, rotation", () => {
     expect(stream.fontTable[0]).toEqual({ fontId: 0, family: "liberation-sans", bold: false, italic: false });
   });
 
-  it("picks the face whose bold / italic match when several of the family are loaded", () => {
-    const { sans } = liberation();
-    const boldFace = { ...sans, family: sans.family, bold: true, glyphId: sans.glyphId.bind(sans), advance: sans.advance.bind(sans), kerning: sans.kerning.bind(sans) };
-    const { stream } = symbolise({ objects: [{ symbolIdx: 0, path: makePath([0, 0]), text: "A" }], symbols: [textSym({ weight: 700 })], fonts: [sans, boldFace] });
-    expect(only(stream, "text")[0].fontId).toBe(1);
-    expect(stream.fontTable[1].bold).toBe(true);
+  it("picks the real bold face for weight ≥ 600 when it is loaded, the regular one below", () => {
+    const { sans, bold } = liberation();
+    expect(bold.bold).toBe(true);
+    const run = (weight: number) => symbolise({ objects: [{ symbolIdx: 0, path: makePath([0, 0]), text: "AB" }], symbols: [textSym({ weight })], fonts: [sans, bold] });
+    for (const [weight, id] of [[400, 0], [599, 0], [600, 1], [700, 1]] as const) {
+      const { stream, warnings } = run(weight);
+      expect(warnings, String(weight)).toEqual([]);
+      expect(only(stream, "text")[0].fontId, String(weight)).toBe(id);
+      expect(stream.fontTable[id].bold).toBe(id === 1);
+    }
+    // The bold face's own advances are laid out, not the regular face's.
+    const adv = (weight: number) => only(run(weight).stream, "text")[0].positions;
+    expect(adv(700)).not.toEqual(adv(400));
   });
 });
 

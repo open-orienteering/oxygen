@@ -18,7 +18,7 @@
  */
 
 import { execFile } from "node:child_process";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
@@ -34,7 +34,7 @@ import {
   rgbToCmykNaive,
   writePage,
 } from "@oxygen/shared/print";
-import { BUNDLED_FONT_FILES } from "./fonts.js";
+import { bundledPdfFaces } from "./fonts.js";
 import { GOLDEN_SUPERSAMPLE, goldenFonts } from "./golden.js";
 import { PAGE_GOLDEN_SUPERSAMPLE, type PageRaster, composePageScene, rasterisePage } from "./page-raster.js";
 import { rasterisePassStream } from "./reference-raster.js";
@@ -47,9 +47,7 @@ const run = promisify(execFile);
 type Cmyk = [number, number, number, number];
 
 async function faces() {
-  return Promise.all(
-    (["liberation-sans", "liberation-sans-narrow"] as const).map(async (family) => ({ family, data: new Uint8Array(await readFile(BUNDLED_FONT_FILES[family].path)) })),
-  );
+  return bundledPdfFaces();
 }
 
 /**

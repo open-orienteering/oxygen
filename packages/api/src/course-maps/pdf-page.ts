@@ -10,14 +10,13 @@
  * `graphics` rows stay as uploaded).
  */
 
-import { readFile } from "node:fs/promises";
 import { course, courseMapObjectSchema, courseMapOverridesSchema, mapGeo, windowBoundingBox, type MapWindow } from "@oxygen/shared";
 import { type ColourMode, PdfWriter, composePage, writePage, type PageInput } from "@oxygen/shared/print";
 import { z } from "zod";
 import type { PrismaClient, Prisma } from "../generated/prisma/client.js";
 import { getBlob } from "../map-store/blob-store.js";
 import { type PreparedDocument, WINDOW_OBJECT_MARGIN_MM, objectsNear, prepareDocument } from "../render/window-raster.js";
-import { BUNDLED_FONT_FILES, loadBundledFont } from "../render/fonts.js";
+import { BUNDLED_FONT_FILES, bundledPdfFaces, loadBundledFonts } from "../render/fonts.js";
 import { type BaseMapInfo, getBaseMapInfo } from "./map-source.js";
 import { type LayoutControlSource, type LayoutTemplateSource, layoutControlsFromCourseControls } from "./resolve-layout.js";
 import { type SheetInput, resolveSheet } from "./resolve-sheet.js";
@@ -109,9 +108,7 @@ export function pageInputFor(doc: PreparedDocument, sheet: SheetInput, geo: mapG
 }
 
 async function fontFaces() {
-  return Promise.all(
-    (["liberation-sans", "liberation-sans-narrow"] as const).map(async (family) => ({ family, data: new Uint8Array(await readFile(BUNDLED_FONT_FILES[family].path)) })),
-  );
+  return bundledPdfFaces();
 }
 
 /**
@@ -122,7 +119,7 @@ async function fontFaces() {
 export async function renderCoursePages(opts: CoursePagesOptions): Promise<CoursePagesResult> {
   const mode = opts.mode ?? "cmyk";
   const warnings: string[] = [];
-  const fonts = await Promise.all([loadBundledFont("liberation-sans"), loadBundledFont("liberation-sans-narrow")]);
+  const fonts = await loadBundledFonts();
   const writer = await PdfWriter.create({ faces: await fontFaces(), deterministic: opts.deterministic, info: opts.info, text: opts.text });
   warnings.push(...writer.warnings);
   const geo = documentPaperFrame(opts.document, opts.rotationCorrectionDeg);

@@ -462,7 +462,7 @@ glyph; the instance transform is the point at that length with
 - Font resolution: the first font in `fonts` whose `family` matches the
   symbol **and** whose face matches (`weight ≥ 600` is bold, `italic`),
   else the family's first font — silently, the face-level analogue of the
-  importer's `FONT_SUBSTITUTED` (only Regular faces ship, §4.10). A face
+  importer's `FONT_SUBSTITUTED` (Sans ships Regular and Bold, Narrow Regular only, §4.10; a bold symbol of a family without a bold face draws regular). A face
   is read from `head.macStyle` (bit 0 bold, bit 1 italic) and recorded in
   the stream's `FontRef`. A family with no font loaded draws nothing
   (`NO_FONT`). Fonts are read by the
@@ -569,28 +569,36 @@ glyph; the instance transform is the point at that length with
 
 ### 4.10 Fonts shipped
 
-`packages/shared/fonts/` holds Liberation Sans Regular and Liberation
-Sans Narrow Regular from the Liberation **1.07** series — the only series
+`packages/shared/fonts/` holds Liberation Sans Regular, Liberation Sans
+Bold and Liberation Sans Narrow Regular from the Liberation **1.07** series — the only series
 with the Narrow face (metric-compatible with Arial Narrow, which the
 corpus uses). Note the licence: 1.07 is GPLv2 with the font-embedding
 exception, not the SIL OFL of Liberation 2.x as 04 §4.4 assumed; both are
 compatible with Oxygen's AGPL and with embedding in PDFs. `LICENSE` in
-the directory is the upstream text. The server loads them through
-`packages/api/src/render/fonts.ts`.
+the directory is the upstream text and covers all three files (the Bold
+is taken from 1.07 too, byte-for-byte the series of the Regular, so one
+licence covers the directory). Bold exists for Sans only; Narrow has no
+bold face and a bold Narrow symbol draws in Narrow Regular (§4.9). The
+server loads the faces through `packages/api/src/render/fonts.ts`
+(`loadBundledFonts()` / `bundledPdfFaces()`, regular before bold), the
+viewer through `packages/web/src/lib/map-fonts.ts`. A face is identified
+by family **and** `bold`: the PDF writer embeds Sans Bold as its own font
+object (`…+LiberationSans-Bold`), the arena path's glyph lookup keys
+`family[/bold]/glyphId`, and the geometry caches likewise.
 
 `packages/shared/fonts/msdf/` holds the WebGL2 backend's **text atlas**
-(§5.2 "Text atlas"), generated from these two files and committed:
+(§5.2 "Text atlas"), generated from these three files and committed:
 
-| Page | Code points | Image | Glyphs (Sans + Narrow) |
+| Page | Code points | Image | Glyphs (Sans + Narrow + Bold) |
 |---|---|---|---:|
-| `text-atlas.latin.{png,json}` | ASCII U+0020–007E, Latin-1 Supplement U+00A0–00FF, Latin Extended-A U+0100–017F, general punctuation U+2010–2027, € U+20AC | 724 × 724 | 334 + 334 |
-| `text-atlas.cyrillic.{png,json}` | Cyrillic U+0400–04FF (what the faces have: U+0400–045F, 0472–0473, 0490–0491) | 416 × 416 | 100 + 100 |
+| `text-atlas.latin.{png,json}` | ASCII U+0020–007E, Latin-1 Supplement U+00A0–00FF, Latin Extended-A U+0100–017F, general punctuation U+2010–2027, € U+20AC | 900 × 900 | 334 + 334 + 334 |
+| `text-atlas.cyrillic.{png,json}` | Cyrillic U+0400–04FF (what the faces have: U+0400–045F, 0472–0473, 0490–0491) | 516 × 516 | 100 + 100 + 100 |
 
-Both faces share each page. MTSDF (RGB multi-channel signed distance,
+All three faces share each page; the Bold face is marked `"bold": true` in the JSON. MTSDF (RGB multi-channel signed distance,
 A true signed distance), 32 px per em, distance range 8 px (0.25 em),
 keyed by **glyph id** (what a `TextPass` carries); a glyph on the Latin
 page is not repeated on the Cyrillic page; empty glyphs (space) have no
-entry. The JSON records per face the TTF's SHA-256 and `unitsPerEm`,
+entry. The JSON records per face (`family`, `bold`) the TTF's SHA-256 and `unitsPerEm`,
 and per glyph its plane bounds (em, y-up, relative to the glyph origin,
 including half the range) and atlas bounds (px, top-left origin).
 
@@ -1407,7 +1415,7 @@ matrix agree to < 0.5 CSS px at every point, rotation and DPR included
 
 Lifecycle: on mount the layer creates the `MapGlRenderer` and the engine
 over `workerTransport()` with the budget, then loads the fonts
-(`lib/map-fonts.ts`, the two Liberation faces of §4.10, fetched once per
+(`lib/map-fonts.ts`, the three Liberation faces of §4.10, fetched once per
 session) and the text atlas pages the document's strings need (§5.2
 "Text atlas"; Latin alone, then none, if a page fails) and calls
 `engine.load` with the document bytes (a copy: the

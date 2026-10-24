@@ -16,17 +16,19 @@ import { MapGlRenderer, hexToRgb, type View } from "../../map-gl/renderer";
 import { MapGlEngine, inlineTransport } from "../../map-gl/engine";
 import { loadMapFonts, loadTextAtlas } from "../../lib/map-fonts";
 import liberationSansUrl from "../../../../shared/fonts/LiberationSans-Regular.ttf?url";
+import liberationSansBoldUrl from "../../../../shared/fonts/LiberationSans-Bold.ttf?url";
 import liberationSansNarrowUrl from "../../../../shared/fonts/LiberationSansNarrow-Regular.ttf?url";
 
-const FONT_URLS: Partial<Record<render.FontFamily, string>> = {
-  "liberation-sans": liberationSansUrl,
-  "liberation-sans-narrow": liberationSansNarrowUrl,
-};
+const FONT_URLS: [render.FontFamily, string][] = [
+  ["liberation-sans", liberationSansUrl],
+  ["liberation-sans-narrow", liberationSansNarrowUrl],
+  ["liberation-sans", liberationSansBoldUrl],
+];
 
 let fontsPromise: Promise<render.TrueTypeFont[]> | undefined;
 function loadFonts(): Promise<render.TrueTypeFont[]> {
   fontsPromise ??= Promise.all(
-    (Object.entries(FONT_URLS) as [render.FontFamily, string][]).map(async ([family, url]) => {
+    FONT_URLS.map(async ([family, url]) => {
       const buf = await (await fetch(url)).arrayBuffer();
       return render.parseTrueType(buf, family);
     }),
