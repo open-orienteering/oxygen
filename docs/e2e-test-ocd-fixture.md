@@ -36,7 +36,14 @@ none of that.
   tile rendering and map-mm → WGS84 conversion.
 - E2E specs: `competition`, `courses`, `map-control-circles`,
   `map-multicourse` (course import + map upload flows), `course-editor`
-  (the overprint-cut targets above).
+  (the overprint-cut targets above), `map-vector-layer` (a black 505 path
+  on white paper, top right, for the lower-purple probe).
+- The colour table puts Yellow above Blue (`DEFAULT_COLORS`), so the
+  aligned stack has lower purple below the yellow area: under the
+  `vector` pipeline the fixture's own courses are hidden where the 403
+  area covers them (`docs/map-rendering.md` §8). Specs read course
+  numbers from the viewer's mirror, not from pixels; the vector-layer
+  probe makes its crossing outside the yellow.
 - Integration tests: `course-import-class-fallback`, `course-import-coords`,
   `map-tiles`, `course-export`, `description-autodetect` (asserts the
   boulder/building coordinates above), `overprint-cuts` (rim slit and
