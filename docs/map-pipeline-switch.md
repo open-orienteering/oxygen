@@ -130,13 +130,40 @@ draw the new map engine; showing the classic map."). The event stays
 With `allowLegacy` false there is no fallback: the layer shows its
 "cannot draw the map" message (`data-status="webgl"`).
 
-### 3.4 Not gated yet
+### 3.4 Print path
 
-09 §3 lists two more reads. Neither has a second path to switch to in
-slice B, so the rule is recorded and nothing is routed:
+`GET /api/maps/:nameId/maps.pdf` (C3) and the layout-editor preview
+`GET /api/maps/:nameId/window.png` (C6) read the switch on the server,
+through `getBaseMapInfo` (`course-print.md` §10.1):
 
-- **Print path** (`maps.pdf`): stays on the legacy path for both values
-  until slice C.
+```
+print = event == "vector" ∧ latest map_files row pins a document ? "vector" : "legacy"
+```
+
+- `vector`: `maps.pdf` composes the pages from the pinned document
+  (`course-print.md` §8.2, CMYK, no `rsvg-convert`); `window.png` draws
+  the document window with the reference raster (`course-print.md`
+  §10.2).
+- `legacy`, or `vector` without a pin: the OCAD → SVG path, `rsvg-convert`
+  for the PDF — unchanged.
+- A pinned document whose colour stack is not aligned
+  (`course.CourseStackError`) prints through the legacy path with a
+  logged warning (`course-print.md` §8.1).
+- `maps.pdf` names the path in `X-Print-Pipeline: vector | legacy |
+  legacy-fallback`.
+- Both paths read the same template, course-map, course, control and
+  graphics rows and write nothing: rollback is flipping the event back.
+  There is no WebGL2 condition — the server draws — and `allowLegacy`
+  does not enter: a `vector` event without a pin has no document to
+  print from.
+- `rsvg-convert` and `fonts-liberation` stay in the image until slice E
+  removes the legacy path (09 §9 step 5).
+
+### 3.5 Not gated yet
+
+09 §3 lists two more reads. Neither has a second path to switch to yet,
+so the rule is recorded and nothing is routed:
+
 - **Editor**: the course editor (`CourseEditorPage` over `MapPanel` with
   `editor`) mounts for both values until slice D adds the new editor;
   under `vector` it edits over the vector base layer.
@@ -177,7 +204,11 @@ value (09 §3, §10). `playwright.config.ts`:
 
 - `MAP_PIPELINE_SPECS` — `webserial.spec.ts` (post-readout map),
   `mobile-layout.spec.ts` (both named by the 09 §4 B gate),
-  `map-viewer-gestures.spec.ts`.
+  `map-viewer-gestures.spec.ts`, `map-control-circles.spec.ts` and
+  `map-multicourse.spec.ts` (the course overlay, C4), `course-maps.spec.ts`
+  (the print path and the layout editor's `window.png`, C3; it uploads
+  the map through `course.uploadMap` so both projects have a pinned
+  document).
 - Projects `map-legacy` and `map-vector` match exactly those files with
   `use: { mapPipeline }`; `chromium` ignores them and runs everything
   else once.
@@ -195,7 +226,11 @@ value (09 §3, §10). `playwright.config.ts`:
 - A dual-run spec that asserts on tiles branches on the `mapPipeline`
   fixture (`mobile-layout.spec.ts` "switching events resets viewport and
   tile state": tiles of the current event under `legacy`, the vector
-  layer's first view and no tile image under `vector`).
+  layer's first view and no tile image under `vector`). One that reads
+  the course overlay's control numbers takes them from
+  `e2e/helpers/course-labels.ts`: SVG text under `legacy`, the GL course
+  layer's `course-label` mirror under `vector` (`map-rendering.md` §5.4
+  "Overlay").
 
 ## 6. Tests
 
@@ -206,17 +241,21 @@ value (09 §3, §10). `playwright.config.ts`:
 | `packages/api/src/__tests__/integration/lease.test.ts` "refreshes cloud-owned settings…" | a flip on the cloud reaches the leased venue copy (the column is not in `EXCLUDED_FIELDS`) |
 | `packages/api/src/__tests__/integration/map-tiles.test.ts` "skips the pre-cache for a vector event" | the poll answers `{0,0,false}` and renders nothing; a requested tile is served; no background crawl to other zooms |
 | `packages/web/src/lib/__tests__/map-pipeline.test.ts` | `resolveMapPipeline`: vector needs a document, unknown = legacy, WebGL2 fallback only while `allowLegacy` |
+| `packages/api/src/__tests__/integration/course-maps.test.ts` "window.png under a pinned document" | the editor preview reads the document only for `vector` + pin; unpinned stays legacy |
+| `packages/api/src/__tests__/integration/course-maps.test.ts` "maps.pdf route switch" | `vector` + pin prints through the composer (`X-Print-Pipeline: vector`, no rsvg); `legacy`, unpinned and flipped-back events through rsvg; `CourseStackError` falls back |
+| `e2e/course-maps.spec.ts` | under `map-legacy` and `map-vector`: the maps page's PDF downloads (page count, A4 size) and `X-Print-Pipeline` equal to the project's value |
 | `e2e/map-pipeline-switch.spec.ts` | toggle text and report line; on → vector layer, another page of the event draws vector with no tile request; off → tiles; without `allowLegacy` no toggle on a vector event and no report line on a legacy one; no WebGL2 → tiles + notice while allowed, the layer's message when not; a lost context → tiles + notice |
 | `e2e/map-vector-layer.spec.ts` | the vector layer in the viewer, the event switched through the column; a legacy event stays on tiles |
+| `e2e/map-control-circles.spec.ts`, `map-multicourse.spec.ts` | under `map-legacy` and `map-vector`: the selected course's code labels, sequence numbers for one course, codes for several, class pills and the sheet; `data-map-pipeline` and `data-course-layer` |
 | `e2e/webserial.spec.ts`, `mobile-layout.spec.ts`, `map-viewer-gestures.spec.ts` | the same flows under `map-legacy` and `map-vector`; each asserts `data-map-pipeline` equals the project's value; `webserial` "post-readout map" uploads the map, reads a card and checks the readout map (vector layer ready and no tile image under `vector`, tiles under `legacy`) |
 
 ## 7. Pending in this chapter
 
-- **Print path and editor** gates (§3.4): slices C and D.
+- **Editor** gate (§3.5): slice D.
 - **Admin UI for the instance flags**: none until slice E needs one.
 - **Dual-run list** grows with the slices that touch maps: candidates
-  `wide-screen-map-pane`, `kiosk-readout`, `map-control-circles`,
-  `course-editor` (C/D). `scripts/e2e-sharded.mjs` weights do not yet
-  count the second run of a dual spec.
+  `wide-screen-map-pane`, `kiosk-readout`, `course-editor` (D).
+  `scripts/e2e-sharded.mjs` weights do not yet count the second run of a
+  dual spec.
 - **Lost context recovery**: the panel falls back (or shows the message)
   and does not try the vector layer again until it remounts.

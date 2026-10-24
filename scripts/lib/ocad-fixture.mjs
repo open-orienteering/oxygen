@@ -52,12 +52,12 @@ function utf16le(str, byteLength) {
 
 const BASE_SYMBOL_SIZE = 24 + 2 + 2 + 28 + 64 + 484 + 128 + 64; // incl. the 64-byte gap
 
-function symbolHeader(buf, { size, symNum, otp, extent, colorIdx, description }) {
+function symbolHeader(buf, { size, symNum, otp, extent, colorIdx, description, flags = 0 }) {
   let o = 0;
   o = buf.writeInt32LE(size, o);
   o = buf.writeInt32LE(symNum, o);
   o = buf.writeInt8(otp, o); // symbol type: 1 point, 2 line, 3 area
-  o = buf.writeUInt8(0, o); // flags
+  o = buf.writeUInt8(flags, o); // flags: 1 rotatable
   o = buf.writeUInt8(0, o); // selected
   o = buf.writeUInt8(0, o); // status (0 = visible)
   o = buf.writeUInt8(0, o); // preferredDrawingTool
@@ -104,10 +104,11 @@ function writeElements(buf, o, elements) {
   return o;
 }
 
-export function pointSymbol({ symNum, extent, colorIdx, description, elements }) {
+/** `flags` 1 = rotatable (the object angle applies); OCAD leaves it clear on north-oriented symbols. */
+export function pointSymbol({ symNum, extent, colorIdx, description, elements, flags = 0 }) {
   const size = BASE_SYMBOL_SIZE + 4 + elementBytes(elements);
   const buf = Buffer.alloc(size);
-  let o = symbolHeader(buf, { size, symNum, otp: 1, extent, colorIdx, description });
+  let o = symbolHeader(buf, { size, symNum, otp: 1, extent, colorIdx, description, flags });
   o = buf.writeUInt16LE(elementDataSize(elements), o);
   o = buf.writeInt16LE(0, o); // reserved
   writeElements(buf, o, elements);
@@ -235,7 +236,7 @@ export function rectangleSymbol({ symNum, extent = 0, description, lineColor, li
  * `unicode` is the record's flag byte as the reader interprets it: 0 means
  * 16-bit text (what OCAD 2018 writes for text objects), 1 means 8-bit text.
  */
-function objectRecord({ sym, otp, coords, text = "", unicode = 1 }) {
+function objectRecord({ sym, otp, coords, text = "", unicode = 1, ang = 0 }) {
   const textSlots = text ? Math.ceil((text.length + 1) / 4) : 0;
   const size = 56 + coords.length * 8 + textSlots * 8;
   const buf = Buffer.alloc(size);
@@ -243,7 +244,7 @@ function objectRecord({ sym, otp, coords, text = "", unicode = 1 }) {
   o = buf.writeInt32LE(sym, o);
   o = buf.writeUInt8(otp, o);
   o = buf.writeUInt8(unicode, o);
-  o = buf.writeInt16LE(0, o); // ang
+  o = buf.writeInt16LE(ang, o); // 0.1°, counter-clockwise
   o = buf.writeInt32LE(0, o); // col
   o = buf.writeInt16LE(0, o); // lineWidth
   o = buf.writeInt16LE(0, o); // diamFlags
@@ -498,6 +499,51 @@ export function buildParityOcad() {
   const objects = [
     { sym: t.power.symNum, otp: 2, coords: [[-2000, 0], [-700, 0, 0, 1], [600, 0, 0, 1], [2000, 0]] },
     { sym: t.path.symNum, otp: 2, coords: [[-2000, -1000], [2000, -1000]] },
+  ];
+  return assembleOcad({ fileType: 0, strings, symbols, objects });
+}
+
+// ─── Rotated point objects (docs/map-import.md §3.3, C10) ───────────────────
+
+/**
+ * Club-full's north-oriented point symbols (flags 0) whose objects all
+ * carry an angle — 504.7 barrier, 512.3 footbridge, 519.0 tunnel with
+ * their glyphs as Club-full defines them — beside a rotatable 418.0, a
+ * centred-dot 109.1 with an angle and an unrotated footbridge. Angles are
+ * 0.1°, counter-clockwise.
+ */
+export const ROTATED_POINTS_OCAD = {
+  barrier: { symNum: 504007, description: "Barrier", flags: 0, ang: 1328, at: [-1500, 0],
+    elements: [
+      { type: 2, color: 1, coords: [[-54, 12], [54, 12], [54, -14], [-54, -14], [-54, 12]] },
+      { type: 1, color: 1, lineWidth: 13, coords: [[-51, -33], [-51, 31]] },
+      { type: 1, color: 1, lineWidth: 13, coords: [[52, -33], [52, 31]] },
+    ] },
+  footbridge: { symNum: 512003, description: "Footbridge", flags: 0, ang: -847, at: [-500, 0],
+    elements: [{ type: 1, color: 1, lineWidth: 25, coords: [[0, -59], [0, 59]] }] },
+  tunnel: { symNum: 519000, description: "Tunnel", flags: 0, ang: 1616, at: [500, 0],
+    elements: [
+      { type: 1, color: 1, lineWidth: 25, coords: [[-59, -7], [59, -7]] },
+      { type: 1, color: 1, lineWidth: 13, coords: [[-70, 31], [-54, -15]] },
+      { type: 1, color: 1, lineWidth: 13, coords: [[68, 31], [52, -17]] },
+    ] },
+  rotatable: { symNum: 418000, description: "Rotatable", flags: 1, ang: 900, at: [1500, 0],
+    elements: [{ type: 1, color: 1, lineWidth: 25, coords: [[-60, 0], [60, 0]] }, { type: 1, color: 1, lineWidth: 25, coords: [[60, 0], [60, 40]] }] },
+  knoll: { symNum: 109001, description: "Small knoll", flags: 0, ang: 450, at: [0, -1000],
+    elements: [{ type: 4, color: 1, diameter: 50, coords: [[0, 0]] }] },
+  /** An unrotated footbridge object (ang 0) at this position. */
+  footbridgeNorth: [-500, -1000],
+};
+
+export function buildRotatedPointsOcad() {
+  const t = ROTATED_POINTS_OCAD;
+  const strings = [...DEFAULT_COLORS, WHITE, { recType: 1039, text: georeferenceString({ scale: 10000, easting: 500000, northing: 6500000 }) }];
+  const kinds = [t.barrier, t.footbridge, t.tunnel, t.rotatable, t.knoll];
+  const extent = (k) => Math.max(...k.elements.flatMap((e) => e.coords.flat().map(Math.abs))) + 25;
+  const symbols = kinds.map((k) => pointSymbol({ symNum: k.symNum, extent: extent(k), colorIdx: 1, description: k.description, elements: k.elements, flags: k.flags }));
+  const objects = [
+    ...kinds.map((k) => ({ sym: k.symNum, otp: 1, ang: k.ang, coords: [k.at] })),
+    { sym: t.footbridge.symNum, otp: 1, coords: [t.footbridgeNorth] },
   ];
   return assembleOcad({ fileType: 0, strings, symbols, objects });
 }

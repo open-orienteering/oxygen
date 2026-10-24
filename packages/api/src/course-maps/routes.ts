@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import type { FastifyInstance } from "fastify";
 import {
+  course,
   courseMapObjectSchema,
   courseMapOverridesSchema,
   mapWindowForFrame,
@@ -18,9 +19,18 @@ import {
 import { composeMapPageSvg, renderBaseMapWindow } from "./map-page-svg.js";
 import { graphicToResolved } from "./graphics.js";
 import { getBaseMapInfo, loadBaseMapSvg } from "./map-source.js";
+import { getBlob } from "../map-store/blob-store.js";
+import { prepareDocument, renderDocumentWindow } from "../render/window-raster.js";
 import { layoutControlsFromCourseControls, resolveMapLayout } from "./resolve-layout.js";
 import { LruCache } from "./lru-cache.js";
 import { RsvgConverter, mergePdfPages } from "./svg-to-pdf.js";
+import {
+  type PrintGraphic,
+  type PrintMapRow,
+  pinnedPrintSource,
+  sheetForMapRow,
+} from "./pdf-page.js";
+import { printGate, renderCoursePagesInWorker, resetPrintWorkers } from "./print-worker-host.js";
 
 type Db = ReturnType<typeof prisma>;
 
@@ -144,15 +154,14 @@ type AllControlRow = {
 };
 
 /**
- * Data-URI / inline-SVG resolver for every graphic referenced by the maps
- * being exported. Loaded once per request; unknown ids resolve to null and
- * the object is simply skipped.
+ * Every graphic referenced by the maps being exported (event or club
+ * scope), by id. Loaded once per request; unknown ids are simply absent.
  */
-async function buildGraphicResolver(
+async function loadGraphics(
   db: Db,
   eventId: bigint,
   rows: MapRow[],
-): Promise<(graphicId: number) => ResolvedMapGraphic | null> {
+): Promise<Map<number, PrintGraphic>> {
   const ids = new Set<bigint>();
   for (const row of rows) {
     for (const source of [row.objects, row.template?.objects]) {
@@ -163,7 +172,7 @@ async function buildGraphicResolver(
       }
     }
   }
-  if (ids.size === 0) return () => null;
+  if (ids.size === 0) return new Map();
   const graphics = await db.graphic.findMany({
     where: {
       id: { in: [...ids] },
@@ -171,12 +180,24 @@ async function buildGraphicResolver(
     },
     select: { id: true, mime: true, data: true },
   });
-  const resolved = new Map<number, ResolvedMapGraphic | null>();
-  for (const graphic of graphics) {
-    resolved.set(
+  return new Map(
+    graphics.map((graphic) => [
       Number(graphic.id),
-      graphicToResolved(graphic.mime, Buffer.from(graphic.data)),
-    );
+      { mime: graphic.mime, data: new Uint8Array(graphic.data) },
+    ]),
+  );
+}
+
+/**
+ * Data-URI / inline-SVG resolver for the legacy page; unknown ids resolve
+ * to null and the object is simply skipped.
+ */
+function graphicResolver(
+  graphics: Map<number, PrintGraphic>,
+): (graphicId: number) => ResolvedMapGraphic | null {
+  const resolved = new Map<number, ResolvedMapGraphic | null>();
+  for (const [id, graphic] of graphics) {
+    resolved.set(id, graphicToResolved(graphic.mime, Buffer.from(graphic.data)));
   }
   return (graphicId) => resolved.get(graphicId) ?? null;
 }
@@ -236,10 +257,24 @@ async function renderPage(
   });
 }
 
+/** Which path drew a `maps.pdf` response (`X-Print-Pipeline`, docs/course-print.md §8.1). */
+export type PrintPipeline = "vector" | "legacy" | "legacy-fallback";
+
 export function registerCourseMapRoutes(
   server: FastifyInstance,
-  options: { converter?: Pick<RsvgConverter, "convert"> } = {},
+  options: {
+    converter?: Pick<RsvgConverter, "convert">;
+    /** The composer's page writer (tests inject a failing one). */
+    renderCoursePages?: typeof renderCoursePagesInWorker;
+  } = {},
 ): void {
+  const renderVectorPages = options.renderCoursePages ?? renderCoursePagesInWorker;
+  // The print workers go with the server (docs/course-print.md §8.2). The
+  // pool is process-global: one server registers in production; a test's
+  // throw-away server resets it and the next print starts a fresh worker.
+  server.addHook("onClose", async () => {
+    await resetPrintWorkers();
+  });
   server.get<{
     Params: { nameId: string };
     Querystring: {
@@ -274,23 +309,64 @@ export function registerCourseMapRoutes(
           description: true,
         },
       });
-      const resolveGraphic = await buildGraphicResolver(db, event.id, rows);
-      const converter = options.converter ?? new RsvgConverter();
-      const pages: Buffer[] = [];
-      for (const row of rows) {
-        pages.push(
-          await converter.convert(
-            await renderPage(db, event, row, allControls, resolveGraphic),
-          ),
-        );
+      const graphics = await loadGraphics(db, event.id, rows);
+      // docs/course-print.md §7.1: one page is "<event> · <map>".
+      const info = {
+        title: rows.length === 1 ? `${event.name} · ${rows[0].name}` : `${event.name} maps`,
+        author: event.organizerName || undefined,
+      };
+      let body: Buffer | null = null;
+      let pipeline: PrintPipeline = "legacy";
+      // The switch (docs/course-print.md §8): `vector` with a pinned
+      // document prints through the composer; everything else, and a
+      // document whose colour stack is not aligned, through rsvg.
+      const pinned = await pinnedPrintSource(db, event.id);
+      if (pinned) {
+        try {
+          const sheets = rows.map((row) =>
+            sheetForMapRow(row, {
+              event: { name: event.name, date: event.date },
+              allControls,
+              mapInfo: pinned.info,
+            }),
+          );
+          // A worker slot, then a permit like every render, but no queue
+          // cap: a 503 would arrive as a broken download (course-print.md
+          // §8.2). Composing runs in the print worker, off the event loop.
+          const out = await printGate(() => renderGate().run(() =>
+            renderVectorPages({
+              document: { hash: pinned.hash, bytes: pinned.bytes },
+              rotationCorrectionDeg: pinned.rotationCorrectionDeg,
+              sheets,
+              graphics,
+              mode: "cmyk",
+              info,
+              onPage: (page) => {
+                for (const warning of page.warnings) req.log.warn({ nameId }, `maps.pdf: ${warning}`);
+              },
+            }),
+          ));
+          body = Buffer.from(out.bytes);
+          pipeline = "vector";
+        } catch (error) {
+          if (!(error instanceof course.CourseStackError)) throw error;
+          req.log.warn({ nameId, hash: pinned.info.document?.hash }, `maps.pdf: ${error.message}; printing through the legacy path`);
+          pipeline = "legacy-fallback";
+        }
       }
-      const body =
-        pages.length === 1
-          ? pages[0]
-          : await mergePdfPages(pages, {
-              title: `${event.name} maps`,
-              author: event.organizerName || undefined,
-            });
+      if (!body) {
+        const resolveGraphic = graphicResolver(graphics);
+        const converter = options.converter ?? new RsvgConverter();
+        const pages: Buffer[] = [];
+        for (const row of rows) {
+          pages.push(
+            await converter.convert(
+              await renderPage(db, event, row, allControls, resolveGraphic),
+            ),
+          );
+        }
+        body = pages.length === 1 ? pages[0] : await mergePdfPages(pages, info);
+      }
       const filename =
         rows.length === 1
           ? `${safeFilename(event.nameId)}_${safeFilename(rows[0].name)}.pdf`
@@ -299,6 +375,7 @@ export function registerCourseMapRoutes(
         .header("Content-Type", "application/pdf")
         .header("Content-Disposition", `attachment; filename="${filename}"`)
         .header("Cache-Control", "no-store")
+        .header("X-Print-Pipeline", pipeline)
         .send(body);
     } catch (error) {
       req.log.error(error);
@@ -392,6 +469,28 @@ export function registerCourseMapRoutes(
         printScale,
         rotation,
       );
+      if (mapInfo.document) {
+        // `vector` event with a pinned document: the reference raster
+        // (docs/course-print.md §10), under the same permit pool and cache.
+        const { hash } = mapInfo.document;
+        const prepared = await prepareDocument(hash, async () => {
+          const bytes = await getBlob(db, "map_documents", hash);
+          if (!bytes) throw new Error("Pinned map document is missing");
+          return bytes;
+        });
+        const body = await renderGate().run(
+          () => renderDocumentWindow(prepared, { window, widthPx, heightPx, layer, hash }),
+          { maxQueue: renderMaxQueue() },
+        );
+        const etag = `"${createHash("sha256").update(body).digest("base64url")}"`;
+        windowPngCache.set(cacheKey, { body, etag });
+        return reply
+          .header("Content-Type", "image/png")
+          .header("Cache-Control", "private, max-age=3600")
+          .header("ETag", etag)
+          .header("X-Cache", "miss")
+          .send(body);
+      }
       const { layers } = await loadBaseMapSvg(db, event.id, window);
       const source =
         layer === "ink"

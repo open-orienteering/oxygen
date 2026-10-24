@@ -8,6 +8,7 @@
 
 import type { render } from "@oxygen/shared";
 import liberationSansUrl from "../../../shared/fonts/LiberationSans-Regular.ttf?url";
+import liberationSansBoldUrl from "../../../shared/fonts/LiberationSans-Bold.ttf?url";
 import liberationSansNarrowUrl from "../../../shared/fonts/LiberationSansNarrow-Regular.ttf?url";
 import latinJsonUrl from "../../../shared/fonts/msdf/text-atlas.latin.json?url";
 import latinPngUrl from "../../../shared/fonts/msdf/text-atlas.latin.png?url";
@@ -24,6 +25,7 @@ export interface MapFontBytes {
 const FONT_FILES: [render.FontFamily, string][] = [
   ["liberation-sans", liberationSansUrl],
   ["liberation-sans-narrow", liberationSansNarrowUrl],
+  ["liberation-sans", liberationSansBoldUrl],
 ];
 
 let fonts: Promise<MapFontBytes[]> | undefined;

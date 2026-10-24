@@ -9,7 +9,8 @@ chapter derives from is `docs/research/vector-map-pipeline/04-render-core.md`;
 when the two disagree, this document wins.
 
 This chapter is normative for the code in `packages/shared/src/render/`,
-`packages/api/src/render/` and `packages/web/src/map-gl/`.
+`packages/shared/src/print/operators.ts` (§5.3), `packages/api/src/render/`
+and `packages/web/src/map-gl/`.
 
 ## 1. Shape of the pipeline
 
@@ -411,7 +412,10 @@ glyph; the instance transform is the point at that length with
 - A pass per part, in the part's colour, with one instance per
   placement; the same `Glyph` object registers once.
 - A point object's angle applies only when `orientation` is `object`
-  and the glyph is `rotatable`; otherwise the glyph is north-up.
+  and the glyph is `rotatable`; otherwise the glyph is north-up. The
+  OCAD importer turns a north-oriented symbol whose objects carry an
+  angle into `object` (`map-import.md` §3.3, `ocad-15`, C10), so this
+  rule and OCAD's drawing agree.
 
 ### 4.7 Areas: fill, hatch, pattern, border
 
@@ -461,7 +465,7 @@ glyph; the instance transform is the point at that length with
 - Font resolution: the first font in `fonts` whose `family` matches the
   symbol **and** whose face matches (`weight ≥ 600` is bold, `italic`),
   else the family's first font — silently, the face-level analogue of the
-  importer's `FONT_SUBSTITUTED` (only Regular faces ship, §4.10). A face
+  importer's `FONT_SUBSTITUTED` (Sans ships Regular and Bold, Narrow Regular only, §4.10; a bold symbol of a family without a bold face draws regular). A face
   is read from `head.macStyle` (bit 0 bold, bit 1 italic) and recorded in
   the stream's `FontRef`. A family with no font loaded draws nothing
   (`NO_FONT`). Fonts are read by the
@@ -568,28 +572,36 @@ glyph; the instance transform is the point at that length with
 
 ### 4.10 Fonts shipped
 
-`packages/shared/fonts/` holds Liberation Sans Regular and Liberation
-Sans Narrow Regular from the Liberation **1.07** series — the only series
+`packages/shared/fonts/` holds Liberation Sans Regular, Liberation Sans
+Bold and Liberation Sans Narrow Regular from the Liberation **1.07** series — the only series
 with the Narrow face (metric-compatible with Arial Narrow, which the
 corpus uses). Note the licence: 1.07 is GPLv2 with the font-embedding
 exception, not the SIL OFL of Liberation 2.x as 04 §4.4 assumed; both are
 compatible with Oxygen's AGPL and with embedding in PDFs. `LICENSE` in
-the directory is the upstream text. The server loads them through
-`packages/api/src/render/fonts.ts`.
+the directory is the upstream text and covers all three files (the Bold
+is taken from 1.07 too, byte-for-byte the series of the Regular, so one
+licence covers the directory). Bold exists for Sans only; Narrow has no
+bold face and a bold Narrow symbol draws in Narrow Regular (§4.9). The
+server loads the faces through `packages/api/src/render/fonts.ts`
+(`loadBundledFonts()` / `bundledPdfFaces()`, regular before bold), the
+viewer through `packages/web/src/lib/map-fonts.ts`. A face is identified
+by family **and** `bold`: the PDF writer embeds Sans Bold as its own font
+object (`…+LiberationSans-Bold`), the arena path's glyph lookup keys
+`family[/bold]/glyphId`, and the geometry caches likewise.
 
 `packages/shared/fonts/msdf/` holds the WebGL2 backend's **text atlas**
-(§5.2 "Text atlas"), generated from these two files and committed:
+(§5.2 "Text atlas"), generated from these three files and committed:
 
-| Page | Code points | Image | Glyphs (Sans + Narrow) |
+| Page | Code points | Image | Glyphs (Sans + Narrow + Bold) |
 |---|---|---|---:|
-| `text-atlas.latin.{png,json}` | ASCII U+0020–007E, Latin-1 Supplement U+00A0–00FF, Latin Extended-A U+0100–017F, general punctuation U+2010–2027, € U+20AC | 724 × 724 | 334 + 334 |
-| `text-atlas.cyrillic.{png,json}` | Cyrillic U+0400–04FF (what the faces have: U+0400–045F, 0472–0473, 0490–0491) | 416 × 416 | 100 + 100 |
+| `text-atlas.latin.{png,json}` | ASCII U+0020–007E, Latin-1 Supplement U+00A0–00FF, Latin Extended-A U+0100–017F, general punctuation U+2010–2027, € U+20AC | 900 × 900 | 334 + 334 + 334 |
+| `text-atlas.cyrillic.{png,json}` | Cyrillic U+0400–04FF (what the faces have: U+0400–045F, 0472–0473, 0490–0491) | 516 × 516 | 100 + 100 + 100 |
 
-Both faces share each page. MTSDF (RGB multi-channel signed distance,
+All three faces share each page; the Bold face is marked `"bold": true` in the JSON. MTSDF (RGB multi-channel signed distance,
 A true signed distance), 32 px per em, distance range 8 px (0.25 em),
 keyed by **glyph id** (what a `TextPass` carries); a glyph on the Latin
 page is not repeated on the Cyrillic page; empty glyphs (space) have no
-entry. The JSON records per face the TTF's SHA-256 and `unitsPerEm`,
+entry. The JSON records per face (`family`, `bold`) the TTF's SHA-256 and `unitsPerEm`,
 and per glyph its plane bounds (em, y-up, relative to the glyph origin,
 including half the range) and atlas bounds (px, top-left origin).
 
@@ -622,12 +634,18 @@ single `scale(1 −1)` group. Slices become subpaths of one `<path>`;
 glyph parts become one `<g id>` per (glyph, part, colour) and one `<use>`
 per instance; hatches are generated lines under a `<clipPath>`; text uses
 caller-supplied glyph outlines or, without them, em boxes (debug only,
-never an oracle).
+never an oracle). A `pointed` stroke with a `taper` is the shared
+`strokeOutline()` (`render/geometry.ts`) filled non-zero, as the PDF
+backend draws it (§5.3; SVG has no tapered stroke).
 
 This is the **oracle** of the golden-image tier. It is slow and simple on
-purpose and is never used to draw a map for use. Its one production job
-is previews (04 §4.1, 06 §5.2): document thumbnails and symbol swatches,
-rendered once and stored as cache (`docs/map-storage.md` §4.5). PNG
+purpose and is never used to draw a map for use. Its production jobs
+are previews (04 §4.1, 06 §5.2): document thumbnails and symbol swatches,
+rendered once and stored as cache (`docs/map-storage.md` §4.5), and — a
+second job, interim — the layout editor's `window.png` of a pinned
+document (`render/window-raster.ts`, `docs/course-print.md` §10): one
+request, one window, cached by document hash, drawn under the render
+gate with explicit `bounds` so the off-frame guard applies. PNG
 encoding is `encodePng` (sharp) in `render/reference-raster.ts`; the
 preview renderers are `render/previews.ts`.
 
@@ -672,7 +690,8 @@ Tests: `packages/shared/src/render/__tests__/swatch.test.ts` (sample
 geometry per kind, flags, 3× point, whole-pixel frame, determinism,
 every entry of both shipped libraries symbolises without warnings);
 `reference-svg.test.ts` (off-frame clip groups left out, partly
-overlapping kept); pixel probes in
+overlapping kept; a tapered pointed stroke is the `strokeOutline` path
+filled non-zero, a pointed one without taper a butt stroke); pixel probes in
 `packages/api/src/render/__tests__/previews.test.ts`.
 
 ### 5.2 WebGL2 (web)
@@ -757,7 +776,7 @@ Vertex layouts (`buckets.ts`):
 | atlas | 32 per mesh vertex | two RGBA32F texels: (x, y, ox, oy), (half width, 0, 0, 0); fill vertices have zero offset and width |
 | instance | 32 | glyph: f32 x, y, cos, sin, scale, atlas base, count, radius · text: f32 x, y, cos, sin, em size (µm), glyph-table entry, halo (em), 0 |
 | glyph table | 64 per text glyph | four RGBA32F texels: plane l, b, r, t (em) · uv u0, v0, u1, v1 · page, range (em), 0, 0 · 0 |
-| text page | 4 per atlas pixel | RGBA8, `LINEAR`, no mipmaps: Latin 2.0 MB, Cyrillic 0.7 MB |
+| text page | 4 per atlas pixel | RGBA8, `LINEAR`, no mipmaps: Latin 3.2 MB, Cyrillic 1.1 MB (three faces, C8) |
 
 The stroke vertex is 16 B rather than 04 §6.2's 8 B: widths mix inside
 one visible-set draw, so the half width is a per-vertex µm value rather
@@ -833,7 +852,8 @@ stencil passes; after, 17.
 bytes (base parts, large bucket, mesh atlas, text atlas pages and glyph
 table, the visible-set buffers — which
 hold every index, instance and clip-group array on the GPU) plus the
-resident detail parts' arena vertices against the budget. After every arrival and
+resident detail parts' arena vertices against the budget — and the dynamic
+bucket's vertices, which count as fixed (below). After every arrival and
 view change it evicts the least recently drawn detail parts until the
 total fits, never one in the drawn set; if the drawn set alone does not
 fit, the engine reports over budget (`EngineStats.overBudget`) rather
@@ -853,6 +873,7 @@ growth factor).
 |---|---|---|
 | `load` | document bytes + `DocumentRenderOptions` (or, dev only, render objects + symbols, or a symbolised stream), font files, the text atlas pages (JSON, in the renderer's page order), optional first view (a view, or "fit into w × h"), gate flag | `loaded`: summary (bounds, origin, grid, detail cells, the first view resolved, stage times, bytes, text: pages, glyphs resolved, glyphs missing), mesh atlas, every cell's base part, the large part — then, without a further request, the first view's detail parts unless it is below the gate |
 | `prepare` | bucket ids, most urgent first | replaces the queue; one `part` per id |
+| `course` | a generation number and the course layer's input without the document (`CourseLayerRequest`: structure, sites, objects, appearance, view options), or `null` | `course`: the generation, the dynamic bucket's part (or `null`), the stack to draw with, the derivation and symbol sizes, warnings, and the mesh atlas when it grew — "Dynamic bucket" below |
 | — | | `error` on a failed load |
 
 Every typed array goes back as a transferable. The worker decodes,
@@ -867,6 +888,76 @@ the dev page does it on the main thread). The caller creates the worker
 when the view mounts, before a document is known: under Vite dev its
 module graph takes ~150 ms to load (Sprint envelope `load` 314 → 147 ms
 once the dev page pre-warmed it).
+
+#### Dynamic bucket (C4)
+
+The course layer (`docs/course-layer.md`) is drawn by this backend as
+one more part — the **dynamic bucket** of 04 §7 — beside the static
+buckets, so map and course are one colour-ordered picture: lower purple
+under black, brown and blue line art, white-outs above the map's ink,
+upper purple on top. The viewer's use of it is §5.4 "Overlay".
+
+**Stack at load.** A load with `courseLayer: true` (the viewer's; the
+dev page and the bench leave it off) builds the static buckets on the
+**course-completed stack** `courseColourStack(header.colours)`
+(`course-layer.md` §1): when the document lacks upper white the row is
+inserted below upper purple and the bridged symbols are re-indexed
+(`remapRenderColours`) before `symbolise`, so every pass at or above
+upper purple carries the shifted index. The stack is a function of the
+document alone, so showing, changing or hiding a course never
+re-prepares a static part and the draw needs no index translation.
+`LoadSummary.colourStack` is the stack the parts index (the document's
+own without `courseLayer`) and `LoadSummary.courseLayer` says whether a
+course can be drawn: `{ supported: true, cutFeatures }`, or — a stack
+without both purples, `CourseStackError` — `{ supported: false, reason }`
+with the document drawn on its own stack, unchanged. The same load
+extracts the automatic-cut features once (`cutFeaturesOfDocument`,
+`course-layer.md` §3.4) and keeps the decoded context, the parsed fonts,
+the text pages and the mesh atlas builder for the course requests.
+
+**A course request.** `course { generation, input }` runs, in the worker,
+`courseLayer({ ...input, document, cutFeatures })`, `symbolise` on the
+layer's objects and symbols alone (its symbols already index the
+completed stack) and `prepareBucketPart(…, COURSE_BUCKET, every pass,
+"all")` — one part with every kind, bucket id `COURSE_BUCKET` (−2).
+Its range-table object ids continue after the document's stream objects
+(`courseRenderInput`'s `courseObjectOffset`), so `setHidden` can address
+document and course objects in one set. Glyph parts (701, 706) join the
+**same mesh atlas**, keyed by their geometry (the course stream's glyph
+ids are local to each run); growth is append-only, so the reply carries
+the whole atlas only when a mesh was added and every resident instance
+keeps its `base`. Numbers (704) are MSDF text resolved against the
+loaded pages like the document's (§"Text atlas"), `TEXT_*` warnings
+counted in the reply. The reply's `colours` is `layer.colours` — the
+completed stack plus a row per hex-coloured layout object on top
+(`course-layer.md` §3.6) — and it brings `derivation` (sites, labels,
+legs) and `metrics` (circle, start and finish radii, line width, digit
+height in paper mm) for the UI layer. `input: null` clears; a load
+without course support answers `part: null` and `COURSE_UNAVAILABLE`.
+The worker answers a request at once, between prepare slices.
+
+**Engine.** `MapGlEngine.setCourse(input | null)` posts the request with
+a new generation (one made before the load waits for it and is sent
+right after the load message); a reply whose generation is not the
+latest is dropped. The current reply's part is uploaded under key `C` —
+through `GpuArena.put` like any part, so a grow re-uploads it with the
+rest and nothing goes through `copyBufferSubData`
+(`docs/bugfix-adreno-arena-grow.md`) — and the previous one released;
+`setAtlas` replaces the mesh texture when the reply carries an atlas.
+The part is **always resident and always drawn**: appended to the
+visible set after the drawn cells and the large bucket at every zoom,
+gated or not, never evicted, its arena bytes counted as fixed. A reply
+rebuilds the visible set on the next `render` at once (not held by
+`ARRIVAL_REBUILD_MS`) and calls `onChange` for the redraw and `onCourse`
+with the derivation, sizes, stack and warnings. Within one colour the
+course draws after the map's own objects of that colour (it is the last
+part). `engine.colours` is the stack to draw with: the latest reply's,
+else the load's.
+
+**Cost.** A dragged control re-symbolises the whole layer (tens of
+objects): the 04 §7 budget of < 1 ms is the symbolisation's; the reply
+is one worker round trip, one part upload and one visible-set rebuild.
+Main-thread symbolisation for the drag is pending (§8).
 
 #### Text atlas (B3)
 
@@ -1224,16 +1315,20 @@ published on `window.__mapGlDoc` for Playwright.
 | `e2e/map-gl-golden.spec.ts` | the per-pass path against the reference raster; the **MSDF text tier**: `text-with-halo`, `lib-text`, `lib-halos` through the arena path (§6.2) |
 | `e2e/map-gl-doc.spec.ts` (text) | arena = per-pass compare also on `e2e/test.xmap` (text, MSDF vs outlines) within 0.5 %; its text resolves on the Latin page with nothing missing |
 | `e2e/map-vector-layer.spec.ts` (text) | the viewer requests the Latin page and not the Cyrillic one |
+| `map-gl/__tests__/worker-course.test.ts` | dynamic bucket: static parts on the completed stack (upper white below upper purple, rows above it +1 with their CMYK), the document's stack without `courseLayer`, an unaligned stack unsupported and unchanged; a course request → one `all` part at `COURSE_BUCKET` on the completed stack (lower-purple strokes, text instances, glyph meshes in the grown atlas, earlier meshes in place, object ids after the document's, everything transferable); no atlas when nothing was added; lower purple drawn under black in one visible set; `null` and unsupported replies; a white-out at upper white above black |
+| `map-gl/__tests__/engine.test.ts` (dynamic bucket) | `setCourse` uploads `C`, drawn below the zoom gate too, rebuilt at once, `onCourse` / `onChange`, `engine.colours` = the reply's; an overtaken reply dropped; `null` releases; a request before the load waits for it; course bytes fixed |
 
 ### 5.4 Viewer
 
 `MapViewer` hosts one base layer — the PNG tiles (`TileLayer`, legacy) or
 the map document drawn by §5.2's arena path (`VectorMapLayer`) — and keeps
 everything else it had: gestures, measure, compass and rotation lock, GPS,
-the course overlay, the editor's hit targets. The overlay (controls, legs,
-course geometry, GPS position and tracks, measure, selection) stays React
-SVG on top of the base layer in slice B (09 §4 B); it becomes document
-objects drawn by the renderer in slice C. `TileLayer.tsx` is unchanged.
+the course overlay, the editor's hit targets. Under `legacy` the overlay
+(controls, legs, course geometry, GPS position and tracks, measure,
+selection) is React SVG on top of the tiles, unchanged. Under `vector`
+the course itself is drawn by the renderer in colour order with the map
+(C4, "Overlay" below) and the SVG keeps the UI layer. `TileLayer.tsx` is
+unchanged.
 
 #### Selecting the layer
 
@@ -1323,7 +1418,7 @@ matrix agree to < 0.5 CSS px at every point, rotation and DPR included
 
 Lifecycle: on mount the layer creates the `MapGlRenderer` and the engine
 over `workerTransport()` with the budget, then loads the fonts
-(`lib/map-fonts.ts`, the two Liberation faces of §4.10, fetched once per
+(`lib/map-fonts.ts`, the three Liberation faces of §4.10, fetched once per
 session) and the text atlas pages the document's strings need (§5.2
 "Text atlas"; Latin alone, then none, if a page fails) and calls
 `engine.load` with the document bytes (a copy: the
@@ -1364,17 +1459,75 @@ In the paper view `MapViewer`:
 - mounts no `TileLayer`, polls no `/api/map-tile-progress`, and shows no
   editor loupe (`MapLoupe` magnifies tiles; the editor moves to the
   document in slice D);
-- has no ink split: the tiles draw the map in two halves so lower purple
-  sits under black, brown and blue line art; the vector layer is one
-  canvas under the overlay, so the overlay's purple is drawn above the
-  whole map (09 §4 B; the stacking returns with the course layer as
-  objects in slice C);
+- needs no ink split: the tiles draw the map in two halves so lower
+  purple sits under black, brown and blue line art; the vector layer
+  draws the course layer in the map's own colour order ("Overlay");
 - exposes `data-centre-x`, `data-centre-y` (µm), `data-px-per-um` and
   `data-rotation` on `map-viewer`, and keeps `data-center-lat` /
   `data-center-lng` (the view centre through `paperToWgs84`) and
   `data-zoom` (the Web Mercator zoom with the same ground resolution at
   the centre) with their legacy meaning, so specs written against tiles
   read the same numbers.
+
+#### Overlay (C4)
+
+Under `vector` the course is **part of the drawing**: `MapViewer` turns
+what it already has into the course layer's input and `VectorMapLayer`
+hands it to the engine's dynamic bucket (§5.2 "Dynamic bucket"), so the
+7xx symbols sort into the document's stack — lower purple (701, 703,
+705, 706, 708) under black, brown and blue line art, white-outs
+at upper white above the map's ink, upper purple (704, 707, 709,
+711) on top. What the layer draws and what it does not:
+
+| GL course layer (dynamic bucket) | SVG UI layer (React, screen widths) |
+|---|---|
+| start triangles (turned to the first control), circles with automatic and authored gaps, finish, legs clipped at circles and gapped at compact features, control numbers placed by the shared placer with manual offsets and leaders, imported courses' authored leg pieces and bends, circle gaps, 707 / 708 / 711 lines and 709 areas | editor hit targets (controls, legs, labels), selection ring, phantom, context-menu anchors, move warnings; status rings (readout punch state `ok` / `missing` / `extra`, highlighted control) around the GL symbol; completion rings, punch-count badges; the editor's faded off-course controls (left out of the layer, drawn faded); class leg pills (multi-course); GPS position and tracks; measure; the description sheet |
+
+**Input.** `courseLayerRequest()` (`lib/course-layer-request.ts`, pure;
+`course-layer.md` §5) from the viewer's props: sites are the visible,
+positioned controls at their own paper mm (the editor's dragged control
+and round-tripping moves applied, as the SVG drew them), the structure is
+the highlighted courses (one or an array; `null` when none), label offsets
+are the single course's (stored, pending or being dragged — only with the
+description sheet or the editor, as before), `labelMode` is `sequence`
+for one ordered course with the sheet or the editor and `code` otherwise,
+`allControls` when a drawn site is on no highlighted course, `objects:
+[]` (no layout objects reach the viewer) and `appearance: {}` — the
+library's sizes × the document factor (`course-layer.md` "Decisions":
+ISOM at 1:7 500 draws 5 mm-radius circles where the SVG drew 2.5 mm).
+`course.courseGeometries` is still read, but only for what an imported
+`ocd` course authored (`course-layer.md` §2): its `preclipped` legs as
+pieces, their course's control `cuts` as circle gaps, bent legs' paths
+and the 707 / 708 / 711 / 709 features. Automatic gaps and cuts of the
+stored GeoJSON are not read: the worker cuts from the document's own
+features (`cutFeaturesOfDocument`, extracted once per load). `MapPanel`
+passes what it passed before; every 09 §1 call site — kiosk,
+`CardReadout`, `CardMapPreview`, dashboard, `TracksPage`, the editor —
+follows through it.
+
+**UI layer geometry.** The engine's `onCourse` reply carries the layer's
+derivation (sites, number positions, legs) and the symbol sizes in paper
+mm; the UI layer sizes its hit targets and status rings by those sizes
+and puts the editor's leg hit-lines on the derived centre-to-centre legs
+and the label drag targets on the derived number positions (box 0.65 em
+per character, the layer's own estimate). A move or a label drag is a new
+request per pointer move — the layer re-derives and the reply redraws.
+
+**Fallback.** A document whose stack has no lower and upper purple
+(`LoadSummary.courseLayer.supported === false`, `CourseStackError`) keeps
+the SVG course overlay over the GL map — today's drawing, purple above
+the whole map. Before the load answers, the viewer assumes support.
+
+**Attributes.** `map-viewer` carries `data-course-layer="gl"` (vector
+with the layer) or `"svg"` (legacy, or the fallback). Under `gl` the
+viewer mirrors the layer as a hidden list: `course-layer` > one
+`course-site` per drawn site (`data-site-id`, `data-role`, `data-x/y` in
+paper mm) holding its `course-label` (`data-text`, `data-x/y`), and one
+`course-leg` per drawn leg piece (`data-course`, `data-leg`,
+`data-points` in paper mm) — what the canvas draws, for tests (`hidden`:
+not in the accessibility tree; an accessible map description is slice
+D's editor work). The SVG `control-label` / `control-circle-cut`
+elements exist only under `svg`.
 
 #### Call sites
 
@@ -1401,13 +1554,113 @@ changes for B4.
 | `lib/__tests__/map-pipeline.test.ts` | `resolveMapPipeline`: a document is required, the WebGL2 fallback (`docs/map-pipeline-switch.md` §6) |
 | `lib/__tests__/map-document-cache.test.ts` | route regex (documents, not previews); URL without query, `x-event-id` / `x-kiosk-key` headers; one request shared, same bytes; bounded memory; 401/403/404/5xx → kinds, failures not cached; offline; unreadable bytes; `storage.persist()` once, absent API |
 | `lib/__tests__/vector-map.test.ts` | paper frame with correction, bounds in mm, stack colours, proxy colours, budgets |
-| `e2e/map-vector-layer.spec.ts` | event `vector`: the pinned document by hash (no query, `x-event-id`), canvas ready and drawn, container-sized, no tile layer and no `/api/map-tile*` request, `data-*` attributes; wheel zoom keeps the paper point under the cursor (< 0.5 px); a GPS fix → follow centres it and the marker is at the viewer's centre; event `legacy`: tiles |
+| `e2e/map-vector-layer.spec.ts` | event `vector`: the pinned document by hash (no query, `x-event-id`), canvas ready and drawn, container-sized, no tile layer and no `/api/map-tile*` request, `data-*` attributes; wheel zoom keeps the paper point under the cursor (< 0.5 px); a GPS fix → follow centres it and the marker is at the viewer's centre; **lower purple under black**: a leg made across a black path on white paper (two controls through the API) is black at the crossing and lower purple 2 mm to either side, zoomed to ≥ 0.02 px/µm, with no SVG control label (fails with the course drawn on the top row); event `legacy`: tiles |
+| `lib/__tests__/course-layer-request.test.ts` | sites from visible positioned controls with kinds; highlighted courses as items (by flag or name, one or several, none → `null`); all-controls when a drawn site is on no course; sequence numbers only for one ordered course with the sheet or editor; single-course label offsets, pending ones winning; positions as given; faded controls left out; an imported course's preclipped legs → pieces, its cuts → circle gaps, extras; generated legs: bent path kept, automatic gaps and cuts not read, a leg count that does not match ignored |
+| `e2e/map-control-circles.spec.ts`, `e2e/map-multicourse.spec.ts` | under `map-legacy` and `map-vector`: code labels of the selected course (SVG text, or the GL layer's `course-label` mirror), sequence numbers for one course with descriptions, codes for several; pills and the sheet SVG text under both; `data-course-layer` |
 | `e2e/map-viewer-gestures.spec.ts`, `mobile-layout.spec.ts`, `course-editor.spec.ts`, `map-control-circles.spec.ts`, `map-multicourse.spec.ts`, `wide-screen-map-pane.spec.ts`, `webserial.spec.ts`, `kiosk*.spec.ts` | under the default `legacy` the mercator model reproduces the pre-B4 viewer; `webserial`, `mobile-layout`, `map-viewer-gestures` also run under `vector` (`docs/map-pipeline-switch.md` §5) |
 
-### 5.3 PDF (api)
+### 5.3 PDF (shared/print)
 
-*Not yet specified.* Slice C (`docs/course-print.md` owns the page model;
-this chapter owns how a pass is emitted as PDF content).
+`packages/shared/src/print/operators.ts` (C1, 2026-10-23):
+`passStreamOperators(stream, { colours, mode, resources, originUm })`
+turns a sorted stream into one content-stream fragment, pass by pass in
+stream order — the stream order *is* the painter's order (§3.6), so no
+reordering and no decision of the backend's own. `docs/course-print.md`
+owns everything around it: the writer, colour modes, fonts, the page.
+
+**Units** (05 §5.2; C11 2026-10-24). Coordinates are the stream's paper
+µm minus `originUm`, written as **integers in a layer unit `u`**
+(`unitUm`; `passStreamOperators` defaults to 1 µm). `mapLayerOperators`
+picks `u = layerUnitUm(matrix)` = 10 µm ÷ *n*, *n* the smallest whole
+number that keeps `u` at most **5 µm on the printed paper**
+(`PRINT_QUANTUM_UM`): 10 µm for a map reduced to half, 5 µm at 1:1,
+10/3 µm for a 1:15 000 map at 1:10 000, 10/6 µm at 1:5 000. Being a
+whole fraction of OCAD's 10 µm grid (`PRINT_GRID_UM`), and with the
+origin moved onto that grid, the source vertices of an OCAD map are
+written **exactly**; only computed points (dash-slice Béziers,
+`strokeOutline` rings, glyph and text origins, hatch ends) round, by at
+most ½ `u` per axis — ½√2 × 5 µm = 3.5 µm on paper, 0.035 px at the
+golden tier's 10 px/mm, ≤ 9 of its 16 levels on one edge. A 10 µm
+printed unit (7 µm worst case, ≈ 18 levels) was measured and moved
+`lib-borders` to 0.84 % and `lib-hatch` to 0.45 % (budget 0.5 %); at
+5 µm every golden ratio stays within 0.014 pp of the µm encoding
+(`course-print.md` §9.2). Widths (`w`) and text sizes (`Tf`) are written
+in `u` with up to 3 decimals. `mapLayerOperators` wraps the fragment as
+`q <matrix′> cm 4 M … Q`, where `matrix′` folds `u` and the origin's move
+onto the grid into the caller's matrix, so every point lands where the
+caller's matrix puts its µm; `layerMatrix({ scaleRatio, rotationDeg,
+atPt })` is `scaleRatio · 72 / 25 400` with the rotation
+(counter-clockwise), the origin landing on `atPt` — so a 1:15 000 map
+printed at 1:10 000 gets its 0.21 mm contours from the matrix, not the
+data. The layer `cm` is written with 9 decimals (6 would put the far
+edge of a 1 m window 0.25 mm off); instance matrices and `Tm` with 6
+(the JSON projection's precision, §3.7). The page composer (C2) picks
+origin, angle and point.
+
+**Anchors** (C11). Every `fill`, `stroke` and pointed outline is written
+under its own anchor — `q 1 0 0 1 ax ay cm <path> f* Q` — at the lower
+left corner of the path's control-point bounds (dash slices lie inside
+that hull), so its numbers are short and never negative: PDF path
+operands are absolute, and a translation per object is the relative
+encoding the grammar allows. The anchor is an integer in `u`, so the
+rounding is the unanchored one's; an anchor of `0 0` writes no `q … Q`. Colour and line style are set before
+the `q`, so the tracker is unaffected.
+
+| Pass | Operators |
+|---|---|
+| `fill` | fill colour; per ring `x y m`, `l` / `c` (Béziers kept, nothing flattened), `h`; then **`f*`** — even-odd, §3.1 (05's table said `f`, written before the rule was fixed). A ring whose last segment is a line back onto its start (as written) leaves that line to `h` — the same edge (C11); likewise every clip ring (`W n` / `W* n`) and every glyph-form fill ring. A closed *stroke* keeps it: its join at the start is the stream's |
+| `stroke` | stroke colour; `w J j` (cap butt / round / square / pointed → `J` 0 / 1 / 2 / 0; join miter / round / bevel → `j` 0 / 1 / 2); rings (`h` when closed); `S`. The mitre limit is `4 M` once per layer (`STROKE_MITRE_LIMIT`: the reference raster's and the GL strips' 4×, not 05's "`M 2`-ish") |
+| `stroke` with `slices` | one subpath per slice from `sliceSegments` (de Casteljau, exact Béziers) and **one** `S` for the pass — each subpath gets its own caps; never PDF's `d` dash array (§3.2) |
+| `stroke`, `cap: "pointed"` with a `taper` | `strokeOutline(path, { widthUm, join, taper, slices })` (`render/geometry.ts`) as fill colour + rings + **`f`** (non-zero: the outline is a union of counter-clockwise quads and join wedges, flattened at 5 µm, integers in `u`, under its anchor). The reference raster fills the same outline (§5.1). Without a taper: a butt `S` |
+| `glyph` | fill colour if the part has fills, stroke colour if it has strokes (a form inherits both); instances by their **turn class** (`c·k`, `s·k` to 6 decimals; C11): the unturned class, and any class used by ≥ `GLYPH_FORM_REUSE` (16) instances of the pass, draws a form whose `/Matrix` is that turn and scale ÷ `u` — `q 1 0 0 1 x y cm /Gn Do`, then per next instance of the class `1 0 0 1 dx dy cm /Gn Do` (integer translation from the one before; `cm` concatenates, `Do` brackets the form's own drawing), re-anchored by `Q` + a new absolute `q` every `CHAIN_LENGTH` (32) instances or when the class changes, so a reader that concatenates in single precision drifts ≤ ~0.1 µm; any other instance `q c·k s·k −s·k c·k x y cm /Gn Do Q` on the form whose `/Matrix` is `1/u` alone. Instances stay in stream order. `/Gn` is a **form XObject per glyph part and `/Matrix`**, shared by every colour that draws it: the mesh in glyph-local µm — fills `… h f*`, strokes `w J j … S`, no colour — with a `BBox` of the mesh bounds plus 4 × half the widest stroke. Below 16 uses an own form costs more (object, dictionary, a second copy of the mesh) than the instances' `cm` operands save: on the corpus, 2 → +7 %, 4 → +0.3 %, 8–16 → −1.2 % against no per-class forms |
+| `glyph` with `clip` | `q <clip rings> W* n` (even-odd, like the oracle's clip path), the instances, `Q` |
+| `hatch` | stroke colour; `q <area rings> W* n`, `w 0 J 0 j`, the `hatchLines()` set (§3.4, the reference generator) as `m l` pairs, `S`, `Q` |
+| `text` | `BT /Fn size Tf` (size in `u`) with `0 Tr` (fill: fill colour) or `1 Tr` (halo: stroke colour, `2 × haloWidthUm w 1 J 1 j`); per glyph `cos sin −sin cos x y Tm <gid> Tj` (`1 0 0 1 x y` without `angles`); `ET`. Glyph ids are the shaper's, written unchanged (Identity-H, `course-print.md` §3.1); one `Tm` per glyph because positions are absolute in the stream (no `TJ`). A halo pass sits at its own colour position because the stream is sorted (§3.5) |
+| `text`, outline fallback | per glyph `q k·cos k·sin −k·sin k·cos x y cm <outline rings> f* Q` with `k = sizeUm / unitsPerEm`; a halo strokes the outline at `2 · haloWidthUm / k` with round caps and joins — what the reference raster draws |
+
+**Graphics state.** A colour (`k` / `K` or `rg` / `RG`, `course-print.md`
+§2), `w`, `J`, `j` or `Tr` is written only when it changes; `q … Q`
+appears only around a clip, an anchor, an instance chain and an
+instance, and the tracker restores its state at a clip's `Q` (anchors and
+instances change nothing but the CTM). Consecutive passes of one colour share one colour operator
+(05 Appendix B's size arithmetic).
+
+**Clips.** `clipOperators(path, rule)` writes `<rings> W n` or `W* n` —
+the primitive for the composer's frame clip and for filter regions (05
+§5.3) once the stream carries them (`course-print.md` "Pending").
+
+Tests: `packages/shared/src/print/__tests__/operators.test.ts` (tier 1,
+05 §7) on the contract fixtures and the library scenes — a fill's exact
+operators (holes as closed subpaths, `f*`, the stack's CMYK); origin
+subtraction; `w J j` and `c` for a Bézier stroke; four slices → four
+subpaths and one `S`, no `d`; pointed + taper → the `strokeOutline`
+rings and `f`, pointed alone → butt; glyph instances as `cm … Do` with
+rotation and scale, one form per part, form content and `BBox`; one
+`q … W* n … Q` block per clip-mode pattern pass of `lib-pattern`; the
+hatch block; the `1 Tr` halo pass before the `0 Tr` fill; per-glyph `Tm`
+with angles; the outline fallback; per scene no `rg` in `cmyk` and no
+`k` in `rgb`; one colour operator per colour change with the stack's
+values; the layer `cm` for a 1:15 000 map at 1:10 000 and a rotation,
+never in exponent notation (a 0.01° tilt is `0.000000495`, not `4.95e-7`);
+round caps and joins on the fallback halo;
+`W n` / `W* n`. C11 adds: the anchor (`q 1 0 0 1 ax ay cm … Q`) on a
+fill, a Bézier stroke, a dash pass and a pointed outline, none at `0 0`;
+a fill ring's closing line left to `h`, a closed stroke's kept; `layerUnitUm` per
+scale ratio (≤ 5 µm printed, a whole fraction of 10 µm); `w` / `Tf` /
+`Tm` in the unit; the map layer's `cm` folding the unit and the origin's
+move onto the 10 µm grid (a point lands where the caller's matrix puts
+it), grid coordinates written exactly; **every fixture and library
+scene round-trips** — decoded (anchors, chains and `Tm` resolved) at a
+10 µm unit, the same operator sequence as the µm encoding and every point
+within ½ unit of it; a turn class used `GLYPH_FORM_REUSE` times → one form
+with that `/Matrix` and a relative chain; re-anchoring every
+`CHAIN_LENGTH`; the unturned form carrying `1/u`; rarer turns under a full
+`cm`. `writer.test.ts`: a form's `/Matrix`, absent for the identity, one
+form per part and matrix. `render/__tests__/stroke-outline.test.ts`: width inside
+and outside the tapers (a vertex at the taper length), counter-clockwise
+rings only, round / miter / bevel joins at a corner, a Bézier within the
+flattening tolerance, the taper measured along the whole path across
+slices, deterministic integer output.
 
 ## 6. Determinism and fixtures
 
@@ -1439,7 +1692,8 @@ and the diff is reviewed with the PR like a golden.
 Three-way. The reference raster (§5.1) renders the fixture at 10 px/mm
 (254 dpi). The WebGL2 backend renders the same stream in headless
 Chromium (Playwright) and the PDF backend's page is rasterised with
-`pdftoppm` at the same density. Each is compared with the oracle by
+poppler's `pdftocairo` at the same density (C3; `docs/course-print.md`
+§9.2). Each is compared with the oracle by
 `diffImages(a, b, channelTolerance = 16)`: a pixel differs when any
 channel differs by more than 16/255; the fixture passes when the fraction
 of differing pixels is ≤ 0.5 % (04 §9 budget). Backends are compared
@@ -1447,8 +1701,14 @@ with the oracle, never with each other.
 
 **Golden scenes** are the six contract fixtures (§6.3), the
 `pilot-scene` (`__fixtures__/pilot-scene.ts`: one object per pilot
-symbol, hand-placed) and the eleven library fixtures (`lib-*`, §6.3,
-coloured from the library's palette through `cmykToHex`). `render.goldenScene(name, fonts)` resolves a name
+symbol, hand-placed), the twelve library fixtures (`lib-*`, §6.3,
+coloured from the library's palette through `cmykToHex`) and the five
+course scenes (`course-*`, §6.3, C0: a library base map and
+`courseLayer()` merged into one stream, coloured from the completed
+stack). The three **page scenes** (`page-*`, C2,
+`docs/course-print.md` §7.5) are separate: a composed page drawn by the
+page oracle (`render/page-raster.ts`), compared by the PDF tier only (C3)
+— the WebGL2 spec does not draw pages. `render.goldenScene(name, fonts)` resolves a name
 to `{ stream, colour }` identically on every side, and
 `render.goldenFrame(stream)` fixes the image frame: bounds + 1 mm
 margin, grown symmetrically to a **whole number of pixels** (a 57.5 px
@@ -1553,6 +1813,37 @@ atlas's 32 px), spread along edges with no systematic offset. The whole
 document compare (`compare=1`) holds MSDF to the per-pass path at the
 ordinary 0.5 % on `e2e/test.xmap`: 0.217 %.
 
+**PDF leg** (C3, `packages/api/src/render/__tests__/pdf-golden.test.ts`;
+the method and the full table are `docs/course-print.md` §9.2). Every
+golden scene is written as a one-page PDF covering its golden frame,
+every page scene through the composer, in `rgb` and `cmyk`; `pdftocairo`
+rasterises at the oracle's own supersample (4× scenes, 2× pages) and the
+result is box-filtered down. Budgets as above: **≤ 0.5 %** for every
+scene, and for a scene with text the same 0.5 % with text written as
+glyph outlines; the embedded-font run of a text scene is the PDF's text
+tier of the golden scenes at a provisional **≤ 2.5 %** (page
+scenes stay at 0.5 %) (user decision 2026-10-24: the
+measured 1.21 % / 1.96 % below are the values to tighten towards once
+CI's poppler is measured; the rasteriser draws embedded fonts through
+FreeType's glyph renderer, not the outlines the oracle fills — the PDF
+counterpart of the MSDF tier). `cmyk` pages are compared against the
+oracle drawn in the rasteriser's own CMYK → RGB conversion of each stack
+colour. `pdftoppm` (Splash) is not used: its stroke adjustment snaps
+fills and hairlines to the pixel grid (2–5 % on geometry-exact library
+scenes). Measured at introduction (`rgb`, poppler 22.02):
+
+| Scene | PDF, embedded fonts | PDF, text as outlines |
+|---|---|---|
+| contract fixtures and `lib-*` without text | ≤ 0.036 % | — |
+| page scenes (held to 0.5 % with fonts) | ≤ 0.073 % | — |
+| `pilot-scene` | 0.038 % | 0.000 % |
+| `text-with-halo` | 0.000 % | 0.000 % |
+| `lib-text` | 1.210 % | 0.000 % |
+| `lib-halos` | 0.369 % | 0.000 % |
+| `lib-text-layout` | 1.964 % | 0.000 % |
+| `lib-colour-order` | 0.118 % | 0.000 % |
+| `course-*` | 0.013–0.478 % | 0.000 % |
+
 **Designing a golden scene.** Two layouts turn that quantisation into a
 failure without any geometry being wrong, and the library scenes avoid
 both (B1; first measured at 0.66 % and 0.505 %): a thin **axis-aligned**
@@ -1621,6 +1912,34 @@ scene is a snapshot (§6.1) and a golden (§6.2).
 | `lib-colour-order` | + | ten ISSprOM colours, lower and upper purple among them, pushed in reverse | colour-major order; lower purple under black, upper purple last |
 | `lib-precision` | + | `lib-dash-ocad` and `lib-line-glyphs` moved to (1 200 000, 1 200 000) µm | every pass the near pass translated, to 1 µm |
 
+The **course scenes** (C0, `docs/course-layer.md`) draw a small base
+map from the canonical library on its palette stack and a course layer
+from `courseLayer()`, merged by `courseRenderInput()` into one stream —
+exactly what a backend does: `__fixtures__/course/index.ts`
+(`courseScene`, `courseSceneNames`), snapshots in `streams/course/`,
+assertions in `packages/shared/src/course/__tests__/scenes.test.ts`.
+WebGL2 per-pass path against the golden, measured at introduction
+(headless Chromium, 2026-10-24): `course-legs` 0.085 %, `course-cuts`
+0.239 %, `course-objects` 0.076 %, `course-sprint` 0.039 %,
+`course-all-controls` 0.056 %.
+
+| Scene | Objects | Asserted |
+|---|---|---|
+| `course-legs` | ISOM 401, 505, 101, 306, 516 under S → 31 → 32 → 33 → F | lower purple under black, brown and blue line art, above yellow; start turned to 31; sequence numbers in upper purple above the ink |
+| `course-cuts` | ISOM 204 on a rim and on a leg, 109 on a rim, 201; an authored gap and authored leg pieces on 33; a manual number position | automatic cuts from the features, authored gap and pieces kept, number at its offset, cut circles as open arcs |
+| `course-objects` | ISOM 406, 505, 106; white-out rectangle, toner-saver ring, 709 rectangle, 709.b triangle, 707 / 708 / 711 extras, a map text in its own colour with `{course}` | white-outs at upper white above all ink and below upper purple; 709 / 707 / 711 upper, 708 lower; the text's row on top of the stack |
+| `course-sprint` | ISSprOM 401, two 521 buildings; `numberStyle: "knockout"` | 6 mm circles; upper-white halo under upper-purple numbers, above the buildings' black |
+| `course-all-controls` | ISOM 403, 304; all controls with a free-order course | every site drawn, codes, no legs, start north |
+
+The **page scenes** (C2, `@oxygen/shared/print` `pageScene`,
+`print/__fixtures__/pages.ts`) are whole pages through `composePage`:
+
+| Scene | Page | Asserted |
+|---|---|---|
+| `page-sprint-a4` | A4 portrait, ISSprOM map 1:4 000 printed at 1:3 000, six-site course, IOF header block with pictograms, page title | map layer under `T_map` (×4/3) clipped to the frame; block geometry and pictograms; page text on top |
+| `page-ring` | 120 × 90 mm, ISOM 1:10 000; map-anchored white-out outside, page white-out box over the frame edge, page text and dashed line | white margin and ring, map inside the ring, page objects above the map |
+| `page-rotated` | 120 × 90 mm, ISOM, window rotated 20° clockwise; map text | map, course and text turned together, corners outside the frame white |
+
 Not in the table: 04 §8 row 10 (minimum sizes) is a screen-backend rule
 (the stream is the same at every zoom), and the filter-region and
 georeference rows belong to the viewer (§5.4) and A11's `mapGeo`.
@@ -1656,7 +1975,12 @@ symbols are listed, not compared.
 **Measures and verdict.** Per row: *differing* (the §6.2 channel
 tolerance 16), *ink* (pixels inked on either side) and *unexplained* —
 pixels inked (some channel more than 48 below white, about a fifth of
-full coverage) on one side with no ink within one pixel on the other.
+full coverage) on one side with no ink within one pixel on the other,
+and differing beyond the channel tolerance there (C7: a tone on the
+threshold — Crop-A's 214.0 at 206 against 207 — otherwise counted as a
+whole missing shape; `docs/bugfix-parity-ink-threshold.md`). The corpus
+tables below were measured before that rule; it only removes counts, so
+none of their verdicts would flip to `diverges`.
 Anti-aliasing shades and sub-pixel placement never count: at 10 px/mm a
 0.1 mm line is one pixel, and a 0.05 mm offset flips every pixel of it
 at the channel tolerance. The verdict is `close` when unexplained ≤ 10 %
@@ -1687,6 +2011,11 @@ the images are always read.
 | `corner-ends` | corner / dash-point glyphs on flagged line ends (§4.5); legacy never draws one on an end |
 | `main-symbol-count` | an OCAD main symbol only with `nPrimSym > 0` (`map-import.md` §3.3, 518.3 "Utan tagg"); legacy draws it as if 1 |
 
+The print counterpart — a whole course page through the PDF backend
+against the page oracle and the legacy rsvg page, with this tool
+attributing the base map's divergences per symbol — is
+`docs/course-print.md` §11.
+
 **Invocation.**
 
 ```
@@ -1706,7 +2035,10 @@ the mapper's own definitions.
 Tests: `packages/api/src/render/__tests__/parity.test.ts` (pixel grid,
 isolation, agreement on `e2e/test.ocd`, the frame as a sanctioned
 divergence, ranking, shape measure, tags; a 510 power line from
-`buildParityOcad` with its poles at the corner points only) and
+`buildParityOcad` with its poles at the corner points only; Club-full's
+north-oriented barrier, footbridge and tunnel with rotated objects from
+`buildRotatedPointsOcad`, every kind `close` with canonical rendering on
+and off, the footbridge laid across on both images — C10) and
 `scripts/__tests__/measure-parity.test.mjs` (CLI, `pnpm test:scripts`).
 **Fonts on the legacy side.** The tiles leave the mapper's font names
 ("Arial") to the system font stack, which in the Docker image resolves
@@ -1754,6 +2086,13 @@ what became of it:
   Crop-B 100 → 102, club-full 98 → 100, Crop-A 101 → 103. Whole maps
   after B10, canonical: club-2026 24 diverging, Sprint 7, Crop-B 8, all
   sanctioned except Crop-B's 522 canopy tone.
+- **Fixed in the importer (`ocad-15`, C10, found by C7).** North-oriented
+  OCAD point symbols whose objects carry an angle are drawn turned, as
+  OCAD and Mapper draw them (`map-import.md` §3.3): Club-full has 23 such
+  symbols; its 504.5 / 504.7 barriers, 512.3 footbridge and 519.0 tunnel
+  — every object turned — diverged 24.92 / 36.28 / 26.65 / 31.96 %, and
+  519.3 21.31 %, 208.4 15.04 %; all 23 are `close` since, with canonical
+  rendering on and off (`docs/bugfix-ocad-point-rotation.md`).
 - **Spec-faithful, kept.** Cliffs: every 201.x / 202.x variant matches
   the legacy at 40 px/mm from source (0 % unexplained); canonically
   matched 202.2 / 201.5 get ISOM's flat ends (the "small houses"),
@@ -1781,15 +2120,18 @@ what became of it:
 | `packages/shared/src/render/measure.ts` | arc length, sections, gap intervals |
 | `packages/shared/src/render/dash.ts` | OCAD / OMAP dash layout |
 | `packages/shared/src/render/placement.ts` | glyphs along lines |
-| `packages/shared/src/render/pattern.ts`, `geometry.ts` | pattern grids, inclusion, offsetting |
+| `packages/shared/src/render/pattern.ts`, `geometry.ts` | pattern grids, inclusion, offsetting, `strokeOutline()` (tapers) |
 | `packages/shared/src/render/glyph-table.ts` | IR glyph → `GlyphMesh`, registry |
 | `packages/shared/src/render/truetype.ts`, `text.ts` | font reader, shaping |
 | `packages/shared/src/render/symbolise.ts` | the stage |
 | `packages/shared/src/render/__fixtures__/` | contract fixtures (`streams/`), library fixtures (`library/`, snapshots in `streams/library/`), pilot symbols, `pilot-scene.ts`, `golden.ts` (scene list, frame) |
 | `packages/shared/src/render/proxy-symbols.ts` | per-kind proxy symbols for the render bridge |
+| `packages/shared/src/render/__fixtures__/course/` | course scenes (C0; snapshots in `streams/course/`) — the layer itself is `packages/shared/src/course/`, `docs/course-layer.md` |
 | `packages/shared/fonts/` | bundled Liberation faces |
 | `packages/api/src/render/reference-raster.ts` | resvg rasterisation, `sampleAt`, `diffImages`, `encodePng` |
 | `packages/shared/src/render/swatch.ts` | symbol swatch scene (§5.1.1) |
+| `packages/shared/src/print/operators.ts` | PDF backend: pass → content-stream operators, layer matrix, clips (§5.3) |
+| `packages/shared/src/print/{colour,fonts,writer}.ts` | colour modes, font programs, `PdfWriter` (`docs/course-print.md` §1–3) |
 | `packages/api/src/render/previews.ts` | swatch and thumbnail PNGs (`docs/map-storage.md` §4.5) |
 | `packages/api/src/render/fonts.ts` | bundled-font loader for the server backends |
 | `packages/api/src/render/golden.ts`, `scripts/render-golden.ts` | golden PNG generation (`pnpm --filter @oxygen/api golden:render`) |
@@ -1811,7 +2153,8 @@ what became of it:
 | `e2e/__golden__/map-gl/`, `e2e/map-gl-golden.spec.ts` | committed goldens and the browser comparison |
 | `e2e/map-gl-doc.spec.ts` | whole-document pipeline on `e2e/test.ocd`: arena path, worker, eviction, arena = per-pass path |
 | `scripts/measure-gl.mjs` | corpus measurements through `/dev/map-gl-doc` (§5.2 Measurements) |
-| `packages/web/src/components/VectorMapLayer.tsx` | the vector base layer in `MapViewer` (§5.4): canvas, engine and worker lifecycle, status |
+| `packages/web/src/components/VectorMapLayer.tsx` | the vector base layer in `MapViewer` (§5.4): canvas, engine and worker lifecycle, status; the course layer request and its replies |
+| `packages/web/src/lib/course-layer-request.ts` | the viewer's course-layer input (§5.4 "Overlay", `course-layer.md` §5) |
 | `packages/web/src/components/MapViewer.tsx` | the host: layer choice, viewport state, gestures, SVG overlay |
 | `packages/web/src/lib/map-viewport.ts` | the viewport model, mercator and paper (§5.4 "Viewport"), `glView` |
 | `packages/web/src/lib/vector-map.ts` | paper frame, bounds, colours, proxy colours, budget from a document header |
@@ -1854,11 +2197,28 @@ The shared module is exported as a namespace: `import { render } from
   nothing produces `ReplayData`; B11 closed as moot (user decision
   2026-10-22). A GPS replay feature gets its own row, with a producer and
   this section's paper view and `mapGeo`.
-- **§5.4 lower purple under the line art.** The vector layer is one
-  canvas under the SVG overlay, so the overlay's purple covers black,
-  brown and blue line art that the tiles' ink half draws above it
-  (09 §4 B sanctions this for slice B). Returns when the course layer is
-  document objects drawn in colour order (slice C).
+- **§5.2 dynamic bucket: hit-testing, hide and highlight.** The layer's
+  object ids are in the range table (`courseObjectOffset`), but the
+  editor still hit-tests its SVG targets and highlights with SVG rings;
+  04 §7's shared-stage hit test and highlight-through-the-dynamic-bucket
+  are slice D's, with the editor on the document.
+- **§5.2 dynamic bucket: main-thread symbolisation.** A drag re-derives
+  the layer in the worker (one round trip per pointer move). If D's
+  editor needs lower latency, the dragged object is symbolised on the
+  main thread and only it is replaced.
+- **§5.4 layout objects in the viewer.** `courseLayer()` draws
+  map-anchored layout objects (white-outs, 709 hatch, text, lines), but
+  no sheet reaches `MapPanel`, so the viewer passes `objects: []`;
+  showing a sheet's objects on the map is slice D's.
+- **§5.4 lower purple below an area colour.** The layer sorts by the
+  document's aligned stack, so where the source put an area colour above
+  a line colour (the `e2e/test.ocd` fixture: Yellow above Blue), stage-7
+  alignment places lower purple below that area and an opaque area hides
+  the course (the fixture's yellow covers most of its courses under
+  `vector`). The legacy tiles draw the course above every area. Whether
+  alignment should place lower purple above the source's area colours
+  when the source order disagrees with the IOF table is an import
+  question (`map-symbols.md` §9, next importer bump).
 - **§5.4 legacy colour settings.** `mapMetadata.colorOverrides` and
   `northLinesBelow` (the tiles' per-map colour-stack fixes) are not
   applied to the document's stack; the document's own order (and, for
@@ -1899,14 +2259,14 @@ The shared module is exported as a namespace: `import { render } from
   and the gate meet the memory budgets without it.
 - **§5.2 earcut deviation check** (04 §6.1): polygons earcut gets wrong
   are not detected or redrawn by stencil-then-cover yet.
-- **Backends drawing `taper` and `angles`** — the stage emits both. The
-  WebGL2 backend draws `angles` on both its paths (B2: a text instance's
-  `cos, sin`); it does not draw `taper` yet (drawn butt) — on the arena
+- **The WebGL2 backend drawing `taper`** — the stage emits it; the
+  reference raster and the PDF backend fill the shared `strokeOutline()`
+  (C1, §5.1 / §5.3). The WebGL2 backend draws it butt — on the arena
   path a stroke vertex carries its own half width, so a taper is that
-  width scaled along the taper length. The PDF backend (slice C) draws
-  neither yet. The goldens leave `taper` out until every backend draws
-  it; `angles` are in `lib-text-layout` since B8 (the reference raster
-  and both GL paths draw them; the PDF tier waits for slice C anyway).
+  width scaled along the taper length. The golden *scenes* leave `taper`
+  out until the WebGL2 backend draws it (the library contact sheet's 107
+  swatches, reference-only, show it since C1). `angles` are drawn by
+  every backend (`lib-text-layout` since B8; PDF: a per-glyph `Tm`).
 - **S2 confirmation** of §4.2 step 3 (what stretches, the `round`
   threshold), of `endGapUm` and of the vertical anchor's metrics (§4.9),
   against OCAD exports; for text layout (§4.9, B8) also the default tab
@@ -1922,4 +2282,3 @@ The shared module is exported as a namespace: `import { render } from
 - **Rectangle grids** (OCAD rectangle symbol cell lines and numbering) —
   a by-design drop (user decision 2026-10-20); not pending, listed so the
   reader does not look for it.
-- **§5.3 PDF** — slice C.

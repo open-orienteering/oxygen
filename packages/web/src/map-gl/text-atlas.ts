@@ -3,7 +3,7 @@
  * fonts (docs/map-rendering.md §4.10, §5.2 "Text atlas") and what the
  * worker and the renderer derive from them.
  *
- * A page holds both faces (Liberation Sans, Liberation Sans Narrow) at
+ * A page holds all three faces (Liberation Sans Regular, Narrow, Bold) at
  * 32 px per em with an 8 px distance range: RGB a multi-channel signed
  * distance field (sharp corners for the fill), A the true signed
  * distance (the halo band). Glyphs are keyed by font **glyph id** — what
@@ -38,6 +38,8 @@ export const TEXT_ATLAS_PAGE_NAMES: readonly TextAtlasPageName[] = ["latin", "cy
 
 export interface TextAtlasFace {
   family: render.FontFamily;
+  /** The bold face of the family (`head.macStyle` bit 0); absent = regular. */
+  bold?: boolean;
   /** SHA-256 (hex) of the TTF the page was generated from. */
   sha256: string;
   unitsPerEm: number;
@@ -82,7 +84,7 @@ export function parseTextAtlasPage(v: unknown): TextAtlasPage {
   if (
     !p || p.version !== 1 || !TEXT_ATLAS_PAGE_NAMES.includes(p.page as TextAtlasPageName) ||
     !num(p.width) || !num(p.height) || !num(p.emPx) || !num(p.distanceRangePx) || !Array.isArray(p.faces) ||
-    !p.faces.every((f) => f && typeof f.family === "string" && num(f.unitsPerEm) && Array.isArray(f.glyphs) && f.glyphs.length % TEXT_GLYPH_STRIDE === 0)
+    !p.faces.every((f) => f && typeof f.family === "string" && (f.bold === undefined || typeof f.bold === "boolean") && num(f.unitsPerEm) && Array.isArray(f.glyphs) && f.glyphs.length % TEXT_GLYPH_STRIDE === 0)
   ) {
     throw new Error("not a text atlas page");
   }
@@ -101,10 +103,10 @@ export interface TextGlyph {
   page: number;
 }
 
-/** `${family}/${glyphId}` → entry, over pages in the given order (the first page holding a glyph wins). */
+/** `${family}[/bold]/${glyphId}` → entry, over pages in the given order (the first page holding a glyph wins). */
 export type TextGlyphLookup = Map<string, TextGlyph>;
 
-export const textGlyphKey = (family: string, glyphId: number) => `${family}/${glyphId}`;
+export const textGlyphKey = (family: string, bold: boolean | undefined, glyphId: number) => `${family}${bold ? "/bold" : ""}/${glyphId}`;
 
 /**
  * Entries of every glyph of `pages` in order, and the table the renderer
@@ -125,7 +127,7 @@ export function buildTextGlyphs(pages: readonly TextAtlasPage[]): { lookup: Text
     for (const f of p.faces) {
       const g = f.glyphs;
       for (let i = 0; i < g.length; i += TEXT_GLYPH_STRIDE, e++) {
-        const key = textGlyphKey(f.family, g[i]);
+        const key = textGlyphKey(f.family, f.bold, g[i]);
         if (!lookup.has(key)) lookup.set(key, { entry: e, page: pi });
         const o = e * GLYPH_TABLE_TEXELS * 4;
         table.set([g[i + 1], g[i + 2], g[i + 3], g[i + 4]], o);

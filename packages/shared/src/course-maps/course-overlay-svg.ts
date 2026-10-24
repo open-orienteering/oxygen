@@ -9,6 +9,7 @@ import {
   type OverlaySegment,
 } from "./overlay-geometry.js";
 import {
+  CONTROL_NUMBER_CAP_HEIGHT_RATIO,
   placeControlLabels,
   type PlacementCircle,
 } from "./control-label-placement.js";
@@ -64,13 +65,7 @@ export interface CourseOverlayLayers {
   upper: string;
 }
 
-/**
- * Cap/digit height of Liberation Sans (metrically Arial-compatible) as a
- * fraction of the em box: 1409/2048. ISOM 704 specifies the control
- * number by digit height, SVG `font-size` is the em box, so
- * `font-size = digitHeight / CONTROL_NUMBER_CAP_HEIGHT_RATIO`.
- */
-export const CONTROL_NUMBER_CAP_HEIGHT_RATIO = 1409 / 2048;
+export { CONTROL_NUMBER_CAP_HEIGHT_RATIO };
 
 /** Font stack for control numbers — identical in print and on screen. */
 export const CONTROL_NUMBER_FONT_FAMILY = "Liberation Sans, Arial, sans-serif";

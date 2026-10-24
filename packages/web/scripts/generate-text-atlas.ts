@@ -1,8 +1,8 @@
 /**
  * Writes the WebGL2 backend's text atlas pages from the bundled fonts
  * (docs/map-rendering.md §4.10): `packages/shared/fonts/msdf/
- * text-atlas.<page>.{png,json}`, MTSDF at 32 px per em, both faces on
- * every page. Run after changing a font file or a page's ranges:
+ * text-atlas.<page>.{png,json}`, MTSDF at 32 px per em, all three faces
+ * (Regular, Narrow, Bold) on every page. Run after changing a font file or a page's ranges:
  *
  *   pnpm text-atlas:generate
  *
@@ -31,6 +31,7 @@ const dockerDir = fileURLToPath(new URL("./text-atlas/", import.meta.url));
 const FACES: { family: render.FontFamily; file: string }[] = [
   { family: "liberation-sans", file: "LiberationSans-Regular.ttf" },
   { family: "liberation-sans-narrow", file: "LiberationSansNarrow-Regular.ttf" },
+  { family: "liberation-sans", file: "LiberationSans-Bold.ttf" },
 ];
 
 execFileSync("docker", ["build", "--network", "host", "-q", "-t", IMAGE, dockerDir], { stdio: ["ignore", "ignore", "inherit"] });
@@ -38,7 +39,7 @@ execFileSync("docker", ["build", "--network", "host", "-q", "-t", IMAGE, dockerD
 const faces = FACES.map(({ family, file }) => {
   const bytes = readFileSync(join(fontsDir, file));
   const font = render.parseTrueType(bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength), family);
-  return { family, file, font, sha256: createHash("sha256").update(bytes).digest("hex"), unitsPerEm: font.unitsPerEm };
+  return { family, bold: font.bold, file, font, sha256: createHash("sha256").update(bytes).digest("hex"), unitsPerEm: font.unitsPerEm };
 });
 
 const work = mkdtempSync(join(tmpdir(), "text-atlas-"));
@@ -50,9 +51,9 @@ try {
     faces.forEach((f, i) => {
       const ids = pageGlyphIds(f.font, page).filter((g) => !onEarlierPage[i].has(g));
       for (const g of ids) onEarlierPage[i].add(g);
-      writeFileSync(join(work, `${f.family}.${page}.txt`), glyphsetFile(ids));
+      writeFileSync(join(work, `${f.file}.${page}.txt`), glyphsetFile(ids));
       if (i) args.push("-and");
-      args.push("-font", `/fonts/${f.file}`, "-glyphset", `/work/${f.family}.${page}.txt`, "-fontname", f.family);
+      args.push("-font", `/fonts/${f.file}`, "-glyphset", `/work/${f.file}.${page}.txt`, "-fontname", `${f.family}${f.bold ? "-bold" : ""}`);
     });
     const uid = `${process.getuid?.() ?? 0}:${process.getgid?.() ?? 0}`;
     execFileSync("docker", [
@@ -63,7 +64,7 @@ try {
       "-json", `/work/${page}.json`, "-imageout", `/work/${page}.png`,
     ], { stdio: ["ignore", "inherit", "inherit"] });
     const raw = JSON.parse(readFileSync(join(work, `${page}.json`), "utf8")) as RawAtlasJson;
-    const out = pageFromAtlasJson(raw, page, faces.map(({ family, sha256, unitsPerEm }) => ({ family, sha256, unitsPerEm })));
+    const out = pageFromAtlasJson(raw, page, faces.map(({ family, bold, sha256, unitsPerEm }) => ({ family, ...(bold ? { bold } : {}), sha256, unitsPerEm })));
     writeFileSync(join(outDir, `text-atlas.${page}.json`), JSON.stringify(out) + "\n");
     copyFileSync(join(work, `${page}.png`), join(outDir, `text-atlas.${page}.png`));
     const n = out.faces.reduce((s, f) => s + f.glyphs.length / 9, 0);

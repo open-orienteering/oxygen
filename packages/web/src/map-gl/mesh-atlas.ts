@@ -60,9 +60,12 @@ export class MeshAtlasBuilder {
   private readonly meshes: AtlasMesh[] = [];
   private readonly byKey = new Map<string, number>();
 
-  /** Mesh index for a glyph part, flattened at `tol` glyph µm. */
-  glyph(mesh: render.GlyphMesh, tol: number): number {
-    const key = `g/${mesh.glyphId}/${mesh.partIdx}`;
+  /**
+   * Mesh index for a glyph part, flattened at `tol` glyph µm. `key` names the mesh: by default the
+   * document stream's glyph id and part; the course layer's stream (§5.2 "Dynamic bucket") keys by
+   * content, since its glyph ids are local to each re-symbolisation.
+   */
+  glyph(mesh: render.GlyphMesh, tol: number, key = `g/${mesh.glyphId}/${mesh.partIdx}`): number {
     const hit = this.byKey.get(key);
     if (hit !== undefined) return hit;
     const tri: number[] = [];
@@ -74,6 +77,11 @@ export class MeshAtlasBuilder {
       pushStrip(strip, s.widthUm / 2, tri);
     }
     return this.add(key, tri);
+  }
+
+  /** Meshes so far: `build()` after it grew returns every earlier mesh at the same `base`. */
+  get size(): number {
+    return this.meshes.length;
   }
 
   private add(key: string, tri: number[]): number {
@@ -95,7 +103,7 @@ export class MeshAtlasBuilder {
     const rows = Math.max(1, Math.ceil((vertexCount * 2) / ATLAS_WIDTH));
     const data = new Float32Array(rows * ATLAS_WIDTH * 4);
     data.set(this.verts);
-    return { data, vertexCount, meshes: this.meshes };
+    return { data, vertexCount, meshes: this.meshes.slice() };
   }
 }
 

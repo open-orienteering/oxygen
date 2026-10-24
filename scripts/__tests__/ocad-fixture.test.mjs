@@ -9,6 +9,8 @@ import {
   buildSymbolTypesOcad,
   buildStaleBorderOcad,
   STALE_BORDER_OCAD,
+  buildRotatedPointsOcad,
+  ROTATED_POINTS_OCAD,
   SYMBOL_TYPES_OCAD,
   E2E_TEXT_SYMBOLS,
   buildShowcaseOcad,
@@ -44,6 +46,20 @@ describe("OCAD fixtures", () => {
     const missing = bySym.get(STALE_BORDER_OCAD.missing.symNum);
     assert.equal(missing.borderSym, STALE_BORDER_OCAD.missing.borderSym);
     assert.equal(bySym.has(STALE_BORDER_OCAD.missing.borderSym), false);
+  });
+
+  it("builds the rotated-points fixture: the reader sees each symbol's rotatable flag and each object's angle", async () => {
+    const { readOcad } = require("ocad2geojson");
+    const file = await readOcad(buildRotatedPointsOcad(), { quietWarnings: true });
+    const t = ROTATED_POINTS_OCAD;
+    const kinds = [t.barrier, t.footbridge, t.tunnel, t.rotatable, t.knoll];
+    const bySym = new Map(file.symbols.map((s) => [s.symNum, s]));
+    for (const k of kinds) {
+      assert.equal(bySym.get(k.symNum).type, 1);
+      assert.equal(bySym.get(k.symNum).flags, k.flags);
+      assert.equal(bySym.get(k.symNum).elements.length, k.elements.length);
+    }
+    assert.deepEqual(file.objects.map((o) => [o.sym, o.ang]), [...kinds.map((k) => [k.symNum, k.ang]), [t.footbridge.symNum, 0]]);
   });
 
   it("builds a small synthetic showcase map with the demo CRS", async () => {

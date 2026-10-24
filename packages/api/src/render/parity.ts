@@ -17,7 +17,7 @@
 import { mapDocument, mapImport, render } from "@oxygen/shared";
 import { importMapToDocument } from "../import/ocad.js";
 import { parseViewBox, windowPixelSize, windowViewBox, withViewBox, type OcadRect } from "../map-window.js";
-import { BUNDLED_FONT_FILES, glyphOutlineFrom, loadBundledFont } from "./fonts.js";
+import { BUNDLED_FONT_FILES, glyphOutlineFrom, loadBundledFonts } from "./fonts.js";
 import { diffImages, rasterisePassStream, type ImageDiff } from "./reference-raster.js";
 
 /** Paper window, mm, y-up (the document's paper frame; OCAD coordinates / 100). */
@@ -234,7 +234,7 @@ export async function runParity(file: Buffer, fileName: string, opts: ParityOpti
     if (channelDistance(a, shared) > tolerance) colourDifferences.push({ number: c.number, name: c.name ?? "", legacy: a, shared });
   }
 
-  const fonts = await Promise.all([loadBundledFont("liberation-sans"), loadBundledFont("liberation-sans-narrow")]);
+  const fonts = await loadBundledFonts();
   const glyphOutline = glyphOutlineFrom(fonts);
   const symNumOf = (s: mapDocument.DocumentSymbol) => (s.sourceIndex !== undefined ? legacy.symbols[s.sourceIndex]?.symNum : undefined);
 
@@ -281,7 +281,7 @@ export async function runParity(file: Buffer, fileName: string, opts: ParityOpti
     }
     const d = diffImages(oldImg, newImg, tolerance);
     const ink = inkUnion(oldImg, newImg);
-    const unexplained = unexplainedPixels(oldImg, newImg);
+    const unexplained = unexplainedPixels(oldImg, newImg, tolerance);
     row.diff = { ...d, ink, inkRatio: ink === 0 ? 0 : d.differing / ink, unexplained, unexplainedRatio: ink === 0 ? 0 : unexplained / ink };
     row.verdict = ink === 0 ? "empty" : row.diff.unexplainedRatio <= CLOSE_INK_RATIO ? "close" : "diverges";
     if (opts.keepImages || opts.onImages) {
@@ -422,10 +422,12 @@ const isInk = (p: Uint8Array, o: number) => p[o] < INK || p[o + 1] < INK || p[o 
 
 /**
  * Shape difference: pixels inked on one side (more than `MASK_DEVIATION` below white in some channel,
- * about a fifth of full coverage) with no ink within one pixel on the other side. Anti-aliasing shades
- * and sub-pixel placement of the same shape never count; a missing, extra or displaced part does.
+ * about a fifth of full coverage) with no ink within one pixel on the other side, and differing by more
+ * than the channel tolerance there. Anti-aliasing shades and sub-pixel placement of the same shape never
+ * count; a missing, extra or displaced part does. The tolerance keeps a tone that sits on the mask
+ * threshold (206 on one side, 207 on the other: C7, Crop-A's 214.0) from counting as a whole shape.
  */
-export function unexplainedPixels(a: RgbaImage, b: RgbaImage): number {
+export function unexplainedPixels(a: RgbaImage, b: RgbaImage, channelTolerance = 16): number {
   const { width: w, height: h } = a;
   const ma = inkMask(a), mb = inkMask(b);
   const near = (m: Uint8Array, x: number, y: number) => {
@@ -438,10 +440,14 @@ export function unexplainedPixels(a: RgbaImage, b: RgbaImage): number {
   for (let y = 0; y < h; y++) {
     for (let x = 0; x < w; x++) {
       const i = y * w + x;
-      if ((ma[i] && !near(mb, x, y)) || (mb[i] && !near(ma, x, y))) n++;
+      if (((ma[i] && !near(mb, x, y)) || (mb[i] && !near(ma, x, y))) && channelDiff(a.pixels, b.pixels, i * 4) > channelTolerance) n++;
     }
   }
   return n;
+}
+
+function channelDiff(pa: Uint8Array, pb: Uint8Array, o: number): number {
+  return Math.max(Math.abs(pa[o] - pb[o]), Math.abs(pa[o + 1] - pb[o + 1]), Math.abs(pa[o + 2] - pb[o + 2]));
 }
 
 /** Channel deviation from white above which a pixel belongs to a shape. */
@@ -453,7 +459,7 @@ function inkMask(img: RgbaImage): Uint8Array {
   return m;
 }
 
-function inkUnion(a: RgbaImage, b: RgbaImage): number {
+export function inkUnion(a: RgbaImage, b: RgbaImage): number {
   let n = 0;
   for (let o = 0; o < a.pixels.length; o += 4) if (isInk(a.pixels, o) || isInk(b.pixels, o)) n++;
   return n;

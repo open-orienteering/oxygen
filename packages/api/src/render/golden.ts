@@ -7,7 +7,7 @@
  */
 
 import { render, symbolLibrary } from "@oxygen/shared";
-import { loadBundledFont, glyphOutlineFrom } from "./fonts.js";
+import { loadBundledFonts, glyphOutlineFrom } from "./fonts.js";
 import { renderSwatchPng, stackColour } from "./previews.js";
 import { encodePng, rasterisePassStream } from "./reference-raster.js";
 
@@ -24,7 +24,7 @@ export const GOLDEN_SUPERSAMPLE = 4;
 export const goldenDir = new URL("../../../../e2e/__golden__/map-gl/", import.meta.url);
 
 export async function goldenFonts(): Promise<render.TrueTypeFont[]> {
-  return Promise.all([loadBundledFont("liberation-sans"), loadBundledFont("liberation-sans-narrow")]);
+  return loadBundledFonts();
 }
 
 export async function renderGoldenPng(name: render.GoldenSceneName): Promise<Buffer> {

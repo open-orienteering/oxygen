@@ -18,6 +18,9 @@ export interface LineFingerprint {
   mainWidth: number | null;
   /** Main stroke colour; for glyph-only or border-only lines the first glyph / border colour. */
   mainClass: ColourClass | null;
+  /** Main stroke end / corner shape; null without a main stroke (map-symbols §8.1, C9). */
+  cap: string | null;
+  join: string | null;
   dashed: boolean;
   dashUm: number | null;
   gapUm: number | null;
@@ -136,11 +139,21 @@ function invertedBand(body: LineSymbolBody, classOf: ClassOfColour): Omit<LineFi
   const inner = 2 * rail.shiftUm - rail.widthUm;
   if (inner <= 0) return null;
   return {
-    mainWidth: inner, mainClass: band, dashed: true, dashUm: main.dash.gapUm, gapUm: main.dash.dashUm,
+    mainWidth: inner, mainClass: band, cap: null, join: null, dashed: true, dashUm: main.dash.gapUm, gapUm: main.dash.dashUm,
     halo: !!main.halo, borders: false, borderWidth: null, borderShift: null, borderClass: null, background: true,
     glyphCount: 0, glyphPlacement: null, glyphSpacing: null, glyphBox: null,
   };
 }
+
+/**
+ * Cap and join compare as the round-vs-sharp choice only: `flat` and
+ * `square` ends are one class, and `bevel` and `miter` joins are one (OCAD's
+ * default `lineStyle 0` is flat/bevel and a template set states flat/miter
+ * for the same stroke; neither is an explicit choice). `pointed` ends stay
+ * their own class.
+ */
+const capClass = (cap: string) => (cap === "round" || cap === "pointed" ? cap : "flat");
+const joinClass = (join: string) => (join === "round" ? "round" : "sharp");
 
 function lineBody(body: LineSymbolBody, classOf: ClassOfColour): Omit<LineFingerprint, "type"> {
   const main = body.main;
@@ -167,6 +180,8 @@ function lineBody(body: LineSymbolBody, classOf: ClassOfColour): Omit<LineFinger
   return {
     mainWidth: stroked ? main.widthUm : bgWidth !== null && bgWidth > 0 ? bgWidth : null,
     mainClass: stroked ? classOf(main.colour) : bgFill ? classOf(b.backgroundColour!) : first ? dominantClass(first.glyph, classOf) : border ? classOf(border.colour) : null,
+    cap: stroked ? capClass(main.cap) : null,
+    join: stroked ? joinClass(main.join) : null,
     dashed: !!main?.dash,
     dashUm: main?.dash?.dashUm ?? null,
     gapUm: main?.dash?.gapUm ?? null,
@@ -227,11 +242,21 @@ export const TOLERANCE = { widthUm: 20, lengthUm: 100, angleDeg: 5, textFraction
 /** Each element more or fewer (a second ring, a missing dash glyph) multiplies the score by this. */
 export const COUNT_PENALTY = 0.6;
 
+/**
+ * Cap and join each differing multiplies the score by this: a tie-break
+ * between variants of one family (OCAD's round no-tag cliff vs the flat
+ * tagged one), never a structural fail, so a perfect geometric match with
+ * the other cap still auto-matches when no variant of its own exists.
+ */
+export const CAP_JOIN_PENALTY = 0.95;
+
 export interface Comparison {
   /** Product of the feature scores; 0 on a hard fail. */
   score: number;
   /** Human-readable feature notes, shown in review. */
   reasons: string[];
+  /** The part of `score` owed to cap / join mismatches (1 when they agree); the geometry-only stage divides it out. */
+  capJoin: number;
   hardFail?: string;
 }
 
@@ -249,6 +274,7 @@ class Scorer {
   score = 1;
   readonly reasons: string[] = [];
   hardFail?: string;
+  capJoin = 1;
   readonly factor: number;
   constructor(factor: number) {
     this.factor = factor;
@@ -282,6 +308,12 @@ class Scorer {
     if (src !== canon) this.mul(penalty, `${label} ${src ? "yes" : "no"} vs ${canon ? "yes" : "no"}`);
   }
 
+  mismatch(label: string, src: string, canon: string, penalty: number): void {
+    if (src === canon) return;
+    this.capJoin *= penalty;
+    this.mul(penalty, `${label} ${src} vs ${canon}`);
+  }
+
   box(label: string, src: Box | null, canon: Box | null): void {
     if (src === null && canon === null) return;
     if (src === null || canon === null) return this.mul(0.5, `${label} present on one side only`);
@@ -312,7 +344,7 @@ class Scorer {
   }
 
   result(): Comparison {
-    const out: Comparison = { score: this.hardFail ? 0 : Math.round(this.score * 1000) / 1000, reasons: this.reasons };
+    const out: Comparison = { score: this.hardFail ? 0 : Math.round(this.score * 1000) / 1000, reasons: this.reasons, capJoin: this.capJoin };
     if (this.hardFail) out.hardFail = this.hardFail;
     return out;
   }
@@ -341,6 +373,8 @@ export function compareFingerprints(src: Fingerprint, canon: Fingerprint, factor
       if (src.dashed !== c.dashed) { s.fail(`dashed ${src.dashed} ≠ ${c.dashed}`); break; }
       if (src.borders !== c.borders) { s.fail(`borders ${src.borders} ≠ ${c.borders}`); break; }
       s.length("main width", src.mainWidth, c.mainWidth, TOLERANCE.widthUm);
+      if (src.cap !== null && c.cap !== null) s.mismatch("cap", src.cap, c.cap, CAP_JOIN_PENALTY);
+      if (src.join !== null && c.join !== null) s.mismatch("join", src.join, c.join, CAP_JOIN_PENALTY);
       s.length("dash", src.dashUm, c.dashUm, TOLERANCE.lengthUm);
       s.length("gap", src.gapUm, c.gapUm, TOLERANCE.lengthUm);
       s.flag("halo", src.halo, c.halo, 0.7);

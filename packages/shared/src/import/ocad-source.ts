@@ -24,9 +24,27 @@ import { OBJECT_TYPE } from "../map-document/header.js";
 import { WARNING_DETAILS_MAX, type ImportWarningDetail } from "./report.js";
 import type { DocumentColour, DocumentSymbolInput, DocumentWarning, Georeferencing, MapDocumentHeaderInput } from "../map-document/header.js";
 
+/**
+ * A north-oriented point symbol (flags bit 1 clear) whose objects carry an
+ * angle is drawn turned by OCAD; Mapper's OCD import makes such a symbol
+ * rotatable unless it is symmetrical, and so does this (map-import §3.3,
+ * C10: Club-full's 504.5 / 504.7 / 512.3 / 519.0). Centred discs and rings
+ * look the same at any angle and keep `north`.
+ */
+function rotateFromObjectAngles(symbols: DocumentSymbolInput[], objects: MapObjectInput[]): void {
+  const turned = new Set<number>();
+  for (const o of objects) if (o.type === OBJECT_TYPE.point && o.angleDeciDeg) turned.add(o.symbolIdx);
+  for (const idx of turned) {
+    const render = symbols[idx].render;
+    if (render?.type !== "point" || render.orientation === "object") continue;
+    if (render.glyph.parts.every((p) => (p.kind === "disc" || p.kind === "ring") && !(p.cx ?? 0) && !(p.cy ?? 0))) continue;
+    symbols[idx].render = { ...render, orientation: "object", glyph: { ...render.glyph, rotatable: true } };
+  }
+}
+
 /** OCAD coordinates are 1/100 mm. */
 export const OCAD_UNITS_PER_MM = 100;
-export const OCAD_IMPORTER_VERSION = "ocad-13";
+export const OCAD_IMPORTER_VERSION = "ocad-15";
 /** Reader warning texts kept for the import report (docs/map-import.md §3.6). */
 export const READER_WARNING_TEXTS_MAX = 50;
 
@@ -347,6 +365,7 @@ export function ocadToDocumentInput(ocad: OcadFileLike, opts: OcadSourceOptions)
   }
   counts.objects = objects.length;
   counts.symbols = symbols.length;
+  rotateFromObjectAngles(symbols, objects);
 
   // Dropped parameter strings, recorded (02 §2.4).
   const templates = ocad.parameterStrings["8"]?.length ?? 0;

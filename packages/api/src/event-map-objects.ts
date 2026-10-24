@@ -20,7 +20,12 @@
  * never register as meeting the path it ends on.
  */
 
-import { isomDescriptionFor } from "@oxygen/shared";
+import { course, isomDescriptionFor, mapDocument, mapImport } from "@oxygen/shared";
+import type { Prisma, PrismaClient } from "./generated/prisma/client.js";
+import { LruCache } from "./course-maps/lru-cache.js";
+import { pinnedDocumentHash } from "./course-maps/map-source.js";
+import { getBlob } from "./map-store/blob-store.js";
+import { cutFeaturesOfSlimObjects } from "./overprint-cuts.js";
 
 /** Point (1), line (2) or area (3) object. Text/rect types are dropped. */
 export type SlimObjectType = 1 | 2 | 3;
@@ -46,9 +51,15 @@ interface MapFileReader {
   };
 }
 
+interface ParsedMap {
+  objects: SlimMapObject[];
+  /** Radii of the file's cut symbols as it draws them, mm by `sym` (`course.ocadCutSymbolRadiiMm`). */
+  cutRadii: Map<number, number>;
+}
+
 const cache = new Map<
   string,
-  { uploadedAtMs: number; objects: SlimMapObject[] | null }
+  { uploadedAtMs: number; parsed: ParsedMap | null }
 >();
 
 /**
@@ -70,6 +81,12 @@ interface RawOcadObject {
   sym: number;
   objType: number;
   coordinates: RawOcadCoordinate[];
+}
+
+interface RawOcadFile {
+  objects: RawOcadObject[];
+  symbols?: ArrayLike<mapImport.OcadSymbolDefLike>;
+  header?: { version?: number };
 }
 
 /** Straight segments per cubic Bezier when flattening. */
@@ -167,6 +184,13 @@ export async function loadEventMapObjects(
   db: MapFileReader,
   eventId: bigint,
 ): Promise<SlimMapObject[] | null> {
+  return (await loadParsedMap(db, eventId))?.objects ?? null;
+}
+
+async function loadParsedMap(
+  db: MapFileReader,
+  eventId: bigint,
+): Promise<ParsedMap | null> {
   const key = eventId.toString();
   const meta = await db.mapFile.findFirst({
     where: { eventId },
@@ -179,9 +203,9 @@ export async function loadEventMapObjects(
   }
   const uploadedAtMs = meta.uploadedAt.getTime();
   const cached = cache.get(key);
-  if (cached && cached.uploadedAtMs === uploadedAtMs) return cached.objects;
+  if (cached && cached.uploadedAtMs === uploadedAtMs) return cached.parsed;
 
-  let objects: SlimMapObject[] | null = null;
+  let parsed: ParsedMap | null = null;
   try {
     const row = await db.mapFile.findFirst({
       where: { eventId },
@@ -193,26 +217,89 @@ export async function loadEventMapObjects(
       const readOcad = (ocadMod as Record<string, unknown>).readOcad as (
         buf: Buffer,
         opts?: Record<string, unknown>,
-      ) => Promise<{ objects: RawOcadObject[] }>;
+      ) => Promise<RawOcadFile>;
       const ocadFile = await readOcad(Buffer.from(row.fileData), {
         quietWarnings: true,
       });
-      objects = [];
+      const objects: SlimMapObject[] = [];
       for (const obj of ocadFile.objects ?? []) {
         const slim = slimObject(obj);
         if (slim) objects.push(slim);
       }
+      const cutRadii = ocadFile.symbols
+        ? course.ocadCutSymbolRadiiMm(ocadFile.symbols, ocadFile.header?.version)
+        : new Map<number, number>();
+      parsed = { objects, cutRadii };
     }
   } catch (err) {
     console.warn("[event-map-objects] OCAD parse failed:", err);
-    objects = null;
+    parsed = null;
   }
-  cache.set(key, { uploadedAtMs, objects });
+  cache.set(key, { uploadedAtMs, parsed });
   // Map iterates in insertion order, so the first key is the oldest.
   while (cache.size > MAX_CACHED_EVENTS) {
     const oldest = cache.keys().next().value;
     if (oldest === undefined || oldest === key) break;
     cache.delete(oldest);
   }
-  return objects;
+  return parsed;
+}
+
+// ─── Automatic-cut features ──────────────────────────────────
+
+/** Cut features of a decoded document, memoised per hash (content-addressed, so never stale). */
+const documentFeatures = new LruCache<course.CutFeature[]>(MAX_CACHED_EVENTS);
+
+export interface EventCutFeatures {
+  features: course.CutFeature[];
+  /** `document`: the pinned map document (`vector` events); `ocad`: the legacy parse of the uploaded file. */
+  source: "document" | "ocad";
+}
+
+/**
+ * The features the course overprint is cut around (docs/course-layer.md
+ * §3.4, §4): from the pinned document when the event reads documents
+ * (`vector` + a pin — the reads-only gate of docs/map-pipeline-switch.md
+ * §3), else from the OCAD parse with radii by `mapScale`. Null when the
+ * event has no usable map.
+ */
+export async function loadEventCutFeatures(
+  db: PrismaClient | Prisma.TransactionClient,
+  eventId: bigint,
+  mapScale: number | null,
+): Promise<EventCutFeatures | null> {
+  const hash = await pinnedDocumentHash(db, eventId);
+  const fromDocument = hash ? await loadDocumentCutFeatures(db, hash) : null;
+  if (fromDocument) return { features: fromDocument, source: "document" };
+  const fromOcad = await loadOcadCutFeatures(db, eventId, mapScale);
+  return fromOcad ? { features: fromOcad, source: "ocad" } : null;
+}
+
+/** Cut features of a stored map document; null when it is missing or unreadable. */
+export async function loadDocumentCutFeatures(
+  db: PrismaClient | Prisma.TransactionClient,
+  hash: string,
+): Promise<course.CutFeature[] | null> {
+  const cached = documentFeatures.get(hash);
+  if (cached) return cached;
+  const bytes = await getBlob(db, "map_documents", hash);
+  if (!bytes) return null;
+  try {
+    const features = course.cutFeaturesOfDocument(mapDocument.decodeMapDocument(bytes));
+    documentFeatures.set(hash, features);
+    return features;
+  } catch (err) {
+    console.warn(`[event-map-objects] document ${hash} unreadable, using the OCAD parse:`, err);
+    return null;
+  }
+}
+
+/** Cut features of the event's latest uploaded OCAD file; null without a parseable map. */
+export async function loadOcadCutFeatures(
+  db: MapFileReader,
+  eventId: bigint,
+  mapScale: number | null,
+): Promise<course.CutFeature[] | null> {
+  const parsed = await loadParsedMap(db, eventId);
+  return parsed ? cutFeaturesOfSlimObjects(parsed.objects, parsed.cutRadii, mapScale) : null;
 }

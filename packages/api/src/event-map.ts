@@ -383,6 +383,12 @@ export async function applyEventMap(
   fireMapUpload(eventId);
   await synchronizePositionedControlCoordinates(db, eventId);
 
+  // The editor-course rebuild waits for the import (up to the hold) so a
+  // `vector` event cuts against its newly pinned document
+  // (docs/course-layer.md §4); otherwise it uses the OCAD parse and the
+  // document's cuts follow with the next write.
+  const job = await importJob;
+
   const editorCourses = await db.course.findMany({
     where: { eventId, removed: false, geometrySource: "editor" },
     select: { id: true },
@@ -399,7 +405,6 @@ export async function applyEventMap(
     data: { overprintCutsVersion: OVERPRINT_CUTS_VERSION },
   });
 
-  const job = await importJob;
   return {
     fileName,
     size: buffer.length,

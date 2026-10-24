@@ -1,0 +1,29 @@
+{
+"objectIdx": [0,1,2,4,5,7,8,9,3,6,6,1,2,10,11,10,11],
+"symbolIdx": [0,1,1,3,3,7,7,7,2,4,4,1,1,5,5,5,5],
+"passes": [
+{"kind":"fill","colour":1,"path":{"coords":[0,0,40000,0,40000,30000,0,30000],"closed":true}},
+{"kind":"fill","colour":18,"path":{"coords":[10000,6000,26000,6000,26000,20000,10000,20000],"closed":true}},
+{"kind":"fill","colour":18,"path":{"coords":[30000,18000,38000,18000,38000,28000,30000,28000],"closed":true}},
+{"kind":"stroke","colour":26,"path":{"coords":[18000,25000,19657,25000,21000,23657,21000,22000,21000,20343,19657,19000,18000,19000,16343,19000,15000,20343,15000,22000,15000,23657,16343,25000,18000,25000],"flags":[0,1,2,0,1,2,0,1,2,0,1,2,0],"closed":true},"widthUm":350,"cap":"butt","join":"round"},
+{"kind":"stroke","colour":26,"path":{"coords":[34000,15000,35657,15000,37000,13657,37000,12000,37000,10343,35657,9000,34000,9000,32343,9000,31000,10343,31000,12000,31000,13657,32343,15000,34000,15000],"flags":[0,1,2,0,1,2,0,1,2,0,1,2,0],"closed":true},"widthUm":350,"cap":"butt","join":"round"},
+{"kind":"stroke","colour":26,"path":{"coords":[6849,7663,15790,19158]},"widthUm":350,"cap":"butt","join":"miter"},
+{"kind":"stroke","colour":26,"path":{"coords":[21053,20092,30947,13908]},"widthUm":350,"cap":"butt","join":"miter"},
+{"kind":"stroke","colour":26,"path":{"coords":[34000,15600,34000,21900]},"widthUm":350,"cap":"butt","join":"miter"},
+{"kind":"glyph","colour":26,"glyphId":0,"partIdx":0,"instances":[4000,4000,0.789352,-0.613941,1]},
+{"kind":"glyph","colour":26,"glyphId":1,"partIdx":0,"instances":[34000,26000,1,0,1]},
+{"kind":"glyph","colour":26,"glyphId":1,"partIdx":1,"instances":[34000,26000,1,0,1]},
+{"kind":"stroke","colour":28,"path":{"coords":[10000,6000,26000,6000,26000,20000,10000,20000],"closed":true},"widthUm":140,"cap":"butt","join":"miter"},
+{"kind":"stroke","colour":28,"path":{"coords":[30000,18000,38000,18000,38000,28000,30000,28000],"closed":true},"widthUm":140,"cap":"butt","join":"miter"},
+{"kind":"text","colour":31,"fontId":0,"sizeUm":5728.671,"glyphs":[20],"positions":[16406.992,27651],"haloWidthUm":150},
+{"kind":"text","colour":31,"fontId":0,"sizeUm":5728.671,"glyphs":[21],"positions":[38458.992,10000],"haloWidthUm":150},
+{"kind":"text","colour":32,"fontId":0,"sizeUm":5728.671,"glyphs":[20],"positions":[16406.992,27651]},
+{"kind":"text","colour":32,"fontId":0,"sizeUm":5728.671,"glyphs":[21],"positions":[38458.992,10000]}
+],
+"glyphTable": [
+{"glyphId":0,"partIdx":0,"fills":[],"strokes":[{"path":{"coords":[0,4041,-3500,-2021,3500,-2021],"closed":true},"widthUm":350,"cap":"butt","join":"miter"}]},
+{"glyphId":1,"partIdx":0,"fills":[],"strokes":[{"path":{"coords":[2500,0,2500,1381,1381,2500,0,2500,-1381,2500,-2500,1381,-2500,0,-2500,-1381,-1381,-2500,0,-2500,1381,-2500,2500,-1381,2500,0],"flags":[0,1,2,0,1,2,0,1,2,0,1,2,0],"closed":true},"widthUm":350,"cap":"butt","join":"round"}]},
+{"glyphId":1,"partIdx":1,"fills":[],"strokes":[{"path":{"coords":[3500,0,3500,1933,1933,3500,0,3500,-1933,3500,-3500,1933,-3500,0,-3500,-1933,-1933,-3500,0,-3500,1933,-3500,3500,-1933,3500,0],"flags":[0,1,2,0,1,2,0,1,2,0,1,2,0],"closed":true},"widthUm":350,"cap":"butt","join":"round"}]}
+],
+"fontTable": [{"fontId":0,"family":"liberation-sans","bold":false,"italic":false},{"fontId":1,"family":"liberation-sans-narrow","bold":false,"italic":false}]
+}

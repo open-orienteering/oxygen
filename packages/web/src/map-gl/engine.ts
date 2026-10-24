@@ -6,6 +6,7 @@
  * (docs/map-rendering.md §5.2 "Arena and buckets", "Worker").
  *
  *   setView(view)  → which cells are drawn; request missing detail; evict
+ *   setCourse(req) → the dynamic bucket: the course layer, re-symbolised in the worker (§5.2 "Dynamic bucket")
  *   render(opts)   → rebuild the visible set if the drawn set changed; draw
  *
  * B4's `VectorMapLayer` drives the same two calls from its viewport.
@@ -15,9 +16,13 @@ import {
   aboveZoomGate, BucketLru, buildVisibleSet, CLUB_BUDGET_BYTES, DRAW_MARGIN_CELLS, PREFETCH_MARGIN_CELLS, visibleCells,
   type PreparedPart, type ResidentPart, type ViewRect,
 } from "./buckets.js";
+import type { render as R } from "@oxygen/shared";
 import type { DocumentRenderOptions, FrameStats, MapGlRenderer, TextAtlasImage } from "./renderer.js";
 import type { RenderTarget } from "./view.js";
-import { createMapGlWorker, messageChannelScheduler, type LoadRequest, type LoadSummary, type WorkerReply, type WorkerRequest } from "./worker.js";
+import {
+  createMapGlWorker, messageChannelScheduler,
+  type CourseLayerRequest, type CourseReply, type LoadRequest, type LoadSummary, type WorkerReply, type WorkerRequest,
+} from "./worker.js";
 
 /** Message transport to the worker: a real Web Worker, or the same handler inline. */
 export interface Transport {
@@ -52,6 +57,9 @@ export type EngineLoadRequest = Omit<LoadRequest, "type" | "gate" | "prefetchMar
   /** Text atlas pages (`lib/map-fonts.ts` `loadTextAtlas`); without them no text is drawn. */
   textAtlas?: TextAtlasImage[];
 };
+
+/** What a course reply tells the host (the UI layer's geometry, the stack, warnings). */
+export type CourseInfo = Pick<CourseReply, "colours" | "derivation" | "metrics" | "warnings">;
 
 export interface EngineOptions {
   /** Resident GPU budget, bytes. Default 150 MB (club); B4 passes 30 MB for event maps. */
@@ -92,6 +100,7 @@ export const ARRIVAL_REBUILD_MS = 150;
 const BASE = (id: number) => `b${id}`;
 const DETAIL = (id: number) => `d${id}`;
 const LARGE = "L";
+const COURSE = "C";
 
 export class MapGlEngine {
   private readonly renderer: MapGlRenderer;
@@ -119,8 +128,18 @@ export class MapGlEngine {
   private loadWaiter: { resolve: (s: LoadSummary) => void; reject: (e: Error) => void } | undefined;
   private completeWaiters: (() => void)[] = [];
   private st = { evictions: 0, rebuilds: 0, lastRebuildMs: 0, lastBuildMs: 0, prepareMs: [] as number[], overBudget: false };
-  /** Called when something arrived that changes the picture (a detail part for a drawn cell). */
+  /** The dynamic bucket: resident whatever the zoom gate and the budget (counted as fixed bytes). */
+  private course: ResidentPart | undefined;
+  private courseColours: R.ColourStack | undefined;
+  /** The last `setCourse` input (`undefined`: never set), re-sent after a load. */
+  private courseInput: CourseLayerRequest | null | undefined;
+  private courseGeneration = 0;
+  private loadPosted = false;
+  private atlasBytes = 0;
+  /** Called when something arrived that changes the picture (a detail part for a drawn cell, a course layer). */
   onChange: (() => void) | undefined;
+  /** Called with each current course reply (not with replies a newer `setCourse` overtook). */
+  onCourse: ((info: CourseInfo) => void) | undefined;
 
   constructor(renderer: MapGlRenderer, transport: Transport, opts: EngineOptions = {}) {
     this.renderer = renderer;
@@ -146,13 +165,63 @@ export class MapGlEngine {
     return new Promise((resolve, reject) => {
       this.loadWaiter = { resolve, reject };
       this.transport.post(msg, transfer);
+      this.loadPosted = true;
+      this.courseColours = undefined;
+      if (this.courseInput !== undefined) this.postCourse();
     });
+  }
+
+  /**
+   * Shows (or with `null` clears) the course layer (§5.2 "Dynamic bucket"): the worker symbolises it
+   * and prepares one part; the reply replaces the resident one and the next `render` rebuilds the
+   * visible set at once. Only the latest request's reply is used. Before `load`, the request waits.
+   */
+  setCourse(input: CourseLayerRequest | null): void {
+    this.courseInput = input;
+    if (this.loadPosted) this.postCourse();
+  }
+
+  private postCourse(): void {
+    this.transport.post({ type: "course", generation: ++this.courseGeneration, input: this.courseInput ?? null }, []);
+  }
+
+  /** The stack to draw with: the course reply's (layout-object rows on top) once one arrived, else the load's. */
+  get colours(): R.ColourStack {
+    return this.courseColours ?? this.summary?.colourStack ?? [];
+  }
+
+  private acceptCourse(m: CourseReply): void {
+    if (m.generation !== this.courseGeneration || !this.summary) return;
+    if (m.atlas) {
+      this.renderer.setAtlas(m.atlas);
+      this.atlasBytes = m.atlas.data.byteLength;
+    }
+    this.renderer.releasePart(COURSE);
+    this.course = m.part ? this.renderer.uploadPart(COURSE, m.part) : undefined;
+    this.courseColours = m.colours.length ? m.colours : undefined;
+    this.updateFixedBytes();
+    this.dirty = true;
+    this.arrivalOnly = false;
+    this.evict();
+    this.onCourse?.({ colours: m.colours, derivation: m.derivation, metrics: m.metrics, warnings: m.warnings });
+    this.onChange?.();
+  }
+
+  private updateFixedBytes(): void {
+    const s = this.summary;
+    if (!s) return;
+    this.fixedBytes = s.bytes.base + s.bytes.large + this.atlasBytes + this.renderer.textAtlasBytes + (this.course?.part.gpuBytes ?? 0);
+    this.lru.fixedBytes = this.fixedBytes;
   }
 
   private receive(m: WorkerReply): void {
     if (m.type === "error") {
       this.loadWaiter?.reject(new Error(m.message));
       this.loadWaiter = undefined;
+      return;
+    }
+    if (m.type === "course") {
+      this.acceptCourse(m);
       return;
     }
     if (m.type === "loaded") {
@@ -168,8 +237,10 @@ export class MapGlEngine {
       for (const p of m.base) this.base.set(p.bucket, this.renderer.uploadPart(BASE(p.bucket), p));
       this.large = m.large ? this.renderer.uploadPart(LARGE, m.large) : undefined;
       this.detailCells = new Set(s.detailCells);
-      this.fixedBytes = s.bytes.base + s.bytes.large + s.bytes.atlas + this.renderer.textAtlasBytes;
-      this.lru.fixedBytes = this.fixedBytes;
+      // `setDocument` dropped every part; a course request posted after the load replies after this.
+      this.course = undefined;
+      this.atlasBytes = s.bytes.atlas;
+      this.updateFixedBytes();
       this.dirty = true;
       this.drawnKey = "";
       this.loadWaiter?.resolve(s);
@@ -302,6 +373,8 @@ export class MapGlEngine {
         }
       }
       if (this.large) parts.push(this.large);
+      // Last: within a colour the course draws over the map's own objects of that colour.
+      if (this.course) parts.push(this.course);
       const vs = buildVisibleSet(parts, this.hidden);
       this.st.lastBuildMs = performance.now() - t0;
       this.renderer.setVisibleSet(vs);

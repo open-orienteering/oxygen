@@ -10,9 +10,10 @@ import {
 } from "../map-color-stack.js";
 import { ensureEventMapRenderKey } from "../map-render-cache.js";
 import type { BaseMapSvg } from "./map-page-svg.js";
-import type { PrismaClient } from "../generated/prisma/client.js";
+import type { Prisma, PrismaClient } from "../generated/prisma/client.js";
+import { readDocumentHead } from "../map-store/previews.js";
 import { LruCache } from "./lru-cache.js";
-import type { ColorProfile, ColorStackOverrides } from "@oxygen/shared";
+import { mapImport, type ColorProfile, type ColorStackOverrides } from "@oxygen/shared";
 
 type MapFileReader = Pick<PrismaClient, "mapFile">;
 
@@ -21,7 +22,7 @@ interface RawObject {
   coordinates?: Array<ArrayLike<number>>;
 }
 
-interface ParsedOcad extends StackOcadFile {
+export interface ParsedOcad extends StackOcadFile {
   objects: RawObject[];
   getBounds(): number[];
   getCrs(): { scale?: number };
@@ -216,6 +217,62 @@ function objectsInWindow(
   });
 }
 
+/**
+ * The full and ink SVG layers of a parsed OCAD file for one window: what
+ * `loadBaseMapSvg` caches per event. Exported for the corpus print run
+ * (`render/print-run.ts`), which builds the legacy page without a database.
+ */
+export async function renderBaseMapLayers(
+  file: ParsedOcad,
+  stack: { inkTo: number | null; northLinesBelow: boolean },
+  window: MapWindow,
+): Promise<BaseMapLayers> {
+  const ocadModule = await import("ocad2geojson");
+  const ocadToSvg = (ocadModule as Record<string, unknown>).ocadToSvg as (
+    file: ParsedOcad,
+    options: Record<string, unknown>,
+  ) => { outerHTML: string };
+  const document = new JSDOM(
+    "<!DOCTYPE html><html><body></body></html>",
+  ).window.document;
+  const objects = objectsInWindow(file.objects, window, 20);
+  const ocadBounds = file.getBounds();
+
+  const fullSvg = inflateUserSpacePatterns(
+    ocadToSvg(file, {
+      document,
+      generateSymbolElements: true,
+      exportHidden: false,
+      objects,
+    }).outerHTML,
+  );
+  const fullViewBox = parseViewBox(fullSvg);
+  if (!fullViewBox) throw new Error("Base map SVG has no viewBox");
+
+  let ink: BaseMapSvg | null = null;
+  if (stack.inkTo != null) {
+    const inkObjects = stack.northLinesBelow
+      ? filterNorthLineObjects(objects) ?? []
+      : objects;
+    const inkSvg = inflateUserSpacePatterns(
+      ocadToSvg(file, {
+        document,
+        generateSymbolElements: true,
+        exportHidden: false,
+        objects: inkObjects,
+        toColor: stack.inkTo,
+        // Transparent fill so the ink layer does not paint a white sheet.
+        fill: "transparent",
+      }).outerHTML,
+    );
+    const inkViewBox = parseViewBox(inkSvg);
+    if (!inkViewBox) throw new Error("Ink layer SVG has no viewBox");
+    ink = { svg: inkSvg, rootViewBox: inkViewBox, ocadBounds };
+  }
+
+  return { full: { svg: fullSvg, rootViewBox: fullViewBox, ocadBounds }, ink };
+}
+
 export async function loadBaseMapSvg(
   db: MapFileReader,
   eventId: bigint,
@@ -231,56 +288,8 @@ export async function loadBaseMapSvg(
   ].join(":");
   const cached = svgCache.get(cacheKey);
   if (cached) return cached;
-  const ocadModule = await import("ocad2geojson");
-  const ocadToSvg = (ocadModule as Record<string, unknown>).ocadToSvg as (
-    file: ParsedOcad,
-    options: Record<string, unknown>,
-  ) => { outerHTML: string };
-  const document = new JSDOM(
-    "<!DOCTYPE html><html><body></body></html>",
-  ).window.document;
-  const objects = objectsInWindow(source.file.objects, window, 20);
-  const ocadBounds = source.file.getBounds();
-
-  const fullSvg = inflateUserSpacePatterns(
-    ocadToSvg(source.file, {
-      document,
-      generateSymbolElements: true,
-      exportHidden: false,
-      objects,
-    }).outerHTML,
-  );
-  const fullViewBox = parseViewBox(fullSvg);
-  if (!fullViewBox) throw new Error("Base map SVG has no viewBox");
-
-  let ink: BaseMapSvg | null = null;
-  if (source.inkTo != null) {
-    const inkObjects = source.northLinesBelow
-      ? filterNorthLineObjects(objects) ?? []
-      : objects;
-    const inkSvg = inflateUserSpacePatterns(
-      ocadToSvg(source.file, {
-        document,
-        generateSymbolElements: true,
-        exportHidden: false,
-        objects: inkObjects,
-        toColor: source.inkTo,
-        // Transparent fill so the ink layer does not paint a white sheet.
-        fill: "transparent",
-      }).outerHTML,
-    );
-    const inkViewBox = parseViewBox(inkSvg);
-    if (!inkViewBox) throw new Error("Ink layer SVG has no viewBox");
-    ink = { svg: inkSvg, rootViewBox: inkViewBox, ocadBounds };
-  }
-
-  const result = {
-    layers: {
-      full: { svg: fullSvg, rootViewBox: fullViewBox, ocadBounds },
-      ink,
-    },
-    scale: source.scale,
-  };
+  const layers = await renderBaseMapLayers(source.file, source, window);
+  const result = { layers, scale: source.scale };
   svgCache.set(cacheKey, result);
   return result;
 }
@@ -296,10 +305,54 @@ export async function getBaseMapScale(
   return source.scale;
 }
 
-export async function getBaseMapInfo(
-  db: MapFileReader,
-  eventId: bigint,
-): Promise<{ scale: number; meridianTiltDeg: number; version: string }> {
+export interface BaseMapInfo {
+  scale: number;
+  meridianTiltDeg: number;
+  version: string;
+  /** The pinned map document when the event reads documents (`vector` + a pin); null on the legacy path. */
+  document: { hash: string } | null;
+}
+
+type MapInfoReader = PrismaClient | Prisma.TransactionClient;
+
+/** Scale and tilt of a document, memoised per hash (content-addressed, so never stale). */
+const documentInfo = new LruCache<{ scale: number; meridianTiltDeg: number }>(8);
+
+/**
+ * The pinned document of a `vector` event, or null (docs/course-print.md §10;
+ * same predicate as the reads-only gate, docs/map-pipeline-switch.md §3).
+ */
+export async function pinnedDocumentHash(db: MapInfoReader, eventId: bigint): Promise<string | null> {
+  const event = await db.event.findUnique({ where: { id: eventId }, select: { mapPipeline: true } });
+  if (event?.mapPipeline !== "vector") return null;
+  const row = await db.mapFile.findFirst({
+    where: { eventId },
+    orderBy: { uploadedAt: "desc" },
+    select: { documentHash: true },
+  });
+  return row?.documentHash ?? null;
+}
+
+async function documentBaseMapInfo(db: MapInfoReader, hash: string): Promise<{ scale: number; meridianTiltDeg: number }> {
+  const cached = documentInfo.get(hash);
+  if (cached) return cached;
+  const head = await readDocumentHead(db, hash);
+  if (!head) throw new Error("Pinned map document is missing");
+  const scale = head.header.mapScale;
+  if (!scale || scale <= 0) throw new Error("Base map has no usable scale");
+  const row = await db.mapDocument.findUnique({ where: { hash }, select: { report: true } });
+  const report = mapImport.importReportSchema.safeParse(row?.report);
+  const info = { scale, meridianTiltDeg: (report.success ? report.data.north?.meridian?.medianTiltDeg : undefined) ?? 0 };
+  documentInfo.set(hash, info);
+  return info;
+}
+
+export async function getBaseMapInfo(db: MapInfoReader, eventId: bigint): Promise<BaseMapInfo> {
+  const hash = await pinnedDocumentHash(db, eventId);
+  if (hash) {
+    const info = await documentBaseMapInfo(db, hash);
+    return { ...info, version: hash, document: { hash } };
+  }
   const source = await parsedMap(db, eventId);
   if (!source.scale || source.scale <= 0) {
     throw new Error("Base map has no usable scale");
@@ -308,14 +361,12 @@ export async function getBaseMapInfo(
     scale: source.scale,
     meridianTiltDeg: source.meridianTiltDeg,
     version: source.renderKey,
+    document: null,
   };
 }
 
 /** Like `getBaseMapInfo`, but null when no base map is uploaded. */
-export async function getBaseMapInfoOrNull(
-  db: MapFileReader,
-  eventId: bigint,
-): Promise<{ scale: number; meridianTiltDeg: number; version: string } | null> {
+export async function getBaseMapInfoOrNull(db: MapInfoReader, eventId: bigint): Promise<BaseMapInfo | null> {
   try {
     return await getBaseMapInfo(db, eventId);
   } catch {
@@ -326,4 +377,5 @@ export async function getBaseMapInfoOrNull(
 export function clearCourseMapSourceCache(): void {
   cache.clear();
   svgCache.clear();
+  documentInfo.clear();
 }

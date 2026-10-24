@@ -539,7 +539,8 @@ document bytes, hashes and report back. It is launched with
 (`tsx watch`, vitest, the E2E stack) the bootstrap registers
 `tsx/esm/api` inside the worker before importing the `.ts` body — tsx's
 loader does not reach `worker_threads` on Node 20 — and from `dist/` it
-imports the `.js` body directly. The worker is terminated as soon as it
+imports the `.js` body directly (`worker-bootstrap.ts`, shared with the
+print worker, `course-print.md` §8.2). The worker is terminated as soon as it
 settles.
 
 ### 6.4 Pins (`applyJobResult`)

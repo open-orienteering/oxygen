@@ -182,8 +182,11 @@ per-symbol decisions.
 - **Colours are palette ids, never CMYK.** `validateLibrary` rejects an
   id outside the spec's own tick marks, so an ISOM entry cannot use
   `brown100` (an ISSprOM-only row) by accident.
-- **Course symbols are ordinary entries** with `purpleRole` per 03 §2.4:
-  ISOM 704 lower / ISSprOM 704 upper, ISOM 710 lower / ISSprOM 710.1 lower
+- **Course symbols are ordinary entries** with `purpleRole` per 03 §2.4,
+  except ISOM 704 (below): ISOM 704 upper like ISSprOM 704 (library
+  `2026.10.4`, user decision 2026-10-24: legibility, and what Mapper and
+  Purple Pen draw — a deliberate deviation from ISOM 2017-2, which lists it
+  lower; 701, 703, 706 stay lower), ISOM 710 lower / ISSprOM 710.1 lower
   + 710.2 upper, 702 / 707 / 709 / 711 / 714 upper, the rest lower. A
   lower-role entry never draws in `purple-upper` and vice versa (tested).
   Minima that drive the course editor (707 ≥ 4.5 mm, 709 ≥ 3 mm wide and
@@ -306,6 +309,10 @@ tests and the coming contact sheet: `{ library, edition, colours:
 paletteStack(...), symbols: entries.map(resolve) }`, i.e. a colour stack
 plus `RenderSymbol[]` that `symbolise` accepts as-is.
 
+The course layer resolves the 7xx entries the same way, against the
+document's aligned stack completed with upper white, and scales them by
+the document factor (`docs/course-layer.md` §1, §3.1).
+
 Registry functions: `listSymbolLibraries()`, `getSymbolLibrary(id)`,
 `getLibraryEntry("ISOM2017-2:302.b")`, `entriesForCode("ISOM2017-2",
 "302")` (heading first, then variants). Libraries are parsed once and
@@ -366,7 +373,7 @@ plus the purple-role and materialisation checks:
     symbols carry id/code/name; 107 in both editions symbolises to a
     pointed stroke pass carrying its 0.75 mm taper (the contact sheet
     cannot show it: the reference raster draws `pointed` as butt).
-- **`import/__tests__/fingerprint.test.ts`** — OCAD's railway (white
+- **`import/__tests__/fingerprint.test.ts`** — C9: cap / join classes (bevel = miter, square = flat), round vs flat same width and colour = 0.903 and above `auto`, each field once, `null` without a main stroke, 201.b vs a flat 0.35 stroke; `matcher.test.ts` — a source round no-tag 201 takes 201.b at 1.0, a flat one scores ≤ 0.91 and never auto-matches the tagged 201. Also — OCAD's railway (white
   dashes over a black band) and OCAD's power line (corner symbol) score
   `auto` against 509 / 510; `render/__tests__/library-fixtures.test.ts`
   rows 3 and 6 (`map-rendering.md` §6.1) hold the pylon and railway
@@ -421,7 +428,9 @@ The OOM dimension spot check (e) is not implemented; see §10.
 | Directional point glyphs: no convention stated (03 §6.2) | Angle 0 = north, slope ticks to +y (§3; B10) | OCAD and Mapper both draw the 101.b / 103.b tick to +y; the first edition used the line-tag convention (−y) and every auto-matched slope line pointed uphill (52–66 % shape difference, `map-rendering.md` §6.4). |
 | 510 "0.3 (OM)" bars | ±0.37 mm, 0.3 beyond each edge of the 0.14 line (B10) | The reading ISOM 511 already used; Mapper's ISOM set and both corpus OCAD sets draw ±0.37 (−0.38 … +0.33). Was ±0.3. ISSprOM 511 (unchanged) measures its 0.3 from the line centre (±1.12 at ±0.82), as OCAD's ISSprOM set does — Sprint's 511 matches it at 1.00; the spec drawing does not settle which. |
 | 508.b yellow band as drawn (visible in forest) | Appendix B order: hidden under 406–410 green (§3; user decision 2026-10-22) | No yellow row above green exists in Appendix B; OCAD's set and the legacy tiles agree. |
-| `defaultMapAppearance` in `course-maps/schema.ts` retired in favour of the library | Not yet | The course layer (slice C) is the consumer that switches; the constants stay until then. |
+| Cliff baselines flat / miter (the spec drawing) | ISOM 201.b, 202, 202.b and ISSprOM 202 (no-tag baselines) round joins and ends; tagged 201 stays miter / flat (library `2026.10.4`; user decision 2026-10-24) | OCAD's own ISOM 2017-2 / ISSprOM sets draw them round (`lineStyle 1`) and Swedish OCAD maps use the round baseline plus separate tag objects. Mapper's sets draw flat; cap/join as a fingerprint class is SLICES C9. |
+| ISOM 704 control numbers lower purple (03 §2.4) | Upper purple, as ISSprOM 704 (library `2026.10.4`; user decision 2026-10-24) | Legibility: numbers sit above the black and brown map ink instead of under it, as Mapper and Purple Pen draw them. Start, circles and finish stay lower per spec. |
+| `defaultMapAppearance` in `course-maps/schema.ts` retired in favour of the library | Retired for the vector path (C0): the course layer draws the 7xx entries × document factor × the template's appearance as multipliers (`docs/course-layer.md` §3.1); the constant stays as the legacy overlay's sizes and the multipliers' denominator (`appearanceFromTemplate`). The vector viewer reads the library's sizes from the course layer (C4, `map-rendering.md` §5.4 "Overlay"); `web/lib/course-map-types.ts` keeps it as a new template's stored appearance, which is multiplier 1 — the spec sizes — on the vector path | The legacy SVG overlay and stored templates still read it; deleted with them (§10). |
 
 ## 8. Matching source symbols to the library (03 §6.5–6.6)
 
@@ -452,7 +461,7 @@ compare equal whatever their CMYK:
 
 | IR type | Features |
 |---|---|
-| line | main stroke class + width, dashed (dash / gap lengths), borders (count, class, width, shift), double-line fill class + width, background halo, glyph presence and its stroke/disc/ring/fill counts, structural shape (`stroked`, `background`) |
+| line | main stroke class + width, cap / join class of the main stroke, dashed (dash / gap lengths), borders (count, class, width, shift), double-line fill class + width, background halo, glyph presence and its stroke/disc/ring/fill counts, structural shape (`stroked`, `background`) |
 | area | fill class, hatch (class, width, spacing, angle), pattern (class, cell, element kind + size), border |
 | point | glyph parts by kind with class, width / diameter, extent box, rotational symmetry, `orientation` |
 | text | class, font size (from the digit height when given), bold / italic — no line spacing, no alignment, no tab stops and no frame or shadow, so a Mapper alignment variant shares its parent's fingerprint (`docs/map-import.md` §4.4) and none of the layout fields a canonically drawn text keeps from its source (`docs/map-document-format.md` §8) is evidence for or against a match |
@@ -483,6 +492,30 @@ structure only here; there is no general colour reordering, so a coloured
 band, rails of another class or a solid stroke over white still
 hard-fail on main colour / dashed (user decision 2026-10-22). Mapper's
 511-coded power line is unchanged: it gains only a `suggested` 510.
+
+**Line cap / join (C9, `ocad-14` / `omap-8`).** A stroked line's
+fingerprint carries the main stroke's `cap` and `join` as a *round-vs-sharp
+class*: cap `round` / `pointed` / `flat` (`square` = `flat`), join `round` /
+`sharp` (`bevel` = `miter`: OCAD's default `lineStyle 0` is flat/bevel and
+template sets state flat/miter for the same stroke, so neither is an
+explicit choice). Glyph-only and border-only lines carry `null` and are
+not compared (nor is A15's normalised railway band, `null`). **Decision (implementer's, recorded for coordinator confirmation): a soft tie-break, not a hard fail** — each of
+cap and join that differs multiplies the score by `CAP_JOIN_PENALTY`
+(0.95; both: 0.903). The class still lets a source's explicit round-vs-flat
+choice select the matching library variant (the round no-tag 201.b / 202
+against the flat tagged 201; source `lineStyle 1` scores 1.0 against the
+round entry and 0.903 against a flat one), but a hard fail would make a
+round-ended source with no round variant in the library fall from `auto`
+to `unmatched` when only the end shape differs — a drawing choice, not a
+different symbol — whereas 03 §6.5's hard fails are for *what* is drawn.
+The penalty is deliberately below the 0.95 stage-4 strictness: stage 4
+(geometry-only suggestions) divides it out (`Comparison.capJoin`), so cap
+and join never withhold a geometry suggestion, and they are not part of
+the document-factor measurement. Corpus effect: no `auto` became
+`suggested`; the 0.903 lines are the source's explicit
+flat/miter against a round library entry (201.14, 512, tagged 104).
+`irHash` changes for every stroked line, so club decisions keyed by
+`irHash` for lines are stale and re-match (§8.5).
 
 ### 8.2 Stages
 
@@ -948,7 +981,13 @@ nearest percent, then the palette's default for the class; some entries
    upper one); `purple-upper` always on top, `purple-lower` directly below
    the first source colour the palette puts above it. Inserted entries have
    `id: "<edition>:<paletteId>"`, the palette CMYK and no `sourceNumber`
-   (`colourStack.inserted`).
+   (`colourStack.inserted`). **Exception (C9, user decision 2026-10-24):**
+   an inserted `purple-upper` / `purple-lower` takes the CMYK of the map's
+   own purple of the other role when it has one (the course overprint is
+   one ink: Ny_karta_test's `src:2` "Upper Purple for Course Overprint"
+   10/90/10/0 gives the inserted lower purple 10/90/10/0, not 35/85/0/0);
+   the palette CMYK only when the map has no purple at all. Purples are
+   still never aliased.
 5. **Flag** palette ids whose relative order disagrees with the palette
    (longest increasing subsequence of palette ranks; everything outside it
    is a `COLOUR_ORDER_CONFLICT` with the pair it contradicts). The order
@@ -973,5 +1012,8 @@ resolves canonical entries through `paletteIndexOfStack(header.colours)`.
   candidate set) once a corpus map uses ISOM 2000 numbering to tune it on.
 - The OOM dimension spot check if 03 §10's licence question is settled in
   favour.
+- `defaultMapAppearance` deleted with the legacy course overlay (slice
+  E); until then it is the legacy sizes and the denominator of the
+  course layer's appearance multipliers (§7).
 - Mapper's 511-coded power line (suggested 510 only) is not normalised
   (A15 scoped to the railway); revisit if a Mapper corpus map shows it.

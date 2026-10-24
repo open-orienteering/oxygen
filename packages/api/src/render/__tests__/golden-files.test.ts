@@ -10,7 +10,9 @@
 import { describe, it, expect } from "vitest";
 import { readFile } from "node:fs/promises";
 import { render } from "@oxygen/shared";
+import { pageSceneNames } from "@oxygen/shared/print";
 import { goldenDir, renderGoldenPng } from "../golden.js";
+import { renderPageGoldenPng } from "../page-raster.js";
 import { diffImages } from "../reference-raster.js";
 
 async function decode(png: Buffer): Promise<{ width: number; height: number; pixels: Uint8Array }> {
@@ -41,6 +43,11 @@ describe("golden PNGs", () => {
       "lib-text-layout",
       "lib-colour-order",
       "lib-precision",
+      "course-legs",
+      "course-cuts",
+      "course-objects",
+      "course-sprint",
+      "course-all-controls",
     ]);
   });
 
@@ -53,6 +60,20 @@ describe("golden PNGs", () => {
       const d = diffImages(committed, current, 1);
       expect(d.differing, `golden ${name}.png is stale — run pnpm --filter @oxygen/api golden:render`).toBe(0);
     });
+  }
+
+  it("lists every page scene", () => {
+    expect([...pageSceneNames]).toEqual(["page-sprint-a4", "page-ring", "page-rotated"]);
+  });
+
+  for (const name of pageSceneNames) {
+    it(`${name}.png matches the current page oracle`, async () => {
+      const committed = await decode(await readFile(new URL(`${name}.png`, goldenDir)));
+      const current = await decode(await renderPageGoldenPng(name));
+      expect({ width: committed.width, height: committed.height }).toEqual({ width: current.width, height: current.height });
+      const d = diffImages(committed, current, 1);
+      expect(d.differing, `golden ${name}.png is stale — run pnpm --filter @oxygen/api golden:render`).toBe(0);
+    }, 60_000);
   }
 
   it("golden frames are whole pixels", async () => {

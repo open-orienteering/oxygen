@@ -13,6 +13,9 @@ export const MAP_PIPELINE_SPECS = [
   "**/webserial.spec.ts",
   "**/mobile-layout.spec.ts",
   "**/map-viewer-gestures.spec.ts",
+  "**/map-control-circles.spec.ts",
+  "**/map-multicourse.spec.ts",
+  "**/course-maps.spec.ts",
 ];
 
 /**
