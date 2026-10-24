@@ -14,11 +14,12 @@
  * Protocol (docs/map-rendering.md §5.2 "Worker"):
  *   → load     { source: document bytes | objects + symbols, fonts, text atlas pages }   ← loaded { summary, atlas, grid, base parts, large part }
  *   → prepare  { ids }   replaces the queue; ← part { part } per id, nearest first
+ *   → course   { generation, input }   ← course { generation, part, colours, derivation, … } (§5.2 "Dynamic bucket")
  *   ← error    { message } (load failures; the queue stops)
  */
 
-import { mapDocument, render } from "@oxygen/shared";
-import { MeshAtlasBuilder, type MeshAtlas } from "./mesh-atlas.js";
+import { course, mapDocument, render } from "@oxygen/shared";
+import { MeshAtlasBuilder, type AtlasMesh, type MeshAtlas } from "./mesh-atlas.js";
 import { buildTextGlyphs, haloEm, textGlyphKey, type TextAtlasPage } from "./text-atlas.js";
 import {
   aboveZoomGate, assignBuckets, fitView, partTransferables, prepareBucketPart, PREFETCH_MARGIN_CELLS, visibleCells,
@@ -58,6 +59,12 @@ export interface LoadRequest {
   toleranceUm?: number;
   cellUm?: number;
   largeCells?: number;
+  /**
+   * Prepare for a course layer (document source; §5.2 "Dynamic bucket"): the static buckets are
+   * built on the course-completed stack (`course.courseColourStack`), the cut features are
+   * extracted, and `course` requests are answered. Default false: the stack is the document's.
+   */
+  courseLayer?: boolean;
 }
 
 export interface PrepareRequest {
@@ -66,7 +73,30 @@ export interface PrepareRequest {
   ids: number[];
 }
 
-export type WorkerRequest = LoadRequest | PrepareRequest;
+/** What the viewer decides of a course layer; the worker adds the document context and cut features. */
+export type CourseLayerRequest = Pick<course.CourseLayerInput, "structure" | "sites" | "objects" | "appearance" | "viewOptions">;
+
+export interface CourseRequest {
+  type: "course";
+  /** Echoed in the reply; the engine keeps only the latest. */
+  generation: number;
+  /** `null` clears the layer. */
+  input: CourseLayerRequest | null;
+}
+
+export type WorkerRequest = LoadRequest | PrepareRequest | CourseRequest;
+
+/** The dynamic bucket's id (never a cell or the large bucket). */
+export const COURSE_BUCKET = -2;
+
+/** Course symbol dimensions on paper, mm: what the UI layer sizes its hit targets and rings by. */
+export interface CourseMetrics {
+  circleRadiusMm: number;
+  finishRadiusMm: number;
+  startRadiusMm: number;
+  lineWidthMm: number;
+  digitHeightMm: number;
+}
 
 export interface LoadSummary {
   /** Paper bounds of everything drawn, µm. */
@@ -98,6 +128,10 @@ export interface LoadSummary {
   queued: number[];
   ms: { decode: number; bridge: number; symbolise: number; atlas: number; assign: number; base: number; large: number };
   bytes: { base: number; large: number; atlas: number };
+  /** The stack the parts' colour indices refer to (document source): the document's, or with `courseLayer` the course-completed one. */
+  colourStack?: render.ColourStack;
+  /** With `courseLayer`: whether `course` requests can be drawn (an unaligned stack cannot), and the cut features found. */
+  courseLayer?: { supported: true; cutFeatures: number } | { supported: false; reason: string };
 }
 
 export interface LoadedReply {
@@ -118,7 +152,22 @@ export interface ErrorReply {
   message: string;
 }
 
-export type WorkerReply = LoadedReply | PartReply | ErrorReply;
+export interface CourseReply {
+  type: "course";
+  generation: number;
+  /** The dynamic bucket (`COURSE_BUCKET`, layer `all`); null when cleared or unsupported. */
+  part: PreparedPart | null;
+  /** The stack to draw everything with while this layer is shown: the completed stack plus layout-object rows on top. */
+  colours: render.ColourStack;
+  derivation: course.CourseDerivation | null;
+  metrics: CourseMetrics | null;
+  /** symbolise, `TEXT_*` and `COURSE_UNAVAILABLE` counts. */
+  warnings: Record<string, number>;
+  /** The whole mesh atlas, only when the course added meshes to it (earlier meshes keep their `base`). */
+  atlas?: MeshAtlas;
+}
+
+export type WorkerReply = LoadedReply | PartReply | ErrorReply | CourseReply;
 
 export type Post = (msg: WorkerReply, transfer: ArrayBuffer[]) => void;
 
@@ -126,6 +175,23 @@ interface State {
   stream: render.PassStream;
   assignment: Assignment;
   ctx: PrepareContext;
+  /** Present after a `courseLayer` load of a document with an aligned stack. */
+  course?: CourseState;
+  /** The stack the static parts index (document source). */
+  colourStack: render.ColourStack;
+}
+
+interface CourseState {
+  document: course.CourseDocumentContext;
+  cutFeatures: course.CutFeature[];
+  stackIndex: ReadonlyMap<string, number>;
+  /** Stream objects of the document: the course part's object ids start here (`courseObjectOffset`). */
+  objectOffset: number;
+  fonts: render.FontMetrics[];
+  textAtlas: TextAtlasPage[] | undefined;
+  atlas: MeshAtlasBuilder;
+  /** The atlas's meshes as last sent to the main thread. */
+  meshes: AtlasMesh[];
 }
 
 /** Queued detail parts are prepared in slices of about this long, then the worker yields so a newer request can overtake. */
@@ -186,6 +252,11 @@ export function createMapGlWorker(post: Post, schedule: (fn: () => void) => void
         }
         return;
       }
+      if (msg.type === "course") {
+        const { reply, transfer } = courseReply(state, msg);
+        post(reply, transfer);
+        return;
+      }
       queue = msg.ids.slice();
       if (!pumping && queue.length) {
         pumping = true;
@@ -206,6 +277,9 @@ function load(msg: LoadRequest): { reply: LoadedReply; transfer: ArrayBuffer[]; 
   let objects: render.RenderObject[] = [], symbols: render.RenderSymbol[] = [];
   let bridge: mapDocument.DocumentRenderInput["stats"] | undefined;
   let tDecode = t0;
+  let colourStack: render.ColourStack = [];
+  let courseSupport: LoadSummary["courseLayer"];
+  let courseDoc: { document: course.CourseDocumentContext; cutFeatures: course.CutFeature[]; stackIndex: ReadonlyMap<string, number> } | undefined;
   if (msg.source.kind === "document") {
     const doc = mapDocument.decodeMapDocument(new Uint8Array(msg.source.bytes));
     tDecode = performance.now();
@@ -213,6 +287,22 @@ function load(msg: LoadRequest): { reply: LoadedReply; transfer: ArrayBuffer[]; 
     objects = input.objects;
     symbols = input.symbols;
     bridge = input.stats;
+    colourStack = doc.header.colours;
+    if (msg.courseLayer) {
+      // The static buckets are keyed on the stack the course layer draws with, course shown or not:
+      // it is a function of the document alone, so showing a course re-prepares nothing (§5.2 "Dynamic bucket").
+      try {
+        const stack = course.courseColourStack(doc.header.colours);
+        if (stack.remap) symbols = symbols.map((s) => render.remapRenderColours(s, stack.remap!));
+        colourStack = stack.colours;
+        const cutFeatures = course.cutFeaturesOfDocument(doc);
+        courseDoc = { document: course.courseDocumentContext(doc.header), cutFeatures, stackIndex: stack.index };
+        courseSupport = { supported: true, cutFeatures: cutFeatures.length };
+      } catch (e) {
+        if (!(e instanceof course.CourseStackError)) throw e;
+        courseSupport = { supported: false, reason: e.message };
+      }
+    }
   } else if (msg.source.kind === "objects") {
     objects = msg.source.objects;
     symbols = msg.source.symbols;
@@ -296,11 +386,73 @@ function load(msg: LoadRequest): { reply: LoadedReply; transfer: ArrayBuffer[]; 
       assign: r(tAssign - tAtlas), base: r(tBase - tAssign), large: r(tLarge - tBase),
     },
     bytes: { base: base.reduce((n, p) => n + p.gpuBytes, 0), large: large?.gpuBytes ?? 0, atlas: built.data.byteLength },
+    ...(msg.source.kind === "document" ? { colourStack } : {}),
+    ...(msg.courseLayer ? { courseLayer: courseSupport ?? { supported: false, reason: "a course layer needs a document source" } } : {}),
+  };
+  const courseState: CourseState | undefined = courseDoc && {
+    ...courseDoc, objectOffset: objects.length, fonts, textAtlas: msg.textAtlas, atlas, meshes: built.meshes,
   };
   const transfer: ArrayBuffer[] = [built.data.buffer as ArrayBuffer];
   for (const p of base) transfer.push(...partTransferables(p));
   if (large) transfer.push(...partTransferables(large));
-  return { reply: { type: "loaded", summary, atlas: built, base, large }, transfer, next: { stream, assignment, ctx } };
+  return { reply: { type: "loaded", summary, atlas: built, base, large }, transfer, next: { stream, assignment, ctx, colourStack, ...(courseState ? { course: courseState } : {}) } };
+}
+
+/**
+ * The dynamic bucket (§5.2 "Dynamic bucket"; 04 §7): the course layer
+ * symbolised on its own — its symbols already index the completed stack
+ * the static parts were built on — and prepared as one `all` part. Object
+ * ids continue after the document's (`courseRenderInput`'s
+ * `courseObjectOffset`), glyph meshes join the atlas by content, numbers
+ * resolve against the loaded text pages.
+ */
+function courseReply(state: State | undefined, msg: CourseRequest): { reply: CourseReply; transfer: ArrayBuffer[] } {
+  const empty = (colours: render.ColourStack, warnings: Record<string, number> = {}): { reply: CourseReply; transfer: ArrayBuffer[] } => ({
+    reply: { type: "course", generation: msg.generation, part: null, colours, derivation: null, metrics: null, warnings },
+    transfer: [],
+  });
+  const cs = state?.course;
+  if (!state || !cs) return empty(state?.colourStack ?? [], msg.input ? { COURSE_UNAVAILABLE: 1 } : {});
+  if (!msg.input) return empty(state.colourStack);
+
+  const layer = course.courseLayer({ ...msg.input, document: cs.document, cutFeatures: cs.cutFeatures });
+  const set = course.courseSymbols(cs.document, cs.stackIndex, msg.input.appearance);
+  const sym = render.symbolise({ objects: layer.objects.map(({ ref: _ref, ...o }) => o), symbols: layer.symbols, fonts: cs.fonts });
+  const objectIdx = new Uint32Array(sym.stream.objectIdx.length);
+  for (let i = 0; i < objectIdx.length; i++) objectIdx[i] = sym.stream.objectIdx[i] + cs.objectOffset;
+  const stream: render.PassStream = { ...sym.stream, objectIdx };
+
+  const before = cs.atlas.size;
+  const glyphMesh = new Map<string, number>();
+  const tol = state.ctx.toleranceUm;
+  for (const m of stream.glyphTable) glyphMesh.set(`${m.glyphId}/${m.partIdx}`, cs.atlas.glyph(m, Math.max(0.5, tol / 4), `c/${meshKey(m)}`));
+  const grown = cs.atlas.size > before ? cs.atlas.build() : undefined;
+  if (grown) cs.meshes = grown.meshes;
+
+  const warnings: Record<string, number> = {};
+  for (const w of sym.warnings) warnings[w.code] = (warnings[w.code] ?? 0) + 1;
+  const textGlyph = resolveText(stream, cs.fonts, cs.textAtlas, warnings, { glyphs: 0, missing: 0 });
+  const ctx: PrepareContext = { ...state.ctx, meshes: cs.meshes, glyphMesh, textGlyph };
+  const passes = stream.passes.map((_, i) => i);
+  const part = passes.length ? prepareBucketPart(stream, COURSE_BUCKET, passes, "all", ctx) : null;
+
+  const um = (v: number) => v / 1000;
+  const reply: CourseReply = {
+    type: "course", generation: msg.generation, part, colours: layer.colours, derivation: layer.derivation, warnings,
+    metrics: {
+      circleRadiusMm: um(set.circleRadiusUm), finishRadiusMm: um(set.finishRadiusUm), startRadiusMm: um(set.startRadiusUm),
+      lineWidthMm: um(set.lineWidthUm), digitHeightMm: um(set.digitHeightUm),
+    },
+    ...(grown ? { atlas: grown } : {}),
+  };
+  const transfer = part ? partTransferables(part) : [];
+  if (grown) transfer.push(grown.data.buffer as ArrayBuffer);
+  return { reply, transfer };
+}
+
+/** A glyph part's geometry as a key: the course stream's glyph ids change with every re-symbolisation. */
+function meshKey(m: render.GlyphMesh): string {
+  return JSON.stringify([m.fills.map((f) => [Array.from(f.coords), Array.from(f.flags), f.closed]), m.strokes.map((s) => [Array.from(s.path.coords), Array.from(s.path.flags), s.path.closed, s.widthUm, s.cap, s.join])]);
 }
 
 /**

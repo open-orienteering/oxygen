@@ -10,3 +10,4 @@ export { courseLayerGeoJson, type CourseGeoJson, type CourseGeoJsonFeature } fro
 export { CUT_CODES, circleCuts, legGaps, cutFeaturesOfDocument } from "./cuts.js";
 export { CourseStackError, courseColourStack } from "./colour-stack.js";
 export { courseDocumentContext } from "./context.js";
+export { courseSymbols, type CourseSymbolSet } from "./symbols.js";
