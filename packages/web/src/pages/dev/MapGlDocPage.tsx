@@ -36,6 +36,7 @@ import { fitView } from "../../map-gl/buckets";
 import { textAtlasPagesFor } from "../../map-gl/text-atlas";
 import { loadTextAtlas } from "../../lib/map-fonts";
 import liberationSansUrl from "../../../../shared/fonts/LiberationSans-Regular.ttf?url";
+import liberationSansBoldUrl from "../../../../shared/fonts/LiberationSans-Bold.ttf?url";
 import liberationSansNarrowUrl from "../../../../shared/fonts/LiberationSansNarrow-Regular.ttf?url";
 
 type Mode = render.OcadConvertMode | "source";
@@ -174,6 +175,7 @@ function documentProxyColours(colours: render.ColourStack): { line: number; area
 const FONT_FILES: [render.FontFamily, string][] = [
   ["liberation-sans", liberationSansUrl],
   ["liberation-sans-narrow", liberationSansNarrowUrl],
+  ["liberation-sans", liberationSansBoldUrl],
 ];
 let fontBytesPromise: Promise<{ family: render.FontFamily; bytes: ArrayBuffer }[]> | undefined;
 function loadFontBytes(): Promise<{ family: render.FontFamily; bytes: ArrayBuffer }[]> {

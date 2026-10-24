@@ -17,7 +17,7 @@
 import { mapDocument, mapImport, render } from "@oxygen/shared";
 import { importMapToDocument } from "../import/ocad.js";
 import { parseViewBox, windowPixelSize, windowViewBox, withViewBox, type OcadRect } from "../map-window.js";
-import { BUNDLED_FONT_FILES, glyphOutlineFrom, loadBundledFont } from "./fonts.js";
+import { BUNDLED_FONT_FILES, glyphOutlineFrom, loadBundledFonts } from "./fonts.js";
 import { diffImages, rasterisePassStream, type ImageDiff } from "./reference-raster.js";
 
 /** Paper window, mm, y-up (the document's paper frame; OCAD coordinates / 100). */
@@ -234,7 +234,7 @@ export async function runParity(file: Buffer, fileName: string, opts: ParityOpti
     if (channelDistance(a, shared) > tolerance) colourDifferences.push({ number: c.number, name: c.name ?? "", legacy: a, shared });
   }
 
-  const fonts = await Promise.all([loadBundledFont("liberation-sans"), loadBundledFont("liberation-sans-narrow")]);
+  const fonts = await loadBundledFonts();
   const glyphOutline = glyphOutlineFrom(fonts);
   const symNumOf = (s: mapDocument.DocumentSymbol) => (s.sourceIndex !== undefined ? legacy.symbols[s.sourceIndex]?.symNum : undefined);
 
