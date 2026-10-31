@@ -118,6 +118,32 @@ export function ringsCrossQuad(rings: FlatRing[], quad: number[]): boolean {
   return false;
 }
 
+/**
+ * Does any edge of the polylines `a` (closed rings when `aClosed`) cross or
+ * touch any edge of the closed rings `b`? Edges whose boxes do not meet
+ * are skipped before the orientation test.
+ */
+export function polylinesCrossRings(a: FlatRing[], aClosed: boolean, b: FlatRing[]): boolean {
+  for (const r of a) {
+    const n = r.length / 2;
+    const edges = aClosed ? n : n - 1;
+    for (let e = 0; e < edges; e++) {
+      const i = e, j = (e + 1) % n;
+      const ax = r[2 * i], ay = r[2 * i + 1], bx = r[2 * j], by = r[2 * j + 1];
+      const minX = Math.min(ax, bx), maxX = Math.max(ax, bx), minY = Math.min(ay, by), maxY = Math.max(ay, by);
+      for (const q of b) {
+        const m = q.length / 2;
+        for (let k = 0, l = m - 1; k < m; l = k++) {
+          const cx = q[2 * l], cy = q[2 * l + 1], dx = q[2 * k], dy = q[2 * k + 1];
+          if (Math.max(cx, dx) < minX || Math.min(cx, dx) > maxX || Math.max(cy, dy) < minY || Math.min(cy, dy) > maxY) continue;
+          if (segmentsIntersect(ax, ay, bx, by, cx, cy, dx, dy)) return true;
+        }
+      }
+    }
+  }
+  return false;
+}
+
 /** Shoelace area of a flat ring (signed, +ve counter-clockwise in y-up). */
 export function ringArea(r: FlatRing): number {
   let a = 0;

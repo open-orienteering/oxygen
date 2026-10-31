@@ -116,6 +116,16 @@ describe("transformPassStream", () => {
     expect(dst.spacingUm).toBeCloseTo(1400 * k, 9);
   });
 
+  it("filter masks: region paths moved like the passes", () => {
+    const region = makePath([0, 0, 10000, 0, 10000, 10000], undefined, true);
+    const m = transformPassStream({ ...stream, masks: [{ regions: [region] }], maskIdx: Int32Array.from([0, -1, -1, -1]) }, t);
+    const [x, y] = mapPointToPage(t, 10000, 10000);
+    expect(m.masks![0].regions[0].coords[4]).toBe(Math.round(x));
+    expect(m.masks![0].regions[0].coords[5]).toBe(Math.round(y));
+    expect(Array.from(m.maskIdx!)).toEqual([0, -1, -1, -1]);
+    expect(out).not.toHaveProperty("masks");
+  });
+
   it("text: positions moved, size and halo scaled, every glyph turned", () => {
     const x = out.passes[3];
     if (x.kind !== "text") throw new Error("kind");

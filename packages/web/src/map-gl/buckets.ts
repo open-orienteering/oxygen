@@ -600,6 +600,8 @@ export interface IndexDraw {
   /** First index in the visible-set buffer. */
   offset: number;
   count: number;
+  /** Filter mask (index into `VisibleSet.filter.masks`); absent = unmasked. */
+  mask?: number;
 }
 
 export interface InstanceDraw {
@@ -608,6 +610,7 @@ export interface InstanceDraw {
   cls: number;
   first: number;
   count: number;
+  mask?: number;
 }
 
 export interface ClipGroup {
@@ -621,6 +624,32 @@ export interface ClipGroup {
   first: number;
   instances: number;
   members: number;
+  mask?: number;
+}
+
+/**
+ * Filter regions on the static buckets (docs/map-rendering.md §4.11,
+ * §5.2 "Filter regions"): which range-table entries draw under which mask,
+ * and each mask's region triangles. Resolved in the worker from the
+ * stream's masks, so a mask is a function of (object, colour).
+ */
+export interface VisibleFilter {
+  /** `filterEntryKey(object, colour)` → mask index. Entries not listed are unmasked (the course part never is). */
+  entryMask: ReadonlyMap<number, number>;
+  /** Region triangles of every mask, x, y relative to the document origin (even-odd triangulated; a mask's regions overlap freely). */
+  positions: Float32Array;
+  indices: Uint32Array;
+  /** Per mask: its triangles' first index and index count in `indices`. */
+  masks: { offset: number; count: number }[];
+}
+
+/** Key of a range-table entry in `VisibleFilter.entryMask`. */
+export const filterEntryKey = (object: number, colour: number): number => object * 65536 + colour;
+
+/** One step of the draw loop: a colour, unmasked (`mask` −1) or under one mask. */
+export interface DrawLayer {
+  colour: number;
+  mask: number;
 }
 
 export interface VisibleSet {
@@ -639,15 +668,23 @@ export interface VisibleSet {
   clips: { positions: Float32Array; indices: Uint32Array; instances: Float32Array; groups: ClipGroup[] };
   /** Colours with anything to draw, ascending. */
   colours: number[];
+  /** The draw loop: per colour the unmasked draws, then each mask's, masks ascending. Draws of every kind are in this order. */
+  layers: DrawLayer[];
+  /** The region triangles of the masks the draws use (`buildVisibleSet`'s filter, passed through). */
+  filter?: Pick<VisibleFilter, "positions" | "indices" | "masks">;
 }
 
 /**
  * Concatenates the ranges of the given parts per (colour, kind) into
  * visible-set buffers, skipping `hidden` objects. Index values are
- * rebased onto each part's arena vertex offset.
+ * rebased onto each part's arena vertex offset. With a `filter`, an
+ * entry's indices go to its mask's draw: within a colour, unmasked first,
+ * then masks ascending.
  */
-export function buildVisibleSet(parts: ResidentPart[], hidden?: ReadonlySet<number>): VisibleSet {
+export function buildVisibleSet(parts: ResidentPart[], hidden?: ReadonlySet<number>, filter?: VisibleFilter): VisibleSet {
   const hide = hidden && hidden.size ? hidden : undefined;
+  const em = filter && filter.entryMask.size ? filter.entryMask : undefined;
+  const maskOf = (object: number, colour: number) => (em ? (em.get(filterEntryKey(object, colour)) ?? -1) : -1);
   const indexed = (kind: "fill" | "hatch" | "stroke") => {
     // Spans: (colour, part, entry lo..hi) in colour order, parts in the given order within a colour.
     const spans: { colour: number; p: ResidentPart; lo: number; hi: number }[] = [];
@@ -669,25 +706,55 @@ export function buildVisibleSet(parts: ResidentPart[], hidden?: ReadonlySet<numb
     const indices = new Uint32Array(total);
     const draws: IndexDraw[] = [];
     let o = 0;
-    for (const s of spans) {
-      const k = s.p.part[kind]!;
-      const r = k.ranges;
-      const add = s.p.base[kind];
-      const before = o;
-      if (!hide) {
-        const a = r.start[s.lo], b = r.start[s.hi - 1] + r.count[s.hi - 1];
-        for (let i = a; i < b; i++) indices[o++] = k.indices[i] + add;
-      } else {
-        for (let e = s.lo; e < s.hi; e++) {
-          if (hide.has(r.object[e])) continue;
-          const a = r.start[e], b = a + r.count[e];
-          for (let i = a; i < b; i++) indices[o++] = k.indices[i] + add;
-        }
-      }
-      if (o === before) continue;
+    const push = (colour: number, mask: number, before: number) => {
+      if (o === before) return;
       const last = draws[draws.length - 1];
-      if (last && last.colour === s.colour) last.count += o - before;
-      else draws.push({ colour: s.colour, offset: before, count: o - before });
+      if (last && last.colour === colour && (last.mask ?? -1) === mask) last.count += o - before;
+      else draws.push({ colour, offset: before, count: o - before, ...(mask >= 0 ? { mask } : {}) });
+    };
+    const copy = (s: (typeof spans)[number], e: number) => {
+      const k = s.p.part[kind]!;
+      const a = k.ranges.start[e], b = a + k.ranges.count[e], add = s.p.base[kind];
+      for (let i = a; i < b; i++) indices[o++] = k.indices[i] + add;
+    };
+    if (em) {
+      // Per colour: the unmasked entries, then each mask's.
+      for (let g = 0; g < spans.length; ) {
+        let h = g + 1;
+        while (h < spans.length && spans[h].colour === spans[g].colour) h++;
+        const colour = spans[g].colour;
+        const keys = new Set<number>();
+        for (let t = g; t < h; t++) {
+          const r = spans[t].p.part[kind]!.ranges;
+          for (let e = spans[t].lo; e < spans[t].hi; e++) if (!hide?.has(r.object[e])) keys.add(maskOf(r.object[e], colour));
+        }
+        for (const m of [...keys].sort((a, b) => a - b)) {
+          const before = o;
+          for (let t = g; t < h; t++) {
+            const r = spans[t].p.part[kind]!.ranges;
+            for (let e = spans[t].lo; e < spans[t].hi; e++) {
+              if (hide?.has(r.object[e]) || maskOf(r.object[e], colour) !== m) continue;
+              copy(spans[t], e);
+            }
+          }
+          push(colour, m, before);
+        }
+        g = h;
+      }
+    } else {
+      for (const s of spans) {
+        const k = s.p.part[kind]!;
+        const r = k.ranges;
+        const add = s.p.base[kind];
+        const before = o;
+        if (!hide) {
+          const a = r.start[s.lo], b = r.start[s.hi - 1] + r.count[s.hi - 1];
+          for (let i = a; i < b; i++) indices[o++] = k.indices[i] + add;
+        } else {
+          for (let e = s.lo; e < s.hi; e++) if (!hide.has(r.object[e])) copy(s, e);
+        }
+        push(s.colour, -1, before);
+      }
     }
     return { indices: o === total ? indices : indices.slice(0, o), draws };
   };
@@ -711,55 +778,82 @@ export function buildVisibleSet(parts: ResidentPart[], hidden?: ReadonlySet<numb
     const instances = new Float32Array(total * INSTANCE_FLOATS);
     const draws: InstanceDraw[] = [];
     let o = 0; // instances written
-    for (const s of spans) {
-      const k = s.p.part[kind]!;
-      const r = k.ranges;
-      const before = o;
-      for (let e = s.lo; e < s.hi; e++) {
-        if (hide?.has(r.object[e])) continue;
-        const a = r.start[e] * INSTANCE_FLOATS, n = r.count[e];
-        instances.set(k.instances.subarray(a, a + n * INSTANCE_FLOATS), o * INSTANCE_FLOATS);
-        o += n;
+    // Masks within a colour: one pass over the colour's spans per mask present (unmasked first), classes ascending in each.
+    for (let g = 0; g < spans.length; ) {
+      let h = g + 1;
+      while (h < spans.length && spans[h].colour === spans[g].colour) h++;
+      const colour = spans[g].colour;
+      let keys = [-1];
+      if (em) {
+        const set = new Set<number>();
+        for (let t = g; t < h; t++) {
+          const r = spans[t].p.part[kind]!.ranges;
+          for (let e = spans[t].lo; e < spans[t].hi; e++) if (!hide?.has(r.object[e])) set.add(maskOf(r.object[e], colour));
+        }
+        keys = [...set].sort((a, b) => a - b);
       }
-      if (o === before) continue;
-      const last = draws[draws.length - 1];
-      if (last && last.colour === s.colour && last.cls === s.cls) last.count += o - before;
-      else draws.push({ colour: s.colour, cls: s.cls, first: before, count: o - before });
+      for (const m of keys) {
+        for (let t = g; t < h; t++) {
+          const s = spans[t];
+          const k = s.p.part[kind]!;
+          const r = k.ranges;
+          const before = o;
+          for (let e = s.lo; e < s.hi; e++) {
+            if (hide?.has(r.object[e])) continue;
+            if (em && maskOf(r.object[e], colour) !== m) continue;
+            const a = r.start[e] * INSTANCE_FLOATS, n = r.count[e];
+            instances.set(k.instances.subarray(a, a + n * INSTANCE_FLOATS), o * INSTANCE_FLOATS);
+            o += n;
+          }
+          if (o === before) continue;
+          const last = draws[draws.length - 1];
+          if (last && last.colour === colour && last.cls === s.cls && (last.mask ?? -1) === m) last.count += o - before;
+          else draws.push({ colour, cls: s.cls, first: before, count: o - before, ...(m >= 0 ? { mask: m } : {}) });
+        }
+      }
+      g = h;
     }
     return { instances: o === total ? instances : instances.slice(0, o * INSTANCE_FLOATS), draws };
   };
   const vs: VisibleSet = {
     fill: indexed("fill"), hatch: indexed("hatch"), stroke: indexed("stroke"),
-    glyph: instanced("glyph"), text: instanced("text"), clips: groupClips(parts, hide), colours: [],
+    glyph: instanced("glyph"), text: instanced("text"), clips: groupClips(parts, hide, maskOf), colours: [], layers: [],
+    ...(filter && em ? { filter: { positions: filter.positions, indices: filter.indices, masks: filter.masks } } : {}),
   };
-  const cs = new Set<number>();
-  for (const k of [vs.fill, vs.hatch, vs.stroke, vs.glyph, vs.text]) for (const d of k.draws) cs.add(d.colour);
-  for (const g of vs.clips.groups) cs.add(g.colour);
-  vs.colours = [...cs].sort((a, b) => a - b);
+  const layers = new Map<string, DrawLayer>();
+  const add = (colour: number, mask: number | undefined) => {
+    const key = `${colour}/${mask ?? -1}`;
+    if (!layers.has(key)) layers.set(key, { colour, mask: mask ?? -1 });
+  };
+  for (const k of [vs.fill, vs.hatch, vs.stroke, vs.glyph, vs.text]) for (const d of k.draws) add(d.colour, d.mask);
+  for (const g of vs.clips.groups) add(g.colour, g.mask);
+  vs.layers = [...layers.values()].sort((a, b) => a.colour - b.colour || a.mask - b.mask);
+  vs.colours = [...new Set(vs.layers.map((l) => l.colour))];
   return vs;
 }
 
-/** Greedy grouping of clip items per colour: an item joins the first group none of whose footprints it meets. */
-function groupClips(parts: ResidentPart[], hide: ReadonlySet<number> | undefined): VisibleSet["clips"] {
-  const items: ClipItem[] = [];
-  for (const p of parts) for (const item of p.part.clips) if (!hide?.has(item.object)) items.push(item);
-  items.sort((a, b) => a.colour - b.colour);
+/** Greedy grouping of clip items per (colour, mask): an item joins the first group none of whose footprints it meets. */
+function groupClips(parts: ResidentPart[], hide: ReadonlySet<number> | undefined, maskOf: (object: number, colour: number) => number): VisibleSet["clips"] {
+  const items: { item: ClipItem; mask: number }[] = [];
+  for (const p of parts) for (const item of p.part.clips) if (!hide?.has(item.object)) items.push({ item, mask: maskOf(item.object, item.colour) });
+  items.sort((a, b) => a.item.colour - b.item.colour || a.mask - b.mask);
   const meets = (a: number[], b: number[]) => a[0] <= b[2] && b[0] <= a[2] && a[1] <= b[3] && b[1] <= a[3];
-  const grouped: { colour: number; members: ClipItem[] }[] = [];
-  let colourStart = 0;
-  for (const item of items) {
-    if (grouped.length && grouped[grouped.length - 1].colour !== item.colour) colourStart = grouped.length;
-    let g = grouped.slice(colourStart).find((x) => x.colour === item.colour && x.members.every((m) => !meets(m.bounds, item.bounds)));
-    if (!g) grouped.push((g = { colour: item.colour, members: [] }));
+  const grouped: { colour: number; mask: number; members: ClipItem[] }[] = [];
+  let start = 0;
+  for (const { item, mask } of items) {
+    const last = grouped[grouped.length - 1];
+    if (last && (last.colour !== item.colour || last.mask !== mask)) start = grouped.length;
+    let g = grouped.slice(start).find((x) => x.members.every((m) => !meets(m.bounds, item.bounds)));
+    if (!g) grouped.push((g = { colour: item.colour, mask, members: [] }));
     g.members.push(item);
   }
   let nPos = 0, nIdx = 0, nInst = 0;
-  for (const it of items) { nPos += it.positions.length; nIdx += it.indices.length; nInst += it.instances.length; }
+  for (const { item: it } of items) { nPos += it.positions.length; nIdx += it.indices.length; nInst += it.instances.length; }
   const positions = new Float32Array(nPos), indices = new Uint32Array(nIdx), instances = new Float32Array(nInst);
   const groups: ClipGroup[] = [];
   let po = 0, io = 0, so = 0;
   for (const g of grouped) {
-    const group: ClipGroup = { colour: g.colour, cls: 0, offset: io, count: 0, first: so / INSTANCE_FLOATS, instances: 0, members: g.members.length };
+    const group: ClipGroup = { colour: g.colour, cls: 0, offset: io, count: 0, first: so / INSTANCE_FLOATS, instances: 0, members: g.members.length, ...(g.mask >= 0 ? { mask: g.mask } : {}) };
     for (const m of g.members) {
       const base = po / 2;
       positions.set(m.positions, po);

@@ -1,8 +1,8 @@
 import { describe, it, expect } from "vitest";
 import { render } from "@oxygen/shared";
 import {
-  aboveZoomGate, assignBuckets, BucketLru, buildVisibleSet, CELL_UM, cellId, passBounds, prepareBucketPart, visibleCells,
-  type PrepareContext, type ResidentPart,
+  aboveZoomGate, assignBuckets, BucketLru, buildVisibleSet, CELL_UM, cellId, filterEntryKey, passBounds, prepareBucketPart, visibleCells,
+  type PrepareContext, type ResidentPart, type VisibleFilter,
 } from "../buckets";
 import { MeshAtlasBuilder, sizeClass, INSTANCE_FLOATS } from "../mesh-atlas";
 
@@ -240,6 +240,44 @@ describe("visible set (04 §6.8 point 2)", () => {
     expect(vs.fill.draws.map((d) => [d.colour, d.count])).toEqual([[1, 12]]);
     expect(vs.stroke.draws).toHaveLength(0);
     expect(vs.colours).toEqual([1]);
+  });
+
+  it("filter masks: per colour the unmasked draw, then one per mask; layers in draw order; hidden still wins", () => {
+    const ps = parts();
+    const filter: VisibleFilter = {
+      // Object 0 (colour 1) and object 3 (colour 1) under mask 1, object 2's stroke (colour 2) under mask 0.
+      entryMask: new Map([[filterEntryKey(0, 1), 1], [filterEntryKey(3, 1), 1], [filterEntryKey(2, 2), 0]]),
+      positions: Float32Array.from([0, 0, 1, 0, 1, 1]), indices: Uint32Array.from([0, 1, 2, 0, 1, 2]),
+      masks: [{ offset: 0, count: 3 }, { offset: 3, count: 3 }],
+    };
+    const vs = buildVisibleSet(ps, undefined, filter);
+    expect(vs.fill.draws.map((d) => [d.colour, d.mask ?? -1, d.count])).toEqual([[1, -1, 6], [1, 1, 12], [3, -1, 6]]);
+    expect(vs.stroke.draws.map((d) => [d.colour, d.mask])).toEqual([[2, 0]]);
+    expect(vs.layers).toEqual([{ colour: 1, mask: -1 }, { colour: 1, mask: 1 }, { colour: 2, mask: 0 }, { colour: 3, mask: -1 }]);
+    expect(vs.colours).toEqual([1, 2, 3]);
+    expect(vs.filter?.masks).toBe(filter.masks);
+    // The same indices as without the filter, regrouped.
+    expect([...vs.fill.indices].sort((a, b) => a - b)).toEqual([...buildVisibleSet(ps).fill.indices].sort((a, b) => a - b));
+    const hidden = buildVisibleSet(ps, new Set([0, 3]), filter);
+    expect(hidden.fill.draws.map((d) => [d.colour, d.mask ?? -1])).toEqual([[1, -1], [3, -1]]);
+    expect(buildVisibleSet(ps, undefined, { ...filter, entryMask: new Map() })).not.toHaveProperty("filter");
+  });
+
+  it("filter masks split instance draws and clip groups by mask", () => {
+    const b = new PassStreamBuilder();
+    b.glyphTable.push({ glyphId: 1, partIdx: 0, fills: [square(-100, -100, 200)], strokes: [] });
+    b.push({ kind: "glyph", colour: 4, glyphId: 1, partIdx: 0, instances: Float32Array.from([0, 0, 1, 0, 1]) }, 0, 0);
+    b.push({ kind: "glyph", colour: 4, glyphId: 1, partIdx: 0, instances: Float32Array.from([0, 500, 1, 0, 1]) }, 1, 0);
+    b.push({ kind: "glyph", colour: 4, glyphId: 1, partIdx: 0, instances: Float32Array.from([900, 0, 1, 0, 1]), clip: square(0, 0, 2000) }, 2, 0);
+    b.push({ kind: "glyph", colour: 4, glyphId: 1, partIdx: 0, instances: Float32Array.from([9000, 0, 1, 0, 1]), clip: square(8000, 0, 2000) }, 3, 0);
+    const s = b.build();
+    const part = prepareBucketPart(s, 0, s.passes.map((_, i) => i), "all", context(s));
+    const filter: VisibleFilter = { entryMask: new Map([[filterEntryKey(1, 4), 0], [filterEntryKey(3, 4), 0]]), positions: new Float32Array(0), indices: new Uint32Array(0), masks: [{ offset: 0, count: 0 }] };
+    const vs = buildVisibleSet([{ part, base: { fill: 0, hatch: 0, stroke: 0 } }], undefined, filter);
+    expect(vs.glyph.draws.map((d) => [d.count, d.mask ?? -1])).toEqual([[1, -1], [1, 0]]);
+    expect(vs.glyph.instances[1]).toBe(0);
+    expect(vs.glyph.instances[INSTANCE_FLOATS + 1]).toBe(500);
+    expect(vs.clips.groups.map((g) => [g.members, g.mask ?? -1])).toEqual([[1, -1], [1, 0]]);
   });
 
   it("groups instances by (colour, size class)", () => {

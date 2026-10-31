@@ -13,6 +13,7 @@ import type { MapTextValues } from "../course-maps/text.js";
 import type { AngularGap, FractionGap } from "../course-maps/overlay-geometry.js";
 import type { DocumentColour } from "../map-document/header.js";
 import type { RenderSymbol } from "../render/symbol.js";
+import type { FilterRegion } from "../render/filter-region.js";
 import type { RenderObject } from "../render/symbolise.js";
 import type { SymbolLibraryId } from "../symbol-library/index.js";
 
@@ -124,6 +125,22 @@ export interface CourseLayerInput {
   document: CourseDocumentContext;
   /** Features for automatic cuts (`cutFeaturesOfDocument`, or C5's legacy adapter). Absent = no automatic cuts. */
   cutFeatures?: readonly CutFeature[];
+  /** Filter regions over the map (`map-rendering.md` §4.11; 08 §4.5 `filter_region`). */
+  regions?: readonly CourseFilterRegion[];
+}
+
+/**
+ * A filter region as the course layer takes it: paper mm, y-up. `symbols`
+ * are document symbol indices, colours the document's own stack indices
+ * (re-indexed onto the completed stack by the layer).
+ */
+export interface CourseFilterRegion {
+  /** Outer ring first, then holes; each ring a polygon (closed implicitly). */
+  rings: readonly (readonly MapPoint[])[];
+  mode: FilterRegion["mode"];
+  symbols: FilterRegion["symbols"];
+  /** Complement of `symbols`: "show only these symbols inside". */
+  invert?: boolean;
 }
 
 export type CourseRefKind = "site" | "leg" | "number" | "leader" | "extra" | "object";
@@ -203,6 +220,8 @@ export interface CourseLayer {
   images: CourseLayerImage[];
   derivation: CourseDerivation;
   warnings: CourseLayerWarning[];
+  /** The input's filter regions in paper µm, colours on `colours`; they act on the document's objects only. */
+  regions: FilterRegion[];
 }
 
 /** A template's stored appearance as multipliers of the library dimensions (`defaultMapAppearance` = 1). */

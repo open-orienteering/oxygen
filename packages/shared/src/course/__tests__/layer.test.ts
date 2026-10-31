@@ -74,6 +74,31 @@ describe("courseLayer + courseRenderInput → one symbolise call", () => {
   });
 });
 
+describe("filter regions (map-rendering §4.11)", () => {
+  const square = [{ x: 20, y: -5 }, { x: 30, y: -5 }, { x: 30, y: 25 }, { x: 20, y: 25 }];
+  const hole = [{ x: 24, y: 0 }, { x: 26, y: 0 }, { x: 26, y: 2 }];
+  it("rings in mm become one closed µm path with hole flags; document colours move onto the completed stack", () => {
+    const layer = courseLayer(layerInput({ regions: [{ rings: [square, hole], mode: "clip", symbols: { colours: [0, 20] }, invert: true }] }));
+    expect(layer.remap).not.toBeNull();
+    const [r] = layer.regions;
+    expect(r.path.closed).toBe(true);
+    expect(Array.from(r.path.coords.slice(0, 4))).toEqual([20000, -5000, 30000, -5000]);
+    expect(Array.from(r.path.flags)).toEqual([0, 0, 0, 0, 16, 0, 0]);
+    expect(r).toMatchObject({ mode: "clip", invert: true, symbols: { colours: [layer.remap![0], layer.remap![20]] } });
+  });
+  it("hide removes the document's 516 under the region but never the course over it", () => {
+    const layer = courseLayer(layerInput({ regions: [{ rings: [square], mode: "hide", symbols: "all" }] }));
+    const input = courseRenderInput(isomDocument(), layer);
+    expect(input.regionObjectLimit).toBe(1);
+    const plain = symbolise({ ...courseRenderInput(isomDocument(), courseLayer(layerInput())), fonts: fonts() });
+    const { stream, hidden, warnings } = symbolise({ ...input, fonts: fonts() });
+    expect(warnings).toEqual([]);
+    expect(hidden).toEqual([0]);
+    expect(stream.objectIdx.includes(0)).toBe(false);
+    expect(stream.passes.length).toBe(plain.stream.passes.filter((_, k) => plain.stream.objectIdx[k] !== 0).length);
+  });
+});
+
 describe("layout objects (§3.6)", () => {
   const rect = (fillMode: "whiteout" | "whiteoutInverted" | "outOfBounds" | "solid", extra: Record<string, unknown> = {}): CourseMapObject =>
     ({ id: `r-${fillMode}`, anchor: "map", kind: "rectangle", x: 20, y: 20, width: 10, height: 5, fillMode, ...extra }) as CourseMapObject;

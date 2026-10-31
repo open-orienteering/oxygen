@@ -175,7 +175,35 @@ export function passStreamToSvg(stream: PassStream, opts: ReferenceSvgOptions): 
   const nextId = (prefix: string) => `${prefix}${idCounter++}`;
   const definedGlyphs = new Set<string>();
 
+  // Filter masks (§3.8): one clip path per region of a mask — the frame with the region as an even-odd hole —
+  // nested, so a masked pass shows only outside every region.
+  const frameRing = `M${n(b.minX)} ${n(b.minY)}L${n(b.maxX)} ${n(b.minY)}L${n(b.maxX)} ${n(b.maxY)}L${n(b.minX)} ${n(b.maxY)}Z`;
+  const maskClips = new Map<number, string[]>();
+  const maskClipIds = (m: number): string[] => {
+    let ids = maskClips.get(m);
+    if (!ids) {
+      ids = s.masks![m].regions.map((r) => {
+        const cid = nextId("mask");
+        defs.push(`<clipPath id="${cid}"><path d="${frameRing}${pathToSvgD(r, true)}" clip-rule="evenodd" fill-rule="evenodd"/></clipPath>`);
+        return cid;
+      });
+      maskClips.set(m, ids);
+    }
+    return ids;
+  };
+
   s.passes.forEach((p: Pass, passIndex: number) => {
+    const mask = s.maskIdx?.[passIndex] ?? -1;
+    const first = body.length;
+    drawPass(p, passIndex);
+    if (mask >= 0 && body.length > first) {
+      const inner = body.splice(first).join("");
+      const ids = maskClipIds(mask);
+      body.push(ids.reduceRight((acc, cid, k) => `<g${k === 0 ? ` data-mask="${mask}"` : ""} clip-path="url(#${cid})">${acc}</g>`, inner));
+    }
+  });
+
+  function drawPass(p: Pass, passIndex: number): void {
     const colour = opts.colour(p.colour);
     const tag = `data-pass="${passIndex}" data-kind="${p.kind}" data-colour="${p.colour}"`;
     switch (p.kind) {
@@ -267,7 +295,7 @@ export function passStreamToSvg(stream: PassStream, opts: ReferenceSvgOptions): 
         break;
       }
     }
-  });
+  }
 
   const viewBox = `${n(b.minX)} ${n(-b.maxY)} ${n(b.maxX - b.minX)} ${n(b.maxY - b.minY)}`;
   return [

@@ -10,6 +10,7 @@ import { strokeOutline } from "../../render/geometry.js";
 import { pathBounds } from "../../render/path.js";
 import { type FontRef, type GlyphMesh, type PassStream, makePath } from "../../render/pass-stream.js";
 import { passStreamFromJson } from "../../render/stream-json.js";
+import { passStreamBounds } from "../../render/reference-svg.js";
 import { symbolise } from "../../render/symbolise.js";
 import type { ColourMode } from "../colour.js";
 import {
@@ -22,7 +23,9 @@ import {
   passStreamOperators,
   pathOperators,
   CHAIN_LENGTH,
+  FILTER_FRAME_MARGIN_UM,
   GLYPH_FORM_REUSE,
+  filterClipPath,
   PRINT_GRID_UM,
   PRINT_QUANTUM_UM,
   UM_TO_PT,
@@ -174,6 +177,53 @@ describe("glyph", () => {
     const o = passStreamOperators(stream, { colours: scene.colours, mode: "cmyk", resources: resources().res });
     const blocks = o.match(/\nq\n[^\n]* W\* n\n(?:(?:q |1 0 0 1 )[^\n]* Do(?: Q)?\n|Q\n)+Q/g) ?? [];
     expect(blocks).toHaveLength(clipped.length);
+  });
+});
+
+describe("filter masks (§3.8, 05 §5.3)", () => {
+  const j = renderFixtures["colour-order"];
+  const a = { coords: [0, 0, 5000, 0, 5000, 5000], closed: true };
+  const b = { coords: [9000, 0, 12000, 0, 12000, 3000], closed: true };
+  const masked = (maskIdx: number[], masks = [{ regions: [a] }, { regions: [a, b] }]) =>
+    passStreamOperators(passStreamFromJson({ ...j, masks, maskIdx }), { colours: stack, mode: "cmyk", resources: resources().res });
+
+  it("the clip path is the frame with the region as an even-odd hole", () => {
+    const p = filterClipPath({ minX: -10, minY: -10, maxX: 100, maxY: 50 }, makePath([0, 0, 5, 0, 5, 5], undefined, true));
+    expect(Array.from(p.coords)).toEqual([-10, -10, 100, -10, 100, 50, -10, 50, 0, 0, 5, 0, 5, 5]);
+    expect(Array.from(p.flags)).toEqual([0, 0, 0, 0, 16, 0, 0]);
+  });
+
+  it("one q … W* n block per run of equally masked passes, one W* n per region, Q before the next run", () => {
+    // In canonical order the passes are fill, stroke, stroke, glyph, stroke with masks −1, 0, 1, 1, 0.
+    const s = passStreamFromJson({ ...j, masks: [{ regions: [a] }, { regions: [a, b] }], maskIdx: [0, 0, -1, 1, 1] });
+    expect(Array.from(s.maskIdx!)).toEqual([-1, 0, 1, 1, 0]);
+    const L = lines(passStreamOperators(s, { colours: stack, mode: "cmyk", resources: resources().res }));
+    expect(L.filter((l) => / W\* n$/.test(l))).toHaveLength(4);
+    expect(L.join("\n")).not.toMatch(/ W n/);
+    const qs = L.flatMap((l, k) => (l === "q" ? [k] : [])), Qs = L.flatMap((l, k) => (l === "Q" ? [k] : []));
+    expect(qs).toHaveLength(3);
+    expect(Qs).toHaveLength(3);
+    expect(L.slice(0, qs[0]).join("\n")).toMatch(/ f\* Q$/); // the unmasked fill comes first, outside any block
+    expect(qs.map((q) => L.slice(q + 1).findIndex((l) => !/ W\* n$/.test(l)))).toEqual([1, 2, 1]);
+    expect(Qs[0]).toBeLessThan(qs[1]);
+    expect(Qs[2]).toBe(L.length - 1);
+  });
+
+  it("the frame contains the stream's bounds by FILTER_FRAME_MARGIN_UM", () => {
+    const clip = lines(masked([0, -1, -1, -1, -1])).find((l) => l.endsWith(" W* n"))!;
+    const b = passStreamBounds(passStreamFromJson(j))!;
+    expect(clip.startsWith(`${b.minX - FILTER_FRAME_MARGIN_UM} ${b.minY - FILTER_FRAME_MARGIN_UM} m`)).toBe(true);
+  });
+
+  it("restores the graphics state at Q: the colour after a masked run is written again", () => {
+    const o = masked([-1, 0, 0, -1, -1]);
+    const L = lines(o);
+    const after = L.slice(L.lastIndexOf("Q") + 1);
+    expect(after.some((l) => / (k|K)$/.test(l))).toBe(true);
+  });
+
+  it("no masks: no clip operators", () => {
+    expect(ops("colour-order")).not.toMatch(/W\*? n/);
   });
 });
 

@@ -266,6 +266,36 @@ describe("MapGlEngine dynamic bucket (docs/map-rendering.md §5.2 Dynamic bucket
     expect(renderer.released).toContain("C");
   });
 
+  it("filter regions: the reply's hidden objects join setHidden's, masks reach the visible set, null clears both", async () => {
+    const { engine, transport, renderer, summary } = await courseEngine();
+    engine.setView({ centreX: 30_000, centreY: 30_000, pxPerUm: 0.02, widthPx: 2000, heightPx: 2000 });
+    transport.flush();
+    const square = [{ x: 20, y: 5 }, { x: 30, y: 5 }, { x: 30, y: 15 }, { x: 20, y: 15 }];
+    const black = indexOf(summary.colourStack!, "black100");
+    const draw = () => { engine.render({ colour: () => [0, 0, 0] }); return renderer.visibleSets.at(-1)!; };
+    const blackDraws = (vs: VisibleSet) => vs.stroke.draws.filter((d) => d.colour === black);
+    expect(blackDraws(draw()).map((d) => d.mask)).toEqual([undefined]);
+
+    engine.setCourse(request({ regions: [{ rings: [square], mode: "clip", symbols: "all" }] }));
+    transport.flush();
+    const clipped = draw();
+    expect(blackDraws(clipped).map((d) => d.mask)).toEqual([0]);
+    expect(clipped.filter?.masks).toHaveLength(1);
+
+    engine.setCourse(request({ regions: [{ rings: [square], mode: "hide", symbols: "all" }] }));
+    transport.flush();
+    expect(blackDraws(draw())).toEqual([]);
+    engine.setHidden(new Set([1]));
+    expect(draw().stroke.draws.filter((d) => d.colour !== black && d.mask === undefined).length).toBeGreaterThan(0);
+
+    engine.setHidden(new Set());
+    engine.setCourse(null);
+    transport.flush();
+    const cleared = draw();
+    expect(blackDraws(cleared).map((d) => d.mask)).toEqual([undefined]);
+    expect(cleared.filter).toBeUndefined();
+  });
+
   it("a request before the load waits for it; the course counts as fixed bytes", async () => {
     const renderer = new FakeRenderer();
     const transport = manualTransport();

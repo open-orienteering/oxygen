@@ -11,7 +11,7 @@
 import type { CourseMapObject, MapPoint, MapRect, MapWindow, PathVertex } from "../course-maps/schema.js";
 import { windowRotationDeg } from "../course-maps/geometry.js";
 import type { MapTextValues } from "../course-maps/text.js";
-import type { CourseAppearance, CourseDocumentContext, CourseSite, CourseStructure, CourseViewOptions, CutFeature } from "../course/types.js";
+import type { CourseAppearance, CourseDocumentContext, CourseFilterRegion, CourseSite, CourseStructure, CourseViewOptions, CutFeature } from "../course/types.js";
 import type { DocumentColour } from "../map-document/header.js";
 import type { PaperFrame } from "../geo/projection.js";
 import type { Pass, PassStream, RenderPath } from "../render/pass-stream.js";
@@ -43,6 +43,8 @@ export interface PageInput {
     sites: readonly CourseSite[];
     appearance: CourseAppearance;
     viewOptions: Pick<CourseViewOptions, "allControls" | "labelMode" | "overprintScale">;
+    /** Filter regions over the map window (`map-rendering.md` §4.11). */
+    regions?: readonly CourseFilterRegion[];
   };
   /** Layout objects of both anchors (template + sheet). */
   objects: readonly CourseMapObject[];
@@ -262,5 +264,9 @@ export function transformPassStream(stream: PassStream, t: MapLayerTransform): P
       }
     }
   };
-  return { ...stream, passes: stream.passes.map(pass) };
+  return {
+    ...stream,
+    passes: stream.passes.map(pass),
+    ...(stream.masks ? { masks: stream.masks.map((m) => ({ regions: m.regions.map((r) => transformPath(r, f)) })) } : {}),
+  };
 }

@@ -13,15 +13,15 @@
  */
 
 import {
-  aboveZoomGate, BucketLru, buildVisibleSet, CLUB_BUDGET_BYTES, DRAW_MARGIN_CELLS, PREFETCH_MARGIN_CELLS, visibleCells,
-  type PreparedPart, type ResidentPart, type ViewRect,
+  aboveZoomGate, BucketLru, buildVisibleSet, CLUB_BUDGET_BYTES, DRAW_MARGIN_CELLS, filterEntryKey, PREFETCH_MARGIN_CELLS, visibleCells,
+  type PreparedPart, type ResidentPart, type ViewRect, type VisibleFilter,
 } from "./buckets.js";
 import type { render as R } from "@oxygen/shared";
 import type { DocumentRenderOptions, FrameStats, MapGlRenderer, TextAtlasImage } from "./renderer.js";
 import type { RenderTarget } from "./view.js";
 import {
   createMapGlWorker, messageChannelScheduler,
-  type CourseLayerRequest, type CourseReply, type LoadRequest, type LoadSummary, type WorkerReply, type WorkerRequest,
+  type CourseLayerRequest, type CourseReply, type FilterReply, type LoadRequest, type LoadSummary, type WorkerReply, type WorkerRequest,
 } from "./worker.js";
 
 /** Message transport to the worker: a real Web Worker, or the same handler inline. */
@@ -102,6 +102,14 @@ const DETAIL = (id: number) => `d${id}`;
 const LARGE = "L";
 const COURSE = "C";
 
+/** A worker filter reply as the visible set takes it. */
+function engineFilter(f: FilterReply | null): { hidden: ReadonlySet<number>; visible: VisibleFilter } | undefined {
+  if (!f) return undefined;
+  const entryMask = new Map<number, number>();
+  for (let i = 0; i < f.entries.length; i += 3) entryMask.set(filterEntryKey(f.entries[i], f.entries[i + 1]), f.entries[i + 2]);
+  return { hidden: new Set(f.hidden), visible: { entryMask, positions: f.positions, indices: f.indices, masks: f.masks } };
+}
+
 export class MapGlEngine {
   private readonly renderer: MapGlRenderer;
   private readonly transport: Transport;
@@ -124,6 +132,8 @@ export class MapGlEngine {
   private lastRebuildAt = -Infinity;
   private holdTimer: ReturnType<typeof setTimeout> | undefined;
   private hidden: ReadonlySet<number> = new Set();
+  /** Filter regions on the static buckets (§5.2 "Filter regions"): from the course reply, or a stream source's masks. */
+  private filter: { hidden: ReadonlySet<number>; visible: VisibleFilter } | undefined;
   private view: ViewRect | undefined;
   private loadWaiter: { resolve: (s: LoadSummary) => void; reject: (e: Error) => void } | undefined;
   private completeWaiters: (() => void)[] = [];
@@ -199,6 +209,7 @@ export class MapGlEngine {
     this.renderer.releasePart(COURSE);
     this.course = m.part ? this.renderer.uploadPart(COURSE, m.part) : undefined;
     this.courseColours = m.colours.length ? m.colours : undefined;
+    this.filter = engineFilter(m.filter);
     this.updateFixedBytes();
     this.dirty = true;
     this.arrivalOnly = false;
@@ -239,6 +250,7 @@ export class MapGlEngine {
       this.detailCells = new Set(s.detailCells);
       // `setDocument` dropped every part; a course request posted after the load replies after this.
       this.course = undefined;
+      this.filter = engineFilter(m.filter ?? null);
       this.atlasBytes = s.bytes.atlas;
       this.updateFixedBytes();
       this.dirty = true;
@@ -375,7 +387,9 @@ export class MapGlEngine {
       if (this.large) parts.push(this.large);
       // Last: within a colour the course draws over the map's own objects of that colour.
       if (this.course) parts.push(this.course);
-      const vs = buildVisibleSet(parts, this.hidden);
+      const f = this.filter;
+      const hidden = f && f.hidden.size ? new Set([...this.hidden, ...f.hidden]) : this.hidden;
+      const vs = buildVisibleSet(parts, hidden, f?.visible);
       this.st.lastBuildMs = performance.now() - t0;
       this.renderer.setVisibleSet(vs);
       this.lru.fixedBytes = this.fixedBytes + this.renderer.documentBytes.visibleSet;

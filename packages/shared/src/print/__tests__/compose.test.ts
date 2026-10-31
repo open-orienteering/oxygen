@@ -45,6 +45,18 @@ describe("composePage", () => {
     expect(page.pageLayer.stream.glyphTable.length).toBeGreaterThan(3);
   });
 
+  it("filter regions reach the map layer: a clip region masks document passes, never the course", () => {
+    const input = pageScene("page-ring");
+    const ring = [{ x: -1000, y: -1000 }, { x: 1000, y: -1000 }, { x: 1000, y: 1000 }, { x: -1000, y: 1000 }];
+    const page = composePage({ ...input, course: { ...input.course, regions: [{ rings: [ring], mode: "clip", symbols: "all" }] } }, fonts());
+    const s = page.mapLayer.stream;
+    expect(s.masks).toHaveLength(1);
+    const plain = composePage(input, fonts()).mapLayer.stream;
+    expect(s.passes.length).toBe(plain.passes.length);
+    const docObjects = input.map.objects.length;
+    s.maskIdx!.forEach((m, i) => expect(m >= 0).toBe(s.objectIdx[i] < docObjects));
+  });
+
   it("no description block when the template hides it", () => {
     const page = composePage({ ...pageScene("page-sprint-a4"), description: null, objects: [] }, fonts());
     expect(page.pageLayer.stream.passes).toEqual([]);

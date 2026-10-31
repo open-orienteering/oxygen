@@ -10,13 +10,15 @@ import type { DocumentRenderInput } from "../map-document/render-bridge.js";
 import { makePath } from "../render/pass-stream.js";
 import type { RenderSymbol } from "../render/symbol.js";
 import type { RenderObject } from "../render/symbolise.js";
+import type { FilterRegion } from "../render/filter-region.js";
+import { COORD_FLAG } from "../render/pass-stream.js";
 import { remapRenderColours } from "../render/transform.js";
 import { circleWithGaps } from "./arcs.js";
 import { courseColourStack, withObjectColours } from "./colour-stack.js";
 import { deriveCourse } from "./derive.js";
 import { layoutObjects, objectColours } from "./objects.js";
 import { courseSymbols } from "./symbols.js";
-import type { CourseExtra, CourseLayer, CourseLayerInput, CourseRenderObject } from "./types.js";
+import type { CourseExtra, CourseFilterRegion, CourseLayer, CourseLayerInput, CourseRenderObject } from "./types.js";
 import type { MapPoint } from "../course-maps/schema.js";
 
 const um = (mm: number) => Math.round(mm * 1000);
@@ -73,7 +75,23 @@ export function courseLayer(input: CourseLayerInput): CourseLayer {
   const built = layoutObjects(input.objects, set, symbols, palette.indexOf, input.viewOptions);
   objects.push(...built.objects);
 
-  return { colours: palette.colours, remap: stack.remap, symbols, objects, images: built.images, derivation, warnings: built.warnings };
+  const regions = (input.regions ?? []).map((r) => filterRegion(r, stack.remap));
+  return { colours: palette.colours, remap: stack.remap, symbols, objects, images: built.images, derivation, warnings: built.warnings, regions };
+}
+
+/** A course filter region in stream units: rings → one closed path (holes flagged), document colours → the completed stack. */
+function filterRegion(r: CourseFilterRegion, remap: number[] | null): FilterRegion {
+  const coords: number[] = [];
+  const flags: number[] = [];
+  r.rings.forEach((ring, k) => {
+    ring.forEach((p, i) => {
+      coords.push(um(p.x), um(p.y));
+      flags.push(k > 0 && i === 0 ? COORD_FLAG.hole : 0);
+    });
+  });
+  const s = r.symbols;
+  const symbols = s === "all" ? s : Array.isArray(s) ? [...s] : { colours: s.colours.map((c) => (remap ? (remap[c] ?? c) : c)) };
+  return { path: makePath(coords, flags, true), mode: r.mode, symbols, ...(r.invert ? { invert: true } : {}) };
 }
 
 export interface CourseRenderInput {
@@ -81,6 +99,9 @@ export interface CourseRenderInput {
   symbols: RenderSymbol[];
   /** `objects[courseObjectOffset + i]` is `layer.objects[i]`. */
   courseObjectOffset: number;
+  /** The layer's filter regions; `symbolise` takes them with `regionObjectLimit` so the course is never filtered. */
+  regions: FilterRegion[];
+  regionObjectLimit: number;
 }
 
 /**
@@ -96,5 +117,7 @@ export function courseRenderInput(base: Pick<DocumentRenderInput, "objects" | "s
     symbols: [...docSymbols, ...layer.symbols],
     objects: [...base.objects, ...layer.objects.map(({ ref: _ref, ...o }) => ({ ...o, symbolIdx: o.symbolIdx + offset }))],
     courseObjectOffset: base.objects.length,
+    regions: layer.regions,
+    regionObjectLimit: base.objects.length,
   };
 }
