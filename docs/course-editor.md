@@ -364,6 +364,14 @@ MapViewer (components/MapViewer.tsx)
   Rapid sequence edits are serialized by the UI (each append waits for
   the refetch before the next click lands); there is no client-side
   op-queue.
+- **Version tokens** (`course-layer.md` §7, "Legacy editor"): every
+  `course.update` / `control.update` goes through `updateCourse` /
+  `updateControl`, which send `baseVersion` from a `VersionBook`
+  (`lib/version-book.ts`; the newest token seen per row, from the
+  `course.list` / `control.list` refetches and each mutation's result).
+  A version `CONFLICT` in `run()` shows "Changed elsewhere — reloaded" in
+  the toolbar and the usual invalidation reloads the rows; the undo entry
+  that hit it is dropped like any failing one.
 - **`MapViewerEditorProps`** (exported from `MapViewer.tsx`) — the
   contract: `selectedControlId`, `phantom`, `contextActions`,
   `contextInfo`, `suggestions` + `suggestionsHeading` (base-map
@@ -381,6 +389,26 @@ MapViewer (components/MapViewer.tsx)
   fixed-height container) instead of driving the shared wide-screen
   shell pane via `MapSlot`. Editing gestures stay scoped to the page and
   never leak into the persistent panel other pages configure.
+
+### API
+
+The course and control mutations the editors write through (08 §6;
+`course-layer.md` §6–7 for the structure and the tokens). Public ids
+throughout: a course by its `seq`, a control by its first code (else its
+seq). Tokens are decimal strings.
+
+| Procedure | Capability | Input | Returns |
+|---|---|---|---|
+| `course.setStructure` | `courses.edit` | `{ courseId, structure /* wire form */, baseVersion? }` | `{ version, checks: [] }` (D6 fills `checks`) |
+| `course.update` | `courses.edit` | today's fields + `baseVersion?`; with `controlIds` the linear shortcut: writes a structure | `{ ok, version }` |
+| `control.update` | `courses.edit`; `notes` alone `courses.review` | today's fields + `kind`, `circleGaps`, `notes`, `baseVersion?` | `{ ok, version }` |
+| `control.check` | `courses.review` | `{ controlId, checked }` | `{ version }` |
+| `course.list` / `course.detail` | `courses.view` | — | rows with `version`; `detail` adds `structure` (wire form) and `structureStored` |
+| `control.list` / `control.getById` | `courses.view` | — | rows with `version`, `kind`, `circleGaps`, `notes`, `checkedAt` |
+
+A stale `baseVersion` answers `CONFLICT` with `data: { kind, id, version,
+current, differing }`; a variation group or a slice-F site kind answers
+`PRECONDITION_FAILED`.
 
 ### Context menu rendering
 
