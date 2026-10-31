@@ -12,12 +12,23 @@
  * Stripped from the payload: `id`/`eventId`/`seq` (carried explicitly),
  * timestamps (local defaults), and the course `geometry`/`geometrySource`
  * blobs — derived artifacts that travel with the checkout snapshot instead
- * of inflating every journal entry.
+ * of inflating every journal entry. BigInt columns (`version`) travel as
+ * decimal strings.
+ *
+ * Version token (docs/course-layer.md §7): a course / control row's
+ * `version` is the HLC of the `*.upserted` entry that last wrote it. The
+ * emit takes the clock reading first, stamps the row with it, then reads the
+ * payload — so the entry carries the token it set and a peer applying it
+ * ends up with the same token. Re-emits that only ship a rebuilt geometry
+ * (a control moved; the event's map or cut settings changed) pass
+ * `{ advanceVersion: false }`: the course's structure did not change, so its
+ * token does not either (a structure edit and a field move never conflict).
  */
 
 import type { Prisma, PrismaClient } from "./generated/prisma/client.js";
-import type { ReferenceUpsertPayload } from "@oxygen/shared";
+import { encodeHlc, type ReferenceUpsertPayload } from "@oxygen/shared";
 import { appendJournal } from "./journalEmit.js";
+import { nextServerHlc } from "./serverClock.js";
 
 type Db = PrismaClient | Prisma.TransactionClient;
 
@@ -28,9 +39,9 @@ function portableFields(
   extraStrip: readonly string[] = [],
 ): Record<string, unknown> {
   return Object.fromEntries(
-    Object.entries(row).filter(
-      ([k, v]) => !STRIP.has(k) && !extraStrip.includes(k) && v !== undefined,
-    ),
+    Object.entries(row)
+      .filter(([k, v]) => !STRIP.has(k) && !extraStrip.includes(k) && v !== undefined)
+      .map(([k, v]) => [k, typeof v === "bigint" ? v.toString() : v]),
   );
 }
 
@@ -61,7 +72,7 @@ export async function courseUpsertPayload(
   const ccs = await db.courseControl.findMany({
     where: { courseId: courseUuid },
     orderBy: { position: "asc" },
-    select: { position: true, controlId: true, labelDx: true, labelDy: true },
+    select: { position: true, controlId: true, labelDx: true, labelDy: true, numberHidden: true },
   });
   return {
     id: row.id,
@@ -100,28 +111,49 @@ export async function emitClassUpserted(
   });
 }
 
-/** Re-read + journal a course row. Call inside the mutating transaction. */
+export interface EmitOptions {
+  /** Stamp the row's `version` with this entry's HLC. Default true; false for geometry-only re-emits. */
+  advanceVersion?: boolean;
+}
+
+/**
+ * Re-read + journal a course row. Call inside the mutating transaction.
+ * Returns the row's version token after the emit.
+ */
 export async function emitCourseUpserted(
   db: Db,
   eventId: bigint,
   courseUuid: string,
-): Promise<void> {
-  await appendJournal(db, {
-    eventId,
-    type: "course.upserted",
-    payload: await courseUpsertPayload(db, courseUuid),
-  });
+  opts: EmitOptions = {},
+): Promise<bigint> {
+  const hlc = nextServerHlc();
+  let version: bigint | null = null;
+  if (opts.advanceVersion !== false) {
+    version = encodeHlc(hlc);
+    await db.course.update({ where: { id: courseUuid }, data: { version } });
+  }
+  const payload = await courseUpsertPayload(db, courseUuid);
+  await appendJournal(db, { eventId, type: "course.upserted", payload, hlc });
+  return version ?? BigInt(String(payload.fields.version ?? 0));
 }
 
-/** Re-read + journal a control row. Call inside the mutating transaction. */
+/**
+ * Re-read + journal a control row. Call inside the mutating transaction.
+ * Returns the row's version token after the emit.
+ */
 export async function emitControlUpserted(
   db: Db,
   eventId: bigint,
   controlUuid: string,
-): Promise<void> {
+): Promise<bigint> {
+  const hlc = nextServerHlc();
+  const version = encodeHlc(hlc);
+  await db.control.update({ where: { id: controlUuid }, data: { version } });
   await appendJournal(db, {
     eventId,
     type: "control.upserted",
     payload: await controlUpsertPayload(db, controlUuid),
+    hlc,
   });
+  return version;
 }

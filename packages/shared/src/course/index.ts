@@ -11,3 +11,25 @@ export { CUT_CODES, CUT_AIR_MM, DEFAULT_FEATURE_RADIUS_MM, circleCuts, legGaps, 
 export { CourseStackError, courseColourStack } from "./colour-stack.js";
 export { courseDocumentContext } from "./context.js";
 export { courseSymbols, type CourseSymbolSet } from "./symbols.js";
+export {
+  courseStructureSchema,
+  courseStructureSchemaOf,
+  courseStructureWireSchema,
+  courseItemSchema,
+  controlItemSchema,
+  variationItemSchema,
+  legPropsSchema,
+  hasVariations,
+  linearStructure,
+  structureControlIds,
+  structureControlItems,
+  structureDiff,
+  structureSiteIssues,
+  type LegProps,
+  type StoredControlItem,
+  type StoredCourseItem,
+  type StoredCourseStructure,
+  type StoredVariationItem,
+  type StructureSiteIssue,
+  type WireCourseStructure,
+} from "./structure.js";
