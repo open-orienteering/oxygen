@@ -338,6 +338,8 @@ export interface FrameStats {
 
 const CLIP_BIT = 0x01;
 const PARITY_BIT = 0x02;
+/** Filter masks (map-rendering §3.8): set inside the union of a mask's regions; masked draws need it clear. */
+const REGION_BIT = 0x04;
 
 const VS_BLIT = `#version 300 es
 precision highp float;
@@ -368,6 +370,8 @@ interface Uploaded {
     strokes: { buf: WebGLBuffer; count: number; halfWidth: number }[];
     inst?: WebGLBuffer; instCount: number;
     clipFan?: WebGLBuffer; clipFanCount: number; clipCover?: WebGLBuffer;
+    /** Filter-mask regions: one stencil fan and cover per region. */
+    regions?: { fan: WebGLBuffer; fanCount: number; cover: WebGLBuffer }[];
   };
 }
 
@@ -477,6 +481,12 @@ export class MapGlRenderer {
   }
 
   private upload(item: Prepared): Uploaded["buffers"] {
+    const b = this.uploadItem(item);
+    if (!item.mask) return b;
+    return { ...b, regions: item.mask.filter((g) => g.fan.length).map((g) => ({ fan: this.buffer(g.fan), fanCount: g.fan.length / 2, cover: this.buffer(g.cover) })) };
+  }
+
+  private uploadItem(item: Prepared): Uploaded["buffers"] {
     const fanOf = (g: FanGeometry | undefined) =>
       g && g.fan.length ? { fan: this.buffer(g.fan), fanCount: g.fan.length / 2, cover: this.buffer(g.cover) } : { fanCount: 0 };
     const strokesOf = (ss: StrokeGeometry[]) =>
@@ -518,6 +528,7 @@ export class MapGlRenderer {
       const b = u.buffers;
       for (const x of [b.fan, b.cover, b.inst, b.clipFan, b.clipCover]) if (x) gl.deleteBuffer(x);
       for (const s of b.strokes) gl.deleteBuffer(s.buf);
+      for (const r of b.regions ?? []) { gl.deleteBuffer(r.fan); gl.deleteBuffer(r.cover); }
     }
     this.uploaded = [];
   }
@@ -624,38 +635,91 @@ export class MapGlRenderer {
 
     for (const { item, buffers: b } of this.uploaded) {
       const rgb = opts.colour(item.colour);
-      switch (item.kind) {
-        case "fill":
-          if (!b.fan) break;
-          this.stencilMark(b.fan, b.fanCount, common);
-          this.coverSolid(b.cover!, rgb, common);
-          break;
-        case "hatch":
-          if (!b.fan) break;
-          this.stencilMark(b.fan, b.fanCount, common);
-          this.coverStripes(b.cover!, rgb, item, view, common);
-          break;
-        case "stroke":
-          for (const s of b.strokes) this.drawStroke(s, rgb, common);
-          break;
-        case "instanced": {
-          if (!b.inst || b.instCount === 0) break;
-          // Stencil bit 0 holds the clip mask (pattern areas), bit 1 the
-          // per-instance even-odd parity, so a clipped instanced fill can
-          // run the parity trick inside the mask.
-          const clipped = !!b.clipFan;
-          if (clipped) this.stencilMark(b.clipFan!, b.clipFanCount, common, CLIP_BIT);
-          if (b.fan) {
-            this.stencilMarkInst(b, common);
-            this.coverSolidInst(b, rgb, clipped, common);
-          }
-          for (const s of b.strokes) this.drawStrokeInst(b, s, rgb, clipped, common);
-          if (clipped) this.stencilClear(b.clipCover!, common);
-          break;
-        }
-      }
+      if (b.regions?.length) this.markRegions(b.regions, common);
+      this.drawItem(item, b, rgb, view, common);
+      if (b.regions?.length) this.clearRegions(b.regions, common);
     }
     gl.disable(gl.STENCIL_TEST);
+  }
+
+  /** Bits a masked draw requires clear: `REGION_BIT` between `markRegions` and `clearRegions`, else none. */
+  private regionTest = 0;
+
+  /** Sets `REGION_BIT` inside the union of the regions: each region's even-odd parity in the parity bit, then moved over. */
+  private markRegions(regions: NonNullable<Uploaded["buffers"]["regions"]>, common: (p: Program) => void): void {
+    const gl = this.gl;
+    for (const r of regions) {
+      this.stencilMark(r.fan, r.fanCount, common, PARITY_BIT);
+      const p = this.programs.fan;
+      common(p);
+      gl.colorMask(false, false, false, false);
+      gl.stencilMask(PARITY_BIT | REGION_BIT);
+      gl.stencilFunc(gl.EQUAL, REGION_BIT | PARITY_BIT, PARITY_BIT);
+      gl.stencilOp(gl.KEEP, gl.KEEP, gl.REPLACE);
+      // Where the parity bit is set, REPLACE writes the reference under the write mask: the region bit (and the parity bit, already set).
+      this.fanDraw(r.cover, p);
+      // Then the parity bit is cleared over the cover for the next region and the item's own fills.
+      gl.stencilMask(PARITY_BIT);
+      gl.stencilFunc(gl.ALWAYS, 0, 0xff);
+      gl.stencilOp(gl.ZERO, gl.ZERO, gl.ZERO);
+      this.fanDraw(r.cover, p);
+      gl.colorMask(true, true, true, true);
+    }
+    this.regionTest = REGION_BIT;
+  }
+
+  private clearRegions(regions: NonNullable<Uploaded["buffers"]["regions"]>, common: (p: Program) => void): void {
+    const gl = this.gl;
+    const p = this.programs.fan;
+    common(p);
+    gl.colorMask(false, false, false, false);
+    gl.stencilMask(REGION_BIT);
+    gl.stencilFunc(gl.ALWAYS, 0, 0xff);
+    gl.stencilOp(gl.ZERO, gl.ZERO, gl.ZERO);
+    for (const r of regions) this.fanDraw(r.cover, p);
+    gl.colorMask(true, true, true, true);
+    this.regionTest = 0;
+  }
+
+  private fanDraw(buf: WebGLBuffer, p: Program): void {
+    const gl = this.gl;
+    gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+    gl.enableVertexAttribArray(p.attribs.a_pos);
+    gl.vertexAttribPointer(p.attribs.a_pos, 2, gl.FLOAT, false, 0, 0);
+    gl.drawArrays(gl.TRIANGLES, 0, 6);
+  }
+
+  private drawItem(item: Prepared, b: Uploaded["buffers"], rgb: [number, number, number], view: View, common: (p: Program) => void): void {
+    switch (item.kind) {
+      case "fill":
+        if (!b.fan) break;
+        this.stencilMark(b.fan, b.fanCount, common);
+        this.coverSolid(b.cover!, rgb, common);
+        break;
+      case "hatch":
+        if (!b.fan) break;
+        this.stencilMark(b.fan, b.fanCount, common);
+        this.coverStripes(b.cover!, rgb, item, view, common);
+        break;
+      case "stroke":
+        for (const s of b.strokes) this.drawStroke(s, rgb, common);
+        break;
+      case "instanced": {
+        if (!b.inst || b.instCount === 0) break;
+        // Stencil bit 0 holds the clip mask (pattern areas), bit 1 the
+        // per-instance even-odd parity, so a clipped instanced fill can
+        // run the parity trick inside the mask.
+        const clipped = !!b.clipFan;
+        if (clipped) this.stencilMark(b.clipFan!, b.clipFanCount, common, CLIP_BIT);
+        if (b.fan) {
+          this.stencilMarkInst(b, common);
+          this.coverSolidInst(b, rgb, clipped, common);
+        }
+        for (const s of b.strokes) this.drawStrokeInst(b, s, rgb, clipped, common);
+        if (clipped) this.stencilClear(b.clipCover!, common);
+        break;
+      }
+    }
   }
 
   /** Reads back finished GPU timer queries (results lag a frame or two). */
@@ -1159,7 +1223,7 @@ export class MapGlRenderer {
   private coverDraw(cover: WebGLBuffer, p: Program): void {
     const gl = this.gl;
     gl.stencilMask(CLIP_BIT);
-    gl.stencilFunc(gl.EQUAL, CLIP_BIT, CLIP_BIT);
+    gl.stencilFunc(gl.EQUAL, CLIP_BIT, CLIP_BIT | this.regionTest);
     gl.stencilOp(gl.ZERO, gl.ZERO, gl.ZERO);
     gl.bindBuffer(gl.ARRAY_BUFFER, cover);
     gl.enableVertexAttribArray(p.attribs.a_pos);
@@ -1228,7 +1292,7 @@ export class MapGlRenderer {
     gl.uniform3f(p.uniforms.u_colour, rgb[0], rgb[1], rgb[2]);
     gl.stencilMask(PARITY_BIT);
     const want = clipped ? PARITY_BIT | CLIP_BIT : PARITY_BIT;
-    gl.stencilFunc(gl.EQUAL, want, want);
+    gl.stencilFunc(gl.EQUAL, want, want | this.regionTest);
     gl.stencilOp(gl.ZERO, gl.ZERO, gl.ZERO);
     gl.bindBuffer(gl.ARRAY_BUFFER, b.cover!);
     gl.enableVertexAttribArray(p.attribs.a_pos);
@@ -1246,7 +1310,8 @@ export class MapGlRenderer {
     common(p);
     gl.uniform3f(p.uniforms.u_colour, rgb[0], rgb[1], rgb[2]);
     gl.uniform1f(p.uniforms.u_halfWidth, s.halfWidth);
-    gl.stencilFunc(gl.ALWAYS, 0, 0xff);
+    if (this.regionTest) gl.stencilFunc(gl.EQUAL, 0, this.regionTest);
+    else gl.stencilFunc(gl.ALWAYS, 0, 0xff);
     gl.stencilOp(gl.KEEP, gl.KEEP, gl.KEEP);
     gl.bindBuffer(gl.ARRAY_BUFFER, s.buf);
     gl.enableVertexAttribArray(p.attribs.a_pos);
@@ -1262,7 +1327,8 @@ export class MapGlRenderer {
     common(p);
     gl.uniform3f(p.uniforms.u_colour, rgb[0], rgb[1], rgb[2]);
     gl.uniform1f(p.uniforms.u_halfWidth, s.halfWidth);
-    if (clipped) gl.stencilFunc(gl.EQUAL, CLIP_BIT, CLIP_BIT);
+    if (clipped) gl.stencilFunc(gl.EQUAL, CLIP_BIT, CLIP_BIT | this.regionTest);
+    else if (this.regionTest) gl.stencilFunc(gl.EQUAL, 0, this.regionTest);
     else gl.stencilFunc(gl.ALWAYS, 0, 0xff);
     gl.stencilOp(gl.KEEP, gl.KEEP, gl.KEEP);
     gl.bindBuffer(gl.ARRAY_BUFFER, s.buf);
