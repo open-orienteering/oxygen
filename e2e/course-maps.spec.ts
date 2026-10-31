@@ -5,6 +5,7 @@ import { type Download, type Locator, type Page } from "@playwright/test";
 import { test, expect } from "./helpers/map-pipeline";
 import { API_BASE } from "./helpers/api-base";
 import { reseed } from "./helpers/reseed";
+import { waitForTrpc } from "./helpers/trpc";
 
 // pdf-lib is the API's dependency; load it from there (as fake-rsvg-convert does).
 const { PDFDocument } = createRequire(resolve(process.cwd(), "packages/api/package.json"))("pdf-lib") as {
@@ -187,7 +188,11 @@ test("creates templates, lays out several maps and exports PDFs", async ({
   page.once("dialog", (dialog) =>
     dialog.accept("E2E shared map template"),
   );
+  // The save is fire-and-forget in the page; the dialog lists what the
+  // club-template query holds when it opens, so let the write settle first.
+  const savedToClub = waitForTrpc(page, "mapTemplate.saveToClub");
   await page.getByTestId(`save-template-to-club-${templateSeq}`).click();
+  await savedToClub;
   await page.getByTestId("import-club-templates").click();
   const importDialog = page.getByTestId("club-template-import-dialog");
   const clubRow = importDialog.getByRole("row", {
@@ -217,7 +222,9 @@ test("creates templates, lays out several maps and exports PDFs", async ({
     .locator("..")
     .getByRole("combobox")
     .selectOption(String(templateSeq));
+  const applied = waitForTrpc(page, "mapTemplate.applyToCourses");
   await page.getByTestId("apply-map-template").click();
+  await applied;
 
   const courseRow = page.getByTestId(`course-map-row-${courseSeq}`);
   await courseRow.locator("td").nth(1).click();
