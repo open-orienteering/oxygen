@@ -48,6 +48,10 @@ describe("golden PNGs", () => {
       "course-objects",
       "course-sprint",
       "course-all-controls",
+      "filter-clip-brown",
+      "filter-hide-505",
+      "filter-moved",
+      "filter-show-only",
     ]);
   });
 
