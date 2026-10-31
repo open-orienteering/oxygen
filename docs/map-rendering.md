@@ -2210,15 +2210,13 @@ The shared module is exported as a namespace: `import { render } from
   map-anchored layout objects (white-outs, 709 hatch, text, lines), but
   no sheet reaches `MapPanel`, so the viewer passes `objects: []`;
   showing a sheet's objects on the map is slice D's.
-- **§5.4 lower purple below an area colour.** The layer sorts by the
-  document's aligned stack, so where the source put an area colour above
-  a line colour (the `e2e/test.ocd` fixture: Yellow above Blue), stage-7
-  alignment places lower purple below that area and an opaque area hides
-  the course (the fixture's yellow covers most of its courses under
-  `vector`). The legacy tiles draw the course above every area. Whether
-  alignment should place lower purple above the source's area colours
-  when the source order disagrees with the IOF table is an import
-  question (`map-symbols.md` §9, next importer bump).
+- **§5.4 lower purple below an area colour — resolved in C14
+  (`ocad-16` / `omap-9`).** Alignment now places an inserted lower purple
+  above the area colours as a group and reports what stays on the wrong
+  side (`COLOUR_ORDER_CONFLICT`, `COLOUR_AREA_ABOVE_LOWER_PURPLE`;
+  `map-symbols.md` §9.2, `docs/bugfix-lower-purple-under-areas.md`). A map
+  whose *own* lower purple sits under area colours keeps that order, so
+  the layer still draws its course under them there.
 - **§5.4 legacy colour settings.** `mapMetadata.colorOverrides` and
   `northLinesBelow` (the tiles' per-map colour-stack fixes) are not
   applied to the document's stack; the document's own order (and, for

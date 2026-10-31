@@ -88,7 +88,7 @@ storeImportedDocument(db, { source: { bytes, fileHash, kind, fileName, uploadedB
   and since stages 6–7 landed `matching` (library, edition, thresholds,
   factor, symbol / object counts per state, `byMethod`, `scaleAnomalies`)
   and `colourStack` (source count, inserted, aliased, conflicts,
-  unclassified) — `docs/map-symbols.md` §8–§9; since stage 5 (`ocad-5` /
+  unclassified; `areasAboveLowerPurple` since `ocad-16` / `omap-9`) — `docs/map-symbols.md` §8–§9; since stage 5 (`ocad-5` /
   `omap-2`) `georeference` and `north` (field list in
   `docs/map-import.md` §3.8; `north` is the legacy `NorthDetection` with
   the WMM fields at the import date, `asOf`); since `ocad-7`

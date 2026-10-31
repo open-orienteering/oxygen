@@ -196,6 +196,13 @@ describe("alignColourStack", () => {
       expect(r.conflicts.filter((x) => /purple-lower/.test(x.reason))).toEqual([]);
     });
 
+    it("a colour whose name says area is an area colour even when its ink is not an IOF colour", () => {
+      const stack = [c(1, "Gul", [0, 27, 79, 0]), c(2, "Brun 100% - Linjeobjekt", [25, 75, 100, 0]), c(3, "Svart", [0, 0, 0, 100]), c(4, "Naturreservat - Area Feature", [90, 32, 0, 0])];
+      const r = align(stack, [], "ISOM2017-2");
+      expect(r.areasAboveLowerPurple).toEqual([{ name: "Naturreservat - Area Feature", sourceNumber: 4 }]);
+      expect(r.colours[lowerOf(r) - 1].sourceNumber).toBe(1);
+    });
+
     it("colours no object uses neither steer the anchor nor raise warnings", () => {
       const stack = [c(1, "Gul", [0, 27, 79, 0]), c(2, "Svart", [0, 0, 0, 100]), c(3, "Gul (oanvänd)", [0, 27, 79, 0]), c(4, "Brun 100% - Linjeobjekt", [25, 75, 100, 0])];
       const r = align(stack, [], "ISOM2017-2", [10, 10, 0, 10]);

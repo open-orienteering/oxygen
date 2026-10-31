@@ -963,10 +963,11 @@ nearest percent, then the palette's default for the class; some entries
 
 A name that states the symbol kind rules out entries of the other kind
 (`nameKind`, whole tokens; C14, 2026-10-31): `area`, `yta`, `ytor`,
-`ytobjekt`, `ytsymbol`, `fill`, `screen` never map to a line or point
+`ytobjekt`, `ytsymbol`, `fill`, `screen` (and plurals) never map to a line or point
 entry (`-line`, `-point`, `-pointline`, `-hedge`, `black100`, `brown100`,
 `black-road-outline`, `white-railway`), and `line`, `linje`,
-`linjeobjekt`, `point`, `punkt`, `punktobjekt` (and plurals) never to an
+`linjeobjekt`, `linjesymbol`, `point`, `punkt`, `punktobjekt`,
+`punktsymbol` (and plurals) never to an
 area entry (`AREA_PALETTE_IDS`: the `-area` entries, the yellows, olive,
 the green and black screens, buildings, canopy, cultivated-land black,
 the white-overs, `brown*-paved`, `white-two-level`). Road infill
@@ -1003,17 +1004,20 @@ Feature" is classified dark green but stands for no palette entry, while
    colour in the stack is on a *side*: *above* when its palette id ranks
    above `purple-lower` (black 100 %, 100 % line / point colours, dark-green
    hedges, railway white, the upper purples); *area* when its palette id
-   is an area entry (§9.1) or, with no palette id, its name says area;
-   *below* for any other palette id the palette ranks under lower purple
-   (road infill and outline, ISSprOM's brown 100 %); unclassified colours
+   is an area entry (§9.1) or, with no palette id, its name says area —
+   whether or not its ink is classified ("Grön Naturreservat - Area
+   Feature" in a non-IOF green is still an area); *below* for any other
+   palette id the palette ranks under lower purple (road infill and
+   outline, ISSprOM's brown 100 %); other colours without a palette id
    take no side. Duplicates count by the entry they were identified as
    (step 2), not only the one chosen to stand for it. Only colours that
-   objects use count (`usage` > 0) — a stray or repeated table entry does
-   not steer the purple. The purple goes into the gap with the fewest
+   objects use count (`usage` > 0; a caller that passes no `usage` counts
+   every colour) — a stray or repeated table entry does not steer the
+   purple. The purple goes into the gap with the fewest
    misplaced colours (areas above it plus *above* colours below it), ties
    to the fewest areas above, then to the fewest *below* colours above,
    then to the lowest gap: directly above the highest area colour it keeps
-   below. Without any area colour it goes directly below the first *above*
+   below (and any road infill drawn on it). Without any area colour it goes directly below the first *above*
    colour, else on top. The source order is never changed; what stays on
    the wrong side is step 5's.
 
