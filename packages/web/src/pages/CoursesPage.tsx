@@ -18,6 +18,7 @@ import {
   courselessClassNames,
   matchCourselessClass,
 } from "../lib/course-editor";
+import { versionConflictOfError } from "../lib/version-book";
 
 function CourseExportMenu({ nameId }: { nameId: string }) {
   const { t } = useTranslation("courses");
@@ -475,10 +476,21 @@ function CourseInlineDetail({ courseId }: { courseId: number }) {
   const { t } = useTranslation("courses");
   const utils = trpc.useUtils();
   const detail = trpc.course.detail.useQuery({ id: courseId });
+  const [saveError, setSaveError] = useState<string | null>(null);
   const updateMutation = trpc.course.update.useMutation({
     onSuccess: () => {
+      setSaveError(null);
       utils.course.list.invalidate();
       utils.course.detail.invalidate();
+    },
+    // A stale token (docs/course-layer.md §7): the course changed in
+    // another tab or device — reload it and say so.
+    onError: (err) => {
+      if (versionConflictOfError(err)) {
+        setSaveError(t("changedElsewhere"));
+        utils.course.list.invalidate();
+        utils.course.detail.invalidate();
+      }
     },
   });
 
@@ -507,7 +519,7 @@ function CourseInlineDetail({ courseId }: { courseId: number }) {
   const d = detail.data;
 
   const handleSave = (field: string, value: string | number | boolean) => {
-    updateMutation.mutate({ id: courseId, [field]: value });
+    updateMutation.mutate({ id: courseId, [field]: value, baseVersion: d.version });
   };
 
   /**
@@ -528,9 +540,12 @@ function CourseInlineDetail({ courseId }: { courseId: number }) {
       {
         id: courseId,
         controlIds: codes.map((c) => parseInt(c, 10)).filter((n) => !isNaN(n)),
+        baseVersion: d.version,
       },
       {
-        onError: (err) => setControlsError(err.message),
+        onError: (err) => {
+          if (!versionConflictOfError(err)) setControlsError(err.message);
+        },
       },
     );
   };
@@ -543,6 +558,11 @@ function CourseInlineDetail({ courseId }: { courseId: number }) {
           <h4 className="text-xs font-semibold text-slate-500 uppercase tracking-wider">
             {t("courseSettings")}
           </h4>
+          {saveError ? (
+            <p className="text-xs text-amber-700" role="status" data-testid="course-changed-elsewhere">
+              {saveError}
+            </p>
+          ) : null}
 
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div>

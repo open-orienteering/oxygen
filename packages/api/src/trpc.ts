@@ -84,15 +84,20 @@ export async function createContext(
   };
 }
 
+/**
+ * A stale `baseVersion` (version-conflict.ts) answers CONFLICT with the
+ * server's row in `data` (docs/course-layer.md §7); every other error keeps
+ * tRPC's default shape.
+ */
+export function withVersionConflict<S extends { data: object }>(shape: S, error: TRPCError): S {
+  if (error.cause instanceof VersionConflictError) {
+    return { ...shape, data: { ...shape.data, ...error.cause.data } };
+  }
+  return shape;
+}
+
 const t = initTRPC.context<Context>().create({
-  // A stale `baseVersion` (version-conflict.ts) answers CONFLICT with the
-  // server's row in `data` (docs/course-layer.md §7).
-  errorFormatter({ shape, error }) {
-    if (error.cause instanceof VersionConflictError) {
-      return { ...shape, data: { ...shape.data, ...error.cause.data } };
-    }
-    return shape;
-  },
+  errorFormatter: ({ shape, error }) => withVersionConflict(shape, error),
 });
 
 export const router = t.router;
