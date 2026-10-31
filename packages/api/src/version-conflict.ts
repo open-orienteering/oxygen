@@ -13,8 +13,7 @@
  * `differing` compares the client's base with the row now. The base is read
  * from the journal — the `*.upserted` entry whose HLC is `baseVersion`
  * carries the row as the client saw it. When that entry is not on this node
- * (token 0, written before D0, or pruned) the client's submitted values
- * stand in for the base.
+ * (token 0, written before D0, or pruned) `differing` is null.
  */
 
 import { TRPCError } from "@trpc/server";

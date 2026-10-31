@@ -92,6 +92,7 @@ import {
   rewriteStructureFromColumns,
   rowKind,
   structureFromWire,
+  uuidsOfPublicIds,
 } from "../course-structure.js";
 import { baseVersionSchema } from "../version-conflict.js";
 
@@ -644,10 +645,10 @@ export const courseRouter = router({
           await emitClassUpserted(tx, ctx.event.id, classRow.id);
         }
         await rewriteStructureFromColumns(tx, ctx.event.id, c.id);
-        await emitCourseUpserted(tx, ctx.event.id, c.id);
-        return c;
+        const version = await emitCourseUpserted(tx, ctx.event.id, c.id);
+        return { ...c, version };
       });
-      return { id: created.seq };
+      return { id: created.seq, version: created.version.toString() };
     }),
 
   clone: coursesEditRaceProcedure
@@ -717,11 +718,11 @@ export const courseRouter = router({
         await rebuildCourseGeometry(tx, ctx.event.id, [created.id], {
           updateLength: true,
         });
-        await emitCourseUpserted(tx, ctx.event.id, created.id);
-        return created;
+        const version = await emitCourseUpserted(tx, ctx.event.id, created.id);
+        return { ...created, version };
       });
 
-      return { id: cloned.seq, name: input.name };
+      return { id: cloned.seq, name: input.name, version: cloned.version.toString() };
     }),
 
   update: coursesEditRaceProcedure
@@ -925,8 +926,11 @@ export const courseRouter = router({
         ...input.structure.items.flatMap((i) => (i.kind === "variation" ? [] : [i.siteId])),
         ...Object.keys(input.structure.labelOffsets ?? {}).map(Number),
       ]);
-      const uuidByPublic = new Map<number, string>();
-      for (const id of publicIds) uuidByPublic.set(id, await controlSeqToId(ctx.db, ctx.event.id, id));
+      const uuidByPublic = await uuidsOfPublicIds(ctx.db, ctx.event.id, publicIds);
+      const unknown = [...publicIds].find((id) => !uuidByPublic.has(id));
+      if (unknown !== undefined) {
+        throw new TRPCError({ code: "NOT_FOUND", message: `Control ${unknown} not found` });
+      }
       const stored = {
         ...structureFromWire(input.structure, (id) => uuidByPublic.get(id)!),
         id: c.id,
@@ -999,14 +1003,14 @@ export const courseRouter = router({
         input.offset === null
           ? { labelDx: null, labelDy: null }
           : { labelDx: input.offset.dx, labelDy: input.offset.dy };
-      await ctx.db.$transaction(async (tx) => {
+      const version = await ctx.db.$transaction(async (tx) => {
         await tx.courseControl.updateMany({
           where: { courseId: course.id, controlId: controlUuid },
           data,
         });
-        await emitCourseUpserted(tx, ctx.event.id, course.id);
+        return emitCourseUpserted(tx, ctx.event.id, course.id);
       });
-      return { ok: true as const };
+      return { ok: true as const, version: version.toString() };
     }),
 
   bulkUpdate: coursesEditRaceProcedure

@@ -527,7 +527,14 @@ structure its columns describe (`course.detail` reports
 shortcut: the structure is rewritten from the columns they wrote, an
 item keeping its `leg` when it still follows the same site);
 `course.clone` (the source's structure); `control.delete` (the courses
-that visited the control lose the item). `course.importCourses` resets it
+whose `course_controls` or stored structure name the control lose the
+item, an explicit start / finish included); `control.update` changing a
+site's **kind** (the stored structures that name it are re-mirrored:
+`splitStructure` now reads the site differently — a control that became
+a start leads its course as the explicit start). A start is found by
+name in `start_name`, so a site turned into a start without a name
+mirrors as `""` and the legacy readers fall back to the default start;
+name a start when creating it (the editor's **Add start** does). `course.importCourses` resets it
 to `NULL` until D1 makes the importers write it. Peers apply it from the
 `course.upserted` payload like any column.
 
@@ -587,8 +594,9 @@ rebuilds its courses' geometry and re-journals them **without** advancing
 their token (`emitCourseUpserted(…, { advanceVersion: false })`; so do
 the map-upload and cut-setting rebuilds), so a structure edit and a field
 move never conflict with each other. `control.delete` advances the
-token of the courses that visited the control (their structure lost an
-item).
+token of the courses whose structure lost the control, and a site's kind
+change the token of the courses re-mirrored for it (§6.2): the course as
+timing reads it changed.
 
 **Writes.** `course.setStructure`, `course.update` and `control.update`
 take an optional `baseVersion`. Inside the write transaction the row is
@@ -627,8 +635,11 @@ reordering is always a conflict, by design.
 **Legacy editor.** `CourseEditorPage` and the Courses page send the
 token too, through the same mutations: a `VersionBook`
 (`packages/web/src/lib/version-book.ts`) keeps the newest token per row
-from the list refetches and each mutation's result (so undo / redo and
-back-to-back writes send their predecessor's token); on a version
+from the list refetches and each mutation's result — `course.update`,
+`control.update`, `course.setControlLabelOffset`, `course.create` /
+`clone` return the row's token, `control.delete` the tokens of the
+courses it advanced — so undo / redo and back-to-back writes send their
+predecessor's token; on a version
 `CONFLICT` they invalidate and show "Changed elsewhere — reloaded"
 (`courses:changedElsewhere`). One rule for both editors on the same rows.
 

@@ -274,6 +274,75 @@ export async function rewriteStructureFromColumns(db: Db, eventId: bigint, cours
   });
 }
 
+/** A course's label offsets by control UUID (first visit wins), from `course_controls`. */
+async function courseLabelOffsets(db: Db, courseUuid: string): Promise<Offsets> {
+  const ccs = await db.courseControl.findMany({
+    where: { courseId: courseUuid },
+    orderBy: { position: "asc" },
+    select: { controlId: true, labelDx: true, labelDy: true },
+  });
+  const out: Offsets = {};
+  for (const cc of ccs) {
+    if (cc.labelDx != null && cc.labelDy != null) out[cc.controlId] ??= { dx: cc.labelDx, dy: cc.labelDy };
+  }
+  return out;
+}
+
+/**
+ * Resolve public control ids (first code, else seq) of active controls to
+ * UUIDs in one query. Unknown ids are absent from the map.
+ */
+export async function uuidsOfPublicIds(db: Db, eventId: bigint, ids: Iterable<number>): Promise<Map<number, string>> {
+  const rows = await db.control.findMany({
+    where: { eventId, removed: false },
+    select: { id: true, codes: true, seq: true },
+  });
+  const byCode = new Map<number, string>();
+  const bySeq = new Map<number, string>();
+  for (const r of rows) {
+    const code = parseInt(r.codes.split(";")[0]?.trim() ?? "", 10);
+    if (Number.isFinite(code) && !byCode.has(code)) byCode.set(code, r.id);
+    bySeq.set(r.seq, r.id);
+  }
+  const out = new Map<number, string>();
+  for (const id of ids) {
+    const uuid = byCode.get(id) ?? bySeq.get(id);
+    if (uuid) out.set(id, uuid);
+  }
+  return out;
+}
+
+/**
+ * Re-write the column mirror of the given courses' stored structures — after
+ * a site's kind changed, `splitStructure` reads the course differently
+ * (§6.2). Returns the courses re-mirrored (those with a stored structure).
+ */
+export async function remirrorStoredStructures(db: Db, eventId: bigint, courseUuids: readonly string[]): Promise<string[]> {
+  const out: string[] = [];
+  for (const id of courseUuids) {
+    const row = await db.course.findUnique({ where: { id }, select: { structure: true, orderMode: true } });
+    const parsed = row?.structure ? course.courseStructureSchema.safeParse(row.structure) : null;
+    if (!parsed?.success) continue;
+    await persistStructure(db, eventId, { ...parsed.data, id, orderMode: row!.orderMode });
+    out.push(id);
+  }
+  return out;
+}
+
+/** Courses whose stored structure names the control (any item, start and finish included). */
+export async function coursesNamingInStructure(db: Db, eventId: bigint, controlUuid: string): Promise<string[]> {
+  const rows = await db.course.findMany({
+    where: { eventId, removed: false, NOT: { structure: { equals: PrismaNs.DbNull } } },
+    select: { id: true, structure: true },
+  });
+  return rows
+    .filter((r) => {
+      const parsed = course.courseStructureSchema.safeParse(r.structure);
+      return parsed.success && course.structureControlIds(parsed.data).includes(controlUuid);
+    })
+    .map((r) => r.id);
+}
+
 /** Public ids of the given controls (the structure's wire form). */
 export async function publicIdsOf(db: Db, eventId: bigint, uuids: Iterable<string>): Promise<Map<string, number>> {
   const rows = await db.control.findMany({
@@ -295,15 +364,7 @@ export async function loadWireStructure(
   courseUuid: string,
 ): Promise<{ structure: WireCourseStructure; stored: boolean }> {
   const { structure, stored } = await loadExplicitStructure(db, eventId, courseUuid);
-  const ccs = await db.courseControl.findMany({
-    where: { courseId: courseUuid },
-    orderBy: { position: "asc" },
-    select: { controlId: true, labelDx: true, labelDy: true },
-  });
-  const labelOffsets: Offsets = {};
-  for (const cc of ccs) {
-    if (cc.labelDx != null && cc.labelDy != null) labelOffsets[cc.controlId] ??= { dx: cc.labelDx, dy: cc.labelDy };
-  }
+  const labelOffsets = await courseLabelOffsets(db, courseUuid);
   const withOffsets = Object.keys(labelOffsets).length > 0 ? { ...structure, labelOffsets } : structure;
   const ids = await publicIdsOf(db, eventId, siteIdsOf(withOffsets));
   return { structure: structureToWire(withOffsets, (id) => ids.get(id) ?? 0), stored };
@@ -353,7 +414,16 @@ export async function assertCourseVersion(
   const base = await basePayload(db, eventId, "course.upserted", c.id, baseVersion);
   let differing: string[] | null = null;
   if (base) {
-    const diff = course.structureDiff(await structureOfPayload(db, eventId, base), now);
+    // Label offsets live in course_controls on both sides: diff them too.
+    const nowOffsets = await courseLabelOffsets(db, c.id);
+    const baseOffsets: Offsets = {};
+    for (const cc of base.courseControls ?? []) {
+      if (cc.labelDx != null && cc.labelDy != null) baseOffsets[cc.controlId] ??= { dx: cc.labelDx, dy: cc.labelDy };
+    }
+    const diff = course.structureDiff(
+      { ...(await structureOfPayload(db, eventId, base)), labelOffsets: baseOffsets },
+      { ...now, labelOffsets: nowOffsets },
+    );
     const ids = await publicIdsOf(db, eventId, diff);
     differing = diff.map((id) => String(ids.get(id) ?? id));
   }

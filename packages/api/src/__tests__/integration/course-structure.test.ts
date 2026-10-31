@@ -336,3 +336,80 @@ describe("control.check and courses.review", () => {
     expect([row.checkedAt, row.checkedBy]).toEqual([null, null]);
   });
 });
+
+describe("the mirror stays a function of the structure (course-layer.md §6.2)", () => {
+  it("re-mirrors a stored structure when a visited site's kind changes, and advances the course token", async () => {
+    const site = await caller.control.create({ codes: "81", xpos: 15, ypos: 15 });
+    await ctx.db.control.updateMany({ where: { eventId: ctx.eventId, codes: "81" }, data: { name: "Start K" } });
+    const { id } = await caller.course.create({ name: "Kind" });
+    await caller.course.setStructure({
+      courseId: id,
+      structure: { version: 1, id: "k", orderMode: "ordered", items: [{ siteId: site.id }, { siteId: 31 }, { siteId: 32 }] },
+    });
+    const v0 = (await courseRow(id)).version;
+    expect((await ccOf(id)).map((cc) => cc.control.codes)).toEqual(["81", "31", "32"]);
+
+    await caller.control.update({ id: site.id, kind: "start" });
+    const row = await courseRow(id);
+    // The site now leads the course as its explicit start: out of course_controls, into start_name.
+    expect(row.startName).toBe("Start K");
+    expect((await ccOf(id)).map((cc) => cc.control.codes)).toEqual(["31", "32"]);
+    expect(row.version > v0).toBe(true);
+    const seq = (row.geometry as { features: { properties: { symbolType?: string; code?: string } }[] }).features
+      .filter((f) => f.properties.symbolType === "start")
+      .map((f) => f.properties.code);
+    expect(seq).toEqual(["81"]);
+
+    await caller.control.update({ id: site.id, kind: "control" });
+    expect((await ccOf(id)).map((cc) => cc.control.codes)).toEqual(["81", "31", "32"]);
+    expect((await courseRow(id)).startName).toBe("");
+  });
+
+  it("drops a deleted explicit start from the structure and advances the token", async () => {
+    const extra = await caller.control.create({ status: 4, xpos: 11, ypos: 11 });
+    const { id } = await caller.course.create({ name: "Lost start" });
+    await caller.course.setStructure({
+      courseId: id,
+      structure: { version: 1, id: "s", orderMode: "ordered", items: [{ siteId: extra.id }, { siteId: 31 }] },
+    });
+    const v0 = (await courseRow(id)).version;
+    const res = await caller.control.delete({ id: extra.id });
+    const row = await courseRow(id);
+    expect(row.version > v0).toBe(true);
+    expect(res.courses).toContainEqual({ id, version: row.version.toString() });
+    const detail = await caller.course.detail({ id });
+    expect(detail.structure.items.map((i) => ("siteId" in i ? i.siteId : null))).toEqual([31]);
+    expect(row.startName).toBe("");
+  });
+
+  it("course.clone copies the structure (legs included); bulkUpdate rewrites it from the columns", async () => {
+    const { id } = await caller.course.create({ name: "Clone src" });
+    await caller.course.setStructure({
+      courseId: id,
+      structure: { version: 1, id: "c", orderMode: "ordered", items: [{ siteId: 31 }, { siteId: 32, leg: { gaps: [{ from: 0.2, to: 0.3 }] } }] },
+    });
+    const clone = await caller.course.clone({ id, name: "Clone dst" });
+    const src = await courseRow(id);
+    const dst = await courseRow(clone.id);
+    expect({ ...(dst.structure as object), id: "_" }).toEqual({ ...(src.structure as object), id: "_" });
+    expect((dst.structure as { id: string }).id).toBe(dst.id);
+    expect(clone.version).toBe(dst.version.toString());
+
+    await caller.course.bulkUpdate({ ids: [clone.id], firstAsStart: true });
+    const after = await courseRow(clone.id);
+    const items = (after.structure as { items: { siteId: string; role?: string; leg?: unknown }[] }).items;
+    expect(items[0].role).toBe("start");
+    expect(items[1].leg).toEqual({ gaps: [{ from: 0.2, to: 0.3 }] });
+  });
+});
+
+describe("differing names label-offset changes", () => {
+  it("reports the site whose number moved since the client's base", async () => {
+    const { id } = await caller.course.create({ name: "Labels", controlIds: [31, 32] });
+    const base = (await caller.course.detail({ id })).version;
+    const moved = await caller.course.setControlLabelOffset({ id, controlId: 32, offset: { dx: 3, dy: 1 } });
+    expect(moved.version).toBe((await courseRow(id)).version.toString());
+    const conflict = await conflictOf(caller.course.update({ id, controlIds: [32, 31], baseVersion: base }));
+    expect(conflict.differing).toEqual(["32"]);
+  });
+});

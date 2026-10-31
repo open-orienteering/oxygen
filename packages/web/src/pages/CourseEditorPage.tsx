@@ -314,6 +314,26 @@ export function CourseEditorPage() {
     [client, versions],
   );
 
+  /** `course.setControlLabelOffset`, keeping the course's token. */
+  const setLabelOffset = useCallback(
+    async (input: Parameters<typeof client.course.setControlLabelOffset.mutate>[0]) => {
+      const res = await client.course.setControlLabelOffset.mutate(input);
+      versions.seed("course", input.id, res.version);
+      return res;
+    },
+    [client, versions],
+  );
+
+  /** `control.delete`, keeping the tokens of the courses it removed an item from. */
+  const deleteControl = useCallback(
+    async (input: Parameters<typeof client.control.delete.mutate>[0]) => {
+      const res = await client.control.delete.mutate(input);
+      versions.seedAll("course", res.courses);
+      return res;
+    },
+    [client, versions],
+  );
+
   /** `control.update` with the newest token this page has for the control. */
   const updateControl = useCallback(
     async (input: Omit<Parameters<typeof client.control.update.mutate>[0], "baseVersion">) => {
@@ -402,7 +422,7 @@ export function CourseEditorPage() {
           undoStack.push({
             undo: async () => {
               await updateCourse({ id: course.id, controlIds: prevIds });
-              await client.control.delete.mutate({ id });
+              await deleteControl({ id });
             },
             redo: async () => {
               await client.control.restore.mutate({ id });
@@ -413,14 +433,14 @@ export function CourseEditorPage() {
         }
       } else {
         undoStack.push({
-          undo: () => client.control.delete.mutate({ id }),
+          undo: () => deleteControl({ id }),
           redo: () => client.control.restore.mutate({ id }),
         });
         bumpHistory();
       }
       dispatch({ type: "placed", id });
     },
-    [updateCourse, controlList.data, seriesAllocation.data, effectiveAllocSeriesId, run, client, selectedCourse, sequenceIds, undoStack, bumpHistory],
+    [deleteControl, updateCourse, controlList.data, seriesAllocation.data, effectiveAllocSeriesId, run, client, selectedCourse, sequenceIds, undoStack, bumpHistory],
   );
 
   /** Place a code-less start/finish control (auto-named server-side). */
@@ -436,13 +456,13 @@ export function CourseEditorPage() {
       if (!created) return;
       const id = created.id;
       undoStack.push({
-        undo: () => client.control.delete.mutate({ id }),
+        undo: () => deleteControl({ id }),
         redo: () => client.control.restore.mutate({ id }),
       });
       bumpHistory();
       dispatch({ type: "placed", id });
     },
-    [run, client, undoStack, bumpHistory],
+    [deleteControl, run, client, undoStack, bumpHistory],
   );
 
   /** Assign the selected start/finish control to the selected course. */
@@ -521,7 +541,7 @@ export function CourseEditorPage() {
       dispatch({ type: "select", id });
       void (async () => {
         const redo = () =>
-          client.course.setControlLabelOffset.mutate({
+          setLabelOffset({
             id: selectedCourse.id,
             controlId: id,
             offset,
@@ -531,7 +551,7 @@ export function CourseEditorPage() {
         undoStack.push({
           redo,
           undo: () =>
-            client.course.setControlLabelOffset.mutate({
+            setLabelOffset({
               id: selectedCourse.id,
               controlId: id,
               offset: prev,
@@ -540,7 +560,7 @@ export function CourseEditorPage() {
         bumpHistory();
       })();
     },
-    [selectedCourse, client, run, undoStack, bumpHistory],
+    [setLabelOffset, selectedCourse, run, undoStack, bumpHistory],
   );
 
   const resetLabelOffset = useCallback(() => {
@@ -550,7 +570,7 @@ export function CourseEditorPage() {
     if (!prev) return;
     void (async () => {
       const redo = () =>
-        client.course.setControlLabelOffset.mutate({
+        setLabelOffset({
           id: selectedCourse.id,
           controlId: id,
           offset: null,
@@ -560,7 +580,7 @@ export function CourseEditorPage() {
       undoStack.push({
         redo,
         undo: () =>
-          client.course.setControlLabelOffset.mutate({
+          setLabelOffset({
             id: selectedCourse.id,
             controlId: id,
             offset: prev,
@@ -568,7 +588,7 @@ export function CourseEditorPage() {
       });
       bumpHistory();
     })();
-  }, [selectedCourse, state.selectedControlId, client, run, undoStack, bumpHistory]);
+  }, [setLabelOffset, selectedCourse, state.selectedControlId, run, undoStack, bumpHistory]);
 
   const handleSelect = useCallback((idStr: string | null) => {
     setRadioSwapOffer(null);
@@ -613,7 +633,7 @@ export function CourseEditorPage() {
       }))
       .filter((c) => c.ids.includes(sel));
     void (async () => {
-      const redo = () => client.control.delete.mutate({ id: sel });
+      const redo = () => deleteControl({ id: sel });
       const done = await run(redo);
       if (done === undefined) return;
       undoStack.push({
@@ -631,7 +651,7 @@ export function CourseEditorPage() {
       bumpHistory();
       dispatch({ type: "deleted", id: sel });
     })();
-  }, [updateCourse, state.selectedControlId, pendingOps, coordsById, courses.data, t, client, run, undoStack, bumpHistory]);
+  }, [deleteControl, updateCourse, state.selectedControlId, pendingOps, coordsById, courses.data, t, client, run, undoStack, bumpHistory]);
 
   // ─── Control description editor (modal) ──────────────────
 
@@ -1127,11 +1147,12 @@ export function CourseEditorPage() {
         }),
       );
       if (!created) return;
+      versions.seed("course", created.id, created.version);
       void utils.class.list.invalidate();
       setNewCourseName("");
       dispatch({ type: "select-course", id: created.id });
     })();
-  }, [newCourseName, run, client, classes.data, utils]);
+  }, [newCourseName, run, client, classes.data, utils, versions]);
 
   const openClone = useCallback(() => {
     if (!selectedCourse) return;
@@ -1149,11 +1170,12 @@ export function CourseEditorPage() {
         client.course.clone.mutate({ id: selectedCourse.id, name }),
       );
       if (!cloned) return;
+      versions.seed("course", cloned.id, cloned.version);
       setShowClone(false);
       setCloneName("");
       dispatch({ type: "select-course", id: cloned.id });
     })();
-  }, [selectedCourse, cloneName, client, run]);
+  }, [versions, selectedCourse, cloneName, client, run]);
 
   const sequenceUpdate = useCallback(
     (nextIds: number[]) => {

@@ -27,7 +27,11 @@ import { loadEventMapObjects } from "../event-map-objects.js";
 import { suggestDescriptions, type DescriptionCandidate } from "../description-autodetect.js";
 import { mapMmToWgs84 } from "../map-projection.js";
 import { rebuildCourseGeometry } from "../course-geometry.js";
-import { rewriteStructureFromColumns } from "../course-structure.js";
+import {
+  coursesNamingInStructure,
+  remirrorStoredStructures,
+  rewriteStructureFromColumns,
+} from "../course-structure.js";
 import {
   baseVersionSchema,
   basePayload,
@@ -922,17 +926,36 @@ export const controlRouter = router({
             });
           }
         }
+        const kindChanged = data.kind !== undefined && data.kind !== siteKind(c);
+        // Courses that depend on the control, computed before the write (a
+        // start / finish default is the lowest live seq of the old world).
+        const dependent =
+          positionChanged || kindChanged
+            ? [
+                ...new Set([
+                  ...(await courseIdsUsingControl(tx, ctx.event.id, c)),
+                  ...(await coursesNamingInStructure(tx, ctx.event.id, c.id)),
+                ]),
+              ]
+            : [];
         await tx.control.update({ where: { id: c.id }, data });
         const v = await emitControlUpserted(tx, ctx.event.id, c.id);
-        if (positionChanged) {
+        // A kind change makes `splitStructure` read a stored structure
+        // differently (a control that became a start leads the course):
+        // re-write those courses' column mirror (course-layer.md §6.2) and
+        // advance their token — the course as timing reads it changed.
+        const remirrored = new Set(
+          kindChanged ? await remirrorStoredStructures(tx, ctx.event.id, dependent) : [],
+        );
+        if (positionChanged || remirrored.size > 0) {
           // A moved control invalidates the stored overlay geometry of
           // every course that visits it — regenerate straight-leg
-          // 'editor' geometry and ship the updated course rows. Their
-          // structure is unchanged, so their token is too (G1).
-          const courseIds = await courseIdsUsingControl(tx, ctx.event.id, c);
-          await rebuildCourseGeometry(tx, ctx.event.id, courseIds);
-          for (const courseId of courseIds) {
-            await emitCourseUpserted(tx, ctx.event.id, courseId, { advanceVersion: false });
+          // 'editor' geometry and ship the updated course rows. A move
+          // leaves their structure, so their token too (G1).
+          const rebuild = positionChanged ? dependent : [...remirrored];
+          await rebuildCourseGeometry(tx, ctx.event.id, rebuild);
+          for (const courseId of rebuild) {
+            await emitCourseUpserted(tx, ctx.event.id, courseId, { advanceVersion: remirrored.has(courseId) });
           }
         }
         return v;
@@ -964,7 +987,7 @@ export const controlRouter = router({
     .input(z.object({ id: z.number().int() }))
     .mutation(async ({ ctx, input }) => {
       const c = await getControlByCode(ctx.db, ctx.event.id, input.id);
-      await ctx.db.$transaction(async (tx) => {
+      const courseVersions = await ctx.db.$transaction(async (tx) => {
         // Dependent courses are computed while the control still counts
         // as active — the start/finish default (lowest live seq) must
         // see the pre-delete world.
@@ -978,16 +1001,18 @@ export const controlRouter = router({
         // circle, symbol-less description rows, and sequence entries
         // that can't be removed (course.update resolves ids against
         // ACTIVE controls only and would 404 on the dead reference).
-        const visited = new Set(
-          (
+        const visited = new Set([
+          ...(
             await tx.courseControl.findMany({
               where: { controlId: c.id },
               select: { courseId: true },
             })
           ).map((cc) => cc.courseId),
-        );
+          // An explicit start / finish item in a stored structure.
+          ...(await coursesNamingInStructure(tx, ctx.event.id, c.id)),
+        ]);
         await tx.courseControl.deleteMany({ where: { controlId: c.id } });
-        // The courses that visited it lose an item: their structure is
+        // The courses that named it lose an item: their structure is
         // rewritten (and their token advances); the rest only reference it
         // as an implicit start / finish and get new geometry alone.
         for (const courseId of visited) {
@@ -995,12 +1020,21 @@ export const controlRouter = router({
         }
         // Deletes are upserts with removed: true on the wire.
         await emitControlUpserted(tx, ctx.event.id, c.id);
-        await rebuildCourseGeometry(tx, ctx.event.id, courseIds);
-        for (const courseId of courseIds) {
-          await emitCourseUpserted(tx, ctx.event.id, courseId, { advanceVersion: visited.has(courseId) });
+        const affected = [...new Set([...courseIds, ...visited])];
+        await rebuildCourseGeometry(tx, ctx.event.id, affected);
+        const versions: { id: number; version: string }[] = [];
+        for (const courseId of affected) {
+          const v = await emitCourseUpserted(tx, ctx.event.id, courseId, { advanceVersion: visited.has(courseId) });
+          if (visited.has(courseId)) {
+            const row = await tx.course.findUniqueOrThrow({ where: { id: courseId }, select: { seq: true } });
+            versions.push({ id: row.seq, version: v.toString() });
+          }
         }
+        return versions;
       });
-      return { ok: true };
+      // The courses whose token advanced, so an editor can keep sending
+      // fresh tokens (course-layer.md §7 "Legacy editor").
+      return { ok: true, courses: courseVersions };
     }),
 
   /**
