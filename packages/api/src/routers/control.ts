@@ -1,7 +1,8 @@
 import { createSocket } from "node:dgram";
 import { z } from "zod";
+import { publicControlId } from "../control-id.js";
 import { TRPCError } from "@trpc/server";
-import { router, coursesViewProcedure, coursesEditProcedure, coursesEditRaceProcedure, raceOperateProcedure, raceOperateRaceProcedure } from "../trpc.js";
+import { router, coursesViewProcedure, coursesEditProcedure, coursesEditRaceProcedure, coursesEditOrReviewRaceProcedure, coursesReviewRaceProcedure, raceOperateProcedure, raceOperateRaceProcedure } from "../trpc.js";
 import type { PrismaClient } from "../generated/prisma/client.js";
 import {
   controlStatusToValue,
@@ -10,6 +11,7 @@ import {
 } from "../statusConvert.js";
 import type {
   ControlInfo,
+  ControlKind,
   ControlDetail,
   ControlConfig,
   ControlDescription,
@@ -25,6 +27,15 @@ import { loadEventMapObjects } from "../event-map-objects.js";
 import { suggestDescriptions, type DescriptionCandidate } from "../description-autodetect.js";
 import { mapMmToWgs84 } from "../map-projection.js";
 import { rebuildCourseGeometry } from "../course-geometry.js";
+import { rewriteStructureFromColumns } from "../course-structure.js";
+import {
+  baseVersionSchema,
+  basePayload,
+  controlFieldsDiff,
+  lockControlVersion,
+  versionConflict,
+} from "../version-conflict.js";
+import { currentActorId } from "../auth.js";
 
 // ─── SNTP client (used by control.serverTime) ──────────────────────
 
@@ -226,22 +237,7 @@ async function courseIdsUsingControl(
   ];
 }
 
-/** Extract the first numeric code from a control's `codes` string. */
-function firstCode(codes: string): number {
-  const head = codes.split(";")[0]?.trim();
-  const n = parseInt(head ?? "", 10);
-  return Number.isNaN(n) ? 0 : n;
-}
-
-/**
- * User-facing id for a control: first code, falling back to seq.
- * Exported because every endpoint that exposes control ids to the web
- * app (control.list, course.controlCoordinates, …) must use the same
- * ID space — the MapPanel filters compare them directly.
- */
-export function publicControlId(c: { codes: string; seq: number }): number {
-  return firstCode(c.codes) || c.seq;
-}
+export { publicControlId };
 
 /**
  * Station battery reading in millivolts.
@@ -330,6 +326,64 @@ async function isUntouchedAutoDescription(
 /** Read the JSONB description column into the shared DTO type. */
 function descriptionDto(row: { description: unknown }): ControlDescription | null {
   return (row.description as ControlDescription | null) ?? null;
+}
+
+/** The D0 site fields of `ControlInfo` (docs/course-layer.md §6–7). */
+function siteFieldsDto(row: {
+  kind: string;
+  status: string;
+  circleGaps: unknown;
+  notes: string;
+  checkedAt: Date | null;
+  version: bigint;
+}): Pick<ControlInfo, "kind" | "circleGaps" | "notes" | "checkedAt" | "version"> {
+  return {
+    kind: siteKind(row),
+    circleGaps: (row.circleGaps as ControlInfo["circleGaps"] | null) ?? [],
+    notes: row.notes,
+    checkedAt: row.checkedAt ? row.checkedAt.toISOString() : null,
+    version: row.version.toString(),
+  };
+}
+
+/** A site's kind: the column, with `status` 4 / 5 for rows the API has not rewritten yet. */
+function siteKind(row: { kind: string; status: string }): ControlKind {
+  if (row.kind !== "control") return row.kind as ControlKind;
+  return row.status === "start" || row.status === "finish" ? row.status : "control";
+}
+
+/** Phase-1 site kinds; the rest of the `control_kind` enum is written from slice F. */
+const PHASE1_KINDS: readonly ControlKind[] = ["control", "start", "finish"];
+
+/**
+ * `kind` and `status` 4 / 5 kept in sync for one release (08 §4.8): the
+ * columns to write when an update sets either.
+ */
+function kindStatusWrite(
+  current: { kind: string; status: string },
+  input: { kind?: ControlKind; status?: number },
+): { kind?: ControlKind; status?: ReturnType<typeof valueToControlStatus> } {
+  if (input.kind !== undefined) {
+    const out: { kind: ControlKind; status?: ReturnType<typeof valueToControlStatus> } = { kind: input.kind };
+    if (input.kind === "start" || input.kind === "finish") out.status = input.kind;
+    else if (current.status === "start" || current.status === "finish") out.status = "ok";
+    if (input.status !== undefined && out.status === undefined) out.status = valueToControlStatus(input.status);
+    return out;
+  }
+  if (input.status !== undefined) {
+    const status = valueToControlStatus(input.status);
+    if (status === "start" || status === "finish") return { status, kind: status };
+    return siteKind(current) === "start" || siteKind(current) === "finish" ? { status, kind: "control" } : { status };
+  }
+  return {};
+}
+
+/** Control fields `differing` names on a conflict, read from a row or a journal payload. */
+function conflictFields(row: Record<string, unknown>): Record<string, unknown> {
+  return {
+    ...row,
+    checkedAt: row.checkedAt instanceof Date ? row.checkedAt.toISOString() : (row.checkedAt ?? null),
+  };
 }
 
 /**
@@ -489,6 +543,7 @@ export const controlRouter = router({
         config: aggregateConfig(u, c.radioType, c.airPlus, c.autosendMode),
         units: u,
         description: descriptionDto(c),
+        ...siteFieldsDto(c),
       };
     });
   }),
@@ -551,6 +606,7 @@ export const controlRouter = router({
         units: u,
         courses,
         description: descriptionDto(c),
+        ...siteFieldsDto(c),
       };
     }),
 
@@ -668,6 +724,7 @@ export const controlRouter = router({
             name,
             codes: input.codes,
             status: statusEnum,
+            kind: isStartFinish ? statusEnum : "control",
             timeAdjust: input.timeAdjust,
             minTime: input.minTime,
             ...(hasPosition
@@ -688,7 +745,7 @@ export const controlRouter = router({
           if (courseIds.length > 0) {
             await rebuildCourseGeometry(tx, ctx.event.id, courseIds);
             for (const courseId of courseIds) {
-              await emitCourseUpserted(tx, ctx.event.id, courseId);
+              await emitCourseUpserted(tx, ctx.event.id, courseId, { advanceVersion: false });
             }
           }
         }
@@ -697,7 +754,12 @@ export const controlRouter = router({
       return { id: publicControlId(created) };
     }),
 
-  update: coursesEditRaceProcedure
+  /**
+   * Edit a control site. Every field needs `courses.edit` except `notes`,
+   * which needs `courses.review` (a controller writes notes without the
+   * right to move controls; SLICES.md slice D, decision 4).
+   */
+  update: coursesEditOrReviewRaceProcedure
     .input(
       z
         .object({
@@ -721,12 +783,37 @@ export const controlRouter = router({
            * position. Hand-edited descriptions are left alone.
            */
           autoDescribe: z.boolean().optional(),
+          /** Site kind (docs/course-layer.md §6); `status` 4 / 5 follows it. Phase 1: control, start, finish. */
+          kind: z.enum(["control", "start", "finish", "map_exchange", "crossing_point", "map_issue"]).optional(),
+          /** Manual circle gaps, compass degrees. */
+          circleGaps: z
+            .array(z.object({ start: z.number().finite(), end: z.number().finite() }))
+            .optional(),
+          /** Setter / controller notes (`courses.review`). */
+          notes: z.string().max(4000).optional(),
+          /** The control's `version` the client edited from; stale → CONFLICT (docs/course-layer.md §7). */
+          baseVersion: baseVersionSchema.optional(),
         })
         .refine((v) => (v.xpos === undefined) === (v.ypos === undefined), {
           message: "xpos and ypos must be provided together",
         }),
     )
     .mutation(async ({ ctx, input }) => {
+      const caps = ctx.capabilities ?? new Set();
+      const { id: _id, baseVersion, notes, ...rest } = input;
+      const editFields = Object.entries(rest).filter(([, v]) => v !== undefined);
+      if (editFields.length > 0 && !caps.has("courses.edit")) {
+        throw new TRPCError({ code: "FORBIDDEN", message: "Missing capability courses.edit" });
+      }
+      if (notes !== undefined && !caps.has("courses.review")) {
+        throw new TRPCError({ code: "FORBIDDEN", message: "Missing capability courses.review" });
+      }
+      if (input.kind !== undefined && !PHASE1_KINDS.includes(input.kind)) {
+        throw new TRPCError({
+          code: "PRECONDITION_FAILED",
+          message: "Map exchanges, crossing points and map-issue points arrive in slice F",
+        });
+      }
       const c = await getControlByCode(ctx.db, ctx.event.id, input.id);
       const data: Record<string, unknown> = {};
       if (input.name !== undefined) data.name = input.name;
@@ -760,8 +847,9 @@ export const controlRouter = router({
       } else if (input.codes !== undefined) {
         data.codes = input.codes;
       }
-      if (input.status !== undefined)
-        data.status = valueToControlStatus(input.status);
+      Object.assign(data, kindStatusWrite(c, { kind: input.kind, status: input.status }));
+      if (input.circleGaps !== undefined) data.circleGaps = input.circleGaps;
+      if (notes !== undefined) data.notes = notes;
       if (input.timeAdjust !== undefined) data.timeAdjust = input.timeAdjust;
       if (input.minTime !== undefined) data.minTime = input.minTime;
       if (input.radioType !== undefined) data.radioType = input.radioType;
@@ -808,21 +896,68 @@ export const controlRouter = router({
         else if (c.description) data.description = PrismaNs.DbNull;
       }
 
-      await ctx.db.$transaction(async (tx) => {
+      const version = await ctx.db.$transaction(async (tx) => {
+        if (baseVersion !== undefined) {
+          const now = await lockControlVersion(tx, c.id);
+          if (now !== BigInt(baseVersion)) {
+            const row = await tx.control.findUniqueOrThrow({ where: { id: c.id } });
+            const base = await basePayload(tx, ctx.event.id, "control.upserted", c.id, baseVersion);
+            throw versionConflict({
+              kind: "control",
+              id: publicControlId(row),
+              version: now.toString(),
+              current: {
+                id: publicControlId(row),
+                name: row.name,
+                codes: row.codes,
+                status: controlStatusToValue(row.status),
+                xpos: row.xpos,
+                ypos: row.ypos,
+                description: descriptionDto(row),
+                ...siteFieldsDto(row),
+              },
+              differing: base
+                ? controlFieldsDiff(conflictFields(base.fields), conflictFields(row as unknown as Record<string, unknown>))
+                : null,
+            });
+          }
+        }
         await tx.control.update({ where: { id: c.id }, data });
-        await emitControlUpserted(tx, ctx.event.id, c.id);
+        const v = await emitControlUpserted(tx, ctx.event.id, c.id);
         if (positionChanged) {
           // A moved control invalidates the stored overlay geometry of
           // every course that visits it — regenerate straight-leg
-          // 'editor' geometry and ship the updated course rows.
+          // 'editor' geometry and ship the updated course rows. Their
+          // structure is unchanged, so their token is too (G1).
           const courseIds = await courseIdsUsingControl(tx, ctx.event.id, c);
           await rebuildCourseGeometry(tx, ctx.event.id, courseIds);
           for (const courseId of courseIds) {
-            await emitCourseUpserted(tx, ctx.event.id, courseId);
+            await emitCourseUpserted(tx, ctx.event.id, courseId, { advanceVersion: false });
           }
         }
+        return v;
       });
-      return { ok: true };
+      return { ok: true, version: version.toString() };
+    }),
+
+  /**
+   * Field-mode check-off (08 §6; `courses.review`): sets or clears
+   * `checked_at` / `checked_by` and advances the control's token.
+   */
+  check: coursesReviewRaceProcedure
+    .input(z.object({ controlId: z.number().int(), checked: z.boolean() }))
+    .mutation(async ({ ctx, input }) => {
+      const c = await getControlByCode(ctx.db, ctx.event.id, input.controlId);
+      const version = await ctx.db.$transaction(async (tx) => {
+        await tx.control.update({
+          where: { id: c.id },
+          data: input.checked
+            ? { checkedAt: new Date(), checkedBy: currentActorId() ?? null }
+            : { checkedAt: null, checkedBy: null },
+        });
+        return emitControlUpserted(tx, ctx.event.id, c.id);
+      });
+      return { version: version.toString() };
     }),
 
   delete: coursesEditRaceProcedure
@@ -843,12 +978,26 @@ export const controlRouter = router({
         // circle, symbol-less description rows, and sequence entries
         // that can't be removed (course.update resolves ids against
         // ACTIVE controls only and would 404 on the dead reference).
+        const visited = new Set(
+          (
+            await tx.courseControl.findMany({
+              where: { controlId: c.id },
+              select: { courseId: true },
+            })
+          ).map((cc) => cc.courseId),
+        );
         await tx.courseControl.deleteMany({ where: { controlId: c.id } });
+        // The courses that visited it lose an item: their structure is
+        // rewritten (and their token advances); the rest only reference it
+        // as an implicit start / finish and get new geometry alone.
+        for (const courseId of visited) {
+          await rewriteStructureFromColumns(tx, ctx.event.id, courseId);
+        }
         // Deletes are upserts with removed: true on the wire.
         await emitControlUpserted(tx, ctx.event.id, c.id);
         await rebuildCourseGeometry(tx, ctx.event.id, courseIds);
         for (const courseId of courseIds) {
-          await emitCourseUpserted(tx, ctx.event.id, courseId);
+          await emitCourseUpserted(tx, ctx.event.id, courseId, { advanceVersion: visited.has(courseId) });
         }
       });
       return { ok: true };
@@ -920,7 +1069,7 @@ export const controlRouter = router({
           if (courseIds.length > 0) {
             await rebuildCourseGeometry(tx, ctx.event.id, courseIds);
             for (const courseId of courseIds) {
-              await emitCourseUpserted(tx, ctx.event.id, courseId);
+              await emitCourseUpserted(tx, ctx.event.id, courseId, { advanceVersion: false });
             }
           }
         }

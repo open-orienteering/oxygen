@@ -20,7 +20,11 @@
  * Label offsets live in `course_controls` only.
  */
 
-import { course, type WireCourseStructure } from "@oxygen/shared";
+import { course, type ReferenceUpsertPayload } from "@oxygen/shared";
+import { publicControlId } from "./control-id.js";
+import { basePayload, lockCourseVersion, versionConflict } from "./version-conflict.js";
+
+type WireCourseStructure = course.WireCourseStructure;
 import type { Prisma, PrismaClient } from "./generated/prisma/client.js";
 import { Prisma as PrismaNs } from "./generated/prisma/client.js";
 
@@ -267,5 +271,97 @@ export async function rewriteStructureFromColumns(db: Db, eventId: bigint, cours
   await db.course.update({
     where: { id: courseUuid },
     data: { structure: next as unknown as Prisma.InputJsonValue },
+  });
+}
+
+/** Public ids of the given controls (the structure's wire form). */
+export async function publicIdsOf(db: Db, eventId: bigint, uuids: Iterable<string>): Promise<Map<string, number>> {
+  const rows = await db.control.findMany({
+    where: { eventId, id: { in: [...new Set(uuids)] } },
+    select: { id: true, codes: true, seq: true },
+  });
+  return new Map(rows.map((r) => [r.id, publicControlId(r)]));
+}
+
+/** Every site id a structure references (label-offset keys included). */
+function siteIdsOf(s: Stored & { labelOffsets?: Offsets }): string[] {
+  return [...course.structureControlIds(s), ...Object.keys(s.labelOffsets ?? {})];
+}
+
+/** A course's explicit structure in wire form, with label offsets from `course_controls`. */
+export async function loadWireStructure(
+  db: Db,
+  eventId: bigint,
+  courseUuid: string,
+): Promise<{ structure: WireCourseStructure; stored: boolean }> {
+  const { structure, stored } = await loadExplicitStructure(db, eventId, courseUuid);
+  const ccs = await db.courseControl.findMany({
+    where: { courseId: courseUuid },
+    orderBy: { position: "asc" },
+    select: { controlId: true, labelDx: true, labelDy: true },
+  });
+  const labelOffsets: Offsets = {};
+  for (const cc of ccs) {
+    if (cc.labelDx != null && cc.labelDy != null) labelOffsets[cc.controlId] ??= { dx: cc.labelDx, dy: cc.labelDy };
+  }
+  const withOffsets = Object.keys(labelOffsets).length > 0 ? { ...structure, labelOffsets } : structure;
+  const ids = await publicIdsOf(db, eventId, siteIdsOf(withOffsets));
+  return { structure: structureToWire(withOffsets, (id) => ids.get(id) ?? 0), stored };
+}
+
+/** The explicit structure a `course.upserted` payload describes (its column, else its columns' mirror). */
+async function structureOfPayload(db: Db, eventId: bigint, p: ReferenceUpsertPayload): Promise<Stored> {
+  const f = p.fields as Record<string, unknown>;
+  const parsed = f.structure ? course.courseStructureSchema.safeParse(f.structure) : null;
+  if (parsed?.success) return parsed.data;
+  const starts = f.startName
+    ? await db.control.findMany({
+        where: { eventId, OR: [{ kind: "start" }, { status: "start" }] },
+        orderBy: { seq: "asc" },
+        select: { id: true, name: true },
+      })
+    : [];
+  return structureFromColumns(
+    {
+      id: p.id,
+      orderMode: f.orderMode === "free_order" ? "free_order" : "ordered",
+      startName: String(f.startName ?? ""),
+      finishControlId: (f.finishControlId as string | null) ?? null,
+      firstAsStart: f.firstAsStart === true,
+      lastAsFinish: f.lastAsFinish === true,
+    },
+    (p.courseControls ?? []).map((cc) => ({ controlId: cc.controlId, numberHidden: cc.numberHidden ?? false })),
+    starts,
+  );
+}
+
+/**
+ * Lock the course row and refuse a stale `baseVersion` (docs/course-layer.md
+ * §7). No-op without one. Call first inside the write transaction.
+ */
+export async function assertCourseVersion(
+  db: Db,
+  eventId: bigint,
+  c: { id: string; seq: number },
+  baseVersion: string | undefined,
+): Promise<void> {
+  if (baseVersion === undefined) return;
+  const version = await lockCourseVersion(db, c.id);
+  if (version === BigInt(baseVersion)) return;
+  const current = await loadWireStructure(db, eventId, c.id);
+  const { structure: now } = await loadExplicitStructure(db, eventId, c.id);
+  const base = await basePayload(db, eventId, "course.upserted", c.id, baseVersion);
+  let differing: string[] | null = null;
+  if (base) {
+    const diff = course.structureDiff(await structureOfPayload(db, eventId, base), now);
+    const ids = await publicIdsOf(db, eventId, diff);
+    differing = diff.map((id) => String(ids.get(id) ?? id));
+  }
+  throw versionConflict({
+    kind: "course",
+    id: c.seq,
+    version: version.toString(),
+    current: current.structure,
+    differing,
   });
 }

@@ -22,6 +22,7 @@ import type { PrismaClient, Prisma } from "./generated/prisma/client.js";
 import { Prisma as PrismaNs } from "./generated/prisma/client.js";
 import { loadEventCrs } from "./event-crs.js";
 import { loadEventCutFeatures } from "./event-map-objects.js";
+import { rowKind, splitStructure } from "./course-structure.js";
 
 /**
  * Increment when stored automatic cut/gap semantics change; events below
@@ -135,7 +136,6 @@ function siteType(c: { kind: string; status: string }): GeometrySeqControl["type
   return "Control";
 }
 
-const TYPE_OF_ROLE = { start: "Start", control: "Control", finish: "Finish" } as const;
 const { courseStructureSchema, structureControlItems } = course;
 
 /**
@@ -162,7 +162,7 @@ export async function loadCourseSequences(
   const startFinish = await db.control.findMany({
     where: { eventId, removed: false, status: { in: ["start", "finish"] } },
     orderBy: { seq: "asc" },
-    select: { id: true, name: true, codes: true, seq: true, status: true, xpos: true, ypos: true },
+    select: { id: true, name: true, codes: true, seq: true, status: true, kind: true, xpos: true, ypos: true },
   });
   const starts = startFinish.filter((c) => c.status === "start");
   const finishes = startFinish.filter((c) => c.status === "finish");
@@ -183,47 +183,55 @@ export async function loadCourseSequences(
     });
     if (!course || course.removed) continue;
 
+    // The explicit start / finish and the sequence between them: from the
+    // stored structure (course-structure.ts `splitStructure`), else from the
+    // columns it mirrors. Sites are drawn by their kind, as before.
+    type Row = { id: string; codes: string; name: string; seq: number; status: string; kind: string; xpos: number; ypos: number };
+    let explicitStart: Row | undefined;
+    let explicitFinish: Row | undefined;
+    let firstAsStart = course.firstAsStart;
+    let lastAsFinish = course.lastAsFinish;
+    let middle: Row[];
     const stored = course.structure ? courseStructureSchema.safeParse(course.structure) : null;
     if (stored?.success) {
       const items = structureControlItems(stored.data);
       const rows = await db.control.findMany({
-        where: { eventId, id: { in: [...new Set(items.map((i) => i.siteId))] } },
+        // A soft-deleted site drops out (an explicit start then falls back
+        // to the default, as `startName` does).
+        where: { eventId, removed: false, id: { in: [...new Set(items.map((i) => i.siteId))] } },
         select: { id: true, codes: true, name: true, seq: true, status: true, kind: true, xpos: true, ypos: true },
       });
       const byId = new Map(rows.map((r) => [r.id, r]));
-      const seq: GeometrySeqControl[] = [];
-      for (const item of items) {
-        const c = byId.get(item.siteId);
-        if (!c) continue;
-        seq.push({
-          id: c.id,
-          code: displayCode(c),
-          type: item.role ? TYPE_OF_ROLE[item.role] : siteType(c),
-          xMm: c.xpos,
-          yMm: c.ypos,
-        });
-      }
-      out.set(courseUuid, { seq, orderMode: course.orderMode });
-      continue;
-    }
-
-    const ccs = await db.courseControl.findMany({
-      where: { courseId: courseUuid },
-      orderBy: { position: "asc" },
-      select: {
-        control: {
-          select: { id: true, codes: true, name: true, seq: true, status: true, xpos: true, ypos: true },
+      const parts = splitStructure(items, (id) => {
+        const r = byId.get(id);
+        return r ? rowKind(r) : undefined;
+      });
+      explicitStart = parts.start ? byId.get(parts.start) : undefined;
+      explicitFinish = parts.finish ? byId.get(parts.finish) : undefined;
+      firstAsStart = parts.firstAsStart;
+      lastAsFinish = parts.lastAsFinish;
+      middle = parts.middle.flatMap((item) => byId.get(item.siteId) ?? []);
+    } else {
+      const ccs = await db.courseControl.findMany({
+        where: { courseId: courseUuid },
+        orderBy: { position: "asc" },
+        select: {
+          control: {
+            select: { id: true, codes: true, name: true, seq: true, status: true, kind: true, xpos: true, ypos: true },
+          },
         },
-      },
-    });
+      });
+      middle = ccs.map((cc) => cc.control);
+      explicitStart = course.startName ? starts.find((s) => s.name === course.startName) : undefined;
+      explicitFinish = course.finishControlId
+        ? finishes.find((f) => f.id === course.finishControlId)
+        : undefined;
+    }
 
     const seq: GeometrySeqControl[] = [];
 
-    if (!course.firstAsStart) {
-      const start =
-        (course.startName
-          ? starts.find((s) => s.name === course.startName)
-          : undefined) ?? starts[0];
+    if (!firstAsStart) {
+      const start = explicitStart ?? starts[0];
       if (start) {
         seq.push({
           id: start.id,
@@ -235,23 +243,18 @@ export async function loadCourseSequences(
       }
     }
 
-    for (const cc of ccs) {
-      const c = cc.control;
+    for (const c of middle) {
       seq.push({
         id: c.id,
         code: displayCode(c),
-        type:
-          c.status === "start" ? "Start" : c.status === "finish" ? "Finish" : "Control",
+        type: siteType(c),
         xMm: c.xpos,
         yMm: c.ypos,
       });
     }
 
-    if (!course.lastAsFinish) {
-      const finish =
-        (course.finishControlId
-          ? finishes.find((f) => f.id === course.finishControlId)
-          : undefined) ?? finishes[0];
+    if (!lastAsFinish) {
+      const finish = explicitFinish ?? finishes[0];
       if (finish) {
         seq.push({
           id: finish.id,
@@ -264,65 +267,6 @@ export async function loadCourseSequences(
     }
 
     out.set(courseUuid, { seq, orderMode: course.orderMode });
-  }
-  return out;
-}
-
-/** A course's structure as a reader sees it (docs/course-layer.md §6). */
-export interface EffectiveStructure {
-  structure: course.CourseStructure;
-  /** False: `courses.structure` is NULL and this is the linear one the sequence describes. */
-  stored: boolean;
-}
-
-/**
- * The structure of each given (non-removed) course: the stored one, else the
- * linear structure of `loadCourseSequences`' sequence (each item with its
- * drawn role). `orderMode` is the course's column and `labelOffsets` come
- * from `course_controls` in both cases — the column holds neither (one
- * source each). Site ids are control UUIDs.
- */
-export async function loadCourseStructures(
-  db: Db,
-  eventId: bigint,
-  courseUuids: string[],
-): Promise<Map<string, EffectiveStructure>> {
-  const out = new Map<string, EffectiveStructure>();
-  if (courseUuids.length === 0) return out;
-  const sequences = await loadCourseSequences(db, eventId, courseUuids);
-  const rows = await db.course.findMany({
-    where: { id: { in: [...sequences.keys()] } },
-    select: { id: true, structure: true },
-  });
-  const ccs = await db.courseControl.findMany({
-    where: { courseId: { in: [...sequences.keys()] } },
-    orderBy: { position: "asc" },
-    select: { courseId: true, controlId: true, labelDx: true, labelDy: true },
-  });
-  for (const row of rows) {
-    const sequence = sequences.get(row.id);
-    if (!sequence) continue;
-    const labelOffsets: Record<string, { dx: number; dy: number }> = {};
-    for (const cc of ccs) {
-      if (cc.courseId !== row.id || cc.labelDx == null || cc.labelDy == null) continue;
-      labelOffsets[cc.controlId] ??= { dx: cc.labelDx, dy: cc.labelDy };
-    }
-    const parsed = row.structure ? courseStructureSchema.safeParse(row.structure) : null;
-    if (parsed?.success) {
-      const { labelOffsets: _ignored, ...rest } = parsed.data;
-      const structure = { ...rest, id: row.id, orderMode: sequence.orderMode } as course.CourseStructure;
-      if (Object.keys(labelOffsets).length > 0) structure.labelOffsets = labelOffsets;
-      out.set(row.id, { structure, stored: true });
-    } else {
-      out.set(row.id, {
-        structure: course.linearStructure(
-          row.id,
-          sequence.seq.map((c) => ({ siteId: c.id, role: KIND[c.type] })),
-          { orderMode: sequence.orderMode, labelOffsets },
-        ),
-        stored: false,
-      });
-    }
   }
   return out;
 }
