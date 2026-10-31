@@ -261,20 +261,25 @@ reopen any of them with a reason):
 - **Loupe** (D9) is Pending behind the nudge pad unless D9's planner finds
   it cheap on B2's explicit render target.
 
-Open before the first rows start (user decisions, recorded in the
-decision log once taken): (1) **G1** — decided 2026-10-31 (decision log;
+Decided before the first rows started (user, 2026-10-31, on the
+coordinator's recommendations; decision log): (1) **G1** — decision log;
 `course-layer.md` "Decided by the user 2026-10-31": journal-HLC version
 token per course and per control, `CONFLICT` payload, field-move rebase
 vs structure refresh-and-redo, presence heartbeat on the existing poll,
-legacy editor sends the token, `map_patches` ops state-setting); (2) **editor gate during D** — a
-temporary instance flag `map.editor.vector` (default `false`, removed in
-E) in the mount rule `vector ∧ pinned ∧ flag`, so a club event can be
-`vector` for the viewer while the editor is unproven, or the per-event
-switch alone; (3) **auto-template duplicate rule** (D8) — which of several
-templates sharing a derived `auto_key` is the auto one (oldest /
-most-assigned / name closest to the key) and whether auto templates are
-renamed to their key; (4) **controller capability** — `notes` / `check`
-for `courses.view`, or a new `courses.review` capability in D0.
+legacy editor sends the token, `map_patches` ops state-setting;
+(2) **editor gate during D** — the temporary instance flag
+`map.editor.vector` (default `false`, removed in E) in the mount rule
+`vector ∧ pinned ∧ flag`, so a club event stays `vector` for the viewer
+and print while the editor is unproven (D4 adds it to
+`map-pipeline-switch.md` §1); (3) **auto-template duplicate rule** (D8)
+— of several templates sharing an `auto_key`, the one with the most
+sheets (`course_maps` rows) is the auto one, ties to the oldest; the
+others are `is_extra`; **no renames** — templates keep their names and
+the key is shown as a badge; (4) **controller capability** — a new
+`courses.review` capability in D0 (`control.check` and a control's
+`notes` require it; everything else stays `courses.edit`), granted to
+the `courseSetter` and `eventAdmin` system groups, so a controller gets
+`courses.view` + `courses.review` without `courses.edit`.
 
 ### Done
 
