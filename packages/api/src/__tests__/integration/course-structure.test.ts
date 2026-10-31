@@ -379,7 +379,13 @@ describe("the mirror stays a function of the structure (course-layer.md §6.2)",
     expect(res.courses).toContainEqual({ id, version: row.version.toString() });
     const detail = await caller.course.detail({ id });
     expect(detail.structure.items.map((i) => ("siteId" in i ? i.siteId : null))).toEqual([31]);
-    expect(row.startName).toBe("");
+    // Every reader now starts the course at the event default: the geometry
+    // (structure path) and the legacy column (the deleted start's name
+    // matches no live start) agree.
+    const starts = (row.geometry as { features: { properties: { symbolType?: string; code?: string } }[] }).features
+      .filter((f) => f.properties.symbolType === "start")
+      .map((f) => f.properties.code);
+    expect(starts).toEqual(["Start 1"]); // the lowest-seq start, by its display code (name)
   });
 
   it("course.clone copies the structure (legs included); bulkUpdate rewrites it from the columns", async () => {

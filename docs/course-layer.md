@@ -520,7 +520,14 @@ D1's backfill is a pure function of the columns, and the new editor
 makes a course explicit on its first save. The inverse,
 `structureFromColumns`, gives every course written before D0 the
 structure its columns describe (`course.detail` reports
-`structureStored: false` for those).
+`structureStored: false` for those). The columns can hold legacy state no
+structure expresses — `start_name` beside `first_as_start` (the name is
+ignored), the flags on a course without controls, the name of a deleted
+start (matches no live start). Rewriting the structure *from* the columns
+(`course.update`, `bulkUpdate`, `control.delete`) writes the column only
+and leaves such state alone; every reader resolves it the same way as
+before D0. `course.setStructure` writes the columns from the structure
+and so normalises it.
 
 **Who writes it.** `course.setStructure` (the structure is the input);
 `course.update`, `course.create` and `course.bulkUpdate` (the linear

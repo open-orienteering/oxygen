@@ -268,6 +268,10 @@ export async function rewriteStructureFromColumns(db: Db, eventId: bigint, cours
   await db.course.update({ where: { id: courseUuid }, data: { structure: PrismaNs.DbNull } });
   const { structure } = await loadExplicitStructure(db, eventId, courseUuid);
   const next = carryLegs(prev?.success ? prev.data : null, structure);
+  // The column only: the flat columns may hold legacy state the structure
+  // cannot express (`start_name` beside `first_as_start`, the flags on a
+  // course without controls, the name of a deleted start) and are left as
+  // they are — every reader resolves such state the same way (§6.2).
   await db.course.update({
     where: { id: courseUuid },
     data: { structure: next as unknown as Prisma.InputJsonValue },
