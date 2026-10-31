@@ -47,6 +47,8 @@ export interface ColourStackSummary {
   conflicts: { colour: string; reason: string }[];
   /** Source colours used by a symbol but outside the IOF vocabulary. */
   unclassified: { sourceNumber?: number; name: string }[];
+  /** Used area colours drawn above lower purple (docs/map-symbols.md §9.2 step 5). */
+  areasAboveLowerPurple: { name: string; sourceNumber?: number; paletteId?: string }[];
 }
 
 export interface MatchDocumentResult {
@@ -132,6 +134,7 @@ export function matchDocument(input: MapDocumentInput, opts: MatchDocumentOption
 
   const aligned = alignColourStack({ colours, infos, spec: library.spec, edition, needed, usage });
   for (const c of aligned.conflicts) warn("COLOUR_ORDER_CONFLICT", `${c.colour}: ${c.reason}`);
+  for (const a of aligned.areasAboveLowerPurple) warn("COLOUR_AREA_ABOVE_LOWER_PURPLE", `"${a.name}" is drawn above lower purple and hides the course overprint under it`);
   const unclassified: ColourStackSummary["unclassified"] = [];
   infos.forEach((info) => {
     if (info.class || usage[info.index] === 0) return;
@@ -157,7 +160,7 @@ export function matchDocument(input: MapDocumentInput, opts: MatchDocumentOption
   return {
     input: out,
     matching: summary,
-    colourStack: { source: colours.length, inserted: aligned.inserted, aliased: aligned.aliased, conflicts: aligned.conflicts, unclassified },
+    colourStack: { source: colours.length, inserted: aligned.inserted, aliased: aligned.aliased, conflicts: aligned.conflicts, unclassified, areasAboveLowerPurple: aligned.areasAboveLowerPurple },
     warnings: [...warnings.values()],
   };
 }

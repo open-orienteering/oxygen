@@ -7,6 +7,7 @@
 
 import { describe, expect, it } from "vitest";
 import { decodeMapDocument, encodeMapDocument } from "../../map-document/codec.js";
+import { OBJECT_TYPE } from "../../map-document/header.js";
 import { canonicalRender, documentRenderInput, isAppliedMatch } from "../../map-document/render-bridge.js";
 import { type LineSymbol, parseRenderSymbol } from "../../render/symbol.js";
 import { renderColourRefs } from "../../render/transform.js";
@@ -61,6 +62,26 @@ describe("matchDocument", () => {
     const metroNow = h.symbols[5].render as LineSymbol;
     expect(h.colours[metroNow.main!.colour].sourceNumber).toBe(1);
     for (const s of h.symbols) if (s.render) for (const c of renderColourRefs(parseRenderSymbol(s.render))) expect(c).toBeLessThan(h.colours.length);
+  });
+
+  it("puts lower purple below the line colours and reports an area colour the source draws above it", () => {
+    // The fixture's yellow is used by no object: lower purple goes directly below the brown line colour.
+    const lower = paletteIndexOfStack(h.colours).get("purple-lower")!;
+    expect(h.colours[lower + 1].sourceNumber).toBe(3);
+    expect(h.colours[lower - 1].sourceNumber).toBe(4);
+    expect(res.colourStack.areasAboveLowerPurple).toEqual([]);
+    const base = input();
+    const green = { id: "src:6", name: "Grön 30% - Ytobjekt", cmyk: [0.24, 0, 0.27, 0] as [number, number, number, number], sourceNumber: 6 };
+    const withArea: typeof base = {
+      header: { ...base.header, colours: [...base.header.colours, green], symbols: [...base.header.symbols, { code: "406.0", name: "Grön", kind: "area", render: { type: "area", id: "src:406", code: "406", name: "Grön", fill: 5 } }] },
+      objects: [...base.objects, { symbolIdx: base.header.symbols.length, type: OBJECT_TYPE.area, sourceIndex: 9, coords: [0, 0, 100, 0, 100, 100], flags: [0, 0, 0] }],
+    };
+    const r = matchDocument(withArea);
+    expect(r.colourStack.areasAboveLowerPurple).toEqual([{ name: "Grön 30% - Ytobjekt", sourceNumber: 6, paletteId: "green30-area" }]);
+    expect(r.warnings.find((w) => w.code === "COLOUR_AREA_ABOVE_LOWER_PURPLE")).toMatchObject({ count: 1 });
+    // One stray area on top does not pull lower purple above black and brown.
+    const lowerR = paletteIndexOfStack(r.input.header.colours).get("purple-lower")!;
+    expect(r.input.header.colours[lowerR + 1].sourceNumber).toBe(3);
   });
 
   it("reports the non-IOF colour that symbols use and the unmatched symbols as warnings", () => {

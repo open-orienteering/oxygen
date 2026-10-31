@@ -138,7 +138,11 @@ describe("importOcadToDocument", () => {
     const input = mapDocument.documentRenderInput(doc);
     expect(input.stats.canonicalSymbols).toBe(result.matching.symbols.auto);
     expect(input.stats.canonicalMissing).toBe(0);
-    // The fixture stacks its blue line colour below yellow, so the inserted lower purple cannot satisfy both neighbours.
+    // The fixture stacks its blue line colour below yellow: the inserted lower purple goes above the yellow and the blue
+    // left under it is reported (docs/map-symbols.md §9.2 steps 4–5).
+    const lower = doc.header.colours.findIndex((c) => c.paletteIds?.includes("purple-lower"));
+    expect(doc.header.colours[lower - 1].name).toBe("Yellow");
+    expect(result.colourStack.conflicts).toContainEqual({ colour: "blue100-line", reason: 'source places "Blue" below purple-lower; the palette has the reverse order' });
     expect(result.warnings.map((w) => w.code)).toContain("COLOUR_ORDER_CONFLICT");
   });
 
