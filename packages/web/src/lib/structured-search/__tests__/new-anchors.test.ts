@@ -21,6 +21,8 @@ import type {
 import { ControlStatus, RunnerStatus } from "@oxygen/shared";
 
 const lbl = (k: string) => k;
+/** The D0 site fields of `ControlInfo` (course-layer.md §6). */
+const SITE = { kind: "control" as const, circleGaps: [], notes: "", checkedAt: null, version: "0" };
 
 // ─── Class anchors ─────────────────────────────────────────
 describe("class anchors", () => {
@@ -76,9 +78,9 @@ describe("class anchors", () => {
 describe("course anchors", () => {
   const anchors = createCourseAnchors(lbl) as AnchorDef<CourseSummary>[];
   const courses: CourseSummary[] = [
-            { id: 1, name: "Lång", controls: "31;42;55", controlCount: 3, length: 5200, climb: 100, numberOfMaps: 30, orderMode: "ordered", firstAsStart: false, lastAsFinish: true, startControlId: null, finishControlId: null, descriptionInstructions: null, labelOffsets: {} },
-    { id: 2, name: "Medel", controls: "31;42", controlCount: 2, length: 3200, climb: 50, numberOfMaps: 20, orderMode: "ordered", firstAsStart: true, lastAsFinish: false, startControlId: null, finishControlId: null, descriptionInstructions: null, labelOffsets: {} },
-    { id: 3, name: "Kort", controls: "31", controlCount: 1, length: 1500, climb: 20, numberOfMaps: 5, orderMode: "ordered", firstAsStart: true, lastAsFinish: true, startControlId: null, finishControlId: null, descriptionInstructions: null, labelOffsets: {} },
+            { id: 1, name: "Lång", controls: "31;42;55", controlCount: 3, length: 5200, climb: 100, numberOfMaps: 30, orderMode: "ordered", firstAsStart: false, lastAsFinish: true, startControlId: null, finishControlId: null, descriptionInstructions: null, labelOffsets: {}, version: "0" },
+    { id: 2, name: "Medel", controls: "31;42", controlCount: 2, length: 3200, climb: 50, numberOfMaps: 20, orderMode: "ordered", firstAsStart: true, lastAsFinish: false, startControlId: null, finishControlId: null, descriptionInstructions: null, labelOffsets: {}, version: "0" },
+    { id: 3, name: "Kort", controls: "31", controlCount: 1, length: 1500, climb: 20, numberOfMaps: 5, orderMode: "ordered", firstAsStart: true, lastAsFinish: true, startControlId: null, finishControlId: null, descriptionInstructions: null, labelOffsets: {}, version: "0" },
   ];
 
   it("filters by length in km", () => {
@@ -110,23 +112,23 @@ describe("control anchors", () => {
       id: 31, name: "", codes: "31", status: ControlStatus.OK, timeAdjust: 0, minTime: 0,
       runnerCount: 12,
       config: { radioType: "internal_radio", airPlus: "default", autosendMode: "last", batteryVoltage: 2.6, batteryLow: false, checkedAt: "2026-04-01T10:00:00Z", memoryClearedAt: null },
-      units: [], description: null,
+      units: [], description: null, ...SITE,
     },
     {
       id: 42, name: "Radio 1", codes: "42", status: ControlStatus.OK, timeAdjust: 0, minTime: 0,
       runnerCount: 5,
       config: { radioType: "public_radio", airPlus: "default", autosendMode: "last", batteryVoltage: 2.4, batteryLow: true, checkedAt: null, memoryClearedAt: null },
-      units: [], description: null,
+      units: [], description: null, ...SITE,
     },
     {
       id: 55, name: "Mål", codes: "55", status: ControlStatus.Finish, timeAdjust: 0, minTime: 0,
-      runnerCount: 0, config: null, units: [], description: null,
+      runnerCount: 0, config: null, units: [], description: null, ...SITE, kind: "finish",
     },
     {
       id: 60, name: "", codes: "60", status: ControlStatus.OK, timeAdjust: 0, minTime: 0,
       runnerCount: 8,
       config: { radioType: "normal", airPlus: "default", autosendMode: "last", batteryVoltage: 3.0, batteryLow: false, checkedAt: "2026-04-02T10:00:00Z", memoryClearedAt: null },
-      units: [], description: null,
+      units: [], description: null, ...SITE,
     },
   ];
 
@@ -171,7 +173,7 @@ describe("control ordinal anchor", () => {
   const anchors = createControlAnchors(lbl, ordinals) as AnchorDef<ControlInfo>[];
   const mkCtrl = (id: number): ControlInfo => ({
     id, name: "", codes: String(id), status: ControlStatus.OK,
-    timeAdjust: 0, minTime: 0, runnerCount: 0, config: null, units: [], description: null,
+    timeAdjust: 0, minTime: 0, runnerCount: 0, config: null, units: [], description: null, ...SITE,
   });
   const ctrls = [mkCtrl(31), mkCtrl(42), mkCtrl(55), mkCtrl(60)];
 

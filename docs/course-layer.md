@@ -9,11 +9,11 @@ This chapter is normative for `packages/shared/src/course/`
 (`import { course } from "@oxygen/shared"`). Its consumers are the
 viewer's dynamic bucket (C4, §5), the page composer (C2,
 `course-print.md`) and the `courses.geometry` compatibility artifact
-(C5). The course *structure* beyond today's linear sequence, its storage
-and editing are slice D's (the concurrency rules are decided below);
-this chapter covers what C needs: how the layer is derived (§1), its v1
-input (§2), the geometry rules (§3), the GeoJSON projection (§4) and the
-viewer (§5).
+(C5). This chapter covers how the layer is derived (§1), its v1 input
+(§2), the geometry rules (§3), the GeoJSON projection (§4), the viewer
+(§5), the stored course structure (§6, slice D row D0) and the
+concurrency rules for editing it (§7, gate G1). Editing the structure on
+the new canvas is `course-editor.md`'s.
 
 ## Decisions taken before the code (user, 2026-10-24)
 
@@ -47,77 +47,9 @@ Decided by the user 2026-10-24 for C5:
   through the `OVERPRINT_CUTS_VERSION` bump.
 
 Decided by the user 2026-10-31 for slice D (gate G1, concurrent
-editing; README "Decision gates" and decision log). D0 writes these rules
-out as §7 "Concurrency"; until then this block is the normative text:
-
-- **Model.** Optimistic concurrency with a version token, over the
-  existing journal. Four designs were weighed: (A) last-write-wins with
-  visibility only ("changed by X" after the fact, no protection — what
-  08 §5.5 inherits); (B) a version token on every edit, the server
-  refusing a stale write; (C) a server-side operation log that merges
-  non-overlapping edits to one structure; (D) a CRDT document. (B) is
-  chosen: it costs one column per edited table and one error path, it
-  uses the journal's existing total order, and the realistic concurrency
-  (a setter on the desktop, a controller in Field mode) is two devices on
-  mostly different rows. (A) clobbers silently, (D) stays rejected
-  (`offline-architecture.md`), and (C) is the upgrade path if real use
-  shows frequent structure conflicts — it would sit on the same token and
-  change nothing in the client contract.
-- **Token.** The HLC of the last journal entry that wrote the row
-  (`JournalEntry.hlc` of its `course.upserted` / `control.upserted`
-  entry), mirrored onto the row as `courses.version BIGINT` and
-  `controls.version BIGINT` in the same transaction as the emit (both
-  emits already re-read the post-write row; D0's migration adds the
-  columns, `0` for rows written before it). Not `updated_at` (a wall
-  clock, not monotonic across nodes) and not a separate counter (one
-  order for the live row and the journal). **Separate tokens** for a
-  course and its controls: `course.setStructure` and `course.update`
-  advance the course's token, `control.update` and `control.check` the
-  control's; a control move rebuilds its courses' geometry but leaves
-  their structure and token untouched, so a structure edit and a field
-  move on the same course never conflict with each other.
-- **Writes.** `course.setStructure`, `course.update` and `control.update`
-  take `baseVersion`; the server compares it with the row's `version`
-  inside the write transaction and answers tRPC `CONFLICT` with
-  `data: { kind: "course" | "control", id, version, current, differing }`
-  — `version` and `current` are the server's row as it is now (the
-  structure or the control), `differing` the structure item ids (course)
-  or field names (control) that differ between the client's base and the
-  server's row. `baseVersion` is optional on the API for one release so
-  clients that predate it keep today's behaviour; every editor sends it
-  (below). Importers, the structure backfill and `course.importCourses`
-  replace by design and send none. Course objects (D2) carry the same
-  token per object; a stale object write is `CONFLICT` too.
-- **Client rules.** A **field move** (position) on a stale control is
-  re-sent with the fresh token automatically when the other side changed
-  only fields the move does not touch (description, code, notes, kind,
-  circle gaps, checked); when the other side also moved it, the editor
-  shows "moved by X at T" with both positions and the user keeps one. A
-  **structure edit** on a stale structure is never merged: the editor
-  refreshes, re-renders the sequence with a one-line notice naming the
-  differing items, and the user redoes the edit. Concurrent reordering is
-  therefore always a conflict, by design.
-- **Presence and live refresh.** No new push channel. Presence is a
-  heartbeat `course.presence { courseId, mode }` (TTL 30 s) stored in a
-  small table (the service runs up to two Cloud Run instances, so not in
-  process memory) and read by the existing 5 s `useExternalChanges` poll
-  of `event.counterState`, shown in the editor's top bar. Live refresh is
-  cache invalidation, not journal replay: the `oCourse` / `oControl`
-  watermarks already invalidate the `course` / `control` queries, and the
-  editor refetches its structure and tokens on them. "Moved by X at T"
-  reads `actorId` and `hlc` from the control's last `control.upserted`
-  entry (D11 adds the lookup and, if the scan is measurable, an index on
-  `(event_id, type, (payload->>'id'))`).
-- **Legacy editor.** Yes, it sends the token: `CourseEditorPage` and the
-  Courses page call the same `course.update` / `control.update` with
-  `baseVersion` from the rows they loaded; on `CONFLICT` they invalidate
-  and show "changed elsewhere — reloaded". One rule for both editors on
-  the same rows.
-- **`map_patches` constraint (for slice G, no code now).** Patch
-  operations are idempotent and commutative: each op is keyed by
-  `(object id, op id)` and sets a state (hidden, colour override, …)
-  rather than applying a relative change, so applying twice equals once
-  and two devices' patches merge through the journal in any order.
+editing; README "Decision gates" and decision log): optimistic
+concurrency with a version token over the journal. D0 wrote the rules out
+as §7; the designs weighed and why (B) won are in the decision log.
 
 ## 1. Derivation
 
@@ -209,7 +141,7 @@ clockwise, the gap sweeping clockwise from `start` to `end`), fractions
 
 | Input | v1 shape | Built today from |
 |---|---|---|
-| `structure` | `CourseStructure` (one course), an array (several highlighted courses: legs of each, codes as numbers) or `null` (no course) | `{ version: 1, id, orderMode, items, labelOffsets?, extras? }`: `items` start … finish — the start by `startName` unless `firstAsStart`, `course_controls` in order, the finish by `finishControlId` unless `lastAsFinish` (`rebuildCourseGeometry` / `course-export.ts`); `labelOffsets` from `course_controls`; `extras` from imported geometry |
+| `structure` | `CourseStructure` (one course), an array (several highlighted courses: legs of each, codes as numbers) or `null` (no course) — the stored form is §6 | `{ version: 1, id, orderMode, items, labelOffsets?, extras? }`: `items` start … finish — the start by `startName` unless `firstAsStart`, `course_controls` in order, the finish by `finishControlId` unless `lastAsFinish` (`rebuildCourseGeometry` / `course-export.ts`); `labelOffsets` from `course_controls`; `extras` from imported geometry |
 | `CourseItem` | `{ siteId, role?, leg?, circleGaps? }` — 08 §4.3's item, the leg being the leg *into* the item | `role` defaults to the site's kind (set it for `firstAsStart` / `lastAsFinish`) |
 | `leg` | `{ path?, pieces?, gaps? }` | imported `ocd` courses only (decision of the slice-C split): `path` the authored polyline with bends, `pieces` the file's preclipped 705 pieces, `gaps` authored fractions. Retired by D's `LegProps.path` |
 | `circleGaps` | `{ start, end }[]` | imported `ocd` `cuts` |
@@ -515,6 +447,225 @@ the viewer mirrors the drawn numbers and legs as a hidden DOM list
 **Unaligned stack.** A document whose stack throws `CourseStackError`
 draws the SVG course overlay over the GL map instead (§1).
 
+## 6. Structure
+
+Slice D row D0 (research 08 §4.2, §4.3, §4.8). A course is stored as a
+**structure**, `courses.structure JSONB` — the §2 `CourseStructure`
+type widened to the whole 08 §4.3 item union so slice F never reshapes
+the column. `NULL` means "not written yet": every reader then reads the
+columns of §6.2, which describe the same course.
+
+### 6.1 Stored shape
+
+```ts
+// packages/shared/src/course/structure.ts — courseStructureSchema (Zod)
+{ version: 1, id, orderMode: "ordered" | "free_order", items: Item[] }
+Item =
+  | { kind?: "control", siteId, role?: "control" | "start" | "finish",
+      leg?: LegProps, numberHidden?: boolean }            // leg = the leg *into* the item
+  | { kind: "variation", id, alternatives: { label, items: ControlItem[] }[] /* ≥ 2 */, loop? }
+LegProps = { style?: "line" | "marked_route" | "none", gaps?: { from, to }[],
+             corridor?: { widthM, edge, whiteMm, whiteOpacity },
+             crossing?: { controlId, section? }, bends?: { x, y }[] }
+```
+
+- **Site ids** are control UUIDs in the column (journal-portable; a
+  public id is a punch code and can change). The tRPC **wire form**
+  (`courseStructureWireSchema`, `course.setStructure` input,
+  `course.detail.structure`) carries public control ids instead; the
+  server maps at the boundary (AGENTS §7: "tRPC inputs use seq").
+- **Rules** (Zod; issue messages are the codes): alternatives hold
+  controls only, so groups never nest; a group is never first or last
+  (`VARIATION_UNANCHORED`) nor next to another group
+  (`VARIATION_OVERLAP`); group ids and alternative labels are unique
+  (`VARIATION_ID_DUPLICATE`, `VARIATION_LABEL_DUPLICATE`); at least two
+  non-empty alternatives. Rules that need the sites
+  (`structureSiteIssues`): unknown site (`SITE_UNKNOWN`), a group holding
+  a map exchange (`VARIATION_CROSSES_EXCHANGE`). Items and legs are
+  strict objects: unknown keys are refused, not dropped.
+- **Not stored**: `labelOffsets` (one source, `course_controls`; readers
+  fill them in, the wire form carries them), `extras`, and C0's interim
+  file-authored `leg.path` / `pieces` / item `circleGaps` — the slice D
+  split decided "no `LegProps.path`"; authored circle cuts become
+  `controls.circle_gaps` and authored leg gaps `LegProps.gaps` (D1).
+- **Phase 1 writes control items only.** `course.setStructure` refuses a
+  structure with a variation group, and any site whose kind is a slice-F
+  kind, with `PRECONDITION_FAILED`.
+- Helpers: `linearStructure(id, items, { orderMode, labelOffsets })`,
+  `structureControlItems` / `structureControlIds` (a group by its first
+  alternative — 08 §4.3's root path), `structureDiff` (§7),
+  `hasVariations`.
+
+### 6.2 The column mirror
+
+What timing, export, the kiosk and the legacy editor read stays in the
+flat columns, written **in the same transaction** as the structure and a
+pure function of it (`splitStructure`, `packages/api/src/course-structure.ts`):
+
+| Structure | Columns |
+|---|---|
+| a leading item whose site is a start | `start_name` = that site's name (else `""`) |
+| a trailing item whose site is a finish | `finish_control_id` (else `NULL`) |
+| a leading / trailing *control* with `role: "start"` / `"finish"` | `first_as_start` / `last_as_finish` |
+| every other item, in order | `course_controls` (`position`, `control_id`, `number_hidden`; label offsets from the wire form's `labelOffsets`, else kept per control) |
+| `orderMode` | `order_mode` |
+
+The structure names only what the course **explicitly** references: a
+course that uses the event's default start (lowest-seq start, `start_name
+= ""`) has no start item, and the readers complete it exactly as before,
+so creating a new start still re-points those courses. This is a
+deviation from 08 §4.3's "items start … finish", read as *explicit*
+items (decided 2026-10-31 by the coordinator on the user's delegation,
+decision log "D0"): legacy re-pointing of implicit starts is unchanged,
+D1's backfill is a pure function of the columns, and the new editor
+makes a course explicit on its first save. The inverse,
+`structureFromColumns`, gives every course written before D0 the
+structure its columns describe (`course.detail` reports
+`structureStored: false` for those). The columns can hold legacy state no
+structure expresses — `start_name` beside `first_as_start` (the name is
+ignored), the flags on a course without controls, the name of a deleted
+start (matches no live start). Rewriting the structure *from* the columns
+(`course.update`, `bulkUpdate`, `control.delete`) writes the column only
+and leaves such state alone; every reader resolves it the same way as
+before D0. `course.setStructure` writes the columns from the structure
+and so normalises it.
+
+**Who writes it.** `course.setStructure` (the structure is the input);
+`course.update`, `course.create` and `course.bulkUpdate` (the linear
+shortcut: the structure is rewritten from the columns they wrote, an
+item keeping its `leg` when it still follows the same site);
+`course.clone` (the source's structure); `control.delete` (the courses
+whose `course_controls` or stored structure name the control lose the
+item, an explicit start / finish included); `control.update` changing a
+site's **kind** (the stored structures that name it are re-mirrored:
+`splitStructure` now reads the site differently — a control that became
+a start leads its course as the explicit start). A start is found by
+name in `start_name`, so a site turned into a start without a name
+mirrors as `""` and the legacy readers fall back to the default start;
+name a start when creating it (the editor's **Add start** does). `course.importCourses` resets it
+to `NULL` until D1 makes the importers write it. Peers apply it from the
+`course.upserted` payload like any column.
+
+**Readers.** `loadCourseSequences` (`course-geometry.ts`, hence
+`courses.geometry`, `legs`, lengths) and the IOF / PPen export
+(`course-export.ts`) take the explicit start, the sequence and the
+explicit finish from the structure when one is stored, from the columns
+otherwise, and complete an absent start / finish from the event default
+as before. Sites are drawn by their kind (`role` matters to the mirror
+and to IOF's `@type`, not to the stored GeoJSON, which keeps drawing a
+`first_as_start` control as a circle), and a soft-deleted site drops out
+as `start_name` does. The geometry of a course written through
+`setStructure` is byte-identical to the one `course.update` writes for
+the same sequence (integration test).
+
+### 6.3 Sites' new fields
+
+| Column | Type | Meaning |
+|---|---|---|
+| `controls.kind` | ENUM `control_kind`: `control`, `start`, `finish`, `map_exchange`, `crossing_point`, `map_issue` | what the site is (08 §4.2); the last three are typed now and refused until slice F |
+| `controls.circle_gaps` | JSONB `[{ start, end }]`, compass degrees | manual circle gaps on the site (same in every course) |
+| `controls.notes` | TEXT, default `""` | setter / controller notes; writing them needs `courses.review` |
+| `controls.checked_at`, `checked_by` | TIMESTAMPTZ, UUID (no FK — journaled to nodes without the users) | field check-off (`control.check`) |
+| `controls.version`, `courses.version` | BIGINT, default 0 | the §7 token |
+| `course_controls.number_hidden` | BOOLEAN, default false | hide this visit's number (08 §4.2) |
+
+`kind` and `status` 4 / 5 are **kept in sync for one release** (08 §4.8):
+`control.create` derives `kind` from `status`; `control.update` writing
+`kind` sets `status` (start / finish, else back to `ok` from start /
+finish) and writing `status` sets `kind`. The migration backfilled
+`kind` from `status`. Readers in the API use `kind`, falling back to
+`status` for rows not rewritten yet.
+
+## 7. Concurrency
+
+Gate G1, decided by the user 2026-10-31 (decision log): **optimistic
+concurrency with a version token**, over the existing journal. A client
+edits from a row's token and sends it back; the server refuses a stale
+one. (The other designs weighed — last-write-wins with visibility only,
+a server-side merge log, a CRDT — and why are in the decision log; the
+merge log is the upgrade path if real use shows frequent structure
+conflicts, and would sit on the same token.)
+
+**Token.** The HLC of the journal entry that last wrote the row — its
+`course.upserted` / `control.upserted` — mirrored onto `courses.version`
+/ `controls.version` in the same transaction as the emit: the emit takes
+the clock reading, stamps the row, then reads the payload, so the entry
+carries the token it set and a peer applying it holds the same token
+(`referenceJournal.ts`). `0` for rows written before D0. On the wire it
+is a **decimal string** (`version`, `baseVersion`): an encoded HLC
+exceeds 2^53 and tRPC runs without a transformer.
+
+**Separate tokens.** `course.setStructure`, `course.update` and every
+other write of the course itself advance the course's token;
+`control.update` and `control.check` the control's. A control move
+rebuilds its courses' geometry and re-journals them **without** advancing
+their token (`emitCourseUpserted(…, { advanceVersion: false })`; so do
+the map-upload and cut-setting rebuilds), so a structure edit and a field
+move never conflict with each other. `control.delete` advances the
+token of the courses whose structure lost the control, and a site's kind
+change the token of the courses re-mirrored for it (§6.2): the course as
+timing reads it changed.
+
+**Writes.** `course.setStructure`, `course.update` and `control.update`
+take an optional `baseVersion`. Inside the write transaction the row is
+locked (`SELECT … FOR UPDATE`) and its token compared; a mismatch is
+tRPC `CONFLICT` with
+
+```ts
+data: { kind: "course" | "control", id /* public id */, version, current, differing }
+```
+
+beside tRPC's own `code` / `httpStatus` / `path` (`errorFormatter` in
+`trpc.ts`; the client narrows with `versionConflictOf(error.data)` —
+the duplicate-code `CONFLICT` has no `kind`). `version` and `current`
+are the server's row now: the wire-form structure (course) or the
+control's editor fields. `differing` compares the client's **base** with
+that row — the item ids (public control ids; a group by its id) outside
+the longest common subsequence of the two item lists, plus sites whose
+label offset changed (`structureDiff`), or the control's field names
+(`controlFieldsDiff`). The base is read from the journal: the entry
+whose HLC is `baseVersion` *is* the row as the client saw it. When that
+entry is not on this node (token `0`, or pruned) `differing` is `null`.
+`baseVersion` stays optional for one release so clients that predate it
+keep last-write-wins; importers and the backfill send none (they replace
+by design). Course objects (D2) will carry the same token per object.
+
+**Client rules** (the new editor, D4 / D11). A **field move** on a stale
+control is re-sent with the fresh token automatically when the other
+side changed only fields the move does not touch (description, code,
+notes, kind, circle gaps, checked); when the other side also moved it,
+the editor shows "moved by X at T" with both positions and the user
+keeps one. A **structure edit** on a stale structure is never merged: the
+editor refreshes, re-renders the sequence with a one-line notice naming
+the differing items, and the user redoes the edit — concurrent
+reordering is always a conflict, by design.
+
+**Legacy editor.** `CourseEditorPage` and the Courses page send the
+token too, through the same mutations: a `VersionBook`
+(`packages/web/src/lib/version-book.ts`) keeps the newest token per row
+from the list refetches and each mutation's result — `course.update`,
+`control.update`, `course.setControlLabelOffset`, `course.create` /
+`clone` return the row's token, `control.delete` the tokens of the
+courses it advanced — so undo / redo and back-to-back writes send their
+predecessor's token; on a version
+`CONFLICT` they invalidate and show "Changed elsewhere — reloaded"
+(`courses:changedElsewhere`). One rule for both editors on the same rows.
+
+**Presence and live refresh** (D11). No new push channel: a heartbeat
+`course.presence { courseId, mode }` (TTL 30 s) in a small table (up to
+two Cloud Run instances, so not in process memory), read by the existing
+5 s `useExternalChanges` poll and shown in the editor's top bar. Live
+refresh is cache invalidation, not journal replay: the `oCourse` /
+`oControl` watermarks already invalidate the `course` / `control`
+queries. "Moved by X at T" reads `actorId` and `hlc` of the control's
+last `control.upserted`.
+
+**`map_patches` (slice G, no code).** Patch operations are idempotent and
+commutative: each op is keyed by `(object id, op id)` and sets a state
+(hidden, colour override, …) rather than applying a relative change, so
+applying twice equals once and two devices' patches merge through the
+journal in any order.
+
 ## Tests
 
 | Layer | Where | What |
@@ -531,6 +682,12 @@ draws the SVG course overlay over the GL map instead (§1).
 | unit | `packages/api/src/__tests__/course-geometry-compare.test.ts` | identical → no diffs; changed / added / removed with widths; stale row; imported fidelity (pieces, bends, authored vs automatic cuts, extras) |
 | integration | `packages/api/src/__tests__/integration/overprint-cuts.test.ts` | legacy event: rim slit over the boulder across north, no gap through the building, leg gap over the boulder, cuts follow a move, upload rebuilds, lazy migration to v3, toggle; `vector` event: document features = OCAD features, the upload rebuild cuts the course created before the map, circle and leg cuts equal to the legacy event's within 1e-6, OCAD fallback without a pin, migration from the document; the comparison report over both events (all same, document vs OCAD 0, imported fidelity) |
 | integration | `control-editor.test.ts`, `journal-completeness.test.ts` | unchanged and green: editor geometry and lengths on create / move / delete / copy; `course.upserted` payloads |
+| unit | `packages/shared/src/course/__tests__/structure.test.ts` | §6.1: C0's linear shape accepted, the 08 leg props, groups and loops; nesting, overlap, unanchored, duplicate ids / labels, < 2 or empty alternatives, out-of-range gaps refused; interim `path` / `pieces` / `circleGaps` and `extras` refused; the wire form; site rules; `linearStructure`, `structureControlIds`; `structureDiff` (equal, moved, added, removed, leg / offset changes) |
+| unit | `packages/api/src/__tests__/course-structure.test.ts` | §6.2: `splitStructure` (explicit start / finish, implicit default, role start / finish, a start mid-sequence), `structureFromColumns` and its round trip, wire ↔ stored mapping |
+| unit | `packages/api/src/__tests__/version-conflict.test.ts` | §7: the `errorFormatter` lifts the payload beside tRPC's fields and leaves the duplicate-code `CONFLICT` alone; `controlFieldsDiff`; `baseVersionSchema` |
+| integration | `packages/api/src/__tests__/integration/course-structure.test.ts` | kind ↔ status sync, slice-F kinds refused, circle gaps; `course.update` writes a structure, token = the entry's HLC, structure and token in the payload; a pre-D0 course reads from its columns; `setStructure` mirror (start / finish, sequence, hidden numbers, label offsets not in the column), geometry byte-identical to `update`'s, variations and unknown controls refused; stale course token → `CONFLICT` with current and differing, nothing written, no token = LWW; stale control token → differing fields; `differing: null` at token 0; separate tokens both ways; `control.delete` prunes and advances; seeded groups hold `courses.review`; a controller checks off and writes notes but cannot move |
+| unit (web) | `packages/web/src/lib/__tests__/version-book.test.ts` | §7 legacy editor: newest token as an integer compare, list seeding, the conflict payload off a client error, public id after a code change |
+| E2E | `e2e/courses.spec.ts` "an edit from a stale copy…" | §7 over HTTP: another client renames the course while this page's poll is held; this page's edit is refused, the notice shows, the page reloads the other write |
 | unit | `packages/api/src/__tests__/courseGeometryStale.test.ts` | unchanged and green: OCD-vs-XML staleness of imported geometry |
 | golden | `e2e/__golden__/map-gl/course-*.png`, `packages/api/src/render/__tests__/golden-files.test.ts`, `e2e/map-gl-golden.spec.ts` | reference raster = committed golden; WebGL2 ≤ 0.5 % (`map-rendering.md` §6.2). The PDF tier joins in C3 |
 | unit (web) | `packages/web/src/lib/__tests__/course-layer-request.test.ts` | the §5 request rules (offsets only with the sheet or the editor) |
@@ -557,6 +714,10 @@ draws the SVG course overlay over the GL map instead (§1).
 | `packages/api/src/event-map-objects.ts`, `overprint-cuts.ts` | cut features (§4.2): `loadEventCutFeatures`, document / OCAD loaders, the OCAD adapter |
 | `packages/api/src/course-geometry-{compare,report}.ts`, `scripts/compare-course-geometry.ts` | the comparison (§4.4) |
 
+| `packages/shared/src/course/structure.ts` | §6.1: `courseStructureSchema`, `courseStructureWireSchema`, `structureSiteIssues`, `linearStructure`, `structureControlIds`, `structureDiff` |
+| `packages/api/src/course-structure.ts` | §6.2: `splitStructure`, `structureFromColumns`, `persistStructure`, `rewriteStructureFromColumns`, wire mapping, `assertCourseVersion` |
+| `packages/api/src/version-conflict.ts`, `referenceJournal.ts`, `trpc.ts` (`withVersionConflict`) | §7: lock and compare, the base from the journal, the emits that stamp the token, the error shape |
+| `packages/web/src/lib/version-book.ts` | §7 legacy editor tokens |
 | `packages/web/src/lib/course-layer-request.ts` | the viewer's request (§5) |
 | `packages/web/src/map-gl/worker.ts` (`courseReply`), `engine.ts` (`setCourse`) | the dynamic bucket that draws it |
 
@@ -569,14 +730,20 @@ draws the SVG course overlay over the GL map instead (§1).
 - **Viewer layout objects and appearance**: the viewer passes no layout
   objects and the spec appearance; a sheet's objects and template
   appearance on the map are slice D's.
-- **Structure** (slice D; the concurrency rules are decided, see
-  "Decided by the user 2026-10-31", and D0 writes them out as §7):
-  `courses.structure`, variations, map exchanges, crossing and map-issue
-  points, per-course hidden numbers, site-level manual `circle_gaps`
-  (08 §4.2), corridors, `LegProps.path` replacing the v1 leg input, the
-  08 §4.5 `course_objects` table with scopes; stored filter regions
+- **Structure, beyond D0** (§6): the layer does not read
+  `numberHidden`, the site's `circle_gaps` or `LegProps` beyond `gaps`
+  yet (the editor, D4 / D5); importers write the structure and the
+  backfill fills `NULL` rows, retiring C0's interim leg input (D1); the
+  08 §4.5 `course_objects` table with scopes and stored filter regions
   feeding `regions` (D2; the rule and the backends are D3's,
-  `map-rendering.md` §4.11).
+  `map-rendering.md` §4.11);
+  variations and their materialisation, map exchanges, crossing and
+  map-issue points, corridors (slice F).
+- **Tokens, beyond D0** (§7): `course.importCourses` journals
+  `reference.imported` and does not advance the tokens of the rows it
+  rewrites, so an editor open during an import is not told (D1, with the
+  importers writing the structure); presence and "moved by X at T"
+  (D11); the new editor's client rules (D4).
 - **Upper white at import**: insert the row in stage-7 alignment
   (`colour-align.ts`) at the next importer bump, so `courseColourStack`
   never has to remap.

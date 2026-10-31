@@ -8,6 +8,8 @@ export const ALL_CAPABILITIES = [
   "event.manage",
   "courses.view",
   "courses.edit",
+  /** Controller: `control.check` and a control's notes (slice D, decision 4). */
+  "courses.review",
   "race.operate",
   "results.view",
 ] as const;
@@ -34,7 +36,7 @@ export const SYSTEM_GROUP_CAPABILITIES: Record<
   readonly Capability[]
 > = {
   eventAdmin: ALL_CAPABILITIES,
-  courseSetter: ["event.view", "courses.view", "courses.edit"],
+  courseSetter: ["event.view", "courses.view", "courses.edit", "courses.review"],
   raceCrew: ["event.view", "race.operate", "results.view"],
   member: ["event.view", "results.view"],
 };

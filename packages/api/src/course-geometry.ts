@@ -22,6 +22,7 @@ import type { PrismaClient, Prisma } from "./generated/prisma/client.js";
 import { Prisma as PrismaNs } from "./generated/prisma/client.js";
 import { loadEventCrs } from "./event-crs.js";
 import { loadEventCutFeatures } from "./event-map-objects.js";
+import { rowKind, splitStructure } from "./course-structure.js";
 
 /**
  * Increment when stored automatic cut/gap semantics change; events below
@@ -128,12 +129,26 @@ export interface CourseSequence {
   orderMode: "ordered" | "free_order";
 }
 
+/** A site's drawn role from its row: `kind`, else the legacy `status` 4 / 5. */
+function siteType(c: { kind: string; status: string }): GeometrySeqControl["type"] {
+  if (c.kind === "start" || c.status === "start") return "Start";
+  if (c.kind === "finish" || c.status === "finish") return "Finish";
+  return "Control";
+}
+
+const { courseStructureSchema, structureControlItems } = course;
+
 /**
- * The rendered sequence of each given (non-removed) course. Mirrors the
- * importers: `course_controls` holds only regular controls; the start is
- * the event's start control matched by `startName` (unless
- * `firstAsStart`), the finish is `finishControlId` or the event's first
- * finish control (unless `lastAsFinish`).
+ * The rendered sequence of each given (non-removed) course.
+ *
+ * A course with a stored `structure` (docs/course-layer.md §6) is read from
+ * it: its control items in order (a variation group by its first
+ * alternative), each drawn by its `role`, else its site's kind. Otherwise
+ * the sequence mirrors the importers: `course_controls` holds only regular
+ * controls; the start is the event's start control matched by `startName`
+ * (unless `firstAsStart`), the finish is `finishControlId` or the event's
+ * first finish control (unless `lastAsFinish`). `course.update` writes the
+ * structure this second path describes, so both read the same sequence.
  */
 export async function loadCourseSequences(
   db: Db,
@@ -147,7 +162,7 @@ export async function loadCourseSequences(
   const startFinish = await db.control.findMany({
     where: { eventId, removed: false, status: { in: ["start", "finish"] } },
     orderBy: { seq: "asc" },
-    select: { id: true, name: true, codes: true, seq: true, status: true, xpos: true, ypos: true },
+    select: { id: true, name: true, codes: true, seq: true, status: true, kind: true, xpos: true, ypos: true },
   });
   const starts = startFinish.filter((c) => c.status === "start");
   const finishes = startFinish.filter((c) => c.status === "finish");
@@ -163,27 +178,60 @@ export async function loadCourseSequences(
         startName: true,
         finishControlId: true,
         orderMode: true,
+        structure: true,
       },
     });
     if (!course || course.removed) continue;
 
-    const ccs = await db.courseControl.findMany({
-      where: { courseId: courseUuid },
-      orderBy: { position: "asc" },
-      select: {
-        control: {
-          select: { id: true, codes: true, name: true, seq: true, status: true, xpos: true, ypos: true },
+    // The explicit start / finish and the sequence between them: from the
+    // stored structure (course-structure.ts `splitStructure`), else from the
+    // columns it mirrors. Sites are drawn by their kind, as before.
+    type Row = { id: string; codes: string; name: string; seq: number; status: string; kind: string; xpos: number; ypos: number };
+    let explicitStart: Row | undefined;
+    let explicitFinish: Row | undefined;
+    let firstAsStart = course.firstAsStart;
+    let lastAsFinish = course.lastAsFinish;
+    let middle: Row[];
+    const stored = course.structure ? courseStructureSchema.safeParse(course.structure) : null;
+    if (stored?.success) {
+      const items = structureControlItems(stored.data);
+      const rows = await db.control.findMany({
+        // A soft-deleted site drops out (an explicit start then falls back
+        // to the default, as `startName` does).
+        where: { eventId, removed: false, id: { in: [...new Set(items.map((i) => i.siteId))] } },
+        select: { id: true, codes: true, name: true, seq: true, status: true, kind: true, xpos: true, ypos: true },
+      });
+      const byId = new Map(rows.map((r) => [r.id, r]));
+      const parts = splitStructure(items, (id) => {
+        const r = byId.get(id);
+        return r ? rowKind(r) : undefined;
+      });
+      explicitStart = parts.start ? byId.get(parts.start) : undefined;
+      explicitFinish = parts.finish ? byId.get(parts.finish) : undefined;
+      firstAsStart = parts.firstAsStart;
+      lastAsFinish = parts.lastAsFinish;
+      middle = parts.middle.flatMap((item) => byId.get(item.siteId) ?? []);
+    } else {
+      const ccs = await db.courseControl.findMany({
+        where: { courseId: courseUuid },
+        orderBy: { position: "asc" },
+        select: {
+          control: {
+            select: { id: true, codes: true, name: true, seq: true, status: true, kind: true, xpos: true, ypos: true },
+          },
         },
-      },
-    });
+      });
+      middle = ccs.map((cc) => cc.control);
+      explicitStart = course.startName ? starts.find((s) => s.name === course.startName) : undefined;
+      explicitFinish = course.finishControlId
+        ? finishes.find((f) => f.id === course.finishControlId)
+        : undefined;
+    }
 
     const seq: GeometrySeqControl[] = [];
 
-    if (!course.firstAsStart) {
-      const start =
-        (course.startName
-          ? starts.find((s) => s.name === course.startName)
-          : undefined) ?? starts[0];
+    if (!firstAsStart) {
+      const start = explicitStart ?? starts[0];
       if (start) {
         seq.push({
           id: start.id,
@@ -195,23 +243,18 @@ export async function loadCourseSequences(
       }
     }
 
-    for (const cc of ccs) {
-      const c = cc.control;
+    for (const c of middle) {
       seq.push({
         id: c.id,
         code: displayCode(c),
-        type:
-          c.status === "start" ? "Start" : c.status === "finish" ? "Finish" : "Control",
+        type: siteType(c),
         xMm: c.xpos,
         yMm: c.ypos,
       });
     }
 
-    if (!course.lastAsFinish) {
-      const finish =
-        (course.finishControlId
-          ? finishes.find((f) => f.id === course.finishControlId)
-          : undefined) ?? finishes[0];
+    if (!lastAsFinish) {
+      const finish = explicitFinish ?? finishes[0];
       if (finish) {
         seq.push({
           id: finish.id,

@@ -17,6 +17,7 @@ import {
   COURSE_ORDER_MODES,
   ControlStatus,
   pruneDescriptionInstructions,
+  course as courseShared,
 } from "@oxygen/shared";
 
 const orderModeSchema = z.enum(
@@ -83,6 +84,17 @@ import {
   controlUpsertPayload,
   classUpsertPayload,
 } from "../referenceJournal.js";
+import {
+  assertCourseVersion,
+  loadExplicitStructure,
+  loadWireStructure,
+  persistStructure,
+  rewriteStructureFromColumns,
+  rowKind,
+  structureFromWire,
+  uuidsOfPublicIds,
+} from "../course-structure.js";
+import { baseVersionSchema } from "../version-conflict.js";
 
 /** Course-level description-sheet instructions (specials + finish). */
 const descriptionInstructionsSchema = z
@@ -461,6 +473,11 @@ async function loadCourseDetail(
     })),
     descriptionInstructions: instructionsDto(c.descriptionInstructions),
     labelOffsets: courseLabelOffsets(ccs),
+    version: c.version.toString(),
+    ...(await loadWireStructure(db, eventId, c.id).then(({ structure, stored }) => ({
+      structure,
+      structureStored: stored,
+    }))),
   };
 }
 
@@ -539,6 +556,7 @@ export const courseRouter = router({
             : null,
           descriptionInstructions: instructionsDto(c.descriptionInstructions),
           labelOffsets: offsetsByCourse.get(c.id) ?? {},
+          version: c.version.toString(),
         };
       },
     );
@@ -626,10 +644,11 @@ export const courseRouter = router({
           });
           await emitClassUpserted(tx, ctx.event.id, classRow.id);
         }
-        await emitCourseUpserted(tx, ctx.event.id, c.id);
-        return c;
+        await rewriteStructureFromColumns(tx, ctx.event.id, c.id);
+        const version = await emitCourseUpserted(tx, ctx.event.id, c.id);
+        return { ...c, version };
       });
-      return { id: created.seq };
+      return { id: created.seq, version: created.version.toString() };
     }),
 
   clone: coursesEditRaceProcedure
@@ -689,14 +708,21 @@ export const courseRouter = router({
             })),
           });
         }
+        // The clone copies the columns, so the source's structure (legs
+        // included) describes it too.
+        const { structure } = await loadExplicitStructure(tx, ctx.event.id, source.id);
+        await tx.course.update({
+          where: { id: created.id },
+          data: { structure: { ...structure, id: created.id } as unknown as PrismaNs.InputJsonValue },
+        });
         await rebuildCourseGeometry(tx, ctx.event.id, [created.id], {
           updateLength: true,
         });
-        await emitCourseUpserted(tx, ctx.event.id, created.id);
-        return created;
+        const version = await emitCourseUpserted(tx, ctx.event.id, created.id);
+        return { ...created, version };
       });
 
-      return { id: cloned.seq, name: input.name };
+      return { id: cloned.seq, name: input.name, version: cloned.version.toString() };
     }),
 
   update: coursesEditRaceProcedure
@@ -720,6 +746,8 @@ export const courseRouter = router({
         startControlId: z.number().int().nullable().optional(),
         finishControlId: z.number().int().nullable().optional(),
         descriptionInstructions: descriptionInstructionsSchema.optional(),
+        /** The course's `version` the client edited from; stale → CONFLICT (docs/course-layer.md §7). */
+        baseVersion: baseVersionSchema.optional(),
       }),
     )
     .mutation(async ({ ctx, input }) => {
@@ -806,7 +834,8 @@ export const courseRouter = router({
         }
       }
       // Table writes + course.upserted journal entry commit together.
-      await ctx.db.$transaction(async (tx) => {
+      const version = await ctx.db.$transaction(async (tx) => {
+        await assertCourseVersion(tx, ctx.event.id, c, input.baseVersion);
         await tx.course.update({ where: { id: c.id }, data });
         if (input.controlIds !== undefined) {
           const existing = await tx.courseControl.findMany({
@@ -844,6 +873,17 @@ export const courseRouter = router({
         if (
           input.controlIds !== undefined ||
           startFinishChanged ||
+          input.orderMode !== undefined ||
+          input.firstAsStart !== undefined ||
+          input.lastAsFinish !== undefined
+        ) {
+          // The linear shortcut: the structure becomes the one the
+          // columns now describe (legs kept where the leg is unchanged).
+          await rewriteStructureFromColumns(tx, ctx.event.id, c.id);
+        }
+        if (
+          input.controlIds !== undefined ||
+          startFinishChanged ||
           input.orderMode !== undefined
         ) {
           // The stored overlay geometry lists the old sequence (or the
@@ -854,9 +894,77 @@ export const courseRouter = router({
             updateLength: input.length === undefined,
           });
         }
-        await emitCourseUpserted(tx, ctx.event.id, c.id);
+        return emitCourseUpserted(tx, ctx.event.id, c.id);
       });
-      return { ok: true };
+      return { ok: true, version: version.toString() };
+    }),
+
+  /**
+   * Write a course's structure (docs/course-layer.md §6; 08 §6): the column,
+   * its mirror (`course_controls`, start / finish, order mode, label offsets
+   * when given), the rebuilt geometry and the `course.upserted` entry, in one
+   * transaction. Site ids are public control ids. Phase 1 writes control
+   * items only — a variation group is refused (slice F).
+   */
+  setStructure: coursesEditRaceProcedure
+    .input(
+      z.object({
+        courseId: z.number().int(),
+        structure: courseShared.courseStructureWireSchema,
+        baseVersion: baseVersionSchema.optional(),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      const c = await getCourseBySeq(ctx.db, ctx.event.id, input.courseId);
+      if (courseShared.hasVariations(input.structure as unknown as courseShared.StoredCourseStructure)) {
+        throw new TRPCError({
+          code: "PRECONDITION_FAILED",
+          message: "Variation groups arrive in slice F",
+        });
+      }
+      const publicIds = new Set<number>([
+        ...input.structure.items.flatMap((i) => (i.kind === "variation" ? [] : [i.siteId])),
+        ...Object.keys(input.structure.labelOffsets ?? {}).map(Number),
+      ]);
+      const uuidByPublic = await uuidsOfPublicIds(ctx.db, ctx.event.id, publicIds);
+      const unknown = [...publicIds].find((id) => !uuidByPublic.has(id));
+      if (unknown !== undefined) {
+        throw new TRPCError({ code: "NOT_FOUND", message: `Control ${unknown} not found` });
+      }
+      const stored = {
+        ...structureFromWire(input.structure, (id) => uuidByPublic.get(id)!),
+        id: c.id,
+      };
+      const rows = await ctx.db.control.findMany({
+        where: { id: { in: [...uuidByPublic.values()] } },
+        select: { id: true, kind: true, status: true },
+      });
+      const unsupported = rows.find((r) => !["control", "start", "finish"].includes(rowKind(r)));
+      if (unsupported) {
+        throw new TRPCError({
+          code: "PRECONDITION_FAILED",
+          message: "Map exchanges, crossing points and map-issue points arrive in slice F",
+        });
+      }
+      const version = await ctx.db.$transaction(async (tx) => {
+        await assertCourseVersion(tx, ctx.event.id, c, input.baseVersion);
+        await persistStructure(tx, ctx.event.id, stored);
+        // Drop description-sheet specials anchored on a control that left.
+        const pruned = pruneDescriptionInstructions(
+          instructionsDto(c.descriptionInstructions),
+          new Set([...publicIds]),
+        );
+        if (JSON.stringify(pruned) !== JSON.stringify(c.descriptionInstructions)) {
+          await tx.course.update({
+            where: { id: c.id },
+            data: { descriptionInstructions: pruned === null ? PrismaNs.DbNull : (pruned as unknown as PrismaNs.InputJsonValue) },
+          });
+        }
+        await rebuildCourseGeometry(tx, ctx.event.id, [c.id]);
+        return emitCourseUpserted(tx, ctx.event.id, c.id);
+      });
+      // Live checks arrive with D6 (08 §5.6).
+      return { version: version.toString(), checks: [] as { code: string; message: string }[] };
     }),
 
   /**
@@ -895,14 +1003,14 @@ export const courseRouter = router({
         input.offset === null
           ? { labelDx: null, labelDy: null }
           : { labelDx: input.offset.dx, labelDy: input.offset.dy };
-      await ctx.db.$transaction(async (tx) => {
+      const version = await ctx.db.$transaction(async (tx) => {
         await tx.courseControl.updateMany({
           where: { courseId: course.id, controlId: controlUuid },
           data,
         });
-        await emitCourseUpserted(tx, ctx.event.id, course.id);
+        return emitCourseUpserted(tx, ctx.event.id, course.id);
       });
-      return { ok: true as const };
+      return { ok: true as const, version: version.toString() };
     }),
 
   bulkUpdate: coursesEditRaceProcedure
@@ -935,6 +1043,16 @@ export const courseRouter = router({
           where: { id: { in: rows.map((r) => r.id) } },
           data,
         });
+        if (
+          input.orderMode !== undefined ||
+          input.firstAsStart !== undefined ||
+          input.lastAsFinish !== undefined
+        ) {
+          // Keep the structure the mirror of the columns just written.
+          for (const r of rows) {
+            await rewriteStructureFromColumns(tx, ctx.event.id, r.id);
+          }
+        }
         if (input.orderMode !== undefined) {
           await rebuildCourseGeometry(
             tx,
@@ -1682,7 +1800,8 @@ export const courseRouter = router({
           updateLength: false,
         });
         for (const id of ids) {
-          await emitCourseUpserted(ctx.db, ctx.event.id, id);
+          // Geometry only: the structure and its token are unchanged.
+          await emitCourseUpserted(ctx.db, ctx.event.id, id, { advanceVersion: false });
         }
       }
       return { success: true as const, enabled: input.enabled };
@@ -2113,6 +2232,10 @@ export const courseRouter = router({
               firstAsStart: false,
               lastAsFinish: false,
               removed: false,
+              // The import rewrites the sequence: a stored structure would
+              // be stale, so the course reads from its columns again (D1
+              // makes the importers write the structure).
+              structure: PrismaNs.DbNull,
               geometry: (nextGeom ?? undefined) as never,
               geometrySource: !nextGeom
                 ? prev?.geometrySource ?? ""

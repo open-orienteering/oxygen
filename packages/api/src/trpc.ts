@@ -7,6 +7,7 @@ import {
   syncSharedSecret,
 } from "./sync/nodeIdentity.js";
 import { assertRaceWritable } from "./sync/lease.js";
+import { VersionConflictError } from "./version-conflict.js";
 import {
   authDevEmail,
   authHeaderName,
@@ -83,7 +84,21 @@ export async function createContext(
   };
 }
 
-const t = initTRPC.context<Context>().create();
+/**
+ * A stale `baseVersion` (version-conflict.ts) answers CONFLICT with the
+ * server's row in `data` (docs/course-layer.md §7); every other error keeps
+ * tRPC's default shape.
+ */
+export function withVersionConflict<S extends { data: object }>(shape: S, error: TRPCError): S {
+  if (error.cause instanceof VersionConflictError) {
+    return { ...shape, data: { ...shape.data, ...error.cause.data } };
+  }
+  return shape;
+}
+
+const t = initTRPC.context<Context>().create({
+  errorFormatter: ({ shape, error }) => withVersionConflict(shape, error),
+});
 
 export const router = t.router;
 export const middleware = t.middleware;
@@ -282,6 +297,28 @@ export const coursesEditProcedure = eventProcedure.use(
 );
 export const coursesEditRaceProcedure = raceProcedure.use(
   requireCapability("courses.edit"),
+);
+/** Controller writes: `control.check` (SLICES.md slice D, decision 4). */
+export const coursesReviewRaceProcedure = raceProcedure.use(
+  requireCapability("courses.review"),
+);
+/**
+ * Either capability; the procedure checks per field which one a write needs
+ * (`control.update`: notes need `courses.review`, everything else
+ * `courses.edit`).
+ */
+export const coursesEditOrReviewRaceProcedure = raceProcedure.use(
+  middleware(async ({ ctx, next }) => {
+    const ectx = ctx as EventContext;
+    const caps = await capabilitiesForContext(ectx);
+    if (!caps.has("courses.edit") && !caps.has("courses.review")) {
+      throw new TRPCError({
+        code: "FORBIDDEN",
+        message: "Missing capability courses.edit",
+      });
+    }
+    return next({ ctx: { ...ectx, capabilities: caps } });
+  }),
 );
 export const raceOperateProcedure = eventProcedure.use(
   requireCapability("race.operate"),

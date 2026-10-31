@@ -59,6 +59,21 @@ enum ControlStatus {
   @@schema("oxygen")
 }
 
+/// What a control site is (08 §4.2; docs/course-layer.md §6). `start` /
+/// `finish` are kept in sync with `controls.status` for one release; the
+/// last three are typed for slice F and not written yet.
+enum ControlKind {
+  control
+  start
+  finish
+  map_exchange
+  crossing_point
+  map_issue
+
+  @@map("control_kind")
+  @@schema("oxygen")
+}
+
 enum ClubControlType {
   normal
   srr
@@ -447,6 +462,19 @@ model Control {
   /// IOF control description ({ c?, d?, e?, g?, s?, f?, h? } — OCAD text encoding).
   /// The description belongs to the control site, not to any course.
   description  Json?
+  /// Site kind (docs/course-layer.md §6); `start` / `finish` mirror `status`.
+  kind         ControlKind   @default(control)
+  /// Manual circle gaps, compass degrees: [{ start, end }].
+  circleGaps   Json?         @map("circle_gaps")
+  /// Setter / controller notes (writing them needs `courses.review`).
+  notes        String        @default("")
+  /// Field-mode check-off (`control.check`). `checkedBy` is a user id, no FK
+  /// (the row is journaled to nodes without the users).
+  checkedAt    DateTime?     @map("checked_at") @db.Timestamptz(6)
+  checkedBy    String?       @map("checked_by") @db.Uuid
+  /// Concurrency token: HLC of the `control.upserted` entry that last wrote
+  /// the row, 0 before D0 (docs/course-layer.md §7).
+  version      BigInt        @default(0)
   removed      Boolean       @default(false)
   createdAt    DateTime      @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt    DateTime      @default(now()) @map("updated_at") @db.Timestamptz(6)
@@ -486,6 +514,12 @@ model Course {
   descriptionInstructions Json? @map("description_instructions")
   /// Visit order: `ordered` (default) or `free_order` (any order, no leg lines).
   orderMode       CourseOrderMode @default(ordered) @map("order_mode")
+  /// Stored course structure (`CourseStructure` v1, docs/course-layer.md §6).
+  /// NULL = not written yet: readers fall back to `course_controls`.
+  structure       Json?
+  /// Concurrency token: HLC of the `course.upserted` entry that last wrote
+  /// the course itself, 0 before D0 (docs/course-layer.md §7).
+  version         BigInt   @default(0)
   removed         Boolean  @default(false)
   createdAt       DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt       DateTime @default(now()) @map("updated_at") @db.Timestamptz(6)
@@ -513,6 +547,8 @@ model CourseControl {
   /// Null = auto-placed. Both set together; never one without the other.
   labelDx Float? @map("label_dx") @db.DoublePrecision
   labelDy Float? @map("label_dy") @db.DoublePrecision
+  /// Hide this visit's number (08 §4.2).
+  numberHidden Boolean @default(false) @map("number_hidden")
 
   course  Course  @relation(fields: [courseId], references: [id], onDelete: Cascade)
   control Control @relation(fields: [controlId], references: [id], onDelete: Restrict)

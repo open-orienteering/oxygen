@@ -165,5 +165,6 @@
     "suggestedSingle": "Förslag: {{label}}"
   },
   "openInCourseEditor": "Öppna i banläggningen",
-  "seriesExhausted": "Klubbens serier är slut — tilldelar nästa lediga kod ≥ 31."
+  "seriesExhausted": "Klubbens serier är slut — tilldelar nästa lediga kod ≥ 31.",
+  "changedElsewhere": "Ändrad någon annanstans — laddades om"
 }
