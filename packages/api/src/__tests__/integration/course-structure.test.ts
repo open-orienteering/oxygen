@@ -388,6 +388,22 @@ describe("the mirror stays a function of the structure (course-layer.md §6.2)",
     expect(starts).toEqual(["Start 1"]); // the lowest-seq start, by its display code (name)
   });
 
+  it("drops a deleted explicit finish the same way", async () => {
+    const extra = await caller.control.create({ status: 5, xpos: 95, ypos: 15 });
+    const { id } = await caller.course.create({ name: "Lost finish" });
+    await caller.course.setStructure({
+      courseId: id,
+      structure: { version: 1, id: "f", orderMode: "ordered", items: [{ siteId: 31 }, { siteId: extra.id }] },
+    });
+    expect((await courseRow(id)).finishControlId).not.toBeNull();
+    const v0 = (await courseRow(id)).version;
+    await caller.control.delete({ id: extra.id });
+    const row = await courseRow(id);
+    expect(row.version > v0).toBe(true);
+    const detail = await caller.course.detail({ id });
+    expect(detail.structure.items.map((i) => ("siteId" in i ? i.siteId : null))).toEqual([31]);
+  });
+
   it("course.clone copies the structure (legs included); bulkUpdate rewrites it from the columns", async () => {
     const { id } = await caller.course.create({ name: "Clone src" });
     await caller.course.setStructure({

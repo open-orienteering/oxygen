@@ -257,7 +257,14 @@ export async function loadExplicitStructure(
         select: { id: true, name: true },
       })
     : [];
-  return { structure: structureFromColumns(c, ccs, starts), stored: false };
+  // A deleted finish matches nothing, as a deleted start's name does.
+  const finishLive = c.finishControlId
+    ? (await db.control.count({ where: { id: c.finishControlId, removed: false } })) > 0
+    : false;
+  return {
+    structure: structureFromColumns({ ...c, finishControlId: finishLive ? c.finishControlId : null }, ccs, starts),
+    stored: false,
+  };
 }
 
 /** Rewrite a course's structure column from its columns (after `course.update`), keeping leg props. */
