@@ -154,3 +154,52 @@ describe("course request → the dynamic bucket", () => {
     expect(white).toBeGreaterThan(indexOf(r.colours, "black100"));
   });
 });
+
+describe("course request → filter regions over the static buckets (§5.2 Filter regions)", () => {
+  const ask = (h: ReturnType<typeof harness>, input: CourseLayerRequest | null, generation = 1): CourseReply => {
+    h.w.handle({ type: "course", generation, input });
+    return h.sent[h.sent.length - 1].msg as CourseReply;
+  };
+  // Over the black document line at x = 25 mm (paper mm, y-up); away from every course object's own ids.
+  const square = [{ x: 20, y: 5 }, { x: 30, y: 5 }, { x: 30, y: 15 }, { x: 20, y: 15 }];
+  const far = [{ x: 100, y: 100 }, { x: 110, y: 100 }, { x: 110, y: 110 }];
+
+  it("hide: the document object meeting the region, exact and fast alike; never a course object", () => {
+    const h = harness();
+    const m = loaded(h);
+    const exact = ask(h, request({ regions: [{ rings: [square], mode: "hide", symbols: "all" }] }));
+    expect(Array.from(exact.filter!.hidden)).toEqual([0]);
+    expect(exact.filter!.entries).toHaveLength(0);
+    const fast = ask(h, request({ regions: [{ rings: [square], mode: "hide", symbols: "all" }], fastFilter: true }), 2);
+    expect(Array.from(fast.filter!.hidden)).toEqual([0]);
+    expect(Array.from(ask(h, request({ regions: [{ rings: [far], mode: "hide", symbols: "all" }] }), 3).filter!.hidden)).toEqual([]);
+    expect(m.summary.objects.total).toBe(2);
+  });
+
+  it("clip by document colour: (object, colour, mask) entries on the completed stack and the region's triangles, origin-relative", () => {
+    const h = harness();
+    const m = loaded(h);
+    const black = indexOf(isomStack(), "black100");
+    const r = ask(h, request({ regions: [{ rings: [square], mode: "clip", symbols: { colours: [black] } }] }));
+    expect(Array.from(r.filter!.entries)).toEqual([0, black, 0]);
+    expect(r.filter!.masks).toEqual([{ offset: 0, count: 6 }]);
+    const xs = Array.from(r.filter!.positions).filter((_, i) => i % 2 === 0).map((x) => x + m.summary.originX);
+    expect(Math.min(...xs)).toBe(20_000);
+    expect(Math.max(...xs)).toBe(30_000);
+    // The visible set puts the black line's stroke under the mask; the course part stays unmasked.
+    const resident = (p: PreparedPart): ResidentPart => ({ part: p, base: { fill: 0, hatch: 0, stroke: 0 } });
+    h.w.handle({ type: "prepare", ids: m.summary.detailCells });
+    const detail = h.sent.flatMap((s) => (s.msg.type === "part" ? [resident(s.msg.part)] : []));
+    const entryMask = new Map([[0 * 65536 + black, 0]]);
+    const vs = buildVisibleSet([...detail, resident(r.part!)], undefined, { entryMask, positions: r.filter!.positions, indices: r.filter!.indices, masks: r.filter!.masks });
+    expect(vs.stroke.draws.filter((d) => d.mask === 0).map((d) => d.colour)).toEqual([black]);
+    expect(vs.stroke.draws.some((d) => d.mask === undefined)).toBe(true);
+  });
+
+  it("no regions, or a cleared layer: no filter", () => {
+    const h = harness();
+    loaded(h);
+    expect(ask(h, request()).filter).toBeNull();
+    expect(ask(h, null, 2).filter).toBeNull();
+  });
+});

@@ -21,7 +21,7 @@ import { viewMatrix, type RenderTarget } from "./view.js";
 import { buildTextGlyphs, GLYPH_TABLE_TEXELS, GLYPH_TABLE_WIDTH, type TextAtlasPage } from "./text-atlas.js";
 import {
   FILL_VERTEX_BYTES, HATCH_VERTEX_BYTES, STROKE_VERTEX_BYTES,
-  type ClipGroup, type PreparedPart, type ResidentPart, type VisibleSet,
+  type ClipGroup, type DrawLayer, type PreparedPart, type ResidentPart, type VisibleSet,
 } from "./buckets.js";
 
 export interface View {
@@ -382,9 +382,9 @@ interface ArenaState {
   atlas: { tex: WebGLTexture; bytes: number };
   parts: Map<string, ResidentPart>;
   vs: VisibleSet | undefined;
-  vsBuffers: { fill: WebGLBuffer; hatch: WebGLBuffer; stroke: WebGLBuffer; glyph: WebGLBuffer; text: WebGLBuffer; clipPos: WebGLBuffer; clipIdx: WebGLBuffer; clipInst: WebGLBuffer };
+  vsBuffers: { fill: WebGLBuffer; hatch: WebGLBuffer; stroke: WebGLBuffer; glyph: WebGLBuffer; text: WebGLBuffer; clipPos: WebGLBuffer; clipIdx: WebGLBuffer; clipInst: WebGLBuffer; maskPos: WebGLBuffer; maskIdx: WebGLBuffer };
   vsBytes: number;
-  vaos: { fill: WebGLVertexArrayObject; hatch: WebGLVertexArrayObject; stroke: WebGLVertexArrayObject; inst: WebGLVertexArrayObject; text: WebGLVertexArrayObject; clip: WebGLVertexArrayObject };
+  vaos: { fill: WebGLVertexArrayObject; hatch: WebGLVertexArrayObject; stroke: WebGLVertexArrayObject; inst: WebGLVertexArrayObject; text: WebGLVertexArrayObject; clip: WebGLVertexArrayObject; mask: WebGLVertexArrayObject };
   vaoGeneration: number;
   programs: { fill: Program; hatch: Program; stroke: Program; inst: Program; text: Program };
 }
@@ -761,9 +761,10 @@ export class MapGlRenderer {
       vsBuffers: {
         fill: gl.createBuffer()!, hatch: gl.createBuffer()!, stroke: gl.createBuffer()!, glyph: gl.createBuffer()!, text: gl.createBuffer()!,
         clipPos: gl.createBuffer()!, clipIdx: gl.createBuffer()!, clipInst: gl.createBuffer()!,
+        maskPos: gl.createBuffer()!, maskIdx: gl.createBuffer()!,
       },
       vsBytes: 0,
-      vaos: { fill: gl.createVertexArray()!, hatch: gl.createVertexArray()!, stroke: gl.createVertexArray()!, inst: gl.createVertexArray()!, text: gl.createVertexArray()!, clip: gl.createVertexArray()! },
+      vaos: { fill: gl.createVertexArray()!, hatch: gl.createVertexArray()!, stroke: gl.createVertexArray()!, inst: gl.createVertexArray()!, text: gl.createVertexArray()!, clip: gl.createVertexArray()!, mask: gl.createVertexArray()! },
       vaoGeneration: -1,
       programs: p,
     };
@@ -909,7 +910,9 @@ export class MapGlRenderer {
       put(gl.ARRAY_BUFFER, a.vsBuffers.text, vs.text.instances) +
       put(gl.ELEMENT_ARRAY_BUFFER, a.vsBuffers.clipIdx, vs.clips.indices) +
       put(gl.ARRAY_BUFFER, a.vsBuffers.clipPos, vs.clips.positions) +
-      put(gl.ARRAY_BUFFER, a.vsBuffers.clipInst, vs.clips.instances);
+      put(gl.ARRAY_BUFFER, a.vsBuffers.clipInst, vs.clips.instances) +
+      put(gl.ELEMENT_ARRAY_BUFFER, a.vsBuffers.maskIdx, vs.filter?.indices ?? new Uint32Array(0)) +
+      put(gl.ARRAY_BUFFER, a.vsBuffers.maskPos, vs.filter?.positions ?? new Float32Array(0));
     a.vs = vs;
     a.vaoGeneration = -1;
   }
@@ -982,6 +985,12 @@ export class MapGlRenderer {
     gl.enableVertexAttribArray(P.fill.attribs.a_pos);
     gl.vertexAttribPointer(P.fill.attribs.a_pos, 2, gl.FLOAT, false, 8, 0);
     gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, a.vsBuffers.clipIdx);
+
+    gl.bindVertexArray(a.vaos.mask);
+    gl.bindBuffer(gl.ARRAY_BUFFER, a.vsBuffers.maskPos);
+    gl.enableVertexAttribArray(P.fill.attribs.a_pos);
+    gl.vertexAttribPointer(P.fill.attribs.a_pos, 2, gl.FLOAT, false, 8, 0);
+    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, a.vsBuffers.maskIdx);
     gl.bindVertexArray(null);
     a.vaoGeneration = gen;
   }
@@ -1046,11 +1055,23 @@ export class MapGlRenderer {
       }
 
       const cur = { fill: 0, hatch: 0, stroke: 0, glyph: 0, text: 0, clip: 0 };
-      const indexed = (kind: "fill" | "hatch" | "stroke", colour: number, rgb: [number, number, number]) => {
+      // Draw lists and `vs.layers` share the order (colour, then unmasked, then masks ascending).
+      const before = (d: { colour: number; mask?: number }, l: DrawLayer) => d.colour < l.colour || (d.colour === l.colour && (d.mask ?? -1) < l.mask);
+      const at = (d: { colour: number; mask?: number }, l: DrawLayer) => d.colour === l.colour && (d.mask ?? -1) === l.mask;
+      /** Masked draws test the region bit (clear = outside every region); unmasked ones draw without the stencil. */
+      const regionTest = (l: DrawLayer) => {
+        if (l.mask < 0) { gl.disable(gl.STENCIL_TEST); return; }
+        gl.enable(gl.STENCIL_TEST);
+        gl.stencilMask(0);
+        gl.stencilFunc(gl.EQUAL, 0, REGION_BIT);
+        gl.stencilOp(gl.KEEP, gl.KEEP, gl.KEEP);
+      };
+      const indexed = (kind: "fill" | "hatch" | "stroke", l: DrawLayer, rgb: [number, number, number]) => {
         const list = vs[kind].draws;
-        while (cur[kind] < list.length && list[cur[kind]].colour < colour) cur[kind]++;
-        if (cur[kind] >= list.length || list[cur[kind]].colour !== colour) return;
+        while (cur[kind] < list.length && before(list[cur[kind]], l)) cur[kind]++;
+        if (cur[kind] >= list.length || !at(list[cur[kind]], l)) return;
         const d = list[cur[kind]++];
+        regionTest(l);
         const p = P[kind];
         gl.useProgram(p.prog);
         gl.uniform3f(p.uniforms.u_colour, rgb[0], rgb[1], rgb[2]);
@@ -1059,15 +1080,16 @@ export class MapGlRenderer {
         draws++;
       };
       /** Text: one quad (6 vertices) per instance, one draw per atlas page in this colour. */
-      const textDraws = (colour: number, rgb: [number, number, number]) => {
+      const textDraws = (l: DrawLayer, rgb: [number, number, number]) => {
         const list = vs.text.draws;
-        while (cur.text < list.length && list[cur.text].colour < colour) cur.text++;
+        while (cur.text < list.length && before(list[cur.text], l)) cur.text++;
         let bound = false;
-        while (cur.text < list.length && list[cur.text].colour === colour) {
+        while (cur.text < list.length && at(list[cur.text], l)) {
           const d = list[cur.text++];
           const page = text?.textures[d.cls];
           if (!page) continue;
           if (!bound) {
+            regionTest(l);
             gl.useProgram(P.text.prog);
             gl.uniform3f(P.text.uniforms.u_colour, rgb[0], rgb[1], rgb[2]);
             gl.bindVertexArray(a.vaos.text);
@@ -1082,13 +1104,14 @@ export class MapGlRenderer {
           draws++;
         }
       };
-      const instanced = (kind: "glyph", colour: number, rgb: [number, number, number]) => {
+      const instanced = (kind: "glyph", l: DrawLayer, rgb: [number, number, number]) => {
         const list = vs[kind].draws;
-        while (cur[kind] < list.length && list[cur[kind]].colour < colour) cur[kind]++;
+        while (cur[kind] < list.length && before(list[cur[kind]], l)) cur[kind]++;
         let bound = false;
-        while (cur[kind] < list.length && list[cur[kind]].colour === colour) {
+        while (cur[kind] < list.length && at(list[cur[kind]], l)) {
           const d = list[cur[kind]++];
           if (!bound) {
+            regionTest(l);
             gl.useProgram(P.inst.prog);
             gl.uniform3f(P.inst.uniforms.u_colour, rgb[0], rgb[1], rgb[2]);
             gl.bindVertexArray(a.vaos.inst);
@@ -1101,19 +1124,22 @@ export class MapGlRenderer {
         }
       };
       const on = (k: "fill" | "hatch" | "stroke" | "glyph" | "clip" | "text") => !opts.kinds || opts.kinds.has(k);
-      for (const colour of vs.colours) {
-        const rgb = opts.colour(colour);
-        if (on("fill")) indexed("fill", colour, rgb);
-        if (on("hatch")) indexed("hatch", colour, rgb);
-        if (on("stroke")) indexed("stroke", colour, rgb);
-        if (on("glyph")) instanced("glyph", colour, rgb);
+      for (const l of vs.layers) {
+        const rgb = opts.colour(l.colour);
+        const masked = l.mask >= 0 && vs.filter;
+        if (masked) draws += this.markMask(a, vs.filter!.masks[l.mask], true);
+        if (on("fill")) indexed("fill", l, rgb);
+        if (on("hatch")) indexed("hatch", l, rgb);
+        if (on("stroke")) indexed("stroke", l, rgb);
+        if (on("glyph")) instanced("glyph", l, rgb);
         const groups = vs.clips.groups;
-        while (cur.clip < groups.length && groups[cur.clip].colour < colour) cur.clip++;
-        while (cur.clip < groups.length && groups[cur.clip].colour === colour) {
+        while (cur.clip < groups.length && before(groups[cur.clip], l)) cur.clip++;
+        while (cur.clip < groups.length && at(groups[cur.clip], l)) {
           const g = groups[cur.clip++];
-          if (on("clip")) draws += this.drawClip(a, g, rgb);
+          if (on("clip")) draws += this.drawClip(a, g, rgb, l.mask >= 0 ? REGION_BIT : 0);
         }
-        if (on("text")) textDraws(colour, rgb);
+        if (on("text")) textDraws(l, rgb);
+        if (masked) draws += this.markMask(a, vs.filter!.masks[l.mask], false);
       }
       gl.bindVertexArray(null);
       gl.disable(gl.STENCIL_TEST);
@@ -1134,8 +1160,29 @@ export class MapGlRenderer {
     gl.vertexAttribPointer(p.attribs.a_i1, 4, gl.FLOAT, false, INSTANCE_FLOATS * 4, offset + 16);
   }
 
-  /** A clip group: its areas into stencil bit 0, its instances where the bit is set, the areas cleared. Three draws. */
-  private drawClip(a: ArenaState, g: ClipGroup, rgb: [number, number, number]): number {
+  /**
+   * A filter mask's regions into the region bit (`set`), or the bit cleared over them: their
+   * triangles drawn with REPLACE / ZERO, no colour. One draw.
+   */
+  private markMask(a: ArenaState, m: { offset: number; count: number }, set: boolean): number {
+    const gl = this.gl;
+    if (!m.count) return 0;
+    gl.useProgram(a.programs.fill.prog);
+    gl.bindVertexArray(a.vaos.mask);
+    gl.enable(gl.STENCIL_TEST);
+    gl.colorMask(false, false, false, false);
+    gl.stencilMask(REGION_BIT);
+    gl.stencilFunc(gl.ALWAYS, REGION_BIT, 0xff);
+    const op = set ? gl.REPLACE : gl.ZERO;
+    gl.stencilOp(op, op, op);
+    gl.drawElements(gl.TRIANGLES, m.count, gl.UNSIGNED_INT, m.offset * 4);
+    gl.colorMask(true, true, true, true);
+    gl.disable(gl.STENCIL_TEST);
+    return 1;
+  }
+
+  /** A clip group: its areas into stencil bit 0, its instances where the bit is set (and `regionTest` clear), the areas cleared. Three draws. */
+  private drawClip(a: ArenaState, g: ClipGroup, rgb: [number, number, number], regionTest = 0): number {
     const gl = this.gl;
     if (!g.count) return 0;
     const P = a.programs;
@@ -1156,7 +1203,7 @@ export class MapGlRenderer {
     gl.bindVertexArray(a.vaos.inst);
     gl.bindBuffer(gl.ARRAY_BUFFER, a.vsBuffers.clipInst);
     this.instancePointers(P.inst, g.first * INSTANCE_FLOATS * 4);
-    gl.stencilFunc(gl.EQUAL, CLIP_BIT, CLIP_BIT);
+    gl.stencilFunc(gl.EQUAL, CLIP_BIT, CLIP_BIT | regionTest);
     gl.stencilOp(gl.KEEP, gl.KEEP, gl.KEEP);
     gl.drawArraysInstanced(gl.TRIANGLES, 0, classVertices(g.cls), g.instances);
     area(gl.ZERO);
