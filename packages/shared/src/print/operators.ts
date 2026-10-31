@@ -26,9 +26,10 @@
  */
 
 import type { FontRef, GlyphMesh, Pass, PassStream, RenderPath, StrokeCap, StrokeJoin } from "../render/pass-stream.js";
-import { type Bounds, type Segment, hatchLines, pathBounds, pathRings, ringSegments, sliceSegments } from "../render/path.js";
+import { type Bounds, type Segment, hatchLines, pathBounds, pathRings, ringSegments, sliceSegments, unionBounds } from "../render/path.js";
 import { STROKE_MITRE_LIMIT, strokeOutline } from "../render/geometry.js";
-import type { GlyphOutline } from "../render/reference-svg.js";
+import { type GlyphOutline, passStreamBounds } from "../render/reference-svg.js";
+import { COORD_FLAG } from "../render/pass-stream.js";
 import type { ColourStack } from "../render/symbol.js";
 import { type ColourMode, type PdfColour, colourOperator, stackColour } from "./colour.js";
 import { glyphHex } from "./fonts.js";
@@ -286,6 +287,25 @@ function glyphInstances(inst: ArrayLike<number>, mesh: GlyphMesh, unit: number, 
   close();
 }
 
+/**
+ * Margin of the filter-mask frame round everything the stream draws, µm:
+ * a masked pass is clipped to "this frame minus the region", so the frame
+ * only has to contain the pass (control-point bounds plus widths).
+ */
+export const FILTER_FRAME_MARGIN_UM = 10_000;
+
+/** A filter-mask clip path: the frame rectangle with the region's rings as holes (read even-odd). */
+export function filterClipPath(frame: Bounds, region: RenderPath): RenderPath {
+  const { minX, minY, maxX, maxY } = frame;
+  const coords = new Int32Array(8 + region.coords.length);
+  coords.set([minX, minY, maxX, minY, maxX, maxY, minX, maxY].map(Math.round));
+  coords.set(region.coords, 8);
+  const flags = new Uint8Array(4 + region.flags.length);
+  flags.set(region.flags, 4);
+  flags[4] |= COORD_FLAG.hole;
+  return { coords, flags, closed: true };
+}
+
 /** Graphics-state values the emitter tracks to skip redundant operators; mirrors `q` / `Q`. */
 interface GState {
   fill?: string;
@@ -453,7 +473,29 @@ export function passStreamOperators(stream: PassStream, opts: OperatorOptions): 
       }
     }
   };
-  for (const p of stream.passes) emit(p);
+  // Filter masks (§3.8, 05 §5.3): a run of passes under one mask is drawn inside
+  // `q <frame + region> W* n …` per region, closed by `Q` before the next mask or an unmasked pass.
+  let frame: Bounds | undefined;
+  if (stream.masks?.length) {
+    let b = passStreamBounds(stream);
+    for (const m of stream.masks) for (const r of m.regions) b = unionBounds(b, pathBounds(r));
+    const g = FILTER_FRAME_MARGIN_UM;
+    frame = b && { minX: b.minX - g, minY: b.minY - g, maxX: b.maxX + g, maxY: b.maxY + g };
+  }
+  let open = -1;
+  stream.passes.forEach((p, i) => {
+    const m = stream.maskIdx?.[i] ?? -1;
+    if (m !== open) {
+      if (open >= 0) restore();
+      if (m >= 0) {
+        save();
+        for (const r of stream.masks![m].regions) out.push(`${path(filterClipPath(frame!, r), true)} W* n`);
+      }
+      open = m;
+    }
+    emit(p);
+  });
+  if (open >= 0) restore();
   return out.join("\n");
 }
 
