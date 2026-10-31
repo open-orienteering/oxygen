@@ -569,6 +569,7 @@ function CourseInlineDetail({ courseId }: { courseId: number }) {
               <label className="block text-xs font-medium text-slate-500 mb-1">{t("name")}</label>
               <input
                 type="text"
+                data-testid="course-detail-name"
                 value={editName ?? d.name}
                 onChange={(e) => setEditName(e.target.value)}
                 onBlur={() => {
