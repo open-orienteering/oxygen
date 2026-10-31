@@ -10,7 +10,7 @@ This chapter is normative for `packages/shared/src/course/`
 viewer's dynamic bucket (C4, §5), the page composer (C2,
 `course-print.md`) and the `courses.geometry` compatibility artifact
 (C5). The course *structure* beyond today's linear sequence, its storage
-and editing concurrency are slice D's (decision G1, recorded before D);
+and editing are slice D's (the concurrency rules are decided below);
 this chapter covers what C needs: how the layer is derived (§1), its v1
 input (§2), the geometry rules (§3), the GeoJSON projection (§4) and the
 viewer (§5).
@@ -45,6 +45,79 @@ Decided by the user 2026-10-24 for C5:
   air**, and a feature is "on" the line by the same sum
   (§3.4). One rule for the layer and the artifact; stored cuts migrate
   through the `OVERPRINT_CUTS_VERSION` bump.
+
+Decided by the user 2026-10-31 for slice D (gate G1, concurrent
+editing; README "Decision gates" and decision log). D0 writes these rules
+out as §7 "Concurrency"; until then this block is the normative text:
+
+- **Model.** Optimistic concurrency with a version token, over the
+  existing journal. Four designs were weighed: (A) last-write-wins with
+  visibility only ("changed by X" after the fact, no protection — what
+  08 §5.5 inherits); (B) a version token on every edit, the server
+  refusing a stale write; (C) a server-side operation log that merges
+  non-overlapping edits to one structure; (D) a CRDT document. (B) is
+  chosen: it costs one column per edited table and one error path, it
+  uses the journal's existing total order, and the realistic concurrency
+  (a setter on the desktop, a controller in Field mode) is two devices on
+  mostly different rows. (A) clobbers silently, (D) stays rejected
+  (`offline-architecture.md`), and (C) is the upgrade path if real use
+  shows frequent structure conflicts — it would sit on the same token and
+  change nothing in the client contract.
+- **Token.** The HLC of the last journal entry that wrote the row
+  (`JournalEntry.hlc` of its `course.upserted` / `control.upserted`
+  entry), mirrored onto the row as `courses.version BIGINT` and
+  `controls.version BIGINT` in the same transaction as the emit (both
+  emits already re-read the post-write row; D0's migration adds the
+  columns, `0` for rows written before it). Not `updated_at` (a wall
+  clock, not monotonic across nodes) and not a separate counter (one
+  order for the live row and the journal). **Separate tokens** for a
+  course and its controls: `course.setStructure` and `course.update`
+  advance the course's token, `control.update` and `control.check` the
+  control's; a control move rebuilds its courses' geometry but leaves
+  their structure and token untouched, so a structure edit and a field
+  move on the same course never conflict with each other.
+- **Writes.** `course.setStructure`, `course.update` and `control.update`
+  take `baseVersion`; the server compares it with the row's `version`
+  inside the write transaction and answers tRPC `CONFLICT` with
+  `data: { kind: "course" | "control", id, version, current, differing }`
+  — `version` and `current` are the server's row as it is now (the
+  structure or the control), `differing` the structure item ids (course)
+  or field names (control) that differ between the client's base and the
+  server's row. `baseVersion` is optional on the API for one release so
+  clients that predate it keep today's behaviour; every editor sends it
+  (below). Importers, the structure backfill and `course.importCourses`
+  replace by design and send none. Course objects (D2) carry the same
+  token per object; a stale object write is `CONFLICT` too.
+- **Client rules.** A **field move** (position) on a stale control is
+  re-sent with the fresh token automatically when the other side changed
+  only fields the move does not touch (description, code, notes, kind,
+  circle gaps, checked); when the other side also moved it, the editor
+  shows "moved by X at T" with both positions and the user keeps one. A
+  **structure edit** on a stale structure is never merged: the editor
+  refreshes, re-renders the sequence with a one-line notice naming the
+  differing items, and the user redoes the edit. Concurrent reordering is
+  therefore always a conflict, by design.
+- **Presence and live refresh.** No new push channel. Presence is a
+  heartbeat `course.presence { courseId, mode }` (TTL 30 s) stored in a
+  small table (the service runs up to two Cloud Run instances, so not in
+  process memory) and read by the existing 5 s `useExternalChanges` poll
+  of `event.counterState`, shown in the editor's top bar. Live refresh is
+  cache invalidation, not journal replay: the `oCourse` / `oControl`
+  watermarks already invalidate the `course` / `control` queries, and the
+  editor refetches its structure and tokens on them. "Moved by X at T"
+  reads `actorId` and `hlc` from the control's last `control.upserted`
+  entry (D11 adds the lookup and, if the scan is measurable, an index on
+  `(event_id, type, (payload->>'id'))`).
+- **Legacy editor.** Yes, it sends the token: `CourseEditorPage` and the
+  Courses page call the same `course.update` / `control.update` with
+  `baseVersion` from the rows they loaded; on `CONFLICT` they invalidate
+  and show "changed elsewhere — reloaded". One rule for both editors on
+  the same rows.
+- **`map_patches` constraint (for slice G, no code now).** Patch
+  operations are idempotent and commutative: each op is keyed by
+  `(object id, op id)` and sets a state (hidden, colour override, …)
+  rather than applying a relative change, so applying twice equals once
+  and two devices' patches merge through the journal in any order.
 
 ## 1. Derivation
 
@@ -495,11 +568,12 @@ draws the SVG course overlay over the GL map instead (§1).
 - **Viewer layout objects and appearance**: the viewer passes no layout
   objects and the spec appearance; a sheet's objects and template
   appearance on the map are slice D's.
-- **Structure and concurrency** (G1, before slice D): `courses.structure`,
-  variations, map exchanges, crossing and map-issue points, per-course
-  hidden numbers, site-level manual `circle_gaps` (08 §4.2), corridors,
-  `LegProps.path` replacing the v1 leg input, the 08 §4.5
-  `course_objects` table with scopes and filter regions.
+- **Structure** (slice D; the concurrency rules are decided, see
+  "Decided by the user 2026-10-31", and D0 writes them out as §7):
+  `courses.structure`, variations, map exchanges, crossing and map-issue
+  points, per-course hidden numbers, site-level manual `circle_gaps`
+  (08 §4.2), corridors, `LegProps.path` replacing the v1 leg input, the
+  08 §4.5 `course_objects` table with scopes and filter regions.
 - **Upper white at import**: insert the row in stage-7 alignment
   (`colour-align.ts`) at the next importer bump, so `courseColourStack`
   never has to remap.
