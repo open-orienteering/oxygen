@@ -515,3 +515,35 @@ describe("symbolise — stream invariants", () => {
     );
   });
 });
+
+describe("symbolise — filter regions (§4.11)", () => {
+  const box = makePath([0, -5000, 10000, -5000, 10000, 5000, 0, 5000], undefined, true);
+  const objects: RenderObject[] = [
+    { symbolIdx: PILOT.contour101, path: makePath([-5000, 0, 20000, 0]) },
+    { symbolIdx: PILOT.footpath505, path: makePath([5000, -20000, 5000, 20000]) },
+  ];
+  it("hide drops the selected object's passes and reports it; clip masks the rest", () => {
+    const { stream, hidden, warnings } = symbolise({
+      objects, symbols: pilotSymbols, fonts: fonts(),
+      regions: [{ path: box, mode: "hide", symbols: [PILOT.footpath505] }, { path: box, mode: "clip", symbols: "all" }],
+    });
+    expect(warnings).toEqual([]);
+    expect(hidden).toEqual([1]);
+    expect(Array.from(stream.objectIdx)).toEqual([0]);
+    expect(Array.from(stream.maskIdx!)).toEqual([0]);
+    expect(stream.masks).toEqual([{ regions: [box] }]);
+  });
+  it("without regions the stream has no mask fields and nothing is hidden", () => {
+    const r = run(objects);
+    expect(r.hidden).toEqual([]);
+    expect(r.stream).not.toHaveProperty("maskIdx");
+  });
+  it("regionObjectLimit protects later objects; an empty region warns", () => {
+    const r = symbolise({
+      objects, symbols: pilotSymbols, fonts: fonts(), regionObjectLimit: 1,
+      regions: [{ path: box, mode: "hide", symbols: "all" }, { path: makePath([0, 0], undefined, true), mode: "clip", symbols: "all" }],
+    });
+    expect(r.hidden).toEqual([0]);
+    expect(r.warnings).toEqual([expect.objectContaining({ objectIdx: -1, code: "FILTER_EMPTY_REGION", region: 1 })]);
+  });
+});

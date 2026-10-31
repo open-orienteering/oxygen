@@ -34,6 +34,22 @@ describe("passStreamFromJson / passStreamToJson", () => {
     expect(diffPassStreams(a, passStreamFromJson(pointed)).map((d) => d.what)).toContain("taper");
   });
 
+  it("round-trips filter masks; the diff sees a missing mask and a moved region", () => {
+    const j = renderFixtures["dashed-bezier-stroke"];
+    const region = { coords: [0, 0, 10000, 0, 10000, 10000], closed: true };
+    const masked = { ...j, masks: [{ regions: [region] }], maskIdx: [0, -1] };
+    const a = passStreamFromJson(masked);
+    expect(a.maskIdx).toBeInstanceOf(Int32Array);
+    expect(passStreamToJson(a)).toMatchObject({ masks: [{ regions: [region] }], maskIdx: [0, -1] });
+    expect(diffPassStreams(a, passStreamFromJson(passStreamToJson(a)))).toEqual([]);
+    expect(diffPassStreams(a, passStreamFromJson(j)).map((d) => d.what)).toContain("mask present vs absent");
+    const moved = passStreamFromJson({ ...masked, masks: [{ regions: [{ ...region, coords: [5, 0, 10000, 0, 10000, 10000] }] }] });
+    expect(diffPassStreams(a, moved).map((d) => d.what)).toContain("mask region 0 coord 0: 0 vs 5");
+    expect(passStreamToJson(passStreamFromJson(j))).not.toHaveProperty("masks");
+    expect(() => passStreamFromJson({ ...j, masks: [{ regions: [region] }] })).toThrow(/together/);
+    expect(() => passStreamFromJson({ ...masked, maskIdx: [1, -1] })).toThrow(/index masks/);
+  });
+
   it("produces typed arrays and canonical order", () => {
     const s = passStreamFromJson(renderFixtures["colour-order"]);
     expect(s.objectIdx).toBeInstanceOf(Uint32Array);

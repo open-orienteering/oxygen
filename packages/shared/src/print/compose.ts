@@ -53,10 +53,11 @@ export function composePage(input: PageInput, fonts: FontMetrics[]): ComposedPag
     viewOptions: { ...input.course.viewOptions, window: frameInMap(transform, grow(frameUm, RING_BLEED_UM)), textValues: input.textValues },
     document: input.map.context,
     ...(input.map.cutFeatures ? { cutFeatures: input.map.cutFeatures } : {}),
+    ...(input.course.regions ? { regions: input.course.regions } : {}),
   });
   for (const w of layer.warnings) warnings.push({ code: w.code, message: w.message });
   const merged = courseRenderInput(input.map, layer);
-  const map = symbolise({ objects: merged.objects, symbols: merged.symbols, fonts });
+  const map = symbolise({ objects: merged.objects, symbols: merged.symbols, fonts, regions: merged.regions, regionObjectLimit: merged.regionObjectLimit });
   for (const w of map.warnings) warnings.push({ code: w.code, message: `map layer: ${w.message}` });
 
   // Page layer: page-anchored objects, flipped to y-up page mm, through the course layer's object builder.
