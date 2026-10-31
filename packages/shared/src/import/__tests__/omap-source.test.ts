@@ -190,7 +190,7 @@ describe("omapToDocumentInput (fixture)", () => {
     }
     expect(result.input).not.toHaveProperty("warningDetails");
     expect(result.warningDetails.length).toBeLessThanOrEqual(WARNING_DETAILS_MAX);
-    expect(header.format.importer).toBe("omap-8");
+    expect(header.format.importer).toBe("omap-9");
   });
 
   it("combined symbols render as merged IR (halo ride, railway band)", () => {

@@ -4,8 +4,10 @@
  * directories through the same code path as the API's import worker
  * (`importMapToDocument` + `buildImportReport`, no decisions) and prints,
  * per map, the document hash, `format.importer`, library version, counts,
- * the warning-code histogram, matching outcomes and the stage-5
- * `georeference` / `north` report fields (docs/map-import.md §3.8).
+ * the warning-code histogram, matching outcomes, where lower purple sits
+ * in the aligned colour stack (docs/map-symbols.md §9.2: index, area
+ * colours above it, order conflicts) and the stage-5 `georeference` /
+ * `north` report fields (docs/map-import.md §3.8).
  *
  *   node scripts/measure-import.mjs <dir|file>… [--previous <json>] [--out <json>] [--hashes <json>]
  *
@@ -154,6 +156,8 @@ function printMap(m) {
   console.log(`  matching   symbols auto ${ms.auto} / suggested ${ms.suggested} / variant ${ms.variant} / none ${ms.unmatched} (reviewed ${ms.reviewed})`);
   console.log(`             objects auto ${mo.auto} / suggested ${mo.suggested} / variant ${mo.variant} / none ${mo.unmatched}`);
   console.log(`             ${m.matching.library} ${m.matching.edition}, factor ×${m.matching.factor} by ${m.matching.factorMethod}`);
+  const p = m.lowerPurple;
+  console.log(`  purple     lower at ${p.index} of ${p.colours} (${p.inserted ? "inserted" : "source"})  areas above ${p.areasAbove.length}${p.areasAbove.length ? ` (${p.areasAbove.map((a) => `"${a}"`).join(", ")})` : ""}  conflicts ${p.conflicts}`);
   const hist = Object.entries(m.warnings);
   console.log(`  warnings   ${hist.length ? hist.map(([k, v]) => `${k} ${v}`).join(", ") : "none"}`);
   printWarnings("!", m.unsupported);
@@ -222,6 +226,13 @@ async function main() {
             symbols: report.matching.symbols,
             objects: report.matching.objects,
             byMethod: report.matching.byMethod,
+          },
+          lowerPurple: {
+            index: header.colours.findIndex((c) => c.paletteIds?.includes("purple-lower")),
+            colours: header.colours.length,
+            inserted: report.colourStack?.inserted.includes("purple-lower") ?? false,
+            areasAbove: (report.colourStack?.areasAboveLowerPurple ?? []).map((a) => a.name),
+            conflicts: report.colourStack?.conflicts.length ?? 0,
           },
           georeference: report.georeference ?? null,
           north: report.north ?? null,

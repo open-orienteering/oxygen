@@ -73,7 +73,7 @@ describe("importOmapToDocument", () => {
     const { header } = mapDocument.readMapDocumentHeader(result.bytes);
     const report = buildImportReport(result, header, "test.xmap");
     expect(report.source).toMatchObject({ kind: "omap", version: "9", fileName: "test.xmap" });
-    expect(report.importer).toBe("omap-8");
+    expect(report.importer).toBe("omap-9");
     expect(report.warnings.map((w) => w.code)).toContain("TEMPLATES_DROPPED");
     // Per-emission detail (docs/map-import.md §3.6): the missing-symbol stub and the dropped templates are listed with their messages.
     expect(report.warningDetails).toEqual(expect.arrayContaining([
@@ -87,11 +87,11 @@ describe("importOmapToDocument", () => {
   });
 
   it("keeps the two source kinds apart: different importer versions, OCAD path unchanged", async () => {
-    expect(importerVersionFor("ocad")).toBe("ocad-15");
-    expect(importerVersionFor("omap")).toBe("omap-8");
+    expect(importerVersionFor("ocad")).toBe("ocad-16");
+    expect(importerVersionFor("omap")).toBe("omap-9");
     const ocd = await importOcadToDocument(ocdFixture, "test.ocd");
     expect(ocd.kind).toBe("ocad");
-    expect(mapDocument.readMapDocumentHeader(ocd.bytes).header.format.importer).toBe("ocad-15");
+    expect(mapDocument.readMapDocumentHeader(ocd.bytes).header.format.importer).toBe("ocad-16");
     await expect(importMapToDocument(ocdFixture, "test.ocd", "omap")).rejects.toThrow();
   });
 

@@ -8,7 +8,7 @@
 import { describe, expect, it } from "vitest";
 import { paletteFor } from "../../symbol-library/palette.js";
 import {
-  classifyCmyk, classifyColour, detectPaletteEdition, formatClass, hueFromName, paletteClass, paletteEntryFor, percentFromName, sameClass,
+  classifyCmyk, classifyColour, detectPaletteEdition, formatClass, hueFromName, nameKind, paletteClass, paletteEntryFor, percentFromName, sameClass,
 } from "../colour-class.js";
 
 const cmyk = (c: number, m: number, y: number, k: number): [number, number, number, number] => [c / 100, m / 100, y / 100, k / 100];
@@ -125,9 +125,38 @@ describe("paletteEntryFor", () => {
     expect(pick("Dark green - hedge", cmyk(100, 0, 80, 30), "ISSprOM2019-2")).toBe("darkgreen-line");
   });
 
+  it("never maps a name that says area to a line or point entry, nor line or point to an area entry (bugfix-lower-purple-under-areas)", () => {
+    // ISOM's only dark green is the hedge line colour: an "area" dark green is no palette entry at all.
+    expect(pick("Green 100% + 50% Black Area Feature", cmyk(65, 0, 85, 40))).toBeUndefined();
+    expect(pick("Grön 100% + 50% Svart - Ytobjekt", cmyk(76, 0, 91, 50))).toBeUndefined();
+    expect(pick("Grön 100% + 50% Svart - Linjeobjekt", cmyk(76, 0, 91, 50))).toBe("darkgreen-hedge");
+    expect(pick("Grön 100% + 50% Svart - Ytobjekt", cmyk(76, 0, 91, 50), "ISSprOM2019-2")).toBe("darkgreen-area");
+    expect(pick("Grön 100% + 50% Svart - Linjeobjekt", cmyk(76, 0, 91, 50), "ISSprOM2019-2")).toBe("darkgreen-line");
+    expect(pick("Blue 100% - Area Feature", cmyk(100, 0, 0, 0))).toBe("blue100-area");
+    expect(pick("Black 100% - Area Feature", cmyk(0, 0, 0, 100))).toBe("black-cultivated");
+    expect(pick("Brown 100% - Area Feature", cmyk(25, 75, 100, 0))).toBeUndefined();
+    expect(pick("Grön 100% - Linjeobjekt", cmyk(80, 0, 100, 0))).toBe("green100-point");
+    // Road infill is neither kind: "Vägfyllning" is not "fill".
+    expect(pick("Brun 50% - Vägfyllning", cmyk(10, 35, 50, 0))).toBe("brown50-road");
+  });
+
   it("falls back to the default entry of a class when the name has no qualifier", () => {
     expect(pick("Brun 50%", cmyk(10, 35, 50, 0))).toBe("brown50-road");
     expect(pick("Svart", cmyk(0, 0, 0, 100))).toBe("black100");
+  });
+});
+
+describe("nameKind", () => {
+  it("reads area and line/point words as whole tokens, English and Swedish", () => {
+    expect(nameKind("Green 100% + 50% Black Area Feature")).toBe("area");
+    expect(nameKind("Gul 100% - Ytobjekt")).toBe("area");
+    expect(nameKind("Grön 100% + 50% Svart - Linjeobjekt")).toBe("linepoint");
+    expect(nameKind("Blue 100% - Point Feature")).toBe("linepoint");
+    expect(nameKind("Grön 100%  - Punktobjekt")).toBe("linepoint");
+    expect(nameKind("Brun 50% - Vägfyllning")).toBeNull();
+    expect(nameKind("Brown 50% - Street Infill")).toBeNull();
+    expect(nameKind("Svart")).toBeNull();
+    expect(nameKind("Blue 100% area and line")).toBeNull();
   });
 });
 

@@ -183,6 +183,36 @@ const QUALIFIERS: { id: RegExp; name: RegExp; weight: number }[] = [
   { id: /^purple-upper$/, name: /övre|upper|överst|top|over\b/, weight: 3 },
 ];
 
+/** Palette entries of area symbols (fills, screens, area patterns): what lower purple must be drawn above (03 §2.4, Appendix B). */
+export const AREA_PALETTE_IDS: ReadonlySet<string> = new Set([
+  "blue100-area", "blue70-area", "blue50-area", "blue30-area",
+  "white-over-green-brown", "white-over-yellow", "white-two-level",
+  "brown50-paved", "brown30-paved", "olive", "darkgreen-area",
+  "green100-area", "green60-area", "green30-area",
+  "black-area-screen", "black-cultivated", "black50-building", "black60-building", "black20-canopy",
+  "yellow100", "yellow75", "yellow50",
+]);
+
+/** Palette entries of line and point symbols (road infill is neither: it is the inside of a line symbol). */
+export function isLinePointPaletteId(id: string): boolean {
+  return /-(line|point|pointline|hedge)$/.test(id) || ["black100", "brown100", "black-road-outline", "white-railway"].includes(id);
+}
+
+const AREA_WORDS = new Set(["area", "areas", "yta", "ytor", "ytobjekt", "ytsymbol", "ytsymboler", "fill", "screen"]);
+const LINE_POINT_WORDS = new Set(["line", "lines", "linje", "linjer", "linjeobjekt", "linjesymbol", "linjesymboler", "point", "points", "punkt", "punkter", "punktobjekt", "punktsymbol", "punktsymboler"]);
+
+/**
+ * The symbol kind a colour name states ("Area Feature", "Ytobjekt" → area;
+ * "Linjeobjekt", "Point Feature" → line/point); `null` when it states
+ * neither or both. Whole tokens, so "Vägfyllning" is not "fill".
+ */
+export function nameKind(name: string): "area" | "linepoint" | null {
+  const tokens = nameTokens(name);
+  const area = tokens.some((t) => AREA_WORDS.has(t));
+  const line = tokens.some((t) => LINE_POINT_WORDS.has(t));
+  return area === line ? null : area ? "area" : "linepoint";
+}
+
 /** Preference order when qualifiers do not decide. */
 const DEFAULT_ORDER = [
   "black100", "black-road-outline", "black-cultivated",
@@ -211,13 +241,20 @@ export interface PaletteEntryChoice {
 /**
  * Which palette entry of `spec` a source colour *is*: same class, then
  * name qualifiers, then default order. `null` when no entry has the class.
- * Purple is handled by the caller (position decides lower vs upper when
- * the name does not).
+ * A name that states the symbol kind rules out entries of the other kind:
+ * ISOM's only dark green is the hedge line colour, so "Green 100% + 50%
+ * Black Area Feature" is no palette entry at all rather than a hedge
+ * (docs/map-symbols.md §9.1). Purple is handled by the caller (position
+ * decides lower vs upper when the name does not).
  */
 export function paletteEntryFor(entry: Pick<ColourEntry, "name" | "cmyk">, cls: ColourClass | null, spec: SpecId, edition: PaletteEdition): PaletteEntryChoice | null {
   if (!cls) return null;
   const n = entry.name.toLowerCase();
-  const candidates = paletteFor(edition, spec).filter((p) => sameClass(paletteClass(p.id, edition), cls));
+  const kind = nameKind(entry.name);
+  const candidates = paletteFor(edition, spec).filter((p) =>
+    sameClass(paletteClass(p.id, edition), cls)
+    && !(kind === "area" && isLinePointPaletteId(p.id))
+    && !(kind === "linepoint" && AREA_PALETTE_IDS.has(p.id)));
   if (candidates.length === 0) return null;
   // Qualifiers first, then the nearest screen (brown 30 % is "brown50-road"
   // by class tolerance but "brown30-road" by value), then the default order.

@@ -68,6 +68,7 @@ export const WARNING_CLASS: Readonly<Record<string, WarningClass>> = {
   DECISION_UNKNOWN_ENTRY: "outcome",
   COLOUR_ORDER_CONFLICT: "outcome",
   COLOUR_UNCLASSIFIED: "outcome",
+  COLOUR_AREA_ABOVE_LOWER_PURPLE: "outcome",
   CRT_LINE_INVALID: "outcome",
   CRT_QUERY_UNSUPPORTED: "outcome",
   CRT_LIBRARY_MISMATCH: "outcome",
@@ -147,6 +148,8 @@ export const importReportSchema = z.object({
       aliased: z.array(z.object({ paletteId: z.string(), viaPaletteId: z.string(), sourceNumber: z.number().int().optional() })),
       conflicts: z.array(z.object({ colour: z.string(), reason: z.string() })),
       unclassified: z.array(z.object({ sourceNumber: z.number().int().optional(), name: z.string() })),
+      /** Absent before `ocad-16` / `omap-9`. */
+      areasAboveLowerPurple: z.array(z.object({ name: z.string(), sourceNumber: z.number().int().optional(), paletteId: z.string().optional() })).optional(),
     })
     .optional(),
   /** Stage 5 (docs/map-import.md §3.8): the header's georeference projected to WGS 84. Absent before `ocad-5` / `omap-2`. */

@@ -961,6 +961,21 @@ palette entry a classified colour stands for: name tokens first
 nearest percent, then the palette's default for the class; some entries
 (`FULL_ONLY`) are never chosen for a screened colour.
 
+A name that states the symbol kind rules out entries of the other kind
+(`nameKind`, whole tokens; C14, 2026-10-31): `area`, `yta`, `ytor`,
+`ytobjekt`, `ytsymbol`, `fill`, `screen` never map to a line or point
+entry (`-line`, `-point`, `-pointline`, `-hedge`, `black100`, `brown100`,
+`black-road-outline`, `white-railway`), and `line`, `linje`,
+`linjeobjekt`, `point`, `punkt`, `punktobjekt` (and plurals) never to an
+area entry (`AREA_PALETTE_IDS`: the `-area` entries, the yellows, olive,
+the green and black screens, buildings, canopy, cultivated-land black,
+the white-overs, `brown*-paved`, `white-two-level`). Road infill
+(`brown*-road`) is neither, and "Vägfyllning" is one token, not "fill".
+When no entry of the class is left, the colour has no palette id: ISOM's
+only dark green is the hedge line colour, so "Green 100% + 50% Black Area
+Feature" is classified dark green but stands for no palette entry, while
+"Grön 100% + 50% Svart - Linjeobjekt" is `darkgreen-hedge`.
+
 ### 9.2 Steps
 
 `identifySourceColours` then `alignColourStack`:
@@ -978,20 +993,63 @@ nearest percent, then the palette's default for the class; some entries
    `colourStack.aliased`). Purples are never aliased.
 4. **Insert** the rest in palette order, each directly above its nearest
    lower palette neighbour already in the stack (else below the nearest
-   upper one); `purple-upper` always on top, `purple-lower` directly below
-   the first source colour the palette puts above it. Inserted entries have
+   upper one); `purple-upper` always on top. Inserted entries have
    `id: "<edition>:<paletteId>"`, the palette CMYK and no `sourceNumber`
-   (`colourStack.inserted`). **Exception (C9, user decision 2026-10-24):**
+   (`colourStack.inserted`).
+
+   **`purple-lower` goes above the area colours as a group** (C14, user
+   decision 2026-10-31; 03 §2.4, Appendix B: lower purple is below only the
+   100 % line and point colours and above every area screen). Each
+   colour in the stack is on a *side*: *above* when its palette id ranks
+   above `purple-lower` (black 100 %, 100 % line / point colours, dark-green
+   hedges, railway white, the upper purples); *area* when its palette id
+   is an area entry (§9.1) or, with no palette id, its name says area;
+   *below* for any other palette id the palette ranks under lower purple
+   (road infill and outline, ISSprOM's brown 100 %); unclassified colours
+   take no side. Duplicates count by the entry they were identified as
+   (step 2), not only the one chosen to stand for it. Only colours that
+   objects use count (`usage` > 0) — a stray or repeated table entry does
+   not steer the purple. The purple goes into the gap with the fewest
+   misplaced colours (areas above it plus *above* colours below it), ties
+   to the fewest areas above, then to the fewest *below* colours above,
+   then to the lowest gap: directly above the highest area colour it keeps
+   below. Without any area colour it goes directly below the first *above*
+   colour, else on top. The source order is never changed; what stays on
+   the wrong side is step 5's.
+
+   Before C14 the anchor was "directly below the first source colour the
+   palette puts above lower purple". OCAD-made maps keep the mapper's
+   dark-green colour at the bottom of the area block and §9.1 read it as
+   the hedge line colour, so one colour put lower purple under every area
+   (`docs/bugfix-lower-purple-under-areas.md`). A literal "directly above
+   the highest area colour" fails the other way: Ny_karta_test keeps a
+   yellow ("Gul (över platta)") at the top of its table, above its own
+   upper purple, so the gap count decides instead. **Exception (C9, user decision 2026-10-24):**
    an inserted `purple-upper` / `purple-lower` takes the CMYK of the map's
    own purple of the other role when it has one (the course overprint is
    one ink: Ny_karta_test's `src:2` "Upper Purple for Course Overprint"
    10/90/10/0 gives the inserted lower purple 10/90/10/0, not 35/85/0/0);
    the palette CMYK only when the map has no purple at all. Purples are
    still never aliased.
-5. **Flag** palette ids whose relative order disagrees with the palette
-   (longest increasing subsequence of palette ranks; everything outside it
-   is a `COLOUR_ORDER_CONFLICT` with the pair it contradicts). The order
-   is not changed.
+5. **Flag**, never reorder. (a) Against lower purple, every used colour
+   with a side: an *above* colour below it or a *below* colour above it is
+   a `COLOUR_ORDER_CONFLICT` naming the colour (`blue100-line: source
+   places "Blå" below purple-lower; …`); an *area* colour above it is
+   `COLOUR_AREA_ABOVE_LOWER_PURPLE` — it hides the course overprint —
+   listed in `colourStack.areasAboveLowerPurple` (name, source number,
+   palette id). This holds for a map's own lower purple too: Vinterserien's
+   named lower purple drawn above its upper purple keeps its place and
+   reports the upper purple and every 100 % line colour under it.
+   (b) The other palette ids whose relative order disagrees with the
+   palette (longest increasing subsequence of palette ranks, lower purple
+   left to (a); everything outside it is a `COLOUR_ORDER_CONFLICT` with the
+   pair it contradicts).
+
+   `scripts/measure-import.mjs` prints per map where lower purple sits,
+   the area colours above it and the conflict count (`purple` line). The
+   map review page has no colour-stack panel; the report's
+   `colourStack` (`mapImport.review` → `stack.alignment`) carries the
+   lists.
 
 Output: `header.colours` with `paletteIds[]` and `purpleRole` on every
 entry that stands for a palette colour, and the source symbols' IR

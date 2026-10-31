@@ -63,6 +63,17 @@ describe("measure-import.mjs", () => {
     assert.match(r.stdout, /sameAsPrevious yes/);
   });
 
+  // bugfix-lower-purple-under-areas: where lower purple sits, what is drawn over it, how many conflicts.
+  it("reports lower purple's place in the aligned stack per map", () => {
+    const out = path.join(dir, "purple.json");
+    const r = run(ocd, xmap, "--out", out);
+    assert.match(r.stdout, /^ {2}purple {5}lower at 3 of 6 \(inserted\) {2}areas above 0 {2}conflicts \d+$/m);
+    assert.match(r.stdout, /^ {2}purple {5}lower at 3 of 8 \(inserted\) {2}areas above 0 {2}conflicts \d+$/m);
+    const maps = JSON.parse(readFileSync(out, "utf8")).maps;
+    assert.deepEqual(maps["test.ocd"].lowerPurple, { index: 3, colours: 6, inserted: true, areasAbove: [], conflicts: maps["test.ocd"].lowerPurple.conflicts });
+    assert.ok(maps["test.ocd"].lowerPurple.conflicts > 0); // the fixture's blue line colour sits under its yellow
+  });
+
   it("fails on unsupported-primitive warnings and lists them", () => {
     const out = path.join(dir, "run.json");
     const r = run(xmap, "--out", out);
