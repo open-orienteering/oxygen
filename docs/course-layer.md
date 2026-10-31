@@ -512,7 +512,12 @@ pure function of it (`splitStructure`, `packages/api/src/course-structure.ts`):
 The structure names only what the course **explicitly** references: a
 course that uses the event's default start (lowest-seq start, `start_name
 = ""`) has no start item, and the readers complete it exactly as before,
-so creating a new start still re-points those courses. The inverse,
+so creating a new start still re-points those courses. This is a
+deviation from 08 §4.3's "items start … finish", read as *explicit*
+items (decided 2026-10-31 by the coordinator on the user's delegation,
+decision log "D0"): legacy re-pointing of implicit starts is unchanged,
+D1's backfill is a pure function of the columns, and the new editor
+makes a course explicit on its first save. The inverse,
 `structureFromColumns`, gives every course written before D0 the
 structure its columns describe (`course.detail` reports
 `structureStored: false` for those).
