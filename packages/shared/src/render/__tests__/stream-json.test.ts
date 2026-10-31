@@ -48,6 +48,7 @@ describe("passStreamFromJson / passStreamToJson", () => {
     expect(passStreamToJson(passStreamFromJson(j))).not.toHaveProperty("masks");
     expect(() => passStreamFromJson({ ...j, masks: [{ regions: [region] }] })).toThrow(/together/);
     expect(() => passStreamFromJson({ ...masked, maskIdx: [1, -1] })).toThrow(/index masks/);
+    expect(() => passStreamToJson({ ...a, maskIdx: undefined })).toThrow(/together/);
   });
 
   it("produces typed arrays and canonical order", () => {

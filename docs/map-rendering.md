@@ -692,7 +692,8 @@ inside the area. A stroke counts by its centre line (not its width), a
 glyph pass by its instances' origins, a text pass by its glyph origins.
 **The fast predicate** (`boundsMeetRegion`, 04 §7 "while dragging"):
 the object's symbolised bounds (`objectBounds`: control-point bounds
-grown by half a stroke width, glyphs by their mesh radius) meet the
+grown by half a stroke width, glyphs by their mesh radius × scale, text
+by each glyph origin grown by the em size plus the halo width) meet the
 region — a bounds corner inside it, a region vertex inside the bounds, or
 an edge crossing. `filterStream(stream, regions, { fast })` uses it for
 `hide` while a region is dragged; the exact predicate runs on release

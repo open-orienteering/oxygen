@@ -227,6 +227,7 @@ function q(v: number, digits = 3): number {
  * equal inputs (the stream is sorted first).
  */
 export function passStreamToJson(stream: PassStream): PassStreamJson {
+  if (!!stream.masks !== !!stream.maskIdx) throw new Error("masks and maskIdx come together");
   const s = sortPassStream(stream);
   return {
     objectIdx: Array.from(s.objectIdx),
