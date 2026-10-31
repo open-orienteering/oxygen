@@ -9,6 +9,7 @@
 import { describe, expect, it } from "vitest";
 import type { DocumentColour } from "../../map-document/header.js";
 import { alignColourStack, identifySourceColours, paletteIndexOfStack } from "../colour-align.js";
+import { nyKartaTest, toColours, ungdomsserien } from "./club-colour-tables.js";
 
 const c = (sourceNumber: number, name: string, cmyk: [number, number, number, number]): DocumentColour => ({ id: `src:${sourceNumber}`, name, cmyk: cmyk.map((v) => v / 100) as [number, number, number, number], sourceNumber });
 
@@ -135,7 +136,8 @@ describe("alignColourStack", () => {
     const upsideDown = [c(1, "Svart", [0, 0, 0, 100]), c(2, "Gul", [0, 27, 79, 0]), c(3, "Brun", [25, 75, 100, 0])];
     const r = align(upsideDown, [], "ISOM2017-2");
     expect(r.conflicts.length).toBeGreaterThan(0);
-    expect(r.conflicts.map((x) => x.colour)).toContain("yellow100");
+    // Lower purple goes above the yellow; the black drawn under it is reported, not moved.
+    expect(r.conflicts).toContainEqual({ colour: "black100", reason: 'source places "Svart" below purple-lower; the palette has the reverse order' });
     // Source order is kept: black still drawn first.
     expect(r.colours[r.remap[0]].sourceNumber).toBe(1);
     expect(r.colours[r.remap[1]].sourceNumber).toBe(2);
@@ -147,5 +149,84 @@ describe("alignColourStack", () => {
     expect(index.get("black20-canopy")).toBe(r.index.get("black20-canopy"));
     expect(index.get("purple-lower")).toBe(r.index.get("purple-lower"));
     expect(index.size).toBe(r.index.size);
+  });
+
+  describe("lower purple: above every area colour, below the 100 % line and point colours (bugfix-lower-purple-under-areas)", () => {
+    const lowerOf = (r: ReturnType<typeof align>) => r.index.get("purple-lower")!;
+    /** New positions of the source colours with these numbers. */
+    const at = (r: ReturnType<typeof align>, ...numbers: number[]) => numbers.map((n) => r.colours.findIndex((x) => x.sourceNumber === n));
+
+    it("Ny_karta_test: inserted directly above the highest area colour, not under the dark-green area colour at the bottom of the area block", () => {
+      const colours = toColours(nyKartaTest);
+      const infos = identifySourceColours(colours, "ISOM2017-2", "iof2024");
+      const darkGreen = colours.findIndex((x) => x.name === "Green 100% + 50% Black Area Feature");
+      expect(infos[darkGreen].paletteId).toBeUndefined();
+      const r = align(colours, [], "ISOM2017-2");
+      const lower = lowerOf(r);
+      expect(r.inserted).toContain("purple-lower");
+      // Above the highest area colour and the road infill the mapper drew over it; below the first line colour.
+      expect(r.colours.slice(lower - 2, lower + 2).map((x) => x.name)).toEqual(["Black 20% - Area Feature", "Brun gc-vägar nära hus", "Lower purple for course overprint", "Brown 100% - Line Feature"]);
+      expect(r.remap[darkGreen]).toBeLessThan(lower);
+      // Brown / blue line, green / brown / blue point, railway white, black 100 %, the map's upper purple.
+      for (const pos of at(r, 18, 16, 15, 14, 13, 9, 5, 2)) expect(pos).toBeGreaterThan(lower);
+      // Two stray colours above the line block stay where the mapper put them and are reported.
+      expect(r.areasAboveLowerPurple.map((a) => a.name)).toEqual(["Vit mask för text och kontrollb", "Gul (över platta)"]);
+      // The inserted purple is still the map's own course purple (C9).
+      expect(r.colours[lower].cmyk).toEqual(r.colours[r.index.get("purple-upper")!].cmyk);
+    });
+
+    it("Ungdomsserien: above the last copy's area block; the dark-green line colour left below is a conflict, not the anchor", () => {
+      const colours = toColours(ungdomsserien);
+      const r = align(colours, [], "ISOM2017-2");
+      const lower = lowerOf(r);
+      expect(r.colours[lower - 1]).toMatchObject({ name: "Blå 100% - Ytobjekt", sourceNumber: 19 });
+      expect(r.colours[lower + 1]).toMatchObject({ name: "Brun 100% - Linjeobjekt", sourceNumber: 18 });
+      // The last copy's brown / blue line, green / brown / blue point, black 100 % and upper purple.
+      for (const pos of at(r, 18, 17, 8, 7, 6, 5, 3)) expect(pos).toBeGreaterThan(lower);
+      expect(r.conflicts).toContainEqual({ colour: "darkgreen-hedge", reason: 'source places "Grön 100% + 50% Svart - Linjeobjekt" below purple-lower; the palette has the reverse order' });
+      // Every copy's yellows and greens are below it.
+      for (const [i, x] of colours.entries()) if (/^(Gul|Grön) \d+% - Ytobjekt$/.test(x.name)) expect(r.remap[i], x.name).toBeLessThan(lower);
+    });
+
+    it("one stray area colour on top does not drag lower purple over the line colours", () => {
+      const stack = [c(1, "Gul", [0, 27, 79, 0]), c(2, "Grön 60%", [48, 0, 60, 0]), c(3, "Brun 100% - Linjeobjekt", [25, 75, 100, 0]), c(4, "Svart", [0, 0, 0, 100]), c(5, "Övre violett", [35, 85, 0, 0]), c(6, "Gul över platta", [0, 27, 79, 0])];
+      const r = align(stack, [], "ISOM2017-2");
+      expect(r.colours[lowerOf(r) - 1].sourceNumber).toBe(2);
+      expect(r.areasAboveLowerPurple).toEqual([{ name: "Gul över platta", sourceNumber: 6, paletteId: "yellow100" }]);
+      expect(r.conflicts.filter((x) => /purple-lower/.test(x.reason))).toEqual([]);
+    });
+
+    it("a colour whose name says area is an area colour even when its ink is not an IOF colour", () => {
+      const stack = [c(1, "Gul", [0, 27, 79, 0]), c(2, "Brun 100% - Linjeobjekt", [25, 75, 100, 0]), c(3, "Svart", [0, 0, 0, 100]), c(4, "Naturreservat - Area Feature", [90, 32, 0, 0])];
+      const r = align(stack, [], "ISOM2017-2");
+      expect(r.areasAboveLowerPurple).toEqual([{ name: "Naturreservat - Area Feature", sourceNumber: 4 }]);
+      expect(r.colours[lowerOf(r) - 1].sourceNumber).toBe(1);
+    });
+
+    it("colours no object uses neither steer the anchor nor raise warnings", () => {
+      const stack = [c(1, "Gul", [0, 27, 79, 0]), c(2, "Svart", [0, 0, 0, 100]), c(3, "Gul (oanvänd)", [0, 27, 79, 0]), c(4, "Brun 100% - Linjeobjekt", [25, 75, 100, 0])];
+      const r = align(stack, [], "ISOM2017-2", [10, 10, 0, 10]);
+      expect(r.colours[lowerOf(r) - 1].sourceNumber).toBe(1);
+      expect(r.areasAboveLowerPurple).toEqual([]);
+      const all = align(stack, [], "ISOM2017-2");
+      expect(all.areasAboveLowerPurple).toEqual([]);
+      expect(all.colours[lowerOf(all) - 1].sourceNumber).toBe(3);
+    });
+
+    it("without area colours: directly below the first colour the palette puts above lower purple", () => {
+      const r = align([c(1, "Brun 50% - Vägfyllning", [10, 35, 50, 0]), c(2, "Svart", [0, 0, 0, 100])], [], "ISOM2017-2");
+      expect(r.colours[lowerOf(r) + 1].sourceNumber).toBe(2);
+      expect(r.colours[lowerOf(r) - 1].sourceNumber).toBe(1);
+    });
+
+    it("a map's own lower purple keeps its place; what it hides and what sits on the wrong side are reported", () => {
+      // Vinterserien's shape: the named lower purple drawn above the named upper one, an area on top of the lower.
+      const stack = [c(1, "Gul", [0, 27, 79, 0]), c(2, "Svart", [0, 0, 0, 100]), c(3, "Övre violett för banpåtryck", [35, 85, 0, 0]), c(4, "Undre violett för banpåtryck", [35, 85, 0, 0]), c(5, "Grön 30% - Ytobjekt", [24, 0, 30, 0])];
+      const r = align(stack, [], "ISOM2017-2");
+      expect(r.inserted).toEqual([]);
+      expect(r.colours.map((x) => x.sourceNumber)).toEqual([1, 2, 3, 4, 5]);
+      expect(r.conflicts.map((x) => x.colour)).toEqual(expect.arrayContaining(["black100", "purple-upper"]));
+      expect(r.areasAboveLowerPurple).toEqual([{ name: "Grön 30% - Ytobjekt", sourceNumber: 5, paletteId: "green30-area" }]);
+    });
   });
 });

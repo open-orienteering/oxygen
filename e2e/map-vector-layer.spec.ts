@@ -8,7 +8,7 @@
  * unrotated canvas; no tile is requested; gestures move a paper-space
  * view; a GPS fix reaches the overlay through `mapGeo`; the course is
  * drawn by the GL layer in colour order with the map (lower purple under
- * black line art). Under `legacy` the viewer is today's tile viewer.
+ * black line art, over the yellow area). Under `legacy` the viewer is today's tile viewer.
  *
  * Headless Chromium draws WebGL2 with SwiftShader, so only presence and
  * geometry are asserted, never timings.
@@ -57,6 +57,101 @@ function pageToPaper(v: Awaited<ReturnType<typeof paperView>>, x: number, y: num
   const dx = x - (v.box.x + v.box.width / 2), dy = y - (v.box.y + v.box.height / 2);
   const ix = dx * Math.cos(r) - dy * Math.sin(r), iy = dx * Math.sin(r) + dy * Math.cos(r);
   return { x: v.centreX + ix / v.pxPerUm, y: v.centreY - iy / v.pxPerUm };
+}
+
+type Rgb = [number, number, number];
+type Pt = { x: number; y: number };
+const isDark = ([r, g, b]: Rgb) => Math.max(r, g, b) < 120;
+// At the fitted view a 0.25 mm line is about a pixel wide: anti-aliased grey.
+const isInk = ([r, g, b]: Rgb) => Math.max(r, g, b) < 180 && Math.max(r, g, b) - Math.min(r, g, b) < 40;
+const isWhite = ([r, g, b]: Rgb) => Math.min(r, g, b) > 230;
+const isPurple = ([r, g, b]: Rgb) => r - g > 50 && b - g > 50;
+const isYellow = ([r, g, b]: Rgb) => r > 220 && g > 150 && g < 230 && b < 140;
+
+/** The canvas as pixels plus paper mm ↔ pixel through the viewer's paper view (CSS rotation included). */
+async function snapshot(viewer: Locator, canvas: Locator) {
+  // The canvas alone: an element screenshot is a page clip, and the scale bar, buttons and SVG sit on top.
+  const style = "body * { visibility: hidden !important } [data-testid='map-vector-layer'] { visibility: visible !important }";
+  const png = PNG.sync.read(await canvas.screenshot({ style }));
+  // Read the view after the screenshot: taking it scrolls the canvas into view, which moves every page coordinate.
+  const v = await paperView(viewer);
+  const cb = (await canvas.boundingBox())!;
+  const k = png.width / cb.width;
+  const rot = (v.rotDeg * Math.PI) / 180;
+  const toPage = (p: Pt) => {
+    const ix = (p.x * 1000 - v.centreX) * v.pxPerUm, iy = -(p.y * 1000 - v.centreY) * v.pxPerUm;
+    return { x: v.box.x + v.box.width / 2 + ix * Math.cos(rot) - iy * Math.sin(rot), y: v.box.y + v.box.height / 2 + ix * Math.sin(rot) + iy * Math.cos(rot) };
+  };
+  const rgb = (p: Pt): Rgb | null => {
+    const q = toPage(p);
+    const px = Math.round((q.x - cb.x) * k), py = Math.round((q.y - cb.y) * k);
+    if (px < 0 || py < 0 || px >= png.width || py >= png.height) return null;
+    const i = (py * png.width + px) * 4;
+    return [png.data[i], png.data[i + 1], png.data[i + 2]];
+  };
+  const toPaper = (px: number, py: number): Pt => {
+    const q = pageToPaper(v, cb.x + px / k, cb.y + py / k);
+    return { x: q.x / 1000, y: q.y / 1000 };
+  };
+  return { png, rgb, toPage, toPaper };
+}
+
+/** The canvas pixel nearest the centre (in rings outward) whose colour passes `first` and paper point passes `test`, as paper mm. */
+function findSpot(shot: Awaited<ReturnType<typeof snapshot>>, first: (c: Rgb) => boolean, test: (p: Pt) => boolean, firstMatch = false): Pt | undefined {
+  const { width, height, data } = shot.png;
+  const candidates: [number, number][] = [];
+  for (let py = 4; py < height - 4; py += 2) for (let px = 4; px < width - 4; px += 2) candidates.push([px, py]);
+  if (!firstMatch) candidates.sort((a, b) => Math.hypot(a[0] - width / 2, a[1] - height / 2) - Math.hypot(b[0] - width / 2, b[1] - height / 2));
+  for (const [px, py] of candidates) {
+    const i = (py * width + px) * 4;
+    if (!first([data[i], data[i + 1], data[i + 2]])) continue;
+    const p = shot.toPaper(px, py);
+    if (test(p)) return p;
+  }
+  return undefined;
+}
+
+/** A course through two new controls, created through the API and shown alone in the viewer. */
+async function showCourse(page: Page, viewer: Locator, canvas: Locator, name: string, controls: [string, Pt][]) {
+  const api = async <T,>(path: string, data: unknown): Promise<T> => {
+    const res = await page.request.post(`${API}/trpc/${path}`, { headers: { "content-type": "application/json", "x-event-id": "itest" }, data });
+    expect(res.ok(), await res.text()).toBe(true);
+    return ((await res.json()) as { result: { data: T } }).result.data;
+  };
+  const ids: number[] = [];
+  for (const [code, p] of controls) ids.push((await api<{ id: number }>("control.create", { codes: code, xpos: p.x, ypos: p.y })).id);
+  await api("course.create", { name, controlIds: ids });
+  await page.reload();
+  await waitForStableMapPanel(page);
+  await page.getByRole("row").filter({ has: page.getByRole("cell", { name, exact: true }) }).getByRole("checkbox").check();
+  await waitForStableMapPanel(page);
+  await expect(viewer).toHaveAttribute("data-course-layer", "gl", { timeout: 30_000 });
+  await expect(canvas).toHaveAttribute("data-ready", "true", { timeout: 60_000 });
+  await expect(viewer.locator(`[data-testid="course-leg"][data-course="${name}"]`).first()).toBeAttached({ timeout: 30_000 });
+  // No course symbol is drawn by the SVG under the GL layer.
+  await expect(viewer.locator('[data-testid="control-label"]')).toHaveCount(0);
+}
+
+/** Zoom in on a paper point with the wheel (which keeps it under the cursor) until about 20 px per mm. */
+async function zoomOn(page: Page, viewer: Locator, canvas: Locator, spot: Pt) {
+  for (let n = 0; n < 15 && Number(await viewer.getAttribute("data-px-per-um")) < 0.02; n++) {
+    const q = (await snapshot(viewer, canvas)).toPage(spot);
+    await page.mouse.move(q.x, q.y);
+    await page.mouse.wheel(0, -200);
+    await page.waitForTimeout(150);
+  }
+  await expect(canvas).toHaveAttribute("data-ready", "true", { timeout: 30_000 });
+}
+
+async function openCourses(page: Page) {
+  await page.locator("nav[aria-label='Tabs']").getByRole("link", { name: "Courses", exact: true }).click();
+  // The courses page remounts the map panel once its data arrives; a locator taken before that detaches.
+  await waitForStableMapPanel(page);
+  const viewer = page.getByTestId("map-panel").first().getByTestId("map-viewer");
+  const canvas = viewer.getByTestId("map-vector-layer");
+  await expect(canvas).toHaveAttribute("data-ready", "true", { timeout: 60_000 });
+  await viewer.scrollIntoViewIfNeeded();
+  return { viewer, canvas };
 }
 
 test.describe("vector map layer", () => {
@@ -178,106 +273,64 @@ test.describe("vector map layer", () => {
 
   test("the course layer draws lower purple under the map's black line art", async ({ page }) => {
     // map-rendering.md §5.4 "Overlay": where a leg crosses a black line, the crossing is black (the
-    // line art is drawn after lower purple) and the leg is purple on either side of it. The fixture's
-    // yellow area sits above lower purple in its own colour order, so the crossing is made on white
-    // paper: two controls straddling a black path where there is no yellow.
+    // line art is drawn after lower purple) and the leg is purple on either side of it. The crossing is
+    // made on white paper so the colour tests stay simple: two controls straddling a black path where
+    // there is no yellow (lower purple is drawn over the yellow too — docs/bugfix-lower-purple-under-areas.md).
     test.setTimeout(180_000);
     await setMapPipeline("vector");
     await openEvent(page);
     await viewerWithMap(page);
-    await page.locator("nav[aria-label='Tabs']").getByRole("link", { name: "Courses", exact: true }).click();
-    const viewer = page.getByTestId("map-panel").first().getByTestId("map-viewer");
-    const canvas = viewer.getByTestId("map-vector-layer");
-    await expect(canvas).toHaveAttribute("data-ready", "true", { timeout: 60_000 });
-    await viewer.scrollIntoViewIfNeeded();
-
-    type Rgb = [number, number, number];
-    type Pt = { x: number; y: number };
-    const isDark = ([r, g, b]: Rgb) => Math.max(r, g, b) < 120;
-    // At the fitted view a 0.25 mm line is about a pixel wide: anti-aliased grey.
-    const isInk = ([r, g, b]: Rgb) => Math.max(r, g, b) < 180 && Math.max(r, g, b) - Math.min(r, g, b) < 40;
-    const isWhite = ([r, g, b]: Rgb) => Math.min(r, g, b) > 230;
-    const isPurple = ([r, g, b]: Rgb) => r - g > 50 && b - g > 50;
-    /** The canvas as pixels plus paper mm ↔ pixel through the viewer's paper view (CSS rotation included). */
-    const snapshot = async () => {
-      const v = await paperView(viewer);
-      // The canvas alone: an element screenshot is a page clip, and the scale bar, buttons and SVG sit on top.
-      const style = "body * { visibility: hidden !important } [data-testid='map-vector-layer'] { visibility: visible !important }";
-      const png = PNG.sync.read(await canvas.screenshot({ style }));
-      const cb = (await canvas.boundingBox())!;
-      const k = png.width / cb.width;
-      const rot = (v.rotDeg * Math.PI) / 180;
-      const toPage = (p: Pt) => {
-        const ix = (p.x * 1000 - v.centreX) * v.pxPerUm, iy = -(p.y * 1000 - v.centreY) * v.pxPerUm;
-        return { x: v.box.x + v.box.width / 2 + ix * Math.cos(rot) - iy * Math.sin(rot), y: v.box.y + v.box.height / 2 + ix * Math.sin(rot) + iy * Math.cos(rot) };
-      };
-      const rgb = (p: Pt): Rgb | null => {
-        const q = toPage(p);
-        const px = Math.round((q.x - cb.x) * k), py = Math.round((q.y - cb.y) * k);
-        if (px < 0 || py < 0 || px >= png.width || py >= png.height) return null;
-        const i = (py * png.width + px) * 4;
-        return [png.data[i], png.data[i + 1], png.data[i + 2]];
-      };
-      const toPaper = (px: number, py: number): Pt => {
-        const q = pageToPaper(v, cb.x + px / k, cb.y + py / k);
-        return { x: q.x / 1000, y: q.y / 1000 };
-      };
-      return { png, rgb, toPage, toPaper };
-    };
+    const { viewer, canvas } = await openCourses(page);
 
     // 1. A black line with white paper 2–3 mm above and below it and line pixels 1.5 mm to either side.
-    const fit = await snapshot();
-    let spot: Pt | undefined;
-    for (let py = 4; py < fit.png.height - 4 && !spot; py += 2) {
-      for (let px = 4; px < fit.png.width - 4 && !spot; px += 2) {
-        const i = (py * fit.png.width + px) * 4;
-        if (!isInk([fit.png.data[i], fit.png.data[i + 1], fit.png.data[i + 2]])) continue;
-        const p = fit.toPaper(px, py);
-        const at = (dx: number, dy: number) => fit.rgb({ x: p.x + dx, y: p.y + dy });
-        const white = [-3, -2, 2, 3].every((dy) => { const c = at(0, dy); return c && isWhite(c); });
-        const sides = [-1.5, 1.5].every((dx) => [-1, -0.75, -0.5, -0.25, 0, 0.25, 0.5, 0.75, 1].some((dy) => { const c = at(dx, dy); return c && isInk(c); }));
-        if (white && sides) spot = p;
-      }
-    }
+    const fit = await snapshot(viewer, canvas);
+    const spot = findSpot(fit, isInk, (p) => {
+      const at = (dx: number, dy: number) => fit.rgb({ x: p.x + dx, y: p.y + dy });
+      const white = [-3, -2, 2, 3].every((dy) => { const c = at(0, dy); return c && isWhite(c); });
+      const sides = [-1.5, 1.5].every((dx) => [-1, -0.75, -0.5, -0.25, 0, 0.25, 0.5, 0.75, 1].some((dy) => { const c = at(dx, dy); return c && isInk(c); }));
+      return !!(white && sides);
+    }, true);
     expect(spot, "a black line on white paper").toBeDefined();
 
     // 2. Course P: two controls 15 mm below and above it (beyond the circles' clearance), through the API.
-    const api = async <T,>(path: string, data: unknown): Promise<T> => {
-      const res = await page.request.post(`${API}/trpc/${path}`, { headers: { "content-type": "application/json", "x-event-id": "itest" }, data });
-      expect(res.ok(), await res.text()).toBe(true);
-      return ((await res.json()) as { result: { data: T } }).result.data;
-    };
-    const ids: number[] = [];
-    for (const [code, dy] of [["191", -15], ["192", 15]] as const) {
-      const c = await api<{ id: number }>("control.create", { codes: code, xpos: spot!.x, ypos: spot!.y + dy });
-      ids.push(c.id);
-    }
-    await api("course.create", { name: "P", controlIds: ids });
-    await page.reload();
-    await waitForStableMapPanel(page);
-    await page.getByRole("row").filter({ has: page.getByRole("cell", { name: "P", exact: true }) }).getByRole("checkbox").check();
-    await waitForStableMapPanel(page);
-    await expect(viewer).toHaveAttribute("data-course-layer", "gl", { timeout: 30_000 });
-    await expect(canvas).toHaveAttribute("data-ready", "true", { timeout: 60_000 });
-    await expect(viewer.locator('[data-testid="course-leg"][data-course="P"]').first()).toBeAttached({ timeout: 30_000 });
-    // No course symbol is drawn by the SVG under the GL layer.
-    await expect(viewer.locator('[data-testid="control-label"]')).toHaveCount(0);
+    await showCourse(page, viewer, canvas, "P", [["191", { x: spot!.x, y: spot!.y - 15 }], ["192", { x: spot!.x, y: spot!.y + 15 }]]);
 
-    // 3. Zoomed in on the crossing (the wheel keeps it under the cursor): black there, purple 2 mm above and below.
-    for (let n = 0; n < 15 && Number(await viewer.getAttribute("data-px-per-um")) < 0.02; n++) {
-      const q = (await snapshot()).toPage(spot!);
-      await page.mouse.move(q.x, q.y);
-      await page.mouse.wheel(0, -200);
-      await page.waitForTimeout(150);
-    }
-    await expect(canvas).toHaveAttribute("data-ready", "true", { timeout: 30_000 });
-    const near = await snapshot();
+    // 3. Zoomed in on the crossing: black there, purple 2 mm above and below.
+    await zoomOn(page, viewer, canvas, spot!);
+    const near = await snapshot(viewer, canvas);
     const crossing = [-0.1, 0, 0.1].map((dy) => near.rgb({ x: spot!.x, y: spot!.y + dy }));
     expect(crossing.some((c) => c && isDark(c)), `black at the crossing: ${JSON.stringify(crossing)}`).toBe(true);
     for (const dy of [-2, 2]) {
       const c = near.rgb({ x: spot!.x, y: spot!.y + dy });
       expect(c && isPurple(c), `lower purple ${dy} mm from the crossing: ${JSON.stringify(c)}`).toBe(true);
     }
+  });
+
+  // docs/bugfix-lower-purple-under-areas.md: the fixture has no lower purple of its own; the inserted one must go
+  // above its yellow, not under it (the yellow is an area colour, 03 §2.4 / Appendix B).
+  test("the course layer draws lower purple over the map's yellow area", async ({ page }) => {
+    test.setTimeout(180_000);
+    await setMapPipeline("vector");
+    await openEvent(page);
+    await viewerWithMap(page);
+    const { viewer, canvas } = await openCourses(page);
+
+    // 1. A yellow spot with only yellow within 8 mm along the x axis and 2 mm across it.
+    const fit = await snapshot(viewer, canvas);
+    const spot = findSpot(fit, isYellow, (p) =>
+      [-8, -6, -4, -2, 2, 4, 6, 8].every((dx) => [-2, 0, 2].every((dy) => { const c = fit.rgb({ x: p.x + dx, y: p.y + dy }); return !!c && isYellow(c); })));
+    expect(spot, "open yellow ground").toBeDefined();
+
+    // 2. Course Y: a 12 mm leg across it.
+    await showCourse(page, viewer, canvas, "Y", [["193", { x: spot!.x - 6, y: spot!.y }], ["194", { x: spot!.x + 6, y: spot!.y }]]);
+
+    // 3. Zoomed in: the leg is purple over the yellow, the yellow 2 mm beside it unchanged.
+    await zoomOn(page, viewer, canvas, spot!);
+    const near = await snapshot(viewer, canvas);
+    const leg = [-0.1, 0, 0.1].map((dy) => near.rgb({ x: spot!.x, y: spot!.y + dy }));
+    expect(leg.some((c) => c && isPurple(c)), `purple leg over yellow: ${JSON.stringify(leg)}`).toBe(true);
+    const beside = near.rgb({ x: spot!.x, y: spot!.y + 2 });
+    expect(beside && isYellow(beside), `yellow beside the leg: ${JSON.stringify(beside)}`).toBe(true);
   });
 
   test("a legacy event stays on tiles", async ({ page }) => {

@@ -525,7 +525,8 @@ entry per code with a count:
 | `SYMBOL_UNMATCHED` | source symbols with a render but no canonical match (state `unmatched`, method `none`); drawn from their own definition. Template `variant`s and render-less symbols are not counted. |
 | `SYMBOL_SCALE_ANOMALY` | an exact-code line fits its entry only at a different enlargement than the document's factor (`matching.scaleAnomalies`) |
 | `DECISION_UNKNOWN_ENTRY` | a `SymbolDecision` names a library entry id that does not exist |
-| `COLOUR_ORDER_CONFLICT` | the source stacks two palette colours in the opposite order to the palette (`colourStack.conflicts`); the source order is kept |
+| `COLOUR_ORDER_CONFLICT` | the source stacks two palette colours in the opposite order to the palette, or a used colour on the wrong side of lower purple (`colourStack.conflicts`, `docs/map-symbols.md` §9.2 step 5); the source order is kept |
+| `COLOUR_AREA_ABOVE_LOWER_PURPLE` | a used area colour is drawn above lower purple and hides course circles and lines under it (`colourStack.areasAboveLowerPurple`, `docs/map-symbols.md` §9.2 step 5); the source order is kept |
 | `COLOUR_UNCLASSIFIED` | a colour used by symbols is not an IOF colour (`colourStack.unclassified`); its symbols stay as drawn |
 
 ### 3.8 Stage 5: georeference and north (both sources)
@@ -805,7 +806,7 @@ non-contiguous priorities). The rest are shared with §3.6–3.7.
 
 ## 5. Header provenance
 
-`format.importer` is `"ocad-15"` for OCAD sources (`OCAD_IMPORTER_VERSION`;
+`format.importer` is `"ocad-16"` for OCAD sources (`OCAD_IMPORTER_VERSION`;
 `ocad-1` had `render: null` for every source symbol, `ocad-2` carried the
 upload name in the header, `ocad-3` had no matcher, `ocad-4` stored
 ScalePar `d` as `declinationDeg`, ignored `e` and had no
@@ -822,12 +823,12 @@ reference as `SYMBOL_FEATURE_DROPPED` and kept no per-symbol warning detail
 — §3.3, §3.6, A14, `ocad-10` dropped text shadows, vertical text alignment,
 rectangle corner radii and framing lines narrower than the main line,
 shortened pointed lines instead of tapering them and reported a rectangle
-grid as `SYMBOL_FEATURE_DROPPED`, `ocad-11` is the A13 importer that reads them — §3.3, A13; `ocad-11` also fingerprinted Mapper's inverted railway as unmatched, `ocad-12` reads it as 509's construction — `docs/map-symbols.md` §8.1, A15; `ocad-12` had no tab stops or rectangle frame and warned line text, `ocad-13` is the B8 importer — §3.3; `ocad-14` fingerprints the main stroke's cap / join — `docs/map-symbols.md` §8.1, C9; `ocad-14` drew north-oriented point symbols north-up even where their objects carry an angle, `ocad-15` turns them — §3.3, C10) and `"omap-8"`
+grid as `SYMBOL_FEATURE_DROPPED`, `ocad-11` is the A13 importer that reads them — §3.3, A13; `ocad-11` also fingerprinted Mapper's inverted railway as unmatched, `ocad-12` reads it as 509's construction — `docs/map-symbols.md` §8.1, A15; `ocad-12` had no tab stops or rectangle frame and warned line text, `ocad-13` is the B8 importer — §3.3; `ocad-14` fingerprints the main stroke's cap / join — `docs/map-symbols.md` §8.1, C9; `ocad-14` drew north-oriented point symbols north-up even where their objects carry an angle, `ocad-15` turns them — §3.3, C10; `ocad-15` anchored an inserted lower purple under the first line or point colour, so one dark-green colour at the bottom of the area block put it under every area, and mapped an "area"-named dark green to the hedge line colour — `docs/map-symbols.md` §9, C14) and `"omap-9"`
 for Mapper sources (`OMAP_IMPORTER_VERSION`; `omap-1` stored `paperOrigin`
 unrounded, `omap-2` is `ocad-7`'s matcher, `omap-3` reported stale
 combined-part references as `SYMBOL_FEATURE_DROPPED` and kept no
 per-symbol detail, `omap-4` drew pointed caps untapered and dropped shadow
-framing and a combined symbol's second border pair — §4.3, A13, `omap-5` is the A13 importer, `omap-6` is `ocad-12`'s matcher, A15; `omap-6` kept a box text's anchor only and had no tab stops, `omap-7` is the B8 importer — §4.2, §4.3; `omap-8` is `ocad-14`'s matcher, C9). A header `warnings` change alone bumps the
+framing and a combined symbol's second border pair — §4.3, A13, `omap-5` is the A13 importer, `omap-6` is `ocad-12`'s matcher, A15; `omap-6` kept a box text's anchor only and had no tab stops, `omap-7` is the B8 importer — §4.2, §4.3; `omap-8` is `ocad-14`'s matcher, C9; `omap-9` is `ocad-16`'s colour alignment, C14). A header `warnings` change alone bumps the
 version — `ocad-6` did — while the report-only `warningDetails` would not.
 Documents of either earlier version have no `georeference` / `north` in
 their report; the dedup only reuses current-version documents, so the
@@ -917,7 +918,7 @@ run; the unsupported ones are listed the same way (`!` lines).
 | `by-design` | `TEMPLATES_DROPPED`, `LAYOUT_OBJECTS_DROPPED`, `OBJECT_TAGS_DROPPED`, `PARTS_MERGED`, `HELPER_SYMBOLS_HIDDEN`, `RECTANGLE_GRID_DROPPED` | dropped on purpose |
 | `source-error` | `SYMBOL_REFERENCE_INVALID`, `MISSING_SYMBOL`, `DUPLICATE_SYMBOL_NUMBER`, `SYMBOL_COLOUR_UNKNOWN`, `SYMBOL_EMPTY`, `EMPTY_GEOMETRY_DROPPED`, `EMPTY_TEXT_DROPPED`, `MAP_SCALE_MISSING`, `CRS_UNRESOLVED` | the file is inconsistent; nothing is missing from the document that the file defines |
 | `substitution` | `FONT_SUBSTITUTED` | a font was replaced |
-| `outcome` | `SYMBOL_UNMATCHED`, `SYMBOL_SCALE_ANOMALY`, `DECISION_UNKNOWN_ENTRY`, `COLOUR_ORDER_CONFLICT`, `COLOUR_UNCLASSIFIED`, the `CRT_*` codes | a matching, colour-stack, decision or CRT result |
+| `outcome` | `SYMBOL_UNMATCHED`, `SYMBOL_SCALE_ANOMALY`, `DECISION_UNKNOWN_ENTRY`, `COLOUR_ORDER_CONFLICT`, `COLOUR_AREA_ABOVE_LOWER_PURPLE`, `COLOUR_UNCLASSIFIED`, the `CRT_*` codes | a matching, colour-stack, decision or CRT result |
 | `reader` | `READER_WARNING` | reader noise (texts in `readerWarnings`) |
 
 A new warning code gets a row in this table and an entry in `WARNING_CLASS`

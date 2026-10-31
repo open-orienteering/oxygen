@@ -576,7 +576,7 @@ S2 judges the print shop's view of the first two.
 | `size-aware-cuts` | automatic circle and leg cuts from the pinned document with clearance = feature radius + line width / 2 + 0.25 mm | user, 2026-10-24 (C5 question) |
 | `rotated-overprint` | on a rotated window, map-anchored images, control numbers and map text turn with the map (legacy drew the overprint upright in page space) | C2, §7.4 |
 | `image-rgb` | images stay DeviceRGB in `cmyk` (CMYK images are the profiles row) | C2, §7.4 |
-| `library-symbols`, `stack-order` | the base map as the window preview draws it (§10.4): matched symbols drawn by the library, every `map-rendering.md` §6.4 code, and the document's own colour order — on `e2e/test.ocd` the stack puts yellow above lower purple, so legs lie under the yellow area | 2026-10-23 slice C split; C6 |
+| `library-symbols`, `stack-order` | the base map as the window preview draws it (§10.4): matched symbols drawn by the library, every `map-rendering.md` §6.4 code, and the document's own colour order — where a map draws an area colour above lower purple (`COLOUR_AREA_ABOVE_LOWER_PURPLE`) or a 100 % line colour under it, legs follow that order (until `ocad-16`, C14, the inserted lower purple also went under every area on `e2e/test.ocd` and the club maps) | 2026-10-23 slice C split; C6 |
 
 Geometry is not on the list: paper size, frame, window, scale, rotation
 and control positions agree with the legacy page (the integration and

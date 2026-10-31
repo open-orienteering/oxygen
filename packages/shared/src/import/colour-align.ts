@@ -13,7 +13,7 @@
 
 import type { DocumentColour } from "../map-document/header.js";
 import { type PaletteEdition, paletteFor, type SpecId } from "../symbol-library/palette.js";
-import { type ColourClass, classifyColour, type ClassifiedColour, paletteClass, paletteEntryFor, sameClass } from "./colour-class.js";
+import { AREA_PALETTE_IDS, type ColourClass, classifyColour, type ClassifiedColour, nameKind, paletteClass, paletteEntryFor, sameClass } from "./colour-class.js";
 
 export interface SourceColourInfo {
   index: number;
@@ -67,7 +67,11 @@ export interface AlignmentInput {
   edition: PaletteEdition;
   /** Palette ids referenced by applied canonical matches. */
   needed: ReadonlySet<string>;
-  /** Objects per source colour index — picks among duplicate source colours. */
+  /**
+   * Objects per source colour index — picks among duplicate source colours;
+   * colours no object uses neither steer lower purple nor raise its warnings.
+   * Absent: every colour counts.
+   */
   usage?: ArrayLike<number>;
 }
 
@@ -80,6 +84,8 @@ export interface AlignmentResult {
   inserted: string[];
   aliased: { paletteId: string; viaPaletteId: string; sourceNumber?: number }[];
   conflicts: { colour: string; reason: string }[];
+  /** Area colours (palette area entries, or named "area" / "ytobjekt") drawn above lower purple: they hide the course overprint. */
+  areasAboveLowerPurple: { name: string; sourceNumber?: number; paletteId?: string }[];
 }
 
 type Slot = { kind: "source"; index: number } | { kind: "palette"; id: string };
@@ -136,6 +142,17 @@ export function alignColourStack(input: AlignmentInput): AlignmentResult {
     toInsert.push(id);
   }
 
+  // Which side of lower purple a slot belongs on (docs/map-symbols.md §9.2 step 4); null when it does not take part.
+  const lowerRank = rank.get("purple-lower")!;
+  const counts = (i: number) => !input.usage || usage(i) > 0;
+  const sideOf = (s: Slot): Side => {
+    if (s.kind === "palette") return paletteSide(s.id, rank, lowerRank);
+    if (!counts(s.index)) return null;
+    const id = infos[s.index]?.paletteId;
+    if (id) return paletteSide(id, rank, lowerRank);
+    return nameKind(colours[s.index].name) === "area" ? "below-area" : null;
+  };
+
   // Step 3b/4: insert in palette order, each next to its nearest already-placed neighbour.
   const stack: Slot[] = colours.map((_, index) => ({ kind: "source", index }));
   const posOf = (id: string): number => {
@@ -150,9 +167,7 @@ export function alignColourStack(input: AlignmentInput): AlignmentResult {
     if (id === "purple-upper") {
       at = stack.length;
     } else if (id === "purple-lower") {
-      // Directly below the first source colour the palette puts above lower purple.
-      const above = stack.findIndex((s) => s.kind === "source" && [...(standsFor.get(s.index) ?? [])].some((p) => (rank.get(p) ?? -1) > r));
-      at = above < 0 ? stack.length : above;
+      at = lowerPurpleAnchor(stack.map(sideOf));
     } else {
       let lower: string | undefined, upper: string | undefined;
       for (const p of positioned) {
@@ -203,9 +218,27 @@ export function alignColourStack(input: AlignmentInput): AlignmentResult {
     }
   }
 
-  // Step 5: palette ids whose relative order in the stack disagrees with the palette (source order kept).
+  // Step 5a: every counted colour against lower purple — the side the palette puts it on (source order kept).
   const conflicts: AlignmentResult["conflicts"] = [];
-  const ordered = [...index.entries()].filter(([id]) => rank.has(id)).sort((a, b) => a[1] - b[1]);
+  const areasAboveLowerPurple: AlignmentResult["areasAboveLowerPurple"] = [];
+  const lowerAt = stack.findIndex((s) => (s.kind === "palette" ? s.id === "purple-lower" : s.index === placed.get("purple-lower")));
+  stack.forEach((slot, pos) => {
+    const side = sideOf(slot);
+    if (!side || pos === lowerAt || (side === "above") === (pos > lowerAt)) return;
+    const id = slot.kind === "palette" ? slot.id : infos[slot.index]?.paletteId;
+    const name = slot.kind === "palette" ? paletteById.get(slot.id)!.name : colours[slot.index].name;
+    if (side === "below-area") {
+      const e: AlignmentResult["areasAboveLowerPurple"][number] = { name };
+      if (slot.kind === "source" && colours[slot.index].sourceNumber !== undefined) e.sourceNumber = colours[slot.index].sourceNumber;
+      if (id) e.paletteId = id;
+      areasAboveLowerPurple.push(e);
+    } else {
+      conflicts.push({ colour: id!, reason: `source places "${name}" ${side === "above" ? "below" : "above"} purple-lower; the palette has the reverse order` });
+    }
+  });
+
+  // Step 5b: palette ids whose relative order in the stack disagrees with the palette (lower purple is 5a's).
+  const ordered = [...index.entries()].filter(([id]) => rank.has(id) && id !== "purple-lower").sort((a, b) => a[1] - b[1]);
   const ranks = ordered.map(([id]) => rank.get(id)!);
   const keep = longestIncreasingSubsequence(ranks);
   ordered.forEach(([id, pos], i) => {
@@ -215,7 +248,51 @@ export function alignColourStack(input: AlignmentInput): AlignmentResult {
     conflicts.push({ colour: id, reason: other ? `source places ${id} ${other[1] < pos ? "above" : "below"} ${other[0]}; the palette has the reverse order` : "out of palette order" });
   });
 
-  return { colours: out, remap, index, inserted, aliased, conflicts };
+  return { colours: out, remap, index, inserted, aliased, conflicts, areasAboveLowerPurple };
+}
+
+/** "above": the palette draws it above lower purple; "below-area": an area colour; "below": any other colour the palette puts below. */
+type Side = "above" | "below-area" | "below" | null;
+
+function paletteSide(id: string, rank: ReadonlyMap<string, number>, lowerRank: number): Side {
+  const r = rank.get(id);
+  if (r === undefined || id === "purple-lower") return null;
+  if (r > lowerRank) return "above";
+  return AREA_PALETTE_IDS.has(id) ? "below-area" : "below";
+}
+
+/**
+ * Where an inserted lower purple goes (docs/map-symbols.md §9.2 step 4):
+ * the gap with the fewest misplaced colours — area colours above it plus
+ * colours the palette puts above lower purple below it — then the fewest
+ * areas above, then the fewest other below-purple colours (road infill and
+ * outline) above, then the lowest gap: directly above the highest area
+ * colour it keeps below. One stray colour (a dark-green "area" kept at the
+ * bottom of the area block, a yellow on top of the stack) does not decide
+ * the place. Without area colours: directly below the first colour the
+ * palette puts above lower purple, else on top.
+ */
+function lowerPurpleAnchor(sides: readonly Side[]): number {
+  if (!sides.includes("below-area")) {
+    const above = sides.indexOf("above");
+    return above < 0 ? sides.length : above;
+  }
+  // Gap g sits below sides[g]: colours at ≥ g end up above lower purple, those at < g below it.
+  let areasAbove = sides.filter((s) => s === "below-area").length;
+  let othersAbove = sides.filter((s) => s === "below").length;
+  let aboveBelow = 0;
+  const key = (): [number, number, number] => [areasAbove + aboveBelow, areasAbove, othersAbove];
+  let best = { at: 0, key: key() };
+  for (let g = 1; g <= sides.length; g++) {
+    const s = sides[g - 1];
+    if (s === "below-area") areasAbove--;
+    else if (s === "below") othersAbove--;
+    else if (s === "above") aboveBelow++;
+    const k = key();
+    const i = k.findIndex((v, j) => v !== best.key[j]);
+    if (i >= 0 && k[i] < best.key[i]) best = { at: g, key: k };
+  }
+  return best.at;
 }
 
 function longestIncreasingSubsequence(values: number[]): Set<number> {

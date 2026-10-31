@@ -88,20 +88,21 @@ describe("renderDocumentWindow", () => {
     expect(b).toBeLessThan(120); // yellow, not white
   });
 
-  it("ink: the fixture stack puts yellow above purple-lower, so yellow stays and paper is transparent", async () => {
+  it("ink: lower purple sits above the fixture's yellow, so yellow leaves the ink and black stays (bugfix-lower-purple-under-areas)", async () => {
     const img = await decode(await renderDocumentWindow(prepared, { window, widthPx: 400, heightPx: 200, layer: "ink" }));
     const [yx, yy] = px(window, pxPerMm, 0, 10);
-    expect(img.at(yx, yy)).toEqual(expect.arrayContaining([255]));
-    expect(img.at(yx, yy)[3]).toBe(255);
-    // Left of the yellow blob (x < −74 mm): bare paper, nothing in the ink.
-    const w2: MapWindow = { minX: -90, minY: 0, width: 10, height: 10 };
-    const outside = await decode(await renderDocumentWindow(prepared, { window: w2, widthPx: 100, heightPx: 100, layer: "ink" }));
-    expect(outside.at(50, 50)[3]).toBe(0);
+    expect(img.at(yx, yy)[3]).toBe(0);
+    // The building (black, 48–58 × 39–46 mm) is drawn above lower purple.
+    const w2: MapWindow = { minX: 45, minY: 36, width: 16, height: 13 };
+    const building = await decode(await renderDocumentWindow(prepared, { window: w2, widthPx: 160, heightPx: 130, layer: "ink" }));
+    const [bx, by] = px(w2, pxPerMm, 53, 42.5);
+    expect(building.at(bx, by)[3]).toBe(255);
+    expect(building.at(bx, by).slice(0, 3).every((v) => v < 160)).toBe(true);
   });
 
   it("ink: colours at or below the boundary are absent", async () => {
-    // Move purple-lower up to the yellow row: yellow (3) and everything under it leave the ink.
-    const colours = doc.header.colours.map((c, i) => ({ ...c, paletteIds: i === 3 ? ["purple-lower"] : [] }));
+    // Move purple-lower down to the yellow row: yellow (2) and everything under it leave the ink.
+    const colours = doc.header.colours.map((c, i) => ({ ...c, paletteIds: i === 2 ? ["purple-lower"] : [] }));
     const raised = { ...prepared, colours };
     const img = await decode(await renderDocumentWindow(raised, { window, widthPx: 400, heightPx: 200, layer: "ink" }));
     const [yx, yy] = px(window, pxPerMm, 0, 10);

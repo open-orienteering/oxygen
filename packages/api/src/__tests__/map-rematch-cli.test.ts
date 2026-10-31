@@ -25,10 +25,10 @@ describe("staleReason (docs/map-storage.md §6.9)", () => {
     expect(staleReason({ importerVersion: "omap-6", libraryVersion: CURRENT }, false)).toBe("importer");
     // ocad-14 drew north-oriented point symbols north-up where their objects carry an angle (C10).
     expect(staleReason({ importerVersion: "ocad-14", libraryVersion: CURRENT }, true)).toBe("importer");
-    expect(staleReason({ importerVersion: "ocad-15", libraryVersion: "none" }, true)).toBe("library");
-    expect(staleReason({ importerVersion: "ocad-15", libraryVersion: "ISOM2017-2@2026.10.1" }, true)).toBe("library");
-    expect(staleReason({ importerVersion: "omap-8", libraryVersion: CURRENT }, false)).toBe("decisions");
-    expect(staleReason({ importerVersion: "ocad-15", libraryVersion: CURRENT }, true)).toBeNull();
+    expect(staleReason({ importerVersion: "ocad-16", libraryVersion: "none" }, true)).toBe("library");
+    expect(staleReason({ importerVersion: "ocad-16", libraryVersion: "ISOM2017-2@2026.10.1" }, true)).toBe("library");
+    expect(staleReason({ importerVersion: "omap-9", libraryVersion: CURRENT }, false)).toBe("decisions");
+    expect(staleReason({ importerVersion: "ocad-16", libraryVersion: CURRENT }, true)).toBeNull();
   });
 });
 
