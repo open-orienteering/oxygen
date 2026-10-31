@@ -195,8 +195,8 @@ y-down convention.
 `window` (`mapWindowForFrame`, rotation clockwise on the page), `map`
 (`objects` near the window, the document's `symbols`, its
 `CourseDocumentContext`, its `cutFeatures`), `course` (structure, sites,
-appearance, view options — the course layer's input without the
-document, `docs/course-layer.md` §2), `objects` (layout objects of both
+appearance, view options, filter regions — the course layer's input
+without the document, `docs/course-layer.md` §2), `objects` (layout objects of both
 anchors), `textValues`, `description` (§6.2, or null), `label`, `geo`
 (§7.3, or null). `resolveSheet` (§5) builds everything but `map` and
 `geo`; `pdf-page.ts` adds them from the pinned document.
@@ -232,7 +232,11 @@ Base-map scale and meridian tilt come from `getBaseMapInfo` only (§10.1).
 2. `courseRenderInput(map, layer)` → one `symbolise` call: lower purple
    under the line art, map-anchored white-outs at upper white, upper
    purple and the layout objects' colours on top — the stack's order, no
-   sandwich, nothing drawn twice.
+   sandwich, nothing drawn twice. The layer's filter regions go into the
+   same call (`regions`, `regionObjectLimit`; `map-rendering.md` §4.11):
+   hidden objects leave the stream, clipped passes carry masks that the
+   operators write as `q <frame + region> W* n … Q` (`map-rendering.md`
+   §5.3).
 3. Emitted as `q <frame> re W n  q <T_map> cm 4 M <passes> Q  [q <T_map>
    cm <map images> Q]  Q`; coordinates integers in the layer unit
    (≤ 5 µm printed, a whole fraction of 10 µm; C11) relative to the
@@ -1055,8 +1059,9 @@ symbols on the window, unexplained ÷ ink and their codes:
   PDF/X-4 and output intents, `colourOverrides`, `minLineWidthMm`, bleed
   and crop marks (the marks layer), CMYK images, the test sheet — a later
   row (decision (2), 2026-10-23).
-- **Filter regions by symbol** (05 §5.3, 04 §7): the stream has no region
-  concept yet; `clipOperators` is the primitive the composer will use.
+- **Filter regions from the print route**: the composer and the
+  operators draw them (D3, `map-rendering.md` §4.11, §5.3); the print
+  route passes none until D2 stores them (`course_objects`).
 - **One window shared by several pages** (05 §5.10): two sheets on the
   same window (a course and its all-controls sheet, forked variants)
   re-symbolise and re-emit the map content per page; a shared form

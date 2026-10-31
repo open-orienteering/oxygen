@@ -219,6 +219,7 @@ clockwise, the gap sweeping clockwise from `start` to `end`), fractions
 | `appearance` | `{ circle?, line?, number?, numberStyle? }`, multipliers (1 = the spec) | `appearanceFromTemplate(template.appearance)`; the template's `purple` is not read (the purple is the stack's row) |
 | `viewOptions` | `{ allControls?, labelMode?, overprintScale?, window?, textValues? }` | the view: all-controls, label mode, print enlargement, the frame polygon for white-out-outside, `{course}` placeholder values |
 | `cutFeatures` | `{ x, y, r? }[]` (`r` the drawn symbol's radius) | `cutFeaturesOfDocument(doc)` (vector events), the legacy OCAD parse (C5, §4.2) |
+| `regions` | `{ rings: MapPoint[][], mode: "clip" \| "hide", symbols: "all" \| number[] \| { colours }, invert? }[]` — filter regions over the map, `rings` outer first; symbol indices are the document's, colours its own stack's | nothing yet: D2's `course_objects` (`filter_region`); the layer returns them as `CourseLayer.regions` (µm paths, colours on the completed stack) and `courseRenderInput` passes them to `symbolise` with the document's object count as `regionObjectLimit` — the rule is `map-rendering.md` §4.11 |
 
 Free order is the structure's `orderMode` (a property of the course, not
 of the view). A site at the origin (0, 0) is unpositioned and skipped,
@@ -573,7 +574,9 @@ draws the SVG course overlay over the GL map instead (§1).
   `courses.structure`, variations, map exchanges, crossing and map-issue
   points, per-course hidden numbers, site-level manual `circle_gaps`
   (08 §4.2), corridors, `LegProps.path` replacing the v1 leg input, the
-  08 §4.5 `course_objects` table with scopes and filter regions.
+  08 §4.5 `course_objects` table with scopes; stored filter regions
+  feeding `regions` (D2; the rule and the backends are D3's,
+  `map-rendering.md` §4.11).
 - **Upper white at import**: insert the row in stage-7 alignment
   (`colour-align.ts`) at the next importer bump, so `courseColourStack`
   never has to remap.
