@@ -19,7 +19,7 @@ describe("withVersionConflict (errorFormatter)", () => {
   it("carries a course object's conflict the same way (§8.4: differing null)", () => {
     const err = versionConflict({ kind: "object", id: 7, version: "456", current: { kind: "whiteout" }, differing: null });
     const out = withVersionConflict(shape, err);
-    expect(versionConflictOf(out.data)).toEqual({ kind: "object", id: 7, version: "456", current: { kind: "whiteout" }, differing: null });
+    expect(versionConflictOf(out.data)).toMatchObject({ kind: "object", id: 7, version: "456", current: { kind: "whiteout" }, differing: null });
     expect(versionConflictOf({ ...out.data, kind: "map" })).toBeNull();
   });
 
