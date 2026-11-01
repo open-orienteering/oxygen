@@ -18,6 +18,7 @@ import {
   ControlStatus,
   pruneDescriptionInstructions,
   course as courseShared,
+  encodeHlc,
 } from "@oxygen/shared";
 
 const orderModeSchema = z.enum(
@@ -96,7 +97,9 @@ import {
   uuidsOfPublicIds,
 } from "../course-structure.js";
 import { baseVersionSchema } from "../version-conflict.js";
-import { legGapsOfFeatures } from "../course-import-structure.js";
+import { collectImportedObjects, legGapsOfFeatures } from "../course-import-structure.js";
+import { nextServerHlc } from "../serverClock.js";
+import { writeImportedObjects } from "../course-import-objects.js";
 
 /** Course-level description-sheet instructions (specials + finish). */
 const descriptionInstructionsSchema = z
@@ -2289,6 +2292,19 @@ export const courseRouter = router({
         await persistStructure(ctx.db, eventId, courseShared.linearStructure(courseUuid, items, { orderMode: pc.orderMode ?? "ordered" }) as courseShared.StoredCourseStructure);
       }
 
+      // The file's course-level lines and areas (707 / 708 / 709 / 711) are
+      // course objects, so nothing of an imported course lives only in the
+      // GeoJSON. An OCD import replaces the ones an earlier import wrote.
+      if (geometrySource === "ocd" && !skipPositions) {
+        await writeImportedObjects(
+          ctx.db,
+          eventId,
+          collectImportedObjects(new Map(Object.entries(courseGeometry))),
+          (name) => courseIdMap.get(name),
+          { replace: true },
+        );
+      }
+
       // A position-less import must not leave geometry drawn from the
       // file's unusable coordinates (or from a previous import of the
       // same course names). Derive it from whatever positions the
@@ -2345,6 +2361,14 @@ export const courseRouter = router({
       // rather than wrapping the whole 300-line import in a transaction —
       // a crash in between loses only the ship, and re-running the import
       // (operator-driven, idempotent by name-matching) re-emits.
+      // The rows the import wrote take the entry's own HLC as their token
+      // (course-layer.md §7), stamped before the payloads are serialised so
+      // a peer applying the entry holds the same one: an editor open on
+      // any of them is told on its next write.
+      const importHlc = nextServerHlc();
+      const importToken = encodeHlc(importHlc);
+      await ctx.db.course.updateMany({ where: { id: { in: [...courseIdMap.values()] } }, data: { version: importToken } });
+      await ctx.db.control.updateMany({ where: { id: { in: [...controlIdMap.values()] } }, data: { version: importToken } });
       const activeControls = await ctx.db.control.findMany({
         where: { eventId, removed: false },
         select: { id: true },
@@ -2363,6 +2387,7 @@ export const courseRouter = router({
       }
       await appendJournal(ctx.db, {
         eventId,
+        hlc: importHlc,
         type: "reference.imported",
         payload: {
           replaceAll: input.replaceAll,
