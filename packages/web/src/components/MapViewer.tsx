@@ -3255,6 +3255,17 @@ export function MapViewer({
         </ul>
       )}
 
+      {/* Shared hit-testing has no SVG targets: every editor site as DOM, for tests (docs/course-editor.md §5). */}
+      {sharedHit && (
+        <ul data-testid="editor-sites" hidden>
+          {controls.filter((c) => c.visible !== false && (c.x !== 0 || c.y !== 0)).map((c) => {
+            const pend = pendingMoves.get(c.id);
+            const at = editorDragPos?.id === c.id ? editorDragPos
+              : pend && Math.abs(c.x - pend.from.x) < 1e-9 && Math.abs(c.y - pend.from.y) < 1e-9 ? pend.to : c;
+            return <li key={c.id} data-testid="editor-site" data-control-id={c.id} data-control-code={c.code} data-type={c.type} data-x={at.x} data-y={at.y} />;
+          })}
+        </ul>
+      )}
       {/* Editor contextual actions — unrotated HTML, anchored at the
           selection/phantom */}
       {editorMenu}
