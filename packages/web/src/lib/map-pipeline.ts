@@ -29,6 +29,22 @@ export function resolveMapPipeline(
   return "vector";
 }
 
+/**
+ * Which course editor `/:nameId/course-editor` mounts (§3.6): the new one
+ * on the GL canvas for `vector ∧ pinned ∧ map.editor.vector`, the legacy
+ * `CourseEditorPage` otherwise — including where the viewer itself falls
+ * back to tiles. The flag is temporary (slice D) and removed in E.
+ */
+export function courseEditorMount(
+  eventPipeline: MapPipeline | undefined,
+  documentHash: string | null | undefined,
+  editorVector: boolean | undefined,
+  context: MapPipelineContext = { webgl2: true, allowLegacy: true },
+): MapPipeline {
+  if (editorVector !== true) return "legacy";
+  return resolveMapPipeline(eventPipeline, documentHash, context);
+}
+
 let webgl2Probe: boolean | null = null;
 
 /** Whether this browser can create a WebGL2 context; probed once per page. */
