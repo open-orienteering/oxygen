@@ -1,6 +1,6 @@
 /**
- * The new editor's writes (docs/course-editor.md §3): every course and
- * control write sends the newest token this client has seen
+ * The new editor's writes (docs/course-editor.md §3, §7): every course,
+ * control and course-object write sends the newest token this client has seen
  * (`VersionBook`), each result advances it, and a version `CONFLICT` is
  * decided by the G1 client rules (`conflict.ts`):
  *
@@ -28,6 +28,16 @@ export interface ControlUpdateInput {
   baseVersion?: string;
 }
 
+/** A course object's writable fields (`courseObject.update`, docs/course-layer.md §8.4). */
+export interface ObjectUpdateInput {
+  id: number;
+  geometry?: course.CourseObject["geometry"];
+  props?: course.CourseObject["props"];
+  scope?: course.CourseObject["scope"];
+}
+
+export type ObjectCreateInput = Pick<course.CourseObject, "kind" | "geometry" | "props" | "scope">;
+
 /** What the editor needs of the tRPC client (structural: `utils.client` fits). */
 export interface EditorClient {
   course: {
@@ -39,6 +49,14 @@ export interface EditorClient {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any -- structural fit for the router's input type
     update: { mutate(input: any): Promise<{ version: string }> };
     delete: { mutate(input: { id: number }): Promise<{ courses: { id: number; version: string }[] }> };
+  };
+  courseObject?: {
+    // The kinds' props are a discriminated union the router validates; the editor builds them per kind.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- structural fit for the router's input type
+    create: { mutate(input: any): Promise<course.CourseObject> };
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- as above
+    update: { mutate(input: any): Promise<course.CourseObject> };
+    delete: { mutate(input: { id: number; baseVersion?: string }): Promise<unknown> };
   };
 }
 
@@ -67,7 +85,7 @@ export class EditorWrites {
 
   /** Sends `send(token)`; on a version conflict decides, re-sends once on `rebase`, throws `EditorConflict` otherwise. */
   private async withToken<T>(
-    kind: "course" | "control",
+    kind: VersionedKind,
     id: number,
     write: { fields: readonly string[]; base?: Pt },
     send: (baseVersion: string | undefined) => Promise<T>,
@@ -119,5 +137,30 @@ export class EditorWrites {
     const res = await this.client.control.delete.mutate({ id });
     this.versions.seedAll("course", res.courses);
     return res;
+  }
+
+  private objects() {
+    if (!this.client.courseObject) throw new Error("course objects are not available");
+    return this.client.courseObject;
+  }
+
+  /** `courseObject.create` (no token in; the object's out). */
+  async createObject(input: ObjectCreateInput): Promise<course.CourseObject> {
+    const res = await this.objects().create.mutate(input);
+    this.versions.seed("object", res.id, res.version);
+    return res;
+  }
+
+  /** `courseObject.update` with the object's token; a conflict is always a refresh (§8.4: no base to diff). */
+  async updateObject(input: ObjectUpdateInput): Promise<course.CourseObject> {
+    const fields = Object.keys(input).filter((k) => k !== "id");
+    const res = await this.withToken("object", input.id, { fields }, (baseVersion) => this.objects().update.mutate({ ...input, baseVersion }));
+    this.versions.seed("object", res.id, res.version);
+    return res;
+  }
+
+  /** `courseObject.delete` with the object's token. */
+  async deleteObject(id: number): Promise<void> {
+    await this.withToken("object", id, { fields: ["delete"] }, (baseVersion) => this.objects().delete.mutate({ id, baseVersion }));
   }
 }

@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import type { course } from "@oxygen/shared";
-import { appendSite, controlSequence, insertSite, moveVisit, removeSite, removeVisit, setRole } from "../structure-edit";
+import { appendSite, controlSequence, insertSite, moveVisit, removeSite, removeVisit, setRole, setLegGaps, setNumberHidden } from "../structure-edit";
 
 type S = course.WireCourseStructure;
 const KIND: Record<number, "start" | "finish" | "control"> = { 1: "start", 2: "start", 9: "finish", 8: "finish" };
@@ -57,5 +57,24 @@ describe("structure edits (docs/course-editor.md §4)", () => {
     // An edit elsewhere keeps the leg.
     const kept = appendSite(s, 40, kindOf);
     expect(kept.items[1]).toEqual({ siteId: 32, leg: { gaps: [{ from: 0.2, to: 0.3 }] } });
+  });
+});
+
+describe("numberHidden and leg gaps (docs/course-editor.md §6)", () => {
+  const base = { version: 1 as const, id: "c", orderMode: "ordered" as const, items: [{ siteId: 1 }, { siteId: 31 }, { siteId: 32 }, { siteId: 31 }, { siteId: 2 }] };
+
+  it("hides every visit's number and shows it again", () => {
+    const hidden = setNumberHidden(base, 31, true);
+    expect(hidden.items.filter((i) => "numberHidden" in i && i.numberHidden)).toHaveLength(2);
+    expect(setNumberHidden(hidden, 31, false)).toEqual(base);
+  });
+
+  it("sets and clears the gaps of the leg into an item, keeping its other leg props", () => {
+    const g = setLegGaps(base, 2, [{ from: 0.4, to: 0.5 }]);
+    expect(g.items[2]).toEqual({ siteId: 32, leg: { gaps: [{ from: 0.4, to: 0.5 }] } });
+    const styled = { ...base, items: base.items.map((i, k) => (k === 2 ? { ...i, leg: { style: "line" as const, gaps: [{ from: 0, to: 0.1 }] } } : i)) };
+    expect(setLegGaps(styled, 2, []).items[2]).toEqual({ siteId: 32, leg: { style: "line" } });
+    expect(setLegGaps(g, 2, []).items[2]).toEqual({ siteId: 32 });
+    expect(setLegGaps(base, 0, [{ from: 0, to: 1 }])).toBe(base);
   });
 });

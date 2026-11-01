@@ -284,6 +284,8 @@ export interface MapViewerEditorProps {
    */
   draftObjects?: readonly import("@oxygen/shared").course.CourseObject[] | null;
   draftFast?: boolean;
+  /** The layer's derivation and course symbol sizes, on every course reply: the ghost's true size, the gap tool's effective gaps. */
+  onCourseInfo?: ((info: Pick<CourseInfo, "derivation" | "metrics"> | null) => void) | null;
   /** A view request: fit these controls, or centre on a point (paper mm); acted on when `key` changes. */
   viewRequest?: { key: number; fit?: readonly string[]; centre?: { x: number; y: number } } | null;
 }
@@ -1062,6 +1064,11 @@ export function MapViewer({
     fitToControlBounds(visibleControls, hideControls ? 0.02 : 0.05);
     hasInitialFitRef.current = true;
   }, [viewport, controls, initialFitControls, hideControls, fitToControlBounds]);
+
+  const onCourseInfo = editor?.onCourseInfo;
+  useEffect(() => {
+    onCourseInfo?.(courseInfo ? { derivation: courseInfo.derivation, metrics: courseInfo.metrics } : null);
+  }, [courseInfo, onCourseInfo]);
 
   // ─── Editor view requests (docs/course-editor.md §6.5: F, Tab) ──
   const viewRequestKeyRef = useRef<number | null>(null);
