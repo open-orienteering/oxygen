@@ -172,3 +172,43 @@ export async function editorReady(page: Page): Promise<Locator> {
   await expect(page.getByTestId("map-vector-layer")).toHaveAttribute("data-ready", "true", { timeout: 60_000 });
   return viewer;
 }
+
+/** Points of the editor's UI-layer shapes (`editor-tool-layer`) by test id, paper mm. */
+export async function toolShapes(page: Page, testId: string): Promise<{ x: number; y: number; data: Record<string, string> }[]> {
+  return page.getByTestId("editor-tool-layer").getByTestId(testId).evaluateAll((els) => els.map((el) => ({
+    x: Number(el.getAttribute("data-x")),
+    y: Number(el.getAttribute("data-y")),
+    data: Object.fromEntries([...el.attributes].filter((a) => a.name.startsWith("data-")).map((a) => [a.name.slice(5), a.value])),
+  })));
+}
+
+/**
+ * Dark pixels of the GL canvas inside a paper rectangle (mm), sampled every 0.1 mm: the map's black ink there.
+ * The canvas alone is captured (the overlays hidden), as `map-vector-layer.spec.ts` does.
+ */
+export async function inkIn(page: Page, rect: { minX: number; minY: number; maxX: number; maxY: number }): Promise<number> {
+  const { PNG } = await import("pngjs");
+  const canvas = page.getByTestId("map-vector-layer");
+  const style = "body * { visibility: hidden !important } [data-testid='map-vector-layer'] { visibility: visible !important }";
+  const png = PNG.sync.read(await canvas.screenshot({ style }));
+  const cb = (await canvas.boundingBox())!;
+  const k = png.width / cb.width;
+  // The view after the screenshot (taking it may scroll the canvas into view).
+  const v = await paperView(page);
+  const rot = (v.rotDeg * Math.PI) / 180;
+  const seen = new Set<number>();
+  let n = 0;
+  for (let x = rect.minX; x <= rect.maxX; x += 0.1) {
+    for (let y = rect.minY; y <= rect.maxY; y += 0.1) {
+      const ix = (x * 1000 - v.centreX) * v.pxPerUm, iy = -(y * 1000 - v.centreY) * v.pxPerUm;
+      const q = { x: v.box.x + v.box.width / 2 + ix * Math.cos(rot) - iy * Math.sin(rot), y: v.box.y + v.box.height / 2 + ix * Math.sin(rot) + iy * Math.cos(rot) };
+      const px = Math.round((q.x - cb.x) * k), py = Math.round((q.y - cb.y) * k);
+      if (px < 0 || py < 0 || px >= png.width || py >= png.height) continue;
+      const i = (py * png.width + px) * 4;
+      if (seen.has(i)) continue;
+      seen.add(i);
+      if (Math.max(png.data[i], png.data[i + 1], png.data[i + 2]) < 110) n++;
+    }
+  }
+  return n;
+}

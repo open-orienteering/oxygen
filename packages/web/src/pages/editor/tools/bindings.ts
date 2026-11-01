@@ -298,7 +298,7 @@ export function gapBinding(o: GapOptions): EditorToolBinding {
   const shapes: ToolShape[] = [];
   const pending = o.gesture.current?.kind === "gap" ? o.gesture.current : null;
   if (t.kind === "circle") {
-    shapes.push({ kind: "circle", x: t.centre.x, y: t.centre.y, rMm: t.radiusMm, dashed: true, color: BLUE, testId: "editor-gap-target", data: { kind: "circle" } });
+    shapes.push({ kind: "circle", x: t.centre.x, y: t.centre.y, rMm: t.radiusMm, dashed: true, color: BLUE, testId: "editor-gap-target", data: { kind: "circle", r: String(t.radiusMm) } });
     t.gaps.forEach((g, i) => shapes.push({ kind: "line", points: arcPoints(t.centre, t.radiusMm, g), color: "#f59e0b", widthPx: 5, testId: "editor-gap", data: { index: String(i), start: String(g.start), end: String(g.end) } }));
     const preview = pending ? circleGapFromDrag(t.centre, pending.from, pending.to) : null;
     if (preview) shapes.push({ kind: "line", points: arcPoints(t.centre, t.radiusMm, preview), color: BLUE, widthPx: 5, testId: "editor-gap-preview" });

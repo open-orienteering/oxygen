@@ -370,7 +370,7 @@ export function EditorPage() {
       || c.startControlId === sel || c.finishControlId === sel));
     void (async () => {
       const before = await Promise.all(affected.map((c) => utils.course.detail.fetch({ id: c.id }).then((d) => ({ id: c.id, structure: d.structure as Structure }))));
-      const redo = async () => { for (const id of ids) await writes.deleteControl(id); };
+      const redo = async () => { for (const id of ids) await writes.deleteControl(id); return true; };
       if ((await run(redo)) === undefined) return;
       record(async () => {
         for (const id of ids) await client.control.restore.mutate({ id });
@@ -530,7 +530,7 @@ export function EditorPage() {
     const body = { kind: o.kind, geometry: o.geometry, props: o.props, scope: o.scope } as Pick<CourseObject, "kind" | "geometry" | "props" | "scope">;
     const box = { id: o.id };
     void (async () => {
-      const redo = () => writes.deleteObject(box.id);
+      const redo = async () => { await writes.deleteObject(box.id); return true; };
       if ((await run(redo)) === undefined) return;
       record(async () => { box.id = (await writes.createObject(body)).id; }, redo);
       dispatch({ type: "select-object", id: null });
@@ -667,7 +667,7 @@ export function EditorPage() {
       const effective = courseInfo?.derivation?.sites.find((d) => d.id === String(sel))?.cuts ?? [];
       return { kind: "circle", siteId: sel, centre: { x: c.mapX, y: c.mapY }, radiusMm, gaps: stored.length ? stored : effective };
     }
-    const insertAt = state.phantom?.insertAt;
+    const insertAt = state.tool.kind === "gap" ? state.tool.legInsertAt : state.phantom?.insertAt;
     if (insertAt == null || !structure) return null;
     const itemIndex = rows.findIndex((r) => (r.kind === "control" ? r.seqIndex === insertAt : r.kind === "finish" && insertAt >= sequenceIds.length));
     const to = rows[itemIndex], from = rows.slice(0, itemIndex).reverse().find((r) => r.pt);
@@ -677,7 +677,7 @@ export function EditorPage() {
     const stored = item && item.kind !== "variation" ? item.leg?.gaps ?? [] : [];
     const effective = courseInfo?.derivation?.courses[0]?.legs.find((l) => l.from === String(from.id) && l.to === String(to.id))?.gaps ?? [];
     return { kind: "leg", itemIndex, a: from.pt, b: to.pt, gaps: stored.length ? stored : effective };
-  }, [courseInfo, state.selectedControlId, state.phantom, coordsById, kindOf, controlRowsById, structure, rows, sequenceIds, sites]);
+  }, [courseInfo, state.selectedControlId, state.phantom, state.tool, coordsById, kindOf, controlRowsById, structure, rows, sequenceIds, sites]);
 
   const writeGaps = useCallback((target: GapTarget, gaps: AngularGap[] | FractionGap[]) => {
     if (target.kind === "circle") {
@@ -882,14 +882,16 @@ export function EditorPage() {
 
   const courseView = state.view === "course";
   const courseControlIds = useMemo(() => new Set(sequenceIds.map(String)), [sequenceIds]);
+  const toolActive = state.tool.kind !== "select";
   const editor: MapViewerEditorProps = useMemo(() => ({
     selectedControlId: state.selectedControlId !== null ? String(state.selectedControlId) : null,
     phantom: state.phantom ? { x: state.phantom.x, y: state.phantom.y } : null,
     contextActions,
-    contextInfo,
-    contextBadge: srrBadge,
-    contextRadioBadge: radioOn ? { label: tc("editor.radioBadge") } : null,
-    suggestions,
+    // An active tool opens no action bar (§6): nothing in it, not even the info line and badges.
+    contextInfo: toolActive ? null : contextInfo,
+    contextBadge: toolActive ? null : srrBadge,
+    contextRadioBadge: radioOn && !toolActive ? { label: tc("editor.radioBadge") } : null,
+    suggestions: toolActive ? [] : suggestions,
     suggestionsHeading: tc("editor.suggestedHeading"),
     courseControlIds,
     fadeNonCourse: courseView && !!selectedCourse,
@@ -909,7 +911,7 @@ export function EditorPage() {
     draftFast,
     viewRequest,
     onCourseInfo: setCourseInfo,
-  }), [state.selectedControlId, state.phantom, contextActions, contextInfo, srrBadge, radioOn, suggestions, tc, courseControlIds,
+  }), [state.selectedControlId, state.phantom, contextActions, contextInfo, srrBadge, radioOn, suggestions, tc, courseControlIds, toolActive,
     courseView, selectedCourse, moveWarnings, moveEpoch, handleMapClick, handleMoveEnd, handleLabelMoveEnd, handleSelect,
     handleDismiss, handleLegClick, toolBinding, snapIndex, snap, draftObjects, draftFast, viewRequest]);
 
@@ -995,7 +997,7 @@ export function EditorPage() {
       } else if (plain && key === "T") {
         setTool({ kind: "text" });
       } else if (plain && key === "G") {
-        if (canGap) setTool({ kind: "gap" });
+        if (canGap) setTool({ kind: "gap", legInsertAt: state.selectedControlId === null ? state.phantom?.insertAt ?? null : null });
       } else if (plain && key === "F") {
         fitView();
       } else if (e.key === "Delete" || e.key === "Backspace") {
@@ -1146,7 +1148,7 @@ export function EditorPage() {
           if (key === "V") exitTool();
           else if (key === "S" || key === "K" || key === "M") armPlace(key === "S" ? "start" : key === "M" ? "finish" : "control");
           else if (key === "T") setTool({ kind: "text" });
-          else if (key === "G") setTool({ kind: "gap" });
+          else if (key === "G") setTool({ kind: "gap", legInsertAt: state.selectedControlId === null ? state.phantom?.insertAt ?? null : null });
         }}
         onArea={startArea}
         areaOpen={areaOpen}

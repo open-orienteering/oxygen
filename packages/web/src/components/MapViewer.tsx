@@ -3036,7 +3036,8 @@ export function MapViewer({
   let editorMenu: React.ReactNode = null;
   const menuEntries =
     (editor?.contextActions?.length ?? 0) + (editor?.suggestions?.length ?? 0) + (editor?.onDismiss ? 1 : 0);
-  if (editor && menuEntries > 0 && overlayContent && !editorDragPos && !editorLabelDragPos) {
+  // An exclusive tool (an armed creation tool, §6) opens no action bar: it would cover the map on every click.
+  if (editor && !editor.tool?.exclusive && menuEntries > 0 && overlayContent && !editorDragPos && !editorLabelDragPos) {
     let inner: Pt | null = null;
     let anchorR = overlayContent.radiusPx;
     if (editor.phantom) {

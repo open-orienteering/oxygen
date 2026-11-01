@@ -1756,12 +1756,24 @@ the GL course layer drawn, pointer-down resolves through `editorHitAt`
 paper at the current zoom, circles by their interior, the nearest target
 (topmost of equally near) mapped by `ref` — `site` → the control drag,
 `number` / `leader` → the label drag, `leg` (`<courseId>:<index>`) → the
-leg click; extras and layout objects are D5's. Controls the editor fades
+leg click, `object` (`course-object:<seq>`) → the course object (D5,
+`course-editor.md` §7; regions and toner savers, not drawn on screen, hit
+by their UI-layer outline); imported extras do not hit. Controls the editor fades
 are drawn by the UI layer, not the layer, and hit as plain circles below
 it. In that mode the viewer renders no SVG hit targets and mirrors every
 editor site as a hidden `editor-site` (paper mm) for tests. The legacy
-editor leaves the prop off. The hit index is the course part only; a
-worker request over the document stream (snapping, Map mode) is D5's.
+editor leaves the prop off. The hit index is the course part only.
+Snapping (D5, `course-editor.md` §6.2) does not hit-test the document's
+stream: point centres and vertices are geometry, read once per document
+into a main-thread grid (`lib/editor/snap.ts`); a worker request over the
+document stream is Map mode's (slice G).
+
+**Tools.** `MapViewerEditorProps.tool` (D5, `course-editor.md` §6): the
+viewer offers pointer-down to the active tool first, routes clicks of an
+exclusive tool to it, and draws its `ToolShape`s (paper mm → the rotated
+overlay) in `editor-tool-layer`; `draftObjects` replace stored course
+objects in the layer request, with `fastFilter` while a filter region is
+dragged (§4.11).
 
 **Drag.** Unchanged from §5.4 "Overlay": a per-move layer request; the
 dragged object is not symbolised on the main thread.
@@ -2451,8 +2463,8 @@ The shared module is exported as a namespace: `import { render } from
   the three backends and the worker protocol take regions; nothing sends
   them yet. They reach `VectorMapLayer` / `course-layer-request.ts` and
   the print route's `PageInput.course.regions` with D2's stored
-  `course_objects` (`filter_region` kind), and the drag that sends
-  `fastFilter` with D5's drawing tool.
+  `course_objects` (`filter_region` kind; D2), and the editor's drag sends
+  `fastFilter` (D5).
 - **§5.2 filter-region limits.** All masks share one stencil bit, so
   overlapping regions of different masks are fine (each masked step marks
   only its own); nothing is capped. A stroke counts as meeting a region
@@ -2490,8 +2502,9 @@ The shared module is exported as a namespace: `import { render } from
 - **§5.5 highlight through the dynamic bucket.** Hit-testing landed in
   D4 (§5.5); the selection is still marked by the SVG ring. 04 §7's
   highlight — the selected object's passes redrawn in a highlight colour
-  in the dynamic bucket — and hiding an edited document object come with
-  D5 (multi-select) and Map mode.
+  in the dynamic bucket — and hiding an edited document object are still
+  open: D5 kept its selection, multi-selection and object outlines in the
+  UI layer (`map-gl` was outside its area); Map mode (slice G) needs both.
 - **§5.2 dynamic bucket: main-thread symbolisation.** A drag re-derives
   the layer in the worker (one round trip per pointer move). If D's
   editor needs lower latency, the dragged object is symbolised on the

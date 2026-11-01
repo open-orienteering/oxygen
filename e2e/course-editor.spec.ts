@@ -7,7 +7,7 @@
 import { test, expect, type Page } from "@playwright/test";
 import { reseed } from "./helpers/reseed";
 import { setEditorVector, setMapPipeline } from "./helpers/map-pipeline";
-import { clickMap, drag, editorReady, emptyPoint, legMidpoint, legPieces, site, sitePoint, sites, toPage } from "./helpers/editor";
+import { clickMap, drag, editorReady, emptyPoint, inkIn, legMidpoint, legPieces, site, sitePoint, sites, toolShapes, toPage } from "./helpers/editor";
 import { waitForTrpc } from "./helpers/trpc";
 
 test.beforeAll(async () => {
@@ -111,12 +111,15 @@ test.describe("Course editor (new, GL canvas)", () => {
     await page.reload();
     await editorReady(page);
     await expect(page.getByTestId("course-editor-page")).toHaveCount(0);
-    // The shell: top bar, V-only tool rail, inspector, status bar; Layout / Field shown, not enterable.
+    // The shell: top bar, tool rail, inspector, status bar; Layout / Field shown, not enterable.
     for (const id of ["editor-top-bar", "editor-tool-rail", "editor-inspector", "editor-status"]) await expect(page.getByTestId(id)).toBeVisible();
     await expect(page.getByTestId("editor-mode-course")).toHaveAttribute("aria-pressed", "true");
     await expect(page.getByTestId("editor-mode-layout")).toBeDisabled();
     // No SVG hit targets: the viewer hit-tests the layer's shapes.
     await expect(page.getByTestId("editor-control-hit")).toHaveCount(0);
+    // The rail (§6): exchange and crossing wait for slice F.
+    for (const key of ["V", "S", "K", "M", "A", "T"]) await expect(page.getByTestId(`editor-tool-${key}`)).toBeEnabled();
+    for (const key of ["X", "C"]) await expect(page.getByTestId(`editor-tool-${key}`)).toBeDisabled();
   });
 
   test("place, move, undo / redo, persist and delete a control", async ({ page }) => {
@@ -255,5 +258,162 @@ test.describe("Course editor (new, GL canvas)", () => {
     await expect(page.getByTestId("editor-course-picker")).toHaveValue(firstCourse!);
     await page.keyboard.press("Escape");
     await expect(page.getByTestId("editor-course-picker")).toHaveValue("");
+  });
+
+  // docs/course-editor.md §6–§7 (D5): the tools.
+  test.describe("tools", () => {
+    async function newCourse(page: Page, prefix: string): Promise<string> {
+      const name = `${prefix} ${Date.now() % 100000}`;
+      await page.getByTestId("editor-new-course-name").fill(name);
+      const created = waitForTrpc(page, "course.create");
+      await page.getByTestId("editor-create-course").click();
+      await created;
+      await expect(page.getByTestId("editor-course-picker").locator("option:checked")).toHaveText(name, { timeout: 10000 });
+      return name;
+    }
+
+    test("ten controls in ten clicks with the armed K tool; Ctrl+Z steps back; Esc returns to V", async ({ page }) => {
+      await openEditor(page);
+      await newCourse(page, "D5 K");
+      const before = (await sites(page)).length;
+
+      await page.keyboard.press("k");
+      await expect(page.getByTestId("editor-tool-K")).toHaveAttribute("aria-pressed", "true");
+      // The ghost: true-size circle, the next number and code; the pending leg from the start, its length in the status bar.
+      const first = await emptyPoint(page, 40);
+      await page.mouse.move(first.x, first.y);
+      await expect(page.getByTestId("editor-ghost")).toBeAttached({ timeout: 10000 });
+      await expect(page.getByTestId("editor-ghost-label")).toHaveText(/^1 · \d+$/);
+      await expect(page.getByTestId("editor-pending-leg").first()).toBeAttached();
+      await expect(page.getByTestId("editor-pending-leg-length")).toHaveText(/\d+ m/);
+
+      const spots = [first];
+      for (let i = 1; i < 10; i++) spots.push(await emptyPoint(page, 30, spots));
+      for (const p of spots) {
+        await page.mouse.move(p.x, p.y);
+        await page.mouse.click(p.x, p.y);
+        // No action bar while armed.
+        await expect(page.getByTestId("editor-action-bar")).toHaveCount(0);
+      }
+      await expect(controlRows(page)).toHaveCount(10, { timeout: 30000 });
+      await expect.poll(async () => (await sites(page)).length, { timeout: 15000 }).toBe(before + 10);
+      await expect(page.getByTestId("editor-tool-K")).toHaveAttribute("aria-pressed", "true");
+      // The ghost reads the next number.
+      await page.mouse.move(spots[0].x + 5, spots[0].y + 5);
+      await expect(page.getByTestId("editor-ghost-label")).toHaveText(/^11 · /, { timeout: 10000 });
+
+      // Ctrl+Z while armed: the last placement goes, the tool stays armed.
+      await page.keyboard.press("Control+z");
+      await expect(controlRows(page)).toHaveCount(9, { timeout: 15000 });
+      await expect(page.getByTestId("editor-tool-K")).toHaveAttribute("aria-pressed", "true");
+
+      await page.keyboard.press("Escape");
+      await expect(page.getByTestId("editor-tool-V")).toHaveAttribute("aria-pressed", "true");
+      await expect(page.getByTestId("editor-ghost")).toHaveCount(0);
+    });
+
+    test("an armed click on an existing control reuses the site", async ({ page }) => {
+      await openEditor(page);
+      await newCourse(page, "D5 reuse");
+      const [a, b] = await regularCodes(page, 2);
+      const before = (await sites(page)).length;
+      await page.getByTestId("editor-tool-K").click();
+      for (const code of [a, b]) {
+        const p = await sitePoint(page, code);
+        await page.mouse.move(p.x, p.y);
+        await expect(page.getByTestId("editor-ghost-label")).toHaveText(`Add ${code}`, { timeout: 10000 });
+        const saved = waitForTrpc(page, "course.setStructure");
+        await page.mouse.click(p.x, p.y);
+        await saved;
+      }
+      await expect(controlRows(page)).toHaveCount(2, { timeout: 15000 });
+      await expect(controlRows(page).nth(0)).toHaveAttribute("data-control-id", a);
+      await expect(controlRows(page).nth(1)).toHaveAttribute("data-control-id", b);
+      expect((await sites(page)).length).toBe(before);
+    });
+
+    test("G: a drag along the rim opens a circle gap, stored on the site", async ({ page }) => {
+      await openEditor(page);
+      const [code] = await regularCodes(page, 1);
+      await clickMap(page, await sitePoint(page, code));
+      await expect(selectedCode(page)).toContainText(code, { timeout: 10000 });
+      // G: no action bar while a tool is active, so nothing covers the rim.
+      await page.keyboard.press("g");
+      await expect(page.getByTestId("editor-action-bar")).toHaveCount(0);
+      const [target] = await toolShapes(page, "editor-gap-target");
+      expect(target).toBeDefined();
+      const r = Number(target.data.r);
+      const rim = (deg: number) => toPage(page, { x: target.x + r * Math.sin((deg * Math.PI) / 180), y: target.y + r * Math.cos((deg * Math.PI) / 180) });
+      const saved = waitForTrpc(page, "control.update");
+      await drag(page, await rim(40), await rim(100));
+      await saved;
+      const covers = async () => (await toolShapes(page, "editor-gap")).some((g) => {
+        const start = Number(g.data.start), end = Number(g.data.end);
+        return ((70 - start + 360) % 360) <= ((end - start + 360) % 360);
+      });
+      await expect.poll(covers, { timeout: 15000 }).toBe(true);
+
+      // Stored: after a reload the gap is the site's.
+      await page.reload();
+      await editorReady(page);
+      await clickMap(page, await sitePoint(page, code));
+      await page.keyboard.press("g");
+      await expect.poll(covers, { timeout: 15000 }).toBe(true);
+    });
+
+    test("A: an out-of-bounds area drawn vertex by vertex is stored and selected", async ({ page }) => {
+      await openEditor(page);
+      await page.getByTestId("editor-tool-A").click();
+      await page.getByTestId("editor-area-oob_area").click();
+      const a = await emptyPoint(page, 40);
+      const corners = [a, { x: a.x + 60, y: a.y }, { x: a.x + 60, y: a.y + 40 }];
+      for (const p of corners) await page.mouse.click(p.x, p.y);
+      await expect(page.getByTestId("editor-polygon-vertex")).toHaveCount(3);
+      const created = waitForTrpc(page, "courseObject.create");
+      await page.mouse.click(a.x, a.y); // the first vertex closes
+      await created;
+      await expect(page.getByTestId("editor-object")).toHaveAttribute("data-object-kind", "oob_area", { timeout: 15000 });
+      await expect(page.getByTestId("editor-tool-V")).toHaveAttribute("aria-pressed", "true");
+      const id = await page.getByTestId("editor-object").getAttribute("data-object-id");
+      await expect(page.locator(`[data-testid="editor-object-row"][data-object-id="${id}"]`)).toHaveCount(1);
+      // Its border from the inspector, then delete it (Delete key) and undo.
+      const updated = waitForTrpc(page, "courseObject.update");
+      await page.getByTestId("editor-prop-border").selectOption("dashed");
+      await updated;
+      await expect(page.locator(`[data-testid="editor-object-row"][data-object-id="${id}"]`)).toHaveAttribute("data-props", '{"border":"dashed"}', { timeout: 15000 });
+      await page.getByTestId("editor-object-delete").click();
+      await expect(page.locator(`[data-testid="editor-object-row"][data-object-id="${id}"]`)).toHaveCount(0, { timeout: 15000 });
+      await page.keyboard.press("Control+z");
+      await expect(page.locator('[data-testid="editor-object-row"][data-object-kind="oob_area"]')).not.toHaveCount(0, { timeout: 15000 });
+    });
+
+    test("a filter region hides the path under it live", async ({ page }) => {
+      await openEditor(page);
+      // e2e/test.ocd: a 505 path runs along y ≈ −4 mm (the fixture's symbol index 3).
+      const band = { minX: -8, minY: -6, maxX: 8, maxY: -2 };
+      const before = await inkIn(page, band);
+      expect(before, "path ink before the region").toBeGreaterThan(5);
+      await page.getByTestId("editor-tool-A").click();
+      await page.getByTestId("editor-area-filter_region").click();
+      for (const p of [{ x: -12, y: -9 }, { x: 12, y: -9 }, { x: 12, y: 1 }, { x: -12, y: 1 }]) {
+        const q = await toPage(page, p);
+        await page.mouse.click(q.x, q.y);
+      }
+      const created = waitForTrpc(page, "courseObject.create");
+      const firstVertex = await toPage(page, { x: -12, y: -9 });
+      await page.mouse.click(firstVertex.x, firstVertex.y);
+      await created;
+      await expect(page.getByTestId("editor-object")).toHaveAttribute("data-object-kind", "filter_region", { timeout: 15000 });
+      await page.getByTestId("editor-filter-by").selectOption("symbols");
+      await page.getByTestId("editor-filter-search").fill("505");
+      const updated = waitForTrpc(page, "courseObject.update");
+      // Listed by the source code (no applied match in the fixture): 505.0 Path.
+      await page.locator('[data-testid^="editor-filter-symbol-505"]').first().check();
+      await updated;
+      await expect.poll(() => inkIn(page, band), { timeout: 30000 }).toBeLessThan(before / 3);
+      // Delete it: the path is back.
+      await page.getByTestId("editor-object-delete").click();
+      await expect.poll(() => inkIn(page, band), { timeout: 30000 }).toBeGreaterThan(before / 2);
+    });
   });
 });

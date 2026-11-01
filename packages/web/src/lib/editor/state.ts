@@ -20,7 +20,8 @@ export type EditorTool =
   | { kind: "place"; chain: PlacementState }
   | { kind: "area"; poly: PolygonState }
   | { kind: "text" }
-  | { kind: "gap" };
+  /** Gaps on the selected circle, or on the leg into control-sequence position `legInsertAt` (the clicked leg). */
+  | { kind: "gap"; legInsertAt: number | null };
 
 export interface EditorState extends CourseEditorState {
   mode: EditorMode;
