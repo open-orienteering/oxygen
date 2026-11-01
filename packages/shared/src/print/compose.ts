@@ -48,7 +48,7 @@ export function composePage(input: PageInput, fonts: FontMetrics[]): ComposedPag
   const layer = courseLayer({
     structure: input.course.structure,
     sites: input.course.sites,
-    objects: input.objects,
+    objects: [...input.objects, ...(input.course.objects ?? [])],
     appearance: input.course.appearance,
     viewOptions: { ...input.course.viewOptions, window: frameInMap(transform, grow(frameUm, RING_BLEED_UM)), textValues: input.textValues },
     document: input.map.context,

@@ -25,6 +25,8 @@ export interface ResolveSheetInput extends ResolveMapLayoutInput {
    * derives legs and automatic cuts itself.
    */
   geometrySource?: string | null;
+  /** The event's course objects in scope of this sheet (course-layer.md §8.3), in draw order. */
+  courseObjects?: readonly course.CourseLayerObject[];
   /** Stable id carried into the structure (the course's uuid or seq); default `course`. */
   courseId?: string;
 }
@@ -113,6 +115,7 @@ export function resolveSheet(input: ResolveSheetInput): ResolvedSheet {
       sites,
       appearance: course.appearanceFromTemplate(document.appearance),
       viewOptions: { allControls: input.kind === "all_controls", labelMode: layout.labelMode, overprintScale: layout.overprintScale },
+      ...(input.courseObjects?.length ? { objects: input.courseObjects } : {}),
     },
     objects: document.objects,
     textValues: layout.textValues,

@@ -17,6 +17,7 @@ import type { PaperFrame } from "../geo/projection.js";
 import type { Pass, PassStream, RenderPath } from "../render/pass-stream.js";
 import type { RenderSymbol } from "../render/symbol.js";
 import type { RenderObject } from "../render/symbolise.js";
+import type { CourseLayerObject } from "../course/objects.js";
 import type { DescriptionBlockInput } from "./description.js";
 
 /** Page mm → page µm. */
@@ -45,6 +46,8 @@ export interface PageInput {
     viewOptions: Pick<CourseViewOptions, "allControls" | "labelMode" | "overprintScale">;
     /** Filter regions over the map window (`map-rendering.md` §4.11). */
     regions?: readonly CourseFilterRegion[];
+    /** The event's course objects in scope of this sheet (docs/course-layer.md §8.3), in draw order. */
+    objects?: readonly CourseLayerObject[];
   };
   /** Layout objects of both anchors (template + sheet). */
   objects: readonly CourseMapObject[];
