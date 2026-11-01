@@ -18,7 +18,9 @@ type Pt = { x: number; y: number };
 export type EditorTarget =
   | { kind: "site"; id: string }
   | { kind: "number"; id: string }
-  | { kind: "leg"; courseId: string; index: number };
+  | { kind: "leg"; courseId: string; index: number }
+  /** A course object (docs/course-editor.md §7) by its public id (`seq`). */
+  | { kind: "object"; id: number };
 
 /** A site the UI layer draws (faded, not in the course layer): its centre and circle radius, paper mm. */
 export interface UiSite {
@@ -26,6 +28,17 @@ export interface UiSite {
   x: number;
   y: number;
   radiusMm: number;
+}
+
+/**
+ * A course object the layer does not draw on screen — a filter region (a
+ * region, not an object) or a toner saver (no frame on screen) — which the
+ * UI layer outlines: its ring, paper mm. It hits over its interior and
+ * along its outline, below everything else.
+ */
+export interface UiArea {
+  id: number;
+  ring: readonly Pt[];
 }
 
 /** Reach around every shape, CSS px — the legacy leg hit-line was 12 px wide (6 px each side). */
@@ -43,8 +56,13 @@ function targetOf(ref: { kind: string; id: string }): EditorTarget | null {
       const index = Number(ref.id.slice(cut + 1));
       return cut > 0 && Number.isInteger(index) ? { kind: "leg", courseId: ref.id.slice(0, cut), index } : null;
     }
+    case "object": {
+      // `course-object:<seq>` (course-layer.md §8.3); a sheet's layout objects are Layout mode's (D7).
+      const m = /^course-object:(\d+)$/.exec(ref.id);
+      return m ? { kind: "object", id: Number(m[1]) } : null;
+    }
     default:
-      // Extras and layout objects are D5's (course objects in the editor).
+      // Imported extras are not editable (D1 turns them into course objects).
       return null;
   }
 }
@@ -53,7 +71,9 @@ function targetOf(ref: { kind: string; id: string }): EditorTarget | null {
  * The target at `pt` (paper mm), within `toleranceMm`: the nearest shape,
  * the topmost of equally near ones (a point inside a circle is distance 0).
  */
-export function editorHitAt(index: CourseHitIndex | null, pt: Pt, toleranceMm: number, uiSites: readonly UiSite[] = []): EditorTarget | null {
+export function editorHitAt(
+  index: CourseHitIndex | null, pt: Pt, toleranceMm: number, uiSites: readonly UiSite[] = [], uiAreas: readonly UiArea[] = [],
+): EditorTarget | null {
   if (index) {
     const hits = render.hitTest(index.stream, pt.x * 1000, pt.y * 1000, {
       toleranceUm: toleranceMm * 1000,
@@ -72,5 +92,30 @@ export function editorHitAt(index: CourseHitIndex | null, pt: Pt, toleranceMm: n
     const d = Math.max(0, Math.hypot(pt.x - s.x, pt.y - s.y) - s.radiusMm);
     if (d <= toleranceMm && (!near || d < near.d)) near = { id: s.id, d };
   }
-  return near ? { kind: "site", id: near.id } : null;
+  if (near) return { kind: "site", id: near.id };
+  for (let i = uiAreas.length - 1; i >= 0; i--) {
+    const a = uiAreas[i];
+    if (insideRing(pt, a.ring) || ringDistance(pt, a.ring) <= toleranceMm) return { kind: "object", id: a.id };
+  }
+  return null;
+}
+
+function insideRing(pt: Pt, ring: readonly Pt[]): boolean {
+  let inside = false;
+  for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+    const a = ring[i], b = ring[j];
+    if ((a.y > pt.y) !== (b.y > pt.y) && pt.x < ((b.x - a.x) * (pt.y - a.y)) / (b.y - a.y) + a.x) inside = !inside;
+  }
+  return inside;
+}
+
+function ringDistance(pt: Pt, ring: readonly Pt[]): number {
+  let best = Infinity;
+  for (let i = 0; i < ring.length; i++) {
+    const a = ring[i], b = ring[(i + 1) % ring.length];
+    const dx = b.x - a.x, dy = b.y - a.y, l2 = dx * dx + dy * dy;
+    const t = l2 === 0 ? 0 : Math.max(0, Math.min(1, ((pt.x - a.x) * dx + (pt.y - a.y) * dy) / l2));
+    best = Math.min(best, Math.hypot(pt.x - a.x - t * dx, pt.y - a.y - t * dy));
+  }
+  return best;
 }

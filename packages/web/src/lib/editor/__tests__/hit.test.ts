@@ -4,7 +4,7 @@ import { documentBytes, fontBytes, latin, request } from "../../../map-gl/__test
 import { editorHitAt, HIT_TOLERANCE_PX } from "../hit";
 
 /** The fixture course (S 10,10 → 31 40,10 → 32 60,40 → F 10,40) through the real worker. */
-function hitIndex(): NonNullable<CourseReply["hit"]> {
+function hitIndex(over: Parameters<typeof request>[0] = {}): NonNullable<CourseReply["hit"]> {
   const sent: WorkerReply[] = [];
   const w = createMapGlWorker((msg) => sent.push(msg), (fn) => fn(), 0);
   w.handle({
@@ -14,7 +14,7 @@ function hitIndex(): NonNullable<CourseReply["hit"]> {
     textAtlas: [latin()],
     courseLayer: true,
   });
-  w.handle({ type: "course", generation: 1, input: request() });
+  w.handle({ type: "course", generation: 1, input: request(over) });
   return (sent[sent.length - 1] as CourseReply).hit!;
 }
 
@@ -59,6 +59,28 @@ describe("editorHitAt (docs/course-editor.md §5)", () => {
     expect(editorHitAt(index, { x: 80, y: 80 }, 0.5, [{ id: "77", x: 80, y: 81, radiusMm: 3 }])).toEqual({ kind: "site", id: "77" });
     expect(editorHitAt(index, { x: 40, y: 10 }, 0.5, [{ id: "77", x: 40, y: 10, radiusMm: 3 }])).toEqual({ kind: "site", id: "31" });
     expect(editorHitAt(null, { x: 80, y: 80 }, 0.5, [{ id: "77", x: 80, y: 81, radiusMm: 3 }])).toEqual({ kind: "site", id: "77" });
+  });
+
+  it("a course object selects the object by its public id (§7)", () => {
+    const withObjects = hitIndex({
+      objects: [
+        { id: 12, kind: "oob_area", geometry: [{ x: 70, y: 60 }, { x: 90, y: 60 }, { x: 90, y: 80 }, { x: 70, y: 80 }], props: {} },
+        { id: 13, kind: "marked_route", geometry: [{ x: 70, y: 90 }, { x: 90, y: 90 }], props: {} },
+      ],
+    });
+    expect(editorHitAt(withObjects, { x: 80, y: 70 }, 0.5)).toEqual({ kind: "object", id: 12 });
+    expect(editorHitAt(withObjects, { x: 80, y: 90.1 }, 0.5)).toEqual({ kind: "object", id: 13 });
+    // The course still wins where it is drawn.
+    expect(editorHitAt(withObjects, { x: 40, y: 10 }, 0.5)).toEqual({ kind: "site", id: "31" });
+  });
+
+  it("UI-layer areas (filter regions, toner savers) hit inside and along the outline, below everything", () => {
+    const ring = [{ x: 0, y: 50 }, { x: 30, y: 50 }, { x: 30, y: 70 }, { x: 0, y: 70 }];
+    expect(editorHitAt(index, { x: 15, y: 60 }, 0.5, [], [{ id: 5, ring }])).toEqual({ kind: "object", id: 5 });
+    expect(editorHitAt(index, { x: 30.3, y: 60 }, 0.5, [], [{ id: 5, ring }])).toEqual({ kind: "object", id: 5 });
+    expect(editorHitAt(index, { x: 31, y: 60 }, 0.5, [], [{ id: 5, ring }])).toBeNull();
+    expect(editorHitAt(index, { x: 40, y: 10 }, 0.5, [], [{ id: 5, ring: [{ x: 0, y: 0 }, { x: 100, y: 0 }, { x: 100, y: 100 }] }]))
+      .toEqual({ kind: "site", id: "31" });
   });
 
   it("names a screen tolerance", () => {
