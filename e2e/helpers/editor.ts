@@ -148,10 +148,19 @@ export async function clickMap(page: Page, p: Pt): Promise<void> {
  * circles) grouped by leg index, then the middle of its longest piece.
  */
 export async function legMidpoint(page: Page, course: string, from: Pt, to: Pt): Promise<Pt> {
-  const pieces = await legPieces(page, course);
   const near = (q: Pt, s: Pt) => Math.hypot(q.x - s.x, q.y - s.y) < 8;
-  const legs = [...new Set(pieces.map((l) => l.leg))].map((leg) => pieces.filter((l) => l.leg === leg));
-  const leg = legs.find((ps) => near(ps[0].points[0], from) && near(ps[ps.length - 1].points.at(-1)!, to));
+  // The mirror lags a structure write by one layer round trip (after an undo
+  // the previous sequence's legs are still drawn), so wait for the leg itself,
+  // not just for some pieces to exist.
+  let leg: { points: Pt[] }[] | undefined;
+  const deadline = Date.now() + 15000;
+  for (;;) {
+    const pieces = await legPieces(page, course);
+    const legs = [...new Set(pieces.map((l) => l.leg))].map((idx) => pieces.filter((l) => l.leg === idx));
+    leg = legs.find((ps) => near(ps[0].points[0], from) && near(ps[ps.length - 1].points.at(-1)!, to));
+    if (leg || Date.now() > deadline) break;
+    await page.waitForTimeout(250);
+  }
   if (!leg) throw new Error("no drawn leg between the two sites");
   const length = (pts: Pt[]) => pts.reduce((sum, q, i) => (i === 0 ? 0 : sum + Math.hypot(q.x - pts[i - 1].x, q.y - pts[i - 1].y)), 0);
   const piece = leg.map((l) => l.points).sort((x, y) => length(y) - length(x))[0];

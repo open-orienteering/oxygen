@@ -675,7 +675,7 @@ admin, synchronous, all events) fill `structure` where it is `NULL`
 | Run | Courses | Bbox Δ / position Δ (mm) | Circle cuts same / compared | Legs with pieces / regenerated with gap |
 |---|---|---|---|---|
 | Integration fixture (`course-structure-backfill`, 2 `ocd` + 1 editor course) | 3 | 0 / 0 | 1 / 1 | 1 / 1 |
-| Club database | — | — | — | — |
+| Club database (dev copy, 2026-11-01: 61 filled / 0 skipped / 0 failed; 21 courses without geometry, 23 `ocd`, 17 editor) | 61 | `ocd` ≤ 15.67 / ≤ 0.064; editor ≤ 21.05 / 0.000 (positions match; the bbox shift of editor rows and of demo_competition / E is not analysed — hygiene item) | `ocd` 114 / 114; editor 87 / 141 | `ocd` 17 / 257; editor 0 / 0 |
 
 The club run is the coordinator's after merge (the dev database is off
 limits from a worktree, as for §4.4); its numbers go into this table.
