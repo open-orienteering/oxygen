@@ -139,6 +139,10 @@ Paper mm at the base map's scale, y-up (the frame of `controls.xpos/ypos`
 and of course GeoJSON). Gaps: compass degrees for circles (0° = +y,
 clockwise, the gap sweeping clockwise from `start` to `end`), fractions
 0..1 for legs — the OCD importer's and `overprint-cuts.ts`'s conventions.
+Stored gaps — a site's `circle_gaps`, a structure's `LegProps.gaps` — are
+the **full effective set** for that circle or leg and replace the
+automatic cuts; an empty list means automatic (decision log 2026-11-01,
+"Stored gaps replace the automatic cuts"; `course-editor.md` §6.3).
 
 | Input | v1 shape | Built today from |
 |---|---|---|
@@ -882,8 +886,9 @@ venue's kiosk map draws them (08 §4.8; 07 §9.2).
   `LegProps.gaps` yet — the editor writes them since D5
   (`course-editor.md` §6.3, §6.6), but the viewer's request
   (`course-layer-request.ts`) builds items from the course's control list
-  and `derive.ts` numbers every item (with D1's request rework; decision
-  log "D5" (4)); importers write the structure and the
+  and `derive.ts` numbers every item — D1 builds the items from the stored
+  structure and the sites' `circle_gaps` and skips a hidden number
+  (coordinator 2026-11-01); importers write the structure and the
   backfill fills `NULL` rows, retiring C0's interim leg input (D1);
   variations and their materialisation, map exchanges, crossing and
   map-issue points, corridors (slice F).

@@ -683,7 +683,7 @@ export function EditorPage() {
       if (!c || kindOf(sel) !== "control" || (c.mapX === 0 && c.mapY === 0)) return null;
       const stored = controlRowsById.get(sel)?.circleGaps ?? [];
       const effective = courseInfo?.derivation?.sites.find((d) => d.id === String(sel))?.cuts ?? [];
-      return { kind: "circle", siteId: sel, centre: { x: c.mapX, y: c.mapY }, radiusMm, gaps: stored.length ? stored : effective };
+      return { kind: "circle", siteId: sel, centre: { x: c.mapX, y: c.mapY }, radiusMm, gaps: stored.length ? stored : effective, stored: stored.length > 0 };
     }
     const insertAt = state.tool.kind === "gap" ? state.tool.legInsertAt : state.phantom?.insertAt;
     if (insertAt == null || !structure) return null;
@@ -694,7 +694,7 @@ export function EditorPage() {
     const item = explicit.items[itemIndex];
     const stored = item && item.kind !== "variation" ? item.leg?.gaps ?? [] : [];
     const effective = courseInfo?.derivation?.courses[0]?.legs.find((l) => l.from === String(from.id) && l.to === String(to.id))?.gaps ?? [];
-    return { kind: "leg", itemIndex, a: from.pt, b: to.pt, gaps: stored.length ? stored : effective };
+    return { kind: "leg", itemIndex, a: from.pt, b: to.pt, gaps: stored.length ? stored : effective, stored: stored.length > 0 };
   }, [courseInfo, state.selectedControlId, state.phantom, state.tool, coordsById, kindOf, controlRowsById, structure, rows, sequenceIds, sites]);
 
   const writeGaps = useCallback((target: GapTarget, gaps: AngularGap[] | FractionGap[]) => {
@@ -1251,6 +1251,13 @@ export function EditorPage() {
           <ChecksSection />
         </Inspector>
         <div className="mt-auto flex flex-col gap-1">
+          {state.tool.kind === "gap" && gapTarget?.stored && (
+            // Stored gaps replace the automatic ones (§6.3): an empty list is automatic again.
+            <button type="button" data-testid="editor-gap-reset" onClick={() => writeGaps(gapTarget, [])}
+              className="pointer-events-auto w-fit px-2 py-1 rounded-md bg-white/95 border border-purple-200 text-purple-700 text-[11px] shadow-sm hover:bg-purple-50 cursor-pointer">
+              {t("resetGaps")}
+            </button>
+          )}
           {showExhausted && <span data-testid="series-exhausted" className="pointer-events-auto w-fit text-[11px] text-amber-700 bg-white/95 rounded px-1.5">{tc("seriesExhausted")}</span>}
           {errorMsg && <span data-testid="editor-error" className="pointer-events-auto w-64 text-[11px] text-red-600 bg-white/95 rounded px-1.5">{errorMsg}</span>}
           <StatusBar controls={selectedCourse ? sequenceIds.length : null} lengthM={selectedCourse ? totalMeters : null} scale={mapScale} save={save}

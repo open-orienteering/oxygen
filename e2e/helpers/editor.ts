@@ -34,6 +34,15 @@ export async function toPage(page: Page, mm: Pt): Promise<Pt> {
   return { x: v.box.x + v.box.width / 2 + ix * Math.cos(rot) - iy * Math.sin(rot), y: v.box.y + v.box.height / 2 + ix * Math.sin(rot) + iy * Math.cos(rot) };
 }
 
+/** Page point → paper mm (the inverse of `toPage`). */
+export async function toPaper(page: Page, p: Pt): Promise<Pt> {
+  const v = await paperView(page);
+  const rot = (v.rotDeg * Math.PI) / 180;
+  const dx = p.x - (v.box.x + v.box.width / 2), dy = p.y - (v.box.y + v.box.height / 2);
+  const ix = dx * Math.cos(rot) + dy * Math.sin(rot), iy = -dx * Math.sin(rot) + dy * Math.cos(rot);
+  return { x: (ix / v.pxPerUm + v.centreX) / 1000, y: (-iy / v.pxPerUm + v.centreY) / 1000 };
+}
+
 export async function sites(page: Page): Promise<Site[]> {
   return page.getByTestId("editor-site").evaluateAll((els) => els.map((el) => ({
     id: el.getAttribute("data-control-id") ?? "",
@@ -183,10 +192,11 @@ export async function toolShapes(page: Page, testId: string): Promise<{ x: numbe
 }
 
 /**
- * Dark pixels of the GL canvas inside a paper rectangle (mm), sampled every 0.1 mm: the map's black ink there.
- * The canvas alone is captured (the overlays hidden), as `map-vector-layer.spec.ts` does.
+ * Pixels of the GL canvas inside a paper rectangle (mm), sampled every 0.1 mm, that are dark (the map's black
+ * ink) or purple (the course overprint). The canvas alone is captured (the overlays hidden), as
+ * `map-vector-layer.spec.ts` does.
  */
-export async function inkIn(page: Page, rect: { minX: number; minY: number; maxX: number; maxY: number }): Promise<number> {
+export async function inkIn(page: Page, rect: { minX: number; minY: number; maxX: number; maxY: number }, kind: "dark" | "purple" = "dark"): Promise<number> {
   const { PNG } = await import("pngjs");
   const canvas = page.getByTestId("map-vector-layer");
   const style = "body * { visibility: hidden !important } [data-testid='map-vector-layer'] { visibility: visible !important }";
@@ -207,7 +217,8 @@ export async function inkIn(page: Page, rect: { minX: number; minY: number; maxX
       const i = (py * png.width + px) * 4;
       if (seen.has(i)) continue;
       seen.add(i);
-      if (Math.max(png.data[i], png.data[i + 1], png.data[i + 2]) < 110) n++;
+      const r = png.data[i], g = png.data[i + 1], b = png.data[i + 2];
+      if (kind === "dark" ? Math.max(r, g, b) < 110 : r - g > 50 && b - g > 50) n++;
     }
   }
   return n;

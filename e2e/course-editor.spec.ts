@@ -11,7 +11,7 @@ import { test, expect, type Page } from "@playwright/test";
 import { API_BASE as API } from "./helpers/api-base";
 import { reseed } from "./helpers/reseed";
 import { setEditorVector, setMapPipeline } from "./helpers/map-pipeline";
-import { clickMap, drag, editorReady, emptyPoint, inkIn, legMidpoint, legPieces, site, sitePoint, sites, toolShapes, toPage } from "./helpers/editor";
+import { clickMap, drag, editorReady, emptyPoint, inkIn, legMidpoint, legPieces, site, sitePoint, sites, toolShapes, toPage, toPaper } from "./helpers/editor";
 import { waitForTrpc } from "./helpers/trpc";
 
 test.beforeAll(async () => {
@@ -32,24 +32,29 @@ const { PDFDocument } = createRequire(resolve(process.cwd(), "packages/api/packa
   PDFDocument: { load(bytes: Uint8Array): Promise<{ getPageCount(): number }> };
 };
 
-/** The event's all-controls sheet as printed (`maps.pdf`): its page count and the inflated size of its streams. */
-async function printedAllControls(page: Page, nameId: string): Promise<{ pages: number; content: number }> {
+/**
+ * The event's all-controls sheet as printed (`maps.pdf`): its page count and its hatch fills — the PDF backend
+ * draws a hatch pass (709) as a clip (`W* n`) and one stroke of separate `m … l` segments (`print/operators.ts`).
+ */
+async function printedAllControls(page: Page, nameId: string): Promise<{ pages: number; hatches: number }> {
   const res = await page.request.get(`/api/maps/${nameId}/maps.pdf?allControls=1`);
   expect(res.ok(), await res.text().catch(() => "")).toBe(true);
   const bytes = await res.body();
   const pages = (await PDFDocument.load(bytes)).getPageCount();
-  // Every Flate stream, inflated: the page's drawing grows by the object's passes (fonts and images are the same both times).
   const text = bytes.toString("latin1");
-  let content = 0;
+  let hatches = 0;
+  const run = /W\* n[^]*?(?:-?[\d.]+ -?[\d.]+ m -?[\d.]+ -?[\d.]+ l ){3,}-?[\d.]+ -?[\d.]+ m -?[\d.]+ -?[\d.]+ l S/g;
   for (let at = text.indexOf("stream"); at >= 0; at = text.indexOf("stream", at + 6)) {
     if (text.slice(at - 3, at) === "end") continue;
     const start = at + 6 + (text[at + 6] === "\r" ? 2 : 1);
     const end = text.indexOf("endstream", start);
     if (end < 0) break;
-    try { content += inflateSync(bytes.subarray(start, end)).length; } catch { /* not Flate */ }
+    let inflated: string | null = null;
+    try { inflated = inflateSync(bytes.subarray(start, end)).toString("latin1"); } catch { /* not Flate */ }
+    if (inflated) hatches += inflated.match(run)?.length ?? 0;
     at = end;
   }
-  return { pages, content };
+  return { pages, hatches };
 }
 
 async function selectCompetition(page: Page) {
@@ -427,6 +432,12 @@ test.describe("Course editor (new, GL canvas)", () => {
       await clickMap(page, await sitePoint(page, code));
       await page.keyboard.press("g");
       await expect.poll(covers, { timeout: 15000 }).toBe(true);
+
+      // Reset gaps: the stored list goes (an empty list is automatic again, §6.3).
+      const reset = waitForTrpc(page, "control.update");
+      await page.getByTestId("editor-gap-reset").click();
+      await reset;
+      await expect(page.getByTestId("editor-gap-reset")).toHaveCount(0, { timeout: 15000 });
     });
 
     test("A: an out-of-bounds area drawn vertex by vertex is stored and selected", async ({ page }) => {
@@ -435,6 +446,10 @@ test.describe("Course editor (new, GL canvas)", () => {
       await page.getByTestId("editor-area-oob_area").click();
       const a = await emptyPoint(page, 40);
       const corners = [a, { x: a.x + 60, y: a.y }, { x: a.x + 60, y: a.y + 40 }];
+      // A patch inside the triangle (page px → paper mm), probed for purple before and after.
+      const [p0, p1] = await Promise.all([toPaper(page, { x: a.x + 35, y: a.y + 3 }), toPaper(page, { x: a.x + 55, y: a.y + 15 })]);
+      const inner = { minX: Math.min(p0.x, p1.x), maxX: Math.max(p0.x, p1.x), minY: Math.min(p0.y, p1.y), maxY: Math.max(p0.y, p1.y) };
+      const purpleBefore = await inkIn(page, inner, "purple");
       for (const p of corners) await page.mouse.click(p.x, p.y);
       await expect(page.getByTestId("editor-polygon-vertex")).toHaveCount(3);
       const created = waitForTrpc(page, "courseObject.create");
@@ -445,7 +460,11 @@ test.describe("Course editor (new, GL canvas)", () => {
       const id = await page.getByTestId("editor-object").getAttribute("data-object-id");
       await expect(page.locator(`[data-testid="editor-object-row"][data-object-id="${id}"]`)).toHaveCount(1);
 
-      // Printed: the all-controls sheet (an `all`-scoped object) carries the 709 hatch — one page, more drawing than without it.
+      // On screen: the hatch's purple inside the area (the GL canvas), none there before it existed.
+      await expect.poll(() => inkIn(page, inner, "purple"), { timeout: 30000 }).toBeGreaterThan(purpleBefore + 5);
+
+      // Printed: the all-controls sheet (an `all`-scoped object) carries the 709 hatch — present with it, absent parked.
+      // The page raster itself is `course-print.test.ts` "course objects on the page" (docs/course-editor.md Tests).
       const nameId = new URL(page.url()).pathname.split("/")[1];
       const headers = { "content-type": "application/json", "x-event-id": nameId };
       const seqOf = async (res: Awaited<ReturnType<Page["request"]["post"]>>) => {
@@ -466,11 +485,12 @@ test.describe("Course editor (new, GL canvas)", () => {
       try {
         const withArea = await printedAllControls(page, nameId);
         expect(withArea.pages).toBe(1);
+        expect(withArea.hatches, "hatch strokes with the area").toBeGreaterThan(0);
         const hidden = await page.request.post(`${API}/trpc/courseObject.update`, { headers, data: { id: Number(id), scope: { courses: [], classes: [] } } });
         expect(hidden.ok(), await hidden.text()).toBe(true);
         const without = await printedAllControls(page, nameId);
         expect(without.pages).toBe(1);
-        expect(withArea.content, "the area's passes in the page").toBeGreaterThan(without.content);
+        expect(without.hatches, "the area's hatch is gone when it is parked").toBeLessThan(withArea.hatches);
         await page.request.post(`${API}/trpc/courseObject.update`, { headers, data: { id: Number(id), scope: { all: true } } });
       } finally {
         await page.request.post(`${API}/trpc/courseMap.delete`, { headers, data: { id: sheetId } });
@@ -513,8 +533,10 @@ test.describe("Course editor (new, GL canvas)", () => {
       await page.getByTestId("editor-filter-by").selectOption("symbols");
       await page.getByTestId("editor-filter-search").fill("505");
       const updated = waitForTrpc(page, "courseObject.update");
-      // Listed by the source code (no applied match in the fixture): 505.0 Path.
-      await page.locator('[data-testid^="editor-filter-symbol-505"]').first().check();
+      // Listed by the source code (no applied match in the fixture): symbol index 3, "505.0 Path". A fixture change fails here.
+      const path505 = page.getByTestId("editor-filter-symbol-505.0");
+      await expect(path505.locator("xpath=..")).toContainText("Path");
+      await path505.check();
       await updated;
       await expect.poll(() => inkIn(page, band), { timeout: 30000 }).toBeLessThan(before / 3);
       // Delete it: the path is back.

@@ -271,9 +271,10 @@ export function textBinding(o: { onPlace: (pt: Pt) => void; onExit: () => void; 
 
 // ─── G: gaps on the selected circle or leg ────────────────
 
+/** `gaps`: the effective ones (stored, else automatic); `stored`: whether a list is stored (Reset gaps applies). */
 export type GapTarget =
-  | { kind: "circle"; siteId: number; centre: Pt; radiusMm: number; gaps: AngularGap[] }
-  | { kind: "leg"; itemIndex: number; a: Pt; b: Pt; gaps: FractionGap[] };
+  | { kind: "circle"; siteId: number; centre: Pt; radiusMm: number; gaps: AngularGap[]; stored?: boolean }
+  | { kind: "leg"; itemIndex: number; a: Pt; b: Pt; gaps: FractionGap[]; stored?: boolean };
 
 export interface GapOptions {
   gesture: GestureRef;

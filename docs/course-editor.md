@@ -284,7 +284,8 @@ layer's rule for authored gaps, `course-layer.md` §3.2–3.4, which the
 importers' file-authored cuts follow too): the tool starts from the
 circle's or leg's *effective* gaps — the stored ones, else the automatic
 ones from the layer's derivation — and writes the whole list. An empty
-list is "automatic" again — so a circle whose only gap is an automatic
+list is "automatic" again (**Reset gaps**, `editor-gap-reset`, shown in
+`G` while a list is stored, writes it) — so a circle whose only gap is an automatic
 one cannot be left without it (turn the event's automatic cuts off for
 that). A leg's effective gaps come from the course the layer draws
 (Course view); in the All-controls view the layer draws no legs and the
@@ -422,7 +423,8 @@ current, differing }`; a variation group or a slice-F site kind answers
 | unit (web) | `pages/editor/__tests__/bindings.test.ts` | §6, §7: V (Shift-click, lasso, object select / move / vertex, outlines, double-click leg), armed (exclusive, right-click, touch), area (vertex drag, first-vertex close), G (rim drag, click removes, leg) |
 | unit (web) | `lib/__tests__/undo-stack.test.ts` | §6.1: `UndoStack.top`, which `Ctrl+Z` while armed checks before stepping the chain back |
 | unit (web) | `lib/editor/__tests__/snap.test.ts`, `hit.test.ts`, `state.test.ts`, `structure-edit.test.ts`, `write-client.test.ts` | §6.2 snap candidates and distance; §5 object targets (stream and UI-layer outline); §6 Escape order, multi-selection, object selection, tools; §6.3 / §6.6 `setLegGaps`, `setNumberHidden`; §7 object tokens |
-| E2E | `e2e/course-editor.spec.ts` "tools" | §6.1 ten controls in ten clicks with `K` (ghost, pending leg, no action bar, `Ctrl+Z`, `Esc`), reuse of a site; §6.5 Shift-click three controls → one add-to-course (one undo entry), §6.6 a site's notes written and reloaded; §6.3 a rim drag stores a circle gap; §6.4 / §7 an out-of-bounds area drawn, its border set, printed (the all-controls `maps.pdf`: one page, its inflated drawing larger with the `all`-scoped area than parked), selected again on the canvas, deleted and undone; a filter region hides the 505 path under it live (canvas ink probe) |
+| E2E | `e2e/course-editor.spec.ts` "tools" | §6.1 ten controls in ten clicks with `K` (ghost, pending leg, no action bar, `Ctrl+Z`, `Esc`), reuse of a site; §6.5 Shift-click three controls → one add-to-course (one undo entry), §6.6 a site's notes written and reloaded; §6.3 a rim drag stores a circle gap, Reset gaps clears it; §6.4 / §7 an out-of-bounds area drawn, its border set, drawn on the canvas (purple inside it), printed (the all-controls `maps.pdf`: one page, the 709 hatch's clip-and-stroke operators present with the `all`-scoped area and gone when it is parked), selected again on the canvas, deleted and undone; a filter region hides the 505 path under it live (canvas ink probe) |
+| integration | `packages/api/src/__tests__/integration/course-print.test.ts` "course objects on the page" | §7 print: the row's "reference-raster pixel probe" of a printed course object is this test's page raster, not the E2E's — no HTTP route rasterises a composed page, and poppler is on the runner for the unit / integration jobs, not the E2E job (coordinator 2026-11-01) |
 | E2E | `e2e/course-editor-legacy.spec.ts` | the legacy page, unchanged (`chromium`) |
 
 ## Pending in this chapter
@@ -435,7 +437,9 @@ current, differing }`; a variation group or a slice-F site kind answers
   editor stores `circle_gaps`, `LegProps.gaps` and `numberHidden`
   (§6.3, §6.6), but the viewer's layer request does not carry them yet
   (`course-layer.md` §6 Pending), so the canvas shows the stored gaps
-  only in `G`'s own overlay.
+  only in `G`'s own overlay. D1 makes the layer draw them (coordinator
+  2026-11-01) and, landing after D5, adds the rendered-gap and
+  hidden-number pixel assertion to this chapter's E2E.
 - **Course objects**: draw order (`courseObject.reorder`) has no control
   in the editor; no image (logo) tool; `inset_frame` is slice F's.
 - **Description instructions** (finish variant, special instructions)

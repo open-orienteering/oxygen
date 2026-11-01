@@ -105,5 +105,6 @@
   "scope": "Drawn with",
   "scopeAll": "All courses",
   "scopeClasses": "Classes",
-  "scopeParked": "Neither a course nor a class: drawn nowhere."
+  "scopeParked": "Neither a course nor a class: drawn nowhere.",
+  "resetGaps": "Reset gaps (automatic)"
 }
