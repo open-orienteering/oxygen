@@ -10,9 +10,6 @@
   "modeField": "Field",
   "modeLater": "Arrives with slice {{slice}}",
   "toolSelect": "Select / move (V)",
-  "fullscreen": "Fullscreen",
-  "exitFullscreen": "Exit fullscreen",
-  "inspector": "Inspector",
   "sequence": "Sequence",
   "selection": "Selection",
   "checks": "Checks",
@@ -42,6 +39,5 @@
   "noDescription": "No description",
   "codes": "Codes",
   "alsoIn": "Also in",
-  "descriptionsSheet": "Description sheet",
   "help": "Click selects; the bar under the selection offers what applies there. Drag a control to move it, a number to place it. V select, H hide other controls, Esc steps back, Ctrl+Z / Ctrl+Shift+Z undo / redo."
 }

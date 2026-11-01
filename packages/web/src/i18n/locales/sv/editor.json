@@ -10,9 +10,6 @@
   "modeField": "Fält",
   "modeLater": "Kommer med delsteg {{slice}}",
   "toolSelect": "Markera / flytta (V)",
-  "fullscreen": "Helskärm",
-  "exitFullscreen": "Lämna helskärm",
-  "inspector": "Inspektör",
   "sequence": "Ordning",
   "selection": "Markering",
   "checks": "Kontroller av banan",
@@ -42,6 +39,5 @@
   "noDescription": "Ingen beskrivning",
   "codes": "Koder",
   "alsoIn": "Finns även i",
-  "descriptionsSheet": "Kontrollbeskrivning",
   "help": "Klick markerar; raden under markeringen visar vad som går att göra där. Dra en kontroll för att flytta den, en siffra för att placera den. V markera, H dölj andra kontroller, Esc backar, Ctrl+Z / Ctrl+Shift+Z ångra / gör om."
 }

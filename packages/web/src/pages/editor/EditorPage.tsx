@@ -570,7 +570,8 @@ export function EditorPage() {
     const currentCodes = controlRowsById.get(id)?.codes ?? current;
     void (async () => {
       if ((await run(() => writes.updateControl({ id, codes: next }))) === undefined) return;
-      record(() => writes.updateControl({ id: publicNew, codes: currentCodes }), () => writes.updateControl({ id: publicNew, codes: next }));
+      // After the edit the control's public id is the new first code; after an undo the old one again.
+      record(() => writes.updateControl({ id: publicNew, codes: currentCodes }), () => writes.updateControl({ id, codes: next }));
       dispatch({ type: "select", id: publicNew });
     })();
   }, [controlRowsById, writes, run, record]);

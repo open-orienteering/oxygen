@@ -19,10 +19,14 @@ describe("editorReducer (docs/course-editor.md §3)", () => {
     expect(escapeHasWork(s)).toBe(false);
   });
 
-  it("hide-others needs a course and goes with it", () => {
+  it("hide-others needs a course and goes with a course change", () => {
     expect(editorReducer(initialEditorState, { type: "toggle-hide-others" }).hideOthers).toBe(false);
     let s = editorReducer(initialEditorState, { type: "select-course", id: 1 });
     s = editorReducer(s, { type: "toggle-hide-others" });
+    expect(s.hideOthers).toBe(true);
+    s = editorReducer(s, { type: "select-course", id: 2 });
+    expect(s.hideOthers).toBe(false);
+    s = editorReducer(editorReducer(s, { type: "toggle-hide-others" }), { type: "select", id: 31 });
     expect(s.hideOthers).toBe(true);
     s = editorReducer(s, { type: "select-course", id: null });
     expect(s.hideOthers).toBe(false);

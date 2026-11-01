@@ -38,8 +38,8 @@ export function editorReducer(state: EditorState, action: EditorAction): EditorS
     default: {
       const next = courseEditorReducer(state, action);
       if (next === state) return state;
-      // Without a course there is nothing to hide others from.
-      return { ...state, ...next, hideOthers: next.selectedCourseId === null ? false : state.hideOthers };
+      // Hiding belongs to the course it was switched on for: a course change switches it off.
+      return { ...state, ...next, hideOthers: next.selectedCourseId !== state.selectedCourseId ? false : state.hideOthers };
     }
   }
 }
