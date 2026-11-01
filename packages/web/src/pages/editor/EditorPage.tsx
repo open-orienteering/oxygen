@@ -212,14 +212,25 @@ export function EditorPage() {
   const kindOfLatest: KindOf = useCallback((id: number) => created.current.get(id)?.kind ?? kindOf(id), [kindOf]);
 
   // The latest values for writes queued behind each other (a chain of placements runs one at a time).
-  const latest = useRef({ structure, selectedCourse, sites, kindOf: kindOfLatest });
-  latest.current = { structure, selectedCourse, sites, kindOf: kindOfLatest };
+  const latest = useRef({ detailStructure, detailVersion: detail.data?.version ?? null, selectedCourse, sites, kindOf: kindOfLatest });
+  latest.current = { detailStructure, detailVersion: detail.data?.version ?? null, selectedCourse, sites, kindOf: kindOfLatest };
+
+  /**
+   * The structure as of now, read from refs: the one this client wrote last unless the course's detail
+   * already holds a newer one. A queued placement can run before React re-renders after its predecessor.
+   */
+  const currentStructure = useCallback((): Structure | null => {
+    const { detailStructure: d, detailVersion, selectedCourse: course } = latest.current;
+    const mine = localStructure.current;
+    if (mine && course && mine.courseId === course.id && d && detailVersion !== null && BigInt(detailVersion) < BigInt(mine.version)) return mine.structure;
+    return d;
+  }, []);
 
   /** The structure edits start from: the current one with its start and finish explicit. */
   const baseStructure = useCallback((): Structure | null => {
-    const { structure: s, sites: rows } = latest.current;
-    return s ? explicitStructure(s, rows) : null;
-  }, []);
+    const s = currentStructure();
+    return s ? explicitStructure(s, latest.current.sites) : null;
+  }, [currentStructure]);
 
   /** `setStructure`, remembering the result as the local structure (every structure write and its undo / redo). */
   const writeStructure = useCallback(async (courseId: number, next: Structure) => {
@@ -231,7 +242,8 @@ export function EditorPage() {
 
   /** One sequence edit: `setStructure(next)`, undo writes back the structure it replaced. */
   const applyStructure = useCallback(async (edit: (s: Structure) => Structure): Promise<boolean> => {
-    const { selectedCourse: course, structure: prev } = latest.current;
+    const course = latest.current.selectedCourse;
+    const prev = currentStructure();
     const base = baseStructure();
     if (!course || !prev || !base) return false;
     const next = edit(base);
@@ -239,7 +251,7 @@ export function EditorPage() {
     if ((await run(redo)) === undefined) return false;
     record(() => writeStructure(course.id, prev), redo);
     return true;
-  }, [baseStructure, writeStructure, run, record]);
+  }, [currentStructure, baseStructure, writeStructure, run, record]);
 
   /**
    * Create a site at `pt` — a control (code from the club allocation; SRR codes get radio) or a code-less
@@ -268,7 +280,7 @@ export function EditorPage() {
     created.current.set(id, { kind, pt, code });
     if (srr) await run(() => client.control.upsertConfig.mutate({ controlIds: [id], radioType: "internal_radio" }));
     const course = latest.current.selectedCourse;
-    const prev = latest.current.structure;
+    const prev = currentStructure();
     const base = baseStructure();
     if (edit && course && base && prev) {
       const next = edit(base, id);
@@ -282,7 +294,7 @@ export function EditorPage() {
     }
     record(() => writes.deleteControl(id), () => client.control.restore.mutate({ id }));
     return id;
-  }, [controlList.data, seriesAllocation.data, activeSeriesId, run, client, baseStructure, writeStructure, writes, record]);
+  }, [controlList.data, seriesAllocation.data, activeSeriesId, run, client, currentStructure, baseStructure, writeStructure, writes, record]);
 
   /** Create a control at `pt`; with `insertAt` also into the selected course at that position (one undo entry). */
   const createControl = useCallback(async (pt: Pt, insertAt: number | null) => {
