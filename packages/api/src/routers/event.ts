@@ -18,6 +18,7 @@ import {
 } from "@oxygen/shared";
 import { randomBytes } from "node:crypto";
 import { toAbsolute } from "../timeConvert.js";
+import { planStructureBackfill, runStructureBackfill } from "../course-structure-backfill.js";
 import { resolveCourseExpectedPositions } from "./course.js";
 import { isWithdrawn, isFinished, WITHDRAWN_STATUSES } from "@oxygen/shared";
 import type {
@@ -385,6 +386,23 @@ export const eventRouter = router({
     const { gcOrphanTiles } = await import("../map-render-cache.js");
     await gcOrphanTiles(prisma());
     return { purged: result.count };
+  }),
+
+  /** Courses still without a stored structure, across the instance's events (course-layer.md §6.4). */
+  structureBackfillStatus: adminProcedure.query(async () => ({
+    pending: (await planStructureBackfill(prisma())).length,
+  })),
+
+  /** Fill `courses.structure` where NULL (the Maintenance entry of `pnpm course:backfill-structure`). */
+  structureBackfillStart: adminProcedure.mutation(async () => {
+    const run = await runStructureBackfill(prisma());
+    return {
+      total: run.total,
+      filled: run.filled,
+      skipped: run.skipped,
+      failed: run.failed,
+      failures: run.results.filter((r) => r.outcome === "failed").map((r) => ({ event: r.event, name: r.name, error: r.error ?? "" })),
+    };
   }),
 
   /** Return the currently selected event's slug. */
