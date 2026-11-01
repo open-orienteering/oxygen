@@ -6,29 +6,20 @@
  * until slice F. Every tool has its key; the page owns the keyboard.
  */
 
-import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { EditorTool } from "../../lib/editor/state";
+import { AREA_CHOICES, railKeyOf, type AreaChoice, type RailTool } from "./tools/rail";
 
-export type RailTool = "V" | "S" | "K" | "M" | "A" | "T" | "G";
-export type AreaChoice = "oob_area" | "oob_line" | "whiteout" | "filter_region" | "toner_saver" | "marked_route";
-export const AREA_CHOICES: AreaChoice[] = ["oob_area", "oob_line", "whiteout", "filter_region", "toner_saver", "marked_route"];
+export type { AreaChoice } from "./tools/rail";
 
-/** The rail key a tool lights up. */
-export function railKeyOf(tool: EditorTool): RailTool {
-  switch (tool.kind) {
-    case "select": return "V";
-    case "place": return tool.chain.tool === "start" ? "S" : tool.chain.tool === "finish" ? "M" : "K";
-    case "area": return "A";
-    case "text": return "T";
-    case "gap": return "G";
-  }
-}
 
 export interface ToolRailProps {
   tool: EditorTool;
   onTool: (key: Exclude<RailTool, "A">) => void;
   onArea: (kind: AreaChoice) => void;
+  /** The `A` menu (the page opens it on the `A` key too). */
+  areaOpen: boolean;
+  onAreaOpen: (open: boolean) => void;
   /** A control circle or a leg is selected (G applies). */
   canGap: boolean;
   /** The toner saver needs a course with positioned sites. */
@@ -41,7 +32,7 @@ const BTN = "w-8 h-8 rounded-md text-xs font-semibold flex items-center justify-
 
 export function ToolRail(p: ToolRailProps) {
   const { t } = useTranslation("editor");
-  const [areaOpen, setAreaOpen] = useState(false);
+  const { areaOpen } = p;
   const active = railKeyOf(p.tool);
   const button = (key: RailTool, label: string, onClick: () => void, disabled = false, title = label) => (
     <button
@@ -72,7 +63,7 @@ export function ToolRail(p: ToolRailProps) {
       {button("M", t("toolFinish"), () => p.onTool("M"))}
       {later("X", t("toolExchange"))}
       {later("C", t("toolCrossing"))}
-      {button("A", t("toolArea"), () => setAreaOpen((v) => !v))}
+      {button("A", t("toolArea"), () => p.onAreaOpen(!areaOpen))}
       {button("T", t("toolText"), () => p.onTool("T"))}
       {button("G", t("toolGap"), () => p.onTool("G"), !p.canGap)}
       <div className="h-px bg-slate-200 my-0.5" />
@@ -85,7 +76,7 @@ export function ToolRail(p: ToolRailProps) {
           {AREA_CHOICES.map((kind) => (
             <button key={kind} type="button" role="menuitem" data-testid={`editor-area-${kind}`}
               disabled={kind === "toner_saver" && !p.canTonerSaver}
-              onClick={() => { setAreaOpen(false); p.onArea(kind); }}
+              onClick={() => { p.onAreaOpen(false); p.onArea(kind); }}
               className="w-full text-left px-2.5 py-1.5 hover:bg-purple-50 disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer">
               {t(`kind_${kind}`)}
             </button>
