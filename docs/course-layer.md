@@ -622,7 +622,9 @@ those: never an object drawn in the editor, nor another file's (an event can
 be fed from more than one file). A backfilled row (same marker) is superseded
 by a re-import the same way. `courses.geometry` is still written as the
 file's GeoJSON (`geometry_source` `ocd` / `xml`) for the consumers that
-read it until the artifact is retired. **PPen `<gaps>` / `<leg>` bends
+read it until the artifact is retired. An XML re-import over an `ocd` course whose geometry is kept still
+writes the leg gaps of that kept geometry, but leaves `circle_gaps` alone
+(the XML carries none). **PPen `<gaps>` / `<leg>` bends
 are not read** (no fixture, no research record; Pending).
 
 **Tokens.** One HLC is taken for the `reference.imported` entry before its
@@ -630,7 +632,10 @@ payloads are serialised and stamped on the `courses.version` and
 `controls.version` of every row the import wrote, so an editor open on
 any of them gets a version `CONFLICT` on its next write (§7), and a peer
 applying the entry holds the same tokens. Course objects take their own
-token. Import-time `differing` is `null`: `basePayload` reads
+token. Rows the import soft-deleted under `replaceAll` are stamped too. The
+import is not atomic (structure, objects, tokens and the journal entry are
+separate statements, as before: a crash in between is repaired by running it
+again). Import-time `differing` is `null`: `basePayload` reads
 `course.upserted` / `control.upserted` entries only, not the rows inside
 a `reference.imported` one (Pending).
 
@@ -646,8 +651,11 @@ admin, synchronous, all events) fill `structure` where it is `NULL`
   token is advanced and nothing is journaled — it derives what the columns
   already replicate;
 - an `ocd` row also takes its stored GeoJSON's authored data, when the
-  geometry's points are the structure's sites one for one (else the
-  report says so and moves nothing): leg gaps from the pieces, cuts into
+  geometry's control points are the structure's control sites one for one
+  (else the report says so and moves nothing); the start and finish points
+  are matched to a start / finish item when there is one — a row the old
+  importer wrote has no finish item (`finish_control_id` was never set) and
+  often a start by name only (`alignPointsToItems`): leg gaps from the pieces, cuts into
   `controls.circle_gaps` where the control's is empty, and the objects
   above — each `source = 'import'`, an equal object already imported is
   not written again and a course-scoped one only adds the course to its

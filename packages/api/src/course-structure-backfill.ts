@@ -135,6 +135,28 @@ export function compareRegenerated(
 }
 const storedGapKeys = (m: Map<string, unknown>) => m.keys();
 
+/**
+ * Align the stored geometry's points (`start` / `control` / `finish`, in
+ * course order) with a structure's items by kind: the controls one for one
+ * (their counts must agree, else `null`), a leading start item with the
+ * start point and a trailing finish item with the finish point when both
+ * exist — a course written by the pre-D1 importer has no finish item (its
+ * `finish_control_id` was never set) or no start item (start by name only).
+ * Returns the point index of each item, `undefined` where an item has none.
+ */
+export function alignPointsToItems(pointKinds: readonly string[], itemKinds: readonly string[]): (number | undefined)[] | null {
+  const controlPts = pointKinds.flatMap((k, i) => (k === "control" ? [i] : []));
+  const controlItems = itemKinds.flatMap((k, j) => (k === "control" ? [j] : []));
+  if (controlPts.length !== controlItems.length) return null;
+  const out: (number | undefined)[] = itemKinds.map(() => undefined);
+  controlItems.forEach((j, n) => (out[j] = controlPts[n]));
+  const startPt = pointKinds.indexOf("start");
+  if (itemKinds[0] === "start" && startPt >= 0) out[0] = startPt;
+  const finishPt = pointKinds.lastIndexOf("finish");
+  if (itemKinds.length > 1 && itemKinds.at(-1) === "finish" && finishPt >= 0) out[itemKinds.length - 1] = finishPt;
+  return out;
+}
+
 /** Fill one course, in its own transaction; a no-op when the column is no longer NULL. */
 export async function backfillCourseStructure(db: PrismaClient, item: StructureBackfillItem): Promise<StructureBackfillResult> {
   const head = { courseId: item.courseId, event: item.event, name: item.name, source: item.source };
@@ -157,12 +179,19 @@ export async function backfillCourseStructure(db: PrismaClient, item: StructureB
       let written: course.StoredCourseStructure = structure;
       // The geometry's own codes for the sites (STA1, 71, FIN1 …), when its sequence is the course's.
       const geometryCodes = new Map<string, string>();
+      const pendingCuts: { siteId: string; cuts: course.AngularGap[] }[] = [];
 
       if (authored) {
         const pts = pointsOf(geometry!);
-        if (pts.length === items.length) {
-          const codeOf = new Map(items.map((i, j) => [i.siteId, pts[j].code]));
-          for (const [siteId, code] of codeOf) geometryCodes.set(siteId, code);
+        const kindOfItem = (siteId: string) => {
+          const r = siteById.get(siteId);
+          return !r ? "control" : r.kind !== "control" ? r.kind : r.status === "start" || r.status === "finish" ? r.status : "control";
+        };
+        const at = alignPointsToItems(pts.map((p) => p.type), items.map((i) => kindOfItem(i.siteId)));
+        if (at) {
+          items.forEach((it, j) => {
+            if (at[j] !== undefined) geometryCodes.set(it.siteId, pts[at[j]!].code);
+          });
           const gaps = legGapsOfFeatures(geometry!, (code) => {
             const xy = pts.find((p) => p.code === code)?.xy;
             return xy ? { x: xy[0], y: xy[1] } : undefined;
@@ -170,25 +199,28 @@ export async function backfillCourseStructure(db: PrismaClient, item: StructureB
           written = {
             ...structure,
             items: items.map((item, j) => {
-              const found = j > 0 ? gaps.get(`${pts[j - 1].code}>${pts[j].code}`) : undefined;
+              const k = at[j], prevK = j > 0 ? at[j - 1] : undefined;
+              const found = k !== undefined && prevK !== undefined ? gaps.get(`${pts[prevK].code}>${pts[k].code}`) : undefined;
               if (!found) return item;
               legGaps++;
               return { ...item, leg: { ...item.leg, gaps: found } };
             }),
           };
           const done = new Set<string>();
-          for (const [siteId, code] of codeOf) {
-            const cuts = pts.find((p) => p.code === code)?.cuts ?? [];
-            const site = siteById.get(siteId);
+          items.forEach((it, j) => {
+            if (at[j] === undefined) return;
+            const cuts = pts[at[j]!].cuts;
+            const site = siteById.get(it.siteId);
             const had = Array.isArray(site?.circleGaps) && (site!.circleGaps as unknown as unknown[]).length > 0;
-            if (!site || cuts.length === 0 || had || done.has(siteId)) continue;
-            done.add(siteId);
-            await tx.control.update({ where: { id: siteId }, data: { circleGaps: cuts as never } });
+            if (!site || cuts.length === 0 || had || done.has(it.siteId)) return;
+            done.add(it.siteId);
+            pendingCuts.push({ siteId: it.siteId, cuts });
             site.circleGaps = cuts as never;
             circleGapControls++;
-          }
+          });
+          for (const c of pendingCuts) await tx.control.update({ where: { id: c.siteId }, data: { circleGaps: c.cuts as never } });
         } else {
-          note = `geometry has ${pts.length} points, the course ${items.length} sites: cuts and gaps not moved`;
+          note = `geometry has ${pts.filter((p) => p.type === "control").length} control points, the course ${items.filter((i) => kindOfItem(i.siteId) === "control").length} control sites: cuts and gaps not moved`;
         }
         objects = await writeImportedObjects(tx, item.eventId, collectImportedObjects(new Map([[row.name, geometry!]])), () => item.courseId, { replace: false });
       }

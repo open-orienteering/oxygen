@@ -100,6 +100,16 @@ describe("resolveSheet", () => {
     expect(bad.items.every((i) => i.leg === undefined)).toBe(true);
   });
 
+  it("a structure whose first site is not in the layout (an explicit start the geometry names S1) aligns on the first shared site", () => {
+    const gaps = [{ from: 0.2, to: 0.3 }];
+    const input = base({
+      course: { ...base().course!, controls: uuidControls },
+      structure: stored([{ siteId: "00000000-0000-4000-8000-0000000000aa" }, { siteId: U31 }, { siteId: U32, leg: { gaps } }]),
+    });
+    const one = resolveSheet(input).sheet.course.structure as { items: { siteId: string; leg?: unknown }[] };
+    expect(one.items.find((i) => i.siteId === U32)!.leg).toEqual({ gaps });
+  });
+
   it("sites carry the controls' circle gaps", () => {
     const { sheet } = resolveSheet(base({ course: { ...base().course!, controls: uuidControls } }));
     expect(sheet.course.sites.find((x) => x.id === U31)!.circleGaps).toEqual([{ start: 10, end: 40 }]);

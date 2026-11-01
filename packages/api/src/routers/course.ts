@@ -2212,6 +2212,8 @@ export const courseRouter = router({
 
         const existing = courseByName.get(pc.name.toLowerCase());
         let courseUuid: string;
+        // The geometry the course ends up with: a kept OCD one (XML re-import) still carries the authored pieces.
+        let storedGeom: GeoJSONFeatureCollection | null = geom;
         if (existing) {
           // Resolve geometry vs existing one: keep OCD unless drift > 30m.
           let nextGeom: GeoJSONFeatureCollection | null = geom;
@@ -2231,6 +2233,7 @@ export const courseRouter = router({
           ) {
             nextGeom = prev.geometry as unknown as GeoJSONFeatureCollection;
           }
+          storedGeom = nextGeom;
           await ctx.db.course.update({
             where: { id: existing.id },
             data: {
@@ -2279,7 +2282,7 @@ export const courseRouter = router({
         // The structure, and through it the column mirror: start / finish
         // sites explicit as the file names them, `course_controls`, the
         // leg gaps the file's 705 pieces leave (course-layer.md §6.4).
-        const gapsByLeg = skipPositions || !geom ? new Map<string, courseShared.FractionGap[]>() : legGapsOfFeatures(geom, (code) => positionOfCode.get(code));
+        const gapsByLeg = skipPositions || !storedGeom ? new Map<string, courseShared.FractionGap[]>() : legGapsOfFeatures(storedGeom, (code) => positionOfCode.get(code));
         const items: courseShared.StoredControlItem[] = [];
         let prevCode: string | null = null;
         for (const cc of pc.controls) {
@@ -2369,6 +2372,11 @@ export const courseRouter = router({
       const importToken = encodeHlc(importHlc);
       await ctx.db.course.updateMany({ where: { id: { in: [...courseIdMap.values()] } }, data: { version: importToken } });
       await ctx.db.control.updateMany({ where: { id: { in: [...controlIdMap.values()] } }, data: { version: importToken } });
+      if (input.replaceAll) {
+        // The rows the wipe soft-deleted were written by the import too.
+        await ctx.db.course.updateMany({ where: { eventId, removed: true }, data: { version: importToken } });
+        await ctx.db.control.updateMany({ where: { eventId, removed: true }, data: { version: importToken } });
+      }
       const activeControls = await ctx.db.control.findMany({
         where: { eventId, removed: false },
         select: { id: true },

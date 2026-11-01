@@ -33,7 +33,7 @@ const OCD_GEOMETRY = {
   ],
 };
 
-async function seedCourse(c: TestEventContext, name: string, geometry: unknown, source: string) {
+async function seedCourse(c: TestEventContext, name: string, geometry: unknown, source: string, opts: { legacyShape?: boolean } = {}) {
   const mk = (n: string, codes: string, status: string, x: number, y: number) =>
     c.db.control.create({ data: { eventId: c.eventId, name: n, codes, status, xpos: x, ypos: y }, select: { id: true } });
   const s = await mk(`Start ${name}`, "", "start", 10, 0);
@@ -41,7 +41,7 @@ async function seedCourse(c: TestEventContext, name: string, geometry: unknown, 
   const b = await mk("", `72${name}`, "ok", 120, 0);
   const f = await mk(`Mål ${name}`, "", "finish", 130, 0);
   const course = await c.db.course.create({
-    data: { eventId: c.eventId, name, startName: `Start ${name}`, finishControlId: f.id, geometry: geometry as never, geometrySource: source },
+    data: { eventId: c.eventId, name, startName: `Start ${name}`, ...(opts.legacyShape ? {} : { finishControlId: f.id }), geometry: geometry as never, geometrySource: source },
     select: { id: true },
   });
   await c.db.courseControl.createMany({ data: [{ courseId: course.id, position: 1, controlId: a.id }, { courseId: course.id, position: 2, controlId: b.id }] });
@@ -54,7 +54,8 @@ beforeAll(async () => {
   ctx = await createTestEvent("structure_backfill");
   other = await createTestEvent("structure_backfill_other");
   await seedCourse(ctx, "Ocd1", OCD_GEOMETRY, "ocd");
-  await seedCourse(ctx, "Ocd2", OCD_GEOMETRY, "ocd");
+  // The shape the pre-D1 importer left: start by name, no finish item (finish_control_id never set).
+  await seedCourse(ctx, "Ocd2", OCD_GEOMETRY, "ocd", { legacyShape: true });
   await seedCourse(ctx, "Editor", { type: "FeatureCollection", features: [] }, "editor");
   await seedCourse(other, "Elsewhere", null, "");
 }, 60_000);
@@ -98,6 +99,16 @@ describe("runStructureBackfill", () => {
     expect(r1).toMatchObject({ outcome: "filled", items: 4, circleGapControls: 1, legGaps: 1 });
     expect(r1.comparison).toMatchObject({ bboxDeltaMm: 0, positionDeltaMm: 0 });
     expect(r1.comparison!.legs).toEqual({ pieces: 1, withGaps: 1 });
+  });
+
+  it("a row in the pre-D1 importer's shape (no finish item) still gets its cuts, gaps and objects", async () => {
+    const ocd2 = await ctx.db.course.findUniqueOrThrow({ where: { id: ids.Ocd2 } });
+    const items = (ocd2.structure as { items: { siteId: string; leg?: { gaps: unknown[] } }[] }).items;
+    expect(items).toHaveLength(3); // start, 71, 72
+    expect(items[2].leg).toEqual({ gaps: [{ from: 0.4, to: 0.6 }] });
+    expect(ocd2.finishControlId).toBeNull();
+    const r = (await runStructureBackfill(ctx.db, { eventId: ctx.eventId, dryRun: true })).total;
+    expect(r).toBe(0);
   });
 
   it("objects are written once per event, scoped to both courses that carry them", async () => {
