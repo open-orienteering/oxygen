@@ -410,6 +410,11 @@ current, differing }`; a variation group or a slice-F site kind answers
 | unit (web) | `lib/__tests__/map-pipeline.test.ts`; `packages/api/src/__tests__/map-pipeline.test.ts` | §1: `courseEditorMount`; `map.editor.vector` parsing |
 | integration | `packages/api/src/__tests__/integration/map-pipeline.test.ts` | §1: `event.mapPipeline` / `setMapPipeline` report `editorVector` |
 | E2E | `e2e/course-editor.spec.ts` | the mount gate both ways and the shell; place → move → undo / redo → reload → select on the canvas → delete; create a course, append two controls, add-to-course on the map, reorder + undo, insert on a leg, remove, reload with `?course=` (explicit start / finish rows); deep links, `H`, Escape cascade |
+| unit (web) | `pages/editor/__tests__/placement.test.ts` | §6.1: insertion point (before the finish, after the selected control, at a leg, `S` at 0, no course), chain advance, `Ctrl+Z` steps back, `S` → `K`, ghost number and pending legs |
+| unit (web) | `pages/editor/__tests__/polygon.test.ts`, `gaps.test.ts` | §6.4: vertex flow, close on the first vertex / double-click, line kinds, vertex drag, hulls (toner saver margin); §6.3: compass degrees, shorter arc, minimum, merge across north, leg fractions |
+| unit (web) | `pages/editor/__tests__/bindings.test.ts` | §6, §7: V (Shift-click, lasso, object select / move / vertex, outlines, double-click leg), armed (exclusive, right-click, touch), area (vertex drag, first-vertex close), G (rim drag, click removes, leg) |
+| unit (web) | `lib/editor/__tests__/snap.test.ts`, `hit.test.ts`, `state.test.ts`, `structure-edit.test.ts`, `write-client.test.ts` | §6.2 snap candidates and distance; §5 object targets (stream and UI-layer outline); §6 Escape order, multi-selection, object selection, tools; §6.3 / §6.6 `setLegGaps`, `setNumberHidden`; §7 object tokens |
+| E2E | `e2e/course-editor.spec.ts` "tools" | §6.1 ten controls in ten clicks with `K` (ghost, pending leg, no action bar, `Ctrl+Z`, `Esc`), reuse of a site; §6.3 a rim drag stores a circle gap; §6.4 / §7 an out-of-bounds area drawn, its border set, deleted and undone; a filter region hides the 505 path under it live (canvas ink probe) |
 | E2E | `e2e/course-editor-legacy.spec.ts` | the legacy page, unchanged (`chromium`) |
 
 ## Pending in this chapter

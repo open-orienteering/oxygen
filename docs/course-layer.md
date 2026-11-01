@@ -878,9 +878,12 @@ venue's kiosk map draws them (08 §4.8; 07 §9.2).
   appearance; a sheet's objects and template appearance on the map are
   D7's (Layout mode).
 - **Structure, beyond D0** (§6): the layer does not read
-  `numberHidden`, the site's `circle_gaps` or `LegProps` beyond `gaps`
-  yet (the editor writes the structure since D4, `course-editor.md` §4;
-  reading these is D5's); importers write the structure and the
+  `numberHidden`, the site's `circle_gaps` or a stored structure's
+  `LegProps.gaps` yet — the editor writes them since D5
+  (`course-editor.md` §6.3, §6.6), but the viewer's request
+  (`course-layer-request.ts`) builds items from the course's control list
+  and `derive.ts` numbers every item (with D1's request rework; decision
+  log "D5" (4)); importers write the structure and the
   backfill fills `NULL` rows, retiring C0's interim leg input (D1);
   variations and their materialisation, map exchanges, crossing and
   map-issue points, corridors (slice F).

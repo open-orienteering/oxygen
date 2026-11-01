@@ -28,9 +28,18 @@ export interface ObjectSectionProps {
 
 const FIELD = "w-full px-1.5 py-1 border border-slate-200 rounded-md bg-white text-xs";
 
-export function ObjectSection(p: ObjectSectionProps) {
+export function ObjectSection(props: ObjectSectionProps) {
   const { t } = useTranslation("editor");
-  const o = p.object;
+  // Optimistic: the inspector shows an edit at once; the stored object (its token) takes over when it arrives.
+  const [pending, setPending] = useState<{ version: string; props?: Props; scope?: Obj["scope"] } | null>(null);
+  const live = pending && pending.version === props.object.version ? pending : null;
+  const o = { ...props.object, ...(live?.props ? { props: live.props } : {}), ...(live?.scope ? { scope: live.scope } : {}) } as Obj;
+  const p: ObjectSectionProps = {
+    ...props,
+    object: o,
+    onProps: (next) => { setPending({ version: props.object.version, scope: live?.scope, props: next }); props.onProps(next); },
+    onScope: (next) => { setPending({ version: props.object.version, props: live?.props, scope: next }); props.onScope(next); },
+  };
   return (
     <div data-testid="editor-object" data-object-id={o.id} data-object-kind={o.kind} className="px-2.5 py-1.5 space-y-2">
       <div className="flex items-center gap-2">

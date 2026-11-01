@@ -298,8 +298,9 @@ test.describe("Course editor (new, GL canvas)", () => {
       await expect(controlRows(page)).toHaveCount(10, { timeout: 30000 });
       await expect.poll(async () => (await sites(page)).length, { timeout: 15000 }).toBe(before + 10);
       await expect(page.getByTestId("editor-tool-K")).toHaveAttribute("aria-pressed", "true");
-      // The ghost reads the next number.
-      await page.mouse.move(spots[0].x + 5, spots[0].y + 5);
+      // The ghost reads the next number (on empty map; over a control it reads "Add ‹code›").
+      const next = await emptyPoint(page, 40, spots);
+      await page.mouse.move(next.x, next.y);
       await expect(page.getByTestId("editor-ghost-label")).toHaveText(/^11 · /, { timeout: 10000 });
 
       // Ctrl+Z while armed: the last placement goes, the tool stays armed.
