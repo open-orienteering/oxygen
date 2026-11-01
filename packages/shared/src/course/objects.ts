@@ -42,31 +42,32 @@ const vertices = (min: number, max = Infinity, vertex: z.ZodType<PathVertex> = p
  * One course object without its row fields: the kind, its geometry (paper
  * mm, y-up, the layout path's vertex / Bézier shape) and its props. Areas
  * take ≥ 3 vertices, lines ≥ 2, a text its anchor, an image two opposite
- * corners. Props are strict: unknown keys are refused, not dropped.
+ * corners. Props are strict: unknown keys are refused, not dropped (the
+ * object itself is not, so the API can intersect it with its row fields).
  */
 export const courseObjectBodySchema = z.discriminatedUnion("kind", [
-  z.strictObject({
+  z.object({
     kind: z.literal("oob_area"),
     geometry: vertices(3),
     /** 709 alone, 709.b with a solid boundary, 709.c dashed. Default `none`. */
     props: z.strictObject({ border: z.enum(["none", "solid", "dashed"]).optional() }),
   }),
-  z.strictObject({
+  z.object({
     kind: z.literal("oob_line"),
     geometry: vertices(2),
     /** 708 out-of-bounds boundary (default) or 711 out-of-bounds route. */
     props: z.strictObject({ symbol: z.enum(["708", "711"]).optional() }),
   }),
-  z.strictObject({ kind: z.literal("whiteout"), geometry: vertices(3), props: z.strictObject({}) }),
-  z.strictObject({
+  z.object({ kind: z.literal("whiteout"), geometry: vertices(3), props: z.strictObject({}) }),
+  z.object({
     kind: z.literal("toner_saver"),
     /** The hull: white-out is drawn outside it, inside the map frame. */
     geometry: vertices(3),
     /** How the hull was generated (D5 regenerates from them); the drawn shape is the stored one. */
     props: z.strictObject({ marginMm: z.number().min(0).optional(), holeRadiusMm: z.number().min(0).optional() }),
   }),
-  z.strictObject({ kind: z.literal("marked_route"), geometry: vertices(2), props: z.strictObject({}) }),
-  z.strictObject({
+  z.object({ kind: z.literal("marked_route"), geometry: vertices(2), props: z.strictObject({}) }),
+  z.object({
     kind: z.literal("text"),
     geometry: vertices(1, 1),
     props: z.strictObject({
@@ -79,12 +80,12 @@ export const courseObjectBodySchema = z.discriminatedUnion("kind", [
       align: z.enum(["left", "center", "right"]).optional(),
     }),
   }),
-  z.strictObject({
+  z.object({
     kind: z.literal("image"),
     geometry: vertices(2, 2),
     props: z.strictObject({ graphicId: z.number().int().positive(), crop: mapImageCropSchema.optional() }),
   }),
-  z.strictObject({
+  z.object({
     kind: z.literal("filter_region"),
     /** A polygon: Bézier handles are refused. */
     geometry: vertices(3, Infinity, pointSchema.strict()),
@@ -96,7 +97,7 @@ export const courseObjectBodySchema = z.discriminatedUnion("kind", [
     }),
   }),
   /** Reserved (micro insets, 08 §4.5): typed, refused on write, never drawn. */
-  z.strictObject({ kind: z.literal("inset_frame"), geometry: vertices(2), props: z.strictObject({}) }),
+  z.object({ kind: z.literal("inset_frame"), geometry: vertices(2), props: z.strictObject({}) }),
 ]);
 export type CourseObjectBody = z.infer<typeof courseObjectBodySchema>;
 

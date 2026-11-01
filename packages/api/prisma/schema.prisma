@@ -224,6 +224,7 @@ model Event {
   renderedMaps       RenderedMap[]
   mapTemplates       MapTemplate[]
   courseMaps         CourseMap[]
+  courseObjects      CourseObject[]
   graphics           Graphic[]
   tracks             Track[]
   routes             Route[]
@@ -608,6 +609,29 @@ model CourseMap {
   @@index([eventId, courseId, sortOrder])
   @@index([templateId])
   @@map("course_maps")
+  @@schema("oxygen")
+}
+
+/// Course objects (docs/course-layer.md §8; 08 §4.5): scoped purple / white
+/// objects drawn by the course layer. Cloud-owned, not journaled.
+model CourseObject {
+  id        String   @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  eventId   BigInt   @map("event_id")
+  seq       Int      @default(0)
+  kind      String
+  geometry  Json
+  props     Json     @default("{}")
+  scope     Json
+  z         Int      @default(0)
+  version   BigInt   @default(0)
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  event Event @relation(fields: [eventId], references: [id], onDelete: Cascade)
+
+  @@unique([eventId, seq])
+  @@index([eventId, z, seq])
+  @@map("course_objects")
   @@schema("oxygen")
 }
 

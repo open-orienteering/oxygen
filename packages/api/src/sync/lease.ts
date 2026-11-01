@@ -129,6 +129,8 @@ export async function releaseLease(
  * caches and readout-backup staging rows stay behind — they are
  * server-local, re-creatable, and not part of the results closure. The
  * event's map rows travel separately as `maps` (docs/map-storage.md §7.2).
+ * Course objects are cloud-owned like the sheets but travel here, since the
+ * kiosk map at the venue draws them (docs/course-layer.md §8).
  */
 const SNAPSHOT_TABLES = [
   "control",
@@ -136,6 +138,8 @@ const SNAPSHOT_TABLES = [
   "courseControl",
   "class",
   "classCoursePool",
+  // Not in the results closure, but the venue's map draws them (08 §4.8).
+  "courseObject",
   "cardReadout",
   "card",
   "runner",

@@ -35,6 +35,7 @@ let documentBytes: Buffer;
 let dump: string;
 let uploaderId: string;
 let originalFile: Record<string, unknown>;
+let courseObjectId: string;
 // Fingerprints no real symbol has: decisions are instance-global and keyed
 // by symbol geometry, so a real one would change other suites' imports.
 const FP = (k: string) => `ocad:999.9:bk${suffix}${k}`;
@@ -79,6 +80,9 @@ beforeAll(async () => {
     data: ["lost", "newer", "older"].map((k) => ({ fingerprint: FP(k), libraryVersion: LIB, canonicalId: `dump-${k}`, decidedBy: uploader.id, decidedAt: T0 })),
   });
   documentBytes = Buffer.from((await source.db.mapDocument.findUniqueOrThrow({ where: { hash: documentHash } })).bytes);
+  courseObjectId = (await source.db.courseObject.create({
+    data: { eventId: source.eventId, kind: "oob_area", geometry: [{ x: 1, y: 1 }, { x: 5, y: 1 }, { x: 5, y: 5 }], scope: { all: true } },
+  })).id;
 
   server = Fastify({ logger: false });
   registerBackupRoute(server);
@@ -123,6 +127,12 @@ describe("per-event dump", () => {
   it("carries the club's symbol decisions", () => {
     const rows = splitBackupSections(dump).get("club_symbol_decisions")!;
     for (const k of ["lost", "newer", "older"]) expect(rows).toContain(`${FP(k)},${LIB},dump-${k},`);
+  });
+
+  it("carries the event's course objects (course-layer.md §8)", () => {
+    const rows = splitBackupSections(dump).get("course_objects")!.trim().split("\n");
+    expect(rows).toHaveLength(2);
+    expect(rows[1].startsWith(`${courseObjectId},`)).toBe(true);
   });
 
   it("omits previews", () => {
