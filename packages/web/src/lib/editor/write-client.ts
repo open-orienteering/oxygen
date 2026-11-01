@@ -44,17 +44,26 @@ export interface EditorClient {
 
 /** A conflict the user has to see: both moved the control, or the row must be refreshed and the edit redone. */
 export class EditorConflict extends Error {
-  constructor(
-    readonly decision: Exclude<ConflictDecision, { kind: "rebase" }>,
-    readonly kind: "course" | "control",
-    readonly id: number,
-  ) {
+  readonly decision: Exclude<ConflictDecision, { kind: "rebase" }>;
+  readonly kind: "course" | "control";
+  readonly id: number;
+
+  constructor(decision: Exclude<ConflictDecision, { kind: "rebase" }>, kind: "course" | "control", id: number) {
     super(decision.kind === "moved" ? "moved elsewhere" : "changed elsewhere");
+    this.decision = decision;
+    this.kind = kind;
+    this.id = id;
   }
 }
 
 export class EditorWrites {
-  constructor(private readonly client: EditorClient, readonly versions: VersionBook = new VersionBook()) {}
+  private readonly client: EditorClient;
+  readonly versions: VersionBook;
+
+  constructor(client: EditorClient, versions: VersionBook = new VersionBook()) {
+    this.client = client;
+    this.versions = versions;
+  }
 
   /** Sends `send(token)`; on a version conflict decides, re-sends once on `rebase`, throws `EditorConflict` otherwise. */
   private async withToken<T>(
