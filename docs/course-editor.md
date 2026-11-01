@@ -235,7 +235,8 @@ returns to select from any tool; right-click exits an exclusive tool.
   open. The insertion point advances and the new site is the anchor.
 - **Drag** pans (the tool is exclusive). **`Ctrl+Z`** undoes the last
   placement and steps the anchor and insertion point back; the tool
-  stays armed.
+  stays armed. The chain steps back only when the entry undone is a
+  placement (an inspector edit made while armed is undone on its own).
 - **Exit**: `Esc`, `V`, `Enter`, right-click. `S` places (or reuses) a
   start, makes it the course's start (`setRole`) and continues with `K`
   from it; `M` places a finish, makes it the course's finish and ends the
@@ -266,7 +267,8 @@ own points.
 ### 6.3 Gaps (`G`)
 
 On the selected control's circle, or on the leg last clicked (its
-phantom): a drag along the rim (within 10 CSS px of it) opens a gap in
+phantom): a drag along the rim (within 10 CSS px of it, at least 1 mm on
+paper) opens a gap in
 the site's `circle_gaps` — compass degrees, the shorter way round
 whichever direction the pointer went, at least 3° — written with
 `control.update { circleGaps }`; a drag along the leg one in the leg's
@@ -282,19 +284,24 @@ layer's rule for authored gaps, `course-layer.md` §3.2–3.4, which the
 importers' file-authored cuts follow too): the tool starts from the
 circle's or leg's *effective* gaps — the stored ones, else the automatic
 ones from the layer's derivation — and writes the whole list. An empty
-list is "automatic" again.
+list is "automatic" again — so a circle whose only gap is an automatic
+one cannot be left without it (turn the event's automatic cuts off for
+that). A leg's effective gaps come from the course the layer draws
+(Course view); in the All-controls view the layer draws no legs and the
+tool starts from the stored ones.
 
 ### 6.4 Area tools (`A`)
 
 `pages/editor/tools/polygon.ts`: click per vertex, drag a vertex
 (`editor-polygon-vertex`) to adjust before closing, close by a
-double-click or a click on the first vertex, `Esc` cancels. Line kinds
+double-click or a click on the first vertex, `Esc` cancels; `Enter`
+finishes any kind once it has its minimum vertices. Line kinds
 (out-of-bounds line, marked route) end by a double-click or `Enter` from
-two vertices. On closing the object is created (§7: `{ all: true }`
+two vertices and never close on the first vertex. On closing the object is created (§7: `{ all: true }`
 scope, the kind's default props), the tool returns to `V` and the new
-object is selected with its inspector. A filter region is live while it
-is drawn: from the third vertex the polygon is sent as a draft region
-with the fast predicate (§7). The **toner saver** needs no drawing: its
+object is selected with its inspector. A filter region being drawn is
+outlined only: it starts with nothing picked (§7), so it hides nothing
+until its symbols are chosen in the inspector, where every change is live. The **toner saver** needs no drawing: its
 hull is generated from the selected course's positioned sites (each
 site's margin octagon, `TONER_MARGIN_MM` = 10 mm, convex hull —
 `tonerSaverHull`), scoped to the course, and edited like any polygon;
@@ -413,8 +420,9 @@ current, differing }`; a variation group or a slice-F site kind answers
 | unit (web) | `pages/editor/__tests__/placement.test.ts` | §6.1: insertion point (before the finish, after the selected control, at a leg, `S` at 0, no course), chain advance, `Ctrl+Z` steps back, `S` → `K`, ghost number and pending legs |
 | unit (web) | `pages/editor/__tests__/polygon.test.ts`, `gaps.test.ts` | §6.4: vertex flow, close on the first vertex / double-click, line kinds, vertex drag, hulls (toner saver margin); §6.3: compass degrees, shorter arc, minimum, merge across north, leg fractions |
 | unit (web) | `pages/editor/__tests__/bindings.test.ts` | §6, §7: V (Shift-click, lasso, object select / move / vertex, outlines, double-click leg), armed (exclusive, right-click, touch), area (vertex drag, first-vertex close), G (rim drag, click removes, leg) |
+| unit (web) | `lib/__tests__/undo-stack.test.ts` | §6.1: `UndoStack.top`, which `Ctrl+Z` while armed checks before stepping the chain back |
 | unit (web) | `lib/editor/__tests__/snap.test.ts`, `hit.test.ts`, `state.test.ts`, `structure-edit.test.ts`, `write-client.test.ts` | §6.2 snap candidates and distance; §5 object targets (stream and UI-layer outline); §6 Escape order, multi-selection, object selection, tools; §6.3 / §6.6 `setLegGaps`, `setNumberHidden`; §7 object tokens |
-| E2E | `e2e/course-editor.spec.ts` "tools" | §6.1 ten controls in ten clicks with `K` (ghost, pending leg, no action bar, `Ctrl+Z`, `Esc`), reuse of a site; §6.3 a rim drag stores a circle gap; §6.4 / §7 an out-of-bounds area drawn, its border set, printed (the all-controls `maps.pdf`: one page, its inflated drawing larger with the `all`-scoped area than parked), selected again on the canvas, deleted and undone; a filter region hides the 505 path under it live (canvas ink probe) |
+| E2E | `e2e/course-editor.spec.ts` "tools" | §6.1 ten controls in ten clicks with `K` (ghost, pending leg, no action bar, `Ctrl+Z`, `Esc`), reuse of a site; §6.5 Shift-click three controls → one add-to-course (one undo entry), §6.6 a site's notes written and reloaded; §6.3 a rim drag stores a circle gap; §6.4 / §7 an out-of-bounds area drawn, its border set, printed (the all-controls `maps.pdf`: one page, its inflated drawing larger with the `all`-scoped area than parked), selected again on the canvas, deleted and undone; a filter region hides the 505 path under it live (canvas ink probe) |
 | E2E | `e2e/course-editor-legacy.spec.ts` | the legacy page, unchanged (`chromium`) |
 
 ## Pending in this chapter

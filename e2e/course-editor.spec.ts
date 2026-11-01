@@ -362,6 +362,44 @@ test.describe("Course editor (new, GL canvas)", () => {
       expect((await sites(page)).length).toBe(before);
     });
 
+    test("Shift-click selects several controls for one add-to-course; notes are written from the inspector", async ({ page }) => {
+      await openEditor(page);
+      await newCourse(page, "D5 multi");
+      const [a, b, c] = await regularCodes(page, 3);
+      await clickMap(page, await sitePoint(page, a));
+      await expect(selectedCode(page)).toContainText(a, { timeout: 10000 });
+      for (const code of [b, c]) {
+        const p = await sitePoint(page, code);
+        await page.keyboard.down("Shift");
+        await page.mouse.click(p.x, p.y);
+        await page.keyboard.up("Shift");
+      }
+      await expect(page.getByTestId("editor-multi")).toHaveAttribute("data-count", "3", { timeout: 10000 });
+      await expect(page.getByTestId("editor-multi-ring")).toHaveCount(3);
+      const saved = waitForTrpc(page, "course.setStructure");
+      await page.getByTestId("editor-bulk-add-to-course").click();
+      await saved;
+      await expect(controlRows(page)).toHaveCount(3, { timeout: 15000 });
+      await expect(controlRows(page).nth(2)).toHaveAttribute("data-control-id", c);
+      // One undo entry for the three.
+      await page.keyboard.press("Control+z");
+      await expect(controlRows(page)).toHaveCount(0, { timeout: 15000 });
+
+      // A site's notes (courses.review) from the selection inspector.
+      await page.keyboard.press("Escape");
+      await clickMap(page, await sitePoint(page, a));
+      await expect(selectedCode(page)).toContainText(a, { timeout: 10000 });
+      const note = `checked ${Date.now() % 1000}`;
+      const updated = waitForTrpc(page, "control.update");
+      await page.getByTestId("editor-selected-notes").fill(note);
+      await page.getByTestId("editor-selected-notes").blur();
+      await updated;
+      await page.reload();
+      await editorReady(page);
+      await clickMap(page, await sitePoint(page, a));
+      await expect(page.getByTestId("editor-selected-notes")).toHaveValue(note, { timeout: 10000 });
+    });
+
     test("G: a drag along the rim opens a circle gap, stored on the site", async ({ page }) => {
       await openEditor(page);
       const [code] = await regularCodes(page, 1);

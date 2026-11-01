@@ -85,3 +85,16 @@ describe("UndoStack", () => {
     expect(log).toEqual(["undo:a"]);
   });
 });
+
+describe("UndoStack.top", () => {
+  it("is the entry the next undo reverses", async () => {
+    const s = new UndoStack(5);
+    expect(s.top).toBeUndefined();
+    const a = { undo: () => {}, redo: () => {} }, b = { undo: () => {}, redo: () => {} };
+    s.push(a);
+    s.push(b);
+    expect(s.top).toBe(b);
+    await s.undo();
+    expect(s.top).toBe(a);
+  });
+});

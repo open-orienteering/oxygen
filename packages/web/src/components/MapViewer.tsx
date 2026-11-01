@@ -3428,7 +3428,7 @@ export function MapViewer({
                 data-testid="editor-phantom" />
             )}
             {editor?.tool?.shapes && viewport && (
-              <g data-testid="editor-tool-layer" style={{ pointerEvents: "none" }}>
+              <g data-testid="editor-tool-layer" className="pointer-events-none">
                 {editor.tool.shapes.map((sh, i) => toolShapeNode(sh, i, mapMmToScreen, symbolScale))}
               </g>
             )}

@@ -199,8 +199,10 @@ export function EditorPage() {
 
   /** Push an undo entry for a write that succeeded. */
   const record = useCallback((undo: () => Promise<unknown>, redo: () => Promise<unknown>) => {
-    undoStack.push({ undo, redo });
+    const entry = { undo, redo };
+    undoStack.push(entry);
     bumpHistory();
+    return entry;
   }, [undoStack, bumpHistory]);
 
   // Sites this client created since the last refetch: their kind, position and code, for the writes and the
@@ -564,6 +566,8 @@ export function EditorPage() {
   /** The armed chain, kept in a ref as well: queued placements read the newest. */
   const chainRef = useRef<PlacementState | null>(null);
   const placeQueue = useRef<Promise<unknown>>(Promise.resolve());
+  /** The undo entries of placements (`Ctrl+Z` steps the chain back only for one of them). */
+  const placementEntries = useRef(new WeakSet<object>());
   const [hover, setHover] = useState<{ pt: Pt; target: ToolPointer["target"] } | null>(null);
   const onHover = useCallback((p: ToolPointer | null) => {
     setHover((prev) => {
@@ -633,12 +637,13 @@ export function EditorPage() {
         }
       }
       if (id === null || chainRef.current !== chain) return;
+      if (undoStack.top) placementEntries.current.add(undoStack.top);
       dispatch({ type: "placed", id });
       const next = afterPlaced(chain, id);
       if (chain.tool === "finish") exitTool(); // a finish ends the chain
       else setChain(next);
     }).catch(() => {});
-  }, [snap, applyStructure, createSite, setChain, exitTool]);
+  }, [snap, applyStructure, createSite, setChain, exitTool, undoStack]);
 
   /** `A` → a kind: the polygon flow, or the toner saver's hull from the course straight away. */
   const startArea = useCallback((kind: AreaChoice) => {
@@ -804,24 +809,17 @@ export function EditorPage() {
     }
   })();
 
-  // Drafts: dragged objects, and the polygon being drawn when it is a filter region (live, 08 §5.3).
-  // Only a region being drawn follows the hover: anything else would re-derive the layer on every pointer move.
-  const regionHover = tool.kind === "area" && tool.poly.kind === "filter_region" ? hover : null;
+  // Drafts: objects being dragged (a region's drag is live, 08 §5.3). A region being drawn picks nothing yet (§6.4).
   const draftObjects = useMemo(() => {
-    if (drafts.size === 0 && !regionHover && !(tool.kind === "area" && tool.poly.kind === "filter_region")) return NO_DRAFTS;
+    if (drafts.size === 0) return NO_DRAFTS;
     const out: CourseObject[] = [];
     for (const [id, geometry] of drafts) {
       const o = objects.find((x) => x.id === id);
       if (o) out.push({ ...o, geometry } as CourseObject);
     }
-    if (tool.kind === "area" && tool.poly.kind === "filter_region") {
-      const v = regionHover ? [...tool.poly.vertices, regionHover.pt] : tool.poly.vertices;
-      if (v.length >= 3) out.push({ id: -1, kind: "filter_region", geometry: v, props: { mode: "hide", symbols: "all" }, scope: { all: true }, z: 0, version: "0", inCourses: null });
-    }
     return out;
-  }, [drafts, objects, tool, regionHover]);
-  const draftFast = (tool.kind === "area" && tool.poly.kind === "filter_region")
-    || [...drafts.keys()].some((id) => objects.find((o) => o.id === id)?.kind === "filter_region");
+  }, [drafts, objects]);
+  const draftFast = [...drafts.keys()].some((id) => objects.find((o) => o.id === id)?.kind === "filter_region");
 
   const [viewRequest, setViewRequest] = useState<MapViewerEditorProps["viewRequest"]>(null);
 
@@ -972,10 +970,13 @@ export function EditorPage() {
         e.preventDefault();
         if (e.shiftKey) runRedo();
         else {
-          runUndo();
-          // Ctrl+Z while armed: the anchor goes back with the last placement (08 §5.3).
+          // Ctrl+Z while armed: the anchor goes back with the last placement (08 §5.3) — only when the entry
+          // about to be undone is that placement: an inspector edit made meanwhile leaves the chain alone.
           const chain = chainRef.current;
-          if (state.tool.kind === "place" && chain && chain.placed.length > 0) setChain(afterUndo(chain));
+          const top = undoStack.top;
+          const stepsChain = state.tool.kind === "place" && !!chain && chain.placed.length > 0 && !!top && placementEntries.current.has(top);
+          runUndo();
+          if (stepsChain && chain) setChain(afterUndo(chain));
         }
       } else if (mod && (e.key === "y" || e.key === "Y")) {
         e.preventDefault();
@@ -1025,7 +1026,7 @@ export function EditorPage() {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [descControlId, runUndo, runRedo, state, handleDelete, deleteControls, deleteObject, selectedObject, setChain, exitTool, finishArea,
+  }, [descControlId, runUndo, runRedo, undoStack, state, handleDelete, deleteControls, deleteObject, selectedObject, setChain, exitTool, finishArea,
     stepSelection, armPlace, setTool, canGap, fitView]);
 
   const deepLinkDone = useRef(false);
