@@ -446,3 +446,29 @@ export async function assertCourseVersion(
     differing,
   });
 }
+
+/**
+ * What the viewer's course layer reads of a stored structure (§6.3): the
+ * authored leg gaps keyed `"<fromId>><toId>"` and the controls whose
+ * number every visit hides, both in public control ids. A NULL or
+ * invalid column has none.
+ */
+export function layerPropsOfStored(
+  stored: unknown,
+  publicId: (uuid: string) => number | undefined,
+): { legGaps: Record<string, course.FractionGap[]>; hiddenNumbers: number[] } {
+  const out = { legGaps: {} as Record<string, course.FractionGap[]>, hiddenNumbers: [] as number[] };
+  const parsed = stored ? course.courseStructureSchema.safeParse(stored) : null;
+  if (!parsed?.success) return out;
+  const items = course.structureControlItems(parsed.data);
+  const visits = new Map<number, boolean>();
+  items.forEach((item, i) => {
+    const id = publicId(item.siteId);
+    if (id === undefined) return;
+    visits.set(id, (visits.get(id) ?? true) && !!item.numberHidden);
+    const prev = i > 0 ? publicId(items[i - 1].siteId) : undefined;
+    if (prev !== undefined && item.leg?.gaps?.length) out.legGaps[`${prev}>${id}`] = item.leg.gaps;
+  });
+  out.hiddenNumbers = [...visits].filter(([, hidden]) => hidden).map(([id]) => id);
+  return out;
+}

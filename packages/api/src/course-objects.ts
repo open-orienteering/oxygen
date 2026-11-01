@@ -126,7 +126,7 @@ export function assertWritableKind(kind: course.CourseObjectKind): void {
 export async function writeCourseObject(
   db: Db,
   eventId: bigint,
-  data: { body: course.CourseObjectBody; scope: StoredScope; z?: number },
+  data: { body: course.CourseObjectBody; scope: StoredScope; z?: number; source?: "import" },
 ): Promise<StoredCourseObject> {
   assertWritableKind(data.body.kind);
   const row = await db.courseObject.create({
@@ -137,6 +137,7 @@ export async function writeCourseObject(
       props: data.body.props as Prisma.InputJsonValue,
       scope: data.scope as Prisma.InputJsonValue,
       z: data.z ?? 0,
+      ...(data.source ? { source: data.source } : {}),
       version: nextObjectVersion(),
     },
   });

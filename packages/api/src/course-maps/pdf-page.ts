@@ -183,7 +183,8 @@ export interface PrintMapRow {
     climbM: number;
     orderMode: "ordered" | "free_order";
     geometry: unknown;
-    geometrySource?: string | null;
+    /** `courses.structure` JSONB: where the authored leg gaps come from. */
+    structure?: unknown;
     descriptionInstructions: unknown;
     classes: Array<{ name: string }>;
     courseControls: Array<{ control: LayoutControlSource; labelDx?: number | null; labelDy?: number | null }>;
@@ -232,7 +233,7 @@ export function sheetForMapRow(
     meridianTiltDeg: ctx.mapInfo.meridianTiltDeg,
     event: ctx.event,
     mapName: row.name,
-    geometrySource: row.course?.geometrySource ?? null,
+    structure: row.course?.structure ?? null,
     ...(row.course?.id !== undefined ? { courseId: String(row.course.id) } : {}),
     courseObjects: inScope.map(({ id: _uuid, scope: _scope, z: _z, version: _v, seq, ...body }) => ({ ...body, id: seq }) as course.CourseLayerObject),
   });

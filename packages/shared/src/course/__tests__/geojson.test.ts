@@ -29,20 +29,11 @@ describe("courseLayerGeoJson", () => {
     expect(fc.features).toHaveLength(5);
   });
 
-  it("imported legs: authored pieces as preclipped LineStrings; extras under their imported names", () => {
-    const pieces = [[{ x: 14, y: 10 }, { x: 20, y: 12 }], [{ x: 22, y: 12 }, { x: 37, y: 10 }]];
-    const structure = linear(["S", "31"], {
-      items: [{ siteId: "S" }, { siteId: "31", leg: { pieces } }],
-      extras: [{ kind: "marked_route", points: [{ x: 0, y: 0 }, { x: 5, y: 5 }] }, { kind: "oob_area", points: [{ x: 0, y: 0 }, { x: 5, y: 0 }, { x: 5, y: 5 }] }],
-    });
+  it("authored leg gaps and site cuts carry into the artifact", () => {
+    const structure = linear(["S", "31"], { items: [{ siteId: "S" }, { siteId: "31", leg: { gaps: [{ from: 0.4, to: 0.6 }] } }] });
     const fc = courseLayerGeoJson(courseLayer(layerInput({ structure })));
-    const legs = fc.features.filter((f) => f.properties.symbolType === "leg");
-    expect(legs.map((f) => f.properties)).toEqual([
-      { symbolType: "leg", from: "S1", to: "31", preclipped: true },
-      { symbolType: "leg", from: "S1", to: "31", preclipped: true },
-    ]);
-    expect(fc.features.at(-2)).toMatchObject({ geometry: { type: "LineString" }, properties: { symbolType: "marked_route" } });
-    expect(fc.features.at(-1)).toMatchObject({ geometry: { type: "Polygon", coordinates: [[[0, 0], [5, 0], [5, 5], [0, 0]]] }, properties: { symbolType: "restricted_area" } });
+    const leg = fc.features.find((f) => f.properties.symbolType === "leg")!;
+    expect(leg.properties).toEqual({ symbolType: "leg", from: "S1", to: "31", gaps: [{ from: 0.4, to: 0.6 }] });
   });
 
   it("picks a course of a multi-course layer by id; none → empty", () => {

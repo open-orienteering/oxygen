@@ -18,6 +18,7 @@ import {
   ControlStatus,
   pruneDescriptionInstructions,
   course as courseShared,
+  encodeHlc,
 } from "@oxygen/shared";
 
 const orderModeSchema = z.enum(
@@ -87,6 +88,7 @@ import {
 import {
   assertCourseVersion,
   loadExplicitStructure,
+  layerPropsOfStored,
   loadWireStructure,
   persistStructure,
   rewriteStructureFromColumns,
@@ -95,6 +97,9 @@ import {
   uuidsOfPublicIds,
 } from "../course-structure.js";
 import { baseVersionSchema } from "../version-conflict.js";
+import { collectImportedObjects, legGapsOfFeatures } from "../course-import-structure.js";
+import { nextServerHlc } from "../serverClock.js";
+import { writeImportedObjects } from "../course-import-objects.js";
 
 /** Course-level description-sheet instructions (specials + finish). */
 const descriptionInstructionsSchema = z
@@ -534,9 +539,12 @@ export const courseRouter = router({
         .filter((c) => c.status === "finish")
         .map((c) => [c.id, publicControlId(c)] as const),
     );
+    const allControls = await ctx.db.control.findMany({ where: { eventId }, select: { id: true, seq: true, codes: true } });
+    const publicIdOf = new Map(allControls.map((c) => [c.id, publicControlId({ codes: c.codes ?? "", seq: c.seq })]));
     return courses.map(
       (c): CourseSummary => {
         const tokens = controlsByCourse.get(c.id) ?? [];
+        const layerProps = layerPropsOfStored(c.structure, (uuid) => publicIdOf.get(uuid));
         return {
           id: c.seq,
           name: c.name,
@@ -556,6 +564,7 @@ export const courseRouter = router({
             : null,
           descriptionInstructions: instructionsDto(c.descriptionInstructions),
           labelOffsets: offsetsByCourse.get(c.id) ?? {},
+          ...layerProps,
           version: c.version.toString(),
         };
       },
@@ -1389,6 +1398,7 @@ export const courseRouter = router({
         xpos: true,
         ypos: true,
         description: true,
+        circleGaps: true,
       },
     });
 
@@ -1441,6 +1451,7 @@ export const courseRouter = router({
           mapX: c.xpos,
           mapY: c.ypos,
           description: (c.description as ControlDescription | null) ?? null,
+          circleGaps: (c.circleGaps as courseShared.AngularGap[] | null) ?? [],
         };
       });
   }),
@@ -2106,6 +2117,12 @@ export const courseRouter = router({
           // A position-less import leaves existing coordinates alone and
           // creates new controls unplaced (0, 0) for the course editor.
           ...(skipPositions ? {} : { xpos: pc.mapX, ypos: pc.mapY }),
+          // The file's authored circle cuts are the effective set (an OCD
+          // bundle with none clears them); IOF / PPen files carry none
+          // and leave the column alone (course-layer.md §6.4).
+          ...(geometrySource === "ocd" && !skipPositions
+            ? { circleGaps: (pc.cuts ?? []).map((g) => ({ start: g.start, end: g.end })) as never }
+            : {}),
           removed: false,
           // Descriptions belong to the control row. Only OCD bundles carry
           // them; XML re-imports leave any existing description untouched.
@@ -2160,16 +2177,10 @@ export const courseRouter = router({
 
       /** Map: parsed course name → PG course UUID. */
       const courseIdMap = new Map<string, string>();
+      /** Parsed control id → position (map mm, as the geometry's), for the leg gaps. */
+      const positionOfCode = new Map(parsed.controls.map((c) => [c.id, { x: c.mapX, y: c.mapY }]));
 
       for (const pc of parsed.courses) {
-        // Build (position, controlUuid) pairs for the join table; only
-        // include "Control" entries (start/finish live as control rows
-        // and don't appear in course_controls, mirroring MeOS).
-        const ordered = pc.controls
-          .filter((cc) => cc.type === "Control")
-          .map((cc) => controlIdMap.get(cc.controlId))
-          .filter((u): u is string => !!u);
-
         // Encoded legs string (used by the matcher for leg-length stats).
         const legsArr = pc.controls
           .filter((cc) => cc.type === "Control")
@@ -2201,6 +2212,8 @@ export const courseRouter = router({
 
         const existing = courseByName.get(pc.name.toLowerCase());
         let courseUuid: string;
+        // The geometry the course ends up with: a kept OCD one (XML re-import) still carries the authored pieces.
+        let storedGeom: GeoJSONFeatureCollection | null = geom;
         if (existing) {
           // Resolve geometry vs existing one: keep OCD unless drift > 30m.
           let nextGeom: GeoJSONFeatureCollection | null = geom;
@@ -2220,6 +2233,7 @@ export const courseRouter = router({
           ) {
             nextGeom = prev.geometry as unknown as GeoJSONFeatureCollection;
           }
+          storedGeom = nextGeom;
           await ctx.db.course.update({
             where: { id: existing.id },
             data: {
@@ -2232,10 +2246,6 @@ export const courseRouter = router({
               firstAsStart: false,
               lastAsFinish: false,
               removed: false,
-              // The import rewrites the sequence: a stored structure would
-              // be stale, so the course reads from its columns again (D1
-              // makes the importers write the structure).
-              structure: PrismaNs.DbNull,
               geometry: (nextGeom ?? undefined) as never,
               geometrySource: !nextGeom
                 ? prev?.geometrySource ?? ""
@@ -2269,19 +2279,33 @@ export const courseRouter = router({
         }
         courseIdMap.set(pc.name, courseUuid);
 
-        // Replace course_controls rows for this course.
-        await ctx.db.courseControl.deleteMany({
-          where: { courseId: courseUuid },
-        });
-        if (ordered.length > 0) {
-          await ctx.db.courseControl.createMany({
-            data: ordered.map((uuid, idx) => ({
-              courseId: courseUuid,
-              position: idx + 1,
-              controlId: uuid,
-            })),
-          });
+        // The structure, and through it the column mirror: start / finish
+        // sites explicit as the file names them, `course_controls`, the
+        // leg gaps the file's 705 pieces leave (course-layer.md §6.4).
+        const gapsByLeg = skipPositions || !storedGeom ? new Map<string, courseShared.FractionGap[]>() : legGapsOfFeatures(storedGeom, (code) => positionOfCode.get(code));
+        const items: courseShared.StoredControlItem[] = [];
+        let prevCode: string | null = null;
+        for (const cc of pc.controls) {
+          const siteId = controlIdMap.get(cc.controlId);
+          if (!siteId) continue;
+          const gaps = prevCode === null ? undefined : gapsByLeg.get(`${prevCode}>${cc.controlId}`);
+          items.push({ siteId, ...(gaps ? { leg: { gaps } } : {}) });
+          prevCode = cc.controlId;
         }
+        await persistStructure(ctx.db, eventId, courseShared.linearStructure(courseUuid, items, { orderMode: pc.orderMode ?? "ordered" }) as courseShared.StoredCourseStructure);
+      }
+
+      // The file's course-level lines and areas (707 / 708 / 709 / 711) are
+      // course objects, so nothing of an imported course lives only in the
+      // GeoJSON. An OCD import replaces the ones an earlier import wrote.
+      if (geometrySource === "ocd" && !skipPositions) {
+        await writeImportedObjects(
+          ctx.db,
+          eventId,
+          collectImportedObjects(new Map(Object.entries(courseGeometry))),
+          (name) => courseIdMap.get(name),
+          { replace: true, rewrittenCourseNames: [...courseIdMap.keys()] },
+        );
       }
 
       // A position-less import must not leave geometry drawn from the
@@ -2340,6 +2364,19 @@ export const courseRouter = router({
       // rather than wrapping the whole 300-line import in a transaction —
       // a crash in between loses only the ship, and re-running the import
       // (operator-driven, idempotent by name-matching) re-emits.
+      // The rows the import wrote take the entry's own HLC as their token
+      // (course-layer.md §7), stamped before the payloads are serialised so
+      // a peer applying the entry holds the same one: an editor open on
+      // any of them is told on its next write.
+      const importHlc = nextServerHlc();
+      const importToken = encodeHlc(importHlc);
+      await ctx.db.course.updateMany({ where: { id: { in: [...courseIdMap.values()] } }, data: { version: importToken } });
+      await ctx.db.control.updateMany({ where: { id: { in: [...controlIdMap.values()] } }, data: { version: importToken } });
+      if (input.replaceAll) {
+        // The rows the wipe soft-deleted were written by the import too.
+        await ctx.db.course.updateMany({ where: { eventId, removed: true }, data: { version: importToken } });
+        await ctx.db.control.updateMany({ where: { eventId, removed: true }, data: { version: importToken } });
+      }
       const activeControls = await ctx.db.control.findMany({
         where: { eventId, removed: false },
         select: { id: true },
@@ -2358,6 +2395,7 @@ export const courseRouter = router({
       }
       await appendJournal(ctx.db, {
         eventId,
+        hlc: importHlc,
         type: "reference.imported",
         payload: {
           replaceAll: input.replaceAll,

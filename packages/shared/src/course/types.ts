@@ -28,15 +28,12 @@ export interface CourseSite {
   kind: "control" | "start" | "finish";
   x: number;
   y: number;
+  /** `controls.circle_gaps`: authored circle cuts, compass degrees. A non-empty list replaces the automatic cuts (course-layer.md §6.4). */
+  circleGaps?: AngularGap[];
 }
 
-/** File-authored geometry of the leg *into* an item (imported `ocd` courses; retired by D's `LegProps.path`). */
-export interface CourseLegInput {
-  /** Leg polyline from the previous site to this one, bends included. Default: the straight line. */
-  path?: MapPoint[];
-  /** 705 pieces as the file drew them: drawn as given, never clipped or gapped. */
-  pieces?: MapPoint[][];
-  /** Authored gaps along `path`; replace the automatic ones. */
+/** The stored `LegProps` the layer reads (08 §4.3): authored gaps of the leg *into* an item; they replace the automatic ones. */
+export interface CourseLegProps {
   gaps?: FractionGap[];
 }
 
@@ -44,16 +41,9 @@ export interface CourseItem {
   siteId: string;
   /** How the item is drawn; default the site's kind (`firstAsStart` / `lastAsFinish` set it). */
   role?: CourseSite["kind"];
-  leg?: CourseLegInput;
-  /** File-authored circle gaps; replace the automatic cuts for this circle. */
-  circleGaps?: AngularGap[];
-}
-
-/** Course-level lines and areas of imported geometry that belong to no leg. */
-export interface CourseExtra {
-  kind: "marked_route" | "restricted_line" | "forbidden_route" | "oob_area";
-  /** Polyline, or the ring of an `oob_area`. */
-  points: MapPoint[];
+  leg?: CourseLegProps;
+  /** Hide this visit's number (08 §4.2); the site stays an obstacle-free label-less circle. */
+  numberHidden?: boolean;
 }
 
 /** v1: today's linear sequence (08 §4.3 item shape; variations and insets are slice D). */
@@ -66,7 +56,6 @@ export interface CourseStructure {
   items: CourseItem[];
   /** Manual number positions: centre = site + offset, paper mm (`course_controls` label offsets). */
   labelOffsets?: Record<string, { dx: number; dy: number }>;
-  extras?: CourseExtra[];
 }
 
 /** Multipliers of the library dimensions (1 = the spec). */
@@ -177,13 +166,12 @@ export interface DerivedSite {
 export interface DerivedLeg {
   from: string;
   to: string;
-  /** Centre-to-centre polyline (or the authored path). */
+  /** Centre-to-centre polyline. */
   points: MapPoint[];
   /** Effective gaps (authored or automatic). */
   gaps: FractionGap[];
-  /** What is drawn: after gaps and circle clipping, or the authored pieces. */
+  /** What is drawn: after gaps and circle clipping. */
   pieces: MapPoint[][];
-  preclipped: boolean;
 }
 
 export interface DerivedCourse {
@@ -192,7 +180,6 @@ export interface DerivedCourse {
   /** Positioned items in order: site id + role. */
   sequence: { siteId: string; role: CourseSite["kind"] }[];
   legs: DerivedLeg[];
-  extras: CourseExtra[];
 }
 
 /** The geometry the course-setting rules produce, before symbols (§3). */

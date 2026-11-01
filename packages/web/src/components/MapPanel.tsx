@@ -544,6 +544,7 @@ function MapPanelImpl({
         completionPct,
         punchStatus: punchStatusByCode?.[c.code],
         description: c.description,
+        circleGaps: c.circleGaps,
       };
     });
   }, [controlCoords.data, effectiveControlIds, filterMode, showOnlyRelevant, courseControlIds, showCompletion, completionStatus.data, punchStatusByCode]);
@@ -609,6 +610,8 @@ function MapPanelImpl({
         orderMode: c.orderMode ?? "ordered",
         descriptionInstructions: c.descriptionInstructions ?? null,
         labelOffsets: c.labelOffsets,
+        legGaps: c.legGaps,
+        hiddenNumbers: c.hiddenNumbers,
       };
     });
   }, [courses.data, controlCoords.data, effectiveCourseNames, classNamesByCourse]);

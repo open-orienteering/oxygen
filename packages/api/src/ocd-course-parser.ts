@@ -14,6 +14,7 @@
  *   706000  Finish double circle
  *   707000  Marked route / restricted line
  *   709000  Restricted line
+ *   708000  Out-of-bounds boundary line
  *   711000  Forbidden route
  */
 
@@ -462,7 +463,7 @@ export function parseOCDCourseData(fileData: Buffer): ParsedOCDCourseData {
                 }
             }
 
-        } else if (entry.sym === 709000 || entry.sym === 711000) {
+        } else if (entry.sym === 708000 || entry.sym === 709000 || entry.sym === 711000) {
             const coords = readCoords(fileData, pos, ni);
             if (coords.length > 1) {
                 if (entry.objType === OTYPE_LINE) {
@@ -627,11 +628,13 @@ export function parseOCDCourseData(fileData: Buffer): ParsedOCDCourseData {
             : (code.startsWith("M") || code === "Finish" || code.startsWith("F")) ? "Finish"
             : "Control";
         const desc = controlDescriptions.get(code);
+        const cuts = controlSlits.get(code);
         controls.push({
             id: code,
             type,
             lat: 0, lng: 0,
             mapX: p?.xMm ?? 0, mapY: p?.yMm ?? 0,
+            ...(type === "Control" && cuts && cuts.length > 0 ? { cuts } : {}),
             ...(desc ? { description: desc } : {}),
         });
     }

@@ -624,6 +624,8 @@ model CourseObject {
   scope     Json
   z         Int      @default(0)
   version   BigInt   @default(0)
+  /// 'import': written by the importers / backfill (replaced on re-import); NULL: drawn by hand.
+  source    String?
   createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
 

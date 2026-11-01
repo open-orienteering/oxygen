@@ -1,8 +1,8 @@
 /**
  * `resolveSheet` (docs/course-print.md §5): the resolved layout as the
  * composer's page input — paper, frame, window, the course layer's
- * structure and sites, authored geometry only for `ocd` courses, label
- * offsets, extras, all-controls, the description block.
+ * structure and sites, the authored leg gaps of the stored structure and
+ * the controls' circle gaps, label offsets, all-controls, the description block.
  */
 
 import { describe, expect, it } from "vitest";
@@ -75,20 +75,45 @@ describe("resolveSheet", () => {
     expect(one.items.map((i) => [i.siteId, i.role])).toEqual([["S1", "start"], ["c31", "control"], ["c32", "control"], ["F1", "finish"]]);
     expect(sheet.course.sites.map((x) => x.id)).toEqual(["S1", "c31", "c32", "F1"]);
     expect(one.labelOffsets).toEqual({ c31: { dx: 0, dy: 6 } });
-    expect(one.extras).toEqual([{ kind: "marked_route", points: [{ x: 20, y: 0 }, { x: 25, y: -8 }] }]);
   });
 
-  it("editor courses: no authored geometry — the course layer derives legs and cuts", () => {
-    const one = resolveSheet(base({ geometrySource: "editor" })).sheet.course.structure as { items: { leg?: unknown; circleGaps?: unknown }[] };
-    expect(one.items.every((i) => i.leg === undefined && i.circleGaps === undefined)).toBe(true);
+  const U31 = "00000000-0000-4000-8000-000000000031";
+  const U32 = "00000000-0000-4000-8000-000000000032";
+  const uuidControls = [{ ...controls[0], id: U31, circleGaps: [{ start: 10, end: 40 }] }, { ...controls[1], id: U32 }];
+  const stored = (items: unknown[]) => ({ version: 1, id: "00000000-0000-4000-8000-0000000000c1", orderMode: "ordered", items });
+
+  it("no stored structure: no authored legs or gaps — the course layer derives them (whatever geometry_source was)", () => {
+    const one = resolveSheet(base()).sheet.course.structure as { items: { leg?: unknown }[] };
+    expect(one.items.every((i) => i.leg === undefined)).toBe(true);
   });
 
-  it("ocd courses keep the file's legs, gaps, pre-clipped pieces and circle gaps", () => {
-    const one = resolveSheet(base({ geometrySource: "ocd" })).sheet.course.structure as { items: { leg?: unknown; circleGaps?: unknown }[] };
-    expect(one.items[0].leg).toBeUndefined();
-    expect(one.items[1]).toMatchObject({ circleGaps: [{ start: 10, end: 40 }], leg: { path: [{ x: -30, y: 0 }, { x: -20, y: 0 }], gaps: [{ from: 0.4, to: 0.6 }] } });
-    expect(one.items[2].leg).toEqual({ pieces: [[{ x: -20, y: 0 }, { x: 0, y: 5 }, { x: 20, y: 0 }]] });
-    expect(one.items[3].leg).toEqual({ path: [{ x: 20, y: 0 }, { x: 30, y: 0 }] });
+  it("the stored structure's leg gaps land on the item the leg runs into, aligned past the geometry's start and finish", () => {
+    const gaps = [{ from: 0.4, to: 0.6 }];
+    const input = base({
+      course: { ...base().course!, controls: uuidControls },
+      structure: stored([{ siteId: U31 }, { siteId: U32, leg: { gaps } }]),
+    });
+    const one = resolveSheet(input).sheet.course.structure as { items: { siteId: string; leg?: unknown }[] };
+    expect(one.items.map((i) => [i.siteId, i.leg])).toEqual([["S1", undefined], [U31, undefined], [U32, { gaps }], ["F1", undefined]]);
+    // An invalid column is ignored.
+    const bad = resolveSheet({ ...input, structure: { nope: true } }).sheet.course.structure as { items: { leg?: unknown }[] };
+    expect(bad.items.every((i) => i.leg === undefined)).toBe(true);
+  });
+
+  it("a structure whose first site is not in the layout (an explicit start the geometry names S1) aligns on the first shared site", () => {
+    const gaps = [{ from: 0.2, to: 0.3 }];
+    const input = base({
+      course: { ...base().course!, controls: uuidControls },
+      structure: stored([{ siteId: "00000000-0000-4000-8000-0000000000aa" }, { siteId: U31 }, { siteId: U32, leg: { gaps } }]),
+    });
+    const one = resolveSheet(input).sheet.course.structure as { items: { siteId: string; leg?: unknown }[] };
+    expect(one.items.find((i) => i.siteId === U32)!.leg).toEqual({ gaps });
+  });
+
+  it("sites carry the controls' circle gaps", () => {
+    const { sheet } = resolveSheet(base({ course: { ...base().course!, controls: uuidControls } }));
+    expect(sheet.course.sites.find((x) => x.id === U31)!.circleGaps).toEqual([{ start: 10, end: 40 }]);
+    expect(sheet.course.sites.find((x) => x.id === U32)!.circleGaps).toBeUndefined();
   });
 
   it("description block from the template position with the IOF header; hidden → null", () => {

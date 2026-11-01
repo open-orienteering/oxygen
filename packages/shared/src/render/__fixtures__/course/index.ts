@@ -84,20 +84,20 @@ function legs(): CourseScene {
   return scene("course-legs", base, { structure: ordered(["S", "31", "32", "33", "F"]), sites, objects: [], appearance: {}, viewOptions: {} });
 }
 
-/** Automatic cuts at 204 / 109 features (document features), an authored gap, file-authored leg pieces and a manual number position. */
+/** Automatic cuts at 204 / 109 features (document features), an authored gap, an authored leg gap and a manual number position. */
 function cuts(): CourseScene {
   const base = new BaseMap("ISOM2017-2")
     .add("204", at(12.5, 10))
     .add("204", at(20, 15.2))
     .add("109", at(30, 22.5))
     .add("201", line(36, 2, 46, 6));
-  const sites = [site("S", "start", 2, 10, "S1"), site("31", "control", 10, 10), site("32", "control", 30, 20), site("33", "control", 44, 10), site("F", "finish", 44, 26, "F1")];
+  const sites = [site("S", "start", 2, 10, "S1"), site("31", "control", 10, 10), site("32", "control", 30, 20), { ...site("33", "control", 44, 10), circleGaps: [{ start: 300, end: 330 }] }, site("F", "finish", 44, 26, "F1")];
   const structure = ordered([], {
     items: [
       { siteId: "S" },
       { siteId: "31" },
       { siteId: "32" },
-      { siteId: "33", circleGaps: [{ start: 300, end: 330 }], leg: { pieces: [[{ x: 32.6, y: 18.6 }, { x: 37, y: 16 }], [{ x: 38.5, y: 15 }, { x: 41.5, y: 12 }]] } },
+      { siteId: "33", leg: { gaps: [{ from: 0.4, to: 0.6 }] } },
       { siteId: "F" },
     ],
     labelOffsets: { "33": { dx: 0, dy: -7 } },
@@ -107,24 +107,21 @@ function cuts(): CourseScene {
   return scene("course-cuts", base, { structure, sites, objects: [], appearance: {}, viewOptions: {}, cutFeatures });
 }
 
-/** Layout objects and imported extras: white-out, toner-saver ring, 709 / 709.b, 707, 708, 711, map text. */
+/** Layout objects and course objects (marked route, 708, 711): white-out, toner-saver ring, 709 / 709.b, 707, 708, 711, map text. */
 function objects(): CourseScene {
   const base = new BaseMap("ISOM2017-2")
     .add("406", area(0, 0, 50, 0, 50, 40, 0, 40))
     .add("505", line(2, 20, 48, 24))
     .add("106", line(4, 36, 46, 30));
   const sites = [site("S", "start", 6, 6, "S1"), site("31", "control", 26, 8), site("F", "finish", 44, 6, "F1")];
-  const structure = ordered(["S", "31", "F"], {
-    extras: [
-      { kind: "marked_route", points: [{ x: 4, y: 12 }, { x: 4, y: 28 }] },
-      { kind: "restricted_line", points: [{ x: 10, y: 30 }, { x: 22, y: 34 }] },
-      { kind: "forbidden_route", points: [{ x: 28, y: 34 }, { x: 46, y: 36 }] },
-    ],
-  });
+  const structure = ordered(["S", "31", "F"]);
   const window = [{ x: 0, y: 0 }, { x: 50, y: 0 }, { x: 50, y: 40 }, { x: 0, y: 40 }];
   return scene("course-objects", base, {
     structure, sites, appearance: {}, viewOptions: { window, textValues: { course: "Bana 1" } },
     objects: [
+      { id: 1, kind: "marked_route", geometry: [{ x: 4, y: 12 }, { x: 4, y: 28 }], props: {} },
+      { id: 2, kind: "oob_line", geometry: [{ x: 10, y: 30 }, { x: 22, y: 34 }], props: {} },
+      { id: 3, kind: "oob_line", geometry: [{ x: 28, y: 34 }, { x: 46, y: 36 }], props: { symbol: "711" } },
       { id: "wo", anchor: "map", kind: "rectangle", x: 14, y: 16, width: 10, height: 10, fillMode: "whiteout" },
       { id: "oob", anchor: "map", kind: "rectangle", x: 30, y: 14, width: 8, height: 8, fillMode: "outOfBounds" },
       { id: "oob-b", anchor: "map", kind: "path", points: [{ x: 40, y: 14 }, { x: 48, y: 14 }, { x: 44, y: 22 }], fillMode: "outOfBounds", closed: true, stroke: "#a626ff", strokeWidthMm: 0.2 },
