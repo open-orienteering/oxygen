@@ -48,12 +48,12 @@ describe("collectImportedObjects", () => {
     ["Bana 2", fc([line("restricted_line", [[3, 3], [4, 4]]), line("forbidden_route", [[5, 5], [6, 6]]), poly])],
   ]);
 
-  it("maps the kinds, scopes 707 to its courses, shares the rest per event", () => {
+  it("maps the kinds, each scoped to the courses that carry it; identical ones are shared", () => {
     const out = collectImportedObjects(geoms);
     expect(out).toHaveLength(4);
     const byKind = (k: string, props?: object) => out.filter((o) => o.body.kind === k && (!props || JSON.stringify(o.body.props) === JSON.stringify(props)));
-    expect(byKind("marked_route")[0]).toMatchObject({ courseNames: ["Bana 1"], all: false, body: { geometry: [{ x: 1, y: 1 }, { x: 2, y: 2 }], props: {} } });
-    expect(byKind("oob_line", {})[0]).toMatchObject({ all: true });
+    expect(byKind("marked_route")[0]).toMatchObject({ courseNames: ["Bana 1"], body: { geometry: [{ x: 1, y: 1 }, { x: 2, y: 2 }], props: {} } });
+    expect(byKind("oob_line", {})[0].courseNames).toEqual(["Bana 1", "Bana 2"]);
     expect(byKind("oob_line", { symbol: "711" })).toHaveLength(1);
     // The ring's closing vertex is dropped (an area is closed implicitly).
     expect(byKind("oob_area")[0].body.geometry).toEqual([{ x: 0, y: 0 }, { x: 5, y: 0 }, { x: 5, y: 5 }]);

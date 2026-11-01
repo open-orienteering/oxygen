@@ -171,12 +171,15 @@ describe("an OCD bundle with authored geometry", () => {
       ["marked_route", {}, "import"], ["oob_line", {}, "import"], ["oob_line", { symbol: "711" }, "import"], ["oob_area", {}, "import"],
     ]);
     expect(objs[0].scope).toEqual({ courses: [c.id], classes: [] });
-    expect(objs[1].scope).toEqual({ all: true });
+    expect(objs[1].scope).toEqual({ courses: [c.id], classes: [] });
     // The polygon's closing vertex is dropped.
     expect(objs[3].geometry).toEqual([{ x: 0, y: 0 }, { x: 5, y: 0 }, { x: 5, y: 5 }]);
   });
 
-  it("a re-import replaces the import-marked objects and keeps a hand-drawn one; the file's cuts are the effective set", async () => {
+  it("a re-import replaces the import-marked objects of its courses, keeps a hand-drawn one and another file's; the file's cuts are the effective set", async () => {
+    const elsewhere = await ctx.db.courseObject.create({
+      data: { eventId: ctx.eventId, kind: "oob_line", geometry: [{ x: 7, y: 7 }, { x: 6, y: 6 }], props: {}, scope: { courses: ["00000000-0000-4000-8000-0000000000ff"], classes: [] }, source: "import" },
+    });
     const hand = await ctx.db.courseObject.create({
       data: { eventId: ctx.eventId, kind: "oob_line", geometry: [{ x: 9, y: 9 }, { x: 8, y: 8 }], props: {}, scope: { all: true } },
     });
@@ -185,8 +188,9 @@ describe("an OCD bundle with authored geometry", () => {
     mocked.parsed = next;
     await importIt();
     const objs = await ctx.db.courseObject.findMany({ where: { eventId: ctx.eventId } });
-    expect(objs.filter((o) => o.source === "import")).toHaveLength(4);
+    expect(objs.filter((o) => o.source === "import")).toHaveLength(5); // the file's 4 + the other file's
     expect(objs.find((o) => o.id === hand.id)).toBeDefined();
+    expect(objs.find((o) => o.id === elsewhere.id)).toBeDefined();
     const ctl = await ctx.db.control.findFirstOrThrow({ where: { eventId: ctx.eventId, codes: "71" } });
     expect(ctl.circleGaps).toEqual([]);
   });

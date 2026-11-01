@@ -599,10 +599,14 @@ dropped them. From an **OCD** file, with positions:
 |---|---|
 | 703 slits (`ParsedControl.cuts`, now filled by the parser) | `controls.circle_gaps` — the file's cuts are the effective set: a control without any gets `[]`. IOF / PPen files carry none and leave the column alone |
 | 705 pieces (and OCAD 2018's two-point 704) of a leg | `LegProps.gaps` on the item the leg runs into: the pieces are projected onto the centre line, the uncovered stretches between the first and last piece are the gaps (fractions, four decimals); the clearance at the circles is not a gap, nor is anything narrower than 0.2 mm (touching pieces). No bends are stored: the club run found 0 of 261 (§4.4) |
-| 707 lines | `marked_route` objects scoped to the courses whose geometry carries them (the T-code map) |
-| 708 and 709 lines | `oob_line {}` (708) scoped `all` |
-| 711 lines | `oob_line { symbol: "711" }`, `all` |
-| 709 polygons | `oob_area {}` (no border), `all`; the closing vertex is dropped |
+| 707 lines | `marked_route` objects |
+| 708 and 709 lines | `oob_line {}` (708) |
+| 711 lines | `oob_line { symbol: "711" }` |
+| 709 polygons | `oob_area {}` (no border); the closing vertex is dropped |
+
+Every object is scoped to the courses of the file whose geometry carries it
+(`{ courses: [uuid], classes: [] }`: the T-code map for 707, every course
+of the file for 708 / 709 / 711), never `all`.
 
 Identical objects (kind, props, geometry) across courses are one object.
 The 704 leg-cut polygons and the 760000 description box are not objects
@@ -612,9 +616,11 @@ consumers. 708 lines are new to the parser (`restricted_line`, `sym`
 708000). Objects are written with `writeCourseObject` and marked
 `course_objects.source = 'import'` (migration
 `20261101130000_course_objects_source`, nullable, not on the wire): an
-OCD import first deletes the event's `source = 'import'` objects and
-writes the file's, so a re-import replaces exactly those and never an
-object drawn in the editor. `courses.geometry` is still written as the
+OCD import first deletes the `source = 'import'` objects whose scope names a
+course it rewrites and writes the file's, so a re-import replaces exactly
+those: never an object drawn in the editor, nor another file's (an event can
+be fed from more than one file). A backfilled row (same marker) is superseded
+by a re-import the same way. `courses.geometry` is still written as the
 file's GeoJSON (`geometry_source` `ocd` / `xml`) for the consumers that
 read it until the artifact is retired. **PPen `<gaps>` / `<leg>` bends
 are not read** (no fixture, no research record; Pending).
@@ -778,7 +784,7 @@ those stay in the sheets (moving them is slice F's).
 | `scope` | `JSONB` | `{ "all": true }` or `{ "courses": [uuid], "classes": [uuid] }` (§8.2); no foreign key |
 | `z` | `INT` default 0 | draw order among the event's objects (`z`, then `seq`) |
 | `version` | `BIGINT` default 0 | the §7 token (§8.4) |
-| `source` | `TEXT` NULL, CHECK `import` (migration `20261101130000_course_objects_source`) | `import` for what the importers and the backfill wrote (§6.4), NULL for an object drawn by hand; not on the wire |
+| `source` | `TEXT` NULL, CHECK `import` (migration `20261101130000_course_objects_source`; D1 deviation from D2's table) | `import` for what the importers and the backfill wrote (§6.4), NULL for an object drawn by hand; not on the wire |
 | `created_at`, `updated_at` | `TIMESTAMPTZ` | `set_updated_at` |
 
 `courseObjectBodySchema` (`packages/shared/src/course/objects.ts`)

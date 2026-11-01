@@ -68,10 +68,8 @@ export function legGapsOfFeatures(geometry: GeoJSONFeatureCollection, positionOf
 
 export interface ImportedObject {
   body: course.CourseObjectBody;
-  /** Names of the imported courses whose geometry carried it. */
+  /** Names of the imported courses whose geometry carried it: its scope. */
   courseNames: string[];
-  /** Scoped `all`: shared by every course of the file (708 / 709 / 711), not tied to a T-code map. */
-  all: boolean;
 }
 
 const vertices = (coords: readonly (readonly number[])[]): { x: number; y: number }[] => coords.map(([x, y]) => ({ x, y }));
@@ -94,9 +92,9 @@ function bodyOf(f: Feature): course.CourseObjectBody | null {
 }
 
 /**
- * The course objects of a file: 707 marked routes scoped to the courses
- * whose geometry carries them, 708 / 709 / 711 lines and 709 areas to
- * every course. Identical (kind, props, geometry) across courses is one
+ * The course objects of a file, each scoped to the courses whose geometry
+ * carries it (707 by T-code map; 708 / 709 / 711 are in every course of
+ * the file). Identical (kind, props, geometry) across courses is one
  * object. Leg cuts and description boxes are not objects.
  */
 export function collectImportedObjects(geometries: ReadonlyMap<string, GeoJSONFeatureCollection>): ImportedObject[] {
@@ -107,7 +105,7 @@ export function collectImportedObjects(geometries: ReadonlyMap<string, GeoJSONFe
       if (!body) continue;
       const key = JSON.stringify([body.kind, body.props, body.geometry]);
       const found = byKey.get(key);
-      if (!found) byKey.set(key, { body, courseNames: [courseName], all: body.kind !== "marked_route" });
+      if (!found) byKey.set(key, { body, courseNames: [courseName] });
       else if (!found.courseNames.includes(courseName)) found.courseNames.push(courseName);
     }
   }

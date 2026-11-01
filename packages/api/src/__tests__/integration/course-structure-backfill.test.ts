@@ -100,11 +100,11 @@ describe("runStructureBackfill", () => {
     expect(r1.comparison!.legs).toEqual({ pieces: 1, withGaps: 1 });
   });
 
-  it("objects are written once per event: the 708 line shared, the 707 scoped to both courses", async () => {
+  it("objects are written once per event, scoped to both courses that carry them", async () => {
     const objs = await ctx.db.courseObject.findMany({ where: { eventId: ctx.eventId }, orderBy: { seq: "asc" } });
     expect(objs.map((o) => [o.kind, o.source])).toEqual([["marked_route", "import"], ["oob_line", "import"]]);
     expect(objs[0].scope).toEqual({ courses: expect.arrayContaining([ids.Ocd1, ids.Ocd2]), classes: [] });
-    expect(objs[1].scope).toEqual({ all: true });
+    expect(objs[1].scope).toEqual({ courses: expect.arrayContaining([ids.Ocd1, ids.Ocd2]), classes: [] });
   });
 
   it("is idempotent: a second run has nothing to do and changes nothing", async () => {

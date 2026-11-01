@@ -2301,7 +2301,7 @@ export const courseRouter = router({
           eventId,
           collectImportedObjects(new Map(Object.entries(courseGeometry))),
           (name) => courseIdMap.get(name),
-          { replace: true },
+          { replace: true, rewrittenCourseNames: [...courseIdMap.keys()] },
         );
       }
 
