@@ -751,9 +751,11 @@ input, so a stored region acts exactly like D3's (never on the course).
   `SheetInput.course.objects`), and `composePage` hands them to the layer
   with the sheet's objects. Filter regions therefore reach the PDF as
   D3's clip paths by construction (`course-print.md` §5.1).
-- **Viewer.** `MapPanel` fetches `courseObject.list` (kiosk-readable)
-  and the request carries the objects in scope of the highlighted
-  courses (§5); the worker's layer lifts the regions. The kiosk map is
+- **Viewer.** `MapPanel` fetches `courseObject.list` (kiosk-readable),
+  keeps the objects in scope of the highlighted courses
+  (`courseObjectsForView`) and hands them to `MapViewer` (`courseObjects`
+  prop), whose request carries them (§5); the worker's layer lifts the
+  regions. The kiosk map is
   `MapPanel` with the runner's course highlighted, so it draws the
   `all`-scoped objects and that course's. A `toner_saver` is not drawn
   on screen (no frame).
@@ -827,6 +829,7 @@ venue's kiosk map draws them (08 §4.8; 07 §9.2).
 | integration | `packages/api/src/__tests__/integration/course-objects.test.ts` | §8.4: every kind created and listed in draw order with public ids; `inset_frame`, unknown course / class, bad body refused; update advances the token; stale token → `CONFLICT` with the object now and nothing written, none = LWW, stale delete; reorder keeps tokens; kiosk-key read, viewer cannot write; §8.2 class scope through `course_id` and the pool; §8.5 snapshot round trip verbatim |
 | integration | `course-print.test.ts` "course objects on the page" | §8.3 print: a sheet takes the objects in scope (all-controls: `all` only), they add passes over the map, a stored filter region hides map objects |
 | integration | `backup.test.ts` | §8.5: the dump's `course_objects` section |
+| E2E | `e2e/map-vector-layer.spec.ts` "a stored white-out course object paints the map white" | §8.3 viewer: an `all`-scoped white-out created through the API turns open yellow ground white on the GL canvas, yellow beside it unchanged |
 | unit (web) | `packages/web/src/map-gl/__tests__/worker-course.test.ts`, `engine.test.ts` | the dynamic bucket (`map-rendering.md` §5.2) |
 | E2E | `e2e/map-vector-layer.spec.ts`, `map-control-circles.spec.ts`, `map-multicourse.spec.ts` | lower purple under black at a crossing; labels under both pipelines (`map-rendering.md` §5.4) |
 
