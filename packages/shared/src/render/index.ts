@@ -31,3 +31,4 @@ export * from "./truetype.js";
 export * from "./symbolise.js";
 export * from "./filter-region.js";
 export * from "./swatch.js";
+export * from "./hit-test.js";
