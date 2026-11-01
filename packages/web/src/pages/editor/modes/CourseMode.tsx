@@ -218,7 +218,11 @@ const SLICE_F_KINDS = ["map_exchange", "crossing_point", "map_issue"] as const;
 
 export function SelectionSection({ selected, onKind, onNotes, onNumberHidden }: SelectionSectionProps) {
   const { t } = useTranslation("editor");
+  // Optimistic: the box flips at once; the stored value takes over when it changes.
+  const [pendingHidden, setPendingHidden] = useState<{ key: string; value: boolean } | null>(null);
   if (!selected) return <p className="px-2.5 py-2 text-slate-400">{t("nothingSelected")}</p>;
+  const hiddenKey = `${selected.code}:${selected.numberHidden}`;
+  const numberHidden = pendingHidden?.key === hiddenKey ? pendingHidden.value : selected.numberHidden;
   return (
     <dl className="px-2.5 py-1.5 grid grid-cols-[auto_1fr] gap-x-2 gap-y-0.5" data-testid="editor-selection">
       <dt className="text-slate-400">{t("codes")}</dt>
@@ -252,8 +256,8 @@ export function SelectionSection({ selected, onKind, onNotes, onNumberHidden }: 
       {selected.numberHidden !== null && selected.role === "control" && (
         <dd className="col-span-2">
           <label className="flex items-center gap-1.5 text-slate-600">
-            <input type="checkbox" data-testid="editor-number-hidden" checked={selected.numberHidden} disabled={!onNumberHidden}
-              onChange={(e) => onNumberHidden?.(e.target.checked)} />
+            <input type="checkbox" data-testid="editor-number-hidden" checked={!!numberHidden} disabled={!onNumberHidden}
+              onChange={(e) => { setPendingHidden({ key: hiddenKey, value: e.target.checked }); onNumberHidden?.(e.target.checked); }} />
             {t("numberHidden")}
           </label>
         </dd>

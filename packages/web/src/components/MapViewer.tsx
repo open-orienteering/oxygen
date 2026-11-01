@@ -921,12 +921,17 @@ export function MapViewer({
     const edge = screenToMapMm(clientX + HIT_TOLERANCE_PX, clientY);
     if (!pt || !edge) return null;
     const tol = Math.hypot(edge.x - pt.x, edge.y - pt.y);
-    // The faded off-course controls are drawn by the UI layer, not the layer: plain circles.
+    // The faded off-course controls are drawn by the UI layer, not the layer: plain circles. The layer's own
+    // controls too, below its shapes: a circle with gaps is drawn as open arcs, whose interior does not hit.
     const radiusMm = courseInfo?.metrics?.circleRadiusMm ?? 3;
-    const uiSites = editor.fadeNonCourse
-      ? controls.filter((c) => c.type === "Control" && !editor.courseControlIds?.has(c.id) && (c.x !== 0 || c.y !== 0))
-        .map((c) => ({ id: c.id, x: c.x, y: c.y, radiusMm }))
-      : [];
+    const uiSites = [
+      ...(editor.fadeNonCourse
+        ? controls.filter((c) => c.type === "Control" && !editor.courseControlIds?.has(c.id) && (c.x !== 0 || c.y !== 0))
+          .map((c) => ({ id: c.id, x: c.x, y: c.y, radiusMm }))
+        : []),
+      ...(courseInfo?.derivation?.sites ?? []).filter((d) => d.role === "control" && d.cuts.length > 0)
+        .map((d) => ({ id: d.id, x: d.x, y: d.y, radiusMm })),
+    ];
     return editorHitAt(courseInfo?.hit ?? null, pt, tol, uiSites, uiAreas);
   };
   const resolveEditorTargetRef = useRef(resolveEditorTarget);
@@ -3469,7 +3474,8 @@ export function MapViewer({
       {glCourse && courseInfo?.derivation && (
         <ul data-testid="course-layer" hidden>
           {courseInfo.derivation.sites.map((ds) => (
-            <li key={`s-${ds.id}`} data-testid="course-site" data-site-id={ds.id} data-role={ds.role} data-x={ds.x} data-y={ds.y}>
+            <li key={`s-${ds.id}`} data-testid="course-site" data-site-id={ds.id} data-role={ds.role} data-x={ds.x} data-y={ds.y}
+              data-cuts={ds.cuts.map((g) => `${g.start}-${g.end}`).join(" ")}>
               {ds.label && (
                 <span data-testid="course-label" data-site-id={ds.id} data-text={ds.label.text} data-x={ds.label.x} data-y={ds.label.y}>
                   {ds.label.text}

@@ -83,6 +83,13 @@ describe("editorHitAt (docs/course-editor.md §5)", () => {
       .toEqual({ kind: "site", id: "31" });
   });
 
+  it("a circle with a stored gap is open arcs: its centre hits only through the UI-layer circle (§5)", () => {
+    const base = request();
+    const gapped = hitIndex({ sites: base.sites.map((x) => (x.id === "31" ? { ...x, circleGaps: [{ start: 40, end: 100 }] } : x)) });
+    expect(editorHitAt(gapped, { x: 40, y: 10 }, 0.1)).toBeNull();
+    expect(editorHitAt(gapped, { x: 40, y: 10 }, 0.1, [{ id: "31", x: 40, y: 10, radiusMm: 2.5 }])).toEqual({ kind: "site", id: "31" });
+  });
+
   it("names a screen tolerance", () => {
     expect(HIT_TOLERANCE_PX).toBeGreaterThan(0);
   });

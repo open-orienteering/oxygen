@@ -405,6 +405,75 @@ test.describe("Course editor (new, GL canvas)", () => {
       await expect(page.getByTestId("editor-selected-notes")).toHaveValue(note, { timeout: 10000 });
     });
 
+    test("stored gaps and a hidden number are what the layer draws", async ({ page }) => {
+      await openEditor(page);
+      await newCourse(page, "D5 drawn");
+      const [a, b] = await regularCodes(page, 2);
+      await page.keyboard.press("k");
+      for (const code of [a, b]) {
+        const p = await sitePoint(page, code);
+        await page.mouse.move(p.x, p.y);
+        const saved = waitForTrpc(page, "course.setStructure");
+        await page.mouse.click(p.x, p.y);
+        await saved;
+      }
+      await page.keyboard.press("Escape");
+      const name = (await page.getByTestId("editor-course-picker").locator("option:checked").textContent()) ?? "";
+      const A = (await site(page, a)).mm, B = (await site(page, b)).mm;
+
+      // A leg gap: G on the leg a → b, a drag from 35 % to 55 % of it; the drawn leg is cut there.
+      await expect.poll(async () => (await legPieces(page, name)).length, { timeout: 15000 }).toBeGreaterThan(0);
+      const at = (f: number) => ({ x: A.x + (B.x - A.x) * f, y: A.y + (B.y - A.y) * f });
+      await clickMap(page, await toPage(page, await legMidpoint(page, name, A, B)));
+      await page.keyboard.press("g");
+      await expect(page.getByTestId("editor-tool-layer").getByTestId("editor-gap-target")).toHaveAttribute("data-kind", "leg");
+      const legSaved = waitForTrpc(page, "course.setStructure");
+      await drag(page, await toPage(page, at(0.35)), await toPage(page, at(0.55)));
+      await legSaved;
+      const near = (p: { x: number; y: number }, q: { x: number; y: number }) => Math.hypot(p.x - q.x, p.y - q.y) < 0.3;
+      const covered = async (f: number) => {
+        const q = at(f);
+        return (await legPieces(page, name)).some((l) => l.points.some((p, i) => {
+          if (i === 0) return false;
+          const o = l.points[i - 1];
+          const t = ((q.x - o.x) * (p.x - o.x) + (q.y - o.y) * (p.y - o.y)) / ((p.x - o.x) ** 2 + (p.y - o.y) ** 2 || 1);
+          return t >= 0 && t <= 1 && near(q, { x: o.x + (p.x - o.x) * t, y: o.y + (p.y - o.y) * t });
+        }));
+      };
+      await expect.poll(() => covered(0.45), { timeout: 15000 }).toBe(false);
+      expect(await covered(0.75)).toBe(true);
+      await page.keyboard.press("Escape");
+
+      // A circle gap: G on control a, a rim drag from 40° to 100°; the drawn circle's cuts cover 70°.
+      await clickMap(page, await sitePoint(page, a));
+      await expect(selectedCode(page)).toContainText(a, { timeout: 10000 });
+      await page.keyboard.press("g");
+      const [target] = await toolShapes(page, "editor-gap-target");
+      const r = Number(target.data.r);
+      const rim = (deg: number) => toPage(page, { x: target.x + r * Math.sin((deg * Math.PI) / 180), y: target.y + r * Math.cos((deg * Math.PI) / 180) });
+      const circleSaved = waitForTrpc(page, "control.update");
+      await drag(page, await rim(40), await rim(100));
+      await circleSaved;
+      const drawnCut = async () => {
+        const cuts = (await page.locator(`[data-testid="course-site"][data-site-id="${a}"]`).getAttribute("data-cuts")) ?? "";
+        return cuts.split(" ").filter(Boolean).some((g) => {
+          const [start, end] = g.split("-").map(Number);
+          return ((70 - start + 360) % 360) <= ((end - start + 360) % 360);
+        });
+      };
+      await expect.poll(drawnCut, { timeout: 15000 }).toBe(true);
+      await page.keyboard.press("Escape");
+
+      // A hidden number: the layer draws control a without its number on this course.
+      await expect(page.locator(`[data-testid="course-label"][data-site-id="${a}"]`)).toHaveCount(1);
+      await clickMap(page, await sitePoint(page, a));
+      const hidden = waitForTrpc(page, "course.setStructure");
+      await page.getByTestId("editor-number-hidden").check();
+      await hidden;
+      await expect(page.locator(`[data-testid="course-label"][data-site-id="${a}"]`)).toHaveCount(0, { timeout: 15000 });
+      await expect(page.locator(`[data-testid="course-label"][data-site-id="${b}"]`)).toHaveCount(1);
+    });
+
     test("G: a drag along the rim opens a circle gap, stored on the site", async ({ page }) => {
       await openEditor(page);
       const [code] = await regularCodes(page, 1);
@@ -499,9 +568,12 @@ test.describe("Course editor (new, GL canvas)", () => {
       await page.reload();
       await editorReady(page);
       await page.getByTestId("editor-object-row").first().waitFor({ state: "attached" });
-      // Select it again on the canvas (a click inside the area).
-      await clickMap(page, { x: a.x + 30, y: a.y + 15 });
-      await expect(page.getByTestId("editor-object")).toHaveAttribute("data-object-id", id!, { timeout: 15000 });
+      // Select it again on the canvas (a click inside the area), once the layer draws it and its hit index has it.
+      await expect.poll(() => inkIn(page, inner, "purple"), { timeout: 30000 }).toBeGreaterThan(purpleBefore + 5);
+      await expect(async () => {
+        await clickMap(page, { x: a.x + 30, y: a.y + 15 });
+        await expect(page.getByTestId("editor-object")).toHaveAttribute("data-object-id", id!, { timeout: 2000 });
+      }).toPass({ timeout: 20000 });
       // Its border from the inspector, then delete it (Delete key) and undo.
       const updated = waitForTrpc(page, "courseObject.update");
       await page.getByTestId("editor-prop-border").selectOption("dashed");

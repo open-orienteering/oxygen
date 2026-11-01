@@ -158,6 +158,9 @@ shared stage (04 §7; `map-rendering.md` §5.5), not SVG hit targets:
   number the label drag, a leg the leg click; anything else is empty map.
 - Off-course controls the Course view fades are not in the layer (the UI
   layer draws them); they hit as plain circles below every layer object.
+  A control whose circle has gaps (stored or automatic) is drawn as open
+  arcs, whose interior does not hit; it hits the same way, as a plain
+  circle below the layer's objects (D5).
 - Synchronous on the main thread: the course part is hundreds of passes,
   so a click never waits a worker round trip. Snapping does not hit-test
   the document's stream either (§6.2); a request over the document stream
@@ -423,7 +426,7 @@ current, differing }`; a variation group or a slice-F site kind answers
 | unit (web) | `pages/editor/__tests__/bindings.test.ts` | §6, §7: V (Shift-click, lasso, object select / move / vertex, outlines, double-click leg), armed (exclusive, right-click, touch), area (vertex drag, first-vertex close), G (rim drag, click removes, leg) |
 | unit (web) | `lib/__tests__/undo-stack.test.ts` | §6.1: `UndoStack.top`, which `Ctrl+Z` while armed checks before stepping the chain back |
 | unit (web) | `lib/editor/__tests__/snap.test.ts`, `hit.test.ts`, `state.test.ts`, `structure-edit.test.ts`, `write-client.test.ts` | §6.2 snap candidates and distance; §5 object targets (stream and UI-layer outline); §6 Escape order, multi-selection, object selection, tools; §6.3 / §6.6 `setLegGaps`, `setNumberHidden`; §7 object tokens |
-| E2E | `e2e/course-editor.spec.ts` "tools" | §6.1 ten controls in ten clicks with `K` (ghost, pending leg, no action bar, `Ctrl+Z`, `Esc`), reuse of a site; §6.5 Shift-click three controls → one add-to-course (one undo entry), §6.6 a site's notes written and reloaded; §6.3 a rim drag stores a circle gap, Reset gaps clears it; §6.4 / §7 an out-of-bounds area drawn, its border set, drawn on the canvas (purple inside it), printed (the all-controls `maps.pdf`: one page, the 709 hatch's clip-and-stroke operators present with the `all`-scoped area and gone when it is parked), selected again on the canvas, deleted and undone; a filter region hides the 505 path under it live (canvas ink probe) |
+| E2E | `e2e/course-editor.spec.ts` "tools" | §6.1 ten controls in ten clicks with `K` (ghost, pending leg, no action bar, `Ctrl+Z`, `Esc`), reuse of a site; §6.5 Shift-click three controls → one add-to-course (one undo entry), §6.6 a site's notes written and reloaded; §6.3 a rim drag stores a circle gap, Reset gaps clears it; the layer draws what the tools store (D1's request path): a leg gap cuts the drawn leg, a circle gap is in the drawn site's cuts (`course-site` `data-cuts`), a hidden number leaves the site without its `course-label`; §6.4 / §7 an out-of-bounds area drawn, its border set, drawn on the canvas (purple inside it), printed (the all-controls `maps.pdf`: one page, the 709 hatch's clip-and-stroke operators present with the `all`-scoped area and gone when it is parked), selected again on the canvas, deleted and undone; a filter region hides the 505 path under it live (canvas ink probe) |
 | integration | `packages/api/src/__tests__/integration/course-print.test.ts` "course objects on the page" | §7 print: the row's "reference-raster pixel probe" of a printed course object is this test's page raster, not the E2E's — no HTTP route rasterises a composed page, and poppler is on the runner for the unit / integration jobs, not the E2E job (coordinator 2026-11-01) |
 | E2E | `e2e/course-editor-legacy.spec.ts` | the legacy page, unchanged (`chromium`) |
 
@@ -433,13 +436,6 @@ current, differing }`; a variation group or a slice-F site kind answers
   selected object's passes redrawn in a highlight colour): the selection
   and multi-selection rings and object outlines stay UI layer; D5 left it
   because it is `map-gl` work outside its area (decision log, D5).
-- **Drawing what the gap tool and the hidden-number box write**: the
-  editor stores `circle_gaps`, `LegProps.gaps` and `numberHidden`
-  (§6.3, §6.6), but the viewer's layer request does not carry them yet
-  (`course-layer.md` §6 Pending), so the canvas shows the stored gaps
-  only in `G`'s own overlay. D1 makes the layer draw them (coordinator
-  2026-11-01) and, landing after D5, adds the rendered-gap and
-  hidden-number pixel assertion to this chapter's E2E.
 - **Course objects**: draw order (`courseObject.reorder`) has no control
   in the editor; no image (logo) tool; `inset_frame` is slice F's.
 - **Description instructions** (finish variant, special instructions)
