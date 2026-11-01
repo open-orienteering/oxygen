@@ -68,6 +68,7 @@ describe("events.map_pipeline", () => {
     expect(await caller.event.setMapPipeline({ pipeline: "vector" })).toEqual({
       pipeline: "vector",
       allowLegacy: true,
+      editorVector: false,
     });
     const row = await prisma().event.findUnique({ where: { id: ev.id }, select: { mapPipeline: true } });
     expect(row?.mapPipeline).toBe("vector");
